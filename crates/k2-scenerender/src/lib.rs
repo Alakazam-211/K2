@@ -23,12 +23,15 @@
 //!   daemon links (posix_spawn, watchdog);
 //! - [`digest`]: the containers a scene previews and the raw digest of what
 //!   each draws, from the mesh read alone (no object ids);
+//! - [`addr`]: their addresses, native addresses in the multiplayer kit's
+//!   grammar, and the percent-encoding that puts a name in one;
 //! - [`testgen`]: scenes generated in code for the tests (no model files);
 //! - [`sha256`]: FIPS 180-4, for the digests (no hash crate).
 //!
 //! This crate never links k2-core: no tokens, no DB, no OS integration in
 //! the process that parses untrusted bytes.
 
+pub mod addr;
 pub mod camera;
 pub mod contents;
 pub mod digest;

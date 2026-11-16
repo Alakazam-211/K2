@@ -46,6 +46,7 @@ fn main() {
         lens_mm: None,
         sensor_mm: None,
         sensor_fit: None,
+        key: None,
     });
     scenes.push(("ao-contact", contact));
     // For ids (the render target asks for them): ids as a BIM pack writes them, an IFC GlobalId

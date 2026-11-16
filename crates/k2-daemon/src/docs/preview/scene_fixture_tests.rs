@@ -39,8 +39,40 @@ use crate::test_support::{with_temp_home, Scratch};
 /// Set to rewrite the fixture's files instead of checking them.
 const ENV_REGEN: &str = "K2_REGEN_FIXTURES";
 
-/// The views drawn, and the stem of each one's files.
-const VIEWS: [(&str, &str); 3] = [("@scene", "scene"), ("@cam:Camera", "cam-Camera"), ("@obj:Sofa", "obj-Sofa")];
+/// The views drawn (the scene, the active camera and the sofa, by their
+/// live addresses), and the stem of each one's files.
+const VIEWS: [(&str, &str); 3] = [("@scene:main", "scene"), ("@cam:1", "cam-Camera"), ("@obj:15", "obj-Sofa")];
+
+/// The live key of each unit the scene draws, and of each camera, as the
+/// living-room sample's snapshot numbers them (its unit keys, `@obj:N`); a
+/// camera is keyed among the cameras by its camera object's number
+/// (`@cam:N`).
+const LIVE_KEYS: &[(&str, u32)] = &[
+    ("Floor", 4),
+    ("Wall.Back", 5),
+    ("Window", 7),
+    ("Rug", 8),
+    ("Ceiling fan", 9),
+    ("Table", 10),
+    ("Chair.001", 11),
+    ("Chair.002", 12),
+    ("Chair.003", 13),
+    ("Chair.004", 14),
+    ("Sofa", 15),
+    ("Shelf", 16),
+    ("Book.001", 17),
+    ("Book.002", 18),
+    ("Floor lamp", 19),
+    ("Vase", 20),
+    ("Mug", 21),
+    ("Clock hand", 23),
+    ("Camera", 1),
+    ("Camera.001", 26),
+];
+
+fn live_key(name: &str) -> u32 {
+    LIVE_KEYS.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("no live key for {name}")).1
+}
 
 /// The key the fixture's render hashes are keyed with (a host keys them
 /// with the space's own host cache key, which is random).
@@ -225,6 +257,7 @@ fn camera(id: &str, loc: [f64; 3], angles: [f64; 3], active: bool) -> Camera {
     let m = trs(loc, Rot::Xyz(angles), ONE);
     Camera {
         id: id.into(),
+        key: Some(format!("@cam:{}", live_key(id))),
         position: [loc[0] as f32, loc[1] as f32, loc[2] as f32],
         target: None,
         forward: Some([-m[8] as f32, -m[9] as f32, -m[10] as f32]),
@@ -240,7 +273,7 @@ fn camera(id: &str, loc: [f64; 3], angles: [f64; 3], active: bool) -> Camera {
 }
 
 /// The living room as K2SCENE1 would carry it: Z up, an object per drawn
-/// unit named as the file names it, its world transform composed through
+/// unit named as the file names it and keyed by its live key, its world transform composed through
 /// its parents, stand-in meshes, the sofa drawn without its subdivision
 /// modifier, and the file's two cameras.
 fn room() -> Scene {
@@ -267,6 +300,7 @@ fn room() -> Scene {
         let sofa = u.name == "Sofa";
         objects.push(Object {
             id: u.name.into(),
+            key: Some(format!("@obj:{}", live_key(u.name))),
             mesh: index as u32,
             base_color: [0.8, 0.8, 0.8, 1.0],
             double_sided: Some(false),
@@ -418,9 +452,15 @@ const SLACK: f64 = 2.0;
 fn the_fixture_boxes_line_up_with_the_id_images() {
     let scene = decode(&std::fs::read(fixture_dir().join("living-room.k2scene")).expect("the scene"), &InputLimits::default()).expect("a K2SCENE1");
     let listing = read_json("listing.json");
+    // Every address listed is a native address (a presence view address too).
+    for c in listing["containers"].as_array().expect("containers") {
+        let a = c["key"].as_str().expect("an address");
+        assert!(k2_scenerender::addr::is_native(a), "{a}");
+    }
+    // An object's container by its title (the file's name; its address is its live key).
     let bounds = |id: &str| -> ([f64; 3], [f64; 3]) {
-        let key = format!("@obj:{id}");
-        let c = listing["containers"].as_array().expect("containers").iter().find(|c| c["key"] == key.as_str()).unwrap_or_else(|| panic!("{key} not listed"));
+        let c = listing["containers"].as_array().expect("containers").iter().find(|c| c["title"] == id && c.get("bounds").is_some()).unwrap_or_else(|| panic!("{id} not listed"));
+        assert_eq!(c["key"], json!(format!("@obj:{}", live_key(id))), "listed under its live key");
         (floats(&c["bounds"]["min"]), floats(&c["bounds"]["max"]))
     };
     for (c, stem) in VIEWS {
@@ -468,8 +508,8 @@ fn the_fixture_boxes_line_up_with_the_id_images() {
             checked += 1;
         }
         let want = match c {
-            "@scene" => 12,
-            "@cam:Camera" => 6,
+            "@scene:main" => 12,
+            "@cam:1" => 6,
             _ => 1,
         };
         assert!(checked >= want, "{c}: only {checked} objects checked");

@@ -42,7 +42,7 @@
       1.0
     ]
   },
-  "container": "@cam:Camera",
+  "container": "@cam:1",
   "fonts_substituted": [],
   "format": "webp-lossless",
   "ids": {

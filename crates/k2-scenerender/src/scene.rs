@@ -14,10 +14,10 @@
 //! ```json
 //! {"version": 1, "up": "z",
 //!  "meshes":  [{"vertices": 8, "triangles": 12, "normals": true, "hash": "…"}],
-//!  "objects": [{"id": "Cube", "mesh": 0, "base_color": [0.8, 0.8, 0.8, 1.0],
+//!  "objects": [{"id": "Cube", "key": "@obj:12", "mesh": 0, "base_color": [0.8, 0.8, 0.8, 1.0],
 //!               "double_sided": null, "transform": [16 floats, column-major], "hash": "…",
 //!               "modifiers": ["SUBSURF", "MIRROR"], "modifiers_not_applied": true}],
-//!  "cameras": [{"id": "Camera", "position": [7.4, -6.5, 5.3], "target": [0, 0, 0],
+//!  "cameras": [{"id": "Camera", "key": "@cam:3", "position": [7.4, -6.5, 5.3], "target": [0, 0, 0],
 //!               "up": [0, 0, 1], "yfov": 0.69, "aspect": 1.7778, "znear": 0.1,
 //!               "active": true, "lens_mm": 50, "sensor_mm": [36, 24], "sensor_fit": "auto"}]}
 //! ```
@@ -41,6 +41,18 @@
 //!   `"vertical"`). They are shown with the camera, never drawn: `yfov` is
 //!   the only field that sets the view, whatever the lens, sensor or fit
 //!   say, and none of them is in a digest ([`crate::digest`]).
+//! - **Keys** (optional, on objects and cameras): the live element address
+//!   the BLEND reader gives the object or camera, `"@obj:N"` or `"@cam:N"`
+//!   (N its live key), which stays the same across edits and renames. The
+//!   listing addresses the object's or camera's view by it
+//!   ([`crate::digest`]). Checked with the header: a key must be a native
+//!   address of one part in the multiplayer kit's grammar ([`crate::addr`])
+//!   of kind `obj` on an object and `cam` on a camera, and unique among the
+//!   objects (the cameras); else the whole input is refused
+//!   (`invalid_input`). Uniqueness is per list: a camera object may be
+//!   `@obj:N` among the objects and `@cam:N` among the cameras. A key draws
+//!   nothing and is in no digest: with or without one, every digest is the
+//!   same.
 //!
 //! **Bounds first.** The worker reads the 12-byte prefix and the header before
 //! any mesh data, and checks every count against [`InputLimits`] before it
@@ -108,6 +120,9 @@ pub struct CameraDisplay {
 pub struct Camera {
     #[serde(default)]
     pub id: String,
+    /// Its live element address (`@cam:N`), when the reader gives one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     pub position: [f32; 3],
     /// A point looked at; or give `forward`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -158,6 +173,9 @@ pub struct MeshInfo {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Object {
     pub id: String,
+    /// Its live element address (`@obj:N`), when the reader gives one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     pub mesh: u32,
     /// Linear RGBA base colour (alpha is ignored: everything is drawn opaque).
     pub base_color: [f32; 4],
@@ -423,6 +441,8 @@ pub fn check_header(h: &Header, hlen: u64, input_len: u64, lim: &InputLimits) ->
             return Err(InputError::BadField { what: "object", at, why: "a modifier name is too long" });
         }
     }
+    check_keys("object", "obj", h.objects.iter().map(|o| o.key.as_deref()))?;
+    check_keys("camera", "cam", h.cameras.iter().map(|c| c.key.as_deref()))?;
     let mut active = false;
     for (i, c) in h.cameras.iter().enumerate() {
         if c.id.len() > MAX_ID_BYTES {
@@ -629,6 +649,25 @@ pub fn layout(bytes: &[u8], lim: &InputLimits) -> Result<(Header, Vec<std::ops::
         at += n;
     }
     Ok((h, ranges))
+}
+
+/// The keys of one list (objects or cameras): each a native address of one
+/// part of kind `kind` ([`crate::addr`]), at most [`MAX_ID_BYTES`] long, and
+/// none twice.
+fn check_keys<'a>(what: &'static str, kind: &str, keys: impl Iterator<Item = Option<&'a str>>) -> Result<(), InputError> {
+    let mut seen = std::collections::HashSet::new();
+    for (i, k) in keys.enumerate() {
+        let Some(k) = k else { continue };
+        let at = i as u32;
+        let why = if what == "object" { "its key must be a native address @obj:<id> (no spaces)" } else { "its key must be a native address @cam:<id> (no spaces)" };
+        if k.len() > MAX_ID_BYTES || crate::addr::single(k).is_none_or(|(kd, _)| kd != kind) {
+            return Err(InputError::BadField { what, at, why });
+        }
+        if !seen.insert(k) {
+            return Err(InputError::BadField { what, at, why: if what == "object" { "its key is another object's" } else { "its key is another camera's" } });
+        }
+    }
+    Ok(())
 }
 
 fn check_camera(c: &Camera) -> Result<(), &'static str> {

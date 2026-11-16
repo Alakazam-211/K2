@@ -49,7 +49,8 @@ fn hex(b: &[u8]) -> String {
 
 /// Lists one container per line, `<address> <digest byte>`, optionally
 /// with a scene locator after them (`scene`, `o<i>`, `t<k>`: then an
-/// `@obj:` address's title is its id); draws every address ending `:fail`
+/// `@obj:` address's title is its id) and a title after that (an object
+/// keyed by its live address, `@obj:7 5 o0 Chair`); draws every address ending `:fail`
 /// as a timeout, the rest as the same small image. A container with a
 /// locator the scene renderer gives ids to also gets [`FAKE_IDS`] and a
 /// table of the listed objects it shows (an object view: itself; any other:
@@ -59,20 +60,20 @@ struct Fake;
 /// The fake's id image.
 const FAKE_IDS: &[u8] = b"IDPNG";
 
-/// A fake listing's lines: (address, digest byte, locator).
-fn fake_lines(text: &str) -> Vec<(&str, u8, Option<&str>)> {
+/// A fake listing's lines: (address, digest byte, locator, title).
+fn fake_lines(text: &str) -> Vec<(&str, u8, Option<&str>, Option<&str>)> {
     text.lines()
         .map(|line| {
             let mut w = line.split(' ');
             let key = w.next().expect("an address");
             let d = w.next().expect("<address> <digest byte>").parse::<u8>().expect("a digest byte");
-            (key, d, w.next())
+            (key, d, w.next(), w.next())
         })
         .collect()
 }
 
-fn fake_title(key: &str, locator: Option<&str>) -> String {
-    locator.and(key.strip_prefix("@obj:")).unwrap_or_default().to_string()
+fn fake_title(key: &str, locator: Option<&str>, title: Option<&str>) -> String {
+    title.or(locator.and(key.strip_prefix("@obj:"))).unwrap_or_default().to_string()
 }
 
 static FAKE: Fake = Fake;
@@ -133,10 +134,10 @@ impl PreviewRenderer for Fake {
         let containers = fake_lines(text)
             .into_iter()
             .enumerate()
-            .map(|(i, (key, d, locator))| Container {
+            .map(|(i, (key, d, locator, title))| Container {
                 key: key.into(),
                 position: i as u32 + 1,
-                title: fake_title(key, locator),
+                title: fake_title(key, locator, title),
                 hidden: false,
                 digest: [d; 32],
                 locator: locator.unwrap_or(key).into(),
@@ -164,9 +165,9 @@ impl PreviewRenderer for Fake {
             let own = SceneTarget::from_locator(&c.locator);
             let objects: Vec<IdEntry> = fake_lines(std::str::from_utf8(src.doc).expect("text"))
                 .into_iter()
-                .filter_map(|(key, _, locator)| match locator.and_then(SceneTarget::from_locator) {
+                .filter_map(|(key, _, locator, title)| match locator.and_then(SceneTarget::from_locator) {
                     Some(t @ SceneTarget::Object(i)) if !matches!(own, Some(SceneTarget::Object(_))) || own == Some(t) => {
-                        Some(IdEntry { index: i, id: fake_title(key, locator) })
+                        Some(IdEntry { index: i, id: fake_title(key, locator, title) })
                     }
                     _ => None,
                 })
@@ -220,7 +221,7 @@ fn scene_with_display_fields() -> k2_scenerender::scene::Scene {
 fn a_scene_listing_carries_bounds_camera_display_values_and_turntable_titles() {
     let l = scene::list_k2scene(&encode(&scene_with_display_fields())).expect("a listing");
     let by = |key: &str| l.containers.iter().find(|c| c.key == key).unwrap_or_else(|| panic!("no {key}"));
-    assert!(by("@scene").extras.is_empty(), "the auto view has no extras");
+    assert!(by("@scene:main").extras.is_empty(), "the auto view has no extras");
     assert_eq!(
         serde_json::Value::Object(by("@cam:Camera").extras.clone()),
         json!({ "camera": { "active": true, "lens_mm": 50.0, "sensor_mm": [36.0, 24.0], "sensor_fit": "horizontal" } })
@@ -323,10 +324,10 @@ fn scene_views_ask_for_transparent_stills_and_the_cache_key_has_no_background() 
     // An opaque entry keeps the name it always had; a transparent one is
     // keyed by the look alone, no colour.
     assert_eq!(Look::Opaque.cache_build("b1"), "b1");
-    assert_eq!(cache::entry_name("@scene", "ab12", Width::Thumb, &Look::Opaque.cache_build("b1")), cache::entry_name("@scene", "ab12", Width::Thumb, "b1"));
+    assert_eq!(cache::entry_name("@scene:main", "ab12", Width::Thumb, &Look::Opaque.cache_build("b1")), cache::entry_name("@scene:main", "ab12", Width::Thumb, "b1"));
     assert_eq!(
-        cache::entry_name("@scene", "ab12", Width::Thumb, &Look::Transparent.cache_build("b1")),
-        format!("{}-ab12-thumb-b1.rgba.k2p", cache::container_id("@scene"))
+        cache::entry_name("@scene:main", "ab12", Width::Thumb, &Look::Transparent.cache_build("b1")),
+        format!("{}-ab12-thumb-b1.rgba.k2p", cache::container_id("@scene:main"))
     );
     assert_eq!(Look::parse("transparent"), Some(Look::Transparent));
     assert_eq!(Look::parse("glass"), None);
@@ -434,7 +435,7 @@ fn clay_occlusion_and_the_scene_views_framing_are_in_the_cache_key() {
     let clay_only = format!("{plain}.clay");
     let full_size_occlusion = format!("{plain}.clay.ao.ids.shape");
     for look in Look::ALL {
-        let name = |b: &str| cache::entry_name("@scene", "ab12", Width::Thumb, &look.cache_build(b));
+        let name = |b: &str| cache::entry_name("@scene:main", "ab12", Width::Thumb, &look.cache_build(b));
         assert_ne!(name(&build), name(&plain), "{look:?}: never an image drawn without clay");
         assert_ne!(name(&build), name(&clay_only), "{look:?}: never an image drawn in clay without occlusion");
         assert_ne!(name(&build), name(&full_size_occlusion), "{look:?}: never an image drawn with the earlier occlusion");
@@ -443,14 +444,14 @@ fn clay_occlusion_and_the_scene_views_framing_are_in_the_cache_key() {
     assert_eq!(Look::Transparent.cache_build(&build), format!("{plain}.clay.ao2.ids.shape.rgba"));
     assert_ne!(Look::Transparent.cache_build(&build), Look::Transparent.cache_build(&clay_only));
 
-    // A scene of one object: the renderer's digest of `@scene` and of that
+    // A scene of one object: the renderer's digest of `@scene:main` and of that
     // object's view is one, but they are framed differently.
     let bytes = encode(&testgen::cube_scene());
     let raw = k2_scenerender::digest::list(&bytes, &k2_scenerender::scene::InputLimits::default()).expect("raw");
-    let (rs, ro) = (raw.iter().find(|i| i.key == "@scene").expect("scene"), raw.iter().find(|i| i.key.starts_with("@obj:")).expect("object"));
+    let (rs, ro) = (raw.iter().find(|i| i.key == "@scene:main").expect("scene"), raw.iter().find(|i| i.key.starts_with("@obj:")).expect("object"));
     assert_eq!(rs.digest, ro.digest, "the renderer's digest leaves the framing out");
     let l = scene::list_k2scene(&bytes).expect("a listing");
-    let (s, o) = (l.containers.iter().find(|c| c.key == "@scene").expect("scene"), l.containers.iter().find(|c| c.key.starts_with("@obj:")).expect("object"));
+    let (s, o) = (l.containers.iter().find(|c| c.key == "@scene:main").expect("scene"), l.containers.iter().find(|c| c.key.starts_with("@obj:")).expect("object"));
     assert_ne!(s.digest, o.digest, "the scene view's framing is keyed: no image is shared between them");
     assert_eq!(s.digest, scene::keyed_digest(SceneTarget::Scene, rs.digest));
     assert_eq!(o.digest, ro.digest, "a bounds-framed view keeps the renderer's digest");
@@ -458,7 +459,7 @@ fn clay_occlusion_and_the_scene_views_framing_are_in_the_cache_key() {
     let both = scene::list_k2scene(&encode(&scene_with_display_fields())).expect("a listing");
     let raw_both = k2_scenerender::digest::list(&encode(&scene_with_display_fields()), &k2_scenerender::scene::InputLimits::default()).expect("raw");
     for (c, r) in both.containers.iter().zip(&raw_both) {
-        assert_eq!(c.digest == r.digest, c.key != "@scene", "{}", c.key);
+        assert_eq!(c.digest == r.digest, c.key != "@scene:main", "{}", c.key);
     }
 }
 
@@ -517,7 +518,7 @@ fn a_renamed_container_is_ready_at_once_from_the_cache_without_a_render() {
     with_temp_home(|| {
         let (_s, blobs) = store();
         let key = doc("rename.blend");
-        let a = snap(&blobs, &key, 1, "@scene 9\n@obj:Old 5");
+        let a = snap(&blobs, &key, 1, "@scene:main 9\n@obj:Old 5");
         let sub = host_events::subscribe(&key);
         assert_eq!(service::request(&blobs, &a, "@obj:Old", Width::Thumb, Look::Opaque, Shape::Wide), Requested::Rendering);
         next(&sub, "rendering");
@@ -525,7 +526,7 @@ fn a_renamed_container_is_ready_at_once_from_the_cache_without_a_render() {
         assert_eq!(renders_of("@obj:Old").len(), 1);
 
         // The object renamed: same digest, new address.
-        let b = snap(&blobs, &key, 2, "@scene 9\n@obj:New 5");
+        let b = snap(&blobs, &key, 2, "@scene:main 9\n@obj:New 5");
         let new = b.container("@obj:New").expect("renamed").clone();
         assert_eq!(new.hash, a.container("@obj:Old").expect("old").hash, "a rename keeps the hash");
         assert_eq!(reuse::widths_to_redraw(&a, &new, "fake-1"), [Width::Thumb], "the head's re-draw asks for the old address's widths");
@@ -547,7 +548,7 @@ fn a_renamed_container_is_ready_at_once_from_the_cache_without_a_render() {
         next(&sub, "ready");
         assert_eq!(renders_of("@obj:New"), [Look::Transparent]);
         // A real edit (a new digest) is drawn too.
-        let c = snap(&blobs, &key, 3, "@scene 9\n@obj:New 6");
+        let c = snap(&blobs, &key, 3, "@scene:main 9\n@obj:New 6");
         assert_eq!(service::request(&blobs, &c, "@obj:New", Width::Thumb, Look::Opaque, Shape::Wide), Requested::Rendering);
         assert!(matches!(next(&sub, "rendering"), HostEvent::PreviewRendering { .. }));
         next(&sub, "ready");
@@ -595,7 +596,7 @@ fn ids_are_in_the_cache_key_and_the_id_image_has_an_entry_of_its_own() {
     let before = format!("scenerender-p{PROTO}-{VERSION}.clay.ao2");
     assert_eq!(build, format!("{before}.ids.shape"));
     for look in Look::ALL {
-        let name = |b: &str| cache::entry_name("@scene", "ab12", Width::Thumb, b);
+        let name = |b: &str| cache::entry_name("@scene:main", "ab12", Width::Thumb, b);
         assert_ne!(name(&look.cache_build(&build)), name(&look.cache_build(&before)), "{look:?}: never an image drawn without its id image");
         let ids = name(&cache::ids_build(&look.cache_build(&build)));
         assert_ne!(ids, name(&look.cache_build(&build)), "{look:?}");
@@ -656,9 +657,9 @@ fn a_scene_image_carries_its_id_table_and_its_id_image_is_served_beside_it() {
     with_temp_home(|| {
         let (_s, blobs) = store();
         let key = doc("ids.blend");
-        let s = snap(&blobs, &key, 1, "@scene 9 scene\n@obj:Chair 5 o0\n@obj:Lamp 6 o1\n@turntable:0 7 t0");
+        let s = snap(&blobs, &key, 1, "@scene:main 9 scene\n@obj:Chair 5 o0\n@obj:Lamp 6 o1\n@turntable:0 7 t0");
         let sub = host_events::subscribe(&key);
-        assert_eq!(service::request(&blobs, &s, "@scene", Width::Full, Look::Transparent, Shape::Wide), Requested::Rendering);
+        assert_eq!(service::request(&blobs, &s, "@scene:main", Width::Full, Look::Transparent, Shape::Wide), Requested::Rendering);
         next(&sub, "rendering");
         let ready = frame(&next(&sub, "ready"));
         let table = json!({ "layer": "ids", "image_len": 5, "count": 2, "objects": [{ "index": 0, "id": "Chair" }, { "index": 1, "id": "Lamp" }] });
@@ -667,26 +668,26 @@ fn a_scene_image_carries_its_id_table_and_its_id_image_is_served_beside_it() {
         assert!(ready.find(r#""camera""#) < ready.find(r#""ids""#), "after the camera: {ready}");
 
         // Cached: the table in the image's metadata, the id image in its own entry.
-        let hash = s.container("@scene").expect("scene").hash.clone();
+        let hash = s.container("@scene:main").expect("scene").hash.clone();
         let build = Look::Transparent.cache_build("fake-1");
-        let Got::Hit(img) = cache::get(&blobs, &key, "@scene", &hash, Width::Full, &build) else { panic!("the image") };
+        let Got::Hit(img) = cache::get(&blobs, &key, "@scene:main", &hash, Width::Full, &build) else { panic!("the image") };
         assert_eq!((img.image.as_slice(), img.meta["ids"].clone()), (&b"PIXELS"[..], table.clone()));
-        let Got::Hit(ids) = cache::get(&blobs, &key, "@scene", &hash, Width::Full, &cache::ids_build(&build)) else { panic!("the id image") };
+        let Got::Hit(ids) = cache::get(&blobs, &key, "@scene:main", &hash, Width::Full, &cache::ids_build(&build)) else { panic!("the id image") };
         assert_eq!(ids.image, FAKE_IDS);
         assert_eq!(
             (ids.meta["layer"].clone(), ids.meta["mime"].clone(), ids.meta["container"].clone(), ids.meta["render_hash"].clone(), ids.meta["look"].clone()),
-            (json!("ids"), json!("image/png"), json!("@scene"), json!(hash), json!("transparent"))
+            (json!("ids"), json!("image/png"), json!("@scene:main"), json!(hash), json!("transparent"))
         );
         assert!(ids.meta.get("ids").is_none() && ids.meta.get("camera").is_none(), "the table stays with the image: {}", ids.meta);
 
         // The route: the image's answer carries the table; `layer=ids` answers the id image.
-        let a = body(route::image(&blobs, &s, "@scene", None, Width::Full, Look::Transparent, Shape::Wide, false));
+        let a = body(route::image(&blobs, &s, "@scene:main", None, Width::Full, Look::Transparent, Shape::Wide, false));
         assert_eq!((a["state"].clone(), a["ids"].clone(), b64(&a)), (json!("ready"), table.clone(), b"PIXELS".to_vec()));
-        let i = body(route::image(&blobs, &s, "@scene", Some(&hash), Width::Full, Look::Transparent, Shape::Wide, true));
+        let i = body(route::image(&blobs, &s, "@scene:main", Some(&hash), Width::Full, Look::Transparent, Shape::Wide, true));
         assert_eq!((i["state"].clone(), i["layer"].clone(), i["format"].clone(), b64(&i)), (json!("ready"), json!("ids"), json!("png"), FAKE_IDS.to_vec()));
         assert_eq!(i["size"], a["size"], "at the still's size");
         // Another look has its own (not drawn yet).
-        assert_eq!(route::image(&blobs, &s, "@scene", None, Width::Full, Look::Opaque, Shape::Wide, true).status, "202 Accepted");
+        assert_eq!(route::image(&blobs, &s, "@scene:main", None, Width::Full, Look::Opaque, Shape::Wide, true).status, "202 Accepted");
         next(&sub, "rendering");
         next(&sub, "ready");
 
@@ -701,12 +702,12 @@ fn a_scene_image_carries_its_id_table_and_its_id_image_is_served_beside_it() {
         assert!(body(route::image(&blobs, &s, "@turntable:0", None, Width::Thumb, Look::Transparent, Shape::Wide, false)).get("ids").is_none());
 
         // A cached image whose id image went (the cap) is drawn again when it is asked for.
-        std::fs::remove_file(cache::doc_dir(&key).join(cache::entry_name("@scene", &hash, Width::Full, &cache::ids_build(&build)))).expect("remove");
-        let r = route::image(&blobs, &s, "@scene", None, Width::Full, Look::Transparent, Shape::Wide, true);
+        std::fs::remove_file(cache::doc_dir(&key).join(cache::entry_name("@scene:main", &hash, Width::Full, &cache::ids_build(&build)))).expect("remove");
+        let r = route::image(&blobs, &s, "@scene:main", None, Width::Full, Look::Transparent, Shape::Wide, true);
         assert_eq!((r.status, body(r)["state"].clone()), ("202 Accepted", json!("rendering")), "never a stale id image");
         assert!(matches!(next(&sub, "rendering"), HostEvent::PreviewRendering { .. }), "drawn again");
         next(&sub, "ready");
-        assert_eq!(b64(&body(route::image(&blobs, &s, "@scene", None, Width::Full, Look::Transparent, Shape::Wide, true))), FAKE_IDS);
+        assert_eq!(b64(&body(route::image(&blobs, &s, "@scene:main", None, Width::Full, Look::Transparent, Shape::Wide, true))), FAKE_IDS);
     });
 }
 
@@ -718,16 +719,16 @@ fn a_rename_reuses_the_id_image_and_its_table_names_the_new_id() {
     with_temp_home(|| {
         let (_s, blobs) = store();
         let key = doc("rename-ids.blend");
-        let a = snap(&blobs, &key, 1, "@scene 9 scene\n@obj:Before 5 o0\n@obj:Other 6 o1");
+        let a = snap(&blobs, &key, 1, "@scene:main 9 scene\n@obj:Before 5 o0\n@obj:Other 6 o1");
         let sub = host_events::subscribe(&key);
-        for c in ["@obj:Before", "@scene"] {
+        for c in ["@obj:Before", "@scene:main"] {
             assert_eq!(service::request(&blobs, &a, c, Width::Thumb, Look::Opaque, Shape::Wide), Requested::Rendering);
             next(&sub, "rendering");
             next(&sub, "ready");
         }
 
         // Before renamed After: reused, its table names After, its id image came along.
-        let b = snap(&blobs, &key, 2, "@scene 9 scene\n@obj:After 5 o0\n@obj:Other 6 o1");
+        let b = snap(&blobs, &key, 2, "@scene:main 9 scene\n@obj:After 5 o0\n@obj:Other 6 o1");
         let new = b.container("@obj:After").expect("renamed").clone();
         assert_eq!(service::request(&blobs, &b, "@obj:After", Width::Thumb, Look::Opaque, Shape::Wide), Requested::Reused { from: "@obj:Before".into() });
         let f: serde_json::Value = serde_json::from_str(&frame(&next(&sub, "ready at once"))).expect("json");
@@ -742,20 +743,20 @@ fn a_rename_reuses_the_id_image_and_its_table_names_the_new_id() {
         assert_eq!(b64(&body(route::image(&blobs, &b, "@obj:After", None, Width::Thumb, Look::Opaque, Shape::Wide, true))), FAKE_IDS);
 
         // The scene view keeps its address and hash: its cached image is answered named as now, without a render.
-        let r = body(route::image(&blobs, &b, "@scene", None, Width::Thumb, Look::Opaque, Shape::Wide, false));
+        let r = body(route::image(&blobs, &b, "@scene:main", None, Width::Thumb, Look::Opaque, Shape::Wide, false));
         assert_eq!(r["ids"]["objects"], json!([{ "index": 0, "id": "After" }, { "index": 1, "id": "Other" }]));
         assert!(sub.rx.recv_timeout(Duration::from_millis(300)).is_err(), "nothing drawn");
 
         // An object added before it, and it renamed again: its view's hash is the same, so it is
         // reused; the index in the image stays (the pixels hold it) and names the object itself.
-        let c = snap(&blobs, &key, 3, "@scene 8 scene\n@obj:Added 3 o0\n@obj:Again 5 o1\n@obj:Other 6 o2");
+        let c = snap(&blobs, &key, 3, "@scene:main 8 scene\n@obj:Added 3 o0\n@obj:Again 5 o1\n@obj:Other 6 o2");
         let Requested::Reused { from } = service::request(&blobs, &c, "@obj:Again", Width::Thumb, Look::Opaque, Shape::Wide) else { panic!("reused") };
         assert!(from == "@obj:After" || from == "@obj:Before", "{from}");
         let f: serde_json::Value = serde_json::from_str(&frame(&next(&sub, "ready at once"))).expect("json");
         assert_eq!(f["ids"]["objects"], json!([{ "index": 0, "id": "Again" }]), "{f}");
         // The scene's image from before (another hash now) keeps the names it was drawn with.
-        let old_scene = a.container("@scene").expect("scene").hash.clone();
-        let r = body(route::image(&blobs, &c, "@scene", Some(&old_scene), Width::Thumb, Look::Opaque, Shape::Wide, false));
+        let old_scene = a.container("@scene:main").expect("scene").hash.clone();
+        let r = body(route::image(&blobs, &c, "@scene:main", Some(&old_scene), Width::Thumb, Look::Opaque, Shape::Wide, false));
         assert_eq!(r["ids"]["objects"], json!([{ "index": 0, "id": "Before" }, { "index": 1, "id": "Other" }]));
     });
 }
@@ -778,7 +779,7 @@ fn pushed_now(sub: &Subscription) -> Vec<HostEvent> {
     v
 }
 
-const PLACE: &str = "@scene 9 scene\n@cam:Main 4 c0\n@obj:Chair 5 o0\n@obj:Lamp 6 o1\n@turntable:0 7 t0";
+const PLACE: &str = "@scene:main 9 scene\n@cam:Main 4 c0\n@obj:Chair 5 o0\n@obj:Lamp 6 o1\n@turntable:0 7 t0";
 
 /// An object renamed in place: the scene and camera views keep their
 /// address and render hash, so nothing is drawn; each of their cached
@@ -792,8 +793,8 @@ fn a_rename_pushes_the_scene_and_camera_tables_again_without_a_render() {
         let a = snap(&blobs, &key, 1, PLACE);
         let sub = host_events::subscribe(&key);
         let views = [
-            ("@scene", Width::Thumb, Look::Opaque),
-            ("@scene", Width::Full, Look::Transparent),
+            ("@scene:main", Width::Thumb, Look::Opaque),
+            ("@scene:main", Width::Full, Look::Transparent),
             ("@cam:Main", Width::Thumb2x, Look::Transparent),
             ("@obj:Lamp", Width::Thumb, Look::Transparent),
             ("@turntable:0", Width::Thumb, Look::Transparent),
@@ -836,23 +837,23 @@ fn a_rename_pushes_the_scene_and_camera_tables_again_without_a_render() {
             again,
             [
                 ("@cam:Main".to_string(), "thumb2x".to_string(), Some("transparent".to_string())),
-                ("@scene".to_string(), "full".to_string(), Some("transparent".to_string())),
-                ("@scene".to_string(), "thumb".to_string(), None),
+                ("@scene:main".to_string(), "full".to_string(), Some("transparent".to_string())),
+                ("@scene:main".to_string(), "thumb".to_string(), None),
             ],
             "the turntable frame has no table; nothing else was cached"
         );
         // A ready as every older client reads it: the old fields first, in order.
-        let f = frame(evs.iter().find(|e| matches!(e, HostEvent::PreviewReady { container, width: "thumb", .. } if container == "@scene")).expect("the scene's thumb"));
-        let hash = &b.container("@scene").expect("scene").hash;
+        let f = frame(evs.iter().find(|e| matches!(e, HostEvent::PreviewReady { container, width: "thumb", .. } if container == "@scene:main")).expect("the scene's thumb"));
+        let hash = &b.container("@scene:main").expect("scene").hash;
         assert!(
-            f.starts_with(&format!(r#"{{"type":"preview_ready","container":"@scene","render_hash":"{hash}","width":"thumb","state":"ready","failed":null,"rev":2,"rendered_at_ms":{},"render_ms":7,"without_modifiers":true,"shape":"wide","camera":{{"fx":1.5}},"ids":{{"#, at["@scene thumb"])),
+            f.starts_with(&format!(r#"{{"type":"preview_ready","container":"@scene:main","render_hash":"{hash}","width":"thumb","state":"ready","failed":null,"rev":2,"rendered_at_ms":{},"render_ms":7,"without_modifiers":true,"shape":"wide","camera":{{"fx":1.5}},"ids":{{"#, at["@scene:main thumb"])),
             "{f}"
         );
 
         // The cache keeps the ids it was drawn with; the route names them as now.
-        let Got::Hit(e) = cache::get(&blobs, &key, "@scene", hash, Width::Thumb, "fake-1") else { panic!("cached") };
+        let Got::Hit(e) = cache::get(&blobs, &key, "@scene:main", hash, Width::Thumb, "fake-1") else { panic!("cached") };
         assert_eq!(e.meta["ids"]["objects"][1]["id"], json!("Lamp"));
-        assert_eq!(body(route::image(&blobs, &b, "@scene", None, Width::Thumb, Look::Opaque, Shape::Wide, false))["ids"]["objects"], renamed);
+        assert_eq!(body(route::image(&blobs, &b, "@scene:main", None, Width::Thumb, Look::Opaque, Shape::Wide, false))["ids"]["objects"], renamed);
         assert!(pushed_now(&sub).is_empty(), "the route drew nothing");
 
         // A head move that renames nothing pushes nothing: the same listing,
@@ -868,10 +869,44 @@ fn a_rename_pushes_the_scene_and_camera_tables_again_without_a_render() {
         let e = snap(&blobs, &key, 5, &format!("{}\n@cam:Side 3 c1\n@obj:Vase 2 o2", PLACE.replace("@obj:Lamp", "@obj:Lantern")));
         service::head_moved(&blobs, &d, &e);
         let again: Vec<serde_json::Value> = pushed_now(&sub).iter().map(|e| serde_json::from_str(&frame(e)).expect("json")).collect();
-        let views: Vec<&serde_json::Value> = again.iter().filter(|f| f["container"] == "@scene" || f["container"] == "@cam:Main").collect();
+        let views: Vec<&serde_json::Value> = again.iter().filter(|f| f["container"] == "@scene:main" || f["container"] == "@cam:Main").collect();
         assert_eq!(views.len(), 3, "{again:?}");
         assert!(views.iter().all(|f| f["ids"]["objects"][1]["id"] == "Lantern" && f["rev"] == 5), "{again:?}");
         assert_eq!(again.len(), 4, "and the object's own view reused: {again:?}");
+    });
+}
+
+/// An object the read keys keeps its address when renamed (its live key),
+/// and so its render hash: its own view is not drawn or reused but pushed
+/// `ready` again with its table naming the new name, as the scene and
+/// camera views are.
+#[test]
+fn a_keyed_rename_keeps_the_address_and_pushes_the_objects_own_table() {
+    with_temp_home(|| {
+        let (_s, blobs) = store();
+        let key = doc("renamed-keyed.blend");
+        let listing = "@scene:main 9 scene\n@cam:3 4 c0 Main\n@obj:7 5 o0 Chair\n@obj:8 6 o1 Lamp";
+        let a = snap(&blobs, &key, 1, listing);
+        let sub = host_events::subscribe(&key);
+        for c in ["@obj:8", "@scene:main"] {
+            draw_now(&blobs, &a, &sub, c, Width::Thumb, Look::Transparent);
+        }
+        let b = snap(&blobs, &key, 2, &listing.replace("o1 Lamp", "o1 Light"));
+        assert_eq!(b.container("@obj:8").expect("the same address").hash, a.container("@obj:8").expect("keyed").hash);
+        assert!(service::dirty(&a, &b).is_empty(), "nothing to draw");
+        service::head_moved(&blobs, &a, &b);
+        let evs = pushed_now(&sub);
+        assert!(evs.iter().all(|e| matches!(e, HostEvent::PreviewReady { state: "ready", .. })), "no worker ran: {evs:?}");
+        let frames: Vec<serde_json::Value> = evs.iter().map(|e| serde_json::from_str(&frame(e)).expect("json")).collect();
+        let own: Vec<&serde_json::Value> = frames.iter().filter(|f| f["container"] == "@obj:8").collect();
+        assert_eq!(own.len(), 1, "{frames:?}");
+        assert_eq!((own[0]["ids"]["objects"].clone(), own[0].get("reused_from")), (json!([{ "index": 1, "id": "Light" }]), None));
+        let scene: Vec<&serde_json::Value> = frames.iter().filter(|f| f["container"] == "@scene:main").collect();
+        assert_eq!(scene.len(), 1, "{frames:?}");
+        assert_eq!(scene[0]["ids"]["objects"], json!([{ "index": 0, "id": "Chair" }, { "index": 1, "id": "Light" }]));
+        assert_eq!(frames.len(), 2, "{frames:?}");
+        assert_eq!(body(route::image(&blobs, &b, "@obj:8", None, Width::Thumb, Look::Transparent, Shape::Wide, false))["ids"]["objects"], json!([{ "index": 1, "id": "Light" }]));
+        assert!(pushed_now(&sub).is_empty(), "the route drew nothing");
     });
 }
 
@@ -884,11 +919,11 @@ fn a_rename_pushes_nothing_for_an_image_not_cached_at_the_current_hash() {
         let key = doc("renamed-uncached.blend");
         let a = snap(&blobs, &key, 1, PLACE);
         let sub = host_events::subscribe(&key);
-        draw_now(&blobs, &a, &sub, "@scene", Width::Thumb, Look::Transparent);
+        draw_now(&blobs, &a, &sub, "@scene:main", Width::Thumb, Look::Transparent);
         // The scene moved on (its hash is another now; the camera was never drawn), then an object renamed.
-        let b = snap(&blobs, &key, 2, &PLACE.replace("@scene 9", "@scene 8"));
-        let c = snap(&blobs, &key, 3, &PLACE.replace("@scene 9", "@scene 8").replace("@obj:Chair", "@obj:Seat"));
-        assert_ne!(b.container("@scene").expect("scene").hash, a.container("@scene").expect("scene").hash);
+        let b = snap(&blobs, &key, 2, &PLACE.replace("@scene:main 9", "@scene:main 8"));
+        let c = snap(&blobs, &key, 3, &PLACE.replace("@scene:main 9", "@scene:main 8").replace("@obj:Chair", "@obj:Seat"));
+        assert_ne!(b.container("@scene:main").expect("scene").hash, a.container("@scene:main").expect("scene").hash);
         service::head_moved(&blobs, &b, &c);
         assert!(pushed_now(&sub).is_empty(), "nothing cached at the current hash, nothing drawn");
     });
@@ -904,17 +939,17 @@ fn a_draw_landing_after_a_rename_pushes_its_table_named_as_now() {
         let (_s, blobs) = store();
         let key = doc("renamed-mid-draw.blend");
         let _pin = service::pin_head(&key);
-        let listing = "@scene 9 scene\n@cam:Main 4 c0\n@obj:Desk 5 o0\n@obj:Stool 6 o1";
+        let listing = "@scene:main 9 scene\n@cam:Main 4 c0\n@obj:Desk 5 o0\n@obj:Stool 6 o1";
         let a = snap(&blobs, &key, 1, listing);
         let sub = host_events::subscribe(&key);
-        let land = hold(listing, "@scene");
-        assert_eq!(service::request(&blobs, &a, "@scene", Width::Thumb, Look::Opaque, Shape::Wide), Requested::Rendering);
+        let land = hold(listing, "@scene:main");
+        assert_eq!(service::request(&blobs, &a, "@scene:main", Width::Thumb, Look::Opaque, Shape::Wide), Requested::Rendering);
         assert!(matches!(next(&sub, "rendering"), HostEvent::PreviewRendering { .. }));
 
         // Stool renamed Bench while the scene is drawn: the same hash, nothing cached yet to push.
         let b = snap(&blobs, &key, 2, &listing.replace("@obj:Stool", "@obj:Bench"));
-        let hash = b.container("@scene").expect("scene").hash.clone();
-        assert_eq!(hash, a.container("@scene").expect("scene").hash, "a rename keeps the hash");
+        let hash = b.container("@scene:main").expect("scene").hash.clone();
+        assert_eq!(hash, a.container("@scene:main").expect("scene").hash, "a rename keeps the hash");
         service::head_moved(&blobs, &a, &b);
         assert!(pushed_now(&sub).is_empty(), "nothing cached yet, nothing pushed");
 
@@ -924,14 +959,14 @@ fn a_draw_landing_after_a_rename_pushes_its_table_named_as_now() {
         let renamed = json!([{ "index": 0, "id": "Desk" }, { "index": 1, "id": "Bench" }]);
         assert_eq!(
             (f["container"].clone(), f["render_hash"].clone(), f["state"].clone(), f["rev"].clone()),
-            (json!("@scene"), json!(hash), json!("ready"), json!(1)),
+            (json!("@scene:main"), json!(hash), json!("ready"), json!(1)),
             "the draw's own push, at its rev: {f}"
         );
         assert_eq!((f["ids"]["objects"].clone(), f["ids"]["count"].clone()), (renamed.clone(), json!(2)), "{f}");
 
-        let Got::Hit(e) = cache::get(&blobs, &key, "@scene", &hash, Width::Thumb, "fake-1") else { panic!("cached") };
+        let Got::Hit(e) = cache::get(&blobs, &key, "@scene:main", &hash, Width::Thumb, "fake-1") else { panic!("cached") };
         assert_eq!(e.meta["ids"]["objects"][1]["id"], json!("Stool"), "the cache keeps the drawn name");
-        assert_eq!(body(route::image(&blobs, &b, "@scene", None, Width::Thumb, Look::Opaque, Shape::Wide, false))["ids"]["objects"], renamed);
+        assert_eq!(body(route::image(&blobs, &b, "@scene:main", None, Width::Thumb, Look::Opaque, Shape::Wide, false))["ids"]["objects"], renamed);
         assert!(pushed_now(&sub).is_empty(), "nothing more");
     });
 }
@@ -945,7 +980,7 @@ fn a_draw_landing_after_its_view_moved_on_pushes_the_names_it_drew_with() {
         let (_s, blobs) = store();
         let key = doc("moved-mid-draw.blend");
         let _pin = service::pin_head(&key);
-        let listing = "@scene 9 scene\n@cam:Main 4 c0\n@obj:Shelf 5 o0\n@obj:Crate 6 o1";
+        let listing = "@scene:main 9 scene\n@cam:Main 4 c0\n@obj:Shelf 5 o0\n@obj:Crate 6 o1";
         let a = snap(&blobs, &key, 1, listing);
         let sub = host_events::subscribe(&key);
         let land = hold(listing, "@cam:Main");
@@ -979,11 +1014,11 @@ fn a_draw_landing_without_a_head_snapshot_pushes_the_names_it_drew_with() {
     with_temp_home(|| {
         let (_s, blobs) = store();
         let key = doc("headless-mid-draw.blend");
-        let listing = "@scene 9 scene\n@obj:Bench 5 o0\n@obj:Easel 6 o1";
+        let listing = "@scene:main 9 scene\n@obj:Bench 5 o0\n@obj:Easel 6 o1";
         let a = snap(&blobs, &key, 1, listing);
         let sub = host_events::subscribe(&key);
-        let land = hold(listing, "@scene");
-        assert_eq!(service::request(&blobs, &a, "@scene", Width::Thumb, Look::Opaque, Shape::Wide), Requested::Rendering);
+        let land = hold(listing, "@scene:main");
+        assert_eq!(service::request(&blobs, &a, "@scene:main", Width::Thumb, Look::Opaque, Shape::Wide), Requested::Rendering);
         assert!(matches!(next(&sub, "rendering"), HostEvent::PreviewRendering { .. }));
 
         let b = snap(&blobs, &key, 2, &listing.replace("@obj:Easel", "@obj:Stand"));
@@ -993,7 +1028,7 @@ fn a_draw_landing_without_a_head_snapshot_pushes_the_names_it_drew_with() {
 
         land.send(()).expect("the draw is held");
         let f: serde_json::Value = serde_json::from_str(&frame(&next(&sub, "ready"))).expect("json");
-        assert_eq!((f["container"].clone(), f["state"].clone(), f["rev"].clone()), (json!("@scene"), json!("ready"), json!(1)), "{f}");
+        assert_eq!((f["container"].clone(), f["state"].clone(), f["rev"].clone()), (json!("@scene:main"), json!("ready"), json!(1)), "{f}");
         assert_eq!(f["ids"]["objects"], json!([{ "index": 0, "id": "Bench" }, { "index": 1, "id": "Easel" }]), "{f}");
         assert!(pushed_now(&sub).is_empty(), "nothing more");
     });
@@ -1065,7 +1100,7 @@ fn the_workers_id_image_round_trips_through_the_cache_when_it_is_built() {
             bytes: Arc::new(bytes.clone()),
         });
         let titles: Vec<&str> = l.containers.iter().filter(|c| c.key.starts_with("@obj:")).map(|c| c.title.as_str()).collect();
-        for (c, w) in [("@scene", Width::Thumb), ("@obj:Item.002", Width::Thumb), ("@cam:Camera", Width::Thumb2x)] {
+        for (c, w) in [("@scene:main", Width::Thumb), ("@obj:Item.002", Width::Thumb), ("@cam:Camera", Width::Thumb2x)] {
             let k = snap.container(c).expect("listed");
             let img = scene::render_k2scene_with(&bin, &bytes, &k.c, w, Look::Transparent, Shape::Wide, Duration::from_secs(60)).unwrap_or_else(|f| panic!("{c}: {f:?}"));
             let png = img.ids.clone().expect("an id image");
@@ -1098,7 +1133,7 @@ fn the_route_takes_wide_or_tall_and_wide_by_default() {
     }
 }
 
-const SHAPED: &str = "@scene 9 scene\n@cam:Shaped 4 c0\n@obj:Plinth 5 o0\n@obj:Wobbly:fail 3 o1\n@turntable:0 7 t0";
+const SHAPED: &str = "@scene:main 9 scene\n@cam:Shaped 4 c0\n@obj:Plinth 5 o0\n@obj:Wobbly:fail 3 o1\n@turntable:0 7 t0";
 
 /// The scene and object views are keyed by shape (tall under its own name,
 /// wide under the name every image had); a camera's view and a turntable
@@ -1110,7 +1145,7 @@ fn only_the_scene_and_object_views_are_keyed_by_shape() {
         let (_s, blobs) = store();
         let s = snap(&blobs, &doc("shape-keys.blend"), 1, SHAPED);
         for look in Look::ALL {
-            for c in ["@scene", "@obj:Plinth"] {
+            for c in ["@scene:main", "@obj:Plinth"] {
                 assert_eq!(s.drawn_shape(c, Shape::Tall), Shape::Tall, "{c}");
                 assert_ne!(s.cache_build(c, look, Shape::Tall), s.cache_build(c, look, Shape::Wide), "{c} {look:?}");
                 assert_eq!(s.cache_build(c, look, Shape::Wide), look.cache_build("fake-1"), "{c} {look:?}: wide keeps the look's name");
@@ -1194,7 +1229,7 @@ fn a_tall_still_is_drawn_and_cached_apart_and_a_camera_or_frame_ignores_the_shap
         for shape in Shape::ALL {
             let v = listed(shape);
             assert_eq!(v["shape"], json!(shape.as_str()));
-            assert_eq!((state(&v, "@obj:Plinth"), state(&v, "@cam:Shaped"), state(&v, "@scene")), (json!("ready"), json!("ready"), json!("none")), "{shape:?}");
+            assert_eq!((state(&v, "@obj:Plinth"), state(&v, "@cam:Shaped"), state(&v, "@scene:main")), (json!("ready"), json!("ready"), json!("none")), "{shape:?}");
         }
     });
 }

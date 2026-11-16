@@ -238,8 +238,9 @@ pub fn head_moved(blobs: &Arc<BlobStore>, prev: &Snapshot, snap: &Arc<Snapshot>)
 
 /// Objects renamed in place. A scene's digest leaves ids out, so the views
 /// that draw every object (the scene and the cameras) keep their address
-/// and render hash: nothing is drawn, and a client holding one of their id
-/// tables would keep the old ids. Each of their images cached at the view's
+/// and render hash, and so does a renamed object's own view when the read
+/// keys it (its address is its live key): nothing is drawn, and a client
+/// holding one of their id tables would keep the old ids. Each of their images cached at the view's
 /// current hash whose table names an object differently from `prev`'s
 /// listing is pushed `ready` again, at once: the same container, render
 /// hash, width, look, shape and fields (its `rendered_at_ms` is when it was
@@ -253,7 +254,7 @@ fn push_renamed_ids(blobs: &BlobStore, prev: &Snapshot, snap: &Snapshot) {
     }
     for k in &snap.containers {
         let Some(p) = prev.container(&k.c.key).filter(|p| p.hash == k.hash) else { continue };
-        if !snap.renderer.draws_ids(&k.c) || !extras::named_by_listing(&k.c) {
+        if !snap.renderer.draws_ids(&k.c) {
             continue;
         }
         for (look, &shape) in Look::ALL.into_iter().filter(|l| snap.renderer.draws(*l)).flat_map(|l| snap.shapes_of(&k.c).iter().map(move |s| (l, s))) {

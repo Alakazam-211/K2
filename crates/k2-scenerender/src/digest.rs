@@ -1,14 +1,32 @@
 //! What a scene previews, and the raw digest of what each draws: the host's
 //! listing (V3's `PreviewRenderer::list`), from the mesh read alone.
 //!
-//! **Containers**, in this order: `@scene` (the auto 3/4 view of every
-//! object), one per camera (`@cam:<id>`, through that camera), one per object
-//! (`@obj:<id>`, the auto view of that object alone), then the turntable's
-//! eight frames of every object (`@turntable:0` to `@turntable:7`, frame k at
-//! azimuth 45 + 45k degrees, [`ViewSpec::Turntable`]). An id that is empty,
-//! too long for an address or already used gets the index form (`@cam#2`,
-//! `@obj#17`); the turntable's addresses are fixed. So a scene lists
-//! 1 + cameras + objects + 8 items.
+//! **Containers**, in this order: the scene view (the auto 3/4 view of every
+//! object), one per camera (through that camera), one per object (the auto
+//! view of that object alone), then the turntable's eight frames of every
+//! object (frame k at azimuth 45 + 45k degrees, [`ViewSpec::Turntable`]). So
+//! a scene lists 1 + cameras + objects + 8 items.
+//!
+//! **Addresses** ([`addresses`]): every one is a native address in the
+//! multiplayer kit's grammar ([`crate::addr`]), so a still's address is also
+//! a presence view address.
+//! - the scene view: `@scene:main`; a turntable frame: `@turntable:<k>`;
+//! - an object's view: the object's `key` when the read gives one (its live
+//!   address, `@obj:N`); else its name, `@obj:<enc(id)>` ([`crate::addr::enc`]);
+//!   else, when the name is empty, encodes longer than [`MAX_ADDRESS_ID`]
+//!   bytes, is another unkeyed object's too, or is spelled like another
+//!   object's key, its index in this read, `@obj-n:<i>` (from 0);
+//! - a camera's view: the same with `cam` (`@cam:N`, `@cam:<enc(id)>`,
+//!   `@cam-n:<i>`).
+//!
+//! **Which survive an edit:** a key form names the same object across
+//! versions, renames included; a name form across every edit but a rename
+//! of that object (renamed, it is listed under the new name). The index form
+//! (`@obj-n`, `@cam-n`) is **bound to one version**: it means "the i-th
+//! object in this read", so adding or removing an object before it, or a
+//! rename that makes its name unique again, moves it. Adding, removing or
+//! editing other objects never changes a key form, nor a name form unless
+//! another unkeyed object takes the same name (both then get the index form).
 //!
 //! **Digest** (SHA-256, [`crate::sha256`]), over what changes the pixels and
 //! nothing else, object and camera ids left out (so a rename doesn't redraw):
@@ -33,11 +51,13 @@
 
 use serde::Serialize;
 
+use crate::addr;
 use crate::camera::{mesh_bounds, ViewSpec, TURNTABLE_FRAMES};
 use crate::sha256::Sha256;
 use crate::scene::{self, Camera, CameraDisplay, Header, InputError, InputLimits, MeshInfo, Object, UpAxis};
 
-/// Longest id put in an address as is.
+/// Longest encoded name put in an address (bytes); a longer one gets the
+/// index form.
 pub const MAX_ADDRESS_ID: usize = 128;
 
 /// What a container draws.
@@ -103,7 +123,8 @@ pub struct LocalBounds {
 /// One previewed thing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
-    /// Its address (`@scene`, `@cam:Camera`, `@obj:Cube`, `@turntable:3`).
+    /// Its address (`@scene:main`, `@cam:3`, `@obj:Cube`, `@obj-n:4`,
+    /// `@turntable:3`; see the module docs).
     pub key: String,
     /// Its id as the file names it (empty for the scene and the turntable).
     pub title: String,
@@ -117,8 +138,33 @@ pub struct Item {
     pub camera: Option<CameraDisplay>,
 }
 
-fn addressable(id: &str) -> bool {
-    !id.is_empty() && id.len() <= MAX_ADDRESS_ID && !id.chars().any(|c| c.is_control())
+/// The addresses of one list's views (`kind` `obj` or `cam`), from each
+/// one's `(key, id)` in the read's order (see the module docs): its key,
+/// else its encoded name when that is unique and no one's key, else its
+/// index (version-bound).
+pub fn addresses<'a>(kind: &str, list: impl IntoIterator<Item = (Option<&'a str>, &'a str)>) -> Vec<String> {
+    let list: Vec<(Option<&str>, &str)> = list.into_iter().collect();
+    let keys: std::collections::HashSet<&str> = list.iter().filter_map(|(k, _)| *k).collect();
+    let named: Vec<Option<String>> = list
+        .iter()
+        .map(|(k, id)| {
+            let e = addr::enc(id);
+            (k.is_none() && !e.is_empty() && e.len() <= MAX_ADDRESS_ID).then(|| format!("@{kind}:{e}"))
+        })
+        .collect();
+    let mut count = std::collections::HashMap::new();
+    for a in named.iter().flatten() {
+        *count.entry(a.as_str()).or_insert(0u32) += 1;
+    }
+    list.iter()
+        .zip(&named)
+        .enumerate()
+        .map(|(i, ((key, _), name))| match (key, name) {
+            (Some(k), _) => k.to_string(),
+            (None, Some(a)) if count[a.as_str()] == 1 && !keys.contains(a.as_str()) && addr::is_native(a) => a.clone(),
+            _ => format!("@{kind}-n:{i}"),
+        })
+        .collect()
 }
 
 fn f32s(h: &mut Sha256, v: &[f32]) {
@@ -239,20 +285,18 @@ fn local_box(m: &MeshInfo, data: &[u8]) -> Option<([f32; 3], [f32; 3])> {
 fn list_header(h: &Header, mesh: &[[u8; 32]], boxes: &[Option<([f32; 3], [f32; 3])>]) -> Vec<Item> {
     let all: Vec<&Object> = h.objects.iter().collect();
     let mut items = Vec::with_capacity(1 + h.cameras.len() + h.objects.len() + TURNTABLE_FRAMES as usize);
-    items.push(Item { key: "@scene".into(), title: String::new(), target: Target::Scene, digest: view_digest(h.up, Through::Auto, &all, mesh), bounds: None, camera: None });
-    let mut used = std::collections::HashSet::new();
-    for (i, c) in h.cameras.iter().enumerate() {
-        let key = if addressable(&c.id) && used.insert(format!("@cam:{}", c.id)) { format!("@cam:{}", c.id) } else { format!("@cam#{i}") };
+    items.push(Item { key: addr::SCENE.into(), title: String::new(), target: Target::Scene, digest: view_digest(h.up, Through::Auto, &all, mesh), bounds: None, camera: None });
+    let cams = addresses("cam", h.cameras.iter().map(|c| (c.key.as_deref(), c.id.as_str())));
+    let objs = addresses("obj", h.objects.iter().map(|o| (o.key.as_deref(), o.id.as_str())));
+    for ((i, c), key) in h.cameras.iter().enumerate().zip(cams) {
         items.push(Item { key, title: c.id.clone(), target: Target::Camera(i as u32), digest: view_digest(h.up, Through::Camera(c), &all, mesh), bounds: None, camera: Some(c.display()) });
     }
-    for (i, o) in h.objects.iter().enumerate() {
-        let key = if addressable(&o.id) && used.insert(format!("@obj:{}", o.id)) { format!("@obj:{}", o.id) } else { format!("@obj#{i}") };
+    for ((i, o), key) in h.objects.iter().enumerate().zip(objs) {
         let bounds = boxes[o.mesh as usize].map(|(min, max)| LocalBounds { min, max, approx: o.modifiers_not_applied });
         items.push(Item { key, title: o.id.clone(), target: Target::Object(i as u32), digest: view_digest(h.up, Through::Auto, &[o], mesh), bounds, camera: None });
     }
     for k in 0..TURNTABLE_FRAMES {
         let key = format!("@turntable:{k}");
-        used.insert(key.clone());
         items.push(Item { key, title: String::new(), target: Target::Turntable(k), digest: view_digest(h.up, Through::Turntable(k), &all, mesh), bounds: None, camera: None });
     }
     items
@@ -273,7 +317,7 @@ mod tests {
         let s = testgen::camera_scene();
         let items = list(&encode(&s), &InputLimits::default()).expect("list");
         let keys: Vec<&str> = items.iter().map(|i| i.key.as_str()).collect();
-        assert_eq!(keys, ["@scene", "@cam:Camera", "@obj:Cube", "@turntable:0", "@turntable:1", "@turntable:2", "@turntable:3", "@turntable:4", "@turntable:5", "@turntable:6", "@turntable:7"]);
+        assert_eq!(keys, ["@scene:main", "@cam:Camera", "@obj:Cube", "@turntable:0", "@turntable:1", "@turntable:2", "@turntable:3", "@turntable:4", "@turntable:5", "@turntable:6", "@turntable:7"]);
         let mut targets = vec![Target::Scene, Target::Camera(0), Target::Object(0)];
         targets.extend((0..8).map(Target::Turntable));
         assert_eq!(items.iter().map(|i| i.target).collect::<Vec<_>>(), targets);
@@ -290,7 +334,7 @@ mod tests {
         n.objects[0].id = "@turntable:0".into();
         n.cameras[0].id = "turntable:1".into();
         let keys: Vec<String> = digests(&n).into_iter().map(|x| x.0).collect();
-        assert_eq!(keys[..4], ["@scene".to_string(), "@cam:turntable:1".into(), "@obj:@turntable:0".into(), "@turntable:0".into()]);
+        assert_eq!(keys[..4], ["@scene:main".to_string(), "@cam:turntable:1".into(), "@obj:@turntable:0".into(), "@turntable:0".into()]);
         assert_eq!(keys.len(), 11);
     }
 
@@ -322,7 +366,7 @@ mod tests {
         c.objects[1].id = c.objects[0].id.clone();
         c.objects[2].id = String::new();
         let keys: Vec<String> = digests(&c).into_iter().map(|x| x.0).collect();
-        assert_eq!(keys[1..4], ["@obj:Item.000".to_string(), "@obj#1".into(), "@obj#2".into()]);
+        assert_eq!(keys[1..5], ["@obj-n:0".to_string(), "@obj-n:1".into(), "@obj-n:2".into(), "@obj:Item.003".into()], "a duplicated name: each by its index; an empty one too");
         assert_eq!(keys[5..], (0..8).map(|k| format!("@turntable:{k}")).collect::<Vec<_>>());
         // Two objects drawing the same thing in the same place have the same digest.
         let mut d = a.clone();
@@ -345,18 +389,18 @@ mod tests {
         // Move one object: the scene, the camera, that object and the turntable.
         let mut m = a.clone();
         m.objects[2].transform[12] += 0.5;
-        assert_eq!(changed(&m), with_tt(&["@scene", "@cam:Camera", "@obj:Item.002"]));
+        assert_eq!(changed(&m), with_tt(&["@scene:main", "@cam:Camera", "@obj:Item.002"]));
         // Its colour, its sidedness, its modifiers flag: the same set.
         let mut c = a.clone();
         c.objects[2].base_color[0] = 0.0;
-        assert_eq!(changed(&c), with_tt(&["@scene", "@cam:Camera", "@obj:Item.002"]));
+        assert_eq!(changed(&c), with_tt(&["@scene:main", "@cam:Camera", "@obj:Item.002"]));
         let mut f = a.clone();
         f.objects[2].modifiers_not_applied = true;
-        assert_eq!(changed(&f), with_tt(&["@scene", "@cam:Camera", "@obj:Item.002"]));
+        assert_eq!(changed(&f), with_tt(&["@scene:main", "@cam:Camera", "@obj:Item.002"]));
         // A shared mesh's data: every object that uses it (0 and 2 use mesh 0).
         let mut g = a.clone();
         g.meshes[0].positions[0][0] += 0.25;
-        assert_eq!(changed(&g), with_tt(&["@scene", "@cam:Camera", "@obj:Item.000", "@obj:Item.002"]));
+        assert_eq!(changed(&g), with_tt(&["@scene:main", "@cam:Camera", "@obj:Item.000", "@obj:Item.002"]));
         // The camera: only its view.
         let mut k = a.clone();
         k.cameras[0].yfov = 0.7;
@@ -419,6 +463,167 @@ mod tests {
         // Absent in the file: absent in the item.
         assert_eq!(serde_json::to_string(&la[1].camera).expect("json"), "{}");
         assert!(la.iter().chain(&lb).filter(|i| !matches!(i.target, Target::Camera(_))).all(|i| i.camera.is_none()));
+    }
+
+    /// Names with spaces, `%`, `/`, `:`, tabs and non-ASCII, a duplicate,
+    /// and keyed objects and cameras (a camera object keyed among both).
+    fn addressed_scene() -> crate::scene::Scene {
+        let mut s = testgen::grid_scene(2, false);
+        s.cameras = testgen::camera_scene().cameras;
+        let mut cam2 = s.cameras[0].clone();
+        cam2.id = "Cam A/B".into();
+        s.cameras.push(cam2);
+        s.cameras[0].key = Some("@cam:3".into());
+        let names = ["Café Tisch", "ナイフ", "50% off", "a/b", "x:y	z", "Café Tisch", "Lamp", "Cube"];
+        let mut more = s.objects.clone();
+        more.extend(s.objects.clone());
+        s.objects = more;
+        for (o, n) in s.objects.iter_mut().zip(names) {
+            o.id = n.into();
+        }
+        s.objects[6].key = Some("@obj:3".into());
+        s.objects[7].key = Some("@obj:17".into());
+        s
+    }
+
+    fn keys_of(s: &crate::scene::Scene) -> Vec<String> {
+        list(&encode(s), &InputLimits::default()).expect("list").into_iter().map(|i| i.key).collect()
+    }
+
+    #[test]
+    fn every_address_is_native_whatever_the_names() {
+        let s = addressed_scene();
+        let keys = keys_of(&s);
+        assert_eq!(
+            keys[..11],
+            [
+                "@scene:main",
+                "@cam:3",
+                "@cam:Cam%20A%2FB",
+                "@obj-n:0",
+                "@obj:ナイフ",
+                "@obj:50%25%20off",
+                "@obj:a%2Fb",
+                "@obj:x:y%09z",
+                "@obj-n:5",
+                "@obj:3",
+                "@obj:17",
+            ]
+        );
+        for k in &keys {
+            assert!(addr::is_native(k), "{k}");
+        }
+        // A name form decodes back to the name exactly.
+        for (k, o) in keys[3..11].iter().zip(&s.objects) {
+            if let Some(e) = k.strip_prefix("@obj:").filter(|_| o.key.is_none()) {
+                assert_eq!(addr::dec(e).as_deref(), Some(o.id.as_str()), "{k}");
+            }
+        }
+        // An unkeyed name spelled like another object's key isn't taken: the index form.
+        let mut t = s.clone();
+        t.objects[1].id = "3".into();
+        assert_eq!(keys_of(&t)[4], "@obj-n:1");
+        // Empty, or too long once encoded: the index form.
+        let mut u = s.clone();
+        u.objects[1].id = String::new();
+        u.objects[2].id = "%".repeat(MAX_ADDRESS_ID / 3 + 1);
+        assert_eq!(keys_of(&u)[4..6], ["@obj-n:1".to_string(), "@obj-n:2".into()]);
+    }
+
+    #[test]
+    fn a_rename_keeps_a_key_and_changes_a_name() {
+        let s = addressed_scene();
+        let before = keys_of(&s);
+        let mut r = s.clone();
+        r.objects[6].id = "Floor lamp".into(); // keyed
+        r.objects[4].id = "Lösung 2".into(); // by name
+        r.cameras[0].id = "Renamed".into(); // keyed
+        let after = keys_of(&r);
+        assert_eq!(after[9], before[9], "keyed: the same address");
+        assert_eq!(after[1], before[1]);
+        assert_eq!((before[7].as_str(), after[7].as_str()), ("@obj:x:y%09z", "@obj:Lösung%202"), "by name: the new name, encoded");
+        let changed: Vec<usize> = (0..before.len()).filter(|&i| before[i] != after[i]).collect();
+        assert_eq!(changed, [7]);
+    }
+
+    /// Adding or removing other objects leaves a key form and a name form
+    /// alone; an index form is bound to its read and moves.
+    #[test]
+    fn other_objects_coming_and_going_move_only_index_forms() {
+        let s = addressed_scene();
+        let addr_of = |sc: &crate::scene::Scene, id: &str, nth: usize| -> String {
+            let objs = addresses("obj", sc.objects.iter().map(|o| (o.key.as_deref(), o.id.as_str())));
+            sc.objects.iter().zip(objs).filter(|(o, _)| o.id == id).nth(nth).map(|(_, a)| a).expect("there")
+        };
+        let watched = [("ナイフ", 0), ("Lamp", 0), ("Cube", 0)];
+        let base: Vec<String> = watched.iter().map(|(id, n)| addr_of(&s, id, *n)).collect();
+        assert_eq!(base, ["@obj:ナイフ", "@obj:3", "@obj:17"]);
+        // One removed before them, one added at the start, one added at the end.
+        let mut removed = s.clone();
+        removed.objects.remove(0);
+        let mut added = s.clone();
+        added.objects.insert(0, testgen::object("New one", 0, [1.0; 3], testgen::identity(), None));
+        added.objects.push(testgen::object("Another", 1, [1.0; 3], testgen::identity(), None));
+        for v in [&removed, &added] {
+            assert_eq!(watched.iter().map(|(id, n)| addr_of(v, id, *n)).collect::<Vec<_>>(), base);
+        }
+        // The duplicate's second copy: @obj-n:5 in this read, @obj-n:4 once an object before it goes, @obj-n:6 once one comes.
+        assert_eq!(addr_of(&s, "Café Tisch", 1), "@obj-n:5");
+        let mut dropped = s.clone();
+        dropped.objects.remove(1);
+        assert_eq!(addr_of(&dropped, "Café Tisch", 1), "@obj-n:4");
+        assert_eq!(addr_of(&added, "Café Tisch", 1), "@obj-n:6");
+        // And with its twin gone, the name form again.
+        let mut single = s.clone();
+        single.objects.remove(0);
+        assert_eq!(addr_of(&single, "Café Tisch", 0), "@obj:Café%20Tisch");
+    }
+
+    /// The reader checks keys: native, of the list's kind, once per list.
+    #[test]
+    fn keys_are_checked_and_change_no_digest() {
+        let s = addressed_scene();
+        let mut plain = s.clone();
+        for o in &mut plain.objects {
+            o.key = None;
+        }
+        for c in &mut plain.cameras {
+            c.key = None;
+        }
+        let digests_of = |sc: &crate::scene::Scene| list(&encode(sc), &InputLimits::default()).expect("list").into_iter().map(|i| i.digest).collect::<Vec<_>>();
+        assert_eq!(digests_of(&s), digests_of(&plain), "a key is in no digest");
+        // Absent, the bytes are as before keys existed (no field written).
+        assert!(!String::from_utf8_lossy(&encode(&plain)).contains("\"key\""));
+        // A camera object keyed among the objects and among the cameras: allowed.
+        let mut both = s.clone();
+        both.objects[0].key = Some("@obj:3x".into());
+        both.cameras[1].key = Some("@cam:3x".into());
+        assert!(list(&encode(&both), &InputLimits::default()).is_ok());
+        let refused = |sc: &crate::scene::Scene| {
+            let e = crate::scene::decode(&encode(sc), &InputLimits::default()).expect_err("refused");
+            assert_eq!(e.code(), "invalid_input", "{e}");
+            assert_eq!(list(&encode(sc), &InputLimits::default()).expect_err("listing refused too").code(), "invalid_input");
+            e.to_string()
+        };
+        for bad in ["@cam:5", "obj:5", "@obj:a b", "@obj:", "@k:5", "@obj:1/sp:2", "@Obj:5", "", " @obj:5"] {
+            let mut b = s.clone();
+            b.objects[0].key = Some(bad.into());
+            assert!(refused(&b).contains("@obj:<id>"), "{bad:?}");
+        }
+        for bad in ["@obj:5", "@cam:\t", "cam:5"] {
+            let mut b = s.clone();
+            b.cameras[1].key = Some(bad.into());
+            assert!(refused(&b).contains("@cam:<id>"), "{bad:?}");
+        }
+        let mut dup = s.clone();
+        dup.objects[0].key = Some("@obj:17".into());
+        assert!(refused(&dup).contains("another object's"));
+        let mut dupc = s.clone();
+        dupc.cameras[1].key = Some("@cam:3".into());
+        assert!(refused(&dupc).contains("another camera's"));
+        // A good one is read back as given.
+        let back = crate::scene::decode(&encode(&s), &InputLimits::default()).expect("read");
+        assert_eq!((back.objects[6].key.as_deref(), back.cameras[0].key.as_deref()), (Some("@obj:3"), Some("@cam:3")));
     }
 
     #[test]

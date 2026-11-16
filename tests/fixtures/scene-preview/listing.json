@@ -2,7 +2,7 @@
   "containers": [
     {
       "hidden": false,
-      "key": "@scene",
+      "key": "@scene:main",
       "position": 1,
       "previews": {
         "full": "none",
@@ -22,7 +22,7 @@
         ]
       },
       "hidden": false,
-      "key": "@cam:Camera",
+      "key": "@cam:1",
       "position": 2,
       "previews": {
         "full": "none",
@@ -42,7 +42,7 @@
         ]
       },
       "hidden": false,
-      "key": "@cam:Camera.001",
+      "key": "@cam:26",
       "position": 3,
       "previews": {
         "full": "none",
@@ -66,7 +66,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Floor",
+      "key": "@obj:4",
       "position": 4,
       "previews": {
         "full": "none",
@@ -90,7 +90,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Wall.Back",
+      "key": "@obj:5",
       "position": 5,
       "previews": {
         "full": "none",
@@ -114,7 +114,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Window",
+      "key": "@obj:7",
       "position": 6,
       "previews": {
         "full": "none",
@@ -138,7 +138,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Rug",
+      "key": "@obj:8",
       "position": 7,
       "previews": {
         "full": "none",
@@ -162,7 +162,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Ceiling fan",
+      "key": "@obj:9",
       "position": 8,
       "previews": {
         "full": "none",
@@ -186,7 +186,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Table",
+      "key": "@obj:10",
       "position": 9,
       "previews": {
         "full": "none",
@@ -210,7 +210,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Chair.001",
+      "key": "@obj:11",
       "position": 10,
       "previews": {
         "full": "none",
@@ -234,7 +234,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Chair.002",
+      "key": "@obj:12",
       "position": 11,
       "previews": {
         "full": "none",
@@ -258,7 +258,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Chair.003",
+      "key": "@obj:13",
       "position": 12,
       "previews": {
         "full": "none",
@@ -282,7 +282,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Chair.004",
+      "key": "@obj:14",
       "position": 13,
       "previews": {
         "full": "none",
@@ -306,7 +306,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Sofa",
+      "key": "@obj:15",
       "position": 14,
       "previews": {
         "full": "none",
@@ -330,7 +330,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Shelf",
+      "key": "@obj:16",
       "position": 15,
       "previews": {
         "full": "none",
@@ -354,7 +354,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Book.001",
+      "key": "@obj:17",
       "position": 16,
       "previews": {
         "full": "none",
@@ -378,7 +378,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Book.002",
+      "key": "@obj:18",
       "position": 17,
       "previews": {
         "full": "none",
@@ -402,7 +402,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Floor lamp",
+      "key": "@obj:19",
       "position": 18,
       "previews": {
         "full": "none",
@@ -426,7 +426,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Vase",
+      "key": "@obj:20",
       "position": 19,
       "previews": {
         "full": "none",
@@ -450,7 +450,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Mug",
+      "key": "@obj:21",
       "position": 20,
       "previews": {
         "full": "none",
@@ -474,7 +474,7 @@
         ]
       },
       "hidden": false,
-      "key": "@obj:Clock hand",
+      "key": "@obj:23",
       "position": 21,
       "previews": {
         "full": "none",

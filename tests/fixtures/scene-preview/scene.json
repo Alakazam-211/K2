@@ -42,7 +42,7 @@
       1.0
     ]
   },
-  "container": "@scene",
+  "container": "@scene:main",
   "fonts_substituted": [],
   "format": "webp-lossless",
   "ids": {

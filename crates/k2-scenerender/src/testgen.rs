@@ -31,6 +31,7 @@ pub fn object(id: &str, mesh: u32, color: [f32; 3], transform: [f32; 16], double
         hash: None,
         modifiers: Vec::new(),
         modifiers_not_applied: false,
+        key: None,
     }
 }
 
@@ -251,6 +252,7 @@ pub fn camera_scene() -> Scene {
         lens_mm: None,
         sensor_mm: None,
         sensor_fit: None,
+        key: None,
     });
     s
 }
@@ -425,6 +427,7 @@ pub fn degenerate_scenes() -> Vec<(&'static str, Scene)> {
         lens_mm: None,
         sensor_mm: None,
         sensor_fit: None,
+        key: None,
     });
     out.push(("camera-inside", inside));
     let mut away = cube_scene();
@@ -441,6 +444,7 @@ pub fn degenerate_scenes() -> Vec<(&'static str, Scene)> {
         lens_mm: None,
         sensor_mm: None,
         sensor_fit: None,
+        key: None,
     });
     out.push(("camera-away", away));
     out

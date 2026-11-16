@@ -8,10 +8,16 @@
 //!   answers `unsupported_part`, and [`SceneRenderer::serves`] no doc), so
 //!   everything after it is wired against K2SCENE1 bytes: [`list_k2scene`]
 //!   and [`render_k2scene`].
-//! - **Listing:** `@scene` (the auto 3/4 view of everything), one container
-//!   per camera (`@cam:<id>`), one per object (`@obj:<id>`) and the
-//!   turntable's eight frames (`@turntable:0` to `@turntable:7`), each with the
-//!   raw digest of what it draws, computed from the mesh read alone: meshes,
+//! - **Listing:** `@scene:main` (the auto 3/4 view of everything), one container
+//!   per camera, one per object and the turntable's eight frames
+//!   (`@turntable:0` to `@turntable:7`). Every address is a native address in
+//!   the multiplayer kit's grammar, so it is also a presence view address: a
+//!   camera or object by its live key from the read (`@cam:N`, `@obj:N`),
+//!   which a rename keeps; else by its percent-encoded name
+//!   (`@obj:Chair%202`), which a rename changes; else (a duplicated or empty
+//!   name) by its index in this read (`@obj-n:4`, `@cam-n:0`), which is bound
+//!   to that version (`k2_scenerender::digest`, `k2_scenerender::addr`). Each
+//!   comes with the raw digest of what it draws, computed from the mesh read alone: meshes,
 //!   transforms, colours, sidedness and cameras, never an object's id
 //!   (`k2_scenerender::digest`). So the cache key is (doc, object or camera,
 //!   render hash over the meshes it draws, width), and editing one object
@@ -30,7 +36,7 @@
 //! - **Clay, and the scene view fitted to its contents.** Every view is
 //!   drawn in clay ([`Clay`]: the renderer's two default tones, the shell
 //!   darker and the contents lighter, by the same class rule as content
-//!   framing), never in the objects' base colours. `@scene` is fitted to the
+//!   framing), never in the objects' base colours. `@scene:main` is fitted to the
 //!   contents ([`Framing::Contents`]: the room's shell is drawn but left out
 //!   of the fit); the turntable and the cameras keep the bounds framing (the
 //!   worker refuses content framing for them), and an object is framed on
@@ -157,7 +163,7 @@ pub fn shapes_view(target: Target) -> bool {
 /// The digest a container is keyed by: the renderer's digest of what it
 /// draws, and for a view not on the bounds framing, that framing too. The
 /// renderer's digest leaves the request's framing out, so without this a
-/// scene of one object would give `@scene` and that object's view the same
+/// scene of one object would give `@scene:main` and that object's view the same
 /// render hash, and one could be answered with the other's image (see
 /// [`super::reuse`]) though they are framed differently.
 pub fn keyed_digest(target: Target, raw: [u8; 32]) -> [u8; 32] {
@@ -357,7 +363,7 @@ mod tests {
         assert_eq!(
             keys,
             [
-                ("@scene", 1, "scene", "Scene"),
+                ("@scene:main", 1, "scene", "Scene"),
                 ("@cam:Camera", 2, "c0", "Camera"),
                 ("@obj:Item.000", 3, "o0", "Item.000"),
                 ("@obj:Item.001", 4, "o1", "Item.001"),
@@ -386,7 +392,7 @@ mod tests {
         b.objects[3].transform[12] += 1.0;
         let (la, lb) = (list_k2scene(&encode(&a)).expect("a"), list_k2scene(&encode(&b)).expect("b"));
         let changed: Vec<&str> = la.containers.iter().zip(&lb.containers).filter(|(x, y)| x.digest != y.digest).map(|(x, _)| x.key.as_str()).collect();
-        assert_eq!(changed[..3], ["@scene", "@cam:Camera", "@obj:Item.003"]);
+        assert_eq!(changed[..3], ["@scene:main", "@cam:Camera", "@obj:Item.003"]);
         assert!(changed[3..].iter().all(|k| k.starts_with("@turntable:")) && changed.len() == 11, "and the turntable's 8 frames: {changed:?}");
         let mut c = a.clone();
         c.objects[0].id = "Renamed".into();
@@ -475,10 +481,10 @@ mod tests {
         let l = list_k2scene(&bytes).expect("listing");
         let by = |key: &str| l.containers.iter().find(|c| c.key == key).unwrap_or_else(|| panic!("no {key}"));
         let cases = [
-            ("@scene", Width::Full, Shape::Wide, (1920, 1080)),
-            ("@scene", Width::Full, Shape::Tall, (1920, 1440)),
-            ("@scene", Width::Thumb, Shape::Wide, (320, 180)),
-            ("@scene", Width::Thumb, Shape::Tall, (320, 240)),
+            ("@scene:main", Width::Full, Shape::Wide, (1920, 1080)),
+            ("@scene:main", Width::Full, Shape::Tall, (1920, 1440)),
+            ("@scene:main", Width::Thumb, Shape::Wide, (320, 180)),
+            ("@scene:main", Width::Thumb, Shape::Tall, (320, 240)),
             ("@obj:Item.001", Width::Full, Shape::Wide, (1920, 1080)),
             ("@obj:Item.001", Width::Full, Shape::Tall, (1920, 1440)),
             ("@obj:Item.001", Width::Thumb, Shape::Wide, (320, 180)),
@@ -490,7 +496,7 @@ mod tests {
         ];
         for (key, w, shape, size) in cases {
             let c = by(key);
-            assert_eq!(SCENE.shapes(c), key == "@scene" || key.starts_with("@obj:"), "{key}");
+            assert_eq!(SCENE.shapes(c), key == "@scene:main" || key.starts_with("@obj:"), "{key}");
             let img = render_k2scene_with(&bin, &bytes, c, w, Look::Transparent, shape, Duration::from_secs(60)).unwrap_or_else(|f| panic!("{key} {shape:?}: {f:?}"));
             assert_eq!((img.width, img.height), size, "{key} {w:?} {shape:?}");
             assert!(img.bytes.len() as u64 <= w.max_bytes(), "{key} {w:?} {shape:?}: within the width's cap");
@@ -521,7 +527,7 @@ mod tests {
         }
         let l = list_k2scene(&bytes).expect("listing");
         for c in &l.containers {
-            assert_eq!(SCENE.shapes(c), c.key == "@scene" || c.key.starts_with("@obj:"), "{}", c.key);
+            assert_eq!(SCENE.shapes(c), c.key == "@scene:main" || c.key.starts_with("@obj:"), "{}", c.key);
         }
     }
 }

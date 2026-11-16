@@ -36,7 +36,7 @@
 //! opaque, a scene transparent, the 3D tab's one still for all its looks).
 //! A deck refuses `transparent`. Answers name `look` only when it is
 //! `transparent`. **`shape`** (`wide`, the default, 16:9; or `tall`, 4:3):
-//! the shape of a still a type shapes (a scene's `@scene` and `@obj:`
+//! the shape of a still a type shapes (a scene's `@scene:main` and `@obj:`
 //! views). It is ignored for every other container (a scene's `@cam:` view
 //! keeps its camera's aspect and a `@turntable:` frame the renderer's; a
 //! slide its page; a timeline's tile its clip's), never refused: they are

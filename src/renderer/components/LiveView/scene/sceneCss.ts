@@ -101,7 +101,13 @@ export const SCENE_PANEL_CSS = `
 .lv-scene-panel .lv-ptab [role="cell"][data-changed] { font-weight: 650; background: color-mix(in srgb, var(--lv-c) 18%, transparent); box-shadow: inset 0 -2px 0 var(--lv-c); border-radius: min(var(--radius-field), 2px); }
 .lv-scene-panel .lv-ptab [data-before], .lv-scene-panel .lv-ptab [data-before-label] { color: var(--color-text-secondary); text-align: right; }
 .lv-scene-panel .lv-ptab [data-before-label] { text-align: left; font-size: var(--type-xs); }
-.lv-scene-panel .lv-ptab [data-quat] { grid-column: span 3; text-align: left; font-size: var(--type-sm); color: var(--color-text-primary); }
+.lv-scene-panel .lv-ptab-more { margin-top: 2px; }
+.lv-scene-panel .lv-pqh { margin-top: 2px; min-height: 22px; line-height: 22px; font-size: var(--type-sm); color: var(--color-text-secondary); }
+.lv-scene-panel .lv-pquat { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 4px; font-size: var(--type-sm); font-variant-numeric: tabular-nums; }
+.lv-scene-panel .lv-pquat [role="row"] { display: contents; }
+.lv-scene-panel .lv-pquat [role="row"] > * { min-height: 22px; line-height: 22px; text-align: right; white-space: nowrap; }
+.lv-scene-panel .lv-pquat [role="columnheader"] { font-size: var(--type-xs); font-weight: 600; letter-spacing: .05em; color: var(--color-text-secondary); }
+.lv-scene-panel .lv-pquat [role="cell"] { color: var(--color-text-primary); }
 .lv-scene-panel .lv-pjust { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: var(--type-sm); color: var(--color-text-secondary); text-wrap: pretty; }
 .lv-scene-panel .lv-pjust b { color: var(--color-text-primary); }
 .lv-scene-panel .lv-plim { margin-top: 8px; font-size: var(--type-sm); color: var(--color-text-secondary); text-wrap: pretty; }

@@ -95,6 +95,24 @@ describe('the scene panel', () => {
     for (const c of within(table).getAllByRole('cell')) expect(c.textContent).toMatch(/^-?\d+\.\d{3}$/)
   })
 
+  it('a quaternion rotation gets its own W X Y Z table under X Y Z: four values, none squeezed into a cell', () => {
+    mount('limits', 1)
+    const props = section('props')
+    expect(within(props).getByTestId('lv-scene-prop-name').textContent).toBe('Ceiling fan')
+    const xyz = within(props).getAllByRole('table', { name: 'Transform' })
+    expect(xyz.flatMap((tb) => within(tb).getAllByRole('rowheader').map((c) => c.textContent))).toEqual(['Location (m)', 'Scale'])
+    for (const tb of xyz) expect(tb.textContent).not.toContain('quaternion')
+    const q = within(props).getByRole('table', { name: 'Rotation (quaternion)' })
+    // in the usual order: Location, Rotation, Scale
+    const order = [...props.querySelectorAll('[role="table"]')]
+    expect(order.indexOf(q)).toBeGreaterThan(order.indexOf(xyz[0]))
+    expect(order.indexOf(q)).toBeLessThan(order.indexOf(xyz[1]))
+    expect(within(q).getAllByRole('columnheader').map((c) => c.textContent)).toEqual(['W', 'X', 'Y', 'Z'])
+    const cells = within(q).getAllByRole('cell')
+    expect(cells).toHaveLength(4)
+    for (const c of cells) expect(c.textContent).toMatch(/^-?\d+\.\d{3}$/)
+  })
+
   it('a value that just changed is marked, with what it was Before', () => {
     mount('turn', 4)
     const props = section('props')

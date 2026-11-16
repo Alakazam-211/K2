@@ -2,7 +2,10 @@
 // and name, then the Transform table as the mock draws it: 22 px rows, the
 // values from about half the width, X Y Z, the units in the label
 // ("Location (m)", "Rotation (°)"), three decimals. Values that just changed
-// are marked in the changer's colour with a "Before" row; then who holds
+// are marked in the changer's colour with a "Before" row. A quaternion
+// rotation has four values, so it gets its own small W X Y Z table after
+// Location, labelled "Rotation (quaternion)", and Scale follows in the
+// X Y Z columns. Then who holds
 // it, what can't change live, and where a child sits in the scene.
 
 import type { CSSProperties } from 'react'
@@ -69,24 +72,46 @@ export function PropertiesBody({ m, rad = false }: { m: PropsModel; rad?: boolea
         Transform
       </div>
       {n ? (
-        <div role="table" aria-labelledby="lv-scene-transform"className="lv-ptab">
-          <div role="row">
-            <span role="columnheader" />
-            <span role="columnheader">X</span>
-            <span role="columnheader">Y</span>
-            <span role="columnheader">Z</span>
-          </div>
-          <Row m={m} label={lu} vals={n.loc} part="loc" f={fmt} />
-          {n.rot.angles ? (
-            <Row m={m} label={rad ? 'Rotation (rad)' : 'Rotation (°)'} vals={n.rot.angles} part="rot" f={(r) => angle(r, rad)} />
-          ) : n.rot.quat ? (
+        <>
+          <div role="table" aria-labelledby="lv-scene-transform" className="lv-ptab">
             <div role="row">
-              <span role="rowheader">Rotation</span>
-              <span data-quat="">quaternion {n.rot.quat.map(fmt).join(' ')}</span>
+              <span role="columnheader" />
+              <span role="columnheader">X</span>
+              <span role="columnheader">Y</span>
+              <span role="columnheader">Z</span>
             </div>
+            <Row m={m} label={lu} vals={n.loc} part="loc" f={fmt} />
+            {n.rot.angles ? <Row m={m} label={rad ? 'Rotation (rad)' : 'Rotation (°)'} vals={n.rot.angles} part="rot" f={(r) => angle(r, rad)} /> : null}
+            {n.rot.quat ? null : <Row m={m} label="Scale" vals={n.scale} part="scale" f={fmt} />}
+          </div>
+          {n.rot.quat ? (
+            <>
+              <div className="lv-pqh" id="lv-scene-quat">
+                Rotation (quaternion)
+              </div>
+              <div role="table" aria-labelledby="lv-scene-quat" className="lv-pquat">
+                <div role="row">
+                  {['W', 'X', 'Y', 'Z'].map((k) => (
+                    <span key={k} role="columnheader">
+                      {k}
+                    </span>
+                  ))}
+                </div>
+                <div role="row">
+                  {n.rot.quat.slice(0, 4).map((v, i) => (
+                    <span key={i} role="cell">
+                      {fmt(v)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              {/* Scale after the rotation, in the X Y Z columns again. */}
+              <div role="table" aria-labelledby="lv-scene-transform" className="lv-ptab lv-ptab-more">
+                <Row m={m} label="Scale" vals={n.scale} part="scale" f={fmt} />
+              </div>
+            </>
           ) : null}
-          <Row m={m} label="Scale" vals={n.scale} part="scale" f={fmt} />
-        </div>
+        </>
       ) : (
         <div className="lv-nopick">No transform.</div>
       )}

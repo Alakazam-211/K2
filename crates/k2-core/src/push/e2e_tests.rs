@@ -2376,9 +2376,122 @@ fn a_calls_clear_aps_fields_wait_for_the_relays_call_aps_token() {
             if state == CallPushState::Ringing {
                 assert_eq!(p.get("interruptionLevel").is_some(), want, "{p}");
                 assert_eq!(p.get("sound").is_some(), want, "beside the seal only with call-aps: {p}");
+            } else {
+                // The replacement is silent: never a sound; `passive` once
+                // the relay copies the level (it puts "default" in `aps`
+                // itself when K2 sends no sound).
+                assert!(p.get("sound").is_none(), "{p}");
+                assert_eq!(p.get("interruptionLevel").and_then(|l| l.as_str()), want.then_some("passive"), "{p}");
+                assert!(relay_apns_len(&relay.calls()[0].1) < seal::VENDOR_PAYLOAD_MAX);
             }
         }
     }
     assert!(e2e::caps_has_call_aps("s1, s2, call-aps"));
     assert!(!e2e::caps_has_call_aps("s1,s2"));
+}
+
+/// The relay's own answer to a caps probe (a dispatch with no devices):
+/// 400 `no_devices`, S0-marked, with its caps.
+fn probe_answer(s1: bool, call_aps: bool) -> GatewayResponse {
+    GatewayResponse { call_aps, status: 400, body: "{\"error\":\"no_devices\"}".into(), s0: true, s1, s2: false }
+}
+
+fn is_probe(call: &(GatewayAuth, serde_json::Value, bool)) -> bool {
+    !call.2 && call.1 == e2e::caps_probe_body()
+}
+
+/// `call-aps` lives in memory only. After a restart (the stored `s1` kept,
+/// nothing heard yet) the first DM call push asks the relay first, so the
+/// ring still carries its clear `category`, `interruptionLevel` and
+/// `sound`. Once heard, no more probes.
+#[test]
+fn after_a_restart_the_first_ring_asks_the_relay_for_call_aps() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (_sk, k1) = phone_key(73);
+    let devices = vec![register("call-restart", "apns", "tok-call-restart", true, Some(&k1))];
+    let url = unique_url("call-restart");
+    e2e::note_relay_caps_full(&url, e2e::RelayCaps { s1: true, s2: false, call_aps: true });
+    e2e::forget_relay_caps_memory(&url);
+    assert!(e2e::relay_s1(&url), "the stored s1 survives the restart");
+    assert!(!e2e::relay_call_aps(&url), "call-aps did not");
+
+    let relay = Relay::new(true);
+    relay.script.lock().expect("relay").push_back(probe_answer(true, true));
+    let cloud = tunnel_cloud(&url, relay.clone());
+    cloud.dispatch_in_mode(&call_event(CallPushState::Ringing), "bk-test", &devices, PushE2eMode::SealedWhenSupported).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 2, "one probe, then the ring: {calls:?}");
+    assert!(is_probe(&calls[0]), "the probe goes first: {:?}", calls[0].1);
+    assert!(matches!(&calls[0].0, GatewayAuth::Tunnel { .. }), "the per-daemon path");
+    assert!(calls[1].2, "the ring is sealed");
+    let p = &calls[1].1["payload"];
+    assert_eq!(p["category"], "K2_CALL", "{p}");
+    assert_eq!(p["interruptionLevel"], "time-sensitive", "{p}");
+    assert_eq!(p["sound"], "default", "{p}");
+
+    // Heard now: the next call push goes straight out.
+    relay.clear();
+    cloud.dispatch_in_mode(&call_event(CallPushState::Missed), "bk-test", &devices, PushE2eMode::SealedWhenSupported).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 1, "no second probe: {calls:?}");
+    assert!(!is_probe(&calls[0]));
+
+    // Other kinds never probe, even with nothing heard.
+    let other = unique_url("call-restart-other");
+    e2e::note_relay_caps(&other, true, false);
+    e2e::forget_relay_caps_memory(&other);
+    let relay = Relay::new(true);
+    tunnel_cloud(&other, relay.clone())
+        .dispatch_in_mode(&msg_thread("hello"), "bk-test", &devices, PushE2eMode::SealedWhenSupported)
+        .expect("dispatch");
+    assert_eq!(relay.calls().len(), 1, "a message push doesn't probe");
+}
+
+/// A relay that truly lacks `call-aps` says so on the probe: the ring goes
+/// without the clear fields (an older relay refuses them). A probe with no
+/// answer from the relay itself doesn't hold the ring, and isn't repeated
+/// on the next push within the retry window.
+#[test]
+fn a_ring_probe_that_says_no_or_gets_no_answer_still_rings() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (_sk, k1) = phone_key(74);
+    let devices = vec![register("call-noaps", "apns", "tok-call-noaps", true, Some(&k1))];
+
+    let url = unique_url("call-noaps");
+    e2e::note_relay_caps(&url, true, false);
+    e2e::forget_relay_caps_memory(&url);
+    let relay = Relay::new(true);
+    relay.script.lock().expect("relay").push_back(probe_answer(true, false));
+    tunnel_cloud(&url, relay.clone())
+        .dispatch_in_mode(&call_event(CallPushState::Ringing), "bk-test", &devices, PushE2eMode::SealedWhenSupported)
+        .expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(is_probe(&calls[0]));
+    assert!(calls[1].2, "sealed");
+    assert!(calls[1].1["payload"].get("category").is_none(), "no call-aps: no clear fields");
+
+    // A proxy's bare 502 to the probe and to the ring: the ring still went;
+    // the next ring doesn't probe again.
+    let url = unique_url("call-noanswer");
+    e2e::note_relay_caps(&url, true, false);
+    e2e::forget_relay_caps_memory(&url);
+    let relay = Relay::new(true);
+    let bare_502 = || GatewayResponse { call_aps: false, status: 502, body: String::new(), s0: false, s1: false, s2: false };
+    relay.script.lock().expect("relay").extend([bare_502(), bare_502()]);
+    let cloud = tunnel_cloud(&url, relay.clone());
+    assert!(cloud.dispatch_in_mode(&call_event(CallPushState::Ringing), "bk-test", &devices, PushE2eMode::SealedWhenSupported).is_err());
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(is_probe(&calls[0]));
+    assert!(calls[1].2, "the ring was sent after the failed probe");
+    relay.clear();
+    cloud.dispatch_in_mode(&call_event(CallPushState::Ringing), "bk-test", &devices, PushE2eMode::SealedWhenSupported).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 1, "no probe within the retry window: {calls:?}");
+    assert!(calls[0].2);
 }

@@ -176,6 +176,11 @@ pub const CALL_CATEGORY_RING: &str = "K2_CALL";
 pub const CALL_CATEGORY_DONE: &str = "K2_CALL_DONE";
 /// `aps.interruption-level` of a ring (harmless without the entitlement).
 pub const INTERRUPTION_TIME_SENSITIVE: &str = "time-sensitive";
+/// `aps.interruption-level` of the push that replaces a ring: no sound, no
+/// lit screen. On the sealed lane the relay always puts `sound` in `aps`
+/// (`"default"` when K2 sends none, and an empty one is refused), so this
+/// level is what keeps that push silent there.
+pub const INTERRUPTION_PASSIVE: &str = "passive";
 
 /// One person's DM call push (S14).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -858,7 +863,8 @@ impl PushEvent {
     /// (never content: fixed words only). A DM call's ring: `category`
     /// `K2_CALL`, `interruptionLevel` `time-sensitive` and `sound`, so it
     /// rings even when the phone's extension can't open the seal; the push
-    /// that replaces it: `category` `K2_CALL_DONE`. Other kinds: none.
+    /// that replaces it: `category` `K2_CALL_DONE` and `interruptionLevel`
+    /// `passive` (silent: no `sound`). Other kinds: none.
     pub fn aps_hints(&self) -> Option<serde_json::Value> {
         match self {
             Self::Call(c) if c.state == CallPushState::Ringing => Some(serde_json::json!({
@@ -866,9 +872,19 @@ impl PushEvent {
                 "interruptionLevel": INTERRUPTION_TIME_SENSITIVE,
                 "sound": PUSH_SOUND_DEFAULT,
             })),
-            Self::Call(_) => Some(serde_json::json!({ "category": CALL_CATEGORY_DONE })),
+            Self::Call(_) => Some(serde_json::json!({
+                "category": CALL_CATEGORY_DONE,
+                "interruptionLevel": INTERRUPTION_PASSIVE,
+            })),
             _ => None,
         }
+    }
+
+    /// True for an alert that must make no sound: the push that replaces a
+    /// DM call's ring (missed, ended, answered on another device). It still
+    /// carries the ring's collapse id, so it replaces the ring.
+    pub fn is_silent_alert(&self) -> bool {
+        matches!(self, Self::Call(c) if c.state != CallPushState::Ringing)
     }
 
     /// Merge [`Self::aps_hints`] into a relay `payload` object.
@@ -1281,10 +1297,21 @@ pub trait DispatchSender: Send + Sync {
     ) -> Result<GatewayResponse, PushError> {
         self.post(url, auth, body)
     }
+
+    /// One caps probe ([`e2e::caps_probe_body`]): the same POST with a short
+    /// timeout ([`CAPS_PROBE_TIMEOUT`]). Only the relay's caps headers are
+    /// read from the answer.
+    fn probe(&self, url: &str, auth: &GatewayAuth) -> Result<GatewayResponse, PushError> {
+        self.post(url, auth, &e2e::caps_probe_body())
+    }
 }
 
 /// The timeout of a sealed dispatch call.
 pub const SEALED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The timeout of a caps probe before a DM call's push: the ring waits on
+/// it, so it is short.
+pub const CAPS_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Production sender: blocking reqwest POST with the chosen bearer (and
 /// `X-K2-Subdomain` on the per-daemon path). Mirrors the [`Webhook`]
@@ -1314,6 +1341,14 @@ impl DispatchSender for HttpDispatchSender {
             .build()
             .map_err(|e| PushError::Transport(e.to_string()))?;
         Self::send(client, url, auth, body)
+    }
+
+    fn probe(&self, url: &str, auth: &GatewayAuth) -> Result<GatewayResponse, PushError> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(CAPS_PROBE_TIMEOUT)
+            .build()
+            .map_err(|e| PushError::Transport(e.to_string()))?;
+        Self::send(client, url, auth, &e2e::caps_probe_body())
     }
 }
 
@@ -1813,7 +1848,7 @@ impl K2Cloud {
             "body": event.body(),
             "data": data,
         });
-        if event.is_mobile() {
+        if event.is_mobile() && !event.is_silent_alert() {
             payload["sound"] = serde_json::json!(PUSH_SOUND_DEFAULT);
         }
         if let Some(t) = event.thread_id() {
@@ -2007,6 +2042,9 @@ impl K2Cloud {
         // share a vendor token (an old id the phone dropped) reach the same
         // phone; only the most recently seen one is sent to.
         let devices = &crate::push_devices::dedupe_by_token(devices);
+        if !devices.is_empty() {
+            self.ensure_call_caps(event, now);
+        }
         let plan = Self::plan_lanes(Some(&self.config), event, devices, mode, now);
         let mut result = Ok(());
         if !plan.legacy.is_empty() {
@@ -2027,6 +2065,38 @@ impl K2Cloud {
             }
         }
         result
+    }
+
+    /// Before a DM call's push: make sure the relay's caps were heard this
+    /// run. `call-aps` lives in memory only, so after a restart (or an
+    /// upgrade) the first ring would otherwise go without its clear
+    /// `category`, `interruptionLevel` and `sound`. When nothing was heard
+    /// yet, one probe ([`e2e::caps_probe_body`], a dispatch with no devices,
+    /// [`CAPS_PROBE_TIMEOUT`]) asks the relay; its answer is cached like any
+    /// other. A probe that gets no answer from the relay itself is not
+    /// repeated for [`e2e::CAPS_PROBE_RETRY`], and the push goes anyway.
+    /// Per-daemon path only (only it carries caps); never while an S0
+    /// rejection is fresh.
+    fn ensure_call_caps(&self, event: &PushEvent, now: i64) {
+        if !matches!(event, PushEvent::Call(_)) || e2e::relay_caps_heard(&self.config.url) {
+            return;
+        }
+        let Some((token, subdomain)) = self.config.tunnel.as_ref() else {
+            return;
+        };
+        if tunnel_rejected_recently(now).is_some() || !e2e::take_caps_probe(&self.config.url) {
+            return;
+        }
+        let auth = GatewayAuth::Tunnel { token: token.clone(), subdomain: subdomain.clone() };
+        let url = format!("{}/push/dispatch", self.config.url);
+        match self.sender.probe(&url, &auth) {
+            // Only the relay's own (S0-marked) answer says what it can do.
+            Ok(resp) if resp.s0 => {
+                e2e::note_relay_caps_full(&self.config.url, e2e::RelayCaps { s1: resp.s1, s2: resp.s2, call_aps: resp.call_aps });
+            }
+            Ok(resp) => crate::log_debug!("[push] caps probe: no relay answer (HTTP {})", resp.status),
+            Err(e) => crate::log_debug!("[push] caps probe failed: {e}"),
+        }
     }
 
     /// Today's path (0.46.3-r3), unchanged: one call per payload variant.
@@ -3093,9 +3163,26 @@ mod tests {
         for state in [CallPushState::Missed, CallPushState::Ended, CallPushState::Answered] {
             let p = K2Cloud::payload_with(&ring(state), &stamp, TEST_KEY, true);
             assert_eq!(p["category"], "K2_CALL_DONE", "{state:?}");
-            assert!(p.get("interruptionLevel").is_none(), "{state:?}");
             assert_eq!(p["collapseId"], "call:88001");
+            // The push that replaces the ring is silent: no sound on any
+            // lane, and `passive` where the relay copies the level.
+            assert_eq!(p["interruptionLevel"], "passive", "{state:?}");
+            assert!(p.get("sound").is_none(), "{state:?}: {p}");
+            assert!(ring(state).is_silent_alert());
+            let plain = K2Cloud::payload(&ring(state), &stamp, TEST_KEY);
+            assert!(plain.get("sound").is_none(), "{state:?}, no call-aps: {plain}");
+            assert_eq!(plain["collapseId"], "call:88001", "still replaces the ring");
+            for call_aps in [false, true] {
+                let g = e2e::generic_payload_with(&ring(state), &stamp, TEST_KEY, call_aps);
+                assert!(g.get("sound").is_none(), "{state:?}, generic: {g}");
+            }
+            let mut sealed = e2e::sealed_dispatch_body(seal::SealKind::Alert, &[]);
+            ring(state).add_aps_hints(&mut sealed["payload"]);
+            assert_eq!(sealed["payload"]["interruptionLevel"], "passive", "{state:?}");
+            assert!(sealed["payload"].get("sound").is_none(), "{state:?}");
         }
+        assert!(!ring(CallPushState::Ringing).is_silent_alert());
+        assert_eq!(e2e::generic_payload_with(&ring(CallPushState::Ringing), &stamp, TEST_KEY, false)["sound"], "default");
         assert_eq!(ring(CallPushState::Answered).body(), "Answered on another device");
         let mut sealed = e2e::sealed_dispatch_body(seal::SealKind::Alert, &[]);
         ring(CallPushState::Ringing).add_aps_hints(&mut sealed["payload"]);

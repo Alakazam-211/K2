@@ -173,12 +173,22 @@ pub struct RelayCaps {
     /// Format 2 too (only meaningful with `s1`).
     pub s2: bool,
     /// A DM call's clear `aps` fields ([`CAPS_CALL_APS`]). Kept in memory
-    /// only: after a restart the first ring goes without them until the
-    /// relay answers again.
+    /// only: after a restart nothing says it until the relay answers again,
+    /// so a DM call's push asks the relay first ([`relay_caps_heard`],
+    /// `K2Cloud::ensure_call_caps`).
     pub call_aps: bool,
 }
 
-type CapsMap = std::collections::HashMap<String, RelayCaps>;
+/// One gateway's caps in memory, and whether a relay answer said them this
+/// run (`heard`) or they were read back from the store (which has no
+/// `call-aps`).
+#[derive(Debug, Clone, Copy)]
+struct SeenCaps {
+    caps: RelayCaps,
+    heard: bool,
+}
+
+type CapsMap = std::collections::HashMap<String, SeenCaps>;
 
 static RELAY_CAPS: std::sync::Mutex<Option<CapsMap>> = std::sync::Mutex::new(None);
 
@@ -202,7 +212,7 @@ pub fn note_relay_caps_full(gateway_url: &str, caps: RelayCaps) {
     let changed = {
         let mut g = relay_map();
         let map = g.get_or_insert_with(Default::default);
-        map.insert(gateway_url.to_string(), caps) != Some(caps)
+        map.insert(gateway_url.to_string(), SeenCaps { caps, heard: true }).map(|s| s.caps) != Some(caps)
     };
     if changed {
         if let Err(e) = store_relay_caps(gateway_url, caps) {
@@ -216,7 +226,7 @@ pub fn note_relay_caps_full(gateway_url: &str, caps: RelayCaps) {
 /// install: the first push takes today's path).
 pub fn relay_caps(gateway_url: &str) -> RelayCaps {
     if let Some(v) = relay_map().as_ref().and_then(|m| m.get(gateway_url)).copied() {
-        return v;
+        return v.caps;
     }
     let stored = match load_relay_caps_full(gateway_url) {
         Ok(v) => v.unwrap_or_default(),
@@ -225,8 +235,50 @@ pub fn relay_caps(gateway_url: &str) -> RelayCaps {
             RelayCaps::default()
         }
     };
-    relay_map().get_or_insert_with(Default::default).insert(gateway_url.to_string(), stored);
+    relay_map()
+        .get_or_insert_with(Default::default)
+        .insert(gateway_url.to_string(), SeenCaps { caps: stored, heard: false });
     stored
+}
+
+/// True when a relay answer said this gateway's caps during this run. The
+/// stored caps (read back after a restart) don't count: they never hold
+/// `call-aps`.
+pub fn relay_caps_heard(gateway_url: &str) -> bool {
+    relay_map().as_ref().and_then(|m| m.get(gateway_url)).is_some_and(|s| s.heard)
+}
+
+/// How long after one caps probe the next may go when the first got no
+/// answer from the relay itself (a timeout, a proxy's 502).
+pub const CAPS_PROBE_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+
+type ProbeMap = std::collections::HashMap<String, std::time::Instant>;
+
+static CAPS_PROBES: std::sync::Mutex<Option<ProbeMap>> = std::sync::Mutex::new(None);
+
+fn probe_map() -> std::sync::MutexGuard<'static, Option<ProbeMap>> {
+    CAPS_PROBES.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// True when this gateway may be probed now: never probed this run, or the
+/// last probe was [`CAPS_PROBE_RETRY`] ago. Taking it records the probe.
+pub fn take_caps_probe(gateway_url: &str) -> bool {
+    let mut g = probe_map();
+    let map = g.get_or_insert_with(Default::default);
+    let now = std::time::Instant::now();
+    if map.get(gateway_url).is_some_and(|at| now.duration_since(*at) < CAPS_PROBE_RETRY) {
+        return false;
+    }
+    map.insert(gateway_url.to_string(), now);
+    true
+}
+
+/// The body of a caps probe: a dispatch with no devices. The relay checks
+/// the per-daemon auth, answers 400 `no_devices` before any window is
+/// charged, and lists its caps on that answer as on every per-daemon one.
+/// Nothing reaches any phone.
+pub fn caps_probe_body() -> serde_json::Value {
+    serde_json::json!({ "devices": [], "payload": { "data": {} } })
 }
 
 /// The relay accepts the sealed kinds (`s1`).
@@ -286,6 +338,9 @@ pub fn load_relay_caps_full(gateway_url: &str) -> Result<Option<RelayCaps>, Stri
 #[cfg(test)]
 pub fn forget_relay_caps_memory(gateway_url: &str) {
     if let Some(m) = relay_map().as_mut() {
+        m.remove(gateway_url);
+    }
+    if let Some(m) = probe_map().as_mut() {
         m.remove(gateway_url);
     }
 }
@@ -660,8 +715,11 @@ pub fn generic_payload_with(event: &PushEvent, stamp: &PushStamp, badge_key: &st
         "title": GENERIC_TITLE,
         "body": body,
         "data": data,
-        "sound": PUSH_SOUND_DEFAULT,
     });
+    // The push that replaces a DM call's ring is silent.
+    if !event.is_silent_alert() {
+        p["sound"] = serde_json::json!(PUSH_SOUND_DEFAULT);
+    }
     if call_aps {
         event.add_aps_hints(&mut p);
     }

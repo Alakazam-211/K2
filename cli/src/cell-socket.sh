@@ -374,7 +374,8 @@ _K2_IDEM_KEY=""
 _k2_idem_valid() {
     [[ "${1:-}" =~ ^[A-Za-z0-9_-]{8,64}$ ]]
 }
-# _k2_idem_init [KEY]: this invocation's key (KEY when given, else a new one).
+# _k2_idem_init [KEY]: the key for the send about to go (KEY when given,
+# else a new one: each send of an invocation is its own).
 _k2_idem_init() {
     if [ -n "${1:-}" ]; then
         if ! _k2_idem_valid "$1"; then
@@ -384,7 +385,6 @@ _k2_idem_init() {
         _K2_IDEM_KEY="$1"
         return 0
     fi
-    [ -n "$_K2_IDEM_KEY" ] && return 0
     _K2_IDEM_KEY="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null)" || _K2_IDEM_KEY=""
     if ! _k2_idem_valid "$_K2_IDEM_KEY"; then
         echo "Error: k2 could not make a send key (python3 failed or is missing); nothing was sent." >&2

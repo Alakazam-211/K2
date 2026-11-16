@@ -116,11 +116,16 @@ fn an_agent_proposes_and_only_the_owner_in_person_approves() {
     assert_eq!(mine["requests"].as_array().unwrap().len(), 1);
     assert!(get("/cli/app/approvals", &agent(&f.ws_b), &[]).unwrap()["requests"].as_array().unwrap().is_empty());
 
-    // Never an agent, a K2 shell tab or an admin; the owner needs a confirm.
-    for who in [a.clone(), shell(&f.ws_a), admin()] {
+    // Never an agent, a K2 shell tab or a Member login; the owner needs a
+    // confirm. An Admin login may approve (0.46.13), but never with the
+    // owner's confirm: it is bound to the person who confirmed.
+    let member = Who::Login { username: "mo".into(), role: Role::Member };
+    for who in [a.clone(), shell(&f.ws_a), member] {
         let e = call("/cli/app/approve", &who, json!({"request": id, "confirmToken": token_for(&id, "owner")})).unwrap_err();
         assert_eq!(e.1, codes::OWNER_ONLY, "{who:?}");
     }
+    let e = call("/cli/app/approve", &admin(), json!({"request": id, "confirmToken": token_for(&id, "owner")})).unwrap_err();
+    assert_eq!(e.1, codes::VAULT_CONFIRM_REQUIRED, "an admin with the owner's confirm");
     let e = call("/cli/app/approve", &Who::Owner, json!({"request": id})).unwrap_err();
     assert_eq!(e.1, codes::VAULT_CONFIRM_REQUIRED, "the owner token alone is not an approval (AR14)");
     let e = call("/cli/app/approve", &Who::Owner, json!({"request": id, "confirmToken": token_for("w_other", "owner")})).unwrap_err();
@@ -151,6 +156,51 @@ fn an_agent_proposes_and_only_the_owner_in_person_approves() {
     };
     let events: Vec<String> = rows.iter().map(|r| r.event.clone()).collect();
     assert!(events.contains(&"egress_requested".to_string()) && events.contains(&"widening_approved".to_string()), "{events:?}");
+}
+
+/// 0.46.13 (Rosson 2026-11-15: any Owner or Admin enters the password for
+/// a card on a user's box): an Admin login approves with a confirm of its
+/// OWN login password, bound to it and to the request; the owner's vault
+/// password or Touch ID never stands in for it. Revoking stays the owner's.
+#[test]
+fn an_admin_approves_with_its_own_login_password() {
+    let f = fx("adminapprove");
+    let r = call("/cli/app/egress/add", &agent(&f.ws_a), json!({"app": "jobs", "host": "api.stripe.com"})).unwrap();
+    let id = r["request"]["id"].as_str().unwrap().to_string();
+    let mint = |stamp: &str, method: &str| test_seams::vault_handle().confirm.mint(CONFIRM_ACTION, Some(&id), stamp, method);
+
+    // Another person's confirm, or the vault password / Touch ID: refused,
+    // nothing decided.
+    for (stamp, method) in [("connect:bea", "connect-password"), ("connect:ada", "vault-password"), ("connect:ada", "local-auth")] {
+        let e = call("/cli/app/approve", &admin(), json!({"request": id, "confirmToken": mint(stamp, method)})).unwrap_err();
+        assert_eq!(e.1, codes::VAULT_CONFIRM_REQUIRED, "{stamp} via {method}");
+    }
+    assert!(allowed("jobs").is_empty(), "nothing approved yet");
+
+    // Its own login password: approved and applied, recorded as the admin.
+    let r = call("/cli/app/approve", &admin(), json!({"request": id, "confirmToken": mint("connect:ada", "connect-password")})).unwrap();
+    assert_eq!(r["request"]["status"], "approved", "{r}");
+    assert_eq!(r["request"]["decidedBy"], "user:ada", "{r}");
+    assert_eq!(r["request"]["confirmVia"], "connect-password", "{r}");
+    assert_eq!(allowed("jobs"), vec!["api.stripe.com:443"]);
+    assert!(
+        msgs_to(&f.ws_a).iter().any(|m| m.contains(&format!("admin ada approved {id}"))),
+        "the agent hears who approved: {:?}",
+        msgs_to(&f.ws_a)
+    );
+
+    // The list tells an Admin it can approve, with its own password.
+    let l = get("/cli/app/approvals", &admin(), &[("state", "all")]).unwrap();
+    assert_eq!(l["canApprove"], true, "{l}");
+    assert_eq!((&l["ownerConfirm"]["available"], &l["ownerConfirm"]["methods"]), (&json!(true), &json!(["connect-password"])), "{l}");
+    assert_eq!(l["ownerConfirm"]["login"], "ada", "the prompt names the login: {l}");
+    let m = get("/cli/app/approvals", &Who::Login { username: "mo".into(), role: Role::Member }, &[]).unwrap();
+    assert_eq!((m["canApprove"].as_bool(), m["ownerConfirm"]["available"].as_bool()), (Some(false), Some(false)), "{m}");
+    assert_eq!(get("/cli/app/approvals", &agent(&f.ws_a), &[]).unwrap()["canApprove"], false);
+
+    // Revoking a standing approval is still the owner's alone.
+    let e = call("/cli/app/approvals/revoke", &admin(), json!({"request": id})).unwrap_err();
+    assert_eq!(e.1, codes::OWNER_ONLY, "revoke stays Owner-only");
 }
 
 #[test]

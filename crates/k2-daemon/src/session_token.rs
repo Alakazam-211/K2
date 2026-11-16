@@ -1252,14 +1252,14 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/updates/pull",
         "/cli/app/updates/stats",
         // Held requests: list own, withdraw own through deny.
-        // `/cli/app/approve` is NOT here: the owner's, in person, with a
-        // vault confirm.
+        // `/cli/app/approve` is NOT here: an owner's or admin's, in person,
+        // with their own vault confirm (never a passport, 0.46.13 too).
         "/cli/app/approvals",
         "/cli/app/deny",
         // 0.46.5 App handover (`k2 app handover`): A offers its own App
         // (POST /cli/app/handover, switch 1), B accepts or declines, A
-        // cancels; plan, status, brief. Approving the card is the owner's
-        // (`/cli/app/approve` stays off this list).
+        // cancels; plan, status, brief. Approving the card is an owner's or
+        // admin's (`/cli/app/approve` stays off this list).
         "/cli/app/handover",
         "/cli/app/handover/plan",
         "/cli/app/handover/status",

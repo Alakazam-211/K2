@@ -2,7 +2,7 @@
 //!
 //! | Action | Floor | Proof | Route entry `apply` calls |
 //! |---|---|---|---|
-//! | `apps.approve request=` | Owner | `app-approve` | `apps::approvals::handle("/cli/app/approve")` |
+//! | `apps.approve request=` | Admin (0.46.13; each with their own confirm) | `app-approve` | `apps::approvals::handle("/cli/app/approve")` |
 //! | `mail.approve message=` | Admin | click | `mail::routes_send::handle_approvals_approve` |
 //! | `sources.approve source= spec=` (plain sources; a list is one batch) | Admin | click | `sources::approve_routes::handle("/cli/sources/{approve,batch-approve}")` |
 //! | `garden.proposal.approve proposal=` | GardenOwner | click | `zen_agent_routes::approve_entry` (E1's `garden_owner_may`) |
@@ -146,7 +146,11 @@ pub(crate) static APPS_APPROVE: ActionSpec = ActionSpec {
     id: "apps.approve",
     area: Area::Held,
     params: &[one("request", ParamKind::HeldRequest)],
-    floor: Floor::Owner,
+    // An Owner or Admin login approves, each confirming with their own login
+    // password (Rosson 2026-11-15); the route checks it again at the click.
+    // Open cards stored at `owner` move in place
+    // (`apps::held_cards::open_cards_to_admins`).
+    floor: Floor::Admin,
     direction: Direction::Loosen,
     grant: Grant::OneTime,
     proof: Proof::SettingsConfirm { action: ConfirmAction::AppApprove },
@@ -154,7 +158,7 @@ pub(crate) static APPS_APPROVE: ActionSpec = ActionSpec {
     words: Words {
         setting: "App Approvals",
         what_changes: "Approve {ws}'s held App request {request}",
-        consequences: "The change K2 held for the owner runs now, exactly as listed in Settings → App Approvals; open it there to see what it does.",
+        consequences: "The change K2 held runs now, exactly as listed in Settings → App Approvals; open it there to see what it does.",
         scope: "request {request}",
         duration: ONE_TIME,
         retry: "",

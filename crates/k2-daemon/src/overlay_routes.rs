@@ -4465,6 +4465,13 @@ pub fn spawn_card_expiry() {
         let entered = rt.as_ref().map(|h| h.enter());
         let now = overlay::now_secs();
         sweep_expired_cards(now);
+        // 0.46.13, the first pass only: App cards raised for the owner
+        // alone become answerable by an Admin too (the same cards, updated
+        // in place).
+        static ADMINS: std::sync::Once = std::sync::Once::new();
+        ADMINS.call_once(|| {
+            crate::apps::held_cards::open_cards_to_admins();
+        });
         // Permission cards (rev 3.1 §6.2): re-check open requests and
         // republish any that became "Already on" (a no-op while the server
         // switch is off).

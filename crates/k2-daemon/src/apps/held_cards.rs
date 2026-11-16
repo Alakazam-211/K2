@@ -2,9 +2,10 @@
 //! Thread (audit-app-agent-access-0464 §4 "one approval system"), Beta or
 //! not: the `apps.approve` permission card (`permission/actions/held.rs`),
 //! posted by K2 itself the way `zen_garden_cards` posts its Garden cards.
-//! The owner answers it on the Thread, the phone or Settings → App
+//! An owner or admin answers it on the Thread, the phone or Settings → App
 //! Approvals; every door approves through `/cli/app/approve` with the same
-//! fresh owner confirm, so a card is never wider than Settings.
+//! fresh confirm (the owner's, or an Admin's own login password since
+//! 0.46.13), so a card is never wider than Settings.
 //!
 //! Which requests: the App grants an agent can't apply itself
 //! (`super::agent_grants`): copy-host, the guests-rooms grant, a test
@@ -23,7 +24,6 @@
 //! sets its password once (`test_guests::password`).
 
 use k2_core::app_grace::requests as reqs;
-use k2_core::permission::catalog::Floor;
 use k2_core::permission::request::{params_hash, PermissionRequest, RequestId, RequestState};
 use serde_json::{json, Map, Value as J};
 
@@ -135,7 +135,8 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
         card_action,
         false,
         req.expires_at,
-        crate::overlay_routes::CardAudience::Logins(present::eligible_logins(Floor::Owner)),
+        // The catalog's floor: an Owner or Admin login (0.46.13).
+        crate::overlay_routes::CardAudience::Logins(present::eligible_logins(reg.spec.floor)),
     );
     let (card_id, addr) = match posted {
         Ok(crate::overlay_routes::Presented::Card { id, addr }) => (id, addr),
@@ -154,6 +155,48 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
         answer::audit(k2_core::permission::audit_event::REQUEST, "k2", "daemon", &stored);
     }
     json!({ "card": card_id, "request": r.id, "addr": addr })
+}
+
+/// Cards raised before 0.46.13 were stored for the owner alone (floor
+/// `owner`); now an Owner or Admin login approves (Rosson 2026-11-15). Each
+/// open `apps.approve` request still at `owner` takes the catalog's floor
+/// and the hash of today's words (the consequences line changed with it),
+/// and its card's view is rewritten in place: the same card, same id, now
+/// answerable by an Admin. Nothing new is posted, so no card is doubled.
+/// Run once per daemon start (the card sweep's first pass); idempotent.
+/// Returns how many requests moved.
+pub(crate) fn open_cards_to_admins() -> usize {
+    let Some(reg) = present::find_action(ACTION) else { return 0 };
+    let to = present::floor_str(reg.spec.floor);
+    if to == "owner" {
+        return 0;
+    }
+    let open = match store::open(None) {
+        Ok(o) => o,
+        Err(e) => {
+            k2_core::log_debug!("[app-cards] open requests: {e}");
+            return 0;
+        }
+    };
+    let mut moved = 0;
+    for req in open.iter().filter(|r| r.action == ACTION && r.floor == "owner") {
+        let hash = present::text_hash_of(reg.spec, &present::ctx_of(req));
+        match store::lower_floor(req.id.as_str(), "owner", to, &hash) {
+            Ok(true) => moved += 1,
+            Ok(false) => continue,
+            Err(e) => {
+                k2_core::log_debug!("[app-cards] floor of {}: {e}", req.id);
+                continue;
+            }
+        }
+        if let (Some(conv), Some(card)) = (req.conversation_id.as_deref(), req.card_id.as_deref()) {
+            present::refresh_card(conv, card, present::CardClose::Void);
+        }
+    }
+    if moved > 0 {
+        k2_core::log_debug!("[app-cards] {moved} open App card(s) now answerable by an owner or admin");
+    }
+    moved
 }
 
 /// The card's "<agent> says:" line: the agent's own reason when it gave

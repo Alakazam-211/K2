@@ -11,6 +11,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
+import { readConfirmIdentity, type ConfirmIdentity } from './confirm-password-ui'
 
 /** Every CLI hint names the noun through this (one-line rename). */
 export const SEW_CLI = 'k2 hostchat'
@@ -799,12 +800,15 @@ export function confirmSecretId(action: SewConfirmAction, installId: string | nu
   return action === 'chat-owner-handoff' ? undefined : installId || 'none'
 }
 
-export async function startSewConfirm(action: SewConfirmAction, secretId: string | undefined): Promise<{ methods: string[] }> {
+export async function startSewConfirm(
+  action: SewConfirmAction,
+  secretId: string | undefined,
+): Promise<{ methods: string[]; who: ConfirmIdentity }> {
   const r = await daemonCliPost<{ methods?: string[] }>(primaryScope(), 'vault/confirm/start', {
     action,
     ...(secretId !== undefined ? { secretId } : {}),
   })
-  return { methods: Array.isArray(r?.methods) ? r.methods : [] }
+  return { methods: Array.isArray(r?.methods) ? r.methods : [], who: readConfirmIdentity(r) }
 }
 
 export async function finishSewConfirm(

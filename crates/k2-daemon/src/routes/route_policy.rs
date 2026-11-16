@@ -1456,6 +1456,31 @@ mod tests {
         });
     }
 
+    /// 0.46.13 (Rosson 2026-11-15: any Owner or Admin enters the password
+    /// for a card on a user's box): approving a held App request is Admin
+    /// at the gate (the handler then wants that person's own confirm);
+    /// revoking a standing approval stays the owner's.
+    #[test]
+    fn an_admin_reaches_app_approve_and_revoke_stays_the_owners() {
+        assert_eq!(lookup("/cli/app/approve").and_then(|r| r.post).expect("approve POST").as_wire(), "admin");
+        assert_eq!(lookup("/cli/app/approvals/revoke").and_then(|r| r.post).expect("revoke POST").as_wire(), "owner");
+        crate::test_support::with_temp_home(|| {
+            let member = session("appr_member", Role::Member);
+            let admin = session("appr_admin", Role::Admin);
+            let owner = session("appr_owner", Role::Owner);
+            let r = role_gate("POST", "/cli/app/approve", &format!("token={member}"), OWNER).expect("member refused");
+            assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("JSON");
+            assert_eq!(v["error"], "role_required", "{v}");
+            assert!(role_gate("POST", "/cli/app/approve", &format!("token={admin}"), OWNER).is_none(), "admin passes");
+            assert!(role_gate("POST", "/cli/app/approve", &format!("token={owner}"), OWNER).is_none(), "owner login passes");
+            assert!(role_gate("POST", "/cli/app/approve", &format!("token={OWNER}"), OWNER).is_none(), "owner token passes");
+            let r = role_gate("POST", "/cli/app/approvals/revoke", &format!("token={admin}"), OWNER).expect("admin refused at revoke");
+            assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+            assert!(role_gate("POST", "/cli/app/approvals/revoke", &format!("token={owner}"), OWNER).is_none(), "owner login revokes");
+        });
+    }
+
     #[test]
     fn keep_awake_changes_need_admin_and_reading_stays_member() {
         // 0.43.2 Q3: Keep awake changes the host machine's power.

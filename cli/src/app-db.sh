@@ -334,8 +334,9 @@ k2 app egress — what a guarded App may reach on the internet
   k2 app approvals [--app A] [--all] [--json]
                                        Held requests (an agent sees its own
                                        workspace's).
-  k2 app approve <request-id>          Owner, in person: Touch ID or your
-                                       password, outside K2. Agents never can.
+  k2 app approve <request-id>          Owner or admin, in person: Touch ID or
+                                       your own password, outside K2. Agents
+                                       never can.
   k2 app deny <request-id> [--reason TEXT]
                                        Owner/admin denies; the requester
                                        withdraws its own.

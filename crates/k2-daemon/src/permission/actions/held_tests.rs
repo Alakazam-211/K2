@@ -146,7 +146,7 @@ fn uniq() -> String {
 fn the_held_actions_are_registered_with_the_code_floors_and_proofs() {
     let _db = k2_core::db::scoped_for_test();
     let rows = [
-        ("apps.approve", Floor::Owner, Proof::SettingsConfirm { action: ConfirmAction::AppApprove }, "/cli/app/approve"),
+        ("apps.approve", Floor::Admin, Proof::SettingsConfirm { action: ConfirmAction::AppApprove }, "/cli/app/approve"),
         ("mail.approve", Floor::Admin, Proof::Click, "/cli/mail/approvals/approve"),
         ("sources.approve", Floor::Admin, Proof::Click, "/cli/sources/approve"),
         ("garden.proposal.approve", Floor::GardenOwner, Proof::Click, "/cli/zen/proposals/approve"),
@@ -265,7 +265,7 @@ fn apps_approve_runs_the_held_request_through_app_approvals_as_the_owner() {
 
     let v = ask_ok(&ws, "apps.approve", json!({ "request": id }));
     assert_eq!(v["id"], id.as_str(), "a held request keeps its own id: {v}");
-    assert_eq!(v["approvers"], "owner");
+    assert_eq!(v["approvers"], "owner or admin", "an Owner or Admin approves (0.46.13)");
     let card = card_of(&v);
     let vw = view(&ws, &card);
     assert_eq!(vw["requestId"], id.as_str());
@@ -275,19 +275,25 @@ fn apps_approve_runs_the_held_request_through_app_approvals_as_the_owner() {
     assert_eq!(vw["grant"], "one-time");
     assert_eq!(vw["settingsPage"], "app-approvals");
 
-    // An Admin is below the floor: at the card, and at the route itself.
-    let admin = login("e2apa", Role::Admin);
-    below_floor(answer_as(&admin, &ws, &card, json!({ "answer": "Allow", "confirmToken": app_token(&id, &format!("connect:{admin}")) })), "owner");
+    // A Member is below the floor: at the card, and at the route itself.
+    let member = login("e2apm", Role::Member);
+    below_floor(answer_as(&member, &ws, &card, json!({ "answer": "Allow", "confirmToken": app_token(&id, &format!("connect:{member}")) })), "admin");
     let e = crate::apps::approvals::handle(
         "/cli/app/approve",
-        &Who::Login { username: admin.clone(), role: Role::Admin },
-        json!({ "request": id, "confirmToken": app_token(&id, &format!("connect:{admin}")) }).to_string().as_bytes(),
+        &Who::Login { username: member.clone(), role: Role::Member },
+        json!({ "request": id, "confirmToken": app_token(&id, &format!("connect:{member}")) }).to_string().as_bytes(),
         &HashMap::new(),
     )
-    .expect_err("an Admin login never approves");
+    .expect_err("a Member login never approves");
     assert_eq!(e.code, "owner_only");
-    let direct = apply_as(&id, &Answerer::Login { user: admin.clone(), role: "admin".into() }, Some(&app_token(&id, &format!("connect:{admin}"))));
+    let direct = apply_as(&id, &Answerer::Login { user: member.clone(), role: "member".into() }, Some(&app_token(&id, &format!("connect:{member}"))));
     assert_eq!(refused_code(direct), "owner_only", "the route's own floor runs at the click");
+    // An Admin with the owner's confirm (not its own): refused at the
+    // route, the card stays open.
+    let admin = login("e2apa", Role::Admin);
+    let (s, a) = answer_as(&admin, &ws, &card, json!({ "answer": "Allow", "confirmToken": app_token(&id, "owner") }));
+    assert_eq!((s.as_str(), &a["error"]["code"]), ("403 Forbidden", &json!("vault_confirm_required")), "{a}");
+    assert!(row(&id).is_answerable(), "a refused confirm leaves the card open");
 
     // No confirm, or one for another request: nothing is decided.
     let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow" }));
@@ -313,6 +319,199 @@ fn apps_approve_runs_the_held_request_through_app_approvals_as_the_owner() {
     // Single use: a second answer applies nothing.
     let (s, _) = answer_as("owner", &ws, &card, json!({ "answer": "Allow", "confirmToken": app_token(&id, "owner") }));
     assert_eq!(s, "409 Conflict");
+}
+
+/// `/cli/vault/confirm/finish` for `app-approve` as an Admin login, with
+/// the password it types: the vault's own route, the same one the Thread
+/// card and Settings call before they answer.
+fn admin_confirm(user: &str, id: &str, password: &str) -> (u16, Value) {
+    let c = crate::vault::actor::VaultCaller {
+        actor: k2_vault::Actor::Login { username: user.to_string(), role: k2_vault::Role::Admin },
+        channel: crate::vault::actor::Channel::Login,
+        session_id: None,
+    };
+    let body = json!({ "action": crate::apps::approvals::CONFIRM_ACTION, "secretId": id, "method": "connect-password", "password": password });
+    let v = crate::apps::egress_routes::test_seams::vault_handle();
+    let r = crate::vault_routes::handle_on(&v, crate::vault_routes::CONFIRM_FINISH, Ok(c), body.to_string().as_bytes(), &HashMap::new(), "test", None);
+    (r.status[..3].parse().expect("status"), serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{e}: {}", r.body)))
+}
+
+/// 0.46.13 (Rosson 2026-11-15: "Any Owner or Admin should be able to enter
+/// the passwords for cards that require passwords on a user's box"): an
+/// Admin login answers K2's App card with its OWN login password. A wrong
+/// password is refused at the confirm, audited, and decides nothing.
+#[test]
+fn an_admin_answers_the_app_card_with_its_own_password() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    quiet_apps();
+    let ws = seed("e2aa");
+    let id = app_request(&ws, app_reqs::KIND_DB_RAW);
+    let v = ask_ok(&ws, "apps.approve", json!({ "request": id }));
+    let card = card_of(&v);
+    let admin = login("e2aaa", Role::Admin);
+
+    // The card is the Admin's to answer.
+    assert_eq!(row(&id).floor, "admin");
+    assert_eq!(view(&ws, &card)["approvers"]["floor"], "admin");
+
+    // The confirm's start names the login the password is for (the prompt's
+    // words and the password manager's username).
+    let start = {
+        let c = crate::vault::actor::VaultCaller {
+            actor: k2_vault::Actor::Login { username: admin.clone(), role: k2_vault::Role::Admin },
+            channel: crate::vault::actor::Channel::Login,
+            session_id: None,
+        };
+        let body = json!({ "action": crate::apps::approvals::CONFIRM_ACTION, "secretId": id });
+        let v = crate::apps::egress_routes::test_seams::vault_handle();
+        let r = crate::vault_routes::handle_on(&v, crate::vault_routes::CONFIRM_START, Ok(c), body.to_string().as_bytes(), &HashMap::new(), "test", None);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        serde_json::from_str::<Value>(&r.body).expect("json")
+    };
+    assert_eq!(start["login"], admin.as_str(), "{start}");
+    assert!(start["methods"].as_array().expect("methods").iter().any(|m| m == "connect-password"), "{start}");
+
+    // A wrong password: no token, an audit line, the card still open.
+    let (st, r) = admin_confirm(&admin, &id, "not-my-password");
+    assert_eq!((st, r["error"]["code"].as_str()), (403, Some("confirm_failed")), "{r}");
+    // It names the login and the lockout the miss counts toward.
+    assert_eq!(
+        r["error"]["hint"].as_str(),
+        Some(format!("that isn't the sign-in password for login {admin} on this server. 3 misses in a row lock sign-in for 15 minutes").as_str()),
+        "{r}"
+    );
+    let audit = k2_core::auth_audit::read_all().expect("audit").iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+    assert!(
+        audit.contains(&format!("connect:{admin}")) && audit.contains("deny app-approve via connect-password: confirm_failed"),
+        "the refused confirm is audited: {audit}"
+    );
+    assert!(row(&id).is_answerable(), "a wrong password decides nothing");
+    assert_eq!(app_status(&id).status, app_reqs::STATUS_PENDING);
+
+    // Its own password: a token bound to it and this request; the card applies.
+    let (st, r) = admin_confirm(&admin, &id, "password123");
+    assert_eq!(st, 200, "{r}");
+    let token = r["token"].as_str().expect("token").to_string();
+    let (s, a) = answer_as(&admin, &ws, &card, json!({ "answer": "Allow", "confirmToken": token, "client": "web" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(a["action"]["result"]["outcome"], "approved", "{a}");
+    let held = app_status(&id);
+    assert_eq!(held.status, app_reqs::STATUS_APPROVED);
+    assert_eq!(held.decided_by.as_deref(), Some(format!("user:{admin}").as_str()));
+    assert_eq!(held.confirm_via.as_deref(), Some("connect-password"));
+    let r = row(&id);
+    assert_eq!((r.state, r.answered_by.as_deref()), (RequestState::Approved, Some(admin.as_str())));
+}
+
+/// 0.46.13: an agent with permission cards off whose held grant K2 cards
+/// itself (`agent_grants::hold`, e.g. a test guest) is told about THAT
+/// card, never "permission cards are off …, so no card went up"
+/// (`approvals::enrich_held` overwrote the route's `card`). A hold with no
+/// card still says where it waits.
+#[test]
+fn a_hold_k2_carded_names_its_card_for_an_agent_with_cards_off() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    quiet_apps();
+    let ws = seed("e2nc");
+    let a = agent(&ws);
+    assert!(!k2_core::permission::gate::enabled_for(&ws.id), "permission cards are off for this agent");
+    let held = crate::apps::agent_grants::hold(
+        crate::apps::agent_grants::Step {
+            who: &a,
+            app: None,
+            label: "shop",
+            workspace: &ws.id,
+            route: crate::apps::agent_grants::TEST_GUEST_ADD,
+            body: json!({ "app": "shop", "username": "tess" }),
+            lines: vec!["a test guest tess on shop".into()],
+            summary: "add test guest tess to shop".into(),
+            why: "a test guest needs the owner".into(),
+            reason: None,
+        },
+        false,
+    )
+    .expect("held");
+    let card = held["card"]["card"].as_str().unwrap_or_else(|| panic!("K2 put up its card: {held}")).to_string();
+    let id = held["request"]["id"].as_str().expect("request id").to_string();
+    let resp = crate::cli_response::CliResponse { status: "202 Accepted", content_type: "application/json", body: held.to_string() };
+    let out: Value = serde_json::from_str(&crate::apps::approvals::enrich_held(&a, resp).body).expect("json");
+    let c = &out["card"];
+    assert_eq!(c["card"], card.as_str(), "the route's card stays: {out}");
+    assert_eq!(c["raised"], true, "{out}");
+    let where_ = c["where"].as_str().unwrap_or_else(|| panic!("says where: {out}"));
+    assert!(where_.contains(&format!("permission card {id}")) && where_.contains("an owner or admin approves it there"), "{where_}");
+    assert!(!out.to_string().contains("no card went up"), "never 'no card went up' when one is up: {out}");
+
+    // A hold K2 doesn't card: where it waits, cards off.
+    let plain = app_status(&app_request(&ws, app_reqs::KIND_DB_RAW));
+    let resp = crate::cli_response::CliResponse {
+        status: "202 Accepted",
+        content_type: "application/json",
+        body: crate::apps::approvals::held_answer(&plain).to_string(),
+    };
+    let out: Value = serde_json::from_str(&crate::apps::approvals::enrich_held(&a, resp).body).expect("json");
+    assert_eq!((out["card"]["raised"].as_bool(), out["card"]["cardsOff"].as_bool()), (Some(false), Some(true)), "{out}");
+    assert!(out["card"]["where"].as_str().expect("where").contains("no card went up"), "{out}");
+}
+
+/// 0.46.13: an `apps.approve` card raised before the floor moved was stored
+/// at `owner`. The first card sweep moves it in place: same request, same
+/// card, now answerable by an Admin; nothing new is posted, and a second
+/// pass changes nothing.
+#[test]
+fn open_owner_app_cards_become_answerable_by_an_admin_in_place() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    quiet_apps();
+    let ws = seed("e2mv");
+    let id = app_request(&ws, app_reqs::KIND_DB_RAW);
+    let posted = crate::apps::held_cards::present_for(&app_status(&id));
+    let card = posted["card"].as_str().unwrap_or_else(|| panic!("K2 posts its card: {posted}")).to_string();
+    // As a 0.46.12 daemon stored it: the owner's floor and the old words.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let n = conn
+            .execute(
+                "UPDATE permission_requests SET floor = 'owner', text_hash = 'pre-0.46.13' WHERE held_ref = ?1",
+                rusqlite::params![id],
+            )
+            .expect("age the request");
+        assert_eq!(n, 1);
+    }
+    present::refresh_card(&ws.conv, &card, present::CardClose::Void).expect("the card view follows");
+    assert_eq!(view(&ws, &card)["approvers"]["floor"], "owner");
+    let admin = login("e2mva", Role::Admin);
+    below_floor(answer_as(&admin, &ws, &card, json!({ "answer": "Allow", "confirmToken": app_token(&id, &format!("connect:{admin}")) })), "owner");
+    let before = row(&id);
+
+    assert_eq!(crate::apps::held_cards::open_cards_to_admins(), 1);
+    let after = row(&id);
+    assert_eq!((after.id.as_str(), after.card_id.as_deref()), (before.id.as_str(), Some(card.as_str())), "the same request, the same card");
+    assert_eq!(after.floor, "admin");
+    assert_ne!(after.text_hash, "pre-0.46.13", "today's words, so the click isn't stale");
+    assert_eq!(view(&ws, &card)["approvers"]["floor"], "admin");
+    let open: Vec<_> = store::open(Some(&ws.id)).expect("open").into_iter().filter(|r| r.action == "apps.approve").collect();
+    assert_eq!(open.len(), 1, "no second card: {open:?}");
+    assert_eq!(crate::apps::held_cards::open_cards_to_admins(), 0, "idempotent");
+    // Posting again finds the open card instead of raising another.
+    assert_eq!(crate::apps::held_cards::present_for(&app_status(&id))["card"], card.as_str());
+
+    // The Admin answers it, with its own confirm.
+    let (s, a) = answer_as(&admin, &ws, &card, json!({ "answer": "Allow", "confirmToken": app_token(&id, &format!("connect:{admin}")) }));
+    // `app_token` mints as `local-auth`: an Admin's must be its login password.
+    assert_eq!((s.as_str(), &a["error"]["code"]), ("403 Forbidden", &json!("vault_confirm_required")), "{a}");
+    let tok = crate::apps::egress_routes::test_seams::vault_handle().confirm.mint(
+        crate::apps::approvals::CONFIRM_ACTION,
+        Some(&id),
+        &format!("connect:{admin}"),
+        "connect-password",
+    );
+    let (s, a) = answer_as(&admin, &ws, &card, json!({ "answer": "Allow", "confirmToken": tok }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(app_status(&id).status, app_reqs::STATUS_APPROVED);
 }
 
 #[test]

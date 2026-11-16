@@ -113,14 +113,18 @@ describe('ApprovalsPanel', () => {
 
   it('asks for a password where there is no Touch ID, and never approves without it', async () => {
     m.fetchAdminRequests.mockResolvedValue({ requests: [req()], canApprove: true })
-    m.startAdminConfirm.mockResolvedValue({ methods: ['connect-password'] })
+    m.startAdminConfirm.mockResolvedValue({ methods: ['connect-password'], server: 'rosson.k2.dev', login: 'ada' })
     m.finishAdminConfirm.mockResolvedValue({ token: 'k2vc_pw' })
     m.approveAdminRequest.mockResolvedValue({ ok: true, request: req({ state: 'sent' }), sent: true, note: '' })
     render(<ApprovalsPanel />)
     fireEvent.click(await screen.findByTestId('compute-approve-car_1'))
     const pw = (await screen.findByTestId('compute-approve-password')) as HTMLInputElement
     expect(m.approveAdminRequest).not.toHaveBeenCalled()
-    expect(screen.getByText('Your K2 Connect password')).toBeTruthy()
+    // 0.46.13 field report: this server's sign-in, by name and login; the
+    // password manager gets the login as the username.
+    expect(screen.getByText('Your sign-in password for rosson.k2.dev (login ada)')).toBeTruthy()
+    const user = screen.getByTestId('compute-approve-username') as HTMLInputElement
+    expect([user.value, user.getAttribute('autocomplete'), user.form]).toEqual(['ada', 'username', pw.form])
     fireEvent.change(pw, { target: { value: 'hunter2-long' } })
     fireEvent.submit(pw.closest('form') as HTMLFormElement)
     await waitFor(() => expect(m.finishAdminConfirm).toHaveBeenCalledWith('car_1', 'connect-password', req().summary, 'hunter2-long'))

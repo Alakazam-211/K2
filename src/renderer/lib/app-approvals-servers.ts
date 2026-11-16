@@ -1,16 +1,17 @@
 // App Approvals across servers (0.46.5 patch-up: "App Approvals only shows
 // the active server").
 //
-// The held App requests of every server the person OWNS, not only the
-// window's. The server list is the Home pool's (`lib/host-pool.ts`), the
+// The held App requests of every server the person OWNS or ADMINS, not only
+// the window's. The server list is the Home pool's (`lib/host-pool.ts`), the
 // same one Home's multi-server rows use: the window's own server first, then
 // each other server this window is signed in to (`auth: 'ok'`) whose whoami
-// role is `owner`. Only an owner approves, so an Admin or Member login, a
-// server not signed in, or one the pool has not checked yet is left out (it
-// shows up once the pool has read it). Each server is read, approved and
-// denied with ITS scope and login, and an approval takes a fresh owner
-// confirm on that server's own vault (`vaultConfirmOn`): nothing is relayed
-// through the window's server, and no daemon route is new.
+// role is `owner` or `admin`. An owner or an admin approves (0.46.13, Rosson
+// 2026-11-15), so a Member login, a server not signed in, or one the pool
+// has not checked yet is left out (it shows up once the pool has read it).
+// Each server is read, approved and denied with ITS scope and login, and an
+// approval takes a fresh confirm of that person on that server's own vault
+// (`vaultConfirmOn`; an admin types their own login password): nothing is
+// relayed through the window's server, and no daemon route is new.
 //
 // Pure bits only (no React); the section and the badge store use them.
 
@@ -28,8 +29,11 @@ export interface ApprovalServer {
   isWindow: boolean
 }
 
+/** Whoami roles that approve held App requests (0.46.13: owner or admin). */
+export const APPROVER_ROLES: ReadonlySet<string> = new Set(['owner', 'admin'])
+
 /** The servers App Approvals reads, the window's own first, then the other
- *  owned ones by host key (a stable order). */
+ *  ones the person owns or admins, by host key (a stable order). */
 export function approvalServers(
   entries: Readonly<Record<string, HostEntry>>,
   primary: ServerScope,
@@ -38,7 +42,7 @@ export function approvalServers(
   const out: ApprovalServer[] = [{ hostKey: primary.hostKey, label: primary.label, scope: primary, isWindow: true }]
   const seen = new Set([canonicalHostKey(primary.hostKey)])
   const others = Object.values(entries)
-    .filter((e) => e.saved && e.auth === 'ok' && e.role === 'owner')
+    .filter((e) => e.saved && e.auth === 'ok' && typeof e.role === 'string' && APPROVER_ROLES.has(e.role))
     .sort((a, b) => a.hostKey.localeCompare(b.hostKey))
   for (const e of others) {
     const key = canonicalHostKey(e.hostKey)

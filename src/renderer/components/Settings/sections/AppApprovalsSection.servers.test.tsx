@@ -84,13 +84,19 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('App Approvals across servers', () => {
-  it('shows each owned server in its own block; Admin and signed-out servers are never read', async () => {
+  it('shows each owned or admined server in its own block; Member and signed-out servers are never read', async () => {
     pool.entries = {
       'box.k2.dev': owner('box.k2.dev'),
+      // 0.46.13: an Admin approves too, so its servers are read.
       'admin.k2.dev': owner('admin.k2.dev', { role: 'admin' }),
+      'member.k2.dev': owner('member.k2.dev', { role: 'member' }),
       'out.k2.dev': owner('out.k2.dev', { auth: 'signin-required' }),
     }
-    const lists: Record<string, AppRequest[]> = { local: [req('w_here', 'notes')], 'box.k2.dev': [req('w_box', 'shop')] }
+    const lists: Record<string, AppRequest[]> = {
+      local: [req('w_here', 'notes')],
+      'box.k2.dev': [req('w_box', 'shop')],
+      'admin.k2.dev': [req('w_adm', 'crm')],
+    }
     h.get.mockImplementation(async (host: string, route: string) => {
       if (route !== 'app/approvals' || !(host in lists)) throw new Error(`unexpected GET ${host} ${route}`)
       return { ok: true, requests: lists[host], ownerConfirm: OK }
@@ -103,9 +109,12 @@ describe('App Approvals across servers', () => {
     expect(here.textContent).toContain('This computer')
     expect(here.textContent).toContain("this window's server")
     expect(here.textContent).toContain('notes wants api.example.test')
-    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('App Approvals (2)')
+    const adm = screen.getByTestId('app-approvals-server-admin.k2.dev')
+    expect(adm.textContent).toContain('crm wants api.example.test')
+    expect(screen.getByTestId('app-approve-w_adm')).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('App Approvals (3)')
     const read = new Set(h.get.mock.calls.map((c) => c[0]))
-    expect(read).toEqual(new Set(['local', 'box.k2.dev']))
+    expect(read).toEqual(new Set(['local', 'box.k2.dev', 'admin.k2.dev']))
   })
 
   it("approves with THAT server's confirm and denies on that server", async () => {

@@ -21,6 +21,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { siteLabel } from '@/components/SessionView/SecretCard'
 import { SettingDropdown, SETTING_ROW_HINT, SETTING_ROW_LABEL } from '../controls/SettingControls'
 import { AccessSheet as Sheet, CopyLine, DIALOG_FIELD as FIELD, DIALOG_LABEL as LABEL, DIALOG_MUTED as MUTED, FailedNote, Field } from './AccessDialogs'
+import { confirmPasswordLabel, LoginUsernameField, readConfirmIdentity, type ConfirmIdentity } from './confirm-password-ui'
 import { fromBase64, toBase64, vaultApi, type VaultAuditRow, type VaultPreset, type VaultRecoveryChallenge, type VaultSecret } from './vault-api'
 import {
   ADD_KINDS,
@@ -171,7 +172,7 @@ export function ValueField({
 
 // ── Confirm it's you ────────────────────────────────────────────────
 
-type Ask = { step: 'idle' } | { step: 'asking' } | { step: 'mac' } | { step: 'password'; method: string } | { step: 'none' }
+type Ask = { step: 'idle' } | { step: 'asking' } | { step: 'mac' } | { step: 'password'; method: string; who: ConfirmIdentity } | { step: 'none' }
 
 /** The vault's person confirm (the Mac's own sheet, or a password): `begin`
  *  resolves with a token, or null when it now waits for a password (or this
@@ -193,7 +194,8 @@ function useVaultConfirm(action: string, secretId: string | undefined, label: st
   const begin = async (): Promise<string | null> => {
     setAsk({ step: 'asking' })
     try {
-      const { methods } = await vaultApi.confirmStart(action, secretId)
+      const started = await vaultApi.confirmStart(action, secretId)
+      const { methods } = started
       if (methods.includes('local-auth')) {
         setAsk({ step: 'mac' })
         const token = await finish('local-auth')
@@ -201,7 +203,7 @@ function useVaultConfirm(action: string, secretId: string | undefined, label: st
         return token
       }
       const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
-      setAsk(pw ? { step: 'password', method: pw } : { step: 'none' })
+      setAsk(pw ? { step: 'password', method: pw, who: readConfirmIdentity(started) } : { step: 'none' })
       return null
     } catch (e) {
       setAsk({ step: 'idle' })
@@ -233,10 +235,11 @@ function ConfirmStep({ c, testId, other }: { c: Confirm; testId: string; other?:
   if (c.ask.step === 'password') {
     return (
       <Field
-        label={c.ask.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
+        label={confirmPasswordLabel(c.ask.method, c.ask.who)}
         hint="K2 checks it once and doesn’t keep it."
         htmlFor={id}
       >
+        <LoginUsernameField method={c.ask.method} who={c.ask.who} testId={`${testId}-username`} />
         <Input
           id={id}
           ref={c.pwRef}

@@ -213,6 +213,76 @@ describe('AppApprovalsSection', () => {
     expect(postsTo('app/approve')).toEqual([])
   })
 
+  // 0.46.13 (Rosson 2026-11-15): an Admin login approves too, with its own
+  // K2 Connect password. The daemon says so on the list (canApprove, and
+  // ownerConfirm with only connect-password for an Admin).
+  it('an Admin login sees what it decides on and approves with its own login password', async () => {
+    let approved = false
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route !== 'app/approvals') throw new Error(`unexpected GET ${route}`)
+      return {
+        ok: true,
+        requests: approved ? [] : [req()],
+        canApprove: true,
+        ownerConfirm: { available: true, methods: ['connect-password'], server: 'rosson.k2.dev', login: 'ada' },
+      }
+    })
+    posts({
+      'vault/confirm/start': () => ({ methods: ['connect-password'], expiresIn: 60, server: 'rosson.k2.dev', login: 'ada' }),
+      'vault/confirm/finish': () => ({ token: 'k2vc_admin', expiresIn: 60 }),
+      'app/approve': () => {
+        approved = true
+        return { ok: true, status: 'approved', request: req({ status: 'approved', decidedBy: 'user:ada', confirmVia: 'connect-password' }) }
+      },
+    })
+    render(<AppApprovalsSection />)
+    // Everything it needs to decide: the change, who asked and why, why it was held.
+    const card = await screen.findByTestId('app-request-w_dep1')
+    expect(card.textContent).toContain('New permission:')
+    expect(card.textContent).toContain('asked by agent:sales for sales')
+    expect(card.textContent).toContain('Why: the shop sends receipts')
+    expect(card.textContent).toContain('Held because:')
+    expect(screen.queryByTestId('app-approvals-no-confirm')).toBeNull()
+    expect(screen.queryByTestId('app-approvals-approvers-only')).toBeNull()
+    const approve = screen.getByTestId('app-approve-w_dep1') as HTMLButtonElement
+    expect(approve.disabled).toBe(false)
+    fireEvent.click(approve)
+    // Its own login password, asked for at once, naming this server and the
+    // login (0.46.13 field report: "K2 Connect password" read as the k2.dev
+    // account's); the password manager gets the login as the username.
+    const pw = (await screen.findByTestId('app-approve-password')) as HTMLInputElement
+    expect(screen.getByText('Your sign-in password for rosson.k2.dev (login ada)')).toBeTruthy()
+    const user = screen.getByTestId('app-approve-username') as HTMLInputElement
+    expect([user.value, user.getAttribute('autocomplete'), user.hidden, user.form]).toEqual(['ada', 'username', true, pw.form])
+    expect(h.daemonCliPost).not.toHaveBeenCalled()
+    fireEvent.change(pw, { target: { value: 'admins own password' } })
+    fireEvent.click(screen.getByTestId('app-approve-submit-w_dep1'))
+    await waitFor(() => expect(postsTo('app/approve')).toEqual([{ request: 'w_dep1', confirmToken: 'k2vc_admin' }]))
+    expect(postsTo('vault/confirm/finish')).toEqual([
+      {
+        action: 'app-approve',
+        secretId: 'w_dep1',
+        method: 'connect-password',
+        label: 'shop: deploy shop with 1 new cap',
+        password: 'admins own password',
+      },
+    ])
+    expect(h.daemonCliPost.mock.calls.map((c) => c[0])).toEqual(['vault/confirm/start', 'vault/confirm/finish', 'app/approve'])
+    expect(pw.value).toBe('')
+  })
+
+  it('a Member login reads and denies but gets no Approve button', async () => {
+    h.daemonCliGet.mockImplementation(async () => ({ ok: true, requests: [req()], canApprove: false, ownerConfirm: { available: false, methods: [] } }))
+    render(<AppApprovalsSection />)
+    const card = await screen.findByTestId('app-request-w_dep1')
+    expect(card.textContent).toContain('deploy shop with 1 new cap')
+    expect(screen.queryByTestId('app-approve-w_dep1')).toBeNull()
+    expect(screen.getByTestId('app-approvals-approvers-only').textContent).toBe('Only the server’s owner or an admin approves App requests.')
+    // Not the "no way to confirm" banner: the server can, this login may not.
+    expect(screen.queryByTestId('app-approvals-no-confirm')).toBeNull()
+    expect((screen.getByTestId('app-deny-w_dep1') as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('deny posts the note the requester reads', async () => {
     serve([req()])
     posts({ 'app/deny': () => ({ ok: true, status: 'denied', request: req({ status: 'denied' }) }) })
@@ -261,14 +331,14 @@ describe('AppApprovalsSection', () => {
       'vault/confirm/start': () => ({ methods: ['local-auth'], expiresIn: 60 }),
       'vault/confirm/finish': () => ({ token: 't', expiresIn: 60 }),
       'app/approve': () => {
-        throw new Error('{"error":{"code":"owner_only","hint":"only the server\'s owner approves App requests, in person"}}')
+        throw new Error('{"error":{"code":"owner_only","hint":"only the server\'s owner or an admin approves App requests, in person"}}')
       },
     })
     render(<AppApprovalsSection />)
     fireEvent.click(await screen.findByTestId('app-approve-w_dep1'))
     fireEvent.click(await screen.findByTestId('app-approve-confirm-w_dep1'))
     const err = await screen.findByTestId('app-request-error-w_dep1')
-    expect(err.textContent).toBe("only the server's owner approves App requests, in person")
+    expect(err.textContent).toBe("only the server's owner or an admin approves App requests, in person")
     // The request is still there, waiting.
     expect(screen.getByTestId('app-approve-w_dep1')).toBeTruthy()
   })

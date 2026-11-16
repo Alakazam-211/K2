@@ -272,7 +272,7 @@ async fn refusals_teach_only_while_both_switches_are_on() {
     let held_id = hv["request"]["id"].as_str().unwrap_or_else(|| panic!("no held id: {hv}")).to_string();
     assert_eq!(hv["permission"]["action"], "apps.approve", "{hv}");
     assert_eq!(hv["permission"]["params"]["request"], held_id.as_str(), "{hv}");
-    assert_eq!(hv["permission"]["approvers"], "owner", "{hv}");
+    assert_eq!(hv["permission"]["approvers"], "owner or admin", "an Owner or Admin approves (0.46.13): {hv}");
 
     // Any other passport refusal: not requestable.
     let n = tcp(port, "POST", "/cli/compute/nodes/remove", Some(&passport), Some(r#"{"node":"x"}"#)).await;

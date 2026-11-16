@@ -13,8 +13,9 @@ import React, { useEffect, useRef, useState } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
 import { btn, input, muted, danger, sourcesErrorText } from './data-sources-ui'
+import { confirmPasswordLabel, LoginUsernameField, readConfirmIdentity, scopeServerName, type ConfirmIdentity } from './confirm-password-ui'
 
-type Step = { step: 'starting' } | { step: 'mac' } | { step: 'password'; method: string } | { step: 'failed'; text: string }
+type Step = { step: 'starting' } | { step: 'mac' } | { step: 'password'; method: string; who: ConfirmIdentity } | { step: 'failed'; text: string }
 
 export interface ConfirmStepProps {
   scope: ServerScope
@@ -72,7 +73,8 @@ export function ConfirmStep({ scope, action, secretId, label, onToken, onCancel 
     started.current = true
     void (async () => {
       try {
-        const { methods } = await daemonCliPost<{ methods: string[] }>(scope, 'vault/confirm/start', { action, secretId })
+        const res = await daemonCliPost<{ methods: string[] }>(scope, 'vault/confirm/start', { action, secretId })
+        const { methods } = res
         if (methods.includes('local-auth')) {
           setState({ step: 'mac' })
           await finish('local-auth')
@@ -80,7 +82,7 @@ export function ConfirmStep({ scope, action, secretId, label, onToken, onCancel 
         }
         const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
         if (pw) {
-          setState({ step: 'password', method: pw })
+          setState({ step: 'password', method: pw, who: readConfirmIdentity(res) })
           return
         }
         setState({
@@ -119,8 +121,9 @@ export function ConfirmStep({ scope, action, secretId, label, onToken, onCancel 
             void submit(state.method)
           }}
         >
+          <LoginUsernameField method={state.method} who={state.who} testId="sources-confirm-username" />
           <label className={`type-hint ${muted}`}>
-            {state.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
+            {confirmPasswordLabel(state.method, state.who, scopeServerName(scope))}
             <Input
               ref={pwRef}
               type="password"

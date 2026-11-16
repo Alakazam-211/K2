@@ -4,7 +4,7 @@
 > body: 
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"owner_only","hint":"only the server's owner approves App requests, in person: k2 app approve <id> from a terminal outside K2, or Settings → App Approvals. An agent can propose, never approve."}}
+{"error":{"code":"owner_only","hint":"only the server's owner or an admin approves App requests, in person: k2 app approve <id> from a terminal outside K2, or Settings → App Approvals. An agent can propose, never approve."}}
 ## cell socket (same passport)
 > POST /cli/app/approve
 > body: 

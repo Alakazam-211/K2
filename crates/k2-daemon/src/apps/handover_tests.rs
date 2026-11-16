@@ -531,11 +531,16 @@ fn the_card_needs_a_fresh_confirm_and_never_a_passport() {
     assert_eq!((st, req_id(&v2), v2["already"].as_bool()), (202, req.clone(), Some(true)), "{v2}");
     let (st, v) = call("/cli/app/approve", &Who::Owner, json!({ "request": req }));
     assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "{v}");
-    for who in [agent(&f.a), agent(&f.b), Who::Login { username: "ad".into(), role: Role::Admin }] {
+    for who in [agent(&f.a), agent(&f.b), Who::Login { username: "mo".into(), role: Role::Member }] {
         let tok = super::egress_routes::test_seams::vault_handle().confirm.mint(super::approvals::CONFIRM_ACTION, Some(&req), "owner", "local-auth");
         let (st, v) = call("/cli/app/approve", &who, json!({ "request": req, "confirmToken": tok }));
         assert_eq!((st, code(&v)), (403, "owner_only"), "{who:?}: {v}");
     }
+    // An Admin approves since 0.46.13, but only with its own confirm: the
+    // owner's is refused.
+    let tok = super::egress_routes::test_seams::vault_handle().confirm.mint(super::approvals::CONFIRM_ACTION, Some(&req), "owner", "local-auth");
+    let (st, v) = call("/cli/app/approve", &Who::Login { username: "ad".into(), role: Role::Admin }, json!({ "request": req, "confirmToken": tok }));
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "an admin with the owner's confirm: {v}");
     let tok = super::egress_routes::test_seams::vault_handle().confirm.mint(super::approvals::CONFIRM_ACTION, Some("w_other"), "owner", "local-auth");
     let (st, v) = call("/cli/app/approve", &Who::Owner, json!({ "request": req, "confirmToken": tok }));
     assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "a confirm for another request: {v}");

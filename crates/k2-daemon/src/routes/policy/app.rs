@@ -20,14 +20,15 @@ pub(super) const ROWS: &[Route] = &[
     // Box prep (S10): the doctor is Admin (agents read it through their
     // passport); prepare runs root-helper verbs and is the owner's.
     // Held App requests (0.46.0 grace + S15 egress, one `app_widenings`
-    // table): a passport lists its own workspace's; approve is the owner's
-    // in person (handler: owner token or Owner login + a vault confirm
+    // table): a passport lists its own workspace's; approve is an owner's or
+    // an admin's in person (0.46.13, Rosson 2026-11-15; handler: owner
+    // token, Owner login or Admin login + that person's own vault confirm
     // bound to the request, never a passport).
     get("/cli/app/approvals", Member),
     // 0.46.6 (client papercut 13): the owner withdraws an approved run's
-    // standing for identical re-runs.
+    // standing for identical re-runs (still the owner's alone).
     post("/cli/app/approvals/revoke", Owner),
-    post("/cli/app/approve", Owner),
+    post("/cli/app/approve", Admin),
     // S19 (0.46.1 door): the per-call audit of an App (a passport: its own
     // workspace's Apps).
     get("/cli/app/audit", Member),

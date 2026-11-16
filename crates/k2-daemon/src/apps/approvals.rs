@@ -9,16 +9,19 @@
 //!
 //! ```text
 //! GET  /cli/app/approvals  [app, state=pending|all|…, all=1]
-//! POST /cli/app/approve    {request, confirmToken}   the owner, in person
+//! POST /cli/app/approve    {request, confirmToken}   an owner or admin, in person
 //! POST /cli/app/deny       {request, reason?}        an admin; the requester withdraws
 //! ```
 //!
 //! The stricter rule from each lane holds:
-//! - **Approve**: the server's owner only (the owner token or an Owner
-//!   login), never a passport (a K2 shell tab included), with a fresh
-//!   vault confirm for `app-approve` bound to the request id (Touch ID or
-//!   a password; 60 s, single use). The owner token alone is not an
-//!   approval. An expired request can't be approved.
+//! - **Approve**: the owner token, an Owner login or an Admin login
+//!   (Rosson 2026-11-15: any Owner or Admin enters the password for a card
+//!   on a user's box), never a passport (a K2 shell tab included), with a
+//!   fresh vault confirm for `app-approve` bound to the request id and to
+//!   the person (Touch ID or a password; 60 s, single use). An Admin login
+//!   confirms with its own login password only. The owner token alone is
+//!   not an approval. An expired request can't be approved. Revoking a
+//!   standing approval stays the owner's.
 //! - **Deny**: an Owner/Admin human denies someone else's request; the
 //!   requester (its own workspace's passport, or the same human) withdraws
 //!   its own. A passport never sees another workspace's requests.
@@ -74,6 +77,28 @@ fn confirm_stamp(who: &Who) -> Option<String> {
         Who::Owner => Some("owner".into()),
         Who::Login { username, role: k2_core::connect_users::Role::Owner } => Some(format!("connect:{username}")),
         _ => None,
+    }
+}
+
+/// The confirm stamp of a person who may approve a held App request: the
+/// owner ([`confirm_stamp`]) or an Admin login (Rosson 2026-11-15). Approve
+/// only: revoking a standing approval stays on [`confirm_stamp`].
+fn approver_stamp(who: &Who) -> Option<String> {
+    match who {
+        Who::Login { username, role: k2_core::connect_users::Role::Admin } => Some(format!("connect:{username}")),
+        _ => confirm_stamp(who),
+    }
+}
+
+/// Who approves held App requests, in words (refusals and notes).
+pub(crate) const APPROVERS: &str = "the server's owner or an admin";
+
+/// The decider of an approval in a message to the requester (`decided_by`
+/// as `actor` writes it: `owner`, `owner:<login>` or `user:<login>`).
+fn decider_words(by: &str) -> String {
+    match by.strip_prefix("user:") {
+        Some(login) => format!("admin {login}"),
+        None => "the owner".to_string(),
     }
 }
 
@@ -144,7 +169,7 @@ fn ago(secs: i64) -> String {
 pub(crate) fn held_note(who: &Who, r: &reqs::AppRequest) -> J {
     let age = deploy::now() - r.requested_at;
     let reused = age > REUSE_AFTER_SECS;
-    let approvals = format!("Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve {})", r.id);
+    let approvals = format!("Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve {})", r.id);
     let card = match who {
         Who::Agent { project_id, session_id } if k2_core::permission::gate::enabled_for(project_id) => {
             let why: String = r
@@ -174,7 +199,7 @@ pub(crate) fn held_note(who: &Who, r: &reqs::AppRequest) -> J {
                     "thread": thread,
                     "routedTo": to,
                     "where": format!(
-                        "{} permission card {id} is on {thread}'s Thread{}: the owner approves it there, or in {approvals}",
+                        "{} permission card {id} is on {thread}'s Thread{}: an owner or admin approves it there, or in {approvals}",
                         if new { "a" } else { "the" },
                         if to.is_empty() { String::new() } else { format!(" for {}", to.join(", ")) },
                     ),
@@ -191,19 +216,48 @@ pub(crate) fn held_note(who: &Who, r: &reqs::AppRequest) -> J {
                 })
             }
         }
-        Who::Agent { .. } => json!({
-            "raised": false,
-            "cardsOff": true,
-            "where": format!("permission cards are off for this agent, so no card went up: the request waits in {approvals}"),
-        }),
+        // Cards off for this agent, but K2 may have put up its own card
+        // for this request (`held_cards::present_for`, the App grants an
+        // agent can't apply itself): name that card, never "no card".
+        Who::Agent { .. } => match open_card_for(r) {
+            Some(open) => {
+                let id = open.display_id().to_string();
+                let thread = open.addr.clone().unwrap_or_default();
+                json!({
+                    "raised": true,
+                    "new": false,
+                    "id": id,
+                    "card": open.card_id,
+                    "thread": thread,
+                    "where": format!("K2 put permission card {id} on {thread}'s Thread: an owner or admin approves it there, or in {approvals}"),
+                })
+            }
+            None => json!({
+                "raised": false,
+                "cardsOff": true,
+                "where": format!("permission cards are off for this agent, so no card went up: the request waits in {approvals}"),
+            }),
+        },
         _ => json!({ "raised": false, "where": format!("it waits in {approvals}") }),
     };
     json!({ "reused": reused, "askedAgo": if reused { Some(ago(age)) } else { None }, "requestedAt": r.requested_at, "card": card })
 }
 
+/// The open `apps.approve` permission request (K2's own card, or the
+/// agent's Beta ask) for held request `r`, if one waits.
+fn open_card_for(r: &reqs::AppRequest) -> Option<k2_core::permission::request::PermissionRequest> {
+    let ws = r.requester_workspace.as_deref()?;
+    let mut params = serde_json::Map::new();
+    params.insert("request".to_string(), J::String(r.id.clone()));
+    let hash = k2_core::permission::request::params_hash(&params);
+    crate::permission::store::open_same(ws, super::held_cards::ACTION, &hash).ok().flatten()
+}
+
 /// Add [`held_note`] to every held request in a `202` answer from the App
 /// routes (one chokepoint for every hold: limits, disk, engine, caps,
-/// egress, box services, the switch, grace kinds).
+/// egress, box services, the switch, grace kinds). What the route already
+/// said wins: a `card` it set (K2 raised one, `agent_grants::hold`) is
+/// never overwritten, only filled in with the note's missing fields.
 pub(crate) fn enrich_held(who: &Who, mut resp: CliResponse) -> CliResponse {
     if !resp.status.starts_with("202") {
         return resp;
@@ -220,19 +274,45 @@ pub(crate) fn enrich_held(who: &Who, mut resp: CliResponse) -> CliResponse {
         let note = held_note(who, &r);
         let slot = if at.is_empty() { Some(&mut v) } else { v.pointer_mut(at) };
         if let Some(J::Object(o)) = slot {
-            for (k, x) in note.as_object().into_iter().flatten() {
-                o.insert(k.clone(), x.clone());
-            }
+            merge_note(o, &note);
         }
         first.get_or_insert(note);
     }
     if let (Some(note), Some(o)) = (first, v.as_object_mut()) {
-        for k in ["reused", "askedAgo", "card"] {
+        for k in ["reused", "askedAgo"] {
             o.entry(k.to_string()).or_insert(note[k].clone());
         }
+        merge_card(o, &note["card"]);
     }
     resp.body = v.to_string();
     resp
+}
+
+/// [`held_note`]'s fields into one held answer, never over what is there.
+fn merge_note(o: &mut serde_json::Map<String, J>, note: &J) {
+    for (k, x) in note.as_object().into_iter().flatten() {
+        if k == "card" {
+            merge_card(o, x);
+        } else {
+            o.entry(k.clone()).or_insert(x.clone());
+        }
+    }
+}
+
+/// The note's `card` into the answer's: absent → the note's; an object →
+/// the note's fields it lacks; anything else (a card id) stays.
+fn merge_card(o: &mut serde_json::Map<String, J>, card: &J) {
+    match o.get_mut("card") {
+        None => {
+            o.insert("card".to_string(), card.clone());
+        }
+        Some(J::Object(have)) => {
+            for (k, x) in card.as_object().into_iter().flatten() {
+                have.entry(k.clone()).or_insert(x.clone());
+            }
+        }
+        Some(_) => {}
+    }
 }
 
 /// Tell the requesting workspace (a `k2 msg` wake of its agent).
@@ -363,20 +443,23 @@ fn approvals(who: &Who, params: &HashMap<String, String>) -> R<J> {
         rows.iter().filter(|r| r.status == reqs::STATUS_PENDING).count()
     };
     Ok(json!({ "ok": true, "requests": rows.iter().map(|r| request_json_for(who, r)).collect::<Vec<_>>(), "pendingCount": pending,
-        "ownerConfirm": owner_confirm_status() }))
+        "ownerConfirm": confirm_status_for(who), "canApprove": approver_stamp(who).is_some() }))
 }
 
 // ── approve ──────────────────────────────────────────────────────────
 
-/// POST `/cli/app/approve {request, confirmToken}`: the owner, in person.
+/// POST `/cli/app/approve {request, confirmToken}`: an owner or admin, in
+/// person, each with their own confirm.
 fn approve(who: &Who, body: &[u8]) -> R<J> {
     need_credential(who)?;
-    let Some(stamp) = confirm_stamp(who) else {
+    let Some(stamp) = approver_stamp(who) else {
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            "only the server's owner approves App requests, in person: k2 app approve <id> from a terminal outside K2, \
-             or Settings → App Approvals. An agent can propose, never approve.",
+            format!(
+                "only {APPROVERS} approves App requests, in person: k2 app approve <id> from a terminal outside K2, \
+                 or Settings → App Approvals. An agent can propose, never approve."
+            ),
         ));
     };
     let v = json_body(body)?;
@@ -398,6 +481,15 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
         k2_vault::HumanProof::Confirmed { method } => method,
         k2_vault::HumanProof::None => return Err(no(codes::VAULT_CONFIRM_REQUIRED, 403, "no owner confirm")),
     };
+    // An Admin confirms with its own login password, never the owner's
+    // vault password (the token above is spent either way).
+    if matches!(who, Who::Login { role: k2_core::connect_users::Role::Admin, .. }) && via != "connect-password" {
+        return Err(no(
+            codes::VAULT_CONFIRM_REQUIRED,
+            403,
+            "an admin approves with their own K2 Connect password: confirm again with it",
+        ));
+    }
     apply_as(&r, &actor(who), &via)
 }
 
@@ -449,7 +541,8 @@ pub(crate) fn apply_as(r: &reqs::AppRequest, by: &str, via: &str) -> R<J> {
         notify_requester(
             &done,
             &format!(
-                "[k2 apps] the owner approved {}: {}{}",
+                "[k2 apps] {} approved {}: {}{}",
+                decider_words(&by),
                 done.id,
                 done.summary,
                 if status == reqs::STATUS_FAILED { ", but it failed to apply" } else { ". It applies now." }
@@ -934,6 +1027,26 @@ pub(crate) fn hold_without_switch(path: &str, who: &Who, body: &[u8]) -> Option<
 }
 
 // ── AR43: can the owner confirm on this box? ─────────────────────────
+
+/// [`owner_confirm_status`] as the caller of the list sees it: an Admin
+/// login confirms with its own K2 Connect password, whatever the box has
+/// (0.46.13); a caller who can't approve has no confirm to offer.
+pub(crate) fn confirm_status_for(who: &Who) -> J {
+    let mut v = match who {
+        Who::Login { role: k2_core::connect_users::Role::Admin, .. } => {
+            json!({ "available": true, "methods": ["connect-password"] })
+        }
+        _ if approver_stamp(who).is_none() => return json!({ "available": false, "methods": [] }),
+        _ => owner_confirm_status(),
+    };
+    // A login types its own sign-in password: the prompt names the server
+    // and the login (0.46.13 field report), as `vault/confirm/start` does.
+    if let Who::Login { username, .. } = who {
+        v["login"] = json!(username);
+        v["server"] = json!(crate::boot_status::public_host());
+    }
+    v
+}
 
 /// How the owner can confirm an approval here (`ownerConfirm` on
 /// `/cli/app/approvals`; the Settings banner). Off a Mac the only ways are

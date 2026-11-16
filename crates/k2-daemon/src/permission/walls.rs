@@ -670,7 +670,7 @@ pub(crate) const ROWS: &[Row] = &[
     Row {
         params: &[("request", &[ParamFrom::Response("/request/id")])],
         ..row(
-            ask("apps.approve", Floor::Owner),
+            ask("apps.approve", Floor::Admin),
             WallMatch::Held { status: 202, field: "status", value: "held" },
             "/cli/app/",
             ANY,
@@ -681,7 +681,7 @@ pub(crate) const ROWS: &[Row] = &[
     Row {
         params: &[("request", &[ParamFrom::Response("/request/id")])],
         ..row(
-            ask("apps.approve", Floor::Owner),
+            ask("apps.approve", Floor::Admin),
             WallMatch::Held { status: 202, field: "status", value: "held" },
             "/cli/publish/run",
             POST,
@@ -689,7 +689,7 @@ pub(crate) const ROWS: &[Row] = &[
     },
     Row {
         params: &[("request", &[ParamFrom::Body("/request"), ParamFrom::Body("/id"), ParamFrom::Query("id")])],
-        ..row(ask("apps.approve", Floor::Owner), code(403, "owner_only"), "/cli/app/approve", POST)
+        ..row(ask("apps.approve", Floor::Admin), code(403, "owner_only"), "/cli/app/approve", POST)
     },
     // ── Sew, vault ─────────────────────────────────────────────────────
     // A box-move step an agent ran is held for the owner (`mv_…`,
@@ -1544,7 +1544,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(p["params"], json!({"request":"w_7f"}));
-        assert_eq!(p["approvers"], "owner");
+        assert_eq!(p["approvers"], "owner or admin", "an Owner or Admin approves (0.46.13)");
         assert_eq!(p["command"], "k2 permission request apps.approve request=w_7f --why \"<what you need it for>\"");
 
         let p = teach_of(403, "POST", "/cli/connections", &[("action", "add"), ("target", "pog-sales")], None, json!({"error":{"code":"agents_create_connections_disabled"}})).unwrap();

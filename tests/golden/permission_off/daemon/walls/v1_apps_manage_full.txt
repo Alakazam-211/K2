@@ -39,7 +39,7 @@ content-type: application/json
   "card": {
     "cardsOff": true,
     "raised": false,
-    "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve <W_ID>)"
+    "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve <W_ID>)"
   },
   "held": {
     "app": "pogapp",
@@ -47,7 +47,7 @@ content-type: application/json
     "card": {
       "cardsOff": true,
       "raised": false,
-      "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve <W_ID>)"
+      "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve <W_ID>)"
     },
     "diff": [
       "memory limit 512 MiB → no limit"
@@ -154,7 +154,7 @@ content-type: application/json
   "card": {
     "cardsOff": true,
     "raised": false,
-    "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve <W_ID>)"
+    "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve <W_ID>)"
   },
   "held": {
     "app": "pogapp",
@@ -162,7 +162,7 @@ content-type: application/json
     "card": {
       "cardsOff": true,
       "raised": false,
-      "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; the owner approves with k2 app approve <W_ID>)"
+      "where": "permission cards are off for this agent, so no card went up: the request waits in Settings → App Approvals (k2 app approvals; an owner or admin approves with k2 app approve <W_ID>)"
     },
     "diff": [
       "memory limit 512 MiB → no limit"

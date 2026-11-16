@@ -64,11 +64,19 @@ export interface OwnerConfirmStatus {
   available: boolean
   methods: string[]
   hint?: string
+  /** For a login: this server's public name and the login, for the
+   *  password prompt's words (0.46.13). */
+  server?: string
+  login?: string
 }
 
 export interface AppApprovalsList {
   requests: AppRequest[]
   ownerConfirm: OwnerConfirmStatus
+  /** May this login approve here? The owner, an Owner or an Admin login
+   *  (0.46.13); a Member reads and denies only. An older daemon doesn't
+   *  say: true, as before. */
+  canApprove: boolean
 }
 
 export interface AppApproveResult {
@@ -95,7 +103,10 @@ export async function fetchAppApprovals(
       available: oc?.available === true,
       methods: Array.isArray(oc?.methods) ? oc.methods : [],
       ...(typeof oc?.hint === 'string' ? { hint: oc.hint } : {}),
+      ...(typeof oc?.server === 'string' ? { server: oc.server } : {}),
+      ...(typeof oc?.login === 'string' ? { login: oc.login } : {}),
     },
+    canApprove: res?.canApprove !== false,
   }
 }
 

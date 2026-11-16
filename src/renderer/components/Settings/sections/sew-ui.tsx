@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Button, Callout, Input, Surface } from '@/components/ui'
 import { AccessSheet, ConfirmSheet, CopyLine, DIALOG_FIELD, DIALOG_LABEL, DIALOG_MUTED } from './AccessDialogs'
 import { finishSewConfirm, sewStateChip, startSewConfirm, type SewConfirmAction, type SewFailure } from './sew-api'
+import { confirmPasswordLabel, LoginUsernameField, type ConfirmIdentity } from './confirm-password-ui'
 
 export const muted = 'text-[var(--color-text-muted)]'
 export const secondary = 'text-[var(--color-text-secondary)]'
@@ -165,7 +166,7 @@ export function OnceSecret({ title, note, secret, warning, onDone }: { title: st
   )
 }
 
-type ConfirmStep = { step: 'idle' } | { step: 'starting' } | { step: 'mac' } | { step: 'password'; method: string }
+type ConfirmStep = { step: 'idle' } | { step: 'starting' } | { step: 'mac' } | { step: 'password'; method: string; who: ConfirmIdentity }
 
 interface Pending {
   action: SewConfirmAction
@@ -206,7 +207,7 @@ export function usePersonConfirm(): {
         setState({ step: 'starting' })
         void (async () => {
           try {
-            const { methods } = await startSewConfirm(action, secretId)
+            const { methods, who } = await startSewConfirm(action, secretId)
             if (methods.includes('local-auth')) {
               setState({ step: 'mac' })
               const { token } = await finishSewConfirm(action, secretId, 'local-auth', label)
@@ -217,7 +218,7 @@ export function usePersonConfirm(): {
             }
             const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
             if (pw) {
-              setState({ step: 'password', method: pw })
+              setState({ step: 'password', method: pw, who })
               return
             }
             throw new Error('This server has no way to confirm it’s you yet. Set a vault password from a terminal outside K2 first')
@@ -266,11 +267,11 @@ export function usePersonConfirm(): {
   }
   if (state.step === 'password') {
     const method = state.method
-    const what = method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'
+    const what = confirmPasswordLabel(method, state.who)
     ui = (
       <AccessSheet
         title="Confirm it’s you"
-        intro={`K2 asks for ${method === 'connect-password' ? 'your K2 Connect password' : 'your vault password'} before this step.`}
+        intro={`K2 asks for ${method === 'connect-password' ? 'your sign-in password for this server' : 'your vault password'} before this step.`}
         onClose={cancel}
         testId="sew-person-confirm"
         footer={
@@ -291,6 +292,7 @@ export function usePersonConfirm(): {
             void submit(method)
           }}
         >
+          <LoginUsernameField method={method} who={state.who} testId="sew-confirm-username" />
           <label htmlFor={pwId} className={DIALOG_LABEL}>
             {what}
           </label>

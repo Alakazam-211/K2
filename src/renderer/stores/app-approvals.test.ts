@@ -116,26 +116,28 @@ describe('App Approvals badge store', () => {
     api.fetchAppApprovals.mockImplementation(async (_state: string, scope: { hostKey: string }) => {
       if (scope.hostKey === 'local') return rows(['pending'])
       if (scope.hostKey === 'box.k2.dev') return rows(['pending', 'pending', 'approved'])
+      if (scope.hostKey === 'admin.k2.dev') return rows(['pending'])
       if (scope.hostKey === 'down.k2.dev') throw new Error('offline')
       throw new Error(`never read ${scope.hostKey}`)
     })
-    // Owned and signed in: read. An Admin, a server not signed in, an
-    // unsaved one: never read.
+    // Owned or admined (0.46.13: an Admin approves too) and signed in:
+    // read. A Member, a server not signed in, an unsaved one: never read.
     pool.set({
       'box.k2.dev': entry('box.k2.dev'),
       'down.k2.dev': entry('down.k2.dev'),
       'admin.k2.dev': entry('admin.k2.dev', { role: 'admin' }),
+      'member.k2.dev': entry('member.k2.dev', { role: 'member' }),
       'out.k2.dev': entry('out.k2.dev', { auth: 'signin-required' }),
       'gone.k2.dev': entry('gone.k2.dev', { saved: false }),
     })
-    await vi.waitFor(() => expect(useAppApprovalsStore.getState().pending).toBe(3))
+    await vi.waitFor(() => expect(useAppApprovalsStore.getState().pending).toBe(4))
     const read = api.fetchAppApprovals.mock.calls.map((c) => (c[1] as { hostKey: string }).hostKey)
-    expect(new Set(read)).toEqual(new Set(['local', 'box.k2.dev', 'down.k2.dev']))
+    expect(new Set(read)).toEqual(new Set(['local', 'box.k2.dev', 'admin.k2.dev', 'down.k2.dev']))
 
     // The window's push replaces only its own share.
     const rev = useAppApprovalsStore.getState().revision
     bus.handler!(0)
-    expect(useAppApprovalsStore.getState().pending).toBe(2)
+    expect(useAppApprovalsStore.getState().pending).toBe(3)
     expect(useAppApprovalsStore.getState().revision).toBe(rev + 1)
 
     // An owned server leaving the pool's list re-reads and drops its share.

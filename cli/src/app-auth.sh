@@ -1860,7 +1860,7 @@ for r in rs:
 _app_approve() {
     local id="$1"
     if _compute_in_session; then
-        echo '{"error":"owner_only","hint":"the owner approves in person: Settings → App Approvals, or k2 app approve <id> from a terminal outside K2. An agent can never approve."}' >&2
+        echo '{"error":"owner_only","hint":"the owner or an admin approves in person: Settings → App Approvals, or k2 app approve <id> from a terminal outside K2. An agent can never approve."}' >&2
         exit 3
     fi
     _compute_call GET /cli/app/approvals "state=all" tcp
@@ -1905,7 +1905,7 @@ if v.get("error"):
 
 cmd_app_approve() {
     case "${1:-}" in
-        ""|-h|--help) echo "usage: k2 app approve <request-id>   (the owner, in person, from a terminal outside K2)" >&2; exit 2 ;;
+        ""|-h|--help) echo "usage: k2 app approve <request-id>   (the owner or an admin, in person, from a terminal outside K2)" >&2; exit 2 ;;
     esac
     _app_approve "$1"
 }
@@ -2015,7 +2015,7 @@ print(json.dumps(out))')" || { echo "usage: --core <core>=on|off[,<core>=on|off�
     if [ -n "$open" ]; then
         # N1 (0.46.3): the standing approval for the open path is retired.
         echo "k2: --open is retired: each open-path move (a new --cmd service, --path open, extra ports, broad egress) is held" >&2
-        echo "    for the owner, who approves it in person: k2 app approvals, then k2 app approve <id> (outside K2)." >&2
+        echo "    for the owner or an admin, who approves it in person: k2 app approvals, then k2 app approve <id> (outside K2)." >&2
         exit 2
     fi
     local t v

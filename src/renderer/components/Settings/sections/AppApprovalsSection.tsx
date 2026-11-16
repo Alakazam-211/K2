@@ -1,6 +1,8 @@
 // Settings → Cores → App Approvals (prd-k2-app-runtime-v1 §5.6, 0.46.1 door).
 //
-// Agents propose, the owner approves in person. Every held App request
+// Agents propose, an owner or admin approves in person (0.46.13, Rosson
+// 2026-11-15: an Admin login confirms with its own login password; the
+// daemon's `canApprove` says whether this login may). Every held App request
 // (config, publish run, App key, clean mode, egress, deploy/install caps,
 // raw database, overcommit, manage, quota) waits here in plain words:
 //   - Approve = a fresh vault owner confirm for THAT request (action
@@ -45,6 +47,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT, SETTING_ROW_LABEL, SETTING_SERVER_REASON, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { AccessSheet, DIALOG_FIELD, Field } from './AccessDialogs'
 import { AppMonogram, StatusDot, type DotTone } from './apps-ui'
+import { confirmPasswordLabel, LoginUsernameField, readConfirmIdentity, scopeServerName, type ConfirmIdentity } from './confirm-password-ui'
 
 export const APP_APPROVALS_MANIFEST: SettingEntry[] = [
   {
@@ -58,7 +61,9 @@ export const APP_APPROVALS_MANIFEST: SettingEntry[] = [
 
 const DENY_MAX = 500
 const NO_CONFIRM_HINT =
-  'You can’t approve yet: this server has no way to confirm it’s you. Set a vault password on the Vault page, then come back.'
+  'You can’t approve yet: this server has no way to confirm it’s you. Set a vault password on the Vault page, then come back. An owner or admin can also approve from their own K2 Connect login, with its password.'
+/** A login that may read and deny but not approve (a Member). */
+const APPROVERS_ONLY_HINT = 'Only the server’s owner or an admin approves App requests.'
 
 function nowSec(): number {
   return Math.floor(Date.now() / 1000)
@@ -135,10 +140,10 @@ export function AppApprovalsSection(): React.JSX.Element {
             App Approvals{total > 0 ? ` (${total})` : ''}
           </h2>
           <p className={SETTING_ROW_HINT}>
-            Changes to an App that only the server&rsquo;s owner may allow wait here: new permissions, outside sites, higher
-            limits and more. Agents can only ask. You approve each one in person, with {touchIdOrPassword()}. Requests
-            expire after 7 days.
-            {multi ? ' Every server you own is listed; each one is approved on its own server.' : ''}
+            Changes to an App that only the server&rsquo;s owner or an admin may allow wait here: new permissions, outside
+            sites, higher limits and more. Agents can only ask. You approve each one in person, with {touchIdOrPassword()}
+            (an admin types their own login password). Requests expire after 7 days.
+            {multi ? ' Every server you own or admin is listed; each one is approved on its own server.' : ''}
           </p>
         </div>
         <div role="tablist" aria-label="App Approvals" className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] w-full">
@@ -221,12 +226,19 @@ function ServerBlock({
   onRetry: () => void
 }): React.JSX.Element {
   const ownerConfirm = g.list?.ownerConfirm ?? null
-  const canConfirm = ownerConfirm?.available === true
+  // A Member login reads and denies; only an owner or admin approves.
+  const canApprove = g.list?.canApprove !== false
+  const canConfirm = canApprove && ownerConfirm?.available === true
   const pending = (g.list?.requests ?? []).filter((r) => r.status === 'pending')
   return (
     <section className="space-y-3" data-testid={`app-approvals-server-${g.server.hostKey}`}>
       <ServerHeading g={g} multi={multi} waiting={g.list ? pending.length : null} />
-      {ownerConfirm && !canConfirm && (pending.length > 0 || !multi) ? (
+      {g.list && !canApprove && pending.length > 0 ? (
+        <p className={SETTING_ROW_HINT} data-testid="app-approvals-approvers-only">
+          {APPROVERS_ONLY_HINT}
+        </p>
+      ) : null}
+      {canApprove && ownerConfirm && !canConfirm && (pending.length > 0 || !multi) ? (
         <Callout tone="warn" className="type-hint flex items-center justify-between gap-4">
           <span data-testid="app-approvals-no-confirm">{NO_CONFIRM_HINT}</span>
           <Button onClick={() => useSettingsStore.getState().openSettings('vault')} data-testid="app-approvals-open-vault">
@@ -250,7 +262,16 @@ function ServerBlock({
         </SettingsLoadState>
       ) : null}
       {pending.map((r) => (
-        <RequestCard key={r.id} request={r} scope={g.server.scope} canConfirm={canConfirm} methods={ownerConfirm?.methods ?? []} onDone={onDone} />
+        <RequestCard
+          key={r.id}
+          request={r}
+          scope={g.server.scope}
+          canApprove={canApprove}
+          canConfirm={canConfirm}
+          methods={ownerConfirm?.methods ?? []}
+          identity={{ server: ownerConfirm?.server ?? null, login: ownerConfirm?.login ?? null }}
+          onDone={onDone}
+        />
       ))}
     </section>
   )
@@ -324,7 +345,7 @@ function approvedWords(r: AppRequest): string {
 /** How the owner confirmed, in words. */
 const CONFIRM_WORDS: Record<string, string> = {
   'vault-password': 'the vault password',
-  'connect-password': 'the K2 Connect password',
+  'connect-password': 'their sign-in password',
   'local-auth': 'Touch ID or the Mac password',
 }
 
@@ -354,19 +375,27 @@ function ChangeLines({ r }: { r: AppRequest }): React.JSX.Element | null {
 function RequestCard({
   request: r,
   scope,
+  canApprove = true,
   canConfirm,
   methods = [],
+  identity,
   onDone,
 }: {
   request: AppRequest
   /** The server this request is held on: read, confirmed, approved and
    *  denied there. */
   scope: ServerScope
+  /** This login may approve here (an owner or admin); a Member only
+   *  reads and denies, so no Approve button. */
+  canApprove?: boolean
   canConfirm: boolean
   /** How the server confirms it's the owner (the list's ownerConfirm): a
    *  password method with no Touch ID puts the password in the dialog at
    *  once, so approving is one more press. */
   methods?: string[]
+  /** Who confirms where (the list's ownerConfirm), for the password
+   *  prompt; `vault/confirm/start` refreshes it. */
+  identity?: ConfirmIdentity
   onDone: (notice: Notice) => Promise<void>
 }): React.JSX.Element {
   const [dialog, setDialog] = useState<'approve' | 'deny' | null>(null)
@@ -376,6 +405,7 @@ function RequestCard({
   /** The password didn't match: say so plainly and keep the field. */
   const [badPassword, setBadPassword] = useState(false)
   const [note, setNote] = useState('')
+  const [who, setWho] = useState<ConfirmIdentity>(identity ?? {})
   const pwFirst = methods.includes('local-auth') ? undefined : methods.find((m) => m === 'connect-password' || m === 'vault-password')
   const firstStep = (): ConfirmStep => (pwFirst ? { step: 'password', method: pwFirst, started: false } : { step: 'review' })
   const pwRef = useRef<HTMLInputElement>(null)
@@ -416,7 +446,10 @@ function RequestCard({
     setError(null)
     setConfirm({ step: 'starting' })
     try {
-      const { methods } = await vaultConfirmOn(scope).start(APP_APPROVE_CONFIRM_ACTION, r.id)
+      const started = await vaultConfirmOn(scope).start(APP_APPROVE_CONFIRM_ACTION, r.id)
+      const { methods } = started
+      const named = readConfirmIdentity(started)
+      if (named.login || named.server) setWho((w) => ({ server: named.server ?? w.server, login: named.login ?? w.login }))
       if (methods.includes('local-auth')) {
         setConfirm({ step: 'mac' })
         await finish('local-auth')
@@ -507,20 +540,22 @@ function RequestCard({
           >
             Deny…
           </Button>
-          <Button
-            variant="accent"
-            disabled={!canConfirm}
-            title={canConfirm ? undefined : 'No way to confirm on this server yet'}
-            onClick={() => {
-              setError(null)
-              setBadPassword(false)
-              setConfirm(firstStep())
-              setDialog('approve')
-            }}
-            data-testid={`app-approve-${r.id}`}
-          >
-            Approve…
-          </Button>
+          {canApprove ? (
+            <Button
+              variant="accent"
+              disabled={!canConfirm}
+              title={canConfirm ? undefined : 'No way to confirm on this server yet'}
+              onClick={() => {
+                setError(null)
+                setBadPassword(false)
+                setConfirm(firstStep())
+                setDialog('approve')
+              }}
+              data-testid={`app-approve-${r.id}`}
+            >
+              Approve…
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -569,8 +604,9 @@ function RequestCard({
                 void submitPassword(confirm.method, confirm.started)
               }}
             >
+              <LoginUsernameField method={confirm.method} who={who} testId="app-approve-username" />
               <Field
-                label={confirm.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
+                label={confirmPasswordLabel(confirm.method, who, scopeServerName(scope))}
                 htmlFor={`approve-pw-input-${r.id}`}
                 hint={badPassword ? undefined : 'K2 uses it once, to confirm it’s you.'}
                 problem={badPassword ? 'That password didn’t match. Try again.' : null}

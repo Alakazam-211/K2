@@ -32,6 +32,7 @@ import {
   type NodeHealthView,
 } from './compute-admin-api'
 import { touchIdOrPassword } from '@/lib/desktop-words'
+import { confirmPasswordLabel, LoginUsernameField, readConfirmIdentity, type ConfirmIdentity } from './confirm-password-ui'
 
 const POLL_MS = 5000
 const muted = 'text-[var(--color-text-muted)]'
@@ -115,7 +116,7 @@ export function ApprovalsPanel({ onChanged, onCount }: { onChanged?: () => void;
   )
 }
 
-type ConfirmStep = { step: 'idle' } | { step: 'starting' } | { step: 'mac' } | { step: 'password'; method: string }
+type ConfirmStep = { step: 'idle' } | { step: 'starting' } | { step: 'mac' } | { step: 'password'; method: string; who: ConfirmIdentity }
 
 function RequestCard({
   request: r,
@@ -148,7 +149,8 @@ function RequestCard({
     setError(null)
     setConfirm({ step: 'starting' })
     try {
-      const { methods } = await startAdminConfirm(r.id)
+      const started = await startAdminConfirm(r.id)
+      const { methods } = started
       if (methods.includes('local-auth')) {
         setConfirm({ step: 'mac' })
         await finish('local-auth')
@@ -156,7 +158,7 @@ function RequestCard({
       }
       const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
       if (pw) {
-        setConfirm({ step: 'password', method: pw })
+        setConfirm({ step: 'password', method: pw, who: readConfirmIdentity(started) })
         return
       }
       setConfirm({ step: 'idle' })
@@ -239,8 +241,9 @@ function RequestCard({
             void submitPassword(confirm.method)
           }}
         >
+          <LoginUsernameField method={confirm.method} who={confirm.who} testId="compute-approve-username" />
           <label className={`type-hint ${muted}`}>
-            {confirm.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
+            {confirmPasswordLabel(confirm.method, confirm.who)}
             <Input
               ref={pwRef}
               type="password"

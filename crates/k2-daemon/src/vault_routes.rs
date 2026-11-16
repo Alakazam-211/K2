@@ -2496,7 +2496,31 @@ fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Val
         ("rollback", _, Some(plan)) => crate::vault_systemd_routes::rollback_binding(vault, c, plan)?.map(|(_, t)| t),
         _ => None,
     };
-    Ok(json!({ "methods": m, "expiresIn": 60, "confirmText": text }))
+    let (server, login) = confirm_identity(c);
+    Ok(json!({ "methods": m, "expiresIn": 60, "confirmText": text, "server": server, "login": login }))
+}
+
+/// Who confirms where, for the password prompt's words (0.46.13 field
+/// report: "Your K2 Connect password" read as the k2.dev account's, and the
+/// browser offered that saved entry): this server's public name (none
+/// without a tunnel) and the Connect login confirming (none for the owner
+/// token, which confirms with Touch ID or the vault password).
+pub(crate) fn confirm_identity(c: &VaultCaller) -> (Option<String>, Option<String>) {
+    let login = match &c.actor {
+        Actor::Login { username, .. } => Some(username.clone()),
+        _ => None,
+    };
+    (crate::boot_status::public_host(), login)
+}
+
+/// A login's wrong password at a confirm: which login, and the lockout it
+/// counts toward (the sign-in lockout: the same failures count there).
+pub(crate) fn confirm_failed_hint(username: &str) -> String {
+    format!(
+        "that isn't the sign-in password for login {username} on this server. {} misses in a row lock sign-in for {} minutes",
+        k2_core::connect_users::LOCKOUT_THRESHOLD,
+        k2_core::connect_users::LOCKOUT_DURATION_MINUTES
+    )
 }
 
 fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Result<Value, VaultError> {
@@ -2627,7 +2651,7 @@ pub(crate) fn confirm_check(
                     k2_core::connect_users::LoginOutcome::LockedOut => Err(err("confirm_locked", 429, "this login is locked for now")),
                     k2_core::connect_users::LoginOutcome::BadCreds => {
                         vault.throttle.record(false);
-                        Err(err("confirm_failed", 403, "that isn't your password"))
+                        Err(err("confirm_failed", 403, confirm_failed_hint(username)))
                     }
                 }
             }

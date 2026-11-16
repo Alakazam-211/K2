@@ -133,7 +133,7 @@ export async function approveAdminRequest(
 }
 
 /** Which confirm methods this caller has (`local-auth` on the Mac). */
-export async function startAdminConfirm(request: string): Promise<{ methods: string[] }> {
+export async function startAdminConfirm(request: string): Promise<{ methods: string[]; server?: string | null; login?: string | null }> {
   return daemonCliPost(primaryScope(), 'vault/confirm/start', { action: 'node-admin', secretId: request })
 }
 

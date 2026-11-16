@@ -63,8 +63,9 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        Owner: an approved k2 publish run stops
                                        covering identical re-runs (they ask
                                        again; it lapses by itself after 30 days).
-  k2 app approve <request-id>          Owner, in person (Touch ID / password),
-                                       from a terminal outside K2.
+  k2 app approve <request-id>          Owner or admin, in person (Touch ID /
+                                       your own password), from a terminal
+                                       outside K2.
   k2 app deny <request-id> [--reason R]
                                        Owner/Admin; an agent withdraws its own.
   k2 app access <workspace> [--build on|off] [--manage on|off] [--users on|off]

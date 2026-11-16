@@ -46,10 +46,10 @@ const SESSION_TTL_DAYS: i64 = 7;
 
 /// Brute-force lockout policy: this many consecutive failed password
 /// attempts for one username triggers a lockout.
-const LOCKOUT_THRESHOLD: u32 = 3;
+pub const LOCKOUT_THRESHOLD: u32 = 3;
 
 /// How long a username stays locked once the threshold is hit.
-const LOCKOUT_DURATION_MINUTES: i64 = 15;
+pub const LOCKOUT_DURATION_MINUTES: i64 = 15;
 
 /// Permission tier for a connect-user (K2SO #629). Strict hierarchy
 /// `Owner > Admin > Member`. The local daemon-token holder (the host

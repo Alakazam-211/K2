@@ -163,7 +163,7 @@ export interface VaultConfirmFinishBody {
 export function vaultConfirmOn(s: ServerScope) {
   return {
     start: (action: string, secretId?: string) =>
-      daemonCliPost<{ methods: string[]; expiresIn: number }>(
+      daemonCliPost<{ methods: string[]; expiresIn: number; server?: string | null; login?: string | null }>(
         s,
         'vault/confirm/start',
         secretId !== undefined ? { action, secretId } : { action },

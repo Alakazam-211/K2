@@ -285,6 +285,20 @@ pub(crate) fn set_card(id: &str, conversation_id: &str, card_id: &str, batch_id:
     })
 }
 
+/// An open request's stored floor from `from` to `to`, with the hash of the
+/// words it is answered on (`apps::held_cards::open_cards_to_admins`: a
+/// catalog floor that moved). `true` when this call changed it.
+pub(crate) fn lower_floor(id: &str, from: &str, to: &str, text_hash: &str) -> Result<bool, String> {
+    with_conn(|c| {
+        c.execute(
+            "UPDATE permission_requests SET floor = ?3, text_hash = ?4 WHERE id = ?1 AND floor = ?2 \
+             AND state IN ('pending', 'already_done') AND answered_at IS NULL",
+            params![id, from, to, text_hash],
+        )
+    })
+    .map(|n| n == 1)
+}
+
 /// A pending request's state between `pending` and `already_done` (the
 /// render-time and sweep re-check, §4.2, §6.2).
 pub(crate) fn set_open_state(id: &str, to: RequestState) -> Result<bool, String> {

@@ -10,7 +10,7 @@
 import type { PlayerScenario, PlayerStep } from '../shared/sample-player'
 import { SampleShellSource, type SampleShellOptions } from '../shared/sample-shell'
 import type { ShellSample } from '../shared/samples'
-import { CONN, GOLDEN, HOLDGONE, LARGE_SC, OPEN, PREP, PRES, SAVES, STATES, TURN, WATCH } from './scenarios'
+import { CONN, EMPTY, GOLDEN, HOLDGONE, LARGE_SC, OPEN, PREP, PRES, REFUSE, SAVES, STATES, TURN, WATCH } from './scenarios'
 import { simulate, type Scenario } from './sim'
 import { SAMPLE_CLOCK0, timelineSnapshot, type TimelineSnapshot } from './snapshot'
 import { ATLAS, CTX, FACTS, SELF } from './world'
@@ -37,6 +37,7 @@ const whole = (sc: Scenario, id: string, label: string, group: string): PlayerSc
 const PEOPLE = 'People and changes'
 const LANES = 'The lanes'
 const MONITOR = 'The monitor'
+const STATES_G = 'Every state'
 
 /** A scenario played on your own playhead: Atlas's moves become yours and nobody is followed. The monitor shows yours until Follow is wired (T5). */
 export function onYourPlayhead(sc: Scenario, id: string): Scenario {
@@ -81,6 +82,12 @@ export function timelineBannerScenarios(): PlayerScenario<TimelineSnapshot>[] {
     // The monitor (T4): every state of the design section, then preparing video.
     whole(MON_STATES, 'states', 'Monitor states', MONITOR),
     whole(PREP, 'prep', 'Preparing video', MONITOR),
+    // Every remaining state, step by step (T6): each outside save, a refusal, a hold gone outside, an empty timeline, files that can't be live.
+    ...SAVES.map((sc) => whole(sc, sc.id, sc.id === 'save-ingested' ? 'Save taken in' : sc.id === 'save-both' ? 'Save kept both' : sc.id === 'save-declined' ? 'Save declined' : 'File missing', STATES_G)),
+    whole(HOLDGONE, 'holdgone', 'A hold ended outside', STATES_G),
+    whole(REFUSE, 'refuse', 'Refused', STATES_G),
+    whole(EMPTY.find((s) => s.id === 'empty')!, 'empty', 'No clips yet', STATES_G),
+    whole(EMPTY.find((s) => s.id === 'errors')!, 'errors', 'Can’t be live', STATES_G),
   ]
 }
 

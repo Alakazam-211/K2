@@ -18,6 +18,8 @@ import { LiveAvatar } from '../shell/LiveAvatar'
 import type { Box } from './box'
 import { AudioGlyph, CheckGlyph, FilmCardGlyph, ImageGlyph, InfoGlyph, NestGlyph, NoPreviewGlyph, OfflineGlyph } from './glyphs'
 import { MonitorDetails } from './MonitorDetails'
+import { StageCardView } from './StageCardView'
+import type { CardAction, StageCard } from '@/lib/live-view/timeline/stage-card'
 
 /** The picture's place in a W × H well: 16:9, centred, letterboxed. */
 export function frameRect(W: number, H: number): { x: number; y: number; w: number; h: number } {
@@ -78,6 +80,9 @@ export interface MonitorProps {
   onRestart: () => void
   /** Show the clips that can't be previewed (preparing). */
   onShowCant: () => void
+  /** No edit to show (opening, no clips, can't be live): the card in the picture's place, and its actions. */
+  stage?: StageCard | null
+  onStageAction?: (id: CardAction['id']) => void
 }
 
 export function Monitor(p: MonitorProps): React.JSX.Element {
@@ -130,7 +135,7 @@ export function Monitor(p: MonitorProps): React.JSX.Element {
     >
       <div className="lv-mon-frame" data-testid="lv-monitor-frame" data-paint={v.paint.how} data-blank={v.paint.how === 'none' ? '' : undefined} style={{ left: r.x, top: r.y, width: r.w, height: r.h }}>
         <canvas ref={canvas} aria-hidden="true" />
-        {!live ? <p className="lv-mon-line m-0">{v.head ? 'The edit’s picture plays here.' : ''}</p> : null}
+        {!live ? p.stage ? <StageCardView card={p.stage} onAction={(id) => p.onStageAction?.(id)} /> : <p className="lv-mon-line m-0">The edit’s picture plays here.</p> : null}
         {live && v.label ? (
           <span className="lv-mon-chip lv-mon-label" data-k2-chamfer="chip" data-testid="lv-mon-label" title={`${v.label.lane} · ${v.label.name}`}>
             <span className="lv-mon-lane">{v.label.lane}</span>

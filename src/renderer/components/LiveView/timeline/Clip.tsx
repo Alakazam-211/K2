@@ -14,7 +14,7 @@ import type { Item, TimelineModel } from '@/lib/live-view/timeline/fold'
 import { kindGlyphOf, labelForRoom } from '@/lib/live-view/timeline/labels'
 import { NAME_H, type ClipMark } from '@/lib/live-view/timeline/lanes-view'
 import { pictureTiles, srcFrameAt, STRIP_MIN, type MediaFacts, type MediaInfo } from '@/lib/live-view/timeline/picture'
-import { ClipMarkShape, KindIcon, LockGlyph, StopGlyph } from './glyphs'
+import { ClipMarkShape, KindIcon, LockGlyph, NoPreviewGlyph, StopGlyph } from './glyphs'
 import type { Box } from './box'
 import { PAINTS } from './measure'
 
@@ -43,6 +43,11 @@ export interface ClipProps {
   facts: MediaFacts
   /** The head tile at a new in-point is on its way. */
   pending: boolean
+  /** Preparing video (T6): its pictures just arrived (they fade in). */
+  fresh?: boolean
+  /** Nobody gets a preview of it (a glyph in the band); `highlight` when the monitor shows them on the lanes. */
+  noPreview?: boolean
+  highlight?: boolean
   measure: (text: string) => number
 }
 
@@ -138,12 +143,13 @@ export function Clip(p: ClipProps): React.JSX.Element {
   const room = bandR - bandL
   const glyph = kindGlyphOf(it.kind, trackKind)
   const full = it.name || 'No name'
-  const badges = (mark?.changed?.fresh ? 12 : 0) + (mark?.held ? 18 : 0) + (mark?.refused ? 18 : 0)
+  const badges = (mark?.changed?.fresh ? 12 : 0) + (mark?.held ? 18 : 0) + (mark?.refused ? 18 : 0) + (p.noPreview ? 16 : 0)
   const label = w >= 14 && room > 0 ? labelForRoom(full, glyph, room, measure, badges) : null
   const kind = trackKind === 'audio' ? 'audio' : it.kind === 'generator' ? 'title' : it.kind === 'nest' ? 'nest' : 'video'
 
   const words = [full]
   if (it.off) words.push('turned off')
+  if (p.noPreview) words.push('can’t be previewed')
   if (mark?.changed) words.push(`changed ${mark.changed.fresh ? 'just now ' : ''}by ${mark.changed.name}`)
   if (mark?.held) words.push(`held by ${mark.held.name}`)
   if (mark?.refused) words.push(mark.refused.line)
@@ -169,6 +175,9 @@ export function Clip(p: ClipProps): React.JSX.Element {
       data-changed={mark?.changed ? '' : undefined}
       data-refused={mark?.refused ? '' : undefined}
       data-released={mark?.released && !mark.held ? '' : undefined}
+      data-fresh-in={p.fresh ? '' : undefined}
+      data-noprev={p.noPreview ? '' : undefined}
+      data-hl={p.highlight ? '' : undefined}
       role="img"
       aria-label={words.join(', ')}
       title={title}
@@ -200,6 +209,11 @@ export function Clip(p: ClipProps): React.JSX.Element {
             </span>
           ) : mark?.changed?.fresh ? (
             <span className="lv-tl-dot" />
+          ) : null}
+          {p.noPreview ? (
+            <span className="lv-tl-noprev" data-testid="lv-clip-noprev">
+              <NoPreviewGlyph size={11} />
+            </span>
           ) : null}
           {mark?.held ? (
             <span className="lv-tl-lock" data-k2-chamfer="chip">

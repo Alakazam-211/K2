@@ -93,6 +93,13 @@ export const TIMELINE_CSS = `
 .lv-tl-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--lv-cc); box-shadow: 0 0 0 1px var(--color-bg); }
 .lv-tl-lock { flex: none; display: inline-grid; place-items: center; width: 14px; height: 12px; border-radius: var(--lv-tl-r); background: var(--lv-hc); color: var(--lv-hink); --k2-ch-bw: 0px; }
 .lv-tl-lock svg { width: 8px; height: 8px; }
+.lv-tl-noprev { flex: none; display: inline-grid; place-items: center; width: 14px; height: 12px; color: var(--color-status-warn-text); }
+.lv-tl-noprev svg { width: 11px; height: 11px; }
+.lv-tl-clip[data-hl] { box-shadow: inset 0 0 0 2px var(--color-status-warn); z-index: 3; }
+.lv-tl-clip[data-fresh-in] :is(.lv-tl-pic, .lv-tl-wave) { animation: lv-tl-in var(--motion-duration-fast) ease-out both; }
+@keyframes lv-tl-in { from { opacity: 0; } to { opacity: 1; } }
+/* edits paused: the lanes hatch behind the clips (nothing new can land) */
+.lv-tl-lanes[data-paused] .lv-tl-body { background-image: repeating-linear-gradient(135deg, transparent 0 7px, color-mix(in srgb, var(--color-text-primary) 9%, transparent) 7px 9px); }
 .lv-tl-stop { flex: none; display: inline-grid; place-items: center; width: 14px; height: 12px; color: var(--color-status-error-text); }
 .lv-tl-stop svg { width: 11px; height: 11px; }
 .lv-tl-pic { position: absolute; left: 0; display: block; pointer-events: none; }

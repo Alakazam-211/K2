@@ -32,6 +32,7 @@ import {
   type ViewPrefs,
 } from '@/lib/live-view/timeline/lanes-view'
 import { DEFAULT_PV, mediaInfo, picModeFor, WAVE_MIN, type MediaFacts } from '@/lib/live-view/timeline/picture'
+import { prepMarks } from '@/lib/live-view/timeline/prep-marks'
 import { RULER_H } from '@/lib/live-view/timeline/ruler'
 import { nowOf, type TimelineView } from '@/lib/live-view/timeline/snapshot'
 import type { Edge } from '../shell/EdgeStack'
@@ -161,6 +162,7 @@ export function Lanes(p: LanesProps): React.JSX.Element {
   const marks = clipMarks(S, M)
   const ghosts = ghostsOf(S, M)
   const pv = S.pv ?? DEFAULT_PV
+  const prep = prepMarks(M, pv, facts)
   const L = lanesOf(M)
   const split = splitBefore(M)
   const H = lanesHeight(M, prefs.lanes)
@@ -178,6 +180,7 @@ export function Lanes(p: LanesProps): React.JSX.Element {
       data-testid="lv-lanes"
       data-size={prefs.lanes}
       data-pic={prefs.pic}
+      data-paused={S.paused ? '' : undefined}
       style={{ height: RULER_H + frameH + (big ? 14 : 0) }}
       onKeyDown={p.onKey}
     >
@@ -247,12 +250,15 @@ export function Lanes(p: LanesProps): React.JSX.Element {
                           a={Math.max(x, left) - x}
                           b={Math.min(x + w, left + tw) - x}
                           mark={marks[it.key]}
-                          mode={mode}
+                          mode={prep.unready(it) ? 'off' : mode}
                           wave={wave}
                           ppf={ppf}
                           mi={mediaInfo(M, it.media, facts)}
                           facts={facts}
                           pending={(pv.pending || []).includes(it.key)}
+                          fresh={prep.fresh(it)}
+                          noPreview={prep.noPreview(it)}
+                          highlight={prep.highlight(it)}
                           measure={measureName}
                         />
                       )

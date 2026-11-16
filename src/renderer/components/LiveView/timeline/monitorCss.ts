@@ -48,6 +48,16 @@ html[data-style="terminal"] .lv-mon-prep { border-radius: 0; }
 .lv-mon-card[data-tone="bad"] > svg { color: color-mix(in srgb, var(--color-status-error) 60%, var(--color-media-label-text)); }
 .lv-mon-card b { font-size: 14px; font-weight: 600; }
 .lv-mon-card .lv-mon-sub { color: var(--lv-ink-2); }
+.lv-mon-card[data-tone="warn"] > svg { color: color-mix(in srgb, var(--color-status-warn) 60%, var(--color-media-label-text)); }
+.lv-mon-btn[data-primary] { background: var(--color-accent-fill); color: var(--color-on-accent); border-color: var(--color-accent-fill); }
+.lv-mon-open { width: min(420px, 86%); align-items: stretch; text-align: left; gap: 4px; }
+.lv-mon-bar { display: block; height: 4px; margin: 6px 0 4px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--color-media-label-text) 16%, transparent); }
+.lv-mon-bar i { display: block; height: 100%; background: var(--color-accent); }
+.lv-mon-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.lv-mon-rows li { display: flex; align-items: center; gap: 8px; }
+.lv-mon-rows li[data-state="wait"] { color: var(--lv-ink-2); }
+.lv-mon-st { display: inline-grid; place-items: center; width: 14px; height: 14px; flex: none; color: color-mix(in srgb, var(--color-status-ok) 55%, var(--color-media-label-text)); }
+.lv-mon-n { margin-left: auto; color: var(--lv-ink-2); }
 .lv-mon-kindw { font-size: 11px; color: var(--lv-ink-2); }
 .lv-mon-acts { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; justify-content: center; }
 .lv-mon-acts .lv-mon-btn { height: 26px; padding: 0 12px; font-size: 12px; font-weight: 500; border: 1px solid color-mix(in srgb, var(--color-media-label-text) 45%, transparent); --k2-ch-bw: 1px; }

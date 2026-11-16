@@ -12,6 +12,9 @@ import { Button } from '@/components/ui'
 import { personById } from '@/lib/live-view/shared/people'
 import { KEY_MAP, keysHint, playbackKey, type WatchKey } from '@/lib/live-view/timeline/keys'
 import { DEFAULT_SEQUENCE, finishedWords, sayAtOf, scriptedLoop } from '@/lib/live-view/timeline/follow-play'
+import { stageCard } from '@/lib/live-view/timeline/stage-card'
+import { actorOf } from '@/lib/live-view/timeline/actors'
+import { agentOf } from '@/lib/live-view/timeline/snapshot'
 import { bracketsOf, type Bracket, defaultPpf, fitPpf, isBig, lanesHeight, loadPrefs, savePrefs, zoomStep, type ViewPrefs } from '@/lib/live-view/timeline/lanes-view'
 import { detailRows } from '@/lib/live-view/timeline/monitor-details'
 import { monitorView, type LocalPlay } from '@/lib/live-view/timeline/monitor-view'
@@ -20,7 +23,7 @@ import { RULER_H } from '@/lib/live-view/timeline/ruler'
 import { monitorSourceFor } from '@/lib/live-view/timeline/sample-footage'
 import type { TimelineSnapshot, TimelineView } from '@/lib/live-view/timeline/snapshot'
 import { editStarts, scrubMarks, whoLine } from '@/lib/live-view/timeline/transport'
-import { FACTS } from '@/lib/live-view/timeline/world'
+import { ATLAS, FACTS } from '@/lib/live-view/timeline/world'
 import type { ShellHeroProps } from '../shell/shell-config'
 import { StagePlaceholder } from '../shell/StagePlaceholder'
 import { box } from './box'
@@ -66,6 +69,12 @@ function useHeight(): [React.RefObject<HTMLDivElement | null>, number] {
     return () => ro.disconnect()
   }, [])
   return [ref, h]
+}
+
+/** The agent a card offers to ask, even before the file is live (no one listed yet; the sample's is Atlas). */
+const cardAgent = (view: TimelineView): string => {
+  const a = agentOf(view.state) ?? (view.sample ? ATLAS : null)
+  return a ? actorOf(a).name : 'the agent'
 }
 
 /** Keys inside these are theirs: typing, menus, dialogs. */
@@ -237,6 +246,11 @@ function TimelineContent({ p, view }: { p: ShellHeroProps; view: TimelineView })
             }}
             onRestart={() => take({ f: 0, rate: 1 })}
             onShowCant={fit}
+            stage={stageCard(S, M, { agent: agent?.name ?? cardAgent(view), file: M.T.name || 'the edit' })}
+            onStageAction={(id) => {
+              if (id === 'ask') ref.current?.closest('[data-testid="lv-tab"]')?.querySelector<HTMLInputElement>('[data-testid="lv-say-field"]')?.focus()
+              else p.onAction?.(id)
+            }}
           />
           <Transport
             model={box(M)}

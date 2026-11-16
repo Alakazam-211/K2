@@ -152,8 +152,9 @@ export function claimWidget(widget: string): Promise<{ widget: string; hash: str
 
 // ── the widget door (B2's bridge uses this) ──────────────────────────
 
-export function gardenCall<T = unknown>(body: GardenCallBody): Promise<GardenCallResponse<T>> {
-  return daemonCliPost<GardenCallResponse<T>>(zenLocalScope(), 'zen/call', body)
+/** `opts.timeoutMs`: a read that gives up after that long (`CliTimeoutError`). */
+export function gardenCall<T = unknown>(body: GardenCallBody, opts?: { timeoutMs?: number }): Promise<GardenCallResponse<T>> {
+  return daemonCliPost<GardenCallResponse<T>>(zenLocalScope(), 'zen/call', body, opts)
 }
 
 /** Where a widget door byte call comes from: the placement and the hash

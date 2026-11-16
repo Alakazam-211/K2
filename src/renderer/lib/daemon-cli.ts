@@ -517,16 +517,21 @@ export async function daemonCliGetText(
  * + CSRF header via `withDaemonFetch`.
  *
  * Same connection-retry semantics as `daemonCliGet`.
+ *
+ * `opts.timeoutMs`: give one try up after that long (`CliTimeoutError`),
+ * for a read whose caller must get an answer (a Garden widget's polled
+ * read, `zen-custom-store`). Never for a write a retry could repeat.
  */
 export async function daemonCliPost<T = unknown>(
   scope: ServerScope,
   route: string,
   body?: unknown,
+  opts?: { timeoutMs?: number },
 ): Promise<T> {
   assertServerScope(scope, 'daemonCliPost')
   // Home M4: a view-only room never writes to its server.
   assertScopeMayPost(scope, route)
-  const timeoutMs = route === 'thread/post' && hasClientMsgId(body) ? threadPostTimeoutMs : undefined
+  const timeoutMs = route === 'thread/post' && hasClientMsgId(body) ? threadPostTimeoutMs : opts?.timeoutMs
   const { res, text } = await cliFetch(scope, { route, method: 'POST', timeoutMs }, (creds) => ({
     url: getUrl(creds, route),
     init: {

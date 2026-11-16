@@ -87,6 +87,27 @@ export const ZEN_STORE_VERBS: ReadonlySet<string> = new Set([
   'store.grantees',
 ])
 
+/** Reads a widget polls for a snapshot of now (Rosson 2026-11-16: the
+ *  Compute Garden's Compute load tile stopped following its nodes). Each
+ *  is answered within {@link ZEN_STORE_READ_DEADLINE_MS}: the daemon's
+ *  answer, or `unreachable` (retryable). A widget chains its next poll on
+ *  the answer, so a read left pending by a request that never comes back
+ *  would stop it for good. Writes never time out here: a retry could
+ *  repeat one. */
+export const ZEN_STORE_DEADLINE_VERBS: ReadonlySet<string> = new Set([
+  'compute.nodes',
+  'app.resources',
+  'app.usage',
+  'app.self',
+  'room.members',
+  'widget.self',
+  'activity.snapshot',
+  'thread.unread',
+])
+
+/** How long a {@link ZEN_STORE_DEADLINE_VERBS} read waits for the daemon. */
+export const ZEN_STORE_READ_DEADLINE_MS = 20_000
+
 /** How long the person's name is reused before `viewer.get` again. */
 export const ZEN_VIEWER_NAME_MS = 30_000
 
@@ -122,6 +143,8 @@ export class ZenStoreError extends Error {
 export function zenStoreErrorFrom(err: unknown): ZenStoreError {
   if (err instanceof ZenStoreError) return err
   const text = err instanceof Error ? err.message : String(err)
+  // `daemonCliPost`'s `timeoutMs` gave up: no answer, so ask again later.
+  if (err instanceof Error && err.name === 'CliTimeoutError') return new ZenStoreError('unreachable', text)
   let e: unknown = httpDetailsOf(err)
   if (e === null || typeof (e as { code?: unknown }).code !== 'string') {
     let env: unknown = null
@@ -155,8 +178,9 @@ export function zenStoreBy(by: unknown, name: string): unknown {
 }
 
 export interface ZenCustomStoreDeps {
-  /** `POST /cli/zen/call` for this placement and the hash its frame runs. */
-  call(verb: string, args: unknown[]): Promise<unknown>
+  /** `POST /cli/zen/call` for this placement and the hash its frame runs;
+   *  `opts.timeoutMs`: give the request up after that long. */
+  call(verb: string, args: unknown[], opts?: { timeoutMs?: number }): Promise<unknown>
   /** `garden_data_changed` on this computer's app bus. */
   onChanged(cb: (space: string, rev: number) => void): () => void
   /** This widget's shared space: `data:<widget>` (a built-in without `@n`). */
@@ -192,9 +216,9 @@ export function createZenCustomStore(deps: ZenCustomStoreDeps): ZenCustomStore {
   let name: { value: string; at: number } | null = null
   let staleSent = false
 
-  const raw = async (verb: string, args: unknown[]): Promise<unknown> => {
+  const raw = async (verb: string, args: unknown[], opts?: { timeoutMs: number }): Promise<unknown> => {
     try {
-      return await deps.call(verb, args)
+      return await (opts ? deps.call(verb, args, opts) : deps.call(verb, args))
     } catch (err) {
       const e = zenStoreErrorFrom(err)
       if (e.daemonCode === 'stale_widget' && !staleSent) {
@@ -224,9 +248,35 @@ export function createZenCustomStore(deps: ZenCustomStoreDeps): ZenCustomStore {
     return v
   }
 
+  /** A snapshot read: the daemon's answer, or `unreachable` at the deadline
+   *  (the request is given up too); an answer after that is dropped. */
+  const deadlined = (verb: string, args: unknown[]): Promise<unknown> =>
+    new Promise((resolve, reject) => {
+      let done = false
+      const timer = deps.setTimer(() => {
+        if (done) return
+        done = true
+        reject(new ZenStoreError('unreachable', `no answer from K2 in ${Math.round(ZEN_STORE_READ_DEADLINE_MS / 1000)} s`))
+      }, ZEN_STORE_READ_DEADLINE_MS)
+      raw(verb, args, { timeoutMs: ZEN_STORE_READ_DEADLINE_MS }).then(
+        (v) => {
+          if (done) return
+          done = true
+          deps.clearTimer(timer)
+          resolve(v)
+        },
+        (err: unknown) => {
+          if (done) return
+          done = true
+          deps.clearTimer(timer)
+          reject(err)
+        },
+      )
+    })
+
   const call = async (verb: string, args: unknown[]): Promise<unknown> => {
     if (!ZEN_STORE_VERBS.has(verb)) throw new ZenStoreError('unknown_verb', `No verb ${verb}.`)
-    const v = await raw(verb, args)
+    const v = ZEN_STORE_DEADLINE_VERBS.has(verb) ? await deadlined(verb, args) : await raw(verb, args)
     return named(verb, v)
   }
 

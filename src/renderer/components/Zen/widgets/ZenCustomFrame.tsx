@@ -393,14 +393,17 @@ export function ZenCustomFrame({
           // Garden data (contract-garden-data-v1 §7): this computer's daemon,
           // for the placement and the bundle hash this frame runs.
           store: createZenCustomStore({
-            call: (verb, args) =>
-              gardenCall({
-                garden: gardenId,
-                placement: widgetRef.current.id,
-                hash: loadedRef.current?.hash ?? widgetRef.current.hash,
-                verb,
-                args,
-              }).then((r) => r.result),
+            call: (verb, args, opts) =>
+              gardenCall(
+                {
+                  garden: gardenId,
+                  placement: widgetRef.current.id,
+                  hash: loadedRef.current?.hash ?? widgetRef.current.hash,
+                  verb,
+                  args,
+                },
+                opts,
+              ).then((r) => r.result),
             onChanged: (cb) => onGardenDataChanged(zenLocalScope(), cb),
             space: zenDataSpace(widgetRef.current.widget),
             onStale: () => reloadZenWidget(key),

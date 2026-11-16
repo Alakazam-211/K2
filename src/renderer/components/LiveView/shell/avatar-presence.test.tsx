@@ -12,6 +12,8 @@ import { join } from 'node:path'
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { LiveAvatar, PresenceColours } from './LiveAvatar'
+import { LIVE_SHELL_CSS } from './shellCss'
+import { AvatarStack } from './AvatarStack'
 
 afterEach(cleanup)
 const avatar = () => screen.getByTestId('lv-avatar')
@@ -54,4 +56,22 @@ describe('the presence tokens as avatar ink', () => {
       const c = JSON.parse(readFileSync(join(__dirname, '..', '..', '..', '..', '..', 'styles', style, 'palettes', `${palette}.json`), 'utf8')).color
       for (const k of [1, 2, 3, 4]) expect(ratio(c[`presence-${k}`].$value, c.bg.$value), `presence-${k}`).toBeGreaterThanOrEqual(4.5)
     })
+})
+
+describe('the ring round a followed (or hovered) avatar', () => {
+  // A presence fill can be as light as the accent ring (dark looks), so the ring keeps a
+  // band of the background between its coloured edge and the fill: one never runs into the other.
+  const rule = (sel: string): string => LIVE_SHELL_CSS.split('\n').find((l) => l.includes(sel)) ?? ''
+  it('the gap inside the ring is the background, whatever colour the ring takes', () => {
+    expect(rule('.lv-ring-gap')).toContain('background: var(--color-bg)')
+    expect(rule('button[aria-pressed="true"] .lv-ring')).toContain('var(--color-accent-text)')
+    expect(rule('.lv-ring-gap')).not.toContain('accent')
+  })
+
+  it('every avatar in the stack sits in the gap, inside its ring', () => {
+    render(<AvatarStack people={[{ id: 'b', name: 'Brook', kind: 'agent', colour: '#3fa37a', away: false, presence: 3 }]} followingId="b" onFollow={() => undefined} />)
+    const av = avatar()
+    expect(av.parentElement?.classList.contains('lv-ring-gap')).toBe(true)
+    expect(av.parentElement?.parentElement?.classList.contains('lv-ring')).toBe(true)
+  })
 })

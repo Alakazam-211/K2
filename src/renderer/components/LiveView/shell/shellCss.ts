@@ -1,5 +1,7 @@
 // The live shell's own styles, scoped under `.lv-shell`: the state dot, the
-// avatar stack's overlap, the follow tint, rows, the notice tones and the
+// avatar stack's overlap (a hovered or followed avatar's ring is a coloured
+// edge with the background inside it, so a light presence fill never runs
+// into it), the follow tint, rows, the notice tones and the
 // stage placeholder. Every colour, radius and duration is a token (the Style
 // package); a person's colour comes from the data as `--lv-c`. Reduced
 // motion turns every animation off. Rendered once per tab as a <style>.
@@ -16,8 +18,8 @@ export const LIVE_SHELL_CSS = `
 .lv-shell .lv-avatar[data-away] { opacity: .45; }
 .lv-shell .lv-avatar[data-grey] { filter: grayscale(1); opacity: .7; }
 .lv-shell .lv-stack [data-lv-stack-item] + [data-lv-stack-item] { margin-left: -8px; }
-.lv-shell .lv-ring { background: var(--color-bg); }
-.lv-shell .lv-head .lv-ring { background: var(--color-tab-active); }
+.lv-shell .lv-ring, .lv-shell .lv-ring-gap { background: var(--color-bg); }
+.lv-shell .lv-head .lv-ring, .lv-shell .lv-head .lv-ring-gap { background: var(--color-tab-active); }
 .lv-shell .lv-stack button[data-lv-stack-item]:hover .lv-avatar { filter: brightness(1.15); }
 .lv-shell .lv-stack button[data-lv-stack-item]:hover .lv-ring { background: var(--color-text-secondary); }
 .lv-shell .lv-stack button[aria-pressed="true"] .lv-ring { background: var(--color-accent-text); }

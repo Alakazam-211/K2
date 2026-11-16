@@ -5,6 +5,19 @@
 import { avatarStack, type LivePerson } from '@/lib/live-view/shared/people'
 import { LiveAvatar } from './LiveAvatar'
 
+/** The ring round an avatar in the stack: its colour (hover, whom you follow) is an edge with a band of
+ *  the background inside it, so a light presence fill never runs into it. Two nested shapes, so
+ *  Terminal's cut corners keep the edge all the way round. */
+function Ring({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <span data-k2-chamfer="surface" data-k2-avatar="" className="lv-ring inline-flex p-[1.25px]" style={{ ['--k2-ch-cut' as string]: '7px', ['--k2-ch-bw' as string]: '0px' }}>
+      <span data-k2-chamfer="surface" data-k2-avatar="" className="lv-ring-gap inline-flex p-[0.75px]" style={{ ['--k2-ch-cut' as string]: '6.5px', ['--k2-ch-bw' as string]: '0px' }}>
+        {children}
+      </span>
+    </span>
+  )
+}
+
 export function AvatarStack({
   people,
   max = 4,
@@ -31,9 +44,9 @@ export function AvatarStack({
       {shown.map((p) =>
         p.self || !onFollow ? (
           <span key={p.id} data-lv-stack-item="" title={p.self ? 'You' : `${p.name}${p.kind === 'agent' ? ' (agent)' : ''}`} className="inline-flex rounded-[var(--radius-pill)]">
-            <span data-k2-chamfer="surface" data-k2-avatar="" className="lv-ring inline-flex p-[2px]" style={{ ['--k2-ch-cut' as string]: '7px', ['--k2-ch-bw' as string]: '0px' }}>
+            <Ring>
               <LiveAvatar person={p} size={22} grey={grey} />
-            </span>
+            </Ring>
           </span>
         ) : (
         <button
@@ -48,9 +61,9 @@ export function AvatarStack({
           onClick={() => onFollow(p.id)}
           className="no-drag inline-flex cursor-pointer rounded-[var(--radius-pill)] p-0 disabled:cursor-default"
         >
-          <span data-k2-chamfer="surface" data-k2-avatar="" className="lv-ring inline-flex p-[2px]" style={{ ['--k2-ch-cut' as string]: '7px', ['--k2-ch-bw' as string]: '0px' }}>
+          <Ring>
             <LiveAvatar person={p} size={22} grey={grey} />
-          </span>
+          </Ring>
         </button>
         ),
       )}

@@ -3160,7 +3160,7 @@
    },
    {
     "name": "vault placements",
-    "usage": "k2 vault placements [NAME] [--json]",
+    "usage": "k2 vault placements [NAME] [--scope <s>] [--json]",
     "description": "Where values live outside the vault (due after a rotate)."
    },
    {

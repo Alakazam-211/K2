@@ -11,7 +11,9 @@
 # Covers, per verb: the flags it reads still reach the request (body or
 # query), and a flag it doesn't read is refused with nothing sent.
 # k2 publish secret add|remove and k2 publish env go through these verbs
-# too: their flags still reach the request.
+# too: their flags still reach the request. So do vault placement and
+# placements (job.sh): placements --scope picks which secret NAME is, and
+# without NAME it is refused (it would be dropped).
 
 set -euo pipefail
 
@@ -243,6 +245,23 @@ refused --out vault carry import carry.age --out x
 refused --json vault backup bk --json
 refused --json vault restore --from bk --json
 refused --as publish secret remove api K --as file
+
+echo "== placement and placements (job.sh) =="
+reaches /cli/vault/placements 'q == {"name": "K", "scope": "workspace", "workspace": "acme"}' vault placements K --scope ws:acme --json
+reaches /cli/vault/placements 'q == {"name": "K", "scope": "server"}' vault placement list K --scope server
+reaches /cli/vault/placements 'q == {}' vault placements --json
+reaches /cli/vault/placement/add 'b == {"name": "K", "where": "box:/etc/k", "note": "n", "scope": "server"}' vault placement add K --where box:/etc/k --note n --scope server --json
+reaches /cli/vault/placement/done 'b == {"id": "pl_1"}' vault placement done pl_1 --json
+reaches /cli/vault/placement/remove 'b == {"id": "pl_1"}' vault placement rm pl_1 --json
+refused --scope vault placements --scope server
+refused --where vault placements K --where box:/x
+refused --note vault placement done pl_1 --note n
+refused --scope vault placement rm pl_1 --scope server
+refused --where vault placement list --where box:/x
+"$K2" --schema | python3 -c '
+import json, sys
+c = {x["name"]: x for x in json.load(sys.stdin)["commands"]}
+sys.exit(0 if "--scope" in {f["name"] for f in c["vault placements"]["flags"]} else 1)' && ok "schema: vault placements --scope" || bad "schema: vault placements lacks --scope"
 
 echo
 echo "vault_verb_flags: $pass passed, $fail failed"

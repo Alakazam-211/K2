@@ -1730,7 +1730,7 @@ EOF
 k2 vault placement add NAME --where <host>:<path> [--note <text>] [--scope <s>] [--json]
 k2 vault placement done ID [--json]
 k2 vault placement rm ID [--json]
-k2 vault placements [NAME] [--json]
+k2 vault placements [NAME] [--scope <s>] [--json]
 
 Where a secret's value lives outside the vault. K2 records the systemd
 credentials it writes itself (k2 vault systemd-cred); add the places it

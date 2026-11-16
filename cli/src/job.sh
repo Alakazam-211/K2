@@ -419,19 +419,35 @@ _vault_placement() {
         act="${1:-list}"
         [ $# -gt 0 ] && shift
     fi
-    local name="" where="" note="" scope="" as_json=0
+    local name="" where="" note="" scope="" as_json=0 seen=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --where|--note|--scope)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
                 case "$1" in --where) where="$2" ;; --note) note="$2" ;; --scope) scope="$2" ;; esac
-                shift 2 ;;
-            --json) as_json=1; shift ;;
+                seen+=("$1"); shift 2 ;;
+            --json) as_json=1; seen+=("$1"); shift ;;
             --*) echo "usage: unknown flag '$1' (k2 vault placement --help)" >&2; exit 2 ;;
             *) [ -z "$name" ] || { echo "usage: k2 vault placement --help" >&2; exit 2; }
                name="$1"; shift ;;
         esac
     done
+    # Each form takes only the flags it reads, like the other vault verbs.
+    local takes="--json" words="placement $act" f
+    case "$act" in
+        add) takes="--where --note --scope --json" ;;
+        list) takes="--scope --json"; [ "$sub" = "placements" ] && words="placements" ;;
+    esac
+    for f in "${seen[@]+"${seen[@]}"}"; do
+        case " $takes " in
+            *" $f "*) ;;
+            *) echo "usage: k2 vault $words doesn't take $f (it takes: ${takes// /, }; k2 vault placement --help)" >&2; exit 2 ;;
+        esac
+    done
+    # The list reads --scope only to pick which secret NAME is.
+    if [ "$act" = "list" ] && [ -n "$scope" ] && [ -z "$name" ]; then
+        echo "usage: --scope picks which secret NAME is: k2 vault placements NAME --scope <s>" >&2; exit 2
+    fi
     local sj
     sj="$(_vault_scope_json "$scope")" || exit 2
     case "$act" in

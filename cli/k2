@@ -40429,28 +40429,28 @@ cmd_vault() {
     local agent_burst="" agent_per_minute="" allow_fwd=0 no_fwd=0
     local remove_original=0 env_file_opt="" done_path="" ttl_secs="" wait_for="" transcripts=0
     local carry_recipient="" carry_target="" carry_target_ws="" own_box_move=0 out_file="" holder="" dry_run=0 replace=0 apply=0 accept_agent=0
-    local add_hosts=() rm_hosts=() pos=() use_secrets=() carry_ws=() carry_server=()
+    local add_hosts=() rm_hosts=() pos=() use_secrets=() carry_ws=() carry_server=() seen=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --json) as_json=1; shift ;;
-            --system) system=1; shift ;;
-            --yes) yes=1; shift ;;
-            --remove-original) remove_original=1; shift ;;
-            --own-box-move) own_box_move=1; shift ;;
+            --json) as_json=1; seen+=("$1"); shift ;;
+            --system) system=1; seen+=("$1"); shift ;;
+            --yes) yes=1; seen+=("$1"); shift ;;
+            --remove-original) remove_original=1; seen+=("$1"); shift ;;
+            --own-box-move) own_box_move=1; seen+=("$1"); shift ;;
             --transcripts)
                 [ "$sub" = "doctor" ] || { echo "usage: --transcripts goes with k2 vault doctor" >&2; exit 2; }
-                transcripts=1; shift ;;
-            --dry-run) dry_run=1; shift ;;
-            --replace) replace=1; shift ;;
-            --apply) apply=1; shift ;;
-            --accept-agent-value) accept_agent=1; shift ;;
-            --allow-forwarded) allow_fwd=1; shift ;;
-            --no-forwarded) no_fwd=1; shift ;;
+                transcripts=1; seen+=("$1"); shift ;;
+            --dry-run) dry_run=1; seen+=("$1"); shift ;;
+            --replace) replace=1; seen+=("$1"); shift ;;
+            --apply) apply=1; seen+=("$1"); shift ;;
+            --accept-agent-value) accept_agent=1; seen+=("$1"); shift ;;
+            --allow-forwarded) allow_fwd=1; seen+=("$1"); shift ;;
+            --no-forwarded) no_fwd=1; seen+=("$1"); shift ;;
             --burst|--per-minute)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a number" >&2; exit 2; }
                 case "$2" in *[!0-9]*) echo "usage: $1 needs a number" >&2; exit 2 ;; esac
                 if [ "$1" = "--burst" ]; then agent_burst="$2"; else agent_per_minute="$2"; fi
-                shift 2 ;;
+                seen+=("$1"); shift 2 ;;
             --recipient|--target|--target-workspace|--workspace|--server|--out|--holder)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
                 case "$1" in
@@ -40458,8 +40458,8 @@ cmd_vault() {
                     --workspace) carry_ws+=("$2") ;; --server) carry_server+=("$2") ;;
                     --out) out_file="$2" ;; --holder) holder="$2" ;;
                 esac
-                shift 2 ;;
-            --secret) [ -n "${2:-}" ] || { echo "usage: --secret NAME" >&2; exit 2; }; use_secrets+=("$2"); shift 2 ;;
+                seen+=("$1"); shift 2 ;;
+            --secret) [ -n "${2:-}" ] || { echo "usage: --secret NAME" >&2; exit 2; }; use_secrets+=("$2"); seen+=("$1"); shift 2 ;;
             --sign|--sign-header|--sign-encoding|--sign-ts-header|--oauth-token-url|--oauth-client-auth)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
                 case "$1" in
@@ -40467,7 +40467,7 @@ cmd_vault() {
                     --sign-encoding) sign_encoding="$2" ;; --sign-ts-header) sign_ts_header="$2" ;;
                     --oauth-token-url) oauth_token_url="$2" ;; --oauth-client-auth) oauth_client_auth="$2" ;;
                 esac
-                shift 2 ;;
+                seen+=("$1"); shift 2 ;;
             --sign-prefix|--sign-template|--sign-value)
                 # May be empty (--sign-prefix ''), so only the count is checked.
                 [ $# -ge 2 ] || { echo "usage: $1 needs a value" >&2; exit 2; }
@@ -40476,10 +40476,10 @@ cmd_vault() {
                     --sign-template) sign_template="$2"; sign_template_set=1 ;;
                     --sign-value) sign_value="$2"; sign_value_set=1 ;;
                 esac
-                shift 2 ;;
-            --env-file) [ -n "${2:-}" ] || { echo "usage: --env-file <file>" >&2; exit 2; }; env_file_opt="$2"; shift 2 ;;
-            --wait) [ -n "${2:-}" ] || { echo "usage: --wait <duration> (10m, 2h)" >&2; exit 2; }; wait_for="$2"; shift 2 ;;
-            --done) [ -n "${2:-}" ] || { echo "usage: --done <path>" >&2; exit 2; }; done_path="$2"; shift 2 ;;
+                seen+=("$1"); shift 2 ;;
+            --env-file) [ -n "${2:-}" ] || { echo "usage: --env-file <file>" >&2; exit 2; }; env_file_opt="$2"; seen+=("$1"); shift 2 ;;
+            --wait) [ -n "${2:-}" ] || { echo "usage: --wait <duration> (10m, 2h)" >&2; exit 2; }; wait_for="$2"; seen+=("$1"); shift 2 ;;
+            --done) [ -n "${2:-}" ] || { echo "usage: --done <path>" >&2; exit 2; }; done_path="$2"; seen+=("$1"); shift 2 ;;
             --scope|--kind|--for|--preset|--delivery|--ceiling|--describe|--rotate-every|--ttl|--inject-header|--inject-format|--inject-dst|--to|--from|--as|--env-name|--file-name|--grant|--add|--remove|--since)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
                 case "$1" in
@@ -40491,12 +40491,58 @@ cmd_vault() {
                     --from) from="$2" ;; --as) as_d="$2" ;; --env-name) env_name="$2" ;; --file-name) file_name="$2" ;;
                     --grant) grant_id="$2" ;; --add) add_hosts+=("$2") ;; --remove) rm_hosts+=("$2") ;; --since) since="$2" ;;
                 esac
-                shift 2 ;;
+                seen+=("$1"); shift 2 ;;
             --value|--value=*|--secret-value*)
                 echo "value_on_argv: values are read from stdin, never an argument (k2 vault set NAME < file)" >&2
                 exit 2 ;;
             --*) echo "usage: unknown flag '$1' (k2 vault --help)" >&2; exit 2 ;;
             *) pos+=("$1"); shift ;;
+        esac
+    done
+    # Each verb takes only the flags it reads (K2, 2026-11-16, like the send
+    # family): any other is refused here, before a request goes out, never
+    # parsed and dropped. --system goes wherever the name goes (the body or
+    # query), so every verb that sends the name takes it. "also" holds the
+    # flags a verb reads only to refuse with its own words, later.
+    local S="--scope --system" takes="" also="" verb_words="$sub"
+    case "$sub" in
+        status|open|recipient|requests|presets) takes="--json" ;;
+        list|ls|show|rotate|public-key|disable|enable|get) takes="$S --json" ;;
+        set) takes="$S --kind --for --preset --delivery --ceiling --describe --rotate-every --ttl --inject-dst --inject-header --inject-format --sign --sign-header --sign-encoding --sign-prefix --sign-ts-header --sign-template --sign-value --oauth-token-url --oauth-client-auth --json" ;;
+        hosts) takes="--add --remove $S --json" ;;
+        sign) takes="--sign-header --sign-encoding --sign-prefix --sign-ts-header --sign-template --sign-value --oauth-token-url --oauth-client-auth $S --json"; also="--sign" ;;
+        agent-limit) takes="--burst --per-minute --allow-forwarded --no-forwarded $S --json" ;;
+        delivery) takes="--ceiling $S --json"; also="--env-name --file-name" ;;
+        grant) takes="--to --as --env-name --file-name --ttl $S --json" ;;
+        revoke) takes="--from --grant $S --json" ;;
+        destroy) takes="--yes $S --json" ;;
+        audit) takes="--since $S --json" ;;
+        doctor) takes="--transcripts --json" ;;
+        env-file|file) takes="--secret --scope --ttl --wait --done --json" ;;
+        proxy-url) takes="--scope --ttl --json"; also="--secret" ;;
+        import) takes="--scope --delivery --remove-original --json" ;;
+        service) takes="--env-file --json" ;;
+        reveal) takes="$S" ;;
+        rollback) takes="--to $S --accept-agent-value" ;;
+        restore) takes="--from --holder --dry-run --replace" ;;
+        carry)
+            case "${pos[0]:-}" in
+                export) takes="--recipient --target --workspace --target-workspace --server --own-box-move --out"; verb_words="carry export" ;;
+                import) takes="--workspace --apply --json"; verb_words="carry import" ;;
+            esac ;;
+        # recovery, confirm-password, kek, rekey, backup: no flags.
+    esac
+    local f
+    for f in "${seen[@]+"${seen[@]}"}"; do
+        case " $takes $also " in
+            *" $f "*) ;;
+            *)
+                if [ -n "$takes" ]; then
+                    echo "usage: k2 vault $verb_words doesn't take $f (it takes: ${takes// /, }; k2 vault $sub --help)" >&2
+                else
+                    echo "usage: k2 vault $verb_words takes no flags, not $f (k2 vault $sub --help)" >&2
+                fi
+                exit 2 ;;
         esac
     done
     local sj

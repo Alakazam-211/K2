@@ -1,12 +1,11 @@
 import { createContext, useContext, useLayoutEffect, useMemo, useState, type ReactNode } from 'react'
-import { useSettingsStore } from '@/stores/settings'
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalCompose'
 import { ThreadOverlayColumn } from './ThreadOverlayColumn'
 import { ChatterOverlayPane } from './ChatterOverlayPane'
 import { SplitSessionColumns } from './SplitSessionColumns'
 import { ThreadDrawerPanel } from './ThreadDrawerPanel'
-import { threadTextCapPx } from './threadTextWidth'
+import { useThreadTextCapPx } from './useThreadTextCap'
 import { useTerminalRevealPresence } from './threadReveal'
 import { threadDrawerOpen, type ThreadDrawerKind } from './threadPanels'
 import { DEFAULT_SPLIT_LEFT, DEFAULT_SPLIT_RIGHT, overlayViewer, type SessionViewTab, type SplitPaneView } from './sessionViewTab'
@@ -163,7 +162,7 @@ export function SessionColumns({
   draftId: string
   cwd: string
 }): React.JSX.Element {
-  const threadTextCap = useSettingsStore((s) => threadTextCapPx(s.threadTextWidth))
+  const threadTextCap = useThreadTextCapPx()
   const sendInput = handle?.sendInput
   const readOnly = handle?.readOnly ?? false
   // The Thread working strip's Stop (prd-daemon-activity-and-thread-working-

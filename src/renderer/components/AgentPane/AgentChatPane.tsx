@@ -48,7 +48,7 @@ import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumn
 import { prefetchThread } from '@/components/SessionView/threadRead'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { useSessionViewTab } from '@/components/SessionView/useSessionViewTab'
-import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
+import { useThreadTextCapPx } from '@/components/SessionView/useThreadTextCap'
 import { ThreadViewIdentity } from '@/components/SessionView/ThreadViewIdentity'
 import { ThreadFloatBell } from '@/components/SessionView/ThreadFloatBell'
 import { ThreadFloatSearch } from '@/components/SessionView/ThreadFloatSearch'
@@ -69,7 +69,6 @@ import type { ThreadPanelKind } from '@/components/SessionView/threadPanels'
 import { FolderTrustHoldPanel, useFolderTrustHold } from './FolderTrustHold'
 import { folderTrustMessage } from '@/kessel-term/folderTrustMessage'
 import { httpStatusOf } from '@/lib/daemon-http-error'
-import { useSettingsStore } from '@/stores/settings'
 import type { SessionViewTab } from '@/components/SessionView/sessionViewTab'
 import {
   initialBreakerState,
@@ -1651,7 +1650,7 @@ function OverlayTabBody({
   banner?: React.ReactNode
   children: React.ReactNode
 }): React.JSX.Element {
-  const threadTextCap = useSettingsStore((s) => threadTextCapPx(s.threadTextWidth))
+  const threadTextCap = useThreadTextCapPx()
   if (viewTab === 'thread') {
     return (
       <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">

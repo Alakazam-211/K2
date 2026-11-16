@@ -89,6 +89,8 @@ export function EditorFrame(props: {
   kind: EditorKind
   mode: string
   full?: boolean
+  /** The tab's own CSS variables (the markdown editor's `--ed-measure`). */
+  style?: React.CSSProperties
   modeControl: React.ReactNode
   notice?: React.ReactNode
   body: React.ReactNode
@@ -99,7 +101,7 @@ export function EditorFrame(props: {
   const name = fileNameOf(filePath)
   return (
     // data-k2-line: the mode control measures its room against the tab, not its own wrapper (ui/segmented-fit.ts).
-    <div ref={frame.root} data-testid="editor-tab" data-k2-line="" data-kind={kind} data-mode={mode} data-full={full ? '' : undefined} className="ed-tab flex h-full min-h-0 flex-col" onKeyDownCapture={props.onKeyDownCapture}>
+    <div ref={frame.root} data-testid="editor-tab" data-k2-line="" data-kind={kind} data-mode={mode} data-full={full ? '' : undefined} style={props.style} className="ed-tab flex h-full min-h-0 flex-col" onKeyDownCapture={props.onKeyDownCapture}>
       <style>{EDITOR_CSS + WRITE_CSS}</style>
       <LiveTabFrame
         header={<LiveHeader fileName={name} fileTitle={filePath} fileGlyph={<SetiFileIcon name={name} size={16} />} sentence={null} mode={props.modeControl} />}

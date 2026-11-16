@@ -4,7 +4,8 @@
 // rendered page; Read is it, read only, with no caret), Source with none. ⌘E
 // toggles Write and Read, ⇧⌘E opens Source. A file over 1 MB or 20,000 lines
 // is Source only. The status line: words, read time, the save word, and the
-// caret in Source; Full width and Wrap.
+// caret in Source; Full width and Wrap. The reading column is the Thread's
+// text width (lib/editor/measure.ts).
 
 import { useState } from 'react'
 import { Segmented } from '@/components/ui'
@@ -13,6 +14,8 @@ import { initialMode, modeForKey, usableMode, type EditorMode } from '@/lib/edit
 import { countWords, readingMinutes } from '@/lib/editor/words'
 import { writeModeFits } from '@/lib/editor/write-mode'
 import { useSettingsStore } from '@/stores/settings'
+import { useThreadTextCapPx } from '@/components/SessionView/useThreadTextCap'
+import { editorMeasure } from '@/lib/editor/measure'
 import { useWriteMode } from './useWriteMode'
 import { EditorFrame, caretItem, fileNameOf, saveItems, saveKey, useEditorFrame, type EditorProps } from './EditorFrame'
 import type { StatusItem, StatusToggle } from './EditorStatusLine'
@@ -39,6 +42,8 @@ export function MarkdownEditor(p: EditorProps): React.JSX.Element {
   const [full, setFull] = useLocalFlag(FULL_WIDTH_KEY)
   const [wrap, setWrap] = useLocalFlag(MARKDOWN_WRAP_KEY, true)
   const lineNumbers = useSettingsStore((s) => s.editor.lineNumbers)
+  // The reading column is the Thread's text width (the same setting), wider at Full width.
+  const measure = editorMeasure(useThreadTextCapPx(), full)
   const name = fileNameOf(filePath)
 
   const onKeyDownCapture = (e: React.KeyboardEvent): void => {
@@ -79,5 +84,5 @@ export function MarkdownEditor(p: EditorProps): React.JSX.Element {
     </div>
   )
 
-  return <EditorFrame frame={frame} filePath={filePath} kind="markdown" mode={mode} full={full} modeControl={modeControl} notice={p.notice} body={body} status={{ items, toggles, facts: [] }} onKeyDownCapture={onKeyDownCapture} />
+  return <EditorFrame frame={frame} filePath={filePath} kind="markdown" mode={mode} full={full} style={{ '--ed-measure': measure } as React.CSSProperties} modeControl={modeControl} notice={p.notice} body={body} status={{ items, toggles, facts: [] }} onKeyDownCapture={onKeyDownCapture} />
 }

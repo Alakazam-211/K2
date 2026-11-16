@@ -2,14 +2,14 @@
 // E1b; the mock's ed.css). Every colour and radius is a token. One document
 // face in both looks (the notes' v3 type): the system sans, 15px in Glass and
 // 14.5px in Terminal, with mono kept for code and the chrome. The reading
-// column is 480px (about 70 characters), 600px at Full width. The writing
-// surface is the tile in Glass and the page in Terminal.
+// column (`--ed-measure`) is the Thread's text width, set on the tab by
+// MarkdownEditor (lib/editor/measure.ts). The writing surface is the tile in
+// Glass and the page in Terminal.
 
 const SANS = `-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Roboto, 'Noto Sans', 'Helvetica Neue', Arial, sans-serif`
 
 export const EDITOR_CSS = `
-.ed-tab { --ed-body: ${SANS}; --ed-fs: 15px; --ed-lh: 1.62; --ed-measure: 480px; --ed-h1: 27px; --ed-h2: 20.5px; --ed-h3: 17.5px; }
-.ed-tab[data-full] { --ed-measure: 600px; }
+.ed-tab { --ed-body: ${SANS}; --ed-fs: 15px; --ed-lh: 1.62; --ed-h1: 27px; --ed-h2: 20.5px; --ed-h3: 17.5px; }
 html[data-style="terminal"] .ed-tab { --ed-fs: 14.5px; --ed-h1: 26px; --ed-h2: 20px; --ed-h3: 17px; }
 html[data-style="glass"] .ed-tab { --editor-bg: var(--color-bg-surface); }
 .ed-tab .lv-shell, .ed-tab .lv-head { background: var(--editor-bg, var(--color-bg)); }

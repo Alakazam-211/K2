@@ -34,7 +34,7 @@ import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColum
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { InputsList } from '@/components/SessionView/ThreadDrawerPanel'
 import { ThreadDrawerSelector, VIEW_LABEL, VIEW_TOOLTIP, ViewIcon } from '@/components/SessionView/ThreadDrawerSelector'
-import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
+import { useThreadTextCapPx } from '@/components/SessionView/useThreadTextCap'
 import { DEFAULT_SPLIT_LEFT, DEFAULT_SPLIT_RIGHT, type SessionViewTab } from '@/components/SessionView/sessionViewTab'
 import type { ServerScope } from '@/kessel/server-scope'
 import {
@@ -221,7 +221,7 @@ export function DashboardAgentTile({
   // waking it. The error phase carries only the server's reason.
   const [failedWake, setFailedWake] = useState(false)
   const pageLive = usePageLive()
-  const textCap = useSettingsStore((s) => threadTextCapPx(s.threadTextWidth))
+  const textCap = useThreadTextCapPx()
 
   // Track parent batch updates; a local wake in flight wins.
   useEffect(() => {

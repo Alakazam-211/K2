@@ -7,7 +7,7 @@
 export const WRITE_CSS = `
 .ed-tab .cm-editor.cm-md { font-family: var(--ed-body); font-size: var(--ed-fs); }
 .ed-tab .cm-md .cm-scroller { font-family: var(--ed-body); line-height: var(--ed-lh); padding: 0 24px; }
-.ed-tab .cm-md .cm-content { flex: 0 1 auto; width: var(--ed-measure); max-width: 100%; margin: 0 auto; padding: 28px 0 40px; }
+.ed-tab .cm-md .cm-content { flex: 0 1 auto; width: var(--ed-measure, 100%); max-width: 100%; margin: 0 auto; padding: 28px 0 40px; }
 .ed-tab .cm-md .cm-gutters { display: none; }
 .ed-tab .cm-md .cm-line { padding: 0 2px 0 0; }
 .ed-tab .cm-md .cm-activeLine { background: transparent; }

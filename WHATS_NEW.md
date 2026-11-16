@@ -5,18 +5,24 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.46.15
 
-- **The web app no longer keeps sign-in tokens or passwords in the browser's saved storage.** A sign-in lasts for the browser tab (a reload keeps it); a new tab asks you to sign in again, and the web app has no "Remember password". Anything an older version saved there is removed when the page loads. The desktop app still uses your system keychain.
-### Heartbeats
-- **A heartbeat can keep its own time zone.** `k2 heartbeat schedule add` and `edit` take `--tz America/New_York`: a 14:15 heartbeat then fires at 14:15 New York time even when the computer is in another zone, so a laptop that travels keeps the schedule's clock. `k2 heartbeat schedule list` shows its next fire in that zone and here; `--tz local` follows the computer's clock again. A time that doesn't exist on a spring-forward day fires at the first minute after the jump, and one that happens twice on a fall-back day fires once.
-### Compute
-- **An agent can ask to add compute nodes to its own node list.** `k2 compute allow-nodes --add <node>` from an agent ends with a permission card request (`compute.allow-nodes nodes=…`). The card shows each node's size and who owns it; an owner or Admin's Allow adds exactly those nodes, and Deny changes nothing. Agents can still only ask for their own list and for nodes already granted to them. Clearing the list stays a person's decision.
+### Threads and Home
+- **Drop a file anywhere on a Thread to attach it.** The messages, the empty Thread and the message box all take it, the same as a drop on the box (a ticket's Thread too); "Drop to attach" shows while the file is over it.
+- **Step through your agents on Home from the keyboard.** ⌥⌘↓ opens the agent below the selected one in the Home list and ⌥⌘↑ the one above (Ctrl+Alt+Down / Up on Linux and Windows), in the order the list shows them, scrolling it into view; with none selected, ⌥⌘↓ starts at the top and ⌥⌘↑ at the bottom. Change the keys in Settings → Key Bindings → Navigation.
+
 ### Apps
 - **An App's agent can ask to change its App's logins in other rooms.** When people who sign in to an agent's App also talk in another workspace's room, the agent used to be refused when it added, removed, reset or changed the role of one of those logins, and you had to do it yourself in Settings. Now the agent's request comes to you, or an admin, as a card on its Thread. The card says exactly what changes, for which login, and in which room. Allow it and K2 makes that change. Deny it and nothing changes. Logins of other workspaces' Apps are still refused.
 - **Passwords stay off the card.** For a password change, the approval lets the agent set that login's password once. The person then chooses their own password at their next sign-in. For a reset, K2 emails the person the App's one-time link.
 - **Your server's logins show up when you add someone to an App.** In Settings → Apps → (the App) → Add a person, the list now has a "This server's logins" group, so you can give a person who signs in to this server a role in the App. Their server sign-in doesn't change.
 - **Clearer next steps when permission cards are off.** If permission cards are off and an agent is refused, `k2 app grant`, `k2 study apps` and `k2 app --help` no longer tell it to use `k2 permission request`, which it can't run. They tell it what you can do instead: make the change in Settings → Apps, or turn on permission cards in Settings → Permission Cards.
-- **Drop a file anywhere on a Thread to attach it.** The messages, the empty Thread and the message box all take it, the same as a drop on the box (a ticket's Thread too); "Drop to attach" shows while the file is over it.
-- **Step through your agents on Home from the keyboard.** ⌥⌘↓ opens the agent below the selected one in the Home list and ⌥⌘↑ the one above (Ctrl+Alt+Down / Up on Linux and Windows), in the order the list shows them, scrolling it into view; with none selected, ⌥⌘↓ starts at the top and ⌥⌘↑ at the bottom. Change the keys in Settings → Key Bindings → Navigation.
+
+### Heartbeats
+- **A heartbeat can keep its own time zone.** `k2 heartbeat schedule add` and `edit` take `--tz America/New_York`: a 14:15 heartbeat then fires at 14:15 New York time even when the computer is in another zone, so a laptop that travels keeps the schedule's clock. `k2 heartbeat schedule list` shows its next fire in that zone and here; `--tz local` follows the computer's clock again. A time that doesn't exist on a spring-forward day fires at the first minute after the jump, and one that happens twice on a fall-back day fires once.
+
+### Compute
+- **An agent can ask to add compute nodes to its own node list.** `k2 compute allow-nodes --add <node>` from an agent ends with a permission card request (`compute.allow-nodes nodes=…`). The card shows each node's size and who owns it; an owner or Admin's Allow adds exactly those nodes, and Deny changes nothing. Agents can still only ask for their own list and for nodes already granted to them. Clearing the list stays a person's decision.
+
+### Web app
+- **The web app no longer keeps sign-in tokens or passwords in the browser's saved storage.** A sign-in lasts for the browser tab (a reload keeps it); a new tab asks you to sign in again, and the web app has no "Remember password". Anything an older version saved there is removed when the page loads. The desktop app still uses your system keychain.
 
 ## 0.46.14 — Choose which Thread the main chat keeps
 

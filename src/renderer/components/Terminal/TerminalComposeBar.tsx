@@ -13,9 +13,10 @@
 // File drops: local paths are inserted into the draft; on a remote host the
 // same `.k2/downloads` upload path as terminal drops runs first, then the
 // host path is inserted. Window-level routing is external-drop-router
-// (`[data-compose-bar]`, plus an image drop anywhere on the thread/chat
-// surface that owns this bar). HTML5 File drops on the bar also land here
-// via onDrop. Draft paths are the attachment list (`extractImagePathsFromDraft`).
+// (`[data-compose-bar]`, plus a file drop anywhere on the Thread pane that
+// owns this bar). HTML5 File drops on the bar, and anywhere on the Thread
+// pane around it (threadDropZone), also land here via onDrop. Draft paths
+// are the attachment list (`extractImagePathsFromDraft`).
 //
 // Condensed UI: just the input + its placeholder hint — no title, no send
 // button, no status lane, no collapse control. A successful send clears the
@@ -95,6 +96,7 @@ import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
 import { scopedKey } from '@/kessel/server-scope'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { useThreadComposeDrawer } from '@/components/SessionView/threadComposeDrawer'
+import { useThreadComposeDropSource } from '@/components/Thread/threadDropZone'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import {
   ThreadAttachmentChip,
@@ -763,6 +765,10 @@ export function TerminalComposeBar({
     },
     [addThreadFiles, insertPathsText, scope, threadFilesOn, workspacePath],
   )
+  // Under a Thread pane, a file dropped anywhere on the pane comes here
+  // too (threadDropZone): this same handler, so the same limits and
+  // refusals. A box that renders nothing (view-only) offers none.
+  useThreadComposeDropSource(permitted, handleDrop)
 
   const handleAttachClick = useCallback(() => {
     // Home M5: in a Home room on another server, "+" picks files on THIS

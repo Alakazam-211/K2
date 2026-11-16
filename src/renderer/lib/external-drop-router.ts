@@ -22,7 +22,7 @@
 //
 // This module owns the ONE subscriber per webview. Hit-test order matches product rules:
 //   0. Compose bar → remote upload + insert path into draft; local path insert
-//   0b. Thread / chat-overlay surface, image drops only → that surface's compose bar
+//   0b. Anywhere else on a Thread pane, any file → that pane's compose bar
 //   1. Terminal  → remote upload + inject path; local path paste
 //   2. Files     → remote folder upload; local fs/copy plan
 //   3. Remote miss → "Save to…" picker
@@ -48,8 +48,8 @@ import {
 import { dropTextOrToast } from './drop-refusal'
 import { isWebClient } from './is-web'
 import {
-  filesAreComposeSurfaceImages,
-  pathsAreComposeSurfaceImages,
+  composeDropSurfaceAt,
+  markComposeSurfaceDropOver,
   surfaceComposeBar,
   COMPOSE_BAR_SELECTOR,
 } from './compose-surface-drop'
@@ -218,14 +218,6 @@ export function panelOwnsFolderPath(rootPath: string, folderPath: string): boole
 export function hitTestExternalDrop(
   position: { x: number; y: number },
   doc: Document = document,
-  options?: {
-    /**
-     * Image-only drop on a thread or chat-overlay surface routes to the
-     * compose bar inside that surface. Off (and any non-image drop) leaves
-     * terminal, files-drawer, and miss behavior unchanged.
-     */
-    composeSurfaceImages?: boolean
-  },
 ): ExternalDropTarget {
   const el = doc.elementFromPoint(position.x, position.y) as HTMLElement | null
 
@@ -249,22 +241,21 @@ export function hitTestExternalDrop(
     })
   }
 
-  // 0b. Image dropped on the thread list or chat overlay (not the bar).
-  //     Same compose insert. Non-images fall through so a nested terminal
-  //     or the files drawer still wins.
-  if (options?.composeSurfaceImages) {
-    const surfaceBar = surfaceComposeBar(el)
-    if (surfaceBar) {
-      return classifyExternalDrop({
-        compose: {
-          sessionId: surfaceBar.dataset.sessionId,
-          workspacePath: surfaceBar.dataset.workspacePath ?? '',
-          element: surfaceBar,
-        },
-        terminal: null,
-        fileTreeFolder: null,
-      })
-    }
+  // 0b. Any file dropped elsewhere on a Thread pane (its messages, header
+  //     or empty state): the same compose insert as a drop on its box. The
+  //     pane wins over a terminal around it; a pane with no box that takes
+  //     files (view-only, disabled) falls through.
+  const surfaceBar = surfaceComposeBar(el)
+  if (surfaceBar) {
+    return classifyExternalDrop({
+      compose: {
+        sessionId: surfaceBar.dataset.sessionId,
+        workspacePath: surfaceBar.dataset.workspacePath ?? '',
+        element: surfaceBar,
+      },
+      terminal: null,
+      fileTreeFolder: null,
+    })
   }
 
   // 1. Terminal — prefer the id-bearing container; fall back to the focus
@@ -518,9 +509,7 @@ export async function routeExternalDrop(
   }
   const scope = dest.scope
 
-  const target = hitTestExternalDrop(position, doc, {
-    composeSurfaceImages: pathsAreComposeSurfaceImages(paths),
-  })
+  const target = hitTestExternalDrop(position, doc)
   const isRemote = scope.isRemote
 
   switch (target.kind) {
@@ -679,9 +668,7 @@ export async function routeBrowserFileDrop(
   }
   const scope = dest.scope
 
-  const target = hitTestExternalDrop(position, doc, {
-    composeSurfaceImages: filesAreComposeSurfaceImages(files),
-  })
+  const target = hitTestExternalDrop(position, doc)
 
   switch (target.kind) {
     case 'zen-widget':
@@ -745,6 +732,9 @@ export function mountExternalDropRouter(): () => void {
     else unlisteners.push(fn)
   }
 
+  // Tauri: whether the OS drag in progress carries files (`drag-enter`).
+  let osDragCarriesFiles = false
+
   if (isWebClient()) {
     // Required: without preventDefault on dragover, the browser never fires drop.
     const onDragOver = (e: DragEvent) => {
@@ -794,6 +784,7 @@ export function mountExternalDropRouter(): () => void {
           (event) => {
             const { paths, position } = event.payload
             markZenDropOver(null)
+            markComposeSurfaceDropOver(null)
             if (!paths || paths.length === 0 || !position) return
             routeExternalDrop(primaryScope(), paths, dropPointToCss(position)).catch(reportDropFailure)
           },
@@ -801,14 +792,30 @@ export function mountExternalDropRouter(): () => void {
         .then(track)
         .then(() =>
           // GP4: K2 draws the drop ring on a listening widget frame (it
-          // can't see a Tauri drag itself).
+          // can't see a Tauri drag itself). A Thread pane draws "Drop to
+          // attach" the same way, for a drag that carries files.
           view.listen<{ position?: { x: number; y: number } }>('tauri://drag-over', (event) => {
             const p = event.payload?.position ? dropPointToCss(event.payload.position) : null
-            markZenDropOver(p ? (zenDropTargetAt(document.elementFromPoint(p.x, p.y))?.frame ?? null) : null)
+            const el = p ? (document.elementFromPoint(p.x, p.y) as HTMLElement | null) : null
+            markZenDropOver(el ? (zenDropTargetAt(el)?.frame ?? null) : null)
+            markComposeSurfaceDropOver(osDragCarriesFiles && el ? composeDropSurfaceAt(el) : null)
           }),
         )
         .then((off) => off && track(off))
-        .then(() => view.listen('tauri://drag-leave', () => markZenDropOver(null)))
+        .then(() =>
+          // Only `drag-enter` says what the drag carries (over only moves).
+          view.listen<{ paths?: string[] }>('tauri://drag-enter', (event) => {
+            osDragCarriesFiles = (event.payload?.paths?.length ?? 0) > 0
+          }),
+        )
+        .then((off) => off && track(off))
+        .then(() =>
+          view.listen('tauri://drag-leave', () => {
+            markZenDropOver(null)
+            markComposeSurfaceDropOver(null)
+            osDragCarriesFiles = false
+          }),
+        )
         .then((off) => off && track(off))
     })
     .catch((err) => {

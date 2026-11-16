@@ -1,7 +1,14 @@
-// Image drops on the Thread column and the chat overlay attach to the
-// Message-the-agent compose bar inside that surface. The bar itself still
-// accepts every file type; this wider hit is images only, and it uses the
-// same extensions the composer thumbnails (not PDF).
+// A file dropped anywhere on a Thread pane (its messages, header, empty
+// state or message box) attaches to the message box inside that pane, as a
+// drop on the box itself does. The pane is `[data-compose-drop-surface]`;
+// its box is the `[data-compose-bar]` inside it. A box marked
+// `data-compose-disabled` (or no box at all: a view-only room) takes no
+// drop, so the pane doesn't either.
+//
+// OS drops (external-drop-router) take any file on the pane. The Files
+// drawer's in-window drag (file-drag.ts) still attaches images only on the
+// pane, and any file on the box itself: the same extensions the composer
+// thumbnails (not PDF).
 
 export const COMPOSE_BAR_SELECTOR = '[data-compose-bar]'
 export const COMPOSE_DROP_SURFACE_SELECTOR = '[data-compose-drop-surface]'
@@ -49,10 +56,44 @@ export function filesAreComposeSurfaceImages(
   return files.length > 0 && files.every((f) => isComposeSurfaceImageFile(f))
 }
 
-/** Compose bar inside the thread/chat surface under `el`, if any. */
+/** Compose bar inside the thread/chat surface under `el`, if any. A
+ *  disabled box (`data-compose-disabled`) takes no drop: null. */
 export function surfaceComposeBar(el: HTMLElement | null): HTMLElement | null {
   if (!el?.closest) return null
   const surface = el.closest(COMPOSE_DROP_SURFACE_SELECTOR) as HTMLElement | null
   if (!surface?.querySelector) return null
-  return surface.querySelector(COMPOSE_BAR_SELECTOR) as HTMLElement | null
+  const bar = surface.querySelector(COMPOSE_BAR_SELECTOR) as HTMLElement | null
+  if (!bar || bar.dataset?.composeDisabled !== undefined) return null
+  return bar
+}
+
+/** The Thread pane under `el` that takes a file drop (it holds a box that
+ *  takes files), or null. */
+export function composeDropSurfaceAt(el: HTMLElement | null): HTMLElement | null {
+  if (!surfaceComposeBar(el)) return null
+  return el?.closest?.(COMPOSE_DROP_SURFACE_SELECTOR) as HTMLElement | null
+}
+
+/** Dispatched on a Thread pane while an OS file drag (Tauri's own drag
+ *  events, which the page never sees as HTML5 drags) is over it, and again
+ *  when it leaves: `detail.over`. The pane draws its drop state. */
+export const COMPOSE_SURFACE_DROP_OVER_EVENT = 'k2:compose-surface-drop-over'
+
+export interface ComposeSurfaceDropOverDetail {
+  over: boolean
+}
+
+let markedSurface: HTMLElement | null = null
+
+/** Mark the one Thread pane an OS file drag is over (null: none). */
+export function markComposeSurfaceDropOver(surface: HTMLElement | null): void {
+  if (markedSurface === surface) return
+  const prev = markedSurface
+  markedSurface = surface
+  prev?.dispatchEvent(
+    new CustomEvent<ComposeSurfaceDropOverDetail>(COMPOSE_SURFACE_DROP_OVER_EVENT, { detail: { over: false } }),
+  )
+  surface?.dispatchEvent(
+    new CustomEvent<ComposeSurfaceDropOverDetail>(COMPOSE_SURFACE_DROP_OVER_EVENT, { detail: { over: true } }),
+  )
 }

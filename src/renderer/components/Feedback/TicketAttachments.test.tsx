@@ -414,6 +414,31 @@ describe('the message box takes files', () => {
     expect(c.querySelectorAll('[data-testid="ticket-compose-files"] [data-zen-attachment]')).toHaveLength(10)
   })
 
+  it('a file dropped anywhere on the rail’s Thread (the messages) attaches, as on the box', async () => {
+    const c = rail()
+    const pane = c.querySelector('[data-testid="ticket-rail-thread"]') as HTMLElement
+    expect(pane.getAttribute('data-compose-drop-surface')).toBe('thread-chat')
+    const messages = c.querySelector('[data-testid="ticket-rail-column"]') as HTMLElement
+    const drag = { dataTransfer: { files: [new File(['y'], 'brief.pdf')], types: ['Files'] } }
+    fireEvent.dragEnter(messages, drag)
+    expect(c.querySelector('[data-testid="thread-drop-overlay"]')!.textContent).toBe('Drop to attach')
+    expect(fireEvent.drop(messages, drag), 'the drop is taken').toBe(false)
+    expect(c.querySelector('[data-testid="thread-drop-overlay"]')).toBeNull()
+    await waitFor(() => expect(c.querySelector('[data-zen-attachment="brief.pdf"]')).not.toBeNull())
+    expect(c.querySelector('[data-zen-attachment="brief.pdf"]')!.getAttribute('title')).toBe('/ws/.k2/downloads/brief.pdf')
+  })
+
+  it('an unlinked ticket’s rail takes no drop anywhere', () => {
+    const c = rail({}, null)
+    const pane = c.querySelector('[data-testid="ticket-rail-thread"]') as HTMLElement
+    expect(pane.hasAttribute('data-compose-drop-surface')).toBe(false)
+    const messages = c.querySelector('[data-testid="ticket-rail-column"]') as HTMLElement
+    const drag = { dataTransfer: { files: [new File(['y'], 'brief.pdf')], types: ['Files'] } }
+    fireEvent.dragEnter(messages, drag)
+    expect(c.querySelector('[data-testid="thread-drop-overlay"]')).toBeNull()
+    expect(fireEvent.drop(messages, drag), 'not taken').toBe(true)
+  })
+
   it('chips survive a remount (the draft) and a refusal reads as words', async () => {
     setTicketDraftFiles(TICKET, [{ path: '/ws/.env', name: '.env' }])
     h.postImpl = async () => {

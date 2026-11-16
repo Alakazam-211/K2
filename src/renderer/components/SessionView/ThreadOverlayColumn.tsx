@@ -11,6 +11,12 @@ import { THREAD_FLOAT_INSET_VAR } from './threadFloats'
 import { measureThreadDock, writeThreadDock } from './threadDock'
 import { FOOTER_FADE_TARGETS, ThreadFooterFade, threadFadeTop } from '@/components/Thread/ThreadZenKit'
 import { ProgressiveHeaderBlur } from '@/components/ui'
+import {
+  ThreadComposeDropContext,
+  ThreadDropOverlay,
+  useThreadComposeDropSlot,
+  useThreadDropZone,
+} from '@/components/Thread/threadDropZone'
 
 /** The drift's length when the Style's `--motion-duration-slow` can't be read. */
 export const EMPTY_START_DRIFT_FALLBACK_MS = 320
@@ -32,9 +38,10 @@ export function cssTimeMs(raw: string): number | null {
  * fills the column and pads its bottom by the bar's measured height, so
  * messages scroll under the bar and the newest rests right above it.
  *
- * `data-compose-drop-surface` is the image-drop hit region for the bar
- * inside this column (external-drop-router / file-drag). Non-image drops
- * are not claimed.
+ * The whole column takes a dropped file into the bar's attachments
+ * (threadDropZone): the bar hands the column its own drop handler, and
+ * `data-compose-drop-surface` is the hit region external-drop-router uses
+ * for OS drops. No bar (or a bar that renders nothing): no drop.
  *
  * The column is a Zen Thread box (`data-k2-thread-zen` + the `--zen-*`
  * tokens from the app's Style), so the list and the bar share the Zen
@@ -96,6 +103,8 @@ export function ThreadOverlayColumn({
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   const drawer = useMemo<ThreadComposeDrawer>(() => ({ turn, onStop }), [turn, onStop])
   const reducedMotion = useReducedMotion()
+  const { handler: dropHandler, slot: dropSlot } = useThreadComposeDropSlot()
+  const drop = useThreadDropZone(rootRef, hasCompose ? dropHandler : null)
 
   // The empty start. `fill` from the list (before paint); `place` measured
   // here; `centred` only once it fits, so a loading or tiny column never
@@ -203,7 +212,9 @@ export function ThreadOverlayColumn({
       data-compose-drop-surface="thread"
       data-thread-centred={centred ? '' : undefined}
       data-thread-drift={drifting ? '' : undefined}
+      data-thread-drop-over={drop.over ? '' : undefined}
       {...scope}
+      {...drop.handlers}
     >
       <div
         className="absolute inset-0 overflow-hidden flex flex-col"
@@ -265,10 +276,13 @@ export function ThreadOverlayColumn({
                 : { zIndex: 1 }
             }
           >
-            <ThreadComposeDrawerContext.Provider value={drawer}>{composeBar}</ThreadComposeDrawerContext.Provider>
+            <ThreadComposeDrawerContext.Provider value={drawer}>
+              <ThreadComposeDropContext.Provider value={dropSlot}>{composeBar}</ThreadComposeDropContext.Provider>
+            </ThreadComposeDrawerContext.Provider>
           </div>
         </div>
       ) : null}
+      <ThreadDropOverlay shown={drop.over} />
     </div>
   )
 }

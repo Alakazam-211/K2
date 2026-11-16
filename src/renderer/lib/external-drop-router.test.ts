@@ -363,11 +363,11 @@ describe('mountExternalDropRouter (desktop)', () => {
     const unmount = mountExternalDropRouter()
     // Dynamic import of @tauri-apps/api/webviewWindow resolves on next microtask.
     await vi.waitFor(() => {
-      expect(tauriListeners.map((l) => l.event)).toEqual(['tauri://drag-drop', 'tauri://drag-over', 'tauri://drag-leave'])
+      expect(tauriListeners.map((l) => l.event)).toEqual(['tauri://drag-drop', 'tauri://drag-over', 'tauri://drag-enter', 'tauri://drag-leave'])
     })
-    expect(tauriListeners.map((l) => l.kind)).toEqual(['WebviewWindow', 'WebviewWindow', 'WebviewWindow'])
+    expect(tauriListeners.map((l) => l.kind)).toEqual(['WebviewWindow', 'WebviewWindow', 'WebviewWindow', 'WebviewWindow'])
     unmount()
-    expect(webviewUnlistenMock).toHaveBeenCalledTimes(3)
+    expect(webviewUnlistenMock).toHaveBeenCalledTimes(4)
   })
 
   it('teardown before listen resolves does not leave a live handler', async () => {
@@ -421,7 +421,7 @@ describe('mountExternalDropRouter (desktop)', () => {
   })
 })
 
-// ── Thread / chat surface image drops ─────────────────────────────────
+// ── Thread pane drops ─────────────────────────────────
 
 const SURFACE_SEL_KEY: Record<string, string> = {
   [COMPOSE_BAR_SELECTOR]: 'composeBar',
@@ -502,7 +502,7 @@ function surfaceDoc(el: SurfaceFake | null, panels: SurfaceFake[] = []): Documen
   } as unknown as Document
 }
 
-describe('hitTestExternalDrop — thread and chat image surfaces', () => {
+describe('hitTestExternalDrop — a file anywhere on a Thread pane', () => {
   function threadColumn() {
     const row = surfaceNode({})
     const bar = surfaceNode({ composeBar: '', sessionId: 'thread-1', workspacePath: '/ws' })
@@ -510,11 +510,9 @@ describe('hitTestExternalDrop — thread and chat image surfaces', () => {
     return { row, bar, surface }
   }
 
-  it('routes an image on the thread list to that column’s compose bar', () => {
+  it('routes a file on the thread list to that column’s compose bar, image or not', () => {
     const { row, bar } = threadColumn()
-    const target = hitTestExternalDrop({ x: 4, y: 4 }, surfaceDoc(row), {
-      composeSurfaceImages: true,
-    })
+    const target = hitTestExternalDrop({ x: 4, y: 4 }, surfaceDoc(row))
     expect(target).toMatchObject({
       kind: 'compose',
       sessionId: 'thread-1',
@@ -523,83 +521,66 @@ describe('hitTestExternalDrop — thread and chat image surfaces', () => {
     if (target.kind === 'compose') expect(target.element).toBe(bar)
   })
 
-  it('leaves a non-image on the thread list as a miss', () => {
-    const { row } = threadColumn()
-    expect(
-      hitTestExternalDrop({ x: 4, y: 4 }, surfaceDoc(row), { composeSurfaceImages: false }),
-    ).toEqual({ kind: 'miss' })
-  })
-
   it('still routes any file dropped on the compose bar itself', () => {
     const { bar } = threadColumn()
-    const target = hitTestExternalDrop({ x: 4, y: 4 }, surfaceDoc(bar), {
-      composeSurfaceImages: false,
-    })
+    const target = hitTestExternalDrop({ x: 4, y: 4 }, surfaceDoc(bar))
     expect(target).toMatchObject({ kind: 'compose', sessionId: 'thread-1' })
   })
 
-  it('prefers the surface compose bar over a terminal ancestor for images only', () => {
+  it('prefers the pane’s compose bar over a terminal around the pane', () => {
     const { row, bar, surface } = threadColumn()
-    const term = surfaceNode(
+    surfaceNode(
       { terminalId: 'pty-1', terminalKind: 'v2', workspacePath: '/ws', terminalContainer: '' },
       [surface],
     )
-    const image = hitTestExternalDrop({ x: 4, y: 4 }, surfaceDoc(row), {
-      composeSurfaceImages: true,
-    })
-    expect(image).toMatchObject({ kind: 'compose', sessionId: 'thread-1' })
-    if (image.kind === 'compose') expect(image.element).toBe(bar)
-
-    const text = hitTestExternalDrop({ x: 4, y: 4 }, surfaceDoc(row), {
-      composeSurfaceImages: false,
-    })
-    expect(text).toMatchObject({ kind: 'terminal', terminalId: 'pty-1' })
-    if (text.kind === 'terminal') expect(text.element).toBe(term)
+    const target = hitTestExternalDrop({ x: 4, y: 4 }, surfaceDoc(row))
+    expect(target).toMatchObject({ kind: 'compose', sessionId: 'thread-1' })
+    if (target.kind === 'compose') expect(target.element).toBe(bar)
   })
 
-  it('does not steal an image drop from the terminal grid or the files drawer', () => {
+  it('does not steal a drop from the terminal grid or the files drawer', () => {
     const grid = surfaceNode({})
     const term = surfaceNode(
       { terminalId: 'pty-1', terminalKind: 'v2', workspacePath: '/ws' },
       [grid],
     )
-    const onGrid = hitTestExternalDrop({ x: 4, y: 4 }, surfaceDoc(grid), {
-      composeSurfaceImages: true,
-    })
+    const onGrid = hitTestExternalDrop({ x: 4, y: 4 }, surfaceDoc(grid))
     expect(onGrid).toMatchObject({ kind: 'terminal', terminalId: 'pty-1' })
     if (onGrid.kind === 'terminal') expect(onGrid.element).toBe(term)
 
     const fileRow = surfaceNode({ path: '/ws/shot.png', isDirectory: 'false' })
     const panel = surfaceNode({ fileTreePanel: '', rootPath: '/ws' }, [fileRow])
-    const onFiles = hitTestExternalDrop({ x: 4, y: 4 }, surfaceDoc(fileRow, [panel]), {
-      composeSurfaceImages: true,
-    })
+    const onFiles = hitTestExternalDrop({ x: 4, y: 4 }, surfaceDoc(fileRow, [panel]))
     expect(onFiles).toEqual({ kind: 'folder', path: '/ws' })
   })
 
-  it('routes a chat-overlay image to the chat bar, not the thread bar', () => {
+  it('routes a drop on another pane to that pane’s bar, not the thread bar', () => {
     const thread = threadColumn()
     const chatRow = surfaceNode({})
     const chatBar = surfaceNode({ composeBar: '', sessionId: 'chat-1', workspacePath: '/ws' })
     surfaceNode({ composeDropSurface: 'chat' }, [chatRow, chatBar])
-    const target = hitTestExternalDrop({ x: 2, y: 2 }, surfaceDoc(chatRow), {
-      composeSurfaceImages: true,
-    })
+    const target = hitTestExternalDrop({ x: 2, y: 2 }, surfaceDoc(chatRow))
     expect(target).toMatchObject({ kind: 'compose', sessionId: 'chat-1' })
     if (target.kind === 'compose') expect(target.element).toBe(chatBar)
     expect(thread.bar._events).toHaveLength(0)
   })
 
-  it('does not claim a surface that has no compose bar', () => {
+  it('does not claim a pane that has no compose bar (view-only)', () => {
     const row = surfaceNode({})
     surfaceNode({ composeDropSurface: 'thread' }, [row])
-    expect(
-      hitTestExternalDrop({ x: 1, y: 1 }, surfaceDoc(row), { composeSurfaceImages: true }),
-    ).toEqual({ kind: 'miss' })
+    expect(hitTestExternalDrop({ x: 1, y: 1 }, surfaceDoc(row))).toEqual({ kind: 'miss' })
+  })
+
+  it('does not claim a pane whose compose bar is disabled; a terminal around it keeps the drop', () => {
+    const row = surfaceNode({})
+    const bar = surfaceNode({ composeBar: '', composeDisabled: '', sessionId: 'thread-1', workspacePath: '/ws' })
+    const surface = surfaceNode({ composeDropSurface: 'thread' }, [row, bar])
+    surfaceNode({ terminalId: 'pty-1', terminalKind: 'v2', workspacePath: '/ws' }, [surface])
+    expect(hitTestExternalDrop({ x: 1, y: 1 }, surfaceDoc(row))).toMatchObject({ kind: 'terminal', terminalId: 'pty-1' })
   })
 })
 
-describe('routeExternalDrop — thread surface images', () => {
+describe('routeExternalDrop — a file on a Thread pane', () => {
   beforeEach(() => {
     useConnectHostStore.setState({ activeHost: 'local' })
   })
@@ -620,12 +601,16 @@ describe('routeExternalDrop — thread surface images', () => {
     expect(ev.detail.uploaded).toBe(false)
   })
 
-  it('does not insert a non-image dropped on the thread list', async () => {
+  it('hands a non-image dropped on the thread list to the box too', async () => {
     const row = surfaceNode({})
     const bar = surfaceNode({ composeBar: '', sessionId: 'thread-1', workspacePath: '/ws' })
     surfaceNode({ composeDropSurface: 'thread' }, [row, bar])
-    await routeExternalDrop(primaryScope(), ['/tmp/notes.txt'], { x: 3, y: 3 }, surfaceDoc(row))
-    expect(bar._events).toHaveLength(0)
+    await routeExternalDrop(primaryScope(), ['/tmp/notes.txt', '/tmp/plan.pdf'], { x: 3, y: 3 }, surfaceDoc(row))
+    expect(bar._events).toHaveLength(1)
+    const ev = bar._events[0] as CustomEvent<ComposeInsertDetail>
+    expect(ev.type).toBe('k2:compose-insert')
+    expect(ev.detail.paths).toEqual(['/tmp/notes.txt', '/tmp/plan.pdf'])
+    expect(ev.detail.uploaded).toBe(false)
   })
 
   it('still pastes an image dropped on the terminal grid into the PTY', async () => {
@@ -801,6 +786,28 @@ describe('mountExternalDropRouter — an OS drop reaches the router and is never
     })
     expect(errors).toHaveBeenCalledWith('[external-drop-router] drop failed', expect.any(Error))
     errors.mockRestore()
+  })
+
+  it('a file drag over a Thread pane marks it ("Drop to attach") until it leaves; a drag with no files never does', async () => {
+    const row = surfaceNode({})
+    const bar = surfaceNode({ composeBar: '', sessionId: 'thread-1', workspacePath: '/ws' })
+    const pane = surfaceNode({ composeDropSurface: 'thread' }, [row, bar])
+    vi.stubGlobal('document', surfaceDoc(row))
+    const marks = () => pane._events.map((e) => [e.type, (e as CustomEvent<{ over: boolean }>).detail.over])
+
+    emitToAnyLabel('tauri://drag-enter', { paths: [], position: { x: 3, y: 3 } })
+    emitToAnyLabel('tauri://drag-over', { position: { x: 3, y: 3 } })
+    expect(marks()).toEqual([])
+
+    emitToAnyLabel('tauri://drag-enter', { paths: ['/Users/me/notes.txt'], position: { x: 3, y: 3 } })
+    emitToAnyLabel('tauri://drag-over', { position: { x: 3, y: 3 } })
+    emitToAnyLabel('tauri://drag-over', { position: { x: 4, y: 4 } })
+    expect(marks()).toEqual([['k2:compose-surface-drop-over', true]])
+    emitToAnyLabel('tauri://drag-leave', {})
+    expect(marks()).toEqual([
+      ['k2:compose-surface-drop-over', true],
+      ['k2:compose-surface-drop-over', false],
+    ])
   })
 
   it('a drop on this computer that lands on nothing says so', async () => {

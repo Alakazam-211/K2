@@ -3,7 +3,11 @@ import { isComposePreviewImagePath } from '@/components/Terminal/terminalCompose
 import {
   COMPOSE_BAR_SELECTOR,
   COMPOSE_DROP_SURFACE_SELECTOR,
+  COMPOSE_SURFACE_DROP_OVER_EVENT,
+  composeDropSurfaceAt,
   filesAreComposeSurfaceImages,
+  markComposeSurfaceDropOver,
+  surfaceComposeBar,
   isComposeSurfaceImageFile,
   isComposeSurfaceImagePath,
   pathsAreComposeSurfaceImages,
@@ -201,7 +205,46 @@ describe('in-app file drag compose target', () => {
   })
 })
 
-describe('routeBrowserFileDrop image surface', () => {
+describe('Thread pane drop target', () => {
+  it('a pane whose box is disabled, or that has no box, takes no drop', () => {
+    const row = node({})
+    const bar = node({ composeBar: '', composeDisabled: '', sessionId: 's' })
+    node({ composeDropSurface: 'thread' }, [row, bar])
+    expect(surfaceComposeBar(asEl(row))).toBeNull()
+    expect(composeDropSurfaceAt(asEl(row))).toBeNull()
+
+    const lone = node({})
+    node({ composeDropSurface: 'thread' }, [lone])
+    expect(surfaceComposeBar(asEl(lone))).toBeNull()
+    expect(composeDropSurfaceAt(asEl(lone))).toBeNull()
+  })
+
+  it('a pane whose box takes files is the drop surface for any point in it', () => {
+    const row = node({})
+    const bar = node({ composeBar: '', sessionId: 's' })
+    const surface = node({ composeDropSurface: 'thread' }, [row, bar])
+    expect(surfaceComposeBar(asEl(row))).toBe(bar)
+    expect(composeDropSurfaceAt(asEl(row))).toBe(surface)
+  })
+
+  it('an OS drag marks one pane at a time and unmarks the last', () => {
+    const a = node({ composeDropSurface: 'thread' })
+    const b = node({ composeDropSurface: 'thread' })
+    const overOf = (n: Fake) =>
+      n._events.map((e) => {
+        expect(e.type).toBe(COMPOSE_SURFACE_DROP_OVER_EVENT)
+        return (e as CustomEvent<{ over: boolean }>).detail.over
+      })
+    markComposeSurfaceDropOver(asEl(a))
+    markComposeSurfaceDropOver(asEl(a))
+    markComposeSurfaceDropOver(asEl(b))
+    markComposeSurfaceDropOver(null)
+    expect(overOf(a)).toEqual([true, false])
+    expect(overOf(b)).toEqual([true, false])
+  })
+})
+
+describe('routeBrowserFileDrop on a Thread pane', () => {
   beforeEach(() => {
     dropMocks.executeBrowserFileDrop.mockClear()
     dropMocks.executeBrowserFileDrop.mockResolvedValue('/host/shot.png ')
@@ -233,7 +276,7 @@ describe('routeBrowserFileDrop image surface', () => {
     expect(surface.dataset.composeDropSurface).toBe('thread')
   })
 
-  it('does not attach a non-image dropped on the thread list', async () => {
+  it('attaches a non-image dropped on the thread list too', async () => {
     const row = node({})
     const bar = node({ composeBar: '', sessionId: 'thread-1', workspacePath: '/ws' })
     node({ composeDropSurface: 'thread' }, [row, bar])
@@ -241,10 +284,12 @@ describe('routeBrowserFileDrop image surface', () => {
     await routeBrowserFileDrop(primaryScope(), [file], { x: 1, y: 1 }, docOf(row))
     expect(dropMocks.executeBrowserFileDrop).toHaveBeenCalledWith(
       [file],
-      { kind: 'miss' },
-      {},
+      { kind: 'terminal' },
+      { workspacePath: '/ws', attachesFiles: true },
+      expect.any(Function),
     )
-    expect(bar._events).toHaveLength(0)
+    expect(bar._events).toHaveLength(1)
+    expect(bar._events[0].type).toBe('k2:compose-insert')
   })
 
   it('keeps an image dropped on the files drawer on the folder path', async () => {

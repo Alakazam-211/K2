@@ -23,7 +23,8 @@
 // files as the Thread does (`attachments`, the daemon's per-viewer views),
 // and the box takes a "+" (`tools`), pasted and dropped files
 // (`onPaste`, `onDropFiles`) and may send with no text (`canSendEmpty`,
-// when files wait to ride the message).
+// when files wait to ride the message). `ThreadChatScope`'s `onDropFiles`
+// (the box's same handler) makes the whole pane take a dropped file.
 
 import {
   createContext,
@@ -50,6 +51,7 @@ import {
 import type { OverlayThreadItem, ThreadFileObject } from '@/components/SessionView/overlayThread'
 import { ZEN_SOLID_PROPS } from '@/lib/zen/zen-materials'
 import { StashBookmark, stashButtonLabel } from '@/components/PromptStash/PromptStash'
+import { ThreadDropOverlay, useThreadDropZone, type ThreadDropHandler } from './threadDropZone'
 import {
   THREAD_COMPOSE_BOX_EDGE,
   THREAD_ZEN_DESKTOP_TOKENS,
@@ -96,19 +98,37 @@ export function ThreadChatScope({
   className,
   style,
   testId,
+  onDropFiles,
 }: {
   children: ReactNode
   className?: string
   style?: CSSProperties
   testId?: string
+  /** A file dropped anywhere on the pane goes here: pass the message box's
+   *  own `onDropFiles` (and put `data-compose-bar` on the box, for OS drops
+   *  in the desktop app). Unset: the pane takes no drop. */
+  onDropFiles?: ThreadDropHandler
 }): JSX.Element {
   const inZen = useContext(ThreadChatZenContext)
   const fontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   const scope = threadChatScopeProps(inZen, fontSize)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const drop = useThreadDropZone(rootRef, onDropFiles)
+  const takesDrops = onDropFiles != null
   return (
-    <div className={className} data-testid={testId} {...scope} style={{ ...scope.style, ...style }}>
+    <div
+      ref={rootRef}
+      className={className}
+      data-testid={testId}
+      data-compose-drop-surface={takesDrops ? 'thread-chat' : undefined}
+      data-thread-drop-over={drop.over ? '' : undefined}
+      {...scope}
+      style={{ ...scope.style, ...(takesDrops ? { position: 'relative' as const } : null), ...style }}
+      {...drop.handlers}
+    >
       <ThreadZenStyles />
       {children}
+      <ThreadDropOverlay shown={drop.over} />
     </div>
   )
 }

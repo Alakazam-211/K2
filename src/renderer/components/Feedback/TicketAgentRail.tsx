@@ -616,7 +616,12 @@ export function ThreadTab({
   }
 
   return (
-    <ThreadChatScope className="flex-1 flex flex-col min-h-0" testId="ticket-rail-thread">
+    <ThreadChatScope
+      className="flex-1 flex flex-col min-h-0"
+      testId="ticket-rail-thread"
+      // A file dropped anywhere on the rail's Thread attaches, as on the box.
+      onDropFiles={attach.on ? composeFiles.onDropFiles : undefined}
+    >
       {/* overflow-anchor: the render window holds the row on screen itself. */}
       <SelectableRegion className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 [overflow-anchor:none]">
         <div

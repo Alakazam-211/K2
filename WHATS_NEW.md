@@ -15,6 +15,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Passwords stay off the card.** For a password change, the approval lets the agent set that login's password once. The person then chooses their own password at their next sign-in. For a reset, K2 emails the person the App's one-time link.
 - **Your server's logins show up when you add someone to an App.** In Settings → Apps → (the App) → Add a person, the list now has a "This server's logins" group, so you can give a person who signs in to this server a role in the App. Their server sign-in doesn't change.
 - **Clearer next steps when permission cards are off.** If permission cards are off and an agent is refused, `k2 app grant`, `k2 study apps` and `k2 app --help` no longer tell it to use `k2 permission request`, which it can't run. They tell it what you can do instead: make the change in Settings → Apps, or turn on permission cards in Settings → Permission Cards.
+- **Drop a file anywhere on a Thread to attach it.** The messages, the empty Thread and the message box all take it, the same as a drop on the box (a ticket's Thread too); "Drop to attach" shows while the file is over it.
 
 ## 0.46.14 — Choose which Thread the main chat keeps
 

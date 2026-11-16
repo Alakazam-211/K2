@@ -81,12 +81,15 @@ exclude = [
     "third_party/sew-proto",
     "third_party/sew-client",
     "vendor/k2-mpc-base",
+    "vendor/k2-mpc-blend",
     "vendor/k2-mpc-board",
+    "vendor/k2-mpc-fab",
     "vendor/k2-mpc-markdown",
     "vendor/k2-mpc-ooxml",
     "vendor/k2-mpc-pptx",
     "vendor/k2-mpc-psd",
     "vendor/k2-mpc-text",
+    "vendor/k2-mpc-timeline",
     # deckcraft (git subtree, vendor/deckcraft/VENDORED.md): its pptx and render crates are
     # path dependencies of k2-deckrender, never members.
     "vendor/deckcraft",

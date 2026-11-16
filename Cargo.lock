@@ -4802,12 +4802,15 @@ dependencies = [
  "k2-deskd-proto",
  "k2-export",
  "k2-mpc-base",
+ "k2-mpc-blend",
  "k2-mpc-board",
  "k2-mpc-board-bridge",
+ "k2-mpc-fab",
  "k2-mpc-markdown",
  "k2-mpc-pptx",
  "k2-mpc-psd",
  "k2-mpc-text",
+ "k2-mpc-timeline",
  "k2-node",
  "k2-node-proto",
  "k2-ptyd",
@@ -4907,7 +4910,10 @@ name = "k2-export"
 version = "0.1.0"
 dependencies = [
  "k2-mpc-base",
+ "k2-mpc-blend",
+ "k2-mpc-fab",
  "k2-mpc-psd",
+ "k2-mpc-timeline",
  "libc",
  "serde_json",
 ]
@@ -4939,6 +4945,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "k2-mpc-blend"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "k2-mpc-base",
+ "ruzstd",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "k2-mpc-board"
 version = "0.1.15"
 dependencies = [
@@ -4952,6 +4968,13 @@ version = "0.1.15"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-board",
+]
+
+[[package]]
+name = "k2-mpc-fab"
+version = "0.1.0"
+dependencies = [
+ "k2-mpc-base",
 ]
 
 [[package]]
@@ -4993,6 +5016,16 @@ version = "0.2.27"
 dependencies = [
  "k2-mpc-base",
  "serde_json",
+]
+
+[[package]]
+name = "k2-mpc-timeline"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "k2-mpc-base",
+ "roxmltree",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -8512,6 +8545,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
+name = "ruzstd"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10930,6 +10972,12 @@ dependencies = [
  "thiserror 2.0.18",
  "utf-8",
 ]
+
+[[package]]
+name = "twox-hash"
+version = "2.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
 
 [[package]]
 name = "type-map"

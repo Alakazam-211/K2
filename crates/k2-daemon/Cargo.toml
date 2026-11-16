@@ -123,6 +123,16 @@ k2-mpc-psd = { path = "../../vendor/k2-mpc-psd/crates/psd" }
 # workspaces (without their fuzz/ and checkers/), as the other packs.
 k2-mpc-pptx = { path = "../../vendor/k2-mpc-pptx/crates/pptx" }
 k2-mpc-text = { path = "../../vendor/k2-mpc-text/crates/text" }
+# File-type packs (K2 Cores, kit v0.21.0), each behind its own core and off by
+# default. Their own workspaces (without their fuzz/), as the other packs.
+# The timeline pack: OTIO, FCPXML and PRPROJ read into a structure index, and
+# OTIO as a live keyed doc (`TimelineLive`).
+k2-mpc-timeline = { path = "../../vendor/k2-mpc-timeline/crates/timeline" }
+# The fab pack: photoplot and drill files read into a structure index; read-only.
+k2-mpc-fab = { path = "../../vendor/k2-mpc-fab/crates/fab" }
+# The BLEND pack: a structure index, a live keyed doc (`BlendLive`) and the
+# mesh read the 3D previews draw from. It brings ruzstd (MIT) for zstd saves.
+k2-mpc-blend = { path = "../../vendor/k2-mpc-blend/crates/blend" }
 # URL hosts for the egress gate; the same `url` 2 k2-vault and reqwest use.
 url = "2"
 
@@ -410,6 +420,8 @@ k2-core = { path = "../k2-core", features = ["test-util"] }
 k2-vault = { path = "../k2-vault", features = ["test-util"] }
 # The pptx pack's deck generator (`testgen`, test-only) for the Slides core's tests.
 k2-mpc-pptx = { path = "../../vendor/k2-mpc-pptx/crates/pptx", features = ["testgen"] }
+# The BLEND pack's scene generator (`testgen`, test-only) for the Blend core's tests.
+k2-mpc-blend = { path = "../../vendor/k2-mpc-blend/crates/blend", features = ["testgen"] }
 # The changes card's tests (workbench-v1 B7) build temp repos. Same git2
 # version/features k2-core uses: the one crate already in the lock tree.
 git2 = { version = "0.19", default-features = false }

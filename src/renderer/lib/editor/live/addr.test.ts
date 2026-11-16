@@ -1,8 +1,10 @@
 // The kit's address grammar for a text doc (K2 Cores: kit addr.rs is the one
 // grammar). Pinned here:
-//   - heading slugs are GitHub-style: lowercased, spaces to '-', punctuation
-//     dropped, unicode letters kept, inline code's backticks dropped, repeats
-//     in document order get -1, -2; an empty heading has no slug;
+//   - heading slugs follow the markdown pack (every case of its own is in
+//     heading-slug.pack.test.ts): lowercased, spaces to '-', punctuation
+//     dropped, unicode letters kept, the heading as written (a link's target
+//     counts), repeats in document order get -1, -2; a heading with nothing
+//     kept has the empty slug;
 //   - addresses: a heading is `@h:<slug>`, a line `L12` (from 1);
 //   - parsing takes both, and (for one release, to delete) the old
 //     `heading:<name>` and `line:<n>`;
@@ -23,9 +25,9 @@ describe('slugify (GitHub-style)', () => {
     expect(slugify('Café Über 2')).toBe('café-über-2')
     expect(slugify('日本語 の 見出し')).toBe('日本語-の-見出し')
   })
-  it('drops inline code’s backticks and emphasis marks, keeping the words', () => {
+  it('takes the heading as written: marks are punctuation, and a link’s target counts (the pack’s rule)', () => {
     expect(slugify('Use `k2 doc say` here')).toBe('use-k2-doc-say-here')
-    expect(slugify('**Bold** and [a link](http://x.y)')).toBe('bold-and-a-link')
+    expect(slugify('**Bold** and [a link](http://x.y)')).toBe('bold-and-a-linkhttpxy')
   })
   it('an empty heading has an empty slug', () => {
     expect(slugify('')).toBe('')
@@ -41,6 +43,7 @@ describe('headingSlugs', () => {
       { line: 3, text: 'Getting started', slug: 'getting-started' },
       { line: 8, text: 'Getting Started', slug: 'getting-started-1' },
       { line: 9, text: 'Getting started!', slug: 'getting-started-2' },
+      { line: 10, text: '', slug: '' },
     ])
   })
   it('a repeat never takes a slug already used, as github-slugger numbers them', () => {

@@ -5,7 +5,7 @@
 // The chip keeps the heading's own words; only the wire carries the address.
 // Pure.
 
-import { headingSlugs } from './heading-slug'
+import { headingSlugs, slugify } from './heading-slug'
 
 export type Addr = { kind: 'heading'; slug: string } | { kind: 'line'; line: number }
 
@@ -31,10 +31,7 @@ function parseOldAddr(address: string): Addr | null {
     } catch {
       // keep it as it came
     }
-    const slug = name
-      .toLowerCase()
-      .replace(/[^\p{L}\p{N}\p{M}\s_-]/gu, '')
-      .replace(/\s/g, '-')
+    const slug = slugify(name)
     return slug ? { kind: 'heading', slug } : null
   }
   const l = /^line:([1-9]\d*)$/.exec(address)

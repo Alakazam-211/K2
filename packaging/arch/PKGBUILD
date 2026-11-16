@@ -33,6 +33,9 @@ depends=(
     # Native voice calls: cpal's ALSA backend (PipeWire serves it through
     # pipewire-alsa). Build needs it too; alsa-lib carries the headers on Arch.
     'alsa-lib'
+    # namcap (errors): k2-gui links libdbus-1; the icons go in the hicolor tree.
+    'dbus'
+    'hicolor-icon-theme'
 )
 makedepends=(
     'cargo'

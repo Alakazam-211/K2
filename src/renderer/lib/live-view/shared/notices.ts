@@ -23,7 +23,19 @@ export type ConnectionState = 'reconnecting' | 'trying' | 'cant' | 'offline' | '
 
 export type LiveNotice =
   | { kind: 'outside_save'; save: OutsideSave }
-  | { kind: 'refused'; actor: string; verb: string; target: string; holder: string | null }
+  | {
+      kind: 'refused'
+      actor: string
+      verb: string
+      target: string
+      holder: string | null
+      /** Why, in words, when no one holds it ("animation drives it"). */
+      why?: string | null
+      /** Whom "Ask …" asks (the holder, else the one refused), when the view knows; null: no one to ask. */
+      ask?: { id: string; name: string } | null
+      /** What was refused, as the say row's address when you ask. */
+      address?: { label: string; address: string } | null
+    }
   | { kind: 'connection'; state: ConnectionState; changes?: number; following?: string | null; retried?: boolean }
 
 export type NoticeActionId = 'retry' | 'open-saved-file' | 'open-copy' | 'history' | 'save-again' | 'ask' | 'dismiss'
@@ -108,8 +120,10 @@ function connectionView(n: Extract<LiveNotice, { kind: 'connection' }>, ctx: Not
 export function noticeView(n: LiveNotice, ctx: NoticeContext): NoticeView {
   if (n.kind === 'outside_save') return saveView(n.save, ctx)
   if (n.kind === 'connection') return connectionView(n, ctx)
-  const title = n.holder ? `${n.actor} couldn’t ${n.verb} ${n.target}: ${n.holder} is holding it.` : `${n.actor} couldn’t ${n.verb} ${n.target}.`
-  return view('warn', 'status', title, '', n.holder ? [{ id: 'ask', label: `Ask ${n.holder}` }, DISMISS] : [DISMISS])
+  const why = n.holder ? `${n.holder} is holding it` : n.why
+  const title = `${n.actor} couldn’t ${n.verb} ${n.target}${why ? `: ${why}` : ''}.`
+  const ask = n.ask !== undefined ? (n.ask?.name ?? null) : n.holder
+  return view('warn', 'status', title, '', ask ? [{ id: 'ask', label: `Ask ${ask}` }, DISMISS] : [DISMISS])
 }
 
 /** The one notice to show: a connection first, else the newest of the rest

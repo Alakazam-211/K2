@@ -12,7 +12,7 @@ import { SampleShellSource, type SampleShellOptions } from '../shared/sample-she
 import type { LiveChange, LiveMessage, LiveShellSnapshot } from '../shared/source'
 import type { OutsideSave } from '../shared/notices'
 import { nameOf } from './fold'
-import { actorOf, framePhrase, VERB_WORD } from './wording'
+import { actorOf, framePhrase, refusalWhy, VERB_WORD } from './wording'
 import { agentId, type SimState } from './sim'
 import { simulate, type Scenario } from './turn'
 import { SCENARIOS } from './scenarios-more'
@@ -90,12 +90,27 @@ export function sceneSnapshot(S: SimState, sc: Scenario, step: number, control: 
     changes,
     messages,
     outsideSave: S.notice ? ({ ...stripI(S.notice), at_ms: S.at ?? 0 } as OutsideSave & { at_ms: number }) : null,
-    refusal: callout ? { actor: actorOf(callout.actor).name, verb: VERB_WORD[callout.verb] || 'change', target: nameOf(S.D, callout.unit), holder: callout.holder ? actorOf(callout.holder).name : null, at_ms: callout.at_ms ?? S.at ?? 0 } : null,
+    refusal: callout ? refusalOf(S, callout, live) : null,
     behind: S.pv.state === 'failed' && S.pv.shown != null,
     features: { viewAddress: true, timePosition: false, say: true },
     clock: S.at ?? undefined,
     hints: { sayFails: S.sendFail },
     scene: { S, scenario: sc.id, step, label: sc.steps[step].label ?? '', fileName: SCENE_SAMPLE_FILE, control },
+  }
+}
+
+/** A refusal as the shell says it: why in words when no one holds it; Ask the holder, else the one refused, while they're here. */
+function refusalOf(S: SimState, r: NonNullable<SimState['callout']>['r'], live: boolean): NonNullable<SceneSnapshot['refusal']> {
+  const to = actorOf(r.holder || r.actor)
+  return {
+    actor: actorOf(r.actor).name,
+    verb: VERB_WORD[r.verb] || 'change',
+    target: nameOf(S.D, r.unit),
+    holder: r.holder ? actorOf(r.holder).name : null,
+    at_ms: r.at_ms ?? S.at ?? 0,
+    why: r.holder ? null : refusalWhy(r.code),
+    ask: live && S.peers[to.id] ? { id: to.id, name: to.name } : null,
+    address: { label: nameOf(S.D, r.unit), address: r.unit },
   }
 }
 

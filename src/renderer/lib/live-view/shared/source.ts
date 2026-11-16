@@ -85,7 +85,19 @@ export interface LiveShellSnapshot {
   /** The latest outside save, with when it came. */
   outsideSave: (OutsideSave & { at_ms: number }) | null
   /** The latest refused verb, by name. */
-  refusal?: { actor: string; verb: string; target: string; holder: string | null; at_ms: number } | null
+  refusal?: {
+    actor: string
+    verb: string
+    target: string
+    holder: string | null
+    at_ms: number
+    /** Why, in words, when no one holds it. */
+    why?: string | null
+    /** Whom "Ask …" asks: the holder, else the one refused (null: no one here to ask). */
+    ask?: { id: string; name: string } | null
+    /** What was refused, sent as the address when you ask. */
+    address?: { label: string; address: string } | null
+  } | null
   /** The picture lags the live file ("Live · picture behind"). */
   behind?: boolean
   features: LiveFeatures

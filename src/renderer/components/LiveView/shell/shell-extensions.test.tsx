@@ -14,6 +14,7 @@ import { LiveTabFrame } from './LiveTabFrame'
 import type { ShellHeroProps } from './shell-config'
 import { useLiveShell } from './useLiveShell'
 import { SCENE_SHELL } from '../scene/scene-shell'
+import { SampleSceneSource } from '@/lib/live-view/scene/sample-source'
 
 afterEach(cleanup)
 
@@ -109,5 +110,56 @@ describe('useLiveShell', () => {
     expect(result.current.panelOpen).toBe(false)
     expect(result.current.tabState).toBe('loading')
     expect(result.current.notice).toBeNull()
+  })
+})
+
+describe('a refusal the view draws on its picture', () => {
+  const refused = (): SampleSceneSource => {
+    const src = new SampleSceneSource({ autoplay: false, scenario: 'refuse' })
+    src.player.goTo(1)
+    return src
+  }
+  function Hero(p: ShellHeroProps): React.JSX.Element {
+    const r = p.refusal
+    return (
+      <div data-testid="lv-hero">
+        {r ? (
+          <div data-testid="callout">
+            {r.view.title}
+            {r.view.actions
+              .filter((a) => a.id === 'ask')
+              .map((a) => (
+                <button key={a.id} type="button" onClick={() => r.onAction(a.id)}>
+                  {a.label}
+                </button>
+              ))}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+
+  it('isn’t in the notice bar; the view gets the shell’s words and actions', () => {
+    render(<LiveShellView source={refused()} config={{ ...SCENE_SHELL, refusalOnPicture: true, Hero }} width={1440} />)
+    expect(screen.queryByTestId('lv-notice')).toBeNull()
+    expect(screen.getByTestId('callout').textContent).toContain('Brook couldn’t rename Chair.002: Atlas is holding it.')
+  })
+
+  it('Ask opens the say row to the holder, about the object that was refused', () => {
+    render(<LiveShellView source={refused()} config={{ ...SCENE_SHELL, refusalOnPicture: true, Hero }} width={1440} />)
+    expect(screen.queryByTestId('lv-say')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Ask Atlas' }))
+    expect(screen.getByTestId('lv-say')).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: /Atlas/ })).toBeTruthy()
+    expect(screen.getByTestId('lv-say-chip').textContent).toContain('Chair.002')
+    // Opened to ask (not by following): it closes.
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(screen.queryByTestId('lv-say')).toBeNull()
+  })
+
+  it('a view that doesn’t draw it keeps it in the notice bar', () => {
+    render(<LiveShellView source={refused()} config={{ ...SCENE_SHELL, refusalOnPicture: false, Hero }} width={1440} />)
+    expect(screen.getByTestId('lv-notice').getAttribute('data-kind')).toBe('refused')
+    expect(screen.queryByTestId('callout')).toBeNull()
   })
 })

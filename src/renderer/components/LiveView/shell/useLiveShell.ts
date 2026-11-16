@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { FOLLOW_IDLE, followReducer, followView, type FollowAction, type FollowState } from '@/lib/live-view/shared/follow'
-import { pickNotice, type LiveNotice, type NoticeActionId } from '@/lib/live-view/shared/notices'
+import { noticeView, pickNotice, type LiveNotice, type NoticeActionId } from '@/lib/live-view/shared/notices'
 import { personById } from '@/lib/live-view/shared/people'
 import { SAY_IDLE, sayReducer } from '@/lib/live-view/shared/say'
 import { isDisconnected, liveTabState } from '@/lib/live-view/shared/state'
@@ -96,7 +96,10 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
   const connection = snap.connection ? { kind: 'connection' as const, state: snap.connection, changes: snap.caughtUp, retried: snap.retried, following: followingId ? personById(people, followingId)?.name : null } : null
   const notices: LiveNotice[] = []
   if (snap.outsideSave) notices.push({ kind: 'outside_save', save: snap.outsideSave })
-  if (snap.refusal) notices.push({ kind: 'refused', actor: snap.refusal.actor, verb: snap.refusal.verb, target: snap.refusal.target, holder: snap.refusal.holder })
+  const r = snap.refusal
+  const refused = r ? { kind: 'refused' as const, actor: r.actor, verb: r.verb, target: r.target, holder: r.holder, ...(r.why !== undefined ? { why: r.why } : {}), ...(r.ask !== undefined ? { ask: r.ask } : {}), ...(r.address !== undefined ? { address: r.address } : {}) } : null
+  // A view that draws the refusal on its picture gets it there; the bar doesn't say it too.
+  if (refused && !config.refusalOnPicture) notices.push(refused)
   const notice = pickNotice({ connection, notices, dismissed: (n) => dismissed.has(noticeKey(n)) })
   // Open the saved file: the tab's File | Live switch goes to File, which shows the file as saved.
   const entry = useLiveEntrySwitch()
@@ -104,8 +107,14 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
     if (id === 'retry') source.retry()
     else if (id === 'open-saved-file') entry?.onMode('file')
     else if (id === 'dismiss' && n) setDismissed((d) => new Set(d).add(noticeKey(n)))
+    else if (id === 'ask' && n?.kind === 'refused' && n.ask) {
+      // Ask: the say row, to whom the refusal names, about what was refused.
+      setMessageTo(n.ask.id)
+      if (n.address) setSayAt({ label: n.address.label, title: n.address.label, address: n.address.address })
+    }
     config.onNoticeAction?.(id, n)
   }
+  const heroRefusal = refused && config.refusalOnPicture && !isDisconnected(snap.connection) && !dismissed.has(noticeKey(refused)) ? { notice: refused, view: noticeView(refused, { fileName: '' }), onAction: (id: NoticeActionId) => onNotice(id, refused) } : null
 
   const offline = isDisconnected(snap.connection)
   const tabState = liveTabState({ tier: snap.tier, connection: snap.connection, outsideSave: snap.outsideSave, behind: snap.behind })
@@ -155,6 +164,7 @@ export function useLiveShell(source: LiveSource, config: ShellConfig, width?: nu
     sayAddress,
     notice,
     onNotice,
+    heroRefusal,
     offline,
     tabState,
     live,

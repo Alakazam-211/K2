@@ -62,6 +62,8 @@ export interface SceneStageProps {
   setSayAt?: ShellHeroProps['setSayAt']
   /** Who's here, for names. */
   people?: readonly LivePerson[]
+  /** A refusal, drawn by its object in the first pane (the shell's words and actions). */
+  refusal?: ShellHeroProps['refusal']
 }
 
 const onlyOneOf = (s: { split: string } | null): boolean => !s || s.split === 'one'
@@ -76,7 +78,7 @@ function showList(from: HTMLElement | null): void {
   requestAnimationFrame(() => tab.querySelector<HTMLElement>('[role="tree"]')?.focus())
 }
 
-export function SceneStage({ S, control, source, narrow, size, offscreen, onJump, follow, setSayAt, people = [] }: SceneStageProps): React.JSX.Element {
+export function SceneStage({ S, control, source, narrow, size, offscreen, onJump, follow, setSayAt, people = [], refusal = null }: SceneStageProps): React.JSX.Element {
   const store = localStore(S)
   const L = useSyncExternalStore(store.subscribe, store.get, store.get)
   const set = (patch: Partial<SceneLocal>): void => store.set((s) => ({ ...s, ...patch }))
@@ -198,6 +200,7 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
             {...shared}
             index={0}
             quiet={menu || L.info}
+            refusal={refusal}
             rect={onlyOne ? null : split.panes[0]}
             still={still}
             name={name}

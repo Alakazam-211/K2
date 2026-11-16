@@ -12,6 +12,7 @@ import type { PaneRect } from '@/lib/live-view/scene/follow-view'
 import { coverBox, letterbox, type Still } from '@/lib/live-view/scene/picture-source'
 import type { SimState } from '@/lib/live-view/scene/sim'
 import type { Doc } from '@/lib/live-view/scene/types'
+import type { HeroRefusal } from '../shell/shell-config'
 import { Compass } from './Compass'
 import { SceneOverlay } from './SceneOverlay'
 import { ScenePicture } from './ScenePicture'
@@ -41,6 +42,8 @@ export interface ScenePaneProps {
   quiet?: boolean
   /** The stage's chrome changed: labels are placed again. */
   chromeKey?: string
+  /** A refusal to draw by its object (the first pane only). */
+  refusal?: HeroRefusal | null
 }
 
 export function ScenePane(p: ScenePaneProps): React.JSX.Element {
@@ -53,7 +56,7 @@ export function ScenePane(p: ScenePaneProps): React.JSX.Element {
   return (
     <div ref={ref} className="lv-pane" data-pane={p.index} data-split={p.rect ? '' : undefined} data-view={p.still?.view} style={style}>
       <ScenePicture lb={lb} still={p.still} label={`Clay picture of the scene, ${p.name}`} dim={p.dim} ground={p.ground} motion={p.motion} />
-      {p.overlay && p.still?.camera && p.bounds ? <SceneOverlay S={p.S} pick={p.pick} still={p.still} lb={lb} bounds={p.bounds} motion={p.motion} stage={ref} pane={{ width: w, height: h }} onFrame={p.onFrame} quiet={p.quiet} chromeKey={p.chromeKey} /> : null}
+      {p.overlay && p.still?.camera && p.bounds ? <SceneOverlay S={p.S} pick={p.pick} still={p.still} lb={lb} bounds={p.bounds} motion={p.motion} stage={ref} pane={{ width: w, height: h }} onFrame={p.onFrame} quiet={p.quiet} chromeKey={p.chromeKey} refusal={p.refusal} /> : null}
       {p.top}
       {p.still?.camera ? (
         <div className="lv-cmpslot">

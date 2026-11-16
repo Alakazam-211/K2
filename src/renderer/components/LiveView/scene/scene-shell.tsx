@@ -35,6 +35,8 @@ export const SCENE_SHELL: ShellConfig = {
     return { label, title: p.place ?? 'the whole scene', address: p.viewAddress ?? SCENE_VIEW }
   },
   Hero: SceneHero,
+  // The refusal is a callout by the object on the picture (S6), not a bar.
+  refusalOnPicture: true,
   // The scene's own panel (Activity, People and holds, Outliner, Properties) for
   // snapshots that carry the scene; the shell's sections otherwise.
   Panel: { when: scenePanelFor, View: ScenePanel },

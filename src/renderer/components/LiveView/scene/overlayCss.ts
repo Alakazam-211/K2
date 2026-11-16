@@ -23,6 +23,16 @@ export const OVERLAY_CSS = `
 .lv-scene-hero .lv-dir[data-fading] { animation: lv-fadeout var(--motion-duration-slow) var(--motion-ease-standard) .15s forwards; }
 
 /* Labels: placed in the stage's pixels by labels.ts */
+.lv-scene-hero .lv-callout { position: absolute; display: flex; align-items: center; gap: 8px; width: max-content; max-width: min(46%, 440px); padding: 6px 6px 6px 12px; font-size: var(--type-md); line-height: 1.35; color: var(--color-text-primary); background: var(--lv-plate); border: 1px solid var(--lv-c); box-shadow: var(--shadow-2); pointer-events: auto; cursor: help; z-index: 1; }
+[data-style="glass"] .lv-scene-hero .lv-callout { border-radius: var(--radius-box); }
+.lv-scene-hero .lv-callout b { font-weight: 650; }
+.lv-scene-hero .lv-callout .lv-lk { display: grid; flex: none; color: var(--lv-c); }
+.lv-scene-hero .lv-callout .lv-ct { min-width: 0; }
+.lv-scene-hero .lv-callout .lv-cask { flex: none; cursor: pointer; }
+.lv-scene-hero .lv-cline { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.lv-scene-hero .lv-cline path { fill: none; stroke: var(--lv-c); stroke-width: 1.4; }
+.lv-scene-hero .lv-cpin { position: absolute; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; background: var(--lv-c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--lv-c) 30%, transparent); }
+[data-style="glass"] .lv-scene-hero .lv-cpin { border-radius: 50%; }
 .lv-scene-hero .lv-tags { position: absolute; inset: 0; z-index: 15; pointer-events: none; }
 .lv-scene-hero .lv-tag, .lv-scene-hero .lv-offchip { position: absolute; display: inline-flex; align-items: center; gap: 5px; max-width: 46%; height: 24px; padding: 0 9px 0 7px; font-size: var(--type-md); font-weight: 500; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--color-text-primary); border-color: var(--lv-c); }
 .lv-scene-hero .lv-tag b { font-weight: 650; }

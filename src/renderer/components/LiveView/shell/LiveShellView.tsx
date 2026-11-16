@@ -56,6 +56,7 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
         onDraft={(text) => s.dispatchSay({ type: 'draft', text })}
         onSend={() => s.send(false)}
         onSendAgain={() => s.send(true)}
+        onClose={s.messageTo && !followingId ? () => s.setMessageTo(null) : undefined}
       />
     ) : null
   // A view that places the say row and the panel itself gets them as nodes; the frame then holds neither.
@@ -113,6 +114,7 @@ export function LiveShellView({ source, config, width, fileName }: { source: Liv
               setSayAt={s.setSayAt}
               onAction={(id) => s.onNotice(id, null)}
               fileName={name}
+              refusal={s.heroRefusal}
               {...(placed ? { say, panel: placedPanel } : {})}
             />
           }

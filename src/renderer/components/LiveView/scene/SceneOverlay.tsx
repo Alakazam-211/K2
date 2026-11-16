@@ -6,16 +6,20 @@
 // drawing and placed by lib/live-view/scene/labels.ts so none touches
 // another or the stage's chrome. A new change slides from its old place
 // (380 ms, easing out) before its tag and arrows show; under reduced
-// motion it is drawn at its end at once, and the tag doesn't fade. Every
+// motion it is drawn at its end at once, and the tag doesn't fade. A
+// refusal is a callout by its object (RefusalCallout), placed first. Every
 // colour is a presence token (`--lv-c`).
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { cx } from '@/components/ui'
+import { calloutOf } from '@/lib/live-view/scene/callout'
 import { placeLabels, type LabelReq, type Placed, type Rect } from '@/lib/live-view/scene/labels'
 import { liveChange, overlayDraw, slotVar, type BoundsOf, type ChipSpec, type TagSpec } from '@/lib/live-view/scene/overlay'
 import type { Letterbox, Still } from '@/lib/live-view/scene/picture-source'
 import type { SimState } from '@/lib/live-view/scene/sim'
 import { EdgeArrow } from '../shell/glyphs'
+import type { HeroRefusal } from '../shell/shell-config'
+import { RefusalCallout } from './RefusalCallout'
 import { LockGlyph } from './scene-glyphs'
 
 /** The slide: the mock's 380 ms, easing out. */
@@ -80,9 +84,11 @@ export interface SceneOverlayProps {
   quiet?: boolean
   /** Changes when the stage's own chrome does (the finished line, the quiet line, the turntable strip): place the labels again. */
   chromeKey?: string
+  /** A refusal to draw by its object (the shell's words and actions). */
+  refusal?: HeroRefusal | null
 }
 
-export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, onFrame, quiet = false, chromeKey = '' }: SceneOverlayProps): React.JSX.Element | null {
+export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, onFrame, quiet = false, chromeKey = '', refusal = null }: SceneOverlayProps): React.JSX.Element | null {
   const lc = liveChange(S)
   const animKey = lc && lc.phase === 'live' && motion ? `${lc.f.rev}:${S.i}` : null
   const [anim, setAnim] = useState<{ key: string | null; t: number }>({ key: null, t: 1 })
@@ -102,6 +108,8 @@ export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, 
 
   const cam = still.camera
   const draw = useMemo(() => (cam ? overlayDraw(S, { pick, still: { camera: cam, width: still.width, height: still.height }, bounds, t }) : null), [S, pick, cam, still.width, still.height, bounds, t])
+  const call = useMemo(() => (cam && refusal ? calloutOf(S, { still: { camera: cam, width: still.width, height: still.height }, bounds }) : null), [S, cam, still.width, still.height, bounds, refusal])
+  const callout = call && refusal && !quiet && t >= 1 ? { spec: call, refusal } : null
 
   // Still pixels to the stage's.
   const k = lb.width / still.width
@@ -111,7 +119,8 @@ export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, 
   const labels: { id: string; tag?: TagSpec; chip?: ChipSpec; text: string }[] = draw && !quiet
     ? [...draw.chips.map((c) => ({ id: `chip:${c.a}`, chip: c, text: c.name })), ...draw.tags.map((g) => ({ id: g.id, tag: g, text: `${g.who} ${g.text} ${g.sub ?? ''}` }))]
     : []
-  const sig = JSON.stringify(labels.map((l) => [l.id, l.text, l.tag?.anchor, l.chip?.at])) + `|${lb.left},${lb.top},${lb.width},${lb.height}|${pane.width},${pane.height}|${chromeKey}`
+  const callText = callout ? `${callout.refusal.view.title} ${callout.refusal.view.actions.map((a) => a.label).join(' ')}` : ''
+  const sig = JSON.stringify([callout?.spec.anchor, callText, ...labels.map((l) => [l.id, l.text, l.tag?.anchor, l.chip?.at])]) + `|${lb.left},${lb.top},${lb.width},${lb.height}|${pane.width},${pane.height}|${chromeKey}`
   // Once more a frame later: chrome that came in with this change (the finished line, a toast) has its size by then.
   const [late, setLate] = useState(0)
   useEffect(() => {
@@ -138,6 +147,10 @@ export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, 
       const g = l.tag!
       return { id: l.id, kind: g.place, anchor: toStage(g.anchor), w, h, prio: PRIO[g.kind] }
     })
+    if (callout) {
+      const { w, h } = guess(els.current.get('callout'), callText)
+      reqs.push({ id: 'callout', kind: 'callout', anchor: toStage(callout.spec.anchor), w, h, prio: -1 })
+    }
     // The picture as seen: a still that covers its pane is cropped at the pane's edges.
     const frame = { x0: Math.max(0, lb.left), y0: Math.max(0, lb.top), x1: Math.min(pane.width, lb.left + lb.width), y1: Math.min(pane.height, lb.top + lb.height) }
     const placed = placeLabels(reqs, { frame, obstacles })
@@ -203,6 +216,7 @@ export function SceneOverlay({ S, pick, still, lb, bounds, motion, stage, pane, 
             </button>
           )
         })}
+        {callout ? <RefusalCallout spec={callout.spec} refusal={callout.refusal} anchor={toStage(callout.spec.anchor)} pos={pos.callout} pane={pane} boxRef={ref('callout')} /> : null}
         {quiet ? null : draw.tags.map((g) => (
           <div
             key={g.id}

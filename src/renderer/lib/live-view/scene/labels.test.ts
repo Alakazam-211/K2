@@ -20,6 +20,14 @@ function apart(placed: { x: number; y: number; w: number; h: number }[], obstacl
 }
 
 describe('placing labels', () => {
+  it('a callout hangs centred under its box, 28 px down (room for its line), else above it', () => {
+    const c = (anchor: Rect): LabelReq => ({ id: 'c', kind: 'callout', anchor, w: 300, h: 40, prio: -1 })
+    const [below] = placeLabels([c(R(300, 100, 400, 200))], { frame: FRAME })
+    expect(below).toMatchObject({ x: 200, y: 228, touching: false })
+    const [above] = placeLabels([c(R(300, 330, 400, 420))], { frame: FRAME })
+    expect(above).toMatchObject({ x: 200, y: 330 - 28 - 40, touching: false })
+  })
+
   it('puts a tag just above its box’s top-left, 6 px clear', () => {
     const [p] = placeLabels([tag('t', R(200, 200, 320, 300))], { frame: FRAME })
     expect(p).toMatchObject({ id: 't', x: 200, y: 200 - LABEL_GAP - 22, touching: false })

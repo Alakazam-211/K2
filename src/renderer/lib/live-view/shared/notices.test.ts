@@ -91,6 +91,17 @@ describe('a refusal', () => {
     expect(v.title).toBe('Atlas couldn’t trim Interview B: Brook is holding it.')
     expect(v.actions.map((a) => a.label)).toEqual(['Ask Brook', 'Dismiss'])
   })
+
+  it('with no holder: why, in words, and asks whom the view says to ask', () => {
+    const v = noticeView({ kind: 'refused', actor: 'Atlas', verb: 'move', target: 'Clock hand', holder: null, why: 'animation drives it', ask: { id: 'atlas', name: 'Atlas' } }, ctx)
+    expect(v.title).toBe('Atlas couldn’t move Clock hand: animation drives it.')
+    expect(v.actions.map((a) => [a.id, a.label])).toEqual([['ask', 'Ask Atlas'], ['dismiss', 'Dismiss']])
+  })
+
+  it('no one to ask: only Dismiss', () => {
+    const v = noticeView({ kind: 'refused', actor: 'Atlas', verb: 'move', target: 'Clock hand', holder: null, why: 'animation drives it', ask: null }, ctx)
+    expect(v.actions.map((a) => a.id)).toEqual(['dismiss'])
+  })
 })
 
 describe('every notice', () => {

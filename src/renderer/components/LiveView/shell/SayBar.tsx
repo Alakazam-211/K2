@@ -7,7 +7,7 @@
 
 import { Button, cx, Input } from '@/components/ui'
 import { sayView, type SayState } from '@/lib/live-view/shared/say'
-import { AtGlyph, SendGlyph, WarnGlyph } from './glyphs'
+import { AtGlyph, CloseGlyph, SendGlyph, WarnGlyph } from './glyphs'
 
 export function SayBar({
   toName,
@@ -18,6 +18,7 @@ export function SayBar({
   onDraft,
   onSend,
   onSendAgain,
+  onClose,
 }: {
   toName: string
   /** What the message points at: the chip's words and its tooltip. */
@@ -28,6 +29,8 @@ export function SayBar({
   onDraft: (text: string) => void
   onSend: () => void
   onSendAgain: () => void
+  /** The row was opened to ask someone (not by following): it can close. */
+  onClose?: () => void
 }): React.JSX.Element {
   const v = sayView(state, { toName, offline, paused })
   const label = `Say something to ${toName}${address ? ` about ${address.label}` : ''}`
@@ -93,6 +96,11 @@ export function SayBar({
           <SendGlyph size={14} />
           Send
         </Button>
+        {onClose ? (
+          <Button size="md" aria-label="Close" title="Close" onClick={onClose} className="inline-flex flex-none items-center text-[var(--color-text-primary)]">
+            <CloseGlyph size={14} />
+          </Button>
+        ) : null}
       </div>
     </div>
   )

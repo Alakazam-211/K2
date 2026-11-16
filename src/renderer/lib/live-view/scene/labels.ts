@@ -12,6 +12,8 @@
 //   point, else above it, else slides.
 // - An edge chip (something off the picture) sits on its frame's edge and
 //   slides along it.
+// - A callout (a refusal) hangs centred under its box, far enough down for
+//   its line, else above it, else slides; it goes first.
 // Every candidate is clamped inside its frame (less `pad`). When nothing is
 // free, the least-overlapping spot is used and the label says `touching`.
 
@@ -22,7 +24,7 @@ export interface Rect {
   y1: number
 }
 
-export type LabelKind = 'tag' | 'point' | 'edge'
+export type LabelKind = 'tag' | 'point' | 'edge' | 'callout'
 export type Side = 'left' | 'right' | 'top' | 'bottom'
 
 export interface LabelReq {
@@ -54,6 +56,8 @@ export interface Placed {
 export const LABEL_GAP = 6
 const PAD = 4
 const SWEEP = 40
+/** How far a callout sits from its box: room for the line to it. */
+export const CALLOUT_DROP = 28
 
 export const grow = (r: Rect, g: number): Rect => ({ x0: r.x0 - g, y0: r.y0 - g, x1: r.x1 + g, y1: r.y1 + g })
 /** Overlapping (edges that only meet don't). */
@@ -76,6 +80,7 @@ function candidates(r: LabelReq, inner: Rect, gap: number): { x: number; y: numb
   const { anchor: a, w, h } = r
   const base: { x: number; y: number }[] = []
   if (r.kind === 'tag') base.push({ x: a.x0, y: a.y0 - gap - h }, { x: a.x1 - w, y: a.y0 - gap - h }, { x: a.x0, y: a.y1 + gap })
+  else if (r.kind === 'callout') base.push({ x: (a.x0 + a.x1) / 2 - w / 2, y: a.y1 + CALLOUT_DROP }, { x: (a.x0 + a.x1) / 2 - w / 2, y: a.y0 - CALLOUT_DROP - h })
   else if (r.kind === 'point') base.push({ x: a.x0 - w / 2, y: a.y0 + gap }, { x: a.x0 - w / 2, y: a.y0 - gap - h })
   else {
     const s = r.side ?? 'left'

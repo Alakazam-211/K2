@@ -6,7 +6,7 @@
 // timeline/timeline-shell.ts); the editors will too.
 
 import type { FollowAction, FollowState } from '@/lib/live-view/shared/follow'
-import type { LiveNotice, NoticeActionId } from '@/lib/live-view/shared/notices'
+import type { LiveNotice, NoticeActionId, NoticeView } from '@/lib/live-view/shared/notices'
 import type { SayTime } from '@/lib/live-view/shared/say-time'
 import type { LivePerson } from '@/lib/live-view/shared/people'
 import type { LiveShellSnapshot } from '@/lib/live-view/shared/source'
@@ -16,6 +16,13 @@ import type { Edge } from './EdgeStack'
 export interface PanelEntry {
   id: 'watching' | 'changes' | 'messages'
   title: string
+}
+
+/** A refusal for the view to draw: the notice, its words (lib/live-view/shared/notices.ts), and its actions. */
+export interface HeroRefusal {
+  notice: Extract<LiveNotice, { kind: 'refused' }>
+  view: NoticeView
+  onAction: (id: NoticeActionId) => void
 }
 
 export interface ShellHeroProps {
@@ -41,6 +48,8 @@ export interface ShellHeroProps {
   onAction?: (id: NoticeActionId) => void
   /** The file's name as the header shows it (a card says "Opening rough-cut"). */
   fileName?: string
+  /** A refusal the view draws on its picture (`refusalOnPicture`): the shell's words and actions ("Ask Atlas"). */
+  refusal?: HeroRefusal | null
 }
 
 /** What a message points at: the chip's words and tooltip, the address it carries, and a time (the playhead's time position) where the view has one. */
@@ -85,6 +94,8 @@ export interface ShellConfig {
   placesSayAndPanel?: boolean
   /** The view's own side panel, for the snapshots it knows (`when`); the shell's sections otherwise. */
   Panel?: { when: (snap: LiveShellSnapshot) => boolean; View: (p: ShellPanelProps) => React.JSX.Element | null }
+  /** The view draws a refusal on its picture (the scene's callout by the object), so the notice bar doesn't. */
+  refusalOnPicture?: boolean
   /** Open the copy, History, Save it again, Ask: wired by the view (Open the saved file the shell does itself: it switches the tab to File). `n` is null for an action from the view's own content (a card in the picture). */
   onNoticeAction?: (id: NoticeActionId, n: LiveNotice | null) => void
 }

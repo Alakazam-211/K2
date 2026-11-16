@@ -18,6 +18,8 @@ import { sampleBounds } from '@/lib/live-view/scene/stand-in/shapes'
 import { SHAPE_ASPECT, stillHeight, type PictureSource } from '@/lib/live-view/scene/picture-source'
 import type { SimState } from '@/lib/live-view/scene/sim'
 import { SceneStage } from './SceneStage'
+import { noticeView } from '@/lib/live-view/shared/notices'
+import type { HeroRefusal } from '../shell/shell-config'
 
 const sc = (id: string) => SCENARIOS.find((s) => s.id === id)!
 const stateAt = (id: string, label: string | number): SimState => {
@@ -42,10 +44,10 @@ function cameraSource(S: () => SimState): PictureSource {
 
 const SIZE = { width: 1100, height: 700 }
 let current: SimState
-function mount(id: string, label: string | number) {
+function mount(id: string, label: string | number, extra: { refusal?: HeroRefusal | null } = {}) {
   current = stateAt(id, label)
   const source = cameraSource(() => current)
-  const el = (S: SimState) => <SceneStage S={S} control={{ retryPicture: () => undefined }} source={source} narrow={false} size={SIZE} offscreen={[]} onJump={() => undefined} />
+  const el = (S: SimState) => <SceneStage S={S} control={{ retryPicture: () => undefined }} source={source} narrow={false} size={SIZE} offscreen={[]} onJump={() => undefined} {...extra} />
   const r = render(el(current))
   return {
     ...r,
@@ -192,5 +194,56 @@ describe('labels never touch', () => {
       expect(t.style.visibility, t.textContent ?? '').not.toBe('hidden')
       expect(t.hasAttribute('data-touching'), t.textContent ?? '').toBe(false)
     }
+  })
+})
+
+describe('a refusal on the picture', () => {
+  const refusal = (onAction = vi.fn()): HeroRefusal => {
+    const notice = { kind: 'refused' as const, actor: 'Brook', verb: 'rename', target: 'Chair.002', holder: 'Atlas', ask: { id: 'atlas', name: 'Atlas' } }
+    return { notice, view: noticeView(notice, { fileName: '' }), onAction }
+  }
+
+  it('a callout by the chair: the shell’s words, the holder’s colour, a pin and a line, the code only in its tooltip', async () => {
+    mount('refuse', 'refused', { refusal: refusal() })
+    await settle()
+    const c = screen.getByTestId('lv-callout')
+    expect(c.getAttribute('role')).toBe('status')
+    expect(c.getAttribute('data-a')).toBe('@obj:12')
+    expect(c.textContent).toContain('Brook couldn’t rename Chair.002: Atlas is holding it.')
+    expect(c.querySelector('b')?.textContent).toBe('Brook')
+    expect(c.getAttribute('title')).toBe('Code MPC-E301')
+    expect(c.textContent).not.toContain('MPC-E301')
+    expect(c.style.getPropertyValue('--lv-c')).toMatch(/^var\(--color-presence-[1-4]\)$/)
+    expect(screen.getByTestId('lv-callout-pin')).toBeTruthy()
+    expect(document.querySelector('[data-testid="lv-callout-line"] path')).toBeTruthy()
+  })
+
+  it('Ask Atlas is the shell’s action, a focusable chip', async () => {
+    const onAction = vi.fn()
+    mount('refuse', 'refused', { refusal: refusal(onAction) })
+    await settle()
+    const ask = screen.getByRole('button', { name: 'Ask Atlas' })
+    expect(ask.hasAttribute('data-k2-focus')).toBe(true)
+    fireEvent.click(ask)
+    expect(onAction).toHaveBeenCalledWith('ask')
+  })
+
+  it('no one to ask: the words alone, in the warning colour', async () => {
+    const notice = { kind: 'refused' as const, actor: 'Atlas', verb: 'move', target: 'Clock hand', holder: null, why: 'animation drives it', ask: null }
+    mount('limits', 'driven', { refusal: { notice, view: noticeView(notice, { fileName: '' }), onAction: vi.fn() } })
+    await settle()
+    const c = screen.getByTestId('lv-callout')
+    expect(c.textContent).toContain('Atlas couldn’t move Clock hand: animation drives it.')
+    expect(c.querySelector('button')).toBeNull()
+    expect(c.hasAttribute('data-warn')).toBe(true)
+  })
+
+  it('goes when the hold is released', async () => {
+    const m = mount('refuse', 'refused', { refusal: refusal() })
+    await settle()
+    expect(screen.queryByTestId('lv-callout')).toBeTruthy()
+    m.step('released')
+    await settle()
+    expect(screen.queryByTestId('lv-callout')).toBeNull()
   })
 })

@@ -26,10 +26,11 @@
 #   mac-tests.sh core      one stage
 #   mac-tests.sh daemon
 #
-# Each stage prints its counts and names every failed test. The script
-# exits non-zero when any test failed, when a step before the tests
-# failed, when a run printed no summary, or when counts don't add up. The
-# whole logs stay in ./mac-tests-core.log and ./mac-tests-daemon.log.
+# Each stage prints its counts, names every failed test and prints the
+# panics. The script exits non-zero when any test failed, when a step
+# before the tests failed, when a run printed no summary, or when counts
+# don't add up. The whole logs are ./mac-tests-core.log and
+# ./mac-tests-daemon.log in the job's checkout, which goes with the job.
 #
 # It refuses to run outside a compute job: cargo never runs on a person's
 # Mac (the full k2-core tests ask for Touch ID and the keychain there).
@@ -92,6 +93,12 @@ one_run() {
         named="$(failed_lines "$log")"
         if [ -n "$named" ]; then
             echo "$named" >&2
+            # Why: each panic with the lines after it. The job's checkout
+            # (and the whole log in it) is gone once the job ends.
+            if grep -q 'panicked at' "$log"; then
+                echo "mac-tests: $what: the panics (each with up to 12 lines after it):" >&2
+                grep -A12 'panicked at' "$log" | head -200 >&2 || true
+            fi
         else
             # Never a failure with nothing to go on.
             echo "(nextest named no test) $(echo "$summary" | sed -E 's/^ +//'). The end of this call's log:" >&2

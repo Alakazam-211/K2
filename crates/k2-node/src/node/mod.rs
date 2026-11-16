@@ -131,6 +131,11 @@ pub struct NodeOptions {
     /// (`Ready.cpu_weight`, prd-compute-blacksmith-class-v1 R2)? `None` =
     /// ask it with `exec_stdin` (tests set it).
     pub exec_cpu_weight: Option<bool>,
+    /// Does the executor run `network_none` units with working loopback
+    /// and make a job's own namespace with dummy interfaces
+    /// (`Ready.netns`, 0.46.14)? `None` = ask it with `exec_stdin` (tests
+    /// set it).
+    pub exec_netns: Option<bool>,
     /// How long a job waits for its secret env (SE18; tests shorten it).
     pub secret_wait: Duration,
     /// The `k2-node` binary that runs `job-hold` (§5.2): set, jobs not
@@ -211,6 +216,7 @@ impl NodeOptions {
             exec_gens_wall: None,
             cache_gens: None,
             exec_cpu_weight: None,
+            exec_netns: None,
             secret_wait: Duration::from_secs(k2_node_proto::secret::NEED_TIMEOUT_SECS),
             job_holder: default_job_holder(),
             tenant_adopt_wait: adopt::TENANT_ADOPT_WAIT,
@@ -246,6 +252,9 @@ pub struct ExecCaps {
     pub gens_wall: bool,
     /// Gives a job unit its `CPUWeight` (R2).
     pub cpu_weight: bool,
+    /// Runs `network_none` units with working loopback and makes a job's
+    /// own namespace with dummy interfaces (0.46.14).
+    pub netns: bool,
 }
 
 /// What the executor's `Ready` says it can do. An older one says none of
@@ -257,7 +266,7 @@ pub async fn probe_exec_caps(admin_socket: &Path) -> ExecCaps {
     })
     .await;
     match r {
-        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { stdin, job_uid, gpus, gpu_usage, gens_wall, cpu_weight, .. })) => ExecCaps { stdin, job_uid, gpus, gpu_usage, gens_wall, cpu_weight },
+        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { stdin, job_uid, gpus, gpu_usage, gens_wall, cpu_weight, netns, .. })) => ExecCaps { stdin, job_uid, gpus, gpu_usage, gens_wall, cpu_weight, netns },
         _ => ExecCaps::default(),
     }
 }
@@ -492,6 +501,10 @@ pub struct Node {
     /// R2: the executor gives job units a `CPUWeight` (`Ready.cpu_weight`;
     /// asked with `exec_stdin`). Without it no unit bursts.
     pub exec_cpu_weight: std::sync::atomic::AtomicBool,
+    /// 0.46.14: the executor's `Ready.netns` (asked with `exec_stdin`).
+    /// Without it a Linux node offers neither `job-network` nor
+    /// `netns-dummy`.
+    pub exec_netns: std::sync::atomic::AtomicBool,
     /// Job caches running jobs hold (module `job_cache`).
     job_caches_busy: Mutex<job_cache::Busy>,
     /// Which running attempt holds which job cache, by (slot, job, gen):
@@ -647,6 +660,7 @@ impl Node {
         let gens_exempt = dev_test_exemption(opts.dev, &layout.config) && matches!(wall, Wall::None { .. });
         let gens = gens_run::open_gens(opts.cache_gens.as_ref().unwrap_or(&Default::default()), &wall, exec_gens_wall, &layout.home, gens_exempt);
         let exec_cpu_weight = opts.exec_cpu_weight.unwrap_or(probed.cpu_weight);
+        let exec_netns = opts.exec_netns.unwrap_or(probed.netns);
         let facts = opts.facts.clone().unwrap_or_else(|| machine_facts(&layout));
         let policy = Policy::resolve(&config::PolicyFile::default(), &facts)?;
         let cgroups = if opts.use_cgroups { Cgroups::detect() } else { None };
@@ -691,6 +705,7 @@ impl Node {
             exec_gpu_usage: std::sync::atomic::AtomicBool::new(exec_gpu_usage),
             exec_gens_wall: std::sync::atomic::AtomicBool::new(exec_gens_wall),
             exec_cpu_weight: std::sync::atomic::AtomicBool::new(exec_cpu_weight),
+            exec_netns: std::sync::atomic::AtomicBool::new(exec_netns),
             job_caches_busy: Mutex::new(job_cache::Busy::default()),
             job_cache_holds: Mutex::new(HashMap::new()),
             git_helpers: Mutex::new(HashMap::new()),
@@ -770,7 +785,7 @@ impl Node {
         if self.opts.exec_stdin.is_some() || !matches!(self.wall, Wall::JobUser { .. }) {
             return false;
         }
-        let ExecCaps { stdin, job_uid, gpus, gpu_usage, gens_wall, cpu_weight } = probe_exec_caps(&self.opts.admin_socket).await;
+        let ExecCaps { stdin, job_uid, gpus, gpu_usage, gens_wall, cpu_weight, netns } = probe_exec_caps(&self.opts.admin_socket).await;
         let mut changed = self.exec_stdin.swap(stdin, std::sync::atomic::Ordering::SeqCst) != stdin;
         if self.opts.exec_job_uid.is_none() {
             changed |= self.exec_job_uid.swap(job_uid, std::sync::atomic::Ordering::SeqCst) != job_uid;
@@ -793,7 +808,56 @@ impl Node {
         if self.opts.exec_cpu_weight.is_none() {
             changed |= self.exec_cpu_weight.swap(cpu_weight, std::sync::atomic::Ordering::SeqCst) != cpu_weight;
         }
+        if self.opts.exec_netns.is_none() {
+            changed |= self.exec_netns.swap(netns, std::sync::atomic::Ordering::SeqCst) != netns;
+        }
         changed
+    }
+
+    /// 0.46.14: can this node run a job at `--network none` whatever its
+    /// own setting? macOS: the Seatbelt wall (its `none` profile). Linux:
+    /// the job wall with an executor that says `netns` (a `network_none`
+    /// unit whose loopback works). No wall: never.
+    pub fn offers_job_network(&self) -> bool {
+        match &self.wall {
+            Wall::Seatbelt => true,
+            Wall::JobUser { .. } => self.exec_netns.load(std::sync::atomic::Ordering::SeqCst),
+            Wall::None { .. } => false,
+        }
+    }
+
+    /// 0.46.14: can this node make a job's own namespace with dummy
+    /// interfaces (`--netns-dummy`)? Linux job wall and an executor whose
+    /// namespace self-test passed; never a Mac.
+    pub fn offers_netns_dummy(&self) -> bool {
+        cfg!(target_os = "linux") && matches!(self.wall, Wall::JobUser { .. }) && self.exec_netns.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 0.46.14: why this node won't run `plan`'s own network ask for `t`
+    /// now, or `None` (no ask, or it can): `(code, detail)`. Checked at
+    /// assign and again as the job starts; never run with more network.
+    pub fn job_network_refusal(&self, t: &Tenant, plan: &k2_node_proto::frames::Plan) -> Option<(&'static str, String)> {
+        use k2_node_proto::jobnet::{self, codes};
+        let n = plan.network.as_ref()?;
+        if let Err(e) = jobnet::check(n) {
+            return Some((codes::JOB_NETWORK_INVALID, format!("--network: {e}")));
+        }
+        if !t.speaks_gens() {
+            return Some((codes::JOB_NETWORK_UNAVAILABLE, "this server never saw job-network offered here (protocol 10)".into()));
+        }
+        if !self.offers_job_network() {
+            return Some((
+                codes::JOB_NETWORK_UNAVAILABLE,
+                format!("this node can't run a job at --network none now (job wall: {}; an older root executor?); it never runs it with more network", self.wall.label()),
+            ));
+        }
+        if !n.dummies.is_empty() && !self.offers_netns_dummy() {
+            return Some((
+                codes::JOB_NETWORK_UNAVAILABLE,
+                "--netns-dummy: this node can't make a job's own network namespace (Linux job wall with a 0.46.14 root executor only; Macs can't)".into(),
+            ));
+        }
+        None
     }
 
     /// Why this node won't take a secret-env job of `t` now (SE16, SE17),
@@ -1643,7 +1707,7 @@ mod wall_tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None, network: None,
             with: Vec::new(),
         };
         let fence = k2_node_proto::frames::Fence { job_id: job.into(), attempt: 1, generation: 1, plan_digest: plan.digest().unwrap() };

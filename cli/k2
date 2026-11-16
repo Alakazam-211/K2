@@ -28832,6 +28832,20 @@ Agents:
                                 reserved, watched only when given. Needs k2-node
                                 0.46.11 on the node (else gpu_mem_needs_update,
                                 exit 3)
+                 [--network none]  this job gets no network, whatever its
+                                node's setting: Linux, a network namespace of its
+                                own with loopback only; macOS, no remote IP and no
+                                DNS (loopback open). A job can only narrow its
+                                network (on, no-lan: exit 2). Needs k2-node
+                                0.46.14 on the node (else job_network_needs_update,
+                                exit 3). k2 study compute: NETWORK
+                 [--netns-dummy NAME=ADDR/PREFIX]  (repeatable, at most 4;
+                                Linux nodes) a dummy interface in the job's own
+                                namespace, up before it starts (sewlane0=
+                                10.254.254.1/32: a browser gets an ICE host
+                                candidate that isn't loopback). Private,
+                                link-local or test ranges only (exit 2 else);
+                                implies --network none
                  [--receipt-v2]  the node signs receipt v2 (how and where the job
                                 ran, and its signed self-statement; k2 compute receipt
                                 shows both); only nodes on protocol 9 take it
@@ -29776,6 +29790,10 @@ elif verb == "get":
     if j.get("secrets"):
         # Secret-env: the env names it gets from the vault, never values.
         print("  secrets (env names): %s" % ", ".join(j["secrets"]))
+    nw = j.get("network")
+    if isinstance(nw, dict):
+        # 0.46.14: the job asked for --network none (and dummy interfaces).
+        print("  network: %s (asked by the job: loopback%s only, whatever the node setting)" % (nw.get("line"), " and its dummy interfaces" if nw.get("dummies") else ""))
     pl = j.get("placement") or ctl.get("placement") or {}
     if pl.get("mode") == "auto":
         # Auto-placement (0.46.6): where K2 put it and why (a move says so).
@@ -30200,7 +30218,8 @@ cmd_compute_run() {
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
     local preset="" now=0 cache_required=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
-    local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=()
+    local network=""
+    local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=() netns_dummies=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; break ;;
@@ -30313,6 +30332,21 @@ sys.exit(0 if ok else 1)'; then
                 esac ;;
             # --gpu-mem SIZE (GPU jobs S6): the GPU job's GPU memory budget.
             --gpu-mem) gpu_mem="$(_compute_bytes "${2:-}")" || exit 2; shift 2 ;;
+            # --network none (0.46.14): this job gets no network (its own
+            # namespace with loopback only on Linux), whatever its node's
+            # setting. A job can only narrow its network.
+            --network)
+                case "${2:-}" in
+                    none) network="none" ;;
+                    on|no-lan|full) echo "usage: --network none is the one value: a job can only narrow its network (its node's owner sets how much jobs get there)" >&2; exit 2 ;;
+                    *) echo "usage: --network none (no network for this job: loopback only)" >&2; exit 2 ;;
+                esac
+                shift 2 ;;
+            # --netns-dummy NAME=ADDR/PREFIX (0.46.14, repeatable, at most 4;
+            # Linux nodes): a dummy interface in the job's own network
+            # namespace, up before the job starts. Implies --network none.
+            --netns-dummy) netns_dummies+=("${2:-}"); shift 2
+                [[ "${netns_dummies[${#netns_dummies[@]}-1]}" == ?*=?*/?* ]] || { echo "usage: --netns-dummy NAME=ADDRESS/PREFIX (e.g. sewlane0=10.254.254.1/32; private, link-local or test ranges only)" >&2; exit 2; } ;;
             --receipt-v2) receipt_v=2; shift ;;
             --retry-interrupted) retry=1; shift ;;
             --no-retry) retry=0; retries=0; shift ;;
@@ -30479,6 +30513,16 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         echo "usage: --gpu-mem needs --gpu: it is the GPU memory budget of a GPU job (k2 compute run --gpu --gpu-mem 4G --mem 8G -- <command>)" >&2
         exit 2
     fi
+    # --network none / --netns-dummy (0.46.14): the daemon checks the
+    # names and addresses (exit 2 with the rule).
+    local netns_json=""
+    if [ "${#netns_dummies[@]}" -gt 0 ]; then
+        if [ "${#netns_dummies[@]}" -gt 4 ]; then
+            echo "usage: at most 4 --netns-dummy per job" >&2; exit 2
+        fi
+        netns_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${netns_dummies[@]}")"
+        network="none"
+    fi
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_distro="$distro" K2_CJ_arch="$arch" K2_CJ_avoid_j="$avoid_json" K2_CJ_only_j="$only_json" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
@@ -30490,7 +30534,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
         K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json" \
         K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_cacheRequired_b="${cache_required#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v" \
-        K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem")"
+        K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem" K2_CJ_network="$network" K2_CJ_netnsDummies_j="$netns_json")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -30568,6 +30612,10 @@ if isinstance(g, dict):
             if m.get("countedBytes"):
                 s += ", counted with --mem (unified GPU: its memory is system RAM)"
         sys.stderr.write("[k2 compute] %s\n" % s)
+nw = v.get("network")
+if isinstance(nw, dict):
+    # 0.46.14: the job asked for --network none (and dummy interfaces).
+    sys.stderr.write("[k2 compute] network: %s (this job only: loopback%s, no internet, no LAN)\n" % (nw.get("line"), " and its dummy interfaces" if nw.get("dummies") else ""))
 if ends:
     sys.stderr.write("[k2 compute] limits: %s\n" % " · ".join(ends))
 eff = v.get("effective") or {}
@@ -30874,7 +30922,7 @@ cmd_compute_test() {
             --needs|--need)
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only)
+            --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan) pass+=("$1"); shift ;;
             --gpu=*) pass+=("$1"); shift ;;
@@ -53861,6 +53909,33 @@ cmd_schema() {
       ]
     },
     {
+      "name": "compute run",
+      "usage": "k2 compute run [<node>] [--sha <commit>] [--needs T@V]... [--cpus N] [--mem 8G] [--cache NAME] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--detach|--wait] [--json] -- <command...>",
+      "description": "Run a command on a compute node granted to this workspace (no node named: K2 picks one). --network none (0.46.14): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. Full flag list: k2 compute --help; k2 study compute.",
+      "args": [{"name": "node", "required": false, "description": "A node name or unique prefix; leave it off and K2 places the job."}],
+      "flags": [
+        {"name": "--sha", "arg": "commit", "description": "Run this commit (it needn't be pushed)."},
+        {"name": "--needs", "arg": "tool@version", "description": "Toolchains or system packages the job needs (repeatable)."},
+        {"name": "--mem", "arg": "size", "description": "The memory the job needs (required; 8G, auto)."},
+        {"name": "--cache", "arg": "name", "description": "A folder on the node that outlives the job ($K2_JOB_CACHE)."},
+        {"name": "--network", "arg": "none", "description": "No network for this job (loopback only), whatever the node's setting; the one value is none (on, no-lan: exit 2, job_network_invalid)."},
+        {"name": "--netns-dummy", "arg": "NAME=ADDR/PREFIX", "description": "Linux nodes: a dummy interface in the job's own network namespace, e.g. sewlane0=10.254.254.1/32. NAME 1-15 of A-Z a-z 0-9 . _ - (not lo); the address from a private, link-local or test range only. Repeatable, at most 4; implies --network none."},
+        {"name": "--detach", "arg": null, "description": "Return at once with the job id."},
+        {"name": "--wait", "arg": null, "description": "Block until the job ends; exit with its result."},
+        {"name": "--json", "arg": null, "description": "The job (or the result with --wait) as JSON."}
+      ]
+    },
+    {
+      "name": "compute get",
+      "usage": "k2 compute get <job> [--full] [--json]",
+      "description": "One job: state, node, placement, attempts, wait, and the network it asked for (network: none; dummies: sewlane0 10.254.254.1/32). --json prints the result object (result.network {mode, dummies, line} when the job asked for one).",
+      "args": [{"name": "job", "required": true, "description": "A job id or its short form."}],
+      "flags": [
+        {"name": "--full", "arg": null, "description": "The whole command line, however long."},
+        {"name": "--json", "arg": null, "description": "The result object."}
+      ]
+    },
+    {
       "name": "wiki",
       "usage": "k2 wiki <status|index|note|seed|serve|chat|publish|unpublish> ...",
       "description": "Per-workspace knowledge base (brain map) under .k2/wiki/: index graph, read notes, seed Home/_Index, localhost serve, publish via nested subdomain. Hosting is being rebuilt on the K2 runtime; public chat is unavailable.",
@@ -65117,6 +65192,35 @@ WORKTREES
   prints "source: worktree .claude/worktrees/x @ 1a2b3c4d +dirty (…)".
   From a folder outside the workspace, pass --workspace <handle>.
 
+NETWORK (--network none, --netns-dummy; k2-node 0.46.14 on the node)
+  A job's network is its node's setting (the node policy, narrowed by
+  this server's share there: k2 compute nodes). A job can narrow it for
+  itself, never widen it:
+    k2 compute run --network none --cache deps -- ./referee input.blend
+  - Linux: the job runs in a network namespace of its own with loopback
+    only (its own 127.0.0.1, not the host's or another job's). No
+    internet, no LAN, no DNS. Get dependencies first: a --cache job with
+    the network fills $K2_JOB_CACHE, then the --network none job on the
+    same cache works offline (pnpm install --offline, cargo --offline).
+  - macOS: the Seatbelt none profile: no remote IP, no DNS. Loopback stays
+    open, and on a Mac that includes the Mac's own services (one uid, one
+    loopback for every job).
+  - --netns-dummy NAME=ADDR/PREFIX (Linux only, repeatable, at most 4):
+    the node adds a dummy interface with that address to the job's own
+    namespace, up before the job starts. For browsers that need an ICE
+    host candidate that isn't loopback:
+      k2 compute run --netns-dummy sewlane0=10.254.254.1/32 -- pnpm e2e
+    NAME: 1-15 of A-Z a-z 0-9 . _ - (not lo). ADDR/PREFIX: inside 10/8,
+    172.16/12, 192.168/16, 169.254/16, 192.0.2/24, 198.51.100/24,
+    203.0.113/24, fc00::/7, fe80::/10 or 2001:db8::/32, the whole prefix
+    inside it. Still no route out: no internet.
+  - K2 places such a job only on a node that offers it; a node that can't
+    (an older k2-node, no job wall, a Mac for --netns-dummy) never runs it
+    with more network: job_network_needs_update (exit 3), or the job
+    fails job_network_unavailable if the node lost it since.
+  - k2 compute get shows the network the job asked for (network: none;
+    dummies: …); --json: result.network {mode, dummies, line}.
+
 IN THE JOB
   The node sets these K2_* variables in every job, and --env can't set
   them:
@@ -65330,6 +65434,14 @@ COMMON ERRORS
                          (compute.allow-nodes nodes=N for an add)
   allow_nodes_not_granted  adding a node not granted to your workspace: a
                          person grants it first; exit 3, can't be requested
+  job_network_invalid    --network other than none, or a --netns-dummy name or
+                         address outside the rules (NETWORK); exit 2
+  job_network_needs_update  --network none / --netns-dummy, but no node for you
+                         runs a job at that network yet (k2-node 0.46.14, its
+                         job wall; Linux for --netns-dummy); exit 3
+  job_network_unavailable  the node can't run the job at its --network now
+                         (its wall or root executor changed since): the job
+                         fails, never runs with more network
 
 SHARED NODES
   A node may serve several K2 servers at once (k2 compute nodes says

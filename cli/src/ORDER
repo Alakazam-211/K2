@@ -82,6 +82,7 @@ schema/users.entries
 schema/app.entries
 schema/skin.entries
 schema/remote-session.entries
+schema/compute.entries
 schema/wiki-zen.entries
 schema/whoami-done.entries
 schema/fed.entries

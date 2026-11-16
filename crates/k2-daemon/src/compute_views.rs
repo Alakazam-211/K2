@@ -1285,6 +1285,16 @@ fn wait_for_change(j: store::JobRow, wait: u64) -> R<store::JobRow> {
     Ok(row)
 }
 
+/// 0.46.14: a job's own network ask as `get`, `--plan` and the result
+/// show it: `{"mode": "none", "dummies": [{"name", "addr"}], "line"}`.
+pub(crate) fn network_json(n: &k2_core::compute::proto::jobnet::JobNet) -> serde_json::Value {
+    serde_json::json!({
+        "mode": n.mode.as_str(),
+        "dummies": n.dummies.iter().map(|d| serde_json::json!({"name": d.name, "addr": d.addr})).collect::<Vec<_>>(),
+        "line": n.line(),
+    })
+}
+
 pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     let j = job_for(who, params.get("job").map(String::as_str))?;
     let wait = params.get("wait").and_then(|w| w.parse::<u64>().ok()).unwrap_or(0).min(25);
@@ -1329,6 +1339,13 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
     };
     if let Some(s) = v.get("secrets").cloned() {
         v["result"]["secrets"] = s;
+    }
+    // 0.46.14: the network the job asked for (`--network none`, its dummy
+    // interfaces); absent = the node's own setting.
+    if let Some(net) = j.plan().and_then(|p| p.network) {
+        let nv = network_json(&net);
+        v["network"] = nv.clone();
+        v["result"]["network"] = nv;
     }
     // prd-compute-blacksmith-class-v1 T1: a CI check job's failing tests
     // carry their history mark (`new`, `flaky`, `quarantined`, `known`) for

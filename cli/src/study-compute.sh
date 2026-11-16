@@ -1062,6 +1062,35 @@ WORKTREES
   prints "source: worktree .claude/worktrees/x @ 1a2b3c4d +dirty (…)".
   From a folder outside the workspace, pass --workspace <handle>.
 
+NETWORK (--network none, --netns-dummy; k2-node 0.46.14 on the node)
+  A job's network is its node's setting (the node policy, narrowed by
+  this server's share there: k2 compute nodes). A job can narrow it for
+  itself, never widen it:
+    k2 compute run --network none --cache deps -- ./referee input.blend
+  - Linux: the job runs in a network namespace of its own with loopback
+    only (its own 127.0.0.1, not the host's or another job's). No
+    internet, no LAN, no DNS. Get dependencies first: a --cache job with
+    the network fills $K2_JOB_CACHE, then the --network none job on the
+    same cache works offline (pnpm install --offline, cargo --offline).
+  - macOS: the Seatbelt none profile: no remote IP, no DNS. Loopback stays
+    open, and on a Mac that includes the Mac's own services (one uid, one
+    loopback for every job).
+  - --netns-dummy NAME=ADDR/PREFIX (Linux only, repeatable, at most 4):
+    the node adds a dummy interface with that address to the job's own
+    namespace, up before the job starts. For browsers that need an ICE
+    host candidate that isn't loopback:
+      k2 compute run --netns-dummy sewlane0=10.254.254.1/32 -- pnpm e2e
+    NAME: 1-15 of A-Z a-z 0-9 . _ - (not lo). ADDR/PREFIX: inside 10/8,
+    172.16/12, 192.168/16, 169.254/16, 192.0.2/24, 198.51.100/24,
+    203.0.113/24, fc00::/7, fe80::/10 or 2001:db8::/32, the whole prefix
+    inside it. Still no route out: no internet.
+  - K2 places such a job only on a node that offers it; a node that can't
+    (an older k2-node, no job wall, a Mac for --netns-dummy) never runs it
+    with more network: job_network_needs_update (exit 3), or the job
+    fails job_network_unavailable if the node lost it since.
+  - k2 compute get shows the network the job asked for (network: none;
+    dummies: …); --json: result.network {mode, dummies, line}.
+
 IN THE JOB
   The node sets these K2_* variables in every job, and --env can't set
   them:
@@ -1275,6 +1304,14 @@ COMMON ERRORS
                          (compute.allow-nodes nodes=N for an add)
   allow_nodes_not_granted  adding a node not granted to your workspace: a
                          person grants it first; exit 3, can't be requested
+  job_network_invalid    --network other than none, or a --netns-dummy name or
+                         address outside the rules (NETWORK); exit 2
+  job_network_needs_update  --network none / --netns-dummy, but no node for you
+                         runs a job at that network yet (k2-node 0.46.14, its
+                         job wall; Linux for --netns-dummy); exit 3
+  job_network_unavailable  the node can't run the job at its --network now
+                         (its wall or root executor changed since): the job
+                         fails, never runs with more network
 
 SHARED NODES
   A node may serve several K2 servers at once (k2 compute nodes says

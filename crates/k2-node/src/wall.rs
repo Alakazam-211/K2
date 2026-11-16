@@ -1335,7 +1335,17 @@ pub fn probe(read: &[String], list: &[String], connect: &[String]) -> serde_json
         };
         c.insert(a.clone(), v.into());
     }
-    serde_json::json!({ "read": r, "list": l, "connect": c, "uid": unsafe { libc::geteuid() } })
+    // 0.46.14: its own loopback (a listener on 127.0.0.1 it connects to)
+    // and the interfaces and addresses of its network namespace.
+    let loopback = match std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr().map(|a| (l, a))) {
+        Ok((_l, a)) => match std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_secs(3)) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => format!("error: connect {a}: {e}"),
+        },
+        Err(e) => format!("error: bind 127.0.0.1: {e}"),
+    };
+    let ifaddrs: Vec<String> = crate::admin::jobs::interface_addrs_named().into_iter().map(|(n, a, l)| format!("{n} {a}/{l}")).collect();
+    serde_json::json!({ "read": r, "list": l, "connect": c, "uid": unsafe { libc::geteuid() }, "loopback": loopback, "ifaddrs": ifaddrs })
 }
 
 #[cfg(test)]
@@ -1746,5 +1756,9 @@ mod tests {
         assert!(v["read"][&missing].as_str().unwrap().starts_with("error:"));
         assert_eq!(v["list"][&d.display().to_string()], "ok: 1 entries");
         assert_eq!(v["connect"][&addr], "ok");
+        // 0.46.14: its own loopback, and the namespace's interfaces.
+        assert_eq!(v["loopback"], "ok");
+        let ifs: Vec<&str> = v["ifaddrs"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
+        assert!(ifs.iter().any(|x| x.ends_with(" 127.0.0.1/8")), "{ifs:?}");
     }
 }

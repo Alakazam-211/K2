@@ -664,6 +664,7 @@ fn nothing_acts_beside_an_unfinished_change() {
         job_uid: false,
         gpu: None,
         cpu_weight: None,
+        netns_dummies: vec![],
     });
     match r.exec.handle_job(&start, vec![]) {
         crate::admin::jobs::JobAnswer::Refused(e) => assert_eq!(e.code, IN_PROGRESS, "{e:?}"),

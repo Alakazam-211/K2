@@ -46,6 +46,8 @@
 //! - [`signer_policy`]: the signer's per-project policy file (TOML).
 //! - [`ci_config`]: `.k2/ci.toml`, the `k2 ci` config (TOML).
 //! - [`gpu`]: GPU jobs (0.46.11): the ask, the facts, the codes.
+//! - [`jobnet`]: a job's own network ask (0.46.14): `--network none`,
+//!   `--netns-dummy`, their features and checks.
 //! - [`gens`]: cache generations, setup snapshots, idle cores, job stats
 //!   (protocol 10 contracts, prd-compute-blacksmith-class-v1).
 //! - [`boxes`]: warm boxes for agents (protocol 10 frames).
@@ -70,6 +72,7 @@ pub mod gitcred;
 pub mod gpu;
 pub mod health;
 pub mod host;
+pub mod jobnet;
 pub mod lanes;
 pub mod needs;
 pub mod node_roster;

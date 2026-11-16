@@ -3,7 +3,8 @@ cmd_compute_run() {
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
     local preset="" now=0 cache_required=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
-    local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=()
+    local network=""
+    local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=() netns_dummies=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; break ;;
@@ -116,6 +117,21 @@ sys.exit(0 if ok else 1)'; then
                 esac ;;
             # --gpu-mem SIZE (GPU jobs S6): the GPU job's GPU memory budget.
             --gpu-mem) gpu_mem="$(_compute_bytes "${2:-}")" || exit 2; shift 2 ;;
+            # --network none (0.46.14): this job gets no network (its own
+            # namespace with loopback only on Linux), whatever its node's
+            # setting. A job can only narrow its network.
+            --network)
+                case "${2:-}" in
+                    none) network="none" ;;
+                    on|no-lan|full) echo "usage: --network none is the one value: a job can only narrow its network (its node's owner sets how much jobs get there)" >&2; exit 2 ;;
+                    *) echo "usage: --network none (no network for this job: loopback only)" >&2; exit 2 ;;
+                esac
+                shift 2 ;;
+            # --netns-dummy NAME=ADDR/PREFIX (0.46.14, repeatable, at most 4;
+            # Linux nodes): a dummy interface in the job's own network
+            # namespace, up before the job starts. Implies --network none.
+            --netns-dummy) netns_dummies+=("${2:-}"); shift 2
+                [[ "${netns_dummies[${#netns_dummies[@]}-1]}" == ?*=?*/?* ]] || { echo "usage: --netns-dummy NAME=ADDRESS/PREFIX (e.g. sewlane0=10.254.254.1/32; private, link-local or test ranges only)" >&2; exit 2; } ;;
             --receipt-v2) receipt_v=2; shift ;;
             --retry-interrupted) retry=1; shift ;;
             --no-retry) retry=0; retries=0; shift ;;
@@ -282,6 +298,16 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         echo "usage: --gpu-mem needs --gpu: it is the GPU memory budget of a GPU job (k2 compute run --gpu --gpu-mem 4G --mem 8G -- <command>)" >&2
         exit 2
     fi
+    # --network none / --netns-dummy (0.46.14): the daemon checks the
+    # names and addresses (exit 2 with the rule).
+    local netns_json=""
+    if [ "${#netns_dummies[@]}" -gt 0 ]; then
+        if [ "${#netns_dummies[@]}" -gt 4 ]; then
+            echo "usage: at most 4 --netns-dummy per job" >&2; exit 2
+        fi
+        netns_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${netns_dummies[@]}")"
+        network="none"
+    fi
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_distro="$distro" K2_CJ_arch="$arch" K2_CJ_avoid_j="$avoid_json" K2_CJ_only_j="$only_json" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
@@ -293,7 +319,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
         K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json" \
         K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_cacheRequired_b="${cache_required#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v" \
-        K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem")"
+        K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem" K2_CJ_network="$network" K2_CJ_netnsDummies_j="$netns_json")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -371,6 +397,10 @@ if isinstance(g, dict):
             if m.get("countedBytes"):
                 s += ", counted with --mem (unified GPU: its memory is system RAM)"
         sys.stderr.write("[k2 compute] %s\n" % s)
+nw = v.get("network")
+if isinstance(nw, dict):
+    # 0.46.14: the job asked for --network none (and dummy interfaces).
+    sys.stderr.write("[k2 compute] network: %s (this job only: loopback%s, no internet, no LAN)\n" % (nw.get("line"), " and its dummy interfaces" if nw.get("dummies") else ""))
 if ends:
     sys.stderr.write("[k2 compute] limits: %s\n" % " · ".join(ends))
 eff = v.get("effective") or {}
@@ -677,7 +707,7 @@ cmd_compute_test() {
             --needs|--need)
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only)
+            --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan) pass+=("$1"); shift ;;
             --gpu=*) pass+=("$1"); shift ;;

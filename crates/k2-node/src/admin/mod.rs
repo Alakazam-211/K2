@@ -18,6 +18,7 @@
 //! - [`owner`]: `servers.owner`, moving the owner server (step file, drain).
 //! - [`units`]: systemd/launchd files for the executor.
 //! - [`service`]: the node's own plist, rewritten when this build's differs.
+//! - [`netns`]: a job's own network namespace with dummy interfaces (0.46.14).
 
 pub mod cli;
 pub mod config;
@@ -31,6 +32,7 @@ pub mod jobpool;
 pub mod jobs;
 #[cfg(target_os = "macos")]
 pub mod launchd;
+pub mod netns;
 pub mod owner;
 pub mod policy;
 pub mod server;

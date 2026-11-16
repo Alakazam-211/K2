@@ -2880,6 +2880,12 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             wait(receipt_v2_feature_wait(), &mut pass);
             continue;
         }
+        // 0.46.14: `--network none` / `--netns-dummy` only to a node that
+        // offers them right now.
+        if k2_core::compute::proto::jobnet::missing_feature(plan.network.as_ref(), &offer.features).is_some() {
+            wait(job_network_feature_wait(), &mut pass);
+            continue;
+        }
         let class = pshare::JobClass::parse(&j.class).unwrap_or_default();
         let ask = share::ShareAsk { cpu_millis: plan.limits.cpu_millis, mem_bytes: plan.limits.mem_bytes, max_secs: plan.limits.max_secs, exclusive: j.exclusive, class };
         if let Some((code, msg)) = share::share_refusal(&view.limits, &ask) {
@@ -3143,6 +3149,16 @@ pub fn kick(node_id: &str) {
         }
         return;
     }
+    // 0.46.14: never a `--network none` plan to a node that doesn't run it
+    // at that network now (an older one would refuse its digest anyway).
+    let offered = offer.as_ref().map(|o| o.features.clone()).unwrap_or_default();
+    if k2_core::compute::proto::jobnet::missing_feature(plan.network.as_ref(), &offered).is_some() {
+        let w = job_network_feature_wait();
+        if job.reason.as_deref() != Some(w.code.as_str()) {
+            store::set_job_reason(&conn, &job.id, Some(&w.code), Some(&w.message));
+        }
+        return;
+    }
     let features = offer.as_ref().map(|o| o.features.clone()).unwrap_or_default();
     let Some((job, plan)) = fit_plan_to(&conn, job, plan, &features) else { return };
     let fence = Fence { job_id: job.id.clone(), attempt: job.attempt as u32, generation: job.generation as u32, plan_digest: job.plan_digest.clone() };
@@ -3216,6 +3232,16 @@ pub(crate) fn receipt_v2_feature_wait() -> frames::Refusal {
 
 /// [`receipt_v2_feature_wait`]'s code.
 pub const RECEIPT_V2_WAIT: &str = "node_too_old_for_receipt_v2";
+
+/// 0.46.14: a `--network none` / `--netns-dummy` plan waits for a node
+/// that runs it at that network (its k2-node, or its executor, was rolled
+/// back since submit). Never sent there: it would run with more network.
+pub(crate) fn job_network_feature_wait() -> frames::Refusal {
+    frames::Refusal::new(
+        k2_core::compute::proto::jobnet::codes::JOB_NETWORK_NEEDS_UPDATE,
+        "the node can't run this job at its --network none (or make its --netns-dummy interfaces) now: it needs k2-node 0.46.14 and its job wall (k2 compute node update <node>)",
+    )
+}
 
 fn cache_feature_wait() -> frames::Refusal {
     frames::Refusal::new(
@@ -3420,7 +3446,7 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None, network: None,
             with: Vec::new(),
         };
         store::insert_job(

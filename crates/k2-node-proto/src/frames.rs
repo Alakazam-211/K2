@@ -927,6 +927,15 @@ pub struct Plan {
     /// [`crate::provenance::FEATURE_PROVENANCE_V1`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<u32>,
+    /// The job's own network ask (0.46.14, `--network none`,
+    /// `--netns-dummy`, [`crate::jobnet`]): it may only narrow what the
+    /// node gives it. Absent unless asked, so every other plan and digest
+    /// is unchanged; sent only to nodes offering what
+    /// [`crate::jobnet::plan_features`] lists (an older node would compute
+    /// another digest and refuse the assign, never run it with network).
+    /// Never stripped on the way to a node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<crate::jobnet::JobNet>,
 }
 
 impl Plan {
@@ -1951,7 +1960,7 @@ mod tests {
             cache_commit: None,
             cache_ref: None,
             setup: Vec::new(),
-            cpus_burst: None, provenance: None,
+            cpus_burst: None, provenance: None, network: None,
         }
     }
 

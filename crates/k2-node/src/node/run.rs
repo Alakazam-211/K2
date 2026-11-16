@@ -299,6 +299,24 @@ pub enum MacNoLan {
     ProxyFailed(String),
 }
 
+/// 0.46.14: the job-log line for a job that asked for its own network
+/// (`--network none`, `--netns-dummy`): what it has and what fails. `mac`:
+/// the Seatbelt `none` (loopback is the Mac's).
+pub fn asked_network_line(n: &k2_node_proto::jobnet::JobNet, mac: bool) -> String {
+    const FAILS: &str = "no DNS, so downloads from crates.io, npm, PyPI or GitHub fail (fetch them in an earlier job into a --cache)";
+    if mac {
+        return format!("network: none (this job asked, --network none): no remote IP and {FAILS}. Loopback stays open, and on a Mac that includes the Mac's own services");
+    }
+    let mut s = format!("network: none (this job asked, --network none): a network namespace of its own, loopback only; {FAILS}");
+    if !n.dummies.is_empty() {
+        s.push_str(&format!(
+            ". Dummy interfaces, up: {} (no route out)",
+            n.dummies.iter().map(k2_node_proto::jobnet::Dummy::line).collect::<Vec<_>>().join(", ")
+        ));
+    }
+    s
+}
+
 /// The job-log line for a job's network (`None` when it's full). Says
 /// which setting closed it (the node's policy, or the owner's share for
 /// this server) and what fails, so a missing DNS isn't a mystery.
@@ -711,6 +729,19 @@ impl Node {
                 return;
             }
         };
+        // 0.46.14: the job's own network ask narrows the node's (`none` is
+        // the narrowest there is); a node that can't run it at that network
+        // now fails it, never runs it with more.
+        let network = match &a.plan.network {
+            None => network,
+            Some(_) => {
+                if let Some((code, detail)) = self.job_network_refusal(&t, &a.plan) {
+                    self.finish_job(&t, &a, None, JobState::Failed, Some(code), Some(&detail), None, None, None, None, None).await;
+                    return;
+                }
+                network.min(Network::None)
+            }
+        };
         // Build statements: the network and isolation it starts under.
         self.set_prov_start(&t, &job, gen, &a.plan, network);
         // A secret job (secret-env, review B-H1) keeps nothing where another
@@ -834,7 +865,9 @@ impl Node {
         // A Mac no-lan job's line comes with its proxy, right before it
         // starts (or the line of the `none` it falls back to).
         let mac_no_lan = cfg!(target_os = "macos") && network == Network::NoLan;
-        if let Some(line) = (t.speaks_easy() && !mac_no_lan).then(|| self.job_network_line(&t, network)).flatten() {
+        if let Some(n) = &a.plan.network {
+            sys(&mut journal, &asked_network_line(n, cfg!(target_os = "macos")));
+        } else if let Some(line) = (t.speaks_easy() && !mac_no_lan).then(|| self.job_network_line(&t, network)).flatten() {
             sys(&mut journal, &line);
         }
         // Toolchains: explicit needs (required) + what the repo declares
@@ -1981,6 +2014,8 @@ impl Node {
             job_uid,
             // GPU jobs (0.46.11): root picks and leases the device.
             gpu: a.plan.gpu,
+            // 0.46.14: root makes the job's own namespace with these.
+            netns_dummies: a.plan.network.as_ref().map(|n| n.dummies.clone()).unwrap_or_default(),
         };
         // The write ends (and the stdin read end) go to root (and the
         // unit); ours close with the call.
@@ -2003,7 +2038,15 @@ impl Node {
                 let _ = self.job_op(JobOp::Release { unit: unit.clone() }, vec![], Duration::from_secs(60)).await;
                 return Err(format!("{}: the executor started {unit} without its GPU; stopped (update k2-node)", k2_node_proto::gpu::codes::GPU_UNAVAILABLE));
             }
-            Ok(JobAnswer::Started { unit, uid_index, gpu }) => (unit, uid_index, gpu),
+            // 0.46.14: asked for dummy interfaces, the answer must name the
+            // job's own namespace; an executor that ignored the ask started
+            // it without them: stopped at once.
+            Ok(JobAnswer::Started { unit, netns: None, .. }) if a.plan.network.as_ref().is_some_and(|n| !n.dummies.is_empty()) => {
+                withhold(stdin_body.take());
+                let _ = self.job_op(JobOp::Release { unit: unit.clone() }, vec![], Duration::from_secs(60)).await;
+                return Err(format!("{}: the executor started {unit} without the job's own network namespace; stopped (update k2-node)", k2_node_proto::jobnet::codes::JOB_NETWORK_UNAVAILABLE));
+            }
+            Ok(JobAnswer::Started { unit, uid_index, gpu, .. }) => (unit, uid_index, gpu),
             Ok(JobAnswer::Refused(r)) => {
                 withhold(stdin_body.take());
                 return Err(format!("the job wall refused to start it: {}: {}", r.code, r.message));
@@ -2932,6 +2975,21 @@ pub(super) mod tests {
     use super::*;
     use crate::cgroup::Cgroups;
 
+    /// 0.46.14: a job that asked for no network says what it has (its own
+    /// namespace, its dummy interfaces) and what fails.
+    #[test]
+    fn a_job_that_asked_for_no_network_says_so_and_names_its_dummies() {
+        use k2_node_proto::jobnet::{Dummy, JobNet, JobNetMode};
+        let plain = asked_network_line(&JobNet::none(), false);
+        assert!(plain.starts_with("network: none (this job asked, --network none): a network namespace of its own, loopback only; no DNS"), "{plain}");
+        assert!(plain.contains("--cache") && !plain.contains("Dummy"), "{plain}");
+        let sew = JobNet { mode: JobNetMode::None, dummies: vec![Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }, Dummy { name: "v6".into(), addr: "fd00::1/128".into() }] };
+        let line = asked_network_line(&sew, false);
+        assert!(line.ends_with(". Dummy interfaces, up: sewlane0 10.254.254.1/32, v6 fd00::1/128 (no route out)"), "{line}");
+        let mac = asked_network_line(&JobNet::none(), true);
+        assert!(mac.contains("no remote IP") && mac.contains("Mac's own services") && !mac.contains("namespace"), "{mac}");
+    }
+
     /// A job that starts with less than full network says so in its log:
     /// which setting closed it and that downloads fail; full network says
     /// nothing.
@@ -2994,7 +3052,7 @@ pub(super) mod tests {
                                 return Err(format!("a secret start carries 3 fds, got {}", fds.len()));
                             }
                             stdin = fds.into_iter().nth(2);
-                            JobAnswer::Started { unit: "k2job-sj-g1.service".into(), uid_index: None, gpu: None }
+                            JobAnswer::Started { unit: "k2job-sj-g1.service".into(), uid_index: None, gpu: None, netns: None }
                         }
                         // The node's open asks root for its key's taint mark.
                         LocalRequest::Job { job: JobOp::KeyTaint { .. } } => JobAnswer::KeyTaint { tainted: false },

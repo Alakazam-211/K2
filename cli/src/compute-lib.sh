@@ -445,6 +445,10 @@ elif verb == "get":
     if j.get("secrets"):
         # Secret-env: the env names it gets from the vault, never values.
         print("  secrets (env names): %s" % ", ".join(j["secrets"]))
+    nw = j.get("network")
+    if isinstance(nw, dict):
+        # 0.46.14: the job asked for --network none (and dummy interfaces).
+        print("  network: %s (asked by the job: loopback%s only, whatever the node setting)" % (nw.get("line"), " and its dummy interfaces" if nw.get("dummies") else ""))
     pl = j.get("placement") or ctl.get("placement") or {}
     if pl.get("mode") == "auto":
         # Auto-placement (0.46.6): where K2 put it and why (a move says so).

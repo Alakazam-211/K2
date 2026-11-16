@@ -185,6 +185,20 @@ Agents:
                                 reserved, watched only when given. Needs k2-node
                                 0.46.11 on the node (else gpu_mem_needs_update,
                                 exit 3)
+                 [--network none]  this job gets no network, whatever its
+                                node's setting: Linux, a network namespace of its
+                                own with loopback only; macOS, no remote IP and no
+                                DNS (loopback open). A job can only narrow its
+                                network (on, no-lan: exit 2). Needs k2-node
+                                0.46.14 on the node (else job_network_needs_update,
+                                exit 3). k2 study compute: NETWORK
+                 [--netns-dummy NAME=ADDR/PREFIX]  (repeatable, at most 4;
+                                Linux nodes) a dummy interface in the job's own
+                                namespace, up before it starts (sewlane0=
+                                10.254.254.1/32: a browser gets an ICE host
+                                candidate that isn't loopback). Private,
+                                link-local or test ranges only (exit 2 else);
+                                implies --network none
                  [--receipt-v2]  the node signs receipt v2 (how and where the job
                                 ran, and its signed self-statement; k2 compute receipt
                                 shows both); only nodes on protocol 9 take it

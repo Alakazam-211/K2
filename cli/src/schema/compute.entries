@@ -1,0 +1,27 @@
+    {
+      "name": "compute run",
+      "usage": "k2 compute run [<node>] [--sha <commit>] [--needs T@V]... [--cpus N] [--mem 8G] [--cache NAME] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--detach|--wait] [--json] -- <command...>",
+      "description": "Run a command on a compute node granted to this workspace (no node named: K2 picks one). --network none (0.46.14): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. Full flag list: k2 compute --help; k2 study compute.",
+      "args": [{"name": "node", "required": false, "description": "A node name or unique prefix; leave it off and K2 places the job."}],
+      "flags": [
+        {"name": "--sha", "arg": "commit", "description": "Run this commit (it needn't be pushed)."},
+        {"name": "--needs", "arg": "tool@version", "description": "Toolchains or system packages the job needs (repeatable)."},
+        {"name": "--mem", "arg": "size", "description": "The memory the job needs (required; 8G, auto)."},
+        {"name": "--cache", "arg": "name", "description": "A folder on the node that outlives the job ($K2_JOB_CACHE)."},
+        {"name": "--network", "arg": "none", "description": "No network for this job (loopback only), whatever the node's setting; the one value is none (on, no-lan: exit 2, job_network_invalid)."},
+        {"name": "--netns-dummy", "arg": "NAME=ADDR/PREFIX", "description": "Linux nodes: a dummy interface in the job's own network namespace, e.g. sewlane0=10.254.254.1/32. NAME 1-15 of A-Z a-z 0-9 . _ - (not lo); the address from a private, link-local or test range only. Repeatable, at most 4; implies --network none."},
+        {"name": "--detach", "arg": null, "description": "Return at once with the job id."},
+        {"name": "--wait", "arg": null, "description": "Block until the job ends; exit with its result."},
+        {"name": "--json", "arg": null, "description": "The job (or the result with --wait) as JSON."}
+      ]
+    },
+    {
+      "name": "compute get",
+      "usage": "k2 compute get <job> [--full] [--json]",
+      "description": "One job: state, node, placement, attempts, wait, and the network it asked for (network: none; dummies: sewlane0 10.254.254.1/32). --json prints the result object (result.network {mode, dummies, line} when the job asked for one).",
+      "args": [{"name": "job", "required": true, "description": "A job id or its short form."}],
+      "flags": [
+        {"name": "--full", "arg": null, "description": "The whole command line, however long."},
+        {"name": "--json", "arg": null, "description": "The result object."}
+      ]
+    },

@@ -339,6 +339,15 @@ pub struct JobStart {
     /// said `cpu_weight`; absent = no weight (today's unit, byte for byte).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_weight: Option<u64>,
+    /// 0.46.14 (`--netns-dummy`, [`k2_node_proto::jobnet`]): with
+    /// `network_none`, root makes the job a network namespace of its own
+    /// ([`super::netns`]) with these dummy interfaces, up, and the unit
+    /// joins it. Sent only when `Ready` said `netns`; an older executor
+    /// ignores the field, so the node fails a start whose answer names no
+    /// namespace (the job never runs without what it asked for). Absent
+    /// when empty (today's start, byte for byte).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub netns_dummies: Vec<k2_node_proto::jobnet::Dummy>,
 }
 
 /// systemd's `CPUWeight` range.
@@ -421,6 +430,13 @@ pub enum JobAnswer {
         /// take another job's guarantee.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         cpu_weight: bool,
+        /// 0.46.14: a `network_none` unit here gets loopback that works
+        /// (`IPAddressAllow=localhost`), and this executor makes a job's
+        /// own namespace with dummy interfaces ([`JobStart::netns_dummies`];
+        /// its self-test passed). An older one omits it (false): the node
+        /// then offers neither `job-network` nor `netns-dummy`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        netns: bool,
     },
     Started {
         unit: String,
@@ -431,6 +447,10 @@ pub enum JobAnswer {
         /// start.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         gpu: Option<String>,
+        /// 0.46.14: the job's own network namespace (`k2job-<key>`), for a
+        /// start with `netns_dummies`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        netns: Option<String>,
     },
     Status(UnitStatus),
     Done { detail: Value },
@@ -647,6 +667,13 @@ pub fn lan_deny_extra() -> Vec<String> {
 
 /// (address, prefix length) of every interface address (getifaddrs).
 fn interface_addrs() -> Vec<(std::net::IpAddr, u32)> {
+    interface_addrs_named().into_iter().map(|(_, a, l)| (a, l)).collect()
+}
+
+/// (interface name, address, prefix length) of every interface address in
+/// this process's network namespace (getifaddrs; the wall probe's
+/// `ifaddrs`).
+pub fn interface_addrs_named() -> Vec<(String, std::net::IpAddr, u32)> {
     let mut out = Vec::new();
     let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
     // SAFETY: getifaddrs fills a list we free below.
@@ -661,6 +688,8 @@ fn interface_addrs() -> Vec<(std::net::IpAddr, u32)> {
         if ifa.ifa_addr.is_null() || ifa.ifa_netmask.is_null() {
             continue;
         }
+        // SAFETY: getifaddrs gives every node a NUL-terminated name.
+        let name = if ifa.ifa_name.is_null() { String::new() } else { unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) }.to_string_lossy().into_owned() };
         // SAFETY: sockaddr pointers from getifaddrs, read per family.
         unsafe {
             match (*ifa.ifa_addr).sa_family as i32 {
@@ -669,14 +698,14 @@ fn interface_addrs() -> Vec<(std::net::IpAddr, u32)> {
                     let m = &*(ifa.ifa_netmask as *const libc::sockaddr_in);
                     let addr = std::net::Ipv4Addr::from(u32::from_be(a.sin_addr.s_addr));
                     let len = u32::from_be(m.sin_addr.s_addr).count_ones();
-                    out.push((std::net::IpAddr::V4(addr), len));
+                    out.push((name, std::net::IpAddr::V4(addr), len));
                 }
                 libc::AF_INET6 => {
                     let a = &*(ifa.ifa_addr as *const libc::sockaddr_in6);
                     let m = &*(ifa.ifa_netmask as *const libc::sockaddr_in6);
                     let addr = std::net::Ipv6Addr::from(a.sin6_addr.s6_addr);
                     let len: u32 = m.sin6_addr.s6_addr.iter().map(|b| b.count_ones()).sum();
-                    out.push((std::net::IpAddr::V6(addr), len));
+                    out.push((name, std::net::IpAddr::V6(addr), len));
                 }
                 _ => {}
             }
@@ -727,6 +756,14 @@ pub struct UnitPlan {
     /// GPU jobs (0.46.11): the leased device, or none (then the argv is
     /// byte-identical to a unit without GPU jobs).
     pub gpu: Option<super::gpu::GpuUnit>,
+    /// 0.46.14, `network` none only: the job's own namespace root made
+    /// ([`super::netns`]), joined with `NetworkNamespacePath=` instead of
+    /// `PrivateNetwork=yes`.
+    pub netns: Option<PathBuf>,
+    /// 0.46.14, `network` none only: the dummy interfaces' prefixes the
+    /// unit's address filter lets through beside loopback (they exist only
+    /// in the job's own namespace, which has no route out).
+    pub allow_ips: Vec<String>,
 }
 
 /// The unit's `RuntimeMaxSec` for a node's `max_secs` (C11): an integer,
@@ -847,8 +884,18 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
     }
     match p.network {
         Network::None => {
-            prop("PrivateNetwork=yes".into());
+            // The job's own namespace: root's, with its dummy interfaces
+            // (0.46.14), or a fresh one with loopback only.
+            match &p.netns {
+                Some(path) => prop(format!("NetworkNamespacePath={}", path.display())),
+                None => prop("PrivateNetwork=yes".into()),
+            }
             prop("IPAddressDeny=any".into());
+            // Its own loopback works (the namespace's; nothing outside it),
+            // and its dummy interfaces' addresses (0.46.14).
+            let mut allow = vec!["localhost".to_string()];
+            allow.extend(p.allow_ips.iter().cloned());
+            prop(format!("IPAddressAllow={}", allow.join(" ")));
             // The resolver's local sockets would still answer from outside
             // the namespace (DNS as a side channel).
             prop("InaccessiblePaths=-/run/systemd/resolve -/run/nscd -/var/run/nscd".into());
@@ -1295,13 +1342,14 @@ impl Executor {
                     gpu_usage: cfg!(target_os = "linux"),
                     gens_wall: true,
                     cpu_weight: cfg!(target_os = "linux"),
+                    netns: cfg!(target_os = "linux") && super::netns::selftest().map_err(|e| crate::nlog!("job network namespaces: self-test failed: {e}")).is_ok(),
                 })
             }
             // No job starts while an owner change is unfinished (its trees
             // and users are moving), whatever the node's control says
             // (verification L3).
             JobOp::Start(_) if super::update::control_held(self) => Err(super::owner::in_progress_refusal("a job start")),
-            JobOp::Start(s) => self.start_job(s, fds).map(|(unit, uid_index, gpu)| JobAnswer::Started { unit, uid_index, gpu }),
+            JobOp::Start(s) => self.start_job(s, fds).map(|(unit, uid_index, gpu, netns)| JobAnswer::Started { unit, uid_index, gpu, netns }),
             JobOp::Status { unit } => self.with_unit(unit, |u| unit_status(u).map(JobAnswer::Status)),
             JobOp::Stop { unit } => self.with_unit(unit, |u| systemctl(&["stop", "--no-block", u]).map(|_| JobAnswer::Done { detail: json!({"stopping": u}) })),
             // Never blocks (V58): a job that ignores SIGTERM holds only its
@@ -1310,7 +1358,13 @@ impl Executor {
             JobOp::Release { unit } => self.with_unit(unit, |u| {
                 let stopped = systemctl(&["stop", "--no-block", u]);
                 let _ = systemctl(&["reset-failed", u]);
-                Ok(JobAnswer::Done { detail: json!({"released": u, "stop": stopped.err()}) })
+                // 0.46.14: its own network namespace goes with it (the
+                // namespace itself lives until its last process ends).
+                let netns = super::netns::netns_name(u).filter(|n| super::netns::netns_path(n).exists()).map(|n| match super::netns::remove(&n) {
+                    Ok(()) => format!("{n}: removed"),
+                    Err(e) => format!("{n}: {e}"),
+                });
+                Ok(JobAnswer::Done { detail: json!({"released": u, "stop": stopped.err(), "netns": netns}) })
             }),
             JobOp::Reclaim { path, slot } => self.reclaim_path(path, *slot),
             JobOp::Tenants => Ok(JobAnswer::Tenants(self.tenant_wall())),
@@ -1406,7 +1460,7 @@ impl Executor {
         gone
     }
 
-    fn start_job(&self, s: &JobStart, fds: Vec<OwnedFd>) -> Result<(String, Option<u32>, Option<String>), AdminRefusal> {
+    fn start_job(&self, s: &JobStart, fds: Vec<OwnedFd>) -> Result<(String, Option<u32>, Option<String>, Option<String>), AdminRefusal> {
         let ids = self.job_ids(s.tenant)?;
         if key_slot(&s.key) != s.tenant {
             return Err(refuse(code::BAD_ARGS, format!("job key {:?} isn't a slot-{} key", s.key, s.tenant)));
@@ -1450,6 +1504,15 @@ impl Executor {
         // get an owner- or own-shaped unit for a team server (SB-A1).
         let entry = if s.tenant == OWNER_SLOT { None } else { Some(tenant_entry(&self.paths.config_dir, s.tenant)?) };
         let network = entry.as_ref().map_or(asked, |e| asked.min(e.network));
+        // 0.46.14: dummy interfaces only in a job's own namespace (`none`),
+        // and only as the rules say (both ends check them).
+        if !s.netns_dummies.is_empty() {
+            if !s.network_none || network != Network::None {
+                return Err(refuse(code::BAD_ARGS, "netns_dummies go only with network_none (the job's own namespace)"));
+            }
+            k2_node_proto::jobnet::check(&k2_node_proto::jobnet::JobNet { mode: k2_node_proto::jobnet::JobNetMode::None, dummies: s.netns_dummies.clone() })
+                .map_err(|e| refuse(code::BAD_ARGS, format!("netns_dummies: {e}")))?;
+        }
         let restrict_userns = team_unit(s.tenant, entry.as_ref().map(|e| e.trust));
         let v = systemd();
         if s.tenant != OWNER_SLOT && v < MIN_SYSTEMD_TENANT {
@@ -1476,6 +1539,8 @@ impl Executor {
             restrict_userns,
             runtime_max_secs: runtime_max(s.max_secs),
             gpu: None,
+            netns: None,
+            allow_ips: s.netns_dummies.iter().map(|d| d.addr.clone()).collect(),
         };
         {
             let mut g = starting().lock().unwrap_or_else(|e| e.into_inner());
@@ -1487,11 +1552,25 @@ impl Executor {
         // it, before the unit exists. A refusal fails the start; the job
         // never falls back to the slot's shared uid.
         let mut uid_index = None;
+        let mut netns: Option<String> = None;
         let r = (|| {
             // GPU jobs: root's device, leased before the unit exists; never
             // a start without it.
             if let Some(ask) = &s.gpu {
                 plan.gpu = Some(self.gpu_for_start(s.tenant, ask, &unit)?);
+            }
+            // 0.46.14: the job's own namespace with its dummy interfaces,
+            // made before the unit exists (namespaces whose unit is gone
+            // go first). Never a start without it.
+            if !s.netns_dummies.is_empty() {
+                let gone = super::netns::sweep();
+                if !gone.is_empty() {
+                    crate::nlog!("job network namespaces: removed {} left by units that are gone", gone.len());
+                }
+                let name = super::netns::netns_name(&unit).ok_or_else(|| refuse(code::BAD_ARGS, "not a K2 job unit"))?;
+                let path = super::netns::make(&name, &s.netns_dummies).map_err(|e| refuse(k2_node_proto::jobnet::codes::JOB_NETWORK_UNAVAILABLE, format!("the job's network namespace: {e}")))?;
+                plan.netns = Some(path);
+                netns = Some(name);
             }
             if s.job_uid {
                 let (index, uid) = self.job_uid_lease(s.tenant, &ids, &unit, &plan.root)?;
@@ -1511,6 +1590,9 @@ impl Executor {
             if let Some(pci) = &gpu {
                 self.release_gpu_lease(pci, &unit);
             }
+            if let Some(n) = &netns {
+                let _ = super::netns::remove(n);
+            }
         }
         starting().lock().unwrap_or_else(|e| e.into_inner()).remove(&unit);
         let _ = self.audit().append(
@@ -1518,12 +1600,12 @@ impl Executor {
                 event: "job".into(),
                 // `stdin` only says a secret-env pipe was relayed; root never
                 // sees what is in it.
-                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok(), "stdin": s.stdin, "restrict_namespaces": restrict_userns, "job_uid": uid_index, "gpu": gpu}),
+                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok(), "stdin": s.stdin, "restrict_namespaces": restrict_userns, "job_uid": uid_index, "gpu": gpu, "netns": netns, "netns_dummies": s.netns_dummies.iter().map(|d| d.line()).collect::<Vec<_>>()}),
                 ..Default::default()
             },
             self.now(),
         );
-        r.map(|_| (unit, uid_index, gpu))
+        r.map(|_| (unit, uid_index, gpu, netns))
     }
 
     fn spawn_unit(&self, plan: &UnitPlan, unit: &str, out: OwnedFd, err: OwnedFd, input: Option<OwnedFd>) -> Result<(), AdminRefusal> {
@@ -1781,6 +1863,8 @@ mod tests {
             restrict_userns: false,
             runtime_max_secs: None,
             gpu: None,
+            netns: None,
+            allow_ips: Vec::new(),
         }
     }
 
@@ -1859,7 +1943,7 @@ mod tests {
         assert_eq!(job_cpu_weight(1), 1, "never 0");
         assert_eq!(job_cpu_weight(1_024_000), 10_000);
         // The wire: absent unless asked; an older executor's Ready says no.
-        let s = JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: Some(8000), stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: Some(400) };
+        let s = JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: Some(8000), stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: Some(400), netns_dummies: vec![] };
         assert!(serde_json::to_string(&JobOp::Start(s.clone())).unwrap().contains(r#""cpu_weight":400"#));
         let none = JobStart { cpu_weight: None, ..s };
         assert!(!serde_json::to_string(&JobOp::Start(none)).unwrap().contains("cpu_weight"));
@@ -2060,9 +2144,63 @@ mod tests {
         p.cpu_millis = Some(5);
         let a = systemd_run_argv(&p);
         assert!(a.iter().any(|x| x == "PrivateNetwork=yes") && a.iter().any(|x| x == "IPAddressDeny=any"));
+        // 0.46.14: its own loopback works (the address filter covers lo too).
+        assert!(a.iter().any(|x| x == "IPAddressAllow=localhost"), "{a:?}");
+        assert!(!a.iter().any(|x| x.starts_with("NetworkNamespacePath")));
         assert!(a.iter().any(|x| x.contains("-/run/systemd/resolve")), "no DNS side channel");
         assert!(!a.iter().any(|x| x.starts_with("MemoryMax")));
         assert!(a.iter().any(|x| x == "CPUQuota=1%"), "never below 1%");
+    }
+
+    /// 0.46.14 (`--netns-dummy`): a unit with its own namespace joins root's
+    /// (`NetworkNamespacePath=`, never `PrivateNetwork` beside it), keeps
+    /// the address filter, and lets through only loopback and its dummy
+    /// interfaces' prefixes.
+    #[test]
+    fn a_unit_with_dummies_joins_roots_namespace_and_allows_only_them() {
+        let mut p = plan();
+        p.network = Network::None;
+        p.netns = Some(crate::admin::netns::netns_path("k2job-j1-g1"));
+        p.allow_ips = vec!["10.254.254.1/32".into(), "fd00::1/128".into()];
+        let a = systemd_run_argv(&p);
+        let has = |s: &str| a.iter().any(|x| x == s);
+        assert!(has("NetworkNamespacePath=/run/netns/k2job-j1-g1"), "{a:?}");
+        assert!(!has("PrivateNetwork=yes"), "one namespace: root's");
+        assert!(has("IPAddressDeny=any"));
+        assert!(has("IPAddressAllow=localhost 10.254.254.1/32 fd00::1/128"), "{a:?}");
+        assert!(a.iter().any(|x| x.contains("-/run/systemd/resolve")), "no DNS side channel");
+        // The namespace is only ever for `none`: on/no-lan never get one.
+        p.network = Network::NoLan;
+        let a = systemd_run_argv(&p);
+        assert!(!a.iter().any(|x| x.starts_with("NetworkNamespacePath") || x.starts_with("IPAddressAllow")), "{a:?}");
+        // The wire: a start carries its dummies; an older executor's
+        // Started names no namespace (the node then stops the unit).
+        let s = JobStart {
+            key: "j1-g1".into(),
+            root: "/r".into(),
+            rw: vec![],
+            network_none: true,
+            mem_bytes: None,
+            cpu_millis: None,
+            stop_grace_secs: 1,
+            tenant: 0,
+            no_lan: false,
+            stdin: false,
+            max_secs: None,
+            job_uid: false,
+            gpu: None,
+            cpu_weight: None,
+            netns_dummies: vec![k2_node_proto::jobnet::Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }],
+        };
+        let text = serde_json::to_string(&JobOp::Start(s.clone())).unwrap();
+        assert!(text.contains(r#""netns_dummies":[{"name":"sewlane0","addr":"10.254.254.1/32"}]"#), "{text}");
+        assert_eq!(serde_json::from_str::<JobOp>(&text).unwrap(), JobOp::Start(s));
+        let old: JobAnswer = serde_json::from_str(r#"{"answer":"started","unit":"k2job-j1-g1.service"}"#).unwrap();
+        assert!(matches!(old, JobAnswer::Started { netns: None, .. }));
+        let new = JobAnswer::Started { unit: "k2job-j1-g1.service".into(), uid_index: None, gpu: None, netns: Some("k2job-j1-g1".into()) };
+        assert_eq!(serde_json::from_str::<JobAnswer>(&serde_json::to_string(&new).unwrap()).unwrap(), new);
+        let ready: JobAnswer = serde_json::from_str(r#"{"answer":"ready","job_user":"k2job","netns":true}"#).unwrap();
+        assert!(matches!(ready, JobAnswer::Ready { netns: true, .. }));
     }
 
     /// A tenant's unit (S3a): its own uid/gid and slice, other users'
@@ -2356,9 +2494,9 @@ mod tests {
     fn ops_round_trip_on_the_wire() {
         let ops = [
             JobOp::Ready,
-            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60), job_uid: false, gpu: None, cpu_weight: None }),
-            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None, job_uid: true, gpu: None, cpu_weight: None }),
-            JobOp::Start(JobStart { key: "j-g3".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 1, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: Some(k2_node_proto::gpu::GpuAsk::one(k2_node_proto::gpu::GpuVendor::Amd)), cpu_weight: None }),
+            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60), job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![] }),
+            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None, job_uid: true, gpu: None, cpu_weight: None, netns_dummies: vec![] }),
+            JobOp::Start(JobStart { key: "j-g3".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 1, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: Some(k2_node_proto::gpu::GpuAsk::one(k2_node_proto::gpu::GpuVendor::Amd)), cpu_weight: None, netns_dummies: vec![] }),
             JobOp::KeyTaint { node_fp: "a".repeat(64), mark: Some("--dev".into()) },
             JobOp::KeyTaint { node_fp: "a".repeat(64), mark: None },
             JobOp::Tenants,
@@ -2379,18 +2517,18 @@ mod tests {
         let JobOp::Start(s) = old else { panic!() };
         assert_eq!((s.tenant, s.no_lan, s.stdin), (0, false, false));
         // A start without stdin is the 0.46.3 wire, byte for byte.
-        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: None });
+        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![] });
         let text = serde_json::to_string(&plain).unwrap();
-        assert!(!text.contains("stdin") && !text.contains("job_uid") && !text.contains("gpu"), "{text}");
+        assert!(!text.contains("stdin") && !text.contains("job_uid") && !text.contains("gpu") && !text.contains("netns"), "{text}");
         // An older executor's Ready (no stdin) reads as "can't relay stdin",
         // and as "no per-job uids" (C2).
         let a: JobAnswer = serde_json::from_str(r#"{"answer":"ready","job_user":"k2job"}"#).unwrap();
-        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false, cpu_weight: false });
+        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false, cpu_weight: false, netns: false });
         // GPU jobs S6: a newer executor says it reads a job's GPU memory; a
         // Ready without it is 0.46.10's bytes.
-        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false, cpu_weight: false };
+        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false, cpu_weight: false, netns: false };
         assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"answer":"ready","job_user":"k2job","stdin":true}"#);
-        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: true, gens_wall: false, cpu_weight: false };
+        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: true, gens_wall: false, cpu_weight: false, netns: false };
         let back: JobAnswer = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(back, r);
         let u = JobAnswer::GpuUsage(k2_node_proto::gpu::GpuMemUsage { bytes: 3 << 30, gtt_bytes: 3 << 30, clients: 1, pids: 2, ..Default::default() });
@@ -2401,8 +2539,8 @@ mod tests {
         // An older executor's Started has no uid index: the node fails a
         // job_uid start on it.
         let a: JobAnswer = serde_json::from_str(r#"{"answer":"started","unit":"k2job-k.service"}"#).unwrap();
-        assert_eq!(a, JobAnswer::Started { unit: "k2job-k.service".into(), uid_index: None, gpu: None });
-        let s = serde_json::to_string(&JobAnswer::Started { unit: "u".into(), uid_index: None, gpu: None }).unwrap();
+        assert_eq!(a, JobAnswer::Started { unit: "k2job-k.service".into(), uid_index: None, gpu: None, netns: None });
+        let s = serde_json::to_string(&JobAnswer::Started { unit: "u".into(), uid_index: None, gpu: None, netns: None }).unwrap();
         assert_eq!(s, r#"{"answer":"started","unit":"u"}"#, "0.46.9's bytes");
         assert_eq!(serde_json::to_string(&JobAnswer::KeyTaint { tainted: true }).unwrap(), r#"{"answer":"key_taint","tainted":true}"#);
     }

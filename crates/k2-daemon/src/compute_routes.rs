@@ -1622,6 +1622,7 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         receipt_v2: false,
         gpu: None,
         gpu_mem: None,
+        network: None,
     };
     // Every matching node: each one's package states are reported, and the
     // names their owners must approve go out as ONE batched request (§7.3).
@@ -1861,6 +1862,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let gpu = gpu_from(v)?;
     // GPU jobs S6 (`--gpu-mem`): its GPU memory budget, only with `--gpu`.
     let gpu_mem = gpu_mem_from(v, gpu.is_some())?;
+    // 0.46.14 (`--network none`, `--netns-dummy`): the job's own network,
+    // only ever narrower than its node's.
+    let network = network_from(v)?;
     if cache.is_some() && !secret_asks.is_empty() {
         return Err(no(pcache::codes::CACHE_WITH_SECRET, 400, "--cache and --secret don't mix: a job with secret env keeps nothing between runs on the node"));
     }
@@ -1972,6 +1976,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         receipt_v2: receipt_v.is_some(),
         gpu,
         gpu_mem,
+        network,
     };
     // `--mem auto` never asks more than the largest node this job could
     // run on allows per job (R1: capped at the node's cap; the job still
@@ -2241,6 +2246,16 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // such nodes; a named one is checked here. Never a GPU job on the CPU.
     if let Some(code) = tier_offer.as_ref().map_or(want.gpu.map(|_| crate::compute_place::skip::NO_GPU), |o| crate::compute_place::gpu_skip(&want, grant.as_ref(), o)) {
         return Err(gpu_node_refusal(code, &node.name, &ws.handle));
+    }
+    // 0.46.14: a `--network none` / `--netns-dummy` job only to a node that
+    // runs it at that network (auto-placement already kept only such
+    // nodes; a named one is checked here). Never queued where it would run
+    // with more network; a node never seen online can't say, so no.
+    if let Some(n) = want.network.as_ref() {
+        let lacks = tier_offer.as_ref().is_none_or(|o| crate::compute_place::network_skip(&want, o).is_some());
+        if lacks {
+            return Err(no(k2_core::compute::proto::jobnet::codes::JOB_NETWORK_NEEDS_UPDATE, 409, crate::compute_place::network_needs_update_hint(n, Some(&node.name))).with("node", node.name.clone()));
+        }
     }
     // Limits first, before any source is read or bundled (A8): each
     // refusal names the whole grant and the owner's command.
@@ -2561,6 +2576,10 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         cache_ref,
         setup: Vec::new(),
         cpus_burst: None, provenance: crate::compute_provenance::ask(&node_features(&node)), // build statements: `provenance-v1` nodes only
+        // 0.46.14: the job's own network ask, only ever placed on nodes
+        // offering what it needs (`required_features`, the pinned check
+        // above); never stripped.
+        network: want.network.clone(),
     };
     let job = {
         let db = k2_core::db::shared();
@@ -2862,6 +2881,49 @@ fn gpu_from(v: &serde_json::Value) -> R<Option<k2_core::compute::proto::gpu::Gpu
     let ask = GpuAsk { vendor, count };
     ask.check().map_err(|e| no(codes::BAD_REQUEST, 400, format!("--gpu: {e}")))?;
     Ok(Some(ask))
+}
+
+/// 0.46.14: the job's own network ask from a run request: `network:
+/// "none"` (`--network none`) and `netnsDummies: ["sewlane0=10.254.254.1/32"]`
+/// (`--netns-dummy`, repeatable, implies `none`). A job may only narrow its
+/// network: `on` and `no-lan` are refused, never widened to. Exit 2 on
+/// anything not valid.
+pub(crate) fn network_from(v: &serde_json::Value) -> R<Option<k2_core::compute::proto::jobnet::JobNet>> {
+    use k2_core::compute::proto::jobnet::{self, codes as jn, JobNet, JobNetMode};
+    let mode = match v.get("network") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(m)) => match JobNetMode::parse(m) {
+            Some(x) => Some(x),
+            None if m == "on" || m == "no-lan" || m == "full" => {
+                return Err(no(
+                    jn::JOB_NETWORK_INVALID,
+                    400,
+                    format!("--network {m}: a job can only narrow its network, so the one value is --network none (no network, loopback only). Its node's owner decides how much network jobs get there (k2 compute node servers limits <server> --network)"),
+                ))
+            }
+            None => return Err(no(jn::JOB_NETWORK_INVALID, 400, format!("--network {m:?}: the one value is none (no network, loopback only)"))),
+        },
+        Some(_) => return Err(no(jn::JOB_NETWORK_INVALID, 400, "network is the string \"none\" (--network none)")),
+    };
+    let dummies = match v.get("netnsDummies") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(serde_json::Value::Array(a)) => {
+            let mut out = Vec::with_capacity(a.len());
+            for x in a {
+                let s = x.as_str().ok_or_else(|| no(jn::JOB_NETWORK_INVALID, 400, "netnsDummies is a list of \"<name>=<address>/<prefix>\" strings (--netns-dummy sewlane0=10.254.254.1/32)"))?;
+                out.push(jobnet::parse_dummy(s).map_err(|e| no(jn::JOB_NETWORK_INVALID, 400, format!("--netns-dummy: {e}")))?);
+            }
+            out
+        }
+        Some(_) => return Err(no(jn::JOB_NETWORK_INVALID, 400, "netnsDummies is a list of \"<name>=<address>/<prefix>\" strings")),
+    };
+    if mode.is_none() && dummies.is_empty() {
+        return Ok(None);
+    }
+    // `--netns-dummy` implies `--network none` (its own namespace).
+    let n = JobNet { mode: mode.unwrap_or(JobNetMode::None), dummies };
+    jobnet::check(&n).map_err(|e| no(jn::JOB_NETWORK_INVALID, 400, format!("--netns-dummy: {e}")))?;
+    Ok(Some(n))
 }
 
 /// `gpuMemBytes` from a run request (`--gpu-mem 4G`): only with `--gpu`.
@@ -3253,6 +3315,10 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
     out["placement"] = serde_json::to_value(f.placement).unwrap_or_default();
     out["effective"] = f.effective.cloned().unwrap_or_default();
     out["tier"] = f.tier.as_str().into();
+    // 0.46.14: the job's own network ask (`--network none`, dummies).
+    if let Some(net) = f.want.network.as_ref() {
+        out["network"] = crate::compute_views::network_json(net);
+    }
     // GPU jobs (0.46.11): the ask, the GPUs there open to this server, and
     // how many are free now (root picks the device at the start).
     if let Some(g) = f.want.gpu {
@@ -3428,6 +3494,11 @@ fn pick_node(
             r = r.with("node", n);
         }
         return Err(r);
+    }
+    // 0.46.14: no node left that runs the job at its `--network` (and some
+    // left out only for that): `job_network_needs_update`, exit 3.
+    if let Some((code, status, hint)) = place::network_refusal(want, &report) {
+        return Err(no(code, status, hint));
     }
     // `--exclusive` (CE-13): only nodes whose grant allows CI; refused
     // with the fix when that rules out every one.
@@ -3935,7 +4006,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         secret_env: Vec::new(),
         tier: None,
         cache: None,
-        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None,
+        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None, network: None,
         with: Vec::new(),
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());
@@ -4473,6 +4544,44 @@ mod tests {
         let e = needs_from(&serde_json::json!({"needs": ["node@$(x)"]})).unwrap_err();
         assert_eq!((e.code, e.status), ("need_invalid", 400));
         assert!(needs_from(&serde_json::json!({})).unwrap().is_empty());
+    }
+
+    /// 0.46.14: `network: "none"` and `netnsDummies` from a run request; a
+    /// job can only narrow its network, dummies imply none, and every name
+    /// and address breaking the rules is exit 2 (`job_network_invalid`).
+    #[test]
+    fn network_asks_are_checked_and_only_ever_narrow() {
+        use k2_core::compute::proto::jobnet::{codes, Dummy, JobNet, JobNetMode};
+        assert_eq!(network_from(&serde_json::json!({})).unwrap(), None, "no ask: the node's own setting");
+        assert_eq!(network_from(&serde_json::json!({"network": null, "netnsDummies": []})).unwrap(), None);
+        assert_eq!(network_from(&serde_json::json!({"network": "none"})).unwrap(), Some(JobNet::none()));
+        let d = network_from(&serde_json::json!({"netnsDummies": ["sewlane0=10.254.254.1/32", "v6=fd00:0::1/128"]})).unwrap().unwrap();
+        assert_eq!(
+            d,
+            JobNet {
+                mode: JobNetMode::None,
+                dummies: vec![Dummy { name: "sewlane0".into(), addr: "10.254.254.1/32".into() }, Dummy { name: "v6".into(), addr: "fd00::1/128".into() }]
+            },
+            "dummies imply none; addresses canonical"
+        );
+        for (body, says) in [
+            (serde_json::json!({"network": "on"}), "only narrow"),
+            (serde_json::json!({"network": "no-lan"}), "only narrow"),
+            (serde_json::json!({"network": "bogus"}), "the one value is none"),
+            (serde_json::json!({"network": 1}), "the string"),
+            (serde_json::json!({"netnsDummies": "sewlane0=10.0.0.1/32"}), "a list"),
+            (serde_json::json!({"netnsDummies": [5]}), "a list"),
+            (serde_json::json!({"netnsDummies": ["sewlane0=8.8.8.8/32"]}), "never a public address"),
+            (serde_json::json!({"netnsDummies": ["lo=10.0.0.1/32"]}), "loopback"),
+            (serde_json::json!({"netnsDummies": ["much-too-long-name=10.0.0.1/32"]}), "1-15"),
+            (serde_json::json!({"netnsDummies": ["sewlane0"]}), "<name>=<address>/<prefix>"),
+            (serde_json::json!({"netnsDummies": ["a=10.0.0.1/32", "a=10.0.0.2/32"]}), "named twice"),
+            (serde_json::json!({"netnsDummies": ["a=10.0.0.1/32", "b=10.0.0.2/32", "c=10.0.0.3/32", "d=10.0.0.4/32", "e=10.0.0.5/32"]}), "at most 4"),
+        ] {
+            let e = network_from(&body).expect_err(says);
+            assert_eq!((e.code, e.status), (codes::JOB_NETWORK_INVALID, 400), "{body}");
+            assert!(e.hint.contains(says), "{body}: {}", e.hint);
+        }
     }
 
     #[test]

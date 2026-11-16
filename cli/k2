@@ -1736,6 +1736,15 @@ cli_send() {
             printf '%s' "$out"
             return 0
         fi
+        # 0.46.15: a send whose daemon can't dedupe it (no `send-once`)
+        # never goes again over TCP after a socket try that may have run
+        # (no answer in time, or an empty one): that was a second copy.
+        if [ "${_K2_SEND_NO_RESEND:-0}" = 1 ]; then
+            case "$rc" in
+                28|52) printf '%s' "$out"; return "$rc" ;;
+                0) if [ -z "$out" ]; then return 0; fi ;;
+            esac
+        fi
     fi
     "$fn" "$endpoint" "$@"
 }
@@ -1964,7 +1973,26 @@ _permission_note_reset() {
 # `clientMsgId`). So a send that got no answer is asked again with the
 # SAME key, a few times; then the command says it may have landed and how
 # to ask once more without a duplicate.
+#
+# Only a daemon that lists `send-once` in /boot-status `features` dedupes
+# keys. Any other (an older one mid-update, a --host server) gets the send
+# once: no retry, no cell-socket-to-TCP resend after a try that may have
+# run, and on no answer "may have been delivered; check before resending".
 _K2_IDEM_KEY=""
+# "" not asked yet, 1 the daemon dedupes keys, 0 it doesn't (or didn't say).
+_K2_SEND_ONCE=""
+_k2_send_once_supported() {
+    if [ -z "$_K2_SEND_ONCE" ]; then
+        local _K2_CFG="" body=""
+        [ -n "${TOKEN:-}" ] && _k2_cfg_add data-urlencode "token=${TOKEN}"
+        body="$(_K2_CURL_TRIES=1 _k2_curl "$_K2_CFG" -s -G --connect-timeout 3 --max-time 5 "${BASE_URL}/boot-status" 2>/dev/null)" || body=""
+        case "$body" in
+            *'"send-once"'*) _K2_SEND_ONCE=1 ;;
+            *) _K2_SEND_ONCE=0 ;;
+        esac
+    fi
+    [ "$_K2_SEND_ONCE" = 1 ]
+}
 _k2_idem_valid() {
     [[ "${1:-}" =~ ^[A-Za-z0-9_-]{8,64}$ ]]
 }
@@ -1977,8 +2005,12 @@ _k2_idem_init() {
             exit 2
         fi
         _K2_IDEM_KEY="$1"
+        _k2_send_once_supported || true
         return 0
     fi
+    # Asked here, in the command's own shell, so every send of the run
+    # reuses the answer.
+    _k2_send_once_supported || true
     _K2_IDEM_KEY="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null)" || _K2_IDEM_KEY=""
     if ! _k2_idem_valid "$_K2_IDEM_KEY"; then
         echo "Error: k2 could not make a send key (python3 failed or is missing); nothing was sent." >&2
@@ -2001,6 +2033,16 @@ _k2_idem_unanswered() {
 _k2_idem_send() {
     local endpoint="$2" tries="${_K2_IDEM_TRIES:-3}" n=1 out rc t0="$SECONDS"
     case "$tries" in ''|*[!0-9]*|0) tries=3 ;; esac
+    if ! _k2_send_once_supported; then
+        rc=0
+        out="$(_K2_NOANSWER_SOFT=1 _K2_SEND_NO_RESEND=1 cli_send "$@")" || rc=$?
+        if ! _k2_idem_unanswered "$rc" "$out"; then
+            printf '%s' "$out"
+            return "$rc"
+        fi
+        echo "Error: K2's server didn't answer ${endpoint} ($((SECONDS - t0)) s). It may have been delivered; check before resending (this server doesn't say it drops a repeated send, so k2 didn't try again)." >&2
+        _k2_end_command 1
+    fi
     while :; do
         rc=0
         out="$(_K2_NOANSWER_SOFT=1 cli_send "$@")" || rc=$?

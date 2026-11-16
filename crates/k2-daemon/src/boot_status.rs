@@ -1302,6 +1302,10 @@ pub fn features() -> Vec<&'static str> {
     if post_idempotency_ready() {
         out.push(FEATURE_POST_IDEMPOTENCY);
     }
+    // 0.46.15: `idempotency_key` on msg, tray, thread ask and federated
+    // sends (crate::send_once). The CLI asks again after no answer only
+    // when this is here; without it, it sends once and says so.
+    out.push(crate::send_once::FEATURE);
     // Remote desktop (prd-remote-desktop-tab-v1 §5): whenever the routes
     // exist, so clients show + → Desktop (Beta) and the off card.
     out.push(crate::desktop::FEATURE);
@@ -1500,6 +1504,7 @@ mod tests {
                 "product-feedback-v1",
                 "product-feedback-screenshot-v1",
                 "post-idempotency-v1",
+                "send-once",
                 "remote-desktop-v1",
                 // Sew 0.9.0's pin: voice:record in App roles.
                 "app-voice-record-v1",

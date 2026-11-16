@@ -32,6 +32,10 @@ use std::time::{Duration, Instant};
 
 use crate::cli_response::CliResponse;
 
+/// The `/boot-status` feature key. The CLI retries a send that got no
+/// answer only when the daemon lists it.
+pub const FEATURE: &str = "send-once";
+
 /// The form / query / JSON body field.
 pub const PARAM: &str = "idempotency_key";
 

@@ -15,6 +15,9 @@
 # and a repeat while the first still runs waits for it. Its first answer
 # per key can be slowed past the CLI's request limit (_K2_POST_MAX_TIME).
 # The cell socket is served too, so the socket-then-TCP fallback is covered.
+# /boot-status lists `send-once` (the daemon's promise that it drops a
+# repeated key) unless the FEATURES file says `none`: then the CLI sends
+# once, never again over TCP, and says to check before resending.
 #
 # Hermetic: throwaway HOME, every K2_*/K2SO_* var unset, a python stub on
 # loopback and a Unix socket. No real daemon, ~/.k2 or keychain.
@@ -48,7 +51,7 @@ import json, os, socketserver, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 
-LOG, PORTF, MODEF, SOCK = sys.argv[1:5]
+LOG, PORTF, MODEF, SOCK, FEATURESF = sys.argv[1:6]
 lock = threading.Lock()
 answers = {}      # (path, key) -> {"done": Event, "answer": (status, body)}
 deliveries = {}   # path -> count
@@ -121,6 +124,9 @@ class H(BaseHTTPRequestHandler):
         body = self.rfile.read(n).decode("utf-8", "replace") if n else ""
         u = urlsplit(self.path)
         path = u.path
+        if path == "/boot-status":
+            feats = [] if open(FEATURESF).read().strip() == "none" else ["post-idempotency-v1", "send-once"]
+            return self.reply(200, {"view": "full", "phase": "ready", "features": feats})
         if path == "/__reset":
             # A new section: delivery counts (and ids) start again at 1.
             with lock:
@@ -181,9 +187,11 @@ PY
 LOG="$SANDBOX/requests.log"
 MODE="$SANDBOX/mode"
 SOCK="$SANDBOX/cell.sock"
+FEATURES="$SANDBOX/features"
 : > "$LOG"
 echo fast > "$MODE"
-python3 -I "$SANDBOX/stub.py" "$LOG" "$SANDBOX/port" "$MODE" "$SOCK" &
+echo send-once > "$FEATURES"
+python3 -I "$SANDBOX/stub.py" "$LOG" "$SANDBOX/port" "$MODE" "$SOCK" "$FEATURES" &
 STUB_PID=$!
 for _ in $(seq 1 50); do [ -s "$SANDBOX/port" ] && [ -S "$SOCK" ] && break; sleep 0.1; done
 [ -s "$SANDBOX/port" ] && [ -S "$SOCK" ] || { echo "FAIL: the stub daemon did not start" >&2; exit 1; }
@@ -348,6 +356,25 @@ MAXT=1 run sock msg beta --inbox-wake ./note.md
     || bad "inbox-wake: every try carries one key: $(cat "$LOG")"
 printf '%s' "$OUT" | grep -q '"id":"inbox_1"' && ok || bad "inbox-wake: the first package: $OUT"
 no_footer "inbox-wake"
+
+echo "== 11. a daemon without send-once: one send, no retry, no TCP resend, check first =="
+reset_stub
+echo none > "$FEATURES"
+echo slow_first > "$MODE"
+MAXT=1 run sock msg beta "ping old daemon"
+[ "$RC" = 1 ] && ok || bad "old daemon, no answer: exit $RC, want 1 ($ERR)"
+n_sends="$(grep -c " /cli/workspace/msg key=" "$LOG" || true)"
+[ "$n_sends" = 1 ] && ok || bad "old daemon: want exactly one send (no retry, no TCP resend), saw $n_sends: $(cat "$LOG")"
+grep -q "^uds POST /cli/workspace/msg" "$LOG" && ok || bad "old daemon: the one send went over the cell socket: $(cat "$LOG")"
+printf '%s' "$ERR" | grep -q "may have been delivered; check before resending" && ok || bad "old daemon: the check-first line: $ERR"
+printf '%s' "$ERR" | grep -q -- "--idempotency-key" && bad "old daemon: offers a key it can't honour: $ERR" || ok
+no_footer "old daemon, no answer"
+sleep 2
+echo fast > "$MODE"
+MAXT=1 run tcp thread ask k2 "Ship it?" --options "Ship,Wait"
+[ "$RC" = 0 ] && ok || bad "old daemon, answered ask: exit $RC ($ERR)"
+[ "$(grep -c " /cli/thread/ask key=" "$LOG" || true)" = 1 ] && ok || bad "old daemon ask: one send: $(cat "$LOG")"
+echo send-once > "$FEATURES"
 
 echo
 echo "msg_send_once: $pass passed, $fail failed"

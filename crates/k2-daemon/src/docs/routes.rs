@@ -141,7 +141,7 @@ pub const ROUTES: &[&str] = &[
     STATUS, super::cores::CORES_ROUTE, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
     UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME, LEASE, CLAIM, ACTIVITY,
     super::export::EXPORT, super::export::TARGETS, super::export::STATUS, super::export::CANCEL, super::export::FETCH,
-    super::annotations::PURGE, super::annotations::ERASE, super::preview::route::PREVIEW, super::say::SAY,
+    super::annotations::PURGE, super::annotations::ERASE, super::preview::route::PREVIEW, super::say::SAY, USE_THEIRS,
 ];
 
 /// Tier 0's lease (K-T0-2): acquire, renew, release, break.
@@ -159,6 +159,10 @@ pub const NAME: &str = "/cli/docs/name";
 pub const REVERT: &str = "/cli/docs/revert";
 pub const MV: &str = "/cli/docs/mv";
 pub const BLAME: &str = "/cli/docs/blame";
+/// "Use their version" after an outside save of a text doc: the doc becomes
+/// the file as the other program saved it, as ONE change by the caller at
+/// the current version, which their undo reverses ([`super::theirs`]).
+pub const USE_THEIRS: &str = "/cli/docs/use-theirs";
 
 fn is_post_route(path: &str) -> bool {
     matches!(
@@ -181,6 +185,7 @@ fn is_post_route(path: &str) -> bool {
             | "/cli/docs/comments/purge"
             | "/cli/docs/erase"
             | "/cli/docs/say"
+            | "/cli/docs/use-theirs"
     ) || is_edit_route(path)
 }
 
@@ -1346,6 +1351,31 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
             let r = s.restore_with(j.conn, v, &c.history_options())?;
             super::claims::record_read(c.caller, &t.key(), r.version);
             edit_reply(s, c, &r, Some(("restored", json!(v))))
+        }
+        USE_THEIRS => {
+            if !matches!(t.tier, target::Tier::Markdown | target::Tier::Text(_)) {
+                return Err(VerbError::Response(with_exit(
+                    refusal("409 Conflict", "not_a_text_doc", "use their version is for a text doc; a keyed doc's outside save keeps a copy (outside_save's copy)"),
+                    k2_mpc_base::tools::exit::REFUSED,
+                )));
+            }
+            let rev = input.u64("rev").map_err(VerbError::Response)?;
+            let theirs = super::theirs::get(&t.key()).filter(|th| rev.is_none_or(|r| r == th.rev)).ok_or_else(|| {
+                VerbError::Response(with_exit(
+                    refusal(
+                        "409 Conflict",
+                        "theirs_gone",
+                        "K2 no longer has that outside save's text (a newer save came, or K2 restarted): compare the versions, or undo their save",
+                    ),
+                    k2_mpc_base::tools::exit::REFUSED,
+                ))
+            })?;
+            // The kit's replace at the current version: one change by the
+            // caller (it diffs: only what differs changes), one undo step.
+            let j = join(s, c, Stay::UntilIdle)?;
+            let r = s.replace_text_with_options(j.conn, ROOT, &theirs.text, &c.write_options())?;
+            super::claims::record_read(c.caller, &t.key(), r.version);
+            edit_reply(s, c, &r, Some(("theirs", json!(theirs.rev))))
         }
         NAME => {
             let name = input

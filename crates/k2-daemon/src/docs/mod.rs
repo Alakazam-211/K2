@@ -68,6 +68,7 @@ pub mod routes;
 pub mod say;
 pub mod shares;
 pub mod target;
+pub mod theirs;
 pub mod tier0;
 pub mod turn;
 pub mod versions;
@@ -555,6 +556,8 @@ impl Runtime {
         // Previews follow the doc (contract Item 8: a rename never leaves
         // them at the old key).
         preview::service::doc_moved(old, new);
+        // An outside save kept for "Use their version" was the old file's.
+        theirs::forget(old);
         let mut set = self.opened.lock().expect("docs opened set");
         if let Some(p) = set.remove(old) {
             if old.path.starts_with(".k2/") {

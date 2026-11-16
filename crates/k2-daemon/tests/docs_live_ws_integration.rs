@@ -753,6 +753,20 @@ async fn the_live_socket_end_to_end() {
     assert_eq!((&os["outcome"], &os["doc"]), (&json!("ingested"), &json!("notes.md")), "{os}");
     assert_eq!(os["rev"], save_change["event"]["version"], "the save's change: {os} {save_change}");
     assert!(os["at_ms"].as_u64().is_some_and(|ms| ms > 0), "{os}");
+    // Use their version (`POST /cli/docs/use-theirs`, the save's rev): the doc
+    // is the file as that save wrote it; an older rev is 409 theirs_gone.
+    let use_theirs = |rev: &J| {
+        http(port, "POST", &format!("/cli/docs/use-theirs?token={OWNER}"), Some(&json!({"path": doc, "rev": rev}).to_string()))
+    };
+    let r = use_theirs(&os["rev"]);
+    assert_eq!(r.status, 200, "use theirs: {}", r.body);
+    assert_eq!(json_of(&r)["theirs"], os["rev"], "{}", r.body);
+    assert_eq!(daemon_text(port, &doc).1, format!("a stale editor's own line\n{to}"), "their save, as saved");
+    let r = use_theirs(&json!(1));
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert_eq!(json_of(&r)["error"]["code"], "theirs_gone", "{}", r.body);
+    let r = http(port, "GET", &format!("/cli/docs/use-theirs?token={OWNER}&path={}", enc(&doc)), None);
+    assert_eq!(r.status, 405, "POST only");
     assert!(
         !b_frames.iter().any(|f| f["event"]["kind"] == "overwritten"),
         "B didn't write the line, so B isn't told: {b_frames:?}"

@@ -41,7 +41,8 @@ export interface EditorMountOptions {
   wrap: boolean
   /** Write and Read: the rendered page (lib/editor/write-mode). Source: none. */
   extensions: Extension
-  /** The frame's tools on this view (find, the outline, Write's toolbar and / menu): mount it with `extensions`. */
+  /** The frame's tools on this view (find, the outline, Write's toolbar and / menu): mount it just before `extensions`,
+   *  so a find match's mark sits inside Write's marks. */
   frame?: Extension
 }
 

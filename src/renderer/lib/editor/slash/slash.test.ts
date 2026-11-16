@@ -38,6 +38,14 @@ describe('opening', () => {
     type(v, '/')
     expect(slashState(v.state)).toMatchObject({ from: 6, query: '', active: 0 })
   })
+  it('a line of only spaces (a list\'s indent) counts as empty; the block keeps the indent', () => {
+    const v = open('- one\n  ', 8)
+    type(v, '/')
+    expect(slashState(v.state)).toMatchObject({ from: 8, query: '' })
+    type(v, 'bul')
+    v.dispatch(insertBlockSpec(v.state, slashState(v.state)!, 'bullet'))
+    expect(v.state.doc.toString()).toBe('- one\n  - ')
+  })
   it('"/" anywhere else is just a slash', () => {
     const v = open('Intro', 5)
     type(v, '/')

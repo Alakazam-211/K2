@@ -12,7 +12,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { cx } from '@/components/ui'
 import { countWords, findCount, findStep, firstFrom, replaceAllSpec, replaceOneSpec, selectMatch, type FindSpec } from '@/lib/editor/find/find'
-import { hideMatches, searchPanelOpen, showMatches } from '@/lib/editor/find/find-view'
+import { hideMatches, showMatches } from '@/lib/editor/find/find-view'
 import { ToolGlyph } from './glyphs'
 
 export interface FindBarProps {
@@ -74,11 +74,6 @@ export function FindBar(p: FindBarProps): React.JSX.Element {
     if (view && shown.current === view) showMatches(view, spec)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spec.replace])
-
-  // The text closed CodeMirror's search (Esc in a code file): the bar goes with it.
-  useEffect(() => {
-    if (view && shown.current === view && !searchPanelOpen(view.state)) p.onClose()
-  })
 
   // Leaving: the matches go.
   useEffect(() => () => void (shown.current && hideMatches(shown.current)), [])

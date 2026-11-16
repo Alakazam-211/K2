@@ -25,7 +25,7 @@ function RealEditor({ o, text }: { o: EditorMountOptions; text: string }): React
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const view = new EditorView({
-      state: EditorState.create({ doc: text, extensions: [history(), keymap.of([...historyKeymap, ...defaultKeymap]), o.readOnly ? EditorState.readOnly.of(true) : [], o.extensions, o.frame ?? []] }),
+      state: EditorState.create({ doc: text, extensions: [history(), keymap.of([...historyKeymap, ...defaultKeymap]), o.readOnly ? EditorState.readOnly.of(true) : [], o.frame ?? [], o.extensions] }),
       parent: box.current!,
     })
     return () => view.destroy()
@@ -152,6 +152,16 @@ describe('find', () => {
     fireEvent.keyDown(screen.getByRole('textbox', { name: 'Find' }), { key: 'Escape' })
     expect(screen.queryByRole('search')).toBeNull()
     expect(document.querySelectorAll('.cm-searchMatch')).toHaveLength(0)
+  })
+
+  it('a match inside inline code is marked inside the code chip, never splitting it', () => {
+    mount({ text: 'Intro.\n\nBriefs live in `briefs/`, one per piece.\n\nEnd.' })
+    key('f')
+    typeFind('brief')
+    const codes = [...document.querySelectorAll('.cm-md-code')]
+    expect(codes.map((c) => c.textContent)).toContain('briefs/')
+    const inCode = [...document.querySelectorAll('.cm-searchMatch')].filter((m) => m.closest('.cm-md-code'))
+    expect(inCode.map((m) => m.textContent)).toEqual(['brief'])
   })
 
   it('CodeMirror’s own search panel never shows', () => {

@@ -39,7 +39,7 @@ export function filterBlocks(query: string): SlashBlock[] {
 }
 
 export interface SlashState {
-  /** Where the "/" is (its line's start). */
+  /** Where the "/" is (after the line's indent, if any). */
   from: number
   /** What's typed after the "/". */
   query: string
@@ -56,10 +56,12 @@ interface Field {
 export const closeSlash = StateEffect.define<null>()
 const setActive = StateEffect.define<number>()
 
+/** The "/" at `from` still starts what's typed on its line (after only spaces), and the caret is after it. */
 function onLine(state: EditorState, from: number): boolean {
   const sel = state.selection.main
   const line = state.doc.lineAt(from)
-  return line.from === from && sel.empty && sel.head > from && sel.head <= line.to && line.text.startsWith('/') && !line.text.includes('\n')
+  const indent = line.text.slice(0, from - line.from)
+  return /^[ \t]*$/.test(indent) && state.sliceDoc(from, from + 1) === '/' && sel.empty && sel.head > from && sel.head <= line.to
 }
 
 const slashField = StateField.define<Field>({
@@ -72,23 +74,24 @@ const slashField = StateField.define<Field>({
     }
     const state = tr.state
     const head = state.selection.main.head
-    if (dismissed !== null && state.doc.lineAt(head).from !== dismissed) dismissed = null
+    if (dismissed !== null && state.doc.lineAt(head).from !== state.doc.lineAt(dismissed).from) dismissed = null
     for (const e of tr.effects) {
       if (e.is(closeSlash)) {
-        if (open) dismissed = open.from
+        if (open) dismissed = state.doc.lineAt(open.from).from
         open = null
       } else if (e.is(setActive) && open) open = { ...open, active: e.value }
     }
     if (open) {
       if (!onLine(state, open.from)) open = null
       else {
-        const query = state.doc.lineAt(open.from).text.slice(1)
+        const query = state.sliceDoc(open.from + 1, state.doc.lineAt(open.from).to)
         if (query !== open.query) open = { ...open, query, active: 0 }
       }
     } else if (tr.docChanged && tr.isUserEvent('input.type')) {
       const line = state.doc.lineAt(head)
       const sel = state.selection.main
-      if (sel.empty && line.text === '/' && head === line.to && dismissed !== line.from) open = { from: line.from, query: '', active: 0 }
+      // An empty line, or one of only spaces (a list's indent): "/" is all that's typed on it.
+      if (sel.empty && /^[ \t]*\/$/.test(line.text) && head === line.to && dismissed !== line.from) open = { from: line.to - 1, query: '', active: 0 }
     }
     return open === f.open && dismissed === f.dismissed ? f : { open, dismissed }
   },
@@ -131,7 +134,7 @@ function blockText(state: EditorState, from: number, id: string): { insert: stri
 export function insertBlockSpec(state: EditorState, s: SlashState, id: string): TransactionSpec {
   const line = state.doc.lineAt(s.from)
   const { insert, caret } = blockText(state, s.from, id)
-  return { changes: { from: line.from, to: line.to, insert }, selection: EditorSelection.cursor(line.from + caret), effects: closeSlash.of(null), userEvent: 'input.slash', scrollIntoView: true }
+  return { changes: { from: s.from, to: line.to, insert }, selection: EditorSelection.cursor(s.from + caret), effects: closeSlash.of(null), userEvent: 'input.slash', scrollIntoView: true }
 }
 
 function move(view: EditorView, by: number): boolean {

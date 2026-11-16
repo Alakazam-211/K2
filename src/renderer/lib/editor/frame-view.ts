@@ -12,6 +12,7 @@ import { EditorView, ViewPlugin, keymap } from '@codemirror/view'
 import { search } from '@codemirror/search'
 import { FORMAT_IDS, FORMAT_KEYS, formatSpec } from './md-commands'
 import { slashExtension } from './slash/slash'
+import { findMarks } from './find/find-view'
 
 export interface FrameView {
   /** The mounted view, or null. */
@@ -60,7 +61,7 @@ export function createFrameView(): Store {
   }
 }
 
-/** The find bar drives CodeMirror's search state; CodeMirror's own panel is an empty, hidden box. */
+/** The find bar keeps its query in CodeMirror's search state; CodeMirror's own panel (never opened) is an empty, hidden box. */
 export const findPanelExtension: Extension = search({
   createPanel: () => {
     const dom = document.createElement('div')
@@ -93,5 +94,5 @@ export function frameExtension(store: FrameView, o: { write: boolean }): Extensi
       destroy: () => s.detach(view),
     }
   })
-  return [plugin, findPanelExtension, o.write ? [slashExtension(store.slashId), formatKeys] : []]
+  return [findMarks, plugin, findPanelExtension, o.write ? [slashExtension(store.slashId), formatKeys] : []]
 }

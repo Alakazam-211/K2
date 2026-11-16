@@ -46,8 +46,9 @@ export function LiveSlot({ host, filePath, opts, configure, onUpdate, presence, 
       getThemeExtension(theme),
       getHighlightExtension(theme),
       lang ?? [],
-      extensions,
+      // The frame's tools first: a find match's mark then sits inside Write's marks (a code chip stays whole).
       opts.frame ?? [],
+      extensions,
       presence ?? [],
       numbers ? lineNumbers() : [],
       EditorView.updateListener.of((u) => {

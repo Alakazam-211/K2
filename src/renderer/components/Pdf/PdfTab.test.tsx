@@ -132,7 +132,7 @@ describe('layers', () => {
     await within(panel).findByRole('button', { name: '5 layers with nothing on them' })
     expect(within(panel).getByTestId('pdf-layers-none').textContent).toBe('This file names 5 layers, but none is attached to anything on the sheets, so there’s nothing to switch.')
     expect(within(panel).queryAllByRole('switch')).toHaveLength(0)
-    expect(within(screen.getByTestId('editor-status')).getByText('5 layers, none in use')).toBeTruthy()
+    expect(within(screen.getByTestId('editor-status')).getByText('No layers in use')).toBeTruthy()
   })
 
   it('says so in one line when the PDF has none', async () => {

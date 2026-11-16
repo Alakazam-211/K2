@@ -14,6 +14,9 @@ export const PDF_CSS = `
 .pdf-tab .pdf-head-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--color-border); flex: none; }
 .pdf-tab :is(.pdf-head-btn, .pdf-zoom-btn, .pdf-find-btn, .pdf-chip, .pdf-panel-tab, .pdf-thumb, .pdf-annot-row, .pdf-group-btn, .pdf-pop-close):focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: 2px; }
 
+/* The status line stays in the page's column (the panel sits beside it). */
+.pdf-tab .ed-status { min-width: 0; overflow: hidden; }
+
 /* The desk and the paper. */
 .pdf-tab .pdf-desk { flex: 1 1 auto; min-height: 0; overflow: auto; background: var(--color-bg-inset); }
 .pdf-tab .pdf-desk-inner { display: flex; justify-content: center; align-items: flex-start; box-sizing: border-box; min-width: fit-content; min-height: 100%; padding: 24px; }
@@ -93,7 +96,7 @@ html[data-style="glass"] .pdf-tab .pdf-find-field { background: var(--color-bg-e
 .pdf-tab .pdf-wrap { overflow-wrap: anywhere; color: var(--color-text-primary); }
 .pdf-tab .pdf-layer-row[data-empty] .pdf-wrap { color: var(--color-text-secondary); }
 .pdf-tab .pdf-empty-group { margin-top: 6px; border-top: 1px solid var(--color-border); }
-.pdf-tab .pdf-group-btn { display: flex; width: 100%; align-items: center; gap: 6px; padding: 8px 14px; text-align: left; color: var(--color-text-secondary); cursor: pointer; border-radius: var(--radius-selector); }
+.pdf-tab .pdf-group-btn { font-size: var(--type-md); line-height: 1.4; display: flex; width: 100%; align-items: center; gap: 6px; padding: 8px 14px; text-align: left; color: var(--color-text-secondary); cursor: pointer; border-radius: var(--radius-selector); }
 .pdf-tab .pdf-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 4px 14px; }
 .pdf-tab .pdf-group-head { padding: 10px 14px 4px; color: var(--color-text-secondary); font-weight: 600; }
 .pdf-tab .pdf-annot-row { display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 100%; padding: 6px 14px; text-align: left; cursor: pointer; }

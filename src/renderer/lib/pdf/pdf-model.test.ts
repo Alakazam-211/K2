@@ -131,7 +131,7 @@ describe('layer coverage', () => {
     const v = layerView(layers, cov)
     expect(v.used).toEqual([])
     expect(v.empty).toHaveLength(5)
-    expect(coverageSummary(v)).toBe('5 layers, none in use')
+    expect(coverageSummary(v)).toBe('No layers in use')
   })
 })
 

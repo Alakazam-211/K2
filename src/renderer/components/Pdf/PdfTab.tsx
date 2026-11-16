@@ -336,7 +336,8 @@ export function PdfTab({ doc, binary, filePath, width }: { doc: PdfDoc; binary: 
           <EditorStatusLine
             items={[
               { id: 'page', node: `Page ${page} of ${numPages}` },
-              { id: 'zoom', node: pct },
+              // Narrow, the header's zoom says it; the status line keeps to the page's column.
+              ...(narrow ? [] : [{ id: 'zoom', node: pct }]),
               ...(layers.length ? [{ id: 'layers', node: view.checking ? `${layers.filter((l) => l.visible).length} of ${layers.length} layers` : coverageSummary(view) }] : []),
             ]}
             toggles={[]}

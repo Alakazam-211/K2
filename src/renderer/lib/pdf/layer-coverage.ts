@@ -115,7 +115,7 @@ export const itemsWord = (n: number): string => `${n.toLocaleString('en-GB')} ${
 export function coverageSummary(view: LayerView): string {
   const { used, empty } = view
   if (used.length === 0 && empty.length === 0) return 'No layers'
-  if (used.length === 0) return `${empty.length} ${empty.length === 1 ? 'layer' : 'layers'}, none in use`
+  if (used.length === 0) return 'No layers in use'
   const on = used.filter((l) => l.visible).length
   return `${on} of ${used.length} ${used.length === 1 ? 'layer' : 'layers'}`
 }

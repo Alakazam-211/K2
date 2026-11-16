@@ -54,6 +54,7 @@ fn spec(script: &str, d: &std::path::Path) -> k2_node::wall::ExecSpec {
         env: vec![("PATH".into(), "/usr/bin:/bin".into())],
         cwd: d.to_path_buf(),
         stdin_env: true,
+        rc_file: None,
     }
 }
 

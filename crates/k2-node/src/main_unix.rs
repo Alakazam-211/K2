@@ -1404,6 +1404,27 @@ pub fn main() -> ExitCode {
         };
         return ExitCode::from(k2_node::hold::main(std::path::Path::new(dir)) as u8);
     }
+    // The Linux job unit's shim (runs as the job user): exec, or run the
+    // command as its child and record its exit (`rc_file`), then end the
+    // same way. Before any thread exists, like the holder (it forks).
+    if raw.first().map(String::as_str) == Some("job-exec") {
+        let Some(spec) = raw.get(1) else {
+            eprintln!("k2-node job-exec <spec>");
+            return ExitCode::from(2);
+        };
+        match k2_node::wall::job_exec(std::path::Path::new(spec)) {
+            k2_node::wall::ShimEnd::Failed(e) => {
+                eprintln!("{e}");
+                return ExitCode::from(127);
+            }
+            k2_node::wall::ShimEnd::Ended { exit, rc_error } => {
+                if let Some(e) = rc_error {
+                    eprintln!("k2-node job-exec: couldn't record the exit: {e}");
+                }
+                k2_node::wall::exit_like(&exit);
+            }
+        }
+    }
     // A Mac no-lan job's egress proxy: forks like the holder, then its own
     // small runtime (prd-compute-mac-no-lan-v1 §5.2).
     if raw.first().map(String::as_str) == Some("job-egress") {
@@ -1435,15 +1456,6 @@ pub fn main() -> ExitCode {
 }
 
 async fn main_async(raw: Vec<String>) -> ExitCode {
-    // The Linux job unit's shim (runs as the job user): exec or fail.
-    if raw.first().map(String::as_str) == Some("job-exec") {
-        let Some(spec) = raw.get(1) else {
-            eprintln!("k2-node job-exec <spec>");
-            return ExitCode::from(2);
-        };
-        eprintln!("{}", k2_node::wall::job_exec(std::path::Path::new(spec)));
-        return ExitCode::from(127);
-    }
     let a = match parse(&raw) {
         Ok(a) => a,
         Err(e) => {

@@ -332,12 +332,59 @@ pub struct ExecSpec {
     /// merges it. Absent = false (a 0.46.3 spec).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stdin_env: bool,
+    /// Where the shim records how the command ended (2026-11-16, job
+    /// 265ae46f): with it the shim runs the command as its child instead
+    /// of exec'ing it, waits, writes the exit here ([`RcRecord`]) and
+    /// exits the same way, so the exit stays provable after systemd has
+    /// forgotten the unit (a k2-node that adopted the job after an update
+    /// reads it). Absent = exec as before (a spec from 0.46.13 or older,
+    /// whose shim ignores the field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rc_file: Option<PathBuf>,
 }
 
 /// Under the job root, in its own group-writable dir so the shim (as the
 /// job user) can delete it once read; the root itself stays the node's.
 pub const EXEC_SPEC: &str = "exec/exec.json";
+/// The shim's record of the command's end, beside the spec.
+pub const EXEC_RC: &str = "exec/rc.json";
 const MAX_SPEC_BYTES: u64 = 4 << 20;
+const MAX_RC_BYTES: u64 = 4096;
+
+/// [`EXEC_RC`]: how the job's command ended, as its parent (the shim) saw
+/// it in `waitpid`. Exactly one of `code` / `signal`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RcRecord {
+    pub v: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
+}
+
+/// The exit an rc file proves: `None` when there is no file, it isn't a
+/// plain small file (never a link), or it doesn't say exactly one of a
+/// code or a signal. Never a default.
+pub fn read_rc(p: &Path) -> Option<k2_node_proto::frames::ExitInfo> {
+    let s = crate::util::read_regular_max(p, MAX_RC_BYTES).ok()?;
+    let r: RcRecord = serde_json::from_str(&s).ok()?;
+    match (r.code, r.signal) {
+        (Some(_), None) | (None, Some(_)) => Some(k2_node_proto::frames::ExitInfo { code: r.code, signal: r.signal }),
+        _ => None,
+    }
+}
+
+/// How `k2-node job-exec` ends when it doesn't exec.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShimEnd {
+    /// Nothing ran (or the command couldn't start): the message for
+    /// stderr; the shim exits 127.
+    Failed(String),
+    /// The command ran as the shim's child and ended so (recorded in the
+    /// rc file when it could be: `rc_error` says why not). The shim exits
+    /// the same way.
+    Ended { exit: k2_node_proto::frames::ExitInfo, rc_error: Option<String> },
+}
 
 pub fn write_exec_spec(root: &Path, spec: &ExecSpec) -> Result<PathBuf, String> {
     let p = root.join(EXEC_SPEC);
@@ -384,24 +431,73 @@ pub fn ensure_runtime_dir(dir: &Path) -> Result<(), String> {
     }
 }
 
-/// The shim: read + delete the spec, then exec the job with exactly its
-/// env and cwd (`PATH` from that env finds the program). Returns only on
-/// failure (the message for stderr).
-pub fn job_exec(spec_path: &Path) -> String {
+/// The signals the recording shim itself ignores while its child runs, so
+/// it outlives the child (a unit stop signals every process of the unit)
+/// and records how the child ended. The child gets back the dispositions
+/// the shim started with.
+const SHIM_SHIELD: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGINT, libc::SIGHUP];
+
+/// Write [`EXEC_RC`] (as the job user, 0644: the node reads it).
+pub fn write_rc(p: &Path, exit: &k2_node_proto::frames::ExitInfo) -> Result<(), String> {
+    let r = RcRecord { v: 1, code: exit.code, signal: exit.signal };
+    let body = serde_json::to_vec(&r).map_err(|e| format!("encode {}: {e}", p.display()))?;
+    crate::util::atomic_write(p, &body, 0o644)
+}
+
+/// End this process the way `exit` says the job's command ended: the same
+/// code, or the same signal (default action), so systemd records what the
+/// rc file records. Falls back to `128 + signal` if the signal doesn't
+/// end it.
+pub fn exit_like(exit: &k2_node_proto::frames::ExitInfo) -> ! {
+    if let Some(sig) = exit.signal {
+        // SAFETY: resetting one disposition and raising it on ourselves.
+        unsafe {
+            libc::signal(sig, libc::SIG_DFL);
+            libc::raise(sig);
+        }
+        std::process::exit(128 + sig);
+    }
+    std::process::exit(exit.code.unwrap_or(1))
+}
+
+/// The shim: read + delete the spec, then run the job with exactly its env
+/// and cwd (`PATH` from that env finds the program). Without an rc file
+/// in the spec (or for a secret-env job, never adopted) it execs and
+/// returns only on failure; with one it runs the command as its child and
+/// returns how it ended ([`ShimEnd::Ended`]), recorded in the rc file.
+pub fn job_exec(spec_path: &Path) -> ShimEnd {
     use std::io::Read;
     use std::os::unix::process::CommandExt;
     let mut body = Vec::new();
     let read = std::fs::File::open(spec_path).and_then(|f| f.take(MAX_SPEC_BYTES).read_to_end(&mut body));
     if let Err(e) = read {
-        return format!("k2-node job-exec: read {}: {e}", spec_path.display());
+        return ShimEnd::Failed(format!("k2-node job-exec: read {}: {e}", spec_path.display()));
     }
     let _ = std::fs::remove_file(spec_path);
     let spec: ExecSpec = match serde_json::from_slice(&body) {
         Ok(s) => s,
-        Err(e) => return format!("k2-node job-exec: {}: {e}", spec_path.display()),
+        Err(e) => return ShimEnd::Failed(format!("k2-node job-exec: {}: {e}", spec_path.display())),
     };
-    let Some(program) = spec.argv.first() else { return "k2-node job-exec: empty argv".into() };
-    let mut cmd = std::process::Command::new(program);
+    match job_command(&spec) {
+        Err(e) => ShimEnd::Failed(e),
+        Ok(Run::Exec(mut cmd, program)) => {
+            let e = cmd.exec();
+            ShimEnd::Failed(format!("k2-node job-exec: exec {program}: {e}"))
+        }
+        Ok(Run::Recorded(cmd, program, rc)) => run_recorded(cmd, &program, &rc),
+    }
+}
+
+/// How the shim runs a spec's command.
+enum Run {
+    Exec(std::process::Command, String),
+    Recorded(std::process::Command, String, PathBuf),
+}
+
+fn job_command(spec: &ExecSpec) -> Result<Run, String> {
+    use std::os::unix::process::CommandExt;
+    let Some(program) = spec.argv.first().cloned() else { return Err("k2-node job-exec: empty argv".into()) };
+    let mut cmd = std::process::Command::new(&program);
     cmd.args(&spec.argv[1..]).env_clear().current_dir(&spec.cwd);
     for (k, v) in &spec.env {
         cmd.env(k, v);
@@ -412,7 +508,7 @@ pub fn job_exec(spec_path: &Path) -> String {
     for (k, v) in gpu_env_from(|k| std::env::var(k).ok()) {
         if k == k2_node_proto::gpu::ENV_RUNTIME_DIR {
             if let Err(e) = ensure_runtime_dir(Path::new(&v)) {
-                return format!("k2-node job-exec: XDG_RUNTIME_DIR: {e}");
+                return Err(format!("k2-node job-exec: XDG_RUNTIME_DIR: {e}"));
             }
         }
         cmd.env(k, v);
@@ -420,20 +516,61 @@ pub fn job_exec(spec_path: &Path) -> String {
     if spec.stdin_env {
         // Secret-env (SE21): fd 0 is the node's pipe. Read it to EOF
         // (capped), then fd 0 becomes /dev/null before anything else runs.
-        let secrets = match read_stdin_secrets(&spec.env) {
-            Ok(s) => s,
-            Err(e) => return format!("k2-node job-exec: {e}"),
-        };
+        // Always exec'd (a secret job keeps its pipes and is never
+        // adopted, SE25): no shim process keeps a copy of the values.
+        let secrets = read_stdin_secrets(&spec.env).map_err(|e| format!("k2-node job-exec: {e}"))?;
         for (k, v) in &secrets.0 {
             cmd.env(k, v);
         }
-        // On success the process image (and every copy above) is gone.
-        let e = cmd.exec();
+        // On a successful exec the process image (and every copy) is gone.
         drop(secrets);
-        return format!("k2-node job-exec: exec {program}: {e}");
+        return Ok(Run::Exec(cmd, program));
     }
-    let e = cmd.exec();
-    format!("k2-node job-exec: exec {program}: {e}")
+    match &spec.rc_file {
+        None => Ok(Run::Exec(cmd, program)),
+        Some(rc) => {
+            // The child gets back what the shim started with.
+            let mut before = [libc::SIG_DFL; SHIM_SHIELD.len()];
+            for (i, s) in SHIM_SHIELD.iter().enumerate() {
+                // SAFETY: setting a disposition to SIG_IGN; the old one is kept.
+                let old = unsafe { libc::signal(*s, libc::SIG_IGN) };
+                before[i] = if old == libc::SIG_ERR { libc::SIG_DFL } else { old };
+            }
+            // SAFETY: only async-signal-safe calls (signal) between fork and exec.
+            unsafe {
+                cmd.pre_exec(move || {
+                    for (i, s) in SHIM_SHIELD.iter().enumerate() {
+                        libc::signal(*s, before[i]);
+                    }
+                    Ok(())
+                });
+            }
+            Ok(Run::Recorded(cmd, program, rc.clone()))
+        }
+    }
+}
+
+/// Run the command as the shim's child, wait, record its end in `rc`.
+fn run_recorded(mut cmd: std::process::Command, program: &str, rc: &Path) -> ShimEnd {
+    use std::os::unix::process::ExitStatusExt;
+    // A record from before never stands for this run.
+    let _ = std::fs::remove_file(rc);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            // Like a failed exec: 127, and recorded as such.
+            let _ = write_rc(rc, &k2_node_proto::frames::ExitInfo { code: Some(127), signal: None });
+            return ShimEnd::Failed(format!("k2-node job-exec: run {program}: {e}"));
+        }
+    };
+    drop(cmd);
+    let exit = match child.wait() {
+        Ok(s) => k2_node_proto::frames::ExitInfo { code: s.code(), signal: s.signal() },
+        // No status: nothing is recorded (an unknown end stays unknown).
+        Err(e) => return ShimEnd::Failed(format!("k2-node job-exec: wait for {program}: {e}")),
+    };
+    let rc_error = write_rc(rc, &exit).err();
+    ShimEnd::Ended { exit, rc_error }
 }
 
 /// The secret env on fd 0 (SE21): `K2SE1\n` + JSON, at most
@@ -1395,11 +1532,17 @@ mod tests {
     fn exec_spec_round_trips_and_is_group_readable() {
         use std::os::unix::fs::PermissionsExt;
         let d = crate::util::temp_dir("exec-spec");
-        let s = ExecSpec { argv: vec!["cargo".into(), "test".into(), "$HOME".into()], env: vec![("PATH".into(), "/bin".into())], cwd: d.clone(), stdin_env: false };
+        let s = ExecSpec { argv: vec!["cargo".into(), "test".into(), "$HOME".into()], env: vec![("PATH".into(), "/bin".into())], cwd: d.clone(), stdin_env: false, rc_file: None };
         let p = write_exec_spec(&d, &s).unwrap();
         assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o640);
         let back: ExecSpec = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
         assert_eq!(back, s, "argv is opaque: no $ or % expansion anywhere");
+        // Without an rc file the spec is 0.46.13's bytes (an older shim
+        // reads it); with one, an older shim ignores the field and execs.
+        assert!(!String::from_utf8(std::fs::read(&p).unwrap()).unwrap().contains("rc_file"));
+        let with = ExecSpec { rc_file: Some(d.join(EXEC_RC)), ..s };
+        let old: serde_json::Value = serde_json::to_value(&with).unwrap();
+        assert_eq!(old["rc_file"], serde_json::json!(d.join(EXEC_RC)));
     }
 
     #[test]
@@ -1408,10 +1551,38 @@ mod tests {
         let p = d.join(EXEC_SPEC);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, "{not json").unwrap();
-        let e = job_exec(&p);
+        let ShimEnd::Failed(e) = job_exec(&p) else { panic!("a bad spec runs nothing") };
         assert!(e.starts_with("k2-node job-exec:"), "{e}");
         assert!(!p.exists(), "read once, then gone");
-        assert!(job_exec(&d.join("missing.json")).contains("read"));
+        let ShimEnd::Failed(e) = job_exec(&d.join("missing.json")) else { panic!("a missing spec runs nothing") };
+        assert!(e.contains("read"), "{e}");
+    }
+
+    /// The rc file proves an exit only when it says exactly one of a code
+    /// or a signal, and is a plain small file (never a link): anything
+    /// else is no proof, never a default 0.
+    #[test]
+    fn an_rc_file_proves_an_exit_only_when_it_says_one() {
+        use k2_node_proto::frames::ExitInfo;
+        let d = crate::util::temp_dir("exec-rc");
+        let p = d.join("rc.json");
+        assert_eq!(read_rc(&p), None, "no file: unknown");
+        write_rc(&p, &ExitInfo { code: Some(0), signal: None }).unwrap();
+        assert_eq!(read_rc(&p), Some(ExitInfo { code: Some(0), signal: None }));
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), r#"{"v":1,"code":0}"#, "the format the adopter reads");
+        write_rc(&p, &ExitInfo { code: None, signal: Some(15) }).unwrap();
+        assert_eq!(read_rc(&p), Some(ExitInfo { code: None, signal: Some(15) }));
+        for bad in [r#"{"v":1}"#, r#"{"v":1,"code":0,"signal":9}"#, "", "{", r#"{"v":1,"code":"0"}"#] {
+            std::fs::write(&p, bad).unwrap();
+            assert_eq!(read_rc(&p), None, "{bad:?} proves nothing");
+        }
+        std::fs::write(&p, "x".repeat(MAX_RC_BYTES as usize + 1)).unwrap();
+        assert_eq!(read_rc(&p), None, "too large");
+        let real = d.join("real.json");
+        write_rc(&real, &ExitInfo { code: Some(0), signal: None }).unwrap();
+        let link = d.join("link.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(read_rc(&link), None, "a link is never followed");
     }
 
     #[test]

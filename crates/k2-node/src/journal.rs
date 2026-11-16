@@ -12,6 +12,8 @@ use k2_node_proto::crypto::Sha256Stream;
 use k2_node_proto::frames::{LogStream, MAX_LOG_CHUNK};
 
 const HEADER: usize = 13;
+/// A record whose stream byte is none of ours: the journal is damaged there.
+const BAD_STREAM: &str = "journal: bad stream byte";
 
 /// A redactor that grows while the job runs (git access, GH#78: a token is
 /// added the moment the node hands it to the job's git). Shared between
@@ -92,10 +94,38 @@ impl JournalWriter {
     /// hash carry on from what's there (a job whose end is recorded later
     /// by someone other than its runner).
     pub fn reopen(path: &Path, cap: u64) -> Result<Self, String> {
+        Self::reopen_with(path, cap, false).map(|(w, _)| w)
+    }
+
+    /// [`Self::reopen`] for a job adopted after an update: an unreadable
+    /// record (and everything after it) is cut off like a torn tail
+    /// instead of failing, so what's added next carries on the sequence
+    /// the server already has (a journal started over at 1 would have its
+    /// records dropped there as repeats). Returns the bytes cut off, which
+    /// the caller says in the log.
+    pub fn reopen_trimming(path: &Path, cap: u64) -> Result<(Self, u64), String> {
+        Self::reopen_with(path, cap, true)
+    }
+
+    fn reopen_with(path: &Path, cap: u64, trim_bad: bool) -> Result<(Self, u64), String> {
         let mut w = Self::create(path, cap)?;
         let mut r = JournalReader::new(path.to_path_buf());
+        let mut bad = false;
         loop {
-            let recs = r.read_more(256)?;
+            let (offset, last_seq) = (r.offset, r.last_seq);
+            let recs = match r.read_more(if bad { 1 } else { 256 }) {
+                Ok(recs) => recs,
+                // The batch that hit it: read again one record at a time
+                // from where it started, up to the bad one.
+                Err(e) if trim_bad && !bad && e == BAD_STREAM => {
+                    bad = true;
+                    r.offset = offset;
+                    r.last_seq = last_seq;
+                    continue;
+                }
+                Err(e) if trim_bad && e == BAD_STREAM => break,
+                Err(e) => return Err(e),
+            };
             if recs.is_empty() {
                 break;
             }
@@ -113,8 +143,9 @@ impl JournalWriter {
         }
         // A torn last record (its writer died mid-write) goes, so what's
         // added next is readable.
+        let len = w.file.metadata().map(|m| m.len()).unwrap_or(r.offset);
         w.file.set_len(r.offset).map_err(|e| format!("trim journal {}: {e}", path.display()))?;
-        Ok(w)
+        Ok((w, if bad { len.saturating_sub(r.offset) } else { 0 }))
     }
 
     fn record(&mut self, stream: LogStream, data: &[u8]) -> Result<(), String> {
@@ -223,7 +254,7 @@ impl JournalReader {
             let mut h = [0u8; HEADER];
             f.read_exact(&mut h).map_err(|e| format!("read journal: {e}"))?;
             let seq = u64::from_be_bytes(h[..8].try_into().unwrap_or([0; 8]));
-            let stream = stream_of(h[8]).ok_or("journal: bad stream byte")?;
+            let stream = stream_of(h[8]).ok_or(BAD_STREAM)?;
             let n = u32::from_be_bytes(h[9..13].try_into().unwrap_or([0; 4])) as u64;
             if self.offset + HEADER as u64 + n > len {
                 break;
@@ -248,6 +279,42 @@ impl JournalReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An adopted job's journal with a damaged record: the trimming reopen
+    /// keeps every good record before it, cuts the rest, says how much,
+    /// and carries the sequence on (a journal started over at 1 would have
+    /// its records dropped by the server as repeats). The plain reopen
+    /// still refuses it.
+    #[test]
+    fn a_trimming_reopen_cuts_a_damaged_tail_and_keeps_the_sequence() {
+        let d = crate::util::temp_dir("journal-trim");
+        let p = d.join("log");
+        let mut w = JournalWriter::create(&p, 1 << 20).unwrap();
+        for i in 0..5 {
+            w.append(LogStream::Out, format!("line {i}\n").as_bytes()).unwrap();
+        }
+        let good = std::fs::metadata(&p).unwrap().len();
+        drop(w);
+        // Record 6 with a stream byte that is none of ours, then more bytes.
+        let mut bad = 6u64.to_be_bytes().to_vec();
+        bad.push(9);
+        bad.extend_from_slice(&3u32.to_be_bytes());
+        bad.extend_from_slice(b"xyz");
+        bad.extend_from_slice(b"trailing");
+        std::fs::OpenOptions::new().append(true).open(&p).unwrap().write_all(&bad).unwrap();
+        assert!(JournalWriter::reopen(&p, 1 << 20).is_err(), "the plain reopen refuses a damaged journal");
+        let (mut w, cut) = JournalWriter::reopen_trimming(&p, 1 << 20).unwrap();
+        assert_eq!(cut, bad.len() as u64, "the damaged tail is cut and counted");
+        assert_eq!(std::fs::metadata(&p).unwrap().len(), good);
+        assert_eq!(w.seq, 5, "carries on from the last good record");
+        w.append(LogStream::Sys, b"adopted\n").unwrap();
+        let recs = JournalReader::new(p.clone()).read_more(100).unwrap();
+        assert_eq!(recs.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(recs[5].data, b"adopted\n");
+        // A sound journal: nothing cut.
+        let (w2, cut) = JournalWriter::reopen_trimming(&p, 1 << 20).unwrap();
+        assert_eq!((w2.seq, cut), (6, 0));
+    }
 
     #[test]
     fn write_read_split_and_resume() {

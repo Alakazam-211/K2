@@ -1836,6 +1836,10 @@ fn secret_artifacts_after(node_id: &str, job_id: &str) {
 }
 
 fn on_state(node_id: &str, s: StateUpdate) {
+    // The live end (sent after its log) supersedes a held snapshot end.
+    if s.state.is_terminal() {
+        held_ends(|m| m.remove(&(s.job_id.clone(), s.generation)));
+    }
     let terminal_outputs = s.state.is_terminal() && s.outputs.as_ref().is_some_and(|o| !o.artifacts.is_empty());
     if let Some(o) = s.outputs.clone().filter(|_| s.state.is_terminal()) {
         store_outputs(node_id, &s.job_id, s.generation, o);
@@ -1862,14 +1866,71 @@ fn on_state(node_id: &str, s: StateUpdate) {
     notify_change();
 }
 
+/// An end a node's snapshot reported before this server stored that
+/// attempt's whole log (2026-11-16: jobs 265ae46f, eae4bb57 read `done`
+/// with an empty or cut-off log, the rest arriving a moment later). The
+/// snapshot comes first on a (re)attach; the node's shipper sends the log
+/// and then the same end as a live `state`, which applies it. If that
+/// never comes, the held end applies after [`HELD_END_MAX`].
+struct HeldEnd {
+    node_id: String,
+    job: frames::LedgerJob,
+    since: Instant,
+}
+
+/// How long a held snapshot end waits for its log.
+pub const HELD_END_MAX: Duration = Duration::from_secs(120);
+
+static HELD_ENDS: Mutex<Option<HashMap<(String, u32), HeldEnd>>> = Mutex::new(None);
+
+fn held_ends<T>(f: impl FnOnce(&mut HashMap<(String, u32), HeldEnd>) -> T) -> T {
+    let mut g = HELD_ENDS.lock().unwrap_or_else(|p| p.into_inner());
+    f(g.get_or_insert_with(HashMap::new))
+}
+
+fn apply_ledger_row(node_id: &str, j: &frames::LedgerJob) {
+    // The node's ledger times (CE-5): a job that ended while this server
+    // slept is heard here, with its real end.
+    let at = if j.state.is_terminal() { j.ended_at } else { j.started_at };
+    apply_observation(node_id, &j.job_id, j.generation, j.state, j.reason.as_deref(), None, j.exit.as_ref(), None, None, NodeTimes { at, started_at: j.started_at });
+}
+
+/// Does this snapshot end wait for its log? Only an attempt this server
+/// still runs on that node (it was in the resume hints, so the node ships
+/// its log and then the live end) whose log here is behind the node's.
+fn end_waits_for_log(node_id: &str, j: &frames::LedgerJob) -> bool {
+    if !j.state.is_terminal() || j.log_seq == 0 || logs::last_seq(&j.job_id, j.generation as i64) >= j.log_seq {
+        return false;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    store::job_by_id(&conn, &j.job_id).is_some_and(|row| row.node_id == node_id && row.generation == j.generation as i64 && !row.is_terminal())
+}
+
+/// Apply the held snapshot ends whose log never came within
+/// [`HELD_END_MAX`] (the ticker; `now` is a parameter for tests).
+pub fn release_held_ends(now: Instant) {
+    let due: Vec<HeldEnd> = held_ends(|m| {
+        let keys: Vec<(String, u32)> = m.iter().filter(|(_, h)| now.duration_since(h.since) >= HELD_END_MAX).map(|(k, _)| k.clone()).collect();
+        keys.into_iter().filter_map(|k| m.remove(&k)).collect()
+    });
+    for h in due {
+        log_debug!("[compute] job {} gen {}: its log didn't arrive within {} s of its end; ending it with what's stored", h.job.job_id, h.job.generation, HELD_END_MAX.as_secs());
+        apply_ledger_row(&h.node_id, &h.job);
+    }
+}
+
 fn on_snapshot(node_id: &str, s: JobsSnapshot, seen: &mut HashSet<String>) {
     for j in &s.jobs {
         seen.insert(format!("{}#{}", j.job_id, j.generation));
         stop_stale(node_id, j);
-        // The node's ledger times (CE-5): a job that ended while this
-        // server slept is heard here, with its real end.
-        let at = if j.state.is_terminal() { j.ended_at } else { j.started_at };
-        apply_observation(node_id, &j.job_id, j.generation, j.state, j.reason.as_deref(), None, j.exit.as_ref(), None, None, NodeTimes { at, started_at: j.started_at });
+        // `done` is published only once its log is here (the live end
+        // after the log applies it).
+        if end_waits_for_log(node_id, j) {
+            held_ends(|m| m.insert((j.job_id.clone(), j.generation), HeldEnd { node_id: node_id.to_string(), job: j.clone(), since: Instant::now() }));
+            continue;
+        }
+        apply_ledger_row(node_id, j);
     }
     if !s.last {
         return;
@@ -3311,6 +3372,8 @@ fn ensure_ticker() {
                     crate::compute_place::sweep_shares(now);
                     // CE-10: warn a quiet job's session before its stall limit.
                     sweep_stalls(now);
+                    // Snapshot ends whose log never came.
+                    release_held_ends(Instant::now());
                 })
                 .await;
             }
@@ -3468,6 +3531,85 @@ mod tests {
         let row = store::job_by_id(&db.lock(), &other.id).expect("row");
         assert_eq!(row.state.as_str(), "queued", "retried: {row:?}");
         assert!(row.attempt > other.attempt, "a new attempt: {row:?}");
+    }
+
+    /// 2026-11-16 (jobs 265ae46f, eae4bb57): a node that (re)attaches
+    /// sends its ledger snapshot before its shipper sends the logs. An end
+    /// in that snapshot whose log this server hasn't stored is not
+    /// published yet (a `done` read then had an empty or cut-off log); the
+    /// live end the shipper sends after the log applies it, or, if it
+    /// never comes, the held end applies after `HELD_END_MAX`. An end with
+    /// nothing more to wait for applies at once.
+    #[test]
+    fn a_snapshot_end_waits_for_its_log() {
+        let _db = k2_core::db::scoped_for_test();
+        let db = k2_core::db::shared();
+        {
+            let conn = db.lock();
+            store::insert_pending_node(&conn, "n1", "n1", "fp", "pem", &BTreeMap::new(), "owner", "123456", 1).expect("node");
+        }
+        let running = |id: &str| {
+            let j = {
+                let conn = db.lock();
+                let j = job_on(&conn, id, "n1");
+                assert!(store::assign_if_queued(&conn, &j.id, compute::now() - 600).expect("assign"));
+                store::job_by_id(&conn, &j.id).expect("row")
+            };
+            apply_observation("n1", &j.id, j.generation as u32, JobState::Running, None, None, None, None, None, NodeTimes::default());
+            let row = store::job_by_id(&db.lock(), &j.id).expect("row");
+            assert_eq!(row.state, "running");
+            row
+        };
+        let ended = |j: &store::JobRow, log_seq: u64| frames::LedgerJob {
+            job_id: j.id.clone(),
+            generation: j.generation as u32,
+            attempt: j.attempt as u32,
+            plan_digest: String::new(),
+            state: JobState::Done,
+            reason: None,
+            started_at: Some(compute::now() - 500),
+            ended_at: Some(compute::now() - 5),
+            exit: Some(frames::ExitInfo { code: Some(0), signal: None }),
+            log_seq,
+            boot_id: "b".into(),
+        };
+        let state_of = |id: &str| {
+            let r = store::job_by_id(&db.lock(), id).expect("row");
+            (r.state, r.exit_code)
+        };
+        // Ids no other test uses (their logs, none stored, are read only).
+        let a = running("a5a5a5a50123456789abcdef0e2e1116");
+        let b = running("b5b5b5b50123456789abcdef0e2e1116");
+        let c = running("c5c5c5c50123456789abcdef0e2e1116");
+        assert_eq!(logs::last_seq(&a.id, a.generation), 0, "nothing of its log stored here");
+        let mut seen = HashSet::new();
+        on_snapshot("n1", JobsSnapshot { jobs: vec![ended(&a, 223), ended(&b, 40), ended(&c, 0)], last: true }, &mut seen);
+        assert_eq!(state_of(&a.id), ("running".to_string(), None), "done before its 223 log records are here: held");
+        assert_eq!(state_of(&b.id), ("running".to_string(), None));
+        assert_eq!(state_of(&c.id), ("done".to_string(), Some(0)), "no log to wait for: applied at once");
+        // The shipper's live end (after the log) applies it.
+        let live = frames::StateUpdate {
+            job_id: a.id.clone(),
+            generation: a.generation as u32,
+            state: JobState::Done,
+            reason: None,
+            detail: None,
+            at: compute::now() - 5,
+            exit: Some(frames::ExitInfo { code: Some(0), signal: None }),
+            src: None,
+            log_seq: 223,
+            outputs: None,
+            queue: None,
+        };
+        on_state("n1", live);
+        assert_eq!(state_of(&a.id), ("done".to_string(), Some(0)));
+        assert!(held_ends(|m| !m.contains_key(&(a.id.clone(), a.generation as u32))), "the live end replaced the held one");
+        // No live end within the limit: the held end applies then, not before.
+        release_held_ends(Instant::now() + HELD_END_MAX / 2);
+        assert_eq!(state_of(&b.id), ("running".to_string(), None), "still within the limit");
+        release_held_ends(Instant::now() + HELD_END_MAX + Duration::from_secs(1));
+        assert_eq!(state_of(&b.id), ("done".to_string(), Some(0)), "applied at the limit");
+        assert!(held_ends(|m| !m.contains_key(&(b.id.clone(), b.generation as u32))));
     }
 
     /// CE-5 acceptance 1: an end the node stamped at T, heard at T + 3 h,

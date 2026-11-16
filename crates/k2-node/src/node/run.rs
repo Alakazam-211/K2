@@ -43,12 +43,35 @@ type OutPipe = Box<dyn tokio::io::AsyncRead + Unpin + Send>;
 pub(super) enum Proc {
     Local { child: tokio::process::Child, pgid: i32, leaf: Option<Leaf> },
     /// `cg`: the unit's cgroup dir under `/sys/fs/cgroup`, once the
-    /// executor said it (CE-14, the CE-10 stall rule).
-    Unit { unit: String, last: Option<crate::admin::jobs::UnitStatus>, cg: Option<PathBuf> },
+    /// executor said it (CE-14, the CE-10 stall rule). `rc`: the
+    /// `job-exec` shim's rc file, when it records the exit there.
+    Unit { unit: String, last: Option<crate::admin::jobs::UnitStatus>, cg: Option<PathBuf>, rc: Option<PathBuf> },
     /// `facts` as the holder said them once (never re-read). `gone`: the
     /// holder ended without an `exit.json`; `timeout`: it stopped the job
     /// at its own deadline.
     Holder { facts: crate::hold::HoldFacts, dir: PathBuf, gone: bool, timeout: bool },
+}
+
+/// `failed/exit_unknown`: a job this process started whose end it can't
+/// prove (infra: retried when the job allows it). An adopted job's ends
+/// `interrupted/node_update` instead.
+pub const EXIT_UNKNOWN: &str = "exit_unknown";
+
+/// The detail (and log line) of an end whose exit nobody can prove.
+pub(super) fn unknown_exit_detail(adopted: bool, why: &str) -> String {
+    let when = if adopted { " after a k2-node update" } else { "" };
+    format!("the job's exit is unknown{when} ({why}); it is not reported as done. Rerun it")
+}
+
+/// A unit job's exit, as far as it is proven: the `job-exec` shim's rc
+/// file first (it survives systemd forgetting the unit), else systemd's
+/// own record of the main process (`ExecMainCode` 1, 2 or 3). `None`:
+/// unknown, never a default.
+pub(super) fn unit_exit(s: &crate::admin::jobs::UnitStatus, rc: Option<&Path>) -> Option<ExitInfo> {
+    if let Some(x) = rc.and_then(crate::wall::read_rc) {
+        return Some(x);
+    }
+    s.exit().map(|(code, signal)| ExitInfo { code, signal })
 }
 
 /// SIGKILL a job's process group the node recorded, never its own group
@@ -1091,6 +1114,7 @@ impl Node {
             rust: self.jobs.lock().unwrap().get(&(t.slot, job.clone())).map(|j| j.rust.clone()).unwrap_or_default(),
             ci_run: self.ci_run(&t, &job, gen),
             egress: None,
+            rc_file: None,
         });
         // C18: the provisional facts are on disk before anything starts, so
         // a crash between the spawn and `set_running` still leaves what the
@@ -1239,9 +1263,10 @@ impl Node {
         }
         if let Some(f) = facts.as_mut() {
             match &proc {
-                Proc::Unit { unit, .. } => {
+                Proc::Unit { unit, rc, .. } => {
                     f.kind = RunKind::Unit;
                     f.unit = Some(unit.clone());
+                    f.rc_file = rc.clone();
                 }
                 Proc::Holder { facts: h, .. } => {
                     f.kind = RunKind::Holder;
@@ -1632,6 +1657,22 @@ impl Node {
             Some(h) => h.await.ok().flatten(),
             None => None,
         };
+        // `done` only with a proven exit (2026-11-16, job 265ae46f): an
+        // end nobody can prove (systemd forgot the unit and no rc file
+        // says, a holder that wrote no exit, an unreadable status) is
+        // never reported as the job's result.
+        let unknown_detail = (ended_by.is_none() && exit.is_none() && !oom && !proc.timed_out() && !proc.holder_gone()).then(|| {
+            let why = match &proc {
+                Proc::Unit { .. } => "systemd no longer records the job's unit and no rc file says how it ended",
+                Proc::Holder { .. } => "its holder recorded no exit",
+                Proc::Local { .. } => "its exit status couldn't be read",
+            };
+            unknown_exit_detail(adopted, why)
+        });
+        if let Some(d) = &unknown_detail {
+            let _ = journal.lock().unwrap().append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {d}\n").as_bytes());
+            crate::nlog!("job {job} gen {gen}: {d}");
+        }
         let mut journal = Arc::try_unwrap(journal).ok().map(|m| m.into_inner().unwrap_or_else(|e| e.into_inner()));
         let (state, reason) = match ended_by {
             Some(s) => (s.state, Some(s.reason)),
@@ -1640,6 +1681,10 @@ impl Node {
             // `RuntimeMaxSec` or the holder's own deadline.
             None if proc.timed_out() => (JobState::Timeout, Some("timeout".to_string())),
             None if proc.holder_gone() => (JobState::Interrupted, Some(k2_node_proto::share::codes::NODE_UPDATE.to_string())),
+            // Infra, never a result: an adopted job's ends like an update's
+            // interruption (no strike against the node).
+            None if unknown_detail.is_some() && adopted => (JobState::Interrupted, Some(k2_node_proto::share::codes::NODE_UPDATE.to_string())),
+            None if unknown_detail.is_some() => (JobState::Failed, Some(EXIT_UNKNOWN.to_string())),
             None => (JobState::Done, None),
         };
         if reason.as_deref() == Some("mem_cap") {
@@ -1736,6 +1781,8 @@ impl Node {
         }
         let detail = if preset_detail.is_some() {
             preset_detail
+        } else if unknown_detail.is_some() {
+            unknown_detail
         } else {
             match reason.as_deref() {
             Some("stalled") => Some(format!("no output for {}s", a.plan.stall_secs.unwrap_or(0))),
@@ -1880,7 +1927,10 @@ impl Node {
     ) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>, Option<u32>, Option<String>), String> {
         use crate::admin::jobs::{JobAnswer, JobOp, JobStart};
         let key = t.job_key(&a.fence.job_id, a.fence.generation);
-        crate::wall::write_exec_spec(&dirs.root, &crate::wall::ExecSpec { argv: a.plan.argv.clone(), env: env.to_vec(), cwd: cwd.to_path_buf(), stdin_env: secrets.is_some() })?;
+        // An adoptable job (spooled output, no secrets) gets the recording
+        // shim: its exit stays provable after an update (2026-11-16).
+        let rc_file = (spool.is_some() && secrets.is_none()).then(|| dirs.root.join(crate::wall::EXEC_RC));
+        crate::wall::write_exec_spec(&dirs.root, &crate::wall::ExecSpec { argv: a.plan.argv.clone(), env: env.to_vec(), cwd: cwd.to_path_buf(), stdin_env: secrets.is_some(), rc_file: rc_file.clone() })?;
         // Spool files (§5.1) where the node gave them; pipes otherwise (a
         // secret job). Either way root only relays the fds.
         let (mut fds, readers): (Vec<std::os::fd::OwnedFd>, Option<(std::io::PipeReader, std::io::PipeReader)>) = match spool {
@@ -1982,8 +2032,8 @@ impl Node {
             tokio::net::unix::pipe::Receiver::from_owned_fd(std::os::fd::OwnedFd::from(r)).ok().map(|p| Box::new(p) as OutPipe)
         };
         Ok(match readers {
-            Some((out_r, err_r)) => (Proc::Unit { unit, last: None, cg: None }, rx(out_r), rx(err_r), uid_index, gpu),
-            None => (Proc::Unit { unit, last: None, cg: None }, None, None, uid_index, gpu),
+            Some((out_r, err_r)) => (Proc::Unit { unit, last: None, cg: None, rc: rc_file }, rx(out_r), rx(err_r), uid_index, gpu),
+            None => (Proc::Unit { unit, last: None, cg: None, rc: rc_file }, None, None, uid_index, gpu),
         })
     }
 
@@ -1994,9 +2044,9 @@ impl Node {
                 use std::os::unix::process::ExitStatusExt;
                 ExitInfo { code: s.code(), signal: s.signal() }
             }),
-            Proc::Unit { unit, last, .. } => {
+            Proc::Unit { unit, last, rc, .. } => {
                 let s = self.unit_wait_end(unit).await;
-                let e = s.exit().map(|(code, signal)| ExitInfo { code, signal });
+                let e = unit_exit(&s, rc.as_deref());
                 *last = Some(s);
                 e
             }
@@ -3082,7 +3132,7 @@ pub(super) mod tests {
             dirs,
             src_ran: None,
             lease: None,
-            proc: Proc::Unit { unit: "k2job-gm-g1.service".into(), last: None, cg: None },
+            proc: Proc::Unit { unit: "k2job-gm-g1.service".into(), last: None, cg: None, rc: None },
             outs: Vec::new(),
             journal,
             redactor: None,
@@ -3254,12 +3304,13 @@ pub(super) mod tests {
             unit: "k2job-j-g1.service".into(),
             last: Some(crate::admin::jobs::parse_show("LoadState=loaded\nActiveState=failed\nResult=oom-kill\n")),
             cg: None,
+            rc: None,
         };
         assert!(unit.oom() && unit.pgid() == 0 && !unit.needs_rss_sampler());
         // CE-14: a unit's usage is read from its cgroup once the executor
         // said it; a leaf's from the leaf; a plain group from ps.
         assert_eq!(unit.usage_source(), crate::jobstat::Source::None);
-        let with_cg = Proc::Unit { unit: "u".into(), last: None, cg: Some("/sys/fs/cgroup/system.slice/u".into()) };
+        let with_cg = Proc::Unit { unit: "u".into(), last: None, cg: Some("/sys/fs/cgroup/system.slice/u".into()), rc: None };
         assert_eq!(with_cg.usage_source(), crate::jobstat::Source::Cgroup("/sys/fs/cgroup/system.slice/u".into()));
         assert_eq!(p.usage_source(), crate::jobstat::Source::Cgroup(l.dir.clone()));
         let s = crate::admin::jobs::parse_show("LoadState=loaded\nControlGroup=/system.slice/k2job-j-g1.service\n");

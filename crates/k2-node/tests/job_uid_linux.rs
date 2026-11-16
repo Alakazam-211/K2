@@ -209,7 +209,7 @@ fn start_rw(r: &Rig, slot: Slot, name: &str, script: &str, env: &[(&str, &str)],
     }
     let mut e: Vec<(String, String)> = vec![("PATH".into(), "/usr/bin:/bin".into()), ("HOME".into(), root.display().to_string()), ("R".into(), root.display().to_string())];
     e.extend(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-    k2_node::wall::write_exec_spec(&root, &ExecSpec { argv: vec!["/bin/sh".into(), "-c".into(), script.into()], env: e, cwd: root.clone(), stdin_env: false }).unwrap();
+    k2_node::wall::write_exec_spec(&root, &ExecSpec { argv: vec!["/bin/sh".into(), "-c".into(), script.into()], env: e, cwd: root.clone(), stdin_env: false, rc_file: None }).unwrap();
     let (r1, w1) = std::io::pipe().unwrap();
     let (r2, w2) = std::io::pipe().unwrap();
     let raw = vec![w1.as_raw_fd(), w2.as_raw_fd()];

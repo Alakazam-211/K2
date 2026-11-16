@@ -155,6 +155,13 @@ pub struct RunFacts {
     /// log on from `offset`. Absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress: Option<super::egress_run::EgressRun>,
+    /// A unit job's `job-exec` rc file (`wall::EXEC_RC`): the shim records
+    /// the command's exit there, so the process that adopts the job can
+    /// prove it even after systemd forgot the unit. Absent for jobs
+    /// started by 0.46.13 or older (their exit is what systemd still
+    /// records, or unknown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rc_file: Option<PathBuf>,
 }
 
 /// Phase 1's sort of this boot's open rows with run facts.
@@ -238,12 +245,9 @@ impl Node {
         let a = Assign { fence: Fence { job_id: job.clone(), attempt: row.attempt, generation: gen, plan_digest: row.plan_digest.clone() }, plan: row.plan.clone() };
         let dirs = JobDirs::new(t.paths.job_dir(&job, gen));
         let mut preset: Option<(StopReason, String)> = None;
-        let unknown_exit = || {
-            (
-                StopReason { state: JobState::Failed, reason: k2_node_proto::share::codes::NODE_UPDATE.into() },
-                "it ended while no node watched; its exit is unknown".to_string(),
-            )
-        };
+        // An exit nobody can prove is never `done` (infra: retried when the
+        // job allows it, no strike against the node).
+        let unknown_exit = || (StopReason { state: JobState::Interrupted, reason: k2_node_proto::share::codes::NODE_UPDATE.into() }, super::run::unknown_exit_detail(true, "it ended while no node watched"));
         let proc = match f.kind {
             RunKind::Unit => {
                 // Only this attempt's own unit (its name is its key's).
@@ -256,10 +260,13 @@ impl Node {
                     }
                 };
                 // C23: a unit systemd already forgot ended with no exit.
-                if preset.is_none() && self.unit_status(&unit).await.is_some_and(|s| !s.loaded) {
+                // The wrapper's rc file proves an exit even then (the wait
+                // reads it first).
+                let rc = f.rc_file.clone();
+                if preset.is_none() && rc.as_deref().and_then(crate::wall::read_rc).is_none() && self.unit_status(&unit).await.is_some_and(|s| !s.loaded) {
                     preset = Some(unknown_exit());
                 }
-                Proc::Unit { unit, last: None, cg: None }
+                Proc::Unit { unit, last: None, cg: None, rc }
             }
             RunKind::Holder => {
                 let h = f.holder.clone().expect("sorted: a holder row has holder facts");
@@ -281,8 +288,12 @@ impl Node {
             RunKind::Provisional => unreachable!("sorted: provisional rows are never adoptable"),
         };
         let journal_path = t.paths.journal(&job, gen);
-        let mut journal = match JournalWriter::reopen(&journal_path, a.plan.limits.log_cap_bytes) {
-            Ok(j) => j,
+        let mut trimmed = 0;
+        let mut journal = match JournalWriter::reopen_trimming(&journal_path, a.plan.limits.log_cap_bytes) {
+            Ok((j, cut)) => {
+                trimmed = cut;
+                j
+            }
             Err(e) => {
                 crate::nlog!("job {job} gen {gen}: reopen its journal: {e}; a new one starts");
                 match JournalWriter::create(&journal_path, a.plan.limits.log_cap_bytes) {
@@ -301,12 +312,23 @@ impl Node {
         let sys = |j: &mut JournalWriter, m: String| {
             let _ = j.append(LogStream::Sys, format!("[k2-node] {m}\n").as_bytes());
         };
+        let at = k2_node_proto::provenance::rfc3339(self.now()).unwrap_or_else(|_| format!("unix {}", self.now()));
+        if trimmed > 0 {
+            sys(&mut journal, format!("{trimmed} bytes of this job's log from before the update (adopted at {at}) were unreadable and are lost"));
+        }
+        // An end decided here (no exit to wait for) is said in the log too.
+        if let Some((_, d)) = &preset {
+            sys(&mut journal, d.clone());
+        }
         let mut outs: Vec<(OutSrc, LogStream)> = Vec::new();
-        for (sf, stream) in [(f.out.as_ref(), LogStream::Out), (f.err.as_ref(), LogStream::Err)] {
-            let Some(sf) = sf else { continue };
+        for (sf, stream, name) in [(f.out.as_ref(), LogStream::Out, "stdout"), (f.err.as_ref(), LogStream::Err, "stderr")] {
+            let Some(sf) = sf else {
+                sys(&mut journal, format!("this job's {name} after the update (adopted {at}) was lost: the last k2-node left no record of where it went"));
+                continue;
+            };
             match crate::spool::reopen(sf) {
                 Ok(file) => outs.push((OutSrc::Spool(crate::spool::Tail::new(file, sf.off)), stream)),
-                Err(e) => sys(&mut journal, format!("this job's output after the update can't be read: {e}")),
+                Err(e) => sys(&mut journal, format!("this job's {name} after the update was lost (adopted at {at}; what it wrote before is above): {e}")),
             }
         }
         // Back in the running map with its reservation (C9), its port block,
@@ -544,5 +566,258 @@ impl Node {
             Err(e) => crate::nlog!("server slot {slot}: stopping its jobs: {e}"),
         }
         self.sweep_run_leftovers(&t, &[]);
+    }
+}
+
+/// The update handoff (2026-11-16, job 265ae46f): a job left running by
+/// the last k2-node is adopted, keeps writing, then ends. What the new
+/// process reports must be what is proven: the exit systemd or the job
+/// wrapper's rc file says, never `done` when neither can say.
+#[cfg(all(test, target_os = "linux"))]
+mod handoff_tests {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use k2_node_proto::frames::{JobState, LogStream};
+
+    use super::super::Node;
+    use crate::admin::exec::{LocalRequest, LocalResponse};
+    use crate::admin::jobs::{JobAnswer, JobOp, UnitStatus};
+    use crate::journal::{JournalReader, JournalWriter};
+    use crate::runner::JobDirs;
+    use crate::wall::Wall;
+
+    /// What the fake root executor says about the job's unit: running
+    /// until the test lets it end, then `end`; forgotten once released.
+    #[derive(Clone)]
+    struct Fake {
+        ended: Arc<AtomicBool>,
+        released: Arc<AtomicBool>,
+        end: Arc<Mutex<UnitStatus>>,
+        unit: String,
+    }
+
+    fn running() -> UnitStatus {
+        UnitStatus { loaded: true, active_state: "active".into(), sub_state: "running".into(), ..Default::default() }
+    }
+
+    fn executor(sock: std::path::PathBuf, fake: Fake) {
+        let _ = std::fs::remove_file(&sock);
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        std::thread::spawn(move || loop {
+            let Ok((mut s, _)) = l.accept() else { break };
+            let Ok(h) = crate::admin::server::read_frame(&mut s, 1 << 20) else { continue };
+            let answer = match serde_json::from_slice::<LocalRequest>(&h) {
+                Ok(LocalRequest::Job { job: JobOp::Status { unit } }) if unit == fake.unit => {
+                    if fake.released.load(Ordering::SeqCst) {
+                        // A released unit is forgotten at once.
+                        JobAnswer::Status(UnitStatus::default())
+                    } else if fake.ended.load(Ordering::SeqCst) {
+                        JobAnswer::Status(fake.end.lock().unwrap().clone())
+                    } else {
+                        JobAnswer::Status(running())
+                    }
+                }
+                // Any other unit (the host's own, listed by systemctl): gone.
+                Ok(LocalRequest::Job { job: JobOp::Status { .. } }) => JobAnswer::Status(UnitStatus::default()),
+                Ok(LocalRequest::Job { job: JobOp::Release { unit } | JobOp::Stop { unit } }) => {
+                    if unit == fake.unit {
+                        fake.released.store(true, Ordering::SeqCst);
+                    }
+                    JobAnswer::Done { detail: serde_json::json!({}) }
+                }
+                Ok(LocalRequest::Job { job: JobOp::KeyTaint { .. } }) => JobAnswer::KeyTaint { tainted: false },
+                _ => JobAnswer::Refused(k2_node_proto::admin::AdminRefusal::new("not_configured", "the test executor answers status, release, stop")),
+            };
+            let _ = crate::admin::server::write_frame(&mut s, &serde_json::to_vec(&LocalResponse::Job(answer)).unwrap());
+        });
+    }
+
+    async fn open(home: &std::path::Path, sock: &std::path::Path) -> Arc<Node> {
+        let layout = crate::paths::Layout::new(home.join("home"), home.join("cfg"));
+        layout.ensure().unwrap();
+        std::fs::create_dir_all(&layout.config).unwrap();
+        let mut o = super::super::NodeOptions::new(layout);
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        o.wall = Some(Wall::JobUser { user: "k2job".into() });
+        o.exec_stdin = Some(true);
+        o.admin_socket = sock.to_path_buf();
+        o.cancel_grace = Duration::from_millis(100);
+        o.rss_every = Duration::from_millis(50);
+        o.unit_poll = Duration::from_millis(50);
+        o.facts = Some(crate::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: false });
+        Node::open(o).await.unwrap()
+    }
+
+    struct Ended {
+        row: crate::ledger::Row,
+        log: String,
+        seqs: Vec<u64>,
+    }
+
+    /// The old k2-node started the job in a unit, journaled 11 records
+    /// and detached for an update; the new one adopts it while it runs,
+    /// the job writes more, then ends as `end` says. `rc`: the run facts
+    /// name the wrapper's rc file; `Some("")` = named but never written,
+    /// `Some(body)` = the wrapper wrote `body`.
+    async fn handoff(tag: &str, end: UnitStatus, rc: Option<&str>) -> Ended {
+        let d = crate::util::temp_dir(tag);
+        let sock = crate::admin::server::short_sock(&d);
+        let (job, gen) = ("hand", 1u32);
+        let key = super::super::tenant::job_key(k2_node_proto::share::OWNER_SLOT, job, gen);
+        let unit = crate::admin::jobs::unit_name(&key).unwrap();
+        let fake = Fake { ended: Arc::default(), released: Arc::default(), end: Arc::new(Mutex::new(end)), unit: unit.clone() };
+        executor(sock.clone(), fake.clone());
+
+        // ── the old k2-node: the job runs, its first output is journaled ──
+        let old = open(&d, &sock).await;
+        let t = old.owner();
+        let mut a = crate::ledger::tests::assign(job, gen);
+        a.plan.limits.max_secs = 600;
+        a.fence.plan_digest = a.plan.digest().unwrap();
+        let dirs = JobDirs::new(t.paths.job_dir(job, gen));
+        dirs.create().unwrap();
+        std::fs::create_dir_all(dirs.root.join("exec")).unwrap();
+        let spool_dir = t.paths.state().join("spool");
+        let out = crate::spool::create(&spool_dir, &key, "out").unwrap();
+        let err = crate::spool::create(&spool_dir, &key, "err").unwrap();
+        let mut job_out = std::fs::File::from(out.writer.try_clone().unwrap());
+        job_out.write_all(b"compiling\n").unwrap();
+        let jp = t.paths.journal(job, gen);
+        std::fs::create_dir_all(jp.parent().unwrap()).unwrap();
+        {
+            let mut j = JournalWriter::create(&jp, 1 << 20).unwrap();
+            for i in 0..9 {
+                j.append(LogStream::Sys, format!("[k2-node] setup line {i}\n").as_bytes()).unwrap();
+            }
+            j.append(LogStream::Out, b"compiling\n").unwrap();
+            j.append(LogStream::Sys, b"[k2-node] k2-node 0.46.12 is restarting for an update; this job keeps running and the next k2-node picks it up\n").unwrap();
+            assert_eq!(j.seq, 11, "the 11 lines the controller had");
+        }
+        let mut out_facts = serde_json::to_value(&out.facts).unwrap();
+        out_facts["off"] = serde_json::json!(b"compiling\n".len());
+        // JSON, as the old k2-node wrote it (0.46.12's facts have no rc file).
+        let mut facts = serde_json::json!({
+            "v": 1, "kind": "unit", "node_version": "0.46.12", "unit": unit,
+            "out": out_facts, "err": serde_json::to_value(&err.facts).unwrap(),
+            "cwd": dirs.root, "target": dirs.root, "mem_limit": 1u64 << 30,
+            "deadline": old.now() + 600,
+        });
+        let rc_path = dirs.root.join("exec/rc.json");
+        if rc.is_some() {
+            facts["rc_file"] = serde_json::json!(rc_path);
+        }
+        {
+            let l = t.ledger.lock().unwrap();
+            l.insert(&a, old.opts.clock.as_ref()).unwrap();
+            l.set_running(job, gen, 0, None, old.now()).unwrap();
+            l.set_run(job, gen, &serde_json::to_string(&facts).unwrap()).unwrap();
+        }
+        drop((t, old, out.reader, err.reader));
+
+        // ── the new k2-node adopts it while it still runs ──
+        let new = open(&d, &sock).await;
+        let t = new.owner();
+        assert!(new.status.lock().unwrap().adopted.iter().any(|x| x.job == key), "adopted at start, not ended");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let row = t.ledger.lock().unwrap().get(job, gen).unwrap().unwrap();
+        assert_eq!(row.state, JobState::Running, "still running after the handoff: {row:?}");
+        // The job writes on through the update, then ends.
+        job_out.write_all(b"test result: ok. 12 passed\n").unwrap();
+        job_out.write_all(b"== job rc=?\n").unwrap();
+        drop(job_out);
+        if let Some(body) = rc.filter(|b| !b.is_empty()) {
+            std::fs::write(&rc_path, body).unwrap();
+        }
+        fake.ended.store(true, Ordering::SeqCst);
+        let t0 = std::time::Instant::now();
+        let row = loop {
+            let r = t.ledger.lock().unwrap().get(job, gen).unwrap().unwrap();
+            if r.state.is_terminal() {
+                break r;
+            }
+            assert!(t0.elapsed() < Duration::from_secs(30), "the adopted job never ended: {r:?}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        let mut reader = JournalReader::new(jp.clone());
+        let recs = reader.read_more(10_000).unwrap();
+        let log = recs.iter().map(|r| String::from_utf8_lossy(&r.data).into_owned()).collect::<String>();
+        let seqs = recs.iter().map(|r| r.seq).collect();
+        let _ = std::fs::remove_file(&sock);
+        Ended { row, log, seqs }
+    }
+
+    /// What every handoff keeps: the adoption is in the log, the output
+    /// after the update reached the journal, and the journal's records run
+    /// 1, 2, 3… with no gap (the controller stores a record only when it
+    /// is the next one).
+    fn output_kept(e: &Ended) {
+        assert!(e.log.contains("adopted by k2-node"), "{}", e.log);
+        assert!(e.log.contains("test result: ok. 12 passed\n") && e.log.contains("== job rc=?\n"), "the output after the update: {}", e.log);
+        let want: Vec<u64> = (1..=e.seqs.len() as u64).collect();
+        assert_eq!(e.seqs, want, "journal records without a gap");
+    }
+
+    fn exit_of(r: &crate::ledger::Row) -> Option<(Option<i32>, Option<i32>)> {
+        r.exit.as_ref().map(|x| (x.code, x.signal))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_adopted_job_that_exits_nonzero_is_done_with_that_exit() {
+        let end = UnitStatus { loaded: true, active_state: "failed".into(), sub_state: "failed".into(), result: "exit-code".into(), main_code: 1, main_status: 3, ..Default::default() };
+        let e = handoff("handoff-nonzero", end, None).await;
+        assert_eq!((e.row.state, e.row.reason.as_deref()), (JobState::Done, None), "{:?}", e.row);
+        assert_eq!(exit_of(&e.row), Some((Some(3), None)), "{:?}", e.row);
+        output_kept(&e);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_adopted_job_that_exits_zero_is_done_with_exit_zero() {
+        let end = UnitStatus { loaded: true, active_state: "active".into(), sub_state: "exited".into(), result: "success".into(), main_code: 1, main_status: 0, ..Default::default() };
+        let e = handoff("handoff-zero", end, None).await;
+        assert_eq!((e.row.state, e.row.reason.as_deref()), (JobState::Done, None), "{:?}", e.row);
+        assert_eq!(exit_of(&e.row), Some((Some(0), None)), "{:?}", e.row);
+        output_kept(&e);
+    }
+
+    /// The unit was forgotten by the time it ended (no `ExecMainCode`) and
+    /// nothing else recorded the exit: never `done`. It ends
+    /// `interrupted/node_update` (infra: retried when the job allows it)
+    /// and says why, in the row and in the log.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_adopted_job_whose_exit_nobody_can_prove_is_never_done() {
+        let e = handoff("handoff-unknown", UnitStatus::default(), None).await;
+        assert_ne!(e.row.state, JobState::Done, "an unknown exit reported as done: {:?}", e.row);
+        assert_eq!((e.row.state, e.row.reason.as_deref()), (JobState::Interrupted, Some(k2_node_proto::share::codes::NODE_UPDATE)), "{:?}", e.row);
+        assert_eq!(exit_of(&e.row), None, "no exit is made up: {:?}", e.row);
+        let detail = e.row.detail.clone().unwrap_or_default();
+        assert!(detail.contains("exit is unknown") && detail.contains("Rerun it"), "{detail}");
+        assert!(e.log.contains("exit is unknown"), "the log says it too: {}", e.log);
+        output_kept(&e);
+    }
+
+    /// The same, but the job wrapper recorded the exit in its rc file:
+    /// that proves it, with systemd's record gone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_wrappers_rc_file_proves_the_exit_when_systemd_forgot_the_unit() {
+        let e = handoff("handoff-rc", UnitStatus::default(), Some(r#"{"v":1,"code":7}"#)).await;
+        assert_eq!((e.row.state, e.row.reason.as_deref()), (JobState::Done, None), "{:?}", e.row);
+        assert_eq!(exit_of(&e.row), Some((Some(7), None)), "{:?}", e.row);
+        output_kept(&e);
+    }
+
+    /// The facts name an rc file the wrapper never wrote (it was killed
+    /// before it could): systemd's record of the kill is the proof.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_rc_file_named_but_never_written_falls_back_to_systemd() {
+        let end = UnitStatus { loaded: true, active_state: "failed".into(), sub_state: "failed".into(), result: "signal".into(), main_code: 2, main_status: 9, ..Default::default() };
+        let e = handoff("handoff-rc-missing", end, Some("")).await;
+        assert_eq!(e.row.state, JobState::Done, "{:?}", e.row);
+        assert_eq!(exit_of(&e.row), Some((None, Some(9))), "killed: systemd says so: {:?}", e.row);
+        output_kept(&e);
     }
 }

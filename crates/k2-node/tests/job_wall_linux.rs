@@ -255,7 +255,10 @@ async fn an_oom_kill_is_reported_as_mem_cap() {
     assert_eq!((s.state, s.reason.as_deref()), (JobState::Failed, Some("mem_cap")), "{s:?}");
     assert!(s.detail.as_deref().unwrap_or("").contains("--mem"), "{s:?}");
     assert!(s.detail.as_deref().unwrap_or("").contains("64 MiB"), "{s:?}");
-    assert!(text(&logs_of(&fr, "oom1"), LogStream::Sys).contains("memory cap"), "the log says why");
+    // The node's words since job tiers v2 (10-28): "… more than its memory
+    // limit of … (64 MiB, its --mem or the node's share) …".
+    let sys = text(&logs_of(&fr, "oom1"), LogStream::Sys);
+    assert!(sys.contains("memory limit") && sys.contains("64 MiB"), "the log says why: {sys}");
 }
 
 /// Security review B, F1: a job's /tmp and /var/tmp are its own folders in
@@ -421,8 +424,8 @@ async fn a_secret_job_gets_its_env_on_stdin_and_nothing_keeps_the_value() {
     assert_eq!(std::fs::metadata(dir.join("log")).unwrap().permissions().mode() & 0o777, 0o600, "the journal is the node's alone");
 
     // While one runs: the unit's properties hold no value, LimitCORE=0;
-    // another workspace's job of the same slot waits (SE26); the same
-    // workspace's doesn't.
+    // another workspace's job of the same slot waits (SE26), and with no
+    // per-job uid pool here the same workspace's waits too (C2).
     let mut p = plan("sec2", &["/bin/sh", "-c", "echo up; exec sleep 1000"]);
     p.secret_env = vec!["K2T_SECRET".into()];
     c.send(Frame::Assign(assign(p, 1)));
@@ -438,12 +441,17 @@ async fn a_secret_job_gets_its_env_on_stdin_and_nothing_keeps_the_value() {
     let fr2 = c.until(|f| matches!(f, Frame::State(s) if s.job_id == "oth1")).await;
     let st = states_of(&fr2, "oth1").into_iter().last().unwrap();
     assert_eq!((st.state, st.reason.as_deref()), (JobState::Queued, Some(k2_node_proto::secret::codes::ISOLATION_WAIT)), "{st:?}");
+    // C2 (protocol 9, 11-07): this node has no per-job uid pool, so a
+    // protocol-9 server's secret job has its slot's uid alone
+    // (`UidShare::SlotAlone`): the same workspace's job waits too (before
+    // C2 it ran beside it, which this test used to expect).
     c.send(Frame::Assign(assign(plan("same1", &["/bin/sh", "-c", "echo same"]), 1)));
-    let fr3 = run_to_receipt(&mut c, "same1").await;
-    assert_eq!(last(&fr3, "same1").state, JobState::Done);
+    let fr3 = c.until(|f| matches!(f, Frame::State(s) if s.job_id == "same1")).await;
+    let st = states_of(&fr3, "same1").into_iter().last().unwrap();
+    assert_eq!((st.state, st.reason.as_deref()), (JobState::Queued, Some(k2_node_proto::secret::codes::ISOLATION_WAIT)), "{st:?}");
     c.send(Frame::Cancel(Cancel { job_id: "sec2".into(), generation: 1, reason: "test".into() }));
     run_to_receipt(&mut c, "sec2").await;
-    // Now it starts.
+    // Now both start.
     c.send(Frame::Assign(assign({
         let mut o = plan("oth1", &["/bin/sh", "-c", "echo other"]);
         o.workspace_id = "ws-other".into();
@@ -451,6 +459,9 @@ async fn a_secret_job_gets_its_env_on_stdin_and_nothing_keeps_the_value() {
     }, 1)));
     let fr4 = run_to_receipt(&mut c, "oth1").await;
     assert_eq!(last(&fr4, "oth1").state, JobState::Done);
+    c.send(Frame::Assign(assign(plan("same1", &["/bin/sh", "-c", "echo same"]), 1)));
+    let fr5 = run_to_receipt(&mut c, "same1").await;
+    assert_eq!(last(&fr5, "same1").state, JobState::Done);
     assert_secret_not_on_disk(&r.base);
 }
 

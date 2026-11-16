@@ -4,11 +4,11 @@
 //! The kit merges an outside save into the live doc, the person's edits not
 //! yet written back included, and keeps the merged doc as the "external
 //! edit" version; the file as the other program saved it isn't kept
-//! anywhere once the kit writes the merged doc back. So K2 keeps it: the
-//! docs watcher reads the file's text just before it tells the kit
-//! ([`ingest`]), and when the kit takes the save in (`Ingested`, change
-//! `rev`), the text is remembered for that doc ([`remember`]), the newest
-//! save only, in memory (a restart forgets it).
+//! anywhere once the kit writes the merged doc back. So K2 keeps it: when
+//! the kit takes a save in (its audit event `ExternalEdit`, change `rev`,
+//! under the doc's lock, before any write-back), K2 reads the file's text
+//! and remembers it for that doc ([`on_external_edit`]), the newest save
+//! only, in memory (a restart forgets it).
 //!
 //! `POST /cli/docs/use-theirs {path, rev?}` then makes the doc that text as
 //! **one** change by the caller at the current version (the kit's replace,
@@ -20,7 +20,6 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use k2_mpc_base::session::{DiskCheck, Session, SessionError};
 use k2_mpc_base::store::DocKey;
 
 /// Docs whose last outside save is kept (the oldest goes first).
@@ -65,18 +64,32 @@ pub fn forget(key: &DocKey) {
     kept().lock().unwrap_or_else(|p| p.into_inner()).retain(|(d, _)| d != key);
 }
 
-/// The watcher's `file_changed` for a text doc's file at `path`: the file's
-/// text is read first, and kept as the save when the kit takes it in. A
-/// file that isn't UTF-8 (the pack declines it) or is too large keeps
-/// nothing. A save in the instant between the read and the kit's read is
-/// the next event's (the watcher sees that write too).
-pub fn ingest(s: &Session, key: &DocKey, path: &Path) -> Result<DiskCheck, SessionError> {
-    let before = std::fs::read(path).ok().filter(|b| b.len() <= TEXT_MAX).and_then(|b| String::from_utf8(b).ok());
-    let r = s.file_changed()?;
-    if let (DiskCheck::Ingested { version }, Some(text)) = (&r, before) {
-        remember(key, *version, text);
+/// The kit took an outside save of `key`'s file in, as change `rev`
+/// (`AuditEvent::ExternalEdit`, from the host's audit hook). The kit calls
+/// the hook under the doc's lock, right after it read the file and before
+/// it can write anything back, so the file still holds the save as the
+/// other program wrote it: read it now and keep it. A text doc only, in a
+/// registered workspace; a file that isn't UTF-8 or is too large keeps
+/// nothing.
+pub fn on_external_edit(key: &DocKey, rev: u64) {
+    if !super::host_events::is_text_doc(key) {
+        return;
     }
-    Ok(r)
+    // A read-pool read: it never waits behind a writer while the doc is locked.
+    let root = k2_core::db::read(|conn| k2_core::db::schema::Project::get(conn, &key.space).ok().map(|p| p.path));
+    let Some(root) = root else { return };
+    if let Some(text) = read_text(&Path::new(&root).join(&key.path)) {
+        remember(key, rev, text);
+    }
+}
+
+/// A file's text, when it is UTF-8 and at most [`TEXT_MAX`] bytes.
+pub fn read_text(path: &Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.len() > TEXT_MAX as u64 {
+        return None;
+    }
+    String::from_utf8(std::fs::read(path).ok()?).ok()
 }
 
 #[cfg(test)]

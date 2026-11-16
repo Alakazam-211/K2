@@ -144,15 +144,7 @@ pub(crate) fn changed<'a>(paths: impl Iterator<Item = &'a Path>) {
             // A Markdown doc or a tier-0 doc: the same disk sync (an outside
             // save becomes an attributed change, or a new version).
             let r = if let Some(s) = rt.get(&key) {
-                // A text doc keeps the save as it was on disk, for "Use
-                // their version" ([`super::theirs`]).
-                if is_file && super::host_events::is_text_doc(&key) {
-                    super::theirs::ingest(&s, &key, &c)
-                } else if is_file {
-                    s.file_changed()
-                } else {
-                    s.check_disk()
-                }
+                if is_file { s.file_changed() } else { s.check_disk() }
             } else if let Some(b) = rt.get_blob(&key) {
                 // A tier-0 save that became a version: open tabs re-read it.
                 let r = if is_file { b.file_changed() } else { b.check_disk() };

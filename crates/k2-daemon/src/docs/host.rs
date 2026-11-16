@@ -313,6 +313,8 @@ impl Host for K2Host {
             AuditEvent::ExternalEdit { key, seq } => {
                 audit(AUDIT_FILE, EXTERNAL, format!("{} external_edit change={seq}", key_label(key)));
                 super::host_events::outside_save_on_text(key, "ingested", Some(*seq), None, now_ms());
+                // "Use their version": the save as the file holds it now.
+                super::theirs::on_external_edit(key, *seq);
             }
             AuditEvent::FileMissing { key, unflushed } => {
                 audit(AUDIT_FILE, EXTERNAL, format!("{} missing unflushed={unflushed}", key_label(key)));

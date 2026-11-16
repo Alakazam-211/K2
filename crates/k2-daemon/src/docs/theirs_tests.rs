@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use k2_mpc_base::session::{
-    AuditEvent, Config, EditOptions, Host, Participant, ParticipantKind, Rights, SessionManager, Stay, TextFilePack, UndoOutcome,
-    WriteOptions,
+    AuditEvent, Config, DiskCheck, EditOptions, Host, Participant, ParticipantKind, Rights, Session, SessionManager, Stay,
+    TextFilePack, UndoOutcome, WriteOptions,
 };
 use k2_mpc_base::store::DocStore;
 use k2_mpc_base::text::Hunk;
@@ -15,6 +15,8 @@ use super::*;
 
 const ROOT: &str = TextFilePack::ROOT;
 
+/// Every right, and K2's audit hook for an outside save (the one that
+/// keeps it).
 struct Full;
 
 impl Host for Full {
@@ -24,7 +26,11 @@ impl Host for Full {
     fn now_ms(&self) -> u64 {
         1_700_000_000_000
     }
-    fn on_event(&self, _: &AuditEvent) {}
+    fn on_event(&self, ev: &AuditEvent) {
+        if let AuditEvent::ExternalEdit { key, seq } = ev {
+            on_external_edit(key, *seq);
+        }
+    }
 }
 
 struct Dir(std::path::PathBuf);
@@ -50,7 +56,13 @@ fn their_save_is_kept_as_saved_and_used_as_one_undoable_change() {
     config.edit_burst = 1_000_000;
     let store = Arc::new(DocStore::open(dir.0.join("docs.redb")).expect("store"));
     let mgr = SessionManager::new(store, Arc::new(Full), config);
-    let key = DocKey { space: "theirs-ws".into(), path: "notes.md".into() };
+    let ws = dir.0.join("ws").canonicalize().expect("ws");
+    let id = uuid::Uuid::new_v4().to_string();
+    k2_core::db::shared()
+        .lock()
+        .execute("INSERT INTO projects (id, name, path) VALUES (?1, 'theirs-ws', ?2)", rusqlite::params![id, ws.to_string_lossy()])
+        .expect("register the workspace");
+    let key = DocKey { space: id, path: "notes.md".into() };
     let s = mgr.open_file(Arc::new(TextFilePack::new("markdown", 4 << 20)), &key, &file, &dir.0.join("ws")).expect("open");
     let ada = s.join(Participant::new("person:ada", "Ada", "#7c3aed", ParticipantKind::Person, "tab"), Stay::Held).expect("join").conn;
 
@@ -58,7 +70,7 @@ fn their_save_is_kept_as_saved_and_used_as_one_undoable_change() {
     let base = s.status().expect("status").version;
     s.edit_at_base(ada, ROOT, base, vec![Hunk { start: 0, end: 0, insert: "mine ".into() }], &EditOptions::new()).expect("typed");
     std::fs::write(&file, "one\ntwo\ntheirs\n").expect("their save");
-    let r = ingest(&s, &key, &file).expect("taken in");
+    let r = s.file_changed().expect("taken in");
     let DiskCheck::Ingested { version } = r else { panic!("an outside save: {r:?}") };
     assert_eq!(get(&key), Some(Theirs { rev: version, text: "one\ntwo\ntheirs\n".into() }), "kept as it was on disk");
     let merged = text(&s, ada);
@@ -77,11 +89,14 @@ fn their_save_is_kept_as_saved_and_used_as_one_undoable_change() {
 
     // The kit's own write-back is an echo: nothing new is kept.
     s.flush(ada).expect("write back");
-    let r = ingest(&s, &key, &file).expect("echo");
+    let r = s.file_changed().expect("echo");
     assert!(!matches!(r, DiskCheck::Ingested { .. }), "{r:?}");
     assert_eq!(get(&key).map(|t| t.rev), Some(version));
     forget(&key);
     assert_eq!(get(&key), None);
+    // A deck's outside save keeps nothing here (its copy is the kit's).
+    on_external_edit(&DocKey { space: key.space.clone(), path: "talk.pptx".into() }, 9);
+    assert_eq!(get(&DocKey { space: key.space.clone(), path: "talk.pptx".into() }), None);
 }
 
 #[test]

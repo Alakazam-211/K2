@@ -266,6 +266,18 @@ impl Host for K2Host {
         super::conflicts::copy_name(file_name, at_ms, who, &super::conflicts::K2Names)
     }
 
+    /// Kit v0.19.0: a conflict copy the kit just wrote, as the doc K2
+    /// serves there ([`super::target::doc_key_at`]), so a keyed watch's
+    /// `outside_save` names it (`copy.doc`) and the view opens it as a doc.
+    /// The copies go under the workspace's `.k2/conflicts/`, which K2 serves
+    /// as docs. A file K2 wouldn't open (outside a workspace, K2's own
+    /// configuration, the vault, over the cap) is `None`: the frame gives
+    /// the path only. Called with the session locked: a path walk and the
+    /// workspace list, as [`Host::rights`] already reads for shares.
+    fn document_at(&self, file: &std::path::Path) -> Option<DocKey> {
+        super::target::doc_key_at(file)
+    }
+
     fn on_event(&self, ev: &AuditEvent) {
         match ev {
             AuditEvent::Refused { key, pid, action, need } => audit(
@@ -644,6 +656,64 @@ mod tests {
         for junk in ["", "person:", "agent:", "kit:import", "owner", "user:bob"] {
             assert_eq!(Principal::parse(junk), None, "{junk:?}");
         }
+    }
+
+    /// Kit v0.19.0's `Host::document_at`: the conflict copy of a keyed doc
+    /// that an outside save replaced, written where this host says
+    /// (`.k2/conflicts/`, named by this host), is a doc K2 serves, so the
+    /// `outside_save` frame's `copy.doc` names it and Open the copy opens it
+    /// as a doc. What K2 wouldn't open is `None`, never a guess.
+    #[test]
+    fn a_conflict_copy_is_named_as_the_doc_k2_serves_there() {
+        let ws = std::env::temp_dir().join(format!("k2-docs-document-at-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(ws.join(".k2")).expect("workspace");
+        let ws = ws.canonicalize().expect("canonical workspace");
+        struct Gone(std::path::PathBuf);
+        impl Drop for Gone {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _gone = Gone(ws.clone());
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, "document-at-ws", ws.to_string_lossy()],
+            )
+            .expect("register the workspace");
+        }
+        let host = K2Host::default();
+        let doc = ws.join("talk.pptx");
+        std::fs::write(&doc, b"PK deck").expect("deck");
+        // Where and how the kit writes the copy: this host's folder and name.
+        let dir = host.conflict_dir(&doc).expect("the workspace's conflict folder");
+        assert_eq!(dir, ws.join(".k2/conflicts"));
+        let name = host.conflict_copy_name("talk.pptx", 1_700_000_000_000, "agent:x").unwrap_or_else(|| "talk (copy).pptx".into());
+        let copy = dir.join(&name);
+        std::fs::write(&copy, b"PK the replaced version").expect("copy");
+        assert_eq!(
+            host.document_at(&copy),
+            Some(DocKey { space: id.clone(), path: format!(".k2/conflicts/{name}") }),
+            "the copy is a doc K2 serves, keyed as every route keys it"
+        );
+        assert_eq!(super::super::target::doc_key_at(&doc), Some(DocKey { space: id.clone(), path: "talk.pptx".into() }));
+        // K2's own configuration, the vault, a missing file and a file in no
+        // workspace aren't docs here.
+        let settings = ws.join(".k2/settings.json");
+        std::fs::write(&settings, b"{}").expect("settings");
+        assert_eq!(host.document_at(&settings), None, "K2's configuration");
+        std::fs::create_dir_all(ws.join(".k2/vault")).expect("vault");
+        let vaulted = ws.join(".k2/vault/key.txt");
+        std::fs::write(&vaulted, b"x").expect("vault file");
+        assert_eq!(host.document_at(&vaulted), None, "the vault");
+        assert_eq!(host.document_at(&dir.join("never written.pptx")), None, "a missing file");
+        let elsewhere = std::env::temp_dir().join(format!("k2-docs-document-at-out-{}.pptx", uuid::Uuid::new_v4()));
+        std::fs::write(&elsewhere, b"PK").expect("outside");
+        assert_eq!(host.document_at(&elsewhere), None, "a file in no workspace");
+        let _ = std::fs::remove_file(&elsewhere);
     }
 
     #[test]

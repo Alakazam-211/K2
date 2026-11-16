@@ -260,9 +260,13 @@ pub fn is_git_internal(rel: &str) -> bool {
 }
 
 /// `.k2/` folders whose other files may be tier-0 docs (wiki attachments,
-/// PRD images). Everything else under `.k2/` is K2's configuration
-/// (settings, heartbeats, hooks, rosters): never written through a doc.
-const K2_DOC_DIRS: &[&str] = &[".k2/wiki/", ".k2/prds/", ".k2/docs/"];
+/// PRD images), and the conflict copies' folder (`.k2/conflicts/`,
+/// [`super::host::conflict_dir_for`]: someone's version of a doc, kept when
+/// an outside save replaced it, opened as a doc of its own: kit v0.19.0's
+/// `outside_save.copy.doc`). Everything else under `.k2/` is K2's
+/// configuration (settings, heartbeats, hooks, rosters): never written
+/// through a doc.
+const K2_DOC_DIRS: &[&str] = &[".k2/wiki/", ".k2/prds/", ".k2/docs/", ".k2/conflicts/"];
 
 /// True for a path under `.k2/` outside [`K2_DOC_DIRS`].
 pub fn is_k2_config(rel: &str) -> bool {
@@ -309,7 +313,7 @@ pub fn deny(rel: &str, link: &Path, abs: &Path) -> Result<(), Refusal> {
     if Tier::of(rel) != Tier::Markdown && is_k2_config(rel) {
         return Err(Refusal::declined(
             "protected",
-            format!("{rel} is K2's own configuration; only Markdown and files under .k2/wiki, .k2/prds or .k2/docs are live docs there"),
+            format!("{rel} is K2's own configuration; only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs there"),
         ));
     }
     let link_name = link.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -499,6 +503,14 @@ pub fn resolve(workspace: Option<&str>, path: &str, default_workspace: Option<&s
     }
     size_cap(&t.rel, meta.len(), super::blob_max_bytes())?;
     Ok(t)
+}
+
+/// The doc K2 serves at the real path `file`, when it serves one there: what
+/// [`resolve`] makes of it as an absolute path (inside a registered
+/// workspace, past the deny list, not a Board file, under the any-file cap),
+/// as its key. `None` otherwise. The kit's `Host::document_at`.
+pub fn doc_key_at(file: &Path) -> Option<DocKey> {
+    resolve(None, file.to_str()?, None).ok().map(|t| t.key())
 }
 
 /// A Board file, for the board routes: the same jail, deny list and workspace

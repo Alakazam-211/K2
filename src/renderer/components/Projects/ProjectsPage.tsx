@@ -6,8 +6,9 @@
 // top bar (which carries the ServerSwitcher + the page switcher, so
 // the server dropdown stays visible here). LEFT NAV = ProjectNav: the
 // project list (Pinned, All projects), then the selected project's agents
-// and their files; collapsible to an ICON RAIL from the » / « at its
-// bottom (§6.7.1). The main area shows the selected project under its
+// and their files, in the Home and Agents navs' panel (NavTile);
+// collapsible to an ICON RAIL from the « in its top row (» at the top of
+// the rail). The main area shows the selected project under its
 // PROJECT BAR (ProjectBar.tsx, projects-reorg-draft §3.2): identity, the
 // dashboards as tabs + Feedback, and Layout, Settings and Chat.
 //
@@ -38,7 +39,8 @@ import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
 import AnimatedDrawer from '@/components/Layout/AnimatedDrawer'
 import { Surface } from '@/components/ui'
-import ProjectNav, { ProjectNavRail } from './ProjectNav'
+import { NavTile } from '@/components/Layout/NavTile'
+import ProjectNav, { PROJECT_NAV_WIDTH, ProjectNavRail } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
 import ProjectBar, { useViewerRole } from './ProjectBar'
 import { projectSettingsCaps } from './project-settings'
@@ -358,28 +360,32 @@ export default function ProjectsPage(): React.JSX.Element | null {
         </div>
 
         {/* Right: utilities + window controls. The nav and chat toggles
-            moved off the top bar (0.46.0): the nav's » / « sits at the
-            bottom of the nav / rail, the chat's in the dashboard tab row
+            moved off the top bar (0.46.0): the nav's « sits in its top
+            row and the rail's » at the rail's top, the chat's in the dashboard tab row
             (closed) or the chat header (open). */}
         <DesktopChromeRight>
           <TopBarUtilities />
         </DesktopChromeRight>
       </Surface>
 
-      {/* Body: left nav (expanded or icon rail, §6.7.1) + main area. */}
-      <div className="flex-1 min-h-0 flex">
+      {/* Body: left nav (expanded or icon rail, §6.7.1) + main area, the
+          pane gap between them as on Home and Agents (Layout.tsx). */}
+      <div className="flex-1 min-h-0 flex gap-[var(--gap-pane)]">
         {/* The nav: the project list, then the selected project's agents
-            and their files (ProjectAgentsSection). */}
+            and their files (ProjectAgentsSection), in the Home and Agents
+            navs' panel (NavTile). The rail is a tile of its own. */}
         {navCollapsed ? (
           <ProjectNavRail show={selectedShow} canAddAgents={canAddAgents} onChanged={reloadShow} />
         ) : (
-          <ProjectNav
-            show={selectedShow}
-            dashboard={navDashboard}
-            canAddAgents={canAddAgents}
-            canSetAgentViews={caps.canEditLooks}
-            onChanged={reloadShow}
-          />
+          <NavTile style={{ width: PROJECT_NAV_WIDTH }}>
+            <ProjectNav
+              show={selectedShow}
+              dashboard={navDashboard}
+              canAddAgents={canAddAgents}
+              canSetAgentViews={caps.canEditLooks}
+              onChanged={reloadShow}
+            />
+          </NavTile>
         )}
 
         <div className="flex-1 flex flex-col min-h-0 min-w-0">

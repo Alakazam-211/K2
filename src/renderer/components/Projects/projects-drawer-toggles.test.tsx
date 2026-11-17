@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 //
 // Toggles on the Projects page. 0.46.0: no nav / chat toggles in the top
-// bar; the nav (which collapses to a rail, never fully hides) gets the main
-// nav's pattern, the toggle at the bottom of the nav and of the rail.
+// bar; the nav (which collapses to a rail, never fully hides) has its
+// toggle where Home's is: « at the right end of the nav's top row, » at the
+// top of the rail.
 // 0.46.12 (projects-reorg-draft §3.5, the owner's mockup): the chat opens
 // from the project bar's Chat button (with the unread count), which steps
 // aside while the chat is open; the × in the chat's own header closes it.
@@ -233,7 +234,7 @@ describe('Project settings from the bar', () => {
   })
 })
 
-describe('Projects nav toggle (main nav pattern)', () => {
+describe('Projects nav toggle (Home nav pattern)', () => {
   it('collapses and opens the nav from its own » / « button', () => {
     render(<ProjectNavCollapseButton />)
     const btn = screen.getByRole('button', { name: 'Collapse projects nav' })
@@ -247,19 +248,20 @@ describe('Projects nav toggle (main nav pattern)', () => {
     expect(open.getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('sits at the bottom of the expanded nav and of the rail', async () => {
+  it('sits at the end of the expanded nav\'s top row and at the top of the rail', async () => {
     await renderPage()
     const inNav = document.querySelectorAll('[data-projects-nav-toggle]')
     expect(inNav.length).toBe(1)
     expect(inNav[0].getAttribute('aria-label')).toBe('Collapse projects nav')
     const nav = must(document.querySelector('[data-projects-nav]') as HTMLElement | null, 'nav')
-    expect(nav.lastElementChild!.contains(inNav[0])).toBe(true)
+    expect(nav.firstElementChild!.lastElementChild).toBe(inNav[0])
     act(() => {
       fireEvent.click(inNav[0])
     })
     const inRail = document.querySelectorAll('[data-projects-nav-toggle]')
     expect(inRail.length).toBe(1)
     expect(inRail[0].getAttribute('aria-label')).toBe('Open projects nav')
-    expect(inRail[0].parentElement!.className).toContain('mt-auto')
+    const rail = must(document.querySelector('nav[aria-label="Projects"]') as HTMLElement | null, 'rail')
+    expect(rail.firstElementChild!.contains(inRail[0])).toBe(true)
   })
 })

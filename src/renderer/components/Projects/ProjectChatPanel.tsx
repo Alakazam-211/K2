@@ -105,6 +105,7 @@ import { ThreadRoundButton } from '@/components/Thread/ThreadZenKit'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import { newClientMsgId, POST_IDEMPOTENCY_FEATURE } from '@/components/SessionView/threadOutbox'
 import { clientToCssPx } from '@/lib/app-zoom'
+import { PROJECT_BAR_ROW_HEIGHT } from './project-bar-height'
 
 // Resize-handle hit-area thickness (px), centered on the panel's left
 // border (the dashboard's DIVIDER_HIT_PX idiom).
@@ -471,8 +472,13 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
       {resizing && <div className="fixed inset-0 z-50" style={{ cursor: 'col-resize' }} />}
       {/* Two lines (the owner's mockup): "Project chat" over who gets each
           message; then the bell and the × that closes the chat, the corner
-          the project bar's Chat button opens it from. */}
-      <div className="flex items-center gap-2 min-h-[52px] pl-3.5 pr-2 py-1.5 border-b border-[var(--color-border)] flex-shrink-0" data-project-chat-header="">
+          the project bar's Chat button opens it from. Level with the project
+          bar, so its bottom line meets the bar's. */}
+      <div
+        className="flex items-center gap-2 pl-3.5 pr-2 py-1 border-b border-[var(--color-border)] flex-shrink-0"
+        style={{ height: PROJECT_BAR_ROW_HEIGHT }}
+        data-project-chat-header=""
+      >
         <div className="min-w-0 flex-1">
           <p className="type-name font-semibold text-[var(--color-text-primary)] truncate">Project chat</p>
           {poc && (

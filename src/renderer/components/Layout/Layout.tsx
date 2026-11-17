@@ -2,7 +2,7 @@ import { useRef, type ReactNode } from 'react'
 import TopBar from '../TopBar/TopBar'
 import type { TopBarRemoteServer } from '../TopBar/TopBarTitle'
 import IconRail from '../Sidebar/IconRail'
-import { Surface } from '../ui'
+import { NavTile } from './NavTile'
 import { useSidebarDisplayWidth, useSidebarStore } from '../../stores/sidebar'
 import { usePanelsStore } from '../../stores/panels'
 import AnimatedDrawer from './AnimatedDrawer'
@@ -67,17 +67,10 @@ export default function Layout({
           <>
             {/* The Sidebar's painted surface — Sidebar.tsx's own root is
                 transparent; this wrapper is the chrome container Glass
-                will paint with material. */}
-            <Surface
-              ref={sidebarRef}
-              role2="surface" material="tile"
-              bordered={false}
-              data-nav-tile=""
-              className="relative flex-shrink-0 overflow-y-auto border-r border-[var(--color-border)]"
-              style={{ width: sidebarWidth }}
-            >
+                paints with material (the Projects nav wears it too). */}
+            <NavTile ref={sidebarRef} style={{ width: sidebarWidth }}>
               {sidebar}
-            </Surface>
+            </NavTile>
           </>
         )}
 

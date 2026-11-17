@@ -47,6 +47,7 @@ import { FEEDBACK_TAB } from './project-tabs'
 import { agentCountText, filterGroupsByQuery, projectSettingsCaps, type ProjectRole } from './project-settings'
 import { openProjectSettings } from './ProjectSettingsSheet'
 import { NEW_PROJECT_EVENT } from './project-nav-events'
+import { PROJECT_BAR_HEIGHT_PX } from './project-bar-height'
 import {
   createErrorMessage,
   createProjectGroupDashboard,
@@ -739,7 +740,8 @@ export default function ProjectBar({
     <div
       ref={barRef}
       data-project-bar=""
-      className="flex items-center gap-4 h-12 px-4 border-b border-[var(--color-border)] flex-shrink-0 min-w-0"
+      className="flex items-center gap-4 px-4 border-b border-[var(--color-border)] flex-shrink-0 min-w-0"
+      style={{ height: PROJECT_BAR_HEIGHT_PX }}
     >
       <Identity show={show} switcher={rail || narrow} tiny={tiny} />
 

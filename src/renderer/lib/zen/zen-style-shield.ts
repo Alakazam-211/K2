@@ -190,6 +190,7 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--tile-fill': zen('surface'),
   '--tile-raised': zen('surface-raised'),
   '--tile-edge': zen('border'),
+  '--tile-edge-width': '1px',
   '--tile-sheen': '0 0 #0000',
   '--tile-shadow': '0 0 #0000',
   '--material-edge': 'transparent',

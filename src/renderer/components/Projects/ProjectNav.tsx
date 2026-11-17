@@ -7,10 +7,13 @@
 //   2. a divider, then the SELECTED project: its picture and name, its
 //      agents (each with its files folded under it) and "Add an agent…"
 //      (ProjectAgentsSection.tsx), scrolling on its own too.
-// The nav collapses to an icon rail (projects on top, the selected
-// project's agents as pictures below), whose toggle sits at the bottom of
-// both (the main nav's pattern). Group-list drag-to-reorder awaits a
-// sort-order route (V1.1).
+// The nav sits in the Home and Agents navs' panel (NavTile, set by the
+// page); its top row is level with the project bar beside it (the nav's top
+// row matches the tabs beside it, as on Home and Agents). It
+// collapses to an icon rail (a tile of its own: projects on top, the
+// selected project's agents as pictures below); « sits at the right end of
+// the top row and » at the top of the rail, Home's places. Group-list
+// drag-to-reorder awaits a sort-order route (V1.1).
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectGroupsStore } from '@/stores/project-groups'
@@ -20,6 +23,8 @@ import { useToastStore } from '@/stores/toast'
 import { showContextMenu } from '@/lib/context-menu'
 import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
 import { NAV_TOGGLE_BOX } from '@/components/Layout/drawer-toggles'
+import { DrawerHeaderButton } from '@/components/Layout/DrawerTabBarToggle'
+import { PROJECT_BAR_ROW_HEIGHT } from './project-bar-height'
 import { Button, Input, cx } from '@/components/ui'
 import {
   AVATAR_ROUND,
@@ -243,18 +248,27 @@ const PLUS_ICON = (
 )
 
 /** Collapse the projects nav to its rail, or open it again. The nav is
- *  never fully hidden (it collapses to the rail), so its toggle follows the
- *  main nav's own pattern: the » / « button at the bottom of the nav and of
- *  the rail, reachable whether or not a project is open. */
-export function ProjectNavCollapseButton(): React.JSX.Element {
+ *  never fully hidden (it collapses to the rail), so its toggle sits where
+ *  Home's does: « at the right end of the nav's top row ('header': the
+ *  drawers' header button in its glyph shape, as Home's « is) and » at the
+ *  top of the rail ('rail'), reachable whether or not a project is open. */
+export function ProjectNavCollapseButton({ placement = 'rail' }: { placement?: 'header' | 'rail' }): React.JSX.Element {
   const collapsed = useProjectGroupsStore((s) => s.navCollapsed)
   const label = collapsed ? 'Open projects nav' : 'Collapse projects nav'
+  const toggle = (): void => useProjectGroupsStore.getState().setNavCollapsed(!collapsed)
+  if (placement === 'header') {
+    return (
+      <DrawerHeaderButton label={label} shape="glyph" aria-expanded={!collapsed} data-projects-nav-toggle="" onClick={toggle}>
+        <DoubleChevron direction={collapsed ? 'right' : 'left'} className="w-4 h-4" />
+      </DrawerHeaderButton>
+    )
+  }
   return (
     <button
       type="button"
       className={`k2-focus no-drag flex items-center justify-center ${NAV_TOGGLE_BOX} flex-shrink-0 rounded-[var(--radius-field)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-row-hover)] transition-colors`}
       data-k2-chamfer="control"
-      onClick={() => useProjectGroupsStore.getState().setNavCollapsed(!collapsed)}
+      onClick={toggle}
       title={label}
       aria-label={label}
       aria-expanded={!collapsed}
@@ -339,9 +353,13 @@ export function ProjectNavRail({
   return (
     <nav
       aria-label="Projects"
+      data-material="tile"
       className="flex flex-col items-center h-full bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] py-2 flex-shrink-0"
       style={{ width: PROJECT_NAV_RAIL_WIDTH }}
     >
+      <div className="pb-1.5 flex-shrink-0">
+        <ProjectNavCollapseButton />
+      </div>
       <div className="flex-shrink min-h-0 flex flex-col items-center gap-1 overflow-y-auto overflow-x-hidden w-full py-0.5">
         {pinned.map((group) => (
           <RailIcon
@@ -364,9 +382,6 @@ export function ProjectNavRail({
         ))}
       </div>
       {show && <RailAgents show={show} canAddAgents={canAddAgents} onChanged={onChanged} />}
-      <div className="mt-auto pt-1.5 flex-shrink-0">
-        <ProjectNavCollapseButton />
-      </div>
     </nav>
   )
 }
@@ -466,12 +481,17 @@ export default function ProjectNav({
     <nav
       aria-label="Projects"
       data-projects-nav=""
-      className="relative flex flex-col h-full flex-shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-surface)]"
-      style={{ width: PROJECT_NAV_WIDTH }}
+      className="relative flex flex-col h-full w-full"
     >
-      {/* Header: the list's name, its fold, and New project. */}
-      <div className="flex items-center gap-1.5 h-12 px-4 flex-shrink-0 no-drag">
-        <h2 className="type-title text-[var(--color-text-primary)] truncate">Projects</h2>
+      {/* The top row, level with the project bar with its bottom line, so
+          the two lines meet across the gap: the list's name, its fold, New
+          project and «, centred in the row. */}
+      <div
+        className="flex items-center gap-1.5 pl-4 flex-shrink-0 border-b border-[var(--color-border)] no-drag"
+        style={{ height: PROJECT_BAR_ROW_HEIGHT }}
+        data-projects-nav-header=""
+      >
+        <h2 className="type-heading text-[var(--color-text-primary)] truncate">Projects</h2>
         {hasGroups && (
           <button
             type="button"
@@ -490,20 +510,19 @@ export default function ProjectNav({
           </button>
         )}
         <span className="flex-1" />
-        <Button
-          variant="quiet"
-          className="!px-1.5 flex items-center"
-          aria-label="New project"
-          title="New project"
+        <DrawerHeaderButton
+          label="New project"
+          shape="glyph"
           aria-expanded={creating}
           onClick={() => setCreating((v) => !v)}
           data-new-project=""
         >
           {PLUS_ICON}
-        </Button>
+        </DrawerHeaderButton>
+        <ProjectNavCollapseButton placement="header" />
       </div>
       {creating && (
-        <div className="px-4 pb-3 flex-shrink-0">
+        <div className="px-4 py-3 flex-shrink-0">
           <CreateProjectForm onDone={() => setCreating(false)} />
         </div>
       )}
@@ -567,10 +586,6 @@ export default function ProjectNav({
           />
         </div>
       )}
-
-      <div className="flex items-center px-3 py-2 flex-shrink-0">
-        <ProjectNavCollapseButton />
-      </div>
     </nav>
   )
 }

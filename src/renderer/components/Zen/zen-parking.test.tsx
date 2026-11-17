@@ -46,7 +46,7 @@ vi.mock('@/components/Projects/ProjectNav', async () => {
     const pageLive = React.useContext(PageLiveContext)
     return <div data-stub-projects-pane="" data-page-live={String(pageLive)} />
   }
-  return { default: Nav, ProjectNavRail: Nav, CreateProjectForm: () => null }
+  return { default: Nav, ProjectNavRail: Nav, CreateProjectForm: () => null, PROJECT_NAV_WIDTH: 296 }
 })
 vi.mock('@/components/TopBar/TopBarUtilities', () => ({ default: () => null }))
 vi.mock('@/components/TopBar/ServerSwitcher', () => ({ default: () => null }))

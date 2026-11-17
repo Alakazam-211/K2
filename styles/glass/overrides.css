@@ -29,6 +29,10 @@
      The bars read it (TOPBAR_HEIGHT_CSS) and the traffic lights centre on
      it (style.ts). */
   --k2-topbar-height: 32px;
+  /* A tile's rim. Rows level with an unframed bar beside a tile (the
+     Projects nav's top row and the chat's header) are this much shorter,
+     so their bottom lines meet the bar's. */
+  --tile-edge-width: 1px;
 }
 
 /* Every rule below stops at a Garden root ([data-zen-root]): Gardens own
@@ -198,7 +202,7 @@
 /* ── TILE: solid fill, the edge is the glass ────────────────────────────── */
 [data-style="glass"] [data-material="tile"]:not([data-zen-root] *),
 [data-style="glass"] [data-material="raised"]:not([data-zen-root] *) {
-  border: 1px solid var(--tile-edge);
+  border: var(--tile-edge-width) solid var(--tile-edge);
   border-radius: var(--radius-box);
   box-shadow: var(--tile-sheen), var(--tile-shadow);
 }
@@ -504,7 +508,7 @@
    bare. */
 [data-style="glass"] [data-drawer-side]:not([data-zen-root] *) {
   background: var(--tile-fill);
-  border: 1px solid var(--tile-edge);
+  border: var(--tile-edge-width) solid var(--tile-edge);
   border-radius: var(--radius-box);
   box-shadow: var(--tile-sheen), var(--tile-shadow);
 }

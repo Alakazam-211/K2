@@ -373,18 +373,18 @@ describe('the nav', () => {
     expect(document.activeElement).toBe(add)
   })
 
-  it('the rail: projects, then the selected project\'s agents as pictures, then its toggle', async () => {
+  it('the rail: its toggle, then projects, then the selected project\'s agents as pictures', async () => {
     useProjectGroupsStore.setState({ navCollapsed: true })
     await renderPage()
     const rail = screen.getAllByRole('navigation', { name: 'Projects' })[0]
     await waitFor(() =>
       expect(within(rail).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+        'Open projects nav',
         'Launch',
         'Docs',
         'Atlas',
         'Web App',
         'Add an agent',
-        'Open projects nav',
       ]),
     )
     fireEvent.click(rail.querySelector('[data-rail-agent="w2"]') as HTMLElement)

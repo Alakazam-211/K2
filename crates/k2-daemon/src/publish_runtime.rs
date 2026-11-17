@@ -1193,15 +1193,14 @@ fn on_child_exit(entry: &LiveChild, code: i64) {
         }
     }
     {
+        // A stop K2 asked for (a person's, an idle stop) is no crash: its exit
+        // code isn't recorded. On Windows the job ends at once and this
+        // watcher can land after the stop's own record, so it must not
+        // stamp the terminate's code 1 over it.
+        let recorded = (!entry.stop_requested.load(Ordering::SeqCst)).then_some(code);
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let _ = ps::mark_exited_if_pid(
-            &conn,
-            &entry.project_id,
-            &entry.name,
-            entry.pid as i64,
-            Some(code),
-        );
+        let _ = ps::mark_exited_if_pid(&conn, &entry.project_id, &entry.name, entry.pid as i64, recorded);
     }
     if !entry.stop_requested.load(Ordering::SeqCst) {
         log_debug!(

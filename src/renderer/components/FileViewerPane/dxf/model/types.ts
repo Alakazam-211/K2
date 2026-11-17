@@ -38,7 +38,7 @@ export type ModelRow = {
   why?: string
   bbox: Box4 | null
   bbox_q?: string
-  /** Why the edit verbs won't change it (`grouped`, `locked-layer`, …), when the model says; absent or null when they will. */
+  /** Why the edit verbs won't change it, in the pack's edit word (`hatch`, `in-block`, `own-frame`, …); null when they will. */
   edit?: string | null
   // Each kind's own fields; read by the renderer kind by kind.
   geom?: Record<string, unknown> | null

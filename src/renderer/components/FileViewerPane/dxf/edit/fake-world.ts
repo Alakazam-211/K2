@@ -110,7 +110,7 @@ export function fakeCadWorld(
     const fields = verb === 'attrib set' ? ['text'] : ['geom']
     for (const r of found) {
       const why = editReason(r, header)
-      if (why === 'locked' || opts.locked?.includes(r.layer)) return refuse(verb, base, 'DXF-E045', `${r.h} is on a locked layer`)
+      if (why === 'locked-layer' || opts.locked?.includes(r.layer)) return refuse(verb, base, 'DXF-E045', `${r.h} is on a locked layer`)
       if (why) return refuse(verb, base, 'DXF-E021', `${r.h} isn't changed by the edit verbs (${why})`)
       const t = touched.get(r.h)
       if (t && t.version > base && t.fields.some((f) => fields.includes(f)))

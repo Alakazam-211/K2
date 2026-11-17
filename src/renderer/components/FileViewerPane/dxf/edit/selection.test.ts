@@ -95,7 +95,7 @@ describe('editReason', () => {
   it('the kinds the verbs change: none', () => {
     for (const h of ['@h:41', '@h:4B', '@h:4C', '@h:51', '@h:5C', '@h:60', '@h:61', '@h:66', '@h:67']) expect(r(h), h).toBeNull()
   })
-  it('the kinds they don’t: the pack’s reason', () => {
+  it('the row’s own edit word, as the pack gives it', () => {
     expect(r('@h:68')).toBe('hatch')
     expect(r('@h:6B')).toBe('dimension')
     expect(r('@h:6C')).toBe('leader')
@@ -104,22 +104,28 @@ describe('editReason', () => {
     expect(r('@h:6D')).toBe('image')
     expect(r('@h:7B')).toBe('unknown')
     expect(r('@h:48')).toBe('unknown')
-    expect(editReason({ ...row('@h:41'), kind: '3DSOLID' }, HEADER)).toBe('acis')
-    expect(editReason({ ...row('@h:41'), kind: 'ACAD_PROXY_ENTITY' }, HEADER)).toBe('proxy')
+    expect(r('@h:4D')).toBe('own-frame')
+    expect(r('@h:7A')).toBe('solid3d')
   })
-  it('the model’s own word wins; a dynamic block’s reference is fine', () => {
-    expect(editReason({ ...row('@h:41'), edit: 'assoc' } as ModelRow, HEADER)).toBe('assoc')
-    // The draw rows' words: each hides Move up front.
-    const by: Record<string, string> = { grouped: 'grouped', dimensioned: 'dimensioned', 'own-frame': 'ocs', 'no-handle': 'minted', proxy: 'proxy', xref: 'xref', 'locked-layer': 'locked', '3D solid': 'acis', unknown: 'unknown' }
-    for (const [w, key] of Object.entries(by)) expect(editReason({ ...row('@h:41'), edit: w }, HEADER), w).toBe(key)
+  it('without a word from the model, the pack’s rule by kind', () => {
+    const bare = (kind: string) => editReason({ ...row('@h:41'), kind, edit: undefined }, HEADER)
+    expect(bare('3DSOLID')).toBe('solid3d')
+    expect(bare('ACAD_PROXY_ENTITY')).toBe('proxy')
+    expect(bare('HATCH')).toBe('hatch')
+    expect(bare('XLINE')).toBe('unknown')
+    expect(bare('LINE')).toBeNull()
+  })
+  it('the model’s word wins; null is editable', () => {
+    for (const w of ['reactors', 'embedded', 'dynamic', 'no-handle', 'xref', 'proxy', 'version', 'multiline-attribute'])
+      expect(editReason({ ...row('@h:41'), edit: w }, HEADER), w).toBe(w)
+    expect(editReason({ ...row('@h:41'), edit: 'locked-layer' }, HEADER)).toBe('locked-layer')
     expect(editReason({ ...row('@h:41'), edit: null }, HEADER)).toBeNull()
-    expect(editReason({ ...row('@h:61'), edit: 'dynblock' } as ModelRow, HEADER)).toBeNull()
   })
   it('an external reference, a locked layer, inside a block', () => {
     expect(editReason({ ...row('@h:61'), geom: { ...row('@h:61').geom, xref: true } }, HEADER)).toBe('xref')
     const locked = { ...HEADER, layers: HEADER.layers.map((l) => (l.name === 'A-WALL' ? { ...l, locked: true } : l)) }
-    expect(editReason(row('@h:41'), locked)).toBe('locked')
-    expect(editReason({ ...row('@h:41'), owner: '@h:2D' }, HEADER)).toBe('block')
+    expect(editReason(row('@h:41'), locked)).toBe('locked-layer')
+    expect(editReason({ ...row('@h:41'), owner: '@h:2D', edit: undefined }, HEADER)).toBe('in-block')
   })
 })
 

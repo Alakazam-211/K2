@@ -68,7 +68,7 @@ describe('refusalWords', () => {
 
   it('a kind the verbs don’t change says which reason, from the message’s word', () => {
     expect(say('DXF-E021', '@h:6B isn’t changed by the edit verbs (dimension)').words).toBe(`Not moved. ${WHY_WORDS.dimension}`)
-    expect(say('DXF-E021', '@h:4C isn’t changed by the edit verbs (assoc)').words).toBe(`Not moved. ${WHY_WORDS.assoc}`)
+    expect(say('DXF-E021', '@h:4C isn’t changed by the edit verbs (reactors)').words).toBe(`Not moved. ${WHY_WORDS.reactors}`)
     expect(say('DXF-E021', 'anything else').words).toBe(`Not moved. ${WHY_WORDS.unknown}`)
   })
 
@@ -82,11 +82,10 @@ describe('refusalWords', () => {
 })
 
 describe('whyWords', () => {
-  it('every reason the model gives has words; an unknown one reads as unknown', () => {
-    for (const k of ['hatch', 'dimension', 'leader', 'viewport', 'acis', 'image', 'proxy', 'unknown', 'xref', 'block', 'assoc', 'ocs', 'minted', 'dynamic'])
-      expect(whyWords(k), k).toBe(WHY_WORDS[k as keyof typeof WHY_WORDS])
+  it('every word a draw row can give has words; an unknown one reads as unknown', () => {
+    for (const k of Object.keys(WHY_WORDS)) expect(whyWords(k), k).toBe(WHY_WORDS[k as keyof typeof WHY_WORDS])
     expect(whyWords('something new')).toBe(WHY_WORDS.unknown)
-    expect(whyWords('locked', 'A-WALL')).toBe('It’s on A-WALL, which is locked. Unlock it in your CAD app first.')
+    expect(whyWords('locked-layer', 'A-WALL')).toBe('It’s on A-WALL, which is locked. Unlock it in your CAD app first.')
   })
 })
 
@@ -97,24 +96,29 @@ describe('a writer that’s off', () => {
   })
 })
 
-describe('the drawing model’s reason words', () => {
-  it('each maps to a plain-word reason', () => {
+describe('the drawing model’s edit words', () => {
+  it('the sampler’s words read as plain reasons', () => {
     const want: Record<string, string> = {
-      grouped: WHY_WORDS.grouped,
-      dimensioned: WHY_WORDS.dimensioned,
-      'own-frame': WHY_WORDS.ocs,
-      'no-handle': WHY_WORDS.minted,
-      proxy: WHY_WORDS.proxy,
-      xref: WHY_WORDS.xref,
-      '3D solid': WHY_WORDS.acis,
-      unknown: WHY_WORDS.unknown,
+      'in-block': 'Part of a block’s definition. Edit the block in your CAD app.',
+      hatch: 'Hatches can’t be changed here yet.',
+      leader: 'Leaders can’t be changed here yet.',
+      'own-frame': 'This is drawn in its own frame. Change it in your CAD app.',
+      unknown: 'K2 doesn’t know this kind yet.',
+      image: 'Images can’t be changed here yet.',
+      dimension: 'Dimensions can’t be changed here yet.',
+      solid3d: '3D solids can’t be changed here.',
     }
     for (const [w, words] of Object.entries(want)) expect(whyWords(w), w).toBe(words)
-    expect(whyWords('locked-layer', 'A-WALL')).toBe('It’s on A-WALL, which is locked. Unlock it in your CAD app first.')
+  })
+  it('the pack’s other words have their own reasons, never the unknown one', () => {
+    for (const w of ['version', 'no-handle', 'xref', 'dynamic', 'proxy', 'multiline-attribute', 'embedded', 'reactors', 'viewport'])
+      expect(whyWords(w), w).not.toBe(WHY_WORDS.unknown)
+    expect(whyWords('locked-layer', 'A-WALL')).toMatch(/A-WALL, which is locked/)
   })
   it('a refusal naming one reads the same', () => {
-    expect(say('DXF-E021', '@h:4C isn’t changed by the edit verbs (own-frame)').words).toBe(`Not moved. ${WHY_WORDS.ocs}`)
-    expect(say('DXF-E021', '@h:4C isn’t changed by the edit verbs (3D solid)').words).toBe(`Not moved. ${WHY_WORDS.acis}`)
+    expect(say('DXF-E021', '@h:4D isn’t changed by the edit verbs (own-frame)').words).toBe(`Not moved. ${WHY_WORDS['own-frame']}`)
+    expect(say('DXF-E021', '@h:7A isn’t changed by the edit verbs (solid3d)').words).toBe(`Not moved. ${WHY_WORDS.solid3d}`)
+    expect(say('DXF-E046').words).toBe(`Not moved. ${WHY_WORDS['in-block']}`)
   })
 })
 

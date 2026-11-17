@@ -155,7 +155,7 @@ export function SelectionPanel({ edit, header, slots }: { edit: CadEdit; header:
   const one = rows.length === 1 ? rows[0] : null
   const layers = [...new Set(rows.map((r) => r.layer))]
   const reasons = [...new Set(rows.map((r) => editReason(r, header)).filter((w): w is string => w !== null))]
-  const cantWords = [...new Set(reasons.map((w) => whyWords(w, w === 'locked' ? layers.find((l) => header.layers.find((x) => x.name === l)?.locked) : null)))]
+  const cantWords = [...new Set(reasons.map((w) => whyWords(w, w === 'locked-layer' ? layers.find((l) => header.layers.find((x) => x.name === l)?.locked) : null)))]
   const holds = holdsOn(edit.selection, edit.holds, rows, header)
   const controls = edit.canEdit
   const isText = one && (one.kind === 'TEXT' || one.kind === 'MTEXT')

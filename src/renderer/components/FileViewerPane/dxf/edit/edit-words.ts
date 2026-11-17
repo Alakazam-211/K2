@@ -11,47 +11,40 @@ import { NO_DIGEST } from './edit-flow'
 import { NO_ROUTE, NOT_SENT, WRITER_OFF, WRITER_OFF_WORDS } from './edit-source'
 import type { ToolResult } from './tool-result'
 
-/** Why an entity can't be changed, by the model's reason word. */
+/**
+ * Why an entity can't be changed, by the drawing model's edit word (each
+ * draw row's `edit`: null when the verbs change it). A row with one of
+ * these has no Move, Rotate or Scale.
+ */
 export const WHY_WORDS = {
+  'in-block': 'Part of a block’s definition. Edit the block in your CAD app.',
   hatch: 'Hatches can’t be changed here yet.',
-  dimension: 'Dimensions can’t be changed here yet.',
   leader: 'Leaders can’t be changed here yet.',
+  'own-frame': 'This is drawn in its own frame. Change it in your CAD app.',
+  unknown: 'K2 doesn’t know this kind yet.',
+  image: 'Images can’t be changed here yet.',
+  dimension: 'Dimensions can’t be changed here yet.',
+  solid3d: '3D solids can’t be changed here.',
+  // The pack's rarer words.
   viewport: 'Viewports can’t be changed here yet.',
-  acis: '3D solids can’t be changed here.',
-  image: 'Images and underlays can’t be changed here yet.',
   proxy: 'It was made by another app. Change it in that app.',
-  unknown: 'K2 can’t change this kind of item yet.',
   xref: 'It’s part of a linked drawing. Change it in that drawing.',
-  block: 'It’s inside a block. Edit the block in your CAD app.',
-  assoc: 'It’s grouped or has a dimension attached, so it can’t be moved here yet.',
-  ocs: 'It’s drawn on a tilted plane, so it can’t be changed here yet.',
-  minted: 'It has no handle. Save the drawing again in your CAD app.',
   dynamic: 'It’s part of a dynamic block’s shape. Change the block in your CAD app.',
-  grouped: 'It’s in a group, so it can’t be moved here yet.',
-  dimensioned: 'It has a dimension attached, so it can’t be moved here yet.',
+  reactors: 'It’s grouped or has a dimension attached, so it can’t be changed here yet.',
+  embedded: 'It holds an object from another app, so it can’t be changed here yet.',
+  'multiline-attribute': 'It has a label with more than one line. Change it in your CAD app.',
+  'no-handle': 'It has no handle. Save the drawing again in your CAD app.',
+  version: 'The drawing was saved before DXF 2000. Save it as DXF 2000 or later in your CAD app.',
 } as const
 
-/** The drawing model's own words for why (its rows' `edit`), as reasons above. */
-const MODEL_WORDS: Record<string, string> = {
-  'own-frame': 'ocs',
-  'no-handle': 'minted',
-  'locked-layer': 'locked',
-  '3d solid': 'acis',
-  '3d-solid': 'acis',
-  dynblock: 'dynamic',
-}
+/** A reason word as given (any case or spacing). */
+export const reasonKey = (why: string): string => why.trim().toLowerCase()
 
-/** A reason word, the model's or the pack's, as one of ours. */
-export const reasonKey = (why: string): string => {
-  const w = why.trim().toLowerCase()
-  return MODEL_WORDS[w] ?? w
-}
-
-export type WhyKey = keyof typeof WHY_WORDS | 'locked'
+export type WhyKey = keyof typeof WHY_WORDS | 'locked-layer'
 
 export function whyWords(why: string, layer?: string | null): string {
   why = reasonKey(why)
-  if (why === 'locked') return `It’s on ${layer || 'a layer'}, which is locked. Unlock it in your CAD app first.`
+  if (why === 'locked-layer') return `It’s on ${layer || 'a layer'}, which is locked. Unlock it in your CAD app first.`
   return (WHY_WORDS as Record<string, string>)[why] ?? WHY_WORDS.unknown
 }
 
@@ -161,7 +154,7 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
       return plain(layer ? `${layer} is locked. Unlock it in your CAD app, then try again.` : 'Its layer is locked. Unlock it in your CAD app, then try again.')
     }
     case 'DXF-E046':
-      return plain(WHY_WORDS.block)
+      return plain(WHY_WORDS['in-block'])
     case 'DXF-E047':
       return plain('This block doesn’t have that label anymore. The drawing has been refreshed.', true)
     case 'DXF-E048':

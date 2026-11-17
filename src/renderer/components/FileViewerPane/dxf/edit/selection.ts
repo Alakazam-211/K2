@@ -5,9 +5,9 @@
 //     to left a crossing (what it touches), as CAD apps do; both read the
 //     model's boxes;
 //   - Shift locks a move to its longer axis.
-// And which entities the edit verbs change: the model's own reason when it
-// gives one, else the CAD pack's rule by kind, then an external reference,
-// a locked layer, or inside a block.
+// And which entities the edit verbs change: the model's own edit word when
+// it gives one, else the CAD pack's rule (inside a block, then by kind),
+// then an external reference or a locked layer.
 
 import type { ModelHeader, ModelRow, XY } from '../model/types'
 import { reasonKey } from './edit-words'
@@ -88,10 +88,10 @@ const BY_KIND: Record<string, string> = {
   MULTILEADER: 'leader',
   VIEWPORT: 'viewport',
   ACAD_PROXY_ENTITY: 'proxy',
-  '3DSOLID': 'acis',
-  REGION: 'acis',
-  BODY: 'acis',
-  SURFACE: 'acis',
+  '3DSOLID': 'solid3d',
+  REGION: 'solid3d',
+  BODY: 'solid3d',
+  SURFACE: 'solid3d',
   IMAGE: 'image',
   WIPEOUT: 'image',
   UNDERLAY: 'image',
@@ -100,15 +100,17 @@ const BY_KIND: Record<string, string> = {
   DGNUNDERLAY: 'image',
 }
 
-/** Why the edit verbs won't change this entity (a reason word for `whyWords`), or null when they will. */
+/** Why the edit verbs won't change this entity (an edit word for `whyWords`), or null when they will. */
 export function editReason(r: ModelRow, header: Pick<ModelHeader, 'layers'>): string | null {
-  // Inside a block definition. (A layout's entities are on paper, which the viewer doesn't show or select yet.)
-  if (r.owner !== 'model') return 'block'
-  // The model's own word, when it gives one (none, or null, when the verbs change it).
-  const word = typeof r.edit === 'string' && r.edit && r.edit !== '1' && r.edit !== 'dynblock' ? reasonKey(r.edit) : null
-  if (word) return word
-  if (!EDITABLE.has(r.kind)) return BY_KIND[r.kind] ?? 'unknown'
+  // The model's own word, when it gives one (null when the verbs change it).
+  if (typeof r.edit === 'string' && r.edit) return reasonKey(r.edit)
+  // A model that doesn't say: the pack's rule. Inside a block definition (a layout's entities are on paper, which the viewer doesn't select yet), then by kind.
+  if (r.edit === undefined) {
+    if (r.owner !== 'model') return 'in-block'
+    if (!EDITABLE.has(r.kind)) return BY_KIND[r.kind] ?? 'unknown'
+  }
+  // What the header knows since: an external reference, a locked layer.
   if (r.kind === 'INSERT' && r.geom?.xref === true) return 'xref'
-  if (header.layers.find((l) => l.name === r.layer)?.locked) return 'locked'
+  if (header.layers.find((l) => l.name === r.layer)?.locked) return 'locked-layer'
   return null
 }

@@ -16,6 +16,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# Everything the block calls is faked (k2, timeout, curl, sleep) except
+# python3, which the provisioner itself needs (step 1 installs it).
+command -v python3 >/dev/null 2>&1 || { echo "SKIP: provision_sew.sh needs python3"; exit 0; }
 PROVISION="$ROOT/scripts/provision-k2-server.sh"
 [ -f "$PROVISION" ] || { echo "FAIL: missing $PROVISION" >&2; exit 1; }
 
@@ -50,6 +53,7 @@ grep -q '^#   K2_SKIP_SEW ' "$PROVISION" || fail "K2_SKIP_SEW must be documented
 grep -q 'echo "  sew:       ${SEW_LINE}"' "$PROVISION" || fail "the summary must print the sew line"
 ok "K2_SKIP_SEW documented; summary prints the sew line"
 grep -q '_bound=(timeout --kill-after=30s "$K2_CLI_TIMEOUT")' "$PROVISION" \
+	&& grep -q '${_bound\[@\]+"${_bound\[@\]}"} runuser' "$PROVISION" \
 	|| fail "k2_as_daemon_user must bound a call with K2_CLI_TIMEOUT"
 if <<<"$(<<<"$BLOCK" grep -Ev '^[[:space:]]*#')" grep -Eiq 'latest|--tarball|--version'; then
 	fail "9c must not override K2's Sew pin (no latest / --tarball / --version)"
@@ -74,10 +78,15 @@ SH
 cat >"$SHIMS/timeout" <<'SH'
 #!/bin/sh
 # timeout <limit> k2 <args>: record the limit; FAKE_HANG=<args> times out.
+# Shift "k2" off explicitly: ${*#k2 } is shell-dependent (dash/busybox strip
+# the joined string, bash strips each word, so "k2" survived where /bin/sh
+# is bash). Never the host's timeout(1): the test owns this one.
 limit="$1"; shift
-echo "$limit ${*#k2 }" >>"$FAKE_STATE/timeouts.log"
-[ "${FAKE_HANG:-}" = "${*#k2 }" ] && exit 124
-exec "$@"
+[ "${1:-}" = k2 ] || { echo "timeout shim: expected k2, got: $*" >&2; exit 98; }
+shift
+echo "$limit $*" >>"$FAKE_STATE/timeouts.log"
+[ "${FAKE_HANG:-}" = "$*" ] && exit 124
+exec k2 "$@"
 SH
 cat >"$SHIMS/k2" <<'SH'
 #!/usr/bin/env bash
@@ -125,7 +134,7 @@ STEP="$WORK/step.sh"
 	echo 'set -euo pipefail'
 	echo 'log() { printf "[provision] %s\n" "$*"; }'
 	echo 'die() { printf "[provision] ERROR: %s\n" "$*" >&2; exit 1; }'
-	echo 'k2_as_daemon_user() { local _bound=(); [ -z "${K2_CLI_TIMEOUT:-}" ] || _bound=(timeout "$K2_CLI_TIMEOUT"); "${_bound[@]}" k2 "$@"; }'
+	echo 'k2_as_daemon_user() { local _bound=(); [ -z "${K2_CLI_TIMEOUT:-}" ] || _bound=(timeout "$K2_CLI_TIMEOUT"); ${_bound[@]+"${_bound[@]}"} k2 "$@"; }'
 	printf '%s\n' "$BLOCK"
 	echo 'echo "SUMMARY=${SEW_LINE}"'
 } >"$STEP"

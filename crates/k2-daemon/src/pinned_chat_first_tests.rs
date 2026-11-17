@@ -111,7 +111,9 @@ fn a_new_server_with_no_llm_cli_asks_instead_of_failing_the_spawn() {
     let c = choices(&v);
     for h in ["claude", "codex", "grok"] {
         assert_eq!(c[h]["installed"], false, "{h}: {v}");
-        assert_eq!(c[h]["install"], true, "K2 can install {h}: {v}");
+        // Grok has no Windows installer K2 can run (ensure_cli's table).
+        let can = !(cfg!(windows) && h == "grok");
+        assert_eq!(c[h]["install"], can, "K2 can install {h}: {v}");
     }
 }
 
@@ -297,6 +299,9 @@ fn a_default_set_to_another_installed_harness_is_not_asked_again() {
 
     // Not installed: it asks, rather than fail the spawn.
     std::fs::remove_file(home.path().join("agent-shims").join("codex")).expect("uninstall codex");
+    // Windows: the fake is also codex.exe (test_env::write_executable).
+    #[cfg(windows)]
+    std::fs::remove_file(home.path().join("agent-shims").join("codex.exe")).expect("uninstall codex.exe");
     assert!(crate::pinned_chat_choice::needs_choice(&path).is_some());
 }
 

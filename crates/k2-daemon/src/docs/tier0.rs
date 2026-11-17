@@ -613,7 +613,7 @@ fn blob_tool(s: &Arc<BlobSession>, c: &Call) -> Result<CliResponse, VerbError> {
         opts = opts.read_budget(usize::try_from(b).unwrap_or(usize::MAX));
     }
     let j = join(s, c, Stay::UntilIdle)?;
-    let v = run_blob_tool(s, j.conn, &c.target.key(), &argv, &opts)?;
+    let v = run_blob_tool_by(s, j.conn, &c.target.key(), &argv, &opts, Some(&c.caller.pid()))?;
     Ok(ok0(c.target, v))
 }
 
@@ -664,14 +664,31 @@ pub(super) fn run_blob_tool(
     argv: &[String],
     opts: &ToolOptions,
 ) -> Result<Value, VerbError> {
+    run_blob_tool_by(s, conn, key, argv, opts, None)
+}
+
+/// [`run_blob_tool`] for the caller `by` (their pid): a version the verb
+/// makes is told with who made it.
+pub(super) fn run_blob_tool_by(
+    s: &BlobSession,
+    conn: ConnId,
+    key: &DocKey,
+    argv: &[String],
+    opts: &ToolOptions,
+    by: Option<&str>,
+) -> Result<Value, VerbError> {
     let mut waited = false;
     loop {
         match s.run_tool(conn, argv, opts) {
             Ok(out) => {
                 // A verb that made a version (a drawing's edit): every
-                // client is told, as for a write (the kit has no event).
+                // client is told, as for a write (the kit has no event),
+                // with who made it.
                 if let Some(v) = out.version_made() {
-                    super::versions::announce(key, v);
+                    match by {
+                        Some(by) => super::versions::announce_by(key, v, by),
+                        None => super::versions::announce(key, v),
+                    }
                 }
                 return Ok(tool_json(out));
             }

@@ -811,13 +811,17 @@ pub enum SessionEvent {
     /// and version number only.
     /// Wire: `{ "kind": "doc_version_changed", "projectId": "<workspace
     /// id>", "workspace": "<absolute root>", "rel": "<path in it>",
-    /// "version": n }`.
+    /// "version": n, "by"?: "<pid>" }` (`by` only for a verb edit or an undo).
     DocVersionChanged {
         #[serde(rename = "projectId")]
         project_id: String,
         workspace: String,
         rel: String,
         version: u64,
+        /// Who made the version, when it came from a verb edit or an undo
+        /// (their pid, as `docs/who` names them); absent when unknown.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
     },
 
     /// prd-app-tickets-websocket-v1 (0.43.3) — one ticket changed. Emitted

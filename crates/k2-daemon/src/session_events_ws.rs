@@ -1259,6 +1259,7 @@ mod tests {
                 workspace: "/x/foo".into(),
                 rel: "models/house.obj".into(),
                 version: 4,
+                by: Some("person:owner".into()),
             },
             SessionEvent::TicketChanged {
                 project_id: "p".into(),

@@ -182,7 +182,7 @@ fn revert(rt: &Arc<super::Runtime>, c: &Call) -> CliResponse {
         Err(e) => return routes::session_error(&e),
     };
     if w.changed {
-        super::versions::announce(&t.key(), w.version);
+        super::versions::announce_by(&t.key(), w.version, &c.caller.pid());
     }
     let (now, after) = match head(rt, t) {
         Ok((v, Opened::Dxf(b))) => (v, b),

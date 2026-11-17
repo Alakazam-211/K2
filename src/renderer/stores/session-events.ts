@@ -724,6 +724,9 @@ export interface DocVersionChangedEvent {
   workspace: string
   rel: string
   version: number
+  /** Who made the version, for a verb edit or an undo (their pid, as
+   *  `docs/who` names them); absent when unknown (an outside save, a write). */
+  by?: string
 }
 
 /** APP-LEVEL — Changes tab v1 (prd-changes-tab-v1): the git state behind a

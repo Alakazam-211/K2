@@ -27,18 +27,29 @@ pub fn disk_version(check: &DiskCheck) -> Option<VersionId> {
 
 /// The event for `key` at `version`, with the workspace's folder (a tab
 /// matches `workspace` + `rel` to its file).
-pub fn event(key: &DocKey, workspace: String, version: VersionId) -> crate::session_events::SessionEvent {
+pub fn event(key: &DocKey, workspace: String, version: VersionId, by: Option<String>) -> crate::session_events::SessionEvent {
     crate::session_events::SessionEvent::DocVersionChanged {
         project_id: key.space.clone(),
         workspace,
         rel: key.path.clone(),
         version,
+        by,
     }
+}
+
+/// [`announce`], naming who made the version (`by`: their pid), for a
+/// verb edit or an undo, so a viewer can say who changed the file.
+pub fn announce_by(key: &DocKey, version: VersionId, by: &str) {
+    announce_with(key, version, Some(by.to_string()));
 }
 
 /// Tell every client `key`'s doc is at `version` now. A workspace K2 no
 /// longer knows has no open tab to tell.
 pub fn announce(key: &DocKey, version: VersionId) {
+    announce_with(key, version, None);
+}
+
+fn announce_with(key: &DocKey, version: VersionId, by: Option<String>) {
     let workspace = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -48,7 +59,7 @@ pub fn announce(key: &DocKey, version: VersionId) {
         k2_core::log_debug!("[docs] {}: version {version}, but its workspace is gone; nobody told", super::host::key_label(key));
         return;
     };
-    let _ = crate::session_events::emit(event(key, workspace, version));
+    let _ = crate::session_events::emit(event(key, workspace, version, by));
 }
 
 #[cfg(test)]
@@ -69,10 +80,17 @@ mod tests {
     #[test]
     fn the_event_names_the_workspace_the_path_and_the_version() {
         let key = DocKey { space: "p1".into(), path: "play/house.obj".into() };
-        let v = serde_json::to_value(event(&key, "/srv/acme".into(), 4)).expect("json");
+        let v = serde_json::to_value(event(&key, "/srv/acme".into(), 4, None)).expect("json");
         assert_eq!(
             v,
-            serde_json::json!({"kind": "doc_version_changed", "projectId": "p1", "workspace": "/srv/acme", "rel": "play/house.obj", "version": 4})
+            serde_json::json!({"kind": "doc_version_changed", "projectId": "p1", "workspace": "/srv/acme", "rel": "play/house.obj", "version": 4}),
+            "no `by` when unknown: the old shape exactly"
+        );
+        let v = serde_json::to_value(event(&key, "/srv/acme".into(), 5, Some("agent:atlas".into()))).expect("json");
+        assert_eq!(
+            v,
+            serde_json::json!({"kind": "doc_version_changed", "projectId": "p1", "workspace": "/srv/acme", "rel": "play/house.obj", "version": 5, "by": "agent:atlas"}),
+            "a verb edit or an undo names who made it"
         );
     }
 }

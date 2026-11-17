@@ -16,6 +16,7 @@ import {
   ThreadZenStyles,
 } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
+import { threadTextColumnStyle } from './threadTextWidth'
 import { ThreadAttachmentSourceProvider, type ThreadAttachmentSource } from '@/components/Thread/ThreadImageObjects'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
 import { usePrependHold } from '@/components/Thread/usePrependHold'
@@ -340,7 +341,7 @@ export const ChatterOverlayPane = memo(function ChatterOverlayPane({
                 ref={contentRef}
                 gap={THREAD_LIST_GAP}
                 testId="chatter-overlay-column"
-                style={textCapPx != null ? { width: '100%', maxWidth: textCapPx, marginInline: 'auto' } : undefined}
+                style={threadTextColumnStyle(textCapPx)}
               >
                 {hasMore && win.drawsOldest && (
                   <ThreadLoadOlder loading={loadingOlder} onClick={() => requestOlder()} testId="overlay-load-older" />

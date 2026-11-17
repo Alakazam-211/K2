@@ -5,6 +5,8 @@
 // user of a server. Same home and shape as "New agents open in"
 // (`sessionViewTab.ts`).
 
+import type { CSSProperties } from 'react'
+
 export const LS_THREAD_TEXT_WIDTH = 'k2.threadTextWidth'
 
 export const THREAD_TEXT_WIDTH_MIN_PX = 480
@@ -72,6 +74,21 @@ export function writeThreadTextWidth(pref: ThreadTextWidthPref): void {
 export function threadTextCapPx(pref: ThreadTextWidthPref | null | undefined): number | null {
   const safe = normalizeThreadTextWidth(pref)
   return safe.limited ? safe.px : null
+}
+
+/** The message column at limit `cap`: capped and centred, while the list
+ *  and its scrollbar stay full width. Null (Full width): no style. Every
+ *  chat column reads this (agent Threads, Chatter, Home's DMs and channels),
+ *  so they all sit at the same width. */
+export function threadTextColumnStyle(cap: number | null): CSSProperties | undefined {
+  return cap != null ? { width: '100%', maxWidth: cap, marginInline: 'auto' } : undefined
+}
+
+/** The message box's limit at `cap`: the column's plus the `--zen-gap` the
+ *  box pads by on each side, as the list does, so its field lines up with
+ *  the messages. Null (Full width): no limit. */
+export function threadComposeCapWidth(cap: number | null): string | undefined {
+  return cap != null ? `calc(${cap}px + 2 * var(--zen-gap, 12px))` : undefined
 }
 
 /** Reset shows only away from the default. */

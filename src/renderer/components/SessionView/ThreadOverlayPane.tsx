@@ -41,6 +41,7 @@ import {
   zenEmptyThreadText,
 } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
+import { threadTextColumnStyle } from './threadTextWidth'
 import { THREAD_JUMP_BOTTOM_PX, ThreadJumpPill } from '@/components/Thread/ThreadJumpPill'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
 import { usePrependHold } from '@/components/Thread/usePrependHold'
@@ -632,7 +633,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
             ref={contentRef}
             gap={THREAD_LIST_GAP}
             testId="thread-overlay-column"
-            style={textCapPx != null ? { width: '100%', maxWidth: textCapPx, marginInline: 'auto' } : undefined}
+            style={threadTextColumnStyle(textCapPx)}
           >
             {/* "Earlier messages" fetches; it shows once the window reaches
                 the first message in memory (memory first). */}

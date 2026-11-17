@@ -39,6 +39,8 @@ vi.mock('@/lib/home-chat/events-socket', async (orig) => ({
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import HomeChatView from './HomeChatView'
 import { resetHomeChatForTests } from '@/stores/home-chat'
+import { useSettingsStore } from '@/stores/settings'
+import { threadComposeCapWidth } from '@/components/SessionView/threadTextWidth'
 import { resetHomeChatViewCacheForTests } from '@/lib/home-chat/chat'
 import type { HomeChatTarget } from '@/lib/home-chat/address'
 
@@ -109,6 +111,34 @@ async function open(): Promise<void> {
 }
 
 describe('Home chat view', () => {
+  it("keeps the agent Thread's text width: the column and the box cap at the same limit and centre", async () => {
+    const was = useSettingsStore.getState().threadTextWidth
+    useSettingsStore.setState({ threadTextWidth: { limited: true, px: 640 } })
+    try {
+      await open()
+      const column = screen.getByTestId('home-chat-column')
+      expect(column.style.maxWidth).toBe('640px')
+      expect(column.style.marginInline).toBe('auto')
+      const box = screen.getByTestId('home-chat-compose-cap')
+      expect(box.style.maxWidth).toBe(threadComposeCapWidth(640))
+      expect(box.contains(screen.getByTestId('home-chat-compose'))).toBe(true)
+    } finally {
+      useSettingsStore.setState({ threadTextWidth: was })
+    }
+  })
+
+  it('Full width (no limit) leaves the column and the box uncapped', async () => {
+    const was = useSettingsStore.getState().threadTextWidth
+    useSettingsStore.setState({ threadTextWidth: { limited: false, px: 640 } })
+    try {
+      await open()
+      expect(screen.getByTestId('home-chat-column').style.maxWidth).toBe('')
+      expect(screen.getByTestId('home-chat-compose-cap').style.maxWidth).toBe('')
+    } finally {
+      useSettingsStore.setState({ threadTextWidth: was })
+    }
+  })
+
   it("the header's glyph matches the row's: a lock for an invite-only channel", async () => {
     await open()
     await waitFor(() => expect(screen.getByTestId('home-chat-header-glyph').querySelector('[data-channel-glyph]')?.getAttribute('data-channel-glyph')).toBe('lock'))

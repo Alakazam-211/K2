@@ -7,7 +7,9 @@ import {
   normalizeThreadTextWidth,
   parseThreadTextWidth,
   readThreadTextWidth,
+  threadComposeCapWidth,
   threadTextCapPx,
+  threadTextColumnStyle,
   writeThreadTextWidth,
 } from './threadTextWidth'
 
@@ -65,5 +67,12 @@ describe('threadTextWidth', () => {
     expect(isThreadTextWidthDefault(THREAD_TEXT_WIDTH_DEFAULT)).toBe(true)
     expect(isThreadTextWidthDefault({ limited: false, px: 720 })).toBe(false)
     expect(isThreadTextWidthDefault({ limited: true, px: 740 })).toBe(false)
+  })
+
+  it('caps and centres the message column, and the box by its gap on both sides', () => {
+    expect(threadTextColumnStyle(640)).toEqual({ width: '100%', maxWidth: 640, marginInline: 'auto' })
+    expect(threadTextColumnStyle(null)).toBeUndefined()
+    expect(threadComposeCapWidth(640)).toBe('calc(640px + 2 * var(--zen-gap, 12px))')
+    expect(threadComposeCapWidth(null)).toBeUndefined()
   })
 })

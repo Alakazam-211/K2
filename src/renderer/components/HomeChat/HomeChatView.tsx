@@ -35,6 +35,8 @@ import {
 } from '@/components/Thread/ThreadChat'
 import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadLoadOlder, ThreadWindowSpacer } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
+import { useThreadTextCapPx } from '@/components/SessionView/useThreadTextCap'
+import { threadComposeCapWidth, threadTextColumnStyle } from '@/components/SessionView/threadTextWidth'
 import { ThreadReplyChip } from '@/components/Thread/ThreadMessageMenu'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
 import { usePrependHold } from '@/components/Thread/usePrependHold'
@@ -461,6 +463,9 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
         : !conv || !me
           ? 'opening the conversation'
           : null
+  // The agent Thread's text width (Settings: Thread text width), one limit.
+  const textCap = useThreadTextCapPx()
+  const composeCap = threadComposeCapWidth(textCap)
   const chatState: 'loading' | 'error' | 'off' | null = chatOff
     ? 'off'
     : convError || loadError
@@ -540,7 +545,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
                 <p className="mt-1">{dm ? `Send ${title} a message.` : `Messages here go to everyone in ${title}.`}</p>
               </ThreadChatEmpty>
             ) : messages ? (
-              <ThreadMessageColumn gap={THREAD_LIST_GAP} testId="home-chat-column">
+              <ThreadMessageColumn gap={THREAD_LIST_GAP} testId="home-chat-column" style={threadTextColumnStyle(textCap)}>
                 {hasMore && win.drawsOldest && (
                   <ThreadLoadOlder loading={loadingOlder} onClick={() => void onLoadOlder()} testId="home-chat-load-older" />
                 )}
@@ -584,6 +589,8 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
           </div>
         </SelectableRegion>
 
+        {/* The box caps with the column, as the agent Thread's does. */}
+        <div className="flex-shrink-0" data-testid="home-chat-compose-cap" style={{ width: '100%', maxWidth: composeCap, marginInline: 'auto' }}>
         {readOnly ? (
           <ThreadChatNote testId="home-chat-readonly">
             {archived ? 'This channel is archived: it is read-only.' : 'This person is no longer on this server: the conversation is read-only.'}
@@ -644,6 +651,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
             }
           />
         )}
+        </div>
       </ThreadChatScope>
     </div>
   )

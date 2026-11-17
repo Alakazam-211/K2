@@ -9,6 +9,7 @@ import { ThreadComposeDrawerContext, type ThreadComposeDrawer } from './threadCo
 import { ThreadEmptyStart, emptyStartPlace, sameEmptyStartPlace, type EmptyStartPlace } from './ThreadEmptyStart'
 import { THREAD_FLOAT_INSET_VAR } from './threadFloats'
 import { measureThreadDock, writeThreadDock } from './threadDock'
+import { threadComposeCapWidth } from './threadTextWidth'
 import { FOOTER_FADE_TARGETS, ThreadFooterFade, threadFadeTop } from '@/components/Thread/ThreadZenKit'
 import { ProgressiveHeaderBlur } from '@/components/ui'
 import {
@@ -198,7 +199,7 @@ export function ThreadOverlayColumn({
   }, [drifting])
 
   const lift = centred && place ? place.lift : 0
-  const capWidth = textCapPx != null ? `calc(${textCapPx}px + 2 * var(--zen-gap, 12px))` : undefined
+  const capWidth = threadComposeCapWidth(textCapPx)
   const scope = threadZenScopeProps(editorFontSize)
   return (
     <div

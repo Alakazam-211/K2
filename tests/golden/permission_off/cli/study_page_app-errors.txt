@@ -568,6 +568,12 @@ DOCS (multiplayer docs: k2 doc (the CAD core's drawings))
       fix: Read the drawing with k2 doc cad <read verb> <file> (k2 doc cad
       --help); change it in your CAD app, and its save is taken in.
 
+HOMES (a person's Home groups, synced between their devices)
+  builtin_group (exit 3)
+      fix: Keep the group; rename or move it instead. The item comes back in
+      rejected[] with the hint "The People group can't be deleted.", and the
+      next pull brings the group back.
+
 GENERAL (any App route)
   airgap (exit 3)
       fix: Nothing to change while air-gap is on. The owner turns air-gap

@@ -160,11 +160,18 @@ pub fn next_version(id: &str, author: &str) -> R<u32> {
 }
 
 /// `~/…` when under the home folder (what people read), else absolute.
+/// The part under home is `/`-joined on every OS (`~/.k2/agent-templates/…`).
 pub fn display_path(p: &Path) -> String {
     match crate::paths::home_dir().and_then(|h| p.strip_prefix(h).ok().map(Path::to_path_buf)) {
-        Some(rest) => format!("~/{}", rest.to_string_lossy()),
+        Some(rest) => format!("~/{}", slash_joined(&rest)),
         None => p.to_string_lossy().into_owned(),
     }
+}
+
+/// A relative path with `/` between its parts on every OS (Windows too), the
+/// way template files, refusals and the CLI name them.
+fn slash_joined(rel: &Path) -> String {
+    rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
 
 // ── the outcome ──────────────────────────────────────────────────────
@@ -427,7 +434,7 @@ fn read_text(abs: &Path) -> Option<String> {
 }
 
 fn ws_rel(ws: &str, abs: &Path) -> String {
-    abs.strip_prefix(ws).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| abs.to_string_lossy().into_owned())
+    abs.strip_prefix(ws).map(slash_joined).unwrap_or_else(|_| abs.to_string_lossy().into_owned())
 }
 
 /// Gather what a save takes from `inp.workspace` (every source text passes

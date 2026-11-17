@@ -4,22 +4,65 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { HomeChatCallButton, HomeChatCallingBar, HomeChatCallRecord, HomeChatCallStrip, HomeChatRingCard } from './HomeChatCall'
+import { HomeChatCallButton, HomeChatCallingBar, HomeChatCallRecord, HomeChatCallStrip, HomeChatRingCard, ringLayerTop } from './HomeChatCall'
 
 afterEach(cleanup)
 
 describe('DM call pieces', () => {
-  it('the ring card: Accept and Decline, silent says so', () => {
+  it('the ring card: Answer and Decline, silent says so', () => {
     const accept = vi.fn()
     const decline = vi.fn()
-    render(<HomeChatRingCard callerName="Alex Doe" picture={null} silent serverLabel="acme" onAccept={accept} onDecline={decline} />)
+    render(<HomeChatRingCard callerName="Alex Doe" username="alex" picture={null} silent serverLabel="acme" onAccept={accept} onDecline={decline} />)
     expect(screen.getByTestId('home-chat-ring-card').dataset.silent).toBe('true')
     expect(screen.getByTestId('home-chat-ring-name').textContent).toBe('Alex Doe')
-    expect(screen.getByRole('alertdialog').textContent).toContain('Calling (silent) · acme')
+    expect(screen.getByRole('alertdialog').textContent).toContain('is calling you (silent) · acme')
     fireEvent.click(screen.getByTestId('home-chat-ring-accept'))
     fireEvent.click(screen.getByTestId('home-chat-ring-decline'))
     expect(accept).toHaveBeenCalledTimes(1)
     expect(decline).toHaveBeenCalledTimes(1)
+  })
+
+  it('the ring card: Answer is the filled primary, Decline a quiet danger button, both real buttons', () => {
+    render(<HomeChatRingCard callerName="Alexandra Featherstonehaugh" username="alex" picture={null} silent={false} serverLabel={null} onAccept={() => {}} onDecline={() => {}} />)
+    const accept = screen.getByTestId('home-chat-ring-accept')
+    const decline = screen.getByTestId('home-chat-ring-decline')
+    expect(accept.textContent).toBe('Answer')
+    expect(decline.textContent).toBe('Decline')
+    // The shared Button: cut in Terminal, the field shape in Glass.
+    for (const b of [accept, decline]) {
+      expect(b.getAttribute('data-k2-chamfer')).toBe('control')
+      expect(b.className).toContain('min-h-8')
+    }
+    expect(accept.className).toContain('bg-[var(--color-accent-fill)]')
+    expect(decline.className).toContain('text-[var(--color-status-error-text)]')
+    expect(decline.className).not.toContain('bg-[var(--color-danger)]')
+  })
+
+  it('the ring card: the person avatar, the whole name and "is calling you"', () => {
+    render(<HomeChatRingCard callerName="Alexandra Featherstonehaugh" username="alex" picture={null} silent={false} serverLabel={null} onAccept={() => {}} onDecline={() => {}} />)
+    const card = screen.getByTestId('home-chat-ring-card')
+    expect(card.querySelector('[data-home-chat-avatar]')).toBeTruthy()
+    const name = screen.getByTestId('home-chat-ring-name')
+    expect(name.className).not.toMatch(/\btruncate\b/)
+    expect(name.className).toContain('line-clamp-2')
+    expect(card.textContent).toContain('is calling you')
+    expect(card.textContent).not.toContain('Calling…')
+  })
+
+  it('the ring card: Frost floating card in Glass, a raised cut tile in Terminal', () => {
+    render(<HomeChatRingCard callerName="Alex" username="alex" picture={null} silent={false} serverLabel={null} onAccept={() => {}} onDecline={() => {}} />)
+    const card = screen.getByTestId('home-chat-ring-card')
+    expect(card.getAttribute('data-material')).toBe('frost')
+    expect(card.getAttribute('data-float')).toBe('popover')
+    expect(card.getAttribute('data-k2-chamfer')).toBe('surface')
+    expect(card.className).toContain('bg-[var(--color-bg-elevated)]')
+    expect(card.parentElement?.hasAttribute('data-k2-chamfer-float')).toBe(true)
+  })
+
+  it('the ring layer sits under the open chat header, never over its controls', () => {
+    expect(ringLayerTop(null)).toBe(56)
+    expect(ringLayerTop(40)).toBe(56)
+    expect(ringLayerTop(92)).toBe(100)
   })
 
   it('the caller’s bar: Cancel while it rings, Call again after a decline or no answer', () => {

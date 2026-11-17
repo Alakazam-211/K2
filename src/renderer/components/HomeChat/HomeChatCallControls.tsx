@@ -20,7 +20,7 @@
 // `dm:<conversation id>`. The daemon rings when nobody rings for this person
 // in the DM, and answers the ring when one does.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react'
 import { voice, useVoice } from '@/stores/voice'
 import { useToastStore } from '@/stores/toast'
 import { daemonErrorText } from '@/lib/daemon-error'
@@ -45,10 +45,11 @@ import { hostPool } from '@/lib/host-pool-instance'
 import { hostIsVoiceChatOnly } from '@/lib/voice-chat-only'
 import { CALL_RING_Z } from '@/lib/overlay-layers'
 import { useStore } from 'zustand'
-import { HomeChatCallingBar, HomeChatCallStrip, HomeChatRingCard } from './HomeChatCall'
+import { HomeChatCallingBar, HomeChatCallStrip, HomeChatRingCard, ringLayerTop } from './HomeChatCall'
 import { serverLabelFor } from './serverLabel'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { ConversationCallPlace } from '@/components/Voice/CallPlace'
+import { clientRectToCss } from '@/lib/app-zoom'
 
 function toastError(e: unknown): void {
   useToastStore.getState().addToast(daemonErrorText(e) || String(e), 'error')
@@ -184,12 +185,32 @@ export function HomeChatCallLayer(): JSX.Element | null {
   const layerRef = useRef<HTMLDivElement>(null)
   useBrowserOverlay({ active: rings.length > 0, ref: layerRef, kind: 'popover', watch: rings.length })
 
+  // Under the open chat's header, so its Call and Members stay in reach;
+  // just under the top bar on a page with no chat header. A ring shows on
+  // every page, so the header can come and go while it rings: look again
+  // now and then as well as on resize.
+  const [top, setTop] = useState(() => ringLayerTop(null))
+  useLayoutEffect(() => {
+    if (rings.length === 0) return
+    const read = (): void => {
+      const header = document.querySelector('[data-testid="home-chat-header"]')
+      setTop(ringLayerTop(header ? clientRectToCss(header.getBoundingClientRect()).bottom : null))
+    }
+    read()
+    window.addEventListener('resize', read)
+    const every = window.setInterval(read, 500)
+    return () => {
+      window.removeEventListener('resize', read)
+      window.clearInterval(every)
+    }
+  }, [rings.length])
+
   if (rings.length === 0) return null
   return (
     <div
       ref={layerRef}
-      className="pointer-events-none fixed right-4 top-14 flex flex-col gap-2"
-      style={{ zIndex: CALL_RING_Z }}
+      className="pointer-events-none fixed right-4 flex flex-col gap-2"
+      style={{ top, zIndex: CALL_RING_Z }}
       data-testid="home-chat-call-layer"
     >
       {rings.map((r) => {
@@ -201,6 +222,7 @@ export function HomeChatCallLayer(): JSX.Element | null {
           <div key={k} className="pointer-events-auto">
             <HomeChatRingCard
               callerName={name}
+              username={who?.username ?? name}
               picture={who?.picture ?? null}
               silent={r.silent}
               serverLabel={serverLabelOf(r.hostKey)}

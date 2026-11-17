@@ -16,12 +16,29 @@
 import type { JSX } from 'react'
 import type { CallRecordLine } from '@/lib/home-chat/calls'
 import { formatCallDuration } from '@/lib/home-chat/calls'
+import { Button } from '@/components/ui/Button'
+import { floatMaterial } from '@/components/ui/float-material'
+import { HomeChatPersonAvatar } from './HomeChatGlyphs'
 
 const BTN =
   'k2-focus rounded-[var(--radius-field)] px-2.5 py-1 text-[12px] text-[var(--color-text-secondary)] hover:bg-[var(--color-row-hover)] disabled:opacity-50'
 
+/** The ring layer's top (px): under the open chat's header when one is on
+ *  screen (`headerBottom`, its bottom edge), so a ring never covers the
+ *  header's controls; else just under the top bar. */
+export const RING_LAYER_MIN_TOP = 56
+export function ringLayerTop(headerBottom: number | null): number {
+  return headerBottom === null ? RING_LAYER_MIN_TOP : Math.max(RING_LAYER_MIN_TOP, Math.round(headerBottom + 8))
+}
+
+/** Someone is calling you. A floating card: Frost with the float shadow in
+ *  Glass (floatMaterial), a solid raised tile with cut corners in Terminal
+ *  (the chamfer-float wrapper carries its shadow). Answer is the filled
+ *  primary and Decline a quiet danger button, both the shared Button at
+ *  32px or more. The name wraps to two lines rather than cutting off. */
 export function HomeChatRingCard({
   callerName,
+  username,
   picture,
   silent,
   serverLabel,
@@ -30,6 +47,8 @@ export function HomeChatRingCard({
   busy = false,
 }: {
   callerName: string
+  /** Their username on that server (the avatar's colour). */
+  username: string
   picture: string | null
   /** A silent ring: no sound (busy in a call, Do Not Disturb, a muted DM). */
   silent: boolean
@@ -40,41 +59,37 @@ export function HomeChatRingCard({
   busy?: boolean
 }): JSX.Element {
   return (
-    <div
-      role="alertdialog"
-      aria-label={`${callerName} is calling`}
-      data-testid="home-chat-ring-card"
-      data-silent={silent ? 'true' : 'false'}
-      className="flex w-72 items-center gap-3 rounded-[var(--radius-box)] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2.5 [box-shadow:var(--shadow-3)]"
-    >
-      {picture ? (
-        <img src={picture} alt="" className="h-9 w-9 rounded-[var(--radius-pill)]" />
-      ) : (
-        <span aria-hidden="true" className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-row-hover)] text-[14px]">
-          {callerName.slice(0, 1).toUpperCase()}
-        </span>
-      )}
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] text-[var(--color-text-primary)]" data-testid="home-chat-ring-name">
-          {callerName}
+    <div data-k2-chamfer-float="">
+      <div
+        role="alertdialog"
+        aria-label={`${callerName} is calling you`}
+        data-testid="home-chat-ring-card"
+        data-silent={silent ? 'true' : 'false'}
+        data-k2-chamfer="surface"
+        {...floatMaterial('popover', 'frost')}
+        className="flex w-72 flex-col gap-3 rounded-[var(--radius-box)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3 [box-shadow:var(--shadow-3)]"
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          <HomeChatPersonAvatar username={username} name={callerName} picture={picture} size={36} />
+          <div className="min-w-0 flex-1">
+            <div className="line-clamp-2 break-words text-[13px] text-[var(--color-text-primary)]" data-testid="home-chat-ring-name">
+              {callerName}
+            </div>
+            <div className="text-[11px] text-[var(--color-text-muted)]">
+              {silent ? 'is calling you (silent)' : 'is calling you'}
+              {serverLabel ? ` · ${serverLabel}` : ''}
+            </div>
+          </div>
         </div>
-        <div className="truncate text-[11px] text-[var(--color-text-muted)]">
-          {silent ? 'Calling (silent)' : 'Calling…'}
-          {serverLabel ? ` · ${serverLabel}` : ''}
+        <div className="flex justify-end gap-2">
+          <Button variant="danger-quiet" size="md" className="min-h-8" data-testid="home-chat-ring-decline" disabled={busy} onClick={onDecline}>
+            Decline
+          </Button>
+          <Button variant="accent" size="md" className="min-h-8" data-testid="home-chat-ring-accept" disabled={busy} onClick={onAccept}>
+            Answer
+          </Button>
         </div>
       </div>
-      <button type="button" className={BTN} data-testid="home-chat-ring-decline" disabled={busy} onClick={onDecline}>
-        Decline
-      </button>
-      <button
-        type="button"
-        className={`${BTN} text-[var(--color-text-primary)]`}
-        data-testid="home-chat-ring-accept"
-        disabled={busy}
-        onClick={onAccept}
-      >
-        Answer
-      </button>
     </div>
   )
 }

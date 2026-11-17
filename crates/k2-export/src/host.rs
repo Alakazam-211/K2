@@ -10,10 +10,10 @@
 //!
 //! | Limit | Linux | macOS | Windows |
 //! |---|---|---|---|
-//! | memory | the worker's counting allocator + `RLIMIT_AS` (cap + 256 MiB) | the allocator + a 250 ms watchdog on `ri_phys_footprint` (SIGKILL over the cap; `RLIMIT_AS` isn't enforced on macOS) | the allocator only (no Job Object yet: documented gap) |
-//! | time | the wall deadline (kill) + `RLIMIT_CPU` = wall + 5 s | same | the wall deadline (kill) |
+//! | memory | the worker's counting allocator + `RLIMIT_AS` (cap + 256 MiB) | the allocator + a 250 ms watchdog on `ri_phys_footprint` (SIGKILL over the cap; `RLIMIT_AS` isn't enforced on macOS) | the allocator + the worker's Job Object: `JOB_OBJECT_LIMIT_PROCESS_MEMORY` = the `RLIMIT_AS` number (native allocations count; a commit past it fails, the job's memory-limit message → the watchdog kills) |
+//! | time | the wall deadline (kill) + `RLIMIT_CPU` = wall + 5 s | same | the wall deadline (kill) + the Job Object's per-process CPU time = the `RLIMIT_CPU` number (Windows ends it; reported as time) |
 //! | files | `RLIMIT_FSIZE` 0, `RLIMIT_NOFILE` 16, `RLIMIT_CORE` 0 | same | — |
-//! | processes | `PR_SET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG` = SIGKILL | the worker exits when its parent changes | — |
+//! | processes | `PR_SET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG` = SIGKILL | the worker exits when its parent changes | the Job Object: one process (`ACTIVE_PROCESS_LIMIT` = 1: no children), `KILL_ON_JOB_CLOSE` (it dies with the host), `DIE_ON_UNHANDLED_EXCEPTION` (a crash ends at once, no dialog) |
 //! | output | the host counts `D` bytes: past the cap → kill | same | same |
 //!
 //! A cancel is a kill. How it ended maps to an error: our watchdog's kill →
@@ -111,6 +111,8 @@ const WHY_MEMORY: u8 = 3;
 const WHY_OUTPUT: u8 = 4;
 const WHY_BREACH: u8 = 5;
 const WHY_IO: u8 = 6;
+/// Windows: the Job Object ended the worker at its CPU time.
+const WHY_CPU: u8 = 7;
 
 /// `describe`: the targets the worker offers for `kind` (its `R` payload's
 /// `targets`), with its hello.
@@ -169,6 +171,23 @@ pub fn run_input(
     let mut child = cmd
         .spawn()
         .map_err(|e| Failed { error: RunError::Spawn(format!("{}: {e}", s.bin.display())), stderr: String::new() })?;
+    // Windows: the worker's Job Object (the unix caps' numbers: RLIMIT_AS and
+    // RLIMIT_CPU), before a byte of its input is written.
+    #[cfg(windows)]
+    let job = {
+        let job_limits = k2_winsec::job::JobLimits {
+            process_memory: if bounds.memory_bytes > 0 { bounds.memory_bytes.saturating_add(ADDRESS_SPACE_HEADROOM) } else { 0 },
+            cpu: Duration::from_secs(bounds.wall.as_secs() + 5),
+        };
+        match k2_winsec::job::WorkerJob::contain(&child, job_limits) {
+            Ok(j) => j,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(Failed { error: RunError::Spawn(format!("could not put the worker in its job: {e}")), stderr: String::new() });
+            }
+        }
+    };
     let pid = child.id();
     let stdin = child.stdin.take();
     let stdout = child.stdout.take().expect("piped stdout");
@@ -241,6 +260,11 @@ pub fn run_input(
                 } else if Instant::now() >= deadline {
                     kill(WHY_TIME);
                 } else if over_memory(pid, bounds.memory_bytes) {
+                    kill(WHY_MEMORY);
+                }
+                // Windows: a commit the job refused (native allocations too).
+                #[cfg(windows)]
+                if job.hit_memory() {
                     kill(WHY_MEMORY);
                 }
             }
@@ -322,6 +346,16 @@ pub fn run_input(
             std::thread::sleep(Duration::from_millis(10));
         };
         finished.store(true, Ordering::Release);
+        // Windows: the job's own limits, when nothing else said why.
+        #[cfg(windows)]
+        if why.load(Ordering::Acquire) == WHY_NONE {
+            job.settle();
+            if job.hit_memory() {
+                why.store(WHY_MEMORY, Ordering::Release);
+            } else if job.hit_cpu() {
+                why.store(WHY_CPU, Ordering::Release);
+            }
+        }
         let stderr = err_thread.join().unwrap_or_default();
         decide(why.load(Ordering::Acquire), status, hello, fin, bytes, breach, io_err, stderr)
     })
@@ -341,7 +375,7 @@ fn decide(
     let fail = |error: RunError| Err(Failed { error, stderr: stderr.clone() });
     match why {
         WHY_CANCEL => return fail(RunError::Cancelled),
-        WHY_TIME => return fail(RunError::Limit("time")),
+        WHY_TIME | WHY_CPU => return fail(RunError::Limit("time")),
         WHY_MEMORY => return fail(RunError::Limit("memory")),
         WHY_OUTPUT => return fail(RunError::Limit("output bytes")),
         WHY_BREACH => {

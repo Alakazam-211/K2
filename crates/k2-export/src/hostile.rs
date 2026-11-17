@@ -27,6 +27,8 @@ pub const TARGETS: &[ExportTarget] = &[
     t("hostile-slow"),
     t("hostile-malloc"),
     t("hostile-env"),
+    t("hostile-spin-threads"),
+    t("hostile-child"),
 ];
 
 pub struct Hostile;
@@ -90,6 +92,35 @@ impl Exporter for Hostile {
                 std::hint::black_box(p);
             },
             "hostile-exit" => std::process::exit(0),
+            // Spins on 16 threads: the CPU time runs out long before the wall
+            // deadline (RLIMIT_CPU on unix, the Job Object on Windows).
+            "hostile-spin-threads" => {
+                for _ in 0..16 {
+                    std::thread::spawn(|| {
+                        let mut x: u64 = 0;
+                        loop {
+                            x = std::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(1));
+                        }
+                    });
+                }
+                loop {
+                    std::thread::sleep(Duration::from_secs(3600));
+                }
+            }
+            // Starts a child process (an absolute path: the environment is
+            // empty) and writes what happened.
+            "hostile-child" => {
+                #[cfg(windows)]
+                let r = std::process::Command::new(r"C:\Windows\System32\cmd.exe").args(["/c", "exit 0"]).status();
+                #[cfg(not(windows))]
+                let r = std::process::Command::new("/bin/sh").args(["-c", "exit 0"]).status();
+                let said = match r {
+                    Ok(_) => "started".to_string(),
+                    Err(e) => format!("refused: {e}"),
+                };
+                out.write_all(said.as_bytes())?;
+                Ok(ExportReport::default())
+            }
             // The names of every environment variable it got (one a line).
             "hostile-env" => {
                 for (k, _) in std::env::vars_os() {

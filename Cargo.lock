@@ -4870,6 +4870,7 @@ dependencies = [
  "deckcraft-render",
  "deckcraft-text",
  "image",
+ "k2-winsec",
  "kurbo",
  "libc",
  "serde",
@@ -4914,6 +4915,7 @@ dependencies = [
  "k2-mpc-fab",
  "k2-mpc-psd",
  "k2-mpc-timeline",
+ "k2-winsec",
  "libc",
  "serde_json",
 ]
@@ -5136,6 +5138,7 @@ name = "k2-scenerender"
 version = "0.1.0"
 dependencies = [
  "image-webp",
+ "k2-winsec",
  "libc",
  "png 0.18.1",
  "serde",

@@ -358,6 +358,41 @@ fn hostile(out: &mut impl Write, what: &str, sandbox: &str) -> i32 {
         // host's watchdog can stop it.
         "alloc_raw" => alloc_raw(out),
         "abort" => std::process::abort(),
+        // A real crash: a write to address 8, in the never-mapped first page
+        // (SIGSEGV on unix, an access violation on Windows, which the Job
+        // Object ends at once). Not null: a debug build checks for null and
+        // aborts instead of crashing.
+        "crash" => {
+            // SAFETY: none; this is the crash.
+            unsafe { (8usize as *mut u8).write_volatile(1) };
+            0
+        }
+        // Spins on more threads than it was given: its CPU time runs out long
+        // before the wall deadline (RLIMIT_CPU on unix, the Job Object on Windows).
+        "spin_threads" => {
+            for _ in 0..16 {
+                std::thread::spawn(|| {
+                    let mut x = 0u64;
+                    loop {
+                        x = std::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(1));
+                    }
+                });
+            }
+            std::thread::sleep(std::time::Duration::from_secs(3600));
+            0
+        }
+        // Starts a child process (an absolute path: the environment is empty).
+        "child" => {
+            #[cfg(windows)]
+            let r = std::process::Command::new(r"C:\Windows\System32\cmd.exe").args(["/c", "exit 0"]).status();
+            #[cfg(not(windows))]
+            let r = std::process::Command::new("/bin/sh").args(["-c", "exit 0"]).status();
+            let child = match r {
+                Ok(_) => "started".to_string(),
+                Err(e) => format!("refused: {e}"),
+            };
+            fail(out, FailureCode::RendererError, format!("child: {child}"))
+        }
         "net" => {
             let r = std::net::UdpSocket::bind("127.0.0.1:0").and_then(|s| s.send_to(b"x", "127.0.0.1:9"));
             let net = match r {
@@ -377,7 +412,7 @@ fn hostile(out: &mut impl Write, what: &str, sandbox: &str) -> i32 {
     }
 }
 
-#[cfg(all(feature = "test-hostile", unix))]
+#[cfg(feature = "test-hostile")]
 fn alloc_raw(_out: &mut impl Write) -> i32 {
     loop {
         // SAFETY: a fresh block of 1 MiB, one volatile write per page (so
@@ -395,7 +430,3 @@ fn alloc_raw(_out: &mut impl Write) -> i32 {
     }
 }
 
-#[cfg(all(feature = "test-hostile", not(unix)))]
-fn alloc_raw(out: &mut impl Write) -> i32 {
-    fail(out, FailureCode::RendererError, "alloc_raw: unix only")
-}

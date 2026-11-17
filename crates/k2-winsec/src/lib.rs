@@ -11,5 +11,8 @@
 
 #[cfg(windows)]
 mod imp;
+/// A Job Object around one worker process (memory, CPU, no children).
+#[cfg(windows)]
+pub mod job;
 #[cfg(windows)]
 pub use imp::{is_owner_only, owned_by_current_user, set_owner_only};

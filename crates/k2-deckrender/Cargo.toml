@@ -67,3 +67,7 @@ path = "tests/fonts.rs"
 [[test]]
 name = "licences"
 path = "tests/licences.rs"
+
+# Windows: the Job Object each worker runs in (memory, CPU, no children).
+[target.'cfg(windows)'.dependencies]
+k2-winsec = { path = "../k2-winsec" }

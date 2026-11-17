@@ -14,11 +14,11 @@
 //!
 //! | Limit | Linux | macOS | Windows |
 //! |---|---|---|---|
-//! | memory | the worker's counting allocator (a `too_large` line, then abort) + its up-front estimate + `RLIMIT_AS` (cap + 512 MiB headroom) + the watchdog on RSS (`/proc/<pid>/statm`, every 25 ms; SIGKILL over the cap) | the allocator + the estimate + the watchdog on the physical footprint (`proc_pid_rusage`; `RLIMIT_AS` isn't enforced on macOS) | the allocator and the estimate only (documented gap) |
-//! | time | the wall deadline (SIGKILL) + `RLIMIT_CPU` = wall × threads + 5 s (SIGXCPU) | same | the wall deadline (kill) |
+//! | memory | the worker's counting allocator (a `too_large` line, then abort) + its up-front estimate + `RLIMIT_AS` (cap + 512 MiB headroom) + the watchdog on RSS (`/proc/<pid>/statm`, every 25 ms; SIGKILL over the cap) | the allocator + the estimate + the watchdog on the physical footprint (`proc_pid_rusage`; `RLIMIT_AS` isn't enforced on macOS) | the allocator + the worker's Job Object: `JOB_OBJECT_LIMIT_PROCESS_MEMORY` = the `RLIMIT_AS` number (native allocations count; a commit past it fails, the job's memory-limit message → the watchdog kills) |
+//! | time | the wall deadline (SIGKILL) + `RLIMIT_CPU` = wall × threads + 5 s (SIGXCPU) | same | the wall deadline (kill) + the Job Object's per-process CPU time = the `RLIMIT_CPU` number (Windows ends it; reported as time) |
 //! | files | `RLIMIT_FSIZE` 0, `RLIMIT_NOFILE` 64, `RLIMIT_CORE` 0, inherited fds closed | same | — |
-//! | network | seccomp: `socket(2)` and `io_uring_setup(2)` fail with `EACCES` (another ABI: `EPERM`) | the `no-network` sandbox profile (`sandbox_init`), best effort (it fails when the host already runs in a sandbox) | none (documented gap) |
-//! | processes | `PR_SET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG` = SIGKILL, the parent's pid checked | the parent's pid checked at start and watched | — |
+//! | network | seccomp: `socket(2)` and `io_uring_setup(2)` fail with `EACCES` (another ABI: `EPERM`) | the `no-network` sandbox profile (`sandbox_init`), best effort (it fails when the host already runs in a sandbox) | none yet (a documented gap: a Job Object can't close the network; AppContainer is the next step) |
+//! | processes | `PR_SET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG` = SIGKILL, the parent's pid checked | the parent's pid checked at start and watched | the Job Object: one process (`ACTIVE_PROCESS_LIMIT` = 1: no children), `KILL_ON_JOB_CLOSE` (it dies with the host), `DIE_ON_UNHANDLED_EXCEPTION` (a crash ends at once, no dialog) |
 //! | output | the response line at most [`MAX_RESPONSE_LINE`], the images (and id images) together at most [`Limits::max_output_bytes`]; past either: kill | same | same |
 //!
 //! How it ended: the worker's own failure line wins (the allocator writes
@@ -212,6 +212,8 @@ const WHY_TIME: u8 = 1;
 const WHY_MEMORY: u8 = 2;
 const WHY_OUTPUT: u8 = 3;
 const WHY_BREACH: u8 = 4;
+/// Windows: the Job Object ended the worker at its CPU time.
+const WHY_CPU: u8 = 5;
 
 /// Draw `req` with the worker at `bin`, within `limits`.
 pub fn render(bin: &Path, req: &SceneRequest<'_>, limits: &Limits) -> Result<Rendered, Failure> {
@@ -275,6 +277,21 @@ fn run(bin: &Path, cwd: &Path, request: &Request, input: &[u8], limits: &Limits)
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     let mut child = cmd.spawn().map_err(|e| Failure::new(FailureCode::RendererError, format!("could not start {}: {e}", bin.display())))?;
+    // Windows: the worker's Job Object (the unix caps' numbers), before a
+    // byte of its input is written.
+    #[cfg(windows)]
+    let job = {
+        let caps = limits.args(std::process::id()).limits;
+        let job_limits = k2_winsec::job::JobLimits { process_memory: caps.address_space, cpu: Duration::from_secs(caps.cpu_secs) };
+        match k2_winsec::job::WorkerJob::contain(&child, job_limits) {
+            Ok(j) => j,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(Failure::new(FailureCode::RendererError, format!("could not put the worker in its job: {e}")));
+            }
+        }
+    };
     let pid = child.id();
     let stdin = child.stdin.take();
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
@@ -341,6 +358,11 @@ fn run(bin: &Path, cwd: &Path, request: &Request, input: &[u8], limits: &Limits)
                 } else if memory_cap > 0 && resident(pid).is_some_and(|m| m > memory_cap) {
                     kill(WHY_MEMORY);
                 }
+                // Windows: a commit the job refused (native allocations too).
+                #[cfg(windows)]
+                if job.hit_memory() {
+                    kill(WHY_MEMORY);
+                }
             }
         });
 
@@ -398,6 +420,16 @@ fn run(bin: &Path, cwd: &Path, request: &Request, input: &[u8], limits: &Limits)
         };
         finished.store(true, Ordering::Release);
         watchdog.thread().unpark();
+        // Windows: the job's own limits, when nothing else said why.
+        #[cfg(windows)]
+        if why.load(Ordering::Acquire) == WHY_NONE {
+            job.settle();
+            if job.hit_memory() {
+                why.store(WHY_MEMORY, Ordering::Release);
+            } else if job.hit_cpu() {
+                why.store(WHY_CPU, Ordering::Release);
+            }
+        }
         let stderr = err_thread.join().unwrap_or_default();
         decide(why.load(Ordering::Acquire), status, response, images, breach, limits, stderr)
     })
@@ -454,6 +486,7 @@ fn decide(
         WHY_TIME => return fail(FailureCode::Timeout, format!("still running after {} ms", limits.wall.as_millis())),
         WHY_MEMORY => return fail(FailureCode::TooLarge, format!("memory: over {} MiB", limits.memory_bytes >> 20)),
         WHY_OUTPUT => return fail(FailureCode::TooLarge, format!("the images are over {} bytes", limits.max_output_bytes)),
+        WHY_CPU => return fail(FailureCode::Timeout, "the CPU limit".into()),
         _ => {}
     }
     if let Some(m) = breach {

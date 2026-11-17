@@ -5,7 +5,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "K2 owner-only file ACLs on Windows: what 0700/0600 mean for K2's private files there. Empty on Unix. No K2 dependencies."
+description = "K2 on Windows: owner-only file ACLs (what 0700/0600 mean there) and the Job Object a worker process runs in. Empty on Unix. No K2 dependencies."
 
 # windows-sys 0.61 is the copy already in Cargo.lock (tokio, mio, rustix…).
 [target.'cfg(windows)'.dependencies]
@@ -14,5 +14,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }

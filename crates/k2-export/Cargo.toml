@@ -48,3 +48,7 @@ required-features = ["test-hostile"]
 [[test]]
 name = "worker"
 path = "tests/worker.rs"
+
+# Windows: the Job Object each worker runs in (memory, CPU, no children).
+[target.'cfg(windows)'.dependencies]
+k2-winsec = { path = "../k2-winsec" }

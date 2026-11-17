@@ -156,7 +156,8 @@ fn the_shipped_tree_is_permissive_with_no_git_source() {
     }
 }
 
-/// The direct dependencies are the Steward's five, normal kind, nothing else
+/// The direct dependencies are the Steward's five, normal kind, plus K2's own
+/// k2-winsec (MIT, Windows only: the worker's Job Object), nothing else
 /// (dev and build dependencies included: there are none).
 #[test]
 fn the_direct_dependencies_are_the_five_cleared() {
@@ -164,5 +165,5 @@ fn the_direct_dependencies_are_the_five_cleared() {
     let root = md["packages"].as_array().expect("packages").iter().find(|p| p["name"] == "k2-scenerender").expect("k2-scenerender");
     let mut deps: Vec<String> = root["dependencies"].as_array().expect("dependencies").iter().map(|d| format!("{} {}", d["name"].as_str().unwrap_or("?"), d["kind"].as_str().unwrap_or("normal"))).collect();
     deps.sort();
-    assert_eq!(deps, ["image-webp normal", "libc normal", "png normal", "serde normal", "serde_json normal"]);
+    assert_eq!(deps, ["image-webp normal", "k2-winsec normal", "libc normal", "png normal", "serde normal", "serde_json normal"]);
 }

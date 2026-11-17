@@ -102,7 +102,39 @@ fn native_memory_past_the_cap_is_a_memory_limit_on_this_os() {
         // RLIMIT_AS (cap + headroom): malloc fails, the exporter says so.
         let (id, details) = kit_id(e);
         assert_eq!((id, &details["limit"]), ("MPC-E003", &serde_json::json!("memory")), "{e:?}");
+    } else if cfg!(windows) {
+        // The Job Object's memory cap (cap + headroom): the commit fails.
+        // Whichever is first says so: the host's watchdog sees the job's
+        // memory-limit message and stops it, or the exporter reports malloc
+        // failing.
+        match e {
+            RunError::Limit("memory") => {}
+            other => {
+                let (id, details) = kit_id(other);
+                assert_eq!((id, &details["limit"]), ("MPC-E003", &serde_json::json!("memory")), "{e:?}");
+            }
+        }
     }
+}
+
+/// Sixteen spinning threads use up the CPU time (wall + 5 s) long before
+/// the wall deadline: RLIMIT_CPU on unix, the Job Object on Windows.
+#[test]
+fn a_spin_on_many_threads_runs_out_of_cpu_time() {
+    let r = export("spin16", "hostile-spin-threads", b"", b(60_000, 256, 64), None, &AtomicU64::new(0));
+    assert_eq!(err(&r), &RunError::Limit("time"), "{:?}", r.res);
+    assert!(r.took < Duration::from_secs(50), "the CPU cap, before the wall deadline: {:?}", r.took);
+}
+
+/// Windows only: the Job Object allows the worker no child process (unix
+/// has no per-process limit for that here).
+#[cfg(windows)]
+#[test]
+fn the_worker_cannot_start_a_child_on_windows() {
+    let r = export("child", "hostile-child", b"", b(60_000, 256, 64), None, &AtomicU64::new(0));
+    r.res.as_ref().expect("the child export ends normally");
+    let said = String::from_utf8(r.out).expect("utf8");
+    assert!(said.starts_with("refused"), "{said}");
 }
 
 #[test]

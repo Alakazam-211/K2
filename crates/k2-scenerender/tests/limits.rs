@@ -53,9 +53,10 @@ fn memory_past_the_cap_is_too_large_through_the_allocator_and_around_it() {
     let f = hostile("alloc", &short());
     assert_eq!(f.code, FailureCode::TooLarge);
     assert!(f.detail.contains("memory"), "{}", f.detail);
-    if cfg!(any(target_os = "linux", target_os = "macos")) {
-        // malloc + touch, never counted: RLIMIT_AS (Linux) and the watchdog on
-        // RSS / the footprint (Linux, macOS) stop it.
+    if cfg!(any(target_os = "linux", target_os = "macos", windows)) {
+        // malloc + touch, never counted: RLIMIT_AS (Linux), the watchdog on
+        // RSS / the footprint (Linux, macOS) and the Job Object's memory cap
+        // (Windows) stop it.
         let l = Limits { wall: Duration::from_secs(30), ..short() };
         assert_eq!(hostile("alloc_raw", &l).code, FailureCode::TooLarge);
     }
@@ -116,13 +117,38 @@ fn id_buffers_are_in_the_memory_estimate() {
     assert!(r.views[0].ids.is_some() && a.views[0].ids.is_none());
 }
 
+/// Sixteen spinning threads use up the CPU time long before the wall
+/// deadline: RLIMIT_CPU (SIGXCPU) on unix, the Job Object's CPU time on
+/// Windows.
+#[test]
+fn a_spin_on_many_threads_runs_out_of_cpu_time() {
+    let l = Limits { wall: Duration::from_secs(60), ..short() };
+    let started = Instant::now();
+    let f = hostile("spin_threads", &l);
+    assert_eq!(f.code, FailureCode::Timeout, "{}", f.detail);
+    assert!(f.detail.contains("CPU limit"), "the CPU cap, not the wall: {}", f.detail);
+    assert!(started.elapsed() < Duration::from_secs(50), "before the wall deadline: {:?}", started.elapsed());
+}
+
+/// Windows only: the Job Object allows the worker no child process (unix
+/// has no per-process limit for that; its seccomp and sandbox profile are
+/// about the network and the files).
+#[cfg(windows)]
+#[test]
+fn the_worker_cannot_start_a_child_on_windows() {
+    let f = hostile("child", &short());
+    assert_eq!(f.code, FailureCode::RendererError);
+    assert!(f.detail.starts_with("child: refused"), "{}", f.detail);
+}
+
 #[test]
 fn a_crash_is_a_renderer_error() {
-    // Windows Error Reporting holds a crashed process about 2.5 s before it
-    // exits (measured on Windows 11), past the 2 s short wall: a crash is
-    // still a renderer error there, it just arrives later.
-    let wall = if cfg!(windows) { Duration::from_secs(10) } else { short().wall };
-    assert_eq!(hostile("abort", &Limits { wall, ..short() }).code, FailureCode::RendererError);
+    // A write to an unmapped address. (Not `abort`: on Windows its fast-fail
+    // goes to Windows Error Reporting, which can't start its helper inside the
+    // worker's no-children job, so an aborting worker waits for the wall
+    // deadline there. A crash in the renderer's code is an access violation,
+    // which the job ends at once.)
+    assert_eq!(hostile("crash", &short()).code, FailureCode::RendererError);
 }
 
 #[test]

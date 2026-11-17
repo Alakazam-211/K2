@@ -50,9 +50,13 @@ export function useCssWidth(fallback: number): [React.RefObject<HTMLDivElement |
 
 /** The classes for each part, split or stacked. */
 export const halves = {
-  /** The body under the fixed header: two columns, or one scroll. */
+  /** The body under the fixed header: two columns, or one scroll. Its own
+   *  stacking context (`isolate`), so its fades (z-20) and sticky bars
+   *  (z-10) stay under the edge of the box it sits in: a chamfered dialog
+   *  in Terminal draws its cut edges at z-index 1, and the bottom fade
+   *  painted over them at the bottom corners. */
   body: (stacked: boolean): string =>
-    cx('flex-1 min-h-0', stacked ? 'overflow-y-auto' : 'grid grid-cols-2 divide-x divide-[var(--color-border)]'),
+    cx('isolate flex-1 min-h-0', stacked ? 'overflow-y-auto' : 'grid grid-cols-2 divide-x divide-[var(--color-border)]'),
   left: (stacked: boolean): string => cx('px-6 [scrollbar-gutter:stable]', stacked ? 'pb-8' : 'overflow-y-auto min-h-0'),
   right: (stacked: boolean): string =>
     cx(

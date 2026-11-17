@@ -44,6 +44,14 @@ describe('halves: the bottom fade sits on the half’s bottom edge', () => {
     }
   })
 
+  it('the body is its own stacking context, so its fades and sticky bars paint under the edge of a cut or rounded box it sits in', () => {
+    // A chamfered box (Terminal) draws its cut edges in a ::before at
+    // z-index 1; a fade at z-20 in the same stacking context painted over
+    // the bottom corners' edges.
+    expect(halves.body(false)).toMatch(/(^|\s)isolate(\s|$)/)
+    expect(halves.body(true)).toMatch(/(^|\s)isolate(\s|$)/)
+  })
+
   it('stacked, the halves keep their space under the last row (the body scrolls, not them)', () => {
     expect(halves.left(true)).toContain('pb-8')
     expect(halves.right(true)).toContain('pb-8')

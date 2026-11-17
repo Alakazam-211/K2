@@ -151,6 +151,9 @@ describe('ModelShapes', () => {
     // A run's own tspan (a line's tspan holds its runs).
     const red = Array.from(m.querySelectorAll('tspan tspan')).find((t) => t.textContent === 'red')!
     expect(red.getAttribute('fill')).toBe('rgb(255 0 0)')
+    // Each line steps down by its tallest run, so a line of 5-unit runs never overlaps the next.
+    const ys = Array.from(m.children).map((t) => Number(t.getAttribute('y')))
+    for (let i = 1; i < ys.length; i++) expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual((5 * 5) / 3 - 1e-9)
   })
 
   it('leaves hidden and not-drawn rows out', async () => {

@@ -131,10 +131,14 @@ export function MtextShape({ h, g, style, visible, m }: { h: string; g: Record<s
   const paras = Array.isArray(g.paragraphs) ? (g.paragraphs as Paragraph[]) : []
   const lines = paras.flatMap((p) => wrapRuns(runsOf(p.runs), refWidth, base, m.advance, sizeOf))
   if (!lines.some((l) => l.some((r) => r.text.trim()))) return null
-  const pitch = ((height * 5) / 3) * (num(g.line_spacing, 1) || 1)
-  const span = height + pitch * (lines.length - 1)
+  // Each line steps down by its tallest run (5/3 of the cap height, times the spacing factor).
+  const spacing = num(g.line_spacing, 1) || 1
+  const tallest = lines.map((l) => Math.max(height, ...l.map((r) => (typeof r.height === 'number' && r.height > 0 ? r.height : height))))
+  const ys: number[] = []
+  tallest.forEach((t, i) => ys.push(i ? ys[i - 1] + ((t * 5) / 3) * spacing : t))
+  const span = ys[ys.length - 1]
   const v = attach.v ?? 'top'
-  const y0 = v === 'top' ? height : v === 'middle' ? height - span / 2 : height - span
+  const shift = v === 'top' ? 0 : v === 'middle' ? -span / 2 : -span
   const ah = attach.h ?? 'left'
   const anchor = ah === 'center' ? 'middle' : ah === 'right' ? 'end' : 'start'
   const rot = num(g.rotation)
@@ -149,7 +153,7 @@ export function MtextShape({ h, g, style, visible, m }: { h: string; g: Record<s
       {...paintProps(paint, 'fill')}
     >
       {lines.map((line, i) => (
-        <tspan key={i} x={0} y={y0 + i * pitch}>
+        <tspan key={i} x={0} y={ys[i] + shift}>
           {line.map((r, j) => (
             <tspan key={j} {...runProps(r, m.cap)}>
               {r.text}

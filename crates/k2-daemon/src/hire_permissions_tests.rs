@@ -216,6 +216,19 @@ fn a_decline_is_held_by_the_daemon_and_undone_only_by_name() {
     assert_eq!((st, e["error"]["code"].as_str()), (400, Some("usage")), "{e}");
 }
 
+/// A record write that fails mid-loop names what this hire already turned
+/// on or carded (those rows ran through their own routes and were
+/// audited); with nothing done yet it says so.
+#[test]
+fn a_record_failure_names_what_was_already_granted() {
+    let none = records_error_text("dev", "disk I/O error", &[], &[]);
+    assert!(none.contains("nothing was granted"), "{none}");
+    let some = records_error_text("dev", "disk I/O error", &["compute.use".into()], &["vault.manage".into()]);
+    assert!(some.contains("turned on compute.use") && some.contains("asked on a card for vault.manage"), "{some}");
+    assert!(!some.contains("nothing was granted"), "{some}");
+    assert!(some.contains("disk I/O error") && some.contains(" dev "), "{some}");
+}
+
 /// `--allow` lifts a held decline only for a caller who could grant the
 /// switch itself, with a role at least the decliner's, and reach is
 /// checked before the record is touched: a Member's `--allow` and an

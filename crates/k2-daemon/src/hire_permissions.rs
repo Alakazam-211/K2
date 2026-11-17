@@ -236,13 +236,30 @@ fn can_grant(h: &Hirer, target: &str) -> Result<(), Cant> {
     }
 }
 
-/// The record couldn't be read: the hire stops, loudly. Deciding without
-/// it could grant what a person declined.
-fn records_error(handle: &str, e: String) -> HireError {
-    HireError::new(
-        500,
-        "permission_records",
-        format!("K2 couldn't read what was declined or asked at earlier hires of {handle} ({e}), so the hire stopped and nothing was granted. Try again; if it repeats, the daemon log has the cause."),
+/// The record couldn't be read or written: the hire stops, loudly.
+/// Deciding without it could grant what a person declined. The rows
+/// before the failure may already have been turned on or carded (each
+/// through its own Settings or card route, which takes the database
+/// itself, so the loop can't be one transaction): the message names them.
+fn records_error(handle: &str, e: String, so_far: &StepOut) -> HireError {
+    HireError::new(500, "permission_records", records_error_text(handle, &e, &so_far.granted, &so_far.carded))
+}
+
+fn records_error_text(handle: &str, e: &str, granted: &[String], carded: &[String]) -> String {
+    let mut done = Vec::new();
+    if !granted.is_empty() {
+        done.push(format!("turned on {}", granted.join(", ")));
+    }
+    if !carded.is_empty() {
+        done.push(format!("asked on a card for {}", carded.join(", ")));
+    }
+    let before = if done.is_empty() {
+        "nothing was granted".to_string()
+    } else {
+        format!("before it stopped, this hire {} (each audited); the rest was not decided", done.join(" and "))
+    };
+    format!(
+        "K2 couldn't read or keep what was declined or asked at hires of {handle} ({e}), so the hire stopped; {before}. Try again; if it repeats, the daemon log has the cause."
     )
 }
 
@@ -259,8 +276,9 @@ pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> Result<StepOut, Hir
         Some(t) => {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let d = records::declined(&conn, &t.id).map_err(|e| records_error(&t.handle, e))?;
-            let a = records::asked(&conn, &t.id).map_err(|e| records_error(&t.handle, e))?;
+            let none = StepOut::default();
+            let d = records::declined(&conn, &t.id).map_err(|e| records_error(&t.handle, e, &none))?;
+            let a = records::asked(&conn, &t.id).map_err(|e| records_error(&t.handle, e, &none))?;
             (d, a)
         }
         None => (Vec::new(), Vec::new()),
@@ -284,7 +302,7 @@ pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> Result<StepOut, Hir
                 let db = k2_core::db::shared();
                 let conn = db.lock();
                 records::record_declined(&conn, &t.id, &want, inp.template_name, &inp.caller.actor(), rank_of(&hirer), now())
-                    .map_err(|e| records_error(&t.handle, e))?;
+                    .map_err(|e| records_error(&t.handle, e, &out))?;
             }
             record(inp, &target, &want, "declined", None);
             continue;
@@ -301,7 +319,7 @@ pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> Result<StepOut, Hir
                 Some(t) => {
                     let db = k2_core::db::shared();
                     let conn = db.lock();
-                    records::decline_rank(&conn, &t.id, &want).map_err(|e| records_error(&t.handle, e))?.unwrap_or(records::RANK_AGENT)
+                    records::decline_rank(&conn, &t.id, &want).map_err(|e| records_error(&t.handle, e, &out))?.unwrap_or(records::RANK_AGENT)
                 }
                 None => records::RANK_AGENT,
             };
@@ -323,7 +341,7 @@ pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> Result<StepOut, Hir
             if let (false, Some(t)) = (inp.dry_run, target.as_ref()) {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
-                records::undecline(&conn, &t.id, &want).map_err(|e| records_error(&t.handle, e))?;
+                records::undecline(&conn, &t.id, &want).map_err(|e| records_error(&t.handle, e, &out))?;
             }
             record(inp, &target, &want, "allowed-again", None);
         }

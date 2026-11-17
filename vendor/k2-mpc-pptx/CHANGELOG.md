@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.9: pairs with kit v0.22.0 and k2-mpc-ooxml v0.1.1
+
+**Requires `k2-mpc-base` v0.22.0** (`e085cada`, its public cut) beside `k2-mpc-ooxml` v0.1.1. A deck
+behaves as in v0.1.8. As for v0.1.8, the tag is a cut commit that leaves out `fuzz/`.
+
+- Pairs with kit v0.22.0. Its pack API additions have defaults this pack keeps (`Pack::checks_edits`
+  and `Pack::check_edit`, `Pack::text_units`, and for blob packs `BlobPack::verbs`,
+  `BlobPack::errors`, `BlobPack::hold_reach`, `BlobPack::save_pairing`,
+  `BlobPack::judge_across_save`); its other changes are the host's (a read that survives a failed
+  render, where each change is, verbs on a blob doc, a typed refusal for a store another process
+  holds).
+- **Docs:** the splice module's note on its test-only counts names `take_counts` as code, so
+  `cargo doc -D warnings` passes with the default features as well as with all of them.
+- `Cargo.lock` and `fuzz/Cargo.lock`: k2-mpc-base 0.22.0, with the kit's new `libc` dependency
+  (glibc targets), and the crate version 0.1.9. The root `Cargo.toml`'s and `README.md`'s kit pin
+  name v0.22.0 and its cut `e085cada`.
+
 ## v0.1.8: pairs with kit v0.21.0 and k2-mpc-ooxml v0.1.1
 
 **Requires `k2-mpc-base` v0.21.0** (its cut `9e6f6419`) and **`k2-mpc-ooxml` v0.1.1** (`k2-mpc-opc`

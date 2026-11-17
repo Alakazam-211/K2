@@ -16,7 +16,7 @@
 //! on the final bytes. Otherwise nothing is written and the kit gets a [`PackError`]; the
 //! store still holds every change.
 //!
-//! **Counts** ([`take_counts`], test-only: the `testgen` feature): the package opens, carrier
+//! **Counts** (`take_counts`, test-only: the `testgen` feature): the package opens, carrier
 //! decodes and read-back guards of this thread's calls, so a row can hold the one pass.
 //!
 //! **The carrier** is handed in by the kit's carrier hook: the bytes the kit last read

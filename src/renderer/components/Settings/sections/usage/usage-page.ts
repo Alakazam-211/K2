@@ -229,7 +229,7 @@ export const MEASURE_LABEL: Record<ChartMeasure, string> = {
   cost: 'Estimated cost',
 }
 
-// ── Chart: one stacked series per harness ────────────────────────────
+// ── Chart: one line per harness ──────────────────────────────────────
 
 export type ChartMeasure = 'input' | 'output' | 'cache_read' | 'cache_write' | 'requests' | 'cost'
 
@@ -324,23 +324,49 @@ export function daySlots(range: UsageRange, now: Date, tz: string, firstDay?: st
   return out
 }
 
-export interface ChartSegment {
+export interface ChartValue {
   harness: string
   value: number
-  x: number
+  /** The value's height in the plot. */
   y: number
-  width: number
-  height: number
 }
 
 export interface ChartColumn {
   day: string
   total: number
-  /** Per harness in series order (zeros dropped). */
-  segments: ChartSegment[]
-  /** Hover target: the whole column. */
+  /** Every charted harness this day, in series order; a day without use is 0. */
+  values: ChartValue[]
+  /** The day's point. */
+  cx: number
+  /** Hover target: halfway to the day before to halfway to the day after,
+   *  so the nearest day answers wherever the pointer is in the plot. */
   x: number
   width: number
+}
+
+export interface ChartLine {
+  harness: string
+  /** The smooth line (monotone cubic). */
+  line: string
+  /** The line closed down to the baseline: the soft wash under it. */
+  area: string
+}
+
+/** A harness's name at its line's right end. */
+export interface ChartEndLabel {
+  harness: string
+  x: number
+  y: number
+}
+
+/** One day can't make a line: a dot per harness with its number beside it. */
+export interface ChartDot {
+  harness: string
+  value: number
+  x: number
+  y: number
+  /** Where its number sits, pushed apart from its neighbours'. */
+  labelY: number
 }
 
 export interface UsageChartGeometry {
@@ -348,6 +374,8 @@ export interface UsageChartGeometry {
   height: number
   /** Left gutter for the y-axis labels. */
   plotLeft: number
+  /** Right edge of the plot; the end labels sit beyond it. */
+  plotRight: number
   plotTop: number
   plotBottom: number
   max: number
@@ -355,6 +383,13 @@ export interface UsageChartGeometry {
   columns: ChartColumn[]
   /** Harnesses with any value, in series order (the legend). */
   harnesses: string[]
+  /** One per harness with any value; empty for a single day. */
+  lines: ChartLine[]
+  /** Empty when there are more than 4 lines, the ends crowd or the card is narrow. */
+  endLabels: ChartEndLabel[]
+  /** A single day: `dots` instead of lines. */
+  single: boolean
+  dots: ChartDot[]
 }
 
 export const USAGE_CHART_WIDTH = 640
@@ -363,10 +398,84 @@ export const USAGE_CHART_HEIGHT = 200
 const PLOT_LEFT = 48
 const PLOT_TOP = 8
 const PLOT_BOTTOM_PAD = 1
-/** 2px surface gap between stacked segments (dataviz spacer). */
-const SEGMENT_GAP = 2
-/** Columns never grow past this; the rest of the slot is air. */
-const MAX_BAR = 24
+/** Air between the plot's edges and the first and last points, so an end
+ *  dot (4px and its ring) is never cut. */
+const POINT_INSET = 6
+/** End labels: at most this many lines get one. */
+const MAX_END_LABELS = 4
+/** Two labels closer than one line of hint text crowd each other. */
+const LABEL_LINE_PX = 14
+/** A label's gap from its line's end, and an estimate of a hint-text
+ *  character, for the room the labels need right of the plot. */
+const LABEL_GAP = 8
+const LABEL_CHAR_PX = 7
+/** The plot never shrinks below this to make room for labels. */
+const MIN_LABELLED_PLOT = 240
+
+/** A cubic segment of a smooth line: two control points and its end. */
+export interface CurveSegment {
+  c1: { x: number; y: number }
+  c2: { x: number; y: number }
+  to: { x: number; y: number }
+}
+
+/** Monotone cubic interpolation (Fritsch–Carlson, as d3's monotoneX): the
+ *  curve passes through every point and never overshoots, so between two
+ *  days it stays inside their range: never under 0, never past a peak. */
+export function monotoneSegments(pts: ReadonlyArray<{ x: number; y: number }>): CurveSegment[] {
+  const n = pts.length
+  if (n < 2) return []
+  const h = (i: number): number => pts[i + 1].x - pts[i].x
+  const s = (i: number): number => (h(i) === 0 ? 0 : (pts[i + 1].y - pts[i].y) / h(i))
+  const t: number[] = new Array(n).fill(0)
+  for (let i = 1; i < n - 1; i++) {
+    const s0 = s(i - 1)
+    const s1 = s(i)
+    const p = (s0 * h(i) + s1 * h(i - 1)) / (h(i - 1) + h(i))
+    t[i] = (Math.sign(s0) + Math.sign(s1)) * Math.min(Math.abs(s0), Math.abs(s1), 0.5 * Math.abs(p)) || 0
+  }
+  if (n === 2) {
+    t[0] = t[1] = s(0)
+  } else {
+    t[0] = (3 * s(0) - t[1]) / 2
+    t[n - 1] = (3 * s(n - 2) - t[n - 2]) / 2
+  }
+  const out: CurveSegment[] = []
+  for (let i = 0; i < n - 1; i++) {
+    const d = h(i) / 3
+    out.push({
+      c1: { x: pts[i].x + d, y: pts[i].y + d * t[i] },
+      c2: { x: pts[i + 1].x - d, y: pts[i + 1].y - d * t[i + 1] },
+      to: pts[i + 1],
+    })
+  }
+  return out
+}
+
+const num = (v: number): string => String(Math.round(v * 100) / 100)
+
+function monotonePath(pts: ReadonlyArray<{ x: number; y: number }>): string {
+  if (pts.length === 0) return ''
+  let d = `M${num(pts[0].x)},${num(pts[0].y)}`
+  for (const s of monotoneSegments(pts)) {
+    d += `C${num(s.c1.x)},${num(s.c1.y)} ${num(s.c2.x)},${num(s.c2.y)} ${num(s.to.x)},${num(s.to.y)}`
+  }
+  return d
+}
+
+/** Pushes label centres apart to at least one line each, keeping their
+ *  order, and back up above `floor` when the push runs past it. */
+function spreadLabels(ys: number[], floor: number): number[] {
+  const order = ys.map((y, i) => ({ y, i })).sort((a, b) => a.y - b.y)
+  for (let k = 1; k < order.length; k++) order[k].y = Math.max(order[k].y, order[k - 1].y + LABEL_LINE_PX)
+  for (let k = order.length - 1; k >= 0; k--) {
+    const limit = k === order.length - 1 ? floor : order[k + 1].y - LABEL_LINE_PX
+    order[k].y = Math.min(order[k].y, limit)
+  }
+  const out = new Array<number>(ys.length)
+  for (const o of order) out[o.i] = o.y
+  return out
+}
 
 /** 1, 2, 5 × 10^k at or above `v`. */
 export function niceCeil(v: number): number {
@@ -379,7 +488,9 @@ export function niceCeil(v: number): number {
   return 10 * base
 }
 
-/** Stacked columns, one per day slot, one segment per harness. */
+/** One line per harness over the day slots (not stacked: each line is its
+ *  own harness's value), a soft area under each, end labels when they fit,
+ *  and for a single day a dot per harness instead. */
 export function usageChart(
   series: ReadonlyArray<{ harness: string; days: ReadonlyArray<UsageDay> | null | undefined }>,
   measure: ChartMeasure,
@@ -387,48 +498,85 @@ export function usageChart(
   width: number = USAGE_CHART_WIDTH,
 ): UsageChartGeometry {
   const order = [...series].sort((a, b) => harnessRank(a.harness) - harnessRank(b.harness) || a.harness.localeCompare(b.harness))
-  const byHarness = order.map((s) => {
-    const m = new Map<string, number>()
-    for (const d of s.days ?? []) m.set(d.day, measureValue(d, measure))
-    return { harness: s.harness, m }
-  })
+  const byHarness = order
+    .map((s) => {
+      const m = new Map<string, number>()
+      for (const d of s.days ?? []) m.set(d.day, measureValue(d, measure))
+      return { harness: s.harness, m }
+    })
+    // A harness with nothing in the range draws no line along the floor.
+    .filter((h) => slots.some((day) => (h.m.get(day) ?? 0) > 0))
+  const harnesses = byHarness.map((h) => h.harness)
   const totals = slots.map((day) => byHarness.reduce((sum, h) => sum + (h.m.get(day) ?? 0), 0))
-  const peak = Math.max(0, ...totals)
+  const peak = Math.max(0, ...byHarness.flatMap((h) => slots.map((day) => h.m.get(day) ?? 0)))
   const max = niceCeil(peak)
   const plotBottom = USAGE_CHART_HEIGHT - PLOT_BOTTOM_PAD
   const plotH = plotBottom - PLOT_TOP
-  const plotW = Math.max(1, width - PLOT_LEFT)
-  const slotW = slots.length > 0 ? plotW / slots.length : plotW
-  const barW = Math.min(MAX_BAR, Math.max(1, slotW * (slots.length > 60 ? 0.8 : 0.65)))
+  const yOf = (v: number): number => plotBottom - (Math.max(0, v) / max) * plotH
+  const single = slots.length === 1
+
+  // End labels decide the plot's right edge, so settle them first: only
+  // heights matter for crowding, and heights don't depend on the width.
+  const ends = single ? [] : byHarness.map((h) => yOf(h.m.get(slots[slots.length - 1]) ?? 0))
+  const sortedEnds = [...ends].sort((a, b) => a - b)
+  const crowded = sortedEnds.some((y, i) => i > 0 && y - sortedEnds[i - 1] < LABEL_LINE_PX)
+  const room = LABEL_GAP + Math.max(0, ...harnesses.map((h) => harnessLabel(h).length * LABEL_CHAR_PX))
+  const labelled =
+    !single && byHarness.length > 0 && byHarness.length <= MAX_END_LABELS && !crowded && width - PLOT_LEFT - room >= MIN_LABELLED_PLOT
+  const plotRight = labelled ? width - room : width
+
+  const plotW = Math.max(1, plotRight - PLOT_LEFT)
+  const n = slots.length
+  const step = n > 1 ? (plotW - 2 * POINT_INSET) / (n - 1) : 0
+  const cxOf = (i: number): number => (n > 1 ? PLOT_LEFT + POINT_INSET + i * step : PLOT_LEFT + plotW / 2)
   const columns: ChartColumn[] = slots.map((day, i) => {
-    const slotX = PLOT_LEFT + i * slotW
-    const x = slotX + (slotW - barW) / 2
-    let base = plotBottom
-    const segments: ChartSegment[] = []
-    for (const h of byHarness) {
+    const cx = cxOf(i)
+    const left = i === 0 ? PLOT_LEFT : (cxOf(i - 1) + cx) / 2
+    const right = i === n - 1 ? plotRight : (cx + cxOf(i + 1)) / 2
+    const values = byHarness.map((h) => {
       const value = h.m.get(day) ?? 0
-      if (value <= 0) continue
-      const full = (value / max) * plotH
-      const gap = segments.length > 0 ? Math.min(SEGMENT_GAP, full / 2) : 0
-      const height = Math.max(0.5, full - gap)
-      const y = base - gap - height
-      segments.push({ harness: h.harness, value, x, y, width: barW, height })
-      base = y
-    }
-    return { day, total: totals[i], segments, x: slotX, width: slotW }
+      return { harness: h.harness, value, y: yOf(value) }
+    })
+    return { day, total: totals[i], values, cx, x: left, width: right - left }
   })
+
+  const lines: ChartLine[] = single
+    ? []
+    : byHarness.map((h, k) => {
+        const pts = columns.map((c) => ({ x: c.cx, y: c.values[k].y }))
+        const line = monotonePath(pts)
+        const area = `${line}L${num(pts[pts.length - 1].x)},${num(plotBottom)}L${num(pts[0].x)},${num(plotBottom)}Z`
+        return { harness: h.harness, line, area }
+      })
+  const endLabels: ChartEndLabel[] = labelled
+    ? byHarness.map((h, k) => ({ harness: h.harness, x: columns[n - 1].cx + LABEL_GAP, y: ends[k] }))
+    : []
+  let dots: ChartDot[] = []
+  if (single && n === 1) {
+    const vals = columns[0].values
+    const labelYs = spreadLabels(
+      vals.map((v) => v.y),
+      plotBottom - LABEL_LINE_PX / 2,
+    )
+    dots = vals.map((v, k) => ({ harness: v.harness, value: v.value, x: columns[0].cx, y: v.y, labelY: labelYs[k] }))
+  }
+
   const ticks = [0, 0.5, 1].map((f) => ({ value: max * f, y: plotBottom - f * plotH }))
-  const harnesses = byHarness.filter((h) => [...h.m.values()].some((v) => v > 0)).map((h) => h.harness)
   return {
     width,
     height: USAGE_CHART_HEIGHT,
     plotLeft: PLOT_LEFT,
+    plotRight,
     plotTop: PLOT_TOP,
     plotBottom,
     max,
     ticks,
     columns,
     harnesses,
+    lines,
+    endLabels,
+    single,
+    dots,
   }
 }
 
@@ -437,4 +585,12 @@ export function harnessLabel(harness: string): string {
   if (harness === 'codex') return 'Codex'
   if (harness === 'grok') return 'Grok'
   return harness || 'unknown'
+}
+
+/** The chart card's title. With one provider there is no legend, so the
+ *  title names it: "Claude output by day". */
+export function chartTitle(measure: ChartMeasure, range: UsageRange, harnesses: readonly string[]): string {
+  const when = range === 'today' ? 'today' : 'by day'
+  if (harnesses.length === 1) return `${harnessLabel(harnesses[0])} ${MEASURE_LABEL[measure].toLowerCase()} ${when}`
+  return `${MEASURE_LABEL[measure]} ${when}`
 }

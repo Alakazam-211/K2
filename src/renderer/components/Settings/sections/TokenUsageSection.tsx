@@ -55,6 +55,7 @@ import {
   UNITS_FOOTNOTE,
   USAGE_RANGES,
   browserTimeZone,
+  chartTitle,
   costFigure,
   daySlots,
   filterForGroup,
@@ -680,7 +681,7 @@ export function TokenUsageSection(): React.JSX.Element {
     <>
       <Tiles total={report_?.total ?? null} measure={measure} onMeasure={setMeasure} />
       <SettingsGroup
-        title={range === 'today' ? `${MEASURE_LABEL[measure]} today` : `${MEASURE_LABEL[measure]} by day`}
+        title={chartTitle(measure, range, legend)}
         hint="Hover a day for its numbers."
         card
         action={<ChartLegend harnesses={legend} />}

@@ -1,11 +1,13 @@
-// Usage v2 Phase 2 — the day chart: one stacked series per harness for the
-// chosen total, a y-axis, hover totals, a legend, and a table view (B29,
-// B31). Geometry is `usageChart` (pure); this file only draws it, at the
-// card's real width so columns and text never stretch.
+// Usage v2 Phase 2 — the day chart: one line per harness for the chosen
+// total (not stacked), a soft wash under each, a y-axis, a crosshair with
+// the day's numbers, the lines' names at their ends, a legend, and a table
+// view. Geometry is `usageChart` (pure); this file only draws it, at the
+// card's real width so lines and text never stretch.
 //
 // Drawn with tokens only: series are the theme's chart colours (each at
 // least 3:1 on the card), gridlines the hairline border, axis text the
-// muted text colour. The hover card is floating chrome (frost in Glass).
+// muted text colour, names and numbers the text colours (never a series
+// colour). The hover card is floating chrome (frost in Glass).
 
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { UsageDay } from '../dailyTokenChart'
@@ -17,10 +19,24 @@ export interface ChartSeries {
   days: UsageDay[] | null | undefined
 }
 
-/** A swatch beside a name: identity is never colour alone (the name says it). */
+/** A short stroke of the series' line beside a name: identity is never
+ *  colour alone (the name says it). */
 export function SeriesKey({ harness }: { harness: string }): React.JSX.Element {
-  return <span aria-hidden="true" className="inline-block h-2.5 w-2.5 flex-shrink-0 rounded-[var(--radius-status)]" style={{ background: harnessColor(harness) }} />
+  return (
+    <span
+      aria-hidden="true"
+      data-testid="usage-series-key"
+      data-shape="line"
+      className="inline-block h-0.5 w-3 flex-shrink-0 rounded-[var(--radius-status)]"
+      style={{ background: harnessColor(harness) }}
+    />
+  )
 }
+
+/** The wash under each line: the series hue, faint. */
+const AREA_OPACITY = 0.1
+/** A point's dot, and the surface ring that lifts it off the lines. */
+const DOT_R = 4
 
 export function ChartLegend({ harnesses }: { harnesses: string[] }): React.JSX.Element | null {
   if (harnesses.length < 2) return null
@@ -86,57 +102,162 @@ export function UsageChart({
   const geo = useMemo(() => usageChart(series, measure, slots, width || undefined), [series, measure, slots, width])
   const [hover, setHover] = useState<number | null>(null)
   const [table, setTable] = useState(false)
-  const col = hover !== null ? geo.columns[hover] : null
+  // A new range or total can leave fewer days than the one picked.
+  const col = hover !== null ? (geo.columns[hover] ?? null) : null
   const label = MEASURE_LABEL[measure]
   const first = slots[0] ?? ''
   const last = slots[slots.length - 1] ?? ''
   const empty = geo.columns.every((c) => c.total === 0)
   const fmtTotal = (v: number): string => (measure === 'cost' ? fmtMeasure(v, measure) : fmtExact(v))
+  const drawn = width > 0 && !loading && !empty
+  const several = geo.harnesses.length > 1
+  const name = geo.single ? `${label} on ${fmtDay(first)}, by provider` : `${label} per day, ${fmtDay(first)} to ${fmtDay(last)}, by provider`
+  const days = geo.columns.length
+
+  // Left and right step the day, from the latest; Home and End jump.
+  const onKey = (e: React.KeyboardEvent): void => {
+    if (!drawn || days === 0) return
+    const at = (h: number | null): number => (h === null || h >= days ? days - 1 : h)
+    let next: number | null | undefined
+    if (e.key === 'ArrowLeft') next = hover === null ? days - 1 : Math.max(0, at(hover) - 1)
+    else if (e.key === 'ArrowRight') next = hover === null ? days - 1 : Math.min(days - 1, at(hover) + 1)
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = days - 1
+    else if (e.key === 'Escape' && hover !== null) next = null
+    if (next === undefined) return
+    e.preventDefault()
+    setHover(next)
+  }
+  const sayDay = col
+    ? `${fmtDay(col.day, true)}: ${col.values.map((v) => `${harnessLabel(v.harness)} ${fmtTotal(v.value)}`).join(', ')}${several ? `, total ${fmtTotal(col.total)}` : ''}`
+    : ''
 
   return (
     <div className="px-4 pt-4 pb-3" data-testid="usage-chart">
-      <div ref={box} className="relative" style={{ height: geo.height }} onMouseLeave={() => setHover(null)}>
+      <div
+        ref={box}
+        className="relative"
+        style={{ height: geo.height }}
+        onMouseLeave={() => setHover(null)}
+        role="group"
+        aria-label={drawn ? `${name}. Use the left and right arrows to read each day.` : undefined}
+        tabIndex={drawn ? 0 : undefined}
+        data-k2-focus={drawn ? '' : undefined}
+        onKeyDown={onKey}
+        onBlur={() => setHover(null)}
+      >
         {width > 0 && !loading ? (
-          <svg
-            width={geo.width}
-            height={geo.height}
-            className="block overflow-visible"
-            role="img"
-            aria-label={`${label} per day, ${fmtDay(first)} to ${fmtDay(last)}, by provider`}
-          >
-            {geo.ticks.map((t, i) => (
+          <svg width={geo.width} height={geo.height} className="block overflow-visible" role="img" aria-label={name}>
+            {geo.ticks.map((t) => (
               <line
                 key={t.value}
                 x1={geo.plotLeft}
-                x2={geo.width}
+                x2={geo.plotRight}
                 y1={Math.round(t.y) + 0.5}
                 y2={Math.round(t.y) + 0.5}
-                stroke={i === 0 ? 'var(--color-control-edge)' : 'var(--color-border)'}
+                stroke="var(--color-border)"
                 strokeWidth={1}
                 shapeRendering="crispEdges"
               />
             ))}
-            {geo.columns.map((c, i) => (
-              <g key={c.day} data-day={c.day}>
-                {hover === i ? (
-                  <rect x={c.x} y={geo.plotTop} width={c.width} height={geo.plotBottom - geo.plotTop} fill="var(--color-wash-1)" />
-                ) : null}
-                {c.segments.map((s) => (
-                  <rect key={s.harness} x={s.x} y={s.y} width={s.width} height={s.height} fill={harnessColor(s.harness)} data-harness={s.harness} />
-                ))}
-                <rect
-                  x={c.x}
-                  y={geo.plotTop}
-                  width={c.width}
-                  height={geo.plotBottom - geo.plotTop}
-                  fill="transparent"
-                  data-testid={`usage-chart-hit-${c.day}`}
-                  onMouseEnter={() => setHover(i)}
+            {geo.lines.map((l) => (
+              <path key={l.harness} d={l.area} fill={harnessColor(l.harness)} fillOpacity={AREA_OPACITY} stroke="none" data-area={l.harness} />
+            ))}
+            {geo.lines.map((l) => (
+              <path
+                key={l.harness}
+                d={l.line}
+                fill="none"
+                stroke={harnessColor(l.harness)}
+                strokeWidth={2}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                data-line={l.harness}
+              />
+            ))}
+            {geo.dots.map((d) => (
+              <circle
+                key={d.harness}
+                cx={d.x}
+                cy={d.y}
+                r={DOT_R}
+                fill={harnessColor(d.harness)}
+                stroke="var(--color-bg-surface)"
+                strokeWidth={2}
+                data-testid="usage-chart-dot"
+              />
+            ))}
+            {col && !empty ? (
+              <g pointerEvents="none">
+                <line
+                  data-testid="usage-chart-crosshair"
+                  x1={Math.round(col.cx) + 0.5}
+                  x2={Math.round(col.cx) + 0.5}
+                  y1={geo.plotTop}
+                  y2={geo.plotBottom}
+                  stroke="var(--color-control-edge)"
+                  strokeWidth={1}
+                  shapeRendering="crispEdges"
                 />
+                {geo.single
+                  ? null
+                  : col.values.map((v) => (
+                      <circle
+                        key={v.harness}
+                        cx={col.cx}
+                        cy={v.y}
+                        r={DOT_R}
+                        fill={harnessColor(v.harness)}
+                        stroke="var(--color-bg-surface)"
+                        strokeWidth={2}
+                        data-testid="usage-chart-hover-dot"
+                      />
+                    ))}
               </g>
+            ) : null}
+            {geo.columns.map((c, i) => (
+              <rect
+                key={c.day}
+                x={c.x}
+                y={geo.plotTop}
+                width={c.width}
+                height={geo.plotBottom - geo.plotTop}
+                fill="transparent"
+                data-testid={`usage-chart-hit-${c.day}`}
+                onMouseEnter={() => setHover(i)}
+              />
             ))}
           </svg>
         ) : null}
+        {/* Each line's name at its right end, in text colour. */}
+        {drawn
+          ? geo.endLabels.map((l) => (
+              <span
+                key={l.harness}
+                aria-hidden="true"
+                data-testid={`usage-chart-end-label-${l.harness}`}
+                className="pointer-events-none absolute -translate-y-1/2 whitespace-nowrap type-hint text-[var(--color-text-secondary)]"
+                style={{ left: l.x, top: l.y }}
+              >
+                {harnessLabel(l.harness)}
+              </span>
+            ))
+          : null}
+        {/* One day: its number beside each dot. */}
+        {drawn
+          ? geo.dots.map((d) => (
+              <span
+                key={d.harness}
+                aria-hidden="true"
+                data-testid={`usage-chart-dot-label-${d.harness}`}
+                className="pointer-events-none absolute -translate-y-1/2 whitespace-nowrap type-hint tabular-nums"
+                style={{ left: d.x + DOT_R + 6, top: d.labelY }}
+              >
+                <span className="text-[var(--color-text-primary)]">{fmtMeasure(d.value, measure)}</span>
+                {several ? <span className="text-[var(--color-text-secondary)]"> {harnessLabel(d.harness)}</span> : null}
+              </span>
+            ))
+          : null}
         {/* The y-axis labels, as text so they stay crisp and themed. */}
         {!empty && !loading
           ? geo.ticks.map((t) => (
@@ -150,31 +271,25 @@ export function UsageChart({
               </span>
             ))
           : null}
-        {col && col.total > 0 ? (
+        {col && drawn ? (
           <div
             role="tooltip"
             data-testid="usage-chart-tooltip"
             {...floatMaterial('popover', 'frost')}
             data-k2-chamfer="surface"
             className="pointer-events-none absolute top-0 z-10 min-w-[10rem] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] rounded-[var(--radius-box)] px-3 py-2 type-hint"
-            style={
-              col.x + col.width / 2 > geo.width / 2
-                ? { right: geo.width - col.x + 8 }
-                : { left: col.x + col.width + 8 }
-            }
+            // Beside the crosshair, on the side with more room.
+            style={col.cx > geo.width / 2 ? { right: geo.width - col.cx + 12 } : { left: col.cx + 12 }}
           >
             <div className="text-[var(--color-text-primary)] mb-1">{fmtDay(col.day, true)}</div>
-            {col.segments
-              .slice()
-              .reverse()
-              .map((s) => (
-                <div key={s.harness} className="flex items-center gap-2 text-[var(--color-text-secondary)] tabular-nums">
-                  <SeriesKey harness={s.harness} />
-                  <span className="flex-1">{harnessLabel(s.harness)}</span>
-                  <span>{fmtTotal(s.value)}</span>
-                </div>
-              ))}
-            {col.segments.length > 1 ? (
+            {col.values.map((v) => (
+              <div key={v.harness} className="flex items-center gap-2 tabular-nums">
+                <SeriesKey harness={v.harness} />
+                <span className="flex-1 text-[var(--color-text-secondary)]">{harnessLabel(v.harness)}</span>
+                <span className="text-[var(--color-text-primary)]">{fmtTotal(v.value)}</span>
+              </div>
+            ))}
+            {several ? (
               <div className="flex justify-between gap-2 mt-1 pt-1 border-t border-[var(--color-border)] text-[var(--color-text-primary)] tabular-nums">
                 <span>Total</span>
                 <span>{fmtTotal(col.total)}</span>
@@ -182,6 +297,9 @@ export function UsageChart({
             ) : null}
           </div>
         ) : null}
+        <span className="sr-only" aria-live="polite">
+          {sayDay}
+        </span>
         {loading ? (
           <p role="status" className="absolute inset-0 flex items-center justify-center type-hint text-[var(--color-text-secondary)]">
             Loading usage…
@@ -194,19 +312,21 @@ export function UsageChart({
       </div>
       <div className="relative mt-1.5 h-4 type-hint tabular-nums text-[var(--color-text-muted)]" aria-hidden="true">
         {width > 0 && !loading
-          ? axisDays(geo.columns.length, (geo.width - geo.plotLeft) / AXIS_LABEL_SLOT_PX).map((i, k, shown) => {
+          ? axisDays(geo.columns.length, (geo.plotRight - geo.plotLeft) / AXIS_LABEL_SLOT_PX).map((i, k, shown) => {
               const c = geo.columns[i]
-              const mid = c.x + c.width / 2
-              // A long axis, or one with labels left out, pins its first and
-              // last labels to the plot's edges, so none sticks out of the card.
-              const pinned = geo.columns.length > 8 || shown.length < geo.columns.length
+              // The lines run edge to edge, so the first and last labels pin
+              // to the plot's edges and never stick out past the y-axis or
+              // the card; the rest centre on their day.
+              const pinned = shown.length > 1
               const end = k === shown.length - 1 && pinned
-              const start = k === 0 && i === 0 && pinned && shown.length > 1
+              const start = k === 0 && i === 0 && pinned
               return (
                 <span
                   key={c.day}
                   className="absolute top-0 whitespace-nowrap"
-                  style={end ? { right: 0 } : start ? { left: c.x } : { left: mid, transform: 'translateX(-50%)' }}
+                  style={
+                    end ? { right: geo.width - geo.plotRight } : start ? { left: c.x } : { left: c.cx, transform: 'translateX(-50%)' }
+                  }
                 >
                   {fmtDay(c.day)}
                 </span>
@@ -242,7 +362,7 @@ export function UsageChart({
                   <td className="py-1 pr-3">{fmtDay(c.day, true)}</td>
                   {geo.harnesses.map((h) => (
                     <td key={h} className="py-1 pr-3 text-right">
-                      {fmtTotal(c.segments.find((s) => s.harness === h)?.value ?? 0)}
+                      {fmtTotal(c.values.find((v) => v.harness === h)?.value ?? 0)}
                     </td>
                   ))}
                   <td className="py-1 text-right">{fmtTotal(c.total)}</td>

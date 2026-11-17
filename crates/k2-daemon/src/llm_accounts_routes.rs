@@ -1871,7 +1871,7 @@ mod tests {
         // Work in vault mode: switch to B, then remove A (kept disabled).
         let body = Body { id: Some(b.clone()), ..Default::default() };
         let vendor = NoVendor;
-        switch_two_phase(false, &body, "owner-token", &vendor).expect("switch in vault mode");
+        switch_two_phase(false, &body, "owner-token", &vendor, &[]).expect("switch in vault mode");
         assert_eq!(std::fs::read_to_string(home.path().join(".claude/.credentials.json")).unwrap(), cred("b"));
         let (st, v) = call(REMOVE, admin.clone(), &format!(r#"{{"id":"{a}"}}"#));
         assert_eq!(st, "200 OK", "{v}");
@@ -2079,7 +2079,7 @@ mod tests {
 
     fn switch_to(id: &str) -> Timed<SwitchResult> {
         let body = Body { id: Some(id.to_string()), ..Default::default() };
-        timed(move || switch_two_phase(false, &body, "owner-token", &NoVendor))
+        timed(move || switch_two_phase(false, &body, "owner-token", &NoVendor, &[]))
     }
 
     /// An idle Claude token signed in to its slot with its own profile.

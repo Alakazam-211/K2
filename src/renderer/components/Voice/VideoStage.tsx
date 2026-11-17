@@ -52,6 +52,12 @@ export function gridRows(n: number, columns: number): number {
   return Math.max(1, Math.ceil(n / Math.max(1, columns)))
 }
 
+/** The room between the tiles and the stage's edges, the same in every
+ *  layout (one tile, two side by side, a grid, a share with its column) and
+ *  in every place (the page, full screen, the call's own window): a tile
+ *  never runs closer to the sides than this, whichever way it fits. */
+export const STAGE_INSET = 'calc(var(--spacing) * 4)'
+
 /** The gap between tiles (Tailwind's gap-2). */
 const TILE_GAP = 'calc(var(--spacing) * 2)'
 
@@ -73,7 +79,7 @@ export function StageGrid({ tiles, ctl, className = '' }: { tiles: ReturnType<ty
   const columns = gridColumns(units)
   const rows = gridRows(units, columns)
   return (
-    <div data-testid="video-grid-box" className={`@container-[size] min-h-0 min-w-0 flex-1 p-2 ${className}`}>
+    <div data-testid="video-grid-box" className={`@container-[size] min-h-0 min-w-0 flex-1 ${className}`} style={{ padding: STAGE_INSET }}>
       <div
         data-testid="video-grid"
         data-columns={columns}

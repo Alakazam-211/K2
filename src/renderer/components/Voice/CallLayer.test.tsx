@@ -147,6 +147,7 @@ vi.mock('@/stores/video', async () => {
 import VoiceButton from './VoiceButton'
 import CallLayer from './CallLayer'
 import CallWindow from './CallWindow'
+import { STAGE_INSET } from './VideoStage'
 import { __resetCallExpandForTests, useCallExpand } from '@/stores/call-expand'
 import { __resetCallShareForTests, useCallShare } from '@/stores/call-share'
 import { __resetCallPopoutForTests, setCallPopoutBridge, useCallPopout, type CallPopoutBridge } from '@/stores/call-popout'
@@ -669,6 +670,10 @@ describe('one call, one home window (this window is main; the app lists main and
     const closeWindow = vi.fn()
     render(<CallWindow closeWindow={closeWindow} />)
     await waitFor(() => expect(within(screen.getByTestId('call-window')).getByTestId('video-grid')).toBeTruthy())
+    // The stage's one inset, and none of the window's own on top of it.
+    const box = within(screen.getByTestId('call-window')).getByTestId('video-grid-box')
+    expect(box.style.padding).toBe(STAGE_INSET)
+    expect(box.className).not.toMatch(/(^|\s)p[xytrbl]?-\d/)
     expect(closeWindow).not.toHaveBeenCalled()
     otherWindowWrites('main')
     await waitFor(() => expect(closeWindow).toHaveBeenCalledTimes(1))
@@ -931,6 +936,9 @@ describe('a screen share in the middle, the people on the left', () => {
     await fullScreen()
     const layout = await screen.findByTestId('call-share-layout')
     expect(layout.dataset.main).toBe('TR_S7')
+    // The same inset as the grid's.
+    expect(layout.style.padding).toBe(STAGE_INSET)
+    expect(layout.className).not.toMatch(/(^|\s)p[xytrbl]?-\d/)
     const main = within(screen.getByTestId('call-share-main')).getByTestId('video-tile')
     expect(main.dataset.track).toBe('TR_S7')
     expect(main.dataset.large).toBe('true')

@@ -166,7 +166,7 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
       ) : (
         <>
           {tiles.length > 0 ? (
-            <CallStage ctl={video} people={people} callId={call.callId} className="flex-1 px-1 pt-1" />
+            <CallStage ctl={video} people={people} callId={call.callId} className="flex-1" />
           ) : (
             <div data-testid="call-window-no-video" className="type-row flex flex-1 items-center justify-center text-[var(--color-text-muted)]">
               No one has video on.

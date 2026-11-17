@@ -10,7 +10,7 @@ import { FakeVideoEngine, fakeTrack } from '@/lib/voice/fake-video-engine'
 import { FakeVideoDecoder, fakeWebCodecs, RecordingSurface } from '@/lib/voice/fake-webcodecs'
 import type { CallPerson } from '@/lib/voice/video-labels'
 import { createVideoController } from '@/stores/video-core'
-import VideoStage, { gridColumns, gridRows, stageTileWidth } from './VideoStage'
+import VideoStage, { STAGE_INSET, gridColumns, gridRows, stageTileWidth } from './VideoStage'
 import { CameraPicker, ScreenPicker, VideoCallButtons, VideoNoticeLine } from './VideoControls'
 
 const people: CallPerson[] = [
@@ -272,6 +272,17 @@ describe('the tiles', () => {
     expect(box.contains(controls)).toBe(false)
     expect(controls.className).toMatch(/\bflex-shrink-0\b/)
     expect(box.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('one inset round the tiles in every layout: two tiles side by side keep it from the sides as one tile does', async () => {
+    const s = setup([fakeTrack('7'), fakeTrack('8')])
+    render(<VideoStage ctl={s.ctl} people={people} title="Standup" controls={<div />} />)
+    await ready(s)
+    const box = await screen.findByTestId('video-grid-box')
+    expect(STAGE_INSET).toBe('calc(var(--spacing) * 4)')
+    expect(box.style.padding).toBe(STAGE_INSET)
+    // No padding class of its own beside it.
+    expect(box.className).not.toMatch(/(^|\s)p[xytrbl]?-\d/)
   })
 })
 

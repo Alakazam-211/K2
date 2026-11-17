@@ -10,7 +10,7 @@ import { shareLayout, type ShareLayout } from '@/lib/voice/call-share'
 import type { CallPerson } from '@/lib/voice/video-labels'
 import { pickShare, useCallShare } from '@/stores/call-share'
 import type { VideoController } from '@/stores/video-core'
-import { StageGrid, useStageTiles } from './VideoStage'
+import { STAGE_INSET, StageGrid, useStageTiles } from './VideoStage'
 import VideoTile from './VideoTile'
 
 export interface CallStageProps {
@@ -28,7 +28,7 @@ const COLUMN = 'w-[clamp(132px,20%,220px)]'
 function ShareView({ layout, ctl, callId, className }: { layout: ShareLayout; ctl: VideoController; callId: string | null; className: string }): React.JSX.Element {
   const { main, others, people } = layout
   return (
-    <div data-testid="call-share-layout" data-main={main.key} className={`flex min-h-0 gap-2 p-2 ${className}`}>
+    <div data-testid="call-share-layout" data-main={main.key} className={`flex min-h-0 gap-2 ${className}`} style={{ padding: STAGE_INSET }}>
       <div data-testid="call-share-column" className={`flex ${COLUMN} shrink-0 flex-col gap-1.5 overflow-y-auto`}>
         {others.length > 0 ? (
           <div role="group" aria-label="Other screen shares" className="flex flex-col gap-1.5">

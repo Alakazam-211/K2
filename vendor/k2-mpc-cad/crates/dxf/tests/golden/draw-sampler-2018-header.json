@@ -44,7 +44,7 @@
       "rgb": [51, 102, 153],
       "aci": 1,
       "fg": false,
-      "alpha": 0.4980392156862745,
+      "alpha": 0.498039216,
       "ltype": "DASHED",
       "lw_mm": 0.35,
       "on": true,

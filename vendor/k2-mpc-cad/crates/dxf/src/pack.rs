@@ -1,9 +1,9 @@
 //! The DXF pack: the kit's tier-0 [`BlobPack`], indexing each version into the kit's
 //! structure index through the format-neutral model ([`k2_mpc_cad_model::index`]), with the
 //! read verbs ([`crate::verbs`]) and the edit verbs ([`crate::edit`]) as the kit's blob verbs,
-//! the pack's refusals by id ([`DXF_ERRORS`]) and how far a hold reaches per node kind. An
-//! agent's whole-file `write` stays allowed until the kit can refuse it without refusing the
-//! agent's verbs too (`AgentWrites::Refused` refuses both).
+//! the pack's refusals by id ([`DXF_ERRORS`]) and how far a hold reaches per node kind. Agents
+//! change a drawing through the verbs only: an agent's whole-file `write` is refused
+//! (`AgentWrites::VerbsOnly`, `MPC-E715`), its verbs are admitted.
 
 use std::io::Read;
 
@@ -11,13 +11,13 @@ use k2_mpc_base::errors::{ErrorEntry, Value};
 use k2_mpc_base::index::{IndexDraft, IndexLimits, IndexRefused, IndexSpec, IndexVerbs};
 use k2_mpc_base::parity::PersonAction;
 use k2_mpc_base::session::{
-    BlobMerge, BlobPack, BlobPlan, BlobVerb, BlobVerbCtx, BlobVerbOut, BlobVerbRefused, HoldReach,
-    SaveFacts, SavePairing, VerbInput, VerbMerge,
+    AgentWrites, BlobMerge, BlobPack, BlobPlan, BlobVerb, BlobVerbCtx, BlobVerbOut,
+    BlobVerbRefused, HoldReach, SaveFacts, SavePairing, VerbInput, VerbMerge,
 };
 use k2_mpc_cad_model::merge::MergeOutcome;
 
 use crate::error::{CadError, USAGE};
-use crate::{read_doc, Limits};
+use crate::{mutant, read_doc, Limits};
 
 /// The index's output format: bump when what a file indexes to changes, and the kit recomputes.
 pub const FORMAT: u32 = 3;
@@ -43,6 +43,20 @@ pub fn index_bytes(bytes: &[u8], limits: &IndexLimits) -> Result<IndexDraft, Ind
 }
 
 impl BlobPack for DxfPack {
+    /// Agents change a drawing through the verbs only: the kit refuses an agent's whole-file
+    /// `write` and `write --base` (`MPC-E715`, the file unchanged) and admits its verbs, which go
+    /// through the pack's rules and `--base` per entity. A person's write and any restore are
+    /// unaffected.
+    fn agent_writes(&self) -> AgentWrites {
+        if mutant::active("AgentWritesAllowed") {
+            return AgentWrites::Allowed;
+        }
+        if mutant::active("AgentWritesRefused") {
+            return AgentWrites::Refused;
+        }
+        AgentWrites::VerbsOnly
+    }
+
     /// The merge by unit and field ([`crate::merge`]).
     fn can_merge(&self) -> bool {
         true

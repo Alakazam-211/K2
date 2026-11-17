@@ -5,6 +5,8 @@
 
 use k2_mpc_base::errors::Value;
 
+use super::fl;
+
 use super::{aci, DrawTables, Ent};
 use crate::model::{BlockKind, Doc, Entity};
 use crate::mutant;
@@ -196,10 +198,6 @@ pub fn visible(doc: &Doc, i: usize, ent: &Ent) -> Res<bool> {
         Some(l) => Res::Value(doc.layers[l].on() && !doc.layers[l].frozen),
         None => Res::Value(true),
     }
-}
-
-fn fl(x: f64) -> Value {
-    Value::float(x).unwrap_or(Value::Null)
 }
 
 fn res<T>(r: &Res<T>, f: impl Fn(&T) -> Value) -> Value {

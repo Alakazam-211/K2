@@ -25,10 +25,23 @@ of data: the colour-number palette (its row below).
 | `crates/cad-model/src/draw` (the drawing-model read: style resolution, text placement, the multiline text parser, spline and hatch tessellation, paging) | our own design and code; the inheritance rules and inline codes from the DXF reference, read as a specification |
 | `crates/cad-model/src/draw/aci.rs` (`TABLE`, the colour-number palette) | **data taken from ezdxf** (MIT licence, notice in `NOTICE.md`): `DXF_DEFAULT_COLORS` in `src/ezdxf/colors.py`, ezdxf 1.4.2, commit 8240df5793daf2fd7db95d118a78e17ec92043ec (the file's SHA-256 2dc20b764a7ca766f9719f954974e46348595669a4ae8eb7dd4da512e0ed16fb). The 256 values only; no code. The drawn-values referee checks every entry against ezdxf when it runs |
 | `crates/dxf/src/draw.rs` (each kind's raw drawing values, the tables the drawing-model read uses) | the DXF reference, read as a specification; our own code |
+| `crates/dxf/src/edit/` (the edit verbs: the planner, the writer, the rules, the self-check, exact decimal numbers) | our own code, written from the DXF reference read as a specification. The writer makes byte patches keyed by handle: value lines replaced, whole pairs inserted or removed, every other byte the input's; new handles above every handle the file owns or points at. No header field is written except `$HANDSEED`, and no identity is written: no `$LASTSAVEDBY`, no GUID, no clock and no application identity |
+| `scripts/referee/ezdxf-edits.py` (the edit verbs' referee) | our own test code: test-only, run on test machines, its output compared (`cad-measure edit-referee`), never shipped. It runs ezdxf as a separate program, pinned in `scripts/referee/requirements.txt` |
 | tests, plants, fuzz properties | our own |
 
 **Not used as sources:** no other DXF or DWG reader's or writer's source code is read or ported
-for this repo. Test referees, where used, run as separate processes on test machines, are pinned
-by version and checksum, and are never shipped or vendored; only their outputs are compared.
+for this repo, but for the palette's one data file named above. In particular:
 
-A DWG reader, when it comes, gets its own lines here, with what it was written from.
+- **The Open Design Specification for .dwg files** (5.4.1) is a source of facts only: our own
+  tables and code, citing its sections; it is never committed, shipped or quoted.
+- **ACadSharp** (MIT) may be studied only, and any port would be cleared first: nothing in this
+  repo is ported from it. Its repository's public sample drawings are test inputs on test
+  machines, by reference only (pinned commit, sha256, licence), never committed.
+- **cadkit-dwg**: the DWG reader was written without reading or running it.
+- **LibreDWG** is not a source: nobody working on this repo reads its source code. Its
+  command-line tools run only as a test referee (below).
+
+**Test referees** (ezdxf; LibreDWG's command-line tools; a DXF program's re-saves, where used)
+run as separate processes on test machines, are pinned by version and checksum, and are never
+shipped, vendored or linked; only their outputs are compared, and those outputs stay off the
+repo.

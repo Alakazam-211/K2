@@ -132,6 +132,8 @@ const PLANTS: &[(&str, Row)] = &[
     ("EmbeddedCodesAsMain", index::index_mtext_embedded_object),
     ("TextBoxExact", draw::draw_text_boxes_are_approx),
     ("TextBoxExact", index::index_text_boxes_are_approx),
+    ("DrawFloatsUnrounded", draw::draw_floats_platform_identical),
+    ("DrawNoiseKept", draw::draw_noise_snapped_to_zero),
     // the edit verbs: what they write, and what they refuse that they shouldn't
     ("SpanCoversCodeLine", edit::untouched_units_exact),
     ("EditStyleLeaks", edit::style_kept),
@@ -150,6 +152,16 @@ const PLANTS: &[(&str, Row)] = &[
     ("LockedReadAsFrozen", edit::honest_edits_land),
     ("ProxyWritten", edit::refusals_named),
     ("MergeFieldSplitDiffers", edit_session::merge_and_base_agree),
+    // agents change a drawing through the verbs only: the whole-file write refused, the verbs
+    // admitted
+    (
+        "AgentWritesAllowed",
+        edit_session::agent_writes_refused_verbs_land,
+    ),
+    (
+        "AgentWritesRefused",
+        edit_session::agent_writes_refused_verbs_land,
+    ),
 ];
 
 /// A plant's row under the plant: `Err` with what stopped it.

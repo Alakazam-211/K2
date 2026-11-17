@@ -1,7 +1,7 @@
 //! The edit verbs inside the kit, on a blob doc through `BlobSession::run_tool`: each lands as
 //! one version with its word, its dry run stores nothing and previews the digest the real run
-//! stores, an agent's verb lands, two agents' calls from one version
-//! land or refuse per node, `--base` and the outside-save merge agree on what overlaps, and a
+//! stores, an agent's verb lands while its whole-file write is refused, two agents' calls from
+//! one version land or refuse per node, `--base` and the outside-save merge agree on what overlaps, and a
 //! person's app saving over an agent's verb merges when the kit knows what the app opened.
 
 use std::collections::HashMap;
@@ -14,8 +14,9 @@ use k2_mpc_base::blob::{BlobConfig, BlobStore};
 use k2_mpc_base::errors::Value;
 use k2_mpc_base::index::Digest;
 use k2_mpc_base::session::{
-    AuditEvent, BlobMerge, BlobPack, BlobSession, ClaimPolicy, Config, ConnId, DiskCheck, Host,
-    OpenedAt, Participant, ParticipantKind, Rights, SessionManager, Stay,
+    AuditEvent, BlobMerge, BlobPack, BlobSession, BlobWriteOptions, ClaimPolicy, Config, ConnId,
+    DiskCheck, Host, OpenedAt, Participant, ParticipantKind, Rights, SessionError, SessionManager,
+    Stay,
 };
 use k2_mpc_base::store::{DocKey, DocStore, VersionId};
 use k2_mpc_base::tools::{ToolOptions, ToolOutput};
@@ -355,15 +356,56 @@ fn r(v: &[String]) -> Vec<&str> {
     v.iter().map(String::as_str).collect()
 }
 
-/// agent_verbs_land: an agent's verb lands. Its whole-file write lands too, for now: the kit's
-/// `AgentWrites::Refused` would refuse its verbs as well, so the pack can't refuse the write
-/// alone until the kit can (a known gap: this row fails when it closes, to be changed then).
+/// agent_writes_refused_verbs_land: agents change a drawing through the verbs only
+/// (`AgentWrites::VerbsOnly`): an agent's whole-file write and its write on a base are refused
+/// (`MPC-E715`, typed) and the file is unchanged, for the agent and for a person, whose read and
+/// index are unaffected; the agent's verb lands; a person's whole-file write still lands. Plants:
+/// `AgentWritesAllowed` (the write lands), `AgentWritesRefused` (the verb is refused too).
 #[test]
-pub fn agent_verbs_land() {
+pub fn agent_writes_refused_verbs_land() {
     let f = fx("agents");
     let b = testgen::edit_sampler(Ver::R2018).build();
     let s = f.open("plan.dxf", &b.bytes);
     let bot = f.join(&s, "bot", ParticipantKind::Agent);
+    let ann = f.join(&s, "ann", ParticipantKind::Person);
+    let v = head(&s);
+    let moved = testgen::splice_move(&b.bytes, b.handle("wall"), 1.0);
+    // the whole-file write and the write on a base: refused, typed, nothing recorded
+    let w = s.write_bytes(bot, &moved, v);
+    assert!(
+        matches!(&w, Err(SessionError::AgentWriteRefused)),
+        "agent_writes_refused_verbs_land: an agent's whole-file write is refused: {w:?}"
+    );
+    assert_eq!(
+        w.unwrap_err().report().id(),
+        "MPC-E715",
+        "agent_writes_refused_verbs_land: by MPC-E715"
+    );
+    let w = s.write_bytes_with(bot, &moved, v, &BlobWriteOptions::new());
+    assert!(
+        matches!(&w, Err(SessionError::AgentWriteRefused)),
+        "agent_writes_refused_verbs_land: an agent's write on a base is refused: {w:?}"
+    );
+    assert_eq!(
+        head(&s),
+        v,
+        "agent_writes_refused_verbs_land: no version recorded"
+    );
+    for (who, c) in [("the agent", bot), ("the person", ann)] {
+        assert!(
+            bytes_at(&s, c, v) == b.bytes,
+            "agent_writes_refused_verbs_land: {who} reads the file unchanged"
+        );
+    }
+    assert!(
+        s.index_view(None)
+            .unwrap()
+            .nodes
+            .iter()
+            .any(|n| n.key.as_str() == b.addr("wall")),
+        "agent_writes_refused_verbs_land: the index still has the wall"
+    );
+    // the agent's verb lands
     let o = call(
         &s,
         bot,
@@ -380,16 +422,17 @@ pub fn agent_verbs_land() {
     assert_eq!(
         o.exit,
         0,
-        "agent_verbs_land: the agent's verb: {}",
+        "agent_writes_refused_verbs_land: the agent's verb lands: {}",
         res(&o).to_json()
     );
+    // a person's whole-file write is the person's
     let v = head(&s);
-    let w = s.write_bytes(bot, &b.bytes, v);
+    let w = s.write_bytes(ann, &b.bytes, v);
     assert!(
         w.is_ok(),
-        "agent_verbs_land: the agent's write lands until the kit can refuse it alone: {w:?}"
+        "agent_writes_refused_verbs_land: a person's whole-file write lands: {w:?}"
     );
-    println!("agent_verbs_land: the verb landed; the whole-file write still lands (kit gap)");
+    println!("agent_writes_refused_verbs_land: the write refused (MPC-E715), the verb landed");
 }
 
 /// The outcome of a call: `landed`, or the refusal's id.

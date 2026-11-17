@@ -79,7 +79,7 @@ fn units_of(doc: &Doc) -> Value {
 }
 
 /// The entities whose box is computed for the extents: model space's, with a box.
-fn computed_extents(doc: &Doc) -> (Option<[f64; 4]>, u64, u64) {
+pub(crate) fn computed_extents(doc: &Doc) -> (Option<[f64; 4]>, u64, u64) {
     let mut acc = crate::geom::Acc::new();
     let (mut over, mut of) = (0u64, 0u64);
     for e in &doc.entities {

@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 
 use k2_mpc_base::errors::Value;
+
+use super::fl;
 use k2_mpc_base::index::Digest;
 
 use super::curve::{self, arc_points, insert_matrix, map_box, Mat, NoPath};
@@ -32,10 +34,6 @@ impl Default for PageBudget {
             bytes: PAGE_BYTES,
         }
     }
-}
-
-fn fl(x: f64) -> Value {
-    Value::float(x).unwrap_or(Value::Null)
 }
 
 fn pt(p: [f64; 2]) -> Value {
@@ -533,6 +531,8 @@ pub fn header(
             .count(),
         doc.units.word
     );
+    let mut data = data;
+    super::snap(&mut data, super::noise_scale(doc));
     Ok(ReadOut {
         stdout,
         data,
@@ -668,6 +668,8 @@ pub fn page_with(
             }),
         ),
     ]);
+    let mut data = data;
+    super::snap(&mut data, super::noise_scale(src.doc()));
     Ok(ReadOut {
         stdout: out,
         data,

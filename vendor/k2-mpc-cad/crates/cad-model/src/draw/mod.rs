@@ -26,8 +26,74 @@ pub mod text;
 
 pub use emit::{header, page, PageBudget};
 
+use k2_mpc_base::errors::Value;
+
 use crate::error::CadError;
 use crate::model::Doc;
+
+/// The significant digits every number of the drawing-model read is written with.
+pub const FLOAT_DIGITS: usize = 9;
+
+/// A number as the drawing-model read writes it: rounded to [`FLOAT_DIGITS`] significant
+/// digits (written then as the fewest digits that read back as the rounded value), and `-0` as
+/// `0`. Part of the `draw header` and `draw page` contract: a platform's maths library may
+/// compute a value's last bits otherwise, and rounded, the bytes are the same on every platform
+/// (a value within a last bit of half a unit in the ninth digit could still round apart). The
+/// rounding is decimal formatting and parsing, no maths library.
+pub fn out_float(x: f64) -> f64 {
+    if !x.is_finite() || crate::mutant::active("DrawFloatsUnrounded") {
+        return x;
+    }
+    let r = format!("{:.*e}", FLOAT_DIGITS - 1, x)
+        .parse::<f64>()
+        .unwrap_or(x);
+    if r == 0.0 {
+        0.0
+    } else {
+        r
+    }
+}
+
+/// The drawing's scale for [`snap`]: its computed extents' larger span, or 1 when it has none.
+pub fn noise_scale(doc: &Doc) -> f64 {
+    match crate::reads::computed_extents(doc).0 {
+        Some(b) => {
+            let span = (b[2] - b[0]).max(b[3] - b[1]);
+            if span.is_finite() && span > 0.0 {
+                span
+            } else {
+                1.0
+            }
+        }
+        None => 1.0,
+    }
+}
+
+/// Every number in `v` whose magnitude is below `1e-12 × scale` written as `0`: a value that
+/// is zero but for a platform's last-bit noise (`-2.22e-16` from a rotation's cosine) is the
+/// same on every platform. Part of the `draw header` and `draw page` contract, with
+/// [`out_float`]'s rounding: each response is snapped by its drawing's [`noise_scale`].
+pub fn snap(v: &mut Value, scale: f64) {
+    if crate::mutant::active("DrawNoiseKept") {
+        return;
+    }
+    let eps = 1e-12 * scale;
+    match v {
+        Value::Float(_) => {
+            if v.as_f64().is_some_and(|x| x.abs() < eps && x != 0.0) {
+                *v = Value::float(0.0).unwrap_or(Value::Null);
+            }
+        }
+        Value::List(items) => items.iter_mut().for_each(|x| snap(x, scale)),
+        Value::Obj(kv) => kv.iter_mut().for_each(|(_, x)| snap(x, scale)),
+        _ => {}
+    }
+}
+
+/// A number of the drawing-model read as a JSON value ([`out_float`]; not finite: `null`).
+pub(crate) fn fl(x: f64) -> Value {
+    Value::float(out_float(x)).unwrap_or(Value::Null)
+}
 
 /// Entities a page holds at most.
 pub const PAGE_ENTITIES: usize = 5_000;

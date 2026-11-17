@@ -9,15 +9,13 @@
 
 use k2_mpc_base::errors::Value;
 
+use super::fl;
+
 use super::curve::arc_points;
 use super::text::plan;
 use super::{aci, Edge, HatchRaw, LoopRaw, HATCH_SEGMENTS_MAX, PATH_POINTS_MAX};
 use crate::geom;
 use crate::mutant;
-
-fn fl(x: f64) -> Value {
-    Value::float(x).unwrap_or(Value::Null)
-}
 
 fn pt(p: [f64; 2]) -> Value {
     Value::List(vec![fl(p[0]), fl(p[1])])

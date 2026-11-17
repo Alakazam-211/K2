@@ -106,6 +106,9 @@ count, (b) every unit the plan didn't name byte for byte, (c) every value it mea
 handles above the highest and `$HANDSEED` above them, (e) no pointer to what it removed, (f) the
 edit rules on what it changed. A failure is `DXF-E090`, and nothing is planned.
 
+**Agents change a drawing through these verbs only**: an agent's whole-file write is refused
+(`MPC-E715`, `AgentWrites::VerbsOnly`); a person's isn't.
+
 **The rules** are the same for a person and an agent (a hold refuses an agent only):
 
 | Id | Name | When |

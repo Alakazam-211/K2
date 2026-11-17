@@ -59,9 +59,10 @@ fn rgb(v: &Value) -> Vec<u64> {
     }
 }
 
+/// `got` is `want` as the drawing-model read writes numbers: to 9 significant digits.
 fn close(got: f64, want: f64, what: &str) {
     assert!(
-        (got - want).abs() <= 1e-9 * (1.0 + want.abs()),
+        (got - want).abs() <= 1e-8 * (1.0 + want.abs()),
         "{what}: {got}, expected {want}"
     );
 }
@@ -1003,5 +1004,131 @@ pub fn draw_order_file_without_table() {
     println!(
         "draw_order_file_without_table: {} rows, the text at {t} before the leader at {l}",
         r.len()
+    );
+}
+
+/// The significant digits of a number as JSON writes it (`-0.00123` has 3).
+fn significant(json: &str) -> usize {
+    let d: String = json.chars().filter(char::is_ascii_digit).collect();
+    d.trim_start_matches('0').trim_end_matches('0').len()
+}
+
+/// Every number with a fraction in `v`, as JSON writes it.
+fn floats(v: &Value, out: &mut Vec<String>) {
+    match v {
+        Value::Float(_) => out.push(v.to_json()),
+        Value::List(items) => items.iter().for_each(|x| floats(x, out)),
+        Value::Obj(kv) => kv.iter().for_each(|(_, x)| floats(x, out)),
+        _ => {}
+    }
+}
+
+/// draw_floats_platform_identical: a number of the drawing-model read is written rounded to 9
+/// significant digits (then the fewest that read back as that), so a value whose last bits a
+/// platform's maths library computes otherwise is written the same: the value and its
+/// neighbours one unit in the last place apart render alike; and every number of the
+/// sampler's header and pages has at most 9 significant digits. Plant: `DrawFloatsUnrounded`.
+#[test]
+pub fn draw_floats_platform_identical() {
+    use k2_mpc_cad_model::draw::out_float;
+    let json = |x: f64| Value::float(out_float(x)).unwrap().to_json();
+    let mut pinned = 0;
+    for (x, want) in [
+        (30f64.to_radians().sin(), "0.5"),
+        (0.1 + 0.2, "0.3"),
+        (2f64.sqrt() * 1000.0, "1414.21356"),
+        (-std::f64::consts::PI, "-3.14159265"),
+        (1e-7 / 3.0, "0.0000000333333333"),
+    ] {
+        for y in [
+            f64::from_bits(x.to_bits() - 1),
+            x,
+            f64::from_bits(x.to_bits() + 1),
+        ] {
+            assert_eq!(
+                json(y),
+                want,
+                "draw_floats_platform_identical: {y:?} (one unit from {x:?})"
+            );
+        }
+        pinned += 1;
+    }
+    let b = sampler();
+    let h = header(&b.bytes);
+    let mut all = Vec::new();
+    floats(&h, &mut all);
+    let mut spaces: Vec<String> = list(&h, &["layouts"])
+        .iter()
+        .map(|l| string(l, &["space"]).to_owned())
+        .collect();
+    spaces.extend(["DOOR", "NEST", "*D1"].map(|n| block_addr(&h, n)));
+    for sp in &spaces {
+        for p in pages(&b.bytes, sp) {
+            floats(&p, &mut all);
+        }
+    }
+    let long: Vec<&String> = all.iter().filter(|s| significant(s) > 9).collect();
+    assert!(
+        long.is_empty(),
+        "draw_floats_platform_identical: numbers over 9 significant digits: {:?}",
+        &long[..long.len().min(5)]
+    );
+    assert!(
+        all.len() > 100,
+        "draw_floats_platform_identical: {} numbers",
+        all.len()
+    );
+    println!(
+        "draw_floats_platform_identical: {pinned} values pinned, {} numbers of 9 digits or fewer",
+        all.len()
+    );
+}
+
+/// draw_noise_snapped_to_zero: a number of the drawing-model read whose magnitude is below
+/// 1e-12 of the drawing's scale (its computed extents' larger span) is written 0, so a value
+/// that is zero but for a platform's last-bit noise (a box edge at -2.22e-16) is the same on
+/// every platform: every number of the sampler's header and pages is 0 or above that size, and
+/// the sampler's noisy box edge renders 0. Plant: `DrawNoiseKept`.
+#[test]
+pub fn draw_noise_snapped_to_zero() {
+    let b = sampler();
+    let h = header(&b.bytes);
+    let c: Vec<f64> = list(&h, &["extents", "computed"])
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect();
+    let eps = 1e-12 * (c[2] - c[0]).max(c[3] - c[1]);
+    let mut all = Vec::new();
+    floats(&h, &mut all);
+    let mut spaces: Vec<String> = list(&h, &["layouts"])
+        .iter()
+        .map(|l| string(l, &["space"]).to_owned())
+        .collect();
+    spaces.extend(["DOOR", "NEST", "*D1"].map(|n| block_addr(&h, n)));
+    for sp in &spaces {
+        for p in pages(&b.bytes, sp) {
+            floats(&p, &mut all);
+        }
+    }
+    let noise: Vec<&String> = all
+        .iter()
+        .filter(|s| {
+            let x: f64 = s.parse().unwrap_or(1.0);
+            x != 0.0 && x.abs() < eps
+        })
+        .collect();
+    assert!(
+        noise.is_empty(),
+        "draw_noise_snapped_to_zero: numbers below {eps:e} not written 0: {:?}",
+        &noise[..noise.len().min(5)]
+    );
+    assert!(
+        all.len() > 100,
+        "draw_noise_snapped_to_zero: {} numbers",
+        all.len()
+    );
+    println!(
+        "draw_noise_snapped_to_zero: {} numbers, none below {eps:e} but 0",
+        all.len()
     );
 }

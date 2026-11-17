@@ -302,17 +302,16 @@ viewer above).
 | **License** | **MIT** (Copyright (c) 2017-2024 Vasco Asturiano; Brian Hough and Maximilian Stoiber; Sebastian McKenzie and other contributors; Tween.js authors; Andrei Kashcha for ngraph.merge) and **BSD-3-Clause** for ngraph.forcelayout, ngraph.graph, ngraph.events and ngraph.random (Copyright (c) Andrei Kashcha) — full texts in `src/renderer/components/Wiki/THIRD_PARTY_NOTICES.txt` |
 | **K2 code** | Is **MIT**. These packages do **not** relicense the product. |
 
-## Multiplayer kit: k2-mpc-base v0.21.0 (vendored)
+## Multiplayer kit: k2-mpc-base v0.22.0 (vendored)
 
 Live docs (Markdown, plain text and any file) run on Alakazam Labs' multiplayer kit,
 vendored with `git subtree`.
 
 | | |
 |--|--|
-| **What** | `vendor/k2-mpc-base` (sessions, presence, store, disk sync, history, blame, erasure, text tools, parity, the export contract, the structure index, comments and claims by node), with its own `NOTICE.md` and `CHANGELOG.md`; and its JS client `k2-mpc-client` 0.21.0 (`vendor/k2-mpc-base/client/src`: the library under the app's Live editor, `src/renderer/components/LiveEditor`) |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-base`, tag `v0.21.0` (`9e6f641`; crate version `0.21.0`, client `0.21.0`) |
+| **What** | `vendor/k2-mpc-base` (sessions, presence, store, disk sync, history, blame, erasure, text tools, parity, the export contract, the structure index, comments and claims by node), with its own `NOTICE.md` and `CHANGELOG.md`; and its JS client `k2-mpc-client` 0.22.0 (`vendor/k2-mpc-base/client/src`: the library under the app's Live editor, `src/renderer/components/LiveEditor`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-base`, `v0.22.0`, its cut `e085cad` (crate version `0.22.0`, client `0.22.0`); the Windows fixes K2 carried on `v0.21.0` are in it |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
-| **Local changes** | Windows fixes on top of `v0.21.0`, all upstream on the kit's main for its next tag: random keys come from RtlGenRandom on Windows, which has no `/dev/urandom` (`8cff1ff8b9`); a folder's fsync is unix-only (`0fa01fc14d`); a chunked blob's segment folder and a compacted segment sync through `sync_dir` too (`03d3be3c01`) |
 
 Its Rust dependencies, in K2's `Cargo.lock`:
 
@@ -322,6 +321,7 @@ Its Rust dependencies, in K2's `Cargo.lock`:
 | [regex-automata](https://github.com/rust-lang/regex) | 0.4 | MIT OR Apache-2.0 | Linear-time regexes for the text tools (`grep`, `sed`); already in the tree |
 | [redb](https://github.com/cberner/redb) | 2 | MIT OR Apache-2.0 | The docs store (`~/.k2/docs.redb`); the copy k2-core already links |
 | thiserror | 2 | MIT OR Apache-2.0 | Error types |
+| [libc](https://github.com/rust-lang/libc) | 0.2 | MIT OR Apache-2.0 | Linux (glibc) only: returning freed pages to the OS after a cut; already in the tree |
 | dashmap (via yrs) | 6.2.1 | MIT | |
 | smallstr (via yrs) | 0.3.1 | MIT OR Apache-2.0 | |
 
@@ -333,7 +333,7 @@ dependencies either: it is a library with no DOM. The Live editor is K2's own co
 the app's own `@codemirror/*` packages (`view`, `state`, `commands`, `language`,
 `lang-markdown`; MIT).
 
-## Multiplayer kit: k2-mpc-markdown v0.7.25 (vendored)
+## Multiplayer kit: k2-mpc-markdown v0.7.26 (vendored)
 
 The Markdown type pack for the kit (schema, file codec, its own verbs such as
 `replace-section`, the parity list), vendored beside it.
@@ -341,11 +341,11 @@ The Markdown type pack for the kit (schema, file codec, its own verbs such as
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-markdown` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-markdown`, tag `v0.7.25` (`ec6f695`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-markdown`, tag `v0.7.26` (`a7b8d39`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | k2-mpc-base only (above): yrs (MIT), regex-automata, redb and thiserror (MIT OR Apache-2.0), and `unicode-ident` (build time only, Unicode-3.0) |
 
-## Multiplayer kit: k2-mpc-text v0.2.27 (vendored)
+## Multiplayer kit: k2-mpc-text v0.2.28 (vendored)
 
 The plain-text type pack for the kit (code, config, markup, diagram sources,
 `.txt`, and `.csv`/`.tsv` as text: a per-extension file-type table, a
@@ -354,11 +354,11 @@ byte-exact codec, the text tier's parity list), vendored beside it.
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-text` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-text`, tag `v0.2.27` (`0f9ffef`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-text`, tag `v0.2.28` (`8c67bcc`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | k2-mpc-base (above) and serde_json (MIT OR Apache-2.0; strict JSON for the merges of JSON types, already in K2's tree); its tests use proptest (MIT OR Apache-2.0) |
 
-## Multiplayer kit: k2-mpc-board v0.1.15 (vendored)
+## Multiplayer kit: k2-mpc-board v0.1.16 (vendored)
 
 The `.k5board` file format and its pack (a strict zip reader and writer,
 canonical JSON, typed refusals, edits with per-object revisions, the agent
@@ -368,12 +368,12 @@ beside the kit.
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-board`, with its own `NOTICE.md`, `THIRD-PARTY-NOTICES.md` and `CHANGELOG.md`. Its `fuzz/` workspace isn't built by K2 |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-board`, tag `v0.1.15` (`63eacf3`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-board`, tag `v0.1.16` (`131064b`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Credit** | Parts of this crate come from Board, Copyright (c) 2026 Baden Ballard, MIT: the schema tables, the templates, the verbs' rules, the parity list, and the shapes the widget conversion pairs describe. See `THIRD-PARTY-NOTICES.md` for which files, and the licence. |
 | **Dependencies** | miniz_oxide (MIT OR Zlib OR Apache-2.0), sha2 (MIT OR Apache-2.0); its `bridge/` adds the kit (k2-mpc-base, above) |
 
-## Multiplayer kit: k2-mpc-psd v0.1.10 (vendored)
+## Multiplayer kit: k2-mpc-psd v0.1.11 (vendored)
 
 The kit's pack that reads PSD and PSB files: each version is read into the
 kit's structure index (a tree of layers), streaming, never holding pixels; it
@@ -383,7 +383,7 @@ never writes a file. Vendored beside the kit from its public cut, which has no
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-psd` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-psd`, tag `v0.1.10` (the cut `437fa5b`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-psd`, tag `v0.1.11` (the cut `bb0c9f8`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Credit** | Its file reader is a copy of the PSD crate of PhotoCraft 0.9.0 (Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors, MIT OR Apache-2.0), with the changes listed in `vendor/k2-mpc-psd/vendor/photocraft-psd/VENDORED.md` (since v0.1.2 also one change from upstream commit `a7301f1d`: the `UnFl` count's reservation cap); its licence texts and `NOTICE` are beside it |
 | **Dependencies** | flate2 (MIT OR Apache-2.0, with miniz_oxide: MIT OR Zlib OR Apache-2.0), thiserror (MIT OR Apache-2.0), and the kit (above) |
@@ -402,7 +402,7 @@ checkers.
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | roxmltree 0.21 (MIT OR Apache-2.0), flate2 (MIT OR Apache-2.0, with miniz_oxide: MIT OR Zlib OR Apache-2.0), crc32fast (MIT OR Apache-2.0) |
 
-## Multiplayer kit: k2-mpc-pptx v0.1.8 (vendored)
+## Multiplayer kit: k2-mpc-pptx v0.1.9 (vendored)
 
 The kit's pack for `.pptx` decks: a deck as a live keyed doc (slides and shapes by their own
 ids), agent verbs, and the file written back by splicing only what changed into its own
@@ -412,12 +412,12 @@ the kit from its public cut, which has no `fuzz/`.
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-pptx` (depends on `../k2-mpc-base/crates/base` and `../k2-mpc-ooxml/crates/opc`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-pptx`, tag `v0.1.8` (the cut `1e85b83`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-pptx`, tag `v0.1.9` (the cut `24ce666`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | the kit and k2-mpc-opc (above), and roxmltree 0.21 (MIT OR Apache-2.0) |
 | **Formats** | docx, pptx and xlsx are file formats specified by ECMA-376 and ISO/IEC 29500. The pack is not affiliated with, endorsed by or sponsored by the formats' original vendor |
 
-## Multiplayer kit: k2-mpc-timeline v0.1.0 (vendored)
+## Multiplayer kit: k2-mpc-timeline v0.1.1 (vendored)
 
 The kit's pack for video timelines: OTIO, FCPXML and PRPROJ files are read into the kit's
 structure index, and an OTIO file can also be a live keyed doc written back to its own bytes.
@@ -427,12 +427,12 @@ into the daemon and the export worker, behind the Timeline core (off by default)
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-timeline` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-timeline`, tag `v0.1.0` (`c0c0efe`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-timeline`, tag `v0.1.1` (`210409f`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project |
 | **Dependencies** | the kit (above), thiserror 2, roxmltree 0.21 (with memchr: Unlicense OR MIT) and flate2 1 (MIT OR Apache-2.0) |
 | **Formats** | OTIO is the file format of OpenTimelineIO, a project of the Academy Software Foundation. FCPXML and PRPROJ are the file formats of other companies' video editing products. This project is not affiliated with, endorsed by or sponsored by any of them; their names and marks belong to their owners and are used here only to name the file formats |
 
-## Multiplayer kit: k2-mpc-fab v0.1.0 (vendored)
+## Multiplayer kit: k2-mpc-fab v0.1.1 (vendored)
 
 The kit's pack for circuit board fabrication files: photoplot and drill files are read into the
 kit's structure index (read only; no writer). Vendored whole beside the kit (its `fuzz/` crate is
@@ -442,12 +442,12 @@ PCB fabrication core (off by default).
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-fab` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-fab`, tag `v0.1.0` (`1bc238a`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-fab`, tag `v0.1.1` (`c46efb4`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project, and no text, tables or figures from the specifications it reads: it cites their section numbers only (the *Gerber Layer Format Specification*, revision 2026.05, and the *XNC Format Specification*, revision 2021.11) |
 | **Dependencies** | the kit only (above) |
 | **Formats** | Gerber Format is a registered trademark of Ucamco NV; the photoplot reader reads files in that format and is not affiliated with, endorsed by or sponsored by Ucamco. XNC is Ucamco's subset of the IPC-NC-349 drill format; Excellon is a trademark of its owner. These names are used here only to name the file formats |
 
-## Multiplayer kit: k2-mpc-blend v0.1.0 (vendored)
+## Multiplayer kit: k2-mpc-blend v0.3.0 (vendored)
 
 The kit's pack for BLEND files (3D scenes): a file is read into the kit's structure index, its
 meshes and cameras can be read for previews, and a file can also be a live keyed doc (objects'
@@ -458,27 +458,29 @@ worker, behind the 3D scene core (off by default).
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-blend` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md`, `PROVENANCE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-blend`, tag `v0.1.0` (`521bb8b`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-blend`, tag `v0.3.0` (`c330b76`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project; `PROVENANCE.md` says what it was written from |
 | **Dependencies** | the kit (above), thiserror 2 and flate2 1 (MIT OR Apache-2.0), and ruzstd 0.9 (MIT, with twox-hash 2: MIT; files saved zstd-compressed, in pure Rust) |
 | **Formats** | BLEND is the file format of Blender, a project of the Blender Foundation. "Blender" is a trademark of its owner, named here only to say whose file format this is. This project is not affiliated with, endorsed by or sponsored by it |
 
-## Multiplayer kit: k2-mpc-cad v0.1.0 (vendored)
+## Multiplayer kit: k2-mpc-cad v0.2.0 (vendored)
 
 The kit's packs for 2D drawings: a format-neutral drawing model (`k2-mpc-cad-model`), the ASCII
-DXF reader (`k2-mpc-dxf`, every version from R12 to 2018, into the kit's structure index) and the
-DWG reader (`k2-mpc-dwg`, the 2004 to 2018 family, read-only), and the drawing-model read a
-viewer draws from. Vendored whole beside the kit (its `fuzz/` crate and `cad-measure` are test
-tooling K2 doesn't build). K2 builds it into the daemon and the export worker, behind the CAD
-core (off by default), and reads drawings only: K2 saves no drawing edits yet.
+DXF reader (`k2-mpc-dxf`, every version from R12 to 2018, into the kit's structure index, with its
+edit verbs: attribute values, an entity's layer, colour or linetype, move, add, delete), the DWG
+reader (`k2-mpc-dwg`, the 2004 to 2018 family, read-only), and the drawing-model read a viewer
+draws from. Vendored whole beside the kit (its `fuzz/` crate, `cad-measure` and the
+`scripts/referee` checkers are test tooling K2 doesn't build or run). K2 builds it into the daemon
+and the export worker, behind the CAD core (off by default): people and agents change a `.dxf`
+through its edit verbs; nobody saves a drawing whole through K2, and a `.dwg` is read only.
 
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-cad` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md`, `PROVENANCE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-cad`, tag `v0.1.0` (`e551975`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-cad`, tag `v0.2.0` (`a315ef4`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project, and one table of data taken from one (below); `PROVENANCE.md` says what each part was written from. Its tables are written in its own words from the DXF reference and the Open Design Specification for .dwg files, read as sources of facts; no text or tables are copied from them |
 | **Dependencies** | the kit only (above) |
-| **Formats** | DXF and DWG are trademarks of their owner. These readers read files in those formats; they are not affiliated with, endorsed by or sponsored by that owner, and make no compatibility claim. The names are used here only to name the file formats |
+| **Formats** | DXF and DWG are trademarks of their owner. This pack reads files in the DXF and DWG formats and edits DXF files through its edit verbs; it writes no DWG. It is not affiliated with, endorsed by or sponsored by that owner, and makes no compatibility claim. The names are used here only to name the file formats |
 
 **The colour-number palette.** The 256 RGB values of
 `vendor/k2-mpc-cad/crates/cad-model/src/draw/aci.rs` (`TABLE`) are taken, as data, from ezdxf's
@@ -520,7 +522,7 @@ daemon, behind the CAD core (off by default).
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-av` (depends on `../k2-mpc-cad` and `../k2-mpc-base`), with its own `NOTICE.md`, `PROVENANCE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-av`, tag `v0.1.0` (`5caa5c6`, beside k2-mpc-cad v0.1.0) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-av`, tag `v0.1.0` (`5caa5c6`, paired with k2-mpc-cad v0.1.0; K2 builds it beside v0.2.0) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project; `PROVENANCE.md` says what each part was written from |
 | **Dependencies** | the kit and the CAD pack (above) |
 | **Formats** | DXF and DWG are trademarks of their owner; they are named here only to name the file formats |

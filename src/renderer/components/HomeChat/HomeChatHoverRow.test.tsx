@@ -10,7 +10,10 @@
 //      out of the flow, so showing them never moves the message column.
 //   4. Motion: it fades and rises a few px in on the fast motion token, and
 //      out a little faster; none under reduced motion.
-//   5. A jumped-to message gets a wash, not a flash.
+//   5. Keyboard: Tab reaches a message, which shows its row; Tab goes on
+//      to React, Reply, More (arrows move along them too); Esc goes back
+//      to the message; the ring is the shared k2-focus one.
+//   6. A jumped-to message gets a wash, not a flash.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -296,6 +299,81 @@ describe('the hover row moves on the motion tokens', () => {
     })
     expect(barOf(message).style.transition).toBe('none')
     expect(barOf(message).style.transform).toBe('none')
+  })
+})
+
+describe('the hover row by keyboard', () => {
+  it('a message takes focus (the shared ring) and focus shows its row', () => {
+    mockRects()
+    const { container } = render(row())
+    const message = container.querySelector('[data-home-chat-message]') as HTMLElement
+    expect(message.tabIndex).toBe(0)
+    expect(message.getAttribute('role')).toBe('article')
+    expect(message.getAttribute('aria-label')).toBe('Message from Ana')
+    expect(message.className).toMatch(/(^| )k2-focus( |$)/)
+    act(() => message.focus())
+    expect(isShown(message)).toBe(true)
+    // Focus leaving the message hides it.
+    const out = document.createElement('button')
+    document.body.append(out)
+    act(() => out.focus())
+    expect(isShown(message)).toBe(false)
+    out.remove()
+  })
+
+  it("a click's focus doesn't pin the row once the pointer has gone", () => {
+    mockRects()
+    const { container } = render(row())
+    const message = container.querySelector('[data-home-chat-message]') as HTMLElement
+    // Long before any other test's clock, so this press can't touch theirs.
+    vi.spyOn(performance, 'now').mockReturnValue(-1e9)
+    act(() => {
+      fireEvent.pointerDown(message, { pointerType: 'mouse' })
+      message.focus()
+    })
+    expect(isShown(message)).toBe(false)
+  })
+
+  it('Tab order: the message, then React, Reply, More, then what is in the bubble and the chips', () => {
+    mockRects()
+    const reacted = { ...msg, reactions: [{ emoji: '👍', count: 1, me: false }] }
+    const { container } = render(row({ m: reacted }))
+    const message = container.querySelector('[data-home-chat-message]') as HTMLElement
+    const tabbable = Array.from(message.querySelectorAll<HTMLElement>('button, [tabindex]')).filter((el) => el.tabIndex >= 0)
+    expect(tabbable.map((el) => el.getAttribute('aria-label') ?? el.getAttribute('data-testid'))).toEqual(['React', 'Reply', 'More', '👍 1'])
+    const bubble = message.querySelector('[data-zen-bubble]') as HTMLElement
+    expect(screen.getByTestId('home-chat-more').compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('arrows move along the row; Esc goes back to the message, which keeps its row', () => {
+    mockRects()
+    const { container } = render(row())
+    const message = container.querySelector('[data-home-chat-message]') as HTMLElement
+    act(() => message.focus())
+    const react = screen.getByTestId('home-chat-react')
+    act(() => react.focus())
+    fireEvent.keyDown(react, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(screen.getByTestId('home-chat-reply'))
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'End' })
+    expect(document.activeElement).toBe(screen.getByTestId('home-chat-more'))
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(react)
+    const outer = vi.fn()
+    document.addEventListener('keydown', outer)
+    act(() => {
+      fireEvent.keyDown(react, { key: 'Escape' })
+    })
+    document.removeEventListener('keydown', outer)
+    expect(document.activeElement).toBe(message)
+    expect(outer).not.toHaveBeenCalled()
+    expect(isShown(message)).toBe(true)
+  })
+
+  it('a deleted message has no row and is not a stop', () => {
+    const { container } = render(row({ m: { ...msg, deleted: true, body: '' } }))
+    const message = container.querySelector('[data-home-chat-message]') as HTMLElement
+    expect(message.hasAttribute('tabindex')).toBe(false)
+    expect(message.querySelector('[data-home-chat-actions]')).toBeNull()
   })
 })
 

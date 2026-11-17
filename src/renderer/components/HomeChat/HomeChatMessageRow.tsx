@@ -13,8 +13,14 @@
 // or long, and doesn't move when chips or a quote change the bubble's
 // height. Where the column's edge leaves no room outward it flips inward,
 // over the top edge inside the corner (`actionBarPlace`). It shows on hover
-// and while focus is inside the message, in the look's button style (the
-// Thread's chamfered control in Terminal, a pill in Glass).
+// and while keyboard focus is inside the message (`useHoverReveal`), in the
+// look's button style (the Thread's chamfered control in Terminal, a pill in
+// Glass).
+//
+// By keyboard: a message is a Tab stop (the shared k2-focus ring); focus on
+// it shows its row, and Tab goes on to React, Reply, More before the
+// bubble's own links and the chips. Arrows move along the row; Esc goes
+// back to the message.
 //
 // A message just jumped to gets a soft accent wash that fades over
 // JUMP_WASH_MS (none of it moves under reduced motion: the wash just goes).
@@ -22,7 +28,7 @@
 // The row's own element carries `data-zen-message` so the render window
 // (`useRenderWindow`) counts and measures it like a Thread row.
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type JSX, type KeyboardEvent } from 'react'
 import { EllipsisIcon, SmilePlusIcon } from 'lucide-react'
 import { ThreadChatBubble } from '@/components/Thread/ThreadChat'
 import { ReplyGlyph, ThreadReplyQuote, useThreadMessageGestures } from '@/components/Thread/ThreadMessageMenu'
@@ -149,6 +155,15 @@ const DELETED_STYLE = {
   padding: '4px 8px',
 } as const
 
+/** Where a key moves focus along the bar's `n` buttons from `at`. */
+function barKeyTarget(key: string, at: number, n: number): number | null {
+  if (key === 'ArrowRight') return (at + 1) % n
+  if (key === 'ArrowLeft') return (at - 1 + n) % n
+  if (key === 'Home') return 0
+  if (key === 'End') return n - 1
+  return null
+}
+
 function quoteText(p: ReplyPreview): { from: string; line: string } {
   if (p.state === 'loaded') return { from: p.author, line: p.line || '(no text)' }
   if (p.state === 'deleted') return { from: 'Reply', line: 'Original message deleted' }
@@ -272,6 +287,22 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
     return () => anim.cancel()
   }, [flash])
 
+  // Along the row: arrows (wrapping), Home and End; Esc back to the message.
+  const onBarKey = (e: KeyboardEvent<HTMLDivElement>): void => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      ref.current?.focus({ preventScroll: true })
+      return
+    }
+    const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('button'))
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement)
+    const to = barKeyTarget(e.key, at, buttons.length)
+    if (to === null || at < 0) return
+    e.preventDefault()
+    buttons[to].focus()
+  }
+
   const side = mine ? 'right' : 'left'
   const barPos: CSSProperties = place ? { top: place.top, [side]: place.inset } : { top: BAR_OVER_Y - BAR_SIZE_FALLBACK.height, [side]: 0 }
 
@@ -282,7 +313,10 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
       data-home-chat-message=""
       data-mine={mine ? '' : undefined}
       data-flash={flash ? '' : undefined}
-      className="relative flex flex-col rounded-[calc(var(--radius-box)/2)]"
+      role={m.deleted ? undefined : 'article'}
+      aria-label={m.deleted ? undefined : mine ? 'Your message' : `Message from ${author}`}
+      tabIndex={m.deleted ? undefined : 0}
+      className="k2-focus relative flex flex-col rounded-[calc(var(--radius-box)/2)]"
       style={{ alignItems: mine ? 'flex-end' : 'flex-start', minWidth: 0 }}
       {...reveal}
       {...(m.deleted ? {} : gestures)}
@@ -298,26 +332,6 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
           }}
         />
       )}
-      {m.deleted ? (
-        <span data-home-chat-deleted="" role="note" style={DELETED_STYLE}>
-          Message deleted
-        </span>
-      ) : (
-        <ThreadChatBubble
-          id={m.id}
-          seq={m.seq}
-          author={author}
-          mine={mine}
-          body={m.body}
-          createdAt={m.createdAt}
-          timeLabel={timeLabel}
-          still={still}
-          runStart={runStart}
-          tail={tail}
-          quote={quote}
-        />
-      )}
-      <HomeChatReactionChips reactions={m.reactions} mine={mine} onToggle={toggle} whoFor={who} disabled={readOnly} />
       {!m.deleted && (
         // The outer box places it (the Thread's chamfer rule makes a cut box
         // position: relative, so the cut is on the inner toolbar).
@@ -333,6 +347,7 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
             role="toolbar"
             aria-label="Message actions"
             data-chamfer=""
+            onKeyDown={onBarKey}
             className="flex rounded-[var(--radius-pill)] [html[data-style=glass]_&]:[box-shadow:var(--shadow-2)]"
             style={BAR_STYLE}
           >
@@ -380,6 +395,26 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
           </div>
         </div>
       )}
+      {m.deleted ? (
+        <span data-home-chat-deleted="" role="note" style={DELETED_STYLE}>
+          Message deleted
+        </span>
+      ) : (
+        <ThreadChatBubble
+          id={m.id}
+          seq={m.seq}
+          author={author}
+          mine={mine}
+          body={m.body}
+          createdAt={m.createdAt}
+          timeLabel={timeLabel}
+          still={still}
+          runStart={runStart}
+          tail={tail}
+          quote={quote}
+        />
+      )}
+      <HomeChatReactionChips reactions={m.reactions} mine={mine} onToggle={toggle} whoFor={who} disabled={readOnly} />
       {picker && (
         <HomeChatReactionPicker anchor={reactRef.current ?? ref.current} align={mine ? 'end' : 'start'} onPick={toggle} onClose={() => setPicker(false)} />
       )}

@@ -21,15 +21,23 @@ export const HOVER_ROW_HIDE_MS = 160
  *  pointer enters another one. */
 let hoverOwner: (() => void) | null = null
 
-/** Keyboard focus (`:focus-visible`), not a click's: a click on a message
- *  shouldn't pin its row once the pointer has gone. */
-function keyboardFocus(el: EventTarget | null): boolean {
-  if (!(el instanceof Element)) return false
-  try {
-    return el.matches(':focus-visible')
-  } catch {
-    return true
-  }
+/** A focus this soon after a press is the press's (ms). */
+const PRESS_FOCUS_MS = 600
+let lastPress = -Infinity
+let pressWatch = false
+function watchPresses(): void {
+  if (pressWatch || typeof document === 'undefined') return
+  pressWatch = true
+  document.addEventListener('pointerdown', () => (lastPress = performance.now()), true)
+}
+
+/** Focus from the keyboard (Tab, or Esc back from the picker), not from a
+ *  click or a click's pick: a click on a message shouldn't pin its row once
+ *  the pointer has gone. Read from the last press rather than
+ *  `:focus-visible`, which engines decide differently for focus moved by
+ *  script. */
+function keyboardFocus(): boolean {
+  return performance.now() - lastPress > PRESS_FOCUS_MS
 }
 
 export interface HoverReveal<P> {
@@ -67,6 +75,7 @@ export function useHoverReveal<P>(measure: () => P | null, hold: boolean, enable
     },
     [hideNow],
   )
+  useEffect(watchPresses, [])
   // Opened some other way (the right-click menu's React…): place it first.
   const placed = place !== null
   const remeasure = useCallback(() => {
@@ -95,8 +104,8 @@ export function useHoverReveal<P>(measure: () => P | null, hold: boolean, enable
       clear()
       timer.current = setTimeout(hideNow, HOVER_ROW_HIDE_MS)
     },
-    onFocus: (e) => {
-      if (!enabled || focus || !keyboardFocus(e.target)) return
+    onFocus: () => {
+      if (!enabled || focus || !keyboardFocus()) return
       if (!showing) remeasure()
       setFocus(true)
     },

@@ -12,7 +12,7 @@ const PACK = [
   'DXF-E001', 'DXF-E002', 'DXF-E003',
   'DXF-E010', 'CAD-E010', 'DXF-E011', 'CAD-E011', 'DXF-E020', 'DXF-E021', 'DXF-E022', 'DXF-E027',
   'DXF-E040', 'DXF-E041', 'DXF-E042', 'DXF-E043', 'DXF-E044', 'DXF-E045', 'DXF-E046', 'DXF-E047',
-  'DXF-E048', 'DXF-E049', 'DXF-E050', 'DXF-E053', 'DXF-E054', 'DXF-E090', 'CAD-E004',
+  'DXF-E048', 'DXF-E049', 'DXF-E050', 'DXF-E051', 'DXF-E053', 'DXF-E054', 'DXF-E090', 'CAD-E004',
 ]
 const KIT = [
   'MPC-E110', 'MPC-E122', 'MPC-E301', 'MPC-E701', 'MPC-E713', 'MPC-E719', 'MPC-E723', 'MPC-E724',
@@ -79,6 +79,22 @@ describe('refusalWords', () => {
     expect(v('longer than 255 bytes')).toMatch(/255/)
     expect(v('a \\U+ sequence, which the format reads as an escape')).toMatch(/\\U\+/)
     expect(v("a character this file's code page can't name")).toMatch(/character/)
+  })
+
+  it('block insert: each refusal says why the block can’t be placed', () => {
+    const i = (id: string, m = '') => say(id, m, {}, 'insert')
+    expect(i('DXF-E051', 'block DOOR2 is missing').words).toBe('Not inserted. That block isn’t in the drawing anymore. The drawing has been refreshed.')
+    expect(i('DXF-E051', 'block DOOR2 is missing').refresh).toBe(true)
+    expect(i('DXF-E051', 'block SITE is an external reference').words).toBe('Not inserted. That block is a linked drawing. Insert it in your CAD app.')
+    expect(i('DXF-E051', 'block *Paper_Space is a layout').words).toBe('Not inserted. That’s a layout’s own block, not one you can place.')
+    expect(i('DXF-E051', 'block *U4 is anonymous').words).toBe('Not inserted. That block is one your CAD app made for itself, so it can’t be placed.')
+    expect(i('DXF-E051', 'block TAG is annotative').words).toBe('Not inserted. That block is annotative, which K2 can’t place yet. Insert it in your CAD app.')
+    expect(i('DXF-E051', 'something else').words).toBe('Not inserted. That block can’t be placed here.')
+    expect(i('DXF-E043').words).toBe('Not inserted. That block holds an object made by another app. Insert it in that app.')
+    expect(i('DXF-E044').words).toBe('Not inserted. That’s a dynamic block. Insert it in your CAD app, where its settings work.')
+    expect(i('DXF-E047')).toMatchObject({ words: 'Not inserted. One of those labels can’t be filled in: the block sets it itself, or no longer has it. The drawing has been refreshed.', refresh: true })
+    // Other verbs keep their own words for these.
+    expect(say('DXF-E044').words).toBe(`Not moved. ${WHY_WORDS.dynamic}`)
   })
 
   it('text set: in a text’s words, and anything but single-line text says so', () => {

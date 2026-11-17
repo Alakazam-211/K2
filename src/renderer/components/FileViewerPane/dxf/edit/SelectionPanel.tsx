@@ -47,7 +47,9 @@ const textOf = (r: ModelRow): string => {
   return ''
 }
 
-const LABEL = 'type-hint text-[var(--color-text-secondary)]'
+export const LABEL = 'type-hint text-[var(--color-text-secondary)]'
+/** The side panel beside the drawing. */
+export const PANEL = 'flex w-[248px] shrink-0 flex-col overflow-y-auto border-l border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2'
 
 const ordinal = (n: number): string => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`
 
@@ -196,7 +198,7 @@ export function SelectionPanel({ edit, header, slots }: { edit: CadEdit; header:
     <aside
       aria-label="Selection"
       data-testid="dxf-edit-panel"
-      className="flex w-[248px] shrink-0 flex-col overflow-y-auto border-l border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2"
+      className={PANEL}
     >
       <div className="flex items-center gap-2">
         <h3 className="type-row m-0 flex-1 font-semibold text-[var(--color-text-primary)]" data-testid="dxf-edit-count">

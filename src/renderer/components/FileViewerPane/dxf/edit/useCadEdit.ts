@@ -1,6 +1,8 @@
 // The viewer's edit state: what is selected, whether the drawing can be
-// changed here (and why not), agents' holds, and the two edits (a move and
-// an attribute's value). Every edit runs against the version on screen; one
+// changed here (and why not), agents' holds, and the edits: move, rotate
+// and scale the selection, an attribute's value, a single-line text's
+// value, and a block placed anew (selected once the drawing shows it).
+// Every edit runs against the version on screen; one
 // that lands shows at once in the change highlight as yours, and the drawing
 // is read again; further edits wait until that version is on screen, so
 // your own last change never reads as someone else's. Before an edit that
@@ -15,6 +17,7 @@ import { attribArgv, moveArgv, rotateArgv, runEdit, scaleArgv, textSetArgv } fro
 import type { EditSource, Hold } from './edit-source'
 import { refusalWords, viewOnlyWhy, type EditVerb } from './edit-words'
 import { holdPrompt, holdsOn } from './holds'
+import { insertArgv, insertedAddress } from './blocks'
 import { ownChange } from './own-change'
 import { editReason, pickable } from './selection'
 import { centreOf, normDeg, selectionBox } from './transform'
@@ -58,6 +61,8 @@ export type CadEdit = {
   relabel: (insert: string, tag: string, value: string, nth: number | null) => Promise<boolean>
   /** Set a single-line text's value. */
   setText: (text: string, value: string) => Promise<boolean>
+  /** Place a block (its handle) with its base point at `at`, with these labels; the new reference is selected when it shows. */
+  insert: (block: string, at: XY, labels: readonly (readonly [string, string])[]) => Promise<boolean>
 }
 
 export function useCadEdit(p: {
@@ -76,6 +81,8 @@ export function useCadEdit(p: {
   const [prompt, setPrompt] = useState<EditPrompt | null>(null)
   const [off, setOff] = useState<string | null>(null)
   const [pending, setPending] = useState<number | null>(null)
+  /** A block just placed: selected once the drawing shows it. */
+  const want = useRef<string | null>(null)
   const cb = useRef(p)
   cb.current = p
 
@@ -108,10 +115,17 @@ export function useCadEdit(p: {
     setMessage(null)
     setOff(null)
     setPending(null)
+    want.current = null
   }, [filePath])
 
-  // What's still in the drawing stays selected when it's read again.
+  // What's still in the drawing stays selected when it's read again; a block just placed is selected once it's there.
   useEffect(() => {
+    const placed = want.current
+    if (placed && byHandle.get(placed)?.visible === true) {
+      want.current = null
+      setSelection([placed])
+      return
+    }
     setSelection((sel) => {
       const keep = sel.filter((h) => byHandle.get(h)?.visible === true)
       return keep.length === sel.length ? sel : keep
@@ -171,7 +185,7 @@ export function useCadEdit(p: {
   )
 
   const run = useCallback(
-    async (argv: string[], handles: readonly string[], verb: EditVerb): Promise<boolean> => {
+    async (argv: string[], handles: readonly string[], verb: EditVerb, landed?: (data: unknown) => void): Promise<boolean> => {
       if (!editable || !source || !filePath || !drawing || busy) return false
       setMessage(null)
       if (!(await overHolds(handles, verb))) return false
@@ -182,6 +196,7 @@ export function useCadEdit(p: {
         if (out.kind === 'done') {
           const c = ownChange(out.result)
           if (c) cb.current.showOwn(c, out.result.afterDigest)
+          landed?.(out.result.data)
           setPending(out.result.after)
           cb.current.reload()
           return true
@@ -226,7 +241,15 @@ export function useCadEdit(p: {
 
   const setText = useCallback((text: string, value: string) => run(textSetArgv(text, value), [text], 'text'), [run])
 
+  const insert = useCallback(
+    (block: string, at: XY, labels: readonly (readonly [string, string])[]) =>
+      run(insertArgv(block, at, unit, labels), [], 'insert', (data) => {
+        want.current = insertedAddress(data)
+      }),
+    [run, unit],
+  )
+
   const goViewOnly = useCallback((words: string) => setOff(words), [])
 
-  return { rows, byHandle, selection, select, canEdit, editable, viewOnly, unit, holds, canMove, busy, message, prompt, goViewOnly, frame, centre, move, rotate, scale, relabel, setText }
+  return { rows, byHandle, selection, select, canEdit, editable, viewOnly, unit, holds, canMove, busy, message, prompt, goViewOnly, frame, centre, move, rotate, scale, relabel, setText, insert }
 }

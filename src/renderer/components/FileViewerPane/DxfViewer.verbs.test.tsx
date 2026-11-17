@@ -9,6 +9,9 @@
 //     handles (a ghost scales the same both ways; Shift: 0.25 steps);
 //   - Text: a single-line text's value set in the panel with a label's
 //     checks; multi-line text read only;
+//   - Insert block: the toolbar's action or the panel's with nothing
+//     selected, a picker, a ghost that follows the pointer, a click, the
+//     labels form, Insert; the new block is selected; refusals in words;
 //   - each runs a dry run, then the commit with --expect, and shows as yours
 //     with Undo; a refusal says why and the ghost goes back;
 //   - a kind the verbs can't change has none of these.
@@ -56,7 +59,7 @@ afterEach(() => {
   cleanup()
 })
 
-async function open(opts: { locked?: string[]; header?: ModelHeader } = {}): Promise<void> {
+async function open(opts: { locked?: string[]; header?: ModelHeader; proxyBlocks?: string[] } = {}): Promise<void> {
   world = fakeCadWorld({ header: opts.header ?? HEADER, pages: PAGES }, opts)
   renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={world.model} edits={world.edits} changes={world.changes} view="@h:51" />)
   await screen.findByTestId('dxf-shapes')
@@ -250,5 +253,118 @@ describe('text', () => {
     click('@h:60')
     expect(screen.getByTestId('dxf-edit-text').textContent).toContain('Multi-line text: later.')
     expect(screen.queryByTestId('dxf-text-input')).toBeNull()
+  })
+})
+
+describe('inserting a block', () => {
+  /** The sampler with DOOR's label definition given, as the model may list it. */
+  const withDefs = (): ModelHeader => ({
+    ...HEADER,
+    blocks: HEADER.blocks.map((b) => (b.name === 'DOOR' ? { ...b, attdefs: [{ tag: 'NO', default: 'D-00', prompt: 'Door number' }] } : b)),
+  })
+  const press = (x: number, y: number) => {
+    fireEvent.pointerDown(sheet(), { pointerId: 1, button: 0, ...client(x, y) })
+    fireEvent.pointerUp(sheet(), { pointerId: 1, ...client(x, y) })
+  }
+
+  it('picker, then a ghost that follows the pointer, a click, the labels form, Insert; the new block is selected', async () => {
+    await open({ header: withDefs() })
+    // With nothing selected the panel offers it; the toolbar too.
+    expect(screen.getByTestId('dxf-edit-empty').textContent).toContain('Insert block…')
+    expect(screen.getByTestId('dxf-insert-block').textContent).toBe('Insert block')
+    fireEvent.click(screen.getByTestId('dxf-insert-open'))
+    const choices = screen.getAllByTestId('dxf-insert-choice')
+    expect(choices.map((c) => c.textContent)).toEqual(['DOOR', 'NEST'])
+    fireEvent.click(choices[0])
+    expect(screen.getByTestId('dxf-edit-hint').textContent).toContain('Click to place DOOR')
+    const ghost = screen.getByTestId('dxf-ghost')
+    expect(ghost.getAttribute('data-block')).toBe('@h:2D')
+    expect(ghost.style.visibility).toBe('hidden')
+    fireEvent.pointerMove(sheet(), { pointerId: 1, ...client(30, 5) })
+    expect(ghost.style.visibility).toBe('')
+    expect(ghost.getAttribute('data-d')).toBe('30 5')
+    expect(ghost.querySelector('use')?.getAttribute('href')).toMatch(/^#.+-b-2D$/)
+    press(30, 5)
+    expect(world.edits.calls).toHaveLength(0)
+    expect(screen.getByTestId('dxf-insert-at').textContent).toBe('At 30, 5 mm')
+    const input = screen.getByTestId('dxf-insert-input') as HTMLInputElement
+    expect(screen.getByTestId('dxf-insert-label').textContent).toContain('NO · Door number')
+    expect(input.value).toBe('D-00')
+    fireEvent.change(input, { target: { value: 'D-07' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dxf-insert-go'))
+    })
+    await waitFor(() => expect(world.edits.calls).toHaveLength(2))
+    expect(world.edits.calls[0]).toEqual(['block', 'insert', '--block', '@h:2D', '--at', '30,5', '--unit', 'mm', '--attr', 'NO=D-07', '--base', '7', '--json', '--dry-run'])
+    expect(world.edits.calls[1][13]).toBe('--expect')
+    expect((await screen.findByTestId('dxf-change-note')).textContent).toContain('You inserted a block on 0')
+    // Read again: the new reference is selected, with its label.
+    await waitFor(() => expect(screen.queryAllByTestId('dxf-selected').map((r) => r.getAttribute('data-h'))).toEqual(['@h:C01']))
+    expect(screen.getByTestId('dxf-edit-name').textContent).toBe('DOOR')
+    expect((screen.getByTestId('dxf-attrib-input') as HTMLInputElement).value).toBe('D-07')
+    expect(screen.queryByTestId('dxf-insert-panel')).toBeNull()
+  })
+
+  it('a block with no labels is placed on the click', async () => {
+    await open()
+    fireEvent.click(screen.getByTestId('dxf-insert-block'))
+    fireEvent.click(screen.getAllByTestId('dxf-insert-choice')[1])
+    fireEvent.pointerMove(sheet(), { pointerId: 1, ...client(40, 0) })
+    await act(async () => {
+      press(40, 0)
+    })
+    await waitFor(() => expect(world.edits.calls).toHaveLength(2))
+    expect(world.edits.calls[0].slice(0, 8)).toEqual(['block', 'insert', '--block', '@h:2E', '--at', '40,0', '--unit', 'mm'])
+    await waitFor(() => expect(screen.queryAllByTestId('dxf-selected').map((r) => r.getAttribute('data-h'))).toEqual(['@h:C01']))
+  })
+
+  it('labels are checked as you type; a label whose default isn’t known is sent only when filled in', async () => {
+    await open()
+    fireEvent.click(screen.getByTestId('dxf-insert-block'))
+    fireEvent.click(screen.getAllByTestId('dxf-insert-choice')[0])
+    press(30, 5)
+    const input = screen.getByTestId('dxf-insert-input') as HTMLInputElement
+    expect(input.value).toBe('')
+    expect(input.placeholder).toBe('The block’s default')
+    fireEvent.change(input, { target: { value: '--x' } })
+    expect((screen.getByTestId('dxf-insert-go') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(input, { target: { value: '' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dxf-insert-go'))
+    })
+    await waitFor(() => expect(world.edits.calls).toHaveLength(2))
+    expect(world.edits.calls[0].slice(0, 9)).toEqual(['block', 'insert', '--block', '@h:2D', '--at', '30,5', '--unit', 'mm', '--base'])
+  })
+
+  it('a refusal says why in plain words and keeps the form', async () => {
+    await open({ proxyBlocks: ['DOOR'] })
+    fireEvent.click(screen.getByTestId('dxf-insert-block'))
+    fireEvent.click(screen.getAllByTestId('dxf-insert-choice')[0])
+    press(30, 5)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dxf-insert-go'))
+    })
+    expect((await screen.findByTestId('dxf-edit-message')).textContent).toBe('Not inserted. That block holds an object made by another app. Insert it in that app.')
+    expect(screen.getByTestId('dxf-insert-form')).toBeTruthy()
+    expect(world.edits.calls).toHaveLength(1)
+  })
+
+  it('Esc stops placing: the ghost goes and the panel is back', async () => {
+    await open()
+    fireEvent.click(screen.getByTestId('dxf-insert-block'))
+    fireEvent.click(screen.getAllByTestId('dxf-insert-choice')[0])
+    fireEvent.pointerMove(sheet(), { pointerId: 1, ...client(30, 5) })
+    expect(screen.getByTestId('dxf-ghost')).toBeTruthy()
+    fireEvent.keyDown(sheet(), { key: 'Escape' })
+    expect(screen.queryByTestId('dxf-ghost')).toBeNull()
+    expect(screen.queryByTestId('dxf-insert-panel')).toBeNull()
+    expect(screen.getByTestId('dxf-edit-empty')).toBeTruthy()
+    expect(world.edits.calls).toHaveLength(0)
+  })
+
+  it('view only: no Insert block anywhere', async () => {
+    await open({ header: { ...HEADER, format: 'dwg' } })
+    expect(screen.queryByTestId('dxf-insert-block')).toBeNull()
+    expect(screen.queryByTestId('dxf-edit-empty')).toBeNull()
   })
 })

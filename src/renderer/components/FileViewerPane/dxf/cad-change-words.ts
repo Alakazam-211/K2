@@ -23,6 +23,7 @@ export const PAST_VERB: Record<string, string> = {
   'entity offset': 'offset',
   'entity set': 'changed',
   'text set': 'edited',
+  'block insert': 'inserted',
   'attrib set': 'changed a label in',
   'layer set': 'changed',
   'layer add': 'added',

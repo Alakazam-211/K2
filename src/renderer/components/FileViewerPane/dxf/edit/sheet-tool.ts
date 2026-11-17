@@ -5,7 +5,9 @@
 // pointer, Shift locks it to one axis, and on release the move is tried.
 // A press on the turn handle above the selection turns it about its centre
 // (Shift: 15° steps), and one on a corner handle scales it about its centre,
-// the same both ways (Shift: 0.25 steps); the ghost follows as you drag. A refused edit
+// the same both ways (Shift: 0.25 steps); the ghost follows as you drag.
+// While a block is being placed, its ghost follows the pointer and a click
+// places it there. A refused edit
 // snaps the ghost back. Panning stays on the other buttons,
 // or Space with the left. The ghost and the box are drawn straight to the
 // DOM, never through React, so a drag costs no renders.
@@ -27,6 +29,8 @@ export interface SheetTool {
   down(e: PointerEvent, c: SheetCtx): boolean
   move(e: PointerEvent, c: SheetCtx): void
   up(e: PointerEvent, c: SheetCtx): void
+  /** The pointer moving over the sheet with no button down. */
+  hover(e: PointerEvent, c: SheetCtx): void
   /** Esc mid-drag: put everything back. True when there was a drag to stop. */
   cancel(): boolean
 }
@@ -38,6 +42,8 @@ export interface Ghost {
   turn(deg: number, about: XY): void
   /** Scaled by `factor` about `about`. */
   size(factor: number, about: XY): void
+  /** A block's ghost, to be placed: hidden until it's put `at` the pointer (its base point's offset). */
+  block(handle: string, base: XY, bbox: Box4 | null): void
   /** Back to where it started, then gone. */
   snapBack(): void
   clear(): void
@@ -58,6 +64,10 @@ export type ToolState = {
   frame: () => Box4 | null
   rotate: (deg: number, about: XY) => Promise<boolean>
   scale: (factor: number, about: XY) => Promise<boolean>
+  /** A block being placed: its base point; null when none is. */
+  placing: () => XY | null
+  /** Place it with its base point at `at`. */
+  place: (at: XY) => void
   ghost: Ghost
   box: SelectBox
 }
@@ -91,19 +101,40 @@ function targetGrip(target: EventTarget | null): Grip | null {
 }
 
 type Drag =
+  | { kind: 'place' }
   | { kind: 'turn'; about: XY; at: XY; deg: number; moving: boolean }
   | { kind: 'size'; about: XY; at: XY; factor: number; moving: boolean }
   | { kind: 'press'; hit: string; sel: readonly string[]; at: XY; client: XY; moving: boolean; d: XY }
   | { kind: 'box'; at: XY; client: XY; shift: boolean; showing: boolean }
   | { kind: 'none' }
 
+/** The drawing point under the pointer, rounded to what a screen pixel can say. */
+function pointAt(c: SheetCtx, e: PointerEvent): XY {
+  const [x, y] = c.toDrawing(e.clientX, e.clientY)
+  const k = c.unitsPerPx()
+  return [snapDelta(x, k), snapDelta(y, k)]
+}
+
 export function editTool(get: () => ToolState): SheetTool {
   let drag: Drag | null = null
   const far = (e: PointerEvent, client: XY) => Math.abs(e.clientX - client[0]) + Math.abs(e.clientY - client[1]) >= SLOP_PX
+  /** A block being placed follows the pointer. */
+  const hover = (e: PointerEvent, c: SheetCtx): void => {
+    const s = get()
+    const base = s.placing()
+    if (!base) return
+    const [x, y] = pointAt(c, e)
+    s.ghost.at(x - base[0], y - base[1])
+  }
   return {
     down(e, c) {
       const s = get()
       const p = c.toDrawing(e.clientX, e.clientY)
+      // Placing a block: the click places it.
+      if (s.placing()) {
+        drag = { kind: 'place' }
+        return true
+      }
       // A handle on the selection's box: the element under the pointer, else the nearest within reach.
       const frame = s.frame()
       const grip: Grip | null = frame ? (targetGrip(e.target) ?? handleAt(frame, p, c.unitsPerPx())) : null
@@ -137,6 +168,7 @@ export function editTool(get: () => ToolState): SheetTool {
     move(e, c) {
       const s = get()
       if (!drag || drag.kind === 'none') return
+      if (drag.kind === 'place') return hover(e, c)
       if (drag.kind === 'turn') {
         if (!drag.moving) {
           drag.moving = true
@@ -179,6 +211,10 @@ export function editTool(get: () => ToolState): SheetTool {
       const d = drag
       drag = null
       if (!d || d.kind === 'none') return
+      if (d.kind === 'place') {
+        if (s.placing()) s.place(pointAt(c, e))
+        return
+      }
       if (d.kind === 'turn') {
         if (!d.deg) return s.ghost.clear()
         void s.rotate(d.deg, d.about).then((ok) => {
@@ -215,9 +251,10 @@ export function editTool(get: () => ToolState): SheetTool {
         if (!ok) s.ghost.snapBack()
       })
     },
+    hover,
     cancel() {
       const s = get()
-      const had = !!drag && drag.kind !== 'none' && (drag.kind === 'box' ? drag.showing : drag.moving)
+      const had = !!drag && drag.kind !== 'none' && drag.kind !== 'place' && (drag.kind === 'box' ? drag.showing : drag.moving)
       if (drag?.kind === 'box') s.box.clear()
       if ((drag?.kind === 'press' || drag?.kind === 'turn' || drag?.kind === 'size') && drag.moving) s.ghost.snapBack()
       drag = null

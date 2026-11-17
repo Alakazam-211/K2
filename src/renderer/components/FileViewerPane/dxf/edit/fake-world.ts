@@ -3,15 +3,18 @@
 // on them the way the CAD pack answers (`mpc.result/1` and `cad.change/1`).
 // A move shifts every point an entity has, a turn turns them (and its
 // angles) about the given point, a scale scales them (and its sizes); an
-// attribute set or a text set changes its value; a locked layer, a kind the verbs don't change, the wrong unit, a
+// attribute set or a text set changes its value; a block insert places a
+// new reference (a new handle) with its labels, refusing a block that's
+// missing, linked, anonymous, dynamic or holds another app's object; a locked layer, a kind the verbs don't change, the wrong unit, a
 // stale `--expect` or an overlap since `--base` is refused with the pack's
 // id. A person is never refused by a hold. Each landed call makes a version.
 
 import { revertDone, revertRefused, type CadChangeSource } from '../cad-change-source'
 import { fixtureDrawingSource, type DrawingModelSource } from '../model/source'
-import type { Box4, ModelHeader, ModelPage, ModelRow, XY } from '../model/types'
+import type { Box4, ModelBlock, ModelHeader, ModelPage, ModelRow, XY } from '../model/types'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { refusalOfError, WRITER_OFF, type EditSource, type Hold } from './edit-source'
+import { insertLabels, type InsertLabel } from './blocks'
 import { editReason } from './selection'
 import { parseToolResult } from './tool-result'
 import { sizePoint, turnPoint } from './transform'
@@ -94,9 +97,10 @@ export function fakeCadWorld(
    * `names`: who's on the file (pid → name; `you` marks your own pid);
    * `locked`: layers locked in the file since the viewer read it (the header shown doesn't say);
    * `writerOff`: the server can't save drawing edits, and says so only when an edit is tried (its words);
-   * `readOnly`: the server says up front the file opens read only (its words).
+   * `readOnly`: the server says up front the file opens read only (its words);
+   * `proxyBlocks`: blocks (by name) whose definitions hold another app's object.
    */
-  opts: { holds?: Hold[]; locked?: string[]; writerOff?: string; readOnly?: string; names?: Record<string, string>; you?: string } = {},
+  opts: { holds?: Hold[]; locked?: string[]; writerOff?: string; readOnly?: string; names?: Record<string, string>; you?: string; proxyBlocks?: string[] } = {},
 ): FakeWorld {
   let header = structuredClone(fx.header)
   const pages = structuredClone(fx.pages)
@@ -130,6 +134,38 @@ export function fakeCadWorld(
   const refuse = (verb: string, base: number, id: string, message: string, exit = 2, details: Record<string, unknown> = {}) =>
     result(verb, base, { ok: false, exit, error: { id, exit, message, next: '', details } })
 
+  /** The handle after every one in the drawing. */
+  const nextHandle = (): number => Math.max(0, ...[...JSON.stringify({ header, pages }).matchAll(/@h:([0-9A-F]+)/gi)].map((m) => parseInt(m[1], 16))) + 1
+
+  /** A new reference of `b` with its base point at `at`, its labels set (given, else defaults), drawn like an existing reference of it. */
+  const placeBlock = (b: ModelBlock, at: XY, labels: readonly InsertLabel[], given: ReadonlyMap<string, string>): ModelRow => {
+    const ref = model().find((r) => r.kind === 'INSERT' && r.geom?.block === b.handle)
+    const [dx, dy] = [at[0] - b.base[0], at[1] - b.base[1]]
+    const m = (Array.isArray(ref?.geom?.m) ? ref.geom.m : [1, 0, 0, 1, 0, 0]) as number[]
+    const n = nextHandle()
+    const refAttribs = (Array.isArray(ref?.geom?.attribs) ? ref.geom.attribs : []) as { tag: string; text?: unknown }[]
+    const attribs = labels.map((l, i) => {
+      const value = given.get(l.tag.toUpperCase()) ?? l.value
+      const src = refAttribs.find((a) => a.tag.toUpperCase() === l.tag.toUpperCase())
+      const text = src?.text ? { ...(mapGeom(src.text, shift(dx - m[4], dy - m[5])) as object), plain: value, runs: [{ text: value }] } : undefined
+      return { h: `@h:${(n + 1 + i).toString(16).toUpperCase()}`, tag: l.tag, value, visible: true, constant: false, layer: '0', text }
+    })
+    return {
+      h: `@h:${n.toString(16).toUpperCase()}`,
+      kind: 'INSERT',
+      layer: '0',
+      owner: 'model',
+      z: Math.max(0, ...model().map((r) => r.z)) + 1,
+      style: ref?.style ?? model()[0]?.style,
+      visible: true,
+      drawn: true,
+      bbox: b.bbox ? [b.bbox[0] + dx, b.bbox[1] + dy, b.bbox[2] + dx, b.bbox[3] + dy] : null,
+      bbox_q: 'approx',
+      edit: null,
+      geom: { block: b.handle, name: b.name, m: [1, 0, 0, 1, dx, dy], array: null, xref: false, attribs },
+    }
+  }
+
   const run = (argv: readonly string[]): unknown => {
     calls.push([...argv])
     if (opts.writerOff)
@@ -138,7 +174,8 @@ export function fakeCadWorld(
     const base = Number(flag(argv, '--base') ?? header.version)
     const dry = argv.includes('--dry-run')
     const expect = flag(argv, '--expect')
-    const addrs = argv.slice(2).filter((a) => a.startsWith('@h:'))
+    // The entities a verb changes (a block insert names a block, not an entity).
+    const addrs = verb === 'block insert' ? [] : argv.slice(2).filter((a) => a.startsWith('@h:'))
     const rows = addrs.map((a) => model().find((r) => r.h.toUpperCase() === a.toUpperCase()))
     const missing = addrs.find((_a, i) => !rows[i])
     if (missing) return refuse(verb, base, 'CAD-E010', `${missing} names no entity`, 4)
@@ -190,6 +227,24 @@ export function fakeCadWorld(
         rows: [{ ...r, geom: { ...r.geom, attribs: nextAttribs } }],
         ents: [{ address: r.h, op: 'changed', kind: r.kind, layer: r.layer, owner: 'model', fields, bbox_before: r.bbox, bbox_after: r.bbox, bbox_q: r.bbox_q ?? 'exact', version: null, by: null, identity: null }],
       }
+    } else if (verb === 'block insert') {
+      if (!unitOk) return refuse(verb, base, 'DXF-E022', 'not the drawing’s unit')
+      const name = flag(argv, '--block') ?? ''
+      const b = header.blocks.find((x) => x.handle.toUpperCase() === name.toUpperCase() || x.name === name)
+      if (!b) return refuse(verb, base, 'DXF-E051', `block ${name} is missing`)
+      if (b.xref) return refuse(verb, base, 'DXF-E051', `block ${b.name} is an external reference`)
+      if (b.anon) return refuse(verb, base, 'DXF-E051', `block ${b.name} is anonymous`)
+      if (b.dynamic) return refuse(verb, base, 'DXF-E044', `block ${b.name} is a dynamic block`)
+      if (opts.proxyBlocks?.includes(b.name)) return refuse(verb, base, 'DXF-E043', `block ${b.name} holds a proxy object`)
+      const at = xyOf(flag(argv, '--at'))
+      if (!at) return refuse(verb, base, 'MPC-E122', 'usage')
+      const given = new Map(argv.flatMap((a, i) => (a === '--attr' && argv[i + 1]?.includes('=') ? [[argv[i + 1].split('=')[0].toUpperCase(), argv[i + 1].slice(argv[i + 1].indexOf('=') + 1)] as const] : [])))
+      const labels = insertLabels(b, model())
+      const stray = [...given.keys()].find((t) => !labels.some((l) => l.tag.toUpperCase() === t))
+      if (stray) return refuse(verb, base, 'DXF-E047', `no settable attribute definition ${stray}`)
+      next = { rows: [placeBlock(b, at, labels, given)], ents: [] }
+      const r = next.rows[0]
+      next.ents = [{ address: r.h, op: 'added', kind: 'INSERT', layer: r.layer, owner: 'model', fields: ['geom'], bbox_before: null, bbox_after: r.bbox, bbox_q: 'approx', version: null, by: null, identity: null }]
     } else if (verb === 'text set') {
       const r = found[0]
       const value = flag(argv, '--value') ?? ''
@@ -212,7 +267,7 @@ export function fakeCadWorld(
     if (expect !== lastDry) return refuse(verb, base, 'MPC-E729', 'not the dry run’s bytes')
     const page = pages.model[0]
     const before = page.entities
-    page.entities = page.entities.map((r) => next.rows.find((n) => n.h === r.h) ?? r)
+    page.entities = [...page.entities.map((r) => next.rows.find((n) => n.h === r.h) ?? r), ...next.rows.filter((n) => !before.some((r) => r.h === n.h))]
     const after = bump(next.rows, fields)
     headDigest = expect ?? ''
     history.set(after, { before, digest: headDigest, verb })

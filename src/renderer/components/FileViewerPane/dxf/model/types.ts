@@ -86,7 +86,13 @@ export type ModelBlock = {
   digest: string
   anon: boolean
   xref: boolean
+  /** A dynamic block (its parameters work only in a CAD app), when the model marks it. */
+  dynamic?: boolean
+  /** Its attribute definitions (the labels a new reference gets, with their defaults), when the model gives them. */
+  attdefs?: ModelAttdef[]
 }
+
+export type ModelAttdef = { tag: string; default: string; constant?: boolean; prompt?: string | null }
 
 export type ModelLayout = {
   handle: string

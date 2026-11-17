@@ -125,6 +125,17 @@ function valueWords(message: string, text: boolean): string {
   return 'It can’t be saved in this drawing.'
 }
 
+/** Why a block can't be placed, from the words in the pack's message: missing, linked, a layout, anonymous or annotative. */
+function notInsertable(message: string): { why: string; refresh: boolean; off: null } {
+  const plain = (why: string, refresh = false) => ({ why, refresh, off: null })
+  if (/annotative/i.test(message)) return plain('That block is annotative, which K2 can’t place yet. Insert it in your CAD app.')
+  if (/external|xref/i.test(message)) return plain('That block is a linked drawing. Insert it in your CAD app.')
+  if (/layout/i.test(message)) return plain('That’s a layout’s own block, not one you can place.')
+  if (/anonymous/i.test(message)) return plain('That block is one your CAD app made for itself, so it can’t be placed.')
+  if (/missing|no block|not found|names no/i.test(message)) return plain('That block isn’t in the drawing anymore. The drawing has been refreshed.', true)
+  return plain('That block can’t be placed here.')
+}
+
 /** The reason word in a "not changed by the edit verbs (why)" message. */
 const whyOf = (message: string): string => /\(([^()]+)\)\s*$/.exec(message.trim())?.[1] ?? 'unknown'
 
@@ -161,8 +172,10 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
     case 'DXF-E042':
       return plain(WHY_WORDS.xref)
     case 'DXF-E043':
+      if (ctx.verb === 'insert') return plain('That block holds an object made by another app. Insert it in that app.')
       return plain(WHY_WORDS.proxy)
     case 'DXF-E044':
+      if (ctx.verb === 'insert') return plain('That’s a dynamic block. Insert it in your CAD app, where its settings work.')
       return plain(WHY_WORDS.dynamic)
     case 'DXF-E045': {
       const layer = address ? ctx.layerOf?.(address) : null
@@ -171,6 +184,7 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
     case 'DXF-E046':
       return plain(WHY_WORDS['in-block'])
     case 'DXF-E047':
+      if (ctx.verb === 'insert') return plain('One of those labels can’t be filled in: the block sets it itself, or no longer has it. The drawing has been refreshed.', true)
       return plain('This block doesn’t have that label anymore. The drawing has been refreshed.', true)
     case 'DXF-E048':
       return plain('Your CAD app fills in this label from a field. Change the field’s source there.')
@@ -178,6 +192,8 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
       return plain('This label has more than one line. Change it in your CAD app.')
     case 'DXF-E050':
       return plain('That’s more than 10,000 items at once. Select fewer and try again.')
+    case 'DXF-E051':
+      return notInsertable(e.message)
     case 'DXF-E053':
       return plain('It uses a linetype or text style the drawing doesn’t have.')
     case 'DXF-E054':

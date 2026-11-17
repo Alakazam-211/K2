@@ -5,7 +5,7 @@
 //   - the handles on the selection's box when it can be changed: one above
 //     it to turn it, one on each corner to scale it;
 //   - the ghost a drag moves, turns or scales (copies of the selected shapes, faint,
-//     with their boxes) and the selection box (solid for a window, dashed
+//     with their boxes), or a block being placed (its definition, with its box) and the selection box (solid for a window, dashed
 //     for a crossing), both driven straight in the DOM;
 //   - HoldAsk, the one question before an edit over an agent's hold.
 
@@ -151,6 +151,7 @@ export function domGhost(rootOf: () => SVGGElement | null, byHandle: () => Reado
       if (!inner) return
       inner.style.transition = ''
       inner.style.transform = `translate(${dx}px, ${dy}px)`
+      inner.style.visibility = ''
       inner.setAttribute('data-d', `${dx} ${dy}`)
     },
     turn(deg, about) {
@@ -158,6 +159,40 @@ export function domGhost(rootOf: () => SVGGElement | null, byHandle: () => Reado
       // In drawing coordinates (y up), so a positive angle turns anticlockwise on screen.
       inner.setAttribute('transform', `rotate(${deg} ${about[0]} ${about[1]})`)
       inner.setAttribute('data-turn', String(deg))
+    },
+    block(handle, base, bbox) {
+      clear()
+      const root = rootOf()
+      if (!root) return
+      inner = document.createElementNS(SVG_NS, 'g')
+      inner.setAttribute('data-testid', 'dxf-ghost')
+      inner.setAttribute('data-block', handle)
+      inner.style.opacity = '0.6'
+      // Hidden until the pointer puts it somewhere.
+      inner.style.visibility = 'hidden'
+      const def = root.ownerSVGElement?.querySelector(`[data-testid="dxf-shapes"] defs [data-block="${handle}"]`)
+      if (def?.id) {
+        const use = document.createElementNS(SVG_NS, 'use')
+        use.setAttribute('href', `#${def.id}`)
+        inner.appendChild(use)
+      }
+      if (bbox) {
+        const r = document.createElementNS(SVG_NS, 'rect')
+        for (const [k, v] of Object.entries(padded(bbox, pad()))) r.setAttribute(k, String(v))
+        r.setAttribute('fill', 'none')
+        r.setAttribute('stroke', ACCENT)
+        r.setAttribute('stroke-dasharray', '4 3')
+        r.setAttribute('vector-effect', HAIR)
+        inner.appendChild(r)
+      }
+      // A cross at the base point: where the click places it.
+      const x = document.createElementNS(SVG_NS, 'path')
+      const q = 4 * (pad() / 5)
+      x.setAttribute('d', `M${base[0] - q} ${base[1]}H${base[0] + q}M${base[0]} ${base[1] - q}V${base[1] + q}`)
+      x.setAttribute('stroke', ACCENT)
+      x.setAttribute('vector-effect', HAIR)
+      inner.appendChild(x)
+      root.appendChild(inner)
     },
     size(factor, about) {
       if (!inner) return

@@ -293,7 +293,9 @@ export function DxfViewer({ text, filePath, view, changes, model, edits }: {
     }
     const onMove = (e: PointerEvent): void => {
       const v = viewRef.current
-      if (!drag || e.pointerId !== drag.id || !v) return
+      // No button down: a block being placed follows the pointer.
+      if (!drag) return toolRef.current?.hover(e, ctx)
+      if (e.pointerId !== drag.id || !v) return
       if (drag.tool) return toolRef.current?.move(e, ctx)
       const dxPx = e.clientX - drag.x
       const dyPx = e.clientY - drag.y
@@ -418,6 +420,7 @@ export function DxfViewer({ text, filePath, view, changes, model, edits }: {
           {drawing.paper?.length ? <LayoutsNote paper={drawing.paper} /> : null}
         </span>
         {drawing.notDrawn?.count ? <NotDrawnNote nd={drawing.notDrawn} /> : null}
+        {editing.toolbar}
         <button
           type="button"
           className="px-1.5 py-0.5 text-[10px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"

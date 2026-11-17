@@ -20,10 +20,7 @@ import { retainVoice, useVoice, voice } from '@/stores/voice'
 import { useSettingsStore } from '@/stores/settings'
 import { headsetState } from './voice-labels'
 import VoicePopover from './VoicePopover'
-import CallControls from './CallControls'
-import { useCallInItsConversation, useCallNoiseRemoval, useCallStageShown, useCallVideoHere } from './CallLayer'
-import { CompactButton } from './CallViewButtons'
-import { useCallPlace } from '@/stores/call-place'
+import TopCallBar from './TopCallBar'
 import VideoDemo from './VideoDemo'
 import { retainVideo, video } from '@/stores/video'
 import { useVoiceOpenRequest } from '@/stores/voice-open-request'
@@ -51,20 +48,13 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
   const servers = useVoice((s) => s.servers)
   const rooms = useVoice((s) => s.rooms)
   const call = useVoice((s) => s.call)
-  const noiseRemoval = useCallNoiseRemoval()
   const open = useVoice((s) => s.popoverOpen)
   const preview = useSettingsStore((s) => s.voiceRoomsPreview)
   const videoPreview = useSettingsStore((s) => s.videoRoomsPreview) === true
   const engineKind = useVoice((s) => s.engineKind)
   const [demo, setDemo] = useState(false)
-  // In a call: Mute, Deafen, Camera and Hang up beside the headset, unless
-  // the call's stage is up in this window, or its conversation is on screen
-  // here with the call at its top. Folded (Compact), Expand opens the stage.
-  const stageShown = useCallStageShown()
-  const videoHere = useCallVideoHere()
-  const compact = useCallPlace((s) => s.compact)
-  const inConversation = useCallInItsConversation()
-  const showControls = call !== null && engineKind === 'native' && !stageShown && !inConversation
+  // In a call: the slim in-call bar beside the headset (TopCallBar), unless
+  // the call is already on screen in this window.
   const [, setTick] = useState(0)
 
   const close = useCallback(() => voice.setPopoverOpen(false), [])
@@ -130,16 +120,7 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
             )
           : null}
       </div>
-      {showControls && call ? (
-        <div className="ml-0.5 flex items-center no-drag" style={noDrag}>
-          <CallControls variant="topbar" call={call} actions={voice} video={videoPreview ? video : null} noiseRemoval={noiseRemoval} />
-          {videoHere && compact ? (
-            <span className="ml-1">
-              <CompactButton testId="call-bar-expand" compact />
-            </span>
-          ) : null}
-        </div>
-      ) : null}
+      <TopCallBar />
       {withPipe ? <TopBarPipe /> : null}
       {demo && videoPreview ? createPortal(<VideoDemo onClose={() => setDemo(false)} />, document.body) : null}
     </>

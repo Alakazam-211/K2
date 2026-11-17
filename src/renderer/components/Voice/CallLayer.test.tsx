@@ -44,6 +44,15 @@ vi.mock('@/stores/settings', () => {
 vi.mock('@/components/TopBar/DesktopChromeLeft', () => ({ default: () => null }))
 vi.mock('@/components/TopBar/DesktopChromeRight', () => ({ default: () => null }))
 
+// Opening a Home row (Back to call opens the call's DM): recorded.
+const opened = vi.hoisted(() => ({ rows: [] as unknown[] }))
+vi.mock('@/lib/home-open', () => ({
+  openHomeRow: (row: unknown) => {
+    opened.rows.push(row)
+    return 'selected'
+  },
+}))
+
 vi.mock('@/components/Home/room/RoomFailure', () => ({
   roomFailureActions: () => ({ signIn: () => {}, retry: () => {}, openServer: () => {} }),
 }))
@@ -150,6 +159,7 @@ import { fakeTrack } from '@/lib/voice/fake-video-engine'
 import { overlayClaims, resetBrowserOverlaysForTest } from '@/lib/browser-overlay'
 import { dmCallRoom } from '@/lib/home-chat/calls'
 import { ConversationCallPlace, RoomCallBand } from './CallPlace'
+import { useHomeChatStore } from '@/stores/home-chat'
 
 const list: VoiceRoomsList = {
   hosting: { state: 'ok', line: 'Voice rooms are on.', detail: null },
@@ -255,6 +265,7 @@ beforeEach(async () => {
     voice.store.setState({ rooms: {}, notice: null, popoverOpen: false, engineKind: 'seat' })
   })
   __resetCallPlaceForTests()
+  useHomeChatStore.setState({ byHost: {} })
   __resetCallExpandForTests()
   __resetCallShareForTests()
   __resetCallPopoutForTests()
@@ -480,6 +491,59 @@ describe('the call lives in its place: a DM call in its conversation, a voice ro
     act(() => voice.store.setState({ engineKind: 'seat' }))
     expect(within(screen.getByTestId('dm-view')).getByTestId('dm-seat-strip')).toBeTruthy()
     expect(screen.queryByTestId('call-bar')).toBeNull()
+  })
+})
+
+describe('elsewhere in the app: the slim bar in the top bar', () => {
+  /** The top bar's slim bar (not a conversation's). */
+  function topBar(): HTMLElement {
+    const bar = screen.getAllByTestId('call-bar').find((b) => b.dataset.look === 'top')
+    if (!bar) throw new Error('no slim bar in the top bar')
+    return bar
+  }
+
+  it("a voice room: the call's name, its time and its controls beside the headset, and nothing to go back to without video", async () => {
+    await inCall()
+    const bar = topBar()
+    expect(within(bar).getByTestId('call-bar-title').textContent).toBe('Standup')
+    await waitFor(() => expect(within(bar).getByTestId('call-bar-time').textContent).toMatch(/^\d+:\d\d$/))
+    expect(bar.contains(screen.getByTestId('call-topbar-mute'))).toBe(true)
+    expect(bar.contains(screen.getByTestId('call-topbar-leave'))).toBe(true)
+    expect(within(bar).queryByTestId('call-bar-back')).toBeNull()
+    expect(within(bar).queryByTestId('call-bar-expand')).toBeNull()
+    // In the top bar's flow, never floating.
+    expect(bar.className).not.toMatch(/\b(fixed|absolute)\b/)
+  })
+
+  it("a DM call away from its DM: Back to call opens the DM, with its stage open; the top bar's bar gives way there", async () => {
+    opened.rows = []
+    const r = await inDmCall(false)
+    act(() => useHomeChatStore.getState().noteDm(DM_HOST, 'k2:connect:ada', '42'))
+    fireEvent.click(screen.getByTestId('call-topbar-camera'))
+    await waitFor(() => expect(video.store.getState().local.camera).not.toBe('off'))
+    act(() => useCallPlace.setState({ compact: true }))
+    const bar = topBar()
+    expect(within(bar).getByTestId('call-bar-title').textContent).toBe('Call with Ada')
+    // Its stage is drawn nowhere here: there is nothing to expand in place.
+    expect(within(bar).queryByTestId('call-bar-expand')).toBeNull()
+    const back = within(bar).getByTestId('call-bar-back')
+    expect(back.textContent).toBe('Back to call')
+    fireEvent.click(back)
+    expect(opened.rows).toEqual([{ kind: 'person', address: 'k2:connect:ada::sewlab.k2.dev', workspaceId: null, label: 'Ada' }])
+    expect(useCallPlace.getState().compact).toBe(false)
+    // The app opens the DM: the stage is at its top, and the top bar's bar is gone.
+    r.rerender(
+      <AppWindow>
+        <DmView />
+      </AppWindow>,
+    )
+    expect(await within(screen.getByTestId('dm-view')).findByTestId('video-stage')).toBeTruthy()
+    expect(screen.queryAllByTestId('call-bar').filter((b) => b.dataset.look === 'top')).toEqual([])
+  })
+
+  it("a DM this window can't find has no Back to call (never a dead button)", async () => {
+    await inDmCall(false)
+    expect(within(topBar()).queryByTestId('call-bar-back')).toBeNull()
   })
 })
 

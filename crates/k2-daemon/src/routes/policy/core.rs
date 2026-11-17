@@ -131,6 +131,10 @@ pub(super) const ROWS: &[Route] = &[
     // (the handler scopes it; anyone else gets 404 no_such_code).
     get("/cli/auth/device/pair-code/status", Member),
     post("/cli/auth/device/pair/check", Public),
+    // K2 Companion (2026-11-17): a login that must change its password
+    // trades the temporary one for a ticket good only for change-password
+    // (the username and password are the credential).
+    post("/cli/auth/device/password-ticket", Public),
     post("/cli/auth/device/revoke", Member),
     get("/cli/auth/devices", Member),
     post("/cli/auth/login", Public),

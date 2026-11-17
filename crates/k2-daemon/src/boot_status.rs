@@ -1065,6 +1065,15 @@ pub const FEATURE_APP_MOBILE_ACCESS: &str = "app-mobile-access-v1";
 /// migration (the Connect session file carries the device binding).
 pub const FEATURE_COMPANION_PAIRING: &str = "companion-pairing-v1";
 
+/// K2 Companion (2026-11-17): a login that must change its password sets
+/// its new one from a phone with web access off. `POST
+/// /cli/auth/device/password-ticket {username, password}` (public) answers
+/// a ticket good only for `POST /cli/auth/change-password` (Bearer); the
+/// pairing 409 `password_change_required` names the login (`error.user`);
+/// change-password answers `current_password_wrong` (401), `locked` (423,
+/// `retryAfterSecs`) and `password_unchanged` (400). No SQL migration.
+pub const FEATURE_COMPANION_PASSWORD_TICKET: &str = "companion-password-ticket-v1";
+
 /// One live Thread stream across rooms (app-room-stream, 0.46.3):
 /// `WS /cli/thread/stream?rooms=all|<ids>` for an App pass (helper, link,
 /// main port) or a login, frames in the inbox stream format
@@ -1367,6 +1376,7 @@ pub fn features() -> Vec<&'static str> {
     // once (`refreshing`, then `subscription_usage_changed`).
     out.push(crate::subscription_usage::FEATURE_REFRESH_ASYNC);
     out.push(FEATURE_COMPANION_PAIRING);
+    out.push(FEATURE_COMPANION_PASSWORD_TICKET);
     out.push(FEATURE_FILES_DOWNLOAD);
     // 0.46.9: resumable uploads, download tokens and the transfer door.
     out.push(crate::transfer_routes::FEATURE);
@@ -1625,6 +1635,7 @@ mod tests {
                 "llm-account-for-v1",
                 "usage-refresh-async",
                 "companion-pairing-v1",
+                "companion-password-ticket-v1",
                 "files-download-v1",
                 "transfers-v1",
                 "product-feedback-v1",

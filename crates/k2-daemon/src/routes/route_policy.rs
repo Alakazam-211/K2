@@ -215,6 +215,7 @@ pub const VOICE_CHAT_ALLOWLIST: &[(&str, &str)] = &[
 pub const VOICE_CHAT_PUBLIC: &[&str] = &[
     "/cli/auth/device/pair",
     "/cli/auth/device/pair/check",
+    "/cli/auth/device/password-ticket",
     "/cli/auth/login",
     "/cli/email/stop",
     "/cli/email/verify",

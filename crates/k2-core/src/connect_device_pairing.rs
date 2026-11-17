@@ -92,7 +92,7 @@ pub struct Paired {
 
 /// Why a redeem did not pair. One wire answer for all of them (no oracle);
 /// the reason is for the audit trail.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refused {
     /// Unknown, already used, or malformed.
     Unknown,
@@ -100,16 +100,18 @@ pub enum Refused {
     /// The person was disabled/removed or their epoch moved since the mint.
     LoginChanged,
     /// The login must change its password first (answered 409, not 401).
-    PasswordChangeRequired,
+    /// Carries the code's own login: the code holder may learn it (a check
+    /// shows it anyway), and the phone needs it to set the new password.
+    PasswordChangeRequired { username: String },
 }
 
 impl Refused {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Refused::Unknown => "unknown",
             Refused::Expired => "expired",
             Refused::LoginChanged => "login_changed",
-            Refused::PasswordChangeRequired => "password_change_required",
+            Refused::PasswordChangeRequired { .. } => "password_change_required",
         }
     }
 }
@@ -445,7 +447,7 @@ pub fn check(raw: &str) -> Result<Checked, Refused> {
         return Err(Refused::LoginChanged);
     }
     if connect_users::must_change_password(&username) {
-        return Err(Refused::PasswordChangeRequired);
+        return Err(Refused::PasswordChangeRequired { username });
     }
     Ok(Checked { username, expires_in_secs: left })
 }
@@ -469,8 +471,9 @@ pub fn redeem(raw: &str, device_id: &str, device_name: &str) -> Result<Result<Pa
         return Ok(Err(Refused::LoginChanged));
     }
     if connect_users::must_change_password(&p.username) {
+        let username = p.username.clone();
         finish(vec![finished_status(p, CodeState::Void)]);
-        return Ok(Err(Refused::PasswordChangeRequired));
+        return Ok(Err(Refused::PasswordChangeRequired { username }));
     }
     let name = clean_device_name(device_name);
     let made = connect_users::create_device_session(&p.username, p.epoch, device_id, &name, &p.minted_by).and_then(
@@ -552,7 +555,10 @@ mod tests {
             let code = mint("rotate_first", "owner-token").expect("mint");
             connect_users::set_must_change_password("rotate_first", true).expect("flag");
             assert_eq!(mint("rotate_first", "owner-token").err(), Some(MintError::PasswordChangeRequired));
-            assert_eq!(redeem(&code.code, "d", "D").expect("store").err(), Some(Refused::PasswordChangeRequired));
+            assert_eq!(
+                redeem(&code.code, "d", "D").expect("store").err(),
+                Some(Refused::PasswordChangeRequired { username: "rotate_first".to_string() })
+            );
         });
     }
 

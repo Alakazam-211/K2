@@ -853,3 +853,238 @@ async fn a_redeem_and_an_expiry_reach_only_the_minters_sockets_without_secrets()
     );
     assert!(next_code(&mut owner_ws, &own_id, Duration::from_millis(1200)).await.is_none(), "the owner's sockets don't");
 }
+
+// ── K2 Companion 2026-11-17: a temporary password, set from a phone ────
+
+const TEMP_PW: &str = "temporary-pw-1";
+const NEW_PW: &str = "brand-new-pw-2";
+
+fn temp_login(name: &str) {
+    connect_users::add_user(name, TEMP_PW).expect("add");
+    connect_users::set_must_change_password(name, true).expect("flag");
+}
+
+/// The phone asks for a ticket the way it reaches a hosted server: through
+/// the tunnel with the edge's markers.
+fn ask_ticket(port: u16, user: &str, password: &str) -> Resp {
+    let body = serde_json::json!({ "username": user, "password": password }).to_string();
+    http(port, "POST", "/cli/auth/device/password-ticket", Some(&body), EDGE)
+}
+
+fn ticket_of(r: &Resp, user: &str) -> String {
+    assert_eq!(r.status, 200, "ticket: {}", r.body);
+    let v = r.json();
+    assert_eq!(v["ok"], true, "{}", r.body);
+    assert_eq!(v["user"], user, "{}", r.body);
+    assert_eq!(v["expiresInSecs"], 600, "{}", r.body);
+    assert_eq!(v["changePath"], "/cli/auth/change-password", "{}", r.body);
+    assert!(v["expiresAt"].as_str().is_some(), "{}", r.body);
+    match v["ticket"].as_str() {
+        Some(t) if t.starts_with("k2pct_") && t.len() == 70 => t.to_string(),
+        _ => panic!("no ticket in {}", r.body),
+    }
+}
+
+fn change_with(port: u16, cred: &str, current: &str, new: &str, extra: &[&str]) -> Resp {
+    let body = serde_json::json!({ "currentPassword": current, "newPassword": new }).to_string();
+    let bearer = bearer(cred);
+    http(port, "POST", "/cli/auth/change-password", Some(&body), &refs(&with(extra, &[&bearer])))
+}
+
+fn error_of(r: &Resp) -> String {
+    match r.json()["error"].as_str() {
+        Some(e) => e.to_string(),
+        None => panic!("no string error in {} {:?}", r.status, r.body),
+    }
+}
+
+/// Item 4: a pairing 409 for a login that must change its password names
+/// that login (the owner named it, or the code was made for it).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_pairing_409_names_the_login_that_must_change_its_password() {
+    let _g = lock();
+    let _home = HomeEnv::set();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    let port = d.port;
+    temp_login("tp_named");
+    connect_users::add_user("tp_late", PW).expect("add");
+    set_web(port, false);
+
+    let r = http(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some(r#"{"user":"TP_Named"}"#), &[]);
+    assert_code(&r, 409, "password_change_required", "owner token naming a must-change login");
+    assert_eq!(r.json()["error"]["user"], "tp_named", "{}", r.body);
+    assert_eq!(r.json()["error"]["ticketPath"], "/cli/auth/device/password-ticket", "{}", r.body);
+
+    // A code made before the flag: check and redeem name the code's login.
+    let code = owner_code(port, "tp_late");
+    connect_users::set_must_change_password("tp_late", true).expect("flag");
+    let r = http(port, "POST", "/cli/auth/device/pair/check", Some(&format!(r#"{{"code":"{code}"}}"#)), EDGE);
+    assert_code(&r, 409, "password_change_required", "check");
+    assert_eq!(r.json()["error"]["user"], "tp_late", "{}", r.body);
+    let body = format!(r#"{{"code":"{code}","device":{{"id":"late-1","name":"P"}}}}"#);
+    let r = http(port, "POST", "/cli/auth/device/pair", Some(&body), EDGE);
+    assert_code(&r, 409, "password_change_required", "redeem");
+    assert_eq!(r.json()["error"]["user"], "tp_late", "{}", r.body);
+    let rows = audit_rows(port, "device-pair");
+    assert!(rows.iter().any(|e| e["user"] == "tp_late" && e["outcome"] == "password_change_required"), "{rows:?}");
+}
+
+/// Item 1: with web access off, a must-change login gets a ticket for its
+/// temporary password; the ticket reaches change-password only, works
+/// once, and nothing after the change.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_ticket_sets_the_new_password_with_web_off_and_opens_nothing_else() {
+    let _g = lock();
+    let _home = HomeEnv::set();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    let port = d.tunnel_port;
+    temp_login("tp_phone");
+    connect_users::add_user("tp_plain", PW).expect("add");
+    set_web(d.port, false);
+
+    // Today's wall: the password sign-in through the edge is refused.
+    let r = http(port, "POST", "/cli/auth/login", Some(&format!(r#"{{"username":"tp_phone","password":"{TEMP_PW}"}}"#)), EDGE);
+    assert_ne!(r.status, 200, "the password sign-in stays walled: {}", r.body);
+
+    // Wrong password, unknown name, a login with nothing to change: one 401.
+    let wrong = ask_ticket(port, "tp_phone", "not-it");
+    assert_code(&wrong, 401, "password_invalid", "wrong temporary password");
+    let ghost = ask_ticket(port, "tp_ghost", TEMP_PW);
+    let plain = ask_ticket(port, "tp_plain", PW);
+    assert_eq!((ghost.status, ghost.body.clone()), (401, wrong.body.clone()), "an unknown name answers like a wrong password");
+    assert_eq!((plain.status, plain.body.clone()), (401, wrong.body.clone()), "so does a login with no pending change");
+    assert_eq!(connect_users::lockout_failed_count("tp_plain"), 1, "and it counts toward that login's lockout");
+    // Never from a browser page.
+    let body = serde_json::json!({ "username": "tp_phone", "password": TEMP_PW }).to_string();
+    let r = http(port, "POST", "/cli/auth/device/password-ticket", Some(&body), &refs(&with(EDGE, &["Origin: https://rosson.app.k2.dev"])));
+    assert_code(&r, 403, "device_pairing_not_from_browser", "a browser page asking for a ticket");
+
+    let ticket = ticket_of(&ask_ticket(port, "TP_Phone", TEMP_PW), "tp_phone");
+    assert_eq!(connect_users::lockout_failed_count("tp_phone"), 0, "the right password clears the count");
+
+    // The ticket is no session: every other route refuses it.
+    let r = http(port, "GET", "/cli/auth/whoami", None, &refs(&with(EDGE, &[&bearer(&ticket)])));
+    assert_code(&r, 403, "WEB_CLIENT_DISABLED", "whoami through the edge");
+    for (method, path) in [("GET", "/cli/auth/whoami"), ("GET", "/cli/auth/devices"), ("GET", "/cli/users/policy"), ("GET", "/cli/users")] {
+        let r = http(d.port, method, path, None, &[&bearer(&ticket)]);
+        assert!(r.status == 401 || r.status == 403, "{method} {path} with a ticket (no web wall): {} {}", r.status, r.body);
+        assert!(!r.body.contains("tp_phone"), "{method} {path} says nothing about the login: {}", r.body);
+    }
+    let r = http(d.port, "POST", "/cli/auth/device/pair-code", Some(&format!(r#"{{"password":"{TEMP_PW}"}}"#)), &[&bearer(&ticket)]);
+    assert_code(&r, 401, "login_required", "no pairing code from a ticket");
+    // Not as a cookie, and not from a browser page.
+    let cookie = format!("Cookie: k2_session={ticket}");
+    let cp = serde_json::json!({ "currentPassword": TEMP_PW, "newPassword": NEW_PW }).to_string();
+    let r = http(port, "POST", "/cli/auth/change-password", Some(&cp), &refs(&with(EDGE, &[&cookie])));
+    assert_ne!(r.status, 200, "a ticket in a cookie: {}", r.body);
+    let r = change_with(port, &ticket, TEMP_PW, NEW_PW, &refs(&with(EDGE, &["Origin: https://rosson.app.k2.dev"])));
+    assert_code(&r, 403, "WEB_CLIENT_DISABLED", "a browser page with a ticket");
+
+    // Item 2 and 3 on the ticket path: the same password, a wrong current.
+    let r = change_with(port, &ticket, TEMP_PW, TEMP_PW, EDGE);
+    assert_eq!((r.status, error_of(&r)), (400, "password_unchanged".to_string()), "{}", r.body);
+    assert!(r.json()["message"].as_str().is_some(), "{}", r.body);
+    let r = change_with(port, &ticket, "not-it", NEW_PW, EDGE);
+    assert_eq!((r.status, error_of(&r)), (401, "current_password_wrong".to_string()), "{}", r.body);
+    assert!(connect_users::must_change_password("tp_phone"), "nothing changed yet");
+
+    // The change.
+    let r = change_with(port, &ticket, TEMP_PW, NEW_PW, EDGE);
+    assert_eq!(r.status, 200, "change with a ticket through the edge: {}", r.body);
+    assert_eq!(r.json()["success"], true, "{}", r.body);
+    assert!(!connect_users::must_change_password("tp_phone"));
+    assert!(connect_users::verify("tp_phone", NEW_PW));
+    let cps = audit_rows(d.port, "change-password");
+    assert!(cps.iter().any(|e| e["user"] == "tp_phone" && e["outcome"] == "ok"), "{cps:?}");
+    let tickets = audit_rows(d.port, "device-password-ticket");
+    assert!(tickets.iter().any(|e| e["user"] == "TP_Phone" && e["outcome"] == "ok"), "{tickets:?}");
+    assert!(tickets.iter().any(|e| e["user"] == "tp_ghost" && e["outcome"] == "bad_creds"), "{tickets:?}");
+
+    // Once: the ticket is spent, and the new password gets no new one.
+    let r = change_with(port, &ticket, NEW_PW, "third-pw-3333", EDGE);
+    assert_code(&r, 403, "WEB_CLIENT_DISABLED", "a spent ticket through the edge");
+    let r = change_with(d.port, &ticket, NEW_PW, "third-pw-3333", &[]);
+    assert_eq!((r.status, r.body.as_str()), (401, r#"{"error":"unauthorized"}"#), "a spent ticket");
+    assert_code(&ask_ticket(port, "tp_phone", NEW_PW), 401, "password_invalid", "no ticket once changed");
+    assert_code(&ask_ticket(port, "tp_phone", TEMP_PW), 401, "password_invalid", "nor for the old temporary one");
+    // Now the owner can pair a phone to it.
+    pair_through_edge(d.port, &owner_code(d.port, "tp_phone"), "tp-phone-1");
+}
+
+/// Item 1: a ticket expires, and dies when someone else sets the password.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_ticket_expires_and_dies_with_a_password_reset() {
+    let _g = lock();
+    let _home = HomeEnv::set();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    let port = d.tunnel_port;
+    temp_login("tp_exp");
+    set_web(d.port, false);
+    let ticket = ticket_of(&ask_ticket(port, "tp_exp", TEMP_PW), "tp_exp");
+    assert!(k2_core::connect_password_ticket::expire_now_for_test(&ticket));
+    let r = change_with(d.port, &ticket, TEMP_PW, NEW_PW, &[]);
+    assert_eq!((r.status, r.body.as_str()), (401, r#"{"error":"unauthorized"}"#), "an expired ticket");
+    let r = change_with(port, &ticket, TEMP_PW, NEW_PW, EDGE);
+    assert_code(&r, 403, "WEB_CLIENT_DISABLED", "an expired ticket through the edge");
+    assert!(connect_users::must_change_password("tp_exp"));
+
+    // An owner reset to another temporary password ends the ticket.
+    let ticket = ticket_of(&ask_ticket(port, "tp_exp", TEMP_PW), "tp_exp");
+    connect_users::set_password("tp_exp", "second-temp-4").expect("reset");
+    connect_users::set_must_change_password("tp_exp", true).expect("flag again");
+    let r = change_with(d.port, &ticket, "second-temp-4", NEW_PW, &[]);
+    assert_eq!((r.status, r.body.as_str()), (401, r#"{"error":"unauthorized"}"#), "a ticket from before the reset");
+    assert!(connect_users::verify("tp_exp", "second-temp-4"));
+}
+
+/// Item 3: change-password tells a wrong current password, a lock and a
+/// dead session apart; a lock answers 423 with retryAfterSecs and
+/// Retry-After. The ticket door's lock does the same for any name.
+#[tokio::test(flavor = "multi_thread")]
+async fn change_password_answers_tell_wrong_locked_and_dead_apart() {
+    let _g = lock();
+    let _home = HomeEnv::set();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    let port = d.port;
+    temp_login("tp_codes");
+    let session = connect_users::create_session("tp_codes");
+
+    // Item 2 on the session path: the temporary password as the new one.
+    let r = change_with(port, &session, TEMP_PW, TEMP_PW, &[]);
+    assert_eq!((r.status, error_of(&r)), (400, "password_unchanged".to_string()), "{}", r.body);
+    assert!(connect_users::verify("tp_codes", TEMP_PW) && connect_users::must_change_password("tp_codes"));
+
+    let dead = "ab".repeat(32);
+    let r = change_with(port, &dead, TEMP_PW, NEW_PW, &[]);
+    assert_eq!((r.status, r.body.as_str()), (401, r#"{"error":"unauthorized"}"#), "a dead session");
+    let r = change_with(port, &dead, "not-it", NEW_PW, &[]);
+    assert_eq!((r.status, r.body.as_str()), (401, r#"{"error":"unauthorized"}"#), "a dead session never checks the password");
+    assert_eq!(connect_users::lockout_failed_count("tp_codes"), 0, "nor counts");
+
+    for i in 0..2 {
+        let r = change_with(port, &session, "not-it", NEW_PW, &[]);
+        assert_eq!((r.status, error_of(&r)), (401, "current_password_wrong".to_string()), "wrong {i}: {}", r.body);
+    }
+    let r = change_with(port, &session, "not-it", NEW_PW, &[]);
+    assert_eq!((r.status, error_of(&r)), (423, "locked".to_string()), "the guess that locks: {}", r.body);
+    let secs = r.json()["retryAfterSecs"].as_i64().unwrap_or_else(|| panic!("retryAfterSecs: {}", r.body));
+    assert!(secs > 0 && secs <= 900, "{}", r.body);
+    assert_eq!(r.header("Retry-After"), Some(secs.to_string()), "{}", r.head);
+    let r = change_with(port, &session, TEMP_PW, NEW_PW, &[]);
+    assert_eq!((r.status, error_of(&r)), (423, "locked".to_string()), "locked: the right password too: {}", r.body);
+    assert!(r.header("Retry-After").is_some(), "{}", r.head);
+    let rows = audit_rows(port, "change-password");
+    let outcomes: Vec<&str> = rows.iter().filter(|e| e["user"] == "tp_codes").filter_map(|e| e["outcome"].as_str()).collect();
+    assert_eq!(outcomes, ["unchanged", "bad_current", "bad_current", "locked", "locked"], "{rows:?}");
+
+    // The ticket door: a locked login is 423, and so is a name with no
+    // login after the same failures (no oracle).
+    let r = ask_ticket(d.tunnel_port, "tp_codes", TEMP_PW);
+    assert_code(&r, 423, "locked", "a locked login asking for a ticket");
+    assert!(r.json()["error"]["retryAfterSecs"].as_i64().is_some_and(|s| s > 0), "{}", r.body);
+    assert!(r.header("Retry-After").is_some(), "{}", r.head);
+    for _ in 0..3 {
+        ask_ticket(d.tunnel_port, "tp_nobody", "x");
+    }
+    assert_code(&ask_ticket(d.tunnel_port, "tp_nobody", "x"), 423, "locked", "a name with no login locks the same way");
+}

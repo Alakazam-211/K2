@@ -2158,6 +2158,21 @@ pub fn check_and_record(username: &str, password: &str) -> LoginOutcome {
 /// (username, address), so one person's wrong guesses can't lock the next
 /// out (security review M3); every other login keeps the per-username key.
 pub fn check_and_record_from(username: &str, password: &str, ip: Option<&str>) -> LoginOutcome {
+    check_and_record_gated(username, password, ip, true)
+}
+
+/// [`check_and_record_from`] for a credential only a login that must
+/// change its password may use (the Companion's change-password ticket,
+/// [`crate::connect_password_ticket`]). Any other name (unknown, disabled,
+/// or a login with no pending change) is never accepted: it costs the same
+/// argon2 work and counts as one failed attempt, exactly like a wrong
+/// password, so neither the answer nor the lockout counter tells anything
+/// about the password or the login.
+pub fn check_and_record_must_change(username: &str, password: &str, ip: Option<&str>) -> LoginOutcome {
+    check_and_record_gated(username, password, ip, must_change_password(username))
+}
+
+fn check_and_record_gated(username: &str, password: &str, ip: Option<&str>, eligible: bool) -> LoginOutcome {
     let key = lockout_key_from(username, ip);
 
     // First: are we currently locked? Read the persisted lockout state and
@@ -2185,8 +2200,9 @@ pub fn check_and_record_from(username: &str, password: &str, ip: Option<&str>) -
         return LoginOutcome::LockedOut;
     }
 
-    // Not locked: do the real (slow) verify outside the store lock.
-    let ok = verify(username, password);
+    // Not locked: do the real (slow) verify outside the store lock. An
+    // ineligible name still pays for the verify, then fails.
+    let ok = verify(username, password) && eligible;
 
     update_sessions(|store| {
         if ok {
@@ -2218,10 +2234,16 @@ pub fn check_and_record_from(username: &str, password: &str, ip: Option<&str>) -
 pub enum ChangePasswordOutcome {
     /// Password changed; all of the user's sessions were revoked.
     Ok,
-    /// Current password was wrong (routed through the lockout gate) OR the
-    /// username is currently locked. Generic — the route must not reveal
-    /// which.
+    /// Current password was wrong (routed through the lockout gate). The
+    /// caller holds a live session or ticket for this login, so saying so
+    /// tells nobody anything new.
     BadCurrent,
+    /// The login is locked (before this attempt, or by this wrong guess):
+    /// seconds until it may try again.
+    Locked { retry_after_secs: i64 },
+    /// The new password is the current one (a temporary password kept as
+    /// the new one included).
+    Unchanged,
     /// New password failed the policy. Carries the human-readable first
     /// unmet requirement (K2SO #620) so the portal can surface it.
     WeakNew(String),
@@ -2242,9 +2264,23 @@ pub fn change_password(username: &str, current: &str, new: &str) -> ChangePasswo
     }
     match check_and_record(username, current) {
         LoginOutcome::Ok => {}
-        LoginOutcome::LockedOut | LoginOutcome::BadCreds => {
-            return ChangePasswordOutcome::BadCurrent
+        LoginOutcome::LockedOut => {
+            return ChangePasswordOutcome::Locked {
+                retry_after_secs: lock_retry_after_secs(username).unwrap_or(LOCKOUT_DURATION_MINUTES * 60),
+            }
         }
+        LoginOutcome::BadCreds => {
+            // The wrong guess that reaches the threshold locks the login:
+            // say so now, not on the next try.
+            return match lock_retry_after_secs(username) {
+                Some(retry_after_secs) => ChangePasswordOutcome::Locked { retry_after_secs },
+                None => ChangePasswordOutcome::BadCurrent,
+            };
+        }
+    }
+    // The same password again (a temporary password kept) is no change.
+    if new == current {
+        return ChangePasswordOutcome::Unchanged;
     }
     // Enforce the stored policy (replaces the old hardcoded >= 8 check).
     if let Err(msg) = validate_password(new, &get_policy()) {
@@ -2289,6 +2325,22 @@ pub fn lockout_failed_count(username: &str) -> u32 {
         Ok(store) => store.locks.get(&key).map(|e| e.failed_count).unwrap_or(0),
         Err(_) => 0,
     }
+}
+
+/// Seconds until `username`'s lock (the per-username key) ends, at least 1;
+/// `None` when it is not locked. Read-only.
+pub fn lock_retry_after_secs(username: &str) -> Option<i64> {
+    lock_retry_after_secs_from(username, None)
+}
+
+/// [`lock_retry_after_secs`] for the key [`check_and_record_from`] uses with
+/// `ip` (a Voice & Chat only login's lock is per address).
+pub fn lock_retry_after_secs_from(username: &str, ip: Option<&str>) -> Option<i64> {
+    let key = lockout_key_from(username, ip);
+    let store = load_sessions().ok()?;
+    let until = store.locks.get(&key).and_then(|e| e.locked_until)?;
+    let now = Utc::now();
+    (until > now).then(|| (until - now).num_seconds().max(1))
 }
 
 /// Whether `username` is currently locked out. Read-only; used by callers

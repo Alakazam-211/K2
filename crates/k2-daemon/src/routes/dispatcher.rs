@@ -332,6 +332,55 @@ async fn device_pair(
     reply.response
 }
 
+/// `POST /cli/auth/device/password-ticket` (Public, K2 Companion
+/// 2026-11-17): the browser-page refusal, the login limiter's per-client
+/// and global buckets (as a login's password re-check for a pairing code),
+/// the ticket attempt through the login's lockout, one audit row
+/// (`device-password-ticket`), and the login's fixed delay on a 401.
+async fn device_password_ticket(
+    limiter: &crate::login_throttle::LoginLimiter,
+    stream: &tokio::net::TcpStream,
+    ingress: Ingress,
+    headers_blob: &str,
+    web: bool,
+    body: Vec<u8>,
+) -> crate::cli_response::CliResponse {
+    use crate::connect_device_routes as dev;
+    if super::http::pair_request_is_browser_shaped(headers_blob) {
+        return dev::ticket_browser_refused();
+    }
+    let trusted = trusted_proxies_from_env();
+    let peer = peer_ip(stream);
+    let relay = relay_client_ip(ingress, stream);
+    let key = login_throttle_key(ingress, None, peer, headers_blob, &trusted, relay);
+    let anonymous = login_client_trust(ingress, None, peer, headers_blob, &trusted, relay).under_global_ceiling();
+    if let Some((bucket, limit, _)) = key.connect_bucket() {
+        if limiter.check_and_record_with_limit(&bucket, limit, limiter.now()) == crate::login_throttle::Verdict::Limited {
+            return dev::rate_limited();
+        }
+    }
+    if anonymous && limiter.global_ceiling_reached(crate::login_throttle::Door::Connect, limiter.now()) {
+        return dev::rate_limited();
+    }
+    let lock_ip: Option<String> = key.connect_bucket().map(|(_, _, ip)| ip.to_string());
+    let reply = tokio::task::spawn_blocking(move || dev::handle_password_ticket(&body, lock_ip.as_deref()))
+        .await
+        .unwrap_or_else(|e| dev::TicketReply {
+            response: crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")),
+            user: String::new(),
+            outcome: "error",
+        });
+    let ip = client_ip_for(ingress, stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
+    device_audit("device-password-ticket", &reply.user, reply.outcome, ingress, &ip, web, None);
+    if reply.response.status.starts_with("401") {
+        if anonymous {
+            limiter.record_global_failure(crate::login_throttle::Door::Connect, limiter.now());
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    reply.response
+}
+
 /// App phone pairing's redeems and checks per window through one App's
 /// link (a BFF redeems for its phones from one socket), V21.
 const APP_PAIR_LINK_PER_APP: usize = 60;
@@ -879,10 +928,10 @@ fn reset_door_admit(
     Some(anonymous)
 }
 
-/// Send `r`, adding `Retry-After` when it is a 429 whose body carries
-/// `error.retryAfterSecs` (or a top-level `retryAfterSecs`).
+/// Send `r`, adding `Retry-After` when it is a 429 or a 423 (locked) whose
+/// body carries `error.retryAfterSecs` (or a top-level `retryAfterSecs`).
 async fn send_with_retry_after(stream: &mut tokio::net::TcpStream, r: &crate::cli_response::CliResponse) {
-    if r.status.starts_with("429") {
+    if r.status.starts_with("429") || r.status.starts_with("423") {
         let secs = serde_json::from_str::<serde_json::Value>(&r.body).ok().and_then(|v| {
             v.pointer("/error/retryAfterSecs").and_then(serde_json::Value::as_i64).or_else(|| v.get("retryAfterSecs").and_then(serde_json::Value::as_i64))
         });
@@ -1846,6 +1895,12 @@ async fn handle_one_request(
         && !crate::email_notify::verify::is_public_page(&path)
         && path != crate::connect_device_routes::PAIR
         && path != crate::connect_device_routes::PAIR_CHECK
+        // K2 Companion (2026-11-17): a login that must change its password
+        // trades the temporary one for a ticket, and the ticket reaches
+        // change-password only (see `connect_device_routes`).
+        && path != crate::connect_device_routes::PASSWORD_TICKET
+        && !(path == "/cli/auth/change-password"
+            && super::http::change_ticket_passes_web_wall(&query, cookie_only, &headers_blob))
         // App phone pairing (V20): belt and braces. A phone app's native
         // call never looks like the hosted web client; this keeps a first
         // contact through the edge working too.
@@ -5880,11 +5935,23 @@ async fn handle_one_request(
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let tok = super::http::extract_token(&query).unwrap_or("").to_string();
             // Owner token does NOT resolve to a connect-user; only a live
-            // session does. Resolve before the blocking hop.
+            // session does, or (K2 Companion 2026-11-17) a live
+            // change-password ticket, which is good for this route only and
+            // only while its login must change its password. Resolve before
+            // the blocking hop.
+            let mut ticket: Option<String> = None;
             let username = if !tok.is_empty() && super::http::ct_eq_token(&tok, state.token.as_str()) {
                 None
+            } else if let Some(u) = k2_core::connect_users::validate_session(&tok) {
+                Some(u)
+            } else if super::http::pair_request_is_browser_shaped(&headers_blob) || cookie_only {
+                None
             } else {
-                k2_core::connect_users::validate_session(&tok)
+                let held = k2_core::connect_password_ticket::holder(&tok);
+                if held.is_some() {
+                    ticket = Some(tok.clone());
+                }
+                held
             };
             let audit_user = username.clone().unwrap_or_default();
             let r = tokio::task::spawn_blocking(move || {
@@ -5892,17 +5959,11 @@ async fn handle_one_request(
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
-            // PRD connect-login-edge-only L1: audited like login. The 401
-            // covers both wrong-current and locked (same wire response).
-            let outcome = if r.status.starts_with("200") {
-                "ok"
-            } else if r.status.starts_with("401") {
-                "bad_current"
-            } else if r.status.starts_with("400") {
-                "rejected"
-            } else {
-                "error"
-            };
+            if let (Some(t), true) = (&ticket, r.status.starts_with("200")) {
+                k2_core::connect_password_ticket::spend(t);
+            }
+            // PRD connect-login-edge-only L1: audited like login.
+            let outcome = crate::connect_users_routes::change_password_audit_outcome(&r);
             k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
                 "change-password",
                 &audit_user,
@@ -5917,7 +5978,7 @@ async fn handle_one_request(
             if r.status.starts_with("401") {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
-            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+            send_with_retry_after(&mut *stream, &r).await;
         }
         // POST /cli/auth/logout — K2 Connect #4. Deletes the CALLER's own
         // persisted session record (per-device logout). Authorized by the
@@ -6006,6 +6067,16 @@ async fn handle_one_request(
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let r = device_pair(&state.login_limiter, &*stream, ingress, &headers_blob, web_client_header, body_bytes, true).await;
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // POST /cli/auth/device/password-ticket {username, password} —
+        // PUBLIC (K2 Companion 2026-11-17): a login that must change its
+        // password trades the temporary one for a change-password ticket.
+        // Open while web access is off; never from a browser page.
+        p if p == crate::connect_device_routes::PASSWORD_TICKET => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = device_password_ticket(&state.login_limiter, &*stream, ingress, &headers_blob, web_client_header, body_bytes).await;
+            send_with_retry_after(&mut *stream, &r).await;
         }
         // GET /cli/auth/devices — live paired phones (the owner: everyone's;
         // a login: its own).

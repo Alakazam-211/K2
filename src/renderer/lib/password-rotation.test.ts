@@ -22,6 +22,7 @@ import {
   changeHostPassword,
   fetchPasswordPolicy,
   isPasswordChangeRequired,
+  lockedCopy,
   policyHint,
   validateNewPassword,
 } from './password-rotation'
@@ -133,6 +134,26 @@ describe('changeHostPassword', () => {
       kind: 'weak',
       reason: 'Password must include a number.',
     })
+  })
+  it('400 password_unchanged → weak with the daemon message', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => fakeRes(400, { error: 'password_unchanged', message: 'Choose a new password, not the current (temporary) one.' })),
+    )
+    await expect(changeHostPassword(HOST, 't', 't')).resolves.toEqual({
+      ok: false,
+      kind: 'weak',
+      reason: 'Choose a new password, not the current (temporary) one.',
+    })
+  })
+  it('423 locked → bad-current saying when to try again', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeRes(423, { error: 'locked', retryAfterSecs: 61 })))
+    await expect(changeHostPassword(HOST, 't', 'n')).resolves.toEqual({
+      ok: false,
+      kind: 'bad-current',
+      reason: lockedCopy(2),
+    })
+    expect(lockedCopy(1)).toBe('Too many wrong passwords. Try again in 1 minute.')
   })
   it('401 → bad-current with the shared copy (wrong temp OR lockout)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => fakeRes(401, { error: 'unauthorized' })))

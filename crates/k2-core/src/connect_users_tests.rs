@@ -310,6 +310,22 @@ fn change_password_wrong_current_is_bad_current() {
 }
 
 #[test]
+fn change_password_refuses_the_current_password_as_the_new_one() {
+    with_temp_home(|| {
+        add_user("chp_same", "temporary1").expect("add");
+        set_must_change_password("chp_same", true).expect("flag");
+        assert_eq!(
+            change_password("chp_same", "temporary1", "temporary1"),
+            ChangePasswordOutcome::Unchanged
+        );
+        assert!(must_change_password("chp_same"), "still must change");
+        assert!(verify("chp_same", "temporary1"));
+        assert_eq!(change_password("chp_same", "temporary1", "temporary2"), ChangePasswordOutcome::Ok);
+        assert!(!must_change_password("chp_same"));
+    });
+}
+
+#[test]
 fn change_password_short_new_is_weak() {
     with_temp_home(|| {
         add_user("chp3", "oldpassword").expect("add");
@@ -327,18 +343,25 @@ fn change_password_short_new_is_weak() {
 fn change_password_through_lockout_locks_after_three_wrong_current() {
     with_temp_home(|| {
         add_user("chp4", "oldpassword").expect("add");
-        for _ in 0..LOCKOUT_THRESHOLD {
+        for _ in 1..LOCKOUT_THRESHOLD {
             assert_eq!(
                 change_password("chp4", "WRONG", "newpassword"),
                 ChangePasswordOutcome::BadCurrent
             );
         }
-        assert!(is_locked("chp4"), "self-service form is subject to lockout");
-        // Even the correct current password is now rejected.
-        assert_eq!(
-            change_password("chp4", "oldpassword", "newpassword"),
-            ChangePasswordOutcome::BadCurrent
+        // The guess that reaches the threshold locks, and says so.
+        let third = change_password("chp4", "WRONG", "newpassword");
+        assert!(
+            matches!(third, ChangePasswordOutcome::Locked { retry_after_secs } if retry_after_secs > 0 && retry_after_secs <= LOCKOUT_DURATION_MINUTES * 60),
+            "{third:?}"
         );
+        assert!(is_locked("chp4"), "self-service form is subject to lockout");
+        // Even the correct current password is now rejected, as locked.
+        assert!(matches!(
+            change_password("chp4", "oldpassword", "newpassword"),
+            ChangePasswordOutcome::Locked { .. }
+        ));
+        assert!(verify("chp4", "oldpassword"), "nothing changed while locked");
     });
 }
 
@@ -1309,10 +1332,10 @@ fn lockout_counter_shared_across_login_and_change_password() {
         assert!(!is_locked("mixlock"), "two fails must not lock yet");
         // A failed CHANGE-PASSWORD (wrong current) trips the SAME counter
         // to the threshold → locked. Proves one shared lockout key.
-        assert_eq!(
+        assert!(matches!(
             change_password("mixlock", "WRONG", "newpassword"),
-            ChangePasswordOutcome::BadCurrent
-        );
+            ChangePasswordOutcome::Locked { .. }
+        ));
         assert!(
             is_locked("mixlock"),
             "3rd fail (via change-password) must lock the shared counter"

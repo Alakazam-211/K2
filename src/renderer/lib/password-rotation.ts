@@ -14,9 +14,10 @@
 //   - `POST /cli/auth/change-password` `{currentPassword, newPassword}` →
 //     200 `{"success":true}` and EVERY session of that user is revoked
 //     (including the one that made the call) — the caller must log in again
-//     with the new password; 400 `{"error":"<first unmet policy rule>"}`;
-//     401 `{"error":"unauthorized"}` for a wrong current password OR a
-//     lockout (deliberately indistinguishable).
+//     with the new password; 400 `{"error":"<first unmet policy rule>"}`
+//     or `{"error":"password_unchanged","message"}` (the current password
+//     kept); 401 `{"error":"current_password_wrong"}` (or `unauthorized`
+//     for a dead session); 423 `{"error":"locked","retryAfterSecs":N}`.
 //
 // All three calls go to the host's OWN base URL (`https://<label>.k2.dev`,
 // LAN, self-host…) — they are session-token authed and are NOT part of the
@@ -53,7 +54,13 @@ export const ROTATION_COPY = {
   mismatch: 'New passwords do not match.',
   missingCurrent: 'Enter the temporary password you were given.',
   badCurrent: 'Temporary password incorrect, or too many attempts. Try again later.',
+  unchanged: 'Choose a new password, not the temporary one.',
 } as const
+
+/** A locked login (423): when it may try again. */
+export function lockedCopy(minutes: number): string {
+  return `Too many wrong passwords. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`
+}
 
 /** The step's words. Every entry point uses ROTATION_COPY except the
  *  self-service change below. */
@@ -72,6 +79,7 @@ export const CHANGE_PASSWORD_COPY: RotationCopy = {
   mismatch: ROTATION_COPY.mismatch,
   missingCurrent: 'Enter your current password.',
   badCurrent: 'Current password incorrect, or too many attempts. Try again later.',
+  unchanged: 'Choose a password that differs from your current one.',
 }
 
 /** Per-request timeout for the policy read + change POST. */
@@ -200,8 +208,11 @@ export async function changeHostPassword(
     // The daemon returns the active policy's first unmet requirement.
     let reason = 'New password does not meet the requirements.'
     try {
-      const body = (await res.json()) as { error?: unknown }
-      if (typeof body.error === 'string' && body.error.length > 0) reason = body.error
+      const body = (await res.json()) as { error?: unknown; message?: unknown }
+      if (body.error === 'password_unchanged') {
+        // The temporary (current) password kept as the new one.
+        reason = typeof body.message === 'string' && body.message.length > 0 ? body.message : ROTATION_COPY.unchanged
+      } else if (typeof body.error === 'string' && body.error.length > 0) reason = body.error
     } catch {
       /* non-JSON 400 — keep the generic copy */
     }
@@ -209,6 +220,17 @@ export async function changeHostPassword(
   }
   if (res.status === 401) {
     return { ok: false, kind: 'bad-current', reason: ROTATION_COPY.badCurrent }
+  }
+  if (res.status === 423) {
+    // Locked: `{"error":"locked","retryAfterSecs":N}`.
+    let mins = 15
+    try {
+      const body = (await res.json()) as { retryAfterSecs?: unknown }
+      if (typeof body.retryAfterSecs === 'number' && body.retryAfterSecs > 0) mins = Math.ceil(body.retryAfterSecs / 60)
+    } catch {
+      /* non-JSON 423 — keep the lockout's full length */
+    }
+    return { ok: false, kind: 'bad-current', reason: lockedCopy(mins) }
   }
   return { ok: false, kind: 'server', reason: `Server returned ${res.status} while changing the password.` }
 }

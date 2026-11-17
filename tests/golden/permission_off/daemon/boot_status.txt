@@ -95,6 +95,7 @@ features:
   llm-account-for-v1
   usage-refresh-async
   companion-pairing-v1
+  companion-password-ticket-v1
   files-download-v1
   transfers-v1
   product-feedback-v1

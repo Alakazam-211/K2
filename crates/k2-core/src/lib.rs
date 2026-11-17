@@ -146,6 +146,9 @@ pub mod connect_users;
 // phone-web-off (2026-10-24): one-time codes that pair a Companion phone
 // to a Connect login (a device session that passes the web-access wall).
 pub mod connect_device_pairing;
+// One-purpose change-password tickets for a login that must change its
+// password (the Companion's way past web access off).
+pub mod connect_password_ticket;
 // phone-web-off: the pairing-link QR matrix (byte mode, level M).
 pub mod qr;
 // PRD connect-login-edge-only: append-only auth audit log

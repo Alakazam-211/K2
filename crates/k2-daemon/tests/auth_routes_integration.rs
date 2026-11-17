@@ -802,6 +802,8 @@ async fn change_password_lockout_via_repeated_wrong_current() {
 
         // 3 wrong-current change-password attempts via the self-service
         // route (authorized by the user's own SESSION token) → lockout.
+        // The first two answer 401 current_password_wrong; the third,
+        // which locks, answers 423 locked.
         for i in 0..3 {
             let r = http(
                 d.port,
@@ -809,11 +811,10 @@ async fn change_password_lockout_via_repeated_wrong_current() {
                 &format!("/cli/auth/change-password?token={session}"),
                 Some(r#"{"currentPassword":"WRONG","newPassword":"brandnewpass"}"#),
             );
-            assert_eq!(
-                r.status, 401,
-                "wrong-current attempt {i} → 401; body={}",
-                r.body
-            );
+            let (status, code) = if i < 2 { (401, "current_password_wrong") } else { (423, "locked") };
+            assert_eq!(r.status, status, "wrong-current attempt {i}; body={}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("change-password json");
+            assert_eq!(v["error"], code, "wrong-current attempt {i}; body={}", r.body);
         }
         assert!(
             connect_users::is_locked(user),

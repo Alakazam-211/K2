@@ -376,6 +376,18 @@ pub(crate) fn device_session_passes_web_wall(query: &str, cookie_only: bool) -> 
         .is_some_and(|t| k2_core::connect_users::validate_device_session(t).is_some())
 }
 
+/// K2 Companion (2026-11-17): while web access is OFF, `POST
+/// /cli/auth/change-password` passes the wall when its credential (Bearer
+/// or `?token=`, never a cookie) is a live change-password ticket
+/// (`k2_core::connect_password_ticket`) and the request isn't shaped like a
+/// browser page (the edge's own markers are allowed, as for a pair). The
+/// caller checks the path: a ticket opens no other route.
+pub(crate) fn change_ticket_passes_web_wall(query: &str, cookie_only: bool, headers_blob: &str) -> bool {
+    !cookie_only
+        && !pair_request_is_browser_shaped(headers_blob)
+        && extract_token(query).and_then(k2_core::connect_password_ticket::holder).is_some()
+}
+
 /// phone-web-off: a request whose credential is a device session that
 /// ended (revoked, signed out, 30 days unused, 180 days old, replaced by a
 /// re-pair, or ended with its login's sessions) is answered 403

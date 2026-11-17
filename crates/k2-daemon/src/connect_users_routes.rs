@@ -1177,17 +1177,27 @@ struct ChangePasswordReq {
 /// `POST /cli/auth/change-password` `{currentPassword,newPassword}`.
 ///
 /// Authorized as the CONNECT-USER (their session token, resolved to a
-/// `username` by the dispatcher via `validate_session`). The OWNER
-/// (daemon token, no session → no username) cannot use this route — it's
-/// for connect-users changing their OWN password. The dispatcher passes
-/// `Some(username)` only for a live session; `None` → generic 401.
+/// `username` by the dispatcher via `validate_session`, or a live
+/// change-password ticket for a login that must change its password,
+/// `k2_core::connect_password_ticket`). The OWNER (daemon token, no
+/// session → no username) cannot use this route — it's for connect-users
+/// changing their OWN password. The dispatcher passes `Some(username)`
+/// only for a live session or ticket; `None` → 401 `unauthorized`.
 ///
 /// Flow (in `connect_users::change_password`): verify `currentPassword`
-/// THROUGH the same brute-force lockout gate as login, require
-/// `newPassword` length >= 8, then re-hash + revoke ALL the user's
-/// sessions (forced re-login everywhere). Returns `{"success":true}` or a
-/// generic 400/401 that never reveals whether the current password was
-/// wrong vs. the account locked.
+/// THROUGH the same brute-force lockout gate as login, refuse the current
+/// password as the new one, check the policy, then re-hash + revoke ALL
+/// the user's sessions (forced re-login everywhere). Answers (K2
+/// Companion 2026-11-17: distinct codes, safe because the caller already
+/// holds this login's live session or ticket):
+/// - 200 `{"success":true}`;
+/// - 401 `{"error":"unauthorized"}`: no live session or ticket;
+/// - 401 `{"error":"current_password_wrong","message"}`;
+/// - 423 `{"error":"locked","retryAfterSecs":N}` (plus `Retry-After`), the
+///   S24 App sign-in shape: locked before this try or by this wrong guess;
+/// - 400 `{"error":"password_unchanged","message"}`: the new password is
+///   the current (temporary) one, as the App door answers;
+/// - 400 `{"error":"<first unmet policy rule>"}`; 403 `password_fixed`.
 pub fn handle_change_password(username: Option<String>, body: &[u8]) -> CliResponse {
     // No session-resolved username → not a connect-user (owner or bad
     // token). Generic 401; don't hint that the route exists for others.
@@ -1230,12 +1240,59 @@ pub fn handle_change_password(username: Option<String>, body: &[u8]) -> CliRespo
             .to_string(),
         },
         connect_users::ChangePasswordOutcome::BadCurrent => CliResponse {
-            // Generic 401 — same whether the current password was wrong or
-            // the account is currently locked out.
             status: "401 Unauthorized",
             content_type: "application/json",
-            body: r#"{"error":"unauthorized"}"#.to_string(),
+            body: serde_json::json!({
+                "error": CHANGE_PASSWORD_CURRENT_WRONG,
+                "message": "The current password is wrong.",
+            })
+            .to_string(),
         },
+        connect_users::ChangePasswordOutcome::Locked { retry_after_secs } => CliResponse {
+            status: "423 Locked",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": crate::skin_routes::LOGIN_LOCKED_ERROR,
+                "retryAfterSecs": retry_after_secs,
+            })
+            .to_string(),
+        },
+        connect_users::ChangePasswordOutcome::Unchanged => CliResponse {
+            status: "400 Bad Request",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": crate::skin_routes::PASSWORD_UNCHANGED,
+                "message": "Choose a new password, not the current (temporary) one.",
+            })
+            .to_string(),
+        },
+    }
+}
+
+/// `/cli/auth/change-password`: the current password was wrong (401; the
+/// caller holds this login's live session or ticket).
+pub const CHANGE_PASSWORD_CURRENT_WRONG: &str = "current_password_wrong";
+
+/// The audit outcome for a `/cli/auth/change-password` answer.
+pub fn change_password_audit_outcome(r: &CliResponse) -> &'static str {
+    let code = serde_json::from_str::<serde_json::Value>(&r.body)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+        .unwrap_or_default();
+    if r.status.starts_with("200") {
+        "ok"
+    } else if r.status.starts_with("423") {
+        "locked"
+    } else if r.status.starts_with("401") && code == CHANGE_PASSWORD_CURRENT_WRONG {
+        "bad_current"
+    } else if r.status.starts_with("401") {
+        "unauthorized"
+    } else if r.status.starts_with("400") && code == crate::skin_routes::PASSWORD_UNCHANGED {
+        "unchanged"
+    } else if r.status.starts_with("400") {
+        "rejected"
+    } else {
+        "error"
     }
 }
 
@@ -1476,6 +1533,44 @@ mod tests {
     fn change_password_malformed_body_is_400() {
         let r = handle_change_password(Some("alice".to_string()), b"not json");
         assert_eq!(r.status, "400 Bad Request");
+    }
+
+    /// K2 Companion 2026-11-17: the temporary password kept as the new one
+    /// is refused like the App door does; a wrong current password, a lock
+    /// and no session each get their own answer.
+    #[test]
+    fn change_password_answers_name_what_went_wrong() {
+        with_temp_home(|| {
+            connect_users::add_user("cp_codes", "temporary-1").expect("add");
+            connect_users::set_must_change_password("cp_codes", true).expect("flag");
+            let call = |current: &str, new: &str| {
+                let body = serde_json::json!({ "currentPassword": current, "newPassword": new }).to_string();
+                let r = handle_change_password(Some("cp_codes".to_string()), body.as_bytes());
+                let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+                (r.status, v)
+            };
+            let (status, v) = call("temporary-1", "temporary-1");
+            assert_eq!(status, "400 Bad Request");
+            assert_eq!(v["error"], "password_unchanged", "{v}");
+            assert!(connect_users::must_change_password("cp_codes"), "nothing changed");
+
+            let (status, v) = call("wrong-1", "brand-new-1");
+            assert_eq!(status, "401 Unauthorized");
+            assert_eq!(v["error"], "current_password_wrong", "{v}");
+            let (status, _) = call("wrong-2", "brand-new-1");
+            assert_eq!(status, "401 Unauthorized");
+            let (status, v) = call("wrong-3", "brand-new-1");
+            assert_eq!(status, "423 Locked", "the third wrong guess locks: {v}");
+            assert_eq!(v["error"], "locked", "{v}");
+            let secs = v["retryAfterSecs"].as_i64().expect("retryAfterSecs");
+            assert!(secs > 0 && secs <= connect_users::LOCKOUT_DURATION_MINUTES * 60, "{v}");
+            let (status, v) = call("temporary-1", "brand-new-1");
+            assert_eq!(status, "423 Locked", "locked: the right password too: {v}");
+            assert_eq!(v.as_object().map(|o| o.len()), Some(2), "exactly {{error, retryAfterSecs}}: {v}");
+
+            let r = handle_change_password(None, br#"{"currentPassword":"x","newPassword":"longenough"}"#);
+            assert_eq!((r.status, r.body.as_str()), ("401 Unauthorized", r#"{"error":"unauthorized"}"#));
+        });
     }
 
     // ── K2 Cloud S1 — mustChangePassword wire shapes ─────────────────

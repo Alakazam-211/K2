@@ -40,6 +40,15 @@
 //!   login a new code from this caller would pair as.
 //! - `POST /cli/auth/device/revoke {id}`: end one paired phone (the owner
 //!   token or an Owner login: anyone's; any other login: its own).
+//! - `POST /cli/auth/device/password-ticket {username, password}` (Public,
+//!   K2 Companion 2026-11-17): a login that must change its password (no
+//!   code is made for it, and with web access off its password sign-in
+//!   meets the wall) trades its temporary password for a ticket good only
+//!   for `POST /cli/auth/change-password` (Bearer), for 10 minutes, once,
+//!   and only while the change is pending
+//!   (`k2_core::connect_password_ticket`). Same browser refusal and
+//!   limiter buckets as a pair; every attempt counts toward the login's
+//!   lockout; any other name is answered like a wrong password.
 //! - `GET /cli/auth/device/pair-code/status?id=<codeId>` (0.46.6): one
 //!   code's state (`pending` / `paired` / `expired` / `void`) for the actor
 //!   that minted it; anyone else, and an unknown id, get 404
@@ -74,6 +83,9 @@ pub const DEVICES: &str = "/cli/auth/devices";
 pub const REVOKE: &str = "/cli/auth/device/revoke";
 /// One code's state, for its minter (GET, `?id=<codeId>`).
 pub const CODE_STATUS: &str = "/cli/auth/device/pair-code/status";
+/// A login that must change its password trades its temporary password for
+/// a change-password ticket (Public; see [`handle_password_ticket`]).
+pub const PASSWORD_TICKET: &str = "/cli/auth/device/password-ticket";
 
 /// The session-events frame for a finished code (0.46.6): person-scoped to
 /// whoever minted it. Never the code or a token.
@@ -354,12 +366,23 @@ fn not_linked(miss: LinkedMiss) -> CliResponse {
     refusal("409 Conflict", "owner_login_not_linked", hint)
 }
 
-fn password_change_required() -> CliResponse {
-    refusal(
-        "409 Conflict",
-        "password_change_required",
-        crate::connect_users_routes::TEMPORARY_PASSWORD_HINT,
-    )
+/// 409 `password_change_required`, naming the login (`error.user`): the
+/// caller's own login, the login the owner token named, or the login a
+/// pairing code was made for (the code holder may learn it). Never anyone
+/// else's. `error.ticketPath` is the phone's next step; `error.hint` says
+/// it for a person (0.46.18).
+fn password_change_required(user: &str) -> CliResponse {
+    CliResponse {
+        status: "409 Conflict",
+        content_type: "application/json",
+        body: json!({ "ok": false, "error": {
+            "code": "password_change_required",
+            "hint": crate::connect_users_routes::TEMPORARY_PASSWORD_HINT,
+            "user": user,
+            "ticketPath": PASSWORD_TICKET,
+        } })
+        .to_string(),
+    }
 }
 
 /// What a new code from `caller` pairs as. `Err` is the refusal.
@@ -385,7 +408,7 @@ pub fn pre_password_checks(caller: &Caller, req: &PairCodeBody) -> Result<String
     let target = pair_target(caller, req.user.as_deref())?;
     if let Some(me) = caller.login() {
         if connect_users::must_change_password(me) {
-            return Err(password_change_required());
+            return Err(password_change_required(me));
         }
         if req.password.is_none() {
             return Err(usage("type your password again to make a pairing code: send {password}"));
@@ -424,7 +447,7 @@ pub fn mint_response(target: &str, actor: &str, host: Option<&str>) -> CliRespon
             }
             CliResponse::ok_json(body.to_string())
         }
-        Err(pairing::MintError::PasswordChangeRequired) => password_change_required(),
+        Err(pairing::MintError::PasswordChangeRequired) => password_change_required(target),
         Err(pairing::MintError::NoSuchLogin(e)) => refusal("400 Bad Request", "no_such_login", &e),
     }
 }
@@ -509,8 +532,8 @@ pub fn handle_pair(body: &[u8], public_host: Option<&str>) -> PairReply {
                 redeem_ms,
             }
         }
-        Ok(Err(pairing::Refused::PasswordChangeRequired)) => {
-            timed(reply(password_change_required(), "", "password_change_required"))
+        Ok(Err(pairing::Refused::PasswordChangeRequired { username })) => {
+            timed(reply(password_change_required(&username), &username, "password_change_required"))
         }
         Ok(Err(why)) => timed(reply(pair_invalid(), "", why.as_str())),
         Err(e) => timed(reply(CliResponse::internal_error(e), "", "error")),
@@ -572,9 +595,90 @@ pub fn handle_pair_check(body: &[u8], host: Option<&str>) -> PairReply {
             let body = json!({ "ok": true, "user": c.username, "host": host, "expiresInSecs": c.expires_in_secs });
             reply(CliResponse::ok_json(body.to_string()), &c.username, "ok")
         }
-        Err(pairing::Refused::PasswordChangeRequired) => reply(password_change_required(), "", "password_change_required"),
+        Err(pairing::Refused::PasswordChangeRequired { username }) => {
+            reply(password_change_required(&username), &username, "password_change_required")
+        }
         Err(why) => reply(pair_invalid(), "", why.as_str()),
     }
+}
+
+/// What the dispatcher audits about a ticket attempt.
+pub struct TicketReply {
+    pub response: CliResponse,
+    /// The username as sent (for the audit row only).
+    pub user: String,
+    pub outcome: &'static str,
+}
+
+/// `POST /cli/auth/device/password-ticket {username, password}` (Public).
+/// `lock_ip` keys a Voice & Chat only login's lockout, as at sign-in.
+///
+/// - 200 `{ok, ticket, user, expiresAt, expiresInSecs, changePath}`;
+/// - 401 `password_invalid`: a wrong password, or a name that can't have a
+///   ticket (no such login, disabled, nothing to change). One answer;
+/// - 423 `locked` with `retryAfterSecs` (and `Retry-After`): the name is
+///   locked, which a name with no login gets the same way;
+/// - 400 `usage`: no username or password.
+pub fn handle_password_ticket(body: &[u8], lock_ip: Option<&str>) -> TicketReply {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return TicketReply { response: r, user: String::new(), outcome: "rejected" },
+    };
+    let user = text(&v, "username").or_else(|| text(&v, "user")).unwrap_or("").to_string();
+    // The password is taken as sent (no trim): it is checked, never stored.
+    let password = v.get("password").and_then(Value::as_str).filter(|s| !s.is_empty() && !user.is_empty());
+    let Some(password) = password else {
+        return TicketReply {
+            response: usage("send {username, password}: the temporary password the login was given"),
+            user,
+            outcome: "rejected",
+        };
+    };
+    match k2_core::connect_password_ticket::issue(&user, password, lock_ip) {
+        k2_core::connect_password_ticket::Issue::Ticket(t) => {
+            let body = json!({
+                "ok": true,
+                "ticket": t.ticket,
+                "user": t.username,
+                "expiresAt": t.expires_at.to_rfc3339(),
+                "expiresInSecs": k2_core::connect_password_ticket::TICKET_TTL_SECS,
+                "changePath": "/cli/auth/change-password",
+            });
+            TicketReply { response: CliResponse::ok_json(body.to_string()), user, outcome: "ok" }
+        }
+        k2_core::connect_password_ticket::Issue::Locked { retry_after_secs } => TicketReply {
+            response: CliResponse {
+                status: "423 Locked",
+                content_type: "application/json",
+                body: json!({ "ok": false, "error": {
+                    "code": "locked",
+                    "hint": "too many wrong passwords for this login: try again later",
+                    "retryAfterSecs": retry_after_secs,
+                } })
+                .to_string(),
+            },
+            user,
+            outcome: "locked",
+        },
+        k2_core::connect_password_ticket::Issue::Refused => TicketReply {
+            response: refusal(
+                "401 Unauthorized",
+                "password_invalid",
+                "that username and temporary password don't match a login waiting for a new password. Check them; if the password was already changed, sign in or pair the phone as usual",
+            ),
+            user,
+            outcome: "bad_creds",
+        },
+    }
+}
+
+/// The answer for a browser-shaped request on the ticket route.
+pub fn ticket_browser_refused() -> CliResponse {
+    refusal(
+        "403 Forbidden",
+        "device_pairing_not_from_browser",
+        "a change-password ticket is for the K2 Companion app, not a web page",
+    )
 }
 
 /// A device name as plain, single-line Markdown-safe text for a notice

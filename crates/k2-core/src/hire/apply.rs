@@ -432,6 +432,21 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
     Ok((hired, group_id, made_links, launches))
 }
 
+/// The recipe doesn't take `declinePermissions` yet (prd-agent-templates-v1
+/// T3): refused by name, at the top level, on `agent` or on any member,
+/// before anything else, so a caller never thinks a permission was left off.
+pub const DECLINE_UNSUPPORTED: &str = "declinePermissions isn't supported on the recipe hire (/v1/agents/hire, /cli/agent-instances/hire) yet: \
+hire one agent from a template with POST /v1/w or POST /cli/agents/hire (k2 agent hire --template <id> --decline <permission>), which take it";
+
+fn refuse_decline_permissions(raw: &serde_json::Value) -> Result<(), HireError> {
+    let has = |v: &serde_json::Value| v.get("declinePermissions").is_some();
+    let members = raw.get("members").and_then(|m| m.as_array()).map(Vec::as_slice).unwrap_or_default();
+    if has(raw) || raw.get("agent").is_some_and(has) || members.iter().any(has) {
+        return Err(HireError::new(400, "unsupported_field", DECLINE_UNSUPPORTED));
+    }
+    Ok(())
+}
+
 /// The hire door's whole job: idempotency, plan, ledger, apply, undo.
 ///
 /// `raw` is the request JSON as sent (hashed for idempotency, minus `key`
@@ -441,6 +456,7 @@ pub fn instantiate(
     idem_header: Option<&str>,
     ctx: &PlanContext,
 ) -> Result<Instantiated, HireError> {
+    refuse_decline_permissions(raw)?;
     let req: HireRequest = serde_json::from_value(raw.clone()).map_err(|e| HireError::usage(format!("invalid hire request: {e}")))?;
     let members = super::recipe::validate_request(&req)?;
     for (i, m) in members.iter().enumerate() {

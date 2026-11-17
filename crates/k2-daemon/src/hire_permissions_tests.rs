@@ -307,3 +307,30 @@ fn people_give_up_to_their_floor_and_keys_give_nothing() {
     let st: Vec<(&str, &str)> = plan.rows.iter().map(|r| (r.target.as_str(), r.status)).collect();
     assert_eq!(st, vec![(CARDS_ROW, "refused"), ("apps.build", "card"), ("compute.use", "card")], "cards on: {plan:?}");
 }
+
+/// The recipe hire doesn't take `declinePermissions` yet: a 400 naming the
+/// field and where it works, wherever it is in the request, and nothing is
+/// made. The CLI door takes it.
+#[test]
+fn the_recipe_hire_refuses_decline_permissions_by_name() {
+    let _home = k2_core::test_env::TempHome::new();
+    ensure_test_root();
+    let owner = crate::routes::http::V1Principal::Owner;
+    let handle = uniq("rec");
+    for body in [
+        json!({ "agent": { "handle": handle, "template": "developer", "declinePermissions": ["compute.use"] } }),
+        json!({ "members": [{ "handle": handle, "template": "developer", "declinePermissions": ["compute.use"] }] }),
+        json!({ "agent": { "handle": handle, "template": "developer" }, "declinePermissions": ["compute.use"] }),
+    ] {
+        let r = crate::hire_routes::handle_v1(crate::hire_routes::V1_HIRE, &owner, true, body.to_string().as_bytes(), &HashMap::new(), None);
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        let v: Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "unsupported_field", "{v}");
+        assert_eq!(v["error"]["hint"], k2_core::hire::apply::DECLINE_UNSUPPORTED, "{v}");
+        assert!(v["error"]["hint"].as_str().unwrap().contains("POST /v1/w or POST /cli/agents/hire"), "{v}");
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE handle = ?1", rusqlite::params![handle], |r| r.get(0)).expect("count");
+    assert_eq!(n, 0, "nothing made");
+}

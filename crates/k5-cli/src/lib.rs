@@ -17,6 +17,10 @@
 //!   the Rust CLI must print the same bytes.
 //! - [`transport::encode`]: the query string escaping the shell CLI gets from
 //!   Python's `urllib.parse.quote(value, safe='')`.
+//! - [`transport`]: the HTTP client that sends the daemon what the shell
+//!   CLI's curl sends for the same call, over loopback TCP and the cell
+//!   socket, with its tries, time limits and permission note. Nothing in
+//!   `main` calls it yet.
 //! - [`called_as`]: the name the command was called by (k2 or k5), and the
 //!   variables the front hands the shell when a verb falls through.
 //! - [`home`]: the K2 home and a workspace's private folder, by k2-client's

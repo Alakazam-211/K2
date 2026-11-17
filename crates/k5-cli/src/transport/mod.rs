@@ -1,3 +1,118 @@
-//! How the command line talks to the daemon.
+//! How the command line talks to the daemon (PRD 6.4).
+//!
+//! One small HTTP/1.1 client over loopback TCP and the cell socket that
+//! sends what the shell CLI sends for the same call: its request
+//! functions in `cli/src/cli-tools-policy.sh` (`cli_request`,
+//! `cli_request_post`, `cli_post_form`, `cli_post_json`,
+//! `cli_post_json_stdin`) and `cli/src/cell-socket.sh` (their `_uds`
+//! twins, `cli_send`, `cli_send_json`), all through `_k2_curl`. Nothing
+//! calls it from `main` yet.
+//!
+//! - [`wire`]: one exchange, written as curl writes it.
+//! - [`client`]: the calls, their tries and time limits.
+//! - [`permission`]: the refusal's closing line.
+//! - [`encode`]: the query escaping (Python's `quote`).
+//!
+//! # The requests
+//!
+//! Every request has curl's head (see [`wire`]): the request line,
+//! `Host`, `User-Agent`, `Accept: */*`, then these custom headers in this
+//! order, then `Content-Length` for a body:
+//!
+//! 1. `Authorization: Bearer <passport>`, on the cell socket only (a
+//!    config line read before the command line's `-H`s).
+//! 2. `X-K5-Would-Refuse: 1`, when the passport rule would refuse the
+//!    call, and never otherwise.
+//! 3. `X-K5-Cli-Via`: `fallthrough` from the shell when the front ran it,
+//!    `native` here. The shell's two are put in front of the command
+//!    line's `-H`s, the Via first, so the would-refuse line ends up above
+//!    it.
+//! 4. A custom `Content-Type`, when the call has one.
+//!
+//! `Host` is `<HOST>:<PORT>` over TCP and `localhost` on the cell socket
+//! (its URL is `http://localhost<path>`). `<P>` is `PROJECT` escaped by
+//! [`encode::quote`]; `<T>` the TCP token (the owner's, or the passport);
+//! `args` the caller's pre-escaped `key=value` pairs, joined by `&`.
+//! Lower case `%xx` marks a query curl's `-G` wrote ([`wire::curl_get_query`]):
+//!
+//! | call | TCP | cell socket |
+//! |---|---|---|
+//! | `cli_request` | `GET <ep>?token=<T>&project=<P>&args` (lower) | `GET <ep>?args` (lower; no `?` with no args) |
+//! | `cli_request_post` | `POST <ep>?token=<T>&project=<P>&args`, empty body, curl's form type | `POST <ep>?args`, likewise |
+//! | `cli_post_form` | `POST <ep>?token=<T>&project=<P>`, body `args`, `Content-Type: application/x-www-form-urlencoded` | `POST <ep>`, likewise |
+//! | `cli_post_json` | `POST <ep>?token=<T>` (no `project=`), `Content-Type: application/json` | `POST <ep>`, likewise |
+//! | `cli_post_json_stdin` | as `cli_post_json` | none |
+//! | `cli_send_json GET` | `GET <ep>?token=<curl-escaped T>&payload` (lower) | `GET <ep>?payload` (lower) |
+//! | `cli_send_json POST` | `POST <ep>?token=<quoted T>`, JSON | `POST <ep>`, JSON |
+//!
+//! An endpoint that already has a `?` gets the `-G` query after `&`; the
+//! POST forms always add `?`, as the shell writes them.
+//!
+//! The per-verb headers are not the shared functions': `X-K2-Tty`
+//! (`k2 vault`, `k2 migrate`, `k2 clone`), `X-K2-Pane`, `X-K2-Agent-Pid`
+//! and `X-K2-Hook-Source`, `-Version`, `-Report`, `-Event` (`k2 hooks
+//! emit`) are `-H`s their callers give `_k2_curl` themselves, after the
+//! shell's two; `X-K2-Client-IP` and `X-K2-Mode` are the daemon's (set on
+//! what it forwards, or on its answers), and `X-K2-Ops-*` names are
+//! `k2 vault --sign` settings for other servers. [`wire::Request`] takes
+//! any ordered header list, so those calls fit in later.
+//!
+//! # Tries
+//!
+//! - Nothing accepted the connection (curl exit 7): again, at most
+//!   [`client::TRIES`] tries, a second apart, every call but a body from
+//!   stdin; a loopback one then tries the port in `daemon.port` when it
+//!   differs ([`client::Client::port_file`]).
+//! - The connect timed out (curl 28 before "Connected to"): again, the
+//!   same way, for `cli_request` and `cli_request_post` and their twins.
+//! - `503` with `"state":"migrating"`: again, at most [`client::TRIES`]
+//!   tries, a second apart, the same four. The status decides, never the
+//!   body alone.
+//! - `cli_request_post` over TCP, an answer holding `method not allowed
+//!   for this route` (a pre-0.44.4 daemon), whatever its status: the same
+//!   call once as `cli_request`, a GET.
+//! - An answer holding `Invalid or missing auth token`: once per client,
+//!   the same call again with a healed passport ([`client::Healer`]).
+//!   Not `cli_post_form` or its twin, not `cli_post_json_stdin`, and not
+//!   `cli_post_json_uds` (the shell's arms have no heal there).
+//!
+//! # Time limits
+//!
+//! Connect 5 s; at most 30 s per try, or `_K2_POST_MAX_TIME` for
+//! `cli_post_json` and `cli_post_form` ([`client::Client::post_max_time`]),
+//! and 60 s or `_K2_SEND_MAX_TIME` for `cli_send_json`
+//! ([`client::Client::send_max_time`]). `cli_post_json_stdin` is 30 s.
+//!
+//! A request the daemon never answered (a timeout, a connection closed
+//! with nothing, or a 5xx with an empty body for the two that read the
+//! status) is [`client::Error::NoAnswer`]: the shell's line, `Error: K2's
+//! server didn't answer <ep> within <n> s; run k2 daemon status` (or
+//! `gave an empty answer to <ep> after <n> s`), instead of a JSON parse
+//! error. `cli_post_json_stdin` and `cli_send_json` have no such line.
+//!
+//! # Where this differs from the shell, on purpose
+//!
+//! - `User-Agent: k5/<version>` for curl's, and `X-K5-Cli-Version:
+//!   <version>` (just before the Via), and `X-K5-Cli-Via: native`.
+//! - PRD 13.9 #4: with a passport, the owner token is never sent on any
+//!   channel. The shell's open tools put the owner token from disk back
+//!   on TCP inside a K2 terminal (`_cli_apply_auth_for_verb`, COMPAT-58),
+//!   and `cli_send`'s TCP arm then uses it; here [`client::Auth`] holds
+//!   either a passport or the owner token, never both.
+//! - No empty Bearer: `cli_send` tries the cell socket whenever
+//!   `K2_HOOK_SOCK` is a socket, with `Bearer ` and nothing after it when
+//!   there is no passport. Here only a passport has a cell socket.
+//! - A healed passport stays healed for the client. The shell's `_uds`
+//!   arms heal inside `$(…)`, so `cli_send`'s TCP try after one starts
+//!   from the old passport again.
+//! - A target curl would not send as given (a space or a control byte:
+//!   curl exit 3; a `#`: curl cuts it off) is an error here, never sent.
+//! - A failed `cli_send_json` is an error here; the shell prints status
+//!   `000`.
 
+pub mod client;
 pub mod encode;
+pub mod permission;
+pub mod wire;
+
+pub use client::{Auth, Call, Channel, Client, Error, Healer, NoAnswer, Passport, Response, SecretsDir};

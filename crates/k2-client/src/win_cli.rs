@@ -111,7 +111,8 @@ pub fn find_git_bash(env: impl Fn(&str) -> Option<OsString>, is_file: impl Fn(&P
     None
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
+#[cfg(windows)]
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};

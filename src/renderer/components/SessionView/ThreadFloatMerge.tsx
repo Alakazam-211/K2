@@ -37,6 +37,17 @@ function shown(el: HTMLElement, r: DOMRect): boolean {
   return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility === 'visible'
 }
 
+/** Resolves once a mask image is decoded. WebKit decodes a data URL set
+ *  straight onto mask-image later, and shows the layer unmasked for that
+ *  frame (a flash of the whole region). Resolves anyway where decoding isn't
+ *  available. */
+function decoded(url: string): Promise<void> {
+  if (typeof Image === 'undefined') return Promise.resolve()
+  const img = new Image()
+  img.src = url
+  return typeof img.decode === 'function' ? img.decode().catch(() => undefined) : Promise.resolve()
+}
+
 const px = (v: string): number => {
   const n = parseFloat(v)
   return Number.isFinite(n) ? n : 0
@@ -50,7 +61,9 @@ const px = (v: string): number => {
  *
  * Glass is drawn from canvas masks, which are only drawn when the row is
  * still: while a window resize or a pane drag moves it, each piece shows
- * its own glass, and the masks follow MERGE_SETTLE_MS after it stops.
+ * its own glass, and the masks follow MERGE_SETTLE_MS after it stops. A
+ * redraw is shown only once its masks are decoded, and only if nothing
+ * newer came since; the first is shown at once, so a Thread opens merged.
  * Terminal's bar is an SVG path, cheap enough to follow every frame.
  *
  * The row is this layer's own parent, read from its DOM node (a parent's
@@ -72,6 +85,9 @@ export function ThreadFloatMerge(): JSX.Element {
     let timer: ReturnType<typeof setTimeout> | null = null
     let lastKey = ''
     let drawn = false
+    // Bumped by every draw and every clear: a redraw whose masks finish
+    // decoding after that is dropped.
+    let generation = 0
     let pieces = new Set<HTMLElement>()
 
     const mark = (next: Set<HTMLElement>): void => {
@@ -80,6 +96,7 @@ export function ThreadFloatMerge(): JSX.Element {
       pieces = next
     }
     const clear = (): void => {
+      generation += 1
       host.removeAttribute(FLOAT_MERGED_ATTR)
       host.removeAttribute(FLOAT_JOINED_ATTR)
       mark(new Set())
@@ -149,7 +166,7 @@ export function ThreadFloatMerge(): JSX.Element {
       host.setAttribute(FLOAT_JOINED_ATTR, '')
     }
 
-    const drawGlass = (g: Geometry): void => {
+    const drawGlass = (g: Geometry, first: boolean): void => {
       host.removeAttribute(FLOAT_JOINED_ATTR)
       const near = mergeNeighbours(g.plate, g.boxes, MERGE_K)
       if (near.length === 0) {
@@ -180,12 +197,6 @@ export function ThreadFloatMerge(): JSX.Element {
         clear()
         return
       }
-      Object.assign(glass.style, {
-        left: `${region.x0}px`,
-        top: `${region.y0}px`,
-        width: `${region.x1 - region.x0}px`,
-        height: `${region.y1 - region.y0}px`,
-      })
       // A layer with no mask (no shadow in this look) isn't drawn at all: an
       // unmasked layer would cover the whole region.
       const apply = (el: HTMLElement, url: string | null): void => {
@@ -194,22 +205,42 @@ export function ThreadFloatMerge(): JSX.Element {
         el.style.setProperty('mask-image', v)
         el.hidden = !url
       }
-      apply(layers.fill, masks.fill)
-      apply(layers.edge, masks.edge)
-      apply(layers.sheen, masks.sheen)
-      apply(layers.shadow, masks.shadow)
-      mark(new Set([g.plateEl, ...near.map((i) => g.els[i])]))
-      host.setAttribute(FLOAT_MERGED_ATTR, '')
+      const show = (): void => {
+        Object.assign(glass.style, {
+          left: `${region.x0}px`,
+          top: `${region.y0}px`,
+          width: `${region.x1 - region.x0}px`,
+          height: `${region.y1 - region.y0}px`,
+        })
+        apply(layers.fill, masks.fill)
+        apply(layers.edge, masks.edge)
+        apply(layers.sheen, masks.sheen)
+        apply(layers.shadow, masks.shadow)
+        mark(new Set([g.plateEl, ...near.map((i) => g.els[i])]))
+        host.setAttribute(FLOAT_MERGED_ATTR, '')
+      }
+      if (first) {
+        show()
+        return
+      }
+      // Each piece keeps its own glass until the new masks are ready.
+      const mine = generation
+      const urls = [masks.fill, masks.edge, masks.sheen, masks.shadow].filter((u): u is string => !!u)
+      void Promise.all(urls.map(decoded)).then(() => {
+        if (mine === generation) show()
+      })
     }
 
     const draw = (): void => {
       timer = null
+      generation += 1
       const g = measure()
       lastKey = keyOf(g)
+      const first = !drawn
       drawn = true
       if (!g) clear()
       else if (g.look === 'terminal') drawTerminal(g)
-      else drawGlass(g)
+      else drawGlass(g, first)
     }
 
     const check = (): void => {
@@ -224,8 +255,9 @@ export function ThreadFloatMerge(): JSX.Element {
         draw()
         return
       }
-      // Glass is moving: each piece shows its own glass until it stops.
-      if (host.hasAttribute(FLOAT_MERGED_ATTR)) clear()
+      // Glass is moving: each piece shows its own glass until it stops (and
+      // masks still decoding from before are dropped).
+      clear()
       if (timer) clearTimeout(timer)
       timer = setTimeout(draw, MERGE_SETTLE_MS)
     }

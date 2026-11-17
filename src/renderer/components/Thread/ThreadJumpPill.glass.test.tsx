@@ -210,7 +210,8 @@ describe('Jump to bottom pill: Glass is the phone glass pill', () => {
         const { pill } = mount({ style: 'glass', scheme }, { unseen: 3 })
         const p = pill()
         const cs = getComputedStyle(p)
-        expect(cs.backdropFilter).toBe('blur(var(--material-blur)) saturate(var(--material-saturate))')
+        // Veil's frost also dims the backdrop a little (the phone's light glass).
+        expect(cs.backdropFilter).toBe(scheme === 'dark' ? 'blur(var(--material-blur)) saturate(var(--material-saturate))' : 'var(--k2-veil-frost-filter)')
         // The same box paints the tint and the scrim (no pseudo-element, no child layer).
         expect(cs.getPropertyValue('background')).toBe('linear-gradient(var(--k2-jump-tint) 0 0), var(--k2-jump-scrim)')
         expect(p.querySelector('[data-material]')).toBeNull()

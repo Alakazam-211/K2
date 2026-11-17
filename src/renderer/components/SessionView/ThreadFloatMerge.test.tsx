@@ -104,7 +104,7 @@ describe('Glass', () => {
     expect(document.querySelector<HTMLElement>('[data-k2-merge="shadow"]')!.hidden).toBe(true)
   })
 
-  it('a moving row shows each piece’s own glass, and draws the masks once it has been still', () => {
+  it('a moving row shows each piece’s own glass, and draws the masks once it has been still', async () => {
     render(<Row />)
     frame()
     expect(renderMergeMasks).toHaveBeenCalledTimes(1)
@@ -125,7 +125,89 @@ describe('Glass', () => {
       vi.advanceTimersByTime(20)
     })
     expect(renderMergeMasks).toHaveBeenCalledTimes(2)
+    // Shown once its masks are decoded (no decoder here: the next tick).
+    await act(async () => {})
     expect(row().hasAttribute(FLOAT_MERGED_ATTR)).toBe(true)
+  })
+
+  describe('a redraw never shows the glass unmasked', () => {
+    // A data URL set straight onto mask-image is decoded later in WebKit,
+    // and the layer shows unmasked meanwhile. Here decoding waits until the
+    // test lets it finish.
+    let pending: Array<() => void> = []
+    beforeEach(() => {
+      pending = []
+      vi.stubGlobal(
+        'Image',
+        class {
+          src = ''
+          decode(): Promise<void> {
+            return new Promise<void>((done) => pending.push(done))
+          }
+        },
+      )
+    })
+    const decodeAll = async (): Promise<void> => {
+      const now = pending
+      pending = []
+      await act(async () => {
+        for (const done of now) done()
+      })
+    }
+    const fill = (): string => document.querySelector<HTMLElement>('[data-k2-merge="fill"]')!.style.getPropertyValue('mask-image')
+    const moveAndSettle = (dx: number): void => {
+      rects.plate = { ...rects.plate, x: rects.plate.x - dx, w: rects.plate.w + dx }
+      resize()
+      act(() => {
+        vi.advanceTimersByTime(MERGE_SETTLE_MS)
+      })
+    }
+
+    it('the first draw shows at once; a later one only once its masks are decoded', async () => {
+      render(<Row />)
+      frame()
+      expect(row().hasAttribute(FLOAT_MERGED_ATTR)).toBe(true)
+      expect(pending).toHaveLength(0)
+      masks.result = { fill: 'data:fill2', edge: 'data:edge2', sheen: 'data:sheen2', shadow: null }
+      moveAndSettle(2)
+      expect(renderMergeMasks).toHaveBeenCalledTimes(2)
+      // Drawn, not shown: each piece keeps its own glass meanwhile.
+      expect(row().hasAttribute(FLOAT_MERGED_ATTR)).toBe(false)
+      expect(screen.getByTestId('near').hasAttribute(FLOAT_PIECE_ATTR)).toBe(false)
+      expect(pending.length).toBeGreaterThan(0)
+      await decodeAll()
+      expect(row().hasAttribute(FLOAT_MERGED_ATTR)).toBe(true)
+      expect(fill()).toContain('data:fill2')
+    })
+
+    it('masks decoded after the row moved on are dropped', async () => {
+      render(<Row />)
+      frame()
+      masks.result = { fill: 'data:stale', edge: 'data:stale', sheen: 'data:stale', shadow: null }
+      moveAndSettle(2)
+      const stale = pending
+      pending = []
+      // It moves again before those are decoded.
+      masks.result = { fill: 'data:fresh', edge: 'data:fresh', sheen: 'data:fresh', shadow: null }
+      moveAndSettle(2)
+      await act(async () => {
+        for (const done of stale) done()
+      })
+      expect(row().hasAttribute(FLOAT_MERGED_ATTR)).toBe(false)
+      await decodeAll()
+      expect(row().hasAttribute(FLOAT_MERGED_ATTR)).toBe(true)
+      expect(fill()).toContain('data:fresh')
+    })
+
+    it('nothing lands after it unmounts', async () => {
+      const { unmount } = render(<Row />)
+      frame()
+      moveAndSettle(2)
+      const r = row()
+      unmount()
+      await decodeAll()
+      expect(r.hasAttribute(FLOAT_MERGED_ATTR)).toBe(false)
+    })
   })
 
   it('a frame where nothing moved changes nothing', () => {

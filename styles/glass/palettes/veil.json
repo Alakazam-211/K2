@@ -299,12 +299,14 @@
       "$type": "color"
     },
     "frost-fill": {
-      "$value": "rgba(255, 255, 255, 0.72)",
-      "$type": "color"
+      "$value": "rgba(255, 255, 255, 0.55)",
+      "$type": "color",
+      "$description": "Frost's fill over the blur, as the phone's light glass: a little less white than the page, so the dimmed backdrop (--k2-veil-frost-brightness) reads a shade darker."
     },
     "frost-edge": {
-      "$value": "#eaeaea",
-      "$type": "color"
+      "$value": "rgba(0, 0, 0, 0.16)",
+      "$type": "color",
+      "$description": "Frost's edge: one even thin line all the way round, dark on light where Obsidian's is white 22% on dark. The merged outline in Thread view paints it too."
     },
     "frost-sheen": {
       "$value": "rgba(255, 255, 255, 0.9)",

@@ -2568,7 +2568,7 @@ html[data-style="glass"][data-palette="veil"] {
    the white words still read at 4.5:1 (the phone's frost alone: 1:1 and 3:1).
    Its rim is the phone's at 32% instead of 22%, 3:1 on the canvas and the
    tile. The phone's white ink, 32px tall, 14px sides, 13px type. Light Glass
-   (the phone has none): Veil's 72% white frost, no scrim, dark words (10:1
+   (the phone has none): Veil's 55% white frost, no scrim, dark words (6:1
    over anything) and a dark rim at 45% (3:1 on the canvas and the tile). */
 html[data-style="glass"] {
   --k2-jump-tint: var(--color-frost-fill);
@@ -2797,9 +2797,15 @@ html[data-style="glass"]:not([data-frost="tile"]) [data-thread-floats-host]:not(
   -webkit-backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
   backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
 }
+/* Veil's frost dims the backdrop a little (styles/glass/overrides.css). */
+html[data-style="glass"][data-palette="veil"] [data-k2-merge="fill"] {
+  -webkit-backdrop-filter: var(--k2-veil-frost-filter);
+  backdrop-filter: var(--k2-veil-frost-filter);
+}
+/* Each layer's paint is a token; a look may set the sheen's and the drop's. */
 [data-k2-merge="edge"] { background: var(--material-edge); }
-[data-k2-merge="sheen"] { background: var(--color-frost-sheen); }
-[data-k2-merge="shadow"] { background: var(--color-shadow-soft); }
+[data-k2-merge="sheen"] { background: var(--k2-merge-sheen-paint, var(--color-frost-sheen)); }
+[data-k2-merge="shadow"] { background: var(--k2-merge-shadow-paint, var(--color-shadow-soft)); }
 html[data-style="glass"]:not([data-frost="tile"]) [data-thread-floats-host]:not(:has([data-thread-centred])) [data-k2-merged] [data-k2-merge-piece][data-material="frost"]:not([data-zen-root] *) {
   --material-tint: transparent;
   -webkit-backdrop-filter: none;

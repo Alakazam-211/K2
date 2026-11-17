@@ -141,7 +141,8 @@ describe('reply bar: Glass', () => {
       const { bar } = mount({ style: 'glass', scheme })
       expect(bar.getAttribute('data-material')).toBe('frost')
       const cs = getComputedStyle(bar)
-      expect(cs.backdropFilter).toBe('blur(var(--material-blur)) saturate(var(--material-saturate))')
+      // Veil's frost also dims the backdrop a little (the phone's light glass).
+      expect(cs.backdropFilter).toBe(scheme === 'dark' ? 'blur(var(--material-blur)) saturate(var(--material-saturate))' : 'var(--k2-veil-frost-filter)')
       expect(cs.getPropertyValue('background')).toBe('linear-gradient(var(--k2-jump-tint) 0 0), var(--k2-jump-scrim)')
       // jsdom can't compute a border colour from var(): the rim rule must match the bar.
       const rim = THREAD_REPLY_BAR_CSS.split('\n').find((l) => l.includes('border-color: var(--k2-jump-edge)'))

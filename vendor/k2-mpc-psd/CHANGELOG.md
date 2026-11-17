@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.11: pairs with kit v0.22.0
+
+**Requires `k2-mpc-base` v0.22.0**, checked out beside this repo. The crate version is `0.1.11`;
+`Cargo.lock` records k2-mpc-base 0.22.0. This pack's own code's behaviour is unchanged from v0.1.10.
+As for v0.1.10, the tag is a cut commit that leaves out the test tooling (`fuzz/`,
+`scripts/oracle/`).
+
+- Pairs with kit v0.22.0. Its pack API additions have defaults this pack keeps (`Pack::checks_edits`
+  and `Pack::check_edit`, `Pack::text_units`, and for blob packs `BlobPack::verbs`,
+  `BlobPack::errors`, `BlobPack::hold_reach`, `BlobPack::save_pairing`,
+  `BlobPack::judge_across_save`); its other changes are the host's (a read that survives a failed
+  render, where each change is, verbs on a blob doc, a typed refusal for a store another process
+  holds). So PSD and PSB files behave as in v0.1.10.
+- `crates/psd/Cargo.toml`'s kit comment names v0.22.0; `Cargo.lock` and `fuzz/Cargo.lock`:
+  k2-mpc-base 0.22.0, with the kit's new `libc` dependency (glibc targets), and the crate version
+  0.1.11.
+
 ## v0.1.10: pairs with kit v0.21.0
 
 **Requires `k2-mpc-base` v0.21.0**, checked out beside this repo. The crate version is `0.1.10`;

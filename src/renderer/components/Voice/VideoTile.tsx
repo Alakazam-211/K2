@@ -40,9 +40,11 @@ function placeholderLine(t: Tile): string | null {
 /** A label drawn on the picture: the name's chip, the time's. The look's
  *  chip: a pill in Glass (`--radius-pill`); in Terminal a cut chip where the
  *  element carries `data-k2-chamfer="chip"` (CHIP_CUT). Its colours read at
- *  4.5:1 or better over any picture, white ones included. */
+ *  4.5:1 or better over any picture, white ones included. Its words are the
+ *  app's small type step (`type-hint`), as the window's other small text,
+ *  on a slim chip: one 16px line, 6px each side. */
 export const MEDIA_LABEL =
-  'flex min-w-0 items-center gap-1 rounded-[var(--radius-pill)] bg-[var(--color-media-label-bg)] px-2 py-0.5 text-[11px] leading-[14px] text-[var(--color-media-label-text)]'
+  'type-hint flex min-w-0 items-center gap-1 rounded-[var(--radius-pill)] bg-[var(--color-media-label-bg)] px-1.5 leading-4 text-[var(--color-media-label-text)]'
 
 /** A media label's Terminal cut, with no edge drawn on it (the chip has no
  *  border; the cut's edge would otherwise take the text colour). */

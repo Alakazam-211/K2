@@ -153,6 +153,20 @@ describe('the tiles', () => {
     expect(label.className).toMatch(/\bleft-1\.5\b/)
   })
 
+  it("a tile's name is set in the app's small type step, no larger than the window's other small text", async () => {
+    const s = setup([fakeTrack('7')])
+    render(<VideoStage ctl={s.ctl} people={people} title="Standup" />)
+    await ready(s)
+    const label = within(await screen.findByTestId('video-tile')).getByTestId('video-tile-label')
+    expect(label.className).toMatch(/\btype-hint\b/)
+    // From the type scale, never a fixed size of its own.
+    expect(label.className).not.toMatch(/text-\[\d+px\]/)
+    // A slim chip: one 16px line, 6px each side, as the phone's.
+    expect(label.className).toMatch(/\bleading-4\b/)
+    expect(label.className).toMatch(/\bpx-1\.5\b/)
+    expect(label.className).not.toMatch(/\bpy-/)
+  })
+
   it("with the camera off: the person's avatar and name in the middle of the tile, the muted mic on the name", async () => {
     const s = setup([fakeTrack('7', { muted: true }), fakeTrack('8', { muted: true })])
     render(<VideoStage ctl={s.ctl} people={people} title="Standup" />)

@@ -5,6 +5,12 @@
 // (`--color-media-label-*`), readable on any video in every Style. A
 // `zoomable` tile (a share in the middle, the call view's grid) lets this
 // viewer zoom in and move around its picture (TileZoom).
+//
+// The tile follows the active look: the look's raised tile surface and edge
+// (`--tile-raised`, `--tile-edge`), rounded by the tile radius in Glass and
+// cut by the surface chamfer in Terminal (`data-k2-chamfer`). Behind a
+// picture that doesn't fill it, and in place of one, is that surface, never
+// a black box.
 
 import { useEffect, useRef, type ReactNode } from 'react'
 import PresenceAvatar from '@/components/Presence/PresenceAvatar'
@@ -96,37 +102,43 @@ export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = 
       data-self={tile.self ? 'true' : 'false'}
       data-zoomable={zoomOn ? 'true' : undefined}
       data-zoomed={zoom.zoomed ? 'true' : undefined}
-      className={`relative min-h-0 min-w-0 overflow-hidden border bg-black ${zoomOn ? 'group/zoom' : ''} ${zoom.zoomed ? 'cursor-grab active:cursor-grabbing' : ''} ${
-        tile.speaking ? 'border-[var(--color-accent)] outline outline-2 outline-[var(--color-accent)]' : 'border-[var(--color-border)]'
+      data-k2-chamfer="surface"
+      className={`relative min-h-0 min-w-0 rounded-[var(--radius-box)] border ${tile.speaking ? 'border-[var(--color-accent)]' : 'border-[var(--tile-edge)]'} bg-[var(--tile-raised)] [box-shadow:var(--tile-sheen)] ${zoomOn ? 'group/zoom' : ''} ${
+        zoom.zoomed ? 'cursor-grab active:cursor-grabbing' : ''
       } ${tile.large && !fill ? 'col-span-2 row-span-2' : ''} ${fill ? 'h-full w-full' : ''}`}
       style={fill ? undefined : { aspectRatio: '16 / 9' }}
     >
-      {/* The zoom's layer: always there, so the canvas never moves to a new
-          parent (its sink watches the parent's box, which a transform never
-          changes). */}
-      <div
-        data-testid="video-zoom-layer"
-        className="absolute inset-0"
-        style={transform ? { transform, transformOrigin: '0 0', willChange: 'transform' } : undefined}
-      >
-        <canvas
-          // A canvas per track: a sink that's closing (its short grace period)
-          // must never draw over the next track's picture on a reused canvas.
-          key={tile.key}
-          ref={canvasRef}
-          data-testid="video-canvas"
-          className="absolute inset-0 h-full w-full object-contain"
-          style={{ transform: tile.mirrored ? 'scaleX(-1)' : undefined, visibility: line === null ? 'visible' : 'hidden' }}
-        />
-      </div>
-      {line !== null ? (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-[var(--color-bg-elevated)]">
-          {tile.state === 'off' && tile.source === 'camera' ? <PresenceAvatar name={tile.self ? 'You' : tile.name} role="member" size={36} /> : null}
-          <span data-testid="video-tile-line" className="px-2 text-center text-[11px] text-[var(--color-text-muted)]">
-            {line}
-          </span>
+      {/* The picture and what stands in for it, clipped to the tile's inner
+          corner (its radius less the 1px edge). The tile itself doesn't
+          clip, so its ring and Terminal's cut edge stay whole. */}
+      <div data-testid="video-tile-media" className="absolute inset-0 overflow-hidden rounded-[calc(var(--radius-box)-1px)]">
+        {/* The zoom's layer: always there, so the canvas never moves to a new
+            parent (its sink watches the parent's box, which a transform never
+            changes). */}
+        <div
+          data-testid="video-zoom-layer"
+          className="absolute inset-0"
+          style={transform ? { transform, transformOrigin: '0 0', willChange: 'transform' } : undefined}
+        >
+          <canvas
+            // A canvas per track: a sink that's closing (its short grace period)
+            // must never draw over the next track's picture on a reused canvas.
+            key={tile.key}
+            ref={canvasRef}
+            data-testid="video-canvas"
+            className="absolute inset-0 h-full w-full object-contain"
+            style={{ transform: tile.mirrored ? 'scaleX(-1)' : undefined, visibility: line === null ? 'visible' : 'hidden' }}
+          />
         </div>
-      ) : null}
+        {line !== null ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-[var(--tile-raised)]">
+            {tile.state === 'off' && tile.source === 'camera' ? <PresenceAvatar name={tile.self ? 'You' : tile.name} role="member" size={36} /> : null}
+            <span data-testid="video-tile-line" className="px-2 text-center text-[11px] text-[var(--color-text-muted)]">
+              {line}
+            </span>
+          </div>
+        ) : null}
+      </div>
       <div data-testid="video-tile-label" data-at="bottom-left" className={`absolute bottom-0 left-0 ${MEDIA_LABEL} ${corner ? 'max-w-[60%]' : ''}`}>
         {tile.audioMuted ? (
           <span data-testid="video-tile-muted" title="Microphone off" className="flex">

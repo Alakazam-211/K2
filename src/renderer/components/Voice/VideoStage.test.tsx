@@ -118,6 +118,20 @@ describe('the tiles', () => {
     expect(screen.getByTestId('video-grid')).not.toBeNull()
   })
 
+  it('a tile sits on the look\'s tile surface: rounded by the tile radius, cut in Terminal, never a black box', async () => {
+    const s = setup([fakeTrack('7')])
+    render(<VideoStage ctl={s.ctl} people={people} title="Standup" />)
+    await ready(s)
+    const tile = await screen.findByTestId('video-tile')
+    expect(tile.getAttribute('data-k2-chamfer')).toBe('surface')
+    expect(tile.className).toContain('rounded-[var(--radius-box)]')
+    expect(tile.className).toContain('bg-[var(--tile-raised)]')
+    expect(tile.className).toContain('border-[var(--tile-edge)]')
+    expect(tile.className).not.toMatch(/\bbg-black\b/)
+    // The picture is clipped inside the tile's own shape.
+    expect(within(tile).getByTestId('video-tile-media').contains(within(tile).getByTestId('video-canvas'))).toBe(true)
+  })
+
   it('picks columns for the tile count', () => {
     expect([1, 2, 4, 5, 9, 10].map(gridColumns)).toEqual([1, 2, 2, 3, 3, 4])
   })

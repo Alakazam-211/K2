@@ -50,9 +50,9 @@
 # Windows NSIS (Step 9.5), Alpha — built on K2-WIN-AX41 (ssh alias
 #   k2-win-ax41; code goes there as a git bundle of the tag), copied back
 #   here and minisigned here for latest.json. Never signed on the box.
-#   OFF by default for now: K2_SKIP_WINDOWS_NSIS defaults to 1; run with
-#   K2_SKIP_WINDOWS_NSIS=0 to include Windows. When on, a failed build
-#   soft-fails unless K2_REQUIRE_WINDOWS_NSIS=1.
+#   ON by default from 0.46.15: K2_SKIP_WINDOWS_NSIS defaults to 0; run with
+#   K2_SKIP_WINDOWS_NSIS=1 to leave Windows out. A failed build soft-fails
+#   (the release goes out without it, loudly) unless K2_REQUIRE_WINDOWS_NSIS=1.
 #   See scripts/windows-nsis-build.sh + wiki "Ops - Windows Build Box".
 #
 # Arch/Omarchy pacman — not built on this Mac and not waited on before the
@@ -1041,13 +1041,8 @@ bash "$PROJECT_DIR/scripts/sign-daemon.sh" --preflight "$VERSION"
 
 # Windows is decided here (not at Step 9.5) because the approval (Step 1.55)
 # names it.
-# Same rule as before: off unless K2_SKIP_WINDOWS_NSIS=0 or
-# K2_REQUIRE_WINDOWS_NSIS=1.
-if [ "${K2_REQUIRE_WINDOWS_NSIS:-0}" = "1" ]; then
-    export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-0}"
-else
-    export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-1}"
-fi
+# On by default (0.46.15); K2_SKIP_WINDOWS_NSIS=1 leaves it out.
+export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-0}"
 
 # ── Step 0.5: Pre-flight quality gates ──
 # Added at 0.40.31 when the tree first reached warning-zero / typecheck-zero.
@@ -1900,14 +1895,9 @@ gh release create "$TAG" "${ASSETS[@]}" \
 # It is minisigned HERE for the updater (windows-patch-latest-json.sh);
 # no signing key ever goes to the box.
 #
-# OFF by default until Windows is switched on for releases: K2_SKIP_WINDOWS_NSIS
-# defaults to 1 (set K2_SKIP_WINDOWS_NSIS=0 to build it). When on, a failed
-# build soft-fails unless K2_REQUIRE_WINDOWS_NSIS=1 (which also turns it on).
-if [ "${K2_REQUIRE_WINDOWS_NSIS:-0}" = "1" ]; then
-    export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-0}"
-else
-    export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-1}"
-fi
+# ON by default from 0.46.15 (K2_SKIP_WINDOWS_NSIS=1 leaves it out). A failed
+# build soft-fails unless K2_REQUIRE_WINDOWS_NSIS=1.
+export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-0}"
 echo ""
 echo "Step 9.5: Windows NSIS installer, Alpha (${K2_WINDOWS_SSH_HOST:-k2-win-ax41})..."
 WIN_PATCH_FAILED=""

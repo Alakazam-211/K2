@@ -317,7 +317,7 @@ before = [
 for b in before:
     assert at(b) < approve, ("must come before the approval", b)
 # The Windows decision (the approval's asset list names it): its first copy.
-assert s.index('export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-1}"') < approve
+assert s.index('export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-0}"') < approve
 # Top-level lines (column 0, so not a comment or a function body): the first
 # of each comes after the approval.
 for pat in (r'^k2_shadow_start$', r'^k2_build_mac_binaries ', r'^codesign --force', r'^k2u_sign ',

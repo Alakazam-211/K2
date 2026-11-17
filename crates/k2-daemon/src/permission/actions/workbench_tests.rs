@@ -38,6 +38,8 @@ fn repo_for(home: &crate::test_support::TempHome, ws: &Ws) -> PathBuf {
     sh(&root, &["init", "-q"]);
     sh(&root, &["config", "user.name", "K2 Test"]);
     sh(&root, &["config", "user.email", "k2-test@example.com"]);
+    // Bytes as committed: Git for Windows' system config turns on autocrlf.
+    sh(&root, &["config", "core.autocrlf", "false"]);
     std::fs::write(root.join("a.txt"), "one\n").expect("a");
     sh(&root, &["add", "-A"]);
     sh(&root, &["commit", "-q", "-m", "init"]);

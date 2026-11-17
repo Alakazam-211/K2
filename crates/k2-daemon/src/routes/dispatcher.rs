@@ -7514,7 +7514,25 @@ async fn handle_one_request(
                     }
                 }
             } else if super::http::token_ok(&query, state.token.as_str()) {
-                crate::transfer_routes::not_a_guest()
+                // A person (the owner token or a Connect login): a download
+                // token for a file at its absolute path (the web client's
+                // Download and PDF bytes, `fs_download::handle_person_token`).
+                // Uploads stay an App guest's.
+                if p == crate::transfer_routes::ROUTE_DOWNLOAD_TOKEN {
+                    let login = match super::http::extract_token(&query) {
+                        Some(t) if super::http::ct_eq_token(t, state.token.as_str()) => "owner".to_string(),
+                        Some(t) => k2_core::connect_users::validate_session(t).unwrap_or_default(),
+                        None => String::new(),
+                    };
+                    match crate::transfer_routes::body_params(&body_bytes) {
+                        Ok(params) => tokio::task::spawn_blocking(move || crate::fs_download::handle_person_token(&params, &login))
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))),
+                        Err(r) => r,
+                    }
+                } else {
+                    crate::transfer_routes::not_a_guest()
+                }
             } else {
                 crate::cli::CliResponse::forbidden()
             };

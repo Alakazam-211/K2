@@ -470,6 +470,77 @@ async fn download_tokens_serve_ranges_with_if_range_and_recheck_rights() {
     assert_eq!(owner_t.status, 200, "a person may save what they may open: {}", owner_t.body);
 }
 
+/// A person's download token (the hosted web client's Download and PDF
+/// bytes): the owner names a file by its absolute path and gets a link the
+/// browser saves with its own download manager. Raw bytes, the file's name
+/// in `Content-Disposition: attachment`, Range, the token in the query (a
+/// link can't set a header). No 50 MB cap (`fs/read-binary`'s). Folders,
+/// missing files, relative paths and no credential are refused; an upload
+/// route is still an App guest's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_persons_download_token_serves_a_file_by_its_absolute_path() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let ws = seed_ws(&env, &format!("pdl{tag}"));
+    // Over fs/read-binary's 50 MB cap, so the old path could never open it.
+    let file: Vec<u8> = (0..(51 * 1024 * 1024u32)).map(|i| (i % 251) as u8).collect();
+    write(&ws.path, "plans/A-101 sheet é.pdf", &file);
+    let abs = ws.path.join("plans/A-101 sheet é.pdf");
+    let abs_s = abs.to_string_lossy().to_string();
+
+    let big = get(port, "/cli/fs/read-binary", OWNER, &format!("path={}", enc(&abs_s))).await;
+    assert_eq!(big.status, 400, "read-binary keeps its cap: {}", big.body);
+
+    let t = post(port, "/cli/fs/download/token", OWNER, json!({ "path": abs_s, "tokenTtlSecs": 120 })).await;
+    assert_eq!(t.status, 200, "{}", t.body);
+    let tv = t.json();
+    let (url, tok) = (tv["url"].as_str().expect("url").to_string(), tv["transferToken"].as_str().expect("token").to_string());
+    assert!(url.starts_with("/_k2/transfers/downloads/"), "{url}");
+    assert!(tok.starts_with("k2dn_"));
+    assert_eq!(tv["size"], file.len() as u64);
+    assert_eq!(tv["name"], "A-101 sheet é.pdf");
+    assert_eq!(tv["mime"], "application/pdf");
+    let expires = tv["expiresAt"].as_u64().expect("expiresAt");
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    assert!(expires > now_ms && expires <= now_ms + 121_000, "the asked lifetime: {expires} vs {now_ms}");
+
+    // A browser link: the token in the query, the whole file, raw.
+    let full = door(port, "GET", &format!("{url}?token={tok}"), None, &[], b"").await;
+    assert_eq!(full.status, 200);
+    assert_eq!(full.h("Content-Type"), Some("application/pdf"));
+    assert_eq!(full.h("Content-Length"), Some(file.len().to_string().as_str()));
+    assert_eq!(full.h("Accept-Ranges"), Some("bytes"));
+    let disp = full.h("Content-Disposition").expect("Content-Disposition");
+    assert!(disp.starts_with("attachment;"), "{disp}");
+    assert!(disp.contains("filename*=UTF-8''A-101%20sheet%20%C3%A9.pdf"), "{disp}");
+    assert!(full.body == file, "the raw bytes ({} of {})", full.body.len(), file.len());
+    let part = door(port, "GET", &format!("{url}?token={tok}"), None, &[("Range", "bytes=100-199".into())], b"").await;
+    assert_eq!((part.status, part.body.as_slice()), (206, &file[100..200]));
+
+    // Refusals: not a file, not there, not absolute, no path, no credential.
+    let r = post(port, "/cli/fs/download/token", OWNER, json!({ "path": ws.path.join("plans").to_string_lossy() })).await;
+    assert_eq!((r.status, r.code()), (400, "not_a_file".to_string()), "{}", r.body);
+    let r = post(port, "/cli/fs/download/token", OWNER, json!({ "path": ws.path.join("plans/none.pdf").to_string_lossy() })).await;
+    assert_eq!((r.status, r.code()), (404, "not_found".to_string()), "{}", r.body);
+    let r = post(port, "/cli/fs/download/token", OWNER, json!({ "path": "plans/A-101 sheet é.pdf" })).await;
+    assert_eq!((r.status, r.code()), (400, "usage".to_string()), "{}", r.body);
+    let r = post(port, "/cli/fs/download/token", OWNER, json!({})).await;
+    assert_eq!((r.status, r.code()), (400, "usage".to_string()), "{}", r.body);
+    let r = post(port, "/cli/fs/download/token", "not-a-token", json!({ "path": abs_s })).await;
+    assert!(matches!(r.status, 401 | 403), "no credential, no token: {} {}", r.status, r.body);
+    assert!(!r.body.contains("k2dn_"), "{}", r.body);
+    // An upload route is still an App guest's.
+    let r = post(port, "/cli/fs/upload/create", OWNER, json!({ "workspace": ws.handle, "filename": "x", "size": 1 })).await;
+    assert_eq!((r.status, r.code()), (400, "usage".to_string()), "{}", r.body);
+
+    // The file goes: the door says so (no bytes of another file).
+    std::fs::remove_file(&abs).unwrap();
+    let gone = door(port, "GET", &format!("{url}?token={tok}"), None, &[], b"").await;
+    assert_ne!(gone.status, 200, "a removed file is never served");
+}
+
 /// A local App (installed without a tunnel, reached at
 /// `http://127.0.0.1:<front port>`): the door answers on its front port,
 /// App up and App down (`apps::router::serve_app_conn` → `read_first_plain`

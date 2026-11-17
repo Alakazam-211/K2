@@ -475,6 +475,54 @@ pub fn handle_token(params: &HashMap<String, String>, pass: &SkinPass) -> CliRes
     }
 }
 
+/// `POST /cli/fs/download/token` for a person (the owner token or a Connect
+/// login, never an App pass or an agent): a short-lived token for one file
+/// on this machine, at the absolute `path` the person already reads through
+/// `fs/read-binary` / `fs/read-range` (the same host-wide rights, no new
+/// ones). Optional `tokenTtlSecs` (60..=86400, default 1 h).
+///
+/// The token opens `GET /_k2/transfers/downloads/<id>?token=` (the transfer
+/// door): the raw bytes, `Content-Disposition: attachment`, `Range` and
+/// `If-Range`. So a browser saves a file with its own download manager
+/// (streamed to disk, its own progress, nothing held in the page), and a
+/// viewer reads a file's raw bytes without base64 or the 50 MB cap of
+/// `fs/read-binary`. The grant is a person's (`Recheck::Person`), as an
+/// attachment token for a person: checked by its token and expiry.
+pub fn handle_person_token(params: &HashMap<String, String>, login: &str) -> CliResponse {
+    use k2_core::fs_transfer as ft;
+    let ttl = match crate::transfer_routes::download_ttl(params) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let path = params.get("path").map(|s| s.trim()).unwrap_or_default();
+    if path.is_empty() {
+        return crate::transfer_routes::error_json("400 Bad Request", "usage", "missing 'path' (the file's absolute path)", None);
+    }
+    if !Path::new(path).is_absolute() {
+        return crate::transfer_routes::error_json("400 Bad Request", "usage", "'path' is the file's absolute path on this machine", None);
+    }
+    let real = match dunce::canonicalize(path) {
+        Ok(r) => r,
+        Err(_) => return crate::transfer_routes::error_json("404 Not Found", "not_found", "File not found", None),
+    };
+    let meta = match std::fs::metadata(&real) {
+        Ok(m) if m.is_file() => m,
+        Ok(_) => return crate::transfer_routes::error_json("400 Bad Request", "not_a_file", "only a file can be downloaded (compress a folder first)", None),
+        Err(_) => return crate::transfer_routes::error_json("404 Not Found", "not_found", "File not found", None),
+    };
+    let name = real.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let mime = fsc::mime_for_name(&name).to_string();
+    let login = if login.trim().is_empty() { "owner" } else { login.trim() };
+    let holder = ft::Holder { principal: format!("person:{login}"), pass_id: None, username: login.to_string() };
+    match ft::mint_download(&ft::downloads_dir(), holder, real.clone(), name, mime, ft::Recheck::Person, ttl, ft::now_secs()) {
+        Ok((g, token)) => {
+            crate::thread_attachments::audit("files.download_token", login, format!("path={real:?} id={} ttl={ttl}", g.id));
+            crate::transfer_routes::download_token_answer(&g, &token, meta.len(), &ft::file_etag(&meta))
+        }
+        Err(e) => crate::transfer_routes::error_response(&e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

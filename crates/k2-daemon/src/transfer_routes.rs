@@ -13,9 +13,12 @@
 //! POST /cli/thread/attachment/token  thread.attachmentToken  {addr, id, n, tokenTtlSecs?}
 //! ```
 //!
-//! An App guest's pass only (a session pass or a platform pass); the owner
-//! token and Connect logins get a usage 400, as on `files.download`
-//! (people use the attachment token, which admits them). A session is its
+//! An App guest's pass (a session pass or a platform pass); the owner token
+//! and Connect logins get a usage 400 on the upload routes. On
+//! `files.downloadToken` a person names a file by its absolute `path` and
+//! gets a person's grant (`fs_download::handle_person_token`: the hosted web
+//! client's Download and PDF bytes), as the attachment token admits people.
+//! A session is its
 //! maker's: another person's upload id is the same 404 as one that never
 //! existed.
 
@@ -103,12 +106,14 @@ pub fn guest_pass_required() -> CliResponse {
     )
 }
 
-/// The owner token and Connect logins: these are an App guest's doors.
+/// The owner token and Connect logins on an upload route: resumable uploads
+/// are an App guest's doors. (A person's download token is
+/// `fs_download::handle_person_token`.)
 pub fn not_a_guest() -> CliResponse {
     error_json(
         "400 Bad Request",
         "usage",
-        "resumable uploads and download tokens are an App guest's (its own pass); a person on this box uses the files routes",
+        "resumable uploads are an App guest's (its own pass); a person on this box uses the files routes",
         None,
     )
 }

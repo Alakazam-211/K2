@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.1.1: pairs with kit v0.22.0
+
+**Requires `k2-mpc-base` v0.22.0**. Photoplot and drill files read as in v0.1.0.
+
+- Pairs with kit v0.22.0. Its pack API additions have defaults this pack keeps (`Pack::checks_edits`
+  and `Pack::check_edit`, `Pack::text_units`, and for blob packs `BlobPack::verbs`,
+  `BlobPack::errors`, `BlobPack::hold_reach`, `BlobPack::save_pairing`,
+  `BlobPack::judge_across_save`); its other changes are the host's (a read that survives a failed
+  render, where each change is, verbs on a blob doc, a typed refusal for a store another process
+  holds).
+- `Cargo.lock` and `fuzz/Cargo.lock`: k2-mpc-base 0.22.0, with the kit's new `libc` dependency
+  (glibc targets), and the crate version 0.1.1. `crates/fab/Cargo.toml`'s kit comment and
+  `README.md`'s kit line name v0.22.0.
+
 ## v0.1.0: pairs with kit v0.21.0
 
 The first release of the fabrication-output pack. It builds with **`k2-mpc-base` v0.21.0**

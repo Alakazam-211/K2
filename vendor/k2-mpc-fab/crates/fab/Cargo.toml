@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-fab"
-version = "0.1.0"
+version = "0.1.1"
 description = "Reads PCB fabrication outputs (photoplot and drill files), read-only: a type pack for the multiplayer kit."
 edition.workspace = true
 rust-version.workspace = true
@@ -17,7 +17,7 @@ mutants = []
 [dependencies]
 # The kit (k2-mpc-base), by path: its checkout sits beside this repo's (a host vendors both side
 # by side: vendor/k2-mpc-base beside vendor/k2-mpc-fab), at the kit release CHANGELOG.md names,
-# v0.21.0. Run `cargo update -p k2-mpc-base` and commit the lock when it moves.
+# v0.22.0. Run `cargo update -p k2-mpc-base` and commit the lock when it moves.
 k2-mpc-base = { path = "../../../k2-mpc-base/crates/base" }
 
 [dev-dependencies]

@@ -11,7 +11,8 @@
 // (`--tile-raised`, `--tile-edge`), rounded by the tile radius in Glass and
 // cut by the surface chamfer in Terminal (`data-k2-chamfer`). Behind a
 // picture that doesn't fill it, and in place of one, is that surface, never
-// a black box.
+// a black box. The speaker's tile carries a ring in the accent colour that
+// follows the same radius or cut.
 
 import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
 import PresenceAvatar from '@/components/Presence/PresenceAvatar'
@@ -138,7 +139,7 @@ export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = 
       data-zoomable={zoomOn ? 'true' : undefined}
       data-zoomed={zoom.zoomed ? 'true' : undefined}
       data-k2-chamfer="surface"
-      className={`relative min-h-0 min-w-0 rounded-[var(--radius-box)] border ${tile.speaking ? 'border-[var(--color-accent)]' : 'border-[var(--tile-edge)]'} bg-[var(--tile-raised)] [box-shadow:var(--tile-sheen)] ${zoomOn ? 'group/zoom' : ''} ${
+      className={`relative min-h-0 min-w-0 rounded-[var(--radius-box)] border border-[var(--tile-edge)] bg-[var(--tile-raised)] [box-shadow:var(--tile-sheen)] ${zoomOn ? 'group/zoom' : ''} ${
         zoom.zoomed ? 'cursor-grab active:cursor-grabbing' : ''
       } ${tile.large && !fill ? 'col-span-2 row-span-2' : ''} ${fill ? 'h-full w-full' : ''}`}
       style={fill ? undefined : { aspectRatio: '16 / 9' }}
@@ -185,6 +186,18 @@ export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = 
           </div>
         ) : null}
       </div>
+      {tile.speaking ? (
+        // The speaker's ring: 2px of the accent over the tile's edge, rounded
+        // by the tile radius in Glass and cut with the tile in Terminal (its
+        // own cut, with a 2px edge on the diagonals: --k2-ch-bw).
+        <div
+          data-testid="video-tile-ring"
+          aria-hidden
+          data-k2-chamfer="surface"
+          className="pointer-events-none absolute -inset-px rounded-[var(--radius-box)] border-2 border-[var(--color-accent)]"
+          style={{ '--k2-ch-bw': '2px' } as CSSProperties}
+        />
+      ) : null}
       {cameraOff ? null : label('bottom-left')}
       {corner ? (
         <div data-testid="video-tile-corner" data-at="bottom-right" {...CHIP_CUT} className={`absolute bottom-1.5 right-1.5 ${MEDIA_LABEL}`}>

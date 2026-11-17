@@ -1,7 +1,7 @@
 // Video in voice rooms: the call's video, in a panel at the window's bottom right
 // that stays while the headset's list is closed. Screens draw large; with no
 // screen shared, the last person who spoke draws large (3 or more tiles). The
-// speaker's tile has the accent outline. Your own camera is the mirrored self-view.
+// speaker's tile has the accent ring. Your own camera is the mirrored self-view.
 // In a call, its header also has Expand (the call over K2, CallExpanded) and
 // Pop out (the call in its own window); those two draw a share in the middle
 // with the people beside it (CallStage), and the same grid without one.

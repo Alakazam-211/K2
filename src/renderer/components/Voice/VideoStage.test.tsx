@@ -170,6 +170,23 @@ describe('the tiles', () => {
     expect(within(ada).getByTestId('video-tile-line').className).toContain('sr-only')
   })
 
+  it("rings the speaker in the accent, following the tile's radius (Glass) or its cut (Terminal)", async () => {
+    const s = setup([fakeTrack('7'), fakeTrack('8')])
+    const { rerender } = render(<VideoStage ctl={s.ctl} people={people} title="Standup" />)
+    await ready(s)
+    await screen.findAllByTestId('video-tile')
+    expect(screen.queryByTestId('video-tile-ring')).toBeNull()
+    const speaking = people.map((p) => (p.memberId === '8' ? { ...p, speaking: true } : p))
+    rerender(<VideoStage ctl={s.ctl} people={speaking} title="Standup" />)
+    const tile = screen.getAllByTestId('video-tile').find((t) => t.dataset.track === 'TR_8')!
+    const ring = within(tile).getByTestId('video-tile-ring')
+    expect(ring.className).toContain('border-[var(--color-accent)]')
+    expect(ring.className).toContain('rounded-[var(--radius-box)]')
+    expect(ring.getAttribute('data-k2-chamfer')).toBe('surface')
+    // No square outline around the tile any more.
+    expect(tile.className).not.toMatch(/\boutline-2\b/)
+  })
+
   it('picks columns for the tile count', () => {
     expect([1, 2, 4, 5, 9, 10].map(gridColumns)).toEqual([1, 2, 2, 3, 3, 4])
   })

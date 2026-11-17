@@ -4562,6 +4562,10 @@ mod tests {
             // goes too (its table and index are IF NOT EXISTS, its move OR
             // IGNORE).
             conn.execute("DELETE FROM _migrations WHERE name = '0307_home_chat_rows_apart'", []).unwrap();
+            // 0310 (delivery badges) and 0311 (Postal friends) are the
+            // newest: their records go (0310 rebuilds msg_deliveries from
+            // its 0161 columns again; 0311's tables are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name IN ('0310_msg_deliveries_badges', '0311_postal_friends')", []).unwrap();
             // 0297 and 0296 (CI monitors, job stats) came before 0299: their records go (IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name IN ('0297_ci_monitors', '0296_compute_job_stats')", []).unwrap();
             // 0295 (CI test history) came before 0297: its record goes (IF NOT EXISTS).

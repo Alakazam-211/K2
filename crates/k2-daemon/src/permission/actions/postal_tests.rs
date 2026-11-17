@@ -113,7 +113,11 @@ async fn an_incoming_request_is_k2s_card_owner_allows_deny_rejects() {
     assert!(effect.contains("let's pair") && effect.contains("SHA256:abc"), "{effect}");
     // The same request again: the same card.
     let again = crate::postal_routes::receive_request(&ws.id, &peer, None, None, Some("pr_1"), None).unwrap();
-    assert!(again["card"].is_null(), "known requests put up no second card: {again}");
+    assert_eq!(
+        (again["card"]["card"].as_str(), again["card"]["waiting"].as_bool()),
+        (Some(card.as_str()), Some(true)),
+        "a known request puts up no second card: {again}"
+    );
     // An Admin may not answer until the owner allows Admins; the owner may.
     let admin = login("ppa", Role::Admin);
     let (s, a) = answer_as(&admin, &ws, &card, json!({ "answer": "Allow" }));

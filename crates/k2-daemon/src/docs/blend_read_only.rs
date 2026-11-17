@@ -297,6 +297,34 @@ impl BlobPack for BlendIndexOnly {
 mod tests {
     use super::*;
 
+    /// `content` with one object's viewport flag flipped (what `object
+    /// visibility` does): the first object, in the pairing's order, whose
+    /// flip the BLEND pack's own splice writes (a linked object has no file
+    /// key to write). Panics when none is.
+    fn first_hidden_flipped(bytes: &[u8], content: &[(String, Neutral)], pairing: &Pairing) -> Vec<(String, Neutral)> {
+        let objs = pairing.keys(k2_mpc_blend::live::OBJS).expect("the objects' keys");
+        let mut errs = Vec::new();
+        for o in objs {
+            let key = k2_mpc_blend::live::prop(o, k2_mpc_blend::live::f::HIDDEN);
+            let mut out = content.to_vec();
+            let props = out
+                .iter_mut()
+                .find(|(r, _)| r == k2_mpc_blend::live::OBJ_PROPS)
+                .and_then(|(_, n)| match n {
+                    Neutral::Map(m) => Some(m),
+                    _ => None,
+                })
+                .expect("the objects' fields");
+            let flipped = if props.get(&key) == Some(&k2_mpc_base::elem::Value::str("1")) { "0" } else { "1" };
+            props.insert(key, k2_mpc_base::elem::Value::str(flipped));
+            match BlendLive::default().encode_from_paired(bytes, pairing, &out, &[1]) {
+                Ok(_) => return out,
+                Err(e) => errs.push(format!("{o:?}: {e}")),
+            }
+        }
+        panic!("the BLEND pack's splice wrote no object's visibility flip: {errs:?}");
+    }
+
     /// The live pack's edit verbs are refused by name; its reads aren't.
     #[test]
     fn the_live_packs_edit_verbs_are_known_by_its_registry() {
@@ -361,22 +389,16 @@ mod tests {
         let bytes = k2_mpc_blend::testgen::scenes::living_room();
         let content = live_pack().decode(&bytes).expect("reads").roots;
         let pairing = k2_mpc_base::session::list_pairing(&content);
-        let first = pairing.keys(k2_mpc_blend::live::OBJS).and_then(|k| k.first()).expect("an object").clone();
-        let mut renamed = content.clone();
-        for (r, n) in renamed.iter_mut() {
-            if let (true, Neutral::Map(m)) = (r == k2_mpc_blend::live::OBJ_PROPS, n) {
-                m.insert(k2_mpc_blend::live::prop(&first, k2_mpc_blend::live::f::NAME), k2_mpc_base::elem::Value::str("X"));
-            }
-        }
-        let out = live_pack().encode_from_paired(&bytes, &pairing, &renamed, &[1]).unwrap_or_else(|e| panic!("the pack's own splice: {e:?}"));
-        assert_ne!(out, bytes, "a rename is written");
+        let changed = first_hidden_flipped(&bytes, &content, &pairing);
+        let out = live_pack().encode_from_paired(&bytes, &pairing, &changed, &[1]).unwrap_or_else(|e| panic!("the pack's own splice: {e:?}"));
+        assert_ne!(out, bytes, "the change is written");
         set_writer_for_test(Some(false));
         assert!(writes_off("room.blend"));
         assert_eq!(cap("room.blend", full).edit, false);
         assert!(refused("/cli/docs/write", "room.blend", true, None).is_some());
         assert!(matches!(blob_pack().agent_writes(), AgentWrites::Refused));
         assert!(live_pack().encode(&content, &[1]).is_err(), "never a file from content alone");
-        assert!(live_pack().encode_from_paired(&bytes, &pairing, &renamed, &[1]).is_err(), "the rename is refused");
+        assert!(live_pack().encode_from_paired(&bytes, &pairing, &changed, &[1]).is_err(), "the change is refused");
         assert_eq!(welcome_fields("room.blend").len(), 1);
         set_writer_for_test(None);
         super::super::cores::tests::all_off();
@@ -393,26 +415,13 @@ mod tests {
         let pairing = k2_mpc_base::session::list_pairing(&content);
         assert_eq!(p.encode_from_paired(&bytes, &pairing, &content, &[1]).expect("the carrier as it is"), bytes);
         assert!(p.encode(&content, &[1]).is_err(), "never a file from content alone");
-        // The first object renamed (a shorter name, as the rename verb
-        // would): the pack splices it into the file, a write that changes
-        // bytes; the read-only pack refuses it.
-        let mut renamed = content.clone();
-        let first = pairing.keys(k2_mpc_blend::live::OBJS).and_then(|k| k.first()).expect("an object").clone();
-        let name_key = k2_mpc_blend::live::prop(&first, k2_mpc_blend::live::f::NAME);
-        let props = renamed
-            .iter_mut()
-            .find(|(r, _)| r == k2_mpc_blend::live::OBJ_PROPS)
-            .and_then(|(_, n)| match n {
-                Neutral::Map(m) => Some(m),
-                _ => None,
-            })
-            .expect("the objects' fields");
-        let old = props.get(&name_key).cloned().unwrap_or_else(|| panic!("no {name_key:?} in the objects' fields"));
-        props.insert(name_key, k2_mpc_base::elem::Value::str("X"));
-        assert_ne!(old, k2_mpc_base::elem::Value::str("X"));
-        let written = BlendLive::default().encode_from_paired(&bytes, &pairing, &renamed, &[1]).unwrap_or_else(|e| panic!("the pack itself splices a rename: {e:?}"));
+        // The first object hidden (as `object visibility` would): the pack
+        // splices it into the file, a write that changes bytes; the
+        // read-only pack refuses it.
+        let changed = first_hidden_flipped(&bytes, &content, &pairing);
+        let written = BlendLive::default().encode_from_paired(&bytes, &pairing, &changed, &[1]).unwrap_or_else(|e| panic!("the pack itself splices it: {e:?}"));
         assert_ne!(written, bytes, "the pack's own splice changes the file");
-        match p.encode_from_paired(&bytes, &pairing, &renamed, &[1]) {
+        match p.encode_from_paired(&bytes, &pairing, &changed, &[1]) {
             Err(SpliceError::Pack(e)) => assert!(e.0.contains(CODE), "{e:?}"),
             other => panic!("a changed render must be refused: {:?}", other.map(|b| b.len())),
         }

@@ -13,7 +13,7 @@
 // Palette colours come from the style packages, per-palette overrides from
 // styles.generated.css; contrast is the WCAG formula.
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { Button } from './Button'
@@ -145,7 +145,8 @@ function sources(): [string, string][] {
       if (statSync(p).isDirectory()) {
         if (name !== 'Zen') walk(p)
       } else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) {
-        out.push([p.slice(repo.length + 1), readFileSync(p, 'utf8')])
+        // `/`-separated on every OS: the ICONS list names files that way.
+        out.push([p.slice(repo.length + 1).split(sep).join('/'), readFileSync(p, 'utf8')])
       }
     }
   }

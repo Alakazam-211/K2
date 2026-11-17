@@ -2,7 +2,7 @@
 // talks to no server and frames nothing itself, has no JMAP client, never
 // marks mail read on its own, and keeps both copyright lines and the MIT text.
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join, relative, resolve } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const PKG = resolve(__dirname, '..')
@@ -49,7 +49,7 @@ describe('@k2/mail-reader source scan', () => {
   const files = walk(SRC)
 
   it('finds the package sources', () => {
-    expect(files.map((f) => relative(SRC, f))).toEqual(
+    expect(files.map((f) => relative(SRC, f).split(sep).join('/'))).toEqual(
       expect.arrayContaining(['index.ts', 'source.ts', 'sanitize.ts', 'views/MailReader.tsx', 'views/EmailViewer.tsx']),
     )
   })

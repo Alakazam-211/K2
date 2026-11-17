@@ -92,7 +92,8 @@ describe('web shims cover every Tauri import in the renderer', () => {
 
   it('aliases every imported Tauri module to a shim in vite.config.web.ts', () => {
     const missing = [...new Set(uses.map((u) => u.mod))]
-      .filter((mod) => !aliases[mod] || !aliases[mod].includes('/src/renderer/shims/'))
+      // `/`-separated: path.resolve spells the alias with `\` on Windows.
+      .filter((mod) => !aliases[mod] || !aliases[mod].replace(/\\/g, '/').includes('/src/renderer/shims/'))
       .map((mod) => `${mod} (used in ${[...new Set(uses.filter((u) => u.mod === mod).map((u) => u.file))].join(', ')})`)
     expect(missing).toEqual([])
   })

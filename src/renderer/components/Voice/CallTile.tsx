@@ -30,7 +30,7 @@ import { createPortal } from 'react-dom'
 import { Surface } from '@/components/ui/Surface'
 import { measureElement, overlayClaims, rectsOverlap, subscribeOverlayClaims, useBrowserOverlay } from '@/lib/browser-overlay'
 import { CALL_TILE_Z } from '@/lib/overlay-layers'
-import { cornerSpots, freeArea, type Bounds, type Corner, type Rect, type Vec } from '@/lib/voice/mini-snap'
+import { composerBands, cornerSpots, freeArea, type Bounds, type Corner, type Rect, type Vec } from '@/lib/voice/mini-snap'
 import { usePanelsStore } from '@/stores/panels'
 import { DRAWER_ANIM_MS } from '@/components/Layout/drawer-motion'
 import { holdLeft, nextSpeaker, NO_SPEAKER, speakingIds, tilePicture, type SpeakerHold } from '@/lib/voice/call-tile-picture'
@@ -62,9 +62,14 @@ export const CALL_TILE_WIDTH = 320
 export const CALL_TILE_STRIP_GAP = 6
 /** Clear of the window's edges, the top bar and what the tile avoids (px). */
 export const CALL_TILE_INSETS = { top: TOPBAR_HEIGHT + 12, bottom: 12, side: 12, gap: 8 }
-/** What the tile never covers: composers (the Thread's and the terminal's
- *  compose bars) and anything marked `data-call-tile-avoid`. */
-export const CALL_TILE_AVOID = '[data-compose-bar], [data-testid="agent-session-thread-compose-slot"], [data-call-tile-avoid]'
+/** The message boxes: the terminal's compose bar, the Thread's slot, and
+ *  the Thread look's box (Home chat, a project's chat, a ticket's agent).
+ *  While one is on screen, the tile's bottom corners sit above it across the
+ *  whole content area (composerBands), so it never covers Send or the
+ *  newest message. */
+export const CALL_TILE_COMPOSERS = '[data-compose-bar], [data-zen-compose], [data-testid="agent-session-thread-compose-slot"]'
+/** Anything else the tile never covers, where it is. */
+export const CALL_TILE_AVOID = '[data-call-tile-avoid]'
 /** Composers come and go with tabs: the corner's spot is checked this often. */
 export const CALL_TILE_RELAYOUT_MS = 1_000
 
@@ -130,7 +135,9 @@ export function measureCallTileArea(): Bounds {
 /** Each corner's spot now for a tile `el` (its top left, CSS px). */
 export function measureCallTileSpots(el: HTMLElement | null): Record<Corner, Vec> {
   const size = { width: el?.offsetWidth || CALL_TILE_WIDTH, height: el?.offsetHeight || 0 }
-  return cornerSpots(cssViewport(), size, CALL_TILE_INSETS, visibleRects(CALL_TILE_AVOID, el), measureCallTileArea())
+  const area = measureCallTileArea()
+  const avoid = [...composerBands(visibleRects(CALL_TILE_COMPOSERS, el), area), ...visibleRects(CALL_TILE_AVOID, el)]
+  return cornerSpots(cssViewport(), size, CALL_TILE_INSETS, avoid, area)
 }
 
 /** A drawer opened, closed or was resized (the panels store): look again once

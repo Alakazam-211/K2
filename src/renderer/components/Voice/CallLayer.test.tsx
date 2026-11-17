@@ -1833,3 +1833,66 @@ describe('the tile moves: dragged, it snaps to the nearest of four corners', () 
     expect((await cameraOn()).dataset.corner).toBe('top-left')
   })
 })
+
+describe('the tile never covers the message box', () => {
+  // jsdom has no layout: the window is 1024 x 768; the tile is given its
+  // height here, and the message box its place.
+  const TILE_HEIGHT = 240
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.testid === 'call-tile' ? TILE_HEIGHT : 0
+    })
+  })
+
+  /** A Home chat message box (the Thread's composer look), centred in the
+   *  column, nowhere under the tile's corner. */
+  function messageBox(top: number): { el: HTMLElement; rect: { left: number; top: number; width: number; height: number } } {
+    const rect = { left: 200, top, width: 400, height: 96 }
+    const el = document.createElement('div')
+    el.dataset.zenCompose = ''
+    el.getBoundingClientRect = () => ({ ...rect, right: rect.left + rect.width, bottom: rect.top + rect.height, x: rect.left, y: rect.top, toJSON: () => ({}) }) as DOMRect
+    document.body.appendChild(el)
+    return { el, rect }
+  }
+
+  function tileRect(tile: HTMLElement): { left: number; top: number; width: number; height: number } {
+    return { left: Number.parseFloat(tile.style.left), top: Number.parseFloat(tile.style.top), width: CALL_TILE_WIDTH, height: TILE_HEIGHT }
+  }
+
+  function overlaps(a: { left: number; top: number; width: number; height: number }, b: { left: number; top: number; width: number; height: number }): boolean {
+    return a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height
+  }
+
+  it('its bottom corners sit above a message box on screen, by its height plus the gap, so Send and the newest message stay clear', async () => {
+    const box = messageBox(768 - 12 - 96)
+    try {
+      await inCall()
+      const tile = await cameraOn()
+      expect(tile.dataset.corner).toBe('bottom-right')
+      const r = tileRect(tile)
+      expect(r.top + r.height).toBe(box.rect.top - 8)
+      expect(overlaps(r, box.rect)).toBe(false)
+      // Dragged to the other bottom corner: above it there too.
+      fireEvent.pointerDown(screen.getByTestId('call-tile-picture'), { clientX: 900, clientY: 600, pointerId: 1, button: 0 })
+      fireEvent.pointerMove(screen.getByTestId('call-tile-picture'), { clientX: 100, clientY: 600, pointerId: 1 })
+      fireEvent.pointerUp(screen.getByTestId('call-tile-picture'), { clientX: 100, clientY: 600, pointerId: 1 })
+      expect(tile.dataset.corner).toBe('bottom-left')
+      expect(tileRect(tile).top + TILE_HEIGHT).toBe(box.rect.top - 8)
+    } finally {
+      box.el.remove()
+    }
+  })
+
+  it('a message box that comes on screen later moves the tile up out of its way', async () => {
+    await inCall()
+    const tile = await cameraOn()
+    expect(Number.parseFloat(tile.style.top) + TILE_HEIGHT).toBe(768 - 12)
+    const box = messageBox(600)
+    try {
+      await waitFor(() => expect(tileRect(tile).top + TILE_HEIGHT).toBe(600 - 8), { timeout: 2500 })
+      expect(overlaps(tileRect(tile), box.rect)).toBe(false)
+    } finally {
+      box.el.remove()
+    }
+  })
+})

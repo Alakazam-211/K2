@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CORNERS,
+  composerBands,
   cornerSpots,
   EASE_DURATION,
   freeArea,
@@ -223,5 +224,31 @@ describe('freeArea + cornerSpots: the corners of the free content area (under th
     const composer = { left: 200, top: 700, width: 500, height: 90 }
     const area = freeArea(view, { content, drawers: [{ side: 'right', rect: { left: 700, top: 38, width: 300, height: 762 } }], tabs: [tabs] })
     expect(cornerSpots(view, size, insets, [composer], area)['bottom-right']).toEqual({ x: 448, y: 700 - 8 - 200 })
+  })
+})
+
+describe('composerBands: the tile sits above the message box whenever one is on screen', () => {
+  const view = { width: 1000, height: 800 }
+  const size = { width: 320, height: 240 }
+  const insets = { top: 50, bottom: 12, side: 12, gap: 8 }
+  const area = { left: 0, top: 50, right: 1000, bottom: 800 }
+
+  it('a composer across from the corner still lifts both bottom corners above it, by its height plus the gap', () => {
+    // A centred message column's box, nowhere under the right corner.
+    const composer = { left: 300, top: 680, width: 400, height: 100 }
+    const bands = composerBands([composer], area)
+    expect(bands).toEqual([{ left: 0, top: 680, width: 1000, height: 100 }])
+    const spots = cornerSpots(view, size, insets, bands, area)
+    for (const c of ['bottom-left', 'bottom-right'] as const) {
+      expect(spots[c].y + size.height).toBe(680 - insets.gap)
+      expect(spots[c].y + size.height <= composer.top).toBe(true)
+    }
+    // The top corners stay where they were.
+    expect(spots['top-right'].y).toBe(50 + insets.gap)
+  })
+
+  it("only composers in the area count: one in another pane's column or with no size takes nothing", () => {
+    expect(composerBands([{ left: 1100, top: 680, width: 300, height: 100 }], area)).toEqual([])
+    expect(composerBands([{ left: 300, top: 680, width: 0, height: 0 }], area)).toEqual([])
   })
 })

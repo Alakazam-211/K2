@@ -258,6 +258,17 @@ export function freeArea(view: { width: number; height: number }, parts: AreaPar
   return { left, top, right, bottom }
 }
 
+/** The message boxes in `area` as bands across its whole width: whenever a
+ *  composer is on screen, the tile's bottom corners sit above it (by its
+ *  height plus the gap), on either side, so the tile never covers Send or
+ *  the newest message, however narrow and centred the box is. A box outside
+ *  the area (another pane's column) or with no size takes nothing. */
+export function composerBands(composers: readonly Rect[], area: Bounds): Rect[] {
+  return composers
+    .filter((r) => sized(r) && r.left < area.right && area.left < r.left + r.width)
+    .map((r) => ({ left: area.left, top: r.top, width: area.right - area.left, height: r.height }))
+}
+
 /** Each corner's spot (the card's top left) in a `view` window for a card
  *  `size`, clear of the insets and of every `avoid` box (composers, key
  *  controls): a bottom corner moves up above what it would cover, a top

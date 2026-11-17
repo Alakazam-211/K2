@@ -1539,6 +1539,10 @@ cli_post_form() {
     # No status is read here: a 5xx from an earlier request must not count.
     _K2_HTTP=""
     _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
+    if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
+        cli_post_form "$endpoint" "$@"
+        return $?
+    fi
     # 0.46.16: note the refusal's `permission` object, as cli_post_json
     # (`k2 msg`, `k2 inbox`: the form sends never noted it, so a refused
     # send ended with another request's line, or none).

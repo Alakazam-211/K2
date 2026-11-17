@@ -2028,6 +2028,10 @@ cli_post_form() {
     # No status is read here: a 5xx from an earlier request must not count.
     _K2_HTTP=""
     _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
+    if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
+        cli_post_form "$endpoint" "$@"
+        return $?
+    fi
     # 0.46.16: note the refusal's `permission` object, as cli_post_json
     # (`k2 msg`, `k2 inbox`: the form sends never noted it, so a refused
     # send ended with another request's line, or none).
@@ -2090,6 +2094,10 @@ cli_post_form_uds() {
     # No status is read here: a 5xx from an earlier request must not count.
     _K2_HTTP=""
     _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
+    if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
+        cli_post_form_uds "$endpoint" "$@"
+        return $?
+    fi
     # 0.46.16: the send's own refusal closes the command (`k2 msg` to an
     # agent that isn't a connection: Ask with: … connections.add).
     _permission_note "$out"
@@ -2104,7 +2112,7 @@ cli_post_json_uds() {
     local _K2_CFG="" out rc=0 t0="${_K2_REQ_T0:-$SECONDS}"
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     _k2_cfg_add data-raw "$body"
-    # 0.46.6: the permission note, as cli_post_json.
+    # 0.46.6: the permission note, and the healed passport, as cli_post_json.
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
         --connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \
         -H "Content-Type: application/json" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
@@ -2112,6 +2120,10 @@ cli_post_json_uds() {
     # No status is read here: a 5xx from an earlier request must not count.
     _K2_HTTP=""
     _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
+    if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
+        cli_post_json_uds "$endpoint" "$body"
+        return $?
+    fi
     _permission_note "$out"
     printf '%s' "$out"
     return "$rc"

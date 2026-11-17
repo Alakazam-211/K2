@@ -179,18 +179,14 @@ impl Kind {
     fn says_no_answer(self) -> bool {
         !matches!(self, Kind::PostJsonStdin | Kind::SendJsonGet | Kind::SendJsonPost)
     }
-    /// A refused passport is tried again with a healed one. Not the form
-    /// arms, not a body from stdin, and not `cli_post_json_uds`.
-    fn heals(self, channel: Channel) -> bool {
-        match self {
-            Kind::PostForm | Kind::PostJsonStdin => false,
-            Kind::PostJson => channel == Channel::Tcp,
-            Kind::Request | Kind::RequestPost | Kind::SendJsonGet | Kind::SendJsonPost => true,
-        }
+    /// A refused passport is tried again with a healed one, on either
+    /// channel. Not a body from stdin.
+    fn heals(self) -> bool {
+        self != Kind::PostJsonStdin
     }
-    /// `_permission_note` runs on the answer.
+    /// `_permission_note` runs on the answer. Not a body from stdin.
     fn notes_permission(self) -> bool {
-        !matches!(self, Kind::PostForm | Kind::PostJsonStdin)
+        self != Kind::PostJsonStdin
     }
     /// The body is read from stdin: nothing is ever tried twice.
     fn once(self) -> bool {
@@ -462,7 +458,7 @@ impl Client {
         if kind == Kind::RequestPost && channel == Channel::Tcp && contains(&answer.body, METHOD_NOT_ALLOWED) {
             return self.run(Kind::Request, Channel::Tcp, endpoint, args, &[], t0);
         }
-        if kind.heals(channel) && contains(&answer.body, PASSPORT_REFUSAL) && self.heal() {
+        if kind.heals() && contains(&answer.body, PASSPORT_REFUSAL) && self.heal() {
             return self.run(kind, channel, endpoint, args, body, t0);
         }
         let permission = if kind.notes_permission() {
@@ -740,29 +736,28 @@ mod tests {
     fn the_kinds_behave_as_their_shell_functions() {
         use Kind::*;
         // (kind, migrating, connect timeout, status, no-answer line,
-        // heals over TCP, heals on the cell socket, note, once)
+        // heals, note, once)
         let rows = [
-            (Request, true, true, true, true, true, true, true, false),
-            (RequestPost, true, true, true, true, true, true, true, false),
-            (PostForm, false, false, false, true, false, false, false, false),
-            (PostJson, false, false, false, true, true, false, true, false),
-            (PostJsonStdin, false, false, false, false, false, false, false, true),
-            (SendJsonGet, false, false, false, false, true, true, true, false),
-            (SendJsonPost, false, false, false, false, true, true, true, false),
+            (Request, true, true, true, true, true, true, false),
+            (RequestPost, true, true, true, true, true, true, false),
+            (PostForm, false, false, false, true, true, true, false),
+            (PostJson, false, false, false, true, true, true, false),
+            (PostJsonStdin, false, false, false, false, false, false, true),
+            (SendJsonGet, false, false, false, false, true, true, false),
+            (SendJsonPost, false, false, false, false, true, true, false),
         ];
-        for (k, m, c, s, n, ht, hu, p, o) in rows {
+        for (k, m, c, s, n, h, p, o) in rows {
             assert_eq!(
                 (
                     k.retries_migrating(),
                     k.retries_connect_timeout(),
                     k.reads_status(),
                     k.says_no_answer(),
-                    k.heals(Channel::Tcp),
-                    k.heals(Channel::Uds),
+                    k.heals(),
                     k.notes_permission(),
                     k.once()
                 ),
-                (m, c, s, n, ht, hu, p, o),
+                (m, c, s, n, h, p, o),
                 "{k:?}"
             );
         }

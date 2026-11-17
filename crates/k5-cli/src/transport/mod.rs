@@ -73,8 +73,7 @@
 //!   call once as `cli_request`, a GET.
 //! - An answer holding `Invalid or missing auth token`: once per client,
 //!   the same call again with a healed passport ([`client::Healer`]).
-//!   Not `cli_post_form` or its twin, not `cli_post_json_stdin`, and not
-//!   `cli_post_json_uds` (the shell's arms have no heal there).
+//!   Every call on either channel but `cli_post_json_stdin`.
 //!
 //! # Time limits
 //!

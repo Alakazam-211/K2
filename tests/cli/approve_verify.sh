@@ -16,7 +16,7 @@ pass() { echo "  ok: $1"; npass=$((npass + 1)); }
 fail() { echo "  FAIL: $1" >&2; [ -z "${2:-}" ] || echo "        $2" >&2; nfail=$((nfail + 1)); }
 
 # k2 with no way to reach any daemon.
-k2() { env -u K2_PORT -u K2_HOOK_TOKEN -u K2SO_PORT -u K2SO_HOOK_TOKEN -u K2_HOOK_SOCK -u K2SO_HOOK_SOCK -u K2_HOST HOME="$tmp/home" bash "$K2" "$@"; }
+k2() { env -u K2_PORT -u K2_HOOK_TOKEN -u K2SO_PORT -u K2SO_HOOK_TOKEN -u K2_HOOK_SOCK -u K2SO_HOOK_SOCK -u K2_HOST HOME="$tmp/home" "$K2" "$@"; }
 
 # check <name> <rc> <text> <args...>
 check() {
@@ -83,7 +83,7 @@ check "help" 0 "k2 approve verify --approval" approve --help
 check "request needs the daemon" 1 "Cannot connect to K2" approve request --to alex --payload x
 
 rc=0
-env -u K2_APPROVE_BIN PATH=/usr/bin:/bin HOME="$tmp/home" bash "$K2" approve verify --approval x --keys y > "$tmp/out" 2>&1 || rc=$?
+env -u K2_APPROVE_BIN PATH=/usr/bin:/bin HOME="$tmp/home" "$K2" approve verify --approval x --keys y > "$tmp/out" 2>&1 || rc=$?
 if [ "$rc" = 2 ] && grep -qF "the k2-approve program isn't installed here" "$tmp/out"; then pass "no program: says how to get it"; else fail "no program" "rc $rc: $(cat "$tmp/out")"; fi
 
 echo

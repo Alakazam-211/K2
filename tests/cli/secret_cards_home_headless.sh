@@ -86,12 +86,12 @@ EOF
 owner_k2() {
     local h="$SANDBOX/$1/home"; shift
     env -i HOME="$h" PATH="$PATH" K2_AIRGAP=1 K2_PORT="$(cat "$h/.k2/heartbeat.port")" \
-        ${K2_PROJECT_PATH:+K2_PROJECT_PATH="$K2_PROJECT_PATH"} bash "$K2CLI" "$@"
+        ${K2_PROJECT_PATH:+K2_PROJECT_PATH="$K2_PROJECT_PATH"} "$K2CLI" "$@"
 }
 agent_k2() {
     local h="$SANDBOX/$1/home" pp="$2" dir="$3"; shift 3
     env -i HOME="$h" PATH="$PATH" K2_AIRGAP=1 K2_HOST=127.0.0.1 K2_PORT="$(cat "$h/.k2/heartbeat.port")" \
-        K2_HOOK_TOKEN="$pp" K2_HOOK_SOCK="$SANDBOX/not-a-socket.sock" K2_PROJECT_PATH="$dir" bash "$K2CLI" "$@"
+        K2_HOOK_TOKEN="$pp" K2_HOOK_SOCK="$SANDBOX/not-a-socket.sock" K2_PROJECT_PATH="$dir" "$K2CLI" "$@"
 }
 port_of() { cat "$SANDBOX/$1/home/.k2/heartbeat.port"; }
 tok_of() { cat "$SANDBOX/$1/home/.k2/heartbeat.token"; }

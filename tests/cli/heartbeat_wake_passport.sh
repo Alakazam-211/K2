@@ -76,7 +76,7 @@ wake() {
     printf '%s' "$disk_port" > "$HOME/.k2/heartbeat.port"
     local out rc=0
     out="$(env -u K2_PORT -u K2SO_PORT -u K2_HOOK_TOKEN -u K2SO_HOOK_TOKEN \
-        K2_PROJECT_PATH="$WS" "$@" bash "$K2_CLI" heartbeat wake 2>"$T/stderr")" || rc=$?
+        K2_PROJECT_PATH="$WS" "$@" "$K2_CLI" heartbeat wake 2>"$T/stderr")" || rc=$?
     [ "$rc" = 0 ] || die "heartbeat wake exited $rc ($*): $out $(cat "$T/stderr")"
     [ "$out" = '{"status":"noop","reason":"no inbox work found"}' ] || die "heartbeat wake printed ($*): $out"
 }

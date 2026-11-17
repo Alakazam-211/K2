@@ -79,12 +79,12 @@ ok "daemon up on $PORT"
 
 owner_k2() {
     env -i HOME="$HOME_A" PATH="$PATH" K2_AIRGAP=1 K2_PORT="$PORT" \
-        ${K2_PROJECT_PATH:+K2_PROJECT_PATH="$K2_PROJECT_PATH"} bash "$K2CLI" "$@"
+        ${K2_PROJECT_PATH:+K2_PROJECT_PATH="$K2_PROJECT_PATH"} "$K2CLI" "$@"
 }
 agent_k2() {
     local pp="$1" dir="$2"; shift 2
     env -i HOME="$HOME_A" PATH="$PATH" K2_AIRGAP=1 K2_HOST=127.0.0.1 K2_PORT="$PORT" \
-        K2_HOOK_TOKEN="$pp" K2_HOOK_SOCK="$SANDBOX/not-a-socket.sock" K2_PROJECT_PATH="$dir" bash "$K2CLI" "$@"
+        K2_HOOK_TOKEN="$pp" K2_HOOK_SOCK="$SANDBOX/not-a-socket.sock" K2_PROJECT_PATH="$dir" "$K2CLI" "$@"
 }
 post() { curl -s -o "$SANDBOX/body" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$2" "http://127.0.0.1:$PORT$1"; }
 body() { cat "$SANDBOX/body"; }

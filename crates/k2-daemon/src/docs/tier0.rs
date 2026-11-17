@@ -657,6 +657,7 @@ pub(super) fn mention_pids(argv: Vec<String>, c: &Call) -> Result<Vec<String>, V
 
 /// Run one `run_tool` verb and shape its answer. A version whose index
 /// isn't recorded yet is waited for once ([`super::indexer::wait_ready`]).
+#[cfg(test)]
 pub(super) fn run_blob_tool(
     s: &BlobSession,
     conn: ConnId,

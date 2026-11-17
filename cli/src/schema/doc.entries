@@ -16,12 +16,33 @@
     {
       "name": "doc cores",
       "usage": "k2 doc cores [on|off <core>] [--json] [--host <server> [--token T]]",
-      "description": "List the multiplayer cores on this server and whether each is on, or turn one on or off (people only: the owner or an Admin, from a terminal outside K2). Cores: markdown, text, any-file, board, slides. Agents only list them. Exit: 1 the flip worked but a file couldn't be written, or no answer from the daemon; 2 bad usage or an unknown core; 3 refused.",
-      "args": [{"name": "action", "required": false, "description": "on or off."}, {"name": "core", "required": false, "description": "markdown, text, any-file, board or slides."}],
+      "description": "List the multiplayer cores on this server and whether each is on, or turn one on or off (people only: the owner or an Admin, from a terminal outside K2). Cores: markdown, text, any-file, board, slides, timeline, fab, blend, cad. Agents only list them. Exit: 1 the flip worked but a file couldn't be written, or no answer from the daemon; 2 bad usage or an unknown core; 3 refused.",
+      "args": [{"name": "action", "required": false, "description": "on or off."}, {"name": "core", "required": false, "description": "markdown, text, any-file, board, slides, timeline, fab, blend or cad."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "The daemon's JSON."},
         {"name": "--host", "arg": "server", "description": "Another server (a Connect login with the Owner or Admin role)."},
         {"name": "--token", "arg": "T", "description": "With --host: the token."}
+      ]
+    },
+    {
+      "name": "doc cad",
+      "usage": "k2 doc cad <read verb> [args] <drawing>",
+      "description": "A .dxf or .dwg drawing's reads (the CAD core), of its current version, with no presence: drawing info, layer list, block list, entity find, text find, attrib find, block show, entity props, draw header, draw page; on a .dxf also header get and check. A read with more prints the next call on stderr. Drawings are read only for now (cad_writer_disabled, exit 3). Exit: 2 bad usage, a drawing that doesn't read or a stale cursor; 3 refused (core_off); 4 an address that names nothing.",
+      "args": [{"name": "verb", "required": true, "description": "The read verb and its arguments, as the pack names them (k2 doc cad --help)."}, {"name": "drawing", "required": true, "description": "The .dxf or .dwg, the last argument."}],
+      "flags": [
+        {"name": "-w", "arg": "ws", "description": "Workspace (also --workspace); a relative path is then inside it."},
+        {"name": "--json", "arg": null, "description": "The whole answer: path, version, verb, shape, stdout, data, next."}
+      ]
+    },
+    {
+      "name": "doc av",
+      "usage": "k2 doc av read|summary --config <file> <drawing|folder>...",
+      "description": "The AV reading of a set of drawings (the CAD core): devices across sheets, cables and their pulls, off-sheet flag pairs, title blocks and the sheet index, with findings. read gives every row; summary gives counts and finding codes only, never a value. A folder adds every .dxf and .dwg under it; at most 200 drawings. Exit: 2 bad usage, a bad configuration or a drawing that doesn't read; 3 refused (core_off); 4 a drawing or the configuration isn't there.",
+      "args": [{"name": "what", "required": true, "description": "read or summary."}, {"name": "drawings", "required": true, "description": "The set's drawings or folders."}],
+      "flags": [
+        {"name": "--config", "arg": "file", "description": "The set's conventions, one key = value per line."},
+        {"name": "-w", "arg": "ws", "description": "Workspace (also --workspace); a relative path is then inside it."},
+        {"name": "--json", "arg": null, "description": "The whole answer."}
       ]
     },
     {

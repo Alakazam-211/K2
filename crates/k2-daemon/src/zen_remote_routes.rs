@@ -201,7 +201,7 @@ pub fn gate(who: &RemoteWho) -> Result<Person, CliResponse> {
         RemoteWho::Login { login } if crate::zen_routes::login_is_owner_person(login) => Err(refuse(
             "403 Forbidden",
             "garden_device_only",
-            "Gardens open on a phone you paired with this server (Settings → Network → K2 Companion → Pair a phone), not on a password sign-in.",
+            "Gardens open on a phone you paired with this server (pair one from Settings → Network), not on a password sign-in.",
         )),
         _ => Err(refuse(
             "403 Forbidden",

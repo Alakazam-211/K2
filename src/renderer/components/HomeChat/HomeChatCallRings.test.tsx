@@ -15,6 +15,9 @@
 //      starts once it says on (no reload).
 //   5. The events socket never gives up: after a few dead tries it slows to
 //      one a minute.
+//   6. The ring layer looks for the chat header every 500 ms (a ring shows on
+//      every page, so the header comes and goes under it) and sits under it,
+//      over it in a narrow chat, or under the top bar with no header.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -177,6 +180,66 @@ describe('the incoming call card for the callee', () => {
       calls: [{ callId: '77', conv: '900', startedBy: CALLER, ringing: true, silent: false, expiresAt: EXPIRES, call: null }],
     })
     await screen.findByTestId('home-chat-ring-card')
+  })
+})
+
+describe('the ring layer follows the chat header', () => {
+  /** A chat header on screen at `rect` (CSS px, as the app zoom leaves it). */
+  function header(rect: { top: number; left: number; width: number; height: number }): HTMLElement {
+    const el = document.createElement('div')
+    el.dataset.testid = 'home-chat-header'
+    el.getBoundingClientRect = () => ({ ...rect, right: rect.left + rect.width, bottom: rect.top + rect.height, x: rect.left, y: rect.top, toJSON: () => ({}) })
+    document.body.appendChild(el)
+    return el
+  }
+
+  it('looks again every 500 ms: a header that appears or moves is followed, and without one the layer is under the top bar', async () => {
+    vi.useFakeTimers()
+    render(<HomeChatCallRings />)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.frames.has('local')).toBe(true)
+    frame('local', ring(true))
+    const layer = screen.getByTestId('home-chat-call-layer')
+    // No chat header on this page: just under the top bar.
+    expect(layer.dataset.place).toBe('float')
+    expect(layer.style.top).toBe('56px')
+
+    // A chat opens under the ring: nothing moves until the layer looks again.
+    const el = header({ top: 40, left: 300, width: 900, height: 48 })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(499)
+    })
+    expect(layer.style.top).toBe('56px')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    // Under its header (bottom 88, plus the 8px gap).
+    expect(layer.style.top).toBe('96px')
+
+    // The header moves down (a banner above it): followed within 500 ms.
+    el.getBoundingClientRect = () => ({ top: 100, left: 300, width: 900, height: 48, right: 1200, bottom: 148, x: 300, y: 100, toJSON: () => ({}) })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(layer.style.top).toBe('156px')
+
+    // The chat narrows: the card docks over the header itself.
+    el.getBoundingClientRect = () => ({ top: 100, left: 300, width: 500, height: 48, right: 800, bottom: 148, x: 300, y: 100, toJSON: () => ({}) })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(layer.dataset.place).toBe('dock')
+    expect(layer.style.top).toBe('100px')
+    expect(layer.style.left).toBe('300px')
+    expect(layer.style.width).toBe('500px')
+
+    // The chat closes: back under the top bar.
+    el.remove()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(layer.dataset.place).toBe('float')
+    expect(layer.style.top).toBe('56px')
   })
 })
 

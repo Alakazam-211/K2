@@ -1,0 +1,222 @@
+// The drawing from the model, as SVG in drawing coordinates (the group flips
+// Y once). Every entity element carries its handle (`data-h`). Block
+// definitions are drawn once, in <defs>, and each INSERT places one with a
+// <use> (one per array cell), handing the block its own colour, alpha and
+// layer state for the definition's "insert" values. Lines stay one screen
+// pixel wide at any zoom, as on the viewer's own path.
+
+import { useId } from 'react'
+import type { TextMetrics } from '../text-metrics'
+import { arcD, bulgeD, ellipsePoints, fmt, num, pointsOf, polyD, vertsOf, xy } from './geom'
+import { HatchShape } from './hatch'
+import { insertVars, paintOf, paintProps } from './paint'
+import { MtextShape, TextShape } from './text'
+import type { ModelHeader, ModelPage, ModelRow, XY } from './types'
+
+const HAIR = 'non-scaling-stroke'
+
+export type ModelScene = {
+  header: ModelHeader
+  rows: ModelRow[]
+  blocks: ReadonlyMap<string, ModelPage>
+  /** How far an XLINE or RAY reaches: well past the drawing. */
+  reach: number
+  /** The finest line spacing a dense hatch is tiled at, in drawing units. */
+  minSpacing: number
+}
+
+type Ctx = { scene: ModelScene; m: TextMetrics; idp: string; layers: Map<string, { on: boolean; frozen: boolean }> }
+
+const blockId = (idp: string, handle: string): string => `${idp}-b-${handle.replace(/^@h:/, '')}`
+
+function pointD(p: XY, mode: number, size: number): string {
+  const s = size / 2
+  const [x, y] = p
+  const parts: string[] = []
+  const shape = mode & 7
+  if (shape === 0) parts.push(`M${fmt(x)} ${fmt(y)} l0.0001 0`)
+  if (shape === 2) parts.push(`M${fmt(x - s)} ${fmt(y)} H${fmt(x + s)} M${fmt(x)} ${fmt(y - s)} V${fmt(y + s)}`)
+  if (shape === 3) parts.push(`M${fmt(x - s)} ${fmt(y - s)} L${fmt(x + s)} ${fmt(y + s)} M${fmt(x - s)} ${fmt(y + s)} L${fmt(x + s)} ${fmt(y - s)}`)
+  if (shape === 4) parts.push(`M${fmt(x)} ${fmt(y)} V${fmt(y + s)}`)
+  if (mode & 32) parts.push(arcD(p, s, 0, 2 * Math.PI))
+  if (mode & 64) parts.push(`M${fmt(x - s)} ${fmt(y - s)} H${fmt(x + s)} V${fmt(y + s)} H${fmt(x - s)} Z`)
+  return parts.join(' ')
+}
+
+function Insert({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
+  const g = r.geom ?? {}
+  const block = typeof g.block === 'string' ? g.block : null
+  const m = Array.isArray(g.m) && g.m.length === 6 ? (g.m as number[]) : null
+  const layer = c.layers.get(r.layer)
+  // A placement on a frozen layer hides its whole block; on an off layer, only the block's layer-0 entities.
+  if (r.visible !== 'insert' && layer?.frozen) return null
+  if (r.visible === false && layer && layer.on) return null
+  const on = r.visible === 'insert' ? 'insert' : (layer?.on ?? true)
+  const vars = insertVars(r.style, on) as React.CSSProperties
+  const uses: React.JSX.Element[] = []
+  if (block && m && c.scene.blocks.has(block)) {
+    const arr = (g.array ?? null) as { cols?: number; rows?: number; dx?: number; dy?: number } | null
+    const cols = Math.max(1, num(arr?.cols, 1))
+    const rows = Math.max(1, num(arr?.rows, 1))
+    const sx = Math.hypot(m[0], m[1]) || 1
+    const sy = Math.hypot(m[2], m[3]) || 1
+    for (let i = 0; i < rows && uses.length < 400; i++) {
+      for (let j = 0; j < cols && uses.length < 400; j++) {
+        // An array cell steps in the placement's turned frame, before its scale.
+        const off = i || j ? ` translate(${fmt((j * num(arr?.dx)) / sx)} ${fmt((i * num(arr?.dy)) / sy)})` : ''
+        uses.push(<use key={`${i}-${j}`} href={`#${blockId(c.idp, block)}`} data-h={r.h} data-block={block} transform={`matrix(${m.map(fmt).join(' ')})${off}`} style={vars} />)
+      }
+    }
+  }
+  const attribs = Array.isArray(g.attribs) ? (g.attribs as Record<string, unknown>[]) : []
+  const shown = attribs.filter((a) => a.visible !== false && a.text && typeof a.text === 'object')
+  if (!uses.length && !shown.length) return null
+  return (
+    <>
+      {uses}
+      {shown.map((a, i) => (
+        <TextShape key={`a${i}`} h={String(a.h ?? r.h)} g={a.text as Record<string, unknown>} style={r.style} visible={r.visible} m={c.m} />
+      ))}
+    </>
+  )
+}
+
+function Row({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
+  if (!r.drawn || !r.geom) return null
+  if (r.visible === false && r.kind !== 'INSERT') return null
+  const g = r.geom
+  const paint = paintOf(r.style, r.visible)
+  const line = { 'data-h': r.h, vectorEffect: HAIR, ...paintProps(paint) }
+  const path = (d: string) => (d ? <path {...line} d={d} /> : null)
+  switch (r.kind) {
+    case 'LINE': {
+      const a = xy(g.p1)
+      const b = xy(g.p2)
+      return a && b ? <line {...line} x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} /> : null
+    }
+    case 'XLINE':
+    case 'RAY': {
+      const p = xy(g.point)
+      const d = xy(g.dir)
+      if (!p || !d) return null
+      const L = c.scene.reach
+      const a: XY = g.ray === true ? p : [p[0] - d[0] * L, p[1] - d[1] * L]
+      return <line {...line} x1={a[0]} y1={a[1]} x2={p[0] + d[0] * L} y2={p[1] + d[1] * L} />
+    }
+    case 'POINT': {
+      const p = xy(g.p)
+      const size = num(g.pdsize, num(c.scene.header.settings?.pdsize))
+      const mode = num(g.pdmode, num(c.scene.header.settings?.pdmode))
+      return p ? path(pointD(p, mode, size > 0 ? size : c.scene.minSpacing * 5)) : null
+    }
+    case 'CIRCLE': {
+      const p = xy(g.centre)
+      return p && num(g.r) > 0 ? <circle {...line} cx={p[0]} cy={p[1]} r={num(g.r)} /> : null
+    }
+    case 'ARC': {
+      if (Array.isArray(g.path)) return path(polyD(pointsOf(g.path), false))
+      const p = xy(g.centre)
+      return p ? path(arcD(p, num(g.r), num(g.a0), num(g.a1))) : null
+    }
+    case 'ELLIPSE': {
+      const p = xy(g.centre)
+      const major = xy(g.major)
+      if (!p || !major) return null
+      const e = ellipsePoints(p, major, num(g.ratio, 1), num(g.p0), num(g.p1, 2 * Math.PI))
+      return path(polyD(e.pts, e.full))
+    }
+    case 'LWPOLYLINE':
+    case 'POLYLINE':
+      return path(bulgeD(vertsOf(g.verts), g.closed === true))
+    case 'SPLINE':
+      return path(polyD(pointsOf(g.path), g.closed === true))
+    case 'TEXT':
+    case 'ATTRIB':
+    case 'ATTDEF':
+      return <TextShape h={r.h} g={g} style={r.style} visible={r.visible} m={c.m} />
+    case 'MTEXT':
+      return <MtextShape h={r.h} g={g} style={r.style} visible={r.visible} m={c.m} />
+    case 'INSERT':
+      return <Insert r={r} c={c} />
+    case 'DIMENSION': {
+      const block = typeof g.block === 'string' ? g.block : null
+      const m = Array.isArray(g.m) && g.m.length === 6 ? (g.m as number[]) : [1, 0, 0, 1, 0, 0]
+      if (!block || !c.scene.blocks.has(block)) return null
+      return <use href={`#${blockId(c.idp, block)}`} data-h={r.h} data-block={block} transform={`matrix(${m.map(fmt).join(' ')})`} style={insertVars(r.style, true) as React.CSSProperties} />
+    }
+    case 'SOLID':
+    case 'TRACE': {
+      const q = pointsOf(g.quad)
+      if (q.length < 3) return null
+      return g.filled === false ? path(polyD(q, true)) : <path {...line} d={polyD(q, true)} {...paintProps(paint, 'fill')} />
+    }
+    case '3DFACE': {
+      const q = pointsOf(g.quad)
+      const hidden = num(g.hidden_edges)
+      const d = q.map((p, i) => ((hidden >> i) & 1 ? '' : `M${fmt(p[0])} ${fmt(p[1])} L${fmt(q[(i + 1) % q.length][0])} ${fmt(q[(i + 1) % q.length][1])}`)).join(' ')
+      return path(d.trim())
+    }
+    case 'HATCH':
+      return <HatchShape h={r.h} g={g} paint={paint} id={`${c.idp}-p-${r.h.replace(/^@h:/, '')}`} minSpacing={c.scene.minSpacing} />
+    case 'LEADER': {
+      const pts = pointsOf(g.path)
+      if (pts.length < 2) return null
+      let arrow = ''
+      if (g.arrow) {
+        // The arrowhead at the first point, along the first segment.
+        const [a, b] = pts
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+        const size = Math.min(len / 2, c.scene.header.units?.insunits === 1 ? 0.18 : 2.5)
+        const ux = (b[0] - a[0]) / len
+        const uy = (b[1] - a[1]) / len
+        const w = size / 6
+        arrow = ` M${fmt(a[0])} ${fmt(a[1])} L${fmt(a[0] + ux * size - uy * w)} ${fmt(a[1] + uy * size + ux * w)} L${fmt(a[0] + ux * size + uy * w)} ${fmt(a[1] + uy * size - ux * w)} Z`
+      }
+      return (
+        <g data-h={r.h}>
+          <path vectorEffect={HAIR} {...paintProps(paint)} d={polyD(pts, false)} />
+          {arrow ? <path vectorEffect={HAIR} {...paintProps(paint)} {...paintProps(paint, 'fill')} d={arrow.trim()} /> : null}
+        </g>
+      )
+    }
+    case 'MLEADER': {
+      const leaders = Array.isArray(g.leaders) ? (g.leaders as Record<string, unknown>[]) : []
+      const d = leaders.flatMap((l) => (Array.isArray(l.lines) ? (l.lines as unknown[]).map((p) => polyD(pointsOf(p), false)) : [])).join(' ')
+      return path(d)
+    }
+    case 'WIPEOUT': {
+      const mask = pointsOf(g.mask)
+      // Covers what is under it in the viewer's own background.
+      return mask.length >= 3 ? <path data-h={r.h} d={polyD(mask, true)} stroke="none" style={{ fill: 'var(--color-bg)' }} /> : null
+    }
+    case 'IMAGE': {
+      const q = pointsOf(g.corners)
+      if (q.length < 4) return null
+      return path(`${polyD(q, true)} M${fmt(q[0][0])} ${fmt(q[0][1])} L${fmt(q[2][0])} ${fmt(q[2][1])} M${fmt(q[1][0])} ${fmt(q[1][1])} L${fmt(q[3][0])} ${fmt(q[3][1])}`)
+    }
+    default:
+      return null
+  }
+}
+
+export function ModelShapes({ scene, m }: { scene: ModelScene; m: TextMetrics }): React.JSX.Element {
+  const idp = `k2m${useId().replace(/[^a-zA-Z0-9]/g, '')}`
+  const layers = new Map(scene.header.layers.map((l) => [l.name, { on: l.on, frozen: l.frozen }]))
+  const c: Ctx = { scene, m, idp, layers }
+  return (
+    <g transform="scale(1 -1)" fill="none" strokeWidth={1} style={{ fontFamily: 'var(--font-ui)' }} data-testid="dxf-shapes" data-source="model">
+      <defs>
+        {[...scene.blocks].map(([h, page]) => (
+          <g key={h} id={blockId(idp, h)} data-block={h}>
+            {page.entities.map((r) => (
+              <Row key={r.h} r={r} c={c} />
+            ))}
+          </g>
+        ))}
+      </defs>
+      {scene.rows.map((r) => (
+        <Row key={r.h} r={r} c={c} />
+      ))}
+    </g>
+  )
+}

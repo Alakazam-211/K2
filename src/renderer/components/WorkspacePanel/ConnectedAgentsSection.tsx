@@ -11,6 +11,7 @@ import { AgentsIcon } from '@/components/icons/K2Icons'
 import { useHomeRowAvatar, useHomeRowColor } from '@/lib/home-avatars'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { DRAWER_HEADER_GLYPH_PX, DRAWER_ROW_AVATAR_PX } from './drawer-glyph'
+import { DRAWER_SECTION_HEADER } from './drawer-section'
 
 /** Collapsible Connected Agents — only workspaces with a present connection. */
 export function ConnectedAgentsSection({ projectId }: { projectId: string }): React.JSX.Element {
@@ -70,7 +71,7 @@ export function ConnectedAgentsSection({ projectId }: { projectId: string }): Re
     <>
       <button
         onClick={toggle}
-        className="w-full flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] cursor-pointer no-drag hover:bg-white/[0.02] transition-colors"
+        className={DRAWER_SECTION_HEADER}
         title={open ? 'Collapse Connected Agents' : 'Expand Connected Agents'}
       >
         <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]">

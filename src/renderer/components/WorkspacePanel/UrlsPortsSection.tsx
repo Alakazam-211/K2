@@ -40,6 +40,7 @@ import {
 } from './urls-ports'
 import { scopeMayWrite, scopedKey } from '@/kessel/server-scope'
 import { appServiceIds } from './workspace-apps'
+import { DRAWER_SECTION_HEADER } from './drawer-section'
 
 const DETAILS_BTN =
   'px-2 py-0.5 text-[9px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer flex-shrink-0'
@@ -277,7 +278,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
       {/* ── Header (the Worktrees collapsible idiom) ── */}
       <button
         onClick={toggle}
-        className="w-full flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] cursor-pointer no-drag hover:bg-white/[0.02] transition-colors"
+        className={DRAWER_SECTION_HEADER}
         title={open ? 'Collapse Published' : 'Expand Published'}
       >
         <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]">

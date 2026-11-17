@@ -13,6 +13,7 @@ import { scopeMayWrite, scopedKey } from '@/kessel/server-scope'
 import { useRoom } from '@/components/Room/RoomContext'
 import { ApiIcon } from '@/components/icons/K2Icons'
 import { DRAWER_HEADER_GLYPH_PX } from './drawer-glyph'
+import { DRAWER_SECTION_HEADER } from './drawer-section'
 
 type ListResponse = { keys?: ApiKeyRow[] }
 
@@ -81,7 +82,7 @@ export function WorkspaceApiSection({
     <>
       <button
         onClick={toggle}
-        className="w-full flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] cursor-pointer no-drag hover:bg-white/[0.02] transition-colors"
+        className={DRAWER_SECTION_HEADER}
         title={open ? 'Collapse API' : 'Expand API'}
       >
         <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]">

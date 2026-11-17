@@ -8,6 +8,7 @@ import { scopedKey } from '@/kessel/server-scope'
 import { AppsIcon } from '@/components/icons/K2Icons'
 import { SectionManageCog } from './SectionManageCog'
 import { DRAWER_HEADER_GLYPH_PX } from './drawer-glyph'
+import { DRAWER_SECTION_HEADER } from './drawer-section'
 import { PublishedServiceDetailsModal } from './PublishedServiceDetailsModal'
 import { parsePublishList, publishedHostLabel, type PublishedService } from './urls-ports'
 import {
@@ -148,7 +149,7 @@ export function AppsSection({ projectId }: { projectId: string }): React.JSX.Ele
       <button
         onClick={toggle}
         data-testid="apps-section-header"
-        className="w-full flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] cursor-pointer no-drag hover:bg-[var(--color-wash-1)] transition-colors"
+        className={DRAWER_SECTION_HEADER}
         title={open ? 'Collapse Apps' : 'Expand Apps'}
       >
         <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]">

@@ -25,7 +25,6 @@
     "src/renderer/components/FocusWindow/FocusWorkspaceHeader.tsx": 2,
     "src/renderer/components/GitInitDialog/GitInitDialog.tsx": 2,
     "src/renderer/components/HeartbeatsPanel/HeartbeatEntry.tsx": 2,
-    "src/renderer/components/HeartbeatsPanel/HeartbeatsPanel.tsx": 1,
     "src/renderer/components/Home/HomeIconRail.tsx": 3,
     "src/renderer/components/Home/HomePicker.tsx": 1,
     "src/renderer/components/Home/room/HomeRemoteRooms.tsx": 2,
@@ -90,10 +89,6 @@
     "src/renderer/components/Wiki/WikiPage.tsx": 3,
     "src/renderer/components/Wiki/wiki-3d-scene.ts": 4,
     "src/renderer/components/Wiki/wiki-graph-data.ts": 1,
-    "src/renderer/components/WorkspacePanel/ConnectedAgentsSection.tsx": 1,
-    "src/renderer/components/WorkspacePanel/UrlsPortsSection.tsx": 1,
-    "src/renderer/components/WorkspacePanel/WorkspaceApiSection.tsx": 1,
-    "src/renderer/components/WorkspacePanel/WorkspacePanel.tsx": 1,
     "src/renderer/components/common/ChatMessage.tsx": 1,
     "src/renderer/App.tsx": 3
   },

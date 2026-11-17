@@ -24,6 +24,7 @@ import { WorkspacePhonePushBell } from './WorkspacePhonePushToggle'
 import { scopedKey } from '@/kessel/server-scope'
 import { InboxIcon, WikiIcon } from '@/components/icons/K2Icons'
 import { DRAWER_HEADER_GLYPH_PX } from './drawer-glyph'
+import { DRAWER_SECTION_HEADER } from './drawer-section'
 
 // Phase 2.1c Item 2 — `WorkItem` interface removed. The badge fetch
 // now uses `invoke<number>('k2_inbox_count', ...)` so the only
@@ -218,7 +219,7 @@ export default function WorkspacePanel(): React.JSX.Element {
           and new-worktree button stay clickable via stopPropagation) */}
       <button
         onClick={toggleWorktrees}
-        className="w-full flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] cursor-pointer no-drag hover:bg-white/[0.02] transition-colors"
+        className={DRAWER_SECTION_HEADER}
         title={worktreesOpen ? 'Collapse Worktrees' : 'Expand Worktrees'}
       >
         <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]">

@@ -7,6 +7,7 @@ import { IconAutonomous } from '@/components/icons/IconAutonomous'
 import { HeartbeatEntryRow } from './HeartbeatEntry'
 import { RemindersList } from './RemindersList'
 import { SectionManageCog } from '@/components/WorkspacePanel/SectionManageCog'
+import { DRAWER_SECTION_HEADER } from '@/components/WorkspacePanel/drawer-section'
 import { scopedKey } from '@/kessel/server-scope'
 
 /**
@@ -142,7 +143,7 @@ export function HeartbeatsPanel(): React.JSX.Element {
           the divider runs the full width of the workspace panel. */}
       <button
         onClick={toggleSection}
-        className="w-full flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] cursor-pointer no-drag hover:bg-white/[0.02] transition-colors"
+        className={DRAWER_SECTION_HEADER}
         title={sectionOpen ? 'Collapse Heartbeats' : 'Expand Heartbeats'}
       >
         <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]">

@@ -172,9 +172,16 @@ pub enum Target {
     NotFound,
 }
 
+/// `path` canonicalized in the root's form: on Windows the plain `D:\…`
+/// spelling (as `dunce` made the root), never the `\\?\` one, or no file
+/// would ever sit under the root.
+async fn canonical(path: PathBuf) -> Option<PathBuf> {
+    tokio::fs::canonicalize(path).await.ok().map(|p| dunce::simplified(&p).to_path_buf())
+}
+
 /// A file under the root (after links), or `None`.
 async fn jailed_file(root: &Path, rel: &str) -> Option<(PathBuf, u64)> {
-    let canon = tokio::fs::canonicalize(root.join(rel)).await.ok()?;
+    let canon = canonical(root.join(rel)).await?;
     if !canon.starts_with(root) {
         return None;
     }
@@ -183,9 +190,9 @@ async fn jailed_file(root: &Path, rel: &str) -> Option<(PathBuf, u64)> {
 }
 
 async fn jailed_dir(root: &Path, rel: &str) -> bool {
-    match tokio::fs::canonicalize(root.join(rel)).await {
-        Ok(c) => c.starts_with(root) && tokio::fs::metadata(&c).await.is_ok_and(|m| m.is_dir()),
-        Err(_) => false,
+    match canonical(root.join(rel)).await {
+        Some(c) => c.starts_with(root) && tokio::fs::metadata(&c).await.is_ok_and(|m| m.is_dir()),
+        None => false,
     }
 }
 

@@ -22,6 +22,7 @@ import { useContextMenuStore, type ContextMenuItemDef } from '@/stores/context-m
 import { useToastStore } from '@/stores/toast'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorText } from '@/lib/daemon-error'
+import { useFittedLine } from './replyFit'
 import {
   threadReplyComposerOpen,
   threadReplyFirstLine,
@@ -335,9 +336,14 @@ export function ThreadReplyChip({
 }
 
 /** On a sent reply, inside its bubble: the quoted message's first line.
- *  `onJump`: the strip is a button that goes to the original (Home chat). */
+ *  `onJump`: the strip is a button that goes to the original (Home chat).
+ *  The words are the bubble's own text colour at full strength (on your own
+ *  bubble a fade fell under 4.5:1 on the accent fill); the strip is set
+ *  apart by its line, its glyph and its smaller size. The line is cut in
+ *  whole words, then "…". */
 export function ThreadReplyQuote({ reply, onJump }: { reply: ParsedThreadReply; onJump?: () => void }): JSX.Element {
   const line = threadReplyFirstLine(reply.quote)
+  const fitted = useFittedLine(line)
   return (
     <div
       data-thread-reply-quote=""
@@ -369,13 +375,15 @@ export function ThreadReplyQuote({ reply, onJump }: { reply: ParsedThreadReply; 
         paddingLeft: 8,
         borderLeft: '2px solid currentColor',
         fontSize: '0.82em',
-        opacity: 0.7,
+        whiteSpace: 'nowrap',
       }}
     >
       <ReplyGlyph size={11} />
-      <span className="min-w-0 truncate">
+      <span data-reply-quote-who="" className="max-w-[55%] flex-shrink-0 truncate">
         {reply.part ? `${reply.from} (part): ` : `${reply.from}: `}
-        {line}
+      </span>
+      <span data-reply-quote-text="" ref={fitted.ref} className="min-w-0 flex-1 overflow-hidden">
+        {fitted.text}
       </span>
     </div>
   )

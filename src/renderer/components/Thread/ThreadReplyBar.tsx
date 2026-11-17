@@ -21,10 +21,11 @@
 // Home's DMs and channels use this bar too (ThreadChatComposer's `chips`).
 // A Garden's box (ZenCompose) keeps ThreadReplyChip.
 
-import { useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
+import type { CSSProperties, JSX } from 'react'
 import { threadReplyFirstLine, threadReplyQuote, type ThreadReplyTarget } from '@/lib/thread-reply'
 import { ReplyGlyph } from './ThreadMessageMenu'
 import { CHAMFER_CUT, CHAMFER_SCOPE, chamferVars } from './chamfer'
+import { useFittedLine } from './replyFit'
 
 /** The ear's side inset on the desktop Thread's box (px): the activity
  *  bar's and the stash's row (TerminalComposeBar), and this bar's. */
@@ -53,47 +54,8 @@ ${GLASS} ${B} :is([data-reply-chip-who], [data-reply-chip-text], [data-reply-can
 ${FROST} { background: linear-gradient(var(--k2-jump-tint) 0 0), var(--k2-jump-scrim); border-color: var(--k2-jump-edge); }
 `
 
-/** `line` cut to whole words that fit `room` px (measured by `width`), then
- *  "…"; just "…" when not even the first word fits. `room` 0: not measured
- *  yet, the whole line. */
-export function fitReplyWords(line: string, room: number, width: (s: string) => number): string {
-  if (room <= 0 || width(line) <= room) return line
-  const words = line.split(/\s+/).filter(Boolean)
-  for (let n = words.length - 1; n > 0; n--) {
-    const s = `${words.slice(0, n).join(' ').replace(/[\s,;:.–—-]+$/, '')}…`
-    if (width(s) <= room) return s
-  }
-  return '…'
-}
-
-/** Text width in `el`'s own font (a canvas; null where there is none). */
-function textWidth(el: HTMLElement): ((s: string) => number) | null {
-  const ctx = typeof document !== 'undefined' ? document.createElement('canvas').getContext?.('2d') : null
-  if (!ctx) return null
-  const cs = getComputedStyle(el)
-  ctx.font = cs.font || `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
-  return (s) => ctx.measureText(s).width
-}
-
-/** The first line, fitted to its slot in whole words (and refitted when the
- *  slot changes size). */
-function useFittedLine(line: string): { ref: React.RefObject<HTMLSpanElement | null>; text: string } {
-  const ref = useRef<HTMLSpanElement | null>(null)
-  const [room, setRoom] = useState(0)
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const read = (): void => setRoom(Math.floor(el.clientWidth))
-    read()
-    if (typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(read)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
-  const el = ref.current
-  const width = el && room > 0 ? textWidth(el) : null
-  return { ref, text: width ? fitReplyWords(line, room, width) : line }
-}
+// The quote line fits its slot in whole words (replyFit).
+export { fitReplyWords } from './replyFit'
 
 export function ThreadReplyBar({ target, onCancel }: { target: ThreadReplyTarget; onCancel: () => void }): JSX.Element {
   const line = threadReplyFirstLine(threadReplyQuote(target))

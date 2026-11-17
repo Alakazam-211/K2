@@ -146,7 +146,8 @@ describe('Home chat view', () => {
 
   it('draws from the Home chat routes only, never a Thread route', async () => {
     await open()
-    expect(screen.getByText('hi @alex, plain text')).toBeTruthy()
+    // The bubble (a reply's quote strip may show the same words).
+    expect(screen.getAllByText('hi @alex, plain text')[0].closest('[data-zen-message="20"]')).toBeTruthy()
     const seen = routes()
     expect(seen.length).toBeGreaterThan(0)
     for (const r of seen) expect(r.startsWith('home-chat/')).toBe(true)
@@ -157,8 +158,7 @@ describe('Home chat view', () => {
 
   it('`@name` is plain text: no mention mark or link', async () => {
     await open()
-    const el = screen.getByText('hi @alex, plain text')
-    expect(el.closest('a')).toBeNull()
+    for (const el of screen.getAllByText('hi @alex, plain text')) expect(el.closest('a')).toBeNull()
     expect(document.querySelector('[data-mention]')).toBeNull()
   })
 

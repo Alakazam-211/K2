@@ -118,7 +118,11 @@ fn id_buffers_are_in_the_memory_estimate() {
 
 #[test]
 fn a_crash_is_a_renderer_error() {
-    assert_eq!(hostile("abort", &short()).code, FailureCode::RendererError);
+    // Windows Error Reporting holds a crashed process about 2.5 s before it
+    // exits (measured on Windows 11), past the 2 s short wall: a crash is
+    // still a renderer error there, it just arrives later.
+    let wall = if cfg!(windows) { Duration::from_secs(10) } else { short().wall };
+    assert_eq!(hostile("abort", &Limits { wall, ..short() }).code, FailureCode::RendererError);
 }
 
 #[test]

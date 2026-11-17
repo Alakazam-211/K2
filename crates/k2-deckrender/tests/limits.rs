@@ -57,7 +57,11 @@ fn memory_past_the_cap_is_too_large_through_the_allocator_and_around_it() {
 
 #[test]
 fn a_crash_is_a_renderer_error() {
-    assert_eq!(hostile("abort", &short()).code, FailureCode::RendererError);
+    // Windows Error Reporting holds a crashed process about 2.5 s before it
+    // exits (measured on Windows 11), past the 2 s short wall: a crash is
+    // still a renderer error there, it just arrives later.
+    let wall = if cfg!(windows) { Duration::from_secs(10) } else { short().wall };
+    assert_eq!(hostile("abort", &Limits { wall, ..short() }).code, FailureCode::RendererError);
 }
 
 #[test]

@@ -268,6 +268,12 @@ docs. Agents never write .fcpxml, .prproj, photoplot or drill files.
   k2 doc entity set @h:E... [--layer L] [--color N] [--ltype NAME] <f>
   k2 doc entity move @h:E... --by dx,dy --unit U <f>
   k2 doc entity add line|polyline|text ... --unit U <f> · entity delete @h:E... <f>
+  k2 doc entity rotate @h:E... --by DEG --about x,y --unit U <f>
+  k2 doc entity scale @h:E... --factor F --about x,y --unit U <f>
+  k2 doc block insert --block NAME|@h:B --at x,y --unit U [--rotate DEG]
+         [--scale S] [--attr TAG=VALUE]... <f>   a block reference, with its attributes
+  k2 doc text set @h:TEXT --value S <f>       a single-line text's value
+  A flag's value may follow = (--value=-5), and a lone -- ends the flags
   Whole-file writes, restore and undo of a drawing, and any .dwg edit, are
   refused (cad_writer_disabled, exit 3)
 Comments on any-file docs (pinned to the whole file, or on PSD/PSB files to
@@ -1759,7 +1765,7 @@ cmd_doc() {
             fi ;;
         cat|head|wc|grep|sed|patch|apply|append|insert|replace|delete)
             _doc_tool "$verb" "$@" ;;
-        layer|outline|node|comment|reply|resolve|comments|reanchor|clip|track|marker|media|timeline|feature|hole|object|scene|collection|entity|attrib)
+        layer|outline|node|comment|reply|resolve|comments|reanchor|clip|track|marker|media|timeline|feature|hole|object|scene|collection|entity|attrib|block|text)
             # Any-file docs, through the docs kit: comments (any file);
             # PSD/PSB files' layer index (k2 doc --help, "PSD/PSB files");
             # timeline, fab, BLEND and DXF files' index verbs, and a live

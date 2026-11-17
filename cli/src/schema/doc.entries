@@ -27,7 +27,7 @@
     {
       "name": "doc cad",
       "usage": "k2 doc cad <read verb> [args] <drawing>",
-      "description": "A .dxf or .dwg drawing's reads (the CAD core), of its current version, with no presence: drawing info, layer list, block list, entity find, text find, attrib find, block show, entity props, draw header, draw page; on a .dxf also header get and check. A read with more prints the next call on stderr. A .dxf changes through its edit verbs (k2 doc attrib set, k2 doc entity set|move|add|delete); whole-file saves and any .dwg edit are refused (cad_writer_disabled, exit 3). Exit: 2 bad usage, a drawing that doesn't read or a stale cursor; 3 refused (core_off); 4 an address that names nothing.",
+      "description": "A .dxf or .dwg drawing's reads (the CAD core), of its current version, with no presence: drawing info, layer list, block list, entity find, text find, attrib find, block show, entity props, draw header, draw page; on a .dxf also header get and check. A read with more prints the next call on stderr. A .dxf changes through its edit verbs (k2 doc attrib set, k2 doc entity set|move|add|delete|rotate|scale, k2 doc block insert, k2 doc text set); whole-file saves and any .dwg edit are refused (cad_writer_disabled, exit 3). Exit: 2 bad usage, a drawing that doesn't read or a stale cursor; 3 refused (core_off); 4 an address that names nothing.",
       "args": [{"name": "verb", "required": true, "description": "The read verb and its arguments, as the pack names them (k2 doc cad --help)."}, {"name": "drawing", "required": true, "description": "The .dxf or .dwg, the last argument."}],
       "flags": [
         {"name": "-w", "arg": "ws", "description": "Workspace (also --workspace); a relative path is then inside it."},

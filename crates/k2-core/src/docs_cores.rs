@@ -148,7 +148,7 @@ pub const CORES: &[Core] = &[
         id: CAD,
         name: "CAD drawing core",
         status: "beta",
-        description: ".dxf and .dwg drawings. People and agents change a .dxf through edit verbs (attribute values, layer, colour and linetype, move, add, delete), each a new version; a .dwg is read only. Agents read layers, blocks, entities and text, and an AV reading of a set of drawings (devices, cables, pulls, flags and the sheet index); the file viewer gets each drawing ready to draw. Off: these are any-file docs.",
+        description: ".dxf and .dwg drawings. People and agents change a .dxf through edit verbs (attribute values, text, layer, colour and linetype, move, rotate, scale, add, insert a block, delete), each a new version; a .dwg is read only. Agents read layers, blocks, entities and text, and an AV reading of a set of drawings (devices, cables, pulls, flags and the sheet index); the file viewer gets each drawing ready to draw. Off: these are any-file docs.",
         short: ".dxf and .dwg drawings: drawing reads, .dxf edit verbs (a .dwg is read only)",
         view: CoreView::None,
     },

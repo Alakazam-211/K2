@@ -82,9 +82,10 @@ pub const WHY: &str = concat!(product_name!(), " can't save drawing edits yet; t
 /// edit verbs (a `.dxf` while they are on), for people and agents alike.
 pub const WHY_WHOLE: &str = "Drawings change through edits; whole-file saves aren't supported yet.";
 
-/// The CAD pack's edit verbs on a `.dxf` (kit v0.22.0), by their first two
-/// words. Its index reads (`entity list|show|diff|blame`) aren't edits.
-pub const EDIT_VERBS: [&str; 5] = ["attrib set", "entity set", "entity move", "entity add", "entity delete"];
+/// The CAD pack's edit verbs on a `.dxf`, by their first two words: the
+/// pack's own list (`k2_mpc_dxf::edit::NAMES`), so a verb it adds is known
+/// here at once. Its index reads (`entity list|show|diff|blame`) aren't edits.
+pub const EDIT_VERBS: &[&str] = &k2_mpc_dxf::edit::NAMES;
 
 /// Whether `argv` is one of [`EDIT_VERBS`].
 pub fn is_edit_verb(argv: &[String]) -> bool {
@@ -390,27 +391,58 @@ mod tests {
         let sampler = k2_mpc_dxf::testgen::draw_sampler(k2_mpc_dxf::testgen::Ver::R2018).build().bytes;
         let key = DocKey { space: "ws-cad".into(), path: "plan.dxf".into() };
         let s = mgr.open_blob(Arc::new(DxfIndexOnly::default()), &key, Some(&mut &sampler[..])).expect("the drawing opens");
-        let line = {
+        let first = |kind: &str| -> String {
             let d = k2_mpc_dxf::verbs::run(&sampler, "draw page", &["--version", "1", "--space", "model"]).expect("a page");
             let v: serde_json::Value = serde_json::from_str(&d.data.to_json()).expect("json");
-            let h = v["entities"].as_array().and_then(|es| es.iter().find(|e| e["kind"] == "LINE")).and_then(|e| e["h"].as_str()).expect("a LINE").to_string();
+            let h = v["entities"]
+                .as_array()
+                .and_then(|es| es.iter().find(|e| e["kind"] == kind))
+                .and_then(|e| e["h"].as_str())
+                .unwrap_or_else(|| panic!("a {kind} on the sampler's model page"))
+                .to_string();
             if h.starts_with("@h:") { h } else { format!("@h:{h}") }
         };
+        let (line, text) = (first("LINE"), first("TEXT"));
+        // Every edit verb of the pack v0.3.0 adds, and move: (its argv
+        // without --base, its past-tense word).
+        let verbs: Vec<(Vec<String>, &str)> = [
+            (vec!["entity", "move", line.as_str(), "--by", "10,0", "--unit", "mm"], "moved"),
+            (vec!["entity", "rotate", line.as_str(), "--by", "90", "--about", "0,0", "--unit", "mm"], "rotated"),
+            (vec!["entity", "scale", line.as_str(), "--factor", "2", "--about", "0,0", "--unit", "mm"], "scaled"),
+            (vec!["text", "set", text.as_str(), "--value", "Edited"], "edited"),
+            (vec!["block", "insert", "--block", "DOOR", "--at", "10,10", "--unit", "mm"], "inserted"),
+        ]
+        .into_iter()
+        .map(|(a, w)| (a.into_iter().map(str::to_string).collect(), w))
+        .collect();
         let opts = ToolOptions::new().json(true).result_json(true);
         for (who, kind) in [("person:owner", ParticipantKind::Person), ("agent:ws-cad", ParticipantKind::Agent)] {
             let conn = s.join(Participant::new(who, who, "#123456", kind, "cli"), Stay::Held).expect("join").conn;
-            let base = s.status().expect("status").version.to_string();
-            let mv = |extra: &[&str]| -> Vec<String> {
-                ["entity", "move", line.as_str(), "--by", "10,0", "--unit", "mm", "--base", base.as_str()].iter().chain(extra).map(|a| a.to_string()).collect()
-            };
-            let dry = s.run_tool(conn, &mv(&["--dry-run"]), &opts).unwrap_or_else(|e| panic!("{who}'s dry run: {e:?}"));
-            assert_eq!((dry.exit, dry.version_made()), (0, None), "{who}: a dry run records nothing");
-            let r: serde_json::Value = serde_json::from_str(&dry.result().expect("the result as data").to_json()).expect("json");
-            let digest = r["changed"]["bytes"]["after_digest"].as_str().unwrap_or_else(|| panic!("{who}: the digest: {r}")).to_string();
-            let real = s.run_tool(conn, &mv(&["--expect", digest.as_str()]), &opts).unwrap_or_else(|e| panic!("{who}'s edit: {e:?}"));
-            assert_eq!(real.exit, 0, "{who}: {}", String::from_utf8_lossy(&real.stdout));
-            let made = real.version_made().unwrap_or_else(|| panic!("{who}: the edit made a version"));
-            assert_eq!(made, s.status().expect("status").version, "{who}");
+            for (verb, word) in &verbs {
+                // Each one's own text, so the second set changes something.
+                let mut verb = verb.clone();
+                if verb[0] == "text" {
+                    *verb.last_mut().expect("the value") = format!("Edited by {who}");
+                }
+                let base = s.status().expect("status").version;
+                let call = |extra: &[&str]| -> Vec<String> {
+                    let mut a = verb.clone();
+                    a.extend(["--base".to_string(), base.to_string()]);
+                    a.extend(extra.iter().map(|s| s.to_string()));
+                    a
+                };
+                let dry = s.run_tool(conn, &call(&["--dry-run"]), &opts).unwrap_or_else(|e| panic!("{who}'s dry {verb:?}: {e:?}"));
+                assert_eq!((dry.exit, dry.version_made()), (0, None), "{who} {verb:?}: a dry run records nothing: {}", String::from_utf8_lossy(&dry.stdout));
+                let r: serde_json::Value = serde_json::from_str(&dry.result().expect("the result as data").to_json()).expect("json");
+                let digest = r["changed"]["bytes"]["after_digest"].as_str().unwrap_or_else(|| panic!("{who} {verb:?}: the digest: {r}")).to_string();
+                assert_eq!(s.status().expect("status").version, base, "{who} {verb:?}: nothing recorded by the dry run");
+                let real = s.run_tool(conn, &call(&["--expect", digest.as_str()]), &opts).unwrap_or_else(|e| panic!("{who}'s {verb:?}: {e:?}"));
+                assert_eq!(real.exit, 0, "{who} {verb:?}: {}", String::from_utf8_lossy(&real.stdout));
+                let r: serde_json::Value = serde_json::from_str(&real.result().expect("the result as data").to_json()).expect("json");
+                assert_eq!(r["changed"]["word"], serde_json::json!(word), "{who} {verb:?}: {r}");
+                let made = real.version_made().unwrap_or_else(|| panic!("{who} {verb:?}: the edit made a version"));
+                assert_eq!((made, s.status().expect("status").version), (base + 1, base + 1), "{who} {verb:?}: one version");
+            }
             if kind == ParticipantKind::Agent {
                 let head = s.status().expect("status").version;
                 match s.write_bytes(conn, &sampler, head) {
@@ -424,12 +456,82 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A drawing indexed under an older index format (CAD v0.2.0's, 3) and
+    /// opened with the pack K2 opens a `.dxf` with now (format 4): the old
+    /// row isn't read, the version is pending (what `indexer::on_open` asks
+    /// a job for, and a verb meeting `MPC-E713` waits on), and the job
+    /// records it again, after which the index verbs answer.
+    #[test]
+    fn a_drawing_indexed_under_the_older_format_is_indexed_again() {
+        use k2_mpc_base::blob::{BlobConfig, BlobStore};
+        use k2_mpc_base::index::IndexStatus;
+        use k2_mpc_base::session::{AuditEvent, Config, Host, Participant, ParticipantKind, Rights, SessionManager, Stay};
+        use k2_mpc_base::store::{DocKey, DocStore};
+        use k2_mpc_base::tools::ToolOptions;
+        use std::sync::Arc;
+
+        struct Editors;
+        impl Host for Editors {
+            fn rights(&self, _: &Participant, _: &DocKey) -> Rights {
+                Rights::editor()
+            }
+            fn now_ms(&self) -> u64 {
+                super::super::host::now_ms()
+            }
+            fn on_event(&self, _: &AuditEvent) {}
+        }
+        /// The DXF pack as v0.2.0 named its index: format 3.
+        struct Format3(DxfPack);
+        impl BlobPack for Format3 {
+            fn index_spec(&self) -> Option<IndexSpec> {
+                Some(IndexSpec::new("dxf", 3, &k2_mpc_dxf::pack::VERBS))
+            }
+            fn index(&self, src: &mut dyn Read, size: u64, limits: &IndexLimits) -> Result<IndexDraft, IndexRefused> {
+                self.0.index(src, size, limits)
+            }
+        }
+        assert_eq!(k2_mpc_dxf::pack::FORMAT, 4, "the pack K2 vendors indexes in format 4");
+        let dir = std::env::temp_dir().join(format!("k2-cad-reindex-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let store = Arc::new(DocStore::open(dir.join("docs.redb")).expect("store"));
+        let blobs = Arc::new(BlobStore::open(store.clone(), dir.join("blobs"), BlobConfig::default(), Arc::new(|| 1_000_000)).expect("blobs"));
+        let mgr = SessionManager::new(store, Arc::new(Editors), Config::default()).with_blob_store(blobs);
+        let sampler = k2_mpc_dxf::testgen::draw_sampler(k2_mpc_dxf::testgen::Ver::R2018).build().bytes;
+        let key = DocKey { space: "ws-cad".into(), path: "plan.dxf".into() };
+        let old = mgr.open_blob(Arc::new(Format3(DxfPack)), &key, Some(&mut &sampler[..])).expect("opened under format 3");
+        let st = old.index_job(None).expect("index_job").expect("a job is due").run().expect("recorded");
+        assert!(matches!(st, IndexStatus::Ready { .. }), "format 3 recorded: {st:?}");
+        drop(old);
+        mgr.close_where("test", |_, _| true).expect("closed");
+        let now = mgr.open_blob(Arc::new(DxfIndexOnly::default()), &key, None).expect("reopened under format 4");
+        let pending = now.index_status(None).expect("status");
+        assert!(matches!(pending, IndexStatus::Pending { running: false, .. }), "the format-3 row isn't this format's: {pending:?}");
+        let st = now.index_job(None).expect("index_job").expect("a job is due again").run().expect("recorded again");
+        assert!(matches!(st, IndexStatus::Ready { .. }), "format 4 recorded: {st:?}");
+        let conn = now.join(Participant::new("person:owner", "Owner", "#123456", ParticipantKind::Person, "cli"), Stay::Held).expect("join").conn;
+        let out = now.run_tool(conn, &["entity".to_string(), "list".to_string()], &ToolOptions::new()).unwrap_or_else(|e| panic!("entity list: {e:?}"));
+        assert_eq!(out.exit, 0, "{}", String::from_utf8_lossy(&out.stdout));
+        assert!(String::from_utf8_lossy(&out.stdout).contains("@h:"), "the index answers");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The pack's edit verbs by their two words; its index reads aren't.
     #[test]
     fn the_edit_verbs_are_known_by_their_words() {
-        for e in [&["attrib", "set", "@h:1", "--tag", "T", "--value", "V"][..], &["entity", "set", "@h:1", "--layer", "0"], &["entity", "add", "line"], &["entity", "delete", "@h:1"], &["entity", "move", "@h:1"]] {
+        for e in [
+            &["attrib", "set", "@h:1", "--tag", "T", "--value", "V"][..],
+            &["entity", "set", "@h:1", "--layer", "0"],
+            &["entity", "add", "line"],
+            &["entity", "delete", "@h:1"],
+            &["entity", "move", "@h:1"],
+            &["entity", "rotate", "@h:1"],
+            &["entity", "scale", "@h:1"],
+            &["block", "insert", "DOOR"],
+            &["text", "set", "@h:1"],
+        ] {
             assert!(is_edit_verb(&argv(e)), "{e:?}");
         }
+        assert_eq!(EDIT_VERBS.len(), 9, "the pack's nine edit verbs: {EDIT_VERBS:?}");
         for r in [&["entity", "list"][..], &["entity", "show", "@h:1"], &["entity", "diff", "1"], &["entity", "blame"], &["comment", "--doc"], &[]] {
             assert!(!is_edit_verb(&argv(r)), "{r:?}");
         }

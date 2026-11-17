@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState, useEffect, useRef, Fragment } from 'react'
+import { useMemo, useCallback, useState, useEffect, useRef } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 import { useActiveStore } from '@/stores/active'
@@ -26,6 +26,8 @@ import { ShortcutRangeHint } from './ShortcutRangeHint'
 import { NAV_SECTION_HOVER_CLASS, NavCountTag, NavSectionChevron, NavSectionLabel } from './NavSection'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { primaryScope } from '@/kessel/server-scope'
+import { RowDropLine, reorderedZoneIds, useRowDragReorder } from './row-drag-reorder'
+import { ACTIVE_ROW_TEXT_INSET, keyboardMoveGap, movedAnnouncement } from './active-pins-reorder'
 
 const TWENTY_FOUR_HOURS = 24 * 60 * 60
 
@@ -337,12 +339,15 @@ function ActiveBarItem({
   isCurrentProject,
   onClick,
   onContextMenu,
+  onKeyDown,
 }: {
   project: ProjectWithWorkspaces
   index: number
   isCurrentProject: boolean
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
+  /** Kept rows only: Option+↑/↓ moves the row. */
+  onKeyDown?: (e: React.KeyboardEvent) => void
 }): React.JSX.Element {
   // plan-agent-status-unify-v1 S3: the same cluster as the nav rows —
   // working | heartbeat | status-or-live | number. Live / reaped is the
@@ -358,6 +363,11 @@ function ActiveBarItem({
     <button
       onClick={onClick}
       onContextMenu={onContextMenu}
+      onKeyDown={onKeyDown}
+      data-active-row={project.id}
+      // A kept row is its own drag handle (the shared gesture skips buttons
+      // that aren't marked).
+      data-row-drag-handle={onKeyDown ? '' : undefined}
       className={`no-drag w-full flex items-center gap-2 px-2 py-1 text-left transition-colors cursor-pointer select-none ${
         isCurrentProject
           ? 'bg-white/[0.08] text-[var(--color-text-primary)]'
@@ -484,11 +494,61 @@ export default function ActiveBar(): React.JSX.Element | null {
   // Boundary index for the pinned↔rest separator. Items are already sorted
   // pinned-first by sortPinnedFirst, so this is just the pinned count.
   const pinnedCount = items.filter((p) => p.manuallyActive).length
+  const pinned = items.slice(0, pinnedCount)
+  const rest = items.slice(pinnedCount)
+
+  // ── Reordering the kept agents (their order is the shortcut order) ──
+  // The shared drag gesture and drop line; a move writes the canonical
+  // workspace order, where the kept agents swap slots among themselves.
+  const reorderProjects = useProjectsStore((s) => s.reorderProjects)
+  const pinDrag = useRowDragReorder<'pins'>()
+  const startPinDrag = pinDrag.onRowMouseDown
+  const barRef = useRef<HTMLDivElement>(null)
+  const pinsRef = useRef<HTMLDivElement>(null)
+  // The kept rows as painted, read at drop time (the closure is from mousedown).
+  const pinIdsRef = useRef<string[]>([])
+  pinIdsRef.current = pinned.map((p) => p.id)
+  const [moveStatus, setMoveStatus] = useState('')
+
+  const movePin = useCallback((project: ProjectWithWorkspaces, gap: number) => {
+    const zone = pinIdsRef.current
+    const allIds = useProjectsStore.getState().projects.map((p) => p.id)
+    const ids = reorderedZoneIds(allIds, zone, project.id, gap)
+    if (!ids) return
+    void reorderProjects(ids)
+    const from = zone.indexOf(project.id)
+    const to = gap > from ? gap - 1 : gap
+    setMoveStatus(movedAnnouncement(project.name, to, useTerminalSettingsStore.getState().shortcutLayout))
+  }, [reorderProjects])
+
+  const handlePinMouseDown = useCallback((e: React.MouseEvent, project: ProjectWithWorkspaces, index: number) => {
+    startPinDrag(e, {
+      zone: 'pins',
+      index,
+      container: () => pinsRef.current,
+      rowSelector: '[data-active-pin]',
+      // The pointer stays in the Active drawer.
+      bounds: () => barRef.current,
+      onDrop: (_from, gap) => movePin(project, gap),
+    })
+  }, [startPinDrag, movePin])
+
+  const handlePinKeyDown = useCallback((e: React.KeyboardEvent, project: ProjectWithWorkspaces) => {
+    if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+    e.preventDefault()
+    e.stopPropagation()
+    const zone = pinIdsRef.current
+    const gap = keyboardMoveGap(zone.indexOf(project.id), zone.length, e.key === 'ArrowUp' ? 'up' : 'down')
+    if (gap !== null) movePin(project, gap)
+  }, [movePin])
 
   if (items.length === 0) return null
 
   return (
-    <div className="border-t border-[var(--color-border)] flex flex-col flex-shrink-0 min-h-0 max-h-[min(320px,45%)]">
+    <div ref={barRef} data-active-bar="" className="border-t border-[var(--color-border)] flex flex-col flex-shrink-0 min-h-0 max-h-[min(320px,45%)]">
+      {/* Where a moved agent landed, for screen readers. */}
+      <div data-active-move-status="" role="status" aria-live="polite" className="sr-only">{moveStatus}</div>
       <button
         className={`no-drag w-full flex items-center gap-1.5 px-3 pt-2 pb-1 text-left cursor-pointer ${NAV_SECTION_HOVER_CLASS} flex-shrink-0`}
         onClick={() => setCollapsed((prev) => !prev)}
@@ -512,21 +572,46 @@ export default function ActiveBar(): React.JSX.Element | null {
         }}
       >
         <div className="px-1 pb-1">
-        {items.map((project, index) => (
-          <Fragment key={project.id}>
-            {/* Single separator at the pinned↔rest boundary (pinned floated
-                to top). Only renders when both groups are non-empty. */}
-            {index === pinnedCount && pinnedCount > 0 && (
-              <div className="mx-2 my-1 border-t border-[var(--color-border)]" />
-            )}
-            <ActiveBarItem
-              project={project}
-              index={index}
-              isCurrentProject={project.id === activeProjectId}
-              onClick={() => handleClick(project)}
-              onContextMenu={(e) => handleContextMenu(e, project)}
-            />
-          </Fragment>
+        {/* The kept agents (floated to the top): drag or Option+↑/↓ to
+            reorder, which reorders their shortcuts. No row moves while
+            dragging; the drop line shows where the row will land. */}
+        {pinnedCount > 0 && (
+          <div ref={pinsRef} className="relative" data-active-pins="">
+            <RowDropLine top={pinDrag.dropLineTop('pins')} inset={ACTIVE_ROW_TEXT_INSET} />
+            {pinned.map((project, index) => (
+              <div
+                key={project.id}
+                data-active-pin={project.id}
+                style={{ opacity: pinDrag.isDragging('pins', index) ? 0.4 : 1 }}
+                onMouseDown={(e) => handlePinMouseDown(e, project, index)}
+                onClickCapture={pinDrag.onRowClickCapture}
+              >
+                <ActiveBarItem
+                  project={project}
+                  index={index}
+                  isCurrentProject={project.id === activeProjectId}
+                  onClick={() => handleClick(project)}
+                  onContextMenu={(e) => handleContextMenu(e, project)}
+                  onKeyDown={(e) => handlePinKeyDown(e, project)}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+        {/* Single separator at the pinned↔rest boundary. Only renders when
+            both groups are non-empty. */}
+        {pinnedCount > 0 && rest.length > 0 && (
+          <div className="mx-2 my-1 border-t border-[var(--color-border)]" />
+        )}
+        {rest.map((project, i) => (
+          <ActiveBarItem
+            key={project.id}
+            project={project}
+            index={pinnedCount + i}
+            isCurrentProject={project.id === activeProjectId}
+            onClick={() => handleClick(project)}
+            onContextMenu={(e) => handleContextMenu(e, project)}
+          />
         ))}
         </div>
       </div>

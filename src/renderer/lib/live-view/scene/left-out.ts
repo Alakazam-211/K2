@@ -71,8 +71,8 @@ export function declinedWords(code: string, message?: string | null): { title: s
     // The pack says which format it read ("format 5.02"); older than it reads is rarer, and said as such.
     const m = /format (\d+)\.(\d+)/.exec(message ?? '')
     const v = m ? +m[1] * 100 + +m[2] : null
-    if (v !== null && v < 306) return { title: 'This file is from an older Blender.', body: 'K2 can’t watch files this old live.', actions: [] }
-    return { title: 'This file is from a newer Blender.', body: 'K2 opens it in a coming update.', actions: [] }
+    if (v !== null && v < 306) return { title: 'This file is from an older Blender.', body: `${PRODUCT_NAME} can’t watch files this old live.`, actions: [] }
+    return { title: 'This file is from a newer Blender.', body: `${PRODUCT_NAME} opens it in a coming update.`, actions: [] }
   }
-  return { title: 'K2 can’t watch this file live yet.', body: failureWords(code), actions: [] }
+  return { title: `${PRODUCT_NAME} can’t watch this file live yet.`, body: failureWords(code), actions: [] }
 }

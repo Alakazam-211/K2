@@ -9,6 +9,8 @@
 //! starts with every core off, and while a core is off the daemon opens no live
 //! doc of that kind (`core_off`).
 
+use crate::product_name;
+
 /// What a person sees for a core (the multiplayer view, or none yet).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreView {
@@ -125,7 +127,7 @@ pub const CORES: &[Core] = &[
         id: FAB,
         name: "PCB fabrication core",
         status: "beta",
-        description: "Photoplot and drill files for circuit boards (.gbr, .drl and their layer files). Agents read apertures, features and holes, and compare versions; nobody writes them through K2. Off: these are any-file docs.",
+        description: concat!("Photoplot and drill files for circuit boards (.gbr, .drl and their layer files). Agents read apertures, features and holes, and compare versions; nobody writes them through ", product_name!(), ". Off: these are any-file docs."),
         short: "photoplot and drill files: read-only feature and hole verbs for agents",
         view: CoreView::None,
     },
@@ -133,7 +135,7 @@ pub const CORES: &[Core] = &[
         id: BLEND,
         name: "3D scene core",
         status: "beta",
-        description: ".blend scenes, read only for now. Agents read collections and objects, a save from your 3D app is taken in by object, and the scene's cameras and objects get previews. Editing .blend files through K2 comes in a later release. Off: a .blend is an any-file doc.",
+        description: concat!(".blend scenes, read only for now. Agents read collections and objects, a save from your 3D app is taken in by object, and the scene's cameras and objects get previews. Editing .blend files through ", product_name!(), " comes in a later release. Off: a .blend is an any-file doc."),
         short: ".blend scenes (read only): object reads for agents, scene previews",
         view: CoreView::None,
     },

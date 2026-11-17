@@ -46,6 +46,7 @@
 //! version to restore, nothing is restored for them. Purge stays off
 //! `k2 doc`.
 
+use k2_core::brand::PRODUCT_NAME;
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
@@ -260,7 +261,7 @@ pub(super) fn stored_as_live_keyed(rel: &str, tier: Tier) -> CliResponse {
             "409 Conflict",
             "stored_as_live_doc",
             format!(
-                "{rel} was opened live by the {name}, which is off now. Turn it on to use this {what} in K2 again \
+                "{rel} was opened live by the {name}, which is off now. Turn it on to use this {what} in {PRODUCT_NAME} again \
                  (k2 doc cores on {core}): its history is kept. The file itself is up to date and opens in {app}"
             ),
         ),

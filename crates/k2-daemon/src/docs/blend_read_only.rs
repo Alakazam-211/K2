@@ -32,6 +32,7 @@
 use std::io::Read;
 
 use k2_core::docs_cores;
+use k2_core::product_name;
 use k2_mpc_base::doc::Neutral;
 use k2_mpc_base::elem::{Applied, Key};
 use k2_mpc_base::index::{IndexDraft, IndexLimits, IndexRefused, IndexSpec};
@@ -108,7 +109,7 @@ pub const CODE: &str = "blend_writer_disabled";
 
 /// The refusal's words, on every write path and as the live welcome's
 /// `read_only_reason` ([`WELCOME_FIELD`]).
-pub const WHY: &str = "K2 can't save .blend edits yet; this file opens read-only.";
+pub const WHY: &str = concat!(product_name!(), " can't save .blend edits yet; this file opens read-only.");
 
 /// The live welcome's field that says why a scene is read-only (its
 /// `rights` is `read`), so a viewer shows it from the start.

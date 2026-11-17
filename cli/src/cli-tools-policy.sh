@@ -371,8 +371,9 @@ _k2_cfg_auth() {
 
 # The hand-over headers. A call the Rust front handed to this script
 # (K5_CLI_VIA=rust, read into _K5_CLI_VIA by the prelude) says so on every
-# request to the daemon, over the cell socket and TCP alike (_k2_curl),
-# in this order:
+# request to the daemon, over the cell socket and TCP alike, from curl
+# (_k2_curl) and from the embedded Python (_K5_PY_HTTP) alike, in this
+# order:
 #   X-K5-Would-Refuse: 1       only when the front's passport rule would
 #                              refuse the call (K5_CLI_WOULD_REFUSE=1, read
 #                              into _K5_WOULD_REFUSE)
@@ -403,6 +404,34 @@ _k5_headers() {
         _K5_HDRS+=("X-K5-Owner-Source: disk")
     fi
 }
+# The same headers, one per line, for a python3 command line.
+_k5_py_headers() {
+    _k5_headers
+    if [ "${#_K5_HDRS[@]}" -gt 0 ]; then printf '%s\n' "${_K5_HDRS[@]}"; fi
+}
+# The embedded Python's side. A python3 block that calls urlopen gets this
+# text and the headers on its own command line, never exported, runs the
+# text first and wraps every request in k5_request():
+#   _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PY'
+#   import os, urllib.request
+#   exec(os.environ.pop("_K5_PY_HTTP"))
+#   ... urllib.request.urlopen(k5_request(req), timeout=30) ...
+# A block that talks to something other than the daemon passes
+# _K5_PY_HEADERS="" instead. Both are taken out of the Python's
+# environment as it reads them, so nothing it starts inherits them.
+# tests/cli/k5_urlopen_gate.sh fails on a urlopen in cli/src that skips
+# any of this.
+_K5_PY_HTTP='
+import os as _k5_os, urllib.request as _k5_urlreq
+k5_headers = [tuple(h.split(": ", 1)) for h in _k5_os.environ.pop("_K5_PY_HEADERS").split("\n") if h]
+def k5_request(req):
+    """req (a urllib Request, or a URL) with the hand-over headers on it."""
+    if isinstance(req, str):
+        req = _k5_urlreq.Request(req)
+    for name, value in k5_headers:
+        req.add_header(name, value)
+    return req
+'
 
 # _k2_curl CFG curl-args… — run curl with CFG (config lines) on stdin.
 # CFG empty → plain curl. The caller's stdin is NOT available to curl.

@@ -175,11 +175,12 @@ cmd_mail_reader() {
     MR_LIMIT="$MR_LIMIT" MR_OFFSET="$MR_OFFSET" MR_HTML="$MR_HTML" MR_OUT="$MR_OUT" \
     MR_INBOX="$MR_INBOX" MR_ACTOR="$MR_ACTOR" MR_READ="$MR_READ" MR_FLAGGED="$MR_FLAGGED" \
     MR_BODY="$MR_BODY" MR_TO="$MR_TO" MR_CC="$MR_CC" MR_SUBJECT="$MR_SUBJECT" \
-    ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
+    ABASE="$BASE_URL" ATOKEN="$TOKEN" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import base64, json, os, sys, time
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ.pop("_K5_PY_HTTP"))
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -211,7 +212,7 @@ def call(method, route, params=None, body=None):
     if E("ATOKEN", ""):
         req.add_header("Authorization", "Bearer " + E("ATOKEN", ""))
     try:
-        with urllib.request.urlopen(req, timeout=float(E("K5_MAIL_HTTP_TIMEOUT") or E("K2_MAIL_HTTP_TIMEOUT") or E("K2SO_MAIL_HTTP_TIMEOUT") or 60)) as r:
+        with urllib.request.urlopen(k5_request(req), timeout=float(E("K5_MAIL_HTTP_TIMEOUT") or E("K2_MAIL_HTTP_TIMEOUT") or E("K2SO_MAIL_HTTP_TIMEOUT") or 60)) as r:
             d = json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace")

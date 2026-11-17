@@ -35,11 +35,12 @@ _preset_py() {
     PR_ENABLE="${PR_ENABLE:-}" PR_CLEAR_DANGER="${PR_CLEAR_DANGER:-false}" \
     PR_CLEAR_ENV="${PR_CLEAR_ENV:-false}" PR_CLEAR_READY="${PR_CLEAR_READY:-false}" \
     PR_INJECT_FLOW="${PR_INJECT_FLOW:-}" PR_CLEAR_INJECT="${PR_CLEAR_INJECT:-false}" \
-    python3 - <<'PYEOF'
+    _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ.pop("_K5_PY_HTTP"))
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -70,7 +71,7 @@ def request(method, route, params=None, body=None):
     if token:
         req.add_header("Authorization", "Bearer " + token)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(k5_request(req), timeout=30) as r:
             return r.status, json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:

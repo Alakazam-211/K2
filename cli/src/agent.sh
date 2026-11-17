@@ -448,11 +448,12 @@ cmd_agent_set() {
     PERSONA_FILE="$persona" ADD_PROJECTS="$add_projects_json" \
     REMOVE_PROJECTS="$remove_projects_json" DRY_RUN="$dry_run" AS_JSON="$as_json" \
     APROJTOKEN="$(_k2_project_token)" \
-    ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
+    ABASE="$BASE_URL" ATOKEN="$TOKEN" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ.pop("_K5_PY_HTTP"))
 
 conf = json.loads(os.environ["CONF"])
 mode = os.environ.get("MODE", "")
@@ -478,7 +479,7 @@ def http_get(route, params):
     req = urllib.request.Request(base + route + ("?" + qs if qs else ""),
                                  headers={"Authorization": "Bearer " + token} if token else {})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(k5_request(req), timeout=30) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
@@ -495,7 +496,7 @@ def http_post_query(route, params, timeout=30):
     req = urllib.request.Request(base + route + ("?" + qs if qs else ""), data=b"", method="POST",
                                  headers={"Authorization": "Bearer " + token} if token else {})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(k5_request(req), timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
@@ -516,7 +517,7 @@ def http_post_json(route, body, tok=None):
     req = urllib.request.Request(base + route, data=json.dumps(body).encode(),
                                  headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(k5_request(req), timeout=30) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
@@ -1652,11 +1653,12 @@ print(json.dumps(out))' ${answers[@]+"${answers[@]}"}) || exit 2
     DB_ACCESS="$db_access" COLOR="$color" FOCUS_GROUP="$focus_group" \
     TAKE_APP="$take_app" TAKE_BRIEF="$take_brief" \
     APROJTOKEN="$(_k2_project_token)" \
-    AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" PTOKEN="$core_token" python3 - <<'PYEOF'
+    AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" PTOKEN="$core_token" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ.pop("_K5_PY_HTTP"))
 
 dir_arg = os.environ["HIRE_DIR"]
 name = os.environ.get("NAME", "")
@@ -1714,7 +1716,7 @@ def http_get(route, params, timeout=30):
     req = urllib.request.Request(base + route + ("?" + qs if qs else ""),
                                  headers={"Authorization": "Bearer " + token} if token else {})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(k5_request(req), timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
@@ -1731,7 +1733,7 @@ def http_post_query(route, params, timeout=30):
     req = urllib.request.Request(base + route + ("?" + qs if qs else ""), data=b"", method="POST",
                                  headers={"Authorization": "Bearer " + token} if token else {})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(k5_request(req), timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
@@ -1752,7 +1754,7 @@ def http_post_json(route, body, timeout=30, tok=None):
     req = urllib.request.Request(base + route, data=json.dumps(body).encode(),
                                  headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(k5_request(req), timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
@@ -3007,11 +3009,12 @@ cmd_agent_retire() {
     conf=$(_agent_conf_fetch "$name") || rc=$?
     [ "$rc" -ne 0 ] && exit "$rc"
     CONF="$conf" ARCHIVE_TO="$archive_to" FORCE="$force" DRY_RUN="$dry_run" \
-    AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
+    AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ.pop("_K5_PY_HTTP"))
 
 conf = json.loads(os.environ["CONF"])
 archive_to = os.environ.get("ARCHIVE_TO", "")
@@ -3033,7 +3036,7 @@ if token:
     headers["Authorization"] = "Bearer " + token
 req = urllib.request.Request(url, data=body, headers=headers, method="POST")
 try:
-    with urllib.request.urlopen(req, timeout=120) as r:
+    with urllib.request.urlopen(k5_request(req), timeout=120) as r:
         d = json.loads(r.read().decode("utf-8", "replace"))
 except urllib.error.HTTPError as e:
     try:
@@ -3139,11 +3142,12 @@ cmd_agent_restart() {
     conf=$(_agent_conf_fetch "$name") || rc=$?
     [ "$rc" -ne 0 ] && exit "$rc"
     CONF="$conf" DRY_RUN="$dry_run" AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" \
-        AHARNESS="$harness" python3 - <<'PYEOF'
+        AHARNESS="$harness" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ.pop("_K5_PY_HTTP"))
 
 conf = json.loads(os.environ["CONF"])
 dry_run = os.environ.get("DRY_RUN") == "true"
@@ -3177,7 +3181,7 @@ if os.environ["ATOKEN"]:
     headers["Authorization"] = "Bearer " + os.environ["ATOKEN"]
 req = urllib.request.Request(url, data=body, headers=headers, method="POST")
 try:
-    with urllib.request.urlopen(req, timeout=120) as r:
+    with urllib.request.urlopen(k5_request(req), timeout=120) as r:
         d = json.loads(r.read().decode("utf-8", "replace"))
 except urllib.error.HTTPError as e:
     raw = e.read().decode("utf-8", "replace")

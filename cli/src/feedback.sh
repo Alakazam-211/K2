@@ -190,11 +190,12 @@ cmd_feedback_ask() {
     FB_PROJECT="$PROJECT" FB_AGENT="$(_envn AGENT_NAME)" \
     FB_SESSION_ID="$FB_SESSION_ID" FB_SESSION_KIND="$FB_SESSION_KIND" FB_FILES="$files_json" \
     FB_FILES_PY="$_ticket_files_check_py" \
-    ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
+    ABASE="$BASE_URL" ATOKEN="$TOKEN" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, re, sys, time
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ.pop("_K5_PY_HTTP"))
 exec(os.environ["FB_FILES_PY"])
 
 base = os.environ["ABASE"]
@@ -242,7 +243,7 @@ def request(method, route, params=None, body=None):
     if token:
         req.add_header("Authorization", "Bearer " + token)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(k5_request(req), timeout=30) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:

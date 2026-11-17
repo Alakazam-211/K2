@@ -28,11 +28,12 @@ _cal_py() {
     C_OMIT="${C_OMIT:-false}" C_WRITE="${C_WRITE:-false}" C_PASTE="${C_PASTE:-false}" \
     C_PASTE_FILE="${C_PASTE_FILE:-}" C_REQUEST="${C_REQUEST:-false}" \
     C_ADD="${C_ADD:-}" C_REMOVE="${C_REMOVE:-}" \
-    python3 - <<'PYEOF'
+    _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, socket, sys
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ.pop("_K5_PY_HTTP"))
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -120,7 +121,7 @@ def call(method, route, params=None, body=None, timeout=60):
     dropped = False
     for attempt in range(4):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(k5_request(req), timeout=timeout) as r:
                 d = json.loads(r.read().decode("utf-8", "replace"))
             break
         except urllib.error.HTTPError as e:
@@ -327,7 +328,7 @@ elif verb == "link":
         if token:
             req.add_header("Authorization", "Bearer " + token)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(k5_request(req), timeout=timeout) as r:
                 return r.status, json.loads(r.read().decode("utf-8", "replace"))
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", "replace")

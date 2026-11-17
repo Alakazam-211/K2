@@ -2,9 +2,9 @@
 # The front's hand-over variables stop at the CLI: the prelude reads
 # K5_CLI_CALLED_AS, K5_CLI_NOTICE_DONE, K5_CLI_VIA and K5_CLI_WOULD_REFUSE
 # into its own variables and takes them out of the environment, so a
-# process the CLI starts (here curl, and any python3, through shims first
-# on PATH) sees none of them, while the CLI's own requests still say what
-# they said: X-K5-Cli-Via: fallthrough,
+# process the CLI starts (here curl, and the python3 of an embedded
+# urlopen call, through shims first on PATH) sees none of them, while the
+# CLI's own requests still say what they said: X-K5-Cli-Via: fallthrough,
 # X-K5-Would-Refuse: 1, the noun (X-K5-Cli-Noun) and, as there is no
 # passport and the owner token comes from disk, X-K5-Owner-Source: disk.
 #
@@ -55,7 +55,8 @@ class H(BaseHTTPRequestHandler):
         }
         with open(os.path.join(work, "requests.log"), "a") as f:
             f.write(json.dumps(rec) + "\n")
-        data = json.dumps({"ok": True, "success": True, "heartbeats": []}).encode()
+        data = json.dumps([] if rec["path"] == "/cli/presets/list"
+                          else {"ok": True, "success": True, "heartbeats": []}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
@@ -134,6 +135,7 @@ PY
     fi
 }
 run "heartbeat list (curl)" /cli/heartbeat/list heartbeat curl heartbeat list --json
+run "preset list (python3 urlopen)" /cli/presets/list preset python3 preset list --json
 
 echo
 echo "k5_cli_env_scrub: $pass passed, $fail failed"

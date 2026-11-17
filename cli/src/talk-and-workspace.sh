@@ -587,8 +587,9 @@ cmd_heartbeat_wake() {
     # switch reach it through the environment, never pasted into its
     # source: a path with a quote in it would end the string.
     _K2_WAKE_PROJECT="$PROJECT" _K2_WAKE_HOME="$K2_HOME" \
-        _K2_WAKE_NO_OWNER_FALLBACK="${_k2_no_owner_fallback:-}" python3 -c "
+        _K2_WAKE_NO_OWNER_FALLBACK="${_k2_no_owner_fallback:-}" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 -c "
 import json, os, re, socket, sys, time, urllib.error, urllib.parse, urllib.request
+exec(os.environ.pop('_K5_PY_HTTP'))
 
 def fail(msg, code=1):
     print('Error: k2 heartbeat wake: ' + msg, file=sys.stderr)
@@ -682,7 +683,7 @@ def request(route, method='GET', soft=False, **params):
     req = urllib.request.Request(f'{base}{route}?{query}', data=body, headers=auth, method=method)
     why = ''
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(k5_request(req), timeout=5) as resp:
             code, raw = resp.status, resp.read()
     except urllib.error.HTTPError as e:
         code, raw = e.code, e.read()

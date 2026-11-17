@@ -109,11 +109,12 @@ _mail_py() {
     M_BK_OFF_DAILY="${M_BK_OFF_DAILY:-}" M_BK_OFF_WEEKLY="${M_BK_OFF_WEEKLY:-}" \
     M_BK_OFF_MONTHLY="${M_BK_OFF_MONTHLY:-}" M_BK_WINDOW="${M_BK_WINDOW:-}" \
     M_BK_MAX_LOCAL_GB="${M_BK_MAX_LOCAL_GB:-}" M_BK_CONFIRM="${M_BK_CONFIRM:-}" \
-    python3 -c "$_K2_PY_STDIN_BOOT"
+    _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 -c "$_K2_PY_STDIN_BOOT"
 import base64, json, os, socket, sys, time
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ.pop("_K5_PY_HTTP"))
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -212,7 +213,7 @@ def request(method, route, params=None, body=None, timeout=30):
     dropped = False
     for attempt in range(4):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(k5_request(req), timeout=timeout) as r:
                 return json.loads(r.read().decode("utf-8", "replace"))
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", "replace")

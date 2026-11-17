@@ -23,7 +23,9 @@
 #                       word is not [a-z][a-z0-9-]{0,31};
 #   X-K5-Owner-Source: disk, only when there is no passport and the call
 #                       runs on the owner token read from disk.
-# Without VIA none of the four goes anywhere.
+# The embedded Python's urlopen calls carry the same headers, under the
+# same rules, as curl's (the shared helper _K5_PY_HTTP); and without VIA
+# none of the four goes anywhere.
 #
 # A python stub daemon (TCP, a cell socket and vault.sock) logs, per
 # request, the transport, method, path, the four headers' values and a
@@ -77,6 +79,7 @@ class H(BaseHTTPRequestHandler):
             "refuse": self.headers.get_all("X-K5-Would-Refuse") or [],
             "noun": self.headers.get_all("X-K5-Cli-Noun") or [],
             "owner": self.headers.get_all("X-K5-Owner-Source") or [],
+            "agent": (self.headers.get("User-Agent") or "").split("/")[0],
             "content_type": self.headers.get("Content-Type") or "",
             "tty": self.headers.get("X-K2-Tty") or "",
             "has_token": "token" in urllib.parse.parse_qs(u.query),
@@ -388,6 +391,58 @@ site "vault POST on vault.sock (recovery show-once's confirm)" "" vault /cli/vau
     "$K2_CLI" vault recovery show-once
 site "vault GET on vault.sock (confirm-password set)" "" vault /cli/vault/status "/cli/vault/status" 180 \
     "$K2_CLI" vault confirm-password set
+
+echo "== the embedded Python's urlopen calls =="
+# The same four headers under the same rules as curl's, from the shared
+# helper (_K5_PY_HTTP). pycheck <label> <path> <want> <cmd…>: every TCP
+# request to <path> logs via|noun|owner|refuse|user-agent as <want>.
+pycheck() {
+    local label="$1" path="$2" want="$3" got; shift 3
+    : >"$WORK/requests.log"
+    "$@" >/dev/null 2>&1 || true
+    if ! got="$(python3 - "$WORK/requests.log" "$path" <<'PY' 2>&1
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1])]
+hits = [r for r in rows if r["transport"] == "tcp" and r["path"] == sys.argv[2]]
+if not hits:
+    sys.exit("no tcp request to %s (log: %s)" % (sys.argv[2], rows[-3:]))
+for r in hits:
+    print("|".join([",".join(r[k]) or "-" for k in ("via", "noun", "owner", "refuse")] + [r["agent"]]))
+PY
+    )"; then
+        bad "$label ($got)"
+    elif [ -z "$(grep -vxF -- "$want" <<<"$got")" ]; then
+        ok "$label: $want"
+    else
+        bad "$label (got $(tr '\n' ' ' <<<"$got"), wanted $want on each)"
+    fi
+}
+P=/cli/presets/list
+pycheck "preset list, a passport, VIA unset" $P "-|-|-|-|Python-urllib" \
+    tcp "$K2_CLI" preset list --json
+pycheck "preset list, a passport, VIA=rust" $P "fallthrough|preset|-|-|Python-urllib" \
+    tcp K5_CLI_VIA=rust "$K2_CLI" preset list --json
+pycheck "preset list, a passport, VIA=rust, WOULD_REFUSE=1" $P "fallthrough|preset|-|1|Python-urllib" \
+    tcp K5_CLI_VIA=rust K5_CLI_WOULD_REFUSE=1 "$K2_CLI" preset list --json
+pycheck "preset list, a passport, WOULD_REFUSE=1 without VIA" $P "-|-|-|-|Python-urllib" \
+    tcp K5_CLI_WOULD_REFUSE=1 "$K2_CLI" preset list --json
+pycheck "preset list, a passport, VIA=RUST" $P "-|-|-|-|Python-urllib" \
+    tcp K5_CLI_VIA=RUST "$K2_CLI" preset list --json
+pycheck "preset list, the owner token from disk, VIA=rust" $P "fallthrough|preset|disk|-|Python-urllib" \
+    clean_env K5_CLI_VIA=rust "$K2_CLI" preset list --json
+pycheck "preset list, the owner token from disk, VIA unset" $P "-|-|-|-|Python-urllib" \
+    clean_env "$K2_CLI" preset list --json
+pycheck "tickets show (an alias), a passport, VIA=rust" /cli/feedback/show "fallthrough|tickets|-|-|Python-urllib" \
+    tcp K5_CLI_VIA=rust "$K2_CLI" tickets show fb_1 --json
+# heartbeat wake: a python3 -c block that reads its own token (here the
+# owner's, from disk).
+pycheck "heartbeat wake, the owner token from disk, VIA=rust" /cli/agents/list "fallthrough|heartbeat|disk|-|Python-urllib" \
+    clean_env K5_CLI_VIA=rust "$K2_CLI" heartbeat wake
+pycheck "heartbeat wake, the owner token from disk, VIA unset" /cli/agents/list "-|-|-|-|Python-urllib" \
+    clean_env "$K2_CLI" heartbeat wake
+# And curl's side of the same call, for the comparison: the same values.
+pycheck "heartbeat list (curl), the owner token from disk, VIA=rust" /cli/heartbeat/list "fallthrough|heartbeat|disk|-|curl" \
+    clean_env K5_CLI_VIA=rust "$K2_CLI" heartbeat list --json
 
 echo "== _K5_NOTICE_DONE and _K5_CLI_VIA, from bash's trace =="
 # traced <var> <env…>: the value the prelude gave <var>.

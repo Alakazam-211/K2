@@ -126,11 +126,12 @@ PYEOF
 # Prints response body on stdout; maps errors to exit codes.
 _context_http() {
     ABASE="$BASE_URL" ATOKEN="$TOKEN" APROJECT="$1" METHOD="$2" ROUTE="$3" \
-    QS="${4:-}" BODY="${5:-}" python3 - <<'PYEOF'
+    QS="${4:-}" BODY="${5:-}" _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ.pop("_K5_PY_HTTP"))
 
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
@@ -171,7 +172,7 @@ url = base + route + "?" + urllib.parse.urlencode(params)
 try:
     if method == "GET":
         req = urllib.request.Request(url, method="GET", headers=auth)
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(k5_request(req), timeout=30) as r:
             raw = r.read().decode("utf-8", "replace")
             status = r.status
     else:
@@ -181,7 +182,7 @@ try:
             headers=dict(auth, **{"Content-Type": "application/json"}),
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(k5_request(req), timeout=60) as r:
             raw = r.read().decode("utf-8", "replace")
             status = r.status
 except urllib.error.HTTPError as e:

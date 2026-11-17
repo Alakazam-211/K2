@@ -82,11 +82,12 @@ _clone_py() {
     { _k2_stdin_secrets K2C_REMOTE_TOKEN "${K2C_REMOTE_TOKEN:-}"; cat; } <<'PY' | \
     K2C_LOCAL_URL="$BASE_URL" K2C_LOCAL_TOKEN="$TOKEN" K2C_K2_HOME="$K2_HOME" K2C_REMOTE_URL="${K2C_REMOTE_URL:-}" \
     K2C_VAULT_SOCK="$(_vault_sock)" K2C_TTY="$( { [ -t 0 ] || [ -t 2 ]; } && [ -r /dev/tty ] && echo 1 || echo 0)" \
-    python3 -c "$_K2_PY_STDIN_BOOT" "$@"
+    _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 -c "$_K2_PY_STDIN_BOOT" "$@"
 import base64, getpass, http.client, json, os, socket, sys, time, uuid
 import urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ.pop("_K5_PY_HTTP"))
 
 LOCAL = ("local", os.environ["K2C_LOCAL_URL"], os.environ["K2C_LOCAL_TOKEN"])
 REMOTE = ("remote", os.environ.get("K2C_REMOTE_URL", ""), K2_STDIN_SECRETS.get("K2C_REMOTE_TOKEN", ""))
@@ -133,7 +134,7 @@ def call(side, method, route, body=None, params=None, timeout=120):
         headers["Authorization"] = "Bearer " + tok
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(k5_request(req), timeout=timeout) as r:
             status, raw = r.status, r.read()
     except urllib.error.HTTPError as e:
         status, raw = e.code, e.read()
@@ -164,7 +165,7 @@ def vault_sock(route, body):
     c = _UConn(VSOCK, 180)
     try:
         c.request("POST", "/cli/vault/" + route, body=json.dumps(body),
-                  headers={"Content-Type": "application/json", "X-K2-Tty": "1" if TTY else "0"})
+                  headers={"Content-Type": "application/json", "X-K2-Tty": "1" if TTY else "0", **dict(k5_headers)})
         r = c.getresponse()
         status, raw = r.status, r.read()
     except OSError as e:

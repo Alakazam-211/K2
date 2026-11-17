@@ -19,10 +19,11 @@ _db_py() {
     D_MANAGE="${D_MANAGE:-false}" D_ROLE="${D_ROLE:-}" D_ACCESS="${D_ACCESS:-}" \
     D_RELATIONS="${D_RELATIONS:-[]}" D_MAJOR="${D_MAJOR:-}" \
     D_REVEAL="${D_REVEAL:-false}" D_AS="${D_AS:-}" D_PERM_NOTE="${_K2_PERMISSION_NOTE:-}" \
-    python3 - <<'PYEOF'
+    _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, sys, urllib.error, urllib.parse, urllib.request
 # Loopback and plain http skip the proxy; remote https may use it.
 exec(os.environ["_K2_PY_PROXY_RULE"])
+exec(os.environ.pop("_K5_PY_HTTP"))
 
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
@@ -58,7 +59,7 @@ def request(method, route, params=None, body=None):
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(k5_request(req), timeout=60) as resp:
             raw = resp.read().decode("utf-8", "replace")
             return resp.status, raw
     except urllib.error.HTTPError as e:

@@ -618,8 +618,10 @@ impl Client {
                 (Method::Get, path, None)
             }
             Kind::RequestPost => {
+                // After `&` when the endpoint has a query already.
+                let sep = if endpoint.contains('?') { '&' } else { '?' };
                 let path = if tcp {
-                    let mut q = format!("{endpoint}?{}", with_project());
+                    let mut q = format!("{endpoint}{sep}{}", with_project());
                     for a in args {
                         q.push('&');
                         q.push_str(a);
@@ -628,7 +630,7 @@ impl Client {
                 } else if joined.is_empty() {
                     endpoint.to_string()
                 } else {
-                    format!("{endpoint}?{joined}")
+                    format!("{endpoint}{sep}{joined}")
                 };
                 (Method::Post, path, Some(Body { bytes: Vec::new(), curl_form_type: true }))
             }

@@ -1812,8 +1812,10 @@ cli_request_post() {
     for param in "$@"; do
         params="${params}&${param}"
     done
-    local out rc=0 _K2_CFG="" try=1 t0="${_K2_REQ_T0:-$SECONDS}"
-    _k2_cfg_add url "${BASE_URL}${endpoint}?${params}"
+    local out rc=0 _K2_CFG="" try=1 t0="${_K2_REQ_T0:-$SECONDS}" sep='?'
+    # An endpoint that has a query already gets ours after `&`.
+    [[ "$endpoint" == *'?'* ]] && sep='&'
+    _k2_cfg_add url "${BASE_URL}${endpoint}${sep}${params}"
     _k2_cfg_auth "$TOKEN"
     while :; do
         rc=0
@@ -1845,11 +1847,12 @@ cli_request_post_uds() {
     local endpoint="$1"; shift
     local params=""
     for param in "$@"; do params="${params}${params:+&}${param}"; done
-    local _K2_CFG="" out rc=0 try=1 t0="${_K2_REQ_T0:-$SECONDS}"
+    local _K2_CFG="" out rc=0 try=1 t0="${_K2_REQ_T0:-$SECONDS}" sep='?'
+    [[ "$endpoint" == *'?'* ]] && sep='&'
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     while :; do
         rc=0
-        out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST -w "$_K2_WSTATUS" --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
+        out="$(r=0; _cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST -w "$_K2_WSTATUS" --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+${sep}${params}}" \
             --connect-timeout 5 --max-time 30 \
             --data-raw "" || r=$?; printf x; exit "$r")" || rc=$?
         out="${out%x}"

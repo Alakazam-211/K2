@@ -12,41 +12,91 @@
 //! the answer it reads. Two streams count as the same when their device
 //! and inode are ([`merged`]).
 //!
-//! On Windows they never count as merged, so the notice shows. The file
-//! ids that would tell (volume serial and file index) are not stable in
-//! Rust's std there, and this crate doesn't add a Windows API crate for a
-//! check nobody calls yet. Look again when the switch turns it on.
+//! On Windows that check can't tell: the file ids that would (volume
+//! serial and file index) are not stable in Rust's std there, and this
+//! crate adds no Windows API crate for it. There the notice shows only
+//! when stderr is a console (`GetConsoleMode` on it succeeds), never into
+//! a pipe or a file (K2's ruling, R1 slice 10). That code is built for
+//! Windows only and has not been run there; [`should_show`] holds the
+//! rule and is tested everywhere with a stand-in for the console check.
 
 use crate::called_as::CalledAs;
 
 /// The notice, one line, on stderr. It never repeats the arguments.
 pub const TEXT: &str = "note: k2 is now k5 (the same command). Type k5 from now on; k2 stops working in 0.48.";
 
-/// Whether the notice shows: only when called as `k2`, and not when
-/// stdout and stderr are merged into one capture.
-pub fn should_show(called_as: CalledAs, merged: bool) -> bool {
-    called_as == CalledAs::K2Name && !merged
+/// What the merged check says about stdout and stderr.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Streams {
+    /// One pipe or file holds both ([`merged`]).
+    Merged,
+    /// They are apart, or stdout is a terminal.
+    Apart,
+    /// The check can't tell (Windows).
+    Unknown,
+}
+
+/// Whether the notice shows: only when called as `k2`; not when stdout
+/// and stderr are merged into one capture; and when the merged check
+/// can't tell, only when `stderr_is_console` says stderr is a console.
+/// That check runs only then.
+pub fn should_show(called_as: CalledAs, streams: Streams, stderr_is_console: impl FnOnce() -> bool) -> bool {
+    if called_as != CalledAs::K2Name {
+        return false;
+    }
+    match streams {
+        Streams::Merged => false,
+        Streams::Apart => true,
+        Streams::Unknown => stderr_is_console(),
+    }
 }
 
 /// Prints the notice when it is due. Nothing calls this yet.
 pub fn show_if_due(called_as: CalledAs) {
-    if should_show(called_as, stdout_and_stderr_merged()) {
+    if should_show(called_as, streams(), stderr_is_console) {
         crate::out::stderr_line(TEXT);
     }
 }
 
-/// Whether this process's stdout and stderr are merged ([`merged`] on
-/// fds 1 and 2). Never on Windows (see the module notes).
-pub fn stdout_and_stderr_merged() -> bool {
+/// What the merged check says about this process's stdout and stderr
+/// ([`merged`] on fds 1 and 2). [`Streams::Unknown`] on Windows.
+pub fn streams() -> Streams {
     #[cfg(unix)]
     {
         use std::os::fd::AsFd;
-        merged(std::io::stdout().as_fd(), std::io::stderr().as_fd())
+        if merged(std::io::stdout().as_fd(), std::io::stderr().as_fd()) {
+            Streams::Merged
+        } else {
+            Streams::Apart
+        }
     }
     #[cfg(not(unix))]
     {
-        false
+        Streams::Unknown
     }
+}
+
+/// Whether this process's stderr is a console: `GetConsoleMode` on its
+/// handle succeeds. A pipe, a file, the null device or no handle at all
+/// is not. Untested on Windows (see the module notes).
+#[cfg(windows)]
+pub fn stderr_is_console() -> bool {
+    use std::os::windows::io::AsRawHandle;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleMode(console: *mut std::ffi::c_void, mode: *mut u32) -> i32;
+    }
+    let handle = std::io::stderr().as_raw_handle();
+    let mut mode = 0u32;
+    // SAFETY: GetConsoleMode only reads the handle (a null or invalid one
+    // makes it fail) and writes one u32 through a pointer to a local.
+    unsafe { GetConsoleMode(handle.cast(), &mut mode) != 0 }
+}
+
+/// Elsewhere the merged check always tells, so this is never asked.
+#[cfg(not(windows))]
+pub fn stderr_is_console() -> bool {
+    false
 }
 
 /// Whether `stdout` and `stderr` are the same pipe or file while `stdout`
@@ -78,12 +128,32 @@ mod tests {
         assert!(!TEXT.contains('\n'));
     }
 
+    fn never_asked() -> bool {
+        panic!("the console check ran although the merged check could tell")
+    }
+
     #[test]
     fn only_k2_and_only_when_not_merged() {
-        assert!(should_show(CalledAs::K2Name, false));
-        assert!(!should_show(CalledAs::K2Name, true));
-        assert!(!should_show(CalledAs::K5Name, false));
-        assert!(!should_show(CalledAs::K5Name, true));
+        assert!(should_show(CalledAs::K2Name, Streams::Apart, never_asked));
+        assert!(!should_show(CalledAs::K2Name, Streams::Merged, never_asked));
+        for streams in [Streams::Apart, Streams::Merged, Streams::Unknown] {
+            assert!(!should_show(CalledAs::K5Name, streams, never_asked), "{streams:?}");
+        }
+    }
+
+    /// Windows' default: when the merged check can't tell, a console on
+    /// stderr shows it and anything else (a pipe, a file) doesn't.
+    #[test]
+    fn when_it_can_t_tell_only_a_console_shows_it() {
+        assert!(should_show(CalledAs::K2Name, Streams::Unknown, || true));
+        assert!(!should_show(CalledAs::K2Name, Streams::Unknown, || false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_always_tells() {
+        assert_ne!(streams(), Streams::Unknown);
+        assert!(!stderr_is_console());
     }
 
     #[cfg(unix)]

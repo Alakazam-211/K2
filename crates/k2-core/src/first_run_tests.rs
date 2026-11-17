@@ -629,7 +629,8 @@ fn load_facts_reads_the_seat_and_a_deleted_kessel_clears_it() {
     assert_eq!(f.kessel.as_ref().map(|l| l.workspace_id.as_str()), Some("w-kessel"));
     assert!(!f.has_agent, "Kessel alone isn't the person's first agent");
     assert!(!f.chief_of_staff);
-    assert!(f.kessel_default_path.ends_with("k2-agents/kessel"), "{}", f.kessel_default_path);
+    // A native path (backslashes on Windows): compared by its last two parts.
+    assert!(std::path::Path::new(&f.kessel_default_path).ends_with(std::path::Path::new("k2-agents").join("kessel")), "{}", f.kessel_default_path);
 
     conn.execute("INSERT INTO projects (id, name, path) VALUES ('w-cos', 'w-cos', '/tmp/fr-cos')", []).expect("cos");
     crate::orchestrator::record_chief_of_staff(&conn, "w-cos").expect("record");

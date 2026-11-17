@@ -147,11 +147,11 @@ fn revert(rt: &Arc<super::Runtime>, c: &Call) -> CliResponse {
     if let Err(e) = s.check_disk() {
         return routes::session_error(&e);
     }
-    let (head, opened) = match head(rt, t) {
+    let (current, opened) = match head(rt, t) {
         Ok(h) => h,
         Err(r) => return r,
     };
-    if change != head {
+    if change != current {
         return not_latest(&t.rel);
     }
     let Opened::Dxf(head_bytes) = opened else { return super::cad_read_only::refusal(&t.rel) };

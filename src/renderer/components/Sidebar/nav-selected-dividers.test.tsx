@@ -13,7 +13,8 @@
 //   - with a worktree row under the selected agent, the line between them
 //     is the one hidden, not the line under the worktree row;
 //   - the Pinned section's end rule goes under a selected last pin, and
-//     comes back while the section is folded;
+//     is not hidden by the rule while the section is folded (it folds away
+//     with the pins then; nav-top-row.test.tsx);
 //   - a hovered row drops the same lines, as a hovered tab does (Rosson
 //     2026-11-15); jsdom has no pointer, so the test reads the rule with
 //     :hover standing in as a [data-test-hover] mark on the row;
@@ -253,7 +254,7 @@ describe('the selected agent row drops the dividers around it (Agents nav)', () 
     expect(lines(container)).toEqual(['shown', 'shown', 'shown', 'shown'])
   })
 
-  it('a selected last pin drops the Pinned section\'s end rule; folded, the rule is back', () => {
+  it('a selected last pin drops the Pinned section\'s end rule; folded, the rule no longer hides it', () => {
     useProjectsStore.setState({ projects: [proj('a', false, true), proj('b', false, true), proj('c'), proj('d')] })
     select('b')
     const { container } = render(<Sidebar />)

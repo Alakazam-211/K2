@@ -39,6 +39,7 @@ import WorktreeDialog from './WorktreeDialog'
 import ProjectAvatar from './ProjectAvatar'
 import PresenceWorkspaceAvatars from '@/components/Presence/PresenceWorkspaceAvatars'
 import FocusGroupDropdown from './FocusGroupDropdown'
+import { TAB_STRIP_HEIGHT } from '@/lib/tab-strip'
 import { NAV_ROW_TEXT_INSET, RowDropLine, reorderedZoneIds, useRowDragReorder } from './row-drag-reorder'
 import ActiveBar from './ActiveBar'
 import { ShortcutRangeHint } from './ShortcutRangeHint'
@@ -375,7 +376,16 @@ export function navListedProjects<P extends Pick<NavProject, 'pinned' | 'focusGr
   return unpinned.filter((p) => p.focusGroupId === groupId || p.focusGroupId == null)
 }
 
-function FocusGroupSelector(): React.JSX.Element {
+/** The nav's top row, as on Home: the tab strip's height (`TAB_STRIP_HEIGHT`)
+ *  with its bottom line, so its bottom edge lines up with the room's tab bar
+ *  and the drawers' strips. The first row in the nav takes it: Pinned's
+ *  header when agents are pinned, else the focus group picker's row, else
+ *  the Workspaces header. Its contents sit centred in the fixed height. */
+const NAV_TOP_ROW_CLASS = `flex ${TAB_STRIP_HEIGHT} flex-shrink-0 items-center border-b border-[var(--color-border)]`
+
+/** `topRow`: nothing is pinned, so this row is the nav's top row. Under the
+ *  pins it keeps its own padding. */
+function FocusGroupSelector({ topRow }: { topRow: boolean }): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
   const focusGroups = useFocusGroupsStore((s) => s.focusGroups)
   const activeFocusGroupId = useFocusGroupsStore((s) => s.activeFocusGroupId)
@@ -384,7 +394,7 @@ function FocusGroupSelector(): React.JSX.Element {
 
   if (!focusGroupsEnabled) {
     return (
-      <div className="px-4 pt-3 pb-2 no-drag">
+      <div className={`${topRow ? NAV_TOP_ROW_CLASS : 'pt-3 pb-2'} px-4 no-drag`} data-nav-top-row={topRow ? '' : undefined}>
         <span className="text-[11px] font-semibold tracking-wide text-[var(--color-text-muted)] uppercase">
           Workspaces
         </span>
@@ -393,9 +403,14 @@ function FocusGroupSelector(): React.JSX.Element {
   }
 
   return (
-    <div className="px-3 pt-3 pb-2 no-drag flex items-center gap-1.5">
+    <div
+      className={`${topRow ? NAV_TOP_ROW_CLASS : 'flex items-center pt-3 pb-2'} gap-1.5 px-3 no-drag`}
+      data-nav-picker-row=""
+      data-nav-top-row={topRow ? '' : undefined}
+    >
       <div className="flex-1 min-w-0">
         <FocusGroupDropdown
+          fitRow={topRow}
           options={focusGroups.map((g) => ({
             id: g.id,
             name: g.name,
@@ -700,7 +715,8 @@ export default function Sidebar(): React.JSX.Element {
           <button
             type="button"
             onClick={() => setAgentsPinnedCollapsed((v) => !v)}
-            className={`no-drag w-full flex items-center gap-1.5 px-4 pt-3 pb-2 text-left cursor-pointer ${NAV_SECTION_HOVER_CLASS}`}
+            className={`${NAV_TOP_ROW_CLASS} no-drag w-full gap-1.5 px-4 text-left cursor-pointer ${NAV_SECTION_HOVER_CLASS}`}
+            data-nav-top-row=""
             aria-expanded={!agentsPinnedCollapsed}
             aria-controls="sidebar-agents-pinned-content"
           >
@@ -712,6 +728,7 @@ export default function Sidebar(): React.JSX.Element {
           </button>
           <div
             id="sidebar-agents-pinned-content"
+            data-nav-section-body=""
             style={{
               overflow: 'hidden',
               maxHeight: agentsPinnedCollapsed ? 0 : 1200,
@@ -752,16 +769,19 @@ export default function Sidebar(): React.JSX.Element {
             })()}
           </div>
             </div>{/* scroll wrapper */}
-          </div>{/* collapse wrapper */}
           {/* The section's end rule: a row line, so it drops under a
-              selected last pin like the lines between rows. */}
+              selected last pin like the lines between rows. It folds away
+              with the pins: folded, the header's own bottom line closes
+              the section (two lines would stack under it). */}
           <NavRowDivider />
+          </div>{/* collapse wrapper */}
         </div>
         )
       })()}
 
-      {/* Focus Group Selector (replaces branding area) */}
-      <FocusGroupSelector />
+      {/* Focus Group Selector (replaces branding area): the top row when
+          nothing is pinned. */}
+      <FocusGroupSelector topRow={pinnedProjects.length === 0} />
 
       {/* Workspace list */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden py-1" data-agents-nav-list="">

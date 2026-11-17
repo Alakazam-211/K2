@@ -21,6 +21,10 @@ interface FocusGroupDropdownProps {
   /** Extra attributes on the open menu (it is portalled, so a host styles it
    *  by these, not by its place under the trigger). */
   menuAttributes?: Record<`data-${string}`, string>
+  /** In a row of the tab strip's height (the Agents nav's top row): the
+   *  shorter trigger, so it clears the row's edges. Glass sets the pill's
+   *  own height, so this only changes Terminal. */
+  fitRow?: boolean
 }
 
 export default function FocusGroupDropdown({
@@ -29,6 +33,7 @@ export default function FocusGroupDropdown({
   onChange,
   triggerCount,
   menuAttributes,
+  fitRow = false,
 }: FocusGroupDropdownProps): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -103,7 +108,7 @@ export default function FocusGroupDropdown({
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center gap-2 px-2 py-1.5 text-left bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer"
+        className={`w-full flex items-center gap-2 px-2 ${fitRow ? 'py-1' : 'py-1.5'} text-left bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer`}
       >
         {selected.color && (
           <span className="w-2 h-2 flex-shrink-0" style={{ backgroundColor: selected.color }} />

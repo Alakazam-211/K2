@@ -1626,8 +1626,9 @@ html[data-scheme="light"] [data-agent-row]:not([aria-current="true"]):hover:not(
    - the line under it: the next one in its own box (a worktree row's line)
      or, when the row ends its box, the box's line;
    - the line over it: the line ending the box before;
-   - a section's end rule (the Agents nav's Pinned), when the section is
-     open and its last row is the selected one: that rule touches the row.
+   - a section's end rule (the Agents nav's Pinned; it sits at the foot of
+     the section's folding body), when the section is open and its last row
+     is the selected one: that rule touches the row.
    Each list wraps a row and its line in a data-nav-row box (NavRowDivider).
    Home's captions carry no line, so a row beside one has none to lose.
    A hovered row drops the same lines, as a hovered tab does (Rosson
@@ -1637,7 +1638,7 @@ html[data-scheme="light"] [data-agent-row]:not([aria-current="true"]):hover:not(
 [data-agent-row]:is([aria-current="true"], :hover) + [data-row-divider]:not([data-zen-root] *),
 [data-nav-row]:has([data-agent-row]:is([aria-current="true"], :hover):last-child) > [data-row-divider]:not([data-zen-root] *),
 [data-nav-row]:has(+ [data-nav-row] [data-agent-row]:is([aria-current="true"], :hover)) > [data-row-divider]:not([data-zen-root] *),
-[data-nav-section]:has(> [aria-expanded="true"]):has([data-nav-row]:last-child [data-agent-row]:is([aria-current="true"], :hover):last-child) > [data-row-divider]:not([data-zen-root] *) {
+[data-nav-section]:has(> [aria-expanded="true"]):has([data-nav-row]:last-child [data-agent-row]:is([aria-current="true"], :hover):last-child) > [data-nav-section-body] > [data-row-divider]:not([data-zen-root] *) {
   visibility: hidden;
 }
 

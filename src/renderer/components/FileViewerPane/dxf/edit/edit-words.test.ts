@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { NO_DIGEST } from './edit-flow'
-import { NO_ROUTE, NOT_SENT } from './edit-source'
+import { NO_ROUTE, NOT_SENT, WRITER_OFF, WRITER_OFF_WORDS } from './edit-source'
 import { refusalWords, viewOnlyWhy, whyWords, WHY_WORDS } from './edit-words'
 import { localRefusal } from './tool-result'
 
@@ -19,6 +19,7 @@ const KIT = [
   'MPC-E725', 'MPC-E726', 'MPC-E727', 'MPC-E728', 'MPC-E729', 'MPC-E823',
 ]
 const OURS = [NO_ROUTE, NOT_SENT, NO_DIGEST]
+// (A writer that's off shows the server's own words: tested on its own below.)
 const say = (id: string, message = '', details: Record<string, unknown> = {}, verb: 'move' | 'relabel' = 'move') =>
   refusalWords(localRefusal(id, message, details), { verb, layerOf: () => 'A-WALL' })
 
@@ -89,6 +90,34 @@ describe('whyWords', () => {
   })
 })
 
+describe('a writer that’s off', () => {
+  it('shows the server’s words as given, and turns editing off with them', () => {
+    const hint = 'K2 can’t save drawing edits yet; this file opens read-only.'
+    expect(say(WRITER_OFF, hint)).toEqual({ words: hint, refresh: false, off: hint })
+  })
+})
+
+describe('the drawing model’s reason words', () => {
+  it('each maps to a plain-word reason', () => {
+    const want: Record<string, string> = {
+      grouped: WHY_WORDS.grouped,
+      dimensioned: WHY_WORDS.dimensioned,
+      'own-frame': WHY_WORDS.ocs,
+      'no-handle': WHY_WORDS.minted,
+      proxy: WHY_WORDS.proxy,
+      xref: WHY_WORDS.xref,
+      '3D solid': WHY_WORDS.acis,
+      unknown: WHY_WORDS.unknown,
+    }
+    for (const [w, words] of Object.entries(want)) expect(whyWords(w), w).toBe(words)
+    expect(whyWords('locked-layer', 'A-WALL')).toBe('It’s on A-WALL, which is locked. Unlock it in your CAD app first.')
+  })
+  it('a refusal naming one reads the same', () => {
+    expect(say('DXF-E021', '@h:4C isn’t changed by the edit verbs (own-frame)').words).toBe(`Not moved. ${WHY_WORDS.ocs}`)
+    expect(say('DXF-E021', '@h:4C isn’t changed by the edit verbs (3D solid)').words).toBe(`Not moved. ${WHY_WORDS.acis}`)
+  })
+})
+
 describe('viewOnlyWhy', () => {
   const header = { format: 'dxf', acadver: 'AC1032' }
   it('a DXF from 2000 on, with handles: editable', () => {
@@ -100,5 +129,12 @@ describe('viewOnlyWhy', () => {
     expect(viewOnlyWhy({ ...header, acadver: 'AC1014' }, [])).toMatch(/before DXF 2000/)
     expect(viewOnlyWhy(header, [{ h: '' }])).toMatch(/handles/)
     expect(viewOnlyWhy({ ...header, handles: { missing: 2, duplicates: 0 } }, [])).toMatch(/handles/)
+  })
+  it('the host’s writer: false is view only, in its words when it gives them', () => {
+    expect(viewOnlyWhy({ ...header, writer: false, read_only_reason: 'Edits to drawings are off here.' }, [])).toBe('Edits to drawings are off here.')
+    expect(viewOnlyWhy({ ...header, writer: false }, [])).toBe(WRITER_OFF_WORDS)
+    expect(viewOnlyWhy({ ...header, writer: true }, [])).toBeNull()
+    // DWG keeps its own words.
+    expect(viewOnlyWhy({ ...header, format: 'dwg', writer: false }, [])).toMatch(/DWG/)
   })
 })

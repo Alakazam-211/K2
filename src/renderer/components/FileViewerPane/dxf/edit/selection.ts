@@ -10,6 +10,7 @@
 // a locked layer, or inside a block.
 
 import type { ModelHeader, ModelRow, XY } from '../model/types'
+import { reasonKey } from './edit-words'
 import { hitDistance, SOLID } from './hit'
 
 /** What can be selected: drawn and shown, in model space. */
@@ -103,7 +104,8 @@ const BY_KIND: Record<string, string> = {
 export function editReason(r: ModelRow, header: Pick<ModelHeader, 'layers'>): string | null {
   // Inside a block definition. (A layout's entities are on paper, which the viewer doesn't show or select yet.)
   if (r.owner !== 'model') return 'block'
-  const word = typeof r.edit === 'string' && r.edit && r.edit !== '1' && r.edit !== 'dynblock' ? r.edit : null
+  // The model's own word, when it gives one (none, or null, when the verbs change it).
+  const word = typeof r.edit === 'string' && r.edit && r.edit !== '1' && r.edit !== 'dynblock' ? reasonKey(r.edit) : null
   if (word) return word
   if (!EDITABLE.has(r.kind)) return BY_KIND[r.kind] ?? 'unknown'
   if (r.kind === 'INSERT' && r.geom?.xref === true) return 'xref'

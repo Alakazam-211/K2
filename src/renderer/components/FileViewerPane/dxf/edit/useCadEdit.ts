@@ -22,8 +22,6 @@ export type EditDrawing = { header: ModelHeader; rows: ModelRow[]; version: numb
 
 export type EditPrompt = { text: string; verb: 'move' | 'relabel'; yes: () => void; no: () => void }
 
-/** How often holds are read again while the drawing is open. */
-export const HOLDS_EVERY_MS = 15_000
 /** The longest edits wait for your own version to come on screen. */
 export const PENDING_MS = 5000
 
@@ -71,7 +69,22 @@ export function useCadEdit(p: {
 
   const rows = useMemo(() => (drawing ? pickable(drawing.rows) : []), [drawing])
   const byHandle = useMemo(() => new Map((drawing?.rows ?? []).map((r) => [r.h, r])), [drawing])
-  const viewOnly = useMemo(() => (drawing ? (viewOnlyWhy(drawing.header, drawing.rows) ?? off) : null), [drawing, off])
+  // Read only up front when the server says so for this file (its words, as given).
+  const [readOnly, setReadOnly] = useState<string | null>(null)
+  useEffect(() => {
+    setReadOnly(null)
+    if (!source || !filePath) return
+    let live = true
+    void source.readOnly(filePath).then((r) => live && setReadOnly(r))
+    return () => {
+      live = false
+    }
+  }, [source, filePath])
+  // The file can't be changed here: its kind, its header's words, the server's, or this server refused a save this session.
+  const viewOnly = useMemo(
+    () => (drawing ? (viewOnlyWhy(drawing.header, drawing.rows) ?? readOnly ?? off ?? source?.writerOff() ?? null) : null),
+    [drawing, readOnly, off, source],
+  )
   const waiting = pending !== null && (drawing?.version ?? 0) < pending
   const canEdit = !!drawing && !!source?.canWrite && !!filePath && !viewOnly
   const editable = canEdit && !waiting
@@ -112,8 +125,8 @@ export function useCadEdit(p: {
   useEffect(() => {
     if (!drawing) return
     void refreshHolds()
-    const t = setInterval(() => void refreshHolds(), HOLDS_EVERY_MS)
-    return () => clearInterval(t)
+    // Read again when a claim on the file is taken or ends (and just before each edit).
+    return source && filePath ? source.onHoldsChanged(filePath, () => void refreshHolds()) : undefined
     // Read again on each version, not on each read of the same one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshHolds, version, !!drawing])

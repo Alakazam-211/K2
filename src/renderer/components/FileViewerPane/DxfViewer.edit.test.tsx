@@ -54,7 +54,7 @@ afterEach(() => {
 })
 
 /** Opens framed on the walls by the door (at the whole drawing's fit, a few pixels span them all). */
-async function open(opts: { holds?: Hold[]; locked?: string[]; header?: ModelHeader } = {}): Promise<void> {
+async function open(opts: { holds?: Hold[]; locked?: string[]; header?: ModelHeader; writerOff?: string; readOnly?: string } = {}): Promise<void> {
   world = fakeCadWorld({ header: opts.header ?? HEADER, pages: PAGES }, opts)
   renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={world.model} edits={world.edits} changes={world.changes} view="@h:51" />)
   await screen.findByTestId('dxf-shapes')
@@ -271,6 +271,21 @@ describe('relabelling', () => {
 describe('holds', () => {
   const atlas: Hold = { pid: 'p_atlas', name: 'Atlas', note: 'moving the doors', keys: ['@h:41'] }
 
+  it('holds are read again when a claim is taken or ends, with no polling', async () => {
+    await open()
+    expect(screen.queryAllByTestId('dxf-hold-mark')).toHaveLength(0)
+    world.edits.setHolds([atlas])
+    await act(async () => {
+      world.edits.emitHoldsChanged()
+    })
+    await waitFor(() => expect(screen.getAllByTestId('dxf-hold-mark').map((m) => m.getAttribute('data-h'))).toEqual(['@h:41']))
+    world.edits.setHolds([])
+    await act(async () => {
+      world.edits.emitHoldsChanged()
+    })
+    await waitFor(() => expect(screen.queryAllByTestId('dxf-hold-mark')).toHaveLength(0))
+  })
+
   it('an agent’s hold is marked on its entities, and named in the panel', async () => {
     await open({ holds: [atlas] })
     await waitFor(() => expect(screen.getAllByTestId('dxf-hold-mark').map((m) => m.getAttribute('data-h'))).toEqual(['@h:41']))
@@ -307,6 +322,57 @@ describe('holds', () => {
     })
     await waitFor(() => expect(world.edits.calls).toHaveLength(2))
     expect((await screen.findByTestId('dxf-change-note')).textContent).toContain('You moved a line')
+  })
+})
+
+describe('when the server can’t save drawing edits', () => {
+  const HINT = 'K2 can’t save drawing edits yet; this file opens read-only.'
+
+  it('the first try turns the tab view only, with the server’s words as given, and the controls don’t come back', async () => {
+    await open({ writerOff: HINT })
+    click('@h:41')
+    fireEvent.change(screen.getByTestId('dxf-move-dx'), { target: { value: '5' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dxf-move-go'))
+    })
+    expect((await screen.findByTestId('dxf-view-only')).textContent).toBe(HINT)
+    expect(screen.getByTestId('dxf-edit-message').textContent).toBe(HINT)
+    // The dry run was the only call: nothing was written.
+    expect(world.edits.calls).toHaveLength(1)
+    expect(world.edits.calls[0]).toContain('--dry-run')
+    expect(screen.queryByTestId('dxf-move-by')).toBeNull()
+    // The same server, opened again this session: view only from the start.
+    cleanup()
+    renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath="/ws/other.dxf" model={world.model} edits={world.edits} changes={world.changes} view="@h:51" />)
+    await screen.findByTestId('dxf-shapes')
+    expect((await screen.findByTestId('dxf-view-only')).textContent).toBe(HINT)
+    click('@h:41')
+    expect(screen.queryByTestId('dxf-move-by')).toBeNull()
+  })
+
+  it('the host’s header says writer: false: view only up front, in its words, with no Move or attribute controls', async () => {
+    await open({ header: { ...HEADER, writer: false, read_only_reason: 'Drawing edits are off on this server.' } })
+    expect(screen.getByTestId('dxf-view-only').textContent).toBe('Drawing edits are off on this server.')
+    click('@h:61')
+    expect(screen.queryByTestId('dxf-move-by')).toBeNull()
+    expect(screen.queryByTestId('dxf-attrib-input')).toBeNull()
+    expect(world.edits.calls).toHaveLength(0)
+  })
+
+  it('docs/cores gives a read-only reason: view only up front, in its words', async () => {
+    await open({ readOnly: 'This server opens drawings read-only.' })
+    expect((await screen.findByTestId('dxf-view-only')).textContent).toBe('This server opens drawings read-only.')
+    click('@h:61')
+    expect(screen.queryByTestId('dxf-move-by')).toBeNull()
+    expect(screen.queryByTestId('dxf-attrib-input')).toBeNull()
+  })
+
+  it('neither says so: the edit controls show', async () => {
+    await open({ header: { ...HEADER, writer: true } })
+    click('@h:61')
+    expect(screen.queryByTestId('dxf-view-only')).toBeNull()
+    expect(screen.getByTestId('dxf-move-by')).toBeTruthy()
+    expect(screen.getByTestId('dxf-attrib-input')).toBeTruthy()
   })
 })
 

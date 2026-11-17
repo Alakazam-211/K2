@@ -109,6 +109,10 @@ describe('editReason', () => {
   })
   it('the model’s own word wins; a dynamic block’s reference is fine', () => {
     expect(editReason({ ...row('@h:41'), edit: 'assoc' } as ModelRow, HEADER)).toBe('assoc')
+    // The draw rows' words: each hides Move up front.
+    const by: Record<string, string> = { grouped: 'grouped', dimensioned: 'dimensioned', 'own-frame': 'ocs', 'no-handle': 'minted', proxy: 'proxy', xref: 'xref', 'locked-layer': 'locked', '3D solid': 'acis', unknown: 'unknown' }
+    for (const [w, key] of Object.entries(by)) expect(editReason({ ...row('@h:41'), edit: w }, HEADER), w).toBe(key)
+    expect(editReason({ ...row('@h:41'), edit: null }, HEADER)).toBeNull()
     expect(editReason({ ...row('@h:61'), edit: 'dynblock' } as ModelRow, HEADER)).toBeNull()
   })
   it('an external reference, a locked layer, inside a block', () => {
@@ -155,7 +159,11 @@ describe('holds', () => {
     expect(holdsOn(['@h:42'], [atlas, kai], ROWS, HEADER)).toEqual([kai])
     const model = HEADER.layouts.find((l) => l.kind === 'model')!
     expect(holdsOn(['@h:A00'], [{ ...atlas, keys: [model.handle] }], ROWS, HEADER)).toHaveLength(1)
-    expect(holdsOn(['@h:A00'], [{ ...atlas, keys: ['@layer:A-WALL'] }], ROWS, HEADER)).toHaveLength(1)
+    expect(holdsOn(['@h:A00'], [{ ...atlas, keys: ['@doc:dxf'] }], ROWS, HEADER)).toHaveLength(1)
+    // Keys are handles only: a layer's name is no key.
+    expect(holdsOn(['@h:A00'], [{ ...atlas, keys: ['@layer:A-WALL'] }], ROWS, HEADER)).toEqual([])
+    // A handle spelt with leading zeros or lower case is the same handle.
+    expect(holdsOn(['@h:A00'], [{ ...atlas, keys: ['@h:0a00'] }], ROWS, HEADER)).toHaveLength(1)
   })
   it('asks once, naming who and what for', () => {
     expect(holdPrompt([atlas], 2, 'move')).toBe('Atlas is working on these: moving the doors. Move anyway?')

@@ -1,7 +1,9 @@
-// Agents' holds on a selection. A hold's keys are index keys: an entity's
-// `@h:<HANDLE>`, or a layer's, a block's or a layout's own handle, which
+// Agents' holds on a selection. A hold's keys are the CAD pack's index
+// keys, always `@h:<HANDLE>` (upper-case hex, no leading zeros): an
+// entity's, or a layer record's, a block record's or a layout's, which
 // covers everything on or in it (model space's covers all of model space);
-// `@layer:<name>` is read too. A person isn't refused by a hold, so before
+// `@doc:dxf` is the whole drawing. Layer and block names come to handles
+// through the drawing's header. A person isn't refused by a hold, so before
 // an edit that touches one the viewer asks once, naming who and what for.
 
 import { namesOf } from '../cad-change-words'
@@ -19,9 +21,12 @@ function keyMaps(header: HeaderKeys) {
   }
 }
 
-/** Every key whose hold covers row `r`: its own, its layer's, its space's. */
+/** The whole drawing's key. */
+export const DOC_KEY = '@doc:dxf'
+
+/** Every key whose hold covers row `r`: its own, its layer's, its space's, the drawing's. */
 function rowKeys(r: ModelRow, m: ReturnType<typeof keyMaps>): string[] {
-  const out = [norm(r.h), `@layer:${r.layer}`, norm(r.owner)]
+  const out = [norm(r.h), norm(r.owner), DOC_KEY]
   const lk = m.layerKey.get(r.layer)
   if (lk) out.push(lk)
   if (r.owner === 'model') out.push(...m.modelKeys)

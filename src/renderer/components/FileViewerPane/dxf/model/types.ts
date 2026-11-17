@@ -38,8 +38,8 @@ export type ModelRow = {
   why?: string
   bbox: Box4 | null
   bbox_q?: string
-  /** Why the edit verbs won't change it (`hatch`, `assoc`, …), when the model says; absent or `1` when they will. */
-  edit?: string
+  /** Why the edit verbs won't change it (`grouped`, `locked-layer`, …), when the model says; absent or null when they will. */
+  edit?: string | null
   // Each kind's own fields; read by the renderer kind by kind.
   geom?: Record<string, unknown> | null
 }
@@ -104,6 +104,9 @@ export type ModelHeader = {
   format?: string
   /** The file's format version (`AC1032`); AC1015 is DXF 2000. */
   acadver?: string
+  /** The host can save this file's edits (false: it opens read only, with `read_only_reason` when given). */
+  writer?: boolean
+  read_only_reason?: string
   units?: { word?: string; insunits?: number }
   extents?: { stated: Box4 | null; computed: Box4 | null }
   settings?: { pdmode?: number; pdsize?: number; fillmode?: boolean; lwdisplay?: boolean; ltscale?: number; lwdefault_mm?: number }

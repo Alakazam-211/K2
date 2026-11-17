@@ -9,7 +9,8 @@
 import type { CadChangeSource } from '../cad-change-source'
 import { fixtureDrawingSource, type DrawingModelSource } from '../model/source'
 import type { ModelHeader, ModelPage, ModelRow } from '../model/types'
-import type { EditSource, Hold } from './edit-source'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
+import { refusalOfError, WRITER_OFF, type EditSource, type Hold } from './edit-source'
 import { editReason } from './selection'
 import { parseToolResult } from './tool-result'
 
@@ -44,7 +45,7 @@ const shiftBox = (b: Box4 | null, dx: number, dy: number): Box4 | null => (b ? [
 
 export type FakeWorld = {
   model: DrawingModelSource
-  edits: EditSource & { calls: string[][]; setHolds(h: Hold[]): void }
+  edits: EditSource & { calls: string[][]; setHolds(h: Hold[]): void; emitHoldsChanged(): void }
   changes: CadChangeSource
   /** Another writer's version: the rows it changes, as an agent would through the verbs. */
   agentMove(handles: readonly string[], dx: number, dy: number): void
@@ -53,8 +54,12 @@ export type FakeWorld = {
 
 export function fakeCadWorld(
   fx: { header: ModelHeader; pages: Record<string, ModelPage[]> },
-  /** `locked`: layers locked in the file since the viewer read it (the header shown doesn't say). */
-  opts: { holds?: Hold[]; locked?: string[] } = {},
+  /**
+   * `locked`: layers locked in the file since the viewer read it (the header shown doesn't say);
+   * `writerOff`: the server can't save drawing edits, and says so only when an edit is tried (its words);
+   * `readOnly`: the server says up front the file opens read only (its words).
+   */
+  opts: { holds?: Hold[]; locked?: string[]; writerOff?: string; readOnly?: string } = {},
 ): FakeWorld {
   let header = structuredClone(fx.header)
   const pages = structuredClone(fx.pages)
@@ -62,6 +67,8 @@ export function fakeCadWorld(
   /** Which version last changed each entity's fields. */
   const touched = new Map<string, { version: number; fields: string[] }>()
   let holds = opts.holds ?? []
+  const holdListeners = new Set<() => void>()
+  let writerOff: string | null = null
   const calls: string[][] = []
   const src = fixtureDrawingSource({ header, pages })
   let lastDry: string | null = null
@@ -85,6 +92,8 @@ export function fakeCadWorld(
 
   const run = (argv: readonly string[]): unknown => {
     calls.push([...argv])
+    if (opts.writerOff)
+      return new DaemonHttpError('cad_writer_disabled', 409, 'cad_writer_disabled', { code: 'cad_writer_disabled', exit: 3, hint: opts.writerOff, path: 'drawing' })
     const verb = `${argv[0]} ${argv[1]}`
     const base = Number(flag(argv, '--base') ?? header.version)
     const dry = argv.includes('--dry-run')
@@ -149,8 +158,20 @@ export function fakeCadWorld(
       canWrite: true,
       calls,
       setHolds: (h) => void (holds = h),
-      run: async (_p, argv) => parseToolResult(run(argv))!,
+      emitHoldsChanged: () => holdListeners.forEach((fn) => fn()),
+      run: async (_p, argv) => {
+        const a = run(argv)
+        const r = a instanceof Error ? refusalOfError(a) : parseToolResult(a)!
+        if (r.error?.id === WRITER_OFF) writerOff = r.error.message
+        return r
+      },
       holds: async () => holds,
+      onHoldsChanged: (_p, fn) => {
+        holdListeners.add(fn)
+        return () => void holdListeners.delete(fn)
+      },
+      readOnly: async () => opts.readOnly ?? null,
+      writerOff: () => writerOff,
     },
     changes: {
       async change() {

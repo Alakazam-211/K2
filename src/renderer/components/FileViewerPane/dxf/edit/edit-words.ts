@@ -8,7 +8,7 @@
 
 import { namesOf } from '../cad-change-words'
 import { NO_DIGEST } from './edit-flow'
-import { NO_ROUTE, NOT_SENT } from './edit-source'
+import { NO_ROUTE, NOT_SENT, WRITER_OFF, WRITER_OFF_WORDS } from './edit-source'
 import type { ToolResult } from './tool-result'
 
 /** Why an entity can't be changed, by the model's reason word. */
@@ -27,11 +27,30 @@ export const WHY_WORDS = {
   ocs: 'It’s drawn on a tilted plane, so it can’t be changed here yet.',
   minted: 'It has no handle. Save the drawing again in your CAD app.',
   dynamic: 'It’s part of a dynamic block’s shape. Change the block in your CAD app.',
+  grouped: 'It’s in a group, so it can’t be moved here yet.',
+  dimensioned: 'It has a dimension attached, so it can’t be moved here yet.',
 } as const
+
+/** The drawing model's own words for why (its rows' `edit`), as reasons above. */
+const MODEL_WORDS: Record<string, string> = {
+  'own-frame': 'ocs',
+  'no-handle': 'minted',
+  'locked-layer': 'locked',
+  '3d solid': 'acis',
+  '3d-solid': 'acis',
+  dynblock: 'dynamic',
+}
+
+/** A reason word, the model's or the pack's, as one of ours. */
+export const reasonKey = (why: string): string => {
+  const w = why.trim().toLowerCase()
+  return MODEL_WORDS[w] ?? w
+}
 
 export type WhyKey = keyof typeof WHY_WORDS | 'locked'
 
 export function whyWords(why: string, layer?: string | null): string {
+  why = reasonKey(why)
   if (why === 'locked') return `It’s on ${layer || 'a layer'}, which is locked. Unlock it in your CAD app first.`
   return (WHY_WORDS as Record<string, string>)[why] ?? WHY_WORDS.unknown
 }
@@ -44,7 +63,7 @@ export const OFF_WORDS = {
   handles: 'View only: this drawing is missing handles. Save it again in your CAD app to change it here.',
 } as const
 
-type HeaderLike = { format?: unknown; acadver?: unknown; binary?: unknown; handles?: unknown }
+type HeaderLike = { format?: unknown; acadver?: unknown; binary?: unknown; handles?: unknown; writer?: unknown; read_only_reason?: unknown }
 
 /** Why the drawing is view only, or null when the verbs can change it. */
 export function viewOnlyWhy(header: HeaderLike, rows: readonly { h?: unknown }[]): string | null {
@@ -56,6 +75,8 @@ export function viewOnlyWhy(header: HeaderLike, rows: readonly { h?: unknown }[]
   const h = header.handles as { missing?: unknown; duplicates?: unknown } | null | undefined
   if (h && typeof h === 'object' && (Number(h.missing) > 0 || Number(h.duplicates) > 0)) return OFF_WORDS.handles
   if (rows.some((r) => typeof r.h !== 'string' || !/^@h:[0-9A-F]+$/i.test(r.h))) return OFF_WORDS.handles
+  // The host says this file's edits can't be saved: its words, as given.
+  if (header.writer === false) return (typeof header.read_only_reason === 'string' && header.read_only_reason.trim()) || WRITER_OFF_WORDS
   return null
 }
 
@@ -99,7 +120,7 @@ function valueWords(message: string): string {
 }
 
 /** The reason word in a "not changed by the edit verbs (why)" message. */
-const whyOf = (message: string): string => /\(([a-z_]+)\)\s*$/i.exec(message.trim())?.[1]?.toLowerCase() ?? 'unknown'
+const whyOf = (message: string): string => /\(([^()]+)\)\s*$/.exec(message.trim())?.[1] ?? 'unknown'
 
 function reason(id: string, e: { message: string; details: Record<string, unknown> }, ctx: RefusalContext): Omit<RefusalWords, 'words'> & { why: string } {
   const plain = (why: string, refresh = false, off: string | null = null) => ({ why, refresh, off })
@@ -181,6 +202,8 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
       return plain('The drawing changed while saving. Try again.', true)
     case 'MPC-E823':
       return plain('This change couldn’t be saved. Please report it with the file.')
+    case WRITER_OFF:
+      return plain(e.message || WRITER_OFF_WORDS, false, e.message || WRITER_OFF_WORDS)
     case NO_ROUTE:
       return plain('This server can’t change drawings yet. Ask its owner to update K2.')
     case NOT_SENT:
@@ -195,5 +218,7 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
 export function refusalWords(r: ToolResult, ctx: RefusalContext): RefusalWords {
   const e = r.error ?? { id: '', message: '', next: '', details: {} }
   const { why, refresh, off } = reason(e.id, e, ctx)
+  // The server's own words for a writer that's off, as given.
+  if (e.id === WRITER_OFF) return { words: why, refresh, off }
   return { words: `${ctx.verb === 'move' ? 'Not moved.' : 'Not changed.'} ${why}`, refresh, off }
 }

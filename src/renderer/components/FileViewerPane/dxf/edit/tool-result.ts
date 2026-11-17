@@ -33,15 +33,12 @@ const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
-/** The kit's result, from the route's reply (its `result`) or as it is; null when it isn't one. */
-export function parseToolResult(raw: unknown): ToolResult | null {
-  const r = isObj(raw) && isObj(raw.result) ? raw.result : raw
+/** The kit's result object itself (`mpc.result/1`), or null when it isn't one. */
+export function parseToolResult(r: unknown): ToolResult | null {
   if (!isObj(r) || r.schema !== 'mpc.result/1') return null
   const version = isObj(r.version) ? r.version : {}
   const changed = isObj(r.changed) ? r.changed : {}
   const bytes = isObj(changed.bytes) ? changed.bytes : {}
-  const e = isObj(r.error) ? r.error : null
-  const stdout = str(r.stdout) ?? (isObj(raw) && raw !== r ? str(raw.stdout) : null) ?? ''
   return {
     ok: r.ok === true,
     exit: num(r.exit) ?? (r.ok === true ? 0 : 2),
@@ -51,11 +48,28 @@ export function parseToolResult(raw: unknown): ToolResult | null {
     after: num(version.after),
     afterDigest: str(bytes.after_digest),
     data: r.data ?? null,
-    error: e
-      ? { id: str(e.id) ?? '', message: str(e.message) ?? '', next: str(e.next) ?? '', details: isObj(e.details) ? e.details : {} }
-      : null,
-    stdout,
+    error: errorOf(r.error),
+    stdout: str(r.stdout) ?? '',
   }
+}
+
+const errorOf = (v: unknown): ToolError | null =>
+  isObj(v) && typeof v.id === 'string' && v.id
+    ? { id: v.id, message: str(v.message) ?? '', next: str(v.next) ?? '', details: isObj(v.details) ? v.details : {} }
+    : null
+
+/**
+ * The doc tool route's reply (`{exit, stdout, stderr, version, result, …}`):
+ * the kit's result under `result`, its stdout from the reply when the result
+ * has none; a reply with no result but an `error` with an id is that
+ * refusal; anything else is null.
+ */
+export function parseToolReply(reply: unknown): ToolResult | null {
+  if (!isObj(reply)) return null
+  const r = parseToolResult(reply.result)
+  if (r) return r.stdout || typeof reply.stdout !== 'string' ? r : { ...r, stdout: reply.stdout }
+  const e = errorOf(reply.error)
+  return e ? localRefusal(e.id, e.message, e.details) : null
 }
 
 /** A refusal made here (the route missing, the server unreachable), shaped like the kit's. */

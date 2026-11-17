@@ -1,8 +1,10 @@
 // The edit verbs' argv, and the flow every edit takes: a dry run against
 // the version shown, then the real call with the dry run's digest
 // (`--expect`), both as data. The daemon source posts to the doc tool route
-// and reads the kit's result object; a missing route or a thrown answer
-// comes back as a refusal, never an exception.
+// and reads the kit's result object from the reply's `result`; a missing
+// route or a thrown answer comes back as a refusal, never an exception: a
+// session refusal by its id (or its code until the id comes), a writer
+// that's off in the server's own words, remembered per server.
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -11,10 +13,29 @@ import { DaemonHttpError } from '@/lib/daemon-http-error'
 
 const cli = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
 vi.mock('@/lib/daemon-cli', () => ({ daemonCliGet: cli.get, daemonCliPost: cli.post }))
+const bus = vi.hoisted(() => ({ fns: new Set<(e: { rel: string; change: string }) => void>() }))
+vi.mock('@/stores/session-events', () => ({
+  onDocStructureChanged: (_s: unknown, fn: (e: { rel: string; change: string }) => void) => {
+    bus.fns.add(fn)
+    return () => void bus.fns.delete(fn)
+  },
+}))
 
 import type { ServerScope } from '@/kessel/server-scope'
 import { attribArgv, fmtCoord, moveArgv, NO_DIGEST, runEdit, withKit } from './edit-flow'
-import { daemonEditSource, fixtureEditSource, NO_ROUTE, parseHolds, TOOL_ROUTE, WHO_ROUTE } from './edit-source'
+import {
+  __resetWriterOffForTests,
+  CORES_ROUTE,
+  daemonEditSource,
+  fixtureEditSource,
+  NO_ROUTE,
+  parseHolds,
+  readOnlyOf,
+  sameFile,
+  TOOL_ROUTE,
+  WHO_ROUTE,
+  WRITER_OFF,
+} from './edit-source'
 import { parseToolResult } from './tool-result'
 
 const FIX = resolve(__dirname, '../../__fixtures__/cad-edit')
@@ -112,9 +133,16 @@ describe('daemonEditSource', () => {
     expect(r).toMatchObject({ ok: true, base: 7, after: 8, verb: 'entity move' })
   })
 
-  it('reads the result object as the whole reply too', async () => {
-    cli.post.mockResolvedValue(fx('refused-locked'))
+  it('a verb’s own refusal is the result under `result`; a reply’s own error with an id is that refusal', async () => {
+    cli.post.mockResolvedValueOnce({ exit: 2, stdout: '', result: fx('refused-locked') })
     expect((await src.run('/w/a.dxf', ['x'])).error?.id).toBe('DXF-E045')
+    cli.post.mockResolvedValueOnce({ exit: 2, stdout: '', error: { id: 'CAD-E010', message: '@h:99 names no entity', details: {} } })
+    expect((await src.run('/w/a.dxf', ['x'])).error?.id).toBe('CAD-E010')
+  })
+
+  it('the whole reply is never read as the result', async () => {
+    cli.post.mockResolvedValueOnce(fx('move-done'))
+    expect((await src.run('/w/a.dxf', ['x'])).error?.id).toBe(NO_ROUTE)
   })
 
   it('no route, or a reply without a result: a refusal of its own', async () => {
@@ -124,11 +152,58 @@ describe('daemonEditSource', () => {
     expect((await src.run('/w/a.dxf', ['x'])).error?.id).toBe(NO_ROUTE)
   })
 
-  it('a thrown refusal keeps the kit’s id', async () => {
-    cli.post.mockRejectedValueOnce(new DaemonHttpError('someone holds the lease (MPC-E701)', 409, null))
+  it('a session refusal (409) by its id, or by its code until the id comes', async () => {
+    const e409 = (error: Record<string, unknown>) => new DaemonHttpError(String(error.hint ?? 'refused'), 409, (error.code as string) ?? null, error, { ok: false, error })
+    cli.post.mockRejectedValueOnce(e409({ code: 'leased', id: 'MPC-E701', exit: 5, hint: 'Sam has the lease', holder: 'Sam' }))
+    expect((await src.run('/w/a.dxf', ['x'])).error).toMatchObject({ id: 'MPC-E701', details: { holder: 'Sam' } })
+    cli.post.mockRejectedValueOnce(e409({ code: 'leased', exit: 5, hint: 'Sam has the lease', holder: 'Sam', retryAfterMs: 2000 }))
     expect((await src.run('/w/a.dxf', ['x'])).error?.id).toBe('MPC-E701')
+    cli.post.mockRejectedValueOnce(e409({ code: 'claimed', exit: 5, by: 'Atlas' }))
+    expect((await src.run('/w/a.dxf', ['x'])).error).toMatchObject({ id: 'MPC-E301', details: { by: 'Atlas' } })
     cli.post.mockRejectedValueOnce(new DaemonHttpError('changed since', 409, 'MPC-E110'))
     expect((await src.run('/w/a.dxf', ['x'])).error?.id).toBe('MPC-E110')
+  })
+
+  it('a writer that’s off: the server’s words, remembered for that server for the session', async () => {
+    __resetWriterOffForTests()
+    const hint = 'K2 can’t save drawing edits yet; this file opens read-only.'
+    const a = daemonEditSource({ hostKey: 'host-a' } as ServerScope)
+    const again = daemonEditSource({ hostKey: 'host-a' } as ServerScope)
+    const b = daemonEditSource({ hostKey: 'host-b' } as ServerScope)
+    expect(a.writerOff()).toBeNull()
+    const error = { code: 'cad_writer_disabled', exit: 3, hint, path: '/w/a.dxf' }
+    cli.post.mockRejectedValueOnce(new DaemonHttpError(hint, 409, 'cad_writer_disabled', error, { ok: false, error }))
+    expect((await a.run('/w/a.dxf', ['x'])).error).toMatchObject({ id: WRITER_OFF, message: hint })
+    expect(again.writerOff()).toBe(hint)
+    expect(b.writerOff()).toBeNull()
+    __resetWriterOffForTests()
+  })
+
+  it('read only up front: docs/cores’ words for the file, read tolerantly', async () => {
+    cli.get.mockResolvedValueOnce({ file: { core: 'cad', on: true, liveView: false, read_only_reason: 'Drawings open read-only on this server.' } })
+    expect(await src.readOnly('/w/a.dxf')).toBe('Drawings open read-only on this server.')
+    expect(cli.get).toHaveBeenLastCalledWith(scope, CORES_ROUTE, { path: '/w/a.dxf' })
+    cli.get.mockResolvedValueOnce({ file: { core: 'cad', on: true, liveView: false } })
+    expect(await src.readOnly('/w/a.dxf')).toBeNull()
+    cli.get.mockRejectedValueOnce(new Error('offline'))
+    expect(await src.readOnly('/w/a.dxf')).toBeNull()
+    expect(readOnlyOf({ file: { readOnlyReason: ' x ' } })).toBe('x')
+  })
+
+  it('holds are read again when a claim on this file is taken or ends', () => {
+    const fn = vi.fn()
+    const off = src.onHoldsChanged('/ws/drawings/a.dxf', fn)
+    for (const f of bus.fns) {
+      f({ rel: 'drawings/a.dxf', change: 'claim_taken' })
+      f({ rel: 'drawings/a.dxf', change: 'claim_ended' })
+      f({ rel: 'drawings/a.dxf', change: 'annotation' })
+      f({ rel: 'drawings/b.dxf', change: 'claim_taken' })
+    }
+    expect(fn).toHaveBeenCalledTimes(2)
+    off()
+    expect(bus.fns.size).toBe(0)
+    expect(sameFile('/ws/a.dxf', 'a.dxf')).toBe(true)
+    expect(sameFile('/ws/ba.dxf', 'a.dxf')).toBe(false)
   })
 
   it('holds: agents’ claims by their node keys, each with what it’s for, from who’s on the file', async () => {

@@ -545,10 +545,11 @@ for r in data:
 # K2_APPROVE_BIN names the program; else k2-approve beside this script, else
 # on PATH.
 cmd_approve_local() {
-    local bin="" self dir
-    if [ -n "${K2_APPROVE_BIN:-}" ]; then
-        [ -x "$K2_APPROVE_BIN" ] || { echo "k2 approve: K2_APPROVE_BIN=$K2_APPROVE_BIN is not a program" >&2; exit 2; }
-        bin="$K2_APPROVE_BIN"
+    local bin="" self dir approve_bin
+    _envn_into approve_bin APPROVE_BIN
+    if [ -n "$approve_bin" ]; then
+        [ -x "$approve_bin" ] || { echo "k2 approve: K2_APPROVE_BIN=$approve_bin is not a program" >&2; exit 2; }
+        bin="$approve_bin"
     else
         self="$0"
         while [ -L "$self" ]; do

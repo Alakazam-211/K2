@@ -10,7 +10,7 @@
 # control-plane base defaults to https://connect.k2.dev and is overridable
 # via $K2_CONNECT_BASE (for the daemon: in ITS environment) for staging /
 # integration tests.
-K2_CONNECT_BASE="${K2_CONNECT_BASE:-https://connect.k2.dev}"
+_envn_into K2_CONNECT_BASE CONNECT_BASE https://connect.k2.dev
 
 # Read the tunnel bearer token from ~/.k2/tunnel.json. Returns empty when
 # missing so the caller can fail loud with guidance.

@@ -32,10 +32,10 @@
 #
 # Tunables are named so the test agent can tweak timing/keys without
 # hunting; each is env-overridable for quick iteration.
-K2_TALK_NAV_SETTLE="${K2_TALK_NAV_SETTLE:-0.35}"       # settle (s) between an arrow-nav and the re-read (scout)
-K2_TALK_ANSWER_SETTLE="${K2_TALK_ANSWER_SETTLE:-0.35}" # settle (s) between batch answer digits
-K2_TALK_SUBMIT_KEY="${K2_TALK_SUBMIT_KEY:-1}"          # key selecting "1. Submit answers" on the review screen
-K2_TALK_SCOUT_MAX="${K2_TALK_SCOUT_MAX:-20}"           # safety cap on questions walked when N is unknown
+_envn_into K2_TALK_NAV_SETTLE TALK_NAV_SETTLE 0.35       # settle (s) between an arrow-nav and the re-read (scout)
+_envn_into K2_TALK_ANSWER_SETTLE TALK_ANSWER_SETTLE 0.35 # settle (s) between batch answer digits
+_envn_into K2_TALK_SUBMIT_KEY TALK_SUBMIT_KEY 1          # key selecting "1. Submit answers" on the review screen
+_envn_into K2_TALK_SCOUT_MAX TALK_SCOUT_MAX 20           # safety cap on questions walked when N is unknown
 K2_TALK_ARROW_RIGHT=$'\033[C'   # → move to the NEXT question (Esc [ C)
 K2_TALK_ARROW_LEFT=$'\033[D'     # ← move to the PREVIOUS question (Esc [ D)
 

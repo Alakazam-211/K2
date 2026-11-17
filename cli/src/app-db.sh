@@ -444,7 +444,7 @@ else:
             fi
             local rc=0
             printf '%s' "$_CP_BODY" | _app_held_exit || rc=$?
-            if [ "$rc" = 2 ] && ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+            if [ "$rc" = 2 ] && ! _compute_in_session && [ -t 0 ] && [ "$(_envn NO_APPROVE)" != "1" ]; then
                 # The owner at a terminal outside K2: approve right here.
                 local id
                 id="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request"]["id"])')"

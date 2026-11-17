@@ -47,11 +47,15 @@ cmd_whoami() {
                 exit 1 ;;
         esac
     done
-    local q=""
-    [ -n "${K2_SESSION_ID:-}" ] && q="${q}session=$(urlencode "$K2_SESSION_ID")&"
-    [ -n "${K2_CELL:-}" ] && q="${q}cell=$(urlencode "$K2_CELL")&"
-    [ -n "${K2_SIDECAR_NAME:-}" ] && q="${q}sidecar_name=$(urlencode "$K2_SIDECAR_NAME")&"
-    [ -n "${K2_PRIMARY:-}" ] && q="${q}primary=$(urlencode "$K2_PRIMARY")&"
+    local q="" w_sid w_cell w_side w_prim
+    _envn_into w_sid SESSION_ID
+    _envn_into w_cell CELL
+    _envn_into w_side SIDECAR_NAME
+    _envn_into w_prim PRIMARY
+    [ -n "$w_sid" ] && q="${q}session=$(urlencode "$w_sid")&"
+    [ -n "$w_cell" ] && q="${q}cell=$(urlencode "$w_cell")&"
+    [ -n "$w_side" ] && q="${q}sidecar_name=$(urlencode "$w_side")&"
+    [ -n "$w_prim" ] && q="${q}primary=$(urlencode "$w_prim")&"
     local resp
     resp=$(cli_send cli_request "/cli/whoami" "${q%&}")
     if [ "$json" = "true" ]; then
@@ -274,8 +278,12 @@ cmd_msg() {
     if [[ -z "$from" ]]; then
         # Sidecar cells stamp sales/reviewer (D15). Daemon rewrite is
         # SSOT on scoped UDS; this covers TCP / env-only fallbacks.
-        if [[ "${K2_CELL:-}" == "sidecar" && -n "${K2_PRIMARY:-}" && -n "${K2_SIDECAR_NAME:-}" ]]; then
-            from="${K2_PRIMARY}/${K2_SIDECAR_NAME}"
+        local f_cell f_prim f_side
+        _envn_into f_cell CELL
+        _envn_into f_prim PRIMARY
+        _envn_into f_side SIDECAR_NAME
+        if [[ "$f_cell" == "sidecar" && -n "$f_prim" && -n "$f_side" ]]; then
+            from="${f_prim}/${f_side}"
         fi
     fi
     if [[ -z "$from" ]]; then

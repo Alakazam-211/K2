@@ -207,7 +207,7 @@ def call(method, route, params=None, body=None):
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
     try:
-        with urllib.request.urlopen(req, timeout=float(E("K2_MAIL_HTTP_TIMEOUT") or 60)) as r:
+        with urllib.request.urlopen(req, timeout=float(E("K5_MAIL_HTTP_TIMEOUT") or E("K2_MAIL_HTTP_TIMEOUT") or E("K2SO_MAIL_HTTP_TIMEOUT") or 60)) as r:
             d = json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace")

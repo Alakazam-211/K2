@@ -399,7 +399,7 @@ _vault_confirm_token() {
     # K2_VAULT_CONFIRM_METHOD=vault-password: use the vault password even on
     # a Mac with Touch ID (a headless run, e.g. the two-server harness). The
     # same check as always: the daemon verifies the vault password.
-    if [ "${K2_VAULT_CONFIRM_METHOD:-}" = "vault-password" ]; then
+    if [ "$(_envn VAULT_CONFIRM_METHOD)" = "vault-password" ]; then
         case " $methods " in
             *" vault-password "*) methods="vault-password" ;;
             *) echo "no_confirm_method: K2_VAULT_CONFIRM_METHOD=vault-password, but no vault password is set (k2 vault confirm-password set)" >&2; exit 3 ;;

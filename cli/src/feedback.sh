@@ -40,16 +40,16 @@ _feedback_detect_session() {
     FB_SESSION_ID=""
     FB_SESSION_KIND=""
     if [ "${K5_API_CELL:-${K2_API_CELL:-${K2SO_API_CELL:-}}}" = "1" ]; then
-        FB_SESSION_ID="${K2_SESSION_ID:-}"
+        FB_SESSION_ID="${K5_SESSION_ID:-${K2_SESSION_ID:-${K2SO_SESSION_ID:-}}}"
         FB_SESSION_KIND="api"
-    elif [ "${K2_CELL:-}" = "sidecar" ]; then
-        FB_SESSION_ID="${K2_SESSION_ID:-}"
+    elif [ "${K5_CELL:-${K2_CELL:-${K2SO_CELL:-}}}" = "sidecar" ]; then
+        FB_SESSION_ID="${K5_SESSION_ID:-${K2_SESSION_ID:-${K2SO_SESSION_ID:-}}}"
         FB_SESSION_KIND="sidecar"
-    elif [ "${K2_CELL:-}" = "canonical" ]; then
-        FB_SESSION_ID="${K2_SESSION_ID:-}"
+    elif [ "${K5_CELL:-${K2_CELL:-${K2SO_CELL:-}}}" = "canonical" ]; then
+        FB_SESSION_ID="${K5_SESSION_ID:-${K2_SESSION_ID:-${K2SO_SESSION_ID:-}}}"
         FB_SESSION_KIND="canonical"
-    elif [ -n "${K2_SESSION_ID:-}" ] && [ -z "${K2_CELL:-}" ]; then
-        FB_SESSION_ID="$K2_SESSION_ID"
+    elif [ -n "${K5_SESSION_ID:-${K2_SESSION_ID:-${K2SO_SESSION_ID:-}}}" ] && [ -z "${K5_CELL:-${K2_CELL:-${K2SO_CELL:-}}}" ]; then
+        FB_SESSION_ID="${K5_SESSION_ID:-${K2_SESSION_ID:-${K2SO_SESSION_ID:-}}}"
         FB_SESSION_KIND="canonical"
     elif [ -n "${CLAUDE_SESSION_ID:-}" ]; then
         FB_SESSION_ID="$CLAUDE_SESSION_ID"
@@ -180,7 +180,7 @@ cmd_feedback_ask() {
         files_json="$(_thread_attachments_json "${files[@]}")" || { _feedback_err "usage" "--file: could not read the file list"; exit 2; }
     fi
     _feedback_detect_session
-    if [ "${K2_TEST_FEEDBACK_DETECT:-}" = "1" ]; then
+    if [ "$(_envn TEST_FEEDBACK_DETECT)" = "1" ]; then
         printf '%s\n' "${FB_SESSION_KIND:-}"
         exit 0
     fi

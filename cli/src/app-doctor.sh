@@ -1701,7 +1701,7 @@ for h in rows:
             fi
             printf '%s' "$_CP_BODY" | _app_handover_print
             if [ "$_CP_STATUS" = "202" ]; then
-                if [ "$sub" = undo ] && ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+                if [ "$sub" = undo ] && ! _compute_in_session && [ -t 0 ] && [ "$(_envn NO_APPROVE)" != "1" ]; then
                     _app_approve "$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request"]["id"])')"
                     return 0
                 fi
@@ -1743,7 +1743,7 @@ for h in rows:
     fi
     local card
     card="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; r=json.load(sys.stdin).get("request"); print(r["id"] if isinstance(r, dict) else "")')"
-    if [ -n "$card" ] && ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+    if [ -n "$card" ] && ! _compute_in_session && [ -t 0 ] && [ "$(_envn NO_APPROVE)" != "1" ]; then
         # The owner at a terminal outside K2: approve the card right here.
         _app_approve "$card"
         return 0
@@ -1819,7 +1819,7 @@ for r in v.get("results", []):
     if r.get("request"):
         print(r["request"])')"
         printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("hint",""))'
-        if ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+        if ! _compute_in_session && [ -t 0 ] && [ "$(_envn NO_APPROVE)" != "1" ]; then
             local c
             for c in $cards; do _app_approve "$c"; done
             return 0

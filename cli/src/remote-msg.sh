@@ -397,7 +397,7 @@ sys.stderr.write(json.dumps({"error":{"code":code,"hint":hint}},
 _remote_token_for_host() {
     local host="$1" explicit="${2:-}"
     if [ -n "$explicit" ]; then printf '%s' "$explicit"; return 0; fi
-    if [ -n "${K2_REMOTE_TOKEN:-}" ]; then printf '%s' "$K2_REMOTE_TOKEN"; return 0; fi
+    if _envn_any REMOTE_TOKEN; then _envn REMOTE_TOKEN; return 0; fi
     if ! command -v python3 >/dev/null 2>&1; then
         return 0
     fi

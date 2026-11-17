@@ -187,7 +187,7 @@ def _timeout_error_body(timeout_secs):
     }}
 
 def request(method, route, params=None, body=None, timeout=30):
-    env_t = os.environ.get("K2_MAIL_HTTP_TIMEOUT")
+    env_t = os.environ.get("K5_MAIL_HTTP_TIMEOUT") or os.environ.get("K2_MAIL_HTTP_TIMEOUT") or os.environ.get("K2SO_MAIL_HTTP_TIMEOUT")
     if env_t:
         timeout = float(env_t)
     qs = urllib.parse.urlencode(dict(params or {}, token=token))
@@ -2239,7 +2239,7 @@ elif verb == "server_upgrade":
                   " watching, not the upgrade)" % (d.get("from") or "?", d.get("to") or "?",
                                                    out.get("typicalSecs", "?")))
         try:
-            interval = float(os.environ.get("K2_HOSTMAIL_UPGRADE_POLL") or "2")
+            interval = float(os.environ.get("K5_HOSTMAIL_UPGRADE_POLL") or os.environ.get("K2_HOSTMAIL_UPGRADE_POLL") or os.environ.get("K2SO_HOSTMAIL_UPGRADE_POLL") or "2")
         except ValueError:
             interval = 2.0
         deadline = time.time() + 6 * 3600
@@ -2250,7 +2250,7 @@ elif verb == "server_upgrade":
         # token goes stale and every poll fails from then on. Give up after
         # a bounded gap instead of polling silently for 6 h.
         try:
-            lost_after = float(os.environ.get("K2_HOSTMAIL_UPGRADE_LOST_SECS") or "120")
+            lost_after = float(os.environ.get("K5_HOSTMAIL_UPGRADE_LOST_SECS") or os.environ.get("K2_HOSTMAIL_UPGRADE_LOST_SECS") or os.environ.get("K2SO_HOSTMAIL_UPGRADE_LOST_SECS") or "120")
         except ValueError:
             lost_after = 120.0
         last_ok = time.time()

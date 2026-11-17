@@ -113,7 +113,7 @@ esac
 # Falls back to ~/.k2/heartbeat.{port,token} for external terminals
 _envn_into PORT PORT
 # LAN / remote daemon: override loopback. Default matches today's bind.
-HOST="${K2_HOST:-127.0.0.1}"
+_envn_into HOST HOST 127.0.0.1
 _envn_into TOKEN HOOK_TOKEN
 
 # #58 Phase-1 close — capture the per-cell SCOPED token NOW, before any
@@ -134,8 +134,9 @@ _envn_into SCOPED_TOKEN HOOK_TOKEN
 _K2_PASSPORT_REFUSAL="Invalid or missing auth token"
 _K2_PASSPORT_RETRIED=0
 _cli_healed_passport() {
-    local cur="${SCOPED_TOKEN:-}" f="${K2_SECRETS_DIR:-}/.k2-passport" t=""
-    [ -n "${K2_SECRETS_DIR:-}" ] && [[ "$cur" == *.* ]] || return 1
+    local cur="${SCOPED_TOKEN:-}" sd="${K5_SECRETS_DIR:-${K2_SECRETS_DIR:-${K2SO_SECRETS_DIR:-}}}" f t=""
+    f="$sd/.k2-passport"
+    [ -n "$sd" ] && [[ "$cur" == *.* ]] || return 1
     [ -f "$f" ] && [ ! -L "$f" ] || return 1
     IFS= read -r t <"$f" 2>/dev/null || [ -n "$t" ] || return 1
     [[ "$t" =~ ^[A-Za-z0-9-]+\.[A-Za-z0-9]+$ ]] || return 1
@@ -418,7 +419,7 @@ fi
 # session passport, and must never act as this server's owner by reading
 # the owner token files. The connection gate below says why.
 _k2_no_owner_fallback=""
-if [ "${K2_NO_OWNER_FALLBACK:-}" = "1" ]; then
+if [ "$(_envn NO_OWNER_FALLBACK)" = "1" ]; then
     _k2_no_owner_fallback=1
 fi
 if [ -z "$_k2_no_owner_fallback" ] && [ -r "${K2_HOME}/heartbeat.token" ]; then

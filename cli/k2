@@ -113,7 +113,7 @@ esac
 # Falls back to ~/.k2/heartbeat.{port,token} for external terminals
 _envn_into PORT PORT
 # LAN / remote daemon: override loopback. Default matches today's bind.
-HOST="${K2_HOST:-127.0.0.1}"
+_envn_into HOST HOST 127.0.0.1
 _envn_into TOKEN HOOK_TOKEN
 
 # #58 Phase-1 close — capture the per-cell SCOPED token NOW, before any
@@ -134,8 +134,9 @@ _envn_into SCOPED_TOKEN HOOK_TOKEN
 _K2_PASSPORT_REFUSAL="Invalid or missing auth token"
 _K2_PASSPORT_RETRIED=0
 _cli_healed_passport() {
-    local cur="${SCOPED_TOKEN:-}" f="${K2_SECRETS_DIR:-}/.k2-passport" t=""
-    [ -n "${K2_SECRETS_DIR:-}" ] && [[ "$cur" == *.* ]] || return 1
+    local cur="${SCOPED_TOKEN:-}" sd="${K5_SECRETS_DIR:-${K2_SECRETS_DIR:-${K2SO_SECRETS_DIR:-}}}" f t=""
+    f="$sd/.k2-passport"
+    [ -n "$sd" ] && [[ "$cur" == *.* ]] || return 1
     [ -f "$f" ] && [ ! -L "$f" ] || return 1
     IFS= read -r t <"$f" 2>/dev/null || [ -n "$t" ] || return 1
     [[ "$t" =~ ^[A-Za-z0-9-]+\.[A-Za-z0-9]+$ ]] || return 1
@@ -418,7 +419,7 @@ fi
 # session passport, and must never act as this server's owner by reading
 # the owner token files. The connection gate below says why.
 _k2_no_owner_fallback=""
-if [ "${K2_NO_OWNER_FALLBACK:-}" = "1" ]; then
+if [ "$(_envn NO_OWNER_FALLBACK)" = "1" ]; then
     _k2_no_owner_fallback=1
 fi
 if [ -z "$_k2_no_owner_fallback" ] && [ -r "${K2_HOME}/heartbeat.token" ]; then
@@ -2768,7 +2769,7 @@ sys.stderr.write(json.dumps({"error":{"code":code,"hint":hint}},
 _remote_token_for_host() {
     local host="$1" explicit="${2:-}"
     if [ -n "$explicit" ]; then printf '%s' "$explicit"; return 0; fi
-    if [ -n "${K2_REMOTE_TOKEN:-}" ]; then printf '%s' "$K2_REMOTE_TOKEN"; return 0; fi
+    if _envn_any REMOTE_TOKEN; then _envn REMOTE_TOKEN; return 0; fi
     if ! command -v python3 >/dev/null 2>&1; then
         return 0
     fi
@@ -6097,10 +6098,11 @@ for r in data:
 # K2_APPROVE_BIN names the program; else k2-approve beside this script, else
 # on PATH.
 cmd_approve_local() {
-    local bin="" self dir
-    if [ -n "${K2_APPROVE_BIN:-}" ]; then
-        [ -x "$K2_APPROVE_BIN" ] || { echo "k2 approve: K2_APPROVE_BIN=$K2_APPROVE_BIN is not a program" >&2; exit 2; }
-        bin="$K2_APPROVE_BIN"
+    local bin="" self dir approve_bin
+    _envn_into approve_bin APPROVE_BIN
+    if [ -n "$approve_bin" ]; then
+        [ -x "$approve_bin" ] || { echo "k2 approve: K2_APPROVE_BIN=$approve_bin is not a program" >&2; exit 2; }
+        bin="$approve_bin"
     else
         self="$0"
         while [ -L "$self" ]; do
@@ -6392,10 +6394,10 @@ for line in data.get('lines', []):
 #
 # Tunables are named so the test agent can tweak timing/keys without
 # hunting; each is env-overridable for quick iteration.
-K2_TALK_NAV_SETTLE="${K2_TALK_NAV_SETTLE:-0.35}"       # settle (s) between an arrow-nav and the re-read (scout)
-K2_TALK_ANSWER_SETTLE="${K2_TALK_ANSWER_SETTLE:-0.35}" # settle (s) between batch answer digits
-K2_TALK_SUBMIT_KEY="${K2_TALK_SUBMIT_KEY:-1}"          # key selecting "1. Submit answers" on the review screen
-K2_TALK_SCOUT_MAX="${K2_TALK_SCOUT_MAX:-20}"           # safety cap on questions walked when N is unknown
+_envn_into K2_TALK_NAV_SETTLE TALK_NAV_SETTLE 0.35       # settle (s) between an arrow-nav and the re-read (scout)
+_envn_into K2_TALK_ANSWER_SETTLE TALK_ANSWER_SETTLE 0.35 # settle (s) between batch answer digits
+_envn_into K2_TALK_SUBMIT_KEY TALK_SUBMIT_KEY 1          # key selecting "1. Submit answers" on the review screen
+_envn_into K2_TALK_SCOUT_MAX TALK_SCOUT_MAX 20           # safety cap on questions walked when N is unknown
 K2_TALK_ARROW_RIGHT=$'\033[C'   # → move to the NEXT question (Esc [ C)
 K2_TALK_ARROW_LEFT=$'\033[D'     # ← move to the PREVIOUS question (Esc [ D)
 
@@ -11778,7 +11780,7 @@ for h in rows:
             fi
             printf '%s' "$_CP_BODY" | _app_handover_print
             if [ "$_CP_STATUS" = "202" ]; then
-                if [ "$sub" = undo ] && ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+                if [ "$sub" = undo ] && ! _compute_in_session && [ -t 0 ] && [ "$(_envn NO_APPROVE)" != "1" ]; then
                     _app_approve "$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request"]["id"])')"
                     return 0
                 fi
@@ -11820,7 +11822,7 @@ for h in rows:
     fi
     local card
     card="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; r=json.load(sys.stdin).get("request"); print(r["id"] if isinstance(r, dict) else "")')"
-    if [ -n "$card" ] && ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+    if [ -n "$card" ] && ! _compute_in_session && [ -t 0 ] && [ "$(_envn NO_APPROVE)" != "1" ]; then
         # The owner at a terminal outside K2: approve the card right here.
         _app_approve "$card"
         return 0
@@ -11896,7 +11898,7 @@ for r in v.get("results", []):
     if r.get("request"):
         print(r["request"])')"
         printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("hint",""))'
-        if ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+        if ! _compute_in_session && [ -t 0 ] && [ "$(_envn NO_APPROVE)" != "1" ]; then
             local c
             for c in $cards; do _app_approve "$c"; done
             return 0
@@ -14655,7 +14657,7 @@ else:
             fi
             local rc=0
             printf '%s' "$_CP_BODY" | _app_held_exit || rc=$?
-            if [ "$rc" = 2 ] && ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+            if [ "$rc" = 2 ] && ! _compute_in_session && [ -t 0 ] && [ "$(_envn NO_APPROVE)" != "1" ]; then
                 # The owner at a terminal outside K2: approve right here.
                 local id
                 id="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request"]["id"])')"
@@ -14805,7 +14807,7 @@ print("  never    " + v.get("refused", ""))'
             fi
             local rc=0
             printf '%s' "$_CP_BODY" | _app_held_exit || rc=$?
-            if [ "$rc" = 2 ] && ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+            if [ "$rc" = 2 ] && ! _compute_in_session && [ -t 0 ] && [ "$(_envn NO_APPROVE)" != "1" ]; then
                 # The owner at a terminal outside K2: approve right here.
                 local id
                 id="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request"]["id"])')"
@@ -23503,11 +23505,15 @@ cmd_whoami() {
                 exit 1 ;;
         esac
     done
-    local q=""
-    [ -n "${K2_SESSION_ID:-}" ] && q="${q}session=$(urlencode "$K2_SESSION_ID")&"
-    [ -n "${K2_CELL:-}" ] && q="${q}cell=$(urlencode "$K2_CELL")&"
-    [ -n "${K2_SIDECAR_NAME:-}" ] && q="${q}sidecar_name=$(urlencode "$K2_SIDECAR_NAME")&"
-    [ -n "${K2_PRIMARY:-}" ] && q="${q}primary=$(urlencode "$K2_PRIMARY")&"
+    local q="" w_sid w_cell w_side w_prim
+    _envn_into w_sid SESSION_ID
+    _envn_into w_cell CELL
+    _envn_into w_side SIDECAR_NAME
+    _envn_into w_prim PRIMARY
+    [ -n "$w_sid" ] && q="${q}session=$(urlencode "$w_sid")&"
+    [ -n "$w_cell" ] && q="${q}cell=$(urlencode "$w_cell")&"
+    [ -n "$w_side" ] && q="${q}sidecar_name=$(urlencode "$w_side")&"
+    [ -n "$w_prim" ] && q="${q}primary=$(urlencode "$w_prim")&"
     local resp
     resp=$(cli_send cli_request "/cli/whoami" "${q%&}")
     if [ "$json" = "true" ]; then
@@ -23730,8 +23736,12 @@ cmd_msg() {
     if [[ -z "$from" ]]; then
         # Sidecar cells stamp sales/reviewer (D15). Daemon rewrite is
         # SSOT on scoped UDS; this covers TCP / env-only fallbacks.
-        if [[ "${K2_CELL:-}" == "sidecar" && -n "${K2_PRIMARY:-}" && -n "${K2_SIDECAR_NAME:-}" ]]; then
-            from="${K2_PRIMARY}/${K2_SIDECAR_NAME}"
+        local f_cell f_prim f_side
+        _envn_into f_cell CELL
+        _envn_into f_prim PRIMARY
+        _envn_into f_side SIDECAR_NAME
+        if [[ "$f_cell" == "sidecar" && -n "$f_prim" && -n "$f_side" ]]; then
+            from="${f_prim}/${f_side}"
         fi
     fi
     if [[ -z "$from" ]]; then
@@ -23874,8 +23884,12 @@ _thread_sender_from() {
         printf '%s' "$explicit_from"
         return 0
     fi
-    if [[ "${K2_CELL:-}" == "sidecar" && -n "${K2_PRIMARY:-}" && -n "${K2_SIDECAR_NAME:-}" ]]; then
-        printf '%s' "${K2_PRIMARY}/${K2_SIDECAR_NAME}"
+    local s_cell s_prim s_side
+    _envn_into s_cell CELL
+    _envn_into s_prim PRIMARY
+    _envn_into s_side SIDECAR_NAME
+    if [[ "$s_cell" == "sidecar" && -n "$s_prim" && -n "$s_side" ]]; then
+        printf '%s' "${s_prim}/${s_side}"
         return 0
     fi
     local sender_path
@@ -32427,8 +32441,8 @@ cmd_compute_node_servers() {
             if [ "$code" = "-" ]; then
                 IFS= read -r code || true
                 code="${code%$'\r'}"
-            elif [ -z "$code" ] && [ -n "${K2_NODE_ENROLL_CODE:-}" ]; then
-                code="$K2_NODE_ENROLL_CODE"
+            elif [ -z "$code" ] && _envn_any NODE_ENROLL_CODE; then
+                _envn_into code NODE_ENROLL_CODE
             fi
             [ -n "$url" ] && [ -n "$code" ] || { echo "usage: k2 compute node servers <node> add --url URL --code - < code-file (or K2_NODE_ENROLL_CODE) [--trust own|team] [--for 7d|none]" >&2; exit 2; }
             local for_n=""
@@ -32614,7 +32628,7 @@ _compute_admin_held_or_approve() {
     printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
 v=json.load(sys.stdin); r=v["request"]
 print("held for the owner: %s\n  %s" % (r["id"], r["summary"]))' >&2
-    if ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+    if ! _compute_in_session && [ -t 0 ] && [ "$(_envn NO_APPROVE)" != "1" ]; then
         _compute_admin_approve "$id"
         exit 0
     fi
@@ -34656,7 +34670,8 @@ print((v.get("login") or {}).get("loginId") or "")
     fi
     _LLMA_LOGIN_ID="$login_id"
     trap '_llma_post login/cancel "$(_llma_json loginId "$_LLMA_LOGIN_ID")" >/dev/null 2>&1; echo "cancelled" >&2; exit 130' INT TERM
-    local poll="${K2_LLMA_POLL_SECS:-2}"
+    local poll
+    _envn_into poll LLMA_POLL_SECS 2
     local shown_url="" shown_code="" shown_banner="" prompted=0
     local deadline=$(( $(date +%s) + 1200 ))
     while :; do
@@ -37223,7 +37238,7 @@ _vault_confirm_token() {
     # K2_VAULT_CONFIRM_METHOD=vault-password: use the vault password even on
     # a Mac with Touch ID (a headless run, e.g. the two-server harness). The
     # same check as always: the daemon verifies the vault password.
-    if [ "${K2_VAULT_CONFIRM_METHOD:-}" = "vault-password" ]; then
+    if [ "$(_envn VAULT_CONFIRM_METHOD)" = "vault-password" ]; then
         case " $methods " in
             *" vault-password "*) methods="vault-password" ;;
             *) echo "no_confirm_method: K2_VAULT_CONFIRM_METHOD=vault-password, but no vault password is set (k2 vault confirm-password set)" >&2; exit 3 ;;
@@ -39129,7 +39144,7 @@ print(json.dumps(o))' "$ws" "${pos[0]:-}" "$ref" "$tier" "$check" "$dir")"
                         echo "still running after ${wait_min:-60} min: k2 ci status ${id:0:8}" >&2
                         exit 1
                     fi
-                    sleep "${K2_CI_WAIT_SECS:-10}"
+                    sleep "$(_envn CI_WAIT_SECS 10)"
                     _ci_call GET status "$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlencode({k: v for k, v in (("workspace", sys.argv[1]), ("run", sys.argv[2])) if v}))' "$ws" "$id")"
                 done
                 if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; else _ci_render run; fi
@@ -39172,7 +39187,7 @@ print(json.dumps(o))' "$ws" "$version" "$rev" "$tier" "$builds" "$dir" "$plan" "
                         echo "still running after ${wait_min:-180} min: k2 ci status ${id:0:8}" >&2
                         exit 1
                     fi
-                    sleep "${K2_CI_WAIT_SECS:-10}"
+                    sleep "$(_envn CI_WAIT_SECS 10)"
                     _ci_call GET status "$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlencode({k: v for k, v in (("workspace", sys.argv[1]), ("run", sys.argv[2])) if v}))' "$ws" "$id")"
                 done
                 if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; else _ci_render run; fi
@@ -42630,7 +42645,7 @@ print("Boot status: %s (live now, no restart)" % (d.get("bootStatusPublic") or s
 # control-plane base defaults to https://connect.k2.dev and is overridable
 # via $K2_CONNECT_BASE (for the daemon: in ITS environment) for staging /
 # integration tests.
-K2_CONNECT_BASE="${K2_CONNECT_BASE:-https://connect.k2.dev}"
+_envn_into K2_CONNECT_BASE CONNECT_BASE https://connect.k2.dev
 
 # Read the tunnel bearer token from ~/.k2/tunnel.json. Returns empty when
 # missing so the caller can fail loud with guidance.
@@ -75337,16 +75352,16 @@ _feedback_detect_session() {
     FB_SESSION_ID=""
     FB_SESSION_KIND=""
     if [ "${K5_API_CELL:-${K2_API_CELL:-${K2SO_API_CELL:-}}}" = "1" ]; then
-        FB_SESSION_ID="${K2_SESSION_ID:-}"
+        FB_SESSION_ID="${K5_SESSION_ID:-${K2_SESSION_ID:-${K2SO_SESSION_ID:-}}}"
         FB_SESSION_KIND="api"
-    elif [ "${K2_CELL:-}" = "sidecar" ]; then
-        FB_SESSION_ID="${K2_SESSION_ID:-}"
+    elif [ "${K5_CELL:-${K2_CELL:-${K2SO_CELL:-}}}" = "sidecar" ]; then
+        FB_SESSION_ID="${K5_SESSION_ID:-${K2_SESSION_ID:-${K2SO_SESSION_ID:-}}}"
         FB_SESSION_KIND="sidecar"
-    elif [ "${K2_CELL:-}" = "canonical" ]; then
-        FB_SESSION_ID="${K2_SESSION_ID:-}"
+    elif [ "${K5_CELL:-${K2_CELL:-${K2SO_CELL:-}}}" = "canonical" ]; then
+        FB_SESSION_ID="${K5_SESSION_ID:-${K2_SESSION_ID:-${K2SO_SESSION_ID:-}}}"
         FB_SESSION_KIND="canonical"
-    elif [ -n "${K2_SESSION_ID:-}" ] && [ -z "${K2_CELL:-}" ]; then
-        FB_SESSION_ID="$K2_SESSION_ID"
+    elif [ -n "${K5_SESSION_ID:-${K2_SESSION_ID:-${K2SO_SESSION_ID:-}}}" ] && [ -z "${K5_CELL:-${K2_CELL:-${K2SO_CELL:-}}}" ]; then
+        FB_SESSION_ID="${K5_SESSION_ID:-${K2_SESSION_ID:-${K2SO_SESSION_ID:-}}}"
         FB_SESSION_KIND="canonical"
     elif [ -n "${CLAUDE_SESSION_ID:-}" ]; then
         FB_SESSION_ID="$CLAUDE_SESSION_ID"
@@ -75477,7 +75492,7 @@ cmd_feedback_ask() {
         files_json="$(_thread_attachments_json "${files[@]}")" || { _feedback_err "usage" "--file: could not read the file list"; exit 2; }
     fi
     _feedback_detect_session
-    if [ "${K2_TEST_FEEDBACK_DETECT:-}" = "1" ]; then
+    if [ "$(_envn TEST_FEEDBACK_DETECT)" = "1" ]; then
         printf '%s\n' "${FB_SESSION_KIND:-}"
         exit 0
     fi
@@ -78166,7 +78181,7 @@ def _timeout_error_body(timeout_secs):
     }}
 
 def request(method, route, params=None, body=None, timeout=30):
-    env_t = os.environ.get("K2_MAIL_HTTP_TIMEOUT")
+    env_t = os.environ.get("K5_MAIL_HTTP_TIMEOUT") or os.environ.get("K2_MAIL_HTTP_TIMEOUT") or os.environ.get("K2SO_MAIL_HTTP_TIMEOUT")
     if env_t:
         timeout = float(env_t)
     qs = urllib.parse.urlencode(dict(params or {}, token=token))
@@ -80218,7 +80233,7 @@ elif verb == "server_upgrade":
                   " watching, not the upgrade)" % (d.get("from") or "?", d.get("to") or "?",
                                                    out.get("typicalSecs", "?")))
         try:
-            interval = float(os.environ.get("K2_HOSTMAIL_UPGRADE_POLL") or "2")
+            interval = float(os.environ.get("K5_HOSTMAIL_UPGRADE_POLL") or os.environ.get("K2_HOSTMAIL_UPGRADE_POLL") or os.environ.get("K2SO_HOSTMAIL_UPGRADE_POLL") or "2")
         except ValueError:
             interval = 2.0
         deadline = time.time() + 6 * 3600
@@ -80229,7 +80244,7 @@ elif verb == "server_upgrade":
         # token goes stale and every poll fails from then on. Give up after
         # a bounded gap instead of polling silently for 6 h.
         try:
-            lost_after = float(os.environ.get("K2_HOSTMAIL_UPGRADE_LOST_SECS") or "120")
+            lost_after = float(os.environ.get("K5_HOSTMAIL_UPGRADE_LOST_SECS") or os.environ.get("K2_HOSTMAIL_UPGRADE_LOST_SECS") or os.environ.get("K2SO_HOSTMAIL_UPGRADE_LOST_SECS") or "120")
         except ValueError:
             lost_after = 120.0
         last_ok = time.time()
@@ -89646,7 +89661,7 @@ def call(method, route, params=None, body=None):
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
     try:
-        with urllib.request.urlopen(req, timeout=float(E("K2_MAIL_HTTP_TIMEOUT") or 60)) as r:
+        with urllib.request.urlopen(req, timeout=float(E("K5_MAIL_HTTP_TIMEOUT") or E("K2_MAIL_HTTP_TIMEOUT") or E("K2SO_MAIL_HTTP_TIMEOUT") or 60)) as r:
             d = json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace")

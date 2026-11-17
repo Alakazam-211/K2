@@ -653,8 +653,8 @@ cmd_compute_node_servers() {
             if [ "$code" = "-" ]; then
                 IFS= read -r code || true
                 code="${code%$'\r'}"
-            elif [ -z "$code" ] && [ -n "${K2_NODE_ENROLL_CODE:-}" ]; then
-                code="$K2_NODE_ENROLL_CODE"
+            elif [ -z "$code" ] && _envn_any NODE_ENROLL_CODE; then
+                _envn_into code NODE_ENROLL_CODE
             fi
             [ -n "$url" ] && [ -n "$code" ] || { echo "usage: k2 compute node servers <node> add --url URL --code - < code-file (or K2_NODE_ENROLL_CODE) [--trust own|team] [--for 7d|none]" >&2; exit 2; }
             local for_n=""
@@ -840,7 +840,7 @@ _compute_admin_held_or_approve() {
     printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
 v=json.load(sys.stdin); r=v["request"]
 print("held for the owner: %s\n  %s" % (r["id"], r["summary"]))' >&2
-    if ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+    if ! _compute_in_session && [ -t 0 ] && [ "$(_envn NO_APPROVE)" != "1" ]; then
         _compute_admin_approve "$id"
         exit 0
     fi

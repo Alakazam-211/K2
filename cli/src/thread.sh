@@ -5,8 +5,12 @@ _thread_sender_from() {
         printf '%s' "$explicit_from"
         return 0
     fi
-    if [[ "${K2_CELL:-}" == "sidecar" && -n "${K2_PRIMARY:-}" && -n "${K2_SIDECAR_NAME:-}" ]]; then
-        printf '%s' "${K2_PRIMARY}/${K2_SIDECAR_NAME}"
+    local s_cell s_prim s_side
+    _envn_into s_cell CELL
+    _envn_into s_prim PRIMARY
+    _envn_into s_side SIDECAR_NAME
+    if [[ "$s_cell" == "sidecar" && -n "$s_prim" && -n "$s_side" ]]; then
+        printf '%s' "${s_prim}/${s_side}"
         return 0
     fi
     local sender_path

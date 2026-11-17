@@ -262,7 +262,8 @@ print((v.get("login") or {}).get("loginId") or "")
     fi
     _LLMA_LOGIN_ID="$login_id"
     trap '_llma_post login/cancel "$(_llma_json loginId "$_LLMA_LOGIN_ID")" >/dev/null 2>&1; echo "cancelled" >&2; exit 130' INT TERM
-    local poll="${K2_LLMA_POLL_SECS:-2}"
+    local poll
+    _envn_into poll LLMA_POLL_SECS 2
     local shown_url="" shown_code="" shown_banner="" prompted=0
     local deadline=$(( $(date +%s) + 1200 ))
     while :; do

@@ -533,7 +533,7 @@ print(json.dumps(o))' "$ws" "${pos[0]:-}" "$ref" "$tier" "$check" "$dir")"
                         echo "still running after ${wait_min:-60} min: k2 ci status ${id:0:8}" >&2
                         exit 1
                     fi
-                    sleep "${K2_CI_WAIT_SECS:-10}"
+                    sleep "$(_envn CI_WAIT_SECS 10)"
                     _ci_call GET status "$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlencode({k: v for k, v in (("workspace", sys.argv[1]), ("run", sys.argv[2])) if v}))' "$ws" "$id")"
                 done
                 if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; else _ci_render run; fi
@@ -576,7 +576,7 @@ print(json.dumps(o))' "$ws" "$version" "$rev" "$tier" "$builds" "$dir" "$plan" "
                         echo "still running after ${wait_min:-180} min: k2 ci status ${id:0:8}" >&2
                         exit 1
                     fi
-                    sleep "${K2_CI_WAIT_SECS:-10}"
+                    sleep "$(_envn CI_WAIT_SECS 10)"
                     _ci_call GET status "$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlencode({k: v for k, v in (("workspace", sys.argv[1]), ("run", sys.argv[2])) if v}))' "$ws" "$id")"
                 done
                 if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; else _ci_render run; fi

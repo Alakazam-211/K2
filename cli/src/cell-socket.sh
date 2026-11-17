@@ -181,8 +181,16 @@ _cli_send_unanswered() {
         return "$3"
     fi
     echo "Error: K2's server didn't answer $1 ($((SECONDS - $2)) s); the request may have been applied. Check before running it again." >&2
+    # A caller that pipes this send into a reader sets _K2_PIPE_MARK=1: the
+    # reader then sees only this mark (never in a JSON answer: a raw control
+    # byte) and stays quiet, so the line above is the only one even when the
+    # reader runs before the command has ended. Other callers' stdout stays
+    # clean.
+    if [ "${_K2_PIPE_MARK:-0}" = 1 ]; then printf '%s' "$_K2_NOANSWER_MARK"; fi
     _k2_end_command 1
 }
+# What _cli_send_unanswered writes on stdout before it ends the command.
+_K2_NOANSWER_MARK=$'\036k2:not-answered\036'
 
 # BEGIN_CLI_SEND_TCP_LOCK
 # Set when a command has repointed BASE_URL at a remote Connect host so

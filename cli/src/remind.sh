@@ -622,10 +622,13 @@ cmd_heartbeat_remove() {
     [ -z "$name" ] && { echo "Usage: k2 heartbeat remove <name> [--purge]" >&2; exit 1; }
 
     if $purge; then
-        cli_send cli_request_post "/cli/heartbeat/remove" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
+        _K2_PIPE_MARK=1 cli_send cli_request_post "/cli/heartbeat/remove" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
 import json, os, sys
 try:
-    d = json.loads(sys.stdin.read())
+    _in = sys.stdin.read()
+    if _in == '\x1ek2:not-answered\x1e':
+        sys.exit(1)  # the send said why and is ending the command
+    d = json.loads(_in)
     n = os.environ['NAME']
     if d.get('success'): print(f'Purged heartbeat: {n} (row deleted, folder removed)')
     else: print(f'Error: {d.get(\"error\", \"unknown\")}', file=sys.stderr); sys.exit(1)
@@ -637,10 +640,13 @@ except Exception as e:
         # Stops firing on schedule, hidden from `heartbeat list`, but
         # the WAKEUP.md and chat history stay readable via
         # `heartbeat list-archived` and the sidebar's Archived section.
-        cli_send cli_request_post "/cli/heartbeat/archive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
+        _K2_PIPE_MARK=1 cli_send cli_request_post "/cli/heartbeat/archive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
 import json, os, sys
 try:
-    d = json.loads(sys.stdin.read())
+    _in = sys.stdin.read()
+    if _in == '\x1ek2:not-answered\x1e':
+        sys.exit(1)  # the send said why and is ending the command
+    d = json.loads(_in)
     n = os.environ['NAME']
     if d.get('success'): print(f'Archived heartbeat: {n}')
     else: print(f'Error: {d.get(\"error\", \"unknown\")}', file=sys.stderr); sys.exit(1)
@@ -653,10 +659,13 @@ except Exception as e:
 cmd_heartbeat_unarchive() {
     local name="${1:-}"
     [ -z "$name" ] && { echo "Usage: k2 heartbeat unarchive <name>" >&2; exit 1; }
-    cli_send cli_request_post "/cli/heartbeat/unarchive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
+    _K2_PIPE_MARK=1 cli_send cli_request_post "/cli/heartbeat/unarchive" "name=$(urlencode "$name")" | NAME="$name" python3 -c "
 import json, os, sys
 try:
-    d = json.loads(sys.stdin.read())
+    _in = sys.stdin.read()
+    if _in == '\x1ek2:not-answered\x1e':
+        sys.exit(1)  # the send said why and is ending the command
+    d = json.loads(_in)
     n = os.environ['NAME']
     if d.get('success'): print(f'Unarchived heartbeat: {n}')
     else: print(f'Error: {d.get(\"error\", \"unknown\")}', file=sys.stderr); sys.exit(1)
@@ -715,10 +724,13 @@ cmd_heartbeat_fire() {
     [ -z "$name" ] && { echo "Usage: k2 heartbeat signal fire <name> [--force]" >&2; exit 1; }
     local params="name=$(urlencode "$name")"
     [ "$force" = "1" ] && params="${params}&force=1"
-    cli_send cli_request_post "/cli/heartbeat/fire" "$params" | python3 -c "
+    _K2_PIPE_MARK=1 cli_send cli_request_post "/cli/heartbeat/fire" "$params" | python3 -c "
 import json, sys
 try:
-    d = json.loads(sys.stdin.read())
+    _in = sys.stdin.read()
+    if _in == '\x1ek2:not-answered\x1e':
+        sys.exit(1)  # the send said why and is ending the command
+    d = json.loads(_in)
     if 'error' in d:
         print(f\"Error: {d['error']}\", file=sys.stderr); sys.exit(1)
     decision = d.get('decision', '?')
@@ -898,11 +910,14 @@ cmd_heartbeat_use_pinned_session() {
     local enabled="$1"; shift
     local name="${1:-}"
     [ -z "$name" ] && { echo "Usage: k2 heartbeat use-pinned-session [on|off] <name>" >&2; exit 1; }
-    cli_send cli_request_post "/cli/heartbeat/set-use-workspace-session" \
+    _K2_PIPE_MARK=1 cli_send cli_request_post "/cli/heartbeat/set-use-workspace-session" \
         "name=$(urlencode "$name")&enabled=$enabled" | python3 -c "
 import json, sys
 try:
-    d = json.loads(sys.stdin.read())
+    _in = sys.stdin.read()
+    if _in == '\x1ek2:not-answered\x1e':
+        sys.exit(1)  # the send said why and is ending the command
+    d = json.loads(_in)
     if d.get('success'):
         state = 'enabled' if '$enabled' == 'true' else 'disabled'
         print(f'Pinned-session delivery {state} for heartbeat: $name')
@@ -973,13 +988,16 @@ else:
         echo "--provider only applies with --set <session-id|workspace/handle>" >&2; exit 1
     fi
 
-    cli_send cli_request_post "/cli/heartbeat/set-session" \
+    _K2_PIPE_MARK=1 cli_send cli_request_post "/cli/heartbeat/set-session" \
         "name=$(urlencode "$name")&mode=$mode&session_id=$(urlencode "$session_id")&provider=$(urlencode "$provider")" \
         | NAME="$name" python3 -c "
 import json, sys, os
 name = os.environ['NAME']
 try:
-    d = json.loads(sys.stdin.read())
+    _in = sys.stdin.read()
+    if _in == '\x1ek2:not-answered\x1e':
+        sys.exit(1)  # the send said why and is ending the command
+    d = json.loads(_in)
 except Exception as e:
     print(f'Error: {e}', file=sys.stderr); sys.exit(1)
 if not d.get('success'):
@@ -1001,10 +1019,13 @@ cmd_heartbeat_rename() {
         echo "Usage: k2 heartbeat rename <old-name> <new-name>" >&2
         exit 1
     fi
-    cli_send cli_request_post "/cli/heartbeat/rename" "from=$(urlencode "$from")&to=$(urlencode "$to")" | python3 -c "
+    _K2_PIPE_MARK=1 cli_send cli_request_post "/cli/heartbeat/rename" "from=$(urlencode "$from")&to=$(urlencode "$to")" | python3 -c "
 import json, sys
 try:
-    d = json.loads(sys.stdin.read())
+    _in = sys.stdin.read()
+    if _in == '\x1ek2:not-answered\x1e':
+        sys.exit(1)  # the send said why and is ending the command
+    d = json.loads(_in)
     if d.get('success'): print(f'Renamed heartbeat: $from -> $to')
     else: print(f\"Error: {d.get('error', 'unknown')}\", file=sys.stderr); sys.exit(1)
 except Exception as e:

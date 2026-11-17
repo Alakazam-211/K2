@@ -1,0 +1,12 @@
+# Every test target, test-only feature and pending #[ignore] of the crate; scripts/check-targets.sh
+# reads this file and checks it. One row per line: PACKAGE|KIND|NAME|FEATURES|PARTS, the format
+# and the rules in scripts/check-targets.sh's header. The part is `check`: scripts/check.sh.
+
+# ---- k2-mpc-av -----------------------------------------------------------------------------------
+k2-mpc-av|lib|k2_mpc_av||check
+k2-mpc-av|doctest|k2_mpc_av||excluded: the crate's docs hold no runnable example
+k2-mpc-av|feature|mutants||check
+k2-mpc-av|test|set||check
+k2-mpc-av|test|config||check
+k2-mpc-av|test|mutants|mutants|check
+k2-mpc-av|example|av-read||built-only:check: a tool run by hand over a set (its summary is a row); clippy and the suite build it

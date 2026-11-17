@@ -1,0 +1,24 @@
+[package]
+name = "k2-mpc-av"
+version = "0.1.0"
+description = "Reads a set of AV system drawings as a technician does: devices across sheets, the boundaries a cable is pulled through, off-sheet flag pairs, title-block revisions and a sheet index."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# Test-only: planted bugs, for `tests/mutants.rs` (the drawing model's plant switch). No host
+# enables it.
+mutants = ["k2-mpc-cad-model/mutants"]
+
+[dependencies]
+# The format-neutral drawing model and its reads, and the DXF reader, from k2-mpc-cad by
+# path: its checkout sits beside this repo's (with the kit, k2-mpc-base, beside both).
+k2-mpc-cad-model = { path = "../../../k2-mpc-cad/crates/cad-model" }
+k2-mpc-dxf = { path = "../../../k2-mpc-cad/crates/dxf" }
+k2-mpc-base = { path = "../../../k2-mpc-base/crates/base" }
+
+[dev-dependencies]
+# The tests draw their AV sets with the CAD repo's drawing generator.
+k2-mpc-dxf = { path = "../../../k2-mpc-cad/crates/dxf", features = ["testgen"] }

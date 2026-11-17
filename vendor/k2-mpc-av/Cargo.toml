@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/av"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.85"
+publish = false
+license = "MIT OR Apache-2.0"
+
+# This repo's own dev and test builds. Line tables only: backtraces keep file:line.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1

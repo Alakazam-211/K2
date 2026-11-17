@@ -563,6 +563,10 @@ case "${1:-help}" in
     whoami)
         shift; cmd_whoami "$@"
         ;;
+    postal)
+        # 0.46.16 (Beta): Postal friends (k2 postal --help).
+        shift; cmd_postal "$@"
+        ;;
     setup)
         # prd-setup-checklist-v1 C2: the setup checklist (k2 setup --help).
         shift; cmd_setup "$@"

@@ -12,11 +12,38 @@
 //!   `k2 msg verify` can say whether a text is the one K2 delivered. Native
 //!   Postal deliveries add the SDK's `p_` badge ([`is_badge`]).
 //!
+//! - **Friends, locally (S3).** A workspace's Postal address and its
+//!   friends ([`store`]), behind the server's Postal switch ([`enabled`],
+//!   off by default). Every friend request, incoming or outgoing, waits for
+//!   a person's permission card.
+//!
 //! Native Postal (the SDK host: pairing on the plane, receive, send, held
 //! mail) comes in later slices; the address grammar here matches p5's
 //! `PostalAddr` so both sides parse one identity the same way.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde::Serialize;
+
+pub mod store;
+
+/// The `/boot-status` feature key while the server's Postal switch is on:
+/// clients show the Postal tab only then.
+pub const FEATURE: &str = "postal";
+
+/// Runtime mirror of the persisted `postalEnabled` setting (the daemon
+/// syncs it at boot and on every change).
+static ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Sync the server's Postal switch into this process.
+pub fn set_enabled(on: bool) {
+    ENABLED.store(on, Ordering::Relaxed);
+}
+
+/// Is Postal on for this server? **Default OFF.**
+pub fn enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
 
 /// The Postal network's zone: every address is `handle::<label>.postal.bot`.
 pub const DOMAIN: &str = "postal.bot";

@@ -22,6 +22,6 @@ Topics:
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  app-databases  jobs  heartbeats
   folder-trust  email-notifications  box-move  board  chat-refresh  desktop  send-feedback  organization
-  agent-templates  provenance  suite-apps
+  agent-templates  provenance  suite-apps  postal
 --- stderr
 --- requests

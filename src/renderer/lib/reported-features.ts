@@ -237,6 +237,11 @@ export const REPORTED_FEATURES = {
    *  to the Thread's other readers. Without it the composer sends nothing
    *  and the typing line under the box stays empty (lib/thread-typing). */
   'thread-typing-v1': 'thread-typing-v1',
+  /** prd-postal-in-k2-v1 §5.5 (P34): Postal (Beta), the local half:
+   *  `/cli/postal/*` (status, friends, claim, invite, decide, remove,
+   *  block). Listed only while the server's Postal switch is on (off by
+   *  default). The workspace Postal tab shows only then. */
+  postal: 'postal',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

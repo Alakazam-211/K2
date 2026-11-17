@@ -556,6 +556,8 @@ async fn async_main() {
     let settings = k2_core::app_settings::load();
     k2_core::airgap::set_setting_enabled(settings.airgap);
     k2_core::listen::set_setting_lan(settings.listen_lan);
+    // Postal (Beta, prd-postal-in-k2-v1 S3): the owner's switch, default off.
+    k2_core::postal::set_enabled(settings.postal_enabled);
 
     // 0.40.0 — retire com.k2so.* LaunchAgents (idempotent; the app's
     // boot runs the same sweep — whichever boots first wins). A swept

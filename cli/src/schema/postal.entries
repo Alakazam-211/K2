@@ -1,0 +1,11 @@
+    {
+      "name": "postal",
+      "usage": "k2 postal status|friends [--workspace <ws>] [--json] | k2 postal invite <handle::label.postal.bot> --why \"…\" | k2 postal remove|block <address> | k2 postal claim <address> | k2 postal accept|reject <request id> | k2 postal enable|disable | k2 postal admins-may-accept on|off | k2 postal link-p5",
+      "description": "Postal (Beta): friends for this agent on other machines (addresses handle::label.postal.bot), behind the owner's switch (off by default: postal_off). An agent reads its own address and friends, asks for a friend with invite (a card on its person's Thread; nothing is sent until a person allows it), and removes or blocks its own friends. Claim, accept/reject and the switch are people's (exit 3 for an agent). link-p5 asks to link p5, Postal's client on this machine (a card; works while Postal is off). The Postal network connection comes in a later release. See k2 study postal.",
+      "args": [{"name": "command", "required": true, "description": "status | friends | invite | remove | block | claim | accept | reject | enable | disable | admins-may-accept | settings | link-p5"}, {"name": "address_or_id", "required": false, "description": "A Postal address (invite, remove, block, claim) or a request id (accept, reject)"}],
+      "flags": [
+        {"name": "--why", "arg": "text", "description": "invite: what you want to do together; your person reads it on the card."},
+        {"name": "--workspace", "arg": "ws", "description": "People: which workspace (default: the one this folder is in). An agent always gets its own."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },

@@ -2120,6 +2120,9 @@ const MIGRATIONS_BY_HAND: &[(&str, &str)] = &[
         // badge and message id, and `via` postal / federation
         // (prd-postal-in-k2-v1 S2); store: `crate::hire::deliveries`.
         ("0310_msg_deliveries_badges", include_str!("../../drizzle_sql/0310_msg_deliveries_badges.sql")),
+        // 0311 — Postal handles and friends (prd-postal-in-k2-v1 S3);
+        // store: `crate::postal::store`.
+        ("0311_postal_friends", include_str!("../../drizzle_sql/0311_postal_friends.sql")),
     ];
 
 /// [`run_migrations`], stopping after `last` when given (tests build an
@@ -2819,7 +2822,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0310_msg_deliveries_badges",
+            last_name, "0311_postal_friends",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -3100,6 +3103,8 @@ mod tests {
                 "0315_llm_sign_in_warnings",
                 // 0.46.16: content-bound delivery records (Postal S2).
                 "0310_msg_deliveries_badges",
+                // 0.46.16: Postal handles and friends (Postal S3).
+                "0311_postal_friends",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -3316,6 +3321,8 @@ mod tests {
                 "0315_llm_sign_in_warnings",
                 // 0.46.16: content-bound delivery records (Postal S2).
                 "0310_msg_deliveries_badges",
+                // 0.46.16: Postal handles and friends (Postal S3).
+                "0311_postal_friends",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3588,7 +3595,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0310_msg_deliveries_badges", "0310 (delivery badges) runs last, after 0315 (Claude sign-in warnings), 0313 (compute job env), 0312 (compute_jobs indexes), 0307 (Home chat rows apart), 0306 (Home chat rows), 0305 (Home groups), 0303 (signed approvals), 0302 (0.46.13), 0299 (0.46.12) and 0295 (CI test history)");
+        assert_eq!(top, "0311_postal_friends", "0311 (Postal friends) runs last, after 0310 (delivery badges), 0315 (Claude sign-in warnings), 0313 (compute job env), 0312 (compute_jobs indexes), 0307 (Home chat rows apart), 0306 (Home chat rows), 0305 (Home groups), 0303 (signed approvals), 0302 (0.46.13), 0299 (0.46.12) and 0295 (CI test history)");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3690,8 +3697,10 @@ mod tests {
                 "0315_llm_sign_in_warnings",
                 // 0.46.16: content-bound delivery records (Postal S2).
                 "0310_msg_deliveries_badges",
+                // 0.46.16: Postal handles and friends (Postal S3).
+                "0311_postal_friends",
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0295, 0296, 0297, 0299 and 0300, then 0.46.12's 0301, then 0302 and 0303, then suite Apps' 0304, then 0305, then 0306, then 0307, then 0.46.15's 0312, 0313 and 0315, then 0310)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0295, 0296, 0297, 0299 and 0300, then 0.46.12's 0301, then 0302 and 0303, then suite Apps' 0304, then 0305, then 0306, then 0307, then 0.46.15's 0312, 0313 and 0315, then 0310 and 0311)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");

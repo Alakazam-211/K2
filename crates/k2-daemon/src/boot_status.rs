@@ -1390,6 +1390,11 @@ pub fn features() -> Vec<&'static str> {
     if crate::app_push::chat::box_enabled() {
         out.push(FEATURE_APP_CHAT_PUSH);
     }
+    // Postal (Beta, prd-postal-in-k2-v1 S3): only while the owner's switch
+    // is on; clients show the workspace Postal tab only then.
+    if k2_core::postal::enabled() {
+        out.push(k2_core::postal::FEATURE);
+    }
     // Last on purpose: boot_status_views_integration pins it as the tail.
     out.push(FEATURE_BOOT_STATUS_VIEWS);
     out

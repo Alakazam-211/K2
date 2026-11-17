@@ -236,6 +236,8 @@ mod rows_core;
 mod rows_home_chat;
 #[path = "policy/mail.rs"]
 mod rows_mail;
+#[path = "policy/postal.rs"]
+mod rows_postal;
 #[path = "policy/sew.rs"]
 mod rows_sew;
 #[path = "policy/skin.rs"]
@@ -251,8 +253,8 @@ mod rows_zen;
 /// compiled: a row out of order in its file, or a path listed twice, fails
 /// the build.
 pub const ROUTES: &[Route] = &MERGED;
-const PARTS: &[&[Route]] = &[rows_app::ROWS, rows_compute::ROWS, rows_core::ROWS, rows_home_chat::ROWS, rows_mail::ROWS, rows_sew::ROWS, rows_skin::ROWS, rows_vault::ROWS, rows_zen::ROWS];
-const TOTAL: usize = rows_app::ROWS.len() + rows_compute::ROWS.len() + rows_core::ROWS.len() + rows_home_chat::ROWS.len() + rows_mail::ROWS.len() + rows_sew::ROWS.len() + rows_skin::ROWS.len() + rows_vault::ROWS.len() + rows_zen::ROWS.len();
+const PARTS: &[&[Route]] = &[rows_app::ROWS, rows_compute::ROWS, rows_core::ROWS, rows_home_chat::ROWS, rows_mail::ROWS, rows_postal::ROWS, rows_sew::ROWS, rows_skin::ROWS, rows_vault::ROWS, rows_zen::ROWS];
+const TOTAL: usize = rows_app::ROWS.len() + rows_compute::ROWS.len() + rows_core::ROWS.len() + rows_home_chat::ROWS.len() + rows_mail::ROWS.len() + rows_postal::ROWS.len() + rows_sew::ROWS.len() + rows_skin::ROWS.len() + rows_vault::ROWS.len() + rows_zen::ROWS.len();
 const MERGED: [Route; TOTAL] = merge_rows(PARTS);
 
 /// The row files merged into one table sorted by path.

@@ -8726,6 +8726,33 @@ async fn handle_one_request(
         // K2_COMPUTE / computePreview is on (CN30). The two sockets carry no
         // HTTP credential: `Public` rows whose handlers fail closed on the
         // signed handshake / one-time code (CN11, CN19).
+        // Postal (Beta, prd-postal-in-k2-v1 S3): the handler classifies the
+        // caller and answers `postal_off` while the switch is off.
+        p if crate::postal_routes::is_route(p) => {
+            if crate::postal_routes::is_post_only(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::postal_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::postal_routes::too_large();
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || crate::postal_routes::handle(&p_owned, who, is_post, &body_bytes, &params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // Agent hire (prd-agent-hire-templates-v1 "build A", 0.45.6): the
         // recipe door, teardown, team links, the hire root and the
         // `k2 msg who` sender check. Floors live in route_policy; the

@@ -85,9 +85,16 @@ pub fn handle(who: &Who, is_post: bool, params: &HashMap<String, String>) -> Cli
                 .ok()
                 .flatten()
         });
-        Some((d, handle))
+        // A Postal sender: is it this workspace's friend now (S3)?
+        let friend = match (d.sender_address.as_deref().filter(|a| k2_core::postal::is_address(a)), d.target_workspace_id.as_deref()) {
+            (Some(a), Some(ws)) => k2_core::postal::store::handle_for_workspace(conn, ws)
+                .and_then(|h| k2_core::postal::store::friend_by_peer(conn, &h.id, a))
+                .map(|f| f.status),
+            _ => None,
+        };
+        Some((d, handle, friend))
     });
-    let Some((d, sender_handle)) = found else {
+    let Some((d, sender_handle, friend)) = found else {
         return not_found(&code);
     };
     if let Some((ws, _)) = who.passport() {
@@ -95,7 +102,9 @@ pub fn handle(who: &Who, is_post: bool, params: &HashMap<String, String>) -> Cli
             return not_found(&code);
         }
     }
-    CliResponse::ok_json(answer(&code, postal, &d, sender_handle, deliveries::content_of(&d, &hashes)).to_string())
+    let mut v = answer(&code, postal, &d, sender_handle, deliveries::content_of(&d, &hashes));
+    v["friendNow"] = serde_json::json!(friend);
+    CliResponse::ok_json(v.to_string())
 }
 
 fn answer(code: &str, postal: bool, d: &Delivery, sender_handle: Option<String>, content: Content) -> serde_json::Value {

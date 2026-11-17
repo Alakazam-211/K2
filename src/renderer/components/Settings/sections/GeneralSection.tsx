@@ -73,6 +73,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { AppFontRows } from '../shared/AppFontRows'
 import { ChatLinkCopyRow } from './ChatLinkCopyRow'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
+import { PostalServerSwitch } from './PostalServerSwitch'
 import { YourAccountRow } from './YourAccountRow'
 import { OwnerTimezoneRow } from './OwnerTimezoneRow'
 import { GitToolsRow } from '@/components/GitTools/GitToolsNotice'
@@ -320,6 +321,9 @@ function ServerTab(): React.JSX.Element {
       <SettingsGroup title="Permissions" card>
         <ClonePersonalComputersRow scope={primaryScope()} />
       </SettingsGroup>
+      {/* Postal (Beta, prd-postal-in-k2-v1 §5.5): the server-wide switch,
+          off by default, owner only. Hides itself on a server without it. */}
+      <PostalServerSwitch scope={primaryScope()} />
     </>
   )
 }

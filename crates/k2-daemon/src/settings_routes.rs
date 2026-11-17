@@ -546,6 +546,11 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
             k2_core::llm_accounts::slots::SETTING_KEY
         ));
     }
+    // Postal (Beta): the switch and who accepts friends change only through
+    // their own route, the owner's, which also syncs the running daemon.
+    if let Some(k) = ["postalEnabled", "postalAdminsMayAccept"].iter().find(|k| partial.get(**k).is_some()) {
+        return forbidden(format!("\"{k}\" changes only through POST /cli/postal/settings (the Owner)"));
+    }
     if actor != SettingsActor::Owner {
         if let Some(gated) = OWNER_ONLY_KEYS.iter().find(|k| partial.get(**k).is_some()) {
             return forbidden(format!("updating \"{gated}\" requires the Owner role"));
@@ -715,6 +720,7 @@ pub fn handle_settings_reset_as(actor: SettingsActor, by: &str) -> CliResponse {
             crate::apps::supervisor::spawn_stop_unwalled_if_off("owner");
             // …and the /v1 API switch back to its default (OFF) too (1c).
             k2_core::app_settings::set_api_enabled(defaults.api_enabled);
+            k2_core::postal::set_enabled(defaults.postal_enabled);
             k2_core::airgap::set_setting_enabled(defaults.airgap);
             k2_core::listen::set_setting_lan(defaults.listen_lan);
             // Reset turns every multiplayer core off (their sessions close).

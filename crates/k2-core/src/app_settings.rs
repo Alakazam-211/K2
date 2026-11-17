@@ -680,6 +680,17 @@ pub struct AppSettings {
     /// silently drops keys with no matching field.
     #[serde(default)]
     pub api_enabled: bool,
+    /// Postal (Beta, prd-postal-in-k2-v1 S3): let this server's agents have
+    /// friends on the Postal network. The owner's switch, **default OFF**:
+    /// while off every `/cli/postal/*` route answers `postal_off` (but the
+    /// switch itself and `link-p5`) and clients hide the Postal tab. The
+    /// daemon mirrors it in `crate::postal::set_enabled`.
+    #[serde(default)]
+    pub postal_enabled: bool,
+    /// Who accepts a Postal friend request (Rosson's 11-08 answer 2): the
+    /// Owner, and Admins too when the Owner turns this on. Default OFF.
+    #[serde(default)]
+    pub postal_admins_may_accept: bool,
     /// MasterControl air-gap: refuse Connect/cert/GitHub. Default OFF.
     /// Env `K2_AIRGAP` wins (garbage → on). Typed so the key survives
     /// the load/update round-trip (unknown keys are dropped).
@@ -1360,6 +1371,8 @@ impl Default for AppSettings {
             apps_auto_prepare: crate::deploy::AUTO_PREPARE_DEFAULT,
             apps_engine_heal: true,
             api_enabled: false,
+            postal_enabled: false,
+            postal_admins_may_accept: false,
             airgap: false,
             listen_lan: false,
             llm_accounts_storage: String::new(),

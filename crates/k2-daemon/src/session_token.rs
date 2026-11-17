@@ -732,6 +732,18 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/msg/who",
         // 0.46.16 `k2 msg verify` (Postal S2): the same rule as msg who.
         "/cli/msg/verify",
+        // 0.46.16 Postal (Beta): an agent reads its own address and friends,
+        // asks for a friend or the p5 link (cards), and removes or blocks
+        // its own friends. Claim and decide are people's: the handler
+        // refuses a passport with the words that say who does them.
+        "/cli/postal/status",
+        "/cli/postal/friends",
+        "/cli/postal/invite",
+        "/cli/postal/remove",
+        "/cli/postal/block",
+        "/cli/postal/link-p5",
+        "/cli/postal/claim",
+        "/cli/postal/decide",
         // 0.46.1 `k2 agent identity`: an agent reads and sets its OWN
         // color and picture. The handler pins the workspace to the passport
         // and refuses a name. `/cli/agent/handle` is NOT here (people and

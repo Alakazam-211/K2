@@ -2,7 +2,7 @@
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-transfers-http app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats provenance vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates suite-apps"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-transfers-http app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats provenance vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates suite-apps postal"
 
 _study_usage() {
     cat <<'EOF'
@@ -27,7 +27,7 @@ Topics:
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  app-databases  jobs  heartbeats
   folder-trust  email-notifications  box-move  board  chat-refresh  desktop  send-feedback  organization
-  agent-templates  provenance  suite-apps
+  agent-templates  provenance  suite-apps  postal
 EOF
 }
 
@@ -107,6 +107,7 @@ _study_title() {
         send-feedback) echo "Telling K2's makers about K2: k2 send-feedback, what is sent, agents' limits" ;;
         organization) echo "The Org Chart: orgs, heads and the daily bulletin" ;;
         agent-templates) echo "Agent templates: hire a type, save your own, upgrade" ;;
+        postal) echo "Postal: friends on other machines (Beta)" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
         projects) echo "K2 projects and who may change them" ;;
@@ -255,6 +256,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   send-feedback       Tell Alakazam Labs about K2 itself: what is sent, never sent, agents' limits
   organization        The Org Chart: read the bulletin daily, reach a head, heads and members
   agent-templates     Hire a type of agent, review first, save your own setup, upgrade safely
+  postal              Friends on other machines (Beta): address, cards, [postal …] mail, k2 msg verify
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -353,6 +355,7 @@ _study_page() {
         send-feedback) _study_page_send_feedback ;;
         organization) _study_page_organization ;;
         agent-templates) _study_page_agent_templates ;;
+        postal) _study_page_postal ;;
         *) return 1 ;;
     esac
 }

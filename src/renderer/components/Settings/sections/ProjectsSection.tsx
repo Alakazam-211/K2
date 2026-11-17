@@ -88,6 +88,8 @@ import { AgentsVirtualDesktopToggle } from './AgentsVirtualDesktopToggle'
 import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { modelSuggestionsForAgent } from '@/lib/model-choices'
 import { WorkspaceSettingsPage } from './WorkspaceSettingsPage'
+import { PostalTab } from './PostalTab'
+import { usePostalTabShown } from './postal-api'
 import {
   WORKSPACE_SETTINGS_TABS,
   advancedSectionFor,
@@ -1463,6 +1465,14 @@ function ProjectDetail({
     useSettingsStore.setState({ initialWorkspaceTab: null })
     setSettingsTab(tab)
   }
+  // Postal (Beta): the tab shows only while the server's Postal switch is on
+  // (`postal` in /boot-status features) and never for a Voice & Chat only
+  // login. When it goes (the switch went off), land on Agent.
+  const postalShown = usePostalTabShown(primaryScope())
+  const visibleTabs = WORKSPACE_SETTINGS_TABS.filter((id) => id !== 'postal' || postalShown)
+  useEffect(() => {
+    if (!postalShown && settingsTab === 'postal') setSettingsTab('agent')
+  }, [postalShown, settingsTab])
 
   // Close takeovers when the selected workspace changes — keep settingsTab
   // so the user stays on Context / Heartbeats / etc. while flipping agents.
@@ -1645,6 +1655,7 @@ function ProjectDetail({
     permissions: 'Permissions',
     context: 'Context',
     connections: 'Connections',
+    postal: 'Postal',
     skills: 'Skills',
     schedule: 'Heartbeats',
     mail: 'Mail',
@@ -1713,7 +1724,7 @@ function ProjectDetail({
           aria-label="Workspace settings"
           className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] w-full"
         >
-          {WORKSPACE_SETTINGS_TABS.map((id) => {
+          {visibleTabs.map((id) => {
             const active = settingsTab === id
             return (
               <button
@@ -1730,6 +1741,7 @@ function ProjectDetail({
                 }`}
               >
                 {tabLabel[id]}
+                {id === 'postal' ? <BetaTag className="ml-1.5" /> : null}
               </button>
             )
           })}
@@ -1901,6 +1913,8 @@ function ProjectDetail({
                 <ConnectedWorkspacesPanel projectId={project.id} />
               </PermissionAsksProvider>
             )}
+
+            {settingsTab === 'postal' && postalShown && <PostalTab project={project} scope={primaryScope()} />}
 
             {settingsTab === 'skills' && (
               <ProjectSkillsPanel projectPath={project.path} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />

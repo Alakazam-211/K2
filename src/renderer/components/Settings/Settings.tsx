@@ -39,6 +39,9 @@ import { primaryScope as settingsPrimaryScope } from '@/kessel/server-scope'
 import type { FeatureKey } from '@/lib/server-capabilities'
 import type { ReportedFeatureKey } from '@/lib/reported-features'
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
+import { POSTAL_MANIFEST } from './sections/PostalTab'
+import { POSTAL_SERVER_MANIFEST } from './sections/PostalServerSwitch'
+import { postalFeatureOn } from './sections/postal-api'
 import { lastOpenedProject } from './sections/workspace-tabs'
 import { useProjectsStore } from '@/stores/projects'
 import { PROJECT_GROUPS_MANIFEST } from '@/components/Projects/project-settings'
@@ -367,6 +370,10 @@ export default function Settings(): React.JSX.Element {
       ...STYLES_MANIFEST,
       ...WORKSPACE_SETTINGS_MANIFEST,
       ...PROJECTS_MANIFEST,
+      // Postal (Beta): the workspace tab's rows only while the server's
+      // switch is on; the switch itself (General → Server) always.
+      ...(postalFeatureOn() ? POSTAL_MANIFEST : []),
+      ...POSTAL_SERVER_MANIFEST,
       ...PROJECT_GROUPS_MANIFEST,
       ...TICKETS_MANIFEST,
       ...ORG_CHART_MANIFEST,

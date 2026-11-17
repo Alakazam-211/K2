@@ -486,6 +486,8 @@ fn decide_one(
         // A secret another agent sent (0.46.10): Deny declines the delivery,
         // through the decide route's own entry, as this person.
         super::actions::vault_incoming::on_denied(&denied, who);
+        // A Postal friend request (0.46.16): Deny rejects it, as this person.
+        super::actions::postal::on_denied(&denied, who);
         return Ok(denied);
     }
 

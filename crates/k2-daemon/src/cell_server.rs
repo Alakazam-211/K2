@@ -955,6 +955,15 @@ mod unix_impl {
                 };
                 from_cli(crate::desktop::routes::handle(&who, &req))
             }
+            // Postal (Beta, 0.46.16): this cell's agent's own address and
+            // friends; its invite and p5 link are cards.
+            p if crate::postal_routes::is_route(p) => {
+                if body.len() > crate::postal_routes::MAX_BODY {
+                    return from_cli(crate::postal_routes::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::postal_routes::handle(p, who, is_post, body, params))
+            }
             p if crate::hire_routes::is_route(p) => {
                 if body.len() > crate::hire_routes::MAX_BODY {
                     return from_cli(crate::hire_routes::too_large());

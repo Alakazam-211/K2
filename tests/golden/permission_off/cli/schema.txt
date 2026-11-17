@@ -95,6 +95,17 @@ exit: 0
       ]
     },
     {
+      "name": "msg verify",
+      "usage": "k2 msg verify <m_…|p_…> [--text \"...\" | --text-file <file|->] [--json]",
+      "description": "Check a message's label: who really sent it (the record K2 wrote from the sender's credential) and, given the text you saw, whether it is the text K2 delivered under that code (content: match | mismatch | unknown | not_checked). A code with no record (exit 4) proves nothing. Mismatch exits 1. Only deliveries to or from your own workspace. The text is hashed locally; the label line and K2's '> ' quote marks are taken off for you.",
+      "args": [{"name": "code", "required": true, "description": "m_ + 10 letters/digits from [from … · m_…], or p_ + 20 hex from [postal … · p_…]"}],
+      "flags": [
+        {"name": "--text", "arg": "text", "description": "The message text you saw."},
+        {"name": "--text-file", "arg": "file|-", "description": "The same from a file, or stdin with -."},
+        {"name": "--json", "arg": null, "description": "The daemon's answer as JSON."}
+      ]
+    },
+    {
       "name": "talk",
       "usage": "k2 talk <workspace> [\"text\"] [--read-only] [--answer <N>|--respond <y|n>] [--scout] [--answers <a,b,c>] [--from <name>] [--lines N] [--agent <name>] [--command \"<text>\"]",
       "description": "BETA. Fused read+send. Reads the peer's live screen FIRST (so you can't inject into a HITL blind), then delivers via msg. --answer/--respond DRIVE a single HITL; --scout surfaces a whole multi-Q form, --answers drives it (N digits + submit) in one call.",
@@ -7911,6 +7922,17 @@ exit: 0
       "flags": [
         {"name": "--all", "arg": null, "description": "Every job (owner or admin only)."},
         {"name": "--workspace", "arg": "name", "description": "People: which workspace (default: the one this folder is in)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON."}
+      ]
+    },
+    {
+      "name": "postal",
+      "usage": "k2 postal status|friends [--workspace <ws>] [--json] | k2 postal invite <handle::label.postal.bot> --why \"…\" | k2 postal remove|block <address> | k2 postal claim <address> | k2 postal accept|reject <request id> | k2 postal enable|disable | k2 postal admins-may-accept on|off | k2 postal link-p5",
+      "description": "Postal (Beta): friends for this agent on other machines (addresses handle::label.postal.bot), behind the owner's switch (off by default: postal_off). An agent reads its own address and friends, asks for a friend with invite (a card on its person's Thread; nothing is sent until a person allows it), and removes or blocks its own friends. Claim, accept/reject and the switch are people's (exit 3 for an agent). link-p5 asks to link p5, Postal's client on this machine (a card; works while Postal is off). The Postal network connection comes in a later release. See k2 study postal.",
+      "args": [{"name": "command", "required": true, "description": "status | friends | invite | remove | block | claim | accept | reject | enable | disable | admins-may-accept | settings | link-p5"}, {"name": "address_or_id", "required": false, "description": "A Postal address (invite, remove, block, claim) or a request id (accept, reject)"}],
+      "flags": [
+        {"name": "--why", "arg": "text", "description": "invite: what you want to do together; your person reads it on the card."},
+        {"name": "--workspace", "arg": "ws", "description": "People: which workspace (default: the one this folder is in). An agent always gets its own."},
         {"name": "--json", "arg": null, "description": "The daemon's JSON."}
       ]
     },

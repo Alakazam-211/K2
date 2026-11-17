@@ -33,6 +33,7 @@ app-wallet.sh
 remote-session.sh
 msg-whoami-done.sh
 msg-verify.sh
+postal.sh
 thread.sh
 browser.sh
 whats-new.sh
@@ -96,6 +97,7 @@ schema/api-key.entries
 schema/migrate.entries
 schema/doc.entries
 schema/job.entries
+schema/postal.entries
 schema-tail.sh
 explain.sh
 setup.sh

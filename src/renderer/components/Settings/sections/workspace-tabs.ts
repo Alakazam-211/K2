@@ -9,6 +9,7 @@ export type WorkspaceSettingsTab =
   | 'permissions'
   | 'context'
   | 'connections'
+  | 'postal'
   | 'skills'
   | 'schedule'
   | 'mail'
@@ -19,6 +20,10 @@ export const WORKSPACE_SETTINGS_TABS: WorkspaceSettingsTab[] = [
   'permissions',
   'context',
   'connections',
+  // Postal (Beta, prd-postal-in-k2-v1 §5.5 / P34): shown only while the
+  // server lists `postal` in /boot-status features (ProjectsSection hides it
+  // otherwise, and for a Voice & Chat only login).
+  'postal',
   'skills',
   'schedule',
   'mail',
@@ -77,6 +82,12 @@ const OTHER_TABS: Record<string, WorkspaceSettingsTab> = {
   'projects.context-stack': 'context',
   'projects.relations': 'connections',
   'projects.agents-can-create-connections': 'connections',
+  'projects.postal': 'postal',
+  'projects.postal-friends': 'postal',
+  'projects.postal-invitations': 'postal',
+  'projects.postal-claim': 'postal',
+  'projects.postal-invite': 'postal',
+  'projects.postal-routing': 'postal',
   'projects.agents': 'skills',
   'projects.heartbeat': 'schedule',
   'projects.worktrees': 'advanced',

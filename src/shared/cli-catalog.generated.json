@@ -1774,6 +1774,11 @@
     "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. The password is temporary: at their first sign-in K2 asks the person to choose their own (--keep-password: not temporary, e.g. your own login). member and voice_chat are made at that role in the add; owner/admin are set by set-role after it. voice_chat (Voice & Chat only) joins voice rooms and uses only what is shared with it: --share-agent (their own conversation with that agent; its memory is shared by every login and its own Thread, so a dedicated demo agent only) and --share-garden (a Garden, read-only on a phone). A voice_chat password is fixed and kept unless --no-fixed-password."
    },
    {
+    "name": "users audit",
+    "usage": "k2 users audit [--tail N] [--json]",
+    "description": "The last N auth-audit records (GET /cli/users/audit?tail=N; owner token or an Owner login): login, change-password, logout, set-password and add-user, each with its time, outcome, user, ingress, ip and client. The records live in ~/.k2/auth-audit.jsonl on the box."
+   },
+   {
     "name": "users set-role",
     "usage": "k2 users set-role <username> owner|admin|member|voice_chat [--fixed-password|--no-fixed-password]",
     "description": "Change a login's role (POST /cli/users/set-role). The owner changes any role; an Admin only member <-> voice_chat. Into or out of voice_chat applies at once with no sign-out (and moving someone to voice_chat ends their paired phones); other changes sign the person out. Exit 3 when refused."

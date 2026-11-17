@@ -907,10 +907,10 @@ USAGE
                                 keeps it with no flag. --keep-password:
                                 the person keeps the password you typed.
   k2 users audit [--tail N] [--json]
-                                Last N auth-audit records (login /
-                                change-password / logout / set-password /
-                                add-user:
-                                outcome, ingress, ip, client). Owner only.
+                                Last N auth-audit records (login,
+                                change-password, logout, set-password,
+                                add-user), each with its time, outcome,
+                                user, ingress, ip and client. Owner only.
                                 Default 50, max 1000. ~/.k2/auth-audit.jsonl
   k2 users set-can-clone <username> on|off
                                 Settings → Admin Access → "Can clone" (owner

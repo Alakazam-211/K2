@@ -67,6 +67,16 @@
       ]
     },
     {
+      "name": "users audit",
+      "usage": "k2 users audit [--tail N] [--json]",
+      "description": "The last N auth-audit records (GET /cli/users/audit?tail=N; owner token or an Owner login): login, change-password, logout, set-password and add-user, each with its time, outcome, user, ingress, ip and client. The records live in ~/.k2/auth-audit.jsonl on the box.",
+      "args": [],
+      "flags": [
+        {"name": "--tail", "arg": "N", "description": "How many records: 1..1000, default 50 (the daemon clamps)."},
+        {"name": "--json", "arg": null, "description": "Print the daemon body {events,tail,path}."}
+      ]
+    },
+    {
       "name": "users set-role",
       "usage": "k2 users set-role <username> owner|admin|member|voice_chat [--fixed-password|--no-fixed-password]",
       "description": "Change a login's role (POST /cli/users/set-role). The owner changes any role; an Admin only member <-> voice_chat. Into or out of voice_chat applies at once with no sign-out (and moving someone to voice_chat ends their paired phones); other changes sign the person out. Exit 3 when refused.",

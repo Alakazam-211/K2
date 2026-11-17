@@ -14,6 +14,7 @@
 //     labels form, Insert; the new block is selected; refusals in words;
 //   - two people changing different labels of one block from the same
 //     version both land; the same label refuses the second;
+//   - Undo (your own latest change) takes back each of these;
 //   - each runs a dry run, then the commit with --expect, and shows as yours
 //     with Undo; a refusal says why and the ghost goes back;
 //   - a kind the verbs can't change has none of these.
@@ -407,5 +408,60 @@ describe('labels of one block, changed by two people', () => {
     await relabel('NO', 'D-02')
     expect((await screen.findByTestId('dxf-edit-message')).textContent).toBe('Not changed. Someone changed this since you looked. The drawing has been refreshed.')
     expect(world.edits.calls).toHaveLength(1)
+  })
+})
+
+describe('undo', () => {
+  const undo = async () => {
+    const digest = world.edits.calls[1][world.edits.calls[1].indexOf('--expect') + 1]
+    const revert = vi.spyOn(world.changes, 'revert')
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('dxf-change-undo'))
+    })
+    expect(revert).toHaveBeenCalledWith(PATH, 8, digest)
+  }
+  const x1 = (h: string) => Number(shape(h).getAttribute('x1'))
+
+  it('takes back a rotate and a scale', async () => {
+    for (const go of [() => fireEvent.click(screen.getByTestId('dxf-rotate-left')), () => {
+      fireEvent.change(screen.getByTestId('dxf-scale-factor'), { target: { value: '3' } })
+      fireEvent.click(screen.getByTestId('dxf-scale-go'))
+    }]) {
+      await open()
+      click('@h:41')
+      await act(async () => go())
+      await waitFor(() => expect(x1('@h:41')).not.toBeCloseTo(0, 6))
+      await undo()
+      await waitFor(() => expect(screen.getByTestId('dxf-change-words').textContent).toBe('You undid a line on A-WALL'))
+      await waitFor(() => expect(x1('@h:41')).toBeCloseTo(0, 6))
+      cleanup()
+    }
+  })
+
+  it('takes back a text’s new value', async () => {
+    await open()
+    click('@h:5C')
+    const input = screen.getByTestId('dxf-text-input')
+    fireEvent.change(input, { target: { value: 'ROOM 102' } })
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' })
+    })
+    await waitFor(() => expect((screen.getByTestId('dxf-text-input') as HTMLInputElement).value).toBe('ROOM 102'))
+    await undo()
+    await waitFor(() => expect((screen.getByTestId('dxf-text-input') as HTMLInputElement).value).toBe('ROOM 101'))
+  })
+
+  it('takes back a placed block: it’s gone again', async () => {
+    await open()
+    fireEvent.click(screen.getByTestId('dxf-insert-block'))
+    fireEvent.click(screen.getAllByTestId('dxf-insert-choice')[1])
+    await act(async () => {
+      fireEvent.pointerDown(sheet(), { pointerId: 1, button: 0, ...client(40, 0) })
+      fireEvent.pointerUp(sheet(), { pointerId: 1, ...client(40, 0) })
+    })
+    await waitFor(() => expect(screen.getByTestId('dxf-shapes').querySelector('[data-h="@h:C01"]')).not.toBeNull())
+    await undo()
+    await waitFor(() => expect(screen.getByTestId('dxf-shapes').querySelector('[data-h="@h:C01"]')).toBeNull())
+    expect(screen.getByTestId('dxf-change-words').textContent).toBe('You undid a block on 0')
   })
 })

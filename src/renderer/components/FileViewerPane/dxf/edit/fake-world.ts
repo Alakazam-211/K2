@@ -308,7 +308,7 @@ export function fakeCadWorld(
       async change() {
         return null
       },
-      // Undo-last: the head only, against its digest; it answers the undo's change.
+      // Undo-last: the head only, against its digest, whichever verb made it; it answers the undo's change.
       async revert(_p, version, expectDigest) {
         const h = history.get(version)
         const refuse = (code: string, hint: string) => revertRefused(new DaemonHttpError(hint, 409, code, { code, hint, exit: 2 }))
@@ -322,9 +322,10 @@ export function fakeCadWorld(
         const changed = now.filter((r) => !h.before.includes(r))
         const to = bump(h.before.filter((r) => changed.some((c) => c.h === r.h)), ['geom'])
         headDigest = `sha256:fake-undo-${to}`
+        // What the version changed goes back; what it added (a placed block) goes.
         const entities = changed.map((r) => {
-          const was = h.before.find((b) => b.h === r.h)!
-          return { address: r.h, op: 'changed', kind: r.kind, layer: r.layer, owner: 'model', fields: ['geom'], bbox_before: r.bbox, bbox_after: was.bbox, bbox_q: r.bbox_q ?? 'exact', version: to, by: 'p_you', identity: null }
+          const was = h.before.find((b) => b.h === r.h)
+          return { address: r.h, op: was ? 'changed' : 'removed', kind: r.kind, layer: r.layer, owner: 'model', fields: ['geom'], bbox_before: r.bbox, bbox_after: was?.bbox ?? null, bbox_q: r.bbox_q ?? 'exact', version: to, by: 'p_you', identity: null }
         })
         return revertDone({ ok: true, path: _p, reverted: version, to, version: to, digest: headDigest, change: { schema: 'cad.change/1', format: 'dxf', from: version, to, pairing: 'kept', versions: [], entities, tables: [], blocks: [], verb: 'undo' } })
       },

@@ -28,6 +28,7 @@
 #
 # Hard-fails when a literal `__lead__` sneaks back into a non-exempt
 # production file.
+# bash-only: greps cli/k2 as text with the rest of the tree; never runs it.
 
 set -euo pipefail
 

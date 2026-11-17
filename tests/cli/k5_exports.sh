@@ -10,12 +10,11 @@
 #      first on PATH, which logs the two names (paths only) and runs the
 #      real python3.
 # No daemon (a dead port), HOME is a temp dir.
+# bash-only: runs a block cut out of cli/k2 and watches the bash's python3 children.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
-[ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not executable" >&2; exit 1; }
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 REAL_PY="$(command -v python3)" || { echo "FAIL: python3 required" >&2; exit 1; }
 
 pass=0

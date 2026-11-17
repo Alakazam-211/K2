@@ -18,12 +18,11 @@
 # request, the transport, method, path, the X-K5-Cli-Via values and a
 # digest of the rest (headers it reads, body hash, whether a token came).
 # No token values are logged. No live K2, HOME is a temp dir.
+# bash-only: pins the bash side of the Rust hand-over, read from a bash -x trace.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
-[ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not executable" >&2; exit 1; }
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 command -v python3 >/dev/null || { echo "FAIL: python3 required" >&2; exit 1; }
 command -v curl >/dev/null || { echo "FAIL: curl required" >&2; exit 1; }
 

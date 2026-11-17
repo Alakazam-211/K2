@@ -8,12 +8,11 @@
 #      does): SESSION_ID and CELL.
 #   3. k2 whoami against a stub daemon: SESSION_ID, CELL, SIDECAR_NAME and
 #      PRIMARY reach the query (token and project dropped; no token is logged).
+# bash-only: reads a bash -x trace of cli/k2 and lifts a function out of it.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
-[ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not executable" >&2; exit 1; }
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 command -v python3 >/dev/null || { echo "FAIL: python3 required" >&2; exit 1; }
 
 pass=0

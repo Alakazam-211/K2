@@ -9,6 +9,7 @@
 # The stage H drop-in (k2_root_proto::templates::handoff_dropin) is
 # covered by its Rust tests.
 # Run with: bash tests/cli/daemon_unit_oompolicy.sh
+# bash-only: reads cli/k2 as text with the other unit writers; never runs it.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

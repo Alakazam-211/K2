@@ -99,6 +99,7 @@ import { callRecordLine } from '@/lib/home-chat/calls'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { serverLabelFor } from './serverLabel'
 import { HomeChatErrorState } from './HomeChatStates'
+import { useKeepNewestInView } from './useKeepNewestInView'
 import { formerPersonName } from '@/lib/home-chat/known-names'
 
 const PAGE = 50
@@ -285,6 +286,12 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
     following: () => followingRef.current,
     wrote: win.wrote,
   })
+  // The box grows (reply bar, typing line, a longer draft): the newest
+  // message stays in view when the list was at it.
+  useKeepNewestInView(
+    () => scrollRef.current,
+    () => followingRef.current,
+  )
   const runInputs = useMemo(
     () => (messages ?? []).map((m) => ({ mine: !!me && m.authorId === me, from: m.authorId, at: m.createdAt })),
     [messages, me],

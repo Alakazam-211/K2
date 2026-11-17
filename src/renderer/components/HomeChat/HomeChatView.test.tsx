@@ -352,3 +352,60 @@ describe('a DM whose person has left', () => {
   })
 })
 
+// The box grows (the reply bar, the typing line, a longer draft) and the
+// list above it gets shorter. When the list was at its newest message, it
+// keeps that message in view instead of letting the box cover it; when you
+// had scrolled up to read, it leaves you where you were.
+describe('the newest message stays in view when the box grows', () => {
+  const observed = new Map<Element, Array<() => void>>()
+  const RealRO = globalThis.ResizeObserver
+  beforeEach(() => {
+    observed.clear()
+    globalThis.ResizeObserver = class {
+      cb: () => void
+      constructor(cb: () => void) {
+        this.cb = cb
+      }
+      observe(el: Element): void {
+        observed.set(el, [...(observed.get(el) ?? []), this.cb])
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    } as unknown as typeof ResizeObserver
+  })
+  afterEach(() => {
+    globalThis.ResizeObserver = RealRO
+  })
+
+  function sized(el: HTMLElement, box: { clientHeight: number; scrollHeight: number }): void {
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => box.clientHeight })
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => box.scrollHeight })
+  }
+
+  it('follows the bottom when the list was at it', async () => {
+    await open()
+    const list = document.querySelector<HTMLElement>('[data-zen-conversation-body]')!
+    const box = { clientHeight: 600, scrollHeight: 2000 }
+    sized(list, box)
+    list.scrollTop = 1400
+    fireEvent.scroll(list)
+    expect(observed.has(list)).toBe(true)
+    // The reply bar appears: the list is 60px shorter.
+    box.clientHeight = 540
+    act(() => observed.get(list)!.forEach((cb) => cb()))
+    expect(list.scrollTop).toBe(2000)
+  })
+
+  it('leaves a reader who scrolled up where they are', async () => {
+    await open()
+    const list = document.querySelector<HTMLElement>('[data-zen-conversation-body]')!
+    const box = { clientHeight: 600, scrollHeight: 2000 }
+    sized(list, box)
+    list.scrollTop = 300
+    fireEvent.scroll(list)
+    box.clientHeight = 540
+    act(() => observed.get(list)!.forEach((cb) => cb()))
+    expect(list.scrollTop).toBe(300)
+  })
+})
+

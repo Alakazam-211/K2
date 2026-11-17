@@ -24,7 +24,7 @@ vi.mock('@/lib/daemon-cli', async (orig) => ({ ...(await orig<typeof import('@/l
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => undefined), listen: vi.fn(async () => () => undefined) }))
 
-import type { LiveClientFrame, LiveClose, LiveServerFrame, LiveTransport, LiveWelcome } from '@/lib/docs-live-transport'
+import { LiveConnectError, parseClose, type LiveClientFrame, type LiveClose, type LiveServerFrame, type LiveTransport, type LiveWelcome } from '@/lib/docs-live-transport'
 import type { ServerScope } from '@/kessel/server-scope'
 import type { TappedWelcome } from '@/lib/editor/live/transport-tap'
 import { LiveEditorFile } from './LiveEditorFile'
@@ -236,5 +236,66 @@ describe('read only and live off', () => {
     act(() => t.end({ reason: 'closed', retry: false, code: 'core_off' }))
     await waitFor(() => expect(onCoreOff).toHaveBeenCalledTimes(1))
     expect(screen.queryByTestId('ed-save-notice')).toBeNull()
+  })
+})
+
+describe('a refused open (closed before any welcome)', () => {
+  class RefusingTransport extends ScriptedTransport {
+    constructor(private frame: Record<string, unknown>) {
+      super()
+    }
+    override connect(): Promise<LiveWelcome> {
+      this.connects += 1
+      return Promise.reject(new LiveConnectError(parseClose(this.frame)))
+    }
+  }
+  const WHY = ".k2/agent/work/page.html is in the workspace's private .k2 folder, where only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs"
+  const refusal = { type: 'closed', reason: 'declined', retry: false, code: 'protected', message: WHY }
+
+  it('the preview asks the host for the file as read (null, never the empty live text), and the notice says the real reason', async () => {
+    const asked: (string | null)[] = []
+    const t = new RefusingTransport(refusal)
+    render(
+      <LiveEditorFile
+        scope={scope}
+        filePath="/w/.k2/agent/work/page.html"
+        kind="code"
+        roomReadOnly={null}
+        onCoreOff={() => undefined}
+        renderPreview={(text) => {
+          asked.push(text)
+          return <div data-testid="pv">{text ?? '<h1>the page as read</h1>'}</div>
+        }}
+        width={1440}
+        createTransport={() => t}
+      />,
+    )
+    await waitFor(() => expect(screen.getByTestId('ed-live-file').dataset.liveState).toBe('closed'))
+    expect(screen.getByTestId('ed-save-notice').textContent).toContain(`This file can’t be edited live: ${WHY}.`)
+    expect(screen.getByTestId('ed-save-notice').textContent).not.toContain('too large, or not text')
+    fireEvent.click(screen.getByRole('radio', { name: /Preview/ }))
+    expect((await screen.findByTestId('pv')).textContent).toBe('<h1>the page as read</h1>')
+    expect(asked.length).toBeGreaterThan(0)
+    expect(asked.every((a) => a === null)).toBe(true)
+    expect(t.connects).toBe(1)
+  })
+
+  it('tells the host, once, with the daemon’s code and words', async () => {
+    const onRefused = vi.fn()
+    const t = new RefusingTransport(refusal)
+    render(<LiveEditorFile scope={scope} filePath="/w/.k2/agent/work/page.html" kind="code" roomReadOnly={null} onCoreOff={() => undefined} onRefused={onRefused} width={1440} createTransport={() => t} />)
+    await waitFor(() => expect(onRefused).toHaveBeenCalledTimes(1))
+    expect(onRefused.mock.calls[0][0]).toEqual({ reason: 'declined', code: 'protected', message: WHY })
+  })
+
+  it('a live file that closes later is not a refusal (the host keeps the live view)', async () => {
+    const onRefused = vi.fn()
+    const t = new ScriptedTransport()
+    render(<LiveEditorFile scope={scope} filePath="/w/README.md" kind="markdown" roomReadOnly={null} onCoreOff={() => undefined} onRefused={onRefused} width={1440} createTransport={() => t} />)
+    await waitFor(() => expect(screen.getByTestId('ed-live-file').dataset.liveState).toBe('live'))
+    act(() => t.end({ reason: 'declined', retry: false, code: 'too_large' }))
+    await waitFor(() => expect(screen.getByTestId('ed-live-file').dataset.liveState).toBe('closed'))
+    expect(screen.getByTestId('ed-save-notice').textContent).toContain('This file can’t be edited live: it’s too large.')
+    expect(onRefused).not.toHaveBeenCalled()
   })
 })

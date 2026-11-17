@@ -59,6 +59,7 @@
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { readFileText } from '@/lib/read-file-text'
 import { tryFocusPreferredInputInDashboardPane } from '@/lib/workspace-switch-focus'
 import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
 import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
@@ -238,7 +239,7 @@ type DocPhase =
   | { kind: 'ready'; content: string }
   | { kind: 'missing'; reason: string | null }
 
-function HtmlDocPane({
+export function HtmlDocPane({
   filePath,
   workspaceId,
 }: {
@@ -278,10 +279,8 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
       filePath,
       intervalMs: FILE_POLL_INTERVAL,
       immediate: true,
-      read: async () => {
-        const result = await daemonCliGet<{ content: string }>(primaryScope(), 'fs/read-file', { path: filePath })
-        return result.content
-      },
+      // Checked: a read that isn't the file's text is the error tile, never "undefined".
+      read: () => readFileText(primaryScope(), filePath),
       apply: (content) => {
         if (cancelled) return
         setRetrying(false)

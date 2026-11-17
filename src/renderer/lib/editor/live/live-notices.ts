@@ -56,6 +56,54 @@ export const askAccess = (owner: string | null): string => (owner ? `Ask ${owner
 /** Why Write is off in a read-only live file. */
 export const readOnlyReason = (owner: string | null): string => `You can view this file but not edit it. ${askAccess(owner)}`
 
+/** The daemon's `message` on a close: on the close itself (a close after
+ *  the welcome), or on the refusal's `close` (a `LiveConnectError`: a
+ *  refused open, whose own Error message doesn't survive the editor copying
+ *  its fields). Without it a refused open loses the daemon's reason. */
+export function closeMessage(c: unknown): string | undefined {
+  const o = c as { message?: unknown; close?: { message?: unknown } } | null
+  const m = typeof o?.message === 'string' ? o.message : typeof o?.close?.message === 'string' ? o.close.message : undefined
+  return m && m.trim() ? m : undefined
+}
+
+const LEAD = 'This file can’t be edited live: '
+const sentence = (s: string): string => (/[.!?]$/.test(s) ? s : `${s}.`)
+
+/** A live open the daemon refused (`closed {declined}`), by its code: each
+ *  refusal in its own words, never "too large, or not text" for a rule. The
+ *  daemon's own words where the code is broad (`protected`: the vault, git's
+ *  folder or the workspace's private `.k2` folder) or one this build doesn't
+ *  know; null when the close says nothing (no code, no message). */
+export function declinedWords(c: { code?: string; message?: string }): string | null {
+  const why = c.message?.trim() || null
+  switch (c.code) {
+    case 'secret':
+      return `${LEAD}it looks like it holds a secret.`
+    case 'generated':
+      return `${LEAD}K2 writes it itself. Edit its source instead.`
+    case 'not_a_text_doc':
+      return `${LEAD}it isn’t text.`
+    case 'too_large':
+      return `${LEAD}it’s too large.`
+    case 'not_utf8':
+      return `${LEAD}it isn’t UTF-8 text.`
+    case 'binary':
+      return `${LEAD}it holds binary data, not text.`
+    case 'mixed_line_endings':
+      return `${LEAD}its lines end in more than one way (mixed line endings).`
+    case 'workspace_not_found':
+      return `${LEAD}it isn’t inside a workspace on this server.`
+    case 'workspace_mismatch':
+    case 'path_escapes':
+    case 'other_workspace':
+      return `${LEAD}it’s outside this workspace.`
+    case 'board_file':
+      return `${LEAD}it’s a Board file.`
+    default:
+      return why ? `${LEAD}${sentence(why)}` : null
+  }
+}
+
 /** Why a closed live editor stopped (not the core turned off: that hands over to the plain editor). */
 export function closedWords(c: LiveDocClose): string {
   switch (c.code === 'docs_unavailable' ? c.code : c.reason) {
@@ -72,7 +120,7 @@ export function closedWords(c: LiveDocClose): string {
     case 'moved':
       return c.path ? `This file was renamed to ${c.path}. Open it there.` : 'This file was renamed. Open it at its new name.'
     case 'declined':
-      return 'This file can’t be edited live: too large, or not text.'
+      return declinedWords(c) ?? 'This file can’t be edited live: too large, or not text.'
     case 'not_found':
       return 'This file is gone.'
     case 'auth':

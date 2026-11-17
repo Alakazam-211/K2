@@ -25,7 +25,7 @@ import { useLiveShell, useTabWidth } from '@/components/LiveView/shell/useLiveSh
 import type { ServerScope } from '@/kessel/server-scope'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import type { LiveTransport } from '@/lib/docs-live-transport'
-import type { LiveDocSnapshot } from '@/lib/editor/live/live-doc-source'
+import type { LiveDocClose, LiveDocSnapshot } from '@/lib/editor/live/live-doc-source'
 import { liveNoticeView, readOnlyReason, type LiveActionId } from '@/lib/editor/live/live-notices'
 import { LIVE_UI, liveReadOnly, liveSaveStatus, pickLiveNotice, showsMerged, type LiveUi, type SaveFlow } from '@/lib/editor/live/pick-notice'
 import { replaceText } from '@/lib/editor/live/replace'
@@ -90,8 +90,15 @@ export interface LiveEditorFileProps {
   roomReadOnly: string | null
   /** The core was turned off mid-session: the plain editor carries on. */
   onCoreOff: () => void
-  /** A file with its own preview (CSV, HTML…): drawn from the live text. */
-  renderPreview?: (text: string) => React.ReactNode
+  /** A file with its own preview (CSV, HTML…): drawn from the live text, or
+   *  from `null` while there is none (before the welcome, or the open was
+   *  refused): the host then draws the file as it read it. A refused live
+   *  session never blanks the preview. */
+  renderPreview?: (text: string | null) => React.ReactNode
+  /** The daemon refused this file before it opened live (`closed {declined}`
+   *  with no welcome: a protected folder, a secret, not text…): the host
+   *  opens it the usual way and says why. Without it the closed notice stays. */
+  onRefused?: (closed: LiveDocClose) => void
   width?: number
   createTransport?: (scope: ServerScope, doc: { path: string }) => LiveTransport
 }
@@ -101,7 +108,7 @@ const linesOf = (c: LiveChange): { first: number; last: number } | null => {
   return m ? { first: Number(m[1]), last: Number(m[2]) } : null
 }
 
-export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff, renderPreview, width, createTransport }: LiveEditorFileProps): React.JSX.Element {
+export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff, renderPreview, onRefused, width, createTransport }: LiveEditorFileProps): React.JSX.Element {
   const markdown = kind === 'markdown'
   const doc = useLiveDoc({ scope, filePath, markdown, onCoreOff, createTransport })
   const [outer, tabWidth] = useTabWidth(width)
@@ -121,6 +128,14 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
     setText(t)
     setCursor(c)
   }, [])
+  // The live text exists only once the daemon welcomed this tab.
+  const everLive = snap.tier === 'live'
+  const closed = snap.closed
+  const refusedRef = useRef(onRefused)
+  refusedRef.current = onRefused
+  useEffect(() => {
+    if (closed && closed.reason === 'declined' && !everLive) refusedRef.current?.(closed)
+  }, [closed, everLive])
 
   // What you did about the notices (the data stays in the source).
   const [ui, setUi] = useState<LiveUi>(LIVE_UI)
@@ -361,7 +376,7 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
                 ring={presence.ring}
               />
             )}
-            renderPreview={renderPreview ? () => renderPreview(text) : undefined}
+            renderPreview={renderPreview ? () => renderPreview(everLive ? text : null) : undefined}
           />
         </FrameLiveContext.Provider>
       </FrameSaveContext.Provider>

@@ -30,6 +30,7 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { createDaemonLiveTransport } from '@/lib/docs-live-daemon'
 import type { LiveTransport } from '@/lib/docs-live-transport'
 import { wireLiveHost } from '@/components/LiveEditor/host-wiring'
+import { closeMessage, declinedWords } from '@/lib/editor/live/live-notices'
 
 /** How a Live view ended for good (the editor closed and won't reconnect). */
 export interface LiveDocClosed {
@@ -38,15 +39,6 @@ export interface LiveDocClosed {
   path?: string
   /** The daemon's own words, when its `closed` frame had them. */
   message?: string
-}
-
-/** The daemon's `message` on a close: on the close itself (a close after
- *  the welcome), or on the refusal's `close` (a `LiveConnectError`, whose
- *  own Error message doesn't survive the editor copying its fields). */
-function closeMessage(c: unknown): string | undefined {
-  const o = c as { message?: unknown; close?: { message?: unknown } } | null
-  const m = typeof o?.message === 'string' ? o.message : typeof o?.close?.message === 'string' ? o.close.message : undefined
-  return m && m.trim() ? m : undefined
 }
 
 export interface LiveDocViewProps {
@@ -98,7 +90,7 @@ export function closedText(c: LiveDocClosed): string {
     case 'moved':
       return c.path ? `This file was renamed to ${c.path}. Open it there.` : 'This file was renamed. Open it at its new name.'
     case 'declined':
-      return 'This file can’t be edited live (too large, or not text K2 can edit live).'
+      return declinedWords(c) ?? 'This file can’t be edited live (too large, or not text K2 can edit live).'
     case 'not_found':
       return 'This file is gone.'
     case 'auth':

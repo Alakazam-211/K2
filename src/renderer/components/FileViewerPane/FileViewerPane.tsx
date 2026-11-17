@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useCallback, useRef, useLayoutEffect, useImperativeHandle } from 'react'
-import { daemonCliGet, daemonCliPost, isHostSwitchedError } from '@/lib/daemon-cli'
+import { daemonCliPost, isHostSwitchedError } from '@/lib/daemon-cli'
 import { isRemoteMacTmpPath } from '@/lib/remote-mac-tmp'
 import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
 // 0.39.0 bundle-perf: PDFViewer pulls in pdfjs-dist (~600KB gzip),
@@ -51,6 +51,9 @@ import { isPinnedTab } from '@/lib/pinned-tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { FILE_POLL_INTERVAL } from '@shared/constants'
 import { useLiveDocCore } from '@/lib/live-doc-core'
+import type { LiveDocClose } from '@/lib/editor/live/live-doc-source'
+import { closedWords } from '@/lib/editor/live/live-notices'
+import { readFileText } from '@/lib/read-file-text'
 import { Button } from '@/components/ui'
 import { AnyFileDocPanel } from './AnyFileDocPanel'
 import { LivePreviewEntry } from '@/components/LiveView/LivePreviewEntry'
@@ -275,7 +278,12 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const [liveEpoch, setLiveEpoch] = useState(0)
   const [liveEnded, setLiveEnded] = useState(false)
   const liveCore = useLiveDocCore(room.scope, filePath, liveEpoch)
-  const liveOn = liveCore.status === 'live' && textLock === null && !isDirty
+  // The daemon refused this file's live open (a protected folder, a secret,
+  // not text…): it opens the usual way, saying why, until the tab opens
+  // another file. Its words name the real reason (closedWords).
+  const [liveRefused, setLiveRefused] = useState<{ path: string; words: string } | null>(null)
+  const refusedWords = liveRefused?.path === filePath ? liveRefused.words : null
+  const liveOn = liveCore.status === 'live' && textLock === null && !isDirty && refusedWords === null
   // The "Any other file" core: the usual view, with the panel beside it.
   const anyFile = liveCore.status === 'any-file'
   const [anyFilePanelOpen, setAnyFilePanelOpen] = useState(true)
@@ -434,10 +442,10 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     setLoading(true)
     setError(null)
     try {
-      const result = await daemonCliGet<{ content: string }>(room.scope, 'fs/read-file', { path: filePath })
+      const text = await readFileText(room.scope, filePath)
       if (gen !== loadGenRef.current) return
       if (room.scope.connectionKey !== startedKey) return
-      textReadOk(result.content, false)
+      textReadOk(text, false)
     } catch (err) {
       if (gen !== loadGenRef.current) return
       if (isHostSwitchedError(err)) return
@@ -567,10 +575,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       filePath,
       intervalMs: FILE_POLL_INTERVAL,
       immediate: false,
-      read: async () => {
-        const result = await daemonCliGet<{ content: string }>(room.scope, 'fs/read-file', { path: filePath })
-        return result.content
-      },
+      read: () => readFileText(room.scope, filePath),
       apply: (next) => textReadOk(next, true),
       // A file that turned binary locks; one that vanished is marked
       // deleted (no silent recreate); transient failures stay quiet.
@@ -804,6 +809,13 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     </div>
   )
 
+  // Live editing refused this file: the usual view, and why.
+  const refusedBar = refusedWords !== null && (
+    <div role="status" data-testid="file-viewer-live-refused" className="border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1 text-[11px] text-[var(--color-text-secondary)] flex-shrink-0">
+      {refusedWords} It opens the usual way.
+    </div>
+  )
+  const onLiveRefused = (c: LiveDocClose): void => setLiveRefused({ path: filePath, words: closedWords(c) })
   const onLiveCoreOff = (): void => void (setLiveEnded(true), setLiveEpoch((e) => e + 1), loadFile()) // the core went off: the file as the daemon wrote it back
   const frameRoute = editorFrameRoute(editorKind, { locked: textLock !== null, liveOn, anyFile, deck: liveCore.status === 'deck' }) // the new editors: no toolbar, no path bar
   const filePreview = (text: string, saved: string) => hasFilePreview(category) && <FilePreview category={category} filePath={filePath} text={text} saved={saved} readError={readError} contentRef={contentRef} />
@@ -815,14 +827,22 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       <div ref={rootRef} className="flex h-full w-full flex-col bg-[var(--color-bg)] no-drag" tabIndex={-1}>
         <Suspense fallback={null}>
           {pdfTab || !editorKind ? <PDFViewer filePath={filePath} /> : frameRoute === 'live' ? (
-            <LiveEditorFile key={filePath} {...{ filePath, kind: editorKind, scope: room.scope }} roomReadOnly={roReason} onCoreOff={onLiveCoreOff} renderPreview={preview ? (t) => filePreview(t, t) : undefined} />
+            <LiveEditorFile
+              key={filePath}
+              {...{ filePath, kind: editorKind, scope: room.scope }}
+              roomReadOnly={roReason}
+              onCoreOff={onLiveCoreOff}
+              onRefused={onLiveRefused}
+              // No live text (not welcomed yet, or refused): the page as read.
+              renderPreview={preview ? (t) => filePreview(t ?? content, t ?? content) : undefined}
+            />
           ) : (
             <EditorFile
               key={filePath}
               {...{ filePath, kind: editorKind, scope: room.scope, base: content, text: editedContent ?? content, setBase: setContent, setText: setEditedContent, cursor: cursorInfo, locked: textLock !== null, readOnly: roReason }}
               baseAbsent={readOkPathRef.current !== filePath}
               saveNew={isNewUntitledFile(filePath, readOkPathRef.current) ? (t) => saveFile(t) : undefined}
-              notice={<>{liveEnded && !liveOn && <LiveOffNotice onDismiss={() => setLiveEnded(false)} />}{rereadBar}</>}
+              notice={<>{refusedBar}{liveEnded && !liveOn && <LiveOffNotice onDismiss={() => setLiveEnded(false)} />}{rereadBar}</>}
               renderEditor={(o) => codeEditor(o, o.readOnly)}
               renderPreview={preview ? () => preview : undefined}
             />
@@ -1027,6 +1047,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </div>
       )}
 
+      {refusedBar}
       {liveEndedBar}
 
       {/* Tier 0 kept both versions after another program's save (once per copy) */}

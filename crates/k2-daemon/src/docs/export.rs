@@ -1335,7 +1335,8 @@ fn run_job(job: &Job, s: &JobSpec) -> Result<Value, CliResponse> {
         "codec": codec_str(copy.codec),
         "size": bytes,
         "name": name,
-        "placed": placed.map(|(ws, rel, abs)| json!({ "workspace": ws, "path": rel, "abs": abs.to_string_lossy() })),
+        // `abs` as people read it: on Windows `D:\…`, never the `\\?\` form canonicalize gives.
+        "placed": placed.map(|(ws, rel, abs)| json!({ "workspace": ws, "path": rel, "abs": dunce::simplified(&abs).to_string_lossy() })),
         "fetch": matches!(s.place, Place::Fetch),
         "report": report,
         "rights": s.rights.json(),

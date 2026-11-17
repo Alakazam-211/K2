@@ -317,6 +317,10 @@ pub fn stream_socket_setup(stream: &TcpStream) {
     crate::tunnel_tls_listener::no_nagle(stream);
 }
 
+/// How long a served socket stays open after a close we sent (see the end
+/// of the serve loop).
+const CLOSE_LINGER: Duration = Duration::from_secs(1);
+
 async fn close(write: &mut (impl SinkExt<Message> + Unpin), code: u16, reason: &str) {
     let _ = write
         .send(Message::Close(Some(CloseFrame { code: CloseCode::from(code), reason: std::borrow::Cow::Owned(reason.to_string()) })))
@@ -507,6 +511,8 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
     }
     let mut auth_tick = tokio::time::interval(auth.every);
     auth_tick.tick().await;
+    // A close frame went out (the socket then lingers: see after the loop).
+    let mut closed = false;
     'serve: loop {
         if flow.window.expire(Instant::now(), ACK_EXPIRY) > 0 {
             log_debug!("[{tag}] viewer {me}: acks lost for {ACK_EXPIRY:?}; freeing the window");
@@ -521,6 +527,7 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
                 if let Verdict::Close { code, reason } = (auth.recheck)() {
                     log_debug!("[{tag}] closing {key} for viewer {me}: {code} {reason}");
                     close(&mut write, code, &reason).await;
+                    closed = true;
                     break 'serve;
                 }
             }
@@ -539,6 +546,7 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
                         }
                     }
                     close(&mut write, CLOSE_DEVICE_STOPPED, &ended_reason).await;
+                    closed = true;
                     break 'serve;
                 };
                 if let Some(e) = &u.encode {
@@ -575,6 +583,7 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
                         let _ = write.send(Message::Text(t)).await;
                     }
                     close(&mut write, CLOSE_DEVICE_STOPPED, &ended_reason).await;
+                    closed = true;
                     break 'serve;
                 }
             },
@@ -586,6 +595,7 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
                 }
                 Push::Close { code, reason } => {
                     close(&mut write, code, &reason).await;
+                    closed = true;
                     break 'serve;
                 }
             },
@@ -613,6 +623,7 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
                 if acts {
                     if let Verdict::Close { code, reason } = (auth.frame)(&msg) {
                         close(&mut write, code, &reason).await;
+                        closed = true;
                         break 'serve;
                     }
                 }
@@ -657,6 +668,14 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
     }
     drop(in_tx); // the input thread ends after what it is doing
     drop(sub); // leaves the hub: its layer pauses if this was the last viewer
+    // After a close we sent: keep the socket a moment before it goes. Closed
+    // with the viewer's acks still unread, it is reset on Windows, and a
+    // viewer that hasn't read our close frame yet loses it (and its code).
+    // Nothing is read here: the loop above is the only read path.
+    if closed {
+        let _ = write.flush().await;
+        tokio::time::sleep(CLOSE_LINGER).await;
+    }
     Ok(())
 }
 

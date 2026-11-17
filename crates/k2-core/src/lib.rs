@@ -103,6 +103,8 @@ pub mod cli_stage;
 /// The `model` key of a Claude Code settings file, put back after K2
 /// switches one session's model (0.46.13, `/cli/sessions/model`).
 pub mod cli_model_settings;
+/// How the k5 CLI is used, as the daemon counts it (migration 0308).
+pub mod cli_usage;
 /// `k2` on the person's PATH with no admin prompt (0.46.11): links
 /// `~/.local/bin/k2` and adds one marked PATH block. Lives in k2-client so
 /// the app runs the same code; the tests here use `test_env::TempHome`.

@@ -508,6 +508,9 @@ async fn async_main() {
     // Machines you can use (Settings → Compute): a node machine tells K2
     // Connect it offers compute and applies one-click enroll offers.
     crate::compute_advertise::spawn();
+    // 0313: ended jobs' plans trimmed to a summary (7 days after the end)
+    // and spent env values dropped, in small batches off the request path.
+    k2_core::compute::trim::spawn();
     // Lane secrets (0.46.10 C3b, V25): the controller reads this server's
     // own seats, lanes, rosters and consents (C1/C3a's tables). Installed
     // always; `lane_secrets::seat_book()` answers "no seats" while the CI

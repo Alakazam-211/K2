@@ -390,6 +390,33 @@ async fn compute_end_to_end_with_the_real_node() {
     let plan: k2_node_proto::frames::Plan = serde_json::from_value(rv["plan"].clone()).expect("the route returns the plan");
     assert_eq!(plan.digest().unwrap(), parsed["plan_digest"].as_str().unwrap(), "the plan hashes to the receipt's plan_digest");
     assert_eq!(plan.job_id, parsed["job_id"].as_str().unwrap());
+    // 0313: `--env` values reach the job (it runs with them) but never a
+    // job view or its log: those carry names and the redacted markers
+    // only. The receipt route alone gives the plan the node signed (with
+    // its values) so a checker can re-hash it.
+    let bundle = "QlVORExFX0I2NF9WQUxVRQ".repeat(370);
+    // (The command checks lengths only: its argv is shown, and must not
+    // hold a value itself.)
+    let mut with_env = run_body("n1", &["sh", "-c", "test \"${#BUNDLE_B64_1}\" -gt 8100 && test \"${#SECRETISH}\" -eq 11 && echo env-ok"], "client-0000000020");
+    with_env["env"] = json!({"BUNDLE_B64_1": bundle, "SECRETISH": "hunter2-xyz"});
+    let r = post(port, "/cli/compute/run", &agent, with_env).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(!r.body.contains(&bundle) && !r.body.contains("hunter2-xyz"), "the run answer carries an env value: {}", r.body);
+    let env_job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let (out, _, fin) = follow(port, &agent, &env_job).await;
+    assert_eq!(out, "env-ok\n", "the job ran with its env values: {fin}");
+    for (path, query) in [
+        ("/cli/compute/jobs/get", format!("job={env_job}")),
+        ("/cli/compute/jobs", String::new()),
+        ("/cli/compute/jobs/logs", format!("job={env_job}&cursor=0")),
+    ] {
+        let r = get(port, path, &agent, &query).await;
+        assert_eq!(r.status, 200, "{path}: {}", r.body);
+        assert!(!r.body.contains(&bundle) && !r.body.contains("hunter2-xyz"), "{path} carries an env value: {}", r.body);
+    }
+    let gj = j(&get(port, "/cli/compute/jobs/get", &agent, &format!("job={env_job}")).await).to_string();
+    assert!(!gj.contains("QlVORExFX0I2NF9WQUxVRQ"), "no part of the value either: {gj}");
+
     // Another workspace's agent can't see it.
     let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": other.id, "toggle": "compute", "value": true})).await;
     assert_eq!(r.status, 200);

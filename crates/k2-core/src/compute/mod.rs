@@ -44,6 +44,8 @@ pub mod share;
 pub mod store;
 pub mod sync;
 pub mod ticket;
+/// 0313: ended jobs' plans trimmed to a summary, spent env values dropped.
+pub mod trim;
 pub mod trust;
 
 pub use k2_node_proto as proto;
@@ -223,6 +225,8 @@ pub mod codes {
     pub const NOT_A_REPO: &str = "not_a_repo";
     pub const DIRTY_TOO_LARGE: &str = "dirty_too_large";
     pub const NO_NODE_FITS: &str = "no_node_fits";
+    /// `retry` of an ended job whose `--env` values were dropped (0313).
+    pub const ENV_DROPPED: &str = "env_dropped";
 }
 
 #[cfg(test)]

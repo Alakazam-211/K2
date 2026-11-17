@@ -840,14 +840,107 @@ pub struct AttemptNote {
 }
 
 /// `plan_json` text: the plan's own fields plus `k2ctl` (when not empty).
+/// Every `env` value is a marker ([`env_marker`]): the values live in
+/// `compute_job_env` ([`save_job_env`]) while the job may still run, and
+/// a row read back carries them again ([`job_from_row`]).
 pub fn plan_json_with(plan: &Plan, ctl: &JobCtl) -> Result<String, String> {
     let mut v = serde_json::to_value(plan).map_err(|e| e.to_string())?;
+    if let Some(env) = v.get_mut("env").and_then(|e| e.as_object_mut()) {
+        for val in env.values_mut() {
+            if let Some(text) = val.as_str().filter(|t| !is_env_marker(t)) {
+                *val = serde_json::Value::String(env_marker(text));
+            }
+        }
+    }
     if *ctl != JobCtl::default() {
         if let Some(m) = v.as_object_mut() {
             m.insert(CTL_KEY.into(), serde_json::to_value(ctl).map_err(|e| e.to_string())?);
         }
     }
     serde_json::to_string(&v).map_err(|e| e.to_string())
+}
+
+// ── env values (0313) ────────────────────────────────────────────────
+
+/// How a stored plan's env value starts when the value itself is kept
+/// apart (in `compute_job_env`, or dropped once the job can't run again).
+pub const ENV_MARKER_PREFIX: &str = "{\"k2redacted\":true";
+
+/// An ended job keeps its env values this long after it ends, then the
+/// trimmer drops them with its plan ([`super::trim`]). Inside it a job
+/// runs again as it was (`k2 compute retry`, an auto-retry), its receipt
+/// is checked against its plan (the node sends it after the end), and
+/// `k2 compute receipt` gives a plan that hashes to the receipt's
+/// `plan_digest`. Past it a retry refuses (`env_dropped`).
+pub const ENV_KEEP_AFTER_END_SECS: i64 = 7 * 24 * 3600;
+
+/// The marker a plan keeps for an env value: its size and digest, never
+/// the value (`{"k2redacted":true,"bytes":N,"sha256":"…"}`).
+pub fn env_marker(value: &str) -> String {
+    format!("{ENV_MARKER_PREFIX},\"bytes\":{},\"sha256\":\"{}\"}}", value.len(), super::proto::crypto::sha256_hex(value.as_bytes()))
+}
+
+pub fn is_env_marker(value: &str) -> bool {
+    value.starts_with(ENV_MARKER_PREFIX)
+}
+
+/// Env keys of `plan` whose value is a marker with no value behind it
+/// (dropped after the job ended): it can't run again as it was.
+pub fn env_dropped(plan: &Plan) -> Vec<String> {
+    plan.env.iter().filter(|(_, v)| is_env_marker(v)).map(|(k, _)| k.clone()).collect()
+}
+
+/// Keep `env`'s values for job `id` (replacing what it had). A marker is
+/// never stored as a value.
+pub fn save_job_env(conn: &Connection, id: &str, env: &BTreeMap<String, String>) -> Result<(), String> {
+    conn.execute("DELETE FROM compute_job_env WHERE job_id = ?1", params![id]).map_err(|e| e.to_string())?;
+    let mut st = conn.prepare("INSERT INTO compute_job_env (job_id, name, value) VALUES (?1, ?2, ?3)").map_err(|e| e.to_string())?;
+    for (k, v) in env.iter().filter(|(_, v)| !is_env_marker(v)) {
+        st.execute(params![id, k, v]).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Drop job `id`'s env values (it can't run again).
+pub fn drop_job_env(conn: &Connection, id: &str) -> Result<usize, String> {
+    conn.execute("DELETE FROM compute_job_env WHERE job_id = ?1", params![id]).map_err(|e| e.to_string())
+}
+
+/// SQL (on `compute_jobs`): the job's plan is signed evidence (receipt v2,
+/// provenance): a release or a checker re-hashes the whole plan, env
+/// values too, against the receipt's `plan_digest`, so its inputs stay.
+pub const KEEPS_INPUTS_SQL: &str =
+    "(COALESCE(json_extract(plan_json, '$.receipt_v'), 1) >= 2 OR json_extract(plan_json, '$.provenance') IS NOT NULL)";
+
+/// Rows `compute_job_env` holds for job `id`.
+pub fn job_env_rows(conn: &Connection, id: &str) -> i64 {
+    conn.query_row("SELECT COUNT(*) FROM compute_job_env WHERE job_id = ?1", params![id], |r| r.get(0)).unwrap_or(0)
+}
+
+/// `plan_json` with its env markers replaced by the values in `vals`
+/// (`compute_job_env`'s rows as a JSON object). Unchanged when there are
+/// none.
+fn with_env_values(plan_json: String, vals: Option<String>) -> String {
+    let Some(vals) = vals.filter(|v| v.len() > 2) else { return plan_json };
+    let (Ok(mut v), Ok(serde_json::Value::Object(vals))) =
+        (serde_json::from_str::<serde_json::Value>(&plan_json), serde_json::from_str::<serde_json::Value>(&vals))
+    else {
+        return plan_json;
+    };
+    let Some(env) = v.get_mut("env").and_then(|e| e.as_object_mut()) else { return plan_json };
+    let mut changed = false;
+    for (k, val) in env.iter_mut() {
+        if val.as_str().is_some_and(is_env_marker) {
+            if let Some(real) = vals.get(k).filter(|r| r.is_string()) {
+                *val = real.clone();
+                changed = true;
+            }
+        }
+    }
+    if !changed {
+        return plan_json;
+    }
+    serde_json::to_string(&v).unwrap_or(plan_json)
 }
 
 fn ctl_of(plan_json: &str) -> JobCtl {
@@ -965,11 +1058,15 @@ const JOB_COLS: &str = "id, client_job_id, node_id, workspace_id, session_id, re
     plan_digest, exclusive, detach, retry_interrupted, exit_code, signal, created_at, assigned_at, started_at, \
     ended_at, log_seq, log_bytes, summary_json, receipt_json, receipt_ok, notified_at, class, est_secs, node_queued, \
     node_pos, node_eta_secs, node_eta_p90_secs, node_blocked_by, node_seen_at, withdraws, withdrawn_at, tier, tier_asked, \
-    submitter, supersede_key, node_of";
+    submitter, supersede_key, node_of, \
+    (SELECT json_group_object(e.name, e.value) FROM compute_job_env e WHERE e.job_id = compute_jobs.id)";
 
 fn job_from_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
     let argv: String = r.get(6)?;
     let env: String = r.get(7)?;
+    // The plan as stored (env markers), with this job's kept env values
+    // put back: what it sends, moves and retries with (0313).
+    let plan_json = with_env_values(r.get(9)?, r.get(49)?);
     Ok(JobRow {
         id: r.get(0)?,
         client_job_id: r.get(1)?,
@@ -980,7 +1077,6 @@ fn job_from_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
         argv: serde_json::from_str(&argv).unwrap_or_default(),
         env_names: serde_json::from_str(&env).unwrap_or_default(),
         request_sha256: r.get(8)?,
-        plan_json: r.get(9)?,
         src_commit: r.get(10)?,
         src_tree: r.get(11)?,
         dirty_sha256: r.get(12)?,
@@ -1005,7 +1101,8 @@ fn job_from_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
         receipt_json: r.get(31)?,
         receipt_ok: r.get::<_, Option<i64>>(32)?.map(|v| v != 0),
         notified_at: r.get(33)?,
-        ctl: ctl_of(&r.get::<_, String>(9)?),
+        ctl: ctl_of(&plan_json),
+        plan_json,
         class: r.get(34)?,
         est_secs: r.get(35)?,
         node_queued: r.get::<_, i64>(36)? != 0,
@@ -1097,6 +1194,7 @@ pub fn insert_job(conn: &Connection, j: &NewJob<'_>) -> Result<JobRow, String> {
         ],
     )
     .map_err(|e| e.to_string())?;
+    save_job_env(conn, &p.job_id, &p.env)?;
     job_by_id(conn, &p.job_id).ok_or_else(|| "job vanished after insert".to_string())
 }
 
@@ -1362,6 +1460,9 @@ pub fn move_queued_job(conn: &Connection, id: &str, plan: &Plan, ctl: &JobCtl, r
             params![id, plan.node_id, plan_json_with(plan, &ctl)?, plan.digest()?, reason],
         )
         .map_err(|e| e.to_string())?;
+    if n == 1 {
+        save_job_env(conn, id, &plan.env)?;
+    }
     Ok(n == 1)
 }
 
@@ -1393,6 +1494,9 @@ pub fn rewrite_queued_plan(conn: &Connection, id: &str, plan: &Plan, ctl: &JobCt
             params![id, plan_json_with(plan, ctl)?, plan.digest()?],
         )
         .map_err(|e| e.to_string())?;
+    if n == 1 {
+        save_job_env(conn, id, &plan.env)?;
+    }
     Ok(n == 1)
 }
 

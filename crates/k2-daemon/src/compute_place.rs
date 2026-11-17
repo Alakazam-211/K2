@@ -2298,6 +2298,10 @@ pub fn after_attempt(job_id: &str) -> bool {
     if j.ctl.any.is_none() && retry::retry_elsewhere_only(reason.as_deref()) {
         return false;
     }
+    // 0313: its `--env` values are gone (never run with a marker).
+    if j.plan().is_some_and(|p| !store::env_dropped(&p).is_empty()) {
+        return false;
+    }
     let mut ctl = j.ctl.clone();
     // Rows from before retries were options: one retry for an interruption.
     let allowed = if ctl == JobCtl::default() && j.retry_interrupted && state == JobState::Interrupted { 1 } else { ctl.retries };

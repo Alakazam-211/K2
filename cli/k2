@@ -66492,8 +66492,11 @@ RUN
   into it, an unpushed local one too. Nothing comes from another remote.
   Env starts empty: PATH, HOME, CARGO_*, TMPDIR, CI=1 and your --env
   NAME=value. No K2 token, socket or port ever reaches a job.
-  --env values are stored (the plan, the job row, the node's ledger):
-  never put a key in --env. Use --secret (SECRETS below).
+  --env values are stored (beside the job's plan, and the node's ledger):
+  never put a key in --env. Use --secret (SECRETS below). K2 keeps them
+  for 7 days after a job ends (retry, receipt), then deletes them; job
+  views and logs show names only. Secrets passed with --env are kept for
+  those 7 days too.
 
 REPOS (0.46.6)
   The code is the repo you run from: the workspace's, a worktree of it, or

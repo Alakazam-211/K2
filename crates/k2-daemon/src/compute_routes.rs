@@ -4267,6 +4267,17 @@ fn job_retry(who: &Who, body: &[u8]) -> R<serde_json::Value> {
 
 /// A new attempt of one ended job. An `--any` job whose node is gone
 /// still retries: the sweeper moves it.
+/// A retry runs the job's own `--env` values or not at all: an ended job
+/// keeps them [`store::ENV_KEEP_AFTER_END_SECS`] (0313).
+fn env_kept(j: &store::JobRow) -> R<()> {
+    let gone = j.plan().map(|p| store::env_dropped(&p)).unwrap_or_default();
+    if gone.is_empty() {
+        return Ok(());
+    }
+    let days = store::ENV_KEEP_AFTER_END_SECS / 86_400;
+    Err(no(codes::ENV_DROPPED, 409, format!("its --env values ({}) were dropped {days} days after it ended; submit it again", gone.join(", "))))
+}
+
 fn retry_one(who: &Who, j: &store::JobRow) -> R<store::JobRow> {
     let n = {
         let db = k2_core::db::shared();
@@ -4288,6 +4299,8 @@ fn retry_one(who: &Who, j: &store::JobRow) -> R<store::JobRow> {
         let short = compute::message::short(&j.id);
         crate::compute_allow::check_node(&ws, n, &format!("retry {short}: it ran on node"))?;
     }
+    // 0313: never run with a marker where an `--env` value was.
+    env_kept(j)?;
     let r = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -4422,6 +4435,10 @@ fn local_disable(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let v = json_body(body)?;
     crate::compute_local::disable(&who.label(), b(&v, "elevate") == Some(true)).map_err(|(code, status, hint)| no(code, status, hint))
 }
+
+#[cfg(test)]
+#[path = "compute_env_retry_tests.rs"]
+mod env_retry_tests;
 
 #[cfg(test)]
 mod tests {

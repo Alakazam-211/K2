@@ -69,6 +69,8 @@ export interface SceneStageProps {
   refusal?: ShellHeroProps['refusal']
   /** Ask someone (the shell's say row): the empty scene's Ask Atlas. */
   ask?: ShellHeroProps['ask']
+  /** Moves when a mesh in the scene changed (a live source): the picture asks for new stills. */
+  meshEpoch?: number
 }
 
 const onlyOneOf = (s: { split: string } | null): boolean => !s || s.split === 'one'
@@ -83,7 +85,7 @@ function showList(from: HTMLElement | null): void {
   requestAnimationFrame(() => tab.querySelector<HTMLElement>('[role="tree"]')?.focus())
 }
 
-export function SceneStage({ S, control, source, narrow, size, offscreen, onJump, follow, setSayAt, people = [], refusal = null, ask }: SceneStageProps): React.JSX.Element {
+export function SceneStage({ S, control, source, narrow, size, offscreen, onJump, follow, setSayAt, people = [], refusal = null, ask, meshEpoch = 0 }: SceneStageProps): React.JSX.Element {
   const store = localStore(S)
   const L = useSyncExternalStore(store.subscribe, store.get, store.get)
   const set = (patch: Partial<SceneLocal>): void => store.set((s) => ({ ...s, ...patch }))
@@ -95,7 +97,9 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
   const fl = useSceneFollow({ follow, snap: { people } as ShellHeroProps['snap'] }, S, own, (v) => set({ view: v }))
   const view = fl.theirView ?? own
   const framed = framedOf(S, L.pick)
-  const feed = usePictureFeed(source, view)
+  const feed = usePictureFeed(source, view, meshEpoch)
+  // A live source tells everyone else which view you look through (Follow reads it).
+  useEffect(() => control.viewChanged?.(view), [control, view])
   // The real picture says its own state; the sample's is the snapshot's.
   const status = feed.status ?? pictureStatus(S)
   const retryPicture = feed.status ? feed.retry : control.retryPicture

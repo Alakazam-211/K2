@@ -9,10 +9,11 @@
 // this file: the banner says so). With the type's switch off, or for any
 // other file, this renders its children and nothing else.
 //
-// The source is chosen here. A timeline the daemon serves (its timeline
-// core on: `real`, from live-doc-core) watches the file itself through the
-// kit's keyed watch on K2's docs socket (TimelineLive), with no Sample data
-// banner; the switch shows for it whether or not the preview key is on.
+// The source is chosen here. A timeline or a 3D scene the daemon serves
+// (its core on: `real`, from live-doc-core) watches the file itself through
+// the kit's keyed watch on K2's docs socket (TimelineLive, SceneLive), with
+// no Sample data banner; the switch shows for it whether or not the preview
+// key is on.
 // Anything else plays its sample, with its banner, as before. Every view
 // gets the file's path (LiveFileContext): the scene's picture is the file's
 // own when the daemon draws it.
@@ -29,10 +30,12 @@ const LiveWorkbookSample = lazy(() => import('./LiveWorkbookSample'))
 const LiveShellSample = lazy(() => import('./shell/LiveShellSample'))
 const TimelineSample = lazy(() => import('./timeline/TimelineSample'))
 const TimelineLive = lazy(() => import('./timeline/TimelineLive'))
+const SceneLive = lazy(() => import('./scene/SceneLive'))
 
-/** A real file's entry: the view on the file itself (only the timeline has one, T7). */
+/** A real file's entry: the view on the file itself (the daemon serves it live): the timeline (T7) and the 3D scene (S8). */
 const REAL: Partial<Record<LivePreviewType, { hint: string; view: (scope: ServerScope, filePath: string) => React.JSX.Element }>> = {
   timeline: { hint: 'Watches this file live: changes, playheads and who’s here.', view: (scope, filePath) => <TimelineLive scope={scope} filePath={filePath} /> },
+  scene: { hint: 'Watches this file live: who’s here, what changes and where each one looks.', view: (scope, filePath) => <SceneLive scope={scope} filePath={filePath} /> },
 }
 
 const ENTRIES: Record<LivePreviewType, { group: string; hint: string; view: () => React.JSX.Element }> = {

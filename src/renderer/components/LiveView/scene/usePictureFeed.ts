@@ -14,7 +14,7 @@ import { foldPreviewPush } from '@/lib/live-view/scene/preview-route'
 /** Before anything is said: the first still is being asked for. */
 export const FIRST: PictureStatus = { shown: null, want: 0, state: 'rendering', renderMs: null, reusedFrom: null, withoutModifiers: false, reason: null, landed: false, recovered: false, retrying: false, again: false }
 
-export function usePictureFeed(source: PictureSource | null, view: string): { status: PictureStatus | null; epoch: number; retry: () => void } {
+export function usePictureFeed(source: PictureSource | null, view: string, meshEpoch = 0): { status: PictureStatus | null; epoch: number; retry: () => void } {
   const docs = source instanceof DocsPreviewPictureSource ? source : null
   const [byView, setByView] = useState<Record<string, PictureStatus>>({})
   const [epoch, setEpoch] = useState(0)
@@ -27,6 +27,12 @@ export function usePictureFeed(source: PictureSource | null, view: string): { st
       if (e.type === 'preview_ready' && e.state === 'ready') setEpoch((n) => n + 1)
     })
   }, [docs])
+  // A mesh changed (a live source's derived mesh_hash moved): every view's still is stale; ask again.
+  useEffect(() => {
+    if (!docs || !meshEpoch) return
+    docs.refreshAll()
+    setEpoch((n) => n + 1)
+  }, [docs, meshEpoch])
   const retry = useCallback(() => {
     if (!docs) return
     docs.retry(view)

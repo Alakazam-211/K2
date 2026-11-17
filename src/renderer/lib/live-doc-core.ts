@@ -56,14 +56,19 @@ export type LiveDocCoreState =
   | { status: 'any-file' } // today's view, with the any-file panel beside it
   | { status: 'deck' } // a live deck (the Slides core): its slide previews
   | { status: 'timeline' } // a live timeline (the timeline pack's core): the timeline view watches the file itself
+  | { status: 'scene' } // a live 3D scene (the BLEND pack's core): the scene view watches the file itself
 
 /** The timeline pack's core id (TODO(vendoring): confirm with K2 once the pack's core is registered in k2_core::docs_cores::CORES). */
 export const TIMELINE_CORE = 'timeline'
 
+/** The BLEND pack's core id. TODO(wiring day): confirm with K2 once the pack's core is registered (cores are off by default). */
+export const SCENE_CORE = 'blend'
+
 export function stateFor(c: LiveDocCore): LiveDocCoreState {
   if (!c.on) return { status: 'off' }
-  // A timeline is watched, not edited, here: its own view, whatever liveView says.
+  // A timeline or a 3D scene is watched, not edited, here: its own view, whatever liveView says.
   if (c.core === TIMELINE_CORE) return { status: 'timeline' }
+  if (c.core === SCENE_CORE) return { status: 'scene' }
   if (c.liveView) return { status: 'live', core: c.core }
   // Any other file has no live editor but does have the panel. A deck
   // (the Slides core) shows its slide previews. The Board (also no live

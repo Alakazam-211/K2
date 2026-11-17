@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.1.16
+
+Pairs with kit v0.22.0 (`e085cada`, the public cut). The bridge's lock and kit pin text move to
+it; the pack's code doesn't change. The kit's pack API additions have defaults
+(`Pack::checks_edits` and `Pack::check_edit`, `Pack::text_units`, and the blob pack hooks), and its
+other changes are the host's (a read that survives a failed render, where each change is, verbs on
+a blob doc, a typed refusal for a store another process holds); the bridge uses none of them.
+
+- The board crate and the bridge 0.1.16 (`Cargo.lock`, `bridge/Cargo.lock`, `fuzz/Cargo.lock`);
+  `bridge/Cargo.lock`: k2-mpc-base 0.22.0, with the kit's new `libc` dependency (glibc targets).
+  `bridge/Cargo.toml`'s pin comment and `bridge/README.md`'s kit line name v0.22.0 and its cut
+  `e085cada`.
+
 ## v0.1.15
 
 Pairs with kit v0.21.0 (`9e6f6419`, the public cut). The bridge's lock and kit pin text move to it;

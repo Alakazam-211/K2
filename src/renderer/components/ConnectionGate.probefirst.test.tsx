@@ -52,7 +52,7 @@ vi.mock('@/App', async () => {
     }, [])
     return <div data-stub-app="" />
   }
-  return { default: App, HomeRoomsHost: () => null, ZenHost: () => null }
+  return { default: App, HomeRoomsHost: () => null, ZenHost: () => null, CallRingHost: () => null }
 })
 
 import { cleanup, render, waitFor } from '@testing-library/react'

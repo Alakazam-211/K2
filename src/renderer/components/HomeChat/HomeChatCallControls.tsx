@@ -6,6 +6,15 @@
 // - `HomeChatCallLayer`: the ring cards of every server this window follows,
 //   with the ring sound (never for a silent ring). Mounted once per window;
 //   a ring stops in every window when the daemon says it stopped.
+// - `HomeChatRingWatch`: what makes a window follow a server's rings: it
+//   holds the Home chat events socket of every server a ring can come from
+//   (`ringWatchHosts`), whatever page is open. Without it the socket lived
+//   only while a chat row or the chat view was on screen, so a callee on
+//   another page never heard the ring.
+// - `HomeChatCallRings`: the two together. App.tsx's `CallRingHost` draws
+//   it, and ConnectionGate mounts that beside the keyed App in every branch,
+//   so the cards show over Settings, Zen and focus mode, on the Voice & Chat
+//   only screen, and survive a server switch.
 //
 // Media is the voice controller's: a DM call joins as the room
 // `dm:<conversation id>`. The daemon rings when nobody rings for this person
@@ -24,9 +33,17 @@ import {
 } from '@/lib/home-chat/calls'
 import { startRingSound, stopRingSound } from '@/lib/home-chat/ring-sound'
 import { CALL_ENDED_SHOW_MS, ringsNow, useHomeChatCallsStore } from '@/stores/home-chat-calls'
-import { refreshHomeChatPeople, scopeForChatHost, useHomeChatStore } from '@/stores/home-chat'
+import { refreshHomeChatPeople, retainHomeChatHost, scopeForChatHost, useHomeChatStore } from '@/stores/home-chat'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { useHomesStore } from '@/stores/homes'
 import { activeHomeHostKey } from '@/lib/home-address'
+import { homeChatTarget } from '@/lib/home-chat/address'
+import { HOME_CHAT_FEATURE } from '@/lib/home-chat/api'
+import { homeHostKey } from '@/lib/host-key'
+import { hostPool } from '@/lib/host-pool-instance'
+import { hostIsVoiceChatOnly } from '@/lib/voice-chat-only'
+import { CALL_RING_Z } from '@/lib/overlay-layers'
+import { useStore } from 'zustand'
 import { HomeChatCallingBar, HomeChatCallStrip, HomeChatRingCard } from './HomeChatCall'
 import { serverLabelFor } from './serverLabel'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
@@ -164,7 +181,12 @@ export function HomeChatCallLayer(): JSX.Element | null {
 
   if (rings.length === 0) return null
   return (
-    <div ref={layerRef} className="pointer-events-none fixed right-4 top-14 z-50 flex flex-col gap-2" data-testid="home-chat-call-layer">
+    <div
+      ref={layerRef}
+      className="pointer-events-none fixed right-4 top-14 flex flex-col gap-2"
+      style={{ zIndex: CALL_RING_Z }}
+      data-testid="home-chat-call-layer"
+    >
       {rings.map((r) => {
         const people = byHost[r.hostKey]?.people?.people ?? []
         const who = people.find((p) => p.memberId !== null && p.memberId === r.startedBy) ?? null
@@ -183,6 +205,11 @@ export function HomeChatCallLayer(): JSX.Element | null {
                 joinDm(r.hostKey, r.conv, name)
                   .catch(toastError)
                   .finally(() => setBusy(null))
+                // On the Voice & Chat only screen (this window's server is
+                // one where the login is Voice & Chat only), the call's
+                // controls are on This computer, as for its voice rooms.
+                const active = useConnectHostStore.getState().activeHost
+                if (active !== 'local' && hostIsVoiceChatOnly(active)) useConnectHostStore.getState().pickHost('local')
               }}
               onDecline={() => {
                 setBusy(k)
@@ -195,5 +222,74 @@ export function HomeChatCallLayer(): JSX.Element | null {
         )
       })}
     </div>
+  )
+}
+
+/** The servers a DM call can ring this window from, sorted: the window's own
+ *  server; every server whose `/boot-status` says Home chat; every server a
+ *  person or channel row on ANY Home names (not only the Home on screen);
+ *  every saved server where this login is Voice & Chat only (it is there to
+ *  talk and call). A server whose chat is off answers its status once, and
+ *  again now and then (`retainHomeChatHost`); no socket opens there. */
+export function ringWatchHosts(
+  connectedKey: string,
+  poolEntries: Record<string, { boot?: { features?: readonly string[] } | null } | undefined>,
+  homes: ReadonlyArray<{ rows: ReadonlyArray<{ kind?: string; address: string }> }>,
+  savedHosts: ReadonlyArray<{ hostname: string; port: number; secure: boolean; access?: string }>,
+): string[] {
+  const out = new Set<string>()
+  if (connectedKey) out.add(connectedKey)
+  for (const [key, e] of Object.entries(poolEntries)) {
+    if (e?.boot?.features?.includes(HOME_CHAT_FEATURE)) out.add(key)
+  }
+  for (const home of homes) {
+    for (const row of home.rows) {
+      const t = homeChatTarget(row)
+      if (t) out.add(t.hostKey)
+    }
+  }
+  for (const h of savedHosts) {
+    if (hostIsVoiceChatOnly(h)) out.add(homeHostKey(h))
+  }
+  return [...out].sort()
+}
+
+/** Hold the Home chat events socket of every server in `ringWatchHosts`
+ *  while mounted, so a ring reaches this window on any page. Counted with
+ *  the rows and the chat view: still one socket per server per window. */
+export function HomeChatRingWatch(): null {
+  const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
+  const savedHosts = useConnectHostStore((s) => s.hosts)
+  const homes = useHomesStore((s) => s.homes)
+  // Only the keys that say Home chat, as one string, so a health poll that
+  // changes nothing else never re-runs the effect.
+  const poolKeys = useStore(hostPool.store, (s) =>
+    Object.entries(s.entries)
+      .filter(([, e]) => e?.boot?.features?.includes(HOME_CHAT_FEATURE))
+      .map(([k]) => k)
+      .sort()
+      .join('\n'),
+  )
+  const hosts = useMemo(() => {
+    const pool = Object.fromEntries((poolKeys ? poolKeys.split('\n') : []).map((k) => [k, { boot: { features: [HOME_CHAT_FEATURE] } }]))
+    return ringWatchHosts(connectedKey, pool, homes, savedHosts).join('\n')
+  }, [connectedKey, poolKeys, homes, savedHosts])
+  useEffect(() => {
+    const releases = (hosts ? hosts.split('\n') : []).map((h) => retainHomeChatHost(h))
+    return () => {
+      for (const release of releases) release()
+    }
+  }, [hosts])
+  return null
+}
+
+/** The window's DM call rings: the socket holder and the ring cards
+ *  (App.tsx's `CallRingHost` mounts it). */
+export function HomeChatCallRings(): JSX.Element {
+  return (
+    <>
+      <HomeChatRingWatch />
+      <HomeChatCallLayer />
+    </>
   )
 }

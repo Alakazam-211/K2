@@ -40,7 +40,6 @@ import { useRoomWorkspaceName } from '@/components/TopBar/TopBarTitle'
 import GrokBotChatView from '@/components/GrokBots/GrokBotChatView'
 import { useGrokBotsStore } from '@/stores/grokbots'
 import HomeChatView from '@/components/HomeChat/HomeChatView'
-import { HomeChatCallLayer } from '@/components/HomeChat/HomeChatCallControls'
 import { useHomeChatStore } from '@/stores/home-chat'
 
 interface ShellProject {
@@ -143,8 +142,8 @@ export default function AgentsShell({
       <RoomSlot visible={remote !== null && overlay === null} />
       {grok !== null && <GrokBotChatView key={`${grok.hostKey}|${grok.agentId}`} hostKey={grok.hostKey} agentId={grok.agentId} />}
       {grok === null && chat !== null && <HomeChatView key={chat.address} target={chat} />}
-      {/* DM call rings show in every window, whatever is open (§11a.3). */}
-      <HomeChatCallLayer />
+      {/* DM call rings: ConnectionGate's CallRingHost (App.tsx), beside the
+          keyed App, so a ring shows over Settings, Zen and focus mode too. */}
       <RoomProvider room={room} shown={remote === null && overlay === null}>
         {hasRoom ? (
           <>

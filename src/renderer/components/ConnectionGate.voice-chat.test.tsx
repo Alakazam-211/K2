@@ -37,7 +37,8 @@ vi.mock('@/App', async () => {
     }, [])
     return <div data-stub-app="" />
   }
-  return { default: App, HomeRoomsHost: () => null, ZenHost: () => null }
+  // The DM call ring layer: it mounts beside the App, so the gate screen has it.
+  return { default: App, HomeRoomsHost: () => null, ZenHost: () => null, CallRingHost: () => <div data-testid="call-ring-host" /> }
 })
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -108,6 +109,9 @@ describe('the Voice & Chat only gate screen', () => {
     expect(screen.getByTestId('voice-chat-only-open-rooms')).toBeTruthy()
     expect(screen.getByTestId('voice-chat-only-switch')).toBeTruthy()
     expect(screen.queryByTestId('voice-chat-only-sign-out')).toBeNull()
+    // A Home DM call still rings on this screen (the callee is often a Voice
+    // & Chat only login): the ring layer is mounted beside the gate.
+    await waitFor(() => expect(screen.getByTestId('call-ring-host')).toBeTruthy())
   })
 
   it('an old hint alone holds the screen before any check', () => {

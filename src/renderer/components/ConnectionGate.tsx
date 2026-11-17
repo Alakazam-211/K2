@@ -876,6 +876,9 @@ interface AppChunk {
   default: AppComponent
   HomeRoomsHost: AppComponent
   ZenHost: AppComponent
+  /** Home DM call rings (sockets + ring cards), mounted the same way so a
+   *  ring shows on every page and on the Voice & Chat only screen. */
+  CallRingHost?: AppComponent
 }
 
 // `activeHostKey` — the stable host identity that keys the <App> remount —
@@ -1559,7 +1562,7 @@ export function ConnectionGate(): React.ReactElement {
       void import('../App').then((mod) => {
         if (cancelled) return
         setImportFailed(false)
-        setAppModule(() => ({ default: mod.default, HomeRoomsHost: mod.HomeRoomsHost, ZenHost: mod.ZenHost }))
+        setAppModule(() => ({ default: mod.default, HomeRoomsHost: mod.HomeRoomsHost, ZenHost: mod.ZenHost, CallRingHost: mod.CallRingHost }))
       }).catch((err: unknown) => {
         console.error(
           `[ConnectionGate] dynamic import of App failed (attempt ${attempt + 1}/${APP_IMPORT_RETRY_DELAYS_MS.length + 1}):`,
@@ -1611,10 +1614,15 @@ export function ConnectionGate(): React.ReactElement {
   // prd-zen-mode-v1 Z6: Zen sits in the same slot, right after the rooms,
   // so a server switch never remounts it either.
   const ZenLayer = AppModule?.ZenHost ?? null
+  // Home DM call rings: in the same slot, so a ring shows whatever the
+  // window shows (the Voice & Chat only screen included) and a server
+  // switch never drops a ringing card or its sockets.
+  const RingLayer = AppModule?.CallRingHost ?? null
   const roomsHost = RoomsHost ? (
     <>
       <RoomsHost key="home-rooms-host" />
       {ZenLayer && <ZenLayer key="zen-host" />}
+      {RingLayer && <RingLayer key="call-ring-host" />}
     </>
   ) : null
 

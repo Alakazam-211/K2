@@ -10,9 +10,11 @@
 // login never gets `/cli/sessions/events`. One per server per window
 // (`stores/home-chat.ts` shares it); the daemon allows 3 per login.
 //
-// Kept like `voice-events-socket.ts`: reconnect with a widening pause; give
-// up after a few failures in a row that never opened (the rows keep their
-// last badges, greyed). Every close reaches the pool.
+// Kept like `voice-events-socket.ts`: reconnect with a widening pause; after
+// a few failures in a row that never opened (the rows keep their last
+// badges, greyed) it slows to one try a minute but never stops: this socket
+// is how a DM call rings in this window, so a server back after a sleep or
+// an outage rings again without a reload. Every close reaches the pool.
 
 import type { ServerScope } from '@/kessel/server-scope'
 import { withCliTokenQuery } from '@/web/session-token'
@@ -25,8 +27,11 @@ export const HOME_CHAT_EVENTS_PATH = '/cli/home-chat/events'
 /** Pauses before each reconnect, then the last one repeats. */
 export const HOME_CHAT_EVENTS_RETRY_MS = [2_000, 5_000, 15_000, 30_000] as const
 
-/** Failures in a row (never opened) before the socket gives up. */
+/** Failures in a row (never opened) before the socket slows down. */
 export const HOME_CHAT_EVENTS_MAX_DEAD_TRIES = 4
+
+/** The pause between tries once it has slowed down. */
+export const HOME_CHAT_EVENTS_SLOW_RETRY_MS = 60_000
 
 /** One frame, parsed. Unknown frames are dropped. */
 export type HomeChatFrame =
@@ -151,8 +156,11 @@ export function subscribeHomeChatEvents(
   let deadTries = 0
 
   const schedule = (): void => {
-    if (stopped || deadTries >= HOME_CHAT_EVENTS_MAX_DEAD_TRIES) return
-    const ms = HOME_CHAT_EVENTS_RETRY_MS[Math.min(tries, HOME_CHAT_EVENTS_RETRY_MS.length - 1)]
+    if (stopped) return
+    const ms =
+      deadTries >= HOME_CHAT_EVENTS_MAX_DEAD_TRIES
+        ? HOME_CHAT_EVENTS_SLOW_RETRY_MS
+        : HOME_CHAT_EVENTS_RETRY_MS[Math.min(tries, HOME_CHAT_EVENTS_RETRY_MS.length - 1)]
     tries += 1
     timer = deps.setTimer(() => {
       timer = null

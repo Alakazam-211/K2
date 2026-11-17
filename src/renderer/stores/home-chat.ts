@@ -299,30 +299,66 @@ export function applyHomeChatFrame(hostKey: string, f: HomeChatFrame, now: numbe
   }
 }
 
+/** While a held server's chat isn't on (its status read failed, or said
+ *  off), its status is read again after these pauses, then every last one:
+ *  the server comes back, or its owner turns Home chat on, and the socket
+ *  (and with it the DM call rings) starts without a reload. */
+export const HOME_CHAT_STATUS_RETRY_MS = [15_000, 30_000, 60_000, 300_000] as const
+
 interface Held {
   count: number
   stop: (() => void) | null
+  /** The next status read while the chat isn't on. */
+  retry: ReturnType<typeof setTimeout> | null
+  tries: number
+  /** Stops watching the store for the status turning on. */
+  unwatch: () => void
+  released: boolean
 }
 const held = new Map<string, Held>()
 let typingTimer: ReturnType<typeof setInterval> | null = null
 
 /** Keep `hostKey`'s chats live while held: its status and summary, and the
- *  one events socket. Returns the release. */
+ *  one events socket. The socket starts once the server says Home chat is
+ *  on, whenever that is (this read, a later one, or any other reader's).
+ *  Returns the release. */
 export function retainHomeChatHost(hostKey: string): () => void {
   let h = held.get(hostKey)
   if (!h) {
-    h = { count: 0, stop: null }
-    held.set(hostKey, h)
-    const entry = h
-    void refreshHomeChatHost(hostKey).then(() => {
-      const s = useHomeChatStore.getState().byHost[hostKey]
-      if (!s?.status?.on || entry.count === 0 || entry.stop) return
+    const entry: Held = { count: 0, stop: null, retry: null, tries: 0, unwatch: () => {}, released: false }
+    h = entry
+    held.set(hostKey, entry)
+    const start = (): void => {
+      if (entry.released || entry.stop) return
+      if (entry.retry !== null) {
+        clearTimeout(entry.retry)
+        entry.retry = null
+      }
       entry.stop = subscribeHomeChatEvents(
         scopeForChatHost(hostKey),
         (f) => applyHomeChatFrame(hostKey, f, Date.now()),
         (up) => useHomeChatStore.getState().patchHost(hostKey, { link: up }),
       )
+    }
+    const check = (): void => {
+      void refreshHomeChatHost(hostKey).then(() => {
+        if (entry.released || entry.stop) return
+        const status = useHomeChatStore.getState().byHost[hostKey]?.status
+        if (status?.on) return start()
+        // Sew doesn't run on a Mac server: its chat never turns on.
+        if (status?.reason === 'mac') return
+        const ms = HOME_CHAT_STATUS_RETRY_MS[Math.min(entry.tries, HOME_CHAT_STATUS_RETRY_MS.length - 1)]
+        entry.tries += 1
+        entry.retry = setTimeout(() => {
+          entry.retry = null
+          check()
+        }, ms)
+      })
+    }
+    entry.unwatch = useHomeChatStore.subscribe((s) => {
+      if (s.byHost[hostKey]?.status?.on) start()
     })
+    check()
     if (!typingTimer) typingTimer = setInterval(() => useHomeChatStore.getState().pruneTyping(Date.now()), 1000)
   }
   h.count += 1
@@ -334,7 +370,10 @@ export function retainHomeChatHost(hostKey: string): () => void {
     if (!cur) return
     cur.count -= 1
     if (cur.count > 0) return
+    cur.released = true
     cur.stop?.()
+    cur.unwatch()
+    if (cur.retry !== null) clearTimeout(cur.retry)
     held.delete(hostKey)
     if (held.size === 0 && typingTimer) {
       clearInterval(typingTimer)
@@ -381,7 +420,12 @@ export function typingMembers(typing: Record<string, Record<string, number>>, ho
 
 /** Tests: forget every host, the open chat and the held sockets. */
 export function resetHomeChatForTests(): void {
-  for (const h of held.values()) h.stop?.()
+  for (const h of held.values()) {
+    h.released = true
+    h.stop?.()
+    h.unwatch()
+    if (h.retry !== null) clearTimeout(h.retry)
+  }
   held.clear()
   for (const t of summaryTimers.values()) clearTimeout(t)
   summaryTimers.clear()

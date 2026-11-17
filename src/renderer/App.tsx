@@ -31,6 +31,7 @@ import Toast from './components/Toast/Toast'
 import CallLayer from './components/Voice/CallLayer'
 import CallWindow from './components/Voice/CallWindow'
 import { isCallWindow } from './lib/voice/call-view'
+import { HomeChatCallRings } from './components/HomeChat/HomeChatCallControls'
 import TransferProgress from './components/TransferProgress/TransferProgress'
 import { useProjectsStore } from './stores/projects'
 import GateChrome from './components/TopBar/GateChrome'
@@ -345,6 +346,25 @@ export function HomeRoomsHost(): React.JSX.Element {
       <HomeRoomsPortal />
     </StyledKesselProvider>
   )
+}
+
+/** Home DM call rings (prd-home-people-channels-v1 §11a.3), mounted by
+ *  ConnectionGate beside `HomeRoomsHost` in every branch: the Home chat
+ *  sockets a ring comes on, and the ring cards (Answer, Decline) over
+ *  whatever the window shows (Settings, Zen, focus mode, the Voice & Chat
+ *  only screen). Not in a popped-out call's window: that window is the call. */
+export function CallRingHost(): React.JSX.Element | null {
+  const callWindow = useMemo(() => {
+    let label: string | null = null
+    try {
+      label = getCurrentTauriWindow().label
+    } catch {
+      label = null
+    }
+    return isCallWindow(window.location.hash, label)
+  }, [])
+  if (callWindow) return null
+  return <HomeChatCallRings />
 }
 
 function AppRoot(): React.JSX.Element {

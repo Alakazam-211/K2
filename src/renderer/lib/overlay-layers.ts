@@ -40,3 +40,8 @@ export const CALL_TILE_Z = 160
  *  since it is what the person is looking at while it's open; below toasts
  *  (9999), so a call notice still shows. */
 export const CALL_EXPANDED_Z = 9000
+
+/** A Home DM call's ring cards (HomeChat/HomeChatCallControls): someone is
+ *  calling you, so over everything in the window (Settings, Zen, focus
+ *  mode, modals, an expanded call); below toasts (9999). */
+export const CALL_RING_Z = 9500

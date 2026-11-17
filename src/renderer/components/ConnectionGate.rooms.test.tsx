@@ -99,7 +99,7 @@ vi.mock('@/App', async () => {
     return <HomeRoomsPortal />
   }
   // Zen's layer (prd-zen-mode-v1 Z6) is not under test here.
-  return { default: App, HomeRoomsHost, ZenHost: () => null }
+  return { default: App, HomeRoomsHost, ZenHost: () => null, CallRingHost: () => null }
 })
 
 import { act, cleanup, render, waitFor } from '@testing-library/react'

@@ -3,7 +3,7 @@
 // so K2 Design can restyle them; the logic lives in `useDmCall`
 // (`HomeChatCallControls.tsx`) and `stores/home-chat-calls.ts`.
 //
-// - `HomeChatRingCard`: someone is calling you (Accept, Decline).
+// - `HomeChatRingCard`: someone is calling you (Answer, Decline).
 // - `HomeChatCallingBar`: you are calling them ("Calling Alex…", Cancel; after
 //   a decline or no answer, Call again).
 // - `HomeChatCallStrip`: you are in the call (time, mute, leave), or on it on
@@ -73,7 +73,7 @@ export function HomeChatRingCard({
         disabled={busy}
         onClick={onAccept}
       >
-        Accept
+        Answer
       </button>
     </div>
   )

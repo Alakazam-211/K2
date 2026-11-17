@@ -9,7 +9,7 @@
 
 import type { ModelRow, XY } from '../model/types'
 import { SOLID } from './hit'
-import { boxMode, boxSelect, pickAt, shiftLock, snapDelta, toggle } from './selection'
+import { attribOwners, boxMode, boxSelect, pickAt, shiftLock, snapDelta, toggle } from './selection'
 
 export type SheetCtx = {
   /** Screen point → drawing point (y up). */
@@ -55,12 +55,15 @@ const SLOP_PX = 3
 /** How near (screen pixels) a click must be to pick an entity. */
 export const PICK_PX = 5
 
-/** The handle of the drawn element under the pointer, when it's one that can be picked. */
+/** The handle of the drawn element under the pointer, when it's one that can be picked (a block's attribute text picks its block). */
 function targetHandle(target: EventTarget | null, rows: readonly ModelRow[]): string | null {
   let el = target instanceof Element ? target : null
   const ok = new Set(rows.map((r) => r.h))
+  const owners = attribOwners(rows)
   while (el && !(el instanceof SVGSVGElement)) {
     const h = el.getAttribute('data-h')
+    const own = h ? owners.get(h) : undefined
+    if (own && ok.has(own) && !el.closest('defs')) return own
     if (h && ok.has(h) && !el.closest('defs')) return h
     el = el.parentElement
   }

@@ -48,6 +48,9 @@ export function EditMarks(p: {
   )
 }
 
+const attribHandles = (r: ModelRow | undefined): string[] =>
+  r?.kind === 'INSERT' && Array.isArray(r.geom?.attribs) ? (r.geom.attribs as { h?: unknown }[]).flatMap((a) => (typeof a?.h === 'string' ? [a.h] : [])) : []
+
 /** The ghost: copies of the selected shapes, drawn faint and moved with the pointer. */
 export function domGhost(rootOf: () => SVGGElement | null, byHandle: () => ReadonlyMap<string, ModelRow>, pad: () => number, reduced: () => boolean): Ghost {
   let inner: SVGGElement | null = null
@@ -66,7 +69,9 @@ export function domGhost(rootOf: () => SVGGElement | null, byHandle: () => Reado
       inner = document.createElementNS(SVG_NS, 'g')
       inner.setAttribute('data-testid', 'dxf-ghost')
       inner.style.opacity = '0.6'
-      const want = new Set(handles)
+      const rows = byHandle()
+      // A block's attribute texts are drawn with their own handles: they move with it.
+      const want = new Set(handles.flatMap((h) => [h, ...attribHandles(rows.get(h))]))
       const shapes = svg?.querySelector('[data-testid="dxf-shapes"]')
       for (const el of shapes ? Array.from(shapes.querySelectorAll('[data-h]')) : []) {
         const h = el.getAttribute('data-h')!
@@ -75,7 +80,6 @@ export function domGhost(rootOf: () => SVGGElement | null, byHandle: () => Reado
         copy.removeAttribute('data-h')
         inner.appendChild(copy)
       }
-      const rows = byHandle()
       for (const h of handles) {
         const b = rows.get(h)?.bbox
         if (!b) continue

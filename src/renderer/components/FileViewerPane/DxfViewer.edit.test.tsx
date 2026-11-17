@@ -115,6 +115,13 @@ describe('selecting', () => {
     expect(selected()).toEqual(['@h:5C'])
   })
 
+  it('a block’s attribute text picks its block', async () => {
+    await open()
+    fireEvent.pointerDown(shape('@h:62'), { pointerId: 1, button: 0 })
+    fireEvent.pointerUp(sheet(), { pointerId: 1 })
+    expect(selected()).toEqual(['@h:61'])
+  })
+
   it('Shift-click adds and removes; Esc clears', async () => {
     await open()
     click('@h:41')

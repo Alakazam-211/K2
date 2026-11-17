@@ -52,6 +52,16 @@ export function pickAt(rows: readonly ModelRow[], p: XY, tol: number): string | 
   return best?.h ?? null
 }
 
+/** A block reference's attribute texts (drawn with their own handles) → the reference that owns them. */
+export function attribOwners(rows: readonly ModelRow[]): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const r of rows) {
+    if (r.kind !== 'INSERT' || !Array.isArray(r.geom?.attribs)) continue
+    for (const a of r.geom.attribs as { h?: unknown }[]) if (typeof a?.h === 'string') out.set(a.h, r.h)
+  }
+  return out
+}
+
 export const toggle = (sel: readonly string[], h: string): string[] => (sel.includes(h) ? sel.filter((x) => x !== h) : [...sel, h])
 
 /** Shift: keep the longer axis of a move. */

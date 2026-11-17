@@ -4801,10 +4801,14 @@ dependencies = [
  "k2-deckrender",
  "k2-deskd-proto",
  "k2-export",
+ "k2-mpc-av",
  "k2-mpc-base",
  "k2-mpc-blend",
  "k2-mpc-board",
  "k2-mpc-board-bridge",
+ "k2-mpc-cad-model",
+ "k2-mpc-dwg",
+ "k2-mpc-dxf",
  "k2-mpc-fab",
  "k2-mpc-markdown",
  "k2-mpc-pptx",
@@ -4912,6 +4916,7 @@ version = "0.1.0"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-blend",
+ "k2-mpc-dxf",
  "k2-mpc-fab",
  "k2-mpc-psd",
  "k2-mpc-timeline",
@@ -4934,6 +4939,15 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "tray-icon",
+]
+
+[[package]]
+name = "k2-mpc-av"
+version = "0.1.0"
+dependencies = [
+ "k2-mpc-base",
+ "k2-mpc-cad-model",
+ "k2-mpc-dxf",
 ]
 
 [[package]]
@@ -4970,6 +4984,29 @@ version = "0.1.15"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-board",
+]
+
+[[package]]
+name = "k2-mpc-cad-model"
+version = "0.1.0"
+dependencies = [
+ "k2-mpc-base",
+]
+
+[[package]]
+name = "k2-mpc-dwg"
+version = "0.1.0"
+dependencies = [
+ "k2-mpc-base",
+ "k2-mpc-cad-model",
+]
+
+[[package]]
+name = "k2-mpc-dxf"
+version = "0.1.0"
+dependencies = [
+ "k2-mpc-base",
+ "k2-mpc-cad-model",
 ]
 
 [[package]]

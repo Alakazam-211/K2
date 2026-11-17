@@ -133,6 +133,15 @@ k2-mpc-fab = { path = "../../vendor/k2-mpc-fab/crates/fab" }
 # The BLEND pack: a structure index, a live keyed doc (`BlendLive`) and the
 # mesh read the 3D previews draw from. It brings ruzstd (MIT) for zstd saves.
 k2-mpc-blend = { path = "../../vendor/k2-mpc-blend/crates/blend" }
+# The CAD packs (read-only in K2 for now): the drawing model and its shared
+# reads, the DXF reader (a structure index) and the DWG reader (2004 to 2018),
+# and the drawing-model read the viewer draws from. The kit only, no other dep.
+k2-mpc-cad-model = { path = "../../vendor/k2-mpc-cad/crates/cad-model" }
+k2-mpc-dxf = { path = "../../vendor/k2-mpc-cad/crates/dxf" }
+k2-mpc-dwg = { path = "../../vendor/k2-mpc-cad/crates/dwg" }
+# The AV reading of a set of drawings (devices, cables, pulls, flags, the
+# sheet index) over the CAD pack's model, behind the CAD core.
+k2-mpc-av = { path = "../../vendor/k2-mpc-av/crates/av" }
 # URL hosts for the egress gate; the same `url` 2 k2-vault and reqwest use.
 url = "2"
 
@@ -422,6 +431,8 @@ k2-vault = { path = "../k2-vault", features = ["test-util"] }
 k2-mpc-pptx = { path = "../../vendor/k2-mpc-pptx/crates/pptx", features = ["testgen"] }
 # The BLEND pack's scene generator (`testgen`, test-only) for the Blend core's tests.
 k2-mpc-blend = { path = "../../vendor/k2-mpc-blend/crates/blend", features = ["testgen"] }
+# The DXF pack's drawing generator (`testgen`, test-only) for the CAD core's tests.
+k2-mpc-dxf = { path = "../../vendor/k2-mpc-cad/crates/dxf", features = ["testgen"] }
 # The changes card's tests (workbench-v1 B7) build temp repos. Same git2
 # version/features k2-core uses: the one crate already in the lock tree.
 git2 = { version = "0.19", default-features = false }

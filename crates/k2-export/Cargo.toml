@@ -37,6 +37,8 @@ k2-mpc-psd = { path = "../../vendor/k2-mpc-psd/crates/psd" }
 k2-mpc-timeline = { path = "../../vendor/k2-mpc-timeline/crates/timeline" }
 k2-mpc-fab = { path = "../../vendor/k2-mpc-fab/crates/fab" }
 k2-mpc-blend = { path = "../../vendor/k2-mpc-blend/crates/blend" }
+# The DXF pack's structure indexer (the CAD core), as the others.
+k2-mpc-dxf = { path = "../../vendor/k2-mpc-cad/crates/dxf" }
 serde_json = "1"
 libc = "0.2"
 

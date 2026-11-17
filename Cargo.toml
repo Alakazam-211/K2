@@ -80,9 +80,11 @@ members = [
 exclude = [
     "third_party/sew-proto",
     "third_party/sew-client",
+    "vendor/k2-mpc-av",
     "vendor/k2-mpc-base",
     "vendor/k2-mpc-blend",
     "vendor/k2-mpc-board",
+    "vendor/k2-mpc-cad",
     "vendor/k2-mpc-fab",
     "vendor/k2-mpc-markdown",
     "vendor/k2-mpc-ooxml",

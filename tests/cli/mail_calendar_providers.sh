@@ -50,7 +50,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 TARGET="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
 DAEMON="$TARGET/debug/k2-daemon"
 FAKES="$TARGET/debug/k2-provider-fakes"

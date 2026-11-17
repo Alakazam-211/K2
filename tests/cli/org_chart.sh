@@ -18,7 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 command -v python3 >/dev/null || { echo "FAIL: python3 is required" >&2; exit 1; }
 command -v curl >/dev/null || { echo "FAIL: curl is required" >&2; exit 1; }
 

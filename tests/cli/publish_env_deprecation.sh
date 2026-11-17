@@ -9,7 +9,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-K2_CLI="$(cd "$SCRIPT_DIR/../.." && pwd)/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 pass=0
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "  ok $*"; pass=$((pass + 1)); }

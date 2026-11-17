@@ -11,7 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 
 command -v python3 >/dev/null || { echo "FAIL: python3 is required" >&2; exit 1; }
 command -v curl >/dev/null || { echo "FAIL: curl is required" >&2; exit 1; }
@@ -644,7 +644,7 @@ k2_as_owner doc capabilities --json px.k5board; want_rc 0 "capabilities --json"
 CAPS="$OUT"
 jok "$CAPS" 'len(j["verbs"]) == 43 and all(v["source"] == "file" for v in j["verbs"])' "capabilities: the board's 43 verbs (verbs::ARGS), each source file"
 jok "$CAPS" '{0, 2, 4, 5} <= set([v["exits"] for v in j["verbs"] if v["name"] == "vote"][0])' "vote's exits, from the kit's rows"
-python3 - "$CAPS" "$K2_CLI" <<'PY' || fail "k2 doc doesn't route every board verb"
+python3 - "$CAPS" "$CLI_BASH_SOURCE" <<'PY' || fail "k2 doc doesn't route every board verb"
 import json, re, sys
 caps = json.loads(sys.argv[1])
 line = re.search(r'^_DOC_BOARD_VERBS="([^"]*)"', open(sys.argv[2], encoding="utf-8").read(), re.M).group(1).split()

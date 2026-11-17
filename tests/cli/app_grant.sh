@@ -7,7 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
 
@@ -81,7 +81,7 @@ run_k2() {
 }
 
 echo "== bash -n =="
-if bash -n "$K2_CLI"; then
+if bash -n "$CLI_BASH_SOURCE"; then
     echo "  PASS: bash -n cli/k2"
     pass=$((pass + 1))
 else
@@ -105,7 +105,7 @@ assert_contains "grant help role" "$help_out" "--role"
 assert_contains "grant help scope" "$help_out" "--scope"
 assert_not_contains "grant help is not people" "$help_out" "k2 people"
 assert_not_contains "grant help is not /cli/people" "$help_out" "/cli/people"
-schema="$(cat "$K2_CLI")"
+schema="$(cat "$CLI_BASH_SOURCE")"
 assert_contains "schema grant add" "$schema" '"name": "app grant add"'
 assert_contains "grant route" "$schema" "/cli/skin/grants"
 

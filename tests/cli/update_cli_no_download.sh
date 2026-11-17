@@ -19,7 +19,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
 
 # shellcheck source=_hermetic_cli.sh
@@ -133,7 +133,7 @@ fi
     || { bad "expected 3 /boot-status reads"; sed 's/^/      | /' "$CALL_LOG" >&2; }
 [ "$(shasum -a 256 "$K2_CLI" | cut -d' ' -f1)" = "$CLI_SUM_BEFORE" ] \
     && ok "cli/k2 unchanged" || bad "cli/k2 was rewritten"
-if grep -q 'raw.githubusercontent.com/Alakazam-211/K2/main/cli/k2' "$K2_CLI"; then
+if grep -q 'raw.githubusercontent.com/Alakazam-211/K2/main/cli/k2' "$CLI_BASH_SOURCE"; then
     bad "the CLI still names the raw-branch cli/k2 URL"
 else
     ok "no raw-branch URL left in the CLI"

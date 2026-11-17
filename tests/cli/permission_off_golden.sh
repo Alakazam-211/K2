@@ -49,15 +49,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # PERMISSION_GOLDEN_CLI: run another copy of the CLI against the same
-# goldens (the version-bump test uses it). Default: this checkout's cli/k2.
-K2="${PERMISSION_GOLDEN_CLI:-$PROJECT_ROOT/cli/k2}"
+# goldens (the version-bump test uses it). Default: the CLI under test (K2) and the
+# bash source (K2_SRC), from tests/cli/_cli_under_test.sh.
+. "$SCRIPT_DIR/_cli_under_test.sh"
+K2="${PERMISSION_GOLDEN_CLI:-$CLI_UNDER_TEST}"
+K2_SRC="${PERMISSION_GOLDEN_CLI:-$CLI_BASH_SOURCE}"
 GOLDEN="$PROJECT_ROOT/tests/golden/permission_off/cli"
 BLESS="${PERMISSION_GOLDEN_BLESS:-0}"
 
 for v in $(env | grep -E '^K2(SO)?_' | cut -d= -f1); do unset "$v"; done
 
-CLI_VERSION="$(grep -m1 '^K2_CLI_VERSION=' "$K2" | cut -d'"' -f2)"
-[ -n "$CLI_VERSION" ] || { echo "FAIL: no K2_CLI_VERSION in $K2" >&2; exit 1; }
+CLI_VERSION="$(grep -m1 '^K2_CLI_VERSION=' "$K2_SRC" | cut -d'"' -f2)"
+[ -n "$CLI_VERSION" ] || { echo "FAIL: no K2_CLI_VERSION in $K2_SRC" >&2; exit 1; }
 
 SANDBOX="$(mktemp -d /tmp/k2pog-XXXXXX)"
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
@@ -237,8 +240,8 @@ capture study_json        offline -- study --json
 capture study_help        offline -- study --help
 capture study_permissions offline -- study permissions
 capture study_permissions_json offline -- study permissions --json
-TOPICS="$(grep -m1 '^_STUDY_TOPIC_IDS=' "$K2" | cut -d'"' -f2)"
-[ -n "$TOPICS" ] || { echo "FAIL: no _STUDY_TOPIC_IDS in $K2" >&2; exit 1; }
+TOPICS="$(grep -m1 '^_STUDY_TOPIC_IDS=' "$K2_SRC" | cut -d'"' -f2)"
+[ -n "$TOPICS" ] || { echo "FAIL: no _STUDY_TOPIC_IDS in $K2_SRC" >&2; exit 1; }
 for t in $TOPICS; do
     capture "study_page_$t" offline -- study "$t"
     capture "study_page_${t}_json" offline -- study "$t" --json

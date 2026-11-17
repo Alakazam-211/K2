@@ -5,35 +5,35 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [ -f "$K2" ] || fail "$K2 not found"
-bash -n "$K2" || fail "bash -n cli/k2"
+bash -n "$CLI_BASH_SOURCE" || fail "bash -n cli/k2"
 
-grep -q 'M_LABEL="${M_LABEL:-}"' "$K2" || fail "_mail_py must export M_LABEL"
+grep -q 'M_LABEL="${M_LABEL:-}"' "$CLI_BASH_SOURCE" || fail "_mail_py must export M_LABEL"
 
-if ! grep -A20 'verb == "app_password_add"' "$K2" | grep -q '/cli/mail/app-password'; then
+if ! grep -A20 'verb == "app_password_add"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/app-password'; then
     fail "app_password_add must POST /cli/mail/app-password"
 fi
-if ! grep -A20 'verb == "app_password_list"' "$K2" | grep -q '/cli/mail/app-password'; then
+if ! grep -A20 'verb == "app_password_list"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/app-password'; then
     fail "app_password_list must GET /cli/mail/app-password"
 fi
-if ! grep -A20 'verb == "app_password_revoke"' "$K2" | grep -q '/cli/mail/app-password/revoke'; then
+if ! grep -A20 'verb == "app_password_revoke"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/app-password/revoke'; then
     fail "app_password_revoke must POST /cli/mail/app-password/revoke"
 fi
-if grep -A40 'verb == "app_password_add"' "$K2" | grep -q 'address/password'; then
+if grep -A40 'verb == "app_password_add"' "$CLI_BASH_SOURCE" | grep -q 'address/password'; then
     fail "app-password must not call password rotate"
 fi
-if grep -A25 'cmd_hostmail_password()' "$K2" | grep -q 'app-password'; then
+if grep -A25 'cmd_hostmail_password()' "$CLI_BASH_SOURCE" | grep -q 'app-password'; then
     fail "app-password must not nest under password"
 fi
 
 # k2 mail link (Gmail/Fastmail linked app-password) is a different verb.
-if ! grep -q 'cmd_mail_link' "$K2"; then
+if ! grep -q 'cmd_mail_link' "$CLI_BASH_SOURCE"; then
     fail "k2 mail link must still exist"
 fi
 

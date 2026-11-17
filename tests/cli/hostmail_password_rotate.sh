@@ -5,27 +5,27 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [ -f "$K2" ] || fail "$K2 not found"
-bash -n "$K2" || fail "bash -n cli/k2"
+bash -n "$CLI_BASH_SOURCE" || fail "bash -n cli/k2"
 
-grep -q 'M_ADDRESS="${M_ADDRESS:-}"' "$K2" || fail "_mail_py must export M_ADDRESS"
+grep -q 'M_ADDRESS="${M_ADDRESS:-}"' "$CLI_BASH_SOURCE" || fail "_mail_py must export M_ADDRESS"
 
-if ! grep -A20 'verb == "password_rotate"' "$K2" | grep -q '/cli/mail/address/password'; then
+if ! grep -A20 'verb == "password_rotate"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/address/password'; then
     fail "password_rotate must POST /cli/mail/address/password"
 fi
-if ! grep -A20 'verb == "password_rotate"' "$K2" | grep -q 'body={"address": env("M_ADDRESS")}'; then
+if ! grep -A20 'verb == "password_rotate"' "$CLI_BASH_SOURCE" | grep -q 'body={"address": env("M_ADDRESS")}'; then
     fail "password_rotate must POST {\"address\": ...} (exact body)"
 fi
-if grep -A25 'verb == "password_rotate"' "$K2" | grep -q 'rotate-admin'; then
+if grep -A25 'verb == "password_rotate"' "$CLI_BASH_SOURCE" | grep -q 'rotate-admin'; then
     fail "password rotate must not call rotate-admin"
 fi
-if grep -A30 'verb == "password_rotate"' "$K2" | grep -q '993'; then
+if grep -A30 'verb == "password_rotate"' "$CLI_BASH_SOURCE" | grep -q '993'; then
     fail "password rotate must not mention 993"
 fi
 

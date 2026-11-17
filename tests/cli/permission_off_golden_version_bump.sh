@@ -15,12 +15,13 @@
 # Any golden that moves fails this test loudly.
 #
 # Hermetic like the harness itself (throwaway HOME, stub daemon, K2_* unset).
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_BASH_SOURCE"
 
 CUR="$(grep -m1 '^K2_CLI_VERSION=' "$K2" | cut -d'"' -f2)"
 [ -n "$CUR" ] || { echo "FAIL: no K2_CLI_VERSION in $K2" >&2; exit 1; }

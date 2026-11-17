@@ -1596,6 +1596,7 @@ type PersonPictureChangedHandler = (e: PersonPictureChangedEvent) => void
 type BoardFileChangedHandler = (e: BoardFileChangedEvent) => void
 type DocConflictCopyHandler = (e: DocConflictCopyEvent) => void
 type DocVersionChangedHandler = (e: DocVersionChangedEvent) => void
+type DocStructureChangedHandler = (e: DocStructureChangedEvent) => void
 // thread-read-v1 — the unread store's live state (`thread_read` /
 // `project_read`, the whole frame).
 export type ReadStateChangedHandler = (e: ThreadReadEvent | ProjectReadEvent) => void
@@ -1653,6 +1654,7 @@ interface AppBusHandlers {
   boardFileChanged: Set<BoardFileChangedHandler>
   docConflictCopy: Set<DocConflictCopyHandler>
   docVersionChanged: Set<DocVersionChangedHandler>
+  docStructureChanged: Set<DocStructureChangedHandler>
   gitChanged: Set<GitChangedHandler>
   gitNotesChanged: Set<GitNotesChangedHandler>
   openChanges: Set<OpenChangesHandler>
@@ -1724,6 +1726,7 @@ function createBusState(scopeId: string): BusState {
       boardFileChanged: new Set(),
       docConflictCopy: new Set(),
       docVersionChanged: new Set(),
+      docStructureChanged: new Set(),
       gitChanged: new Set(),
       gitNotesChanged: new Set(),
       openChanges: new Set(),
@@ -2064,6 +2067,11 @@ export function onDocVersionChanged(scope: ServerScope, fn: DocVersionChangedHan
   return addHandler(busFor(scope).handlers.docVersionChanged, fn)
 }
 
+/** A blob doc's structure changed: a node claim taken or ended, an index, a comment (filter on `rel` and `change`). */
+export function onDocStructureChanged(scope: ServerScope, fn: DocStructureChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.docStructureChanged, fn)
+}
+
 /** Changes tab v1 — subscribe to APP-LEVEL `git_changed` on `scope`'s
  *  server. Filter on `workspacePath`; refetch the snapshot when `rev`
  *  differs from the one you hold. */
@@ -2358,6 +2366,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   doc_version_changed: (h, m) => {
     for (const fn of h.docVersionChanged) fn(m)
+  },
+  doc_structure_changed: (h, m) => {
+    for (const fn of h.docStructureChanged) fn(m)
   },
   git_changed: (h, m) => {
     for (const fn of h.gitChanged) fn(m)

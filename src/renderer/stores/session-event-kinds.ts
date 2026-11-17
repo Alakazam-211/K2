@@ -138,11 +138,10 @@ export const SESSION_EVENT_ROUTES = {
   board_file_changed: { class: 'app', app: true },
   // A blob doc's structure index or comments changed (a PSD/PSB file's
   // layers indexed, a comment op, an anchor's state, a node claim). The
-  // layer panel and comment pins will subscribe; nothing listens yet.
-  doc_structure_changed: {
-    class: 'app',
-    ignored: 'No client surface yet: the layer panel and comment pins are still to be built.',
-  },
+  // drawing viewer reads agents' holds again on a claim taken or ended
+  // (`onDocStructureChanged`); the layer panel and comment pins will follow.
+  // Carried, so a pinned room's drawing tab stays live too.
+  doc_structure_changed: { class: 'app', app: true, carried: true },
   // Tier 0 kept both versions of a file (kit v0.14.0): an open tab of it
   // shows the notice once (`DocConflictNotice`).
   doc_conflict_copy: { class: 'app', app: true },

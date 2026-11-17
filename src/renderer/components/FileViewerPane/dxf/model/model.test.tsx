@@ -76,6 +76,11 @@ describe('loadModel', () => {
     src.setHeader(changed)
     await loadModel(src, ESTIMATED_METRICS)
     expect(src.calls.block.filter((h) => h === '@h:2D')).toHaveLength(2)
+    // The same for a dimension's block when its text moves (the pack gives it a new digest).
+    const before = src.calls.block.filter((h) => h === '@h:2F').length
+    src.setHeader({ ...changed, blocks: changed.blocks.map((b) => (b.handle === '@h:2F' ? { ...b, digest: `${b.digest}-moved` } : b)) })
+    await loadModel(src, ESTIMATED_METRICS)
+    expect(src.calls.block.filter((h) => h === '@h:2F')).toHaveLength(before + 1)
   })
 
   it('a missing route (no header) is null, so the viewer keeps its own reading', async () => {
@@ -162,7 +167,7 @@ describe('ModelShapes', () => {
       const g = row(h).geom as { height: number }
       expect(baseline(el(svg, h))).toBeCloseTo(row(h).bbox![1] + 0.2 * g.height, 9)
     }
-    // The dimension's text, inside its block: top-left at the text point, so it spans its box (and the line at -5).
+    // The dimension's text, inside its block: centred on its text point, above the line at -5.
     const dimText = svg.querySelector('defs [data-h="@h:3F"]')!
     expect(baseline(dimText)).toBeCloseTo(DIM.entities.find((e) => e.h === '@h:3F')!.bbox![1], 9)
   })

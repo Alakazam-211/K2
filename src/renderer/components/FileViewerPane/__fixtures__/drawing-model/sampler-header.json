@@ -224,9 +224,9 @@
       "name": "*D1",
       "base": [0, 0],
       "entities": 2,
-      "bbox": [0, -6.5, 100, -4],
+      "bbox": [0, -5, 100, -1.875],
       "bbox_q": "approx",
-      "digest": "376fb0f659028781",
+      "digest": "b5f80aef01c8234a",
       "anon": true,
       "xref": false
     }

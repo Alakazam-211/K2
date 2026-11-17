@@ -61,13 +61,13 @@
       },
       "visible": "insert",
       "drawn": true,
-      "bbox": [50, -6.5, 54.5, -4],
+      "bbox": [47.75, -4.375, 52.25, -1.875],
       "bbox_q": "approx",
       "geom": {
-        "anchor": [50, -4],
+        "anchor": [50, -3.125],
         "attach": {
-          "h": "left",
-          "v": "top"
+          "h": "center",
+          "v": "middle"
         },
         "ref_width": 0,
         "height": 2.5,

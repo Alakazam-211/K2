@@ -400,6 +400,77 @@ fn disable_keeps_the_recorder_and_uninstall_needs_confirm_and_keeps_recordings()
     assert_eq!(code(&v), "owner_only");
 }
 
+// ── install only (prd-home-call-recording-v1 §7, HR-12, HR-24) ───────────
+
+/// Provisioning's step: the owner token installs the recorder with no
+/// confirm, and recording stays OFF for people (no org policy is ever
+/// sent); status then reads installed true, enabled false. A second run
+/// installs nothing again.
+#[test]
+fn install_only_installs_the_recorder_and_never_turns_recording_on() {
+    let t = t();
+    let (st, v) = t.call(&Who::Owner, INSTALL_ROUTE, files());
+    assert_eq!(st, "200 OK", "the owner token, no confirm: {v}");
+    assert_eq!((v["installed"].as_bool(), v["enabled"].as_bool(), v["state"].as_str()), (Some(true), Some(false), Some("installed")), "{v}");
+    let argv = t.recording_calls();
+    assert!(argv.iter().filter(|a| a.ends_with("recording stage")).count() == 4, "{argv:?}");
+    assert!(argv.iter().any(|a| a == "engine sew recording install"), "{argv:?}");
+    assert!(t.policy_posts().is_empty(), "recording.enabled is never sent: {:?}", t.policy_posts());
+    assert!(!t.ops.mgmt_calls.lock().unwrap().iter().any(|c| c.starts_with("POST")), "no Sew policy write at all");
+    let s = t.get(&Who::Owner, ROUTE);
+    assert_eq!((s["installed"].as_bool(), s["enabled"].as_bool()), (Some(true), Some(false)), "HR-24: installed, still off: {s}");
+    assert_eq!(t.get(&Who::Owner, "/cli/sew/status")["recording"], json!({"installed": true, "enabled": false, "version": "0.0.2"}));
+
+    t.reset();
+    let (st, v) = t.call(&Who::Owner, INSTALL_ROUTE, json!({}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!((v["alreadyInstalled"].as_bool(), v["enabled"].as_bool()), (Some(true), Some(false)), "{v}");
+    assert!(!t.recording_calls().iter().any(|a| a.ends_with("stage") || a.ends_with("install")), "{:?}", t.recording_calls());
+    assert!(t.policy_posts().is_empty());
+}
+
+/// Who: the owner token or an Owner or Admin login. Any passport (an agent
+/// with Manage chat and voice, a K2 terminal) is `person_only` and stages
+/// nothing; a Member is `owner_only`.
+#[test]
+fn install_only_is_people_only_and_agents_never_install() {
+    let t = t();
+    for who in [agent("w-it"), agent("w-plain"), Who::Shell { project_id: "w-it".into(), session_id: "s2".into() }] {
+        let (st, v) = t.call(&who, INSTALL_ROUTE, files());
+        assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "person_only"), "{who:?}: {v}");
+        assert!(!v["error"]["hint"].as_str().unwrap().contains("permission request"), "no card offers an install alone: {v}");
+    }
+    let (_, v) = t.call(&login(Role::Member), INSTALL_ROUTE, files());
+    assert_eq!(code(&v), "owner_only", "{v}");
+    assert!(t.recording_calls().is_empty() && t.policy_posts().is_empty());
+    let (st, v) = t.call(&login(Role::Admin), INSTALL_ROUTE, files());
+    assert_eq!(st, "200 OK", "an Admin login: {v}");
+    assert_eq!(v["enabled"], false);
+    assert!(t.policy_posts().is_empty());
+}
+
+/// The same gates as enable: under 8 GiB (or when the model doesn't fit)
+/// it is `preflight_failed` and nothing is staged; on a Sew without
+/// `app_recording` it is `sew_feature_missing`. Provisioning reads the
+/// preflight first and skips with a line (scripts/provision-k2-server.sh).
+#[test]
+fn install_only_refuses_a_box_that_cant_record_and_changes_nothing() {
+    let t = t();
+    *t.ops.mem.lock().unwrap() = Some(4 * GIB);
+    let p = t.get(&Who::Owner, PREFLIGHT_ROUTE);
+    assert_eq!(p["ready"], false, "{p}");
+    let (st, v) = t.call(&Who::Owner, INSTALL_ROUTE, files());
+    assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "preflight_failed"), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains("8 GiB"), "{v}");
+    assert!(!t.recording_calls().iter().any(|a| a.ends_with("stage") || a.ends_with("install")));
+    assert!(t.policy_posts().is_empty());
+
+    let t = t_with(&["app_governed_spaces"]);
+    let (st, v) = t.call(&Who::Owner, INSTALL_ROUTE, files());
+    assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "sew_feature_missing"), "{v}");
+    assert!(t.recording_calls().is_empty());
+}
+
 // ── preflight and Sew's refusals ─────────────────────────────────────────
 
 fn check_of<'a>(p: &'a Value, id: &str) -> &'a Value {

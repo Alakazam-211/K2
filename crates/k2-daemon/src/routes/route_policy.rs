@@ -179,6 +179,7 @@ pub const VOICE_CHAT_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/cli/home-chat/people"),
     ("POST", "/cli/home-chat/react"),
     ("GET", "/cli/home-chat/reactors"),
+    ("GET", "/cli/home-chat/replies"),
     ("POST", "/cli/home-chat/send"),
     ("GET", "/cli/home-chat/status"),
     ("GET", "/cli/home-chat/summary"),
@@ -1738,8 +1739,9 @@ mod tests {
         assert_eq!(table, list, "VoiceChat rows in ROUTES vs VOICE_CHAT_ALLOWLIST");
         // The PRD's 14 rows plus the reviewer shares (3 + 8 Garden reads),
         // plus Home chat's 21 (prd-home-people-channels-v1 HP-11), plus its
-        // 4 DM call rows (HP-39).
-        assert_eq!(list.len(), 14 + 3 + 8 + 21 + 4);
+        // 4 DM call rows (HP-39), plus a recording card's transcript lines
+        // (`home-chat/replies`, prd-home-call-recording-v1 §5).
+        assert_eq!(list.len(), 14 + 3 + 8 + 21 + 4 + 1);
         for p in VOICE_CHAT_PUBLIC {
             let r = lookup(p).unwrap_or_else(|| panic!("{p} is not a row"));
             assert!(

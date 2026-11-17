@@ -8,7 +8,19 @@
 //! POST /cli/voice/call/ring {dm, callId, memberIds?}  ring again (Sew allows 3 per person)
 //! POST /cli/voice/call/cancel {dm, callId}         the caller's Cancel while it rings
 //! POST /cli/voice/call/leave {callId?}             leave (today's leave)
+//! POST /cli/voice/recording/start {dm}             Record in the DM call (prd-home-call-recording-v1 S1)
+//! POST /cli/voice/recording/controls {dm}          the person's Sew permissions in the DM, for Record and Stop
 //! ```
+//!
+//! **Recording a DM call** (prd-home-call-recording-v1 §3, §5; HR-4, HR-5).
+//! Either person in the call may press Record or Stop while the owner or
+//! an Admin has "Record calls in DMs" on (Sew's `recording.dm_enabled`;
+//! Sew decides, K2 adds no rule of its own). Never a Voice & Chat only
+//! login (`routes::recording_act`), never an agent (join's refusals).
+//! Record goes on the person's held Home chat session, the one the call
+//! itself uses, and asks Sew for [`DM_AUDIO_KEEP_DAYS`] of audio, capped by
+//! the server's longest keep (`recording.audio_max_days`). Stop and the
+//! consent answer take a recording id and need nothing DM-specific.
 //!
 //! **Who.** A person's own login on this server (a desktop login or a
 //! paired phone), by join's rule (`routes::person_of`): the owner token,
@@ -48,6 +60,18 @@ use super::bff::{self, Person, Refusal};
 /// true; false makes them free on every Linux server.
 pub const DM_CALLS_NEED_PRO: bool = true;
 
+/// How long a DM recording's audio is kept, in days (prd-home-call-recording-v1
+/// Q7's default: Sew's own default), before the server's longest keep caps
+/// it ([`dm_keep_days`]). The transcript lasts as long as the DM's messages.
+pub const DM_AUDIO_KEEP_DAYS: u64 = 30;
+
+/// The keep days a DM recording asks Sew for: [`DM_AUDIO_KEEP_DAYS`], capped
+/// by the org's `recording.audio_max_days` when K2 knows it (Sew clamps
+/// again on its side).
+pub fn dm_keep_days(org_max: Option<u64>) -> u64 {
+    org_max.map_or(DM_AUDIO_KEEP_DAYS, |m| m.min(DM_AUDIO_KEEP_DAYS))
+}
+
 /// What the DM call routes decide from, besides the request.
 #[derive(Clone)]
 pub struct Ctx {
@@ -59,6 +83,8 @@ pub struct Ctx {
     pub call_cancel: bool,
     /// The voice BFF's deps (the lane hold; the leave's login session).
     pub bff: Arc<bff::Deps>,
+    /// The org's `recording.audio_max_days` as K2 last saw or set it.
+    pub audio_max_days: Option<u64>,
 }
 
 impl Ctx {
@@ -68,6 +94,7 @@ impl Ctx {
             tier: super::pro_tier().0,
             call_cancel: (crate::home_chat::deps().flags)().call_cancel,
             bff: bff::deps(),
+            audio_max_days: k2_core::tool_hook::recording_org_audio_max_days().ok().flatten(),
         }
     }
 }
@@ -250,6 +277,46 @@ pub fn cancel(p: &Person, b: &Value, ctx: &Ctx) -> R<Value> {
     v["callId"] = json!(id);
     v["hint"] = json!("this server's chat can't cancel a ring yet: you left the call, and they see a missed call");
     Ok(v)
+}
+
+/// `POST /cli/voice/recording/start {dm}`: the person's own Record in the
+/// DM's call, on their held Home chat session. Pressing Record is the
+/// starter's own consent and nobody else's; Sew tells the other person.
+pub fn recording_start(p: &Person, b: &Value, ctx: &Ctx) -> R<Value> {
+    gate(ctx)?;
+    let dm = the_dm(p, b)?;
+    let body = json!({ "audio_keep_days": dm_keep_days(ctx.audio_max_days) });
+    let a = crate::home_chat::routes::sew_as(&p.ext.to_string(), "POST", &bff::paths::recording_start(&dm), Some(&body))?;
+    if !a.ok() {
+        return Err(bff::recording_act_refusal(&a));
+    }
+    Ok(json!({ "ok": true, "action": "started", "dm": dm, "recording": a.body }))
+}
+
+/// `POST /cli/voice/recording/controls {dm}`: the person's own Sew
+/// permissions in the DM (Sew gives RECORD_CALLS to each person in a DM
+/// while `recording.dm_enabled` is on). The caller adds `rights`.
+pub fn recording_controls(p: &Person, b: &Value, ctx: &Ctx) -> R<Value> {
+    gate(ctx)?;
+    let dm = the_dm(p, b)?;
+    let a = crate::home_chat::routes::sew_as(&p.ext.to_string(), "GET", &bff::paths::channel(&dm), None)?;
+    if !a.ok() {
+        return Err(bff::sew_refusal(&a));
+    }
+    let Some(bits) = bff::perms_bits(&a.body) else {
+        return Err(Refusal::new(502, "chat_unavailable", "this server's chat answered the DM without the person's permissions"));
+    };
+    Ok(json!({
+        "ok": true,
+        "room": format!("dm:{dm}"),
+        "dm": dm,
+        "channelId": dm,
+        "myPerms": bits.to_string(),
+        "recordCalls": bits & bff::perms::RECORD_CALLS != 0,
+        "manageChannels": bits & bff::perms::MANAGE_CHANNELS != 0,
+        "recordingRule": Value::Null,
+        "recordingRequired": Value::Null,
+    }))
 }
 
 /// `POST /cli/voice/call/leave {callId?}`: today's leave.

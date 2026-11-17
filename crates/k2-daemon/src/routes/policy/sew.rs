@@ -136,6 +136,9 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/sew/recording", Member),
     post("/cli/sew/recording/disable", Admin),
     post("/cli/sew/recording/enable", Admin),
+    // prd-home-call-recording-v1 §7: install only, recording stays off
+    // (the owner token in provisioning, or an Owner or Admin login).
+    post("/cli/sew/recording/install", Admin),
     // Sew 0.9.0: the org recording policies (read; set by the owner or an
     // Admin in person, recording.required by the owner: handler). Sorted in
     // with the rest: `lookup` is a binary search.

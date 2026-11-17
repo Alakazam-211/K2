@@ -334,6 +334,62 @@ describe('Home chat view', () => {
     })
     await waitFor(() => expect(screen.getByTestId('home-chat-call-record-text').textContent).toBe('Call · 0:05'))
   })
+
+  it('a DM draws a recording card with Show transcript; the lines open beside it, never as bubbles (prd-home-call-recording-v1 §2, HR-10)', async () => {
+    const DM: HomeChatTarget = { kind: 'person', hostKey: 'local', ext: 'k2:connect:a', address: 'k2:connect:a::local' }
+    const card = m('50', ALEX, '', {
+      recording: {
+        recording_id: '42',
+        started_by: ALEX,
+        auto: false,
+        stopped_at: '2026-11-14T10:12:04Z',
+        stop_reason: 'stopped',
+        duration_ms: 724_000,
+        transcript: { state: 'done', turns: 2 },
+        audio: { state: 'available', keep_days: 30, mixed: true },
+      },
+    })
+    const line = (id: string, author: string, body: string) =>
+      m(id, author, body, { thread_root_id: '50', transcript: { recording_id: '42', speaker_id: author, start_ms: 0, end_ms: 900 } })
+    h.post.mockImplementation(async (_s, route) => (route === 'home-chat/dm' ? { ok: true, conv: '600' } : { ok: true }))
+    h.get.mockImplementation(async (_s, route, p) => {
+      if (route === 'home-chat/messages')
+        // A transcript line in the page (a thread reply also sent to the channel) never draws.
+        return { ok: true, conv: '600', page: { items: [m('49', ALEX, 'before the call'), card, line('51', ALEX, 'in the page')], has_more: false } }
+      if (route === 'home-chat/replies') {
+        expect(p).toEqual({ conv: '600', id: '50' })
+        return { ok: true, conv: '600', id: '50', page: { items: [line('52', ME, 'and me'), line('51', ALEX, 'hello from Alex')], has_more: false } }
+      }
+      if (route === 'home-chat/status') return { ok: true, on: true, reason: null, flags: {} }
+      if (route === 'home-chat/summary') return { ok: true, chat: 'live', convs: [] }
+      if (route === 'home-chat/people') return { ok: true, me: { ext: 'k2:connect:me', memberId: ME }, people: [{ ext: 'k2:connect:a', username: 'alex', displayName: 'Alex', ready: true, memberId: ALEX }] }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<HomeChatView target={DM} />)
+    await screen.findByText('before the call')
+    const text = await screen.findByTestId('home-chat-recording-card-text')
+    await waitFor(() => expect(text.textContent).toBe('Recording · 12:04 · started by Alex · transcript ready · audio kept 30 days'))
+    expect(screen.queryByText('in the page')).toBeNull()
+    expect(screen.getByTestId('home-chat-recording-card').closest('[data-zen-message="50"]')?.querySelector('[data-testid="home-chat-hover-row"]')).toBeFalsy()
+
+    fireEvent.click(screen.getByTestId('home-chat-show-transcript'))
+    const panel = await screen.findByTestId('home-chat-transcript')
+    await waitFor(() => expect(panel.querySelectorAll('[data-testid="home-chat-transcript-line"]').length).toBe(2))
+    const lines = [...panel.querySelectorAll('[data-testid="home-chat-transcript-line"]')].map((el) => el.textContent)
+    expect(lines).toEqual(['Alexhello from Alex', 'Youand me'])
+    // A live line goes to the open transcript, never the timeline.
+    await waitFor(() => expect(h.frames).not.toBeNull())
+    await act(async () => {
+      h.frames?.({ type: 'message', conv: '600', message: line('53', ALEX, 'a live line') })
+    })
+    await waitFor(() => expect(panel.querySelectorAll('[data-testid="home-chat-transcript-line"]').length).toBe(3))
+    expect(document.querySelector('[data-zen-message="53"]')).toBeNull()
+    for (const el of screen.getAllByTestId('home-chat-transcript-line')) expect(el.closest('[data-thread-column]')).toBeNull()
+    fireEvent.click(screen.getByTestId('home-chat-transcript-close'))
+    expect(screen.queryByTestId('home-chat-transcript')).toBeNull()
+    // Never audio: no player anywhere.
+    expect(document.querySelector('audio')).toBeNull()
+  })
 })
 
 describe('a chat that fails to open', () => {

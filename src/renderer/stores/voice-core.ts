@@ -773,8 +773,9 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   const readRecordingPerms = async (): Promise<void> => {
     const c = store.getState().call
     const read = deps.api.recordingControls
-    // DM calls record only by Sew's DM policy (off by default): no Record here.
-    if (!c || !read || convOfDmRoom(c.roomId)) return
+    // A DM call reads its controls too (prd-home-call-recording-v1 HR-7):
+    // Sew answers Record only while "Record calls in DMs" is on.
+    if (!c || !read) return
     const gen = callGen
     try {
       const perms = await read(deps.scopeFor(c.hostKey), c.roomId)

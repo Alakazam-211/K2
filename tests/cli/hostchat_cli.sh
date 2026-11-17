@@ -251,6 +251,13 @@ class H(BaseHTTPRequestHandler):
                     "hint": "nothing changed: an Owner or Admin installs Sew's recorder in person. Ask on a permission card: k2 permission request sew.recording-enable --why \"<why>\""}}
             else:
                 out = {"ok": True, "state": "enabled", "installed": True, "enabled": True, "version": "0.9.0", "model": "base-q8_0"}
+        elif p == "/cli/sew/recording/install":
+            if token == scoped:
+                status, out = 403, {"ok": False, "error": {"code": "person_only",
+                    "hint": "nothing changed: installing Sew's recorder is the server's owner's or an admin's, never an agent's or an app terminal's. Ask your human in your Thread"}}
+            else:
+                out = {"ok": True, "state": "installed", "installed": True, "enabled": False, "version": "0.9.0", "model": "base-q8_0",
+                       "next": "recording stays off until the owner or an admin turns it on"}
         elif p == "/cli/sew/recording/disable":
             out = {"ok": True, "enabled": False, "installed": True, "kept": "the recorder stays installed and every recording is kept"}
         elif p == "/cli/sew/recording/uninstall":
@@ -650,7 +657,7 @@ run owner hostchat recording enable --bogus
 assert_eq "recording: unknown flag → exit 2" "$rc" "2"
 run owner hostchat recording status --model-file x.gguf
 assert_eq "recording: --model-file outside enable → exit 2" "$rc" "2"
-assert_contains "recording: --model-file names enable" "$err" "only applies to k2 hostchat recording enable"
+assert_contains "recording: --model-file names enable" "$err" "only applies to k2 hostchat recording install and enable"
 run owner hostchat recording status --yes
 assert_eq "recording: --yes outside uninstall → exit 2" "$rc" "2"
 run owner hostchat recording uninstall </dev/null
@@ -669,6 +676,22 @@ assert_eq "recording enable from a K2 terminal → exit 3" "$rc" "3"
 assert_contains "recording enable from a K2 terminal: person_only" "$err" '"error": "person_only"'
 assert_contains "recording enable from a K2 terminal: the card" "$err" "k2 permission request sew.recording-enable"
 assert_eq "recording enable from a K2 terminal carries no confirm" "$(req_where /cli/sew/recording/enable body)" '{}'
+# prd-home-call-recording-v1 §7: install only. No confirm (no Touch ID, no
+# vault password: provisioning has neither), and it says recording stays off.
+run owner hostchat recording install </dev/null
+assert_eq "recording install exit 0" "$rc" "0"
+assert_eq "recording install is a POST" "$(req_where /cli/sew/recording/install method)" "POST"
+assert_eq "recording install carries no confirm" "$(req_where /cli/sew/recording/install body)" '{}'
+assert_contains "recording install: installed" "$out" "installed"
+assert_contains "recording install: recording stays off" "$out" "off"
+run owner hostchat recording install --model-file /tmp/m.gguf --json </dev/null
+assert_eq "recording install --model-file exit 0" "$rc" "0"
+assert_contains "recording install --model-file is sent" "$(req_where /cli/sew/recording/install body)" '"modelFilePath": "/tmp/m.gguf"'
+run cell hostchat recording install
+assert_eq "recording install from a K2 terminal → exit 3" "$rc" "3"
+assert_contains "recording install from a K2 terminal: person_only" "$err" '"error": "person_only"'
+run owner hostchat recording disable --model-file /tmp/m.gguf
+assert_eq "--model-file on disable is a usage error" "$rc" "2"
 run owner hostchat recording status
 assert_eq "recording status exit 0" "$rc" "0"
 assert_contains "recording status: not installed" "$out" "not installed"

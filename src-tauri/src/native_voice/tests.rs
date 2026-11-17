@@ -904,6 +904,21 @@ async fn record_and_stop_call_the_daemons_routes() {
     }
 }
 
+/// HR-6 (prd-home-call-recording-v1): a DM call's Record names the DM, as
+/// its join does, never the room string `dm:<conv>`; a room's stays `{room}`.
+#[test]
+fn a_dm_calls_record_names_the_dm() {
+    let req = |room: &str, action: &str| -> tauri_plugin_sew_voice::RecordingRequest {
+        serde_json::from_value(json!({"target": "h", "room": room, "action": action, "recording_id": "42"})).expect("request")
+    };
+    let (route, body) = super::provider::recording_body(&req("dm:900", "start")).expect("start");
+    assert_eq!((route, body), ("recording/start", json!({"dm": "900"})));
+    let (route, body) = super::provider::recording_body(&req("room-1", "start")).expect("start");
+    assert_eq!((route, body), ("recording/start", json!({"room": "room-1"})));
+    let (route, body) = super::provider::recording_body(&req("dm:900", "stop")).expect("stop");
+    assert_eq!((route, body), ("recording/stop", json!({"recordingId": "42"})), "Stop names the recording either way");
+}
+
 /// The plugin's Record and Stop are their own permission set; K2's
 /// renderer knows the two command names.
 #[test]

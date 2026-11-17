@@ -46,6 +46,7 @@ import { hostIsVoiceChatOnly } from '@/lib/voice-chat-only'
 import { CALL_RING_Z } from '@/lib/overlay-layers'
 import { useStore } from 'zustand'
 import { HomeChatCallingBar, HomeChatCallStrip, HomeChatRingCard, ringLayerPlace, type CallButtonState, type RingLayerPlace } from './HomeChatCall'
+import { dmCallRecording, type DmCallRecording } from '@/lib/home-chat/recordings'
 import { serverLabelFor } from './serverLabel'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { ConversationCallPlace } from '@/components/Voice/CallPlace'
@@ -70,12 +71,15 @@ export interface DmCallView {
   /** The caller's bar, or null. */
   calling: 'joining' | 'ringing' | 'busy' | 'declined' | 'missed' | null
   /** The in-call strip: here (with seconds), elsewhere, or none. */
-  strip: { seconds: number | null; muted: boolean; elsewhere: string | null } | null
+  strip: { seconds: number | null; muted: boolean; elsewhere: string | null; recording?: DmCallRecording | null } | null
   call: () => void
   cancel: () => void
   callAgain: () => void
   leave: () => void
   toggleMute: () => void
+  /** Record and Stop (the voice controller's, as the top bar's). */
+  record: () => void
+  stopRecording: () => void
 }
 
 /** One DM's call, for the open chat view. `me` is the person's Sew member id. */
@@ -110,7 +114,7 @@ export function useDmCall(hostKey: string, conv: string | null, name: string, me
   let strip: DmCallView['strip'] = null
   if (mine && calling === null && voiceCall) {
     const seconds = voiceCall.connectedAt !== null ? Math.max(0, Math.floor((now - voiceCall.connectedAt) / 1000)) : null
-    strip = { seconds, muted: voiceCall.muted, elsewhere: null }
+    strip = { seconds, muted: voiceCall.muted, elsewhere: null, recording: dmCallRecording(voiceCall) }
   } else if (!mine && live && me && live.participantIds.includes(me)) {
     strip = { seconds: null, muted: false, elsewhere: 'another device' }
   }
@@ -138,8 +142,10 @@ export function useDmCall(hostKey: string, conv: string | null, name: string, me
     const c = voice.store.getState().call
     if (c) voice.setMuted(!c.muted)
   }, [])
+  const record = useCallback(() => void voice.startRecording(), [])
+  const stopRecording = useCallback(() => void voice.stopRecording(), [])
 
-  return { calling, strip, call, cancel, callAgain, leave, toggleMute }
+  return { calling, strip, call, cancel, callAgain, leave, toggleMute, record, stopRecording }
 }
 
 /** The header Call button's state for this DM's call: calling while you
@@ -161,7 +167,18 @@ export function HomeChatDmCallBars({ view, name, hostKey, conv }: { view: DmCall
     return <HomeChatCallingBar name={name} state={view.calling} onCancel={view.cancel} onCallAgain={view.callAgain} />
   }
   if (view.strip) {
-    const strip = <HomeChatCallStrip seconds={view.strip.seconds} muted={view.strip.muted} elsewhere={view.strip.elsewhere} onMute={view.toggleMute} onLeave={view.leave} />
+    const strip = (
+      <HomeChatCallStrip
+        seconds={view.strip.seconds}
+        muted={view.strip.muted}
+        elsewhere={view.strip.elsewhere}
+        onMute={view.toggleMute}
+        onLeave={view.leave}
+        recording={view.strip.recording ?? null}
+        onRecord={view.record}
+        onStop={view.stopRecording}
+      />
+    )
     if (view.strip.elsewhere || !conv) return strip
     return <ConversationCallPlace hostKey={hostKey} roomId={dmRoomId(conv)} fallback={strip} />
   }

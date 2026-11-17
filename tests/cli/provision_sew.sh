@@ -124,6 +124,17 @@ print(json.dumps(d))' "$(rd installed)" "$(rd identity)" "$(rd voice)" "$(rd bac
 		[ -n "${FAKE_DOCTOR+x}" ] || FAKE_DOCTOR='checking...\n{"verdict":{"failed":[],"degraded":["drill.recent","keys.mirror","keys.swap","search.encrypted_disk","media.turn","media.reachability"]}}\n'
 		printf '%b' "$FAKE_DOCTOR"
 		[ "${DOCTOR_RC:-0}" = 0 ] || exit "$DOCTOR_RC" ;;
+	# 9c.8: the recorder, install only. FAKE_REC_PREFLIGHT is the
+	# preflight's text; FAIL_REC_INSTALL=1 fails the install.
+	"hostchat recording preflight")
+		[ -n "${FAKE_REC_PREFLIGHT+x}" ] || FAKE_REC_PREFLIGHT='ready\n  ok    ram            16.0 GiB of RAM\n'
+		printf '%b' "$FAKE_REC_PREFLIGHT" ;;
+	"hostchat recording install")
+		[ "${FAIL_REC_INSTALL:-0}" = 1 ] && { echo '{"error": "model_does_not_fit"}' >&2; exit 3; }
+		echo 1 >"$S/recorder"; echo "recorder:        installed"; echo "recording:       off" ;;
+	"hostchat recording status --json")
+		if [ -f "$S/recorder" ]; then echo '{"ok": true, "installed": true, "enabled": false}'
+		else echo '{"ok": true, "installed": false, "enabled": false}'; fi ;;
 	*) echo "fake k2: unexpected $*" >&2; exit 99 ;;
 esac
 SH
@@ -167,15 +178,24 @@ hostchat backup
 hostchat media install
 settings set homeChat true
 settings set voiceRoomsPreview true
-hostchat doctor --json"
+hostchat doctor --json
+hostchat recording preflight
+hostchat recording install
+hostchat recording status --json"
 [ "$(mutating)" = "$want" ] || fail "call order: $(mutating)"
 <<<"$out" grep -q 'Sew \[2/7\]: hostchat preflight' || fail "state not-installed must run preflight + enable: $out"
 ok "status state not-installed (null installedVersion/identityProvider) → preflight + enable run"
 ok "preflight → enable → backup (before media) → media install → homeChat → voiceRoomsPreview → doctor"
 [ "$(grep -v ' hostchat status --json$' "$FAKE_STATE/timeouts.log")" = "20m hostchat enable --identity k2
 30m hostchat backup
-15m hostchat media install" ] || fail "time limits: $(cat "$FAKE_STATE/timeouts.log")"
-ok "enable 20m, backup 30m, media install 15m"
+15m hostchat media install
+2m hostchat recording preflight
+15m hostchat recording install
+2m hostchat recording status --json" ] || fail "time limits: $(cat "$FAKE_STATE/timeouts.log")"
+ok "enable 20m, backup 30m, media install 15m, recorder install 15m"
+<<<"$out" grep -q 'Sew: recorder installed, recording off' || fail "recorder line: $out"
+if <<<"$calls" grep -q 'recording enable\|recording policy'; then fail "provisioning must never turn recording on: $calls"; fi
+ok "9c.8: the recorder is installed after the doctor and recording stays off (no enable, no policy)"
 [ "$(<<<"$calls" grep -c '^hostchat status --json$')" -eq 4 ] || fail "status must be re-read after enable, backup and media: $calls"
 grep -q '^2m hostchat status --json$' "$FAKE_STATE/timeouts.log" || fail "status reads must be time-bounded"
 ok "status read at start and re-read after enable, backup and media install (2m bound)"
@@ -189,7 +209,10 @@ PRE_INSTALLED=0.10.3 PRE_VOICE=1 PRE_BACKUP_AGE=1200000 run_step box2
 [ "$rc" -eq 0 ] || fail "re-run exit $rc: $out"
 [ "$(mutating)" = "settings set homeChat true
 settings set voiceRoomsPreview true
-hostchat doctor --json" ] || fail "re-run calls: $(mutating)"
+hostchat doctor --json
+hostchat recording preflight
+hostchat recording install
+hostchat recording status --json" ] || fail "re-run calls: $(mutating)"
 <<<"$out" grep -q 'last backup is 20 min old — skipped' || fail "backup skip line: $out"
 ok "idempotent re-run; a backup under 1 h old is not repeated"
 PRE_INSTALLED=0.10.3 PRE_VOICE=1 PRE_BACKUP_AGE=3600000 run_step box2b
@@ -272,6 +295,27 @@ expect_fail "backup timeout" "hostchat backup timed out after 30 min"
 FAKE_HANG="hostchat media install" run_step t3
 expect_fail "media timeout" "hostchat media install timed out after 15 min"
 ok "enable / backup / media install timeouts stop provisioning and say so"
+
+echo "== 9c.8: the recorder never fails provisioning =="
+FAKE_REC_PREFLIGHT='NOT ready\n  ok    os             Linux\n  fail  ram            4.0 GiB of RAM  (recording needs at least 8 GiB of RAM)\n' run_step r1
+[ "$rc" -eq 0 ] || fail "a 4 GiB box must still provision: $out"
+<<<"$out" grep -q 'Sew: recorder skipped (not ready: ram 4.0 GiB of RAM' || fail "4 GiB skip line: $out"
+if <<<"$calls" grep -q 'recording install'; then fail "nothing is installed on a 4 GiB box: $calls"; fi
+<<<"$out" grep -q 'SUMMARY=installed (Sew' || fail "Sew itself still provisions: $out"
+ok "under 8 GiB: one skip line naming the check, no install, provisioning goes on"
+FAKE_REC_PREFLIGHT='NOT ready\n  fail  fit            Sew needs 9000 MiB; this shared box gives them 5000 MiB  (free memory)\n' run_step r2
+[ "$rc" -eq 0 ] && <<<"$out" grep -q 'recorder skipped (not ready: fit' || fail "the model doesn't fit: $out"
+ok "the model doesn't fit: a skip line"
+FAIL_REC_INSTALL=1 run_step r3
+[ "$rc" -eq 0 ] || fail "a failed recorder install must not stop provisioning: $out"
+<<<"$out" grep -q 'Sew: recorder not installed (hostchat recording install exit 3' || fail "install failure line: $out"
+ok "a failed install: a line, provisioning goes on"
+K2_SKIP_RECORDER=1 run_step r4
+[ "$rc" -eq 0 ] && <<<"$out" grep -q 'Sew: recorder skipped (K2_SKIP_RECORDER=1)' || fail "K2_SKIP_RECORDER: $out"
+if <<<"$calls" grep -q 'hostchat recording'; then fail "K2_SKIP_RECORDER=1 runs no recorder step: $calls"; fi
+ok "K2_SKIP_RECORDER=1 skips 9c.8"
+grep -q '^#   K2_SKIP_RECORDER ' "$PROVISION" && grep -q 'echo "  recorder:  ${REC_LINE}"' "$PROVISION" || fail "K2_SKIP_RECORDER documented, summary prints the recorder line"
+ok "K2_SKIP_RECORDER documented; summary prints the recorder line"
 
 echo "== opt-out and legacy daemon: skipped, nothing run =="
 K2_SKIP_SEW=1 run_step s1

@@ -28,6 +28,8 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/home-chat/people", VoiceChat),
     post("/cli/home-chat/react", VoiceChat),
     get("/cli/home-chat/reactors", VoiceChat),
+    // prd-home-call-recording-v1 §5: a recording card's transcript lines.
+    get("/cli/home-chat/replies", VoiceChat),
     post("/cli/home-chat/send", VoiceChat),
     get("/cli/home-chat/status", VoiceChat),
     get("/cli/home-chat/summary", VoiceChat),

@@ -215,10 +215,14 @@ pub fn consent_body(a: &ConsentAnswer) -> Value {
 
 /// Record → `recording/start {room}`; Stop → `recording/stop {recordingId}`.
 /// The daemon maps the room (a slug, or Sew's channel id after a move) to
-/// the channel itself.
+/// the channel itself. A DM call's room (`dm:<conversation id>`) goes as
+/// `{dm}`, as its join does (prd-home-call-recording-v1 HR-6).
 pub fn recording_body(req: &RecordingRequest) -> Result<(&'static str, Value), ProviderError> {
     match (req.action, req.recording_id) {
-        (RecordingControl::Start, _) => Ok(("recording/start", json!({ "room": req.room }))),
+        (RecordingControl::Start, _) => match req.room.strip_prefix(DM_ROOM_PREFIX) {
+            Some(dm) => Ok(("recording/start", json!({ "dm": dm }))),
+            None => Ok(("recording/start", json!({ "room": req.room }))),
+        },
         (RecordingControl::Stop, Some(id)) => Ok(("recording/stop", json!({ "recordingId": id.to_string() }))),
         (RecordingControl::Stop, None) => Err(refused("no_recording", "there is no recording to stop")),
         _ => Err(refused("recording_unsupported", "this K2 doesn't know that recording action")),

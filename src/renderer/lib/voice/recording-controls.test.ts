@@ -78,3 +78,35 @@ describe("K2's own recording notice", () => {
     expect(recordingBadgeTitle(rec(), 'Alice')).toBe('Recording: started by Alice')
   })
 })
+
+describe("a DM call's recording notice (prd-home-call-recording-v1 §2, HR-8)", () => {
+  it('says this DM, OK and Leave, and the PRD wording, line by line', () => {
+    const t = recordingNoticeText({ roomName: 'Alex', prompt: prompt({ startedByName: 'Alex' }), agentReaders: false, ask: 'in_call', dm: true })
+    expect(t.title).toBe('This call is being recorded')
+    expect(t.lines).toEqual([
+      'Alex started recording this call.',
+      "Everyone's voice is recorded and transcribed. The transcript is kept in this DM.",
+      'The audio is kept for 30 days.',
+      'Staying in the call means being recorded.',
+    ])
+    expect([t.ok, t.leave]).toEqual(['OK', 'Leave call'])
+    expect([t.title, ...t.lines].join(' ')).not.toMatch(/room/i)
+  })
+
+  it("joining a DM call that already records: the same notice, Don't join", () => {
+    const j = recordingNoticeText({ roomName: 'Alex', prompt: prompt(), agentReaders: false, ask: 'join', dm: true })
+    expect(j.title).toBe('This call is being recorded')
+    expect(j.lines.at(-1)).toBe('Joining means being recorded.')
+    expect([j.ok, j.leave]).toEqual(['OK', "Don't join"])
+  })
+
+  it("never K2's agent line in a DM, even when an agent holds Read call transcripts; Sew's own word still shows", () => {
+    expect(recordingNoticeText({ roomName: 'Alex', prompt: prompt(), agentReaders: true, ask: 'in_call', dm: true }).lines).not.toContain(AGENT_READERS_LINE)
+    expect(recordingNoticeText({ roomName: 'Alex', prompt: prompt({ agentReaders: true }), agentReaders: false, ask: 'in_call', dm: true }).lines).toContain(AGENT_READERS_LINE)
+  })
+
+  it("a DM's badge names the server's rule, never a room", () => {
+    expect(recordingBadgeTitle(rec({ trigger: 'required' }), null, true)).toBe('Recording: this server records every call with more than one person')
+    expect(recordingBadgeTitle(rec(), 'Alex', true)).toBe('Recording: started by Alex')
+  })
+})

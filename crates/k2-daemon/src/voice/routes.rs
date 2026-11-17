@@ -15,23 +15,23 @@
 //! POST /cli/voice/moderate {room, person, action}   kick|mute|unmute|deafen|undeafen (owner/Admin login)
 //! POST /cli/voice/recording/consent {recording_id, consent, notice_version?}
 //!                                          a person's own login only → Sew's recording
-//! POST /cli/voice/recording/start {room}   Record (Sew 0.9.0): a person's own login only
+//! POST /cli/voice/recording/start {room} | {dm}
+//!                                          Record (Sew 0.9.0): a person's own login only,
+//!                                          never Voice & Chat only; `dm` a DM call (`dm_call`)
 //! POST /cli/voice/recording/stop {recordingId}   Stop (Sew 0.9.0): the same callers
-//! POST /cli/voice/recording/controls {room} the person's Sew permissions in a room
+//! POST /cli/voice/recording/controls {room} | {dm}
+//!                                          the person's Sew permissions in a room or DM
 //!                                          (RECORD_CALLS, MANAGE_CHANNELS) for the buttons
 //! GET  /cli/voice/recordings[?room=]       this server's rooms' recordings (voice::transcripts)
 //! GET  /cli/voice/transcript?id=[&after=]  one recording's transcript (voice::transcripts)
-//! POST /cli/voice/recording/start {room}   Record (Sew 0.9.0): a person's own login only
-//! POST /cli/voice/recording/stop {recordingId}  Stop (Sew 0.9.0): a person's own login only
-//! GET  /cli/voice/recording/controls?room= the person's Sew permissions in a room
-//!                                          (RECORD_CALLS, MANAGE_CHANNELS), for the buttons
 //! POST /cli/voice/repair {}                check the K5 Space with Sew and repair it
 //!                                          (owner/Admin, or an agent with Manage chat and voice)
 //! ```
 //!
 //! Every route answers 404 `voice_rooms_off` while the preview is off (the
 //! family is dark, like compute's), except DM calls while Home chat is on
-//! (a join with `dm`, `call/*`, and the call's own session routes). Every POST route is POST-only (`if
+//! (a join with `dm`, `call/*`, the call's own session routes, and its
+//! recording: consent, stop, and start or controls with `dm`; HR-3). Every POST route is POST-only (`if
 //! !is_post { 405 }` here, and the dispatcher's `require_post`). Floors for
 //! logins live in `route_policy`; this handler classifies every caller:
 //!
@@ -149,13 +149,28 @@ pub fn is_post_route(p: &str) -> bool {
 /// The routes a DM call uses: they answer while Home chat is on even with
 /// the voice rooms preview off (the handler then takes only a DM call).
 pub fn dm_capable(p: &str) -> bool {
-    CALL_ROUTES.contains(&p) || matches!(p, JOIN | LEAVE | SESSION_STATE | SESSION_STATS | SESSION_KEY_PACKAGES | SESSION_KEYS_JOIN)
+    CALL_ROUTES.contains(&p)
+        || matches!(
+            p,
+            JOIN | LEAVE
+                | SESSION_STATE
+                | SESSION_STATS
+                | SESSION_KEY_PACKAGES
+                | SESSION_KEYS_JOIN
+                // A DM call's recording (prd-home-call-recording-v1 HR-3):
+                // the notice's answer and Stop by recording id, Record and
+                // the controls read by `dm`.
+                | RECORDING_CONSENT
+                | RECORDING_STOP
+                | RECORDING_START
+                | RECORDING_CONTROLS
+        )
 }
 
 /// Is this request a DM call's (with the voice rooms preview off, only
-/// these answer)? A join must name a `dm`.
+/// these answer)? A join, a Record and a controls read must name a `dm`.
 fn is_dm_call(path: &str, body: &[u8]) -> bool {
-    if path == JOIN {
+    if matches!(path, JOIN | RECORDING_START | RECORDING_CONTROLS) {
         return serde_json::from_slice::<Value>(body).ok().is_some_and(|b| b.get("dm").is_some());
     }
     dm_capable(path)
@@ -961,8 +976,9 @@ fn recording_id_ok(id: &str) -> bool {
     !id.is_empty() && id.len() <= 19 && !id.starts_with('0') && id.bytes().all(|x| x.is_ascii_digit())
 }
 
-/// `POST /cli/voice/recording/start {room}` / `…/stop {recordingId}`: the
-/// caller's class first, then the body, then the person's own login.
+/// `POST /cli/voice/recording/start {room}` / `{dm}` / `…/stop {recordingId}`:
+/// the caller's class first (a Voice & Chat only login never records), then
+/// the body, then the person's own login.
 fn recording_act(c: &Caller, owner_token: &str, path: &str, b: &Value) -> CliResponse {
     if let Some(r) = not_a_person(c) {
         return r;
@@ -970,10 +986,20 @@ fn recording_act(c: &Caller, owner_token: &str, path: &str, b: &Value) -> CliRes
     if matches!(c, Caller::Login { role: Role::VoiceChat, .. }) {
         return voice_chat_cannot_record();
     }
+    if path == RECORDING_START && b.get("dm").is_some() {
+        let p = match need_person(c, owner_token) {
+            Ok(p) => p,
+            Err(r) => return r,
+        };
+        return match super::dm_call::recording_start(&p, b, &super::dm_call::Ctx::live()) {
+            Ok(v) => ok(v),
+            Err(r) => refuse(&r),
+        };
+    }
     let act = if path == RECORDING_START {
         match field(b, "room") {
             Some(room) => bff::RecordingAct::Start { room },
-            None => return no(400, "usage", "send {\"room\": \"room-1\"}"),
+            None => return no(400, "usage", "send {\"room\": \"room-1\"} (a voice room) or {\"dm\": \"<the DM's id>\"} (a DM call)"),
         }
     } else {
         match field(b, "recordingId").or_else(|| field(b, "recording_id")) {
@@ -985,11 +1011,16 @@ fn recording_act(c: &Caller, owner_token: &str, path: &str, b: &Value) -> CliRes
         Ok(p) => p,
         Err(r) => return r,
     };
-    let view = match k2_core::tool_hook::admin_space_view() {
-        Ok(v) => v,
-        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+    // Stop names a recording, not a room: it needs no room list (a DM
+    // call's Stop answers on a server with no K5 rooms, HR-3).
+    let rooms = match &act {
+        bff::RecordingAct::Start { .. } => match k2_core::tool_hook::admin_space_view() {
+            Ok(v) => v.rooms,
+            Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+        },
+        bff::RecordingAct::Stop { .. } => Vec::new(),
     };
-    match bff::recording_act(&p, &act, &view.rooms, &bff::deps()) {
+    match bff::recording_act(&p, &act, &rooms, &bff::deps()) {
         Ok(v) => ok(v),
         Err(r) => refuse(&r),
     }
@@ -1002,29 +1033,29 @@ fn recording_controls(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
     if let Some(r) = not_a_person(c) {
         return r;
     }
-    let Some(room) = field(b, "room") else {
-        return no(400, "usage", "send {\"room\": \"room-1\"}");
-    };
+    let dm = b.get("dm").is_some();
+    let room = field(b, "room");
+    if !dm && room.is_none() {
+        return no(400, "usage", "send {\"room\": \"room-1\"} (a voice room) or {\"dm\": \"<the DM's id>\"} (a DM call)");
+    }
     let p = match need_person(c, owner_token) {
         Ok(p) => p,
         Err(r) => return r,
     };
-    let view = match k2_core::tool_hook::admin_space_view() {
-        Ok(v) => v,
-        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+    let perms = if dm {
+        super::dm_call::recording_controls(&p, b, &super::dm_call::Ctx::live())
+    } else {
+        let view = match k2_core::tool_hook::admin_space_view() {
+            Ok(v) => v,
+            Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+        };
+        bff::recording_perms(&p, room.as_deref().unwrap_or_default(), &view.rooms, &bff::deps())
     };
-    match bff::recording_perms(&p, &room, &view.rooms, &bff::deps()) {
-        Ok(mut v) => {
-            if p.role == Role::VoiceChat {
-                v["recordCalls"] = json!(false);
-                v["manageChannels"] = json!(false);
-                v["voiceChatOnly"] = json!(true);
-            }
-            v["agentReaders"] = json!(super::transcripts::any_reader());
+    match perms {
+        Ok(v) => {
             // Sew 0.9.2's plugin (`set_recording_rights`) takes the raw facts
             // and decides itself: the org policies as Sew last reported them
-            // (null when K2 hasn't seen them), the room is no DM, and no App
-            // caps the K5 Space.
+            // (null when K2 hasn't seen them).
             let seen = |key: &str| {
                 k2_core::tool_hook::recording_policies()
                     .ok()
@@ -1032,17 +1063,50 @@ fn recording_controls(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
                     .and_then(|r| r.seen)
                     .unwrap_or(Value::Null)
             };
-            v["rights"] = json!({
-                "dm": false,
-                "recordingEnabled": seen(k2_core::tool_hook::sew_wire::recording::POLICY_ENABLED),
-                "recordingDmEnabled": seen(k2_core::tool_hook::sew_wire::recording::POLICY_DM_ENABLED),
-                "recordCapped": false,
-                "agent": false,
-            });
-            ok(v)
+            let facts = ControlsFacts {
+                dm,
+                voice_chat: p.role == Role::VoiceChat,
+                agent_readers: super::transcripts::any_reader(),
+                recording_enabled: seen(k2_core::tool_hook::sew_wire::recording::POLICY_ENABLED),
+                recording_dm_enabled: seen(k2_core::tool_hook::sew_wire::recording::POLICY_DM_ENABLED),
+            };
+            ok(controls_answer(v, &facts))
         }
         Err(r) => refuse(&r),
     }
+}
+
+/// What `recording/controls` adds to the person's Sew permissions.
+pub(crate) struct ControlsFacts {
+    /// A DM call (`{dm}`), not a K5 room.
+    pub dm: bool,
+    /// A Voice & Chat only login: it never records.
+    pub voice_chat: bool,
+    /// Any agent holds "Read call transcripts" (K5 rooms only).
+    pub agent_readers: bool,
+    pub recording_enabled: Value,
+    pub recording_dm_enabled: Value,
+}
+
+/// The controls answer: a Voice & Chat only login never records; K2's
+/// agent line never for a DM ("Read call transcripts" reaches only the K5
+/// rooms, HR-8); `rights` as the plugin takes them, `dm` true for a DM call
+/// (HR-5), no App caps either.
+pub(crate) fn controls_answer(mut v: Value, f: &ControlsFacts) -> Value {
+    if f.voice_chat {
+        v["recordCalls"] = json!(false);
+        v["manageChannels"] = json!(false);
+        v["voiceChatOnly"] = json!(true);
+    }
+    v["agentReaders"] = json!(!f.dm && f.agent_readers);
+    v["rights"] = json!({
+        "dm": f.dm,
+        "recordingEnabled": f.recording_enabled,
+        "recordingDmEnabled": f.recording_dm_enabled,
+        "recordCapped": false,
+        "agent": false,
+    });
+    v
 }
 
 fn moderate(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {

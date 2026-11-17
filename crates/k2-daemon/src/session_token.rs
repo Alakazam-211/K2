@@ -1045,6 +1045,7 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/sew/recording",
         "/cli/sew/recording/preflight",
         "/cli/sew/recording/enable",
+        "/cli/sew/recording/install",
         "/cli/sew/recording/disable",
         "/cli/sew/recording/uninstall",
         "/cli/sew/meet/bind",

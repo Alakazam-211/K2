@@ -884,8 +884,11 @@ describe('panels', () => {
     tab('Recording')
     await waitFor(() => expect(screen.getAllByTestId('sew-recording-app')).toHaveLength(2))
     expect(screen.queryByTestId('sew-recording-unavailable')).toBeNull()
-    expect(screen.getByTestId('sew-recording-policy').textContent).toContain('Recording in App calls')
-    expect(screen.getByTestId('sew-recording-policies').textContent).not.toContain('recording.enabled')
+    // prd-home-call-recording-v1 HR-11: recording.enabled is the "Recording on this server" switch, not a read-only row.
+    const sw = document.querySelector('[data-testid="sew-recording-switch"][data-key="recording.enabled"]')
+    expect(sw?.textContent).toContain('Recording on this server')
+    expect(screen.queryAllByTestId('sew-recording-policy')).toHaveLength(0)
+    expect(screen.getByTestId('sew-recording-switches').textContent).not.toContain('recording.enabled')
     const [jobs, hearth] = screen.getAllByTestId('sew-recording-app')
     expect(jobs.textContent).toContain('jobs')
     expect(screen.getByTestId('sew-recording-delivered').textContent).toBe('Sending to chat…')

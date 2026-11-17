@@ -6,8 +6,12 @@
 // - `HomeChatRingCard`: someone is calling you (Answer, Decline).
 // - `HomeChatCallingBar`: you are calling them ("Calling Alex…", Cancel; after
 //   a decline or no answer, Call again).
-// - `HomeChatCallStrip`: you are in the call (time, mute, leave), or on it on
-//   another device.
+// - `HomeChatCallStrip`: you are in the call (time, mute, Record or Stop,
+//   leave; the red "Recording" badge while one runs), or on it on another
+//   device.
+// - `HomeChatRecordingCard`: a recording's card in the DM ("Recording · 12:04 ·
+//   started by Alex · transcript ready · audio kept 30 days"), with Show
+//   transcript; `HomeChatTranscriptPanel`: the lines, beside the DM.
 // - `HomeChatCallRecord`: a call's line in the DM ("Missed call", "Declined",
 //   "Cancelled", "Call · 12:04"), with Call back. Not a bubble: no reactions,
 //   no reply.
@@ -20,6 +24,7 @@ import { formatCallDuration } from '@/lib/home-chat/calls'
 import { Button } from '@/components/ui/Button'
 import { floatMaterial } from '@/components/ui/float-material'
 import { HomeChatPersonAvatar } from './HomeChatGlyphs'
+import type { DmCallRecording, TranscriptLine } from '@/lib/home-chat/recordings'
 
 const BTN =
   'k2-focus rounded-[var(--radius-field)] px-2.5 py-1 text-[12px] text-[var(--color-text-secondary)] hover:bg-[var(--color-row-hover)] disabled:opacity-50'
@@ -184,6 +189,9 @@ export function HomeChatCallStrip({
   elsewhere,
   onMute,
   onLeave,
+  recording = null,
+  onRecord,
+  onStop,
 }: {
   /** Seconds in the call; null while it connects. */
   seconds: number | null
@@ -192,6 +200,9 @@ export function HomeChatCallStrip({
   elsewhere: string | null
   onMute: () => void
   onLeave: () => void
+  recording?: DmCallRecording | null
+  onRecord?: () => void
+  onStop?: () => void
 }): JSX.Element {
   if (elsewhere) {
     return (
@@ -205,9 +216,30 @@ export function HomeChatCallStrip({
       <span className="flex-1 truncate text-[var(--color-text-primary)]" data-testid="home-chat-call-time">
         {seconds === null ? 'Connecting…' : `On a call · ${formatCallDuration(seconds * 1000)}`}
       </span>
+      {recording?.badge ? (
+        <span
+          role="status"
+          data-testid="home-chat-call-recording"
+          title={recording.badge}
+          className="flex shrink-0 items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-status-error-text)]"
+        >
+          <span aria-hidden className="inline-block h-2 w-2 rounded-[var(--radius-pill)] bg-[var(--color-status-error)]" />
+          Recording
+        </span>
+      ) : null}
       <button type="button" className={BTN} aria-pressed={muted} data-testid="home-chat-call-mute" onClick={onMute}>
         {muted ? 'Unmute' : 'Mute'}
       </button>
+      {recording?.canRecord && onRecord ? (
+        <button type="button" className={BTN} data-testid="home-chat-call-record" onClick={onRecord}>
+          Record
+        </button>
+      ) : null}
+      {recording?.canStop && onStop ? (
+        <button type="button" className={BTN} data-testid="home-chat-call-stop-recording" onClick={onStop}>
+          Stop recording
+        </button>
+      ) : null}
       <button type="button" className={BTN} data-testid="home-chat-call-leave" onClick={onLeave}>
         Leave
       </button>
@@ -248,6 +280,79 @@ export function HomeChatCallRecord({
 /** The header button's state: `calling` while you ring them, `in-call`
  *  while you are in this DM's call (here or on another device). */
 export type CallButtonState = 'idle' | 'calling' | 'in-call'
+/** A recording's card in the DM: a line like the call's own, with Show
+ *  transcript once there can be lines. Not a bubble: no reactions, no reply. */
+export function HomeChatRecordingCard({
+  text,
+  timeLabel,
+  onShowTranscript,
+}: {
+  text: string
+  timeLabel: string
+  /** Absent: no transcript to show yet. */
+  onShowTranscript?: () => void
+}): JSX.Element {
+  return (
+    <div className="flex items-center justify-center gap-2 py-1 text-[11px] text-[var(--color-text-muted)]" data-testid="home-chat-recording-card">
+      <span aria-hidden className="inline-block h-2 w-2 rounded-[var(--radius-pill)] bg-[var(--color-status-error)]" />
+      <span data-testid="home-chat-recording-card-text">{text}</span>
+      <span>· {timeLabel}</span>
+      {onShowTranscript && (
+        <button type="button" className="k2-focus underline" data-testid="home-chat-show-transcript" onClick={onShowTranscript}>
+          Show transcript
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** A recording's transcript, beside the DM: one line per speaker turn, each
+ *  under the person who spoke. Text only: K2 has no audio playback. */
+export function HomeChatTranscriptPanel({
+  lines,
+  nameOf,
+  state,
+  onClose,
+}: {
+  lines: TranscriptLine[] | null
+  nameOf: (memberId: string) => string
+  /** `loading`, an error line, or null. */
+  state: string | null
+  onClose: () => void
+}): JSX.Element {
+  return (
+    <aside
+      aria-label="Transcript"
+      data-testid="home-chat-transcript"
+      className="flex w-72 shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-bg)]"
+    >
+      <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-2">
+        <span className="flex-1 text-[12px] text-[var(--color-text-primary)]">Transcript</span>
+        <button type="button" className={BTN} data-testid="home-chat-transcript-close" onClick={onClose}>
+          Close
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-[12px]">
+        {state ? (
+          <p className="text-[var(--color-text-muted)]" data-testid="home-chat-transcript-state">
+            {state}
+          </p>
+        ) : lines && lines.length === 0 ? (
+          <p className="text-[var(--color-text-muted)]" data-testid="home-chat-transcript-empty">
+            No lines yet.
+          </p>
+        ) : (
+          (lines ?? []).map((l) => (
+            <div key={l.id} className="mb-2" data-testid="home-chat-transcript-line">
+              <div className="text-[11px] text-[var(--color-text-secondary)]">{nameOf(l.speaker)}</div>
+              <div className="whitespace-pre-wrap text-[var(--color-text-primary)]">{l.text}</div>
+            </div>
+          ))
+        )}
+      </div>
+    </aside>
+  )
+}
 
 export function HomeChatCallButton({
   disabledReason,

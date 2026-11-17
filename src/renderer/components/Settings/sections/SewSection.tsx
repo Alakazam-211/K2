@@ -1869,7 +1869,7 @@ export function SewSection(): React.JSX.Element {
         {shown === 'overview' ? <OverviewPanel {...props} /> : null}
         {shown === 'backups' ? <BackupsPanel {...props} /> : null}
         {shown === 'app-spaces' ? <AppSpacesPanel {...props} /> : null}
-        {shown === 'recording' ? <RecordingPanel sample={sample} canMutate={canMutate} isOwner={youOf(status).isOwner} /> : null}
+        {shown === 'recording' ? <RecordingPanel sample={sample} canMutate={canMutate} isOwner={youOf(status).isOwner} installId={status?.installId ?? null} /> : null}
       </div>
     </>,
   )

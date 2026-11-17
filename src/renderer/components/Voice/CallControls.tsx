@@ -35,6 +35,7 @@ import {
 import { micBlockedText, MIC_DENIED_LINE } from '@/lib/voice/voice-wire'
 import { policyBlockText } from '@/lib/voice/video-labels'
 import { recordingBadgeTitle, recordingButtons } from '@/lib/voice/recording-controls'
+import { convOfDmRoom } from '@/lib/home-chat/calls'
 import type { VoiceCall } from '@/stores/voice-core'
 import type { VideoController } from '@/stores/video-core'
 
@@ -323,7 +324,7 @@ export function RecordingBadge({ call, variant }: { call: VoiceCall; variant: Ca
     <span
       data-testid={`call-${variant}-recording`}
       role="status"
-      title={recordingBadgeTitle(r, starter)}
+      title={recordingBadgeTitle(r, starter, convOfDmRoom(call.roomId) !== null)}
       className="flex shrink-0 items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-status-error-text)]"
       style={noDrag}
     >

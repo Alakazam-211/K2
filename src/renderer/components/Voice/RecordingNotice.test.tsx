@@ -83,4 +83,17 @@ describe('RecordingNotice', () => {
     rerender(<RecordingBadge call={call({ recording: null, recordingNotice: null })} variant="topbar" />)
     expect(screen.queryByTestId('call-topbar-recording')).toBeNull()
   })
+
+  it("a DM call's notice says this DM and never K2's agent line, even with an agent reader (HR-8)", () => {
+    const onAnswer = vi.fn()
+    render(<RecordingNotice call={call({ roomId: 'dm:900', roomName: 'Alex' })} agentReaders onAnswer={onAnswer} />)
+    const text = screen.getByRole('alertdialog').textContent ?? ''
+    expect(text).toContain('This call is being recorded')
+    expect(text).toContain('The transcript is kept in this DM.')
+    expect(text).not.toContain('Agents on this server may read the transcript.')
+    expect(text).not.toMatch(/room/i)
+    fireEvent.click(screen.getByTestId('recording-notice-ok'))
+    expect(onAnswer).toHaveBeenLastCalledWith('ok')
+    expect(screen.getByTestId('recording-notice-leave').textContent).toBe('Leave call')
+  })
 })

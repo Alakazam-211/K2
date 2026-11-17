@@ -1003,3 +1003,43 @@ async fn a_voice_chat_only_callee_gets_the_ring_on_its_socket_and_may_answer() {
     super::call_push::reset_for_tests();
     set_deps(None);
 }
+
+/// prd-home-call-recording-v1 §5 (HR-10): `replies` reads a recording
+/// card's transcript lines through the person's own held session, oldest
+/// first as Sew pages them; a line of another conversation is dropped; the
+/// ids are Sew ids. It is a GET row on the Voice & Chat only allowlist
+/// (either person in a DM reads it); agents never reach it (the caller
+/// classification answers `agents_use_k2_chat` before any route runs).
+#[test]
+fn replies_read_a_recording_cards_lines_as_the_person() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, api) = chat_box();
+    assert!(routes::GET_ROUTES.contains(&"/cli/home-chat/replies") && !routes::is_post_route("/cli/home-chat/replies"));
+    let q = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>();
+    api.answer(
+        "/api/v1/messages/2001/replies?limit=100",
+        200,
+        json!({"items": [
+            {"id": "2002", "channel_id": "900", "author_id": "42", "body": "hello", "thread_root_id": "2001", "transcript": {"recording_id": "42"}},
+            {"id": "2003", "channel_id": 900, "author_id": "41", "body": "hi", "thread_root_id": "2001", "transcript": {"recording_id": "42"}},
+            {"id": "2999", "channel_id": "901", "author_id": "43", "body": "not this DM's", "thread_root_id": "2001"},
+        ], "has_more": false}),
+    );
+    let v = routes::route("/cli/home-chat/replies", &alex(), &q(&[("conv", "900"), ("id", "2001")]), b"").expect("replies");
+    let ids: Vec<&str> = v["page"]["items"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["2002", "2003"], "only this DM's lines");
+    assert_eq!(v["page"]["has_more"], false);
+    let sent = api.calls_to("/api/v1/messages/2001/replies?limit=100");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0.as_deref(), Some("sews_first.x"), "on the person's own held session");
+    api.answer("/api/v1/messages/2001/replies?limit=50&after=2003", 200, json!({"items": [], "has_more": false}));
+    routes::route("/cli/home-chat/replies", &alex(), &q(&[("conv", "900"), ("id", "2001"), ("limit", "50"), ("after", "2003")]), b"").expect("the next page");
+    for bad in [&[("id", "2001")][..], &[("conv", "900")], &[("conv", "900"), ("id", "../2001")], &[("conv", "../900"), ("id", "2001")], &[("conv", "900"), ("id", "2001"), ("limit", "0")]] {
+        let r = routes::route("/cli/home-chat/replies", &alex(), &q(bad), b"").unwrap_err();
+        assert_eq!((r.status, r.code.as_str()), (400, "usage"), "{bad:?}");
+    }
+    let r = people::caller_of(Who::Agent { project_id: "p".into(), session_id: "s".into() }, "x", "o").unwrap_err();
+    assert_eq!(r.code, "agents_use_k2_chat", "no agent reads a DM recording's lines");
+    assert!(crate::routes::route_policy::VOICE_CHAT_ALLOWLIST.contains(&("GET", "/cli/home-chat/replies")));
+    done();
+}

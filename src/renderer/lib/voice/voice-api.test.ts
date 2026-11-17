@@ -7,7 +7,7 @@ vi.mock('@/lib/daemon-cli', () => ({
   daemonCliPost: (...a: unknown[]) => h.post(...a),
 }))
 
-import { JOIN_TIMEOUT_MS, joinVoiceRoom, sendVoiceSelfState, voiceCodeOfError } from './voice-api'
+import { JOIN_TIMEOUT_MS, fetchRecordingControls, joinVoiceRoom, sendVoiceSelfState, voiceCodeOfError } from './voice-api'
 import type { ServerScope } from '@/kessel/server-scope'
 
 const scope = { hostKey: 'sewlab.k2.dev', id: 'sewlab.k2.dev' } as unknown as ServerScope
@@ -79,5 +79,16 @@ describe('sendVoiceSelfState', () => {
     h.post.mockResolvedValue({ ok: true })
     await sendVoiceSelfState(scope, 'vc_9', true, false)
     expect(h.post).toHaveBeenCalledWith(scope, 'voice/session/state', { callId: 'vc_9', body: { self_mute: true, self_deaf: false } })
+  })
+})
+
+describe('fetchRecordingControls (prd-home-call-recording-v1 HR-6)', () => {
+  it('a DM call asks by {dm}; a room by {room}; the rights keep the room the plugin knows', async () => {
+    h.post.mockResolvedValue({ ok: true, myPerms: '8388608', recordCalls: true, manageChannels: false, rights: { dm: true, recordingEnabled: true, recordingDmEnabled: true } })
+    const p = await fetchRecordingControls(scope, 'dm:900')
+    expect(h.post).toHaveBeenLastCalledWith(scope, 'voice/recording/controls', { dm: '900' })
+    expect(p.rights).toEqual({ room: 'dm:900', my_perms: '8388608', dm: true, recording_enabled: true, recording_dm_enabled: true, record_capped: false, agent: false })
+    await fetchRecordingControls(scope, 'room-1')
+    expect(h.post).toHaveBeenLastCalledWith(scope, 'voice/recording/controls', { room: 'room-1' })
   })
 })

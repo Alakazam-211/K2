@@ -10,6 +10,7 @@
 import type { ServerScope } from '@/kessel/server-scope'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { parseCallSummary, type HomeChatCallSummary } from './calls'
+import { parseRecordingSummary, transcriptRootOf, type HomeChatRecordingSummary } from './recordings'
 
 export const HOME_CHAT_FEATURE = 'home-chat-v1'
 
@@ -91,6 +92,12 @@ export interface HomeChatMessage {
   nonce: string | null
   /** A DM call's record (Sew's CallSummary): drawn as a line, not a bubble. */
   call?: HomeChatCallSummary | null
+  /** A recording's card (Sew's RecordingSummary): drawn as a line with Show
+   *  transcript (prd-home-call-recording-v1 §2). */
+  recording?: HomeChatRecordingSummary | null
+  /** A transcript line: the card (or recording) it belongs to. Never on the
+   *  DM's timeline; Show transcript reads it. */
+  transcriptOf?: string | null
 }
 
 export interface HomeChatPage {
@@ -181,6 +188,8 @@ export function parseHomeChatMessage(v: unknown): HomeChatMessage | null {
     deleted: m.deleted_at !== undefined && m.deleted_at !== null,
     nonce: typeof m.nonce === 'string' ? m.nonce : null,
     call: m.call ? parseCallSummary(m.call) : null,
+    recording: m.recording ? parseRecordingSummary(m.recording) : null,
+    transcriptOf: transcriptRootOf(m),
   }
 }
 
@@ -188,7 +197,8 @@ export function parseHomeChatMessage(v: unknown): HomeChatMessage | null {
 export function parseHomeChatPage(v: unknown): HomeChatPage {
   const page = (v as { page?: unknown } | null)?.page as { items?: unknown; has_more?: unknown } | unknown[] | undefined
   const items = Array.isArray(page) ? page : Array.isArray((page as { items?: unknown })?.items) ? ((page as { items: unknown[] }).items) : []
-  const messages = items.map(parseHomeChatMessage).filter((m): m is HomeChatMessage => m !== null)
+  // A recording's transcript lines never join the timeline (HR-10).
+  const messages = items.map(parseHomeChatMessage).filter((m): m is HomeChatMessage => m !== null && !m.transcriptOf)
   messages.sort((a, b) => compareSewIds(a.id, b.id))
   return { messages, hasMore: !Array.isArray(page) && (page as { has_more?: unknown })?.has_more === true }
 }

@@ -1,5 +1,12 @@
 //! Sew's recorder on K2 (0.46.11, K-a, `prd-k2-bobbin-in-apps-v1` §4):
-//! `k2 hostchat recording status|preflight|enable|disable|uninstall`.
+//! `k2 hostchat recording status|preflight|install|enable|disable|uninstall`.
+//!
+//! - **Install only** (`prd-home-call-recording-v1` §7, HR-12, HR-24): the
+//!   same staging, checks and Sew install as enable, and **never** the org
+//!   policy: recording stays off for people until a person turns it on.
+//!   For provisioning (step 9c.8): the owner token or an Owner or Admin
+//!   login, no confirm (it records nothing; it only uses disk and memory).
+//!   Any passport (an agent, a terminal in the app) gets `person_only`.
 //!
 //! - **Two switches** (Sew 2026-11-10). Sew's own `[recording] enabled`
 //!   (`sew recording enable`) means "installed and available"; the org
@@ -54,8 +61,10 @@ pub const PREFLIGHT_ROUTE: &str = "/cli/sew/recording/preflight";
 pub const ENABLE_ROUTE: &str = "/cli/sew/recording/enable";
 pub const DISABLE_ROUTE: &str = "/cli/sew/recording/disable";
 pub const UNINSTALL_ROUTE: &str = "/cli/sew/recording/uninstall";
-pub const ROUTES: [&str; 5] = [ROUTE, PREFLIGHT_ROUTE, ENABLE_ROUTE, DISABLE_ROUTE, UNINSTALL_ROUTE];
-pub const POST_ROUTES: [&str; 3] = [ENABLE_ROUTE, DISABLE_ROUTE, UNINSTALL_ROUTE];
+/// Install the recorder and leave recording off (prd-home-call-recording-v1 §7).
+pub const INSTALL_ROUTE: &str = "/cli/sew/recording/install";
+pub const ROUTES: [&str; 6] = [ROUTE, PREFLIGHT_ROUTE, INSTALL_ROUTE, ENABLE_ROUTE, DISABLE_ROUTE, UNINSTALL_ROUTE];
+pub const POST_ROUTES: [&str; 4] = [INSTALL_ROUTE, ENABLE_ROUTE, DISABLE_ROUTE, UNINSTALL_ROUTE];
 
 /// The vault confirm a person's enable takes (`secretId` = this install's
 /// id, or `none`); the card binds its own to the request id.
@@ -563,7 +572,16 @@ pub fn enable_machine(env: &Env, files: &Files) -> R<Value> {
     r
 }
 
-fn enable_steps(env: &Env, files: &Files) -> R<Value> {
+/// What [`install_steps`] did.
+struct Installed {
+    pin_v: &'static str,
+    already: bool,
+    model: Option<String>,
+}
+
+/// Stage and install the recorder when it isn't on the pin yet, then
+/// Sew's consent timeout. Never the org policy: that is a person's choice.
+fn install_steps(env: &Env, files: &Files) -> R<Installed> {
     let arch = env.ops.arch();
     let (pin_v, _) = rec::pinned_sidecar(Sidecar::Recorder, &arch).map_err(|e| no("recording_unpinned", 409, e))?;
     let current = live(env);
@@ -584,18 +602,31 @@ fn enable_steps(env: &Env, files: &Files) -> R<Value> {
     }
     step(env, "consent-timeout");
     set_consent_timeout(env);
-    step(env, "policy");
-    set_policy(env, true)?;
+    Ok(Installed { pin_v, already: installed, model })
+}
+
+/// The record after an install: installed, on the pin.
+fn note_installed(env: &Env, i: &Installed, enabled: Option<bool>) {
     let after = live(env);
     let now = env.ops.now();
     update(env, |st| {
         st.installed = true;
-        st.enabled = true;
-        st.recorder_version = after.as_ref().and_then(|l| version_of(l, Sidecar::Recorder)).or(Some(pin_v.into()));
+        if let Some(on) = enabled {
+            st.enabled = on;
+        }
+        st.recorder_version = after.as_ref().and_then(|l| version_of(l, Sidecar::Recorder)).or(Some(i.pin_v.into()));
         st.transcriber_version = after.as_ref().and_then(|l| version_of(l, Sidecar::Transcriber)).or(st.transcriber_version.clone());
-        st.model = model.clone();
+        st.model = i.model.clone();
         st.installed_at = st.installed_at.or(Some(now));
     });
+}
+
+fn enable_steps(env: &Env, files: &Files) -> R<Value> {
+    let i = install_steps(env, files)?;
+    step(env, "policy");
+    set_policy(env, true)?;
+    note_installed(env, &i, Some(true));
+    let (pin_v, installed, model) = (i.pin_v, i.already, i.model);
     Ok(json!({
         "ok": true,
         "state": "enabled",
@@ -606,6 +637,54 @@ fn enable_steps(env: &Env, files: &Files) -> R<Value> {
         "model": model,
         "next": "Apps and K5 rooms still choose who may record (Settings → Cores → Chat / Voice → Recording); each person consents for themselves",
     }))
+}
+
+/// The install-only machine (`POST /cli/sew/recording/install`): stage,
+/// install and the consent timeout, as enable does, and **never** the org
+/// policy `recording.enabled` (HR-24: installed, still off for people).
+pub fn install_machine(env: &Env, files: &Files) -> R<Value> {
+    let r = install_steps(env, files).map(|i| {
+        note_installed(env, &i, None);
+        i
+    });
+    let now = env.ops.now();
+    match r {
+        Ok(i) => {
+            update(env, |st| {
+                st.progress = Some(json!({"step": null, "result": "done", "at": now}));
+                st.last_error = None;
+            });
+            sup::changed("recording-installed");
+            Ok(json!({
+                "ok": true,
+                "state": "installed",
+                "installed": true,
+                "enabled": load(env).enabled,
+                "alreadyInstalled": i.already,
+                "version": i.pin_v,
+                "model": i.model,
+                "next": "recording stays off until the owner or an admin turns it on (Settings → Chat Hosting → Recording, or k2 hostchat recording enable)",
+            }))
+        }
+        Err(f) => {
+            let msg = format!("{}: {}", f.code, f.hint);
+            update(env, |st| {
+                st.progress = Some(json!({"step": st.progress.as_ref().and_then(|p| p.get("step").cloned()), "result": "error", "error": msg, "at": now}));
+                st.last_error = Some(msg.clone());
+            });
+            sup::changed("recording-failed");
+            Err(f)
+        }
+    }
+}
+
+/// An agent's or an app terminal's install: refused, nothing staged.
+pub fn install_refusal() -> Fail {
+    no(
+        "person_only",
+        403,
+        "nothing changed: installing Sew's recorder is the server's owner's or an admin's (the owner token in provisioning, or their own login), never an agent's or an app terminal's. Ask your human in your Thread",
+    )
 }
 
 /// Set Sew's `[recording] consent_prompt_timeout_ms` to [`CONSENT_TIMEOUT_MS`]
@@ -746,6 +825,46 @@ pub fn route(env: Env<'static>, path: &str, who: &Who, v: &Value, background: bo
             let checks = preflight(&env);
             let ready = !checks.iter().any(|c| c["status"] == "fail");
             Ok(json!({"ok": true, "ready": ready, "checks": checks}))
+        }
+        INSTALL_ROUTE => {
+            // prd-home-call-recording-v1 §7: the owner token or an Owner or
+            // Admin login; any passport is person_only. No confirm: it turns
+            // nothing on.
+            need_credential(who)?;
+            if who.passport().is_some() {
+                return Err(install_refusal());
+            }
+            need_manage(who)?;
+            gates(&env)?;
+            let files = Files { recorder: abs(v, "recorderTarballPath")?, transcriber: abs(v, "transcriberTarballPath")?, model: abs(v, "modelFilePath")? };
+            let latch = sup::begin(&env)?;
+            let checks = preflight(&env);
+            if checks.iter().any(|c| c["status"] == "fail") {
+                let why: Vec<String> = checks
+                    .iter()
+                    .filter(|c| c["status"] == "fail")
+                    .map(|c| format!("{}. {}", c["detail"].as_str().unwrap_or(""), c["hint"].as_str().unwrap_or("")))
+                    .collect();
+                let mut f = no("preflight_failed", 409, format!("the box isn't ready for the recorder; nothing was installed. {}", why.join(" ")));
+                f.extra = Some(json!({"report": checks}));
+                return Err(f);
+            }
+            crate::vault::auth_audit("sew-recording-install", &who.label(), "install only (recording stays off)", "cli");
+            if background {
+                std::thread::Builder::new()
+                    .name("sew-recording-install".into())
+                    .spawn(move || {
+                        let _l = latch;
+                        if let Err(f) = install_machine(&env, &files) {
+                            k2_core::log_debug!("[sew] recording install: {}", f.code);
+                        }
+                    })
+                    .map_err(|e| no("spawn", 500, e.to_string()))?;
+                return Ok(json!({"ok": true, "state": "installing", "hint": "poll GET /cli/sew/recording (progress)"}));
+            }
+            let r = install_machine(&env, &files)?;
+            drop(latch);
+            Ok(r)
         }
         ENABLE_ROUTE => {
             // An agent never installs, Manage Sew or not: the card.

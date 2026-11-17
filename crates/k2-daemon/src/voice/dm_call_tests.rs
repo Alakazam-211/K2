@@ -61,7 +61,7 @@ fn bff_deps(sew: Arc<LoginSew>) -> Arc<bff::Deps> {
 }
 
 fn ctx(call_cancel: bool, login: Arc<LoginSew>) -> Ctx {
-    Ctx { chat: (true, None), tier: Tier::Ok, call_cancel, bff: bff_deps(login) }
+    Ctx { chat: (true, None), tier: Tier::Ok, call_cancel, bff: bff_deps(login), audio_max_days: None }
 }
 
 /// Sam's held session knows DM 900 (Sew's READY listed it).
@@ -113,7 +113,7 @@ fn the_dm_call_door_is_post_only_allowlisted_and_people_only() {
     for p in [routes::JOIN, routes::LEAVE, routes::SESSION_STATE] {
         assert!(routes::dm_capable(p), "{p}");
     }
-    for p in [routes::SETTINGS, routes::MODERATE, routes::ROOMS, routes::RECORDING_START] {
+    for p in [routes::SETTINGS, routes::MODERATE, routes::ROOMS, routes::RECORDING_SETTINGS] {
         assert!(!routes::dm_capable(p), "{p}");
     }
 
@@ -507,4 +507,184 @@ fn a_rings_end_is_pushed_at_once_or_by_the_fallback() {
     assert_eq!(expire_rings(SAM_EXT, rang + 1_000, false), 0, "once");
     crate::home_chat::call_push::reset_for_tests();
     crate::home_chat::set_deps(None);
+}
+
+// ── recording a DM call (prd-home-call-recording-v1 S1) ──────────────
+
+/// HR-3: with Home chat on and the voice rooms preview OFF, a DM call's
+/// recording routes reach the handler (before, the notice's OK got 404
+/// `voice_rooms_off` and Sew dropped the person after 60 s): the consent
+/// answer and Stop by path, Record and the controls read with `dm`. A
+/// room's Record or controls read stays dark. Callers who never record are
+/// refused by the handler, so each answer below comes from it.
+#[test]
+fn a_dm_calls_recording_routes_answer_with_the_preview_off() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _l = super::super::lane::test_lock();
+    let _home = k2_core::test_env::TempHome::new();
+    for p in [routes::RECORDING_CONSENT, routes::RECORDING_STOP, routes::RECORDING_START, routes::RECORDING_CONTROLS] {
+        assert!(routes::dm_capable(p), "{p}: the dispatcher lets it through while Home chat is on");
+    }
+    k2_core::voice_preview::set_enabled(false);
+    k2_core::home_chat::set_enabled(true);
+    let st = |r: &crate::cli_response::CliResponse| r.status.split(' ').next().unwrap_or("").to_string();
+    let err = |r: &crate::cli_response::CliResponse| body_of(r)["error"]["code"].as_str().unwrap_or("").to_string();
+    let consent: &[u8] = br#"{"recording_id":"42","consent":true,"notice_version":3}"#;
+    let cases: [(&str, &[u8]); 4] = [
+        (routes::RECORDING_CONSENT, consent),
+        (routes::RECORDING_STOP, br#"{"recordingId":"42"}"#),
+        (routes::RECORDING_START, br#"{"dm":"900"}"#),
+        (routes::RECORDING_CONTROLS, br#"{"dm":"900"}"#),
+    ];
+    for (p, body) in cases {
+        let r = routes::handle(p, Caller::Passport, "o", true, body);
+        assert_eq!((st(&r), err(&r)), ("403".into(), "agents_not_in_voice".into()), "{p}: the handler answers, not voice_rooms_off");
+        let r = routes::handle(p, Caller::ChatManager, "o", true, body);
+        assert_eq!(err(&r), "agents_not_in_voice", "{p}: never an agent, Manage chat and voice or not");
+        let r = routes::handle(p, Caller::OwnerToken, "o", true, body);
+        assert_eq!(err(&r), "owner_token_cannot_join", "{p}");
+        // A GET is 405 (the dispatcher answers it by path before any body).
+        assert_eq!(st(&routes::handle(p, Caller::Passport, "o", false, body)), "405", "{p}: POST only");
+    }
+    // A Voice & Chat only login is told and may leave, never records.
+    let vc = Caller::Login { username: "sam".into(), role: Role::VoiceChat, token: "t".into() };
+    let vc_cases: [(&str, &[u8]); 2] = [(routes::RECORDING_START, br#"{"dm":"900"}"#), (routes::RECORDING_STOP, br#"{"recordingId":"42"}"#)];
+    for (p, body) in vc_cases {
+        let r = routes::handle(p, vc.clone(), "o", true, body);
+        assert_eq!((st(&r), err(&r)), ("403".into(), "voice_chat_not_allowed".into()), "{p}");
+    }
+    // A room's Record and controls read stay dark with the preview off.
+    for p in [routes::RECORDING_START, routes::RECORDING_CONTROLS] {
+        let r = routes::handle(p, Caller::Passport, "o", true, br#"{"room":"1"}"#);
+        assert_eq!((st(&r), err(&r)), ("404".into(), "voice_rooms_off".into()), "{p} for a room");
+    }
+    // Home chat off too: everything dark.
+    k2_core::home_chat::set_enabled(false);
+    let r = routes::handle(routes::RECORDING_CONSENT, Caller::Passport, "o", true, consent);
+    assert_eq!(err(&r), "voice_rooms_off");
+}
+
+/// HR-4 + Q7: Record in a DM goes to Sew's `channels/{dm}/recording/start`
+/// on the person's held Home chat session, asking for 30 days of audio,
+/// capped by the server's longest keep; a DM the person isn't in is
+/// `dm_not_found` and Sew is never asked; Sew's refusals keep its reason.
+#[test]
+fn a_dm_record_goes_to_sew_on_the_held_session_with_the_keep_days() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _home = k2_core::test_env::TempHome::new();
+    let api = Arc::new(FakeApi::default());
+    crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
+    sam_in_dm_900();
+    let path = "/api/v1/channels/900/recording/start";
+    api.answer(path, 200, json!({"id": "42", "state": "recording", "started_by": "41"}));
+    let c = ctx(false, Arc::new(LoginSew::default()));
+
+    assert_eq!(DM_AUDIO_KEEP_DAYS, 30, "Q7's default: Sew's own 30 days");
+    let v = recording_start(&sam(), &json!({"dm": "900"}), &c).expect("record");
+    assert_eq!((v["action"].as_str(), v["dm"].as_str(), v["recording"]["id"].as_str()), (Some("started"), Some("900"), Some("42")), "{v}");
+    let sent = api.calls_to(path);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0.as_deref(), Some("sews_first.x"), "on the person's held session, as the call");
+    assert_eq!(sent[0].1, json!({"audio_keep_days": 30}));
+
+    let capped = Ctx { audio_max_days: Some(7), ..c.clone() };
+    recording_start(&sam(), &json!({"dm": "900"}), &capped).expect("record");
+    assert_eq!(api.calls_to(path)[1].1, json!({"audio_keep_days": 7}), "the server's longest keep caps it");
+    assert_eq!(dm_keep_days(Some(90)), 30, "a longer server keep never lengthens a DM's");
+
+    assert_eq!(code(&recording_start(&sam(), &json!({"dm": "901"}), &c).unwrap_err()), (404, "dm_not_found"));
+    assert_eq!(code(&recording_start(&sam(), &json!({"dm": "../900"}), &c).unwrap_err()), (400, "usage"));
+    assert_eq!(api.calls_to("/api/v1/channels/901/recording/start").len(), 0, "never asked for another DM");
+    let off = Ctx { chat: (false, Some("sew_off")), ..c.clone() };
+    assert_eq!(code(&recording_start(&sam(), &json!({"dm": "900"}), &off).unwrap_err()), (503, "chat_unavailable"));
+    let free = Ctx { tier: Tier::NotPro, ..c.clone() };
+    assert_eq!(code(&recording_start(&sam(), &json!({"dm": "900"}), &free).unwrap_err()), (403, "host_not_pro"), "DM recording needs Pro, as DM calls do");
+
+    // DM recording off on this server: Sew's refusal, its reason kept.
+    api.answer(path, 403, json!({"error": {"code": "missing_permission", "hint": "", "details": {"reason": "recording_disabled"}}}));
+    let r = recording_start(&sam(), &json!({"dm": "900"}), &c).unwrap_err();
+    assert_eq!((r.status, r.code.as_str()), (403, "recording_disabled"));
+    assert_eq!(r.details.unwrap()["sew"]["details"]["reason"], "recording_disabled");
+    follower::release_all();
+    crate::home_chat::set_deps(None);
+}
+
+/// HR-4 + HR-5: the controls read for a DM reads the DM channel's
+/// `my_perms` on the held session; the answer says `dm: true` with the
+/// seen `recording.dm_enabled`, and never K2's agent line (HR-8). A Voice &
+/// Chat only login is told it can't record.
+#[test]
+fn a_dm_controls_read_says_dm_and_never_the_agent_line() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _home = k2_core::test_env::TempHome::new();
+    let api = Arc::new(FakeApi::default());
+    crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
+    sam_in_dm_900();
+    let both = bff::perms::RECORD_CALLS | bff::perms::MANAGE_CHANNELS;
+    api.answer("/api/v1/channels/900", 200, json!({"channel": {"id": "900", "kind": "dm", "my_perms": bff::perms::RECORD_CALLS.to_string()}}));
+    let c = ctx(false, Arc::new(LoginSew::default()));
+    let v = recording_controls(&sam(), &json!({"dm": "900"}), &c).expect("perms");
+    assert_eq!((v["room"].as_str(), v["channelId"].as_str()), (Some("dm:900"), Some("900")));
+    assert_eq!((v["recordCalls"].as_bool(), v["manageChannels"].as_bool()), (Some(true), Some(false)), "{v}");
+    assert_eq!(api.calls_to("/api/v1/channels/900")[0].0.as_deref(), Some("sews_first.x"));
+    api.answer("/api/v1/channels/900", 200, json!({"id": "900", "my_perms": both}));
+    let v = recording_controls(&sam(), &json!({"dm": "900"}), &c).expect("perms at the top level");
+    assert_eq!(v["myPerms"], both.to_string());
+    api.answer("/api/v1/channels/900", 200, json!({"id": "900"}));
+    assert_eq!(code(&recording_controls(&sam(), &json!({"dm": "900"}), &c).unwrap_err()), (502, "chat_unavailable"));
+    assert_eq!(code(&recording_controls(&sam(), &json!({"dm": "901"}), &c).unwrap_err()), (404, "dm_not_found"));
+
+    let facts = |dm: bool, voice_chat: bool| routes::ControlsFacts {
+        dm,
+        voice_chat,
+        agent_readers: true,
+        recording_enabled: json!(true),
+        recording_dm_enabled: json!(true),
+    };
+    let a = routes::controls_answer(json!({"recordCalls": true, "manageChannels": false}), &facts(true, false));
+    assert_eq!(a["rights"], json!({"dm": true, "recordingEnabled": true, "recordingDmEnabled": true, "recordCapped": false, "agent": false}));
+    assert_eq!(a["agentReaders"], false, "Read call transcripts never reaches a DM: no agent line");
+    assert_eq!(a["recordCalls"], true);
+    let room = routes::controls_answer(json!({"recordCalls": true}), &facts(false, false));
+    assert_eq!((room["rights"]["dm"].clone(), room["agentReaders"].clone()), (json!(false), json!(true)), "a K5 room keeps its line");
+    let vc = routes::controls_answer(json!({"recordCalls": true, "manageChannels": true}), &facts(true, true));
+    assert_eq!((vc["recordCalls"].clone(), vc["voiceChatOnly"].clone()), (json!(false), json!(true)), "Voice & Chat only never records");
+    follower::release_all();
+    crate::home_chat::set_deps(None);
+}
+
+/// HR-10: a transcript line (a reply under the recording card) from the
+/// other person never adds to the DM's unread, its count or its last
+/// message (so the row's preview never shows one); the card itself makes
+/// the DM unread but counts nothing. The frame still reaches the windows.
+#[test]
+fn a_transcript_line_never_counts_toward_the_dms_badge() {
+    let mut st = ringing_state();
+    let card = json!({"message": {"id": "2001", "channel_id": "900", "author_id": "42", "body": "",
+        "recording": {"recording_id": "42", "started_by": "42", "transcript": {"state": "running", "turns": 0}}}});
+    let f = st.apply_event("message_created", &card, true);
+    assert!(f.iter().any(|x| x["type"] == "message"));
+    assert!(st.convs["900"].unread, "the card makes the DM unread");
+    assert_eq!((st.convs["900"].mention_count, st.convs["900"].unread_count.unwrap_or(0)), (0, 0), "the card counts nothing");
+    assert_eq!(st.convs["900"].last_message_id.as_deref(), Some("2001"));
+    st.convs.get_mut("900").unwrap().unread = false;
+
+    let lines = [
+        json!({"id": "2002", "channel_id": "900", "author_id": "42", "body": "hello", "thread_root_id": "2001",
+            "transcript": {"recording_id": "42", "speaker_id": "42", "start_ms": 0, "end_ms": 900}}),
+        json!({"id": "2003", "channel_id": "900", "author_id": "42", "body": "a reply only", "thread_root_id": "2001"}),
+        json!({"id": "2004", "channel_id": "900", "author_id": "42", "body": "a turn only", "transcript": {"recording_id": "42"}}),
+    ];
+    for (i, line) in lines.into_iter().enumerate() {
+        let f = st.apply_event("message_created", &json!({"message": line}), true);
+        assert_eq!(f.len(), 1, "{i}: one frame, no summary_changed");
+        assert_eq!(f[0]["type"], "message", "{i}: Show transcript hears it");
+        let c = &st.convs["900"];
+        assert!(!c.unread, "{i}: not unread");
+        assert_eq!((c.mention_count, c.unread_count.unwrap_or(0)), (0, 0), "{i}: never counted");
+        assert_eq!(c.last_message_id.as_deref(), Some("2001"), "{i}: the row's preview never shows a transcript line");
+    }
+    // An ordinary DM message from them still counts (Sew's HP-26 rule).
+    st.apply_event("message_created", &json!({"message": {"id": "2005", "channel_id": "900", "author_id": "42", "body": "hi"}}), true);
+    assert_eq!(st.convs["900"].mention_count, 1);
 }

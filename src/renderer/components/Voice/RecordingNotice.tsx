@@ -12,6 +12,7 @@
 import { useEffect, useRef } from 'react'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { recordingNoticeText } from '@/lib/voice/recording-controls'
+import { convOfDmRoom } from '@/lib/home-chat/calls'
 import type { VoiceCall } from '@/stores/voice-core'
 
 export interface RecordingNoticeProps {
@@ -32,7 +33,9 @@ export default function RecordingNotice({ call, agentReaders, onAnswer }: Record
     first.current?.focus()
   }, [n?.recordingId, n?.prompt.noticeVersion])
   if (!n) return null
-  const text = recordingNoticeText({ roomName: call.roomName, prompt: n.prompt, agentReaders, ask: n.ask })
+  // A DM call's notice says "this DM" and carries no K2 agent line (HR-8).
+  const dm = convOfDmRoom(call.roomId) !== null
+  const text = recordingNoticeText({ roomName: call.roomName, prompt: n.prompt, agentReaders, ask: n.ask, dm })
   return (
     <div
       ref={root}

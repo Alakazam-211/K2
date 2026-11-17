@@ -797,6 +797,20 @@ describe("recording in K2's own rooms (Sew 0.9.0): told, not asked", () => {
     expect(s.calls.filter(([x]) => x === `${P}set_recording_rights`)).toEqual([[`${P}set_recording_rights`, rights]])
   })
 
+  it('a DM call reads its recording controls too, by its dm: room (prd-home-call-recording-v1 HR-7)', async () => {
+    const rights = { room: 'dm:900', my_perms: '8388608', dm: true, recording_enabled: true, recording_dm_enabled: true, record_capped: false, agent: false }
+    const s = setup()
+    s.api.recordingControls.mockImplementation(async () => ({ recordCalls: true, manageChannels: false, rights }))
+    s.plugin.state = { state: 'connected', participants: [], call_id: 'r_x' }
+    const dm: VoiceRoom = { id: 'dm:900', name: 'Alex', channelId: '900', limit: 2, occupants: [], closing: false, closesAt: null, unavailable: null }
+    await s.ctl.join(SEW, dm)
+    await settle()
+    expect(s.api.recordingControls).toHaveBeenCalledWith(expect.anything(), 'dm:900')
+    expect(s.calls.filter(([x]) => x === `${P}set_recording_rights`)).toEqual([[`${P}set_recording_rights`, rights]])
+    await s.ctl.startRecording()
+    expect(s.calls.map(([x]) => x)).toContain(`${P}start_recording`)
+  })
+
   it("plugin 0.6.1's recording_controls event drives Record and Stop", async () => {
     const s = await inCall()
     expect(s.ctl.store.getState().call?.recordingControls).toBeNull()

@@ -102,9 +102,12 @@ export async function sendVoiceSelfState(scope: ServerScope, callId: string, mut
 }
 
 /** Sew 0.9.0: `POST /cli/voice/recording/controls {room}`, the person's own
- *  permissions in a room, for Record and Stop (`recording-controls.ts`). */
+ *  permissions in a room, for Record and Stop (`recording-controls.ts`). A
+ *  DM call's room (`dm:<conv>`) asks by `{dm}` (prd-home-call-recording-v1
+ *  HR-6), as its join does. */
 export async function fetchRecordingControls(scope: ServerScope, roomId: string): Promise<RecordingPerms> {
-  const v = (await daemonCliPost(scope, 'voice/recording/controls', { room: roomId })) as Record<string, unknown> | null
+  const dm = roomId.startsWith('dm:') ? roomId.slice(3) : null
+  const v = (await daemonCliPost(scope, 'voice/recording/controls', dm ? { dm } : { room: roomId })) as Record<string, unknown> | null
   if (!v || typeof v !== 'object') throw new Error('voice/recording/controls: not an answer')
   const r = v.rights && typeof v.rights === 'object' ? (v.rights as Record<string, unknown>) : null
   const rights =

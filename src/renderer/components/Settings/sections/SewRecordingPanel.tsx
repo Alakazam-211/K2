@@ -10,12 +10,20 @@
 // `vault_confirm_required` (a widening, or `required` / `server_read` on,
 // the owner only) the person confirms and the same change goes again. The
 // per-Space CUI/FCI lock is the owner's, in person. Never `fetchProjects()`.
+//
+// The two server switches (prd-home-call-recording-v1 §3, HR-11): "Recording
+// on this server" (`recording.enabled`) and "Record calls in DMs"
+// (`recording.dm_enabled`), both off until a person turns them on. Each goes
+// to `POST /cli/sew/recording/policy`; the daemon takes an Owner or Admin in
+// person, with a fresh confirm (`recording-policy`, bound to this install),
+// and refuses an agent `person_only`. Neither is ever turned on by K2 itself.
 
 import React, { useCallback, useEffect, useId, useState } from 'react'
 import { Button, Input, Segmented, Toggle } from '@/components/ui'
 import { SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { httpCodeOf, httpDetailsOf } from '@/lib/daemon-http-error'
 import {
+  setSewRecordingPolicy,
   fetchAppRecording,
   fetchSewAppSpaces,
   fetchSewHomeAppIds,
@@ -41,10 +49,30 @@ const LEVEL_LABEL: Record<Level, string> = { none: 'Nobody', admin: 'Admins', mo
 
 const CONFIRM_CODES = new Set(['vault_confirm_required', 'owner_confirm_required'])
 
+/** The two switches a person turns on here (HR-11): their keys, labels and
+ *  hints. Everything else stays a read-only row. */
+export const RECORDING_SWITCHES = [
+  {
+    key: 'recording.enabled',
+    label: 'Recording on this server',
+    hint: 'Lets people record calls in voice rooms, Apps and (with the next switch) DMs. Everyone in a call is told first. Audio is stored on this server, sealed with its keys: it is not end-to-end encrypted on disk. You are responsible for the recording laws where people are (for example, two-party consent).',
+  },
+  {
+    key: 'recording.dm_enabled',
+    label: 'Record calls in DMs',
+    hint: 'Either person in a DM call may press Record or Stop; the other person is told and may leave. The transcript is kept in the DM, which only the two people read (chat’s compliance tools can still reach it). The audio is kept 30 days, or less if this server keeps audio for less.',
+  },
+] as const
+
+/** The org rule that would also record every DM call (HR-15). */
+export const REQUIRED_ALSO_DMS = 'Also records every DM call while “Record calls in DMs” is on.'
+
 /** The server-wide recording rules, in plain words (unknown keys are
  *  worded from the key itself, never shown raw). */
 const POLICY_LABEL: Record<string, string> = {
-  'recording.enabled': 'Recording in App calls',
+  'recording.enabled': 'Recording on this server',
+  'recording.dm_enabled': 'Record calls in DMs',
+  'recording.required': 'Record every call with two or more people',
   'recording.audio_max_days': 'Longest time audio is kept',
   'recording.transcripts': 'Transcripts',
   'recording.required_allowed': 'Apps may record every call',
@@ -68,9 +96,18 @@ export interface RecordingPanelProps {
   sample: boolean
   canMutate: boolean
   isOwner: boolean
+  /** This install's id: the policy confirm is bound to it. */
+  installId?: string | null
 }
 
-export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelProps): React.JSX.Element {
+/** A policy's value as the person sees it: what K2 asked for, else what Sew
+ *  shows; never there = off (both switches start off). */
+export function policyOn(p: { want: unknown; seen: unknown } | undefined): boolean {
+  if (!p) return false
+  return (p.want ?? p.seen) === true
+}
+
+export function RecordingPanel({ sample, canMutate, isOwner, installId = null }: RecordingPanelProps): React.JSX.Element {
   const { confirm, ui } = usePersonConfirm()
   const [policies, setPolicies] = useState<SewRecordingPolicies | null>(null)
   const [apps, setApps] = useState<AppRecordingView[]>([])
@@ -148,6 +185,14 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
       key,
     )
 
+  const setPolicy = (key: string, on: boolean, label: string): Promise<void> =>
+    withConfirm(
+      (token) => setSewRecordingPolicy({ [key]: on }, token),
+      { action: 'recording-policy', secretId: installId || 'none' },
+      `${label}: ${on ? 'on' : 'off'}`,
+      `policy:${key}`,
+    )
+
   const lock = (spaceId: string, on: boolean): Promise<void> =>
     withConfirm((token) => setSpaceRecordingLock(spaceId, on, token), { action: 'recording-lock', secretId: spaceId }, `recording lock for Space ${spaceId}`, `lock:${spaceId}`)
 
@@ -171,16 +216,57 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
       {!unavailable && policies ? (
         <>
           <SettingsGroup
+            title="Recording"
+            card
+            hint="Both start off. The owner or an admin turns them on here, with a confirm (Touch ID, your login or the vault password). Agents never turn them on."
+            testId="sew-recording-switches"
+          >
+            {RECORDING_SWITCHES.map((sw) => {
+              const row = policies.policies.find((p) => p.key === sw.key)
+              const on = policyOn(row)
+              const busy = pending !== null
+              const dmNeedsServer = sw.key === 'recording.dm_enabled' && !on && !policyOn(policies.policies.find((p) => p.key === 'recording.enabled'))
+              return (
+                <div key={sw.key} data-testid="sew-recording-switch" data-key={sw.key}>
+                  <SettingRow
+                    label={sw.label}
+                    hint={
+                      <>
+                        {sw.hint}
+                        {row && !row.delivered ? <span className="block">Saved here. Chat picks it up in a moment.</span> : null}
+                        {!canMutate ? <span className="block">Only the owner or an admin changes this.</span> : null}
+                        {dmNeedsServer ? <span className="block">Turn on recording on this server first.</span> : null}
+                      </>
+                    }
+                  >
+                    <Toggle
+                      aria-label={sw.label}
+                      checked={on}
+                      disabled={!canMutate || busy || dmNeedsServer}
+                      onChange={(v) => void setPolicy(sw.key, v, sw.label)}
+                      size="sm"
+                    />
+                  </SettingRow>
+                </div>
+              )
+            })}
+          </SettingsGroup>
+          <SettingsGroup
             title="This server’s rules"
             card
-            hint="Everything starts off. Each person in a call still answers their own consent notice, and is never recorded after saying no. The owner or an admin changes these from a terminal on the server."
+            hint="Everything starts off. Each person in a call still answers their own consent notice, and is never recorded after saying no. The owner or an admin changes the rest from a terminal on the server (k2 hostchat recording policy set)."
             testId="sew-recording-policies"
           >
-            {policies.policies.map((p) => (
+            {policies.policies.filter((p) => !RECORDING_SWITCHES.some((sw) => sw.key === p.key)).map((p) => (
               <div key={p.key} data-testid="sew-recording-policy">
                 <SettingRow
                   label={policyLabel(p.key)}
-                  hint={p.want === null ? 'Chat’s own setting.' : p.delivered ? undefined : 'Saved here. Chat picks it up in a moment.'}
+                  hint={
+                    <>
+                      {p.want === null ? 'Chat’s own setting.' : p.delivered ? null : 'Saved here. Chat picks it up in a moment.'}
+                      {p.key === 'recording.required' ? <span className="block">{REQUIRED_ALSO_DMS}</span> : null}
+                    </>
+                  }
                 >
                   <span className="type-row text-[var(--color-text-primary)]">{policyValue(p.key, p.want === null ? p.seen : p.want)}</span>
                 </SettingRow>

@@ -1270,8 +1270,8 @@
    },
    {
     "name": "hostchat recording",
-    "usage": "k2 hostchat recording <status|preflight|enable|disable|uninstall> [--json]",
-    "description": "Sew's call recorder (Sew 0.9.0+, app_recording): status (installed, enabled, version, org policies, Sew's flags), preflight (8 GiB of RAM, the fit rule on a shared box, voice installed, disk above the disk guard's reserve; each failed check names its fix), enable [--recorder-tarball FILE] [--transcriber-tarball FILE] [--model-file FILE] [--no-wait] (installs the recorder, the transcriber and the speech model, then turns the org policy recording.enabled on; an Owner or Admin in person, with Touch ID or the vault password; an agent asks on the sew.recording-enable card), disable (recording off; the recorder and every recording are kept), uninstall [--yes] (removes the recorder; never deletes recordings)."
+    "usage": "k2 hostchat recording <status|preflight|install|enable|disable|uninstall> [--json]",
+    "description": "Sew's call recorder (Sew 0.9.0+, app_recording): status (installed, enabled, version, org policies, Sew's flags), preflight (8 GiB of RAM, the fit rule on a shared box, voice installed, disk above the disk guard's reserve; each failed check names its fix), install [--recorder-tarball FILE] [--transcriber-tarball FILE] [--model-file FILE] [--no-wait] (installs the recorder, the transcriber and the speech model and leaves recording off: for provisioning; the owner token or an Owner or Admin login, no confirm; an agent or a K2 terminal gets person_only), enable [--recorder-tarball FILE] [--transcriber-tarball FILE] [--model-file FILE] [--no-wait] (installs the recorder, the transcriber and the speech model, then turns the org policy recording.enabled on; an Owner or Admin in person, with Touch ID or the vault password; an agent asks on the sew.recording-enable card), disable (recording off; the recorder and every recording are kept), uninstall [--yes] (removes the recorder; never deletes recordings)."
    },
    {
     "name": "hostchat media",

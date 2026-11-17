@@ -33,6 +33,7 @@ pub const GET_ROUTES: &[&str] = &[
     "/cli/home-chat/messages",
     "/cli/home-chat/people",
     "/cli/home-chat/reactors",
+    "/cli/home-chat/replies",
     "/cli/home-chat/status",
     "/cli/home-chat/summary",
 ];
@@ -119,6 +120,7 @@ pub(super) fn route(path: &str, c: &Caller, p: &HashMap<String, String>, body: &
         "/cli/home-chat/summary" => summary(c, p),
         "/cli/home-chat/messages" => messages(c, p),
         "/cli/home-chat/reactors" => reactors(c, p),
+        "/cli/home-chat/replies" => replies(c, p),
         "/cli/home-chat/channels/members" => members(c, p),
         "/cli/home-chat/dm" => dm(c, parse(body)?),
         "/cli/home-chat/send" => send(c, parse(body)?),
@@ -355,6 +357,42 @@ fn reactors(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
         path.push_str(&format!("?emoji={}", hook::sew_wire::pct_path(e)));
     }
     Ok(json!({"ok": true, "reactors": ok_or_refuse(as_person(c, "GET", &path, None)?)?}))
+}
+
+/// `GET /cli/home-chat/replies?conv=&id=[&after=][&limit=]`: the replies
+/// under one message, oldest first, through the person's own session
+/// (prd-home-call-recording-v1 §5, HR-10): a recording card's transcript
+/// lines, for Show transcript. Sew answers only what this person may read
+/// (in a DM, the two people); a line of another conversation is dropped.
+fn replies(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
+    let conv = sew_id(param(p, "conv").ok_or_else(|| usage("name the conversation: conv"))?, "conv")?;
+    let id = sew_id(param(p, "id").ok_or_else(|| usage("name the message: id (the recording card)"))?, "id")?;
+    let limit: u32 = match param(p, "limit") {
+        Some(l) => l.parse().ok().filter(|n| (1..=100).contains(n)).ok_or_else(|| usage("limit is 1-100"))?,
+        None => 100,
+    };
+    let mut path = format!("/api/v1/messages/{id}/replies?limit={limit}");
+    if let Some(a) = param(p, "after") {
+        path.push_str(&format!("&after={}", sew_id(a, "after")?));
+    }
+    let a = as_person(c, "GET", &path, None)?;
+    if a.status == 404 {
+        if let Some(gone) = dm_gone(c, &conv)? {
+            return Err(gone);
+        }
+    }
+    let mut page = ok_or_refuse(a)?;
+    let keep = |m: &Value| match &m["channel_id"] {
+        Value::String(s) => *s == conv,
+        Value::Number(n) => n.to_string() == conv,
+        _ => false,
+    };
+    if let Some(items) = page.get_mut("items").and_then(Value::as_array_mut) {
+        items.retain(keep);
+    } else if let Some(items) = page.as_array_mut() {
+        items.retain(keep);
+    }
+    Ok(json!({"ok": true, "conv": conv, "id": id, "page": page}))
 }
 
 /// The ledger row of a Home channel by its Sew id.

@@ -1164,7 +1164,7 @@ pub enum RecordingAct {
 
 /// A Sew refusal of a Record or Stop, in K2's words. Sew's own error stays
 /// under `details.sew` (its `reason` is what a client branches on).
-fn recording_act_refusal(a: &SewAnswer) -> Refusal {
+pub(crate) fn recording_act_refusal(a: &SewAnswer) -> Refusal {
     let reason = a.body.pointer("/error/details/reason").and_then(Value::as_str).unwrap_or("");
     let sew = a.body.get("error").cloned().unwrap_or(Value::Null);
     let status = if a.status >= 400 { a.status } else { 502 };
@@ -1211,6 +1211,17 @@ pub fn recording_act(p: &Person, act: &RecordingAct, rooms: &[RoomRow], d: &Deps
     Ok(json!({ "ok": true, "action": what, "recording": a.body }))
 }
 
+/// The person's `my_perms` in a channel answer (top level, or under
+/// `channel`), as bits.
+pub(crate) fn perms_bits(body: &Value) -> Option<u64> {
+    let v = body.get("my_perms").or_else(|| body.pointer("/channel/my_perms"));
+    match v {
+        Some(Value::String(s)) => s.trim().parse::<u64>().ok(),
+        Some(Value::Number(n)) => n.as_u64(),
+        _ => None,
+    }
+}
+
 /// `GET /cli/voice/recording/controls?room=`: what the person's own Sew
 /// permissions in a room allow (Sew 0.9.0 has no `can_record` / `can_stop`
 /// in its plugin until 0.9.2; the client derives the buttons from these,
@@ -1222,12 +1233,7 @@ pub fn recording_perms(p: &Person, room: &str, rooms: &[RoomRow], d: &Deps) -> R
     if !a.ok() {
         return Err(sew_refusal(&a));
     }
-    let bits = match a.body.get("my_perms") {
-        Some(Value::String(s)) => s.trim().parse::<u64>().ok(),
-        Some(Value::Number(n)) => n.as_u64(),
-        _ => None,
-    };
-    let Some(bits) = bits else {
+    let Some(bits) = perms_bits(&a.body) else {
         return Err(Refusal::new(502, "chat_unavailable", "this server's chat answered the room without the person's permissions"));
     };
     Ok(json!({

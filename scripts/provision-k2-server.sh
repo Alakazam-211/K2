@@ -66,6 +66,12 @@
 #                      callback. An existing Sew with another identity
 #                      (e.g. standalone) is never converted: provisioning
 #                      stops (that is a migration).
+#   K2_SKIP_RECORDER   1 = skip step 9c.8 (Sew's call recorder, install
+#                      only). Default: a box with 8 GiB of RAM or more where
+#                      the speech model fits gets the recorder installed and
+#                      recording left OFF (a person turns it on in Settings).
+#                      Never fails provisioning: a box that can't take it is
+#                      one log line.
 #   FRP_VERSION        frpc version (default 0.61.1 — MUST match the relay)
 #
 # Idempotent: re-running converges; existing users/units are updated,
@@ -726,6 +732,11 @@ fi
 #   6. settings homeChat true + voiceRoomsPreview true — without
 #      voiceRoomsPreview the app joins a call but never starts voice
 #   7. hostchat doctor --json → verdict.failed must be []
+#   8. (9c.8, prd-home-call-recording-v1 §7) hostchat recording preflight;
+#      when `ready`, hostchat recording install (15 min), then status must
+#      say installed. INSTALL ONLY: it never turns recording on. Under
+#      8 GiB, a model that doesn't fit, or any failure here is one log line
+#      and provisioning goes on (never fatal). K2_SKIP_RECORDER=1 skips it.
 # then /boot-status must list home-chat-v1 within 60 s (voice-rooms-v1
 # missing is only a NOTE: voice rooms are Pro-only). K2 0.46.16 makes the
 # daemon default homeChat/voiceRoomsPreview ON once Sew is linked with
@@ -734,6 +745,7 @@ fi
 # converges. K2_SKIP_SEW=1 skips it. A legacy daemon (pre-root-helper) is
 # skipped with a line; any other failure stops provisioning (FAIL LOUD).
 SEW_LINE="skipped"
+REC_LINE="skipped (no Sew)"
 sew_die() { # <step> [output file]: print the step's output, stop provisioning
 	[ -z "${2:-}" ] || { cat "$2" >&2; rm -f "$2"; }
 	die "sew step failed: $1 — provisioning stopped. Fix it and re-run this script (idempotent), or run as ${K2_RUN_USER}: k2 hostchat doctor"
@@ -845,6 +857,36 @@ f=json.load(sys.stdin)["verdict"]["failed"]
 print(json.dumps(f) if f else "[]")' 2>/dev/null) \
 		|| sew_die "hostchat doctor --json (unreadable verdict)" "$SEW_OUT"
 	[ "$SEW_FAILED" = "[]" ] || sew_die "hostchat doctor (verdict.failed: ${SEW_FAILED})" "$SEW_OUT"
+	# 9c.8: the recorder, install only (recording stays off). Never fatal.
+	if [ "${K2_SKIP_RECORDER:-}" = "1" ]; then
+		REC_LINE="skipped (K2_SKIP_RECORDER=1)"
+	else
+		log "Sew [9c.8]: hostchat recording preflight (the recorder, install only: recording stays off)"
+		K2_CLI_TIMEOUT=2m k2_as_daemon_user hostchat recording preflight >"$SEW_OUT" 2>&1 || true
+		if [ "$(head -n1 "$SEW_OUT")" != "ready" ]; then
+			REC_WHY="$(grep -E '^  fail ' "$SEW_OUT" | sed -E 's/^  fail +//; s/ +/ /g' | head -n3 | paste -sd ';' - || true)"
+			REC_LINE="skipped (not ready: ${REC_WHY:-preflight said no})"
+		else
+			log "Sew [9c.8]: hostchat recording install (15 min)"
+			_rc=0
+			K2_CLI_TIMEOUT=15m k2_as_daemon_user hostchat recording install >"$SEW_OUT" 2>&1 || _rc=$?
+			if [ "$_rc" != 0 ]; then
+				REC_LINE="not installed (hostchat recording install exit ${_rc}: $(tail -n1 "$SEW_OUT"))"
+			else
+				REC_ST="$(K2_CLI_TIMEOUT=2m k2_as_daemon_user hostchat recording status --json 2>/dev/null | tail -n1 || true)"
+				REC_INST="$(sew_field "$REC_ST" installed)"
+				REC_ON="$(sew_field "$REC_ST" enabled)"
+				if [ "$REC_INST" = "True" ] && [ "$REC_ON" = "False" ]; then
+					REC_LINE="installed, recording off (a person turns it on: Settings → Chat Hosting → Recording)"
+				elif [ "$REC_INST" = "True" ]; then
+					REC_LINE="installed, recording on (a person turned it on earlier)"
+				else
+					REC_LINE="not installed (status says installed=${REC_INST:-?} after the install)"
+				fi
+			fi
+		fi
+	fi
+	log "Sew: recorder ${REC_LINE}"
 	rm -f "$SEW_OUT"
 	# Features follow the switches a moment later: poll /boot-status (60 s).
 	log "Sew: checking /boot-status features (up to 60 s)"
@@ -897,6 +939,7 @@ fi
 echo "  mail:      helper ${MAIL_HELPER_LINE}"
 echo "  apps:      ${APPS_LINE}"
 echo "  sew:       ${SEW_LINE}"
+echo "  recorder:  ${REC_LINE}"
 echo "  sandboxes: OFF (Standard-tier host — the Dedicated bootstrap adds them)"
 if [ -z "${K2_TUNNEL_TOKEN:-}" ] || [ -z "${K2_OWNER_USER:-}" ]; then
 echo ""

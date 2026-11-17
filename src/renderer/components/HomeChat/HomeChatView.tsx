@@ -95,9 +95,17 @@ import { HomeChatTyping } from './HomeChatTyping'
 import { HomeChatChannelGlyph, HomeChatPersonAvatar } from './HomeChatGlyphs'
 import { EyeIcon } from 'lucide-react'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
-import { HomeChatCallButton, HomeChatCallRecord } from './HomeChatCall'
+import { HomeChatCallButton, HomeChatCallRecord, HomeChatRecordingCard, HomeChatTranscriptPanel } from './HomeChatCall'
 import { HomeChatDmCallBars, dmCallButtonState, useDmCall } from './HomeChatCallControls'
 import { callRecordLine } from '@/lib/home-chat/calls'
+import {
+  canShowTranscript,
+  fetchHomeChatTranscript,
+  parseTranscriptLine,
+  recordingCardLine,
+  transcriptRootOf,
+  type TranscriptLine,
+} from '@/lib/home-chat/recordings'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { serverLabelFor } from './serverLabel'
 import { HomeChatErrorState } from './HomeChatStates'
@@ -239,12 +247,41 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
     return n
   }, [goneName, peopleNames, messages, me])
 
+  // ── A recording's transcript (prd-home-call-recording-v1 §2) ─────────
+  // Beside the DM, read as the person: only the two people in it can.
+  const [transcript, setTranscript] = useState<{ cardId: string; lines: TranscriptLine[] | null; state: string | null } | null>(null)
+  useEffect(() => setTranscript(null), [conv, hostKey])
+  const showTranscript = useCallback(
+    (cardId: string) => {
+      if (!conv) return
+      setTranscript({ cardId, lines: null, state: 'Loading…' })
+      fetchHomeChatTranscript(scope, conv, cardId).then(
+        (lines) => setTranscript((t) => (t && t.cardId === cardId ? { cardId, lines, state: null } : t)),
+        (e: unknown) =>
+          setTranscript((t) => (t && t.cardId === cardId ? { cardId, lines: null, state: `Couldn't load the transcript (${daemonErrorText(e) || String(e)}).` } : t)),
+      )
+    },
+    [conv, scope],
+  )
+
   // Live frames for this conversation.
   useEffect(() => {
     if (!conv) return
     return onHomeChatFrame(hostKey, (f) => {
       if (!('conv' in f) || f.conv !== conv) return
       if (f.type === 'message' || f.type === 'message_updated') {
+        // A recording's transcript line never joins the timeline (HR-10):
+        // an open transcript of its card takes it.
+        const root = transcriptRootOf(f.message)
+        if (root) {
+          const line = parseTranscriptLine(f.message)
+          if (line) {
+            setTranscript((t) =>
+              t && t.cardId === root && t.lines && !t.lines.some((l) => l.id === line.id) ? { ...t, lines: [...t.lines, line] } : t,
+            )
+          }
+          return
+        }
         // A call's record updates in place (§11a.4).
         const m = parseHomeChatMessage(f.message)
         if (m) setMessages((prev) => mergeHomeChatMessages(prev ?? [], [m]))
@@ -555,7 +592,8 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
         <HomeChatMembersSheet target={target} onClose={() => setMembersOpen(false)} onChanged={reloadChannel} />
       )}
 
-      <ThreadChatScope className="flex min-h-0 flex-1 flex-col" style={{ background: 'var(--zen-canvas)' }} testId="home-chat-thread">
+      <div className="flex min-h-0 flex-1">
+      <ThreadChatScope className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ background: 'var(--zen-canvas)' }} testId="home-chat-thread">
         <SelectableRegion className="flex min-h-0 flex-1 flex-col">
           <div
             ref={scrollRef}
@@ -597,6 +635,19 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
                 )}
                 <ThreadWindowSpacer px={win.above} gap={THREAD_LIST_GAP} edge="top" />
                 {messages.slice(win.lo, win.hi).map((m, j) => {
+                  if (m.recording) {
+                    const r = m.recording
+                    const starter = r.startedBy ? (me !== null && r.startedBy === me ? 'you' : authorName(r.startedBy, me, names)) : null
+                    return (
+                      <div key={m.id} data-home-chat-message="" data-zen-message={m.id}>
+                        <HomeChatRecordingCard
+                          text={recordingCardLine(r, starter)}
+                          timeLabel={formatRelativeTime(m.createdAt, nowSec)}
+                          onShowTranscript={canShowTranscript(r) ? () => showTranscript(m.id) : undefined}
+                        />
+                      </div>
+                    )
+                  }
                   if (m.call) {
                     return (
                       <div key={m.id} data-home-chat-message="" data-zen-message={m.id}>
@@ -701,6 +752,15 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
         )}
         </div>
       </ThreadChatScope>
+      {transcript && (
+        <HomeChatTranscriptPanel
+          lines={transcript.lines}
+          state={transcript.state}
+          nameOf={(id) => (me !== null && id === me ? 'You' : authorName(id, me, names))}
+          onClose={() => setTranscript(null)}
+        />
+      )}
+      </div>
     </div>
   )
 }

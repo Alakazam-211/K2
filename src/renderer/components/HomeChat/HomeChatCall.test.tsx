@@ -5,7 +5,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { dmCallButtonState, type DmCallView } from './HomeChatCallControls'
-import { HomeChatCallButton, HomeChatCallingBar, HomeChatCallRecord, HomeChatCallStrip, HomeChatRingCard, RING_DOCK_BELOW, ringLayerPlace, ringLayerTop } from './HomeChatCall'
+import {
+  HomeChatCallButton,
+  HomeChatCallingBar,
+  HomeChatCallRecord,
+  HomeChatCallStrip,
+  HomeChatRecordingCard,
+  HomeChatRingCard,
+  HomeChatTranscriptPanel,
+  RING_DOCK_BELOW,
+  ringLayerPlace,
+  ringLayerTop,
+} from './HomeChatCall'
+import { dmCallRecording, type DmCallRecording } from '@/lib/home-chat/recordings'
 
 afterEach(cleanup)
 
@@ -189,6 +201,8 @@ describe('DM call pieces', () => {
       callAgain: () => {},
       leave: () => {},
       toggleMute: () => {},
+      record: () => {},
+      stopRecording: () => {},
       ...over,
     })
     expect(dmCallButtonState(view({}))).toBe('idle')
@@ -200,5 +214,83 @@ describe('DM call pieces', () => {
     expect(dmCallButtonState(view({ calling: 'missed' }))).toBe('idle')
     expect(dmCallButtonState(view({ strip: { seconds: 3, muted: false, elsewhere: null } }))).toBe('in-call')
     expect(dmCallButtonState(view({ strip: { seconds: null, muted: false, elsewhere: 'another device' } }))).toBe('in-call')
+  })
+})
+
+describe('recording a DM call (prd-home-call-recording-v1 §2, HR-9)', () => {
+  it('the strip shows Record only when allowed, Stop while it may, and the badge while one runs', () => {
+    const rec = vi.fn()
+    const stop = vi.fn()
+    const strip = (recording: DmCallRecording | null) => (
+      <HomeChatCallStrip seconds={5} muted={false} elsewhere={null} onMute={vi.fn()} onLeave={vi.fn()} recording={recording} onRecord={rec} onStop={stop} />
+    )
+    const { rerender } = render(strip(null))
+    expect(screen.queryByTestId('home-chat-call-record')).toBeNull()
+    expect(screen.queryByTestId('home-chat-call-recording')).toBeNull()
+    rerender(strip({ badge: null, canRecord: false, canStop: false }))
+    expect(screen.queryByTestId('home-chat-call-record')).toBeNull()
+    rerender(strip({ badge: null, canRecord: true, canStop: false }))
+    fireEvent.click(screen.getByTestId('home-chat-call-record'))
+    expect(rec).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('home-chat-call-stop-recording')).toBeNull()
+    rerender(strip({ badge: 'Recording: started by Alex', canRecord: false, canStop: true }))
+    const badge = screen.getByTestId('home-chat-call-recording')
+    expect(badge.textContent).toBe('Recording')
+    expect(badge.getAttribute('title')).toBe('Recording: started by Alex')
+    expect(screen.queryByTestId('home-chat-call-record')).toBeNull()
+    fireEvent.click(screen.getByTestId('home-chat-call-stop-recording'))
+    expect(stop).toHaveBeenCalledTimes(1)
+  })
+
+  it("the strip's rule is the call bar's: the plugin's word, never a Voice & Chat only login; the badge names the starter", () => {
+    const recording = { recordingId: '42', myConsent: 'granted' as const, recorderPresent: true, trigger: 'manual' as const, required: false, startedBy: '7', prompt: null }
+    const participants = [{ user: 'Alex', speaking: false, muted: false, memberId: '7' }]
+    expect(dmCallRecording({ recording: null, recordingPerms: null, recordingControls: null, participants })).toEqual({ badge: null, canRecord: false, canStop: false })
+    expect(dmCallRecording({ recording: null, recordingPerms: { recordCalls: true, manageChannels: false }, recordingControls: { canRecord: true, canStop: false }, participants })).toEqual({
+      badge: null,
+      canRecord: true,
+      canStop: false,
+    })
+    expect(
+      dmCallRecording({ recording: null, recordingPerms: { recordCalls: true, manageChannels: false, voiceChatOnly: true }, recordingControls: { canRecord: true, canStop: true }, participants }),
+    ).toEqual({ badge: null, canRecord: false, canStop: false })
+    expect(dmCallRecording({ recording, recordingPerms: null, recordingControls: { canRecord: false, canStop: true }, participants })).toEqual({
+      badge: 'Recording: started by Alex',
+      canRecord: false,
+      canStop: true,
+    })
+  })
+
+  it('the recording card: its line, and Show transcript only when offered', () => {
+    const show = vi.fn()
+    const { rerender } = render(<HomeChatRecordingCard text="Recording · 12:04 · started by Alex" timeLabel="2m" onShowTranscript={show} />)
+    expect(screen.getByTestId('home-chat-recording-card-text').textContent).toBe('Recording · 12:04 · started by Alex')
+    fireEvent.click(screen.getByTestId('home-chat-show-transcript'))
+    expect(show).toHaveBeenCalledTimes(1)
+    rerender(<HomeChatRecordingCard text="Recording in progress" timeLabel="now" />)
+    expect(screen.queryByTestId('home-chat-show-transcript')).toBeNull()
+  })
+
+  it('the transcript panel: each line under who spoke, loading and empty states, Close', () => {
+    const close = vi.fn()
+    const nameOf = (id: string) => (id === '7' ? 'Alex' : 'You')
+    const { rerender } = render(<HomeChatTranscriptPanel lines={null} state="Loading…" nameOf={nameOf} onClose={close} />)
+    expect(screen.getByTestId('home-chat-transcript-state').textContent).toBe('Loading…')
+    rerender(<HomeChatTranscriptPanel lines={[]} state={null} nameOf={nameOf} onClose={close} />)
+    expect(screen.getByTestId('home-chat-transcript-empty')).toBeTruthy()
+    rerender(
+      <HomeChatTranscriptPanel
+        lines={[
+          { id: '1', speaker: '7', text: 'hello', startMs: 0 },
+          { id: '2', speaker: '1', text: 'hi', startMs: 900 },
+        ]}
+        state={null}
+        nameOf={nameOf}
+        onClose={close}
+      />,
+    )
+    expect(screen.getAllByTestId('home-chat-transcript-line').map((el) => el.textContent)).toEqual(['Alexhello', 'Youhi'])
+    fireEvent.click(screen.getByTestId('home-chat-transcript-close'))
+    expect(close).toHaveBeenCalledTimes(1)
   })
 })

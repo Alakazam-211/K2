@@ -776,6 +776,13 @@ export async function setAppRecording(app: string, change: AppRecordingChange, c
   return daemonCliPost(primaryScope(), 'app/recording/set', { app, ...change, ...(confirmToken ? { confirmToken } : {}) })
 }
 
+/** `POST /cli/sew/recording/policy {changes, confirmToken?}`: the server's
+ *  recording policies (an Owner or Admin in person; `recording.required`
+ *  the owner). Without a confirm the daemon answers `owner_confirm_required`. */
+export async function setSewRecordingPolicy(changes: Record<string, unknown>, confirmToken?: string): Promise<unknown> {
+  return daemonCliPost(primaryScope(), 'sew/recording/policy', { changes, ...(confirmToken ? { confirmToken } : {}) })
+}
+
 /** `POST /cli/sew/app-spaces/recording-lock` (the owner, in person). */
 export async function setSpaceRecordingLock(spaceId: string, lock: boolean, confirmToken?: string): Promise<unknown> {
   return daemonCliPost(primaryScope(), 'sew/app-spaces/recording-lock', { spaceId, lock, ...(confirmToken ? { confirmToken } : {}) })
@@ -793,6 +800,7 @@ export type SewConfirmAction =
   | 'app-recording'
   | 'app-recording-owner'
   | 'recording-lock'
+  | 'recording-policy'
 
 /** `secretId` per action: the install id (or `none`) for the S29 steps;
  *  none for the owner handoff (the daemon takes it unbound). */

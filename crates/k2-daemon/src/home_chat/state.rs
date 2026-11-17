@@ -111,6 +111,13 @@ pub struct PersonState {
     pub missed_counted: HashSet<String>,
 }
 
+/// A recording's transcript line (Sew S35 v2 §15.2): a reply under the
+/// recording card (`thread_root_id`), or a message that carries
+/// `transcript`. Kept off the timeline and out of every count (HR-10).
+pub fn is_transcript_line(m: &Value) -> bool {
+    m["transcript"].is_object() || !m["thread_root_id"].is_null()
+}
+
 fn id_of(v: &Value) -> Option<String> {
     match v {
         Value::String(s) if !s.is_empty() => Some(s.clone()),
@@ -344,6 +351,15 @@ impl PersonState {
             "message_created" => {
                 let m = if d.get("message").is_some() { &d["message"] } else { d };
                 let Some(cid) = id_of(&m["channel_id"]) else { return out };
+                if is_transcript_line(m) {
+                    // A recording's transcript line (prd-home-call-recording-v1
+                    // HR-10): a reply under its recording card. It reaches the
+                    // person's windows (Show transcript) but never moves the
+                    // conversation's unread, its count or its last message
+                    // (the row's preview never shows a transcript line).
+                    out.push(json!({"type": "message", "conv": cid, "message": m}));
+                    return out;
+                }
                 let mine = id_of(&m["author_id"]).is_some_and(|a| a == self.me);
                 let c = self.convs.entry(cid.clone()).or_insert_with(|| Conv { channel_id: cid.clone(), ..Default::default() });
                 if !c.kind_known {
@@ -365,6 +381,10 @@ impl PersonState {
                             bump(c, unread_count_flag);
                         }
                     }
+                } else if m["recording"].is_object() && !mine {
+                    // A recording's card: unread, as a call's record is, but
+                    // never counted (the call itself was the news).
+                    c.unread = true;
                 } else if mine {
                     // Posting reads the channel (Sew moves the cursor).
                     c.unread = false;

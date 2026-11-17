@@ -70,7 +70,10 @@ export interface RecordingNoticeText {
 }
 
 /** K2's notice for its own rooms: who started it, what is kept and how long,
- *  who reads it, and that staying means being recorded. */
+ *  who reads it, and that staying means being recorded. A DM call
+ *  (prd-home-call-recording-v1 §2, HR-8) says "this DM", and never K2's
+ *  agent line: "Read call transcripts" reaches only the K5 rooms (Sew's own
+ *  `agentReaders` still shows). */
 export function recordingNoticeText(opts: {
   roomName: string
   prompt: NativeConsentPrompt
@@ -78,23 +81,31 @@ export function recordingNoticeText(opts: {
   agentReaders: boolean
   /** Before joining (a held join) or in the call. */
   ask: 'join' | 'in_call'
+  /** A DM call (its room is `dm:<conv>`). */
+  dm?: boolean
 }): RecordingNoticeText {
   const { prompt, roomName } = opts
+  const dm = opts.dm === true
   const lines: string[] = []
   if (prompt.startedByName) lines.push(`${prompt.startedByName} started recording this call.`)
+  else if (dm) lines.push(prompt.required ? "This server records every call with more than one person." : 'This call is being recorded.')
   else if (prompt.required) lines.push('This room records every call with more than one person.')
   else lines.push('This room records its calls.')
-  lines.push("Everyone's voice is recorded and transcribed. The transcript is kept in this room's chat.")
+  lines.push(
+    dm
+      ? "Everyone's voice is recorded and transcribed. The transcript is kept in this DM."
+      : "Everyone's voice is recorded and transcribed. The transcript is kept in this room's chat.",
+  )
   lines.push(
     prompt.audioKeepDays === 0
       ? 'The audio is deleted once the transcript is final.'
       : `The audio is kept for ${prompt.audioKeepDays} ${prompt.audioKeepDays === 1 ? 'day' : 'days'}.`,
   )
   if (prompt.appReaders.length > 0) lines.push(`${prompt.appReaders.join(', ')} can read the transcript.`)
-  if (opts.agentReaders || prompt.agentReaders) lines.push(AGENT_READERS_LINE)
+  if ((opts.agentReaders && !dm) || prompt.agentReaders) lines.push(AGENT_READERS_LINE)
   lines.push(opts.ask === 'join' ? 'Joining means being recorded.' : 'Staying in the call means being recorded.')
   return {
-    title: opts.ask === 'join' ? `${roomName} is being recorded` : 'This call is being recorded',
+    title: opts.ask === 'join' && !dm ? `${roomName} is being recorded` : 'This call is being recorded',
     lines,
     ok: 'OK',
     leave: opts.ask === 'join' ? "Don't join" : 'Leave call',
@@ -102,8 +113,8 @@ export function recordingNoticeText(opts: {
 }
 
 /** The badge's tooltip: what started it. */
-export function recordingBadgeTitle(r: NativeRecording, startedByName: string | null): string {
-  if (r.trigger === 'required') return 'Recording: this room records every call with more than one person'
-  if (r.trigger === 'auto') return 'Recording: this room records its calls'
+export function recordingBadgeTitle(r: NativeRecording, startedByName: string | null, dm = false): string {
+  if (r.trigger === 'required') return dm ? 'Recording: this server records every call with more than one person' : 'Recording: this room records every call with more than one person'
+  if (r.trigger === 'auto') return dm ? 'Recording: this server records its calls' : 'Recording: this room records its calls'
   return startedByName ? `Recording: started by ${startedByName}` : 'Recording'
 }

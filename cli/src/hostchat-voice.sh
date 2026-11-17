@@ -704,8 +704,21 @@ Voice (sew-media, TURN over TLS on 5349, WebRTC DTLS-SRTP):
 Recording (Sew, this box's chat and voice service: its recorder and transcriber; Sew 0.9.0+):
   k2 hostchat recording status [--json]     installed, on or off, versions, Sew's recording settings
                                             and whether this Sew can record (its app_recording flag)
-  k2 hostchat recording preflight [--json]  what enable checks, changing nothing; each failed check
-                                            names its fix
+  k2 hostchat recording preflight [--json]  what install and enable check, changing nothing; each
+                                            failed check names its fix
+  k2 hostchat recording install [--recorder-tarball FILE] [--transcriber-tarball FILE]
+                                [--model-file FILE] [--no-wait] [--json]
+                                            install the recorder, the transcriber and the speech
+                                            model and leave recording OFF: it never turns
+                                            recording on. For provisioning scripts that run with
+                                            the server's owner token (no person there), or an
+                                            Owner or Admin login; no confirm, since it records
+                                            nobody. An agent or a K2 terminal is refused
+                                            (person_only). It stops, changing nothing, unless the
+                                            box passes the same checks as enable (8 GiB of RAM,
+                                            voice installed, the RAM fit, disk; see enable and
+                                            preflight), and takes the same files. Status then says
+                                            installed yes, recording off.
   k2 hostchat recording enable [--recorder-tarball FILE] [--transcriber-tarball FILE]
                                [--model-file FILE] [--no-wait] [--json]
                                             install the recorder, the transcriber and the speech
@@ -714,8 +727,9 @@ Recording (Sew, this box's chat and voice service: its recorder and transcriber;
                                             does it in person, with Touch ID on a Mac or the vault
                                             password. An agent never runs enable: it asks on a card
                                             (k2 permission request sew.recording-enable --why "...");
-                                            the Owner or Admin who allows it there installs it, and
-                                            the agent has nothing to run afterwards.
+                                            the Owner or Admin who allows it there installs it and
+                                            turns recording on, and the agent has nothing to run
+                                            afterwards.
                                             Stops, changing nothing, unless: the box has at least
                                             8 GiB of RAM; voice is installed (k2 hostchat media
                                             install first); every Sew service fits in RAM with 40%
@@ -906,8 +920,14 @@ elif verb == "recording-status":
     r = v.get("ready") or {}
     if r.get("ok") is False:
         line("not ready", "%s: %s" % (r.get("code"), r.get("hint")))
-elif verb in ("recording-enable", "recording-disable", "recording-uninstall"):
-    if verb == "recording-enable":
+elif verb in ("recording-install", "recording-enable", "recording-disable", "recording-uninstall"):
+    if verb == "recording-install":
+        line("recorder", "installing (k2 hostchat recording status)" if v.get("state") == "installing" else "installed")
+        line("recording", "on" if v.get("enabled") else "off")
+        line("version", v.get("version"))
+        line("model", v.get("model"))
+        line("next", v.get("next"))
+    elif verb == "recording-enable":
         line("recording", "installing (k2 hostchat recording status)" if v.get("state") == "installing" else "on")
         line("version", v.get("version"))
         line("model", v.get("model"))
@@ -1936,8 +1956,21 @@ k2 hostchat recording — Sew's call recorder on this box (chat and voice)
 Recording (Sew, this box's chat and voice service: its recorder and transcriber; Sew 0.9.0+):
   k2 hostchat recording status [--json]     installed, on or off, versions, Sew's recording settings
                                             and whether this Sew can record (its app_recording flag)
-  k2 hostchat recording preflight [--json]  what enable checks, changing nothing; each failed check
-                                            names its fix
+  k2 hostchat recording preflight [--json]  what install and enable check, changing nothing; each
+                                            failed check names its fix
+  k2 hostchat recording install [--recorder-tarball FILE] [--transcriber-tarball FILE]
+                                [--model-file FILE] [--no-wait] [--json]
+                                            install the recorder, the transcriber and the speech
+                                            model and leave recording OFF: it never turns
+                                            recording on. For provisioning scripts that run with
+                                            the server's owner token (no person there), or an
+                                            Owner or Admin login; no confirm, since it records
+                                            nobody. An agent or a K2 terminal is refused
+                                            (person_only). It stops, changing nothing, unless the
+                                            box passes the same checks as enable (8 GiB of RAM,
+                                            voice installed, the RAM fit, disk; see enable and
+                                            preflight), and takes the same files. Status then says
+                                            installed yes, recording off.
   k2 hostchat recording enable [--recorder-tarball FILE] [--transcriber-tarball FILE]
                                [--model-file FILE] [--no-wait] [--json]
                                             install the recorder, the transcriber and the speech
@@ -1946,8 +1979,9 @@ Recording (Sew, this box's chat and voice service: its recorder and transcriber;
                                             does it in person, with Touch ID on a Mac or the vault
                                             password. An agent never runs enable: it asks on a card
                                             (k2 permission request sew.recording-enable --why "...");
-                                            the Owner or Admin who allows it there installs it, and
-                                            the agent has nothing to run afterwards.
+                                            the Owner or Admin who allows it there installs it and
+                                            turns recording on, and the agent has nothing to run
+                                            afterwards.
                                             Stops, changing nothing, unless: the box has at least
                                             8 GiB of RAM; voice is installed (k2 hostchat media
                                             install first); every Sew service fits in RAM with 40%
@@ -1991,7 +2025,7 @@ _hostchat_recording() {
                 yes=1; shift ;;
             --no-wait) wait=0; shift ;;
             --recorder-tarball|--transcriber-tarball|--model-file)
-                [ "$sub" = "enable" ] || { echo "{\"error\":\"usage\",\"hint\":\"$1 only applies to k2 hostchat recording enable\"}" >&2; exit 2; }
+                case "$sub" in enable|install) ;; *) echo "{\"error\":\"usage\",\"hint\":\"$1 only applies to k2 hostchat recording install and enable\"}" >&2; exit 2 ;; esac
                 [ $# -ge 2 ] || { echo "{\"error\":\"usage\",\"hint\":\"$1 FILE\"}" >&2; exit 2; }
                 local f="$2"; case "$f" in /*) ;; *) f="$PWD/$f" ;; esac
                 case "$1" in
@@ -2008,6 +2042,25 @@ _hostchat_recording() {
     case "$sub" in
         status) _hostchat_call GET /cli/sew/recording ""; _hostchat_print recording-status "$as_json" ;;
         preflight) _hostchat_call GET /cli/sew/recording/preflight ""; _hostchat_print recording-preflight "$as_json" ;;
+        install)
+            # Install only (prd-home-call-recording-v1 §7): no confirm, and
+            # recording stays off. In a K2 terminal the daemon answers
+            # person_only.
+            _hostchat_call POST /cli/sew/recording/install "$(_compute_json K2_CJ_recorderTarballPath="$rec" \
+                K2_CJ_transcriberTarballPath="$tra" K2_CJ_modelFilePath="$model")"
+            if [ "$wait" = "1" ] && [ "$(_hostchat_field state)" = "installing" ]; then
+                local i=0 res=""
+                while [ "$i" -lt 900 ]; do
+                    _hostchat_call GET /cli/sew/recording ""
+                    res="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; p=json.load(sys.stdin).get("progress") or {}; print(p.get("result") or "")')"
+                    [ "$res" = "running" ] || break
+                    sleep 2; i=$((i + 1))
+                done
+                _hostchat_print recording-status "$as_json"
+                [ "$res" = "done" ] || exit 3
+                return 0
+            fi
+            _hostchat_print recording-install "$as_json" ;;
         enable)
             if _compute_in_session; then
                 # An agent: the daemon refuses (person_only) with the card's line.

@@ -242,8 +242,9 @@ pub fn rights_for(pid: &str, key: &DocKey, store: Option<&DocStore>) -> DocRight
         Some(Principal::Agent(id)) => agent_rights(&id, &key.space, &key.path, store).unwrap_or(DocRights::NONE),
         None => DocRights::NONE,
     };
-    // A `.blend` is read-only while the blend core is on: no edit for anyone.
-    super::blend_read_only::cap(&key.path, r)
+    // A `.blend` is read-only while the blend core is on, and so is a
+    // drawing while the CAD core is on: no edit for anyone.
+    super::cad_read_only::cap(&key.path, super::blend_read_only::cap(&key.path, r))
 }
 
 /// The host. Holds only a weak handle on the store (for shares), so it never

@@ -213,6 +213,7 @@ pub const AREAS: &[(&str, &str)] = &[
     ("links", "iOS and Android link files"),
     ("updates", "a desktop app's update feed"),
     ("static", "static Apps (a built folder, no process)"),
+    ("docs", "multiplayer docs: k2 doc (the CAD core's drawings)"),
     ("general", "any App route"),
 ];
 

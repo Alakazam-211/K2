@@ -52,6 +52,8 @@ mod blob_flow_tests;
 mod demote_tests;
 pub mod blob_packs;
 pub mod blend_read_only;
+pub mod cad;
+pub mod cad_read_only;
 pub mod caller;
 pub mod claims;
 pub mod conflicts;

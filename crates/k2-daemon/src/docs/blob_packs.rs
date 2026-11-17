@@ -23,6 +23,10 @@
 //!   list|show|diff|blame`. A `.blend` is a live keyed doc while the core is
 //!   on; it is indexed here as a tier-0 doc (a version the live tier
 //!   declines, or one stored as one).
+//! - **the CAD core** (the CAD packs): `.dxf` drawings, `entity
+//!   list|show|diff|blame` from the DXF pack's index, and `.dwg` drawings
+//!   (no index yet). Read only ([`super::cad_read_only`]); their reads are
+//!   the drawing model's ([`super::cad`]).
 //!
 //! The verbs come from the kit: [`registry_for`] is
 //! `Registry::for_blob_pack(&pack)`, so `/cli/docs/tool` routes exactly the
@@ -46,6 +50,10 @@ pub const PHOTOPLOT_EXTENSIONS: &[&str] = &["gbr", "ger", "pho", "gtl", "gbl", "
 pub const DRILL_EXTENSIONS: &[&str] = &["drl", "xnc", "xln", "ncd"];
 /// BLEND scenes (the blend core).
 pub const BLEND_EXTENSIONS: &[&str] = &["blend"];
+/// ASCII DXF drawings (the CAD core).
+pub const DXF_EXTENSIONS: &[&str] = &["dxf"];
+/// DWG drawings, the 2004 to 2018 family (the CAD core).
+pub const DWG_EXTENSIONS: &[&str] = &["dwg"];
 
 /// What a tier-0 file is, for its pack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,25 +74,40 @@ pub enum BlobKind {
     Drill,
     /// A BLEND scene (the blend core).
     Blend,
+    /// A DXF drawing (the CAD core), indexed by the DXF pack.
+    Dxf,
+    /// A DWG drawing (the CAD core): no index yet.
+    Dwg,
 }
 
 impl BlobKind {
     /// Every kind, in a fixed order.
-    pub const ALL: [BlobKind; 8] =
-        [BlobKind::Any, BlobKind::Psd, BlobKind::Otio, BlobKind::Fcpxml, BlobKind::Prproj, BlobKind::Photoplot, BlobKind::Drill, BlobKind::Blend];
+    pub const ALL: [BlobKind; 10] = [
+        BlobKind::Any,
+        BlobKind::Psd,
+        BlobKind::Otio,
+        BlobKind::Fcpxml,
+        BlobKind::Prproj,
+        BlobKind::Photoplot,
+        BlobKind::Drill,
+        BlobKind::Blend,
+        BlobKind::Dxf,
+        BlobKind::Dwg,
+    ];
 
     fn index(self) -> usize {
         BlobKind::ALL.iter().position(|k| *k == self).expect("in ALL")
     }
 
     /// The multiplayer core this kind's pack needs besides its file's: the
-    /// timeline, fab and blend cores. `None` for PSD and any other file (the
+    /// timeline, fab, blend and CAD cores. `None` for PSD and any other file (the
     /// any-file core).
     pub fn core(self) -> Option<&'static str> {
         match self {
             BlobKind::Otio | BlobKind::Fcpxml | BlobKind::Prproj => Some(docs_cores::TIMELINE),
             BlobKind::Photoplot | BlobKind::Drill => Some(docs_cores::FAB),
             BlobKind::Blend => Some(docs_cores::BLEND),
+            BlobKind::Dxf | BlobKind::Dwg => Some(docs_cores::CAD),
             BlobKind::Any | BlobKind::Psd => None,
         }
     }
@@ -102,7 +125,16 @@ impl BlobKind {
             // While the writer switch is off: its index, never a merge or an
             // agent write (`blend_read_only::BLEND_WRITER`).
             BlobKind::Blend => super::blend_read_only::blob_pack(),
+            // Read only: the DXF pack's index, never a merge or an agent
+            // write; a DWG has no index yet (`cad_read_only`).
+            BlobKind::Dxf => Arc::new(super::cad_read_only::DxfIndexOnly::default()),
+            BlobKind::Dwg => Arc::new(super::cad_read_only::DwgReadOnly),
         }
+    }
+
+    /// Whether this kind's pack keeps a structure index.
+    pub fn indexes(self) -> bool {
+        index_pack_name(self).is_some()
     }
 }
 
@@ -134,18 +166,22 @@ pub fn kind_by_name(rel: &str) -> BlobKind {
         BlobKind::Drill
     } else if listed(BLEND_EXTENSIONS, ext) {
         BlobKind::Blend
+    } else if listed(DXF_EXTENSIONS, ext) {
+        BlobKind::Dxf
+    } else if listed(DWG_EXTENSIONS, ext) {
+        BlobKind::Dwg
     } else {
         BlobKind::Any
     }
 }
 
-/// The file-type core `rel`'s name belongs to (timeline, fab or blend), on
-/// or off; `None` for every other file.
+/// The file-type core `rel`'s name belongs to (timeline, fab, blend or
+/// cad), on or off; `None` for every other file.
 pub fn core_by_name(rel: &str) -> Option<&'static str> {
     kind_by_name(rel).core()
 }
 
-/// Whether `rel` is a file the timeline, fab or blend core reads, by name:
+/// Whether `rel` is a file the timeline, fab, blend or CAD core reads, by name:
 /// never live text (line merges would break their structure), whatever the
 /// text pack would guess.
 pub fn is_pack_file(rel: &str) -> bool {
@@ -173,7 +209,7 @@ pub fn registry_for(rel: &str) -> &'static Registry {
 }
 
 pub fn registry_of(kind: BlobKind) -> &'static Registry {
-    static REGISTRIES: [OnceLock<Registry>; 8] = [const { OnceLock::new() }; 8];
+    static REGISTRIES: [OnceLock<Registry>; BlobKind::ALL.len()] = [const { OnceLock::new() }; BlobKind::ALL.len()];
     REGISTRIES[kind.index()].get_or_init(|| {
         Registry::for_blob_pack(&*kind.pack()).unwrap_or_else(|e| panic!("the {kind:?} pack's registry: {e:?}"))
     })
@@ -181,12 +217,12 @@ pub fn registry_of(kind: BlobKind) -> &'static Registry {
 
 /// Whether `rel`'s pack keeps a structure index now.
 pub fn indexes(rel: &str) -> bool {
-    kind_of(rel) != BlobKind::Any
+    kind_of(rel).indexes()
 }
 
 /// The pack's name in the export worker's `index` op (`psd`, `otio`,
-/// `photoplot`, `drill-common`, `blend`...): its index spec's name, which
-/// the worker's `INDEXERS` list.
+/// `photoplot`, `drill-common`, `blend`, `dxf`...): its index spec's name,
+/// which the worker's `INDEXERS` list. `None` for a kind with no index.
 pub fn index_pack_name(kind: BlobKind) -> Option<&'static str> {
     match kind {
         BlobKind::Any => None,
@@ -197,6 +233,8 @@ pub fn index_pack_name(kind: BlobKind) -> Option<&'static str> {
         BlobKind::Photoplot => Some("photoplot"),
         BlobKind::Drill => Some("drill-common"),
         BlobKind::Blend => Some(k2_mpc_blend::pack::PACK),
+        BlobKind::Dxf => Some("dxf"),
+        BlobKind::Dwg => None,
     }
 }
 
@@ -236,11 +274,15 @@ mod tests {
             ("board.ncd", BlobKind::Drill),
             ("scene.blend", BlobKind::Blend),
             ("x/Room.BLEND", BlobKind::Blend),
+            ("plan.dxf", BlobKind::Dxf),
+            ("site/Plan.DXF", BlobKind::Dxf),
+            ("part.dwg", BlobKind::Dwg),
+            ("a/B.Dwg", BlobKind::Dwg),
         ] {
             assert_eq!(kind_by_name(p), k, "{p}");
             assert!(is_pack_file(p), "{p}");
         }
-        for p in [".otio", "otio", "cut.otio.zip", "scene.blend1", "a.gbrx", "dir.drl/a.png", "a.fcpxmld", "a.xml"] {
+        for p in [".otio", "otio", "cut.otio.zip", "scene.blend1", "a.gbrx", "dir.drl/a.png", "a.fcpxmld", "a.xml", ".dxf", "plan.dxf.bak", "a.dwt", "a.dxb", "part.dgn"] {
             assert_eq!(kind_by_name(p), BlobKind::Any, "{p}");
             assert!(!is_pack_file(p), "{p}");
         }
@@ -249,6 +291,8 @@ mod tests {
         assert_eq!(core_by_name("a.drl"), Some("fab"));
         assert_eq!(core_by_name("a.gbr"), Some("fab"));
         assert_eq!(core_by_name("a.blend"), Some("blend"));
+        assert_eq!(core_by_name("a.dxf"), Some("cad"));
+        assert_eq!(core_by_name("a.dwg"), Some("cad"));
         assert_eq!(core_by_name("a.psd"), None, "PSD is the any-file core's");
         assert_eq!(core_by_name("a.png"), None);
     }
@@ -259,7 +303,7 @@ mod tests {
     fn a_pack_files_kind_follows_its_core() {
         let _l = crate::docs::cores::tests::mirror_lock();
         crate::docs::cores::tests::all_off();
-        let files = [("cut.otio", "timeline", BlobKind::Otio), ("a.fcpxml", "timeline", BlobKind::Fcpxml), ("a.prproj", "timeline", BlobKind::Prproj), ("a.gbr", "fab", BlobKind::Photoplot), ("a.drl", "fab", BlobKind::Drill), ("a.blend", "blend", BlobKind::Blend)];
+        let files = [("cut.otio", "timeline", BlobKind::Otio), ("a.fcpxml", "timeline", BlobKind::Fcpxml), ("a.prproj", "timeline", BlobKind::Prproj), ("a.gbr", "fab", BlobKind::Photoplot), ("a.drl", "fab", BlobKind::Drill), ("a.blend", "blend", BlobKind::Blend), ("a.dxf", "cad", BlobKind::Dxf)];
         for (p, _, _) in files {
             assert_eq!(kind_of(p), BlobKind::Any, "{p}: its core is off");
             assert!(!indexes(p), "{p}");
@@ -274,6 +318,14 @@ mod tests {
             assert_eq!(Some(spec.pack), index_pack_name(k), "{p}: the worker's name is the index's");
             crate::docs::cores::set_for_test(core, false);
         }
+        // A DWG: its core's kind while on, with no index yet (any-file's
+        // verbs, its own read-only pack).
+        assert_eq!(kind_of("a.dwg"), BlobKind::Any);
+        crate::docs::cores::set_for_test("cad", true);
+        assert_eq!(kind_of("a.dwg"), BlobKind::Dwg);
+        assert!(!indexes("a.dwg") && pack_for("a.dwg").index_spec().is_none());
+        assert!(matches!(pack_for("a.dwg").agent_writes(), k2_mpc_base::session::AgentWrites::Refused));
+        assert!(matches!(pack_for("a.dxf").agent_writes(), k2_mpc_base::session::AgentWrites::Refused));
         crate::docs::cores::tests::all_off();
     }
 
@@ -311,6 +363,7 @@ mod tests {
             (BlobKind::Photoplot, "feature"),
             (BlobKind::Drill, "hole"),
             (BlobKind::Blend, "object"),
+            (BlobKind::Dxf, "entity"),
         ] {
             let r = registry_of(kind);
             for v in ["list", "show", "diff", "blame"] {
@@ -329,7 +382,7 @@ mod tests {
     #[test]
     fn every_indexing_kind_has_a_distinct_worker_name() {
         let names: Vec<&str> = BlobKind::ALL.iter().filter_map(|k| index_pack_name(*k)).collect();
-        assert_eq!(names, ["psd", "otio", "fcpxml", "prproj", "photoplot", "drill-common", "blend"]);
+        assert_eq!(names, ["psd", "otio", "fcpxml", "prproj", "photoplot", "drill-common", "blend", "dxf"]);
         for k in BlobKind::ALL {
             assert_eq!(index_pack_name(k).is_some(), k.pack().index_spec().is_some(), "{k:?}");
             if let (Some(n), Some(spec)) = (index_pack_name(k), k.pack().index_spec()) {

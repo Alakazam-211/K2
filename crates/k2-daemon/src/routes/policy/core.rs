@@ -360,7 +360,14 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/docs/activity", Member),
     get("/cli/docs/approvals", Member),
     post("/cli/docs/approve", Member),
+    // The AV reading of a set of drawings (`docs/cad.rs`): the read right on
+    // each drawing and on the configuration.
+    get("/cli/docs/av/read", Member),
     get("/cli/docs/blame", Member),
+    // A drawing's reads (`docs/cad.rs`, the CAD core): the doc's read right;
+    // the current version, no join.
+    get("/cli/docs/cad/draw", Member),
+    get("/cli/docs/cad/read", Member),
     post("/cli/docs/claim", Member),
     // Comments on any-file docs: the owner's purge and participant erasure
     // (the handler and the kit both ask for the doc owner: the box owner

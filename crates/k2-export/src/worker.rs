@@ -46,7 +46,7 @@ fn registry() -> ExportRegistry {
 /// each pack's index spec name. PSD/PSB; OTIO, FCPXML and PRPROJ
 /// timelines; photoplot files and drill files (the common-export reading,
 /// strict first); BLEND scenes.
-pub const INDEXERS: &[&str] = &[k2_mpc_psd::pack::PACK, "otio", "fcpxml", "prproj", "photoplot", "drill-common", k2_mpc_blend::pack::PACK];
+pub const INDEXERS: &[&str] = &[k2_mpc_psd::pack::PACK, "otio", "fcpxml", "prproj", "photoplot", "drill-common", k2_mpc_blend::pack::PACK, "dxf"];
 
 /// The pack named `pack` in the `index` op, if this worker runs it.
 pub fn indexer(pack: &str) -> Option<Box<dyn k2_mpc_base::session::BlobPack>> {
@@ -58,6 +58,7 @@ pub fn indexer(pack: &str) -> Option<Box<dyn k2_mpc_base::session::BlobPack>> {
         "drill-common" => Box::new(k2_mpc_fab::CommonDrillPack),
         p if p == k2_mpc_psd::pack::PACK => Box::new(k2_mpc_psd::PsdPack),
         p if p == k2_mpc_blend::pack::PACK => Box::new(k2_mpc_blend::BlendPack::default()),
+        "dxf" => Box::new(k2_mpc_dxf::DxfPack),
         _ => return None,
     };
     Some(p)

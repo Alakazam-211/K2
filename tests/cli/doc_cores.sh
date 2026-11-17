@@ -131,16 +131,17 @@ has "$OUT" "  slides     off   Slides core (Beta): .pptx decks: slide and shape 
 has "$OUT" "  timeline   off   Timeline core (Beta): .otio, .fcpxml and .prproj timelines: clip and marker verbs for agents" "timeline row"
 has "$OUT" "  fab        off   PCB fabrication core (Beta): photoplot and drill files: read-only feature and hole verbs for agents" "fab row"
 has "$OUT" "  blend      off   3D scene core (Beta): .blend scenes (read only): object reads for agents, scene previews" "blend row"
+has "$OUT" "  cad        off   CAD drawing core (Beta): .dxf and .dwg drawings (read only): drawing reads for agents" "cad row"
 has "$OUT" "While a core is off, k2 doc refuses its files (core_off, exit 3) and people open them the usual way." "list footer"
-ok "k2 doc cores lists eight cores, all off"
+ok "k2 doc cores lists nine cores, all off"
 cli -- doc cores --json
 want_rc 0 "list --json"
-jok "$OUT" 'j["ok"] is True and j["canChange"] is True and [c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend"] and j["later"] == ["CSV grid", "Word"]' "--json is the daemon's answer"
+jok "$OUT" 'j["ok"] is True and j["canChange"] is True and [c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend", "cad"] and j["later"] == ["CSV grid", "Word"]' "--json is the daemon's answer"
 
 echo "== bad usage =="
 cli -- doc cores on word
 want_rc 2 "unknown core"
-has "$ERR" "no such core: word (markdown, text, any-file, board, slides, timeline, fab, blend)" "unknown core message"
+has "$ERR" "no such core: word (markdown, text, any-file, board, slides, timeline, fab, blend, cad)" "unknown core message"
 cli -- doc cores flip markdown
 want_rc 2 "bad action"
 cli -- doc cores on
@@ -171,7 +172,7 @@ ok "an agent with a real passport and cell socket"
 AGENT_ENV=(K2_HOOK_TOKEN="$PASSPORT" K2_HOOK_SOCK="$SOCK" K2_PROJECT_PATH="$AG")
 cli "${AGENT_ENV[@]}" -- doc cores --json
 want_rc 0 "agent list"
-jok "$OUT" 'j["canChange"] is False and [c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend"] and not any(c["on"] for c in j["cores"])' "an agent lists the cores (canChange false)"
+jok "$OUT" 'j["canChange"] is False and [c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend", "cad"] and not any(c["on"] for c in j["cores"])' "an agent lists the cores (canChange false)"
 settings_before="$(cat "$SB/.k2/settings.json" 2>/dev/null || echo none)"
 audit_before="$(cat "$SB"/.k2/*audit*.jsonl 2>/dev/null | grep -c '"doc-core-switch"' || true)"
 cli "${AGENT_ENV[@]}" -- doc cores on markdown
@@ -212,7 +213,7 @@ MEM="$(printf '%s' "$login" | python3 -c 'import json,sys; v=json.load(sys.stdin
 cli -- doc cores off markdown --host "http://127.0.0.1:$DPORT" --token "$MEM"
 want_rc 3 "member off"
 has "$ERR" 'updating "multiplayerCores" requires the Owner or Admin role' "member refusal"
-jok "$(cores_json)" '[c["on"] for c in j["cores"]] == [True, True, False, False, False, False, False, False]' "a Member's off changed nothing"
+jok "$(cores_json)" '[c["on"] for c in j["cores"]] == [True, True, False, False, False, False, False, False, False]' "a Member's off changed nothing"
 cli -- doc cores --host "http://127.0.0.1:$DPORT" --token "$MEM" --json
 want_rc 0 "member list"
 jok "$OUT" 'j["canChange"] is False' "a Member may list the cores, never change them"
@@ -260,7 +261,7 @@ has "$OUT" "its changes are kept in K2's history and are written when the core i
 chmod 755 "$WS/ro"
 ok "a failed write-back: the flip completes, the line names it, exit 1"
 cli -- doc cores --json
-jok "$OUT" '[c["on"] for c in j["cores"]] == [False, False, False, False, False, False, False, False] and [f["path"] for f in j["cores"][1]["lastChange"]["failed"]] == ["ro/x.txt"]' "every core off; the text row keeps the failed path"
+jok "$OUT" '[c["on"] for c in j["cores"]] == [False, False, False, False, False, False, False, False, False] and [f["path"] for f in j["cores"][1]["lastChange"]["failed"]] == ["ro/x.txt"]' "every core off; the text row keeps the failed path"
 cli -- doc cores on text
 want_rc 0 "text on again"
 cli -- doc cat "$WS/ro/x.txt"

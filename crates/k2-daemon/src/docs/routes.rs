@@ -29,6 +29,8 @@
 //! | `/cli/docs/export/status`, `/cli/docs/export/fetch` | GET | the job's caller | the job table | P24 |
 //! | `/cli/docs/export/cancel` | POST | the job's caller | a kill | P24 |
 //! | `/cli/docs/comments/purge` | POST | owner (box owner or Admin login) | tier 0: `purge_annotations` ([`super::annotations`]) | K-PURGE-3 |
+//! | `/cli/docs/cad/draw`, `/cli/docs/cad/read` | GET | read | none: the CAD packs' reads of the current version, no join ([`super::cad`]) | CAD core |
+//! | `/cli/docs/av/read` | GET | read (each drawing and the configuration) | none: the AV reading of a set ([`super::cad`]) | CAD core |
 //! | `/cli/docs/erase` | POST | owner | tier 0: `erase_participant` | K-PURGE-7 |
 //!
 //! Comments and claims by layer ride `/cli/docs/tool` (POST): every verb
@@ -142,6 +144,7 @@ pub const ROUTES: &[&str] = &[
     UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME, LEASE, CLAIM, ACTIVITY,
     super::export::EXPORT, super::export::TARGETS, super::export::STATUS, super::export::CANCEL, super::export::FETCH,
     super::annotations::PURGE, super::annotations::ERASE, super::preview::route::PREVIEW, super::say::SAY, USE_THEIRS,
+    super::cad::DRAW, super::cad::READ, super::cad::AV,
 ];
 
 /// Tier 0's lease (K-T0-2): acquire, renew, release, break.
@@ -350,6 +353,11 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     if matches!(path, SHARES | SHARE | UNSHARE) {
         return shares_route(path, caller, &input);
     }
+    // The AV reading of a set of drawings: each drawing (and the
+    // configuration) is resolved, gated and rights-checked on its own.
+    if path == super::cad::AV {
+        return super::cad::av_route(caller, &input);
+    }
     let on_behalf = match super::caller::on_behalf_pid(caller, input.str("onBehalfOf").as_deref()) {
         Ok(p) => p,
         Err(r) => return r,
@@ -367,6 +375,13 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
             return r;
         }
     };
+    // The CAD reads take drawings only, and answer for the CAD core while
+    // it is off (never the any-file core that serves a drawing then).
+    if super::cad::on_a_drawing(path) {
+        if let Some(r) = super::cad::precheck(&target) {
+            return r;
+        }
+    }
     if let Err(r) = super::cores::gate(&target) {
         if path == super::export::EXPORT {
             super::export::audit_early_refusal(Some(&target), &caller.pid(), &input, &r);
@@ -398,6 +413,16 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
             return r;
         }
     }
+    // A drawing is read-only while the CAD core is on: the whole-file write
+    // routes and the pack's edit verbs are refused with their own reason
+    // (`cad_read_only`; the kit refuses them too, by the edit right).
+    {
+        let argv: Option<Vec<String>> =
+            input.body.get("argv").and_then(Value::as_array).map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect());
+        if let Some(r) = super::cad_read_only::refused(path, &target.rel, is_edit_route(path) || path == USE_THEIRS, argv.as_deref()) {
+            return r;
+        }
+    }
     // History reads need the history right (K-PERM-9); the kit checks it
     // too, this gives the refusal its own code first.
     if matches!(path, LOG | VERSIONS | SHOW | DIFF | RESTORE | BLAME) && !rights.history {
@@ -411,6 +436,10 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     // (history for a version, in the route).
     if path == super::preview::route::PREVIEW {
         return super::preview::route::handle(&rt, &call);
+    }
+    // A drawing's reads (the CAD core): the current version, no join.
+    if super::cad::on_a_drawing(path) {
+        return super::cad::handle(path, &rt, &call);
     }
     // Say something in the doc's live room (read right, POST only, rate-limited).
     if path == super::say::SAY {
@@ -652,7 +681,7 @@ pub(crate) fn rights_or_refusal(
     workspace_param: Option<&str>,
     store: Option<&DocStore>,
 ) -> Result<DocRights, CliResponse> {
-    rights_uncapped(caller, t, workspace_param, store).map(|r| super::blend_read_only::cap(&t.rel, r))
+    rights_uncapped(caller, t, workspace_param, store).map(|r| super::cad_read_only::cap(&t.rel, super::blend_read_only::cap(&t.rel, r)))
 }
 
 fn rights_uncapped(

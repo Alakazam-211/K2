@@ -229,9 +229,9 @@ and comment on this one with --proposal <new file>.
                                       them: exit 5
   k2 doc claim --renew|--release [--id claim-N] <f>   (a .psd or .psb file;
                                       no --id: every claim of yours)
-Timelines, circuit board files and 3D scenes (Beta): each kind has its own
-core (k2 doc cores), off by default; while it is off they are any-file docs.
-Agents never write .fcpxml, .prproj, photoplot or drill files.
+Timelines, circuit board files, 3D scenes and drawings (Beta): each kind has
+its own core (k2 doc cores), off by default; while it is off they are any-file
+docs. Agents never write .fcpxml, .prproj, photoplot or drill files.
   timeline core: .otio, .fcpxml and .prproj files
   k2 doc clip list|show|diff|blame <f>   sequences, tracks, clips and markers,
                                       as outline and node read them
@@ -252,6 +252,17 @@ Agents never write .fcpxml, .prproj, photoplot or drill files.
   k2 doc scene list|collection show @coll:N|object show @obj:N <f>
   .blend files are read only for now: object place, visibility and rename,
   write, restore and undo are refused (blend_writer_disabled, exit 3)
+  cad core: .dxf and .dwg drawings (DWG 2004 to 2018), read only for now
+  k2 doc entity list|show|diff|blame <f>    a .dxf's layers, blocks and entities
+  k2 doc cad <read verb> [args] <f>         the drawing's own reads, of its
+                                      current version (k2 doc cad --help):
+                                      drawing info, layer list, block list,
+                                      entity find, text find, attrib find,
+                                      block show, entity props, draw header,
+                                      draw page; on a .dxf also header get, check
+  k2 doc av read|summary --config <file> <f|folder>...   the AV reading of a
+                                      set of drawings (k2 doc av --help)
+  write, restore and undo on a drawing are refused (cad_writer_disabled, exit 3)
 Comments on any-file docs (pinned to the whole file, or on PSD/PSB files to
 a layer). They need edit, or a share with --comment; they make no version.
   k2 doc comment --doc|--node ADDR --body "text" [--mention P]... [--proposal FILE]... <f>
@@ -782,6 +793,150 @@ print(int(m.group(1)) * {None: 1, "ms": 1, "s": 1000, "m": 60000}[m.group(2)])
         esac
     done
     _doc_blob_tool claim ${args[@]+"${args[@]}"}
+}
+
+_doc_cad_usage() {
+    cat <<'USAGE'
+k2 doc cad <read verb> [args] <drawing>   a .dxf or .dwg drawing's reads (the CAD core)
+
+Each read is of the drawing's current version (a save from your CAD app is
+taken in first). It never opens the drawing for anyone: no presence.
+
+  drawing info                 version, units, extents, counts, handle health
+  layer list [--unused]        each layer with its switches and its entities
+  block list [--unused] [--anon]   each block with its base point and inserts
+  entity find [--layer L] [--kind K] [--in model|paper|@h:B]
+              [--window x0,y0,x1,y1 | --crossing x0,y0,x1,y1] [--after @h:H] [--limit N]
+  text find --contains S [--layer L] [--case] [--after @h:H] [--limit N]
+  attrib find ...  block show @h:B  entity props @h:H
+  draw header                  everything a viewer needs before drawing
+  draw page --space model|@h:B [--cursor C]   one page of a space, ready to draw
+  header get $VAR...           (a .dxf) header variables as written
+  check [--writeback]          (a .dxf) structure and reference findings
+
+A read that has more prints the next call on stderr ("more: ..."). --json
+prints the whole answer: path, version, verb, shape, stdout, data, next.
+Drawings are read only for now: K2 can't save drawing edits yet
+(cad_writer_disabled, exit 3).
+Exit: 0 ok · 2 bad usage, a drawing that doesn't read, or a stale cursor
+(the drawing changed: start again) · 3 refused (core_off: the CAD core is
+off) · 4 an address that names nothing.
+USAGE
+}
+
+# `k2 doc cad <read verb> [args] <drawing>`: GET /cli/docs/cad/read. The
+# drawing is the last argument; the rest go to the pack as typed (K2's own
+# flags aside).
+_doc_cad() {
+    local -a k2args=() toks=()
+    local last=-1
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help) _doc_cad_usage; return 0 ;;
+            -w|--workspace|--on-behalf-of|--host|--token)
+                [ $# -ge 2 ] || _doc_die usage "$1 needs a value"
+                k2args+=("$1" "$2"); shift 2 ;;
+            --workspace=*|--on-behalf-of=*|--host=*|--json) k2args+=("$1"); shift ;;
+            --) shift
+                while [ $# -gt 0 ]; do toks+=("$1"); last=$((${#toks[@]} - 1)); shift; done ;;
+            -*) toks+=("$1"); shift ;;
+            *) toks+=("$1"); last=$((${#toks[@]} - 1)); shift ;;
+        esac
+    done
+    [ "$last" -ge 1 ] || _doc_die usage "k2 doc cad <read verb> [args] <drawing>  (k2 doc cad --help)"
+    local path="${toks[$last]}"
+    unset 'toks[last]'
+    _doc_parse ${k2args[@]+"${k2args[@]}"}
+    path="$(_doc_path "$path")"
+    local argv q
+    argv="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' ${toks[@]+"${toks[@]}"})"
+    q="$(_doc_query "$path" argv "$argv")"
+    _doc_call GET /cli/docs/cad/read "$q"
+    _doc_print_json_or '
+import json, sys
+v = json.load(sys.stdin)
+out = v.get("stdout") or ""
+if out:
+    sys.stdout.write(out if out.endswith("\n") else out + "\n")
+nxt = list(v.get("next") or [])
+while "--version" in nxt:
+    i = nxt.index("--version")
+    del nxt[i:i + 2]
+if nxt:
+    print("more: k2 doc cad %s %s" % (" ".join(nxt), v.get("path", "")), file=sys.stderr)
+'
+}
+
+_doc_av_usage() {
+    cat <<'USAGE'
+k2 doc av read|summary --config <file> <drawing|folder>...   the AV reading of a set (the CAD core)
+
+Reads a set of AV system drawings (.dxf, .dwg) as a technician does: devices
+across sheets, cables and the boundaries they are pulled through, off-sheet
+flag pairs, title blocks and the sheet index, with findings for what doesn't
+hold together. A folder adds every .dxf and .dwg under it. At most 200
+drawings; each needs the read right, as does the configuration.
+
+  --config <file>   the set's conventions, one key = value per line (attribute
+                    tags, layers, linetypes, block names); nothing about a
+                    project is built in
+  read              every row (identifiers, labels and sheet numbers included)
+  summary           counts and finding codes only, never a value: what you can
+                    pass on about a private set
+
+--json prints the whole answer (read: sheets_read, shape av.set/1, data).
+Exit: 0 ok · 2 bad usage, a bad configuration or a drawing that doesn't read
+· 3 refused (core_off: the CAD core is off) · 4 a drawing or the
+configuration isn't there.
+USAGE
+}
+
+# `k2 doc av read|summary --config <file> <drawing|folder>...`:
+# GET /cli/docs/av/read.
+_doc_av() {
+    local what="${1:-}"
+    case "$what" in
+        read|summary) shift ;;
+        -h|--help) _doc_av_usage; return 0 ;;
+        *) _doc_die usage "k2 doc av read|summary --config <file> <drawing|folder>...  (k2 doc av --help)" ;;
+    esac
+    local config=""
+    local -a rest=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help) _doc_av_usage; return 0 ;;
+            --config) [ $# -ge 2 ] || _doc_die usage "--config needs a file"; config="$2"; shift 2 ;;
+            --config=*) config="${1#*=}"; shift ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    [ -n "$config" ] || _doc_die usage "k2 doc av $what needs --config <file>"
+    _doc_parse ${rest[@]+"${rest[@]}"}
+    [ ${#_DOC_ARGS[@]} -ge 1 ] || _doc_die usage "name the drawings (or a folder of them): k2 doc av $what --config <file> <drawing|folder>..."
+    local -a paths=()
+    local a f
+    for a in "${_DOC_ARGS[@]}"; do
+        if [ -d "$a" ]; then
+            while IFS= read -r f; do
+                paths+=("$(_doc_path "$f")")
+            done < <(find "$a" -type f \( -iname '*.dxf' -o -iname '*.dwg' \) | LC_ALL=C sort)
+        else
+            paths+=("$(_doc_path "$a")")
+        fi
+    done
+    [ ${#paths[@]} -ge 1 ] || _doc_die usage "no .dxf or .dwg drawing there"
+    config="$(_doc_path "$config")"
+    local pj q
+    pj="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${paths[@]}")"
+    q="$(_doc_query "" config "$config" paths "$pj" what "$what")"
+    _doc_call GET /cli/docs/av/read "$q"
+    _doc_print_json_or '
+import json, sys
+v = json.load(sys.stdin)
+out = (v.get("summary") if v.get("what") == "summary" else v.get("stdout")) or ""
+if out:
+    sys.stdout.write(out if out.endswith("\n") else out + "\n")
+'
 }
 
 # The owner's comment purge and participant erasure on an any-file doc.
@@ -1368,6 +1523,8 @@ Which core a file needs, by its name:
               layer files, .drl, .xnc, .xln, .ncd): feature and hole reads,
               never written
   blend       .blend scenes: object reads (read only for now)
+  cad         .dxf and .dwg drawings: drawing reads and the AV reading of a
+              set (read only for now)
   A text file too large or too odd to edit live (it is then an any-file doc)
   still needs its own core: a big .md needs markdown, not any-file.
 
@@ -1381,7 +1538,7 @@ One core opens as a Garden, not a file kind:
   k2 doc cores on <core>      turn one on (people only: the owner or an Admin)
   k2 doc cores off <core>     turn one off; files open live are written to disk
                               and closed (their history stays)
-    <core>: markdown | text | any-file | board | slides | timeline | fab | blend
+    <core>: markdown | text | any-file | board | slides | timeline | fab | blend | cad
   --json                      the daemon's JSON (on/off: the switches and the report)
   --host <server> [--token T] another server (a Connect login with the Owner or Admin role)
 
@@ -1416,7 +1573,7 @@ _doc_cores() {
     case "${#_DOC_ARGS[@]}" in
         0) ;;
         2) action="${_DOC_ARGS[0]}"; core="${_DOC_ARGS[1]}" ;;
-        *) _doc_die usage "k2 doc cores [on|off <core>]  (<core>: markdown | text | any-file | board | slides | timeline | fab | blend)" ;;
+        *) _doc_die usage "k2 doc cores [on|off <core>]  (<core>: markdown | text | any-file | board | slides | timeline | fab | blend | cad)" ;;
     esac
     if [ -z "$action" ]; then
         _doc_call GET /cli/docs/cores ""
@@ -1436,8 +1593,8 @@ print("While a core is off, k2 doc refuses its files (core_off, exit 3) and peop
 '
         return 0
     fi
-    case "$action" in on|off) ;; *) _doc_die usage "k2 doc cores on|off <core>  (<core>: markdown | text | any-file | board | slides | timeline | fab | blend)" ;; esac
-    case "$core" in markdown|text|any-file|board|slides|timeline|fab|blend) ;; *) _doc_die usage "no such core: $core (markdown, text, any-file, board, slides, timeline, fab, blend)" ;; esac
+    case "$action" in on|off) ;; *) _doc_die usage "k2 doc cores on|off <core>  (<core>: markdown | text | any-file | board | slides | timeline | fab | blend | cad)" ;; esac
+    case "$core" in markdown|text|any-file|board|slides|timeline|fab|blend|cad) ;; *) _doc_die usage "no such core: $core (markdown, text, any-file, board, slides, timeline, fab, blend, cad)" ;; esac
     if [ -n "${SCOPED_TOKEN:-}" ]; then
         [ "${_DOC_JSON:-0}" = "1" ] || echo "Error [person_only]: k2 doc cores on|off is for people, from a terminal outside K2 or Settings → Cores → Multiplayer. An agent can list the cores (k2 doc cores) and asks its human (k2 thread) to turn one on." >&2
         python3 -c 'import json; print(json.dumps({"error": {"code": "person_only", "hint": "k2 doc cores on|off is for people"}}))' >&2
@@ -1595,13 +1752,17 @@ cmd_doc() {
             fi ;;
         cat|head|wc|grep|sed|patch|apply|append|insert|replace|delete)
             _doc_tool "$verb" "$@" ;;
-        layer|outline|node|comment|reply|resolve|comments|reanchor|clip|track|marker|media|timeline|feature|hole|object|scene|collection)
+        layer|outline|node|comment|reply|resolve|comments|reanchor|clip|track|marker|media|timeline|feature|hole|object|scene|collection|entity)
             # Any-file docs, through the docs kit: comments (any file);
             # PSD/PSB files' layer index (k2 doc --help, "PSD/PSB files");
-            # timeline, fab and BLEND files' index verbs, and a live
+            # timeline, fab, BLEND and DXF files' index verbs, and a live
             # timeline's or scene's own verbs (the kit routes them by the
             # doc's tier). Every argument goes to the kit as typed.
             _doc_blob_tool "$verb" "$@" ;;
+        cad)
+            _doc_cad "$@" ;;
+        av)
+            _doc_av "$@" ;;
         purge-comments|erase-participant)
             _doc_owner_purge "$verb" "$@" ;;
         view)

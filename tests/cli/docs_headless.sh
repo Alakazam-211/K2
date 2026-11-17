@@ -237,7 +237,7 @@ printf 'png bytes\n' >"$A/notes/off.png"
 before_md="$(python3 -c 'import os,sys; s=os.stat(sys.argv[1]); print(open(sys.argv[1],"rb").read().hex(), s.st_mtime_ns)' "$A/notes/plan.md")"
 owner GET /cli/docs/cores
 want 200 "cores list"
-jok "$BODY" '[c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend"] and not any(c["on"] for c in j["cores"]) and j["canChange"] is True' "cores: eight rows, all off; the owner may change them"
+jok "$BODY" '[c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend", "cad"] and not any(c["on"] for c in j["cores"]) and j["canChange"] is True' "cores: nine rows, all off; the owner may change them"
 agent GET /cli/docs/cores
 want 200 "agent cores list"
 jok "$BODY" 'j["canChange"] is False and len(j["cores"]) == 8' "an agent may read the cores, never change them"
@@ -264,7 +264,7 @@ agent POST /cli/settings/update '{"multiplayerCores":{"markdown":true}}'
 owner GET /cli/docs/cores; jok "$BODY" 'not any(c["on"] for c in j["cores"])' "an agent can't turn a core on (its cell socket doesn't route settings/update)"
 owner POST /cli/settings/update '{"multiplayerCores":{"word":true}}'
 want 400 "unknown core"
-case "$BODY" in *"multiplayerCores.word: no such core (markdown, text, any-file, board, slides, timeline, fab, blend)"*) ;; *) fail "unknown core refusal: $BODY" ;; esac
+case "$BODY" in *"multiplayerCores.word: no such core (markdown, text, any-file, board, slides, timeline, fab, blend, cad)"*) ;; *) fail "unknown core refusal: $BODY" ;; esac
 ok "an unknown core is refused"
 rm -f "$A/notes/off.png"
 

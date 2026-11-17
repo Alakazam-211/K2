@@ -499,6 +499,11 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
     if !keyed && root_param.is_some_and(|r| r != ROOT) {
         return Err(Closed::k2(CloseReason::Declined, "bad_request", format!("root must be `{ROOT}`")));
     }
+    // A drawing (the CAD core on) has no live view and K2 writes none: the
+    // write routes' reason, so a client reads one answer (`cad_read_only`).
+    if let Some((code, why)) = super::cad_read_only::socket_decline(&t.rel) {
+        return Err(Closed::k2(CloseReason::Declined, code, why.to_string()));
+    }
     if !keyed && !matches!(t.tier, Tier::Markdown | Tier::Text(_)) {
         return Err(Closed::k2(
             CloseReason::Declined,

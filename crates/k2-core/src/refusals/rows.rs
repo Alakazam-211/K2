@@ -414,6 +414,9 @@ pub(super) const ROWS: &[Refusal] = &[
     r("static_not_on_runtime", "static", 409, Who::Agent, concat!("An older ", product_name!(), " server: its App runtime didn't serve static Apps (host.mode: \"static\")."),
         concat!("Update that server's ", product_name!(), " (from 0.46.7 a static App deploys), or serve it with ", cli_name!(), " publish run --skin there."))
         .retired(),
+    // ── docs (k2 doc; the CAD core) ──
+    r("cad_writer_disabled", "docs", 409, Who::K2, concat!("Drawings (.dxf, .dwg) are read only in ", product_name!(), " for now: a write, restore, undo or edit of one is refused while the CAD core is on. Nothing was changed."),
+        concat!("Read the drawing with ", cli_name!(), " doc cad <read verb> <file> (", cli_name!(), " doc cad --help); change it in your CAD app, and its save is taken in.")),
     // ── general ──
     r("airgap", "general", 409, Who::Owner, concat!("Air-gap is on, so ", product_name!(), " makes no outside call (DNS checks, push, downloads)."),
         "Nothing to change while air-gap is on. The owner turns air-gap off if this server should reach out."),

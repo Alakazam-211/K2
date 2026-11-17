@@ -72,6 +72,11 @@ pub const FAB: &str = "fab";
 /// visibility and names) and the mesh read the 3D previews draw from. Off,
 /// a `.blend` is an any-file doc.
 pub const BLEND: &str = "blend";
+/// 2D drawings (K2 Cores' CAD packs), a Beta, off by default: `.dxf` (read
+/// into a structure index) and `.dwg` (2004 to 2018), the drawing-model read
+/// the file viewer draws from, and the AV reading of a set of drawings. Read
+/// only. Off, they are any-file docs.
+pub const CAD: &str = "cad";
 
 /// Every core, in the order Settings and the CLI list them.
 pub const CORES: &[Core] = &[
@@ -139,6 +144,14 @@ pub const CORES: &[Core] = &[
         short: ".blend scenes (read only): object reads for agents, scene previews",
         view: CoreView::None,
     },
+    Core {
+        id: CAD,
+        name: "CAD drawing core",
+        status: "beta",
+        description: concat!(".dxf and .dwg drawings, read only for now. Agents read layers, blocks, entities and text, and an AV reading of a set of drawings (devices, cables, pulls, flags and the sheet index); the file viewer gets each drawing ready to draw. Editing drawings through ", product_name!(), " comes in a later release. Off: these are any-file docs."),
+        short: ".dxf and .dwg drawings (read only): drawing reads for agents",
+        view: CoreView::None,
+    },
 ];
 
 /// Whether a core opens files (and so needs the docs runtime): every view
@@ -155,7 +168,7 @@ pub fn by_id(id: &str) -> Option<&'static Core> {
     CORES.iter().find(|c| c.id == id)
 }
 
-/// `markdown, text, any-file, board, slides, timeline, fab, blend`, for refusals.
+/// `markdown, text, any-file, board, slides, timeline, fab, blend, cad`, for refusals.
 pub fn ids_list() -> String {
     CORES.iter().map(|c| c.id).collect::<Vec<_>>().join(", ")
 }
@@ -192,9 +205,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn eight_cores_in_order() {
+    fn nine_cores_in_order() {
         let ids: Vec<&str> = CORES.iter().map(|c| c.id).collect();
-        assert_eq!(ids, ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend"]);
+        assert_eq!(ids, ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend", "cad"]);
         assert_eq!(by_id("board").expect("board").view, CoreView::Garden);
         assert_eq!(by_id("board").expect("board").status, "beta");
         assert!(opens_files("markdown") && opens_files("any-file") && !opens_files("board") && !opens_files("nope"));
@@ -202,16 +215,21 @@ mod tests {
         assert_eq!(by_id("any-file").expect("any-file").view, CoreView::None);
         assert_eq!(by_id("markdown").expect("markdown").view, CoreView::Live);
         assert!(by_id("word").is_none());
-        assert_eq!(ids_list(), "markdown, text, any-file, board, slides, timeline, fab, blend");
+        assert_eq!(ids_list(), "markdown, text, any-file, board, slides, timeline, fab, blend, cad");
     }
 
-    /// The three file-type cores open files (their docs need the docs
+    /// The four file-type cores open files (their docs need the docs
     /// runtime), have no live view for people yet, are Betas, and say what
     /// happens while they are off. People find them by file type; product
     /// names stay out.
     #[test]
-    fn the_timeline_fab_and_blend_cores_open_files_with_no_view_for_people() {
-        for (id, kinds) in [(TIMELINE, &[".otio", ".fcpxml", ".prproj"][..]), (FAB, &["Photoplot", "drill", ".gbr", ".drl"][..]), (BLEND, &[".blend"][..])] {
+    fn the_timeline_fab_blend_and_cad_cores_open_files_with_no_view_for_people() {
+        for (id, kinds) in [
+            (TIMELINE, &[".otio", ".fcpxml", ".prproj"][..]),
+            (FAB, &["Photoplot", "drill", ".gbr", ".drl"][..]),
+            (BLEND, &[".blend"][..]),
+            (CAD, &[".dxf", ".dwg", "read only"][..]),
+        ] {
             let c = by_id(id).unwrap_or_else(|| panic!("{id}"));
             assert_eq!((c.view, c.status), (CoreView::None, "beta"), "{id}");
             assert!(opens_files(id), "{id}");
@@ -221,7 +239,7 @@ mod tests {
             assert!(c.description.contains("Off: "), "{id}: {}", c.description);
             for text in [c.description, c.short, c.name] {
                 let lower = text.to_lowercase();
-                for mark in ["blender", "premiere", "final cut", "gerber", "excellon", "adobe", "apple"] {
+                for mark in ["blender", "premiere", "final cut", "gerber", "excellon", "adobe", "apple", "autocad", "autodesk"] {
                     assert!(!lower.contains(mark), "{id}: file types only: {text}");
                 }
             }
@@ -262,7 +280,7 @@ mod tests {
         validate_partial(&json!({})).expect("empty is fine");
         assert_eq!(
             validate_partial(&json!({"word": true})).expect_err("unknown"),
-            "multiplayerCores.word: no such core (markdown, text, any-file, board, slides, timeline, fab, blend)"
+            "multiplayerCores.word: no such core (markdown, text, any-file, board, slides, timeline, fab, blend, cad)"
         );
         assert_eq!(
             validate_partial(&json!({"markdown": "yes"})).expect_err("not a bool"),

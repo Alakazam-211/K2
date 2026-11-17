@@ -107,8 +107,9 @@ pub fn core_of(tier: Tier) -> &'static str {
 }
 
 /// The core of a workspace-relative path, by its name, on or off: a deck's
-/// is the Slides core's; a timeline, `.fcpxml`, `.prproj`, photoplot, drill
-/// or `.blend` file's is its file-type core's (`blob_packs::core_by_name`).
+/// is the Slides core's; a timeline, `.fcpxml`, `.prproj`, photoplot, drill,
+/// `.blend`, `.dxf` or `.dwg` file's is its file-type core's
+/// (`blob_packs::core_by_name`).
 pub fn core_of_path(rel: &str) -> &'static str {
     super::blob_packs::core_by_name(rel).unwrap_or_else(|| core_of(Tier::of(rel)))
 }
@@ -139,7 +140,7 @@ pub fn core_for(t: &Target) -> &'static str {
 /// on: turning one on closes those files' loaded any-file sessions, so the
 /// next open takes the core's pack (and its index).
 pub fn swaps_packs(id: &str) -> bool {
-    matches!(id, docs_cores::TIMELINE | docs_cores::FAB | docs_cores::BLEND)
+    matches!(id, docs_cores::TIMELINE | docs_cores::FAB | docs_cores::BLEND | docs_cores::CAD)
 }
 
 /// The core as a sentence names it: "the Markdown core".
@@ -152,6 +153,7 @@ fn sentence_name(id: &str) -> &'static str {
         docs_cores::TIMELINE => "the Timeline core",
         docs_cores::FAB => "the PCB fabrication core",
         docs_cores::BLEND => "the 3D scene core",
+        docs_cores::CAD => "the CAD drawing core",
         _ => "the any-file core",
     }
 }
@@ -674,7 +676,7 @@ pub(crate) mod tests {
         assert_eq!(core_of_path("photo.png"), "any-file");
         assert_eq!(core_of_path("deck.pptx"), "slides");
         assert_eq!(core_of_path("a/Talk.PPTX"), "slides");
-        for p in ["art/poster.psd", "scene.blend1", "part.dwg", "gear.step", "print.stl", "model.fbx", "deck.pptx.zip", "deck.ppt"] {
+        for p in ["art/poster.psd", "scene.blend1", "part.dgn", "gear.step", "print.stl", "model.fbx", "deck.pptx.zip", "deck.ppt", "plan.dxf.bak"] {
             assert_eq!(core_of_path(p), "any-file", "{p}");
         }
         assert_ne!(core_of_path(".pptx"), "slides", "a name with nothing before the dot isn't a deck");
@@ -686,6 +688,8 @@ pub(crate) mod tests {
             ("board.gtl", "fab"),
             ("board.drl", "fab"),
             ("scene.blend", "blend"),
+            ("plan.dxf", "cad"),
+            ("a/Site.DWG", "cad"),
         ] {
             assert_eq!(core_of_path(p), core, "{p}");
         }
@@ -705,7 +709,7 @@ pub(crate) mod tests {
             abs: format!("/w/{rel}").into(),
             tier: crate::docs::target::tier_now(rel),
         };
-        let files = [("cut.otio", "timeline"), ("a.fcpxml", "timeline"), ("a.prproj", "timeline"), ("a.gbr", "fab"), ("a.xnc", "fab"), ("a.blend", "blend")];
+        let files = [("cut.otio", "timeline"), ("a.fcpxml", "timeline"), ("a.prproj", "timeline"), ("a.gbr", "fab"), ("a.xnc", "fab"), ("a.blend", "blend"), ("a.dxf", "cad"), ("a.dwg", "cad")];
         for (p, _) in files {
             assert_eq!(core_now(p), "any-file", "{p}");
             assert_eq!(core_for(&t(p)), "any-file", "{p}");
@@ -724,7 +728,7 @@ pub(crate) mod tests {
             let r = gate(&t(p)).expect_err("every core off");
             assert!(r.body.contains("\"core\":\"any-file\""), "{p}: {}", r.body);
         }
-        assert!(swaps_packs("timeline") && swaps_packs("fab") && swaps_packs("blend"));
+        assert!(swaps_packs("timeline") && swaps_packs("fab") && swaps_packs("blend") && swaps_packs("cad"));
         assert!(!swaps_packs("slides") && !swaps_packs("markdown") && !swaps_packs("any-file"));
         all_off();
     }
@@ -909,7 +913,7 @@ pub(crate) mod tests {
             assert_eq!(events.len(), 1, "one event per flip: {events:?}");
             assert_eq!(
                 events[0],
-                json!({"kind": "doc_cores_changed", "cores": {"any-file": false, "blend": false, "board": false, "fab": false, "markdown": false, "slides": false, "text": true, "timeline": false},
+                json!({"kind": "doc_cores_changed", "cores": {"any-file": false, "blend": false, "board": false, "cad": false, "fab": false, "markdown": false, "slides": false, "text": true, "timeline": false},
                        "core": "markdown", "on": false, "by": "anna"})
             );
             let last = last_changes().lock().expect("last").get("markdown").cloned().expect("last change");
@@ -995,7 +999,7 @@ pub(crate) mod tests {
             set("markdown", true);
             let file = |p: &str| -> Value {
                 let v: Value = serde_json::from_str(&cores_route_for(&crate::docs::caller::owner(), Some(p)).body).expect("json");
-                assert_eq!(v["cores"].as_array().map(Vec::len), Some(8), "the rows are still there");
+                assert_eq!(v["cores"].as_array().map(Vec::len), Some(9), "the rows are still there");
                 v["file"].clone()
             };
             assert_eq!(file("/nowhere/notes.md"), json!({"core": "markdown", "on": true, "liveView": true}));
@@ -1013,7 +1017,7 @@ pub(crate) mod tests {
             // A timeline (and the other files its core reads), a fab file and
             // a scene: any-file's while their core is off; their core's while
             // on, with no live editor for people (it isn't the text editor).
-            for (p, core) in [("cut.otio", "timeline"), ("edit/Info.fcpxml", "timeline"), ("show.prproj", "timeline"), ("board.gbr", "fab"), ("board.drl", "fab"), ("room.blend", "blend")] {
+            for (p, core) in [("cut.otio", "timeline"), ("edit/Info.fcpxml", "timeline"), ("show.prproj", "timeline"), ("board.gbr", "fab"), ("board.drl", "fab"), ("room.blend", "blend"), ("plan.dxf", "cad"), ("cad/part.dwg", "cad")] {
                 assert_eq!(file(p), json!({"core": "any-file", "on": false, "liveView": false}), "{p}");
                 set(core, true);
                 assert_eq!(file(p), json!({"core": core, "on": true, "liveView": false}), "{p}");
@@ -1025,12 +1029,12 @@ pub(crate) mod tests {
         });
     }
 
-    /// The read route: eight rows from the registry (the Board's view is
+    /// The read route: nine rows from the registry (the Board's view is
     /// `garden`), every core off by default, all-zero `open` without a
     /// runtime, and `canChange` only for the owner token and Owner/Admin
     /// logins.
     #[test]
-    fn the_read_route_lists_eight_cores_and_says_who_can_change_them() {
+    fn the_read_route_lists_nine_cores_and_says_who_can_change_them() {
         let _m = mirror_lock();
         crate::test_support::with_temp_home(|| {
             all_off();
@@ -1042,10 +1046,10 @@ pub(crate) mod tests {
             assert_eq!(owner["ok"], true);
             assert_eq!(owner["canChange"], true);
             let ids: Vec<&str> = owner["cores"].as_array().expect("rows").iter().map(|r| r["id"].as_str().expect("id")).collect();
-            assert_eq!(ids, ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend"]);
+            assert_eq!(ids, ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend", "cad"]);
             assert_eq!(owner["cores"][3]["view"], "garden");
             assert_eq!(owner["cores"][4]["view"], "none", "Slides: no live view for people yet");
-            for i in 5..8 {
+            for i in 5..9 {
                 assert_eq!(owner["cores"][i]["view"], "none", "{}: no live editor for people", owner["cores"][i]["id"]);
             }
             for row in owner["cores"].as_array().expect("rows") {

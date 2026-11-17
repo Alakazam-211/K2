@@ -2820,7 +2820,7 @@ mod tests {
         let before = fs::read_to_string(settings_file()).unwrap();
         let err = update(serde_json::json!({ "multiplayerCores": { "word": true }, "defaultAgent": "codex" }))
             .expect_err("an unknown core");
-        assert_eq!(err, "multiplayerCores.word: no such core (markdown, text, any-file, board, slides, timeline, fab, blend)");
+        assert_eq!(err, "multiplayerCores.word: no such core (markdown, text, any-file, board, slides, timeline, fab, blend, cad)");
         let err = update(serde_json::json!({ "multiplayerCores": { "markdown": "off" } })).expect_err("not a bool");
         assert!(err.contains("must be true or false"), "{err}");
         let err = update(serde_json::json!({ "multiplayerCores": "markdown" })).expect_err("not an object");

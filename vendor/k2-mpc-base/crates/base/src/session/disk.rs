@@ -387,7 +387,7 @@ pub(crate) fn atomic_write_with(
     })();
     match written {
         Ok(stat) => {
-            let dir_sync = File::open(dir).and_then(|d| d.sync_all()).err();
+            let dir_sync = crate::hash::sync_dir(dir).err();
             Ok((stat, dir_sync))
         }
         Err(e) => {

@@ -223,7 +223,7 @@ impl DocStore {
         }
         if let Some(dir) = self.path.parent() {
             // the rename is in place; a failed folder sync only weakens its durability
-            let _ = std::fs::File::open(dir).and_then(|d| d.sync_all());
+            let _ = crate::hash::sync_dir(dir);
         }
         // the old file is unlinked; closing it releases its blocks
         let old = std::mem::replace(&mut *g, fresh);

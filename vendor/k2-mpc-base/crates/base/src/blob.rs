@@ -465,7 +465,7 @@ impl BlobStore {
             let parent = path.parent().expect("blob path has a folder");
             fs::create_dir_all(parent)?;
             fs::rename(&tmp, &path)?;
-            File::open(parent)?.sync_all()
+            crate::hash::sync_dir(parent)
         })();
         if let Err(e) = placed {
             let _ = fs::remove_file(&tmp);

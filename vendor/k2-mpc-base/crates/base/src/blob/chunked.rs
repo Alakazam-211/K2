@@ -473,7 +473,7 @@ pub(super) fn ensure_dir(dir: &Path) -> io::Result<()> {
         Err(e) => return Err(e),
     }
     if let Some(parent) = dir.parent() {
-        File::open(parent)?.sync_all()?;
+        crate::hash::sync_dir(parent)?;
         chunk_work!(folder_syncs);
     }
     Ok(())

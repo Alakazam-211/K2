@@ -207,6 +207,20 @@ pub(crate) fn random32() -> std::io::Result<[u8; 32]> {
     Ok(k)
 }
 
+/// Make a folder's entries (a rename, a new file) durable: fsync the folder on
+/// unix. Windows can't open a folder as a file (access denied) and NTFS
+/// journals its entries, so there it is nothing to do.
+#[cfg(not(windows))]
+pub(crate) fn sync_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::File::open(dir)?.sync_all()
+}
+
+/// Make a folder's entries durable (Windows: NTFS journals them; nothing to do).
+#[cfg(windows)]
+pub(crate) fn sync_dir(_dir: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// Fill `buf` from the OS's random source: `/dev/urandom` on unix, the system
 /// generator (`RtlGenRandom`, advapi32) on Windows, which has no `/dev/urandom`.
 #[cfg(not(windows))]

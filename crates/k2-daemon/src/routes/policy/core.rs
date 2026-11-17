@@ -368,6 +368,8 @@ pub(super) const ROWS: &[Route] = &[
     // the current version, no join.
     get("/cli/docs/cad/draw", Member),
     get("/cli/docs/cad/read", Member),
+    // Undo-last on a .dxf (`docs/cad.rs`): the edit right, as the verbs.
+    post("/cli/docs/cad/revert", Member),
     post("/cli/docs/claim", Member),
     // Comments on any-file docs: the owner's purge and participant erasure
     // (the handler and the kit both ask for the doc owner: the box owner

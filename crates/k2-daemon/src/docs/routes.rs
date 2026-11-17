@@ -144,7 +144,7 @@ pub const ROUTES: &[&str] = &[
     UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME, LEASE, CLAIM, ACTIVITY,
     super::export::EXPORT, super::export::TARGETS, super::export::STATUS, super::export::CANCEL, super::export::FETCH,
     super::annotations::PURGE, super::annotations::ERASE, super::preview::route::PREVIEW, super::say::SAY, USE_THEIRS,
-    super::cad::DRAW, super::cad::READ, super::cad::AV,
+    super::cad::DRAW, super::cad::READ, super::cad::AV, super::cad::REVERT,
 ];
 
 /// Tier 0's lease (K-T0-2): acquire, renew, release, break.
@@ -189,6 +189,7 @@ fn is_post_route(path: &str) -> bool {
             | "/cli/docs/erase"
             | "/cli/docs/say"
             | "/cli/docs/use-theirs"
+            | "/cli/docs/cad/revert"
     ) || is_edit_route(path)
 }
 

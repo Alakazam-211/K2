@@ -415,8 +415,12 @@ pub(super) const ROWS: &[Refusal] = &[
         concat!("Update that server's ", product_name!(), " (from 0.46.7 a static App deploys), or serve it with ", cli_name!(), " publish run --skin there."))
         .retired(),
     // ── docs (k2 doc; the CAD core) ──
-    r("cad_writer_disabled", "docs", 409, Who::K2, concat!("Drawings (.dxf, .dwg) are read only in ", product_name!(), " for now: a write, restore, undo or edit of one is refused while the CAD core is on. Nothing was changed."),
-        concat!("Read the drawing with ", cli_name!(), " doc cad <read verb> <file> (", cli_name!(), " doc cad --help); change it in your CAD app, and its save is taken in.")),
+    r("cad_writer_disabled", "docs", 409, Who::K2, concat!("Nobody saves a drawing whole in ", product_name!(), ": a .dxf changes through the edit verbs, and a .dwg is read only. A whole-file write, restore or undo of one, or an edit of a .dwg, is refused while the CAD core is on. Nothing was changed."),
+        concat!("Change a .dxf with its edit verbs (", cli_name!(), " doc entity move|set|add|delete, attrib set; ", cli_name!(), " doc cad --help); change a .dwg in your CAD app, and its save is taken in.")),
+    r("cad_undo_not_latest", "docs", 409, Who::Agent, "Undo goes back only from the drawing's latest change: someone changed it after the change you asked to undo, so nothing was undone.",
+        "Read the drawing again and change it with the edit verbs instead (k2 doc cad --help)."),
+    r("cad_expect_stale", "docs", 409, Who::Agent, "The drawing isn't the version you saw: its digest differs from the one you sent, so nothing was undone.",
+        "Read the drawing again (its new version and digest), then undo or edit from there."),
     // ── homes (Home sync, /cli/me/homes/push: a `rejected[].reason`) ──
     // homes-people-group-v1 (0.46.15): the built-in People group's delete.
     r("builtin_group", "homes", 409, Who::Person, "The People group is built in: every person has one, and it can't be deleted or merged away. Renaming and moving it work.",

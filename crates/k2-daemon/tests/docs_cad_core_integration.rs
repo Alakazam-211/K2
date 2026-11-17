@@ -443,6 +443,39 @@ async fn the_cad_core_headless() {
     assert!(st != 200 || stale["exit"] != json!(0), "{stale}");
     assert_eq!(doc_status(port, &plan)["version"], json!(8), "nothing applied");
 
+    // ── 7c. Undo-last (docs/cad/revert): an older change is refused, a
+    //        stale digest is refused, the latest change is undone (the
+    //        drawing is the sampler again, one new version) with its
+    //        cad.change/1; a .dwg is refused ──
+    let sha = |b: &[u8]| -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(b).iter().fold(String::from("sha256:"), |mut s, x| {
+            s.push_str(&format!("{x:02x}"));
+            s
+        })
+    };
+    let undo = |body: J| -> (u16, J) {
+        let (st, out) = http(port, "POST", &format!("/cli/docs/cad/revert?token={OWNER}"), Some(&body.to_string()));
+        (st, json_of("undo", &out))
+    };
+    let edited = std::fs::read(&plan_p).expect("the edited drawing");
+    let (st, v) = undo(json!({"path": plan, "change_version": 7, "expect_digest": sha(&edited)}));
+    refused("an undo of an older change", st, &v.to_string(), 409, "cad_undo_not_latest");
+    let (st, v) = undo(json!({"path": plan, "change_version": 8, "expect_digest": sha(b"another drawing")}));
+    refused("an undo with a stale digest", st, &v.to_string(), 409, "cad_expect_stale");
+    assert_eq!(doc_status(port, &plan)["version"], json!(8), "nothing undone");
+    let (st, v) = undo(json!({"path": plan, "change_version": 8, "expect_digest": sha(&edited)}));
+    assert_eq!((st, &v["ok"], &v["reverted"], &v["to"], &v["version"]), (200, &json!(true), &json!(8), &json!(7), &json!(9)), "the undo: {v}");
+    let back = std::fs::read(&plan_p).expect("the drawing");
+    assert_eq!(back, sampler, "the drawing is the sampler again");
+    assert_eq!(v["digest"], json!(sha(&back)), "{v}");
+    assert_eq!((&v["change"]["schema"], &v["change"]["from"], &v["change"]["to"]), (&json!("cad.change/1"), &json!(8), &json!(9)), "{v}");
+    assert!(v["change"]["by"].as_str().is_some_and(|b| b.starts_with("person:")), "by the person: {v}");
+    assert_eq!((&v["change"]["entities"][0]["address"], &v["change"]["entities"][0]["op"]), (&json!(addr), &json!("changed")), "the undo moved the line back: {v}");
+    let (st, v) = undo(json!({"path": site, "change_version": 1}));
+    let e = refused("an undo on a .dwg", st, &v.to_string(), 409, "cad_writer_disabled");
+    assert_eq!(e["error"]["hint"], json!(WHY), "{e}");
+
     // ── 8. Off again: core_off ──
     let off = flip(&[("any-file", true), ("cad", false)]).await;
     assert!(off.changed.contains(&("cad".to_string(), false)), "{off:?}");

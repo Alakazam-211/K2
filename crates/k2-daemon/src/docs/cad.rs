@@ -64,6 +64,16 @@ pub const READ: &str = "/cli/docs/cad/read";
 /// `GET /cli/docs/av/read`: the AV reading of a set (`k2 doc av`).
 pub const AV: &str = "/cli/docs/av/read";
 
+/// `POST /cli/docs/cad/revert`: undo the latest change of a `.dxf` (v1:
+/// undo-last only, [`revert`]).
+pub const REVERT: &str = "/cli/docs/cad/revert";
+
+/// The refusal for an undo of a change someone has edited past.
+pub const NOT_LATEST: &str = "cad_undo_not_latest";
+
+/// The refusal for an undo whose `expect_digest` isn't the current version's.
+pub const EXPECT_STALE: &str = "cad_expect_stale";
+
 /// Most drawings in one AV reading.
 pub const AV_MAX_SHEETS: usize = 200;
 /// Largest AV configuration file.
@@ -81,7 +91,138 @@ const MODEL_VERBS: [&str; 8] =
 
 /// Whether `path` is one of the routes on a single drawing.
 pub fn on_a_drawing(path: &str) -> bool {
-    path == DRAW || path == READ
+    path == DRAW || path == READ || path == REVERT
+}
+
+fn not_latest(rel: &str) -> CliResponse {
+    let mut r = routes::with_exit(
+        refusal("409 Conflict", NOT_LATEST, "someone changed the drawing after this; undo isn't possible"),
+        k2_mpc_base::tools::exit::REFUSED,
+    );
+    if let Ok(mut v) = serde_json::from_str::<Value>(&r.body) {
+        if let Some(e) = v.get_mut("error").and_then(Value::as_object_mut) {
+            e.insert("path".into(), Value::from(rel));
+            r.body = v.to_string();
+        }
+    }
+    r
+}
+
+/// `sha256:<hex>` of `bytes`, the kit's digest form (`--expect`).
+fn digest(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let h = Sha256::digest(bytes);
+    let mut s = String::with_capacity(7 + 64);
+    s.push_str("sha256:");
+    for b in h {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// `POST /cli/docs/cad/revert {path, version, expect?}` (v1, undo-last):
+/// the drawing goes back to the version before `version`, only while
+/// `version` is the current one, through the kit's restore of that earlier
+/// version (one new version, by the caller). `expect`, when given, is the
+/// current version's digest (`sha256:…`). Someone edited since: `409
+/// cad_undo_not_latest`. The edit right, as the verbs; a drawing K2
+/// doesn't write (a `.dwg`): `cad_writer_disabled`.
+fn revert(rt: &Arc<super::Runtime>, c: &Call) -> CliResponse {
+    let t = c.target;
+    if !super::cad_read_only::writer(&t.rel) {
+        return super::cad_read_only::refusal(&t.rel);
+    }
+    if !c.rights.edit {
+        return routes::with_exit(refusal("403 Forbidden", "edit_forbidden", "you may read this drawing but not change it"), k2_mpc_base::tools::exit::REFUSED);
+    }
+    let change = match c.input.u64("change_version") {
+        Ok(Some(v)) => v,
+        Ok(None) => return routes::bad("change_version is required: the version the change made (the current one)"),
+        Err(r) => return r,
+    };
+    let s = match super::tier0::open(rt, t) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(e) = s.check_disk() {
+        return routes::session_error(&e);
+    }
+    let (head, opened) = match head(rt, t) {
+        Ok(h) => h,
+        Err(r) => return r,
+    };
+    if change != head {
+        return not_latest(&t.rel);
+    }
+    let Opened::Dxf(head_bytes) = opened else { return super::cad_read_only::refusal(&t.rel) };
+    if let Some(want) = c.input.str("expect_digest").map(|e| e.trim().to_string()).filter(|e| !e.is_empty()) {
+        if digest(&head_bytes) != want {
+            return routes::with_exit(
+                refusal("409 Conflict", EXPECT_STALE, "the drawing isn't the one you saw (its digest differs): read it again"),
+                k2_mpc_base::tools::exit::REFUSED,
+            );
+        }
+    }
+    let j = match super::tier0::join(&s, c, k2_mpc_base::session::Stay::UntilIdle) {
+        Ok(j) => j,
+        Err(e) => return routes::session_error(&e),
+    };
+    let before = match s.versions(j.conn) {
+        Ok(vs) => vs.into_iter().map(|(v, _)| v).filter(|v| *v < change).max(),
+        Err(e) => return routes::session_error(&e),
+    };
+    let Some(before) = before else {
+        return routes::with_exit(
+            refusal("409 Conflict", "no_earlier_version", format!("{} has no version before {change} to go back to", t.rel)),
+            k2_mpc_base::tools::exit::REFUSED,
+        );
+    };
+    let w = match s.restore(j.conn, before) {
+        Ok(w) => w,
+        Err(e) => return routes::session_error(&e),
+    };
+    if w.changed {
+        super::versions::announce(&t.key(), w.version);
+    }
+    let (now, after) = match head(rt, t) {
+        Ok((v, Opened::Dxf(b))) => (v, b),
+        Ok(_) => return super::cad_read_only::refusal(&t.rel),
+        Err(r) => return r,
+    };
+    routes::ok(json!({
+        "path": t.rel,
+        "reverted": change,
+        "to": before,
+        "version": now,
+        "digest": digest(&after),
+        "change": undo_change(&head_bytes, &after, &c.caller.pid(), change, now),
+    }))
+}
+
+/// `cad.change/1` for what an undo changed, from the version it undid
+/// (`before`) to the one it made (`after`): entities by handle, `changed`
+/// when any fact but its handle differs; `from`, `to` and `by` filled.
+/// `null` when either version doesn't read.
+fn undo_change(before: &[u8], after: &[u8], by: &str, from: u64, to: u64) -> Value {
+    let limits = k2_mpc_dxf::Limits::default();
+    let (Ok(b), Ok(a)) = (k2_mpc_dxf::read_doc(before, &limits), k2_mpc_dxf::read_doc(after, &limits)) else {
+        return Value::Null;
+    };
+    let facts = |d: &k2_mpc_cad_model::Doc| -> std::collections::BTreeMap<u64, String> {
+        d.entities.iter().filter_map(|e| e.handle.map(|h| (h, format!("{:?}", e.record)))).collect()
+    };
+    let (fb, fa) = (facts(&b), facts(&a));
+    let changed: Vec<u64> = fb.iter().filter(|(h, r)| fa.get(h).is_some_and(|ra| ra != *r)).map(|(h, _)| *h).collect();
+    let added: Vec<u64> = fa.keys().filter(|h| !fb.contains_key(h)).copied().collect();
+    let removed: Vec<u64> = fb.keys().filter(|h| !fa.contains_key(h)).copied().collect();
+    let mut v: Value = serde_json::from_str(&k2_mpc_cad_model::change::of_edit(&b, &a, &changed, &added, &removed).to_json()).unwrap_or(Value::Null);
+    if let Some(o) = v.as_object_mut() {
+        o.insert("from".into(), json!(from));
+        o.insert("to".into(), json!(to));
+        o.insert("by".into(), json!(by));
+        o.insert("verb".into(), json!("undo"));
+    }
+    v
 }
 
 /// Before the generic core gate, for the routes on one drawing: a file that
@@ -296,6 +437,9 @@ fn data_json(out: &ReadOut) -> Value {
 /// `/cli/docs/cad/draw` and `/cli/docs/cad/read`, after the docs family
 /// resolved the caller, the target, its core and the read right.
 pub(crate) fn handle(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliResponse {
+    if path == REVERT {
+        return revert(rt, c);
+    }
     let t = c.target;
     if path == DRAW {
         let (verb, args) = match c.input.str("what").as_deref().map(str::trim) {

@@ -277,7 +277,7 @@ fn blob_write_options(c: &Call) -> k2_mpc_base::session::BlobWriteOptions {
     }
 }
 
-fn join(s: &BlobSession, c: &Call, stay: Stay) -> Result<Joined, SessionError> {
+pub(super) fn join(s: &BlobSession, c: &Call, stay: Stay) -> Result<Joined, SessionError> {
     s.join_shared(c.caller.participant(c.on_behalf), stay)
 }
 

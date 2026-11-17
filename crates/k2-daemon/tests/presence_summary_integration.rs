@@ -323,11 +323,12 @@ async fn presence_summary_auth_shape_and_boot_status_stays_public() {
             // Same answer through the connect-user session.
             assert_eq!(summary(port, &member), v);
 
-            // /boot-status is public and carries no presence.
+            // /boot-status is public and carries no presence. A "people" KEY would be
+            // presence; a feature id that merely contains the word (homes-people-group-v1) is not.
             let b = http(port, "GET", "/boot-status", None);
             assert_eq!(b.status, 200, "boot-status; {}", b.body);
             assert!(
-                !b.body.contains("sum_member") && !b.body.contains("people"),
+                !b.body.contains("sum_member") && !b.body.contains("\"people\""),
                 "boot-status must not carry who is online: {}",
                 b.body
             );

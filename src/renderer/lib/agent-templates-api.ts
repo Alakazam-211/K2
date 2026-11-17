@@ -83,10 +83,13 @@ export interface HireRow {
    *  `skill`, `heartbeat`, `permission`, `lock`, `hello`. */
   step: string
   target: string
-  /** `write` (dry run), `done`, `skip`, `yours`, `suggest`; T3 adds `grant`
-   *  and `card`. */
+  /** `write` (dry run), `done`, `skip`, `yours`. A permission row (T3):
+   *  `grant` (dry run), `done`, `card`, `refused`, `skip` (already on),
+   *  `declined`, or `suggest` (an older daemon decides nothing). */
   status: string
   reason?: string
+  /** A refused permission: who can turn it on, and how. */
+  hint?: string
 }
 
 export interface HireTemplateRef {
@@ -123,7 +126,16 @@ export interface HireResult {
   rows: HireRow[]
   /** The rendered charter: the Review's preview. */
   charter: string
-  permissions: { cards: boolean; suggested: string[]; granted: string[]; carded: string[] }
+  permissions: {
+    cards: boolean
+    suggested: string[]
+    granted: string[]
+    carded: string[]
+    /** T3; absent on an older daemon. */
+    cardsPending?: string[]
+    refused?: Array<{ action: string; code: string; hint: string }>
+    declined?: string[]
+  }
   /** The first message the agent gets, on the first create only. */
   hello: string | null
   /** The daemon started the agent and delivered `hello` itself. Missing on
@@ -147,6 +159,8 @@ export interface HireRequest {
   /** Start the agent and deliver its hello (the real create only; absent:
    *  no launch). */
   launch?: boolean
+  /** Suggested permissions the person unticked on the Review (T3). */
+  declinePermissions?: string[]
 }
 
 export interface HireRoot {
@@ -308,15 +322,31 @@ export const HIRE_STATUS_LABELS: Record<string, string> = {
   skip: 'Already there',
   yours: 'Kept as it is',
   suggest: 'Suggested',
-  grant: 'Will be granted',
-  card: 'Asks you on a card',
+  grant: 'Will be turned on',
+  card: 'It will ask you on a card',
+  refused: 'Stays off for now',
+  declined: 'Left off',
+}
+
+/** A permission row's status: the same words, except where "added" and
+ *  "already there" would read wrong for a switch. */
+export const PERMISSION_STATUS_LABELS: Record<string, string> = {
+  done: 'Turned on',
+  skip: 'Already on',
+}
+
+/** A permission the person may tick or untick on the Review: one the hire
+ *  would turn on, or ask for on a card. */
+export function permissionChoosable(status: string): boolean {
+  return status === 'grant' || status === 'card'
 }
 
 export function hireStepLabel(step: string): string {
   return HIRE_STEP_LABELS[step] ?? step
 }
 
-export function hireStatusLabel(status: string): string {
+export function hireStatusLabel(status: string, step?: string): string {
+  if (step === 'permission' && PERMISSION_STATUS_LABELS[status]) return PERMISSION_STATUS_LABELS[status]
   return HIRE_STATUS_LABELS[status] ?? status
 }
 

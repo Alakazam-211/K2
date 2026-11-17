@@ -11,8 +11,10 @@
 //   3. Tool: the enabled presets with their sign-in state, the template's
 //      suggestion (else the server default) chosen.
 //   4. Review: the daemon's own dry run (`POST /cli/agents/hire` with
-//      `dryRun: true`), every row drawn. Permission rows are plain rows
-//      until the permissions step (T3) adds checkboxes.
+//      `dryRun: true`), every row drawn. Each permission the hire would turn
+//      on, or ask for on a card, is a checkbox the person can untick (sent
+//      as `declinePermissions`); one already on, or one that stays off, is
+//      a disabled box with the reason (T3).
 //
 // Create posts the same request for real, then opens the new agent's Chat tab
 // in the Thread view (the Kessel sheet's helper). The daemon starts the agent
@@ -35,7 +37,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import remarkGfm from 'remark-gfm'
-import { Button, Callout, Input, Radio, RadioTile, Spinner, Surface, Tag, Textarea, TileIcon } from '@/components/ui'
+import { Button, Callout, Checkbox, Input, Radio, RadioTile, Spinner, Surface, Tag, Textarea, TileIcon } from '@/components/ui'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import Markdown from '@/components/Markdown/Markdown'
 import { FEATURE_ICONS } from '@/components/icons/feature-icons'
@@ -65,6 +67,7 @@ import {
   hireFromTemplate,
   hireStatusLabel,
   listTemplates,
+  permissionChoosable,
   pickerGroups,
   sayHello,
   showTemplate,
@@ -247,6 +250,8 @@ export function buildHireRequest(f: {
   params: Record<string, string>
   answers: Record<string, string>
   dryRun: boolean
+  /** Suggested permissions the person unticked. */
+  declined?: string[]
 }): HireRequest {
   const handle = slugifyAddressToken(f.handle) ?? f.handle.trim()
   const folder = f.folder.trim()
@@ -259,6 +264,7 @@ export function buildHireRequest(f: {
     ...(f.preset ? { preset: f.preset } : {}),
     ...(filled(f.params) ? { params: filled(f.params) } : {}),
     ...(filled(f.answers) ? { answers: filled(f.answers) } : {}),
+    ...(f.declined?.length ? { declinePermissions: f.declined } : {}),
     dryRun: f.dryRun,
   }
 }
@@ -339,6 +345,8 @@ function CreateAgentBody(): React.JSX.Element {
   const [toolPick, setTool] = useState<string | null>(null)
 
   const [plan, setPlan] = useState<Load<HireResult> | null>(null)
+  // Permissions unticked on the Review (ids, as the plan's rows name them).
+  const [declined, setDeclined] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState<HireErrorView | null>(null)
 
@@ -415,6 +423,13 @@ function CreateAgentBody(): React.JSX.Element {
   })
   const nameStepOk = !problems.name && !problems.handle && !problems.folder && Object.keys(paramProblems).length === 0
 
+  // Only what this plan offers to untick: a template changed since keeps no
+  // stale id (the daemon refuses one it doesn't suggest).
+  const declinedNow = (): string[] =>
+    plan?.state === 'ok'
+      ? declined.filter((id) => asArray<HireResult['rows'][number]>(plan.value.rows).some((r) => r.step === 'permission' && r.target === id && permissionChoosable(r.status)))
+      : []
+
   const request = (dryRun: boolean): HireRequest =>
     buildHireRequest({
       template: detail?.id ?? picked ?? '',
@@ -426,6 +441,7 @@ function CreateAgentBody(): React.JSX.Element {
       params,
       answers,
       dryRun,
+      declined: dryRun ? [] : declinedNow(),
     })
 
   const review = async (): Promise<void> => {
@@ -878,6 +894,8 @@ function CreateAgentBody(): React.JSX.Element {
           library={library}
           tool={chosenTool}
           busy={busy}
+          declined={declined}
+          onToggle={(id) => setDeclined((d) => (d.includes(id) ? d.filter((x) => x !== id) : [...d, id]))}
           onEdit={(to) => {
             setFailed(null)
             setStep(to)
@@ -911,12 +929,16 @@ function ReviewBody({
   library,
   tool,
   busy,
+  declined,
+  onToggle,
   onEdit,
 }: {
   plan: HireResult
   library: boolean
   tool: { label: string; tool: string; signIn: SignIn } | null
   busy: boolean
+  declined: string[]
+  onToggle: (id: string) => void
   onEdit: (step: Step) => void
 }): React.JSX.Element {
   const open = asArray<HireResult['questions'][number]>(plan.questions).filter((q) => !q.answered)
@@ -958,13 +980,14 @@ function ReviewBody({
       </ReviewCard>
       <ReviewSection title={`What ${PRODUCT_NAME} sets up`} testId="create-agent-rows">
         <ReviewItems
-          items={asArray<HireResult['rows'][number]>(plan.rows).map((r, i) => ({
-            key: `${r.step}-${r.target}-${i}`,
-            ...hireRowWords(r),
-            note: rowNote(hireStatusLabel(r.status), r.reason),
-            testId: 'create-agent-row',
-            step: r.step,
-          }))}
+          items={asArray<HireResult['rows'][number]>(plan.rows).map((r, i) => {
+            const words = hireRowWords(r)
+            const base = { key: `${r.step}-${r.target}-${i}`, ...words, testId: 'create-agent-row', step: r.step }
+            if (r.step !== 'permission' || r.status === 'suggest') {
+              return { ...base, note: rowNote(hireStatusLabel(r.status, r.step), r.reason) }
+            }
+            return { ...base, ...permissionItem(r, words.what, declined.includes(r.target), busy, onToggle) }
+          })}
         />
       </ReviewSection>
       {open.length ? (
@@ -981,6 +1004,48 @@ function ReviewBody({
       {plan.charter ? <Charter text={plan.charter} startOpen={library} /> : null}
     </>
   )
+}
+
+/** A permission row on the Review: a checkbox the person can untick when
+ *  the hire would turn it on or ask for it on a card; a disabled one, with
+ *  why, when it is on already or stays off. A card says it will ask; one
+ *  that stays off says who can turn it on. */
+function permissionItem(
+  r: HireResult['rows'][number],
+  what: string,
+  off: boolean,
+  busy: boolean,
+  onToggle: (id: string) => void,
+): { what: React.ReactNode; note: string } {
+  const choosable = permissionChoosable(r.status)
+  // `skip` is "already on", or (permission cards only) "off on this server".
+  const on = choosable ? !off : r.status === 'done' || (r.status === 'skip' && r.reason === 'already on')
+  const label = hireStatusLabel(r.status, r.step)
+  const note = choosable
+    ? off
+      ? hireStatusLabel('declined')
+      : label
+    : r.status === 'refused'
+      ? (r.hint ?? rowNote(label, r.reason))
+      : r.status === 'skip'
+        ? rowNote(label, r.reason)
+        : label
+  return {
+    what: (
+      <label className={`inline-flex items-start gap-2 ${choosable && !busy ? 'cursor-pointer' : ''}`}>
+        <Checkbox
+          checked={on}
+          disabled={!choosable || busy}
+          onChange={() => onToggle(r.target)}
+          data-testid="create-agent-permission-check"
+          data-permission={r.target}
+          className="mt-0.5 flex-shrink-0"
+        />
+        <span>{what}</span>
+      </label>
+    ),
+    note,
+  }
 }
 
 /** The charter, folded under its name (open from the start for someone's own

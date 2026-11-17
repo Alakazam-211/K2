@@ -392,7 +392,7 @@ describe('CreateAgentSheet', () => {
     expect((screen.getByTestId('create-agent-tool-p-claude') as HTMLInputElement).checked).toBe(true)
   })
 
-  it('Review: a dry run, and every row it returns is drawn (permissions as plain rows)', async () => {
+  it('Review: a dry run, and every row it returns is drawn (an older daemon’s suggested permissions as plain rows)', async () => {
     await toReview()
     const [route, body] = h.daemonCliPost.mock.calls[0]
     expect(route).toBe('agents/hire')
@@ -425,6 +425,47 @@ describe('CreateAgentSheet', () => {
     expect(screen.getByTestId('create-agent-charter').textContent).toContain('You write for Rosson.')
   })
 
+  it('Review (T3): each permission is a checkbox; an unticked one is sent as declinePermissions', async () => {
+    const T3_ROWS = [
+      ...ROWS.filter((r) => r.step !== 'permission'),
+      { step: 'permission', target: 'permission-cards', status: 'skip', reason: 'already on' },
+      { step: 'permission', target: 'compute.use', status: 'grant' },
+      { step: 'permission', target: 'apps.build', status: 'card', reason: 'only the server’s owner can turn it on; a person is asked on a card' },
+      {
+        step: 'permission',
+        target: 'vault.manage',
+        status: 'refused',
+        reason: 'your role can’t turn it on; permission cards are off on this server',
+        hint: 'An owner or admin can turn on "Let this agent manage server-wide secrets" for max: Settings → Workspaces → max → Agent.',
+      },
+    ]
+    h.daemonCliPost.mockImplementation(async (_r: string, body: { dryRun: boolean }) => ({ ...plan(body.dryRun), rows: T3_ROWS }))
+    await toReview()
+    const box = (id: string) => screen.getAllByTestId('create-agent-permission-check').find((b) => b.getAttribute('data-permission') === id) as HTMLInputElement
+    const rowOf = (id: string) => box(id).closest('[data-testid="create-agent-row"]') as HTMLElement
+    // Would be turned on, or asked on a card: ticked, and the person may untick it.
+    expect([box('compute.use').checked, box('compute.use').disabled]).toEqual([true, false])
+    expect(rowOf('compute.use').textContent).toContain(HIRE_STATUS_LABELS.grant)
+    expect([box('apps.build').checked, box('apps.build').disabled]).toEqual([true, false])
+    expect(rowOf('apps.build').textContent).toContain('It will ask you on a card')
+    // Already on: ticked and fixed. Stays off: unticked and fixed, with who can turn it on.
+    expect([box('permission-cards').checked, box('permission-cards').disabled]).toEqual([true, true])
+    expect(rowOf('permission-cards').textContent).toContain('Already on')
+    expect([box('vault.manage').checked, box('vault.manage').disabled]).toEqual([false, true])
+    expect(rowOf('vault.manage').textContent).toContain('An owner or admin can turn on')
+    fireEvent.click(box('compute.use'))
+    expect(box('compute.use').checked).toBe(false)
+    expect(rowOf('compute.use').textContent).toContain(HIRE_STATUS_LABELS.declined)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-agent-create'))
+    })
+    const real = h.daemonCliPost.mock.calls[1][1] as { dryRun: boolean; declinePermissions?: string[] }
+    expect(real.dryRun).toBe(false)
+    expect(real.declinePermissions).toEqual(['compute.use'])
+    // The review's own dry run never sends one.
+    expect(h.daemonCliPost.mock.calls[0][1]).not.toHaveProperty('declinePermissions')
+  })
+
   it('Create posts for real, closes, opens the Thread; an older daemon (no helloDelivered) gets the hello from the app', async () => {
     await toReview()
     expect(plan(false)).not.toHaveProperty('helloDelivered')
@@ -435,6 +476,7 @@ describe('CreateAgentSheet', () => {
     expect(real[0]).toBe('agents/hire')
     expect((real[1] as { dryRun: boolean }).dryRun).toBe(false)
     expect((real[1] as { launch?: boolean }).launch).toBe(true)
+    expect(real[1]).not.toHaveProperty('declinePermissions')
     expect(useAgentTemplatesStore.getState().createOpen).toBe(false)
     expect(h.openWorkspaceThread).toHaveBeenCalledWith('ws-max')
     await waitFor(() => expect(h.daemonCliPostQuery).toHaveBeenCalledTimes(2))

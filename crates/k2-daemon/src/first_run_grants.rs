@@ -17,7 +17,8 @@
 //!   actor.
 //!
 //! The permission-cards switch ("Let this agent ask for permission") is
-//! turned on the same two ways ([`cards_on`]).
+//! turned on the same two ways ([`cards_on`]): by a person at their floor,
+//! or by Kessel only while Kessel's own is on.
 
 use k2_core::hire::starter_permissions::{owner_floor, standing_switch};
 use serde_json::json;
@@ -206,12 +207,17 @@ pub(crate) fn grant_set(set: &[&str], t: &Target, by: &Grantor) -> Granted {
 }
 
 /// "Let this agent ask for permission" on for `t`. A person turns it on
-/// through Settings' entry; Kessel turns it on for its hire (the seat-only
-/// route is that authority), whether or not Kessel's own is on.
+/// through Settings' entry. Kessel (an agent grantor) follows the reach rule
+/// like any hire (prd-agent-templates-v1 §9, T3): only while its own switch
+/// is on; else `hirer_lacks` and the hire goes ahead without it.
 pub(crate) fn cards_on(t: &Target, by: &Grantor) -> Result<(), String> {
     match by {
         Grantor::Person(_) => grant_switch(by, t, "permission_cards"),
-        Grantor::Agent { .. } => {
+        Grantor::Agent { workspace_id } => {
+            if !k2_core::permission::gate::agent_switch_on(workspace_id) {
+                audit(&by.audit_user(), format!("refused:hirer_lacks {} permission_cards (starter set)", t.handle));
+                return Err("hirer_lacks".into());
+            }
             let actor = by.audit_user();
             write_on(t, "permission_cards", &actor)?;
             audit(&actor, format!("ok {} permission_cards=true (starter set)", t.handle));

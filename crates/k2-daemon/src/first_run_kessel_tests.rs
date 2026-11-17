@@ -385,6 +385,32 @@ fn kessels_pinned_chat_hires_the_chief_of_staff_with_only_what_kessel_holds() {
     assert!(std::path::Path::new(&kessel_path).is_dir());
 }
 
+/// prd-agent-templates-v1 T3: Kessel hiring the Chief of Staff follows the
+/// reach rule like any hire. The owner made Kessel with its cards switch
+/// (the owner may give anything); with Kessel's own switch off, the Chief
+/// of Staff doesn't get it, and a starter switch Kessel lost stays off too.
+#[test]
+fn kessel_passes_on_cards_and_switches_only_while_it_holds_them() {
+    let _e = env(true, &["codex"]);
+    let (kessel, _, _) = make_kessel();
+    assert!(k2_core::workspace::settings::agents_can_request_permissions(&kessel), "the owner gave Kessel its cards switch");
+    k2_core::workspace::settings::set_agents_can_request_permissions(&kessel, false).expect("off");
+    k2_core::workspace::settings::set_agents_can_hire_agents(&kessel, false).expect("off");
+    TEST_LAUNCHES.lock().clear();
+    let r = handle_chief_of_staff(&cos_body(), &kessel_session(&kessel));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let out = json_of(&r);
+    let cos = out["workspaceId"].as_str().expect("id").to_string();
+    assert!(!k2_core::workspace::settings::agents_can_request_permissions(&cos), "no cards switch Kessel doesn't hold");
+    assert_eq!(out["permissions"]["cards"], json!(false), "{out}");
+    assert!(!on(&cos, "agents.hire"), "a switch Kessel lost stays off");
+    let left = out["permissions"]["left"].as_array().expect("left");
+    assert!(left.contains(&json!({ "action": "agents.hire", "reason": "hirer_lacks" })), "{out}");
+    for a in CHIEF_OF_STAFF_STARTER_PERMISSIONS.iter().filter(|a| **a != "agents.hire") {
+        assert!(on(&cos, a), "{a}: Kessel still holds it, so it passes on");
+    }
+}
+
 #[test]
 fn a_kessel_folder_already_there_is_409_folder_exists_not_a_crash() {
     let _e = env(true, &["codex"]);

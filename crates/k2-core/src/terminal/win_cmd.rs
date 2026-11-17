@@ -296,21 +296,28 @@ fn npm_shim(
     let target = target.to_string_lossy().into_owned();
     let lower = target.to_ascii_lowercase();
     let prefix = quoted[..open].trim_end();
-    let prefix_lower = prefix.to_ascii_lowercase();
-    let by_node = prefix.ends_with("\"%_prog%\"") || prefix_lower.ends_with("node") || prefix_lower.ends_with("node.exe\"");
+    // The word before the target: a quoted path, or a bare word.
+    let (word, word_quoted) = match prefix.strip_suffix('"') {
+        Some(inner) => (&inner[inner.rfind('"').map_or(0, |q| q + 1)..], true),
+        None => (prefix.rsplit(|c: char| c.is_whitespace() || c == '&').next().unwrap_or(""), false),
+    };
+    let word_lower = word.to_ascii_lowercase();
+    let file_name = word_lower.rsplit(['\\', '/']).next().unwrap_or("");
+    // A node.exe the shim pins (`"…\node.exe"`); `"%_prog%"`, `node` or
+    // `node.exe` (whole words) mean the shim's own node.exe, else PATH's.
+    let pinned = word_quoted && file_name == "node.exe";
+    let by_node = pinned || (word_quoted && word == "%_prog%") || (!word_quoted && (word_lower == "node" || word_lower == "node.exe"));
     if by_node {
         if ![".js", ".cjs", ".mjs"].iter().any(|e| lower.ends_with(e)) {
             return None;
         }
-        // The node the shim names (`"…\node.exe"`), else its own, else PATH's.
-        let named = prefix_lower
-            .ends_with("node.exe\"")
-            .then(|| prefix[..prefix.len() - 1].rfind('"').map(|q| &prefix[q + 1..prefix.len() - 1]))
-            .flatten()
-            .and_then(|p| shim_path(dir, p))
-            .filter(|p| exists(p));
-        let beside = Some(dir.join("node.exe")).filter(|p| exists(p));
-        let node = named.or(beside).or_else(|| on_path_exe("node"))?;
+        let node = if pinned {
+            // The pin is honoured: when that node.exe isn't there, no other
+            // one runs instead (the shim is a batch file again).
+            shim_path(dir, word).filter(|p| exists(p))?
+        } else {
+            Some(dir.join("node.exe")).filter(|p| exists(p)).or_else(|| on_path_exe("node"))?
+        };
         return Some((node.to_string_lossy().into_owned(), vec![target]));
     }
     // No interpreter: the line is the path alone (or follows cmd-shim's `&`).
@@ -742,6 +749,28 @@ mod tests {
             let volta_path = format!(r"{};C:\Program Files\Volta", volta_bin.display());
             let r = for_ok(launcher, "claude", &args, &volta_path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
             assert_eq!(r, (volta_exe.to_string_lossy().into_owned(), vec!["run".into(), "claude".into(), "--append-system-prompt".into(), prompt.clone()]), "volta {launcher:?}");
+        }
+        // A pinned node.exe that isn't there: no other node runs; the shim is a
+        // batch file (a line break refused, a plain argument escaped).
+        // `xnode` is no node: only the whole word `node` / `node.exe` is.
+        let ghost = format!("@\"C:\\nowhere\\node.exe\"  \"{}\" %*\r\n", abs_cli.display());
+        let xnode = "@SETLOCAL\r\nxnode  \"%~dp0\\global\\5\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n";
+        let mut odd = files.clone();
+        odd.insert(pnpm.join("ghost.cmd"));
+        odd.insert(pnpm.join("xn.cmd"));
+        let read_odd = |p: &Path| -> Option<String> {
+            match p.file_name()?.to_str()? {
+                "ghost.cmd" => Some(ghost.clone()),
+                "xn.cmd" => Some(xnode.to_string()),
+                _ => None,
+            }
+        };
+        for name in ["ghost", "xn"] {
+            let r = resolve_for(Launcher::Pty, name, &args, &path, ".EXE;.CMD", "cmd.exe", exists_in(&odd), read_odd);
+            assert_eq!(r, Err(Refused { program: name.to_string() }), "{name}");
+            let (prog, a) = for_ok(Launcher::Pty, name, &["one".into()], &path, ".EXE;.CMD", "cmd.exe", exists_in(&odd), read_odd);
+            assert_eq!(prog, "cmd.exe", "{name}: a batch file");
+            assert_eq!(&a[..5], &CMD_WRAPPER, "{name}: a batch file");
         }
         // Volta's shim with no volta.exe on PATH: a batch file, so this argument is refused.
         let no_volta: HashSet<PathBuf> = files.iter().filter(|p| **p != volta_exe).cloned().collect();

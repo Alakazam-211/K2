@@ -24,6 +24,8 @@ import { setUpdateInstallGuard } from '@/stores/update'
 import { createVoiceController, type VoicePrefs, type VoiceState } from './voice-core'
 import { subscribeVoiceEvents } from '@/lib/voice/voice-events-socket'
 import { hostIsVoiceChatOnly, isVoiceChatOnly } from '@/lib/voice-chat-only'
+import { callPersonName, dmCallRoomName } from '@/lib/home-chat/call-names'
+import { refreshHomeChatPeople, refreshHomeChatSummary, useHomeChatStore } from '@/stores/home-chat'
 
 const REPORTED_KEY = 'k2.voice.reportedServers.v1'
 const PREFS_KEY = 'k2.voice.prefs.v1'
@@ -94,6 +96,23 @@ function hostKeyForTarget(target: string): string | null {
   return host ? homeHostKey(host) : null
 }
 
+/** A DM call's people are named from Home's people (their room is on no
+ *  rooms list). A window that never opened Home (the call's own window)
+ *  reads them now; the names follow when they arrive. */
+const NAMES_RETRY_MS = 30_000
+const namesAsked = new Map<string, number>()
+function chatNames(hostKey: string, roomId: string | null) {
+  const h = useHomeChatStore.getState().byHost[hostKey]
+  // At most one read per server per NAMES_RETRY_MS: the names are drawn on
+  // every speaking change, and a server with no Home chat never answers.
+  if ((!h?.people || (roomId && !h.summary)) && Date.now() - (namesAsked.get(hostKey) ?? 0) > NAMES_RETRY_MS) {
+    namesAsked.set(hostKey, Date.now())
+    if (!h?.people) void refreshHomeChatPeople(hostKey)
+    if (roomId && !h?.summary) void refreshHomeChatSummary(hostKey)
+  }
+  return h
+}
+
 export const voice = createVoiceController({
   keys: knownKeys,
   windowKey,
@@ -150,6 +169,13 @@ export const voice = createVoiceController({
   loadNative,
   targetFor,
   hostKeyForTarget,
+  personName: (key, memberId) => callPersonName(chatNames(key, null), memberId),
+  dmRoomName: (key, roomId) => dmCallRoomName(chatNames(key, roomId), roomId),
+})
+
+// Home's people or DMs arrived or changed: name the call's people again.
+useHomeChatStore.subscribe((s, prev) => {
+  if (s.byHost !== prev.byHost && voice.store.getState().call) voice.renamePeople()
 })
 
 // vs-live V36: installing an update restarts the app, which ends a call.

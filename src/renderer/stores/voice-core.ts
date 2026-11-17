@@ -193,7 +193,19 @@ export interface VoiceDeps {
   targetFor?: (hostKey: string) => string | null
   /** The way back, for a window opened mid-call. */
   hostKeyForTarget?: (target: string) => string | null
+  /** A person's name by their Sew member id, from Home's people: a DM
+   *  call's room is on no rooms list, so its people are named here. Null:
+   *  not known (yet). */
+  personName?: (hostKey: string, memberId: string) => string | null
+  /** A DM call's name (the other person's) by its room id, for a window
+   *  that didn't start the call. Null: not known (yet). */
+  dmRoomName?: (hostKey: string, roomId: string) => string | null
 }
+
+/** A DM call's person no list names: never the room id or "Someone". */
+export const UNKNOWN_CALLER = 'Unknown caller'
+/** A DM call's name before the other person's is known. */
+export const DM_CALL_FALLBACK_NAME = 'Call'
 
 export interface VoiceController {
   store: StoreApi<VoiceState>
@@ -211,6 +223,8 @@ export interface VoiceController {
   /** Read the window's own server's `/cli/voice/rooms` into `windowHosting`:
    *  why it doesn't host (the dimmed headset, §4.5). */
   readWindowHosting(): Promise<void>
+  /** Home's people changed: name the call's people (and a DM call) again. */
+  renamePeople(): void
   /** Join `room` on `hostKey`. A call in progress is left first (the UI
    *  asks before calling this, §4.3). */
   join(hostKey: string, room: VoiceRoom): Promise<void>
@@ -512,6 +526,22 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
 
   // ── the native engine ────────────────────────────────────────────
 
+  /** A DM call's name for a window that didn't start it: the other
+   *  person's, else "Call" (never the room id). Null: not a DM call. */
+  const dmCallName = (hostKey: string, roomId: string): string | null =>
+    convOfDmRoom(roomId) === null ? null : (deps.dmRoomName?.(hostKey, roomId) ?? DM_CALL_FALLBACK_NAME)
+
+  /** Home's people changed: name the call's people (and a DM call) again. */
+  const renamePeople = (): void => {
+    const c = store.getState().call
+    if (!c) return
+    if (convOfDmRoom(c.roomId) !== null && c.roomName === DM_CALL_FALLBACK_NAME) {
+      const named = deps.dmRoomName?.(c.hostKey, c.roomId) ?? null
+      if (named) store.setState({ call: { ...c, roomName: named } })
+    }
+    drawNativeParticipants()
+  }
+
   const clearNativeCall = (): void => {
     nativePeople = []
     nativeSpeaking = new Set()
@@ -519,21 +549,23 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     store.setState({ devices: null })
   }
 
-  /** The name of a Sew member: the rooms list is the only place that knows. */
+  /** The name of a Sew member: the rooms list, else Home's people (a DM
+   *  call's room is on no list). */
   const nameOfMember = (hostKey: string, memberId: string): string | null => {
     for (const r of store.getState().rooms[hostKey]?.list?.rooms ?? []) {
       const o = r.occupants.find((x) => x.memberId === memberId)
       if (o) return o.name ?? o.user
     }
-    return null
+    return deps.personName?.(hostKey, memberId) ?? null
   }
 
   const drawNativeParticipants = (): void => {
     const c = store.getState().call
     if (!native || !c) return
+    const unknown = convOfDmRoom(c.roomId) !== null ? UNKNOWN_CALLER : 'Someone'
     const self = nativePeople.find((p) => p.isSelf)
     const list: EngineParticipant[] = nativePeople.map((p) => ({
-      user: nameOfMember(c.hostKey, p.memberId) ?? (p.isSelf ? deps.selfNames(c.hostKey)[0] ?? 'You' : 'Someone'),
+      user: nameOfMember(c.hostKey, p.memberId) ?? (p.isSelf ? deps.selfNames(c.hostKey)[0] ?? 'You' : unknown),
       speaking: nativeSpeaking.has(p.memberId),
       muted: p.muted || p.serverMuted || p.speakDenied,
       memberId: p.memberId,
@@ -614,7 +646,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     }
     const onList = roomOnList(hostKey, snap.room)
     const roomId = onList?.id ?? snap.room
-    const roomName = onList?.name ?? snap.room
+    const roomName = onList?.name ?? dmCallName(hostKey, snap.room) ?? snap.room
     nativePeople = snap.participants
     const self = snap.participants.find((p) => p.isSelf)
     callGen += 1
@@ -1232,6 +1264,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       if (open) void refreshRooms()
     },
     readWindowHosting,
+    renamePeople,
     join,
     leave,
     setMuted,

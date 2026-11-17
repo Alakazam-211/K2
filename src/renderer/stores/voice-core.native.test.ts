@@ -229,6 +229,25 @@ describe('native join', () => {
     expect(s.ctl.store.getState().notice?.text).toBe('Sign in to sewlab again to join.')
   })
 
+  it("a DM call opened in another window (the call's own window) names the person from Home's people, not 'Someone'", async () => {
+    const names = new Map<string, string>()
+    const s = setup({
+      plugin: { state: { state: 'connected', participants: [person(ME, true), person('101', false)], call_id: 'r_dm' }, call: { target: 'host-1', room: 'dm:900' } },
+      personName: (k, member) => (k === SEW ? (names.get(member) ?? null) : null),
+      dmRoomName: (k, roomId) => (k === SEW && roomId === 'dm:900' ? (names.get('101') ?? null) : null),
+    })
+    const stop = s.ctl.start()
+    await settle()
+    // Home's people not read yet in this window: an honest unknown, never the room id.
+    expect(s.ctl.store.getState().call?.participants.find((p) => !p.isSelf)?.user).toBe('Unknown caller')
+    expect(s.ctl.store.getState().call?.roomName).toBe('Call')
+    names.set('101', 'Ana Ruiz')
+    s.ctl.renamePeople()
+    expect(s.ctl.store.getState().call?.participants.find((p) => !p.isSelf)?.user).toBe('Ana Ruiz')
+    expect(s.ctl.store.getState().call?.roomName).toBe('Ana Ruiz')
+    stop()
+  })
+
   it("another window's leave cancelled this join: the call goes, quietly", async () => {
     const s = setup({ plugin: { joinError: { code: 'left', detail: null } } })
     await s.ctl.join(SEW, room1)

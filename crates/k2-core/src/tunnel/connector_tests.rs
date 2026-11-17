@@ -1938,7 +1938,6 @@ fn assert_settled_on(tunnel: &PathBTunnel, want: u64, pid: i32, g: u64) {
 /// rendered, so every new child was killed at once (125 spawns a second)
 /// and the tunnel stayed down until the daemon restarted. One change is
 /// one restart, the new child stays up, and a later change is one more.
-#[cfg(unix)]
 #[test]
 fn a_changed_custom_name_restarts_frpc_once_and_the_new_child_stays() {
     use super::super::custom_names as names;
@@ -1968,7 +1967,6 @@ fn a_changed_custom_name_restarts_frpc_once_and_the_new_child_stays() {
 /// The other respawns share the post-exit spawn site. Here frpc dies on
 /// its own just after a change: the respawn already renders the new list,
 /// so the change costs no second restart.
-#[cfg(unix)]
 #[test]
 fn a_respawn_after_frpc_exits_carries_a_changed_name_without_another_restart() {
     use super::super::custom_names as names;
@@ -1976,12 +1974,18 @@ fn a_respawn_after_frpc_exits_carries_a_changed_name_without_another_restart() {
         let tunnel = start_path_b_tunnel(Vec::new());
         let pid = running_pid();
         assert!(names::set(vec!["a.example.com".to_string()]));
+        #[cfg(unix)]
         let killed = crate::bg_proc::command("kill")
             .arg("-9")
             .arg(pid.to_string())
             .status()
             .expect("run kill");
-        assert!(killed.success(), "kill -9 {pid}: {killed:?}");
+        #[cfg(windows)]
+        let killed = crate::bg_proc::command("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .status()
+            .expect("run taskkill");
+        assert!(killed.success(), "kill {pid}: {killed:?}");
         wait_until("the respawn after the exit", 10, || frpc_runs() >= 2);
         let pid = wait_for_new_pid(pid);
         assert_settled_on(&tunnel, 2, pid, names::generation());

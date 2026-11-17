@@ -27,10 +27,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A job can turn its own network off.** `k2 compute run --network none` runs the job with no network, whatever its node allows: on Linux it gets a network namespace of its own with only loopback; on a Mac, no remote addresses and no DNS (loopback stays open). A job can only narrow its network, never widen it.
 - **Dummy interfaces for browser tests.** `--netns-dummy sewlane0=10.254.254.1/32` (Linux, up to 4) adds an interface with that address to the job's own namespace before it starts, so a browser has an address other than loopback. Addresses come from private, link-local or test ranges only.
 - **K2 places these jobs only on nodes that can run them,** and `k2 compute get` shows the network a job asked for. Nodes need k2-node 0.46.14; an older node never runs such a job with more network.
+- **Compute jobs stop piling up on one node.** K2 now counts the jobs already waiting on a node (for example behind your workspace's one-at-a-time limit there) before it places a new one, so the job goes to a node that can start it now, or to the one with the shorter real wait, even when the busy node has more free CPU. A `--cache` job no longer waits behind such a line for its cache.
 
 ### Web app
 - **The web app no longer keeps sign-in tokens or passwords in the browser's saved storage.** A sign-in lasts for the browser tab (a reload keeps it); a new tab asks you to sign in again, and the web app has no "Remember password". Anything an older version saved there is removed when the page loads. The desktop app still uses your system keychain.
-- **Compute jobs stop piling up on one node.** K2 now counts the jobs already waiting on a node (for example behind your workspace's one-at-a-time limit there) before it places a new one, so the job goes to a node that can start it now, or to the one with the shorter real wait, even when the busy node has more free CPU. A `--cache` job no longer waits behind such a line for its cache.
 
 ## 0.46.14 — Choose which Thread the main chat keeps
 

@@ -14,6 +14,10 @@
 // client; the OS's own full screen (its green button) is the window's.
 //
 // K2's voice rooms have no in-call chat today, so there's none to bring.
+//
+// It wears the active look: the title in the heading size, the time beside
+// it, the tiles with room around them, and the controls on the call's bar
+// (CallControlBar: Frost in Glass, a raised cut bar in Terminal).
 
 import { useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -27,7 +31,8 @@ import { keepCallWindowFrame, popInCall } from '@/stores/call-popout'
 import { loadSharePick } from '@/stores/call-share'
 import { retainVideo, video } from '@/stores/video'
 import { retainVoice, useVoice } from '@/stores/voice'
-import CallControls from './CallControls'
+import { Button } from '@/components/ui/Button'
+import CallControls, { CallControlBar } from './CallControls'
 import { callActions, useCallNoiseRemoval } from './CallLayer'
 import CallStage from './CallStage'
 import { useCallDuration } from './CallTile'
@@ -114,18 +119,18 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
   return (
     <div className="fixed inset-[var(--inset-window)] flex flex-col bg-[var(--color-bg)]" data-testid="call-window">
       <div
-        className="flex flex-shrink-0 select-none items-center gap-3 border-b border-[var(--color-border)] px-3"
+        className="flex flex-shrink-0 select-none items-center gap-2.5 border-b border-[var(--color-border)] px-3"
         style={{ height: TOPBAR_HEIGHT_CSS, minHeight: TOPBAR_HEIGHT_CSS }}
         onMouseDown={titleBarDragOnMouseDown}
         onDoubleClick={titleBarOnDoubleClick}
         onContextMenu={titleBarOnContextMenu}
       >
         <DesktopChromeLeft />
-        <span data-testid="call-window-title" className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-text-primary)]">
+        <span data-testid="call-window-title" className="type-heading min-w-0 flex-1 truncate font-medium text-[var(--color-text-primary)]">
           {roomName ?? 'Call'}
         </span>
         {time ? (
-          <span data-testid="call-window-duration" className="font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">
+          <span data-testid="call-window-duration" className="type-control font-mono tabular-nums text-[var(--color-text-secondary)]">
             {time}
           </span>
         ) : null}
@@ -133,18 +138,13 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
         <DesktopChromeRight />
       </div>
       {!call ? (
-        <div data-testid="call-window-empty" className="flex flex-1 flex-col items-center justify-center gap-2 text-[12px] text-[var(--color-text-muted)]">
+        <div data-testid="call-window-empty" className="type-row flex flex-1 flex-col items-center justify-center gap-3 text-[var(--color-text-muted)]">
           {waited || (native && !preview) ? (
             <>
               <span>There's no call to show here.</span>
-              <button
-                type="button"
-                data-testid="call-window-close"
-                className="border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]"
-                onClick={closeWindow}
-              >
+              <Button variant="quiet" data-testid="call-window-close" onClick={closeWindow}>
                 Close
-              </button>
+              </Button>
             </>
           ) : (
             <span>Finding the call…</span>
@@ -153,14 +153,16 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
       ) : (
         <>
           {tiles.length > 0 ? (
-            <CallStage ctl={video} people={people} callId={call.callId} className="flex-1" />
+            <CallStage ctl={video} people={people} callId={call.callId} className="flex-1 px-1 pt-1" />
           ) : (
-            <div data-testid="call-window-no-video" className="flex flex-1 items-center justify-center text-[12px] text-[var(--color-text-muted)]">
+            <div data-testid="call-window-no-video" className="type-row flex flex-1 items-center justify-center text-[var(--color-text-muted)]">
               No one has video on.
             </div>
           )}
-          <div className="flex flex-shrink-0 flex-col items-center gap-1 border-t border-[var(--color-border)] px-2 py-1.5">
-            <CallControls variant="overlay" call={call} actions={callActions} video={video} noiseRemoval={noiseRemoval} />
+          <div data-testid="call-window-controls" className="flex flex-shrink-0 flex-col items-center gap-1.5 px-3 pb-3 pt-1">
+            <CallControlBar>
+              <CallControls variant="overlay" call={call} actions={callActions} video={video} noiseRemoval={noiseRemoval} />
+            </CallControlBar>
             <ScreenPicker ctl={video} />
             <VideoNoticeLine ctl={video} noticeOnly />
           </div>

@@ -1151,6 +1151,9 @@ describe('pop out: the call in its own window', () => {
     // No Expand here (the window is the call); Pop in instead.
     expect(within(win).queryByTestId('call-window-fullscreen')).toBeNull()
     expect(within(win).getByTestId('call-window-popin').getAttribute('aria-label')).toBe("Pop back into K2's window")
+    // In the look: the title in the heading size, the controls on the call's bar.
+    expect(within(win).getByTestId('call-window-title').className).toContain('type-heading')
+    expect(within(win).getByTestId('call-control-bar').contains(within(win).getByTestId('call-overlay-leave'))).toBe(true)
     fireEvent.click(within(win).getByTestId('call-overlay-mute'))
     expect(voice.store.getState().call?.muted).toBe(true)
     expect(closeWindow).not.toHaveBeenCalled()

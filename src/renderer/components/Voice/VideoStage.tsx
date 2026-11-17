@@ -55,7 +55,7 @@ export function StageGrid({ tiles, ctl, className = '' }: { tiles: ReturnType<ty
     <div
       data-testid="video-grid"
       data-columns={columns}
-      className={`grid min-h-0 gap-1 overflow-y-auto p-1 ${className}`}
+      className={`grid min-h-0 gap-2 overflow-y-auto p-2 ${className}`}
       style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
     >
       {tiles.map((t) => (

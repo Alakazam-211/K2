@@ -655,7 +655,10 @@ pub fn built_workspace_bin(package: &str, bin: &str) -> PathBuf {
             dir
         }
     };
-    let name = format!("{bin}{}", std::env::consts::EXE_SUFFIX);
+    // A caller may pass the file name (`k2-scenerender.exe`, a worker's
+    // BINARY_NAME on Windows) or the bare bin name: one `.exe` either way.
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let name = if !suffix.is_empty() && bin.ends_with(suffix) { bin.to_string() } else { format!("{bin}{suffix}") };
     let _build = BuildLock::take(&profile_dir);
     let p = profile_dir.join(&name);
     assert!(p.is_file(), "`cargo build -p {package} --bins` made no {}", p.display());

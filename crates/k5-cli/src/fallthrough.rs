@@ -143,7 +143,7 @@ impl FrontError {
 impl fmt::Display for FrontError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FrontError::Home(e) => write!(f, "can't find the K2 home to keep the shell CLI in: {e}"),
+            FrontError::Home(e) => write!(f, "can't find where to keep the shell CLI: {e}"),
             FrontError::Cache { path, err } => write!(f, "can't write the shell CLI to {}: {err}", path.display()),
             FrontError::CacheMismatch { path } => {
                 write!(f, "the shell CLI written to {} doesn't match this build", path.display())
@@ -556,7 +556,7 @@ mod tests {
         assert!(matches!(err, FrontError::Home(HomeError::NoUserHome)), "{err:?}");
         assert_eq!(
             err.line(CalledAs::K5Name),
-            "k5: can't find the K2 home to keep the shell CLI in: no home folder: set HOME"
+            "k5: can't find where to keep the shell CLI: no home folder: set HOME"
         );
         assert_eq!(err.exit_code(), 1);
     }

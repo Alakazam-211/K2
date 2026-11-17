@@ -4,6 +4,8 @@
 #   K5_CLI_VIA=rust     every daemon request carries `X-K5-Cli-Via:
 #                       fallthrough`, over TCP and the cell socket alike.
 #                       Unset, empty or any other value: no request does.
+#                       The Connect control plane is not the daemon: the
+#                       CLI's own call to it never carries the header.
 #   K5_CLI_NOTICE_DONE  set non-empty: _K5_NOTICE_DONE=1, where the k2-to-k5
 #                       notice will look. Empty or unset: it stays empty.
 #
@@ -56,6 +58,16 @@ class H(BaseHTTPRequestHandler):
         }
         with open(os.path.join(work, "requests.log"), "a") as f:
             f.write(json.dumps(rec) + "\n")
+        if rec["path"] == "/cli/connect/proxy":
+            # A daemon without the proxy route: the CLI then calls the
+            # control plane (K2_CONNECT_BASE, this same stub) itself.
+            data = b'{"error":"not found"}'
+            self.send_response(404)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         data = json.dumps({"ok": True, "success": True, "heartbeats": []}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -147,6 +159,15 @@ for t in tcp uds; do
     one "$t" "=RUST" -
     one "$t" "=bash" -
 done
+
+echo "== the Connect control plane is not the daemon =="
+printf '{"token":"k2c_test-connect","subdomain":"me"}' >"$WORK/home/.k2/tunnel.json"
+chmod 600 "$WORK/home/.k2/tunnel.json"
+: >"$WORK/requests.log"
+clean_env K5_CLI_VIA=rust K2_CONNECT_BASE="http://127.0.0.1:${PORT}" "$K2_CLI" publish status --json >/dev/null 2>&1 || true
+expect "the daemon's proxy route gets the header" tcp /cli/connect/proxy fallthrough
+expect "the control plane does not" tcp /subdomains -
+rm -f "$WORK/home/.k2/tunnel.json"
 
 echo "== _K5_NOTICE_DONE and _K5_CLI_VIA, from bash's trace =="
 # traced <var> <env…>: the value the prelude gave <var>.

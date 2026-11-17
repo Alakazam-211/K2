@@ -244,7 +244,8 @@ _connect_curl() {
         _k2_cfg_add data-raw "$body"
     fi
     local out
-    out="$(_k2_curl "$_K2_CFG" "${args[@]}" 2>/dev/null)" || {
+    # The control plane is not the daemon: no X-K5-Cli-Via (see _k2_curl).
+    out="$(_K2_CURL_NOT_DAEMON=1 _k2_curl "$_K2_CFG" "${args[@]}" 2>/dev/null)" || {
         echo "Error: could not reach the K2 Connect control plane at ${K2_CONNECT_BASE}." >&2
         exit 1
     }

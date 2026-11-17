@@ -76,6 +76,36 @@ describe('the wave button', () => {
   })
 })
 
+describe('muted, in words', () => {
+  for (const variant of ['topbar', 'tile', 'overlay'] as const) {
+    it(`${variant}: the mic's name and tooltip say what a press does (Mute, then Unmute)`, () => {
+      const { rerender } = render(<CallControls variant={variant} call={call} actions={actions()} video={null} />)
+      const mic = screen.getByTestId(`call-${variant}-mute`)
+      expect([mic.getAttribute('aria-label'), mic.getAttribute('title'), mic.getAttribute('aria-pressed')]).toEqual(['Mute', 'Mute', 'false'])
+      rerender(<CallControls variant={variant} call={{ ...call, muted: true }} actions={actions()} video={null} />)
+      expect([mic.getAttribute('aria-label'), mic.getAttribute('title'), mic.getAttribute('aria-pressed')]).toEqual(['Unmute', 'Unmute', 'true'])
+    })
+  }
+
+  it("on the call's bar, a muted mic carries the word Muted under its glyph, small and in the look's chip", () => {
+    const { rerender } = render(<CallControls variant="overlay" call={call} actions={actions()} video={null} />)
+    expect(screen.queryByTestId('call-overlay-muted')).toBeNull()
+    rerender(<CallControls variant="overlay" call={{ ...call, muted: true }} actions={actions()} video={null} />)
+    const mic = screen.getByTestId('call-overlay-mute')
+    const word = screen.getByTestId('call-overlay-muted')
+    expect(word.textContent).toBe('Muted')
+    // On the mic button itself, so nothing in the bar moves when it shows.
+    expect(mic.contains(word)).toBe(true)
+    expect(mic.querySelector('[data-k2-icon]')?.getAttribute('data-k2-icon')).toBe('mic-off')
+    expect(word.className).toMatch(/\babsolute\b/)
+    expect(word.className).toMatch(/\btype-badge\b/)
+    expect(word.className).toContain('rounded-[var(--radius-pill)]')
+    expect(word.getAttribute('data-k2-chamfer')).toBe('chip')
+    // The button's own name already says it; the word is for the eye.
+    expect(word.getAttribute('aria-hidden')).toBe('true')
+  })
+})
+
 describe("the controls' look", () => {
   it("the call's bar (overlay): 40px buttons, round in Glass and cut in Terminal, with a visible focus ring", () => {
     render(<CallControls variant="overlay" call={call} actions={actions()} video={null} noiseRemoval />)

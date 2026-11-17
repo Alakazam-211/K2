@@ -153,6 +153,27 @@ describe('the tiles', () => {
     expect(label.className).toMatch(/\bleft-1\.5\b/)
   })
 
+  it('while you are muted, your own tile says Muted beside the mic-off glyph; others keep the glyph alone', async () => {
+    const s = setup([fakeTrack('7')])
+    const mutedMe = people.map((p) => (p.isSelf ? { ...p, muted: true } : p))
+    const { rerender } = render(<VideoStage ctl={s.ctl} people={people} title="Standup" />)
+    await ready(s)
+    await act(async () => {
+      await s.ctl.setCamera(true)
+    })
+    const mine = (): HTMLElement => screen.getAllByTestId('video-tile').find((t) => t.dataset.self === 'true')!
+    await waitFor(() => expect(mine()).toBeTruthy())
+    expect(within(mine()).queryByTestId('video-tile-muted-word')).toBeNull()
+    rerender(<VideoStage ctl={s.ctl} people={mutedMe} title="Standup" />)
+    const label = within(mine()).getByTestId('video-tile-label')
+    expect(within(label).getByTestId('video-tile-muted')).toBeTruthy()
+    expect(within(label).getByTestId('video-tile-muted-word').textContent).toBe('Muted')
+    // Ada is muted too: her tile keeps the glyph, with no word.
+    const ada = screen.getAllByTestId('video-tile').find((t) => t.dataset.track === 'TR_7')!
+    expect(within(ada).getByTestId('video-tile-muted')).toBeTruthy()
+    expect(within(ada).queryByTestId('video-tile-muted-word')).toBeNull()
+  })
+
   it("a tile's name is set in the app's small type step, no larger than the window's other small text", async () => {
     const s = setup([fakeTrack('7')])
     render(<VideoStage ctl={s.ctl} people={people} title="Standup" />)

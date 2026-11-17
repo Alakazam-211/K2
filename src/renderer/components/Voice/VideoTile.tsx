@@ -118,6 +118,18 @@ export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = 
       <span data-testid="video-tile-name" className="truncate">
         {tile.name}
       </span>
+      {/* Your own mic in words too ("You · Muted"): the call's controls are
+          icons, so the self-view says it plainly. Others keep the glyph. */}
+      {tile.self && tile.audioMuted ? (
+        <>
+          <span aria-hidden className="shrink-0">
+            ·
+          </span>
+          <span data-testid="video-tile-muted-word" className="shrink-0">
+            Muted
+          </span>
+        </>
+      ) : null}
     </div>
   )
   const transform = viewTransform(zoom.view)

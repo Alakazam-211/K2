@@ -82,9 +82,11 @@ export interface VideoStageProps {
   /** A call's controls (on the call's bar), in place of the footer's own
    *  buttons (the demo's). */
   controls?: React.ReactNode
+  /** A line under the header from the place (why Pop out failed). */
+  notice?: React.ReactNode
 }
 
-export default function VideoStage({ ctl, people, title, footerStart, footer, onClose, actions, className = '', controls }: VideoStageProps): React.JSX.Element | null {
+export default function VideoStage({ ctl, people, title, footerStart, footer, onClose, actions, className = '', controls, notice }: VideoStageProps): React.JSX.Element | null {
   const availability = useStore(ctl.store, (s) => s.availability)
   const tiles = useStageTiles(ctl, people)
   if (availability !== 'ready' || tiles.length === 0) return null
@@ -106,6 +108,7 @@ export default function VideoStage({ ctl, people, title, footerStart, footer, on
           </button>
         ) : null}
       </header>
+      {notice}
       <StageGrid tiles={tiles} ctl={ctl} />
       {controls ? (
         <footer data-testid="video-stage-controls" className="flex flex-shrink-0 flex-col items-center gap-1 px-2 pb-2 pt-1">

@@ -74,7 +74,14 @@ export async function popOutCall(): Promise<void> {
     const why = err instanceof Error ? err.message : String(err)
     console.warn('[call] could not open the call window:', why)
     useCallPopout.setState({ open: false, error: `Couldn't open the call in its own window: ${why}` })
+    // The stage stays here: this window is its home again at once.
+    handCallHome(getWindowLabel())
   }
+}
+
+/** The person read why Pop out failed (the stage's Dismiss). */
+export function dismissCallPopoutError(): void {
+  if (useCallPopout.getState().error !== null) useCallPopout.setState({ error: null })
 }
 
 /** In the call's window: Back to chat. Hands the call back to the window that

@@ -1045,6 +1045,31 @@ describe('pop out: the call in its own window', () => {
     expect(localStorage.getItem(CALL_POPPED_FROM_KEY)).toBe('main')
   })
 
+  it("a window that won't open says so on the stage, with Try again and Dismiss; the call stays here", async () => {
+    let tries = 0
+    setCallPopoutBridge({
+      open: async () => {
+        tries += 1
+        throw new Error('no display')
+      },
+      isOpen: async () => false,
+      watch: async () => () => {},
+    })
+    await inCall()
+    await cameraOn()
+    fireEvent.click(inStage('video-stage-popout'))
+    const line = await within(await screen.findByTestId('video-stage')).findByTestId('call-popout-error')
+    expect(line.getAttribute('role')).toBe('alert')
+    expect(line.textContent).toContain("Couldn't open the call in its own window: no display")
+    fireEvent.click(within(line).getByTestId('call-popout-retry'))
+    await waitFor(() => expect(tries).toBe(2))
+    expect(await screen.findByTestId('call-popout-error')).toBeTruthy()
+    fireEvent.click(within(screen.getByTestId('call-popout-error')).getByTestId('call-popout-dismiss'))
+    expect(screen.queryByTestId('call-popout-error')).toBeNull()
+    expect(useCallPopout.getState().error).toBeNull()
+    expect(inStage('video-stage-popout')).toBeTruthy()
+  })
+
   it('no Pop out where the app cannot open windows (the web client)', async () => {
     await inCall()
     await cameraOn()

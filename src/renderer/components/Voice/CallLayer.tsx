@@ -39,6 +39,7 @@ import type { CallPerson } from '@/lib/voice/video-labels'
 import { useCallVideoLive } from './callHooks'
 import VideoStage from './VideoStage'
 import CallExpanded from './CallExpanded'
+import PopOutError from './PopOutError'
 import RecordingNotice from './RecordingNotice'
 import { callTitle } from '@/lib/home-chat/call-names'
 import CallControls, { CallControlBar } from './CallControls'
@@ -151,6 +152,7 @@ export function CallStageView({ call, className }: { call: VoiceCall; className?
       title={callTitle(call)}
       className={className}
       actions={<CallStageActions />}
+      notice={<PopOutError />}
       controls={
         <CallControlBar>
           <CallControls variant="overlay" call={call} actions={callActions} video={video} noiseRemoval={noiseRemoval} />

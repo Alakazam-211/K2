@@ -253,6 +253,12 @@ export interface HomesState {
   /** False when the address is already on that Home (dedupe per Home). */
   addRow: (homeId: string, row: HomeRow) => boolean
   removeRow: (homeId: string, address: string) => void
+  /** Move the row at `address` from one Home to the end of another, in one
+   *  change (Home sync sends it as the row leaving one and joining the
+   *  other). It keeps its last send; its pin stays behind, as pins belong
+   *  to a group. False when either Home is gone, the row isn't on `fromId`,
+   *  or `toId` already has it. */
+  moveRowToHome: (fromId: string, toId: string, address: string) => boolean
   moveRow: (homeId: string, from: number, to: number) => void
   /**
    * Rename repair for one host's rows, on every Home. `resolve` maps an
@@ -634,6 +640,26 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
         if (!home || !home.rows.some((r) => r.address === address)) return
         const next = mapHome(homeId, (h) => ({ ...h, rows: h.rows.filter((r) => r.address !== address) }))
         if (next) commit(next)
+      },
+
+      moveRowToHome: (fromId, toId, address) => {
+        const { homes } = get()
+        const from = homes.find((h) => h.id === fromId)
+        const to = homes.find((h) => h.id === toId)
+        const row = from?.rows.find((r) => r.address === address)
+        if (!from || !to || !row || fromId === toId || to.rows.some((r) => r.address === address)) return false
+        const moved: HomeRow = { ...row }
+        delete moved.pinOrder
+        commit(
+          homes.map((h) =>
+            h.id === fromId
+              ? { ...h, rows: h.rows.filter((r) => r.address !== address) }
+              : h.id === toId
+                ? { ...h, rows: [...h.rows, moved] }
+                : h,
+          ),
+        )
+        return true
       },
 
       moveRow: (homeId, from, to) => {

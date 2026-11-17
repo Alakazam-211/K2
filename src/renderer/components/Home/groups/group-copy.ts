@@ -23,5 +23,11 @@ export const NEW_GROUP_LABEL = 'New group'
 export const CURRENT_GROUP_NOTE = 'Current'
 export const ALREADY_IN_GROUP_NOTE = 'Already in it'
 
+/** A row's menu item that moves it to another of the person's groups. */
+export const MOVE_TO_GROUP_LABEL = 'Move to group…'
+
+/** Why "Move to group…" is off when there is only one group. */
+export const ONLY_ONE_GROUP_TEXT = 'Make another group first.'
+
 /** A row's menu item that takes it out of the group it is in. */
 export const removeFromGroupLabel = (name: string): string => `Remove from ${name}`

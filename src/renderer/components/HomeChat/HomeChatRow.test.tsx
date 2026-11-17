@@ -17,6 +17,13 @@ vi.mock('@/lib/daemon-cli', () => ({
   daemonCliPost: vi.fn(async () => ({ ok: true })),
   withHostCliSlot: async <T,>(_s: unknown, fn: () => Promise<T>): Promise<T> => fn(),
 }))
+const menu = vi.hoisted(() => ({ next: null as string | null, items: [] as Array<Array<{ id: string; label: string; enabled?: boolean; hint?: string; submenu?: Array<{ id: string; label: string }> }>> }))
+vi.mock('@/lib/context-menu', () => ({
+  showContextMenu: vi.fn(async (items: (typeof menu.items)[number]) => {
+    menu.items.push(items)
+    return menu.next
+  }),
+}))
 vi.mock('@/lib/home-chat/events-socket', async (orig) => ({
   ...(await orig<typeof import('@/lib/home-chat/events-socket')>()),
   subscribeHomeChatEvents: () => () => undefined,
@@ -27,7 +34,7 @@ import { HomeChatHomeRow } from './HomeChatRow'
 import { HomeChatChannelGlyph, HomeChatPersonAvatar, PERSON_INK_DARK, personInk } from './HomeChatGlyphs'
 import { CHIP_INK_LIGHT, PERSON_COLORS, personColor, relativeLuminance } from '@/components/Presence/PresenceChip'
 import { resetHomeChatForTests, useHomeChatStore } from '@/stores/home-chat'
-import type { Home } from '@/stores/homes'
+import { useHomesStore, type Home } from '@/stores/homes'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -141,5 +148,37 @@ describe('Home chat rows', () => {
     }
     render(<HomeChatPersonAvatar username="ana" name="Ana Ruiz" picture="data:image/png;base64,AA" />)
     expect(document.querySelector('[data-home-chat-avatar="picture"] img')).not.toBeNull()
+  })
+
+  it('person and channel rows offer Move to group…, and a pick moves the row', async () => {
+    const work: Home = { id: 'h2', name: 'Ops', rows: [] }
+    useHomesStore.setState({ homes: [HOME, work], selectedId: HOME.id })
+    for (const [i, row] of HOME.rows.entries()) {
+      menu.items = []
+      menu.next = 'home-move:h2'
+      const home = useHomesStore.getState().homes.find((x) => x.id === HOME.id)!
+      render(<HomeChatHomeRow home={home} row={row} />)
+      await act(async () => {
+        fireEvent.contextMenu(document.querySelector(`[data-home-chat-row="${row.kind}"] [data-agent-row]`)!)
+      })
+      const item = menu.items[0].find((x) => x.id === 'home-move')
+      expect(item?.label, row.kind).toBe('Move to group…')
+      expect(item?.submenu?.map((r) => r.label)).toEqual(['Ops', '', 'New group'])
+      const homes = useHomesStore.getState().homes
+      expect(homes.find((x) => x.id === 'h2')?.rows.map((r) => r.address)).toEqual(HOME.rows.slice(0, i + 1).map((r) => r.address))
+      cleanup()
+    }
+    expect(useHomesStore.getState().homes.find((x) => x.id === HOME.id)?.rows).toEqual([])
+    menu.next = null
+  })
+
+  it('with one group, Move to group… is off and says why', async () => {
+    useHomesStore.setState({ homes: [HOME], selectedId: HOME.id })
+    menu.items = []
+    render(<HomeChatHomeRow home={HOME} row={HOME.rows[1]} />)
+    await act(async () => {
+      fireEvent.contextMenu(document.querySelector('[data-home-chat-row="channel"] [data-agent-row]')!)
+    })
+    expect(menu.items[0].find((x) => x.id === 'home-move')).toMatchObject({ enabled: false, hint: 'Make another group first.' })
   })
 })

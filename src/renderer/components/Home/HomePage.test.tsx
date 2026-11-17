@@ -1204,7 +1204,33 @@ describe('Home — the Agents page shell', () => {
     await act(async () => {
       fireEvent.contextMenu(rowOf('Cortana'))
     })
-    expect(menu.items[1].map((i) => i.id)).toEqual(['home-settings', 'home-wiki', 'home-sep', 'home-pin', 'home-remove'])
+    expect(menu.items[1].map((i) => i.id)).toEqual(['home-settings', 'home-wiki', 'home-sep', 'home-pin', 'home-move', 'home-remove'])
+  })
+
+  it('right-click Move to group… moves the row into the picked group', async () => {
+    const st = useHomesStore.getState()
+    const first = st.homes[0]
+    const target = st.createHome('Work')
+    if (!target) throw new Error('no group made')
+    st.selectHome(first.id)
+    try {
+      menu.next = `home-move:${target}`
+      menu.items = []
+      render(<Shell />)
+      await act(async () => {
+        fireEvent.contextMenu(rowOf('Bee'))
+      })
+      const item = menu.items[0].find((i) => i.id === 'home-move') as { label: string; submenu?: { label: string }[] } | undefined
+      expect(item?.label).toBe('Move to group…')
+      expect(item?.submenu?.map((r) => r.label)).toEqual(['Work', '', 'New group'])
+      const homes = useHomesStore.getState().homes
+      expect(homes.find((h) => h.id === first.id)?.rows.map((r) => r.address)).toEqual(['cortana::local', 'cee::c.k2.dev'])
+      expect(homes.find((h) => h.id === target)?.rows.map((r) => r.address)).toEqual(['bee::b.k2.dev'])
+    } finally {
+      menu.next = null
+      useHomesStore.getState().deleteHome(target)
+      useHomesStore.getState().selectHome(first.id)
+    }
   })
 
   it('the ⌘K field is the palette\'s entry: a click or typing opens it, the text carried over; it never filters', () => {

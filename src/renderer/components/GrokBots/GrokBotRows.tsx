@@ -36,6 +36,7 @@ import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
 import { grokAgentStatus } from '@/lib/home-agent-status'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { useHomeRowOnScreen } from '@/components/Home/home-row-on-screen'
+import { moveToGroupItem, runMoveToGroup } from '@/components/Home/groups/move-to-group'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { useHomeRowAvatar } from '@/lib/home-avatars'
 import { GrokBotTag } from './GrokBotTag'
@@ -192,7 +193,11 @@ export function GrokBotHomeRow({ home, row, index }: { home: Home; row: HomeRow;
         }}
         onContextMenu={(e) => {
           e.preventDefault()
-          void showContextMenu([{ id: 'home-remove', label: `Remove from ${home.name}` }]).then((clicked) => {
+          void showContextMenu([
+            moveToGroupItem(useHomesStore.getState().homes, home, row),
+            { id: 'home-remove', label: `Remove from ${home.name}` },
+          ]).then((clicked) => {
+            if (runMoveToGroup(clicked, home, row)) return
             if (clicked === 'home-remove') useHomesStore.getState().removeRow(home.id, row.address)
           })
         }}

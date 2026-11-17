@@ -13,6 +13,7 @@ import {
   GROUP_NAME_LABEL,
   GROUPS_LABEL,
   LAST_GROUP_TEXT,
+  MOVE_TO_GROUP_LABEL,
   NEW_GROUP_LABEL,
   removeFromGroupLabel,
 } from './group-copy'
@@ -40,6 +41,7 @@ const PHONE = {
 
 describe('Home groups: the desktop says what the phone says', () => {
   it('the controls both have use the phone’s exact words', () => {
+    expect(MOVE_TO_GROUP_LABEL).toBe(PHONE.moveTo)
     expect(GROUPS_LABEL).toBe(PHONE.groupsList)
     expect(CURRENT_GROUP_NOTE).toBe(PHONE.current)
     expect(ALREADY_IN_GROUP_NOTE).toBe(PHONE.alreadyIn)

@@ -10,7 +10,7 @@
 //
 // Clicking opens the chat in the main area. The menu: Pin / Unpin (pins and
 // "Most recent at the top" are shared with agent rows), "Also on" another
-// server for a person (§6.3), and Remove from <Home> (a DM can't be left in
+// server for a person (§6.3), Move to group…, and Remove from <Home> (a DM can't be left in
 // Sew: removing hides the row, D10).
 
 import { useEffect, useMemo, type CSSProperties, type JSX } from 'react'
@@ -36,6 +36,7 @@ import { UnreadBadge } from '@/components/common/UnreadBadge'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { HomeRowPinMark } from '@/components/Home/groups/HomeRowCaption'
 import { useHomeRowOnScreen } from '@/components/Home/home-row-on-screen'
+import { moveToGroupItem, runMoveToGroup } from '@/components/Home/groups/move-to-group'
 import { serverLabelFor } from './serverLabel'
 import { HomeChatChannelGlyph, HomeChatPersonAvatar } from './HomeChatGlyphs'
 
@@ -86,8 +87,13 @@ async function homeChatRowMenu(
     items.push({ id: 'sep-also', label: '', type: 'separator' })
   }
   items.push(pinMenuItem(home, row))
+  items.push(moveToGroupItem(useHomesStore.getState().homes, home, row))
   items.push({ id: 'home-remove', label: `Remove from ${home.name}` })
   const clicked = await showContextMenu(items)
+  if (runMoveToGroup(clicked, home, row)) {
+    // Its chat stays open: the row is still on Home, in another group.
+    return
+  }
   if (clicked === 'home-pin') useHomesStore.getState().pinRow(home.id, row.address)
   else if (clicked === 'home-unpin') useHomesStore.getState().unpinRow(home.id, row.address)
   else if (clicked === 'home-remove') {

@@ -64,6 +64,7 @@ import { GroupSwipeStrip } from './groups/GroupSwipeSlide'
 import { useRowFlip } from './groups/useRowFlip'
 import { HomeRowCaption, HomeRowPinMark } from './groups/HomeRowCaption'
 import { GROUP_EMPTY_TEXT, removeFromGroupLabel } from './groups/group-copy'
+import { moveToGroupItem, runMoveToGroup } from './groups/move-to-group'
 import { MAX_PINS, displayRows, isPinned, pinnedRows, planRowDrop, rowDropLanding, shortcutIndexFor } from '@/lib/home-row-order'
 import { HomeAddButton, HomeNavFooterRow } from './HomeNavFooter'
 import { AddToHomeHost } from './AddToHomeModal'
@@ -206,10 +207,12 @@ export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: H
   if (roomOpen) items.push({ id: 'home-close-room', label: 'Close room' })
   if (items.length > 0) items.push({ id: 'home-sep', label: '', type: 'separator' })
   items.push(pinMenuItem(home, row))
+  items.push(moveToGroupItem(useHomesStore.getState().homes, home, row))
   items.push({ id: 'home-remove', label: removeFromGroupLabel(home.name) })
 
   // On Glass a clear frost: the list shows through, blurred (K2 Design).
   const clicked = await showContextMenu(items, { look: 'clear' })
+  if (runMoveToGroup(clicked, home, row)) return
   if (clicked === 'home-pin') {
     useHomesStore.getState().pinRow(home.id, row.address)
   } else if (clicked === 'home-unpin') {

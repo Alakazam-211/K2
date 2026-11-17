@@ -19,6 +19,8 @@
 
 import type { ThreadFileObject } from '@/components/SessionView/overlayThread'
 import { downloadChunks, type ReadRangeResponse } from '@/lib/fs-transfer'
+import { mintAttachmentLink } from '@/lib/file-link'
+import { isWebClient } from '@/lib/is-web'
 import { readAttachment, type AttachmentReader } from '@/lib/thread-image-thumbs'
 import type { ServerScope } from '@/kessel/server-scope'
 
@@ -58,9 +60,15 @@ export function downloadThreadAttachment(
   name: string,
   opts: ThreadAttachmentDownloadOptions = {},
 ): Promise<string | null> {
+  const label = name || 'file'
+  // Hosted web: the Thread door's own download link (a person may save
+  // what they may open), so the browser downloads the raw file itself. A
+  // ticket's door has no link: its chunks, as before.
+  const addr = ref.addr
+  const link = isWebClient() && !ref.read && addr ? () => mintAttachmentLink(ref.scope, { addr, docId: ref.docId, n: ref.n }, label) : undefined
   return downloadChunks(
-    name || 'file',
+    label,
     (offset, len) => readAttachment(ref, { mode: THREAD_DOWNLOAD_MODE, offset, len }) as Promise<ReadRangeResponse>,
-    opts.fromOthers ? { quarantine: true } : {},
+    { ...(opts.fromOthers ? { quarantine: true } : {}), ...(link ? { link } : {}) },
   )
 }

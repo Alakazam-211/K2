@@ -62,6 +62,7 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   'lib/connect-validate.ts': 'add-server validation probe',
   'lib/password-rotation.ts': 'password rotation for one host',
   'web/session-token.ts': 'hosted-web cookie session',
+  'lib/file-link.ts': 'a file\'s raw bytes on the transfer door, by a short-lived download token the scoped layer minted (no K2 login, no cookie)',
   // Pre-M1 raw daemon calls that resolve creds through getDaemonWs(scope).
   'stores/tabs.ts': 'closeV2Session(scope): v2/close on the room\'s own scope (M3, MS42)',
   'kessel-term/TerminalPane.tsx': 'v2 spawn (M4 gives the pane a scope prop)',

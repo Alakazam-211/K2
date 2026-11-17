@@ -17,8 +17,18 @@ vi.mock('./daemon-cli', async () => {
   return {
     daemonCliGet: primaryOnly((...args: unknown[]) => daemonCliGetMock(...args)),
     daemonCliPost: vi.fn(),
+    isHostSwitchedError: (e: unknown) => e instanceof Error && e.name === 'HostSwitchedError',
   }
 })
+
+// The download link (lib/file-link has its own test): minted per call,
+// handed to the browser. Unset, the link can't be made (an older server).
+const mintFileLinkMock = vi.fn()
+const startBrowserDownloadMock = vi.fn()
+vi.mock('./file-link', () => ({
+  mintFileLink: (...args: unknown[]) => mintFileLinkMock(...args),
+  startBrowserDownload: (...args: unknown[]) => startBrowserDownloadMock(...args),
+}))
 
 vi.mock('./is-web', () => ({
   isWebClient: () => isWebClientMock(),
@@ -53,6 +63,7 @@ import {
   downloadFile,
   saveBlobInBrowser,
   triggerBrowserDownload,
+  userActivationLive,
 } from './fs-transfer'
 
 describe('base64ToUint8Array', () => {
@@ -73,13 +84,53 @@ describe('downloadFile (hosted web)', () => {
     isCancelRequestedMock.mockReset()
     isCancelRequestedMock.mockReturnValue(false)
     addToastMock.mockClear()
+    mintFileLinkMock.mockReset()
+    mintFileLinkMock.mockRejectedValue(Object.assign(new Error('resumable uploads and download tokens are an App guest’s'), { status: 400, code: 'usage' }))
+    startBrowserDownloadMock.mockReset()
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('streams read-range slices, saves via blob, never invokes Tauri', async () => {
+  it('hands a download link to the browser: no bytes through the page, no read-range, a busy card while it mints', async () => {
+    const link = { url: 'https://rosson.app.k2.dev/_k2/transfers/downloads/0123456789abcdef0123456789abcdef?token=k2dn_x.y', name: 'plans é.pdf', size: 80_000_000, mime: 'application/pdf' }
+    mintFileLinkMock.mockReset()
+    mintFileLinkMock.mockImplementation(async () => {
+      // The card is up while the daemon mints.
+      expect(beginMock).toHaveBeenCalledWith('download', 'plans é.pdf')
+      expect(endMock).not.toHaveBeenCalled()
+      return link
+    })
+    const result = await downloadFile(primaryScope(), '/srv/ws/plans é.pdf')
+    expect(result).toBe('plans é.pdf')
+    expect(mintFileLinkMock).toHaveBeenCalledWith(primaryScope(), '/srv/ws/plans é.pdf')
+    expect(startBrowserDownloadMock).toHaveBeenCalledWith(link)
+    expect(daemonCliGetMock).not.toHaveBeenCalled()
+    expect(addToastMock).toHaveBeenCalledWith('Downloading “plans é.pdf”: your browser shows its progress', 'success', 4000)
+    expect(endMock).toHaveBeenCalledWith('tid-1')
+  })
+
+  it('Cancel while the link is minted: nothing starts', async () => {
+    mintFileLinkMock.mockReset()
+    mintFileLinkMock.mockResolvedValue({ url: 'https://h/_k2/transfers/downloads/x?token=k2dn_x.y', name: 'a.bin', size: 1, mime: 'application/octet-stream' })
+    isCancelRequestedMock.mockReturnValue(true)
+    const result = await downloadFile(primaryScope(), '/srv/ws/a.bin')
+    expect(result).toBeNull()
+    expect(startBrowserDownloadMock).not.toHaveBeenCalled()
+    expect(addToastMock).toHaveBeenCalledWith('Download cancelled', 'info', 3000)
+  })
+
+  it('a host switch while minting ends quietly (no chunked read on the new server)', async () => {
+    mintFileLinkMock.mockReset()
+    mintFileLinkMock.mockRejectedValue(Object.assign(new Error('switched'), { name: 'HostSwitchedError' }))
+    const result = await downloadFile(primaryScope(), '/srv/ws/a.bin')
+    expect(result).toBeNull()
+    expect(daemonCliGetMock).not.toHaveBeenCalled()
+    expect(endMock).toHaveBeenCalledWith('tid-1')
+  })
+
+  it('a server without links: streams read-range slices, saves via blob, never invokes Tauri', async () => {
     // Two chunks of "hi" and "!" — total "hi!"
     daemonCliGetMock
       .mockResolvedValueOnce({
@@ -174,6 +225,27 @@ describe('triggerBrowserDownload / saveBlobInBrowser', () => {
     expect(createObjectURL).toHaveBeenCalled()
     expect(click).toHaveBeenCalled()
     expect(appendChild).toHaveBeenCalled()
+  })
+
+  it('skips the save picker once the click’s user activation has run out (Chromium would refuse it)', async () => {
+    const click = vi.fn()
+    vi.stubGlobal('document', {
+      createElement: () => ({ href: '', download: '', rel: '', style: { display: '' }, click, remove: vi.fn() }),
+      body: { appendChild: vi.fn() },
+    })
+    vi.stubGlobal('URL', { createObjectURL: () => 'blob:x', revokeObjectURL: vi.fn() })
+    const showSaveFilePicker = vi.fn()
+    vi.stubGlobal('showSaveFilePicker', showSaveFilePicker)
+    vi.stubGlobal('navigator', { userActivation: { isActive: false } })
+    expect(userActivationLive()).toBe(false)
+    const name = await saveBlobInBrowser(new Blob(['a']), 'late.bin')
+    expect(name).toBe('late.bin')
+    expect(showSaveFilePicker).not.toHaveBeenCalled()
+    expect(click).toHaveBeenCalled()
+    vi.stubGlobal('navigator', { userActivation: { isActive: true } })
+    expect(userActivationLive()).toBe(true)
+    vi.stubGlobal('navigator', {})
+    expect(userActivationLive()).toBe(true)
   })
 
   it('triggerBrowserDownload sets download attribute', () => {

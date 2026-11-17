@@ -11,7 +11,7 @@ import { PdfTab } from '@/components/Pdf/PdfTab'
 import { usePdfDocument } from '@/components/Pdf/usePdfDocument'
 
 export function PDFViewer({ filePath }: { filePath: string }): React.JSX.Element {
-  const { doc, binary, loading, error } = usePdfDocument(filePath)
+  const { doc, binary, loading, error, progress } = usePdfDocument(filePath)
   if (doc && !loading) return <PdfTab doc={doc} binary={binary} filePath={filePath} />
   const name = fileNameOf(filePath)
   return (
@@ -26,8 +26,8 @@ export function PDFViewer({ filePath }: { filePath: string }): React.JSX.Element
             <span className="type-hint max-w-[420px] text-[var(--color-text-secondary)]">{error}</span>
           </>
         ) : (
-          <span role="status" className="type-row text-[var(--color-text-secondary)]">
-            Opening the PDF…
+          <span role="status" data-testid="pdf-tab-opening" className="type-row text-[var(--color-text-secondary)]">
+            {progress !== null && progress < 1 ? `Opening the PDF… ${Math.floor(progress * 100)}%` : 'Opening the PDF…'}
           </span>
         )}
       </div>

@@ -7,14 +7,18 @@
 // daemon IO is host-aware via `daemonCli*` (works identically on the
 // local daemon and a K2 Connect remote).
 //
-// Hosted web (VITE_WEB): no Tauri `local_download_chunk` — stream the same
-// `fs/read-range` slices into a browser Blob / File System Access write and
-// trigger the browser download (parity with HTML5 upload).
+// Hosted web (VITE_WEB): no Tauri `local_download_chunk`. A download is a
+// link to the file's raw bytes on the daemon's transfer door
+// (`lib/file-link`), handed to the browser's own download manager: streamed
+// to disk with the browser's progress, nothing held in the page, no `/cli`
+// slot held. A server without download links falls back to streaming the
+// same `fs/read-range` slices into a Blob and saving that.
 
 import { invoke } from '@tauri-apps/api/core'
 
-import { daemonCliGet, daemonCliPost } from './daemon-cli'
+import { daemonCliGet, daemonCliPost, isHostSwitchedError } from './daemon-cli'
 import { isWebClient } from './is-web'
+import { mintFileLink, startBrowserDownload, type FileLink } from './file-link'
 import { useToastStore } from '@/stores/toast'
 import { useTransferProgressStore } from '@/stores/transfer-progress'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -229,7 +233,10 @@ export async function saveBlobInBrowser(blob: Blob, filename: string): Promise<s
     suggestedName?: string
   }) => Promise<{ createWritable: () => Promise<{ write: (d: Blob) => Promise<void>; close: () => Promise<void> }> }>
   const w = globalThis as unknown as { showSaveFilePicker?: SavePicker }
-  if (typeof w.showSaveFilePicker === 'function') {
+  // The picker needs the click's user activation: after a long read it has
+  // run out (Chromium refuses with a SecurityError), and a save dialog
+  // seconds after the click is a surprise anyway. Then: the plain download.
+  if (typeof w.showSaveFilePicker === 'function' && userActivationLive()) {
     try {
       const handle = await w.showSaveFilePicker({ suggestedName: name })
       const writable = await handle.createWritable()
@@ -249,6 +256,13 @@ export async function saveBlobInBrowser(blob: Blob, filename: string): Promise<s
   return name
 }
 
+/** Does the page still hold the click's user activation? True where the
+ *  browser can't say (`navigator.userActivation` missing). */
+export function userActivationLive(): boolean {
+  const ua = (globalThis as unknown as { navigator?: { userActivation?: { isActive?: boolean } } }).navigator?.userActivation
+  return ua === undefined || ua.isActive !== false
+}
+
 /**
  * Stream a file from the ACTIVE daemon's disk onto THIS machine.
  *
@@ -262,8 +276,10 @@ export async function saveBlobInBrowser(blob: Blob, filename: string): Promise<s
  * @returns a local path (desktop) or the saved filename (web), or null.
  */
 export async function downloadFile(scope: ServerScope, remotePath: string): Promise<string | null> {
-  return downloadChunks(baseName(remotePath), (offset, len) =>
-    daemonCliGet<ReadRangeResponse>(scope, 'fs/read-range', { path: remotePath, offset, len }),
+  return downloadChunks(
+    baseName(remotePath),
+    (offset, len) => daemonCliGet<ReadRangeResponse>(scope, 'fs/read-range', { path: remotePath, offset, len }),
+    { link: () => mintFileLink(scope, remotePath) },
   )
 }
 
@@ -285,16 +301,59 @@ export async function downloadChunks(
   opts: DownloadOptions = {},
 ): Promise<string | null> {
   if (isWebClient()) {
+    if (opts.link) {
+      const saved = await downloadLinkInBrowser(label, opts.link)
+      if (saved !== FALL_BACK) return saved
+    }
     return downloadChunksInBrowser(label, read)
   }
   return downloadChunksDesktop(label, read, opts)
 }
 
-/** How a download lands (desktop). */
+/** How a download lands. */
 export interface DownloadOptions {
   /** Mark the file `com.apple.quarantine` on macOS (a file a Garden widget
-   *  made: Gatekeeper asks before it opens). */
+   *  made: Gatekeeper asks before it opens). Desktop only. */
   quarantine?: boolean
+  /** Hosted web: a link to the file's raw bytes on the transfer door
+   *  (`lib/file-link`). When it can be made, the browser downloads it
+   *  itself; when not (an older server), the chunked read runs instead. */
+  link?: () => Promise<FileLink>
+}
+
+const FALL_BACK = Symbol('fall back to the chunked read')
+
+/**
+ * Hosted-web path with a link: a busy card while the daemon mints it, then
+ * the browser's own download (its progress, streamed to disk). Resolves to
+ * the file's name, or {@link FALL_BACK} when no link could be made (the
+ * caller reads the chunks instead, which reports a real error itself).
+ */
+async function downloadLinkInBrowser(label: string, makeLink: () => Promise<FileLink>): Promise<string | null | typeof FALL_BACK> {
+  const toast = useToastStore.getState()
+  const tid = useTransferProgressStore.getState().begin('download', label)
+  let link: FileLink
+  try {
+    link = await makeLink()
+  } catch (err) {
+    useTransferProgressStore.getState().end(tid)
+    // The window moved to another server mid-click: nothing to save here.
+    return isHostSwitchedError(err) ? null : FALL_BACK
+  }
+  try {
+    if (useTransferProgressStore.getState().isCancelRequested(tid)) {
+      toast.addToast('Download cancelled', 'info', 3000)
+      return null
+    }
+    startBrowserDownload(link)
+    toast.addToast(`Downloading “${link.name}”: your browser shows its progress`, 'success', 4000)
+    return link.name
+  } catch (err) {
+    toast.addToast(`Download failed: ${err instanceof Error ? err.message : String(err)}`, 'error')
+    return null
+  } finally {
+    useTransferProgressStore.getState().end(tid)
+  }
 }
 
 /** Desktop path: Tauri local_download_chunk → ~/Downloads. */

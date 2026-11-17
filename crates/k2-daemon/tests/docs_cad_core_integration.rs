@@ -321,15 +321,17 @@ async fn the_cad_core_headless() {
     let (st, v) = av(port, &cfg, &[&notes], "read");
     refused("a set with a .md", st, &v.to_string(), 400, "not_a_drawing");
 
-    // ── 5. A DWG: the DWG reader, refused typed (the builder writes no objects) ──
-    let (st, body) = draw(port, &site, "&what=header");
-    let e = json_of("draw header on the builder's DWG", &body);
-    assert_eq!((st, &e["ok"]), (422, &json!(false)), "{body}");
-    assert!(e["error"]["id"].as_str().is_some_and(|id| id.starts_with("DWG-E")), "the DWG reader's refusal: {body}");
-    assert!(e["error"]["code"].as_str().is_some_and(|c| !c.is_empty()), "the refusal's name: {body}");
-    let (st, v) = read(port, &site, &["layer", "list"]);
-    assert_eq!(st, 422, "{v}");
-    assert!(v["error"]["id"].as_str().is_some_and(|id| id.starts_with("DWG-E")), "{v}");
+    // ── 5. A DWG: the DWG reader, refused typed. The builder's container
+    //       reads (its header, page and section maps), but it writes no
+    //       drawing objects, so the reader finds no handles section: a
+    //       drawing that doesn't open is 422 with the reader's own refusal ──
+    let header_answer = draw(port, &site, "&what=header");
+    let layers_answer = read(port, &site, &["layer", "list"]);
+    for (what, st, body) in [("draw header", header_answer.0, header_answer.1), ("layer list", layers_answer.0, layers_answer.1.to_string())] {
+        let e = json_of(what, &body);
+        assert_eq!((st, &e["ok"], &e["error"]["id"], &e["error"]["code"]), (422, &json!(false), &json!("CAD-E010"), &json!("address_not_found")), "{what} on the builder's DWG: {body}");
+        assert!(e["error"]["hint"].as_str().is_some_and(|h| h.contains("AcDb:Handles")), "the DWG reader's words: {body}");
+    }
     let (st, v) = read(port, &site, &["check"]);
     refused("check on a DWG", st, &v.to_string(), 400, "bad_request");
 

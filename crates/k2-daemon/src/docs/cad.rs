@@ -110,6 +110,17 @@ pub fn cad_refusal(e: &CadError) -> CliResponse {
         ("usage" | "name_ambiguous" | "not_a_boundary" | "bad_config", _) => "400 Bad Request",
         _ => "422 Unprocessable Entity",
     };
+    cad_refusal_as(e, status)
+}
+
+/// A drawing that doesn't open: `422` whatever the pack's code (a DWG
+/// missing a section says `address_not_found`, which is about the file,
+/// not a caller's address), with the pack's name, id and exit.
+fn unreadable(e: &CadError) -> CliResponse {
+    cad_refusal_as(e, "422 Unprocessable Entity")
+}
+
+fn cad_refusal_as(e: &CadError, status: &'static str) -> CliResponse {
     let hint = if e.next.is_empty() { e.why.clone() } else { format!("{}: {}", e.why, e.next) };
     let mut r = routes::with_exit(refusal(status, e.code.name, hint), e.code.exit);
     if let Ok(mut v) = serde_json::from_str::<Value>(&r.body) {
@@ -197,7 +208,7 @@ pub fn head(rt: &Arc<super::Runtime>, t: &Target) -> Result<(VersionId, Opened),
         .read_to_vec_of(&key.space, id, &st.current.blob, super::blob_max_bytes())
         .map_err(|e| routes::session_error(&SessionError::Blob(e)))?;
     let opened = match kind {
-        BlobKind::Dwg => Opened::Dwg(Arc::new(DwgDrawing::open(&bytes, &k2_mpc_dwg::Limits::default()).map_err(|e| cad_refusal(&e))?)),
+        BlobKind::Dwg => Opened::Dwg(Arc::new(DwgDrawing::open(&bytes, &k2_mpc_dwg::Limits::default()).map_err(|e| unreadable(&e))?)),
         _ => Opened::Dxf(Arc::new(bytes)),
     };
     cache().put(key, st.version, st.current.blob, opened.clone());

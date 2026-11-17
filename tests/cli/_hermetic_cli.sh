@@ -22,8 +22,11 @@ hermetic_cli_env() {
     export K2_TEST_HOME
     export HOME="$K2_TEST_HOME"
     # Never inherit a session's connection or identity from the caller.
+    # The CLI reads K5_ names first, so they go too, before the dummies.
     unset K2SO_PORT K2SO_HOOK_TOKEN K2_HOOK_SOCK K2SO_HOOK_SOCK K2_HOST \
         K2_PROJECT_PATH K2SO_PROJECT_PATH K2_CELL K2_API_CELL
+    unset K5_PORT K5_HOOK_TOKEN K5_HOOK_SOCK K5_HOST K5_PROJECT_PATH \
+        K5_CELL K5_API_CELL K5_CLI_VIA K5_CLI_NOTICE_DONE K5_CLI_CALLED_AS
     export K2_PORT=1
     export K2_HOOK_TOKEN=test-token
     trap hermetic_cli_cleanup EXIT

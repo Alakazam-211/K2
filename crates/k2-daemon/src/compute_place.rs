@@ -57,6 +57,11 @@ mod backlog;
 #[path = "compute_why_not.rs"]
 pub mod why_not;
 
+/// Placement's reads stay cheap over a long job history (0312).
+#[cfg(test)]
+#[path = "compute_place_lock_tests.rs"]
+mod lock_tests;
+
 // ── controller awake time ────────────────────────────────────────────
 
 static AWAKE_SINCE: AtomicI64 = AtomicI64::new(0);
@@ -1146,17 +1151,14 @@ pub fn largest_job_mem(w: &Want, now: i64) -> Option<u64> {
 /// [`candidates_report`] without the package step (prewarm reports every
 /// node's package states itself and files one batched request).
 pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandReport {
-    let (rows, cache_at, waits, permit, pinned_only) = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let cache_at = w.cache.as_deref().and_then(|name| cache_node(&conn, &w.ws_id, name));
-        // The workspace's node list (0.46.8): for every caller, named node
-        // or auto, and every move.
-        let permit = k2_core::compute::allow::permit(&conn, &w.ws_id);
-        // The nodes that take only jobs that name them: for auto only.
-        let pinned_only = k2_core::compute::pinned_only::all(&conn);
-        (store::list_nodes(&conn, false), cache_at, SoloWaits::read(&conn, now), permit, pinned_only)
-    };
+    // One pooled read for every node: the node list, this workspace's
+    // grants, and every queued and active job, in one snapshot. Never the
+    // main lock (a read never waits behind a writer, nor holds one up),
+    // never a lock per node.
+    let snap = k2_core::db::read(|conn| PlaceSnapshot::read(conn, w));
+    let PlaceSnapshot { nodes: rows, cache_at, permit, pinned_only, mut grants, queued, active } = snap;
+    let waits = SoloWaits::of(&queued, &active, now);
+    let by_node = |list: &[JobRow], id: &str| -> Vec<JobRow> { list.iter().filter(|j| j.node_id == id).cloned().collect() };
     let feats = required_features(w);
     let mut out = CandReport::default();
     let skipped = |out: &mut CandReport, code: &'static str| *out.skipped.entry(code).or_insert(0) += 1;
@@ -1164,12 +1166,20 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
         if exclude.contains(&n.id) {
             continue;
         }
+        // The node's live state (the engine lock), with no database lock held.
+        let (online, _, live) = compute_ws::live_view(&n.id);
+        let node_queued = by_node(&queued, &n.id);
+        let node_active = by_node(&active, &n.id);
         let (grant, queued_ws, queued_all, load) = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            let g = store::grant(&conn, &n.id, &w.ws_id);
-            let (q, load) = compute_ws::queued_view(&conn, &n.id);
-            (g, store::queued_count(&conn, &n.id, &w.ws_id), q.len(), load)
+            let g = grants.remove(&n.id);
+            let (q, load) = compute_ws::queued_view_of(&node_queued, &node_active, live.as_ref());
+            // As `store::queued_count`: queued, or assigned and in the node's queue.
+            let queued_ws = node_queued
+                .iter()
+                .chain(node_active.iter())
+                .filter(|j| j.workspace_id == w.ws_id && (j.state == "queued" || (j.state == "assigned" && j.node_queued)))
+                .count() as i64;
+            (g, queued_ws, q.len(), load)
         };
         // F2 (D1): auto never crosses grants; the owner/Admin bypass is for
         // a node they name.
@@ -1209,7 +1219,6 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
             skipped(&mut out, skip::QUEUE_FULL);
             continue;
         }
-        let (online, _, live) = compute_ws::live_view(&n.id);
         let Some(offer) = live.filter(|_| online).or_else(|| n.last_offer.clone()) else {
             skipped(&mut out, skip::OFFLINE);
             continue;
@@ -1285,7 +1294,7 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
         let pending = pending_for(&n.id, online.then_some(offer.revision), now);
         let recent = recent_for(&n.id, now);
         let holds_cache = cache_at.as_deref() == Some(n.id.as_str());
-        let est_wait = online.then(|| backlog::est_wait(&waits, &n.id, &offer, grant.as_ref(), &load, &w.ws_id, now)).flatten();
+        let est_wait = online.then(|| backlog::est_wait(&waits, &n.id, &offer, grant.as_ref(), &load, &w.ws_id, node_queued.iter().chain(node_active.iter()), now)).flatten();
         let held_wait = if share::is_shared(&offer) { waits.held_eta(&n.id, offer.parallel_max) } else { 0 };
         let gen_heads = if online { crate::compute_ws::trusted_heads(&n.id) } else { Vec::new() };
         out.cands.push(Cand { node: n, online, offer, load, queued: queued_all, grant, pending, recent, holds_cache, est_wait, held_wait, gen_heads, ws_id: w.ws_id.clone() });
@@ -1374,19 +1383,21 @@ pub struct SoloWaits {
 }
 
 impl SoloWaits {
-    pub fn read(conn: &rusqlite::Connection, now: i64) -> Self {
+    /// From rows already read: every queued job ([`store::queued_jobs`])
+    /// and every active one ([`store::active_jobs`]).
+    pub fn of(queued: &[JobRow], active: &[JobRow], now: i64) -> Self {
         let est = |j: &JobRow| j.est_secs.filter(|e| *e > 0).map(|e| e as u64);
         let mut w = SoloWaits::default();
-        for j in store::queued_jobs(conn) {
-            w.ahead.entry(j.node_id.clone()).or_default().push(est(&j));
-            w.held.entry(j.node_id.clone()).or_default().push(est(&j));
+        for j in queued {
+            w.ahead.entry(j.node_id.clone()).or_default().push(est(j));
+            w.held.entry(j.node_id.clone()).or_default().push(est(j));
         }
-        for j in store::active_jobs(conn) {
+        for j in active {
             if j.node_queued {
-                w.ahead.entry(j.node_id.clone()).or_default().push(est(&j));
+                w.ahead.entry(j.node_id.clone()).or_default().push(est(j));
                 continue;
             }
-            let left = match (j.started_at, est(&j)) {
+            let left = match (j.started_at, est(j)) {
                 (Some(s), Some(e)) => Some((s + e as i64 - now).max(0) as u64),
                 (None, Some(e)) => Some(e),
                 (_, None) => None,
@@ -1407,6 +1418,39 @@ impl SoloWaits {
     pub fn eta(&self, node_id: &str, parallel_max: u32) -> u64 {
         let none = Vec::new();
         solo_eta(self.ahead.get(node_id).unwrap_or(&none), self.left.get(node_id).unwrap_or(&none), parallel_max)
+    }
+}
+
+/// What placement reads of the database for one report, in one read
+/// transaction ([`candidates_report_raw`]).
+pub struct PlaceSnapshot {
+    pub nodes: Vec<store::NodeRow>,
+    /// The node that holds the job's `--cache` ([`cache_node`]).
+    pub cache_at: Option<String>,
+    pub permit: k2_core::compute::allow::Permit,
+    pub pinned_only: k2_core::compute::pinned_only::Pinned,
+    /// This workspace's grants, by node.
+    pub grants: HashMap<String, store::GrantRow>,
+    /// Every queued job, oldest first ([`store::queued_jobs`]).
+    pub queued: Vec<JobRow>,
+    /// Every job in an active state, oldest first ([`store::active_jobs`]).
+    pub active: Vec<JobRow>,
+}
+
+impl PlaceSnapshot {
+    pub fn read(conn: &rusqlite::Connection, w: &Want) -> Self {
+        PlaceSnapshot {
+            cache_at: w.cache.as_deref().and_then(|name| cache_node(conn, &w.ws_id, name)),
+            // The workspace's node list (0.46.8): for every caller, named
+            // node or auto, and every move.
+            permit: k2_core::compute::allow::permit(conn, &w.ws_id),
+            // The nodes that take only jobs that name them: for auto only.
+            pinned_only: k2_core::compute::pinned_only::all(conn),
+            nodes: store::list_nodes(conn, false),
+            grants: store::grants(conn, None, Some(&w.ws_id)).into_iter().map(|g| (g.node_id.clone(), g)).collect(),
+            queued: store::queued_jobs(conn),
+            active: store::active_jobs(conn),
+        }
     }
 }
 
@@ -2323,9 +2367,8 @@ pub fn sweep(now: i64) {
 
     // Lost nodes: running work on a node gone for `node_lost_secs`.
     let active = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        store::active_jobs(&conn)
+        // A pooled read: the sweep's snapshot never holds the writer's lock.
+        k2_core::db::read(store::active_jobs)
     };
     for j in active {
         let Some(n) = nodes.get(&j.node_id) else { continue };
@@ -2367,9 +2410,8 @@ pub fn sweep(now: i64) {
 
     // Queued work: deadlines, then moves.
     let queued = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        store::queued_jobs(&conn)
+        // A pooled read: the sweep's snapshot never holds the writer's lock.
+        k2_core::db::read(store::queued_jobs)
     };
     let mut decisions: HashMap<String, scheduler::Decision> = HashMap::new();
     let mut changed = false;

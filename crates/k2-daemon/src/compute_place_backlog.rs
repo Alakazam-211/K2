@@ -25,7 +25,7 @@
 
 use k2_core::compute::proto::frames::Offer;
 use k2_core::compute::share;
-use k2_core::compute::store::{self, GrantRow, JobRow};
+use k2_core::compute::store::{GrantRow, JobRow};
 
 use super::{scheduler, solo_eta, Cand, SoloWaits, Want};
 
@@ -48,7 +48,20 @@ impl Cand {
 /// ([`SoloWaits::eta`], as before); on a shared node, only while the
 /// workspace runs its grant's most jobs there, its own line there (the
 /// node's quote can't know that limit). `None`: the quote stands.
-pub(super) fn est_wait(waits: &SoloWaits, node_id: &str, offer: &Offer, grant: Option<&GrantRow>, load: &scheduler::Load, ws_id: &str, now: i64) -> Option<u64> {
+///
+/// `node_jobs`: the node's queued and active jobs, read with the rest of
+/// placement's snapshot (one query for every node, never a lock per node).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn est_wait<'a>(
+    waits: &SoloWaits,
+    node_id: &str,
+    offer: &Offer,
+    grant: Option<&GrantRow>,
+    load: &scheduler::Load,
+    ws_id: &str,
+    node_jobs: impl IntoIterator<Item = &'a JobRow>,
+    now: i64,
+) -> Option<u64> {
     if !share::is_shared(offer) {
         return Some(waits.eta(node_id, offer.parallel_max));
     }
@@ -56,14 +69,7 @@ pub(super) fn est_wait(waits: &SoloWaits, node_id: &str, offer: &Offer, grant: O
     if load.running_by_workspace.get(ws_id).copied().unwrap_or(0) < cap {
         return None;
     }
-    let jobs = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let mut states = vec!["queued"];
-        states.extend_from_slice(store::ACTIVE_STATES);
-        store::jobs_in_states(&conn, node_id, &states)
-    };
-    Some(ws_line(jobs.iter().filter(|j| j.workspace_id == ws_id).map(line_entry), cap, now))
+    Some(ws_line(node_jobs.into_iter().filter(|j| j.workspace_id == ws_id).map(line_entry), cap, now))
 }
 
 /// One job of the line: (waiting to start, started at, its estimate).

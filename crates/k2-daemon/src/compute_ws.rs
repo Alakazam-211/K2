@@ -2734,19 +2734,31 @@ fn send_to(node_id: &str, f: Frame) -> bool {
 // ── placement ────────────────────────────────────────────────────────
 
 /// Queued jobs on a node as the scheduler sees them.
-pub fn queued_view(conn: &rusqlite::Connection, node_id: &str) -> (Vec<scheduler::QueuedJob>, scheduler::Load) {
+///
+/// `offer` is the node's live offer ([`live_view`]), read by the caller
+/// before it takes the database (the engine lock is never taken under the
+/// database's). GPU jobs S6: a GPU job's memory there counts its GPU
+/// memory on a unified GPU (what the node itself counts).
+pub fn queued_view_for(conn: &rusqlite::Connection, node_id: &str, offer: Option<&Offer>) -> (Vec<scheduler::QueuedJob>, scheduler::Load) {
+    let queued = store::jobs_in_states(conn, node_id, &["queued"]);
+    let active = store::jobs_in_states(conn, node_id, store::ACTIVE_STATES);
+    queued_view_of(&queued, &active, offer)
+}
+
+/// [`queued_view_for`] from rows already read: `queued` = the node's
+/// queued jobs, `active` = its jobs in [`store::ACTIVE_STATES`], each oldest
+/// first. Pure, so placement reads every node's rows in one query
+/// ([`store::queued_jobs`], [`store::active_jobs`]) and splits them.
+pub fn queued_view_of(queued: &[store::JobRow], active: &[store::JobRow], offer: Option<&Offer>) -> (Vec<scheduler::QueuedJob>, scheduler::Load) {
     let now = compute::now();
-    // GPU jobs S6: a GPU job's memory there counts its GPU memory on a
-    // unified GPU (what the node itself counts).
-    let offer = live_view(node_id).2;
-    let queue = store::jobs_in_states(conn, node_id, &["queued"])
-        .into_iter()
+    let queue = queued
+        .iter()
         // A retry waiting out its backoff isn't placeable yet.
         .filter(|j| j.ctl.not_before.is_none_or(|nb| nb <= now))
-        .map(|j| qjob_of(&j, offer.as_ref()))
+        .map(|j| qjob_of(j, offer))
         .collect();
     let mut load = scheduler::Load::default();
-    for j in store::jobs_in_states(conn, node_id, store::ACTIVE_STATES) {
+    for j in active {
         *load.running_by_workspace.entry(j.workspace_id.clone()).or_insert(0) += 1;
         load.exclusive_running |= j.exclusive;
         // L3: CI never counts toward a per-submitter cap.
@@ -2959,7 +2971,7 @@ pub fn decision_for(node_id: &str) -> scheduler::Decision {
         }
         return scheduler::Decision { place: None, waiting };
     }
-    let (queue, load) = queued_view(&conn, node_id);
+    let (queue, load) = queued_view_for(&conn, node_id, offer.as_ref());
     let grants: HashMap<String, crate::compute_place::GrantCaps> =
         store::grants(&conn, Some(node_id), None).into_iter().map(|g| (g.workspace_id.clone(), crate::compute_place::GrantCaps::of(&g))).collect();
     let par = |ws: &str| grants.get(ws).map(|c| c.ws).unwrap_or(1);

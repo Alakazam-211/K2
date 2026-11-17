@@ -1006,14 +1006,13 @@ pub(crate) fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_
     };
     // CE-9: `jobs --tag NAME` (in SQL, so --limit counts matching jobs).
     let tag = tag_param(params.get("tag").map(String::as_str))?;
-    let rows = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
+    // A pooled read: listing never holds the writer's lock.
+    let rows = k2_core::db::read(|conn| {
         store::list_jobs(
-            &conn,
+            conn,
             &store::JobFilter { node_id: node.as_deref(), workspace_id: ws.as_deref(), state, session_id: session.as_deref(), limit, tier, tag },
         )
-    };
+    });
     // Queued rows carry the queue view (one scheduler pass per node).
     let mut decisions: HashMap<String, scheduler::Decision> = HashMap::new();
     let jobs: Vec<serde_json::Value> = rows

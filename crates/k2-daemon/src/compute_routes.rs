@@ -3152,11 +3152,11 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
     let decision = compute_ws::decision_for(&n.id);
     let ahead = decision.waiting.len();
     let blocking = decision.waiting.values().min_by_key(|(pos, _)| *pos).map(|(_, r)| serde_json::json!({"code": r.code, "message": r.message}));
-    let (queued_ws, load) = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        (store::queued_count(&conn, &n.id, &f.ws.id), compute_ws::queued_view(&conn, &n.id).1)
-    };
+    // The live offer (engine lock) first, then a pooled read: never the
+    // engine lock under the database's, never a write lock for a read.
+    let offer = compute_ws::live_view(&n.id).2;
+    let (queued_ws, load) =
+        k2_core::db::read(|conn| (store::queued_count(conn, &n.id, &f.ws.id), compute_ws::queued_view_for(conn, &n.id, offer.as_ref()).1));
     let running_ws = load.running_by_workspace.get(&f.ws.id).copied().unwrap_or(0);
     // Warm slot: the commit this run would use, against the node's slots.
     let warm = warm_key(f.ws, f.v)

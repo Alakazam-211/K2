@@ -1155,15 +1155,47 @@ pub struct JobFilter<'a> {
 
 pub fn list_jobs(conn: &Connection, f: &JobFilter<'_>) -> Vec<JobRow> {
     let limit = if f.limit <= 0 { 50 } else { f.limit.min(500) };
-    let Ok(mut stmt) = conn.prepare(&format!(
-        "SELECT {JOB_COLS} FROM compute_jobs WHERE (?1 IS NULL OR node_id = ?1) AND (?2 IS NULL OR workspace_id = ?2) \
-         AND (?3 IS NULL OR state = ?3 OR (?3 = 'queued' AND state = 'assigned' AND node_queued = 1)) AND (?4 IS NULL OR session_id = ?4) \
-         AND (?6 IS NULL OR tier = ?6) AND (?7 IS NULL OR json_extract(plan_json, '$.k2ctl.tag') = ?7) \
-         ORDER BY created_at DESC, id DESC LIMIT ?5"
-    )) else {
+    // Only the filters given go in the SQL, so an index serves each one
+    // (`?1 IS NULL OR col = ?1` defeats every index: a full scan of the
+    // table, plans and all, for each list; 0312).
+    let mut terms: Vec<&str> = Vec::new();
+    let mut args: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    if let Some(n) = f.node_id.as_ref() {
+        terms.push("node_id = ?");
+        args.push(n);
+    }
+    if let Some(w) = f.workspace_id.as_ref() {
+        terms.push("workspace_id = ?");
+        args.push(w);
+    }
+    if let Some(st) = f.state.as_ref() {
+        if *st == "queued" {
+            // `IN` first, so the state indexes serve it (an `OR` here
+            // would read every row of the node or the table).
+            terms.push("state IN (?, 'assigned') AND (state = 'queued' OR node_queued = 1)");
+        } else {
+            terms.push("state = ?");
+        }
+        args.push(st);
+    }
+    if let Some(sid) = f.session_id.as_ref() {
+        terms.push("session_id = ?");
+        args.push(sid);
+    }
+    if let Some(t) = f.tier.as_ref() {
+        terms.push("tier = ?");
+        args.push(t);
+    }
+    if let Some(tag) = f.tag.as_ref() {
+        terms.push("json_extract(plan_json, '$.k2ctl.tag') = ?");
+        args.push(tag);
+    }
+    let filter = if terms.is_empty() { String::new() } else { format!("WHERE {}", terms.join(" AND ")) };
+    args.push(&limit);
+    let Ok(mut stmt) = conn.prepare(&format!("SELECT {JOB_COLS} FROM compute_jobs {filter} ORDER BY created_at DESC, id DESC LIMIT ?")) else {
         return Vec::new();
     };
-    stmt.query_map(params![f.node_id, f.workspace_id, f.state, f.session_id, limit, f.tier, f.tag], job_from_row)
+    stmt.query_map(args.as_slice(), job_from_row)
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default()
 }

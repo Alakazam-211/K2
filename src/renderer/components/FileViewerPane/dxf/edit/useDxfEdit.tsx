@@ -83,10 +83,11 @@ export function useDxfEdit(p: {
   // A block being placed: its ghost waits for the pointer; it stays where it was placed while the form asks for labels, and goes when placing stops.
   const placing = flow.step?.step === 'place' ? flow.step.block : null
   const inserting = !!flow.step
+  // (Shown again when the drawing is read again mid-placing.)
   useEffect(() => {
     if (placing) ghostApi.block(placing.handle, placing.base, placing.bbox)
     else if (!inserting) ghostApi.clear()
-  }, [placing, inserting, ghostApi])
+  }, [placing, inserting, ghostApi, p.drawing])
   // Selecting something stops placing a block.
   const cancelFlow = flow.cancel
   useEffect(() => {

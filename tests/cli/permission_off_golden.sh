@@ -35,19 +35,24 @@
 #     differs between macOS /private/tmp and Linux /tmp)
 #   * a `User-Agent: curl/x.y.z` / `Python-urllib/x.y` value → …/<VERSION>
 #   * ONLY when the CLI under test is not the bash source (the k5 binary,
-#     K5_CLI_UNDER_TEST): a request log line that is exactly
-#     `> X-K5-Cli-Via: fallthrough` or `> X-K5-Cli-Via: native` is dropped.
-#     The binary hands a verb it doesn't answer to the bash with
-#     K5_CLI_VIA=rust, and the bash then marks every daemon request with
-#     that one header on each request it sends with curl
-#     (tests/cli/k5_cli_via.sh); the goldens are bash's bytes. It is
-#     counted, not trusted: each request in the log sent by curl
-#     (`User-Agent: curl/…`) must carry exactly one such line and any other
-#     request none (the bash's embedded python, e.g. `k2 project create`,
-#     does not mark its calls), so the lines dropped equal the curl
-#     requests sent (none with no request). Anything else fails the capture
-#     loudly, naming it and the counts. On the bash CLI none of this runs: a
-#     Via line there stays and fails against its golden.
+#     K5_CLI_UNDER_TEST): two request log lines are dropped, a line that is
+#     exactly `> X-K5-Cli-Via: fallthrough` or `> X-K5-Cli-Via: native`,
+#     and a line that is exactly `> X-K5-Cli-Noun: <noun>`, where <noun> is
+#     the capture's first word (`project` for `k2 project create demo`;
+#     `other` when that word is not [a-z][a-z0-9-]{0,31}, as the bash
+#     sends it). The binary hands a verb it doesn't answer to the bash with
+#     K5_CLI_VIA=rust, and the bash then marks every daemon request it
+#     sends, with curl and from its embedded python's urlopen alike, with
+#     those two headers (tests/cli/k5_cli_via.sh); the goldens are bash's
+#     bytes. It is counted, not trusted: each request in the log sent by
+#     curl (`User-Agent: curl/…`) or by the embedded python
+#     (`User-Agent: Python-urllib/…`, e.g. `k2 project create`) must carry
+#     exactly one Via line and exactly one Noun line, and any other request
+#     neither, so the lines dropped are twice the requests the bash sent
+#     (none with no request). A Noun line naming another word is not
+#     dropped. Anything else fails the capture loudly, naming it and the
+#     counts. On the bash CLI none of this runs: a Via or Noun line there
+#     stays and fails against its golden.
 #
 # Modes:
 #   bash tests/cli/permission_off_golden.sh              compare (fails loudly on any diff or missing fixture)
@@ -155,8 +160,8 @@ mkdir -p "$HOME" "$SANDBOX/ws"
 cd "$SANDBOX/ws"
 
 normalize() {
-    # stdin → stdout. Never drops a line (the Via lines go before it, in
-    # drop_via, and only for the binary).
+    # stdin → stdout. Never drops a line (the Via and Noun lines go before
+    # it, in drop_via, and only for the binary).
     python3 -I -c '
 import re, sys
 ver, port, sandbox = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -194,43 +199,50 @@ sys.stdout.write(t)
 ' "$CLI_VERSION" "$PORT" "$SANDBOX"
 }
 
-# drop_via <capture> <log> <out>: the binary's request log without its
-# X-K5-Cli-Via lines. Drops only a line that is exactly the header, and
-# fails (non-zero, naming the capture and the counts) unless every request
-# sent by curl carries exactly one and every other request none, so the
-# lines dropped equal the curl requests sent.
+# drop_via <capture> <log> <out> <first word>: the binary's request log
+# without its X-K5-Cli-Via and X-K5-Cli-Noun lines. Drops only a line that
+# is exactly one of the headers (the Noun's value the noun of <first
+# word>), and fails (non-zero, naming the capture and the counts) unless
+# every request sent by curl or by the embedded python carries exactly one
+# of each and every other request neither, so the lines dropped are twice
+# the requests the bash sent.
 drop_via() {
     python3 -I -c '
 import re, sys
-name, src, dst = sys.argv[1], sys.argv[2], sys.argv[3]
+name, src, dst, word = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+# The bash sends a word the daemon would not take as `other` (_k5_headers).
+noun = word if re.fullmatch(r"[a-z][a-z0-9-]{0,31}", word) else "other"
 request = re.compile(r"> [A-Z]+ /")
 via = re.compile(r"> X-K5-Cli-Via: (fallthrough|native)\r?")
+noun_line = re.compile(r"> X-K5-Cli-Noun: " + re.escape(noun) + r"\r?")
 with open(src, encoding="utf-8", errors="surrogateescape", newline="") as f:
     lines = f.read().split("\n")
-curl_agent = re.compile(r"> User-Agent: curl/")
-# Per request: [marker lines dropped, sent by curl].
+bash_agent = re.compile(r"> User-Agent: (curl|Python-urllib)/")
+# Per request: [Via lines dropped, Noun lines dropped, sent by the bash].
 kept, per_request, stray = [], [], 0
 for line in lines:
     if request.match(line):
-        per_request.append([0, False])
-    elif per_request and curl_agent.match(line):
-        per_request[-1][1] = True
-    if via.fullmatch(line):
+        per_request.append([0, 0, False])
+    elif per_request and bash_agent.match(line):
+        per_request[-1][2] = True
+    which = 0 if via.fullmatch(line) else 1 if noun_line.fullmatch(line) else None
+    if which is not None:
         if per_request:
-            per_request[-1][0] += 1
+            per_request[-1][which] += 1
         else:
             stray += 1
         continue
     kept.append(line)
 requests = len(per_request)
-by_curl = sum(1 for _, c in per_request if c)
-dropped = sum(n for n, _ in per_request) + stray
-if dropped != by_curl or stray or any(n != (1 if c else 0) for n, c in per_request):
-    sys.stderr.write("  FAIL: %s: dropped %d X-K5-Cli-Via line(s) for %d request(s) in the log, %d of them sent by curl; want exactly one per curl request and none on any other\n" % (name, dropped, requests, by_curl))
+by_bash = sum(1 for _, _, b in per_request if b)
+vias = sum(v for v, _, _ in per_request)
+nouns = sum(n for _, n, _ in per_request)
+if stray or vias != by_bash or nouns != by_bash or any((v, n) != ((1, 1) if b else (0, 0)) for v, n, b in per_request):
+    sys.stderr.write("  FAIL: %s: dropped %d X-K5-Cli-Via and %d X-K5-Cli-Noun: %s line(s) (%d before any request) for %d request(s) in the log, %d of them sent by curl or the embedded python; want exactly one of each per such request and none on any other\n" % (name, vias, nouns, noun, stray, requests, by_bash))
     sys.exit(1)
 with open(dst, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
     f.write("\n".join(kept))
-' "$1" "$2" "$3"
+' "$1" "$2" "$3" "$4"
 }
 
 pass=0
@@ -255,7 +267,7 @@ capture() {
     local reqlog="$LOG"
     if [ "$VIA_MODE" = "1" ]; then
         reqlog="$SANDBOX/requests.via-dropped"
-        if ! drop_via "$name" "$LOG" "$reqlog"; then
+        if ! drop_via "$name" "$LOG" "$reqlog" "${1:-help}"; then
             fail=$((fail + 1))
             return
         fi

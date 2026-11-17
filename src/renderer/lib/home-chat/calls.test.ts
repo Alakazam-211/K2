@@ -23,7 +23,7 @@ import {
 } from './calls'
 import { parseHomeChatFrame } from './events-socket'
 import { parseHomeChatMessage } from './api'
-import { applyCallFrame, resetHomeChatCallsForTests, ringsNow, useHomeChatCallsStore } from '@/stores/home-chat-calls'
+import { applyCallFrame, callerEndedLine, resetHomeChatCallsForTests, ringsNow, useHomeChatCallsStore } from '@/stores/home-chat-calls'
 import { joinVoiceRoom } from '@/lib/voice/voice-api'
 
 const scope = { hostKey: 'acme.example.test', id: 'acme.example.test' } as unknown as ServerScope
@@ -102,7 +102,19 @@ describe('the ring store', () => {
     expect(useHomeChatCallsStore.getState().calls['acme|900']?.callId).toBe('90')
     applyCallFrame('acme', parseHomeChatFrame(JSON.stringify({ type: 'call_updated', d: { call: { id: '90', channel_id: '900', state: 'ended', end_reason: 'no_answer' } } }))!, 4)
     expect(useHomeChatCallsStore.getState().calls['acme|900']).toBeUndefined()
-    expect(useHomeChatCallsStore.getState().ended['acme|900']).toEqual({ callId: '90', reason: 'no_answer', at: 4 })
+    // The end keeps who started it (the live call knew, the end frame may not).
+    expect(useHomeChatCallsStore.getState().ended['acme|900']).toEqual({ callId: '90', reason: 'no_answer', at: 4, startedBy: '41' })
+  })
+
+  it("only the caller hears that it wasn't answered or was declined: the person called gets the record line, never the caller's bar", () => {
+    const ended = { callId: '90', reason: 'no_answer', at: 1_000, startedBy: '41' }
+    expect(callerEndedLine(ended, '41', 2_000)).toBe('missed')
+    expect(callerEndedLine({ ...ended, reason: 'declined' }, '41', 2_000)).toBe('declined')
+    expect(callerEndedLine(ended, '42', 2_000)).toBeNull()
+    expect(callerEndedLine({ ...ended, startedBy: null }, '41', 2_000)).toBeNull()
+    expect(callerEndedLine(ended, '41', 1_000 + 60_000)).toBeNull()
+    expect(callerEndedLine({ ...ended, reason: 'call_ended' }, '41', 2_000)).toBeNull()
+    expect(callerEndedLine(undefined, '41', 2_000)).toBeNull()
   })
 })
 

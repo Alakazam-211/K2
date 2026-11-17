@@ -32,7 +32,7 @@ import {
   ringDmCallAgain,
 } from '@/lib/home-chat/calls'
 import { startRingSound, stopRingSound } from '@/lib/home-chat/ring-sound'
-import { CALL_ENDED_SHOW_MS, ringsNow, useHomeChatCallsStore } from '@/stores/home-chat-calls'
+import { callerEndedLine, ringsNow, useHomeChatCallsStore } from '@/stores/home-chat-calls'
 import { refreshHomeChatPeople, retainHomeChatHost, scopeForChatHost, useHomeChatStore } from '@/stores/home-chat'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useHomesStore } from '@/stores/homes'
@@ -101,9 +101,7 @@ export function useDmCall(hostKey: string, conv: string | null, name: string, me
   let calling: DmCallView['calling'] = null
   if (mine && voiceCall?.phase === 'joining' && !live) calling = 'joining'
   else if (mine && iStarted && !someoneJoined && (other?.state === 'ringing' || other?.state === 'busy')) calling = other.state === 'busy' ? 'busy' : 'ringing'
-  else if (!mine && ended && ended.at + CALL_ENDED_SHOW_MS > now && (ended.reason === 'declined' || ended.reason === 'no_answer')) {
-    calling = ended.reason === 'declined' ? 'declined' : 'missed'
-  }
+  else if (!mine) calling = callerEndedLine(ended, me, now)
 
   let strip: DmCallView['strip'] = null
   if (mine && calling === null && voiceCall) {

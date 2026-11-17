@@ -25,6 +25,8 @@ export interface CallEnded {
   callId: string
   reason: string | null
   at: number
+  /** Who started it (their Sew member id), when known. */
+  startedBy: string | null
 }
 
 interface HomeChatCallsStore {
@@ -39,6 +41,14 @@ interface HomeChatCallsStore {
 export const useHomeChatCallsStore = create<HomeChatCallsStore>(() => ({ rings: {}, calls: {}, ended: {} }))
 
 const key = (hostKey: string, id: string): string => `${hostKey}|${id}`
+
+/** The caller's bar after their call ended unanswered: "declined" or
+ *  "missed" (no answer), for CALL_ENDED_SHOW_MS. Only for the person who
+ *  started the call (`me`); the person called sees the DM's record line. */
+export function callerEndedLine(ended: CallEnded | undefined, me: string | null, now: number): 'declined' | 'missed' | null {
+  if (!ended || !me || ended.startedBy !== me || ended.at + CALL_ENDED_SHOW_MS <= now) return null
+  return ended.reason === 'declined' ? 'declined' : ended.reason === 'no_answer' ? 'missed' : null
+}
 
 /** What one frame does to the calls (exported for tests). */
 export function applyCallFrame(hostKey: string, f: HomeChatFrame, now: number): void {
@@ -69,7 +79,7 @@ export function applyCallFrame(hostKey: string, f: HomeChatFrame, now: number): 
       if (f.call.ended) {
         if (calls[k]?.callId === f.call.callId || !calls[k]) delete calls[k]
         delete rings[key(hostKey, f.call.callId)]
-        ended[k] = { callId: f.call.callId, reason: f.call.endReason, at: now }
+        ended[k] = { callId: f.call.callId, reason: f.call.endReason, at: now, startedBy: f.call.startedBy ?? s.calls[k]?.startedBy ?? null }
       } else {
         calls[k] = f.call
         delete ended[k]

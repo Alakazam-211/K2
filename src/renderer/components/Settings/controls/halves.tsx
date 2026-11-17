@@ -11,8 +11,14 @@
 // Use it as: the body `halves.body(stacked)` holding a ScrollEdge pair when
 // stacked, then the left half (`halves.left`) and the right half
 // (`halves.right`, its content under `halves.rightTop`), each holding its
-// own ScrollEdge pair when split. Keep the same wrappers in both layouts,
-// so crossing the breakpoint restyles them instead of remounting the rows.
+// own ScrollEdge pair when split, the bottom one with `room`. Keep the same
+// wrappers in both layouts, so crossing the breakpoint restyles them
+// instead of remounting the rows.
+//
+// A split half has no bottom padding: browsers inset a sticky child by its
+// scroller's padding, so padding there held the bottom fade that far above
+// the half's edge, the rows under it uncut by any fade. The space under the
+// last row is the bottom ScrollEdge's `room` instead.
 
 import React, { useLayoutEffect, useRef, useState } from 'react'
 import { cx } from '@/components/ui'
@@ -47,9 +53,12 @@ export const halves = {
   /** The body under the fixed header: two columns, or one scroll. */
   body: (stacked: boolean): string =>
     cx('flex-1 min-h-0', stacked ? 'overflow-y-auto' : 'grid grid-cols-2 divide-x divide-[var(--color-border)]'),
-  left: (stacked: boolean): string => cx('px-6 pb-8 [scrollbar-gutter:stable]', stacked ? '' : 'overflow-y-auto min-h-0'),
+  left: (stacked: boolean): string => cx('px-6 [scrollbar-gutter:stable]', stacked ? 'pb-8' : 'overflow-y-auto min-h-0'),
   right: (stacked: boolean): string =>
-    cx('px-6 pb-8 [scrollbar-gutter:stable]', stacked ? 'pt-5 border-t border-[var(--color-border)]' : 'overflow-y-auto min-h-0'),
+    cx(
+      'px-6 [scrollbar-gutter:stable]',
+      stacked ? 'pt-5 pb-8 border-t border-[var(--color-border)]' : 'overflow-y-auto min-h-0',
+    ),
   /** The right half's content: its top space when split (stacked, the half
    *  has it above the hairline). */
   rightTop: (stacked: boolean): string => (stacked ? '' : 'pt-5'),
@@ -57,12 +66,23 @@ export const halves = {
 
 /** A fade at the top or bottom edge of a scrolling half, shown while there
  *  is more to scroll that way, so a row cut by the edge reads as "more
- *  below" instead of clipped. A zero-height sticky child of the scroller:
- *  place the top one first and the bottom one last. `inset` stretches it
- *  over the scroller's side padding. The top one sits under a sticky bar
- *  in the half (Projects' dashboard bar, z-10: z-[5] < z-10); the bottom
- *  one over it. */
-export function ScrollEdge({ at, inset = '' }: { at: 'top' | 'bottom'; inset?: string }): React.JSX.Element {
+ *  below" instead of clipped. A sticky child of the scroller: place the top
+ *  one first and the bottom one last, in a scroller with no padding on that
+ *  edge (a sticky child stops short of its scroller's padding). `inset`
+ *  stretches it over the scroller's side padding. `room` (a split half's
+ *  bottom edge) is the space under the last row, held by the edge itself so
+ *  the edge's bottom is the end of the scroll; without it the edge takes no
+ *  space. The top one sits under a sticky bar in the half (Projects'
+ *  dashboard bar, z-10: z-[5] < z-10); the bottom one over it. */
+export function ScrollEdge({
+  at,
+  inset = '',
+  room = false,
+}: {
+  at: 'top' | 'bottom'
+  inset?: string
+  room?: boolean
+}): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [more, setMore] = useState(false)
   useLayoutEffect(() => {
@@ -88,7 +108,7 @@ export function ScrollEdge({ at, inset = '' }: { at: 'top' | 'bottom'; inset?: s
       aria-hidden="true"
       data-scroll-edge={at}
       data-more={more || undefined}
-      className={cx('sticky h-0 pointer-events-none', at === 'top' ? 'top-0 z-[5]' : 'bottom-0 z-20', inset)}
+      className={cx('sticky pointer-events-none', room ? 'h-8' : 'h-0', at === 'top' ? 'top-0 z-[5]' : 'bottom-0 z-20', inset)}
     >
       <div
         className={cx(

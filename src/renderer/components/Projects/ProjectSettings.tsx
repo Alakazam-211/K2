@@ -2029,7 +2029,7 @@ export function ProjectSettingsDetail({
               onReloadDocs={onReloadDocs}
               bar={bar}
             />
-            {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
+            {!stacked && <ScrollEdge at="bottom" inset="-mx-6" room />}
           </div>
           <div
             data-testid="project-settings-right"
@@ -2039,7 +2039,7 @@ export function ProjectSettingsDetail({
             <div className={halves.rightTop(stacked)}>
               <AgentsSection detail={detail} caps={caps} edit={edit} />
             </div>
-            {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
+            {!stacked && <ScrollEdge at="bottom" inset="-mx-6" room />}
           </div>
           {stacked && <ScrollEdge at="bottom" />}
         </div>

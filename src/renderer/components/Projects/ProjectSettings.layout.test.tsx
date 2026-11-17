@@ -203,6 +203,15 @@ describe('two halves', () => {
     expect(within(left).queryByRole('region', { name: 'Agents' })).toBeNull()
     expect(left.className).toContain('overflow-y-auto')
     expect(right.className).toContain('overflow-y-auto')
+    // Each half's bottom fade ends on the half's bottom edge: the half has
+    // no bottom padding (a sticky child stops short of it) and its last
+    // child is the fade, holding the space under the last row.
+    for (const half of [left, right]) {
+      expect(half.className).not.toMatch(/(^|\s)(pb|py|p)-/)
+      const edge = half.lastElementChild as HTMLElement
+      expect(edge.getAttribute('data-scroll-edge')).toBe('bottom')
+      expect(edge.className).toMatch(/(^|\s)h-8(\s|$)/)
+    }
     // No tab strips anywhere: no nested dashboard tabs, no page tabs.
     expect(screen.queryByRole('tablist')).toBeNull()
     expect(screen.queryByRole('tab')).toBeNull()

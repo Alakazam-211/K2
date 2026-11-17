@@ -1436,12 +1436,12 @@ function TunnelSides({ left, right }: { left: React.ReactNode; right: React.Reac
         <div data-testid="tunnel-left" className={halves.left(stacked)}>
           {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
           <div className="pt-5 space-y-6">{left}</div>
-          {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
+          {!stacked && <ScrollEdge at="bottom" inset="-mx-6" room />}
         </div>
         <div data-testid="tunnel-right" className={halves.right(stacked)}>
           {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
           <div className={cx(halves.rightTop(stacked), 'space-y-6')}>{right}</div>
-          {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
+          {!stacked && <ScrollEdge at="bottom" inset="-mx-6" room />}
         </div>
         {stacked && <ScrollEdge at="bottom" />}
       </div>

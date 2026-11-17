@@ -182,14 +182,14 @@ export function AgentsSection(): React.JSX.Element {
             <DefaultAgentGroup />
             <PresetsGroup />
           </div>
-          {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
+          {!stacked && <ScrollEdge at="bottom" inset="-mx-6" room />}
         </div>
         <div data-testid="agents-right" className={halves.right(stacked)}>
           {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
           <div className={halves.rightTop(stacked)}>
             <AgentToolsGroup where={where} />
           </div>
-          {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
+          {!stacked && <ScrollEdge at="bottom" inset="-mx-6" room />}
         </div>
         {stacked && <ScrollEdge at="bottom" />}
       </div>

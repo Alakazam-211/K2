@@ -18,7 +18,7 @@ import { fixtureDrawingSource, type DrawingModelSource } from '../model/source'
 import type { Box4, ModelBlock, ModelHeader, ModelPage, ModelRow, XY } from '../model/types'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { refusalOfError, WRITER_OFF, type EditSource, type Hold } from './edit-source'
-import { insertLabels, type InsertLabel } from './blocks'
+import { currentLayerName, insertLabels, type InsertLabel } from './blocks'
 import { editReason } from './selection'
 import { parseToolResult } from './tool-result'
 import { sizePoint, turnPoint } from './transform'
@@ -149,17 +149,19 @@ export function fakeCadWorld(
     const [dx, dy] = [at[0] - b.base[0], at[1] - b.base[1]]
     const m = (Array.isArray(ref?.geom?.m) ? ref.geom.m : [1, 0, 0, 1, 0, 0]) as number[]
     const n = nextHandle()
+    // On the drawing's current layer.
+    const layer = currentLayerName(header) ?? '0'
     const refAttribs = (Array.isArray(ref?.geom?.attribs) ? ref.geom.attribs : []) as { tag: string; text?: unknown }[]
     const attribs = labels.map((l, i) => {
       const value = given.get(l.tag.toUpperCase()) ?? l.value
       const src = refAttribs.find((a) => a.tag.toUpperCase() === l.tag.toUpperCase())
       const text = src?.text ? { ...(mapGeom(src.text, shift(dx - m[4], dy - m[5])) as object), plain: value, runs: [{ text: value }] } : undefined
-      return { h: `@h:${(n + 1 + i).toString(16).toUpperCase()}`, tag: l.tag, value, visible: true, constant: false, layer: '0', text }
+      return { h: `@h:${(n + 1 + i).toString(16).toUpperCase()}`, tag: l.tag, value, visible: true, constant: false, layer, text }
     })
     return {
       h: `@h:${n.toString(16).toUpperCase()}`,
       kind: 'INSERT',
-      layer: '0',
+      layer,
       owner: 'model',
       z: Math.max(0, ...model().map((r) => r.z)) + 1,
       style: ref?.style ?? model()[0]?.style,
@@ -242,6 +244,7 @@ export function fakeCadWorld(
       if (!b) return refuse(verb, base, 'DXF-E051', `block ${name} is missing`)
       if (b.xref) return refuse(verb, base, 'DXF-E051', `block ${b.name} is an external reference`)
       if (b.anon) return refuse(verb, base, 'DXF-E051', `block ${b.name} is anonymous`)
+      if (b.annotative) return refuse(verb, base, 'DXF-E051', `block ${b.name} is annotative`)
       if (b.dynamic) return refuse(verb, base, 'DXF-E044', `block ${b.name} is a dynamic block`)
       if (opts.proxyBlocks?.includes(b.name)) return refuse(verb, base, 'DXF-E043', `block ${b.name} holds a proxy object`)
       const at = xyOf(flag(argv, '--at'))

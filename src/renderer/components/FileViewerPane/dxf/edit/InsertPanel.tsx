@@ -2,8 +2,9 @@
 //   1. pick one of the drawing's blocks that can be placed;
 //   2. its ghost follows the pointer over the drawing, and a click places it
 //      (its base point goes where you click);
-//   3. a short form asks for its labels (the attributes that aren't
-//      constant), with their defaults filled in, checked as you type; Insert
+//   3. a short form says where it goes (the drawing's current layer) and
+//      asks for its labels (the attributes that aren't constant, each by its
+//      prompt), with their defaults filled in, checked as you type; Insert
 //      places it. A block with no labels is placed on the click.
 // The new block is selected once the drawing shows it; a refusal says why
 // and keeps the form. Esc or Cancel stops at any step.
@@ -92,7 +93,8 @@ export function NothingSelectedPanel({ onInsert, disabled }: { onInsert: () => v
   )
 }
 
-export function InsertPanel({ flow, blocks, edit, utf8 }: { flow: InsertFlow; blocks: readonly ModelBlock[]; edit: CadEdit; utf8: boolean }): React.JSX.Element | null {
+export function InsertPanel(p: { flow: InsertFlow; blocks: readonly ModelBlock[]; edit: CadEdit; utf8: boolean; layer: string | null }): React.JSX.Element | null {
+  const { flow, blocks, edit, utf8 } = p
   const s = flow.step
   if (!s) return null
   return (
@@ -124,7 +126,7 @@ export function InsertPanel({ flow, blocks, edit, utf8 }: { flow: InsertFlow; bl
           Click in the drawing to place it. Its base point goes where you click.
         </p>
       ) : (
-        <InsertForm key={`${s.block.handle}-${s.at.join()}`} step={s} flow={flow} edit={edit} utf8={utf8} />
+        <InsertForm key={`${s.block.handle}-${s.at.join()}`} step={s} flow={flow} edit={edit} utf8={utf8} layer={p.layer} />
       )}
       {edit.message ? (
         <p role="alert" className="type-hint m-0 pt-2 text-[var(--color-status-error-text)]" data-testid="dxf-edit-message">
@@ -147,7 +149,7 @@ export function InsertPanel({ flow, blocks, edit, utf8 }: { flow: InsertFlow; bl
   )
 }
 
-function InsertForm({ step, flow, edit, utf8 }: { step: Extract<InsertStep, { step: 'form' }>; flow: InsertFlow; edit: CadEdit; utf8: boolean }): React.JSX.Element {
+function InsertForm({ step, flow, edit, utf8, layer }: { step: Extract<InsertStep, { step: 'form' }>; flow: InsertFlow; edit: CadEdit; utf8: boolean; layer: string | null }): React.JSX.Element {
   const [values, setValues] = useState(() => step.labels.map((l) => l.value))
   const id = useId()
   const problems = values.map((v) => attribProblem(v, { utf8 }))
@@ -165,11 +167,16 @@ function InsertForm({ step, flow, edit, utf8 }: { step: Extract<InsertStep, { st
         At {fmtCoord(step.at[0])}, {fmtCoord(step.at[1])}
         {unit}
       </p>
+      {layer ? (
+        <p className={`${LABEL} m-0`} data-testid="dxf-insert-layer">
+          Goes on layer {layer}
+        </p>
+      ) : null}
       {step.labels.length ? <p className={`${LABEL} m-0 pt-2`}>Labels</p> : null}
       {step.labels.map((l, i) => (
         <div key={l.tag} className="py-1" data-testid="dxf-insert-label" data-tag={l.tag}>
           <label htmlFor={`${id}-${i}`} className={`${LABEL} block pb-0.5`}>
-            {l.prompt ? `${l.tag} · ${l.prompt}` : l.tag}
+            {l.prompt || l.tag}
           </label>
           <Input
             id={`${id}-${i}`}

@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ModelBlock, ModelHeader, ModelPage } from '../model/types'
-import { insertableBlocks, insertArgv, insertedAddress, insertLabels } from './blocks'
+import { currentLayerName, insertableBlocks, insertArgv, insertedAddress, insertLabels } from './blocks'
 
 const FIX = resolve(__dirname, '../../__fixtures__/drawing-model')
 const HEADER = JSON.parse(readFileSync(`${FIX}/sampler-header.json`, 'utf8')) as ModelHeader
@@ -29,20 +29,49 @@ describe('insertableBlocks', () => {
         extra({ handle: '@h:91', name: '*U4' }),
         extra({ handle: '@h:92', name: 'VALVE', dynamic: true }),
         extra({ handle: '@h:93', name: 'CHAIR' }),
+        extra({ handle: '@h:94', name: 'NORTH', annotative: true }),
+        // Annotative unknown (as on DWG): kept.
+        extra({ handle: '@h:95', name: 'TREE', annotative: null }),
       ],
     }
-    expect(insertableBlocks(header).map((b) => b.name)).toEqual(['CHAIR', 'DOOR', 'NEST'])
+    expect(insertableBlocks(header).map((b) => b.name)).toEqual(['CHAIR', 'DOOR', 'NEST', 'TREE'])
+  })
+  it('the sampler’s blocks say they’re neither dynamic nor annotative', () => {
+    for (const b of HEADER.blocks) expect([b.name, b.dynamic, b.annotative]).toEqual([b.name, false, false])
   })
 })
 
 describe('insertLabels', () => {
-  it('the model’s definitions that aren’t constant, with their defaults', () => {
-    const b = { ...block('DOOR'), attdefs: [{ tag: 'NO', default: 'D-00', prompt: 'Door number' }, { tag: 'MAKER', default: 'ACME', constant: true }] }
-    expect(insertLabels(b, ROWS)).toEqual([{ tag: 'NO', value: 'D-00', prompt: 'Door number', known: true }])
-  })
-  it('without them, the tags an existing reference carries, defaults unknown', () => {
-    expect(insertLabels(block('DOOR'), ROWS)).toEqual([{ tag: 'NO', value: '', prompt: null, known: false }])
+  it('the sampler’s DOOR: its one label, by prompt, with its default; NEST has none', () => {
+    expect(block('DOOR').attdefs).toEqual([{ tag: 'NO', default: 'D-00', constant: false, prompt: 'Door number' }])
+    expect(insertLabels(block('DOOR'), ROWS)).toEqual([{ tag: 'NO', value: 'D-00', prompt: 'Door number', known: true }])
     expect(insertLabels(block('NEST'), ROWS)).toEqual([])
+  })
+  it('constant definitions are left out; the rest keep file order', () => {
+    const b = {
+      ...block('DOOR'),
+      attdefs: [
+        { tag: 'MAKER', default: 'ACME', constant: true, prompt: 'Maker' },
+        { tag: 'NO', default: 'D-00', constant: false, prompt: 'Door number' },
+        { tag: 'FIRE', default: 'FD30', constant: false, prompt: null },
+      ],
+    }
+    expect(insertLabels(b, ROWS).map((l) => [l.tag, l.value, l.prompt])).toEqual([['NO', 'D-00', 'Door number'], ['FIRE', 'FD30', null]])
+  })
+  it('only when the model can’t read them (null): the tags an existing reference carries, defaults unknown', () => {
+    expect(insertLabels({ ...block('DOOR'), attdefs: null }, ROWS)).toEqual([{ tag: 'NO', value: '', prompt: null, known: false }])
+  })
+})
+
+describe('currentLayerName', () => {
+  it('the header’s current layer, by name through the layers’ handles', () => {
+    expect(HEADER.current_layer).toBe('@h:19')
+    expect(currentLayerName(HEADER)).toBe('0')
+    expect(currentLayerName({ ...HEADER, current_layer: '@h:01a' })).toBe('A-WALL')
+  })
+  it('nothing when it isn’t set or isn’t in the drawing', () => {
+    expect(currentLayerName({ ...HEADER, current_layer: null })).toBeNull()
+    expect(currentLayerName({ ...HEADER, current_layer: '@h:FFF' })).toBeNull()
   })
 })
 

@@ -86,13 +86,15 @@ export type ModelBlock = {
   digest: string
   anon: boolean
   xref: boolean
-  /** A dynamic block (its parameters work only in a CAD app), when the model marks it. */
+  /** A dynamic block (its parameters work only in a CAD app): block insert refuses it. */
   dynamic?: boolean
-  /** Its attribute definitions (the labels a new reference gets, with their defaults), when the model gives them. */
-  attdefs?: ModelAttdef[]
+  /** An annotative block: block insert refuses it. Null when the model can't say (DWG). */
+  annotative?: boolean | null
+  /** Its attribute definitions in file order, constant ones included and flagged. Null when the model can't read them (DWG). */
+  attdefs?: ModelAttdef[] | null
 }
 
-export type ModelAttdef = { tag: string; default: string; constant?: boolean; prompt?: string | null }
+export type ModelAttdef = { tag: string; default: string; constant: boolean; prompt: string | null }
 
 export type ModelLayout = {
   handle: string
@@ -117,6 +119,8 @@ export type ModelHeader = {
   extents?: { stated: Box4 | null; computed: Box4 | null }
   settings?: { pdmode?: number; pdsize?: number; fillmode?: boolean; lwdisplay?: boolean; ltscale?: number; lwdefault_mm?: number }
   layers: ModelLayer[]
+  /** The layer new entities go on (`@h:` of its layer record, as in `layers`), or null when unset. */
+  current_layer?: string | null
   linetypes?: ModelLinetype[]
   blocks: ModelBlock[]
   /** Model space's own block record (`@h:`): a hold on it covers all of model space. Null for an old drawing without handles. */

@@ -2,12 +2,14 @@
 // a new reference asks for, and the verb's argv.
 //   - Insertable: the header's blocks, leaving out linked drawings (xrefs),
 //     layouts' own blocks (model and paper space), the ones a CAD app makes
-//     for itself (anonymous: a name starting "*") and dynamic blocks when
-//     the model marks them; by name.
-//   - Labels: every attribute definition that isn't constant, with its
-//     default. When the model doesn't list a block's definitions, the tags
-//     an existing reference of it carries, with no default (left empty, the
-//     block's own default is used).
+//     for itself (anonymous: a name starting "*"), and dynamic and
+//     annotative blocks, which the verb refuses (an annotative flag the
+//     model can't give is unknown, so the block stays); by name.
+//   - Labels: every attribute definition that isn't constant, in file
+//     order, with its prompt and default. Only when the model can't read a
+//     block's definitions (null): the tags an existing reference of it
+//     carries, with no default (left empty, the block's own default is used).
+//   - Where it goes: the drawing's current layer, by name.
 //   - The verb places the block's base point at the point given; each label
 //     is sent once, by tag.
 
@@ -17,7 +19,7 @@ import { fmtCoord } from './edit-flow'
 export function insertableBlocks(header: Pick<ModelHeader, 'blocks' | 'layouts' | 'model_space_block'>): ModelBlock[] {
   const spaces = new Set([header.model_space_block, ...header.layouts.flatMap((l) => [l.handle, l.space])].filter((h): h is string => !!h).map((h) => h.toUpperCase()))
   return header.blocks
-    .filter((b) => !b.xref && !b.anon && !b.dynamic && !b.name.startsWith('*') && !spaces.has(b.handle.toUpperCase()))
+    .filter((b) => !b.xref && !b.anon && b.dynamic !== true && b.annotative !== true && !b.name.startsWith('*') && !spaces.has(b.handle.toUpperCase()))
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
@@ -31,6 +33,15 @@ export function insertLabels(block: ModelBlock, rows: readonly ModelRow[]): Inse
   const attribs = (ref?.geom?.attribs ?? []) as { tag?: unknown; constant?: unknown }[]
   const tags = [...new Set(attribs.filter((a) => typeof a.tag === 'string' && a.constant !== true).map((a) => a.tag as string))]
   return tags.map((tag) => ({ tag, value: '', prompt: null, known: false }))
+}
+
+const norm = (h: string): string => h.replace(/^@h:0*/i, '').toUpperCase()
+
+/** The name of the layer new entities go on (the header's current layer), or null when it isn't set or isn't in the drawing. */
+export function currentLayerName(header: Pick<ModelHeader, 'layers' | 'current_layer'>): string | null {
+  const h = header.current_layer
+  if (typeof h !== 'string' || !h) return null
+  return header.layers.find((l) => norm(l.handle) === norm(h))?.name ?? null
 }
 
 /** Place `block` (its handle) with its base point at `at`; `labels` as tag and value, each once. */

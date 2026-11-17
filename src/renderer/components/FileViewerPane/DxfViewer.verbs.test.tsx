@@ -115,7 +115,7 @@ describe('rotating', () => {
       fireEvent.click(screen.getByTestId('dxf-rotate-right'))
     })
     await waitFor(() => expect(world.edits.calls).toHaveLength(2))
-    expect(world.edits.calls[0].slice(0, 7)).toEqual(['entity', 'rotate', '@h:41', '--by', '270', '--about', '5,2'])
+    expect(world.edits.calls[0].slice(0, 7)).toEqual(['entity', 'rotate', '@h:41', '--by', '-90', '--about', '5,2'])
   })
 
   it('the turn handle above the box: a ghost turns as you drag, Shift snaps to 15°, release rotates about the centre', async () => {
@@ -281,10 +281,10 @@ describe('text', () => {
 })
 
 describe('inserting a block', () => {
-  /** The sampler with DOOR's label definition given, as the model may list it. */
-  const withDefs = (): ModelHeader => ({
+  /** The sampler with DOOR's label definitions changed. */
+  const doorDefs = (attdefs: ModelHeader['blocks'][number]['attdefs']): ModelHeader => ({
     ...HEADER,
-    blocks: HEADER.blocks.map((b) => (b.name === 'DOOR' ? { ...b, attdefs: [{ tag: 'NO', default: 'D-00', prompt: 'Door number' }] } : b)),
+    blocks: HEADER.blocks.map((b) => (b.name === 'DOOR' ? { ...b, attdefs } : b)),
   })
   const press = (x: number, y: number) => {
     fireEvent.pointerDown(sheet(), { pointerId: 1, button: 0, ...client(x, y) })
@@ -292,7 +292,7 @@ describe('inserting a block', () => {
   }
 
   it('picker, then a ghost that follows the pointer, a click, the labels form, Insert; the new block is selected', async () => {
-    await open({ header: withDefs() })
+    await open()
     // With nothing selected the panel offers it; the toolbar too.
     expect(screen.getByTestId('dxf-edit-empty').textContent).toContain('Insert block…')
     expect(screen.getByTestId('dxf-insert-block').textContent).toBe('Insert block')
@@ -311,8 +311,11 @@ describe('inserting a block', () => {
     press(30, 5)
     expect(world.edits.calls).toHaveLength(0)
     expect(screen.getByTestId('dxf-insert-at').textContent).toBe('At 30, 5 mm')
+    // The drawing's current layer (@h:19), by name.
+    expect(screen.getByTestId('dxf-insert-layer').textContent).toBe('Goes on layer 0')
+    // DOOR's one label, by its prompt, with its default.
     const input = screen.getByTestId('dxf-insert-input') as HTMLInputElement
-    expect(screen.getByTestId('dxf-insert-label').textContent).toContain('NO · Door number')
+    expect(screen.getByTestId('dxf-insert-label').textContent).toBe('Door number')
     expect(input.value).toBe('D-00')
     fireEvent.change(input, { target: { value: 'D-07' } })
     await act(async () => {
@@ -342,8 +345,31 @@ describe('inserting a block', () => {
     await waitFor(() => expect(screen.queryAllByTestId('dxf-selected').map((r) => r.getAttribute('data-h'))).toEqual(['@h:C01']))
   })
 
-  it('labels are checked as you type; a label whose default isn’t known is sent only when filled in', async () => {
-    await open()
+  it('only the labels that aren’t constant are asked for, each by its prompt, in file order', async () => {
+    const defs = [
+      { tag: 'NO', default: 'D-00', constant: false, prompt: 'Door number' },
+      { tag: 'MAKER', default: 'ACME', constant: true, prompt: 'Maker' },
+      { tag: 'FIRE', default: 'FD30', constant: false, prompt: 'Fire rating' },
+    ]
+    await open({ header: doorDefs(defs) })
+    fireEvent.click(screen.getByTestId('dxf-insert-block'))
+    fireEvent.click(screen.getAllByTestId('dxf-insert-choice')[0])
+    press(30, 5)
+    expect(screen.getAllByTestId('dxf-insert-label').map((l) => l.textContent)).toEqual(['Door number', 'Fire rating'])
+    expect(screen.getAllByTestId('dxf-insert-input').map((i) => (i as HTMLInputElement).value)).toEqual(['D-00', 'FD30'])
+  })
+
+  it('no layer line when the drawing has no current layer', async () => {
+    await open({ header: { ...HEADER, current_layer: null } })
+    fireEvent.click(screen.getByTestId('dxf-insert-block'))
+    fireEvent.click(screen.getAllByTestId('dxf-insert-choice')[0])
+    press(30, 5)
+    expect(screen.getByTestId('dxf-insert-form')).toBeTruthy()
+    expect(screen.queryByTestId('dxf-insert-layer')).toBeNull()
+  })
+
+  it('labels are checked as you type; when the model can’t read the definitions, a label is sent only when filled in', async () => {
+    await open({ header: doorDefs(null) })
     fireEvent.click(screen.getByTestId('dxf-insert-block'))
     fireEvent.click(screen.getAllByTestId('dxf-insert-choice')[0])
     press(30, 5)

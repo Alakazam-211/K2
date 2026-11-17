@@ -54,9 +54,9 @@ describe('argv', () => {
     expect(moveArgv(['@h:41'], 0.1 + 0.2, 1e-7, 'drawing')).toEqual(['entity', 'move', '@h:41', '--by', '0.3,0.0000001', '--unit', 'drawing'])
   })
 
-  it('entity rotate: every address, --by degrees anticlockwise (0 up to 360), --about the centre, the unit', () => {
+  it('entity rotate: every address, --by degrees anticlockwise (clockwise negative), --about the centre, the unit', () => {
     expect(rotateArgv(['@h:41', '@h:A00'], 90, [5, 2.5], 'mm')).toEqual(['entity', 'rotate', '@h:41', '@h:A00', '--by', '90', '--about', '5,2.5', '--unit', 'mm'])
-    expect(rotateArgv(['@h:41'], -90, [-1.25, 0], 'drawing')).toEqual(['entity', 'rotate', '@h:41', '--by', '270', '--about', '-1.25,0', '--unit', 'drawing'])
+    expect(rotateArgv(['@h:41'], -90, [-1.25, 0], 'drawing')).toEqual(['entity', 'rotate', '@h:41', '--by', '-90', '--about', '-1.25,0', '--unit', 'drawing'])
     expect(rotateArgv(['@h:41'], 37.3, [0, 0], 'mm')[4]).toBe('37.3')
   })
 

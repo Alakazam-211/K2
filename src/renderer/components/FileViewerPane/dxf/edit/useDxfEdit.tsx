@@ -20,7 +20,7 @@ import type { ModelHeader, ModelRow } from '../model/types'
 import { daemonEditSource, type EditSource } from './edit-source'
 import { domBox, domGhost, EditMarks, HoldAsk, SelectBoxEl } from './EditLayer'
 import { writesUtf8 } from './attrib-value'
-import { insertableBlocks } from './blocks'
+import { currentLayerName, insertableBlocks } from './blocks'
 import { heldHandles } from './holds'
 import { InsertButton, InsertPanel, NothingSelectedPanel, useInsertFlow } from './InsertPanel'
 import { SelectionPanel } from './SelectionPanel'
@@ -170,7 +170,7 @@ export function useDxfEdit(p: {
     ),
     toolbar: canInsert ? <InsertButton onClick={flow.start} disabled={insertOff || inserting} /> : null,
     panel: inserting ? (
-      <InsertPanel flow={flow} blocks={blocks} edit={edit} utf8={writesUtf8(p.drawing.header.acadver)} />
+      <InsertPanel flow={flow} blocks={blocks} edit={edit} utf8={writesUtf8(p.drawing.header.acadver)} layer={currentLayerName(p.drawing.header)} />
     ) : edit.selection.length ? (
       <SelectionPanel edit={edit} header={p.drawing.header} slots={p.live.slots} />
     ) : canInsert ? (

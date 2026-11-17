@@ -4,7 +4,7 @@
 // or chip, and a monitor that says Preparing video and draws nothing (never
 // sample footage, no waveforms); a refusal at open is the can't-be-live card.
 
-import { act, cleanup, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ServerScope } from '@/kessel/server-scope'
 import { LiveConnectError, type LiveClose, type LiveTransport, type LiveWelcome } from '@/lib/docs-live-transport'
@@ -20,14 +20,18 @@ afterEach(() => cleanup())
 
 type Step = { step: string; roster: Record<string, unknown>[]; watch?: Record<string, unknown>[] }
 const STEPS = (golden as unknown as { steps: Step[] }).steps
-const WELCOME = { type: 'welcome', root: '', version: 0, client: 1, self: 'ada', rights: 'edit', features: ['keyed_watch', 'view_address', 'time_position'] } as unknown as LiveWelcome
+const WELCOME = { type: 'welcome', root: 'tracks', version: 0, client: 1, self: 'ada', rights: 'edit', features: ['keyed_watch', 'view_address', 'time_position'] } as unknown as LiveWelcome
 
 /** The live socket's push, for a frame after the golden's (the latest scripted socket). */
 let pushLive: (f: unknown) => void = () => {}
 
 /** K2's docs socket, scripted: the welcome, then on `watch` the golden's frames up to `upto`. */
-function scripted(upto: string, refuse?: LiveClose): () => LiveTransport {
-  return () => {
+/** What each socket was asked for: the doc and its root. */
+const DIALLED: { path: string; root?: string | null }[] = []
+
+function scripted(upto: string, refuse?: LiveClose, welcome: Record<string, unknown> = {}): (scope: unknown, doc: { path: string; root?: string | null }) => LiveTransport {
+  return (_scope, doc) => {
+    DIALLED.push(doc)
     const frames = new Set<(f: unknown) => void>()
     const push = (f: unknown): void => [...frames].forEach((cb) => cb(f))
     pushLive = push
@@ -35,7 +39,7 @@ function scripted(upto: string, refuse?: LiveClose): () => LiveTransport {
       open: true,
       connect: async () => {
         if (refuse) throw new LiveConnectError(refuse)
-        return WELCOME
+        return { ...WELCOME, ...welcome } as LiveWelcome
       },
       send: (f: { type?: string }) => {
         SENT.push(f as Record<string, unknown>)
@@ -81,7 +85,7 @@ function longer(seq: number, rev: number, times: number): unknown {
 }
 const SCOPE = { id: 'local' } as unknown as ServerScope
 
-async function mount(createTransport: () => LiveTransport, filePath = '/w/edits/cut.otio'): Promise<void> {
+async function mount(createTransport: (scope: unknown, doc: { path: string; root?: string | null }) => LiveTransport, filePath = '/w/edits/cut.otio'): Promise<void> {
   render(<TimelineLive scope={SCOPE} filePath={filePath} width={1440} createTransport={createTransport} />)
   await act(async () => {})
   await act(async () => {})
@@ -99,13 +103,17 @@ describe('the live timeline tab on a real file', () => {
     expect(rows.some((r) => r.includes('Atlas trimmed the start of Shot A by 6 frames'))).toBe(true)
   })
 
-  it('the monitor says Preparing video and draws nothing: no footage, no pictures, no waveforms', async () => {
+  it('with no lane tiles (null previews: no host decodes video yet), the lanes and the monitor say no preview and draw nothing', async () => {
     await mount(scripted('watch'))
     const mon = screen.getByTestId('lv-monitor')
-    // The file starts on a gap (Shot A is at 1 s): the gap's card, and Preparing video for the rest.
+    // The file starts on a gap (Shot A is at 1 s): the gap's card; no Preparing video, as nothing is coming.
     expect(mon.getAttribute('data-state')).toBe('gap')
     expect(screen.getByTestId('lv-monitor-frame').getAttribute('data-paint')).toBe('none')
-    expect(screen.getByTestId('lv-mon-prep').textContent).toMatch(/^Preparing video/)
+    expect(screen.queryByTestId('lv-mon-prep')).toBeNull()
+    // On a clip: the no-preview card.
+    await act(async () => void fireEvent.click(screen.getByTestId('lv-mon-skip')))
+    expect(screen.getByTestId('lv-monitor').getAttribute('data-state')).toBe('no_preview')
+    expect(screen.getByTestId('lv-monitor-frame').getAttribute('data-paint')).toBe('none')
     expect(document.querySelector('.lv-tl-wave')).toBeNull()
     expect(document.querySelector('.lv-tl-pic canvas, .lv-tl-strip canvas')).toBeNull()
   })
@@ -117,18 +125,27 @@ describe('the live timeline tab on a real file', () => {
     expect(SENT).toContainEqual(expect.objectContaining({ type: 'time_position', time_position: expect.objectContaining({ at: '0', state: 'paused' }) }))
   })
 
-  it.each(['/w/edits/cut.fcpxml', '/w/edits/cut.prproj'])('%s is live but read only: the header says K2 writes back .otio only', async (path) => {
-    await mount(scripted('trim'), path)
-    const chip = screen.getByTestId('lv-state')
-    expect(chip.getAttribute('data-state')).toBe('read-only-file')
-    expect(chip.textContent).toBe('Read only: K2 writes back .otio only')
+  it.each(['/w/edits/cut.fcpxml', '/w/edits/cut.prproj'])('%s: the timeline core indexes it but only .otio is live, so the socket (no root) is declined and the card says so', async (path) => {
+    DIALLED.length = 0
+    await mount(scripted('watch', { reason: 'declined', retry: false, code: 'not_a_text_doc', message: 'not a live doc' }), path)
+    expect(DIALLED.at(-1)).toEqual({ path, root: null })
     expect(screen.queryByTestId('lv-sample-banner')).toBeNull()
-    expect(screen.getByTestId('lv-lane-V1')).toBeTruthy()
+    expect(document.body.textContent).toContain('Only .otio timelines are live, for now')
+    expect(screen.getByText('Open the saved file')).toBeTruthy()
   })
 
-  it('an .otio file is plain Live', async () => {
+  it('an .otio dials its own root, tracks, and is plain Live', async () => {
+    DIALLED.length = 0
     await mount(scripted('watch'))
+    expect(DIALLED.at(-1)).toEqual({ path: '/w/edits/cut.otio', root: 'tracks' })
     expect(screen.getByTestId('lv-state').getAttribute('data-state')).toBe('live')
+  })
+
+  it('a welcome with read_only_reason is live but read only, the reason on the chip', async () => {
+    await mount(scripted('watch', undefined, { rights: 'read', read_only_reason: 'nobody may change this timeline yet' }))
+    const chip = screen.getByTestId('lv-state')
+    expect(chip.getAttribute('data-state')).toBe('read-only-file')
+    expect(chip.getAttribute('title') ?? '').toContain('nobody may change this timeline yet')
   })
 
   it('opens fitted: the whole edit across the lanes, not the default zoom', async () => {

@@ -9,7 +9,7 @@
 
 import type { ErrorReport, Transport } from '@k2/mpc-client'
 import { LiveConnectError, type LiveClose, type LiveTransport, type LiveWelcome } from '@/lib/docs-live-transport'
-import type { KeyedSourceOptions, KeyedWelcome } from './keyed-source'
+import type { KeyedSourceOptions } from './keyed-source'
 import { KeyedWatchTimelineSource } from './keyed-source'
 
 /** Waits between attempts, ms: 1 s, doubling, at most 30 s. */
@@ -87,11 +87,10 @@ export function connectTimeline(t: LiveTransport, o: ConnectOptions): TimelineCo
     if (stopped || ctl !== me) return
     attempt = 0
     prev = w.client
-    const kw = w as unknown as KeyedWelcome
     if (!attached) {
       attached = true
-      source.attach(kw)
-    } else source.reconnected(kw)
+      source.attach(w)
+    } else source.reconnected(w)
   }
 
   const offClose = t.onClose((c) => ended(c))

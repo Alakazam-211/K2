@@ -11,7 +11,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { createDaemonLiveTransport } from '@/lib/docs-live-daemon'
 import type { LiveTransport } from '@/lib/docs-live-transport'
 import { connectTimeline } from '@/lib/live-view/timeline/connect'
-import { readOnlyWhy } from '@/lib/live-view/timeline/live-map'
+import { timelineRoot } from '@/lib/live-view/timeline/live-map'
 import type { KeyedWatchTimelineSource } from '@/lib/live-view/timeline/keyed-source'
 import { LiveShellView } from '../shell/LiveShellView'
 import { TIMELINE_SHELL } from './timeline-shell'
@@ -22,7 +22,7 @@ export interface TimelineLiveProps {
   filePath: string
   width?: number
   /** Tests and shots: the socket (default: the daemon's, through the dial queue). */
-  createTransport?: (scope: ServerScope, doc: { path: string }) => LiveTransport
+  createTransport?: (scope: ServerScope, doc: { path: string; root?: string | null }) => LiveTransport
 }
 
 const nameOf = (p: string): string => p.split(/[\\/]/).pop() || p
@@ -30,8 +30,8 @@ const nameOf = (p: string): string => p.split(/[\\/]/).pop() || p
 export default function TimelineLive({ scope, filePath, width, createTransport }: TimelineLiveProps): React.JSX.Element | null {
   const [source, setSource] = useState<KeyedWatchTimelineSource | null>(null)
   useEffect(() => {
-    const t = (createTransport ?? createDaemonLiveTransport)(scope, { path: filePath })
-    const c = connectTimeline(t, { post: (body) => daemonCliPost(scope, 'docs/say', { path: filePath, ...body }), readOnly: readOnlyWhy(filePath) })
+    const t = (createTransport ?? createDaemonLiveTransport)(scope, { path: filePath, root: timelineRoot(filePath) })
+    const c = connectTimeline(t, { post: (body) => daemonCliPost(scope, 'docs/say', { path: filePath, ...body }) })
     setSource(c.source)
     return () => c.stop()
   }, [scope, filePath, createTransport])

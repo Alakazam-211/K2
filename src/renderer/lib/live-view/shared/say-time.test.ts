@@ -12,10 +12,12 @@ describe('a message’s time', () => {
     expect(sayTime('0', '@d-seq:1')).toEqual({ at: '0', in: '@d-seq:1' })
   })
 
-  it('reads the TimePosition shape, and (this release only) the old bare ticks', () => {
+  it('reads K2’s say frame (time as ticks, time_in beside it) and the TimePosition shape', () => {
+    expect(readSayTime('1234', '@trk:1')).toEqual({ at: '1234', in: '@trk:1' })
+    expect(readSayTime('1234')).toEqual({ at: '1234' })
+    expect(readSayTime('1234', '')).toEqual({ at: '1234' })
     expect(readSayTime({ at: '1234', in: '@seq:S2' })).toEqual({ at: '1234', in: '@seq:S2' })
     expect(readSayTime({ at: '1234' })).toEqual({ at: '1234' })
-    expect(readSayTime('1234')).toEqual({ at: '1234' })
     for (const bad of [null, undefined, '', 'soon', 12, { at: 12 }, { at: '1.5' }, { at: '12', in: 3 }]) expect(readSayTime(bad), JSON.stringify(bad)).toBeNull()
   })
 })

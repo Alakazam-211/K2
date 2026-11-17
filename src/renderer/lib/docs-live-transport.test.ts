@@ -373,5 +373,8 @@ describe('LiveTransport', () => {
     expect(liveUrl('wss://h', 'tok', 'n.md', { resume: 3, prev: 9007199254740991 })).toBe(
       'wss://h/cli/docs/live?doc=n.md&root=source&resume=3&prev=9007199254740991&token=tok',
     )
+    // A timeline names its own container root (docs/live.rs: a keyed doc's root is its own, or source); null leaves it out.
+    expect(liveUrl('wss://h', 'tok', '/w/cut.otio', { root: 'tracks' })).toBe('wss://h/cli/docs/live?doc=%2Fw%2Fcut.otio&root=tracks&token=tok')
+    expect(liveUrl('wss://h', 'tok', '/w/cut.fcpxml', { root: null })).toBe('wss://h/cli/docs/live?doc=%2Fw%2Fcut.fcpxml&token=tok')
   })
 })

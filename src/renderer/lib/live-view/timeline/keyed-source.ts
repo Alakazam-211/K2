@@ -15,6 +15,7 @@
 // (`attach`, `reconnected`) and says when the socket is down.
 
 import { KeyedWatch, PresenceChannel, type ClaimEnded, type ErrorReport, type OpsChangeFrame, type OutsideSaveFrame, type ServerFrame, type TimePositionSet, type Transport, type VerbRefusedFrame, type Welcome } from '@k2/mpc-client'
+import type { LiveWelcome } from '@/lib/docs-live-transport'
 import type { LiveMessage, LiveShellSnapshot, LiveSource, SayResult } from '../shared/source'
 import type { SayTime } from '../shared/say-time'
 import { readSayTime } from '../shared/say-time'
@@ -26,16 +27,14 @@ import { KEYED_ROOTS, type Book, type OutsideSaveEvent, type Refusal, type Timel
 import { applyGroup, blankState, finish, type SimEvent, type SimState } from './sim'
 import { timelineSnapshot, type TimelineSnapshot } from './snapshot'
 
-/** The welcome as K2's docs socket sends it for a keyed doc: the kit's, with its features. */
-export type KeyedWelcome = Welcome & { features?: string[]; rights?: string }
+/** The welcome K2's docs socket sends for a timeline: root `tracks`, features `keyed_watch`, `view_address` and `time_position`, and `read_only_reason` when nobody may change it. */
+export type KeyedWelcome = Pick<LiveWelcome, 'root' | 'version' | 'client' | 'self' | 'rights' | 'features' | 'read_only_reason'>
 
 export interface KeyedSourceOptions {
   /** Sends a message (`POST /cli/docs/say`), with the view's address and time. */
   post: (body: { text: string; to: string; at?: string; time?: SayTime }) => Promise<unknown>
   /** The host clock now (ms); presence and changes read against it. */
   now?: () => number
-  /** Live but never changed here, and why (a format the pack reads but doesn't write back: live-map `readOnlyWhy`). */
-  readOnly?: string | null
 }
 
 const EMPTY_BOOK: Book = { rev: 0, lists: {}, hidden: {}, maps: {}, derived: { containers: {} } }
@@ -48,7 +47,8 @@ export class KeyedWatchTimelineSource implements LiveSource {
   private S: SimState = blankState(EMPTY_BOOK, '')
   private i = 0
   private conn: 'reconnecting' | 'failed' | null = null
-  private host: 'preparing' | 'not_on_this_host' = 'preparing'
+  // Lane tiles are K2's preview service's; no host decodes video yet, so every tile is not_on_this_host (preview/timeline.rs).
+  private host: 'preparing' | 'not_on_this_host' = 'not_on_this_host'
   private snap: TimelineSnapshot | null = null
   private readonly subs = new Set<(s: LiveShellSnapshot) => void>()
   private offs: (() => void)[] = []
@@ -81,8 +81,8 @@ export class KeyedWatchTimelineSource implements LiveSource {
     this.S = blankState(EMPTY_BOOK, welcome.self, { rights: welcome.rights ?? null })
     this.S.loading = { phase: 'welcome', upto: -1, roots: [], unitPages: [] }
     this.S.follow = false
-    this.watch = new KeyedWatch(this.t, welcome)
-    this.presence = new PresenceChannel(this.t, welcome)
+    this.watch = new KeyedWatch(this.t, kitWelcome(welcome))
+    this.presence = new PresenceChannel(this.t, kitWelcome(welcome))
     // Where you were before the welcome (the view mounted while connecting) goes out now.
     if (this.mine.view !== null) this.presence.setViewAddress(this.mine.view)
     if (this.mine.time !== null) this.presence.setTimePosition(this.mine.time)
@@ -93,8 +93,8 @@ export class KeyedWatchTimelineSource implements LiveSource {
   /** A reconnect's welcome: the watch and presence pick up from it (the watch asks for a fresh snapshot). */
   reconnected(welcome: KeyedWelcome): void {
     this.welcome = welcome
-    this.watch?.reconnected(welcome)
-    this.presence?.reconnected(welcome)
+    this.watch?.reconnected(kitWelcome(welcome))
+    this.presence?.reconnected(kitWelcome(welcome))
     this.setConnection(null)
   }
 
@@ -242,9 +242,9 @@ export class KeyedWatchTimelineSource implements LiveSource {
 
   private onFrame(f: ServerFrame | { type: string }): void {
     if (this.closed || f.type !== 'say') return
-    const s = f as unknown as { id?: unknown; from?: { id?: unknown }; to?: { id?: unknown } | null; text?: unknown; at?: unknown; time?: unknown; at_ms?: unknown }
+    const s = f as unknown as { id?: unknown; from?: { id?: unknown }; to?: { id?: unknown } | null; text?: unknown; at?: unknown; time?: unknown; time_in?: unknown; at_ms?: unknown }
     if (typeof s.id !== 'string' || typeof s.from?.id !== 'string' || typeof s.text !== 'string') return
-    const time = readSayTime(s.time)
+    const time = readSayTime(s.time, s.time_in)
     const at = typeof s.at === 'string' && s.at ? s.at : null
     this.extra = [...this.extra, { id: s.id, from: s.from.id, to: typeof s.to?.id === 'string' ? s.to.id : this.S.self, text: s.text, at_ms: typeof s.at_ms === 'number' ? s.at_ms : this.now(), address: at ? { label: at, address: at } : null, ...(time ? { time } : {}) }]
     this.changed()
@@ -310,7 +310,7 @@ export class KeyedWatchTimelineSource implements LiveSource {
     const f = this.welcome?.features ?? []
     snap.features = { viewAddress: f.includes('view_address'), timePosition: f.includes('time_position'), say: true }
     snap.timeline.sequence = sequenceOf(M)
-    if (this.o.readOnly) snap.readOnly = this.o.readOnly
+    if (this.welcome?.read_only_reason) snap.readOnly = this.welcome.read_only_reason
     for (const p of snap.people) {
       const slot = p.self ? undefined : this.slots.get(p.id)
       if (slot) p.presence = slot
@@ -330,4 +330,9 @@ export function refusalCode(e: { id: string; message: string; rule?: string; det
   if (e.rule && /^live_|^unreadable$/.test(e.rule)) return e.rule
   const m = /\b(live_[a-z_]+|unreadable)\b/.exec(e.message)
   return m ? m[1] : e.id
+}
+
+/** K2's welcome as the kit client takes it (its root, version, client, self, rights and features). */
+function kitWelcome(w: KeyedWelcome): Welcome {
+  return { root: w.root, version: w.version, client: w.client, self: w.self, rights: w.rights, ...(w.features ? { features: [...w.features] } : {}) } as Welcome
 }

@@ -12,11 +12,11 @@ import { createLiveTransport, liveUrl, type LiveSocket, type LiveTransport } fro
 
 /** A Live transport for `path` on `scope`'s server (`path` absolute, or
  *  workspace-relative with `workspace`). */
-export function createDaemonLiveTransport(scope: ServerScope, doc: { path: string; workspace?: string }): LiveTransport {
+export function createDaemonLiveTransport(scope: ServerScope, doc: { path: string; workspace?: string; root?: string | null }): LiveTransport {
   return createLiveTransport({
     url: async (resume, prev) => {
       const creds = await getDaemonWs(scope)
-      return liveUrl(daemonWsBase(creds), creds.token, doc.path, { workspace: doc.workspace, resume, prev })
+      return liveUrl(daemonWsBase(creds), creds.token, doc.path, { workspace: doc.workspace, resume, prev, ...(doc.root !== undefined ? { root: doc.root } : {}) })
     },
     open: async (url, signal) => (await openQueuedWebSocket(scope, url, { signal })) as unknown as LiveSocket,
     // After a failed dial only: was it the credential?

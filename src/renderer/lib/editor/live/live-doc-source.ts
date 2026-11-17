@@ -353,7 +353,7 @@ export class LiveDocSource implements LiveSource {
     const to = (f.to ?? null) as { id?: unknown } | null
     if (typeof f.id !== 'string' || typeof from.id !== 'string' || typeof f.text !== 'string') return
     const at = typeof f.at === 'string' && f.at ? f.at : null
-    const time = readSayTime(f.time)
+    const time = readSayTime(f.time, f.time_in)
     this.addMessage({ id: f.id, from: from.id, to: typeof to?.id === 'string' ? to.id : '', text: f.text, at_ms: typeof f.at_ms === 'number' ? f.at_ms : this.timers.now(), address: at ? { label: this.addrLabel(at), address: at } : null, ...(time ? { time } : {}) })
   }
 

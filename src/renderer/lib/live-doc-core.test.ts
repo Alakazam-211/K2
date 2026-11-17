@@ -36,7 +36,7 @@ vi.mock('@/stores/session-events', async (orig) => ({
   },
 }))
 
-import { parseLiveDocCore, useLiveDocCore } from './live-doc-core'
+import { parseLiveDocCore, stateFor, useLiveDocCore } from './live-doc-core'
 import type { ServerScope } from '@/kessel/server-scope'
 
 function scopeWith(features: string[]): ServerScope {
@@ -94,6 +94,12 @@ describe('useLiveDocCore', () => {
       for (const fn of events.handlers) fn({ kind: 'doc_cores_changed', core: 'slides', on: false })
     })
     await waitFor(() => expect(result.current).toEqual({ status: 'off' }))
+  })
+
+  it('opens the real timeline on core timeline and on, whatever liveView says (it names a live text editor, not the socket)', () => {
+    expect(stateFor({ core: 'timeline', on: true, liveView: false })).toEqual({ status: 'timeline' })
+    expect(stateFor({ core: 'timeline', on: true, liveView: true })).toEqual({ status: 'timeline' })
+    expect(stateFor({ core: 'timeline', on: false, liveView: false })).toEqual({ status: 'off' })
   })
 
   it('gives a timeline its live view only while the daemon serves it (the timeline core on), else today’s view', async () => {

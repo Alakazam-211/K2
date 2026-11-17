@@ -38,7 +38,7 @@ function socket(): Transport & { push: (f: unknown) => void; sent: Record<string
   } as Transport & { push: (f: unknown) => void; sent: Record<string, unknown>[] }
 }
 
-const WELCOME: KeyedWelcome = { root: '', version: 0, client: 1, self: 'ada', rights: 'edit', features: ['keyed_watch', 'view_address', 'time_position'] } as KeyedWelcome // what K2's daemon lists for a keyed doc (live_watch.rs keyed_socket_features)
+const WELCOME: KeyedWelcome = { root: 'tracks', version: 0, client: 1, self: 'ada', rights: 'edit', features: ['keyed_watch', 'view_address', 'time_position'] } as KeyedWelcome // K2's welcome for a timeline (docs/live.rs: root tracks; live_watch.rs keyed_socket_features)
 
 function open(o: { upto?: string; welcome?: KeyedWelcome } = {}) {
   const t = socket()
@@ -204,21 +204,29 @@ describe('KeyedWatchTimelineSource on the pack golden', () => {
 })
 
 describe('the monitor on a real file is honest', () => {
-  it('says Preparing video and never draws sample footage', () => {
+  it('with no lane tiles (no host decodes video yet: every tile not_on_this_host), says no preview and never draws sample footage', () => {
     const v = open({ upto: 'watch' }).tl()
     const mv = monitorView({ S: v.state, M: v.model, facts: v.facts!, now: T0, local: { f: 30, rate: 0 } })
     expect(v.sample).toBe(false)
+    expect(mv.state).toBe('no_preview')
+    expect(mv.paint.how).toBe('none')
+    expect(mv.prep).toBeNull()
+    // Every video clip's source is marked no preview, so the lanes badge each one.
+    expect(v.state.pv?.nopreview.length).toBeGreaterThan(0)
+  })
+
+  it('says Preparing video once a host can make tiles (K2 Render), still drawing nothing until they come', () => {
+    const o = open({ upto: 'watch' })
+    o.src.setPreviewHost('preparing')
+    const v = o.tl()
+    const mv = monitorView({ S: v.state, M: v.model, facts: v.facts!, now: T0, local: { f: 30, rate: 0 } })
     expect(mv.state).toBe('preparing')
     expect(mv.paint.how).toBe('none')
     expect(mv.prep?.text).toMatch(/^Preparing video/)
   })
 
-  it('says no preview where this host can’t decode', () => {
-    const o = open({ upto: 'watch' })
-    o.src.setPreviewHost('not_on_this_host')
-    const v = o.tl()
-    const mv = monitorView({ S: v.state, M: v.model, facts: v.facts!, now: T0, local: { f: 30, rate: 0 } })
-    expect(mv.state).toBe('no_preview')
-    expect(mv.paint.how).toBe('none')
+  it('a welcome with read_only_reason is live but read only, in its words', () => {
+    const o = open({ upto: 'watch', welcome: { ...WELCOME, rights: 'read', read_only_reason: 'nobody may change this file yet' } })
+    expect(o.src.snapshot().readOnly).toBe('nobody may change this file yet')
   })
 })

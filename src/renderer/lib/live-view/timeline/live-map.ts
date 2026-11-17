@@ -49,6 +49,8 @@ export function declineWords(code: string, message?: string | null): { code: str
     live_time_range: ['A time in the file is out of range', `${PRODUCT_NAME} can’t count one of this timeline’s times, so it won’t watch it live. You can still open the saved file.`],
     live_structure: [`${PRODUCT_NAME} can’t follow this timeline’s structure live`, `Something in the file’s tracks or clips isn’t one ${PRODUCT_NAME} watches live yet. You can still open the saved file.`],
     unreadable: [`${PRODUCT_NAME} couldn’t read this file`, `It doesn’t read as a timeline ${PRODUCT_NAME} knows. You can still open the saved file.`],
+    // The daemon's own: the timeline core reads Final Cut Pro XML and Premiere projects, but only an .otio is live.
+    not_a_text_doc: ['Only .otio timelines are live, for now', `${PRODUCT_NAME} reads this file’s clips but watches only .otio timelines live. You can still open the saved file.`],
   }
   const w = W[code]
   return w ? { code, title: w[0], text: w[1], detail: message || code } : { code, title: 'This file can’t be watched live', text: message ? `${message} You can still open the saved file.` : 'You can still open the saved file.', detail: message || code }
@@ -86,9 +88,9 @@ export function sequenceOf(M: TimelineModel): string {
   return typeof uid === 'string' && uid ? `@uid:${uid}` : FIRST_SEQUENCE
 }
 
-/** Why a timeline file is read only live: the pack reads OTIO, Final Cut Pro XML and Premiere projects but writes back .otio only (its verbs refuse the others with a typed reason). Null for .otio. */
-export function readOnlyWhy(path: string): string | null {
-  return /\.otio$/i.test(path) ? null : `${PRODUCT_NAME} writes back .otio only`
+/** The docs socket's root for a timeline file: an .otio is a live keyed doc, its container root `tracks`; the timeline core's other files (.fcpxml, .prproj) are indexed, not live, so the root is left out and the daemon says why (`not_a_text_doc`). */
+export function timelineRoot(path: string): string | null {
+  return /\.otio$/i.test(path) ? 'tracks' : null
 }
 
 export { isPresenceToken, PRESENCE_TOKEN, type PresenceSlot } from '../shared/presence-slots'

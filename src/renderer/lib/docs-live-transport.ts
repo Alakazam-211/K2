@@ -286,12 +286,14 @@ export function liveUrl(
   wsBase: string,
   token: string,
   doc: string,
-  opts: { workspace?: string; resume?: number; prev?: number } = {},
+  opts: { workspace?: string; resume?: number; prev?: number; root?: string | null } = {},
 ): string {
   const q = new URLSearchParams()
   q.set('doc', doc)
   if (opts.workspace) q.set('workspace', opts.workspace)
-  q.set('root', 'source')
+  // The text views' root is `source`; a keyed doc names its own container root (a timeline's `tracks`), and null leaves it out.
+  const root = opts.root === undefined ? 'source' : opts.root
+  if (root) q.set('root', root)
   if (opts.resume !== undefined) q.set('resume', String(opts.resume))
   if (opts.prev !== undefined) q.set('prev', String(opts.prev))
   q.set('token', token)

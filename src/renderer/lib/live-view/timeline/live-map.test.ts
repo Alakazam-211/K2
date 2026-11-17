@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { modelOf } from './fold'
-import { declineWords, FIRST_SEQUENCE, readOnlyWhy, realPreview, sequenceOf, timelineSlots } from './live-map'
+import { declineWords, FIRST_SEQUENCE, realPreview, sequenceOf, timelineRoot, timelineSlots } from './live-map'
 import type { Book } from './schema'
 
 const book = (timeline: Record<string, Record<string, string>>): Book => ({
@@ -39,11 +39,13 @@ describe('live-map', () => {
   })
 })
 
-describe('readOnlyWhy', () => {
-  it('only .otio is written back: Final Cut Pro XML and Premiere projects are read only live', () => {
-    expect(readOnlyWhy('/w/cut.otio')).toBeNull()
-    expect(readOnlyWhy('/w/cut.fcpxml')).toBe('K2 writes back .otio only')
-    expect(readOnlyWhy('/w/Cut.PRPROJ')).toBe('K2 writes back .otio only')
+describe('timelineRoot', () => {
+  it('an .otio opens on its container root, tracks; the core’s indexed files (.fcpxml, .prproj) leave it out, and the daemon says why', () => {
+    expect(timelineRoot('/w/cut.otio')).toBe('tracks')
+    expect(timelineRoot('/w/Cut.OTIO')).toBe('tracks')
+    expect(timelineRoot('/w/cut.fcpxml')).toBeNull()
+    expect(timelineRoot('/w/cut.prproj')).toBeNull()
+    expect(declineWords('not_a_text_doc').title).toBe('Only .otio timelines are live, for now')
   })
 })
 

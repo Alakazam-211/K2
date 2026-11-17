@@ -16,10 +16,9 @@ export function sayTime(at: bigint | string, within: string): SayTime {
   return { at: String(at), in: within }
 }
 
-/** A say frame's `time`, in the TimePosition shape; null when absent or unreadable. */
-export function readSayTime(raw: unknown): SayTime | null {
-  // TODO(0.46.15): delete the bare-ticks form; senders before 0.46.14 sent `time` as decimal ticks.
-  if (typeof raw === 'string') return DECIMAL.test(raw) ? { at: raw } : null
+/** A say frame's time, in the TimePosition shape; null when absent or unreadable. K2's frame carries `time` as decimal ticks and, when the message said what the playhead was in, `time_in` (docs/say.rs); an `{at, in}` object reads too. */
+export function readSayTime(raw: unknown, rawIn?: unknown): SayTime | null {
+  if (typeof raw === 'string') return DECIMAL.test(raw) ? (typeof rawIn === 'string' && rawIn ? { at: raw, in: rawIn } : { at: raw }) : null
   if (!raw || typeof raw !== 'object') return null
   const t = raw as { at?: unknown; in?: unknown }
   if (typeof t.at !== 'string' || !DECIMAL.test(t.at)) return null

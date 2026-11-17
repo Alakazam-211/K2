@@ -58,7 +58,7 @@ export type LiveDocCoreState =
   | { status: 'timeline' } // a live timeline (the timeline pack's core): the timeline view watches the file itself
   | { status: 'scene' } // a live 3D scene (the BLEND pack's core): the scene view watches the file itself
 
-/** The timeline pack's core id (TODO(vendoring): confirm with K2 once the pack's core is registered in k2_core::docs_cores::CORES). */
+/** The timeline pack's core (k2_core docs_cores: .otio live, .fcpxml and .prproj indexed). Its `liveView` is false: that names a live text editor, not the socket. */
 export const TIMELINE_CORE = 'timeline'
 
 /** The BLEND pack's core id (`docs/cores` answers `{core: 'blend', on, liveView: false}`; off by default). `liveView` only says a core has a live text editor, so it's not read for a scene. */

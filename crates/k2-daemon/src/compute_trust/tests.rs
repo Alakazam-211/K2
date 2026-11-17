@@ -878,6 +878,8 @@ fn lane_secrets_end_to_end_between_two_servers() {
     });
     assert!(seat_out["result"]["plans"].as_array().unwrap().iter().all(|p| p["queued"] == true), "{seat_out}");
     // The lanes file each node gets (root's, through `lanes.write`).
+    // Read back on unix only (k2-node, which reads it, has no Windows port).
+    #[cfg_attr(not(unix), allow(unused_variables))]
     let lanes_file: LanesFile = on(&odb, OWNER, || {
         let n = &onodes[0];
         let h = k2_core::db::shared();
@@ -886,6 +888,7 @@ fn lane_secrets_end_to_end_between_two_servers() {
         let o = plan.commands.iter().map(|c| node_open(n, c)).find(|o| o.cmd.verb == plane::VERB_LANES_WRITE).unwrap();
         plane::check_write_args(&o.cmd.args).unwrap()
     });
+    #[cfg_attr(not(unix), allow(unused_variables))]
     let client_fp = on(&cdb, CLIENT, || my_fp().unwrap());
 
     // Client: the seat is active with the owner's lane; both seat nodes

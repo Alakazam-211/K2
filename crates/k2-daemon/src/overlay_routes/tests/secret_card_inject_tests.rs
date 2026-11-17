@@ -585,12 +585,15 @@ fn a_guests_save_reaches_the_chats_running_session() {
     }
 }
 
+// For the unix-only tests below (they run real agent sessions).
+#[cfg(unix)]
 fn guest_named(project_id: &str, name: &str) -> k2_core::skin::SkinPass {
     let mut p = person_pass(&[project_id.to_string()]);
     p.username = name.to_string();
     p
 }
 
+#[cfg(unix)]
 fn guest_saves(handle: &str, project_id: &str, name: &str, id: &str) -> CliResponse {
     with_request_skin(Some(guest_named(project_id, name)), || {
         post_json("/cli/thread/answer", &HashMap::new(), serde_json::json!({ "addr": handle, "id": id, "secret": SESSION_PW }))
@@ -847,6 +850,7 @@ fn a_file_already_in_the_folder_is_not_claimed_as_delivered() {
 }
 
 /// The vault's minute pass, as the daemon runs it.
+#[cfg(unix)]
 fn vault_tick(vault: &k2_vault::LocalVault) {
     crate::vault::spawn::follow_and_top_up(vault);
 }

@@ -1351,7 +1351,8 @@ mod tests {
         assert!(!crate::vault::proxy::session_counts_as_live("no-such-session"));
     }
 
-    /// The vault id of the only secret in session `sid`.
+    /// The vault id of the only secret in session `sid` (for the unix-only test above).
+    #[cfg(unix)]
     fn k2_vault_id_of(v: &k2_vault::LocalVault, sid: &str) -> String {
         let m = v
             .list(&k2_vault::ListFilter::default(), &k2_vault::Actor::Owner)

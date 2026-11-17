@@ -73,7 +73,7 @@ export function applyFrame(D0: Doc, f: Frame): Doc {
   for (const [a, vals] of Object.entries(f.derived?.units ?? {})) {
     const u = D.units[a]
     if (!u) continue
-    for (const n of VS.unit_derived ?? []) {
+    for (const n of D.unitDerived ?? VS.unit_derived ?? []) {
       if (!(n in vals)) continue
       if (vals[n] === null) delete u.derived[n]
       else u.derived[n] = vals[n] as string

@@ -26,12 +26,14 @@ export const SCENE_SAMPLE_REPLY = 'On it.'
 /** What the picture asks of the source: draw again (Retry). The sample steps its scenario on (the next step is the retry's outcome); the live source (S8) asks K2 Render. */
 export interface SceneControl {
   retryPicture(): void
+  /** The view on screen changed: a live source tells everyone else (presence's view address). */
+  viewChanged?(address: string | null): void
 }
 const NO_CONTROL: SceneControl = { retryPicture: () => undefined }
 
 /** A scene step: the shell's snapshot and the scene's own state. */
 export interface SceneSnapshot extends SampleSnapshot {
-  scene: { S: SimState; scenario: string; step: number; label: string; fileName: string; control: SceneControl }
+  scene: { S: SimState; scenario: string; step: number; label: string; fileName: string; control: SceneControl; meshEpoch?: number }
 }
 
 export const isSceneSnapshot = (s: LiveShellSnapshot): s is SceneSnapshot => 'scene' in s && !!(s as SceneSnapshot).scene

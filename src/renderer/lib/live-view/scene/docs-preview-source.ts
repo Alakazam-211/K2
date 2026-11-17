@@ -130,6 +130,11 @@ export class DocsPreviewPictureSource implements PictureSource {
     this.emit(frame as PictureEvent)
   }
 
+  /** Every view's still is stale (a mesh changed): the next asks fetch again. */
+  refreshAll(): void {
+    for (const k of this.cache.keys()) this.cache.forget(k)
+  }
+
   /** Ask a view again (after a failure): its cached still goes, and the tab asks. */
   retry(view: string): void {
     this.drop(view)

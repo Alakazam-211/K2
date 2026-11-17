@@ -186,4 +186,8 @@ export interface Doc {
   added: Record<string, number>
   generated?: boolean
   pinned?: boolean
+  /** A live doc's derived value names (the view schema's unit_derived); the sample's are the schema's. */
+  unitDerived?: string[]
+  /** The scene the picture draws (the container whose derived current_scene is true); null or absent: no such mark. */
+  currentScene?: string | null
 }

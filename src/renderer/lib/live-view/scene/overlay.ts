@@ -82,6 +82,11 @@ export function presenceSlots(S: SimState): Record<string, Slot> {
 export type Hidden = 'self' | 'collection' | 'none'
 /** Hidden in the file, by K2 Cores' rule (hidden-by.ts, the mesh read's `hidden: self | collection`): its own flag, else no shown path from the scene's master collection to a collection holding it. */
 export function hiddenOf(D: Doc, a: string): Hidden {
+  // A live doc's derived hidden_by is the pack's own answer by the same rule ("self", "collection:@coll:N", absent when shown).
+  if (D.unitDerived?.includes('hidden_by')) {
+    const by = D.units[a]?.derived.hidden_by
+    return by === 'self' ? 'self' : by?.startsWith('collection') ? 'collection' : 'none'
+  }
   const o = objOf(D, a)
   if (o.hidden) return 'self'
   const keys = D.lists[CONT] ?? []
@@ -165,8 +170,22 @@ function itemsOf(S: SimState, pick: string | null | undefined, slots: Record<str
   if (lc)
     for (const a of [...lc.moved, ...lc.direct])
       put(a, { ...base, pri: 4, style: lc.phase, slot: slots[lc.actor.id] ?? 1, who: lc.actor.name, agent: lc.actor.kind === 'agent', rides: !lc.direct.includes(a) })
-  // Linked objects never; hidden ones only while an agent acts on or holds them.
-  return [...items.values()].filter((it) => objOf(S.D, it.a).edit !== '0' && (!isHidden(S.D, it.a, bounds) || (it.agent && (it.style === 'live' || it.style === 'settled' || it.style === 'hold'))))
+  // Linked objects never; hidden ones only while an agent acts on or holds them; nothing outside the scene the picture draws.
+  return [...items.values()].filter((it) => inSceneDrawn(S.D, it.a) && objOf(S.D, it.a).edit !== '0' && (!isHidden(S.D, it.a, bounds) || (it.agent && (it.style === 'live' || it.style === 'settled' || it.style === 'hold'))))
+}
+
+/** In the scene the picture draws: its collections reach the container marked current_scene. No mark (the sample, a view that can't pair): every object is. */
+export function inSceneDrawn(D: Doc, a: string): boolean {
+  if (!D.currentScene) return true
+  const o = objOf(D, a)
+  const seen = new Set<string>()
+  for (const start of [o.container, ...o.also].filter(Boolean)) {
+    for (let c: string | null = start; c && !seen.has(c); c = collOf(D, c).parent) {
+      if (c === D.currentScene) return true
+      seen.add(c)
+    }
+  }
+  return false
 }
 
 /** Driven (the place op or the pack's mark), or the listing's `approx: true` (its `approx_reason` the why). */

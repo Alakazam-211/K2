@@ -159,7 +159,7 @@ fn run_error(e: k2_export::host::RunError) -> CliResponse {
         R::Limit(l) => export_error(&ExportError::Limit(l)),
         R::Cancelled => export_error(&ExportError::Cancelled),
         R::Internal { worker, message } => report_response(
-            &ExportError::Internal { exporter: k2_export::proto::BINARY_NAME.into(), message }.report().with("worker", worker),
+            &ExportError::Internal { exporter: k2_export::proto::WORKER_NAME.into(), message }.report().with("worker", worker),
         ),
         R::Io(m) => export_error(&ExportError::Io(io::Error::other(m))),
         R::Spawn(m) => worker_unavailable(&m),

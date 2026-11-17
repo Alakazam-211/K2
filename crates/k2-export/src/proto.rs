@@ -38,8 +38,12 @@ pub const EXIT_OK: i32 = 0;
 /// The worker's exit after an `E` frame.
 pub const EXIT_ERROR: i32 = 3;
 
-/// The worker binary's name (beside the daemon, in `~/.k2/bin/export/`).
-pub const BINARY_NAME: &str = "k2-export";
+/// The worker binary's file name (beside the daemon, in `~/.k2/bin/export/`):
+/// `k2-export.exe` on Windows, where the installer puts it beside k2-daemon.exe.
+pub const BINARY_NAME: &str = if cfg!(windows) { "k2-export.exe" } else { "k2-export" };
+
+/// The worker's name in reports (the same on every OS).
+pub const WORKER_NAME: &str = "k2-export";
 
 /// The worker's version line (its own, like k2-ptyd's).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -373,6 +377,11 @@ pub fn target_json(exporter: &str, t: &k2_mpc_base::export::ExportTarget) -> ser
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_binary_name_is_the_program_file_on_this_os() {
+        assert_eq!(BINARY_NAME, format!("{WORKER_NAME}{}", std::env::consts::EXE_SUFFIX));
+    }
 
     #[test]
     fn frames_round_trip_and_breaches_are_named() {

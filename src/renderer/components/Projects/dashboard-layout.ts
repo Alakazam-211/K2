@@ -694,9 +694,8 @@ export function computeLayoutGeometry(root: LayoutNode | null): LayoutGeometry {
 
 // ── Display fit (a narrow canvas; never saved) ───────────────────────────
 
-/** The narrowest a tile is drawn: its name, the folded view picker and
- *  close still fit in the bar (tile-bar-fit.ts folds the picker at about
- *  230px). */
+/** The narrowest a tile is drawn: some of its name, the folded view picker,
+ *  ⌘N and close still fit in the bar (tile-bar-fit.ts). */
 export const MIN_TILE_W_PX = 240
 /** The shortest a reflowed tile is drawn: a bar, a few lines and the box. */
 export const MIN_TILE_H_PX = 200

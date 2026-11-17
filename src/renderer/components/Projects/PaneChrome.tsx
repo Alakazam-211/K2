@@ -138,18 +138,19 @@ export function PaneChrome({
           <span aria-hidden="true" className="w-px h-3.5 mx-1 flex-none bg-[var(--color-border)]" data-tile-sep="" />
         </span>
       ) : null}
-      {/* ⌘N pane-switch badge, left of the close button: a shortcut hint,
-          so it shows on the bar's hover and on keyboard focus in the tile
-          (globals.css). It keeps its slot, so nothing moves. */}
+      {/* ⌘N pane-switch hint, left of the close button: a quiet keycap like
+          the app's other shortcut hints (the ⌘K field's, Settings search's).
+          It always shows, the same at rest and on hover, and keeps its room:
+          the name truncates first (tile-bar-fit.ts). */}
       {shortcutNum !== undefined && (
-        <span
-          className="flex-none whitespace-nowrap overflow-hidden mr-2 type-hint text-[var(--color-text-muted)] tabular-nums"
+        <kbd
+          className="flex-none whitespace-nowrap mr-2 px-1.5 py-0.5 border border-[var(--color-border)] rounded-[var(--radius-selector)] type-hint leading-none text-[var(--color-text-muted)] tabular-nums"
           data-tile-shortcut=""
           title={`⌘${shortcutNum} focuses this pane`}
         >
           <span className="key-symbol">⌘</span>
           {shortcutNum}
-        </span>
+        </kbd>
       )}
       {!readOnly && (
         // The shared quiet ×: closing a tile only takes it off the
@@ -172,7 +173,6 @@ export function PaneChrome({
     'data-tile-bar': '',
     'data-tile-hint': hint ? (fit.hint ? 'on' : 'off') : undefined,
     'data-tile-asleep': asleep ? (fit.asleepWord ? 'word' : 'icon') : undefined,
-    'data-tile-keys': shortcutNum !== undefined ? (fit.keys ? 'on' : 'off') : undefined,
     'data-tile-bell': tools ? (fit.bell ? 'on' : 'off') : undefined,
     'data-tile-pick': picker && pickerCompact ? (fit.compact ? 'compact' : 'full') : undefined,
     onMouseDown: readOnly ? undefined : onHeaderMouseDown,

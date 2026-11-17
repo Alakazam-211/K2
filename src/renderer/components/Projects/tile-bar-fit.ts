@@ -1,14 +1,17 @@
 // How a dashboard tile's 32px bar (PaneChrome) fits its parts. The name has
-// priority: as the tile narrows, first the hint hides, then the view picker
-// stops being centred and sits right after the name, then the ⌘N slot goes,
-// then the picker folds to one menu button (the current view's icon), then
-// the bell folds away (search stays: ⌘F is the tile's find), and only then
-// does the name truncate. Every step keeps one row (the owner's mockup).
+// priority over what can give way: as the tile narrows, first the hint
+// hides, then the view picker stops being centred and sits right after the
+// name, then the picker folds to one menu button (the current view's icon),
+// then the bell folds away (search stays: ⌘F is the tile's find), and only
+// then does the name truncate. Every step keeps one row (the owner's mockup).
+//
+// The ⌘N hint always shows (Rosson, 2026-11-17): its room is always kept,
+// so the name truncates before it would.
 //
 // An asleep agent's mark is state, not a hint (Rosson, 2026-11-11): it is
-// never dropped. The word "asleep" holds while the picker moves off centre
-// and ⌘N goes; then it shrinks to a moon (named "Asleep"), before the picker
-// folds. The name truncates before the moon would.
+// never dropped. The word "asleep" holds while the picker moves off centre;
+// then it shrinks to a moon (named "Asleep"), before the picker folds. The
+// name truncates before the moon would.
 
 /** Natural widths in px, read from the bar (`measureTileBar`). */
 export interface TileBarSizes {
@@ -44,8 +47,6 @@ export interface TileBarFit {
   hint: boolean
   /** The picker sits in the bar's centre (else right after the name). */
   centred: boolean
-  /** The ⌘N badge keeps its slot (it shows on hover and keyboard focus). */
-  keys: boolean
   /** The bell keeps its button (true when there is none to fold). */
   bell: boolean
   /** The picker is folded to its menu button. */
@@ -56,13 +57,12 @@ export interface TileBarFit {
 }
 
 /** Before the bar is measured (and in a test DOM): everything in place. */
-export const TILE_BAR_FIT_DEFAULT: TileBarFit = { hint: true, centred: true, keys: true, bell: true, compact: false, asleepWord: true }
+export const TILE_BAR_FIT_DEFAULT: TileBarFit = { hint: true, centred: true, bell: true, compact: false, asleepWord: true }
 
 export function sameTileBarFit(a: TileBarFit, b: TileBarFit): boolean {
   return (
     a.hint === b.hint &&
     a.centred === b.centred &&
-    a.keys === b.keys &&
     a.bell === b.bell &&
     a.compact === b.compact &&
     a.asleepWord === b.asleepWord
@@ -73,37 +73,36 @@ export function sameTileBarFit(a: TileBarFit, b: TileBarFit): boolean {
 const SLACK = 1
 
 export function fitTileBar(s: TileBarSizes): TileBarFit {
-  const end = (keys: boolean, bell = true): number => s.close + (keys ? s.keys : 0) + s.tools - (bell ? 0 : s.bell)
+  // The controls: [bell search |] ⌘N ×. ⌘N's room is always kept.
+  const end = s.close + s.keys + s.tools
   const asleep = (s.asleep ?? 0) > 0
   // The asleep mark rides with the name: the word, or the moon when tight.
   const mark = (word: boolean): number => (asleep ? s.gap + (word ? (s.asleep ?? 0) : (s.asleepIcon ?? 0)) : 0)
   const named = (hint: boolean, word = true): number => s.name + (hint && s.hint > 0 ? s.gap + s.hint : 0) + mark(word)
   const hasHint = s.hint > 0
   const canFold = (s.pickerCompact ?? 0) > 0
-  const fit = (o: Partial<TileBarFit>): TileBarFit => ({ hint: false, centred: false, keys: false, bell: true, compact: false, asleepWord: true, ...o })
+  const fit = (o: Partial<TileBarFit>): TileBarFit => ({ hint: false, centred: false, bell: true, compact: false, asleepWord: true, ...o })
   if (s.picker <= 0) {
     // name [asleep] [hint] … [bell search |] [⌘N] ×
-    const fits = (hint: boolean, keys: boolean, word = true): boolean => named(hint, word) + s.gap + end(keys) + SLACK <= s.width
-    if (fits(true, true)) return fit({ hint: true, keys: true })
-    if (hasHint && fits(false, true)) return fit({ keys: true })
-    if (fits(false, false)) return fit({})
-    if (asleep && fits(false, false, false)) return fit({ asleepWord: false })
+    const fits = (hint: boolean, word = true): boolean => named(hint, word) + s.gap + end + SLACK <= s.width
+    if (fits(true)) return fit({ hint: true })
+    if (hasHint && fits(false)) return fit({})
+    if (asleep && fits(false, false)) return fit({ asleepWord: false })
     return fit({ bell: s.bell <= 0, asleepWord: !asleep })
   }
   // name [asleep] [hint] | picker | [bell search |] [⌘N] ×, the side columns equal while centred.
   const side = (s.width - s.picker - 2 * s.gap) / 2
-  const centres = (hint: boolean): boolean => Math.max(named(hint), end(true)) + SLACK <= side
-  if (centres(true)) return fit({ hint: true, centred: true, keys: true })
-  if (hasHint && centres(false)) return fit({ centred: true, keys: true })
+  const centres = (hint: boolean): boolean => Math.max(named(hint), end) + SLACK <= side
+  if (centres(true)) return fit({ hint: true, centred: true })
+  if (hasHint && centres(false)) return fit({ centred: true })
   // Then the picker follows the name: in full, then folded to its button.
   // The asleep word holds through both, and gives way to the moon before
   // the picker folds.
-  const follows = (keys: boolean, compact: boolean, word = true): boolean =>
-    named(false, word) + s.gap + (compact ? (s.pickerCompact ?? 0) : s.picker) + s.gap + end(keys) + SLACK <= s.width
-  if (follows(true, false)) return fit({ keys: true })
-  if (follows(false, false)) return fit({})
-  if (asleep && follows(false, false, false)) return fit({ asleepWord: false })
-  if (canFold && follows(false, true, !asleep)) return fit({ compact: true, asleepWord: !asleep })
+  const follows = (compact: boolean, word = true): boolean =>
+    named(false, word) + s.gap + (compact ? (s.pickerCompact ?? 0) : s.picker) + s.gap + end + SLACK <= s.width
+  if (follows(false)) return fit({})
+  if (asleep && follows(false, false)) return fit({ asleepWord: false })
+  if (canFold && follows(true, !asleep)) return fit({ compact: true, asleepWord: !asleep })
   return fit({ compact: canFold, bell: s.bell <= 0, asleepWord: !asleep })
 }
 

@@ -2,8 +2,9 @@
 // The tile bar's layout: an agent tile's view picker sits in the middle
 // column of three (name | picker | controls), centred while the name fits
 // beside it and right after the name when it doesn't; a pane without one
-// keeps the plain row. ⌘N is a shortcut hint shown on hover and keyboard
-// focus (globals.css); the × is the shared quiet close button.
+// keeps the plain row. ⌘N is a quiet keycap that always shows, and keeps
+// its place when the bar is short (the name truncates first); the × is the
+// shared quiet close button.
 import type React from 'react'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -87,19 +88,18 @@ describe('PaneChrome', () => {
     let restore = stubWidths({ bar: 400, title: 90, picker: 96 })
     render(agentTile())
     expect(bar().getAttribute('data-tile-fit')).toBe('centred')
-    expect(bar().getAttribute('data-tile-keys')).toBe('on')
     cleanup(); restore()
     // A side column of (300 - 96) / 2 = 102 < 107: the picker follows the name, nothing truncates.
     restore = stubWidths({ bar: 300, title: 90, picker: 96 })
     render(agentTile())
     expect(bar().getAttribute('data-tile-fit')).toBe('follow')
-    expect(bar().getAttribute('data-tile-keys')).toBe('on')
     cleanup(); restore()
-    // 106 + 96 + 44 + 1 > 240: the ⌘N slot goes before the name truncates.
+    // 106 + 96 + 44 + 1 > 240: the name truncates; ⌘N keeps its place.
     restore = stubWidths({ bar: 240, title: 90, picker: 96 })
     render(agentTile())
     expect(bar().getAttribute('data-tile-fit')).toBe('follow')
-    expect(bar().getAttribute('data-tile-keys')).toBe('off')
+    expect(bar().hasAttribute('data-tile-keys')).toBe(false)
+    expect(bar().querySelector('[data-tile-shortcut]')?.textContent).toBe('⌘2')
     restore()
   })
 
@@ -128,10 +128,10 @@ describe('PaneChrome', () => {
     render(asleepTile())
     expect([bar().getAttribute('data-tile-fit'), bar().getAttribute('data-tile-asleep'), bar().getAttribute('data-tile-pick')]).toEqual(['follow', 'word', 'full'])
     cleanup(); restore()
-    // 146 + 96 + 24 + 1 = 267 > 250, 106 + 12 + 96 + 24 + 1 = 239: the moon, the picker in full.
-    restore = stubWidths({ bar: 250, title: 90, picker: 96, compact: 30, asleep: 40, moon: 12 })
+    // 146 + 96 + 44 + 1 = 287 > 260, 106 + 12 + 96 + 44 + 1 = 259: the moon, the picker in full, ⌘N kept.
+    restore = stubWidths({ bar: 260, title: 90, picker: 96, compact: 30, asleep: 40, moon: 12 })
     render(asleepTile())
-    expect([bar().getAttribute('data-tile-asleep'), bar().getAttribute('data-tile-pick'), bar().getAttribute('data-tile-keys')]).toEqual(['icon', 'full', 'off'])
+    expect([bar().getAttribute('data-tile-asleep'), bar().getAttribute('data-tile-pick')]).toEqual(['icon', 'full'])
     cleanup(); restore()
     // Tighter: the picker folds, the moon stays.
     restore = stubWidths({ bar: 120, title: 90, picker: 96, compact: 30, asleep: 40, moon: 12 })
@@ -164,17 +164,18 @@ describe('PaneChrome', () => {
     expect(b.hasAttribute('data-tile-fit')).toBe(false)
     expect(b.className).toContain('flex')
     expect(b.querySelector('[data-tile-picker]')).toBeNull()
-    expect([b.getAttribute('data-tile-hint'), b.getAttribute('data-tile-keys')]).toEqual(['on', 'on'])
+    expect(b.getAttribute('data-tile-hint')).toBe('on')
     cleanup(); restore()
     // 145 > 120: the hint goes first.
     restore = stubWidths({ bar: 120, title: 70, hint: 30 })
     render(doc())
-    expect([bar().getAttribute('data-tile-hint'), bar().getAttribute('data-tile-keys')]).toEqual(['off', 'on'])
+    expect(bar().getAttribute('data-tile-hint')).toBe('off')
     cleanup(); restore()
-    // 115 > 100: then ⌘N.
+    // 115 > 100: then the name truncates; ⌘N stays.
     restore = stubWidths({ bar: 100, title: 70, hint: 30 })
     render(doc())
-    expect([bar().getAttribute('data-tile-hint'), bar().getAttribute('data-tile-keys')]).toEqual(['off', 'off'])
+    expect(bar().getAttribute('data-tile-hint')).toBe('off')
+    expect(bar().querySelector('[data-tile-shortcut]')?.textContent).toBe('⌘5')
     restore()
   })
 
@@ -233,16 +234,23 @@ describe('PaneChrome', () => {
     expect(b.innerHTML).not.toMatch(/text-\[\d+px\]|font-mono/)
   })
 
-  it('⌘N keeps its name and tooltip, and shows only on the bar’s hover and keyboard focus in the tile', () => {
+  it('⌘N keeps its name and tooltip, and always shows: a quiet keycap at rest, unchanged on hover', () => {
     render(agentTile())
     const keys = bar().querySelector('[data-tile-shortcut]') as HTMLElement
     expect(keys.getAttribute('title')).toBe('⌘2 focuses this pane')
     expect(keys.textContent).toBe('⌘2')
-    // globals.css: hidden at rest, keeps its slot; shown on hover and on keyboard focus (not while typing).
-    expect(CSS).toMatch(/\[data-tile-shortcut\] \{ opacity: 0;/)
-    expect(CSS).toContain('[data-tile-bar]:hover [data-tile-shortcut],')
-    expect(CSS).toContain('[data-tile]:has(:focus-visible:not(textarea, input, [contenteditable])) [data-tile-shortcut] { opacity: 1; }')
-    expect(document.querySelector('[data-tile]')).not.toBeNull()
+    // A keycap like the app's other shortcut hints: a hairline edge, the
+    // selector radius, muted text, no fill of its own.
+    expect(keys.tagName).toBe('KBD')
+    for (const c of ['border', 'border-[var(--color-border)]', 'rounded-[var(--radius-selector)]', 'text-[var(--color-text-muted)]']) {
+      expect(keys.className.split(/\s+/)).toContain(c)
+    }
+    // Nothing hides it at rest, here or in globals.css, and nothing on hover
+    // or focus changes it.
+    expect(keys.className).not.toMatch(/(^|\s)(hidden|invisible|opacity-0|sr-only)(\s|$)|group-hover|hover:/)
+    expect(keys.getAttribute('aria-hidden')).toBeNull()
+    expect(CSS).not.toMatch(/\[data-tile-shortcut\][^{}]*\{[^}]*(opacity|visibility|display: none|max-width: 0)/)
+    expect(CSS).not.toContain('data-tile-keys')
   })
 
   describe('an agent tile’s bell and search (TileBarTools)', () => {
@@ -294,27 +302,24 @@ describe('PaneChrome', () => {
       expect(bar().hasAttribute('data-tile-bell')).toBe(false)
     })
 
-    it('fold the bell after ⌘N, before the name truncates', () => {
+    it('fold the bell before the name truncates, keeping ⌘N', () => {
       // No CSS in jsdom: name 16 + 90, picker 96, ⌘N 20, tools 24 + 24, × 24.
-      // Following needs 106 + 96 + 20 + 48 + 24 + 1 = 295; without ⌘N 275.
+      // Following needs 106 + 96 + 20 + 48 + 24 + 1 = 295.
       let restore = stubWidths({ bar: 295, title: 90, picker: 96 })
       render(tile())
-      expect([bar().getAttribute('data-tile-keys'), bar().getAttribute('data-tile-bell')]).toEqual(['on', 'on'])
+      expect(bar().getAttribute('data-tile-bell')).toBe('on')
       cleanup(); restore()
-      restore = stubWidths({ bar: 275, title: 90, picker: 96 })
+      restore = stubWidths({ bar: 294, title: 90, picker: 96 })
       render(tile())
-      expect([bar().getAttribute('data-tile-keys'), bar().getAttribute('data-tile-bell')]).toEqual(['off', 'on'])
-      cleanup(); restore()
-      restore = stubWidths({ bar: 274, title: 90, picker: 96 })
-      render(tile())
-      expect([bar().getAttribute('data-tile-keys'), bar().getAttribute('data-tile-bell')]).toEqual(['off', 'off'])
+      expect(bar().getAttribute('data-tile-bell')).toBe('off')
+      expect(bar().querySelector('[data-tile-shortcut]')?.textContent).toBe('⌘2')
       restore()
-      // A folded bell collapses like ⌘N (globals.css).
+      // A folded bell collapses to no width (globals.css).
       expect(CSS).toContain('[data-tile-bar][data-tile-bell="off"] [data-tile-tool="bell"],')
     })
   })
 
-  it('folds the picker to its menu button after ⌘N, keeping one row and the name', () => {
+  it('folds the picker to its menu button, keeping one row, the name and ⌘N', () => {
     const folding = (): React.JSX.Element => (
       <PaneChrome
         title="Design System"
@@ -330,14 +335,15 @@ describe('PaneChrome', () => {
         <div />
       </PaneChrome>
     )
-    // name 106, ⌘N 20, × 24: in full 106 + 96 + 44 + 1 = 247; without ⌘N 227; folded (36) 167.
-    let restore = stubWidths({ bar: 227, title: 90, picker: 96, compact: 36 })
+    // name 106, ⌘N 20, × 24: in full 106 + 96 + 44 + 1 = 247; folded (36) 187.
+    let restore = stubWidths({ bar: 247, title: 90, picker: 96, compact: 36 })
     render(folding())
-    expect([bar().getAttribute('data-tile-keys'), bar().getAttribute('data-tile-pick')]).toEqual(['off', 'full'])
+    expect(bar().getAttribute('data-tile-pick')).toBe('full')
     cleanup(); restore()
-    restore = stubWidths({ bar: 226, title: 90, picker: 96, compact: 36 })
+    restore = stubWidths({ bar: 246, title: 90, picker: 96, compact: 36 })
     render(folding())
-    expect([bar().getAttribute('data-tile-keys'), bar().getAttribute('data-tile-pick')]).toEqual(['off', 'compact'])
+    expect(bar().getAttribute('data-tile-pick')).toBe('compact')
+    expect(bar().querySelector('[data-tile-shortcut]')?.textContent).toBe('⌘2')
     // Both stay mounted (the capsule keeps Ctrl+`); CSS shows one.
     const cell = bar().querySelector('[data-tile-picker]') as HTMLElement
     expect(cell.querySelector('[data-tile-picker-full] [data-testid="capsule"]')).not.toBeNull()

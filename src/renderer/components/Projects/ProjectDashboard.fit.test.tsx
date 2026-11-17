@@ -35,7 +35,9 @@ vi.mock('./DashboardAgentTile', () => ({
   },
 }))
 vi.mock('./PaneChrome', () => ({
-  PaneChrome: ({ title }: { title: string }) => <div data-testid="tile">{title}</div>,
+  PaneChrome: ({ title, shortcutNum }: { title: string; shortcutNum?: number }) => (
+    <div data-testid="tile" data-shortcut={shortcutNum}>{title}</div>
+  ),
 }))
 vi.mock('./TileBarTools', () => ({ TileBarTools: () => null, tileToolsPlace: () => null }))
 
@@ -136,6 +138,20 @@ describe('a dashboard in a narrow canvas', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('each tile’s ⌘N hint', () => {
+  it('numbers the tiles 1 to 6 in their reading order, saved or reflowed', () => {
+    canvasW = 1200
+    render(<ProjectDashboard show={show} dashboard={dashboard} />)
+    const numbers = (): Array<[string | undefined, string | undefined]> =>
+      panes().map((p) => [p.dataset.paneId, p.querySelector<HTMLElement>('[data-testid="tile"]')?.dataset.shortcut])
+    const expected = [['t:a', '1'], ['t:b', '2'], ['t:c', '3'], ['t:d', '4'], ['t:e', '5'], ['t:f', '6']]
+    resize(1200)
+    expect(numbers()).toEqual(expected)
+    resize(380)
+    expect(numbers()).toEqual(expected)
   })
 })
 

@@ -2687,26 +2687,18 @@ html[data-style="glass"] [data-page-tabs][data-tab-mode="switch"][data-tab-size=
    While the name fits beside it, the picker is centred (equal side
    columns); when it doesn't, the picker follows the name and the controls
    keep the right end. PaneChrome measures and sets `data-tile-fit`, and
-   hides the hint, then the ⌘N slot, folds the picker to its menu button,
-   then hides the bell, before the name truncates. An asleep agent's word
-   shrinks to its moon (never hidden). A hidden part collapses to no width
-   (so it can still be measured). */
+   hides the hint, folds the picker to its menu button, then hides the
+   bell, before the name truncates. The ⌘N keycap always shows and keeps its
+   room. An asleep agent's word shrinks to its moon (never hidden). A hidden
+   part collapses to no width (so it can still be measured). */
 [data-tile-bar][data-tile-fit="centred"] { grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr); }
 [data-tile-bar][data-tile-fit="follow"] { grid-template-columns: minmax(0, max-content) auto minmax(max-content, 1fr); }
 [data-tile-bar][data-tile-hint="off"] [data-tile-hint],
 [data-tile-bar][data-tile-asleep="icon"] [data-tile-asleep-word],
 [data-tile-bar][data-tile-asleep="word"] [data-tile-asleep-icon],
-[data-tile-bar][data-tile-keys="off"] [data-tile-shortcut],
 [data-tile-bar][data-tile-bell="off"] [data-tile-tool="bell"],
 [data-tile-bar][data-tile-pick="compact"] [data-tile-picker-full],
 [data-tile-bar][data-tile-pick="full"] [data-tile-picker-compact] { max-width: 0; margin: 0; overflow: hidden; visibility: hidden; }
-/* ⌘N is a shortcut hint, not content: it shows while the pointer is on the
-   bar and while keyboard focus is on a control in the tile (not while
-   typing in its message box or terminal). It keeps its slot, so nothing
-   moves when it shows. */
-[data-tile-shortcut] { opacity: 0; transition: opacity var(--motion-duration-fast) var(--motion-ease-standard); }
-[data-tile-bar]:hover [data-tile-shortcut],
-[data-tile]:has(:focus-visible:not(textarea, input, [contenteditable])) [data-tile-shortcut] { opacity: 1; }
 /* An agent tile's search (TileBarTools, ThreadFloatSearch `bar`): the button
    stays in the bar, and the field opens just under it, over the top of the
    tile's Thread, at the right, as wide as reads well. The Thread pads by it

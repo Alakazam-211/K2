@@ -30,9 +30,14 @@ pub struct TemplateLock {
     /// Switches the permissions step turned on (T3).
     #[serde(default)]
     pub granted: Vec<String>,
-    /// Suggestions filed as cards for a person (T3).
+    /// Suggestions asked of a person on a card (T3): filed, or waiting in
+    /// `cards_pending`. A re-apply never asks these again.
     #[serde(default)]
     pub carded: Vec<String>,
+    /// Cards still to file: the agent had no Thread when it was hired.
+    /// Whatever starts it first files them once, then clears this (T3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cards_pending: Vec<String>,
     /// Files the agent had changed when an upgrade came: kept, with the new
     /// text beside each as `<file>.proposed` (T5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -138,6 +143,24 @@ pub fn replay_hello(workspace: &str) -> Result<Option<String>, HireError> {
     l.hello_sent_at = Some(super::super::now_secs());
     write(workspace, &l)?;
     Ok(Some(text))
+}
+
+/// Take the cards waiting for the agent's first start: clear them in the
+/// lock FIRST, then return them for the caller to file (never twice).
+pub fn take_pending_cards(workspace: &str) -> Result<Vec<String>, HireError> {
+    let _g = HELLO_TAKE.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(mut l) = read(workspace)? else { return Ok(Vec::new()) };
+    if l.cards_pending.is_empty() {
+        return Ok(Vec::new());
+    }
+    let taken = std::mem::take(&mut l.cards_pending);
+    write(workspace, &l)?;
+    Ok(taken)
+}
+
+/// The workspace's lock holds cards still to file (a cheap read).
+pub fn has_pending_cards(workspace: &str) -> bool {
+    matches!(read(workspace), Ok(Some(l)) if !l.cards_pending.is_empty())
 }
 
 impl TemplateLock {

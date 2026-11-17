@@ -299,6 +299,8 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
                     no_wiki: !seed_wiki,
                     tool_chosen: r.preset.is_some(),
                     model_chosen: r.model.is_some(),
+                    declined: &[],
+                    permissions_by_door: false,
                 })?;
                 hello = out.hello;
             }

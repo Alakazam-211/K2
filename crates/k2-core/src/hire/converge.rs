@@ -63,6 +63,16 @@ pub struct ConvergeRequest {
     /// NOT mint a database.
     #[serde(default)]
     pub db_access: Option<String>,
+    /// A template hire: suggested permissions the person unticked on the
+    /// Review step (action ids, or `permission-cards`). Absent: every
+    /// suggestion is decided by the hirer's reach (prd-agent-templates-v1
+    /// §6 step 4, T3).
+    #[serde(default)]
+    pub decline_permissions: Option<Vec<String>>,
+    /// The door grants its own starter set (the first-run routes). Never
+    /// read from a request body.
+    #[serde(skip)]
+    pub permissions_by_door: bool,
 }
 
 /// What the caller may do beyond the shape of the request.
@@ -414,10 +424,15 @@ pub fn converge(
             super::template::check_caller(&tpl, caller)?;
             let vars = super::template::bind_params(&tpl, &req.params.clone().unwrap_or_default(), caller)?;
             let answers = super::template::bind_answers(&tpl, &req.answers.clone().unwrap_or_default())?;
+            let declined = super::template::permissions::clean_declined(&req.decline_permissions.clone().unwrap_or_default());
+            super::template::permissions::check_declined(&tpl, &declined)?;
             super::template::apply::check_lock(&path, &tpl)?;
-            Some((tpl, vars, answers))
+            Some((tpl, vars, answers, declined))
         }
         None => {
+            if req.decline_permissions.as_ref().is_some_and(|d| !d.is_empty()) {
+                return Err(HireError::usage("declinePermissions goes with a template (--template <id>)"));
+            }
             if req.params.as_ref().is_some_and(|p| !p.is_empty()) {
                 return Err(HireError::usage("params go with a template (--template <id>)"));
             }
@@ -504,7 +519,7 @@ pub fn converge(
     }
 
     let mut template_out = None;
-    if let Some((tpl, vars, answers)) = tpl.as_ref() {
+    if let Some((tpl, vars, answers, declined)) = tpl.as_ref() {
         // The template writes the persona (and its starters, layers, lock)
         // before the name and preset steps below.
         let display = match req.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -531,6 +546,8 @@ pub fn converge(
             no_wiki,
             tool_chosen: req.preset.as_deref().is_some_and(|s| !s.trim().is_empty()),
             model_chosen: req.default_model.as_deref().is_some_and(|s| !s.trim().is_empty()),
+            declined,
+            permissions_by_door: req.permissions_by_door,
         })?;
         changed |= out.changed;
         steps_out.push(if out.wrote_role { done("write-persona") } else { skipped("write-persona", "exists") });

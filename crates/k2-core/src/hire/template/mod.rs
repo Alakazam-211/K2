@@ -14,12 +14,13 @@
 //!   ([`apply::workspace_steps`]), and writes `.k2/agent/template.lock`.
 //!   A dry run returns the same rows without writing: that is the review.
 //! - A template never carries authority. It *suggests* standing switches;
-//!   the permissions step (T3) decides from the hirer's reach. This slice
-//!   reports the suggestions and grants nothing.
+//!   the permissions step ([`permissions`], T3) decides each one from the
+//!   hirer's reach: granted, asked on a card, or refused with a hint.
 
 pub mod apply;
 pub mod format;
 pub mod lock;
+pub mod permissions;
 pub mod render;
 pub mod save;
 pub mod sets;

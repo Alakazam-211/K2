@@ -6,9 +6,12 @@
 //! its rows are the daemon's own truth for the review screen.
 //!
 //! Row statuses: `write` (dry run: would write), `done` (written), `skip`
-//! (already there), `yours` (the agent's own file, kept), `suggest` (a
-//! permission the template suggests; the permissions step, T3, turns it
-//! into a grant or a card).
+//! (already there), `yours` (the agent's own file, kept). Permission rows
+//! (the permissions step, T3, [`super::permissions`]): `grant` (dry run:
+//! would turn on), `done` (turned on), `card` (asked of a person on a
+//! permission card), `refused` (with a `hint`: who can turn it on, and
+//! how), `skip` (already on), `declined` (unticked at hire), and `suggest`
+//! (no decision here: the door grants its own set).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -47,6 +50,12 @@ pub struct ApplyRequest {
     pub no_wiki: bool,
     pub no_agents_md: bool,
     pub fanout: bool,
+    /// Suggested permissions the person unticked on the Review step (action
+    /// ids, or `permission-cards`). Empty: every suggestion is decided.
+    pub declined: Vec<String>,
+    /// The door grants its own starter set (the first-run routes): the
+    /// permission rows stay `suggest` and nothing is granted here.
+    pub permissions_by_door: bool,
 }
 
 impl ApplyRequest {
@@ -63,22 +72,34 @@ pub struct Row {
     pub status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// A refused permission: who can turn it on, and how.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 fn row(step: &'static str, target: impl Into<String>, status: &'static str, reason: Option<&str>) -> Row {
-    Row { step, target: target.into(), status, reason: reason.map(str::to_string) }
+    Row { step, target: target.into(), status, reason: reason.map(str::to_string), hint: None }
 }
 
-/// The permissions part (T3 fills `granted` and `carded`; this slice only
-/// reports `suggested`).
+/// The permissions part (T3, [`super::permissions`]).
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionPlan {
     /// The template turns on "Can ask for permission cards".
     pub cards: bool,
     pub suggested: Vec<String>,
+    /// On for this agent through its template, this apply or an earlier
+    /// one (a dry run: what this apply would turn on).
     pub granted: Vec<String>,
+    /// Asked of a person on a card, this apply or an earlier one (a dry
+    /// run: what this apply would ask).
     pub carded: Vec<String>,
+    /// Cards waiting for the agent's first start (it has no Thread yet).
+    pub cards_pending: Vec<String>,
+    /// Couldn't be given or asked for: each with who can turn it on.
+    pub refused: Vec<super::permissions::Refusal>,
+    /// Unticked at hire.
+    pub declined: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -190,6 +211,10 @@ pub struct StepInput<'a> {
     /// The hirer picked a tool / model: the template's suggestion stays out.
     pub tool_chosen: bool,
     pub model_chosen: bool,
+    /// Suggested permissions the person unticked ([`ApplyRequest::declined`]).
+    pub declined: &'a [String],
+    /// [`ApplyRequest::permissions_by_door`].
+    pub permissions_by_door: bool,
 }
 
 /// One template per agent: a lock naming another id is a conflict.
@@ -583,18 +608,45 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
         rows.push(row(step, want, wrote, None));
     }
 
-    // Permissions: suggestions only in this slice (T3 decides).
+    // Permissions (T3): the hirer's reach decides each suggestion. Never
+    // turns one off; never asks twice on a card.
+    let suggested = t.suggested();
+    let asked_before: Vec<String> = prev.as_ref().map(|l| l.carded.clone()).unwrap_or_default();
+    let step_in = super::permissions::StepIn {
+        caller: inp.caller,
+        path: inp.path,
+        template_name: &t.meta.name,
+        cards: t.meta.permissions.cards,
+        suggested: &suggested,
+        declined: inp.declined,
+        asked_before: &asked_before,
+        dry_run: dry,
+    };
+    let decided = if inp.permissions_by_door {
+        super::permissions::suggest_only(&step_in, Some("granted by the route that made this agent"))
+    } else {
+        super::permissions::run(&step_in)
+    };
+    let union = |before: Vec<String>, now: &[String]| {
+        let mut v = before;
+        for x in now {
+            if !v.contains(x) {
+                v.push(x.clone());
+            }
+        }
+        v
+    };
     let permissions = PermissionPlan {
         cards: t.meta.permissions.cards,
-        suggested: t.suggested(),
-        granted: prev.as_ref().map(|l| l.granted.clone()).unwrap_or_default(),
-        carded: prev.as_ref().map(|l| l.carded.clone()).unwrap_or_default(),
+        suggested: suggested.clone(),
+        granted: union(prev.as_ref().map(|l| l.granted.clone()).unwrap_or_default(), &decided.granted),
+        carded: union(asked_before.clone(), &decided.carded),
+        cards_pending: union(prev.as_ref().map(|l| l.cards_pending.clone()).unwrap_or_default(), &decided.cards_pending),
+        refused: decided.refused.clone(),
+        declined: decided.rows.iter().filter(|r| r.status == "declined").map(|r| r.target.clone()).collect(),
     };
-    if permissions.cards {
-        rows.push(row("permission", "permission-cards", "suggest", None));
-    }
-    for id in &permissions.suggested {
-        rows.push(row("permission", id.clone(), "suggest", None));
+    for d in decided.rows {
+        rows.push(Row { step: "permission", target: d.target, status: d.status, reason: d.reason, hint: d.hint });
     }
 
     // The hello, rendered on the first create only. It is kept in the lock
@@ -615,6 +667,7 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
         suggested: permissions.suggested.clone(),
         granted: permissions.granted.clone(),
         carded: permissions.carded.clone(),
+        cards_pending: permissions.cards_pending.clone(),
         kept: prev.as_ref().map(|l| l.kept.clone()).unwrap_or_default(),
         files,
         // What the text was rendered with: the first apply's, kept after.
@@ -745,6 +798,8 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
     super::check_caller(&tpl, caller)?;
     let vars = super::bind_params(&tpl, &req.params, caller)?;
     let answers = super::bind_answers(&tpl, &req.answers)?;
+    let declined = super::permissions::clean_declined(&req.declined);
+    super::permissions::check_declined(&tpl, &declined)?;
     // An agent's hire only ever creates: the path is checked (and a dry
     // run refused) the same way the real hire checks it.
     let path = match req.path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -794,6 +849,8 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
             no_wiki: req.no_wiki,
             tool_chosen: req.tool.as_deref().is_some_and(|s| !s.trim().is_empty()),
             model_chosen: req.model.as_deref().is_some_and(|s| !s.trim().is_empty()),
+            declined: &declined,
+            permissions_by_door: req.permissions_by_door,
         })?;
         rows.extend(out.rows);
         let (ws_id, handle) = match &existing {
@@ -830,6 +887,8 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
         no_wiki: Some(req.no_wiki),
         no_agents_md: Some(req.no_agents_md),
         fanout: Some(req.fanout),
+        decline_permissions: Some(declined),
+        permissions_by_door: req.permissions_by_door,
         ..Default::default()
     };
     let out = converge::converge(&creq, caller, auth)?;

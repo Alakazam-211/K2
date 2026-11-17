@@ -57,9 +57,11 @@ export interface VideoTileProps {
   fill?: boolean
   /** This viewer may zoom in on the picture while it's live (TileZoom). */
   zoomable?: boolean
+  /** A small tile (the share layout's column): a smaller avatar. */
+  compact?: boolean
 }
 
-export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = false }: VideoTileProps): React.JSX.Element {
+export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = false, compact = false }: VideoTileProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
   const held = tile.state !== 'live'
@@ -90,6 +92,31 @@ export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = 
   }, [ctl, tile.key, wantSharp])
 
   const line = placeholderLine(tile)
+  const cameraOff = tile.state === 'off' && tile.source === 'camera'
+  const avatarSize = compact ? 40 : tile.large || fill ? 72 : 56
+  // The name's chip, with the mic when it's off: on the picture's bottom
+  // left, or under the avatar while the camera's off.
+  const label = (at: 'bottom-left' | 'center'): React.JSX.Element => (
+    <div
+      data-testid="video-tile-label"
+      data-at={at}
+      {...CHIP_CUT}
+      className={
+        at === 'center'
+          ? `${MEDIA_LABEL} max-w-full`
+          : `absolute bottom-1.5 left-1.5 ${MEDIA_LABEL} ${corner ? 'max-w-[60%]' : 'max-w-[calc(100%-12px)]'}`
+      }
+    >
+      {tile.audioMuted ? (
+        <span data-testid="video-tile-muted" title="Microphone off" className="flex shrink-0">
+          <MicOffIcon size={12} />
+        </span>
+      ) : null}
+      <span data-testid="video-tile-name" className="truncate">
+        {tile.name}
+      </span>
+    </div>
+  )
   const transform = viewTransform(zoom.view)
   return (
     <div
@@ -138,30 +165,27 @@ export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = 
             style={{ transform: tile.mirrored ? 'scaleX(-1)' : undefined, visibility: line === null ? 'visible' : 'hidden' }}
           />
         </div>
-        {line !== null ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-[var(--tile-raised)]">
-            {tile.state === 'off' && tile.source === 'camera' ? <PresenceAvatar name={tile.self ? 'You' : tile.name} role="member" size={36} /> : null}
+        {cameraOff ? (
+          // The camera's off: the person, as everywhere else in K2, on the
+          // tile's surface, with their name's chip (and its mic) under them.
+          <div data-testid="video-tile-off" className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-[var(--tile-raised)] p-2">
+            <span data-testid="video-tile-avatar" data-size={avatarSize} className="flex shrink-0">
+              <PresenceAvatar name={tile.self ? 'You' : tile.name} role="member" size={avatarSize} />
+            </span>
+            {label('center')}
+            <span data-testid="video-tile-line" className="sr-only">
+              {line}
+            </span>
+          </div>
+        ) : line !== null ? (
+          <div data-testid="video-tile-placeholder" className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-[var(--tile-raised)]">
             <span data-testid="video-tile-line" className="px-2 text-center text-[11px] text-[var(--color-text-muted)]">
               {line}
             </span>
           </div>
         ) : null}
       </div>
-      <div
-        data-testid="video-tile-label"
-        data-at="bottom-left"
-        {...CHIP_CUT}
-        className={`absolute bottom-1.5 left-1.5 ${MEDIA_LABEL} ${corner ? 'max-w-[60%]' : 'max-w-[calc(100%-12px)]'}`}
-      >
-        {tile.audioMuted ? (
-          <span data-testid="video-tile-muted" title="Microphone off" className="flex">
-            <MicOffIcon size={12} />
-          </span>
-        ) : null}
-        <span data-testid="video-tile-name" className="truncate">
-          {tile.name}
-        </span>
-      </div>
+      {cameraOff ? null : label('bottom-left')}
       {corner ? (
         <div data-testid="video-tile-corner" data-at="bottom-right" {...CHIP_CUT} className={`absolute bottom-1.5 right-1.5 ${MEDIA_LABEL}`}>
           {corner}

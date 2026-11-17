@@ -43,7 +43,7 @@ function ShareView({ layout, ctl, callId, className }: { layout: ShareLayout; ct
                 className="block w-full shrink-0 text-left"
                 onClick={() => pickShare(callId, t.key)}
               >
-                <VideoTile tile={t} ctl={ctl} />
+                <VideoTile tile={t} ctl={ctl} compact />
               </button>
             ))}
             <div aria-hidden className="h-px shrink-0 bg-[var(--color-border)]" />
@@ -52,7 +52,7 @@ function ShareView({ layout, ctl, callId, className }: { layout: ShareLayout; ct
         <div role="list" aria-label="People in the call" data-testid="call-share-people" className="flex flex-col gap-1.5">
           {people.map((t) => (
             <div key={t.key} role="listitem" className="shrink-0">
-              <VideoTile tile={t} ctl={ctl} />
+              <VideoTile tile={t} ctl={ctl} compact />
             </div>
           ))}
         </div>

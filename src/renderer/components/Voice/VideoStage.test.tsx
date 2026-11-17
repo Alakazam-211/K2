@@ -146,6 +146,30 @@ describe('the tiles', () => {
     expect(label.className).toMatch(/\bleft-1\.5\b/)
   })
 
+  it("with the camera off: the person's avatar and name in the middle of the tile, the muted mic on the name", async () => {
+    const s = setup([fakeTrack('7', { muted: true }), fakeTrack('8', { muted: true })])
+    render(<VideoStage ctl={s.ctl} people={people} title="Standup" />)
+    await ready(s)
+    const [ada, grace] = await screen.findAllByTestId('video-tile')
+    expect(ada.dataset.state).toBe('off')
+    const off = within(ada).getByTestId('video-tile-off')
+    expect(off.className).toContain('bg-[var(--tile-raised)]')
+    const avatar = within(off).getByTestId('video-tile-avatar')
+    expect(avatar.querySelector('[data-presence-chip]')).not.toBeNull()
+    // Larger than the old 36px mark.
+    expect(Number(avatar.dataset.size)).toBeGreaterThanOrEqual(48)
+    // The name's chip moves to the middle, under the avatar, with the mic.
+    const label = within(ada).getByTestId('video-tile-label')
+    expect(label.dataset.at).toBe('center')
+    expect(off.contains(label)).toBe(true)
+    expect(within(label).getByTestId('video-tile-name').textContent).toBe('Ada')
+    expect(within(label).queryByTestId('video-tile-muted')).not.toBeNull()
+    expect(within(grace).getByTestId('video-tile-label').dataset.at).toBe('center')
+    expect(within(grace).queryByTestId('video-tile-muted')).toBeNull()
+    // Said for screen readers, not drawn over the avatar.
+    expect(within(ada).getByTestId('video-tile-line').className).toContain('sr-only')
+  })
+
   it('picks columns for the tile count', () => {
     expect([1, 2, 4, 5, 9, 10].map(gridColumns)).toEqual([1, 2, 2, 3, 3, 4])
   })

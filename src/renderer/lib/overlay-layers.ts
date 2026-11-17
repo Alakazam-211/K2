@@ -29,12 +29,6 @@ export const REMOVE_WORKSPACE_Z = 1000
  *  nothing (Rosson 2026-11-04). */
 export const ADD_WORKSPACE_Z = 1000
 
-/** The floating call tile (Voice/CallTile): over the room and over Zen
- *  (150), so a video call stays in view on every page; below Settings (200),
- *  where the top bar's call controls take over, and below every modal, menu
- *  and toast. It steps aside while a menu or popover overlaps it. */
-export const CALL_TILE_Z = 160
-
 /** The call expanded over K2 (Voice/CallExpanded): its scrim, and its frame
  *  one above. Over everything in the window, Settings and modals included,
  *  since it is what the person is looking at while it's open; below toasts

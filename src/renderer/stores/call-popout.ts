@@ -1,7 +1,7 @@
 // The call in its own window (Rosson 2026-11-10, "pop out", like a Focus
 // window for one agent). Per-client view state: whether the call's window is
-// open, so every other window's tile and call view give way to it, and come
-// back when it closes. Never daemon state.
+// open, so every other window's stage gives way to it, and comes back when
+// it closes. Never daemon state.
 //
 // The call never moves: it lives in the app's Rust process (the sew-voice
 // plugin), and every K2 window adopts it and draws its own sinks. So opening
@@ -9,11 +9,11 @@
 // src-tauri's `window_open_call` (call_window.rs), which tells every window
 // `k2-call-popout { open }` when it opens and when it's destroyed.
 //
-// Pop in (the call's window's button) closes that window and brings the call
-// back where it came from: the window that popped it out opens its call view,
-// with the same share in the middle (call-view.ts keeps both per client).
-// Closing the call's window with the OS's close button pops it back in too,
-// as the floating tile: the call never ends because a window closed.
+// Back to chat (the call's window's button) closes that window and brings
+// the call back where it came from: the window that popped it out opens its
+// stage, with the same share in the middle (call-view.ts keeps both per
+// client). Closing the call's window with the OS's close button brings it
+// back too: the call never ends because a window closed.
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -37,7 +37,7 @@ export interface CallPopoutBridge {
 export interface CallPopoutState {
   /** This app can pop the call out (the desktop app; not the web client). */
   available: boolean
-  /** The call's window is open: this window shows no tile or call view. */
+  /** The call's window is open: this window shows no stage. */
   open: boolean
   /** Opening it failed: why. */
   error: string | null
@@ -62,7 +62,7 @@ export async function popOutCall(): Promise<void> {
   shrinkCall()
   notePoppedOutFrom(getWindowLabel())
   gen += 1
-  // At once: the tile gives way while the window comes up.
+  // At once: the stage gives way while the window comes up.
   useCallPopout.setState({ open: true, error: null })
   try {
     await b.open(readWindowFrame())
@@ -74,8 +74,8 @@ export async function popOutCall(): Promise<void> {
   }
 }
 
-/** In the call's window: Pop in. Hands the call back to the window that
- *  popped it out (its call view opens there), then closes this one. */
+/** In the call's window: Back to chat. Hands the call back to the window that
+ *  popped it out (its stage opens there), then closes this one. */
 export function popInCall(callId: string | null, closeWindow: () => void, now = Date.now()): void {
   if (callId) writeCallHandBack(callId, now)
   closeWindow()

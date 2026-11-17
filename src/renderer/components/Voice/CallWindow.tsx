@@ -7,10 +7,10 @@
 // The call doesn't move here: it lives in the app's Rust process, and this
 // window adopts it as any K2 window does (voice-core `adoptNativeCall`) and
 // draws its own video sinks. Closing the window leaves the call up and puts
-// it back in the room's window (the floating tile); leaving the call here
-// ends it everywhere, and then this window closes itself. Pop in (title bar)
-// closes this window and opens the call view in the window that popped it
-// out, with the same share in the middle. Its size and place are kept per
+// it back in K2's windows; leaving the call here ends it everywhere, and then
+// this window closes itself. Back to chat (title bar) closes this window and
+// opens the call's stage in the window that popped it out, with the same
+// share in the middle. Its size and place are kept per
 // client; the OS's own full screen (its green button) is the window's.
 //
 // K2's voice rooms have no in-call chat today, so there's none to bring.
@@ -35,8 +35,8 @@ import { Button } from '@/components/ui/Button'
 import CallControls, { CallControlBar } from './CallControls'
 import { callActions, useCallNoiseRemoval } from './CallLayer'
 import CallStage from './CallStage'
-import { useCallDuration } from './CallTile'
-import { PopInButton } from './CallViewButtons'
+import { useCallDuration } from './callHooks'
+import { BackToChatButton } from './CallViewButtons'
 import { ScreenPicker, VideoNoticeLine } from './VideoControls'
 import { useStageTiles } from './VideoStage'
 import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
@@ -134,7 +134,7 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
             {time}
           </span>
         ) : null}
-        {call ? <PopInButton testId="call-window-popin" onPress={() => popInCall(call.callId, closeWindow)} /> : null}
+        {call ? <BackToChatButton testId="call-window-popin" onPress={() => popInCall(call.callId, closeWindow)} /> : null}
         <DesktopChromeRight />
       </div>
       {!call ? (

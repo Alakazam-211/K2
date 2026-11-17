@@ -1188,7 +1188,7 @@ function AppRoot(): React.JSX.Element {
       <UnsavedChangesModalHost />
       <HeartbeatScheduleDialog />
       <MergeDialog />
-      {/* A call's video: the floating tile, or the call view over the page. */}
+      {/* A call's video: its stage, and full screen. */}
       <CallLayer />
       <Toast />
       <TransferProgress />

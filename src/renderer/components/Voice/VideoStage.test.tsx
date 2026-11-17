@@ -103,7 +103,7 @@ describe('the tiles', () => {
     expect(screen.getAllByTestId('video-tile')[0]).toMatchObject({ dataset: { track: 'TR_9', large: 'true', speaking: 'false' } })
   })
 
-  it('shows your camera as a mirrored self-view, and hides to a pill', async () => {
+  it('shows your camera as a mirrored self-view; no Bigger, no Hide, never fixed over the page', async () => {
     const s = setup([])
     render(<VideoStage ctl={s.ctl} people={people} title="Standup" />)
     await ready(s)
@@ -112,10 +112,17 @@ describe('the tiles', () => {
     const self = await screen.findByTestId('video-tile')
     expect(self.dataset).toMatchObject({ track: 'local:camera', self: 'true' })
     expect((within(self).getByTestId('video-canvas') as HTMLCanvasElement).style.transform).toBe('scaleX(-1)')
-    fireEvent.click(screen.getByTestId('video-stage-hide'))
-    expect(screen.queryByTestId('video-grid')).toBeNull()
-    fireEvent.click(screen.getByTestId('video-stage-show'))
-    expect(screen.getByTestId('video-grid')).not.toBeNull()
+    expect(screen.queryByTestId('video-stage-hide')).toBeNull()
+    expect(screen.queryByTestId('video-stage-size')).toBeNull()
+    expect(screen.getByTestId('video-stage').className).not.toMatch(/\bfixed\b/)
+  })
+
+  it('takes its header actions from the place it sits in', async () => {
+    const s = setup([fakeTrack('7')])
+    render(<VideoStage ctl={s.ctl} people={people} title="Standup" actions={<button type="button" data-testid="a-header-action" />} />)
+    await ready(s)
+    const stage = await screen.findByTestId('video-stage')
+    expect(within(stage.querySelector('header') as HTMLElement).getByTestId('a-header-action')).toBeTruthy()
   })
 
   it('a tile sits on the look\'s tile surface: rounded by the tile radius, cut in Terminal, never a black box', async () => {

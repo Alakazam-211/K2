@@ -21,7 +21,9 @@ import { useSettingsStore } from '@/stores/settings'
 import { headsetState } from './voice-labels'
 import VoicePopover from './VoicePopover'
 import CallControls from './CallControls'
-import { useCallNoiseRemoval, useCallTileShown } from './CallLayer'
+import { useCallNoiseRemoval, useCallStageShown, useCallVideoHere } from './CallLayer'
+import { CompactButton } from './CallViewButtons'
+import { useCallPlace } from '@/stores/call-place'
 import VideoDemo from './VideoDemo'
 import { retainVideo, video } from '@/stores/video'
 import { useVoiceOpenRequest } from '@/stores/voice-open-request'
@@ -56,9 +58,12 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
   const engineKind = useVoice((s) => s.engineKind)
   const [demo, setDemo] = useState(false)
   // In a call: Mute, Deafen, Camera and Hang up beside the headset, unless
-  // the call's video is up in the floating tile, whose strip has them.
-  const tileShown = useCallTileShown()
-  const showControls = call !== null && engineKind === 'native' && !tileShown
+  // the call's stage is up in this window, with its own. Folded (Compact),
+  // Expand opens the stage again.
+  const stageShown = useCallStageShown()
+  const videoHere = useCallVideoHere()
+  const compact = useCallPlace((s) => s.compact)
+  const showControls = call !== null && engineKind === 'native' && !stageShown
   const [, setTick] = useState(0)
 
   const close = useCallback(() => voice.setPopoverOpen(false), [])
@@ -127,6 +132,11 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
       {showControls && call ? (
         <div className="ml-0.5 flex items-center no-drag" style={noDrag}>
           <CallControls variant="topbar" call={call} actions={voice} video={videoPreview ? video : null} noiseRemoval={noiseRemoval} />
+          {videoHere && compact ? (
+            <span className="ml-1">
+              <CompactButton testId="call-bar-expand" compact />
+            </span>
+          ) : null}
         </div>
       ) : null}
       {withPipe ? <TopBarPipe /> : null}

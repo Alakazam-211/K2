@@ -1,17 +1,17 @@
-// The call expanded over K2 (Rosson 2026-11-10, in place of full screen): the
-// call view grows to nearly the whole window, a margin clear of its edges on
-// every side, over the dim scrim, and stays inside the app. With a screen
+// The call full screen, inside K2's window (never the OS's full screen, which
+// is the call window's own): the call grows to nearly the whole window, a
+// margin clear of its edges on every side, over the dim scrim. With a screen
 // share, the share is in the middle and the people in a column of smaller
 // tiles on the left (CallStage); with none, the grid. The call's controls
 // (mute, deafen, camera, share, leave) sit along its bottom.
 //
-// Shrink (top right), a click on the scrim round it, or Esc put it back as it
-// was: the tile, or the call view (Esc on a zoomed-in share takes it back to
-// fit first). Focus moves to Shrink on open, stays in the
-// view while it's open, and goes back to the Expand button on shrink.
+// Exit full screen (top right), a click on the scrim round it, or Esc put it
+// back as it was: the stage, or the slim bar (Esc on a zoomed-in share takes
+// it back to fit first). Focus moves to Exit full screen on open, stays in
+// the view while it's open, and goes back to the Full screen button on exit.
 //
-// Mounted while the call has video; it draws only while expanded, and its
-// going (the video stopped, the call ended) shrinks it.
+// Mounted while the call has video; it draws only while open, and its going
+// (the video stopped, the call ended) closes it.
 
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
@@ -27,7 +27,7 @@ import type { VoiceCall } from '@/stores/voice-core'
 import CallControls, { type CallControlsProps } from './CallControls'
 import CallStage from './CallStage'
 import { PopOutButton } from './CallViewButtons'
-import { useCallDuration } from './CallTile'
+import { useCallDuration } from './callHooks'
 import { ScreenPicker, VideoNoticeLine } from './VideoControls'
 import { callTitle } from '@/lib/home-chat/call-names'
 
@@ -76,7 +76,7 @@ function View({ call, video, actions, noiseRemoval }: CallExpandedProps): React.
     window.addEventListener('keydown', onKey, true)
     return () => {
       window.removeEventListener('keydown', onKey, true)
-      // The tile or the call view is drawn again by now: its Expand button
+      // The stage or the slim bar is drawn again by now: its Full screen button
       // takes focus back.
       returnFocusAfterShrink()
     }
@@ -88,7 +88,7 @@ function View({ call, video, actions, noiseRemoval }: CallExpandedProps): React.
         zIndex={CALL_EXPANDED_Z + 1}
         role="dialog"
         aria-modal
-        aria-label={`${callTitle(call)}, expanded`}
+        aria-label={`${callTitle(call)}, full screen`}
         data-testid="call-expanded"
         className="flex flex-col overflow-hidden"
         style={{ width: `calc(var(--k2-vw) - ${CALL_EXPAND_MARGIN * 2}px)`, height: `calc(var(--k2-vh) - ${CALL_EXPAND_MARGIN * 2}px)`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -103,10 +103,10 @@ function View({ call, video, actions, noiseRemoval }: CallExpandedProps): React.
               {time}
             </span>
           ) : null}
-          <PopOutButton testId="call-expanded-popout" look="panel" />
-          <Button ref={shrinkRef} variant="quiet" data-testid="call-expanded-shrink" title="Shrink (Esc)" className="flex items-center gap-1.5" onClick={() => shrinkCall()}>
+          <PopOutButton testId="call-expanded-popout" />
+          <Button ref={shrinkRef} variant="quiet" data-testid="call-expanded-exit" title="Exit full screen (Esc)" className="flex items-center gap-1.5" onClick={() => shrinkCall()}>
             <ExpandIcon shrink size={13} />
-            Shrink
+            Exit full screen
           </Button>
         </header>
         <CallStage ctl={video} people={call.participants} callId={call.callId} className="flex-1" />
@@ -122,10 +122,10 @@ function View({ call, video, actions, noiseRemoval }: CallExpandedProps): React.
   )
 }
 
-/** Mounted while the call has video; draws only while expanded. */
+/** Mounted while the call has video; draws only while full screen is open. */
 export default function CallExpanded(props: CallExpandedProps): React.JSX.Element | null {
   const expanded = useCallExpand((s) => s.expanded)
-  // The video stopped or the call ended: next time it's the tile again.
+  // The video stopped or the call ended: full screen closes with it.
   useEffect(() => () => shrinkCall(), [])
   if (!expanded || typeof document === 'undefined') return null
   return createPortal(<View {...props} />, document.body)

@@ -1,12 +1,11 @@
-// The call's video expanded over K2 (Rosson 2026-11-10, in place of full
-// screen): the call view grows to nearly the whole window, over a dim scrim,
-// and stays inside the app. Per-window view state, never the daemon's: the
-// call is the voice and video stores'.
+// Full screen: the call over K2, inside this window (CallExpanded), over a
+// dim scrim. Per-window view state, never the daemon's: the call is the
+// voice and video stores'.
 //
-// Shrinking (the Shrink button, a click on the scrim, Esc) puts focus back
-// where it was when the view opened: the Expand button that opened it, or
-// the same button drawn again (the tile and the call view give way while
-// it's open, so theirs are new elements by then).
+// Exiting (the Exit full screen button, a click on the scrim, Esc) puts
+// focus back where it was when it opened: the Full screen button that
+// opened it, or the same button drawn again (the stage gives way while it's
+// open, so its buttons are new elements by then).
 
 import { create } from 'zustand'
 
@@ -24,7 +23,7 @@ function noteOpener(from: string | null): void {
   opener = { el, testId: from ?? at?.dataset.testid ?? null }
 }
 
-/** Open the expanded view. `from`: the test id of the button that asked
+/** Open full screen. `from`: the test id of the button that asked
  *  (focus goes back to it, or to the one drawn in its place, on shrink). */
 export function expandCall(from: string | null = null): void {
   if (useCallExpand.getState().expanded) return
@@ -32,7 +31,7 @@ export function expandCall(from: string | null = null): void {
   useCallExpand.setState({ expanded: true })
 }
 
-/** Back to how it was: the tile, or the call view. */
+/** Exit full screen: back to how it was (the stage, or the slim bar). */
 export function shrinkCall(): void {
   if (!useCallExpand.getState().expanded) return
   useCallExpand.setState({ expanded: false })

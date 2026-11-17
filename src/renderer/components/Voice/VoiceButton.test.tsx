@@ -6,7 +6,7 @@
 // call on top, join / leave against the fake engine, the confirm when
 // switching calls, the signed-out row and the lane-reconnecting line.
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStore } from 'zustand'
 import type { HostEntry } from '@/lib/host-pool'
@@ -565,20 +565,18 @@ describe('video in the call (videoRoomsPreview)', () => {
     expect(screen.queryByTestId('video-demo-open')).toBeNull()
   })
 
-  it('with it on: Camera and Share screen in the call panel; the camera brings up the floating tile, and leaving takes it away', async () => {
+  it("with it on: Camera and Share screen in the call panel; the camera brings up the call's stage, and leaving takes it away", async () => {
     h.videoPreview = true
     await inCall()
     fireEvent.click(await screen.findByTestId('video-camera'))
-    // The window's call layer (mounted at the app's root) floats the tile.
-    await waitFor(() => expect(screen.getByTestId('call-tile')).toBeTruthy())
-    expect(screen.getByTestId('call-tile').dataset.picture).toBe('local:camera')
-    expect(screen.getByTestId('video-tile').dataset.track).toBe('local:camera')
-    expect(screen.queryByTestId('video-stage')).toBeNull()
-    expect(screen.getAllByTestId('video-screen').map((b) => b.getAttribute('aria-label'))).toEqual(['Share screen'])
-    expect(screen.getAllByTestId('video-camera').map((b) => b.getAttribute('aria-label'))).toEqual(['Turn camera off'])
+    // The window's call layer shows the stage; there is no floating tile.
+    const stage = await screen.findByTestId('video-stage')
+    expect(within(stage).getByTestId('video-tile').dataset.track).toBe('local:camera')
+    expect(screen.queryByTestId('call-tile')).toBeNull()
+    expect(screen.getAllByTestId('video-camera').map((b) => b.getAttribute('aria-label'))).toEqual(['Turn camera off', 'Turn camera off'])
     expect(screen.getByTestId('video-demo-open')).toBeTruthy()
-    fireEvent.click(screen.getByTestId('call-tile-leave'))
-    await waitFor(() => expect(screen.queryByTestId('call-tile')).toBeNull())
+    fireEvent.click(within(stage).getByTestId('video-stage-leave'))
+    await waitFor(() => expect(screen.queryByTestId('video-stage')).toBeNull())
     expect(voice.store.getState().call).toBeNull()
   })
 

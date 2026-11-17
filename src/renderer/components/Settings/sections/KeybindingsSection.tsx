@@ -76,7 +76,7 @@ export const KEYBINDING_NAMES: Record<string, { name: string; hint?: string }> =
   toggleServerSwitcher: { name: 'Switch to another server', hint: 'In a browser tab, it goes to the address bar instead.' },
   openProjects: { name: 'Open the Projects page', hint: 'A second shortcut for the Projects page.' },
   openMobile: { name: 'Open the phone simulator', hint: 'This workspace’s Mobile tab, on servers that can run a phone.' },
-  toggleCallFullscreen: { name: 'Expand the call video', hint: 'During a video call, the video fills the window.' },
+  toggleCallFullscreen: { name: 'Call video full screen', hint: 'During a video call, the video fills this window.' },
 }
 
 /** The Settings name for a hotkey id (its HOTKEYS label if it has none). */

@@ -1,99 +1,18 @@
-// The call's video, as this client sizes and shows it (Rosson 2026-11-10):
-// the floating tile's size, the full-screen chord, the call's own window
-// (pop out). Pure, plus the per-client localStorage they're kept in. View
-// state only: the call is the voice and video stores' (the app's engine),
-// never this, and none of it is daemon state.
+// The call's view as this client keeps it: the full-screen chord, the call's
+// own window (pop out) and its frame, the call's clock, the share in the
+// middle, and popping back in. Pure, plus the per-client localStorage they're
+// kept in. View state only: the call is the voice and video stores' (the
+// app's engine), never this, and none of it is daemon state.
 
 import { effectiveKeybinding, keyEventMatchesCombo, type KeyComboEventLike } from '@shared/hotkeys'
-import type { Corner } from './mini-snap'
 
-/** The picture's shape. */
-export const VIDEO_ASPECT = 16 / 9
-/** The tile's width bounds (px): small enough to stay out of the way, never
- *  narrower than the control strip under it. */
-export const CALL_TILE_MIN_WIDTH = 200
-export const CALL_TILE_MAX_WIDTH = 960
-export const CALL_TILE_DEFAULT_WIDTH = 240
+// ── full screen ─────────────────────────────────────────────────────
 
-export const CALL_TILE_WIDTH_KEY = 'k2.voice.callTileWidth.v1'
-
-/** The room the tile may take: the free area's width and height (less the
- *  insets), and what the tile adds under the picture (the strip). */
-export interface TileRoom {
-  width: number
-  height: number
-  /** The strip and the gap above it (px). */
-  below: number
-}
-
-/** The largest width that fits `room` (keeping 16:9), within the bounds. */
-export function maxTileWidth(room: TileRoom): number {
-  const byHeight = Math.max(0, room.height - room.below) * VIDEO_ASPECT
-  return Math.max(CALL_TILE_MIN_WIDTH, Math.min(CALL_TILE_MAX_WIDTH, Math.floor(room.width), Math.floor(byHeight)))
-}
-
-/** A width the tile may take: whole px, at least the minimum, at most what
- *  fits. A bad number (NaN) is the default. */
-export function clampTileWidth(want: number, room: TileRoom): number {
-  const w = Number.isFinite(want) ? want : CALL_TILE_DEFAULT_WIDTH
-  return Math.round(Math.min(maxTileWidth(room), Math.max(CALL_TILE_MIN_WIDTH, w)))
-}
-
-/** Which way each inward edge grows the tile: the tile is anchored at its
- *  corner, so it grows from the two edges away from it. -1: the left (or
- *  top) edge, dragged left (up) to grow; 1: the right (bottom) edge. */
-export function inwardEdges(corner: Corner): { x: -1 | 1; y: -1 | 1 } {
-  return { x: corner.endsWith('right') ? -1 : 1, y: corner.startsWith('bottom') ? -1 : 1 }
-}
-
-/** The handles a resize can start from. */
-export type ResizeHandle = 'corner' | 'x' | 'y'
-
-/** The width after a drag of (dx, dy) from `start` on `handle`. An edge
- *  follows its own axis; the corner follows whichever axis moved further
- *  (the height through the aspect), so the picture keeps its shape. */
-export function resizedWidth(start: number, dx: number, dy: number, handle: ResizeHandle, edges: { x: -1 | 1; y: -1 | 1 }): number {
-  const byX = dx * edges.x
-  const byY = dy * edges.y * VIDEO_ASPECT
-  if (handle === 'x') return start + byX
-  if (handle === 'y') return start + byY
-  return start + (Math.abs(byX) >= Math.abs(byY) ? byX : byY)
-}
-
-/** A width kept for this client, for when storage is unavailable. */
-let sessionWidth: number | null = null
-
-export function readTileWidth(): number {
-  try {
-    const raw = localStorage.getItem(CALL_TILE_WIDTH_KEY)
-    const v = raw === null ? NaN : Number(raw)
-    if (Number.isFinite(v) && v > 0) return v
-  } catch {
-    // Storage unavailable: this session's width.
-  }
-  return sessionWidth ?? CALL_TILE_DEFAULT_WIDTH
-}
-
-export function writeTileWidth(width: number): void {
-  sessionWidth = width
-  try {
-    localStorage.setItem(CALL_TILE_WIDTH_KEY, String(Math.round(width)))
-  } catch {
-    // Storage unavailable: this session only.
-  }
-}
-
-export function __resetTileWidthForTests(): void {
-  sessionWidth = null
-}
-
-// ── expand ──────────────────────────────────────────────────────────
-
-/** The registry id of the chord (`@shared/hotkeys`, rebindable). The id is
- *  the one it had as full screen, so a chord someone rebound still works. */
+/** The registry id of the Full screen chord (`@shared/hotkeys`,
+ *  rebindable). */
 export const CALL_EXPAND_HOTKEY = 'toggleCallFullscreen'
 
-/** The Expand chord, as this person has it bound: ⌃⌘V on macOS,
+/** The Full screen chord, as this person has it bound: ⌃⌘V on macOS,
  *  Ctrl+Alt+V elsewhere by default. AltGr (Windows reports Ctrl+Alt) types
  *  a character, so it never counts. */
 export function isCallExpandChord(e: KeyComboEventLike, keybindings: Record<string, string>, isMac: boolean): boolean {
@@ -101,13 +20,8 @@ export function isCallExpandChord(e: KeyComboEventLike, keybindings: Record<stri
   return keyEventMatchesCombo(e, effectiveKeybinding(keybindings, CALL_EXPAND_HOTKEY, isMac))
 }
 
-/** Double-click window for the tile: a single click waits this long before
- *  opening the call view, so a double-click can expand it instead. */
-export const DOUBLE_CLICK_MS = 280
-
-/** The expanded view's margin from the window's edges on every side (px):
- *  the page shows round it, so it reads as K2's, and a click there shrinks
- *  it. */
+/** Full screen's margin from the window's edges on every side (px): the
+ *  page shows round it, so it reads as K2's, and a click there exits it. */
 export const CALL_EXPAND_MARGIN = 32
 
 // ── the call's own window ───────────────────────────────────────────
@@ -226,21 +140,21 @@ export function writeSharePick(callId: string | null, key: string | null): void 
 
 export const CALL_POPPED_FROM_KEY = 'k2.voice.callPoppedFrom.v1'
 export const CALL_HAND_BACK_KEY = 'k2.voice.callHandBack.v1'
-/** A pop in older than this is stale (the window it was for had gone). */
+/** A Back to chat older than this is stale (the window it was for had gone). */
 export const CALL_HAND_BACK_MS = 15_000
 
-/** The window that popped the call out: Pop in brings it back there. */
+/** The window that popped the call out: Back to chat brings it back there. */
 export function notePoppedOutFrom(windowLabel: string): void {
   try {
     localStorage.setItem(CALL_POPPED_FROM_KEY, windowLabel)
   } catch {
-    // Storage unavailable: Pop in lands on the tile, as closing does.
+    // Storage unavailable: Back to chat lands as closing the window does.
   }
 }
 
-/** Pop in: what the call's window hands back as it closes. `to` is the
- *  window that popped it out, which opens the call view; every other window
- *  just gets its tile back, as when the call's window is closed. */
+/** Back to chat: what the call's window hands back as it closes. `to` is the
+ *  window that popped it out, which opens its stage; every other window
+ *  is as when the call's window is closed. */
 export interface CallHandBack {
   callId: string
   to: string
@@ -252,7 +166,7 @@ export function writeCallHandBack(callId: string, now: number): void {
     const to = localStorage.getItem(CALL_POPPED_FROM_KEY) ?? 'main'
     localStorage.setItem(CALL_HAND_BACK_KEY, JSON.stringify({ callId, to, at: now }))
   } catch {
-    // Storage unavailable: the call comes back as the tile.
+    // Storage unavailable: the call comes back as when the window closes.
   }
 }
 

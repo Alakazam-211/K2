@@ -82,22 +82,41 @@ export default function VideoDemo({ onClose }: { onClose: () => void }): React.J
     [speaker],
   )
   if (!canMakeSyntheticVideo()) return <NoEncoderNote onClose={onClose} />
+  return <DemoPanel ctl={ctl} people={people} engine={engine} onClose={onClose} />
+}
+
+/** The dev-only demo floats in its own panel (a call's stage never does). */
+function DemoPanel({
+  ctl,
+  people,
+  engine,
+  onClose,
+}: {
+  ctl: ReturnType<typeof demoController>['ctl']
+  people: CallPerson[]
+  engine: ReturnType<typeof demoController>['engine']
+  onClose: () => void
+}): React.JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: true, ref, kind: 'popover' })
   return (
-    <VideoStage
-      ctl={ctl}
-      people={people}
-      title="Video demo (fake engine)"
-      onClose={onClose}
-      footer={
-        <button
-          type="button"
-          data-testid="video-demo-refuse"
-          className="ml-auto border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)]"
-          onClick={() => engine.refuseNext('camera', 'video_slots_full')}
-        >
-          Next camera: room full
-        </button>
-      }
-    />
+    <div ref={ref} className="fixed bottom-3 right-3 z-40 flex max-h-[calc(var(--k2-vh)*0.8)] w-[min(380px,calc(var(--k2-vw)-24px))] flex-col [box-shadow:var(--shadow-3)]">
+      <VideoStage
+        ctl={ctl}
+        people={people}
+        title="Video demo (fake engine)"
+        onClose={onClose}
+        footer={
+          <button
+            type="button"
+            data-testid="video-demo-refuse"
+            className="ml-auto border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)]"
+            onClick={() => engine.refuseNext('camera', 'video_slots_full')}
+          >
+            Next camera: room full
+          </button>
+        }
+      />
+    </div>
   )
 }

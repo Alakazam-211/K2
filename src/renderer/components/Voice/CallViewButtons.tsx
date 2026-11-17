@@ -1,16 +1,23 @@
-// Expand, Pop out and Pop in (Rosson 2026-11-10): the ways to give the call's
-// video more room, and to bring it back. Expand opens the call over K2, inside
-// the app (CallExpanded; it was OS full screen); Pop out moves it to its own
-// window, and that window's Pop in brings it back. On the picture they're
-// small icon buttons on the same chip as its labels; in a panel's header or a
-// control bar, the strip's square buttons.
+// The call's view actions, each named for what it does:
+// - Pop out: the call in its own window.
+// - Full screen: the call over K2, inside this window (CallExpanded), and
+//   Exit full screen to come back. The OS's own full screen is the call
+//   window's green button.
+// - Compact / Expand: one toggle, the stage folded into the slim in-call bar
+//   and opened again.
+// - Back to chat (in the call's own window): the call goes back into the
+//   window it came from, and the call's window closes.
+// Minimising is the OS window's own; there is no Hide and no Bigger. The
+// zoom's buttons on a picture use PictureButton.
 
 import { ExpandIcon, PopInIcon, PopOutIcon } from '@/components/icons/K2Icons'
+import { Button } from '@/components/ui/Button'
 import { effectiveKeybinding, formatKeyCombo } from '@shared/hotkeys'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { CALL_EXPAND_HOTKEY } from '@/lib/voice/call-view'
 import { useSettingsStore } from '@/stores/settings'
 import { expandCall, shrinkCall, useCallExpand } from '@/stores/call-expand'
+import { compactCallStage, expandCallStage } from '@/stores/call-place'
 import { popOutCall, useCallPopout } from '@/stores/call-popout'
 import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
 
@@ -54,8 +61,8 @@ export function PictureButton({
   )
 }
 
-/** The Expand chord as this person has it bound, painted for this OS. */
-export function useExpandChordLabel(): string | null {
+/** The Full screen chord as this person has it bound, painted for this OS. */
+export function useFullScreenChordLabel(): string | null {
   const keybindings = useSettingsStore((s) => s.keybindings)
   const mac = isMacPlatform()
   const combo = effectiveKeybinding(keybindings, CALL_EXPAND_HOTKEY, mac)
@@ -63,26 +70,17 @@ export function useExpandChordLabel(): string | null {
   return mac ? formatKeyCombo(combo, true) : combo
 }
 
-/** The label with the chord, for the tooltip ("Expand (⌃⌘V)"). */
-export function expandLabel(chord: string | null): string {
-  return chord ? `Expand (${chord})` : 'Expand'
+/** The label with the chord, for the tooltip ("Full screen (⌃⌘V)"). */
+export function fullScreenLabel(chord: string | null): string {
+  return chord ? `Full screen (${chord})` : 'Full screen'
 }
 
-/** Expand, or Shrink while expanded. `look`: on the picture, or the strip's
- *  square button. */
-export function ExpandButton({ testId, look, chord }: { testId: string; look: 'picture' | 'panel'; chord: string | null }): React.JSX.Element {
+/** Full screen, or Exit full screen while it's open. */
+export function FullScreenButton({ testId, chord }: { testId: string; chord: string | null }): React.JSX.Element {
   const on = useCallExpand((s) => s.expanded)
-  const label = on ? 'Shrink (Esc)' : expandLabel(chord)
-  const press = (): void => (on ? shrinkCall() : expandCall(testId))
-  if (look === 'picture') {
-    return (
-      <PictureButton label={label} testId={testId} onPress={press}>
-        <ExpandIcon shrink={on} size={13} />
-      </PictureButton>
-    )
-  }
+  const label = on ? 'Exit full screen (Esc)' : fullScreenLabel(chord)
   return (
-    <CallPanelButton label={label} testId={testId} onPress={press}>
+    <CallPanelButton label={label} testId={testId} onPress={() => (on ? shrinkCall() : expandCall(testId))}>
       <ExpandIcon shrink={on} size={CALL_PANEL_ICON} />
     </CallPanelButton>
   )
@@ -90,31 +88,42 @@ export function ExpandButton({ testId, look, chord }: { testId: string; look: 'p
 
 /** Pop out: the call in its own window. Nothing where the app can't (the web
  *  client). */
-export function PopOutButton({ testId, look }: { testId: string; look: 'picture' | 'panel' }): React.JSX.Element | null {
+export function PopOutButton({ testId }: { testId: string }): React.JSX.Element | null {
   const available = useCallPopout((s) => s.available)
   if (!available) return null
-  const label = 'Pop out into its own window'
-  const press = (): void => void popOutCall()
-  if (look === 'picture') {
-    return (
-      <PictureButton label={label} testId={testId} onPress={press}>
-        <PopOutIcon size={13} />
-      </PictureButton>
-    )
-  }
   return (
-    <CallPanelButton label={label} testId={testId} onPress={press}>
+    <CallPanelButton label="Pop out into its own window" testId={testId} onPress={() => void popOutCall()}>
       <PopOutIcon size={CALL_PANEL_ICON} />
     </CallPanelButton>
   )
 }
 
-/** Pop in, in the call's own window: back into K2's window, and this one
- *  closes. Pop out's square button. */
-export function PopInButton({ testId, onPress }: { testId: string; onPress: () => void }): React.JSX.Element {
+/** Compact (the stage folds into the slim bar) or Expand (it opens again):
+ *  one toggle, in words. `compact`: the stage is folded now. */
+export function CompactButton({ testId, compact }: { testId: string; compact: boolean }): React.JSX.Element {
+  const word = compact ? 'Expand' : 'Compact'
+  const title = compact ? 'Expand: show the call’s video here' : 'Compact: fold the call into a slim bar'
   return (
-    <CallPanelButton label="Pop back into K2's window" testId={testId} onPress={onPress}>
-      <PopInIcon size={CALL_PANEL_ICON} />
-    </CallPanelButton>
+    <Button variant="quiet" data-testid={testId} title={title} style={noDrag} onClick={() => (compact ? expandCallStage() : compactCallStage())}>
+      {word}
+    </Button>
+  )
+}
+
+/** Back to chat, in the call's own window: the call goes back into the
+ *  window it came from, and this one closes. */
+export function BackToChatButton({ testId, onPress }: { testId: string; onPress: () => void }): React.JSX.Element {
+  return (
+    <Button
+      variant="quiet"
+      data-testid={testId}
+      title="Back to chat: the call goes back into the window it came from, and this one closes"
+      className="flex items-center gap-1.5"
+      style={noDrag}
+      onClick={onPress}
+    >
+      <PopInIcon size={13} />
+      Back to chat
+    </Button>
   )
 }

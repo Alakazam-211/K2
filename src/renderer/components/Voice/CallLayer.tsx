@@ -1,19 +1,17 @@
-// The call's video, once per window (mounted at the app's root, as K2
-// Companion's `VoiceMiniTile` and `VoiceCallScreen`): while video is on in a
-// call, either the call view (VideoStage, over the current page) or the
-// floating tile (CallTile) in a corner. Clicking the tile opens the call
-// view; its Hide returns to the page and the tile. When the video stops, both
-// go and the call's controls are back in the top bar (VoiceButton).
+// The call's video, once per window (mounted at the app's root): while video
+// is on in a call, its stage (VideoStage: the tiles, with the call's
+// controls), unless this window has it folded into the slim bar (Compact),
+// full screen (CallExpanded, ⌃⌘V / Ctrl+Alt+V), or the call is in its own
+// window (Pop out). There is no floating tile and no corner. When the video
+// stops, the stage goes and the call's controls are back in the top bar
+// (VoiceButton).
 //
 // Only where calls happen: the app's native engine with video rooms on. The
 // web client's calls are seats with no media, so it never shows either.
 // Everything it shows comes from the voice and video stores (the engine's
-// truth); the only state here is this window's view of it: the call view
-// open or closed, expanded over K2 (CallExpanded, ⌃⌘V / Ctrl+Alt+V), and
-// whether the call is in its own window (Pop out), where every other window
-// shows neither the tile nor the call view until that window closes. Pop in
-// there brings it back to the window that popped it out, as its call view
-// with the same share in the middle; the others get their tile back.
+// truth); the only state here is this window's view of it. Back to chat in
+// the call's own window brings the call back to the window that popped it
+// out, as its stage with the same share in the middle.
 
 import { useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
@@ -23,33 +21,41 @@ import { getWindowLabel } from '@/lib/window-chrome'
 import { toggleCallExpand, useCallExpand } from '@/stores/call-expand'
 import { loadSharePick } from '@/stores/call-share'
 import { useCallPopout, watchCallPopout } from '@/stores/call-popout'
+import { expandCallStage, useCallPlace } from '@/stores/call-place'
 import { useSettingsStore } from '@/stores/settings'
-import { useCallScreen } from '@/stores/call-screen'
 import { useVoice, voice } from '@/stores/voice'
 import { video } from '@/stores/video'
 import type { VoiceCall } from '@/stores/voice-core'
 import type { CallPerson } from '@/lib/voice/video-labels'
-import CallTile, { useCallVideoLive } from './CallTile'
+import { useCallVideoLive } from './callHooks'
 import VideoStage from './VideoStage'
 import CallExpanded from './CallExpanded'
 import RecordingNotice from './RecordingNotice'
 import { callTitle } from '@/lib/home-chat/call-names'
 import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
+import { CompactButton, FullScreenButton, PopOutButton, useFullScreenChordLabel } from './CallViewButtons'
 import { MicIcon, MicOffIcon, PhoneOffIcon } from '@/components/icons/K2Icons'
 
 const NO_PEOPLE: CallPerson[] = []
 
-/** The floating tile is up in this window: the top bar's call controls give
- *  way to the tile's strip. */
-export function useCallTileShown(): boolean {
+/** The call's video, as this window can show it: the call has video and
+ *  isn't in its own window. */
+export function useCallVideoHere(): boolean {
   const call = useVoice((s) => s.call)
   const native = useVoice((s) => s.engineKind) === 'native'
   const preview = useSettingsStore((s) => s.videoRoomsPreview) === true
-  const settingsOpen = useSettingsStore((s) => s.settingsOpen) === true
-  const open = useCallScreen((s) => s.open)
   const live = useCallVideoLive(video, call?.participants ?? NO_PEOPLE)
   const poppedOut = useCallPopout((s) => s.open)
-  return call !== null && native && preview && live && !open && !settingsOpen && !poppedOut
+  return call !== null && native && preview && live && !poppedOut
+}
+
+/** The stage is up in this window: the top bar's call controls give way to
+ *  the stage's own. */
+export function useCallStageShown(): boolean {
+  const here = useCallVideoHere()
+  const compact = useCallPlace((s) => s.compact)
+  const settingsOpen = useSettingsStore((s) => s.settingsOpen) === true
+  return here && !compact && !settingsOpen
 }
 
 /** This webview is the call's own window (it draws the call itself). */
@@ -57,7 +63,7 @@ export function inCallWindow(): boolean {
   return isCallWindow(window.location.hash, getWindowLabel())
 }
 
-/** The Expand chord, while the call has video in this window. */
+/** The Full screen chord, while the call has video in this window. */
 export function useCallExpandChord(active: boolean): void {
   useEffect(() => {
     if (!active) return
@@ -97,16 +103,50 @@ function NoticeLayer({ call }: { call: VoiceCall }): React.JSX.Element | null {
   )
 }
 
+/** The stage's header: Pop out, Full screen, Compact. */
+export function CallStageActions(): React.JSX.Element {
+  const chord = useFullScreenChordLabel()
+  return (
+    <>
+      <PopOutButton testId="video-stage-popout" />
+      <FullScreenButton testId="video-stage-fullscreen" chord={chord} />
+      <CompactButton testId="video-stage-compact" compact={false} />
+    </>
+  )
+}
+
+/** The call's stage, with Mute and Leave call beside its camera and share. */
+export function CallStageView({ call, className }: { call: VoiceCall; className?: string }): React.JSX.Element {
+  return (
+    <VideoStage
+      ctl={video}
+      people={call.participants}
+      title={callTitle(call)}
+      className={className}
+      actions={<CallStageActions />}
+      footerStart={
+        <CallPanelButton testId="video-stage-mute" label={call.muted ? 'Unmute' : 'Mute'} on={call.muted} onPress={() => voice.setMuted(!call.muted)}>
+          {call.muted ? <MicOffIcon size={CALL_PANEL_ICON} /> : <MicIcon size={CALL_PANEL_ICON} />}
+        </CallPanelButton>
+      }
+      footer={
+        <CallPanelButton testId="video-stage-leave" label="Leave call" danger onPress={() => void voice.leave()}>
+          <PhoneOffIcon size={CALL_PANEL_ICON} />
+        </CallPanelButton>
+      }
+    />
+  )
+}
+
 function InCall({ call }: { call: VoiceCall }): React.JSX.Element | null {
   const noiseRemoval = useCallNoiseRemoval()
-  const open = useCallScreen((s) => s.open)
-  const settingsOpen = useSettingsStore((s) => s.settingsOpen) === true
-  const live = useCallVideoLive(video, call.participants)
+  const here = useCallVideoHere()
+  const stageShown = useCallStageShown()
   const expanded = useCallExpand((s) => s.expanded)
   const poppedOut = useCallPopout((s) => s.open)
-  useCallExpandChord(live && !poppedOut)
-  // The call's window closed. Pop in (not the OS's close) hands the call
-  // back to the window that popped it out: its call view opens, and every
+  useCallExpandChord(here)
+  // The call's window closed. Back to chat (not the OS's close) hands the
+  // call back to the window that popped it out: its stage opens, and every
   // window takes up the share that was in the middle there.
   const wasOut = useRef(poppedOut)
   useEffect(() => {
@@ -114,63 +154,31 @@ function InCall({ call }: { call: VoiceCall }): React.JSX.Element | null {
     wasOut.current = poppedOut
     if (!was || poppedOut) return
     loadSharePick(call.callId)
-    if (takeCallHandBack(call.callId, getWindowLabel(), Date.now())) useCallScreen.getState().ask()
+    if (takeCallHandBack(call.callId, getWindowLabel(), Date.now())) expandCallStage()
   }, [poppedOut, call.callId])
-  // The video stopped: the call view goes with it, and next time the tile
-  // comes first again.
-  useEffect(() => {
-    if (!live && open) useCallScreen.getState().close()
-  }, [live, open])
-  // The call ended (this unmounts): the same.
-  useEffect(() => () => useCallScreen.getState().close(), [])
+  // The call ended (this unmounts): next call starts with its stage open.
+  useEffect(() => () => expandCallStage(), [])
   // The call's own window counts its time from the same second.
   useEffect(() => {
     if (call.connectedAt !== null && call.callId) noteCallConnected(call.callId, call.connectedAt)
   }, [call.callId, call.connectedAt])
 
-  // In its own window: that window draws it.
-  if (poppedOut) return null
-  const host = live ? <CallExpanded call={call} video={video} actions={callActions} noiseRemoval={noiseRemoval} /> : null
-  // Expanded: the view is drawn there; the tile and the call view wait (one
-  // sink per track).
-  if (expanded) return host
-  if (open && live) {
-    const stage = createPortal(
-      <VideoStage
-        ctl={video}
-        people={call.participants}
-        title={callTitle(call)}
-        viewButtons
-        onHide={() => useCallScreen.getState().close()}
-        footerStart={
-          <CallPanelButton testId="video-stage-mute" label={call.muted ? 'Unmute' : 'Mute'} on={call.muted} onPress={() => voice.setMuted(!call.muted)}>
-            {call.muted ? <MicOffIcon size={CALL_PANEL_ICON} /> : <MicIcon size={CALL_PANEL_ICON} />}
-          </CallPanelButton>
-        }
-        footer={
-          <CallPanelButton testId="video-stage-leave" label="Leave call" danger onPress={() => void voice.leave()}>
-            <PhoneOffIcon size={CALL_PANEL_ICON} />
-          </CallPanelButton>
-        }
-      />,
-      document.body,
-    )
-    return (
-      <>
-        {host}
-        {stage}
-      </>
-    )
-  }
-  if (live && !settingsOpen) {
-    return (
-      <>
-        {host}
-        <CallTile call={call} video={video} actions={callActions} noiseRemoval={noiseRemoval} />
-      </>
-    )
-  }
-  return host
+  if (!here) return null
+  const host = <CallExpanded call={call} video={video} actions={callActions} noiseRemoval={noiseRemoval} />
+  // Full screen: the video is drawn there; the stage waits (one sink per
+  // track).
+  if (expanded || !stageShown) return host
+  return (
+    <>
+      {host}
+      {createPortal(
+        <div className="fixed bottom-3 right-3 z-40 flex max-h-[calc(var(--k2-vh)*0.8)] w-[min(380px,calc(var(--k2-vw)-24px))] flex-col">
+          <CallStageView call={call} />
+        </div>,
+        document.body,
+      )}
+    </>
+  )
 }
 
 export default function CallLayer(): React.JSX.Element | null {

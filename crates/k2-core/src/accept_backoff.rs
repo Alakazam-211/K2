@@ -142,6 +142,18 @@ mod tests {
             assert!(!is_resource_exhaustion(&e), "{code}");
             assert_eq!(b.note_error(&e, Instant::now()), (None, None), "{code}");
         }
+        // Windows: WSAEMFILE, WSAENOBUFS, ERROR_NOT_ENOUGH_MEMORY are a shortage;
+        // WSAEBADF, WSAEINVAL, WSAECONNABORTED, WSAENOTSOCK are not.
+        #[cfg(windows)]
+        for code in [10024, 10055, 8] {
+            assert!(is_resource_exhaustion(&io::Error::from_raw_os_error(code)), "{code}");
+        }
+        #[cfg(windows)]
+        for code in [10009, 10022, 10053, 10038] {
+            let e = io::Error::from_raw_os_error(code);
+            assert!(!is_resource_exhaustion(&e), "{code}");
+            assert_eq!(b.note_error(&e, Instant::now()), (None, None), "{code}");
+        }
         assert!(!is_resource_exhaustion(&io::Error::other("no OS code")));
         assert!(!b.failing, "a fault in the listener is no shortage");
     }

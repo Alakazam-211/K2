@@ -87,11 +87,14 @@ describe('LivePreviewEntry', () => {
     expect(dialled).toEqual(['/ws/edits/cut.otio'])
   })
 
-  it('served or not, a type with no real view yet plays its sample (a scene), and a timeline not served plays the sample', async () => {
+  it('served or not, a type with no real view yet plays its sample (a workbook); a served scene has its real view (S8); a timeline not served plays the sample', async () => {
     const scope = { id: 'local' } as never
-    setLivePreview('scene', true)
+    setLivePreview('workbook', true)
+    const w = render(<LivePreviewEntry filePath="/ws/budget.xlsx" real={scope}>{content}</LivePreviewEntry>)
+    expect(screen.getByTestId('live-workbook-entry').getAttribute('data-source')).toBe('sample')
+    w.unmount()
     const s = render(<LivePreviewEntry filePath="/ws/living-room.blend" real={scope}>{content}</LivePreviewEntry>)
-    expect(screen.getByTestId('live-scene-entry').getAttribute('data-source')).toBe('sample')
+    expect(screen.getByTestId('live-scene-entry').getAttribute('data-source')).toBe('real')
     s.unmount()
     render(<LivePreviewEntry filePath="/ws/edits/cut.otio" real={null}>{content}</LivePreviewEntry>)
     expect(screen.queryByTestId('live-timeline-entry')).toBeNull()

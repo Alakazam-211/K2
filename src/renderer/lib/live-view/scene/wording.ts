@@ -4,6 +4,7 @@
 // says who couldn't do what, and why, in plain words; its code goes only in
 // the details. People's colours are data (the kit's actor colours).
 
+import { PRODUCT_NAME } from '@/lib/brand'
 import { GOLD } from './samples'
 import { same, xformParts } from './math'
 import { PROPS, UNITS, nameOf } from './fold'
@@ -102,7 +103,7 @@ export function framePhrase(f: Frame, D0: Doc, D1: Doc): { who: string; sep: str
 export const VERB_WORD: Record<string, string> = { 'object place': 'move', 'object rename': 'rename', 'object visibility': 'hide or show' }
 /** The BLEND writer is off (edits to a .blend are refused until it's proven). TODO(K2): confirm the code; K2's proposal. */
 export const BLEND_WRITER_OFF = 'blend_writer_disabled'
-const WHY: Record<string, string> = { blend_driven: 'animation drives it', blend_rotation_mode: 'it turns by quaternion', blend_not_editable: 'it’s linked from another file', [BLEND_WRITER_OFF]: 'K2 can’t save changes to .blend files yet' }
+const WHY: Record<string, string> = { blend_driven: 'animation drives it', blend_rotation_mode: 'it turns by quaternion', blend_not_editable: 'it’s linked from another file', [BLEND_WRITER_OFF]: `${PRODUCT_NAME} can’t save changes to .blend files yet` }
 /** Why a refusal with no holder happened, in words. */
 /** Why, in words: the refusal's own hint when it has one, else the scene's words for its code. Never the code itself. */
 export const refusalWhy = (code: string, hint?: string | null): string => (hint && hint.trim()) || WHY[code] || 'it can’t change right now'

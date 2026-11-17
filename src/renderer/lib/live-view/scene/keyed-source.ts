@@ -15,6 +15,7 @@
 // The connection is the caller's (shared/live-connect.ts): it hands each
 // welcome in (`attach`, `reconnected`) and says when the socket is down.
 
+import { PRODUCT_NAME } from '@/lib/brand'
 import { KeyedWatch, PresenceChannel, type ClaimEnded, type ClaimView, type ErrorReport, type OpsChangeFrame, type OutsideSaveFrame, type PresencePeer, type Transport, type VerbRefusedFrame, type Welcome } from '@k2/mpc-client'
 import type { LiveMessage, LiveShellSnapshot, LiveSource, SayResult } from '../shared/source'
 import { docFromWatch, meshesChanged, normFrame, withDerived } from './keyed-doc'
@@ -38,7 +39,7 @@ export interface KeyedSceneOptions {
 }
 
 /** The chip's words when the host gives none (the BLEND writer is off in this release). */
-export const READ_ONLY_WORDS = 'K2 can’t save .blend edits yet; this file opens read-only.'
+export const READ_ONLY_WORDS = `${PRODUCT_NAME} can’t save .blend edits yet; this file opens read-only.`
 
 const EMPTY: Doc = { rev: 0, lists: {}, kinds: {}, props: {}, scene: {}, units: {}, space: null, tier: 'live', removed: {}, added: {} }
 /** The live tab has one "step": now. */

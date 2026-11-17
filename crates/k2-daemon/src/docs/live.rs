@@ -465,26 +465,18 @@ fn route_open_error(e: super::routes::OpenError, core: &str) -> Closed {
     }
 }
 
-/// Resolve, gate, open, join, subscribe, read. Blocking.
-fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Opened, Closed> {
-    let rt = super::runtime().map_err(|u| match &u {
-        super::Unavailable::Failed(_) => Closed::k2(CloseReason::Declined, "docs_unavailable", u.message()),
-        _ => restart(),
-    })?;
+/// The file a Live socket names, resolved and jailed, or why it can't be a
+/// live view: the target's refusal (the deny list: `protected` for the vault,
+/// git's folder and the workspace's private `.k2` folder; `secret`,
+/// `generated`, `workspace_not_found`…), a bad root, a drawing, or not text.
+/// Each one carries its own code and the daemon's words, so a tab never says
+/// "too large, or not text" for a rule. An absolute path in another
+/// workspace resolves to that workspace (the caller's rights decide next).
+fn live_target(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Target, Closed> {
     let root_param = params.get("root").map(|r| r.trim()).filter(|r| !r.is_empty());
-    let resume = match params.get("resume").map(|r| r.trim()).filter(|r| !r.is_empty()) {
-        Some(r) => Some(
-            r.parse::<u64>()
-                .map_err(|_| Closed::k2(CloseReason::Declined, "bad_request", "resume must be a whole number"))?,
-        ),
-        None => None,
-    };
-    // A malformed `prev` is ignored like an unknown one.
-    let prev = params.get("prev").and_then(|v| v.trim().parse::<u64>().ok());
     let path = params.get("doc").or_else(|| params.get("path")).cloned().unwrap_or_default();
     let t: Target = target::resolve(params.get("workspace").map(String::as_str), &path, caller.default_workspace())
         .map_err(|r| Closed::k2(target_reason(&r), r.code, r.message))?;
-    let core = super::cores::core_of(t.tier);
     // The Live view edits text; a live keyed doc (a deck, a timeline or a
     // scene, its core on) is watched ([`super::live_deck`]); any other file
     // is refused.
@@ -511,6 +503,27 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
             format!("{} isn't a text file; the Live view edits Markdown and other text", t.rel),
         ));
     }
+    Ok(t)
+}
+
+/// Resolve, gate, open, join, subscribe, read. Blocking.
+fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Opened, Closed> {
+    let rt = super::runtime().map_err(|u| match &u {
+        super::Unavailable::Failed(_) => Closed::k2(CloseReason::Declined, "docs_unavailable", u.message()),
+        _ => restart(),
+    })?;
+    let resume = match params.get("resume").map(|r| r.trim()).filter(|r| !r.is_empty()) {
+        Some(r) => Some(
+            r.parse::<u64>()
+                .map_err(|_| Closed::k2(CloseReason::Declined, "bad_request", "resume must be a whole number"))?,
+        ),
+        None => None,
+    };
+    // A malformed `prev` is ignored like an unknown one.
+    let prev = params.get("prev").and_then(|v| v.trim().parse::<u64>().ok());
+    let t = live_target(caller, params)?;
+    let core = super::cores::core_of(t.tier);
+    let keyed = t.tier.is_keyed();
     if !core_is_on(core) {
         return Err(core_off_at_open(core));
     }
@@ -1683,6 +1696,72 @@ mod tests {
         assert!(m.starts_with("this doc is on the native engine (format 1), which this build doesn't have. "), "{m}");
         assert!(m.contains("update K2 to open it live again"), "{m}");
         assert_eq!(c.error.as_ref().expect("the kit's report").id(), "MPC-E169");
+    }
+
+    /// The file Rosson opened: a plain 10 KB HTML page in ANOTHER
+    /// workspace's `.k2/agent/work/`. The owner's absolute path resolves to
+    /// that workspace (a file there outside `.k2/` opens live), but `.k2/`
+    /// outside its doc folders is K2's private folder: the socket closes
+    /// `declined` with `protected` and the daemon's words naming the folder,
+    /// never a size or text reason. Outside every workspace is its own code.
+    #[test]
+    fn a_page_in_another_workspaces_k2_folder_is_refused_as_protected_not_too_large() {
+        let dir = crate::test_support::Scratch::new();
+        let mine = dir.path().join("mine");
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(&mine).expect("mine");
+        std::fs::create_dir_all(other.join(".k2/agent/work")).expect("other's .k2/agent/work");
+        let mut page = String::from("<!doctype html>\n<html><head><style>body { font: 14px sans-serif; }</style></head><body>\n");
+        while page.len() < 9_900 {
+            page.push_str("<p>The k5 CLI port, slice by slice.</p>\n");
+        }
+        page.push_str("</body></html>\n");
+        let inside = other.join(".k2/agent/work/k5-cli-progress.html");
+        std::fs::write(&inside, &page).expect("page in .k2");
+        let beside = other.join("k5-cli-progress.html");
+        std::fs::write(&beside, &page).expect("page beside .k2");
+        let loose = dir.path().join("loose.html");
+        std::fs::write(&loose, &page).expect("page in no workspace");
+        let (mine_id, other_id) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            for (id, name, root) in [(&mine_id, "live-mine", &mine), (&other_id, "live-other", &other)] {
+                let root = root.canonicalize().expect("root");
+                conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)", rusqlite::params![id, name, root.to_string_lossy()])
+                    .expect("register the workspace");
+            }
+        }
+        let open = |p: &std::path::Path| {
+            let params: HashMap<String, String> = [("doc".to_string(), p.to_string_lossy().to_string())].into();
+            live_target(&super::super::caller::owner(), &params)
+        };
+
+        let c = open(&inside).expect_err("a page in .k2/agent/work is not a live doc");
+        println!("[docs/live] refusal for {}: {}", inside.display(), c.value());
+        assert_eq!(c.reason, CloseReason::Declined);
+        assert_eq!(c.code.as_deref(), Some("protected"), "{:?}", c);
+        assert_eq!(
+            c.message.as_deref(),
+            Some(".k2/agent/work/k5-cli-progress.html is in the workspace's private .k2 folder, where only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs"),
+        );
+        assert!(c.error.is_none(), "K2's own rule, not a kit report: {:?}", c.error);
+        let frame = c.value().to_string();
+        assert!(!frame.contains("too_large") && !frame.contains("not_utf8") && !frame.contains("binary"), "{frame}");
+
+        let t = open(&beside).expect("the same page outside .k2 opens live, in its own workspace");
+        assert_eq!((t.project_id.as_str(), t.rel.as_str()), (other_id.as_str(), "k5-cli-progress.html"));
+        assert_eq!(t.tier, Tier::Text(k2_mpc_text::Family::Markup));
+
+        let c = open(&loose).expect_err("a page in no workspace");
+        assert_eq!((c.reason, c.code.as_deref()), (CloseReason::NotFound, Some("workspace_not_found")));
+        assert_eq!(c.message.as_deref(), Some("that file is not inside a workspace on this server"));
+
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for id in [&mine_id, &other_id] {
+            conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id]).expect("unregister");
+        }
     }
 
     #[test]

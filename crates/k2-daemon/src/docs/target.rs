@@ -389,7 +389,7 @@ pub fn deny(rel: &str, link: &Path, abs: &Path) -> Result<(), Refusal> {
     if Tier::of(rel) != Tier::Markdown && is_k2_config(rel) {
         return Err(Refusal::declined(
             "protected",
-            format!("{rel} is K2's own configuration; only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs there"),
+            format!("{rel} is in the workspace's private .k2 folder, where only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs"),
         ));
     }
     let link_name = link.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();

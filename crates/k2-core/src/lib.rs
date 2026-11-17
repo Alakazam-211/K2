@@ -253,10 +253,8 @@ pub mod bg_proc;
 pub mod win_fs;
 #[cfg(windows)]
 pub mod win_proc;
-/// macOS process facts from libproc and sysctl (no setuid `ps`). Built
-/// for tests everywhere so its reply parser is tested on Linux too.
-#[cfg(any(target_os = "macos", test))]
-pub mod mac_proc;
+#[cfg(target_os = "macos")]
+pub use k2_client::mac_proc;
 pub mod private_home;
 pub mod session_archive;
 pub mod session_homes;
@@ -419,7 +417,7 @@ pub mod port_claim;
 pub mod postal;
 // prd-daemon-activity-and-thread-working-v1 DA14: live process lookup for
 // the hook owner check (macOS proc_pidinfo, Linux /proc).
-pub mod proc_ancestry;
+pub use k2_client::proc_ancestry;
 // Send feedback to K2 (prd-k2-product-feedback-v1, 0.46.11): the outbox,
 // the wire contract and the consented diagnostics. Not the tickets.
 pub mod product_feedback;

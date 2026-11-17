@@ -58,6 +58,10 @@ pub mod env_names;
 pub mod events;
 pub mod hosts;
 pub mod login_path;
+/// macOS process facts from libproc and sysctl (no setuid `ps`). Built
+/// for tests everywhere so its reply parser is tested on Linux too.
+#[cfg(any(target_os = "macos", test))]
+pub mod mac_proc;
 #[cfg(target_os = "macos")]
 pub mod macos_keychain;
 pub mod migration_home;
@@ -65,6 +69,8 @@ pub mod migration_launchd;
 pub mod path_env;
 pub mod paths;
 pub mod perf;
+pub mod proc_ancestry;
+pub mod proc_tree;
 pub mod process;
 pub mod proxy_rule;
 pub mod release_sums;

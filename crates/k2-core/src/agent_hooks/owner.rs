@@ -48,35 +48,7 @@ pub const MAX_ANCESTRY_DEPTH: usize = 16;
 /// Most distinct hook senders remembered per pane.
 const KNOWN_SENDERS_CAP: usize = 32;
 
-/// One process, as the owner check sees it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProcInfo {
-    pub pid: i32,
-    pub ppid: i32,
-    /// Opaque, monotonic per boot: tells a reused pid apart.
-    pub start_time: u64,
-}
-
-/// Process lookup. `None` when the pid is not alive.
-pub trait ProcessTable {
-    fn info(&self, pid: i32) -> Option<ProcInfo>;
-}
-
-/// `pid`'s chain upward, starting with `pid` itself, at most `max`
-/// entries. Stops at a missing parent, pid ≤ 1, or a self-parent loop.
-pub fn ancestry(table: &dyn ProcessTable, start: ProcInfo, max: usize) -> Vec<ProcInfo> {
-    let mut chain = vec![start];
-    let mut cur = start;
-    while chain.len() < max && cur.ppid > 1 && cur.ppid != cur.pid {
-        let Some(parent) = table.info(cur.ppid) else { break };
-        if chain.iter().any(|p| p.pid == parent.pid) {
-            break;
-        }
-        chain.push(parent);
-        cur = parent;
-    }
-    chain
-}
+pub use k2_client::proc_tree::{ancestry, ProcInfo, ProcessTable};
 
 /// Which owner check this platform can run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -802,5 +774,45 @@ mod tests {
         assert_eq!(OwnerCheckMode::for_this_platform(), OwnerCheckMode::Conversation);
         #[cfg(not(windows))]
         assert_eq!(OwnerCheckMode::for_this_platform(), OwnerCheckMode::Ancestry);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    use crate::proc_ancestry::LiveProcessTable;
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn own_process_resolves_with_the_real_parent() {
+        let me = std::process::id() as i32;
+        let info = LiveProcessTable.info(me).expect("this process is alive");
+        // SAFETY: getppid has no preconditions.
+        let parent = unsafe { libc::getppid() };
+        assert_eq!(info.ppid, parent);
+        assert!(info.start_time > 0);
+        // Stable across reads (the pid-reuse check depends on it).
+        assert_eq!(LiveProcessTable.info(me).expect("again").start_time, info.start_time);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_child_process_chain_reaches_this_process() {
+        let mut child = crate::bg_proc::command("/bin/sleep")
+            .arg("5")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id() as i32;
+        let info = LiveProcessTable.info(pid).expect("child is alive");
+        let chain = ancestry(&LiveProcessTable, info, MAX_ANCESTRY_DEPTH);
+        let me = std::process::id() as i32;
+        assert!(chain.iter().any(|p| p.pid == me), "chain {chain:?} misses {me}");
+        child.kill().expect("kill sleep");
+        child.wait().expect("reap sleep");
+        assert!(LiveProcessTable.info(pid).is_none(), "a reaped pid is gone");
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn nonsense_pids_are_none() {
+        assert!(LiveProcessTable.info(0).is_none());
+        assert!(LiveProcessTable.info(-5).is_none());
     }
 }

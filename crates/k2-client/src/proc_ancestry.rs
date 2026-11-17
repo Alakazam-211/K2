@@ -11,7 +11,7 @@
 //! The start time is only compared with itself (pid-reuse detection), so
 //! its unit differs per OS and that is fine.
 
-use crate::agent_hooks::owner::{ProcInfo, ProcessTable};
+use crate::proc_tree::{ProcInfo, ProcessTable};
 
 /// The OS process table.
 #[derive(Debug, Clone, Copy, Default)]
@@ -95,45 +95,5 @@ mod platform {
 
     pub fn info(_pid: i32) -> Option<ProcInfo> {
         None
-    }
-}
-
-#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
-mod tests {
-    use super::*;
-    use crate::agent_hooks::owner::{ancestry, MAX_ANCESTRY_DEPTH};
-
-    #[test]
-    fn own_process_resolves_with_the_real_parent() {
-        let me = std::process::id() as i32;
-        let info = LiveProcessTable.info(me).expect("this process is alive");
-        // SAFETY: getppid has no preconditions.
-        let parent = unsafe { libc::getppid() };
-        assert_eq!(info.ppid, parent);
-        assert!(info.start_time > 0);
-        // Stable across reads (the pid-reuse check depends on it).
-        assert_eq!(LiveProcessTable.info(me).expect("again").start_time, info.start_time);
-    }
-
-    #[test]
-    fn a_child_process_chain_reaches_this_process() {
-        let mut child = crate::bg_proc::command("/bin/sleep")
-            .arg("5")
-            .spawn()
-            .expect("spawn sleep");
-        let pid = child.id() as i32;
-        let info = LiveProcessTable.info(pid).expect("child is alive");
-        let chain = ancestry(&LiveProcessTable, info, MAX_ANCESTRY_DEPTH);
-        let me = std::process::id() as i32;
-        assert!(chain.iter().any(|p| p.pid == me), "chain {chain:?} misses {me}");
-        child.kill().expect("kill sleep");
-        child.wait().expect("reap sleep");
-        assert!(LiveProcessTable.info(pid).is_none(), "a reaped pid is gone");
-    }
-
-    #[test]
-    fn nonsense_pids_are_none() {
-        assert!(LiveProcessTable.info(0).is_none());
-        assert!(LiveProcessTable.info(-5).is_none());
     }
 }

@@ -55,11 +55,13 @@ const itemClass =
 const headClass = 'px-3 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]'
 const listClass = 'flex-1 min-h-0 overflow-y-auto py-1'
 
-/** "No chat on this server" and why, from a status read. */
-export function noChatLine(reason: string | null): string {
-  if (reason === 'mac') return 'No chat on this server (chat runs on Linux servers).'
+/** Why a server has no one to add, and what to do, from a status read
+ *  (`unreachable`: the status could not be read at all). */
+export function noChatLine(reason: string | null, o: { unreachable?: boolean } = {}): string {
+  if (o.unreachable) return "Couldn't reach chat on this server. Check it's online, then try again."
+  if (reason === 'mac') return 'No chat here: chat runs on Linux servers. Use a Linux server to chat with people.'
   if (reason === 'space_pending') return 'Chat is still being set up on this server.'
-  return 'No chat on this server.'
+  return 'Chat is off on this server. An owner or admin can turn it on.'
 }
 
 export interface ChatServer {
@@ -148,7 +150,7 @@ function channelGlyph(inviteOnly: boolean): AgentListRow['avatar'] {
  *  list shows). */
 function sectionStatus(st: HomeChatHostState | undefined, needPeople: boolean): JSX.Element | undefined {
   if (!st || (!st.status && !st.statusError)) return <AgentListStatus text="Loading…" />
-  if (st.statusError) return <AgentListStatus marker="offline" text={noChatLine(null)} />
+  if (st.statusError) return <AgentListStatus marker="offline" text={noChatLine(null, { unreachable: true })} />
   if (st.status && !st.status.on) return <AgentListStatus marker="no-access" text={noChatLine(st.status.reason)} />
   if (needPeople && !st.people) return <AgentListStatus text="Loading people…" />
   return undefined

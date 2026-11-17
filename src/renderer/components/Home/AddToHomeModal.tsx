@@ -5,7 +5,8 @@
 // from the window's sides and 24px from its top and bottom; below 640px of
 // room across it is a full-height sheet.
 //
-// Head: "Add to Home", then "Adds to <icon> <group>": it always adds to the
+// Head: "Add to Home", then "Adds to <group>" in plain words (no group
+// number or glyph in the line): it always adds to the
 // current group. A tab bar between that line and the search appears only
 // once there is more than one kind to add (`addToHomeSections`): Agents,
 // and People and Channels once a server this window knows has Home chat
@@ -47,8 +48,6 @@ import { selectedHome, useHomesStore, type Home, type HomeRow } from '@/stores/h
 import { useHomeChatOffered } from '@/stores/home-chat'
 import { isWebClient } from '@/lib/is-web'
 import { AddChannelPanel, AddPersonPanel, NewChannelPanel } from '@/components/HomeChat/HomeChatPickers'
-import { GroupGlyph } from './groups/GroupGlyph'
-import { useHomeGroups } from './groups/useHomeGroups'
 import { useHomeAddPickerStore } from './home-room'
 import {
   AddSourceHead,
@@ -111,9 +110,6 @@ export const ADD_TO_HOME_SIZE_CLASS =
 
 export interface AddToHomeModalProps {
   home: Home
-  /** The group's 0-based position and icon, for "Adds to". */
-  index: number
-  icon: string | null
   /** The section it opens on (default: the last one shown on this Home,
    *  else Agents). */
   section?: AddToHomeSection
@@ -314,7 +310,7 @@ export function AddAgentsPanel({
   )
 }
 
-export function AddToHomeModal({ home, index, icon, section, onClose, onAdded, onAddRow, avatarFor }: AddToHomeModalProps): JSX.Element {
+export function AddToHomeModal({ home, section, onClose, onAdded, onAddRow, avatarFor }: AddToHomeModalProps): JSX.Element {
   const titleId = useId()
   const sections = addToHomeSections(useHomeChatOffered() && !isWebClient())
   const [picked, setPicked] = useState<AddToHomeSection>(() => section ?? rememberedAddToHomeTab(home.id) ?? 'agents')
@@ -366,11 +362,7 @@ export function AddToHomeModal({ home, index, icon, section, onClose, onAdded, o
             Add to Home
           </h2>
           <p className="m-0 mt-1 flex min-w-0 items-center gap-1.5 type-hint text-[var(--color-text-secondary)]" data-add-to="">
-            Adds to
-            <span aria-hidden="true" className="inline-flex flex-shrink-0">
-              <GroupGlyph icon={icon} index={index} size={12} bare />
-            </span>
-            <b className="min-w-0 truncate font-semibold text-[var(--color-text-primary)]">{home.name}</b>
+            Adds to <b className="min-w-0 truncate font-semibold text-[var(--color-text-primary)]">{home.name}</b>
           </p>
         </div>
         {sections.length > 1 && (
@@ -448,13 +440,10 @@ export function closeAddToHome(): void {
 export function AddToHomeHost(): JSX.Element | null {
   const open = useHomeAddPickerStore((s) => s.open)
   const home = useHomesStore(selectedHome)
-  const groups = useHomeGroups()
   if (!open) return null
   return (
     <AddToHomeModal
       home={home}
-      index={groups.current.index}
-      icon={groups.current.icon}
       onClose={closeAddToHome}
       onAdded={(address) => {
         const st = useHomeAddPickerStore.getState()

@@ -814,10 +814,10 @@ describe('Home — the Agents page shell', () => {
     const dialog = screen.getByRole('dialog', { name: 'Add to Home' })
     expect(dialog.hasAttribute('data-add-to-home-modal')).toBe(true)
     const addsTo = dialog.querySelector('[data-add-to]') as HTMLElement
-    expect(addsTo.firstChild?.textContent).toBe('Adds to')
+    // Plain words: "Adds to Launch", no group number or glyph in the line.
+    expect(addsTo.textContent).toBe(`Adds to ${home.name}`)
     expect(addsTo.querySelector('b')?.textContent).toBe(home.name)
-    // The group's own glyph (here its number), not read aloud.
-    expect(addsTo.querySelector('[aria-hidden="true"]')?.textContent).toBe('1')
+    expect(addsTo.querySelector('[aria-hidden="true"]')).toBeNull()
     // One kind to add: no tab bar.
     expect(within(dialog).queryByRole('tablist')).toBeNull()
     // A section per source: this computer (connected), then each saved server.

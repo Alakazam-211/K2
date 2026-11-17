@@ -32,7 +32,7 @@ vi.mock('@/lib/home-chat/events-socket', async (orig) => ({
 }))
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { AddChannelPanel, AddPersonPanel, NewChannelPanel, chatServers, waitForChannelId } from './HomeChatPickers'
+import { AddChannelPanel, AddPersonPanel, NewChannelPanel, chatServers, waitForChannelId, noChatLine } from './HomeChatPickers'
 import { HomeChatMembersSheet } from './HomeChatMembersSheet'
 import { resetHomeChatForTests } from '@/stores/home-chat'
 import { useHomesStore, type HomeRow } from '@/stores/homes'
@@ -129,7 +129,14 @@ describe('Add a person', () => {
       throw new Error(`unexpected GET ${route}`)
     })
     render(<AddPersonPanel home={home()} onAddRow={add} />)
-    expect(await screen.findByText('No chat on this server (chat runs on Linux servers).')).toBeTruthy()
+    expect(await screen.findByText('No chat here: chat runs on Linux servers. Use a Linux server to chat with people.')).toBeTruthy()
+  })
+
+  it('says why there is no one to add, and what to do, for chat off and an unreachable server', () => {
+    expect(noChatLine(null)).toBe('Chat is off on this server. An owner or admin can turn it on.')
+    expect(noChatLine('off')).toBe('Chat is off on this server. An owner or admin can turn it on.')
+    expect(noChatLine(null, { unreachable: true })).toBe("Couldn't reach chat on this server. Check it's online, then try again.")
+    expect(noChatLine('space_pending')).toBe('Chat is still being set up on this server.')
   })
 })
 

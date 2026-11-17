@@ -44,8 +44,6 @@ function open(section: 'agents' | 'people' | 'channels' | undefined, rows: HomeR
   render(
     <AddToHomeModal
       home={home}
-      index={0}
-      icon={null}
       section={section}
       onClose={onClose}
       onAdded={onAdded}

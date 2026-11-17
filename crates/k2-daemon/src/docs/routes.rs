@@ -3126,10 +3126,23 @@ mod tests {
         let s = mgr.open(Arc::new(k2_mpc_markdown::PACK), &key, None).expect("and loads");
         let conn = s.join(owner(), Stay::Held).expect("join").conn;
         s.replace_text(conn, k2_mpc_markdown::ROOT, "# notes\n\nkeep this line\nand one more\n").expect("editing still works");
-        let before = std::fs::read(&path).expect("read the store file");
+        // The store file's bytes; on Windows, where the open store holds a
+        // byte-range lock no other handle may read through, its size and time.
+        let fingerprint = || -> Vec<u8> {
+            #[cfg(not(windows))]
+            {
+                std::fs::read(&path).expect("read the store file")
+            }
+            #[cfg(windows)]
+            {
+                let m = std::fs::metadata(&path).expect("the store file's metadata");
+                format!("{} {:?}", m.len(), m.modified().expect("mtime")).into_bytes()
+            }
+        };
+        let before = fingerprint();
         let err = s.purge(conn, PurgeRequest::new(PurgeScope::History)).expect_err("a purge is refused");
         assert_eq!(err, SessionError::Store(StoreError::NewerData { table: NEWER_TABLE.into() }));
-        assert_eq!(std::fs::read(&path).expect("read the store file"), before, "nothing changed");
+        assert_eq!(fingerprint(), before, "nothing changed");
         let r = session_error(&err);
         assert_eq!(r.status, "409 Conflict");
         let e = error_of(&r);

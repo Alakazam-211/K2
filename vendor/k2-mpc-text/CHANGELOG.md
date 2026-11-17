@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.28: pairs with kit v0.22.0
+
+**Requires `k2-mpc-base` v0.22.0**. This pack's behaviour is unchanged from v0.2.27.
+
+- Pairs with kit v0.22.0. Its pack API additions have defaults this pack keeps (`Pack::checks_edits`
+  and `Pack::check_edit`, `Pack::text_units`, and for blob packs `BlobPack::verbs`,
+  `BlobPack::errors`, `BlobPack::hold_reach`, `BlobPack::save_pairing`,
+  `BlobPack::judge_across_save`); its other changes are the host's (a read that survives a failed
+  render, where each change is, verbs on a blob doc, a typed refusal for a store another process
+  holds). So this pack behaves as in v0.2.27.
+- `Cargo.lock`: k2-mpc-base 0.22.0, with the kit's new `libc` dependency (glibc targets); the crate
+  version.
+
 ## v0.2.27: pairs with kit v0.21.0
 
 **Requires `k2-mpc-base` v0.21.0**. This pack's behaviour is unchanged from v0.2.26.

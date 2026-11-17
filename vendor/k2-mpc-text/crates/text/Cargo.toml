@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-text"
-version = "0.2.27"
+version = "0.2.28"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

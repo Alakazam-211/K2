@@ -23,6 +23,7 @@ import type { ModelDrawing } from './dxf/model/load'
 import { LayoutsNote, NotDrawnNote, useModelSource } from './dxf/model/ModelStats'
 import type { DrawingModelSource } from './dxf/model/source'
 import { setPxPerUnit } from './dxf/model/lines'
+import { SHEET_STYLE } from './dxf/sheet'
 import { pageTextMetrics } from './dxf/text-metrics'
 import { useDxfLiveChanges } from './dxf/useDxfLiveChanges'
 import { framed, viewBounds } from './dxf/view-address'
@@ -359,7 +360,8 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
       <div
         ref={boxRef}
         className="relative min-h-0 flex-1 cursor-grab select-none overflow-hidden"
-        style={{ touchAction: 'none', color: 'var(--color-text-primary)' }}
+        style={{ touchAction: 'none', ...SHEET_STYLE }}
+        data-testid="dxf-sheet"
       >
         <svg
           ref={svgRef}
@@ -373,7 +375,7 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
         </svg>
         {drawing.skippedTotal ? (
           <div
-            className="pointer-events-none absolute bottom-2.5 left-3 right-3 text-[11px] text-[var(--color-text-muted)]"
+            className="pointer-events-none absolute bottom-2.5 left-3 right-3 text-[11px] text-[var(--dxf-note)]"
             data-testid="dxf-skipped"
           >
             {`${drawing.skippedTotal} ${drawing.skippedTotal === 1 ? 'entity' : 'entities'} not shown (${skippedLabel(drawing.skipped)})`}

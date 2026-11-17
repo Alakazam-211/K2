@@ -125,6 +125,8 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--color-selection': mix('accent', 25),
   // The live 3D picture's stage: a Garden's own inset surface.
   '--color-stage': zen('surface'),
+  // The CAD viewer's drawing area: a Garden's own inset surface, as the stage.
+  '--color-cad-sheet': zen('surface'),
   // Washes, overlays, scrollbars
   '--color-wash-1': mix('text', 5),
   '--color-wash-2': mix('text', 10),

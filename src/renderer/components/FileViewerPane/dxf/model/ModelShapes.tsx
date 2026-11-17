@@ -232,8 +232,8 @@ function Row({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
     }
     case 'WIPEOUT': {
       const mask = pointsOf(g.mask)
-      // Covers what is under it in the viewer's own background.
-      return mask.length >= 3 ? <path data-h={r.h} d={polyD(mask, g.closed !== false)} stroke="none" style={{ fill: 'var(--color-bg)' }} /> : null
+      // Covers what is under it in the sheet's colour.
+      return mask.length >= 3 ? <path data-h={r.h} d={polyD(mask, g.closed !== false)} stroke="none" style={{ fill: 'var(--dxf-sheet, var(--color-bg))' }} /> : null
     }
     case 'IMAGE': {
       // Images aren't loaded yet: the frame, marked across, and its clip boundary when it has one.

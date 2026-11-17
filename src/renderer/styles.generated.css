@@ -143,6 +143,7 @@
   --color-find-match-current: rgba(253, 199, 0, 0.28);
   --color-selection: rgba(59, 130, 246, 0.34);
   --color-stage: #1a1a1a;
+  --color-cad-sheet: var(--color-bg);
   --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: #333333;
   --color-control-hover-quiet: #333333;
@@ -317,6 +318,7 @@
   --color-find-match-current: rgba(253, 199, 0, 0.28);
   --color-selection: rgba(59, 130, 246, 0.34);
   --color-stage: #1a1a1a;
+  --color-cad-sheet: var(--color-bg);
   --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
@@ -425,6 +427,7 @@
   --color-find-match-current: rgba(214, 150, 0, 0.40);
   --color-selection: rgba(37, 90, 146, 0.20);
   --color-stage: #1a1a1a;
+  --color-cad-sheet: #1a1a1a;
   --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
@@ -601,6 +604,7 @@
   --color-find-match-current: rgba(255, 195, 92, 0.30);
   --color-selection: rgba(64, 159, 255, 0.32);
   --color-stage: #24252a;
+  --color-cad-sheet: var(--color-bg);
   --color-tab-active: var(--color-bg);
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
@@ -718,6 +722,7 @@
   --color-find-match-current: rgba(255, 170, 0, 0.42);
   --color-selection: rgba(8, 106, 204, 0.20);
   --color-stage: #24252a;
+  --color-cad-sheet: #24252a;
   --color-tab-active: var(--color-bg-surface);
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
@@ -835,6 +840,7 @@
   --color-find-match-current: rgba(255, 195, 92, 0.30);
   --color-selection: rgba(64, 159, 255, 0.32);
   --color-stage: #24252a;
+  --color-cad-sheet: var(--color-bg);
   --color-tab-active: var(--color-bg);
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
@@ -1912,6 +1918,7 @@
   --color-find-match-current: rgba(255, 195, 92, 0.30);
   --color-selection: rgba(64, 159, 255, 0.32);
   --color-stage: #24252a;
+  --color-cad-sheet: var(--color-bg);
   --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
@@ -2016,6 +2023,7 @@
   --color-find-match-current: rgba(255, 170, 0, 0.42);
   --color-selection: rgba(8, 106, 204, 0.20);
   --color-stage: #24252a;
+  --color-cad-sheet: #24252a;
   --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
@@ -2120,6 +2128,7 @@
   --color-find-match-current: rgba(255, 195, 92, 0.30);
   --color-selection: rgba(64, 159, 255, 0.32);
   --color-stage: #24252a;
+  --color-cad-sheet: var(--color-bg);
   --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: var(--color-border);
   --color-control-hover-quiet: var(--color-bg-elevated);
@@ -2362,6 +2371,7 @@
   --color-find-match-current: rgba(253, 199, 0, 0.28);
   --color-selection: rgba(59, 130, 246, 0.34);
   --color-stage: #1a1a1a;
+  --color-cad-sheet: var(--color-bg);
   --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: #333333;
   --color-control-hover-quiet: #333333;
@@ -2468,6 +2478,7 @@
   --color-find-match-current: rgba(214, 150, 0, 0.40);
   --color-selection: rgba(37, 90, 146, 0.20);
   --color-stage: #1a1a1a;
+  --color-cad-sheet: #1a1a1a;
   --color-tab-active: color-mix(in srgb, rgb(40, 32, 16) 16%, var(--color-bg-surface));
   --color-control-hover: #cfc7b6;
   --color-control-hover-quiet: #cfc7b6;
@@ -2574,6 +2585,7 @@
   --color-find-match-current: rgba(253, 199, 0, 0.28);
   --color-selection: rgba(59, 130, 246, 0.34);
   --color-stage: #1a1a1a;
+  --color-cad-sheet: var(--color-bg);
   --color-tab-active: color-mix(in srgb, white 8%, var(--color-bg-surface));
   --color-control-hover: #3a3732;
   --color-control-hover-quiet: #3a3732;

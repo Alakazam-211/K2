@@ -13,6 +13,8 @@ import type { VoiceCall } from '@/stores/voice-core'
 import CallControls, { CallControlBar } from './CallControls'
 import { useCallNoiseRemoval } from './CallLayer'
 import { useCallDuration } from './callHooks'
+import { useCallPopout } from '@/stores/call-popout'
+import { useCallHomeIsCallWindow } from '@/stores/call-home'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
@@ -38,6 +40,9 @@ export default function CallBar({ call, action, look }: CallBarProps): React.JSX
   const noiseRemoval = useCallNoiseRemoval()
   const videoPreview = useSettingsStore((s) => s.videoRoomsPreview) === true
   const title = callTitle(call)
+  // Popped out: the bar says where the call went.
+  const poppedOut = useCallPopout((s) => s.open)
+  const inItsWindow = useCallHomeIsCallWindow() || poppedOut
   const controls = <CallControls variant="topbar" call={call} actions={voice} video={videoPreview ? video : null} noiseRemoval={noiseRemoval} />
   const frame = look === 'dock' ? 'border-b border-[var(--color-border)] px-4 py-1.5' : 'ml-0.5'
   return (
@@ -48,6 +53,11 @@ export default function CallBar({ call, action, look }: CallBarProps): React.JSX
       <span data-testid="call-bar-time" className="font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">
         {time ?? 'Connecting…'}
       </span>
+      {inItsWindow ? (
+        <span data-testid="call-bar-where" className="whitespace-nowrap text-[11px] text-[var(--color-text-secondary)]">
+          In its own window
+        </span>
+      ) : null}
       {look === 'dock' ? <span className="flex-1" /> : null}
       {look === 'dock' ? (
         // On the call's bar, as the stage's controls are.

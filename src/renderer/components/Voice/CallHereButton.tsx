@@ -1,7 +1,8 @@
 // In a window that isn't the call's home (one call, one home window), the
 // slim bar's action moves the call's stage here: Show call here, or Back to
 // chat in the window the call's own window came from. The old home folds to
-// the slim bar; the call's own window closes. Only while the call has video:
+// the slim bar; the call's own window closes. While the call is in its own
+// window it can always come back; elsewhere only while the call has video:
 // without it there is no stage to move.
 
 import { Button } from '@/components/ui/Button'
@@ -21,8 +22,11 @@ export function useCallHereAction(call: VoiceCall): 'here' | 'back-to-chat' | nu
   const home = useIsCallHome()
   const preview = useSettingsStore((s) => s.videoRoomsPreview) === true
   const live = useCallVideoLive(video, call.participants)
-  if (!tracked || home || !preview || !live) return null
-  return owner === CALL_WINDOW_LABEL && readPoppedOutFrom() === getWindowLabel() ? 'back-to-chat' : 'here'
+  if (!tracked || home || !preview) return null
+  const inItsWindow = owner === CALL_WINDOW_LABEL
+  // In its own window, it can always come back; elsewhere, only video moves.
+  if (!inItsWindow && !live) return null
+  return inItsWindow && readPoppedOutFrom() === getWindowLabel() ? 'back-to-chat' : 'here'
 }
 
 export default function CallHereButton({ kind, then }: { kind: 'here' | 'back-to-chat'; then?: () => void }): React.JSX.Element {

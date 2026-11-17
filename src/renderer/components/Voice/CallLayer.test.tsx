@@ -608,6 +608,18 @@ describe('one call, one home window (this window is main; the app lists main and
     expect(await screen.findByTestId('video-stage')).toBeTruthy()
   })
 
+  it('with the call in its own window, the slim bar says so, video or not, and offers to bring it back', async () => {
+    localStorage.setItem(CALL_POPPED_FROM_KEY, 'main')
+    writeCallHome({ call: ROOM, owner: 'window-call', until: later() })
+    await inCall()
+    const bar = await screen.findByTestId('call-bar')
+    expect((await within(bar).findByTestId('call-bar-where')).textContent).toBe('In its own window')
+    expect(within(bar).getByTestId('call-bar-back-to-chat')).toBeTruthy()
+    // Brought back: it no longer says so.
+    fireEvent.click(within(bar).getByTestId('call-bar-back-to-chat'))
+    await waitFor(() => expect(screen.queryByTestId('call-bar-where')).toBeNull())
+  })
+
   it("another window that didn't pop it out says Show call here", async () => {
     localStorage.setItem(CALL_POPPED_FROM_KEY, 'window-2')
     writeCallHome({ call: ROOM, owner: 'window-call', until: later() })
@@ -1021,8 +1033,9 @@ describe('pop out: the call in its own window', () => {
     // The call is untouched: still connected, nothing sent to the engine.
     expect(voice.store.getState().call?.phase).toBe('connected')
     expect(h.voiceEngine?.calls.length ?? 0).toBe(before)
-    // While it's out, this window's top bar has the call's controls.
+    // While it's out, this window's top bar has the call's controls, and says where it went.
     expect(screen.getByTestId('call-topbar-controls')).toBeTruthy()
+    expect(screen.getByTestId('call-bar-where').textContent).toBe('In its own window')
     // The window closes (its close button, ⌘W): the stage is back; the call never dropped.
     p.emit(false)
     expect(await screen.findByTestId('video-stage')).toBeTruthy()

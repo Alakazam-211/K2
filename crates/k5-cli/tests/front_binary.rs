@@ -222,26 +222,40 @@ fn a_cache_that_cannot_be_written_is_one_line_and_exit_1() {
     assert_eq!(out.stderr.lines().count(), 1, "{out:?}");
 }
 
-/// The front adds its three variables and bash reads them, and bash's
-/// `$0` is the cache file. Shown by the shell's own trace (bash takes
-/// `SHELLOPTS=xtrace` from the environment, which the front passes on).
+/// The front adds its four variables and bash reads them; bash's `$0` is
+/// `/dev/fd/N`, the open cache file, and the shell closes N. Shown by the
+/// shell's own trace (bash takes `SHELLOPTS=xtrace` from the environment,
+/// which the front passes on).
 #[test]
-fn bash_s_dollar_0_is_the_cache_file_and_the_front_s_variables_arrive() {
+fn bash_runs_the_open_cache_file_and_the_front_s_variables_arrive() {
     let rig = Rig::new("dollar0");
-    let out = rig.front("k5", &args(&["nosuchverb"]), &[("SHELLOPTS", "xtrace")]);
+    // A value left by some other call is replaced by the front's own.
+    let out = rig.front("k5", &args(&["nosuchverb"]), &[("SHELLOPTS", "xtrace"), ("K5_CLI_SCRIPT_DIR", "/stale")]);
     assert_eq!(out.code, Some(1), "{}", out.stdout);
-    let sha = sha256_hex(&std::fs::read(cli_k2()).unwrap());
-    let traced = |line: &str| out.stderr.lines().any(|l| l.trim_start_matches('+') == format!(" {line}"));
+    let lines: Vec<&str> = out.stderr.lines().map(|l| l.trim_start_matches('+')).collect();
+    let traced = |line: &str| lines.iter().any(|l| *l == format!(" {line}"));
+    // `$0` is /dev/fd/N, so the name from it is N, a number of 3 or more.
+    let n = lines
+        .iter()
+        .find_map(|l| l.strip_prefix(" _k2_name="))
+        .unwrap_or_else(|| panic!("no _k2_name in the trace:\n{}", out.stderr));
+    assert!(n.parse::<u32>().is_ok_and(|n| n >= 3), "$0 is not /dev/fd/N: _k2_name={n}");
+    // The folder of the binary as run, links resolved: the rig's links
+    // point at the build.
+    let dir = std::fs::canonicalize(BIN).unwrap().parent().unwrap().to_path_buf();
     for line in [
-        format!("_k2_name=k2-{}.sh", &sha[..12]),
         "_K2_CALLED_AS=k5".to_string(),
         "_K5_NOTICE_DONE=1".to_string(),
         "_K5_CLI_VIA=rust".to_string(),
+        format!("_K5_SCRIPT_DIR={}", dir.display()),
+        "unset K5_CLI_SCRIPT_DIR".to_string(),
+        format!("eval 'exec {n}<&-'"),
     ] {
         assert!(traced(&line), "no `{line}` in the trace:\n{}", out.stderr);
     }
-    // Run straight, the shell sees none of them.
+    // Run straight, the shell sees none of them and closes nothing.
     let plain = rig.bash(&args(&["nosuchverb"]), &[("SHELLOPTS", "xtrace")]);
     let traced = |line: &str| plain.stderr.lines().any(|l| l.trim_start_matches('+') == format!(" {line}"));
-    assert!(traced("_k2_name=k2") && traced("_K2_CALLED_AS=k2") && !traced("_K5_CLI_VIA=rust"), "{}", plain.stderr);
+    assert!(traced("_k2_name=k2") && traced("_K2_CALLED_AS=k2") && traced("_K5_SCRIPT_DIR=") && !traced("_K5_CLI_VIA=rust"), "{}", plain.stderr);
+    assert!(!plain.stderr.contains("exec 3<&-"), "{}", plain.stderr);
 }

@@ -19,7 +19,11 @@
 //!    (to a temporary name in the same folder, then renamed) and runs
 //!    from there.
 //!
-//! A copy that doesn't match is never run.
+//! A copy that doesn't match is never run. The copy is opened once, and
+//! the open file is both what is hashed and what bash reads: on Unix bash
+//! runs `/dev/fd/N`, a descriptor of that open file, so a file swapped in
+//! at the path after the check is not what runs. On Windows (no
+//! `/dev/fd`) bash still runs the path, a moment after the check.
 //!
 //! The bash: `/bin/bash` on macOS; elsewhere on Unix the first of
 //! `/bin/bash` and `/usr/bin/bash` that is there. On Windows, Git Bash, by
@@ -27,21 +31,25 @@
 //!
 //! On Unix the front becomes bash (`exec`): the process id, the terminal,
 //! signals and the process ancestry the passport check walks are bash's
-//! own, and so is the exit code. bash's `$0` is the script's path (the
-//! cache file's, or the bundled copy's); the shell reads the name it was
-//! called by from `K5_CLI_CALLED_AS` first, so `$0` doesn't decide it. On
-//! Windows bash runs as a child and the front exits with its code.
+//! own, and so is the exit code. bash's `$0` is `/dev/fd/N`, which says
+//! nothing about the name or the folder, so the front passes both: the
+//! name it was called by in `K5_CLI_CALLED_AS`, and in `K5_CLI_SCRIPT_DIR`
+//! the folder where an install keeps the files shipped beside the CLI
+//! ([`script_dir_for`]). The shell closes N first thing, so the commands
+//! it starts don't inherit it; bash reads the script through its own
+//! descriptor. On Windows bash runs as a child, `$0` is the path, and the
+//! front exits with bash's code.
 
-use crate::called_as::CalledAs;
+use crate::called_as::{CalledAs, SCRIPT_DIR_VAR};
 use crate::embedded;
 use crate::exit::Exit;
 use crate::home::HomeError;
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -90,17 +98,45 @@ fn hex(digest: &[u8]) -> String {
     s
 }
 
-/// The sha256 of the file at `path` (links followed), read in pieces.
-fn file_sha256(path: &Path) -> io::Result<String> {
-    let mut file = fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    io::copy(&mut file, &mut hasher)?;
-    Ok(hex(&hasher.finalize()))
+/// The copy of the shell CLI that runs: its path, and the file opened at
+/// that path whose bytes were hashed, wound back to the start. The open
+/// file is what bash reads on Unix ([`inheritable_copy`]).
+#[derive(Debug)]
+pub struct Script {
+    pub path: PathBuf,
+    pub file: fs::File,
 }
 
-/// True when `path` is a plain file (not a link) whose sha256 is `want`.
-fn plain_file_matches(path: &Path, want: &str) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) && file_sha256(path).is_ok_and(|h| h == want)
+/// `path` opened, when it is a file whose sha256 is `want`, wound back to
+/// the start. With `follow_links` false a link is no match (on Unix it is
+/// not even opened: `O_NOFOLLOW`). What is hashed is the open file, so it
+/// is the same bytes whatever is put at `path` afterwards.
+fn open_matching(path: &Path, want: &str, follow_links: bool) -> Option<fs::File> {
+    // Looked at before opening, so a folder or a pipe is never opened.
+    let meta = if follow_links { fs::metadata(path) } else { fs::symlink_metadata(path) };
+    if !meta.ok()?.is_file() {
+        return None;
+    }
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        if !follow_links {
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+    }
+    let mut file = opts.open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    io::copy(&mut file, &mut hasher).ok()?;
+    if hex(&hasher.finalize()) != want {
+        return None;
+    }
+    file.seek(SeekFrom::Start(0)).ok()?;
+    Some(file)
 }
 
 /// The front's own failures. Each is one line on stderr and exit 1;
@@ -185,39 +221,39 @@ pub fn cache_dir(k2_home: &Path) -> PathBuf {
     k2_home.join("run").join("cli")
 }
 
-/// The script to run: the bundled copy when it is this build's, else the
-/// cache under the K2 home ([`cached`]). The home is looked up only when
-/// the bundled copy doesn't do.
-pub fn script_path(
+/// The script to run, open: the bundled copy when it is this build's
+/// (links followed), else the cache under the K2 home ([`cached`]). The
+/// home is looked up only when the bundled copy doesn't do.
+pub fn script(
     packed: &Packed<'_>,
     bundled: Option<&Path>,
     k2_home: impl FnOnce() -> Result<PathBuf, HomeError>,
-) -> Result<PathBuf, FrontError> {
+) -> Result<Script, FrontError> {
     if let Some(copy) = bundled {
-        if file_sha256(copy).is_ok_and(|h| h == packed.sha256) {
-            return Ok(copy.to_path_buf());
+        if let Some(file) = open_matching(copy, packed.sha256, true) {
+            return Ok(Script { path: copy.to_path_buf(), file });
         }
     }
     let home = k2_home().map_err(FrontError::Home)?;
     cached(packed, &cache_dir(&home))
 }
 
-/// The cache copy in `dir`, made private first. A plain file whose sha256
-/// is this build's is kept; anything else (missing, changed, a link, a
-/// folder) is replaced from the packed copy, which is checked before it is
-/// written and read back after.
-pub fn cached(packed: &Packed<'_>, dir: &Path) -> Result<PathBuf, FrontError> {
+/// The cache copy in `dir`, made private first, open. A plain file whose
+/// sha256 is this build's is kept; anything else (missing, changed, a
+/// link, a folder) is replaced from the packed copy, which is checked
+/// before it is written and read back after.
+pub fn cached(packed: &Packed<'_>, dir: &Path) -> Result<Script, FrontError> {
     private_dir(dir)?;
     let path = dir.join(packed.cache_name());
-    if plain_file_matches(&path, packed.sha256) {
-        return Ok(path);
+    if let Some(file) = open_matching(&path, packed.sha256, false) {
+        return Ok(Script { path, file });
     }
     let bytes = packed.unpack()?;
     write_replacing(dir, &path, &bytes).map_err(|err| FrontError::Cache { path: path.clone(), err })?;
-    if !plain_file_matches(&path, packed.sha256) {
-        return Err(FrontError::CacheMismatch { path });
+    match open_matching(&path, packed.sha256, false) {
+        Some(file) => Ok(Script { path, file }),
+        None => Err(FrontError::CacheMismatch { path }),
     }
-    Ok(path)
 }
 
 /// Makes `dir` (and what is missing above it) and leaves it a folder only
@@ -283,17 +319,40 @@ pub fn bundled_place_for(exe: &Path) -> Option<PathBuf> {
     k2_client::cli_install::packaged_cli_for_exe(exe, k2_client::cli_install::CLI_NAME)
 }
 
-/// [`bundled_place_for`] this process's executable, links resolved.
-pub fn bundled_place() -> Option<PathBuf> {
+/// This process's executable, links resolved.
+pub fn resolved_exe() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(fs::canonicalize(&exe).unwrap_or(exe))
+}
+
+/// [`bundled_place_for`] `exe`; never on Windows.
+pub fn bundled_place(exe: &Path) -> Option<PathBuf> {
     #[cfg(unix)]
     {
-        let exe = std::env::current_exe().ok()?;
-        let exe = fs::canonicalize(&exe).unwrap_or(exe);
-        bundled_place_for(&exe)
+        bundled_place_for(exe)
     }
     #[cfg(not(unix))]
     {
+        let _ = exe;
         None
+    }
+}
+
+/// The folder [`SCRIPT_DIR_VAR`] names for an executable at `exe` (links
+/// already resolved): where an install keeps the files shipped beside the
+/// CLI, `k2-approve` and `k2-widget-shot.mjs`.
+///
+/// In a packaged macOS app that is the bundled script's folder
+/// (`Contents/Resources/_up_/cli`, where the app's resources put
+/// `k2-widget-shot.mjs` beside `k2`), not `Contents/MacOS`. Anywhere else
+/// it is the executable's own folder, links resolved: cli_install links
+/// `k2` in a bin folder (`~/.local/bin`, `/usr/local/bin`) to the CLI and
+/// puts nothing beside the link, and the shell has always looked beside
+/// its own file with links followed. So a link's folder is never it.
+pub fn script_dir_for(exe: &Path) -> Option<PathBuf> {
+    match bundled_place(exe) {
+        Some(bundled) => bundled.parent().map(Path::to_path_buf),
+        None => exe.parent().map(Path::to_path_buf),
     }
 }
 
@@ -329,13 +388,47 @@ pub fn interpreter(args: &[OsString]) -> Result<PathBuf, FrontError> {
     }
 }
 
-/// The command that runs `script` in `bash` with `args` as they came, and
-/// the front's variables for the shell. The rest of the environment is
-/// this process's own.
-pub fn command(bash: &Path, script: &Path, args: &[OsString], who: CalledAs) -> Command {
+/// The command that runs `script` (`/dev/fd/N` on Unix) in `bash` with
+/// `args` as they came, and the front's variables for the shell: the three
+/// of [`CalledAs::fallthrough_env`], and [`SCRIPT_DIR_VAR`] set to
+/// `script_dir`, or taken away when there is none (so a value left by
+/// another call is never read as this one's). The rest of the environment
+/// is this process's own.
+pub fn command(bash: &Path, script: &OsStr, args: &[OsString], who: CalledAs, script_dir: Option<&Path>) -> Command {
     let mut cmd = Command::new(bash);
     cmd.arg(script).args(args).envs(who.fallthrough_env());
+    match script_dir {
+        Some(dir) => cmd.env(SCRIPT_DIR_VAR, dir),
+        None => cmd.env_remove(SCRIPT_DIR_VAR),
+    };
     cmd
+}
+
+/// A copy of `file`'s descriptor that bash inherits: numbered 3 or above
+/// (never stdin, stdout or stderr) and without close-on-exec, which
+/// `F_DUPFD` clears on the copy. Every other descriptor the front opens,
+/// `file` included, keeps close-on-exec, so this is the one bash gets.
+/// The copy shares `file`'s place in the file, at the start.
+#[cfg(unix)]
+pub fn inheritable_copy(file: &fs::File) -> io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    // SAFETY: F_DUPFD on a descriptor `file` holds open; it takes and
+    // returns plain integers and touches no memory.
+    let fd = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD, 3) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `fd` was just made by F_DUPFD, is open, and nothing else
+    // owns it.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+}
+
+/// The path bash opens for the descriptor `fd`: `/dev/fd/<fd>`. Linux and
+/// macOS both have it, and bash 3.2 runs a script from it.
+#[cfg(unix)]
+pub fn dev_fd(fd: &std::os::fd::OwnedFd) -> OsString {
+    use std::os::fd::AsRawFd;
+    OsString::from(format!("/dev/fd/{}", fd.as_raw_fd()))
 }
 
 /// Hands `args` to the shell CLI. On Unix this process becomes bash, so
@@ -347,20 +440,28 @@ pub fn run(who: CalledAs, args: &[OsString]) -> FrontError {
         Ok(b) => b,
         Err(e) => return e,
     };
-    let script = match script_path(&embedded(), bundled_place().as_deref(), crate::home::k2_home) {
+    let exe = resolved_exe();
+    let bundled = exe.as_deref().and_then(bundled_place);
+    let script = match script(&embedded(), bundled.as_deref(), crate::home::k2_home) {
         Ok(s) => s,
         Err(e) => return e,
     };
-    let mut cmd = command(&bash, &script, args, who);
+    let dir = exe.as_deref().and_then(script_dir_for);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let err = cmd.exec();
+        let fd = match inheritable_copy(&script.file) {
+            Ok(fd) => fd,
+            Err(err) => return FrontError::Run { bash, err },
+        };
+        let err = command(&bash, &dev_fd(&fd), args, who, dir.as_deref()).exec();
         FrontError::Run { bash, err }
     }
     #[cfg(not(unix))]
     {
-        match cmd.status() {
+        // No /dev/fd: bash runs the path. The open file stays open until
+        // bash is done.
+        match command(&bash, script.path.as_os_str(), args, who, dir.as_deref()).status() {
             Ok(status) => std::process::exit(status.code().unwrap_or(1)),
             Err(err) => FrontError::Run { bash, err },
         }
@@ -412,6 +513,12 @@ mod tests {
         }
     }
 
+    fn read_all(mut file: fs::File) -> Vec<u8> {
+        let mut out = Vec::new();
+        file.read_to_end(&mut out).unwrap();
+        out
+    }
+
     #[cfg(unix)]
     fn mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
@@ -439,9 +546,11 @@ mod tests {
     fn a_first_run_writes_the_cache_private_and_runnable() {
         let home = scratch("first");
         let f = Fixture::new(SCRIPT);
-        let path = script_path(&f.packed(), None, || Ok(home.clone())).expect("cached");
+        let got = script(&f.packed(), None, || Ok(home.clone())).expect("cached");
+        let path = got.path.clone();
         assert_eq!(path, home.join("run/cli").join(f.packed().cache_name()));
         assert_eq!(fs::read(&path).unwrap(), SCRIPT);
+        assert_eq!(read_all(got.file), SCRIPT, "the open file reads from the start");
         #[cfg(unix)]
         {
             assert_eq!(mode(&path), 0o755);
@@ -459,9 +568,11 @@ mod tests {
         use std::os::unix::fs::MetadataExt;
         let dir = scratch("keep");
         let f = Fixture::new(SCRIPT);
-        let path = cached(&f.packed(), &dir).unwrap();
+        let path = cached(&f.packed(), &dir).unwrap().path;
         let before = fs::metadata(&path).unwrap().ino();
-        assert_eq!(cached(&f.packed(), &dir).unwrap(), path);
+        let again = cached(&f.packed(), &dir).unwrap();
+        assert_eq!(again.path, path);
+        assert_eq!(read_all(again.file), SCRIPT, "a kept cache file is read from the start");
         assert_eq!(fs::metadata(&path).unwrap().ino(), before, "a matching cache file is not rewritten");
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -472,7 +583,9 @@ mod tests {
         let f = Fixture::new(SCRIPT);
         let path = dir.join(f.packed().cache_name());
         fs::write(&path, b"#!/bin/bash\necho PWNED\n").unwrap();
-        assert_eq!(cached(&f.packed(), &dir).unwrap(), path);
+        let got = cached(&f.packed(), &dir).unwrap();
+        assert_eq!(got.path, path);
+        assert_eq!(read_all(got.file), SCRIPT);
         assert_eq!(fs::read(&path).unwrap(), SCRIPT);
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -489,7 +602,7 @@ mod tests {
         fs::create_dir(&cache).unwrap();
         let path = cache.join(f.packed().cache_name());
         std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
-        assert_eq!(cached(&f.packed(), &cache).unwrap(), path);
+        assert_eq!(cached(&f.packed(), &cache).unwrap().path, path);
         assert!(fs::symlink_metadata(&path).unwrap().is_file());
         assert_eq!(fs::read(&elsewhere).unwrap(), SCRIPT);
         fs::remove_dir_all(&dir).unwrap();
@@ -541,24 +654,25 @@ mod tests {
         fs::write(&bundled, SCRIPT).unwrap();
         let home = dir.join("home");
         // Matching: used as it is, and the home is never looked up.
-        let got = script_path(&f.packed(), Some(&bundled), || panic!("the home is not needed")).unwrap();
-        assert_eq!(got, bundled);
+        let got = script(&f.packed(), Some(&bundled), || panic!("the home is not needed")).unwrap();
+        assert_eq!(got.path, bundled);
+        assert_eq!(read_all(got.file), SCRIPT);
         assert!(!home.exists());
         // Changed: the cache instead, and the bundled file is left alone.
         fs::write(&bundled, b"#!/bin/bash\necho old\n").unwrap();
-        let got = script_path(&f.packed(), Some(&bundled), || Ok(home.clone())).unwrap();
+        let got = script(&f.packed(), Some(&bundled), || Ok(home.clone())).unwrap().path;
         assert_eq!(got, cache_dir(&home).join(f.packed().cache_name()));
         assert_eq!(fs::read(&bundled).unwrap(), b"#!/bin/bash\necho old\n");
         // Missing: the cache.
         fs::remove_file(&bundled).unwrap();
-        assert_eq!(script_path(&f.packed(), Some(&bundled), || Ok(home.clone())).unwrap(), got);
+        assert_eq!(script(&f.packed(), Some(&bundled), || Ok(home.clone())).unwrap().path, got);
         fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn no_home_is_an_error_and_writes_nothing() {
         let f = Fixture::new(SCRIPT);
-        let err = script_path(&f.packed(), None, || Err(HomeError::NoUserHome)).expect_err("no home");
+        let err = script(&f.packed(), None, || Err(HomeError::NoUserHome)).expect_err("no home");
         assert!(matches!(err, FrontError::Home(HomeError::NoUserHome)), "{err:?}");
         assert_eq!(
             err.line(CalledAs::K5Name),
@@ -621,21 +735,108 @@ mod tests {
             use std::os::unix::ffi::OsStringExt;
             args.push(OsString::from_vec(b"caf\xe9 \xff\n".to_vec()));
         }
-        let cmd = command(Path::new("/bin/bash"), Path::new("/h/run/cli/k2-x.sh"), &args, CalledAs::K5Name);
+        let cmd = command(Path::new("/bin/bash"), OsStr::new("/dev/fd/4"), &args, CalledAs::K5Name, Some(Path::new("/opt/k 2")));
         assert_eq!(cmd.get_program(), "/bin/bash");
         let got: Vec<&std::ffi::OsStr> = cmd.get_args().collect();
-        let mut want: Vec<&std::ffi::OsStr> = vec![std::ffi::OsStr::new("/h/run/cli/k2-x.sh")];
+        let mut want: Vec<&std::ffi::OsStr> = vec![std::ffi::OsStr::new("/dev/fd/4")];
         want.extend(args.iter().map(OsString::as_os_str));
         assert_eq!(got, want);
         let envs: Vec<(String, Option<String>)> = cmd
             .get_envs()
             .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned())))
             .collect();
-        let want: Vec<(String, Option<String>)> = CalledAs::K5Name
+        let mut want: Vec<(String, Option<String>)> = CalledAs::K5Name
             .fallthrough_env()
             .iter()
             .map(|(k, v)| (k.to_string(), Some(v.to_string())))
             .collect();
-        assert_eq!(envs, want, "only the three variables are added, nothing removed");
+        want.push((SCRIPT_DIR_VAR.to_string(), Some("/opt/k 2".to_string())));
+        want.sort();
+        let mut envs = envs;
+        envs.sort();
+        assert_eq!(envs, want, "only the four variables are added, nothing removed");
+        // No folder: the variable is taken away, so an inherited one is
+        // never read as this call's.
+        let cmd = command(Path::new("/bin/bash"), OsStr::new("/dev/fd/4"), &[], CalledAs::K2Name, None);
+        let dir: Vec<_> = cmd.get_envs().filter(|(k, _)| *k == SCRIPT_DIR_VAR).collect();
+        assert_eq!(dir, vec![(OsStr::new(SCRIPT_DIR_VAR), None)]);
+    }
+
+    /// The folder for the files beside the CLI: the bundled script's in a
+    /// packaged app, else the executable's own (links already resolved
+    /// by the caller).
+    #[cfg(unix)]
+    #[test]
+    fn the_script_dir_is_where_an_install_keeps_the_files_beside_the_cli() {
+        let dir = scratch("scriptdir");
+        let contents = dir.join("K2.app/Contents");
+        fs::create_dir_all(contents.join("MacOS")).unwrap();
+        let exe = contents.join("MacOS/k5-cli");
+        fs::write(&exe, b"").unwrap();
+        // No bundled script: the executable's folder.
+        assert_eq!(script_dir_for(&exe), Some(contents.join("MacOS")));
+        let cli = contents.join("Resources/_up_/cli");
+        fs::create_dir_all(&cli).unwrap();
+        fs::write(cli.join("k2"), SCRIPT).unwrap();
+        assert_eq!(script_dir_for(&exe), Some(cli));
+        // A build or an install elsewhere: its own folder.
+        assert_eq!(script_dir_for(&dir.join("opt/k5/k5-cli")), Some(dir.join("opt/k5")));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// What bash reads through `/dev/fd/N` is the file that was hashed,
+    /// even when another file is renamed over the path afterwards; the
+    /// copy is 3 or above and survives exec, the front's own descriptor
+    /// does not.
+    #[cfg(unix)]
+    #[test]
+    fn bash_reads_the_file_that_was_hashed() {
+        use std::os::fd::AsRawFd;
+        let dir = scratch("fd");
+        let f = Fixture::new(SCRIPT);
+        let got = cached(&f.packed(), &dir).unwrap();
+        // Swapped after the check, as an attacker or a racing writer would.
+        let other = dir.join("other");
+        fs::write(&other, b"#!/bin/bash\necho PWNED\n").unwrap();
+        fs::rename(&other, &got.path).unwrap();
+        let fd = inheritable_copy(&got.file).unwrap();
+        assert!(fd.as_raw_fd() >= 3);
+        let cloexec = |fd: i32| {
+            // SAFETY: F_GETFD on an open descriptor; integers only.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            assert!(flags >= 0, "F_GETFD {fd}: {}", io::Error::last_os_error());
+            flags & libc::FD_CLOEXEC != 0
+        };
+        assert!(!cloexec(fd.as_raw_fd()), "the copy bash gets survives exec");
+        assert!(cloexec(got.file.as_raw_fd()), "the front's own descriptor closes at exec");
+        let path = dev_fd(&fd);
+        assert_eq!(path, OsString::from(format!("/dev/fd/{}", fd.as_raw_fd())));
+        assert_eq!(fs::read(&path).unwrap(), SCRIPT, "through {path:?}");
+        assert_eq!(fs::read(&got.path).unwrap(), b"#!/bin/bash\necho PWNED\n");
+        // On macOS opening /dev/fd/N shares the place in the file, which
+        // the read above left at the end; the front hands bash a file at
+        // its start, so wind it back as the front leaves it.
+        (&got.file).seek(SeekFrom::Start(0)).unwrap();
+        // And bash itself runs it so, $0 included.
+        let out = Command::new(find_unix_bash(cfg!(target_os = "macos"), |p| p.is_file()).unwrap())
+            .arg(&path)
+            .arg("x y")
+            .env_clear()
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "real\n");
+        let probe = dir.join("probe.sh");
+        fs::write(&probe, b"printf '%s|%s\\n' \"$0\" \"$1\"\n").unwrap();
+        let file = fs::File::open(&probe).unwrap();
+        let fd = inheritable_copy(&file).unwrap();
+        let out = Command::new(find_unix_bash(cfg!(target_os = "macos"), |p| p.is_file()).unwrap())
+            .arg(dev_fd(&fd))
+            .arg("x y")
+            .env_clear()
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), format!("/dev/fd/{}|x y\n", fd.as_raw_fd()), "{out:?}");
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

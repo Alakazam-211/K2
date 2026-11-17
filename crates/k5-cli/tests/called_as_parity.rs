@@ -80,3 +80,56 @@ fn the_fallthrough_env_is_what_the_shell_reads() {
     // Without the front, none of the three is set.
     assert_eq!(common::bash(&script, "k5", &[]), "k5||\n");
 }
+
+/// The prelude's lines that read the folder the front passes and close the
+/// script's descriptor the front handed over.
+fn script_dir_block() -> String {
+    common::block(&common::prelude(), r#"_K5_SCRIPT_DIR="${K5_CLI_SCRIPT_DIR:-}""#, "fi")
+}
+
+/// The folder arrives as it was set; empty or unset is none.
+#[cfg(unix)]
+#[test]
+fn the_script_dir_is_what_the_shell_reads() {
+    use k5_cli::called_as::SCRIPT_DIR_VAR;
+    let script = format!("{}\n{}\nprintf '[%s]\\n' \"$_K5_SCRIPT_DIR\"", handoff_block(), script_dir_block());
+    assert!(script_dir_block().contains(SCRIPT_DIR_VAR));
+    assert_eq!(common::bash(&script, "k2", &[(SCRIPT_DIR_VAR, "/opt/k5 x/bin")]), "[/opt/k5 x/bin]\n");
+    assert_eq!(common::bash(&script, "k2", &[(SCRIPT_DIR_VAR, "")]), "[]\n");
+    assert_eq!(common::bash(&script, "k2", &[]), "[]\n");
+    // Taken out of the environment: a child never sees it.
+    let child = format!("{}\n{}\nsh -c 'echo \"[${{{var}-unset}}]\"'", handoff_block(), script_dir_block(), var = SCRIPT_DIR_VAR);
+    assert_eq!(common::bash(&child, "k2", &[(SCRIPT_DIR_VAR, "/opt/k5")]), "[unset]\n");
+}
+
+/// Run from the front as `/dev/fd/N`, the shell closes N, so what it
+/// starts doesn't inherit it. Only a plain number above 2, and only
+/// through the front.
+#[cfg(unix)]
+#[test]
+fn the_front_s_descriptor_is_closed_and_nothing_else() {
+    let script = format!(
+        "exec 9</dev/null\n{}\n{}\nif {{ : <&9; }} 2>/dev/null; then echo open; else echo closed; fi",
+        handoff_block(),
+        script_dir_block()
+    );
+    type Env<'a> = &'a [(&'a str, &'a str)];
+    let via: Env = &[("K5_CLI_VIA", "rust")];
+    let rows: &[(&str, Env, &str)] = &[
+        ("/dev/fd/9", via, "closed\n"),
+        ("/dev/fd/9", &[], "open\n"),
+        ("/dev/fd/09", via, "open\n"),
+        ("/dev/fd/9x", via, "open\n"),
+        ("/dev/fd/", via, "open\n"),
+        ("/tmp/fd/9", via, "open\n"),
+        ("9", via, "open\n"),
+    ];
+    for (argv0, env, want) in rows {
+        assert_eq!(common::bash(&script, argv0, env), *want, "$0 {argv0:?}, env {env:?}");
+    }
+    // The three standard ones are never closed.
+    for n in ["0", "1", "2"] {
+        let script = format!("{}\n{}\necho still", handoff_block(), script_dir_block());
+        assert_eq!(common::bash(&script, &format!("/dev/fd/{n}"), via), "still\n", "/dev/fd/{n}");
+    }
+}

@@ -19,7 +19,7 @@
 mod common;
 
 use k2_client::env_names;
-use k5_cli::called_as::{CALLED_AS_VAR, NOTICE_DONE_VAR, VIA_VAR};
+use k5_cli::called_as::FRONT_VARS;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One read the shell makes: where, and the names it tries, in order.
@@ -30,7 +30,7 @@ struct Read {
 }
 
 /// The names the Rust front hands the shell: one name each, not settings.
-const FRONT: &[&str] = &[CALLED_AS_VAR, NOTICE_DONE_VAR, VIA_VAR];
+const FRONT: &[&str] = &FRONT_VARS;
 
 /// Reads in cli/src that do not match the registry today and wait for a
 /// ruling: the file, the names it tries in its order, and why it is left.

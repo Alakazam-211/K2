@@ -103,6 +103,18 @@ describe('selecting', () => {
     expect(screen.queryByTestId('dxf-edit-hint')).toBeNull()
   })
 
+  it('a line under the pointer wins over the text whose box it crosses', async () => {
+    await open()
+    // The browser reports the text as under the pointer (its box covers the line).
+    fireEvent.pointerDown(shape('@h:5C'), { pointerId: 1, button: 0, ...client(5, 2) })
+    fireEvent.pointerUp(sheet(), { pointerId: 1, ...client(5, 2) })
+    expect(selected()).toEqual(['@h:41'])
+    // Away from any line, the text itself.
+    fireEvent.pointerDown(shape('@h:5C'), { pointerId: 1, button: 0, ...client(12, 3) })
+    fireEvent.pointerUp(sheet(), { pointerId: 1, ...client(12, 3) })
+    expect(selected()).toEqual(['@h:5C'])
+  })
+
   it('Shift-click adds and removes; Esc clears', async () => {
     await open()
     click('@h:41')

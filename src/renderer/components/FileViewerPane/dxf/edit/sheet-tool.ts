@@ -8,6 +8,7 @@
 // DOM, never through React, so a drag costs no renders.
 
 import type { ModelRow, XY } from '../model/types'
+import { SOLID } from './hit'
 import { boxMode, boxSelect, pickAt, shiftLock, snapDelta, toggle } from './selection'
 
 export type SheetCtx = {
@@ -78,7 +79,11 @@ export function editTool(get: () => ToolState): SheetTool {
     down(e, c) {
       const s = get()
       const p = c.toDrawing(e.clientX, e.clientY)
-      const hit = targetHandle(e.target, s.rows) ?? pickAt(s.rows, p, PICK_PX * c.unitsPerPx())
+      // The element under the pointer, unless it's a text, block or fill and a line or curve is right there too.
+      const dom = targetHandle(e.target, s.rows)
+      const near = pickAt(s.rows, p, PICK_PX * c.unitsPerPx())
+      const kind = (h: string | null) => (h ? s.rows.find((r) => r.h === h)?.kind ?? '' : '')
+      const hit = dom && near && near !== dom && SOLID.has(kind(dom)) && !SOLID.has(kind(near)) ? near : (dom ?? near)
       if (hit && e.shiftKey) {
         s.select(toggle(s.selection, hit))
         drag = { kind: 'none' }

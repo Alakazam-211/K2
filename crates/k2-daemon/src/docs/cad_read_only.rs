@@ -424,6 +424,11 @@ mod tests {
                 if verb[0] == "text" {
                     *verb.last_mut().expect("the value") = format!("Edited by {who}");
                 }
+                // The head version indexed first, as K2's index job does
+                // after every version (a verb on an unindexed one is MPC-E713).
+                if let Some(job) = s.index_job(None).expect("index_job") {
+                    job.run().expect("the head version indexed");
+                }
                 let base = s.status().expect("status").version;
                 let call = |extra: &[&str]| -> Vec<String> {
                     let mut a = verb.clone();

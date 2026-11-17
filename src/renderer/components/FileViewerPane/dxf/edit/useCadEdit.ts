@@ -175,8 +175,9 @@ export function useCadEdit(p: {
           return true
         }
         const w = refusalWords(out.result, { verb, layerOf: (a) => byHandle.get(a.toUpperCase().replace(/^@H:/, '@h:'))?.layer ?? null })
-        setMessage(w.words)
+        // A file that can't be changed here at all is a standing state, not a refusal: the header line says why, and nothing shows in red.
         if (w.off) setOff(w.off)
+        else setMessage(w.words)
         if (w.refresh) cb.current.reload()
         return false
       } finally {

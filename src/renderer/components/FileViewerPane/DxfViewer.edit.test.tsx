@@ -336,7 +336,11 @@ describe('when the server can’t save drawing edits', () => {
       fireEvent.click(screen.getByTestId('dxf-move-go'))
     })
     expect((await screen.findByTestId('dxf-view-only')).textContent).toBe(HINT)
-    expect(screen.getByTestId('dxf-edit-message').textContent).toBe(HINT)
+    // The reason shows once, in the header line; the panel says only "View only", and nothing is in the error colour.
+    expect(screen.queryByTestId('dxf-edit-message')).toBeNull()
+    expect(screen.getByTestId('dxf-edit-view-only').textContent).toBe('View only')
+    expect(screen.getByTestId('file-dxf').textContent!.split(HINT)).toHaveLength(2)
+    expect(document.querySelector('[class*="--color-status-error"], [class*="--color-danger"]')).toBeNull()
     // The dry run was the only call: nothing was written.
     expect(world.edits.calls).toHaveLength(1)
     expect(world.edits.calls[0]).toContain('--dry-run')

@@ -7,7 +7,8 @@
 //   - a block reference's attributes as rows you can change (Enter saves),
 //     checked as you type; a text's value shown, not editable here yet;
 //   - the last refusal, in plain words.
-// With the drawing view only, it lists what's selected and nothing else.
+// With the drawing view only, it lists what's selected, with one quiet
+// "View only" line (the header line says why); red is for refusals only.
 
 import { useEffect, useId, useState } from 'react'
 import { Button, Input } from '@/components/ui'
@@ -195,6 +196,11 @@ export function SelectionPanel({ edit, header, slots }: { edit: CadEdit; header:
           <span className="block text-[var(--color-text-secondary)]">{layers.length === 1 ? `On ${layers[0]}` : `On ${layers.length} layers`}</span>
         </p>
       )}
+      {edit.viewOnly ? (
+        <p className={`${LABEL} m-0 pt-1`} data-testid="dxf-edit-view-only">
+          View only
+        </p>
+      ) : null}
       {holds.length ? (
         <p className="type-hint m-0 flex gap-1.5 pt-2 text-[var(--color-text-primary)]" data-testid="dxf-edit-held">
           <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true" className="mt-[5px] flex-none">

@@ -3,7 +3,7 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.15
+## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 
 ### Threads and Home
 - **Drop a file anywhere on a Thread to attach it.** The messages, the empty Thread and the message box all take it, the same as a drop on the box (a ticket's Thread too); "Drop to attach" shows while the file is over it.
@@ -13,7 +13,12 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A save from another app keeps what others typed.** When K2 opens a live file in an editor, the editor's save merges from the version it opened, so lines people and agents added in the meantime stay in the file instead of being overwritten.
 - **Agents get `k2 doc` results as data.** `--json` on a text doc's verb prints one line with what the call did: the versions, what changed, the output (marked text or typed), and the error with what to do next.
 - **Preview: timelines, circuit board files and 3D scenes (off by default).** Three new cores in Settings → Cores → Multiplayer, each a Beta that stays off until you turn it on. **Timeline**: agents read the tracks, clips and markers of .otio, .fcpxml and .prproj files, and move, trim, add and mark clips in .otio timelines while you watch. **PCB fabrication**: agents read the apertures, features and holes of photoplot and drill files and compare versions; nobody writes them through K2. **3D scene**: agents read a .blend scene's collections and objects, and the scene's cameras and objects get previews; .blend files are read only in K2 for now (editing them comes in a later release). While a core is off, its files open the usual way.
+- **Watch a 3D scene or a timeline live.** With its core on, a .blend scene opens in a live view: the picture from the file, its outliner, people, Follow and view links, read only for now. An .otio timeline opens live with its lanes and clips, and agents' edits appear as they happen. Scenes saved in Blender 5.2 and later open in a coming update.
 - **Timeline, photoplot and drill files are no longer edited as live text.** These files point at their own lines, so a line-by-line merge could break them. They are now any-file docs (who's here, a lock, versions), and their own core reads them by structure when it is on.
+
+### Files and editors
+- **A new PDF viewer.** Comments, markups and stamps show on the page with their author and date, layers can be turned on and off, you can select and find text (⌘F), and the page fits to the window or its width.
+- **The markdown and code editors gain find and replace, a formatting toolbar, a / menu, an outline and go to line.**
 
 ### Agent messages
 - **A message sent twice lands once.** `k2 msg` (live and `--inbox-wake`/`--inbox-silent`, local or `agent::host`), `k2 thread` and `k2 thread ask` give each send a key; when K2 is slow to answer, the command asks again with the same key and K2 delivers it once, answering with the first delivery. If K2 still doesn't answer, the error says the message may have been delivered and prints the key: run the same command with `--idempotency-key <key>` to try again without a duplicate.
@@ -32,11 +37,19 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **An agent can ask to add compute nodes to its own node list.** `k2 compute allow-nodes --add <node>` from an agent ends with a permission card request (`compute.allow-nodes nodes=…`). The card shows each node's size and who owns it; an owner or Admin's Allow adds exactly those nodes, and Deny changes nothing. Agents can still only ask for their own list and for nodes already granted to them. Clearing the list stays a person's decision.
 - **A job can turn its own network off.** `k2 compute run --network none` runs the job with no network, whatever its node allows: on Linux it gets a network namespace of its own with only loopback; on a Mac, no remote addresses and no DNS (loopback stays open). A job can only narrow its network, never widen it.
 - **Dummy interfaces for browser tests.** `--netns-dummy sewlane0=10.254.254.1/32` (Linux, up to 4) adds an interface with that address to the job's own namespace before it starts, so a browser has an address other than loopback. Addresses come from private, link-local or test ranges only.
-- **K2 places these jobs only on nodes that can run them,** and `k2 compute get` shows the network a job asked for. Nodes need k2-node 0.46.14; an older node never runs such a job with more network.
+- **K2 places these jobs only on nodes that can run them,** and `k2 compute get` shows the network a job asked for. Nodes need k2-node 0.46.15; an older node never runs such a job with more network.
 - **Compute jobs stop piling up on one node.** K2 now counts the jobs already waiting on a node (for example behind your workspace's one-at-a-time limit there) before it places a new one, so the job goes to a node that can start it now, or to the one with the shorter real wait, even when the busy node has more free CPU. A `--cache` job no longer waits behind such a line for its cache.
 
 ### Settings
 - **Settings → Workspaces / Agents shows the agent's name.** The list and the page header show the name you gave the agent (the folder stays on the line under it), change the moment you rename it, and search finds an agent by that name.
+- **Settings → Tunnel is laid out in two columns,** so Policies and Advanced are visible without scrolling.
+
+### Under the hood
+- **Hosted mail keeps its store private.** Stalwart's mail, settings and logs are readable only by the mail server itself; existing servers are tightened on their own, with no restart.
+- **A compute job only shows as finished when its exit is known,** and its log is complete. A job that was running while its node updated no longer reads as a clean exit by mistake.
+- **The Compute garden's load tile keeps refreshing** after a slow or lost answer, instead of freezing on old numbers.
+- **Commands refuse options they don't use** (vault, compute, done, reserve) instead of ignoring them, and their help now matches what they do.
+- **Multiplayer kit 0.21.0** and its file packs.
 
 ### Web app
 - **The web app no longer keeps sign-in tokens or passwords in the browser's saved storage.** A sign-in lasts for the browser tab (a reload keeps it); a new tab asks you to sign in again, and the web app has no "Remember password". Anything an older version saved there is removed when the page loads. The desktop app still uses your system keychain.

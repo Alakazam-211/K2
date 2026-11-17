@@ -5,9 +5,13 @@
 // angles) about the given point, a scale scales them (and its sizes); an
 // attribute set or a text set changes its value; a block insert places a
 // new reference (a new handle) with its labels, refusing a block that's
-// missing, linked, anonymous, dynamic or holds another app's object; a locked layer, a kind the verbs don't change, the wrong unit, a
-// stale `--expect` or an overlap since `--base` is refused with the pack's
-// id. A person is never refused by a hold. Each landed call makes a version.
+// missing, linked, anonymous, dynamic or holds another app's object. A
+// locked layer, a kind the verbs don't change, the wrong unit, a stale
+// `--expect` or an overlap since `--base` is refused with the pack's id:
+// an overlap is the same field of one entity (its geometry, its text, or
+// one label of a block reference by its tag, so two different labels of
+// one reference both land). A person is never refused by a hold. Each
+// landed call makes a version.
 
 import { revertDone, revertRefused, type CadChangeSource } from '../cad-change-source'
 import { fixtureDrawingSource, type DrawingModelSource } from '../model/source'
@@ -88,6 +92,8 @@ export type FakeWorld = {
   changes: CadChangeSource
   /** Another writer's version: the rows it changes, as an agent would through the verbs. */
   agentMove(handles: readonly string[], dx: number, dy: number): void
+  /** Another writer's verb at the head (its words, without the kit's flags). */
+  agentRun(argv: readonly string[]): void
   version(): number
 }
 
@@ -166,8 +172,8 @@ export function fakeCadWorld(
     }
   }
 
-  const run = (argv: readonly string[]): unknown => {
-    calls.push([...argv])
+  const run = (argv: readonly string[], record = true): unknown => {
+    if (record) calls.push([...argv])
     if (opts.writerOff)
       return new DaemonHttpError('cad_writer_disabled', 409, 'cad_writer_disabled', { code: 'cad_writer_disabled', exit: 3, hint: opts.writerOff, path: 'drawing' })
     const verb = `${argv[0]} ${argv[1]}`
@@ -180,7 +186,8 @@ export function fakeCadWorld(
     const missing = addrs.find((_a, i) => !rows[i])
     if (missing) return refuse(verb, base, 'CAD-E010', `${missing} names no entity`, 4)
     const found = rows as ModelRow[]
-    const fields = verb === 'attrib set' || verb === 'text set' ? ['text'] : ['geom']
+    // What overlaps under --base: each label of a reference is a field of its own (by tag, in lower case).
+    const fields = verb === 'attrib set' ? [`att.${(flag(argv, '--tag') ?? '').toLowerCase()}`] : verb === 'text set' ? ['text'] : ['geom']
     for (const r of found) {
       const why = editReason(r, header)
       if (why === 'locked-layer' || opts.locked?.includes(r.layer)) return refuse(verb, base, 'DXF-E045', `${r.h} is on a locked layer`)
@@ -225,7 +232,8 @@ export function fakeCadWorld(
       const nextAttribs = attribs.map((x) => (x === a ? { ...x, value, text: x.text ? { ...x.text, plain: value, runs: [{ text: value }] } : x.text } : x))
       next = {
         rows: [{ ...r, geom: { ...r.geom, attribs: nextAttribs } }],
-        ents: [{ address: r.h, op: 'changed', kind: r.kind, layer: r.layer, owner: 'model', fields, bbox_before: r.bbox, bbox_after: r.bbox, bbox_q: r.bbox_q ?? 'exact', version: null, by: null, identity: null }],
+        // A label's value is the reference's text in the change.
+        ents: [{ address: r.h, op: 'changed', kind: r.kind, layer: r.layer, owner: 'model', fields: ['text'], bbox_before: r.bbox, bbox_after: r.bbox, bbox_q: r.bbox_q ?? 'exact', version: null, by: null, identity: null }],
       }
     } else if (verb === 'block insert') {
       if (!unitOk) return refuse(verb, base, 'DXF-E022', 'not the drawing’s unit')
@@ -326,6 +334,10 @@ export function fakeCadWorld(
       const moved = page.entities.filter((r) => handles.includes(r.h)).map((r) => placed(r, shift(dx, dy)))
       page.entities = page.entities.map((r) => moved.find((m) => m.h === r.h) ?? r)
       bump(moved, ['geom'])
+    },
+    agentRun(argv) {
+      const dry = run([...argv, '--dry-run'], false) as { changed?: { bytes?: { after_digest?: string } } }
+      run([...argv, '--expect', dry.changed?.bytes?.after_digest ?? ''], false)
     },
     version: () => header.version,
   }

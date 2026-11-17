@@ -12,6 +12,8 @@
 //   - Insert block: the toolbar's action or the panel's with nothing
 //     selected, a picker, a ghost that follows the pointer, a click, the
 //     labels form, Insert; the new block is selected; refusals in words;
+//   - two people changing different labels of one block from the same
+//     version both land; the same label refuses the second;
 //   - each runs a dry run, then the commit with --expect, and shows as yours
 //     with Undo; a refusal says why and the ghost goes back;
 //   - a kind the verbs can't change has none of these.
@@ -59,8 +61,8 @@ afterEach(() => {
   cleanup()
 })
 
-async function open(opts: { locked?: string[]; header?: ModelHeader; proxyBlocks?: string[] } = {}): Promise<void> {
-  world = fakeCadWorld({ header: opts.header ?? HEADER, pages: PAGES }, opts)
+async function open(opts: { locked?: string[]; header?: ModelHeader; proxyBlocks?: string[]; pages?: typeof PAGES } = {}): Promise<void> {
+  world = fakeCadWorld({ header: opts.header ?? HEADER, pages: opts.pages ?? PAGES }, opts)
   renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={world.model} edits={world.edits} changes={world.changes} view="@h:51" />)
   await screen.findByTestId('dxf-shapes')
   await act(async () => {})
@@ -366,5 +368,44 @@ describe('inserting a block', () => {
     await open({ header: { ...HEADER, format: 'dwg' } })
     expect(screen.queryByTestId('dxf-insert-block')).toBeNull()
     expect(screen.queryByTestId('dxf-edit-empty')).toBeNull()
+  })
+})
+
+describe('labels of one block, changed by two people', () => {
+  /** The DOOR at @h:61 with a second label, SIZE. */
+  const twoLabels = (): typeof PAGES => {
+    const model = structuredClone(PAGES.model[0])
+    const door = model.entities.find((r) => r.h === '@h:61')!
+    const attribs = door.geom!.attribs as { h: string; tag: string; value: string }[]
+    door.geom = { ...door.geom, attribs: [...attribs, { ...attribs[0], h: '@h:B00', tag: 'SIZE', value: '900' }] }
+    return { ...PAGES, model: [model] }
+  }
+  const relabel = async (tag: string, value: string) => {
+    const input = screen.getAllByTestId('dxf-attrib-row').find((r) => r.getAttribute('data-tag') === tag)!.querySelector('input')!
+    fireEvent.change(input, { target: { value } })
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' })
+    })
+  }
+
+  it('different labels both land, from the same version', async () => {
+    await open({ pages: twoLabels() })
+    click('@h:61')
+    // Someone else sets SIZE while this view still shows version 7.
+    world.agentRun(['attrib', 'set', '@h:61', '--tag', 'SIZE', '--value', '1000'])
+    await relabel('NO', 'D-02')
+    await waitFor(() => expect(world.edits.calls).toHaveLength(2))
+    expect(world.edits.calls[1].slice(0, 9)).toEqual(['attrib', 'set', '@h:61', '--tag', 'NO', '--value', 'D-02', '--base', '7'])
+    expect((await screen.findByTestId('dxf-change-note')).textContent).toContain('You changed a label in a block')
+    expect(screen.queryByTestId('dxf-edit-message')).toBeNull()
+  })
+
+  it('the same label refuses the second, in plain words, and reads the drawing again', async () => {
+    await open({ pages: twoLabels() })
+    click('@h:61')
+    world.agentRun(['attrib', 'set', '@h:61', '--tag', 'NO', '--value', 'D-09'])
+    await relabel('NO', 'D-02')
+    expect((await screen.findByTestId('dxf-edit-message')).textContent).toBe('Not changed. Someone changed this since you looked. The drawing has been refreshed.')
+    expect(world.edits.calls).toHaveLength(1)
   })
 })

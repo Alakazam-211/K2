@@ -15,7 +15,7 @@
 // in the headset list and the call view, 40px on the call's bar
 // (CallControlBar: Frost in Glass, a raised cut bar in Terminal). Hang up
 // stays the danger red. On the call's bar a muted mic also says Muted in
-// words (MutedWord). Keyboard focus draws the shared ring (`k2-focus`
+// words beside it (MutedWord). Keyboard focus draws the shared ring (`k2-focus`
 // outside Terminal, the cut ring in it), with a line of the label colour on
 // a filled button so it reads on the fill too.
 
@@ -156,7 +156,6 @@ function CallButton({
   state,
   onPress,
   children,
-  badge = null,
   optional = false,
 }: {
   variant: CallControlsVariant
@@ -171,9 +170,6 @@ function CallButton({
   state?: string
   onPress: () => void
   children: ReactNode
-  /** A word drawn on the button's lower edge (Muted), over the glyph's
-   *  state; it never changes the button's size. */
-  badge?: ReactNode
   /** One a narrow top bar may fold away (call-bar-fit's last step): it is
    *  in the headset's list too. Mute, Hang up and Record never are. */
   optional?: boolean
@@ -209,25 +205,17 @@ function CallButton({
       }}
     >
       {children}
-      {badge}
     </button>
   )
 }
 
-/** "Muted" on the mic button's lower edge, on the call's bar: the state in
- *  words beside the mic-off glyph. Small (the badge type step) and in the
- *  look's chip (a pill in Glass, cut in Terminal), on the raised fill with
- *  the control edge so it reads on the engaged button and the bar alike.
- *  It hangs into the bar's padding, so nothing in the bar moves when it
- *  shows. The button's own name says it for screen readers. */
+/** "Muted" right after the mic on the call's bar: the state in words beside
+ *  the engaged mic-off button, as the bar's own text at the hint size (never
+ *  a tag hung over the button). The bar grows by the word while it shows.
+ *  The button's own name says it for screen readers. */
 function MutedWord({ testId }: { testId: string }): React.JSX.Element {
   return (
-    <span
-      aria-hidden
-      data-testid={testId}
-      data-k2-chamfer="chip"
-      className="type-badge pointer-events-none absolute -bottom-1.5 left-1/2 z-[2] -translate-x-1/2 whitespace-nowrap rounded-[var(--radius-pill)] border border-[var(--color-control-edge)] bg-[var(--color-bg-elevated)] px-1 leading-3 text-[var(--color-text-primary)]"
-    >
+    <span aria-hidden data-testid={testId} className="type-hint shrink-0 whitespace-nowrap pr-1 text-[var(--color-text-primary)]">
       Muted
     </span>
   )
@@ -371,10 +359,10 @@ export default function CallControls({ variant, call, actions, video, noiseRemov
         dead={busy || locked !== null}
         testId={`call-${variant}-mute`}
         onPress={() => actions.setMuted(!call.muted)}
-        badge={variant === 'overlay' && micOff ? <MutedWord testId={`call-${variant}-muted`} /> : null}
       >
         {micOff ? <MicOffIcon size={size} /> : <MicIcon size={size} />}
       </CallButton>
+      {variant === 'overlay' && micOff ? <MutedWord testId={`call-${variant}-muted`} /> : null}
       <CallButton
         variant={variant}
         label={call.deafened ? 'Undeafen' : 'Deafen'}

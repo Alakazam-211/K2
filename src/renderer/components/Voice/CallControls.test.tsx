@@ -87,22 +87,34 @@ describe('muted, in words', () => {
     })
   }
 
-  it("on the call's bar, a muted mic carries the word Muted under its glyph, small and in the look's chip", () => {
+  it("on the call's bar, a muted mic says Muted in words beside it, at the hint size, never a tag hung over the button", () => {
     const { rerender } = render(<CallControls variant="overlay" call={call} actions={actions()} video={null} />)
     expect(screen.queryByTestId('call-overlay-muted')).toBeNull()
     rerender(<CallControls variant="overlay" call={{ ...call, muted: true }} actions={actions()} video={null} />)
     const mic = screen.getByTestId('call-overlay-mute')
     const word = screen.getByTestId('call-overlay-muted')
     expect(word.textContent).toBe('Muted')
-    // On the mic button itself, so nothing in the bar moves when it shows.
-    expect(mic.contains(word)).toBe(true)
+    // The button's own state shows it (engaged, the mic-off glyph)...
+    expect(mic.dataset.on).toBe('true')
     expect(mic.querySelector('[data-k2-icon]')?.getAttribute('data-k2-icon')).toBe('mic-off')
-    expect(word.className).toMatch(/\babsolute\b/)
-    expect(word.className).toMatch(/\btype-badge\b/)
-    expect(word.className).toContain('rounded-[var(--radius-pill)]')
-    expect(word.getAttribute('data-k2-chamfer')).toBe('chip')
+    // ...and the word is the bar's own text, right after the mic: not on the
+    // button, not hung over its edge, not the tiny badge step.
+    expect(mic.contains(word)).toBe(false)
+    expect(mic.nextElementSibling).toBe(word)
+    expect(word.className).not.toMatch(/\babsolute\b/)
+    expect(word.className).not.toMatch(/\btype-badge\b/)
+    expect(word.className).toMatch(/\btype-hint\b/)
+    expect(word.className).toContain('text-[var(--color-text-primary)]')
     // The button's own name already says it; the word is for the eye.
     expect(word.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('the word is only on the call\'s bar: the top bar and the tile strip keep the glyph alone', () => {
+    for (const variant of ['topbar', 'tile'] as const) {
+      const { unmount } = render(<CallControls variant={variant} call={{ ...call, muted: true }} actions={actions()} video={null} />)
+      expect(screen.queryByTestId(`call-${variant}-muted`)).toBeNull()
+      unmount()
+    }
   })
 })
 

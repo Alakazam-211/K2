@@ -22,6 +22,7 @@ import type { CadChangeSource } from './dxf/cad-change-source'
 import type { ModelDrawing } from './dxf/model/load'
 import { LayoutsNote, NotDrawnNote, useModelSource } from './dxf/model/ModelStats'
 import type { DrawingModelSource } from './dxf/model/source'
+import { setPxPerUnit } from './dxf/model/lines'
 import { pageTextMetrics } from './dxf/text-metrics'
 import { useDxfLiveChanges } from './dxf/useDxfLiveChanges'
 import { framed, viewBounds } from './dxf/view-address'
@@ -178,10 +179,15 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
     const el = boxRef.current
     const svg = svgRef.current
     if (!el || !svg || !fit) return
+    // Dashes are in drawing units: a drawing with linetype patterns is told its zoom (lines.ts).
+    const dashed = svg.querySelector('[data-dashed]') !== null
     const apply = (v: Box): void => {
       viewRef.current = v
       svg.setAttribute('viewBox', `${v.x} ${v.y} ${v.w} ${v.h}`)
+      if (dashed) setPxPerUnit(svg, el, v)
     }
+    const ro = dashed && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => viewRef.current && setPxPerUnit(svg, el, viewRef.current)) : null
+    ro?.observe(el)
     const frame = (b: Bounds): void => apply(fitBox(framed(b, drawing!.bounds)))
     const start = viewBounds(view, drawing!)
     if (start) frame(start)
@@ -295,6 +301,7 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
       el.removeEventListener('gesturechange', onGestureChange)
       el.removeEventListener('gestureend', onGestureEnd)
       el.removeEventListener('dblclick', onDbl)
+      ro?.disconnect()
       refitRef.current = () => {}
       frameRef.current = () => {}
     }

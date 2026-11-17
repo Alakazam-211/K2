@@ -58,8 +58,20 @@ export type ModelLayer = {
   rgb: RGB
   fg: boolean
   alpha: number
+  ltype?: string
+  lw_mm?: number
   on: boolean
   frozen: boolean
+}
+
+/** A linetype: its pattern in drawing units (positive a dash, negative a gap, 0 a dot). */
+export type ModelLinetype = {
+  handle?: string
+  name: string
+  length?: number
+  dashes: number[]
+  /** Text or shapes placed along the line (complex linetypes). */
+  complex?: unknown[]
 }
 
 export type ModelBlock = {
@@ -87,8 +99,9 @@ export type ModelHeader = {
   version: number
   units?: { word?: string; insunits?: number }
   extents?: { stated: Box4 | null; computed: Box4 | null }
-  settings?: { pdmode?: number; pdsize?: number; fillmode?: boolean; lwdisplay?: boolean }
+  settings?: { pdmode?: number; pdsize?: number; fillmode?: boolean; lwdisplay?: boolean; ltscale?: number; lwdefault_mm?: number }
   layers: ModelLayer[]
+  linetypes?: ModelLinetype[]
   blocks: ModelBlock[]
   layouts: ModelLayout[]
   whys?: string[]

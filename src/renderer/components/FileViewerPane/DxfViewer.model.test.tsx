@@ -78,6 +78,30 @@ describe('DxfViewer on the drawing model', () => {
     expect(none.calls.header).toBe(1)
   })
 
+  it('dashes follow the zoom: the drawing is told its screen px per drawing unit as it zooms', async () => {
+    const rect = { x: 0, y: 0, left: 0, top: 0, width: 800, height: 400, right: 800, bottom: 400, toJSON: () => ({}) } as DOMRect
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+    try {
+      renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={model()} changes={null} />)
+      const svg = (await screen.findByTestId('dxf-svg')) as unknown as SVGSVGElement
+      await screen.findByTestId('dxf-shapes')
+      const ppu = (): number => Number(svg.style.getPropertyValue('--k2-ppu'))
+      const [, , w, h] = svg.getAttribute('viewBox')!.split(' ').map(Number)
+      expect(ppu()).toBeCloseTo(1 / Math.max(w / 800, h / 400), 4)
+      const before = ppu()
+      fireEvent.wheel(svg.parentElement!, { deltaY: -200, clientX: 400, clientY: 200 })
+      expect(ppu()).toBeGreaterThan(before)
+      // The viewer's own reading has no linetypes: nothing to tell.
+      cleanup()
+      renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={null} changes={null} />)
+      const own = (await screen.findByTestId('dxf-svg')) as unknown as SVGSVGElement
+      await screen.findByTestId('dxf-shapes')
+      expect(own.style.getPropertyValue('--k2-ppu')).toBe('')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('view addresses frame the model’s boxes', async () => {
     // The dense hatch's box, as the model gives it (a box under 2% of the drawing would grow to that).
     renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={model()} changes={null} view="@h:6A" />)

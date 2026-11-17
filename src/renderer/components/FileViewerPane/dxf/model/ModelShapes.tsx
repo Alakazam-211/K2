@@ -1,14 +1,17 @@
 // The drawing from the model, as SVG in drawing coordinates (the group flips
 // Y once). Every entity element carries its handle (`data-h`). Block
 // definitions are drawn once, in <defs>, and each INSERT places one with a
-// <use> (one per array cell), handing the block its own colour, alpha and
-// layer state for the definition's "insert" values. Lines stay one screen
-// pixel wide at any zoom, as on the viewer's own path.
+// <use> (one per array cell), handing the block its own colour, alpha,
+// layer state, linetype, lineweight and scale for the definition's "insert"
+// values. Lines keep their width in screen pixels at any zoom (1 px, or their
+// lineweight when the drawing shows lineweights); dashes follow the zoom
+// (lines.ts).
 
 import { useId } from 'react'
 import type { TextMetrics } from '../text-metrics'
 import { arcD, bulgeD, ellipsePoints, fmt, num, pointsOf, polyD, vertsOf, xy } from './geom'
 import { HatchShape } from './hatch'
+import { hasPatterns, insertLineVars, lineCtx, strokeOf, type LineCtx } from './lines'
 import { insertVars, paintOf, paintProps, type Paint } from './paint'
 import { MtextShape, TextShape } from './text'
 import type { ModelHeader, ModelPage, ModelRow, XY } from './types'
@@ -25,7 +28,8 @@ export type ModelScene = {
   minSpacing: number
 }
 
-type Ctx = { scene: ModelScene; m: TextMetrics; idp: string; layers: Map<string, { on: boolean; frozen: boolean }> }
+/** `nested`: drawing a block definition, where a placement is inside another. */
+type Ctx = { scene: ModelScene; m: TextMetrics; idp: string; layers: Map<string, { on: boolean; frozen: boolean }>; lines: LineCtx; nested: boolean }
 
 const blockId = (idp: string, handle: string): string => `${idp}-b-${handle.replace(/^@h:/, '')}`
 
@@ -78,7 +82,7 @@ function Insert({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
   if (r.visible !== 'insert' && layer?.frozen) return null
   if (r.visible === false && layer && layer.on) return null
   const on = r.visible === 'insert' ? 'insert' : (layer?.on ?? true)
-  const vars = insertVars(r.style, on) as React.CSSProperties
+  const vars = { ...insertVars(r.style, on), ...(m ? insertLineVars(r.style, c.lines, m, c.nested, r.layer) : {}) } as React.CSSProperties
   const uses: React.JSX.Element[] = []
   if (block && m && c.scene.blocks.has(block)) {
     const arr = (g.array ?? null) as { cols?: number; rows?: number; dx?: number; dy?: number } | null
@@ -112,8 +116,13 @@ function Row({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
   if (r.visible === false && r.kind !== 'INSERT') return null
   const g = r.geom
   const paint = paintOf(r.style, r.visible)
-  const line = { 'data-h': r.h, vectorEffect: HAIR, ...paintProps(paint) }
+  // `plain`: points, fills and frames (no linetype, 1 px); `line`: with the row's linetype and weight.
+  const pp = paintProps(paint)
+  const plain = { 'data-h': r.h, vectorEffect: HAIR, ...pp }
+  const strokes = strokeOf(r.style, c.lines, r.layer)
+  const line = Object.keys(strokes).length ? { ...plain, style: { ...pp.style, ...strokes } as React.CSSProperties } : plain
   const path = (d: string) => (d ? <path {...line} d={d} /> : null)
+  const plainPath = (d: string) => (d ? <path {...plain} d={d} /> : null)
   switch (r.kind) {
     case 'LINE': {
       const a = xy(g.p1)
@@ -133,7 +142,7 @@ function Row({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
       const p = xy(g.p)
       const size = num(g.pdsize, num(c.scene.header.settings?.pdsize))
       const mode = num(g.pdmode, num(c.scene.header.settings?.pdmode))
-      return p ? path(pointD(p, mode, size > 0 ? size : c.scene.minSpacing * 5)) : null
+      return p ? plainPath(pointD(p, mode, size > 0 ? size : c.scene.minSpacing * 5)) : null
     }
     case 'CIRCLE': {
       const p = xy(g.centre)
@@ -168,13 +177,14 @@ function Row({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
       const block = typeof g.block === 'string' ? g.block : null
       const m = Array.isArray(g.m) && g.m.length === 6 ? (g.m as number[]) : [1, 0, 0, 1, 0, 0]
       if (!block || !c.scene.blocks.has(block)) return null
-      return <use href={`#${blockId(c.idp, block)}`} data-h={r.h} data-block={block} transform={`matrix(${m.map(fmt).join(' ')})`} style={insertVars(r.style, true) as React.CSSProperties} />
+      const vars = { ...insertVars(r.style, true), ...insertLineVars(r.style, c.lines, m, c.nested, r.layer) } as React.CSSProperties
+      return <use href={`#${blockId(c.idp, block)}`} data-h={r.h} data-block={block} transform={`matrix(${m.map(fmt).join(' ')})`} style={vars} />
     }
     case 'SOLID':
     case 'TRACE': {
       const q = pointsOf(g.quad)
       if (q.length < 3) return null
-      return g.filled === false ? path(polyD(q, true)) : <path {...line} d={polyD(q, true)} {...paintProps(paint, 'fill')} />
+      return g.filled === false ? path(polyD(q, true)) : <path {...plain} d={polyD(q, true)} {...paintProps(paint, 'fill')} />
     }
     case '3DFACE': {
       const q = pointsOf(g.quad)
@@ -190,7 +200,7 @@ function Row({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
       const head = arrowOf(g.arrow, c.scene.header.units?.insunits)
       return (
         <g data-h={r.h}>
-          <path vectorEffect={HAIR} {...paintProps(paint)} d={polyD(pts, false)} />
+          <path {...line} data-h={undefined} d={polyD(pts, false)} />
           {head ? <Arrowhead at={pts[0]} toward={pts[1]} kind={head.kind} size={head.size} paint={paint} /> : null}
         </g>
       )
@@ -210,7 +220,7 @@ function Row({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
       const q = pointsOf(g.corners)
       if (q.length < 4) return null
       const clip = pointsOf(g.clip)
-      return path(`${polyD(q, true)} M${fmt(q[0][0])} ${fmt(q[0][1])} L${fmt(q[2][0])} ${fmt(q[2][1])} M${fmt(q[1][0])} ${fmt(q[1][1])} L${fmt(q[3][0])} ${fmt(q[3][1])}${clip.length >= 3 ? ` ${polyD(clip, true)}` : ''}`)
+      return plainPath(`${polyD(q, true)} M${fmt(q[0][0])} ${fmt(q[0][1])} L${fmt(q[2][0])} ${fmt(q[2][1])} M${fmt(q[1][0])} ${fmt(q[1][1])} L${fmt(q[3][0])} ${fmt(q[3][1])}${clip.length >= 3 ? ` ${polyD(clip, true)}` : ''}`)
     }
     default:
       return null
@@ -220,14 +230,15 @@ function Row({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
 export function ModelShapes({ scene, m }: { scene: ModelScene; m: TextMetrics }): React.JSX.Element {
   const idp = `k2m${useId().replace(/[^a-zA-Z0-9]/g, '')}`
   const layers = new Map(scene.header.layers.map((l) => [l.name, { on: l.on, frozen: l.frozen }]))
-  const c: Ctx = { scene, m, idp, layers }
+  const c: Ctx = { scene, m, idp, layers, lines: lineCtx(scene.header), nested: false }
+  const inBlock: Ctx = { ...c, nested: true }
   return (
-    <g transform="scale(1 -1)" fill="none" strokeWidth={1} style={{ fontFamily: 'var(--font-ui)' }} data-testid="dxf-shapes" data-source="model">
+    <g transform="scale(1 -1)" fill="none" strokeWidth={1} style={{ fontFamily: 'var(--font-ui)' }} data-testid="dxf-shapes" data-source="model" data-dashed={hasPatterns(scene.header) ? '' : undefined}>
       <defs>
         {[...scene.blocks].map(([h, page]) => (
           <g key={h} id={blockId(idp, h)} data-block={h}>
             {page.entities.map((r) => (
-              <Row key={r.h} r={r} c={c} />
+              <Row key={r.h} r={r} c={inBlock} />
             ))}
           </g>
         ))}

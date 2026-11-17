@@ -41,6 +41,14 @@ export function agentIdentityDisplayName(e: Pick<AgentIdentityChangedEvent, 'dis
   return n ? n : null
 }
 
+/** The label a workspace list shows for its agent: projects/list's
+ *  `agentDisplayName` (AGENT.md `display_name`, kept live by
+ *  `applyAgentIdentity`), else the registry name (`projects.name`; older
+ *  daemons send no display name). The folder path stays the second line. */
+export function workspaceAgentLabel(p: { name: string; agentDisplayName?: string }): string {
+  return p.agentDisplayName?.trim() || p.name
+}
+
 interface IdentityRow {
   id: string
   name: string

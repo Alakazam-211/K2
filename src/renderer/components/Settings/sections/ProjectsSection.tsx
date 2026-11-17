@@ -26,7 +26,7 @@ import {
   AgentPictureControls,
 } from '@/components/AgentIdentity/AgentIdentityFields'
 import { onAgentIdentityChanged } from '@/stores/session-events'
-import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-identity'
+import { agentIdentityDisplayName, agentIdentityMatchesPath, workspaceAgentLabel } from '@/lib/agent-identity'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore, noteOptimisticProjectsMutationSuccess, type ProjectWithWorkspaces } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
@@ -436,7 +436,7 @@ export function ProjectsSection(): React.JSX.Element {
   const matchesSearch = useCallback((p: typeof projects[0]) => {
     if (!searchQuery.trim()) return true
     const q = searchQuery.toLowerCase()
-    return p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q)
+    return workspaceAgentLabel(p).toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q)
   }, [searchQuery])
 
   // 0.39.0: retired the per-agent forced-pinned section. Agent-mode
@@ -700,7 +700,7 @@ export function ProjectsSection(): React.JSX.Element {
         role="button"
         tabIndex={0}
         data-k2-focus=""
-        aria-label={twoColumn ? `Show settings for ${p.name}` : `Open ${p.name}`}
+        aria-label={twoColumn ? `Show settings for ${workspaceAgentLabel(p)}` : `Open ${workspaceAgentLabel(p)}`}
         aria-current={isSelected ? 'true' : undefined}
         onClick={() => selectProject(p.id)}
         onKeyDown={(e) => {
@@ -737,7 +737,7 @@ export function ProjectsSection(): React.JSX.Element {
         </span>
         {twoColumn ? (
           <span className="min-w-0 flex-1">
-            <span className="block type-name text-[var(--color-text-primary)] truncate">{p.name}</span>
+            <span className="block type-name text-[var(--color-text-primary)] truncate">{workspaceAgentLabel(p)}</span>
             {/* Cut from the start: the end of a path is the part that differs. */}
             <span className="block type-hint text-[var(--color-text-secondary)] truncate [direction:rtl] text-left" title={p.path}>
               <bdi>{p.path}</bdi>
@@ -745,7 +745,7 @@ export function ProjectsSection(): React.JSX.Element {
           </span>
         ) : (
           <>
-            <span className="type-name text-[var(--color-text-primary)] truncate min-w-0 flex-shrink-0 max-w-[45%]">{p.name}</span>
+            <span className="type-name text-[var(--color-text-primary)] truncate min-w-0 flex-shrink-0 max-w-[45%]">{workspaceAgentLabel(p)}</span>
             <span className="type-hint text-[var(--color-text-secondary)] truncate min-w-0 flex-1" title={p.path}>{p.path}</span>
           </>
         )}
@@ -763,7 +763,7 @@ export function ProjectsSection(): React.JSX.Element {
               : 'text-transparent group-hover:text-[var(--color-text-secondary)] group-focus-within:text-[var(--color-text-secondary)] focus-visible:text-[var(--color-text-secondary)] hover:!text-[var(--color-accent)]'
           }`}
           title={p.pinned ? 'Unpin' : 'Pin to top'}
-          aria-label={p.pinned ? `Unpin ${p.name}` : `Pin ${p.name} to top`}
+          aria-label={p.pinned ? `Unpin ${workspaceAgentLabel(p)}` : `Pin ${workspaceAgentLabel(p)} to top`}
           aria-pressed={Boolean(p.pinned)}
         >
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -842,7 +842,7 @@ export function ProjectsSection(): React.JSX.Element {
           id: 'sort-workspaces',
           label: 'Sort workspaces A–Z',
           onSelect: async () => {
-            const sorted = [...projects].sort((a, b) => a.name.localeCompare(b.name))
+            const sorted = [...projects].sort((a, b) => workspaceAgentLabel(a).localeCompare(workspaceAgentLabel(b)))
             await reorderProjects(sorted.map((p) => p.id))
           },
         },
@@ -1669,7 +1669,7 @@ function ProjectDetail({
         value={project.id}
         ariaLabel="Switch workspace"
         triggerLabel="Switch workspace"
-        options={projects.map((p) => ({ value: p.id, label: p.name }))}
+        options={projects.map((p) => ({ value: p.id, label: workspaceAgentLabel(p) }))}
         onChange={(id) => onSwitchProject(id)}
       />
       <Button variant="quiet" onClick={openWorkspace}>
@@ -1702,7 +1702,7 @@ function ProjectDetail({
             />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className="type-title text-[var(--color-text-primary)] truncate">{project.name}</h2>
+            <h2 className="type-title text-[var(--color-text-primary)] truncate">{workspaceAgentLabel(project)}</h2>
             <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 truncate" title={project.path}>{project.path}</p>
           </div>
           {/* Side by side the actions share the name's line. */}

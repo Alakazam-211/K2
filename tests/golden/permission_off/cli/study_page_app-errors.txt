@@ -563,6 +563,11 @@ STATIC (static Apps (a built folder, no process))
       fix: Update that server's K2 (from 0.46.7 a static App deploys), or
       serve it with k2 publish run --skin there.
 
+DOCS (multiplayer docs: k2 doc (the CAD core's drawings))
+  cad_writer_disabled (exit 3)
+      fix: Read the drawing with k2 doc cad <read verb> <file> (k2 doc cad
+      --help); change it in your CAD app, and its save is taken in.
+
 GENERAL (any App route)
   airgap (exit 3)
       fix: Nothing to change while air-gap is on. The owner turns air-gap

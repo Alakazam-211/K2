@@ -6,7 +6,7 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 FIX="$REPO/crates/k2-approve/fixtures/sa1"
-K2="$REPO/cli/k2"
+. "$REPO/tests/cli/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 [ -n "${K2_APPROVE_BIN:-}" ] && [ -x "$K2_APPROVE_BIN" ] || { echo "FAIL: set K2_APPROVE_BIN to a built k2-approve" >&2; exit 1; }
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/approve-cli.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT

@@ -22,6 +22,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+. "$SCRIPT_DIR/_cli_under_test.sh"
 for v in $(env | grep -E '^K2(SO)?_' | cut -d= -f1); do unset "$v"; done
 
 FAKE_DIR="$(mktemp -d -t k2-relay-fake-XXXXXX)"
@@ -69,7 +70,7 @@ status_field() {
 for k in sys.argv[1].split("."): v = v.get(k) if isinstance(v, dict) else None
 print(json.dumps(v))' "$1"
 }
-cli_status() { HOME="$SANDBOX_HOME" "$PROJECT_ROOT/cli/k2" tunnel status; }
+cli_status() { HOME="$SANDBOX_HOME" "$CLI_UNDER_TEST" tunnel status; }
 TUNNEL_JSON="$SANDBOX_HOME/.k2/tunnel.json"
 write_tunnel_json() { # $1 = extra JSON members (may be empty)
     printf '{\n  "server_addr": "178.156.232.105",\n  "server_port": 7000,\n  "token": "k2c_headless_relay_test",\n  "auto_start": false,\n  "e2e": false%s\n}\n' "$1" >"$TUNNEL_JSON"

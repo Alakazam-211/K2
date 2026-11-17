@@ -18,7 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2CLI="$ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2CLI="$CLI_UNDER_TEST"
 for v in $(env | cut -d= -f1 | grep -E '^(K2|K2SO)_' || true); do unset "$v"; done
 command -v jq >/dev/null || { echo "FAIL: jq is required" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "FAIL: python3 is required" >&2; exit 1; }

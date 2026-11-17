@@ -1437,6 +1437,20 @@
 [data-style="glass"] :is([data-drawer-panel], [data-nav-tile], [data-home-picker-menu], [data-focus-group-menu]) :is(:is([class~="border-b"], [class~="border-t"], [class~="border-y"]):is([class~="border-[var(--color-border)]"], [class~="border-white/[0.06]"]):not([data-nav-footer]), [class~="divide-y"] > *):not([data-zen-root] *) {
   border-image: linear-gradient(to right, transparent 12px, var(--color-border) 12px, var(--color-border) calc(100% - 12px), transparent calc(100% - 12px)) 1;
 }
+/* A collapsed rail's top row: the same short hairline as the open nav's top
+   row, drawn without taking height (as the room's tab strip, which has no
+   border here), so » keeps the strip's own centre line. */
+[data-style="glass"] [data-rail-top-row]:not([data-zen-root] *) { position: relative; border-bottom-width: 0; }
+[data-style="glass"] [data-rail-top-row]:not([data-zen-root] *)::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  height: 1px;
+  background: var(--color-border);
+  pointer-events: none;
+}
 /* The nav's bottom band floats its controls; no rule above them. */
 [data-style="glass"] [data-nav-footer]:not([data-zen-root] *) { border-top-color: transparent; border-image: none; }
 

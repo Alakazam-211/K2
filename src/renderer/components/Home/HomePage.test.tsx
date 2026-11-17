@@ -1309,6 +1309,31 @@ describe('Home — the Agents page shell', () => {
     expect(useSidebarStore.getState().isCollapsed).toBe(false)
   })
 
+  it('the rail opens with a top row the tab strip\'s height: » centred in it over the strip\'s line, … under the line', () => {
+    useSidebarStore.setState({ isCollapsed: true })
+    render(<Shell />)
+    const rail = document.querySelector('[data-home-rail]') as HTMLElement
+    // Nothing above the row: the rail's own padding is only at the bottom.
+    expect(rail.className).not.toMatch(/\bpy-|\bpt-/)
+    const top = rail.querySelector('[data-home-rail-top]') as HTMLElement
+    expect(rail.firstElementChild).toBe(top)
+    // The row is the first thing in the rail's top block, with the shared
+    // tab-strip token and line, its contents centred, no padding that
+    // would push » off centre.
+    const row = top.firstElementChild as HTMLElement
+    expect(row.hasAttribute('data-rail-top-row')).toBe(true)
+    const cls = row.className.split(/\s+/)
+    expect(cls).toContain(TAB_STRIP_HEIGHT)
+    expect(row.className).toContain('border-b border-[var(--color-border)]')
+    expect(cls).toContain('items-center')
+    expect(cls).toContain('flex-shrink-0')
+    expect(row.className).not.toMatch(/min-h-|\bpy-|\bpt-|\bpb-|\bmt-|\bmy-/)
+    expect(Array.from(row.querySelectorAll('button')).map((b) => b.getAttribute('aria-label'))).toEqual(['Open workspaces sidebar'])
+    // … sits under the line, outside the row.
+    const edit = top.querySelector('[data-group-edit-open]') as HTMLElement
+    expect(row.contains(edit)).toBe(false)
+  })
+
   it('Add to Home is 560 × 540 at most, 16px from the sides and 24px from the top and bottom, a full sheet under 640px across', () => {
     expect(ADD_TO_HOME_MAX).toEqual({ width: 560, height: 540 })
     expect(ADD_TO_HOME_MARGIN).toEqual({ x: 16, y: 24 })

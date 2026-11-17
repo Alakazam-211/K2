@@ -17,7 +17,7 @@ import { useCommandPaletteStore } from '@/stores/command-palette'
 import { isWebClient } from '@/lib/is-web'
 import { activeHomeHostKey, findWorkspaceForRow, parseHomeAddress } from '@/lib/home-address'
 import { useHomeRowAvatar, useHomeRowColor } from '@/lib/home-avatars'
-import { ProjectIcon } from '@/components/Sidebar/IconRail'
+import { ProjectIcon, RAIL_TOP_ROW_CLASS } from '@/components/Sidebar/IconRail'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
 import { NavFooterPlus } from '@/components/Sidebar/NavFooterButton'
@@ -163,29 +163,32 @@ export default function HomeIconRail(): React.JSX.Element {
   return (
     <div
       data-material="tile"
-      className="flex flex-col items-center h-full bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] py-2 flex-shrink-0"
+      className="flex flex-col items-center h-full bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] pb-2 flex-shrink-0"
       style={{ width: RAIL_WIDTH }}
       data-home-rail=""
       data-group-swipe-zone=""
     >
-      {/* Top: « (open the nav), then … (the Groups dialog) beneath it. */}
-      <div className="flex flex-shrink-0 flex-col items-center gap-0.5 mb-1" data-home-rail-top="">
-        <button
-          type="button"
-          data-k2-focus=""
-          data-home-rail-open=""
-          className={RAIL_BUTTON_CLASS}
-          onClick={() => useSidebarStore.getState().expand()}
-          title="Open workspaces sidebar"
-          aria-label="Open workspaces sidebar"
-        >
-          <DoubleChevron direction="right" className="h-4 w-4" />
-        </button>
+      {/* Top: » (open the nav) in the tab strip's top row, as the open
+          nav's « is; … (the Groups dialog) under the row's line. */}
+      <div className="flex w-full flex-shrink-0 flex-col items-center mb-1" data-home-rail-top="">
+        <div className={RAIL_TOP_ROW_CLASS} data-rail-top-row="">
+          <button
+            type="button"
+            data-k2-focus=""
+            data-home-rail-open=""
+            className={RAIL_BUTTON_CLASS}
+            onClick={() => useSidebarStore.getState().expand()}
+            title="Open workspaces sidebar"
+            aria-label="Open workspaces sidebar"
+          >
+            <DoubleChevron direction="right" className="h-4 w-4" />
+          </button>
+        </div>
         <button
           type="button"
           data-k2-focus=""
           data-group-edit-open=""
-          className={RAIL_BUTTON_CLASS}
+          className={`${RAIL_BUTTON_CLASS} mt-2`}
           onClick={() => groups.editCurrent()}
           title={`Edit groups (${groups.current.name})`}
           aria-label={`Edit groups (${groups.current.name})`}

@@ -26,8 +26,16 @@ import { ADD_MENU_TITLE, AddMenu } from './add-menu'
 import { primaryScope } from '@/kessel/server-scope'
 import { revealInFileManagerLabel } from '@/lib/reveal-label'
 import { installedEditorsDefaultFirst } from '@/lib/installed-editors'
+import { TAB_STRIP_HEIGHT } from '@/lib/tab-strip'
 
 const RAIL_WIDTH = 48
+
+/** A collapsed rail's top row (Agents' and Home's): the tab strip's height
+ *  (`TAB_STRIP_HEIGHT`) with its bottom line, as the open nav's top row,
+ *  and » (open the nav) centred in it. » then sits on the same centre line
+ *  as the tab strip's own », and the line runs on from the room's tab bar.
+ *  The rail has no top padding, so nothing sits above it. */
+export const RAIL_TOP_ROW_CLASS = `flex ${TAB_STRIP_HEIGHT} w-full flex-shrink-0 items-center justify-center border-b border-[var(--color-border)]`
 
 export function ProjectIcon({
   project,
@@ -250,13 +258,19 @@ export default function IconRail(): React.JSX.Element {
   return (
     <div
       data-material="tile"
-      className="flex flex-col items-center h-full bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] py-2 flex-shrink-0"
+      className="flex flex-col items-center h-full bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] pb-2 flex-shrink-0"
       style={{ width: RAIL_WIDTH }}
+      data-nav-rail=""
     >
+      {/* Top row: » (open the nav), lined up with the tab strip's ». */}
+      <div className={RAIL_TOP_ROW_CLASS} data-rail-top-row="">
+        <SidebarCollapseButton />
+      </div>
+
       {/* Zone 1: Pinned (0.39.0: agent-mode workspaces flow through here
           as manual pins, not auto-promoted as a separate section) */}
       {topSection.length > 0 && (
-        <div className="flex flex-col items-center gap-0.5 pb-1.5 w-full">
+        <div className="flex flex-col items-center gap-0.5 pt-2 pb-1.5 w-full">
           {topSection.map((project, i) => (
             <ProjectIcon
               key={project.id}
@@ -276,7 +290,7 @@ export default function IconRail(): React.JSX.Element {
         data-material="frost"
         data-frost-shape="round"
         data-nav-control=""
-        className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors mb-1"
+        className={`no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors mb-1${topSection.length > 0 ? '' : ' mt-2'}`}
         onClick={() => useCommandPaletteStore.getState().toggle()}
         title="Search Workspaces (⌘K)"
       >
@@ -317,7 +331,7 @@ export default function IconRail(): React.JSX.Element {
         </div>
       )}
 
-      {/* Add (Create an agent, Add Workspace), then open the full nav. The rail is one icon wide. */}
+      {/* Add (Create an agent, Add Workspace). The rail is one icon wide; » is in the top row. */}
       <div className="flex flex-col items-center mt-1 flex-shrink-0" data-nav-rail-actions="">
         <SetupChecklistRailButton />
         <AddMenu
@@ -339,7 +353,6 @@ export default function IconRail(): React.JSX.Element {
             </button>
           )}
         />
-        <SidebarCollapseButton />
       </div>
     </div>
   )

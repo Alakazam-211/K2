@@ -219,6 +219,9 @@ async fn homes_routes_sync_one_person_across_devices_and_refuse_everyone_else() 
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let port = d.port;
         isolate_homes();
+        // homes-sync-v1 on its own: the People group (seeded on a pull) has
+        // its own test below.
+        let _people_off = k2_core::test_env::EnvVar::set(k2_core::homes_sync::PEOPLE_SWITCH_ENV, "off");
 
         // /boot-status: the feature key and a stable 16-hex serverId from the identity key.
         let boot = ok(port, "GET", "/boot-status", None);
@@ -434,6 +437,8 @@ async fn device_removal_answers_410_and_frames_reach_only_that_person() {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let port = d.port;
         isolate_homes();
+        // The People group's seed has its own test below.
+        let _people_off = k2_core::test_env::EnvVar::set(k2_core::homes_sync::PEOPLE_SWITCH_ENV, "off");
         let phone = login(port, "hsfphone");
         ok(port, "POST", &format!("/cli/owner/accounts?token={OWNER_TOKEN}"), Some(json!({ "accounts": ["hsfphone"] })));
         let gina = login(port, "hsfgina");
@@ -497,5 +502,106 @@ async fn device_removal_answers_410_and_frames_reach_only_that_person() {
         assert_eq!((v["device"]["syncing"].as_bool(), home_names(&v)), (Some(true), vec!["Home".to_string()]), "{v}");
         let r = push(port, &phone, "phone-1", json!([home_item("h1", "Back again", "V", now_ms() + 200)]));
         assert_eq!(r.status, 200, "{}", r.body);
+    });
+}
+
+// ── 3. The People group (homes-people-group-v1, 0.46.16) ──────────────
+
+fn people_groups(v: &J) -> Vec<J> {
+    v["changes"].as_array().expect("changes").iter().filter(|c| c["kind"] == "home" && c["id"] == "people" && c.get("deleted").is_none()).cloned().collect()
+}
+
+/// The seed through the real routes: listed on /boot-status, made once on
+/// a pull (never before the person has a group), the same for every device,
+/// merged with a client's own copy, never deleted (the item comes back in
+/// `rejected` with `builtin_group` and the hint; the rest of the push
+/// lands), renamed and moved like any group, marker kept; an agent row stays
+/// in its group. Switch off: no key, no seed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_people_group_is_seeded_once_and_never_deleted() {
+    with_temp_home(|_home| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = d.port;
+        isolate_homes();
+        let _people_on = k2_core::test_env::EnvVar::remove(k2_core::homes_sync::PEOPLE_SWITCH_ENV);
+        let boot = ok(port, "GET", "/boot-status", None);
+        let features = boot["features"].as_array().expect("features").clone();
+        let at = |k: &str| features.iter().position(|f| f == k).unwrap_or_else(|| panic!("{k} listed: {boot}"));
+        assert_eq!(at("homes-people-group-v1"), at("homes-sync-v1") + 1, "listed with homes-sync-v1");
+        let sid = boot["serverId"].as_str().expect("serverId").to_string();
+        let phone = login(port, "hspphone");
+        ok(port, "POST", &format!("/cli/owner/accounts?token={OWNER_TOKEN}"), Some(json!({ "accounts": ["hspphone"] })));
+        let gina = login(port, "hspgina");
+        register(port, OWNER_TOKEN, "desk-1", "Desk", "macos");
+        register(port, &phone, "phone-1", "Phone", "ios");
+        register(port, &gina, "gina-1", "Gina", "android");
+
+        // No group yet: nothing is made (the device's own groups come first).
+        let v = pull(port, OWNER_TOKEN, "desk-1", None).json();
+        assert_eq!((v["cursor"].as_i64(), people_groups(&v).len()), (Some(0), 0), "{v}");
+        let t = now_ms();
+        let agent = format!("atlas::{sid}");
+        let r = push(port, OWNER_TOKEN, "desk-1", json!([home_item("h1", "Home", "V", t), home_item("h2", "Work", "l", t), row_item("h2", &agent, "Atlas", "V", t)]));
+        assert_eq!(r.status, 200, "{}", r.body);
+        let pushed = r.json()["cursor"].as_i64().expect("cursor");
+        // The next pull seeds it: right after the first group, low stamp, the marker.
+        let v = pull(port, OWNER_TOKEN, "desk-1", Some(pushed)).json();
+        assert_eq!(v["cursor"].as_i64(), Some(pushed + 1), "{v}");
+        let p = people_groups(&v);
+        assert_eq!(p.len(), 1, "{v}");
+        assert_eq!((p[0]["name"].clone(), p[0]["builtin"].clone(), p[0]["updatedAt"].clone()), (json!("People"), json!("people"), json!(1)));
+        let order = p[0]["order"].as_str().expect("order").to_string();
+        assert!(order.as_str() > "V" && order.as_str() < "l", "{order}");
+        // Every pull after, on every device of the person: exactly one.
+        for (tok, dev) in [(OWNER_TOKEN, "desk-1"), (phone.as_str(), "phone-1"), (OWNER_TOKEN, "desk-1")] {
+            let v = pull(port, tok, dev, None).json();
+            assert_eq!((people_groups(&v).len(), v["cursor"].as_i64()), (1, Some(pushed + 1)), "{dev}: {v}");
+            let rows: Vec<&J> = v["changes"].as_array().unwrap().iter().filter(|c| c["kind"] == "row").collect();
+            assert_eq!((rows.len(), rows[0]["homeId"].clone()), (1, json!("h2")), "the agent row stays in its group: {v}");
+        }
+
+        // Delete: refused, item by item, with the hint; the rest of the push lands.
+        let mut del = home_item("people", "People", &order, t + 10);
+        del["deleted"] = json!(true);
+        let r = push(port, &phone, "phone-1", json!([del, home_item("h3", "Kids", "x", t + 10)]));
+        assert_eq!(r.status, 200, "{}", r.body);
+        let a = r.json();
+        assert_eq!(a["applied"], 1, "{a}");
+        assert_eq!(a["rejected"].as_array().map(Vec::len), Some(1), "{a}");
+        assert_eq!(
+            (a["rejected"][0]["reason"].clone(), a["rejected"][0]["hint"].clone(), a["rejected"][0]["item"]["id"].clone()),
+            (json!("builtin_group"), json!("The People group can't be deleted."), json!("people"))
+        );
+        let v = pull(port, OWNER_TOKEN, "desk-1", None).json();
+        assert_eq!(people_groups(&v).len(), 1, "still there: {v}");
+        // Rename + move (an old client sends no marker): the marker stays.
+        let r = push(port, &phone, "phone-1", json!([home_item("people", "Humans", "y", t + 20)])).json();
+        assert_eq!(r["applied"], 1, "{r}");
+        let p = people_groups(&pull(port, OWNER_TOKEN, "desk-1", None).json());
+        assert_eq!((p[0]["name"].clone(), p[0]["order"].clone(), p[0]["builtin"].clone()), (json!("Humans"), json!("y"), json!("people")));
+
+        // A client that made People itself before its first sync: one group.
+        let mut local = home_item("people", "People", "W", t);
+        local["builtin"] = json!("people");
+        let r = push(port, &gina, "gina-1", json!([home_item("g1", "Home", "V", t), local])).json();
+        assert_eq!((r["applied"].as_i64(), r["rejected"].as_array().map(Vec::len)), (Some(2), Some(0)), "{r}");
+        let v = pull(port, &gina, "gina-1", None).json();
+        assert_eq!(people_groups(&v).len(), 1, "{v}");
+        assert_eq!(people_groups(&v)[0]["deviceId"], "gina-1", "her copy, not a second one");
+
+        // Switch off: no key, and a person with no People group gets none.
+        let _off = k2_core::test_env::EnvVar::set(k2_core::homes_sync::PEOPLE_SWITCH_ENV, "off");
+        let boot = ok(port, "GET", "/boot-status", None);
+        assert!(!boot["features"].as_array().unwrap().iter().any(|f| f == "homes-people-group-v1"), "{boot}");
+        let pat = login(port, "hsppat");
+        register(port, &pat, "pat-1", "Pat", "web");
+        push(port, &pat, "pat-1", json!([home_item("p1", "Home", "V", t)]));
+        let v = pull(port, &pat, "pat-1", None).json();
+        assert!(people_groups(&v).is_empty(), "{v}");
+        // A People group made before stays undeletable.
+        let mut del = home_item("people", "Humans", "y", t + 30);
+        del["deleted"] = json!(true);
+        let r = push(port, &phone, "phone-1", json!([del])).json();
+        assert_eq!(r["rejected"][0]["reason"], "builtin_group", "{r}");
     });
 }

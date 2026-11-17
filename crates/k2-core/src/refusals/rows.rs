@@ -417,6 +417,10 @@ pub(super) const ROWS: &[Refusal] = &[
     // ── docs (k2 doc; the CAD core) ──
     r("cad_writer_disabled", "docs", 409, Who::K2, concat!("Drawings (.dxf, .dwg) are read only in ", product_name!(), " for now: a write, restore, undo or edit of one is refused while the CAD core is on. Nothing was changed."),
         concat!("Read the drawing with ", cli_name!(), " doc cad <read verb> <file> (", cli_name!(), " doc cad --help); change it in your CAD app, and its save is taken in.")),
+    // ── homes (Home sync, /cli/me/homes/push: a `rejected[].reason`) ──
+    // homes-people-group-v1 (0.46.15): the built-in People group's delete.
+    r("builtin_group", "homes", 409, Who::Person, "The People group is built in: every person has one, and it can't be deleted or merged away. Renaming and moving it work.",
+        "Keep the group; rename or move it instead. The item comes back in rejected[] with the hint \"The People group can't be deleted.\", and the next pull brings the group back."),
     // ── general ──
     r("airgap", "general", 409, Who::Owner, concat!("Air-gap is on, so ", product_name!(), " makes no outside call (DNS checks, push, downloads)."),
         "Nothing to change while air-gap is on. The owner turns air-gap off if this server should reach out."),

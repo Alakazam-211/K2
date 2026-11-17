@@ -24,11 +24,20 @@
 //! `homes_device_removed {deviceId}`) until it registers again.
 //!
 //! **Frames.** A push that changed something emits `homes_changed
-//! {cursor}` to that person's `/cli/sessions/events` sockets only.
+//! {cursor}` to that person's `/cli/sessions/events` sockets only; so do a
+//! pull that seeded the People group and an arrival the daemon added.
+//!
+//! **The People group** (homes-people-group-v1, while
+//! `K2_HOMES_PEOPLE_GROUP` isn't off): a pull seeds it
+//! (`homes_sync::ensure_people_group`); a push that deletes it gets that item
+//! back in `rejected[]` with `reason: "builtin_group"` and `hint: "The People
+//! group can't be deleted."` (the rest of the push lands; an older client
+//! drops the item and pulls the group back). Arrivals:
+//! `home_chat::arrivals`.
 
 use std::collections::HashMap;
 
-use k2_core::homes_sync::{self, DeviceState, Removal};
+use k2_core::homes_sync::{self, DeviceState, Removal, Seed};
 use k2_core::notify_prefs::{People, OWNER};
 use serde_json::{json, Value};
 
@@ -206,10 +215,26 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor, params: &Ha
             if state == DeviceState::Removed {
                 return device_removed(&device);
             }
+            // homes-people-group-v1: the person's People group, made on the
+            // first pull that finds them with a group and without it.
+            let seeded = if homes_sync::people_group_on() {
+                match homes_sync::ensure_people_group(&conn, &person) {
+                    Ok(Seed::Seeded { cursor }) => Some(cursor),
+                    Ok(Seed::Exists | Seed::NoGroups) => None,
+                    Err(e) => return store(e),
+                }
+            } else {
+                None
+            };
             let p = match homes_sync::pull(&conn, &person, since, Some(&device), now) {
                 Ok(p) => p,
                 Err(e) => return store(e),
             };
+            drop(conn);
+            if let Some(cursor) = seeded {
+                // The person's other devices pull it too.
+                let _ = crate::session_events::emit(SessionEvent::HomesChanged { person: person.clone(), cursor });
+            }
             let redirects: serde_json::Map<String, Value> =
                 p.redirects.into_iter().map(|(from, to)| (from, Value::String(to))).collect();
             ok(json!({
@@ -268,7 +293,14 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor, params: &Ha
                 "cursor": r.cursor,
                 "applied": r.applied,
                 "superseded": r.superseded,
-                "rejected": r.rejected.iter().map(|x| json!({ "item": x.item, "reason": x.reason })).collect::<Vec<_>>(),
+                // `hint` beside a reason that has one (`builtin_group`).
+                "rejected": r.rejected.iter().map(|x| {
+                    let mut v = json!({ "item": x.item, "reason": x.reason });
+                    if let Some(h) = homes_sync::reason::hint(x.reason) {
+                        v["hint"] = json!(h);
+                    }
+                    v
+                }).collect::<Vec<_>>(),
             }))
         }
         REGISTER_PATH => {

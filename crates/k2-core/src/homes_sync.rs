@@ -13,8 +13,9 @@
 //!
 //! **Items** (the wire shape the routes speak, camelCase):
 //! - Home: `{kind:"home", id, name, order, updatedAt, deleted?, mergedInto?,
-//!   icon?, recentFirst?}` — `icon` is a Lucide icon name (`[a-z0-9-]{1,64}`)
-//!   or null; `recentFirst` sorts its unpinned rows by `lastMessagedAt`.
+//!   icon?, recentFirst?, builtin?}` — `icon` is a Lucide icon name (`[a-z0-9-]{1,64}`)
+//!   or null; `recentFirst` sorts its unpinned rows by `lastMessagedAt`;
+//!   `builtin: "people"` only on the People group (see below).
 //! - Row:  `{kind:"row", homeId, address:"handle::<serverId>", label,
 //!   workspaceId, order, updatedAt, deleted?, pinOrder?, lastMessagedAt?}` —
 //!   identity `(kind, homeId, address)`. Two more row kinds carry the same
@@ -64,6 +65,23 @@
 //! **Devices.** A device registers (`deviceId`, name, platform) before it
 //! pushes. Removing it marks it removed: its pulls and pushes answer 410
 //! `device_removed` until it registers again.
+//!
+//! **The People group** (homes-people-group-v1, 0.46.16; spec
+//! `k2-design/.k2/prds/home-people-group-spec.md`). Every person has one
+//! built-in group with the fixed id [`PEOPLE_ID`]; the wire marks it
+//! `builtin: "people"` (derived from the id, so a rename keeps it).
+//! - **Seed** ([`ensure_people_group`]): on a pull, a person with at least one
+//!   live group and no `people` group gets one, named "People", right after
+//!   their first group, stamped [`PEOPLE_SEED_UPDATED_AT`] so any rename a
+//!   device makes wins. A client that made `people` itself (no Home sync yet)
+//!   pushes the same id: last writer wins, never a second group.
+//! - **Delete** is refused one item at a time: `rejected[].reason =
+//!   builtin_group` (merging it away too). Rename and reorder are edits.
+//! - **Arrivals** ([`land_arrival`]): a DM or a channel that arrives on its
+//!   own (someone DMs the person, or adds them to a channel) is added by the
+//!   daemon as a person or channel row in People, once: a person who has any
+//!   row for it already (live or deleted) is left alone. Explicit adds are
+//!   the clients' and land in the open group, as agents do.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
@@ -255,16 +273,22 @@ impl Item {
     /// The wire form (camelCase). `deleted` / `mergedInto` only when set.
     pub fn to_json(&self) -> Value {
         let mut v = match self.kind {
-            Kind::Home => json!({
-                "kind": "home",
-                "id": self.home_id,
-                "name": self.name,
-                "icon": self.icon,
-                "recentFirst": self.recent_first,
-                "order": self.order,
-                "updatedAt": self.updated_at,
-                "deviceId": self.device_id,
-            }),
+            Kind::Home => {
+                let mut h = json!({
+                    "kind": "home",
+                    "id": self.home_id,
+                    "name": self.name,
+                    "icon": self.icon,
+                    "recentFirst": self.recent_first,
+                    "order": self.order,
+                    "updatedAt": self.updated_at,
+                    "deviceId": self.device_id,
+                });
+                if self.home_id == PEOPLE_ID {
+                    h["builtin"] = json!(BUILTIN_PEOPLE);
+                }
+                h
+            }
             Kind::Row | Kind::Person | Kind::Channel => json!({
                 "kind": self.kind.as_str(),
                 "homeId": self.home_id,
@@ -310,6 +334,18 @@ pub mod reason {
     /// A pin past [`super::MAX_PINS`] on one Home.
     pub const TOO_MANY_PINS: &str = "too_many_pins";
     pub const LAST_HOME: &str = "last_home";
+    /// A delete (or merge away) of the built-in People group.
+    pub const BUILTIN_GROUP: &str = "builtin_group";
+    /// `builtin` on a row, or naming anything but the People group.
+    pub const INVALID_BUILTIN: &str = "invalid_builtin";
+
+    /// The hint a push answer carries beside a refused item, when it has one.
+    pub fn hint(reason: &str) -> Option<&'static str> {
+        match reason {
+            BUILTIN_GROUP => Some(super::BUILTIN_GROUP_HINT),
+            _ => None,
+        }
+    }
 }
 
 /// A valid fractional-index key: 1..=[`ORDER_MAX`] chars from
@@ -422,6 +458,13 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
             if o.get("lastMessagedAt").is_some_and(|m| !m.is_null()) {
                 return Err(reason::INVALID_LAST_MESSAGED_AT);
             }
+            // `builtin` is the server's (derived from the id); a client may
+            // send back what it pulled, never claim it for another group.
+            match o.get("builtin") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(b)) if b == BUILTIN_PEOPLE && id == PEOPLE_ID => {}
+                Some(_) => return Err(reason::INVALID_BUILTIN),
+            }
             Ok(Item {
                 kind,
                 home_id: id.to_string(),
@@ -474,6 +517,9 @@ pub fn parse_change(v: &Value, device_id: &str, now_ms: i64) -> Result<Item, &'s
             }
             if o.get("recentFirst").is_some_and(|m| !m.is_null()) {
                 return Err(reason::INVALID_RECENT_FIRST);
+            }
+            if o.get("builtin").is_some_and(|m| !m.is_null()) {
+                return Err(reason::INVALID_BUILTIN);
             }
             let (pin_order, pin_omitted) = match o.get("pinOrder") {
                 None => (None, true),
@@ -746,6 +792,12 @@ pub fn push(
     let mut applied = 0usize;
     let mut superseded = 0usize;
     for item in parsed {
+        // The People group stays (renames and moves are edits): whatever
+        // the stamp, its delete (or merge away) is refused, never stored.
+        if item.kind == Kind::Home && item.deleted && item.home_id == PEOPLE_ID {
+            rejected.push(Rejected { item: item.to_json(), reason: reason::BUILTIN_GROUP });
+            continue;
+        }
         let existing = get_item(&tx, person, &item)?;
         if let Some(ex) = &existing {
             if !item.beats(ex) {
@@ -783,39 +835,7 @@ pub fn push(
                 }
             }
         }
-        tx.execute(
-            &format!(
-                "INSERT INTO {} (person, kind, home_id, address, name, label, workspace_id, ord, \
-                   updated_at, device_id, deleted, merged_into, seq, icon, recent_first, pin_order, last_messaged_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
-                 ON CONFLICT (person, kind, home_id, address) DO UPDATE SET \
-                   name = excluded.name, label = excluded.label, workspace_id = excluded.workspace_id, \
-                   ord = excluded.ord, updated_at = excluded.updated_at, device_id = excluded.device_id, \
-                   deleted = excluded.deleted, merged_into = excluded.merged_into, seq = excluded.seq, \
-                   icon = excluded.icon, recent_first = excluded.recent_first, pin_order = excluded.pin_order, \
-                   last_messaged_at = excluded.last_messaged_at",
-                item.kind.table()
-            ),
-            params![
-                person,
-                item.kind.as_str(),
-                item.home_id,
-                item.address,
-                item.name,
-                item.label,
-                item.workspace_id,
-                item.order,
-                item.updated_at,
-                item.device_id,
-                item.deleted as i64,
-                item.merged_into,
-                next,
-                item.icon,
-                item.recent_first as i64,
-                item.pin_order,
-                item.last_messaged_at
-            ],
-        )?;
+        store_item(&tx, person, &item, next)?;
         applied += 1;
     }
     let cursor = if applied > 0 {
@@ -838,11 +858,7 @@ pub fn push(
                 floor = floor.max(m);
             }
         }
-        tx.execute(
-            "INSERT INTO homes_people (person, seq, floor) VALUES (?1, ?2, ?3) \
-             ON CONFLICT (person) DO UPDATE SET seq = excluded.seq, floor = excluded.floor",
-            params![person, next, floor],
-        )?;
+        set_person_seq(&tx, person, next, floor)?;
         next
     } else {
         seq
@@ -850,6 +866,242 @@ pub fn push(
     touch_device(&tx, person, device_id, now_ms)?;
     tx.commit()?;
     Ok(PushResult { cursor, applied, superseded, rejected })
+}
+
+/// Write one item (insert or replace) stamped with cursor `seq`.
+fn store_item(conn: &Connection, person: &str, item: &Item, seq: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        &format!(
+            "INSERT INTO {} (person, kind, home_id, address, name, label, workspace_id, ord, \
+               updated_at, device_id, deleted, merged_into, seq, icon, recent_first, pin_order, last_messaged_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
+             ON CONFLICT (person, kind, home_id, address) DO UPDATE SET \
+               name = excluded.name, label = excluded.label, workspace_id = excluded.workspace_id, \
+               ord = excluded.ord, updated_at = excluded.updated_at, device_id = excluded.device_id, \
+               deleted = excluded.deleted, merged_into = excluded.merged_into, seq = excluded.seq, \
+               icon = excluded.icon, recent_first = excluded.recent_first, pin_order = excluded.pin_order, \
+               last_messaged_at = excluded.last_messaged_at",
+            item.kind.table()
+        ),
+        params![
+            person,
+            item.kind.as_str(),
+            item.home_id,
+            item.address,
+            item.name,
+            item.label,
+            item.workspace_id,
+            item.order,
+            item.updated_at,
+            item.device_id,
+            item.deleted as i64,
+            item.merged_into,
+            seq,
+            item.icon,
+            item.recent_first as i64,
+            item.pin_order,
+            item.last_messaged_at
+        ],
+    )?;
+    Ok(())
+}
+
+fn set_person_seq(conn: &Connection, person: &str, seq: i64, floor: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO homes_people (person, seq, floor) VALUES (?1, ?2, ?3) \
+         ON CONFLICT (person) DO UPDATE SET seq = excluded.seq, floor = excluded.floor",
+        params![person, seq, floor],
+    )?;
+    Ok(())
+}
+
+// ── The People group (homes-people-group-v1) ───────────────────────────
+
+/// `/boot-status` feature key, listed while [`people_group_on`].
+pub const PEOPLE_FEATURE: &str = "homes-people-group-v1";
+/// The People group's fixed id (the same on every device and server).
+pub const PEOPLE_ID: &str = "people";
+/// The wire marker on it: `builtin: "people"`.
+pub const BUILTIN_PEOPLE: &str = "people";
+/// Its seeded name.
+pub const PEOPLE_NAME: &str = "People";
+/// Its seed stamp: lower than any device's, so a rename always wins.
+pub const PEOPLE_SEED_UPDATED_AT: i64 = 1;
+/// The `deviceId` the server writes its own items under (the seed, arrivals).
+pub const SERVER_DEVICE_ID: &str = "k2-server";
+/// The hint beside a refused delete (`builtin_group`).
+pub const BUILTIN_GROUP_HINT: &str = "The People group can't be deleted.";
+/// The daemon switch: `off` (or `0`, `false`, `no`) = no seed, no arrivals,
+/// no feature key. Default on. A delete of an existing People group is
+/// refused either way.
+pub const PEOPLE_SWITCH_ENV: &str = "K2_HOMES_PEOPLE_GROUP";
+
+/// Is the People group on (default yes)?
+pub fn people_group_on() -> bool {
+    !matches!(
+        std::env::var(PEOPLE_SWITCH_ENV).ok().map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("off" | "0" | "false" | "no")
+    )
+}
+
+/// What [`ensure_people_group`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seed {
+    /// The person has a live People group already.
+    Exists,
+    /// The person has no live group yet (a device's first push brings
+    /// them; the next pull seeds).
+    NoGroups,
+    /// Seeded; the person's cursor is now this.
+    Seeded { cursor: i64 },
+}
+
+fn get_home(conn: &Connection, person: &str, id: &str) -> rusqlite::Result<Option<Item>> {
+    conn.query_row(
+        &format!("SELECT {ITEM_COLS} FROM {HOMES_TABLE} WHERE person = ?1 AND kind = 'home' AND home_id = ?2 AND address = ''"),
+        params![person, id],
+        item_from_row,
+    )
+    .optional()
+}
+
+/// Write the People group (inside the caller's transaction) at cursor `seq`.
+/// False when the person has no live group to place it after.
+fn seed_people(conn: &Connection, person: &str, seq: i64) -> rusqlite::Result<bool> {
+    let mut st = conn.prepare(
+        "SELECT ord FROM homes_items WHERE person = ?1 AND kind = 'home' AND deleted = 0 AND home_id != ?2 \
+         ORDER BY ord, home_id",
+    )?;
+    let orders: Vec<String> = st.query_map(params![person, PEOPLE_ID], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    let Some(first) = orders.first() else { return Ok(false) };
+    // Right after the first group: before the next key above it.
+    let next = orders.iter().find(|o| o.as_str() > first.as_str());
+    let order = order_between(Some(first.as_str()), next.map(String::as_str))
+        .or_else(|_| order_between(orders.last().map(String::as_str), None))
+        .unwrap_or_else(|_| "V".to_string());
+    // A tombstone (none is ever stored by a push; one from an older build
+    // could be) is beaten, so a device that held it takes the group back.
+    let updated_at = match get_home(conn, person, PEOPLE_ID)? {
+        Some(t) => t.updated_at.saturating_add(1).max(PEOPLE_SEED_UPDATED_AT),
+        None => PEOPLE_SEED_UPDATED_AT,
+    };
+    let item = Item {
+        kind: Kind::Home,
+        home_id: PEOPLE_ID.to_string(),
+        address: String::new(),
+        name: Some(PEOPLE_NAME.to_string()),
+        label: None,
+        workspace_id: None,
+        order,
+        updated_at,
+        device_id: SERVER_DEVICE_ID.to_string(),
+        deleted: false,
+        merged_into: None,
+        icon: None,
+        recent_first: false,
+        pin_order: None,
+        last_messaged_at: None,
+        omitted: Omitted::default(),
+    };
+    store_item(conn, person, &item, seq)?;
+    Ok(true)
+}
+
+/// Make sure `person` has exactly one live People group (once they have a
+/// group at all). Idempotent; a pull calls it while [`people_group_on`].
+pub fn ensure_people_group(conn: &Connection, person: &str) -> rusqlite::Result<Seed> {
+    let tx = conn.unchecked_transaction()?;
+    if get_home(&tx, person, PEOPLE_ID)?.is_some_and(|h| !h.deleted) {
+        return Ok(Seed::Exists);
+    }
+    let (seq, floor) = person_seq(&tx, person)?;
+    if !seed_people(&tx, person, seq + 1)? {
+        return Ok(Seed::NoGroups);
+    }
+    set_person_seq(&tx, person, seq + 1, floor)?;
+    tx.commit()?;
+    Ok(Seed::Seeded { cursor: seq + 1 })
+}
+
+/// What [`land_arrival`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Landing {
+    /// The row is in People now; the person's cursor is this.
+    Landed { cursor: i64 },
+    /// The person has (or had) a row for it in some group: left as it is.
+    AlreadyOnHome,
+    /// The person has no groups (no device syncs Homes here).
+    NoGroups,
+}
+
+/// A DM (`Kind::Person`, `address` = the other person's
+/// `<external id>::<serverId>`) or a channel (`Kind::Channel`, `<channel
+/// id>::<serverId>`) arrived for `person`: add its row at the end of their
+/// People group (seeding the group first when it's missing). A person who
+/// has any row of that kind and address, live or deleted, in any group is
+/// left alone: they placed it, or removed it, themselves.
+pub fn land_arrival(conn: &Connection, person: &str, kind: Kind, address: &str, label: &str, now_ms: i64) -> Result<Landing, String> {
+    if !matches!(kind, Kind::Person | Kind::Channel) {
+        return Err(format!("only a person or a channel lands in People, not a {}", kind.as_str()));
+    }
+    let address = normalize_address(address)
+        .filter(|a| address_fits(kind, a))
+        .ok_or_else(|| format!("not a {} address: {address:?}", kind.as_str()))?;
+    let store = |e: rusqlite::Error| format!("homes store: {e}");
+    let tx = conn.unchecked_transaction().map_err(store)?;
+    let had: i64 = tx
+        .query_row(
+            &format!("SELECT COUNT(*) FROM {CHAT_TABLE} WHERE person = ?1 AND kind = ?2 AND address = ?3"),
+            params![person, kind.as_str(), address],
+            |r| r.get(0),
+        )
+        .map_err(store)?;
+    if had > 0 {
+        return Ok(Landing::AlreadyOnHome);
+    }
+    let (seq, floor) = person_seq(&tx, person).map_err(store)?;
+    let next = seq + 1;
+    if !get_home(&tx, person, PEOPLE_ID).map_err(store)?.is_some_and(|h| !h.deleted)
+        && !seed_people(&tx, person, next).map_err(store)?
+    {
+        return Ok(Landing::NoGroups);
+    }
+    let mut last: Option<String> = None;
+    for table in [HOMES_TABLE, CHAT_TABLE] {
+        let m: Option<String> = tx
+            .query_row(
+                &format!("SELECT MAX(ord) FROM {table} WHERE person = ?1 AND kind != 'home' AND home_id = ?2 AND deleted = 0"),
+                params![person, PEOPLE_ID],
+                |r| r.get(0),
+            )
+            .map_err(store)?;
+        if m.as_deref() > last.as_deref() {
+            last = m;
+        }
+    }
+    let order = order_between(last.as_deref(), None).or_else(|_| order_between(None, None))?;
+    let item = Item {
+        kind,
+        home_id: PEOPLE_ID.to_string(),
+        address,
+        name: None,
+        label: Some(label.trim().chars().take(LABEL_MAX).collect()),
+        workspace_id: None,
+        order,
+        updated_at: now_ms,
+        device_id: SERVER_DEVICE_ID.to_string(),
+        deleted: false,
+        merged_into: None,
+        icon: None,
+        recent_first: false,
+        pin_order: None,
+        last_messaged_at: None,
+        omitted: Omitted::default(),
+    };
+    store_item(&tx, person, &item, next).map_err(store)?;
+    set_person_seq(&tx, person, next, floor).map_err(store)?;
+    tx.commit().map_err(store)?;
+    Ok(Landing::Landed { cursor: next })
 }
 
 // ── Devices ────────────────────────────────────────────────────────────
@@ -1877,5 +2129,211 @@ mod tests {
         // A second run moves nothing and loses nothing.
         conn.execute_batch(sql_0307().as_str()).expect("0307 again");
         assert_eq!(live(&conn, "owner"), l);
+    }
+
+    // ── The People group (homes-people-group-v1) ──
+
+    fn homes_of(conn: &Connection, person: &str) -> Vec<Value> {
+        live(conn, person).into_iter().filter(|v| v["kind"] == "home").collect()
+    }
+
+    fn people_groups(conn: &Connection, person: &str) -> Vec<Value> {
+        homes_of(conn, person).into_iter().filter(|v| v["id"] == PEOPLE_ID).collect()
+    }
+
+    /// Every stored item of `person`, both tables, tombstones included.
+    fn stored(conn: &Connection, person: &str) -> Vec<Item> {
+        let mut out = Vec::new();
+        for t in [HOMES_TABLE, CHAT_TABLE] {
+            let mut st = conn.prepare(&format!("SELECT {ITEM_COLS} FROM {t} WHERE person = ?1 ORDER BY kind, home_id, address")).expect("stored");
+            out.extend(st.query_map(params![person], item_from_row).expect("stored rows").collect::<rusqlite::Result<Vec<_>>>().expect("stored items"));
+        }
+        out
+    }
+
+    #[test]
+    fn the_people_group_switch_is_on_unless_turned_off() {
+        {
+            let _unset = crate::test_env::EnvVar::remove(PEOPLE_SWITCH_ENV);
+            assert!(people_group_on(), "default on");
+        }
+        for off in ["off", "0", "false", "no", " OFF "] {
+            let _v = crate::test_env::EnvVar::set(PEOPLE_SWITCH_ENV, off);
+            assert!(!people_group_on(), "{off:?} turns it off");
+        }
+        for on in ["on", "1", "yes", ""] {
+            let _v = crate::test_env::EnvVar::set(PEOPLE_SWITCH_ENV, on);
+            assert!(people_group_on(), "{on:?} leaves it on");
+        }
+    }
+
+    #[test]
+    fn the_seed_makes_one_people_group_right_after_the_first_and_never_another() {
+        let c = db();
+        // No group yet: nothing to place it after, nothing written.
+        assert_eq!(ensure_people_group(&c, "owner").expect("ensure"), Seed::NoGroups);
+        assert_eq!(person_seq(&c, "owner").expect("seq"), (0, 0), "no cursor bump without a seed");
+        let r = push(&c, "owner", "laptop", &[home("h1", "Home", "V", NOW), home("h2", "Work", "l", NOW), home("h3", "Family", "x", NOW)], NOW)
+            .expect("groups");
+        assert_eq!(ensure_people_group(&c, "owner").expect("ensure"), Seed::Seeded { cursor: r.cursor + 1 });
+        let p = people_groups(&c, "owner");
+        assert_eq!(p.len(), 1, "{p:?}");
+        let g = &p[0];
+        assert_eq!((g["name"].clone(), g["builtin"].clone()), (json!("People"), json!("people")));
+        assert_eq!((g["updatedAt"].clone(), g["deviceId"].clone()), (json!(PEOPLE_SEED_UPDATED_AT), json!(SERVER_DEVICE_ID)));
+        let order = g["order"].as_str().expect("order").to_string();
+        assert!(order.as_str() > "V" && order.as_str() < "l", "right after the first group: {order}");
+        // A delta from before the seed carries it (other devices pull it).
+        let d = pull(&c, "owner", Some(r.cursor), None, NOW).expect("delta");
+        assert_eq!(d.changes.iter().map(|i| i.home_id.as_str()).collect::<Vec<_>>(), vec![PEOPLE_ID]);
+        // Pull after pull: still exactly one, no cursor bump.
+        for _ in 0..5 {
+            assert_eq!(ensure_people_group(&c, "owner").expect("again"), Seed::Exists);
+        }
+        assert_eq!(people_groups(&c, "owner").len(), 1);
+        assert_eq!(person_seq(&c, "owner").expect("seq").0, r.cursor + 1);
+        // Only the People group carries the marker.
+        for h in homes_of(&c, "owner").iter().filter(|h| h["id"] != PEOPLE_ID) {
+            assert!(h.get("builtin").is_none(), "{h}");
+        }
+        // Another person's groups are their own.
+        assert_eq!(ensure_people_group(&c, "gina").expect("gina"), Seed::NoGroups);
+        assert!(people_groups(&c, "gina").is_empty());
+    }
+
+    #[test]
+    fn a_client_made_people_group_merges_with_the_seed_never_duplicates() {
+        let c = db();
+        // A device made People itself before its first sync: the same id.
+        let mut local = home(PEOPLE_ID, "People", "W", NOW);
+        local["builtin"] = json!("people");
+        let r = push(&c, "owner", "phone", &[home("h1", "Home", "V", NOW), local], NOW).expect("first sync");
+        assert!(r.rejected.is_empty(), "{:?}", r.rejected);
+        assert_eq!(ensure_people_group(&c, "owner").expect("ensure"), Seed::Exists);
+        let p = people_groups(&c, "owner");
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert_eq!((p[0]["order"].clone(), p[0]["deviceId"].clone()), (json!("W"), json!("phone")), "the device's own copy");
+        // The other way round: the server seeded first, then a device pushes
+        // the copy it made offline (renamed): its stamp beats the seed's.
+        push(&c, "gina", "desk", &[home("g1", "Home", "V", NOW)], NOW).expect("gina's group");
+        assert!(matches!(ensure_people_group(&c, "gina").expect("seed"), Seed::Seeded { .. }));
+        let r = push(&c, "gina", "phone", &[home(PEOPLE_ID, "Folks", "k", NOW + 5)], NOW).expect("offline copy");
+        assert_eq!((r.applied, r.superseded), (1, 0), "{r:?}");
+        let p = people_groups(&c, "gina");
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert_eq!((p[0]["name"].clone(), p[0]["builtin"].clone()), (json!("Folks"), json!("people")));
+        assert_eq!(homes_of(&c, "gina").len(), 2, "Home and Folks");
+    }
+
+    #[test]
+    fn the_people_group_is_never_deleted_and_a_rename_keeps_the_marker() {
+        let c = db();
+        push(&c, "owner", "d", &[home("h1", "Home", "V", NOW), home("h2", "Work", "l", NOW)], NOW).expect("groups");
+        ensure_people_group(&c, "owner").expect("seed");
+        // A delete, whatever its stamp, and a merge away: refused one by one.
+        let mut merge = tomb(home(PEOPLE_ID, "People", "W", NOW + 20));
+        merge["mergedInto"] = json!("h1");
+        let r = push(&c, "owner", "old-phone", &[tomb(home(PEOPLE_ID, "People", "W", NOW + 10)), merge, home("h3", "Kids", "z", NOW)], NOW)
+            .expect("delete");
+        assert_eq!(r.rejected.iter().map(|x| x.reason).collect::<Vec<_>>(), vec![reason::BUILTIN_GROUP; 2], "{r:?}");
+        assert_eq!(r.rejected[0].item["id"], json!(PEOPLE_ID), "the refused item is echoed back");
+        assert_eq!(reason::hint(r.rejected[0].reason), Some("The People group can't be deleted."));
+        assert_eq!(reason::hint(reason::LAST_HOME), None);
+        assert_eq!(r.applied, 1, "the rest of the push lands");
+        assert_eq!(people_groups(&c, "owner").len(), 1, "still there");
+        assert!(stored(&c, "owner").iter().all(|i| !(i.home_id == PEOPLE_ID && i.deleted)), "no tombstone stored");
+        // Rename and reorder are edits; the marker stays.
+        let r = push(&c, "owner", "d", &[home(PEOPLE_ID, "Humans", "y", NOW + 30)], NOW).expect("rename");
+        assert_eq!(r.applied, 1, "{r:?}");
+        let p = people_groups(&c, "owner");
+        assert_eq!((p[0]["name"].clone(), p[0]["order"].clone(), p[0]["builtin"].clone()), (json!("Humans"), json!("y"), json!("people")));
+        // A device sending back what it pulled (marker and all) is fine.
+        let r = push(&c, "owner", "d", &[p[0].clone()], NOW).expect("echo");
+        assert_eq!((r.rejected.len(), r.superseded), (0, 1), "{r:?}");
+        // The marker can't be claimed for another group, or a row.
+        let mut claim = home("h2", "Work", "l", NOW + 40);
+        claim["builtin"] = json!("people");
+        let mut odd = home(PEOPLE_ID, "Humans", "y", NOW + 40);
+        odd["builtin"] = json!("agents");
+        let mut on_row = row("h1", "atlas::aaaa", "V", NOW + 40);
+        on_row["builtin"] = json!("people");
+        let r = push(&c, "owner", "d", &[claim, odd, on_row], NOW).expect("claims");
+        assert_eq!(r.rejected.iter().map(|x| x.reason).collect::<Vec<_>>(), vec![reason::INVALID_BUILTIN; 3], "{r:?}");
+        // The other groups can all go: People is a group, so one stays.
+        let r = push(
+            &c,
+            "owner",
+            "d",
+            &[tomb(home("h1", "Home", "V", NOW + 50)), tomb(home("h2", "Work", "l", NOW + 50)), tomb(home("h3", "Kids", "z", NOW + 50))],
+            NOW,
+        )
+        .expect("drop the others");
+        assert!(r.rejected.is_empty(), "{r:?}");
+        assert_eq!(homes_of(&c, "owner").iter().map(|h| h["id"].clone()).collect::<Vec<_>>(), vec![json!(PEOPLE_ID)]);
+    }
+
+    #[test]
+    fn an_arrival_lands_in_people_once_and_existing_rows_stay_where_they_are() {
+        let c = db();
+        let sid = "0123456789abcdef";
+        let dm = |ext: &str| format!("{ext}::{sid}");
+        // Nobody syncs Homes for gina: nothing lands, nothing is written.
+        assert_eq!(land_arrival(&c, "gina", Kind::Person, &dm("k2:owner"), "Rosson", NOW).expect("no groups"), Landing::NoGroups);
+        assert!(stored(&c, "gina").is_empty());
+        // The owner's groups, an agent row, a DM row placed on purpose in
+        // Work, and a channel row the person removed.
+        let mut placed = row("h2", &dm("k2:connect:aaaa-1"), "a", NOW);
+        placed["kind"] = json!("person");
+        let mut removed = row("h1", &dm("77"), "b", NOW);
+        removed["kind"] = json!("channel");
+        push(
+            &c,
+            "owner",
+            "desk",
+            &[home("h1", "Home", "V", NOW), home("h2", "Work", "l", NOW), row("h1", "atlas::aaaa", "V", NOW), placed, removed.clone()],
+            NOW,
+        )
+        .expect("groups");
+        let mut gone = tomb(removed);
+        gone["updatedAt"] = json!(NOW + 1);
+        assert_eq!(push(&c, "owner", "desk", &[gone], NOW).expect("removed").applied, 1);
+        let before = stored(&c, "owner");
+        // A new DM: People is seeded (it wasn't yet) and the row lands there.
+        let l = land_arrival(&c, "owner", Kind::Person, &dm("K2:Connect:BBBB-2"), "Gina", NOW + 100).expect("land");
+        let Landing::Landed { cursor } = l else { panic!("landed: {l:?}") };
+        assert_eq!(people_groups(&c, "owner").len(), 1, "seeded with the first arrival");
+        let rows: Vec<Value> = live(&c, "owner").into_iter().filter(|v| v["homeId"] == PEOPLE_ID).collect();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(
+            (rows[0]["kind"].clone(), rows[0]["address"].clone(), rows[0]["label"].clone(), rows[0]["deviceId"].clone()),
+            (json!("person"), json!(dm("k2:connect:bbbb-2")), json!("Gina"), json!(SERVER_DEVICE_ID))
+        );
+        // Other devices pull it from their cursor.
+        let d = pull(&c, "owner", Some(cursor - 1), None, NOW).expect("delta");
+        assert_eq!(d.changes.len(), 2, "the People group and its row: {:?}", d.changes);
+        // A channel lands after it, at the end of People.
+        let l = land_arrival(&c, "owner", Kind::Channel, &dm("4242"), "design", NOW + 200).expect("channel");
+        assert!(matches!(l, Landing::Landed { .. }), "{l:?}");
+        let rows: Vec<Value> = live(&c, "owner").into_iter().filter(|v| v["homeId"] == PEOPLE_ID).collect();
+        assert_eq!(rows.len(), 2);
+        let order_of = |k: &str| rows.iter().find(|r| r["kind"] == k).expect(k)["order"].as_str().expect("order").to_string();
+        assert!(order_of("channel") > order_of("person"), "appended");
+        // Arriving again (each message of the DM): nothing changes.
+        let seq = person_seq(&c, "owner").expect("seq").0;
+        assert_eq!(land_arrival(&c, "owner", Kind::Person, &dm("k2:connect:bbbb-2"), "Gina", NOW + 300).expect("again"), Landing::AlreadyOnHome);
+        // Placed in Work on purpose, or removed by the person: left alone.
+        assert_eq!(land_arrival(&c, "owner", Kind::Person, &dm("k2:connect:aaaa-1"), "Alex", NOW + 300).expect("placed"), Landing::AlreadyOnHome);
+        assert_eq!(land_arrival(&c, "owner", Kind::Channel, &dm("77"), "old", NOW + 300).expect("removed"), Landing::AlreadyOnHome);
+        assert_eq!(person_seq(&c, "owner").expect("seq").0, seq, "no cursor bump");
+        // Every row from before is exactly as it was (no migration).
+        let after = stored(&c, "owner");
+        for b in &before {
+            assert!(after.contains(b), "kept as it was: {b:?}");
+        }
+        assert_eq!(after.len(), before.len() + 3, "the People group and two arrivals");
+        // Agents and groups never land; a person address must be a person's.
+        assert!(land_arrival(&c, "owner", Kind::Row, "atlas::aaaa", "Atlas", NOW).is_err());
+        assert!(land_arrival(&c, "owner", Kind::Home, "x::y", "x", NOW).is_err());
+        assert!(land_arrival(&c, "owner", Kind::Person, &dm("k2:workspace:5d1c"), "agent", NOW).is_err());
     }
 }

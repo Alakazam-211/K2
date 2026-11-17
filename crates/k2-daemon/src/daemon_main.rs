@@ -2102,6 +2102,9 @@ async fn async_main() {
     // People and channels on Home: the held person sessions and their
     // followers. Idle (holds nothing) while the homeChat switch is off.
     crate::home_chat::follower::spawn();
+    // homes-people-group-v1: channels Sew makes arrive in their people's
+    // People group (the ledger hands them over once Sew answers).
+    crate::home_chat::arrivals::install();
     // S14: phone pushes for DM call rings (idle while Home chat is off).
     crate::home_chat::call_push::spawn();
 

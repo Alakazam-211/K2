@@ -10,6 +10,8 @@
 //! - [`events_ws`]: `WS /cli/home-chat/events`, the person's own socket.
 //! - [`call_push`]: phone pushes for DM call rings (S14), from Sew's person
 //!   feed.
+//! - [`arrivals`]: DMs and channels that arrive on their own land in the
+//!   person's People group (homes-people-group-v1).
 //!
 //! **Who.** Only a person's own login on this server: a Connect login
 //! (`k2:connect:<uuid>`) or the owner's linked login (`k2:owner`). The bare
@@ -25,6 +27,7 @@ use k2_core::tool_hook::features::HomeChatFeatures;
 
 use crate::voice::bff::{HttpSew, SewApi};
 
+pub mod arrivals;
 pub mod call_push;
 pub mod events_ws;
 pub mod follower;

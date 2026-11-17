@@ -255,6 +255,49 @@ fn create_uses_a_random_slug_and_sets_members_can_leave_by_flag() {
     assert_eq!(with(|c| sent_list(c, SAM)), Some(vec!["9100".to_string()]));
 }
 
+static ARRIVED: std::sync::Mutex<Vec<crate::home_chat::ChannelArrival>> = std::sync::Mutex::new(Vec::new());
+
+fn note_arrivals(v: Vec<crate::home_chat::ChannelArrival>) {
+    ARRIVED.lock().unwrap_or_else(|p| p.into_inner()).extend(v);
+}
+
+fn arrived_in(channel_id: &str) -> Vec<String> {
+    ARRIVED.lock().unwrap_or_else(|p| p.into_inner()).iter().filter(|a| a.channel_id == channel_id).map(|a| a.ext.clone()).collect()
+}
+
+/// homes-people-group-v1: once Sew made a new channel, everyone the creator
+/// put in it (people only, never the creator) arrives for the daemon to add
+/// to their People group, with the channel's id and name. A create Sew
+/// answers for a channel it already had arrives for no one.
+#[test]
+fn a_new_channel_arrives_for_the_people_put_in_it_not_its_creator() {
+    let _e = setup(&[]);
+    crate::home_chat::set_arrival_sink(Some(note_arrivals));
+    let row = with(|c| request_create(c, "Design", false, ALEX, &[SAM.to_string(), OWNER.to_string()], 5));
+    let ops = plan_home(&HashSet::new(), &levels(&[ALEX, SAM, OWNER]));
+    let create = ops.iter().find(|o| o.subject_key == channel_subject(&row.slug)).expect("create");
+    let answer = json!({"channel_id": "9300", "space_id": SPACE, "slug": row.slug, "name": "Design", "private": true, "created": true,
+        "added": [{"external_id": ALEX, "member_id": "41"}, {"external_id": SAM, "member_id": "42"}, {"external_id": OWNER, "member_id": "40"},
+                  {"external_id": "k2:workspace:5d1c0000-0000-4000-8000-000000000009", "member_id": "43"}]});
+    deliver(create, &answer.to_string());
+    let mut got = arrived_in("9300");
+    got.sort();
+    let mut want = vec![SAM.to_string(), OWNER.to_string()];
+    want.sort();
+    assert_eq!(got, want, "the creator and the agent never arrive");
+    let a = ARRIVED.lock().unwrap().iter().find(|a| a.channel_id == "9300").cloned().expect("one");
+    assert_eq!(a.name, "Design");
+    // Sew already had it (an idempotent answer): no one arrives.
+    let again = with(|c| request_create(c, "Again", false, ALEX, &[SAM.to_string()], 6));
+    let ops = plan_home(&HashSet::new(), &levels(&[ALEX, SAM]));
+    let create = ops.iter().find(|o| o.subject_key == channel_subject(&again.slug)).expect("create again");
+    let answer = json!({"channel_id": "9301", "space_id": SPACE, "slug": again.slug, "name": "Again", "private": true, "created": false,
+        "added": [{"external_id": SAM, "member_id": "42"}]});
+    deliver(create, &answer.to_string());
+    assert!(arrived_in("9301").is_empty(), "{:?}", arrived_in("9301"));
+    crate::home_chat::set_arrival_sink(None);
+}
+
 /// Rename and delete go as `channels/bulk` ops on the channel's queue;
 /// delete is an archive; the last person leaving archives the channel.
 #[test]

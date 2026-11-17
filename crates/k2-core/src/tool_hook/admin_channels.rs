@@ -847,6 +847,21 @@ pub fn after_done(conn: &Connection, id: &str, result: &str, now: i64) -> Result
                 )
                 .map_err(|e| format!("home channel member why: {e}"))?;
             }
+            // homes-people-group-v1: everyone the creator put in a channel
+            // Sew just made has it arrive (their People group); the creator
+            // added it themselves. Sew's answer for one it already had
+            // (`created: false`) arrives for no one.
+            if a.created {
+                let creator = channel_by_slug(conn, slug)?.map(|c| c.creator_ext).unwrap_or_default();
+                crate::home_chat::channel_arrived(
+                    a.added
+                        .iter()
+                        .map(|m| m.external_id.to_string())
+                        .filter(|ext| *ext != creator && crate::home_chat::is_box_person(ext))
+                        .map(|ext| crate::home_chat::ChannelArrival { ext, channel_id: a.channel_id.clone(), name: a.name.clone() })
+                        .collect(),
+                );
+            }
             Ok(())
         }
         Some(Op::AdminChannelOps) => {

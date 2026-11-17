@@ -718,3 +718,154 @@ async fn a_sew_data_reset_reconnects_the_follower_at_once() {
     follower::release_all();
     set_deps(None);
 }
+
+// ── homes-people-group-v1: arrivals land in People ──
+
+/// The owner's Homes as the store holds them now (live items, wire form).
+fn owner_homes() -> Vec<Value> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::homes_sync::pull(&conn, "owner", None, None, chrono::Utc::now().timestamp_millis())
+        .expect("pull")
+        .changes
+        .iter()
+        .map(k2_core::homes_sync::Item::to_json)
+        .collect()
+}
+
+/// The owner syncs Homes here: their groups (and rows) as a desk pushed them,
+/// nothing kept from an earlier test.
+fn owner_syncs(changes: Value) {
+    super::arrivals::forget_for_tests();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    for t in ["homes_items", "homes_chat_items", "homes_people"] {
+        conn.execute(&format!("DELETE FROM {t} WHERE person = 'owner'"), []).expect("forget the owner's Homes");
+    }
+    let r = k2_core::homes_sync::push(&conn, "owner", "desk", changes.as_array().expect("changes"), chrono::Utc::now().timestamp_millis())
+        .expect("push");
+    assert!(r.rejected.is_empty(), "{:?}", r.rejected);
+}
+
+fn sid() -> String {
+    crate::boot_status::server_id().expect("serverId")
+}
+
+fn rows_in(homes: &[Value], group: &str) -> Vec<Value> {
+    homes.iter().filter(|v| v["kind"] != "home" && v["homeId"] == group).cloned().collect()
+}
+
+/// Someone DMs the owner: the DM (a person row for the sender) lands in the
+/// owner's People group, made for it, whatever group they have open; each
+/// later message changes nothing. A row the owner placed themselves (an
+/// explicit add, in the open group) stays where it is, and agents' rows too.
+#[test]
+fn a_dm_someone_sends_lands_in_people_once() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, api) = chat_box();
+    let at = chrono::Utc::now().timestamp_millis() - 1000;
+    let agent = format!("atlas::{}", sid());
+    owner_syncs(json!([
+        {"kind": "home", "id": "h1", "name": "Home", "order": "V", "updatedAt": at},
+        {"kind": "home", "id": "h2", "name": "Work", "order": "l", "updatedAt": at},
+        {"kind": "row", "homeId": "h2", "address": agent, "label": "Atlas", "order": "V", "updatedAt": at},
+    ]));
+    k2_core::tool_hook::with_home_chat_db(|conn| k2_core::tool_hook::admin_channels::set_dm_channel(conn, ALEX, "k2:owner", "920", 1))
+        .expect("Alex's DM with the owner");
+    api.answer("/api/v1/channels/920/messages", 200, json!({"id": "1", "channel_id": "920"}));
+    call("/cli/home-chat/send", json!({"conv": "920", "text": "hi", "nonce": "p1"})).expect("send");
+    let homes = owner_homes();
+    let people: Vec<&Value> = homes.iter().filter(|v| v["kind"] == "home" && v["id"] == "people").collect();
+    assert_eq!(people.len(), 1, "{homes:?}");
+    assert_eq!((people[0]["name"].clone(), people[0]["builtin"].clone()), (json!("People"), json!("people")));
+    let landed = rows_in(&homes, "people");
+    assert_eq!(landed.len(), 1, "{homes:?}");
+    assert_eq!((landed[0]["kind"].clone(), landed[0]["address"].clone()), (json!("person"), json!(format!("{ALEX}::{}", sid()))));
+    // The agent row stays in the group it was put in.
+    assert_eq!(rows_in(&homes, "h2").iter().map(|r| r["address"].clone()).collect::<Vec<_>>(), vec![json!(agent)]);
+    // More messages: nothing new.
+    call("/cli/home-chat/send", json!({"conv": "920", "text": "again", "nonce": "p2"})).expect("send again");
+    super::arrivals::forget_for_tests();
+    call("/cli/home-chat/send", json!({"conv": "920", "text": "after a restart", "nonce": "p3"})).expect("send after a restart");
+    assert_eq!(owner_homes(), homes, "the store didn't change");
+    // A DM the owner added themselves (an explicit add in the open group):
+    // a message from that person leaves it there.
+    let placed = format!("k2:connect:1a2b3c4d-0000-4000-8000-000000000001::{}", sid());
+    owner_syncs(json!([
+        {"kind": "home", "id": "h1", "name": "Home", "order": "V", "updatedAt": at},
+        {"kind": "home", "id": "h2", "name": "Work", "order": "l", "updatedAt": at},
+        {"kind": "person", "homeId": "h2", "address": format!("{ALEX}::{}", sid()), "label": "Alex", "order": "V", "updatedAt": at},
+        {"kind": "person", "homeId": "h2", "address": placed, "label": "Sam", "order": "k", "updatedAt": at},
+    ]));
+    let before = owner_homes();
+    call("/cli/home-chat/send", json!({"conv": "920", "text": "hi", "nonce": "p4"})).expect("send");
+    assert_eq!(owner_homes(), before, "placed on purpose: not moved, not doubled, no People group made for it");
+    done();
+}
+
+/// Switch off: nothing arrives.
+#[test]
+fn nothing_arrives_while_the_people_group_is_off() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, api) = chat_box();
+    let _off = k2_core::test_env::EnvVar::set(k2_core::homes_sync::PEOPLE_SWITCH_ENV, "off");
+    owner_syncs(json!([{"kind": "home", "id": "h1", "name": "Home", "order": "V", "updatedAt": 1_000}]));
+    k2_core::tool_hook::with_home_chat_db(|conn| k2_core::tool_hook::admin_channels::set_dm_channel(conn, ALEX, "k2:owner", "921", 1))
+        .expect("DM");
+    api.answer("/api/v1/channels/921/messages", 200, json!({"id": "1", "channel_id": "921"}));
+    call("/cli/home-chat/send", json!({"conv": "921", "text": "hi", "nonce": "o1"})).expect("send");
+    let homes = owner_homes();
+    assert_eq!(homes.len(), 1, "no People group, no row: {homes:?}");
+    done();
+}
+
+/// Someone adds the owner to a channel: it lands in the owner's People
+/// group. A new channel Sew made with the owner in it (the ledger's sink)
+/// lands there too.
+#[test]
+fn a_channel_someone_puts_you_in_lands_in_people() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, _api) = chat_box();
+    owner_syncs(json!([{"kind": "home", "id": "h1", "name": "Home", "order": "V", "updatedAt": 1_000}]));
+    k2_core::tool_hook::with_home_chat_db(|conn| {
+        let row = k2_core::tool_hook::admin_channels::request_create(conn, "plans", false, ALEX, &[], 1)?;
+        conn.execute("UPDATE tool_admin_chat_channels SET channel_id = '906', state = 'active' WHERE slug = ?1", [&row.slug])
+            .map_err(|e| e.to_string())?;
+        conn.execute("UPDATE tool_admin_chat_members SET state = 'in' WHERE slug = ?1", [&row.slug]).map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .expect("Alex's live channel");
+    let r = call("/cli/home-chat/channels/add", json!({"conv": "906", "ext": ["k2:owner"]})).expect("add");
+    assert_eq!(r["results"][0]["outcome"], json!("added"), "{r}");
+    let homes = owner_homes();
+    let landed = rows_in(&homes, "people");
+    assert_eq!(landed.len(), 1, "{homes:?}");
+    assert_eq!(
+        (landed[0]["kind"].clone(), landed[0]["address"].clone(), landed[0]["label"].clone()),
+        (json!("channel"), json!(format!("906::{}", sid())), json!("plans"))
+    );
+    // Added again ("already"): nothing new.
+    let r = call("/cli/home-chat/channels/add", json!({"conv": "906", "ext": ["k2:owner"]})).expect("add again");
+    assert_eq!(r["results"][0]["outcome"], json!("already"), "{r}");
+    assert_eq!(owner_homes(), homes);
+    // A channel Sew just made with the owner in it, through the installed
+    // sink (it lands off the ledger's thread).
+    super::arrivals::install();
+    k2_core::home_chat::channel_arrived(vec![k2_core::home_chat::ChannelArrival {
+        ext: "k2:owner".into(),
+        channel_id: "907".into(),
+        name: "launch".into(),
+    }]);
+    let want = json!(format!("907::{}", sid()));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !rows_in(&owner_homes(), "people").iter().any(|r| r["address"] == want) {
+        assert!(std::time::Instant::now() < deadline, "the new channel never landed: {:?}", owner_homes());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    k2_core::home_chat::set_arrival_sink(None);
+    let landed = rows_in(&owner_homes(), "people");
+    assert_eq!(landed.len(), 2, "{landed:?}");
+    let order = |a: &Value| landed.iter().find(|r| r["address"] == *a).expect("row")["order"].as_str().expect("order").to_string();
+    assert!(order(&want) > order(&json!(format!("906::{}", sid()))), "appended after the first");
+    done();
+}

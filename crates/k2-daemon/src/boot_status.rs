@@ -942,6 +942,13 @@ fn thread_read_ready() -> bool {
 /// exist.
 pub const FEATURE_HOMES_SYNC: &str = k2_core::homes_sync::FEATURE;
 
+/// homes-people-group-v1 (0.46.16): Home sync seeds each person's built-in
+/// People group (id `people`, `builtin: "people"`), refuses its delete
+/// (`builtin_group`) and adds arriving DMs and channels to it. Listed with
+/// `homes-sync-v1` while the switch (`K2_HOMES_PEOPLE_GROUP`, default on)
+/// is on; clients never make the group themselves on a server that lists it.
+pub const FEATURE_HOMES_PEOPLE_GROUP: &str = k2_core::homes_sync::PEOPLE_FEATURE;
+
 /// stash-sync-v1 (0.46.7): `/cli/me/stash*` (a person's prompt stash
 /// synced between their devices) and the `stash_changed` frame. On only
 /// when migration 0257's tables (and 0193's device registry) exist.
@@ -964,6 +971,16 @@ fn stash_sync_ready() -> bool {
     k2_core::db::try_shared()
         .map(|db| k2_core::stash_sync::tables_exist(&db.lock()))
         .unwrap_or(false)
+}
+
+/// The Home sync keys: `homes-sync-v1` once its tables exist, and with it
+/// `homes-people-group-v1` while the People group's switch is on.
+fn homes_keys(ready: bool, people_on: bool) -> Vec<&'static str> {
+    match (ready, people_on) {
+        (false, _) => Vec::new(),
+        (true, false) => vec![FEATURE_HOMES_SYNC],
+        (true, true) => vec![FEATURE_HOMES_SYNC, FEATURE_HOMES_PEOPLE_GROUP],
+    }
 }
 
 fn homes_sync_ready() -> bool {
@@ -1258,9 +1275,7 @@ pub fn features() -> Vec<&'static str> {
     if thread_read_ready() {
         out.push(FEATURE_THREAD_READ);
     }
-    if homes_sync_ready() {
-        out.push(FEATURE_HOMES_SYNC);
-    }
+    out.extend(homes_keys(homes_sync_ready(), k2_core::homes_sync::people_group_on()));
     if stash_sync_ready() {
         out.push(FEATURE_STASH_SYNC);
     }
@@ -1386,6 +1401,17 @@ mod tests {
         }
     }
 
+    /// homes-people-group-v1 rides with homes-sync-v1, and only while the
+    /// People group's switch is on.
+    #[test]
+    fn the_people_group_key_is_listed_only_while_its_switch_is_on() {
+        assert_eq!(FEATURE_HOMES_PEOPLE_GROUP, "homes-people-group-v1");
+        assert_eq!(homes_keys(true, true), vec!["homes-sync-v1", "homes-people-group-v1"]);
+        assert_eq!(homes_keys(true, false), vec!["homes-sync-v1"], "switch off: not listed");
+        assert!(homes_keys(false, true).is_empty(), "no Home sync tables: neither");
+        assert!(homes_keys(false, false).is_empty());
+    }
+
     #[test]
     fn features_report_spawn_attach_only_and_tickets_list_all() {
         // The harness hook is never set in unit tests.
@@ -1479,6 +1505,8 @@ mod tests {
                 "push-read-hints-v1",
                 "thread-read-v1",
                 "homes-sync-v1",
+                // 0.46.16: the People group, while its switch is on (default).
+                "homes-people-group-v1",
                 "stash-sync-v1",
                 "inbox-catchup-v1",
                 "catchup-unchanged-v1",

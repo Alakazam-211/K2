@@ -473,7 +473,7 @@ fn send(c: &Caller, b: SendBody) -> R<Value> {
     }
     let key = sends::Key { ext: c.ext.clone(), conv: conv.clone(), nonce: b.nonce.clone() };
     let idem = key.idempotency_key();
-    sends::once(key, || {
+    let sent = sends::once(key, || {
         let a = sew_as_keyed(&c.ext, "POST", &format!("/api/v1/channels/{conv}/messages"), Some(&body), Some(&idem))?;
         if a.status == 404 {
             if let Some(gone) = dm_gone(c, &conv)? {
@@ -482,7 +482,13 @@ fn send(c: &Caller, b: SendBody) -> R<Value> {
         }
         let m = ok_or_refuse(a)?;
         Ok(json!({"ok": true, "message": m}))
-    })
+    });
+    if sent.is_ok() {
+        // homes-people-group-v1: a DM someone sends arrives in the other
+        // person's People group (once; their own placement wins).
+        super::arrivals::dm_sent(&c.ext, &conv);
+    }
+    sent
 }
 
 /// Sew answered 404 for `conv`: when it is a DM of the caller's that K2
@@ -789,15 +795,23 @@ fn add(c: &Caller, b: AddBody) -> R<Value> {
         return Err(Refusal::new(403, "not_a_member", "only people in a channel add others to it"));
     }
     let mut out = Vec::new();
+    let mut added = Vec::new();
     for e in &b.ext {
         let e = e.trim();
         let outcome = match people::check_target(e) {
             Ok(()) => skin(|conn| ledger::request_add(conn, &ch.slug, e, now_secs()))?.to_string(),
             Err(r) => format!("refused: {}", r.code),
         };
+        if outcome == "added" {
+            added.push(e.to_string());
+        }
         out.push(json!({"ext": e, "outcome": outcome}));
     }
     hook::kick_reconcile();
+    // homes-people-group-v1: the channel arrives in each added person's People group.
+    if let Some(id) = ch.channel_id.as_deref() {
+        super::arrivals::channel_added(&c.ext, id, ch.desired_name(), &added);
+    }
     Ok(json!({"ok": true, "results": out}))
 }
 

@@ -80,7 +80,7 @@ pub struct Refusal {
     pub id: &'static str,
     /// Where it comes from: `deploy`, `runtime`, `access`, `door`, `data`,
     /// `egress`, `box`, `domains`, `approvals`, `handover`, `push`,
-    /// `pairing`, `links`, `updates`, `static`, `general`.
+    /// `pairing`, `links`, `updates`, `static`, `homes`, `general`.
     pub area: &'static str,
     /// The HTTP status it usually comes with.
     pub http: u16,
@@ -214,6 +214,7 @@ pub const AREAS: &[(&str, &str)] = &[
     ("updates", "a desktop app's update feed"),
     ("static", "static Apps (a built folder, no process)"),
     ("docs", "multiplayer docs: k2 doc (the CAD core's drawings)"),
+    ("homes", "a person's Home groups, synced between their devices"),
     ("general", "any App route"),
 ];
 

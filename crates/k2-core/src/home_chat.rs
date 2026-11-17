@@ -170,6 +170,42 @@ pub fn agent_may_use_k5_channel(workspace_uuid: &str, channel_id: &str) -> bool 
     false
 }
 
+/// A new Home channel that someone else put a box person in
+/// (homes-people-group-v1): the daemon adds it to that person's People
+/// group ([`crate::homes_sync::land_arrival`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelArrival {
+    /// The person it arrived for (`k2:owner` or `k2:connect:<uuid>`).
+    pub ext: String,
+    /// Sew's channel id.
+    pub channel_id: String,
+    /// The channel's name (the row's label).
+    pub name: String,
+}
+
+/// Where channel arrivals go. The daemon installs one at start (it lands
+/// them off this thread: the ledger's connection is held here); none
+/// installed (a CLI, a unit test) drops them.
+pub type ArrivalSink = fn(Vec<ChannelArrival>);
+
+static ARRIVAL_SINK: std::sync::RwLock<Option<ArrivalSink>> = std::sync::RwLock::new(None);
+
+/// Install (or, with `None`, remove) the channel arrival sink.
+pub fn set_arrival_sink(sink: Option<ArrivalSink>) {
+    *ARRIVAL_SINK.write().unwrap_or_else(|p| p.into_inner()) = sink;
+}
+
+/// Hand new channel members to the sink (the ledger, once Sew made the channel).
+pub fn channel_arrived(arrivals: Vec<ChannelArrival>) {
+    if arrivals.is_empty() {
+        return;
+    }
+    let sink = *ARRIVAL_SINK.read().unwrap_or_else(|p| p.into_inner());
+    if let Some(f) = sink {
+        f(arrivals);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

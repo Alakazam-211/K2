@@ -64,8 +64,9 @@
 //!
 //! - Nothing accepted the connection (curl exit 7): again, at most
 //!   [`client::TRIES`] tries, a second apart, every call but a body from
-//!   stdin; a loopback one then tries the port in `daemon.port` when it
-//!   differs ([`client::Client::port_file`]).
+//!   stdin (the shell's test: a curl argument that is exactly `@-`; an
+//!   `@-` inside a URL keeps the tries); a loopback one then tries the
+//!   port in `daemon.port` when it differs ([`client::Client::port_file`]).
 //! - The connect timed out (curl 28 before "Connected to"): again, the
 //!   same way, for `cli_request` and `cli_request_post` and their twins.
 //! - `503` with `"state":"migrating"`: again, at most [`client::TRIES`]

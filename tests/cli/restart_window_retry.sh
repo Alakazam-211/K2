@@ -12,6 +12,8 @@
 #   3. a POST answered 500 → sent exactly once (never retried);
 #   4. K2_PORT refused while ~/.k2/daemon.port names the live port (the
 #      daemon came back on another port) → exit 0 on the new port;
+#      4c. _k2_curl itself: a URL with `@-` in it is still retried there,
+#      a body read from stdin (`--data-binary @-`) never is;
 #   5. nothing ever comes back → gives up within the retry bound;
 #   6. migrating forever → at most 4 tries, then the 503 is returned.
 #
@@ -172,6 +174,26 @@ if grep '"path": "/cli/users/add"' "$WORK/requests.log" | grep -q "pw-http://h:$
 else
     bad "the port follow rewrote the body: $(grep users/add "$WORK/requests.log")"
 fi
+
+# ── 4c. only an argument that is exactly @- turns the retries off ────
+echo "== an @- in the URL keeps the retries; a body from stdin doesn't =="
+echo "$P1" >"$HOME/.k2/daemon.port"
+CURL_LIB="$WORK/curl-lib.sh"
+awk '/^# BEGIN_CLI_CURL_CFG$/{on=1} on{print} /^# END_CLI_CURL_CFG$/{exit}' "$CLI_BASH_SOURCE" >"$CURL_LIB"
+grep -q '^_k2_curl() {' "$CURL_LIB" || { echo "FAIL: no _k2_curl in $CLI_BASH_SOURCE" >&2; exit 1; }
+# _k2_curl with K2_PORT=$DEAD, the rest of its argv as given.
+curl_dead() {
+    clean_env bash -c '. "$1"; HOST=127.0.0.1; PORT="$2"; BASE_URL="http://${HOST}:${PORT}"; shift 2; _k2_curl "" "$@"' \
+        _ "$CURL_LIB" "$DEAD" "$@"
+}
+plan '{}'
+rc=0; curl_dead -s -o /dev/null "http://127.0.0.1:${DEAD}/cli/files/a@-b" || rc=$?
+n="$(arrivals /cli/files/a@-b)"
+if [ "$rc" -eq 0 ] && [ "$n" = 1 ]; then ok "a URL with @- in it is retried on the published port"; else bad "@- in the URL: exit $rc, $n arrivals"; fi
+plan '{}'
+rc=0; printf '{}' | curl_dead -s -o /dev/null -X POST --data-binary @- "http://127.0.0.1:${DEAD}/cli/stdin-body" || rc=$?
+n="$(arrivals /cli/stdin-body)"
+if [ "$rc" -eq 7 ] && [ "$n" = 0 ]; then ok "a body from stdin is sent once: the refused try is the answer (exit 7)"; else bad "stdin body: exit $rc, $n arrivals"; fi
 
 # ── 5. nothing comes back: bounded ────────────────────────────────────
 echo "== the daemon never comes back =="

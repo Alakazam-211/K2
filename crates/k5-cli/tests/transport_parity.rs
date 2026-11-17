@@ -122,6 +122,8 @@ enum Outcome {
     BodyAndStatus,
     /// The no-answer line and exit 1, its seconds in the range.
     NoAnswer { empty: bool, secs: (u64, u64) },
+    /// Nothing accepted the connection: curl's exit 7 and no output.
+    Unreachable,
 }
 
 struct Row {
@@ -146,7 +148,7 @@ struct BashRun {
     note: Option<String>,
 }
 
-fn run_bash(w: &Work, row: &Row) -> BashRun {
+fn run_bash(w: &Work, row: &Row, port: u16) -> BashRun {
     let (token, scoped) = match row.who {
         Who::Owner => (OWNER, ""),
         Who::PassportTcp | Who::PassportUds => (PASSPORT, PASSPORT),
@@ -175,7 +177,7 @@ rc=0
 printf '%s' "$rc" >"$K5T_RC"
 if [ -f "$_K2_PERMISSION_NOTE" ]; then cat "$_K2_PERMISSION_NOTE" >"$K5T_NOTE"; fi
 "#,
-        port = w.stub.port,
+        port = port,
         wr = if row.would_refuse { "1" } else { "" },
         call = row.bash,
     );
@@ -208,14 +210,14 @@ if [ -f "$_K2_PERMISSION_NOTE" ]; then cat "$_K2_PERMISSION_NOTE" >"$K5T_NOTE"; 
     }
 }
 
-fn client(w: &Work, row: &Row) -> Client {
+fn client(w: &Work, row: &Row, port: u16) -> Client {
     let passport = || Passport::new(PASSPORT).expect("a passport");
     let auth = match row.who {
         Who::Owner => Auth::Owner(OWNER.to_string()),
         Who::PassportTcp => Auth::Passport { passport: passport(), sock: None },
         Who::PassportUds => Auth::Passport { passport: passport(), sock: Some(w.stub.sock.clone()) },
     };
-    let mut c = Client::new("127.0.0.1", w.stub.port, PROJECT, auth);
+    let mut c = Client::new("127.0.0.1", port, PROJECT, auth);
     c.would_refuse = row.would_refuse;
     c.healer = Some(Box::new(SecretsDir(w.secrets())));
     c.port_file = Some(w.dir.join("k2home").join("daemon.port"));
@@ -269,17 +271,23 @@ fn no_answer_secs(line: &str) -> (String, u64) {
 }
 
 fn check(w: &Work, row: &Row) {
+    check_on(w, row, w.stub.port);
+}
+
+/// [`check`], both sides given `port` (a dead one, for the rows whose
+/// first connect is refused).
+fn check_on(w: &Work, row: &Row, port: u16) {
     let name = row.name;
     // The heal rows' stub writes the new passport; start without one.
     let _ = std::fs::remove_file(w.secrets().join(".k2-passport"));
     w.stub.reset(&row.replies);
-    let bash = run_bash(w, row);
+    let bash = run_bash(w, row, port);
     let bash_log = w.stub.log();
     assert_eq!(w.stub.left(), 0, "{name}: bash left answers unused; stderr: {}", bash.stderr);
 
     let _ = std::fs::remove_file(w.secrets().join(".k2-passport"));
     w.stub.reset(&row.replies);
-    let mut c = client(w, row);
+    let mut c = client(w, row, port);
     let got = (row.rust)(&mut c);
     let rust_log = w.stub.log();
     assert_eq!(w.stub.left(), 0, "{name}: rust left answers unused");
@@ -319,6 +327,13 @@ fn check(w: &Work, row: &Row) {
             for (side, s) in [("bash", bash_secs), ("rust", rust_secs)] {
                 assert!((secs.0..=secs.1).contains(&s), "{name}: {side} waited {s} s, wanted {secs:?}");
             }
+        }
+        Outcome::Unreachable => {
+            assert_eq!(bash.status, Some(0), "{name}: bash failed: {}", bash.stderr);
+            assert_eq!(bash.rc.as_deref(), Some("7"), "{name}: bash's call; stderr: {}", bash.stderr);
+            assert_eq!(bash.stdout, b"", "{name}: bash's output");
+            assert_eq!(bash.stderr, "", "{name}: bash printed on stderr");
+            assert!(matches!(got, Err(Error::Unreachable { .. })), "{name}: rust: {got:?}");
         }
     }
 }
@@ -759,6 +774,46 @@ fn every_call_sends_what_bash_sends() {
     let rows = rows(&w);
     for row in &rows {
         check(&w, row);
+        println!("ok: {}", row.name);
+    }
+    println!("{} rows match", rows.len());
+}
+
+/// A refused connect is tried again, on the port in `daemon.port`, unless
+/// the call read stdin: the shell's rule is an argument that is exactly
+/// `@-`, so an `@-` inside the URL keeps the retries.
+#[test]
+fn a_refused_connect_is_tried_again_unless_stdin_was_read() {
+    let w = Work::new("refused");
+    std::fs::write(w.dir.join("k2home").join("daemon.port"), format!("{}\n", w.stub.port)).unwrap();
+    let dead = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let rows = [
+        Row {
+            name: "a URL with @- in it, refused: tried again on the moved port",
+            who: Who::Owner,
+            would_refuse: false,
+            replies: vec![ok(r#"{"ok":true}"#)],
+            bash: r#"cli_request "/cli/files/a@-b" "q=1""#,
+            rust: |c| c.call(Channel::Tcp, "/cli/files/a@-b", Call::Request(&["q=1"])),
+            requests: 1,
+            outcome: Outcome::Body,
+        },
+        Row {
+            name: "a body from stdin, refused: never tried again",
+            who: Who::Owner,
+            would_refuse: false,
+            replies: vec![],
+            bash: r#"printf '%s' "$BODY" | cli_post_json_stdin /cli/llm/accounts/add-key"#,
+            rust: |c| c.post_json_stdin("/cli/llm/accounts/add-key", BODY.as_bytes()),
+            requests: 0,
+            outcome: Outcome::Unreachable,
+        },
+    ];
+    for row in &rows {
+        check_on(&w, row, dead);
         println!("ok: {}", row.name);
     }
     println!("{} rows match", rows.len());

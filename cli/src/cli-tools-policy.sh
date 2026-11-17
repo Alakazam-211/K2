@@ -377,8 +377,10 @@ _k2_cfg_auth() {
 # between processes and nothing held its socket) is retried, at most
 # $_K2_CURL_TRIES tries, 1 s apart; such a request never reached a
 # handler, so a retry can't run it twice. Never `curl --retry` (it also
-# retries after a response). A request whose body is read from stdin
-# (`@-`, `-T -`) is not retried: the first try consumed it. A refused
+# retries after a response). A request that reads stdin (an argument
+# that is exactly `@-`, as in `--data-binary @-`, or `-T`) is not
+# retried: the first try consumed it. An `@-` inside a URL or another
+# value is not stdin and keeps the retries. A refused
 # loopback request on $PORT also tries the port the daemon published in
 # ~/.k2/daemon.port, when that one differs (the daemon came back on
 # another port).
@@ -497,7 +499,7 @@ _k2_curl() {
     local cfg="$1"; shift
     local try=1 rc once=0 a
     for a in "$@"; do
-        case "$a" in *@-*|-T) once=1 ;; esac
+        case "$a" in @-|-T) once=1 ;; esac
     done
     if [ "${_K5_CLI_VIA:-}" = "rust" ] && [ -z "${_K2_CURL_NOT_DAEMON:-}" ]; then
         set -- -H "X-K5-Cli-Via: fallthrough" "$@"
@@ -1126,7 +1128,7 @@ _cli_curl() {
         shift 2
     fi
     for a in "$@"; do
-        case "$a" in *@-*|-T) once=1 ;; esac
+        case "$a" in @-|-T) once=1 ;; esac
     done
     local _had_e=0
     case $- in *e*) _had_e=1; set +e ;; esac

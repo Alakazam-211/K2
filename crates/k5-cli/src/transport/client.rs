@@ -188,7 +188,9 @@ impl Kind {
     fn notes_permission(self) -> bool {
         self != Kind::PostJsonStdin
     }
-    /// The body is read from stdin: nothing is ever tried twice.
+    /// The body is read from stdin: nothing is ever tried twice. Only
+    /// then: the shell's `@-` rule is an argument that is exactly `@-`,
+    /// never one in a URL.
     fn once(self) -> bool {
         self == Kind::PostJsonStdin
     }

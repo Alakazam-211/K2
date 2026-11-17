@@ -18,7 +18,7 @@ THE LOOP
   3. A person approves it: one click in Settings → Gardens → a Garden → External Data
      for a secretless public source; a vault confirm when it uses a secret
      (one confirm for many: k2 sources approve a b c --secret NAME). An
-     agent with "Manage Gardens and data sources" approves it itself.
+     agent with "Let this agent manage Gardens and data sources" approves it itself.
   4. k2 sources trigger propose --source fleet --on item_went_crit
      wakes YOU when a box goes red. A person approves it too.
   5. k2 sources show fleet   the definition + the exact card view.
@@ -46,15 +46,16 @@ LIMITS
   cooldown/cap, point a trigger at another agent. LAN and plain http are
   the owner's only.
 
-"MANAGE GARDENS AND DATA SOURCES" (THE AGENT SWITCH)
-  The owner or an admin turns it on per agent (Settings → Workspaces → <ws>
-  → Agent, or k2 sources access on --workspace <ws> outside K2); an agent
+"LET THIS AGENT MANAGE GARDENS AND DATA SOURCES" (THE AGENT SWITCH)
+  The owner or an admin turns it on per agent (Settings → Workspaces /
+  Agents → <ws> → Permissions → Projects and Gardens, or k2 sources access
+  on --workspace <ws> outside K2); an agent
   never can. With it you act with no person and no confirm: pending,
   approve (yours and others' on this server), approve a b c --secret NAME
   (all bound or none), secret, pause/resume, pin/unpin, trigger approve /
   add / pause / resume. You bind only a secret you may already use: your
   own workspace's (k2 vault set NAME: scope ws:<you> by default), or a
-  server secret if you also have "Allow managing server-wide secrets"
+  server secret if you also have "Let this agent manage server-wide secrets"
   (else exit 3, secret_not_usable). The bind goes only to the source's one
   site, inside the secret's own sites; it never widens them. Each act is
   logged with you, your session, the target and the secret's NAME (Access

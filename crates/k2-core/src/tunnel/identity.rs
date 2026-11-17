@@ -509,8 +509,8 @@ pub fn switch_subdomain(
         }
         None => {
             return Err(format!(
-                "switching to {} needs its tunnel token (pick it from your subdomains in \
-                 Settings → K2 Connect, or pass --token)",
+                "switching to {} needs its tunnel token (pick it from your subdomains under Address in \
+                 Settings → Network → Tunnel, or pass --token)",
                 host_of(&label)
             ))
         }

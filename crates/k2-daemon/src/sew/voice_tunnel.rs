@@ -668,7 +668,7 @@ pub fn rebind_steps(env: &Env, st: &VoiceState) -> R<Value> {
 /// reconfigure keeps `"::"`: `k2 hostchat upgrade` first, which runs it too.
 pub fn rebind(env: &Env) -> R<Value> {
     if !env.ops.linux() {
-        return Err(no("unsupported", 409, "Chat / Voice Hosting runs on Linux boxes only"));
+        return Err(no("unsupported", 409, "Chat and voice run on Linux servers only"));
     }
     let st = voice::load(env);
     if !st.installed {

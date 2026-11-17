@@ -176,7 +176,7 @@ pub fn compute(i: &Inputs) -> View {
             if port == k2_root_proto::sew::SEW_TURN_TLS_PORT && !i.voice_tier_direct {
                 continue; // TURN rides :443 behind the front (passthrough tier)
             }
-            let why = if udp { "Chat / Voice Hosting: media" } else if port == k2_root_proto::sew::SEW_TURN_TLS_PORT { "Chat / Voice Hosting: TURN over TLS" } else { "Chat / Voice Hosting: ICE over TCP" };
+            let why = if udp { "Chat and voice: media" } else if port == k2_root_proto::sew::SEW_TURN_TLS_PORT { "Chat and voice: TURN over TLS" } else { "Chat and voice: ICE over TCP" };
             public.push(PortEntry::public(port, if udp { Udp } else { Tcp }, "sew-voice", ANY, why));
         }
     }

@@ -351,7 +351,7 @@ mod tests {
         let v = body_json(&resp);
         assert_eq!(v["error"]["code"], "not_ready");
         assert!(
-            v["error"]["hint"].as_str().unwrap().contains("Settings → Email"),
+            v["error"]["hint"].as_str().unwrap().contains("Settings → Cores → Email Hosting"),
             "{v}"
         );
     }

@@ -460,7 +460,7 @@ cmd_voice() {
 
 _hostchat_usage() {
     cat <<'EOF'
-k2 hostchat — Chat / Voice Hosting on this box: the chat and voice server (powered by Sew)
+k2 hostchat — the chat and voice server on this box (Settings → Cores → Chat / Voice; powered by Sew)
 The core's id is sew: k2 app access <workspace> --core sew=on lets that workspace's Apps use it.
 
 Server:
@@ -562,7 +562,7 @@ Server:
   k2 hostchat job <id> [--json]
   k2 hostchat app-url set https://HOST[/path] | clear | show [--json]
          where the owner's Sew web app lives (k2 hostchat open goes there)
-Off-box copies (a folder on ANOTHER disk you mounted: NFS, SMB, sshfs, a replicated volume):
+Copies on another machine (a folder on ANOTHER disk you mounted: NFS, SMB, sshfs, a replicated volume):
   k2 hostchat ship dir <path> | box-backup | none [--json]
          backup bundles: each new one is copied there (the newest 7 kept).
          box-backup = this box's own nightly backup (k2-backup) already takes
@@ -617,9 +617,9 @@ Home client (each App session sees only its own App's Spaces once Sew has app_sc
   k2 hostchat home [--json]                     the settings, Sew's feature flags, whether Sew has them
   k2 hostchat home client <app>|none            the App whose sessions see every Space (Hearth).
                                                 The owner only (owner token, Owner login or a K2 shell
-                                                tab); never an admin or an agent, even with Manage Chat / Voice Hosting
+                                                tab); never an admin or an agent, even with "Manage chat and voice"
   k2 hostchat home app <app> --hidden on|off    "App-only": its Spaces never show in the home client
-                                                (on: Manage Chat / Voice Hosting; off: the owner or an admin, never an agent)
+                                                (on: "Manage chat and voice"; off: the owner or an admin, never an agent)
           The human output says "app-scoped sessions yes|no", "app origin yes|no", "every App
           origin yes|no" (Sew's flags app_scoped_sessions, app_origin, app_origins): k2 study app-chat.
 Chat-pass signing keys (K2 signs every chat pass; Sew checks it against K2's published keys):
@@ -646,7 +646,7 @@ Person only (outside K2, with Touch ID / your login / the vault password):
   k2 hostchat open [--print]                (the owner)
          a one-time 60 s link to Sew's web app as its install owner. You
          confirm first; --print prints the link instead of opening it.
-         An agent with Manage Chat / Voice Hosting (chat_manage) asks the owner on a card instead:
+         An agent with "Manage chat and voice" (chat_manage) asks the owner on a card instead:
            k2 permission request sew.owner-handoff --why "<why>"
          The owner presses Allow and confirms (Touch ID, the vault password or
          their Connect password) in K2 on the box's own computer or its LAN
@@ -761,7 +761,7 @@ Config:
   k2 hostchat config set approvals.by people|people+agents
   k2 hostchat config set default_space <space-slug>|none   (the Space whose access governs DMs;
                                             fixed to k5-admin while voice rooms are on: 409 default_space_fixed)
-                                            who may approve queued posts (agents need Manage Chat / Voice Hosting; nobody
+                                            who may approve queued posts (agents need "Manage chat and voice"; nobody
                                             approves their own post; agent approvals are labelled as an agent's)
 
 People (K2 users who can use chat and voice here: member by default; a guest sees only channels they're invited to):
@@ -791,7 +791,7 @@ Deliveries (each chat agent's hub: what reaches its terminal):
   k2 hostchat deliveries set <workspace> [--quiet-hours 22:00-07:00|off] [--tz Europe/Berlin|box] [--batch 10m|off]
   k2 hostchat deliveries reset <workspace>    prefs back to defaults (follows stay, their --batch goes)
 
-Agents need "Manage Chat / Voice Hosting" on their workspace:
+Agents need "Manage chat and voice" on their workspace:
   k2 agent access set <workspace> chat_manage on   (the owner or an admin)
 Using chat inside Spaces is k2 chat.
 EOF
@@ -1176,7 +1176,7 @@ _hostchat_rollback_data_loss() {
         echo "  k2 hostchat upgrade, then k2 hostchat restore <kept backup> --confirm."
     } >&2
     local id tok; id="$(_hostchat_install_id)"
-    tok="$(_vault_confirm_token sew-rollback-data-loss "$id:$bundle" "Roll Sew back to $to: chat written since $since leaves the live chat (a backup of it is kept)")" || exit 3
+    tok="$(_vault_confirm_token sew-rollback-data-loss "$id:$bundle" "Roll chat back to $to: chat written since $since leaves the live chat (a backup of it is kept)")" || exit 3
     K2_CP_MAX_TIME=3600 _hostchat_call POST /cli/sew/server/rollback "$(_compute_json K2_CJ_acceptDataLoss_b=1 K2_CJ_bundleId="$bundle" \
         K2_CJ_confirmToken="$tok" K2_CJ_mediaTarballPath="$media")" tcp
     if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; fi
@@ -1350,7 +1350,7 @@ if v.get("ok") is False:
                 [ "${#accept_binary}" -eq 64 ] || { echo '{"error":"usage","hint":"--accept-binary is the binary'"'"'s sha256: 64 hex characters"}' >&2; exit 2; }
                 _hostchat_person
                 local id tok; id="$(_hostchat_install_id)"
-                tok="$(_vault_confirm_token sew-accept-binary "$id:$accept_binary" "Upgrade Sew from a binary K2 doesn't know (sha256 $accept_binary)")" || exit 3
+                tok="$(_vault_confirm_token sew-accept-binary "$id:$accept_binary" "Update chat from a build K2 doesn't know (sha256 $accept_binary)")" || exit 3
                 b="$(_compute_json K2_CJ_tarballPath="$(abs "$tarball")" K2_CJ_mediaTarballPath="$(abs "$media_tarball")" K2_CJ_dryRun_b="$dry" \
                     K2_CJ_acceptBinary="$accept_binary" K2_CJ_confirmToken="$tok")"
                 _hostchat_call POST /cli/sew/server/upgrade "$b" tcp
@@ -1371,7 +1371,7 @@ if v.get("ok") is False:
             if [ "$drop_prev" = "1" ]; then
                 _hostchat_person
                 local id tok; id="$(_hostchat_install_id)"
-                tok="$(_vault_confirm_token sew-drop-prev "$id" "Drop Sew's old master key")" || exit 3
+                tok="$(_vault_confirm_token sew-drop-prev "$id" "Drop chat's old master key")" || exit 3
                 _hostchat_call POST /cli/sew/server/rotate-master "$(_compute_json K2_CJ_phase=drop-prev K2_CJ_confirmToken="$tok")" tcp
             else
                 _hostchat_call POST /cli/sew/server/rotate-master "$(_compute_json K2_CJ_phase=start)"
@@ -1380,7 +1380,7 @@ if v.get("ok") is False:
         recovery-key)
             _hostchat_person
             local id tok; id="$(_hostchat_install_id)"
-            tok="$(_vault_confirm_token sew-recovery-key "$id" "Show Sew's launch key")" || exit 3
+            tok="$(_vault_confirm_token sew-recovery-key "$id" "Show the chat recovery key")" || exit 3
             _hostchat_call POST /cli/sew/server/recovery-key "$(_compute_json K2_CJ_confirmToken="$tok")" tcp
             _hostchat_print recovery-key "$as_json" ;;
         config)
@@ -1465,7 +1465,7 @@ print("%-20s %-14s %s" % ("server.public_url", "(see status)", "https://HOST on 
             _hostchat_call GET /cli/sew/status ""
             local app_url; app_url="$(_hostchat_field appUrl)"
             [ -n "$app_url" ] || { echo '{"error":"app_url_unset","hint":"set where the Sew web app lives first: k2 hostchat app-url set https://HOST"}' >&2; exit 3; }
-            local tok; tok="$(_vault_confirm_token chat-owner-handoff "" "Open Sew as its owner")" || exit 3
+            local tok; tok="$(_vault_confirm_token chat-owner-handoff "" "Open chat as its owner")" || exit 3
             _hostchat_call POST /cli/sew/owner-handoff "$(_compute_json K2_CJ_confirmToken="$tok")" tcp
             tok=""
             local link
@@ -1481,10 +1481,10 @@ print(os.environ["K2_HC_APP"].rstrip("/") + "/k2/owner-handoff#code=" + code)
                 printf '%s\n' "$link"
             elif [ "$(uname -s)" = "Darwin" ] && command -v open >/dev/null 2>&1; then
                 open "$link" || exit 3
-                echo "Opened Sew as its owner (the link works once, for 60 s)." >&2
+                echo "Opened chat as its owner (the link works once, for 60 s)." >&2
             elif command -v xdg-open >/dev/null 2>&1; then
                 xdg-open "$link" >/dev/null 2>&1 || exit 3
-                echo "Opened Sew as its owner (the link works once, for 60 s)." >&2
+                echo "Opened chat as its owner (the link works once, for 60 s)." >&2
             else
                 echo '{"error":"no_opener","hint":"no browser opener here: k2 hostchat open --print, then open the link within 60 s"}' >&2
                 exit 3
@@ -1571,7 +1571,7 @@ still answers their own consent notice):
                                                    [--required on|off|inherit] [--json]
           change it (each flag optional). Down (start level none, required off, inherit):
           the owner, an admin, or the App's own agent (its "…and manage them end to end"
-          switch; Manage Chat / Voice Hosting isn't needed). Up (a start level above
+          switch; "Manage chat and voice" isn't needed). Up (a start level above
           none): the owner or an admin, in person. --required on: the owner only, in
           person. In person = from a terminal outside K2, with a confirm (Touch ID or the
           vault password); an agent is refused (person_only). A locked Space takes no
@@ -1931,7 +1931,7 @@ _hostchat_meet() {
 
 _hostchat_recording_usage() {
     cat <<'EOF'
-k2 hostchat recording — Sew's call recorder on this box (Chat / Voice Hosting)
+k2 hostchat recording — Sew's call recorder on this box (chat and voice)
 
 Recording (Sew, this box's chat and voice service: its recorder and transcriber; Sew 0.9.0+):
   k2 hostchat recording status [--json]     installed, on or off, versions, Sew's recording settings
@@ -2027,7 +2027,7 @@ if r.get("ok") is False:
             if [ -n "$notready" ]; then echo "$notready" >&2; exit 3; fi
             local id tok
             id="$(_hostchat_install_id)"
-            tok="$(_vault_confirm_token sew-recording-enable "$id" "Install Sew's recorder and turn recording on")" || exit 3
+            tok="$(_vault_confirm_token sew-recording-enable "$id" "Install the chat recorder and turn recording on")" || exit 3
             _hostchat_call POST /cli/sew/recording/enable "$(_compute_json K2_CJ_confirmToken="$tok" K2_CJ_recorderTarballPath="$rec" \
                 K2_CJ_transcriberTarballPath="$tra" K2_CJ_modelFilePath="$model")" tcp
             if [ "$wait" = "1" ] && [ "$(_hostchat_field state)" = "installing" ]; then

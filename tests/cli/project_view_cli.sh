@@ -58,7 +58,7 @@ assert_contains "project help lists view" "$pj_help" "view <project> [<view>]   
 assert_contains "project help names the views" "$pj_help" "open in: terminal, thread or chatter"
 assert_contains "project help names --agent" "$pj_help" "(--agent <name>: one agent's own view)"
 assert_contains "project help: switch default" "$pj_help" "projects\" (on by default; Settings"
-assert_contains "project help: switch sentence is one line" "$pj_help" "code forbidden. Each workspace has that per-agent switch, \"Manage K2"
+assert_contains "project help: switch sentence is one line" "$pj_help" "code forbidden. Each workspace has that per-agent switch, \"Let"
 assert_contains "project help: view is admin" "$pj_help" "setting the view its agents open in (\`view\`) are for the owner, an admin,"
 view_help="$(nodaemon project view --help)"
 assert_contains "view help usage" "$view_help" "k2 project view <project> [terminal|thread|chatter] [--json]"

@@ -49,7 +49,8 @@ front of the App, so an App whose manifest says host.clientIp: false (its
 connections reach it raw) can't have them: refused with needs_k2_front.
 
 Who: every form needs the owner, an Admin, or the App's own agent with the
-workspace's "Build and run Apps" switch (Settings → Apps); check is the
+workspace's "Build and run Apps" switch (Settings → Workspaces / Agents → <agent> →
+Permissions → Apps); check is the
 owner's. Every change is recorded in the App's deploy audit. Exit codes: 0
 ok, 2 bad usage, 3 refused (JSON with a code on stderr); check exits 1 when a
 host serves a different file.

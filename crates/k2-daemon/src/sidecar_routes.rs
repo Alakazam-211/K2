@@ -470,7 +470,7 @@ pub(crate) fn require_credential(caller: &Caller) -> Result<(), SidecarError> {
     }
 }
 
-pub(crate) const GATED_HINT: &str = "Ask your human to turn on 'Let this agent manage its sidecars' in Settings → Workspaces / Agents → {ws} → Agent (or run k2 sidecar access on --workspace {ws} as the owner).";
+pub(crate) const GATED_HINT: &str = "Ask your human to turn on 'Let this agent manage its sidecars' in Settings → Workspaces / Agents → {ws} → Permissions (or run k2 sidecar access on --workspace {ws} as the owner).";
 
 /// The interim agent gate (§7.3 rules 1–3). Rule 5 (no more power) is
 /// checked once the preset is known.
@@ -1786,7 +1786,7 @@ fn handle_access(
         return Err(err(
             "owner_only",
             403,
-            "only the server's owner turns \"Let this agent manage its Apps' users\" on or off (Settings → Workspaces → <agent> → Agent → Apps)",
+            "only the server's owner turns \"Let this agent manage its Apps' users\" on or off (Settings → Workspaces / Agents → <agent> → Permissions → Apps)",
         ));
     }
     if toggle == "compute_manage" && !caller_is_owner(caller) {
@@ -1797,7 +1797,7 @@ fn handle_access(
         return Err(err(
             "owner_only",
             403,
-            "only the server's owner may turn \"Allow managing compute nodes\" on or off (Settings → Workspaces → <agent> → Agent, or k2 compute manage on|off --workspace <ws> from a terminal outside K2)",
+            "only the server's owner may turn \"Let this agent manage compute nodes\" on or off (Settings → Workspaces / Agents → <agent> → Permissions → Compute, or k2 compute manage on|off --workspace <ws> from a terminal outside K2)",
         ));
     }
     let value = match v.get("value") {
@@ -1816,7 +1816,7 @@ fn handle_access(
             return Err(err(
                 "owner_only",
                 403,
-                "only the server's owner turns on \"Read call transcripts\" (Settings → Workspaces → <agent> → Agent); an Admin may turn it off",
+                "only the server's owner turns on \"Read call transcripts\" (Settings → Workspaces / Agents → <agent> → Permissions → Calls); an Admin may turn it off",
             ));
         }
         k2_core::voice_transcripts::set_reader(&ws.id, value, &caller.audit_user()).map_err(|e| err("store_unavailable", 503, e))?;
@@ -1843,7 +1843,7 @@ fn handle_access(
             return Err(err(
                 "owner_only",
                 403,
-                "only the server's owner turns on \"Manage the org chart\" (Settings → Workspaces → <agent> → Agent); an Admin may turn it off",
+                "only the server's owner turns on \"Manage the org chart\" (Settings → Workspaces / Agents → <agent> → Permissions → Org Chart); an Admin may turn it off",
             ));
         }
         {

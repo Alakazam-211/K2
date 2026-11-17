@@ -349,7 +349,7 @@ fn respond_outcome(
                     "status": "pending_approval",
                     "hint": format!(
                         "queued for approval ({id}) — your human decides in Settings → \
-                         Email → Approvals; track with 'k2 mail outbox {id}'"
+                         Cores → Email Hosting → Approvals; track with 'k2 mail outbox {id}'"
                     ),
                 });
                 if let Some(after) = send_after {

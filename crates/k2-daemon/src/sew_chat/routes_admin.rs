@@ -115,7 +115,7 @@ fn chat_manage_off() -> ChatErr {
     ChatErr::new(
         "chat_manage_off",
         403,
-        "managing chat needs the Manage Chat / Voice Hosting switch on your workspace — your owner or an admin turns it on \
+        "managing chat needs the Manage chat and voice switch on your workspace — your owner or an admin turns it on \
          (k2 agent access set <workspace> chat_manage on)",
     )
 }
@@ -137,7 +137,7 @@ pub(crate) fn admin(who: &Who) -> R<Admin> {
                 label: format!("agent:{}", crate::compute_routes::ws_handle(project_id)),
             })
         }
-        _ => Err(ChatErr::new("owner_only", 403, "only the owner, an admin, or an agent with Manage Chat / Voice Hosting manages chat")),
+        _ => Err(ChatErr::new("owner_only", 403, "only the owner, an admin, or an agent with Manage chat and voice manages chat")),
     }
 }
 
@@ -227,7 +227,7 @@ fn self_loosening(why: &str) -> ChatErr {
     ChatErr::new(
         "self_loosening",
         403,
-        format!("an agent can't loosen its own chat access ({why}) — ask your owner or an admin, or another agent with Manage Chat / Voice Hosting"),
+        format!("an agent can't loosen its own chat access ({why}) — ask your owner or an admin, or another agent with Manage chat and voice"),
     )
 }
 

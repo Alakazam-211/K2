@@ -351,7 +351,7 @@ try:
 except Exception:
     print("Error: no answer from the K2 daemon", file=sys.stderr); sys.exit(1)
 s = v.get("settings", v) if isinstance(v, dict) else {}
-print("Permission cards (Beta): %s" % ("on" if s.get("permissionCards") is True else "off"))
+print("Let agents ask with permission cards: %s" % ("on" if s.get("permissionCards") is True else "off"))
 '
                     ;;
                 *) echo "Usage: k2 permission beta on|off|status" >&2; exit 2 ;;

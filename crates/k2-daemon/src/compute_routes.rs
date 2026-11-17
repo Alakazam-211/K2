@@ -595,7 +595,7 @@ pub(crate) fn passport_gate(who: &Who) -> R<Option<String>> {
         return Err(no(
             codes::COMPUTE_OFF,
             403,
-            "compute nodes are off for this workspace: ask your owner to turn on \"Allow compute nodes\" in Settings → Workspaces → <agent> → Agent",
+            "compute nodes are off for this workspace: ask your owner to turn on \"Let this agent use compute nodes\" in Settings → Workspaces / Agents → <agent> → Permissions → Compute",
         ));
     }
     Ok(Some(own.to_string()))
@@ -915,7 +915,7 @@ fn remove_now(by: &str, n: &store::NodeRow) -> R<usize> {
     Ok(ended.len())
 }
 
-/// "Use compute from this machine" OFF (Settings → Compute): queued jobs
+/// "Use compute from this machine" OFF (Settings → Cores → Compute): queued jobs
 /// are cancelled, running ones finish (the node drains meanwhile), then
 /// the node is removed. Idle → removed now. Owner only, like remove.
 fn node_retire(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
@@ -1211,7 +1211,7 @@ fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Val
         store::agents_can_use_compute(&conn, &ws.id)
     };
     Ok(serde_json::json!({"ok": true, "node": n.name, "workspace": ws.handle, "grant": g, "agentsCanUseCompute": switch_on, "resent": resent,
-        "note": if switch_on { "agents in this workspace can use the node now" } else { "agents also need Settings → Workspaces → <agent> → Agent → Allow compute nodes (k2 compute access on --workspace <ws>)" }}))
+        "note": if switch_on { "agents in this workspace can use the node now" } else { "agents also need \"Let this agent use compute nodes\" in Settings → Workspaces / Agents → <agent> → Permissions → Compute (k2 compute access on --workspace <ws>)" }}))
 }
 
 fn n_pos(v: &serde_json::Value, k: &str, lo: i64, hi: i64) -> R<Option<i64>> {
@@ -1244,7 +1244,7 @@ fn grant_revoke(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::
 // ── agents (the Agent tab's "Allow compute nodes") ───────────────────
 
 /// Every workspace with its "Allow compute nodes" switch and grants, plus
-/// the default limits a toggle applies. Owner/admin. (Settings → Compute
+/// the default limits a toggle applies. Owner/admin. (Settings → Cores → Compute
 /// no longer lists agents, Rosson 2026-10-11; kept for the CLI/scripts.)
 fn agents_list(who: &Who) -> R<serde_json::Value> {
     need_admin(who)?;
@@ -1328,7 +1328,7 @@ pub(crate) fn set_agent_compute(
                 "note": "queued and running jobs keep going; new runs are refused"})
         }
     };
-    // Projects carry the switch (Agent tab); Settings → Compute shows grants.
+    // Projects carry the switch (Agent tab); Settings → Cores → Compute shows grants.
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"compute": "agent_access"}));
     Ok(out)

@@ -285,7 +285,7 @@ fn publish_run_gate(project_id: &str, name: &str, skin: bool, dev: bool) -> Opti
 fn dev_gate() -> Gate {
     Gate {
         why: "a --dev service runs from your live folder with no wall around it, so each new one waits for the owner's in-person approval \
-              (k2 app approve <id> from a terminal outside K2, or Settings → Apps → Approvals)"
+              (k2 app approve <id> from a terminal outside K2, or Settings → Cores → App Approvals)"
             .into(),
         switch_off: false,
     }
@@ -351,7 +351,7 @@ fn gate_for(legacy: bool, level: crate::apps::access::Level) -> Option<Gate> {
         why: format!(
             "from K2 {PUBLISH_RUN_GATE_FROM} a new --cmd service from an agent is an open-path App, which loosens its wall: \
              each new service waits for the owner's in-person approval (k2 app approve <id> from a terminal outside K2, or \
-             Settings → Apps → Approvals)"
+             Settings → Cores → App Approvals)"
         ),
         switch_off: false,
     })

@@ -52,7 +52,7 @@ pub fn refusal_or(path: &str, otherwise: CliResponse) -> CliResponse {
     error_response(
         "403 Forbidden",
         "forbidden",
-        "only the owner, an admin, or an agent with 'Manage K2 projects' can change \
+        "only the owner, an admin, or an agent with 'Let this agent manage K2 projects' on can change \
          the view an agent opens in on a project (it changes it for everyone)",
     )
 }

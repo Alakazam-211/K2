@@ -923,7 +923,7 @@ _study_page_permissions() {
     cat <<'EOF'
 # Permission cards (Beta)
 
-Permission cards are on for you: "Permission cards (Beta)" is on for this server (on by default from K2 0.46.11), and a person turned on your own "Let this agent ask for permission" switch in your workspace's settings. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
+Permission cards are on for you: "Let agents ask with permission cards" is on for this server (Settings → Access → Permission Cards; on by default from K2 0.46.11), and a person turned on your own "Let this agent ask for permission" switch in your workspace's settings. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
 
 ## The closing line
 
@@ -1025,7 +1025,7 @@ When the `[permission:]` turn says approved, they have that role on your App, an
 
 ## Your own chat account
 
-`k2 chat` runs as your workspace's own chat account. "Manage Chat / Voice Hosting" makes it by itself, so an agent that runs chat for its Apps asks for that switch, not for the account.
+`k2 chat` runs as your workspace's own chat account. "Manage chat and voice" makes it by itself, so an agent that runs chat for its Apps asks for that switch, not for the account.
 
 - The switch is off: `k2 chat whoami` (every `k2 chat` read) and `k2 chat space create` are refused and end with `k2 permission request chat.manage --why "..."`. The owner or an admin allows it. Run it as printed.
 - The switch is on and you still have no account (a person removed it): those refusals end with `k2 permission request chat.account scope=coworker --why "..."`. Run it as printed; only the owner allows it.
@@ -1043,7 +1043,7 @@ When the `[permission:]` turn says approved, they have that role on your App, an
 
 ## Refreshing your own chat
 
-A long pinned chat goes stale. `k2 agent refresh --note "<what the next chat needs>"` (or `--notes-file <path>`) starts a new chat on the same harness that carries on from this one. Your main session only; a sidecar has its own chat. With your workspace's "Can refresh its own pinned chat" off, the refusal ends with the line to ask with, and K2 keeps your note for the card:
+A long pinned chat goes stale. `k2 agent refresh --note "<what the next chat needs>"` (or `--notes-file <path>`) starts a new chat on the same harness that carries on from this one. Your main session only; a sidecar has its own chat. With your workspace's "Let this agent refresh its pinned chat" off, the refusal ends with the line to ask with, and K2 keeps your note for the card:
 
     k2 permission request chat.refresh notes=<hash> --why "<what you need it for>"
 
@@ -1057,7 +1057,7 @@ A job whose `--needs` asks for a system package its node's owner hasn't approved
 
 Run it as printed. `k2 compute node packages request <node> <names> --why "..."` (before a job) and `k2 compute prewarm` file the same kind of request and print the same line. The owner or an admin sees exactly what installs, on which machine, the number of packages with dependencies and the size. Several of your package requests can share one card; other kinds never join it. When the `[permission:]` turn says approved, root installs them on the node, and a `[compute]` message says when it's done: then run your job again. A node another server owns is that server's owner's to decide: you hear back in a `[compute]` message, and there is nothing to ask here.
 
-What a node installs without asking is its package policy, and only the owner sets it. Without "operate compute nodes", `k2 compute node packages policy <node> <server> level=list|profiles|official` ends with `k2 permission request compute.packages-policy node=<node> server=<server> level=<level> --why "..."`. Narrowing applies at once; widening waits as a node request for the owner in Settings → Compute → Approvals.
+What a node installs without asking is its package policy, and only the owner sets it. Without "operate compute nodes", `k2 compute node packages policy <node> <server> level=list|profiles|official` ends with `k2 permission request compute.packages-policy node=<node> server=<server> level=<level> --why "..."`. Narrowing applies at once; widening waits as a node request for the owner in Settings → Cores → Compute → Machine settings → Waiting for you.
 
 ## Your compute node list
 
@@ -1259,8 +1259,8 @@ WHAT'S RETIRED
   A put that became a proposal   An unlisted agent's put is refused now
                                  (garden_access_needed, exit 3) and K2 asks
                                  the person with a garden.access card.
-  "Manage Gardens and data       Reaches data sources only; for Gardens,
-  sources" for Gardens           the Garden's list decides.
+  "Let this agent manage         Reaches data sources only; for Gardens,
+  Gardens and data sources"      the Garden's list decides.
   Cards: garden.keep-mine, garden.proposal.approve and the Thread's
   "Keep as mine" card. Open ones closed: "No longer needed".
   Maker-based reach: signing a widget no longer opens its data to you;

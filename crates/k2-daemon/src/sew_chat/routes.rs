@@ -290,7 +290,7 @@ pub(crate) fn expire_now(conn: &rusqlite::Connection) -> R<()> {
 }
 
 pub(crate) fn backend() -> R<std::sync::Arc<dyn SewChat>> {
-    sew::backend().ok_or_else(|| ChatErr::new("chat_unavailable", 503, "Chat / Voice Hosting is not enabled on this box"))
+    sew::backend().ok_or_else(|| ChatErr::new("chat_unavailable", 503, "Chat and voice are not set up on this server"))
 }
 
 /// The person this workspace's agent assists in chat (its S27 grant
@@ -360,7 +360,7 @@ pub(crate) fn caller(who: &Who) -> R<Caller> {
         return Err(ChatErr::new(
             "agent_only",
             403,
-            "k2 chat is for agents (it runs as the agent's Sew member). People use the chat app; the box's Chat / Voice Hosting \
+            "k2 chat is for agents (it runs as the agent's Sew member). People use the chat app; this server's chat and voice \
              is `k2 hostchat`",
         ));
     };
@@ -446,7 +446,7 @@ pub(crate) fn need_any_access(c: &Caller) -> R<Vec<store::Access>> {
                     "not_granted",
                     403,
                     format!(
-                        "{h} has no chat account yet. To run chat for its Apps, it needs \"Manage Chat / Voice Hosting\", which also \
+                        "{h} has no chat account yet. To run chat for its Apps, it needs \"Manage chat and voice\", which also \
                          makes its chat account, and it then makes its own Spaces: {how}. Only to take part in chat, ask for the account \
                          alone instead of that line: k2 permission request chat.account scope=coworker --why \"<what you need it for>\"; \
                          a person then gives it a Space: k2 chat access grant <space> {h}",
@@ -460,7 +460,7 @@ pub(crate) fn need_any_access(c: &Caller) -> R<Vec<store::Access>> {
                 "not_granted",
                 403,
                 format!(
-                    "{h} has \"Manage Chat / Voice Hosting\" but no chat account (K2 makes one by itself, unless a person removed or \
+                    "{h} has \"Manage chat and voice\" but no chat account (K2 makes one by itself, unless a person removed or \
                      turned it off). Grant the agent chat access first (its own chat account, not a Space): {how}",
                     h = c.handle,
                     how = account_how(c)
@@ -558,7 +558,7 @@ fn account_how(c: &Caller) -> String {
     }
 }
 
-/// How the agent gets "Manage Chat / Voice Hosting".
+/// How the agent gets "Manage chat and voice".
 fn manage_how(c: &Caller) -> String {
     let set = format!("k2 agent access set {} chat_manage on", c.handle);
     if k2_core::permission::gate::enabled_for(&c.project_id) {
@@ -1216,7 +1216,7 @@ fn write_route(c: &Caller, action: Action, body: &[u8]) -> R<Value> {
                 refuse(&base, "not_author")?;
                 let hint = if action == Action::Delete {
                     "you can only delete your own messages — removing someone else's is moderation: it needs the Manage \
-                     Chat / Voice Hosting switch and level manage in this Space"
+                     chat and voice switch and level manage in this Space"
                 } else {
                     "you can only edit your own messages"
                 };

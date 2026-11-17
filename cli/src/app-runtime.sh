@@ -7,7 +7,7 @@
 
 _app_rt_usage() {
     cat <<'EOF'
-k2 app — host Apps on this box (Apps (beta): Settings → Apps → This server)
+k2 app — host Apps on this server (Settings → Cores → Apps → This server)
 
 One step (suite Apps verified by K2: Sew's Hearth and Meet):
   k2 app catalog                       What this box can deploy, and why not.
@@ -119,7 +119,7 @@ See and run it:
   k2 app inspect <app-id>              Runtime, Seed, createdWith, audit chain.
   k2 app inspect <app-id> --resources  That App's row of the box usage view.
   k2 app resources [--json] [--app A] [--owner AGENT] [--rescan [--wait]]
-                                       Box usage: disk per filesystem and per
+                                       Disk and memory: disk per filesystem and per
                                        App, service, database, agent folder
                                        and shared part, each with its owner
                                        (k2 msg <address>); RAM, load; the disk
@@ -267,7 +267,7 @@ Box services (a walled App reaching a service on this box's loopback):
   k2 app box-service revoke <app-id> <name>
                                        At once. k2 app box-service --help.
 
-Debug it (guarded Apps; agents need "Allow this agent to manage Apps"):
+Debug it (guarded Apps; agents need "Build and run Apps"):
   k2 app exec <app-id> [--timeout 60] [--no-stdin] -- <command…>
                                        One command inside the App's container,
                                        as the App. Output is framed; exit = the

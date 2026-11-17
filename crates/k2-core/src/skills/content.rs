@@ -40,7 +40,7 @@ use crate::fs_atomic::{atomic_write_str, log_if_err};
 pub const CUSTOM_AGENT_HEARTBEAT_DOCS: &str = r#"## Heartbeats
 
 Your wake schedule is controlled by **named heartbeats** the user
-configures in Settings → Heartbeats (or via the CLI). Each
+configures in Settings → Workspaces / Agents → <agent> → Heartbeats (or via the CLI). Each
 heartbeat has its own WAKEUP.md file and its own cron-style
 schedule — daily at a clock time, weekly on specific days,
 hourly at a fixed interval, etc. You don't adjust your own
@@ -69,7 +69,7 @@ k2 heartbeat signal wake                           # auto-wake (no name needed)
 ```
 
 The user can also drive the same actions from Settings →
-Heartbeats. Both paths converge on the same `agent_heartbeats`
+Workspaces / Agents → <agent> → Heartbeats. Both paths converge on the same `agent_heartbeats`
 table; whichever you prefer is fine.
 
 ## Available Tools
@@ -229,7 +229,7 @@ If your workspace may manage hosted mail: `k2 hostmail group create|add|remove|l
 fn db_skill_section(heading: &str) -> String {
     format!(
         r#"{heading} Database (k2 db / k2 store)
-Linux sidecar (your human enables it in Settings → Data). Fail-closed: `db_agent_access` is off/read/write (default off) — create-only passport; it only gates `k2 db create`. List/dsn/store work when this workspace owns a DB or has a grant. Enable/disable/uninstall/doctor/bind are owner — agent tokens exit 3. Postgres stays loopback. Off-box `*.k2.dev`: `k2 publish subdomain create <label> --target localhost:<port>` (port already listening — do not `publish run` Postgres; no `k2 db expose`; not a static-IP feature).
+Linux sidecar (your human turns it on in Settings → Cores → Database). Fail-closed: `db_agent_access` is off/read/write (default off) — create-only passport; it only gates `k2 db create`. List/dsn/store work when this workspace owns a DB or has a grant. Enable/disable/uninstall/doctor/bind are owner — agent tokens exit 3. Postgres stays loopback. Off-box `*.k2.dev`: `k2 publish subdomain create <label> --target localhost:<port>` (port already listening — do not `publish run` Postgres; no `k2 db expose`; not a static-IP feature).
 ```
 k2 db create [--id <key>] [--db-access write] [--json]   # mint this workspace's DB (need write to create)
 k2 db list | dsn                     # owned or granted; DSN always re-fetchable; never logged
@@ -418,7 +418,7 @@ k2 project msg [<name>] "..."   # post to it
 **If a message arrives prefixed `[project:<name>]`, it came from that project's shared chat — reply with `k2 project msg <name> "your reply"`. Never `k2 msg <name>` for this: `<name>` is a Project, not a workspace, and `msg` fails with `workspace_not_found`.**
 
 ### Email (k2 mail)
-Your server can host real email (Linux daemons; your human enables it in Settings → Email). You mint addresses on verified domains, read what arrives, block on `wait` for verification codes, and send/reply under your human's governance.
+Your server can host real email (Linux daemons; your human turns it on in Settings → Cores → Email Hosting). You mint addresses on verified domains, read what arrives, block on `wait` for verification codes, and send/reply under your human's governance.
 ```
 k2 hostmail create <local>[@<domain>] [--id <key>]  # mint an address (--id = idempotency key: retrying the same --id returns the existing address)
 k2 mail addresses                               # your ACTIVE addresses + cap usage (incoming mail is `messages`)
@@ -440,7 +440,7 @@ k2 mail delete <address>                        # retire an address you own (fre
 - Sending is OFF by default — that is your human's decision: request access with `k2 tickets ask`, never retry-loop. In approval mode `queued for approval (out_…)` + exit 0 IS success; track it with `k2 mail outbox`, or `--wait` to block until decided (exit 2 = timed out but STILL queued).
 - `submitted` means accepted-for-delivery — never claim an email was "delivered".
 - Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `link`) are server-enforced: agent tokens exit 3 — approving your own mail or linking an inbox is futile; ask your human.
-- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other. `k2 mail draft` (reply onto `<message-id>`, or compose with `--to`/`--subject`) lands in the human's Gmail Drafts. Drafting is always available; `k2 mail send`/`reply` from a linked inbox need the `send` level AND Sending=`on` or `approval` (app-password and Gmail-OAuth send over SMTP, Microsoft 365 over Microsoft Graph; in approval mode `queued for approval` is success) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop. `k2 mail capabilities <address>` says what an inbox can do and why not.
+- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email Link; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other. `k2 mail draft` (reply onto `<message-id>`, or compose with `--to`/`--subject`) lands in the human's Gmail Drafts. Drafting is always available; `k2 mail send`/`reply` from a linked inbox need the `send` level AND Sending=`on` or `approval` (app-password and Gmail-OAuth send over SMTP, Microsoft 365 over Microsoft Graph; in approval mode `queued for approval` is success) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop. `k2 mail capabilities <address>` says what an inbox can do and why not.
 
 "#);
     skill.push_str(&calendar_skill_section("###"));
@@ -578,7 +578,7 @@ k2 project msg [<name>] "..."   # post to it
 
 ## Email (k2 mail)
 
-Your server can host real email (Linux daemons; your human enables it in Settings → Email). You mint addresses on verified domains, read what arrives, block on `wait` for verification codes, and send/reply under your human's governance.
+Your server can host real email (Linux daemons; your human turns it on in Settings → Cores → Email Hosting). You mint addresses on verified domains, read what arrives, block on `wait` for verification codes, and send/reply under your human's governance.
 
 ```
 k2 hostmail create <local>[@<domain>] [--id <key>]  # mint an address (--id = idempotency key: retrying the same --id returns the existing address)
@@ -603,7 +603,7 @@ k2 mail delete <address>                        # retire an address you own (fre
 - Sending is OFF by default — that is your human's decision: request access with `k2 tickets ask`, never retry-loop. In approval mode `queued for approval (out_…)` + exit 0 IS success; track it with `k2 mail outbox`, or `--wait` to block until decided (exit 2 = timed out but STILL queued).
 - `submitted` means accepted-for-delivery — never claim an email was "delivered".
 - Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `link`) are server-enforced: agent tokens exit 3 — approving your own mail or linking an inbox is futile; ask your human.
-- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other. `k2 mail draft` (reply onto `<message-id>`, or compose with `--to`/`--subject`) lands in the human's Gmail Drafts. Drafting is always available; `k2 mail send`/`reply` from a linked inbox need the `send` level AND Sending=`on` or `approval` (app-password and Gmail-OAuth send over SMTP, Microsoft 365 over Microsoft Graph; in approval mode `queued for approval` is success) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop. `k2 mail capabilities <address>` says what an inbox can do and why not.
+- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email Link; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other. `k2 mail draft` (reply onto `<message-id>`, or compose with `--to`/`--subject`) lands in the human's Gmail Drafts. Drafting is always available; `k2 mail send`/`reply` from a linked inbox need the `send` level AND Sending=`on` or `approval` (app-password and Gmail-OAuth send over SMTP, Microsoft 365 over Microsoft Graph; in approval mode `queued for approval` is success) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop. `k2 mail capabilities <address>` says what an inbox can do and why not.
 
 "#);
     skill.push_str(&calendar_skill_section("##"));
@@ -794,7 +794,7 @@ k2 project msg [<name>] "..."   # post to it
 
 ## Email (k2 mail)
 
-Your server can host real email (Linux daemons; your human enables it in Settings → Email). You mint addresses on verified domains, read what arrives, block on `wait` for verification codes, and send/reply under your human's governance.
+Your server can host real email (Linux daemons; your human turns it on in Settings → Cores → Email Hosting). You mint addresses on verified domains, read what arrives, block on `wait` for verification codes, and send/reply under your human's governance.
 
 ```
 k2 hostmail create <local>[@<domain>] [--id <key>]  # mint an address (--id = idempotency key: retrying the same --id returns the existing address)
@@ -819,7 +819,7 @@ k2 mail delete <address>                        # retire an address you own (fre
 - Sending is OFF by default — that is your human's decision: request access with `k2 tickets ask`, never retry-loop. In approval mode `queued for approval (out_…)` + exit 0 IS success; track it with `k2 mail outbox`, or `--wait` to block until decided (exit 2 = timed out but STILL queued).
 - `submitted` means accepted-for-delivery — never claim an email was "delivered".
 - Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `link`) are server-enforced: agent tokens exit 3 — approving your own mail or linking an inbox is futile; ask your human.
-- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other. `k2 mail draft` (reply onto `<message-id>`, or compose with `--to`/`--subject`) lands in the human's Gmail Drafts. Drafting is always available; `k2 mail send`/`reply` from a linked inbox need the `send` level AND Sending=`on` or `approval` (app-password and Gmail-OAuth send over SMTP, Microsoft 365 over Microsoft Graph; in approval mode `queued for approval` is success) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop. `k2 mail capabilities <address>` says what an inbox can do and why not.
+- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email Link; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other. `k2 mail draft` (reply onto `<message-id>`, or compose with `--to`/`--subject`) lands in the human's Gmail Drafts. Drafting is always available; `k2 mail send`/`reply` from a linked inbox need the `send` level AND Sending=`on` or `approval` (app-password and Gmail-OAuth send over SMTP, Microsoft 365 over Microsoft Graph; in approval mode `queued for approval` is success) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop. `k2 mail capabilities <address>` says what an inbox can do and why not.
 
 "#);
     skill.push_str(&calendar_skill_section("##"));
@@ -1339,7 +1339,7 @@ pub const K2_PERMISSIONS_SKILL_DESCRIPTION: &str =
 /// (`cli/k2` `_study_page_permissions`); a test keeps the two identical.
 pub const K2_PERMISSIONS_SKILL_BODY: &str = r#"# Permission cards (Beta)
 
-Permission cards are on for you: "Permission cards (Beta)" is on for this server (on by default from K2 0.46.11), and a person turned on your own "Let this agent ask for permission" switch in your workspace's settings. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
+Permission cards are on for you: "Let agents ask with permission cards" is on for this server (Settings → Access → Permission Cards; on by default from K2 0.46.11), and a person turned on your own "Let this agent ask for permission" switch in your workspace's settings. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
 
 ## The closing line
 
@@ -1441,7 +1441,7 @@ When the `[permission:]` turn says approved, they have that role on your App, an
 
 ## Your own chat account
 
-`k2 chat` runs as your workspace's own chat account. "Manage Chat / Voice Hosting" makes it by itself, so an agent that runs chat for its Apps asks for that switch, not for the account.
+`k2 chat` runs as your workspace's own chat account. "Manage chat and voice" makes it by itself, so an agent that runs chat for its Apps asks for that switch, not for the account.
 
 - The switch is off: `k2 chat whoami` (every `k2 chat` read) and `k2 chat space create` are refused and end with `k2 permission request chat.manage --why "..."`. The owner or an admin allows it. Run it as printed.
 - The switch is on and you still have no account (a person removed it): those refusals end with `k2 permission request chat.account scope=coworker --why "..."`. Run it as printed; only the owner allows it.
@@ -1459,7 +1459,7 @@ When the `[permission:]` turn says approved, they have that role on your App, an
 
 ## Refreshing your own chat
 
-A long pinned chat goes stale. `k2 agent refresh --note "<what the next chat needs>"` (or `--notes-file <path>`) starts a new chat on the same harness that carries on from this one. Your main session only; a sidecar has its own chat. With your workspace's "Can refresh its own pinned chat" off, the refusal ends with the line to ask with, and K2 keeps your note for the card:
+A long pinned chat goes stale. `k2 agent refresh --note "<what the next chat needs>"` (or `--notes-file <path>`) starts a new chat on the same harness that carries on from this one. Your main session only; a sidecar has its own chat. With your workspace's "Let this agent refresh its pinned chat" off, the refusal ends with the line to ask with, and K2 keeps your note for the card:
 
     k2 permission request chat.refresh notes=<hash> --why "<what you need it for>"
 
@@ -1473,7 +1473,7 @@ A job whose `--needs` asks for a system package its node's owner hasn't approved
 
 Run it as printed. `k2 compute node packages request <node> <names> --why "..."` (before a job) and `k2 compute prewarm` file the same kind of request and print the same line. The owner or an admin sees exactly what installs, on which machine, the number of packages with dependencies and the size. Several of your package requests can share one card; other kinds never join it. When the `[permission:]` turn says approved, root installs them on the node, and a `[compute]` message says when it's done: then run your job again. A node another server owns is that server's owner's to decide: you hear back in a `[compute]` message, and there is nothing to ask here.
 
-What a node installs without asking is its package policy, and only the owner sets it. Without "operate compute nodes", `k2 compute node packages policy <node> <server> level=list|profiles|official` ends with `k2 permission request compute.packages-policy node=<node> server=<server> level=<level> --why "..."`. Narrowing applies at once; widening waits as a node request for the owner in Settings → Compute → Approvals.
+What a node installs without asking is its package policy, and only the owner sets it. Without "operate compute nodes", `k2 compute node packages policy <node> <server> level=list|profiles|official` ends with `k2 permission request compute.packages-policy node=<node> server=<server> level=<level> --why "..."`. Narrowing applies at once; widening waits as a node request for the owner in Settings → Cores → Compute → Machine settings → Waiting for you.
 
 ## Your compute node list
 

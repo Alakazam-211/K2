@@ -60,7 +60,7 @@ pub fn not_connected_hint(target_display: &str) -> String {
     format!(
         "'{shown}' is not a local connection — add it with \
          `k2 connections add {shown}` (or ask your human: Settings → \
-         Connections). Same-workspace is always allowed."
+         Workspaces / Agents → <workspace> → Connections). Same-workspace is always allowed."
     )
 }
 

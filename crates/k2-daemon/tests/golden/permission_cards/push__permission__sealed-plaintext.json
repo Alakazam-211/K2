@@ -1,6 +1,6 @@
 {
   "bk": "rosson:inst_01",
-  "body": "Allow compute nodes",
+  "body": "Let this agent use compute nodes",
   "ctr": 7,
   "data": {
     "addr": "billing",

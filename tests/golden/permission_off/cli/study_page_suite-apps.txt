@@ -43,13 +43,13 @@ ADDRESSES
 
 WHO MAY, AND THE WAITS
   An agent needs "Build and run Apps". Binding chat/meet and Meet's Sew setup
-  also need "Manage Chat / Voice Hosting". Without it the job waits
+  also need "Manage chat and voice". Without it the job waits
   (waiting_sew_rights): the owner runs k2 agent access set <workspace>
-  chat_manage on, or deploys from Settings → Apps → Add an App. Nothing to
+  chat_manage on, or deploys from Settings → Cores → Apps → Add an App. Nothing to
   rerun: the job goes on by itself.
   Box services or caps not yet approved: the job waits (waiting_approval) on
   the request it filed (k2 app catalog job <job-id> shows its id); the owner
-  approves it in Settings → Apps → Approvals or k2 app approve <request>.
+  approves it in Settings → Cores → App Approvals or k2 app approve <request>.
   Then the job goes on. Denied: the job ends; ask again with a new install.
 
 MEET

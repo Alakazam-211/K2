@@ -91,7 +91,7 @@ msgs = {
     "label_is_primary": "That label is your primary subdomain — it cannot be reassigned here.",
     "primary_undeletable": "Your primary subdomain cannot be removed.",
     "not_found": "No such subdomain.",
-    "invalid_token": "Tunnel token rejected — re-select your subdomain in Settings -> K2 Connect to refresh it.",
+    "invalid_token": "Tunnel token rejected — choose your address again in Settings → Network → Tunnel (k2.dev account → Address) to refresh it.",
 }
 m = msgs.get(err)
 if m is None:
@@ -231,7 +231,7 @@ _connect_curl() {
     local token
     token="$(_connect_bearer_token)"
     if [ -z "$token" ]; then
-        _publish_err "no_token" "could not reach the K2 daemon, which holds the K2 Connect tunnel token (${K2_HOME}/tunnel.json has none). Start K2 and try again — or, if this device is not paired, select a subdomain in Settings -> K2 Connect (or run 'k2 tunnel start') first."
+        _publish_err "no_token" "could not reach the K2 daemon, which holds the K2 Connect tunnel token (${K2_HOME}/tunnel.json has none). Start K2 and try again — or, if this device is not paired, choose an address in Settings → Network → Tunnel (or run 'k2 tunnel start') first."
         exit 1
     fi
     local args=(-sS -X "$method" "${K2_CONNECT_BASE}${endpoint}"
@@ -1969,7 +1969,7 @@ if row is None:
         print("  Plan: unknown (subdomain not found in your account list)")
     else:
         print("Not connected to a K2 Connect subdomain.")
-        print("  Select a subdomain in Settings -> K2 Connect (or run k2 tunnel start).")
+        print("  Choose an address in Settings → Network → Tunnel (or run k2 tunnel start).")
     sys.exit(0)
 
 host = host_of(row)

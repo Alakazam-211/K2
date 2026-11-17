@@ -83,9 +83,12 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// the tiers teach `inbox`, `organization bulletin` / `update` and `done`.
 /// Bumped to 15 (template to 5) in 0.46.13: the skills teach `k2 <verb>`
 /// (never the retired `k2so` CLI name) and say "K2", not "K2SO".
-pub const SKILL_VERSION_MANAGER: u32 = 15;
-pub const SKILL_VERSION_K2_AGENT: u32 = 15;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 15;
+/// Bumped to 16 in 0.46.15: the email, database and heartbeat notes name
+/// the Settings pages by their current labels (Cores → Email Hosting,
+/// Email Link, Cores → Database, the agent's Heartbeats tab).
+pub const SKILL_VERSION_MANAGER: u32 = 16;
+pub const SKILL_VERSION_K2_AGENT: u32 = 16;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 16;
 pub const SKILL_VERSION_TEMPLATE: u32 = 5;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 /// v2 = authored persona file is `.k2/agent/ROLE.md`.
@@ -344,7 +347,9 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// card's answer names it (`chose "<option>" on card #<seq> ("…")`).
 /// Bumped to 60 (0.46.13): the Study topics list names suite-apps.
 /// Bumped to 61 (0.46.13): the Study topics list names app-transfers-http.
-pub const SKILL_VERSION_WORKSPACE: u32 = 61;
+/// Bumped to 62 (0.46.15): the mail and database notes name the Settings
+/// pages by their current labels (Cores → Email Hosting, Cores → Database).
+pub const SKILL_VERSION_WORKSPACE: u32 = 62;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and
@@ -369,7 +374,9 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 61;
 /// v14 = 0.46.11: the opening line (cards are on by default; who turned on
 /// the agent's own switch, by its Settings name).
 /// v15 = 0.46.15: "Your compute node list" (`compute.allow-nodes`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 15;
+/// v16 = 0.46.15: the switches by their current Settings labels ("Let agents
+/// ask with permission cards", "Let this agent refresh its pinned chat").
+pub const SKILL_VERSION_PERMISSIONS: u32 = 16;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

@@ -129,11 +129,11 @@ pub fn hosting_of(f: &HostingFacts) -> Hosting {
         if f.sew_standalone {
             return h(
                 "sew_off",
-                "This server's Chat / Voice Hosting uses its own sign-ins (standalone), so it can't host K2 voice rooms.",
+                "This server's chat and voice use their own sign-ins (standalone), so it can't host K2 voice rooms.",
                 Some("identity: standalone (k2 hostchat status)".into()),
             );
         }
-        return h("sew_off", "Voice rooms are off on this server: Chat / Voice Hosting isn't on (k2 hostchat status).", None);
+        return h("sew_off", "Voice rooms are off on this server: chat and voice aren't on (k2 hostchat status).", None);
     }
     if !f.flags.server_governed_space {
         return h("voice_off", "Voice isn't set up: this server's Sew is too old for voice rooms.", Some(SEW_TOO_OLD.into()));

@@ -91,7 +91,7 @@ fn manager(c: &Caller) -> R<Admin> {
         return Err(ChatErr::new(
             "chat_manage_off",
             403,
-            "community management needs the Manage Chat / Voice Hosting switch on your workspace — your owner or an admin turns it on \
+            "community management needs the Manage chat and voice switch on your workspace — your owner or an admin turns it on \
              (k2 agent access set <workspace> chat_manage on). It also makes your agent's own chat account",
         ));
     }
@@ -644,7 +644,7 @@ fn owner_external_id(owner: Option<&str>) -> R<(String, String)> {
 /// Why a new Space needs the creating agent's chat account.
 const MANAGER_NEEDS_ACCOUNT: &str =
     "Sew makes the agent that creates a Space its manager, and only an agent with its own chat account can be one. \
-     Manage Chat / Voice Hosting makes that account by itself, so a person removed or turned off this one, or K2 couldn't make it";
+     Manage chat and voice makes that account by itself, so a person removed or turned off this one, or K2 couldn't make it";
 
 /// Sew's 422 for a manager it has no member for (`principal_unknown` on
 /// `managers.<n>`).

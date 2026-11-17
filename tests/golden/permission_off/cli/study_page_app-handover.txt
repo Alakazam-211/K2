@@ -21,7 +21,7 @@ HOW IT GOES
   3. The owner approves one card that lists exactly what moves
                  (k2 app approve <request>, or Settings → App Approvals;
                  a fresh vault confirm, never an agent).
-  The owner can also start it (Settings → Apps → Hand over…, or the same
+  The owner can also start it (Settings → Cores → Apps → Hand over…, or the same
   command from a terminal outside K2). k2 agent hire <dir> --take-app <app>
   hires an agent and offers it the App in one step (accepted for it).
 

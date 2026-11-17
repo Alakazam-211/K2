@@ -1632,13 +1632,13 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
     };
     let Some((status, hostname, port_plan)) = ctx else {
         return Err(DocError::NotReady(
-            "the email server is not installed — enable it in Settings → Email first"
+            "the email server is not installed — install it in Settings → Cores → Email Hosting → Server first"
                 .to_string(),
         ));
     };
     let hostname = hostname.filter(|h| !h.trim().is_empty()).ok_or_else(|| {
         DocError::NotReady(
-            "the mail server has no hostname on file — re-run Enable in Settings → Email"
+            "the mail server has no hostname on file — install it again in Settings → Cores → Email Hosting → Server"
                 .to_string(),
         )
     })?;
@@ -2899,7 +2899,7 @@ mod tests {
         }
         match run(None) {
             Err(DocError::NotReady(hint)) => {
-                assert!(hint.contains("Settings → Email"), "{hint}")
+                assert!(hint.contains("Settings → Cores → Email Hosting"), "{hint}")
             }
             other => panic!("expected NotReady, got {other:?}"),
         }

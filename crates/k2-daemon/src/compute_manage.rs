@@ -125,7 +125,7 @@ pub fn owner_notice(m: &Manager, verb: &str, node: &str) {
     let title = format!("Agent {} {verb} compute node {node}", m.handle);
     let undo = format!("k2 compute node remove {node}");
     let text = format!(
-        "{title}.\n\nIt acted under \"Allow managing compute nodes\" (Settings → Workspaces → {} → Agent), session {}.\n\
+        "{title}.\n\nIt acted under \"Let this agent manage compute nodes\" (Settings → Workspaces / Agents → {} → Permissions → Compute), session {}.\n\
          Every act is in Settings → Logs → Access Audit. To undo, from a terminal outside K2: {undo}\n\
          To stop it: turn the switch off, or k2 compute manage off --workspace {}",
         m.handle, m.session_id, m.handle

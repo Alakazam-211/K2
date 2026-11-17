@@ -96,8 +96,9 @@ DNS (K2 Connect zones — toggle-gated)
   dns record add <domain> <type> <name> <value> [--ttl N] [--priority N]
   dns record remove <record-id>         Delete a user-managed record
   dns verify <domain>                   Delegation check
-    enable: Settings → K2 Connect (Allow agents to manage DNS records)
-            or Workspaces → (workspace) → Allow DNS manage  (exit 3 if off)
+    enable: Settings → Network → Tunnel → Policies → "Agents can change DNS records",
+            or Settings → Workspaces / Agents → <workspace> → Permissions → DNS
+            → "Let this agent manage DNS"  (exit 3 if off)
     not for: nested *.k2.dev labels (use publish) · tunnel (use tunnel) · mail MX (hostmail)
 
 PROJECTS

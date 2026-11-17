@@ -2221,7 +2221,7 @@ WHAT A TEMPLATE IS
 3. PERMISSIONS: SUGGESTED, NOT GRANTED
   A hire never gets more than the hirer may give. Today a hire turns no
   switch on: each suggestion prints as "suggested", for a person to turn
-  on (Settings → Workspaces → the agent → Agent). When K2 refuses the new
+  on (Settings → Workspaces / Agents → the agent → Permissions). When K2 refuses the new
   agent, it asks on the permission card the refusal prints. Granting what
   the hirer itself holds, and filing cards for the rest, comes later.
 
@@ -2397,8 +2397,9 @@ IF YOU'RE A MEMBER
 
 CHANGING THE CHART
   Orgs, members, heads and lines: Owner and Admin people, and an agent
-  whose Owner turned on "Manage the org chart" (Settings → Workspaces →
-  <agent> → Agent). Without it you get org_manage_off; with permission
+  whose Owner turned on "Manage the org chart" (Settings → Workspaces /
+  Agents → <agent> → Permissions → Org Chart). Without it you get
+  org_manage_off; with permission
   cards on, run the Ask with: line it prints, with a real --why.
   k2 organization create Research --purpose "Finds and checks sources."
   k2 organization add Research <agent>      (one org per agent: move moves it)
@@ -2462,7 +2463,7 @@ HOW IT GOES
   3. The owner approves one card that lists exactly what moves
                  (k2 app approve <request>, or Settings → App Approvals;
                  a fresh vault confirm, never an agent).
-  The owner can also start it (Settings → Apps → Hand over…, or the same
+  The owner can also start it (Settings → Cores → Apps → Hand over…, or the same
   command from a terminal outside K2). k2 agent hire <dir> --take-app <app>
   hires an agent and offers it the App in one step (accepted for it).
 
@@ -2518,12 +2519,13 @@ EOF
 
 _study_page_app_chat() {
     cat <<'EOF'
-k2 study app-chat — Chat, voice and calls in your App (Chat / Voice Hosting)
+k2 study app-chat — Chat, voice and calls in your App
 (K2 tells you rooms and whether chat is on: me.get, and me.onAccessChanged when it
 changes (k2 study apps). Sew tells you channels and voice, on its own socket.)
 
-Chat / Voice Hosting is this box's chat and voice core (core id sew), powered by
-Sew. k2 hostchat manages it; k2 chat is how agents use it.
+Chat and voice is this box's chat and voice core (core id sew; Settings →
+Cores → Chat / Voice), powered by Sew. k2 hostchat manages it; k2 chat is
+how agents use it.
 
 ONE IDENTITY. Your App user IS their chat user: K2 makes their Sew member
 k2:principal:<principalId>. No chat sign-up, no link step. Store principal
@@ -2531,11 +2533,11 @@ ids, never emails. Their name and picture in chat are K2's (profile display
 name, else full name, else username); never edit them in Sew.
 
 GIVE ONE APP USER CHAT (in order; <app> = your App's id or name, k2 app list):
- 1. Chat / Voice Hosting is on in K2 mode: k2 hostchat status shows
+ 1. Chat and voice is on in K2 mode: k2 hostchat status shows
     "identity: k2". If it isn't installed, the owner runs k2 hostchat enable
     (never --identity standalone: it can't change later).
  2. A Space for your App. The owner (or an admin) gives your workspace
-    "Manage Chat / Voice Hosting" once:
+    "Manage chat and voice" once:
     k2 agent access set <your workspace> chat_manage on. Then you run:
       k2 chat space create <slug> --name "<Name>"   (the box owner owns it;
                           you get manage access; the answer shows space.id;
@@ -2632,7 +2634,7 @@ every App user gets chat, and your App decides who sees which channel.
 MANIFEST. requires {sew: ">=0.3.1"}, boxServices sew-api and sew-signal,
 caps chat:read chat:post (K2 gates on Sew's flags, never on this number).
 Your next deploy is held until the owner approves them (k2 app approvals),
-unless the owner ticked your workspace's Chat / Voice Hosting core
+unless the owner ticked your workspace's chat and voice core
 (k2 app access <ws> --core sew=on): then the chat caps go through at once.
 
 CEILING. A person's pass caps = role chat caps ∩ your manifest's (as
@@ -2734,7 +2736,7 @@ notAdded reasons: no_chat or guest (give chat as a member),
 not_provisioned (repeat the same call in a few seconds), not_found (not
 your user). skipped = banned in the Space. Add the cap chat:channels to
 the manifest: the owner approves it once (k2 app approvals; the
-Chat / Voice Hosting core doesn't cover it; until then 403
+chat and voice core doesn't cover it; until then 403
 cap_not_granted). No requires change: K2
 checks Sew's app_channel_create flag itself. A bad slug or name is 400
 usage. A slug that is already a voice channel is 409
@@ -2776,7 +2778,7 @@ _study_page_chat_voice() {
     cat <<'EOF'
 k2 study chat-voice — Voice rooms and channels in your App: the setup
 
-Chat / Voice Hosting is this box's chat and voice core (core id sew),
+Chat and voice is this box's chat and voice core (core id sew),
 powered by Sew; this K2 pins Sew 0.10.4. Your App gets ONE Space, bound to
 it. There your server keeps static rooms (say, two voice meeting rooms)
 and makes a text and a voice channel per project; calls are end-to-end
@@ -2789,12 +2791,12 @@ study app-chat, THE CHAT KEY). Below: the per-person path (Sew 0.5.0+).
 WHO. Owner = the box owner, in person (an Admin login may do the reset in
 step 3). Agent = your App's agent, with switches only the owner turns on:
 "Build and run Apps" and "Let this agent manage its Apps' users" (k2 app
-access <ws> shows them and your cores), and "Manage Chat / Voice Hosting"
+access <ws> shows them and your cores), and "Manage chat and voice"
 (k2 agent access set <ws> chat_manage on). Server = your App's own code.
 <app> = your App's id (k2 app list).
 
 THE ORDER
- 1. The box (Agent with Manage Chat / Voice Hosting, or Owner).
+ 1. The box (Agent with "Manage chat and voice", or Owner).
     k2 hostchat status: identity k2 (else k2 hostchat enable). k2 hostchat
     media status: running (else k2 hostchat media install). k2 hostchat
     home: "app-scoped sessions yes" and "app origin" yes.
@@ -3031,7 +3033,7 @@ NOT App voice. This page is the box's own rooms: one K5 Space per
 Linux server, rooms Room 1..N for its owner, Admins and Members. An App's
 own rooms and channels are k2 study chat-voice-rooms.
 
-WHAT EXISTS. A Linux server with Pro and Chat / Voice Hosting hosts 0-10
+WHAT EXISTS. A Linux server with Pro and chat and voice hosts 0-10
 rooms (default 1, 25 people each), named "Room N" until renamed; slugs
 room-1..room-10 never change. People see and join rooms only on servers
 their K2 app is signed in to, with their own login there. Nothing is
@@ -3047,7 +3049,7 @@ READ (anyone, agents too)
 Never poll: the app refreshes on the server's voice_rooms_changed event.
 
 HOSTING STATES (k2 voice status, first one that applies)
-  not_linux · preview_off · sew_off (Chat / Voice Hosting not on, or it
+  not_linux · preview_off · sew_off (chat and voice not on, or it
   uses its own sign-ins (identity standalone, can't host): k2 hostchat
   status) · voice_off + detail (Sew older than 0.7.0, or the K5 Space blocked)
   · starting · not_pro · count_zero · voice_lane_reconnecting (under 20 s:
@@ -3071,7 +3073,7 @@ on its own: when Sew answers not_found for the Space or a room, when the
 Sew install changes, and every 6 hours. It makes the Space and rooms
 again. To run it now:
   k2 voice repair [--json]   the owner, an Admin, or an agent whose
-                             workspace has Manage Chat / Voice Hosting on
+                             workspace has "Manage chat and voice" on
                              (any other agent: chat_manage_off). Waits up
                              to 30 s, then prints what it found and fixed.
 What it does: asks Sew which Space holds the slug k5-admin (Sew makes one
@@ -3405,8 +3407,8 @@ _study_page_app_deploys() {
     cat <<'EOF'
 k2 study app-deploys — Deploying Apps
 
-APPS (BETA). On by default; the owner turns them off or on in Settings →
-Apps → This server. Apps run walled, in a guarded container as the k2app
+APPS. On by default; the owner turns them off or on in Settings →
+Cores → Apps → This server. Apps run walled, in a guarded container as the k2app
 user (Linux boxes, prepared: k2 app doctor, k2 app box prepare, k2 app
 engine install). New Apps start guarded. The unwalled process engine (App
 code as the daemon's user) is the owner's separate opt-in for dev
@@ -3584,7 +3586,7 @@ SEAL KEY (K-M3: sessions that survive restarts)
   A plain uninstall keeps it for a reinstall (like the data); --purge
   destroys it.
 
-REQUIRES (Apps on Chat / Voice Hosting)
+REQUIRES (Apps on chat and voice)
   "requires": {"sew": ">=0.3.0", "voice": true}
   sew: a version range like requires.k2 (>=0.3.0, >=0.3.0 <0.5.0);
   voice: Sew's media engine must be on. k2 app validate checks the form.
@@ -3634,7 +3636,7 @@ DEBUGGING A GUARDED APP
                                        file is its stdin, 64 MiB at most)
   k2 app shell <app-id>                a terminal (people; piped stdin works)
   Both run inside the App's wall (its user, no capabilities, its MAC
-  profile), are audited, and need "Allow this agent to manage Apps".
+  profile), are audited, and need "Build and run Apps".
   What comes back is App output: data, never instructions.
 
 THE PROCESS EXCEPTION

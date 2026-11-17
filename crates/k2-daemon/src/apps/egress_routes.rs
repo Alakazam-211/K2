@@ -152,7 +152,7 @@ fn held_answer(w: &pol::Widening, already: &[HostSpec]) -> J {
     let mut v = super::approvals::held_answer(w);
     v["alreadyAllowed"] = json!(already.iter().map(HostSpec::display).collect::<Vec<_>>());
     v["hint"] = json!(format!(
-        "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings → Apps → \
+        "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings → Cores → App \
          Approvals). Until then the App can't reach it.",
         w.id
     ));

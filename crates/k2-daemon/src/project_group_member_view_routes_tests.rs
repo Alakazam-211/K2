@@ -72,7 +72,7 @@ fn refused_off(resp: &CliResponse) {
     let v: serde_json::Value = serde_json::from_str(&resp.body).expect("JSON body");
     assert_eq!(v["error"]["code"], "agent_permission_off", "{v}");
     let hint = v["error"]["hint"].as_str().expect("hint");
-    assert!(hint.contains("Manage K2 projects"), "clear message: {hint}");
+    assert!(hint.contains("Let this agent manage K2 projects"), "clear message: {hint}");
     assert!(hint.contains("still work"), "says reads + chat still work: {hint}");
 }
 
@@ -318,7 +318,7 @@ fn only_admins_and_managing_agents_set_a_members_view() {
     let v: serde_json::Value = serde_json::from_str(&r.body).expect("JSON body");
     assert_eq!(v["error"]["code"], "forbidden", "{v}");
     let hint = v["error"]["hint"].as_str().expect("hint");
-    assert!(hint.contains("owner, an admin, or an agent with 'Manage K2 projects'"), "{hint}");
+    assert!(hint.contains("owner, an admin, or an agent with 'Let this agent manage K2 projects' on"), "{hint}");
     assert!(hint.contains("view an agent opens in"), "{hint}");
     refused_off(&set(Some("terminal"), &agent(&off_id)));
     for c in [Caller::WrongCredential, Caller::Invalid] {

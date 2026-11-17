@@ -220,7 +220,7 @@ pub fn start(p: &Principal, body: &Value, req: &Req<'_>, id: &str) -> CliRespons
             return refuse(
                 409,
                 "agent_desktop_off",
-                format!("{name} isn't allowed a virtual desktop: a person turns on \"Allow a virtual desktop\" in Settings → Workspaces → {name} → Agent."),
+                format!("{name} isn't allowed a virtual desktop: a person turns on \"Allow a virtual desktop\" in Settings → Workspaces / Agents → {name} → Permissions → Desktop."),
             );
         }
     }

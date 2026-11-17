@@ -871,7 +871,7 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
 
 /// The refusal an agent gets when its workspace's "Let this agent hire
 /// agents" is off (`hire_off`; the walls map teaches `agents.hire`).
-pub(crate) const HIRE_OFF_HINT: &str = "Ask your human to turn on 'Let this agent hire agents' in Settings → Workspaces / Agents → {ws} → Agent (or run k2 agent access set {ws} agents_hire on as the owner). Opening your own sidecars is a separate switch.";
+pub(crate) const HIRE_OFF_HINT: &str = "Ask your human to turn on 'Let this agent hire agents' in Settings → Workspaces / Agents → {ws} → Permissions (or run k2 agent access set {ws} agents_hire on as the owner). Opening your own sidecars is a separate switch.";
 
 /// "Let this agent hire agents" (0299, 0.46.12; prd-agent-templates-v1
 /// AT5): an agent's own `k2 agent hire` needs its workspace's switch, and

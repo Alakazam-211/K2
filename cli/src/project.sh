@@ -993,9 +993,10 @@ WHO MAY CHANGE PROJECTS
   Projects are open by default: any agent may create, rename and pin
   projects and add or remove members. Deleting a project (and its chat) and
   setting the view its agents open in (`view`) are for the owner, an admin,
-  or an agent with "Manage K2 projects" on: a Member login gets exit 1 with
-  code forbidden. Each workspace has that per-agent switch, "Manage K2
-  projects" (on by default; Settings → Workspaces → <ws> → Agent, or
+  or an agent with "Let this agent manage K2 projects" on: a Member login gets
+  exit 1 with code forbidden. Each workspace has that per-agent switch, "Let
+  this agent manage K2 projects" (on by default; Settings → Workspaces /
+  Agents → <ws> → Permissions → Projects and Gardens, or
   `k2 project access`). Off: that agent gets exit 1 with code
   agent_permission_off on every change, but `list`, `show`, `read` and `msg`
   still work. Only the owner or an admin can flip it; an agent never can.
@@ -1041,7 +1042,7 @@ EOF
 
 cmd_help_project_access() {
     cat <<'EOF'
-Turn a workspace agent's "Manage K2 projects" switch on or off. Projects are
+Turn a workspace agent's "Let this agent manage K2 projects" switch on or off. Projects are
 open by default (the switch starts ON). Off: that workspace's agent can't
 create, rename or delete projects or change their members or settings
 (code agent_permission_off); it can still list, show and read projects and
@@ -1049,7 +1050,7 @@ post in its project chat. You (the owner) and people are never limited.
 
 Owner or admin only. Inside a K2 terminal this sends the session passport,
 which the daemon refuses: an agent can never flip its own switch. Run it from
-a terminal outside K2, or use Settings → Workspaces → <ws> → Agent.
+a terminal outside K2, or use Settings → Workspaces / Agents → <ws> → Permissions.
 
 USAGE
   k2 project access on|off [--workspace <ws>] [--json]
@@ -1080,7 +1081,7 @@ cmd_help_project_delete() {
     cat <<'EOF'
 Delete a project: its member list, dashboards and its whole chat. The agents
 and their folders are never touched. Only the owner, an admin, or an agent
-with "Manage K2 projects" on can delete a project; a Member login is refused
+with "Let this agent manage K2 projects" on can delete a project; a Member login is refused
 (exit 1, code forbidden), and an agent with the switch off gets
 agent_permission_off.
 
@@ -1130,8 +1131,8 @@ Anyone may read it; no permission is needed. After a set it prints:
   ada in sales now opens in: chatter
   ada in sales now follows the project's view: thread
 
-Setting it is for the owner, an admin, or an agent with "Manage K2
-projects" on (on by default), for the project's view and one agent's alike.
+Setting it is for the owner, an admin, or an agent with "Let this agent
+manage K2 projects" on (on by default), for the project's view and one agent's alike.
 A Member login gets exit 1 with code forbidden; an agent with the switch
 off gets exit 1 with code agent_permission_off.
 

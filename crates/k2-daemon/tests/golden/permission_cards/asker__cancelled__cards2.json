@@ -1,5 +1,5 @@
 {
-  "body": "billing asks: Let billing run jobs on this server's compute nodes (Allow compute nodes).",
+  "body": "billing asks: Let billing run jobs on this server's compute nodes (Let this agent use compute nodes).",
   "choice": {
     "action": {
       "dedupe": "compute.use:44136fa3",
@@ -48,8 +48,8 @@
         },
         "requestId": "pr_7f3a2c",
         "scope": "billing",
-        "setting": "Allow compute nodes",
-        "settingsPage": "workspaces/billing/agent",
+        "setting": "Let this agent use compute nodes",
+        "settingsPage": "workspaces/billing/permissions",
         "state": "cancelled",
         "undo": null,
         "v": 1,
@@ -79,7 +79,7 @@
     "closedAs": "withdrawn",
     "expiresAt": 1761319200,
     "options": [],
-    "prompt": "billing asks: Let billing run jobs on this server's compute nodes (Allow compute nodes).",
+    "prompt": "billing asks: Let billing run jobs on this server's compute nodes (Let this agent use compute nodes).",
     "status": "voided"
   },
   "created_at": 1761060000,

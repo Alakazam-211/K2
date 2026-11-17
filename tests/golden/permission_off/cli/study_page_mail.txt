@@ -255,13 +255,14 @@ FORWARDING (`k2 hostmail forward`)
            says which of the two a pending_verify forward is.
   People   the owner links a mailbox to its person's box login
            (`k2 hostmail person link <addr> <login>`); that person then
-           uses `k2 mail forward` or Settings → Email Hosting. An agent
+           uses `k2 mail forward` or Settings → Cores → Email Hosting. An agent
            running `k2 mail forward` gets exit 3 person_only.
   Never claim mail was forwarded before `show` says state=active.
 
 HOSTMAIL TOGGLE
-  Default off. Owner/Admin: Settings → Workspaces → (this
-  workspace) → Allow agents to manage hosted mail on this host.
+  Default off. Owner/Admin: Settings → Workspaces / Agents → (this
+  workspace) → Permissions → Hosted mail → "Let this agent manage
+  hosted mail".
   Opens enable/disable + domain list/add/check, access grant, doctor,
   approvals, and config/set for that workspace's agent. Uninstall,
   domain remove, OAuth/link, and the toggle writer stay owner.

@@ -69,8 +69,8 @@ pub(crate) fn users_off(what: &str) -> Refusal {
         crate::skin_routes::APP_USERS_OFF,
         403,
         format!(
-            "{what} needs \"{SWITCH_NAME}\" for this agent (off): ask your owner to turn it on (Settings → Workspaces → \
-             <this agent> → Agent → Apps, or k2 app access <ws> --users on from a terminal outside K2)"
+            "{what} needs \"{SWITCH_NAME}\" for this agent (off): ask your owner to turn it on (Settings → Workspaces / Agents → \
+             <this agent> → Permissions → Apps, or k2 app access <ws> --users on from a terminal outside K2)"
         ),
     )
 }
@@ -227,7 +227,7 @@ pub(crate) fn hold(step: Step<'_>, switch_hint: bool) -> R<J> {
          you get a k2 msg when it's decided.{}",
         r.id,
         if switch_hint {
-            format!(" With \"{SWITCH_NAME}\" on for this agent you do this yourself (Settings → Workspaces → <this agent> → Agent → Apps); the card's Always allow turns it on.")
+            format!(" With \"{SWITCH_NAME}\" on for this agent you do this yourself (Settings → Workspaces / Agents → <this agent> → Permissions → Apps); the card's Always allow turns it on.")
         } else {
             String::new()
         }

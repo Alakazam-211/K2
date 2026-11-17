@@ -26,7 +26,7 @@
 //! GET  /cli/voice/recording/controls?room= the person's Sew permissions in a room
 //!                                          (RECORD_CALLS, MANAGE_CHANNELS), for the buttons
 //! POST /cli/voice/repair {}                check the K5 Space with Sew and repair it
-//!                                          (owner/Admin, or an agent with Manage Chat / Voice Hosting)
+//!                                          (owner/Admin, or an agent with Manage chat and voice)
 //! ```
 //!
 //! Every route answers 404 `voice_rooms_off` while the preview is off (the
@@ -41,7 +41,7 @@
 //! | Owner/Admin login | ✓ | ✓ | ✓ | ✓ | ✓ (own Sew session) |
 //! | Member login | ✓ | route floor | route floor | ✓ | `moderator_only` |
 //! | agent or K2 terminal passport | ✓ | ✓ (read) | `owner_or_admin_only` | `agents_not_in_voice` | `agents_cannot_moderate` |
-//! | ...whose workspace has Manage Chat / Voice Hosting | as above, and `repair` | | | | |
+//! | ...whose workspace has Manage chat and voice | as above, and `repair` | | | | |
 //! | App pass, API key | `app_pass_not_allowed` | … | … | … | … |
 //! | an ended phone pairing | `device_session_ended` (403) on every route | | | | |
 //!
@@ -261,7 +261,7 @@ pub enum Caller {
     Login { username: String, role: Role, token: String },
     /// An agent's or a K2 terminal's passport.
     Passport,
-    /// A passport whose workspace has "Manage Chat / Voice Hosting"
+    /// A passport whose workspace has "Manage chat and voice"
     /// (`chat_manage`) on: a [`Caller::Passport`] that may also run
     /// `repair` (the box's chat server upkeep is that switch's).
     ChatManager,
@@ -1104,7 +1104,7 @@ fn repair(c: &Caller) -> CliResponse {
             return no(
                 403,
                 "chat_manage_off",
-                "k2 voice repair is the owner's, an Admin's, or an agent's whose workspace has \"Manage Chat / Voice Hosting\" on \
+                "k2 voice repair is the owner's, an Admin's, or an agent's whose workspace has \"Manage chat and voice\" on \
                  (the owner or an Admin runs k2 agent access set <workspace> chat_manage on). Ask your human in your Thread.",
             )
         }

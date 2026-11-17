@@ -638,7 +638,7 @@ fn an_iphone_on_a_mac_node_needs_control_or_an_agent_with_compute() {
     let r = post(BOOT, agent(&ws), json!({ "platform": "ios", "noTab": true }));
     assert_eq!((r.status, code(&r).as_str()), ("403 Forbidden", "compute_off"), "{}", r.body);
     assert_eq!(body(&r)["exit"], json!(3));
-    assert!(body(&r)["message"].as_str().expect("message").contains("Allow compute nodes"), "{}", r.body);
+    assert!(body(&r)["message"].as_str().expect("message").contains("Let this agent use compute nodes"), "{}", r.body);
     assert!(dir.node.sessions().is_empty());
 
     // Both on: it boots on the node.

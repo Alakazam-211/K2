@@ -623,7 +623,7 @@ pub(crate) fn after_receive(
             delivery: Some(rec.item.landing_delivery().0.as_str().to_string()),
             ceiling: Some(rec.item.landing_delivery().1.as_str().to_string()),
         };
-        let body = format!("{from_label} sent {name}. Accept or decline it here, or in Settings → Vault → Incoming.");
+        let body = format!("{from_label} sent {name}. Accept or decline it here, or in Settings → Access → Vault → Incoming.");
         match crate::overlay_routes::post_handoff_card(target_path, from_label, &body, card) {
             Ok(card_ref) => {
                 if let Err(e) = vault.handoff_set_card(&rec.delivery_id, &card_ref) {

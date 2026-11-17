@@ -50,7 +50,7 @@ pub const KEPT: &[&str] = &[
     "K2's Podman in /opt/k2/podman (k2 app box podman uninstall removes it)",
 ];
 
-const NOTE: &str = "Automatic box prep is paused until you press Retry (Settings → Apps → This server, or k2 app box auto-prepare retry). \
+const NOTE: &str = "Automatic box prep is paused until you press Retry (Settings → Cores → Apps → This server, or k2 app box auto-prepare retry). \
                     K2's Podman stays: k2 app box podman uninstall removes it.";
 
 /// The box as unprep sees it (tests drive a fake).
@@ -93,7 +93,7 @@ pub(crate) fn route_with(ops: &dyn UnprepOps, who: &Who, body: &J) -> R<J> {
         return Err(no(
             "owner_only",
             403,
-            "undoing the box setup is the owner's: Settings → Apps → This server → Undo box setup, or k2 app box unprep from a terminal outside K2",
+            "undoing the box setup is the owner's: Settings → Cores → Apps → This server → Undo the setup, or k2 app box unprep from a terminal outside K2",
         ));
     }
     let dry = flag(body, "dryRun")?;

@@ -127,7 +127,7 @@ async fn the_held_send_teaches_the_card_only_while_both_switches_are_on() {
         assert!(v.get("permission").is_none(), "{why}: {v}");
         let hint = v["error"]["hint"].as_str().unwrap();
         assert!(hint.contains("Ask your person (an Owner or Admin)"), "{why}: {hint}");
-        assert!(hint.contains("Settings → Workspaces → sendagent → Permissions → Secrets it may send to other servers"), "{why}: {hint}");
+        assert!(hint.contains("Settings → Workspaces / Agents → sendagent → Permissions → Secrets it may send to other servers"), "{why}: {hint}");
         assert!(hint.contains("k2 vault send FLEET_DATABASE --scope ws:sendagent --to argus::stubbox"), "{why}: {hint}");
     };
     let r = post(port, SEND, &agent, body.clone()).await;

@@ -258,10 +258,10 @@ pub fn run_once(ops: &dyn Ops) -> Outcome {
         return skip("not_linux", "walled Apps run on Linux boxes only");
     }
     if !ops.apps_on() {
-        return skip("apps_off", "Apps (beta) are off on this server");
+        return skip("apps_off", "Apps are off on this server");
     }
     if !ops.enabled() {
-        return skip("setting_off", "the owner's \"Prepare this box automatically\" (appsAutoPrepare) is off");
+        return skip("setting_off", "the owner's \"Keep this server set up\" (appsAutoPrepare) is off");
     }
     if ops.undone() {
         return blocked(
@@ -273,7 +273,7 @@ pub fn run_once(ops: &dyn Ops) -> Outcome {
         None => {
             return skip(
                 "no_helper",
-                "K2's root helper isn't installed: the owner installs it once (Settings → K2 Server), or prepares the box by hand",
+                "K2's root helper isn't installed: the owner installs it once (Settings → Cores → Apps → This server → Set up this server), or prepares the box by hand",
             )
         }
         Some(p) if p < MIN_PROTOCOL => {
@@ -368,9 +368,9 @@ fn steps(ops: &dyn Ops, prepare: bool, engine: bool) -> Outcome {
         ops.note_owner(
             "K2 prepared this server for Apps",
             &format!(
-                "\"Prepare this box automatically\" is on, so after the update K2 set this server up for walled Apps through its \
+                "\"Keep this server set up\" is on, so after the update K2 set this server up for walled Apps through its \
                  root helper:\n\n- {}\n\nUndo: k2 app box podman uninstall (K2's Podman) and k2 app box unprep (the rest: Settings → \
-                 Apps → This server → Undo box setup). Turn automatic prep off in Settings → Apps → This server (appsAutoPrepare).",
+                 Cores → Apps → This server → Undo the setup). Turn automatic prep off in Settings → Cores → Apps → This server (\"Keep this server set up\").",
                 changed.join("\n- ")
             ),
         );

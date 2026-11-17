@@ -279,7 +279,7 @@ async fn an_agent_asks_for_its_own_compute_access_and_only_that_turns_on() {
         v["consequences"].as_str().is_some_and(|t| t.contains("every machine switched on here")),
         "the card says it covers every machine: {v}"
     );
-    assert_eq!(v["setting"], "Allow compute nodes", "{v}");
+    assert_eq!(v["setting"], "Let this agent use compute nodes", "{v}");
     assert_eq!(v["approvers"], "owner or admin", "{v}");
     assert!(!v.to_string().contains('\u{2014}'), "no em dashes on the card: {v}");
 

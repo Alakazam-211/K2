@@ -975,7 +975,7 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
             return refusal(
                 "409 Conflict",
                 "front_door_unsafe",
-                &format!("{why}. Fix the front door (Settings → K2 Server → Domains), or use --code and give the person the code yourself"),
+                &format!("{why}. Fix the front door (Settings → Network → Custom Domains), or use --code and give the person the code yourself"),
             )
         }
     };

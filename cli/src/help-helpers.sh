@@ -169,9 +169,9 @@ AGENT GATE (create / remove)
   Adding and removing connections is OFF by default for agents.
   When gated, both `add` and `remove` exit 3 with:
     {"error":{"code":"agents_create_connections_disabled","hint":"…"}}
-  Owner can enable: Settings → K2 Connect → Allow agents to create
-  connections (or Workspaces → (workspace) → Allow agents to create
-  connections). `list` is always allowed.
+  Owner can turn on: Settings → Network → Tunnel → Policies → "Agents can add connections"
+  (or Settings → Workspaces / Agents → <workspace> → Connections → "Let this agent add
+  connections"). `list` is always allowed.
 
 MSG / READ PEER GATE
   Live `k2 msg`, tray `k2 msg --inbox-wake|--inbox-silent`, and `k2 read` require a local

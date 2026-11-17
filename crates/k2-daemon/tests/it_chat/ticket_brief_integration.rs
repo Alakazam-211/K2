@@ -862,10 +862,10 @@ fn teaching_sites_teach_the_brief() {
         assert!(body.contains("required in a future update"), "{name}");
         assert!(body.contains("k2 connections list --users"), "{name}");
     }
-    assert_eq!(version::SKILL_VERSION_MANAGER, 15);
-    assert_eq!(version::SKILL_VERSION_K2_AGENT, 15);
-    assert_eq!(version::SKILL_VERSION_CUSTOM_AGENT, 15);
-    assert_eq!(version::SKILL_VERSION_WORKSPACE, 61);
+    assert_eq!(version::SKILL_VERSION_MANAGER, 16);
+    assert_eq!(version::SKILL_VERSION_K2_AGENT, 16);
+    assert_eq!(version::SKILL_VERSION_CUSTOM_AGENT, 16);
+    assert_eq!(version::SKILL_VERSION_WORKSPACE, 62);
 
     // The loadable k2-cli skill the compose path writes into a workspace
     // (temp HOME so nothing lands in the real one).

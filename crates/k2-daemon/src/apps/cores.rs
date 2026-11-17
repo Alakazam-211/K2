@@ -62,7 +62,7 @@ pub fn label(core: &str) -> &'static str {
         "files" => "Files and rooms",
         "thread" => "Thread",
         "mail" => "Mail",
-        "sew" => "Chat / Voice Hosting",
+        "sew" => "Chat and voice",
         _ => "?",
     }
 }
@@ -167,8 +167,8 @@ pub fn hold_detail(app_ws: &str, add: &[String]) -> (Vec<String>, J) {
         let names: Vec<&str> = n.cores.iter().map(|c| core_name(c)).collect();
         let flags: Vec<String> = n.cores.iter().map(|c| format!("{c}=on")).collect();
         reasons.push(format!(
-            "tick {} for {handle} to let its Apps use {} without asking (the owner: Settings → Workspaces → {handle} → \
-             Agent → Apps, or k2 app access {handle} --core {} from a terminal outside K2)",
+            "tick {} for {handle} to let its Apps use {} without asking (the owner: Settings → Workspaces / Agents → {handle} → \
+             Permissions → Apps, or k2 app access {handle} --core {} from a terminal outside K2)",
             names.join(" and "),
             if n.cores.len() == 1 { "it" } else { "them" },
             flags.join(","),
@@ -244,8 +244,8 @@ pub(crate) fn set_cores(ws_id: &str, changes: &[(String, bool)], caller_is_owner
         return Err(no(
             deploy::codes::OWNER_ONLY,
             403,
-            "only the server's owner ticks an App core for an agent (an Admin may untick one): Settings → Workspaces → \
-             <agent> → Agent → Apps, or k2 app access <ws> --core <core>=on from a terminal outside K2",
+            "only the server's owner ticks an App core for an agent (an Admin may untick one): Settings → Workspaces / Agents → \
+             <agent> → Permissions → Apps, or k2 app access <ws> --core <core>=on from a terminal outside K2",
         ));
     }
     let handle = ws_handle(&ws.id);

@@ -80,7 +80,7 @@ assert_contains "help: on-behalf" "$out" "on-behalf approve <act_…|msg_…>"
 assert_contains "help: restart" "$out" "k2 hostchat restart [--json]"
 assert_contains "help: reconfigure" "$out" "k2 hostchat reconfigure [--json]"
 assert_contains "help: agents alias" "$out" "alias of k2 chat access"
-assert_contains "help: home client is the owner's" "$out" "never an admin or an agent, even with Manage Chat / Voice Hosting"
+assert_contains "help: home client is the owner's" "$out" "never an admin or an agent, even with \"Manage chat and voice\""
 # Rosson 2026-10-30: the recovery key lives in the vault; nobody copies it.
 # 0.46.8 (voice rooms PRD v1.9 §2.7): renamed to sew-launch-key.
 assert_contains "help: launch key in the vault" "$out" "sew-launch-key, so you don't need to copy it"

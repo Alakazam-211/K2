@@ -1257,7 +1257,7 @@ fn linked_send_is_gated_off_like_hosted() {
     assert_eq!(v["error"]["code"], "gated");
     let hint = v["error"]["hint"].as_str().unwrap();
     assert!(hint.contains("`k2 mail sending <workspace> on`"), "{hint}");
-    assert!(hint.contains("Workspaces / Agents → <workspace> → Email sending"), "{hint}");
+    assert!(hint.contains("Workspaces / Agents → <workspace> → Permissions → Email sending"), "{hint}");
     assert_eq!(outbound_count(&project_id), 0, "off mode never audits linked");
     cleanup_linked(&project_id);
 }

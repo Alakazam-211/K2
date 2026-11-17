@@ -207,7 +207,7 @@ fn owner_only(act: VersionsAct) -> Refusal {
         OWNER_ONLY,
         403,
         format!(
-            "only the server's owner may run `{}` (from a terminal outside K2, or Settings → Data)",
+            "only the server's owner may run `{}` (from a terminal outside K2, or Settings → Cores → Database)",
             act.as_str()
         ),
     )
@@ -249,8 +249,8 @@ pub fn decide(
                 return Err(no(
                     SWITCH_OFF,
                     403,
-                    "\"Allow this agent to manage Postgres versions\" is off for this agent: the owner turns it on in \
-                     Settings → Workspaces → <agent> → Agent",
+                    "\"Let this agent manage Postgres versions\" is off for this agent: the owner turns it on in \
+                     Settings → Workspaces / Agents → <agent> → Permissions → Database",
                 ));
             }
             if act.unscoped() {
@@ -298,8 +298,8 @@ pub fn set_switch(ws_id: &str, value: bool, caller_is_owner: bool, by: &str) -> 
         return Err(no(
             OWNER_ONLY,
             403,
-            "only the server's owner turns \"Allow this agent to manage Postgres versions\" on (an Admin may turn it off): \
-             Settings → Workspaces → <agent> → Agent, or k2 db versions-access on --workspace <ws> from a terminal outside K2",
+            "only the server's owner turns \"Let this agent manage Postgres versions\" on (an Admin may turn it off): \
+             Settings → Workspaces / Agents → <agent> → Permissions → Database, or k2 db versions-access on --workspace <ws> from a terminal outside K2",
         ));
     }
     if value != before {
@@ -332,7 +332,7 @@ fn changed(path: &str, handle: &str, on: bool, by: &str) {
     let title = format!("Postgres versions: {state}");
     let text = if on {
         format!(
-            "\"Allow this agent to manage Postgres versions\" is on (by {by}).\n\n\
+            "\"Let this agent manage Postgres versions\" is on (by {by}).\n\n\
              You may check, move and roll back your own databases and your Apps' databases to a newer Postgres \
              (k2 db upgrade <db> --check, then k2 db upgrade <db>), create a database on a chosen version \
              (k2 db create --major <M>) and tidy empty clusters (k2 db clusters tidy). Every act is in the Access \
@@ -341,7 +341,7 @@ fn changed(path: &str, handle: &str, on: bool, by: &str) {
         )
     } else {
         format!(
-            "\"Allow this agent to manage Postgres versions\" is off (by {by}).\n\n\
+            "\"Let this agent manage Postgres versions\" is off (by {by}).\n\n\
              Moves, rollbacks and create --major now need the owner. Your databases keep the version they are on."
         )
     };

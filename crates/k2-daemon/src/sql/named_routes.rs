@@ -81,7 +81,7 @@ fn gate(who: &Who, act: VersionsAct, project: &str) -> Result<(), CliResponse> {
         return Err(err(
             "403 Forbidden",
             versions_access::OWNER_ONLY,
-            "named Postgres clusters are the owner's, or an agent's with \"Allow this agent to manage Postgres versions\" for its own workspace",
+            "named Postgres clusters are the owner's, or an agent's with \"Let this agent manage Postgres versions\" for its own workspace",
         ));
     }
     let switch = match who {
@@ -134,7 +134,7 @@ pub fn handle(ops: &dyn SystemOps, who: Who, is_post: bool, body: &[u8], params:
         return err(
             "403 Forbidden",
             versions_access::OWNER_ONLY,
-            "named Postgres clusters are the owner's, or an agent's with \"Allow this agent to manage Postgres versions\" for its own workspace",
+            "named Postgres clusters are the owner's, or an agent's with \"Let this agent manage Postgres versions\" for its own workspace",
         );
     }
     let b: Body = match serde_json::from_slice(body) {

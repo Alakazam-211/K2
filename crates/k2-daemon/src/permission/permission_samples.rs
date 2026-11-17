@@ -142,8 +142,9 @@ fn set_behaviour(b: Behaviour) {
     BEHAVIOUR.with(|c| c.set(b));
 }
 
-const STANDARD_SETTINGS: SettingsRef = SettingsRef { page: "workspaces/{ws}/agent", path: "Settings → Workspaces → {ws} → Agent" };
-const APPROVALS: SettingsRef = SettingsRef { page: "app-approvals", path: "Settings → Apps → Approvals" };
+const STANDARD_SETTINGS: SettingsRef =
+    SettingsRef { page: "workspaces/{ws}/permissions", path: "Settings → Workspaces / Agents → {ws} → Permissions" };
+const APPROVALS: SettingsRef = SettingsRef { page: "app-approvals", path: "Settings → Cores → App Approvals" };
 
 const fn switch_words(setting: &'static str, what: &'static str, consequences: &'static str) -> Words {
     Words { setting, what_changes: what, consequences, scope: "{ws}", duration: "until someone turns it off", retry: "run your command again" }
@@ -172,7 +173,7 @@ static COMPUTE_USE: ActionSpec = switch(
     "compute.use",
     Floor::Admin,
     switch_words(
-        "Allow compute nodes",
+        "Let this agent use compute nodes",
         "Let {ws} run jobs on this server's compute nodes",
         "Every active machine; default limits; jobs see only the code {ws} sends.",
     ),

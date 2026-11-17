@@ -559,7 +559,7 @@ impl Manager {
                 format!("the {} lane isn't set up{detail}. The server's owner runs it again: Retry setup on the Mobile tab.", lane.kind())
             } else {
                 format!(
-                    "the {} lane needs a one-time setup by the server's owner before devices can boot{detail}. The owner sees a card (Settings → K2 Server → Mobile devices).",
+                    "the {} lane needs a one-time setup by the server's owner before devices can boot{detail}. The owner sees a card on the Thread.",
                     lane.kind(),
                 )
             };

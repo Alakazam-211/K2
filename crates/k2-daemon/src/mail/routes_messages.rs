@@ -1695,7 +1695,7 @@ mod tests {
         assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
         let v = body_json(&resp);
         assert_eq!(v["error"]["code"], "not_ready");
-        assert!(v["error"]["hint"].as_str().unwrap().contains("Settings → Email"), "{v}");
+        assert!(v["error"]["hint"].as_str().unwrap().contains("Settings → Cores → Email Hosting"), "{v}");
 
         cleanup_project(&project_id);
         cleanup_project(&project2);

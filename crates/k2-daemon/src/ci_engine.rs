@@ -323,7 +323,7 @@ pub fn poll(o: &dyn Ops, w: &ci::WorkspaceRow, now: i64) {
         let db = db();
         let conn = db.lock();
         if !k2_core::compute::store::agents_can_use_compute(&conn, &ws.id) {
-            ci::set_polled(&conn, &ws.id, now, Some("the workspace's \"Allow compute nodes\" switch is off; an agent's watch waits for it"));
+            ci::set_polled(&conn, &ws.id, now, Some("the workspace's \"Let this agent use compute nodes\" switch is off; an agent's watch waits for it"));
             return;
         }
     }

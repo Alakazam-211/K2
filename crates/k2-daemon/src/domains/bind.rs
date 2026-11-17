@@ -149,7 +149,7 @@ pub fn classify_bind_response(resp: &DnsHttpResponse) -> BindOutcome {
         401 => {
             return BindOutcome::Failed {
                 status: 401,
-                hint: "tunnel token rejected by DNS bind API — re-pair K2 Connect".into(),
+                hint: "tunnel token rejected by DNS bind API — sign in to your k2.dev account in Settings → Network → Tunnel again".into(),
             }
         }
         405 => return api_missing(&format!("HTTP 405{}", body_note(body))),

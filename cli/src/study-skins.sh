@@ -42,8 +42,9 @@ HOW TO MAKE ONE (copy this)
      Apps, or `k2 app user add` / `password` / `email`; leftover
      `k2 skin user …`).
      Email is optional. Guests log in; they never copy a key.
-     Platform tokens (BYO servers) are separate: `k2 app token
-     create --name vercel --agent sales` (leftover `k2 skin-token`).
+     Keys for other sites (BYO servers; Settings → Cores → Apps) are
+     separate: `k2 app token create --name vercel --agent sales`
+     (leftover `k2 skin-token`).
      Agents: exit 3. Do not sudo k2 — that is not an owner passport.
      Do not mint a key for this user.
   3. Browser logs in on THIS origin:
@@ -132,9 +133,9 @@ PER-APP LOGINS (0.45.5)
   people's sessions (k2 app user sessions <u> --app <app> --revoke-all); it sets
   the password of, names or removes only people its own agent added, and a box login's
   access is a card for the owner (k2 permission request apps.user-grant-box). #if-cards
-  access is the owner's: they give it (Settings → Apps → <the App> → Add a person, or k2 app grant #if-no-cards
+  access is the owner's: they give it (Settings → Cores → Apps → <the App> → Add a person, or k2 app grant #if-no-cards
   add from a terminal outside K2) or turn on permission cards (Settings → #if-no-cards
-  Permission Cards) so you can ask on a card. #if-no-cards
+  Access → Permission Cards) so you can ask on a card. #if-no-cards
   WAITS FOR THEIR OWN PASSWORD: a person an agent created, or whose password
   or email it set (or an App key made) is tied to that agent's workspace. If
   you give them more than that workspace's room (another App or room, a room on
@@ -365,14 +366,16 @@ PASSWORD RESET
       stay: true keeps this one ({ok, stayed:true}). Unused reset links go.
   Profiles, pictures and sessions: k2 study app-profile.
   Never put an owner or platform token in the browser.
-  OIDC issuer still this password file. RP/Google reset at the IdP.
+  Sign-in for other sites (the OIDC issuer) still uses this password
+  file. RP/Google reset at the IdP.
 
 TWO CREDENTIALS (same prefix k2skn_)
   Login session  = password → create_session_token on that guest.
                    Official --skin: browser JSON has no token; gateway holds it.
                    BYO BFF: step 4 JSON includes token; hold it on the server.
-  Platform token = `k2 app token create --name vercel --agent sales`
+  Site key       = `k2 app token create --name vercel --agent sales`
                    (leftover: `k2 skin-token create --name`).
+                   "Keys for other sites" in Settings → Cores → Apps.
                    User-agnostic site key. Not a guest. Secret shown once.
   Do not mint a copyable key per person.
 
@@ -382,7 +385,7 @@ ROLES (named bundles for guests — not Connect, not a platform token)
   k2 app role room dentist docs --caps thread:read,thread:post,files:read,tickets:read,tickets:post,wiki:read,store:read,store:write
   k2 app user role bob dentist
   Session inherits the role at login (and live sessions rewrite on
-  change). Platform token keeps its own caps+rooms — it is not a role.
+  change). A site key keeps its own caps+rooms — it is not a role.
   Empty rooms on a role = Thread dark, not omnipotent.
   files:*, tickets:*, wiki:read, store:read, and store:write on a role are has_cap_in_room (per room, not union).
   Never grid. Never a DSN.
@@ -694,8 +697,8 @@ OWNER VS AGENT
   List roster / list tokens: workspace agent always (no secrets).
   Toggle off does not hide the roster.
   Mutations (user add/password/remove/rooms, role create/update/remove/assign/unassign,
-  k2 app token create/rooms/revoke): if this workspace's Agent-tab toggle is on
-  (Settings → Workspaces → Agent → Allow this agent to manage Apps).
+  k2 app token create/rooms/revoke): if this workspace's "Build and run Apps" switch is on
+  (Settings → Workspaces / Agents → <agent> → Permissions → Apps).
   Leftover front-door / hydra: still owner, even when the toggle is on.
   Do not sudo. Exit 3 `owner_only` if the toggle is off — ask `k2 feedback ask`,
   do not retry.

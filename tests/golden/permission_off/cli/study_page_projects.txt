@@ -9,8 +9,9 @@ WHAT A PROJECT IS
   `k2 project --help` has every command.
 
 OPEN BY DEFAULT, WITH A PER-AGENT SWITCH
-  Every workspace has "Manage K2 projects" (Settings → Workspaces →
-  <ws> → Agent). It starts ON: your agent may create, rename and delete
+  Every workspace has "Let this agent manage K2 projects" (Settings →
+  Workspaces / Agents → <ws> → Permissions → Projects and Gardens). It
+  starts ON: your agent may create, rename and delete
   projects and add or remove members, its own or others'.
   Off: create, rename, delete, add, remove, poc, settings and setting a
   `view` fail with agent_permission_off (exit 1).
@@ -19,7 +20,7 @@ OPEN BY DEFAULT, WITH A PER-AGENT SWITCH
 
 WHO MAY FLIP IT
   Only the owner or an admin (`k2 project access on|off --workspace
-  <ws>` outside K2, or the Agent tab). An agent never can, its own or
+  <ws>` outside K2, or the Permissions tab). An agent never can, its own or
   another's. Inside a K2 terminal `k2 project` sends your session
   passport, never the owner token, so the switch always applies.
 

@@ -17,7 +17,7 @@
 //!   node, where root's guards run (dry run, deny list, origins, size cap).
 //! - `POST /cli/compute/nodes/packages/policy {node, server, level?,
 //!   profiles?, maxInstallMb?}` — narrowing applies at once; a widening is
-//!   held for the owner (a node admin request, Settings → Compute →
+//!   held for the owner (a node admin request, Settings → Cores → Compute →
 //!   Approvals).
 //!
 //! An older node (no `pkg-requests`): the owner's approval falls back to
@@ -102,7 +102,7 @@ fn decider(who: &Who) -> R<()> {
     Err(no(
         "owner_only",
         403,
-        "only this server's owner or an Admin decides package requests, in person: the card in chat, Settings → Compute → Approvals, \
+        "only this server's owner or an Admin decides package requests, in person: the card in chat, Settings → Cores → Compute → Machine settings → Waiting for you, \
          or k2 compute node packages approve|deny <request> from a terminal outside K2. An agent can never approve.",
     ))
 }
@@ -316,7 +316,7 @@ pub(crate) fn file(who: &Who, ws: &crate::compute_routes::Ws, session: Option<&s
     let sent: Vec<String> = filed.iter().filter(|r| r.origin == pr::SENT).map(|r| format!("{} ({})", node_name(&r.node_id), r.server)).collect();
     let mut hint = Vec::new();
     if own {
-        hint.push(format!("held for this server's owner or an Admin: they approve it on the card, or in Settings → Compute → Approvals (k2 compute node packages approve {batch})"));
+        hint.push(format!("held for this server's owner or an Admin: they approve it on the card, or in Settings → Cores → Compute → Machine settings → Waiting for you (k2 compute node packages approve {batch})"));
     }
     if !sent.is_empty() {
         hint.push(format!("asked the node's owner for {}: you hear back here when they decide", sent.join(", ")));

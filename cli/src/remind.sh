@@ -458,7 +458,7 @@ if installed is False:
     print('', file=sys.stderr)
     print('WARNING: no schedule transport is installed on this machine (launchd/cron).', file=sys.stderr)
     print('         This heartbeat will NOT fire until the daemon installs it —', file=sys.stderr)
-    print('         check \`k2 daemon status\` and the Heartbeat Settings page.', file=sys.stderr)
+    print('         check \`k2 daemon status\` and Settings → Logs → Heartbeats.', file=sys.stderr)
 elif stale is not None and stale > 900 and d.get('enabledCount', 0) > 0:
     print('', file=sys.stderr)
     print(f'WARNING: the heartbeat scheduler has not ticked for {stale // 60} minutes.', file=sys.stderr)

@@ -185,7 +185,7 @@ printf '{"schema":1,"kind":"app","id":"mapp","name":"M","version":"1.0.0","host"
 printf 'const a = ;\n' >"$WS/mapp/s.js"
 capture app validate "$WS/mapp"
 assert_eq "a manifest folder with a parse error fails (1) with the preview off" "$rc" "1"
-assert_contains "it says the manifest was not checked" "$out" "Apps (beta) are off on this server"
+assert_contains "it says the manifest was not checked" "$out" "Apps are off on this server"
 assert_contains "the code pass still placed the error" "$out" "s.js:1:"
 capture app validate --dir mapp --types
 assert_eq "--types on a manifest folder with the preview off is a usage error (2)" "$rc" "2"

@@ -159,7 +159,7 @@ pub fn switch_off(handle: &str) -> CliResponse {
         403,
         store::OFF_CODE,
         format!(
-            "{handle} can't read call transcripts: \"Read call transcripts\" is off for it (Settings → Workspaces → {handle} → Agent). Only the server's owner turns it on."
+            "{handle} can't read call transcripts: \"Read call transcripts\" is off for it (Settings → Workspaces / Agents → {handle} → Permissions → Calls). Only the server's owner turns it on."
         ),
     )
 }
@@ -234,7 +234,7 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 async fn chat_client() -> Result<MgmtClient, CliResponse> {
     match blocking(|| hook::get_target(hook::CHAT_KIND)).await? {
         Ok(Some(t)) if t.enabled => Ok(MgmtClient::new(&t.socket, &t.token_file)),
-        Ok(_) => Err(error(503, "chat_unavailable", "Chat / Voice Hosting isn't on for this server")),
+        Ok(_) => Err(error(503, "chat_unavailable", "Chat and voice aren't on for this server")),
         Err(e) => Err(error(503, "chat_unavailable", e)),
     }
 }

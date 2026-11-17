@@ -277,7 +277,7 @@ pub(crate) fn turn_on_always(ctx: &Ctx, who: &Answerer) -> Result<String, String
     }
     Ok(format!(
         "Let this agent manage its Apps' users is now on for {}: it manages its own Apps' users itself next time \
-         (turn it off in Settings → Workspaces → {} → Agent → Apps).",
+         (turn it off in Settings → Workspaces / Agents → {} → Permissions → Apps).",
         ctx.workspace_handle, ctx.workspace_handle
     ))
 }

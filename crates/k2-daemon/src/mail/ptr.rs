@@ -193,7 +193,7 @@ pub(crate) fn map_ptr_cp_response(resp: &DnsHttpResponse) -> CliResponse {
         401 => err_json(
             "401 Unauthorized",
             "unauthorized",
-            "tunnel token rejected by PTR API — re-pair K2 Connect".into(),
+            "tunnel token rejected by PTR API — sign in to your k2.dev account in Settings → Network → Tunnel again".into(),
         ),
         404 => {
             // k2.dev answers JSON 404 (`route_missing`, or a servers-row
@@ -685,7 +685,7 @@ pub(crate) fn handle_ptr_set_with(
                     "401 Unauthorized",
                     "unpaired",
                     format!(
-                        "no tunnel token in ~/.k2/tunnel.json — pair K2 Connect \
+                        "no tunnel token in ~/.k2/tunnel.json — sign in to your k2.dev account in Settings → Network → Tunnel \
                          before ptr set ({e})"
                     ),
                 )

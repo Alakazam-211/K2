@@ -1212,7 +1212,7 @@ pub fn set_agents_can_publish_open_apps(project_id: &str, enable: bool) -> Resul
         .query_row("SELECT agents_can_manage_skin FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| r.get(0))
         .map_err(|_| format!("Project not found: {project_id}"))?;
     if enable && parent != 1 {
-        return Err("turn on \"Allow this agent to manage Apps\" first (k2 app access <ws> --manage on)".to_string());
+        return Err("turn on \"Build and run Apps\" first (k2 app access <ws> --manage on)".to_string());
     }
     conn.execute(
         "UPDATE projects SET agents_can_publish_open_apps = ?1 WHERE id = ?2",
@@ -2756,8 +2756,8 @@ mod tests {
         assert!(err.contains("Project not found"), "got {err:?}");
     }
 
-    /// 0168 — "…and publish open Apps": nested under "Allow this agent to
-    /// manage Apps" (on needs the parent; parent off turns it off), off by
+    /// 0168 — "…and publish open Apps": nested under "Build and run Apps"
+    /// (on needs the parent; parent off turns it off), off by
     /// default, never through workspace/set.
     #[test]
     fn publish_open_apps_is_nested_under_manage_apps() {
@@ -2765,7 +2765,7 @@ mod tests {
         let pid = insert_project(&path);
         assert!(!agents_can_publish_open_apps(&pid), "default off");
         let err = set_agents_can_publish_open_apps(&pid, true).expect_err("needs the parent");
-        assert!(err.contains("manage Apps"), "{err}");
+        assert!(err.contains("Build and run Apps"), "{err}");
         set_agents_can_manage_skin(&path, true).unwrap();
         set_agents_can_publish_open_apps(&pid, true).unwrap();
         assert!(agents_can_publish_open_apps(&pid));

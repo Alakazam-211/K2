@@ -110,9 +110,9 @@ impl Why {
 impl Facts {
     pub(crate) fn live() -> Facts {
         let sew = match crate::sew::store::load() {
-            None => Err(Why::new("sew_not_installed", "Needs chat hosting on this server: turn it on in Settings → Chat / Voice", Some("k2 hostchat enable"))),
+            None => Err(Why::new("sew_not_installed", "Needs chat hosting on this server: turn it on in Settings → Cores → Chat / Voice", Some("k2 hostchat enable"))),
             Some(r) if r.status == "removed" => {
-                Err(Why::new("sew_not_installed", "Chat hosting was removed from this server: turn it on again in Settings → Chat / Voice", Some("k2 hostchat enable")))
+                Err(Why::new("sew_not_installed", "Chat hosting was removed from this server: turn it on again in Settings → Cores → Chat / Voice", Some("k2 hostchat enable")))
             }
             Some(r) if !matches!(r.status.as_str(), "running" | "degraded") => {
                 Err(Why::new("sew_not_running", format!("Chat hosting isn't running on this server (it is {})", r.status.replace('_', " ")), Some("k2 hostchat status")))

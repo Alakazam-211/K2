@@ -107,7 +107,7 @@ fn app(id: &str) -> R<(String, String)> {
 }
 
 /// Where a person does what an agent is refused here.
-const PERSON_WHERE: &str = "Settings → Sew, or k2 hostchat home from a terminal outside K2 or a K2 shell tab";
+const PERSON_WHERE: &str = "Settings → Cores → Chat / Voice, or k2 hostchat home from a terminal outside K2 or a K2 shell tab";
 
 /// Audit event of every home-client change and refusal.
 pub const AUDIT_HOME_CLIENT: &str = "sew-home-client";
@@ -116,7 +116,7 @@ fn agent_refusal(what: &str) -> super::supervisor::Fail {
     no(
         "owner_only",
         403,
-        format!("{what} is a person's, never an agent's (Manage Sew does not cover it). A person does it: {PERSON_WHERE}"),
+        format!("{what} is a person's, never an agent's (Manage chat and voice does not cover it). A person does it: {PERSON_WHERE}"),
     )
 }
 

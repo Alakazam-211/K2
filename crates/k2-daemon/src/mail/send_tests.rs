@@ -213,8 +213,8 @@ fn linked_send_gate_off_blocks_on_and_approval_allow() {
             // Names controls that exist on every OS — never the
             // hosted-only Email page (Appa/Baden, macOS 0.45.4).
             assert!(h.contains("`k2 mail sending <workspace> on`"), "{h}");
-            assert!(h.contains("Workspaces / Agents → <workspace> → Email sending"), "{h}");
-            assert!(!h.contains("Settings → Email → Sending"), "{h}");
+            assert!(h.contains("Workspaces / Agents → <workspace> → Permissions → Email sending"), "{h}");
+            assert!(!h.contains("Email Hosting → Domains → Sending"), "{h}");
         }
         other => panic!("expected Gated, got {other:?}"),
     }
@@ -1445,7 +1445,7 @@ fn domain_send_modes_enforce_per_prd() {
     let err = check_domain_send_mode(&secrets, &format!("bot@{d}")).expect_err("refuse");
     assert!(
         matches!(&err, SendError::SendMode(h) if h.contains("receive-only")
-            && h.contains("Settings → Email")),
+            && h.contains("Settings → Cores → Email Hosting")),
         "{err:?}"
     );
     cleanup_domain(&d, None);

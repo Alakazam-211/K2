@@ -177,7 +177,7 @@ fn an_unprepared_box_is_prepared_once_and_the_owner_is_told() {
     let notes = f.notes.borrow();
     assert_eq!(notes.len(), 1);
     assert!(
-        notes[0].1.contains("k2 app box podman uninstall") && notes[0].1.contains("k2 app box unprep") && notes[0].1.contains("appsAutoPrepare"),
+        notes[0].1.contains("k2 app box podman uninstall") && notes[0].1.contains("k2 app box unprep") && notes[0].1.contains("Keep this server set up"),
         "{}",
         notes[0].1
     );

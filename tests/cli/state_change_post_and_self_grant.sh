@@ -154,7 +154,7 @@ set -e
 assert_eq "self-grant exit 3" "$rc" "3"
 code="$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().strip().splitlines()[-1])["error"]["code"])' "$WORK/hire.err")"
 assert_eq "self-grant error code owner_only" "$code" "owner_only"
-if grep -q "db_agent_access" "$WORK/hire.err" && grep -q "Allow this agent to create databases" "$WORK/hire.err"; then
+if grep -q "db_agent_access" "$WORK/hire.err" && grep -q "Let this agent create databases" "$WORK/hire.err"; then
     echo "  PASS: refusal names the setting and where a human changes it"
     pass=$((pass + 1))
 else

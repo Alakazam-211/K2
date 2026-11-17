@@ -23,7 +23,10 @@ use super::{Answerer, Applied, Check, Ctx, Registered};
 pub(crate) const ACTION: &str = "approve.request";
 pub(crate) const ACTION_OFF: &str = "approve.request-off";
 
-const SETTINGS: SettingsRef = SettingsRef { page: "workspaces/{ws}/agent", path: "Settings → Workspaces → {ws} → Agent" };
+/// No Settings row yet: the place is the command (the card's "Open in
+/// Settings" still lands on the agent's page).
+const SETTINGS: SettingsRef =
+    SettingsRef { page: "workspaces/{ws}/permissions", path: "k2 approve agents {ws} on|off (an Owner or Admin)" };
 const SETTING: &str = "Let this agent ask people for signed approvals";
 
 pub(crate) static APPROVE_REQUEST: ActionSpec = ActionSpec {

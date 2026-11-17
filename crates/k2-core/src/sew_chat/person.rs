@@ -109,7 +109,7 @@ pub enum AutoAccount {
     Sweep,
 }
 
-/// "Manage Chat / Voice Hosting" on means the agent has its own chat
+/// "Manage chat and voice" on means the agent has its own chat
 /// account (Rosson 2026-11-02: an agent with the switch manages end to
 /// end, so no second ask). Makes the workspace's `coworker` grant when the
 /// switch is on, chat is on, and it has no grant at all. Never touches an

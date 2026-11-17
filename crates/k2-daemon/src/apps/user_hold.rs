@@ -747,7 +747,7 @@ pub(crate) fn agent_password_once(ws: &str, body: &[u8], actor: &str) -> CliResp
 
 /// Where the owner turns permission cards on for an agent (both switches).
 pub const PERMISSION_CARDS_ON_PATH: &str =
-    "Settings → Permission Cards → \"Let agents ask with permission cards\", then this agent under \"Agents that can ask\"";
+    "Settings → Access → Permission Cards → \"Let agents ask with permission cards\", then this agent under \"Agents that can ask\"";
 
 /// The hint when an agent (of `ws`, when known) is refused on a guest that holds
 /// a box login. With permission cards on for that agent it names the card to
@@ -766,7 +766,7 @@ pub(crate) fn box_login_hint(ws: Option<&str>, username: &str) -> String {
 /// to an App themselves, or turns cards on so the agent can ask.
 pub(crate) fn box_login_grant_by_owner(username: &str) -> String {
     format!(
-        "To give {username} access to your App, ask your human to do it: Settings → Apps → <your App> → Add a person (the server's logins are listed there too), or k2 app grant add \
+        "To give {username} access to your App, ask your human to do it: Settings → Cores → Apps → <your App> → Add a person (the server's logins are listed there too), or k2 app grant add \
          --subject-kind principal --subject <{username}'s principal id> --kind app --target <your app> --role <role> from a terminal outside {PRODUCT_NAME}. \
          Or they turn on permission cards ({PERMISSION_CARDS_ON_PATH}) and you ask on a card."
     )

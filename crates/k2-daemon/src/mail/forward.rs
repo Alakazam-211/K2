@@ -639,7 +639,7 @@ fn refuse_outside_now(row: &MailAddress) -> R<()> {
         return Err(fail(
             409,
             "receive_only",
-            format!("{}'s domain is receive-only, so its mail can't be forwarded outside (Settings → Email → Sending)", row.address),
+            format!("{}'s domain is receive-only, so its mail can't be forwarded outside (Settings → Cores → Email Hosting → Domains → Sending)", row.address),
         ));
     }
     Ok(())

@@ -1,4 +1,4 @@
-//! The node machine's advertise loop (Settings → Compute, "Machines you
+//! The node machine's advertise loop (Settings → Cores → Compute, "Machines you
 //! can use"; Rosson 2026-10-11). While "Make this computer a node" is on,
 //! this daemon tells K2 Connect it offers compute, so the owner's other
 //! servers list it; the answer may carry one-click enroll offers from a

@@ -8,8 +8,9 @@ WHAT A PROJECT IS
   `k2 project --help` has every command.
 
 OPEN BY DEFAULT, WITH A PER-AGENT SWITCH
-  Every workspace has "Manage K2 projects" (Settings → Workspaces →
-  <ws> → Agent). It starts ON: your agent may create, rename and delete
+  Every workspace has "Let this agent manage K2 projects" (Settings →
+  Workspaces / Agents → <ws> → Permissions → Projects and Gardens). It
+  starts ON: your agent may create, rename and delete
   projects and add or remove members, its own or others'.
   Off: create, rename, delete, add, remove, poc, settings and setting a
   `view` fail with agent_permission_off (exit 1).
@@ -18,7 +19,7 @@ OPEN BY DEFAULT, WITH A PER-AGENT SWITCH
 
 WHO MAY FLIP IT
   Only the owner or an admin (`k2 project access on|off --workspace
-  <ws>` outside K2, or the Agent tab). An agent never can, its own or
+  <ws>` outside K2, or the Permissions tab). An agent never can, its own or
   another's. Inside a K2 terminal `k2 project` sends your session
   passport, never the owner token, so the switch always applies.
 
@@ -271,7 +272,7 @@ EVERY ACCESS IS LOGGED
   body). If the log can't be written, nothing opens (audit_unavailable). The
   mailbox's person isn't notified. --reason "<why>" is kept in the row.
   k2 mail reader log shows it: Owners and Admins every row; you the rows
-  about your own mailboxes. Settings → Email → Reader log shows the same.
+  about your own mailboxes. Settings → Cores → Email Reader Log shows the same.
 
 ACTING ON MAIL
   flag, move, archive, delete (to Trash), reply, draft and send run the same
@@ -388,7 +389,8 @@ WHAT K2 DOES
   folder is gated like any program.
 
   Trust it      this version only; K2 asks again when those settings change
-  Always        any version; undo in Settings → Workspaces → Folder trust
+  Always        any version; undo in Settings → Workspaces / Agents →
+                <workspace> → Agent → Folder trust
   Don't trust   K2 starts no program there (but a plain shell tab) and
                 removes the trust entries it wrote; it lists entries it
                 didn't write that still trust it
@@ -399,9 +401,9 @@ WHAT K2 DOES
 
   Who decides: the owner (the owner token, or a login with the Owner
   role, from any device). Admins and Members are refused, in words. The
-  same three choices are in Settings → Workspaces → <workspace> → Folder
-  trust while the folder waits, in the agent's chat when its session
-  can't start, and on the CLI. Whichever is used first decides: the card
+  same three choices are in Settings → Workspaces / Agents → <workspace>
+  → Agent → Folder trust while the folder waits, in the agent's chat
+  when its session can't start, and on the CLI. Whichever is used first decides: the card
   closes showing that choice and who made it, and a later tap on it says
   "Already answered: … by <who> at <time>". A trust starts the spawns K2
   held there again; a session K2 stopped starts again when its tab opens.

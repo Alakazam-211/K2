@@ -200,7 +200,7 @@ EOF
 
 _study_page_app_resources() {
     cat <<'EOF'
-k2 study app-resources — Box usage, the disk guard, clean and trends
+k2 study app-resources — Disk and memory, the disk guard, clean and trends
 
 ONE DISK, MANY USERS. Apps, --cmd services, agent folders, Postgres, mail
 and K2 share this box's disk. When it fills, Postgres stops, mail bounces
@@ -243,7 +243,7 @@ TRENDS:
   averages and peaks kept 30 days. Each App's RAM budget shows beside its
   memory; trends never stop or slow an App. — means not measured here.
 
-ELSEWHERE: Settings → Apps → This server → Box usage shows the same, with
+ELSEWHERE: Settings → Cores → Apps → This server → Disk and memory shows the same, with
 bars. A Garden can show it with the built-in card k2:box-disk@1.
 EOF
 }

@@ -29,7 +29,7 @@ pub const ADMIN_URL: &str = "http://127.0.0.1:4445/";
 pub const LINUX_ONLY_HINT: &str =
     "THIS FEATURE ONLY WORKS ON LINUX DEPLOYMENTS, THIS PAGE IS JUST HERE FOR EXAMPLE PURPOSES.";
 
-pub const HYDRA_MISSING: &str = "hydra_missing: the OIDC issuer needs `hydra` on PATH. \
+pub const HYDRA_MISSING: &str = "hydra_missing: sign-in for other sites (the OIDC issuer) needs `hydra` on PATH. \
 Install: sudo apt install ory (or download Ory Hydra from GitHub releases). \
 The daemon does not apt-get. Enabling skins does not start Hydra.";
 

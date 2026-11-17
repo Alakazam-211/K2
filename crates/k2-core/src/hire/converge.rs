@@ -211,7 +211,7 @@ pub fn check_db_access(
         return Err(HireError::new(
             403,
             "owner_only",
-            "An agent can't grant 'db_agent_access'. Ask a human (owner or admin): Settings → Workspaces → (workspace) → Allow this agent to create databases, or `k2 agent hire <dir> --db-access write` from a terminal outside a K2 agent session.",
+            "An agent can't grant 'db_agent_access'. Ask a human (owner or admin): Settings → Workspaces / Agents → (workspace) → Permissions → Database → \"Let this agent create databases\", or `k2 agent hire <dir> --db-access write` from a terminal outside a K2 agent session.",
         ));
     }
     if let Some(max) = max_db {
@@ -234,7 +234,7 @@ pub fn check_chat_manage(caller: &HireCaller, requested: Option<bool>) -> Result
         return Err(HireError::new(
             403,
             "owner_only",
-            "An agent can't turn on 'Manage Chat / Voice Hosting' (chat_manage). Ask a human (owner or admin): Settings → Workspaces → (workspace) → Agent, or `k2 agent access set <workspace> chat_manage on` from a terminal outside a K2 agent session.",
+            "An agent can't turn on 'Manage chat and voice' (chat_manage). Ask a human (owner or admin) to run `k2 agent access set <workspace> chat_manage on` from a terminal outside a K2 agent session (it has no Settings row).",
         ));
     }
     Ok(())

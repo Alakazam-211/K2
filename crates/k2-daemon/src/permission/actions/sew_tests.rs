@@ -44,7 +44,7 @@ fn the_card_is_registered_owner_only_with_the_settings_confirm_and_the_hc2_note(
     assert_eq!(r.spec.floor, Floor::Owner);
     assert_eq!(r.spec.proof, Proof::SettingsConfirm { action: ConfirmAction::ChatOwnerHandoff });
     assert_eq!(ConfirmAction::ChatOwnerHandoff.as_str(), crate::chat_pass::handoff::CONFIRM_ACTION, "the same confirm Settings takes");
-    assert!(r.spec.words.consequences.contains("promoting someone to install owner or admin lifts their Sew bans"));
+    assert!(r.spec.words.consequences.contains("promoting someone to install owner or admin lifts their chat bans"));
     assert!(crate::routes::route_policy::lookup(HANDOFF_ROUTE).and_then(|x| x.post).is_some(), "{HANDOFF_ROUTE} has a POST row");
 }
 
@@ -91,7 +91,7 @@ fn the_owner_allows_and_the_link_goes_to_them_never_to_the_agent() {
     let card = card_of(&v);
     let vw = view(&ws, &card);
     assert_eq!(vw["proof"], json!({ "kind": "confirm", "action": "chat-owner-handoff", "secretId": id }));
-    assert!(vw.to_string().contains("lifts their Sew bans"), "{vw}");
+    assert!(vw.to_string().contains("lifts their chat bans"), "{vw}");
 
     // An Admin is below the floor; so is a Member.
     let admin = login("sewad", Role::Admin);
@@ -108,7 +108,7 @@ fn the_owner_allows_and_the_link_goes_to_them_never_to_the_agent() {
     confirm("k2vc_tunnel", &id, "owner");
     let (s, a) = local("tunnel", || answer_as("owner", &ws, &card, json!({ "answer": "Allow", "confirmToken": "k2vc_tunnel" })));
     assert_eq!((s.as_str(), &a["error"]["code"]), ("403 Forbidden", &json!("loopback_only")), "{a}");
-    assert!(a["error"]["hint"].as_str().unwrap().starts_with("Open this from K2 on the box's own computer"), "{a}");
+    assert!(a["error"]["hint"].as_str().unwrap().starts_with("Open this from K2 on the server's own computer"), "{a}");
     assert!(a.get("forYou").is_none(), "{a}");
     assert!(row(&id).is_answerable(), "the request stays open");
 

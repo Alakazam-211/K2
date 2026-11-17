@@ -326,7 +326,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
                         403,
                         format!(
                             "{} {} not granted to workspace {}, so a node list entry would never let its jobs in. A person grants {} first \
-                             (Settings → Compute, or k2 compute grant <node> --workspace {} from a terminal outside {PRODUCT_NAME}); then ask to add {}",
+                             (Settings → Cores → Compute, or k2 compute grant <node> --workspace {} from a terminal outside {PRODUCT_NAME}); then ask to add {}",
                             ungranted.join(", "),
                             if ungranted.len() == 1 { "is" } else { "are" },
                             ws.handle,

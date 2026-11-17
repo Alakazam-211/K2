@@ -569,7 +569,7 @@ fn ensure_spawned_blocking(handle: tokio::runtime::Handle, http_port: u16) -> Re
     if subdomain.is_empty() {
         return Err(
             "cannot stand up the E2E HTTPS listener: no subdomain configured in \
-             ~/.k2/tunnel.json — select/claim a subdomain in Settings → K2 Connect \
+             ~/.k2/tunnel.json — pick a subdomain under Address in Settings → Network → Tunnel \
              first (the cert SANs need <sub>.k2.dev)"
                 .to_string(),
         );

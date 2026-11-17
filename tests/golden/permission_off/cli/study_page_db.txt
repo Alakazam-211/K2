@@ -3,7 +3,7 @@ exit: 0
 --- stdout
 k2 study db — workspace database
 
-Linux sidecar. Your human enables it (Settings → Data). Postgres
+Linux sidecar. Your human turns it on (Settings → Cores → Database). Postgres
 listens on loopback only. There is no `k2 db expose`. Off-box reach
 is a hostname pointed at an already-listening port (`k2 publish
 subdomain create`), not "publish run Postgres".

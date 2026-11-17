@@ -3106,7 +3106,7 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
         );
         assert_owner_only(&door, "front-door still owner-only with toggle ON");
         assert!(
-            !door.body.contains("Allow this agent to manage Apps")
+            !door.body.contains("To let this workspace's agent manage Apps")
                 && !door.body.contains("Allow this agent to manage Skin Access"),
             "leftover keeps today's hint: {}",
             door.body
@@ -3119,7 +3119,7 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
         );
         assert_owner_only(&hydra, "hydra still owner-only with toggle ON");
         assert!(
-            !hydra.body.contains("Allow this agent to manage Apps")
+            !hydra.body.contains("To let this workspace's agent manage Apps")
                 && !hydra
                     .body
                     .contains("Allow this agent to manage Skin Access"),
@@ -4173,7 +4173,7 @@ async fn skin_guest_full_name_owner_set_clear_and_list() {
             agent_name.body
         );
         assert!(
-            !agent_name.body.contains("Allow this agent to manage Apps"),
+            !agent_name.body.contains("To let this workspace's agent manage Apps"),
             "full-name must not ride the manage-skin toggle: {}",
             agent_name.body
         );

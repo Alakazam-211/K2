@@ -208,7 +208,7 @@ fn agent_switch(c: &Caller, ws: &Ws) -> Result<(), SimError> {
                 403,
                 "sim_switch_off",
                 format!(
-                    "mobile devices are off for {}. A person turns on \"Allow mobile devices\" in Settings → Workspaces → {} → Agent.",
+                    "mobile devices are off for {}. A person can turn on \"Allow mobile devices\" for {}; there is no Settings row for it yet.",
                     ws.handle, ws.handle
                 ),
             )
@@ -249,7 +249,7 @@ fn node_lease_gate(c: &Caller, ws: &Ws) -> Result<bool, SimError> {
                     403,
                     "compute_off",
                     format!(
-                        "an iPhone on a Mac compute node uses compute nodes, which are off for {}: ask your owner to turn on \"Allow compute nodes\" in Settings → Workspaces → {} → Agent",
+                        "an iPhone on a Mac compute node uses compute nodes, which are off for {}: ask your owner to turn on \"Let this agent use compute nodes\" in Settings → Workspaces / Agents → {} → Permissions → Compute",
                         ws.handle, ws.handle
                     ),
                 )
@@ -281,7 +281,7 @@ fn box_owner(c: &Caller) -> Result<String, SimError> {
         _ => Err(SimError::new(
             403,
             "owner_only",
-            "only the server's owner can accept a licence and set up a device lane (the card on the Thread, or Settings → K2 Server → Mobile devices)",
+            "only the server's owner can accept a licence and set up a device lane (the card on the Thread)",
         )
         .exit(3)),
     }

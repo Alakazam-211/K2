@@ -23,7 +23,7 @@ WHO MAY
   The owner and Admins connect at once. A Member never does.
   An agent (in a K2 tab) connects at once only when every switch it needs
   is on and the database is its own workspace's. The switches, by their
-  Settings names (Settings → Workspaces → <agent> → Agent):
+  Settings names (Settings → Workspaces / Agents → <agent> → Permissions):
     "Build and run Apps"
     "Database" (under Apps: what its Apps may use)
     "Let this agent create databases" (for --new)

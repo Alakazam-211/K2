@@ -142,7 +142,7 @@ pub fn reach(from: &str, session_id: &str, m: &Map<String, Value>, now: i64) -> 
     // 3. A ticket for the server's Owner and Admins.
     let title = format!("Connect {me} to {head_name} (head of {})", org.name);
     let body = format!(
-        "{me} needs to reach {head_name}, the head of {} on the Org Chart, and the two aren't connected.\n\nWhy: {why}\n\nTo allow it, add the connection in Settings → Connections, or run `k2 connections add {head_name} --workspace {me}`. K2 tells {me} once it's done. Org membership never connects agents by itself.",
+        "{me} needs to reach {head_name}, the head of {} on the Org Chart, and the two aren't connected.\n\nWhy: {why}\n\nTo allow it, add the connection in Settings → Workspaces / Agents → {me} → Connections, or run `k2 connections add {head_name} --workspace {me}`. K2 tells {me} once it's done. Org membership never connects agents by itself.",
         org.name
     );
     let item = crate::feedback_routes::file_owner_notice(from, &me, &title, &body)

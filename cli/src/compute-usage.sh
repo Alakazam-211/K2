@@ -1,7 +1,7 @@
 # ── k2 compute — run commands on your compute nodes ───────────────────
 # (prd-k2-compute-nodes-v1 §15.2). `compute` is an `id` tool and locked:
 # inside a K2 terminal the request carries this session's passport, so an
-# agent only ever sees its own workspace and needs "Allow compute nodes"
+# agent only ever sees its own workspace and needs "Let this agent use compute nodes"
 # plus a grant. Owner verbs (node add/confirm/remove, grant, local pause…)
 # refuse a passport with `owner_only`: run them outside K2.
 # Agent verbs ride the per-cell socket when present; owner verbs go TCP.
@@ -437,7 +437,7 @@ Agents:
                  check a statement against this server's records; says
                  what it checked (k2 study provenance)
 Owner / admin (refused for agents and inside K2 terminals, except where
-"Allow managing compute nodes" is on for that agent: see k2 compute manage):
+"Let this agent manage compute nodes" is on for that agent: see k2 compute manage):
   k2 compute preview on|off|status             turn the preview on for this server (owner)
   k2 compute placement v1|v2|status           how K2 ranks nodes when no node is
                    named (owner): v2 (default) = load first, a warm slot worth
@@ -574,8 +574,9 @@ terminal outside K2, Touch ID / vault password) decides every change:
                    agent sees only its own workspace's grants; naming
                    another is refused (forbidden, exit 3)
   k2 compute access on|off --workspace WS
-                   the Agent tab's "Allow compute nodes" (Settings → Workspaces →
-                   <agent> → Agent): on = a grant on every machine switched on,
+                   "Let this agent use compute nodes" (Settings → Workspaces /
+                   Agents → <agent> → Permissions → Compute): on = a grant on
+                   every machine switched on,
                    default limits (and ones added later); off removes them all.
                    The owner or an admin sets it. An agent can't; with
                    permission cards on, it asks for its own workspace with
@@ -583,7 +584,7 @@ terminal outside K2, Touch ID / vault password) decides every change:
                    always its own). Allowed, it is on: run your command again
   k2 compute usage [--days N]    k2 compute events --audit [--limit N]
                    the audit log (plain `events` shows job events since 0.46.7)
-Node admin (agents need "Allow this agent to operate compute nodes"):
+Node admin (agents need "Let this agent operate compute nodes"):
   k2 compute node health <node> [--json]       uptime, disk, RAM, FileVault, update state
   k2 compute node policy <node> show
   k2 compute node policy <node> set key=value... [--reason "…"]
@@ -659,9 +660,9 @@ Node admin, owner only (refused for agents and inside K2 terminals):
   k2 compute node alerts <node> [--after 10m|off]   offline alert after N minutes
   k2 compute node alerts --to <workspace>|none      where alerts go (an IT agent)
   k2 compute operate on|off --workspace WS
-                   the Agent switch "Allow this agent to operate compute nodes"
+                   the switch "Let this agent operate compute nodes"
   k2 compute manage on|off --workspace WS      (owner only)
-                   the Agent switch "Allow managing compute nodes": that agent may
+                   the switch "Let this agent manage compute nodes": that agent may
                    node add/confirm/rename/pause/drain/resume/retire/route and
                    grant/revoke any workspace (each act in Access Audit). Still
                    yours: preview on|off, node remove, and this switch

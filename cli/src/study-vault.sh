@@ -83,7 +83,7 @@ WHO SETS WHAT
   You may not widen its sites, raise its delivery, share it, or read it
   (vault_owner_confirm_required → ask the owner in Settings → Vault).
   Secrets your workspace created are yours to widen.
-  "Allow managing server-wide secrets" (vault_manage) lets an IT agent
+  "Let this agent manage server-wide secrets" (vault_manage) lets an IT agent
   share server secrets with OTHER workspaces — never its own.
   compute:<ws>/<node> grants (a secret as env in compute jobs on another
   machine) are people only, for every agent: ask your owner with the
@@ -96,7 +96,7 @@ PEOPLE ONLY
   don't run it — tell your owner.
 
 MOVING TO ANOTHER BOX
-  With "Allow managing server-wide secrets": new box `k2 vault recipient`;
+  With "Let this agent manage server-wide secrets": new box `k2 vault recipient`;
   old box `k2 vault carry export --recipient … --target … --workspace <ws>
   --out carry.age`; new box `k2 vault carry import carry.age --workspace
   <id>` (lists first; add --apply). By workspace id, never by name; only

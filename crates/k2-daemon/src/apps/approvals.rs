@@ -137,7 +137,7 @@ pub(crate) fn held_answer(r: &reqs::AppRequest) -> J {
         "reasons": r.reasons,
         "expiresAt": r.expires_at,
         "hint": format!(
-            "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings → App \
+            "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings → Cores → App \
              Approvals), or deny it. Check with k2 app approvals.",
             r.id
         ),

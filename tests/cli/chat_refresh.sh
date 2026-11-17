@@ -116,7 +116,7 @@ echo "== an agent with the switch off =="
 run as_agent agent refresh --note "the note"
 [ "$rc" = 3 ] || fail "agent refresh exit $rc: $out"
 has "$out" "chat_refresh_needs_person"
-has "$out" "Can refresh its own pinned chat"
+has "$out" "Let this agent refresh its pinned chat"
 hasnt "$out" "Ask with:"
 [ "$(starts claude)" = 1 ] || fail "a refused refresh spawned"
 run as_agent workspace swap-canonical "$A" --agent claude

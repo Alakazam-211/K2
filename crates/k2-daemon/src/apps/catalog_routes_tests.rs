@@ -243,7 +243,7 @@ fn an_agent_needs_build_and_run_apps() {
     assert_eq!(v["plan"]["workspace"], WS);
     let w = &v["plan"]["waits"][0];
     assert_eq!(w["reason"], jobs::WAIT_SEW_RIGHTS, "the dry run names the wait ahead: {v}");
-    assert!(w["text"].as_str().unwrap().contains("Manage Chat / Voice Hosting"), "{w}");
+    assert!(w["text"].as_str().unwrap().contains("Manage chat and voice"), "{w}");
     assert_eq!(w["hint"], format!("k2 agent access set {WS} chat_manage on"), "{w}");
     assert!(w.get("question").is_none(), "no open question is ever named: {w}");
     assert_plain(&v);
@@ -343,7 +343,7 @@ fn a_reason_is_a_sentence_and_its_command_apart() {
     let fx = fx();
     let (c, f) = hearth_cat(&fx);
     let mut fa = facts();
-    fa.sew = Err(Why::new("sew_not_installed", "Needs chat hosting on this server: turn it on in Settings → Chat / Voice", Some("k2 hostchat enable")));
+    fa.sew = Err(Why::new("sew_not_installed", "Needs chat hosting on this server: turn it on in Settings → Cores → Chat / Voice", Some("k2 hostchat enable")));
     fa.pro = Some(false);
     fa.linux = false;
     let v = list(&Who::Owner, &c, &fa).unwrap();
@@ -362,7 +362,7 @@ fn a_reason_is_a_sentence_and_its_command_apart() {
     let e = install_with(&Who::Owner, &json!({ "entry": "sew/hearth", "workspace": WS }), &c, &Facts { linux: true, ..fa }, &f).unwrap_err();
     assert_eq!(e.code, "sew_not_installed");
     assert!(e.hint.contains("k2 hostchat enable"), "{}", e.hint);
-    assert_eq!(e.extra.unwrap()["text"], "Needs chat hosting on this server: turn it on in Settings → Chat / Voice");
+    assert_eq!(e.extra.unwrap()["text"], "Needs chat hosting on this server: turn it on in Settings → Cores → Chat / Voice");
 }
 
 /// What deploying approves, in words about what the App may then do; no

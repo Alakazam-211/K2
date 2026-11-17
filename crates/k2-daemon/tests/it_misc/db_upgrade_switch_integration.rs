@@ -209,7 +209,7 @@ async fn db_upgrade_switch_floors_end_to_end() {
     assert_eq!(toggle_audit(), vec![("owner".to_string(), "ok db_upgrade=on workspace=pg-ops".to_string())]);
     let n = notes(&ops);
     assert_eq!(n.len(), 1, "{n:#?}");
-    assert!(n[0].contains("Allow this agent to manage Postgres versions") && n[0].contains("is on"), "{n:#?}");
+    assert!(n[0].contains("Let this agent manage Postgres versions") && n[0].contains("is on"), "{n:#?}");
 
     // An agent can't lower it either, but an Admin can.
     let r = post(port, "/cli/agent-access/set", &agent, set(&ops, false)).await;

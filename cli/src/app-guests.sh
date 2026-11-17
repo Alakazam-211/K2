@@ -181,7 +181,7 @@ print(line)'
 cmd_agent_access() {
     local usage="usage: k2 agent access set <workspace> chat_manage|chat_refresh|agents_hire|agents_manage on|off [--json]"
     case "${1:-}" in
-        -h|--help|"") echo "$usage"; echo "  chat_manage = \"Manage Chat / Voice Hosting\": the agent may run Chat / Voice Hosting here, create Spaces and bind them to its Apps. On also makes its own chat account (off keeps it)."; echo "  chat_refresh = \"Let this agent refresh its pinned chat\"."; echo "  agents_hire = \"Let this agent hire agents\": its main session may run k2 agent hire (a new agent in its own workspace)."; echo "  agents_manage = \"Let this agent manage its sidecars\": its main session may open and stop its sidecars (also k2 sidecar access on|off)."; [ -z "${1:-}" ] && exit 2; return 0 ;;
+        -h|--help|"") echo "$usage"; echo "  chat_manage = \"Manage chat and voice\": the agent may run chat and voice here, create Spaces and bind them to its Apps. On also makes its own chat account (off keeps it)."; echo "  chat_refresh = \"Let this agent refresh its pinned chat\"."; echo "  agents_hire = \"Let this agent hire agents\": its main session may run k2 agent hire (a new agent in its own workspace)."; echo "  agents_manage = \"Let this agent manage its sidecars\": its main session may open and stop its sidecars (also k2 sidecar access on|off)."; [ -z "${1:-}" ] && exit 2; return 0 ;;
         set) shift ;;
         *) echo "$usage" >&2; exit 2 ;;
     esac
@@ -209,7 +209,7 @@ elif "agentsCanHire" in v:
 elif v.get("toggle") == "agents_manage":
     print("Let this agent manage its sidecars is %s for %s" % ("on" if v.get("agentsCanManage") else "off", v.get("workspace")))
 else:
-    print("Manage Chat / Voice Hosting is %s for %s" % ("on" if v.get("agentsCanManageChat") else "off", v.get("workspace")))'
+    print("Manage chat and voice is %s for %s" % ("on" if v.get("agentsCanManageChat") else "off", v.get("workspace")))'
 }
 
 cmd_app_grant_kind() {

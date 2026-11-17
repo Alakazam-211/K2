@@ -71,12 +71,12 @@ fn hosting_state_follows_the_table_in_order() {
     // Sew installed with its own sign-ins: said plainly, not "isn't on".
     let mut f = ready_facts();
     f.chat_on = false;
-    assert_eq!(hosting_of(&f).line, "Voice rooms are off on this server: Chat / Voice Hosting isn't on (k2 hostchat status).");
+    assert_eq!(hosting_of(&f).line, "Voice rooms are off on this server: chat and voice aren't on (k2 hostchat status).");
     assert_eq!(hosting_of(&f).detail, None);
     f.sew_standalone = true;
     let h = hosting_of(&f);
     assert_eq!(h.state, "sew_off");
-    assert_eq!(h.line, "This server's Chat / Voice Hosting uses its own sign-ins (standalone), so it can't host K2 voice rooms.");
+    assert_eq!(h.line, "This server's chat and voice use their own sign-ins (standalone), so it can't host K2 voice rooms.");
     assert_eq!(h.detail.as_deref(), Some("identity: standalone (k2 hostchat status)"));
     // The earlier checks still come first.
     f.preview = false;

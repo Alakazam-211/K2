@@ -321,7 +321,7 @@ assert_eq "record add on pending zone exit 3" "$rc" "3"
 pending_err="$(cat "$WORK/err_pending")"
 assert_contains "pending code" "$pending_err" '"code":"zone_pending_ns"'
 assert_contains "pending names the nameservers" "$pending_err" 'Pending: point nameservers to ns1.k2.dev, ns2.k2.dev'
-if grep -Fq 'Allow agents to manage DNS records' <<<"$pending_err"; then
+if grep -Fq 'Agents can change DNS records' <<<"$pending_err"; then
     echo "  FAIL: pending error must not append the Settings toggle teaching" >&2
     fail=$((fail + 1))
 else
@@ -349,7 +349,7 @@ out="$(run_cli dns --help 2>/dev/null)"
 rc=$?
 set -e
 assert_eq "dns --help exit 0" "$rc" "0"
-assert_contains "help mentions Settings → K2 Connect" "$out" 'Settings → K2 Connect'
+assert_contains "help mentions Settings → Network → Tunnel" "$out" 'Settings → Network → Tunnel → Policies'
 
 echo
 echo "Results: $pass passed, $fail failed"

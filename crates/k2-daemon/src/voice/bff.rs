@@ -632,7 +632,7 @@ fn member_gate(p: &Person, d: &Deps) -> Result<(), Refusal> {
         ConnectChatGate::Pending => Ok(()),
         ConnectChatGate::Blocked(why) => Err(Refusal::new(503, "chat_member_blocked", format!("this login's chat account is stuck: {why}"))),
         ConnectChatGate::Disabled => Err(Refusal::new(403, "no_chat_grant", "this login's chat access is switched off (grant kind chat)")),
-        ConnectChatGate::Off => Err(Refusal::new(503, "chat_unavailable", "Chat / Voice Hosting is not enabled on this server")),
+        ConnectChatGate::Off => Err(Refusal::new(503, "chat_unavailable", "Chat and voice are not set up on this server")),
     }
 }
 
@@ -642,7 +642,7 @@ fn session(p: &Person, d: &Deps, fresh: bool) -> Result<String, Refusal> {
         member_gate(p, d)?;
         (d.mint)(&p.ident).map_err(|e| {
             k2_core::log_debug!("[voice-rooms] pass for {}: {e}", p.ident.actor);
-            Refusal::new(503, "chat_unavailable", "Chat / Voice Hosting is not enabled or not reachable on this server")
+            Refusal::new(503, "chat_unavailable", "Chat and voice are not set up or not reachable on this server")
         })
     })
 }

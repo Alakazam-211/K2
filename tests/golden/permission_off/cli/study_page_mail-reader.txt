@@ -28,7 +28,7 @@ EVERY ACCESS IS LOGGED
   body). If the log can't be written, nothing opens (audit_unavailable). The
   mailbox's person isn't notified. --reason "<why>" is kept in the row.
   k2 mail reader log shows it: Owners and Admins every row; you the rows
-  about your own mailboxes. Settings → Email → Reader log shows the same.
+  about your own mailboxes. Settings → Cores → Email Reader Log shows the same.
 
 ACTING ON MAIL
   flag, move, archive, delete (to Trash), reply, draft and send run the same

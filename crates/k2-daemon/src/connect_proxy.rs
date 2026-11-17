@@ -408,8 +408,8 @@ pub fn handle(body: &[u8], principal: Option<&HookPrincipal>) -> CliResponse {
         Err(ProxyError::NoToken) => err(
             "400 Bad Request",
             "no_token",
-            "no K2 Connect tunnel token on this device — select a subdomain in \
-             Settings → K2 Connect (or run 'k2 tunnel start') first",
+            "no tunnel token on this device — pick your subdomain under Address in \
+             Settings → Network → Tunnel (or run 'k2 tunnel start') first",
         ),
         Err(ProxyError::Unreachable(m)) => err("502 Bad Gateway", "unreachable", m),
     }

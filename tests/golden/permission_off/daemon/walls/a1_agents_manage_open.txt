@@ -4,10 +4,10 @@
 > body: {}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"gated","hint":"Ask your human to turn on 'Let this agent manage its sidecars' in Settings → Workspaces / Agents → pog-billing → Agent (or run k2 sidecar access on --workspace pog-billing as the owner)."}}
+{"error":{"code":"gated","hint":"Ask your human to turn on 'Let this agent manage its sidecars' in Settings → Workspaces / Agents → pog-billing → Permissions (or run k2 sidecar access on --workspace pog-billing as the owner)."}}
 ## cell socket (same passport)
 > POST /cli/sessions/open
 > body: {}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"gated","hint":"Ask your human to turn on 'Let this agent manage its sidecars' in Settings → Workspaces / Agents → pog-billing → Agent (or run k2 sidecar access on --workspace pog-billing as the owner)."}}
+{"error":{"code":"gated","hint":"Ask your human to turn on 'Let this agent manage its sidecars' in Settings → Workspaces / Agents → pog-billing → Permissions (or run k2 sidecar access on --workspace pog-billing as the owner)."}}

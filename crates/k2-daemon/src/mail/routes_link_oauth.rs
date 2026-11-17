@@ -766,11 +766,11 @@ fn require_configured_client(provider: OauthProvider, client: &ClientChoice) -> 
              'Allow public client flows' on, delegated Graph permissions openid profile email \
              offline_access User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite), then run \
              'k2 mail oauth-config set --provider microsoft --client-id <application id> \
-             [--tenant <tenant>]' or use Settings → Email Link → OAuth apps"
+             [--tenant <tenant>]' or use Settings → Email Link → Sign-in apps"
         }
         OauthProvider::Gmail => {
             "set your own Google OAuth Desktop client with 'k2 mail oauth-config set --provider \
-             gmail --client-id <id> --secret-stdin' or Settings → Email Link → OAuth apps"
+             gmail --client-id <id> --secret-stdin' or Settings → Email Link → Sign-in apps"
         }
     };
     Err(error_response(

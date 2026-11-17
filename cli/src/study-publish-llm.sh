@@ -215,15 +215,16 @@ SERVER DEFAULT
   subscription back to its folder (the tool may have refreshed it),
   then puts the chosen one in place.
   No default: when an API token is the server default, Admin or Owner can
-  clear it (k2 llm tokens clear-default <tool>, or "No default" in
-  Settings), or remove it with --clear-default. A subscription signed in
+  clear it (k2 llm tokens clear-default <tool>, or "Stop using as
+  default" in Settings → Language Models → Subs / Tokens), or remove it
+  with --clear-default. A subscription signed in
   to the tool itself stays the default (switch to another token first).
   When a session hits its limit, "Use next token" is one click on
   Settings → Language Models → Subs / Tokens (k2 llm tokens next <tool>).
   K2 never rotates tokens on its own.
 
 ADDING A SUBSCRIPTION
-  Settings → Language Models → Subs / Tokens → Add subscription. K2 runs the tool's own
+  Settings → Language Models → Subs / Tokens → Add a token. K2 runs the tool's own
   sign-in in a terminal it owns: Open sign-in page, Copy code, Paste
   code. This works from the web app and a phone against a headless box.
   Over SSH: k2 llm tokens add <tool> <label> [--device]; paste the code

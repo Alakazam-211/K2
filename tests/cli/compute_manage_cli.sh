@@ -185,10 +185,10 @@ expect_eq "cache clear body" "$(last body)" '{"all": false, "node": "k2n7", "wor
 echo "== docs =="
 usage="$("$K2" compute --help 2>&1 || true)"
 expect_has "usage lists k2 compute manage" "$usage" "k2 compute manage on|off --workspace WS"
-expect_has "usage names the switch" "$usage" "Allow managing compute nodes"
+expect_has "usage names the switch" "$usage" "Let this agent manage compute nodes"
 study="$("$K2" study compute)"
 expect_has "study has the section" "$study" "MANAGING THE MACHINES"
-expect_has "study names the switch" "$study" "Allow managing compute nodes"
+expect_has "study names the switch" "$study" "Let this agent manage compute nodes"
 expect_has "study keeps remove with the owner" "$study" "k2 compute node remove"
 expect_has "study: never over the tunnel" "$study" "never over LAN, the tunnel or an App"
 

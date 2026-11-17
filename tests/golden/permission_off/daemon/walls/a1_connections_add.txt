@@ -4,10 +4,10 @@
 > body: 
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"agents_create_connections_disabled","hint":"this agent isn't allowed to create or remove connections — the owner can enable it in Settings → K2 Connect (Allow agents to create connections) or Workspaces → (workspace) → Allow agents to create connections"},"ok":false}
+{"error":{"code":"agents_create_connections_disabled","hint":"this agent isn't allowed to create or remove connections — Owner can turn on: Settings → Network → Tunnel → Policies → \"Agents can add connections\" (or Settings → Workspaces / Agents → <workspace> → Connections → \"Let this agent add connections\")."},"ok":false}
 ## cell socket (same passport)
 > POST /cli/connections?action=add&target=pog-sales
 > body: 
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"agents_create_connections_disabled","hint":"this agent isn't allowed to create or remove connections — the owner can enable it in Settings → K2 Connect (Allow agents to create connections) or Workspaces → (workspace) → Allow agents to create connections"},"ok":false}
+{"error":{"code":"agents_create_connections_disabled","hint":"this agent isn't allowed to create or remove connections — Owner can turn on: Settings → Network → Tunnel → Policies → \"Agents can add connections\" (or Settings → Workspaces / Agents → <workspace> → Connections → \"Let this agent add connections\")."},"ok":false}

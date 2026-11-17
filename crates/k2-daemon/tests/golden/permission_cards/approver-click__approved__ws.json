@@ -1,7 +1,7 @@
 {
   "collection": "thread",
   "doc": {
-    "body": "billing asks: Let billing run jobs on this server's compute nodes (Allow compute nodes).",
+    "body": "billing asks: Let billing run jobs on this server's compute nodes (Let this agent use compute nodes).",
     "choice": {
       "action": {
         "dedupe": "compute.use:44136fa3",
@@ -10,7 +10,7 @@
           "request": "pr_7f3a2c"
         },
         "result": {
-          "message": "Allowed. Turn it off again in Settings → Workspaces → billing → Agent.",
+          "message": "Allowed. Turn it off again in Settings → Workspaces / Agents → billing → Permissions.",
           "outcome": "approved"
         },
         "view": {
@@ -56,8 +56,8 @@
           },
           "requestId": "pr_7f3a2c",
           "scope": "billing",
-          "setting": "Allow compute nodes",
-          "settingsPage": "workspaces/billing/agent",
+          "setting": "Let this agent use compute nodes",
+          "settingsPage": "workspaces/billing/permissions",
           "state": "approved",
           "undo": {
             "label": "Turn off again",
@@ -101,7 +101,7 @@
           "label": "Deny"
         }
       ],
-      "prompt": "billing asks: Let billing run jobs on this server's compute nodes (Allow compute nodes).",
+      "prompt": "billing asks: Let billing run jobs on this server's compute nodes (Let this agent use compute nodes).",
       "status": "answered"
     },
     "created_at": 1761060000,

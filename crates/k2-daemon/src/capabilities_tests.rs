@@ -60,7 +60,7 @@ fn the_box_rows_have_the_shape_and_every_code_is_explained() {
     k2_core::deploy::set_enabled(false);
     let (_, v) = call(Who::Owner, &[]);
     let apps = v["box"].as_array().expect("rows").iter().find(|r| r["cap"] == "apps").cloned().expect("apps row");
-    assert_eq!(apps["missing"], json!({ "reason": OWNER_DISABLED, "fix": "the owner turns them on in Settings → Apps → This server", "code": "apps_disabled" }));
+    assert_eq!(apps["missing"], json!({ "reason": OWNER_DISABLED, "fix": "the owner turns them on in Settings → Cores → Apps → This server", "code": "apps_disabled" }));
     k2_core::deploy::set_enabled(true);
 }
 

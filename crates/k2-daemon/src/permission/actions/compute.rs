@@ -46,13 +46,13 @@ pub(crate) static ADMIN_APPROVE: ActionSpec = ActionSpec {
     words: Words {
         setting: "Compute approvals",
         what_changes: "{change}",
-        consequences: "Like every approved node change, it runs on {node} as root, signed with the owner's approval key. This is request {request} in Settings → Compute → Approvals: whichever you answer first decides it, and the other then shows it as decided. The agent's reason when it filed the request: {reason}",
+        consequences: "Like every approved node change, it runs on {node} as root, signed with the owner's approval key. This is request {request} in Settings → Cores → Compute → Machine settings → Waiting for you: whichever you answer first decides it, and the other then shows it as decided. The agent's reason when it filed the request: {reason}",
         scope: "node request {request}",
         duration: "once",
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "compute", path: "Settings → Compute → Approvals" },
+    settings: SettingsRef { page: "compute", path: "Settings → Cores → Compute → Machine settings → Waiting for you" },
     walls: &[
         Wall {
             matches: WallMatch::Code { status: 403, code: "owner_only" },
@@ -116,8 +116,8 @@ fn may_act_on_nodes(workspace_id: &str) -> bool {
 
 /// The refusal (and the stale reason at the click) when neither is on.
 pub(crate) const NO_NODE_SWITCH: &str = "this agent can't operate or manage compute nodes now, so it can't bring their approvals to chat. \
-     Ask your owner to turn on \"Allow this agent to operate compute nodes\" or \"Allow managing compute nodes\" \
-     (Settings → Workspaces → <agent> → Agent); the request still waits in Settings → Compute → Approvals";
+     Ask your owner to turn on \"Let this agent operate compute nodes\" or \"Let this agent manage compute nodes\" \
+     (Settings → Workspaces / Agents → <agent> → Permissions → Compute); the request still waits in Settings → Cores → Compute → Machine settings → Waiting for you";
 
 /// The card's words from the stored node request (0.46.9): `{change}` is
 /// its summary (what the owner reads in Settings), `{node}` its node,
@@ -234,9 +234,9 @@ fn apply(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
 
 // ── compute.ci (prd-compute-job-tiers-v1 §5.1, vs-live T13) ─────────
 
-const CI_SETTING: &str = "Allow CI jobs (Settings → Compute → Grants)";
+const CI_SETTING: &str = "Allow CI jobs (Settings → Cores → Compute → Machine settings → Workspaces that may use a machine)";
 const CI_NODE: &[ParamSpec] = &[ParamSpec { key: "node", kind: ParamKind::Node, required: true, list: false, choices: &[] }];
-const CI_SETTINGS: SettingsRef = SettingsRef { page: "compute", path: "Settings → Compute → Grants" };
+const CI_SETTINGS: SettingsRef = SettingsRef { page: "compute", path: "Settings → Cores → Compute → Machine settings → Workspaces that may use a machine" };
 
 /// `compute.ci node=`: let the asking workspace send CI jobs to one node
 /// (its grant's `allow_ci`). Admin floor: only the owner or an Admin login
@@ -366,7 +366,7 @@ fn apply_ci_to(ctx: &Ctx, who: &Answerer, on: bool) -> Applied {
     let message = if on {
         format!("{} may send CI jobs to {node} now.", ctx.workspace_handle)
     } else {
-        format!("{} sends no more CI jobs to {node}. Turn it back on in Settings → Compute → Grants.", ctx.workspace_handle)
+        format!("{} sends no more CI jobs to {node}. Turn it back on in Settings → Cores → Compute → Machine settings → Workspaces that may use a machine.", ctx.workspace_handle)
     };
     super::switches::applied(&r, message)
 }
@@ -859,13 +859,13 @@ pub(crate) static PACKAGES: ActionSpec = ActionSpec {
     words: Words {
         setting: "Compute packages",
         what_changes: "{change}",
-        consequences: "Root installs them on {nodes} from the distro's signed official repos, after a dry run that refuses anything that removes a package, comes from another repo or is too big. {shared}This is request {request} in Settings → Compute → Approvals: whichever you answer first decides it. The agent's reason: {reason}",
+        consequences: "Root installs them on {nodes} from the distro's signed official repos, after a dry run that refuses anything that removes a package, comes from another repo or is too big. {shared}This is request {request} in Settings → Cores → Compute → Machine settings → Waiting for you: whichever you answer first decides it. The agent's reason: {reason}",
         scope: "package request {request}",
         duration: "once",
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "compute", path: "Settings → Compute → Approvals" },
+    settings: SettingsRef { page: "compute", path: "Settings → Cores → Compute → Machine settings → Waiting for you" },
     walls: &[
         // The request verb: filed and held for this server's owner.
         Wall {
@@ -1010,7 +1010,7 @@ fn apply_packages(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied 
             }
             if !offline.is_empty() {
                 msg.push(format!(
-                    "{} is offline, so it waits there: a person approves it in Settings → Compute → Approvals when it's back.",
+                    "{} is offline, so it waits there: a person approves it in Settings → Cores → Compute → Machine settings → Waiting for you when it's back.",
                     offline.join(", ")
                 ));
             }
@@ -1039,7 +1039,7 @@ const POLICY_LEVELS: &[&str] = &["list", "profiles", "official"];
 /// `compute.packages-policy node= server= level=`: set what a node installs
 /// for a server without asking (its package policy). The owner. Narrowing
 /// applies at once; widening goes on as a held node admin request the
-/// owner approves in Settings → Compute → Approvals (root on the node).
+/// owner approves in Settings → Cores → Compute → Machine settings → Waiting for you (root on the node).
 pub(crate) static PACKAGES_POLICY: ActionSpec = ActionSpec {
     id: "compute.packages-policy",
     area: Area::Compute,
@@ -1056,13 +1056,13 @@ pub(crate) static PACKAGES_POLICY: ActionSpec = ActionSpec {
     words: Words {
         setting: "Compute package policy",
         what_changes: "Set {node}'s package policy for {server} to {level}",
-        consequences: "list installs only names on {node}'s approved list; profiles adds K2's bundles you turned on; official allows any package from the distro's signed official repos, minus K2's deny list. A package installs for every job on that machine. Narrowing applies at once. Widening runs as root on {node}, so it waits as a node request for you in Settings → Compute → Approvals.",
+        consequences: "list installs only names on {node}'s approved list; profiles adds K2's bundles you turned on; official allows any package from the distro's signed official repos, minus K2's deny list. A package installs for every job on that machine. Narrowing applies at once. Widening runs as root on {node}, so it waits as a node request for you in Settings → Cores → Compute → Machine settings → Waiting for you.",
         scope: "{server} on {node}",
         duration: "until someone changes it",
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "compute", path: "Settings → Compute" },
+    settings: SettingsRef { page: "compute", path: "Settings → Cores → Compute" },
     walls: &[Wall {
         // The policy route, to an agent that may not operate compute nodes.
         matches: WallMatch::Code { status: 403, code: k2_core::compute::admin::codes::OPERATE_OFF },
@@ -1135,7 +1135,7 @@ fn apply_packages_policy(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> A
     let message = if v["held"] == true {
         let id = v.pointer("/request/id").and_then(serde_json::Value::as_str).unwrap_or("");
         format!(
-            "That widens what {} installs as root, so it waits as node request {id}: approve it in Settings → Compute → Approvals.",
+            "That widens what {} installs as root, so it waits as node request {id}: approve it in Settings → Cores → Compute → Machine settings → Waiting for you.",
             n.name
         )
     } else {
@@ -1370,7 +1370,7 @@ pub(crate) fn actions() -> Vec<Registered> {
 // ── Appendix A4: compute rows that aren't card-able in v1 ───────────
 
 // `compute.grant` and `compute.node.pause` are E1's.
-const IN_SETTINGS: &str = "Settings → Compute";
+const IN_SETTINGS: &str = "Settings → Cores → Compute";
 
 static NOT_CARDABLE: [NotCardableSpec; 9] = [
     NotCardableSpec { id: "compute.agents", area: Area::Compute, why: NotCardable::Covered { by: "compute.use" }, r#where: IN_SETTINGS },
@@ -1380,25 +1380,25 @@ static NOT_CARDABLE: [NotCardableSpec; 9] = [
         id: "compute.node.enroll",
         area: Area::Compute,
         why: NotCardable::Never { reason: NeverReason::BoxLevel },
-        r#where: "Settings → Compute (the owner, with the node in hand)",
+        r#where: "Settings → Cores → Compute (the owner, with the node in hand)",
     },
     NotCardableSpec {
         id: "compute.node.remove",
         area: Area::Compute,
         why: NotCardable::Never { reason: NeverReason::Irreversible },
-        r#where: "Settings → Compute (the owner)",
+        r#where: "Settings → Cores → Compute (the owner)",
     },
     NotCardableSpec {
         id: "compute.node.retire",
         area: Area::Compute,
         why: NotCardable::Never { reason: NeverReason::Irreversible },
-        r#where: "Settings → Compute (the owner)",
+        r#where: "Settings → Cores → Compute (the owner)",
     },
     NotCardableSpec {
         id: "compute.local",
         area: Area::Compute,
         why: NotCardable::Never { reason: NeverReason::BoxLevel },
-        r#where: "Settings → Compute → This computer (the owner)",
+        r#where: "Settings → Cores → Compute → This computer (the owner)",
     },
     NotCardableSpec {
         id: "compute.node.remote-admin",
@@ -1406,7 +1406,7 @@ static NOT_CARDABLE: [NotCardableSpec; 9] = [
         why: NotCardable::Never { reason: NeverReason::BoxLevel },
         r#where: "the node itself: sudo k2-node admin level … at that machine",
     },
-    NotCardableSpec { id: "compute.admin-deny", area: Area::Compute, why: NotCardable::Dropped, r#where: "Settings → Compute → Approvals" },
+    NotCardableSpec { id: "compute.admin-deny", area: Area::Compute, why: NotCardable::Dropped, r#where: "Settings → Cores → Compute → Machine settings → Waiting for you" },
 ];
 
 pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {

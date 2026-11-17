@@ -4,10 +4,10 @@
 > body: {}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"hire_off","hint":"Ask your human to turn on 'Let this agent hire agents' in Settings → Workspaces / Agents → pog-billing → Agent (or run k2 agent access set pog-billing agents_hire on as the owner). Opening your own sidecars is a separate switch."},"ok":false}
+{"error":{"code":"hire_off","hint":"Ask your human to turn on 'Let this agent hire agents' in Settings → Workspaces / Agents → pog-billing → Permissions (or run k2 agent access set pog-billing agents_hire on as the owner). Opening your own sidecars is a separate switch."},"ok":false}
 ## cell socket (same passport)
 > POST /cli/agents/hire
 > body: {}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"hire_off","hint":"Ask your human to turn on 'Let this agent hire agents' in Settings → Workspaces / Agents → pog-billing → Agent (or run k2 agent access set pog-billing agents_hire on as the owner). Opening your own sidecars is a separate switch."},"ok":false}
+{"error":{"code":"hire_off","hint":"Ask your human to turn on 'Let this agent hire agents' in Settings → Workspaces / Agents → pog-billing → Permissions (or run k2 agent access set pog-billing agents_hire on as the owner). Opening your own sidecars is a separate switch."},"ok":false}

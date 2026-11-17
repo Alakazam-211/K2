@@ -36,15 +36,16 @@ k2 sources — data sources: HTTP JSON checks this server runs for Garden cards 
   k2 sources trigger list|show|log|propose|add|edit|approve|pause|resume|remove|test …
   k2 sources access on|off [--workspace <ws>]   owner/admin: the agent switch below
 
-AGENTS AND "MANAGE GARDENS AND DATA SOURCES"
-  A per-agent switch (Settings → Workspaces → <ws> → Agent, or
+AGENTS AND "LET THIS AGENT MANAGE GARDENS AND DATA SOURCES"
+  A per-agent switch (Settings → Workspaces / Agents → <ws> → Permissions
+  → Projects and Gardens, or
   `k2 sources access on --workspace <ws>` outside K2). Off (the default): an
   agent proposes; pending, approve, secret, pause/resume, pin/unpin and
   trigger approve/add/pause/resume exit 3 (person_only). On: the agent does
   all of those itself with no confirm (approve its own proposals and others'
   on this server). It binds only a secret it may already use: its own
-  workspace's secret, or a server secret when it also has "Allow managing
-  server-wide secrets" (else secret_not_usable, exit 3). The bind still goes
+  workspace's secret, or a server secret when it also has "Let this agent
+  manage server-wide secrets" (else secret_not_usable, exit 3). The bind still goes
   only to the source's one site, inside the secret's own sites. It never sets
   viewers / agent-access / keep or a trigger's cooldown or cap. Every act is
   logged with the agent and its session (Settings → Logs → Access Audit).
@@ -99,7 +100,7 @@ EOF
 k2 sources pending [--names a,b] [--json]
 
   Proposals (sources and triggers) waiting for approval.
-  A person, or an agent with "Manage Gardens and data sources": every proposal.
+  A person, or an agent with "Let this agent manage Gardens and data sources": every proposal.
   Any other agent: only its own (the answer says "scope": "own"); a person
   approves them.
 EOF
@@ -257,9 +258,9 @@ except Exception:
             case "$code" in person_only|vault_confirm_required|confirm_required|field_person_only) person_code=1 ;; esac
             if [ "$code" != "owner_only" ] && { [ -z "$daemon_hint" ] || [ "$person_code" = "1" ]; }; then
                 if [ "$code" = "secret_not_usable" ]; then
-                    echo "Bind a secret from your own workspace, or ask your human for \"Allow managing server-wide secrets\"." >&2
+                    echo "Bind a secret from your own workspace, or ask your human for \"Let this agent manage server-wide secrets\"." >&2
                 else
-                    echo "This needs a person (run it outside K2, or Settings → Gardens → a Garden → External Data), or the agent switch \"Manage Gardens and data sources\" (k2 sources --help)." >&2
+                    echo "This needs a person (run it outside K2, or Settings → Gardens → a Garden → External Data), or the agent switch \"Let this agent manage Gardens and data sources\" (k2 sources --help)." >&2
                 fi
             fi
             exit 3 ;;
@@ -1187,7 +1188,7 @@ cmd_sources_access() {
     [ "$_SRC_STATUS" = "$raw" ] && _SRC_BODY=""
     if [ "$_SRC_STATUS" != "200" ]; then
         if [ "$_SRC_STATUS" = "403" ]; then
-            echo "Error: forbidden: only the owner or an admin turns this on or off (outside K2, or Settings → Workspaces → <ws> → Agent). An agent never can." >&2
+            echo "Error: forbidden: only the owner or an admin turns this on or off (outside K2, or Settings → Workspaces / Agents → <ws> → Permissions). An agent never can." >&2
             exit 3
         fi
         _sources_fail "$_SRC_STATUS" "$_SRC_BODY"
@@ -1592,7 +1593,7 @@ THE LOOP
   3. A person approves it: one click in Settings → Gardens → a Garden → External Data
      for a secretless public source; a vault confirm when it uses a secret
      (one confirm for many: k2 sources approve a b c --secret NAME). An
-     agent with "Manage Gardens and data sources" approves it itself.
+     agent with "Let this agent manage Gardens and data sources" approves it itself.
   4. k2 sources trigger propose --source fleet --on item_went_crit
      wakes YOU when a box goes red. A person approves it too.
   5. k2 sources show fleet   the definition + the exact card view.
@@ -1620,15 +1621,16 @@ LIMITS
   cooldown/cap, point a trigger at another agent. LAN and plain http are
   the owner's only.
 
-"MANAGE GARDENS AND DATA SOURCES" (THE AGENT SWITCH)
-  The owner or an admin turns it on per agent (Settings → Workspaces → <ws>
-  → Agent, or k2 sources access on --workspace <ws> outside K2); an agent
+"LET THIS AGENT MANAGE GARDENS AND DATA SOURCES" (THE AGENT SWITCH)
+  The owner or an admin turns it on per agent (Settings → Workspaces /
+  Agents → <ws> → Permissions → Projects and Gardens, or k2 sources access
+  on --workspace <ws> outside K2); an agent
   never can. With it you act with no person and no confirm: pending,
   approve (yours and others' on this server), approve a b c --secret NAME
   (all bound or none), secret, pause/resume, pin/unpin, trigger approve /
   add / pause / resume. You bind only a secret you may already use: your
   own workspace's (k2 vault set NAME: scope ws:<you> by default), or a
-  server secret if you also have "Allow managing server-wide secrets"
+  server secret if you also have "Let this agent manage server-wide secrets"
   (else exit 3, secret_not_usable). The bind goes only to the source's one
   site, inside the secret's own sites; it never widens them. Each act is
   logged with you, your session, the target and the secret's NAME (Access

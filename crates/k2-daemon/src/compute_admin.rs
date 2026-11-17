@@ -270,8 +270,8 @@ fn operate_off() -> crate::compute_routes::Refusal {
     no(
         acodes::OPERATE_OFF,
         403,
-        "this agent can't operate compute nodes: ask your owner to turn on \"Allow this agent to operate compute nodes\" \
-         in Settings → Workspaces → <agent> → Agent (k2 compute operate on --workspace <ws>)",
+        "this agent can't operate compute nodes: ask your owner to turn on \"Let this agent operate compute nodes\" \
+         in Settings → Workspaces / Agents → <agent> → Permissions → Compute (k2 compute operate on --workspace <ws>)",
     )
 }
 
@@ -607,7 +607,7 @@ fn classify_body(node_name: &str, kind: &str, body: &Value) -> R<(Class, String)
             return Err(no(
                 codes::OWNER_ONLY,
                 403,
-                "servers.owner is never proposed: the server's owner asks for it in Settings → Compute or with k2 compute node servers <node> owner <server>",
+                "servers.owner is never proposed: the server's owner asks for it in Settings → Cores → Compute or with k2 compute node servers <node> owner <server>",
             ));
         }
         // Protocol 9's CI steps (a node's lanes file, the owner's node
@@ -670,7 +670,7 @@ fn file_request(op: &Operator, node: &store::NodeRow, kind: &str, class: Class, 
     Ok(json!({
         "held": true,
         "request": request_json(&r, Some(&node.name)),
-        "hint": format!("held for the owner: they approve it in Settings → Compute → Approvals (or k2 compute node admin approve {})", r.id),
+        "hint": format!("held for the owner: they approve it in Settings → Cores → Compute → Machine settings → Waiting for you (or k2 compute node admin approve {})", r.id),
     }))
 }
 
@@ -741,7 +741,7 @@ fn approve(who: &Who, body: &[u8]) -> R<Value> {
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            "only the server's owner approves node admin requests, in person: Settings → Compute → Approvals, or \
+            "only the server's owner approves node admin requests, in person: Settings → Cores → Compute → Machine settings → Waiting for you, or \
              k2 compute node admin approve <id> from a terminal outside K2. An agent can never approve.",
         ));
     }
@@ -2680,7 +2680,7 @@ fn servers_revoke(who: &Who, body: &[u8]) -> R<Value> {
 fn servers_owner(who: &Who, body: &[u8]) -> R<Value> {
     if who.passport().is_some() || !who.is_owner() {
         crate::compute_routes::need_credential(who)?;
-        return Err(no(codes::OWNER_ONLY, 403, "only the server's owner changes a node's owner server (Settings → Compute, or k2 compute node servers <node> owner <server> from a terminal outside K2)"));
+        return Err(no(codes::OWNER_ONLY, 403, "only the server's owner changes a node's owner server (Settings → Cores → Compute, or k2 compute node servers <node> owner <server> from a terminal outside K2)"));
     }
     let op = operator(who)?;
     let v = json_body(body)?;
@@ -2746,7 +2746,7 @@ fn servers_owner(who: &Who, body: &[u8]) -> R<Value> {
             .into_iter()
             .any(|r| r.steps().is_ok_and(|s| s.iter().any(|st| st.verb == pshare::VERB_OWNER)));
         if open {
-            return Err(no("owner_change_pending", 409, format!("an owner change for {} is already waiting: approve or deny it in Settings → Compute → Approvals", node.name)));
+            return Err(no("owner_change_pending", 409, format!("an owner change for {} is already waiting: approve or deny it in Settings → Cores → Compute → Machine settings → Waiting for you", node.name)));
         }
     }
     let args = serde_json::to_value(pshare::OwnerArgs { server: row.label.clone(), fp: Some(fp.clone()), old, caches, now }).map_err(|e| no("internal", 500, e.to_string()))?;

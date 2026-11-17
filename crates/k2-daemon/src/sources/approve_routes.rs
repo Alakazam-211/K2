@@ -87,7 +87,7 @@ pub(crate) mod util {
         SourceErr::new(
             "person_only",
             403,
-            "This needs a person (run it outside K2, or use Settings → Gardens → External Data), or turn on \"Manage Gardens and data sources\" for this agent (Settings → Workspaces → Agent).",
+            "This needs a person (run it outside K2, or use Settings → Gardens → External Data), or turn on \"Let this agent manage Gardens and data sources\" for this agent (Settings → Workspaces / Agents → <agent> → Permissions → Projects and Gardens).",
         )
     }
 
@@ -404,7 +404,7 @@ fn bind_scope(who: &Who, secret: &str) -> Result<Option<String>, SourceErr> {
         return Err(SourceErr::new(
             "secret_not_usable",
             403,
-            format!("{secret} is a server-wide secret: binding it needs \"Allow managing server-wide secrets\" for this agent too; or keep it in your own workspace"),
+            format!("{secret} is a server-wide secret: binding it needs \"Let this agent manage server-wide secrets\" for this agent too; or keep it in your own workspace"),
         )
         .with("secret", secret));
     }

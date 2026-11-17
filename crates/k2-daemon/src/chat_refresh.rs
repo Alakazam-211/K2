@@ -134,8 +134,8 @@ fn needs_person(project_id: &str, project_path: &str, notes: &str, mode: &str) -
         "Refreshing ends this chat and starts a new one, so a person allows it. Finish your work first: when they run it, this chat ends \
          at once. Your note was not kept: save it to a file and give your person the whole command, with the file's full path, \
          `k2 agent refresh {ws} --notes-file <path>`, to run from a terminal outside K2. Or ask them to pick \"Continue in a new chat…\" in \
-         the pinned chat's menu (tell them where the note is), or to turn on \"Can refresh its own pinned chat\" (Settings → Workspaces \
-         → {ws} → Agent)."
+         the pinned chat's menu (tell them where the note is), or to turn on \"Let this agent refresh its pinned chat\" (Settings → Workspaces / Agents \
+         → {ws} → Permissions)."
     );
     let mut error = json!({ "code": NEEDS_PERSON, "hint": hint, "workspace": ws });
     if k2_core::permission::gate::enabled_for(project_id) {

@@ -654,12 +654,12 @@
     {
       "name": "app grant add",
       "usage": "k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli|chat --target <id> [--role <role> | --room <handle>…] [--scope <text>]",
-      "description": "Create a grant. kind=app takes --role (role id or name) or --room (repeatable; Thread-only rooms, or --scope as a JSON array), not both; --target is host, a published service id, or <workspace>/<name> (unknown Apps 400). Other kinds require --scope and no --role. Principal subject is a principals.id. Workspace subject is a non-empty id (not looked up). kind=chat creates the chat account (Chat / Voice Hosting must be enabled; Linux): --target optional (sew); principal --subject may be a username, scope member (default) or guest; workspace --subject may be a handle, scope coworker or assistant:<username|owner>. Roles and channels are set in Sew. Owner only.",
+      "description": "Create a grant. kind=app takes --role (role id or name) or --room (repeatable; Thread-only rooms, or --scope as a JSON array), not both; --target is host, a published service id, or <workspace>/<name> (unknown Apps 400). Other kinds require --scope and no --role. Principal subject is a principals.id. Workspace subject is a non-empty id (not looked up). kind=chat creates the chat account (chat and voice must be on; Linux): --target optional (sew); principal --subject may be a username, scope member (default) or guest; workspace --subject may be a handle, scope coworker or assistant:<username|owner>. Roles and channels are set in Sew. Owner only.",
       "args": [],
       "flags": [
         {"name": "--subject-kind", "arg": "principal|workspace", "description": "Who the grant is for."},
         {"name": "--subject", "arg": "id", "description": "Principal id or workspace id."},
-        {"name": "--kind", "arg": "app|mailbox|database|cli|chat", "description": "What is granted. app is a login on one App; chat is a chat account (Chat / Voice Hosting)."},
+        {"name": "--kind", "arg": "app|mailbox|database|cli|chat", "description": "What is granted. app is a login on one App; chat is a chat account (chat and voice)."},
         {"name": "--target", "arg": "id", "description": "App (host, service id, or <workspace>/<name>), mailbox, database, or cli target id."},
         {"name": "--role", "arg": "role", "description": "Role id or name (kind=app)."},
         {"name": "--room", "arg": "handle", "description": "Thread-only room for a role-less kind=app grant (repeatable)."},
@@ -777,7 +777,7 @@
     {
       "name": "app hydra",
       "usage": "k2 app hydra [on|off] [--json]",
-      "description": "OIDC issuer sidecar (Linux leftover). Still owner even when Agent-tab Apps is on.",
+      "description": "Sign-in for other sites: the OIDC issuer sidecar (Linux leftover). Still the owner's even when \"Build and run Apps\" is on.",
       "args": [{"name": "action", "required": false}],
       "flags": [
         {"name": "--json", "arg": null, "description": "Raw daemon JSON."}

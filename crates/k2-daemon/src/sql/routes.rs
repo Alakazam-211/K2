@@ -250,7 +250,7 @@ pub(crate) fn may_choose_major(project_id: &str, major: u32) -> Result<(), CliRe
             "403 Forbidden",
             "db_upgrade_off",
             format!(
-                "creating on Postgres {major} (not this box's default {default}) needs \"Allow this agent to manage Postgres versions\" — ask your human to turn it on, or leave out --major"
+                "creating on Postgres {major} (not this box's default {default}) needs \"Let this agent manage Postgres versions\" — ask your human to turn it on, or leave out --major"
             ),
         ));
     }
@@ -711,7 +711,7 @@ pub(crate) fn create_for_app_install(project_id: &str, path: &str, major: u32, a
                 403,
                 "db_upgrade_off",
                 format!(
-                    "creating the App's database on Postgres {major} (not this box's default {default}) needs \"Allow this agent to manage Postgres versions\" — ask your human to turn it on, or install with --pg-major {default} if the App allows it"
+                    "creating the App's database on Postgres {major} (not this box's default {default}) needs \"Let this agent manage Postgres versions\" — ask your human to turn it on, or install with --pg-major {default} if the App allows it"
                 ),
             ));
         }

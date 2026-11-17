@@ -19,11 +19,11 @@ pub const AGENT_RECORD_TYPES: &[&str] = &["A", "AAAA", "CNAME", "TXT", "MX", "SR
 
 /// Teaching text when the DNS-manage toggle is off for the caller's workspace.
 /// Canonical owner path (must match `cli/k2` `DNS_GATED_HINT` / `k2 dns --help`
-/// exit-3 prose — GH#32). Product UI: app master under Settings → K2 Connect,
-/// per-workspace under Workspaces → (workspace) → Allow DNS manage.
+/// exit-3 prose — GH#32). Product UI: the server-wide switch under Settings →
+/// Network → Tunnel → Policies, per workspace on its Permissions tab (DNS).
 pub const DNS_DENIED_HINT: &str = "this agent isn't allowed to manage DNS — \
-the owner can enable it in Settings → K2 Connect (Allow agents to manage DNS records) \
-or Workspaces → (workspace) → Allow DNS manage";
+Settings → Network → Tunnel → Policies → \"Agents can change DNS records\", or Settings → Workspaces / Agents → \
+<workspace> → Permissions → DNS → \"Let this agent manage DNS\".";
 
 /// Teaching text when a local envelope check rejects the request.
 pub const ZONE_LIFECYCLE_HINT: &str =

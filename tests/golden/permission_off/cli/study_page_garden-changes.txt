@@ -32,8 +32,8 @@ WHAT'S RETIRED
   A put that became a proposal   An unlisted agent's put is refused now
                                  (garden_access_needed, exit 3) and K2 asks
                                  the person with a garden.access card.
-  "Manage Gardens and data       Reaches data sources only; for Gardens,
-  sources" for Gardens           the Garden's list decides.
+  "Let this agent manage         Reaches data sources only; for Gardens,
+  Gardens and data sources"      the Garden's list decides.
   Cards: garden.keep-mine, garden.proposal.approve and the Thread's
   "Keep as mine" card. Open ones closed: "No longer needed".
   Maker-based reach: signing a widget no longer opens its data to you;

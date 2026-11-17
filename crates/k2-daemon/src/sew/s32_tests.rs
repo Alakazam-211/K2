@@ -384,7 +384,7 @@ fn ship_box_backup_clears_the_offbox_alarm_only_on_evidence() {
 
 /// Only the owner (the owner token, an Owner login, a K2 shell tab) says
 /// the box backup carries Sew's bundles. An admin and every agent are
-/// refused, even with Manage Chat / Voice Hosting; nothing changes.
+/// refused, even with Manage chat and voice; nothing changes.
 #[test]
 fn ship_box_backup_is_the_owners_only() {
     let t = t();

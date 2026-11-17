@@ -11,7 +11,7 @@ The front holds the box's public :443 (IPv4 and IPv6). For each visitor
 it reads the name they asked for (the TLS server name) and passes the
 connection, still encrypted, to the server for that name: custom App
 names (k2 app domain), K2's own Caddy (the App front door in direct
-mode), hosted mail's web pages, Chat / Voice Hosting calls (their TURN relay), and
+mode), hosted mail's web pages, chat and voice calls (their TURN relay), and
 names you pass through to your own web server. A name nothing serves is
 closed.
 

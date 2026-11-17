@@ -1039,27 +1039,27 @@ pub fn engine_from_db() -> Result<(StalwartClient, Option<String>), String> {
         server_info(&conn)
     };
     let Some(info) = info else {
-        return Err("the mail server is not installed — enable it in Settings → Email first".to_string());
+        return Err("the mail server is not installed — install it in Settings → Cores → Email Hosting → Server first".to_string());
     };
     if info.status != "running" && info.status != "degraded" {
         return Err(format!(
-            "the mail server is {} — start it in Settings → Email before managing domains",
+            "the mail server is {} — start it in Settings → Cores → Email Hosting before managing domains",
             info.status
         ));
     }
     let api_url = info
         .api_url
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "mail server has no api_url — re-run Enable in Settings → Email".to_string())?;
+        .ok_or_else(|| "mail server has no api_url — install it again in Settings → Cores → Email Hosting → Server".to_string())?;
     let key_ref = info
         .api_key_ref
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "mail server has no API key — re-run Enable in Settings → Email".to_string())?;
+        .ok_or_else(|| "mail server has no API key — install it again in Settings → Cores → Email Hosting → Server".to_string())?;
     let api_key = FileSecretStore::default()
         .resolve(&key_ref)?
         .ok_or_else(|| {
-            "mail server API key missing from the secret store — re-run Enable in \
-             Settings → Email"
+            "mail server API key missing from the secret store — install it again in \
+             Settings → Cores → Email Hosting → Server"
                 .to_string()
         })?;
     Ok((StalwartClient::new(api_url, api_key), info.hostname))
@@ -1204,7 +1204,7 @@ pub fn remove_domain(
     if let Some(stalwart_id) = row.stalwart_domain_id.as_deref() {
         let Some(engine) = engine else {
             return Err(OpError::Engine(
-                "the mail server is unavailable — start it in Settings → Email, then retry the remove"
+                "the mail server is unavailable — start it in Settings → Cores → Email Hosting, then retry the remove"
                     .to_string(),
             ));
         };
@@ -2051,7 +2051,7 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
             .expect("seed");
         }
         match remove_domain(None, "noengine.example", true, false) {
-            Err(OpError::Engine(e)) => assert!(e.contains("Settings → Email"), "{e}"),
+            Err(OpError::Engine(e)) => assert!(e.contains("Settings → Cores → Email Hosting"), "{e}"),
             other => panic!("must fail closed, got {other:?}"),
         }
         {

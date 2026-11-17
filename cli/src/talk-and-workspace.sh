@@ -2874,7 +2874,7 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         link) once, on their own screen; you never see it #if-cards
                                         An agent wanting --code, --to or --from asks the owner or an admin #if-no-cards
                                         to run it (Settings → User Access), or to turn on permission cards #if-no-cards
-                                        (Settings → Permission Cards) so it can ask on a card #if-no-cards
+                                        (Settings → Access → Permission Cards) so it can ask on a card #if-no-cards
   k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] [--max-devices <n>] …
                                         The App's link lives, set-password page, own mail text
                                         and how many devices a person may keep signed in
@@ -2974,8 +2974,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         (k2 permission request app.login-grant op=add|remove user=… app=… role=…); #if-cards
                                         the owner's Allow makes it, so don't run the add again. #if-cards
                                         Owner only. An App's own agent asks its owner to run it (from a #if-no-cards
-                                        terminal outside K2, or Settings → Apps → <the App> → Add a person), or #if-no-cards
-                                        to turn on permission cards (Settings → Permission Cards) so it can ask on a card. #if-no-cards
+                                        terminal outside K2, or Settings → Cores → Apps → <the App> → Add a person), or #if-no-cards
+                                        to turn on permission cards (Settings → Access → Permission Cards) so it can ask on a card. #if-no-cards
                                         kind=app is a login on one App: --role, or --room (repeatable;
                                         Thread-only rooms). --target: host, a service id, or <workspace>/<name>.
                                         Other kinds need --scope and no --role (recorded, not enforced).
@@ -2983,7 +2983,7 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         (an App's user: k2 app user chat <user> member --app <app> instead)
   k2 app grant add --kind chat --subject-kind workspace --subject <handle|id> --scope coworker|assistant:<username|owner>
   k2 app grant add --kind chat --subject-kind connect --subject <login|id> [--scope member|guest]
-                                        chat grants create the person's or agent's chat account (Linux, Chat / Voice Hosting enabled);
+                                        chat grants create the person's or agent's chat account (Linux, chat and voice on);
                                         roles and channels are set in Sew. --target is optional (sew).
                                         A Connect login's first chat pass writes its own connect grant;
                                         switch it off (not rm) to keep that login out of chat.
@@ -3032,10 +3032,10 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         k2 app guest --help.
   k2 app guest ceiling <app> | list <app> [--json]
                                         What <app> may hand its guests; its guests with their rooms (0.46.4).
-  k2 app hydra [on|off] [--json]       OIDC issuer sidecar (Linux; leftover)
+  k2 app hydra [on|off] [--json]       Sign-in for other sites: the OIDC issuer sidecar (Linux; leftover)
   k2 app token create --name vercel --agent sales [--caps thread:read,thread:post,files:read]
                                         Mint platform k2skn_ pass (secret once; ≥1 --agent; no user)
-  k2 app token list                    Platform tokens only (prefix + caps + rooms; hide sessions)
+  k2 app token list                    Keys for other sites only (prefix + caps + rooms; hide sessions)
   k2 app token rooms <id> --agent sales
   k2 app token rooms <id> --clear      Empty rooms (Thread dark, keep secret)
   k2 app token revoke <id>
@@ -3192,8 +3192,8 @@ WHAT IT CHECKS (it never runs your code)
     request/event handlers, setInterval started in a handler with no clear,
     listeners added per request to long-lived targets, session stores with
     no expiry (express-session with no store, MemoryStore)
-  - a folder with manifest.json, or a Seed (Apps (beta) on: Settings → Apps →
-    This server, on by default): also manifest.json and the K2 contract (caps,
+  - a folder with manifest.json, or a Seed (Apps on: Settings → Cores → Apps
+    → This server, on by default): also manifest.json and the K2 contract (caps,
     bindings, roles, requires). With Apps off a folder gets the code
     checks only (said on stderr).
   Skipped inside the folder: node_modules, dist, build, .next and other
@@ -3235,10 +3235,10 @@ EOF
             _app_validate_seed folder "$abs" "$types" "$as_json" "$manifest" && return 0
             # 10 = Apps (beta) are off: the code pass still runs.
             [ "$?" = 10 ] || exit 1
-            echo "note: Apps (beta) are off on this server (Settings → Apps → This server), so manifest.json and the contract were not checked; code checks only" >&2
+            echo "note: Apps are off on this server (Settings → Cores → Apps → This server), so manifest.json and the contract were not checked; code checks only" >&2
         fi
         if [ "$types" = 1 ]; then
-            echo "Error: --types needs a folder with manifest.json (or a Seed) and Apps (beta) on" >&2
+            echo "Error: --types needs a folder with manifest.json (or a Seed) and Apps on" >&2
             exit 2
         fi
         _app_validate_code "" "$dir" "$as_json"

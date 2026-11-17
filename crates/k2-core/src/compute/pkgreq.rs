@@ -3,7 +3,7 @@
 //!
 //! Three origins share one table:
 //! - `own`: this server's agent asked for a node this server owns. The
-//!   owner (or an Admin) decides here, on a card or in Settings → Compute →
+//!   owner (or an Admin) decides here, on a card or in Settings → Cores → Compute →
 //!   Approvals; an approval sends `packages.allow {packages, install,
 //!   request}` to the node, where root's guards run.
 //! - `sent`: this server asked another server's node. The node relays it

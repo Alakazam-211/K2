@@ -35,13 +35,13 @@ content-type: application/json
     ]
   },
   "expiresAt": "<expiresAt>",
-  "hint": "Tick Thread for pog-apps (k2 app access pog-apps --core thread=on, the owner, from a terminal outside K2) and deploy again, or held for the owner: they approve it in person (k2 app approve <W_ID> from a terminal outside K2, or Settings → App Approvals), or deny it. Check with k2 app approvals.",
+  "hint": "Tick Thread for pog-apps (k2 app access pog-apps --core thread=on, the owner, from a terminal outside K2) and deploy again, or held for the owner: they approve it in person (k2 app approve <W_ID> from a terminal outside K2, or Settings → Cores → App Approvals), or deny it. Check with k2 app approvals.",
   "kind": "install",
   "note": "nothing runs until the owner approves",
   "ok": true,
   "reasons": [
     "an App's first install sets the caps it may use: the owner approves them",
-    "tick Thread for pog-apps to let its Apps use it without asking (the owner: Settings → Workspaces → pog-apps → Agent → Apps, or k2 app access pog-apps --core thread=on from a terminal outside K2)"
+    "tick Thread for pog-apps to let its Apps use it without asking (the owner: Settings → Workspaces / Agents → pog-apps → Permissions → Apps, or k2 app access pog-apps --core thread=on from a terminal outside K2)"
   ],
   "request": {
     "appId": "pogapp",
@@ -84,7 +84,7 @@ content-type: application/json
     "reason": null,
     "reasons": [
       "an App's first install sets the caps it may use: the owner approves them",
-      "tick Thread for pog-apps to let its Apps use it without asking (the owner: Settings → Workspaces → pog-apps → Agent → Apps, or k2 app access pog-apps --core thread=on from a terminal outside K2)"
+      "tick Thread for pog-apps to let its Apps use it without asking (the owner: Settings → Workspaces / Agents → pog-apps → Permissions → Apps, or k2 app access pog-apps --core thread=on from a terminal outside K2)"
     ],
     "requestedAt": "<requestedAt>",
     "requestedBy": "agent:pog-apps",
@@ -137,13 +137,13 @@ content-type: application/json
     ]
   },
   "expiresAt": "<expiresAt>",
-  "hint": "Tick Thread for pog-apps (k2 app access pog-apps --core thread=on, the owner, from a terminal outside K2) and deploy again, or held for the owner: they approve it in person (k2 app approve <W_ID> from a terminal outside K2, or Settings → App Approvals), or deny it. Check with k2 app approvals.",
+  "hint": "Tick Thread for pog-apps (k2 app access pog-apps --core thread=on, the owner, from a terminal outside K2) and deploy again, or held for the owner: they approve it in person (k2 app approve <W_ID> from a terminal outside K2, or Settings → Cores → App Approvals), or deny it. Check with k2 app approvals.",
   "kind": "install",
   "note": "nothing runs until the owner approves",
   "ok": true,
   "reasons": [
     "an App's first install sets the caps it may use: the owner approves them",
-    "tick Thread for pog-apps to let its Apps use it without asking (the owner: Settings → Workspaces → pog-apps → Agent → Apps, or k2 app access pog-apps --core thread=on from a terminal outside K2)"
+    "tick Thread for pog-apps to let its Apps use it without asking (the owner: Settings → Workspaces / Agents → pog-apps → Permissions → Apps, or k2 app access pog-apps --core thread=on from a terminal outside K2)"
   ],
   "request": {
     "appId": "pogapp",
@@ -186,7 +186,7 @@ content-type: application/json
     "reason": null,
     "reasons": [
       "an App's first install sets the caps it may use: the owner approves them",
-      "tick Thread for pog-apps to let its Apps use it without asking (the owner: Settings → Workspaces → pog-apps → Agent → Apps, or k2 app access pog-apps --core thread=on from a terminal outside K2)"
+      "tick Thread for pog-apps to let its Apps use it without asking (the owner: Settings → Workspaces / Agents → pog-apps → Permissions → Apps, or k2 app access pog-apps --core thread=on from a terminal outside K2)"
     ],
     "requestedAt": "<requestedAt>",
     "requestedBy": "agent:pog-apps",

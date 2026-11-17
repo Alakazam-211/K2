@@ -656,7 +656,7 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
         Err(e) => return err(400, "usage", e),
     };
     if matches!(who, Who::Other | Who::Member { .. }) {
-        return err(403, versions_access::OWNER_ONLY, "moving a database needs the owner, or an agent with \"Allow this agent to manage Postgres versions\"");
+        return err(403, versions_access::OWNER_ONLY, "moving a database needs the owner, or an agent with \"Let this agent manage Postgres versions\"");
     }
     if !crate::sql::sql_supported() {
         return err(503, "unsupported", "Postgres runs on Linux deployments only");

@@ -48,9 +48,18 @@ use crate::sidecar_routes::Caller;
 
 // ── shared helpers for the E1 entries (also used by connections.rs) ──
 
-/// The Settings deep link and path every Agent-tab switch shares.
-pub(crate) const AGENT_TAB: SettingsRef =
-    SettingsRef { page: "workspaces/{ws}/agent", path: "Settings → Workspaces → {ws} → Agent" };
+/// The Settings deep link and path every agent switch on the Permissions
+/// tab shares.
+pub(crate) const PERMISSIONS_TAB: SettingsRef = SettingsRef {
+    page: "workspaces/{ws}/permissions",
+    path: "Settings → Workspaces / Agents → {ws} → Permissions",
+};
+
+/// The Connections tab ("Connection rules" card): the connection switches.
+pub(crate) const CONNECTIONS_TAB: SettingsRef = SettingsRef {
+    page: "workspaces/{ws}/connections",
+    path: "Settings → Workspaces / Agents → {ws} → Connections",
+};
 
 /// The route caller an answerer is: the owner token, or a Connect login.
 pub(crate) fn as_caller(who: &Answerer) -> Caller {
@@ -165,9 +174,9 @@ pub(crate) fn check_state(want_on: bool, is_on: bool) -> Check {
 }
 
 /// The card line for an applied tightening (the core's default line is
-/// for loosening).
-pub(crate) fn off_message(ctx: &Ctx) -> String {
-    format!("Turned off. Turn it back on in Settings → Workspaces → {} → Agent.", ctx.workspace_handle)
+/// for loosening), naming the tab where the switch lives.
+pub(crate) fn off_message(ctx: &Ctx, tab: SettingsRef) -> String {
+    format!("Turned off. Turn it back on in {}.", tab.path.replace("{ws}", &ctx.workspace_handle))
 }
 
 // ── the table ───────────────────────────────────────────────────────
@@ -227,7 +236,7 @@ const fn on_spec(
         expiry: Expiry::STANDARD,
         words: Words { setting, what_changes: what, consequences, scope: "{ws}", duration: DURATION_ON, retry: RETRY },
         undo: Undo::Twin { action: off_id },
-        settings: AGENT_TAB,
+        settings: PERMISSIONS_TAB,
         walls,
         coverage,
         machine_hints: &[],
@@ -253,7 +262,7 @@ pub(crate) const fn off_spec(
         expiry: Expiry::STANDARD,
         words: Words { setting, what_changes: what, consequences, scope: "{ws}", duration: DURATION_OFF, retry: "" },
         undo: Undo::None,
-        settings: AGENT_TAB,
+        settings: PERMISSIONS_TAB,
         walls: &[],
         coverage: WallCoverage::None,
         machine_hints: &[],
@@ -313,7 +322,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "compute.use-off",
             Floor::Admin,
             &[],
-            "Allow compute nodes",
+            "Let this agent use compute nodes",
             "Let {ws} run jobs on this server's compute nodes",
             "It may use every machine switched on here, with default limits, and machines added later. Jobs see only the code {ws} sends.",
             COMPUTE_USE_WALLS,
@@ -323,7 +332,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "compute.use-off",
             Floor::Admin,
             &[],
-            "Allow compute nodes",
+            "Let this agent use compute nodes",
             "Stop {ws} running jobs on this server's compute nodes",
             "Its grants on every machine are removed. Queued and running jobs keep going; new runs are refused.",
         ),
@@ -335,7 +344,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "compute.operate-off",
             Floor::Admin,
             &[],
-            "Allow this agent to operate compute nodes",
+            "Let this agent operate compute nodes",
             "Let {ws} pause, drain, resume, narrow, update and restart compute nodes",
             "Root steps on a machine still wait for the owner every time.",
             &[code_wall("operate_off", "/cli/")],
@@ -345,7 +354,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "compute.operate-off",
             Floor::Admin,
             &[],
-            "Allow this agent to operate compute nodes",
+            "Let this agent operate compute nodes",
             "Stop {ws} operating compute nodes",
             "Pausing, draining and restarting machines goes back to the owner.",
         ),
@@ -357,7 +366,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "compute.manage-off",
             Floor::Owner,
             &[],
-            "Allow managing compute nodes",
+            "Let this agent manage compute nodes",
             "Let {ws} add, confirm, rename, pause and retire compute machines",
             "These are the owner's steps on this server, so only the owner allows them.",
             &[code_wall("owner_only", "/cli/compute/")],
@@ -367,7 +376,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "compute.manage-off",
             Floor::Owner,
             &[],
-            "Allow managing compute nodes",
+            "Let this agent manage compute nodes",
             "Stop {ws} managing compute machines",
             "Adding, confirming and retiring machines goes back to the owner.",
         ),
@@ -425,7 +434,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "projects.manage-off",
             Floor::Admin,
             &[],
-            "Manage K2 projects",
+            "Let this agent manage K2 projects",
             "Let {ws} create, rename and delete K2 projects and change who is in them",
             "It covers every project {ws} can see.",
             &[code_wall("agent_permission_off", "/cli/")],
@@ -435,7 +444,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "projects.manage-off",
             Floor::Admin,
             &[],
-            "Manage K2 projects",
+            "Let this agent manage K2 projects",
             "Stop {ws} changing K2 projects",
             "It can still read its projects and use their project chat.",
         ),
@@ -542,9 +551,9 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "chat.manage-off",
             Floor::Admin,
             &[],
-            "Manage Chat / Voice Hosting",
-            "Let {ws} run Chat / Voice Hosting on this server and manage its communities",
-            "It may enable, upgrade, back up and roll back Chat / Voice Hosting here. It gets its own chat account too, as a coworker, if it has none.",
+            "Manage chat and voice",
+            "Let {ws} run chat and voice on this server and manage its communities",
+            "It may set up, update, back up and roll back chat and voice here. It gets its own chat account too, as a coworker, if it has none.",
             CHAT_MANAGE_WALLS,
             WallCoverage::Code,
         ),
@@ -552,9 +561,9 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "chat.manage-off",
             Floor::Admin,
             &[],
-            "Manage Chat / Voice Hosting",
-            "Stop {ws} running Chat / Voice Hosting",
-            "Chat / Voice Hosting keeps running; managing it goes back to the owner and admins. Its chat account stays.",
+            "Manage chat and voice",
+            "Stop {ws} running chat and voice",
+            "Chat and voice keep running; managing them goes back to the owner and admins. Its chat account stays.",
         ),
         writer: Writer::Access("chat_manage"),
     },
@@ -564,7 +573,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "vault.manage-off",
             Floor::Admin,
             &[],
-            "Allow managing server-wide secrets",
+            "Let this agent manage server-wide secrets",
             "Let {ws} share server secrets with other workspaces and look after them",
             "Never with itself, and it can't loosen a secret it uses. It never sees a secret's value.",
             &[code_wall("vault_manage_required", "/cli/")],
@@ -574,7 +583,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "vault.manage-off",
             Floor::Admin,
             &[],
-            "Allow managing server-wide secrets",
+            "Let this agent manage server-wide secrets",
             "Stop {ws} managing server-wide secrets",
             "Secrets it already shared stay shared until someone changes them.",
         ),
@@ -586,7 +595,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "gardens.manage-off",
             Floor::Admin,
             &[],
-            "Manage Gardens and data sources",
+            "Let this agent manage Gardens and data sources",
             "Let {ws} write Gardens and widgets and approve data sources",
             "Its writes stop waiting as proposals. Locked Gardens stay locked.",
             &[code_wall("person_only", "/cli/sources/"), code_wall("person_only", "/cli/zen/")],
@@ -596,7 +605,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "gardens.manage-off",
             Floor::Admin,
             &[],
-            "Manage Gardens and data sources",
+            "Let this agent manage Gardens and data sources",
             "Stop {ws} writing Gardens directly",
             "Its Garden and widget changes become proposals again.",
         ),
@@ -608,7 +617,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "dns.manage-off",
             Floor::Admin,
             &[],
-            "Allow agents to manage DNS for this workspace",
+            "Let this agent manage DNS",
             "Let {ws} manage DNS records",
             "It may add and change records on this server's domains.",
             &[code_wall("dns_manage_disabled", "/cli/")],
@@ -618,7 +627,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "dns.manage-off",
             Floor::Admin,
             &[],
-            "Allow agents to manage DNS for this workspace",
+            "Let this agent manage DNS",
             "Stop {ws} managing DNS records",
             "Records it made stay. The server-wide DNS switch, when on, still lets it in.",
         ),
@@ -630,7 +639,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "mail.manage-off",
             Floor::Admin,
             &[],
-            "Allow agents to manage hosted mail on this host",
+            "Let this agent manage hosted mail",
             "Let {ws} turn hosted mail on and off and add and check its domains",
             "Uninstalling, removing a domain, OAuth and access stay the owner's.",
             &[code_wall("owner_only", "/cli/mail/")],
@@ -640,7 +649,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "mail.manage-off",
             Floor::Admin,
             &[],
-            "Allow agents to manage hosted mail on this host",
+            "Let this agent manage hosted mail",
             "Stop {ws} managing hosted mail",
             "Hosted mail keeps running; managing it goes back to the owner and admins.",
         ),
@@ -674,7 +683,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "db.agent-access-off",
             Floor::Admin,
             LEVEL,
-            "Allow this agent to create databases",
+            "Let this agent create databases",
             "Let {ws} create new databases",
             "Create only: databases it already uses stay usable either way.",
             &[code_wall("forbidden", "/cli/db/")],
@@ -684,7 +693,7 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "db.agent-access-off",
             Floor::Admin,
             LEVEL,
-            "Allow this agent to create databases",
+            "Let this agent create databases",
             "Stop {ws} creating new databases",
             "Databases it already has stay usable.",
         ),
@@ -944,7 +953,7 @@ fn apply_on<const I: usize>(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -
 }
 
 fn apply_off<const I: usize>(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
-    applied(&write(&SWITCHES[I], ctx, who, false), off_message(ctx))
+    applied(&write(&SWITCHES[I], ctx, who, false), off_message(ctx, PERMISSIONS_TAB))
 }
 
 macro_rules! register {
@@ -972,7 +981,7 @@ pub(crate) static NOT_CARDABLE: [NotCardableSpec; 11] = [
         id: "heartbeat.wake-computer",
         area: Area::Switches,
         why: NotCardable::Dropped,
-        r#where: "Settings → Workspaces → <agent> → Heartbeats (any login may turn wake on)",
+        r#where: "Settings → Logs → Heartbeats (any login may turn wake on)",
     },
     NotCardableSpec {
         id: "workspace.skip-permissions",
@@ -981,24 +990,24 @@ pub(crate) static NOT_CARDABLE: [NotCardableSpec; 11] = [
         r#where: "a terminal outside K2 (k2 workspace api-skip-permissions)",
     },
     NotCardableSpec { id: "compute.grant", area: Area::Compute, why: NotCardable::Covered { by: "compute.use" }, r#where: IN_SETTINGS },
-    NotCardableSpec { id: "compute.node.pause", area: Area::Compute, why: NotCardable::Dropped, r#where: "Settings → Compute" },
+    NotCardableSpec { id: "compute.node.pause", area: Area::Compute, why: NotCardable::Dropped, r#where: "Settings → Cores → Compute → Machine settings" },
     NotCardableSpec { id: "domain.apex.add", area: Area::Domains, why: NotCardable::Covered { by: "dns.manage" }, r#where: IN_SETTINGS },
     NotCardableSpec { id: "vault.widen", area: Area::Vault, why: NotCardable::Dropped, r#where: "Settings → Vault" },
     NotCardableSpec { id: "vault.self-grant", area: Area::Vault, why: NotCardable::Dropped, r#where: "Settings → Vault" },
-    NotCardableSpec { id: "mail.rules", area: Area::Mail, why: NotCardable::Dropped, r#where: "Settings → Mail" },
-    NotCardableSpec { id: "mail.inbox-access", area: Area::Mail, why: NotCardable::Dropped, r#where: "Settings → Mail" },
+    NotCardableSpec { id: "mail.rules", area: Area::Mail, why: NotCardable::Dropped, r#where: "Settings → Workspaces / Agents → <agent> → Mail" },
+    NotCardableSpec { id: "mail.inbox-access", area: Area::Mail, why: NotCardable::Dropped, r#where: "Settings → Workspaces / Agents → <agent> → Mail" },
     // Rosson (2026-10-21): agents can't ask for wider roles or clones.
     NotCardableSpec {
         id: "app.role-caps",
         area: Area::Apps,
         why: NotCardable::Dropped,
-        r#where: "Settings → Apps → Roles (talk to the agent that manages the role)",
+        r#where: "Settings → Cores → Apps → <app> → Roles (talk to the agent that manages the role)",
     },
     NotCardableSpec {
         id: "clone.approve",
         area: Area::Clone,
         why: NotCardable::Dropped,
-        r#where: "Settings → Clone, by the person who runs the clone",
+        r#where: "Settings → General or Settings → Access → Admin Access, by the person who runs the clone",
     },
 ];
 

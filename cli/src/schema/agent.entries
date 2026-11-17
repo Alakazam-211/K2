@@ -153,7 +153,7 @@
     {
       "name": "agent access",
       "usage": "k2 agent access set <workspace> chat_manage|chat_refresh|agents_hire|agents_manage on|off [--json]",
-      "description": "One switch for one workspace's agent. chat_manage: \"Manage Chat / Voice Hosting\" (it may run Chat / Voice Hosting on this server, create Spaces and bind them to its Apps; on also makes its own chat account, as a coworker, if it has none; off keeps it). chat_refresh: \"Let this agent refresh its pinned chat\". agents_hire: \"Let this agent hire agents\" (its main session may run k2 agent hire). agents_manage: \"Let this agent manage its sidecars\" (its main session may open and stop its sidecars). The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
+      "description": "One switch for one workspace's agent. chat_manage: \"Manage chat and voice\" (it may run chat and voice on this server, create Spaces and bind them to its Apps; on also makes its own chat account, as a coworker, if it has none; off keeps it). chat_refresh: \"Let this agent refresh its pinned chat\". agents_hire: \"Let this agent hire agents\" (its main session may run k2 agent hire). agents_manage: \"Let this agent manage its sidecars\" (its main session may open and stop its sidecars). The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
       "args": [{"name": "workspace", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output."}]
     },
@@ -235,7 +235,7 @@
     {
       "name": "agent refresh",
       "usage": "k2 agent refresh [<workspace>] [--note <text> | --notes-file <path>] [--full] [--dry-run] [--json]",
-      "description": "Start a new pinned chat on the same harness that carries on from the current one, for a long chat that has gone stale. K2 ends the current chat at once (anything running in it stops), starts a new one with the same launch options, and sends it a summary and your note when it is ready. The old chat stays in Chat history; the Thread, messages and heartbeats on the pinned chat carry on in the new one; sidecars keep running. A person runs it for any workspace (owner, Admin, or a person in a K2 shell tab). An agent's main session may run it for its own workspace with \"Can refresh its own pinned chat\" on; otherwise exit 3, and with permission cards on the refusal ends with the k2 permission request chat.refresh line. Read k2 study chat-refresh. Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "description": "Start a new pinned chat on the same harness that carries on from the current one, for a long chat that has gone stale. K2 ends the current chat at once (anything running in it stops), starts a new one with the same launch options, and sends it a summary and your note when it is ready. The old chat stays in Chat history; the Thread, messages and heartbeats on the pinned chat carry on in the new one; sidecars keep running. A person runs it for any workspace (owner, Admin, or a person in a K2 shell tab). An agent's main session may run it for its own workspace with \"Let this agent refresh its pinned chat\" on; otherwise exit 3, and with permission cards on the refusal ends with the k2 permission request chat.refresh line. Read k2 study chat-refresh. Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
       "args": [
         {"name": "workspace", "required": false, "description": "Workspace handle, name or path. Default: this workspace."}
       ],

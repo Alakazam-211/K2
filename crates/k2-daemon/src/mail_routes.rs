@@ -761,7 +761,7 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
 
 const OWNER_ONLY_HINT: &str = "requires owner/admin — ask your human (k2 hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces)";
 
-const OWNER_ONLY_MANAGE_HINT: &str = "requires owner/admin — ask your human (k2 hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces). To let this workspace's agent manage hosted mail on this host, Settings → Workspaces → (this workspace) → Allow agents to manage hosted mail on this host.";
+const OWNER_ONLY_MANAGE_HINT: &str = "requires owner/admin — ask your human (k2 hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces). To let this workspace's agent manage hosted mail: Settings → Workspaces / Agents → (this workspace) → Permissions → Hosted mail → \"Let this agent manage hosted mail\".";
 
 /// C33: flag-on leftover M6 names the missing verb, not the Settings toggle.
 fn leftover_m6_hint(path: &str) -> String {
@@ -1077,7 +1077,7 @@ mod tests {
             "hint should teach owner/human: {hint}"
         );
         assert!(
-            !hint.contains("Allow agents to manage hosted mail"),
+            !hint.contains("Let this agent manage hosted mail"),
             "generic hint must not name the Settings row: {hint}"
         );
     }
@@ -1190,7 +1190,7 @@ mod tests {
         assert!(body.contains("owner_only"), "{body}");
         assert!(body.contains("k2 hostmail calendar"), "names the verb: {body}");
         assert!(
-            !body.contains("Allow agents to manage hosted mail"),
+            !body.contains("Let this agent manage hosted mail"),
             "must not promise the toggle: {body}"
         );
         assert!(mail_manage_authorized(p, false, None).is_err(), "Member is refused");
@@ -1388,7 +1388,7 @@ mod tests {
         assert!(body.contains("owner_only"), "{body}");
         assert!(body.contains("k2 hostmail profile"), "names the verb: {body}");
         assert!(
-            !body.contains("Allow agents to manage hosted mail"),
+            !body.contains("Let this agent manage hosted mail"),
             "must not promise the toggle: {body}"
         );
         assert!(mail_manage_authorized(p, false, None).is_err(), "Member is refused");
@@ -1425,7 +1425,7 @@ mod tests {
         assert!(body.contains("owner_only"), "{body}");
         assert!(body.contains("k2 hostmail upgrade"), "names the verb: {body}");
         assert!(
-            !body.contains("Allow agents to manage hosted mail"),
+            !body.contains("Let this agent manage hosted mail"),
             "must not promise the toggle: {body}"
         );
         assert!(mail_manage_authorized(p, false, None).is_err(), "Member is refused");
@@ -1491,7 +1491,7 @@ mod tests {
         let hint = v["error"]["hint"].as_str().expect("hint");
         assert!(hint.contains("ask your human"), "got {hint}");
         assert!(
-            hint.contains("Allow agents to manage hosted mail on this host"),
+            hint.contains("Let this agent manage hosted mail"),
             "flag-off hint must name the Settings row: {hint}"
         );
         // 0.46.1: it names the workspace whose toggle was checked.
@@ -1617,7 +1617,7 @@ mod tests {
         let body = m5.err().unwrap().body;
         assert!(body.contains("owner_only"), "{body}");
         assert!(
-            body.contains("Allow agents to manage hosted mail"),
+            body.contains("Let this agent manage hosted mail"),
             "M5 flag-off names Settings: {body}"
         );
         let m6 = mail_manage_authorized("/cli/mail/server/uninstall", false, Some(&p));
@@ -1625,7 +1625,7 @@ mod tests {
         let body = m6.err().unwrap().body;
         assert!(body.contains("owner_only"), "{body}");
         assert!(
-            !body.contains("Allow agents to manage hosted mail"),
+            !body.contains("Let this agent manage hosted mail"),
             "M6 must not promise the toggle: {body}"
         );
         assert!(

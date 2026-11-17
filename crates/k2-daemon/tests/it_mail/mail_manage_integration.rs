@@ -364,7 +364,7 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
         assert!(
             dkim_off
                 .body
-                .contains("Allow agents to manage hosted mail on this host"),
+                .contains("Let this agent manage hosted mail"),
             "flag-off dkim names Settings: {}",
             dkim_off.body
         );
@@ -385,7 +385,7 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
         assert!(
             ptr_off
                 .body
-                .contains("Allow agents to manage hosted mail on this host"),
+                .contains("Let this agent manage hosted mail"),
             "flag-off ptr names Settings: {}",
             ptr_off.body
         );
@@ -405,7 +405,7 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
         assert!(
             disable_off
                 .body
-                .contains("Allow agents to manage hosted mail on this host"),
+                .contains("Let this agent manage hosted mail"),
             "manage OFF hint must name the Settings row: {}",
             disable_off.body
         );
@@ -445,7 +445,7 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
         assert!(
             !agent_toggle
                 .body
-                .contains("Allow agents to manage hosted mail on this host"),
+                .contains("Let this agent manage hosted mail"),
             "writer self-grant must not promise the agent can flip: {}",
             agent_toggle.body
         );
@@ -574,7 +574,7 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
         assert!(
             !uninstall
                 .body
-                .contains("Allow agents to manage hosted mail on this host"),
+                .contains("Let this agent manage hosted mail"),
             "M6 hint must not name the toggle: {}",
             uninstall.body
         );
@@ -597,7 +597,7 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             assert_owner_only(&r, &format!("flag ON leftover M6 must not open {path}"));
             assert!(
                 !r.body
-                    .contains("Allow agents to manage hosted mail on this host"),
+                    .contains("Let this agent manage hosted mail"),
                 "C33 leftover M6 names the verb, not Settings: {} {}",
                 path,
                 r.body

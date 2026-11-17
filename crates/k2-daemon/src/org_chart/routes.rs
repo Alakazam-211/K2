@@ -128,7 +128,7 @@ fn manage_off(ws: &str) -> CliResponse {
         "403 Forbidden",
         MANAGE_OFF_CODE,
         &format!(
-            "Managing the Org Chart needs the Owner to turn on 'Manage the org chart' for {ws} (Settings → Workspaces → {ws} → Agent). Reading, your own bulletin as a head, update, ask and reach need no switch."
+            "Managing the Org Chart needs the Owner to turn on 'Manage the org chart' for {ws} (Settings → Workspaces / Agents → {ws} → Permissions → Org Chart). Reading, your own bulletin as a head, update, ask and reach need no switch."
         ),
     )
 }
@@ -330,7 +330,7 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
             OrgCaller::Person { .. } => Err(refusal(
                 "403 Forbidden",
                 "agent_only",
-                "reach is an agent's ask to be connected to a head; a person connects agents in Settings → Connections (or k2 connections add).",
+                "reach is an agent's ask to be connected to a head; a person connects agents in Settings → Workspaces / Agents → <agent> → Connections (or k2 connections add).",
             )),
         },
         "/cli/organization/create" => create(caller, &m, now.timestamp()),

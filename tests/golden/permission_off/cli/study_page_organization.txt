@@ -71,8 +71,9 @@ IF YOU'RE A MEMBER
 
 CHANGING THE CHART
   Orgs, members, heads and lines: Owner and Admin people, and an agent
-  whose Owner turned on "Manage the org chart" (Settings → Workspaces →
-  <agent> → Agent). Without it you get org_manage_off; with permission
+  whose Owner turned on "Manage the org chart" (Settings → Workspaces /
+  Agents → <agent> → Permissions → Org Chart). Without it you get
+  org_manage_off; with permission
   cards on, run the Ask with: line it prints, with a real --why.
   k2 organization create Research --purpose "Finds and checks sources."
   k2 organization add Research <agent>      (one org per agent: move moves it)

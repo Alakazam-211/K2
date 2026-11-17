@@ -196,7 +196,7 @@ fn a_helper_below_protocol_15_is_helper_outdated_and_nothing_runs() {
 
 // ── who ──────────────────────────────────────────────────────────────────
 
-/// PRD §8 K-a: an agent, even with Manage Chat / Voice Hosting, gets
+/// PRD §8 K-a: an agent, even with Manage chat and voice, gets
 /// `person_only` and the card's line; it never stages or installs anything.
 #[test]
 fn an_agent_gets_person_only_and_the_card_line_never_an_install() {

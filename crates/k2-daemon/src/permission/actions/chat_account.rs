@@ -8,7 +8,7 @@
 //! names only a person or an agent with its own account a manager.
 //!
 //! **The broad switch comes first (Rosson 2026-11-02).** An agent with
-//! "Manage Chat / Voice Hosting" on gets this account by itself
+//! "Manage chat and voice" on gets this account by itself
 //! (`k2_core::sew_chat::person::ensure_chat_manage_account`), so this card
 //! is for an agent without the switch that only takes part in chat, and
 //! for one whose account a person removed.
@@ -189,7 +189,7 @@ fn check(ctx: &Ctx) -> Check {
         Ok(false) => {
             return Check::Unavailable {
                 code: "chat_unavailable",
-                why: "Chat / Voice Hosting isn't on for this server, so there are no chat accounts yet: the owner turns it on first (k2 hostchat status)".into(),
+                why: "Chat and voice aren't on for this server, so there are no chat accounts yet: the owner turns it on first (k2 hostchat status)".into(),
             }
         }
         Err(e) => return Check::Unavailable { code: "chat_unavailable", why: e },

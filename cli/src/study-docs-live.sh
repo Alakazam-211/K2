@@ -23,7 +23,8 @@ CORES
   Live docs are switched per kind of file on each server: k2 doc cores.
   Markdown, text and code, and any other file each have a multiplayer
   core, and every core is off until the server's owner or an Admin turns
-  it on (k2 doc cores on <core>, or Settings → Cores → Multiplayer). A
+  it on (k2 doc cores on <core>, or Settings → Cores → Multiplayer →
+  Kinds of files). A
   file whose core is off is refused by every k2 doc verb (core_off, exit
   3): nothing was opened or changed. Edit it with ordinary tools, and if
   it should be live, ask your human (k2 thread): only a person switches a

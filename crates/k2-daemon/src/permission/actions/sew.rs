@@ -36,7 +36,7 @@ use crate::vault::actor::{Channel, VaultCaller};
 /// The card's route wall: an agent's own call to the owner handoff.
 pub(crate) const HANDOFF_ROUTE: &str = crate::chat_pass::mint::OWNER_HANDOFF;
 /// Why a tunnel answer (Connect, a phone) doesn't open Sew.
-pub(crate) const LOCAL_ONLY: &str = "Open this from K2 on the box's own computer (or Settings → Chat / Voice Hosting there): Sew opens as its owner only from the box or its LAN, never through the tunnel";
+pub(crate) const LOCAL_ONLY: &str = "Open this from K2 on the server's own computer (or Settings → Cores → Chat / Voice there): chat opens as its owner only from this server or its LAN, never through the tunnel";
 
 /// The one-time link lives this long (the handoff code's TTL).
 pub(crate) const LINK_TTL_SECS: i64 = crate::chat_pass::handoff::TTL_SECS;
@@ -51,15 +51,15 @@ pub(crate) static OWNER_HANDOFF: ActionSpec = ActionSpec {
     proof: Proof::SettingsConfirm { action: ConfirmAction::ChatOwnerHandoff },
     expiry: Expiry { default_secs: 24 * 3600, max_secs: MAX_EXPIRY_SECS },
     words: Words {
-        setting: "Open Sew as owner",
-        what_changes: "Open Sew's web app as its install owner, for you ({ws} asked)",
-        consequences: "K2 opens a one-time link for you only (it works once, for 60 seconds); {ws} never gets it and never becomes Sew's owner. In Sew, promoting someone to install owner or admin lifts their Sew bans.",
+        setting: "Open chat as owner",
+        what_changes: "Open the chat web app as its install owner, for you ({ws} asked)",
+        consequences: "K2 opens a one-time link for you only (it works once, for 60 seconds); {ws} never gets it and never becomes chat's owner. In chat, promoting someone to install owner or admin lifts their chat bans.",
         scope: "you, once",
         duration: "once",
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "sew", path: "Settings → Cores → Chat / Voice Hosting → Open Sew as owner" },
+    settings: SettingsRef { page: "sew", path: "Settings → Cores → Chat / Voice → Open chat as owner" },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "owner_only" },
         route_prefix: HANDOFF_ROUTE,
@@ -91,10 +91,10 @@ pub(crate) static ROLLBACK_DATA_LOSS: ActionSpec = ActionSpec {
     proof: Proof::SettingsConfirm { action: ConfirmAction::SewRollbackDataLoss },
     expiry: Expiry { default_secs: 24 * 3600, max_secs: MAX_EXPIRY_SECS },
     words: Words {
-        setting: "Roll Sew back",
-        what_changes: "Roll this server's chat (Sew) back from {from} to {to}",
+        setting: "Roll chat back",
+        what_changes: "Roll this server's chat back from {from} to {to}",
         consequences: "Chat written since {since} will be lost from the live chat; a backup of it is kept. Approving runs \
-            it now: K2 backs up the chat on Sew {from}, then everyone's chat goes back to how it was at {since}. Chat is offline \
+            it now: K2 backs up the chat on version {from}, then everyone's chat goes back to how it was at {since}. Chat is offline \
             for a few minutes while it runs. To bring the newer chat back later: k2 hostchat upgrade, then k2 hostchat \
             restore <the kept backup> --confirm.",
         scope: "this server's chat, for everyone",
@@ -159,7 +159,7 @@ fn check_rollback(ctx: &Ctx) -> Check {
     if !k2_core::workspace::settings::agents_can_manage_chat(&ctx.workspace_id) {
         return Check::Unavailable {
             code: "chat_manage_off",
-            why: format!("\"Manage Chat / Voice Hosting\" is off for {}: only an agent that manages it may ask", ctx.workspace_handle),
+            why: format!("\"Manage chat and voice\" is off for {}: only an agent that manages it may ask", ctx.workspace_handle),
         };
     }
     match rollback_plan() {
@@ -263,7 +263,7 @@ fn check(ctx: &Ctx) -> Check {
     if !k2_core::workspace::settings::agents_can_manage_chat(&ctx.workspace_id) {
         return Check::Unavailable {
             code: "chat_manage_off",
-            why: format!("\"Manage Chat / Voice Hosting\" is off for {}: only an agent that manages it may ask", ctx.workspace_handle),
+            why: format!("\"Manage chat and voice\" is off for {}: only an agent that manages it may ask", ctx.workspace_handle),
         };
     }
     if app_url().is_none() {
@@ -388,8 +388,8 @@ pub(crate) static RECORDING_ENABLE: ActionSpec = ActionSpec {
     proof: Proof::SettingsConfirm { action: ConfirmAction::SewRecordingEnable },
     expiry: Expiry { default_secs: 24 * 3600, max_secs: MAX_EXPIRY_SECS },
     words: Words {
-        setting: "Install Sew's recorder",
-        what_changes: "Install Sew's recorder and transcriber on this server and turn recording on ({ws} asked)",
+        setting: "Install the chat recorder",
+        what_changes: "Install the chat recorder and transcriber on this server and turn recording on ({ws} asked)",
         consequences: "Calls can then be recorded and transcribed where an App or a room allows it, and only for people who \
             consent; nobody is recorded without saying yes. It needs 8 GiB of RAM and some disk under /var/lib. Turning it \
             off later (k2 hostchat recording disable) keeps the recorder and every recording; uninstalling it never deletes \
@@ -416,7 +416,7 @@ fn check_recording(ctx: &Ctx) -> Check {
     if !k2_core::workspace::settings::agents_can_manage_chat(&ctx.workspace_id) {
         return Check::Unavailable {
             code: "chat_manage_off",
-            why: format!("\"Manage Chat / Voice Hosting\" is off for {}: only an agent that manages it may ask", ctx.workspace_handle),
+            why: format!("\"Manage chat and voice\" is off for {}: only an agent that manages it may ask", ctx.workspace_handle),
         };
     }
     let env = crate::sew::supervisor::live();

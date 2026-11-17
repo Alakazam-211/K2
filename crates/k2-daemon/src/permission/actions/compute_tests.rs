@@ -210,7 +210,7 @@ fn the_card_names_the_change_and_its_reason() {
     assert!(want.contains(&name), "the change names the node: {want}");
     let cons = vw["consequences"].as_str().unwrap_or_else(|| panic!("no consequences: {vw}"));
     assert!(cons.contains(&format!("it runs on {name} as root")), "{cons}");
-    assert!(cons.contains(&format!("This is request {id} in Settings → Compute → Approvals")), "{cons}");
+    assert!(cons.contains(&format!("This is request {id} in Settings → Cores → Compute → Machine settings → Waiting for you")), "{cons}");
     assert!(cons.ends_with("The agent's reason when it filed the request: wedged"), "{cons}");
     let prompt = vw.to_string();
     assert!(!prompt.contains('\u{2014}'), "no em dashes on the card: {vw}");
@@ -283,7 +283,7 @@ fn only_an_agent_that_may_act_on_nodes_raises_the_card() {
     set_operate(&ws, false);
     let (s, v) = ask(&ws, "compute.admin-approve", json!({ "request": id }));
     assert_eq!((s.as_str(), &v["error"]["code"]), ("409 Conflict", &json!("compute_admin_off")), "{v}");
-    assert!(v["error"]["hint"].as_str().unwrap_or("").contains("Allow managing compute nodes"), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap_or("").contains("Let this agent manage compute nodes"), "{v}");
 
     // "Allow managing compute nodes" alone is enough.
     set_manage(&ws, true);
@@ -591,7 +591,7 @@ fn the_package_card_names_what_installs_where_and_for_whom() {
     );
     let cons = vw["consequences"].as_str().unwrap_or_else(|| panic!("no consequences: {vw}"));
     assert!(cons.starts_with(&format!("Root installs them on {name} from the distro's signed official repos")), "{cons}");
-    assert!(cons.contains(&format!("This is request {id} in Settings → Compute → Approvals")), "{cons}");
+    assert!(cons.contains(&format!("This is request {id} in Settings → Cores → Compute → Machine settings → Waiting for you")), "{cons}");
     assert!(cons.ends_with("The agent's reason: the Tauri tests need GTK"), "{cons}");
     assert!(!cons.contains("every job on that machine"), "this server's own agent asked: {cons}");
     let all = vw.to_string();

@@ -339,7 +339,7 @@ fn app_user(c: &Ctx, username: &str) -> Result<(String, skin::SkinGrant), CliRes
         return Err(err(
             403,
             BOX_LOGIN,
-            format!("'{username}' has a box login: an App key never manages a box login (the owner does, in Settings → Users)"),
+            format!("'{username}' has a box login: an App key never manages a box login (the owner does, in Settings → Access → Admin Access)"),
         ));
     }
     Ok((pid, g))

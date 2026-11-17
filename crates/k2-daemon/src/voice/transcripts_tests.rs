@@ -31,7 +31,7 @@ fn an_agent_without_the_switch_is_refused() {
     assert_eq!(code(&r), store::OFF_CODE);
     assert!(r.body.contains("Only the server's owner turns it on"), "{}", r.body);
     assert!(may_read(&agent("ws-a"), true).is_ok(), "with the switch it reads");
-    // Listing (no text) needs the switch too, or Manage Chat / Voice Hosting.
+    // Listing (no text) needs the switch too, or Manage chat and voice.
     assert_eq!(code(&may_list(&agent("ws-a"), false, false).unwrap_err()), store::OFF_CODE);
     assert!(may_list(&agent("ws-a"), true, false).is_ok(), "chat manager lists");
     assert!(may_list(&agent("ws-a"), false, true).is_ok(), "reader lists");

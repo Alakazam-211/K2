@@ -182,7 +182,7 @@ async fn a_held_send_names_the_secret_and_how_to_get_a_yes_and_other_sends_are_u
     let hint = j["error"]["hint"].as_str().unwrap();
     assert!(hint.starts_with("a person gave GEO_DB, so it goes to another server only when a person on this server says so."), "{hint}");
     assert!(hint.contains("Ask your person (an Owner or Admin)"), "{hint}");
-    assert!(hint.contains(&format!("Settings → Workspaces → {} → Permissions → Secrets it may send to other servers", ws.handle)), "{hint}");
+    assert!(hint.contains(&format!("Settings → Workspaces / Agents → {} → Permissions → Secrets it may send to other servers", ws.handle)), "{hint}");
     assert!(hint.contains(&format!("k2 vault send GEO_DB --scope ws:{} --to bob::heldbox", ws.handle)), "{hint}");
     assert!(j.get("permission").is_none(), "cards off: no closing line here");
     assert!(!raw.contains(&value_of("GEO_DB")));

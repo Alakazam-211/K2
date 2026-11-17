@@ -540,16 +540,17 @@ if err is not None:
         hint = str(err)
     gated = (
         code in ('agents_create_connections_disabled', 'gated', 'forbidden')
-        or 'Allow agents to create connections' in hint
+        or 'Agents can add connections' in hint
         or \"isn't allowed to create or remove connections\" in hint
     )
     if gated:
         if 'Settings' not in hint:
             hint = (hint + ' — ' if hint else '') + (
                 \"this agent isn't allowed to create or remove connections — \"
-                'the owner can enable it in Settings \u2192 K2 Connect '
-                '(Allow agents to create connections) or Workspaces \u2192 '
-                '(workspace) \u2192 Allow agents to create connections'
+                'Owner can turn on: Settings \u2192 Network \u2192 Tunnel '
+                '\u2192 Policies \u2192 \"Agents can add connections\" (or Settings '
+                '\u2192 Workspaces / Agents \u2192 <workspace> \u2192 Connections '
+                '\u2192 \"Let this agent add connections\").'
             )
         sys.stderr.write(json.dumps({'error': {'code': code or 'agents_create_connections_disabled', 'hint': hint}}, ensure_ascii=False) + '\n')
         sys.exit(3)
@@ -595,16 +596,17 @@ if err is not None:
         hint = str(err)
     gated = (
         code in ('agents_create_connections_disabled', 'gated', 'forbidden')
-        or 'Allow agents to create connections' in hint
+        or 'Agents can add connections' in hint
         or \"isn't allowed to create or remove connections\" in hint
     )
     if gated:
         if 'Settings' not in hint:
             hint = (hint + ' — ' if hint else '') + (
                 \"this agent isn't allowed to create or remove connections — \"
-                'the owner can enable it in Settings \u2192 K2 Connect '
-                '(Allow agents to create connections) or Workspaces \u2192 '
-                '(workspace) \u2192 Allow agents to create connections'
+                'Owner can turn on: Settings \u2192 Network \u2192 Tunnel '
+                '\u2192 Policies \u2192 \"Agents can add connections\" (or Settings '
+                '\u2192 Workspaces / Agents \u2192 <workspace> \u2192 Connections '
+                '\u2192 \"Let this agent add connections\").'
             )
         sys.stderr.write(json.dumps({'error': {'code': code or 'agents_create_connections_disabled', 'hint': hint}}, ensure_ascii=False) + '\n')
         sys.exit(3)
@@ -616,7 +618,7 @@ print('Disconnected.')
         *)
             echo "Usage: k2 connections [list|add|remove] [workspace-name] [--json] [--users]" >&2
             echo "  list [--json] [--users]  List connections for this workspace (exit 0)" >&2
-            echo "  add <name>        Connect (agents need Settings → Allow agents to create connections; exit 3 when gated)" >&2
+            echo "  add <name>        Connect (agents need \"Agents can add connections\" in Settings → Network → Tunnel → Policies; exit 3 when gated)" >&2
             echo "  remove <name>     Disconnect (same agent create/remove gate as add; exit 3 when gated)" >&2
             exit 1
             ;;
@@ -790,8 +792,8 @@ if d.get("running"):
     url = d.get("public_url") or "(subdomain assigned by the server)"
     print(f"Tunnel enabled and running. Public URL: {url}")
 else:
-    print("Tunnel enabled (persisted). Not running yet — pair a subdomain in")
-    print("Settings -> K2 Connect (or run: k2 tunnel start).")
+    print("Tunnel enabled (persisted). Not running yet — choose an address in")
+    print("Settings → Network → Tunnel (or run: k2 tunnel start).")
 if d.get("autoStart") is True:
     print("Auto-start: on (comes back by itself after a daemon restart or reboot).")
 elif d.get("autoStart") is False:

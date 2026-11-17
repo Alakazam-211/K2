@@ -15,7 +15,7 @@ use k2_core::permission::catalog::{
     WallCoverage, WallMatch, WallMethod, Words,
 };
 
-use super::switches::{applied, param, AGENT_TAB};
+use super::switches::{applied, param, PERMISSIONS_TAB};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 
 pub(crate) static SHARE: ActionSpec = ActionSpec {
@@ -41,7 +41,7 @@ pub(crate) static SHARE: ActionSpec = ActionSpec {
         retry: "run your command again",
     },
     undo: Undo::None,
-    settings: AGENT_TAB,
+    settings: PERMISSIONS_TAB,
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "doc_not_shared" },
         route_prefix: "/cli/docs/",

@@ -152,7 +152,7 @@ rc=$?
 set -e
 assert_exit "mail sending --help" 0 "$rc"
 assert_contains "help names macOS" "$out" "every OS (macOS included)"
-assert_contains "help names the Settings control" "$out" "Workspaces / Agents → <workspace> → Email sending"
+assert_contains "help names the Settings control" "$out" "Workspaces / Agents → <workspace> → Permissions → Email sending"
 set +e
 out="$("${K2[@]}" "$K2_CLI" mail --help 2>&1)"
 set -e

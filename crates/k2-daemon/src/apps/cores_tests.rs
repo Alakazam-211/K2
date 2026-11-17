@@ -343,7 +343,7 @@ fn the_owner_ticks_an_admin_unticks_and_agents_never() {
         assert!(t.starts_with("[note] Your App access changed"), "{t}");
         assert!(t.contains("cores: Database, Files, Mail (by owner:rosson)"), "{t}");
         assert!(t.contains(" Mail takes effect when App mail lands."), "{t}");
-        assert!(!t.contains("chat for Apps"), "Chat / Voice Hosting is enforced: {t}");
+        assert!(!t.contains("chat for Apps"), "chat and voice is enforced: {t}");
     }
     // An Admin unticks; ticking again in the same call is refused whole.
     let (st, v) = access_set(admin(), json!({"workspace": ws, "toggle": "app_core", "cores": {"mail": false, "thread": true}}));

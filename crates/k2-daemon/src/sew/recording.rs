@@ -10,7 +10,7 @@
 //!   Uninstall removes the sidecars and the model; recordings stay in Sew.
 //! - **Who.** Enable: an Owner or Admin, in person, with a fresh vault
 //!   confirm bound to this install ([`CONFIRM_ENABLE`]). An agent, even
-//!   with "Manage Chat / Voice Hosting", gets `person_only` and asks on the
+//!   with "Manage chat and voice", gets `person_only` and asks on the
 //!   `sew.recording-enable` card (Admin floor); it never installs anything.
 //!   Disable and uninstall: Manage Sew (they only narrow), uninstall with
 //!   `confirm: true`.
@@ -186,7 +186,7 @@ fn need_helper(env: &Env) -> R<()> {
 fn gates(env: &Env) -> R<()> {
     sup::need_released(env)?;
     if !env.ops.linux() {
-        return Err(no("unsupported", 409, "Chat / Voice Hosting runs on Linux boxes only"));
+        return Err(no("unsupported", 409, "Chat and voice run on Linux servers only"));
     }
     need_feature(env)?;
     need_helper(env)
@@ -198,7 +198,7 @@ pub fn agent_refusal() -> Fail {
         "person_only",
         403,
         "nothing changed: an Owner or Admin installs Sew's recorder in person (Touch ID, the vault password or their \
-         login), never an agent, even with Manage Chat / Voice Hosting. Ask on a permission card: k2 permission request \
+         login), never an agent, even with Manage chat and voice. Ask on a permission card: k2 permission request \
          sew.recording-enable --why \"<why>\"",
     )
 }
@@ -220,7 +220,7 @@ fn gib(b: u64) -> String {
 pub fn preflight(env: &Env) -> Vec<Value> {
     let mut c = Vec::new();
     if !env.ops.linux() {
-        c.push(check("os", "fail", "not Linux", "Chat / Voice Hosting runs on Linux boxes only"));
+        c.push(check("os", "fail", "not Linux", "Chat and voice run on Linux servers only"));
         return c;
     }
     if feature_on(env) {
@@ -239,9 +239,9 @@ pub fn preflight(env: &Env) -> Vec<Value> {
         ));
     }
     match super::store::load() {
-        Some(r) if matches!(r.status.as_str(), "running" | "degraded") => c.push(check("chat", "ok", format!("Chat / Voice Hosting is {}", r.status), "")),
-        Some(r) => c.push(check("chat", "fail", format!("Chat / Voice Hosting is {}", r.status), "recording needs it running: k2 hostchat enable")),
-        None => c.push(check("chat", "fail", "Chat / Voice Hosting is not installed", "k2 hostchat enable --voice first")),
+        Some(r) if matches!(r.status.as_str(), "running" | "degraded") => c.push(check("chat", "ok", format!("Chat and voice are {}", r.status), "")),
+        Some(r) => c.push(check("chat", "fail", format!("Chat and voice are {}", r.status), "recording needs it running: k2 hostchat enable")),
+        None => c.push(check("chat", "fail", "Chat and voice are not installed", "k2 hostchat enable --voice first")),
     }
     if super::voice::load(env).installed {
         c.push(check("voice", "ok", "voice is installed", ""));
@@ -267,7 +267,7 @@ pub fn preflight(env: &Env) -> Vec<Value> {
             "ram",
             "fail",
             format!("{} of RAM", gib(b)),
-            "recording needs at least 8 GiB of RAM: move Chat / Voice Hosting to a box with 8 GiB or more",
+            "recording needs at least 8 GiB of RAM: move chat and voice to a server with 8 GiB or more",
         )),
         None => c.push(check("ram", "fail", "K2 couldn't read this box's memory", "recording needs at least 8 GiB of RAM")),
     }
@@ -357,7 +357,7 @@ pub const SEW_REFUSALS: &[(&[&str], &str, &str)] = &[
     (&["recording_needs_loopback_media"], "recording_needs_loopback_media", "the voice engine must bind 0.0.0.0 or a loopback address (voice.ops.bind_v4) so the recorder can reach it: k2 hostchat media status, then k2 hostchat doctor"),
     (&["recording_unpinned_build"], "recording_unpinned_build", "this Sew build carries no recorder pins (a dev build): k2 hostchat upgrade to the Sew this K2 pins"),
     (&["tarball", "sha256"], "sidecar_sha256_mismatch", "the recorder or transcriber isn't the one this Sew pins: k2 hostchat upgrade so K2 and Sew are the same release, then retry"),
-    (&["8 GiB"], "recording_needs_8gib", "recording needs at least 8 GiB of RAM: move Chat / Voice Hosting to a box with 8 GiB or more"),
+    (&["8 GiB"], "recording_needs_8gib", "recording needs at least 8 GiB of RAM: move chat and voice to a server with 8 GiB or more"),
     (&["not a pinned, selectable model"], "model_unknown", "this Sew doesn't offer the model K2 pins (or hasn't measured it yet): k2 hostchat upgrade so K2 and Sew are the same release"),
 ];
 
@@ -604,7 +604,7 @@ fn enable_steps(env: &Env, files: &Files) -> R<Value> {
         "alreadyInstalled": installed,
         "version": pin_v,
         "model": model,
-        "next": "Apps and K5 rooms still choose who may record (Settings → Chat / Voice Hosting); each person consents for themselves",
+        "next": "Apps and K5 rooms still choose who may record (Settings → Cores → Chat / Voice → Recording); each person consents for themselves",
     }))
 }
 
@@ -729,7 +729,7 @@ fn abs(v: &Value, k: &str) -> R<Option<PathBuf>> {
 fn need_credential(who: &Who) -> R<()> {
     match who {
         Who::Invalid => Err(no("forbidden", 403, "invalid or missing token")),
-        Who::Wrong => Err(no("wrong_credential", 403, "App passes, API keys and API sessions can't manage Chat / Voice Hosting")),
+        Who::Wrong => Err(no("wrong_credential", 403, "App passes, API keys and API sessions can't manage chat and voice")),
         _ => Ok(()),
     }
 }

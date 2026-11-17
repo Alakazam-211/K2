@@ -112,7 +112,7 @@ fn mint(d: &Deps, ext: &str) -> Result<String, Refusal> {
     let sid = sid_for(ext);
     let pass = (d.mint)(ext, &sid).map_err(|e| {
         k2_core::log_debug!("[home-chat] pass for {ext}: {e}");
-        Refusal::new(503, "chat_unavailable", "Chat / Voice Hosting is not enabled or not reachable on this server")
+        Refusal::new(503, "chat_unavailable", "Chat and voice are not set up or not reachable on this server")
     })?;
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new("chat-pass", ext, "home-chat".to_string(), "daemon", "-", "api"));
     Ok(pass)

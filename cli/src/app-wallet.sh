@@ -272,7 +272,7 @@ _grant_owner_next_step() {
     [ -n "${SCOPED_TOKEN:-}" ] || return 0
     case "$1" in *'"owner_only"'*) ;; *) return 0 ;; esac
     _permission_cli_enabled && return 0
-    echo "Logins are the owner's: ask your human to do it (Settings → Apps → <the App> → Add a person, or this same k2 app grant command from a terminal outside K2), or to turn on permission cards (Settings → Permission Cards) so you can ask on a card." >&2
+    echo "Logins are the owner's: ask your human to do it (Settings → Cores → Apps → <the App> → Add a person, or this same k2 app grant command from a terminal outside K2), or to turn on permission cards (Settings → Access → Permission Cards) so you can ask on a card." >&2
     return 0
 }
 

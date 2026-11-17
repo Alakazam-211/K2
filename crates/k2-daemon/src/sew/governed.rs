@@ -99,7 +99,7 @@ pub fn governance(who: &Who, v: &Value) -> R<Value> {
             403,
             format!(
                 "nothing changed: only the server's owner or an admin switches who governs a Space, in person with a confirm \
-                 (Manage Sew does not cover it). Ask them to run, from a terminal outside K2: \
+                 (Manage chat and voice does not cover it). Ask them to run, from a terminal outside K2: \
                  k2 hostchat app-space governance {app} {space} {to}"
             ),
         ));

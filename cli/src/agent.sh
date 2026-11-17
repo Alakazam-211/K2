@@ -36,7 +36,7 @@ COMMANDS
                           An agent's main session may, for its own chat, when a person allows it.
   identity [<name>]       Show or change the picture, color and name (an agent: its own color and picture)
   access set <ws> chat_manage on|off
-                          "Manage Chat / Voice Hosting" for that workspace's agent (the owner or an admin)
+                          "Manage chat and voice" for that workspace's agent (the owner or an admin)
   context <subcommand>    Manage the always-on AGENTS.md context stack (layers)
   team [served|link|unlink]  Team links: who serves this agent, who it serves (agents read their own)
   instances [show|hire|retire]  Hires made from an inline recipe (owner/admin; v1 API keys hire too)
@@ -1275,8 +1275,8 @@ FLAGS
 WHO
   A person: the owner (the desktop app, or a terminal outside K2), an Admin login,
   or a person typing in a K2 shell tab, for any workspace.
-  An agent: its main session, for its own chat, with "Can refresh its own pinned
-  chat" on. Off, it gets exit 3, and with permission cards on the error ends with
+  An agent: its main session, for its own chat, with "Let this agent refresh its
+  pinned chat" on. Off, it gets exit 3, and with permission cards on the error ends with
   the line to ask with: k2 permission request chat.refresh … --why "…". Save your
   work first: once you've asked, the chat can end at any moment. A sidecar can't
   refresh itself.
@@ -1591,7 +1591,7 @@ cmd_agent_hire() {
     # verb runs with the owner token in-cell). Lowering to `off` is fine.
     if { [ "$db_access" = "read" ] || [ "$db_access" = "write" ]; } && _cli_caller_is_agent_passport; then
         _cli_refuse_agent_self_grant "db_agent_access" \
-            "Settings → Workspaces → (workspace) → Allow this agent to create databases, or \`k2 agent hire <dir> --db-access write\` from their own terminal"
+            "Settings → Workspaces / Agents → (workspace) → Permissions → Database → \"Let this agent create databases\", or \`k2 agent hire <dir> --db-access write\` from their own terminal"
     fi
     # --onboard implies --launch (mockup contract).
     [ -n "$onboard" ] && launch=true
@@ -1898,7 +1898,7 @@ if focus_group_arg:
                 hits = prefixes
         if not hits:
             fail("not_found",
-                 "no focus group matches '%s' — create one in Settings → Workspaces" % sel, 4)
+                 "no focus group matches '%s' — create one in Settings → Workspaces / Agents" % sel, 4)
         if len(hits) > 1:
             fail("ambiguous",
                  "'%s' matches multiple focus groups: %s — pass the id" %
@@ -2381,7 +2381,7 @@ def finish(changed):
     sys.exit(0)
 
 TEMPLATE_PERMS_NOTE = ("suggested switches are not turned on by this K2: a person turns them on "
-                       "(Settings > Workspaces > the agent), or the agent asks on a card")
+                       "(Settings → Workspaces / Agents → the agent → Permissions), or the agent asks on a card")
 
 def take_template_rows(a, resp, applied):
     """Attach the daemon's template rows to the apply-template action."""

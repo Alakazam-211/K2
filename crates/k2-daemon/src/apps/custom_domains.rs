@@ -92,7 +92,7 @@ pub fn may_bind(caller_ws: Option<&str>, name: &str) -> Result<(), Refusal> {
             403,
             k2_core::deploy::codes::APPS_MANAGE_OFF,
             "\"Build and run Apps\" is off for this agent: use `k2 app domain add <app> <host>`, which asks your owner, \
-             or ask them to turn it on (Workspace settings → Agent → Apps)",
+             or ask them to turn it on (Settings → Workspaces / Agents → <agent> → Permissions → Apps)",
         ));
     }
     Ok(())

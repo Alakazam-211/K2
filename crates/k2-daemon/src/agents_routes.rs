@@ -1819,7 +1819,7 @@ mod gap_route_tests {
         assert_eq!(r.status, "403 Forbidden", "body={}", r.body);
         assert!(
             r.body.contains("agents_create_connections_disabled")
-                || r.body.contains("Allow agents to create connections"),
+                || r.body.contains("Agents can add connections"),
             "body={}",
             r.body
         );

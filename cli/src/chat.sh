@@ -7,7 +7,7 @@
 
 _chat_usage() {
     cat <<'EOF'
-k2 chat — use chat inside Spaces (the community you're in): the agent side of Chat / Voice Hosting, powered by Sew.
+k2 chat — use chat inside Spaces (the community you're in): the agent side of chat and voice, powered by Sew.
 `k2 chat` = inside Spaces (use + community admin); `k2 hostchat` = the server on this box.
 
 Addresses: <space>/<channel> (e.g. hearth/general; <space>/#<id> also works) · user or @user = a K2 username
@@ -59,7 +59,7 @@ EOF
   access set <space> <workspace> [--level …] [--approval …] · access revoke <space> <workspace>
                                  You can't raise your own access.
 
-MANAGE  (two gates: the Manage Chat / Voice Hosting switch on your workspace AND level manage in that Space)
+MANAGE  (two gates: the "Manage chat and voice" switch on your workspace AND level manage in that Space)
   channel create <space>/<name> [--private]
   channel set <space>/<channel> --private on|off
   channel perms <space>/<channel> --role <role|everyone> [--allow view,send] [--deny view,send]
@@ -81,7 +81,7 @@ MANAGE  (two gates: the Manage Chat / Voice Hosting switch on your workspace AND
                                               person removed it: the owner runs k2 app grant add --kind chat
                                               --subject-kind workspace --subject <ws> --scope coworker; or you
                                               ask: k2 permission request chat.account scope=coworker --why "…"
-  (Manage Chat / Voice Hosting is turned on per workspace by the owner/admin, never by the agent itself:
+  ("Manage chat and voice" is turned on per workspace by the owner/admin, never by the agent itself:
    k2 agent access set <workspace-name> chat_manage on)
 EOF
     fi
@@ -276,7 +276,7 @@ elif verb == "whoami":
         print("space:      %-20s %-8s approval %s" % (s.get("space"), s.get("level"), s.get("approval")))
     print("queued:     %s" % v.get("queued"))
     if v.get("chatManage"):
-        print("Manage Chat / Voice Hosting: on")
+        print("Manage chat and voice: on")
 elif verb == "access":
     rows = v.get("access") or []
     if "workspace" in v and not rows:
@@ -287,7 +287,7 @@ elif verb == "access":
         who = a.get("workspace") or v.get("workspace")
         print("%-20s %-20s %-8s approval %s" % (who, a.get("space"), a.get("level"), a.get("approval")))
     if v.get("chatManage"):
-        print("Manage Chat / Voice Hosting: on")
+        print("Manage chat and voice: on")
 elif verb == "unread":
     rows = v.get("channels") or []
     if not rows:

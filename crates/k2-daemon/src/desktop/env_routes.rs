@@ -158,7 +158,7 @@ pub fn handle(who: &Who, req: &Req<'_>) -> CliResponse {
         return refuse(
             403,
             "desktop_switch_off",
-            format!("{name}'s \"Allow a virtual desktop\" switch is off: an Owner or Admin turns it on (Settings → Workspaces → {name} → Agent → Desktop, or k2 desktop allow on --workspace {name})."),
+            format!("{name}'s \"Allow a virtual desktop\" switch is off: an Owner or Admin turns it on (Settings → Workspaces / Agents → {name} → Permissions → Desktop, or k2 desktop allow on --workspace {name})."),
         );
     }
     if setting_up() {

@@ -318,7 +318,7 @@ fn chat_rejected_when_target_disabled_and_off_linux_enable_refused() {
     if cfg!(target_os = "linux") {
         assert!(r.is_ok(), "Linux may enable: {r:?}");
     } else {
-        assert_eq!(r.unwrap_err(), "Chat / Voice Hosting runs on Linux boxes only");
+        assert_eq!(r.unwrap_err(), "Chat and voice run on Linux servers only");
     }
     assert!(
         !set_target(CHAT_KIND, false, None, None, "owner-token")

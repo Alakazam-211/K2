@@ -2896,7 +2896,7 @@ async fn connections_resolve_checks_targets_without_writing() {
     // Federation off: a remote target can't be reached.
     let r = run(format!("quahog::{host}")).await;
     assert_eq!(code(&r), ("404 Not Found".into(), "not_found".into()), "{}", r.body);
-    assert!(r.body.contains("federation is off"), "{}", r.body);
+    assert!(r.body.contains("Connect agents across servers"), "{}", r.body);
 
     let _fed = k2_core::test_env::EnvVar::set("K2_FEDERATION", "1");
     let r = run(format!("quahog::{host}")).await;

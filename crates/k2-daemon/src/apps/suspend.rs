@@ -203,8 +203,8 @@ fn resume(who: &Who, body: &[u8]) -> R<J> {
             return Err(no(
                 super::egress_routes::codes::OWNER_ONLY,
                 403,
-                "resuming an App you suspended needs \"Manage its Apps end to end\" for this agent (Settings → Workspaces → \
-                 <this agent> → Agent → Apps); otherwise the owner resumes it",
+                "resuming an App you suspended needs \"Manage its Apps end to end\" for this agent (Settings → Workspaces / Agents → \
+                 <this agent> → Permissions → Apps); otherwise the owner resumes it",
             ));
         }
     }

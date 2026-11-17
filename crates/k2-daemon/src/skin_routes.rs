@@ -496,7 +496,7 @@ pub fn app_users_off_response() -> CliResponse {
             "ok": false,
             "error": {
                 "code": APP_USERS_OFF,
-                "hint": "managing your Apps' users needs \"Let this agent manage its Apps' users\" for this agent (off). Ask your owner to turn it on: Settings → Workspaces → <this agent> → Agent → Apps (or k2 app access <ws> --users on from a terminal outside K2); with permission cards on, run the Ask with: line below. A test guest (k2 app user add <app> <name> --test) is one held request the owner approves from a card on your Thread.",
+                "hint": "managing your Apps' users needs \"Let this agent manage its Apps' users\" for this agent (off). Ask your owner to turn it on: Settings → Workspaces / Agents → <this agent> → Permissions → Apps (or k2 app access <ws> --users on from a terminal outside K2); with permission cards on, run the Ask with: line below. A test guest (k2 app user add <app> <name> --test) is one held request the owner approves from a card on your Thread.",
             }
         })
         .to_string(),
@@ -3322,7 +3322,7 @@ pub const STORE_WRITE: &str = CAP_STORE_WRITE;
 
 const OWNER_ONLY_HINT: &str = "requires owner/admin — ask your human (k2 app user add/remove/password, k2 app role create/update/remove, k2 app user role/unassign, k2 app token create/revoke/rooms; leftover k2 skin / k2 skin-token; use k2 app user list / k2 app role list / k2 app token list to read the roster). Host the UI with k2 publish, not k2 app.";
 
-const OWNER_ONLY_MANAGE_HINT: &str = "requires owner/admin — ask your human (k2 app user add/remove/password, k2 app role create/update/remove, k2 app user role/unassign, k2 app token create/revoke/rooms; leftover k2 skin / k2 skin-token; use k2 app user list / k2 app role list / k2 app token list to read the roster). Host the UI with k2 publish, not k2 app. To let this workspace's agent manage Apps, Settings → Workspaces → (this workspace) → Agent → Allow this agent to manage Apps.";
+const OWNER_ONLY_MANAGE_HINT: &str = "requires owner/admin — ask your human (k2 app user add/remove/password, k2 app role create/update/remove, k2 app user role/unassign, k2 app token create/revoke/rooms; leftover k2 skin / k2 skin-token; use k2 app user list / k2 app role list / k2 app token list to read the roster). Host the UI with k2 publish, not k2 app. To let this workspace's agent manage Apps: Settings → Workspaces / Agents → (this workspace) → Permissions → Apps → \"Build and run Apps\".";
 
 fn owner_only_with_hint(hint: &str) -> CliResponse {
     CliResponse {

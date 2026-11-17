@@ -784,8 +784,8 @@ pub fn connections(
 /// Teaching text when an agent is denied connection mutate (add/remove).
 /// Canonical owner path — must match CLI exit-3 prose / Settings labels.
 pub const CONNECTIONS_MUTATE_DENIED_HINT: &str = "this agent isn't allowed to create or remove \
-connections — the owner can enable it in Settings → K2 Connect (Allow agents to create connections) \
-or Workspaces → (workspace) → Allow agents to create connections";
+connections — Owner can turn on: Settings → Network → Tunnel → Policies → \"Agents can add connections\" \
+(or Settings → Workspaces / Agents → <workspace> → Connections → \"Let this agent add connections\").";
 
 /// Same as [`connections`] but with an explicit actor-privilege bit.
 ///
@@ -2752,7 +2752,7 @@ mod tests {
             let err = connections_for_actor(&src_path, "add", Some("C1GateTgt"), None, false)
                 .expect_err("agent add must fail with toggle off");
             assert!(
-                err.contains("Allow agents to create connections"),
+                err.contains("Agents can add connections"),
                 "deny must teach Settings path; got {err}"
             );
             assert!(

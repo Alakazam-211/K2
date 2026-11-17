@@ -21,7 +21,7 @@
 //!   workspace's address, so it reaches the NEW chat, after the handoff.
 
 use k2_core::permission::catalog::{
-    ActionSpec, Area, Direction, Expiry, Floor, Grant, NotCardableSpec, ParamFrom, ParamKind, ParamSpec, Proof, SettingsRef, Undo,
+    ActionSpec, Area, Direction, Expiry, Floor, Grant, NotCardableSpec, ParamFrom, ParamKind, ParamSpec, Proof, Undo,
     Wall, WallCoverage, WallMatch, WallMethod, Words,
 };
 use k2_core::permission::label;
@@ -30,7 +30,7 @@ use k2_core::workspace::canonical_swap::{normalize_harness, read_refresh_note};
 use serde_json::{json, Value};
 
 use super::held::{error_of, route_floor, text_param};
-use super::switches::applied;
+use super::switches::{applied, PERMISSIONS_TAB};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::chat_refresh::{CARD_ACTION as ACTION, NEEDS_PERSON, ROUTE};
 use crate::cli_response::CliResponse;
@@ -53,13 +53,13 @@ pub(crate) static REFRESH: ActionSpec = ActionSpec {
     words: Words {
         setting: "Refresh pinned chat",
         what_changes: "Start a new {harness} pinned chat for {ws} that carries on from this one",
-        consequences: "K2 ends {ws}'s current chat and starts a new one that gets only a summary of it and {ws}'s note. Anything it's doing right now stops, and secrets kept for that session end. Files aren't touched. The old chat stays in Chat history; the Thread, messages and heartbeats on the pinned chat carry on in the new chat. Sidecars keep running. \"From now on\" lets it do this without asking, until someone turns off \"Can refresh its own pinned chat\" in Settings → Workspaces → {ws} → Agent. {note}",
+        consequences: "K2 ends {ws}'s current chat and starts a new one that gets only a summary of it and {ws}'s note. Anything it's doing right now stops, and secrets kept for that session end. Files aren't touched. The old chat stays in Chat history; the Thread, messages and heartbeats on the pinned chat carry on in the new chat. Sidecars keep running. \"From now on\" lets it do this without asking, until someone turns off \"Let this agent refresh its pinned chat\" in Settings → Workspaces / Agents → {ws} → Permissions. {note}",
         scope: "{ws}",
         duration: "once, unless you choose from now on",
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "workspaces/{ws}/agent", path: "Settings → Workspaces → {ws} → Agent" },
+    settings: PERMISSIONS_TAB,
     walls: &[
         Wall { matches: WallMatch::Code { status: 403, code: NEEDS_PERSON }, route_prefix: ROUTE, method: WallMethod::Post, params: NOTE_PARAMS },
         Wall { matches: WallMatch::Code { status: 403, code: NEEDS_PERSON }, route_prefix: SWAP_ROUTE, method: WallMethod::Post, params: NOTE_PARAMS },
@@ -160,7 +160,7 @@ fn check(ctx: &Ctx) -> Check {
     };
     if k2_core::workspace::settings::agents_can_refresh_chat(&ctx.workspace_id) {
         return Check::Moved(format!(
-            "\"Can refresh its own pinned chat\" is on for {}: run `k2 agent refresh` yourself",
+            "\"Let this agent refresh its pinned chat\" is on for {}: run `k2 agent refresh` yourself",
             ctx.workspace_handle
         ));
     }
@@ -229,7 +229,7 @@ pub(crate) fn turn_on_always(ctx: &Ctx, who: &Answerer) -> Result<String, String
         return Err(message);
     }
     Ok(format!(
-        "\"Can refresh its own pinned chat\" is now on for {}: it refreshes its chat itself next time (turn it off in Settings → Workspaces → {} → Agent).",
+        "\"Let this agent refresh its pinned chat\" is now on for {}: it refreshes its chat itself next time (turn it off in Settings → Workspaces / Agents → {} → Permissions).",
         ctx.workspace_handle, ctx.workspace_handle
     ))
 }

@@ -293,7 +293,7 @@ _compute_pkg_held_exit() {
     local id
     id="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("request") or {}).get("id") or "")')"
     echo "held for the owner: package request $id" >&2
-    echo "  the owner approves it on the card, in Settings → Compute → Approvals, or outside K2: k2 compute node packages approve $id" >&2
+    echo "  the owner approves it on the card, in Settings → Cores → Compute → Machine settings → Waiting for you, or outside K2: k2 compute node packages approve $id" >&2
     if _permission_in_body "$_CP_BODY"; then
         echo "  to ask the owner in chat now, run the Ask with: line below: it puts this same request on a card." >&2
     fi
@@ -328,8 +328,8 @@ k2 compute node packages — system packages on a compute node (0.46.9)
   k2 compute node packages approve|deny <request> [--add] [--note "…"]
         the owner or an Admin, from a terminal outside K2 (an agent never
         decides). <request> is the cpr_… id that requests shows (a start of
-        it that fits one is enough). The card in chat and Settings →
-        Compute → Approvals are the main path. approve --add also puts the
+        it that fits one is enough). The card in chat and Settings → Cores →
+        Compute → Machine settings → Waiting for you are the main path. approve --add also puts the
         names on that server's approved list, so the next ask for them
         needs no card
   k2 compute node packages policy <node> [--json]
@@ -460,7 +460,7 @@ if v.get("canDecide") and any(r.get("state") == "pending" and r.get("origin") !=
             [ -n "$id" ] || { echo "$dec_usage" >&2; exit 2; }
             [ "$first" = "deny" ] && [ "$add" = "1" ] && { echo "usage: --add goes with approve (it puts the names on the server's approved list)" >&2; exit 2; }
             if _compute_in_session; then
-                echo '{"error":"owner_only","hint":"only the owner or an Admin decides package requests, in person: the card in chat, Settings → Compute → Approvals, or this command from a terminal outside K2. An agent can never approve."}' >&2
+                echo '{"error":"owner_only","hint":"only the owner or an Admin decides package requests, in person: the card in chat, Settings → Cores → Compute → Machine settings → Waiting for you, or this command from a terminal outside K2. An agent can never approve."}' >&2
                 exit 3
             fi
             # Show what is decided first: the names, nodes and install set.
@@ -844,7 +844,7 @@ print("held for the owner: %s\n  %s" % (r["id"], r["summary"]))' >&2
         _compute_admin_approve "$id"
         exit 0
     fi
-    echo "  the owner approves it in Settings → Compute → Approvals (or: k2 compute node admin approve $id, outside K2)" >&2
+    echo "  the owner approves it in Settings → Cores → Compute → Machine settings → Waiting for you (or: k2 compute node admin approve $id, outside K2)" >&2
     # 0.46.9: with permission cards on, the daemon's Ask with: line (printed
     # last, at exit) brings this same request to the owner's chat as a card.
     if _permission_in_body "$_CP_BODY"; then
@@ -860,7 +860,7 @@ print("held for the owner: %s\n  %s" % (r["id"], r["summary"]))' >&2
 _compute_admin_approve() {
     local id="$1"
     if _compute_in_session; then
-        echo '{"error":"owner_only","hint":"approve in Settings → Compute → Approvals, or from a terminal outside K2. An agent can never approve."}' >&2
+        echo '{"error":"owner_only","hint":"approve in Settings → Cores → Compute → Machine settings → Waiting for you, or from a terminal outside K2. An agent can never approve."}' >&2
         exit 3
     fi
     _compute_call GET /cli/compute/admin/requests "state=all&limit=500" tcp

@@ -203,7 +203,7 @@ cmd_daemon_status() {
     echo "  Log file:      $_daemon_stdout_log"
     if [ "$installed" = "no" ]; then
         echo ""
-        echo "  Daemon plist is not installed. Open K2 → Settings → General → K2 Daemon"
+        echo "  Daemon plist is not installed. Open K2 → Settings → General → Server → K2 server"
         echo "  to install the launch agent."
     fi
 }
@@ -244,7 +244,7 @@ _daemon_status_linux() {
 cmd_daemon_start() {
     if [ ! -f "$_daemon_plist" ]; then
         echo "Daemon plist not installed at $_daemon_plist" >&2
-        echo "Open K2 → Settings → General → K2 Daemon → Install." >&2
+        echo "Open K2 → Settings → General → Server → K2 server → Install." >&2
         exit 1
     fi
     # `launchctl load -w` is persistent across reboots. On an already-

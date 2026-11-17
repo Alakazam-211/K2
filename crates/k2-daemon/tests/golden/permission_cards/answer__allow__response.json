@@ -3,7 +3,7 @@
     "action": {
       "id": "permission",
       "result": {
-        "message": "Allowed. Turn it off again in Settings → Workspaces → billing → Agent.",
+        "message": "Allowed. Turn it off again in Settings → Workspaces / Agents → billing → Permissions.",
         "outcome": "approved"
       }
     },

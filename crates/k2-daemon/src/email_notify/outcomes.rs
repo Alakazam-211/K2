@@ -356,7 +356,7 @@ pub fn evaluate(s: &Sender, now: i64) -> Option<&'static str> {
                 &format!(
                     "{label}'s email from {} is paused: {what} in 24 hours. Its sends now answer email_paused. \
                      Fix the list, then resume it from your own terminal: k2 notifications email sender resume {} \
-                     (it asks you to confirm). Suppressed addresses: k2 notifications email suppressions.",
+                     (it asks you to confirm). Stopped addresses: k2 notifications email suppressions.",
                     s.address, s.address
                 ),
             );

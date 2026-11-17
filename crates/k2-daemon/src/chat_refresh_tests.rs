@@ -90,7 +90,7 @@ fn an_agent_is_refused_unless_its_own_main_session_has_the_switch_and_nothing_mo
     let hint = v["error"]["hint"].as_str().expect("hint");
     assert!(hint.contains(&format!("k2 agent refresh {handle} --notes-file")), "{hint}");
     assert!(hint.contains("Your note was not kept"), "{hint}");
-    assert!(hint.contains("Can refresh its own pinned chat"), "{hint}");
+    assert!(hint.contains("Let this agent refresh its pinned chat"), "{hint}");
     assert!(!std::path::Path::new(&path).join(".k2").join("handoffs").exists(), "nothing written");
 
     // On, the rule still holds for everything else.

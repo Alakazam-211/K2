@@ -346,7 +346,7 @@ fn signed_in_tool(asked: Option<String>) -> Result<String, CliResponse> {
         return Err(error(
             "400 Bad Request",
             "tool_not_signed_in",
-            format!("{tool} isn't signed in on this server: sign in first (Settings → LLM tokens, or k2 llm tokens add {tool} <label>)"),
+            format!("{tool} isn't signed in on this server: sign in first (Settings → Language Models → Subs / Tokens → Add a token, or k2 llm tokens add {tool} <label>)"),
         ));
     }
     Ok(tool)
@@ -381,7 +381,7 @@ fn focus_group_for(asked: Option<String>) -> Result<Option<String>, CliResponse>
         [] => Err(error(
             "400 Bad Request",
             "unknown_focus_group",
-            format!("no focus group is {asked:?}: nothing was made (Settings → Workspaces lists them)"),
+            format!("no focus group is {asked:?}: nothing was made (Settings → Workspaces / Agents → Workspace settings → Focus Groups lists them)"),
         )),
         _ => Err(error("400 Bad Request", "ambiguous_focus_group", format!("more than one focus group is named {asked:?}: send its id"))),
     }

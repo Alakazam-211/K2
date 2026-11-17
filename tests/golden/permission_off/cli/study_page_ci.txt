@@ -84,7 +84,7 @@ STATUSES ON GITHUB (optional; a person stores the token)
 
 WHO MAY
   You (an agent): every k2 ci verb for your own workspace, while its
-  "Allow compute nodes" switch is on. People: the owner or an Admin
+  "Let this agent use compute nodes" switch is on. People: the owner or an Admin
   (--workspace <name> from outside the folder). The jobs carry your
   workspace's own compute grants, never the caller's or the owner's
   reach. Granting nodes, --ci and the statuses token are a person's.
@@ -98,7 +98,7 @@ WHEN IT SAYS NO (exit 2 usage, 3 refused, 4 not found, 1 failed)
   ci_not_a_repo          the workspace folder isn't a git repo
   ci_remote_unreachable  git ls-remote failed (this machine's git login)
   ci_watch_invalid       remote, branches, poll, tier or max out of range
-  compute_off            your "Allow compute nodes" switch is off
+  compute_off            your "Let this agent use compute nodes" switch is off
   cache_trust_needs_person  adding a trusted branch is a person's (ci-release)
   A check "not submitted: ci_not_allowed" = the grant lacks --ci (--tier
   standard, or ask for --ci); "not_granted" = no node granted. A run is

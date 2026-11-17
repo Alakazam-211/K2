@@ -34,7 +34,7 @@ no agent: k2.auth.doorStatus() (GET /cli/skin/auth/door with the App pass):
 
 Who: door on|off for the server is the owner's. One App's door and origins:
 the owner, an Admin, or the App's own agent with "Build and run Apps"
-(Settings → Apps). Every change is recorded. Exit codes: 0 ok, 2 bad usage,
+(Settings → Workspaces / Agents → <agent> → Permissions → Apps). Every change is recorded. Exit codes: 0 ok, 2 bad usage,
 3 refused (JSON with a code on stderr).
 EOF
 }
@@ -2072,7 +2072,7 @@ print(json.dumps(out))')" || { echo "usage: --core <core>=on|off[,<core>=on|off�
         printf '%s' "$last" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
-print("%s: changed (k2 app access %s shows it once Apps (beta) are on)" % (v.get("workspace"), v.get("workspace")))'
+print("%s: changed (k2 app access %s shows it once Apps are on)" % (v.get("workspace"), v.get("workspace")))'
     fi
 }
 

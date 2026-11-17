@@ -4,10 +4,10 @@
 > body: 
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"compute_off","hint":"compute nodes are off for this workspace: ask your owner to turn on \"Allow compute nodes\" in Settings → Workspaces → <agent> → Agent"}}
+{"error":{"code":"compute_off","hint":"compute nodes are off for this workspace: ask your owner to turn on \"Let this agent use compute nodes\" in Settings → Workspaces / Agents → <agent> → Permissions → Compute"}}
 ## cell socket (same passport)
 > GET /cli/compute/nodes
 > body: 
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"compute_off","hint":"compute nodes are off for this workspace: ask your owner to turn on \"Allow compute nodes\" in Settings → Workspaces → <agent> → Agent"}}
+{"error":{"code":"compute_off","hint":"compute nodes are off for this workspace: ask your owner to turn on \"Let this agent use compute nodes\" in Settings → Workspaces / Agents → <agent> → Permissions → Compute"}}

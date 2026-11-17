@@ -7,7 +7,7 @@ NOT App voice. This page is the box's own rooms: one K5 Space per
 Linux server, rooms Room 1..N for its owner, Admins and Members. An App's
 own rooms and channels are k2 study chat-voice-rooms.
 
-WHAT EXISTS. A Linux server with Pro and Chat / Voice Hosting hosts 0-10
+WHAT EXISTS. A Linux server with Pro and chat and voice hosts 0-10
 rooms (default 1, 25 people each), named "Room N" until renamed; slugs
 room-1..room-10 never change. People see and join rooms only on servers
 their K2 app is signed in to, with their own login there. Nothing is
@@ -23,7 +23,7 @@ READ (anyone, agents too)
 Never poll: the app refreshes on the server's voice_rooms_changed event.
 
 HOSTING STATES (k2 voice status, first one that applies)
-  not_linux · preview_off · sew_off (Chat / Voice Hosting not on, or it
+  not_linux · preview_off · sew_off (chat and voice not on, or it
   uses its own sign-ins (identity standalone, can't host): k2 hostchat
   status) · voice_off + detail (Sew older than 0.7.0, or the K5 Space blocked)
   · starting · not_pro · count_zero · voice_lane_reconnecting (under 20 s:
@@ -47,7 +47,7 @@ on its own: when Sew answers not_found for the Space or a room, when the
 Sew install changes, and every 6 hours. It makes the Space and rooms
 again. To run it now:
   k2 voice repair [--json]   the owner, an Admin, or an agent whose
-                             workspace has Manage Chat / Voice Hosting on
+                             workspace has "Manage chat and voice" on
                              (any other agent: chat_manage_off). Waits up
                              to 30 s, then prints what it found and fixed.
 What it does: asks Sew which Space holds the slug k5-admin (Sew makes one

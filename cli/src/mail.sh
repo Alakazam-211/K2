@@ -551,7 +551,7 @@ def print_inboxes(rows, agent_view):
                 print("SEND BLOCKED: this workspace's agent sending is 'approval', which only "
                       "queues hosted mailboxes — a linked inbox needs 'on'.")
             print("Ask your human to run: k2 mail sending <this workspace> on   (or Settings → "
-                  "Workspaces / Agents → <workspace> → Email sending)")
+                  "Workspaces / Agents → <workspace> → Permissions → Email sending)")
     else:
         print(("%-" + str(w) + "s%-9s%-22s%s") % ("ADDRESS", "SOURCE", "PRIMARY", "GRANTS"))
         for r in rows:
@@ -1309,7 +1309,7 @@ elif verb.startswith("forward_") or verb.startswith("self_forward_"):
             die({"code": "person_only", "hint":
                  "k2 mail forward is for a person's own mailbox (a box login, or the owner). "
                  "An agent uses k2 hostmail forward <set|add|rm|show|unset|pause|resume> <address> "
-                 "(needs \"Allow agents to manage hosted mail on this host\" on)"}, 3)
+                 "(needs \"Let this agent manage hosted mail\" on)"}, 3)
         if code in ("destination_stopped", "too_many_destinations", "new_outside_limit", "notice_limit",
                     "suppressed", "no_front_door", "no_mail_path", "forward_loop"):
             # The daemon's hint says what to do. Exit 1, no "ask your human" tail.

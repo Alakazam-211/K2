@@ -31,7 +31,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   app-tickets         App tickets: routes, live ticket_changed frames, contract
   app-identity        App agent identity: name, color, picture, handle; caps
   app-surfaces        Room members (who holds a grant), an App's own self and usage
-  app-resources       Box usage: the disk guard's lines, clean, CPU and memory trends
+  app-resources       Disk and memory: the disk guard's lines, clean, CPU and memory trends
   app-runtime         K2 updates move your App to the new runtime: re-host, setting, checks
   app-handover        Hand an App to another agent: offer, accept, the owner's card, undo
   app-push            Your App's own phone app: keys in the vault, register, send, limits

@@ -158,13 +158,13 @@ pub(crate) static APPS_APPROVE: ActionSpec = ActionSpec {
     words: Words {
         setting: "App Approvals",
         what_changes: "Approve {ws}'s held App request {request}",
-        consequences: "The change K2 held runs now, exactly as listed in Settings → App Approvals; open it there to see what it does.",
+        consequences: "The change K2 held runs now, exactly as listed in Settings → Cores → App Approvals; open it there to see what it does.",
         scope: "request {request}",
         duration: ONE_TIME,
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "app-approvals", path: "Settings → App Approvals" },
+    settings: SettingsRef { page: "app-approvals", path: "Settings → Cores → App Approvals" },
     walls: &[
         // Every App hold (switch 2 off, a missing core, new caps, a --cmd
         // service, egress, a box service, budget, clean-mode off).
@@ -248,13 +248,13 @@ pub(crate) static MAIL_APPROVE: ActionSpec = ActionSpec {
     words: Words {
         setting: "Email approvals",
         what_changes: "Send {ws}'s held email {message}",
-        consequences: "The message leaves exactly as it was queued: the same sender, recipients and text. This card only covers a message with no files, no Reply-To and no forward, and a reply whose original's sender cleared the DMARC check. Anything else is approved in Settings → Email Hosting → Approvals, or with k2 hostmail approvals. Read it first in Settings → Email Hosting → Approvals.",
+        consequences: "The message leaves exactly as it was queued: the same sender, recipients and text. This card only covers a message with no files, no Reply-To and no forward, and a reply whose original's sender cleared the DMARC check. Anything else is approved in Settings → Cores → Email Hosting → Approvals, or with k2 hostmail approvals. Read it first in Settings → Cores → Email Hosting → Approvals.",
         scope: "message {message}",
         duration: ONE_TIME,
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "email-hosting", path: "Settings → Email Hosting → Approvals" },
+    settings: SettingsRef { page: "email-hosting", path: "Settings → Cores → Email Hosting → Approvals" },
     walls: &[
         // A send held for approval (`agentSend: approval`).
         Wall {
@@ -312,7 +312,7 @@ fn needs_a_closer_look(id: &str) -> Option<String> {
     };
     Some(format!(
         "email {id} is still waiting. It carries {what}, which a permission card can't show, so it has \
-         to be approved where they're shown: Settings → Email Hosting → Approvals, or k2 hostmail \
+         to be approved where they're shown: Settings → Cores → Email Hosting → Approvals, or k2 hostmail \
          approvals show {id}"
     ))
 }

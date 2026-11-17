@@ -393,13 +393,13 @@ fn domain_is_mintable(row: &MailDomain) -> Result<(), AddrError> {
         return Err(AddrError::NotReady(format!(
             "domain '{}' is pending with sendMode '{}' — mint is allowed only on \
              receive-only until DNS verifies; send/direct stay locked. Your human \
-             can check it in Settings → Email",
+             can check it in Settings → Cores → Email Hosting → Domains",
             row.domain, row.send_mode
         )));
     }
     Err(AddrError::NotReady(format!(
         "domain '{}' is not verified yet — records are still propagating or \
-         missing; your human can check it in Settings → Email",
+         missing; your human can check it in Settings → Cores → Email Hosting → Domains",
         row.domain
     )))
 }
@@ -446,7 +446,7 @@ pub fn pick_mint_domain(
         return Err(AddrError::NotReady(
             "no hosted domain ready to mint on — a pending receive-only domain is \
              enough before NS cut; send stays locked until verified. Ask your human \
-             in Settings → Email"
+             in Settings → Cores → Email Hosting → Domains"
                 .to_string(),
         ));
     };
@@ -462,7 +462,7 @@ pub fn pick_mint_domain(
 fn cap_error(used: u32, cap: u32) -> AddrError {
     AddrError::CapReached(format!(
         "address cap reached ({used}/{cap}). Retire one with 'k2 mail delete <addr>' \
-         (frees its slot) or ask your human to raise the cap in Settings → Email."
+         (frees its slot) or ask your human to raise the cap (k2 hostmail config --workspace <workspace> --address-cap <n>)."
     ))
 }
 
@@ -675,7 +675,7 @@ pub fn mint_address(
         .filter(|s| !s.is_empty())
     else {
         return Err(AddrError::Engine(format!(
-            "domain '{}' has no mail-server id — remove and re-add it in Settings → Email",
+            "domain '{}' has no mail-server id — remove and re-add it in Settings → Cores → Email Hosting → Domains",
             domain_row.domain
         )));
     };
@@ -806,7 +806,7 @@ pub fn retire_address(
     if let Some(account_id) = row.stalwart_account_id.as_deref() {
         let Some(engine) = engine else {
             return Err(AddrError::Engine(
-                "the mail server is unavailable — start it in Settings → Email, then retry \
+                "the mail server is unavailable — start it in Settings → Cores → Email Hosting, then retry \
                  the delete"
                     .to_string(),
             ));
@@ -1325,7 +1325,7 @@ pub(crate) mod tests {
         let pending_direct = vec![domain_with_mode("pending-send.example", "pending", "direct")];
         match pick_mint_domain(Some("pending-send.example"), "", &pending_direct) {
             Err(AddrError::NotReady(hint)) => {
-                assert!(hint.contains("Settings → Email"), "{hint}");
+                assert!(hint.contains("Settings → Cores → Email Hosting"), "{hint}");
                 assert!(hint.contains("direct") || hint.contains("send"), "{hint}");
             }
             other => panic!("must be NotReady, got {other:?}"),
@@ -1381,7 +1381,7 @@ pub(crate) mod tests {
         // No verified, only pending + direct → still not_ready.
         match pick_mint_domain(None, "", &pending_direct) {
             Err(AddrError::NotReady(hint)) => {
-                assert!(hint.contains("Settings → Email"), "{hint}");
+                assert!(hint.contains("Settings → Cores → Email Hosting"), "{hint}");
             }
             other => panic!("must be NotReady, got {other:?}"),
         }
@@ -1730,7 +1730,7 @@ pub(crate) mod tests {
             Err(AddrError::CapReached(hint)) => assert_eq!(
                 hint,
                 "address cap reached (2/2). Retire one with 'k2 mail delete <addr>' \
-                 (frees its slot) or ask your human to raise the cap in Settings → Email.",
+                 (frees its slot) or ask your human to raise the cap (k2 hostmail config --workspace <workspace> --address-cap <n>).",
             ),
             other => panic!("must be CapReached, got {other:?}"),
         }
@@ -2013,7 +2013,7 @@ pub(crate) mod tests {
 
         // Stalwart id present + NO engine → fail closed, row untouched.
         match retire_address(None, &project, &address) {
-            Err(AddrError::Engine(hint)) => assert!(hint.contains("Settings → Email"), "{hint}"),
+            Err(AddrError::Engine(hint)) => assert!(hint.contains("Settings → Cores → Email Hosting"), "{hint}"),
             other => panic!("must fail closed, got {other:?}"),
         }
         assert_eq!(address_row(&address).unwrap().status, "active");

@@ -122,7 +122,7 @@ ON A LINUX SERVER (no screen: a virtual desktop, 0.46.12)
   gone (its agent's workspace was removed).
 
   An agent's desktop: a person turns on "Allow a virtual desktop" for that
-  agent (Settings → Workspaces → <agent> → Agent → Desktop, or
+  agent (Settings → Workspaces / Agents → <agent> → Permissions → Desktop, or
   k2 desktop allow on --workspace <agent>; an Owner or Admin). Each agent's desktop is
   separate, not private: until agent isolation (0.49) every desktop runs as
   this server's K2 user, so one agent could reach another's. There is no
@@ -380,7 +380,7 @@ STATUSES ON GITHUB (optional; a person stores the token)
 
 WHO MAY
   You (an agent): every k2 ci verb for your own workspace, while its
-  "Allow compute nodes" switch is on. People: the owner or an Admin
+  "Let this agent use compute nodes" switch is on. People: the owner or an Admin
   (--workspace <name> from outside the folder). The jobs carry your
   workspace's own compute grants, never the caller's or the owner's
   reach. Granting nodes, --ci and the statuses token are a person's.
@@ -394,7 +394,7 @@ WHEN IT SAYS NO (exit 2 usage, 3 refused, 4 not found, 1 failed)
   ci_not_a_repo          the workspace folder isn't a git repo
   ci_remote_unreachable  git ls-remote failed (this machine's git login)
   ci_watch_invalid       remote, branches, poll, tier or max out of range
-  compute_off            your "Allow compute nodes" switch is off
+  compute_off            your "Let this agent use compute nodes" switch is off
   cache_trust_needs_person  adding a trusted branch is a person's (ci-release)
   A check "not submitted: ci_not_allowed" = the grant lacks --ci (--tier
   standard, or ask for --ci); "not_granted" = no node granted. A run is
@@ -619,7 +619,7 @@ AN IPHONE FROM A LINUX SERVER
     k2 sim open-url https://shop.example.com   a web App in Safari
   Every other verb (tree, tap, type, screenshot…) works as above, in
   points. What differs:
-  - Agents also need "Allow compute nodes" (else exit 3 compute_off with
+  - Agents also need "Let this agent use compute nodes" (else exit 3 compute_off with
     an Ask with: line) and a compute grant for this workspace on that Mac
     (else exit 3 sim_node_not_granted, naming the owner's `k2 compute
     grant` command). From the Mobile tab, only the owner or an admin can

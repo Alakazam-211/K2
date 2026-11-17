@@ -453,7 +453,7 @@
     {
       "name": "compute node add",
       "usage": "k2 compute node add <name> [--url URL] [--json]",
-      "description": "Mint a 10-minute enroll code (CODE.FP) for a new node. Owner or admin (refused for agents and inside K2 terminals, unless Allow managing compute nodes is on for that agent).",
+      "description": "Mint a 10-minute enroll code (CODE.FP) for a new node. Owner or admin (refused for agents and inside K2 terminals, unless \"Let this agent manage compute nodes\" is on for that agent).",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--url", "arg": "URL", "description": "The controller URL the node should dial."},
@@ -463,7 +463,7 @@
     {
       "name": "compute node confirm",
       "usage": "k2 compute node confirm <name> <code>",
-      "description": "Confirm an enrolling node with the 6 digits the node shows. Owner or admin (refused for agents and inside K2 terminals, unless Allow managing compute nodes is on for that agent).",
+      "description": "Confirm an enrolling node with the 6 digits the node shows. Owner or admin (refused for agents and inside K2 terminals, unless \"Let this agent manage compute nodes\" is on for that agent).",
       "args": [{"name": "name", "required": true}, {"name": "code", "required": true}],
       "flags": []
     },
@@ -477,35 +477,35 @@
     {
       "name": "compute node rename",
       "usage": "k2 compute node rename <old> <new>",
-      "description": "Rename a node. Owner or admin (refused for agents and inside K2 terminals, unless Allow managing compute nodes is on for that agent).",
+      "description": "Rename a node. Owner or admin (refused for agents and inside K2 terminals, unless \"Let this agent manage compute nodes\" is on for that agent).",
       "args": [{"name": "old", "required": true}, {"name": "new", "required": true}],
       "flags": []
     },
     {
       "name": "compute node retire",
       "usage": "k2 compute node retire <name>",
-      "description": "Drain a node, then remove it once its jobs end. Owner or admin (refused for agents and inside K2 terminals, unless Allow managing compute nodes is on for that agent).",
+      "description": "Drain a node, then remove it once its jobs end. Owner or admin (refused for agents and inside K2 terminals, unless \"Let this agent manage compute nodes\" is on for that agent).",
       "args": [{"name": "name", "required": true}],
       "flags": []
     },
     {
       "name": "compute node pause",
       "usage": "k2 compute node pause <name>",
-      "description": "This server stops assigning jobs to the node. Owner or admin (refused for agents and inside K2 terminals, unless Allow managing compute nodes is on for that agent).",
+      "description": "This server stops assigning jobs to the node. Owner or admin (refused for agents and inside K2 terminals, unless \"Let this agent manage compute nodes\" is on for that agent).",
       "args": [{"name": "name", "required": true}],
       "flags": []
     },
     {
       "name": "compute node drain",
       "usage": "k2 compute node drain <name>",
-      "description": "This server stops assigning jobs to the node. Owner or admin (refused for agents and inside K2 terminals, unless Allow managing compute nodes is on for that agent).",
+      "description": "This server stops assigning jobs to the node. Owner or admin (refused for agents and inside K2 terminals, unless \"Let this agent manage compute nodes\" is on for that agent).",
       "args": [{"name": "name", "required": true}],
       "flags": []
     },
     {
       "name": "compute node resume",
       "usage": "k2 compute node resume <name>",
-      "description": "This server starts assigning jobs to the node again. Owner or admin (refused for agents and inside K2 terminals, unless Allow managing compute nodes is on for that agent).",
+      "description": "This server starts assigning jobs to the node again. Owner or admin (refused for agents and inside K2 terminals, unless \"Let this agent manage compute nodes\" is on for that agent).",
       "args": [{"name": "name", "required": true}],
       "flags": []
     },
@@ -519,7 +519,7 @@
     {
       "name": "compute node route",
       "usage": "k2 compute node route add|rm <name> <url>",
-      "description": "Add or remove a LAN or tailnet URL the node may dial. Owner or admin (refused for agents and inside K2 terminals, unless Allow managing compute nodes is on for that agent).",
+      "description": "Add or remove a LAN or tailnet URL the node may dial. Owner or admin (refused for agents and inside K2 terminals, unless \"Let this agent manage compute nodes\" is on for that agent).",
       "args": [{"name": "add|rm", "required": true}, {"name": "name", "required": true}, {"name": "url", "required": true}],
       "flags": []
     },
@@ -627,7 +627,7 @@
     {
       "name": "compute node health",
       "usage": "k2 compute node health <node> [--json]",
-      "description": "Uptime, disk, RAM, FileVault, update state. Node admin: agents need Allow this agent to operate compute nodes.",
+      "description": "Uptime, disk, RAM, FileVault, update state. Node admin: agents need \"Let this agent operate compute nodes\".",
       "args": [{"name": "node", "required": true}],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output."}
@@ -636,14 +636,14 @@
     {
       "name": "compute node policy show",
       "usage": "k2 compute node policy <node> show",
-      "description": "Show the node's policy. Node admin: agents need Allow this agent to operate compute nodes.",
+      "description": "Show the node's policy. Node admin: agents need \"Let this agent operate compute nodes\".",
       "args": [{"name": "node", "required": true}],
       "flags": []
     },
     {
       "name": "compute node policy set",
       "usage": "k2 compute node policy <node> set key=value... [--reason \"…\"]",
-      "description": "Change the node's policy: narrowing applies at once; widening waits for the owner (exit 2). Node admin: agents need Allow this agent to operate compute nodes.",
+      "description": "Change the node's policy: narrowing applies at once; widening waits for the owner (exit 2). Node admin: agents need \"Let this agent operate compute nodes\".",
       "args": [{"name": "node", "required": true}, {"name": "key=value", "required": true}],
       "flags": [
         {"name": "--reason", "arg": "text", "description": "Why."}
@@ -652,7 +652,7 @@
     {
       "name": "compute node update",
       "usage": "k2 compute node update <node> [--canary] [--now] | k2 compute node update --all [--batch N] [--now]",
-      "description": "Send this server's k2-node build to one node, or roll it out to every node this server owns, a few at a time. Node admin: agents need Allow this agent to operate compute nodes.",
+      "description": "Send this server's k2-node build to one node, or roll it out to every node this server owns, a few at a time. Node admin: agents need \"Let this agent operate compute nodes\".",
       "args": [{"name": "node", "required": false}],
       "flags": [
         {"name": "--canary", "arg": null, "description": "This node goes first in every later --all."},
@@ -664,7 +664,7 @@
     {
       "name": "compute node rollout",
       "usage": "k2 compute node rollout [show|pause|resume|stop] [--id ID] [--json]",
-      "description": "The latest rollout and each node's state (pending, offered, healthy, rolled_back, refused, failed, timed_out, skipped). The first rolled_back pauses it; resume sends to the rest; stop ends it. Node admin: agents need Allow this agent to operate compute nodes.",
+      "description": "The latest rollout and each node's state (pending, offered, healthy, rolled_back, refused, failed, timed_out, skipped). The first rolled_back pauses it; resume sends to the rest; stop ends it. Node admin: agents need \"Let this agent operate compute nodes\".",
       "args": [{"name": "action", "required": false, "description": "show (default), pause, resume or stop."}],
       "flags": [
         {"name": "--id", "arg": "ID", "description": "Which rollout (default: the latest)."},
@@ -674,7 +674,7 @@
     {
       "name": "compute node rollback",
       "usage": "k2 compute node rollback <node> [--now]",
-      "description": "Back to the node's own previous build. Node admin: agents need Allow this agent to operate compute nodes.",
+      "description": "Back to the node's own previous build. Node admin: agents need \"Let this agent operate compute nodes\".",
       "args": [{"name": "node", "required": true}],
       "flags": [
         {"name": "--now", "arg": null, "description": "Stop jobs at once."}
@@ -683,7 +683,7 @@
     {
       "name": "compute node wall",
       "usage": "k2 compute node wall <node> [--no-restart] [--reason \"…\"]",
-      "description": "Linux: turn the job wall on (jobs run as k2job, walled off from the node's key, /home and /root). An older node, or one whose owner set it up without the wall, holds it for the owner (exit 2). Node admin: agents need Allow this agent to operate compute nodes.",
+      "description": "Linux: turn the job wall on (jobs run as k2job, walled off from the node's key, /home and /root). An older node, or one whose owner set it up without the wall, holds it for the owner (exit 2). Node admin: agents need \"Let this agent operate compute nodes\".",
       "args": [{"name": "node", "required": true}],
       "flags": [
         {"name": "--no-restart", "arg": null, "description": "Use it at the next restart instead of restarting k2-node."},
@@ -693,7 +693,7 @@
     {
       "name": "compute node admin propose",
       "usage": "k2 compute node admin propose <node> <verb> [key=value…] --reason \"…\" | k2 compute node admin propose <node> --plan plan.json --reason \"…\"",
-      "description": "File a node admin request, held for the owner: exit 2 with the request id. Verbs today: unit.restart, policy.set, control.pause|drain|resume, gc, jobs.kill, wall.enable, homes.private. Node admin: agents need Allow this agent to operate compute nodes.",
+      "description": "File a node admin request, held for the owner: exit 2 with the request id. Verbs today: unit.restart, policy.set, control.pause|drain|resume, gc, jobs.kill, wall.enable, homes.private. Node admin: agents need \"Let this agent operate compute nodes\".",
       "args": [{"name": "node", "required": true}, {"name": "verb", "required": false}, {"name": "key=value", "required": false}],
       "flags": [
         {"name": "--reason", "arg": "text", "description": "Why (shown to the owner)."},
@@ -703,7 +703,7 @@
     {
       "name": "compute node admin list",
       "usage": "k2 compute node admin list [--node N] [--state open|pending|all] [--limit N] [--json]",
-      "description": "Node admin requests. Node admin: agents need Allow this agent to operate compute nodes.",
+      "description": "Node admin requests. Node admin: agents need \"Let this agent operate compute nodes\".",
       "args": [],
       "flags": [
         {"name": "--node", "arg": "N", "description": "Only this node."},
@@ -715,7 +715,7 @@
     {
       "name": "compute node admin withdraw",
       "usage": "k2 compute node admin withdraw <id>",
-      "description": "Withdraw your own node admin request. Node admin: agents need Allow this agent to operate compute nodes.",
+      "description": "Withdraw your own node admin request. Node admin: agents need \"Let this agent operate compute nodes\".",
       "args": [{"name": "id", "required": true}],
       "flags": []
     },
@@ -1025,7 +1025,7 @@
     {
       "name": "compute access",
       "usage": "k2 compute access on|off --workspace WS",
-      "description": "The Agent tab's Allow compute nodes: on = a grant on every machine switched on, with default limits (and ones added later); off removes them all. The owner or an admin sets it; an agent asks with k2 permission request compute.use.",
+      "description": "The Permissions tab's \"Let this agent use compute nodes\": on = a grant on every machine switched on, with default limits (and ones added later); off removes them all. The owner or an admin sets it; an agent asks with k2 permission request compute.use.",
       "args": [{"name": "on|off", "required": true}],
       "flags": [
         {"name": "--workspace", "arg": "WS", "description": "The workspace."}
@@ -1034,7 +1034,7 @@
     {
       "name": "compute operate",
       "usage": "k2 compute operate on|off --workspace WS",
-      "description": "The Agent switch Allow this agent to operate compute nodes. Owner only (refused for agents and inside K2 terminals).",
+      "description": "The Permissions tab's \"Let this agent operate compute nodes\". Owner only (refused for agents and inside K2 terminals).",
       "args": [{"name": "on|off", "required": true}],
       "flags": [
         {"name": "--workspace", "arg": "WS", "description": "The workspace."}
@@ -1043,7 +1043,7 @@
     {
       "name": "compute manage",
       "usage": "k2 compute manage on|off --workspace WS",
-      "description": "The Agent switch Allow managing compute nodes: that agent may node add/confirm/rename/pause/drain/resume/retire/route and grant/revoke any workspace (each act in Access Audit). Owner only.",
+      "description": "The Permissions tab's \"Let this agent manage compute nodes\": that agent may node add/confirm/rename/pause/drain/resume/retire/route and grant/revoke any workspace (each act in Access Audit). Owner only.",
       "args": [{"name": "on|off", "required": true}],
       "flags": [
         {"name": "--workspace", "arg": "WS", "description": "The workspace."}
@@ -1107,7 +1107,7 @@
     {
       "name": "compute local enable",
       "usage": "k2 compute local enable [--controller URL --enroll CODE.FP --name NAME] [--private-home | --no-private-home] [--remote-admin off|policy|full]",
-      "description": "Make this computer a compute node.",
+      "description": "Let a server run jobs on this computer (Settings → Cores → Compute → This computer).",
       "args": [],
       "flags": [
         {"name": "--controller", "arg": "URL", "description": "The controller to enroll with."},

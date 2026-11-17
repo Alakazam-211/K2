@@ -1030,8 +1030,8 @@ async fn an_apps_agent_ends_its_own_guests_sessions() {
     assert!(!hint.contains("k2 permission request"), "never an unknown command: {hint}");
     assert!(
         hint.contains(&format!("k2 app grant add --subject-kind principal --subject <{bx}'s principal id> --kind app"))
-            && hint.contains("Settings → Apps → <your App> → Add a person")
-            && hint.contains("Settings → Permission Cards"),
+            && hint.contains("Settings → Cores → Apps → <your App> → Add a person")
+            && hint.contains("Settings → Access → Permission Cards"),
         "the owner's own path, and where cards turn on: {hint}"
     );
     // Cards on (the server's switch and this agent's): it names the card.

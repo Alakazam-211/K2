@@ -65,7 +65,7 @@ WHAT A TEMPLATE IS
 3. PERMISSIONS: SUGGESTED, NOT GRANTED
   A hire never gets more than the hirer may give. Today a hire turns no
   switch on: each suggestion prints as "suggested", for a person to turn
-  on (Settings → Workspaces → the agent → Agent). When K2 refuses the new
+  on (Settings → Workspaces / Agents → the agent → Permissions). When K2 refuses the new
   agent, it asks on the permission card the refusal prints. Granting what
   the hirer itself holds, and filing cards for the rest, comes later.
 

@@ -42,7 +42,7 @@ pub(crate) static SWITCH: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "workspaces/{ws}", path: "Settings → Workspaces → {ws} → Default Agent" },
+    settings: SettingsRef { page: "workspaces/{ws}", path: "Settings → Workspaces / Agents → {ws} → Agent → Model → Default agent" },
     walls: &[
         Wall {
             matches: WallMatch::Code { status: 403, code: NEEDS_PERSON },

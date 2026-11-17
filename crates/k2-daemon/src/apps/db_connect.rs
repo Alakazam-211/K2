@@ -288,13 +288,13 @@ pub(crate) struct Switch {
 /// What connecting needs for an agent of `ws` (`path` its folder).
 pub(crate) fn switches(ws: &str, path: &str, plan: &Plan) -> Vec<Switch> {
     let handle = super::routes::ws_handle(ws);
-    let agent_tab = format!("Settings → Workspaces → {handle} → Agent");
+    let tab = format!("Settings → Workspaces / Agents → {handle} → Permissions");
     let mut out = vec![
-        Switch { id: "apps_build", name: "Build and run Apps", place: format!("{agent_tab} → Apps"), on: super::access::level(ws) >= super::access::Level::Build },
+        Switch { id: "apps_build", name: "Build and run Apps", place: format!("{tab} → Apps"), on: super::access::level(ws) >= super::access::Level::Build },
         Switch {
             id: "app_core_db",
             name: "Database (what its Apps may use)",
-            place: format!("{agent_tab} → Apps → Database"),
+            place: format!("{tab} → Apps"),
             on: super::cores::ticked(ws).iter().any(|c| c == "db"),
         },
     ];
@@ -302,7 +302,7 @@ pub(crate) fn switches(ws: &str, path: &str, plan: &Plan) -> Vec<Switch> {
         out.push(Switch {
             id: "db_create",
             name: "Let this agent create databases",
-            place: agent_tab.clone(),
+            place: format!("{tab} → Database"),
             on: k2_core::workspace::settings::db_agent_access_for_path(path) == "write",
         });
         let (default, _) = crate::sql::cluster::default_major();
@@ -310,7 +310,7 @@ pub(crate) fn switches(ws: &str, path: &str, plan: &Plan) -> Vec<Switch> {
             out.push(Switch {
                 id: "db_versions",
                 name: "Let this agent manage Postgres versions",
-                place: agent_tab.clone(),
+                place: format!("{tab} → Database"),
                 on: crate::sql::versions_access::switch_on(ws),
             });
         }

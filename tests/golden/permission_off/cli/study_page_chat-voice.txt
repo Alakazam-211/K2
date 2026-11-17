@@ -3,7 +3,7 @@ exit: 0
 --- stdout
 k2 study chat-voice — Voice rooms and channels in your App: the setup
 
-Chat / Voice Hosting is this box's chat and voice core (core id sew),
+Chat and voice is this box's chat and voice core (core id sew),
 powered by Sew; this K2 pins Sew 0.10.4. Your App gets ONE Space, bound to
 it. There your server keeps static rooms (say, two voice meeting rooms)
 and makes a text and a voice channel per project; calls are end-to-end
@@ -16,12 +16,12 @@ study app-chat, THE CHAT KEY). Below: the per-person path (Sew 0.5.0+).
 WHO. Owner = the box owner, in person (an Admin login may do the reset in
 step 3). Agent = your App's agent, with switches only the owner turns on:
 "Build and run Apps" and "Let this agent manage its Apps' users" (k2 app
-access <ws> shows them and your cores), and "Manage Chat / Voice Hosting"
+access <ws> shows them and your cores), and "Manage chat and voice"
 (k2 agent access set <ws> chat_manage on). Server = your App's own code.
 <app> = your App's id (k2 app list).
 
 THE ORDER
- 1. The box (Agent with Manage Chat / Voice Hosting, or Owner).
+ 1. The box (Agent with "Manage chat and voice", or Owner).
     k2 hostchat status: identity k2 (else k2 hostchat enable). k2 hostchat
     media status: running (else k2 hostchat media install). k2 hostchat
     home: "app-scoped sessions yes" and "app origin" yes.

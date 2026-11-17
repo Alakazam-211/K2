@@ -1569,7 +1569,7 @@ fn record_fire_failure(
         }
         let disable_reason = format!(
             "auto-disabled after {new_count} consecutive failed fire-attempts; \
-             last error: {reason}. Re-enable from Settings → Heartbeats to retry."
+             last error: {reason}. Turn it on again in Settings → Logs → Heartbeats to retry."
         );
         write_audit(project_id, agent_name, hb, "auto_disabled_failing", &disable_reason);
         k2_core::log_debug!(

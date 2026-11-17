@@ -51,9 +51,9 @@ PASSWORD SIGN-IN OVER THE TUNNEL
   page and answers `POST /cli/auth/login` only when the request was
   signed by a K2 edge (`<sub>.app.k2.dev` or the k2.dev dashboard).
   Scanners get 404. Tokens, sessions and local/LAN login are unchanged.
-  Setting `connectLoginIngress` (Settings → K2 Connect → Policies;
-  `k2 tunnel status` shows it):
-    edge   default — only via the K2 edge
+  Setting `connectLoginIngress` ("Password sign-in from the internet" in
+  Settings → Network → Tunnel → Policies; `k2 tunnel status` shows it):
+    edge   default ("Only at its k2.dev address"): only via the K2 edge
     any    self-hosters NOT behind the K2 edge (your own relay/proxy):
            restores plain password login over the tunnel; the daemon
            lockout still applies

@@ -2066,7 +2066,7 @@ fn take_hire_mint_confirm(actor: &str, token: Option<&str>) -> Result<String, Cl
     take_hire_confirm(
         actor,
         token,
-        "a key that can hire agents needs a fresh owner confirm (Touch ID, your login password or the vault password): `k2 api-key create --hire …` asks for it, or Settings → K2 API Tokens",
+        "a key that can hire agents needs a fresh owner confirm (Touch ID, your login password or the vault password): `k2 api-key create --hire …` asks for it, or Settings → Access → API Keys",
     )
 }
 
@@ -2167,7 +2167,7 @@ pub fn handle_api_key_hire_ceiling(body: &[u8], actor: &str) -> CliResponse {
         match take_hire_confirm(
             actor,
             token,
-            "widening a hire key's App access needs a fresh owner confirm (Touch ID, your login password or the vault password): `k2 api-key hire-ceiling` asks for it, or Settings → API Keys",
+            "widening a hire key's App access needs a fresh owner confirm (Touch ID, your login password or the vault password): `k2 api-key hire-ceiling` asks for it, or Settings → Access → API Keys",
         ) {
             Ok(m) => confirm_method = Some(m),
             Err(resp) => {

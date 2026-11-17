@@ -945,7 +945,7 @@ pub(crate) fn may_prepare(who: &Who) -> R<()> {
         Who::Agent { .. } | Who::Shell { .. } => Err(no(
             "owner_only",
             403,
-            "box prep is the owner's: ask your owner to run it (Settings → Apps → This server → Prepare this box, or \
+            "box prep is the owner's: ask your owner to run it (Settings → Cores → Apps → This server → Prepare this server, or \
              k2 app box prepare from a terminal outside K2); you may run k2 app box prepare --dry-run to see what it would change",
         )),
         _ => Err(no("owner_only", 403, "box prep is the owner's")),

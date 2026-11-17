@@ -155,22 +155,22 @@ echo off > "$SANDBOX/cards"
 run app grant add --subject-kind principal --subject dana --kind app --target shop --role viewer
 expect_eq "grant add refused: exit 3" "$rc" "3"
 lacks "grant add, cards off: no unknown command" "$out" "k2 permission"
-has "grant add, cards off: the owner's own path" "$out" "Settings → Apps → <the App> → Add a person"
-has "grant add, cards off: where cards turn on" "$out" "Settings → Permission Cards"
+has "grant add, cards off: the owner's own path" "$out" "Settings → Cores → Apps → <the App> → Add a person"
+has "grant add, cards off: where cards turn on" "$out" "Settings → Access → Permission Cards"
 run study apps
 lacks "study apps, cards off: no unknown command" "$out" "k2 permission request"
-has "study apps, cards off: the owner's own path" "$out" "Settings → Apps → <the App> → Add a person"
+has "study apps, cards off: the owner's own path" "$out" "Settings → Cores → Apps → <the App> → Add a person"
 has "study apps: the held changes" "$out" "A LOGIN OF YOUR APP IN ANOTHER WORKSPACE'S ROOM"
 run app --help
 lacks "app --help, cards off: no unknown command" "$out" "k2 permission request"
 lacks "app --help: no tag leaks" "$out" "#if-"
-has "app --help, cards off: where cards turn on" "$out" "Settings → Permission Cards"
+has "app --help, cards off: where cards turn on" "$out" "Settings → Access → Permission Cards"
 
 echo "== permission cards on =="
 echo on > "$SANDBOX/cards"
 run app grant add --subject-kind principal --subject dana --kind app --target shop --role viewer
 expect_eq "grant add refused: exit 3" "$rc" "3"
-lacks "grant add, cards on: no owner's-path line (the refusal's Ask with: stands)" "$out" "Settings → Permission Cards"
+lacks "grant add, cards on: no owner's-path line (the refusal's Ask with: stands)" "$out" "Settings → Access → Permission Cards"
 run study apps
 has "study apps, cards on: names the card" "$out" "k2 permission request apps.user-grant-box"
 lacks "study apps: no tag leaks" "$out" "#if-"

@@ -588,8 +588,8 @@ k2 vault send — hand a vault secret to another agent by name (you never see th
   line it prints (several for one agent: secret=A,B,C):
   k2 permission request vault.send secret=NAME to=<agent>::<host> --why "…"
   An Owner or Admin sends it from the card, or lets you send it there from
-  now on. Cards off: ask them to add it in Settings → Workspaces → <you> →
-  Permissions → Secrets it may send to other servers.
+  now on. Cards off: ask them to add it in Settings → Workspaces / Agents →
+  <you> → Permissions → Secrets it may send to other servers.
   k2 vault send-allow [--workspace <ws>] [--json]   what you may send to another server without asking
 
   People only (your own terminal, not a K2 terminal; the card does the same):

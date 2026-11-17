@@ -328,7 +328,7 @@ fn a_hearth_install_runs_every_step_to_ready() {
     let steps = v["nextSteps"].as_array().unwrap();
     assert_eq!(steps.len(), v["next"].as_array().unwrap().len(), "{v}");
     let invite = &steps[0];
-    assert_eq!(invite["text"], "Invite people to Hearth from Settings → Apps → Hearth → People.", "{v}");
+    assert_eq!(invite["text"], "Invite people to Hearth from Settings → Cores → Apps → Hearth → People.", "{v}");
     assert_eq!(invite["hint"], "k2 app user invite hearth <email>", "{v}");
     for st in steps {
         let text = st["text"].as_str().unwrap();
@@ -533,7 +533,7 @@ fn waiting_states_name_their_question_and_clear_by_themselves() {
     assert_eq!(v["waiting"]["reason"], jobs::WAIT_SEW_RIGHTS);
     // The person reads which permission; the agent gets the command.
     let text = v["waiting"]["text"].as_str().unwrap();
-    assert!(text.contains("Manage Chat / Voice Hosting") && !text.contains("k2 ") && !text.contains("chat_manage"), "{text}");
+    assert!(text.contains("Manage chat and voice") && !text.contains("k2 ") && !text.contains("chat_manage"), "{text}");
     assert_eq!(v["waiting"]["hint"], format!("k2 agent access set {WS} chat_manage on"), "{v}");
     assert!(v["waiting"].get("question").is_none(), "{v}");
     assert_plain(&v);

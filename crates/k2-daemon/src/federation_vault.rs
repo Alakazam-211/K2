@@ -341,7 +341,7 @@ fn too_old(host: &str) -> VaultError {
     VaultError::new(
         "peer_too_old",
         422,
-        format!("{host} can't take secret handoffs yet (it needs K2 0.46.1 or later, with federation on); nothing was sent"),
+        format!("{host} can't take secret handoffs yet (it needs K2 0.46.1 or later, with \"Connect agents across servers\" on); nothing was sent"),
     )
 }
 
@@ -457,7 +457,7 @@ fn refused_error(status: u16, code: &str, hint: &str, host: &str) -> VaultError 
 
 /// Where a person reviews and adds standing send grants (Settings).
 pub(crate) fn send_allow_settings_path(ws_label: &str) -> String {
-    format!("Settings → Workspaces → {ws_label} → Permissions → Secrets it may send to other servers")
+    format!("Settings → Workspaces / Agents → {ws_label} → Permissions → Secrets it may send to other servers")
 }
 
 /// The addresses a standing send grant may name for this send: what the
@@ -549,7 +549,7 @@ pub(crate) fn send_remote(
         return Err(VaultError::new(
             "federation_off",
             422,
-            "federation is off on this server; turn it on and pair with that server first (k2 fed enable, k2 fed pair)",
+            "\"Connect agents across servers\" is off on this server: turn it on in Settings → Network → Tunnel → Policies (or k2 fed enable), then pair with that server (k2 fed pair)",
         )
         .into());
     }
@@ -756,7 +756,7 @@ pub(crate) fn send_remote(
 /// A pinned, Trusted peer by the host the caller typed.
 fn trusted_peer(host: &str) -> Result<FederationPeer, VaultError> {
     if !federation::enabled() {
-        return Err(VaultError::new("federation_off", 422, "federation is off on this server; turn it on and pair first"));
+        return Err(VaultError::new("federation_off", 422, "\"Connect agents across servers\" is off on this server: turn it on in Settings → Network → Tunnel → Policies, then pair a server"));
     }
     let store = PeerStore::load().map_err(|e| VaultError::internal(format!("peer store: {e}")))?;
     let peer = store

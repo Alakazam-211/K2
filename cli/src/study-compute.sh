@@ -80,9 +80,10 @@ AVOID A NODE (0.46.8)
 
 FIRST
   k2 compute nodes      what this workspace may use, and why one waits.
-  Nothing listed: your owner turns on "Allow compute nodes" for you in
-  Settings → Workspaces → <you> → Agent. That gives you every machine
-  they switched on in Settings → Compute (and ones added later). You
+  Nothing listed: your owner turns on "Let this agent use compute nodes"
+  for you in Settings → Workspaces / Agents → <you> → Permissions →
+  Compute. That gives you every machine they switched on in Settings →
+  Cores → Compute (and ones added later). You
   can't turn it on yourself.
 
 NODE LIST (0.46.8)
@@ -1052,8 +1053,8 @@ LIMITS
   workspace, age; other workspaces' jobs are anonymous). nodes shows
   free CPU (cap minus what K2 jobs reserved) and free memory per node.
   The machine's owner can pause or drain the node at any time; agents
-  never pause, resume or grant (unless "Allow managing compute nodes" is
-  on, below). Owner verbs inside a K2 terminal answer owner_only.
+  never pause, resume or grant (unless "Let this agent manage compute
+  nodes" is on, below). Owner verbs inside a K2 terminal answer owner_only.
 
 WORKTREES
   From a git worktree inside the workspace (.claude/worktrees/x) runs
@@ -1133,9 +1134,9 @@ IN THE JOB
   --exclusive waits for an idle node and holds other K2 jobs while it
   runs; it doesn't stop non-K2 load (Sew VMs, hand-run builds).
 
-ADDING A MACHINE (owner, or an agent with "Allow managing compute nodes")
-  On the machine itself: Settings → Compute → "Make this computer a
-  compute node", or in a terminal outside K2:
+ADDING A MACHINE (owner, or an agent with "Let this agent manage compute nodes")
+  On the machine itself: Settings → Cores → Compute → This computer →
+  "Let a server run jobs on this computer", or in a terminal outside K2:
     k2 compute local enable --controller https://you.k2.dev \
       --enroll ABCDE-FGHJK.0123456789abcdef --name mini-1 --private-home
   (the code comes from `k2 compute node add mini-1` on the controller).
@@ -1158,9 +1159,9 @@ ADDING A MACHINE (owner, or an agent with "Allow managing compute nodes")
   blocked by design and falls back to the code. Smoke one-click from a
   built app.
 
-ADMIN (looking after the machines; Agent switch "Allow this agent to
-operate compute nodes", which your owner turns on — separate from
-"Allow compute nodes")
+ADMIN (looking after the machines; the "Let this agent operate compute
+nodes" switch, Permissions tab → Compute, which your owner turns on;
+separate from "Let this agent use compute nodes")
   Rule: agents propose, the owner approves, the node checks.
   Read:     k2 compute node health <node>   k2 compute node policy <node> show
   Operate (runs at once, no approval): lowering limits
@@ -1194,11 +1195,11 @@ operate compute nodes", which your owner turns on — separate from
   Needs a person at the machine: the first install, macOS OS updates,
   FileVault unlock after a power cut. Raising a node's remote-admin level
   needs the machine's owner: at the machine, or the owner's own K2 on it
-  (Settings → Compute, also over K2 Connect). You can never raise it.
+  (Settings → Cores → Compute, also over the tunnel). You can never raise it.
 
-MANAGING THE MACHINES (Agent switch "Allow managing compute nodes",
-which only your owner turns on: Settings → Workspaces → <you> → Agent,
-or k2 compute manage on --workspace <you> outside K2)
+MANAGING THE MACHINES ("Let this agent manage compute nodes", which
+only your owner turns on: Settings → Workspaces / Agents → <you> →
+Permissions → Compute, or k2 compute manage on --workspace <you> outside K2)
   With it on, from this computer (never over LAN, the tunnel or an App):
     k2 compute node add <name>            mint the enroll code (owner gets a note)
     k2 compute node confirm <name> <code> the 6 digits the NODE shows (read
@@ -1209,13 +1210,13 @@ or k2 compute manage on --workspace <you> outside K2)
     k2 compute grant <node> --workspace <any>
     k2 compute revoke <node> --workspace <any>
     k2 compute nodes / info / grants       every node and grant, not just yours
-  Every act is a line in the owner's Access Audit (Settings → Logs) with
+  Every act is a line in the owner's Access Audit (Settings → Logs → Access Audit) with
   your workspace and session; add and confirm also drop an inbox note.
   Still the owner's: k2 compute preview on|off, k2 compute node remove,
   k2 compute node pinned-only (a pinned-only node runs only jobs that
-  name it), "Allow compute nodes" (agents set), and this switch. Off:
-  owner_only.
-  Running jobs still needs "Allow compute nodes" and a grant.
+  name it), "Let this agent use compute nodes" (agents set), and this
+  switch. Off: owner_only.
+  Running jobs still needs "Let this agent use compute nodes" and a grant.
 
 SERVICES
   Long-running workloads a node supervises (Lima VMs, runners) are
@@ -1229,7 +1230,7 @@ COMMON ERRORS
   stalled                no output for --stall-timeout (a hung test): a result, not retried
   artifact_gone          the node keeps artifacts 7 days; run it again
   relay_cap              an artifact over 100 MB through the relay: fetch --over-relay (≤ 500 MB)
-  operate_off            ask your owner for "Allow this agent to operate compute nodes"
+  operate_off            ask your owner for "Let this agent operate compute nodes"
   node_lacks_admin       that k2-node predates node admin: someone re-runs setup there
   too_many_pending       10 requests (admin, or package requests from this server)
                          already wait for the owner on that node; wait or withdraw
@@ -1284,7 +1285,7 @@ COMMON ERRORS
                          machine. It can't be requested; exit 3
   private_home_choice    enable: say --private-home or --no-private-home
   owner_only             owner verb from an agent or a K2 terminal: use Settings
-                         (or ask for "Allow managing compute nodes")
+                         (or ask for "Let this agent manage compute nodes")
   node_not_allowed       that node is off this workspace's node list (the error
                          names the list): name one on it, or no node; exit 3
   no_gpu_node            --gpu, but no node you can use runs GPU jobs for this server

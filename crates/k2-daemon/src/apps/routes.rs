@@ -267,7 +267,7 @@ pub fn dark() -> CliResponse {
 }
 
 /// Where the owner turns Apps (beta) back on.
-pub const APPS_OFF_HINT: &str = "Apps (beta) are off on this server: the owner turns them on in Settings → Apps → \
+pub const APPS_OFF_HINT: &str = "Apps are off on this server: the owner turns them on in Settings → Cores → Apps → \
      This server (or K2_APPS=1)";
 
 pub(crate) fn db_err(e: impl std::fmt::Display) -> Refusal {

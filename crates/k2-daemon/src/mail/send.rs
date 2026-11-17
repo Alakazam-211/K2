@@ -132,7 +132,7 @@ pub enum SendError {
 /// page.
 pub const AGENT_SEND_CONTROLS: &str =
     "`k2 mail sending <workspace> on` (the owner runs it from a terminal outside a K2 \
-     agent session) or Settings → Workspaces / Agents → <workspace> → Email sending";
+     agent session) or Settings → Workspaces / Agents → <workspace> → Permissions → Email sending";
 
 /// The `gated` hint for a workspace whose agent-send mode is `off`.
 pub fn agent_send_off_hint() -> String {
@@ -162,7 +162,7 @@ pub fn effective_gate(mode: Result<String, String>) -> Result<Gate, SendError> {
         Ok(other) => Err(SendError::Engine(format!(
             "unrecognized send-gating mode '{other}' — refusing to send (fail-closed); \
              your human can reset it with `k2 mail sending <workspace> off|approval|on` or \
-             Settings → Workspaces / Agents → <workspace> → Email sending"
+             Settings → Workspaces / Agents → <workspace> → Permissions → Email sending"
         ))),
         Err(e) => Err(SendError::Engine(format!(
             "could not read the send-gating setting — refusing to send (fail-closed): {e}"
@@ -1628,7 +1628,7 @@ pub fn wire_status(db_status: &str) -> &'static str {
 /// The per-status outbox note (rendered next to the owner's own note).
 pub fn status_note(db_status: &str) -> &'static str {
     match db_status {
-        "pending" => "queued for approval — your human decides in Settings → Email → Approvals",
+        "pending" => "queued for approval — your human decides in Settings → Cores → Email Hosting → Approvals",
         "approved" => "approved — handing to the mail server",
         "denied" => "denied by your human — see the note",
         "sent" => "accepted-for-delivery (final delivery is the receiving server's business)",
@@ -1818,7 +1818,7 @@ pub fn check_domain_send_mode(
         "direct" => Ok(()),
         "receive-only" => Err(SendError::SendMode(format!(
             "domain '{domain}' is receive-only — outbound mail is disabled for it. Your \
-             human can change its send mode in Settings → Email → Sending"
+             human can change its send mode in Settings → Cores → Email Hosting → Domains → Sending"
         ))),
         "relay" => check_relay_config(secrets, &domain, row.relay_config_id.as_deref()),
         other => Err(SendError::Engine(format!(
@@ -1839,7 +1839,7 @@ fn check_relay_config(
 ) -> Result<(), SendError> {
     let misconfigured = |what: &str| {
         SendError::SendMode(format!(
-            "domain '{domain}' is in relay mode but {what} — fix it in Settings → Email → Sending"
+            "domain '{domain}' is in relay mode but {what} — fix it in Settings → Cores → Email Hosting → Domains → Sending"
         ))
     };
     let Some(config_id) = relay_config_id.filter(|s| !s.trim().is_empty()) else {
@@ -1890,7 +1890,7 @@ fn check_relay_config(
         }
         other => Err(SendError::SendMode(format!(
             "relay kind '{other}' is not supported yet (V1 relays over generic SMTP) — \
-             domain '{domain}' cannot send until its relay is switched in Settings → Email"
+             domain '{domain}' cannot send until its relay is switched in Settings → Cores → Email Hosting → Domains → Sending"
         ))),
     }
 }

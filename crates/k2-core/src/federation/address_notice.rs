@@ -621,7 +621,7 @@ pub struct NoticeRow {
 /// is told to do (shown in `k2 fed peers`).
 pub const REPAIR_HINT: &str =
     "this peer stores a different address for this server; pair again with it to update \
-     (k2 fed pair-start, or Settings → Connections → Pair)";
+     (k2 fed pair-start, or Settings → Network → Connected Servers → Pair again)";
 
 /// How many earlier announced addresses are kept as alternates.
 const HISTORY_LEN: usize = 5;
@@ -880,7 +880,7 @@ pub fn classify(res: &SendResult) -> DeliveryOutcome {
             reason: "peer_too_old".to_string(),
             detail: format!(
                 "the peer answered 404: it has no address-notice route (older than 0.45.2) \
-                 or its federation is off ({})",
+                 or it has \"Connect agents across servers\" off ({})",
                 body.trim()
             ),
         },

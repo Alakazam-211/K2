@@ -39,7 +39,7 @@ pub fn tunnel_bearer_token() -> Result<String, String> {
     let tok = cfg.token.trim().to_string();
     if tok.is_empty() {
         return Err(
-            "no tunnel token in ~/.k2/tunnel.json — pair K2 Connect first".to_string(),
+            "no tunnel token in ~/.k2/tunnel.json — sign in to your k2.dev account in Settings → Network → Tunnel first".to_string(),
         );
     }
     Ok(tok)
@@ -236,7 +236,7 @@ pub fn map_proxy_response(resp: &DnsHttpResponse) -> (&'static str, String) {
                 "ok": false,
                 "error": {
                     "code": "unauthorized",
-                    "hint": "tunnel token rejected by DNS API — re-pair K2 Connect"
+                    "hint": "tunnel token rejected by DNS API — sign in to your k2.dev account in Settings → Network → Tunnel again"
                 }
             })
             .to_string(),

@@ -27,7 +27,7 @@ pub const NOTICE_TITLE: &str = "Permission cards are now on";
 /// The notice body: what changed, what it doesn't do, where to turn it off.
 pub const NOTICE_BODY: &str = "Permission cards are now on for this server (K2 0.46.11 turns them on by default). \
 An agent you choose can ask you, on a card in its Thread, to change a setting it can't change itself; nothing changes until you or an admin allow that card. \
-To choose an agent: Settings → Workspaces → <agent> → Permissions → \"Let this agent ask for permission\" (each agent's switch is still off until you turn it on). \
+To choose an agent: Settings → Workspaces / Agents → <agent> → Permissions → \"Let this agent ask for permission\" (each agent's switch is still off until you turn it on). \
 To turn cards off for the whole server: Settings → Access → Permission Cards, or `k2 permission beta off`.";
 
 /// The Access Audit line the pass writes when it turns the switch on.

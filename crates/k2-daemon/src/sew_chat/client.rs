@@ -1114,7 +1114,7 @@ fn emoji_text(e: &sew_client::proto::api::messages::Emoji) -> String {
 /// every chat route stays 503 `chat_unavailable`. Idempotent.
 pub fn install_live(socket: &str) -> Result<(), String> {
     if !crate::sew::sew_supported() {
-        return Err("Chat / Voice Hosting runs on Linux boxes only".into());
+        return Err("Chat and voice run on Linux servers only".into());
     }
     let tokens: TokenSource =
         Arc::new(|refresh| crate::sew::supervisor::mgmt_token(&crate::sew::supervisor::live(), refresh));

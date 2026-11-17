@@ -1322,7 +1322,7 @@ fn level_refusal(verb: &str, inbox: &ReaderInbox) -> Option<CliResponse> {
         "not_allowed",
         &format!(
             "the reader acts on '{}' as its workspace '{ws}', and '{ws}' may not {what}. An Owner or \
-             Admin can change that in Settings → Email, or with 'k2 mail access set-level' / \
+             Admin can change that in Settings → Workspaces / Agents → <workspace> → Mail, or with 'k2 mail access set-level' / \
              'k2 mail access set-manage'",
             inbox.address
         ),

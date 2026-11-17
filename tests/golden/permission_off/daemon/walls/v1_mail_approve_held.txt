@@ -5,7 +5,7 @@
 HTTP/1.1 200 OK
 content-type: application/json
 {
-  "hint": "queued for approval (<OUT_ID>) — your human decides in Settings → Email → Approvals; track with 'k2 mail outbox <OUT_ID>'",
+  "hint": "queued for approval (<OUT_ID>) — your human decides in Settings → Cores → Email Hosting → Approvals; track with 'k2 mail outbox <OUT_ID>'",
   "id": "<OUT_ID>",
   "ok": true,
   "queued": true,
@@ -17,7 +17,7 @@ content-type: application/json
 HTTP/1.1 200 OK
 content-type: application/json
 {
-  "hint": "queued for approval (<OUT_ID>) — your human decides in Settings → Email → Approvals; track with 'k2 mail outbox <OUT_ID>'",
+  "hint": "queued for approval (<OUT_ID>) — your human decides in Settings → Cores → Email Hosting → Approvals; track with 'k2 mail outbox <OUT_ID>'",
   "id": "<OUT_ID>",
   "ok": true,
   "queued": true,

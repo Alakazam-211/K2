@@ -274,7 +274,7 @@ impl ZenFiles {
             }
             if !valid_widget_file(file) {
                 return Err(ZenError::BadRequest(format!(
-                    "'{file}' is an image or font: only a person, or an agent with \"Manage Gardens and data sources\", can add or change one (proposals hold code files)"
+                    "'{file}' is an image or font: only a person, or an agent with \"Let this agent manage Gardens and data sources\" on, can add or change one (proposals hold code files)"
                 )));
             }
             let text = String::from_utf8(bytes.clone()).map_err(|_| ZenError::BadRequest(format!("{file} is not UTF-8 text")))?;

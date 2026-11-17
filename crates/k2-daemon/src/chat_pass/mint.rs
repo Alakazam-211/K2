@@ -193,7 +193,7 @@ fn connect_gate_refusal(ident: &PassIdentity, d: &Deps<'_>, req: &PassRequest<'_
         Ok(ConnectChatGate::Disabled) => {
             refuse(403, "no_chat_grant", "this login's chat access is switched off (grant kind chat)")
         }
-        Ok(ConnectChatGate::Off) => refuse(503, "chat_unavailable", "Chat / Voice Hosting is not enabled on this box"),
+        Ok(ConnectChatGate::Off) => refuse(503, "chat_unavailable", "Chat and voice are not set up on this server"),
         Err(e) => {
             super::keyring::klog(format!("pass mint: connect member gate: {e}"));
             refuse(503, "chat_unavailable", "K2 could not check this login's chat account")
@@ -240,7 +240,7 @@ fn keyed_gate_refusal(ident: &PassIdentity, d: &Deps<'_>, req: &PassRequest<'_>)
             &format!("this App's chat key already gave chat to {max} people, its ceiling (the owner raises it: k2 app grant <app> --kind chat-key --max N)"),
             Some(json!({ "maxMembers": max })),
         ),
-        Ok(KeyedChatGate::Off) => refuse(503, "chat_unavailable", "Sew is not enabled on this box", None),
+        Ok(KeyedChatGate::Off) => refuse(503, "chat_unavailable", "chat isn't set up on this server", None),
         Err(e) => {
             super::keyring::klog(format!("pass mint: keyed member gate: {e}"));
             refuse(503, "chat_unavailable", "K2 could not check this person's chat account", None)
@@ -418,7 +418,7 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
                 Err(e) => {
                     let e: RedeemError = e;
                     audit("chat-handoff", "handoff", &format!("handoff_invalid:{}", e.reason()), req.ingress, req.ip);
-                    return error(401, "handoff_invalid", "this handoff code is unknown, used or expired; open Sew again from K2", None).into();
+                    return error(401, "handoff_invalid", "this handoff code is unknown, used or expired; open chat again from K2", None).into();
                 }
             }
         }
@@ -517,7 +517,7 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
         Err(e) => {
             super::keyring::klog(format!("pass mint: no install id: {e}"));
             audit(event, &ident.actor, "chat_unavailable", req.ingress, req.ip);
-            return error(503, "chat_unavailable", "Chat / Voice Hosting is not enabled or not reachable", None).into();
+            return error(503, "chat_unavailable", "Chat and voice are not set up or not reachable", None).into();
         }
     };
     // Sew 0.3.1 readiness: wait through an upgrade (≤10 s), never through a
@@ -609,14 +609,14 @@ fn owner_gate(caller: &Result<VaultCaller, VaultError>) -> Result<Actor, CliResp
     let c = match caller {
         Ok(c) => c,
         Err(e) if e.status == 401 => return Err(error(401, "unauthenticated", "send the owner token or an Owner Connect login as Authorization: Bearer", None)),
-        Err(_) => return Err(error(403, "owner_only", "app passes and API keys can't open Sew as its owner", None)),
+        Err(_) => return Err(error(403, "owner_only", "app passes and API keys can't open chat as its owner", None)),
     };
     if c.is_passport() {
-        return Err(error(403, "owner_only", "agents never get Sew's install owner; ask a person to open Sew as owner", None));
+        return Err(error(403, "owner_only", "agents never get chat's install owner; ask a person to open chat as owner", None));
     }
     match &c.actor {
         Actor::Owner | Actor::Login { role: Role::Owner, .. } => Ok(c.actor.clone()),
-        _ => Err(error(403, "owner_only", "opening Sew as its install owner needs the box owner", None)),
+        _ => Err(error(403, "owner_only", "opening chat as its install owner needs the server's owner", None)),
     }
 }
 
@@ -651,7 +651,7 @@ pub fn handle_owner_handoff_with(
     codes: &handoff::Store,
 ) -> Reply {
     if ingress == "tunnel" {
-        return error(403, "loopback_only", "open Sew as owner from the box or its LAN, not through the tunnel", None).into();
+        return error(403, "loopback_only", "open chat as owner from this server or its LAN, not through the tunnel", None).into();
     }
     let actor = match owner_gate(&caller) {
         Ok(a) => a,
@@ -672,7 +672,7 @@ pub fn handle_owner_handoff_with(
         return error(
             403,
             "vault_confirm_required",
-            "opening Sew as its owner needs a person: confirm first (POST /cli/vault/confirm/finish with action chat-owner-handoff: Touch ID, the vault password or your Connect password), then send confirmToken",
+            "opening chat as its owner needs a person: confirm first (POST /cli/vault/confirm/finish with action chat-owner-handoff: Touch ID, the vault password or your Connect password), then send confirmToken",
             None,
         )
         .into();

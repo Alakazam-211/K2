@@ -164,7 +164,7 @@ impl LimitRefusal {
     pub fn message(&self) -> String {
         match self {
             LimitRefusal::TooManyDevices { running, max } => format!(
-                "this server already runs {running} of its {max} devices. Stop one (`k2 sim stop` in that workspace) or ask the owner to raise the limit in Settings → K2 Server → Mobile devices."
+                "this server already runs {running} of its {max} devices. Stop one (`k2 sim stop` in that workspace) or ask the owner to raise the limit."
             ),
             LimitRefusal::LowRam { available, need } => format!(
                 "not enough free memory to boot a device: {:.1} GB free, {:.1} GB needed. Stop a device or an App, then try again.",

@@ -414,7 +414,7 @@ fn an_agent_without_its_switches_gets_one_card_naming_each_and_approval_connects
     let id = v["request"]["id"].as_str().unwrap().to_string();
     let off: Vec<&str> = v["switches"].as_array().unwrap().iter().filter(|s| s["on"] == false).map(|s| s["name"].as_str().unwrap()).collect();
     assert_eq!(off, vec!["Build and run Apps", "Database (what its Apps may use)", "Let this agent create databases"], "each by its Settings name");
-    assert!(v["switches"][0]["where"].as_str().unwrap().starts_with("Settings → Workspaces → "), "{v}");
+    assert!(v["switches"][0]["where"].as_str().unwrap().starts_with("Settings → Workspaces / Agents → "), "{v}");
     let lines = v["diff"]["lines"].to_string();
     for s in &off {
         assert!(lines.contains(s), "the card lists {s}: {lines}");

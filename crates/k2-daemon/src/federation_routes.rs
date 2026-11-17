@@ -1214,7 +1214,7 @@ pub fn handle_send_user_tray(
 ) -> CliResponse {
     if !federation::enabled() {
         return CliResponse::bad_request(
-            "federation is off — enable it and pair first (k2 fed enable / k2 fed pair-request)",
+            "\"Connect agents across servers\" is off on this server — turn it on (Settings → Network → Tunnel → Policies, or k2 fed enable) and pair first (k2 fed pair-request)",
         );
     }
     if agent.trim().is_empty() || host.trim().is_empty() {
@@ -1947,7 +1947,7 @@ fn not_connected_response(
         .unwrap_or_else(|| typed_name.to_string());
     let add_hint = format!(
         "add it with `k2 connections add {target_handle}::{host}` (or ask your human: \
-         Settings → Connections)"
+         Settings → Workspaces / Agents → <workspace> → Connections)"
     );
 
     // 0159: a row saved under the typed name whose bound workspace left
@@ -2175,7 +2175,7 @@ pub(crate) fn connections_resolve(target: &str, full: bool) -> CliResponse {
         )
     };
     if !k2_core::federation::enabled() {
-        return not_paired("federation is off on this server");
+        return not_paired("\"Connect agents across servers\" is off on this server");
     }
     let Some(peer) = fp.as_deref().and_then(trusted_peer_by_fingerprint) else {
         return not_paired("no paired server answers for that host");

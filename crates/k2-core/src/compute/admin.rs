@@ -891,7 +891,7 @@ pub fn summarize(node: &str, verb: &str, args: &Value) -> String {
 /// CPUs 7 → 10, memory 8 → 14 GB"). `server` is the server's label;
 /// `before` its current share (`ShareLimits` as JSON, plus `priority` when
 /// known). A value `before` lacks shows only the new one. What the owner
-/// reads in Settings → Compute → Approvals and on the permission card.
+/// reads in Settings → Cores → Compute → Machine settings → Waiting for you and on the permission card.
 pub fn summarize_limits_change(node: &str, server: &str, args: &Value, before: &Value) -> String {
     // (key, name, unit); the order the line reads in.
     const FIELDS: &[(&str, &str, &str)] = &[

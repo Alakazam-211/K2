@@ -422,9 +422,9 @@ pub enum Undo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsRef {
-    /// `view.settingsPage`: the deep-link id (`workspaces/{ws}/agent`).
+    /// `view.settingsPage`: the deep-link id (`workspaces/{ws}/permissions`).
     pub page: &'static str,
-    /// Human path for refusals ("Settings → Workspaces → {ws} → Agent").
+    /// Human path for refusals ("Settings → Workspaces / Agents → {ws} → Permissions").
     pub path: &'static str,
 }
 
@@ -645,7 +645,7 @@ mod tests {
         proof: Proof::Click,
         expiry: Expiry::STANDARD,
         words: Words {
-            setting: "Allow compute nodes",
+            setting: "Let this agent use compute nodes",
             what_changes: "Let {ws} run jobs on this server's compute nodes",
             consequences: "Every active machine; default limits; jobs see only the code {ws} sends.",
             scope: "{ws}",
@@ -653,7 +653,7 @@ mod tests {
             retry: "run your command again",
         },
         undo: Undo::Twin { action: "compute.use-off" },
-        settings: SettingsRef { page: "workspaces/{ws}/agent", path: "Settings → Workspaces → {ws} → Agent" },
+        settings: SettingsRef { page: "workspaces/{ws}/permissions", path: "Settings → Workspaces / Agents → {ws} → Permissions" },
         walls: &[Wall {
             matches: WallMatch::Code { status: 403, code: "compute_off" },
             route_prefix: "/cli/compute/",

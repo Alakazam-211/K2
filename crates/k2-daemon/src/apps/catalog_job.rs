@@ -101,7 +101,7 @@ pub(crate) trait Hooks: Send + Sync {
     fn deployment(&self, app_id: &str, id: Option<&str>, seed: &str) -> Option<Dep>;
     /// An approval request's status (`pending`, `approved`, …).
     fn request_status(&self, id: &str) -> Option<String>;
-    /// Manage Chat / Voice Hosting for this caller (A4).
+    /// Manage chat and voice for this caller (A4).
     fn may_manage_sew(&self, who: &Who) -> bool;
     /// Sew's mgmt API.
     fn sew_mgmt(&self, method: &str, path: &str, body: &J) -> Result<J, MgmtError>;
@@ -634,12 +634,12 @@ pub(crate) fn suite_label_holder(label: &str) -> Option<String> {
     held.or_else(|| (label == crate::sew::meet::MEET_LABEL).then(crate::sew::meet::bound_live).flatten().map(|(a, _)| a))
 }
 
-/// The wait for "Manage Chat / Voice Hosting" (binding a suite label, Sew
+/// The wait for "Manage chat and voice" (binding a suite label, Sew
 /// setup): the plain sentence and the command that ends it.
 pub(crate) fn sew_rights_wait(what: &str, workspace: &str) -> (String, String) {
     (
         format!(
-            "Setting up {what} on this server's chat needs the \"Manage Chat / Voice Hosting\" permission. The owner can give it to the agent that looks after this App, or deploy it from Settings → Apps → Add an App; the deploy goes on by itself then"
+            "Setting up {what} on this server's chat needs the \"Manage chat and voice\" permission. The owner can give it to the agent that looks after this App, or deploy it from Settings → Cores → Apps → Add an App; the deploy goes on by itself then"
         ),
         format!("k2 agent access set {workspace} chat_manage on"),
     )
@@ -979,7 +979,7 @@ pub(crate) fn next_steps(j: &JobRow) -> Vec<NextStep> {
     let mut out = vec![];
     if j.variant == suite::VARIANT_K2 {
         let cmd = format!("k2 app user invite {} <email>", j.app_id);
-        out.push(NextStep { text: format!("Invite people to {app} from Settings → Apps → {app} → People."), line: format!("Invite people: {cmd}"), hint: cmd });
+        out.push(NextStep { text: format!("Invite people to {app} from Settings → Cores → Apps → {app} → People."), line: format!("Invite people: {cmd}"), hint: cmd });
         // TODO(Q14): offer "Let this App give chat to its users"
         // (guests-chat) at deploy, and the default member role (A10). Until
         // that is decided, each person also needs chat and a role by hand.

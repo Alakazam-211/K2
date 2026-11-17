@@ -2,7 +2,7 @@
 #
 # Thin client over daemon `/cli/dns/*` (control-plane proxy). Agents never
 # hold the tunnel token; the daemon gates on dns_manage_allowed_for_path
-# (Settings → K2 Connect master, or Workspaces → Allow DNS manage) and
+# (Settings → Network → Tunnel → Policies, or the agent's Permissions → DNS) and
 # stamps identity from the scoped principal (Wave 0). Prefer UDS when
 # available; POST JSON for mutations.
 #
@@ -47,9 +47,10 @@ def dumps(obj):
 # GH#32 — single canonical owner path, shared with daemon DNS_DENIED_HINT
 # and k2 dns --help exit-3 prose.
 DNS_GATED_HINT = (
-    "this agent isn't allowed to manage DNS — the owner can enable it in "
-    "Settings \u2192 K2 Connect (Allow agents to manage DNS records) or "
-    "Workspaces \u2192 (workspace) \u2192 Allow DNS manage"
+    "this agent isn't allowed to manage DNS — "
+    "Settings \u2192 Network \u2192 Tunnel \u2192 Policies \u2192 "
+    "\"Agents can change DNS records\", or Settings \u2192 Workspaces / Agents "
+    "\u2192 <workspace> \u2192 Permissions \u2192 DNS \u2192 \"Let this agent manage DNS\"."
 )
 
 GATED_CODES = frozenset({
@@ -495,9 +496,10 @@ EXIT CODES
   0 ok
   1 error (proxy/upstream/not found/etc.)
   2 bad usage (missing args, disallowed record type)
-  3 gated/forbidden — DNS manage is off; ask your human to enable it in
-    Settings → K2 Connect (Allow agents to manage DNS records) or
-    Workspaces → (workspace) → Allow DNS manage
+  3 gated/forbidden — DNS manage is off; ask your human to turn it on in
+    Settings → Network → Tunnel → Policies → "Agents can change DNS records",
+    or Settings → Workspaces / Agents → <workspace> → Permissions → DNS →
+    "Let this agent manage DNS"
     (same path as the access-denied `hint` — GH#32)
 
 NS and zone lifecycle are not available to agents.

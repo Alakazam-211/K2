@@ -53,7 +53,7 @@ pub(crate) static STOP_SENDING: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "workspaces/{target}", path: "Settings → Workspaces / Agents → {target} → Email sending" },
+    settings: SettingsRef { page: "workspaces/{target}/permissions", path: "Settings → Workspaces / Agents → {target} → Permissions → Email sending" },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "owner_only" },
         route_prefix: ROUTE,

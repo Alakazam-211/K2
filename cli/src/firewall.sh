@@ -45,7 +45,7 @@ effect where it is applied: at your provider when K2 applies it
 your change is in), else only once you apply k2 firewall rules. A
 firewall already on this box (ufw, nft) needs the port opened there too.
 SSH is always public (narrow it, never close it). A port K2 opened for a
-feature (the :443 front, hosted mail, Chat / Voice Hosting) is read-only here: turn
+feature (the :443 front, hosted mail, chat and voice) is read-only here: turn
 the feature off to close it. Changes are the owner's, an Admin login's
 or a K2 shell tab's; an agent gets owner_only (exit 3) and can't request
 it. Also: Settings → Network → Custom Domains → Firewall.

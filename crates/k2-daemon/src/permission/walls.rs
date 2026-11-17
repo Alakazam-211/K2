@@ -706,7 +706,7 @@ pub(crate) const ROWS: &[Row] = &[
     },
     row(ask("chat.manage", Floor::Admin), code(403, "chat_manage_off"), "/cli/", ANY),
     // 0.46.8 (Rosson 2026-11-02: the broad switch first). A `k2 chat` read
-    // with no chat account: "Manage Chat / Voice Hosting" while it's off
+    // with no chat account: "Manage chat and voice" while it's off
     // (`details.chatManage`; `k2 chat space create` already stops at
     // `chat_manage_off`). With the switch on and the account still not
     // there: `chat.account`, for that read (`details.chatAccount`) and for

@@ -372,7 +372,7 @@ fn propose(caller: &Caller, kind: ProposalKind, target: &str, file: Option<&str>
                     "proposed": true,
                     "proposal": p.summary(),
                     "message": format!(
-                        "Proposed {}. A person approves it (Settings → Gardens, or k2 zen proposals approve {} outside K2), or an agent with \"Manage Gardens and data sources\".",
+                        "Proposed {}. A person approves it (Settings → Gardens, or k2 zen proposals approve {} outside K2), or an agent with \"Let this agent manage Gardens and data sources\" on.",
                         p.id, p.id
                     ),
                 }),
@@ -498,7 +498,7 @@ fn widget_delete(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
             "403 Forbidden",
             "person_only",
             format!(
-                "Deleting a widget needs a person or an agent with \"Manage Gardens and data sources\". Ask your person to run k2 zen widget delete {} (outside K2, or in Settings \u{2192} Gardens).",
+                "Deleting a widget needs a person or an agent with \"Let this agent manage Gardens and data sources\" on. Ask your person to run k2 zen widget delete {} (outside K2, or in Settings \u{2192} Gardens).",
                 b.widget.trim()
             ),
         );
@@ -643,7 +643,7 @@ fn folder_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
                 return refuse(
                     "400 Bad Request",
                     "bad_request",
-                    "--prune removes files; a proposal can't. Leave it out (extra files stay), or ask a person or an agent with \"Manage Gardens and data sources\".",
+                    "--prune removes files; a proposal can't. Leave it out (extra files stay), or ask a person or an agent with \"Let this agent manage Gardens and data sources\" on.",
                 );
             }
             let name = match f.check_widget_folder_put(&b.widget, &staged) {
@@ -682,7 +682,7 @@ fn folder_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
                     "proposal": v["proposal"],
                     "proposals": [v["proposal"]],
                     "message": format!(
-                        "Proposed one change to widgets/{name}/ as {id} ({} file(s): {}). A person approves it (Settings → Gardens, or k2 zen proposals approve {id} outside K2), or an agent with \"Manage Gardens and data sources\"; approving writes the whole folder at once. Until then the widget keeps running its last good version.",
+                        "Proposed one change to widgets/{name}/ as {id} ({} file(s): {}). A person approves it (Settings → Gardens, or k2 zen proposals approve {id} outside K2), or an agent with \"Let this agent manage Gardens and data sources\" on; approving writes the whole folder at once. Until then the widget keeps running its last good version.",
                         names.len(),
                         names.join(", ")
                     ),
@@ -703,7 +703,7 @@ fn preview(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
         return refuse(
             "403 Forbidden",
             "person_only",
-            "A preview places the widget on a Garden where it runs. Ask a person, or an agent with \"Manage Gardens and data sources\". Meanwhile check it with k2 zen validate --dir <folder>.",
+            "A preview places the widget on a Garden where it runs. Ask a person, or an agent with \"Let this agent manage Gardens and data sources\" on. Meanwhile check it with k2 zen validate --dir <folder>.",
         );
     }
     let b: PreviewBody = match parse(body, "widget/preview takes {widget?, fallback?, files, config?} or {clear: true}") {
@@ -927,7 +927,7 @@ pub(crate) fn approve_entry(caller: &Caller, id: &str) -> CliResponse {
             return refuse(
                 "403 Forbidden",
                 "person_only",
-                "A person approves Garden proposals (Settings → Gardens, or k2 zen proposals approve outside K2), or an agent with \"Manage Gardens and data sources\".",
+                "A person approves Garden proposals (Settings → Gardens, or k2 zen proposals approve outside K2), or an agent with \"Let this agent manage Gardens and data sources\" on.",
             )
         }
     };
@@ -939,7 +939,7 @@ fn approve(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
         return refuse(
             "403 Forbidden",
             "person_only",
-            "A person approves Garden proposals (Settings → Gardens, or k2 zen proposals approve outside K2), or an agent with \"Manage Gardens and data sources\".",
+            "A person approves Garden proposals (Settings → Gardens, or k2 zen proposals approve outside K2), or an agent with \"Let this agent manage Gardens and data sources\" on.",
         );
     }
     let b: IdBody = match parse(body, "proposals/approve takes {id}") {

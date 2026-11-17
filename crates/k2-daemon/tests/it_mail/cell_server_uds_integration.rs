@@ -703,7 +703,7 @@ async fn mail_manage_toggle_gates_cell_uds_m5() {
         "UDS flag-off must teach owner_only: {off_body}"
     );
     assert!(
-        off_body.contains("Allow agents to manage hosted mail on this host"),
+        off_body.contains("Let this agent manage hosted mail"),
         "UDS flag-off hint names Settings: {off_body}"
     );
 

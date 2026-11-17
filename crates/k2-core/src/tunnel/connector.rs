@@ -639,13 +639,13 @@ impl std::fmt::Display for SpawnBlock {
             SpawnBlock::Disabled => write!(
                 f,
                 "tunnel is disabled on this device (persisted in tunnel.json) — \
-                 re-enable with `k2 tunnel enable` or the Settings → K2 Connect toggle"
+                 turn it on again with `k2 tunnel enable` or Settings → Network → Tunnel → Status"
             ),
             SpawnBlock::Released => write!(
                 f,
                 "this device's tunnel identity was released (unpaired) — it can no \
-                 longer claim its old subdomain; re-pair in Settings → K2 Connect to \
-                 mint a fresh identity"
+                 longer claim its old subdomain; sign in again under \"k2.dev account\" in \
+                 Settings → Network → Tunnel to mint a fresh identity"
             ),
             SpawnBlock::Unreadable(e) => write!(f, "tunnel state unreadable: {e}"),
             SpawnBlock::Airgap => write!(f, "{}", crate::airgap::TEACHING),
@@ -1319,8 +1319,8 @@ pub fn start(
     }
     if !cfg.is_connectable() {
         return Err(
-            "tunnel not configured: select one of your purchased subdomains in \
-             Settings → K2 Connect first (picking it binds its access token; \
+            "tunnel not configured: pick one of your subdomains under Address in \
+             Settings → Network → Tunnel first (picking it binds its access token; \
              no token in ~/.k2/tunnel.json)"
                 .to_string(),
         );

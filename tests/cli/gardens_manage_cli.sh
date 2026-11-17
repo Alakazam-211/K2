@@ -175,7 +175,7 @@ set +e
 cell sources approve denied-src >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "person_only exits 3" "$rc" "3"
-assert_contains "person_only names the switch" "$(cat "$WORK/err")" "Manage Gardens and data sources"
+assert_contains "person_only names the switch" "$(cat "$WORK/err")" "Let this agent manage Gardens and data sources"
 
 reset
 out="$(cell sources secret a-src WS_KEY)"

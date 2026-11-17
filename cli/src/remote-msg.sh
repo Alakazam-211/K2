@@ -140,7 +140,7 @@ print("NONE\t%s" % (", ".join(known) if known else ""))
             printf '%s\n' "${fp:-forbidden}" >&2
             return 3 ;;
         NOFED|ERR)
-            echo "federation is off or unreachable on $host — enable it and pair first (k2 fed enable / k2 fed pair-start)." >&2
+            echo "\"Connect agents across servers\" is off or $host can't be reached: turn it on (k2 fed enable, or Settings → Network → Tunnel → Policies) and pair first (k2 fed pair-start)." >&2
             [ -n "$fp" ] && [ "$pkind" = "NOFED" ] && echo "detail: $fp" >&2
             return 2 ;;
         NONE)
@@ -148,7 +148,7 @@ print("NONE\t%s" % (", ".join(known) if known else ""))
             # return pin, or the host string doesn't match the peer's subdomain.
             if [ -n "$fp" ]; then
                 echo "no paired peer matching $host — known peers: $fp" >&2
-                echo "hint: run \`k2 fed peers\` to inspect trust; if you received a message from this host but have no pin, complete pairing (k2 fed pair-start / confirm, or Settings → Connections → Pair) so replies can go back." >&2
+                echo "hint: run \`k2 fed peers\` to inspect trust; if you received a message from this host but have no pin, complete pairing (k2 fed pair-start / confirm, or Settings → Network → Connected Servers → Pair a server) so replies can go back." >&2
             else
                 echo "no paired peer for $host — pair it first (k2 fed pair-start / confirm), or check the host." >&2
                 echo "hint: run \`k2 fed peers\` to list trusted servers on this machine." >&2

@@ -78,7 +78,7 @@ pub(crate) static SEND: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "workspaces/{ws}/permissions", path: "Settings → Workspaces → {ws} → Permissions" },
+    settings: SettingsRef { page: "workspaces/{ws}/permissions", path: "Settings → Workspaces / Agents → {ws} → Permissions" },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "held" },
         route_prefix: ROUTE,

@@ -64,7 +64,8 @@ fn count(ws: &str, action: &str, who: &Answerer) {
     LAST_ACTOR.lock().expect("testkit actor").get_or_insert_with(HashMap::new).insert(key(ws, action), who.stamp());
 }
 
-const SETTINGS: SettingsRef = SettingsRef { page: "workspaces/{ws}/agent", path: "Settings → Workspaces → {ws} → Agent" };
+const SETTINGS: SettingsRef =
+    SettingsRef { page: "workspaces/{ws}/permissions", path: "Settings → Workspaces / Agents → {ws} → Permissions" };
 
 const fn words(setting: &'static str, what: &'static str, duration: &'static str) -> Words {
     Words {
@@ -112,7 +113,7 @@ pub(crate) static CONFIRM: ActionSpec = ActionSpec {
     expiry: Expiry::STANDARD,
     words: words("App Approvals", "Run {ws}'s held request {request}", "once"),
     undo: Undo::None,
-    settings: SettingsRef { page: "app-approvals", path: "Settings → Apps → Approvals" },
+    settings: SettingsRef { page: "app-approvals", path: "Settings → Cores → App Approvals" },
     walls: &[],
     coverage: WallCoverage::None,
     machine_hints: &[],

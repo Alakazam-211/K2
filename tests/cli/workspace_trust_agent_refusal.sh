@@ -97,12 +97,12 @@ grep -q "decide" "$REQ_LOG" && fail "an agent's CLI never sends decide: $(cat "$
 # 2. No daemon: the same lines, with a placeholder for the workspace.
 K2_PORT=1
 run_refusal
-grep -qF "The owner can also decide in the app: Settings → Workspaces → (that workspace) → Folder trust, or by opening that agent." "$WORK/err" \
+grep -qF "The owner can also decide in the app: Settings → Workspaces / Agents → (that workspace) → Agent → Folder trust, or by opening that agent." "$WORK/err" \
     || fail "the app line without a daemon: $(cat "$WORK/err")"
 
 # 3. The help says the same.
 help="$("$K2" workspace trust --help)"
 grep -qF "another workspace's" <<<"$help" || fail "help: request covers another workspace's folder: $help"
-grep -qF "Settings → Workspaces → <workspace> → Folder trust, or by opening that" <<<"$help" || fail "help: the app line: $help"
+grep -qF "Settings → Workspaces / Agents → <workspace> → Agent → Folder trust, or by opening that" <<<"$help" || fail "help: the app line: $help"
 
 echo "PASS: workspace trust refusal for an agent"

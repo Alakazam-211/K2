@@ -204,14 +204,14 @@ Caps by kind: `agents` → `agents:read, agents:add, presence:read`;
 `garden-empty` → `agents:read, thread:read, thread:post`;
 `nav-rail` → `app:navigate`.
 
-Props (Rosson, answer 5: a widget shows **a whole Home** or **one agent
-filtered from a Home**):
+Props (Rosson, answer 5: a widget shows **a whole Home group** or **one agent
+filtered from a Home group**):
 
 | kind | prop | type | default | meaning |
 |---|---|---|---|---|
-| `agents` | `mode` | `"home"` \| `"agent"` | `"agent"` when `agent` is set, else `"home"` (always sent) | whole Home, or one agent |
-| `agents` | `home` | string | unset | the Home to show, by id **or name**; unset = the Garden's `seedHome`, else the window's selected Home (G27) |
-| `agents` | `agent` | string | unset | in `mode: "agent"`, the one agent's name or address in that Home |
+| `agents` | `mode` | `"home"` \| `"agent"` | `"agent"` when `agent` is set, else `"home"` (always sent) | whole Home group, or one agent |
+| `agents` | `home` | string | unset | the Home group to show, by id **or name**; unset = the Garden's `seedHome`, else the window's selected group (G27) |
+| `agents` | `agent` | string | unset | in `mode: "agent"`, the one agent's name or address in that group |
 | `agents` | `home-picker` | bool | `false` (texting: `true`) | the widget's own Home picker; never moves the Home page |
 | `agents` | `order` | `"home"` | `"home"` | row order |
 | `agents` | `server-tag` | bool | `true` | tag rows from another server |
@@ -219,7 +219,7 @@ filtered from a Home**):
 | `agents` | `status` | list of `working`, `idle`, `needs-you` | all three | which live statuses show (`monitoring` shows with `working`, `unverifiable` with `idle`; a row's `activity` is one of `working`, `monitoring`, `needs-you`, `unverifiable`, `idle`, prd-daemon-activity-and-thread-working-v1 Q13) |
 | `conversation` | `agents` | string (a widget id) | the page's first `agents` widget (column order) | follow that widget's picked agent; **always sent** unless `agent` is set |
 | `conversation` | `agent` | string | unset | pin one agent's conversation (name or address), no list needed |
-| `conversation` | `home` | string | unset | with `agent`: the Home to look it up in (id or name) |
+| `conversation` | `home` | string | unset | with `agent`: the Home group to look it up in (id or name) |
 | `conversation` | `compose` | bool | `true` | the compose box |
 | `conversation` | `attachments` | bool | `true` | attachments in the box |
 | `conversation` | `load-older` | bool | `true` | load older on scroll |
@@ -705,8 +705,8 @@ A custom placement is a content widget in `page.widgets`
   paused (see Limits), else `null`.
 - **Reach.** A widget's rows are the Garden's reach, resolved on this device
   (`zenWidgetReachRows`): this computer's agents plus every row on the
-  person's Homes (the rooms and servers they connected in Home), at most 8
-  live servers. A saved server on no Home is outside it (`not_bound`).
+  person's Home groups (the rooms and servers they connected in Home), at most 8
+  live servers. A saved server in no Home group is outside it (`not_bound`).
   Remote rows use the person's own Connect login, so every server's role
   floors still apply.
 - `state`: `ok`, `errors` (a newer edit has errors; the last good bundle is
@@ -1182,7 +1182,7 @@ phone (K2 Companion) reaches the Gardens only through `/cli/zen/remote/*`:
 
 - **Who:** the owner token, or a live **device session** (from `POST
   /cli/auth/device/pair`) whose login is the **owner person** (a login the
-  owner linked, `ownerAccounts`; the same rule as Homes and the
+  owner linked, `ownerAccounts`; the same rule as Home sync and the
   Garden-owner routes, GP-B1). The owner person on a password login gets
   403 `garden_device_only`; anyone else (another login of any role, an
   agent or K2 terminal passport, an App pass, an API key) gets 403

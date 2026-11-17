@@ -142,7 +142,7 @@ impl std::fmt::Display for BrokerError {
             BrokerError::InvalidToken(d) => write!(
                 f,
                 "cert broker rejected the tunnel token (invalid_token): {d} — \
-                 re-select your subdomain in Settings → K2 Connect to refresh it"
+                 pick your subdomain again under Address in Settings → Network → Tunnel to refresh it"
             ),
             BrokerError::SubdomainNotOwned(d) => write!(
                 f,
@@ -330,8 +330,8 @@ pub fn provision_via_broker(subdomain: &str) -> Result<(String, String), BrokerE
     let token = cfg.token;
     if token.trim().is_empty() {
         return Err(BrokerError::InvalidToken(
-            "no tunnel bearer token in ~/.k2/tunnel.json (select a subdomain in \
-             Settings → K2 Connect first)"
+            "no tunnel bearer token in ~/.k2/tunnel.json (pick a subdomain under Address in \
+             Settings → Network → Tunnel first)"
                 .to_string(),
         ));
     }

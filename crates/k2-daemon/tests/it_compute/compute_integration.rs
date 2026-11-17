@@ -968,7 +968,7 @@ fn switch_of(ws: &str) -> bool {
     k2_core::compute::store::agents_can_use_compute(&conn, ws)
 }
 
-/// Settings → Compute (Rosson 2026-10-11): an agent's toggle = the switch
+/// Settings → Cores → Compute (Rosson 2026-10-11): an agent's toggle = the switch
 /// plus a grant on every machine; a machine confirmed later is granted to
 /// every agent that's on; off revokes; switching a machine off drains it,
 /// then removes it once its jobs are done.

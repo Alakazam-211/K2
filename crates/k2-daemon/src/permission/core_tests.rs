@@ -155,7 +155,7 @@ fn a_request_posts_a_permission_card_and_allow_applies_it_once() {
     assert_eq!(view["undo"]["label"], "Turn off again");
     assert_eq!(
         d["choice"]["action"]["result"]["message"],
-        format!("Allowed. Turn it off again in Settings → Workspaces → {} → Agent.", ws.handle)
+        format!("Allowed. Turn it off again in Settings → Workspaces / Agents → {} → Permissions.", ws.handle)
     );
 
     let turns = inject::sent_to(&ws.handle);

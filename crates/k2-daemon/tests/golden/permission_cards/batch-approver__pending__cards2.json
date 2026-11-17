@@ -50,7 +50,7 @@
             "requestId": "pr_a1a1a1",
             "scope": "billing",
             "setting": "Build and run Apps",
-            "settingsPage": "workspaces/billing/agent",
+            "settingsPage": "workspaces/billing/permissions",
             "state": "pending",
             "undo": null,
             "values": [
@@ -94,7 +94,7 @@
             "requestId": "pr_a2a2a2",
             "scope": "billing",
             "setting": "App cores",
-            "settingsPage": "workspaces/billing/agent",
+            "settingsPage": "workspaces/billing/permissions",
             "state": "pending",
             "undo": null,
             "values": [
@@ -125,7 +125,7 @@
             },
             "askedFor": null,
             "askers": null,
-            "consequences": "The change K2 held runs now, exactly as listed in Settings → App Approvals; open it there to see what it does.",
+            "consequences": "The change K2 held runs now, exactly as listed in Settings → Cores → App Approvals; open it there to see what it does.",
             "direction": "loosen",
             "duration": "once",
             "expiresAt": 1761319200,

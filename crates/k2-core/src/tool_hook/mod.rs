@@ -78,7 +78,7 @@ pub const ACTOR_BOOT: &str = "system:boot";
 pub const ACTOR_SYSTEM: &str = "system:k2";
 
 /// Error when a chat grant is made before Sew is enabled (§15).
-pub const CHAT_NOT_ENABLED: &str = "chat is not enabled on this box: enable Chat / Voice Hosting first";
+pub const CHAT_NOT_ENABLED: &str = "chat isn't set up on this server: Set up chat and voice in Settings → Cores → Chat / Voice first";
 
 /// The op column. Stays unconstrained TEXT in SQL (S27-A12): a newer
 /// daemon's op must never make an older worker block a row.
@@ -666,7 +666,7 @@ fn enabling_allowed_here() -> Result<(), String> {
     if cfg!(target_os = "linux") || ALLOW_OFF_LINUX.load(Ordering::SeqCst) {
         Ok(())
     } else {
-        Err("Chat / Voice Hosting runs on Linux boxes only".to_string())
+        Err("Chat and voice run on Linux servers only".to_string())
     }
 }
 

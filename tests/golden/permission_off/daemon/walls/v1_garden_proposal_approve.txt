@@ -4,7 +4,7 @@
 > body: {}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":"person_only","message":"A person approves Garden proposals (Settings → Gardens, or k2 zen proposals approve outside K2), or an agent with \"Manage Gardens and data sources\".","ok":false}
+{"error":"person_only","message":"A person approves Garden proposals (Settings → Gardens, or k2 zen proposals approve outside K2), or an agent with \"Let this agent manage Gardens and data sources\" on.","ok":false}
 ## cell socket (same passport)
 > POST /cli/zen/proposals/approve
 > body: {}

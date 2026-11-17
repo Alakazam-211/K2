@@ -59,8 +59,9 @@ DRAFTED REPLIES (an agent's 'k2 mail draft <id>', or yours; 'thread' shows them 
   draft-send <draft-id> [same flags as draft-save]
                                   Send it, by the same send rule as 'send': off
                                   refuses (exit 3, the draft stays); approval
-                                  queues it for the owner (Settings → Email →
-                                  Approvals, or k2 hostmail approvals) and the
+                                  queues it for the owner (Settings → Cores →
+                                  Email Hosting → Approvals, or k2 hostmail
+                                  approvals) and the
                                   draft shows "held"; on sends. Either way it
                                   leaves Drafts; once sent it joins the thread
   draft-discard <draft-id>        Remove it from Drafts (hosted: deleted; linked: Trash)
@@ -560,7 +561,8 @@ FLAGS
 
 CAP
   Addresses are capped per workspace (default 5; 0 = unlimited; your human
-  adjusts it in Settings → Email). The cap counts ACTIVE addresses —
+  adjusts it with `k2 hostmail config --workspace <ws> --address-cap <n>`).
+  The cap counts ACTIVE addresses —
   `k2 mail delete <addr>` frees its slot immediately.
 
 TIP — plus addressing
@@ -1190,7 +1192,7 @@ For off, any workspace on this server, yours or another's:
   k2 permission request mail.stop-sending target=<workspace> --why "…"
 
 Same setting as `k2 hostmail config --workspace <ws> --agent-send <m>`,
-and as Settings → Workspaces / Agents → <workspace> → Email sending.
+and as Settings → Workspaces / Agents → <workspace> → Permissions → Email sending.
 
 USAGE
   k2 mail sending <workspace>                   Show the mode
@@ -1591,8 +1593,9 @@ k2 hostmail — run the K2 email SERVER (owner surface). Provision the
 server, host domains, mint addresses, check deliverability, and gate
 agent sending.
 
-Agents: with "Allow agents to manage hosted mail on this host" on for
-the agent's OWN workspace (Settings → Workspaces → that workspace), it
+Agents: with "Let this agent manage hosted mail" on for the agent's OWN
+workspace (Settings → Workspaces / Agents → that workspace → Permissions →
+Hosted mail), it
 may run server enable/disable, domain add/list/show/check, doctor,
 config, approvals and the mailbox-setting verbs. uninstall, upgrade and
 domain remove stay owner-only. Otherwise the server refuses (exit 3,
@@ -2078,8 +2081,8 @@ MODES
   none          nothing runs; --reason is required and recorded.
 
 WHO
-  The box's it-email agent (Settings → Workspaces → Allow agents to manage
-  hosted mail on this host) or the owner/admin. Every change is recorded
+  The box's it-email agent (Settings → Workspaces / Agents → <workspace> →
+  Permissions → "Let this agent manage hosted mail") or the owner/admin. Every change is recorded
   (who, workspace, when, old → new).
 
 Run `k2 hostmail backup <command> --help` for details.
@@ -2848,12 +2851,13 @@ that was already set shows paused (upgrade_required) instead, and starts
 again by itself after the upgrade. Same-box forwards work on any version.
 
 WHO
-  Owner, Admin, and agents with "Allow agents to manage hosted mail on
-  this host" on: set, add, rm, show, unset, pause, and resume a manual
+  Owner, Admin, and agents with "Let this agent manage hosted mail"
+  on: set, add, rm, show, unset, pause, and resume a manual
   pause (an agent only its own), on any mailbox they manage, outside
   destinations included (no extra approval; the owner is told who did it). Without that switch an
   agent gets exit 3 owner_only; the owner or an Admin turns it on in
-  Settings → Workspaces → (the agent's workspace).
+  Settings → Workspaces / Agents → (the agent's workspace) → Permissions →
+  Hosted mail.
   Resume after any other pause, and list: see their own help.
   After K2 or a person pauses an address, an agent can't add it again for 24
   hours, even if it was removed since, so an agent that removes it can't put
@@ -3052,7 +3056,7 @@ you, say which with --address.
 
 Agents: this verb answers exit 3 person_only. Use
 k2 hostmail forward <set|add|rm|show|unset|pause|resume> <your address>,
-with "Allow agents to manage hosted mail on this host" on.
+with "Let this agent manage hosted mail" on.
 
 USAGE
   k2 mail forward set --to <dest> [--to <dest>…] [--keep|--no-keep] [--address <addr>] [--json]

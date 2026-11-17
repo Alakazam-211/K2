@@ -98,7 +98,7 @@ pub(crate) static ACCEPT: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "vault", path: "Settings → Vault → Incoming" },
+    settings: SettingsRef { page: "vault", path: "Settings → Access → Vault → Incoming" },
     // No wall: an agent never reaches the decide route (it is DENY for
     // passports), so nothing refuses it there to teach from. K2 presents
     // the card itself; the agent may also ask for it (`k2 permission list`).

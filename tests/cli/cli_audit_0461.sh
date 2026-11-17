@@ -220,13 +220,13 @@ routes '{"GET /cli/sources/pending": [403, {"error": {"code": "owner_only", "hin
 run cell sources pending
 assert_eq "sources pending refused → exit 3" "$rc" "3"
 assert_contains "daemon hint shown" "$err" "approvals are the owner's"
-assert_absent "no second hint" "$err" "Manage Gardens and data sources"
+assert_absent "no second hint" "$err" "Let this agent manage Gardens and data sources"
 routes '{"GET /cli/sources/pending": [403, {"error": {"code": "person_only"}}]}'
 run cell sources pending
-assert_contains "our hint when the daemon gave none" "$err" "Manage Gardens and data sources"
+assert_contains "our hint when the daemon gave none" "$err" "Let this agent manage Gardens and data sources"
 routes '{"GET /cli/sources/pending": [403, {"error": {"code": "owner_only"}}]}'
 run cell sources pending
-assert_absent "never the switch hint for owner_only" "$err" "Manage Gardens and data sources"
+assert_absent "never the switch hint for owner_only" "$err" "Let this agent manage Gardens and data sources"
 
 echo "== 13. k2 zen widget errors =="
 routes '{"GET /cli/zen/widget/errors": [200, {"ok": true, "widget": "w", "hash": null, "last": 7, "errors": []}]}'

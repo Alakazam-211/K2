@@ -26,7 +26,7 @@ const ROUTE: &str = "/cli/publish/visibility";
 /// Asked Allow before the PIN is set: nothing is decided.
 pub(crate) const PIN_FORM_FIRST: &str = "pin_form_first";
 
-const SETTINGS: SettingsRef = SettingsRef { page: "k2-connect", path: "Settings → K2 Connect → URLs" };
+const SETTINGS: SettingsRef = SettingsRef { page: "k2-connect", path: "Settings → Network → Tunnel → Addresses" };
 
 const LABEL_ONLY: &[ParamSpec] = &[ParamSpec { key: "label", kind: ParamKind::Site, required: true, list: false, choices: &[] }];
 const LABEL_REASON: &[ParamSpec] = &[

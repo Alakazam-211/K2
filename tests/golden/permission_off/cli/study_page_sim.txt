@@ -66,7 +66,7 @@ AN IPHONE FROM A LINUX SERVER
     k2 sim open-url https://shop.example.com   a web App in Safari
   Every other verb (tree, tap, type, screenshot…) works as above, in
   points. What differs:
-  - Agents also need "Allow compute nodes" (else exit 3 compute_off with
+  - Agents also need "Let this agent use compute nodes" (else exit 3 compute_off with
     an Ask with: line) and a compute grant for this workspace on that Mac
     (else exit 3 sim_node_not_granted, naming the owner's `k2 compute
     grant` command). From the Mobile tab, only the owner or an admin can

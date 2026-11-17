@@ -1889,7 +1889,7 @@ fn trusted_peer(host: &str) -> R<FederationPeer> {
         return Ok(p);
     }
     if !federation::enabled() {
-        return Err(no("federation_off", 422, "federation is off on this server; turn it on and pair with the node owner first"));
+        return Err(no("federation_off", 422, "\"Connect agents across servers\" is off on this server (Settings → Network → Tunnel → Policies); turn it on and pair with the machine's server first"));
     }
     let store = PeerStore::load().map_err(db_err)?;
     let peer = store

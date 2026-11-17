@@ -207,7 +207,7 @@ async fn chat_client() -> Result<MgmtClient, CliResponse> {
     let t = blocking(|| hook::get_target(hook::CHAT_KIND)).await?;
     match t {
         Ok(Some(t)) if t.enabled => Ok(MgmtClient::new(&t.socket, &t.token_file)),
-        Ok(_) => Err(error(503, "chat_unavailable", "Chat / Voice Hosting isn't on for this server", None)),
+        Ok(_) => Err(error(503, "chat_unavailable", "Chat and voice aren't on for this server", None)),
         Err(e) => Err(error(503, "chat_unavailable", e, None)),
     }
 }

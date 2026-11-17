@@ -199,7 +199,7 @@ fn empty_pair_err() -> String {
     } else {
         "can't federate: peer has no K2 Connect tunnel subdomain \
          (fail-closed — unroutable without <subdomain>.k2.dev). \
-         Each side needs a purchased/bound tunnel under Settings → K2 Connect \
+         Each side needs an address under Settings → Network → Tunnel \
          (or k2.dev/dashboard) before Pair — or pass --url / baseUrl for LAN"
             .to_string()
     }

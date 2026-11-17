@@ -68,9 +68,10 @@ THE OLD COPY (14 days)
 
 WHO
   Owner: everything. Admin login: --check only.
-  An agent needs "Allow this agent to manage Postgres versions" (the owner
-  turns it on: Agent tab, or `k2 db versions-access on`), and then moves,
-  checks and rolls back its OWN workspace's and its own Apps' databases.
+  An agent needs "Let this agent manage Postgres versions" (the owner
+  turns it on: Permissions tab → Database, or `k2 db versions-access on`),
+  and then moves, checks and rolls back its OWN workspace's and its own
+  Apps' databases.
   Owner only: --forget-old, --now (skip the notice), --allow-adopted,
   --all, --acknowledge-failed, and for now --live, --switch, --abort,
   --replica-identity-full and --prepare-live. A database shared with other
@@ -141,7 +142,7 @@ WHO MAY
   The owner and Admins connect at once. A Member never does.
   An agent (in a K2 tab) connects at once only when every switch it needs
   is on and the database is its own workspace's. The switches, by their
-  Settings names (Settings → Workspaces → <agent> → Agent):
+  Settings names (Settings → Workspaces / Agents → <agent> → Permissions):
     "Build and run Apps"
     "Database" (under Apps: what its Apps may use)
     "Let this agent create databases" (for --new)
@@ -203,7 +204,7 @@ _study_page_db() {
     cat <<'EOF'
 k2 study db — workspace database
 
-Linux sidecar. Your human enables it (Settings → Data). Postgres
+Linux sidecar. Your human turns it on (Settings → Cores → Database). Postgres
 listens on loopback only. There is no `k2 db expose`. Off-box reach
 is a hostname pointed at an already-listening port (`k2 publish
 subdomain create`), not "publish run Postgres".
@@ -596,13 +597,14 @@ FORWARDING (`k2 hostmail forward`)
            says which of the two a pending_verify forward is.
   People   the owner links a mailbox to its person's box login
            (`k2 hostmail person link <addr> <login>`); that person then
-           uses `k2 mail forward` or Settings → Email Hosting. An agent
+           uses `k2 mail forward` or Settings → Cores → Email Hosting. An agent
            running `k2 mail forward` gets exit 3 person_only.
   Never claim mail was forwarded before `show` says state=active.
 
 HOSTMAIL TOGGLE
-  Default off. Owner/Admin: Settings → Workspaces → (this
-  workspace) → Allow agents to manage hosted mail on this host.
+  Default off. Owner/Admin: Settings → Workspaces / Agents → (this
+  workspace) → Permissions → Hosted mail → "Let this agent manage
+  hosted mail".
   Opens enable/disable + domain list/add/check, access grant, doctor,
   approvals, and config/set for that workspace's agent. Uninstall,
   domain remove, OAuth/link, and the toggle writer stay owner.
@@ -683,9 +685,9 @@ PASSWORD SIGN-IN OVER THE TUNNEL
   page and answers `POST /cli/auth/login` only when the request was
   signed by a K2 edge (`<sub>.app.k2.dev` or the k2.dev dashboard).
   Scanners get 404. Tokens, sessions and local/LAN login are unchanged.
-  Setting `connectLoginIngress` (Settings → K2 Connect → Policies;
-  `k2 tunnel status` shows it):
-    edge   default — only via the K2 edge
+  Setting `connectLoginIngress` ("Password sign-in from the internet" in
+  Settings → Network → Tunnel → Policies; `k2 tunnel status` shows it):
+    edge   default ("Only at its k2.dev address"): only via the K2 edge
     any    self-hosters NOT behind the K2 edge (your own relay/proxy):
            restores plain password login over the tunnel; the daemon
            lockout still applies

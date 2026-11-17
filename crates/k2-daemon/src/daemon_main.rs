@@ -505,7 +505,7 @@ async fn async_main() {
     k2_core::zen::garden_access::set_switch(true);
     // Garden History: the daily 2-year sweep (G29a), headless.
     crate::garden_access::spawn_sweep();
-    // Machines you can use (Settings → Compute): a node machine tells K2
+    // Machines you can use (Settings → Cores → Compute): a node machine tells K2
     // Connect it offers compute and applies one-click enroll offers.
     crate::compute_advertise::spawn();
     // 0313: ended jobs' plans trimmed to a summary (7 days after the end)
@@ -2425,7 +2425,7 @@ fn maybe_autostart_tunnel(daemon_port: u16) {
         if !cfg.enabled {
             log_debug!(
                 "[daemon/tunnel] auto-start skipped: tunnel is disabled (persisted) — \
-                 re-enable with `k2 tunnel enable` or Settings → K2 Connect"
+                 turn it on again with `k2 tunnel enable` or Settings → Network → Tunnel"
             );
             return;
         }

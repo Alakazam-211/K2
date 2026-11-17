@@ -203,7 +203,7 @@ pub fn choose(project_path: &str, harness: &str) -> Result<(), CliResponse> {
     };
     let Some((preset_id, label, command)) = preset else {
         return Err(CliResponse::bad_request(format!(
-            "no enabled agent preset runs {target}; turn one on in Settings → Agents"
+            "no enabled agent preset runs {target}; turn one on in Settings → Language Models → Providers / Models → Launch presets"
         )));
     };
     // Same check as the spawn, before anything is saved.

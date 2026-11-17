@@ -6,8 +6,8 @@
       "flags": [
         {"name": "--id", "arg": "client-id", "description": "Your key for this database: a new key makes a new database, the same key answers the one it made."},
         {"name": "--db-access", "arg": "off|read|write", "description": "Set the create-only db_agent_access flag on this workspace (hire convenience). Default stays off. Does not gate list/dsn/store."},
-        {"name": "--major", "arg": "16|17", "description": "The Postgres major to create on. Default: the box's (17 on new boxes; an existing box keeps its current major until the owner runs k2 db default-major 17). A major other than the default needs the agent switch \"Allow this agent to manage Postgres versions\". Unsupported or past-EOL majors exit 3."},
-        {"name": "--cluster", "arg": "name", "description": "Create in this workspace's named cluster (k2 db cluster create) instead of a main one. Needs \"Allow this agent to manage Postgres versions\" for an agent; with --major, it must be the cluster's major. Not with --test."},
+        {"name": "--major", "arg": "16|17", "description": "The Postgres major to create on. Default: the box's (17 on new boxes; an existing box keeps its current major until the owner runs k2 db default-major 17). A major other than the default needs the agent switch \"Let this agent manage Postgres versions\". Unsupported or past-EOL majors exit 3."},
+        {"name": "--cluster", "arg": "name", "description": "Create in this workspace's named cluster (k2 db cluster create) instead of a main one. Needs \"Let this agent manage Postgres versions\" for an agent; with --major, it must be the cluster's major. Not with --test."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -34,7 +34,7 @@
     {
       "name": "db cluster create",
       "usage": "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] [--json]",
-      "description": "Make a named Postgres cluster (17/feedback) beside each major's main one, through the root helper (protocol 15; no root session): for one database that needs a cluster to itself, such as point-in-time restore or its own restarts. It runs in K2's band (5433-5449, never 5432; without --port the first free one), loopback only, with K2's settings and RAM cap, and belongs to this workspace: only it creates databases there (k2 db create --cluster <name>). The name is the box's: 2-24 of a-z, 0-9 and _, starting with a letter, never main, and never one any cluster already has, so a cluster made outside K2 is never taken over. --wal-archive copies every finished WAL segment to /var/lib/postgresql/k2-wal/<major>-<name> for a backup to ship and prune. The owner, or an agent with \"Allow this agent to manage Postgres versions\" (exit 3 otherwise). K2 never removes a cluster.",
+      "description": "Make a named Postgres cluster (17/feedback) beside each major's main one, through the root helper (protocol 15; no root session): for one database that needs a cluster to itself, such as point-in-time restore or its own restarts. It runs in K2's band (5433-5449, never 5432; without --port the first free one), loopback only, with K2's settings and RAM cap, and belongs to this workspace: only it creates databases there (k2 db create --cluster <name>). The name is the box's: 2-24 of a-z, 0-9 and _, starting with a letter, never main, and never one any cluster already has, so a cluster made outside K2 is never taken over. --wal-archive copies every finished WAL segment to /var/lib/postgresql/k2-wal/<major>-<name> for a backup to ship and prune. The owner, or an agent with \"Let this agent manage Postgres versions\" (exit 3 otherwise). K2 never removes a cluster.",
       "args": [{"name": "major", "required": true}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "The cluster's name (required)."},
@@ -46,7 +46,7 @@
     {
       "name": "db cluster restart",
       "usage": "k2 db cluster restart <name> [--json]",
-      "description": "Restart one named cluster K2 made (a minor update, a drill), nothing else: its databases' connections drop and come back. The owner, or an agent with \"Allow this agent to manage Postgres versions\" for its own workspace's cluster.",
+      "description": "Restart one named cluster K2 made (a minor update, a drill), nothing else: its databases' connections drop and come back. The owner, or an agent with \"Let this agent manage Postgres versions\" for its own workspace's cluster.",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output."}
@@ -55,7 +55,7 @@
     {
       "name": "db upgrade",
       "usage": "k2 db upgrade <db>|--app <id> [--all-workspace-dbs]|--all [--to 17] [--check] [--live [--replica-identity-full]] [--switch] [--abort] [--status] [--rollback --yes] [--forget-old [--force-now]] [--now] [--allow-adopted] [--acknowledge-failed] [--no-wait] [--json] | k2 db upgrade --prepare-live <major>",
-      "description": "Move a database to a newer Postgres major by copy (dump/restore into that major's cluster; the old copy is kept closed 14 days). --check is read-only. A move gives a 60 s notice, stops the database's Apps, pauses its guest doors (503 db_maintenance), recreates its roles with the same passwords, copies, verifies (rows, RLS, policies, grants, sequences, logins), re-points the vaulted DATABASE_URL and starts the Apps. --rollback --yes goes back within 14 days (writes since the move are lost). Agents need the \"Allow this agent to manage Postgres versions\" switch and move only their own and their Apps' databases; --forget-old, --now, --all, --allow-adopted and --acknowledge-failed are the owner's. --live (owner, 0.46.4) copies by logical replication while the database keeps serving, then --switch (writes pause a few seconds, Apps re-hosted) or --abort (free); --prepare-live <major> makes an older cluster logical with one restart. Exit 0 done, 3 refused (nothing changed), 1 failed.",
+      "description": "Move a database to a newer Postgres major by copy (dump/restore into that major's cluster; the old copy is kept closed 14 days). --check is read-only. A move gives a 60 s notice, stops the database's Apps, pauses its guest doors (503 db_maintenance), recreates its roles with the same passwords, copies, verifies (rows, RLS, policies, grants, sequences, logins), re-points the vaulted DATABASE_URL and starts the Apps. --rollback --yes goes back within 14 days (writes since the move are lost). Agents need the \"Let this agent manage Postgres versions\" switch and move only their own and their Apps' databases; --forget-old, --now, --all, --allow-adopted and --acknowledge-failed are the owner's. --live (owner, 0.46.4) copies by logical replication while the database keeps serving, then --switch (writes pause a few seconds, Apps re-hosted) or --abort (free); --prepare-live <major> makes an older cluster logical with one restart. Exit 0 done, 3 refused (nothing changed), 1 failed.",
       "args": [{"name": "db", "required": false}],
       "flags": [
         {"name": "--app", "arg": "id", "description": "The App's own database: the one its DATABASE_URL names, else its workspace's default."},

@@ -88,7 +88,7 @@
     {
       "name": "front",
       "usage": "k2 front [status|enable|disable|http|passthrough] ...",
-      "description": "K2's front on this box's port 443 (Linux, systemd, k2-root-helper protocol 8; the :80 front needs protocol 12). It reads the name each visitor asked for and passes the connection, still encrypted, to the server for that name: custom App names, K2's own Caddy, hosted mail's web pages, Chat / Voice Hosting calls, and names you pass through to your own web server. Every verb is the owner's (a terminal outside K2), an Admin login's or a K2 shell tab's; an agent may only list the passthrough names, anything else is owner_only (exit 3).",
+      "description": "K2's front on this box's port 443 (Linux, systemd, k2-root-helper protocol 8; the :80 front needs protocol 12). It reads the name each visitor asked for and passes the connection, still encrypted, to the server for that name: custom App names, K2's own Caddy, hosted mail's web pages, chat and voice calls, and names you pass through to your own web server. Every verb is the owner's (a terminal outside K2), an Admin login's or a K2 shell tab's; an agent may only list the passthrough names, anything else is owner_only (exit 3).",
       "args": [{"name": "verb", "required": false, "description": "status (default) | enable | disable | http | passthrough"}],
       "flags": []
     },

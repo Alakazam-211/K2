@@ -1082,7 +1082,7 @@ fn ask_is_the_owners_and_needs_the_switch_on() {
     // Off: refused, and nothing asked or logged.
     let (s, v) = call(&owner, "/cli/desktop/ask", json!({}));
     assert_eq!((s, code(&v)), (409, "desktop_off"), "{v}");
-    assert!(v["error"]["hint"].as_str().unwrap().contains("Settings → Remote desktop"), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains("Settings → Access → Remote Desktop"), "{v}");
     assert!(e.fake.asks.lock().unwrap().is_empty());
     assert!(audit_events().is_empty(), "{:?}", audit_events());
 

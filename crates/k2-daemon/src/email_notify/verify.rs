@@ -118,7 +118,7 @@ pub fn compose_forward_notice(box_label: &str, asker: &str, mailbox: &str, addre
 pub(crate) fn link(path: &str, token: &str) -> R<String> {
     match crate::app_user_invites::k2_front_door_url(path) {
         Ok(Some(u)) => Ok(format!("{u}?t={token}")),
-        Ok(None) => Err(fail(409, "no_front_door", "this server has no front door URL for the confirm link (Settings → Apps → front door, or connect the server)")),
+        Ok(None) => Err(fail(409, "no_front_door", "this server has no front door URL for the confirm link (k2 app front-door --url <https URL> from a terminal outside K2, or turn on the tunnel in Settings → Network → Tunnel)")),
         Err(why) => Err(fail(409, "no_front_door", format!("the confirm link can't use this server's front door: {why}"))),
     }
 }

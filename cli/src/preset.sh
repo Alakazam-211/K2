@@ -233,7 +233,7 @@ if verb in ("add", "set"):
             print(dumps({"ok": True, "preset": d}))
         else:
             print("Created preset '%s' (%s)." % (d.get("id"), d.get("command")))
-            print("Use it: k2 agent hire <dir> --agent %s   (or Settings → Editors & Agents)" % d.get("id"))
+            print("Use it: k2 agent hire <dir> --agent %s   (or Settings → Language Models → Providers / Models → Launch presets)" % d.get("id"))
         sys.exit(0)
 
     # set — resolve first, then apply only what was passed.
@@ -265,7 +265,7 @@ if verb == "remove":
         # Fail client-side with the daemon's own policy wording so the
         # exit code is the refused tier (1), not a generic daemon_error.
         die("refused", "'%s' is a built-in preset — built-ins can't be deleted (disable it: "
-            "k2 preset set %s --disable; reset all built-ins via Settings)" %
+            "k2 preset set %s --disable; or Restore built-in presets in Settings → Language Models → Providers / Models)" %
             (p.get("label"), p.get("id")))
     call("POST", "/cli/presets/delete", body={"id": p.get("id")})
     if as_json:

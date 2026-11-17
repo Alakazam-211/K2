@@ -531,7 +531,7 @@ fn delete_needs_admin() -> CliResponse {
     error_response(
         "403 Forbidden",
         "forbidden",
-        "only the owner, an admin, or an agent with 'Manage K2 projects' can delete a project \
+        "only the owner, an admin, or an agent with 'Let this agent manage K2 projects' on can delete a project \
          (it removes the project's chat too)",
     )
 }
@@ -542,10 +542,10 @@ fn agent_permission_off(ws: &str) -> CliResponse {
         "403 Forbidden",
         "agent_permission_off",
         format!(
-            "'Manage K2 projects' is off for {ws}, so this agent can't create, rename or delete \
+            "'Let this agent manage K2 projects' is off for {ws}, so this agent can't create, rename or delete \
              projects or change their members or settings. Reading projects and posting in your \
-             project chat still work. Ask your human to turn it on in Settings → Workspaces → {ws} \
-             → Agent (or the owner runs: k2 project access on --workspace {ws})."
+             project chat still work. Ask your human to turn it on in Settings → Workspaces / Agents → {ws} \
+             → Permissions (or the owner runs: k2 project access on --workspace {ws})."
         ),
     )
 }
@@ -716,7 +716,7 @@ pub fn dispatch_post_as(
                     error_response(
                         "403 Forbidden",
                         "forbidden",
-                        "only the owner, an admin, or an agent with 'Manage K2 projects' can change \
+                        "only the owner, an admin, or an agent with 'Let this agent manage K2 projects' on can change \
                          the view a project opens its agents in (it changes it for everyone)",
                     )
                 } else {
@@ -4188,7 +4188,7 @@ mod agent_switch_tests {
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("JSON body");
         assert_eq!(v["error"]["code"], "agent_permission_off", "{v}");
         let hint = v["error"]["hint"].as_str().expect("hint");
-        assert!(hint.contains("Manage K2 projects"), "clear message: {hint}");
+        assert!(hint.contains("Let this agent manage K2 projects"), "clear message: {hint}");
         assert!(hint.contains("still work"), "says reads + chat still work: {hint}");
     }
 
@@ -4579,7 +4579,7 @@ mod agent_switch_tests {
         let as_member = Caller::Login { username: member.clone() };
         let r = post("/cli/project-group/delete", serde_json::json!({ "group": gids[0] }), &as_member);
         assert_eq!(r.status, "403 Forbidden", "{}", r.body);
-        assert!(r.body.contains("owner, an admin, or an agent with 'Manage K2 projects'"), "{}", r.body);
+        assert!(r.body.contains("owner, an admin, or an agent with 'Let this agent manage K2 projects' on"), "{}", r.body);
         // An agent without the switch is refused (agent_permission_off).
         let (off_id, _, _) = insert_workspace("del-agent-off");
         k2_core::workspace::settings::set_agents_can_manage_projects(&off_id, false).expect("switch off");
@@ -4651,7 +4651,7 @@ mod agent_switch_tests {
         let v: serde_json::Value = serde_json::from_str(&r.body).expect("JSON body");
         assert_eq!(v["error"]["code"], "forbidden", "{v}");
         let hint = v["error"]["hint"].as_str().expect("hint");
-        assert!(hint.contains("owner, an admin, or an agent with 'Manage K2 projects'"), "{hint}");
+        assert!(hint.contains("owner, an admin, or an agent with 'Let this agent manage K2 projects' on"), "{hint}");
         assert!(hint.contains("view a project opens its agents in"), "{hint}");
         // A login that does not exist is not an admin either.
         let r = set("terminal", &Caller::Login { username: format!("nobody-{}", uuid::Uuid::new_v4()) });

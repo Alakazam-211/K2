@@ -1147,7 +1147,7 @@ pub fn render_heartbeats_roster_body(project_path: &str) -> String {
     let rows = crate::heartbeats::k2_heartbeat_list(project_path.to_string()).unwrap_or_default();
     if rows.is_empty() {
         out.push_str("### No heartbeats yet\n\n");
-        out.push_str("Create one in Settings → Heartbeats, or:\n\n");
+        out.push_str("Create one in Settings → Workspaces / Agents → <agent> → Heartbeats, or:\n\n");
         out.push_str("    k2 heartbeat create <name> --every 1h\n");
         return out;
     }
@@ -1282,13 +1282,13 @@ pub fn render_skin_roster_body(_project_path: &str) -> String {
          not Connect / Server Access operators, and not workspace-agents.\n\
          Do **not** `k2 msg` these names. CLI lookup: `k2 app user list` \
          (leftover: `k2 skin user list`). \
-         Platform tokens: `k2 app token create --name <label> --agent sales` \
+         Keys for other sites: `k2 app token create --name <label> --agent sales` \
          (leftover: `k2 skin-token create --name`). \
          Regenerated whenever K2 rewrites AGENTS.md.\n\n",
     );
     if users.is_empty() {
         out.push_str("### No app users yet\n\n");
-        out.push_str("Add a guest in Settings → Apps, or:\n\n");
+        out.push_str("Add a guest in Settings → Cores → Apps, or:\n\n");
         out.push_str("    k2 app user add <username>\n");
         out.push_str("    k2 app token create --name vercel --agent sales\n");
         return out;
@@ -1741,7 +1741,7 @@ This is user-owned brain matter — not host control docs, not a dump into AGENT
 3. **Index is the map.** Keep `.k2/wiki/_Index.md` (and `Home.md` if you use it) current when you add or rename notes.
 4. **No orphans.** New notes should be reachable from Index/Home or a parent note. Fix broken `[[links]]` when you notice them.
 5. **Titles + aliases.** Use clear H1 titles; frontmatter `aliases` / `tags` when useful for discovery.
-6. **Seed if empty.** If the vault is missing, seed Index/Home (Settings → Context → Seed wiki, or create the files), then grow from there.
+6. **Seed if empty.** If the vault is missing, seed Index/Home (Settings → Workspaces / Agents → <agent> → Context → Seed wiki, or create the files), then grow from there.
 
 ## Every meaningful wiki edit
 

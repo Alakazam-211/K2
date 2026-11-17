@@ -640,7 +640,7 @@ fn ask(p: &Principal, body: &Value, req: &Req<'_>, desktop: &str) -> CliResponse
             return refuse(
                 409,
                 "desktop_off",
-                "Remote desktop is off on this computer, so there's nothing to ask. Turn it on at that computer: Settings → Remote desktop, or k2 desktop enable there.",
+                "Remote desktop is off on this computer, so there's nothing to ask. Turn it on at that computer: Settings → Access → Remote Desktop, or k2 desktop enable there.",
             )
         }
         Err(e) => return refuse(500, "store_error", e),

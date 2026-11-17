@@ -59,7 +59,7 @@ _study_title() {
         app-tickets) echo "Tickets in an app" ;;
         app-identity) echo "An agent's name, color, picture and handle in an app" ;;
         app-surfaces) echo "Room members, and an App's own self and usage" ;;
-        app-resources) echo "Box usage, the disk guard, clean and trends" ;;
+        app-resources) echo "Disk and memory, the disk guard, clean and trends" ;;
         app-runtime) echo "K2 updates and your App: the re-host" ;;
         app-handover) echo "Handing an App to another agent" ;;
         app-push) echo "Notifications to a custom App's own phone app" ;;
@@ -69,7 +69,7 @@ _study_title() {
         app-account-deletion) echo "A person deletes their own App account: store rules, modes, what stays" ;;
         app-transfers) echo "Big files that survive the app in the background" ;;
         app-transfers-http) echo "Resumable uploads over plain HTTP: every field, refusal and curl" ;;
-        app-chat) echo "Chat, voice and calls in your App (Chat / Voice Hosting)" ;;
+        app-chat) echo "Chat, voice and calls in your App" ;;
         app-recording) echo "Recording in an App's calls: consent, required, server reads, the lock" ;;
         chat-voice) echo "Voice rooms and channels in your App: the setup" ;;
         chat-voice-rooms) echo "Rooms and channels in your App Space" ;;
@@ -117,7 +117,7 @@ _study_title() {
         sim) echo "The mobile device: tree first, act, read the diff" ;;
         docs) echo "Live docs: edit Markdown, code and text with people and agents" ;;
         design) echo "Design notes: what a Design tab sends you" ;;
-        permissions) echo "Permission cards (Beta)" ;;
+        permissions) echo "Permission cards: ask a person to allow what K2 refused you" ;;
         garden-access) echo "Garden access: who may edit a Garden" ;;
         garden-changes) echo "What changed for Gardens in 0.46.3" ;;
         *) echo "" ;;
@@ -156,7 +156,7 @@ _study_usage_all() {
 _study_catalog_all() {
     _study_catalog | {
         if _permission_cli_enabled; then
-            awk '{ print } /^  design   / { print "  permissions         Permission cards (Beta): ask a person to allow what K2 refused you" }'
+            awk '{ print } /^  design   / { print "  permissions         Permission cards: ask a person to allow what K2 refused you" }'
         else
             cat
         fi
@@ -195,7 +195,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   app-tickets         App tickets: routes, live ticket_changed frames, contract
   app-identity        App agent identity: name, color, picture, handle; caps
   app-surfaces        Room members (who holds a grant), an App's own self and usage
-  app-resources       Box usage: the disk guard's lines, clean, CPU and memory trends
+  app-resources       Disk and memory: the disk guard's lines, clean, CPU and memory trends
   app-runtime         K2 updates move your App to the new runtime: re-host, setting, checks
   app-handover        Hand an App to another agent: offer, accept, the owner's card, undo
   app-push            Your App's own phone app: keys in the vault, register, send, limits

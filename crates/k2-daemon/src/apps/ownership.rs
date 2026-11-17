@@ -553,7 +553,7 @@ fn release_route(who: &Who, body: &[u8]) -> R<J> {
             "way": way,
             "results": results,
             "hint": format!(
-                "{held} handover card(s) wait for the owner's approval (k2 app approve <request> from a terminal outside K2, or Settings → \
+                "{held} handover card(s) wait for the owner's approval (k2 app approve <request> from a terminal outside K2, or Settings → Cores → \
                  App Approvals); the workspace keeps its Apps until then"
             ),
         }));

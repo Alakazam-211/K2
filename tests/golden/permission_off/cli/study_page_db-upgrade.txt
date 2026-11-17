@@ -69,9 +69,10 @@ THE OLD COPY (14 days)
 
 WHO
   Owner: everything. Admin login: --check only.
-  An agent needs "Allow this agent to manage Postgres versions" (the owner
-  turns it on: Agent tab, or `k2 db versions-access on`), and then moves,
-  checks and rolls back its OWN workspace's and its own Apps' databases.
+  An agent needs "Let this agent manage Postgres versions" (the owner
+  turns it on: Permissions tab → Database, or `k2 db versions-access on`),
+  and then moves, checks and rolls back its OWN workspace's and its own
+  Apps' databases.
   Owner only: --forget-old, --now (skip the notice), --allow-adopted,
   --all, --acknowledge-failed, and for now --live, --switch, --abort,
   --replica-identity-full and --prepare-live. A database shared with other

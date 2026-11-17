@@ -355,7 +355,7 @@ assert_contains "agents ask from PTY" "$skins_out" "k2 thread ask"
 assert_contains "agents secret from PTY" "$skins_out" "k2 thread secret"
 assert_contains "owner vs agent heading" "$skins_out" "OWNER VS AGENT"
 assert_contains "list always" "$skins_out" "workspace agent always"
-assert_contains "agent tab toggle" "$skins_out" "Allow this agent to manage Apps"
+assert_contains "agent tab toggle" "$skins_out" "\"Build and run Apps\" switch is on"
 assert_contains "leftover front-door owner" "$skins_out" "front-door"
 assert_contains "leftover hydra owner" "$skins_out" "hydra"
 assert_contains "do not sudo" "$skins_out" "Do not sudo"
@@ -375,7 +375,7 @@ assert_contains "never owner platform in browser" "$skins_out" "Never put an own
 assert_contains "token never back to the app" "$skins_out" "the token never comes back to the App"
 assert_contains "used link clears the lock" "$skins_out" "clears the login lock"
 assert_contains "forgot 404 on skin" "$skins_out" "Official --skin: this path 404s"
-assert_contains "oidc this password file" "$skins_out" "OIDC issuer still this password file"
+assert_contains "oidc this password file" "$skins_out" "Sign-in for other sites (the OIDC issuer) still uses this password"
 assert_contains "rp google at idp" "$skins_out" "RP/Google reset at the IdP"
 assert_absent "no resend product in skins" "$skins_out" "Resend"
 assert_contains "skins actor helper" "$skins_out" "k2.actor_kind() is 'guest'"
@@ -715,7 +715,7 @@ echo "== k2 study projects (0.45.6 Manage K2 projects) =="
 pj_out="$("$K2" study projects)"
 assert_contains "projects title" "$pj_out" "k2 study projects"
 assert_contains "projects open by default" "$pj_out" "OPEN BY DEFAULT, WITH A PER-AGENT SWITCH"
-assert_contains "projects switch name" "$pj_out" "\"Manage K2 projects\""
+assert_contains "projects switch name" "$pj_out" "\"Let this agent manage K2 projects\""
 assert_contains "projects refusal code" "$pj_out" "agent_permission_off"
 assert_contains "projects reads + chat stay" "$pj_out" "list, show, read and msg still work"
 assert_contains "projects: setting a view needs the switch" "$pj_out" "settings and setting a
@@ -724,7 +724,7 @@ assert_contains "projects: printing a view needs nothing" "$pj_out" "and so does
 assert_contains "projects agent never flips" "$pj_out" "An agent never can"
 assert_contains "projects audit" "$pj_out" "is logged with who did it"
 pj_json="$("$K2" study projects --json)"
-python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="projects" and "Manage K2 projects" in d["body"], d["id"]' "$pj_json"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="projects" and "Let this agent manage K2 projects" in d["body"], d["id"]' "$pj_json"
 echo "  PASS: projects --json id+body"
 pass=$((pass + 1))
 # `k2 project` is not daemon-optional: a dead port + a dummy token is enough
@@ -760,7 +760,7 @@ for needle in "WHAT CHANGED IN 0.46.3" "WHAT'S RETIRED" "UPDATE YOUR WORKSPACE B
     "garden.delete card" "Lock freezes a Garden" "for 2 years" "signs it (k2 zen widget sign <w>)" \
     "need you on at least one" "never gated" \
     "k2 zen widget claim <w>" "k2 zen proposals [--all]" "k2 zen proposals show|approve|reject <id>" \
-    "garden_access_needed" "\"Manage Gardens and data" "garden.keep-mine" "garden.proposal.approve" \
+    "garden_access_needed" "\"Let this agent manage" "garden.keep-mine" "garden.proposal.approve" \
     "k2 zen widget claim → k2 zen widget sign" "without --sign leaves" "AGENTS.md" \
     "k2 zen garden access <g>" "removed in 0.47.0"; do
     assert_contains "garden-changes names $needle" "$gc_out" "$needle"
@@ -802,7 +802,7 @@ for needle in "k2 app resources clean --dry-run" "NEVER App data" "Build and run
 done
 ar_lines="$(printf '%s\n' "$ar_out" | wc -l | tr -d ' ')"
 if [ "$ar_lines" -le 80 ]; then echo "  PASS: app-resources is bounded ($ar_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-resources is $ar_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
-assert_contains "catalog: app-resources row" "$("$K2" study)" "  app-resources       Box usage: the disk guard's lines, clean, CPU and memory trends"
+assert_contains "catalog: app-resources row" "$("$K2" study)" "  app-resources       Disk and memory: the disk guard's lines, clean, CPU and memory trends"
 
 echo "== k2 study app-runtime (update continuity R26, 0.46.4) =="
 ar_out="$("$K2" study app-runtime)"

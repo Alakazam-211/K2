@@ -1161,7 +1161,7 @@ fn service_set(c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
 fn may_carry(c: &VaultCaller) -> Result<(), VaultError> {
     match c.actor.agent() {
         Some(a) if a.vault_manage => Ok(()),
-        Some(_) => Err(VaultError::owner_confirm_required("moving secrets between boxes needs \"Allow managing server-wide secrets\"")),
+        Some(_) => Err(VaultError::owner_confirm_required("moving secrets between boxes needs \"Let this agent manage server-wide secrets\"")),
         None if c.actor.is_admin_human() => Ok(()),
         None => Err(VaultError::forbidden("vault_admin_required", "this needs an Owner or Admin")),
     }
@@ -1238,12 +1238,12 @@ pub(crate) fn agent_export_notice(
     let list = if names.is_empty() { "- (none)".to_string() } else { names.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n") };
     let from = if workspaces.is_empty() { "server secrets only".to_string() } else { workspaces.join(", ") };
     let body = format!(
-        "Agent {agent}{} ran `k2 vault carry export`. It may, because \"Allow managing server-wide secrets\" is on for it.\n\n\
+        "Agent {agent}{} ran `k2 vault carry export`. It may, because \"Let this agent manage server-wide secrets\" is on for it.\n\n\
          Secrets (names only, never values):\n{list}\n\n\
          From: {from}\n\
          To: vault {target_vault_id} (key {target_fp})\n\n\
          It is also in Settings → Logs → Access Audit and in `k2 vault audit`. \
-         Didn't expect it? Turn that switch off for {agent} (Settings → Workspaces → {agent} → Agent) and rotate these secrets.",
+         Didn't expect it? Turn that switch off for {agent} (Settings → Workspaces / Agents → {agent} → Permissions) and rotate these secrets.",
         session.map(|s| format!(" (session {s})")).unwrap_or_default(),
     );
     (title, body)

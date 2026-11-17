@@ -210,7 +210,7 @@ esac
 [ "$(printf '%s\n' "$OUT" | grep -c 'permission request')" = 1 ] && ok || bad "k2 help: the line must appear once"
 
 run agent study
-<<<"$OUT" grep -q '^  permissions         Permission cards (Beta)' && ok || bad "k2 study: no permissions entry while on"
+<<<"$OUT" grep -q '^  permissions         Permission cards: ask a person' && ok || bad "k2 study: no permissions entry while on"
 run agent study --json
 <<<"$OUT" grep -q '"id":"permissions"' && ok || bad "k2 study --json: no permissions topic while on"
 run agent study permissions

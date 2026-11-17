@@ -1157,7 +1157,7 @@ owner: a card on Thread (Trust it / Always trust this folder / Don't trust).
 
 Deciding is the owner's: an agent or a K2 terminal gets exit 3 and the
 request line to run instead. The owner can also decide in the app:
-Settings → Workspaces → <workspace> → Folder trust, or by opening that
+Settings → Workspaces / Agents → <workspace> → Agent → Folder trust, or by opening that
 agent. More: k2 study folder-trust
 EOF
 }
@@ -1235,7 +1235,7 @@ elif mode == "request":
         if d.get("decide_in_app"):
             print("The owner can also decide in the app: %s, or by opening that agent." % d["decide_in_app"])
     elif st == "denied":
-        print("Not trusted: the owner chose \"Don'"'"'t trust\". Only the owner can change it (%s → Reset)." % (d.get("decide_in_app") or "Settings → Workspaces → Folder trust"))
+        print("Not trusted: the owner chose \"Don'"'"'t trust\". Only the owner can change it (%s → Reset)." % (d.get("decide_in_app") or "Settings → Workspaces / Agents → <workspace> → Agent → Folder trust"))
     else:
         print("Not gated: %s" % (d.get("reason") or st))
 elif mode == "forget":
@@ -1266,7 +1266,7 @@ try:
     print(json.load(sys.stdin).get("decide_in_app") or "")
 except Exception:
     pass' 2>/dev/null) || where=""
-    [ -n "$where" ] || where="Settings → Workspaces → (that workspace) → Folder trust"
+    [ -n "$where" ] || where="Settings → Workspaces / Agents → (that workspace) → Agent → Folder trust"
     echo "Error: only the owner decides folder trust; an agent or a K2 terminal can't." >&2
     echo "The owner can also decide in the app: $where, or by opening that agent." >&2
     echo "Ask with: k2 workspace trust request $(printf '%q' "$folder") --why \"<what you need it for>\"" >&2

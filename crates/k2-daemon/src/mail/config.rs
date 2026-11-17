@@ -92,7 +92,7 @@ fn engine_required(engine: Option<&dyn RelayEngine>) -> Result<&dyn RelayEngine,
     engine.ok_or_else(|| {
         CfgError::NotReady(
             "the mail server is not installed/running — relay routes are applied on the \
-             live server; start it in Settings → Email first"
+             live server; start it in Settings → Cores → Email Hosting first"
                 .to_string(),
         )
     })
@@ -709,7 +709,7 @@ pub fn set_send_mode(
     if row.status == "pending" && mode != "receive-only" {
         return Err(CfgError::NotReady(format!(
             "domain '{domain}' is pending — sendMode cannot leave receive-only until \
-             DNS verifies (no direct or relay). Your human can check it in Settings → Email"
+             DNS verifies (no direct or relay). Your human can check it in Settings → Cores → Email Hosting → Domains"
         )));
     }
 
@@ -1329,7 +1329,7 @@ pub(crate) mod tests {
         };
         assert!(hint.contains("pending"), "{hint}");
         assert!(hint.contains("receive-only"), "{hint}");
-        assert!(hint.contains("Settings → Email"), "{hint}");
+        assert!(hint.contains("Settings → Cores → Email Hosting"), "{hint}");
 
         let err = set_send_mode(&secrets, None, "cfg-pending.example", "relay", None)
             .expect_err("pending cannot go relay");

@@ -291,7 +291,7 @@ pub const SET_UP_LINE: &str = "Set up · waiting for Pro";
 fn opt_out_line(why: &str) -> String {
     match why {
         "env" => format!("Not set up: turned off on this box ({OPT_OUT_ENV}=off)"),
-        "purge" => "Not set up: the owner purged Chat / Voice Hosting (k2 hostchat enable sets it up again)".into(),
+        "purge" => "Not set up: the owner purged chat and voice (k2 hostchat enable sets it up again)".into(),
         other => format!("Not set up: turned off ({other})"),
     }
 }

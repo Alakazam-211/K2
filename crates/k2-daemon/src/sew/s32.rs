@@ -85,19 +85,19 @@ pub fn is_post_route(p: &str) -> bool {
 fn need_credential(who: &Who) -> R<()> {
     match who {
         Who::Invalid => Err(no("forbidden", 403, "invalid or missing token")),
-        Who::Wrong => Err(no("wrong_credential", 403, "App passes, API keys and API sessions can't manage Chat / Voice Hosting")),
+        Who::Wrong => Err(no("wrong_credential", 403, "App passes, API keys and API sessions can't manage chat and voice")),
         _ => Ok(()),
     }
 }
 
 fn unsupported() -> sup::Fail {
-    no("unsupported", 409, "Chat / Voice Hosting runs on Linux boxes only (Ubuntu 24.04 / Debian 12+, systemd 250 or newer)")
+    no("unsupported", 409, "Chat and voice run on Linux servers only (Ubuntu 24.04 / Debian 12+, systemd 250 or newer)")
 }
 
 fn need_row() -> R<store::Row> {
-    let r = store::load().ok_or_else(|| no("not_installed", 404, "Chat / Voice Hosting is not installed on this box (k2 hostchat enable)"))?;
+    let r = store::load().ok_or_else(|| no("not_installed", 404, "Chat and voice are not installed on this server (k2 hostchat enable)"))?;
     if r.status == "removed" {
-        return Err(no("not_installed", 409, "Chat / Voice Hosting was uninstalled (data kept): k2 hostchat enable brings it back"));
+        return Err(no("not_installed", 409, "Chat and voice were uninstalled (data kept): k2 hostchat enable brings it back"));
     }
     Ok(r)
 }
@@ -658,7 +658,7 @@ fn need_owner_for_box_backup(who: &Who) -> R<()> {
         Who::Agent { .. } => Err(no(
             "owner_only",
             403,
-            "only the server's owner says the box backup carries Sew's bundles; an agent can't, even with \"Manage Chat / Voice Hosting\" (ask the owner to run k2 hostchat ship box-backup)",
+            "only the server's owner says the box backup carries Sew's bundles; an agent can't, even with \"Manage chat and voice\" (ask the owner to run k2 hostchat ship box-backup)",
         )),
         _ => Err(no("owner_only", 403, "only the server's owner says the box backup carries Sew's bundles (k2 hostchat ship box-backup)")),
     }

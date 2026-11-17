@@ -1,7 +1,7 @@
     {
       "name": "dns access",
       "usage": "k2 dns access [--json]",
-      "description": "DNS manage capability probe for this workspace (allowed?, record types, zones summary). Toggle-off returns allowed:false without dialing the control plane. Exit 3 when gated: Settings → K2 Connect (Allow agents to manage DNS records) or Workspaces → (workspace) → Allow DNS manage.",
+      "description": "DNS manage capability probe for this workspace (allowed?, record types, zones summary). Toggle-off returns allowed:false without dialing the control plane. Exit 3 when gated: Settings → Network → Tunnel → Policies → \"Agents can change DNS records\", or Settings → Workspaces / Agents → <workspace> → Permissions → DNS → \"Let this agent manage DNS\".",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON capability envelope."}]
     },
@@ -52,7 +52,7 @@
     {
       "name": "dns",
       "usage": "k2 dns <access|list|records|record|verify> ...",
-      "description": "Manage DNS records for K2 Connect zones (toggle-gated). access/list/records/record add|remove/verify. Exit 3 when off — Settings → K2 Connect (Allow agents to manage DNS records) or Workspaces → (workspace) → Allow DNS manage. Not for nested *.k2.dev (publish) or tunnel. ID/locked tool.",
+      "description": "Manage DNS records for K2 Connect zones (toggle-gated). access/list/records/record add|remove/verify. Exit 3 when off — Settings → Network → Tunnel → Policies → \"Agents can change DNS records\", or Settings → Workspaces / Agents → <workspace> → Permissions → DNS → \"Let this agent manage DNS\". Not for nested *.k2.dev (publish) or tunnel. ID/locked tool.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },

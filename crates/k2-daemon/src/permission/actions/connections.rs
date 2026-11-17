@@ -15,10 +15,10 @@ use k2_core::permission::catalog::{
     WallCoverage, WallMatch, WallMethod, Words,
 };
 
-use super::switches::{applied, check_state, off_message, off_spec, param, ws_path, AGENT_TAB, GONE};
+use super::switches::{applied, check_state, off_message, off_spec, param, ws_path, CONNECTIONS_TAB, GONE};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 
-const SETTING: &str = "Allow agents to create connections for this workspace";
+const SETTING: &str = "Let this agent add connections";
 
 pub(crate) static CREATE: ActionSpec = ActionSpec {
     id: "connections.create",
@@ -38,7 +38,7 @@ pub(crate) static CREATE: ActionSpec = ActionSpec {
         retry: "run your command again",
     },
     undo: Undo::Twin { action: "connections.create-off" },
-    settings: AGENT_TAB,
+    settings: CONNECTIONS_TAB,
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "agents_create_connections_disabled" },
         route_prefix: "/cli/",
@@ -49,14 +49,17 @@ pub(crate) static CREATE: ActionSpec = ActionSpec {
     machine_hints: &[],
 };
 
-pub(crate) static CREATE_OFF: ActionSpec = off_spec(
-    "connections.create-off",
-    Floor::Admin,
-    &[],
-    SETTING,
-    "Stop {ws} creating or removing connections itself",
-    "Connections it already has stay.",
-);
+pub(crate) static CREATE_OFF: ActionSpec = ActionSpec {
+    settings: CONNECTIONS_TAB,
+    ..off_spec(
+        "connections.create-off",
+        Floor::Admin,
+        &[],
+        SETTING,
+        "Stop {ws} creating or removing connections itself",
+        "Connections it already has stay.",
+    )
+};
 
 pub(crate) static ADD: ActionSpec = ActionSpec {
     id: "connections.add",
@@ -76,7 +79,7 @@ pub(crate) static ADD: ActionSpec = ActionSpec {
         retry: "run your command again",
     },
     undo: Undo::None,
-    settings: AGENT_TAB,
+    settings: CONNECTIONS_TAB,
     walls: &[
         Wall {
             matches: WallMatch::Code { status: 403, code: "agents_create_connections_disabled" },
@@ -124,7 +127,7 @@ fn apply_create(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
 
 fn apply_create_off(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     match ws_path(&ctx.workspace_id) {
-        Some(p) => applied(&crate::misc_routes::connections_switch_entry(who, &p, false), off_message(ctx)),
+        Some(p) => applied(&crate::misc_routes::connections_switch_entry(who, &p, false), off_message(ctx, CONNECTIONS_TAB)),
         None => Applied::Refused { code: "workspace_not_found".into(), message: GONE.into() },
     }
 }

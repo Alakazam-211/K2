@@ -454,7 +454,7 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
                                  a named cluster (17/feedback) for this workspace, via the
                                  root helper (protocol 15): band port, K2's settings; K2
                                  never takes over or removes a cluster. Owner, or an agent
-                                 with "Allow this agent to manage Postgres versions"
+                                 with "Let this agent manage Postgres versions"
   cluster restart <name>         restart that one named cluster (same rule)
   default-major <M> [--json]     owner: the major new databases go on (new boxes: 17;
                                  existing boxes keep their current major until set)
@@ -464,7 +464,7 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
   uninstall [--json]             drop catalog row + stop unit
   bind --role <pg_role> [--db …] assistant PG role (default ws_<id>_agent; no secrets)
   versions-access on|off [--workspace <ws>]
-                                 "Allow this agent to manage Postgres versions"
+                                 "Let this agent manage Postgres versions"
                                  (owner turns on; owner or Admin turns off; never an agent)
   cap [<n>|default] [--workspace <ws>] [--json]
                                  how many ACTIVE databases this workspace (its agent)
@@ -884,7 +884,7 @@ cmd_db() {
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
 v=json.load(sys.stdin)
 on=v["agentsCanUpgradePostgres"]
-print("Allow this agent to manage Postgres versions: %s for %s%s" % ("on" if on else "off", v["workspace"], " (check, move, roll back and create --major on its own and its Apps databases; each act is in Access Audit; deleting the old copy stays yours)" if on else ""))'
+print("Let this agent manage Postgres versions: %s for %s%s" % ("on" if on else "off", v["workspace"], " (check, move, roll back and create --major on its own and its Apps databases; each act is in Access Audit; deleting the old copy stays yours)" if on else ""))'
             ;;
         create)
             local access="" test=false major="" cluster=""

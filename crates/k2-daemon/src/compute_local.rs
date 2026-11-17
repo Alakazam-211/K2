@@ -1,5 +1,5 @@
 //! "Make this computer a compute node" from the machine's own K2
-//! (compute polish v1): Settings → Compute and `k2 compute local enable`.
+//! (compute polish v1): Settings → Cores → Compute and `k2 compute local enable`.
 //!
 //! 1. **The binary.** `k2-node` ships next to the daemon (Linux release
 //!    assets, the Arch package, K2.app on macOS). A standalone Linux box
@@ -623,7 +623,7 @@ pub fn enable(req: &EnableReq, by: &str) -> Result<serde_json::Value, Refused> {
             "ok": true, "step": "enrolling", "mode": "installed", "sas": sas,
             "message": match &sas {
                 Some(s) => format!("Installed and enrolled. Confirm code {s} on the controller."),
-                None => "Installed and enrolled; the confirmation code shows in Settings → Compute and `k2-node status`.".into(),
+                None => "Installed and enrolled; the confirmation code shows in Settings → Cores → Compute and `k2-node status`.".into(),
             },
         }));
     }
@@ -662,7 +662,7 @@ pub fn enable(req: &EnableReq, by: &str) -> Result<serde_json::Value, Refused> {
         }
         None => Ok(serde_json::json!({
             "ok": true, "step": "waiting", "requestId": id,
-            "message": "Asked the node to enroll; it answers within a few seconds (Settings → Compute shows the code).",
+            "message": "Asked the node to enroll; it answers within a few seconds (Settings → Cores → Compute shows the code).",
         })),
     }
 }

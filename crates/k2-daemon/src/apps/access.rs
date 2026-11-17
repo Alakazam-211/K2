@@ -167,7 +167,7 @@ pub(crate) fn need_build(who: &Who) -> R<()> {
         return Err(no(
             codes::APPS_MANAGE_OFF,
             403,
-            "\"Build and run Apps\" is off for this agent: ask your owner to turn it on (Workspace settings → Agent → Apps, \
+            "\"Build and run Apps\" is off for this agent: ask your owner to turn it on (Settings → Workspaces / Agents → <agent> → Permissions → Apps, \
              or k2 app access <workspace> --build on from a terminal outside K2)",
         ));
     }
@@ -253,8 +253,8 @@ pub(crate) fn set_switches(ws_id: &str, change: SwitchChange, caller_is_owner: b
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            "only the server's owner turns an agent's App switches on (an Admin may turn them off): Settings → Workspaces → \
-             <agent> → Agent, or k2 app access <ws> --build on|--manage on from a terminal outside K2",
+            "only the server's owner turns an agent's App switches on (an Admin may turn them off): Settings → Workspaces / Agents → \
+             <agent> → Permissions → Apps, or k2 app access <ws> --build on|--manage on from a terminal outside K2",
         ));
     }
     if change.full == Some(true) && !build {
@@ -272,8 +272,8 @@ pub(crate) fn set_switches(ws_id: &str, change: SwitchChange, caller_is_owner: b
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            "only the server's owner turns an agent's App switches on (an Admin may turn them off): Settings → Workspaces → \
-             <agent> → Agent, or k2 app access <ws> --build on|--manage on from a terminal outside K2",
+            "only the server's owner turns an agent's App switches on (an Admin may turn them off): Settings → Workspaces / Agents → \
+             <agent> → Permissions → Apps, or k2 app access <ws> --build on|--manage on from a terminal outside K2",
         ));
     }
     if build != b0 {
@@ -317,7 +317,7 @@ pub(crate) fn core_name(c: &str) -> &str {
         "files" => "Files",
         "thread" => "Thread",
         "mail" => "Mail",
-        "sew" => "Chat / Voice Hosting",
+        "sew" => "Chat and voice",
         other => other,
     }
 }
@@ -434,7 +434,7 @@ pub fn review_note_once() -> Option<String> {
     let title = "Review which agents can build and run Apps";
     let body = format!(
         "These agents could manage Apps before; they now have Build and run Apps on: {}.\n\n\
-         Review each one (Settings → Workspaces → <agent> → Agent → Apps, or k2 app access <workspace> --build off \
+         Review each one (Settings → Workspaces / Agents → <agent> → Permissions → Apps, or k2 app access <workspace> --build off \
          from a terminal outside K2). \"…and manage them end to end\" starts off for all of them, and anything that \
          loosens an App's wall still waits for you in person.",
         handles.join(", ")

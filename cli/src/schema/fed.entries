@@ -8,7 +8,7 @@
     {
       "name": "fed enable",
       "usage": "k2 fed enable",
-      "description": "Turn federation on for this server (the saved switch, same as Settings, live at once with no restart). Owner-gated by the settings route.",
+      "description": "Turn on \"Connect agents across servers\" for this server (the same switch as Settings → Network → Tunnel → Policies; live at once with no restart). Owner-gated by the settings route.",
       "args": [],
       "flags": []
     },

@@ -1148,7 +1148,7 @@ mod unix_impl {
                 if body.len() > crate::voice::routes::MAX_BODY {
                     return from_cli(crate::voice::routes::too_large());
                 }
-                // An agent whose workspace has Manage Chat / Voice Hosting
+                // An agent whose workspace has Manage chat and voice
                 // may also run `repair`; any other cell caller is a passport.
                 let caller = match crate::compute_routes::who_from_cell(this_session_id, principal) {
                     who @ (crate::compute_routes::Who::Agent { .. } | crate::compute_routes::Who::Shell { .. }) => {

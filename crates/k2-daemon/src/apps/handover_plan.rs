@@ -364,7 +364,7 @@ impl Plan {
         if !self.to_app_users && !self.guests.is_empty() {
             out.push(format!(
                 "{b} can't manage {app}'s users itself: \"Let this agent manage its Apps' users\" is off for it, and a handover never \
-                 turns it on (you can: Settings → Workspaces → {b} → Agent → Apps)."
+                 turns it on (you can: Settings → Workspaces / Agents → {b} → Permissions → Apps)."
             ));
         }
         if !self.overages.is_empty() {
@@ -381,7 +381,7 @@ impl Plan {
                 out.push(format!("Its source is copied into {b}'s folder (apps/{app}; never .k2/ or .env files)."));
             }
         }
-        out.push(format!("Undo: you can undo this for {} hours (Settings → Apps, or k2 app handover undo {app}).", k2_core::deploy::handover::WINDOW_SECS / 3600));
+        out.push(format!("Undo: you can undo this for {} hours (Settings → Cores → Apps, or k2 app handover undo {app}).", k2_core::deploy::handover::WINDOW_SECS / 3600));
         out
     }
 

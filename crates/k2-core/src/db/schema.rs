@@ -178,7 +178,7 @@ pub struct Project {
     #[serde(default)]
     pub agents_can_manage_vault: i64,
     /// K2 compute nodes (migration 0147, CN20) — "Allow compute nodes".
-    /// Read-only here (Settings → Compute shows it); written only by
+    /// Read-only here (Settings → Cores → Compute shows it); written only by
     /// `POST /cli/agent-access/set {toggle: "compute"}` (Owner/Admin).
     #[serde(default)]
     pub agents_can_use_compute: i64,

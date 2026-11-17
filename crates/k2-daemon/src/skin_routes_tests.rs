@@ -371,7 +371,7 @@ fn owner_only_response_has_stable_code_and_403() {
         "hint should teach owner/human: {hint}"
     );
     assert!(
-        !hint.contains("Allow this agent to manage Apps")
+        !hint.contains("To let this workspace's agent manage Apps")
             && !hint.contains("Allow this agent to manage Skin Access"),
         "leftover/hydra keep today's hint without the Agent-tab sentence: {hint}"
     );
@@ -390,7 +390,7 @@ fn owner_only_manage_response_adds_agent_tab_sentence() {
     assert_eq!(v["error"]["code"], "owner_only");
     let hint = v["error"]["hint"].as_str().expect("hint");
     assert!(
-        hint.contains("Allow this agent to manage Apps"),
+        hint.contains("Build and run Apps"),
         "manage OFF must teach the Agent-tab toggle: {hint}"
     );
     assert!(

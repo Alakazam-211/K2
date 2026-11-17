@@ -103,9 +103,9 @@ fn box_rows(who: &Who, doctor: &J) -> Vec<J> {
     let mut out = Vec::new();
     let apps_on = k2_core::deploy::enabled();
     out.push(if apps_on {
-        row("apps", true, "Apps (beta) are on")
+        row("apps", true, "Apps are on")
     } else {
-        no_row("apps", "Apps (beta) are off on this server", OWNER_DISABLED, "the owner turns them on in Settings → Apps → This server", Some("apps_disabled"))
+        no_row("apps", "Apps are off on this server", OWNER_DISABLED, "the owner turns them on in Settings → Cores → Apps → This server", Some("apps_disabled"))
     });
     let linux = cfg!(target_os = "linux");
     let ready = doctor["ready"].as_bool().unwrap_or(false);
@@ -146,7 +146,7 @@ fn box_rows(who: &Who, doctor: &J) -> Vec<J> {
     out.push(if crate::email_notify::box_enabled() {
         row("mail", true, "an App can send email to its own users once its owner grants a sender (k2 app email on)")
     } else {
-        no_row("mail", "email from Apps is off on this server", OWNER_DISABLED, "the owner turns it on (Settings → Notifications → Email)", Some("email_off"))
+        no_row("mail", "email from Apps is off on this server", OWNER_DISABLED, "the owner turns it on (Settings → Cores → Email Notifications)", Some("email_off"))
     });
     out.extend(push_rows(who));
     out.push(if feature_on("app-updates-v1") {

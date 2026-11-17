@@ -2,7 +2,7 @@
 //! real switches:
 //!
 //! - the three writes are POST-only: a GET is 405 before auth;
-//! - an agent with Manage Chat / Voice Hosting gets `person_only`, and with
+//! - an agent with Manage chat and voice gets `person_only`, and with
 //!   cards on, the exact Ask-with line for `sew.recording-enable`; a person
 //!   is never taught a card;
 //! - a person on a box whose Sew can't record (no `app_recording`; this

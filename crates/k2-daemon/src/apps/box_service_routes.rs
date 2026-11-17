@@ -471,7 +471,7 @@ fn held_answer(w: &k2_core::app_grace::requests::AppRequest, already: &[String],
     v["alreadyAllowed"] = json!(already);
     v["services"] = json!(w.box_services());
     v["hint"] = json!(format!(
-        "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings → Apps → \
+        "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings → Cores → App \
          Approvals). Until then the door stays shut{}.",
         w.id,
         if wall == "container" { " (the forward is in the wall from the next start; approving opens it without a restart)" } else { "" }

@@ -137,7 +137,7 @@ step = sys.argv[1]
 try:
     d = json.load(sys.stdin)
 except Exception:
-    sys.stderr.write("k2 fed %s: no answer from the daemon (is federation enabled? k2 fed enable)\n" % step); sys.exit(1)
+    sys.stderr.write("k2 fed %s: no answer from the daemon (is \"Connect agents across servers\" on? k2 fed enable)\n" % step); sys.exit(1)
 if not isinstance(d, dict) or d.get("error"):
     err = d.get("error") if isinstance(d, dict) else d
     sys.stderr.write("k2 fed %s: %s\n" % (step, err)); sys.exit(1)
@@ -245,7 +245,7 @@ print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv
             ;;
         enable|disable)
             # Flip the persisted federation master switch on THIS daemon — the
-            # headless equivalent of Settings → K2 Connect → Enable federation.
+            # headless equivalent of Settings → Network → Tunnel → Policies → "Connect agents across servers".
             # Owner-gated via /cli/settings/update; federation::set_enabled() is
             # synced so the /cli/federation/* gate goes live/dark immediately
             # (no restart). Built for Linux headless setup.
@@ -254,7 +254,7 @@ print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv
                 | python3 -c "import json,sys
 try:
     d = json.load(sys.stdin)
-    print('federation: ' + ('ENABLED' if d.get('federationEnabled') else 'disabled') + ' (this server)')
+    print('Connect agents across servers: ' + ('on' if d.get('federationEnabled') else 'off') + ' (this server)')
 except Exception:
     sys.stderr.write('k2 fed: unexpected response from /cli/settings/update\n'); sys.exit(1)"
             ;;
@@ -263,7 +263,7 @@ except Exception:
                 | python3 -c "import json,sys
 try:
     d = json.load(sys.stdin)
-    print('federation: ' + ('ENABLED' if d.get('federationEnabled') else 'disabled') + ' (this server)')
+    print('Connect agents across servers: ' + ('on' if d.get('federationEnabled') else 'off') + ' (this server)')
 except Exception:
     sys.stderr.write('k2 fed status: unexpected response from /cli/settings/get\n'); sys.exit(1)"
             ;;
@@ -299,8 +299,8 @@ def _host(p):
     return b.split('/')[0] or (p.get('subdomain') or '').strip()
 peers = sorted(peers, key=lambda p: (_shown(p).casefold(), _host(p).casefold(), p.get('fingerprint') or ''))
 if not peers:
-    print('No federation peers pinned on this server.')
-    print('Pair with: k2 fed pair-start / k2 fed confirm (or Settings → Connections auto-pair).')
+    print('No paired servers yet.')
+    print('Pair with: k2 fed pair-start / k2 fed confirm (or Settings → Network → Connected Servers → Pair a server).')
     sys.exit(0)
 print('Peers (%d):' % len(peers))
 for p in peers:
@@ -320,7 +320,7 @@ for p in peers:
     extra = ('  label=%s' % label) if label else ''
     print('  %s  trust=%s  fp=%s…%s' % (host, trust, fp, extra))
     if p.get('repair_recommended'):
-        print('      older pairing code: messages still work; re-pair recommended (Settings → Connections → Re-pair, or k2 fed pair-start)')
+        print('      older pairing code: messages still work; pairing again recommended (Settings → Network → Connected Servers → Pair again, or k2 fed pair-start)')
     # 0.45.2: this server's signed address notice to that peer.
     n = p.get('address_notice') or {}
     st = n.get('status')
@@ -350,7 +350,7 @@ for p in peers:
 try:
     d = json.load(sys.stdin)
 except Exception:
-    sys.stderr.write('k2 fed outbox: unexpected response (is federation on?)\n'); sys.exit(1)
+    sys.stderr.write('k2 fed outbox: unexpected response (is \"Connect agents across servers\" on?)\n'); sys.exit(1)
 if 'error' in d:
     sys.stderr.write('k2 fed outbox: ' + str(d['error']) + '\n'); sys.exit(1)
 peers = d.get('peers', [])

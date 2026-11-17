@@ -106021,6 +106021,29 @@ and comment on this one with --proposal <new file>.
                                       them: exit 5
   k2 doc claim --renew|--release [--id claim-N] <f>   (a .psd or .psb file;
                                       no --id: every claim of yours)
+Timelines, circuit board files and 3D scenes (Beta): each kind has its own
+core (k2 doc cores), off by default; while it is off they are any-file docs.
+Agents never write .fcpxml, .prproj, photoplot or drill files.
+  timeline core: .otio, .fcpxml and .prproj files
+  k2 doc clip list|show|diff|blame <f>   sequences, tracks, clips and markers,
+                                      as outline and node read them
+  A live .otio (the timeline core on): the pack's own verbs, --json for the
+  result as data. T: timecode (01:00:10:00), frames (240f) or seconds (10s)
+  k2 doc timeline info|track list|marker list|media list <f>
+  k2 doc clip list @trk:N [--from T] [--to T] <f> · clip at @trk:N T <f>
+  k2 doc clip move @item:N --to T [--track @trk:N] [--snap] --base V <f>
+  k2 doc clip trim|rename|enable|delete|add ... --base V <f>
+  k2 doc marker add|set|delete ... --base V <f> · track rename @trk:N NAME --base V <f>
+  fab core: photoplot files (.gbr, .ger, .pho, .gtl, .gbl, .gto, .gbo, .gts,
+  .gbs, .gko) and drill files (.drl, .xnc, .xln, .ncd), read only
+  k2 doc feature list|show|diff|blame <f>   a photoplot file's apertures and features
+  k2 doc hole list|show|diff|blame <f>      a drill file's tools and holes
+  blend core: .blend files
+  k2 doc object list|show|diff|blame <f>    a scene file's objects
+  A live .blend (the blend core on): the pack's reads, --json for data
+  k2 doc scene list|collection show @coll:N|object show @obj:N <f>
+  .blend files are read only for now: object place, visibility and rename,
+  write, restore and undo are refused (blend_writer_disabled, exit 3)
 Comments on any-file docs (pinned to the whole file, or on PSD/PSB files to
 a layer). They need edit, or a share with --comment; they make no version.
   k2 doc comment --doc|--node ADDR --body "text" [--mention P]... [--proposal FILE]... <f>
@@ -107128,6 +107151,15 @@ Which core a file needs, by its name:
               .txt, logs, .csv/.tsv, and names without an extension
   any-file    everything else: PSD, CAD, 3D and .blend files, images, PDFs,
               office files, archives, binaries
+  These kinds have their own core (Beta); while it is off, they are any-file
+  docs:
+  slides      .pptx decks: slide and shape verbs for agents
+  timeline    .otio, .fcpxml and .prproj timelines: clip, track and marker
+              reads; .otio also takes clip and marker edits
+  fab         photoplot and drill files (.gbr, .ger, .pho, the .gtl-style
+              layer files, .drl, .xnc, .xln, .ncd): feature and hole reads,
+              never written
+  blend       .blend scenes: object reads (read only for now)
   A text file too large or too odd to edit live (it is then an any-file doc)
   still needs its own core: a big .md needs markdown, not any-file.
 
@@ -107141,7 +107173,7 @@ One core opens as a Garden, not a file kind:
   k2 doc cores on <core>      turn one on (people only: the owner or an Admin)
   k2 doc cores off <core>     turn one off; files open live are written to disk
                               and closed (their history stays)
-    <core>: markdown | text | any-file | board | slides
+    <core>: markdown | text | any-file | board | slides | timeline | fab | blend
   --json                      the daemon's JSON (on/off: the switches and the report)
   --host <server> [--token T] another server (a Connect login with the Owner or Admin role)
 
@@ -107176,7 +107208,7 @@ _doc_cores() {
     case "${#_DOC_ARGS[@]}" in
         0) ;;
         2) action="${_DOC_ARGS[0]}"; core="${_DOC_ARGS[1]}" ;;
-        *) _doc_die usage "k2 doc cores [on|off <core>]  (<core>: markdown | text | any-file | board | slides)" ;;
+        *) _doc_die usage "k2 doc cores [on|off <core>]  (<core>: markdown | text | any-file | board | slides | timeline | fab | blend)" ;;
     esac
     if [ -z "$action" ]; then
         _doc_call GET /cli/docs/cores ""
@@ -107196,8 +107228,8 @@ print("While a core is off, k2 doc refuses its files (core_off, exit 3) and peop
 '
         return 0
     fi
-    case "$action" in on|off) ;; *) _doc_die usage "k2 doc cores on|off <core>  (<core>: markdown | text | any-file | board | slides)" ;; esac
-    case "$core" in markdown|text|any-file|board|slides) ;; *) _doc_die usage "no such core: $core (markdown, text, any-file, board, slides)" ;; esac
+    case "$action" in on|off) ;; *) _doc_die usage "k2 doc cores on|off <core>  (<core>: markdown | text | any-file | board | slides | timeline | fab | blend)" ;; esac
+    case "$core" in markdown|text|any-file|board|slides|timeline|fab|blend) ;; *) _doc_die usage "no such core: $core (markdown, text, any-file, board, slides, timeline, fab, blend)" ;; esac
     if [ -n "${SCOPED_TOKEN:-}" ]; then
         [ "${_DOC_JSON:-0}" = "1" ] || echo "Error [person_only]: k2 doc cores on|off is for people, from a terminal outside K2 or Settings → Cores → Multiplayer. An agent can list the cores (k2 doc cores) and asks its human (k2 thread) to turn one on." >&2
         python3 -c 'import json; print(json.dumps({"error": {"code": "person_only", "hint": "k2 doc cores on|off is for people"}}))' >&2
@@ -107355,9 +107387,12 @@ cmd_doc() {
             fi ;;
         cat|head|wc|grep|sed|patch|apply|append|insert|replace|delete)
             _doc_tool "$verb" "$@" ;;
-        layer|outline|node|comment|reply|resolve|comments|reanchor)
+        layer|outline|node|comment|reply|resolve|comments|reanchor|clip|track|marker|media|timeline|feature|hole|object|scene|collection)
             # Any-file docs, through the docs kit: comments (any file);
-            # PSD/PSB files' layer index (k2 doc --help, "PSD/PSB files").
+            # PSD/PSB files' layer index (k2 doc --help, "PSD/PSB files");
+            # timeline, fab and BLEND files' index verbs, and a live
+            # timeline's or scene's own verbs (the kit routes them by the
+            # doc's tier). Every argument goes to the kit as typed.
             _doc_blob_tool "$verb" "$@" ;;
         purge-comments|erase-participant)
             _doc_owner_purge "$verb" "$@" ;;

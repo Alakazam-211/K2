@@ -220,6 +220,9 @@ pub(super) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<BlobSessi
         SessionError::PackMismatch { stored, .. } if super::target::is_deck_file(&t.rel) && stored.as_str() == Tier::Deck.pack() => {
             stored_as_live_deck(&t.rel)
         }
+        SessionError::PackMismatch { stored, .. } if matches!(Tier::of(&t.rel), Tier::Timeline | Tier::Scene) && stored.as_str() == Tier::of(&t.rel).pack() => {
+            stored_as_live_keyed(&t.rel, Tier::of(&t.rel))
+        }
         _ => routes::session_error(&e),
     })
 }
@@ -237,6 +240,28 @@ pub(super) fn stored_as_live_deck(rel: &str) -> CliResponse {
             format!(
                 "{rel} was opened live by the Slides core, which is off now. Turn it on to use this deck in K2 again \
                  (k2 doc cores on slides): its history is kept. The file itself is up to date and opens in your presentation app"
+            ),
+        ),
+        k2_mpc_base::tools::exit::REFUSED,
+    )
+}
+
+/// A timeline or scene opened live while its core was on, asked for with it
+/// off: as [`stored_as_live_deck`], its live doc is kept and the file on
+/// disk is up to date.
+pub(super) fn stored_as_live_keyed(rel: &str, tier: Tier) -> CliResponse {
+    let (what, core, app) = match tier {
+        Tier::Timeline => ("timeline", k2_core::docs_cores::TIMELINE, "your editing app"),
+        _ => ("scene", k2_core::docs_cores::BLEND, "your 3D app"),
+    };
+    let name = k2_core::docs_cores::by_id(core).map_or(core, |c| c.name);
+    routes::with_exit(
+        refusal(
+            "409 Conflict",
+            "stored_as_live_doc",
+            format!(
+                "{rel} was opened live by the {name}, which is off now. Turn it on to use this {what} in K2 again \
+                 (k2 doc cores on {core}): its history is kept. The file itself is up to date and opens in {app}"
             ),
         ),
         k2_mpc_base::tools::exit::REFUSED,
@@ -989,7 +1014,7 @@ mod tests {
         let usage_start = cli.find("\n_doc_usage() {").expect("_doc_usage");
         let usage = &cli[usage_start..cli[usage_start..].find("\nEOF\n").expect("usage end") + usage_start];
         let mut missing = Vec::new();
-        for kind in [super::super::blob_packs::BlobKind::Any, super::super::blob_packs::BlobKind::Psd] {
+        for kind in super::super::blob_packs::BlobKind::ALL {
             for spec in super::super::blob_packs::registry_of(kind).verbs() {
                 let word = spec.name.split_whitespace().next().unwrap_or(spec.name);
                 let routed = labels.contains(&word);

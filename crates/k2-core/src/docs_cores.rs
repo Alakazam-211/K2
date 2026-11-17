@@ -56,6 +56,20 @@ pub const BOARD: &str = "board";
 /// `.pptx` decks as live keyed docs (K2 Cores' pptx pack, `PptxLive`), a Beta,
 /// off by default. Off, a deck is an any-file doc, as before the core.
 pub const SLIDES: &str = "slides";
+/// Video timelines (K2 Cores' timeline pack), a Beta, off by default: OTIO,
+/// FCPXML and PRPROJ files read into a structure index (clips, tracks and
+/// markers for agents), and an OTIO file as a live keyed doc
+/// (`TimelineLive`). Off, they are any-file docs.
+pub const TIMELINE: &str = "timeline";
+/// Circuit board fabrication files (K2 Cores' fab pack), a Beta, off by
+/// default: photoplot and drill files read into a structure index, read only.
+/// Off, they are any-file docs.
+pub const FAB: &str = "fab";
+/// `.blend` scenes (K2 Cores' BLEND pack), a Beta, off by default: a
+/// structure index, a live keyed doc (`BlendLive`: objects' placement,
+/// visibility and names) and the mesh read the 3D previews draw from. Off,
+/// a `.blend` is an any-file doc.
+pub const BLEND: &str = "blend";
 
 /// Every core, in the order Settings and the CLI list them.
 pub const CORES: &[Core] = &[
@@ -99,6 +113,30 @@ pub const CORES: &[Core] = &[
         short: ".pptx decks: slide and shape verbs for agents",
         view: CoreView::None,
     },
+    Core {
+        id: TIMELINE,
+        name: "Timeline core",
+        status: "beta",
+        description: ".otio, .fcpxml and .prproj video timelines. Agents read tracks, clips and markers, and change .otio timelines with clip and marker verbs; a save from your editing app is taken in by clip. Off: these are any-file docs.",
+        short: ".otio, .fcpxml and .prproj timelines: clip and marker verbs for agents",
+        view: CoreView::None,
+    },
+    Core {
+        id: FAB,
+        name: "PCB fabrication core",
+        status: "beta",
+        description: "Photoplot and drill files for circuit boards (.gbr, .drl and their layer files). Agents read apertures, features and holes, and compare versions; nobody writes them through K2. Off: these are any-file docs.",
+        short: "photoplot and drill files: read-only feature and hole verbs for agents",
+        view: CoreView::None,
+    },
+    Core {
+        id: BLEND,
+        name: "3D scene core",
+        status: "beta",
+        description: ".blend scenes, read only for now. Agents read collections and objects, a save from your 3D app is taken in by object, and the scene's cameras and objects get previews. Editing .blend files through K2 comes in a later release. Off: a .blend is an any-file doc.",
+        short: ".blend scenes (read only): object reads for agents, scene previews",
+        view: CoreView::None,
+    },
 ];
 
 /// Whether a core opens files (and so needs the docs runtime): every view
@@ -115,7 +153,7 @@ pub fn by_id(id: &str) -> Option<&'static Core> {
     CORES.iter().find(|c| c.id == id)
 }
 
-/// `markdown, text, any-file, board, slides`, for refusals.
+/// `markdown, text, any-file, board, slides, timeline, fab, blend`, for refusals.
 pub fn ids_list() -> String {
     CORES.iter().map(|c| c.id).collect::<Vec<_>>().join(", ")
 }
@@ -152,9 +190,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn five_cores_in_order() {
+    fn eight_cores_in_order() {
         let ids: Vec<&str> = CORES.iter().map(|c| c.id).collect();
-        assert_eq!(ids, ["markdown", "text", "any-file", "board", "slides"]);
+        assert_eq!(ids, ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend"]);
         assert_eq!(by_id("board").expect("board").view, CoreView::Garden);
         assert_eq!(by_id("board").expect("board").status, "beta");
         assert!(opens_files("markdown") && opens_files("any-file") && !opens_files("board") && !opens_files("nope"));
@@ -162,7 +200,30 @@ mod tests {
         assert_eq!(by_id("any-file").expect("any-file").view, CoreView::None);
         assert_eq!(by_id("markdown").expect("markdown").view, CoreView::Live);
         assert!(by_id("word").is_none());
-        assert_eq!(ids_list(), "markdown, text, any-file, board, slides");
+        assert_eq!(ids_list(), "markdown, text, any-file, board, slides, timeline, fab, blend");
+    }
+
+    /// The three file-type cores open files (their docs need the docs
+    /// runtime), have no live view for people yet, are Betas, and say what
+    /// happens while they are off. People find them by file type; product
+    /// names stay out.
+    #[test]
+    fn the_timeline_fab_and_blend_cores_open_files_with_no_view_for_people() {
+        for (id, kinds) in [(TIMELINE, &[".otio", ".fcpxml", ".prproj"][..]), (FAB, &["Photoplot", "drill", ".gbr", ".drl"][..]), (BLEND, &[".blend"][..])] {
+            let c = by_id(id).unwrap_or_else(|| panic!("{id}"));
+            assert_eq!((c.view, c.status), (CoreView::None, "beta"), "{id}");
+            assert!(opens_files(id), "{id}");
+            for k in kinds {
+                assert!(c.description.contains(k), "{id}: {k} missing from {}", c.description);
+            }
+            assert!(c.description.contains("Off: "), "{id}: {}", c.description);
+            for text in [c.description, c.short, c.name] {
+                let lower = text.to_lowercase();
+                for mark in ["blender", "premiere", "final cut", "gerber", "excellon", "adobe", "apple"] {
+                    assert!(!lower.contains(mark), "{id}: file types only: {text}");
+                }
+            }
+        }
     }
 
     /// The Slides core opens files (decks, live) but has no view for people
@@ -199,7 +260,7 @@ mod tests {
         validate_partial(&json!({})).expect("empty is fine");
         assert_eq!(
             validate_partial(&json!({"word": true})).expect_err("unknown"),
-            "multiplayerCores.word: no such core (markdown, text, any-file, board, slides)"
+            "multiplayerCores.word: no such core (markdown, text, any-file, board, slides, timeline, fab, blend)"
         );
         assert_eq!(
             validate_partial(&json!({"markdown": "yes"})).expect_err("not a bool"),

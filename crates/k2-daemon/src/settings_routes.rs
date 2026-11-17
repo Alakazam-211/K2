@@ -1454,7 +1454,7 @@ mod tests {
 
             let r = handle_settings_update_as(br#"{"multiplayerCores":{"word":true}}"#, SettingsActor::Owner, "owner-token");
             assert!(r.status.starts_with("400"), "{}", r.body);
-            assert!(r.body.contains("multiplayerCores.word: no such core (markdown, text, any-file, board, slides)"), "{}", r.body);
+            assert!(r.body.contains("multiplayerCores.word: no such core (markdown, text, any-file, board, slides, timeline, fab, blend)"), "{}", r.body);
 
             // An ordinary write answers exactly as before (no report key).
             let r = handle_settings_update_as(br#"{"defaultAgent":"codex"}"#, SettingsActor::Owner, "owner-token");

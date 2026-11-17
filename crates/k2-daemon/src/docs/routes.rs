@@ -388,6 +388,16 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         }
     };
     drop(store);
+    // A `.blend` is read-only while the blend core is on: the calls that
+    // would write one are refused with their own reason first
+    // (`blend_read_only`; the kit refuses them too, by the edit right).
+    {
+        let argv: Option<Vec<String>> =
+            input.body.get("argv").and_then(Value::as_array).map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect());
+        if let Some(r) = super::blend_read_only::refused(path, &target.rel, is_edit_route(path) || path == USE_THEIRS, argv.as_deref()) {
+            return r;
+        }
+    }
     // History reads need the history right (K-PERM-9); the kit checks it
     // too, this gives the refusal its own code first.
     if matches!(path, LOG | VERSIONS | SHOW | DIFF | RESTORE | BLAME) && !rights.history {
@@ -427,6 +437,8 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         Err(OpenError::Session(SessionError::PackMismatch { stored, .. })) if stored == k2_mpc_base::store::BLOB_DOC_PACK => {
             let message = match target.tier {
                 target::Tier::Deck => "it was opened as an any-file doc earlier (before the Slides core was on), and stays one",
+                target::Tier::Timeline => "it was opened as an any-file doc earlier (before the Timeline core was on), and stays one",
+                target::Tier::Scene => "it was opened as an any-file doc earlier (before the 3D scene core was on), and stays one",
                 _ => "it was opened as an any-file doc earlier (its text was refused then), and stays one",
             };
             let why = super::tier0::Fallback { code: "stored_as_any_file".into(), message: message.into() };
@@ -640,6 +652,15 @@ pub(crate) fn rights_or_refusal(
     workspace_param: Option<&str>,
     store: Option<&DocStore>,
 ) -> Result<DocRights, CliResponse> {
+    rights_uncapped(caller, t, workspace_param, store).map(|r| super::blend_read_only::cap(&t.rel, r))
+}
+
+fn rights_uncapped(
+    caller: &DocCaller,
+    t: &Target,
+    workspace_param: Option<&str>,
+    store: Option<&DocStore>,
+) -> Result<DocRights, CliResponse> {
     let rights = match caller.principal() {
         Principal::Person(k) => host::person_rights(&k),
         Principal::Agent(id) => match host::agent_rights(&id, &t.project_id, &t.rel, store) {
@@ -704,6 +725,12 @@ pub(crate) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>,
         // into its carrier. A deck the pack declines (or one over the kit's
         // keyed limit) is a tier-0 doc, as any declined file.
         target::Tier::Deck => Arc::new(k2_mpc_pptx::PptxLive::default()),
+        // A timeline (the timeline core) and a scene (the blend core): live
+        // keyed docs written back by splicing into their carrier, as a deck.
+        // One the pack declines (another version, too large, more than one
+        // timeline) is a tier-0 doc, indexed by its blob pack.
+        target::Tier::Timeline => Arc::new(k2_mpc_timeline::live::TimelineLive::default()),
+        target::Tier::Scene => Arc::new(super::blend_read_only::SceneReadOnly::default()),
         _ => Arc::new(k2_mpc_markdown::PACK),
     };
     let opened = rt.open(&key, &t.abs, &t.root, pack);

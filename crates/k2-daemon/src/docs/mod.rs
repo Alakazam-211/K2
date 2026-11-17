@@ -51,6 +51,7 @@ mod blob_flow_tests;
 #[cfg(test)]
 mod demote_tests;
 pub mod blob_packs;
+pub mod blend_read_only;
 pub mod caller;
 pub mod claims;
 pub mod conflicts;
@@ -429,9 +430,11 @@ fn workspace_exists(id: &str) -> bool {
 
 /// The tier-0 open of `key` (`open_blob_file` with its file type's pack),
 /// and the kit's demote when the doc is stored as live text under a name
-/// that now routes to tier 0 by itself ([`target::Tier::of`] is `Blob`: the
-/// CAD, BIM and circuit-board files the text pack moved to not-text, and
-/// K2's own design list). `demote_text_file` runs once: the same key and doc
+/// that now routes to tier 0 by itself ([`target::Tier::of`] isn't Markdown
+/// or text: the CAD, BIM and circuit-board files the text pack moved to
+/// not-text, K2's own design list, and the timeline and fab files, which the
+/// text pack took as text before their cores; an `.otio` served at tier 0
+/// while its core is off too). `demote_text_file` runs once: the same key and doc
 /// id become a tier-0 doc with every text version, the live state current
 /// and written to the file, an outside save since the last sync kept beside
 /// it (keep-both, never merged by lines), the change log readable as the
@@ -450,7 +453,7 @@ pub(crate) fn open_blob_or_demote(
     let pack = blob_packs::pack_for(&key.path);
     match manager.open_blob_file(pack.clone(), key, abs, root) {
         Err(SessionError::PackMismatch { stored, .. })
-            if stored == k2_mpc_text::SCHEMA.name && matches!(target::Tier::of(&key.path), target::Tier::Blob) =>
+            if stored == k2_mpc_text::SCHEMA.name && !matches!(target::Tier::of(&key.path), target::Tier::Markdown | target::Tier::Text(_)) =>
         {
             let (s, d) = manager.demote_text_file(Arc::new(k2_mpc_text::PACK), pack, key, abs, root)?;
             Ok((s, (!d.already).then_some(d)))

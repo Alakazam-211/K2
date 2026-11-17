@@ -94,26 +94,52 @@ pub fn set_for_test(id: &str, on: bool) {
     set(id, on);
 }
 
-/// The core a file belongs to, by its name (`Tier::of`, §4.1).
+/// The core a tier belongs to (`Tier::of`, §4.1).
 pub fn core_of(tier: Tier) -> &'static str {
     match tier {
         Tier::Markdown => docs_cores::MARKDOWN,
         Tier::Text(_) => docs_cores::TEXT,
         Tier::Blob => docs_cores::ANY_FILE,
         Tier::Deck => docs_cores::SLIDES,
+        Tier::Timeline => docs_cores::TIMELINE,
+        Tier::Scene => docs_cores::BLEND,
     }
 }
 
-/// The core of a workspace-relative path, by its name (a deck's is the
-/// Slides core's, on or off).
+/// The core of a workspace-relative path, by its name, on or off: a deck's
+/// is the Slides core's; a timeline, `.fcpxml`, `.prproj`, photoplot, drill
+/// or `.blend` file's is its file-type core's (`blob_packs::core_by_name`).
 pub fn core_of_path(rel: &str) -> &'static str {
-    core_of(Tier::of(rel))
+    super::blob_packs::core_by_name(rel).unwrap_or_else(|| core_of(Tier::of(rel)))
 }
 
-/// The core that serves a path now: [`core_of_path`], except that a deck is
-/// the any-file core's while the Slides core is off ([`super::target::tier_now`]).
+/// The core that serves a path now: [`core_of_path`], except that a file
+/// whose own core is off (a deck, a timeline, a fab or BLEND file) is the
+/// any-file core's ([`super::target::tier_now`]).
 pub fn core_now(rel: &str) -> &'static str {
-    core_of(super::target::tier_now(rel))
+    match super::blob_packs::core_by_name(rel) {
+        Some(core) if is_on(core) => core,
+        Some(_) => docs_cores::ANY_FILE,
+        None => core_of(super::target::tier_now(rel)),
+    }
+}
+
+/// The core a resolved doc needs now: a live tier's own, or for a tier-0
+/// doc the core that serves its name now ([`core_now`]: a `.fcpxml` or a
+/// drill file is its own core's while that core is on). A text file served
+/// at tier 0 keeps its tier, so it still needs its own core.
+pub fn core_for(t: &Target) -> &'static str {
+    match t.tier {
+        Tier::Blob => core_now(&t.rel),
+        tier => core_of(tier),
+    }
+}
+
+/// The file-type cores whose files open with another pack while they are
+/// on: turning one on closes those files' loaded any-file sessions, so the
+/// next open takes the core's pack (and its index).
+pub fn swaps_packs(id: &str) -> bool {
+    matches!(id, docs_cores::TIMELINE | docs_cores::FAB | docs_cores::BLEND)
 }
 
 /// The core as a sentence names it: "the Markdown core".
@@ -123,6 +149,9 @@ fn sentence_name(id: &str) -> &'static str {
         docs_cores::TEXT => "the text and code core",
         docs_cores::BOARD => "the Board core",
         docs_cores::SLIDES => "the Slides core",
+        docs_cores::TIMELINE => "the Timeline core",
+        docs_cores::FAB => "the PCB fabrication core",
+        docs_cores::BLEND => "the 3D scene core",
         _ => "the any-file core",
     }
 }
@@ -156,7 +185,7 @@ pub fn core_off(core: &str, rel: &str) -> CliResponse {
 /// session is looked up or loaded, so a refused file leaves no session and no
 /// presence.
 pub fn gate(t: &Target) -> Result<(), CliResponse> {
-    let core = core_of(t.tier);
+    let core = core_for(t);
     if is_on(core) {
         Ok(())
     } else {
@@ -352,6 +381,17 @@ pub(crate) fn sync_with(
             if super::runtime().is_err() {
                 start();
             }
+            if let Some(closer) = closer.filter(|_| swaps_packs(core.id)) {
+                // This core's files were any-file docs while it was off: a
+                // loaded one would keep the any-file pack (no index) until it
+                // unloads. Written back and closed now; the next open takes
+                // the core's pack. Nothing is lost: their history stays.
+                let id = core.id;
+                let done = closer.close_where(&|k: &DocKey| core_of_path(&k.path) == id);
+                if !done.is_empty() {
+                    log_debug!("[docs] the {} is on: {} any-file session(s) of its files closed to reopen with its pack", core.name, done.len());
+                }
+            }
         } else if let Some(closer) = closer {
             // 2. Close this kind's sessions (the kit's host close): write
             //    back now, end claims and presence, out of the pool. 3. Each
@@ -515,8 +555,9 @@ pub fn cores_route_for(caller: &DocCaller, path: Option<&str>) -> CliResponse {
     let tier = super::target::tier_now(p);
     // A board is `Tier::Blob` to the docs routes, and its own row here. A
     // deck is the Slides core's while it is on (no live view for people yet:
-    // it opens the usual way), else any-file's.
-    let core = if super::target::is_board_file(p) { docs_cores::BOARD } else { core_of(tier) };
+    // it opens the usual way), else any-file's; so is a timeline, fab or
+    // BLEND file with its own core.
+    let core = if super::target::is_board_file(p) { docs_cores::BOARD } else { core_now(p) };
     let live_view = matches!(tier, Tier::Markdown | Tier::Text(_));
     v["file"] = json!({ "core": core, "on": is_on(core), "liveView": live_view });
     CliResponse { body: v.to_string(), ..r }
@@ -633,10 +674,90 @@ pub(crate) mod tests {
         assert_eq!(core_of_path("photo.png"), "any-file");
         assert_eq!(core_of_path("deck.pptx"), "slides");
         assert_eq!(core_of_path("a/Talk.PPTX"), "slides");
-        for p in ["art/poster.psd", "scene.blend", "part.dwg", "gear.step", "print.stl", "model.fbx", "deck.pptx.zip", "deck.ppt"] {
+        for p in ["art/poster.psd", "scene.blend1", "part.dwg", "gear.step", "print.stl", "model.fbx", "deck.pptx.zip", "deck.ppt"] {
             assert_eq!(core_of_path(p), "any-file", "{p}");
         }
         assert_ne!(core_of_path(".pptx"), "slides", "a name with nothing before the dot isn't a deck");
+        for (p, core) in [
+            ("cut.otio", "timeline"),
+            ("edit/Info.fcpxml", "timeline"),
+            ("Show.PRPROJ", "timeline"),
+            ("board.gbr", "fab"),
+            ("board.gtl", "fab"),
+            ("board.drl", "fab"),
+            ("scene.blend", "blend"),
+        ] {
+            assert_eq!(core_of_path(p), core, "{p}");
+        }
+    }
+
+    /// A timeline, fab or BLEND file is served by its own core while it is
+    /// on, and by the any-file core while it is off; the gate asks for the
+    /// core that serves it now.
+    #[test]
+    fn timeline_fab_and_blend_files_are_served_by_their_core_only_while_it_is_on() {
+        let _m = mirror_lock();
+        all_off();
+        let t = |rel: &str| Target {
+            project_id: "p1".into(),
+            root: "/w".into(),
+            rel: rel.into(),
+            abs: format!("/w/{rel}").into(),
+            tier: crate::docs::target::tier_now(rel),
+        };
+        let files = [("cut.otio", "timeline"), ("a.fcpxml", "timeline"), ("a.prproj", "timeline"), ("a.gbr", "fab"), ("a.xnc", "fab"), ("a.blend", "blend")];
+        for (p, _) in files {
+            assert_eq!(core_now(p), "any-file", "{p}");
+            assert_eq!(core_for(&t(p)), "any-file", "{p}");
+        }
+        set("any-file", true);
+        for (p, _) in files {
+            assert!(gate(&t(p)).is_ok(), "{p}: an any-file doc while its core is off");
+        }
+        set("any-file", false);
+        for (p, core) in files {
+            set(core, true);
+            assert_eq!(core_now(p), core, "{p}");
+            assert_eq!(core_for(&t(p)), core, "{p}");
+            assert!(gate(&t(p)).is_ok(), "{p}: its own core is on, any-file is off");
+            set(core, false);
+            let r = gate(&t(p)).expect_err("every core off");
+            assert!(r.body.contains("\"core\":\"any-file\""), "{p}: {}", r.body);
+        }
+        assert!(swaps_packs("timeline") && swaps_packs("fab") && swaps_packs("blend"));
+        assert!(!swaps_packs("slides") && !swaps_packs("markdown") && !swaps_packs("any-file"));
+        all_off();
+    }
+
+    /// Turning a file-type core on closes the loaded any-file sessions of its
+    /// files (they reopen with its pack) and nothing else; turning it off
+    /// closes them again.
+    #[test]
+    fn turning_a_file_type_core_on_closes_its_files_any_file_sessions() {
+        let _m = mirror_lock();
+        crate::test_support::with_temp_home(|| {
+            all_off();
+            let key = |p: &str| key("p1", p);
+            let fake = Fake {
+                loaded: vec![key("board.gbr"), key("board.drl"), key("photo.png"), key("cut.otio"), key("notes.md")],
+                dirty: Vec::new(),
+                failing: Vec::new(),
+                calls: AtomicUsize::new(0),
+                closed: Mutex::new(Vec::new()),
+            };
+            sync_with(&map(&[("any-file", true)]), "owner-token", Some(&fake), count_start);
+            fake.closed.lock().expect("closed").clear();
+            let r = sync_with(&map(&[("any-file", true), ("fab", true)]), "owner-token", Some(&fake), count_start);
+            assert_eq!(r.changed, vec![("fab".to_string(), true)]);
+            assert_eq!(*fake.closed.lock().expect("closed"), vec![key("board.gbr"), key("board.drl")], "only the fab files");
+            fake.closed.lock().expect("closed").clear();
+            sync_with(&map(&[("any-file", true), ("fab", false)]), "owner-token", Some(&fake), count_start);
+            assert_eq!(*fake.closed.lock().expect("closed"), vec![key("board.gbr"), key("board.drl")], "fab off closes its files");
+            fake.closed.lock().expect("closed").clear();
+            sync_with(&map(&[("any-file", true), ("slides", true)]), "owner-token", Some(&fake), count_start);
+            assert!(fake.closed.lock().expect("closed").is_empty(), "turning Slides on closes nothing");
+            all_off();
+        });
     }
 
     /// A deck is served by the Slides core while it is on, and by the
@@ -788,7 +909,7 @@ pub(crate) mod tests {
             assert_eq!(events.len(), 1, "one event per flip: {events:?}");
             assert_eq!(
                 events[0],
-                json!({"kind": "doc_cores_changed", "cores": {"any-file": false, "board": false, "markdown": false, "slides": false, "text": true},
+                json!({"kind": "doc_cores_changed", "cores": {"any-file": false, "blend": false, "board": false, "fab": false, "markdown": false, "slides": false, "text": true, "timeline": false},
                        "core": "markdown", "on": false, "by": "anna"})
             );
             let last = last_changes().lock().expect("last").get("markdown").cloned().expect("last change");
@@ -874,7 +995,7 @@ pub(crate) mod tests {
             set("markdown", true);
             let file = |p: &str| -> Value {
                 let v: Value = serde_json::from_str(&cores_route_for(&crate::docs::caller::owner(), Some(p)).body).expect("json");
-                assert_eq!(v["cores"].as_array().map(Vec::len), Some(5), "the rows are still there");
+                assert_eq!(v["cores"].as_array().map(Vec::len), Some(8), "the rows are still there");
                 v["file"].clone()
             };
             assert_eq!(file("/nowhere/notes.md"), json!({"core": "markdown", "on": true, "liveView": true}));
@@ -889,18 +1010,27 @@ pub(crate) mod tests {
             assert_eq!(file("talk.pptx"), json!({"core": "any-file", "on": false, "liveView": false}));
             set("slides", true);
             assert_eq!(file("talk.pptx"), json!({"core": "slides", "on": true, "liveView": false}));
+            // A timeline (and the other files its core reads), a fab file and
+            // a scene: any-file's while their core is off; their core's while
+            // on, with no live editor for people (it isn't the text editor).
+            for (p, core) in [("cut.otio", "timeline"), ("edit/Info.fcpxml", "timeline"), ("show.prproj", "timeline"), ("board.gbr", "fab"), ("board.drl", "fab"), ("room.blend", "blend")] {
+                assert_eq!(file(p), json!({"core": "any-file", "on": false, "liveView": false}), "{p}");
+                set(core, true);
+                assert_eq!(file(p), json!({"core": core, "on": true, "liveView": false}), "{p}");
+                set(core, false);
+            }
             let none: Value = serde_json::from_str(&cores_route_for(&crate::docs::caller::owner(), Some("  ")).body).expect("json");
             assert!(none.get("file").is_none(), "{none}");
             all_off();
         });
     }
 
-    /// The read route: five rows from the registry (the Board's view is
+    /// The read route: eight rows from the registry (the Board's view is
     /// `garden`), every core off by default, all-zero `open` without a
     /// runtime, and `canChange` only for the owner token and Owner/Admin
     /// logins.
     #[test]
-    fn the_read_route_lists_five_cores_and_says_who_can_change_them() {
+    fn the_read_route_lists_eight_cores_and_says_who_can_change_them() {
         let _m = mirror_lock();
         crate::test_support::with_temp_home(|| {
             all_off();
@@ -912,9 +1042,12 @@ pub(crate) mod tests {
             assert_eq!(owner["ok"], true);
             assert_eq!(owner["canChange"], true);
             let ids: Vec<&str> = owner["cores"].as_array().expect("rows").iter().map(|r| r["id"].as_str().expect("id")).collect();
-            assert_eq!(ids, ["markdown", "text", "any-file", "board", "slides"]);
+            assert_eq!(ids, ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend"]);
             assert_eq!(owner["cores"][3]["view"], "garden");
             assert_eq!(owner["cores"][4]["view"], "none", "Slides: no live view for people yet");
+            for i in 5..8 {
+                assert_eq!(owner["cores"][i]["view"], "none", "{}: no live editor for people", owner["cores"][i]["id"]);
+            }
             for row in owner["cores"].as_array().expect("rows") {
                 assert_eq!(row["on"], false, "{row}");
                 assert_eq!(row["status"], "beta");

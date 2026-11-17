@@ -237,11 +237,13 @@ pub fn agent_rights(agent_project: &str, space: &str, rel: &str, store: Option<&
 /// Rights for `pid` on `key`: the whole rule, used by the kit and by K2's
 /// own pre-checks.
 pub fn rights_for(pid: &str, key: &DocKey, store: Option<&DocStore>) -> DocRights {
-    match Principal::parse(pid) {
+    let r = match Principal::parse(pid) {
         Some(Principal::Person(k)) => person_rights(&k),
         Some(Principal::Agent(id)) => agent_rights(&id, &key.space, &key.path, store).unwrap_or(DocRights::NONE),
         None => DocRights::NONE,
-    }
+    };
+    // A `.blend` is read-only while the blend core is on: no edit for anyone.
+    super::blend_read_only::cap(&key.path, r)
 }
 
 /// The host. Holds only a weak handle on the store (for shares), so it never

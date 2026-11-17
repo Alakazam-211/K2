@@ -300,3 +300,30 @@ fn a_text_name_is_never_demoted() {
     assert_eq!(f.pack_of(name), "text", "still a text doc");
     s.read(a).expect("the text session still answers");
 }
+
+/// Drill, timeline and FCPXML files were live text before their cores (the
+/// text pack takes an unknown name as text when its bytes pass): a doc
+/// stored that way opens at tier 0 through the same demote, once.
+#[test]
+fn drill_timeline_and_fcpxml_files_live_as_text_open_at_tier_0() {
+    for (name, body) in [
+        ("board.drl", "M48\nMETRIC\nT01C0.300\n%\nT01\nX1.0Y1.0\nM30\n"),
+        ("cut.otio", "{\"OTIO_SCHEMA\": \"Timeline.1\", \"name\": \"cut\"}\n"),
+        ("edit.fcpxml", "<?xml version=\"1.0\"?>\n<fcpxml version=\"1.10\"/>\n"),
+    ] {
+        let f = fx("packfile");
+        std::fs::write(f.path(name), body).expect("the file");
+        assert!(
+            !matches!(super::target::Tier::of(name), super::target::Tier::Markdown | super::target::Tier::Text(_)),
+            "{name} is never live text now"
+        );
+        let s = f.open_as_text(name);
+        assert_eq!(f.pack_of(name), "text", "{name}");
+        let (blob, d) = super::open_blob_or_demote(&f.mgr, &key(name), &f.path(name), &f.ws).expect("it opens at tier 0");
+        assert!(d.is_some_and(|d| !d.already), "{name}: this open demoted it");
+        assert_eq!(f.pack_of(name), BLOB_DOC_PACK, "{name}: a tier-0 doc now");
+        let r = blob.join(who("reader"), Stay::Held).expect("join").conn;
+        assert_eq!(blob_current(&blob, r), body.as_bytes(), "{name}: the same bytes");
+        drop(s);
+    }
+}

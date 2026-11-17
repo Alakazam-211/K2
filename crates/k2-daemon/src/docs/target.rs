@@ -26,7 +26,12 @@
 //! shown (`routes`), never to a plain editor. A path keeps its kind for
 //! life (`mv` can't change Markdown, text or any-file). A `.pptx` deck is a
 //! live keyed doc ([`Tier::Deck`], the pptx pack) while the Slides core is
-//! on, and a tier-0 doc while it is off ([`tier_now`]).
+//! on, and a tier-0 doc while it is off ([`tier_now`]); so are an `.otio`
+//! timeline ([`Tier::Timeline`], the timeline core) and a `.blend` scene
+//! ([`Tier::Scene`], the blend core). The other files those cores and the
+//! fab core read (`.fcpxml`, `.prproj`, photoplot and drill files) are
+//! tier-0 docs by name, never live text, indexed by their pack while their
+//! core is on (`blob_packs`).
 //!
 //! **Never live docs** (MI12), refused before any open, on every tier:
 //! - secret files by path or content (`secret_paths::classify`), `secret`;
@@ -45,12 +50,24 @@ pub fn is_deck_file(rel: &str) -> bool {
     name.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && ext.eq_ignore_ascii_case("pptx"))
 }
 
-/// A path's tier now: [`Tier::of`], except that a deck is an any-file doc
-/// while the Slides core is off (as before that core), so every route,
-/// export and the Live socket treat it exactly as they did.
+/// An `.otio` timeline, by its name alone (any case, a name before the dot).
+pub fn is_timeline_file(rel: &str) -> bool {
+    super::blob_packs::kind_by_name(rel) == super::blob_packs::BlobKind::Otio
+}
+
+/// A `.blend` scene, by its name alone (any case, a name before the dot).
+pub fn is_scene_file(rel: &str) -> bool {
+    super::blob_packs::kind_by_name(rel) == super::blob_packs::BlobKind::Blend
+}
+
+/// A path's tier now: [`Tier::of`], except that a live keyed doc is an
+/// any-file doc while its core is off (a deck with the Slides core, a
+/// timeline with the timeline core, a scene with the blend core: as before
+/// those cores), so every route, export and the Live socket treat it
+/// exactly as they did.
 pub fn tier_now(rel: &str) -> Tier {
     match Tier::of(rel) {
-        Tier::Deck if !super::cores::is_on(k2_core::docs_cores::SLIDES) => Tier::Blob,
+        t @ (Tier::Deck | Tier::Timeline | Tier::Scene) if !super::cores::is_on(super::cores::core_of(t)) => Tier::Blob,
         t => t,
     }
 }
@@ -102,6 +119,17 @@ pub enum Tier {
     /// verbs for agents, no live view for people yet. While that core is off
     /// a deck is [`Tier::Blob`] ([`tier_now`]).
     Deck,
+    /// An `.otio` timeline as a live keyed doc (the timeline pack,
+    /// `TimelineLive`), behind the timeline core: tracks, items, markers and
+    /// media by their own keys, the pack's clip and marker verbs for agents.
+    /// People watch it (and follow a playhead). While that core is off it is
+    /// [`Tier::Blob`].
+    Timeline,
+    /// A `.blend` scene as a live keyed doc (the BLEND pack, `BlendLive`),
+    /// behind the blend core: collections and objects by their own keys, the
+    /// pack's object verbs for agents, 3D previews from its mesh read. People
+    /// watch it. While that core is off it is [`Tier::Blob`].
+    Scene,
 }
 
 impl Tier {
@@ -113,6 +141,14 @@ impl Tier {
             Tier::Blob
         } else if is_deck_file(rel) {
             Tier::Deck
+        } else if is_timeline_file(rel) {
+            Tier::Timeline
+        } else if is_scene_file(rel) {
+            Tier::Scene
+        } else if super::blob_packs::is_pack_file(rel) {
+            // `.fcpxml`, `.prproj`, photoplot and drill files: structured
+            // files whose lines point at each other, never live text.
+            Tier::Blob
         } else if k2_mpc_markdown::is_markdown_path(rel) {
             Tier::Markdown
         } else if let Some(pack) = k2_mpc_text::TextPack::for_path(rel) {
@@ -122,42 +158,60 @@ impl Tier {
         }
     }
 
-    /// On the wire: `1` (a live doc: Markdown, the text pack, a deck) or `0`
-    /// (any file).
+    /// On the wire: `1` (a live doc: Markdown, the text pack, a deck, a
+    /// timeline, a scene) or `0` (any file).
     pub fn number(self) -> u8 {
         match self {
-            Tier::Markdown | Tier::Text(_) | Tier::Deck => 1,
+            Tier::Markdown | Tier::Text(_) | Tier::Deck | Tier::Timeline | Tier::Scene => 1,
             Tier::Blob => 0,
         }
     }
 
-    /// The pack's name on the wire: `markdown`, `text`, `pptx` or `blob`.
+    /// A live keyed doc that people watch and agents change with the pack's
+    /// verbs: a deck, a timeline or a scene.
+    pub fn is_keyed(self) -> bool {
+        matches!(self, Tier::Deck | Tier::Timeline | Tier::Scene)
+    }
+
+    /// The pack's name on the wire: `markdown`, `text`, `pptx`,
+    /// `timeline-otio`, `blend` or `blob`. For a keyed doc it is the pack's
+    /// schema name, which the kit stamps on its stored doc.
     pub fn pack(self) -> &'static str {
         match self {
             Tier::Markdown => "markdown",
             Tier::Text(_) => "text",
             Tier::Deck => "pptx",
+            Tier::Timeline => k2_mpc_timeline::live::SCHEMA.name,
+            Tier::Scene => k2_mpc_blend::live::SCHEMA.name,
             Tier::Blob => "blob",
         }
     }
 
     /// The editor family (`markdown`, the text pack's `text` / `code` /
-    /// `config` / `markup` / `diagram` / `csv-as-text`, `deck`, or `none`).
+    /// `config` / `markup` / `diagram` / `csv-as-text`, `deck`, `timeline`,
+    /// `scene`, or `none`).
     pub fn family(self) -> &'static str {
         match self {
             Tier::Markdown => "markdown",
             Tier::Text(f) => f.name(),
             Tier::Deck => "deck",
+            Tier::Timeline => "timeline",
+            Tier::Scene => "scene",
             Tier::Blob => "none",
         }
     }
 
     /// The same kind of doc (`mv` keeps it): Markdown, text (any family:
-    /// one schema), a deck, or any-file.
+    /// one schema), a deck, a timeline, a scene, or any-file.
     pub fn same_kind(self, other: Tier) -> bool {
         matches!(
             (self, other),
-            (Tier::Markdown, Tier::Markdown) | (Tier::Text(_), Tier::Text(_)) | (Tier::Deck, Tier::Deck) | (Tier::Blob, Tier::Blob)
+            (Tier::Markdown, Tier::Markdown)
+                | (Tier::Text(_), Tier::Text(_))
+                | (Tier::Deck, Tier::Deck)
+                | (Tier::Timeline, Tier::Timeline)
+                | (Tier::Scene, Tier::Scene)
+                | (Tier::Blob, Tier::Blob)
         )
     }
 }
@@ -448,6 +502,8 @@ pub fn resolve_new(t: &Target, to: &str) -> Result<(String, PathBuf), Refusal> {
                 Tier::Markdown => format!("{} is a Markdown doc; mv keeps it one (name it .md or .markdown)", t.rel),
                 Tier::Text(_) => format!("{} is a text doc; mv keeps it text ({rel} isn't: Markdown, or not text)", t.rel),
                 Tier::Deck => format!("{} is a deck; mv keeps it one (name it .pptx)", t.rel),
+                Tier::Timeline => format!("{} is a live timeline; mv keeps it one (name it .otio)", t.rel),
+                Tier::Scene => format!("{} is a live scene; mv keeps it one (name it .blend)", t.rel),
                 Tier::Blob => format!("{} is an any-file doc; mv keeps it one ({rel} would be a text doc)", t.rel),
             },
         ));
@@ -748,6 +804,56 @@ mod tests {
         assert!(!Tier::Deck.same_kind(Tier::Blob) && !Tier::Blob.same_kind(Tier::Deck));
     }
 
+    /// An `.otio` is a timeline and a `.blend` a scene by name: live keyed
+    /// docs (tier 1, their packs' schema names), and mv keeps each one. The
+    /// other files the timeline and fab cores read are any-file docs by
+    /// name, never live text, though the text pack would take most of them.
+    #[test]
+    fn timelines_and_scenes_by_name_and_the_other_pack_files_are_any_file() {
+        for name in ["cut.otio", "a/b/Cut.OTIO", ".x.otio"] {
+            assert!(is_timeline_file(name), "{name}");
+            assert_eq!(Tier::of(name), Tier::Timeline, "{name}");
+        }
+        for name in ["scene.blend", "a/Room.BLEND"] {
+            assert!(is_scene_file(name), "{name}");
+            assert_eq!(Tier::of(name), Tier::Scene, "{name}");
+        }
+        for name in [".otio", "cut.otio.json", "scene.blend1", "otio", "dir.otio/a.md"] {
+            assert!(!is_timeline_file(name) && !is_scene_file(name), "{name}");
+            assert!(!matches!(Tier::of(name), Tier::Timeline | Tier::Scene), "{name}");
+        }
+        for name in ["edit/Info.fcpxml", "Show.prproj", "board.gbr", "board.GTL", "board.ger", "board.drl", "board.xnc", "board.xln", "board.ncd", "board.gko"] {
+            assert_eq!(Tier::of(name), Tier::Blob, "{name}");
+        }
+        assert!(k2_mpc_text::TextPack::for_path("board.gbr").is_some(), "the text pack would take a photoplot file as text");
+        assert_eq!((Tier::Timeline.number(), Tier::Timeline.pack(), Tier::Timeline.family()), (1, "timeline-otio", "timeline"));
+        assert_eq!((Tier::Scene.number(), Tier::Scene.pack(), Tier::Scene.family()), (1, "blend", "scene"));
+        assert_eq!(Tier::Deck.pack(), k2_mpc_pptx::live::SCHEMA.name, "a keyed tier's pack is its schema's name");
+        for t in [Tier::Deck, Tier::Timeline, Tier::Scene] {
+            assert!(t.is_keyed() && t.same_kind(t), "{t:?}");
+            assert!(!t.same_kind(Tier::Blob) && !Tier::Blob.same_kind(t), "{t:?}");
+        }
+        assert!(!Tier::Timeline.same_kind(Tier::Scene) && !Tier::Deck.same_kind(Tier::Timeline));
+        assert!(!Tier::Blob.is_keyed() && !Tier::Markdown.is_keyed());
+    }
+
+    /// While its core is off, a live keyed doc is an any-file doc; on, its
+    /// own tier.
+    #[test]
+    fn a_timeline_or_scene_is_any_file_while_its_core_is_off() {
+        let _l = super::super::cores::tests::mirror_lock();
+        super::super::cores::tests::all_off();
+        assert_eq!(tier_now("cut.otio"), Tier::Blob);
+        assert_eq!(tier_now("room.blend"), Tier::Blob);
+        super::super::cores::set_for_test("timeline", true);
+        assert_eq!(tier_now("cut.otio"), Tier::Timeline);
+        assert_eq!(tier_now("room.blend"), Tier::Blob, "the blend core is its own");
+        super::super::cores::set_for_test("blend", true);
+        assert_eq!(tier_now("room.blend"), Tier::Scene);
+        assert_eq!(tier_now("edit.fcpxml"), Tier::Blob, "an .fcpxml is tier 0, on or off");
+        super::super::cores::tests::all_off();
+    }
+
     #[test]
     fn a_share_can_name_a_board_file_and_the_deny_list_stays_about_paths() {
         let d = tmp();
@@ -827,7 +933,7 @@ mod tests {
     #[test]
     fn design_cad_and_3d_files_are_any_file_docs() {
         for p in [
-            "art/poster.psd", "art/big.PSB", "scene.blend", "scene.blend1", "part.dwg", "plan.DXF", "gear.step", "gear.stp",
+            "art/poster.psd", "art/big.PSB", "scene.blend1", "part.dwg", "plan.DXF", "gear.step", "gear.stp",
             "gear.iges", "site.ifc", "board.kicad_pcb", "bracket.sldprt", "body.f3d", "house.skp", "print.stl", "mesh.obj", "mesh.ply", "model.fbx",
             "model.glb", "model.gltf", "print.3mf", "stage.usdz", "sheet.kicad_sch", "lib.kicad_sym",
             "fp.kicad_mod", "part.p21", "site.ifczip",

@@ -11,8 +11,9 @@
 //! | Limit | Linux | macOS | Windows |
 //! |---|---|---|---|
 //! | memory | the worker's counting allocator + `RLIMIT_AS` (cap + 256 MiB) | the allocator + a 250 ms watchdog on `ri_phys_footprint` (SIGKILL over the cap; `RLIMIT_AS` isn't enforced on macOS) | the allocator + the worker's Job Object: `JOB_OBJECT_LIMIT_PROCESS_MEMORY` = the `RLIMIT_AS` number (native allocations count; a commit past it fails, the job's memory-limit message → the watchdog kills) |
-//! | time | the wall deadline (kill) + `RLIMIT_CPU` = wall + 5 s | same | the wall deadline (kill) + the Job Object's per-process CPU time = the `RLIMIT_CPU` number (Windows ends it; reported as time) |
+//! | time | the wall deadline (kill) + `RLIMIT_CPU` = wall + 5 s | same | the wall deadline (kill) + the Job Object's per-process user-mode CPU time, capped at the `RLIMIT_CPU` number (on unix that counts user + system time; Windows ends it; reported as time) |
 //! | files | `RLIMIT_FSIZE` 0, `RLIMIT_NOFILE` 16, `RLIMIT_CORE` 0 | same | — |
+//! | network | not limited | not limited | not limited yet (a Job Object can't close the network; an AppContainer is the next step) |
 //! | processes | `PR_SET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG` = SIGKILL | the worker exits when its parent changes | the Job Object: one process (`ACTIVE_PROCESS_LIMIT` = 1: no children), `KILL_ON_JOB_CLOSE` (it dies with the host), `DIE_ON_UNHANDLED_EXCEPTION` (a crash ends at once, no dialog) |
 //! | output | the host counts `D` bytes: past the cap → kill | same | same |
 //!
@@ -111,7 +112,7 @@ const WHY_MEMORY: u8 = 3;
 const WHY_OUTPUT: u8 = 4;
 const WHY_BREACH: u8 = 5;
 const WHY_IO: u8 = 6;
-/// Windows: the Job Object ended the worker at its CPU time.
+/// Windows: the Job Object ended the worker at its user-mode CPU time.
 const WHY_CPU: u8 = 7;
 
 /// `describe`: the targets the worker offers for `kind` (its `R` payload's

@@ -18,7 +18,7 @@
 //! | Limit | Linux | macOS | Windows |
 //! |---|---|---|---|
 //! | memory | the worker's counting allocator (a `too_large` line, then abort) + `RLIMIT_AS` (cap + 512 MiB headroom) + the watchdog on RSS (`/proc/<pid>/statm`, every 50 ms; SIGKILL over the cap) | the allocator + the watchdog on the physical footprint (`proc_pid_rusage`; `RLIMIT_AS` isn't enforced on macOS) | the allocator + the worker's Job Object: `JOB_OBJECT_LIMIT_PROCESS_MEMORY` = the `RLIMIT_AS` number (native allocations count; a commit past it fails, the job's memory-limit message → the watchdog kills) |
-//! | time | the wall deadline (SIGKILL) + `RLIMIT_CPU` = wall × max(1, threads) + 5 s (SIGXCPU) | same | the wall deadline (kill) + the Job Object's per-process CPU time = the `RLIMIT_CPU` number (Windows ends it; reported as time) |
+//! | time | the wall deadline (SIGKILL) + `RLIMIT_CPU` = wall × max(1, threads) + 5 s (SIGXCPU) | same | the wall deadline (kill) + the Job Object's per-process user-mode CPU time, capped at the `RLIMIT_CPU` number (on unix that counts user + system time; Windows ends it; reported as time) |
 //! | files | `RLIMIT_FSIZE` 0 (it writes no file), `RLIMIT_NOFILE` 64, `RLIMIT_CORE` 0 | same | — |
 //! | network | a seccomp filter: `socket(2)` and `io_uring_setup(2)` fail with `EACCES` (and any syscall of another ABI, x32 included, with `EPERM`) | the worker puts itself in the `no-network` sandbox profile (`sandbox_init`) before it reads its input; best effort: a failure is logged to stderr and it goes on (it fails when the host itself already runs in a sandbox, as K2 Compute's macOS jobs do) | none yet (a documented gap: a Job Object can't close the network; AppContainer is the next step) |
 //! | processes | `PR_SET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG` = SIGKILL (then the parent checked against the host's pid on argv) | the parent checked against the host's pid, then the worker exits when its parent changes | the Job Object: one process (`ACTIVE_PROCESS_LIMIT` = 1: no children), `KILL_ON_JOB_CLOSE` (it dies with the host), `DIE_ON_UNHANDLED_EXCEPTION` (a crash ends at once, no dialog) |
@@ -134,7 +134,7 @@ const WHY_TIME: u8 = 1;
 const WHY_MEMORY: u8 = 2;
 const WHY_OUTPUT: u8 = 3;
 const WHY_BREACH: u8 = 4;
-/// Windows: the Job Object ended the worker at its CPU time.
+/// Windows: the Job Object ended the worker at its user-mode CPU time.
 const WHY_CPU: u8 = 5;
 
 /// Render `req` with the worker at `bin`, within `limits`.
@@ -364,7 +364,7 @@ fn decide(
         WHY_TIME => return fail(FailureCode::Timeout, format!("still running after {} ms", limits.wall.as_millis())),
         WHY_MEMORY => return fail(FailureCode::TooLarge, format!("memory: over {} MiB", limits.memory_bytes >> 20)),
         WHY_OUTPUT => return fail(FailureCode::TooLarge, format!("the image is over {} bytes", limits.max_output_bytes)),
-        WHY_CPU => return fail(FailureCode::Timeout, "the CPU limit".into()),
+        WHY_CPU => return fail(FailureCode::Timeout, "the CPU limit (user-mode CPU time)".into()),
         _ => {}
     }
     if let Some(m) = breach {
@@ -453,7 +453,7 @@ fn configure(cmd: &mut Command, limits: &Limits) {
 }
 
 /// The CPU seconds a render may use: wall × max(1, threads) + 5 s
-/// (`RLIMIT_CPU` on unix, the Job Object's CPU time on Windows).
+/// (`RLIMIT_CPU` on unix, the Job Object's user-mode CPU time on Windows).
 fn cpu_secs(limits: &Limits) -> u64 {
     limits.wall.as_secs().saturating_mul(u64::from(limits.threads.max(1))).saturating_add(5)
 }

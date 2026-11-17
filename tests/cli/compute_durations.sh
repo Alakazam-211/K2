@@ -3,10 +3,12 @@
 # `--timeout 1h30m` died with "value too great for base"). Compound
 # durations add up; anything that isn't digits plus a unit is the usage
 # error, and never reaches shell arithmetic.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+. "$ROOT/tests/cli/_cli_under_test.sh"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-awk '/^_compute_secs\(\) \{/{f=1} /^_compute_bytes\(\) \{/{f=1} f{print} f&&/^\}/{f=0}' "$ROOT/cli/k2" > "$TMP/fns.sh"
+awk '/^_compute_secs\(\) \{/{f=1} /^_compute_bytes\(\) \{/{f=1} f{print} f&&/^\}/{f=0}' "$CLI_BASH_SOURCE" > "$TMP/fns.sh"
 . "$TMP/fns.sh"
 fail=0
 eq() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got '$2', want '$3'"; fail=1; fi; }

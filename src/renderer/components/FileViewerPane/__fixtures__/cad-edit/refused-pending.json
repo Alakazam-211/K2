@@ -1,0 +1,31 @@
+{
+ "schema": "mpc.result/1",
+ "verb": "entity move",
+ "kind": "edit",
+ "ok": false,
+ "exit": 2,
+ "version": {
+  "base": 7,
+  "after": null,
+  "if_version": null,
+  "base_given": 7
+ },
+ "changed": null,
+ "data": null,
+ "data_schema": null,
+ "error": {
+  "id": "MPC-E713",
+  "exit": 2,
+  "message": "the index is being built",
+  "next": "retry after a moment",
+  "details": {
+   "retry_after_ms": 250
+  }
+ },
+ "conflicts": [],
+ "notes": [],
+ "warnings": [],
+ "view": null,
+ "dry_run": false,
+ "stdout": ""
+}

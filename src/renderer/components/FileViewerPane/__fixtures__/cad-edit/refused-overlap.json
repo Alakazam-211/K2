@@ -1,0 +1,38 @@
+{
+ "schema": "mpc.result/1",
+ "verb": "entity move",
+ "kind": "edit",
+ "ok": false,
+ "exit": 1,
+ "version": {
+  "base": 7,
+  "after": null,
+  "if_version": null,
+  "base_given": 7
+ },
+ "changed": null,
+ "data": null,
+ "data_schema": null,
+ "error": {
+  "id": "MPC-E723",
+  "exit": 1,
+  "message": "an entity this call changes was changed since version 7",
+  "next": "read again, then retry",
+  "details": {
+   "conflicts": [
+    {
+     "address": "@h:41",
+     "field": "geom",
+     "by": "Atlas",
+     "change": 8
+    }
+   ]
+  }
+ },
+ "conflicts": [],
+ "notes": [],
+ "warnings": [],
+ "view": null,
+ "dry_run": false,
+ "stdout": ""
+}

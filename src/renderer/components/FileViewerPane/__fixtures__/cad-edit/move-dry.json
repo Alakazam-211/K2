@@ -1,0 +1,146 @@
+{
+ "schema": "mpc.result/1",
+ "verb": "entity move",
+ "kind": "edit",
+ "ok": true,
+ "exit": 0,
+ "version": {
+  "base": 7,
+  "after": null,
+  "if_version": null,
+  "base_given": 7
+ },
+ "changed": {
+  "word": "moved",
+  "counts": [],
+  "units": [],
+  "lines": null,
+  "bytes": {
+   "size_before": 41230,
+   "size_after": 41230,
+   "spans": 2,
+   "removed": 2,
+   "inserted": 2,
+   "after_digest": "sha256:5f1c0e9a7b2d4c6e8f0a1b3c5d7e9f1a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e"
+  }
+ },
+ "data": {
+  "schema": "cad.change/1",
+  "format": "dxf",
+  "from": null,
+  "to": null,
+  "units": {
+   "word": "mm",
+   "insunits": 4,
+   "measurement": 1,
+   "source": "insunits"
+  },
+  "pairing": "kept",
+  "versions": [],
+  "entities": [
+   {
+    "address": "@h:41",
+    "op": "changed",
+    "kind": "LINE",
+    "layer": "A-WALL",
+    "owner": "model",
+    "fields": [
+     "geom"
+    ],
+    "bbox_before": [
+     0,
+     2,
+     10,
+     2
+    ],
+    "bbox_after": [
+     5,
+     2,
+     15,
+     2
+    ],
+    "bbox_q": "exact",
+    "version": null,
+    "by": null,
+    "identity": null
+   },
+   {
+    "address": "@h:A00",
+    "op": "changed",
+    "kind": "LINE",
+    "layer": "A-WALL",
+    "owner": "model",
+    "fields": [
+     "geom"
+    ],
+    "bbox_before": [
+     0,
+     0,
+     10,
+     0
+    ],
+    "bbox_after": [
+     5,
+     0,
+     15,
+     0
+    ],
+    "bbox_q": "exact",
+    "version": null,
+    "by": null,
+    "identity": null
+   },
+   {
+    "address": "@h:A01",
+    "op": "changed",
+    "kind": "LINE",
+    "layer": "A-WALL",
+    "owner": "model",
+    "fields": [
+     "geom"
+    ],
+    "bbox_before": [
+     0,
+     1,
+     10,
+     1
+    ],
+    "bbox_after": [
+     5,
+     1,
+     15,
+     1
+    ],
+    "bbox_q": "exact",
+    "version": null,
+    "by": null,
+    "identity": null
+   }
+  ],
+  "entities_more": 0,
+  "tables": [],
+  "blocks": [],
+  "page": null,
+  "verb": "entity move",
+  "word": "moved",
+  "handseed": null,
+  "plan": {
+   "spans": 2,
+   "replacements": 2,
+   "inserts": 0,
+   "removals": 0,
+   "pairs_inserted": 0,
+   "pairs_removed": 0
+  }
+ },
+ "data_schema": "cad.change/1",
+ "error": null,
+ "conflicts": [],
+ "notes": [],
+ "warnings": [],
+ "view": {
+  "address": "@h:41"
+ },
+ "dry_run": true,
+ "stdout": "moved @h:41 @h:A00 @h:A01 by 5,0"
+}

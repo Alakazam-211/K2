@@ -1,0 +1,29 @@
+{
+ "schema": "mpc.result/1",
+ "verb": "entity move",
+ "kind": "edit",
+ "ok": false,
+ "exit": 2,
+ "version": {
+  "base": 7,
+  "after": null,
+  "if_version": null,
+  "base_given": 7
+ },
+ "changed": null,
+ "data": null,
+ "data_schema": null,
+ "error": {
+  "id": "DXF-E045",
+  "exit": 2,
+  "message": "@h:41 is on a locked layer",
+  "next": "unlock the layer in the app, then retry",
+  "details": {}
+ },
+ "conflicts": [],
+ "notes": [],
+ "warnings": [],
+ "view": null,
+ "dry_run": false,
+ "stdout": ""
+}

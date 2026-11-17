@@ -1,0 +1,38 @@
+{
+ "schema": "mpc.result/1",
+ "verb": "attrib set",
+ "kind": "edit",
+ "ok": true,
+ "exit": 0,
+ "version": {
+  "base": 7,
+  "after": null,
+  "if_version": null,
+  "base_given": 7
+ },
+ "changed": {
+  "word": "set",
+  "counts": [],
+  "units": [],
+  "lines": null,
+  "bytes": {
+   "size_before": 41230,
+   "size_after": 41230,
+   "spans": 2,
+   "removed": 2,
+   "inserted": 2,
+   "after_digest": "sha256:5f1c0e9a7b2d4c6e8f0a1b3c5d7e9f1a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e"
+  }
+ },
+ "data": null,
+ "data_schema": null,
+ "error": null,
+ "conflicts": [],
+ "notes": [],
+ "warnings": [],
+ "view": {
+  "address": "@h:41"
+ },
+ "dry_run": true,
+ "stdout": "no change: NO of @h:61 is already D-01"
+}

@@ -662,7 +662,15 @@ fn open_exclusive(path: &Path) -> std::io::Result<fs::File> {
         use std::os::unix::fs::OpenOptionsExt;
         o.custom_flags(libc::O_NOFOLLOW);
     }
-    o.open(path)
+    match o.open(path) {
+        // Windows answers a create over a FOLDER with access denied, not
+        // "exists": anything already at the path is taken, as on unix.
+        #[cfg(windows)]
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && fs::symlink_metadata(path).is_ok() => {
+            Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, e))
+        }
+        r => r,
+    }
 }
 
 // ── New "Untitled" files (Cmd+N, the tab + menu, the Board tab) ────────
@@ -2115,6 +2123,19 @@ mod tests {
         let err = create_new_free(names.path(), "x.bin").expect_err("every name taken");
         assert!(err.contains("no free name"), "{err}");
         assert_eq!(fs::read(names.path().join("x.bin")).unwrap(), b"", "the first name is not overwritten");
+    }
+
+    /// A folder already at the upload's name is a taken name on every OS
+    /// (Windows reports it as access denied, not "exists").
+    #[test]
+    fn write_upload_skips_a_folder_at_its_name() {
+        let tmp = TempDir::new("upload-folder");
+        let canon = dunce::canonicalize(&tmp.path()).unwrap();
+        fs::create_dir(tmp.path().join("a.txt")).unwrap();
+        let p = write_upload(&tmp.s(), "a.txt", b"new").expect("upload");
+        assert_eq!(p, canon.join("a (1).txt"));
+        assert_eq!(fs::read(&p).unwrap(), b"new");
+        assert!(tmp.path().join("a.txt").is_dir(), "the folder is untouched");
     }
 
     #[test]

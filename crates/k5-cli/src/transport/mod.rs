@@ -5,8 +5,8 @@
 //! functions in `cli/src/cli-tools-policy.sh` (`cli_request`,
 //! `cli_request_post`, `cli_post_form`, `cli_post_json`,
 //! `cli_post_json_stdin`) and `cli/src/cell-socket.sh` (their `_uds`
-//! twins, `cli_send`, `cli_send_json`), all through `_k2_curl`. Nothing
-//! calls it from `main` yet.
+//! twins, `cli_send`, `cli_send_json`), all through `_k2_curl`. The
+//! binary's own verbs call it (`k5 --version --check`).
 //!
 //! - [`wire`]: one exchange, written as curl writes it.
 //! - [`client`]: the calls, their tries and time limits.

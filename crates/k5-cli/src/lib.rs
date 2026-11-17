@@ -21,7 +21,9 @@
 //!   CLI's curl sends for the same call, over loopback TCP and the cell
 //!   socket, with its tries, time limits and permission note, and the one
 //!   line when the server's version is not the binary's
-//!   ([`transport::skew`]). Nothing in `main` calls it yet.
+//!   ([`transport::skew`]).
+//! - [`daemon`]: where the daemon is and the credential the binary's own
+//!   requests use, by the shell CLI's settings.
 //! - [`called_as`]: the name the command was called by (k2 or k5), and the
 //!   variables the front hands the shell when a verb falls through.
 //! - [`home`]: the K2 home and a workspace's private folder, by k2-client's
@@ -30,14 +32,16 @@
 //!   top-level `case`: who answers each command (the binary, its
 //!   `--schema` entry, or the shell CLI).
 //! - [`front`]: what the binary (`src/main.rs`, `k5-cli`) does with a
-//!   command line, by the route table: `--version` here, everything else
-//!   to the shell CLI.
+//!   command line, by the route table: `--version` and `--version
+//!   --check` ([`check`]) here, everything else to the shell CLI.
 //! - [`fallthrough`]: handing a verb to the shell CLI, byte for byte, from
 //!   the copy of `cli/k2` packed into the binary ([`embedded`]).
 //! - [`passport`]: the passport rule the front applies before a verb
 //!   falls through. It only counts for now.
 
 pub mod called_as;
+pub mod check;
+pub mod daemon;
 pub mod embedded;
 pub mod exit;
 pub mod fallthrough;

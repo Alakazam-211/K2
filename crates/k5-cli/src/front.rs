@@ -2,8 +2,9 @@
 //! to the shell CLI.
 //!
 //! The route table ([`crate::route`]) says who answers. Today its one
-//! `Native` row is the version, and the front answers it only with
-//! nothing after it. Everything else falls through, byte for byte
+//! `Native` row is the version, and the front answers it alone or as
+//! exactly `--version --check`. A form the front's code does not take
+//! falls through, as does everything else, byte for byte
 //! ([`crate::fallthrough`]).
 
 use crate::route::{self, Noun, Owner};
@@ -14,6 +15,9 @@ use std::ffi::OsString;
 pub enum Route {
     /// `--version`, `-v` or `version`, with nothing after it.
     Version,
+    /// Exactly `--version --check`: the version, then the server's
+    /// ([`crate::check`]).
+    VersionCheck,
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
@@ -31,8 +35,16 @@ pub fn route(args: &[OsString]) -> Route {
 /// The front's own code for a `Native` row. A form it does not take
 /// falls through.
 fn native(noun: &Noun, args: &[OsString]) -> Route {
-    if noun.names("version") && args.len() == 1 {
-        return Route::Version;
+    let words: Option<Vec<&str>> = args.iter().map(|a| a.to_str()).collect();
+    let Some(words) = words else {
+        return Route::Fallthrough;
+    };
+    if noun.names("version") {
+        return match words.as_slice() {
+            [_] => Route::Version,
+            ["--version", "--check"] => Route::VersionCheck,
+            _ => Route::Fallthrough,
+        };
     }
     Route::Fallthrough
 }
@@ -67,6 +79,11 @@ mod tests {
             &["--version="],
             &[" --version"],
             &["--version", "--json"],
+            &["--version", "--check", "x"],
+            &["-v", "--check"],
+            &["version", "--check"],
+            &["--check", "--version"],
+            &["--version", "--Check"],
             &["version", "x"],
             &["-v", ""],
             &["--json", "--version"],
@@ -78,11 +95,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn only_the_exact_check_pair_asks_the_server() {
+        assert_eq!(route(&args(&["--version", "--check"])), Route::VersionCheck);
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_argument_that_is_not_utf8_falls_through() {
         use std::os::unix::ffi::OsStringExt;
         assert_eq!(route(&[OsString::from_vec(b"--version\xff".to_vec())]), Route::Fallthrough);
+        assert_eq!(route(&[OsString::from("--version"), OsString::from_vec(b"--check\xff".to_vec())]), Route::Fallthrough);
     }
 
     /// A `Native` row is one the front has code for, under each of its

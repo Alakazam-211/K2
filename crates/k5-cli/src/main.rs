@@ -1,7 +1,8 @@
-//! `k5-cli`: the k5 command line's front. It answers `--version` itself
-//! and hands every other verb to the shell CLI it carries
-//! ([`k5_cli::fallthrough`]). Before a verb falls through, the passport
-//! rule ([`k5_cli::passport`]) runs; for now it only counts.
+//! `k5-cli`: the k5 command line's front. It answers `--version` and
+//! `--version --check` itself and hands every other verb to the shell CLI
+//! it carries ([`k5_cli::fallthrough`]). Before a verb
+//! falls through, the passport rule ([`k5_cli::passport`]) runs; for now
+//! it only counts. The binary's own requests carry its verdict too.
 //!
 //! The result goes to stdout and the front's own errors to stderr
 //! ([`k5_cli::out`]); the exit codes are [`k5_cli::exit::Exit`]'s. The
@@ -11,8 +12,38 @@
 use k5_cli::called_as::CalledAs;
 use k5_cli::exit::Exit;
 use k5_cli::front::{self, Route};
-use k5_cli::{embedded, fallthrough, out, passport};
+use k5_cli::{check, daemon, embedded, fallthrough, out, passport};
 use std::ffi::OsString;
+
+/// Writes `text` to stdout; the exit after it.
+fn print(text: &str, then: Exit) -> Exit {
+    match out::stdout(text) {
+        Ok(()) => then,
+        Err(err) => out::after_stdout_error(&err),
+    }
+}
+
+/// `--version --check`.
+fn version_check(args: &[OsString]) -> Exit {
+    let ours = embedded::version();
+    if let Err(err) = out::stdout(&front::version_line(ours)) {
+        return out::after_stdout_error(&err);
+    }
+    let client = daemon::current().map_err(|e| (e.to_string(), Exit::Error)).and_then(|s| {
+        s.client(passport::current(args).would_refuse()).map_err(|e| (e.to_string(), Exit::DaemonUnreachable))
+    });
+    let outcome = match client {
+        Ok(mut c) => check::run(ours, &mut c),
+        Err((line, exit)) => check::Outcome::Failed(line, exit),
+    };
+    match outcome {
+        check::Outcome::Answer(line) => print(&format!("{line}\n"), Exit::Ok),
+        check::Outcome::Failed(line, exit) => {
+            out::stderr_line(&line);
+            exit
+        }
+    }
+}
 
 fn main() {
     let mut argv = std::env::args_os();
@@ -20,10 +51,8 @@ fn main() {
     let args: Vec<OsString> = argv.collect();
     let who = CalledAs::current(&argv0);
     let exit = match front::route(&args) {
-        Route::Version => match out::stdout(&front::version_line(embedded::version())) {
-            Ok(()) => Exit::Ok,
-            Err(err) => out::after_stdout_error(&err),
-        },
+        Route::Version => print(&front::version_line(embedded::version()), Exit::Ok),
+        Route::VersionCheck => version_check(&args),
         Route::Fallthrough => {
             // The passport rule, count-only: the shell is told when the
             // call would be refused, and a value the caller set never

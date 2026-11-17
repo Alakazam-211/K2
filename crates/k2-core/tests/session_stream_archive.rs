@@ -16,7 +16,24 @@ use k2_core::session::{
     self, archive, Frame, SemanticKind, SessionEntry, SessionId,
 };
 
-fn tmp_project(tag: &str) -> PathBuf {
+/// A temp project folder, removed when the test ends (pass or fail): the
+/// aggregate test alone writes about 5 GB of archive segments.
+struct TmpProject(PathBuf);
+
+impl std::ops::Deref for TmpProject {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
+}
+
+impl Drop for TmpProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn tmp_project(tag: &str) -> TmpProject {
     let path = std::env::temp_dir().join(format!(
         "k2-archive-test-{}-{}-{}",
         tag,
@@ -28,7 +45,7 @@ fn tmp_project(tag: &str) -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).unwrap();
-    path
+    TmpProject(path)
 }
 
 fn text_frame(s: &str) -> Frame {
@@ -62,7 +79,7 @@ async fn spawn_and_publish_creates_ndjson_with_one_line_per_frame() {
     let project = tmp_project("basic");
     let entry = Arc::new(SessionEntry::new());
 
-    let handle = archive::spawn(session_id, entry.clone(), project.clone());
+    let handle = archive::spawn(session_id, entry.clone(), project.to_path_buf());
     // Yield to let the writer open its file before we publish.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -110,8 +127,8 @@ async fn archive_survives_across_multiple_writer_lifetimes() {
     let entry_a = Arc::new(SessionEntry::new());
     let entry_b = Arc::new(SessionEntry::new());
 
-    let ha = archive::spawn(id_a, entry_a.clone(), project.clone());
-    let hb = archive::spawn(id_b, entry_b.clone(), project.clone());
+    let ha = archive::spawn(id_a, entry_a.clone(), project.to_path_buf());
+    let hb = archive::spawn(id_b, entry_b.clone(), project.to_path_buf());
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     entry_a.publish(text_frame("from-a-1"));
@@ -148,7 +165,7 @@ async fn archive_appends_across_two_runs_on_same_session_id() {
     // First writer's lifetime.
     {
         let entry = Arc::new(SessionEntry::new());
-        let handle = archive::spawn(session_id, entry.clone(), project.clone());
+        let handle = archive::spawn(session_id, entry.clone(), project.to_path_buf());
         tokio::time::sleep(Duration::from_millis(50)).await;
         entry.publish(text_frame("first-run-1"));
         entry.publish(text_frame("first-run-2"));
@@ -159,7 +176,7 @@ async fn archive_appends_across_two_runs_on_same_session_id() {
     // Second writer, same session_id.
     {
         let entry = Arc::new(SessionEntry::new());
-        let handle = archive::spawn(session_id, entry.clone(), project.clone());
+        let handle = archive::spawn(session_id, entry.clone(), project.to_path_buf());
         tokio::time::sleep(Duration::from_millis(50)).await;
         entry.publish(text_frame("second-run-1"));
         drop(entry);
@@ -183,7 +200,7 @@ async fn semantic_event_frames_round_trip_through_archive() {
     let session_id = SessionId::new();
     let entry = Arc::new(SessionEntry::new());
 
-    let handle = archive::spawn(session_id, entry.clone(), project.clone());
+    let handle = archive::spawn(session_id, entry.clone(), project.to_path_buf());
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let semantic = Frame::SemanticEvent {
@@ -220,7 +237,7 @@ async fn empty_session_produces_empty_archive_file() {
     let session_id = SessionId::new();
     let entry = Arc::new(SessionEntry::new());
 
-    let handle = archive::spawn(session_id, entry.clone(), project.clone());
+    let handle = archive::spawn(session_id, entry.clone(), project.to_path_buf());
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     drop(entry);
@@ -280,7 +297,7 @@ async fn active_segment_rotates_past_boundary() {
     // Now spin up the writer; it sees bytes_in_current > ROTATE_BYTES
     // already, so the very next write triggers rotation.
     let entry = Arc::new(SessionEntry::new());
-    let handle = archive::spawn(session_id, entry.clone(), project.clone());
+    let handle = archive::spawn(session_id, entry.clone(), project.to_path_buf());
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     entry.publish(text_frame("post-rotation"));
@@ -330,7 +347,7 @@ async fn rotation_index_increments_across_multiple_rotations() {
     std::fs::write(archive_dir.join("archive.ndjson"), &fat_line).unwrap();
 
     let entry = Arc::new(SessionEntry::new());
-    let handle = archive::spawn(session_id, entry.clone(), project.clone());
+    let handle = archive::spawn(session_id, entry.clone(), project.to_path_buf());
     tokio::time::sleep(Duration::from_millis(50)).await;
     entry.publish(text_frame("bump"));
     drop(entry);
@@ -369,7 +386,7 @@ async fn aggregate_hard_limit_freezes_writes_but_keeps_session_alive() {
     drop(f);
 
     let entry = Arc::new(SessionEntry::new());
-    let handle = archive::spawn(session_id, entry.clone(), project.clone());
+    let handle = archive::spawn(session_id, entry.clone(), project.to_path_buf());
     tokio::time::sleep(Duration::from_millis(50)).await;
     entry.publish(text_frame("should-not-appear"));
     drop(entry);

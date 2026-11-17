@@ -18,7 +18,7 @@ and it is never committed or shipped. No sample drawing is committed: public sam
 inputs on test machines only, by reference.
 
 DXF and DWG are trademarks of their owner. This repo reads files in the DXF and DWG formats
-(this release has no edit verbs). It is not affiliated with, endorsed by or
+and edits DXF files through its edit verbs; it writes no DWG. It is not affiliated with, endorsed by or
 sponsored by that owner, and makes no compatibility claim. The names are used here only to name
 the file formats.
 

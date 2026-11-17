@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.2.0: pairs with kit v0.22.0
 
-Built against the kit (k2-mpc-base) **v0.22.0** (its release commit bfdb6217; after v0.21.0: the tier-0 verb path,
-the pack's refusals by id, a hold's reach per node kind, pairing across an outside save, and
-`AgentWrites::VerbsOnly`). `Cargo.lock` and `fuzz/Cargo.lock` name that kit.
+**Requires `k2-mpc-base` v0.22.0**, checked out beside this repo (a host vendors both side by
+side: `vendor/k2-mpc-base` beside `vendor/k2-mpc-cad`). After v0.21.0 that kit adds what this
+release uses: the tier-0 verb path, a pack's refusals by id, a hold's reach per node kind, pairing
+across an outside save, and `AgentWrites::VerbsOnly`. The crates are 0.2.0; `Cargo.lock` and
+`fuzz/Cargo.lock` name that kit.
 
 ### Provenance
 - `PROVENANCE.md` rows for the edit verbs (`crates/dxf/src/edit/`: our own code from the DXF

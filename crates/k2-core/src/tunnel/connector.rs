@@ -644,7 +644,7 @@ impl std::fmt::Display for SpawnBlock {
             SpawnBlock::Released => write!(
                 f,
                 "this device's tunnel identity was released (unpaired) — it can no \
-                 longer claim its old subdomain; sign in again under \"k2.dev account\" in \
+                 longer claim its old subdomain; sign in to your account again in \
                  Settings → Network → Tunnel to mint a fresh identity"
             ),
             SpawnBlock::Unreadable(e) => write!(f, "tunnel state unreadable: {e}"),

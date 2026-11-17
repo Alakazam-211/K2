@@ -347,7 +347,7 @@ pub fn handle_refresh(params: &HashMap<String, String>) -> CliResponse {
     });
     if !checked {
         body["hint"] = serde_json::json!(
-            "no tunnel token on this server — sign in to your k2.dev account in Settings → Network → Tunnel, then check again"
+            "no tunnel token on this server — sign in to your account in Settings → Network → Tunnel, then check again"
         );
     }
     if single.is_some() {

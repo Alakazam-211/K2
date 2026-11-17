@@ -85,7 +85,7 @@ pub fn select_challenge(binding: &DomainBinding, hostname: &str) -> Result<Chall
         if crate::dns::proxy::tunnel_bearer_token().is_err() {
             return Err(
                 "DNS-01 needs a Connect tunnel token to plant TXT via k2 dns — \
-sign in to your k2.dev account in Settings → Network → Tunnel, or point the name here and use HTTP-01/:80 or TLS-ALPN/:443"
+sign in to your account in Settings → Network → Tunnel, or point the name here and use HTTP-01/:80 or TLS-ALPN/:443"
                     .into(),
             );
         }

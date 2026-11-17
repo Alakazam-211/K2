@@ -21,8 +21,15 @@
 //!   variables the front hands the shell when a verb falls through.
 //! - [`home`]: the K2 home and a workspace's private folder, by k2-client's
 //!   rules.
+//! - [`front`]: what the binary (`src/main.rs`, `k5-cli`) does with a
+//!   command line: `--version` here, everything else to the shell CLI.
+//! - [`fallthrough`]: handing a verb to the shell CLI, byte for byte, from
+//!   the copy of `cli/k2` packed into the binary ([`embedded`]).
 
 pub mod called_as;
+pub mod embedded;
+pub mod fallthrough;
+pub mod front;
 pub mod home;
 pub mod out;
 pub mod transport;

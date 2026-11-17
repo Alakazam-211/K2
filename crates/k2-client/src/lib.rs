@@ -71,7 +71,9 @@ pub mod release_sums;
 pub mod wake;
 #[cfg(windows)]
 pub mod win_autostart;
-#[cfg(windows)]
+/// Git Bash for the bash CLI on Windows: the `k2.cmd` wrapper and the
+/// search the k5 command line shares with it. Builds everywhere so its
+/// search is tested everywhere.
 pub mod win_cli;
 /// A workspace's private folder: `.k2`, or an older workspace's `.k2so`.
 pub mod workspace_dir;

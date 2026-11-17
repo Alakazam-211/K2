@@ -229,7 +229,7 @@ export function SearchableAgentList({
 
   return (
     <>
-      <div className="p-1.5 border-b border-[var(--color-border)]">
+      <div className="p-1.5 border-b border-[var(--color-border)]" data-agent-list-search="">
         {searchStyle === 'field' ? (
           <SearchField
             ref={searchRef}
@@ -275,7 +275,7 @@ export function SearchableAgentList({
             data-dim={section.dim ? '' : undefined}
           >
             {section.label !== null && (
-              <div className={`flex items-center gap-1.5 px-2 pt-2 pb-1 select-none${section.dim ? ' opacity-50' : ''}`}>
+              <div className={`flex items-center gap-1.5 px-2 pt-2 pb-1 select-none${section.dim ? ' opacity-50' : ''}`} data-agent-list-head="">
                 {section.accent ? (
                   <span className="w-1 h-3 flex-shrink-0 bg-[var(--color-accent)]" />
                 ) : (

@@ -2091,6 +2091,17 @@ html[data-style="terminal"] .k2-slider::-webkit-slider-thumb {
    menu is open (⌘L), as Home's hidden trigger does. */
 [data-top-bar-fit="minimal"] :is([data-server-switcher]:not([aria-expanded="true"]), [data-top-bar-pipe]) { display: none; }
 
+/* Add to Home: the search field, section heads, rows and a section's note
+   start on the dialog's 20px edge (px-5), the title's and the tabs'. The
+   shared list pads them for a menu (6-8px); a note keeps its own 8px, so
+   its box adds the rest. */
+[data-add-to-home-panel] :is([data-agent-list-search], [data-agent-list-head], [data-ws-filter-value]) {
+  padding-inline: calc(var(--spacing) * 5);
+}
+[data-add-to-home-panel] [data-agent-list-status] {
+  padding-inline: calc(calc(var(--spacing) * 5) - var(--spacing) * 2);
+}
+
 /* A Settings row's button on a line of its own that is still wider than the
    line (a narrow pane, the app zoomed in): its label wraps rather than
    running off the card. Where there's room it keeps to one line, as every

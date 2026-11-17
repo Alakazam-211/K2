@@ -4,6 +4,8 @@
 // somewhere; a person or channel pick adds ONE row and closes, as an
 // agent pick does.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -156,3 +158,38 @@ describe('Add to Home: people and channels', () => {
     expect(document.querySelector('[data-add-to-home-panel]')?.getAttribute('data-add-to-home-panel')).toBe('agents')
   })
 })
+
+// The title, the tabs, the search field and the list share one left edge:
+// the dialog's 20px (px-5). The shared list pads its search and rows for a
+// menu (6-8px); inside Add to Home one rule moves them onto the dialog's edge.
+describe('Add to Home: one left edge', () => {
+  it('the head and the tabs sit on the 20px edge', async () => {
+    open('people', [])
+    await screen.findByText('Alex')
+    expect(document.querySelector('[data-add-to-home-head]')?.className).toContain('pl-5')
+    expect(document.querySelector('[data-add-to-home-tabs]')?.className).toContain('px-5')
+  })
+
+  it('the search, section heads, rows and notes are marked for the dialog rule', async () => {
+    open('people', [])
+    await screen.findByText('Alex')
+    const panel = document.querySelector('[data-add-to-home-panel]')!
+    expect(panel.querySelector('[data-agent-list-search]')).toBeTruthy()
+    expect(panel.querySelector('[data-agent-list-head]')).toBeTruthy()
+    expect(panel.querySelector('[data-ws-filter-value]')).toBeTruthy()
+  })
+
+  it('the rule puts them on the same 20px edge', () => {
+    const css = readFileSync(join(__dirname, '..', '..', 'globals.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ')
+    const edge = 'calc(var(--spacing) * 5)'
+    const block = (sel: string): string => {
+      const at = css.indexOf(sel)
+      expect(at, sel).toBeGreaterThanOrEqual(0)
+      return css.slice(at, css.indexOf('}', at))
+    }
+    expect(block('[data-add-to-home-panel] :is([data-agent-list-search], [data-agent-list-head], [data-ws-filter-value]) {')).toContain(`padding-inline: ${edge}`)
+    // A section's note keeps its own 8px, so the box adds the rest.
+    expect(block('[data-add-to-home-panel] [data-agent-list-status] {')).toContain(`padding-inline: calc(${edge} - var(--spacing) * 2)`)
+  })
+})
+

@@ -60,7 +60,7 @@ use sha2::Sha256;
 
 use k2_core::log_debug;
 use k2_mpc_base::blob::BlobStore;
-use k2_mpc_base::session::{ConnId, Session};
+use k2_mpc_base::session::{ConnId, Pairing, Session};
 use k2_mpc_base::store::DocKey;
 
 use super::{cache, extras, reuse, Container, FailCode, Failed, Look, NoSideFiles, Page, PreviewRenderer, Shape, Source, Width};
@@ -107,6 +107,11 @@ pub struct Snapshot {
     pub bytes: Arc<Vec<u8>>,
     /// The listing's top-level extras ([`super::Listing::extras`]).
     pub extras: serde_json::Map<String, serde_json::Value>,
+    /// The head's carrier pairing the listing was keyed with, for a renderer
+    /// that wants it ([`PreviewRenderer::wants_pairing`]); `None` otherwise
+    /// and for a cut version (the kit keeps a version's pairing, but hands
+    /// it to no host: its listing takes the keys an import mints).
+    pub pairing: Option<Arc<Pairing>>,
 }
 
 impl Snapshot {
@@ -167,7 +172,8 @@ pub fn keyed_hash(secret: &[u8; 32], digest: &[u8; 32]) -> String {
     m.finalize().into_bytes().iter().take(16).map(|b| format!("{b:02x}")).collect()
 }
 
-/// List `bytes` and key every digest: a fresh snapshot.
+/// List `bytes` (keyed by `pairing` when given) and key every digest: a
+/// fresh snapshot.
 pub fn list(
     blobs: &BlobStore,
     renderer: &'static dyn PreviewRenderer,
@@ -175,8 +181,9 @@ pub fn list(
     rev: u64,
     version: Option<u64>,
     bytes: Vec<u8>,
+    pairing: Option<Pairing>,
 ) -> Result<Snapshot, SnapError> {
-    let listing = renderer.list(&bytes).map_err(SnapError::Failed)?;
+    let listing = renderer.list_paired(&bytes, pairing.as_ref()).map_err(SnapError::Failed)?;
     let k = blobs.host_cache_key(&key.space, HASH_LABEL).map_err(|e| SnapError::NoKey(e.to_string()))?;
     let containers =
         listing.containers.into_iter().map(|c| Keyed { hash: keyed_hash(k.secret_bytes(), &c.digest), c }).collect();
@@ -190,7 +197,23 @@ pub fn list(
         containers,
         bytes: Arc::new(bytes),
         extras: listing.extras,
+        pairing: pairing.map(Arc::new),
     })
+}
+
+/// The head's bytes, and for a renderer that wants it the carrier's pairing
+/// (the kit's default pairing of the live content read with those bytes:
+/// each list root's keys in order, which is what the kit makes at each sync
+/// point for a pack that keeps its default; the BLEND pack does). Through
+/// `conn` (needs read).
+fn head_file(renderer: &dyn PreviewRenderer, session: &Session, conn: ConnId) -> Result<(u64, Vec<u8>, Option<Pairing>), SnapError> {
+    if renderer.wants_pairing() {
+        let r = session.read(conn).map_err(SnapError::Session)?;
+        let pairing = k2_mpc_base::session::list_pairing(&r.content);
+        return Ok((r.version, r.bytes, Some(pairing)));
+    }
+    let file = session.file_now(conn).map_err(SnapError::Session)?;
+    Ok((file.version, file.bytes, None))
 }
 
 /// The doc's head snapshot, read through `conn` (needs read). At an
@@ -208,8 +231,8 @@ pub fn head(
     if let Some(p) = prev.as_ref().filter(|p| p.rev == now && p.build == renderer.build()) {
         return Ok(p.clone());
     }
-    let file = session.file_now(conn).map_err(SnapError::Session)?;
-    let snap = Arc::new(list(blobs, renderer, key, file.version, None, file.bytes)?);
+    let (rev, bytes, pairing) = head_file(renderer, session, conn)?;
+    let snap = Arc::new(list(blobs, renderer, key, rev, None, bytes, pairing)?);
     match prev {
         Some(prev) => head_moved(blobs, &prev, &snap),
         None => remember(snap.clone()),
@@ -305,7 +328,7 @@ pub fn at_version(
         return Ok(s);
     }
     let file = session.file_at(conn, version).map_err(SnapError::Session)?;
-    let snap = Arc::new(list(blobs, renderer, key, file.version, Some(version), file.bytes)?);
+    let snap = Arc::new(list(blobs, renderer, key, file.version, Some(version), file.bytes, None)?);
     remember(snap.clone());
     Ok(snap)
 }
@@ -524,7 +547,7 @@ fn draw(job: &Job) -> Result<(), FailCode> {
     });
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("k2-docs-preview-render".into()).spawn(move || {
-        let src = Source { doc: &snap.bytes, side: &NoSideFiles };
+        let src = Source { doc: &snap.bytes, side: &NoSideFiles, pairing: snap.pairing.as_deref() };
         let _ = tx.send(snap.renderer.render(&src, &container, w, look, shape, WALL));
     });
     let result = match spawned {
@@ -870,6 +893,7 @@ mod tests {
             containers: cs,
             bytes: Arc::new(Vec::new()),
             extras: Default::default(),
+            pairing: None,
         };
         let a = snap(vec![c("@sld:1", "x"), c("@sld:2", "y"), c("@sld:3", "z")]);
         let b = snap(vec![c("@sld:1", "x"), c("@sld:2", "Y"), c("@sld:4", "w")]);

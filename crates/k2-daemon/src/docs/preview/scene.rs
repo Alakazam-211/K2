@@ -4,10 +4,16 @@
 //!   doc version into K2SCENE1 (K2 Render's neutral contract,
 //!   `k2_scenerender::scene`): base meshes triangulated by the pack,
 //!   transforms as stored, no animation evaluated, each object's modifier
-//!   types and whether they were applied. **Not in K2 yet** ([`mesh_read`]
-//!   answers `unsupported_part`, and [`SceneRenderer::serves`] no doc), so
-//!   everything after it is wired against K2SCENE1 bytes: [`list_k2scene`]
-//!   and [`render_k2scene`].
+//!   types and whether they were applied ([`mesh_read_paired`]). It is given
+//!   the live doc's carrier pairing (the keys the live store holds for the
+//!   version's objects), so an object's key in K2SCENE1 (`@obj:N`, a camera's
+//!   `@cam:N`) is its address in the live view; without one (a cut version),
+//!   the keys an import of those bytes mints. Kept per (bytes, pairing, the
+//!   pack's `MESH_READ_FORMAT`) for the renders that follow a listing. A
+//!   refusal maps to the contract's codes ([`fail_code`]: `too_large`, else
+//!   `unsupported_part`). [`SceneRenderer::serves`] a live BLEND doc (a
+//!   `.blend` while the blend core is on); everything after the read works
+//!   on K2SCENE1 bytes: [`list_k2scene`] and [`render_k2scene`].
 //! - **Listing:** `@scene:main` (the auto 3/4 view of everything), one container
 //!   per camera, one per object and the turntable's eight frames
 //!   (`@turntable:0` to `@turntable:7`). Every address is a native address in
@@ -88,9 +94,12 @@
 //! Daemon.app`). With neither, every render fails `renderer_error`.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use k2_core::log_debug;
+use k2_mpc_base::session::Pairing;
+use k2_mpc_blend::meshread::{MeshReadLimits, MESH_READ_FORMAT};
 use k2_scenerender::camera::Framing;
 use k2_scenerender::digest::{self, Target};
 use k2_scenerender::host::{self, Limits, SceneRequest};
@@ -120,17 +129,73 @@ pub fn binary() -> Option<PathBuf> {
     beside.is_file().then_some(beside)
 }
 
-/// The BLEND pack's mesh read: a doc version's bytes to K2SCENE1.
-///
-/// TODO(K2 Cores): call the BLEND pack's host-only mesh read here (its v1:
-/// base meshes triangulated by the pack, transforms as stored, `modifiers`
-/// and `modifiers_not_applied` per object, and `hidden` and
-/// `transform_not_evaluated` where they apply) once the pack is vendored in K2,
-/// with its own bounds before it allocates; and give a live BLEND doc its
-/// tier, so [`SceneRenderer::serves`] says yes. Until then no doc is served
-/// and this answers `unsupported_part`. K2 parses no `.blend` itself.
-pub fn mesh_read(_doc: &[u8]) -> Result<Vec<u8>, Failed> {
-    Err(Failed::new(FailCode::UnsupportedPart, "the BLEND pack's mesh read isn't in this build"))
+/// A mesh read's refusal code (`MeshReadError::code`) as the contract's:
+/// over a limit is `too_large`; anything else the file holds that the read
+/// won't draw (`not_blend`, `unknown_form`, `unreadable`, `live_version`,
+/// `live_ambiguous`, `pairing_mismatch`, `invalid`, a code a later pack
+/// adds) is `unsupported_part`.
+pub fn fail_code(code: &str) -> FailCode {
+    match code {
+        "too_large" => FailCode::TooLarge,
+        _ => FailCode::UnsupportedPart,
+    }
+}
+
+/// How many reads are kept: the views of one or two scenes being drawn.
+const READS_KEPT: usize = 4;
+
+/// The kept reads, newest last: (key, K2SCENE1).
+fn reads() -> &'static Mutex<Vec<([u8; 32], Arc<Vec<u8>>)>> {
+    static R: OnceLock<Mutex<Vec<([u8; 32], Arc<Vec<u8>>)>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// What a read is kept under: the bytes, the pairing and the read's format
+/// (a pack whose output changes bumps it).
+fn read_key(doc: &[u8], pairing: Option<&Pairing>) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"k2/scene-preview/mesh-read\0");
+    h.update(MESH_READ_FORMAT.to_le_bytes());
+    h.update((doc.len() as u64).to_le_bytes());
+    h.update(doc);
+    match pairing {
+        Some(p) => {
+            h.update([1u8]);
+            h.update(p.to_bytes());
+        }
+        None => h.update([0u8]),
+    }
+    h.finalize().into()
+}
+
+/// The BLEND pack's mesh read of a doc version's bytes into K2SCENE1, its
+/// objects keyed by `pairing` (the version's carrier pairing: the live
+/// view's addresses), or as an import mints them without one. Bounded by the
+/// pack's own limits (the live tier's file cap, the renderer's input
+/// limits, the heap) before it allocates. The report goes to the debug log
+/// (names only). K2 parses no `.blend` itself.
+pub fn mesh_read_paired(doc: &[u8], pairing: Option<&Pairing>) -> Result<Arc<Vec<u8>>, Failed> {
+    let key = read_key(doc, pairing);
+    if let Some((_, s)) = reads().lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(k, _)| *k == key) {
+        return Ok(s.clone());
+    }
+    let read = k2_mpc_blend::meshread::mesh_read_paired(doc, pairing, &MeshReadLimits::default())
+        .map_err(|e| Failed::new(fail_code(e.code()), format!("the mesh read: {e}")))?;
+    for line in read.report.lines() {
+        log_debug!("[docs/preview] mesh read: {line}");
+    }
+    let k2scene = Arc::new(read.k2scene);
+    let mut kept = reads().lock().unwrap_or_else(|p| p.into_inner());
+    if kept.len() >= READS_KEPT {
+        kept.remove(0);
+    }
+    kept.push((key, k2scene.clone()));
+    Ok(k2scene)
+}
+
+/// [`mesh_read_paired`] with no pairing: the keys an import mints.
+pub fn mesh_read(doc: &[u8]) -> Result<Arc<Vec<u8>>, Failed> {
+    mesh_read_paired(doc, None)
 }
 
 fn code(c: FailureCode) -> FailCode {
@@ -327,10 +392,15 @@ impl PreviewRenderer for SceneRenderer {
         format!("scenerender-p{PROTO}-{VERSION}.clay.ao2.ids.shape")
     }
 
-    /// No doc yet: a live BLEND doc needs the pack's mesh read and its tier
-    /// (see [`mesh_read`]).
-    fn serves(&self, _t: &DocTarget) -> bool {
-        false
+    /// A live BLEND doc: a `.blend` while the blend core is on (its tier is
+    /// then [`crate::docs::target::Tier::Scene`]).
+    fn serves(&self, t: &DocTarget) -> bool {
+        t.tier == crate::docs::target::Tier::Scene
+    }
+
+    /// The listing's keys are the live view's: the head's carrier pairing.
+    fn wants_pairing(&self) -> bool {
+        true
     }
 
     /// The 3D tab's stills: transparent, so one image serves every look.
@@ -351,11 +421,15 @@ impl PreviewRenderer for SceneRenderer {
     }
 
     fn list(&self, bytes: &[u8]) -> Result<Listing, Failed> {
-        list_k2scene(&mesh_read(bytes)?)
+        self.list_paired(bytes, None)
+    }
+
+    fn list_paired(&self, bytes: &[u8], pairing: Option<&Pairing>) -> Result<Listing, Failed> {
+        list_k2scene(&mesh_read_paired(bytes, pairing)?)
     }
 
     fn render(&self, src: &Source<'_>, container: &Container, width: Width, look: Look, shape: Shape, wall: Duration) -> Result<Image, Failed> {
-        render_k2scene(&mesh_read(src.doc)?, container, width, look, shape, wall)
+        render_k2scene(&mesh_read_paired(src.doc, src.pairing)?, container, width, look, shape, wall)
     }
 }
 
@@ -424,10 +498,88 @@ mod tests {
         assert_eq!(code(FailureCode::RendererError), FailCode::RendererError);
         assert_eq!(code(FailureCode::Timeout), FailCode::Timeout);
         assert_eq!(code(FailureCode::TooLarge), FailCode::TooLarge);
-        // Until the pack's mesh read is in K2, a doc's bytes list as unsupported.
-        assert_eq!(SCENE.list(b"BLENDER-v300").expect_err("no mesh read").code, FailCode::UnsupportedPart);
+        // Bytes the pack's mesh read won't draw list as unsupported.
+        assert_eq!(SCENE.list(b"BLENDER-v300").expect_err("not a whole scene").code, FailCode::UnsupportedPart);
+        assert_eq!(SCENE.list(b"not a scene file").expect_err("not a scene").code, FailCode::UnsupportedPart);
         assert_eq!(SCENE.kind(), "scene");
         assert!(SCENE.build().starts_with("scenerender-p1-"));
+    }
+
+    /// The mesh read's refusals as the contract's codes: a limit is
+    /// `too_large`, everything else the file holds `unsupported_part`.
+    #[test]
+    fn mesh_read_refusals_map_to_the_contracts_codes() {
+        assert_eq!(fail_code("too_large"), FailCode::TooLarge);
+        for c in ["not_blend", "unknown_form", "unreadable", "live_version", "live_ambiguous", "pairing_mismatch", "invalid", "a_code_from_later"] {
+            assert_eq!(fail_code(c), FailCode::UnsupportedPart, "{c}");
+        }
+    }
+
+    /// A real scene (the pack's generated living room): its listing keys
+    /// objects and cameras as an import mints them without a pairing, and by
+    /// the pairing's keys with one; a pairing that doesn't fit is refused,
+    /// never guessed. The same bytes read once.
+    #[test]
+    fn a_blend_scene_lists_its_cameras_and_objects_by_live_key() {
+        let bytes = k2_mpc_blend::testgen::scenes::living_room();
+        let k2scene = mesh_read(&bytes).expect("the living room reads");
+        let scene = k2_scenerender::scene::decode(&k2scene, &InputLimits::default()).expect("the renderer's own decoder takes it");
+        assert!(!scene.objects.is_empty() && !scene.cameras.is_empty(), "objects and cameras");
+        let l = SCENE.list(&bytes).expect("a listing");
+        assert_eq!(l.containers[0].key, "@scene:main");
+        let objs: Vec<&str> = l.containers.iter().map(|c| c.key.as_str()).filter(|k| k.starts_with("@obj:")).collect();
+        let cams: Vec<&str> = l.containers.iter().map(|c| c.key.as_str()).filter(|k| k.starts_with("@cam:")).collect();
+        assert_eq!(objs.len(), scene.objects.len(), "{objs:?}");
+        assert!(!cams.is_empty(), "{cams:?}");
+        for k in objs.iter().chain(&cams) {
+            let n = k.split_once(':').map(|(_, n)| n).expect("a key");
+            assert!(n.parse::<u64>().is_ok_and(|n| n >= 1), "{k}: a live key's number (minted o1, o2, ...)");
+        }
+        assert!(std::sync::Arc::ptr_eq(&mesh_read(&bytes).expect("again"), &k2scene), "the same bytes are read once");
+
+        // The live doc's pairing: every object of the decode, in its order.
+        let blend = k2_mpc_blend::live::BlendLive::default();
+        let content = k2_mpc_base::session::Pack::decode(&blend, &bytes).expect("the live tier reads it").roots;
+        let objs_root = k2_mpc_blend::live::OBJS;
+        let n = content
+            .iter()
+            .find(|(r, _)| r == objs_root)
+            .and_then(|(_, v)| match v {
+                k2_mpc_base::doc::Neutral::List(l) => Some(l.len()),
+                _ => None,
+            })
+            .expect("the objects' list");
+        let shifted: Vec<k2_mpc_base::elem::Key> = (0..n).map(|i| k2_mpc_base::elem::Key::new(&format!("o{}", 100 + i)).expect("key")).collect();
+        let pairing = Pairing { roots: vec![(objs_root.to_string(), shifted)] };
+        let paired = SCENE.list_paired(&bytes, Some(&pairing)).expect("a paired listing");
+        let paired_objs: Vec<&str> = paired.containers.iter().map(|c| c.key.as_str()).filter(|k| k.starts_with("@obj:")).collect();
+        assert!(!paired_objs.is_empty() && paired_objs.iter().all(|k| k[5..].parse::<u64>().is_ok_and(|n| n >= 100)), "keyed by the pairing: {paired_objs:?}");
+        let wrong = Pairing { roots: vec![(objs_root.to_string(), vec![k2_mpc_base::elem::Key::new("o1").expect("key")])] };
+        assert_eq!(SCENE.list_paired(&bytes, Some(&wrong)).expect_err("a pairing that doesn't fit").code, FailCode::UnsupportedPart);
+    }
+
+    /// K2 Render's decoder takes the pack's hand-written K2SCENE1 golden
+    /// (the pack's conformance row, on K2's side).
+    #[test]
+    fn the_renderer_decodes_the_packs_k2scene_golden() {
+        let text = include_str!("../../../../../vendor/k2-mpc-blend/crates/blend/tests/meshread_golden/scene.k2scene.hex");
+        let mut bytes = Vec::new();
+        for line in text.lines().map(str::trim) {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some(t) = line.strip_prefix("text ") {
+                bytes.extend_from_slice(t.as_bytes());
+                continue;
+            }
+            for h in line.split_whitespace() {
+                bytes.push(u8::from_str_radix(h, 16).unwrap_or_else(|e| panic!("{h:?}: {e}")));
+            }
+        }
+        let s = k2_scenerender::scene::decode(&bytes, &InputLimits::default()).expect("the golden decodes");
+        assert_eq!((s.meshes.len(), s.objects.len(), s.cameras.len()), (2, 3, 1), "two meshes, three objects, one camera");
+        let l = list_k2scene(&bytes).expect("and lists");
+        assert!(l.containers.iter().any(|c| c.key.starts_with("@cam:")), "{:?}", l.containers.iter().map(|c| &c.key).collect::<Vec<_>>());
     }
 
     #[test]

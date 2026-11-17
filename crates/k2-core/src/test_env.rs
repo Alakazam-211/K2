@@ -735,15 +735,42 @@ fn private_link(_profile_dir: &Path, program: &Path, _name: &str) -> PathBuf {
     program.to_path_buf()
 }
 
+/// The `<target>/<profile>` folder a test binary at `exe` was built in.
+///
+/// Two layouts: cargo's `<target>/<profile>/deps/<test>`, and the build
+/// folder layout newer cargo writes test binaries in,
+/// `<target>/<profile>/build/<package>/<hash>/<dir>/<test>` (cargo 1.100 on
+/// the compute nodes: `debug/build/k2-daemon/<hash>/out/`). In both, a
+/// `cargo build --target-dir <target>` of that profile puts the programs in
+/// `<target>/<profile>/`. `None` for anything else.
+pub fn profile_dir_of(exe: &Path) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    // `<profile>/build/<package>/<hash>/<dir>`: `build` is three folders
+    // above the binary's own, and the one below the package is a hex hash
+    // (so a target dir that happens to sit under a `build` folder isn't
+    // taken for it).
+    let hash = dir.parent()?;
+    let is_hex = hash.file_name().and_then(OsStr::to_str).is_some_and(|h| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit()));
+    if let Some(build) = hash.parent().and_then(Path::parent).filter(|b| is_hex && b.file_name() == Some(OsStr::new("build"))) {
+        if let Some(profile) = build.parent().filter(|p| p.parent().is_some()) {
+            return Some(profile.to_path_buf());
+        }
+    }
+    if dir.file_name() == Some(OsStr::new("deps")) {
+        return dir.parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf);
+    }
+    None
+}
+
 fn build_workspace_bins(package: &str) -> PathBuf {
     let exe = std::env::current_exe().expect("test binary path");
-    let deps = exe.parent().expect("test binary dir");
-    assert!(
-        deps.file_name() == Some(OsStr::new("deps")),
-        "{} is not in a cargo target dir's <profile>/deps/, so there is nowhere to build {package} for it",
-        exe.display()
-    );
-    let profile_dir = deps.parent().expect("<profile> dir");
+    let profile_dir = profile_dir_of(&exe).unwrap_or_else(|| {
+        panic!(
+            "{} is in neither a cargo target dir's <profile>/deps/ nor its <profile>/build/<package>/<hash>/, so there is nowhere to build {package} for it",
+            exe.display()
+        )
+    });
+    let profile_dir = profile_dir.as_path();
     let target_dir = profile_dir.parent().expect("target dir");
     let profile = profile_dir.file_name().and_then(OsStr::to_str).expect("profile dir name");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
@@ -1546,6 +1573,22 @@ pub fn with_temp_home<R>(f: impl FnOnce(&Path) -> R) -> R {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both layouts a test binary is built in give the profile folder the
+    /// programs are built into; anything else gives none (the caller panics,
+    /// saying where the binary was).
+    #[test]
+    fn a_test_binary_finds_its_profile_in_either_layout() {
+        let p = |s: &str| profile_dir_of(Path::new(s));
+        assert_eq!(p("/t/debug/deps/k2_daemon-0123abcd"), Some(PathBuf::from("/t/debug")));
+        assert_eq!(p("/cache/target-1/release/deps/k2_core-9"), Some(PathBuf::from("/cache/target-1/release")));
+        assert_eq!(p("/t/debug/build/k2-daemon/4f2a1c0e9b8d7a65/out/k2_daemon-0123abcd"), Some(PathBuf::from("/t/debug")));
+        assert_eq!(p("/t/custom/build/k2-core/0f/deps/k2_core-1"), Some(PathBuf::from("/t/custom")));
+        assert_eq!(p("/x/build/target/debug/deps/t"), Some(PathBuf::from("/x/build/target/debug")), "an old layout under a build folder");
+        for odd in ["/usr/bin/true", "/t/debug/k2_daemon", "/t/debug/build/k2-daemon/out/x", "deps/x", "/build/a/b/c"] {
+            assert_eq!(p(odd), None, "{odd}");
+        }
+    }
 
     #[test]
     fn env_var_guard_restores_previous_value_lifo() {

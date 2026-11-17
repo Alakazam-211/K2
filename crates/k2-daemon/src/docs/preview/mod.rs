@@ -15,8 +15,8 @@
 //! |---|---|
 //! | `mod.rs` | the per-type interface ([`PreviewRenderer`]), the registry ([`renderer_for`]), the shared types |
 //! | [`deck`] | `.pptx` slides: the pptx pack's view index, drawn by `k2-deckrender` (one process per render) |
-//! | [`scene`] | live BLEND scenes: the pack's mesh read (K2SCENE1; not in K2 yet), cameras and objects drawn by `k2-scenerender` (one process per request) |
-//! | [`timeline`] | live timelines: a clip's head and tail tiles keyed by (media hash, source time); a slot (no timeline pack, no tile decoder yet: `not_on_this_host`) |
+//! | [`scene`] | live BLEND scenes (the blend core): the pack's mesh read into K2SCENE1, paired with the head's carrier, cameras and objects drawn by `k2-scenerender` (one process per request) |
+//! | [`timeline`] | live timelines: a clip's head and tail tiles keyed by (media hash, source time); a slot (no tile decoder on any host yet: `not_on_this_host`) |
 //! | [`extras`] | what a listing and an image carry besides the image (a scene's bounds, cameras, turntable titles, id tables), in the client's shapes |
 //! | [`reuse`] | a renamed container answered from the image its render hash already has, without a render |
 //! | [`cache`] | the sealed on-disk cache, its cap, and the purge hooks' file side |
@@ -336,10 +336,15 @@ impl SideFiles for NoSideFiles {
 }
 
 /// What a render draws from: the doc's bytes at the rev or version asked
-/// (`file_now` / `file_at`), and its side files.
+/// (`file_now` / `file_at`), its side files, and the carrier pairing the
+/// listing was keyed with (a renderer that [`wants_pairing`]; `None`
+/// otherwise and for a cut version).
+///
+/// [`wants_pairing`]: PreviewRenderer::wants_pairing
 pub struct Source<'a> {
     pub doc: &'a [u8],
     pub side: &'a dyn SideFiles,
+    pub pairing: Option<&'a k2_mpc_base::session::Pairing>,
 }
 
 /// One doc type's renderer.
@@ -381,6 +386,18 @@ pub trait PreviewRenderer: Send + Sync {
     /// daemon on bytes the live pack already holds (bounded by the pack's
     /// limits); never draws.
     fn list(&self, bytes: &[u8]) -> Result<Listing, Failed>;
+    /// Whether its listing keys things by the live doc's own keys, which
+    /// only the carrier's pairing gives for a pack that mints them (a
+    /// scene's objects): the host then reads the head with its content and
+    /// hands the pairing to [`list_paired`](PreviewRenderer::list_paired)
+    /// and to every render ([`Source::pairing`]).
+    fn wants_pairing(&self) -> bool {
+        false
+    }
+    /// [`list`](PreviewRenderer::list), keyed by `pairing` when given.
+    fn list_paired(&self, bytes: &[u8], _pairing: Option<&k2_mpc_base::session::Pairing>) -> Result<Listing, Failed> {
+        self.list(bytes)
+    }
     /// Draw `container` of `src` at `width` px in `look` (one it
     /// [`draws`](PreviewRenderer::draws)) and, when it
     /// [`shapes`](PreviewRenderer::shapes) it, in `shape`, out of process,
@@ -439,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_live_deck_has_a_renderer_today() {
+    fn a_live_deck_and_a_live_scene_have_renderers() {
         let t = |rel: &str, tier| Target {
             project_id: "p".into(),
             root: std::path::PathBuf::from("/w"),
@@ -452,11 +469,14 @@ mod tests {
         assert!(renderer_for(&t("talk.pptx", Tier::Blob)).is_none(), "a deck served at tier 0 (Slides off)");
         assert!(renderer_for(&t("notes.md", Tier::Markdown)).is_none());
         assert!(renderer_for(&t("photo.png", Tier::Blob)).is_none());
-        // The scene renderer is registered, but serves nothing until the BLEND pack's mesh read lands.
-        assert!(renderers().iter().any(|r| r.kind() == "scene"));
+        // A live scene (the blend core on) is the scene renderer's; a
+        // `.blend` served at tier 0 (the core off) has none.
+        assert_eq!(renderer_for(&t("scene.blend", Tier::Scene)).map(|r| r.kind()), Some("scene"));
         assert!(renderer_for(&t("scene.blend", Tier::Blob)).is_none());
-        // So is the timeline's, serving nothing until the timeline pack and its tier land.
+        assert!(super::scene::SCENE.wants_pairing() && !super::deck::DECK.wants_pairing());
+        // The timeline's is registered but serves nothing: no host decodes lane tiles yet.
         assert!(renderers().iter().any(|r| r.kind() == "timeline"));
         assert!(renderer_for(&t("rough-cut.otio", Tier::Blob)).is_none());
+        assert!(renderer_for(&t("rough-cut.otio", Tier::Timeline)).is_none());
     }
 }

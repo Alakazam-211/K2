@@ -197,7 +197,7 @@ impl PreviewRenderer for Fake {
 }
 
 fn snap(blobs: &BlobStore, key: &DocKey, rev: u64, listing: &str) -> Arc<Snapshot> {
-    Arc::new(service::list(blobs, &FAKE, key, rev, None, listing.as_bytes().to_vec()).expect("a fake listing"))
+    Arc::new(service::list(blobs, &FAKE, key, rev, None, listing.as_bytes().to_vec(), None).expect("a fake listing"))
 }
 
 fn next(sub: &Subscription, what: &str) -> HostEvent {
@@ -269,6 +269,7 @@ fn the_route_and_the_welcome_carry_the_extras_with_keyed_hashes_only() {
             containers: l.containers.iter().cloned().map(|c| Keyed { hash: service::keyed_hash(&secret, &c.digest), c }).collect(),
             bytes: Arc::new(Vec::new()),
             extras: Default::default(),
+            pairing: None,
         };
         let listed: Vec<serde_json::Value> = snap.containers.iter().map(|k| route::container_json(&snap, k, Look::Transparent, Shape::Wide)).collect();
         let welcome = crate::docs::live_deck::previews_value(&snap).to_json();
@@ -674,6 +675,7 @@ fn a_scene_listing_passes_its_cameras_left_out_through_at_top_level() {
                 containers: l.containers.iter().cloned().map(|c| Keyed { hash: service::keyed_hash(&secret, &c.digest), c }).collect(),
                 bytes: Arc::new(bytes),
                 extras: l.extras.clone(),
+                pairing: None,
             });
             (l, body(route::listing(&blobs, &snap, None, Look::Transparent, Shape::Wide)))
         };
@@ -777,6 +779,7 @@ fn a_hidden_object_is_listed_with_its_box_and_a_driven_ones_box_is_approx() {
             containers: l.containers.iter().cloned().map(|c| Keyed { hash: service::keyed_hash(&secret, &c.digest), c }).collect(),
             bytes: Arc::new(Vec::new()),
             extras: Default::default(),
+            pairing: None,
         };
         let listed: Vec<serde_json::Value> = snap.containers.iter().map(|k| route::container_json(&snap, k, Look::Transparent, Shape::Wide)).collect();
         let obj = listed.iter().find(|v| v["key"] == "@obj:Item.000").expect("the hidden object");
@@ -1350,6 +1353,7 @@ fn a_deck_never_gets_an_id_table_push() {
                     .collect(),
                 bytes: Arc::new(Vec::new()),
                 extras: Default::default(),
+                pairing: None,
             })
         };
         let (a, b) = (slides(["Intro", "Plan"]), slides(["Overview", "Plan"]));
@@ -1392,6 +1396,7 @@ fn the_workers_id_image_round_trips_through_the_cache_when_it_is_built() {
             containers: l.containers.iter().cloned().map(|c| Keyed { hash: service::keyed_hash(&secret, &c.digest), c }).collect(),
             bytes: Arc::new(bytes.clone()),
             extras: Default::default(),
+            pairing: None,
         });
         let titles: Vec<&str> = l.containers.iter().filter(|c| c.key.starts_with("@obj:")).map(|c| c.title.as_str()).collect();
         for (c, w) in [("@scene:main", Width::Thumb), ("@obj:Item.002", Width::Thumb), ("@cam:Camera", Width::Thumb2x)] {
@@ -1545,6 +1550,7 @@ fn a_deck_listing_names_no_shape() {
             }],
             bytes: Arc::new(Vec::new()),
             extras: Default::default(),
+            pairing: None,
         });
         let v = body(route::listing(&blobs, &s, None, Look::Opaque, Shape::Tall));
         assert!(v.get("shape").is_none(), "{v}");

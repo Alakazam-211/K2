@@ -358,6 +358,7 @@ fn make() -> BTreeMap<String, Vec<u8>> {
             containers: l.containers.into_iter().map(|c| Keyed { hash: service::keyed_hash(&HASH_KEY, &c.digest), c }).collect(),
             bytes: Arc::new(bytes.clone()),
             extras: l.extras,
+            pairing: None,
         });
         files.insert("living-room.k2scene".to_string(), bytes.clone());
         files.insert("listing.json".to_string(), pretty(&body(route::listing(&blobs, &snap, None, Look::Transparent, Shape::Wide))));

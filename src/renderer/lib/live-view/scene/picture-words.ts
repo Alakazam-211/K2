@@ -10,7 +10,7 @@ import type { PictureStatus } from './picture-source'
 
 export type CardAction = 'retry' | 'try-camera' | 'show-list' | 'ask'
 export interface PictureCard {
-  kind: 'opening' | 'nostill' | 'nopicture' | 'empties' | 'empty'
+  kind: 'opening' | 'nostill' | 'nopicture' | 'empties' | 'empty' | 'declined'
   title: string
   body?: string
   /** "Opening…": what's done, what's under way, what's next. */

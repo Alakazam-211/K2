@@ -265,3 +265,37 @@ describe('the BLEND writer switched on (a later release, behind a switch)', () =
     expect(o.snap().refusal).toMatchObject({ actor: 'Bolt', why: 'animation drives it' })
   })
 })
+
+describe('a .blend from a newer Blender (the pack declines it at open: live_version)', () => {
+  // As the pack sends it (crates/blend/tests/results_golden/declined-live-version.json): the kit's report, the pack's code in details.code.
+  const refused = (format: string) => ({ type: 'watch_refused', error: { id: 'MPC-E407', message: `live editing is off: Nothing was read: this file was saved by a newer (or older) release of the program that wrote it (format ${format}) than this pack has checked (3.06 to 5.01). (live_version)`, details: { code: 'live_version' } } })
+  const fresh = () => {
+    const t = socket()
+    const src = new KeyedWatchSceneSource(t, { post: async () => undefined, fileName: 'set', now: () => T0 })
+    src.attach(WELCOME)
+    return { t, src, snap: () => src.snapshot() as SceneSnapshot }
+  }
+
+  it('a newer Blender (5.02, 5.03): the card says so in plain words, with no action (the File view can’t show a .blend either)', () => {
+    const o = fresh()
+    o.t.push(refused('5.02'))
+    expect(o.snap().scene.declined).toEqual({ title: 'This file is from a newer Blender.', body: 'K2 opens it in a coming update.', actions: [] })
+    // no raw code, nothing generic
+    expect(JSON.stringify(o.snap().scene.declined)).not.toMatch(/live_version|MPC-|couldn’t open/)
+    // the header: read only, no people
+    expect(o.snap().readOnly).toBeTruthy()
+    expect(o.snap().people.filter((p) => !p.self)).toEqual([])
+  })
+
+  it('an older one than the pack reads: its own words, still plain', () => {
+    const o = fresh()
+    o.t.push(refused('2.80'))
+    expect(o.snap().scene.declined).toMatchObject({ title: 'This file is from an older Blender.' })
+  })
+
+  it('a socket declined at open (the same code from the docs socket) reads the same', () => {
+    const o = fresh()
+    o.src.refusedAtOpen({ id: 'live_version', message: 'declined: live_version' } as never)
+    expect(o.snap().scene.declined?.title).toBe('This file is from a newer Blender.')
+  })
+})

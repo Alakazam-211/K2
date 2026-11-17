@@ -15,5 +15,5 @@ export function SceneHero(p: ShellHeroProps): React.JSX.Element {
     const line = p.state === 'loading' ? 'Opening the scene. The list of objects comes first, then the picture.' : 'The scene’s picture shows here: who’s looking where, and each change as it lands.'
     return <StagePlaceholder kind="scene" line={line} p={p} />
   }
-  return <SceneStage S={scene.S} control={scene.control} meshEpoch={scene.meshEpoch ?? 0} source={source} narrow={p.narrow} offscreen={p.offscreen} onJump={p.onJump} follow={p.follow} setSayAt={p.setSayAt} people={p.snap.people} refusal={p.refusal} ask={p.ask} />
+  return <SceneStage S={scene.S} control={scene.control} meshEpoch={scene.meshEpoch ?? 0} declined={scene.declined ?? null} source={source} narrow={p.narrow} offscreen={p.offscreen} onJump={p.onJump} follow={p.follow} setSayAt={p.setSayAt} people={p.snap.people} refusal={p.refusal} ask={p.ask} />
 }

@@ -19,6 +19,7 @@ import { PRODUCT_NAME } from '@/lib/brand'
 import { KeyedWatch, PresenceChannel, type ClaimEnded, type ClaimView, type ErrorReport, type OpsChangeFrame, type OutsideSaveFrame, type PresencePeer, type Transport, type VerbRefusedFrame, type Welcome } from '@k2/mpc-client'
 import type { LiveMessage, LiveShellSnapshot, LiveSource, SayResult } from '../shared/source'
 import { docFromWatch, meshesChanged, normFrame, withDerived } from './keyed-doc'
+import { declinedWords } from './left-out'
 import { sceneSnapshot, type SceneControl, type SceneSnapshot } from './sample-source'
 import { applyGroup, blankState, finish, type Claim, type Peer, type SimEvent, type SimState } from './sim'
 import type { Scenario } from './turn'
@@ -84,6 +85,8 @@ export class KeyedWatchSceneSource implements LiveSource {
   meshEpoch = 0
   /** The pack's refusal at open, when the watch can't be live. */
   refusedCode: string | null = null
+  /** The card for it (not too large): what the tab says instead of the scene. */
+  declined: { title: string; body: string; actions: [] } | null = null
   readonly control: SceneControl & { viewChanged: (v: string | null) => void } = {
     retryPicture: () => undefined,
     viewChanged: (v) => this.setViewAddress(v),
@@ -100,8 +103,12 @@ export class KeyedWatchSceneSource implements LiveSource {
   /** The kit can't watch this doc live (`watch_refused`, or a socket refused at open): the saved version, read-only, said in the scene's words. */
   refusedAtOpen(e: ErrorReport): void {
     this.refusedCode = refusalCode(e)
+    // Too large: the saved version, read only. Anything else: the card says why, in plain words.
+    const blob = this.refusedCode === 'too_large'
+    this.declined = blob ? null : declinedWords(this.refusedCode, e.message)
+    if (this.declined) this.readOnly = `${this.declined.title} ${this.declined.body}`
     this.group([
-      { kind: 'tier', tier: 'blob' },
+      { kind: 'tier', tier: blob ? 'blob' : 'declined' },
       { kind: 'loading', v: null },
     ])
   }
@@ -313,6 +320,6 @@ export class KeyedWatchSceneSource implements LiveSource {
     const S = finish({ ...this.S, peers: { ...this.S.peers }, claims: [...this.S.claims], log: [...this.S.log] })
     const snap = sceneSnapshot(S, LIVE, 0, this.control)
     const messages = [...snap.messages, ...this.extra].sort((a, b) => a.at_ms - b.at_ms)
-    return { ...snap, size: null, messages, ...(this.readOnly ? { readOnly: this.readOnly } : {}), scene: { ...snap.scene, fileName: this.o.fileName, scenario: 'live', label: '', meshEpoch: this.meshEpoch, holds: this.claimsOn } }
+    return { ...snap, size: null, messages, ...(this.readOnly ? { readOnly: this.readOnly } : {}), scene: { ...snap.scene, fileName: this.o.fileName, scenario: 'live', label: '', meshEpoch: this.meshEpoch, holds: this.claimsOn, ...(this.declined ? { declined: this.declined } : {}) } }
   }
 }

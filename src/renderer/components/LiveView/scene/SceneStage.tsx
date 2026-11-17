@@ -71,6 +71,8 @@ export interface SceneStageProps {
   ask?: ShellHeroProps['ask']
   /** Moves when a mesh in the scene changed (a live source): the picture asks for new stills. */
   meshEpoch?: number
+  /** The pack won't open the file live: this card instead of the picture. */
+  declined?: { title: string; body: string; actions: [] } | null
 }
 
 const onlyOneOf = (s: { split: string } | null): boolean => !s || s.split === 'one'
@@ -85,7 +87,7 @@ function showList(from: HTMLElement | null): void {
   requestAnimationFrame(() => tab.querySelector<HTMLElement>('[role="tree"]')?.focus())
 }
 
-export function SceneStage({ S, control, source, narrow, size, offscreen, onJump, follow, setSayAt, people = [], refusal = null, ask, meshEpoch = 0 }: SceneStageProps): React.JSX.Element {
+export function SceneStage({ S, control, source, narrow, size, offscreen, onJump, follow, setSayAt, people = [], refusal = null, ask, meshEpoch = 0, declined = null }: SceneStageProps): React.JSX.Element {
   const store = localStore(S)
   const L = useSyncExternalStore(store.subscribe, store.get, store.get)
   const set = (patch: Partial<SceneLocal>): void => store.set((s) => ({ ...s, ...patch }))
@@ -284,7 +286,7 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
             }
           />
         ) : null}
-        {words.card ? <PictureCard card={words.card} onAction={onCard} /> : null}
+        {declined ? <PictureCard card={{ kind: 'declined', ...declined }} onAction={onCard} /> : words.card ? <PictureCard card={words.card} onAction={onCard} /> : null}
         {words.older ? <OlderMark text={words.older} /> : null}
         <div className="lv-vfoot">
           <PictureChips chips={words.chips} onRetry={() => retryPicture()} />

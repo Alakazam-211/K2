@@ -33,7 +33,7 @@ const NO_CONTROL: SceneControl = { retryPicture: () => undefined }
 
 /** A scene step: the shell's snapshot and the scene's own state. */
 export interface SceneSnapshot extends SampleSnapshot {
-  scene: { S: SimState; scenario: string; step: number; label: string; fileName: string; control: SceneControl; meshEpoch?: number; /** False: the host takes no claims (no holds shown or promised). */ holds?: boolean }
+  scene: { S: SimState; scenario: string; step: number; label: string; fileName: string; control: SceneControl; meshEpoch?: number; /** False: the host takes no claims (no holds shown or promised). */ holds?: boolean; /** The pack won't open it live: the card instead of the scene. */ declined?: { title: string; body: string; actions: [] } }
 }
 
 export const isSceneSnapshot = (s: LiveShellSnapshot): s is SceneSnapshot => 'scene' in s && !!(s as SceneSnapshot).scene

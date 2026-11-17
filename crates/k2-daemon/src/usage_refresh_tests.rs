@@ -662,7 +662,8 @@ fn only_usage_store_writes_usage_json_outside_the_old_path() {
     let mut found: Vec<(String, usize)> = Vec::new();
     for entry in walk(&src) {
         let text = std::fs::read_to_string(&entry).expect("read source");
-        let name = entry.strip_prefix(&src).expect("under src").trim_start_matches('/').to_string();
+        // `/`-separated on every OS (walk joins with `\` on Windows).
+        let name = entry.strip_prefix(&src).expect("under src").replace('\\', "/").trim_start_matches('/').to_string();
         if name.ends_with("_tests.rs") || name.contains("/tests/") {
             continue;
         }

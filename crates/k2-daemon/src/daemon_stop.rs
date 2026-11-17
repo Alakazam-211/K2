@@ -612,7 +612,8 @@ mod tests {
             vec![
                 "unload".to_string(),
                 "-w".to_string(),
-                "/Users/example/Library/LaunchAgents/dev.k2.menubar.plist".to_string(),
+                // The plist checked above, spelled as this OS joins it.
+                plist.to_string_lossy().into_owned(),
             ]
         );
         assert_ne!(MENU_BAR_HELPER_LABEL, DAEMON_LAUNCHD_LABEL);

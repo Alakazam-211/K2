@@ -324,7 +324,7 @@ pub fn binary_supports_no_daemon(program: &str, search_path: &str) -> Result<(),
 fn probe_help(binary: &Path, search_path: &str) -> Result<String, String> {
     let program = binary.to_string_lossy().into_owned();
     let (prog, args) =
-        crate::terminal::win_cmd::resolve_spawn(&program, &["--help".to_string()], search_path);
+        crate::terminal::win_cmd::resolve_command(&program, &["--help".to_string()], search_path);
     let mut cmd = crate::bg_proc::command(&prog);
     cmd.args(&args)
         .stdin(Stdio::null())

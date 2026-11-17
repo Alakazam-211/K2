@@ -8,19 +8,49 @@
 
 use std::path::{Path, PathBuf};
 
-/// Rewrite `(program, args)` so CreateProcess can start npm `.cmd`
-/// shims. No-op on Unix, and when `program` is already an `.exe`.
+/// How the caller starts what [`resolve_for`] returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Launcher {
+    /// ConPTY: K2 writes the whole command line ([`conpty_command`]), so a
+    /// `.bat`/`.cmd` or a cmd.exe built-in goes through cmd.exe here, with
+    /// every argument escaped for cmd.exe ([`bat_arg`]).
+    Pty,
+    /// `std::process::Command`: std runs a `.bat`/`.cmd` through cmd.exe
+    /// itself (escaping its arguments, refusing a line break), so the
+    /// batch file is returned as the program; built-ins aren't rewritten.
+    Std,
+}
+
+/// Rewrite `(program, args)` so a ConPTY spawn can start npm `.cmd`
+/// shims and cmd.exe built-ins. No-op on Unix, and when `program` is
+/// already an `.exe`.
 pub fn resolve_spawn(program: &str, args: &[String], path: &str) -> (String, Vec<String>) {
+    resolve_native(Launcher::Pty, program, args, path)
+}
+
+/// [`resolve_spawn`] for a `std::process::Command` spawn.
+pub fn resolve_command(program: &str, args: &[String], path: &str) -> (String, Vec<String>) {
+    resolve_native(Launcher::Std, program, args, path)
+}
+
+fn resolve_native(launcher: Launcher, program: &str, args: &[String], path: &str) -> (String, Vec<String>) {
     #[cfg(not(windows))]
     {
-        let _ = path;
+        let _ = (launcher, path);
         (program.to_string(), args.to_vec())
     }
     #[cfg(windows)]
     {
         let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
         let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
-        resolve_for_pty(program, args, path, &pathext, &comspec, |p| p.is_file())
+        resolve_for(launcher, program, args, path, &pathext, &comspec, |p| p.is_file(), |p| {
+            // A shim is a few hundred bytes; anything big is no npm shim.
+            let meta = std::fs::metadata(p).ok()?;
+            if meta.len() > SHIM_MAX_BYTES {
+                return None;
+            }
+            std::fs::read_to_string(p).ok()
+        })
     }
 }
 
@@ -35,26 +65,31 @@ pub fn which(program: &str, path: &str) -> Option<PathBuf> {
     find_on_path(program, &split_search_dirs(path), &pathext, &|p: &Path| p.is_file())
 }
 
+/// The switches of the cmd.exe wrapper [`resolve_for`] builds; its last
+/// argument, the payload, follows them, in a pair of quotes of its own.
+/// `/e:ON` for the `%` escape ([`bat_arg`]), `/v:OFF` so `!` is plain
+/// text, `/d` skips AutoRun, and `/s` strips just that outer pair.
+pub const CMD_WRAPPER: [&str; 5] = ["/e:ON", "/v:OFF", "/d", "/s", "/c"];
+
 /// How a ConPTY spawn of `(program, args)` must be handed to alacritty,
 /// which joins `program` and `args` into one command line:
 /// `(program, args, escape_args)`. A program path with spaces is quoted
 /// (else `C:\Program Files\...` splits at the space), and args are
 /// escaped the C-runtime way (else an arg with spaces, a whole prompt,
-/// arrives as several). The one exception is the `cmd /d /s /c "<payload>"`
-/// wrapper [`resolve_for_pty`] builds for npm `.cmd` shims: its payload is
-/// already in cmd.exe's own syntax and must reach it as written.
+/// arrives as several). The one exception is the cmd.exe wrapper
+/// ([`CMD_WRAPPER`]) [`resolve_for`] builds: its payload is already in
+/// cmd.exe's own syntax, every argument escaped, and must reach it as written.
 pub fn conpty_command(program: &str, args: &[String]) -> (String, Vec<String>, bool) {
     let quoted = if program.contains(char::is_whitespace) && !program.starts_with('"') {
         format!("\"{program}\"")
     } else {
         program.to_string()
     };
-    let cmd_wrapper = args.len() == 4 && args[..3].iter().map(String::as_str).eq(["/d", "/s", "/c"]);
+    let cmd_wrapper = args.len() == CMD_WRAPPER.len() + 1 && args[..CMD_WRAPPER.len()].iter().map(String::as_str).eq(CMD_WRAPPER);
     (quoted, args.to_vec(), !cmd_wrapper)
 }
 
-/// Testable core. `exists` is injected so macOS unit tests can fake a
-/// Windows npm layout.
+/// Testable core of [`resolve_spawn`] for ConPTY (no npm shim is read).
 pub fn resolve_for_pty(
     program: &str,
     args: &[String],
@@ -63,18 +98,54 @@ pub fn resolve_for_pty(
     comspec: &str,
     exists: impl Fn(&Path) -> bool,
 ) -> (String, Vec<String>) {
+    resolve_for(Launcher::Pty, program, args, path, pathext, comspec, exists, |_| None)
+}
+
+/// Testable core. `exists` and `read` (a small file's text) are injected
+/// so macOS unit tests can fake a Windows npm layout.
+///
+/// - An npm shim (`claude.cmd`, `codex.cmd`…) runs what it would run,
+///   without cmd.exe: `node <script>` or the `.exe` it names ([`npm_shim`]).
+/// - Another `.bat`/`.cmd`, or a cmd.exe built-in, runs through cmd.exe
+///   ([`Launcher::Pty`]: every argument escaped by [`bat_arg`]; one that
+///   can't pass through cmd.exe (a line break) leaves `(program, args)` as
+///   given, so the spawn fails instead) or is left to std ([`Launcher::Std`]).
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_for(
+    launcher: Launcher,
+    program: &str,
+    args: &[String],
+    path: &str,
+    pathext: &str,
+    comspec: &str,
+    exists: impl Fn(&Path) -> bool,
+    read: impl Fn(&Path) -> Option<String>,
+) -> (String, Vec<String>) {
+    let unchanged = || (program.to_string(), args.to_vec());
     let dirs = split_search_dirs(path);
     let Some(found) = find_on_path(program, &dirs, pathext, &exists) else {
         // A cmd.exe built-in (`echo`, `dir`…) is no file on PATH: cmd.exe runs it.
-        if is_cmd_builtin(program) {
-            return (comspec.to_string(), cmd_builtin_args(program, args));
+        if launcher == Launcher::Pty && is_cmd_builtin(program) {
+            if let Some(payload) = cmd_payload(program.to_string(), args) {
+                return (comspec.to_string(), cmd_wrapper(payload));
+            }
         }
-        return (program.to_string(), args.to_vec());
+        return unchanged();
     };
-    if is_batch(&found) {
-        return (comspec.to_string(), cmd_c_args(&found, args));
+    if !is_batch(&found) {
+        return (found.to_string_lossy().into_owned(), args.to_vec());
     }
-    (found.to_string_lossy().into_owned(), args.to_vec())
+    if let Some((prog, mut lead)) = npm_shim(&found, &dirs, pathext, &exists, &read) {
+        lead.extend(args.iter().cloned());
+        return (prog, lead);
+    }
+    match launcher {
+        Launcher::Std => (found.to_string_lossy().into_owned(), args.to_vec()),
+        Launcher::Pty => match cmd_payload(format!("\"{}\"", found.display()), args) {
+            Some(payload) => (comspec.to_string(), cmd_wrapper(payload)),
+            None => unchanged(),
+        },
+    }
 }
 
 fn is_batch(path: &Path) -> bool {
@@ -89,20 +160,124 @@ fn is_batch(path: &Path) -> bool {
     }
 }
 
-/// `cmd /d /s /c "path" arg…` — `/d` skips AutoRun; `/s` keeps quotes.
-fn cmd_c_args(batch: &Path, args: &[String]) -> Vec<String> {
-    let mut payload = format!("\"{}\"", batch.display());
+/// The switches, then the payload in one more pair of quotes: the pair
+/// `/s` strips (so the payload's own quotes are kept as written).
+fn cmd_wrapper(payload: String) -> Vec<String> {
+    CMD_WRAPPER.iter().map(|s| s.to_string()).chain(std::iter::once(format!("\"{payload}\""))).collect()
+}
+
+/// `head` (a quoted batch path, or a built-in's name) and each argument
+/// escaped for cmd.exe; `None` when one can't be ([`bat_arg`]).
+fn cmd_payload(head: String, args: &[String]) -> Option<String> {
+    let mut payload = head;
     for a in args {
         payload.push(' ');
-        if needs_cmd_quotes(a) {
-            payload.push('"');
-            payload.push_str(&a.replace('"', "\\\""));
-            payload.push('"');
-        } else {
-            payload.push_str(a);
-        }
+        payload.push_str(&bat_arg(a)?);
     }
-    vec!["/d".into(), "/s".into(), "/c".into(), payload]
+    Some(payload)
+}
+
+/// One argument for cmd.exe (inside the [`CMD_WRAPPER`] payload), so it
+/// arrives as the same text: std's rule for batch files. Anything but
+/// letters, digits and `#$*+-./:?@\_` puts it in quotes, where cmd.exe's
+/// operators (`& | < > ^ ( )`) are plain text; a `"` is doubled; a `%`
+/// becomes `%%cd:~,%` (an empty substring of `%cd%`, so no `%VAR%` is
+/// expanded); backslashes before a quote are doubled. `None` for a line
+/// break or a NUL: cmd.exe ends the command there, and no escape keeps it.
+pub fn bat_arg(arg: &str) -> Option<String> {
+    if arg.contains(['\r', '\n', '\0']) {
+        return None;
+    }
+    const UNQUOTED: &str = r"#$*+-./:?@\_";
+    let quote = arg.is_empty()
+        || arg.ends_with('\\')
+        || arg.chars().any(|c| (c.is_ascii() && !(c.is_ascii_alphanumeric() || UNQUOTED.contains(c))) || c.is_control());
+    let mut s = String::with_capacity(arg.len() + 2);
+    if quote {
+        s.push('"');
+    }
+    let mut backslashes = 0usize;
+    for c in arg.chars() {
+        if c == '\\' {
+            backslashes += 1;
+        } else {
+            if c == '"' {
+                s.extend(std::iter::repeat_n('\\', backslashes));
+                s.push('"');
+            } else if c == '%' {
+                s.push_str("%%cd:~,");
+            }
+            backslashes = 0;
+        }
+        s.push(c);
+    }
+    if quote {
+        s.extend(std::iter::repeat_n('\\', backslashes));
+        s.push('"');
+    }
+    Some(s)
+}
+
+/// The most of a `.cmd` [`npm_shim`] reads.
+#[cfg(windows)]
+const SHIM_MAX_BYTES: u64 = 16 << 10;
+
+/// An npm shim (cmd-shim: `claude.cmd`, `codex.cmd`, `gemini.cmd`…) runs
+/// one target with `%*`: `"%_prog%" "%dp0%\…\cli.js" %*` (node, or the
+/// shim's own `node.exe` beside it) or `"%dp0%\…\x.exe" %*`. Returns that
+/// program and the arguments before the caller's: `(node, [script])` or
+/// `(exe, [])`. `None` for anything else (it then runs as a batch file).
+fn npm_shim(
+    cmd: &Path,
+    dirs: &[PathBuf],
+    pathext: &str,
+    exists: &impl Fn(&Path) -> bool,
+    read: &impl Fn(&Path) -> Option<String>,
+) -> Option<(String, Vec<String>)> {
+    let text = read(cmd)?;
+    let line = text.lines().map(str::trim).filter(|l| l.ends_with("%*")).last()?;
+    let body = line[..line.len() - 2].trim_end();
+    let start = body.rfind("\"%dp0%\\").or_else(|| body.rfind("\"%~dp0\\"))?;
+    let quoted = &body[start + 1..];
+    let end = quoted.find('"')?;
+    // The path must be the last thing before `%*` (no fixed arguments).
+    if end + 1 != quoted.len() {
+        return None;
+    }
+    let rel = quoted[..end].strip_prefix("%dp0%\\").or_else(|| quoted[..end].strip_prefix("%~dp0\\"))?;
+    if rel.is_empty() || rel.contains(['%', '"', '!', '^']) {
+        return None;
+    }
+    let dir = cmd.parent()?;
+    let target = dir.join(rel);
+    if !exists(&target) {
+        return None;
+    }
+    let target = target.to_string_lossy().into_owned();
+    let lower = target.to_ascii_lowercase();
+    let prefix = body[..start].trim_end();
+    let by_node = prefix.ends_with("\"%_prog%\"") || prefix.ends_with("node") || prefix.to_ascii_lowercase().ends_with("node.exe\"");
+    if by_node {
+        if ![".js", ".cjs", ".mjs"].iter().any(|e| lower.ends_with(e)) {
+            return None;
+        }
+        let beside = dir.join("node.exe");
+        let node = if exists(&beside) {
+            beside.to_string_lossy().into_owned()
+        } else {
+            let n = find_on_path("node", dirs, pathext, exists)?;
+            if !n.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("exe")) {
+                return None;
+            }
+            n.to_string_lossy().into_owned()
+        };
+        return Some((node, vec![target]));
+    }
+    // No interpreter: the line is the path alone (or follows cmd-shim's `&`).
+    if (prefix.is_empty() || prefix.ends_with('&')) && lower.ends_with(".exe") {
+        return Some((target, Vec::new()));
+    }
+    None
 }
 
 /// cmd.exe's own commands: they are in cmd.exe, not files a spawn can find.
@@ -114,26 +289,6 @@ const CMD_BUILTINS: &[&str] = &[
 
 fn is_cmd_builtin(program: &str) -> bool {
     !program.contains(['/', '\\', '.']) && CMD_BUILTINS.iter().any(|b| b.eq_ignore_ascii_case(program))
-}
-
-/// `cmd /d /s /c "echo a b"` for a built-in and its arguments.
-fn cmd_builtin_args(program: &str, args: &[String]) -> Vec<String> {
-    let mut payload = program.to_string();
-    for a in args {
-        payload.push(' ');
-        if needs_cmd_quotes(a) {
-            payload.push('"');
-            payload.push_str(&a.replace('"', "\\\""));
-            payload.push('"');
-        } else {
-            payload.push_str(a);
-        }
-    }
-    vec!["/d".into(), "/s".into(), "/c".into(), payload]
-}
-
-fn needs_cmd_quotes(s: &str) -> bool {
-    s.is_empty() || s.chars().any(|c| c.is_whitespace() || c == '"')
 }
 
 /// Split a Windows PATH (`;` — and `:` only between entries, not
@@ -267,11 +422,8 @@ mod tests {
             exists_in(&files),
         );
         assert_eq!(prog, r"C:\Windows\System32\cmd.exe");
-        assert_eq!(args[0], "/d");
-        assert_eq!(args[1], "/s");
-        assert_eq!(args[2], "/c");
-        assert!(args[3].contains("claude.cmd"));
-        assert!(args[3].contains("--dangerously-skip-permissions"));
+        assert_eq!(&args[..5], &CMD_WRAPPER);
+        assert_eq!(args[5], format!("\"\"{}\" --dangerously-skip-permissions\"", cmd.display()));
     }
 
     #[test]
@@ -306,9 +458,9 @@ mod tests {
         let (p, _, esc) = conpty_command(r"C:\tools\claude.exe", &[]);
         assert_eq!((p.as_str(), esc), (r"C:\tools\claude.exe", true));
         // K2's own npm .cmd wrapper goes through as cmd.exe syntax.
-        let (p, a, esc) = conpty_command(r"C:\Windows\System32\cmd.exe", &s(&["/d", "/s", "/c", r#""C:\npm\codex.cmd" "a b""#]));
+        let (p, a, esc) = conpty_command(r"C:\Windows\System32\cmd.exe", &s(&["/e:ON", "/v:OFF", "/d", "/s", "/c", r#""C:\npm\codex.cmd" "a b""#]));
         assert_eq!(p, r"C:\Windows\System32\cmd.exe");
-        assert_eq!(a.len(), 4);
+        assert_eq!(a.len(), 6);
         assert!(!esc, "the wrapper's payload is already quoted for cmd.exe");
         // Any other cmd use is escaped like everything else.
         assert!(conpty_command("cmd.exe", &s(&["/c", "dir", r"C:\Program Files"])).2);
@@ -327,12 +479,12 @@ mod tests {
             exists_in(&files),
         );
         assert_eq!(prog, r"C:\Windows\System32\cmd.exe");
-        assert!(args[3].contains("codex.cmd"), "{args:?}");
+        assert!(args[5].contains("codex.cmd"), "{args:?}");
         // The same through an absolute path without an extension.
         let full = dir.join("codex").to_string_lossy().into_owned();
         let (prog, args) = resolve_for_pty(&full, &[], "", ".EXE;.CMD", "cmd.exe", exists_in(&files));
         assert_eq!(prog, "cmd.exe");
-        assert!(args[3].contains("codex.cmd"), "{args:?}");
+        assert!(args[5].contains("codex.cmd"), "{args:?}");
         // An extensionless file alone resolves to nothing (left as given).
         let only: HashSet<_> = [dir.join("lonely")].into_iter().collect();
         let (prog, _) = resolve_for_pty("lonely", &[], &dir.to_string_lossy(), ".EXE;.CMD", "cmd.exe", exists_in(&only));
@@ -344,15 +496,143 @@ mod tests {
         let files: HashSet<PathBuf> = HashSet::new();
         let (prog, args) = resolve_for_pty("echo", &["hello".into(), "two words".into()], r"C:\empty", ".EXE;.CMD", "cmd.exe", exists_in(&files));
         assert_eq!(prog, "cmd.exe");
-        assert_eq!(args, vec!["/d", "/s", "/c", "echo hello \"two words\""]);
+        assert_eq!(args, vec!["/e:ON", "/v:OFF", "/d", "/s", "/c", "\"echo hello \"two words\"\""]);
         // A real program of that name on PATH wins, as in cmd.exe itself.
-        let files: HashSet<PathBuf> = [PathBuf::from(r"C:\tools\echo.exe")].into_iter().collect();
+        let echo = PathBuf::from(r"C:\tools").join("echo.exe");
+        let files: HashSet<PathBuf> = [echo.clone()].into_iter().collect();
         let (prog, _) = resolve_for_pty("echo", &[], r"C:\tools", ".EXE;.CMD", "cmd.exe", exists_in(&files));
-        assert_eq!(prog, r"C:\tools\echo.exe");
+        assert_eq!(prog, echo.to_string_lossy());
         // A path is never a built-in.
         let none: HashSet<PathBuf> = HashSet::new();
         let (prog, _) = resolve_for_pty(r".\echo", &[], r"C:\empty", ".EXE", "cmd.exe", exists_in(&none));
         assert_eq!(prog, r".\echo");
+    }
+
+    /// Every argument reaches cmd.exe as text: its operators quoted, `"`
+    /// doubled, `%` kept from expanding (std's rule for batch files).
+    #[test]
+    fn cmd_exe_arguments_are_escaped_as_text() {
+        let cases: &[(&str, &str)] = &[
+            ("plain-arg", "plain-arg"),
+            (r"C:\dir\file.txt", r"C:\dir\file.txt"),
+            ("two words", "\"two words\""),
+            ("a&b", "\"a&b\""),
+            ("a|b<c>d^e(f)", "\"a|b<c>d^e(f)\""),
+            ("x\" & more & \"", "\"x\"\" & more & \"\"\""),
+            ("%PATH%", "\"%%cd:~,%PATH%%cd:~,%\""),
+            ("!x!", "\"!x!\""),
+            (r"tail\", r#""tail\\""#),
+            (r#"a\"b"#, r#""a\\""b""#),
+            ("", "\"\""),
+        ];
+        for (arg, want) in cases {
+            assert_eq!(bat_arg(arg).as_deref(), Some(*want), "{arg:?}");
+        }
+        for arg in ["a\nb", "a\r\nb", "a\0b"] {
+            assert_eq!(bat_arg(arg), None, "{arg:?} can't pass through cmd.exe");
+        }
+    }
+
+    #[test]
+    fn a_batch_file_or_built_in_never_gets_an_unescaped_argument() {
+        let dir = PathBuf::from(r"C:\tools");
+        let files: HashSet<_> = [dir.join("run.bat")].into_iter().collect();
+        let args: Vec<String> = vec!["ok".into(), "a&more".into(), "x\"&more&\"".into()];
+        let (prog, a) = resolve_for_pty("run", &args, &dir.to_string_lossy(), ".EXE;.BAT", "cmd.exe", exists_in(&files));
+        assert_eq!(prog, "cmd.exe");
+        assert_eq!(a[5], format!(r#"""{}" ok "a&more" "x""&more&"""""#, dir.join("run.bat").display()));
+        let (prog, a) = resolve_for_pty("echo", &args, r"C:\empty", ".EXE", "cmd.exe", exists_in(&files));
+        assert_eq!(prog, "cmd.exe");
+        assert_eq!(a[5], r#""echo ok "a&more" "x""&more&"""""#);
+        // A line break can't pass through cmd.exe: left as given, the spawn fails.
+        let broken: Vec<String> = vec!["line one\nline two".into()];
+        assert_eq!(resolve_for_pty("run", &broken, &dir.to_string_lossy(), ".EXE;.BAT", "cmd.exe", exists_in(&files)), ("run".to_string(), broken.clone()));
+        assert_eq!(resolve_for_pty("echo", &broken, r"C:\empty", ".EXE", "cmd.exe", exists_in(&files)), ("echo".to_string(), broken));
+    }
+
+    #[test]
+    fn std_spawns_get_the_batch_file_itself_and_no_built_ins() {
+        let dir = PathBuf::from(r"C:\tools");
+        let files: HashSet<_> = [dir.join("run.bat")].into_iter().collect();
+        let args: Vec<String> = vec!["a&b".into()];
+        let r = resolve_for(Launcher::Std, "run", &args, &dir.to_string_lossy(), ".EXE;.BAT", "cmd.exe", exists_in(&files), |_| None);
+        assert_eq!(r, (dir.join("run.bat").to_string_lossy().into_owned(), args.clone()), "std escapes a batch file's arguments itself");
+        let r = resolve_for(Launcher::Std, "echo", &args, r"C:\empty", ".EXE", "cmd.exe", exists_in(&files), |_| None);
+        assert_eq!(r, ("echo".to_string(), args));
+    }
+
+    const MODERN_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n";
+    const OLD_SHIM: &str = "@IF EXIST \"%~dp0\\node.exe\" (\r\n  \"%~dp0\\node.exe\"  \"%~dp0\\node_modules\\npm\\bin\\npm-cli.js\" %*\r\n) ELSE (\r\n  @SETLOCAL\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node  \"%~dp0\\node_modules\\npm\\bin\\npm-cli.js\" %*\r\n)\r\n";
+    const EXE_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.exe\"   %*\r\n";
+
+    #[test]
+    fn an_npm_shim_runs_its_target_without_cmd_exe() {
+        let npm = PathBuf::from(r"C:\Users\x\AppData\Roaming\npm");
+        let node = PathBuf::from(r"C:\Program Files\nodejs").join("node.exe");
+        // `\` inside: the shim's own spelling (on Windows one path; joined as Windows does).
+        let cli = npm.join(r"node_modules\@anthropic-ai\claude-code\cli.js").to_string_lossy().into_owned();
+        let npm_cli = npm.join(r"node_modules\npm\bin\npm-cli.js").to_string_lossy().into_owned();
+        let codex = npm.join(r"node_modules\@openai\codex\bin\codex.exe").to_string_lossy().into_owned();
+        let files: HashSet<PathBuf> =
+            [npm.join("claude.cmd"), npm.join("npm.cmd"), npm.join("codex.cmd"), node.clone(), PathBuf::from(&cli), PathBuf::from(&npm_cli), PathBuf::from(&codex)]
+                .into_iter()
+                .collect();
+        let path = format!(r"{};C:\Program Files\nodejs", npm.display());
+        let read = |p: &Path| -> Option<String> {
+            let name = p.file_name()?.to_str()?;
+            Some(match name { "claude.cmd" => MODERN_SHIM, "npm.cmd" => OLD_SHIM, "codex.cmd" => EXE_SHIM, _ => return None }.to_string())
+        };
+        // A whole multi-line prompt with cmd.exe's operators: one argument, untouched.
+        let prompt = "line one & \"two\"\n%PATH% | three".to_string();
+        let args = vec!["--append-system-prompt".to_string(), prompt.clone()];
+        for launcher in [Launcher::Pty, Launcher::Std] {
+            let r = resolve_for(launcher, "claude", &args, &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
+            assert_eq!(r, (node.to_string_lossy().into_owned(), vec![cli.clone(), "--append-system-prompt".into(), prompt.clone()]), "{launcher:?}");
+            let r = resolve_for(launcher, "npm", &["ls".into()], &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
+            assert_eq!(r, (node.to_string_lossy().into_owned(), vec![npm_cli.clone(), "ls".into()]), "{launcher:?}");
+            let r = resolve_for(launcher, "codex", &args, &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
+            assert_eq!(r, (codex.clone(), args.clone()), "{launcher:?}");
+        }
+        // A node.exe beside the shim wins over the one on PATH.
+        let mut with_local = files.clone();
+        with_local.insert(npm.join("node.exe"));
+        let r = resolve_for(Launcher::Pty, "claude", &[], &path, ".EXE;.CMD", "cmd.exe", exists_in(&with_local), read);
+        assert_eq!(r.0, npm.join("node.exe").to_string_lossy());
+        // The target missing, or a shim with fixed arguments: a batch file as before.
+        let no_cli: HashSet<PathBuf> = files.iter().filter(|p| p.to_string_lossy() != cli.as_str()).cloned().collect();
+        let r = resolve_for(Launcher::Pty, "claude", &[], &path, ".EXE;.CMD", "cmd.exe", exists_in(&no_cli), read);
+        assert_eq!(r.0, "cmd.exe");
+        let fixed = |_: &Path| Some("\"%dp0%\\node_modules\\x\\x.exe\" --fixed %*\r\n".to_string());
+        let r = resolve_for(Launcher::Pty, "claude", &[], &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), fixed);
+        assert_eq!(r.0, "cmd.exe");
+    }
+
+    /// Windows only (it runs cmd.exe): what a batch file and a built-in get
+    /// is the text that was sent, operators and `%VAR%` included, and
+    /// nothing else runs.
+    #[cfg(windows)]
+    #[test]
+    fn cmd_exe_runs_nothing_an_argument_says() {
+        use std::os::windows::process::CommandExt;
+        let dir = std::env::temp_dir().join(format!("k2-win-cmd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("show.cmd"), "@echo off\r\necho(ARGS[%*]\r\n").expect("batch");
+        let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
+        let args: Vec<String> = vec!["a&echo SECOND".into(), "q\"&echo SECOND&\"".into(), "%USERNAME%".into(), "x|echo SECOND".into()];
+        let path = dir.to_string_lossy().into_owned();
+        for program in ["show", "echo"] {
+            let (prog, a) = resolve_for(Launcher::Pty, program, &args, &path, ".EXE;.CMD", &comspec, |p| p.is_file(), |_| None);
+            assert_eq!(&a[..5], &CMD_WRAPPER, "{program}");
+            // As ConPTY gets it: the switches, then the payload as written.
+            let out = std::process::Command::new(&prog).args(&a[..5]).raw_arg(&a[5]).output().expect("cmd.exe");
+            let text = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
+            let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+            assert_eq!(lines.len(), 1, "{program}: one line, nothing else ran: {text}");
+            assert!(lines[0].contains("%USERNAME%"), "{program}: no variable expanded: {text}");
+            assert!(lines[0].contains("a&echo SECOND"), "{program}: {text}");
+        }
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[test]

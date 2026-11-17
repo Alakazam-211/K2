@@ -294,10 +294,11 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
     if !mat.skipped.is_empty() {
         sink.lock().note(&format!("[k2] vault items not delivered: {}\n", mat.skipped.join("; ")));
     }
-    // Windows: an npm-style `.cmd` program runs through cmd.exe, found on
-    // the run's PATH by cmd.exe's rule.
+    // Windows: found on the run's PATH by cmd.exe's rule; an npm shim runs
+    // its target, another `.bat`/`.cmd` goes to std (which escapes its
+    // arguments for cmd.exe).
     #[cfg(windows)]
-    let (prog, args) = k2_core::terminal::win_cmd::resolve_spawn(&job.argv[0], &job.argv[1..], env.get("PATH").map(String::as_str).unwrap_or(""));
+    let (prog, args) = k2_core::terminal::win_cmd::resolve_command(&job.argv[0], &job.argv[1..], env.get("PATH").map(String::as_str).unwrap_or(""));
     #[cfg(not(windows))]
     let (prog, args) = (job.argv[0].clone(), job.argv[1..].to_vec());
     let mut cmd = k2_core::bg_proc::command(&prog);

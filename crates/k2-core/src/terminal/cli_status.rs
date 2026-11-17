@@ -404,7 +404,7 @@ fn probe_version(
         Err(e) => return Err(format!("not checked: {}", clip(&e))),
     }
     let (prog, args) =
-        super::win_cmd::resolve_spawn(&program, &[flag.to_string()], search_path);
+        super::win_cmd::resolve_command(&program, &[flag.to_string()], search_path);
     let mut cmd = crate::bg_proc::command(&prog);
     cmd.args(&args)
         .stdin(Stdio::null())

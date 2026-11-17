@@ -433,8 +433,9 @@ impl RuntimeEngine for ProcessEngine {
 
     /// Windows: as on Unix, with a Job Object for the setsid group (stop
     /// ends the tree; it also ends with the daemon, so Windows doesn't
-    /// adopt: the supervisor starts the App again at boot), npm-style
-    /// `.cmd` programs run through cmd.exe, and the system variables a
+    /// adopt: the supervisor starts the App again at boot), an npm shim
+    /// runs its target and another `.bat`/`.cmd` goes to std (which escapes
+    /// its arguments for cmd.exe), and the system variables a
     /// Windows program needs added to the clean environment.
     #[cfg(windows)]
     fn start(&self, spec: &AppSpec, p: &Prepared, port: u16) -> Result<RunHandle> {
@@ -443,7 +444,7 @@ impl RuntimeEngine for ProcessEngine {
         };
         let env = clean_env(spec, port);
         let path = env.iter().find(|(k, _)| k == "PATH").map(|(_, v)| v.clone()).unwrap_or_default();
-        let (prog, args) = k2_core::terminal::win_cmd::resolve_spawn(prog, args, &path);
+        let (prog, args) = k2_core::terminal::win_cmd::resolve_command(prog, args, &path);
         let mut cmd = k2_core::bg_proc::command(&prog);
         cmd.args(&args).current_dir(&p.workdir).env_clear();
         for (k, v) in windows_base_env(spec).into_iter().chain(env) {

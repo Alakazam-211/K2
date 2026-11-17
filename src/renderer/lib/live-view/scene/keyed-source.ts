@@ -285,7 +285,8 @@ export class KeyedWatchSceneSource implements LiveSource {
   }
 
   private build(): SceneSnapshot {
-    const S = finish(this.S)
+    // A new state object each time: the views memoise on it (the sample hands a new one each step).
+    const S = finish({ ...this.S, peers: { ...this.S.peers }, claims: [...this.S.claims], log: [...this.S.log] })
     const snap = sceneSnapshot(S, LIVE, 0, this.control)
     const messages = [...snap.messages, ...this.extra].sort((a, b) => a.at_ms - b.at_ms)
     return { ...snap, size: null, messages, scene: { ...snap.scene, fileName: this.o.fileName, scenario: 'live', label: '', meshEpoch: this.meshEpoch } }

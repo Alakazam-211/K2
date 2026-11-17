@@ -83,6 +83,15 @@ describe('KeyedWatchSceneSource on the BLEND pack’s golden', () => {
     expect(s.people.find((p) => p.name === 'Atlas')?.kind).toBe('agent')
   })
 
+  it('each snapshot hands a new state (the views memoise on it)', () => {
+    const o = open({ upto: 'claim' })
+    const a = o.snap().scene.S
+    o.play('place Table')
+    const b = o.snap().scene.S
+    expect(b).not.toBe(a)
+    expect(b.D.rev).toBe(2)
+  })
+
   it('a transform change: Atlas places Table; the doc moves and Activity says so', () => {
     const o = open({ upto: 'claim' })
     o.play('place Table')

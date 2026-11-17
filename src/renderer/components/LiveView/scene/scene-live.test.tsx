@@ -76,6 +76,8 @@ describe('the scene tab on a real file', () => {
     expect(screen.getByTestId('lv-shell-header').textContent).toContain('set')
     expect(screen.getByRole('group', { name: /Who’s here/ }).textContent).toContain('A')
     expect(screen.getByTestId('lv-scene-section-activity').textContent).toContain('Atlas moved and turned Table')
+    // the outliner is the file's: its collections and objects
+    expect(screen.getByRole('tree', { name: /Collections and objects/ }).textContent).toContain('Table')
     // only real people: the sample's Brook and Sam are nowhere
     expect(document.body.textContent).not.toMatch(/Brook|Sam\b/)
   })

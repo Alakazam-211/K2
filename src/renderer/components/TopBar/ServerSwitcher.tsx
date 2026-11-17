@@ -128,15 +128,19 @@ export function hostIndicator(
   return { color: statusColor(status), title: `Connection: ${status}` }
 }
 
+/** The current server's connection mark in the menu. Its corners read
+ *  `--radius-status`, like every status mark: a square in Terminal, a
+ *  round dot in Glass. */
 function StatusDot({ status }: { status: ConnectionStatus }): React.JSX.Element {
   return (
     <span
       aria-label={`connection ${status}`}
       title={`Connection: ${status}`}
+      data-server-status={status}
       style={{
         width: 7,
         height: 7,
-
+        borderRadius: 'var(--radius-status, 0px)',
         background: statusColor(status),
         flexShrink: 0,
         display: 'inline-block',
@@ -636,7 +640,7 @@ function SwitcherRow({
       {statusDot !== null ? (
         <StatusDot status={statusDot} />
       ) : (
-        <span style={{ width: 7, flexShrink: 0 }} />
+        <span data-server-status-slot="" style={{ width: 7, flexShrink: 0 }} />
       )}
       <span className="flex flex-col min-w-0">
         <span className="truncate">{label}</span>

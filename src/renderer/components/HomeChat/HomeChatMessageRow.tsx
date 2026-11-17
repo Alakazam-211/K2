@@ -5,12 +5,16 @@
 // same three as a menu (`useThreadMessageGestures`, the Thread's). No
 // @mentions: `@name` is plain text in the body (D18).
 //
-// The action bar floats at the bubble's top edge, beside it on the open side
-// (right of theirs, left of yours), so it never covers the message's words;
-// a bubble too wide to leave room puts it just above its outer corner
-// instead (`actionBarPlace`). It shows on hover and while focus is inside
-// the message, in the look's button style (the Thread's chamfered control
-// in Terminal, a pill in Glass).
+// The action bar (the hover row) sits on the bubble's top corner away from
+// the sender, as chat apps put it: top right on theirs, top left on yours.
+// It reaches outward from the corner and overlaps the bubble's top edge by
+// less than the bubble's top padding, so it never covers the words; it is
+// fixed to the top edge, so it sits in the same place on every bubble, short
+// or long, and doesn't move when chips or a quote change the bubble's
+// height. Where the column's edge leaves no room outward it flips inward,
+// over the top edge inside the corner (`actionBarPlace`). It shows on hover
+// and while focus is inside the message, in the look's button style (the
+// Thread's chamfered control in Terminal, a pill in Glass).
 //
 // A message just jumped to gets a soft accent wash that fades over
 // JUMP_WASH_MS (none of it moves under reduced motion: the wash just goes).
@@ -27,6 +31,7 @@ import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { copyToClipboard } from '@/components/common/chat-copy'
 import { useToastStore } from '@/stores/toast'
+import { clientRectToCss } from '@/lib/app-zoom'
 import type { HomeChatMessage } from '@/lib/home-chat/api'
 import type { ReplyPreview } from '@/lib/home-chat/chat'
 import { HomeChatReactionChips, HomeChatReactionPicker } from './HomeChatReactions'
@@ -45,37 +50,47 @@ export const JUMP_WASH_MS = 1200
 const ACTION_PX = 26
 const BAR_PAD = 3
 export const ACTION_BAR_PX = ACTION_PX + BAR_PAD * 2
-/** How far beside the bubble the bar sits, and how far above its top edge. */
-const BAR_GAP = 6
-const BAR_RISE = 8
+/** The whole bar (three buttons, its inset and its 1px edge), used until
+ *  it has been measured. */
+const BAR_SIZE_FALLBACK = { width: ACTION_PX * 3 + BAR_PAD * 2 + 2, height: ACTION_BAR_PX + 2 }
+/** How far the bar reaches over the bubble's outer corner (px), and how far
+ *  down over its top edge: less than the bubble's 9px top padding, so it
+ *  never covers the first line. */
+export const BAR_OVER_X = 16
+export const BAR_OVER_Y = 8
+/** Turned inward, the bar's end stays this far inside the bubble's corner;
+ *  turned outward, this far inside the column's edge. */
+const BAR_IN_X = 6
+const BAR_COLUMN_PAD = 4
 
 export interface ActionBarPlace {
   /** From the row's top (px). */
   top: number
-  /** From the row's left edge (theirs) or right edge (yours), px. */
+  /** From the sender's side of the row (px): its left edge on theirs, its
+   *  right edge on yours. */
   inset: number
-  /** Beside the bubble (true), or over its outer top corner (no room). */
-  beside: boolean
+  /** Turned inward over the bubble (no room outward at the column's edge). */
+  inward: boolean
 }
 
-/** Where the bar goes for a bubble (rects relative to the row): beside it on
- *  the open side, level with its top edge; when the open side has no room
- *  for `barWidth`, just above its outer corner (exported for tests). */
-export function actionBarPlace(row: { width: number }, bubble: { left: number; right: number; top: number }, barWidth: number, mine: boolean): ActionBarPlace {
-  const room = mine ? bubble.left : row.width - bubble.right
-  if (room >= barWidth + BAR_GAP) {
-    return {
-      top: Math.round(bubble.top - BAR_RISE),
-      inset: Math.round(mine ? row.width - bubble.left + BAR_GAP : bubble.right + BAR_GAP),
-      beside: true,
-    }
-  }
-  const outer = mine ? Math.max(0, bubble.left) : Math.max(0, row.width - bubble.right)
-  return {
-    top: Math.round(bubble.top - ACTION_BAR_PX + 4),
-    inset: Math.round(outer),
-    beside: false,
-  }
+/** Where the bar goes for a bubble (rects relative to the row, px): on its
+ *  outer top corner, reaching outward, BAR_OVER_Y down over its top edge;
+ *  inward over the top edge when the column has no room outward; never
+ *  outside the row. Only the bubble's top edge sets the height, so a tall
+ *  bubble gets it where a short one does (exported for tests). */
+export function actionBarPlace(
+  row: { width: number },
+  bubble: { left: number; right: number; top: number; bottom?: number },
+  bar: { width: number; height: number },
+  mine: boolean,
+): ActionBarPlace {
+  const top = Math.round(bubble.top - bar.height + BAR_OVER_Y)
+  // The bubble's outer corner, from the sender's side of the row.
+  const corner = mine ? row.width - bubble.left : bubble.right
+  const out = corner - BAR_OVER_X
+  if (out + bar.width <= row.width - BAR_COLUMN_PAD) return { top, inset: Math.round(out), inward: false }
+  const inside = Math.min(corner - bar.width - BAR_IN_X, row.width - bar.width)
+  return { top, inset: Math.round(Math.max(0, inside)), inward: true }
 }
 
 const ACTION_BUTTON_CLASS =
@@ -215,11 +230,12 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
     const row = ref.current
     const bubble = row?.querySelector<HTMLElement>('[data-zen-bubble]')
     if (!row || !bubble) return
-    const r = row.getBoundingClientRect()
-    const b = bubble.getBoundingClientRect()
+    const r = clientRectToCss(row.getBoundingClientRect())
+    const b = clientRectToCss(bubble.getBoundingClientRect())
     if (r.width === 0) return
-    const w = barRef.current?.offsetWidth ?? ACTION_BAR_PX * 3
-    setPlace(actionBarPlace({ width: r.width }, { left: b.left - r.left, right: b.right - r.left, top: b.top - r.top }, w, mine))
+    const bar = barRef.current?.firstElementChild as HTMLElement | null | undefined
+    const size = { width: bar?.offsetWidth || BAR_SIZE_FALLBACK.width, height: bar?.offsetHeight || BAR_SIZE_FALLBACK.height }
+    setPlace(actionBarPlace({ width: r.width }, { left: b.left - r.left, right: b.right - r.left, top: b.top - r.top }, size, mine))
   }, [mine])
 
   // The jump's wash: shown, then faded out over JUMP_WASH_MS.
@@ -231,7 +247,7 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
   }, [flash])
 
   const side = mine ? 'right' : 'left'
-  const barPos: CSSProperties = place ? { top: place.top, [side]: place.inset } : { top: -BAR_RISE, [mine ? 'left' : 'right']: 0 }
+  const barPos: CSSProperties = place ? { top: place.top, [side]: place.inset } : { top: BAR_OVER_Y - BAR_SIZE_FALLBACK.height, [mine ? 'left' : 'right']: 0 }
 
   return (
     <div
@@ -283,7 +299,7 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
         <div
           ref={barRef}
           data-home-chat-actions=""
-          data-beside={place?.beside === false ? undefined : ''}
+          data-inward={place?.inward ? '' : undefined}
           className="pointer-events-none absolute z-[3] opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
           style={barPos}
         >

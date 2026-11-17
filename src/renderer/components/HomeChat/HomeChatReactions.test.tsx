@@ -3,9 +3,7 @@
 //   1. Chips: the emoji and count, a ring when yours, a tip naming who.
 //   2. The picker: six quick emoji and a search, all by keyboard; Esc
 //      closes it and focus goes back to the React button.
-//   3. The action bar: React (an icon), Reply, More; beside the bubble on
-//      the open side, so it never covers the words.
-//   4. A jumped-to message gets a wash, not a flash.
+// (The hover row on a message: HomeChatHoverRow.test.tsx.)
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -22,8 +20,6 @@ import {
   reactionTipText,
   reactorsLine,
 } from './HomeChatReactions'
-import { HomeChatMessageRow, actionBarPlace, type HomeChatRowActions } from './HomeChatMessageRow'
-import type { HomeChatMessage } from '@/lib/home-chat/api'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -179,62 +175,5 @@ describe('the picker', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(outer).not.toHaveBeenCalled()
     document.removeEventListener('keydown', outer)
-  })
-})
-
-describe('the action bar', () => {
-  it('sits beside the bubble on the open side, level with its top edge', () => {
-    // Theirs: to the right of the bubble.
-    expect(actionBarPlace({ width: 800 }, { left: 0, right: 300, top: 20 }, 90, false)).toEqual({ top: 12, inset: 306, beside: true })
-    // Yours: to its left (inset from the row's right edge).
-    expect(actionBarPlace({ width: 800 }, { left: 500, right: 800, top: 0 }, 90, true)).toEqual({ top: -8, inset: 306, beside: true })
-  })
-
-  it('a bubble with no room beside it gets the bar over its outer top corner', () => {
-    const p = actionBarPlace({ width: 400 }, { left: 0, right: 360, top: 20 }, 90, false)
-    expect(p.beside).toBe(false)
-    expect(p.inset).toBe(40)
-    // Wholly above the bubble's words (the bubble's padding is under its last 4px).
-    expect(p.top).toBeLessThan(20)
-  })
-
-  const msg: HomeChatMessage = { id: '5', conv: '7', authorId: '2', body: 'hello', createdAt: 1, seq: 5, reactions: [], replyTo: null, deleted: false, nonce: null }
-  const actions: HomeChatRowActions = { react: vi.fn(), reply: vi.fn(), jump: vi.fn(), who: async () => [] }
-  const row = (o: Partial<{ flash: boolean; readOnly: boolean }> = {}) => (
-    <HomeChatMessageRow m={msg} mine={false} author="Ana" timeLabel="now" still runStart tail reply={null} flash={o.flash ?? false} readOnly={o.readOnly ?? false} actions={actions} />
-  )
-
-  it('React is an icon button (no text glyph); the bar is a toolbar of React, Reply, More', () => {
-    render(row())
-    const react = screen.getByTestId('home-chat-react')
-    expect(react.querySelector('svg')).not.toBeNull()
-    expect(react.textContent).toBe('')
-    const bar = screen.getByRole('toolbar', { name: 'Message actions' })
-    expect([...bar.querySelectorAll('button')].map((b) => b.getAttribute('aria-label'))).toEqual(['React', 'Reply', 'More'])
-    // Shown on hover and on keyboard focus inside the message.
-    const holder = bar.parentElement!
-    expect(holder.className).toContain('group-hover:opacity-100')
-    expect(holder.className).toContain('focus-within:opacity-100')
-  })
-
-  it('React opens the picker; Esc closes it and puts focus back on React', async () => {
-    render(row())
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('home-chat-react'))
-    })
-    expect(screen.getByTestId('home-chat-reaction-picker')).toBeTruthy()
-    await act(async () => {
-      fireEvent.keyDown(screen.getByTestId('home-chat-emoji-search'), { key: 'Escape' })
-    })
-    expect(screen.queryByTestId('home-chat-reaction-picker')).toBeNull()
-    expect(document.activeElement).toBe(screen.getByTestId('home-chat-react'))
-  })
-
-  it('a jumped-to message gets a soft accent wash', () => {
-    const { rerender, container } = render(row())
-    expect(container.querySelector('[data-home-chat-wash]')).toBeNull()
-    rerender(row({ flash: true }))
-    const wash = container.querySelector<HTMLElement>('[data-home-chat-wash]')!
-    expect(wash.style.background).toContain('var(--zen-accent) 18%')
   })
 })

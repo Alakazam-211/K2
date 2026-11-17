@@ -18,7 +18,10 @@ import { loadHostBinary } from '@/lib/load-host-binary'
 import { useDocVersion } from './useDocVersion'
 import { ViewerNote } from './ViewerNote'
 import type { Bounds, DxfDrawing, DxfNode } from './dxfModel'
+import type { CadChangeSource } from './dxf/cad-change-source'
 import { pageTextMetrics } from './dxf/text-metrics'
+import { useDxfLiveChanges } from './dxf/useDxfLiveChanges'
+import { framed, viewBounds } from './dxf/view-address'
 
 type Box = { x: number; y: number; w: number; h: number }
 
@@ -108,13 +111,22 @@ const DxfShapes = memo(function DxfShapes({ nodes }: { nodes: DxfNode[] }) {
   )
 })
 
-export function DxfViewer({ text }: { text: string }): React.JSX.Element {
+export function DxfViewer({ text, filePath, view, changes }: {
+  text: string
+  /** The file: with it, each new version's change is highlighted. */
+  filePath?: string
+  /** Open framed to a view address (`@h:2B1`, `@layer:A-WALL`, a set); Fit still shows it all. */
+  view?: string | readonly string[]
+  /** Where changes come from instead of the daemon (tests, shots); null turns the highlight off. */
+  changes?: CadChangeSource | null
+}): React.JSX.Element {
   const [drawing, setDrawing] = useState<DxfDrawing | null>(null)
   const [error, setError] = useState<string | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const viewRef = useRef<Box | null>(null)
   const refitRef = useRef<() => void>(() => {})
+  const frameRef = useRef<(b: Bounds) => void>(() => {})
 
   useEffect(() => {
     let cancelled = false
@@ -135,6 +147,18 @@ export function DxfViewer({ text }: { text: string }): React.JSX.Element {
   }, [text])
 
   const fit = drawing?.bounds ? fitBox(drawing.bounds) : null
+  const viewKey = typeof view === 'string' ? view : view?.join(' ')
+  const live = useDxfLiveChanges({
+    drawing,
+    filePath,
+    changes,
+    frame: (b) => frameRef.current(b),
+    padUnits: () => {
+      const r = boxRef.current?.getBoundingClientRect()
+      const v = viewRef.current
+      return r && v && r.width && r.height ? 5 * Math.max(v.w / r.width, v.h / r.height) : 0
+    },
+  })
 
   // Gestures write the viewBox straight to the DOM: no React render per frame.
   // A layout effect: the listeners are bound in the same commit that shows
@@ -149,8 +173,12 @@ export function DxfViewer({ text }: { text: string }): React.JSX.Element {
       viewRef.current = v
       svg.setAttribute('viewBox', `${v.x} ${v.y} ${v.w} ${v.h}`)
     }
-    apply(fit)
+    const frame = (b: Bounds): void => apply(fitBox(framed(b, drawing!.bounds)))
+    const start = viewBounds(view, drawing!)
+    if (start) frame(start)
+    else apply(fit)
     refitRef.current = () => apply(fit)
+    frameRef.current = frame
 
     /** SVG units per screen pixel (viewBox is "meet"-fitted). */
     const unitsPerPx = (v: Box): { k: number; r: DOMRect } => {
@@ -259,10 +287,11 @@ export function DxfViewer({ text }: { text: string }): React.JSX.Element {
       el.removeEventListener('gestureend', onGestureEnd)
       el.removeEventListener('dblclick', onDbl)
       refitRef.current = () => {}
+      frameRef.current = () => {}
     }
-    // `fit` is derived from `drawing`: re-bind only when the drawing changes.
+    // `fit` is derived from `drawing`: re-bind only when the drawing or the view address changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawing])
+  }, [drawing, viewKey])
 
   if (error) {
     const binary = /binary dxf/i.test(error)
@@ -308,6 +337,7 @@ export function DxfViewer({ text }: { text: string }): React.JSX.Element {
           Fit
         </button>
       </div>
+      {live.note}
       <div
         ref={boxRef}
         className="relative min-h-0 flex-1 cursor-grab select-none overflow-hidden"
@@ -321,6 +351,7 @@ export function DxfViewer({ text }: { text: string }): React.JSX.Element {
           data-testid="dxf-svg"
         >
           <DxfShapes nodes={drawing.nodes} />
+          {live.outlines}
         </svg>
         {drawing.skippedTotal ? (
           <div
@@ -418,5 +449,5 @@ export function DxfHostBytesViewer({ filePath }: { filePath: string }): React.JS
       />
     )
   }
-  return <DxfViewer text={text} />
+  return <DxfViewer text={text} filePath={filePath} />
 }

@@ -61,7 +61,7 @@ export function FilePreview(p: {
         ) : p.readError && !p.saved ? (
           <ViewerNote tone="error" testId="dxf-read-error" {...dxfReadErrorNote(p.readError)} />
         ) : (
-          <DxfViewer text={text} />
+          <DxfViewer text={text} filePath={filePath} />
         )}
       </Suspense>
     </div>

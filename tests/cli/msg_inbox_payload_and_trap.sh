@@ -2,11 +2,12 @@
 # GH#64: tray file send must keep sender prose, and must not exit 1
 # from an unbound `_tray_remote_applied` on RETURN.
 # Pure helpers — no daemon.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="${ROOT}/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 
 if [ ! -f "$K2_CLI" ]; then
     echo "FAIL: cli/k2 not found at $K2_CLI" >&2

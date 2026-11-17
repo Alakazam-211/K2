@@ -3,12 +3,13 @@
 # "text" --file path[:line[-end]]`. No daemon: help, usage errors and the
 # --file → JSON parsing (extracted from cli/k2). The daemon end to end is
 # crates/k2-daemon/tests/it_chat/thread_attachments_integration.rs.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 

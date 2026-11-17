@@ -3,11 +3,12 @@
 # Injects fake curl/OS outcomes (PATH wrap) plus a real closed-port refuse
 # and a stub daemon. Fail loud; no skip-if-missing. No live K2 daemon.
 # Run with: bash tests/cli/agent_list_transport.sh
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_BASH_SOURCE"
 
 [ -f "$K2" ] || { echo "FAIL: $K2 not found" >&2; exit 1; }
 [ -x "$K2" ] || { echo "FAIL: $K2 not executable" >&2; exit 1; }

@@ -3,11 +3,12 @@
 # given, so a byte that is not valid UTF-8 becomes %XX, and when it cannot
 # encode at all (no python3) it prints an error and ends the command, so
 # nothing is sent.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 pass=0
 die() { echo "FAIL: $*" >&2; exit 1; }
 

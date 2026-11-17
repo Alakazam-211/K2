@@ -4,11 +4,12 @@
 # prints for a virtual desktop. A stub daemon answers with the wire
 # contract's shapes and logs each request (path, query, body).
 # Hermetic: HOME is a temp dir; no real daemon, no ~/.k2.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-K2_CLI="$(cd "$SCRIPT_DIR/../.." && pwd)/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
 
 WORK="$(mktemp -d -t k2-vd-cli-XXXXXX)"

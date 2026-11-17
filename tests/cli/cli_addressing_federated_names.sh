@@ -8,11 +8,12 @@
 # inbound envelopes. The peer is paired for real (pairing v2 respond/verify
 # + owner confirm with the code). Loud: every check must pass; nothing is
 # skipped.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not executable" >&2; exit 1; }
 for tool in jq openssl python3 curl; do
     command -v "$tool" >/dev/null || { echo "FAIL: $tool is required" >&2; exit 1; }

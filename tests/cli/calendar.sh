@@ -3,11 +3,12 @@
 # Stalwart. Static wiring + help + schema + study + usage errors, then a
 # local echo server checks the exact requests (routes, the --from/--to →
 # start/end mapping, POST bodies) and the output/exit contract.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_BASH_SOURCE"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 

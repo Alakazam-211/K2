@@ -20,6 +20,18 @@
 //!     manage a regular-file install.
 //!   - **Non-fatal.** A failed write (not root, read-only `/usr/local/bin`)
 //!     is logged by the caller, never crashes boot.
+//!
+//! New k5 command (Beta): when the owner's switch is on and the k5 binary
+//! sits beside this daemon at this release's version
+//! ([`k2_client::cli_install::binary_in_dir_if_on`]), `k2` becomes a link to
+//! the binary and a `k5` link joins it ([`StageAs::Binary`]). Off, or with no
+//! such binary, it is the copy of the script as before, and a link to the
+//! binary that K2 made is put back to the copy (a `k5` K2 made gets a copy
+//! too; none is made while off). The one symlink the stage replaces is a
+//! link to the binary (`is_binary_target`); any other symlink is still
+//! never touched. Each change is one rename over the old file or link, so
+//! the path never goes missing; `k2` changes before `k5`, so a stage stopped
+//! between them leaves both working, one on each.
 
 use std::path::{Path, PathBuf};
 
@@ -38,6 +50,8 @@ const LEGACY_VERSION_PREFIX: &str = "K2SO_CLI_VERSION=";
 /// Canonical install location (on PATH; matches `provision-k2-server.sh`):
 /// `/usr/local/bin/<the command>`, from the brand file.
 const INSTALL_PATH: &str = crate::cli_install::SYSTEM_CLI_PATH;
+/// The command's name (the file name of [`INSTALL_PATH`]).
+const CLI_NAME: &str = k2_client::cli_install::CLI_NAME;
 
 /// Extract the CLI version value, quote-trimmed. `None` when neither
 /// marker is present (treated as outdated so a marker-less / hand-edited
@@ -81,6 +95,54 @@ fn write_exec(path: &Path, content: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// What the stage puts at a command's path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageAs<'a> {
+    /// A copy of the embedded script (today's).
+    Script,
+    /// A link to the k5 binary at this path.
+    Binary(&'a Path),
+}
+
+impl<'a> StageAs<'a> {
+    /// From the links' [`k2_client::cli_install::Choice`].
+    pub fn of(choice: &'a k2_client::cli_install::Choice) -> Self {
+        choice.binary().map_or(StageAs::Script, StageAs::Binary)
+    }
+}
+
+/// True when `path` is a symlink to the k5 binary (by its name).
+fn is_binary_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+        && std::fs::read_link(path).is_ok_and(|t| k2_client::cli_install::is_binary_target(&t))
+}
+
+/// Put the script copy at `target` in one step (a temp file beside it,
+/// renamed over it), for a path that holds a link to the binary.
+fn swap_in_script(target: &Path) -> Result<(), String> {
+    let tmp = k2_client::cli_install::swap_temp_path(target);
+    let _ = std::fs::remove_file(&tmp);
+    write_exec(&tmp, CLI_CONTENT)?;
+    k2_client::cli_install::finish_swap(&tmp, target).map_err(|e| format!("replace {}: {e}", target.display()))
+}
+
+/// Put a link to `binary` at `target` in one step.
+#[cfg(unix)]
+fn swap_in_binary(binary: &Path, target: &Path) -> Result<(), String> {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create {} (for {}): {e}", parent.display(), target.display()))?;
+    }
+    let tmp = k2_client::cli_install::begin_link_swap(binary, target)
+        .map_err(|e| format!("link {}: {e}", target.display()))?;
+    k2_client::cli_install::finish_swap(&tmp, target).map_err(|e| format!("replace {}: {e}", target.display()))
+}
+
+#[cfg(not(unix))]
+fn swap_in_binary(_binary: &Path, target: &Path) -> Result<(), String> {
+    Err(format!("{}: the k5 binary is linked on Unix only", target.display()))
+}
+
 /// Testable core — decide + act at an explicit `target`. Returns
 /// `Ok(Some(path))` when the CLI is now staged (freshly written or
 /// already current), `Ok(None)` when deliberately skipped because the
@@ -88,9 +150,47 @@ fn write_exec(path: &Path, content: &str) -> Result<(), String> {
 /// the K2 CLI (another program named `k2`), and `Err` only on a real
 /// write/permission failure.
 pub fn stage_cli_at(target: &Path) -> Result<Option<PathBuf>, String> {
-    // Never clobber a symlink: the macOS app points it into its bundle,
-    // and a developer may link it at their repo checkout. We manage only
-    // a regular-file install.
+    stage_at(target, StageAs::Script, true)
+}
+
+/// [`stage_cli_at`] for what `as_` says. `create`: make the path when
+/// nothing is there (`false` for a `k5` while the links run the script).
+/// A link to the k5 binary is K2's: it is replaced (by the script copy, or
+/// re-pointed at this binary). Leftover swap temps beside it are removed
+/// first ([`k2_client::cli_install::sweep_temp_links`]).
+pub fn stage_at(target: &Path, as_: StageAs<'_>, create: bool) -> Result<Option<PathBuf>, String> {
+    #[cfg(unix)]
+    if let Some(dir) = target.parent() {
+        for gone in k2_client::cli_install::sweep_temp_links(dir) {
+            crate::log_debug!("[cli-stage] removed {}, left by an interrupted swap", gone.display());
+        }
+    }
+    let present = std::fs::symlink_metadata(target).is_ok();
+    if !present && !create {
+        return Ok(None);
+    }
+    if is_binary_link(target) {
+        return match as_ {
+            StageAs::Binary(binary) => {
+                let current = std::fs::read_link(target).ok().map(|t| match target.parent() {
+                    Some(dir) if t.is_relative() => dir.join(t),
+                    _ => t,
+                });
+                if current.as_deref() == Some(binary) {
+                    return Ok(Some(target.to_path_buf()));
+                }
+                swap_in_binary(binary, target)?;
+                Ok(Some(target.to_path_buf()))
+            }
+            StageAs::Script => {
+                swap_in_script(target)?;
+                Ok(Some(target.to_path_buf()))
+            }
+        };
+    }
+    // Never clobber any other symlink: the macOS app points it into its
+    // bundle, and a developer may link it at their repo checkout. We manage
+    // only a regular-file install (and a link to the binary, above).
     if std::fs::symlink_metadata(target)
         .map(|m| m.file_type().is_symlink())
         .unwrap_or(false)
@@ -113,6 +213,13 @@ pub fn stage_cli_at(target: &Path) -> Result<Option<PathBuf>, String> {
             crate::log_debug!("[cli-stage] left {} alone: it isn't the K2 CLI", target.display());
             return Ok(None);
         }
+    }
+
+    if let StageAs::Binary(binary) = as_ {
+        // Over the script copy (or nothing): one rename. A folder there
+        // fails the rename, so the caller's fallback runs, as for a write.
+        swap_in_binary(binary, target)?;
+        return Ok(Some(target.to_path_buf()));
     }
 
     let embedded = cli_version(CLI_CONTENT);
@@ -148,7 +255,48 @@ pub fn stage_cli_with_fallback(
     primary: &Path,
     fallback: Option<&Path>,
 ) -> Result<Option<PathBuf>, String> {
-    let primary_err = match stage_cli_at(primary) {
+    stage_cli_with_fallback_as(primary, fallback, StageAs::Script)
+}
+
+/// [`stage_cli_with_fallback`] for what `as_` says, then the `k5` beside
+/// the staged `k2` (made for the binary; with the script only refreshed
+/// where K2 made one). With the script, a link to the binary at the other
+/// place (`k2` or `k5`) goes back to the script too, so turning the switch
+/// off reaches every link it made.
+pub fn stage_cli_with_fallback_as(
+    primary: &Path,
+    fallback: Option<&Path>,
+    as_: StageAs<'_>,
+) -> Result<Option<PathBuf>, String> {
+    let staged = stage_k2_with_fallback(primary, fallback, as_)?;
+    if let Some(k2) = &staged {
+        let k5 = k2.with_file_name(k2_client::cli_install::K5_NAME);
+        if let Err(e) = stage_at(&k5, as_, matches!(as_, StageAs::Binary(_))) {
+            crate::log_debug!("[cli-stage] WARN: stage {}: {e}", k5.display());
+        }
+    }
+    if as_ == StageAs::Script {
+        for other in [Some(primary), fallback].into_iter().flatten() {
+            for name in [CLI_NAME, k2_client::cli_install::K5_NAME] {
+                let path = other.with_file_name(name);
+                if staged.as_deref().and_then(Path::parent) == path.parent() || !is_binary_link(&path) {
+                    continue;
+                }
+                if let Err(e) = stage_at(&path, StageAs::Script, false) {
+                    crate::log_debug!("[cli-stage] WARN: put the script back at {}: {e}", path.display());
+                }
+            }
+        }
+    }
+    Ok(staged)
+}
+
+fn stage_k2_with_fallback(
+    primary: &Path,
+    fallback: Option<&Path>,
+    as_: StageAs<'_>,
+) -> Result<Option<PathBuf>, String> {
+    let primary_err = match stage_at(primary, as_, true) {
         Ok(out) => return Ok(out),
         Err(e) => e,
     };
@@ -160,7 +308,7 @@ pub fn stage_cli_with_fallback(
         primary.display(),
         fallback.display(),
     );
-    stage_cli_at(fallback)
+    stage_at(fallback, as_, true)
         .map_err(|e| format!("{primary_err}; fallback {e}"))
 }
 
@@ -175,8 +323,40 @@ pub fn stage_cli() -> Result<Option<PathBuf>, String> {
     let fallback = std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(|h| crate::cli_install::user_bin_dir(Path::new(&h)).join(crate::cli_install::CLI_NAME));
-    stage_cli_with_fallback(Path::new(INSTALL_PATH), fallback.as_deref())
+    let choice = current_choice();
+    stage_cli_with_fallback_as(Path::new(INSTALL_PATH), fallback.as_deref(), StageAs::of(&choice))
 }
+
+/// What this daemon's commands run, by the owner's switch: on Linux the
+/// k5 binary beside this daemon checked against the embedded script; on
+/// macOS the one beside the bundled script ([`k2_client::cli_install::choice_for_script`]);
+/// the script anywhere else, or for a build with no bundle.
+pub fn current_choice() -> k2_client::cli_install::Choice {
+    use k2_client::cli_install::{self as ci, Choice};
+    let on = ci::switch_on();
+    let exe = std::env::current_exe().ok();
+    if cfg!(target_os = "linux") {
+        let dir = exe.as_deref().and_then(Path::parent);
+        let found = match dir {
+            Some(dir) => ci::binary_in_dir_if_on(on, dir, embedded_version().as_deref()),
+            None => Err("this daemon's folder is unknown".to_string()),
+        };
+        return Choice::from_found(on, found);
+    }
+    if cfg!(target_os = "macos") {
+        if let Some(script) = exe.as_deref().and_then(|e| ci::packaged_cli_for_exe(e, ci::CLI_NAME)) {
+            return ci::choice_for_script(on, &script);
+        }
+        return Choice::Script { note: on.then(|| "this build isn't an installed app".to_string()) };
+    }
+    Choice::Script { note: on.then(|| "this system runs the script only".to_string()) }
+}
+
+/// The k5 binary's tests (they name its file, which this file doesn't:
+/// `tests/packaging/k5_cli_not_shipped.sh`).
+#[cfg(all(test, unix))]
+#[path = "cli_stage_binary_tests.rs"]
+mod binary_tests;
 
 #[cfg(test)]
 mod tests {

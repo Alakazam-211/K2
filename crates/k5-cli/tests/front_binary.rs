@@ -127,11 +127,19 @@ fn args(list: &[&str]) -> Vec<OsString> {
 #[test]
 fn the_binary_carries_the_version_marker() {
     let bytes = std::fs::read(BIN).unwrap_or_else(|e| panic!("read {BIN}: {e}"));
-    let marker = format!("K5_CLI_VERSION={}", script_version());
+    let marker = format!("K5_CLI_VERSION={}\0", script_version());
     assert!(
         bytes.windows(marker.len()).any(|w| w == marker.as_bytes()),
-        "{marker} is not in the bytes of {BIN}"
+        "{marker:?} is not in the bytes of {BIN}"
     );
+    // The install code's check, on the built binary: read, never run.
+    assert_eq!(k2_client::cli_install::binary_versions(&bytes), vec![script_version()]);
+    k2_client::cli_install::check_binary(std::path::Path::new(BIN), Some(&script_version()))
+        .unwrap_or_else(|e| panic!("the built binary fails the install check: {e}"));
+    assert!(k2_client::cli_install::is_k5_binary(std::path::Path::new(BIN)));
+    let other = k2_client::cli_install::check_binary(std::path::Path::new(BIN), Some("0.0.1"))
+        .expect_err("another version must fail");
+    assert!(other.contains("0.0.1"), "{other}");
 }
 
 #[test]

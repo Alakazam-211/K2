@@ -40,6 +40,9 @@ const K5: Names = Names {
     fish_conf: "k5-cli.fish",
 };
 
+/// The links run the script (the k5 switch off).
+const SCRIPT: Choice = Choice::Script { note: None };
+
 /// The blocks as bytes, as they sit in a person's startup files.
 const K2_ZSH: &str = "# >>> K2 CLI >>>\nexport PATH=\"$HOME/.local/bin:$PATH\"\n# <<< K2 CLI <<<\n";
 const K2_FISH: &str = "# >>> K2 CLI >>>\nif not contains -- $HOME/.local/bin $PATH\n    \
@@ -185,7 +188,7 @@ fn an_xy_build_leaves_another_brands_links_block_and_fish_file() {
         LinkState::Stale { target: k2_target.clone() }
     );
 
-    let report = XY.heal_at(h, &input(&cli, None, "/bin/zsh")).expect("heal");
+    let report = XY.heal_at(h, &input(&cli, None, "/bin/zsh"), &SCRIPT).expect("heal");
     assert_eq!(report.user_link, LinkOutcome::Created);
     assert_eq!(report.user_link_path, bin.join("xy"));
     assert_eq!(link_target(&bin.join("xy")), cli);
@@ -196,7 +199,7 @@ fn an_xy_build_leaves_another_brands_links_block_and_fish_file() {
     assert_eq!(report.path, PathOutcome::BlockAdded { file: zprofile.clone() });
     assert_eq!(read(&zprofile), format!("{mine}{XY_ZSH}"), "the K2 block stays byte for byte; XY's goes beside it");
 
-    let fish = XY.heal_at(h, &input(&cli, None, "/usr/bin/fish")).expect("fish heal");
+    let fish = XY.heal_at(h, &input(&cli, None, "/usr/bin/fish"), &SCRIPT).expect("fish heal");
     let xy_fish = conf_d(h).join("xy-cli.fish");
     assert_eq!(fish.path, PathOutcome::BlockAdded { file: xy_fish.clone() });
     assert_eq!(read(&xy_fish), XY.path_block(ShellKind::Fish));
@@ -230,7 +233,7 @@ fn a_k5_build_takes_over_the_k2_block_once_and_links_its_aliases() {
     let (before, after) = ("# before\n", "alias gs='git status'\n");
     fs::write(&zprofile, format!("{before}{K2_ZSH}{after}")).unwrap();
 
-    let report = K5.heal_at(h, &input(&cli, Some(&shim), "/bin/zsh")).expect("heal");
+    let report = K5.heal_at(h, &input(&cli, Some(&shim), "/bin/zsh"), &SCRIPT).expect("heal");
     assert_eq!(report.user_link, LinkOutcome::Created);
     assert_eq!(link_target(&bin.join("k5")), cli);
     assert_eq!(
@@ -247,7 +250,7 @@ fn a_k5_build_takes_over_the_k2_block_once_and_links_its_aliases() {
     let healed = format!("{before}{K5_ZSH}{after}");
     assert_eq!(read(&zprofile), healed, "the K5 block takes the K2 block's place");
 
-    let again = K5.heal_at(h, &input(&cli, Some(&shim), "/bin/zsh")).expect("second heal");
+    let again = K5.heal_at(h, &input(&cli, Some(&shim), "/bin/zsh"), &SCRIPT).expect("second heal");
     assert_eq!(again.user_link, LinkOutcome::Current);
     assert_eq!(
         again.user_aliases.iter().map(|a| &a.outcome).collect::<Vec<_>>(),
@@ -271,7 +274,7 @@ fn a_k5_build_takes_over_the_k2_fish_file() {
 
     for run in 1..=2 {
         let r = K5
-            .heal_at(h, &HealInput { login_path: None, ..input(&cli, shim.as_deref(), "/usr/bin/fish") })
+            .heal_at(h, &HealInput { login_path: None, ..input(&cli, shim.as_deref(), "/usr/bin/fish") }, &SCRIPT)
             .expect("fish heal");
         let want = if run == 1 {
             PathOutcome::BlockReplaced { file: k5_fish.clone() }
@@ -319,9 +322,70 @@ fn a_file_with_two_brands_blocks_keeps_both_through_two_heals() {
         let both = format!("# mine\n{K2_ZSH}{XY_ZSH}# end\n");
         fs::write(&zprofile, &both).unwrap();
         for run in 1..=2 {
-            let r = names.heal_at(h, &input(&cli, None, "/bin/zsh")).expect("heal");
+            let r = names.heal_at(h, &input(&cli, None, "/bin/zsh"), &SCRIPT).expect("heal");
             assert_eq!(r.path, PathOutcome::BlockPresent { file: zprofile.clone() }, "{} run {run}", names.name);
             assert_eq!(read(&zprofile), both, "{} run {run}", names.name);
+        }
+    }
+}
+
+/// The names of the entries in `dir`, sorted (none when it is missing).
+fn entries(dir: &Path) -> Vec<String> {
+    let mut out: Vec<String> = match fs::read_dir(dir) {
+        Ok(rd) => rd.map(|e| e.expect("read an entry").file_name().to_string_lossy().into_owned()).collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => panic!("read {}: {e}", dir.display()),
+    };
+    out.sort();
+    out
+}
+
+/// A default-brand install gets exactly today's links, so the brand's
+/// [`Names`] change nothing a normal user has: `k2` in `~/.local/bin` and in
+/// the system bin folder, at the script; `k5` beside each ONLY when the
+/// links run the k5 binary, and then both names run it; nothing else (no
+/// alias link on a new install, no temp link left behind). Twice each, so a
+/// second heal adds nothing either.
+#[test]
+fn a_default_brand_install_makes_exactly_todays_links() {
+    for on in [false, true] {
+        let home = Home::new(if on { "default-k5-on" } else { "default-k5-off" });
+        let h = home.path();
+        let (cli, shim) = bundle(h, "K2", "k2", Some("k2so"));
+        let sys = h.join("usr-local-bin");
+        fs::create_dir_all(&sys).expect("make the system bin folder");
+        let runs = if on {
+            let dir = h.join("Applications/K2.app/Contents/MacOS");
+            fs::create_dir_all(&dir).expect("make the MacOS folder");
+            let binary = dir.join("k5-cli");
+            fs::write(&binary, "stand-in").expect("write the stand-in binary");
+            Choice::Binary { binary }
+        } else {
+            SCRIPT
+        };
+        let target = runs.binary().map(Path::to_path_buf).unwrap_or_else(|| cli.clone());
+        let input = HealInput { system_bin: Some(&sys), ..input(&cli, shim.as_deref(), "/bin/zsh") };
+        let bin = user_bin_dir(h);
+        let want: Vec<&str> = if on { vec!["k2", "k5"] } else { vec!["k2"] };
+
+        for run in 1..=2 {
+            let report = Names::compiled().heal_at(h, &input, &runs).expect("heal");
+            assert_eq!(entries(&bin), want, "k5 {on}, run {run}: ~/.local/bin");
+            assert_eq!(entries(&sys), want, "k5 {on}, run {run}: the system bin folder");
+            for dir in [&bin, &sys] {
+                for name in &want {
+                    let link = dir.join(name);
+                    assert_eq!(link_target(&link), target, "k5 {on}, run {run}: {}", link.display());
+                }
+            }
+            assert_eq!(report.user_link_path, bin.join("k2"));
+            assert!(report.user_link.is_ours(), "k5 {on}, run {run}: {:?}", report.user_link);
+            assert!(report.system_link.as_ref().is_some_and(LinkOutcome::is_ours), "k5 {on}, run {run}");
+            assert_eq!(report.user_k5.is_some(), on, "k5 {on}, run {run}: the user k5 link");
+            assert_eq!(report.system_k5.is_some(), on, "k5 {on}, run {run}: the system k5 link");
+            assert_eq!(report.user_aliases, Vec::<AliasLink>::new(), "k5 {on}, run {run}: no alias on a new install");
+            assert_eq!(report.system_aliases, Vec::<AliasLink>::new(), "k5 {on}, run {run}");
+            assert_eq!(report.swept, Vec::<PathBuf>::new(), "k5 {on}, run {run}");
         }
     }
 }

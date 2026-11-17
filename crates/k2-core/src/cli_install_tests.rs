@@ -460,3 +460,233 @@ fn the_packaged_cli_is_found_from_the_app_and_the_daemon_but_never_a_dev_build()
     fs::write(repo.join("cli/k2"), CLI_BODY).unwrap();
     assert_eq!(packaged_cli_for_exe(&repo.join("target/debug/k2-daemon"), "k2"), None);
 }
+
+// ── New k5 command (Beta): what the links run ───────────────────────────
+
+/// A stand-in for the k5 binary: an ELF header and the version marker the
+/// real one carries (`K5_CLI_VERSION=<v>` and a NUL), never run.
+fn binary_body(version: &str) -> Vec<u8> {
+    let mut b = b"\x7fELF\x02\x01\x01\x00 some code ".to_vec();
+    b.extend_from_slice(format!("K5_CLI_VERSION={version}\0").as_bytes());
+    b.extend_from_slice(b" more bytes");
+    b
+}
+
+/// The binary beside the app's executable in a bundle made by
+/// [`make_bundle`]: `K2.app/Contents/MacOS/k5-cli`.
+fn put_binary(home: &Path, dir: &str, version: &str) -> PathBuf {
+    let macos = home.join(dir).join("K2.app/Contents/MacOS");
+    fs::create_dir_all(&macos).unwrap();
+    let bin = macos.join("k5-cli");
+    fs::write(&bin, binary_body(version)).unwrap();
+    ensure_executable(&bin);
+    bin
+}
+
+fn switch(on: bool) {
+    let file = crate::paths::k2_home().join("settings.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, format!("{{\"k5CliBeta\": {on}}}")).unwrap();
+}
+
+fn k5(home: &Path) -> PathBuf {
+    user_bin_dir(home).join("k5")
+}
+
+#[test]
+fn the_switch_is_off_by_default_and_the_links_run_the_script() {
+    let home = TempHome::new();
+    let h = home.path();
+    let (cli, shim) = make_bundle(h, "Applications");
+    put_binary(h, "Applications", "0.46.11");
+    assert!(!switch_on(), "a fresh home has the switch off");
+
+    let report = heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal");
+    assert_eq!(report.runs, Choice::Script { note: None }, "off: the script, and no note");
+    assert_eq!(link_target(&user_bin_dir(h).join("k2")), cli);
+    assert!(fs::symlink_metadata(k5(h)).is_err(), "no k5 link while the switch is off");
+    assert_eq!(report.user_k5, None);
+}
+
+#[test]
+fn switching_on_points_k2_and_k5_at_the_binary_and_off_points_them_back() {
+    let home = TempHome::new();
+    let h = home.path();
+    let (cli, shim) = make_bundle(h, "Applications");
+    let binary = put_binary(h, "Applications", "0.46.11");
+    let sys = h.join("usr-local-bin");
+    fs::create_dir_all(&sys).unwrap();
+    let k2 = user_bin_dir(h).join("k2");
+    heal(&input(&cli, &shim, Some(&sys), Some(BARE_LOGIN_PATH))).expect("first heal");
+    assert_eq!(link_target(&k2), cli);
+
+    // Script to binary.
+    switch(true);
+    let on = heal(&input(&cli, &shim, Some(&sys), Some(BARE_LOGIN_PATH))).expect("heal on");
+    assert_eq!(on.runs, Choice::Binary { binary: binary.clone() });
+    assert_eq!(on.user_link, LinkOutcome::Repointed { from: cli.clone() });
+    assert_eq!(on.user_k5, Some(LinkOutcome::Created));
+    assert_eq!(link_target(&k2), binary);
+    assert_eq!(link_target(&k5(h)), binary);
+    assert_eq!(on.system_link, Some(LinkOutcome::Repointed { from: cli.clone() }));
+    assert_eq!(on.system_k5, Some(LinkOutcome::Created));
+    assert_eq!(link_target(&sys.join("k5")), binary);
+    assert!(on.log_lines().iter().any(|l| l.starts_with("k5 linked at")), "{:?}", on.log_lines());
+    // Both are K2's, and a new window finds the K2 CLI through them.
+    assert!(is_k2_cli_target(&binary));
+    assert!(is_k2_cli_script(&k2), "the binary counts as the K2 CLI");
+    assert_eq!(link_state(&k2, &cli), LinkState::Stale { target: binary.clone() }, "ours, not foreign");
+    let status = path_status_at(h, Path::new("/bin/zsh"), None, Some(BARE_LOGIN_PATH));
+    assert_eq!(status.new_terminals_run, Some(k2.clone()));
+    // Idempotent.
+    let again = heal(&input(&cli, &shim, Some(&sys), Some(BARE_LOGIN_PATH))).expect("heal again");
+    assert_eq!((again.user_link, again.user_k5), (LinkOutcome::Current, Some(LinkOutcome::Current)));
+
+    // Binary back to script: both re-pointed, k5 kept (never removed).
+    switch(false);
+    let off = heal(&input(&cli, &shim, Some(&sys), Some(BARE_LOGIN_PATH))).expect("heal off");
+    assert_eq!(off.runs, Choice::Script { note: None });
+    assert_eq!(off.user_link, LinkOutcome::Repointed { from: binary.clone() });
+    assert_eq!(off.user_k5, Some(LinkOutcome::Repointed { from: binary.clone() }));
+    assert_eq!(link_target(&k2), cli);
+    assert_eq!(link_target(&k5(h)), cli);
+    assert_eq!(link_target(&sys.join("k2")), cli);
+    assert_eq!(link_target(&sys.join("k5")), cli);
+    assert_eq!(begin_count(&read(&zprofile(h))), 1, "flips never add a second PATH block");
+}
+
+#[test]
+fn a_missing_binary_means_the_script_with_a_note() {
+    let home = TempHome::new();
+    let h = home.path();
+    let (cli, shim) = make_bundle(h, "Applications");
+    switch(true);
+    let report = heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal");
+    match &report.runs {
+        Choice::Script { note: Some(n) } => assert!(n.contains("no k5 program") && n.contains("is missing"), "{n}"),
+        other => panic!("a missing binary must mean the script: {other:?}"),
+    }
+    assert_eq!(link_target(&user_bin_dir(h).join("k2")), cli);
+    assert!(fs::symlink_metadata(k5(h)).is_err(), "no k5 link without the binary");
+    assert!(report.log_lines().iter().any(|l| l.contains("links run the script")), "{:?}", report.log_lines());
+}
+
+#[test]
+fn a_binary_of_another_version_means_the_script_and_a_link_to_it_goes_back() {
+    let home = TempHome::new();
+    let h = home.path();
+    let (cli, shim) = make_bundle(h, "Applications");
+    let binary = put_binary(h, "Applications", "0.46.11");
+    switch(true);
+    heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal on");
+    assert_eq!(link_target(&user_bin_dir(h).join("k2")), binary);
+
+    // The app updated its script but this binary is the old release's.
+    for (wrong, why) in [
+        (binary_body("0.46.10"), "version 0.46.10"),
+        (binary_body("0.46.1"), "version 0.46.1,"),
+        (binary_body("0.46.110"), "version 0.46.110"),
+        (b"\x7fELF no marker at all K5_CLI_VERSION=0.46.11".to_vec(), "no k5 version mark"),
+    ] {
+        fs::write(&binary, &wrong).unwrap();
+        let report = heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal");
+        match &report.runs {
+            Choice::Script { note: Some(n) } => assert!(n.contains(why), "{why}: {n}"),
+            other => panic!("{why}: a wrong version must mean the script: {other:?}"),
+        }
+        assert_eq!(link_target(&user_bin_dir(h).join("k2")), cli, "{why}");
+        assert_eq!(link_target(&k5(h)), cli, "{why}: k5 follows k2");
+    }
+}
+
+#[test]
+fn a_k5_that_is_not_k2_s_is_left_alone() {
+    let home = TempHome::new();
+    let h = home.path();
+    let (cli, shim) = make_bundle(h, "Applications");
+    put_binary(h, "Applications", "0.46.11");
+    let bin = user_bin_dir(h);
+    fs::create_dir_all(&bin).unwrap();
+    let other = "#!/bin/sh\necho another k5 tool\n";
+    fs::write(bin.join("k5"), other).unwrap();
+    switch(true);
+    let report = heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal");
+    assert!(matches!(report.user_k5, Some(LinkOutcome::Foreign { .. })), "{:?}", report.user_k5);
+    assert_eq!(read(&bin.join("k5")), other);
+    switch(false);
+    let report = heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal");
+    assert_eq!(report.user_k5, None, "off: someone else's k5 isn't even mentioned");
+    assert_eq!(read(&bin.join("k5")), other);
+}
+
+#[test]
+fn an_interrupted_swap_leaves_a_working_link_at_every_step() {
+    let home = TempHome::new();
+    let h = home.path();
+    let (cli, shim) = make_bundle(h, "Applications");
+    let binary = put_binary(h, "Applications", "0.46.11");
+    let bin = user_bin_dir(h);
+    let k2 = bin.join("k2");
+    heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal");
+    switch(true);
+
+    // 1. Stopped after the temp link, before the rename: k2 still runs the
+    //    script; the temp sits beside it.
+    let tmp = begin_link_swap(&binary, &k2).expect("temp link");
+    assert_eq!(link_target(&k2), cli, "the old link is untouched");
+    assert!(is_k2_cli_script(&k2));
+    assert_eq!(link_target(&tmp), binary);
+    // The process that made it is gone (a pid no system hands out).
+    let dead = bin.join(".k2.k2-link-2147483647");
+    fs::rename(&tmp, &dead).unwrap();
+
+    // 2. Stopped between the two links: k2 on the binary, k5 not made yet.
+    assert_eq!(ensure_link(&k2, &binary, true), LinkOutcome::Repointed { from: cli.clone() });
+    assert!(is_k2_cli_script(&k2), "k2 runs the binary");
+    assert!(fs::symlink_metadata(k5(h)).is_err());
+
+    // The next heal finishes both and removes the dead process's temp.
+    let report = heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal");
+    assert_eq!(report.swept, vec![dead.clone()]);
+    assert!(fs::symlink_metadata(&dead).is_err());
+    assert_eq!(link_target(&k2), binary);
+    assert_eq!(link_target(&k5(h)), binary);
+
+    // Turning off, stopped between the two: k2 on the script, k5 on the
+    // binary. Both work; the next heal finishes.
+    switch(false);
+    assert_eq!(ensure_link(&k2, &cli, true), LinkOutcome::Repointed { from: binary.clone() });
+    assert!(is_k2_cli_script(&k2) && is_k2_cli_script(&k5(h)), "both run a K2 CLI");
+    heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal");
+    assert_eq!(link_target(&k5(h)), cli);
+
+    // A live process's temp is its own: never swept.
+    let live = begin_link_swap(&cli, &k2).expect("temp link");
+    let report = heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal");
+    assert!(report.swept.is_empty(), "{:?}", report.swept);
+    assert!(fs::symlink_metadata(&live).is_ok());
+    finish_swap(&live, &k2).expect("rename");
+    assert_eq!(link_target(&k2), cli);
+}
+
+#[test]
+fn the_check_reads_the_marker_without_running_the_binary() {
+    let home = TempHome::new();
+    let h = home.path();
+    let (cli, _shim) = make_bundle(h, "Applications");
+    let binary = put_binary(h, "Applications", "0.46.11");
+    // Not executable at all: a check that ran it would fail.
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(check_binary(&binary, Some("0.46.11")), Ok(()));
+    assert_eq!(script_version(&cli).as_deref(), Some("0.46.11"));
+    assert_eq!(binary_for_script_if_on(true, &cli), Ok(binary.clone()));
+    assert!(binary_for_script_if_on(false, &cli).is_err(), "off never names it");
+    // A checkout's script has no bundle beside it.
+    let repo = h.join("repo/cli");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(repo.join("k2"), CLI_BODY).unwrap();
+    assert!(binary_for_script_if_on(true, &repo.join("k2")).is_err());
+    assert!(!is_k5_binary(&cli), "the script is not the binary");
+    assert!(is_k5_binary(&binary));
+}

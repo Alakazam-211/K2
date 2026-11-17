@@ -51,8 +51,9 @@ fn main() {
          /// The version on `cli/k2`'s `K2_CLI_VERSION=` line.\n\
          pub const SCRIPT_VERSION: &str = {version:?};\n\
          /// The version as a marker other code finds in the binary's bytes\n\
-         /// without running it.\n\
-         pub static VERSION_MARKER: &str = \"K5_CLI_VERSION={version}\";\n"
+         /// without running it (k2-client's `cli_install::check_binary`).\n\
+         /// The NUL ends it, so `0.46.1` is never read inside `0.46.15`.\n\
+         pub static VERSION_MARKER: &str = \"K5_CLI_VERSION={version}\\0\";\n"
     );
     let rs_path = out.join("embedded.rs");
     std::fs::write(&rs_path, rs).unwrap_or_else(|e| panic!("write {}: {e}", rs_path.display()));

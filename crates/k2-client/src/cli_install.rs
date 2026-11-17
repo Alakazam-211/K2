@@ -22,7 +22,26 @@
 //!
 //! Never overwrites a `k2` that isn't K2's: a real file, a folder, or a link
 //! to anything but a `cli/k2` (a K2 bundle's `…/_up_/cli/k2` or a checkout's
-//! `cli/k2`) is left alone and reported as [`LinkState::Foreign`].
+//! `cli/k2`) or K2's k5 binary is left alone and reported as
+//! [`LinkState::Foreign`].
+//!
+//! **What the links run** ([`Choice`]): the script, as always, unless the
+//! owner turned on "New k5 command (Beta)" (`k5CliBeta`, read through
+//! [`crate::app_settings_view`]) and the bundle has the k5 binary and it is
+//! this release's ([`check_binary`]: its `K5_CLI_VERSION=` marker equals the
+//! script's `K2_CLI_VERSION`, read from the file, never by running it). A
+//! missing binary, or one of another version, means the script. With the
+//! binary, `k2` and a second link, `k5`, both run it. With the script, `k5`
+//! is kept up to date only where K2 already made one (turning the switch off
+//! re-points it, never removes it); a new install gets `k2` alone.
+//!
+//! **The swap:** each link is replaced in one step (a temp link beside it,
+//! renamed over it), so a path never goes missing. A flip re-points `k2`
+//! first, then `k5`; stopped between the two, one name runs the binary and
+//! the other the script, both of this release, and the next heal finishes
+//! it. Stopped between a temp link and its rename, the old link still works
+//! and the temp (`.k2.k2-link-<pid>`) is removed by a later heal once that
+//! process is gone ([`sweep_temp_links`]).
 //!
 //! Daemon-first: the daemon runs [`boot_heal`] at boot (so a headless or
 //! launchd-started K2 heals too); the desktop app runs the same call as a
@@ -48,6 +67,8 @@ use std::path::{Path, PathBuf};
 use k2_brand::RetiredName;
 use serde::Serialize;
 
+use crate::brand::PRODUCT_NAME;
+
 /// First line of the PATH block this build writes into a shell startup
 /// file (`# >>> K2 CLI >>>` with the default brand).
 pub const BLOCK_BEGIN: &str = k2_brand::PATH_BLOCK_BEGIN;
@@ -68,6 +89,16 @@ pub const LEGACY_NAME: &str = match crate::brand::CLI_ALIASES {
 /// The command's system-wide path, `/usr/local/bin/<name>` (the Linux copy
 /// in `k2_core::cli_stage`, and the system link here).
 pub use k2_brand::SYSTEM_CLI_PATH;
+/// The command's next name: a second link beside `k2`, made when the links
+/// run the k5 binary (it answers to both names, and so does the script).
+/// A fixed name, not from the brand file, until the rename step.
+pub const K5_NAME: &str = "k5";
+
+/// What the k5 binary carries in its bytes: this, its version, then a NUL
+/// (written by the binary's build script).
+pub const BINARY_VERSION_MARKER: &str = "K5_CLI_VERSION=";
+/// A k5 binary larger than this is not read (it is a few MB).
+const BINARY_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The system-wide bin folder linked when it is already writable (macOS).
 pub const SYSTEM_BIN: &str = "/usr/local/bin";
@@ -140,11 +171,12 @@ impl Names {
     /// file named as the command or one of its aliases in a folder named
     /// `cli` (a bundle's `…/_up_/cli/k2`, or a checkout's `cli/k2`). Shape
     /// only, so a link to a deleted old bundle still counts and gets
-    /// re-pointed. Another brand's command is never this build's.
+    /// re-pointed. Another brand's command is never this build's. K2's k5
+    /// binary by its name is ([`is_binary_target`]).
     pub fn is_cli_target(&self, target: &Path) -> bool {
         let name = target.file_name().and_then(|n| n.to_str());
         let dir = target.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str());
-        name.is_some_and(|n| self.owns_file_name(n)) && dir == Some("cli")
+        (name.is_some_and(|n| self.owns_file_name(n)) && dir == Some("cli")) || is_binary_target(target)
     }
 }
 
@@ -155,23 +187,220 @@ pub fn is_k2_cli_target(target: &Path) -> bool {
     Names::compiled().is_cli_target(target)
 }
 
-/// True when the file at `path` (links followed) is the K2 CLI script: a
-/// `#!` first line and a `K2_CLI_VERSION=` (or pre-rename
-/// `K2SO_CLI_VERSION=`) line near the top. A program that merely shares the
-/// name (the Linux .deb puts the GUI binary at `/usr/bin/k2`) is not.
-pub fn is_k2_cli_script(path: &Path) -> bool {
+/// The first 8 KiB of a file, links followed.
+fn head_of(path: &Path) -> Option<Vec<u8>> {
     use std::io::Read;
-    let Ok(file) = fs::File::open(path) else { return false };
+    let file = fs::File::open(path).ok()?;
     let mut head = Vec::with_capacity(8192);
-    if file.take(8192).read_to_end(&mut head).is_err() {
-        return false;
+    file.take(8192).read_to_end(&mut head).ok()?;
+    Some(head)
+}
+
+/// True when the file at `path` (links followed) is the K2 CLI: the script
+/// (a `#!` first line and a `K2_CLI_VERSION=`, or pre-rename
+/// `K2SO_CLI_VERSION=`, line near the top) or the k5 binary
+/// ([`is_k5_binary`]). A program that merely shares the name (the Linux .deb
+/// puts the GUI binary at `/usr/bin/k2`) is not.
+pub fn is_k2_cli_script(path: &Path) -> bool {
+    let Some(head) = head_of(path) else { return false };
+    let text = String::from_utf8_lossy(&head);
+    let mut lines = text.lines();
+    if lines.next().is_some_and(|l| l.starts_with("#!")) {
+        return lines.take(40).any(|l| l.starts_with("K2_CLI_VERSION=") || l.starts_with("K2SO_CLI_VERSION="));
     }
+    is_k5_binary(path)
+}
+
+/// The `K2_CLI_VERSION="x.y.z"` of the script at `path`, quotes trimmed.
+pub fn script_version(path: &Path) -> Option<String> {
+    let head = head_of(path)?;
     let text = String::from_utf8_lossy(&head);
     let mut lines = text.lines();
     if !lines.next().is_some_and(|l| l.starts_with("#!")) {
+        return None;
+    }
+    let line = lines.take(40).find_map(|l| l.strip_prefix("K2_CLI_VERSION="))?;
+    let v = line.trim().trim_matches('"');
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+// ── The k5 binary ───────────────────────────────────────────────────────
+
+/// Every version the k5 binary's bytes carry: `K5_CLI_VERSION=` then
+/// letters, digits, `.`, `-` or `+`, then a NUL. A marker with no NUL
+/// right after its version is not counted, so `0.46.1` never matches inside
+/// `0.46.15`.
+pub fn binary_versions(bytes: &[u8]) -> Vec<String> {
+    let marker = BINARY_VERSION_MARKER.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i + marker.len() <= bytes.len() {
+        if &bytes[i..i + marker.len()] != marker {
+            i += 1;
+            continue;
+        }
+        let start = i + marker.len();
+        let len = bytes[start..]
+            .iter()
+            .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+'))
+            .count();
+        if len > 0 && bytes.get(start + len) == Some(&0) {
+            let v = String::from_utf8_lossy(&bytes[start..start + len]).into_owned();
+            if !out.contains(&v) {
+                out.push(v);
+            }
+        }
+        i = start;
+    }
+    out
+}
+
+/// True when the file at `path` (links followed) is a program carrying the
+/// k5 binary's version marker (any version): an ELF or Mach-O file.
+pub fn is_k5_binary(path: &Path) -> bool {
+    let Some(head) = head_of(path) else { return false };
+    let magic = head.get(..4).unwrap_or_default();
+    let program = magic == b"\x7fELF"
+        || magic == [0xcf, 0xfa, 0xed, 0xfe]
+        || magic == [0xce, 0xfa, 0xed, 0xfe]
+        || magic == [0xca, 0xfe, 0xba, 0xbe];
+    if !program {
         return false;
     }
-    lines.take(40).any(|l| l.starts_with("K2_CLI_VERSION=") || l.starts_with("K2SO_CLI_VERSION="))
+    match fs::metadata(path) {
+        Ok(m) if m.len() <= BINARY_MAX_BYTES => {}
+        _ => return false,
+    }
+    fs::read(path).is_ok_and(|bytes| !binary_versions(&bytes).is_empty())
+}
+
+/// `Ok` when the file at `path` is the k5 binary of version `want` (the
+/// script's): read for its marker, never run. Otherwise why not, in words
+/// the owner reads in Settings.
+pub fn check_binary(path: &Path, want: Option<&str>) -> Result<(), String> {
+    let Some(want) = want.filter(|w| !w.is_empty()) else {
+        return Err("the script's version can't be read".to_string());
+    };
+    let meta = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(format!("this release has no k5 program ({} is missing)", path.display()))
+        }
+        Err(e) => return Err(format!("{PRODUCT_NAME} can't read {}: {e}", path.display())),
+    };
+    if !meta.is_file() {
+        return Err(format!("{} isn't a file", path.display()));
+    }
+    if meta.len() > BINARY_MAX_BYTES {
+        return Err(format!("{} is too large to be the k5 program", path.display()));
+    }
+    let bytes = fs::read(path).map_err(|e| format!("{PRODUCT_NAME} can't read {}: {e}", path.display()))?;
+    let found = binary_versions(&bytes);
+    if found.iter().any(|v| v == want) {
+        return Ok(());
+    }
+    match found.first() {
+        Some(v) => Err(format!("the k5 program is version {v}, the script {want}")),
+        None => Err(format!("{} carries no k5 version mark", path.display())),
+    }
+}
+
+/// What the `k2` and `k5` links run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "runs", rename_all = "snake_case")]
+pub enum Choice {
+    /// The shell script (today's, and the default). `note`: when the switch
+    /// is on, why not the binary.
+    Script { note: Option<String> },
+    /// The k5 binary at this path.
+    Binary { binary: PathBuf },
+}
+
+impl Choice {
+    /// The binary when `found` is one, else the script, with the reason
+    /// only when the switch is on (off is not worth a note).
+    pub fn from_found(on: bool, found: Result<PathBuf, String>) -> Self {
+        match found {
+            Ok(binary) => Choice::Binary { binary },
+            Err(why) => Choice::Script { note: on.then_some(why) },
+        }
+    }
+
+    /// The binary, when the links run it.
+    pub fn binary(&self) -> Option<&Path> {
+        match self {
+            Choice::Binary { binary } => Some(binary),
+            Choice::Script { .. } => None,
+        }
+    }
+}
+
+/// The owner's switch (`k5CliBeta`) from `settings.json`.
+pub fn switch_on() -> bool {
+    crate::app_settings_view::load().k5_cli_beta
+}
+
+/// The bundle's `Contents/MacOS` folder for a bundled script at
+/// `<X>.app/Contents/Resources/_up_/cli/<name>` ([`packaged_cli_for_exe`]'s
+/// layout), else `None` (a checkout's `cli/k2`).
+pub fn bundle_exe_dir_of_script(script: &Path) -> Option<PathBuf> {
+    let cli = script.parent()?;
+    let up = cli.parent()?;
+    let resources = up.parent()?;
+    let contents = resources.parent()?;
+    let named = |p: &Path, n: &str| p.file_name().is_some_and(|x| x == n);
+    let shaped = named(cli, "cli") && named(up, "_up_") && named(resources, "Resources") && named(contents, "Contents");
+    (shaped && contents.parent()?.extension()? == "app").then(|| contents.join("MacOS"))
+}
+
+// k5-cli guard: begin
+// tests/packaging/k5_cli_not_shipped.sh holds this file and the other
+// install code to it: the binary's file name is spelled only between these
+// two lines, the const below is read nowhere else, and every function here
+// that returns a path starts with `if !on {`. So no install path leads to
+// the binary while the owner's switch is off.
+
+/// The binary's file name.
+const BINARY_FILE: &str = "k5-cli";
+
+/// The k5 binary a bundled script's links run when the switch is `on`:
+/// `<X>.app/Contents/MacOS/k5-cli`, beside the app's executable and the
+/// other sidecars (from there the binary finds this same script,
+/// `packaged_cli_for_exe`). It must be this release's ([`check_binary`]
+/// against the script's version). Otherwise why not.
+pub fn binary_for_script_if_on(on: bool, script: &Path) -> Result<PathBuf, String> {
+    if !on {
+        return Err("the switch is off".to_string());
+    }
+    let dir = bundle_exe_dir_of_script(script).ok_or_else(|| format!("{} isn't in an app bundle", script.display()))?;
+    let binary = dir.join(BINARY_FILE);
+    check_binary(&binary, script_version(script).as_deref())?;
+    Ok(binary)
+}
+
+/// The k5 binary in `dir` when the switch is `on` (Linux: `dir` is the
+/// daemon's own folder, so `/usr/bin/k2-daemon` has `/usr/bin/k5-cli`),
+/// checked against `want`, the version of the script it replaces.
+pub fn binary_in_dir_if_on(on: bool, dir: &Path, want: Option<&str>) -> Result<PathBuf, String> {
+    if !on {
+        return Err("the switch is off".to_string());
+    }
+    let binary = dir.join(BINARY_FILE);
+    check_binary(&binary, want)?;
+    Ok(binary)
+}
+
+/// True when a link target is K2's k5 binary by its name (shape only, as
+/// [`is_k2_cli_target`]: a link to a deleted old bundle's binary is K2's).
+pub fn is_binary_target(target: &Path) -> bool {
+    target.file_name().is_some_and(|n| n == BINARY_FILE)
+}
+// k5-cli guard: end
+
+/// What a heal of the bundled `script` links: the binary beside it when the
+/// switch is on and the binary passes, else the script.
+pub fn choice_for_script(on: bool, script: &Path) -> Choice {
+    Choice::from_found(on, binary_for_script_if_on(on, script))
 }
 
 /// The CLI script a packaged macOS K2 ships, found from a K2 executable
@@ -322,13 +551,100 @@ pub fn ensure_link(link: &Path, cli: &Path, make_dir: bool) -> LinkOutcome {
 /// in another window never finds the path missing).
 #[cfg(unix)]
 fn replace_symlink(target: &Path, link: &Path) -> io::Result<()> {
+    let tmp = begin_link_swap(target, link)?;
+    finish_swap(&tmp, link)
+}
+
+/// The temp name beside `link` that this process swaps in through:
+/// `.<name>.k2-link-<pid>`.
+pub fn swap_temp_path(link: &Path) -> PathBuf {
     let name = link.file_name().and_then(|n| n.to_str()).unwrap_or(CLI_NAME);
-    let tmp = link.with_file_name(format!(".{name}.k2-link-{}", std::process::id()));
+    link.with_file_name(format!(".{name}.k2-link-{}", std::process::id()))
+}
+
+/// The swap's first half: a link to `target` at [`swap_temp_path`]. Until
+/// [`finish_swap`] renames it, `link` is untouched (tests stop here to show
+/// an interrupted swap leaves a working link).
+#[cfg(unix)]
+pub fn begin_link_swap(target: &Path, link: &Path) -> io::Result<PathBuf> {
+    let tmp = swap_temp_path(link);
     let _ = fs::remove_file(&tmp);
     std::os::unix::fs::symlink(target, &tmp)?;
-    fs::rename(&tmp, link).inspect_err(|_| {
-        let _ = fs::remove_file(&tmp);
+    Ok(tmp)
+}
+
+/// The swap's second half: `tmp` renamed over `link` (one step).
+pub fn finish_swap(tmp: &Path, link: &Path) -> io::Result<()> {
+    fs::rename(tmp, link).inspect_err(|_| {
+        let _ = fs::remove_file(tmp);
     })
+}
+
+/// Remove the temp entries a swap left in `dir` when its process stopped
+/// between the two halves: `.<name>.k2-link-<pid>` for the command, `k5` or
+/// an alias, whose process is gone. A running process's temp is its own,
+/// still in use. Returns what went. With this build's names
+/// ([`Names::sweep_temp_links`]).
+#[cfg(unix)]
+pub fn sweep_temp_links(dir: &Path) -> Vec<PathBuf> {
+    Names::compiled().sweep_temp_links(dir)
+}
+
+impl Names {
+    /// [`sweep_temp_links`] with these names.
+    #[cfg(unix)]
+    pub fn sweep_temp_links(&self, dir: &Path) -> Vec<PathBuf> {
+        let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+        let names: Vec<&str> = [self.name, K5_NAME].into_iter().chain(self.aliases.iter().copied()).collect();
+        let mut gone = Vec::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let pid = names
+                .iter()
+                .find_map(|n| name.strip_prefix(&format!(".{n}.k2-link-")))
+                .and_then(|p| p.parse::<i32>().ok());
+            let Some(pid) = pid else { continue };
+            if pid <= 0 || process_running(pid) {
+                continue;
+            }
+            let path = entry.path();
+            let plain = fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink() || m.is_file());
+            if plain && fs::remove_file(&path).is_ok() {
+                gone.push(path);
+            }
+        }
+        gone
+    }
+}
+
+#[cfg(unix)]
+fn process_running(pid: i32) -> bool {
+    // SAFETY: signal 0 only checks that the process exists.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// The `k5` link beside `k2`: made and kept at `target` when the links run
+/// the binary; with the script, re-pointed only where K2 already made one
+/// (`None` when there is none, or one that isn't K2's). With this build's
+/// names ([`Names::ensure_k5_link`]).
+#[cfg(unix)]
+pub fn ensure_k5_link(link: &Path, target: &Path, binary: bool, make_dir: bool) -> Option<LinkOutcome> {
+    Names::compiled().ensure_k5_link(link, target, binary, make_dir)
+}
+
+impl Names {
+    /// [`ensure_k5_link`] with these names.
+    #[cfg(unix)]
+    pub fn ensure_k5_link(&self, link: &Path, target: &Path, binary: bool, make_dir: bool) -> Option<LinkOutcome> {
+        if !binary && matches!(self.link_state(link, target), LinkState::Missing | LinkState::Foreign { .. }) {
+            return None;
+        }
+        Some(self.ensure_link(link, target, make_dir))
+    }
 }
 
 // ── Shells and startup files ────────────────────────────────────────────
@@ -787,7 +1103,8 @@ impl HomeLock {
 
 /// Inputs to [`heal_at`].
 pub struct HealInput<'a> {
-    /// The bundled `k2` script the links point at.
+    /// The bundled `k2` script (the links run it, or the k5 binary beside
+    /// it: [`Choice`]).
     pub cli: &'a Path,
     /// The bundled shim the alias links run (`k2so` with the default
     /// brand), when the bundle has one.
@@ -808,13 +1125,18 @@ pub struct HealInput<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HealReport {
+    /// What the links run.
+    pub runs: Choice,
     pub user_link_path: PathBuf,
     pub user_link: LinkOutcome,
+    /// `~/.local/bin/k5` ([`ensure_k5_link`]).
+    pub user_k5: Option<LinkOutcome>,
     /// The first alias's link in `~/.local/bin` (`k2so` with the default
     /// brand), when an earlier install left one. Every alias's link is in
     /// [`HealReport::user_aliases`].
     pub user_legacy: Option<LinkOutcome>,
     pub system_link: Option<LinkOutcome>,
+    pub system_k5: Option<LinkOutcome>,
     /// The same in the system bin folder.
     pub system_legacy: Option<LinkOutcome>,
     /// Every alias link refreshed in `~/.local/bin`, in the brand's order.
@@ -822,6 +1144,8 @@ pub struct HealReport {
     /// Every alias link refreshed in the system bin folder.
     pub system_aliases: Vec<AliasLink>,
     pub path: PathOutcome,
+    /// Temp links an interrupted swap left, removed.
+    pub swept: Vec<PathBuf>,
 }
 
 /// One alias link a heal refreshed.
@@ -848,6 +1172,24 @@ impl HealReport {
             LinkOutcome::NotWritable { reason } => out.push(format!("couldn't link {user}: {reason}")),
             LinkOutcome::Current => {}
         }
+        let k5 = self.user_link_path.with_file_name(K5_NAME);
+        match &self.user_k5 {
+            Some(LinkOutcome::Created) => out.push(format!("k5 linked at {}", k5.display())),
+            Some(LinkOutcome::Repointed { from }) => {
+                out.push(format!("k5 at {} re-pointed (was {})", k5.display(), from.display()))
+            }
+            Some(LinkOutcome::Foreign { what }) => {
+                out.push(format!("left {} alone: it is {what}, not {PRODUCT_NAME}'s", k5.display()))
+            }
+            Some(LinkOutcome::NotWritable { reason }) => out.push(format!("couldn't link {}: {reason}", k5.display())),
+            Some(LinkOutcome::Current) | None => {}
+        }
+        if let Choice::Script { note: Some(note) } = &self.runs {
+            out.push(format!("the new k5 command is on, but the links run the script: {note}"));
+        }
+        for p in &self.swept {
+            out.push(format!("removed {}, left by an interrupted swap", p.display()));
+        }
         if let Some(LinkOutcome::Foreign { what }) = &self.system_link {
             out.push(format!("left {SYSTEM_CLI_PATH} alone: it is {what}, not K2's"));
         }
@@ -869,36 +1211,51 @@ impl HealReport {
     }
 }
 
-/// Link `~/.local/bin/k2`, link `/usr/local/bin/k2` when that folder is
-/// writable, and add the PATH block when new Terminal windows wouldn't find
-/// `k2` otherwise. An alias (`k2so`) is only refreshed where an earlier
-/// install left one ([`legacy_alias_present`]); a new install gets `k2`
-/// alone. Idempotent: a second run changes nothing. With this build's
-/// names ([`Names::heal_at`]).
+/// Link `~/.local/bin/k2` (and `k5`, [`ensure_k5_link`]) at what `runs`
+/// says, link `/usr/local/bin/k2` (and `k5`) when that folder is writable,
+/// and add the PATH block when new Terminal windows wouldn't find `k2`
+/// otherwise. An alias (`k2so`) is only refreshed where an earlier install
+/// left one ([`legacy_alias_present`]); a new install gets `k2` alone.
+/// Idempotent: a second run changes nothing. With this build's names
+/// ([`Names::heal_at`]).
 #[cfg(unix)]
-pub fn heal_at(home: &Path, input: &HealInput) -> Result<HealReport, String> {
-    Names::compiled().heal_at(home, input)
+pub fn heal_at(home: &Path, input: &HealInput, runs: &Choice) -> Result<HealReport, String> {
+    Names::compiled().heal_at(home, input, runs)
 }
 
 impl Names {
-    /// [`heal_at`] with these names: the command's link, then each alias
-    /// an earlier install left, in `~/.local/bin` and then in the system
-    /// bin folder (its aliases only over this build's own link there).
+    /// [`heal_at`] with these names: the command's link (and `k5`) at what
+    /// `runs` says, then each alias an earlier install left, in
+    /// `~/.local/bin` and then in the system bin folder (its `k5` and
+    /// aliases only over this build's own link there). The aliases run the
+    /// shim either way.
     #[cfg(unix)]
-    pub fn heal_at(&self, home: &Path, input: &HealInput) -> Result<HealReport, String> {
+    pub fn heal_at(&self, home: &Path, input: &HealInput, runs: &Choice) -> Result<HealReport, String> {
+        let target = runs.binary().unwrap_or(input.cli);
+        let binary = runs.binary().is_some();
         let bin = user_bin_dir(home);
+        let mut swept = self.sweep_temp_links(&bin);
         let user_link_path = bin.join(self.name);
-        let user_link = self.ensure_link(&user_link_path, input.cli, true);
+        let user_link = self.ensure_link(&user_link_path, target, true);
+        // A build whose own name is `k5` has no second link to make.
+        let k5_beside = self.name != K5_NAME;
+        let user_k5 = (k5_beside && user_link.is_ours())
+            .then(|| self.ensure_k5_link(&bin.join(K5_NAME), target, binary, true))
+            .flatten();
         let user_aliases = self.refresh_aliases(&bin, input.legacy_shim, true);
 
-        let (system_link, system_aliases) = match input.system_bin {
+        let (system_link, system_k5, system_aliases) = match input.system_bin {
             Some(sys) if sys.is_dir() => {
-                let link = self.ensure_link(&sys.join(self.name), input.cli, false);
+                swept.extend(self.sweep_temp_links(sys));
+                let link = self.ensure_link(&sys.join(self.name), target, false);
+                let k5 = (k5_beside && link.is_ours())
+                    .then(|| self.ensure_k5_link(&sys.join(K5_NAME), target, binary, false))
+                    .flatten();
                 let aliases =
                     if link.is_ours() { self.refresh_aliases(sys, input.legacy_shim, false) } else { Vec::new() };
-                (Some(link), aliases)
+                (Some(link), k5, aliases)
             }
-            _ => (None, Vec::new()),
+            _ => (None, None, Vec::new()),
         };
 
         let path = if user_link.is_ours() {
@@ -909,14 +1266,18 @@ impl Names {
             }
         };
         Ok(HealReport {
+            runs: runs.clone(),
             user_legacy: self.first_alias_in(&user_aliases),
             system_legacy: self.first_alias_in(&system_aliases),
             user_link_path,
             user_link,
+            user_k5,
             system_link,
+            system_k5,
             user_aliases,
             system_aliases,
             path,
+            swept,
         })
     }
 
@@ -944,11 +1305,12 @@ impl Names {
     }
 }
 
-/// [`heal_at`] under `$HOME`.
+/// [`heal_at`] under `$HOME`, with the links' target from the owner's
+/// switch and the bundle ([`choice_for_script`]).
 #[cfg(unix)]
 pub fn heal(input: &HealInput) -> Result<HealReport, String> {
     let home = crate::paths::home_dir().ok_or_else(|| "HOME is not set".to_string())?;
-    heal_at(&home, input)
+    heal_at(&home, input, &choice_for_script(switch_on(), input.cli))
 }
 
 /// The boot heal for a packaged macOS K2, from the running exe (the app's
@@ -970,6 +1332,9 @@ pub fn boot_heal(exe: &Path) -> Option<Result<HealReport, String>> {
     ensure_executable(&cli);
     if let Some(s) = &shim {
         ensure_executable(s);
+    }
+    if let Some(binary) = choice_for_script(switch_on(), &cli).binary() {
+        ensure_executable(binary);
     }
     let shell = user_shell();
     let login = crate::process::login_shell_path(&shell);
@@ -1028,7 +1393,7 @@ pub struct PathStatus {
     /// The login PATH has `~/.local/bin`; `None` when the shell didn't say.
     pub on_login_path: Option<bool>,
     /// The `k2` a new Terminal window runs (login PATH, plus the block),
-    /// when it is the K2 CLI.
+    /// when it is the K2 CLI (the script or the k5 binary).
     pub new_terminals_run: Option<PathBuf>,
     /// A new Terminal window finds a K2 `k2`.
     pub new_terminals_find_it: bool,
@@ -1100,6 +1465,42 @@ mod tests {
         assert!(!is_k2_cli_target(Path::new("/opt/homebrew/bin/k2")));
         assert!(!is_k2_cli_target(Path::new("/Users/x/K2/cli/k2-widget-shot.mjs")));
         assert!(!is_k2_cli_target(Path::new("k2")));
+    }
+
+    #[test]
+    fn a_version_counts_only_with_its_nul() {
+        assert_eq!(binary_versions(b"..K5_CLI_VERSION=0.46.15\0.."), vec!["0.46.15".to_string()]);
+        assert_eq!(binary_versions(b"K5_CLI_VERSION=0.46.15"), Vec::<String>::new(), "no NUL, no version");
+        assert_eq!(binary_versions(b"K5_CLI_VERSION=\0"), Vec::<String>::new(), "empty");
+        assert_eq!(binary_versions(b"K5_CLI_VERSION=build.rs writes"), Vec::<String>::new(), "a bare prefix");
+        assert_eq!(
+            binary_versions(b"K5_CLI_VERSION=K5_CLI_VERSION=1.2.3\0 K5_CLI_VERSION=1.2.3\0 K5_CLI_VERSION=2.0.0-rc1+x\0"),
+            vec!["1.2.3".to_string(), "2.0.0-rc1+x".to_string()]
+        );
+    }
+
+    #[test]
+    fn the_bundle_exe_dir_comes_from_the_script_s_place_only() {
+        assert_eq!(
+            bundle_exe_dir_of_script(Path::new("/Applications/K2.app/Contents/Resources/_up_/cli/k2")),
+            Some(PathBuf::from("/Applications/K2.app/Contents/MacOS"))
+        );
+        assert_eq!(bundle_exe_dir_of_script(Path::new("/Users/x/K2/cli/k2")), None);
+        assert_eq!(bundle_exe_dir_of_script(Path::new("/opt/K2/Contents/Resources/_up_/cli/k2")), None, "not an .app");
+        assert_eq!(bundle_exe_dir_of_script(Path::new("k2")), None);
+    }
+
+    #[test]
+    fn choice_off_never_names_the_binary_and_carries_no_note() {
+        let script = Path::new("/no-such-dir-k2-test/K2.app/Contents/Resources/_up_/cli/k2");
+        assert_eq!(choice_for_script(false, script), Choice::Script { note: None });
+        assert!(binary_for_script_if_on(false, script).is_err());
+        assert!(binary_in_dir_if_on(false, Path::new("/usr/bin"), Some("1.0.0")).is_err());
+        // On, with nothing there: the script, and why.
+        match choice_for_script(true, script) {
+            Choice::Script { note: Some(n) } => assert_eq!(n, "the script's version can't be read"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

@@ -1,9 +1,13 @@
 //! The owner's switch for the new k5 command (Beta).
 //!
 //! ```text
-//! GET  /cli/k5-cli               {"on": bool}
+//! GET  /cli/k5-cli               {"on", "runs": "script"|"binary", "binary"?, "note"?}
 //! POST /cli/k5-cli {"on": bool}  flips it, re-points the commands, answers as GET plus "links"
 //! ```
+//!
+//! `runs` is what the commands run now (`k2_core::cli_stage::current_choice`):
+//! the binary only when the switch is on and this release has it at its own
+//! version; `note` says why the script when the switch is on.
 //!
 //! The switch is the `k5CliBeta` setting, off by default. Only this route
 //! changes it (a settings write refuses the key, `settings_routes`), because
@@ -33,9 +37,11 @@ fn refuse(status: &'static str, code: &str, hint: &str) -> CliResponse {
 }
 
 /// The switch as the commands see it (the client view of `settings.json`,
-/// the one the heal reads).
+/// the one the heal reads), and what they run.
 fn state() -> Value {
-    json!({ "on": k2_core::app_settings::k5_cli_beta() })
+    let mut v = serde_json::to_value(k2_core::cli_stage::current_choice()).unwrap_or_else(|_| json!({}));
+    v["on"] = json!(k2_core::app_settings::k5_cli_beta());
+    v
 }
 
 /// The route. `by`: the caller when it is the owner (the dispatcher's
@@ -203,6 +209,8 @@ mod tests {
                 let r = call(&q, false, "", &heals);
                 assert_eq!(r.status, "200 OK", "{}", r.body);
                 assert_eq!(body(&r)["on"], json!(false));
+                assert_eq!(body(&r)["runs"], json!("script"), "{}", r.body);
+                assert_eq!(body(&r)["note"], Value::Null, "off carries no note");
             }
             assert_eq!(heals.get(), 0, "a read never heals");
         });
@@ -218,6 +226,9 @@ mod tests {
             assert_eq!(r.status, "200 OK", "{}", r.body);
             assert_eq!(body(&r)["on"], json!(true));
             assert_eq!(body(&r)["links"], json!(["healed"]));
+            // A test build has no k5 binary beside it: the script, and why.
+            assert_eq!(body(&r)["runs"], json!("script"), "{}", r.body);
+            assert!(body(&r)["note"].as_str().is_some_and(|n| !n.is_empty()), "{}", r.body);
             assert!(k2_core::app_settings::load().k5_cli_beta);
             assert!(k2_core::app_settings::k5_cli_beta(), "the heal reads it on");
             assert_eq!(body(&call(&q, false, "", &heals))["on"], json!(true));

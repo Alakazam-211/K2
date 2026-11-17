@@ -872,7 +872,9 @@ fn named_cluster_route_gate() {
     record(16, 5432, "k2");
     let (pid, path) = insert_project("fb-route");
     let ops = akzm_ops();
-    let body = |op: &str, extra: &str| format!(r#"{{"op":"{op}","project":"{path}"{extra}}}"#).into_bytes();
+    // The path as a JSON string (a Windows path's backslashes escaped).
+    let project = serde_json::to_string(&path).expect("path as JSON");
+    let body = |op: &str, extra: &str| format!(r#"{{"op":"{op}","project":{project}{extra}}}"#).into_bytes();
     let agent = Who::Agent { project_id: pid.clone(), session_id: "s".into(), local: true, sandboxed: false };
     let create = body("create", r#","major":17,"name":"feedback","walArchive":true"#);
     let p = Default::default();

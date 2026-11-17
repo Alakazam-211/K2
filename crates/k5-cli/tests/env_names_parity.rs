@@ -36,12 +36,9 @@ const FRONT: &[&str] = &FRONT_VARS;
 /// ruling: the file, the names it tries in its order, and why it is left.
 /// Each must still be there (the list only shrinks): fix the read, then
 /// drop its row.
-const KNOWN_DRIFT: &[(&str, &[&str], &str)] = &[(
-    "cli/src/vault.sh",
-    &["K2_HOOK_SOCK", "K2_HOOK_TOKEN", "K2SO_HOOK_SOCK", "K2SO_HOOK_TOKEN"],
-    "the --scope/--workspace refusal for agents misses K5_HOOK_SOCK and K5_HOOK_TOKEN; \
-     vault code, changed only with K2's sign-off (`_envn_any HOOK_SOCK HOOK_TOKEN` is the fix)",
-)];
+/// None today: the last one (vault.sh's agent refusal for --scope and
+/// --workspace) now reads its names with `_envn_any HOOK_SOCK HOOK_TOKEN`.
+const KNOWN_DRIFT: &[(&str, &[&str], &str)] = &[];
 
 fn is_ident(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'

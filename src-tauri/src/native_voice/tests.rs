@@ -30,49 +30,10 @@ fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("repo root").to_path_buf()
 }
 
-/// The repository and commit the root Cargo.toml's `tauri-plugin-sew-voice`
-/// row pins (Sew's public mirror).
-fn sew_pin() -> (String, String) {
-    let root_manifest = std::fs::read_to_string(repo_root().join("Cargo.toml")).expect("root Cargo.toml");
-    let row = root_manifest
-        .lines()
-        .find(|l| l.starts_with("tauri-plugin-sew-voice = { git = \""))
-        .expect("the root Cargo.toml's [patch] has a git row for tauri-plugin-sew-voice");
-    let field = |name: &str| -> String {
-        let rest = row.split(&format!("{name} = \"")).nth(1).unwrap_or_else(|| panic!("no {name} in {row}"));
-        rest.split('"').next().expect("closing quote").to_string()
-    };
-    let url = field("git");
-    let repo = url.trim_end_matches('/').rsplit('/').next().expect("repository name").trim_end_matches(".git").to_string();
-    (repo, field("rev"))
-}
-
-/// A file of one of Sew's crates, from the pinned commit cargo checked out (the
-/// root Cargo.toml's rev). Offline: this build already fetched it. The mirror
-/// has each crate at its root.
+/// A file of one of Sew's crates as published on crates.io (since Sew 0.10.4
+/// every one of them is, the voice SDK included), at the version Cargo.lock pins.
 fn sew_crate_file(krate: &str, rel: &str) -> Vec<u8> {
-    let (repo, rev) = sew_pin();
-    let short = &rev[..7];
-    let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| dirs::home_dir().expect("home").join(".cargo"));
-    let checkouts = cargo_home.join("git/checkouts");
-    let prefix = format!("{repo}-");
-    for entry in std::fs::read_dir(&checkouts).unwrap_or_else(|e| panic!("read {}: {e}", checkouts.display())) {
-        let dir = entry.expect("entry").path();
-        // `<repo>-<hash>`, and not a longer name that starts the same (sew-crates-…).
-        let ours = dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| n.strip_prefix(&prefix))
-            .is_some_and(|hash| hash.chars().all(|c| c.is_ascii_hexdigit()));
-        if !ours {
-            continue;
-        }
-        let path = dir.join(short).join(krate).join(rel);
-        if path.exists() {
-            return std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        }
-    }
-    panic!("{krate}/{rel} of {repo} at {short} isn't under {}", checkouts.display())
+    registry_crate_file(krate, rel)
 }
 
 fn fixture() -> Value {
@@ -133,8 +94,8 @@ fn the_renderers_contract_file_matches_the_plugin() {
     assert_eq!(exact::<Option<RecordingInfo>>(&f["recording"]["stopped"]), None);
 }
 
-/// Sew's own contract file: the renderer's copy is byte for byte the one at the
-/// pinned commit, and every payload parses to the plugin's real types and back.
+/// Sew's own contract file: the renderer's copy is byte for byte the one in the
+/// pinned crates.io release, and every payload parses to the plugin's real types and back.
 #[test]
 fn sews_contract_matches_the_plugin_and_the_renderers_copy() {
     let pinned = sew_crate_file("tauri-plugin-sew-voice", "tests/native-voice-contract.json");
@@ -857,18 +818,20 @@ fn the_app_bundles_the_dfn3_weights_folder() {
 }
 
 /// A file of a crates.io crate as cargo unpacked it, at the version
-/// Cargo.lock pins (offline: this build already fetched it).
+/// Cargo.lock pins from crates.io (offline: this build already fetched it).
+/// A same-named path crate (the vendored sew-proto 0.3) is not the one.
 fn registry_crate_file(krate: &str, rel: &str) -> Vec<u8> {
     let lock = std::fs::read_to_string(repo_root().join("Cargo.lock")).expect("Cargo.lock");
     let name_line = format!("name = \"{krate}\"");
-    let mut lines = lock.lines();
-    let version = loop {
-        let l = lines.next().unwrap_or_else(|| panic!("{krate} is not in Cargo.lock"));
-        if l == name_line {
-            let v = lines.next().expect("a version line");
-            break v.trim_start_matches("version = \"").trim_end_matches('"').to_string();
-        }
-    };
+    let mut registry = lock.split("[[package]]").filter(|p| p.lines().any(|l| l == name_line) && p.contains("\nsource = \"registry+"));
+    let package = registry.next().unwrap_or_else(|| panic!("{krate} is not in Cargo.lock from crates.io"));
+    assert!(registry.next().is_none(), "{krate}: more than one crates.io version in Cargo.lock");
+    let version = package
+        .lines()
+        .find_map(|l| l.strip_prefix("version = \""))
+        .expect("a version line")
+        .trim_end_matches('"')
+        .to_string();
     let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| dirs::home_dir().expect("home").join(".cargo"));
     let src = cargo_home.join("registry/src");
     for entry in std::fs::read_dir(&src).unwrap_or_else(|e| panic!("read {}: {e}", src.display())) {

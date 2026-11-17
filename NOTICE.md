@@ -147,7 +147,7 @@ the macOS app. crates.io 0.57.0 still unwraps those.
 
 ## Third-party: Sew native voice crates (MIT OR Apache-2.0; Apache-2.0)
 
-K2's desktop app can carry voice calls with Sew's client crates (the `native-voice` build feature), from Sew's public mirror, [Alakazam-211/sew-crates](https://github.com/Alakazam-211/sew-crates), pinned by commit in the root `Cargo.toml`.
+K2's desktop app can carry voice calls with Sew's client crates (the `native-voice` build feature), from crates.io (their source is Sew's public mirror, [Alakazam-211/sew-crates](https://github.com/Alakazam-211/sew-crates)), pinned by version in `src-tauri/Cargo.toml` and `Cargo.lock`.
 
 | | |
 |--|--|

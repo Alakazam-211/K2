@@ -41,8 +41,8 @@ pub const DFN3_BUNDLE_FILES: [&str; 4] = ["dfn3/dfn3_ll.nnef.tar", "dfn3/NOTICE"
 
 /// Every DeepFilterNet3 bundle K2 has pinned, oldest first; the last is the
 /// one the app ships.
-/// Sew 0.10.3's asset is the same bytes as 0.10.2's (its own name, on its own
-/// release).
+/// Sew 0.10.3's and 0.10.4's assets are the same bytes as 0.10.2's (each with
+/// its own name, on its own release).
 pub const SEW_DFN3: &[SewDfn3] = &[
     SewDfn3 {
         version: "0.10.2",
@@ -54,6 +54,13 @@ pub const SEW_DFN3: &[SewDfn3] = &[
     SewDfn3 {
         version: "0.10.3",
         file: "sew-dfn3-0.10.3.tar.gz",
+        sha256: "153721fd5f9f33663da7d831b3b611adcb9ca9e65233a6128d94941ad48d6697",
+        bytes: 36_353_582,
+        weights_sha256: "b6e52c0bc66b82e42e3403d22cdd3b847143026d6a41cc4380a97b044f7766af",
+    },
+    SewDfn3 {
+        version: "0.10.4",
+        file: "sew-dfn3-0.10.4.tar.gz",
         sha256: "153721fd5f9f33663da7d831b3b611adcb9ca9e65233a6128d94941ad48d6697",
         bytes: 36_353_582,
         weights_sha256: "b6e52c0bc66b82e42e3403d22cdd3b847143026d6a41cc4380a97b044f7766af",

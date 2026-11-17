@@ -5307,6 +5307,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "k2-client",
+ "libc",
  "sha2 0.10.9",
 ]
 

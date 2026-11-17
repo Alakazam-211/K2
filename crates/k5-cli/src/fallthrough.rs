@@ -34,6 +34,7 @@
 
 use crate::called_as::CalledAs;
 use crate::embedded;
+use crate::exit::Exit;
 use crate::home::HomeError;
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
@@ -123,12 +124,17 @@ pub enum FrontError {
 }
 
 impl FrontError {
+    /// The exit.
+    pub fn exit(&self) -> Exit {
+        match self {
+            FrontError::NoGitBash { .. } => Exit::NoGitBash,
+            _ => Exit::Error,
+        }
+    }
+
     /// The exit code.
     pub fn exit_code(&self) -> i32 {
-        match self {
-            FrontError::NoGitBash { .. } => 9009,
-            _ => 1,
-        }
+        self.exit().code()
     }
 
     /// The line printed on stderr, for a front called as `who`.

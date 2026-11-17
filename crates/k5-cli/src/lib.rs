@@ -28,8 +28,10 @@
 
 pub mod called_as;
 pub mod embedded;
+pub mod exit;
 pub mod fallthrough;
 pub mod front;
 pub mod home;
+pub mod notice;
 pub mod out;
 pub mod transport;

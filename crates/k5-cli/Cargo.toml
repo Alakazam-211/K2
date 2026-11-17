@@ -27,6 +27,12 @@ flate2 = "1.1.9"
 k2-client = { path = "../k2-client" }
 sha2 = "0.10"
 
+# libc: a broken pipe on stdout ends the process by SIGPIPE, as the shell
+# CLI's does (src/out/mod.rs), and the notice test opens a pseudo
+# terminal. k2-client already depends on it, so Cargo.lock gains no crate.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # build.rs packs cli/k2 into the binary: gzip, and its sha256.
 [build-dependencies]
 flate2 = "1.1.9"

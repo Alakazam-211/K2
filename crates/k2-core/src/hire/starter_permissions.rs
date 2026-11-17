@@ -27,7 +27,9 @@
 //!   `walls.rs:818`), and Kessel asks an Owner for it on a card.
 //! - **The hirer holds it.** An agent hirer (Kessel hiring the Chief of Staff)
 //!   passes on only the standing switches it holds itself, never an
-//!   Owner-floor one.
+//!   Owner-floor one, and never `compute.use` (the hire would get every
+//!   machine, wider than the hirer's own grants): the Chief of Staff asks
+//!   for compute on a card (0.46.15, T3 security review).
 //! - **No silent widening.** K2 never widens either list on upgrade: these
 //!   are applied once, when the agent is made.
 //!
@@ -52,7 +54,7 @@ pub const KESSEL_STARTER_PERMISSIONS: &[&str] = &[
 ];
 
 /// The Chief of Staff's starter set (granted by Kessel when it hires it, each
-/// only while Kessel holds it).
+/// only while Kessel holds it; `compute.use` is asked on a card instead).
 pub const CHIEF_OF_STAFF_STARTER_PERMISSIONS: &[&str] = &[
     "agents.manage",
     "agents.hire",

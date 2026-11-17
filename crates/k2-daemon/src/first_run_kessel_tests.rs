@@ -350,10 +350,16 @@ fn kessels_pinned_chat_hires_the_chief_of_staff_with_only_what_kessel_holds() {
     assert_eq!(agent_mode(&cos), ("custom".to_string(), 1), "pinned chat on");
     assert!(k2_core::workspace::settings::agents_can_request_permissions(&cos), "its cards switch");
     assert!(k2_core::workspace::settings::get_agents_can_create_connections(&cos_path), "per-workspace connections on");
-    // Only what Kessel holds: chat.refresh stays a card ask.
+    // Only what Kessel holds: chat.refresh stays a card ask. Compute is
+    // never passed on by an agent (T3): the Chief of Staff asks for it.
     assert!(!on(&cos, "chat.refresh"));
-    assert_eq!(out["permissions"]["left"], json!([{ "action": "chat.refresh", "reason": "hirer_lacks" }]));
-    for a in CHIEF_OF_STAFF_STARTER_PERMISSIONS {
+    assert!(!on(&cos, "compute.use"), "compute isn't passed on, though Kessel holds it");
+    assert!(on(&kessel, "compute.use"));
+    assert_eq!(
+        out["permissions"]["left"],
+        json!([{ "action": "compute.use", "reason": "not_passable" }, { "action": "chat.refresh", "reason": "hirer_lacks" }])
+    );
+    for a in CHIEF_OF_STAFF_STARTER_PERMISSIONS.iter().filter(|a| **a != "compute.use") {
         assert!(on(&cos, a), "{a} passed on");
     }
     assert!(!on(&cos, "organization.manage") && !on(&cos, "gardens.manage"), "nothing beyond its set");
@@ -406,7 +412,7 @@ fn kessel_passes_on_cards_and_switches_only_while_it_holds_them() {
     assert!(!on(&cos, "agents.hire"), "a switch Kessel lost stays off");
     let left = out["permissions"]["left"].as_array().expect("left");
     assert!(left.contains(&json!({ "action": "agents.hire", "reason": "hirer_lacks" })), "{out}");
-    for a in CHIEF_OF_STAFF_STARTER_PERMISSIONS.iter().filter(|a| **a != "agents.hire") {
+    for a in CHIEF_OF_STAFF_STARTER_PERMISSIONS.iter().filter(|a| !matches!(**a, "agents.hire" | "compute.use")) {
         assert!(on(&cos, a), "{a}: Kessel still holds it, so it passes on");
     }
 }

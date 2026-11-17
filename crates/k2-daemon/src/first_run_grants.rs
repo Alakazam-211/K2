@@ -11,7 +11,9 @@
 //!   switch (`organization.manage`) is left out for an Admin: Kessel asks an
 //!   Owner on a card.
 //! - **Kessel** hiring the Chief of Staff (the seat-only route): it passes on
-//!   only the standing switches it holds itself, never an Owner-floor one.
+//!   only the standing switches it holds itself, never an Owner-floor one,
+//!   and never compute ([`AGENT_NEVER_PASSES`]: the hire would get every
+//!   machine, wider than Kessel's own grants; the CoS asks on a card).
 //!   `/cli/agent-access/set` is not an agent verb, so these are written
 //!   in-process through the same single writers, and audited with Kessel as the
 //!   actor.
@@ -24,6 +26,12 @@ use k2_core::hire::starter_permissions::{owner_floor, standing_switch};
 use serde_json::json;
 
 use crate::permission::actions::Answerer;
+
+/// Standing switches an agent never passes on, even one it holds
+/// (prd-agent-templates-v1 T3, security review): `compute.use` would hand
+/// the hire every machine with default limits, wider than the hirer's own
+/// grants, so a person is asked instead (a card, or Settings).
+pub(crate) const AGENT_NEVER_PASSES: &[&str] = &["compute.use"];
 
 /// Who grants.
 #[derive(Debug, Clone)]
@@ -196,6 +204,10 @@ pub(crate) fn grant_set(set: &[&str], t: &Target, by: &Grantor) -> Granted {
         };
         if owner_floor(action) && !by.is_owner() {
             out.left.push(left("owner_floor"));
+            continue;
+        }
+        if matches!(by, Grantor::Agent { .. }) && AGENT_NEVER_PASSES.contains(action) {
+            out.left.push(left("not_passable"));
             continue;
         }
         match grant_switch(by, t, switch) {

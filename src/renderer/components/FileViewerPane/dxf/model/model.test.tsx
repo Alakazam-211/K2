@@ -147,6 +147,26 @@ describe('ModelShapes', () => {
     expect(el(svg, '@h:5F').querySelector('tspan[text-decoration="underline"]')!.textContent).toBe('UNDER')
   })
 
+  it('text sits in the model’s own box vertically: every attachment’s first baseline is the box’s bottom (one line, no descenders)', async () => {
+    const { svg } = await drawn()
+    const baseline = (t: Element): number => {
+      const at = /translate\((-?[\d.]+) (-?[\d.]+)\)/.exec(t.getAttribute('transform')!)!
+      return Number(at[2]) - Number(t.querySelector('tspan')!.getAttribute('y'))
+    }
+    // MTEXT top, middle and bottom (left, centre and right), and TEXT in the middle: the box's bottom.
+    for (const h of ['@h:70', '@h:71', '@h:72', '@h:73', '@h:74', '@h:75', '@h:76', '@h:77', '@h:78', '@h:5D']) {
+      expect(baseline(el(svg, h))).toBeCloseTo(row(h).bbox![1], 9)
+    }
+    // TEXT on its baseline: the model's box keeps a descender (0.2 of the height) below it.
+    for (const h of ['@h:5C', '@h:5F']) {
+      const g = row(h).geom as { height: number }
+      expect(baseline(el(svg, h))).toBeCloseTo(row(h).bbox![1] + 0.2 * g.height, 9)
+    }
+    // The dimension's text, inside its block: top-left at the text point, so it spans its box (and the line at -5).
+    const dimText = svg.querySelector('defs [data-h="@h:3F"]')!
+    expect(baseline(dimText)).toBeCloseTo(DIM.entities.find((e) => e.h === '@h:3F')!.bbox![1], 9)
+  })
+
   it('MTEXT: paragraphs, wrapped at the reference width, with runs that keep bold and colour', async () => {
     const { svg } = await drawn()
     const m = el(svg, '@h:60')

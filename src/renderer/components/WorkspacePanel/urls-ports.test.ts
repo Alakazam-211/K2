@@ -1,6 +1,7 @@
 // Published drawer + settings — pure derivation logic (urls-ports.ts).
 
 import { describe, it, expect } from 'vitest'
+import { thisMachine } from '@/lib/desktop-words'
 import {
   PUBLISH_RUN_EXAMPLE,
   byoWorkspaceTargets,
@@ -472,8 +473,9 @@ describe('serviceLaunchLabel / serviceSkinUiLabel (P17)', () => {
 })
 
 describe('publishedHostLabel (P13)', () => {
-  it('local daemon is This Mac', () => {
-    expect(publishedHostLabel('local')).toBe('This Mac')
+  // "This PC" on Windows (desktop-words.test.ts pins which OS says which).
+  it('local daemon is this machine', () => {
+    expect(publishedHostLabel('local')).toBe(thisMachine())
   })
 
   it('remote uses label, then hostname — never This Mac', () => {

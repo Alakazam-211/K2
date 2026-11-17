@@ -123,6 +123,8 @@ asyncio.run(main())
 struct Reaper {
     child: Option<Child>,
     pids: Vec<i32>,
+    /// The daemons' K2 home: the k2-ptyd they launched there is ended too.
+    k2_home: Option<PathBuf>,
 }
 
 impl Drop for Reaper {
@@ -134,7 +136,56 @@ impl Drop for Reaper {
             let _ = c.kill();
             let _ = c.wait();
         }
+        if let Some(k2) = &self.k2_home {
+            if let Err(e) = end_ptyd(k2) {
+                if std::thread::panicking() {
+                    eprintln!("[rt-h] {e}");
+                } else {
+                    panic!("{e}");
+                }
+            }
+        }
     }
+}
+
+/// End the k2-ptyd the daemons launched under `k2`, the way a daemon stop
+/// does, and wait until every thread of it is gone.
+///
+/// Each daemon here runs with the ptyd switch at its default (on): at boot
+/// it launches k2-ptyd under the scratch HOME, or takes it over, and hands
+/// it a copy of the main listener (P50). A stop ends ptyd
+/// (`daemon_stop::on_shutdown`), but this test SIGKILLs the last daemon
+/// and a draining daemon skips that step by design (the successor owns
+/// ptyd), so nothing tells ptyd to go: it waits out its 60 s idle exit,
+/// long after the test, and the leak check below sees it. The test is the
+/// supervisor here, so it ends what the killed daemon's stop would have.
+///
+/// SIGTERM is ptyd's "end the sessions and exit". No pid in the lock file
+/// (or a dead one) means ptyd never started: the k2-ptyd binary isn't
+/// built, or the scratch HOME is too long for its socket path.
+fn end_ptyd(k2: &Path) -> Result<(), String> {
+    let lock = k2.join("run").join("ptyd").join("lock");
+    let Some(pid) = std::fs::read_to_string(&lock).ok().and_then(|s| s.trim().parse::<i32>().ok()) else {
+        return Ok(());
+    };
+    if !pid_alive(pid) {
+        return Ok(());
+    }
+    // SAFETY: a signal to ptyd's pid, read from its own lock file.
+    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::ESRCH) {
+            return Err(format!("SIGTERM k2-ptyd (pid {pid}): {e}"));
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while pid_alive(pid) {
+        if Instant::now() >= deadline {
+            return Err(format!("k2-ptyd (pid {pid}) still runs 20 s after SIGTERM"));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Ok(())
 }
 
 fn scratch_home() -> PathBuf {
@@ -438,6 +489,7 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     let log = std::fs::File::create(&log_path).unwrap();
     let path_env = k2_core::test_env::path_list_prepend(&bin, std::env::var("PATH").unwrap());
     let mut reaper = Reaper::default();
+    reaper.k2_home = Some(k2.clone());
     reaper.child = Some(
         Command::new(env!("CARGO_BIN_EXE_k2-daemon"))
             .env("HOME", &home)
@@ -780,8 +832,8 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
         ok_n.load(Ordering::SeqCst)
     );
 
-    // The last daemon was killed for the lock check; the reaper stops frpc
-    // and the App.
+    // The last daemon was killed for the lock check; the reaper stops frpc,
+    // the App and the k2-ptyd the daemons launched (see `end_ptyd`).
     drop(reaper);
     let _ = std::fs::remove_dir_all(&home);
 }

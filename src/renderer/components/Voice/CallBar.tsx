@@ -21,7 +21,9 @@ import { useCallBarFit } from './call-bar-fit'
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
 
 /** The call's time as every window counts it (from the earliest second any
- *  window saw it connect). Null while it connects. */
+ *  window saw it connect). Null while it connects. Every call timer draws it
+ *  in the look's UI font with tabular figures (the system font in Glass, the
+ *  code face in Terminal), as the words beside it are. */
 export function useCallTime(call: VoiceCall): string | null {
   const startedAt = call.callId ? callStartedAt(call.callId, call.connectedAt) : call.connectedAt
   return useCallDuration(startedAt)
@@ -53,7 +55,7 @@ export default function CallBar({ call, action, look }: CallBarProps): React.JSX
       <span data-testid="call-bar-title" data-call-bar-part="name" className={`min-w-0 truncate text-[var(--color-text-primary)] ${look === 'top' ? 'max-w-[160px]' : ''}`}>
         {title}
       </span>
-      <span data-testid="call-bar-time" data-call-bar-part="time" className="font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">
+      <span data-testid="call-bar-time" data-call-bar-part="time" className="text-[11px] tabular-nums text-[var(--color-text-secondary)]">
         {time ?? 'Connecting…'}
       </span>
       {inItsWindow ? (

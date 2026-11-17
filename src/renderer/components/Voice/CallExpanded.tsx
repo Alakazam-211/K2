@@ -113,7 +113,7 @@ function View({ call, video, actions, noiseRemoval }: CallExpandedProps): React.
             {callTitle(call)}
           </span>
           {time ? (
-            <span data-testid="call-expanded-duration" className="font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">
+            <span data-testid="call-expanded-duration" className="text-[11px] tabular-nums text-[var(--color-text-secondary)]">
               {time}
             </span>
           ) : null}

@@ -89,7 +89,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
         <span className="text-[12px] text-[var(--color-text-primary)]">
           {call.roomName} <span className="text-[var(--color-text-muted)]">· {call.serverLabel}</span>
         </span>
-        <span data-testid="voice-call-phase" className="text-[11px] font-mono text-[var(--color-text-muted)]">
+        <span data-testid="voice-call-phase" className="text-[11px] tabular-nums text-[var(--color-text-muted)]">
           {phaseLine}
         </span>
       </div>

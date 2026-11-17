@@ -143,7 +143,7 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
           {roomName ?? 'Call'}
         </span>
         {time ? (
-          <span data-testid="call-window-duration" className="type-control font-mono tabular-nums text-[var(--color-text-secondary)]">
+          <span data-testid="call-window-duration" className="type-control tabular-nums text-[var(--color-text-secondary)]">
             {time}
           </span>
         ) : null}

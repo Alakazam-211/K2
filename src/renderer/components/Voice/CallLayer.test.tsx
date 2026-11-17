@@ -519,6 +519,14 @@ describe('the call lives in its place: a DM call in its conversation, a voice ro
   })
 })
 
+/** A call's time is set in the look's UI font, as the words beside it are
+ *  (the system font in Glass, the code face in Terminal, whose UI font it
+ *  is), with tabular figures so it never jitters as it counts. */
+function expectUiFontTime(el: HTMLElement): void {
+  expect(el.className).not.toMatch(/\bfont-mono\b/)
+  expect(el.className).toMatch(/\btabular-nums\b/)
+}
+
 describe('elsewhere in the app: the slim bar in the top bar', () => {
   /** The top bar's slim bar (not a conversation's). */
   function topBar(): HTMLElement {
@@ -532,6 +540,7 @@ describe('elsewhere in the app: the slim bar in the top bar', () => {
     const bar = topBar()
     expect(within(bar).getByTestId('call-bar-title').textContent).toBe('Standup')
     await waitFor(() => expect(within(bar).getByTestId('call-bar-time').textContent).toMatch(/^\d+:\d\d$/))
+    expectUiFontTime(within(bar).getByTestId('call-bar-time'))
     expect(bar.contains(screen.getByTestId('call-topbar-mute'))).toBe(true)
     expect(bar.contains(screen.getByTestId('call-topbar-leave'))).toBe(true)
     expect(within(bar).queryByTestId('call-bar-back')).toBeNull()
@@ -883,6 +892,7 @@ describe('full screen: the call over K2, inside the app', () => {
     fireEvent.click(within(bar).getByTestId('call-overlay-mute'))
     expect(voice.store.getState().call?.muted).toBe(true)
     expect(screen.getByTestId('call-expanded-duration').textContent).toMatch(/^\d+:\d\d$/)
+    expectUiFontTime(screen.getByTestId('call-expanded-duration'))
   })
 
   it('the chord toggles it (⌃⌘V on macOS, Ctrl+Alt+V elsewhere)', async () => {
@@ -1156,6 +1166,7 @@ describe('pop out: the call in its own window', () => {
     expect(within(win).getByTestId('call-window-title').textContent).toBe('Standup')
     expect(within(win).getByTestId('video-grid')).toBeTruthy()
     expect(within(win).getByTestId('call-window-duration').textContent).toMatch(/^\d+:\d\d$/)
+    expectUiFontTime(within(win).getByTestId('call-window-duration'))
     // No Full screen here (the OS's own is the window's); Back to chat instead.
     expect(within(win).queryByTestId('call-window-fullscreen')).toBeNull()
     const back = within(win).getByTestId('call-window-popin')

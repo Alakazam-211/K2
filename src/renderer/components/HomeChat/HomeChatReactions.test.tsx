@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 // Reactions and the action bar on a Home chat message (K2 Design pass):
 //   1. Chips: the emoji and count, a ring when yours, a tip naming who.
+//      A toggle is a small crisp change (the width holds); a 28px hit
+//      target; a new chip row grows in and a chip that goes fades out, on
+//      the fast motion token, with none of it under reduced motion.
 //   2. The picker: six quick emoji and a search, all by keyboard; Esc
 //      closes it and focus goes back to the React button.
 // (The hover row on a message: HomeChatHoverRow.test.tsx.)
@@ -15,6 +18,8 @@ import {
   HomeChatReactionChips,
   HomeChatReactionPicker,
   PICKER_COLUMNS,
+  REACTION_CHIP_PX,
+  REACTION_HIT_PX,
   pickerMove,
   reactionTipTop,
   reactionTipText,
@@ -23,7 +28,39 @@ import {
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+  delete (HTMLElement.prototype as { animate?: unknown }).animate
+})
+
+/** Web Animations for jsdom: records each call; `finish()` ends them all. */
+function mockAnimate(): { calls: { el: HTMLElement; frames: Keyframe[]; opts: KeyframeAnimationOptions }[]; finish: () => void } {
+  const calls: { el: HTMLElement; frames: Keyframe[]; opts: KeyframeAnimationOptions }[] = []
+  const anims: { onfinish: (() => void) | null }[] = []
+  ;(HTMLElement.prototype as { animate?: unknown }).animate = function (this: HTMLElement, frames: Keyframe[], opts: KeyframeAnimationOptions) {
+    calls.push({ el: this, frames, opts })
+    const a = { onfinish: null as (() => void) | null, cancel: () => undefined }
+    anims.push(a)
+    return a
+  }
+  return {
+    calls,
+    finish: () => {
+      for (const a of anims.splice(0)) a.onfinish?.()
+    },
+  }
+}
+
+function mockReducedMotion(reduce: boolean): void {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((q: string) => ({ matches: reduce && q.includes('reduce'), media: q, addEventListener: () => undefined, removeEventListener: () => undefined })),
+  )
+}
+
+const face = (chip: Element): HTMLElement => chip.querySelector('[data-reaction-face]') as HTMLElement
+const px = (v: string): number => Number.parseFloat(v || '0')
 
 describe('who reacted', () => {
   it('names you first, joins with "and", and folds a long list', () => {
@@ -54,11 +91,99 @@ describe('reaction chips', () => {
     expect(chips.map((c) => c.textContent)).toEqual(['👍2', '🎉1'])
     expect(chips[0].getAttribute('aria-pressed')).toBe('true')
     expect(chips[0].hasAttribute('data-me')).toBe(true)
-    expect(chips[0].style.border).toContain('var(--zen-focus-ring)')
-    expect(chips[1].style.border).toContain('var(--zen-control-edge)')
+    expect(face(chips[0]).style.border).toContain('var(--zen-focus-ring)')
+    expect(face(chips[1]).style.border).toContain('var(--zen-control-edge)')
     // A chip in each look: the Thread's chamfer in Terminal, a pill in Glass.
-    expect(chips[0].hasAttribute('data-chamfer')).toBe(true)
+    expect(face(chips[0]).hasAttribute('data-chamfer')).toBe(true)
+    expect(face(chips[0]).className).toContain('rounded-[var(--radius-pill)]')
     expect(chips[0].className).toContain('rounded-[var(--radius-pill)]')
+  })
+
+  it('each chip is a 28px hit target around the smaller chip you see', () => {
+    render(<HomeChatReactionChips reactions={reactions} mine={false} onToggle={vi.fn()} whoFor={async () => []} />)
+    const chip = screen.getAllByTestId('home-chat-reaction')[0]
+    expect(REACTION_HIT_PX).toBeGreaterThanOrEqual(28)
+    expect(px(chip.style.height)).toBe(REACTION_HIT_PX)
+    expect(px(face(chip).style.height)).toBe(REACTION_CHIP_PX)
+    // The chips' hit areas meet: no dead gap between them, and the row keeps
+    // its small visual gap from the hit area's own inset.
+    expect(screen.getByTestId('home-chat-reactions').style.gap).toBe('0px')
+  })
+
+  it('toggling yours is a small change: the width holds (edge, inset and a count of up to two digits)', () => {
+    const one = { emoji: '👍', count: 9, me: false }
+    const { rerender } = render(<HomeChatReactionChips reactions={[one]} mine={false} onToggle={vi.fn()} whoFor={async () => []} />)
+    const across = (): number => {
+      const f = face(screen.getByTestId('home-chat-reaction'))
+      // (A var() colour leaves the longhands empty here: read the shorthand.)
+      return px(/([\d.]+)px/.exec(f.style.border)?.[1] ?? '') * 2 + px(f.style.paddingLeft) + px(f.style.paddingRight)
+    }
+    const theirs = across()
+    rerender(<HomeChatReactionChips reactions={[{ ...one, count: 10, me: true }]} mine={false} onToggle={vi.fn()} whoFor={async () => []} />)
+    expect(across()).toBe(theirs)
+    const count = screen.getByTestId('home-chat-reaction').querySelector('[data-reaction-count]') as HTMLElement
+    expect(count.style.minWidth).toBe('2ch')
+    expect(face(screen.getByTestId('home-chat-reaction')).style.fontVariantNumeric).toBe('tabular-nums')
+  })
+
+  it('the fill and ring change on the fast token, at once under reduced motion', () => {
+    mockReducedMotion(false)
+    const { unmount } = render(<HomeChatReactionChips reactions={reactions} mine={false} onToggle={vi.fn()} whoFor={async () => []} />)
+    expect(face(screen.getAllByTestId('home-chat-reaction')[0]).style.transition).toContain('background-color var(--motion-duration-fast)')
+    unmount()
+    mockReducedMotion(true)
+    render(<HomeChatReactionChips reactions={reactions} mine={false} onToggle={vi.fn()} whoFor={async () => []} />)
+    expect(face(screen.getAllByTestId('home-chat-reaction')[0]).style.transition).toBe('none')
+  })
+
+  it('a first reaction grows the chip row in (no jump below); a row already there just draws', () => {
+    const anim = mockAnimate()
+    const { rerender } = render(<HomeChatReactionChips reactions={[]} mine={false} onToggle={vi.fn()} whoFor={async () => []} />)
+    expect(screen.queryByTestId('home-chat-reactions')).toBeNull()
+    rerender(<HomeChatReactionChips reactions={[{ emoji: '👍', count: 1, me: true }]} mine={false} onToggle={vi.fn()} whoFor={async () => []} />)
+    const box = screen.getByTestId('home-chat-reactions')
+    const grow = anim.calls.find((c) => c.el === box)
+    expect(grow?.frames[0]).toMatchObject({ height: '0px' })
+    expect(typeof grow?.opts.duration).toBe('number')
+    // Mounted with reactions (scrolled into view): no motion.
+    cleanup()
+    anim.calls.length = 0
+    render(<HomeChatReactionChips reactions={reactions} mine={false} onToggle={vi.fn()} whoFor={async () => []} />)
+    expect(anim.calls).toHaveLength(0)
+  })
+
+  it('a chip that goes fades out first (not clickable meanwhile); the last one folds the row', () => {
+    const anim = mockAnimate()
+    const onToggle = vi.fn()
+    const { rerender } = render(<HomeChatReactionChips reactions={reactions} mine={false} onToggle={onToggle} whoFor={async () => []} />)
+    rerender(<HomeChatReactionChips reactions={[reactions[0]]} mine={false} onToggle={onToggle} whoFor={async () => []} />)
+    const leaving = document.querySelector('[data-leaving]') as HTMLElement
+    expect(leaving.getAttribute('data-emoji')).toBe('🎉')
+    expect(leaving.getAttribute('aria-hidden')).toBe('true')
+    expect(leaving.tabIndex).toBe(-1)
+    fireEvent.click(leaving)
+    expect(onToggle).not.toHaveBeenCalled()
+    expect(anim.calls.find((c) => c.el === leaving)?.frames.at(-1)).toMatchObject({ opacity: 0 })
+    // It holds its place until the fade ends.
+    expect(screen.getAllByTestId('home-chat-reaction').map((c) => c.getAttribute('data-emoji'))).toEqual(['👍', '🎉'])
+    act(() => anim.finish())
+    expect(screen.getAllByTestId('home-chat-reaction').map((c) => c.getAttribute('data-emoji'))).toEqual(['👍'])
+    // The last chip: the row folds as it fades, then goes.
+    rerender(<HomeChatReactionChips reactions={[]} mine={false} onToggle={onToggle} whoFor={async () => []} />)
+    const box = screen.getByTestId('home-chat-reactions')
+    expect(anim.calls.find((c) => c.el === box)?.frames.at(-1)).toMatchObject({ height: '0px' })
+    act(() => anim.finish())
+    expect(screen.queryByTestId('home-chat-reactions')).toBeNull()
+  })
+
+  it('under reduced motion a chip just goes, and a row just appears', () => {
+    mockReducedMotion(true)
+    const anim = mockAnimate()
+    const { rerender } = render(<HomeChatReactionChips reactions={[]} mine={false} onToggle={vi.fn()} whoFor={async () => []} />)
+    rerender(<HomeChatReactionChips reactions={reactions} mine={false} onToggle={vi.fn()} whoFor={async () => []} />)
+    rerender(<HomeChatReactionChips reactions={[reactions[0]]} mine={false} onToggle={vi.fn()} whoFor={async () => []} />)
+    expect(screen.getAllByTestId('home-chat-reaction')).toHaveLength(1)
+    expect(anim.calls).toHaveLength(0)
   })
 
   it('hover shows a tip listing who reacted, and the label names them too', async () => {

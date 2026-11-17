@@ -1,7 +1,11 @@
 // Reactions on a Home chat bubble (prd-home-people-channels-v1 §10, D7):
 //   - chips under the bubble: the emoji and its count, a ring when one is
 //     yours; a tap toggles yours; hovering (or keyboard focus) shows a tip
-//     naming who reacted;
+//     naming who reacted. A toggle is a small crisp change: the count ticks
+//     and the fill and ring change on the fast motion token, and the chip
+//     keeps its width (tabular figures in a two-digit box; yours trades
+//     inset for its thicker ring). Each chip is a 28px hit target around the
+//     smaller chip you see. Chips come and go smoothly (`useChipMotion`);
 //   - the picker: a small popover in the app's menu shape, six quick emoji
 //     and a search over the Unicode set, all by keyboard; Esc closes it.
 //
@@ -21,9 +25,15 @@ import { SearchField } from '@/components/ui/SearchField'
 import { MENU_LIST, MENU_ROW, floatMaterial } from '@/components/ui/float-material'
 import { clientRectToCss, cssViewport } from '@/lib/app-zoom'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { useReducedMotion } from '@/hooks/useReducedMotion'
+import { useChipMotion } from './useChipMotion'
 
-/** A chip's height (px): the Thread's small control. */
+/** A chip's height as drawn (px): the Thread's small control. */
 export const REACTION_CHIP_PX = 22
+/** Its hit target (px): the drawn chip with an inset around it. */
+export const REACTION_HIT_PX = 28
+/** The hit target's inset beside the drawn chip: half the chips' gap. */
+const HIT_INSET_X = 2
 
 /** "Ana", "Ana and you"... with You first: who reacted, for the chip's tip. */
 export function reactorsLine(names: readonly string[], max = 6): string {
@@ -44,18 +54,34 @@ export function reactionTipText(names: readonly string[] | undefined, emoji: str
   return `${reactorsLine(names)} reacted with ${emoji}`
 }
 
-const CHIP_BASE: CSSProperties = {
+const CHIP_HIT: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 4,
+  height: REACTION_HIT_PX,
+  padding: `${(REACTION_HIT_PX - REACTION_CHIP_PX) / 2}px ${HIT_INSET_X}px`,
+  border: 'none',
+  background: 'transparent',
+}
+
+/** The drawn chip's inset (px) inside a 1px edge; a thicker edge takes its
+ *  extra width out of the inset, so a toggle never changes the width. */
+const FACE_INSET_X = 6
+
+const FACE_BASE: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 3,
   height: REACTION_CHIP_PX,
-  padding: '0 8px 0 6px',
   fontSize: 'var(--zen-type-sm, 0.8em)',
   lineHeight: 1,
-  cursor: 'pointer',
   color: 'var(--zen-text)',
   fontVariantNumeric: 'tabular-nums',
 }
+
+/** Up to two digits in one width: 9 to 10 doesn't widen the chip. */
+const COUNT_STYLE: CSSProperties = { fontWeight: 600, minWidth: '2ch', textAlign: 'center' }
+
+const FACE_FADE = 'var(--motion-duration-fast) var(--motion-ease-standard)'
 
 /** Yours: the readable accent as the ring, a light accent wash inside. */
 const MINE_EDGE = 'var(--zen-focus-ring)'
@@ -63,15 +89,18 @@ const MINE_FILL = 'color-mix(in srgb, var(--zen-accent) 16%, var(--zen-canvas))'
 const CHIP_EDGE = 'var(--zen-control-edge)'
 const CHIP_FILL = 'var(--zen-surface)'
 
-function chipStyle(me: boolean, readOnly: boolean): CSSProperties {
+function faceStyle(me: boolean, reduced: boolean): CSSProperties {
   const edge = me ? MINE_EDGE : CHIP_EDGE
   const fill = me ? MINE_FILL : CHIP_FILL
   const border = me ? 1.5 : 1
+  const inset = FACE_INSET_X - (border - 1)
   return {
-    ...CHIP_BASE,
-    cursor: readOnly ? 'default' : 'pointer',
+    ...FACE_BASE,
+    paddingLeft: inset,
+    paddingRight: inset,
     border: `${border}px solid ${edge}`,
     background: fill,
+    transition: reduced ? 'none' : `background-color ${FACE_FADE}, border-color ${FACE_FADE}`,
     ...chamferVars({ cut: chamferCutFor(REACTION_CHIP_PX), fill, edge, border }),
   }
 }
@@ -138,7 +167,9 @@ export function HomeChatReactionChips({
 }): JSX.Element | null {
   const [who, setWho] = useState<Record<string, string[]>>({})
   const [tip, setTip] = useState<{ emoji: string; el: HTMLElement } | null>(null)
-  if (reactions.length === 0) return null
+  const reduced = useReducedMotion()
+  const { shown, boxRef } = useChipMotion(reactions, reduced)
+  if (shown.length === 0) return null
   const ask = (emoji: string, el: HTMLElement): void => {
     setTip({ emoji, el })
     void whoFor(emoji).then(
@@ -147,13 +178,15 @@ export function HomeChatReactionChips({
     )
   }
   const hide = (): void => setTip(null)
+  const tipLive = tip && reactions.some((r) => r.emoji === tip.emoji)
   return (
     <div
+      ref={boxRef}
       data-testid="home-chat-reactions"
       className="flex flex-wrap"
-      style={{ gap: 4, alignSelf: mine ? 'flex-end' : 'flex-start', marginTop: 4, padding: '0 4px' }}
+      style={{ gap: 0, alignSelf: mine ? 'flex-end' : 'flex-start', marginTop: 1, padding: `0 ${4 - HIT_INSET_X}px` }}
     >
-      {reactions.map((r) => {
+      {shown.map(({ r, leaving }) => {
         const names = who[r.emoji]
         const line = names && names.length > 0 ? `: ${reactorsLine(names)}` : r.me ? ', you reacted' : ''
         return (
@@ -161,32 +194,36 @@ export function HomeChatReactionChips({
             key={r.emoji}
             type="button"
             data-testid="home-chat-reaction"
-            data-chamfer=""
             className="k2-focus rounded-[var(--radius-pill)]"
             data-emoji={r.emoji}
             data-me={r.me ? '' : undefined}
+            data-leaving={leaving ? '' : undefined}
+            aria-hidden={leaving || undefined}
+            tabIndex={leaving ? -1 : undefined}
             aria-pressed={r.me}
             aria-label={`${r.emoji} ${r.count}${line}`}
             aria-disabled={disabled || undefined}
-            onMouseEnter={(e) => ask(r.emoji, e.currentTarget)}
+            onMouseEnter={leaving ? undefined : (e) => ask(r.emoji, e.currentTarget)}
             onMouseLeave={hide}
-            onFocus={(e) => ask(r.emoji, e.currentTarget)}
+            onFocus={leaving ? undefined : (e) => ask(r.emoji, e.currentTarget)}
             onBlur={hide}
             onClick={() => {
-              if (!disabled) onToggle(r.emoji)
+              if (!disabled && !leaving) onToggle(r.emoji)
             }}
-            style={chipStyle(r.me, disabled)}
+            style={{ ...CHIP_HIT, cursor: disabled || leaving ? 'default' : 'pointer', pointerEvents: leaving ? 'none' : undefined }}
           >
-            <span aria-hidden="true" style={{ fontSize: '1.1em' }}>
-              {r.emoji}
-            </span>
-            <span data-reaction-count="" style={{ fontWeight: 600 }}>
-              {r.count}
+            <span data-reaction-face="" data-chamfer="" className="rounded-[var(--radius-pill)]" style={faceStyle(r.me, reduced)}>
+              <span aria-hidden="true" style={{ fontSize: '1.1em' }}>
+                {r.emoji}
+              </span>
+              <span data-reaction-count="" style={COUNT_STYLE}>
+                {r.count}
+              </span>
             </span>
           </button>
         )
       })}
-      {tip && <ReactionTip anchor={tip.el} text={reactionTipText(who[tip.emoji], tip.emoji)} />}
+      {tip && tipLive && <ReactionTip anchor={tip.el} text={reactionTipText(who[tip.emoji], tip.emoji)} />}
     </div>
   )
 }

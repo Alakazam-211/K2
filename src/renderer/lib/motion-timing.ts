@@ -1,6 +1,6 @@
-// The Style's slow motion, read live from its tokens, for motion driven
-// from script (Web Animations): the setup list's fold and the sidebar's
-// floor move together on it. Terminal: 300ms linear; Glass: 320ms
+// The Style's motion, read live from its tokens, for motion driven from
+// script (Web Animations): the setup list's fold and the sidebar's floor
+// move together on the slow one; a Home chat chip row on the fast one. Terminal: 300ms linear; Glass: 320ms
 // cubic-bezier(0.22, 1, 0.36, 1). The medium motion (a row moving to its
 // new place): Terminal 150ms linear; Glass 180ms on the same curve.
 
@@ -34,4 +34,12 @@ export function slowMotionTiming(): { duration: number; easing: string } {
 /** `--motion-duration-medium` and `--motion-ease-standard`, as WAAPI timing. */
 export function mediumMotionTiming(): { duration: number; easing: string } {
   return motionTiming('--motion-duration-medium', MEDIUM_MOTION_FALLBACK_MS)
+}
+
+/** Used when the Style's `--motion-duration-fast` can't be read. */
+export const FAST_MOTION_FALLBACK_MS = 120
+
+/** `--motion-duration-fast` and `--motion-ease-standard`, as WAAPI timing. */
+export function fastMotionTiming(): { duration: number; easing: string } {
+  return motionTiming('--motion-duration-fast', FAST_MOTION_FALLBACK_MS)
 }

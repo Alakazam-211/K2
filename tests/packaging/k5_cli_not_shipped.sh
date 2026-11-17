@@ -21,8 +21,8 @@
 # scripts/provision-k2-server.sh, scripts/arch-release-asset.sh,
 # scripts/sign-*.sh, scripts/windows-sign-after-release.sh, every file
 # under packaging/, the Tauri bundle configs (src-tauri/tauri*.json), and
-# the code that installs or stages the CLI (k2-client's cli_install and
-# win_cli, k2-core's cli_stage, the root helper's cli_refresh, the app's
+# the code that installs or stages the CLI (k2-client's cli_install,
+# cli_copy and win_cli, k2-core's cli_stage, the root helper's cli_refresh, the app's
 # Install CLI in src-tauri's settings). A listed file or glob that matches
 # nothing fails too: a rename must update this list.
 #
@@ -47,6 +47,7 @@ scripts/windows-sign-after-release.sh
 packaging/**
 src-tauri/tauri*.json
 crates/k2-client/src/cli_install.rs
+crates/k2-client/src/cli_copy.rs
 crates/k2-client/src/win_cli.rs
 crates/k2-core/src/cli_stage.rs
 crates/k2-daemon/src/root_helper/cli_refresh.rs

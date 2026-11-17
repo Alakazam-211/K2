@@ -48,6 +48,9 @@ pub use k2_brand::{cli_name, product_name};
 pub mod browser_notes;
 /// The retired `k2so` CLI alias check, on every OS (Windows Install CLI too).
 pub mod cli_alias;
+/// The Linux desktop app's copy of the `k2` script (never through a link).
+#[cfg(unix)]
+pub mod cli_copy;
 /// `k2` on the person's PATH with no admin prompt (0.46.11).
 #[cfg(unix)]
 pub mod cli_install;

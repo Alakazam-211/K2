@@ -124,59 +124,9 @@ const CLI_SYMLINK_PATH: &str = "/usr/local/bin/k2";
 #[cfg(all(not(windows), not(target_os = "linux")))]
 const CLI_LEGACY_SYMLINK_PATH: &str = "/usr/local/bin/k2so";
 
-/// Distro packages (Arch pacman) install the CLI here. Settings must not
-/// write a second copy over it.
-#[cfg(any(target_os = "linux", test))]
-const DISTRO_CLI_PATH: &str = "/usr/bin/k2";
-
-/// Login PATH order on Linux. `/usr/local/bin` is ahead of `/usr/bin`,
-/// which is ahead of `~/.local/bin`. The first file that exists is the
-/// one `k2` runs.
-#[cfg(any(target_os = "linux", test))]
-fn linux_cli_search_paths(home: Option<&Path>) -> Vec<PathBuf> {
-    let mut paths = vec![
-        PathBuf::from("/usr/local/bin/k2"),
-        PathBuf::from(DISTRO_CLI_PATH),
-    ];
-    if let Some(home) = home {
-        if !home.as_os_str().is_empty() {
-            paths.push(home.join(".local/bin/k2"));
-        }
-    }
-    paths
-}
-
-/// The first of `paths` that is the K2 CLI script (a `#!` file with a
-/// version line, links followed). 0.46.11: the .deb puts the GUI binary at
-/// `/usr/bin/k2`, which used to read as "installed by the package" and
-/// left the person with a `k2` that opens the app.
-#[cfg(any(target_os = "linux", test))]
-fn first_k2_cli(paths: &[PathBuf]) -> Option<PathBuf> {
-    paths
-        .iter()
-        .find(|p| is_script(p) && read_cli_version(p).is_some())
-        .cloned()
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn cli_is_distro_package(path: &Path) -> bool {
-    path == Path::new(DISTRO_CLI_PATH)
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn copy_cli_script(src: &Path, dest: &Path) -> Result<(), String> {
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-    }
-    fs::copy(src, dest).map_err(|e| format!("copy CLI to {}: {e}", dest.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(dest, fs::Permissions::from_mode(0o755))
-            .map_err(|e| format!("chmod {}: {e}", dest.display()))?;
-    }
-    Ok(())
-}
+// Linux: what counts as installed and how the copy is written (never
+// through a link, so never onto the k5 binary) live in
+// `k2_client::cli_copy`, where cargo tests them.
 
 #[cfg(target_os = "linux")]
 fn linux_home() -> Option<PathBuf> {
@@ -186,9 +136,13 @@ fn linux_home() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
+fn linux_search_paths() -> Vec<PathBuf> {
+    k2_client::cli_copy::search_paths(linux_home().as_deref())
+}
+
+#[cfg(target_os = "linux")]
 fn linux_installed_cli() -> Option<PathBuf> {
-    let home = linux_home();
-    first_k2_cli(&linux_cli_search_paths(home.as_deref()))
+    k2_client::cli_copy::first_k2_cli(&linux_search_paths())
 }
 
 #[cfg(target_os = "linux")]
@@ -199,17 +153,22 @@ fn linux_user_cli_dest() -> Result<PathBuf, String> {
 
 /// Copy the bundled CLI onto `dest`, and refresh the `k2so` shim beside it
 /// only where an earlier install left one (a new install gets `k2` alone).
+/// Never through a link (`k2_client::cli_copy::copy_script`): what isn't
+/// K2's to replace is left, and `Err` says why.
 #[cfg(target_os = "linux")]
 fn linux_write_cli(
     dest: &Path,
     cli_script: &Path,
     legacy_shim: &Option<PathBuf>,
 ) -> Result<(), String> {
-    copy_cli_script(cli_script, dest)?;
+    use k2_client::cli_copy::{copy_script, CopyOutcome};
+    if let CopyOutcome::Left { why } = copy_script(cli_script, dest)? {
+        return Err(format!("{} is {why}, so it was left alone", dest.display()));
+    }
     if let (Some(shim), Some(parent)) = (legacy_shim.as_ref(), dest.parent()) {
-        let alias = parent.join("k2so");
+        let alias = parent.join(k2_client::cli_install::LEGACY_NAME);
         if k2_client::cli_install::legacy_alias_present(&alias) {
-            let _ = copy_cli_script(shim, &alias);
+            let _ = copy_script(shim, &alias);
         }
     }
     Ok(())
@@ -479,7 +438,7 @@ fn cli_install_status_now() -> Result<serde_json::Value, String> {
         let bundled_path = bundled.as_ref().map(|p| p.to_string_lossy().to_string());
         let bundled_version = bundled.as_ref().and_then(|p| read_cli_version(p));
         let found = linux_installed_cli();
-        let package_managed = found.as_ref().is_some_and(|p| cli_is_distro_package(p));
+        let package_managed = found.as_ref().is_some_and(|p| k2_client::cli_copy::is_distro_package(p));
         let installed_version = found.as_ref().and_then(|p| {
             let actual = dunce::canonicalize(&p).unwrap_or_else(|_| p.clone());
             read_cli_version(&actual)
@@ -591,10 +550,11 @@ pub(crate) fn cli_heal_silent() -> Result<bool, String> {
     }
     #[cfg(target_os = "linux")]
     {
-        if linux_installed_cli().is_some() {
-            return Ok(false);
-        }
-        let dest = linux_user_cli_dest()?;
+        use k2_client::cli_copy::{heal_plan, HealPlan};
+        let dest = match heal_plan(&linux_search_paths(), &linux_user_cli_dest()?) {
+            HealPlan::Installed(_) => return Ok(false),
+            HealPlan::Copy(dest) => dest,
+        };
         linux_write_cli(&dest, &cli_script, &legacy_shim)?;
         if let Some(Err(e)) = k2_client::cli_install::boot_path_for_staged(&dest) {
             eprintln!("[boot] CLI PATH line: {e}");
@@ -632,7 +592,7 @@ fn cli_install_now() -> Result<String, String> {
         let legacy_shim = find_cli_script_named("k2so");
         ensure_cli_executable(&cli_script, &legacy_shim);
         if let Some(found) = linux_installed_cli() {
-            if cli_is_distro_package(&found) {
+            if k2_client::cli_copy::is_distro_package(&found) {
                 return Ok(found.display().to_string());
             }
             let is_link = fs::symlink_metadata(&found)
@@ -1006,19 +966,18 @@ pub fn set_document_edited(app: AppHandle, edited: bool) -> Result<(), String> {
     Ok(())
 }
 
+// The Linux search order, what counts as installed and the copy (never
+// through a link) are tested in k2-client's `cli_copy`.
 #[cfg(test)]
 mod cli_heal_tests {
-    use super::{
-        cli_is_distro_package, copy_cli_script, first_k2_cli, is_script, linux_cli_search_paths,
-        read_cli_version, version_is_newer,
-    };
+    use super::{is_script, read_cli_version, version_is_newer};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-    // Unique scratch dir per test (real FS — we exercise fs::canonicalize).
+    // Unique scratch dir per test (real FS).
     fn scratch() -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("k2-cliheal-{}-{}", std::process::id(), n));
@@ -1028,35 +987,11 @@ mod cli_heal_tests {
     }
 
     #[test]
-    fn linux_search_order_matches_login_path() {
-        let home = PathBuf::from("/home/z");
-        let paths = linux_cli_search_paths(Some(&home));
-        assert_eq!(
-            paths,
-            vec![
-                PathBuf::from("/usr/local/bin/k2"),
-                PathBuf::from("/usr/bin/k2"),
-                home.join(".local/bin/k2"),
-            ]
-        );
-        assert!(linux_cli_search_paths(None).len() == 2);
-    }
-
-    #[test]
-    fn first_k2_cli_skips_absent_and_distro_is_usr_bin_only() {
+    fn the_script_s_version_and_which_is_newer() {
         let d = scratch();
-        let absent = d.join("missing");
         let present = d.join("k2");
         fs::write(&present, "#!/bin/bash\nK2_CLI_VERSION=\"0.41.2\"\n").unwrap();
-        let found = first_k2_cli(&[absent, present.clone()]).unwrap();
-        assert_eq!(found, present);
-        assert_eq!(read_cli_version(&found).as_deref(), Some("0.41.2"));
-        assert!(!cli_is_distro_package(&found));
-        assert!(cli_is_distro_package(std::path::Path::new("/usr/bin/k2")));
-        assert!(!cli_is_distro_package(std::path::Path::new("/usr/local/bin/k2")));
-        assert!(!cli_is_distro_package(std::path::Path::new(
-            "/home/z/.local/bin/k2"
-        )));
+        assert_eq!(read_cli_version(&present).as_deref(), Some("0.41.2"));
         assert!(version_is_newer(Some("0.41.3"), Some("0.41.2")));
         assert!(!version_is_newer(Some("0.41.2"), Some("0.41.2")));
         assert!(!version_is_newer(Some("0.41.3"), None));
@@ -1064,38 +999,15 @@ mod cli_heal_tests {
     }
 
     #[test]
-    fn a_gui_binary_named_k2_is_not_the_cli() {
-        // 0.46.11: the .deb installs the GUI at /usr/bin/k2. It must not
-        // read as an installed CLI (Settings said "installed, updates with
-        // the package" and `k2` in a terminal opened the app).
+    fn a_bundled_candidate_must_be_a_script() {
+        // 0.46.11: the .deb's GUI at /usr/bin/k2 is not a bundled script.
         let d = scratch();
         let gui = d.join("usr-bin-k2");
         fs::write(&gui, b"\x7fELF\x02\x01\x01\x00\x00").unwrap();
-        let no_version = d.join("other-k2");
-        fs::write(&no_version, "#!/bin/sh\necho hi\n").unwrap();
-        let cli = d.join("local-bin-k2");
-        fs::write(&cli, "#!/bin/bash\nK2_CLI_VERSION=\"0.46.11\"\n").unwrap();
+        let script = d.join("other-k2");
+        fs::write(&script, "#!/bin/sh\necho hi\n").unwrap();
         assert!(!is_script(&gui));
-        assert!(is_script(&no_version));
-        assert_eq!(first_k2_cli(&[gui.clone(), no_version.clone(), cli.clone()]), Some(cli));
-        assert_eq!(first_k2_cli(&[gui, no_version]), None);
-        let _ = fs::remove_dir_all(&d);
-    }
-
-    #[test]
-    fn copy_cli_script_writes_an_executable_user_copy() {
-        let d = scratch();
-        let src = d.join("bundled");
-        fs::write(&src, "#!/bin/bash\nK2_CLI_VERSION=\"9.9.9\"\n").unwrap();
-        let dest = d.join("bin").join("k2");
-        copy_cli_script(&src, &dest).unwrap();
-        assert_eq!(read_cli_version(&dest).as_deref(), Some("9.9.9"));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(&dest).unwrap().permissions().mode();
-            assert_eq!(mode & 0o111, 0o111);
-        }
+        assert!(is_script(&script));
         let _ = fs::remove_dir_all(&d);
     }
 }

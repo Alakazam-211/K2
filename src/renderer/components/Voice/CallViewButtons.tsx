@@ -20,6 +20,7 @@ import { expandCall, shrinkCall, useCallExpand } from '@/stores/call-expand'
 import { compactCallStage, expandCallStage } from '@/stores/call-place'
 import { popOutCall, useCallPopout } from '@/stores/call-popout'
 import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
+import CallBarWord from './CallBarWord'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
@@ -109,8 +110,8 @@ export function CompactButton({ testId, compact }: { testId: string; compact: bo
   const word = compact ? 'Expand' : 'Compact'
   const title = compact ? 'Expand: show the call’s video here' : 'Compact: fold the call into a slim bar'
   return (
-    <Button variant="quiet" data-testid={testId} title={title} style={noDrag} onClick={() => (compact ? expandCallStage() : compactCallStage())}>
-      {word}
+    <Button variant="quiet" data-testid={testId} aria-label={word} title={title} className="flex items-center" style={noDrag} onClick={() => (compact ? expandCallStage() : compactCallStage())}>
+      <CallBarWord icon={<ExpandIcon shrink={!compact} size={14} />} word={word} />
     </Button>
   )
 }

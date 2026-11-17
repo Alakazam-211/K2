@@ -536,6 +536,11 @@ describe('elsewhere in the app: the slim bar in the top bar', () => {
     expect(within(bar).queryByTestId('call-bar-expand')).toBeNull()
     // In the top bar's flow, never floating.
     expect(bar.className).not.toMatch(/\b(fixed|absolute)\b/)
+    // A narrow top bar folds it (call-bar-fit): mute and hang up always
+    // stay; the others can go, as they're in the headset's list too.
+    expect(screen.getByTestId('call-topbar-mute').hasAttribute('data-call-optional')).toBe(false)
+    expect(screen.getByTestId('call-topbar-leave').hasAttribute('data-call-optional')).toBe(false)
+    expect(screen.getByTestId('call-topbar-deafen').hasAttribute('data-call-optional')).toBe(true)
   })
 
   it("a DM call away from its DM: Back to call opens the DM, with its stage open; the top bar's bar gives way there", async () => {
@@ -551,6 +556,10 @@ describe('elsewhere in the app: the slim bar in the top bar', () => {
     expect(within(bar).queryByTestId('call-bar-expand')).toBeNull()
     const back = within(bar).getByTestId('call-bar-back')
     expect(back.textContent).toBe('Back to call')
+    // Folded to its icon in a narrow top bar, it keeps its name.
+    expect(back.getAttribute('aria-label')).toBe('Back to call')
+    expect(back.querySelector('[data-call-bar-glyph] svg')).not.toBeNull()
+    expect(back.querySelector('[data-call-bar-label]')?.textContent).toBe('Back to call')
     expectFocusRing(back)
     fireEvent.click(back)
     expect(opened.rows).toEqual([{ kind: 'person', address: 'k2:connect:ada::sewlab.k2.dev', workspaceId: null, label: 'Ada' }])

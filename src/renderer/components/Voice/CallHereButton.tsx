@@ -6,6 +6,7 @@
 // without it there is no stage to move.
 
 import { Button } from '@/components/ui/Button'
+import { PopInIcon } from '@/components/icons/K2Icons'
 import { CALL_WINDOW_LABEL, readPoppedOutFrom } from '@/lib/voice/call-view'
 import { getWindowLabel } from '@/lib/window-chrome'
 import { showCallHere, useCallHome, useIsCallHome } from '@/stores/call-home'
@@ -14,6 +15,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { video } from '@/stores/video'
 import type { VoiceCall } from '@/stores/voice-core'
 import { useCallVideoLive } from './callHooks'
+import CallBarWord from './CallBarWord'
 
 /** Whether this window offers to take the stage, and in which words. */
 export function useCallHereAction(call: VoiceCall): 'here' | 'back-to-chat' | null {
@@ -37,14 +39,14 @@ export default function CallHereButton({ kind, then }: { kind: 'here' | 'back-to
   }
   if (kind === 'back-to-chat') {
     return (
-      <Button variant="quiet" data-testid="call-bar-back-to-chat" title="Back to chat: the call's video comes back here, and its own window closes" onClick={press}>
-        Back to chat
+      <Button variant="quiet" data-testid="call-bar-back-to-chat" aria-label="Back to chat" title="Back to chat: the call's video comes back here, and its own window closes" className="flex items-center" onClick={press}>
+        <CallBarWord icon={<PopInIcon size={14} />} word="Back to chat" />
       </Button>
     )
   }
   return (
-    <Button variant="quiet" data-testid="call-bar-here" title="Show call here: the call's video moves to this window" onClick={press}>
-      Show call here
+    <Button variant="quiet" data-testid="call-bar-here" aria-label="Show call here" title="Show call here: the call's video moves to this window" className="flex items-center" onClick={press}>
+      <CallBarWord icon={<PopInIcon size={14} />} word="Show call here" />
     </Button>
   )
 }

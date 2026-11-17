@@ -10,9 +10,11 @@
 // A DM this window can't place has no Back to call: never a dead button.
 
 import { Button } from '@/components/ui/Button'
+import { ArrowLeftIcon } from '@/components/icons/K2Icons'
 import { callHasConversation, useCallPlace } from '@/stores/call-place'
 import { useVoice } from '@/stores/voice'
 import CallBar from './CallBar'
+import CallBarWord from './CallBarWord'
 import { useCallInItsConversation, useCallStageShown, useCallVideoHere } from './CallLayer'
 import { CompactButton } from './CallViewButtons'
 import { openCallConversation, useCallConversationAddress } from './callConversation'
@@ -40,8 +42,15 @@ function TopCallBarFor({ call, address, videoHere, compact }: { call: VoiceCall;
   } else if (callHasConversation(call)) {
     if (address) {
       action = (
-        <Button variant="quiet" data-testid="call-bar-back" title="Back to call: open the conversation the call is in" onClick={() => openCallConversation(address, call.roomName)}>
-          Back to call
+        <Button
+          variant="quiet"
+          data-testid="call-bar-back"
+          aria-label="Back to call"
+          title="Back to call: open the conversation the call is in"
+          className="flex items-center"
+          onClick={() => openCallConversation(address, call.roomName)}
+        >
+          <CallBarWord icon={<ArrowLeftIcon size={14} />} word="Back to call" />
         </Button>
       )
     }

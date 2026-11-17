@@ -15,6 +15,7 @@ import { useCallNoiseRemoval } from './CallLayer'
 import { useCallDuration } from './callHooks'
 import { useCallPopout } from '@/stores/call-popout'
 import { useCallHomeIsCallWindow } from '@/stores/call-home'
+import { useCallBarFit } from './call-bar-fit'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
@@ -45,16 +46,18 @@ export default function CallBar({ call, action, look }: CallBarProps): React.JSX
   const inItsWindow = useCallHomeIsCallWindow() || poppedOut
   const controls = <CallControls variant="topbar" call={call} actions={voice} video={videoPreview ? video : null} noiseRemoval={noiseRemoval} />
   const frame = look === 'dock' ? 'border-b border-[var(--color-border)] px-4 py-1.5' : 'ml-0.5'
+  // In the top bar it folds before the top bar overflows (call-bar-fit).
+  const fit = useCallBarFit(look === 'top')
   return (
-    <div role="region" aria-label={`In call: ${title}`} data-testid="call-bar" data-look={look} className={`flex min-w-0 items-center gap-2 text-[12px] ${frame}`} style={noDrag}>
-      <span data-testid="call-bar-title" className={`min-w-0 truncate text-[var(--color-text-primary)] ${look === 'top' ? 'max-w-[160px]' : ''}`}>
+    <div ref={fit} role="region" aria-label={`In call: ${title}`} data-testid="call-bar" data-look={look} className={`flex min-w-0 items-center gap-2 text-[12px] ${frame}`} style={noDrag}>
+      <span data-testid="call-bar-title" data-call-bar-part="name" className={`min-w-0 truncate text-[var(--color-text-primary)] ${look === 'top' ? 'max-w-[160px]' : ''}`}>
         {title}
       </span>
-      <span data-testid="call-bar-time" className="font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">
+      <span data-testid="call-bar-time" data-call-bar-part="time" className="font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">
         {time ?? 'Connecting…'}
       </span>
       {inItsWindow ? (
-        <span data-testid="call-bar-where" className="whitespace-nowrap text-[11px] text-[var(--color-text-secondary)]">
+        <span data-testid="call-bar-where" data-call-bar-part="name" className="whitespace-nowrap text-[11px] text-[var(--color-text-secondary)]">
           In its own window
         </span>
       ) : null}

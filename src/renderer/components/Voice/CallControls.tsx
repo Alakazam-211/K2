@@ -157,6 +157,7 @@ function CallButton({
   onPress,
   children,
   badge = null,
+  optional = false,
 }: {
   variant: CallControlsVariant
   label: string
@@ -173,6 +174,9 @@ function CallButton({
   /** A word drawn on the button's lower edge (Muted), over the glyph's
    *  state; it never changes the button's size. */
   badge?: ReactNode
+  /** One a narrow top bar may fold away (call-bar-fit's last step): it is
+   *  in the headset's list too. Mute, Hang up and Record never are. */
+  optional?: boolean
 }): React.JSX.Element {
   const look =
     variant === 'topbar'
@@ -194,6 +198,7 @@ function CallButton({
       data-testid={testId}
       data-state={state}
       data-on={on ? 'true' : 'false'}
+      data-call-optional={optional ? '' : undefined}
       data-k2-chamfer={variant !== 'topbar' ? 'control' : undefined}
       // The top bar's small icon buttons take the same ring with no cut:
       // square in Terminal (its radius tokens are 0), a circle in Glass.
@@ -275,6 +280,7 @@ function CameraButton({ variant, video, busy }: { variant: CallControlsVariant; 
       on={on}
       dead={busy || pending || asking || block !== null}
       testId={`call-${variant}-camera`}
+      optional
       state={local.camera}
       onPress={() => void video.setCamera(!on)}
     >
@@ -307,6 +313,7 @@ function ScreenButton({ variant, video, busy }: { variant: CallControlsVariant; 
       on={on}
       dead={busy || pending || asking || block !== null}
       testId={`call-${variant}-screen`}
+      optional
       state={local.screen}
       onPress={() => {
         if (on) void video.setScreen(false)
@@ -375,6 +382,7 @@ export default function CallControls({ variant, call, actions, video, noiseRemov
         on={call.deafened}
         dead={busy}
         testId={`call-${variant}-deafen`}
+        optional
         onPress={() => actions.setDeafened(!call.deafened)}
       >
         <HeadphonesIcon off={call.deafened} size={size} />
@@ -386,6 +394,7 @@ export default function CallControls({ variant, call, actions, video, noiseRemov
           pressed={noiseRemoval}
           on={!noiseRemoval}
           testId={`call-${variant}-noise`}
+          optional
           state={noiseRemoval ? 'on' : 'off'}
           onPress={() => actions.setNoiseRemoval?.(!noiseRemoval)}
         >

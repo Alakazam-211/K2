@@ -524,6 +524,13 @@ report it privately, not in a public issue, through GitHub's private
 vulnerability reporting: <https://github.com/Alakazam-211/K2/security>, then
 "Report a vulnerability". The repository's SECURITY.md has the policy.
 
+**Issues:** for a bug or a question,
+[open an issue](https://github.com/Alakazam-211/K2/issues/new?labels=kessel-audio&template=kessel-audio.yml)
+(a short form for this crate, under the `kessel-audio` label). Give the
+crate version, your platform and backend, and a minimal repro if you can.
+A crash, hang or memory blow-up on a crafted packet is a security problem:
+report it privately as above, never in an issue.
+
 ### Unsafe code and fuzzing
 
 What is and isn't covered, plainly:

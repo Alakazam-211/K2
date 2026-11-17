@@ -10,6 +10,7 @@ authors = ["Alakazam Labs"]
 readme = "README.md"
 documentation = "https://docs.rs/kessel-audio"
 repository = "https://github.com/Alakazam-211/K2"
+homepage = "https://github.com/Alakazam-211/K2/tree/main/crates/kessel-audio"
 keywords = ["audio", "voice", "opus", "echo-cancellation", "jitter-buffer"]
 categories = ["multimedia::audio"]
 # Only the code, the README, the changelog and the licences ship. Everything
@@ -17,7 +18,20 @@ categories = ["multimedia::audio"]
 # metric tests, see the `speech-tests` feature; tests/scrub.rs is the
 # repository's own publish check), scripts/ and deny.toml. The leading / anchors each
 # pattern at the crate root: a bare "README.md" also matches tests/data/README.md.
-include = ["/src/", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE", "/CHANGELOG.md"]
+# The unit tests and their helpers (src/tests/, src/testkit.rs,
+# src/phone/tests.rs) are `#[cfg(test)]` modules: they stay out too (the `!`
+# patterns, gitignore style, come after "/src/"). The library builds without
+# them; `cargo package` checks that.
+include = [
+    "/src/",
+    "!/src/tests/",
+    "!/src/testkit.rs",
+    "!/src/phone/tests.rs",
+    "/README.md",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+    "/CHANGELOG.md",
+]
 
 [features]
 default = ["cpal", "os-voice"]

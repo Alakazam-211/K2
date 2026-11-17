@@ -1,0 +1,52 @@
+name: kessel-audio
+description: A bug, wrong audio or question about the kessel-audio crate.
+title: "kessel-audio: "
+labels: ["kessel-audio"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A crash, hang or memory blow-up on a crafted Opus packet is a security issue: please report it privately with "Report a vulnerability" on the Security tab instead of here.
+  - type: input
+    id: version
+    attributes:
+      label: Crate version
+      description: From your Cargo.lock, for example 0.2.2.
+      placeholder: "0.2.2"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and version, target triple, and the device or phone model if it matters.
+      placeholder: "macOS 26, aarch64-apple-darwin, MacBook Air M3"
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options:
+        - System (cpal)
+        - System (cpal) with the pulseaudio feature
+        - OsVoiceProcessing, OS mode (iOS or Android)
+        - OsVoiceProcessing, raw mode (iOS or Android)
+        - Null device
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead (an error code, a panic message, echo, dropouts, wrong levels, a capture stage bypassed). Your ProcessingConfig and EngineConfig settings help, and so do Stats or Event readings if you have them.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro or sample
+      description: A minimal repro, or a short recording (drag a file in or link one) if you can share it.
+    validations:
+      required: false

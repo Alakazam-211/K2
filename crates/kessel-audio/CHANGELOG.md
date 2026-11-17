@@ -2,9 +2,17 @@
 
 ## 0.2.2
 
-Additions only; code written against 0.2.1 builds unchanged. One default
-changes behaviour: the capture stage's new grace window is on by default
-(see Changed).
+### Changed
+
+- **Behaviour change:** with a capture stage and the default config, slow
+  calls in the first 1.5 s of capture after the stage starts (and after each
+  capture stream start or restart) no longer strike. A stage that is too
+  slow from its first call is bypassed about 1.5 s later than in 0.2.1. Set
+  `stage_grace` to `Duration::ZERO` for 0.2.1's timing. Otherwise additions
+  only: code written against 0.2.1 builds unchanged.
+- The package no longer ships the crate's unit tests and their helpers
+  (`src/tests/`, `src/testkit.rs`, `src/phone/tests.rs`, about 130 KB): they
+  are `#[cfg(test)]` and were never built from the package.
 
 ### Added
 
@@ -35,14 +43,9 @@ changes behaviour: the capture stage's new grace window is on by default
     that excused slow calls closes.
   - Faults are unchanged: a panic or a NaN in the window bypasses the stage
     for good, at once.
-
-### Changed
-
-- With a capture stage and the default config, slow calls in the first
-  1.5 s of capture after the stage starts (and after each capture stream
-  start or restart) no longer strike. A stage that is too slow from its
-  first call is bypassed about 1.5 s later than in 0.2.1. Set
-  `stage_grace` to `Duration::ZERO` for 0.2.1's timing.
+- `homepage` in the manifest: the crate's folder in the repository.
+- An issue form for the crate, linked from the README (Issues, next to the
+  private security line).
 
 ### Documented
 

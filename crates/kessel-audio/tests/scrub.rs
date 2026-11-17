@@ -3,7 +3,7 @@
 //! patterns are assembled at run time so this file doesn't match itself.
 //!
 //! This is the repository's own check. It stays out of the published package
-//! (see `exclude` in Cargo.toml), because its list is itself those names.
+//! (see `include` in Cargo.toml), because its list is itself those names.
 
 use std::path::{Path, PathBuf};
 
@@ -72,10 +72,22 @@ fn may_name_product(file_name: &str, line: &str) -> bool {
 
 /// The manifest's `repository` line, exactly. crates.io and docs.rs link the
 /// source from it, and the source lives in the product's own repository, so
-/// this one line names the organisation and the product. Nothing else may:
-/// not another line of Cargo.toml, not a variant of this one, not another file.
+/// this line names the organisation and the product. Only it and the
+/// `homepage` line ([`homepage_line`]) may: not another line of Cargo.toml,
+/// not a variant of these, not another file.
 fn repository_line() -> String {
     format!("repository = \"{}\"", repository_url())
+}
+
+/// The manifest's `homepage` line, exactly: the crate's own folder in the
+/// repository (the Published Crate Standard asks for it; the Steward's
+/// ruling allows the names on this line too).
+fn homepage_line() -> String {
+    format!(
+        "homepage = \"{}/tree/main/crates/{}\"",
+        repository_url(),
+        env!("CARGO_PKG_NAME")
+    )
 }
 
 /// The source repository's URL. Allowlisted for publishing: the README may
@@ -116,7 +128,7 @@ fn without_repository_urls(file_name: &str, line: &str) -> String {
 
 /// What's wrong with one line of one file.
 fn line_hits(file_name: &str, line: &str, banned: &[String]) -> Vec<String> {
-    if file_name == "Cargo.toml" && line == repository_line() {
+    if file_name == "Cargo.toml" && (line == repository_line() || line == homepage_line()) {
         return Vec::new();
     }
     let line = &without_repository_urls(file_name, line);
@@ -215,13 +227,26 @@ fn only_the_used_in_line_of_the_readme_may_name_the_product() {
 }
 
 #[test]
-fn only_the_exact_repository_line_of_the_manifest_may_name_the_organisation() {
+fn only_the_exact_repository_and_homepage_lines_of_the_manifest_may_name_the_organisation() {
     let banned = banned();
     let line = repository_line();
     assert_eq!(
         line_hits("Cargo.toml", &line, &banned),
         Vec::<String>::new()
     );
+    let home = homepage_line();
+    assert_eq!(
+        line_hits("Cargo.toml", &home, &banned),
+        Vec::<String>::new()
+    );
+    // The homepage line is allowed only as it is, and only in the manifest.
+    assert_eq!(line_hits("lib.rs", &home, &banned).len(), 2);
+    assert_eq!(
+        line_hits("Cargo.toml", &format!("{home} # note"), &banned).len(),
+        2
+    );
+    let other_crate = home.replacen(env!("CARGO_PKG_NAME"), "other-crate", 1);
+    assert_eq!(line_hits("Cargo.toml", &other_crate, &banned).len(), 2);
 
     // The same line in another file, or changed at all, is still caught: once
     // for the organisation and once for the product. (The README is the
@@ -235,6 +260,7 @@ fn only_the_exact_repository_line_of_the_manifest_may_name_the_organisation() {
         line_hits("Cargo.toml", &format!("{line} # note"), &banned).len(),
         2
     );
+    // A homepage that is the bare repository URL is not the allowed line.
     let homepage = line.replacen("repository", "homepage", 1);
     assert_eq!(line_hits("Cargo.toml", &homepage, &banned).len(), 2);
     let org_only = format!("homepage = \"https://github.com/{}-211\"", "Alakazam");

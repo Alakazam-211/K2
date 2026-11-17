@@ -205,10 +205,30 @@ function Row({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
         </g>
       )
     }
+    case 'MULTILEADER':
     case 'MLEADER': {
+      // Each leader's lines run from their arrow; the last point meets the
+      // landing, which carries on to the text. An arrowhead sits at each
+      // line's start. The text is one line at `at`, placed by its attachment.
       const leaders = Array.isArray(g.leaders) ? (g.leaders as Record<string, unknown>[]) : []
-      const d = leaders.flatMap((l) => (Array.isArray(l.lines) ? (l.lines as unknown[]).map((p) => polyD(pointsOf(p), false)) : [])).join(' ')
-      return path(d)
+      const head = arrowOf(g.arrow, c.scene.header.units?.insunits)
+      const lines = leaders.flatMap((l) => {
+        const landing = xy(l.landing)
+        return (Array.isArray(l.lines) ? (l.lines as unknown[]) : []).map((p) => {
+          const pts = pointsOf(p)
+          const last = pts[pts.length - 1]
+          return landing && last && (last[0] !== landing[0] || last[1] !== landing[1]) ? [...pts, landing] : pts
+        })
+      }).filter((pts) => pts.length >= 2)
+      const text = mleaderText(g)
+      if (!lines.length && !text) return null
+      return (
+        <g data-h={r.h}>
+          {lines.length ? <path {...line} data-h={undefined} d={lines.map((pts) => polyD(pts, false)).join(' ')} /> : null}
+          {head ? lines.map((pts, i) => <Arrowhead key={i} at={pts[0]} toward={pts[1]} kind={head.kind} size={head.size} paint={paint} />) : null}
+          {text ? <TextShape h={r.h} g={text} style={r.style} visible={r.visible} m={c.m} /> : null}
+        </g>
+      )
     }
     case 'WIPEOUT': {
       const mask = pointsOf(g.mask)
@@ -225,6 +245,18 @@ function Row({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
     default:
       return null
   }
+}
+
+/** A multileader's text as a one-line text shape: its plain text at `at`,
+ *  aligned by its attachment (1 top left … 9 bottom right), or null. */
+export function mleaderText(g: Record<string, unknown>): Record<string, unknown> | null {
+  const plain = typeof g.plain === 'string' ? g.plain.replace(/\s*\n\s*/g, ' ').trim() : ''
+  const at = xy(g.at)
+  if (!plain || !at) return null
+  const a = Math.min(9, Math.max(1, Math.round(num(g.attachment, 1)) || 1))
+  const h = ['left', 'center', 'right'][(a - 1) % 3]
+  const v = ['top', 'middle', 'bottom'][Math.floor((a - 1) / 3)]
+  return { plain, anchor: at, height: num(g.height, 1) || 1, align: { h, v } }
 }
 
 export function ModelShapes({ scene, m }: { scene: ModelScene; m: TextMetrics }): React.JSX.Element {

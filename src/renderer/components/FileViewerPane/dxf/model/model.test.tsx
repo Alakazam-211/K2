@@ -14,6 +14,7 @@ import { viewBounds } from '../view-address'
 import { loadModel, type ModelDrawing } from './load'
 import { insertVars, paintOf } from './paint'
 import { fixtureDrawingSource } from './source'
+import { mleaderText } from './ModelShapes'
 import { wrapRuns } from './text'
 import type { ModelHeader, ModelPage, ModelRow } from './types'
 
@@ -89,8 +90,8 @@ describe('loadModel', () => {
 
   it('counts what isn’t drawn, with plain words for why (attribute templates aren’t counted)', async () => {
     const d = (await loadModel(source(), ESTIMATED_METRICS))!
-    expect(d.notDrawn.count).toBe(4)
-    expect(d.notDrawn.lines).toEqual(['3 kinds this viewer doesn’t draw yet: MULTILEADER, 3DSOLID, ACME_GADGET', '1 spline whose weights can’t be drawn'])
+    expect(d.notDrawn.count).toBe(3)
+    expect(d.notDrawn.lines).toEqual(['2 kinds this viewer doesn’t draw yet: 3DSOLID, ACME_GADGET', '1 spline whose weights can’t be drawn'])
   })
 
   it('boxes and handles come from the model, for the change highlight and view addresses', async () => {
@@ -230,6 +231,31 @@ describe('ModelShapes', () => {
     expect(tip('@h:6C')).toBeCloseTo(0.18, 3)
     expect(tip('@h:6E')).toBeCloseTo(5, 3)
     expect(el(svg, '@h:6E').querySelector('[data-part="arrow"]')!.getAttribute('data-kind')).toBe('closed_filled')
+  })
+
+  it('a multileader draws each leader line to its landing, an arrowhead per line, and its text by attachment', async () => {
+    const g = {
+      leaders: [{ landing: [10, 5], lines: [[[0, 0], [8, 5]], [[0, 10], [10, 5]]] }],
+      dropped: 0,
+      arrow: { shown: true, kind: 'closed_filled', size: 1 },
+      text: 'Note',
+      plain: 'Note',
+      at: [11, 5],
+      attachment: 4,
+      height: 2.5,
+    }
+    expect(row('@h:79').kind).toBe('MULTILEADER')
+    const page = { ...MODEL, entities: MODEL.entities.map((e) => (e.h === '@h:79' ? { ...e, geom: g } : e)) }
+    const d = (await loadModel(fixtureDrawingSource({ header: HEADER, pages: { model: [page], '@h:2D': [DOOR], '@h:2E': [NEST], '@h:2F': [DIM] } }), ESTIMATED_METRICS))!
+    const { container } = render(<svg>{d.shapes}</svg>)
+    const m = container.querySelector('[data-h="@h:79"]')!
+    const lines = m.querySelector('path:not([data-part])')!.getAttribute('d')!
+    // The first line gains the landing; the second already ends on it.
+    expect(lines).toMatch(/L8 5 L10 5/)
+    expect(m.querySelectorAll('[data-part="arrow"]').length).toBe(2)
+    expect(m.querySelector('text')!.textContent).toBe('Note')
+    expect(mleaderText(g)).toMatchObject({ anchor: [11, 5], height: 2.5, align: { h: 'left', v: 'middle' } })
+    expect(mleaderText({ ...g, plain: null })).toBeNull()
   })
 
   it('an image draws as its frame, marked across, until images resolve', async () => {

@@ -13,7 +13,7 @@
   "z_first": 0,
   "z_last": 54,
   "of": 55,
-  "not_drawn": 4,
+  "not_drawn": 3,
   "oversize": false,
   "budget": {
     "entities": 5000,
@@ -2318,10 +2318,23 @@
         "lw_mm": 0.25
       },
       "visible": true,
-      "drawn": false,
-      "why": "not_modelled",
+      "drawn": true,
       "bbox": null,
-      "bbox_q": "none"
+      "bbox_q": "none",
+      "geom": {
+        "leaders": [],
+        "dropped": 0,
+        "arrow": {
+          "shown": true,
+          "kind": "closed_filled",
+          "size": null
+        },
+        "text": null,
+        "plain": null,
+        "at": null,
+        "attachment": null,
+        "height": 2.5
+      }
     },
     {
       "h": "@h:7A",

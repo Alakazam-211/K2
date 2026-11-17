@@ -56,10 +56,11 @@ describe('DxfViewer on the drawing model', () => {
   it('says how many items aren’t drawn, and why in plain words on hover or focus', async () => {
     renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={model()} changes={null} />)
     const note = await screen.findByTestId('dxf-not-drawn')
-    expect(note.textContent).toContain('4 items not drawn')
+    expect(note.textContent).toContain('3 items not drawn')
     const tip = screen.getByTestId('dxf-not-drawn-why')
     expect(tip.getAttribute('role')).toBe('tooltip')
-    expect(tip.textContent).toContain('MULTILEADER, 3DSOLID, ACME_GADGET')
+    expect(tip.textContent).toContain('3DSOLID, ACME_GADGET')
+    expect(tip.textContent).not.toContain('MULTILEADER')
     expect(tip.textContent).toContain('spline whose weights can’t be drawn')
     expect(note.getAttribute('aria-describedby')).toBe(tip.id)
   })

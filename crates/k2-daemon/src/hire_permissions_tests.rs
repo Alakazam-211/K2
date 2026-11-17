@@ -221,6 +221,9 @@ fn step_in<'a>(caller: &'a HireCaller, path: &'a str, suggested: &'a [String], c
 fn with_cards_on_the_rest_goes_to_a_card_now_or_at_the_first_start() {
     let _home = k2_core::test_env::TempHome::new();
     ensure_test_root();
+    // It files permission requests: its own database (the pending cap is
+    // server-wide).
+    let _db = k2_core::db::scoped_for_test();
     let (hirer, _) = hiring_agent("cardh");
     let agent = HireCaller::Agent { workspace_id: hirer };
     let suggested = vec!["compute.use".to_string()];
@@ -308,6 +311,10 @@ fn people_give_up_to_their_floor_and_keys_give_nothing() {
 
     let key = HireCaller::ApiKey { id: "k1".into(), label: None };
     let plan = step_with(&step_in(&key, &path, &suggested, true, true), false);
-    assert!(plan.rows.iter().all(|r| r.status == "refused"), "{plan:?}");
-    assert!(plan.refused.iter().all(|r| r.code == "api_key" || r.action == CARDS_ROW), "{plan:?}");
+    let st: Vec<(&str, &str)> = plan.rows.iter().map(|r| (r.target.as_str(), r.status)).collect();
+    assert_eq!(st, vec![(CARDS_ROW, "skip"), ("apps.build", "refused"), ("compute.use", "refused")], "cards off: {plan:?}");
+    assert!(plan.refused.iter().all(|r| r.code == "api_key"), "{plan:?}");
+    let plan = step_with(&step_in(&key, &path, &suggested, true, true), true);
+    let st: Vec<(&str, &str)> = plan.rows.iter().map(|r| (r.target.as_str(), r.status)).collect();
+    assert_eq!(st, vec![(CARDS_ROW, "refused"), ("apps.build", "card"), ("compute.use", "card")], "cards on: {plan:?}");
 }

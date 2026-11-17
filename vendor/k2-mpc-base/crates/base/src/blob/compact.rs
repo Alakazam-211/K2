@@ -262,8 +262,7 @@ impl BlobStore {
             outs.files.push(path);
         }
         if !outs.files.is_empty() {
-            File::open(&dir)
-                .and_then(|d| d.sync_all())
+            crate::hash::sync_dir(&dir)
                 .map_err(|e| io_err("syncing a segment's folder", e))?;
             hook(Step::Renamed);
         }

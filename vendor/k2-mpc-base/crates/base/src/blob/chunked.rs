@@ -875,8 +875,7 @@ impl BlobStore {
                 }
             }
             stop_at(StepShim::Renamed)?;
-            File::open(&folder)
-                .and_then(|d| d.sync_all())
+            crate::hash::sync_dir(&folder)
                 .map_err(|e| io_err("syncing a segment's folder", e))?;
             chunk_work!(folder_syncs);
             stop_at(StepShim::FolderSynced)?;

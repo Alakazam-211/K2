@@ -33,6 +33,7 @@ import CallTile, { useCallVideoLive } from './CallTile'
 import VideoStage from './VideoStage'
 import CallExpanded from './CallExpanded'
 import RecordingNotice from './RecordingNotice'
+import { callTitle } from '@/lib/home-chat/call-names'
 import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
 import { MicIcon, MicOffIcon, PhoneOffIcon } from '@/components/icons/K2Icons'
 
@@ -138,7 +139,7 @@ function InCall({ call }: { call: VoiceCall }): React.JSX.Element | null {
       <VideoStage
         ctl={video}
         people={call.participants}
-        title={call.roomName}
+        title={callTitle(call)}
         viewButtons
         onHide={() => useCallScreen.getState().close()}
         footerStart={

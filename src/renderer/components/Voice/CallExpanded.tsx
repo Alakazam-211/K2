@@ -29,6 +29,7 @@ import CallStage from './CallStage'
 import { PopOutButton } from './CallViewButtons'
 import { useCallDuration } from './CallTile'
 import { ScreenPicker, VideoNoticeLine } from './VideoControls'
+import { callTitle } from '@/lib/home-chat/call-names'
 
 export interface CallExpandedProps {
   call: VoiceCall
@@ -87,7 +88,7 @@ function View({ call, video, actions, noiseRemoval }: CallExpandedProps): React.
         zIndex={CALL_EXPANDED_Z + 1}
         role="dialog"
         aria-modal
-        aria-label={`Video call in ${call.roomName}, expanded`}
+        aria-label={`${callTitle(call)}, expanded`}
         data-testid="call-expanded"
         className="flex flex-col overflow-hidden"
         style={{ width: `calc(var(--k2-vw) - ${CALL_EXPAND_MARGIN * 2}px)`, height: `calc(var(--k2-vh) - ${CALL_EXPAND_MARGIN * 2}px)`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -95,7 +96,7 @@ function View({ call, video, actions, noiseRemoval }: CallExpandedProps): React.
       >
         <header className="flex flex-shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 py-2">
           <span data-testid="call-expanded-title" className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-text-primary)]">
-            {call.roomName}
+            {callTitle(call)}
           </span>
           {time ? (
             <span data-testid="call-expanded-duration" className="font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">

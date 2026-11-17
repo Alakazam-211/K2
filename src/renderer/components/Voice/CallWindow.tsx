@@ -21,6 +21,7 @@ import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { CALL_WINDOW_ADOPT_MS, callStartedAt } from '@/lib/voice/call-view'
+import { callTitle } from '@/lib/home-chat/call-names'
 import { useSettingsStore } from '@/stores/settings'
 import { keepCallWindowFrame, popInCall } from '@/stores/call-popout'
 import { loadSharePick } from '@/stores/call-share'
@@ -98,7 +99,7 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
     return () => clearTimeout(id)
   }, [])
   // The OS title follows the room.
-  const roomName = call?.roomName ?? null
+  const roomName = call ? callTitle(call) : null
   useEffect(() => {
     if (!roomName) return
     try {
@@ -121,7 +122,7 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
       >
         <DesktopChromeLeft />
         <span data-testid="call-window-title" className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-text-primary)]">
-          {call ? call.roomName : 'Call'}
+          {roomName ?? 'Call'}
         </span>
         {time ? (
           <span data-testid="call-window-duration" className="font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">

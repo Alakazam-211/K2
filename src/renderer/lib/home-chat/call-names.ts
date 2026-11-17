@@ -28,3 +28,14 @@ export function dmCallRoomName(src: CallNamesSource | undefined, roomId: string)
   if (!ext) return null
   return src.people?.people.find((p) => p.ext === ext)?.displayName ?? null
 }
+
+/** A call's title wherever it's named (the call's window and its OS title,
+ *  the call view): a DM call is "Call with <name>", a voice room its name.
+ *  An internal id (`dm:<conversation>`) is never shown: a DM call whose
+ *  person isn't known yet is just "Call". */
+export function callTitle(call: { roomId: string; roomName: string }): string {
+  if (convOfDmRoom(call.roomId) === null) return call.roomName
+  const name = call.roomName.trim()
+  if (!name || name === 'Call' || convOfDmRoom(name) !== null || name === call.roomId) return 'Call'
+  return `Call with ${name}`
+}

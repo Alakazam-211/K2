@@ -62,6 +62,7 @@ import VideoTile, { MEDIA_LABEL } from './VideoTile'
 import { ExpandIcon, ScreenShareIcon } from '@/components/icons/K2Icons'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { clientRectToCss, clientToCssPx, cssViewport } from '@/lib/app-zoom'
+import { callTitle } from '@/lib/home-chat/call-names'
 
 /** The tile's first width (px); the picture is 16:9 inside it. The person
  *  resizes it from its inward edges (remembered per client, call-view.ts). */
@@ -378,7 +379,7 @@ function Card({ call, video, actions, noiseRemoval }: CallTileProps): React.JSX.
     setWanted(widthRef.current)
   }
 
-  const label = `Video call in ${call.roomName}. Click the video to open the call; double-click to expand it.`
+  const label = `${callTitle(call)}. Click the video to open the call; double-click to expand it.`
   // The buttons sit on the top edge, clear of the resize corner.
   const buttonsLeft = corner === 'bottom-left'
   return (
@@ -421,7 +422,7 @@ function Card({ call, video, actions, noiseRemoval }: CallTileProps): React.JSX.
         className="group pointer-events-auto relative w-full cursor-pointer overflow-hidden"
         role="button"
         tabIndex={0}
-        aria-label={`Open the call in ${call.roomName}`}
+        aria-label={`Open ${callTitle(call)}`}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { callPersonName, dmCallRoomName, type CallNamesSource } from './call-names'
+import { callPersonName, callTitle, dmCallRoomName, type CallNamesSource } from './call-names'
 
 const ana = { ext: 'k2:connect:ana', username: 'ana', displayName: 'Ana Ruiz', picture: null, role: null, ready: true, memberId: '101' }
 const SRC: CallNamesSource = {
@@ -20,5 +20,12 @@ describe('DM call names', () => {
     expect(dmCallRoomName({ ...SRC, summary: null, dms: { 'k2:connect:ana': '900' } }, 'dm:900')).toBe('Ana Ruiz')
     expect(dmCallRoomName(SRC, 'room-1')).toBeNull()
     expect(dmCallRoomName({ ...SRC, people: null }, 'dm:900')).toBeNull()
+  })
+
+  it('titles a DM call "Call with <name>" and never shows its internal id', () => {
+    expect(callTitle({ roomId: 'dm:900', roomName: 'Ana Ruiz' })).toBe('Call with Ana Ruiz')
+    expect(callTitle({ roomId: 'dm:58106105651265536', roomName: 'dm:58106105651265536' })).toBe('Call')
+    expect(callTitle({ roomId: 'dm:900', roomName: 'Call' })).toBe('Call')
+    expect(callTitle({ roomId: 'room-1', roomName: 'Standup' })).toBe('Standup')
   })
 })

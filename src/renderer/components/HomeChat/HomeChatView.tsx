@@ -45,6 +45,7 @@ import { SelectableRegion } from '@/components/common/SelectableText'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { useToastStore } from '@/stores/toast'
 import { activeHomeHostKey } from '@/lib/home-address'
 import type { HomeChatTarget } from '@/lib/home-chat/address'
 import {
@@ -75,6 +76,7 @@ import {
   rememberHomeChat,
   replyPreview,
   toggleReaction,
+  undoReaction,
 } from '@/lib/home-chat/chat'
 import { noteHomeChatSend } from '@/lib/home-chat/stamp'
 import { useHomesStore } from '@/stores/homes'
@@ -397,9 +399,12 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
         reactHomeChat(scope, { conv, msg: msgId, emoji, on: t.on }).then(
           (m) => m && setMessages((prev) => mergeHomeChatMessages(prev ?? [], [m])),
           (e: unknown) => {
-            // The server's truth back: undo the optimistic toggle.
-            setMessages((prev) => (prev ? toggleReaction(prev, msgId, emoji).messages : prev))
-            setSendError(daemonErrorText(e) || String(e))
+            // Refused: the chip goes back as it was (it fades if it was
+            // new), with a quiet note; the composer's send line is for
+            // messages.
+            setMessages((prev) => (prev ? undoReaction(prev, msgId, emoji, t.on) : prev))
+            const why = (daemonErrorText(e) || String(e)).trim().replace(/[.\s]+$/, '')
+            useToastStore.getState().addToast(`Couldn't ${t.on ? 'add' : 'remove'} your reaction${why ? ` (${why})` : ''}`, 'warning')
           },
         )
       },

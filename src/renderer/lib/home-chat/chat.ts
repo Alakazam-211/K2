@@ -70,6 +70,15 @@ export function toggleReaction(
   }
 }
 
+/** A toggle the server refused (`on`: what it asked for): the viewer's own
+ *  put back as it was, unless a live frame has set it since (then the
+ *  frame stands). */
+export function undoReaction(messages: readonly HomeChatMessage[], msgId: string, emoji: string, on: boolean): HomeChatMessage[] {
+  const cur = messages.find((x) => x.id === msgId)?.reactions.find((r) => r.emoji === emoji)
+  if (!!cur?.me !== on) return messages as HomeChatMessage[]
+  return toggleReaction(messages, msgId, emoji).messages
+}
+
 /** A deleted message keeps its place with no words (Sew's tombstone). */
 export function markDeleted(messages: readonly HomeChatMessage[], id: string): HomeChatMessage[] {
   if (!messages.some((m) => m.id === id)) return messages as HomeChatMessage[]

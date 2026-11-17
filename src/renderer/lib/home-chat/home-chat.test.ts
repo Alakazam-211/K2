@@ -17,6 +17,7 @@ import {
   resetHomeChatViewCacheForTests,
   searchEmoji,
   toggleReaction,
+  undoReaction,
   typingLine,
   VIEW_CACHE_CHATS,
 } from './chat'
@@ -114,6 +115,18 @@ describe('reactions (§10)', () => {
     const off = toggleReaction(list, '1', '👍')
     expect(off.on).toBe(false)
     expect(off.messages[0].reactions).toEqual([])
+  })
+
+  it('a refused toggle is put back, unless a live frame has set it since', () => {
+    const start = [msg('1', { reactions: [{ emoji: '👍', count: 1, me: false }] })]
+    const on = toggleReaction(start, '1', '👍')
+    expect(undoReaction(on.messages, '1', '👍', on.on)[0].reactions).toEqual([{ emoji: '👍', count: 1, me: false }])
+    // A new chip that failed: gone again.
+    const fresh = toggleReaction([msg('1')], '1', '🎉')
+    expect(undoReaction(fresh.messages, '1', '🎉', fresh.on)[0].reactions).toEqual([])
+    // The server's frame already said it's off: left as the frame set it.
+    const framed = applyReactionFrame(on.messages, { msg: '1', emoji: '👍', on: false, count: 1, mine: true })
+    expect(undoReaction(framed, '1', '👍', true)).toBe(framed)
   })
 
   it('a live frame sets the count; `me` moves only for the viewer’s own', () => {

@@ -3,7 +3,8 @@
 //
 //   1. It draws from `/cli/home-chat/*` only: never a Thread route, never
 //      the redb Thread store (agent Threads stay on redb, §2).
-//   2. Reactions: a chip tap toggles the viewer's own, on the wire too.
+//   2. Reactions: a chip tap toggles the viewer's own, on the wire too; a
+//      pick shows at once, and one the server refuses goes back quietly.
 //   3. Reply: the hover row's Reply puts "Replying to X: first line" over
 //      the box; the send carries `replyTo`; × clears it.
 //   4. The quote strip jumps to the original, reading back a page when it
@@ -40,6 +41,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import HomeChatView from './HomeChatView'
 import { resetHomeChatForTests } from '@/stores/home-chat'
 import { useSettingsStore } from '@/stores/settings'
+import { useToastStore } from '@/stores/toast'
 import { threadComposeCapWidth } from '@/components/SessionView/threadTextWidth'
 import { resetHomeChatViewCacheForTests } from '@/lib/home-chat/chat'
 import type { HomeChatTarget } from '@/lib/home-chat/address'
@@ -175,6 +177,47 @@ describe('Home chat view', () => {
     const after = document.querySelector('[data-zen-message="21"] [data-testid="home-chat-reaction"]') as HTMLButtonElement
     expect(after.getAttribute('data-me')).toBeNull()
     expect(after.textContent).toContain('1')
+  })
+
+  it('a picked emoji shows at once, before the server answers', async () => {
+    let answer: (v: unknown) => void = () => undefined
+    h.post.mockImplementation(async (_s, route) => (route === 'home-chat/react' ? new Promise((r) => (answer = r)) : { ok: true }))
+    await open()
+    const row = document.querySelector('[data-zen-message="20"]') as HTMLElement
+    await act(async () => {
+      fireEvent.click(row.querySelector('[data-testid="home-chat-react"]') as HTMLElement)
+    })
+    const quick = screen.getByTestId('home-chat-quick-reactions').querySelectorAll('button')
+    await act(async () => {
+      fireEvent.click(quick[3])
+    })
+    // The picker has closed, and the chip is there while the send is out.
+    expect(screen.queryByTestId('home-chat-reaction-picker')).toBeNull()
+    const chip = row.querySelector('[data-testid="home-chat-reaction"]') as HTMLElement
+    expect(chip.getAttribute('data-emoji')).toBe(quick[3].getAttribute('data-emoji'))
+    expect(chip.hasAttribute('data-me')).toBe(true)
+    await act(async () => {
+      answer({ ok: true })
+    })
+  })
+
+  it('a reaction the server refuses goes back, with a quiet note (not the send error)', async () => {
+    useToastStore.setState({ toasts: [] })
+    h.post.mockImplementation(async (_s, route) => {
+      if (route === 'home-chat/react') throw new Error('offline')
+      return { ok: true }
+    })
+    await open()
+    const chip = () => document.querySelector('[data-zen-message="21"] [data-testid="home-chat-reaction"]') as HTMLElement
+    await act(async () => {
+      fireEvent.click(chip())
+    })
+    await waitFor(() => expect(chip().hasAttribute('data-me')).toBe(true))
+    expect(chip().textContent).toContain('2')
+    const toasts = useToastStore.getState().toasts
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].message).toMatch(/^Couldn't remove your reaction/)
+    expect(screen.queryByText(/Not sent/)).toBeNull()
   })
 
   it('Reply: the bar names who and the first line; the send carries replyTo; × clears it', async () => {

@@ -4,8 +4,10 @@
 //      A toggle is a small crisp change (the width holds); a 28px hit
 //      target; a new chip row grows in and a chip that goes fades out, on
 //      the fast motion token, with none of it under reduced motion.
-//   2. The picker: six quick emoji and a search, all by keyboard; Esc
-//      closes it and focus goes back to the React button.
+//   2. The picker: six quick emoji, a search and a grid of emoji, all by
+//      keyboard; Esc closes it and focus goes back to the React button. It
+//      opens by the React button inside the window, placed before it shows,
+//      and keeps one size, so typing never moves it.
 // (The hover row on a message: HomeChatHoverRow.test.tsx.)
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -20,7 +22,9 @@ import {
   PICKER_COLUMNS,
   REACTION_CHIP_PX,
   REACTION_HIT_PX,
+  PICKER_GRID_PX,
   pickerMove,
+  pickerPlace,
   reactionTipTop,
   reactionTipText,
   reactorsLine,
@@ -235,6 +239,68 @@ describe('reaction chips', () => {
 })
 
 describe('the picker', () => {
+  const SIZE = { width: 236, height: 250 }
+  const btn = { top: 300, bottom: 326, left: 400, right: 426 }
+
+  it('opens above the React button, lined up with it; below when there is no room above', () => {
+    expect(pickerPlace(btn, SIZE, { width: 1200, height: 900 }, 'start')).toEqual({ left: 400, top: 300 - 250 - 6 })
+    expect(pickerPlace(btn, SIZE, { width: 1200, height: 900 }, 'end')).toEqual({ left: 426 - 236, top: 44 })
+    const high = { top: 120, bottom: 146, left: 400, right: 426 }
+    expect(pickerPlace(high, SIZE, { width: 1200, height: 900 }, 'start').top).toBe(146 + 6)
+  })
+
+  it('stays inside the window: clamped at its edges, both ways', () => {
+    const p = pickerPlace({ top: 120, bottom: 146, left: 1150, right: 1176 }, SIZE, { width: 1200, height: 300 }, 'start')
+    expect(p.left).toBe(1200 - 236 - 8)
+    expect(p.top).toBeGreaterThanOrEqual(8)
+    expect(p.top + SIZE.height).toBeLessThanOrEqual(300 - 8 + 0.5)
+    expect(pickerPlace({ top: 300, bottom: 326, left: 2, right: 28 }, SIZE, { width: 1200, height: 900 }, 'end').left).toBe(8)
+  })
+
+  it('is placed before it shows, and typing never moves or resizes it', () => {
+    // Its height follows what it holds (as a browser's would).
+    const h = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('data-testid') === 'home-chat-reaction-picker' ? 120 + 4 * this.querySelectorAll('button').length : 0
+    })
+    const w = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(() => 236)
+    const anchor = document.createElement('button')
+    anchor.getBoundingClientRect = () => DOMRect.fromRect({ x: 400, y: 600, width: 26, height: 26 })
+    document.body.append(anchor)
+    try {
+      render(<HomeChatReactionPicker anchor={anchor} onPick={vi.fn()} onClose={vi.fn()} />)
+      const box = screen.getByTestId('home-chat-reaction-picker')
+      const holder = box.closest('[data-k2-chamfer-float="menu"]') as HTMLElement
+      expect(holder.style.visibility).toBe('visible')
+      const at = { left: holder.style.left, top: holder.style.top }
+      expect(px(at.top)).toBeLessThan(600)
+      // The grid has one fixed height, whatever it shows.
+      const grid = screen.getByTestId('home-chat-emoji-results')
+      expect(grid.style.height).toBe(`${PICKER_GRID_PX}px`)
+      fireEvent.change(screen.getByTestId('home-chat-emoji-search'), { target: { value: 'heart' } })
+      expect({ left: holder.style.left, top: holder.style.top }).toEqual(at)
+      expect(screen.getByTestId('home-chat-emoji-results').style.height).toBe(`${PICKER_GRID_PX}px`)
+      fireEvent.change(screen.getByTestId('home-chat-emoji-search'), { target: { value: 'zzzz' } })
+      expect({ left: holder.style.left, top: holder.style.top }).toEqual(at)
+      expect(screen.getByRole('status').textContent).toBe('No emoji match')
+    } finally {
+      anchor.remove()
+      h.mockRestore()
+      w.mockRestore()
+    }
+  })
+
+  it('with no search it shows every emoji to browse; Enter in the empty search picks nothing', () => {
+    const onPick = vi.fn()
+    render(<HomeChatReactionPicker anchor={null} onPick={onPick} onClose={vi.fn()} />)
+    const grid = screen.getByTestId('home-chat-emoji-results')
+    expect(grid.getAttribute('aria-label')).toBe('All emoji')
+    expect(grid.querySelectorAll('button').length).toBeGreaterThan(100)
+    fireEvent.keyDown(screen.getByTestId('home-chat-emoji-search'), { key: 'Enter' })
+    expect(onPick).not.toHaveBeenCalled()
+    fireEvent.keyDown(screen.getByTestId('home-chat-emoji-search'), { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(grid.querySelector('button'))
+  })
+
   it('keys move between the quick row, the search and the results', () => {
     const counts = { quick: 6, results: 14 }
     expect(pickerMove({ zone: 'search', index: 0 }, 'ArrowUp', counts)).toEqual({ zone: 'quick', index: 0 })

@@ -6,8 +6,10 @@
 //     keeps its width (tabular figures in a two-digit box; yours trades
 //     inset for its thicker ring). Each chip is a 28px hit target around the
 //     smaller chip you see. Chips come and go smoothly (`useChipMotion`);
-//   - the picker: a small popover in the app's menu shape, six quick emoji
-//     and a search over the Unicode set, all by keyboard; Esc closes it.
+//   - the picker: a small popover in the app's menu shape, six quick emoji,
+//     a search, and a grid of emoji (all of them to browse, or what the
+//     search finds), all by keyboard; Esc closes it. It is one size whatever
+//     it shows, so it never moves while you type.
 //
 // Look: chips live inside the Thread box, so they take the Thread's tokens
 // (`--zen-*`) and its chamfer in Terminal (`data-chamfer`, Thread/chamfer)
@@ -19,7 +21,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { HomeChatReaction } from '@/lib/home-chat/api'
-import { QUICK_REACTIONS, searchEmoji } from '@/lib/home-chat/chat'
+import { EMOJI_INDEX, QUICK_REACTIONS, searchEmoji } from '@/lib/home-chat/chat'
 import { chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
 import { SearchField } from '@/components/ui/SearchField'
 import { MENU_LIST, MENU_ROW, floatMaterial } from '@/components/ui/float-material'
@@ -231,6 +233,33 @@ export function HomeChatReactionChips({
 /** Columns in the picker's grids. */
 export const PICKER_COLUMNS = 6
 const PICKER_WIDTH = 236
+/** The emoji grid's height (px): four and a half rows, so it reads as one
+ *  that scrolls; fixed, so the picker never changes size. */
+export const PICKER_GRID_PX = 148
+/** Every emoji the search knows, to browse when nothing is typed. */
+const ALL_EMOJI = EMOJI_INDEX.map(([e]) => e)
+/** The picker's gap from its anchor, and its least margin in the window (px). */
+const PICKER_GAP = 6
+const PICKER_MARGIN = 8
+
+/** Where the picker opens (window px): above the anchor (the React button)
+ *  so the message stays in view, lined up with its start or end edge; below
+ *  it when there's no room above; clamped inside the window either way
+ *  (exported for tests). */
+export function pickerPlace(
+  a: { top: number; bottom: number; left: number; right: number },
+  size: { width: number; height: number },
+  view: { width: number; height: number },
+  align: 'start' | 'end',
+): { left: number; top: number } {
+  const { width: w, height: h } = size
+  const above = a.top - PICKER_GAP - h
+  const below = a.bottom + PICKER_GAP
+  let top = above >= PICKER_MARGIN ? above : below
+  top = Math.max(PICKER_MARGIN, Math.min(top, view.height - h - PICKER_MARGIN))
+  const left = Math.max(PICKER_MARGIN, Math.min(align === 'end' ? a.right - w : a.left, view.width - w - PICKER_MARGIN))
+  return { left: Math.round(left), top: Math.round(top) }
+}
 const CELL_CLASS =
   'k2-focus no-drag flex h-8 w-8 cursor-pointer items-center justify-center text-[18px] leading-none outline-none hover:bg-[var(--color-wash-1)] focus-visible:bg-[var(--color-wash-1)]'
 
@@ -261,10 +290,12 @@ export function pickerMove(
 }
 
 /** The picker, anchored to `anchor` (the React button, else the message):
- *  the quick row, then the search, then what it finds. Focus starts in the
- *  search; ↑ goes to the quick row, ↓ to the results, arrows move in them,
- *  Enter picks (in the search: the first match). Esc or a press outside
- *  closes it; Esc and a pick put focus back on `anchor`. */
+ *  the quick row, then the search, then the grid (every emoji, or what the
+ *  search finds). Placed once, before it shows (`pickerPlace`); one size
+ *  after that. Focus starts in the search; ↑ goes to the quick row, ↓ to the
+ *  grid, arrows move in them, Enter picks (in the search: the first match).
+ *  Esc or a press outside closes it; Esc and a pick put focus back on
+ *  `anchor`. */
 export function HomeChatReactionPicker({
   anchor,
   align = 'start',
@@ -278,7 +309,9 @@ export function HomeChatReactionPicker({
   onClose: () => void
 }): JSX.Element {
   const [q, setQ] = useState('')
-  const found = useMemo(() => (q.trim() ? searchEmoji(q) : []), [q])
+  const searching = q.trim() !== ''
+  const found = useMemo(() => (searching ? searchEmoji(q) : []), [q, searching])
+  const grid = searching ? found : ALL_EMOJI
   const ref = useRef<HTMLDivElement | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
@@ -293,21 +326,19 @@ export function HomeChatReactionPicker({
     [onClose, anchor],
   )
 
+  // Placed once as it opens, before it is seen: its size never changes.
   useLayoutEffect(() => {
     const box = ref.current
     if (!box) return
-    const { width: vw, height: vh } = cssViewport()
-    const w = box.offsetWidth
-    const h = box.offsetHeight
-    const a = anchor ? clientRectToCss(anchor.getBoundingClientRect()) : { top: vh / 2, bottom: vh / 2, left: vw / 2, right: vw / 2 }
-    let top = a.top - h - 6
-    if (top < 8) top = Math.min(a.bottom + 6, vh - h - 8)
-    const left = Math.max(8, Math.min(align === 'end' ? a.right - w : a.left, vw - w - 8))
-    setPos({ left: Math.round(left), top: Math.round(Math.max(8, top)) })
-  }, [anchor, align, found.length])
+    const view = cssViewport()
+    const a = anchor
+      ? clientRectToCss(anchor.getBoundingClientRect())
+      : { top: view.height / 2, bottom: view.height / 2, left: view.width / 2, right: view.width / 2 }
+    setPos(pickerPlace(a, { width: box.offsetWidth, height: box.offsetHeight }, view, align))
+  }, [anchor, align])
 
   useEffect(() => {
-    searchRef.current?.focus()
+    searchRef.current?.focus({ preventScroll: true })
     const onDown = (e: MouseEvent): void => {
       if (!(e.target instanceof Node)) return
       if (ref.current?.contains(e.target) || anchor?.contains(e.target)) return
@@ -330,7 +361,7 @@ export function HomeChatReactionPicker({
     else cells(to.zone)[to.index]?.focus()
     return true
   }
-  const counts = (): { quick: number; results: number } => ({ quick: QUICK_REACTIONS.length, results: found.length })
+  const counts = (): { quick: number; results: number } => ({ quick: QUICK_REACTIONS.length, results: grid.length })
 
   const cell = (e: string, zone: 'quick' | 'results', i: number): JSX.Element => (
     <button
@@ -353,7 +384,11 @@ export function HomeChatReactionPicker({
   )
 
   return createPortal(
-    <div data-k2-chamfer-float="menu" className="fixed z-[1000]" style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999 }}>
+    <div
+      data-k2-chamfer-float="menu"
+      className="fixed z-[1000]"
+      style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999, visibility: pos ? 'visible' : 'hidden' }}
+    >
       <div
         ref={ref}
         role="dialog"
@@ -386,7 +421,7 @@ export function HomeChatReactionPicker({
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
-              if (found[0]) pick(found[0])
+              if (searching && found[0]) pick(found[0])
               return
             }
             if (go(pickerMove({ zone: 'search', index: 0 }, e.key, counts()))) e.preventDefault()
@@ -398,17 +433,21 @@ export function HomeChatReactionPicker({
           autoComplete="off"
           className="w-full"
         />
-        {q.trim() !== '' && (
-          <div role="group" aria-label="Matching emoji" className="grid max-h-[148px] grid-cols-6 justify-items-center overflow-y-auto" data-testid="home-chat-emoji-results">
-            {found.length === 0 ? (
-              <span role="status" className="col-span-6 justify-self-start px-1 py-1 text-[11px] text-[var(--color-text-muted)]">
-                No emoji match
-              </span>
-            ) : (
-              found.map((e, i) => cell(e, 'results', i))
-            )}
-          </div>
-        )}
+        <div
+          role="group"
+          aria-label={searching ? 'Matching emoji' : 'All emoji'}
+          className="grid grid-cols-6 content-start justify-items-center overflow-y-auto"
+          style={{ height: PICKER_GRID_PX }}
+          data-testid="home-chat-emoji-results"
+        >
+          {grid.length === 0 ? (
+            <span role="status" className="col-span-6 justify-self-start px-1 py-1 text-[11px] text-[var(--color-text-muted)]">
+              No emoji match
+            </span>
+          ) : (
+            grid.map((e, i) => cell(e, 'results', i))
+          )}
+        </div>
       </div>
     </div>,
     document.body,

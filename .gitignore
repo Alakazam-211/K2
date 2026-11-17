@@ -25,6 +25,7 @@ src-tauri/.dfn3.*
 *.zip
 *.app
 .DS_Store
+__pycache__/
 *.db
 *.db-journal
 *.db-wal

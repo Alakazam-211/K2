@@ -1,9 +1,29 @@
 # Changelog
 
-## Unreleased
+## v0.1.0: pairs with kit v0.21.0
 
-Built on k2-mpc-cad (the drawing model and the DXF reader) and the kit (k2-mpc-base) v0.21.0,
-the kit k2-mpc-cad pairs with.
+The first release of the AV reading layer. It builds with **`k2-mpc-cad` v0.1.0** (the drawing
+model and the DXF reader) and **`k2-mpc-base` v0.21.0**, the kit `k2-mpc-cad` v0.1.0 pairs
+with, both checked out beside this repo (a host vendors the three side by side:
+`vendor/k2-mpc-base`, `vendor/k2-mpc-cad` and `vendor/k2-mpc-av`); `Cargo.lock` names them.
+
+**This release is read-only.** It reads a set of AV system drawings (devices across sheets,
+cables, boundaries and the wire pull list, off-sheet flags, title blocks and the sheet index)
+and never writes a drawing. It has no edit verbs.
+
+- **What a host gets:** `k2_mpc_av::read_files` (a configuration file's text and a set of DXF
+  files, each a name and its bytes) and `k2_mpc_av::read_set` (a parsed `Config` and sheets
+  already read into the drawing model), both giving `av.set/1` typed data;
+  `k2_mpc_av::set::summary`, the same reading in counts and finding codes only, never a value.
+  A refusal is a typed code (`AV-E001 bad_config`, `AV-E002 sheet_unreadable`) or the drawing
+  reader's own.
+- **Known limits:** `read_files` reads DXF sheets; a DWG sheet reaches `read_set` only as a
+  drawing model a host has read itself (`k2_mpc_dwg::drawing::DwgDrawing`, through the model's
+  `DrawSource::doc`). Every convention (tags, layers, linetypes, blocks)
+  comes from the caller's configuration; nothing about a project is built in. Text boxes come
+  from the drawing model's estimates. The known limits of `k2-mpc-cad` v0.1.0 apply.
+- **Tests** run on drawing sets the CAD repo's generator draws when they run, with neutral
+  names. No referee program and no sample drawing is used, and none is committed.
 
 ### Reading a set of AV system drawings
 - Devices across sheets: a device is every block reference whose attribute (by the

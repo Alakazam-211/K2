@@ -131,8 +131,14 @@ const LOGIN = {
   offerMakeActive: false,
 }
 
+/** What the server says about the old background Claude token refresher. */
+const refresher = { installed: false }
+
 function routeGet(route: string, params?: Record<string, string>): unknown {
   if (route === 'llm/accounts/list') return doc()
+  if (route === 'claude-auth/status') {
+    return { state: 'valid', expiresAt: null, secondsRemaining: null, schedulerInstalled: refresher.installed, retired: true }
+  }
   if (route === 'llm/accounts/login/status') return { login: { ...LOGIN, loginId: params?.loginId } }
   throw new Error(`unexpected GET ${route}`)
 }
@@ -143,10 +149,15 @@ beforeEach(() => {
   h.daemonCliGet.mockReset()
   h.daemonCliPost.mockReset()
   h.openUrl.mockClear()
+  refresher.installed = false
   h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) => routeGet(route, params))
   h.daemonCliPost.mockImplementation(async (route: string) => {
     if (route === 'llm/accounts/add' || route === 'llm/accounts/login') return { account: account({ id: 'acc_new' }), login: LOGIN }
     if (route.startsWith('llm/accounts/')) return {}
+    if (route === 'claude-auth/uninstall-scheduler') {
+      refresher.installed = false
+      return { success: true }
+    }
     throw new Error(`unexpected POST ${route}`)
   })
 })
@@ -874,5 +885,52 @@ describe('Usage v2 limit bars from /cli/usage/limits (Owner / Admin)', () => {
     expect(screen.getByTestId('llm-usage-acc_work').textContent).toContain('Session 42%')
     fireEvent.click(screen.getByRole('button', { name: 'More actions for work' }))
     expect(screen.queryByRole('menuitem', { name: /^Check usage now/ })).toBeNull()
+  })
+})
+
+// The old background refresher (a scheduled job that refreshed the server
+// default Claude token every 20 minutes) can no longer be turned on, but
+// anyone who turned it on keeps a way off: the Claude card says it is on,
+// only while the server reports it installed.
+describe('the old background Claude token refresher', () => {
+  it('says nothing while the server reports it not installed', async () => {
+    await renderColumn()
+    await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith('claude-auth/status'))
+    await act(async () => {})
+    expect(screen.queryByTestId('llm-claude-refresher')).toBeNull()
+    expect(document.body.textContent).not.toContain('Background token refresh')
+  })
+
+  it('says it is on in the Claude card while installed, and Turn off removes it on the server', async () => {
+    refresher.installed = true
+    await renderColumn()
+    const line = await within(screen.getByTestId('llm-tool-claude')).findByTestId('llm-claude-refresher')
+    expect(line.textContent).toBe('Background token refresh is on · Turn off')
+    for (const t of ['codex', 'grok', 'gemini']) {
+      expect(within(screen.getByTestId(`llm-tool-${t}`)).queryByTestId('llm-claude-refresher')).toBeNull()
+    }
+    const off = within(line).getByRole('button', { name: 'Turn off' })
+    expect(off.getAttribute('data-k2-focus')).toBe('')
+    fireEvent.click(off)
+    await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('claude-auth/uninstall-scheduler', {}))
+    // It reads the status again and the line goes; the card says what changed.
+    await waitFor(() => expect(screen.queryByTestId('llm-claude-refresher')).toBeNull())
+    expect(h.daemonCliGet.mock.calls.filter((c) => c[0] === 'claude-auth/status').length).toBeGreaterThanOrEqual(2)
+    expect(within(screen.getByTestId('llm-tool-claude')).getByTestId('llm-notice').textContent).toContain('Background token refresh is off.')
+  })
+
+  it('a failed Turn off keeps the line and says what failed in the Claude card', async () => {
+    refresher.installed = true
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'claude-auth/uninstall-scheduler') throw new Error('launchctl unload failed')
+      throw new Error(`unexpected POST ${route}`)
+    })
+    await renderColumn()
+    const line = await screen.findByTestId('llm-claude-refresher')
+    fireEvent.click(within(line).getByRole('button', { name: 'Turn off' }))
+    const alert = await within(screen.getByTestId('llm-tool-claude')).findByTestId('llm-row-error')
+    expect(alert.textContent).toContain('Couldn’t turn off background token refresh.')
+    expect(alert.textContent).toContain('launchctl unload failed')
+    expect(screen.getByTestId('llm-claude-refresher')).toBeTruthy()
   })
 })

@@ -891,7 +891,6 @@
 1 K2 src/renderer/components/Settings/sections/update-host.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/Settings/sections/usage/UsageActivity.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/Settings/shared/BootStatusPublicRow.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/shared/ClaudeAuthRefreshRow.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/Thread/ThreadZenKit.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/Thread/useComposeModel.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/TopBar/AppMenuPanel.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand

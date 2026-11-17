@@ -63,6 +63,7 @@ import {
 } from '@/stores/llm-accounts'
 import { LlmLoginSheet, type LoginSheetResult, type LoginSheetStart } from './LlmLoginSheet'
 import { SIGN_IN_TOOLS, useLlmSignInRequestStore } from '@/stores/llm-sign-in-request'
+import { useClaudeRefresher } from '@/stores/claude-refresher'
 import { Button, Callout, Input, OverflowMenu, Tag, type OverflowMenuItem } from '@/components/ui'
 import { SETTING_ROW_HINT, SettingRow, SettingsGroup, SettingsLoadState, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 import { AccessSheet, ConfirmSheet, DIALOG_FIELD, Field } from '../sections/AccessDialogs'
@@ -568,6 +569,8 @@ export function AgentAccountsColumn(): React.JSX.Element {
   const [announce, setAnnounce] = useState('')
 
   useEffect(() => watchLlmAccounts(scope), [scope])
+  // The old background Claude token refresher: shown only while installed.
+  const refresher = useClaudeRefresher(scope)
   // Usage v2: every login's limits for the bars (Owner/Admin; a Member's
   // 403 leaves each row on its wallet reading). One watcher per server.
   const limitsTarget = useMemo(() => ({ key: scope.id, scope }), [scope])
@@ -772,6 +775,24 @@ export function AgentAccountsColumn(): React.JSX.Element {
                     Use next token
                   </Button>
                 </SettingRow>
+              ) : null}
+              {row.id === 'claude' && refresher.installed ? (
+                <div className="px-4 py-2.5" data-testid="llm-claude-refresher">
+                  <p className={`${SETTING_ROW_HINT} mt-0`}>
+                    Background token refresh is on ·{' '}
+                    <button
+                      type="button"
+                      data-k2-focus=""
+                      disabled={refresher.busy}
+                      className="px-0.5 -mx-0.5 text-[var(--color-accent-text)] hover:underline cursor-pointer no-drag disabled:opacity-60 disabled:cursor-not-allowed"
+                      onClick={() =>
+                        void change('claude', refresher.turnOff(), 'Background token refresh is off.', 'Couldn’t turn off background token refresh.')
+                      }
+                    >
+                      Turn off
+                    </button>
+                  </p>
+                </div>
               ) : null}
             </SettingsGroup>
           )

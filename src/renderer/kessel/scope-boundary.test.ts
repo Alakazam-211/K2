@@ -74,7 +74,6 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   'hooks/useTunnelUrls.ts': 'raw /cli fetch via getDaemonWs(scope)',
   'lib/federation.ts': 'raw /cli fetch via getDaemonWs(scope)',
   'lib/daemon-settings.ts': 'settings fetch via getDaemonWs(scope)',
-  'stores/claude-auth.ts': 'raw /cli fetch via getDaemonWs(scope)',
   'lib/app-update-driver.ts': 'local app-update driver',
   // Not daemon calls.
   'components/Settings/lib/k2-account.ts': 'Supabase account API, not a daemon',
@@ -311,7 +310,6 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.4 Settings → App Approvals badge: the window's server's held App
   // requests (its push on that server's events bus; a server switch reloads).
   'stores/app-approvals.ts',
-  'stores/claude-auth.ts',
   'stores/custom-themes.ts',
   'stores/feedback.ts',
   'stores/focus-groups.ts',

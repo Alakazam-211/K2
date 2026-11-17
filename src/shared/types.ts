@@ -92,7 +92,6 @@ export interface AppSettingsResponse {
   timer: TimerSettingsBackend
   /** Always true — agentic systems are GA; kept for settings.json wire compat. */
   agenticSystemsEnabled: boolean
-  claudeAuthAutoRefresh: boolean
   lastActiveProjectId: string | null
   lastActiveWorkspaceId: string | null
   editor: EditorSettingsBackend

@@ -72,7 +72,6 @@ export const DEFAULT_SETTINGS = {
   timer: { visible: true, skipMemo: false, timezone: '' },
   agenticSystemsEnabled: true,
   keepDaemonOnQuit: true,
-  claudeAuthAutoRefresh: false,
   lastActiveProjectId: null,
   lastActiveWorkspaceId: null,
   editor: {
@@ -145,10 +144,8 @@ function cannedResponse(pathname: string, postBody?: unknown): { status: number;
   if (pathname === '/cli/settings/update') {
     return { status: 200, json: mergeSettingsEcho(postBody) }
   }
-  // Settings → General/Terminal render ClaudeAuthRefreshRow, which
-  // destructures a status-indicator config keyed by `state`. 'unknown'
-  // renders NO indicator — the only timestamp-free, deterministic option
-  // (any other state renders a "Valid (Nm)" countdown).
+  // Settings → Subs / Tokens reads whether the old background Claude token
+  // refresher is installed; not installed draws no line in the Claude card.
   if (pathname === '/cli/claude-auth/status') {
     return {
       status: 200,

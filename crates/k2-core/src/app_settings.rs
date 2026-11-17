@@ -395,6 +395,10 @@ pub struct AppSettings {
     pub agentic_systems_enabled: bool,
     #[serde(default = "default_true")]
     pub keep_daemon_on_quit: bool,
+    /// Ignored: no client reads or writes it. Whether the old background
+    /// Claude token refresher is installed is `/cli/claude-auth/status`'s
+    /// `schedulerInstalled`. Wire field retained so old settings.json still
+    /// deserializes.
     #[serde(default)]
     pub claude_auth_auto_refresh: bool,
     #[serde(default)]

@@ -214,9 +214,6 @@ interface SettingsState {
   // Kept for settings.json / daemon API compat; never used to hide UI.
   agenticSystemsEnabled: boolean
 
-  // Claude Auth auto-refresh (background scheduler)
-  claudeAuthAutoRefresh: boolean
-
   // P1.C — how long (hours) a workspace stays in the Active Bar after the
   // user last interacted with it (Active-Bar rule 2). Read by ActiveBar
   // (and a future reaper). Default 24, min 1.
@@ -367,7 +364,6 @@ interface SettingsState {
   resetKeybinding: (id: string) => void
   resetAllKeybindings: () => void
   updateProjectSetting: (projectId: string, key: string, value: string) => void
-  setClaudeAuthAutoRefresh: (enabled: boolean) => void
   setActiveWindowHours: (hours: number) => void
   setOwnerDisplayName: (name: string) => void
   setAllowRemoteInstruct: (enabled: boolean) => void
@@ -578,7 +574,6 @@ async function persistAndApply(
     defaultAgent: result.defaultAgent ?? 'claude',
     // Always on — ignore any stale false from disk / remote hosts.
     agenticSystemsEnabled: true,
-    claudeAuthAutoRefresh: result.claudeAuthAutoRefresh ?? false,
     activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
     ownerDisplayName: result.ownerDisplayName ?? '',
     allowRemoteInstruct: result.allowRemoteInstruct ?? false,
@@ -628,7 +623,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   keybindings: {},
   projectSettings: {},
   agenticSystemsEnabled: true,
-  claudeAuthAutoRefresh: false,
   activeWindowHours: DEFAULT_ACTIVE_WINDOW_HOURS,
   ownerDisplayName: '',
   allowRemoteInstruct: false,
@@ -759,17 +753,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     } catch (err) {
       console.error('[settings] Failed to persist project setting:', err)
       set({ projectSettings: prev })
-    }
-  },
-
-  setClaudeAuthAutoRefresh: async (enabled: boolean) => {
-    const prev = get().claudeAuthAutoRefresh
-    set({ claudeAuthAutoRefresh: enabled })
-    try {
-      await persistAndApply(set, { claudeAuthAutoRefresh: enabled })
-    } catch (err) {
-      console.error('[settings] Failed to persist Claude auth auto-refresh setting:', err)
-      set({ claudeAuthAutoRefresh: prev })
     }
   },
 
@@ -1116,7 +1099,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       defaultAgent: result.defaultAgent ?? 'claude',
       // Always on — ignore any stale false from disk / remote hosts.
       agenticSystemsEnabled: true,
-      claudeAuthAutoRefresh: result.claudeAuthAutoRefresh ?? false,
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,

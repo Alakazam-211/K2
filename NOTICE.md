@@ -463,6 +463,68 @@ worker, behind the 3D scene core (off by default).
 | **Dependencies** | the kit (above), thiserror 2 and flate2 1 (MIT OR Apache-2.0), and ruzstd 0.9 (MIT, with twox-hash 2: MIT; files saved zstd-compressed, in pure Rust) |
 | **Formats** | BLEND is the file format of Blender, a project of the Blender Foundation. "Blender" is a trademark of its owner, named here only to say whose file format this is. This project is not affiliated with, endorsed by or sponsored by it |
 
+## Multiplayer kit: k2-mpc-cad (vendored, before v0.1.0)
+
+The kit's packs for 2D drawings: a format-neutral drawing model (`k2-mpc-cad-model`), the ASCII
+DXF reader (`k2-mpc-dxf`, every version from R12 to 2018, into the kit's structure index) and the
+DWG reader (`k2-mpc-dwg`, the 2004 to 2018 family, read-only), and the drawing-model read a
+viewer draws from. Vendored whole beside the kit (its `fuzz/` crate and `cad-measure` are test
+tooling K2 doesn't build). K2 builds it into the daemon and the export worker, behind the CAD
+core (off by default), and reads drawings only: K2 saves no drawing edits yet.
+
+| | |
+|--|--|
+| **What** | `vendor/k2-mpc-cad` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md`, `PROVENANCE.md` and `CHANGELOG.md` |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-cad`, main at `a64ef30` (re-pointed to its `v0.1.0` tag when it is cut) |
+| **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project, and one table of data taken from one (below); `PROVENANCE.md` says what each part was written from. Its tables are written in its own words from the DXF reference and the Open Design Specification for .dwg files, read as sources of facts; no text or tables are copied from them |
+| **Dependencies** | the kit only (above) |
+| **Formats** | DXF and DWG are trademarks of their owner. These readers read files in those formats and are not affiliated with, endorsed by or sponsored by that owner. The names are used here only to name the file formats |
+
+**The colour-number palette.** The 256 RGB values of
+`vendor/k2-mpc-cad/crates/cad-model/src/draw/aci.rs` (`TABLE`) are taken, as data, from ezdxf's
+model-space palette (`DXF_DEFAULT_COLORS` in `src/ezdxf/colors.py`, ezdxf 1.4.2), under its
+licence:
+
+```
+MIT License
+
+Copyright (c) 2020 Manfred Moitzi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## Multiplayer kit: k2-mpc-av (vendored, before v0.1.0)
+
+The kit's reading of a set of AV system drawings over the CAD pack's drawing model: devices
+across sheets, cables and the boundaries they are pulled through, off-sheet flag pairs, title
+blocks and the sheet index. It never writes a drawing. Each project's conventions come from a
+configuration file the caller passes; nothing about a project is built in. K2 builds it into the
+daemon, behind the CAD core (off by default).
+
+| | |
+|--|--|
+| **What** | `vendor/k2-mpc-av` (depends on `../k2-mpc-cad` and `../k2-mpc-base`), with its own `NOTICE.md`, `PROVENANCE.md` and `CHANGELOG.md` |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-av`, main at `17454a0` (re-pointed to its `v0.1.0` tag when it is cut) |
+| **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project; `PROVENANCE.md` says what each part was written from |
+| **Dependencies** | the kit and the CAD pack (above) |
+| **Formats** | DXF and DWG are trademarks of their owner; they are named here only to name the file formats |
+
 Update these sections on every kit bump.
 
 ## Third-party: deckcraft v0.18.1, for .pptx previews (MIT OR Apache-2.0, vendored)

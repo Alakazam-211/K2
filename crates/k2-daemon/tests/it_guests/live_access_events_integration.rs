@@ -7,6 +7,7 @@
 
 use crate::support::app_fixture;
 use crate::support::live_sockets;
+#[cfg(unix)]
 use crate::support::fake_sew;
 
 use std::time::{Duration, Instant};
@@ -682,6 +683,8 @@ async fn one_socket_for_all_of_an_apps_guests() {
 /// is no news on K2's socket, and the owner's grant hooks list shows the blocked row
 /// (PRD §9, §14). How `k2 app chat` shows a Space's blocked step is
 /// `sew::governed`'s own test.
+// Unix only: the fake Sew is a unix-socket server (Sew runs on Linux, not Windows).
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_blocked_step_toward_sew_doesnt_hold_up_k2s_own_answer() {
     use k2_core::tool_hook as hook;

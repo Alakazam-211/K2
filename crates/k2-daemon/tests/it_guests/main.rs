@@ -9,6 +9,8 @@
 mod support {
     pub mod env;
     pub mod app_fixture;
+    // Sew's management API is a unix socket (Sew runs on Linux, not Windows).
+    #[cfg(unix)]
     pub mod fake_sew;
     pub mod live_sockets;
 }

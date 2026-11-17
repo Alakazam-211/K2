@@ -424,6 +424,7 @@ mod unix_impl {
                     refused.status,
                     "application/json",
                     r#"{"error":"bad request on cell socket"}"#,
+                    "",
                 )
                 .await;
                 if refused.drain.is_some() {
@@ -441,6 +442,8 @@ mod unix_impl {
             Some((p, q)) => (p, q),
             None => (target, ""),
         };
+        // R1 slice 10: a /cli/* answer names the daemon's version.
+        let k5_version = if path.starts_with("/cli/") { crate::cli_usage::SERVER_VERSION_HEADER } else { "" };
 
         // A caller that has already hung up is not waiting for this answer:
         // its request sat in the listener's queue (a cell socket ptyd held
@@ -503,6 +506,7 @@ mod unix_impl {
                 "405 Method Not Allowed",
                 "application/json",
                 r#"{"error":"POST required"}"#,
+                "",
             )
             .await;
             return;
@@ -546,7 +550,7 @@ mod unix_impl {
                 None
             };
             let body = gated.as_deref().unwrap_or(r#"{"error":"Invalid or missing auth token"}"#);
-            write_response(&mut stream, "403 Forbidden", "application/json", body).await;
+            write_response(&mut stream, "403 Forbidden", "application/json", body, k5_version).await;
             return;
         }
 
@@ -559,6 +563,7 @@ mod unix_impl {
                     "413 Payload Too Large",
                     "application/json",
                     r#"{"error":"hook body over 1 MiB"}"#,
+                    "",
                 )
                 .await;
                 return;
@@ -575,9 +580,9 @@ mod unix_impl {
                 // `k2 hooks emit` (GL45) asks for the verdict.
                 (true, Ok(v)) => {
                     let body = serde_json::json!({ "verdict": v.as_str() }).to_string();
-                    write_response(&mut stream, "200 OK", "application/json", &body).await;
+                    write_response(&mut stream, "200 OK", "application/json", &body, "").await;
                 }
-                _ => write_response(&mut stream, "204 No Content", "application/json", "").await,
+                _ => write_response(&mut stream, "204 No Content", "application/json", "", "").await,
             }
             return;
         }
@@ -591,6 +596,7 @@ mod unix_impl {
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"Invalid or missing auth token"}"#,
+                    k5_version,
                 )
                 .await;
                 return;
@@ -707,7 +713,7 @@ mod unix_impl {
         };
         // The Org Chart's feed field, for this cell's agent (none while off).
         let out = crate::org_chart::feed::stamp_cell(&status, &out, &this_session_id[..], &feed_principal).unwrap_or(out);
-        write_response(&mut stream, &status, ctype, &out).await;
+        write_response(&mut stream, &status, ctype, &out, k5_version).await;
     }
 
     /// Route an authorized cell-socket request to the SAME pure handler the
@@ -1624,9 +1630,12 @@ mod unix_impl {
         rc > 0 && fds.revents & libc::POLLHUP != 0
     }
 
-    async fn write_response(stream: &mut UnixStream, status: &str, content_type: &str, body: &str) {
+    /// One answer, then a half-close. `extra` is zero or more complete
+    /// `Name: value\r\n` header lines (`X-K5-Server-Version` on a `/cli/*`
+    /// answer, R1 slice 10).
+    async fn write_response(stream: &mut UnixStream, status: &str, content_type: &str, body: &str, extra: &str) {
         let resp = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{}",
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n{extra}\r\n{}",
             body.len(),
             body,
         );

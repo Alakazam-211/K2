@@ -1577,7 +1577,7 @@ async fn handle_one_request(
         method,
         path_and_query,
         &req,
-    ));
+    ).server_version(ingress == Ingress::Loopback)); // X-K5-Server-Version on a /cli/* answer
 
     // H5 (E2E splice hardening): reject `Transfer-Encoding: chunked`.
     // `read_post_body` is Content-Length-driven ONLY — it never decodes

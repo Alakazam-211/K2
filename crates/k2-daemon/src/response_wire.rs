@@ -45,6 +45,10 @@ pub struct Request {
     /// The request's `If-None-Match` header, else its `if_none_match`
     /// query parameter.
     pub if_none_match: Option<String>,
+    /// A `/cli/*` request on this machine: its answer says the daemon's
+    /// version (`X-K5-Server-Version`, R1 slice 10). Never off the machine,
+    /// where a ghost `/boot-status` hides the version from strangers.
+    pub server_version: bool,
 }
 
 impl Request {
@@ -66,7 +70,16 @@ impl Request {
             } else {
                 None
             },
+            server_version: !remote && path.starts_with("/cli/"),
         }
+    }
+
+    /// Keep the version header only when `on_this_machine` (the request
+    /// came over loopback, not through a proxy, the LAN, the tunnel or an
+    /// App's link).
+    pub fn server_version(mut self, on_this_machine: bool) -> Request {
+        self.server_version &= on_this_machine;
+        self
     }
 }
 
@@ -135,6 +148,9 @@ pub fn shape(req: &Request, status: &str, ct: &str, body: &str) -> Shaped {
     let json = is_json(ct);
     let ok = status.starts_with("200");
     let mut headers = String::new();
+    if req.server_version {
+        headers.push_str(crate::cli_usage::SERVER_VERSION_HEADER);
+    }
     if req.etag && ok && json {
         let tag = etag_of(body);
         headers.push_str(&format!("ETag: {tag}\r\nCache-Control: no-cache\r\n"));
@@ -313,6 +329,39 @@ mod tests {
     fn etag_matches_the_renderer_fixture() {
         let body = "[{\"id\":\"p1\",\"name\":\"Caf\u{e9} \\\"one\\\"\",\"tabOrder\":3,\"iconUrl\":null,\"workspaces\":[]}]";
         assert_eq!(etag_of(body), "W/\"a9de4e57e561bbb8bdc197b3faee8112\"");
+    }
+
+    /// R1 slice 10: a `/cli/*` answer on this machine names the daemon's
+    /// version, whatever its status or type; nothing else does.
+    #[test]
+    fn a_cli_answer_on_this_machine_says_the_daemon_version() {
+        let line = format!("X-K5-Server-Version: {}\r\n", env!("CARGO_PKG_VERSION"));
+        let cli = Request::from_head(false, "GET", "/cli/inbox/list?token=t", &head(&[])).server_version(true);
+        for (status, ct, body) in
+            [("200 OK", "application/json", "{}"), ("403 Forbidden", "application/json", "{}"), ("200 OK", "text/plain", "x")]
+        {
+            let s = shape(&cli, status, ct, body);
+            assert!(s.headers.contains(&line), "{status} {ct}: {:?}", s.headers);
+            assert_eq!(s.headers.matches("X-K5-Server-Version").count(), 1);
+        }
+        // A 304 too.
+        let body = big_json();
+        let tag = etag_of(&body);
+        let again = Request::from_head(false, "GET", "/cli/projects/list", &head(&[&format!("If-None-Match: {tag}")]))
+            .server_version(true);
+        let s = shape(&again, "200 OK", "application/json", &body);
+        assert_eq!(s.status, "304 Not Modified");
+        assert!(s.headers.contains(&line), "{:?}", s.headers);
+        // Not a /cli/* route; off this machine (LAN or tunnel, or an App's
+        // link: loopback but not this machine's CLI); outside a scope (the
+        // cell socket writes its own).
+        let not_cli = Request::from_head(false, "GET", "/boot-status", &head(&[])).server_version(true);
+        let remote = Request::from_head(true, "GET", "/cli/inbox/list", &head(&[])).server_version(true);
+        let app_link = Request::from_head(false, "GET", "/cli/inbox/list", &head(&[])).server_version(false);
+        for r in [not_cli, remote, app_link, Request::default()] {
+            let s = shape(&r, "200 OK", "application/json", "{}");
+            assert!(!s.headers.contains("X-K5-Server-Version"), "{r:?}: {:?}", s.headers);
+        }
     }
 
     #[test]

@@ -34,6 +34,9 @@ use crate::cli_response::CliResponse;
 pub const ROUTE: &str = "/cli/cli-usage";
 /// How often the counts in memory are written to the table.
 pub const FLUSH_EVERY: Duration = Duration::from_secs(60);
+/// The response header line on every `/cli/*` answer to the CLI: this
+/// daemon's version, the one `/boot-status` reports.
+pub const SERVER_VERSION_HEADER: &str = concat!("X-K5-Server-Version: ", env!("CARGO_PKG_VERSION"), "\r\n");
 
 /// What one request's `X-K5-*` headers claim.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -511,5 +514,10 @@ mod tests {
         conn.execute_batch(include_str!("../../k2-core/drizzle_sql/0308_cli_usage_counts.sql")).unwrap();
         c.flush_to(&conn).unwrap();
         assert_eq!(store::list(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_version_header_is_the_boot_status_version() {
+        assert_eq!(SERVER_VERSION_HEADER, format!("X-K5-Server-Version: {}\r\n", env!("CARGO_PKG_VERSION")));
     }
 }

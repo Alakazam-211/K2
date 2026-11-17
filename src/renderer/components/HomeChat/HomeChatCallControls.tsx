@@ -45,7 +45,7 @@ import { hostPool } from '@/lib/host-pool-instance'
 import { hostIsVoiceChatOnly } from '@/lib/voice-chat-only'
 import { CALL_RING_Z } from '@/lib/overlay-layers'
 import { useStore } from 'zustand'
-import { HomeChatCallingBar, HomeChatCallStrip, HomeChatRingCard, ringLayerTop } from './HomeChatCall'
+import { HomeChatCallingBar, HomeChatCallStrip, HomeChatRingCard, ringLayerTop, type CallButtonState } from './HomeChatCall'
 import { serverLabelFor } from './serverLabel'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { ConversationCallPlace } from '@/components/Voice/CallPlace'
@@ -139,6 +139,15 @@ export function useDmCall(hostKey: string, conv: string | null, name: string, me
   }, [])
 
   return { calling, strip, call, cancel, callAgain, leave, toggleMute }
+}
+
+/** The header Call button's state for this DM's call: calling while you
+ *  ring (not after a decline or no answer: the bar offers Call again), in
+ *  the call while you are on it here or on another device. */
+export function dmCallButtonState(view: DmCallView): CallButtonState {
+  if (view.strip) return 'in-call'
+  if (view.calling === 'joining' || view.calling === 'ringing' || view.calling === 'busy') return 'calling'
+  return 'idle'
 }
 
 /** The DM's call bars, drawn under its header. In the call here, the call

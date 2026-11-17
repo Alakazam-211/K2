@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { dmCallButtonState, type DmCallView } from './HomeChatCallControls'
 import { HomeChatCallButton, HomeChatCallingBar, HomeChatCallRecord, HomeChatCallStrip, HomeChatRingCard, ringLayerTop } from './HomeChatCall'
 
 afterEach(cleanup)
@@ -121,5 +122,47 @@ describe('DM call pieces', () => {
     rerender(<HomeChatCallButton disabledReason={null} onCall={call} />)
     fireEvent.click(screen.getByTestId('home-chat-call-button'))
     expect(call).toHaveBeenCalledTimes(1)
+  })
+
+  it('the call button is not offered again while you call or are in the call', () => {
+    const call = vi.fn()
+    const { rerender } = render(<HomeChatCallButton disabledReason={null} state="calling" onCall={call} />)
+    let b = screen.getByTestId('home-chat-call-button') as HTMLButtonElement
+    expect(b.textContent).toContain('Calling…')
+    expect(b.getAttribute('aria-pressed')).toBe('true')
+    expect(b.disabled).toBe(true)
+    fireEvent.click(b)
+    rerender(<HomeChatCallButton disabledReason={null} state="in-call" onCall={call} />)
+    b = screen.getByTestId('home-chat-call-button') as HTMLButtonElement
+    expect(b.textContent).toContain('In call')
+    expect(b.getAttribute('aria-pressed')).toBe('true')
+    expect(b.disabled).toBe(true)
+    expect(call).not.toHaveBeenCalled()
+    rerender(<HomeChatCallButton disabledReason={null} state="idle" onCall={call} />)
+    b = screen.getByTestId('home-chat-call-button') as HTMLButtonElement
+    expect(b.textContent).toContain('Call')
+    expect(b.hasAttribute('aria-pressed')).toBe(false)
+  })
+
+  it("the DM's call decides the button: calling, in the call (here or on another device), else idle", () => {
+    const view = (over: Partial<DmCallView>): DmCallView => ({
+      calling: null,
+      strip: null,
+      call: () => {},
+      cancel: () => {},
+      callAgain: () => {},
+      leave: () => {},
+      toggleMute: () => {},
+      ...over,
+    })
+    expect(dmCallButtonState(view({}))).toBe('idle')
+    expect(dmCallButtonState(view({ calling: 'joining' }))).toBe('calling')
+    expect(dmCallButtonState(view({ calling: 'ringing' }))).toBe('calling')
+    expect(dmCallButtonState(view({ calling: 'busy' }))).toBe('calling')
+    // After a decline or no answer the bar offers Call again; the header's Call is back too.
+    expect(dmCallButtonState(view({ calling: 'declined' }))).toBe('idle')
+    expect(dmCallButtonState(view({ calling: 'missed' }))).toBe('idle')
+    expect(dmCallButtonState(view({ strip: { seconds: 3, muted: false, elsewhere: null } }))).toBe('in-call')
+    expect(dmCallButtonState(view({ strip: { seconds: null, muted: false, elsewhere: 'another device' } }))).toBe('in-call')
   })
 })

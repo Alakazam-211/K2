@@ -94,7 +94,7 @@ import { HomeChatChannelGlyph, HomeChatPersonAvatar } from './HomeChatGlyphs'
 import { EyeIcon } from 'lucide-react'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import { HomeChatCallButton, HomeChatCallRecord } from './HomeChatCall'
-import { HomeChatDmCallBars, useDmCall } from './HomeChatCallControls'
+import { HomeChatDmCallBars, dmCallButtonState, useDmCall } from './HomeChatCallControls'
 import { callRecordLine } from '@/lib/home-chat/calls'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { serverLabelFor } from './serverLabel'
@@ -519,7 +519,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
           </span>
         )}
         <div className="flex-1" />
-        {dm && <HomeChatCallButton disabledReason={callBlocked} onCall={dmCall.call} />}
+        {dm && <HomeChatCallButton disabledReason={callBlocked} state={dmCallButtonState(dmCall)} onCall={dmCall.call} />}
         {target.kind === 'channel' && (
           <button
             type="button"

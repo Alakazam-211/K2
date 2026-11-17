@@ -204,14 +204,38 @@ export function HomeChatCallRecord({
   )
 }
 
+/** The header button's state: `calling` while you ring them, `in-call`
+ *  while you are in this DM's call (here or on another device). */
+export type CallButtonState = 'idle' | 'calling' | 'in-call'
+
 export function HomeChatCallButton({
   disabledReason,
+  state = 'idle',
   onCall,
 }: {
   /** Why calling isn't possible now (a Mac server, calls off); null: it is. */
   disabledReason: string | null
+  state?: CallButtonState
   onCall: () => void
 }): JSX.Element {
+  // While you call or are in the call it isn't offered again: it shows as
+  // pressed, with what is going on, and does nothing.
+  if (state !== 'idle') {
+    const label = state === 'calling' ? 'Calling…' : 'In call'
+    return (
+      <button
+        type="button"
+        className="k2-focus rounded-[var(--radius-field)] bg-[var(--color-row-hover)] px-2 py-1 text-[11px] text-[var(--color-text-primary)]"
+        data-testid="home-chat-call-button"
+        data-state={state}
+        aria-pressed="true"
+        disabled
+        title={state === 'calling' ? 'You are calling' : 'You are in this call'}
+      >
+        📞 {label}
+      </button>
+    )
+  }
   return (
     <button
       type="button"

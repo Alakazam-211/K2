@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-cad-measure"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-cad-model",

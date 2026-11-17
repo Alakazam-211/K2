@@ -14,6 +14,8 @@ mod generic;
 mod index;
 #[path = "merge.rs"]
 mod merge;
+#[path = "pack_session.rs"]
+mod pack_session;
 #[path = "probe.rs"]
 mod probe;
 #[path = "references.rs"]
@@ -78,6 +80,11 @@ const PLANTS: &[(&str, Row)] = &[
     ),
     // what we write
     ("SubclassDropped", writer::subclass_markers_in_order),
+    // the pack in the kit: an agent's whole-file write refused
+    (
+        "AgentWritesAllowed",
+        pack_session::an_agents_whole_file_write_is_refused,
+    ),
     // the merge
     ("MergeTakesTheirs", merge::merge_disjoint_entities),
     ("FieldsAsWhole", merge::merge_same_entity_different_fields),

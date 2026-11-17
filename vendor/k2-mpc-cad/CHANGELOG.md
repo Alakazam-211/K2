@@ -1,8 +1,65 @@
 # Changelog
 
-## Unreleased
+## v0.1.0: pairs with kit v0.21.0
 
-Built against the kit (k2-mpc-base) v0.21.0.
+The first release of the drawing pack. It builds with **`k2-mpc-base` v0.21.0** checked out
+beside this repo (a host vendors both side by side: `vendor/k2-mpc-base` beside
+`vendor/k2-mpc-cad`); `Cargo.lock` and `fuzz/Cargo.lock` name that kit.
+
+**This release is read-only.** It reads ASCII DXF files (every version from R12 to 2018) and
+DWG files (the 2004 to 2018 family: `AC1018`, `AC1024`, `AC1027`, `AC1032`) into one
+format-neutral drawing model, and answers read verbs and the drawing-model read (`draw header`,
+`draw page`) from it. It has no edit verbs yet: nothing here edits a drawing for a person or an
+agent, and a host must not offer whole-file writes to DXF or DWG files through this pack until
+the edit verbs ship. **Agents' whole-file writes are refused**: `DxfPack` refuses an agent's
+`write` and `write --base` of a DXF file (the kit's `MPC-E715`), whatever rights the host
+grants, and the file is unchanged; people's reads are unaffected. A DWG file is never written.
+
+- **What a host gets:** `k2_mpc_dxf::DxfPack`, the kit's tier-0 blob pack for DXF with a
+  structure index (index name `dxf`, format 3; the noun `entity`); `k2_mpc_dxf::read_doc` and
+  `k2_mpc_dxf::verbs::run` for the DXF reads; `k2_mpc_dwg::drawing::DwgDrawing` and
+  `k2_mpc_dwg::drawing::draw` for the DWG drawing-model read. A refusal is a typed code
+  (`CAD-E…`, `DXF-E…`, `DWG-E…`) that never quotes file content.
+- **`k2-mpc-cad-measure`** is test tooling (the test drawings, the speed and memory
+  measurements, the referee comparisons): run in test jobs, never shipped, and not a dependency
+  of the readers.
+
+### Known limits
+
+- **DWG, named known differences** from what a program's own DXF save of the same drawing
+  writes, each counted and printed by the comparison on every run:
+  - a true-colour layer's colour number: the file stores none beside the true colour, so the
+    reader gives the palette's nearest; a program may give another nearby number;
+  - a viewport's on flag, read from its status bits: a drawing can mark a viewport on without
+    that bit, and where else the file keeps it isn't known yet;
+  - a spline stored by fit points only is drawn by interpolating its fit points, where a
+    program computes control points of its own, so the two curves can differ slightly;
+  - a leader's hook line: the file doesn't store it (a program computes it); the reader draws
+    the leader's stored points only.
+- **LEADER from 2010 on:** a leader's text box height and width are read up to 2007 only; from
+  2010 they are not read.
+- **The old 2D polyline's layout in a DWG file** is checked on hand-made rows only.
+- Binary DXF is refused, typed. Encrypted or password-protected DWG drawings are refused, as are
+  DWG versions outside the 2004 to 2018 family.
+- Text boxes are estimates (`bbox_q: "approx"`); a viewer measures text with its own font.
+
+### Test-only referees
+
+The readers are checked against other programs run as separate processes, on test machines
+only, pinned by version and checksum, never shipped, vendored or linked; only their outputs are
+compared, and nothing from them is committed:
+
+- **ezdxf** (MIT, a Python library): the DXF structure and the drawn values (`cad-measure
+  referee`, `cad-measure referee-draw`, `scripts/referee/`);
+- **LibreDWG's command-line tools** (GPL, run only as programs, never read as a source): DWG
+  entity counts by kind and a DXF conversion to compare drawing-model reads against;
+- **a DXF program's re-saves**, where used (`cad-measure h1` judges save pairs from any
+  writer): run by a person, or on a test machine under the same terms; the re-saves are private
+  test data, never committed.
+
+Public sample drawings are fetched on the test machines at a pinned commit, checked by sha256,
+and never committed, shipped or attached to a job's output (`crates/dwg/README.md`).
+
 
 ### A format-neutral drawing model
 - `k2-mpc-cad-model`: entities by handle, layers, blocks, attributes and external references;

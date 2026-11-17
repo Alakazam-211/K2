@@ -4,10 +4,10 @@
 use std::io::Read;
 
 use k2_mpc_base::index::{IndexDraft, IndexLimits, IndexRefused, IndexSpec, IndexVerbs};
-use k2_mpc_base::session::{BlobMerge, BlobPack};
+use k2_mpc_base::session::{AgentWrites, BlobMerge, BlobPack};
 use k2_mpc_cad_model::merge::MergeOutcome;
 
-use crate::{read_doc, Limits};
+use crate::{mutant, read_doc, Limits};
 
 /// The index's output format: bump when what a file indexes to changes, and the kit recomputes.
 pub const FORMAT: u32 = 3;
@@ -33,6 +33,16 @@ pub fn index_bytes(bytes: &[u8], limits: &IndexLimits) -> Result<IndexDraft, Ind
 }
 
 impl BlobPack for DxfPack {
+    /// Agents never write a DXF file whole (`write`, `write --base`): the kit refuses it
+    /// (`MPC-E715`) and the file is unchanged. This release is read-only; agents will change a
+    /// drawing through its edit verbs, never by replacing the file.
+    fn agent_writes(&self) -> AgentWrites {
+        if mutant::active("AgentWritesAllowed") {
+            return AgentWrites::Allowed;
+        }
+        AgentWrites::Refused
+    }
+
     /// The merge by unit and field ([`crate::merge`]).
     fn can_merge(&self) -> bool {
         true

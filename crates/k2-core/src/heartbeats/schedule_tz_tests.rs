@@ -133,6 +133,9 @@ fn next_fire_reads_new_york_whatever_the_process_zone() {
     assert_eq!((next_local.hour(), next_local.minute()), (14, 15), "machine-clock row: {next_local}");
 }
 
+// Unix only: the child is put in another zone with TZ, which Windows ignores
+// (chrono's Local reads the system zone there); the test above still runs there.
+#[cfg(unix)]
 #[test]
 fn next_fire_is_1415_new_york_in_denver_and_tokyo() {
     let exe = std::env::current_exe().expect("test binary path");

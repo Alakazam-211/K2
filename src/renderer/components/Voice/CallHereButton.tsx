@@ -1,9 +1,11 @@
 // In a window that isn't the call's home (one call, one home window), the
-// slim bar's action moves the call's stage here: Show call here, or Back to
-// chat in the window the call's own window came from. The old home folds to
+// slim bar's action moves the call's video here: Show call here (it shows
+// here as it would have there: the floating tile, or the stage this window
+// was asked for), or Back to chat in the window the call's own window came
+// from, which brings it back as the stage in its place. The old home keeps
 // the slim bar; the call's own window closes. While the call is in its own
 // window it can always come back; elsewhere only while the call has video:
-// without it there is no stage to move.
+// without it there is nothing to move.
 
 import { Button } from '@/components/ui/Button'
 import { PopInIcon } from '@/components/icons/K2Icons'
@@ -34,7 +36,7 @@ export function useCallHereAction(call: VoiceCall): 'here' | 'back-to-chat' | nu
 export default function CallHereButton({ kind, then }: { kind: 'here' | 'back-to-chat'; then?: () => void }): React.JSX.Element {
   const press = (): void => {
     showCallHere()
-    expandCallStage()
+    if (kind === 'back-to-chat') expandCallStage()
     then?.()
   }
   if (kind === 'back-to-chat') {

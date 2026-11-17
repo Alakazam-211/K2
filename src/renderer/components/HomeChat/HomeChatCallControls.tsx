@@ -151,10 +151,11 @@ export function dmCallButtonState(view: DmCallView): CallButtonState {
   return 'idle'
 }
 
-/** The DM's call bars, drawn under its header. In the call here, the call
- *  lives at the top of its conversation (ConversationCallPlace: the stage
- *  with its video, or the slim bar); where this app has no engine for it
- *  (the web client's seats), the DM's own strip. */
+/** The DM's call bars, drawn under its header. In the call here, the
+ *  conversation gives it room only once the person chose Expand
+ *  (ConversationCallPlace: the stage at its top); otherwise the call is the
+ *  top bar's slim bar, or the floating tile while it has video. Where this
+ *  app has no engine for it (the web client's seats), the DM's own strip. */
 export function HomeChatDmCallBars({ view, name, hostKey, conv }: { view: DmCallView; name: string; hostKey: string; conv: string | null }): JSX.Element | null {
   if (view.calling) {
     return <HomeChatCallingBar name={name} state={view.calling} onCancel={view.cancel} onCallAgain={view.callAgain} />

@@ -1,15 +1,18 @@
 // The call's stage: its video tiles, with the call's controls under them.
-// It sits in the page where it's placed (never floating over content, never
-// pinned to a corner): its header holds the place's actions (Pop out, Full
-// screen, Compact). Screens draw large; with no screen shared, the last
-// person who spoke draws large (3 or more tiles). The speaker's tile has the
-// accent ring. Your own camera is the mirrored self-view. Full screen and
-// the call's own window draw a share in the middle with the people beside it
-// (CallStage), and the same grid without one.
+// It sits in the page where it's placed (never floating over content): its
+// header holds the place's actions (Float, Pop out, Full screen). Screens
+// draw large; with no screen shared, the last person who spoke draws large
+// (3 or more tiles). The speaker's tile has the accent ring. Your own camera
+// is the mirrored self-view. With nobody's video on (the person chose the
+// stage and the video stopped), everyone in the call is a tile with their
+// picture. Full screen and the call's own window draw a share in the middle
+// with the people beside it (CallStage), and the same grid without one.
 
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from 'zustand'
 import { videoTiles, withSpeakerEmphasis, type CallPerson } from '@/lib/voice/video-labels'
+import { videoLive } from '@/lib/voice/call-tile-picture'
+import { peopleTiles } from '@/lib/voice/call-share'
 import type { VideoController } from '@/stores/video-core'
 import VideoTile from './VideoTile'
 import { ScreenPicker, VideoCallButtons, VideoNoticeLine } from './VideoControls'
@@ -106,7 +109,7 @@ export interface VideoStageProps {
   /** The demo closes itself. */
   onClose?: () => void
   /** The header's actions, from the place the stage sits in (a call's:
-   *  Pop out, Full screen, Compact). */
+   *  Float, Pop out, Full screen). */
   actions?: React.ReactNode
   /** Extra classes from the place (its size there). */
   className?: string
@@ -119,8 +122,13 @@ export interface VideoStageProps {
 
 export default function VideoStage({ ctl, people, title, footerStart, footer, onClose, actions, className = '', controls, notice }: VideoStageProps): React.JSX.Element | null {
   const availability = useStore(ctl.store, (s) => s.availability)
-  const tiles = useStageTiles(ctl, people)
-  if (availability !== 'ready' || tiles.length === 0) return null
+  const video = useStageTiles(ctl, people)
+  // A call's stage (it has the call's controls) stays up with nobody's video
+  // on: everyone in the call as their pictures, or a line while nobody is
+  // listed yet. Anything else shows only while there is video.
+  const call = controls !== undefined
+  const tiles = call && !videoLive(video) ? peopleTiles(video, people) : video
+  if (!call && (availability !== 'ready' || tiles.length === 0)) return null
 
   return (
     <div
@@ -140,7 +148,13 @@ export default function VideoStage({ ctl, people, title, footerStart, footer, on
         ) : null}
       </header>
       {notice}
-      <StageGrid tiles={tiles} ctl={ctl} />
+      {tiles.length > 0 ? (
+        <StageGrid tiles={tiles} ctl={ctl} />
+      ) : (
+        <div data-testid="video-stage-no-video" className="type-row flex min-h-0 flex-1 items-center justify-center text-[var(--color-text-muted)]">
+          No one has video on.
+        </div>
+      )}
       {controls ? (
         <footer data-testid="video-stage-controls" className="flex flex-shrink-0 flex-col items-center gap-1 px-2 pb-2 pt-1">
           {controls}

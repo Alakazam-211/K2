@@ -1,23 +1,25 @@
 // The call's view actions, each named for what it does:
+// - Expand (the floating tile, the top bar's slim bar): the call's stage in
+//   its place, kept until Float or the call ends.
+// - Float (the stage): back to the floating tile while the call has video,
+//   and to the top bar's slim bar while it hasn't.
 // - Pop out: the call in its own window.
 // - Full screen: the call over K2, inside this window (CallExpanded), and
 //   Exit full screen to come back. The OS's own full screen is the call
 //   window's green button.
-// - Compact / Expand: one toggle, the stage folded into the slim in-call bar
-//   and opened again.
 // - Back to chat (in the call's own window): the call goes back into the
 //   window it came from, and the call's window closes.
 // Minimising is the OS window's own; there is no Hide and no Bigger. The
-// zoom's buttons on a picture use PictureButton.
+// tile's and the zoom's buttons on a picture use PictureButton.
 
-import { ExpandIcon, PopInIcon, PopOutIcon } from '@/components/icons/K2Icons'
+import { ArrowLeftIcon, ExpandIcon, PopInIcon, PopOutIcon } from '@/components/icons/K2Icons'
 import { Button } from '@/components/ui/Button'
 import { effectiveKeybinding, formatKeyCombo } from '@shared/hotkeys'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { CALL_EXPAND_HOTKEY } from '@/lib/voice/call-view'
 import { useSettingsStore } from '@/stores/settings'
 import { expandCall, shrinkCall, useCallExpand } from '@/stores/call-expand'
-import { compactCallStage, expandCallStage } from '@/stores/call-place'
+import { floatCall } from '@/stores/call-place'
 import { popOutCall, useCallPopout } from '@/stores/call-popout'
 import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
 import CallBarWord from './CallBarWord'
@@ -104,14 +106,43 @@ export function PopOutButton({ testId }: { testId: string }): React.JSX.Element 
   )
 }
 
-/** Compact (the stage folds into the slim bar) or Expand (it opens again):
- *  one toggle, in words. `compact`: the stage is folded now. */
-export function CompactButton({ testId, compact }: { testId: string; compact: boolean }): React.JSX.Element {
-  const word = compact ? 'Expand' : 'Compact'
-  const title = compact ? 'Expand: show the call’s video here' : 'Compact: fold the call into a slim bar'
+/** Float, on the stage: the call goes back to following what it carries,
+ *  the floating tile with video (`video`), the top bar's slim bar without. */
+export function FloatButton({ testId, video }: { testId: string; video: boolean }): React.JSX.Element {
+  const title = video ? 'Float: the call in a small tile in a corner' : 'Float: the call back in the top bar'
   return (
-    <Button variant="quiet" data-testid={testId} aria-label={word} title={title} className="flex items-center" style={noDrag} onClick={() => (compact ? expandCallStage() : compactCallStage())}>
-      <CallBarWord icon={<ExpandIcon shrink={!compact} size={14} />} word={word} />
+    <Button variant="quiet" data-testid={testId} aria-label="Float" title={title} className="flex items-center" style={noDrag} onClick={floatCall}>
+      <CallBarWord icon={<ExpandIcon shrink size={14} />} word="Float" />
+    </Button>
+  )
+}
+
+/** Expand, on the top bar's slim bar: the call's stage in its place. `back`:
+ *  the stage is already the person's choice and only its conversation is
+ *  away, so it reads Back to call. */
+export function ExpandBarButton({ onPress, back = false }: { onPress: () => void; back?: boolean }): React.JSX.Element {
+  if (back) {
+    return (
+      <Button variant="quiet" data-testid="call-bar-back" aria-label="Back to call" title="Back to call: open the conversation the call is in" className="flex items-center" style={noDrag} onClick={onPress}>
+        <CallBarWord icon={<ArrowLeftIcon size={14} />} word="Back to call" />
+      </Button>
+    )
+  }
+  return (
+    <Button variant="quiet" data-testid="call-bar-expand" aria-label="Expand" title="Expand: show the call's stage in its place" className="flex items-center" style={noDrag} onClick={onPress}>
+      <CallBarWord icon={<ExpandIcon size={14} />} word="Expand" />
+    </Button>
+  )
+}
+
+/** Pop out, on the top bar's slim bar, in words. Nothing where the app
+ *  can't (the web client). */
+export function PopOutBarButton(): React.JSX.Element | null {
+  const available = useCallPopout((s) => s.available)
+  if (!available) return null
+  return (
+    <Button variant="quiet" data-testid="call-bar-popout" aria-label="Pop out" title="Pop out: the call in its own window" className="flex items-center" style={noDrag} onClick={() => void popOutCall()}>
+      <CallBarWord icon={<PopOutIcon size={14} />} word="Pop out" />
     </Button>
   )
 }

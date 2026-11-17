@@ -567,20 +567,20 @@ describe('video in the call (videoRoomsPreview)', () => {
     expect(screen.queryByTestId('video-demo-open')).toBeNull()
   })
 
-  it("with it on: Camera and Share screen in the call panel; the camera brings up the call's stage, and leaving takes it away", async () => {
+  it("with it on: Camera and Share screen in the call panel; the camera brings up the floating tile, and leaving takes it away", async () => {
     h.videoPreview = true
     await inCall()
     fireEvent.click(await screen.findByTestId('video-camera'))
-    // The window's call layer shows the stage; there is no floating tile.
-    const stage = await screen.findByTestId('video-stage')
-    expect(within(stage).getByTestId('video-tile').dataset.track).toBe('local:camera')
-    expect(screen.queryByTestId('call-tile')).toBeNull()
+    // The window's call layer floats the tile; the stage waits for Expand.
+    const tile = await screen.findByTestId('call-tile')
+    expect(within(tile).getByTestId('video-tile').dataset.track).toBe('local:camera')
+    expect(screen.queryByTestId('video-stage')).toBeNull()
     expect(screen.getAllByTestId('video-camera').map((b) => b.getAttribute('aria-label'))).toEqual(['Turn camera off'])
-    // The stage's controls sit on the call's bar.
-    expect(within(stage).getByTestId('call-control-bar').contains(within(stage).getByTestId('call-overlay-camera'))).toBe(true)
+    // The tile's controls sit on the call's bar.
+    expect(within(tile).getByTestId('call-control-bar').contains(within(tile).getByTestId('call-overlay-camera'))).toBe(true)
     expect(screen.getByTestId('video-demo-open')).toBeTruthy()
-    fireEvent.click(within(stage).getByTestId('call-overlay-leave'))
-    await waitFor(() => expect(screen.queryByTestId('video-stage')).toBeNull())
+    fireEvent.click(within(tile).getByTestId('call-overlay-leave'))
+    await waitFor(() => expect(screen.queryByTestId('call-tile')).toBeNull())
     expect(voice.store.getState().call).toBeNull()
   })
 

@@ -274,6 +274,21 @@ describe('the tiles', () => {
     expect(box.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it("a call's stage stays up with nobody's video on: everyone as their picture, or a line while nobody is listed", async () => {
+    const s = setup([])
+    const { rerender } = render(<VideoStage ctl={s.ctl} people={people} title="Standup" controls={<div />} />)
+    await ready(s)
+    const tiles = screen.getAllByTestId('video-tile')
+    expect(tiles.map((t) => within(t).getByTestId('video-tile-name').textContent)).toEqual(['Ada', 'Grace', 'Linus', 'You'])
+    for (const t of tiles) expect(t.dataset.state).toBe('off')
+    expect(within(tiles[0]).getByTestId('video-tile-avatar')).toBeTruthy()
+    rerender(<VideoStage ctl={s.ctl} people={[]} title="Standup" controls={<div />} />)
+    expect(screen.getByTestId('video-stage-no-video').textContent).toBe('No one has video on.')
+    // Anything that isn't a call's stage shows only while there is video.
+    rerender(<VideoStage ctl={s.ctl} people={people} title="Standup" />)
+    expect(screen.queryByTestId('video-stage')).toBeNull()
+  })
+
   it('one inset round the tiles in every layout: two tiles side by side keep it from the sides as one tile does', async () => {
     const s = setup([fakeTrack('7'), fakeTrack('8')])
     render(<VideoStage ctl={s.ctl} people={people} title="Standup" controls={<div />} />)

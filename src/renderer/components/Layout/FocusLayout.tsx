@@ -91,8 +91,8 @@ export default function FocusLayout({
         )}
 
         {/* Main content (terminal) */}
-        {/* A voice room call's stage sits at the top of the content, the page under it. */}
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {/* A voice room call's stage sits at the top of the content, the page under it; the floating call tile's corners are this area's. */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden" data-call-tile-area="">
           <RoomCallBand />
           <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
         </div>

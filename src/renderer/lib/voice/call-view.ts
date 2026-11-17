@@ -20,6 +20,11 @@ export function isCallExpandChord(e: KeyComboEventLike, keybindings: Record<stri
   return keyEventMatchesCombo(e, effectiveKeybinding(keybindings, CALL_EXPAND_HOTKEY, isMac))
 }
 
+/** Double-click window for the floating tile: a single click waits this
+ *  long before it expands the call (the stage), so a double-click can open
+ *  it full screen instead. */
+export const DOUBLE_CLICK_MS = 280
+
 // ── the call's own window ───────────────────────────────────────────
 
 export const CALL_WINDOW_LABEL = 'window-call'

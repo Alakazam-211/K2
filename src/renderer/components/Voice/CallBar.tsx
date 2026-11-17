@@ -1,18 +1,18 @@
-// The slim in-call bar: the call's name, its time and its controls (mute,
-// deafen, camera, share, leave), and one action that says where the call's
-// video goes (Expand, Back to call, Show call here, Back to chat). It is the
-// stage folded (Compact) at the top of the call's conversation, and the call
-// everywhere else in the app (the top bar). Never a box over the content.
+// The slim in-call bar in the top bar: the call's name, its time and its
+// controls (mute, deafen, camera, share, leave), and the actions that say
+// where the call goes from here (Expand or Back to call, Pop out, Show call
+// here, Back to chat). It is the whole call while the call is audio only, and
+// the call wherever its tile or stage isn't showing. In the top bar's flow,
+// never a box over the content.
 
 import { callTitle } from '@/lib/home-chat/call-names'
-import { callStartedAt } from '@/lib/voice/call-view'
 import { useSettingsStore } from '@/stores/settings'
 import { video } from '@/stores/video'
 import { voice } from '@/stores/voice'
 import type { VoiceCall } from '@/stores/voice-core'
-import CallControls, { CallControlBar } from './CallControls'
+import CallControls from './CallControls'
 import { useCallNoiseRemoval } from './CallLayer'
-import { useCallDuration } from './callHooks'
+import { useCallTime } from './callHooks'
 import { useCallPopout } from '@/stores/call-popout'
 import { useCallHomeIsCallWindow } from '@/stores/call-home'
 import { useCallBarFit } from './call-bar-fit'
@@ -20,25 +20,13 @@ import { useCallBarFit } from './call-bar-fit'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
 
-/** The call's time as every window counts it (from the earliest second any
- *  window saw it connect). Null while it connects. Every call timer draws it
- *  in the look's UI font with tabular figures (the system font in Glass, the
- *  code face in Terminal), as the words beside it are. */
-export function useCallTime(call: VoiceCall): string | null {
-  const startedAt = call.callId ? callStartedAt(call.callId, call.connectedAt) : call.connectedAt
-  return useCallDuration(startedAt)
-}
-
 export interface CallBarProps {
   call: VoiceCall
-  /** Where the call's video goes from here (a button), or nothing. */
+  /** Where the call goes from here (buttons), or nothing. */
   action?: React.ReactNode
-  /** `top`: in the top bar, no frame of its own; `dock`: at the top of the
-   *  call's conversation, ruled off from the messages below it. */
-  look: 'top' | 'dock'
 }
 
-export default function CallBar({ call, action, look }: CallBarProps): React.JSX.Element {
+export default function CallBar({ call, action }: CallBarProps): React.JSX.Element {
   const time = useCallTime(call)
   const noiseRemoval = useCallNoiseRemoval()
   const videoPreview = useSettingsStore((s) => s.videoRoomsPreview) === true
@@ -47,12 +35,11 @@ export default function CallBar({ call, action, look }: CallBarProps): React.JSX
   const poppedOut = useCallPopout((s) => s.open)
   const inItsWindow = useCallHomeIsCallWindow() || poppedOut
   const controls = <CallControls variant="topbar" call={call} actions={voice} video={videoPreview ? video : null} noiseRemoval={noiseRemoval} />
-  const frame = look === 'dock' ? 'border-b border-[var(--color-border)] px-4 py-1.5' : 'ml-0.5'
-  // In the top bar it folds before the top bar overflows (call-bar-fit).
-  const fit = useCallBarFit(look === 'top')
+  // It folds before the top bar overflows (call-bar-fit).
+  const fit = useCallBarFit(true)
   return (
-    <div ref={fit} role="region" aria-label={`In call: ${title}`} data-testid="call-bar" data-look={look} className={`flex min-w-0 items-center gap-2 text-[12px] ${frame}`} style={noDrag}>
-      <span data-testid="call-bar-title" data-call-bar-part="name" className={`min-w-0 truncate text-[var(--color-text-primary)] ${look === 'top' ? 'max-w-[160px]' : ''}`}>
+    <div ref={fit} role="region" aria-label={`In call: ${title}`} data-testid="call-bar" data-look="top" className="ml-0.5 flex min-w-0 items-center gap-2 text-[12px]" style={noDrag}>
+      <span data-testid="call-bar-title" data-call-bar-part="name" className="min-w-0 max-w-[160px] truncate text-[var(--color-text-primary)]">
         {title}
       </span>
       <span data-testid="call-bar-time" data-call-bar-part="time" className="text-[11px] tabular-nums text-[var(--color-text-secondary)]">
@@ -63,13 +50,7 @@ export default function CallBar({ call, action, look }: CallBarProps): React.JSX
           In its own window
         </span>
       ) : null}
-      {look === 'dock' ? <span className="flex-1" /> : null}
-      {look === 'dock' ? (
-        // On the call's bar, as the stage's controls are.
-        <CallControlBar className="py-1">{controls}</CallControlBar>
-      ) : (
-        controls
-      )}
+      {controls}
       {action}
     </div>
   )

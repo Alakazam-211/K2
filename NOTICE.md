@@ -312,6 +312,7 @@ vendored with `git subtree`.
 | **What** | `vendor/k2-mpc-base` (sessions, presence, store, disk sync, history, blame, erasure, text tools, parity, the export contract, the structure index, comments and claims by node), with its own `NOTICE.md` and `CHANGELOG.md`; and its JS client `k2-mpc-client` 0.21.0 (`vendor/k2-mpc-base/client/src`: the library under the app's Live editor, `src/renderer/components/LiveEditor`) |
 | **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-base`, tag `v0.21.0` (`9e6f641`; crate version `0.21.0`, client `0.21.0`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
+| **Local changes** | Windows fixes on top of `v0.21.0`, all upstream on the kit's main for its next tag: random keys come from RtlGenRandom on Windows, which has no `/dev/urandom` (`8cff1ff8b9`); a folder's fsync is unix-only (`0fa01fc14d`); a chunked blob's segment folder and a compacted segment sync through `sync_dir` too (`03d3be3c01`) |
 
 Its Rust dependencies, in K2's `Cargo.lock`:
 

@@ -112,7 +112,9 @@ fn the_limits_are_on_before_the_first_input_byte_is_read() {
         want("nofile", format!("{0}/{0}", k2_deckrender::sandbox::NOFILE));
         want("cpu", format!("{cpu}/{}", cpu + 1));
     }
-    if cfg!(target_os = "linux") {
+    // An attribute, not `if cfg!`: libc has no SIGKILL on Windows.
+    #[cfg(target_os = "linux")]
+    {
         let as_cap = limits.memory_bytes + host::ADDRESS_SPACE_HEADROOM;
         want("as", format!("{as_cap}/{as_cap}"));
         want("no_new_privs", "1".into());

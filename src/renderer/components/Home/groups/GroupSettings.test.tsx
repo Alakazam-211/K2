@@ -91,34 +91,10 @@ describe('the list pane', () => {
     expect(detail().getAttribute('data-group-detail')).toBe('g3')
   })
 
-  it('a drag drops a group onto another’s place', () => {
-    const p = props()
-    render(<GroupEditModal {...p} />)
-    fireEvent.dragStart(row('g3'))
-    fireEvent.dragOver(row('g1'))
-    fireEvent.drop(row('g1'))
-    expect(p.onReorderGroups).toHaveBeenLastCalledWith(['g3', 'g1', 'g2'])
+  // Dragging a row: group-list-drag.test.tsx.
+  it('moveId moves one id to a new index', () => {
     expect(moveId(['a', 'b', 'c'], 0, 2)).toEqual(['b', 'c', 'a'])
-  })
-
-  it('a drag opens a gap the row’s height where it will land, not a line over a row', () => {
-    const p = props()
-    render(<GroupEditModal {...p} />)
-    fireEvent.dragStart(row('g3'))
-    // Its own place: no gap.
-    fireEvent.dragOver(row('g3'))
-    expect(document.querySelector('[data-group-drop-gap]')).toBeNull()
-    fireEvent.dragOver(row('g1'))
-    const gap = document.querySelector('[data-group-drop-gap]') as HTMLElement
-    expect(gap.nextElementSibling).toBe(row('g1'))
-    expect(gap.style.height).toBe('34px')
-    expect(gap.getAttribute('aria-hidden')).toBe('true')
-    expect(document.querySelector('[data-group-drop-line]')).toBeNull()
-    // Dropped on the gap itself, it lands there.
-    fireEvent.dragOver(gap)
-    fireEvent.drop(gap)
-    expect(p.onReorderGroups).toHaveBeenLastCalledWith(['g3', 'g1', 'g2'])
-    expect(document.querySelector('[data-group-drop-gap]')).toBeNull()
+    expect(moveId(['a', 'b', 'c'], 2, 0)).toEqual(['c', 'a', 'b'])
   })
 })
 

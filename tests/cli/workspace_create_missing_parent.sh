@@ -13,13 +13,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  PASS: $*"; }
 
 [ -x "$K2" ] || fail "$K2 not executable"
-bash -n "$K2" || fail "bash -n cli/k2"
+bash -n "$CLI_BASH_SOURCE" || fail "bash -n cli/k2"
 
 SANDBOX="$(mktemp -d -t k2-ws-create-parent-XXXXXX)"
 SANDBOX="$(cd "$SANDBOX" && pwd)"
@@ -35,7 +35,7 @@ trap cleanup EXIT
 
 echo "== cli_abs_path =="
 FN="$SANDBOX/fn.sh"
-python3 - "$K2" "$FN" <<'PY'
+python3 - "$CLI_BASH_SOURCE" "$FN" <<'PY'
 import pathlib, re, sys
 src = pathlib.Path(sys.argv[1]).read_text()
 m = re.search(r'^cli_abs_path\(\) \{\n.*?^\}\n', src, re.M | re.S)

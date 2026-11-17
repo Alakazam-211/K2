@@ -13,7 +13,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -40,7 +40,7 @@ if not used:
     sys.exit("found no M_* reads in the _mail_py heredoc")
 print(" ".join(sorted(used - exported)))
 PY
-python3 "$WORK/audit.py" "$K2" >"$WORK/missing"
+python3 "$WORK/audit.py" "$CLI_BASH_SOURCE" >"$WORK/missing"
 missing="$(cat "$WORK/missing")"
 [ -z "$missing" ] || fail "_mail_py reads but does not export: $missing"
 

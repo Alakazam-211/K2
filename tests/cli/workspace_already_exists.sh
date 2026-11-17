@@ -5,16 +5,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [ -x "$K2" ] || fail "$K2 not executable"
-bash -n "$K2" || fail "bash -n cli/k2"
+bash -n "$CLI_BASH_SOURCE" || fail "bash -n cli/k2"
 
 # Helper must exist; open + create must use it (not dump raw JSON at exit 0).
-grep -q '^cli_print_or_fail()' "$K2" || fail "cli_print_or_fail helper missing"
-python3 - "$K2" <<'PY' || exit 1
+grep -q '^cli_print_or_fail()' "$CLI_BASH_SOURCE" || fail "cli_print_or_fail helper missing"
+python3 - "$CLI_BASH_SOURCE" <<'PY' || exit 1
 import pathlib, re, sys
 src = pathlib.Path(sys.argv[1]).read_text()
 def body(name):

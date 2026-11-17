@@ -12,12 +12,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 
 [ -f "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found" >&2; exit 1; }
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not executable" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "FAIL: python3 is required" >&2; exit 1; }
-bash -n "$K2_CLI" || { echo "FAIL: bash -n cli/k2" >&2; exit 1; }
+bash -n "$CLI_BASH_SOURCE" || { echo "FAIL: bash -n cli/k2" >&2; exit 1; }
 
 # Never inherit a live session's socket or identity.
 for v in $(compgen -e | grep -E '^(K2|K2SO)_' || true); do unset "$v"; done

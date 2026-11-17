@@ -5,29 +5,29 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [ -f "$K2" ] || fail "$K2 not found"
-bash -n "$K2" || fail "bash -n cli/k2"
+bash -n "$CLI_BASH_SOURCE" || fail "bash -n cli/k2"
 
 # k2 mail list stays inbox catalog — do not add list to moved-to-hostmail.
-if grep -E 'create\|status\|domain\|doctor\|config\|approvals\|spam\|queue\|acl\|autoconfig\|list\)' "$K2" | grep -q 'moved to'; then
+if grep -E 'create\|status\|domain\|doctor\|config\|approvals\|spam\|queue\|acl\|autoconfig\|list\)' "$CLI_BASH_SOURCE" | grep -q 'moved to'; then
     # The redirect line must include spam|queue|acl|autoconfig and must NOT include list.
     :
 fi
 # The moved-to-hostmail case for list must not exist as a mail-family redirect.
 # `k2 mail list` is cmd_mail_inboxes.
-grep -q 'list)        shift 2; cmd_mail_inboxes' "$K2" || fail "k2 mail list must still be cmd_mail_inboxes"
+grep -q 'list)        shift 2; cmd_mail_inboxes' "$CLI_BASH_SOURCE" || fail "k2 mail list must still be cmd_mail_inboxes"
 
 # The `k2 mail` moved-to-hostmail redirect case must cover
 # spam|queue|acl|autoconfig and must not steal `list`. 95de3056 gave them
 # their own `spam|queue|acl|autoconfig)` arm; 7926a0db folded every moved
 # verb into ONE case arm, so check that arm's label, not a literal string.
-python3 - "$K2" <<'PY' || fail "k2 mail spam|queue|acl|autoconfig must redirect to hostmail, and list must not"
+python3 - "$CLI_BASH_SOURCE" <<'PY' || fail "k2 mail spam|queue|acl|autoconfig must redirect to hostmail, and list must not"
 import re, sys
 text = open(sys.argv[1]).read()
 arms = re.findall(r"^\s*([a-z|-]+)\)\n\s*_mail_err \"usage\" \"'k2 mail \$\{2\}' moved to 'k2 hostmail \$\{2\}'", text, re.M)
@@ -83,7 +83,7 @@ acl_help="$("$K2" hostmail acl --help)"
 <<<"$acl_help" grep -q 'mail access' || fail "acl help must mention k2 mail access is separate: $acl_help"
 
 # Python helper exports new env.
-grep -q 'M_MEMBERS="${M_MEMBERS:-}"' "$K2" || fail "_mail_py must export M_MEMBERS"
-grep -q 'M_SENDER="${M_SENDER:-}"' "$K2" || fail "_mail_py must export M_SENDER"
+grep -q 'M_MEMBERS="${M_MEMBERS:-}"' "$CLI_BASH_SOURCE" || fail "_mail_py must export M_MEMBERS"
+grep -q 'M_SENDER="${M_SENDER:-}"' "$CLI_BASH_SOURCE" || fail "_mail_py must export M_SENDER"
 
 echo "OK: hostmail next CLI parser (list/spam/queue/acl/autoconfig); k2 mail list still inboxes"

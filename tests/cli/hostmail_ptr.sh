@@ -4,20 +4,20 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [ -f "$K2" ] || fail "$K2 not found"
-bash -n "$K2" || fail "bash -n cli/k2"
+bash -n "$CLI_BASH_SOURCE" || fail "bash -n cli/k2"
 
 # Subcommand + routes.
-grep -q 'cmd_hostmail_ptr' "$K2" || fail "cmd_hostmail_ptr missing"
-grep -A30 'verb == "ptr_show"' "$K2" | grep -q '/cli/mail/ptr' \
+grep -q 'cmd_hostmail_ptr' "$CLI_BASH_SOURCE" || fail "cmd_hostmail_ptr missing"
+grep -A30 'verb == "ptr_show"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/ptr' \
   || fail "ptr_show must GET /cli/mail/ptr"
-grep -A20 'verb == "ptr_set"' "$K2" | grep -q '/cli/mail/ptr/set' \
+grep -A20 'verb == "ptr_set"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/ptr/set' \
   || fail "ptr_set must POST /cli/mail/ptr/set"
 
 # Help + schema mention ptr.
@@ -60,7 +60,7 @@ set -e
 <<<"$out" grep -q "hostmail" || fail "k2 mail ptr must point at k2 hostmail ($out)"
 
 # CLI keeps TCP for mail (quota pattern) — _uds_eligible omits /cli/mail/.
-if grep -A40 '_uds_eligible()' "$K2" | grep -q '/cli/mail'; then
+if grep -A40 '_uds_eligible()' "$CLI_BASH_SOURCE" | grep -q '/cli/mail'; then
   fail "_uds_eligible must not glob /cli/mail (ptr stays TCP like quota)"
 fi
 

@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "FAIL: python3 is required to parse the schema" >&2; exit 1; }
@@ -31,7 +31,7 @@ ok()  { echo "  PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
 
 echo "== bash -n =="
-if bash -n "$K2_CLI"; then ok "bash -n cli/k2"; else bad "bash -n cli/k2"; fi
+if bash -n "$CLI_BASH_SOURCE"; then ok "bash -n cli/k2"; else bad "bash -n cli/k2"; fi
 
 for form in "--schema" "schema" "--schema json"; do
     echo "== k2 $form =="
@@ -54,7 +54,7 @@ for form in "--schema" "schema" "--schema json"; do
 
     # Parse the WHOLE output and check its shape and pinned strings.
     set +e
-    py_out="$(python3 - "$out" "$K2_CLI" <<'PY' 2>&1
+    py_out="$(python3 - "$out" "$CLI_BASH_SOURCE" <<'PY' 2>&1
 import json, re, sys
 
 out_path, cli_path = sys.argv[1], sys.argv[2]

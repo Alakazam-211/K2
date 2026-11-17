@@ -7,7 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 
 [ -f "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found" >&2; exit 1; }
 
@@ -15,9 +15,9 @@ FN="$(awk '
     /^_feedback_detect_session\(\)/ { grab=1 }
     grab { print }
     grab && /^}/ { exit }
-' "$K2_CLI")"
+' "$CLI_BASH_SOURCE")"
 
-[ -n "$FN" ] || { echo "FAIL: could not extract _feedback_detect_session from $K2_CLI" >&2; exit 1; }
+[ -n "$FN" ] || { echo "FAIL: could not extract _feedback_detect_session from $CLI_BASH_SOURCE" >&2; exit 1; }
 <<<"$FN" grep -q 'FB_SESSION_KIND="sandbox"' && {
     echo "FAIL: legacy sandbox stamp still present in _feedback_detect_session" >&2
     exit 1

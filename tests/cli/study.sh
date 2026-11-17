@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 K2="$K2_CLI"
 
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
@@ -708,8 +708,8 @@ assert_contains "human page: cards stay open while people talk" "$human_out" "CA
 assert_contains "human page: prose is not the answer" "$human_out" "never close it and are never its answer"
 assert_contains "human page: withdraw your own obsolete card" "$human_out" "k2 thread withdraw <addr> <card-id>"
 assert_contains "human page: cards have a time frame" "$human_out" "--expires 2h|3d"
-assert_contains "schema: --expires flag" "$(grep -F '"name": "thread",' -A20 "$K2_CLI")" '"name": "--expires"'
-assert_contains "thread schema mentions pushes" "$(grep -F '"name": "thread",' -A2 "$K2_CLI")" "k2 study notifications"
+assert_contains "schema: --expires flag" "$(grep -F '"name": "thread",' -A20 "$CLI_BASH_SOURCE")" '"name": "--expires"'
+assert_contains "thread schema mentions pushes" "$(grep -F '"name": "thread",' -A2 "$CLI_BASH_SOURCE")" "k2 study notifications"
 
 echo "== k2 study projects (0.45.6 Manage K2 projects) =="
 pj_out="$("$K2" study projects)"
@@ -952,7 +952,7 @@ if [ "$tv_lines" -le 100 ]; then echo "  PASS: tauri-voice is bounded ($tv_lines
 assert_contains "catalog: tauri-voice row" "$("$K2" study)" "  tauri-voice         Calls in a Tauri window"
 assert_contains "app-deploys: static Apps" "$("$K2" study app-deploys)" "STATIC APPS (0.46.7: a built site, no server)"
 assert_contains "usage lists app-runtime" "$("$K2" study --help)" "app-resources  app-runtime"
-assert_contains "k2 app help points at the page" "$(grep -F 'Re-hosts explained: k2 study app-runtime.' "$K2_CLI" || true)" "k2 study app-runtime"
+assert_contains "k2 app help points at the page" "$(grep -F 'Re-hosts explained: k2 study app-runtime.' "$CLI_BASH_SOURCE" || true)" "k2 study app-runtime"
 
 echo "== k2 study chat-voice + chat-voice-rooms (Sew's embedding guide, K2 0.46.7) =="
 cv_out="$("$K2" study chat-voice)"
@@ -1113,7 +1113,7 @@ assert_contains "unknown verb connection error" "$unknown_verb_out" "Cannot conn
 assert_eq "k2 help is not daemon-optional" "$help_gate_rc" "1"
 
 echo "== schema mentions study =="
-assert_contains "schema usage" "$(grep -F 'k2 study [list' "$K2_CLI" || true)" "k2 study [list|<topic>|--json]"
+assert_contains "schema usage" "$(grep -F 'k2 study [list' "$CLI_BASH_SOURCE" || true)" "k2 study [list|<topic>|--json]"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

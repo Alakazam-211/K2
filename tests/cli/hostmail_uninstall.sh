@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
@@ -40,10 +40,10 @@ if grep -q daemon_unreachable "$out"; then
     fail "uninstall without flags must not POST: $(cat "$out")"
 fi
 
-if ! grep -q 'body={"purgeData": True, "confirmHostname": hostname}' "$K2"; then
+if ! grep -q 'body={"purgeData": True, "confirmHostname": hostname}' "$CLI_BASH_SOURCE"; then
     fail "k2 hostmail uninstall must POST purgeData and confirmHostname"
 fi
-if ! grep -q '/cli/mail/server/uninstall' "$K2"; then
+if ! grep -q '/cli/mail/server/uninstall' "$CLI_BASH_SOURCE"; then
     fail "k2 hostmail uninstall must target /cli/mail/server/uninstall"
 fi
 

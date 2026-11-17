@@ -5,39 +5,39 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [ -f "$K2" ] || fail "$K2 not found"
-bash -n "$K2" || fail "bash -n cli/k2"
+bash -n "$CLI_BASH_SOURCE" || fail "bash -n cli/k2"
 
-grep -q 'M_TEXT="${M_TEXT:-}"' "$K2" || fail "_mail_py must export M_TEXT"
-grep -q 'M_DAYS="${M_DAYS:-}"' "$K2" || fail "_mail_py must export M_DAYS"
-grep -q 'M_UNTIL="${M_UNTIL:-}"' "$K2" || fail "_mail_py must export M_UNTIL"
+grep -q 'M_TEXT="${M_TEXT:-}"' "$CLI_BASH_SOURCE" || fail "_mail_py must export M_TEXT"
+grep -q 'M_DAYS="${M_DAYS:-}"' "$CLI_BASH_SOURCE" || fail "_mail_py must export M_DAYS"
+grep -q 'M_UNTIL="${M_UNTIL:-}"' "$CLI_BASH_SOURCE" || fail "_mail_py must export M_UNTIL"
 
-if ! grep -A30 'verb == "ooo_set"' "$K2" | grep -q '/cli/mail/ooo'; then
+if ! grep -A30 'verb == "ooo_set"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/ooo'; then
     fail "ooo_set must POST /cli/mail/ooo"
 fi
-if ! grep -A20 'verb == "ooo_unset"' "$K2" | grep -q '/cli/mail/ooo/unset'; then
+if ! grep -A20 'verb == "ooo_unset"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/ooo/unset'; then
     fail "ooo_unset must POST /cli/mail/ooo/unset"
 fi
-if ! grep -A20 'verb == "ooo_get"' "$K2" | grep -q '/cli/mail/ooo'; then
+if ! grep -A20 'verb == "ooo_get"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/ooo'; then
     fail "ooo_get must GET /cli/mail/ooo"
 fi
-if ! grep -A20 'verb == "footer_set"' "$K2" | grep -q '/cli/mail/footer'; then
+if ! grep -A20 'verb == "footer_set"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/footer'; then
     fail "footer_set must POST /cli/mail/footer"
 fi
-if ! grep -A20 'verb == "footer_unset"' "$K2" | grep -q '/cli/mail/footer/unset'; then
+if ! grep -A20 'verb == "footer_unset"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/footer/unset'; then
     fail "footer_unset must POST /cli/mail/footer/unset"
 fi
 
-if grep -A40 'verb == "ooo_set"' "$K2" | grep -q 'VacationResponse'; then
+if grep -A40 'verb == "ooo_set"' "$CLI_BASH_SOURCE" | grep -q 'VacationResponse'; then
     fail "ooo must not call VacationResponse"
 fi
-if grep -A40 'verb == "ooo_set"' "$K2" | grep -q 'x:SieveScript'; then
+if grep -A40 'verb == "ooo_set"' "$CLI_BASH_SOURCE" | grep -q 'x:SieveScript'; then
     fail "ooo must not call x:SieveScript"
 fi
 

@@ -8,7 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
@@ -21,7 +21,7 @@ fails=0
 bad() { echo "FAIL: $*" >&2; fails=$((fails + 1)); }
 
 # The table itself, straight from cli/k2.
-block="$(sed -n '/^# BEGIN_RETIRED_VERBS$/,/^# END_RETIRED_VERBS$/p' "$K2_CLI")"
+block="$(sed -n '/^# BEGIN_RETIRED_VERBS$/,/^# END_RETIRED_VERBS$/p' "$CLI_BASH_SOURCE")"
 [ -n "$block" ] || { echo "FAIL: no BEGIN/END_RETIRED_VERBS block in cli/k2" >&2; exit 1; }
 eval "$block"
 [ "${#_K2_RETIRED_VERBS[@]}" -gt 0 ] || { echo "FAIL: the retired-verb table is empty" >&2; exit 1; }

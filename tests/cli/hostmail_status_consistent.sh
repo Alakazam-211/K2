@@ -10,7 +10,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 
 [ -f "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found" >&2; exit 1; }
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not executable" >&2; exit 1; }
@@ -236,13 +236,13 @@ assert_absent "enable no EACCES" "$out" "Permission denied"
 
 echo "== help + study explain consistent / systemd / disable =="
 # C18: `k2 hostmail status --help` is leaf help. Group help is `k2 hostmail --help`.
-help_out="$(sed -n '/^cmd_help_mail_status() {$/,/^}$/p' "$K2_CLI")"
-[ -n "$help_out" ] || { echo "FAIL: cmd_help_mail_status() not found in $K2_CLI" >&2; exit 1; }
+help_out="$(sed -n '/^cmd_help_mail_status() {$/,/^}$/p' "$CLI_BASH_SOURCE")"
+[ -n "$help_out" ] || { echo "FAIL: cmd_help_mail_status() not found in $CLI_BASH_SOURCE" >&2; exit 1; }
 assert_contains "status help consistent" "$help_out" "consistent: false"
 assert_contains "status help systemd" "$help_out" "systemctl is-active stalwart"
 assert_contains "status help disable" "$help_out" "until \`k2 hostmail enable\`"
 assert_contains "status help helper" "$help_out" "installed | missing | not allowed by sudoers"
-enable_help="$(sed -n '/^cmd_help_hostmail_enable() {$/,/^}$/p' "$K2_CLI")"
+enable_help="$(sed -n '/^cmd_help_hostmail_enable() {$/,/^}$/p' "$CLI_BASH_SOURCE")"
 assert_contains "enable help helper" "$enable_help" "install-root-helper.sh"
 assert_contains "enable help code" "$enable_help" "mail_helper_missing"
 # Through the stub env: the CLI connection gate needs a port + token even

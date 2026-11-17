@@ -710,9 +710,10 @@ fi
 # The CLI runs as the daemon user with a clean env (k2_as_daemon_user: the
 # owner token from its own ~/.k2/daemon.token, never an agent's). State is
 # read from `k2 hostchat status --json` (its last line). In order:
-#   1. identity check: NEVER converts an existing Sew. Not installed →
-#      install it; identity k2 → skip 2–3; any other identity (e.g.
-#      standalone) → stop: changing it is a migration, not provisioning.
+#   1. identity check: NEVER converts an existing Sew. state not-installed
+#      → install it; identity k2 → skip 2–3; any other state with another
+#      identity (e.g. degraded + standalone) → stop: that is a migration.
+#      Unreadable status → stop (never guess).
 #   2. hostchat preflight → first line `ready`
 #   3. hostchat enable --identity k2 (20 min). No --tarball: enable
 #      downloads the Sew release THIS K2 pins (sha256 built into K2), never
@@ -736,9 +737,18 @@ sew_die() { # <step> [output file]: print the step's output, stop provisioning
 	[ -z "${2:-}" ] || { cat "$2" >&2; rm -f "$2"; }
 	die "sew step failed: $1 — provisioning stopped. Fix it and re-run this script (idempotent), or run as ${K2_RUN_USER}: k2 hostchat doctor"
 }
-# The last line of `k2 hostchat status --json`, "" when it has none.
-sew_status() { k2_as_daemon_user hostchat status --json 2>/dev/null | tail -n1 || true; }
-# sew_field <status json> <dotted.path>: the field, "" when missing/unreadable.
+# sew_load_status: SEW_ST = the last line of `k2 hostchat status --json`.
+# A failed or timed-out call, or a last line that is not a JSON object,
+# stops provisioning: never guess whether Sew is installed (a guess could
+# run enable over an existing Sew). Re-read after every mutating step.
+sew_load_status() {
+	local _rc=0
+	SEW_ST="$(K2_CLI_TIMEOUT=2m k2_as_daemon_user hostchat status --json 2>/dev/null | tail -n1)" || _rc=$?
+	{ [ "$_rc" = 0 ] && python3 -I -c 'import json,sys
+sys.exit(0 if isinstance(json.loads(sys.argv[1]), dict) else 1)' "$SEW_ST" 2>/dev/null; } \
+		|| sew_die "hostchat status --json unreadable; refusing to guess whether Sew is installed"
+}
+# sew_field <status json> <dotted.path>: the field, "" when missing/null.
 sew_field() {
 	python3 -I -c 'import json,sys
 try: d=json.loads(sys.argv[1])
@@ -768,14 +778,19 @@ elif [ "${ROOT_HELPER_MODE:-}" != "root" ]; then
 else
 	SEW_OUT=$(mktemp)
 	log "Sew [1/7]: identity check"
-	SEW_ST="$(sew_status)"
+	# Sew is "not installed" ONLY when status says state not-installed
+	# (K2 0.46.14: installedVersion/identityProvider null, pinnedVersion set).
+	# Any other state (installed, degraded, …) without identity k2 is an
+	# existing Sew: refuse (e.g. sewlab: degraded + standalone).
+	sew_load_status
+	SEW_STATE="$(sew_field "$SEW_ST" state)"
 	SEW_INST="$(sew_field "$SEW_ST" installedVersion)"
 	SEW_IDP="$(sew_field "$SEW_ST" identityProvider)"
-	if [ -n "$SEW_INST" ] && [ "$SEW_IDP" != "k2" ]; then
+	if [ "$SEW_STATE" != "not-installed" ] && [ "$SEW_IDP" != "k2" ]; then
 		sew_die "Sew is installed with identity ${SEW_IDP:-unknown}; changing it is a migration, not a provisioning step"
 	fi
-	if [ -n "$SEW_INST" ]; then
-		log "Sew [2-3/7]: Sew ${SEW_INST} already installed with identity k2 — preflight and enable skipped"
+	if [ "$SEW_STATE" != "not-installed" ]; then
+		log "Sew [2-3/7]: Sew ${SEW_INST:-?} already installed with identity k2 (state ${SEW_STATE:-?}) — preflight and enable skipped"
 	else
 		log "Sew [2/7]: hostchat preflight"
 		k2_as_daemon_user hostchat preflight >"$SEW_OUT" 2>&1 || true
@@ -783,7 +798,7 @@ else
 		log "Sew [3/7]: hostchat enable --identity k2 (K2's pinned Sew)"
 		sew_timed 20m "20 min" "hostchat enable --identity k2" hostchat enable --identity k2
 	fi
-	SEW_ST="$(sew_status)"
+	sew_load_status
 	[ "$(sew_field "$SEW_ST" identityProvider)" = "k2" ] \
 		|| sew_die "hostchat enable (status identityProvider is '$(sew_field "$SEW_ST" identityProvider)', not k2)"
 	SEW_INST="$(sew_field "$SEW_ST" installedVersion)"
@@ -799,6 +814,7 @@ else
 	else
 		sew_timed 30m "30 min" "hostchat backup" hostchat backup
 		grep -q '"id"' "$SEW_OUT" || sew_die "hostchat backup (no backup id in its output)" "$SEW_OUT"
+		sew_load_status
 	fi
 	log "Sew [5/7]: hostchat media install (voice)"
 	if [ "$(sew_field "$SEW_ST" voice.state)" = "running" ]; then
@@ -806,7 +822,8 @@ else
 	else
 		sew_timed 15m "15 min" "hostchat media install" hostchat media install
 	fi
-	[ "$(sew_field "$(sew_status)" voice.state)" = "running" ] \
+	sew_load_status
+	[ "$(sew_field "$SEW_ST" voice.state)" = "running" ] \
 		|| sew_die "hostchat media install (status voice.state is not running)"
 	log "Sew [6/7]: settings homeChat + voiceRoomsPreview true"
 	k2_as_daemon_user settings set homeChat true >"$SEW_OUT" 2>&1 \

@@ -89,12 +89,17 @@ rd() { cat "$S/$1" 2>/dev/null || true; }
 case "$*" in
 	"hostchat status --json")
 		echo "Sew status (fake)"
+		[ -z "${FAKE_STATUS_RAW+x}" ] || { printf '%b' "$FAKE_STATUS_RAW"; exit "${FAKE_STATUS_RC:-0}"; }
+		# Shapes as K2 0.46.14 prints them: not-installed has null
+		# installedVersion/identityProvider and the pin.
 		python3 -I -c 'import json,sys
-inst,idp,voice,age,pin=sys.argv[1:6]
-d={"ok":True,"pinnedVersion":pin,"voice":{"state":voice or "stopped"},"backup":{}}
-if inst: d["installedVersion"]=inst; d["identityProvider"]=idp
+inst,idp,voice,age,pin,state=sys.argv[1:7]
+d={"state":"not-installed","ok":True,"installedVersion":None,"pinnedVersion":pin,
+   "identityProvider":None,"voice":{"state":voice or "stopped"},"backup":{}}
+if inst: d.update(state=state or "running", installedVersion=inst, identityProvider=idp)
 if age: d["backup"]={"ageMs":int(age),"lastOkAt":"2026-11-17T00:00:00Z","lastId":"b0"}
-print(json.dumps(d))' "$(rd installed)" "$(rd identity)" "$(rd voice)" "$(rd backup-age)" "${FAKE_PINNED-0.10.3}" ;;
+print(json.dumps(d))' "$(rd installed)" "$(rd identity)" "$(rd voice)" "$(rd backup-age)" "${FAKE_PINNED-0.10.3}" "$(rd state)"
+		exit "${FAKE_STATUS_RC:-0}" ;;
 	"hostchat preflight") printf '%b' "${FAKE_PREFLIGHT-ready\nall checks pass\n}" ;;
 	"hostchat enable --identity k2")
 		[ "${FAIL_ENABLE:-0}" = 1 ] && { echo "enable boom" >&2; exit 3; }
@@ -130,6 +135,7 @@ run_step() { # <box>; PRE_INSTALLED=<ver> PRE_IDENTITY PRE_VOICE=1 PRE_BACKUP_AG
 	rm -rf "$FAKE_STATE"; mkdir -p "$FAKE_STATE"; : >"$FAKE_STATE/calls.log"
 	if [ -n "${PRE_INSTALLED:-}" ]; then
 		echo "$PRE_INSTALLED" >"$FAKE_STATE/installed"; echo "${PRE_IDENTITY:-k2}" >"$FAKE_STATE/identity"
+		[ -z "${PRE_STATE:-}" ] || echo "$PRE_STATE" >"$FAKE_STATE/state"
 	fi
 	[ "${PRE_VOICE:-0}" = 1 ] && echo running >"$FAKE_STATE/voice"
 	[ -n "${PRE_BACKUP_AGE:-}" ] && echo "$PRE_BACKUP_AGE" >"$FAKE_STATE/backup-age"
@@ -154,11 +160,16 @@ settings set homeChat true
 settings set voiceRoomsPreview true
 hostchat doctor --json"
 [ "$(mutating)" = "$want" ] || fail "call order: $(mutating)"
+<<<"$out" grep -q 'Sew \[2/7\]: hostchat preflight' || fail "state not-installed must run preflight + enable: $out"
+ok "status state not-installed (null installedVersion/identityProvider) → preflight + enable run"
 ok "preflight → enable → backup (before media) → media install → homeChat → voiceRoomsPreview → doctor"
-[ "$(cat "$FAKE_STATE/timeouts.log")" = "20m hostchat enable --identity k2
+[ "$(grep -v ' hostchat status --json$' "$FAKE_STATE/timeouts.log")" = "20m hostchat enable --identity k2
 30m hostchat backup
 15m hostchat media install" ] || fail "time limits: $(cat "$FAKE_STATE/timeouts.log")"
 ok "enable 20m, backup 30m, media install 15m"
+[ "$(<<<"$calls" grep -c '^hostchat status --json$')" -eq 4 ] || fail "status must be re-read after enable, backup and media: $calls"
+grep -q '^2m hostchat status --json$' "$FAKE_STATE/timeouts.log" || fail "status reads must be time-bounded"
+ok "status read at start and re-read after enable, backup and media install (2m bound)"
 <<<"$out" grep -q 'installedVersion 0.10.3 pinnedVersion 0.10.3' || fail "version log: $out"
 <<<"$out" grep -q 'SUMMARY=installed (Sew 0.10.3, identity k2, voice running, home-chat-v1, voice-rooms-v1)' || fail "summary: $out"
 ok "logs installed/pinned version; summary names Sew version, identity, voice and features"
@@ -182,6 +193,28 @@ PRE_INSTALLED=0.10.3 PRE_IDENTITY=standalone run_step std
 <<<"$out" grep -q 'Sew is installed with identity standalone; changing it is a migration, not a provisioning step' || fail "standalone message: $out"
 [ -z "$(mutating)" ] || fail "nothing may run on a standalone Sew: $(mutating)"
 ok "standalone Sew: stops before preflight/enable, with the migration message"
+PRE_INSTALLED=0.10.3 PRE_IDENTITY=standalone PRE_STATE=degraded run_step std2
+[ "$rc" -ne 0 ] && <<<"$out" grep -q 'Sew is installed with identity standalone; changing it is a migration' || fail "degraded standalone: $out"
+[ -z "$(mutating)" ] || fail "nothing may run on a degraded standalone Sew: $(mutating)"
+ok "state degraded + standalone (sewlab): refusal"
+FAKE_STATUS_RAW='{"state":"degraded","ok":false,"installedVersion":null,"identityProvider":null}\n' run_step std3
+[ "$rc" -ne 0 ] && <<<"$out" grep -q 'changing it is a migration' || fail "installed-state with no identity must refuse: $out"
+[ -z "$(mutating)" ] || fail "nothing may run: $(mutating)"
+ok "any state other than not-installed without identity k2: refusal"
+
+echo "== unreadable status: never guess, stop before enable =="
+for raw in 'Error: daemon busy\n' '' 'Sew status\n[1,2]\n'; do
+	FAKE_STATUS_RAW="$raw" run_step unr
+	[ "$rc" -ne 0 ] || fail "unreadable status ($raw) must stop: $out"
+	<<<"$out" grep -q 'sew step failed: hostchat status --json unreadable; refusing to guess whether Sew is installed' || fail "message ($raw): $out"
+	[ -z "$(mutating)" ] || fail "nothing may run after an unreadable status ($raw): $(mutating)"
+done
+FAKE_STATUS_RC=1 run_step unr2
+[ "$rc" -ne 0 ] && <<<"$out" grep -q 'hostchat status --json unreadable' || fail "a failing status must stop: $out"
+[ -z "$(mutating)" ] || fail "nothing may run after a failed status: $(mutating)"
+FAKE_HANG="hostchat status --json" run_step unr3
+[ "$rc" -ne 0 ] && <<<"$out" grep -q 'hostchat status --json unreadable' || fail "a timed-out status must stop: $out"
+ok "non-JSON / empty / non-object / failed / timed-out status stops before preflight and enable"
 
 echo "== not Pro: voice-rooms-v1 missing is a NOTE, not a failure =="
 FAKE_BOOT='{"features":["home-chat-v1"]}' run_step box3

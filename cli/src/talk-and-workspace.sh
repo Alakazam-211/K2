@@ -873,7 +873,7 @@ print(json.dumps({
     "notes": notes,
     "model": os.environ.get("SWAP_MODEL", ""),
 }))
-' | curl -sS -X POST "${BASE_URL}/cli/workspace/swap-canonical?token=$(urlencode "$auth_token")" \
+' | _k2_curl "" -sS -X POST "${BASE_URL}/cli/workspace/swap-canonical?token=$(urlencode "$auth_token")" \
         --connect-timeout 5 --max-time 120 \
         -H "Content-Type: application/json" \
         --data-binary @- 2>/dev/null) || rc=$?

@@ -227,7 +227,7 @@ _vault_sock_call() {
         out="$(_k2_curl "" -s -G --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
             -H "X-K2-Tty: ${tty}" --connect-timeout 5 --max-time 180 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     else
-        out="$(printf '%s' "$payload" | curl -s -X POST --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
+        out="$(printf '%s' "$payload" | _k2_curl "" -s -X POST --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
             -H "X-K2-Tty: ${tty}" -H "Content-Type: application/json" --data-binary @- \
             --connect-timeout 5 --max-time 180 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     fi

@@ -116,10 +116,11 @@ _migrate_send() {
     [ -t 0 ] && [ -t 1 ] && tty="1"
     [ -t 0 ] && [ -t 2 ] && tty="1"
     if [ "$method" = "GET" ]; then
-        out="$(curl -s -G --unix-socket "$(_vault_sock)" "http://localhost/cli/migrate/secrets/${route}" \
+        # One try, as before (_k2_curl would retry a refused connect).
+        out="$(_K2_CURL_TRIES=1 _k2_curl "" -s -G --unix-socket "$(_vault_sock)" "http://localhost/cli/migrate/secrets/${route}" \
             -H "X-K2-Tty: ${tty}" --connect-timeout 5 --max-time 600 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     else
-        out="$(printf '%s' "$payload" | curl -s -X POST --unix-socket "$(_vault_sock)" "http://localhost/cli/migrate/secrets/${route}" \
+        out="$(printf '%s' "$payload" | _k2_curl "" -s -X POST --unix-socket "$(_vault_sock)" "http://localhost/cli/migrate/secrets/${route}" \
             -H "X-K2-Tty: ${tty}" -H "Content-Type: application/json" --data-binary @- \
             --connect-timeout 5 --max-time 600 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     fi

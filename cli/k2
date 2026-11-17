@@ -1555,7 +1555,9 @@ cli_post_json_stdin() {
     local url="${BASE_URL}${endpoint}?token=${TOKEN}"
     url="${url//\\/\\\\}"
     url="${url//\"/\\\"}"
-    curl -s -K /dev/fd/3 -X POST \
+    # _k2_curl with no config: its stdin is the body, so the URL stays on
+    # fd 3. A body read from stdin is never retried.
+    _k2_curl "" -s -K /dev/fd/3 -X POST \
         --connect-timeout 5 --max-time 30 \
         -H "Content-Type: application/json" \
         --data-binary @- 2>/dev/null 3<<<"url = \"${url}\""
@@ -7231,7 +7233,7 @@ print(json.dumps({
     "notes": notes,
     "model": os.environ.get("SWAP_MODEL", ""),
 }))
-' | curl -sS -X POST "${BASE_URL}/cli/workspace/swap-canonical?token=$(urlencode "$auth_token")" \
+' | _k2_curl "" -sS -X POST "${BASE_URL}/cli/workspace/swap-canonical?token=$(urlencode "$auth_token")" \
         --connect-timeout 5 --max-time 120 \
         -H "Content-Type: application/json" \
         --data-binary @- 2>/dev/null) || rc=$?
@@ -37049,7 +37051,7 @@ _vault_sock_call() {
         out="$(_k2_curl "" -s -G --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
             -H "X-K2-Tty: ${tty}" --connect-timeout 5 --max-time 180 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     else
-        out="$(printf '%s' "$payload" | curl -s -X POST --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
+        out="$(printf '%s' "$payload" | _k2_curl "" -s -X POST --unix-socket "$(_vault_sock)" "http://localhost/cli/vault/${route}" \
             -H "X-K2-Tty: ${tty}" -H "Content-Type: application/json" --data-binary @- \
             --connect-timeout 5 --max-time 180 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     fi
@@ -40180,10 +40182,11 @@ _migrate_send() {
     [ -t 0 ] && [ -t 1 ] && tty="1"
     [ -t 0 ] && [ -t 2 ] && tty="1"
     if [ "$method" = "GET" ]; then
-        out="$(curl -s -G --unix-socket "$(_vault_sock)" "http://localhost/cli/migrate/secrets/${route}" \
+        # One try, as before (_k2_curl would retry a refused connect).
+        out="$(_K2_CURL_TRIES=1 _k2_curl "" -s -G --unix-socket "$(_vault_sock)" "http://localhost/cli/migrate/secrets/${route}" \
             -H "X-K2-Tty: ${tty}" --connect-timeout 5 --max-time 600 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     else
-        out="$(printf '%s' "$payload" | curl -s -X POST --unix-socket "$(_vault_sock)" "http://localhost/cli/migrate/secrets/${route}" \
+        out="$(printf '%s' "$payload" | _k2_curl "" -s -X POST --unix-socket "$(_vault_sock)" "http://localhost/cli/migrate/secrets/${route}" \
             -H "X-K2-Tty: ${tty}" -H "Content-Type: application/json" --data-binary @- \
             --connect-timeout 5 --max-time 600 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     fi

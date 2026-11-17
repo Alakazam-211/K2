@@ -1119,7 +1119,9 @@ cli_post_json_stdin() {
     local url="${BASE_URL}${endpoint}?token=${TOKEN}"
     url="${url//\\/\\\\}"
     url="${url//\"/\\\"}"
-    curl -s -K /dev/fd/3 -X POST \
+    # _k2_curl with no config: its stdin is the body, so the URL stays on
+    # fd 3. A body read from stdin is never retried.
+    _k2_curl "" -s -K /dev/fd/3 -X POST \
         --connect-timeout 5 --max-time 30 \
         -H "Content-Type: application/json" \
         --data-binary @- 2>/dev/null 3<<<"url = \"${url}\""

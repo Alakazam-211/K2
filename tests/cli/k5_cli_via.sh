@@ -6,12 +6,18 @@
 #                       Unset, empty or any other value: no request does.
 #                       The Connect control plane is not the daemon: the
 #                       CLI's own call to it never carries the header.
+#                       The calls that once ran curl themselves (the
+#                       stdin-body POST, swap-canonical, the migrate and
+#                       vault calls on vault.sock) carry it too, and
+#                       nothing else about them changes: same request, same
+#                       curl argv but for the header.
 #   K5_CLI_NOTICE_DONE  set non-empty: _K5_NOTICE_DONE=1, where the k2-to-k5
 #                       notice will look. Empty or unset: it stays empty.
 #
-# A python stub daemon (TCP + a real Unix socket) logs, per request, the
-# transport, the path and the X-K5-Cli-Via values it got. Nothing else is
-# logged (no tokens). No live K2, HOME is a temp dir.
+# A python stub daemon (TCP, a cell socket and vault.sock) logs, per
+# request, the transport, method, path, the X-K5-Cli-Via values and a
+# digest of the rest (headers it reads, body hash, whether a token came).
+# No token values are logged. No live K2, HOME is a temp dir.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -26,9 +32,11 @@ fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
 
-WORK="$(mktemp -d -t k2-k5-via-XXXXXX)"
-# A short socket path: sun_path is ~104 bytes on macOS.
+# Short paths: sun_path is ~104 bytes on macOS, and vault.sock lives in
+# $HOME/.k2.
+WORK="$(mktemp -d /tmp/k2kv-XXXXXX)"
 SOCK="/tmp/k2kv-$$.sock"
+VSOCK="$WORK/home/.k2/vault.sock"
 STUB_PID=""
 cleanup() {
     [ -n "${STUB_PID:-}" ] && kill "$STUB_PID" 2>/dev/null || true
@@ -41,20 +49,26 @@ echo "owner-test-token" >"$WORK/home/.k2/heartbeat.token"
 chmod 600 "$WORK/home/.k2/heartbeat.token"
 : >"$WORK/requests.log"
 
-python3 - "$WORK" "$SOCK" <<'PY' &
-import json, os, socketserver, sys, threading, urllib.parse
+python3 - "$WORK" "$SOCK" "$VSOCK" <<'PY' &
+import hashlib, json, os, socketserver, sys, threading, urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
-work, sock_path = sys.argv[1], sys.argv[2]
+work, sock_path, vsock_path = sys.argv[1], sys.argv[2], sys.argv[3]
 class H(BaseHTTPRequestHandler):
     transport = "tcp"
     def _go(self):
         n = int(self.headers.get("Content-Length", 0) or 0)
-        if n:
-            self.rfile.read(n)
+        body = self.rfile.read(n) if n else b""
+        u = urllib.parse.urlparse(self.path)
         rec = {
             "transport": self.transport,
-            "path": urllib.parse.urlparse(self.path).path,
+            "method": self.command,
+            "path": u.path,
             "via": self.headers.get_all("X-K5-Cli-Via") or [],
+            "content_type": self.headers.get("Content-Type") or "",
+            "tty": self.headers.get("X-K2-Tty") or "",
+            "has_token": "token" in urllib.parse.parse_qs(u.query),
+            "has_auth": bool(self.headers.get("Authorization")),
+            "body_sha": hashlib.sha256(body).hexdigest(),
         }
         with open(os.path.join(work, "requests.log"), "a") as f:
             f.write(json.dumps(rec) + "\n")
@@ -80,12 +94,17 @@ class H(BaseHTTPRequestHandler):
 class U(H):
     transport = "uds"
     def address_string(self): return "uds"
+class V(H):
+    transport = "vault"
+    def address_string(self): return "vault"
 class UnixHTTP(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
 class TcpHTTP(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
 us = UnixHTTP(sock_path, U)
 threading.Thread(target=us.serve_forever, daemon=True).start()
+vs = UnixHTTP(vsock_path, V)
+threading.Thread(target=vs.serve_forever, daemon=True).start()
 srv = TcpHTTP(("127.0.0.1", 0), H)
 with open(os.path.join(work, "stub.port"), "w") as f:
     f.write(str(srv.server_address[1]))
@@ -93,8 +112,8 @@ srv.serve_forever()
 PY
 STUB_PID=$!
 disown "$STUB_PID" 2>/dev/null || true
-for _ in $(seq 1 100); do [ -s "$WORK/stub.port" ] && [ -S "$SOCK" ] && break; sleep 0.05; done
-[ -s "$WORK/stub.port" ] && [ -S "$SOCK" ] || { echo "FAIL: stub never bound" >&2; exit 1; }
+for _ in $(seq 1 100); do [ -s "$WORK/stub.port" ] && [ -S "$SOCK" ] && [ -S "$VSOCK" ] && break; sleep 0.05; done
+[ -s "$WORK/stub.port" ] && [ -S "$SOCK" ] && [ -S "$VSOCK" ] || { echo "FAIL: stub never bound" >&2; exit 1; }
 PORT="$(cat "$WORK/stub.port")"
 
 # Never inherit a session, or a K5_ name, from the caller.
@@ -168,6 +187,91 @@ clean_env K5_CLI_VIA=rust K2_CONNECT_BASE="http://127.0.0.1:${PORT}" "$K2_CLI" p
 expect "the daemon's proxy route gets the header" tcp /cli/connect/proxy fallthrough
 expect "the control plane does not" tcp /subdomains -
 rm -f "$WORK/home/.k2/tunnel.json"
+
+echo "== the calls that once ran curl themselves =="
+# A curl shim first on PATH logs each argv (bash %q, one call per line),
+# then runs the real curl.
+REAL_CURL="$(command -v curl)"
+mkdir -p "$WORK/shim"
+cat >"$WORK/shim/curl" <<SHIM
+#!/usr/bin/env bash
+printf '%q ' "\$@" >>'$WORK/argv.log'
+echo >>'$WORK/argv.log'
+exec '$REAL_CURL' "\$@"
+SHIM
+chmod +x "$WORK/shim/curl"
+HDR_ARGV="$(printf '%q ' -H "X-K5-Cli-Via: fallthrough")"
+# An owner terminal: no session, so the vault calls go to vault.sock.
+owner_shim() { clean_env PATH="$WORK/shim:$PATH" "$@"; }
+# site_run <tag> <stdin> <transport> <path> <argv match> <cmd…>: run once,
+# keep the matching requests (via split off) and curl argvs.
+site_run() {
+    local tag="$1" input="$2" transport="$3" path="$4" match="$5"; shift 5
+    : >"$WORK/requests.log"; : >"$WORK/argv.log"
+    printf '%s' "$input" | owner_shim "$@" >/dev/null 2>&1 || true
+    python3 - "$WORK/requests.log" "$transport" "$path" "$WORK/$tag" <<'PY'
+import json, sys
+log, transport, path, out = sys.argv[1:5]
+rows = [json.loads(l) for l in open(log)]
+hits = [r for r in rows if r["transport"] == transport and r["path"] == path]
+with open(out + ".via", "w") as f:
+    for r in hits:
+        f.write((",".join(r.pop("via")) or "-") + "\n")
+with open(out + ".req", "w") as f:
+    for r in hits:
+        f.write(json.dumps(r, sort_keys=True) + "\n")
+PY
+    grep -F -- "$match" "$WORK/argv.log" >"$WORK/$tag.argv" || true
+}
+# site <label> <stdin> <transport> <path> <argv match> <max-time> <cmd…>
+site() {
+    local label="$1" input="$2" transport="$3" path="$4" match="$5" mt="$6"; shift 6
+    site_run off "$input" "$transport" "$path" "$match" "$@"
+    site_run on "$input" "$transport" "$path" "$match" K5_CLI_VIA=rust "$@"
+    if [ ! -s "$WORK/off.req" ] || [ ! -s "$WORK/off.argv" ]; then
+        bad "$label: no request or no curl argv seen ($(tail -2 "$WORK/requests.log" | tr '\n' ' '))"
+        return
+    fi
+    if [ -z "$(grep -vx -- - "$WORK/off.via")" ]; then
+        ok "$label: no header when VIA is unset"
+    else
+        bad "$label: a header without VIA ($(tr '\n' ' ' <"$WORK/off.via"))"
+    fi
+    if [ -s "$WORK/on.via" ] && [ -z "$(grep -vx fallthrough "$WORK/on.via")" ]; then
+        ok "$label: X-K5-Cli-Via: fallthrough with VIA=rust"
+    else
+        bad "$label: with VIA=rust got '$(tr '\n' ' ' <"$WORK/on.via")'"
+    fi
+    if cmp -s "$WORK/off.req" "$WORK/on.req"; then
+        ok "$label: the request is otherwise the same"
+    else
+        bad "$label: the request changed ($(diff "$WORK/off.req" "$WORK/on.req" | tr '\n' ' '))"
+    fi
+    local want_on
+    want_on="$(while IFS= read -r l; do printf '%s%s\n' "$HDR_ARGV" "$l"; done <"$WORK/off.argv")"
+    if [ "$want_on" = "$(cat "$WORK/on.argv")" ]; then
+        ok "$label: curl argv is the same but for the header"
+    else
+        bad "$label: curl argv changed (off: $(cat "$WORK/off.argv") on: $(cat "$WORK/on.argv"))"
+    fi
+    if grep -qF -- "--max-time $mt " "$WORK/off.argv"; then
+        ok "$label: still --max-time $mt"
+    else
+        bad "$label: --max-time $mt missing ($(cat "$WORK/off.argv"))"
+    fi
+}
+site "cli_post_json_stdin (agent instances hire)" '{"team":"acme"}' tcp /cli/agent-instances/hire "-K /dev/fd/3" 30 \
+    "$K2_CLI" agent instances hire -
+site "workspace swap-canonical" "" tcp /cli/workspace/swap-canonical "swap-canonical" 120 \
+    "$K2_CLI" workspace swap-canonical "$WORK/proj" --agent claude
+site "migrate GET on vault.sock (migrate status)" "" vault /cli/migrate/secrets/status "/cli/migrate/secrets/status" 600 \
+    "$K2_CLI" migrate status
+site "migrate POST on vault.sock (import-secrets begin)" "" vault /cli/migrate/secrets/begin "/cli/migrate/secrets/begin" 600 \
+    "$K2_CLI" migrate import-secrets begin
+site "vault POST on vault.sock (recovery show-once)" "" vault /cli/vault/recovery/show-once "/cli/vault/recovery/show-once" 180 \
+    "$K2_CLI" vault recovery show-once
+site "vault GET on vault.sock (confirm-password set)" "" vault /cli/vault/status "/cli/vault/status" 180 \
+    "$K2_CLI" vault confirm-password set
 
 echo "== _K5_NOTICE_DONE and _K5_CLI_VIA, from bash's trace =="
 # traced <var> <env…>: the value the prelude gave <var>.

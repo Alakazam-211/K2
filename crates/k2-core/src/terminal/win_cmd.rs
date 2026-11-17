@@ -65,6 +65,10 @@ pub fn resolve_for_pty(
 ) -> (String, Vec<String>) {
     let dirs = split_search_dirs(path);
     let Some(found) = find_on_path(program, &dirs, pathext, &exists) else {
+        // A cmd.exe built-in (`echo`, `dir`…) is no file on PATH: cmd.exe runs it.
+        if is_cmd_builtin(program) {
+            return (comspec.to_string(), cmd_builtin_args(program, args));
+        }
         return (program.to_string(), args.to_vec());
     };
     if is_batch(&found) {
@@ -88,6 +92,33 @@ fn is_batch(path: &Path) -> bool {
 /// `cmd /d /s /c "path" arg…` — `/d` skips AutoRun; `/s` keeps quotes.
 fn cmd_c_args(batch: &Path, args: &[String]) -> Vec<String> {
     let mut payload = format!("\"{}\"", batch.display());
+    for a in args {
+        payload.push(' ');
+        if needs_cmd_quotes(a) {
+            payload.push('"');
+            payload.push_str(&a.replace('"', "\\\""));
+            payload.push('"');
+        } else {
+            payload.push_str(a);
+        }
+    }
+    vec!["/d".into(), "/s".into(), "/c".into(), payload]
+}
+
+/// cmd.exe's own commands: they are in cmd.exe, not files a spawn can find.
+const CMD_BUILTINS: &[&str] = &[
+    "assoc", "break", "call", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir", "echo", "erase", "ftype",
+    "md", "mkdir", "mklink", "move", "path", "pause", "popd", "prompt", "pushd", "rd", "ren", "rename", "rmdir", "set",
+    "start", "time", "title", "type", "ver", "verify", "vol",
+];
+
+fn is_cmd_builtin(program: &str) -> bool {
+    !program.contains(['/', '\\', '.']) && CMD_BUILTINS.iter().any(|b| b.eq_ignore_ascii_case(program))
+}
+
+/// `cmd /d /s /c "echo a b"` for a built-in and its arguments.
+fn cmd_builtin_args(program: &str, args: &[String]) -> Vec<String> {
+    let mut payload = program.to_string();
     for a in args {
         payload.push(' ');
         if needs_cmd_quotes(a) {
@@ -306,6 +337,22 @@ mod tests {
         let only: HashSet<_> = [dir.join("lonely")].into_iter().collect();
         let (prog, _) = resolve_for_pty("lonely", &[], &dir.to_string_lossy(), ".EXE;.CMD", "cmd.exe", exists_in(&only));
         assert_eq!(prog, "lonely");
+    }
+
+    #[test]
+    fn a_cmd_builtin_runs_through_cmd_exe() {
+        let files: HashSet<PathBuf> = HashSet::new();
+        let (prog, args) = resolve_for_pty("echo", &["hello".into(), "two words".into()], r"C:\empty", ".EXE;.CMD", "cmd.exe", exists_in(&files));
+        assert_eq!(prog, "cmd.exe");
+        assert_eq!(args, vec!["/d", "/s", "/c", "echo hello \"two words\""]);
+        // A real program of that name on PATH wins, as in cmd.exe itself.
+        let files: HashSet<PathBuf> = [PathBuf::from(r"C:\tools\echo.exe")].into_iter().collect();
+        let (prog, _) = resolve_for_pty("echo", &[], r"C:\tools", ".EXE;.CMD", "cmd.exe", exists_in(&files));
+        assert_eq!(prog, r"C:\tools\echo.exe");
+        // A path is never a built-in.
+        let none: HashSet<PathBuf> = HashSet::new();
+        let (prog, _) = resolve_for_pty(r".\echo", &[], r"C:\empty", ".EXE", "cmd.exe", exists_in(&none));
+        assert_eq!(prog, r".\echo");
     }
 
     #[test]

@@ -5,7 +5,7 @@
 // goes to the daemon's switch for this chat only. Its states have words.
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 
 const h = vi.hoisted(() => {
@@ -114,7 +114,7 @@ describe('the composer’s /model', () => {
 
   it('lists the server default first, this harness’s models, and checks the current one', async () => {
     renderBar()
-    const chip = await screen.findByTestId('compose-model-chip')
+    const chip = await screen.findByTestId('compose-model')
     expect(chip.textContent).toBe('Haiku 5.5')
     fireEvent.click(chip)
     await screen.findByTestId('compose-model-picker')
@@ -126,12 +126,10 @@ describe('the composer’s /model', () => {
     expect(checked[0].querySelector('[data-testid="compose-model-picker-check"]')).not.toBeNull()
   })
 
-  it('the chip stays away while the chat is on the server default', async () => {
+  it('the composer names the model on the server default too', async () => {
     h.options.current = 'opus'
     renderBar()
-    await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith('sessions/model/options', { session_id: 'sess-1' }))
-    await act(async () => {})
-    expect(screen.queryByTestId('compose-model-chip')).toBeNull()
+    expect((await screen.findByTestId('compose-model')).textContent).toBe('Opus 5.5')
   })
 
   it('a refused switch says why under the composer, and nothing changes', async () => {
@@ -140,14 +138,14 @@ describe('the composer’s /model', () => {
       return { ok: true }
     })
     renderBar()
-    const chip = await screen.findByTestId('compose-model-chip')
+    const chip = await screen.findByTestId('compose-model')
     fireEvent.click(chip)
     const search = await screen.findByTestId('compose-model-picker-search')
     fireEvent.change(search, { target: { value: 'sonnet' } })
     fireEvent.keyDown(search, { key: 'Enter' })
     const err = await screen.findByTestId('compose-model-error')
     expect(err.textContent).toContain('mid-turn')
-    expect(screen.getByTestId('compose-model-chip').textContent).toBe('Haiku 5.5')
+    expect(screen.getByTestId('compose-model').textContent).toBe('Haiku 5.5')
   })
 })
 

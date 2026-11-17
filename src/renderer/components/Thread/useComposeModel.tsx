@@ -1,11 +1,12 @@
-// The composer's model controls (0.46.13): `/model` opens the picker, and a
-// quiet chip names the chat's model when it isn't the server default. The
-// switch is the daemon's (`POST /cli/sessions/model`): this chat only, live,
+// The composer's model controls: `/model` opens the picker, and the
+// composer names the chat's model, server default included
+// (ComposeModelButton, left of the stash button while the box is empty).
+// The switch is the daemon's (`POST /cli/sessions/model`): this chat only, live,
 // the CLI's saved default put back; the daemon writes the Thread note.
 
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
-import { checkedModelRow, modelLabel, modelPickerRows, showModelChip } from '@/lib/model-choices'
+import { checkedModelRow, composeModelId, modelPickerRows } from '@/lib/model-choices'
 import { fetchSessionModelOptions, switchSessionModel, type SessionModelOptions } from '@/lib/session-model-api'
 import { MODEL_PICKER_WORDS, ModelPicker } from './ModelPicker'
 
@@ -14,8 +15,11 @@ export interface ComposeModel {
   open: (query: string) => void
   /** The portalled picker, while open. */
   picker: JSX.Element | null
-  /** The chip, when the chat isn't on the server default. */
-  chip: JSX.Element | null
+  /** The model the composer names (server default included); null for a
+   *  shell, or until K2 knows. */
+  model: string | null
+  /** Open the picker beside `anchor` (the model control). */
+  openFrom: (anchor: HTMLElement) => void
   /** A switch that failed, in words (shown under the composer). */
   error: string | null
   clearError: () => void
@@ -116,24 +120,11 @@ export function useComposeModel(input: {
       />
     )
 
-  const current = opts?.current ?? null
-  const chip =
-    opts && opts.switchable && showModelChip(current, opts.serverDefault) && current ? (
-      <button
-        type="button"
-        data-testid="compose-model-chip"
-        data-k2-focus=""
-        className="k2-focus inline-flex items-center gap-1 self-start rounded-[var(--radius-pill)] border border-[var(--color-border)] px-2 py-0.5 type-hint text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-        title="Model for this chat (click to change)"
-        aria-label={`Model for this chat: ${modelLabel(current)}. Change`}
-        onClick={(e) => {
-          setError(null)
-          setOpenAt({ query: '', anchor: e.currentTarget })
-        }}
-      >
-        {modelLabel(current)}
-      </button>
-    ) : null
+  const model = opts ? composeModelId(opts) : null
+  const openFrom = useCallback((anchor: HTMLElement) => {
+    setError(null)
+    setOpenAt({ query: '', anchor })
+  }, [])
 
-  return { open, picker, chip, error, clearError: () => setError(null) }
+  return { open, picker, model, openFrom, error, clearError: () => setError(null) }
 }

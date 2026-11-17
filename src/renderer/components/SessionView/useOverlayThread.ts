@@ -116,6 +116,8 @@ import { peekThreadView, readThreadView, saveThreadView, type CachedThreadView }
 import { newestSeq as cacheCursor } from './threadCacheMerge'
 import { markThreadOpen } from './chatCatchup'
 import { readThreadFirstPage } from './threadRead'
+import { clearThreadTypist, noteThreadTyping, parseThreadTypingFrame, registerThreadTypingSocket } from '@/lib/thread-typing'
+import { parseThreadAuthor } from '@/lib/thread-viewer'
 import {
   kickOutbox,
   loadOutbox,
@@ -341,6 +343,16 @@ export function useOverlayThread(opts: {
         viewingRef.current && windowIsLookedAt() && scope.serverSupports('thread-push-v1'),
     })
     viewingSenderRef.current = viewingSender
+    // Typing in this Thread rides this socket both ways (lib/thread-typing).
+    const releaseTyping = registerThreadTypingSocket(scope.hostKey, () => addrRef.current, (frame) => {
+      if (!ws || ws.readyState !== 1) return false
+      try {
+        ws.send(frame)
+        return true
+      } catch {
+        return false
+      }
+    })
 
     /** The address now points at another conversation (the pinned Chat
      *  changed): this socket is on the old one. Start over. */
@@ -522,12 +534,20 @@ export function useOverlayThread(opts: {
             setTurn((prev) => applyActivityCatchUp(prev, { turn: frame.activity ?? null }, receivedAt))
             return
           }
+          const typing = parseThreadTypingFrame(frame)
+          if (typing) {
+            noteThreadTyping(scope.hostKey, typing)
+            return
+          }
           if (frame.collection === 'activity') {
             activityFrames += 1
             const receivedAt = Date.now()
             setTurn((prev) => applyActivityFrame(prev, frame, receivedAt))
             return
           }
+          // A person's post ends their typing at once.
+          const author = frame.collection === 'thread' ? parseThreadAuthor(frame.doc?.author) : null
+          if (author) clearThreadTypist(scope.hostKey, addrRef.current, author.login)
           // A pushed row is provisional: never a cursor (threadCacheMerge).
           setItems((prev) => applyOverlayFrame(prev, frame, threadWindowFloor(prev, hasMoreRef.current), { provisional: true }))
         }
@@ -719,6 +739,7 @@ export function useOverlayThread(opts: {
     return () => {
       // Before the socket goes: `visible:false` while it can still be sent.
       viewingSender.dispose()
+      releaseTyping()
       if (viewingSenderRef.current === viewingSender) viewingSenderRef.current = null
       cancelled = true
       bootedConvRef.current = ''

@@ -2750,6 +2750,12 @@ html[data-style="terminal"] [data-k2-float-picture] { border: 1px solid var(--co
   margin-right: var(--k2-plate-mr);
 }
 [data-thread-view-identity][data-fit="snug"]:not([data-compact]) > [data-k2-float="name"] { padding-inline: 8px; }
+/* The chat's model in the composer (ComposeModelButton): quiet text, a fill
+   only while hovered or focused; square in Terminal. */
+[data-compose-model] { border-radius: var(--radius-field); transition: background-color var(--motion-duration-fast) var(--motion-ease-out-soft), color var(--motion-duration-fast) var(--motion-ease-out-soft); }
+[data-compose-model="zen"]:is(:hover, :focus-visible) { background: color-mix(in srgb, currentColor 12%, transparent) !important; color: var(--zen-text) !important; }
+[data-compose-model="square"]:is(:hover, :focus-visible) { background: var(--color-bg-hover) !important; color: var(--color-text-primary) !important; }
+html[data-style="terminal"] [data-compose-model], [data-compose-model="square"] { border-radius: 0; }
 [data-thread-view-identity][data-fit="snug"][data-compact] > [data-k2-float="name"] { padding-right: 8px; }
 /* Terminal: the name's object starts on the objects' bottom edge, so where
    it reaches under one the two share that hairline (the joined bar below). */

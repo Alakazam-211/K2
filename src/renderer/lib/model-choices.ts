@@ -49,6 +49,12 @@ export function modelLabel(id: string): string {
   return LABELS[id]?.name ?? id
 }
 
+/** The model's family ("Opus" for Opus 5.5): its name's first word; an id
+ *  without a name shows as itself. */
+export function modelFamilyLabel(id: string): string {
+  return LABELS[id] ? LABELS[id].name.split(' ')[0] : id
+}
+
 export function modelNote(id: string): string | undefined {
   return LABELS[id]?.note
 }
@@ -98,10 +104,12 @@ export function checkedModelRow(rows: readonly ModelRow[], current: string | nul
   return rows.some((r) => r.value === cur) ? cur : ''
 }
 
-/** The composer's model chip shows only when the chat isn't on the server
- *  default (and K2 knows what it's on). */
-export function showModelChip(current: string | null | undefined, serverDefault: string | null | undefined): boolean {
-  const cur = current?.trim()
-  if (!cur) return false
-  return cur !== (serverDefault?.trim() ?? '')
+/** The model the composer names for a chat: the one it's on, else the
+ *  server default; none for a harness without models (a shell), or when K2
+ *  knows neither. */
+export function composeModelId(o: { harness: string; current: string | null; serverDefault: string | null }): string | null {
+  // The answer is the daemon's: read each field only when it is a string.
+  const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+  if (!defaultModelHarness(binaryTokenFromCommand(text(o.harness)))) return null
+  return text(o.current) || text(o.serverDefault) || null
 }

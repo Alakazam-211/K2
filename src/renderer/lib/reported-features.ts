@@ -218,6 +218,11 @@ export const REPORTED_FEATURES = {
    *  the server's `homeChat` switch is on and Sew runs there. Home's Add
    *  picker offers Add a person, New channel and Add a channel only then. */
   'home-chat-v1': 'home-chat-v1',
+  /** Typing in agent Threads: the overlay socket carries `{"t":"typing",
+   *  "thread"}` from a person's composer and `collection: "typing"` frames
+   *  to the Thread's other readers. Without it the composer sends nothing
+   *  and the typing line under the box stays empty (lib/thread-typing). */
+  'thread-typing-v1': 'thread-typing-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

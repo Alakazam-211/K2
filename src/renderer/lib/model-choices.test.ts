@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checkedModelRow, defaultModelHarness, modelPickerRows, modelSuggestionsForAgent, showModelChip } from './model-choices'
+import { checkedModelRow, composeModelId, defaultModelHarness, modelFamilyLabel, modelPickerRows, modelSuggestionsForAgent } from './model-choices'
 
 describe('model choices (0.46.13)', () => {
   it('lists only this harness’s models', () => {
@@ -37,11 +37,21 @@ describe('model choices (0.46.13)', () => {
     expect(checkedModelRow(rows, null, 'opus')).toBe('')
   })
 
-  it('the chip shows only off the server default', () => {
-    expect(showModelChip('haiku', 'opus')).toBe(true)
-    expect(showModelChip('opus', 'opus')).toBe(false)
-    expect(showModelChip(null, 'opus')).toBe(false)
-    expect(showModelChip('opus', null)).toBe(true)
+  it('the composer names the model the chat is on, the server default included', () => {
+    expect(composeModelId({ harness: 'claude', current: 'haiku', serverDefault: 'opus' })).toBe('haiku')
+    expect(composeModelId({ harness: 'claude', current: 'opus', serverDefault: 'opus' })).toBe('opus')
+    expect(composeModelId({ harness: 'claude', current: null, serverDefault: 'opus' })).toBe('opus')
+    expect(composeModelId({ harness: 'claude', current: '  ', serverDefault: null })).toBeNull()
+  })
+
+  it('the composer names no model for a shell', () => {
+    expect(composeModelId({ harness: 'zsh', current: null, serverDefault: 'opus' })).toBeNull()
+  })
+
+  it('the family is the first word of the name', () => {
+    expect(modelFamilyLabel('opus')).toBe('Opus')
+    expect(modelFamilyLabel('haiku')).toBe('Haiku')
+    expect(modelFamilyLabel('gpt-5.3-codex')).toBe('gpt-5.3-codex')
   })
 
   it('maps CLI names to the settings keys', () => {

@@ -112,6 +112,9 @@ import {
 } from '@/components/Thread/ThreadZenKit'
 import { ThreadReplyChip, useThreadReply } from '@/components/Thread/ThreadMessageMenu'
 import { useComposeModel } from '@/components/Thread/useComposeModel'
+import { ComposeModelButton } from '@/components/Thread/ComposeModelButton'
+import { ThreadTypingSliver } from '@/components/Thread/ThreadTypingSliver'
+import { useThreadTyping, useThreadTypingSignal } from '@/lib/thread-typing'
 import { THREAD_EAR_INSET_PX, ThreadReplyBar } from '@/components/Thread/ThreadReplyBar'
 import { formatThreadReply, threadReplyKey } from '@/lib/thread-reply'
 import { isMacPlatform } from '@/lib/desktop-chrome'
@@ -328,6 +331,13 @@ export function TerminalComposeBar({
     anchor: () => barRef.current,
     refocus: () => textareaRef.current?.focus(),
   })
+  // Who else is typing in this agent's Thread (the sliver under the box),
+  // and this person's own typing, said on the Thread's socket.
+  const typingNames = useThreadTyping(scope, threadAddr)
+  const noteTyping = useThreadTypingSignal(scope, threadAddr)
+  // The sliver's row is kept in every agent chat (its box never moves);
+  // a bare terminal has no Thread and no sliver.
+  const typingRow = sessionChrome !== null
   const imagePaths = extractImagePathsFromDraft(draft)
   // Prompt stash (spec-prompt-stash-v1): the person's saved drafts on this
   // device. Cmd+S saves the draft, then clears the box; on an empty box it
@@ -1657,6 +1667,7 @@ export function TerminalComposeBar({
           return
         }
         setDraft(value)
+        noteTyping(value)
         const query = composeSlashTypeaheadQuery(value)
         if (query != null) {
           const matches = filterComposeSlashMenu(query)
@@ -1737,7 +1748,9 @@ export function TerminalComposeBar({
       <div
         ref={setBar}
         className="flex min-w-0 w-full flex-shrink-0 flex-col"
-        style={{ padding: '8px var(--zen-gap, 12px) var(--zen-gap, 12px)' }}
+        // Under the typing sliver the bar's own bottom gap shrinks: the
+        // sliver already keeps the box off the bar's edge.
+        style={{ padding: `8px var(--zen-gap, 12px) ${typingRow ? `${COMPOSE_SLIVER_FOOT_PX}px` : 'var(--zen-gap, 12px)'}` }}
         data-compose-bar=""
         data-zen-compose=""
         data-compose-look="zen"
@@ -1755,9 +1768,8 @@ export function TerminalComposeBar({
         <ThreadComposeBox
           stacked={stacked}
           chips={
-            hasChips || replyChip || composeModel.chip ? (
+            hasChips || replyChip ? (
               <>
-              {composeModel.chip}
               {replyChip}
               {hasChips ? (
               <ThreadAttachmentChips testId="compose-image-previews">
@@ -1839,6 +1851,9 @@ export function TerminalComposeBar({
             {textarea}
           </div>
           <ThreadComposeStackSpacer stacked={stacked} />
+          {composeEmpty && composeModel.model ? (
+            <ComposeModelButton model={composeModel.model} onOpen={composeModel.openFrom} look="zen" height={COMPOSE_TOOL.height} />
+          ) : null}
           {composeEmpty ? (
             <ThreadRoundButton
               label={stashButtonLabel(stashItems.length)}
@@ -1865,6 +1880,7 @@ export function TerminalComposeBar({
             size={COMPOSE_TOOL.height}
           />
         </ThreadComposeBox>
+        {typingRow ? <ThreadTypingSliver names={typingNames} look="zen" /> : null}
       </div>
     )
   }
@@ -1887,7 +1903,6 @@ export function TerminalComposeBar({
       {fileInput}
       {stashOpen ? stashDrawerEl('square') : null}
       {replyChip}
-      {composeModel.chip}
       <div
         className="flex min-w-0 w-full flex-col bg-[var(--color-bg)]"
         style={{ border: '1px solid var(--color-border)', borderRadius: 0 }}
@@ -1962,6 +1977,9 @@ export function TerminalComposeBar({
       <div className="relative min-w-0 flex-1">
       {textarea}
       </div>
+      {composeEmpty && composeModel.model ? (
+        <ComposeModelButton model={composeModel.model} onOpen={composeModel.openFrom} look="square" height={btnSize} marginBottom={btnNudge} />
+      ) : null}
       {composeEmpty ? (
         <StashSquareButton
           count={stashItems.length}
@@ -1994,6 +2012,7 @@ export function TerminalComposeBar({
       </button>
       </div>
       </div>
+      {typingRow ? <ThreadTypingSliver names={typingNames} look="square" /> : null}
     </div>
   )
 }
@@ -2008,6 +2027,9 @@ export function composeRowChromeWidth(): number {
 
 /** The Thread box's "+" / "/" spacing (px). `gap` is both visible gaps:
  *  the field's outer edge to the "+" ink, and the "+" ink to the "/" ink. */
+/** The Thread bar's bottom gap (px) under the typing sliver. */
+export const COMPOSE_SLIVER_FOOT_PX = 6
+
 export const COMPOSE_TOOL = {
   gap: 10,
   /** "+", "/" and Send are this tall (Send is this square): the one-line

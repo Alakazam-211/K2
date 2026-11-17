@@ -719,10 +719,23 @@ _k2_cq() {
     _K2_CQ="\"${s}\""
 }
 
+# Git Bash (Windows): curl there is a native Windows program. Git Bash
+# converts the paths in curl's argv, but not the ones in the config curl
+# reads from stdin, so a `data-binary = "@/tmp/…"` body file isn't found
+# (curl exit 26) unless it is spelled the Windows way (cygpath -w).
+_K2_CYGPATH=""
+case "${OSTYPE:-}" in
+    msys*|cygwin*) command -v cygpath >/dev/null 2>&1 && _K2_CYGPATH=1 ;;
+esac
+
 # _k2_cfg_add NAME VALUE — append `NAME = "VALUE"` to the caller's
 # `local _K2_CFG` (bash dynamic scope; no subshell).
 _k2_cfg_add() {
-    _k2_cq "$2"
+    local v="$2"
+    if [ -n "$_K2_CYGPATH" ] && [ "$1" = data-binary ] && [ "${v#@/}" != "$v" ]; then
+        v="@$(cygpath -w "${v#@}")"
+    fi
+    _k2_cq "$v"
     _K2_CFG="${_K2_CFG}${1} = ${_K2_CQ}"$'\n'
 }
 

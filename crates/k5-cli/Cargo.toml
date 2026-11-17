@@ -4,11 +4,15 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "The k5 command line in Rust, built piece by piece; so far the JSON reader and printer that writes the same bytes as Python's json.dumps. Std only."
+description = "The k5 command line in Rust, built piece by piece: the JSON printer and query escaping that write what the shell CLI's Python writes, and the name, settings and paths it resolves as the shell CLI does, through k2-client."
 
 [lib]
 path = "src/lib.rs"
 
-# No dependencies of any kind: the JSON printer has to match Python byte for
-# byte, and serde_json differs on numbers and key order.
+# The JSON printer has to match Python byte for byte, and serde_json differs
+# on numbers and key order, so it is our own. k2-client holds the one
+# registry of setting names, the brand's names and the K2 home's paths; the
+# CLI reads them there and keeps no copy. It is already in the workspace,
+# so Cargo.lock gains no crate.
 [dependencies]
+k2-client = { path = "../k2-client" }

@@ -439,6 +439,24 @@ describe('the newest message stays in view when the box grows', () => {
     expect(list.scrollTop).toBe(2000)
   })
 
+  it('a list that fit (nothing to scroll) keeps its newest message when the call stage takes its space', async () => {
+    await open()
+    const list = document.querySelector<HTMLElement>('[data-zen-conversation-body]')!
+    const box = { clientHeight: 757, scrollHeight: 2000 }
+    sized(list, box)
+    // Scrolled up earlier (a jump to an original), so not following.
+    list.scrollTop = 0
+    fireEvent.scroll(list)
+    // Now everything fits: no scroll event can say the list is at its end.
+    box.scrollHeight = 757
+    act(() => observed.get(list)!.forEach((cb) => cb()))
+    // The stage opens above: the list is 405px shorter.
+    box.clientHeight = 352
+    box.scrollHeight = 704
+    act(() => observed.get(list)!.forEach((cb) => cb()))
+    expect(list.scrollTop).toBe(704)
+  })
+
   it('leaves a reader who scrolled up where they are', async () => {
     await open()
     const list = document.querySelector<HTMLElement>('[data-zen-conversation-body]')!

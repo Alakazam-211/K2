@@ -1,10 +1,13 @@
 //! What the parity tests share: the shell CLI's source, read from the
-//! repo, and a way to run a piece of it under bash.
+//! repo, a way to run a piece of it under bash, and a logging stub
+//! daemon ([`stub`]).
 //!
 //! The source is `cli/src`, found from this crate's folder. It must be
 //! there: a test that can't read it fails, it never skips.
 
 #![allow(dead_code)]
+
+pub mod stub;
 
 use std::path::PathBuf;
 
@@ -30,6 +33,12 @@ pub fn shell_sources() -> Vec<(String, String)> {
     out.sort();
     assert!(out.len() > 50, "only {} files in {}: not the shell CLI's source", out.len(), dir.display());
     out
+}
+
+/// `cli/k2`, the built shell CLI (what the binary carries).
+pub fn cli_script() -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
 /// `cli/src/prelude.sh`.

@@ -57,6 +57,12 @@
 #   K2_SKIP_APPS       1 = skip step 8b (Apps (beta) box prep + App engine).
 #                      Default: a full provision prepares the box for walled
 #                      Apps and installs the App engine (0.46.3+ daemons).
+#   K2_SKIP_SEW        1 = skip step 9c (Sew chat + voice, Home chat, voice
+#                      rooms). Default: every full provision installs Sew
+#                      (identity k2) and voice, turns on homeChat and
+#                      voiceRoomsPreview, takes the first Sew backup and
+#                      requires a clean `k2 hostchat doctor`; any failure
+#                      stops provisioning before the callback.
 #   FRP_VERSION        frpc version (default 0.61.1 — MUST match the relay)
 #
 # Idempotent: re-running converges; existing users/units are updated,
@@ -689,6 +695,106 @@ if [ -n "${K2_OPS_USER:-}" ]; then
 		|| die "ops set-role owner failed"
 fi
 
+# ── 9c. Sew (chat + voice) + Home chat + voice rooms ───────────────
+# Every server gets Sew by default (Rosson, 2026-11-17: "Sew should be set
+# up by default for every server"). Runs after the daemon is ready (8),
+# the root helper is checked (7a; the Sew/voice install goes through it)
+# and the owner exists (9), and before the callback (10) flips the server
+# online, so a failure here is a provisioning failure, not a half-set box.
+# The CLI runs as the daemon user with a clean env (k2_as_daemon_user: the
+# owner token from its own ~/.k2/daemon.token, never an agent's). In order:
+#   1. hostchat preflight → first line `ready`
+#   2. hostchat enable --identity k2   (skipped if status shows identity: k2)
+#   3. hostchat media install          (skipped if voice: running), then
+#      voice must be running
+#   4. settings homeChat true
+#   5. settings voiceRoomsPreview true — without it the app joins a call
+#      but never starts voice
+#   6. hostchat backup (the first backup)
+#   7. hostchat doctor --json → verdict.failed must be []
+# then /boot-status must list home-chat-v1 (voice-rooms-v1 missing is only
+# a NOTE: voice rooms are Pro-only). K2 0.46.16 makes the daemon default
+# homeChat/voiceRoomsPreview ON once Sew is linked with identity k2; steps
+# 4–5 then become no-ops, but the Sew install stays a provisioning step
+# (it needs the root helper). Re-runnable: each step converges.
+# K2_SKIP_SEW=1 skips it. A legacy daemon (pre-root-helper) is skipped with
+# a line; any other failure stops provisioning (FAIL LOUD).
+SEW_LINE="skipped"
+sew_die() { # <step> [output file]: print the step's output, stop provisioning
+	[ -z "${2:-}" ] || { cat "$2" >&2; rm -f "$2"; }
+	die "sew step failed: $1 — provisioning stopped. Fix it and re-run this script (idempotent), or run as ${K2_RUN_USER}: k2 hostchat doctor"
+}
+sew_status() { k2_as_daemon_user hostchat status 2>/dev/null || true; }
+if [ "${K2_SKIP_SEW:-}" = "1" ]; then
+	log "Sew: skipped (K2_SKIP_SEW=1)"
+	SEW_LINE="skipped (K2_SKIP_SEW=1)"
+elif [ "${ROOT_HELPER_MODE:-}" != "root" ]; then
+	log "Sew: skipped (no root helper on this box: ${MAIL_HELPER_LINE:-none})"
+	SEW_LINE="skipped (no root helper)"
+else
+	SEW_OUT=$(mktemp)
+	log "Sew [1/7]: hostchat preflight"
+	k2_as_daemon_user hostchat preflight >"$SEW_OUT" 2>&1 || true
+	[ "$(head -n1 "$SEW_OUT")" = "ready" ] || sew_die "hostchat preflight (first line is not 'ready')" "$SEW_OUT"
+	log "Sew [2/7]: hostchat enable --identity k2"
+	if sew_status | grep -q '^identity: *k2'; then
+		log "Sew: already linked (identity k2)"
+	else
+		k2_as_daemon_user hostchat enable --identity k2 >"$SEW_OUT" 2>&1 \
+			|| sew_die "hostchat enable --identity k2" "$SEW_OUT"
+	fi
+	sew_status | grep -q '^identity: *k2' || sew_die "hostchat enable (status does not show identity: k2)"
+	log "Sew [3/7]: hostchat media install (voice)"
+	if sew_status | grep -q '^voice: *running'; then
+		log "Sew: voice already running"
+	else
+		k2_as_daemon_user hostchat media install >"$SEW_OUT" 2>&1 \
+			|| sew_die "hostchat media install" "$SEW_OUT"
+	fi
+	sew_status | grep -q '^voice: *running' || sew_die "hostchat media install (status does not show voice: running)"
+	log "Sew [4/7]: settings homeChat true"
+	k2_as_daemon_user settings set homeChat true >"$SEW_OUT" 2>&1 \
+		|| sew_die "settings set homeChat true" "$SEW_OUT"
+	log "Sew [5/7]: settings voiceRoomsPreview true"
+	k2_as_daemon_user settings set voiceRoomsPreview true >"$SEW_OUT" 2>&1 \
+		|| sew_die "settings set voiceRoomsPreview true" "$SEW_OUT"
+	log "Sew [6/7]: hostchat backup (first backup)"
+	k2_as_daemon_user hostchat backup >"$SEW_OUT" 2>&1 \
+		|| sew_die "hostchat backup" "$SEW_OUT"
+	log "Sew [7/7]: hostchat doctor --json"
+	# The doctor may exit non-zero when a check fails: its verdict decides.
+	k2_as_daemon_user hostchat doctor --json >"$SEW_OUT" 2>/dev/null || true
+	# The whole output is the JSON document; else its last line is.
+	SEW_FAILED=$(python3 -I -c 'import json,sys
+t=sys.stdin.read()
+try: d=json.loads(t)
+except ValueError: d=json.loads([l for l in t.splitlines() if l.strip()][-1])
+f=d["verdict"]["failed"]
+print(json.dumps(f) if f else "[]")' <"$SEW_OUT" 2>/dev/null) \
+		|| sew_die "hostchat doctor --json (unreadable verdict)" "$SEW_OUT"
+	[ "$SEW_FAILED" = "[]" ] || sew_die "hostchat doctor (verdict.failed: ${SEW_FAILED})" "$SEW_OUT"
+	rm -f "$SEW_OUT"
+	# Features follow the switches a moment later: poll /boot-status.
+	log "Sew: checking /boot-status features"
+	SEW_FEAT=""
+	for _ in $(seq 1 30); do
+		SEW_FEAT=$(curl -fsS -m 8 "$BASE/boot-status" 2>/dev/null | python3 -I -c 'import json,sys
+f=json.load(sys.stdin).get("features") or []
+print(" ".join(k for k in ("home-chat-v1","voice-rooms-v1") if k in f))' 2>/dev/null || true)
+		case " $SEW_FEAT " in *" home-chat-v1 "*) break ;; esac
+		sleep 1
+	done
+	case " $SEW_FEAT " in *" home-chat-v1 "*) ;; *) sew_die "/boot-status does not list home-chat-v1" ;; esac
+	case " $SEW_FEAT " in
+		*" voice-rooms-v1 "*) SEW_LINE="installed (identity k2, voice running, home-chat-v1, voice-rooms-v1)" ;;
+		*)
+			log "NOTE: Sew: /boot-status does not list voice-rooms-v1 — voice rooms are Pro-only (not a failure)"
+			SEW_LINE="installed (identity k2, voice running, home-chat-v1; voice-rooms-v1 not listed: not Pro)"
+			;;
+	esac
+	log "Sew: ${SEW_LINE}"
+fi
+
 # ── 10. control-plane callback ───────────────────────────────────────
 if [ -n "${K2_CALLBACK_URL:-}" ]; then
 	log "posting provisioning callback"
@@ -718,6 +824,7 @@ if [ -n "${K2_OWNER_USER:-}" ]; then
 fi
 echo "  mail:      helper ${MAIL_HELPER_LINE}"
 echo "  apps:      ${APPS_LINE}"
+echo "  sew:       ${SEW_LINE}"
 echo "  sandboxes: OFF (Standard-tier host — the Dedicated bootstrap adds them)"
 if [ -z "${K2_TUNNEL_TOKEN:-}" ] || [ -z "${K2_OWNER_USER:-}" ]; then
 echo ""

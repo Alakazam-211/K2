@@ -434,6 +434,10 @@ pub struct Block {
     /// An anonymous block that draws a dynamic block's reference as set: that block's name,
     /// named by handle in this block's record's extension data.
     pub rep_of: Option<String>,
+    /// Extension data at the end of its block record (2000 and later): pairs from a `1001`.
+    pub record_xdata: Vec<(i32, String)>,
+    /// Its block record keeps a list of its references (`102 {BLKREFS`), empty as written.
+    pub blkrefs: bool,
 }
 
 /// A whole drawing.
@@ -549,6 +553,8 @@ impl Spec {
             flags: 0,
             path: String::new(),
             rep_of: None,
+            record_xdata: Vec::new(),
+            blkrefs: false,
         });
         self
     }
@@ -563,7 +569,38 @@ impl Spec {
             flags: 1,
             path: String::new(),
             rep_of: Some(of.into()),
+            record_xdata: Vec::new(),
+            blkrefs: false,
         });
+        self
+    }
+
+    /// The block named `name` (added before) with extension data `pairs` (from its `1001`) at
+    /// the end of its record.
+    ///
+    /// # Panics
+    /// When no block has that name: a test's own mistake.
+    pub fn record_xdata(mut self, name: &str, pairs: &[(i32, &str)]) -> Spec {
+        let b = self
+            .blocks
+            .iter_mut()
+            .find(|b| b.name == name)
+            .unwrap_or_else(|| panic!("no block {name}"));
+        b.record_xdata
+            .extend(pairs.iter().map(|(c, v)| (*c, (*v).to_owned())));
+        self
+    }
+
+    /// The block named `name` (added before) with an empty list of its references in its record.
+    ///
+    /// # Panics
+    /// When no block has that name: a test's own mistake.
+    pub fn blkrefs(mut self, name: &str) -> Spec {
+        self.blocks
+            .iter_mut()
+            .find(|b| b.name == name)
+            .unwrap_or_else(|| panic!("no block {name}"))
+            .blkrefs = true;
         self
     }
 
@@ -576,6 +613,8 @@ impl Spec {
             flags: 4,
             path: path.into(),
             rep_of: None,
+            record_xdata: Vec::new(),
+            blkrefs: false,
         });
         self
     }
@@ -1124,6 +1163,11 @@ impl<'o> Writer<'o> {
                     _ => "0".into(),
                 };
                 p(&mut tables, 340, layout);
+                let def = s.blocks.iter().find(|b| b.name == n);
+                if def.is_some_and(|b| b.blkrefs) {
+                    p(&mut tables, 102, "{BLKREFS");
+                    p(&mut tables, 102, "}");
+                }
                 p(&mut tables, 70, "0");
                 p(&mut tables, 280, "1");
                 p(&mut tables, 281, "0");
@@ -1137,6 +1181,9 @@ impl<'o> Writer<'o> {
                     p(&mut tables, 1001, REP_APP);
                     p(&mut tables, 1070, "1");
                     p(&mut tables, 1005, format!("{REP_MARK}{of}"));
+                }
+                for (c, v) in def.map(|b| b.record_xdata.clone()).unwrap_or_default() {
+                    p(&mut tables, c, v);
                 }
                 records.push((n, h));
             }
@@ -2219,6 +2266,42 @@ pub fn edit_sampler(version: Ver) -> Spec {
             vec![Ent::line([0.0, 0.0], [1.0, 0.0]).on("0").label("in-dyn")],
             "DYN",
         )
+        // a device symbol with attribute definitions: two a reference sets, one constant
+        .block(
+            "TAGGED",
+            [1.0, 1.0],
+            vec![
+                Ent::circle([1.0, 1.0], 0.5).on("0"),
+                attdef("DEVICE", "CAM-00", 0, [1.0, 1.5], &[]).on("0"),
+                attdef("LABEL", "L", 0, [1.0, 0.5], &[(72, "1")]).on("ANNO"),
+                attdef("MAKER", "ACME", 2, [1.0, 0.0], &[]).on("0"),
+            ],
+        )
+        .blkrefs("TAGGED")
+        // annotative (refused), and one whose annotative mark is off (placed)
+        .block(
+            "ANNOBLK",
+            [0.0, 0.0],
+            vec![Ent::circle([0.0, 0.0], 0.5).on("0")],
+        )
+        .record_xdata("ANNOBLK", &ANNOTATIVE_ON)
+        // a block holding another application's object (a proxy): refused
+        .block(
+            "PROXYBLK",
+            [0.0, 0.0],
+            vec![raw(
+                "ACAD_PROXY_ENTITY",
+                &[(100, "AcDbProxyEntity"), (90, "498"), (91, "0"), (92, "0")],
+            )
+            .on("0")],
+        )
+        .block(
+            "PLAINMARK",
+            [0.0, 0.0],
+            vec![Ent::circle([0.0, 0.0], 0.5).on("0")],
+        )
+        .record_xdata("PLAINMARK", &ANNOTATIVE_OFF)
+        .xref("BACK", "../back.dxf")
         .model(
             Ent::line([1.1, 0.0], [10.0, 0.0])
                 .on("A-WALL")
@@ -2339,6 +2422,51 @@ pub fn edit_sampler(version: Ver) -> Spec {
     s
 }
 
+/// A block record's annotative mark, set and not set (`AcadAnnotative`).
+pub const ANNOTATIVE_ON: [(i32, &str); 6] = [
+    (1001, "AcadAnnotative"),
+    (1000, "AnnotativeData"),
+    (1002, "{"),
+    (1070, "1"),
+    (1070, "1"),
+    (1002, "}"),
+];
+pub const ANNOTATIVE_OFF: [(i32, &str); 6] = [
+    (1001, "AcadAnnotative"),
+    (1000, "AnnotativeData"),
+    (1002, "{"),
+    (1070, "1"),
+    (1070, "0"),
+    (1002, "}"),
+];
+
+/// An attribute definition (2000 and later): tag, default value, flags (`2` constant), its
+/// point, height 0.25, and `extra` pairs of its text group after the value (`72` alignment
+/// with `11` its second point, written as its first when `72` is given).
+fn attdef(tag: &str, default: &str, flags: i32, at: [f64; 2], extra: &[(i32, &str)]) -> Ent {
+    let (x, y) = (num(at[0]), num(at[1]));
+    let flags = flags.to_string();
+    let mut p: Vec<(i32, &str)> = vec![
+        (100, "AcDbText"),
+        (10, &x),
+        (20, &y),
+        (30, "0.0"),
+        (40, "0.25"),
+        (1, default),
+    ];
+    p.extend_from_slice(extra);
+    if !extra.is_empty() {
+        p.extend([(11, x.as_str()), (21, y.as_str()), (31, "0.0")]);
+    }
+    p.extend([
+        (100, "AcDbAttributeDefinition"),
+        (3, tag),
+        (2, tag),
+        (70, flags.as_str()),
+    ]);
+    Ent::raw("ATTDEF", &p)
+}
+
 /// Our own splice of `bytes`: `pairs` put right after the handle of the attribute tagged `tag`
 /// (the first such) of the block reference with handle `h`, written as that pair is.
 ///
@@ -2416,7 +2544,8 @@ fn pairs_like(bytes: &[u8], p: &crate::token::Pair, pairs: &[(i32, &str)]) -> Ve
 /// The drawing-model read's sampler (2000 on): every kind it models and one it doesn't, the
 /// inheritance cases (by layer, by block, layer `0` in a block, own values), a linetype and text
 /// styles of its own, layer true colour, lineweight and transparency, a draw-order table, a
-/// nested block, a paper layout with a viewport, and the header settings the rules use. Each row
+/// nested block, a paper layout with its sheet viewport and a viewport onto model space, its
+/// stated extents, and the header settings the rules use. Each row
 /// finds its entity by label.
 pub fn draw_sampler(version: Ver) -> Spec {
     let mut s = Spec::new(version)
@@ -3477,6 +3606,8 @@ pub fn draw_sampler(version: Ver) -> Spec {
                 (340, "0"),
                 (90, "0"),
                 (170, "1"),
+                // its arrowhead size, which a DWG file always stores
+                (42, "0.18"),
             ],
         )
         .on("ANNO")
@@ -3494,8 +3625,65 @@ pub fn draw_sampler(version: Ver) -> Spec {
             .on("E-LITE")
             .label("unknown"),
     );
-    // paper space: a viewport onto model space, and a title
+    // the extents a drawing states: the computed ones (`draw header`'s `extents.computed`)
+    s.opts.extents = Some(([-35.0, -10.0], [840.0, 102.0]));
+    // paper space: the sheet's own viewport (id 1, the paper itself), a viewport onto model
+    // space, and a title
     s.paper(
+        raw(
+            "VIEWPORT",
+            &[
+                (100, "AcDbViewport"),
+                (10, "210.0"),
+                (20, "148.5"),
+                (30, "0.0"),
+                (40, "420.0"),
+                (41, "297.0"),
+                (68, "1"),
+                (69, "1"),
+                (12, "210.0"),
+                (22, "148.5"),
+                (13, "0.0"),
+                (23, "0.0"),
+                (14, "10.0"),
+                (24, "10.0"),
+                (15, "10.0"),
+                (25, "10.0"),
+                (16, "0.0"),
+                (26, "0.0"),
+                (36, "1.0"),
+                (17, "0.0"),
+                (27, "0.0"),
+                (37, "0.0"),
+                (42, "50.0"),
+                (43, "0.0"),
+                (44, "0.0"),
+                (45, "297.0"),
+                (50, "0.0"),
+                (51, "0.0"),
+                (72, "1000"),
+                (90, "32864"),
+                (1, ""),
+                (281, "0"),
+                (71, "1"),
+                (74, "0"),
+                (110, "0.0"),
+                (120, "0.0"),
+                (130, "0.0"),
+                (111, "1.0"),
+                (121, "0.0"),
+                (131, "0.0"),
+                (112, "0.0"),
+                (122, "1.0"),
+                (132, "0.0"),
+                (79, "0"),
+                (146, "0.0"),
+            ],
+        )
+        .on("0")
+        .label("sheet-viewport"),
+    )
+    .paper(
         raw(
             "VIEWPORT",
             &[

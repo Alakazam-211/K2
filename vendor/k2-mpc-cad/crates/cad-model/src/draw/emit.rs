@@ -501,6 +501,16 @@ pub fn header(
         ("linetypes", Value::List(linetypes)),
         ("text_styles", Value::List(styles)),
         ("blocks", Value::List(blocks)),
+        // model space's own block record, by the address a hold on it has; null when the
+        // file gives it no handle
+        (
+            "model_space_block",
+            doc.blocks
+                .iter()
+                .find(|b| b.kind == BlockKind::Model)
+                .and_then(|b| b.handle)
+                .map_or(Value::Null, |h| Value::from(crate::handle::key(h))),
+        ),
         ("layouts", Value::List(layouts)),
         ("xrefs", Value::List(xrefs)),
         (
@@ -713,6 +723,7 @@ fn entity_value(src: &dyn DrawSource, i: usize, z: usize, boxes: &mut Boxes) -> 
         ("z", Value::from(z)),
         ("style", st.value()),
         ("visible", style::visible_value(&vis)),
+        ("edit", src.edit(i).map_or(Value::Null, Value::from)),
     ];
     let drawn = g.is_ok();
     v.push(("drawn", Value::from(drawn)));

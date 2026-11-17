@@ -174,6 +174,10 @@ pub fn registry_takes_the_pack() {
         ("entity move", "moved"),
         ("entity add", "added"),
         ("entity delete", "deleted"),
+        ("entity rotate", "rotated"),
+        ("entity scale", "scaled"),
+        ("block insert", "inserted"),
+        ("text set", "edited"),
     ] {
         let v = r
             .get(name)

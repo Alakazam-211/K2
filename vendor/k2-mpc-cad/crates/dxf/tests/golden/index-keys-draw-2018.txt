@@ -71,6 +71,7 @@
 @h:7A 3dsolid 3DSOLID
 @h:7B acme_gadget ACME_GADGET
 @h:7C viewport VIEWPORT
-@h:7D text TEXT
+@h:7D viewport VIEWPORT
+@h:7E text TEXT
 @h:A00 line LINE
 @h:A01 line LINE

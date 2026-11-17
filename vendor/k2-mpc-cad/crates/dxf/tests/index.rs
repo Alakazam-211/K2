@@ -132,8 +132,83 @@ pub fn followers_in_parent() {
     }
     assert_eq!(attr(node(&d, &b.addr("door1")), "followers"), "1");
     assert_eq!(attr(node(&d, &b.addr("poly")), "followers"), "3");
-    // the attribute's value is the insert's text
-    assert_eq!(node(&d, &b.addr("door1")).text.as_deref(), Some("NO=D-01"));
+    // the attribute's value is a field of the insert's own (format 4), not its text
+    let door = node(&d, &b.addr("door1"));
+    assert_eq!(
+        (attr(door, "att.no"), door.text.as_deref()),
+        ("D-01", None),
+        "followers_in_parent: the attribute is the insert's field att.no"
+    );
+}
+
+/// attribs_are_fields (index format 4): each attribute of a block reference is a field of the
+/// reference's node, `att.<tag>`: the tag in lower case, a byte other than a letter, digit or
+/// `_` written `-xx`, a repeated tag's second `.2`; no attribute is the reference's text. A
+/// reference whose tags can't each be named (a field name over the kit's 64 bytes) keeps them
+/// as its text, as before. The kit takes every draft.
+#[test]
+pub fn attribs_are_fields() {
+    let long = "T".repeat(70);
+    let b = Spec::new(Ver::R2018)
+        .block("DEV", [0.0, 0.0], vec![Ent::circle([0.0, 0.0], 0.5)])
+        .model(
+            Ent::insert("DEV", [0.0, 0.0])
+                .attrib("DEVICE", "CAM-01")
+                .attrib("LABEL", "C1")
+                .attrib("DEVICE", "CAM-02")
+                .attrib("ROOM.NO", "1-01")
+                .label("dev"),
+        )
+        .model(
+            Ent::insert("DEV", [5.0, 0.0])
+                .attrib(&long, "x")
+                .label("long"),
+        )
+        .build();
+    let d = draft(&b.bytes);
+    let dev = node(&d, &b.addr("dev"));
+    let att: Vec<(&str, &str)> = dev
+        .attrs
+        .iter()
+        .filter(|(k, _)| k.starts_with("att."))
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    assert_eq!(
+        att,
+        vec![
+            ("att.device", "CAM-01"),
+            ("att.device.2", "CAM-02"),
+            ("att.label", "C1"),
+            ("att.room-2eno", "1-01"),
+        ],
+        "attribs_are_fields: one field per attribute"
+    );
+    assert_eq!(
+        dev.text, None,
+        "attribs_are_fields: no attribute is the text"
+    );
+    let l = node(&d, &b.addr("long"));
+    assert!(
+        !l.attrs.keys().any(|k| k.starts_with("att.")),
+        "attribs_are_fields: a tag too long to name is no field"
+    );
+    assert_eq!(
+        l.text.as_deref(),
+        Some(format!("{long}=x").as_str()),
+        "attribs_are_fields: a tag too long to name keeps the text"
+    );
+    let wire = k2_mpc_base::index::index_to_wire(
+        &k2_mpc_dxf::DxfPack,
+        &mut &b.bytes[..],
+        b.bytes.len() as u64,
+        &limits(),
+    );
+    assert!(
+        wire.is_ok(),
+        "attribs_are_fields: the kit takes the draft: {:?}",
+        wire.err()
+    );
+    println!("attribs_are_fields: 4 fields, 1 kept as text");
 }
 
 /// The drawing of the change rows: two layers, a few entities, no paper space (so an added

@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-cad-model"
-version = "0.2.0"
+version = "0.3.0"
 description = "A format-neutral model of a 2D CAD drawing (entities by handle, layers, blocks, attributes, external references), its structure index and its shared reads: the model the drawing packs share."
 edition.workspace = true
 rust-version.workspace = true

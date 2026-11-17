@@ -7,6 +7,8 @@
 #   C <h> <colour number>       T <h> <true colour or none>     LT <h> <linetype>
 #   P <h> <name> <x> <y>        a point (start, end, center, insert, v<n>, a:<tag> for an attribute)
 #   V <h> <name> <x> <y>        a vector (an ellipse's major axis): never moved by a move
+#   R <h> <name> <degrees>      an angle (start, end, rotation, ar:<tag> an attribute's), in [0, 360)
+#   H <h> <name> <value>        a size (radius, height, xscale, yscale, ah:<tag> an attribute's height)
 #   A <h> <tag> <value>         an attribute's value       S <h> <text>   a text's
 #                               (both with the format's \U+XXXX escapes decoded: ezdxf keeps them
 #                               as written, the app shows the character)
@@ -35,11 +37,21 @@ def facts(doc, h):
     def p(name, v, kind="P"):
         out.append("%s %s %s %r %r" % (kind, h, name, float(v[0]), float(v[1])))
 
+    def r(name, a):
+        out.append("R %s %s %r" % (h, name, float(a) % 360.0))
+
+    def size(name, v):
+        out.append("H %s %s %r" % (h, name, float(v)))
+
     if t == "LINE":
         p("start", e.dxf.start)
         p("end", e.dxf.end)
     elif t in ("CIRCLE", "ARC"):
         p("center", e.dxf.center)
+        size("radius", e.dxf.radius)
+        if t == "ARC":
+            r("start", e.dxf.start_angle)
+            r("end", e.dxf.end_angle)
     elif t == "ELLIPSE":
         p("center", e.dxf.center)
         p("major", e.dxf.major_axis, "V")
@@ -51,12 +63,19 @@ def facts(doc, h):
             p("v%d" % i, v.dxf.location)
     elif t in ("TEXT", "MTEXT"):
         p("insert", e.dxf.insert)
+        size("height", e.dxf.get("char_height" if t == "MTEXT" else "height", 0))
         if t == "TEXT":
+            r("rotation", e.dxf.get("rotation", 0))
             out.append("S %s %s" % (h, decode_dxf_unicode(e.dxf.text)))
     elif t == "INSERT":
         p("insert", e.dxf.insert)
+        r("rotation", e.dxf.get("rotation", 0))
+        size("xscale", e.dxf.get("xscale", 1))
+        size("yscale", e.dxf.get("yscale", 1))
         for a in e.attribs:
             p("a:" + a.dxf.tag, a.dxf.insert)
+            r("ar:" + a.dxf.tag, a.dxf.get("rotation", 0))
+            size("ah:" + a.dxf.tag, a.dxf.get("height", 0))
             out.append("A %s %s %s" % (h, a.dxf.tag, decode_dxf_unicode(a.dxf.text)))
     return out
 

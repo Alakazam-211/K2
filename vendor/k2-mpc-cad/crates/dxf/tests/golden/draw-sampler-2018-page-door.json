@@ -36,6 +36,7 @@
         "lw_mm": "insert"
       },
       "visible": "insert",
+      "edit": "in-block",
       "drawn": true,
       "bbox": [0, 0, 0.9, 0],
       "bbox_q": "exact",
@@ -60,6 +61,7 @@
         "lw_mm": "insert"
       },
       "visible": "insert",
+      "edit": "in-block",
       "drawn": true,
       "bbox": [0, 0, 0.9, 0.9],
       "bbox_q": "exact",
@@ -87,6 +89,7 @@
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": "in-block",
       "drawn": true,
       "bbox": [0, 0, 0, 0.9],
       "bbox_q": "exact",
@@ -111,6 +114,7 @@
         "lw_mm": "insert"
       },
       "visible": "insert",
+      "edit": "in-block",
       "drawn": false,
       "why": "attdef",
       "bbox": [0, 0.95, 0.6, 1.25],

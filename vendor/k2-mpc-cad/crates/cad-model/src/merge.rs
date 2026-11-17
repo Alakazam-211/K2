@@ -8,9 +8,10 @@
 pub struct MergeConflict {
     /// The unit: `@h:<HANDLE>`, `$VAR` (a header variable), or `name:<NAME>`.
     pub address: String,
-    /// The field: `geom`, `layer`, `color`, `rgb`, `ltype`, `lw`, `alpha`, `text`, `content`,
-    /// or `whole` (a unit merged whole: deleted on one side and changed on the other, added
-    /// twice, or a unit with no fields of its own).
+    /// The field: `geom`, `layer`, `color`, `rgb`, `ltype`, `lw`, `alpha`, `text`, a block
+    /// reference's attribute (`att.<tag>`, [`crate::index::attrib_fields`]), `content`, or
+    /// `whole` (a unit merged whole: deleted on one side and changed on the other, added twice,
+    /// or a unit with no fields of its own).
     pub field: String,
     /// What ours made of it, short (`deleted`, or its values).
     pub ours: String,

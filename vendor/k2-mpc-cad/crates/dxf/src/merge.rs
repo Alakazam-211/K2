@@ -14,9 +14,11 @@
 //! endings) where pairs are added. Every byte outside the units ours changed is theirs'.
 //!
 //! **Fields.** Where both sides changed one entity, it merges field by field: its layer,
-//! colour, true colour, linetype, lineweight, transparency, text, geometry (its kind's data, as
-//! one whole: a merge never mixes two sides' coordinates), and its content (extension data,
-//! reactors, comments). Two changes to different fields both land; two different changes to the
+//! colour, true colour, linetype, lineweight, transparency, text, each attribute of a block
+//! reference (`att.<tag>`, named as the structure index names it:
+//! [`k2_mpc_cad_model::index::attrib_fields`]; a reference whose tags can't each be named has
+//! them as its text), geometry (its kind's data, as one whole: a merge never mixes two sides'
+//! coordinates), and its content (extension data, reactors, comments). Two changes to different fields both land; two different changes to the
 //! same field are a [`MergeConflict`], naming the unit, the field and both sides: never one
 //! side's value over the other's. Any other unit both sides changed differently, or one side
 //! deleted and the other changed, is a conflict of the whole unit.
@@ -100,7 +102,7 @@ struct U {
 type Sem<'a> = Vec<(i32, &'a [u8])>;
 
 /// A unit's pairs by the field each belongs to.
-type Fields<'a> = BTreeMap<&'static str, Sem<'a>>;
+type Fields<'a> = BTreeMap<String, Sem<'a>>;
 
 struct Side<'a> {
     s: Structure<'a>,
@@ -246,40 +248,91 @@ impl<'a> Side<'a> {
             .collect()
     }
 
+    /// The field of each attribute (an `ATTRIB` follower) of an entity unit, in order: as the
+    /// structure index names it, by each attribute's tag (its last `2` outside its groups and
+    /// extension data, as the reader takes it), or `text` for every one when they can't each be
+    /// named.
+    fn attrib_names(&self, u: &U) -> Vec<String> {
+        let t = &self.s.tok;
+        let mut tags: Vec<Option<String>> = Vec::new();
+        let (mut in102, mut xdata, mut attrib) = (false, false, false);
+        for i in u.first + 1..u.end {
+            let c = t.pairs[i].code;
+            if c == 0 {
+                attrib = decode(t.value(i)).trim().eq_ignore_ascii_case("ATTRIB");
+                in102 = false;
+                xdata = false;
+                if attrib {
+                    tags.push(None);
+                }
+                continue;
+            }
+            if !attrib {
+                continue;
+            }
+            if xdata || codes::is_xdata(c) {
+                xdata = true;
+                continue;
+            }
+            if c == 102 {
+                in102 = t.value(i).trim_ascii().starts_with(b"{");
+                continue;
+            }
+            if c == 2 && !in102 {
+                if let Some(last) = tags.last_mut() {
+                    *last = Some(decode(t.value(i)).trim().to_owned());
+                }
+            }
+        }
+        let names = k2_mpc_cad_model::index::attrib_fields(
+            tags.iter().map(|x| x.as_deref().unwrap_or_default()),
+        )
+        .filter(|_| !mutant::active("MergeAttribsAsOneText"));
+        names.unwrap_or_else(|| vec!["text".to_owned(); tags.len()])
+    }
+
     /// The field each pair of an entity unit belongs to.
-    fn fields(&self, u: &U) -> Vec<&'static str> {
+    fn fields(&self, u: &U) -> Vec<String> {
         let t = &self.s.tok;
         let kind = decode(t.value(u.first)).trim().to_ascii_uppercase();
-        let mut out = Vec::with_capacity(u.end - u.first);
+        let mut out: Vec<String> = Vec::with_capacity(u.end - u.first);
         let (mut in102, mut xdata, mut head) = (false, false, true);
         let mut seen: BTreeSet<i32> = BTreeSet::new();
         let mut follower = String::new();
+        let atts = self.attrib_names(u);
+        let mut att = 0usize;
+        fn push(out: &mut Vec<String>, f: &str) {
+            out.push(f.to_owned());
+        }
         for i in u.first..u.end {
             let c = t.pairs[i].code;
             if c == 0 {
                 if i == u.first {
-                    out.push("kind");
+                    push(&mut out, "kind");
                     continue;
                 }
                 head = false;
                 in102 = false;
                 xdata = false;
                 follower = decode(t.value(i)).trim().to_ascii_uppercase();
-                out.push("geom");
+                if follower == "ATTRIB" {
+                    att += 1;
+                }
+                push(&mut out, "geom");
                 continue;
             }
             if xdata || codes::is_xdata(c) {
                 xdata = true;
-                out.push("content");
+                push(&mut out, "content");
                 continue;
             }
             if c == 102 {
                 in102 = t.value(i).trim_ascii().starts_with(b"{");
-                out.push("content");
+                push(&mut out, "content");
                 continue;
             }
             if in102 || matches!(c, 999 | 100 | 67 | 410) {
-                out.push("content");
+                push(&mut out, "content");
                 continue;
             }
             if head {
@@ -298,14 +351,15 @@ impl<'a> Side<'a> {
                     _ => "geom",
                 };
                 if !matches!(f, "geom" | "text") && !seen.insert(c) {
-                    out.push("geom");
+                    push(&mut out, "geom");
                 } else {
-                    out.push(f);
+                    push(&mut out, f);
                 }
             } else if follower == "ATTRIB" && matches!(c, 1 | 2) {
-                out.push("text");
+                let name = atts.get(att.wrapping_sub(1)).map_or("text", String::as_str);
+                push(&mut out, name);
             } else {
-                out.push("geom");
+                push(&mut out, "geom");
             }
         }
         out
@@ -592,21 +646,21 @@ impl<'a, 'b> Merger<'a, 'b> {
     fn merge_fields(&mut self, k: &Key, bu: &U, ou: &U, tu: &U) {
         let (bs, os, ts) = (self.b.sem(bu), self.o.sem(ou), self.t.sem(tu));
         let (bf, of, tf) = (self.b.fields(bu), self.o.fields(ou), self.t.fields(tu));
-        let by_field = |sem: &Sem<'a>, f: &[&'static str]| {
+        let by_field = |sem: &Sem<'a>, f: &[String]| {
             let mut m: Fields<'a> = BTreeMap::new();
             for (p, name) in sem.iter().zip(f) {
-                m.entry(*name).or_default().push(*p);
+                m.entry(name.clone()).or_default().push(*p);
             }
             m
         };
         let (vb, vo, vt) = (by_field(&bs, &bf), by_field(&os, &of), by_field(&ts, &tf));
-        let names: BTreeSet<&'static str> = vb
+        let names: BTreeSet<&str> = vb
             .keys()
             .chain(vo.keys())
             .chain(vt.keys())
-            .copied()
+            .map(String::as_str)
             .collect();
-        let mut ours_only: BTreeSet<&'static str> = BTreeSet::new();
+        let mut ours_only: BTreeSet<&str> = BTreeSet::new();
         let mut clash = false;
         let show = |v: Option<&Sem<'a>>| -> String {
             match v {
@@ -652,8 +706,11 @@ impl<'a, 'b> Merger<'a, 'b> {
         };
         let m = matches(&bs, &os);
         for (alo, ahi, olo, ohi) in hunks(&m, bs.len(), os.len()) {
-            let touched: BTreeSet<&'static str> =
-                bf[alo..ahi].iter().chain(&of[olo..ohi]).copied().collect();
+            let touched: BTreeSet<&str> = bf[alo..ahi]
+                .iter()
+                .chain(&of[olo..ohi])
+                .map(String::as_str)
+                .collect();
             if !touched.iter().all(|f| ours_only.contains(f)) {
                 if touched.iter().any(|f| ours_only.contains(f)) {
                     self.conflict(k, "whole", "edits overlap".into(), "edits overlap".into());

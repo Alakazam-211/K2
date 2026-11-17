@@ -104,9 +104,24 @@ fn xdata_value(s: &Structure<'_>, u: &Unit, app: &str, code: i32) -> Option<Stri
 fn unit_digests(s: &Structure<'_>, units: &[&Unit], fields: &[i32]) -> (Digest, Digest) {
     let (mut rec, mut con) = (Digest::stream(), Digest::stream());
     for u in units {
+        // a block record's list of its references (`102 {BLKREFS`) is over other records (the
+        // references), as a count would be: left out, so a new reference changes no block node
+        let mut blkrefs = false;
         for i in u.first..u.end {
             let c = s.tok.pairs[i].code;
-            if c == 5 || c == 105 {
+            if c == 102 {
+                let v = s.tok.value(i).trim_ascii();
+                if v.eq_ignore_ascii_case(b"{BLKREFS") {
+                    blkrefs = !mutant::active("BlkrefsInBlockNode");
+                    if blkrefs {
+                        continue;
+                    }
+                } else if blkrefs && v == b"}" {
+                    blkrefs = false;
+                    continue;
+                }
+            }
+            if blkrefs || c == 5 || c == 105 {
                 continue;
             }
             let v = s.tok.value(i);

@@ -150,6 +150,58 @@ fn calls(b: &testgen::Built) -> Vec<(&'static str, Vec<String>)> {
             ],
         ),
         ("entity delete", vec![a("arc"), a("lamp")]),
+        (
+            "entity rotate",
+            vec![
+                a("wall"),
+                a("dev"),
+                a("room"),
+                a("arc"),
+                "--by".into(),
+                "90".into(),
+                "--about".into(),
+                "1,1".into(),
+                "--unit".into(),
+                "mm".into(),
+            ],
+        ),
+        (
+            "entity scale",
+            vec![
+                a("lamp"),
+                a("dev"),
+                a("lw"),
+                "--factor".into(),
+                "1.5".into(),
+                "--about".into(),
+                "0,0".into(),
+                "--unit".into(),
+                "mm".into(),
+            ],
+        ),
+        (
+            "block insert",
+            vec![
+                "--block".into(),
+                "TAGGED".into(),
+                "--at".into(),
+                "100,50".into(),
+                "--rotate".into(),
+                "90".into(),
+                "--scale".into(),
+                "2".into(),
+                "--attr".into(),
+                "DEVICE=CAM-50".into(),
+                "--unit".into(),
+                "mm".into(),
+                "--layer".into(),
+                "E-DEV".into(),
+            ],
+        ),
+        (
+            "text set",
+            vec![a("room"), "--value".into(), "ROOM 202".into()],
+        ),
     ]
 }
 
@@ -219,8 +271,9 @@ pub fn style_kept() {
                 }
             }
             let first = text.split(|c| *c == b'\r').next().unwrap_or_default();
+            let code = String::from_utf8_lossy(first.trim_ascii());
             assert!(
-                first.len() >= 3 && first.starts_with(b" "),
+                first == format!("{code:>3}").as_bytes(),
                 "style_kept: {verb}: a written code isn't padded as the file's are"
             );
             written += 1;
@@ -536,9 +589,11 @@ pub fn self_check_catches() {
     println!("self_check_catches: 3 caught, the honest move passes");
 }
 
-/// honest_edits_land: every entity the rules allow takes each verb: a move, a colour, a delete
-/// (a dynamic block's reference and an entity on a frozen layer included), and both references'
-/// attributes. Plants: `DynblockAttribRefused`, `LockedReadAsFrozen`.
+/// honest_edits_land: every entity the rules allow takes each verb: a move, a colour, a delete,
+/// a turn and a scale (a dynamic block's reference and an entity on a frozen layer included),
+/// both references' attributes, the texts' values, and a reference of each block a reference can
+/// name (one whose annotative mark is off included). Plants: `DynblockAttribRefused`,
+/// `LockedReadAsFrozen`, `AnnotativeReadLoose`.
 #[test]
 pub fn honest_edits_land() {
     let b = testgen::edit_sampler(Ver::R2018).build();
@@ -556,6 +611,22 @@ pub fn honest_edits_land() {
             ),
             ("entity set", vec![a.as_str(), "--color", "2"]),
             ("entity delete", vec![a.as_str()]),
+            (
+                "entity rotate",
+                vec![a.as_str(), "--by", "30", "--about", "0,0", "--unit", "mm"],
+            ),
+            (
+                "entity scale",
+                vec![
+                    a.as_str(),
+                    "--factor",
+                    "2",
+                    "--about",
+                    "0,0",
+                    "--unit",
+                    "mm",
+                ],
+            ),
         ] {
             landed("honest_edits_land", &b.bytes, verb, &args);
             landed_n += 1;
@@ -603,11 +674,33 @@ pub fn honest_edits_land() {
         landed("honest_edits_land", &b.bytes, "entity add", &a);
         landed_n += 1;
     }
+    for l in ["room", "title"] {
+        landed(
+            "honest_edits_land",
+            &b.bytes,
+            "text set",
+            &[&b.addr(l), "--value", "NEW"],
+        );
+        landed_n += 1;
+    }
+    for block in ["TAGGED", "PLAINMARK", "DEV"] {
+        landed(
+            "honest_edits_land",
+            &b.bytes,
+            "block insert",
+            &[
+                "--block", block, "--at", "1,1", "--unit", "mm", "--layer", "FROZEN",
+            ],
+        );
+        landed_n += 1;
+    }
     println!("honest_edits_land: {} edits land", landed_n + 1);
 }
 
-/// refusals_named: each refusal comes with its own id, and nothing is planned. Plant:
-/// `ProxyWritten`.
+/// refusals_named: each refusal comes with its own id, and nothing is planned; the verbs that
+/// turn, scale, insert and set a text too (a block that is missing, an external reference, a layout, anonymous, annotative or
+/// dynamic; an attribute a reference can't set; a text set on what isn't a single-line text).
+/// Plants: `ProxyWritten`, `AnnotativeIgnored`.
 #[test]
 pub fn refusals_named() {
     let b = testgen::edit_sampler(Ver::R2018).build();
@@ -664,6 +757,11 @@ pub fn refusals_named() {
         .model(Ent::line([0.0, 1.0], [1.0, 1.0]).no_handle())
         .build();
     let s = |v: &[&str]| v.iter().map(|x| (*x).to_owned()).collect::<Vec<String>>();
+    let ins = |block: &str, more: &[&str]| {
+        let mut v = s(&["--block", block, "--at", "0,0", "--unit", "mm"]);
+        v.extend(s(more));
+        v
+    };
     let cases: Vec<(&str, &[u8], &str, Vec<String>)> = vec![
         ("DXF-E043", &b.bytes, "entity move", mv("proxy")),
         ("DXF-E045", &b.bytes, "entity move", mv("locked")),
@@ -738,6 +836,96 @@ pub fn refusals_named() {
             s(&[&b.addr("dev"), "--tag", "DEVICE", "--value", "two\nlines"]),
         ),
         ("DXF-E010", &b.bytes, "entity delete", s(&["@h:FFFFF"])),
+        (
+            "DXF-E043",
+            &b.bytes,
+            "entity rotate",
+            s(&[
+                &b.addr("proxy"),
+                "--by",
+                "90",
+                "--about",
+                "0,0",
+                "--unit",
+                "mm",
+            ]),
+        ),
+        (
+            "DXF-E045",
+            &b.bytes,
+            "entity scale",
+            s(&[
+                &b.addr("locked"),
+                "--factor",
+                "2",
+                "--about",
+                "0,0",
+                "--unit",
+                "mm",
+            ]),
+        ),
+        (
+            "DXF-E022",
+            &b.bytes,
+            "entity rotate",
+            s(&[
+                &b.addr("wall"),
+                "--by",
+                "90",
+                "--about",
+                "0,0",
+                "--unit",
+                "in",
+            ]),
+        ),
+        (
+            "DXF-E021",
+            &b.bytes,
+            "text set",
+            s(&[&b.addr("note"), "--value", "x"]),
+        ),
+        (
+            "DXF-E021",
+            &b.bytes,
+            "text set",
+            s(&[&b.addr("dev"), "--value", "x"]),
+        ),
+        (
+            "DXF-E054",
+            &b.bytes,
+            "text set",
+            s(&[&b.addr("room"), "--value", "a\nb\u{7}"]),
+        ),
+        ("DXF-E051", &b.bytes, "block insert", ins("NO-SUCH", &[])),
+        ("DXF-E051", &b.bytes, "block insert", ins("BACK", &[])),
+        (
+            "DXF-E051",
+            &b.bytes,
+            "block insert",
+            ins("*Model_Space", &[]),
+        ),
+        ("DXF-E051", &b.bytes, "block insert", ins("*U7", &[])),
+        ("DXF-E051", &b.bytes, "block insert", ins("ANNOBLK", &[])),
+        ("DXF-E043", &b.bytes, "block insert", ins("PROXYBLK", &[])),
+        ("DXF-E044", &b.bytes, "block insert", ins("DYN", &[])),
+        (
+            "DXF-E047",
+            &b.bytes,
+            "block insert",
+            ins("TAGGED", &["--attr", "NOPE=1"]),
+        ),
+        (
+            "DXF-E047",
+            &b.bytes,
+            "block insert",
+            ins("TAGGED", &["--attr", "MAKER=X"]),
+        ),
+        (
+            "DXF-E045",
+            &b.bytes,
+            "block insert",
+            ins("TAGGED", &["--layer", "LOCKED"]),
+        ),
     ];
     let mut n = 0;
     for (want, bytes, verb, args) in &cases {
@@ -750,4 +938,342 @@ pub fn refusals_named() {
         n += 1;
     }
     println!("refusals_named: {n} refusals, each by its own id");
+}
+
+/// The model of `bytes`, read as the index reads it.
+fn doc_of(bytes: &[u8]) -> k2_mpc_dxf::Doc {
+    let l = Limits::default();
+    convert::doc(&structure::walk(token::tokenize(bytes, &l).unwrap(), &l).unwrap())
+}
+
+fn num(v: &str) -> f64 {
+    v.trim().parse().unwrap_or(f64::NAN)
+}
+
+/// rotate_turns_points_and_angles: a quarter turn about a point is exact on the file's tokens
+/// (a line's ends, an ellipse's major axis turned as a vector); the angles of an arc, a text and
+/// a block reference with its attributes gain the turn (written in where the entity had none,
+/// put in [0, 360)); a turn of 30 degrees reads back within a unit in the last place. Plants:
+/// `QuarterTurnInFloat`, `AngleNotTurned`.
+#[test]
+pub fn rotate_turns_points_and_angles() {
+    let b = testgen::edit_sampler(Ver::R2018).build();
+    let targets = ["wall", "ellipse", "arc", "room", "dev"];
+    let mut args: Vec<String> = targets.iter().map(|l| b.addr(l)).collect();
+    args.extend(
+        ["--by", "90", "--about", "1,1", "--unit", "mm"]
+            .iter()
+            .map(|x| (*x).to_owned()),
+    );
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let p = landed(
+        "rotate_turns_points_and_angles",
+        &b.bytes,
+        "entity rotate",
+        &refs,
+    );
+    let wall = entity_pairs(&p.output, b.handle("wall"));
+    assert_eq!(
+        (
+            values(&wall, 10),
+            values(&wall, 20),
+            values(&wall, 11),
+            values(&wall, 21)
+        ),
+        (
+            vec!["2.0".to_owned()],
+            vec!["1.1".to_owned()],
+            vec!["2.0".to_owned()],
+            vec!["10.0".to_owned()]
+        ),
+        "rotate_turns_points_and_angles: a quarter turn about 1,1 is exact"
+    );
+    let el = entity_pairs(&p.output, b.handle("ellipse"));
+    assert_eq!(
+        (values(&el, 11), values(&el, 21)),
+        (vec!["-1.0".to_owned()], vec!["2.0".to_owned()]),
+        "rotate_turns_points_and_angles: the major axis turns as a vector"
+    );
+    let arc = entity_pairs(&p.output, b.handle("arc"));
+    let ang =
+        |v: &[(i32, String)], c: i32| values(v, c).iter().map(|x| num(x)).collect::<Vec<f64>>();
+    assert_eq!(
+        (ang(&arc, 50), ang(&arc, 51)),
+        (vec![90.0], vec![270.0]),
+        "rotate_turns_points_and_angles: an arc's ends turn"
+    );
+    let room = entity_pairs(&p.output, b.handle("room"));
+    assert_eq!(
+        ang(&room, 50),
+        vec![90.0],
+        "rotate_turns_points_and_angles: a text gains its rotation"
+    );
+    let dev = entity_pairs(&p.output, b.handle("dev"));
+    assert_eq!(
+        ang(&dev, 50),
+        vec![90.0, 90.0, 90.0],
+        "rotate_turns_points_and_angles: a block reference and its two attributes turn"
+    );
+    // any other angle, in f64
+    let p = landed(
+        "rotate_turns_points_and_angles",
+        &b.bytes,
+        "entity rotate",
+        &[
+            &b.addr("lamp"),
+            "--by",
+            "30",
+            "--about",
+            "0,0",
+            "--unit",
+            "mm",
+        ],
+    );
+    let lamp = entity_pairs(&p.output, b.handle("lamp"));
+    let (sin, cos) = 30f64.to_radians().sin_cos();
+    let want = [20.0 * cos - 20.0 * sin, 20.0 * sin + 20.0 * cos];
+    let got = [num(&values(&lamp, 10)[0]), num(&values(&lamp, 20)[0])];
+    assert!(
+        (got[0] - want[0]).abs() < 1e-12 && (got[1] - want[1]).abs() < 1e-12,
+        "rotate_turns_points_and_angles: 30 degrees: {got:?}, expected {want:?}"
+    );
+    println!("rotate_turns_points_and_angles: 5 kinds a quarter turn, 1 by 30");
+}
+
+/// scale_sizes_and_points: a scale about a point moves points from it by the factor and scales
+/// sizes (a circle's radius, a text's height, a block reference's scales written in, its
+/// attributes' heights), exactly in decimal (3.0 by 0.1 is 0.3). Plants: `ScaleAboutOrigin`,
+/// `SizesLeft`, `ScaleInFloat`.
+#[test]
+pub fn scale_sizes_and_points() {
+    let b = testgen::edit_sampler(Ver::R2018).build();
+    let p = landed(
+        "scale_sizes_and_points",
+        &b.bytes,
+        "entity scale",
+        &[
+            &b.addr("lamp"),
+            &b.addr("room"),
+            &b.addr("dev"),
+            "--factor",
+            "2",
+            "--about",
+            "10,10",
+            "--unit",
+            "mm",
+        ],
+    );
+    let lamp = entity_pairs(&p.output, b.handle("lamp"));
+    assert_eq!(
+        (values(&lamp, 10), values(&lamp, 20), values(&lamp, 40)),
+        (
+            vec!["30.0".to_owned()],
+            vec!["30.0".to_owned()],
+            vec!["4.0".to_owned()]
+        ),
+        "scale_sizes_and_points: a circle's centre from 10,10 and its radius"
+    );
+    let room = entity_pairs(&p.output, b.handle("room"));
+    assert_eq!(
+        (values(&room, 10), values(&room, 40)),
+        (vec!["-8.0".to_owned()], vec!["5.0".to_owned()]),
+        "scale_sizes_and_points: a text's point and height"
+    );
+    let dev = entity_pairs(&p.output, b.handle("dev"));
+    assert_eq!(
+        (values(&dev, 41), values(&dev, 42), values(&dev, 43)),
+        (
+            vec!["2".to_owned()],
+            vec!["2".to_owned()],
+            vec!["2".to_owned()]
+        ),
+        "scale_sizes_and_points: a block reference's scales written in"
+    );
+    let p = landed(
+        "scale_sizes_and_points",
+        &b.bytes,
+        "entity scale",
+        &[
+            &b.addr("poly"),
+            "--factor",
+            "0.1",
+            "--about",
+            "0,0",
+            "--unit",
+            "mm",
+        ],
+    );
+    let poly = entity_pairs(&p.output, b.handle("poly"));
+    assert_eq!(
+        values(&poly, 20),
+        vec!["0.0", "0.0", "0.0", "0.3"],
+        "scale_sizes_and_points: 3.0 by 0.1 is 0.3, in decimal"
+    );
+    println!("scale_sizes_and_points: 4 kinds by 2 about 10,10, a polyline by 0.1");
+}
+
+/// block_insert_places_attribs: a reference of a block with attribute definitions is written
+/// with an attribute per settable definition (a constant one has none), each placed as the
+/// reference places its block (`Doc::place`), its height scaled and its rotation turned, its
+/// value the call's or the default, on the reference's layer when the definition is on `0`; the
+/// block record's list of references gains it; `$HANDSEED` is past every new handle. Plants:
+/// `AttribsUnplaced`, `ConstantAttdefWritten`, `BlkrefsLeft`.
+#[test]
+pub fn block_insert_places_attribs() {
+    let b = testgen::edit_sampler(Ver::R2018).build();
+    let p = landed(
+        "block_insert_places_attribs",
+        &b.bytes,
+        "block insert",
+        &[
+            "--block",
+            "TAGGED",
+            "--at",
+            "100,50",
+            "--rotate",
+            "90",
+            "--scale",
+            "2",
+            "--attr",
+            "DEVICE=CAM-50",
+            "--unit",
+            "mm",
+            "--layer",
+            "E-DEV",
+        ],
+    );
+    assert_eq!(
+        p.created.len(),
+        1,
+        "block_insert_places_attribs: one reference"
+    );
+    let h = k2_mpc_dxf::handle::from_addr(&p.created[0]).unwrap();
+    let d = doc_of(&p.output);
+    let i = d.entities.iter().position(|e| e.handle == Some(h)).unwrap();
+    let e = &d.entities[i];
+    let atts = &e.extra.as_ref().expect("its attributes").attribs;
+    let got: Vec<(&str, &str)> = atts.iter().map(|a| (&*a.tag, &*a.value)).collect();
+    assert_eq!(
+        got,
+        vec![("DEVICE", "CAM-50"), ("LABEL", "L")],
+        "block_insert_places_attribs: one attribute per settable definition"
+    );
+    // each where Doc::place puts its definition's point
+    for (a, def) in atts.iter().zip([[1.0, 1.5], [1.0, 0.5]]) {
+        let want = d.place(i, def).unwrap();
+        let at = a.at.unwrap();
+        assert!(
+            (at[0] - want[0]).abs() < 1e-9 && (at[1] - want[1]).abs() < 1e-9,
+            "block_insert_places_attribs: {} at {at:?}, placed {want:?}",
+            a.tag
+        );
+    }
+    let pairs = entity_pairs(&p.output, h);
+    assert_eq!(
+        (values(&pairs, 40), values(&pairs, 50), values(&pairs, 8)),
+        (
+            vec!["0.50".to_owned(), "0.50".to_owned()],
+            vec!["90".to_owned(), "90".to_owned(), "90".to_owned()],
+            vec![
+                "E-DEV".to_owned(),
+                "E-DEV".to_owned(),
+                "ANNO".to_owned(),
+                "E-DEV".to_owned()
+            ]
+        ),
+        "block_insert_places_attribs: heights, rotations, layers (the reference, its \
+         attributes, its end)"
+    );
+    let all = pairs_of(&p.output);
+    let key = format!("{h:X}");
+    let listed = all
+        .windows(2)
+        .any(|w| w[0].0 == 331 && w[0].1 == key && w[1].0 == 102 && w[1].1 == "}");
+    assert!(
+        listed,
+        "block_insert_places_attribs: the block record lists the new reference"
+    );
+    let seed = k2_mpc_dxf::verbs::run(&p.output, "header get", &["$HANDSEED"]).unwrap();
+    assert!(
+        seed.stdout.contains(&format!("\t5\t{:X}", h + 4)),
+        "block_insert_places_attribs: $HANDSEED past the reference, 2 attributes and its end: {}",
+        seed.stdout
+    );
+    println!("block_insert_places_attribs: @h:{key}, 2 attributes placed");
+}
+
+fn pairs_of(bytes: &[u8]) -> Vec<(i32, String)> {
+    let t = token::tokenize(bytes, &Limits::default()).unwrap();
+    (0..t.pairs.len())
+        .map(|i| (t.pairs[i].code, t.text(i).trim().to_owned()))
+        .collect()
+}
+
+/// text_set_written: a single-line text's value, written as the file writes text (a 2000 file's
+/// code page, `\U+` for what it lacks; UTF-8 from 2007), reads back as given.
+#[test]
+pub fn text_set_written() {
+    let value = "Caf\u{e9} \u{2116}5";
+    for (v, want) in [
+        (Ver::R2000, b"Caf\xe9 \\U+21165".to_vec()),
+        (Ver::R2018, value.as_bytes().to_vec()),
+    ] {
+        let b = testgen::edit_sampler(v).build();
+        let p = landed(
+            "text_set_written",
+            &b.bytes,
+            "text set",
+            &[&b.addr("room"), "--value", value],
+        );
+        let got: Vec<Vec<u8>> = p.spans.iter().map(|s| s.with.clone()).collect();
+        assert_eq!(got, vec![want], "text_set_written: {}", v.acadver());
+        let d = doc_of(&p.output);
+        let room = d
+            .entities
+            .iter()
+            .find(|e| e.handle == Some(b.handle("room")))
+            .unwrap();
+        assert_eq!(
+            room.text.as_deref(),
+            Some(value),
+            "text_set_written: {} reads back",
+            v.acadver()
+        );
+    }
+    println!("text_set_written: 2 versions");
+}
+
+/// rotate_noise_snapped: a turn by an angle that isn't a quarter is computed in `f64`; a
+/// coordinate that comes out zero but for the sine's and cosine's last bits (a text at 1,1 turned
+/// 45 degrees about the origin: x is 1.1e-16) is written 0.0, so the bytes are the same on every
+/// platform. Plant: `RotateNoiseKept`.
+#[test]
+pub fn rotate_noise_snapped() {
+    let b = testgen::edit_sampler(Ver::R2018).build();
+    let p = landed(
+        "rotate_noise_snapped",
+        &b.bytes,
+        "entity rotate",
+        &[
+            &b.addr("room"),
+            "--by",
+            "45",
+            "--about",
+            "0,0",
+            "--unit",
+            "mm",
+        ],
+    );
+    let room = entity_pairs(&p.output, b.handle("room"));
+    assert_eq!(
+        values(&room, 10),
+        vec!["0.0".to_owned()],
+        "rotate_noise_snapped: x at the noise of 45 degrees is 0.0"
+    );
+    let y = num(&values(&room, 20)[0]);
+    assert!(
+        (y - std::f64::consts::SQRT_2).abs() < 1e-12,
+        "rotate_noise_snapped: y is sqrt 2: {y}"
+    );
+    println!("rotate_noise_snapped: x 0.0, y {y}");
 }

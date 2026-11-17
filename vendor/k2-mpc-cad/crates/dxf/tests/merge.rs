@@ -233,3 +233,38 @@ pub fn merge_through_the_pack() {
     let theirs = splice_move(&b.bytes, b.handle("wall"), 2.0);
     assert!(DxfPack.merge3_bytes(&b.bytes, &ours, &theirs) == BlobMerge::Conflict);
 }
+
+/// `bytes` with the value line of the one `1` pair holding `old` written `new` (our own splice).
+fn splice_one_value(bytes: &[u8], old: &str, new: &str) -> Vec<u8> {
+    let t = k2_mpc_dxf::token::tokenize(bytes, &Limits::default()).expect("our drawing reads");
+    let hits: Vec<std::ops::Range<usize>> = (0..t.pairs.len())
+        .filter(|&i| t.pairs[i].code == 1 && t.value(i) == old.as_bytes())
+        .map(|i| t.pairs[i].value_range())
+        .collect();
+    assert_eq!(hits.len(), 1, "one value {old:?} in the drawing");
+    let r = hits[0].clone();
+    [&bytes[..r.start], new.as_bytes(), &bytes[r.end..]].concat()
+}
+
+/// merge_attribute_tags (index format 4): ours set one attribute of a block reference, theirs
+/// another of the same reference: each tag is a field of its own, so the merge is theirs with
+/// ours' value written in, byte for byte; the same tag set to two values is a conflict naming
+/// the attribute's field.
+#[test]
+pub fn merge_attribute_tags() {
+    let b = testgen::edit_sampler(Ver::R2018).build();
+    let ours = splice_one_value(&b.bytes, "CAM-01", "CAM-41");
+    let theirs = splice_one_value(&b.bytes, "C1", "C41");
+    let want = splice_one_value(&theirs, "CAM-01", "CAM-41");
+    assert!(
+        merged(&b.bytes, &ours, &theirs) == want,
+        "merge_attribute_tags: two tags aren't theirs plus ours' value"
+    );
+    let theirs = splice_one_value(&b.bytes, "CAM-01", "CAM-42");
+    let c = conflicts(&b.bytes, &ours, &theirs);
+    assert!(
+        c.iter().any(|x| x.field == "att.device"),
+        "merge_attribute_tags: one tag twice names its field: {c:?}"
+    );
+    println!("merge_attribute_tags: two tags merged, one tag a conflict");
+}

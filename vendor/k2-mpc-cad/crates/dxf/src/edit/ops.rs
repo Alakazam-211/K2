@@ -22,7 +22,7 @@ use crate::{codes, handle, mutant};
 // ---------------------------------------------------------------------------------------------
 
 /// The entity addresses a call names: at least one, at most [`EDIT_MAX`], each once.
-fn addresses(sp: &Spec, words: &[String]) -> Result<Vec<String>, CadError> {
+pub(super) fn addresses(sp: &Spec, words: &[String]) -> Result<Vec<String>, CadError> {
     if words.is_empty() {
         return Err(args::usage(
             sp,
@@ -49,7 +49,7 @@ fn addresses(sp: &Spec, words: &[String]) -> Result<Vec<String>, CadError> {
 
 /// Pairs of unit `u` that hold its own data: past its `0` pair, outside its `102` groups,
 /// before its extension data.
-fn data_pairs(s: &Structure<'_>, u: &Unit) -> Vec<usize> {
+pub(super) fn data_pairs(s: &Structure<'_>, u: &Unit) -> Vec<usize> {
     let mut out = Vec::new();
     let mut in102 = false;
     for p in u.first + 1..u.end {
@@ -69,20 +69,20 @@ fn data_pairs(s: &Structure<'_>, u: &Unit) -> Vec<usize> {
 }
 
 /// The first data pair of `u` with code `code`.
-fn first(s: &Structure<'_>, u: &Unit, code: i32) -> Option<usize> {
+pub(super) fn first(s: &Structure<'_>, u: &Unit, code: i32) -> Option<usize> {
     data_pairs(s, u)
         .into_iter()
         .find(|&p| s.tok.pairs[p].code == code)
 }
 
-fn int_of(s: &Structure<'_>, u: &Unit, code: i32) -> i64 {
+pub(super) fn int_of(s: &Structure<'_>, u: &Unit, code: i32) -> i64 {
     first(s, u, code)
         .and_then(|p| s.text(p).trim().parse::<i64>().ok())
         .unwrap_or(0)
 }
 
 /// The handles `u`'s `102 {ACAD_XDICTIONARY` group points at.
-fn xdicts(s: &Structure<'_>, u: &Unit) -> Vec<u64> {
+pub(super) fn xdicts(s: &Structure<'_>, u: &Unit) -> Vec<u64> {
     let mut out = Vec::new();
     let mut inside = false;
     for p in u.first + 1..u.end {
@@ -102,14 +102,14 @@ fn xdicts(s: &Structure<'_>, u: &Unit) -> Vec<u64> {
 }
 
 /// A unit's own handle (`5`).
-fn own(s: &Structure<'_>, u: &Unit) -> Option<u64> {
+pub(super) fn own(s: &Structure<'_>, u: &Unit) -> Option<u64> {
     (u.first + 1..u.end)
         .find(|&p| s.tok.pairs[p].code == 5)
         .and_then(|p| handle::parse(s.tok.value(p)))
 }
 
 /// A value line as replaced: the old one's spaces around it kept.
-fn keep_spaces(old: &[u8], new: &str) -> Vec<u8> {
+pub(super) fn keep_spaces(old: &[u8], new: &str) -> Vec<u8> {
     let lead = old.iter().take_while(|b| **b == b' ').count();
     let trail = old.iter().rev().take_while(|b| **b == b' ').count();
     if lead == old.len() {
@@ -122,7 +122,7 @@ fn keep_spaces(old: &[u8], new: &str) -> Vec<u8> {
 }
 
 /// An integer value replacing `old`: right-aligned to its width when it was aligned.
-fn int_like(old: &[u8], n: i64) -> Vec<u8> {
+pub(super) fn int_like(old: &[u8], n: i64) -> Vec<u8> {
     let w = old.len();
     if old.first() == Some(&b' ') {
         format!("{n:>w$}").into_bytes()
@@ -145,7 +145,7 @@ fn rank(c: i32) -> Option<usize> {
 }
 
 /// The entity head's common group: the run of common-group pairs around its layer (`8`).
-fn common(s: &Structure<'_>, head: &Unit) -> Result<(usize, usize), CadError> {
+pub(super) fn common(s: &Structure<'_>, head: &Unit) -> Result<(usize, usize), CadError> {
     let data = data_pairs(s, head);
     let Some(k) = data.iter().position(|&p| s.tok.pairs[p].code == 8) else {
         return Err(CadError::new(
@@ -167,7 +167,13 @@ fn common(s: &Structure<'_>, head: &Unit) -> Result<(usize, usize), CadError> {
 
 /// Code `c` in the common group `g` holds `value`: replaced where it is, else inserted in the
 /// group's order.
-fn set_code(w: &mut Writer<'_, '_>, s: &Structure<'_>, g: (usize, usize), c: i32, value: Vec<u8>) {
+pub(super) fn set_code(
+    w: &mut Writer<'_, '_>,
+    s: &Structure<'_>,
+    g: (usize, usize),
+    c: i32,
+    value: Vec<u8>,
+) {
     if let Some(p) = (g.0..g.1).find(|&p| s.tok.pairs[p].code == c) {
         w.set_value(p, &value);
         return;
@@ -190,7 +196,7 @@ fn remove_code(w: &mut Writer<'_, '_>, s: &Structure<'_>, g: (usize, usize), c: 
 }
 
 /// A colour flag: `bylayer` (256), `byblock` (0), or a number from 0 to 256.
-fn color_arg(sp: &Spec, v: &str) -> Result<i64, CadError> {
+pub(super) fn color_arg(sp: &Spec, v: &str) -> Result<i64, CadError> {
     match v.to_ascii_lowercase().as_str() {
         "bylayer" => Ok(256),
         "byblock" => Ok(0),
@@ -203,7 +209,7 @@ fn color_arg(sp: &Spec, v: &str) -> Result<i64, CadError> {
 }
 
 /// A true colour flag, `#rrggbb`: its value as the format writes it (`0x00RRGGBB` in decimal).
-fn rgb_arg(sp: &Spec, v: &str) -> Result<i64, CadError> {
+pub(super) fn rgb_arg(sp: &Spec, v: &str) -> Result<i64, CadError> {
     v.strip_prefix('#')
         .filter(|h| h.len() == 6)
         .and_then(|h| i64::from_str_radix(h, 16).ok())
@@ -212,7 +218,7 @@ fn rgb_arg(sp: &Spec, v: &str) -> Result<i64, CadError> {
 
 /// A linetype flag: `bylayer`, `byblock`, or a linetype of the drawing's LTYPE table (as the
 /// table spells it).
-fn ltype_arg(s: &Structure<'_>, v: &str) -> Result<String, CadError> {
+pub(super) fn ltype_arg(s: &Structure<'_>, v: &str) -> Result<String, CadError> {
     match v.to_ascii_lowercase().as_str() {
         "bylayer" => return Ok("ByLayer".into()),
         "byblock" => return Ok("ByBlock".into()),
@@ -236,14 +242,14 @@ fn ltype_arg(s: &Structure<'_>, v: &str) -> Result<String, CadError> {
 }
 
 /// The display flags of `entity set` and `entity add`, read and checked.
-struct Props {
-    layer: Option<String>,
-    color: Option<i64>,
-    rgb: Option<i64>,
-    ltype: Option<String>,
+pub(super) struct Props {
+    pub layer: Option<String>,
+    pub color: Option<i64>,
+    pub rgb: Option<i64>,
+    pub ltype: Option<String>,
 }
 
-fn props(cx: &Cx<'_, '_>, sp: &Spec, a: &args::Args) -> Result<Props, CadError> {
+pub(super) fn props(cx: &Cx<'_, '_>, sp: &Spec, a: &args::Args) -> Result<Props, CadError> {
     let layer = match a.get("--layer") {
         Some(l) => Some(cx.doc.layers[rules::target_layer(cx.doc, l)?].name.clone()),
         None => None,
@@ -268,14 +274,14 @@ const ATTRIB_SET: Spec = Spec {
 };
 
 /// The tag of attribute unit `u`.
-fn tag_of(s: &Structure<'_>, u: &Unit) -> String {
+pub(super) fn tag_of(s: &Structure<'_>, u: &Unit) -> String {
     first(s, u, 2)
         .map(|p| s.text(p).into_owned())
         .unwrap_or_default()
 }
 
 /// Whether the attribute's value is a field: its extension dictionary holds `ACAD_FIELD`.
-fn field_driven(cx: &Cx<'_, '_>, u: &Unit) -> bool {
+pub(super) fn field_driven(cx: &Cx<'_, '_>, u: &Unit) -> bool {
     let s = cx.s;
     xdicts(s, u).into_iter().any(|h| {
         cx.objects.get(&h).is_some_and(|&o| {
@@ -383,6 +389,72 @@ pub(crate) fn attrib_set(
 }
 
 // ---------------------------------------------------------------------------------------------
+// text set
+// ---------------------------------------------------------------------------------------------
+
+const TEXT_SET: Spec = Spec {
+    verb: "text set",
+    valued: &["--value"],
+    bare: &[],
+    words: true,
+};
+
+/// `text set @h:E --value S`: a single-line text's value (its `1` value line).
+pub(crate) fn text_set(
+    cx: &Cx<'_, '_>,
+    w: &mut Writer<'_, '_>,
+    it: &mut Intent,
+    out: &mut Out,
+    a: &[&str],
+) -> Result<(), CadError> {
+    let sp = &TEXT_SET;
+    let args = sp.parse(a)?;
+    let [addr] = args.words.as_slice() else {
+        return Err(args::usage(sp, "text set takes one text's address"));
+    };
+    let value = args
+        .get("--value")
+        .ok_or_else(|| args::usage(sp, "text set needs --value"))?;
+    let s = cx.s;
+    let i = cx.entity(addr)?;
+    let kind = &*cx.doc.entities[i].kind;
+    if kind != "TEXT" {
+        return Err(CadError::new(
+            NOT_EDITABLE,
+            format!("{addr} is a {kind}: text set changes a single-line text (TEXT)"),
+            if kind == "INSERT" {
+                format!("`attrib set {addr} --tag T --value V` sets a block reference's attribute")
+            } else {
+                format!("`entity props {addr}` says what it is; change it in the app")
+            },
+        ));
+    }
+    rules::entity(s, cx.doc, i)?;
+    let enc = encode_text(cx, value)?;
+    let head = &s.entities[i].head;
+    match first(s, head, 1) {
+        Some(p) => w.set_value(p, &enc),
+        None => {
+            let at = first(s, head, 50)
+                .or_else(|| first(s, head, 41))
+                .or_else(|| first(s, head, 7))
+                .unwrap_or(head.end);
+            w.insert_before(at, &[(1, enc)]);
+        }
+    }
+    let h = cx.doc.entities[i].handle.unwrap_or(0);
+    it.changed.insert(h);
+    it.wants.push(Want::Text {
+        h,
+        value: value.to_owned(),
+    });
+    out.word = "edited";
+    out.stdout = format!("set the text of {addr}");
+    out.viewing = Some(handle::key(h));
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
 // entity set
 // ---------------------------------------------------------------------------------------------
 
@@ -482,7 +554,7 @@ pub(crate) fn entity_set(
     Ok(())
 }
 
-fn list(addrs: &[String]) -> String {
+pub(super) fn list(addrs: &[String]) -> String {
     match addrs {
         [one] => one.clone(),
         many => format!("{} entities: {}", many.len(), many.join(", ")),
@@ -502,13 +574,13 @@ const ENTITY_MOVE: Spec = Spec {
 
 /// Whether a text, attribute or attribute definition places itself by its second point (`11`):
 /// any horizontal alignment but left, or (`73` for a text, `74` for the others) any vertical one.
-fn aligned(s: &Structure<'_>, u: &Unit, kind: &str) -> bool {
+pub(super) fn aligned(s: &Structure<'_>, u: &Unit, kind: &str) -> bool {
     let v = if kind == "TEXT" { 73 } else { 74 };
     int_of(s, u, 72) != 0 || int_of(s, u, v) != 0
 }
 
 /// The x codes of the points unit `u` (of kind `kind`) holds: its y code is ten more.
-fn point_codes(s: &Structure<'_>, u: &Unit, kind: &str) -> Vec<i32> {
+pub(super) fn point_codes(s: &Structure<'_>, u: &Unit, kind: &str) -> Vec<i32> {
     let vectors = mutant::active("VectorMovedAsPoint");
     match kind {
         "LINE" | "SPLINE" => vec![10, 11],
@@ -654,7 +726,7 @@ const ADD_TEXT: Spec = Spec {
 };
 
 /// A point flag, `x,y[,z]`: its numbers as written (z 0 when left out).
-fn point(sp: &Spec, flag: &str, v: &str) -> Result<[String; 3], CadError> {
+pub(super) fn point(sp: &Spec, flag: &str, v: &str) -> Result<[String; 3], CadError> {
     let n: Vec<f64> = v
         .split(',')
         .map(num::parse)
@@ -667,13 +739,17 @@ fn point(sp: &Spec, flag: &str, v: &str) -> Result<[String; 3], CadError> {
     }
 }
 
-fn number(sp: &Spec, flag: &str, v: &str) -> Result<f64, CadError> {
+pub(super) fn number(sp: &Spec, flag: &str, v: &str) -> Result<f64, CadError> {
     num::parse(v).ok_or_else(|| args::usage(sp, format!("{flag} takes a number")))
 }
 
 /// Where a new entity goes: its owner's handle, the pair it goes before, and whether it is in the
 /// active layout's part of the entities section (`67 1`).
-fn place(cx: &Cx<'_, '_>, sp: &Spec, at: Option<&str>) -> Result<(u64, usize, bool), CadError> {
+pub(super) fn place(
+    cx: &Cx<'_, '_>,
+    sp: &Spec,
+    at: Option<&str>,
+) -> Result<(u64, usize, bool), CadError> {
     let s = cx.s;
     let doc = cx.doc;
     let at = at.unwrap_or("model");
@@ -971,7 +1047,13 @@ pub(crate) fn entity_add(
 }
 
 /// `$HANDSEED` raised past `last`, in its own spelling (its width and case kept).
-fn raise_seed(cx: &Cx<'_, '_>, w: &mut Writer<'_, '_>, it: &mut Intent, out: &mut Out, last: u64) {
+pub(super) fn raise_seed(
+    cx: &Cx<'_, '_>,
+    w: &mut Writer<'_, '_>,
+    it: &mut Intent,
+    out: &mut Out,
+    last: u64,
+) {
     if mutant::active("HandseedLeft") {
         return;
     }

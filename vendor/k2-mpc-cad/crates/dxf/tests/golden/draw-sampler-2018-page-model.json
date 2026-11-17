@@ -36,6 +36,7 @@
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 2, 10, 2],
       "bbox_q": "exact",
@@ -60,6 +61,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 3, 10, 3],
       "bbox_q": "exact",
@@ -84,6 +86,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 4, 10, 4],
       "bbox_q": "exact",
@@ -108,6 +111,7 @@
         "lw_mm": 0.25
       },
       "visible": false,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 5, 10, 5],
       "bbox_q": "exact",
@@ -132,6 +136,7 @@
         "lw_mm": 0.25
       },
       "visible": false,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 6, 10, 6],
       "bbox_q": "exact",
@@ -156,6 +161,7 @@
         "lw_mm": 0.25
       },
       "visible": false,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 7, 10, 7],
       "bbox_q": "exact",
@@ -180,6 +186,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 8, 10, 8],
       "bbox_q": "exact",
@@ -204,6 +211,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "unknown",
       "drawn": true,
       "bbox": null,
       "bbox_q": "none",
@@ -229,6 +237,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "unknown",
       "drawn": true,
       "bbox": null,
       "bbox_q": "none",
@@ -254,6 +263,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [5, 5, 5, 5],
       "bbox_q": "exact",
@@ -279,6 +289,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [18, 18, 22, 22],
       "bbox_q": "exact",
@@ -303,6 +314,7 @@
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [30, 0, 35, 5],
       "bbox_q": "exact",
@@ -330,6 +342,7 @@
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": "own-frame",
       "drawn": true,
       "bbox": [-35, -5, -25, 5],
       "bbox_q": "approx",
@@ -357,6 +370,7 @@
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": "own-frame",
       "drawn": true,
       "bbox": [-4, 25, 4, 35],
       "bbox_q": "approx",
@@ -439,6 +453,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [40, -5, 60, 5],
       "bbox_q": "approx",
@@ -466,6 +481,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "own-frame",
       "drawn": true,
       "bbox": [40, -5, 60, 5],
       "bbox_q": "approx",
@@ -493,6 +509,7 @@
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 0, 15, 10],
       "bbox_q": "exact",
@@ -537,6 +554,7 @@
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 0, 4.75, 3],
       "bbox_q": "exact",
@@ -581,6 +599,7 @@
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 0, 5, 7],
       "bbox_q": "exact",
@@ -619,6 +638,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 0, 50, 20],
       "bbox_q": "approx",
@@ -774,6 +794,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 0, 10, 10],
       "bbox_q": "approx",
@@ -924,6 +945,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 0, 10, 5],
       "bbox_q": "approx",
@@ -966,6 +988,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": false,
       "why": "spline_weights",
       "bbox": [0, 0, 1, 0],
@@ -987,6 +1010,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [1, 0.5, 13, 3.5],
       "bbox_q": "approx",
@@ -1028,6 +1052,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [15.8, 9, 24.2, 11],
       "bbox_q": "approx",
@@ -1069,6 +1094,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [-1.41421356, 19.7171573, 10.2828427, 31.4142136],
       "bbox_q": "approx",
@@ -1112,6 +1138,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 39.6, 15.6, 42],
       "bbox_q": "approx",
@@ -1160,6 +1187,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [-20, 50.4166667, 20, 69.5833333],
       "bbox_q": "approx",
@@ -1239,6 +1267,7 @@
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [10, 0, 10.9, 1.25],
       "bbox_q": "approx",
@@ -1297,6 +1326,7 @@
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [97.5, 0, 100, 1.8],
       "bbox_q": "approx",
@@ -1325,6 +1355,7 @@
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [200, 0, 200.9, 1.25],
       "bbox_q": "approx",
@@ -1358,6 +1389,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, -10, 4, -6],
       "bbox_q": "exact",
@@ -1387,6 +1419,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [10, -10, 14, -6],
       "bbox_q": "exact",
@@ -1416,6 +1449,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "hatch",
       "drawn": true,
       "bbox": [-0.00141421356, -30.0014142, 10.0014142, -19.9985858],
       "bbox_q": "approx",
@@ -1469,6 +1503,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "hatch",
       "drawn": true,
       "bbox": [19.9985858, -30.0014142, 30.0014142, -19.9985858],
       "bbox_q": "approx",
@@ -1657,6 +1692,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "hatch",
       "drawn": true,
       "bbox": [-0.0141421356, -200.014142, 100.014142, -99.9858579],
       "bbox_q": "approx",
@@ -1726,6 +1762,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "dimension",
       "drawn": true,
       "bbox": [0, -5, 100, -1.875],
       "bbox_q": "approx",
@@ -1766,6 +1803,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "leader",
       "drawn": true,
       "bbox": [0, 80, 10, 85],
       "bbox_q": "approx",
@@ -1801,6 +1839,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "image",
       "drawn": true,
       "bbox": [60, 60, 70, 70],
       "bbox_q": "approx",
@@ -1830,6 +1869,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "leader",
       "drawn": true,
       "bbox": [20, 80, 25, 85],
       "bbox_q": "approx",
@@ -1864,6 +1904,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "image",
       "drawn": true,
       "bbox": [100, 100, 110, 105],
       "bbox_q": "approx",
@@ -1904,6 +1945,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [360, 98, 400, 100],
       "bbox_q": "approx",
@@ -1950,6 +1992,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [400, 98, 440, 100],
       "bbox_q": "approx",
@@ -1996,6 +2039,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [440, 98, 480, 100],
       "bbox_q": "approx",
@@ -2042,6 +2086,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [540, 99, 580, 101],
       "bbox_q": "approx",
@@ -2088,6 +2133,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [580, 99, 620, 101],
       "bbox_q": "approx",
@@ -2134,6 +2180,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [620, 99, 660, 101],
       "bbox_q": "approx",
@@ -2180,6 +2227,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [720, 100, 760, 102],
       "bbox_q": "approx",
@@ -2226,6 +2274,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [760, 100, 800, 102],
       "bbox_q": "approx",
@@ -2272,6 +2321,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [800, 100, 840, 102],
       "bbox_q": "approx",
@@ -2318,6 +2368,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "leader",
       "drawn": true,
       "bbox": null,
       "bbox_q": "none",
@@ -2327,7 +2378,7 @@
         "arrow": {
           "shown": true,
           "kind": "closed_filled",
-          "size": null
+          "size": 0.18
         },
         "text": null,
         "plain": null,
@@ -2352,6 +2403,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "solid3d",
       "drawn": false,
       "why": "not_modelled",
       "bbox": null,
@@ -2373,6 +2425,7 @@
         "lw_mm": 0.25
       },
       "visible": true,
+      "edit": "unknown",
       "drawn": false,
       "why": "not_modelled",
       "bbox": null,
@@ -2394,6 +2447,7 @@
         "lw_mm": 0.5
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 1, 10, 1],
       "bbox_q": "exact",
@@ -2418,6 +2472,7 @@
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": null,
       "drawn": true,
       "bbox": [0, 0, 10, 0],
       "bbox_q": "exact",

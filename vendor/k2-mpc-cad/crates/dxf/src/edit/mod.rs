@@ -7,7 +7,12 @@
 //!   [--ltype NAME|bylayer|byblock]`: display properties;
 //! - `entity move @h:E… --by dx,dy --unit U`: each point of each entity, its followers' too;
 //! - `entity add line|polyline|text … --unit U`: one new entity;
-//! - `entity delete @h:E…`: entities with their followers and what they own.
+//! - `entity delete @h:E…`: entities with their followers and what they own;
+//! - `entity rotate @h:E… --by DEG --about x,y --unit U` and `entity scale @h:E… --factor F
+//!   --about x,y --unit U`: each entity turned or scaled, its followers with it;
+//! - `block insert --block NAME|@h:B --at x,y --unit U [--rotate DEG] [--scale S]
+//!   [--attr TAG=VALUE…]`: a new block reference with its attributes;
+//! - `text set @h:E --value S`: a single-line text's value.
 //!
 //! **The write model.** A plan replaces value lines (never a code line or a line ending),
 //! inserts whole pairs before a pair, or removes whole pairs; new pairs are written in the file's
@@ -21,10 +26,12 @@
 //! `DXF-E090` when it doesn't read back as planned, and nothing is planned.
 
 pub mod check;
+mod insert;
 mod num;
 mod ops;
 pub mod rules;
 mod write;
+mod xform;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -40,12 +47,16 @@ use crate::structure::Structure;
 use crate::{convert, handle, mutant, structure, token, Limits};
 
 /// Every edit verb, by name.
-pub const NAMES: [&str; 5] = [
+pub const NAMES: [&str; 9] = [
     "attrib set",
     "entity set",
     "entity move",
     "entity add",
     "entity delete",
+    "entity rotate",
+    "entity scale",
+    "block insert",
+    "text set",
 ];
 
 /// The most entities one call may name (`DXF-E050` past it).
@@ -326,6 +337,10 @@ pub fn plan(bytes: &[u8], verb: &str, args: &[&str]) -> Result<Planned, CadError
         "entity set" => ops::entity_set(&cx, &mut w, &mut it, &mut out, args)?,
         "entity move" => ops::entity_move(&cx, &mut w, &mut it, &mut out, args)?,
         "entity add" => ops::entity_add(&cx, &mut w, &mut it, &mut out, args)?,
+        "entity rotate" => xform::entity_rotate(&cx, &mut w, &mut it, &mut out, args)?,
+        "entity scale" => xform::entity_scale(&cx, &mut w, &mut it, &mut out, args)?,
+        "block insert" => insert::block_insert(&cx, &mut w, &mut it, &mut out, args)?,
+        "text set" => ops::text_set(&cx, &mut w, &mut it, &mut out, args)?,
         _ => ops::entity_delete(&cx, &mut w, &mut it, &mut out, args)?,
     }
     let (inserted, removed) = (w.inserted, w.removed);
@@ -420,6 +435,10 @@ pub fn word(verb: &str) -> &'static str {
         "entity set" => "changed",
         "entity move" => "moved",
         "entity add" => "added",
+        "entity rotate" => "rotated",
+        "entity scale" => "scaled",
+        "block insert" => "inserted",
+        "text set" => "edited",
         _ => "deleted",
     }
 }

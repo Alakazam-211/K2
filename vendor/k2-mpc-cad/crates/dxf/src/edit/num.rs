@@ -118,6 +118,66 @@ pub(crate) fn add(token: &str, delta: &str) -> Option<String> {
     x.is_finite().then(|| fmt_f64(x))
 }
 
+/// `-token`, as text: its sign turned (`-0.0` is `0.0`).
+pub(crate) fn neg(token: &str) -> String {
+    let t = token.trim();
+    let body = t.strip_prefix('+').unwrap_or(t);
+    match body.strip_prefix('-') {
+        Some(b) => b.to_owned(),
+        None if dec(body).is_some_and(|d| d.mant == 0) => body.to_owned(),
+        None => format!("-{body}"),
+    }
+}
+
+/// `a − b`, as [`add`].
+pub(crate) fn sub(a: &str, b: &str) -> Option<String> {
+    add(a, &neg(b))
+}
+
+/// `token × factor`, exactly when both are plain decimals the product keeps (as many digits
+/// after the point as the token has, more only when the product needs them), else in `f64`
+/// written by [`fmt_f64`]. `None` when either isn't a number, or the product isn't finite.
+pub(crate) fn mul(token: &str, factor: &str) -> Option<String> {
+    let exact = || {
+        if mutant::active("ScaleInFloat") {
+            return None;
+        }
+        let (a, b) = (dec(token)?, dec(factor)?);
+        let mut m = a.mant.checked_mul(b.mant)?;
+        let mut scale = a.scale + b.scale;
+        if m.abs() >= MANT_MAX || scale > SCALE_MAX {
+            return None;
+        }
+        while scale > a.scale && m % 10 == 0 {
+            m /= 10;
+            scale -= 1;
+        }
+        Some(text(m, scale, a.point || b.point))
+    };
+    if let Some(s) = exact() {
+        return Some(s);
+    }
+    let x = parse(token)? * parse(factor)?;
+    x.is_finite().then(|| fmt_f64(x))
+}
+
+/// An angle in degrees put in `[0, 360)`, exactly on its decimal text where it can be.
+pub(crate) fn turn(deg: &str) -> Option<String> {
+    let mut a = deg.trim().to_owned();
+    for _ in 0..4 {
+        let v = parse(&a)?;
+        if v >= 360.0 {
+            a = sub(&a, "360")?;
+        } else if v < 0.0 {
+            a = add(&a, "360")?;
+        } else {
+            return Some(a);
+        }
+    }
+    let v = parse(deg)?.rem_euclid(360.0);
+    Some(fmt_f64(v))
+}
+
 /// A number as written in a file or a call: finite, or `None`.
 pub(crate) fn parse(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok().filter(|x| x.is_finite())
@@ -155,6 +215,19 @@ mod tests {
             assert_eq!(add(a, b).as_deref(), Some(want), "{a} + {b}");
         }
         assert_eq!(add("x", "1"), None);
+        for (a, b, want) in [
+            ("1.1", "2", "2.2"),
+            ("10.0", "0.5", "5.0"),
+            ("1.25", "4", "5.00"),
+            ("3", "1.5", "4.5"),
+            ("-2.0", "0.1", "-0.2"),
+        ] {
+            assert_eq!(mul(a, b).as_deref(), Some(want), "{a} × {b}");
+        }
+        assert_eq!(sub("5.0", "1.5").as_deref(), Some("3.5"));
+        assert_eq!(neg("-0.0"), "0.0");
+        assert_eq!(turn("450").as_deref(), Some("90"));
+        assert_eq!(turn("-90.0").as_deref(), Some("270.0"));
         assert_eq!(fmt_f64(-0.0), "0.0");
         assert_eq!(fmt_f64(2.0), "2.0");
         assert_eq!(fmt_f64(0.1 + 0.2), "0.30000000000000004");

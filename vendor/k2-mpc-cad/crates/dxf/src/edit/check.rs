@@ -27,6 +27,8 @@ pub struct Intent {
     pub changed: BTreeSet<u64>,
     /// Entities created.
     pub created: BTreeSet<u64>,
+    /// Followers created with them (a new reference's attributes and end marker): their handles.
+    pub minted: BTreeSet<u64>,
     /// Entities removed, with their followers' handles.
     pub removed: BTreeSet<u64>,
     /// Objects changed or removed (a sort table mended, an extension dictionary removed).
@@ -62,6 +64,8 @@ pub enum Want {
     Rgb { h: u64, value: Option<String> },
     /// Its linetype as written, or none.
     Ltype { h: u64, value: Option<String> },
+    /// Entity `h`'s text reads back as `value` (escapes read).
+    Text { h: u64, value: String },
     /// Its `nth` attribute (from 0) tagged `tag` holds `value`.
     Attrib {
         h: u64,
@@ -222,6 +226,14 @@ pub fn self_check(
                     ));
                 }
             }
+            Want::Text { h, value } => {
+                if doc.entities[find(*h)?].text.as_deref() != Some(value.as_str()) {
+                    return Err(fail(
+                        "c",
+                        format!("@h:{h:X}'s text isn't the value planned"),
+                    ));
+                }
+            }
             Want::Attrib { h, tag, nth, value } => {
                 let e = &doc.entities[find(*h)?];
                 let got = e
@@ -252,8 +264,8 @@ pub fn self_check(
             }
         }
     }
-    if let Some(&top) = intent.created.iter().max() {
-        for &h in &intent.created {
+    if let Some(&top) = intent.created.iter().chain(&intent.minted).max() {
+        for &h in intent.created.iter().chain(&intent.minted) {
             if h <= intent.hmax {
                 return Err(fail(
                     "d",

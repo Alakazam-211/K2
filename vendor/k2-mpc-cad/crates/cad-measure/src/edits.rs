@@ -4,8 +4,9 @@
 //! `edits` writes, for each style of the edit sampler and each call of each edit verb, the
 //! input (`<name>.in.dxf`), the verb's output (`<name>.out.dxf`) and what the call meant
 //! (`<name>.intent.txt`, one line per change: `move H dx dy`, `color H N`, `rgb H N`,
-//! `ltype H NAME`, `layer H NAME`, `attrib H TAG VALUE`, `gone H`, `new H TYPE LAYER`,
-//! `newp H KEY X Y`, `newx H TEXT`). The checker (`scripts/referee/ezdxf-edits.py`) writes
+//! `ltype H NAME`, `layer H NAME`, `attrib H TAG VALUE`, `rotate H DEG CX CY`,
+//! `scale H F CX CY`, `text H VALUE`, `gone H`, `new H TYPE LAYER`, `newp H KEY X Y`,
+//! `newx H TEXT`, `newa H TAG VALUE`, `newr H KEY DEG`). The checker (`scripts/referee/ezdxf-edits.py`) writes
 //! what it reads of each handle an intent names, in the input and in the output, and its audit
 //! counts. `edit-referee` then holds the output's facts to the input's, changed as the intent
 //! says and in no other way, and the output's audit to no new errors.
@@ -150,6 +151,87 @@ fn calls(b: &testgen::Built) -> Vec<Call> {
             format!("newp {new} insert 5 5"),
             format!("newx {new} NEW 1"),
         ],
+    });
+    let rotated = ["wall", "ellipse", "arc", "room", "dev"];
+    let mut args: Vec<String> = rotated.iter().map(|l| a(l)).collect();
+    args.extend(["--by", "90", "--about", "1,1", "--unit", "mm"].map(String::from));
+    out.push(Call {
+        name: "rotate",
+        verb: "entity rotate",
+        args,
+        intent: rotated
+            .iter()
+            .map(|l| format!("rotate {} 90 1 1", h(l)))
+            .collect(),
+    });
+    out.push(Call {
+        name: "rotate-30",
+        verb: "entity rotate",
+        args: vec![
+            a("lamp"),
+            a("lw"),
+            "--by".into(),
+            "30".into(),
+            "--about".into(),
+            "0,0".into(),
+            "--unit".into(),
+            "mm".into(),
+        ],
+        intent: vec![
+            format!("rotate {} 30 0 0", h("lamp")),
+            format!("rotate {} 30 0 0", h("lw")),
+        ],
+    });
+    let scaled = ["lamp", "room", "dev", "lw", "ellipse"];
+    let mut args: Vec<String> = scaled.iter().map(|l| a(l)).collect();
+    args.extend(["--factor", "2", "--about", "10,10", "--unit", "mm"].map(String::from));
+    out.push(Call {
+        name: "scale",
+        verb: "entity scale",
+        args,
+        intent: scaled
+            .iter()
+            .map(|l| format!("scale {} 2 10 10", h(l)))
+            .collect(),
+    });
+    out.push(Call {
+        name: "insert",
+        verb: "block insert",
+        args: [
+            "--block",
+            "TAGGED",
+            "--at",
+            "100,50",
+            "--rotate",
+            "90",
+            "--scale",
+            "2",
+            "--attr",
+            "DEVICE=CAM-50",
+            "--unit",
+            "mm",
+            "--layer",
+            "E-DEV",
+        ]
+        .map(String::from)
+        .to_vec(),
+        // the definitions' points (1,1.5) and (1,0.5) from the base (1,1), by 2, turned 90
+        intent: vec![
+            format!("new {new} INSERT E-DEV"),
+            format!("newp {new} insert 100 50"),
+            format!("newr {new} rotation 90"),
+            format!("newa {new} DEVICE CAM-50"),
+            format!("newa {new} LABEL L"),
+            format!("newp {new} a:DEVICE 99 50"),
+            format!("newp {new} a:LABEL 101 50"),
+            format!("newr {new} ar:DEVICE 90"),
+        ],
+    });
+    out.push(Call {
+        name: "text",
+        verb: "text set",
+        args: vec![a("room"), "--value".into(), "Caf\u{e9} 7".into()],
+        intent: vec![format!("text {} Caf\u{e9} 7", h("room"))],
     });
     out.push(Call {
         name: "delete",
@@ -296,6 +378,46 @@ fn expected(input: &[(String, Vec<String>)], lines: &[Vec<&str>]) -> Vec<(String
                     }
                 }
             }
+            "rotate" | "scale" => {
+                let (k, cx, cy) = (
+                    num(w[2]).unwrap_or(0.0),
+                    num(w[3]).unwrap_or(0.0),
+                    num(w[4]).unwrap_or(0.0),
+                );
+                let (sin, cos) = k.to_radians().sin_cos();
+                let turn = |x: f64, y: f64| (x * cos - y * sin, x * sin + y * cos);
+                for (kind, v) in &mut f {
+                    let at = |i: usize| v.get(i).and_then(|x| num(x)).unwrap_or(0.0);
+                    let (x, y) = (at(1), at(2));
+                    let n: Option<Vec<f64>> = match (w[0], kind.as_str()) {
+                        ("rotate", "P") if v.len() >= 3 => {
+                            let (a, b) = turn(x - cx, y - cy);
+                            Some(vec![cx + a, cy + b])
+                        }
+                        ("rotate", "V") if v.len() >= 3 => {
+                            let (a, b) = turn(x, y);
+                            Some(vec![a, b])
+                        }
+                        ("rotate", "R") if v.len() >= 2 => Some(vec![(x + k).rem_euclid(360.0)]),
+                        ("scale", "P") if v.len() >= 3 => {
+                            Some(vec![cx + k * (x - cx), cy + k * (y - cy)])
+                        }
+                        ("scale", "V") if v.len() >= 3 => Some(vec![k * x, k * y]),
+                        ("scale", "H") if v.len() >= 2 => Some(vec![k * x]),
+                        _ => None,
+                    };
+                    for (i, val) in n.into_iter().flatten().enumerate() {
+                        v[i + 1] = format!("{val}");
+                    }
+                }
+            }
+            "text" => {
+                for (k, v) in &mut f {
+                    if k == "S" {
+                        *v = vec![rest(2)];
+                    }
+                }
+            }
             "gone" => f = vec![("G".into(), Vec::new())],
             _ => {}
         }
@@ -303,8 +425,38 @@ fn expected(input: &[(String, Vec<String>)], lines: &[Vec<&str>]) -> Vec<(String
     f
 }
 
+/// Every edit verb: the referee compares at least one call of each.
+const VERBS: [&str; 9] = [
+    "attrib set",
+    "entity set",
+    "entity move",
+    "entity add",
+    "entity delete",
+    "entity rotate",
+    "entity scale",
+    "block insert",
+    "text set",
+];
+
+/// The verb a referee call is of, by its name (`<version>-<eol>-<call>`).
+fn verb_of(name: &str) -> &'static str {
+    let tail = name.splitn(3, '-').nth(2).unwrap_or("");
+    match tail.split('-').next().unwrap_or("") {
+        "move" => "entity move",
+        "set" => "entity set",
+        "attrib" => "attrib set",
+        "add" => "entity add",
+        "delete" => "entity delete",
+        "rotate" => "entity rotate",
+        "scale" => "entity scale",
+        "insert" => "block insert",
+        "text" => "text set",
+        _ => "other",
+    }
+}
+
 /// `cad-measure edit-referee DIR`: each output held to its input and intent, as the checker
-/// read both.
+/// read both; a count of the calls compared per verb, and none missing.
 pub fn referee(dir: &Path) -> Result<(), String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .map_err(|e| format!("{}: {e}", dir.display()))?
@@ -319,6 +471,7 @@ pub fn referee(dir: &Path) -> Result<(), String> {
     names.sort();
     let read = |p: String| std::fs::read_to_string(dir.join(&p)).map_err(|e| format!("{p}: {e}"));
     let (mut compared, mut differ, mut handles) = (0u64, 0u64, 0u64);
+    let mut per_verb: BTreeMap<&'static str, u64> = BTreeMap::new();
     for name in &names {
         let intent = read(format!("{name}.intent.txt"))?;
         let ins = read(format!("{name}.in.dxf.ezdxf-edits.txt"));
@@ -354,6 +507,8 @@ pub fn referee(dir: &Path) -> Result<(), String> {
                             vec![l[2].to_owned(), l[3].to_owned(), l[4].to_owned()],
                         )),
                         "newx" => w.push(("S".to_owned(), vec![l[2..].join(" ")])),
+                        "newa" => w.push(("A".to_owned(), vec![l[2].to_owned(), l[3..].join(" ")])),
+                        "newr" => w.push(("R".to_owned(), vec![l[2].to_owned(), l[3].to_owned()])),
                         _ => {}
                     }
                 }
@@ -384,6 +539,7 @@ pub fn referee(dir: &Path) -> Result<(), String> {
             what.push(format!("audit errors {ao:?}, the input's {ai:?}"));
         }
         compared += 1;
+        *per_verb.entry(verb_of(name)).or_default() += 1;
         if what.is_empty() {
             println!("edit-referee {name}: agrees ({} handles)", by_h.len());
         } else {
@@ -393,9 +549,19 @@ pub fn referee(dir: &Path) -> Result<(), String> {
             }
         }
     }
-    println!("edit-referee: {compared} compared, {differ} differ, {handles} handles");
+    let counts: Vec<String> = VERBS
+        .iter()
+        .map(|v| format!("{v} {}", per_verb.get(v).copied().unwrap_or(0)))
+        .collect();
+    println!(
+        "edit-referee: {compared} compared, {differ} differ, {handles} handles; per verb: {}",
+        counts.join(", ")
+    );
     if compared == 0 || differ > 0 {
         return Err(format!("{differ} of {} differ", names.len()));
+    }
+    if let Some(v) = VERBS.iter().find(|v| !per_verb.contains_key(*v)) {
+        return Err(format!("no case of {v}"));
     }
     Ok(())
 }

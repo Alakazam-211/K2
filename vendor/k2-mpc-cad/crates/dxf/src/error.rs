@@ -129,6 +129,14 @@ pub const EDIT_TOO_MANY: Code = Code {
     exit: 2,
 };
 
+/// `block insert` names a block it can't place: missing, an external reference, a layout,
+/// anonymous, or annotative (`why` in the message). (exit 2)
+pub const BLOCK_NOT_INSERTABLE: Code = Code {
+    id: "DXF-E051",
+    name: "block_not_insertable",
+    exit: 2,
+};
+
 /// A linetype or text style the call names isn't in its table. (exit 2)
 pub const TABLE_ENTRY_MISSING: Code = Code {
     id: "DXF-E053",
@@ -154,7 +162,7 @@ pub const SELF_CHECK: Code = Code {
 pub const ALL: [Code; 6] = [BINARY, NOT_PAIRS, OVER_BOUND, USAGE, NOT_FOUND, AMBIGUOUS];
 
 /// Every code the edit verbs refuse with besides those of [`ALL`].
-pub const EDIT: [Code; 18] = [
+pub const EDIT: [Code; 19] = [
     LAYER_MISSING,
     NOT_EDITABLE,
     UNIT_MISMATCH,
@@ -170,6 +178,7 @@ pub const EDIT: [Code; 18] = [
     ATTRIB_DRIVEN,
     ATTRIB_MULTILINE,
     EDIT_TOO_MANY,
+    BLOCK_NOT_INSERTABLE,
     TABLE_ENTRY_MISSING,
     VALUE_NOT_WRITABLE,
     SELF_CHECK,

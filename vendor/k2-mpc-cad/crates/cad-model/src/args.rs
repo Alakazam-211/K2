@@ -40,25 +40,49 @@ impl Spec {
         CadError::new(USAGE, why, self.accepted())
     }
 
-    /// Parses `args` (`--json` is the host's, and ignored here).
+    /// Parses `args` (`--json` is the host's, and ignored here). A flag's value is the next
+    /// argument, whatever it is, or follows the flag after `=` (`--value=--foo`); after a lone
+    /// `--` every argument is a word.
     pub fn parse(&self, args: &[&str]) -> Result<Args, CadError> {
         let mut out = Args::default();
         let mut i = 0;
+        let mut words_only = false;
         while i < args.len() {
             let a = args[i];
             i += 1;
+            if words_only {
+                if !self.words {
+                    return Err(self.usage(format!("{} takes no words", self.verb)));
+                }
+                out.words.push(a.to_owned());
+                continue;
+            }
+            if a == "--" {
+                words_only = true;
+                continue;
+            }
             if a == "--json" {
                 continue;
             }
-            if let Some(f) = self.valued.iter().find(|f| **f == a) {
+            let (name, inline) = match a.split_once('=') {
+                Some((n, v)) if n.starts_with("--") && self.valued.contains(&n) => (n, Some(v)),
+                _ => (a, None),
+            };
+            if let Some(f) = self.valued.iter().find(|f| **f == name) {
                 if out.pairs.iter().any(|(k, _)| k == f) {
-                    return Err(self.usage(format!("{a} given twice")));
+                    return Err(self.usage(format!("{name} given twice")));
                 }
-                let Some(v) = args.get(i) else {
-                    return Err(self.usage(format!("{a} needs a value")));
+                let v = match inline {
+                    Some(v) => v,
+                    None => {
+                        let Some(v) = args.get(i) else {
+                            return Err(self.usage(format!("{name} needs a value")));
+                        };
+                        i += 1;
+                        v
+                    }
                 };
-                i += 1;
-                out.pairs.push((*f, (*v).to_owned()));
+                out.pairs.push((*f, v.to_owned()));
             } else if let Some(f) = self.bare.iter().find(|f| **f == a) {
                 out.bare.push(*f);
             } else if a.starts_with("--") || !self.words {

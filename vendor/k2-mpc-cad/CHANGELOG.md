@@ -1,5 +1,100 @@
 # Changelog
 
+## v0.3.0: pairs with kit v0.22.0
+
+**Requires `k2-mpc-base` v0.22.0**, checked out beside this repo, as v0.2.0 does; no kit change.
+The crates are 0.3.0 (a breaking release: the structure index's format is 4); `Cargo.lock` and
+`fuzz/Cargo.lock` name that kit. **Breaking first:** a host re-indexes the versions v0.2.0
+indexed (below). New: the edit verbs `entity rotate`, `entity scale`, `block insert` and
+`text set`; attributes as fields of their own; each draw row's `edit`; `model_space_block`; flag
+values after `=`.
+
+### Breaking: the structure index, format 4 (attributes as fields)
+- **A block reference's attributes are fields of its node**, `att.<tag>`
+  (`k2_mpc_cad_model::index::attrib_fields`: the tag in lower case, other bytes `-xx`, a repeat
+  `.2`), and no longer its text; the merge splits an entity by the same names. Two attribute
+  values of one reference **land** under `--base` and in the merge when their tags differ, and
+  overlap when the tag is the same (`MPC-E723` naming `att.<tag>`). A reference whose tags can't
+  each be named (a name over the kit's 64 bytes, or over 200 attributes) keeps them as its text,
+  as before. `text find` and `cad.change/1` are unchanged (an attribute change is the
+  reference's `text` there).
+- **What a host or a stored index does on 3 → 4: both a re-index and a typed refusal.** The kit
+  keeps index rows by pack and format and reads only its pack's own format, so a version indexed
+  only by v0.2.0 (format 3) is not ready under v0.3.0: a `--base` call on it is refused
+  `MPC-E713 index_pending` (exit 1, `details.retry_after_ms`), and the host's index job indexes
+  it again under format 4, whose row replaces the format-3 one. Rolling back to v0.2.0 does the
+  same the other way (it never reads a format-4 row). Node keys are handles and don't change;
+  keys the kit minted (entities without a handle) are minted again. Format 4 also leaves a
+  block record's list of its references (`102 {BLKREFS`) out of the block's node. Row `index_format_n1`
+  (`tests/edit_session.rs`) runs both directions on one store.
+- **Tests**: `tests/index.rs` `attribs_are_fields`, `tests/merge.rs` `merge_attribute_tags`, and
+  in `tests/edit_session.rs` the attribute pairs of `merge_and_base_agree` (two tags land in
+  both, one tag overlaps in both), `two_agents_one_drawing` (two tags now land) and
+  `index_format_n1`; plants `AttribsAsOneText`, `MergeAttribsAsOneText`.
+
+### More edit verbs: rotate, scale, block insert, text set (DXF)
+- `entity rotate @h:E… --by DEG --about x,y --unit U` (`rotated`): points turn about the
+  centre in plan, directions turn (an ellipse's major axis, a multiline text's direction, a
+  spline's end tangents), angles gain DEG in `[0, 360)` (an arc's ends, a text's, a reference's
+  and its attributes' rotation, written in where missing); quarter turns are exact in decimal on
+  the file's tokens, other angles computed in `f64` and written as the shortest decimal that
+  reads back.
+- `entity scale @h:E… --factor F --about x,y --unit U` (`scaled`, F above 0): points from the
+  centre by F (z from 0 by F), radii, text heights, a multiline text's widths, polyline widths,
+  an ellipse's major axis, a reference's three scales (written in where missing); exact decimal
+  products where they can be (3.0 by 0.1 is 0.3).
+- `block insert --block NAME|@h:B --at x,y --unit U [--rotate DEG] [--scale S]
+  [--attr TAG=VALUE]…` (`inserted`): a new reference with an attribute per settable definition
+  (constant ones have none), placed as the reference places its block (`Doc::place`), heights
+  scaled, rotations turned, the definition's style, flags and alignment kept, layer `0`
+  becoming the reference's; the block record's reference list (`BLKREFS`) gains it. Refused:
+  a block missing, an external reference, a layout, anonymous or annotative (`DXF-E051`, new),
+  a dynamic block (`DXF-E044`), a tag it can't set (`DXF-E047`), a field-driven (`DXF-E048`)
+  or multi-line (`DXF-E049`) definition.
+- `text set @h:TEXT --value S` (`edited`): a single-line text's value, written as the file
+  writes text; anything but a TEXT refuses `DXF-E021` (a block reference: `attrib set`).
+- `block insert` also refuses a block whose definition holds another application's object
+  (`DXF-E043 proxy`); a missing block is refused (`DXF-E051`), never created. DWG files have no
+  edit verbs (a verb on one is the kit's unknown-verb usage refusal).
+- A turn by an angle that isn't a quarter writes a coordinate whose magnitude is below 1e-12 of
+  the drawing's scale (the drawing-model read's rule) as `0.0`: the sine's and cosine's
+  last-bit noise is the same on every platform. Row `rotate_noise_snapped`, plant
+  `RotateNoiseKept`.
+- The edit referee prints its case count per verb and fails when a verb has none.
+- The self-check reads a text's value back (c) and checks a new reference's attribute and end
+  handles (d) too.
+- The structure index leaves a block record's list of its references (`102 {BLKREFS`) out of
+  the block's node, as it leaves counts out: a new reference changes no block node (index
+  format 4). The merge still takes that list whole, so an app's save that adds a reference of
+  the same block as a verb's insert is kept as both files.
+- **Tests**: `tests/edit.rs` `rotate_turns_points_and_angles`, `scale_sizes_and_points`,
+  `block_insert_places_attribs`, `text_set_written`, and the four verbs in
+  `untouched_units_exact`, `style_kept`, `honest_edits_land` and `refusals_named`;
+  `tests/edit_session.rs` the four in `verbs_through_the_kit` and `person_edits_with_base`, and
+  `merge_and_base_agree`'s rotate/colour, rotate/scale and text/layer pairs; 10 plants, each
+  caught by its row; the referee's rotate, scale, insert and text calls.
+
+### The drawing-model read
+- The drawing-model sampler is as complete as a real drawing, so a drawing saved from it in
+  another format compares fact for fact: it states its extents (the computed ones), its
+  multileader has its arrowhead size, and its layout has its own sheet viewport (id 1) beside
+  the viewport onto model space. Row `draw_sampler_as_complete_as_a_drawing`. The DWG reader
+  keeps taking a layout's first viewport as the sheet's: a DWG viewport stores no id (a DXF
+  writer numbers them as it writes).
+- Each `draw page` row has `edit`: null when the edit verbs take the entity, else why they
+  refuse it, one word of a closed set (`k2_mpc_cad_model::draw::EDIT_WORDS`: `version`,
+  `no-handle`, `xref`, `dynamic`, `in-block`, `proxy`, `locked-layer`, `multiline-attribute`,
+  `embedded`, `solid3d`, `own-frame`, `reactors`, `hatch`, `dimension`, `leader`, `viewport`,
+  `image`, `unknown`). For DXF it is the verbs' own rules, so a viewer greys out exactly what
+  a verb would refuse; a DWG drawing's comes from the model's facts. Row
+  `draw_edit_matches_the_verbs`, plant `InBlockDrawnEditable`.
+- `draw header` gains `model_space_block`: model space's own block record by its address
+  (`@h:<HEX>`, the key a hold on it has), null only in a file without handles; a DWG read gives
+  it too. Row `model_space_block_is_the_hold_address`.
+- A verb's flag takes its value after `=` as well (`--value=--foo`: a value that starts with
+  `--`, or is one of the kit's own flags, reaches the verb), and a lone `--` ends the flags:
+  what follows is words. Row `verb_values_that_look_like_flags`.
+
 ## v0.2.0: pairs with kit v0.22.0
 
 **Requires `k2-mpc-base` v0.22.0**, checked out beside this repo (a host vendors both side by

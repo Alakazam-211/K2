@@ -50,6 +50,48 @@ impl DrawSource for DxfDrawing<'_> {
     fn entity(&self, i: usize) -> Result<Ent, CadError> {
         Ok(entity(&self.s, &self.s.entities[i]))
     }
+
+    /// The edit verbs' own rules ([`crate::edit::rules`]), so a row's `edit` is exactly what
+    /// a verb refuses: the drawing's facts first, then the entity's.
+    fn edit(&self, i: usize) -> Option<&'static str> {
+        use crate::error;
+        let doc = &self.doc;
+        if doc.version.as_str() < "AC1015" {
+            return Some("version");
+        }
+        if doc.handles != "on" || doc.entities[i].duplicate {
+            return Some("no-handle");
+        }
+        let e = crate::edit::rules::entity(&self.s, doc, i).err()?;
+        let word = match e.code.id {
+            x if x == error::EXTERNAL_REFERENCE.id => "xref",
+            x if x == error::DYNAMIC_GEOMETRY.id => "dynamic",
+            x if x == error::IN_BLOCK_DEFINITION.id => {
+                if crate::mutant::active("InBlockDrawnEditable") {
+                    return None;
+                }
+                "in-block"
+            }
+            x if x == error::PROXY.id => "proxy",
+            x if x == error::HANDLES_OFF.id => "no-handle",
+            x if x == error::LAYER_LOCKED.id => "locked-layer",
+            x if x == error::ATTRIB_MULTILINE.id => "multiline-attribute",
+            // the kind or state the verbs don't change: by its edit word, or (a kind they do
+            // change) an embedded object in it
+            _ => match doc.entities[i].edit {
+                "acis" => "solid3d",
+                "ocs" => "own-frame",
+                "assoc" => "reactors",
+                "1" | "dynblock" => "embedded",
+                w => k2_mpc_cad_model::draw::EDIT_WORDS
+                    .iter()
+                    .copied()
+                    .find(|x| *x == w)
+                    .unwrap_or("unknown"),
+            },
+        };
+        Some(word)
+    }
 }
 
 /// A unit's pairs as `(code, text)`, extension data and `{…}` groups left out. Text is

@@ -36,6 +36,7 @@
         "lw_mm": "insert"
       },
       "visible": "insert",
+      "edit": "in-block",
       "drawn": true,
       "bbox": [0, -5, 100, -5],
       "bbox_q": "exact",
@@ -60,6 +61,7 @@
         "lw_mm": "insert"
       },
       "visible": "insert",
+      "edit": "in-block",
       "drawn": true,
       "bbox": [47.75, -4.375, 52.25, -1.875],
       "bbox_q": "approx",

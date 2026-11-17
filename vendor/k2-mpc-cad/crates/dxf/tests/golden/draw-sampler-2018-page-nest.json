@@ -36,6 +36,7 @@
         "lw_mm": "insert"
       },
       "visible": "insert",
+      "edit": "in-block",
       "drawn": true,
       "bbox": [1, 1, 1.9, 2.25],
       "bbox_q": "approx",

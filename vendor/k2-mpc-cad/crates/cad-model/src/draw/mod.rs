@@ -643,7 +643,92 @@ pub trait DrawSource {
     fn tables(&self) -> &DrawTables;
     /// Entity `i`'s raw geometry ([`Doc::entities`] index), read on demand.
     fn entity(&self, i: usize) -> Result<Ent, CadError>;
+    /// Why the edit verbs refuse entity `i`, one of [`EDIT_WORDS`], or `None` when they take
+    /// it: a page row's `edit`. By the model's facts ([`edit_word`]); a format with its own
+    /// rules gives its own.
+    fn edit(&self, i: usize) -> Option<&'static str> {
+        edit_word(self.doc(), i)
+    }
 }
+
+/// Why the edit verbs refuse entity `i` of `doc`, by the model's facts: the drawing before DXF
+/// 2000 or without handles; the entity's owner (an external reference, a dynamic block's
+/// definition or drawn form, any other block definition); what it is (its `edit` word: a
+/// dynamic block's reference is taken); its layer (an external reference's, or locked).
+/// `None` when they take it.
+pub fn edit_word(doc: &Doc, i: usize) -> Option<&'static str> {
+    use crate::model::BlockKind;
+    if doc.version.as_str() < "AC1015" {
+        return Some("version");
+    }
+    if doc.handles != "on" {
+        return Some("no-handle");
+    }
+    let e = &doc.entities[i];
+    if e.duplicate {
+        return Some("no-handle");
+    }
+    if let Some(o) = e.owner {
+        let b = &doc.blocks[o];
+        if b.xref || e.edit == "xref" {
+            return Some("xref");
+        }
+        if b.dynamic_of.is_some() || doc.blocks.iter().any(|x| x.dynamic_of == Some(o)) {
+            return Some("dynamic");
+        }
+        if b.kind == BlockKind::Block {
+            return Some("in-block");
+        }
+    }
+    let word = match e.edit {
+        "1" => None,
+        "dynblock" if &*e.kind == "INSERT" => None,
+        "minted" => Some("no-handle"),
+        "acis" => Some("solid3d"),
+        "ocs" => Some("own-frame"),
+        "assoc" => Some("reactors"),
+        w => Some(
+            EDIT_WORDS
+                .iter()
+                .copied()
+                .find(|x| *x == w)
+                .unwrap_or("unknown"),
+        ),
+    };
+    if word.is_some() {
+        return word;
+    }
+    let l = doc.layer_named(&e.layer).map(|l| &doc.layers[l])?;
+    if l.xref {
+        Some("xref")
+    } else if l.locked {
+        Some("locked-layer")
+    } else {
+        None
+    }
+}
+
+/// The words a page row's `edit` holds: why the edit verbs refuse the entity.
+pub const EDIT_WORDS: [&str; 18] = [
+    "version",
+    "no-handle",
+    "xref",
+    "dynamic",
+    "in-block",
+    "proxy",
+    "locked-layer",
+    "multiline-attribute",
+    "embedded",
+    "solid3d",
+    "own-frame",
+    "reactors",
+    "hatch",
+    "dimension",
+    "leader",
+    "viewport",
+    "image",
+    "unknown",
+];
 
 /// The host's answer for an external reference: whether its path resolves, and to what.
 pub trait XrefResolver {

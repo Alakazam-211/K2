@@ -5,7 +5,13 @@
 //! | the drawing (`drawing`) | `@doc:<format>` | none | the version stamp | none: the doc attributes hold the file's facts |
 //! | a layer (`layer`) | `@h:<handle>` | the drawing | its name | `color`, `on`, `frozen`, `locked`, `plot`, `ltype`, `lw`, `xref` |
 //! | model space, a layout, a block (`model`, `layout`, `block`) | `@h:<handle>` | the drawing | its name | `base`, `anon`, `xref` |
-//! | an entity (its kind, lower case) | `@h:<handle>` | its owner | its kind, upper case | `layer`, `layer_key`, `block_key`, `color`, `rgb`, `ltype`, `lw`, `alpha`, `geom`, `bbox`, `bbox_q`, `ocs`, `xd`, `edit`, `followers` |
+//! | an entity (its kind, lower case) | `@h:<handle>` | its owner | its kind, upper case | `layer`, `layer_key`, `block_key`, `color`, `rgb`, `ltype`, `lw`, `alpha`, `geom`, `bbox`, `bbox_q`, `ocs`, `xd`, `edit`, `followers`; a block reference's attributes, `att.<tag>` ([`attrib_fields`]) |
+//!
+//! **A block reference's attributes are fields of their own** (format 4): each attribute's
+//! value is the reference's attribute `att.<tag>`, and none is its text, so two edits of
+//! different tags of one reference are changes of different fields. A reference whose tags
+//! can't each be named ([`attrib_fields`] gives none) keeps its attributes as its text,
+//! `TAG=value` lines, as before. The pack's merge splits an entity by the same names.
 //!
 //! **Each attribute is a fact of the node's own record.** No node counts other records (the
 //! entities on a layer, a block's inserts), so an edit to one entity changes that entity's node
@@ -36,6 +42,58 @@ use crate::mutant;
 
 /// The bounds' scale: thousandths of the drawing's unit.
 pub const BOUNDS_SCALE: f64 = 1000.0;
+
+/// The most attributes of one block reference that are fields of their own: past it, the
+/// reference keeps them as its text (an entity node's other attributes and these stay within
+/// the kit's [`k2_mpc_base::index::INDEX_ATTRS_MAX`]).
+pub const ATTRIB_FIELDS_MAX: usize = 200;
+
+/// The field of each attribute of a block reference, by its tags in the file's order:
+/// `att.<tag>`, where the tag is in lower case (tags are matched without case), a byte other
+/// than a letter, a digit or `_` is written `-xx` (its hex, lower case), an empty tag is `-`, and
+/// a tag's second and later attributes take `.2`, `.3`… Distinct tags have distinct names, and
+/// every name is a word the kit takes. `None` when a name would be over the kit's
+/// [`k2_mpc_base::index::INDEX_ATTR_KEY_MAX`] bytes, or there are over [`ATTRIB_FIELDS_MAX`]
+/// attributes: the reference's attributes are then its text. The pack's merge names an
+/// attribute's pairs by this too, so `--base` and the merge split a reference alike.
+pub fn attrib_fields<'t, I: IntoIterator<Item = &'t str>>(tags: I) -> Option<Vec<String>> {
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    let mut out = Vec::new();
+    for tag in tags {
+        let mut name = String::from("att.");
+        if tag.is_empty() {
+            name.push('-');
+        }
+        for b in tag.bytes().map(|b| b.to_ascii_lowercase()) {
+            if b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' {
+                name.push(char::from(b));
+            } else {
+                name.push_str(&format!("-{b:02x}"));
+            }
+        }
+        let n = seen.entry(name.clone()).or_default();
+        *n += 1;
+        if *n > 1 {
+            name.push_str(&format!(".{n}"));
+        }
+        if name.len() > k2_mpc_base::index::INDEX_ATTR_KEY_MAX || out.len() >= ATTRIB_FIELDS_MAX {
+            return None;
+        }
+        out.push(name);
+    }
+    Some(out)
+}
+
+/// An attribute's value as its field holds it: as written, or, over the kit's
+/// [`INDEX_ATTR_VALUE_MAX`], `digest:` and the first 16 hex digits of its digest (a change still
+/// shows).
+fn attrib_value(v: &str) -> String {
+    if v.len() <= INDEX_ATTR_VALUE_MAX {
+        v.to_owned()
+    } else {
+        format!("digest:{}", hex16(&Digest::of(v.as_bytes())))
+    }
+}
 
 fn cut(s: &str, max: usize) -> String {
     cut_text(s, max as u32).0.to_owned()
@@ -276,7 +334,19 @@ fn build(doc: &Doc, limits: &IndexLimits, full: bool) -> Result<IndexDraft, Inde
         if e.followers > 0 {
             at.insert("followers".into(), e.followers.to_string());
         }
-        if let Some(t) = &e.text {
+        // a block reference's attributes, each a field of its own when they can be named
+        let mut att_fields = false;
+        if let Some(x) = e.extra.as_deref().filter(|x| !x.attribs.is_empty()) {
+            let names = attrib_fields(x.attribs.iter().map(|a| &*a.tag))
+                .filter(|_| !mutant::active("AttribsAsOneText"));
+            if let Some(names) = names {
+                for (k, a) in names.into_iter().zip(&x.attribs) {
+                    at.insert(k, attrib_value(&a.value));
+                }
+                att_fields = true;
+            }
+        }
+        if let Some(t) = e.text.as_ref().filter(|_| !att_fields) {
             let (t, cut_) = cut_text(t, limits.max_text_bytes);
             n.text = Some(t.to_owned());
             if cut_ {

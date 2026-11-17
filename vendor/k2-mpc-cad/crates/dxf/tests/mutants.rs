@@ -134,6 +134,7 @@ const PLANTS: &[(&str, Row)] = &[
     ("TextBoxExact", index::index_text_boxes_are_approx),
     ("DrawFloatsUnrounded", draw::draw_floats_platform_identical),
     ("DrawNoiseKept", draw::draw_noise_snapped_to_zero),
+    ("InBlockDrawnEditable", draw::draw_edit_matches_the_verbs),
     // the edit verbs: what they write, and what they refuse that they shouldn't
     ("SpanCoversCodeLine", edit::untouched_units_exact),
     ("EditStyleLeaks", edit::style_kept),
@@ -162,6 +163,25 @@ const PLANTS: &[(&str, Row)] = &[
         "AgentWritesRefused",
         edit_session::agent_writes_refused_verbs_land,
     ),
+    // attributes as fields of their own (index format 4): an honest second tag refused, a merge
+    // of two tags refused
+    ("AttribsAsOneText", edit_session::two_agents_one_drawing),
+    // rotate, scale, block insert, text set: what they write, and what they refuse that they
+    // shouldn't
+    ("QuarterTurnInFloat", edit::rotate_turns_points_and_angles),
+    ("AngleNotTurned", edit::rotate_turns_points_and_angles),
+    ("ScaleAboutOrigin", edit::scale_sizes_and_points),
+    ("SizesLeft", edit::scale_sizes_and_points),
+    ("ScaleInFloat", edit::scale_sizes_and_points),
+    ("AttribsUnplaced", edit::block_insert_places_attribs),
+    ("ConstantAttdefWritten", edit::block_insert_places_attribs),
+    ("BlkrefsLeft", edit::block_insert_places_attribs),
+    ("BlkrefsInBlockNode", edit_session::verbs_through_the_kit),
+    ("AnnotativeReadLoose", edit::honest_edits_land),
+    ("AnnotativeIgnored", edit::refusals_named),
+    ("RotateNoiseKept", edit::rotate_noise_snapped),
+    ("ProxyBlockInserted", edit::refusals_named),
+    ("MergeAttribsAsOneText", edit_session::merge_and_base_agree),
 ];
 
 /// A plant's row under the plant: `Err` with what stopped it.

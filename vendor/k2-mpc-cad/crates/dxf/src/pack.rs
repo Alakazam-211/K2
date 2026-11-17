@@ -20,7 +20,14 @@ use crate::error::{CadError, USAGE};
 use crate::{mutant, read_doc, Limits};
 
 /// The index's output format: bump when what a file indexes to changes, and the kit recomputes.
-pub const FORMAT: u32 = 3;
+///
+/// Format 4: a block reference's attributes are fields of their own (`att.<tag>`), no longer its
+/// text. The kit keeps rows by pack and format, so a release before it never reads a format-4
+/// row: it finds the version unindexed, indexes it again under format 3, and that commit
+/// replaces the format-4 row (and this release does the same with a format-3 row). Node keys
+/// are handles, unchanged by the bump; keys the kit minted (entities without a handle) are minted
+/// again.
+pub const FORMAT: u32 = 4;
 
 /// The index verbs, under the noun `entity`.
 pub const VERBS: IndexVerbs = IndexVerbs::new(
@@ -291,6 +298,13 @@ pub static DXF_ERRORS: &[ErrorEntry] = &[
         "Split the call.",
     ),
     ErrorEntry::pack(
+        "DXF-E051",
+        "block_not_insertable",
+        2,
+        "block insert names a block it can't place: missing, an external reference, a layout, anonymous or annotative",
+        "`block list` lists the blocks a reference can name.",
+    ),
+    ErrorEntry::pack(
         "DXF-E053",
         "table_entry_missing",
         2,
@@ -476,6 +490,10 @@ edit_verbs! {
     e_move => "entity move", "moved", "@h:E... --by dx,dy --unit U";
     e_add => "entity add", "added", "line --from x,y[,z] --to x,y[,z] | polyline --points x,y;x,y;... [--closed] [--bulges b,...] [--width W] | text --at x,y[,z] --height H --value S [--rotate DEG] [--style NAME] [--align left|center|right]; --unit U [--layer L] [--color N] [--ltype NAME] [--in model|paper|@h:LAYOUT]";
     e_delete => "entity delete", "deleted", "@h:E... (its followers and what it owns with it)";
+    e_rotate => "entity rotate", "rotated", "@h:E... --by DEG --about x,y --unit U";
+    e_scale => "entity scale", "scaled", "@h:E... --factor F --about x,y --unit U";
+    e_insert => "block insert", "inserted", "--block NAME|@h:B --at x,y --unit U [--rotate DEG] [--scale S] [--attr TAG=VALUE]... [--layer L] [--color N] [--ltype NAME] [--in model|paper|@h:LAYOUT]";
+    e_text_set => "text set", "edited", "@h:TEXT --value S";
 }
 
 /// Every verb the pack gives its blob docs: the reads, then the edits.
@@ -497,4 +515,8 @@ pub static VERB_SET: &[BlobVerb] = &[
     EDIT_VERBS[2],
     EDIT_VERBS[3],
     EDIT_VERBS[4],
+    EDIT_VERBS[5],
+    EDIT_VERBS[6],
+    EDIT_VERBS[7],
+    EDIT_VERBS[8],
 ];

@@ -32,8 +32,12 @@ The repo holds:
   `1`, its kind, which is its name); `k2_mpc_cad_model::index::with_defaults` gives them back.
   An entity's own facts are its fields: `layer`, `layer_key` (the layer record it names),
   `color`, `rgb`, `ltype`, `lw`, `alpha`, `geom` (a digest of its geometry, followers
-  included), `bbox`, and its text. A node never carries counts over other records: those are
-  computed by the read verbs on each read.
+  included), `bbox`, and its text. A block reference's attributes are fields of their own
+  (index format 4): `att.<tag>`, the tag in lower case, a byte other than a letter, digit or `_`
+  written `-xx`, a repeated tag's second `.2` (`att.device`, `att.device.2`,
+  `att.room-2eno` for `ROOM.NO`); none is its text. A reference whose tags can't each be named (a
+  name over 64 bytes, or over 200 attributes) keeps them as its text, `TAG=value` lines. A node
+  never carries counts over other records: those are computed by the read verbs on each read.
 - **Handles** are normalised: leading zeros dropped, upper case. A file without handles gets keys
   minted by the kit.
 
@@ -91,6 +95,10 @@ input's. Each is `merge: pack` (the unit merge covers it) and reads the version 
 | `entity move @h:E… --by dx,dy --unit U` | each point of each entity and its followers | `moved` |
 | `entity add line\|polyline\|text … --unit U [--layer L] [--color N] [--ltype NAME] [--in model\|paper\|@h:LAYOUT]` | one new entity | `added` |
 | `entity delete @h:E…` | the entities, their followers, what they own and their draw-order rows | `deleted` |
+| `entity rotate @h:E… --by DEG --about x,y --unit U` | points turned about the centre, directions turned, angles plus DEG (written in where missing); quarter turns exact in decimal | `rotated` |
+| `entity scale @h:E… --factor F --about x,y --unit U` | points from the centre by F (z from 0), radii, heights, widths, a reference's scales (written in where missing); exact in decimal where it can be | `scaled` |
+| `block insert --block NAME\|@h:B --at x,y --unit U [--rotate DEG] [--scale S] [--attr TAG=VALUE]… [--layer L] [--color N] [--ltype NAME] [--in …]` | a new block reference with an attribute per settable definition, placed as the reference places its block; the block record's reference list gains it | `inserted` |
+| `text set @h:TEXT --value S` | a single-line text's value | `edited` |
 
 **What a plan writes.** Value lines (never a code line or a line ending), whole pairs inserted
 before a pair, whole pairs removed; new pairs in the file's own style (code padding, line
@@ -127,15 +135,16 @@ edit rules on what it changed. A failure is `DXF-E090`, and nothing is planned.
 | `DXF-E047` | `attrib_missing` | no attribute with that tag |
 | `DXF-E048` | `attrib_driven` | the attribute's value is a field |
 | `DXF-E049` | `attrib_multiline` | a multi-line attribute (2018) |
+| `DXF-E051` | `block_not_insertable` | `block insert` of a block that is missing, an external reference, a layout, anonymous or annotative |
 | `DXF-E050` | `edit_too_many` | over 10,000 entities in one call |
 | `DXF-E053` | `table_entry_missing` | a linetype or text style the drawing lacks |
 | `DXF-E054` | `value_not_writable` | a line break, a control character, over 255 bytes |
 | `DXF-E090` | `self_check` | the output didn't read back as planned |
 
 **Beside other changes.** Two calls from one version (`--base`) land unless they change the same
-field of one entity: geometry, layer, colour, linetype and text are fields apart, and every
-attribute value of a block reference is its text (so two attribute values of one reference
-overlap for now). An app's save over a verb's write merges by unit and field when the host has
+field of one entity: geometry, layer, colour, linetype, text and each attribute of a block
+reference (by tag) are fields apart, so two attribute values of one reference land when their
+tags differ and overlap when the tag is the same. An app's save over a verb's write merges by unit and field when the host has
 noted the version the app opened; without that, both are kept. DWG files are read only.
 
 ## The drawing-model read

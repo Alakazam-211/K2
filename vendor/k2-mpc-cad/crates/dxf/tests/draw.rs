@@ -1132,3 +1132,123 @@ pub fn draw_noise_snapped_to_zero() {
         all.len()
     );
 }
+
+/// draw_sampler_as_complete_as_a_drawing: the sampler carries what a real drawing does, so a
+/// drawing saved from it in another format compares fact for fact: its stated extents (the
+/// computed ones), a multileader's arrowhead size, and a layout's own sheet viewport (id 1),
+/// which the read leaves out, beside the viewport onto model space it lists.
+#[test]
+pub fn draw_sampler_as_complete_as_a_drawing() {
+    let b = sampler();
+    let h = header(&b.bytes);
+    let ext = at(&h, &["extents"]);
+    assert_eq!(
+        at(ext, &["stated"]).to_json(),
+        at(ext, &["computed"]).to_json(),
+        "draw_sampler_as_complete_as_a_drawing: the stated extents are the computed ones"
+    );
+    let rows = rows(&b.bytes, "model");
+    let m = ent(&rows, &b, "mleader");
+    assert!(
+        at(m, &["geom", "arrow", "size"]).as_f64().is_some(),
+        "draw_sampler_as_complete_as_a_drawing: the multileader's arrowhead size: {}",
+        at(m, &["geom", "arrow"]).to_json()
+    );
+    let paper = row(list(&h, &["layouts"]), "kind", "paper");
+    let vps: Vec<String> = list(paper, &["viewports"])
+        .iter()
+        .map(|v| string(v, &["handle"]).to_owned())
+        .collect();
+    assert_eq!(
+        vps,
+        vec![b.addr("viewport")],
+        "draw_sampler_as_complete_as_a_drawing: the sheet's own viewport left out, the other listed"
+    );
+    assert_eq!(
+        number(paper, &["entities"]),
+        3.0,
+        "draw_sampler_as_complete_as_a_drawing: the layout holds its sheet viewport, the viewport \
+         and the title"
+    );
+    println!("draw_sampler_as_complete_as_a_drawing: extents stated, arrow sized, sheet viewport");
+}
+
+/// The refusal an `edit` word stands for.
+fn edit_code(word: &str) -> &'static str {
+    match word {
+        "version" => "DXF-E040",
+        "no-handle" => "DXF-E041",
+        "xref" => "DXF-E042",
+        "proxy" => "DXF-E043",
+        "dynamic" => "DXF-E044",
+        "locked-layer" => "DXF-E045",
+        "in-block" => "DXF-E046",
+        "multiline-attribute" => "DXF-E049",
+        _ => "DXF-E021",
+    }
+}
+
+/// draw_edit_matches_the_verbs: every row of every space (model, the layouts, every block) has
+/// `edit`: null exactly when `entity move` takes the entity, else a word of the closed set whose
+/// refusal is the one `entity move` gives. Plant: `InBlockDrawnEditable`.
+#[test]
+pub fn draw_edit_matches_the_verbs() {
+    use k2_mpc_cad_model::draw::EDIT_WORDS;
+    let b = sampler();
+    let h = header(&b.bytes);
+    let unit = string(&h, &["units", "word"]).to_owned();
+    let unit = if matches!(unit.as_str(), "unitless" | "unknown") {
+        "drawing".to_owned()
+    } else {
+        unit
+    };
+    let mut spaces: Vec<String> = list(&h, &["layouts"])
+        .iter()
+        .map(|l| string(l, &["space"]).to_owned())
+        .collect();
+    spaces.extend(
+        list(&h, &["blocks"])
+            .iter()
+            .map(|x| string(x, &["handle"]).to_owned()),
+    );
+    let (mut takes, mut refuses) = (0, 0);
+    for sp in &spaces {
+        for r in rows(&b.bytes, sp) {
+            let addr = string(&r, &["h"]).to_owned();
+            let word = at(&r, &["edit"]).as_str().map(str::to_owned);
+            let got = match k2_mpc_dxf::edit::plan(
+                &b.bytes,
+                "entity move",
+                &[&addr, "--by", "1,0", "--unit", &unit],
+            ) {
+                Ok(_) => None,
+                Err(e) => Some(k2_mpc_dxf::pack::pack_id(e.code.id)),
+            };
+            match (&word, &got) {
+                (None, None) => takes += 1,
+                (Some(w), Some(code)) => {
+                    assert!(
+                        EDIT_WORDS.contains(&w.as_str()),
+                        "draw_edit_matches_the_verbs: {addr}: {w} isn't one of the words"
+                    );
+                    assert_eq!(
+                        code.as_str(),
+                        edit_code(w),
+                        "draw_edit_matches_the_verbs: {addr} ({}): edit {w}",
+                        string(&r, &["kind"])
+                    );
+                    refuses += 1;
+                }
+                _ => panic!(
+                    "draw_edit_matches_the_verbs: {addr} ({}): edit {word:?}, entity move {got:?}",
+                    string(&r, &["kind"])
+                ),
+            }
+        }
+    }
+    assert!(
+        takes > 10 && refuses > 5,
+        "draw_edit_matches_the_verbs: {takes} taken, {refuses} refused"
+    );
+    println!("draw_edit_matches_the_verbs: {takes} rows the verbs take, {refuses} they refuse, each named");
+}

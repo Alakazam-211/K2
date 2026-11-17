@@ -338,12 +338,46 @@ pub fn deliver_recorded_with_summary(
     sender: &Sender,
     summary: Option<&str>,
 ) -> (crate::workspace_msg::MsgResponse, Option<String>) {
+    deliver_recorded_inner(target, text, from, command, wake, wake_timeout, via, sender, summary, None)
+}
+
+/// A Postal message through the `/v1` door (prd-postal-in-k2-v1 S0):
+/// recorded like any delivery, typed in under K2's own `[postal <address> ·
+/// m_…]` label with every body line quoted ([`crate::workspace_msg::Sender::Postal`]).
+/// `address` is a parsed Postal address; it is never a command.
+pub fn deliver_recorded_postal(
+    target: &str,
+    text: &str,
+    address: &str,
+    wake: bool,
+    sender: &Sender,
+) -> (crate::workspace_msg::MsgResponse, Option<String>) {
+    let timeout = crate::workspace_msg::DEFAULT_WAKE_TIMEOUT;
+    deliver_recorded_inner(target, text, address, "", wake, timeout, "postal", sender, None, Some(address))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn deliver_recorded_inner(
+    target: &str,
+    text: &str,
+    from: &str,
+    command: &str,
+    wake: bool,
+    wake_timeout: std::time::Duration,
+    via: &str,
+    sender: &Sender,
+    summary: Option<&str>,
+    postal: Option<&str>,
+) -> (crate::workspace_msg::MsgResponse, Option<String>) {
     let target_ws = crate::workspace_msg::resolve_workspace(target).and_then(|path| {
         let db = k2_core::db::shared();
         let conn = db.lock();
         k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
     });
-    let label = crate::workspace_msg::humanize_from(from);
+    let label = match postal {
+        Some(address) => address.to_string(),
+        None => crate::workspace_msg::humanize_from(from),
+    };
     let id = k2_core::hire::deliveries::new_id();
     let recorded = {
         let db = k2_core::db::shared();
@@ -365,11 +399,26 @@ pub fn deliver_recorded_with_summary(
         )
         .is_ok()
     };
-    let resp = if recorded {
-        let from_with_id = format!("{label} · {id}");
-        crate::workspace_msg::deliver_live_with_receipt(target, text, &from_with_id, from, &id, command, wake, wake_timeout, via, summary)
-    } else {
-        crate::workspace_msg::deliver_live_with_via(target, text, &label, command, wake, wake_timeout, via)
+    let resp = match (recorded, postal) {
+        (true, Some(address)) => {
+            let stamp = crate::workspace_msg::postal_label(address, &id);
+            let sender = crate::workspace_msg::Sender::Postal(&stamp);
+            crate::workspace_msg::deliver_live_with_receipt(target, text, sender, from, &id, "", wake, wake_timeout, via, summary)
+        }
+        (true, None) => {
+            let from_with_id = format!("{label} · {id}");
+            let sender = crate::workspace_msg::Sender::Named(&from_with_id);
+            crate::workspace_msg::deliver_live_with_receipt(target, text, sender, from, &id, command, wake, wake_timeout, via, summary)
+        }
+        // A Postal message is never typed in without its record: the
+        // label's id is how the agent checks it (`k2 msg who`).
+        (false, Some(_)) => {
+            let mut r = crate::workspace_msg::MsgResponse::fail(crate::workspace_msg::MsgReason::SpawnFailed);
+            r.reason = Some("not_recorded".into());
+            r.hint = Some("the delivery record couldn't be written, so nothing was typed in; try again".into());
+            return (r, None);
+        }
+        (false, None) => crate::workspace_msg::deliver_live_with_via(target, text, &label, command, wake, wake_timeout, via),
     };
     if recorded {
         let db = k2_core::db::shared();

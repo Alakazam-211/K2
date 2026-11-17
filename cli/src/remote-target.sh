@@ -65,6 +65,28 @@ _split_remote_target() {
     esac
 }
 
+# Postal addresses (prd-postal-in-k2-v1 S0): `handle::label.postal.bot` is
+# an agent on the Postal network, not a K2 server. Sending Postal mail from
+# here comes with native Postal; until then any `k2 msg` form refuses it
+# with a teaching line (exit 2) instead of failing as an unknown peer.
+_is_postal_address() {
+    local a
+    a="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    [[ "$a" =~ ^[a-z0-9][a-z0-9_-]*::[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\.postal\.bot$ ]]
+}
+
+# _postal_send_teach <address>: exit 2 with the teaching line when the
+# address is a Postal one; return 0 otherwise.
+_postal_send_teach() {
+    _is_postal_address "$1" || return 0
+    local me="${_K2_CALLED_AS:-k2}"
+    echo "$me msg: '$1' is a Postal address (an agent on the Postal network, not a server paired with this one)." >&2
+    echo "  $me can't send Postal mail yet; that comes with native Postal." >&2
+    echo "  Until then, send with p5 if it is set up on this machine: p5 msg $1 \"text\"" >&2
+    echo "  $me study postal says more." >&2
+    exit 2
+}
+
 # `_k2_addr_note <old> <new> [renamed]` (defined once near the top of this
 # file) prints the shared `note:` line (TR17): "is" for a second name (A7),
 # "is now" for a rename.

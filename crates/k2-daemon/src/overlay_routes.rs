@@ -462,13 +462,7 @@ pub fn strip_untrusted_controls(s: &str) -> String {
 /// (`> `), the first included, so no text of theirs can follow the stamp or
 /// start a line (M4). Every break kind counts.
 pub fn vc_payload(vc: &str, text: &str) -> String {
-    let unified = text.replace("\r\n", "\n").replace(['\r', '\u{0b}', '\u{0c}', '\u{85}', '\u{2028}', '\u{2029}'], "\n");
-    let quoted = unified
-        .split('\n')
-        .map(|l| if l.is_empty() { ">".to_string() } else { format!("> {l}") })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("[thread:{vc}]\n{quoted}")
+    format!("[thread:{vc}]\n{}", workspace_msg::quote_every_line(text))
 }
 
 #[cfg(test)]

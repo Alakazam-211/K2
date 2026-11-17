@@ -1342,6 +1342,9 @@ pub fn features() -> Vec<&'static str> {
     // sends (crate::send_once). The CLI asks again after no answer only
     // when this is here; without it, it sends once and says so.
     out.push(crate::send_once::FEATURE);
+    // 0.46.16 (prd-postal-in-k2-v1 S0): the `/v1` door writes the Postal
+    // label itself, so p5 sends the raw body (an older K2 gets p5's label).
+    out.push(k2_core::postal::FEATURE_LABEL);
     // Remote desktop (prd-remote-desktop-tab-v1 §5): whenever the routes
     // exist, so clients show + → Desktop (Beta) and the off card.
     out.push(crate::desktop::FEATURE);
@@ -1564,6 +1567,7 @@ mod tests {
                 "product-feedback-screenshot-v1",
                 "post-idempotency-v1",
                 "send-once",
+                "postal-label",
                 "remote-desktop-v1",
                 // Sew 0.9.0's pin: voice:record in App roles.
                 "app-voice-record-v1",

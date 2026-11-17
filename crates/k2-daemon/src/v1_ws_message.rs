@@ -11,6 +11,13 @@
 //! 3. **Busy** — never inject into an agent that is mid-work (`working`) or
 //!    sitting on a HITL permission prompt (`permission`), since the injected
 //!    text could be consumed as the prompt's answer. Busy → `409 agent_busy`.
+//!
+//! **`kind: "postal"`** (prd-postal-in-k2-v1 S0, P15–P18, P21): p5's knock
+//! for a Postal message. Accepted only from the p5 link key K2 made for this
+//! workspace (label `postal-link:<ws>`); `from` must be a Postal address;
+//! K2 writes the `[postal <from> · m_…]` label on its own line and quotes
+//! every body line; never a command; one delivery per `idempotency_key`
+//! (the Postal message id) for that key.
 
 use crate::cli_response::CliResponse;
 use crate::routes::http::{V1Capability, V1Principal};
@@ -72,6 +79,32 @@ pub fn busy_status_for_path(project_path: &str) -> Option<&'static str> {
     })
 }
 
+/// Gates (2) and (3): `Some(answer)` when the message must not be typed in.
+pub(crate) fn consent_and_busy(project_path: &str) -> Option<CliResponse> {
+    // (2) CONSENT — per-workspace remote-instruct opt-in (same gate as federation).
+    if !k2_core::workspace::settings::remote_instruct_allowed_for_path(project_path) {
+        return Some(CliResponse::ok_json(
+            serde_json::json!({
+                "delivered": false,
+                "mode": "declined",
+                "reason": "remote_instruction_disabled",
+            })
+            .to_string(),
+        ));
+    }
+    // (3) BUSY — refuse to inject into a working / HITL-permission agent.
+    busy_status_for_path(project_path).map(|status| CliResponse {
+        status: "409 Conflict",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "delivered": false,
+            "reason": "agent_busy",
+            "agentStatus": status,
+        })
+        .to_string(),
+    })
+}
+
 pub(crate) fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> CliResponse {
     // Phase 0 — canonical-message capability (owner always has it). Missing
     // cap → uniform 404 (same as ungranted workspace; no existence oracle).
@@ -97,6 +130,9 @@ pub(crate) fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: 
         Ok(v) => v,
         Err(_) => return CliResponse::bad_request("invalid JSON body"),
     };
+    if v.get("kind").and_then(|x| x.as_str()).map(str::trim) == Some("postal") {
+        return crate::v1_ws_postal::handle(principal, &project_path, &v);
+    }
     let text = v
         .get("text")
         .and_then(|x| x.as_str())
@@ -114,30 +150,8 @@ pub(crate) fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: 
         .unwrap_or_else(crate::workspace_msg::resolve_owner_from);
     let wake = v.get("wake").and_then(|x| x.as_bool()).unwrap_or(true);
 
-    // (2) CONSENT — per-workspace remote-instruct opt-in (same gate as federation).
-    if !k2_core::workspace::settings::remote_instruct_allowed_for_path(&project_path) {
-        return CliResponse::ok_json(
-            serde_json::json!({
-                "delivered": false,
-                "mode": "declined",
-                "reason": "remote_instruction_disabled",
-            })
-            .to_string(),
-        );
-    }
-
-    // (3) BUSY — refuse to inject into a working / HITL-permission agent.
-    if let Some(status) = busy_status_for_path(&project_path) {
-        return CliResponse {
-            status: "409 Conflict",
-            content_type: "application/json",
-            body: serde_json::json!({
-                "delivered": false,
-                "reason": "agent_busy",
-                "agentStatus": status,
-            })
-            .to_string(),
-        };
+    if let Some(refused) = consent_and_busy(&project_path) {
+        return refused;
     }
 
     // Deliver via the SAME engine as `k2 talk` (wake=true → live-inject or

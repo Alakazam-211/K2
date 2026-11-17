@@ -1,38 +1,40 @@
-//! Cross-Server Agent Communication (federation) — **Phase 1: internal
-//! cryptographic + trust-store primitives ONLY**.
+//! Cross-Server Agent Communication (federation): two K2 servers whose
+//! owners paired them let their agents message each other.
 //!
-//! SSOT: `.k2/prds/prd-cross-server-agent-comms.md`. This module implements
-//! the *foundation* the later phases stand on, and **opens nothing on the
-//! network**:
+//! SSOT: `.k2/prds/prd-cross-server-agent-comms.md`. What lives here, and
+//! where the daemon wires it:
 //!
-//!   - [`peers`] — a TOFU pinned-peer trust store (`~/.k2/federation-peers.json`,
-//!     0600, atomic-rename) with owner-side CRUD and a **fail-closed
-//!     `require_peer` capability gate** (default-deny). DECISION-2: a peer is an
-//!     **asymmetric-key principal**, never a `connect_user`/owner token.
-//!   - [`envelope`] — pure [`seal`](envelope::seal) / [`open`](envelope::open)
-//!     of an [`AgentSignal`](crate::awareness::AgentSignal) into a signed
-//!     envelope, signed by the box's **federation identity key**
-//!     ([`identity::load_or_create`], `~/.k2/federation/identity.pem`; 0.45.2
-//!     split it from the tunnel TLS key) and verified against a
-//!     peer's **pinned** ECDSA P-256 public key.
+//!   - [`peers`] — the pinned-peer trust store (`federation-peers.json` under
+//!     `k2_home()`, 0600, atomic-rename) with a fail-closed `require_peer`
+//!     capability gate. A peer is an asymmetric-key principal, never a
+//!     `connect_user` or owner token.
+//!   - [`identity`] — the box's federation signing key
+//!     (`federation/identity.pem`, split from the tunnel TLS key in 0.45.2).
+//!   - [`envelope`] — seal / open an [`AgentSignal`](crate::awareness::AgentSignal)
+//!     into an envelope signed by that key and checked against the peer's
+//!     pinned key.
+//!   - [`pairing_v2`] and [`sas`] — pairing with the commit-reveal SAS (v2,
+//!     0.45.2; [`pairing`] keeps the v1 code for old peers).
+//!   - [`ingress`] — inbound checks: signature, ±[`DEFAULT_SKEW_SECS`] clock
+//!     skew, a nonce cache, control-byte strip and the capability gate.
+//!   - [`outbox`] (durable, capped, dead letters), [`seen`] (delivered
+//!     message ids, so a redelivery dedupes) and [`dial`] (who may be dialed,
+//!     and how).
+//!   - [`roster`] (the agents a peer may address) and [`tray`] (packages that
+//!     land in the inbox).
 //!
-//! ## What is deliberately NOT here (later phases — see the PRD phase map)
+//! The daemon's `federation_routes` serves the network side: `/federation/*`
+//! inbound and `/cli/federation/*` for the owner and agents. Inbound text
+//! reaches an agent only through the recipient workspace's "allow remote
+//! instruction" consent, and every delivered message gets a `msg_deliveries`
+//! row (`via = federation`, 0.46.16).
 //!
-//! There is **no `UnixListener`/`TcpListener`, no dial code, no
-//! `routes/dispatcher.rs` touch, no pairing handshake, no ingress/egress, no
-//! replay/skew/TTL enforcement** in Phase 1. Those open the trust boundary and
-//! land later (Phase 2 pairing, Phase 3 ingress, Phase 4 egress) behind their
-//! own review. These primitives are a *library*: nothing in the daemon calls
-//! them yet, so the whole module is inert in a shipped 0.40.x build.
+//! ## Switch
 //!
-//! ## Feature flag
-//!
-//! [`enabled`] reads the default-OFF `K2_FEDERATION` env flag (mirroring
-//! `session_token::scoped_hooks_enabled` / `K2_HOOK_SCOPED`). It exists so the
-//! later ingress/egress wiring can gate itself on a single switch; Phase 1
-//! ships it OFF and unconsulted. The pure primitives below remain unit-testable
-//! regardless of the flag — inertness comes from having no caller, not from a
-//! runtime branch inside the crypto.
+//! [`enabled`] is the default-OFF switch: the persisted `federationEnabled`
+//! setting (synced by [`set_enabled`]) or the `K2_FEDERATION` env force-on.
+//! The routes refuse while it is off; the primitives below stay testable
+//! regardless.
 
 pub mod address_notice;
 pub mod dial;

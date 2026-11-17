@@ -1867,6 +1867,15 @@ pub fn handle_api_key_create(body: &[u8], actor: &str) -> CliResponse {
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
     let label = v.get("label").and_then(|x| x.as_str()).unwrap_or("");
+    // P21: the p5 link key's label is K2's to give (`k2 postal link-p5`):
+    // only that key may send `kind: "postal"` on the `/v1` door.
+    if label.trim().to_ascii_lowercase().starts_with(k2_core::postal::LINK_LABEL_PREFIX) {
+        return CliResponse::bad_request(format!(
+            "labels starting {} are reserved for the p5 link key: run {} postal link-p5 <workspace>",
+            k2_core::postal::LINK_LABEL_PREFIX,
+            k2_core::cli_name!()
+        ));
+    }
     // PRD boot-status-ghost §5.1: `scope` picks the key family. Absent /
     // `owner` = today's key; `status` = a read-only status key for the
     // fleet monitor (full `/boot-status` only, no doors, no workspaces, no

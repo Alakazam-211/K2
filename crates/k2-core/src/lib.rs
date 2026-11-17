@@ -412,6 +412,7 @@ pub mod airgap;
 pub mod listen;
 // Phase 2.5 follow-up — daemon port stability (sub-fix A of finding #547).
 pub mod port_claim;
+pub mod postal;
 // prd-daemon-activity-and-thread-working-v1 DA14: live process lookup for
 // the hook owner check (macOS proc_pidinfo, Linux /proc).
 pub mod proc_ancestry;

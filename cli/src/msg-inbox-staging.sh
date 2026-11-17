@@ -980,6 +980,11 @@ cmd_msg_signal_form() {
 
 # Wrapper that splits `k2 msg <ws> ...` into live / tray / --signal forms.
 cmd_msg_v2() {
+    # A Postal address in any form: the teaching line (exit 2).
+    local first
+    for first in "$@"; do
+        case "$first" in -*) ;; *) _postal_send_teach "$first"; break ;; esac
+    done
     # Detect tray flags or --signal anywhere in the args.
     local has_inbox_bare="false"
     local has_inbox_silent="false"

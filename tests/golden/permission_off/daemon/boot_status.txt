@@ -98,6 +98,7 @@ features:
   product-feedback-screenshot-v1
   post-idempotency-v1
   send-once
+  postal-label
   remote-desktop-v1
   app-voice-record-v1
   boot-status-views-v1

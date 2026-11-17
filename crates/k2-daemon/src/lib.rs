@@ -39,6 +39,7 @@ pub mod chat_routes;
 pub mod sandbox_chat_routes;
 pub mod sandbox_reaper;
 pub mod v1_ws_message;
+pub mod v1_ws_postal;
 pub mod claude_auth_host;
 pub mod subscription_usage;
 pub mod usage_switch;

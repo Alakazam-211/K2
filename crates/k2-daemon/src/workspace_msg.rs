@@ -272,7 +272,7 @@ impl MsgResponse {
         r
     }
 
-    fn fail(reason: MsgReason) -> Self {
+    pub(crate) fn fail(reason: MsgReason) -> Self {
         Self {
             success: false,
             target_session_id: None,
@@ -612,14 +612,47 @@ pub enum Sender<'a> {
     Named(&'a str),
     /// [`guest_label`]'s words.
     Guest(&'a str),
+    /// A Postal message from outside this server (prd-postal-in-k2-v1 S0,
+    /// P17): the inside of K2's own label, `postal <address> · <badge>`
+    /// ([`postal_label`]). Untrusted text: the label stands on its own line,
+    /// every line of the body is quoted (the first too), the body loses
+    /// every control, bidi and invisible character, and the inject
+    /// chokepoint holds it when the terminal has bracketed paste off.
+    Postal(&'a str),
 }
 
 impl<'a> Sender<'a> {
     fn name(self) -> &'a str {
         match self {
-            Sender::Named(n) | Sender::Guest(n) => n,
+            Sender::Named(n) | Sender::Guest(n) | Sender::Postal(n) => n,
         }
     }
+
+    /// Text from outside this server's people and agents, which the inject
+    /// chokepoint treats as untrusted by type (never by sniffing the line).
+    pub fn is_untrusted(self) -> bool {
+        matches!(self, Sender::Postal(_))
+    }
+}
+
+/// The inside of a Postal message's label: `postal <address> · <badge>`.
+/// `address` is a parsed Postal address (`k2_core::postal::parse_address`)
+/// and `badge` K2's own delivery id; neither can leave the brackets.
+pub fn postal_label(address: &str, badge: &str) -> String {
+    let clean = |s: &str| -> String { s.chars().filter(|c| !c.is_control() && !matches!(c, '[' | ']')).collect() };
+    format!("postal {} · {}", clean(address).trim(), clean(badge).trim())
+}
+
+/// Every line of `text` quoted (`> `), the first included; an empty line is
+/// a bare `>`. Every kind of line break counts as one (the Voice & Chat only
+/// shape, security review M4), so no text can start a line of its own.
+pub fn quote_every_line(text: &str) -> String {
+    let unified = text.replace("\r\n", "\n").replace(['\r', '\u{0b}', '\u{0c}', '\u{85}', '\u{2028}', '\u{2029}'], "\n");
+    unified
+        .split('\n')
+        .map(|l| if l.is_empty() { ">".to_string() } else { format!("> {l}") })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The inside of a guest's stamp: `guest <who>`, with no way out of the brackets.
@@ -647,6 +680,9 @@ pub fn format_sender(sender: Sender<'_>, text: &str, command: &str) -> String {
     match sender {
         Sender::Named(from) => format_message(from, text, command),
         Sender::Guest(label) => format!("[{label}] {text}"),
+        Sender::Postal(label) => {
+            format!("[{label}]\n{}", quote_every_line(&crate::overlay_routes::strip_untrusted_controls(&sanitize_inject_text(text))))
+        }
     }
 }
 
@@ -1009,14 +1045,14 @@ struct Receipt<'a> {
 }
 
 /// A live send that wrote a `msg_deliveries` receipt
-/// ([`crate::hire_routes::deliver_recorded`]): `stamp_from` is what the
-/// recipient sees after `[from` (`label · m_…`); the Chatter line keeps
-/// the caller's own `from` and the receipt's `delivery_id`.
+/// ([`crate::hire_routes::deliver_recorded`]): `stamp` is what the
+/// recipient sees (`[from label · m_…]`, or a Postal label); the Chatter
+/// line keeps the caller's own `from` and the receipt's `delivery_id`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn deliver_live_with_receipt(
     workspace_token: &str,
     text: &str,
-    stamp_from: &str,
+    stamp: Sender<'_>,
     from: &str,
     delivery_id: &str,
     command: &str,
@@ -1028,7 +1064,7 @@ pub(crate) fn deliver_live_with_receipt(
     deliver_live_inner(
         workspace_token,
         text,
-        Sender::Named(stamp_from),
+        stamp,
         command,
         wake,
         wake_timeout,
@@ -1516,6 +1552,13 @@ fn inject_and_submit(live: &session_lookup::LiveSession, payload: &str) -> Injec
     inject_and_submit_with_timeout(live, payload, INJECT_LOCK_TIMEOUT)
 }
 
+/// [`inject_and_submit`] for a payload whose sender's type says whether it
+/// is untrusted ([`Sender::is_untrusted`]): the chokepoint strips an
+/// untrusted one and holds it without bracketed paste.
+fn inject_and_submit_as(live: &session_lookup::LiveSession, payload: &str, untrusted: bool) -> InjectOutcome {
+    inject_and_submit_with_timeout_as(live, payload, INJECT_LOCK_TIMEOUT, untrusted)
+}
+
 /// 0.45.6 — heartbeat wake delivery through the SAME guarded path `k2 msg`
 /// uses, replacing the heartbeat's old raw `write(body)` + fixed sleep.
 ///
@@ -1573,6 +1616,15 @@ fn inject_and_submit_with_timeout(
     payload: &str,
     lock_timeout: Duration,
 ) -> InjectOutcome {
+    inject_and_submit_with_timeout_as(live, payload, lock_timeout, false)
+}
+
+fn inject_and_submit_with_timeout_as(
+    live: &session_lookup::LiveSession,
+    payload: &str,
+    lock_timeout: Duration,
+    untrusted: bool,
+) -> InjectOutcome {
     // D1/D2 — acquire the per-session lock on the RESOLVED live session,
     // bounded by the deadline so a stuck holder can't pin this waiter.
     let lock = lock_for(&live.session_id());
@@ -1586,7 +1638,7 @@ fn inject_and_submit_with_timeout(
             return InjectOutcome::Stalled;
         }
     };
-    inject_framed_locked(live, payload)
+    inject_framed_locked(live, payload, untrusted)
 }
 
 /// The actual framed write + submit. ALWAYS called while holding the
@@ -1604,7 +1656,7 @@ fn inject_and_submit_with_timeout(
 /// above is the guard for the one screen where raw keystrokes are
 /// catastrophic. Pinned by
 /// `framed_injection_payload_cannot_escape_the_paste_frame`.
-fn inject_framed_locked(live: &session_lookup::LiveSession, payload: &str) -> InjectOutcome {
+fn inject_framed_locked(live: &session_lookup::LiveSession, payload: &str, untrusted: bool) -> InjectOutcome {
     // Slice 5 hard-safety rule (a): NEVER write into a grok pane whose
     // screen shows an open permission gate. Grok's gate default is
     // "1 (●) Yes, and don't ask again for anything (always-approve
@@ -1623,9 +1675,12 @@ fn inject_framed_locked(live: &session_lookup::LiveSession, payload: &str) -> In
     // Security review M4: a Voice & Chat only post (an untrusted person) is
     // typed in only inside bracketed paste, so none of its lines can submit
     // on its own; without it the line is held, never typed raw.
-    if voice_chat_paste_hold(payload, live.bracketed_paste_active()) {
+    // P17: a Postal message is untrusted by its sender's type; a Voice &
+    // Chat only post by its stamp.
+    let untrusted = untrusted || is_voice_chat_line(payload);
+    if untrusted && !live.bracketed_paste_active() {
         log_debug!(
-            "[msg/inject] session={} Voice & Chat only post held: the terminal has bracketed paste off",
+            "[msg/inject] session={} untrusted line (Voice & Chat only or Postal) held: the terminal has bracketed paste off",
             live.session_id()
         );
         return InjectOutcome::GateHold;
@@ -1635,7 +1690,7 @@ fn inject_framed_locked(live: &session_lookup::LiveSession, payload: &str) -> In
     // paste payload, not at Return; grok_gate_open ran once before step 1.
     // M4: a Voice & Chat only line also loses every other C0/C1 control
     // (but `\n`) and the bidi overrides, here at the one chokepoint.
-    let clean = if is_voice_chat_line(payload) {
+    let clean = if untrusted {
         crate::overlay_routes::strip_untrusted_controls(&sanitize_inject_text(payload))
     } else {
         sanitize_inject_text(payload)
@@ -2036,7 +2091,7 @@ fn inject_cell(
     branch: &str,
 ) -> MsgResponse {
     let payload = format_sender(from, text, command);
-    match inject_and_submit(live, &payload) {
+    match inject_and_submit_as(live, &payload, from.is_untrusted()) {
         InjectOutcome::Delivered => MsgResponse::ok(live.session_id().to_string(), branch),
         InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),
         InjectOutcome::Stalled => MsgResponse::fail(MsgReason::PtyStalled),
@@ -2313,7 +2368,7 @@ fn wake_sidecar_and_fire(
             wake_start.elapsed().as_millis() as u64,
         );
     }
-    match deliver_post_wake(&live, &first_turn, wake_timeout, &inject_profile) {
+    match deliver_post_wake_as(&live, &first_turn, wake_timeout, &inject_profile, from.is_untrusted()) {
         InjectOutcome::Delivered => MsgResponse::ok_woke(
             target_id,
             "sidecar_wake",
@@ -2335,7 +2390,7 @@ fn inject_live(
     project_id: &str,
 ) -> MsgResponse {
     let payload = format_sender(from, text, command);
-    match inject_and_submit(live, &payload) {
+    match inject_and_submit_as(live, &payload, from.is_untrusted()) {
         InjectOutcome::Delivered => {}
         InjectOutcome::PtyDied => {
             log_debug!("[msg/inject_live] PTY died during injection — pty_died");
@@ -2427,6 +2482,17 @@ fn deliver_post_wake(
     wake_timeout: Duration,
     profile: &k2_core::workspace::provider_resume::InjectionProfile,
 ) -> InjectOutcome {
+    deliver_post_wake_as(live, payload, wake_timeout, profile, false)
+}
+
+/// [`deliver_post_wake`] with the sender's type ([`Sender::is_untrusted`]).
+fn deliver_post_wake_as(
+    live: &session_lookup::LiveSession,
+    payload: &str,
+    wake_timeout: Duration,
+    profile: &k2_core::workspace::provider_resume::InjectionProfile,
+    untrusted: bool,
+) -> InjectOutcome {
     let start = std::time::Instant::now();
     if profile.ready_via_bracketed_paste {
         // Honest / polling: poll from t=0. Extra 1s only on a real 0→1
@@ -2471,7 +2537,7 @@ fn deliver_post_wake(
     // D7: post-wake delivery funnels through the SAME locked
     // `inject_and_submit` as live sends, so the just-woken session's
     // injection serializes against a concurrent human composer.
-    inject_and_submit(live, payload)
+    inject_and_submit_as(live, payload, untrusted)
 }
 
 /// How the polling readiness wait in [`deliver_post_wake`] ended.
@@ -2643,7 +2709,7 @@ fn wake_and_fire(
     };
     if let Some(live) = relookup_live(project_id, saved_session.as_deref()) {
         let payload = format_sender(from, text, command);
-        return match inject_and_submit(&live, &payload) {
+        return match inject_and_submit_as(&live, &payload, from.is_untrusted()) {
             InjectOutcome::Delivered => {
                 crate::active_reaper::note_workspace_need(project_id);
                 MsgResponse::ok(live.session_id().to_string(), "wake_coalesced")
@@ -2818,7 +2884,7 @@ fn wake_and_fire(
     }
 
     let _ = Path::new(project_path);
-    match deliver_post_wake(&live, &payload, wake_timeout, &inject_profile) {
+    match deliver_post_wake_as(&live, &payload, wake_timeout, &inject_profile, from.is_untrusted()) {
         InjectOutcome::Delivered => {
             let wake_ms = wake_start.elapsed().as_millis() as u64;
             log_debug!(

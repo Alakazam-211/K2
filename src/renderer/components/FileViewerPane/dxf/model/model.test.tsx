@@ -103,6 +103,37 @@ describe('loadModel', () => {
   })
 })
 
+describe('the sampler as the pack now writes it', () => {
+  it('the header states its extents and names model space’s block record', () => {
+    expect(HEADER.extents?.stated).toEqual([-35, -10, 840, 102])
+    expect(HEADER.model_space_block).toBe('@h:2B')
+    expect(HEADER.layouts.find((l) => l.kind === 'model')?.handle).toBe(HEADER.model_space_block)
+  })
+
+  it('Layout1 holds 3 entities, with its own viewport', () => {
+    const l = HEADER.layouts.find((x) => x.name === 'Layout1') as ModelHeader['layouts'][number] & { viewports: { handle: string }[] }
+    expect(l.entities).toBe(3)
+    expect(l.viewports.map((v) => v.handle)).toEqual(['@h:7D'])
+  })
+
+  it('the multileader’s arrow has its size', () => {
+    expect((row('@h:79').geom as { arrow: { size: number } }).arrow.size).toBe(0.18)
+  })
+
+  it('every row says whether the edit verbs change it, with one of the pack’s words', () => {
+    const words = new Set([null, 'in-block', 'hatch', 'leader', 'own-frame', 'unknown', 'image', 'dimension', 'solid3d'])
+    for (const page of [MODEL, DOOR, NEST, DIM])
+      for (const e of page.entities) {
+        expect(e, e.h).toHaveProperty('edit')
+        expect(words.has(e.edit ?? null), `${e.h} ${e.edit}`).toBe(true)
+      }
+    expect(row('@h:41').edit).toBeNull()
+    expect(row('@h:4D').edit).toBe('own-frame')
+    expect(row('@h:7A').edit).toBe('solid3d')
+    expect(DOOR.entities.every((e) => e.edit === 'in-block')).toBe(true)
+  })
+})
+
 describe('ModelShapes', () => {
   it('instances a block from its definition: one definition, a placement per INSERT and array cell', async () => {
     const { svg } = await drawn()

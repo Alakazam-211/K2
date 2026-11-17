@@ -10,7 +10,7 @@
     "source": "insunits"
   },
   "extents": {
-    "stated": null,
+    "stated": [-35, -10, 840, 102],
     "computed": [-35, -10, 840, 102]
   },
   "settings": {
@@ -44,7 +44,7 @@
       "rgb": [51, 102, 153],
       "aci": 1,
       "fg": false,
-      "alpha": 0.4980392156862745,
+      "alpha": 0.498039216,
       "ltype": "DASHED",
       "lw_mm": 0.35,
       "on": true,
@@ -231,6 +231,7 @@
       "xref": false
     }
   ],
+  "model_space_block": "@h:2B",
   "layouts": [
     {
       "handle": "@h:2B",
@@ -248,7 +249,7 @@
       "name": "Layout1",
       "kind": "paper",
       "space": "@h:2C",
-      "entities": 2,
+      "entities": 3,
       "tab": 1,
       "draw_order": "file",
       "paper": {
@@ -259,7 +260,7 @@
       },
       "viewports": [
         {
-          "handle": "@h:7C",
+          "handle": "@h:7D",
           "centre": [210, 148.5],
           "size": [300, 200],
           "view_centre": [50, 0],

@@ -36,6 +36,7 @@
         "lw_mm": "insert"
       },
       "visible": "insert",
+      "edit": "in-block",
       "drawn": true,
       "bbox": [0, 0, 0.9, 0],
       "bbox_q": "exact",
@@ -60,6 +61,7 @@
         "lw_mm": "insert"
       },
       "visible": "insert",
+      "edit": "in-block",
       "drawn": true,
       "bbox": [0, 0, 0.9, 0.9],
       "bbox_q": "exact",
@@ -67,7 +69,7 @@
         "centre": [0, 0],
         "r": 0.9,
         "a0": 0,
-        "a1": 1.5707963267948966,
+        "a1": 1.57079633,
         "ccw": true
       }
     },
@@ -81,12 +83,13 @@
         "rgb": [51, 102, 153],
         "fg": false,
         "aci": null,
-        "alpha": 0.4980392156862745,
+        "alpha": 0.498039216,
         "ltype": "DASHED",
         "lt_scale": 2,
         "lw_mm": 0.35
       },
       "visible": true,
+      "edit": "in-block",
       "drawn": true,
       "bbox": [0, 0, 0, 0.9],
       "bbox_q": "exact",
@@ -111,6 +114,7 @@
         "lw_mm": "insert"
       },
       "visible": "insert",
+      "edit": "in-block",
       "drawn": false,
       "why": "attdef",
       "bbox": [0, 0.95, 0.6, 1.25],

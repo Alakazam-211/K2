@@ -1,5 +1,6 @@
 The CAD pack's drawing-model goldens for its generated sampler (read-only copies):
-  the CAD pack's drawing-model goldens, index format 3
+  the CAD pack's drawing-model goldens, index format 4
+  copied from k2-mpc-cad main at 07126410, before its v0.2.1 tag (copy again at the tag)
   crates/dxf/tests/golden/draw-sampler-2018-header.json          -> sampler-header.json
   crates/dxf/tests/golden/draw-sampler-2018-page-model.json      -> sampler-page-model.json
   crates/dxf/tests/golden/draw-sampler-2018-page-door.json       -> sampler-page-door.json

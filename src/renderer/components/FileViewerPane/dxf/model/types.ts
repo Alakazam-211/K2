@@ -113,6 +113,8 @@ export type ModelHeader = {
   layers: ModelLayer[]
   linetypes?: ModelLinetype[]
   blocks: ModelBlock[]
+  /** Model space's own block record (`@h:`): a hold on it covers all of model space. Null for an old drawing without handles. */
+  model_space_block?: string | null
   layouts: ModelLayout[]
   whys?: string[]
 }

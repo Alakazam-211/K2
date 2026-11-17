@@ -20,6 +20,7 @@ verbs are the people's side on this box:
   k2 agent hire-root [set <dir>]
   k2 msg who <m_…>                               who really sent a delivery
 Inside a K2 terminal `team` and `instances` carry the session passport:
+an agent reads its own links; it never hires teams, links or retires.
 EOF
 }
 # Inside a K2 terminal `team` and `instances` carry the session passport:

@@ -104,7 +104,9 @@ for verb in team instances; do
     first="${out%%$'\n'*}"
     [ "$first" = "── Agent hire: teams, instances, hire root, sender check (0.45.6) ────" ] || die "agent $verb --help starts: $first"
     case "$out" in *"  k2 agent instances retire <instance> [--force]"*) ;; *) die "agent $verb --help: $out" ;; esac
-    [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 15 ] || die "agent $verb --help is not 15 lines: $out"
+    [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 16 ] || die "agent $verb --help is not 16 lines: $out"
+    last="$(printf '%s\n' "$out" | tail -1)"
+    [ "$last" = "an agent reads its own links; it never hires teams, links or retires." ] || die "agent $verb --help ends: $last"
     ok
 done
 

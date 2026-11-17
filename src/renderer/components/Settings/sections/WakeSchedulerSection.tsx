@@ -21,8 +21,9 @@ import { describeHeartbeatStatus, spanLabel } from '@/lib/heartbeat-wait'
 import { localWhen } from '../shared/local-time'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
-import { BetaTag, Button, Segmented, Toggle } from '@/components/ui'
+import { Button, Segmented, Toggle, cx } from '@/components/ui'
 import { SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { HALVES_MIN_WIDTH, ScrollEdge, halves, useCssWidth } from '../controls/halves'
 import { PRODUCT_NAME } from '@/lib/brand'
 
 export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
@@ -1033,21 +1034,54 @@ export function WakeSchedulerSection(): React.JSX.Element {
     </SettingsGroup>
   )
 
+  // Two sides under a fixed header, like Settings → Tunnel: every heartbeat
+  // on the left, and how heartbeats run (the scheduler's status, wake and
+  // battery) then the recent runs on the right, so a long list never
+  // pushes the wake switches or the runs far down.
   return (
-    <div data-settings-id="heartbeats" className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`}>
-      <header className="min-w-0">
-        <h2 className="type-title text-[var(--color-text-primary)] flex items-center gap-2">
-          Heartbeats
-          <BetaTag />
-        </h2>
-        <p className={SETTING_ROW_HINT}>
-          Heartbeats wake your agents on a schedule. Here you see every one on this server, pause or resume them, and
-          find out why one didn’t run.
-        </p>
+    <div data-settings-id="heartbeats" className="flex flex-col h-full min-h-0 overflow-hidden">
+      <header className="flex-shrink-0 px-6 pt-6 pb-4 border-b border-[var(--color-border)]">
+        <div className={`min-w-0 ${CONTENT_WIDTH}`}>
+          <h2 className="type-title text-[var(--color-text-primary)]">Heartbeats</h2>
+          <p className={SETTING_ROW_HINT}>
+            Heartbeats wake your agents on a schedule. Here you see every one on this server, pause or resume them, and
+            find out why one didn’t run.
+          </p>
+        </div>
       </header>
-      {statusGroup}
-      {listGroup}
-      {runsGroup}
+      <HeartbeatsSides
+        left={listGroup}
+        right={
+          <>
+            {statusGroup}
+            {runsGroup}
+          </>
+        }
+      />
+    </div>
+  )
+}
+
+/** The page's body (controls/halves, as on Settings → Tunnel): two sides
+ *  each scrolling on its own, stacking left above right in one scroll
+ *  below HALVES_MIN_WIDTH. */
+function HeartbeatsSides({ left, right }: { left: React.ReactNode; right: React.ReactNode }): React.JSX.Element {
+  const [bodyRef, bodyWidth] = useCssWidth(HALVES_MIN_WIDTH)
+  const stacked = bodyWidth < HALVES_MIN_WIDTH
+  return (
+    <div ref={bodyRef} data-testid="heartbeats-halves" data-layout={stacked ? 'stacked' : 'split'} className={halves.body(stacked)}>
+      {stacked && <ScrollEdge at="top" />}
+      <div data-testid="heartbeats-left" className={halves.left(stacked)}>
+        {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
+        <div className="pt-5 space-y-6">{left}</div>
+        {!stacked && <ScrollEdge at="bottom" inset="-mx-6" room />}
+      </div>
+      <div data-testid="heartbeats-right" className={halves.right(stacked)}>
+        {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
+        <div className={cx(halves.rightTop(stacked), 'space-y-6')}>{right}</div>
+        {!stacked && <ScrollEdge at="bottom" inset="-mx-6" room />}
+      </div>
+      {stacked && <ScrollEdge at="bottom" />}
     </div>
   )
 }

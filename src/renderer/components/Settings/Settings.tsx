@@ -643,6 +643,7 @@ export default function Settings(): React.JSX.Element {
           activeSection === 'context-catalog' ||
           activeSection === 'zen-gardens' ||
           activeSection === 'k2-connect' ||
+          activeSection === 'wake-scheduler' ||
           activeSection === 'k2-access' ||
           activeSection === 'connections' ||
           activeSection === 'agents' ||

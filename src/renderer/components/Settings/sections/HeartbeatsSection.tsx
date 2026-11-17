@@ -31,7 +31,7 @@ import {
 import { primaryScope } from '@/kessel/server-scope'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
-import { BetaTag, DialogCloseButton, Toggle, Tag, useDialogCancel } from '@/components/ui'
+import { DialogCloseButton, Toggle, Tag, useDialogCancel } from '@/components/ui'
 
 // ── Types mirroring the backend agent_heartbeats table ────────────────
 
@@ -1152,10 +1152,7 @@ export function HeartbeatsPanel({
     <div data-settings-id="heartbeats">
       <div className="flex items-center justify-between mb-2">
         <div>
-          <h3 className="type-heading text-[var(--color-text-primary)] flex items-center gap-2">
-            Heartbeats
-            <BetaTag />
-          </h3>
+          <h3 className="type-heading text-[var(--color-text-primary)]">Heartbeats</h3>
           <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
             Scheduled wakeups for <span className="text-[var(--color-text-secondary)]">{agentModeLabel(agentMode, agentName)}</span>. Each fires on its own cadence with its own <span className="font-mono">WAKEUP.md</span>.
           </p>

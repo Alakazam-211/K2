@@ -3,7 +3,7 @@
 // card instead of crashing; pausing confirms or says why it didn't take;
 // Recent runs filters to problems and opens a run to say why.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 const h = vi.hoisted(() => ({
   invokes: {} as Record<string, unknown>,
@@ -141,7 +141,7 @@ describe('WakeSchedulerSection', () => {
     expect(screen.queryByText('Something went wrong')).toBeNull()
 
     h.invokes.k2_heartbeat_list_all = [ROW]
-    fireEvent.click(screen.getAllByRole('button', { name: 'Try again' })[1])
+    fireEvent.click(within(screen.getByTestId('heartbeats-list-error')).getByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(screen.getByTestId('heartbeat-row-hb1')).toBeTruthy())
   })
 

@@ -7,7 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 K2="$K2_CLI"
 
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
@@ -82,7 +82,7 @@ run_k2() {
 }
 
 echo "== bash -n =="
-if bash -n "$K2_CLI"; then
+if bash -n "$CLI_BASH_SOURCE"; then
     echo "  PASS: bash -n cli/k2"
     pass=$((pass + 1))
 else
@@ -164,7 +164,7 @@ assert_contains "publish run --help --skin" "$pub_run_help" "--skin"
 assert_not_contains "publish has no --app flag" "$pub_help" "--app ["
 
 echo "== routes / prefix unchanged in cli/k2 =="
-src="$(cat "$K2_CLI")"
+src="$(cat "$CLI_BASH_SOURCE")"
 assert_contains "login route" "$src" "/cli/skin/login"
 assert_contains "k2skn_ prefix" "$src" "k2skn_"
 assert_contains "skin-tokens route" "$src" "/cli/skin-tokens"

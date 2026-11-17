@@ -4,25 +4,25 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [ -f "$K2" ] || fail "$K2 not found"
-bash -n "$K2" || fail "bash -n cli/k2"
+bash -n "$CLI_BASH_SOURCE" || fail "bash -n cli/k2"
 
-grep -q 'cmd_hostmail_bans' "$K2" || fail "cmd_hostmail_bans missing"
-grep -q 'cmd_hostmail_allowlist' "$K2" || fail "cmd_hostmail_allowlist missing"
+grep -q 'cmd_hostmail_bans' "$CLI_BASH_SOURCE" || fail "cmd_hostmail_bans missing"
+grep -q 'cmd_hostmail_allowlist' "$CLI_BASH_SOURCE" || fail "cmd_hostmail_allowlist missing"
 
-grep -A20 'verb == "bans_list"' "$K2" | grep -q '/cli/mail/bans' \
+grep -A20 'verb == "bans_list"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/bans' \
   || fail "bans_list must GET /cli/mail/bans"
-grep -A20 'verb == "bans_clear"' "$K2" | grep -q '/cli/mail/bans/clear' \
+grep -A20 'verb == "bans_clear"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/bans/clear' \
   || fail "bans_clear must POST /cli/mail/bans/clear"
-grep -A20 'verb == "allowlist_add"' "$K2" | grep -q '/cli/mail/allowlist/add' \
+grep -A20 'verb == "allowlist_add"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/allowlist/add' \
   || fail "allowlist_add must POST /cli/mail/allowlist/add"
-grep -A20 'verb == "bans_migrate_restore"' "$K2" | grep -q '/cli/mail/bans/migrate/restore' \
+grep -A20 'verb == "bans_migrate_restore"' "$CLI_BASH_SOURCE" | grep -q '/cli/mail/bans/migrate/restore' \
   || fail "migrate restore must POST restore"
 
 help="$("$K2" hostmail bans --help)"
@@ -96,7 +96,7 @@ list_help="$("$K2" hostmail list --help)"
 <<<"$list_help" grep -qi 'MailingList\|mailing list\|list create' \
   || fail "k2 hostmail list --help must stay mailing lists ($list_help)"
 
-if grep -A40 '_uds_eligible()' "$K2" | grep -q '/cli/mail'; then
+if grep -A40 '_uds_eligible()' "$CLI_BASH_SOURCE" | grep -q '/cli/mail'; then
   fail "_uds_eligible must not glob /cli/mail (bans stays TCP like quota)"
 fi
 

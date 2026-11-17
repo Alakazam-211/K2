@@ -7,17 +7,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [ -f "$K2" ] || fail "$K2 not found"
-bash -n "$K2" || fail "bash -n cli/k2"
+bash -n "$CLI_BASH_SOURCE" || fail "bash -n cli/k2"
 
-grep -q 'calendar) cmd_hostmail_calendar' "$K2" || fail "cmd_hostmail must route calendar"
-grep -A12 'verb == "dav"' "$K2" | grep -q '"/cli/mail/dav"' \
+grep -q 'calendar) cmd_hostmail_calendar' "$CLI_BASH_SOURCE" || fail "cmd_hostmail must route calendar"
+grep -A12 'verb == "dav"' "$CLI_BASH_SOURCE" | grep -q '"/cli/mail/dav"' \
   || fail "dav verb must use /cli/mail/dav"
 
 # Help.

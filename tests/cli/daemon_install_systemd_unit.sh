@@ -16,9 +16,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-K2="$ROOT/cli/k2"
+. "$ROOT/tests/cli/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 [ -f "$K2" ] || { echo "FAIL: $K2 not found" >&2; exit 1; }
-bash -n "$K2" || { echo "FAIL: bash -n cli/k2" >&2; exit 1; }
+bash -n "$CLI_BASH_SOURCE" || { echo "FAIL: bash -n cli/k2" >&2; exit 1; }
 for v in $(env | grep -E '^K2(SO)?_' | cut -d= -f1); do unset "$v"; done
 
 pass=0

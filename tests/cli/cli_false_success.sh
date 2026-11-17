@@ -8,7 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
 
@@ -67,7 +67,7 @@ run_k2() {
 
 # ── 0. Syntax ────────────────────────────────────────────────────────
 echo "== bash -n =="
-if bash -n "$K2_CLI"; then
+if bash -n "$CLI_BASH_SOURCE"; then
     echo "  PASS: bash -n cli/k2"
     pass=$((pass + 1))
 else
@@ -167,7 +167,7 @@ assert_not_contains "workspace help has no pending work" "$ws_help" "pending wor
 # ── 6. terminal spawn fail-loud ──────────────────────────────────────
 echo "== terminal spawn handler path =="
 set +e
-python3 - "$K2_CLI" <<'PY'
+python3 - "$CLI_BASH_SOURCE" <<'PY'
 import pathlib, re, sys
 src = pathlib.Path(sys.argv[1]).read_text()
 m = re.search(r'^cmd_terminal_spawn\(\) \{(.*?)^\}\n', src, re.M | re.S)

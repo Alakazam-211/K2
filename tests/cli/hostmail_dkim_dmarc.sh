@@ -4,24 +4,24 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [ -f "$K2" ] || fail "$K2 not found"
-bash -n "$K2" || fail "bash -n cli/k2"
+bash -n "$CLI_BASH_SOURCE" || fail "bash -n cli/k2"
 
-grep -q 'M_SELECTOR="${M_SELECTOR:-}"' "$K2" || fail "_mail_py must export M_SELECTOR"
-grep -q 'M_VERB="dkim_show"' "$K2" || fail "dkim show must set M_VERB"
-grep -q 'M_VERB="dkim_rotate"' "$K2" || fail "dkim rotate must set M_VERB"
-grep -q 'M_VERB="dkim_retire"' "$K2" || fail "dkim retire must set M_VERB"
-grep -q 'M_VERB="dmarc_show"' "$K2" || fail "dmarc show must set M_VERB"
-grep -q 'M_VERB="dmarc_report_to"' "$K2" || fail "dmarc report-to must set M_VERB"
-grep -q '/cli/mail/dkim/retire' "$K2" || fail "retire must POST /cli/mail/dkim/retire"
-grep -q '"/cli/mail/dkim"' "$K2" || fail "show/rotate must use /cli/mail/dkim"
-grep -q '/cli/mail/dmarc' "$K2" || fail "dmarc must use /cli/mail/dmarc"
+grep -q 'M_SELECTOR="${M_SELECTOR:-}"' "$CLI_BASH_SOURCE" || fail "_mail_py must export M_SELECTOR"
+grep -q 'M_VERB="dkim_show"' "$CLI_BASH_SOURCE" || fail "dkim show must set M_VERB"
+grep -q 'M_VERB="dkim_rotate"' "$CLI_BASH_SOURCE" || fail "dkim rotate must set M_VERB"
+grep -q 'M_VERB="dkim_retire"' "$CLI_BASH_SOURCE" || fail "dkim retire must set M_VERB"
+grep -q 'M_VERB="dmarc_show"' "$CLI_BASH_SOURCE" || fail "dmarc show must set M_VERB"
+grep -q 'M_VERB="dmarc_report_to"' "$CLI_BASH_SOURCE" || fail "dmarc report-to must set M_VERB"
+grep -q '/cli/mail/dkim/retire' "$CLI_BASH_SOURCE" || fail "retire must POST /cli/mail/dkim/retire"
+grep -q '"/cli/mail/dkim"' "$CLI_BASH_SOURCE" || fail "show/rotate must use /cli/mail/dkim"
+grep -q '/cli/mail/dmarc' "$CLI_BASH_SOURCE" || fail "dmarc must use /cli/mail/dmarc"
 
 # Do not steal domain / rotate-admin / password.
 "$K2" hostmail domain --help >/dev/null || fail "hostmail domain still exists"

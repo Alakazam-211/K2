@@ -19,7 +19,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
 
@@ -70,7 +70,7 @@ assert_exit() {
 
 # ── 0. Syntax ────────────────────────────────────────────────────────
 echo "== bash -n =="
-if bash -n "$K2_CLI"; then
+if bash -n "$CLI_BASH_SOURCE"; then
     echo "  PASS: bash -n cli/k2"
     pass=$((pass + 1))
 else

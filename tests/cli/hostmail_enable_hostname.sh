@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
@@ -26,13 +26,13 @@ if ! grep -q hostname "$out"; then
 fi
 
 # CLI POSTs hostname; never empty {}.
-if ! grep -q 'body={"hostname": hostname}' "$K2"; then
+if ! grep -q 'body={"hostname": hostname}' "$CLI_BASH_SOURCE"; then
     fail "k2 hostmail enable must POST {\"hostname\": hostname}"
 fi
-if grep -A6 'verb == "server_enable"' "$K2" | grep -q 'body={}'; then
+if grep -A6 'verb == "server_enable"' "$CLI_BASH_SOURCE" | grep -q 'body={}'; then
     fail "k2 hostmail enable must not POST empty {}"
 fi
-if ! grep -q '/cli/db/server/enable", body={}' "$K2"; then
+if ! grep -q '/cli/db/server/enable", body={}' "$CLI_BASH_SOURCE"; then
     fail "k2 db enable must still POST {}"
 fi
 

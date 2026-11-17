@@ -5,11 +5,12 @@
 # K5_CLI_CALLED_AS (set by the Rust front, which runs this script from a
 # path of its own) wins over $0 when it says k2 or k5; anything else, and
 # an empty value, is ignored.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 unset K5_CLI_CALLED_AS

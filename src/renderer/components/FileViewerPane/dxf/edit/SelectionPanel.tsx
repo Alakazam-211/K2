@@ -187,7 +187,9 @@ export function SelectionPanel({ edit, header, slots }: { edit: CadEdit; header:
   const one = rows.length === 1 ? rows[0] : null
   const layers = [...new Set(rows.map((r) => r.layer))]
   const reasons = [...new Set(rows.map((r) => editReason(r, header)).filter((w): w is string => w !== null))]
-  const cantWords = [...new Set(reasons.map((w) => whyWords(w, w === 'locked-layer' ? layers.find((l) => header.layers.find((x) => x.name === l)?.locked) : null)))]
+  // A locked layer is named: the layer of a selected row that's on one.
+  const lockedOn = rows.find((r) => editReason(r, header) === 'locked-layer')?.layer ?? null
+  const cantWords = [...new Set(reasons.map((w) => whyWords(w, w === 'locked-layer' ? lockedOn : null)))]
   const holds = holdsOn(edit.selection, edit.holds, rows, header)
   const controls = edit.canEdit
   const isText = one && (one.kind === 'TEXT' || one.kind === 'MTEXT')

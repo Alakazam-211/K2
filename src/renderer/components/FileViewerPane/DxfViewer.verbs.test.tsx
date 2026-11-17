@@ -158,6 +158,15 @@ describe('rotating', () => {
     expect(world.edits.calls).toHaveLength(1)
   })
 
+  it('a row the model says is on a locked layer names that layer, with no Rotate by', async () => {
+    const model = structuredClone(PAGES.model[0])
+    model.entities = model.entities.map((r) => (r.h === '@h:41' ? { ...r, edit: 'locked-layer' } : r))
+    await open({ pages: { ...PAGES, model: [model] } })
+    click('@h:41')
+    expect(screen.getByTestId('dxf-edit-cant').textContent).toContain('It’s on A-WALL, which is locked. Unlock it in your CAD app first.')
+    expect(screen.queryByTestId('dxf-rotate-by')).toBeNull()
+  })
+
   it('kinds the verbs can’t change have no Rotate by and no handles', async () => {
     await open()
     click('@h:68')

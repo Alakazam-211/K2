@@ -42,14 +42,25 @@ beforeEach(() => {
 describe('the call record line', () => {
   it('reads each end reason, and a cancelled ring is never a missed call', () => {
     const at = { ended_at: '2026-11-14T12:01:00Z' }
-    expect(callRecordLine(summary({ ...at, end_reason: 'no_answer', missed_ids: ['41'] }), '41')).toEqual({ kind: 'missed', text: 'Missed call', callBack: true })
+    expect(callRecordLine(summary({ ...at, end_reason: 'no_answer', missed_ids: ['41'] }), '41')).toEqual({ kind: 'missed', text: 'Missed call', action: 'Call back' })
     expect(callRecordLine(summary({ ...at, end_reason: 'declined', declined_ids: ['41'] }), '41').text).toBe('Declined')
-    expect(callRecordLine(summary({ ...at, end_reason: 'cancelled', missed_ids: ['41'] }), '41')).toEqual({ kind: 'cancelled', text: 'Cancelled', callBack: true })
+    expect(callRecordLine(summary({ ...at, end_reason: 'cancelled', missed_ids: ['41'] }), '41')).toEqual({ kind: 'cancelled', text: 'Cancelled', action: 'Call again' })
     expect(callRecordLine(summary({ ...at, end_reason: 'empty', joined_ids: ['42', '41'], duration_ms: 724_000 }), '41').text).toBe('Call · 12:04')
     // The caller left without Sew's cancel (an older Sew): a missed call.
     expect(callRecordLine(summary({ ...at, end_reason: 'empty', missed_ids: ['41'] }), '41').kind).toBe('missed')
-    expect(callRecordLine(summary({ ...at, end_reason: 'media_failed' }), '41')).toEqual({ kind: 'ended', text: 'Call ended', callBack: true })
-    expect(callRecordLine(summary({}), '41')).toEqual({ kind: 'live', text: 'Call in progress', callBack: false })
+    expect(callRecordLine(summary({ ...at, end_reason: 'media_failed' }), '41')).toEqual({ kind: 'ended', text: 'Call ended', action: 'Call again' })
+    expect(callRecordLine(summary({}), '41')).toEqual({ kind: 'live', text: 'Call in progress', action: null })
+  })
+
+  it('Call back only on a call you missed; a finished call or one you made says Call again', () => {
+    const at = { ended_at: '2026-11-14T12:01:00Z' }
+    // They called (42), you (41) missed it.
+    expect(callRecordLine(summary({ ...at, end_reason: 'no_answer', missed_ids: ['41'] }), '41').action).toBe('Call back')
+    // You called (42 is you here); they didn't answer.
+    expect(callRecordLine(summary({ ...at, end_reason: 'no_answer', missed_ids: ['41'] }), '42').action).toBe('Call again')
+    // A call that happened.
+    expect(callRecordLine(summary({ ...at, end_reason: 'empty', joined_ids: ['42', '41'], duration_ms: 5_000 }), '41').action).toBe('Call again')
+    expect(callRecordLine(summary({ ...at, end_reason: 'declined', declined_ids: ['41'] }), '41').action).toBe('Call again')
   })
 
   it('formats a duration', () => {

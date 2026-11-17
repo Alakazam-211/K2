@@ -160,21 +160,27 @@ export type CallRecordKind = 'live' | 'missed' | 'declined' | 'cancelled' | 'ans
 export interface CallRecordLine {
   kind: CallRecordKind
   text: string
-  /** "Call back" makes sense (the call is over). */
-  callBack: boolean
+  /** The line's button once the call is over: "Call back" on a call you
+   *  missed, "Call again" on any other (one that happened, one you made);
+   *  null while it is live. */
+  action: 'Call back' | 'Call again' | null
 }
 
 /** What a call's record says to `me` (a Sew member id): "Missed call",
  *  "Declined", "Cancelled" or "Call · 12:04"; "Call in progress" while live.
  *  A cancelled ring is never a missed call. */
 export function callRecordLine(s: HomeChatCallSummary, me: string | null): CallRecordLine {
-  if (!s.ended) return { kind: 'live', text: 'Call in progress', callBack: false }
-  if (s.endReason === 'cancelled') return { kind: 'cancelled', text: 'Cancelled', callBack: true }
-  if (s.endReason === 'declined' || (me !== null && s.declinedIds.includes(me))) return { kind: 'declined', text: 'Declined', callBack: true }
+  if (!s.ended) return { kind: 'live', text: 'Call in progress', action: null }
+  const again = 'Call again' as const
+  if (s.endReason === 'cancelled') return { kind: 'cancelled', text: 'Cancelled', action: again }
+  if (s.endReason === 'declined' || (me !== null && s.declinedIds.includes(me))) return { kind: 'declined', text: 'Declined', action: again }
   // Answered: someone besides the caller joined.
-  if (s.joinedIds.length >= 2) return { kind: 'answered', text: `Call · ${formatCallDuration(s.durationMs ?? 0)}`, callBack: true }
-  if (s.endReason === 'no_answer' || s.missedIds.length > 0) return { kind: 'missed', text: 'Missed call', callBack: true }
-  return { kind: 'ended', text: 'Call ended', callBack: true }
+  if (s.joinedIds.length >= 2) return { kind: 'answered', text: `Call · ${formatCallDuration(s.durationMs ?? 0)}`, action: again }
+  if (s.endReason === 'no_answer' || s.missedIds.length > 0) {
+    const yours = me !== null && s.startedBy === me
+    return { kind: 'missed', text: 'Missed call', action: yours ? again : 'Call back' }
+  }
+  return { kind: 'ended', text: 'Call ended', action: again }
 }
 
 // ── The person's gestures ──────────────────────────────────────────────

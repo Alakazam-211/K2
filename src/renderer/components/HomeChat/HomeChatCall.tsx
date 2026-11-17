@@ -181,7 +181,7 @@ export function HomeChatCallRecord({
 }: {
   line: CallRecordLine
   timeLabel: string
-  /** Absent: no Call back (calls unavailable here, or read-only). */
+  /** Absent: no Call back or Call again (calls unavailable here, or read-only). */
   onCallBack?: () => void
 }): JSX.Element {
   return (
@@ -195,9 +195,9 @@ export function HomeChatCallRecord({
         {line.text}
       </span>
       <span>· {timeLabel}</span>
-      {line.callBack && onCallBack && (
+      {line.action && onCallBack && (
         <button type="button" className="k2-focus underline" data-testid="home-chat-call-back" onClick={onCallBack}>
-          Call back
+          {line.action}
         </button>
       )}
     </div>

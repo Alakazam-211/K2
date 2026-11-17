@@ -98,14 +98,17 @@ describe('DM call pieces', () => {
 
   it('the record line: its words, and Call back only when offered', () => {
     const back = vi.fn()
-    const { rerender } = render(<HomeChatCallRecord line={{ kind: 'missed', text: 'Missed call', callBack: true }} timeLabel="2m" onCallBack={back} />)
+    const { rerender } = render(<HomeChatCallRecord line={{ kind: 'missed', text: 'Missed call', action: 'Call back' }} timeLabel="2m" onCallBack={back} />)
     expect(screen.getByTestId('home-chat-call-record').dataset.kind).toBe('missed')
     expect(screen.getByTestId('home-chat-call-record-text').textContent).toBe('Missed call')
+    expect(screen.getByTestId('home-chat-call-back').textContent).toBe('Call back')
     fireEvent.click(screen.getByTestId('home-chat-call-back'))
     expect(back).toHaveBeenCalledTimes(1)
-    rerender(<HomeChatCallRecord line={{ kind: 'live', text: 'Call in progress', callBack: false }} timeLabel="now" onCallBack={back} />)
+    rerender(<HomeChatCallRecord line={{ kind: 'answered', text: 'Call · 0:05', action: 'Call again' }} timeLabel="now" onCallBack={back} />)
+    expect(screen.getByTestId('home-chat-call-back').textContent).toBe('Call again')
+    rerender(<HomeChatCallRecord line={{ kind: 'live', text: 'Call in progress', action: null }} timeLabel="now" onCallBack={back} />)
     expect(screen.queryByTestId('home-chat-call-back')).toBeNull()
-    rerender(<HomeChatCallRecord line={{ kind: 'cancelled', text: 'Cancelled', callBack: true }} timeLabel="now" />)
+    rerender(<HomeChatCallRecord line={{ kind: 'cancelled', text: 'Cancelled', action: 'Call again' }} timeLabel="now" />)
     expect(screen.queryByTestId('home-chat-call-back')).toBeNull()
   })
 

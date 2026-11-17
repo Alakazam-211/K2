@@ -237,13 +237,19 @@ fn remote_passes_are_the_owners_to_mint_and_anyones_to_revoke() {
         let (st, v) = call("/cli/app/remote-pass/rotate", &who, json!({"app": "jobs"}));
         assert_eq!((st, code(&v)), (403, "owner_only"), "{v}");
     }
+    // The pass is stamped with the wall clock inside the route, so its
+    // expiry is bracketed by the seconds read before and after the call
+    // (a busy box can cross a second boundary between the two).
+    let before = k2_core::deploy::now();
     let (st, v) = call("/cli/app/remote-pass/rotate", &owner_login(), json!({"app": "jobs", "ttl": "2d"}));
+    let after = k2_core::deploy::now();
     assert_eq!(st, 200, "{v}");
     // The grants formula: manifest (thread:read, files:write) ∩ approved (thread:read).
     assert_eq!(v["caps"], json!(["thread:read"]));
     assert_eq!(v["withheld"], json!(["files:write"]));
     assert_eq!(v["rooms"], json!([f.ws_a]));
-    assert_eq!(v["expiresAt"].as_i64().unwrap() - k2_core::deploy::now(), 2 * 86_400);
+    let issued = v["expiresAt"].as_i64().unwrap() - 2 * 86_400;
+    assert!((before..=after).contains(&issued), "a 2d pass issued at {issued}, outside the call [{before}, {after}]: {v}");
     let first = v["pass"].as_str().unwrap().to_string();
     let p = k2_core::skin::resolve_skin_token(&first).expect("works on the main port");
     assert_eq!(k2_core::skin::link::remote_pass_app(&p.id).as_deref(), Some(s.as_str()));

@@ -58,6 +58,11 @@ afterEach(() => {
 })
 
 describe('the daemon’s word', () => {
+  it('liveView false with on true still opens the real source (liveView only means a live text editor)', () => {
+    expect(stateFor({ core: 'blend', on: true, liveView: false })).toEqual({ status: 'scene' })
+    expect(stateFor({ core: 'blend', on: true, liveView: true })).toEqual({ status: 'scene' })
+  })
+
   it('a .blend whose core is on is a live scene; off, the sample', () => {
     expect(stateFor({ core: 'blend', on: true, liveView: false })).toEqual({ status: 'scene' })
     expect(stateFor({ core: 'blend', on: false, liveView: false })).toEqual({ status: 'off' })

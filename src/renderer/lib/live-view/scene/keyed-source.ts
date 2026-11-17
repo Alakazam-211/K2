@@ -58,6 +58,12 @@ function knowActor(a: { id: string; name: string; kind: string; colour: string }
   return ACTORS[a.id] ?? putActor(a)
 }
 
+/** Whether a welcome's rights include writing: a word (`'edit'`) or a list of them; `'write'` reads the same. */
+export function canWrite(rights: unknown): boolean {
+  const has = (r: unknown): boolean => r === 'edit' || r === 'write'
+  return Array.isArray(rights) ? rights.some(has) : has(rights)
+}
+
 /** A refusal's code: the pack's own when the kit put it in the error's details, else the kit's. */
 export function refusalCode(e: ErrorReport): string {
   const d = (e as { details?: { code?: unknown } }).details
@@ -116,7 +122,7 @@ export class KeyedWatchSceneSource implements LiveSource {
   /** The first welcome on this socket. */
   attach(welcome: KeyedWelcome): void {
     this.S = blankState(EMPTY, welcome.self)
-    this.S.rights = welcome.rights ?? this.S.rights
+    this.S.rights = (Array.isArray(welcome.rights) ? (canWrite(welcome.rights) ? 'edit' : 'read') : welcome.rights) ?? this.S.rights
     this.S.loading = { phase: 'welcome' }
     this.S.follow = false
     this.watch = new KeyedWatch(this.t, welcome)
@@ -142,9 +148,9 @@ export class KeyedWatchSceneSource implements LiveSource {
   private fromWelcome(welcome: KeyedWelcome): void {
     this.S.rights = welcome.rights ?? this.S.rights
     this.claimsOn = (welcome.features ?? []).includes('claims') || !!this.presence?.claimsSupported
-    // Read only up front: no write right (TODO(K2): confirm `read_only_reason`, K2's proposal), with the host's words when it gives them.
+    // Read only up front: no write right (the welcome's `rights`, a word or a list), with the host's words (`read_only_reason`) when it gives them.
     const reason = (welcome as { read_only_reason?: string | null }).read_only_reason
-    this.readOnly = welcome.rights !== 'edit' || reason ? (reason || READ_ONLY_WORDS) : null
+    this.readOnly = !canWrite(welcome.rights) || reason ? (reason || READ_ONLY_WORDS) : null
   }
 
   /** The socket is down: `reconnecting` while the caller retries, `failed` when it stopped. */

@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ServerFrame, Transport } from '@k2/mpc-client'
-import { KeyedWatchSceneSource, refusalCode, type KeyedWelcome } from './keyed-source'
+import { canWrite, KeyedWatchSceneSource, refusalCode, type KeyedWelcome } from './keyed-source'
 import { hiddenOf, inSceneDrawn } from './overlay'
 import { activityItems } from './panel'
 import type { SceneSnapshot } from './sample-source'
@@ -297,5 +297,31 @@ describe('a .blend from a newer Blender (the pack declines it at open: live_vers
     const o = fresh()
     o.src.refusedAtOpen({ id: 'live_version', message: 'declined: live_version' } as never)
     expect(o.snap().scene.declined?.title).toBe('This file is from a newer Blender.')
+  })
+})
+
+describe('the wired welcome (K2, the BLEND writer off)', () => {
+  // As K2's daemon sends it for a .blend: these features, rights as a word, and its read-only reason.
+  const WIRED = { root: '', version: 0, client: 1, self: 'ada', rights: 'read', read_only_reason: 'K2 can’t save .blend edits yet; this file opens read-only.', features: ['keyed_watch', 'view_address', 'presence'] } as unknown as KeyedWelcome
+
+  it('rights as a word or a list: write only with edit (or write)', () => {
+    expect(canWrite('edit')).toBe(true)
+    expect(canWrite('read')).toBe(false)
+    expect(canWrite(['read', 'edit'])).toBe(true)
+    expect(canWrite(['read'])).toBe(false)
+    expect(canWrite(['write'])).toBe(true)
+    expect(canWrite(undefined)).toBe(false)
+  })
+
+  it('the welcome K2 sends: read only, its words, no holds; the snapshot still comes in', () => {
+    const o = open({ welcome: WIRED })
+    expect(o.snap().readOnly).toBe('K2 can’t save .blend edits yet; this file opens read-only.')
+    expect(o.snap().scene.holds).toBe(false)
+    expect(o.src.state().D.lists.objs).toHaveLength(5)
+  })
+
+  it('rights as a list reads the same', () => {
+    expect(open({ welcome: { ...WIRED, rights: ['read'] } as unknown as KeyedWelcome }).snap().readOnly).toBeTruthy()
+    expect(open({ welcome: { ...WIRED, rights: ['read', 'edit'], read_only_reason: undefined } as unknown as KeyedWelcome }).snap().readOnly).toBeUndefined()
   })
 })

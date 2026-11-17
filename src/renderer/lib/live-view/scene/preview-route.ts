@@ -18,12 +18,10 @@
 // those keys). Loud on a shape this client doesn't know; quiet (null) on a
 // field it can do without.
 //
-// TODO(S8, with K2 Cores' next mesh-read slice): a derived `mesh_hash` and
-// `hidden_by` per unit on the keyed watch (the live view's hidden_by is
-// "self" or "collection:@coll:N"; the vendored kit's WIRE.md has neither
-// yet). Until then the listing's hidden ("self" or "collection", never an
-// address) gives the "(hidden)" label, and naming the hiding collection
-// waits for S8's session read.
+// A live scene's units carry the pack's derived `mesh_hash` and `hidden_by`
+// ("self" or "collection:@coll:N") on the keyed watch (keyed-doc.ts reads
+// them); the listing's hidden ("self" or "collection", never an address)
+// is the picture's own, for the sample and before the watch is in.
 
 import { entryOf, idIndexAt, type IdEntry, type IdLayer } from './ids'
 import type { CameraLeftOut } from './left-out'

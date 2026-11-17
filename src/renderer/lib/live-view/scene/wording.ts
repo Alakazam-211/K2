@@ -101,7 +101,7 @@ export function framePhrase(f: Frame, D0: Doc, D1: Doc): { who: string; sep: str
 }
 
 export const VERB_WORD: Record<string, string> = { 'object place': 'move', 'object rename': 'rename', 'object visibility': 'hide or show' }
-/** The BLEND writer is off (edits to a .blend are refused until it's proven). TODO(K2): confirm the code; K2's proposal. */
+/** The BLEND writer is off (edits to a .blend are refused, 409 with this code, until it's proven). */
 export const BLEND_WRITER_OFF = 'blend_writer_disabled'
 const WHY: Record<string, string> = { blend_driven: 'animation drives it', blend_rotation_mode: 'it turns by quaternion', blend_not_editable: 'it’s linked from another file', [BLEND_WRITER_OFF]: `${PRODUCT_NAME} can’t save changes to .blend files yet` }
 /** Why a refusal with no holder happened, in words. */

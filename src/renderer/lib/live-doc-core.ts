@@ -61,7 +61,7 @@ export type LiveDocCoreState =
 /** The timeline pack's core id (TODO(vendoring): confirm with K2 once the pack's core is registered in k2_core::docs_cores::CORES). */
 export const TIMELINE_CORE = 'timeline'
 
-/** The BLEND pack's core id. TODO(wiring day): confirm with K2 once the pack's core is registered (cores are off by default). */
+/** The BLEND pack's core id (`docs/cores` answers `{core: 'blend', on, liveView: false}`; off by default). `liveView` only says a core has a live text editor, so it's not read for a scene. */
 export const SCENE_CORE = 'blend'
 
 export function stateFor(c: LiveDocCore): LiveDocCoreState {

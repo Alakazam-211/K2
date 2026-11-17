@@ -16,6 +16,7 @@ import type { VoiceCall } from '@/stores/voice-core'
 import CallBar from './CallBar'
 import { CallStageView, useCallStageShown, useCallVideoHere } from './CallLayer'
 import { CompactButton } from './CallViewButtons'
+import CallHereButton, { useCallHereAction } from './CallHereButton'
 
 /** The stage at the top of a conversation: as tall as its tiles need, up to
  *  under half the window, so the messages stay in view. */
@@ -25,8 +26,11 @@ function PlaceStageOrBar({ call }: { call: VoiceCall }): React.JSX.Element {
   const stageShown = useCallStageShown()
   const videoHere = useCallVideoHere()
   const compact = useCallPlace((s) => s.compact)
+  // Not the call's home: Show call here (or Back to chat) moves it here.
+  const away = useCallHereAction(call)
   if (stageShown) return <CallStageView call={call} className={`${STAGE_IN_PAGE} border-x-0 border-t-0`} />
-  return <CallBar call={call} look="dock" action={videoHere && compact ? <CompactButton testId="call-bar-expand" compact /> : null} />
+  const action = away ? <CallHereButton kind={away} /> : videoHere && compact ? <CompactButton testId="call-bar-expand" compact /> : null
+  return <CallBar call={call} look="dock" action={action} />
 }
 
 /** The call's place at the top of a conversation (`hostKey`, `roomId`: the

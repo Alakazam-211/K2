@@ -160,6 +160,8 @@ import { overlayClaims, resetBrowserOverlaysForTest } from '@/lib/browser-overla
 import { dmCallRoom } from '@/lib/home-chat/calls'
 import { ConversationCallPlace, RoomCallBand } from './CallPlace'
 import { useHomeChatStore } from '@/stores/home-chat'
+import { __resetCallHomeForTests, setCallHomeBridge } from '@/stores/call-home'
+import { CALL_HOME_KEY, readCallHome, writeCallHome } from '@/lib/voice/call-home'
 
 const list: VoiceRoomsList = {
   hosting: { state: 'ok', line: 'Voice rooms are on.', detail: null },
@@ -544,6 +546,88 @@ describe('elsewhere in the app: the slim bar in the top bar', () => {
   it("a DM this window can't find has no Back to call (never a dead button)", async () => {
     await inDmCall(false)
     expect(within(topBar()).queryByTestId('call-bar-back')).toBeNull()
+  })
+})
+
+describe('one call, one home window (this window is main; the app lists main and window-2)', () => {
+  const ROOM = 'sewlab.k2.dev|room-1'
+  const later = (): number => Date.now() + 60_000
+
+  beforeEach(() => setCallHomeBridge({ liveWindows: async () => ['main', 'window-2', 'window-call'] }))
+  afterEach(() => __resetCallHomeForTests())
+
+  /** Another window's write, as this window hears it. */
+  function otherWindowWrites(owner: string): void {
+    act(() => {
+      writeCallHome({ call: ROOM, owner, until: later() })
+      window.dispatchEvent(new StorageEvent('storage', { key: CALL_HOME_KEY }))
+    })
+  }
+
+  it('another window is home: this one draws no video and opens no sinks; Show call here brings the stage here', async () => {
+    writeCallHome({ call: ROOM, owner: 'window-2', until: later() })
+    await inCall()
+    fireEvent.click(await screen.findByTestId('call-topbar-camera'))
+    await waitFor(() => expect(video.store.getState().local.camera).not.toBe('off'))
+    const here = await screen.findByTestId('call-bar-here')
+    expect(here.textContent).toBe('Show call here')
+    expect(screen.queryByTestId('video-stage')).toBeNull()
+    expect(video.sinks()).toEqual([])
+    // Full screen's chord does nothing here either.
+    fireEvent.keyDown(window, fullScreenChord())
+    expect(useCallExpand.getState().expanded).toBe(false)
+    fireEvent.click(here)
+    expect(readCallHome()).toMatchObject({ call: ROOM, owner: 'main' })
+    expect(await screen.findByTestId('video-stage')).toBeTruthy()
+    await waitFor(() => expect(video.sinks().map((s) => s.track)).toEqual(['local:camera']))
+    expect(screen.queryByTestId('call-bar-here')).toBeNull()
+  })
+
+  it('home here, then Show call here in another window: this one folds to the slim bar and lets its video go', async () => {
+    await inCall()
+    await cameraOn()
+    await waitFor(() => expect(readCallHome()).toMatchObject({ call: ROOM, owner: 'main' }))
+    otherWindowWrites('window-2')
+    expect(screen.queryByTestId('video-stage')).toBeNull()
+    expect(screen.getByTestId('call-bar-here')).toBeTruthy()
+    await waitFor(() => expect(video.sinks()).toEqual([]), { timeout: 3500 })
+    // The call itself never moved.
+    expect(voice.store.getState().call?.phase).toBe('connected')
+  })
+
+  it("with the call in its own window, the window it came from says Back to chat, which brings the stage back", async () => {
+    localStorage.setItem(CALL_POPPED_FROM_KEY, 'main')
+    writeCallHome({ call: ROOM, owner: 'window-call', until: later() })
+    await inCall()
+    fireEvent.click(await screen.findByTestId('call-topbar-camera'))
+    const back = await screen.findByTestId('call-bar-back-to-chat')
+    expect(back.textContent).toBe('Back to chat')
+    expect(screen.queryByTestId('call-bar-here')).toBeNull()
+    fireEvent.click(back)
+    expect(readCallHome()?.owner).toBe('main')
+    expect(await screen.findByTestId('video-stage')).toBeTruthy()
+  })
+
+  it("another window that didn't pop it out says Show call here", async () => {
+    localStorage.setItem(CALL_POPPED_FROM_KEY, 'window-2')
+    writeCallHome({ call: ROOM, owner: 'window-call', until: later() })
+    await inCall()
+    fireEvent.click(await screen.findByTestId('call-topbar-camera'))
+    expect(await screen.findByTestId('call-bar-here')).toBeTruthy()
+    expect(screen.queryByTestId('call-bar-back-to-chat')).toBeNull()
+  })
+
+  it("the call's own window closes itself when another window takes the stage; the call goes on", async () => {
+    writeCallHome({ call: ROOM, owner: 'window-call', until: later() })
+    await inCall()
+    fireEvent.click(await screen.findByTestId('call-topbar-camera'))
+    const closeWindow = vi.fn()
+    render(<CallWindow closeWindow={closeWindow} />)
+    await waitFor(() => expect(within(screen.getByTestId('call-window')).getByTestId('video-grid')).toBeTruthy())
+    expect(closeWindow).not.toHaveBeenCalled()
+    otherWindowWrites('main')
+    await waitFor(() => expect(closeWindow).toHaveBeenCalledTimes(1))
+    expect(voice.store.getState().call?.phase).toBe('connected')
   })
 })
 

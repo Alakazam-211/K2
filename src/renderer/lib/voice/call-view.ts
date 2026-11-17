@@ -152,6 +152,15 @@ export function notePoppedOutFrom(windowLabel: string): void {
   }
 }
 
+/** The window that popped the call out, or null. */
+export function readPoppedOutFrom(): string | null {
+  try {
+    return localStorage.getItem(CALL_POPPED_FROM_KEY)
+  } catch {
+    return null
+  }
+}
+
 /** Back to chat: what the call's window hands back as it closes. `to` is the
  *  window that popped it out, which opens its stage; every other window
  *  is as when the call's window is closed. */

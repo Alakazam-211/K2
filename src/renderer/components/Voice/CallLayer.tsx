@@ -8,6 +8,12 @@
 // window (Pop out). There is no floating tile and no corner. When the video
 // stops, the stage goes and the call's controls are in its slim bar.
 //
+// One call, one home window (stores/call-home.ts): only the home window
+// draws the stage and opens video sinks (the camera's self-view included);
+// every other K2 window has the slim bar with Show call here. Audio is the
+// native engine's, in the app's Rust process: it plays once, whichever
+// window is home.
+//
 // Only where calls happen: the app's native engine with video rooms on. The
 // web client's calls are seats with no media, so it never shows either.
 // Everything it shows comes from the voice and video stores (the engine's
@@ -23,7 +29,8 @@ import { getWindowLabel } from '@/lib/window-chrome'
 import { toggleCallExpand, useCallExpand } from '@/stores/call-expand'
 import { loadSharePick } from '@/stores/call-share'
 import { useCallPopout, watchCallPopout } from '@/stores/call-popout'
-import { callHasConversation, expandCallStage, useCallDocked, useCallPlace } from '@/stores/call-place'
+import { callHasConversation, callPlaceKey, expandCallStage, useCallDocked, useCallPlace } from '@/stores/call-place'
+import { noteCallWindowClosed, useIsCallHome, watchCallHome } from '@/stores/call-home'
 import { useSettingsStore } from '@/stores/settings'
 import { useVoice, voice } from '@/stores/voice'
 import { video } from '@/stores/video'
@@ -47,7 +54,9 @@ export function useCallVideoHere(): boolean {
   const preview = useSettingsStore((s) => s.videoRoomsPreview) === true
   const live = useCallVideoLive(video, call?.participants ?? NO_PEOPLE)
   const poppedOut = useCallPopout((s) => s.open)
-  return call !== null && native && preview && live && !poppedOut
+  // One call, one home window: only the home draws the call's video.
+  const home = useIsCallHome()
+  return call !== null && native && preview && live && !poppedOut && home
 }
 
 /** The stage is up in this window, in the call's place (CallPlace): its
@@ -164,9 +173,16 @@ function InCall({ call }: { call: VoiceCall }): React.JSX.Element | null {
     const was = wasOut.current
     wasOut.current = poppedOut
     if (!was || poppedOut) return
+    // Closed by the OS too: the stage comes back without waiting out the
+    // call window's lease.
+    noteCallWindowClosed()
     loadSharePick(call.callId)
     if (takeCallHandBack(call.callId, getWindowLabel(), Date.now())) expandCallStage()
   }, [poppedOut, call.callId])
+  // Which window is the call's home (one call, one home window). No window
+  // left to show it: the call ends rather than going on unseen.
+  const placeKey = callPlaceKey(call)
+  useEffect(() => watchCallHome(placeKey, () => void voice.leave()), [placeKey])
   // The call ended (this unmounts): next call starts with its stage open.
   useEffect(() => () => expandCallStage(), [])
   // The call's own window counts its time from the same second.

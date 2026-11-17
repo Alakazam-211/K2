@@ -24,7 +24,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
-import { CALL_WINDOW_ADOPT_MS, callStartedAt } from '@/lib/voice/call-view'
+import { CALL_WINDOW_ADOPT_MS, CALL_WINDOW_LABEL, callStartedAt } from '@/lib/voice/call-view'
+import { callPlaceKey } from '@/stores/call-place'
+import { useCallHome, watchCallHome } from '@/stores/call-home'
 import { callTitle } from '@/lib/home-chat/call-names'
 import { useSettingsStore } from '@/stores/settings'
 import { keepCallWindowFrame, popInCall } from '@/stores/call-popout'
@@ -99,6 +101,17 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
     if (call) had.current = true
     else if (had.current) closeWindow()
   }, [call, closeWindow])
+  // One call, one home window: this window is the call's home while it's
+  // open. Show call here in another window takes the stage there, and this
+  // window closes (the call goes on).
+  const placeKey = call ? callPlaceKey(call) : null
+  useEffect(() => (placeKey ? watchCallHome(placeKey, () => void callActions.leave(), CALL_WINDOW_LABEL) : undefined), [placeKey])
+  const homeOwner = useCallHome((s) => (s.tracked ? s.owner : null))
+  const wasHome = useRef(false)
+  useEffect(() => {
+    if (homeOwner === CALL_WINDOW_LABEL) wasHome.current = true
+    else if (homeOwner !== null && wasHome.current) closeWindow()
+  }, [homeOwner, closeWindow])
   useEffect(() => {
     const id = setTimeout(() => setWaited(true), CALL_WINDOW_ADOPT_MS)
     return () => clearTimeout(id)

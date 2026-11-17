@@ -21,8 +21,9 @@ import { getCurrentWindow, Window as TauriWindow } from '@tauri-apps/api/window'
 import { create } from 'zustand'
 import { isWebClient } from '@/lib/is-web'
 import { getWindowLabel } from '@/lib/window-chrome'
-import { CALL_POPOUT_EVENT, CALL_WINDOW_LABEL, notePoppedOutFrom, readWindowFrame, writeCallHandBack, writeWindowFrame, type WindowFrame } from '@/lib/voice/call-view'
+import { CALL_POPOUT_EVENT, CALL_WINDOW_LABEL, notePoppedOutFrom, readPoppedOutFrom, readWindowFrame, writeCallHandBack, writeWindowFrame, type WindowFrame } from '@/lib/voice/call-view'
 import { shrinkCall } from './call-expand'
+import { handCallHome } from './call-home'
 
 /** What this needs from the app: injected, so tests run without Tauri. */
 export interface CallPopoutBridge {
@@ -61,6 +62,8 @@ export async function popOutCall(): Promise<void> {
   if (!b) return
   shrinkCall()
   notePoppedOutFrom(getWindowLabel())
+  // The call's own window is its home while it's open.
+  handCallHome(CALL_WINDOW_LABEL, getWindowLabel())
   gen += 1
   // At once: the stage gives way while the window comes up.
   useCallPopout.setState({ open: true, error: null })
@@ -78,6 +81,8 @@ export async function popOutCall(): Promise<void> {
  *  popped it out (its stage opens there), then closes this one. */
 export function popInCall(callId: string | null, closeWindow: () => void, now = Date.now()): void {
   if (callId) writeCallHandBack(callId, now)
+  // The stage goes home to the window it came from.
+  handCallHome(readPoppedOutFrom() ?? 'main')
   closeWindow()
 }
 

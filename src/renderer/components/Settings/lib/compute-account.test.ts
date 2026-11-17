@@ -201,6 +201,7 @@ describe('requestEnrollOffer', () => {
     if (out.ok) throw new Error('expected a refusal')
     expect(out.unavailable).toBe(false)
     expect(out.message).toMatch(/^That machine hasn't checked in with K2 Connect in the last 10 minutes/)
+    expect(out.message).toContain('"Let a server run jobs on this computer" is on')
   })
 })
 

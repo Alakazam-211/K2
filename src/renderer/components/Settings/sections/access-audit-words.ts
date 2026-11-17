@@ -154,7 +154,7 @@ const ACTION_WORDS: Record<string, string> = {
   'apps.manage-users': 'manage its Apps’ users',
   'apps.core': 'let its Apps use a core',
   'apps.approve': 'get an App approved',
-  'chat.manage': 'run Chat / Voice Hosting',
+  'chat.manage': 'run chat and voice',
   'vault.manage': 'share server-wide secrets',
   'vault.move-approve': 'move secrets to another server',
   'gardens.manage': 'manage Gardens and data sources',
@@ -172,7 +172,7 @@ const ACTION_WORDS: Record<string, string> = {
   'connections.create': 'add a connection',
   'connections.add': 'add a connection',
   'docs.share': 'share a document',
-  'sew.owner-handoff': 'open Sew as the owner',
+  'sew.owner-handoff': 'open chat as the owner',
   'sew.rollback-data-loss': 'roll Sew back',
 }
 

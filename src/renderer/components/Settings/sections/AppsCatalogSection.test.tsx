@@ -152,6 +152,7 @@ describe('helpers', () => {
     const w = job('waiting', 'address', { waiting: { reason: 'waiting_sew_rights', requests: [], text: 'turn it on', hint: 'k2 agent access set ws chat_manage on' } })
     // The server's words and its command stay out of the sheet's own words.
     expect(waitText(w)).toContain('Waiting for permission to set up chat and voice')
+    expect(waitText(w)).toContain('“Manage chat and voice”')
     expect(waitText(w)).not.toContain('turn it on')
     expect(waitText(w)).not.toContain('k2 agent')
     expect(waitText(job('running', 'check'))).toBeNull()

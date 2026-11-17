@@ -111,7 +111,7 @@ export function waitText(job: CatalogJob): string | null {
     case 'waiting_approval':
       return 'Waiting for the owner to approve what this App uses. The deploy goes on by itself once it’s approved.'
     case 'waiting_sew_rights':
-      return 'Waiting for permission to set up chat and voice. The owner can turn on Chat / Voice Hosting for the agent that looks after it, or deploy it themselves; the deploy goes on by itself then.'
+      return 'Waiting for permission to set up chat and voice. The owner can turn on “Manage chat and voice” for the agent that looks after it, or deploy it themselves; the deploy goes on by itself then.'
     default:
       return 'Waiting for the server. The deploy goes on by itself.'
   }

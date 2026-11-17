@@ -208,7 +208,7 @@ describe('VoiceRoomsSection', () => {
     h.rooms.mockResolvedValue({ ...rooms(false), hosting, rooms: [] })
     render(<VoiceRoomsSection />)
     const box = await screen.findByTestId('voice-rooms-hosting')
-    expect(box.textContent).toContain('Voice rooms need Chat / Voice Hosting')
+    expect(box.textContent).toContain('Voice rooms need chat and voice')
     expect(box.textContent).not.toContain('k2 hostchat')
     expect(box.textContent).toContain('The server said: identity: standalone.')
   })

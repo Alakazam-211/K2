@@ -197,9 +197,9 @@ export function SewPersonAccess({
   const hint = !principalId
     ? 'K2 on the server needs an update before this person can use chat.'
     : !installed
-      ? 'Chat / Voice Hosting isn’t set up on this server yet.'
+      ? 'Chat and voice isn’t set up on this server yet.'
       : !targetOn && grant
-        ? 'Chat / Voice Hosting is turned off, so this can’t change now. You can still remove it.'
+        ? 'Chat and voice is turned off, so this can’t change now. You can still remove it.'
         : 'Members join the chat on this server. Guests see only the channels they’re added to.'
   return (
     <SettingsGroup title="Chat and voice" hint={SEW_ACCESS_TOOLTIP} card testId="sew-person-access">
@@ -267,7 +267,7 @@ export function SewAdminAccessState({ users }: { users: { id?: string; username:
   const nameOf = (id: string): string => users.find((u) => u.id === id)?.username ?? id
   return (
     <div className="space-y-1 border border-[var(--color-border)] p-2" data-testid="sew-admin-access">
-      <div className="type-name text-[var(--color-text-primary)]">Chat / Voice Hosting (read only)</div>
+      <div className="type-name text-[var(--color-text-primary)]">Chat and voice (read only)</div>
       <p className={`type-hint ${muted}`}>
         A login uses chat and voice only through its own chat grant, never because of its role here. Admin Access never adds anyone to an App&apos;s
         Spaces.

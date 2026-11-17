@@ -122,7 +122,7 @@ describe('User Access: Sew column', () => {
     state.sew = { supported: true, state: 'not-installed' }
     await openAda()
     const link = await screen.findByRole('button', { name: 'Set up chat' })
-    expect(screen.getByTestId('sew-person-access').textContent).toContain('Chat / Voice Hosting isn’t set up on this server yet.')
+    expect(screen.getByTestId('sew-person-access').textContent).toContain('Chat and voice isn’t set up on this server yet.')
     expect(screen.queryByRole('button', { name: 'Chat and voice access for ada' })).toBeNull()
     fireEvent.click(link)
     expect(useSettingsStore.getState().activeSection).toBe('sew')
@@ -211,7 +211,7 @@ describe('User Access: Sew column', () => {
     state.grants = [chat()]
     h.daemonCliPost.mockResolvedValue({ success: true, cascaded: [] })
     await openAda()
-    expect((await screen.findByTestId('sew-person-access')).textContent).toContain('Chat / Voice Hosting is turned off, so this can’t change now.')
+    expect((await screen.findByTestId('sew-person-access')).textContent).toContain('Chat and voice is turned off, so this can’t change now.')
     expect(screen.getByTestId('sew-person-access').textContent).toContain('Member')
     expect(screen.queryByRole('button', { name: 'Chat and voice access for ada' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))

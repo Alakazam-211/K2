@@ -160,7 +160,7 @@ export function AddConnectionPicker({
                     ? 'it is no longer a trusted paired server'
                     : r.kind === 'denied'
                       ? 'your login can’t list paired servers'
-                      : 'federation is off on this server',
+                      : 'Connect agents across servers is off on this server',
             }
       setRetried((prev) => ({ ...prev, [s.key]: fresh }))
     })
@@ -250,7 +250,7 @@ export function AddConnectionPicker({
         status: hasQuery ? undefined : (
           <AgentListStatus
             marker="federation-off"
-            text={`Federation is off on this server. Turn it on under ${isAirgap() ? 'Servers → Policies' : 'Tunnel → Policies'} to connect to agents on paired servers.`}
+            text={`Connect agents across servers is off on this server. Turn it on under ${isAirgap() ? 'Servers → Policies' : 'Tunnel → Policies'} to connect to agents on paired servers.`}
           />
         ),
         rows: [],

@@ -6,9 +6,9 @@
 //   THIS server (K2 Connect delivers the ticket to that machine); off =
 //   drain, then remove (daemon `nodes/retire`).
 //
-// Which agents may use the machines is NOT set here: it's the Agent tab's
-// "Allow compute nodes" (Settings → Workspaces → <agent> → Agent;
-// `ProjectsSection.tsx` AgentsUseComputeToggle), Rosson 2026-10-11.
+// Which agents may use the machines is NOT set here: it's the Permissions
+// tab's "Let this agent use compute nodes" (Settings → Workspaces / Agents →
+// <agent> → Permissions; `ProjectsSection.tsx` AgentsUseComputeToggle).
 //
 // Thin client: the daemon owns nodes, grants and the retire sweep; K2
 // Connect owns the account's machine list. The page only re-reads while

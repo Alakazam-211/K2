@@ -122,7 +122,7 @@ describe('the Apps (beta) switch', () => {
     gets({ 'app/box': () => doctor() })
     h.settingsUpdate.mockResolvedValue({ apps: false })
     render(<AppsServerSection />)
-    const sw = await screen.findByRole('switch', { name: 'Apps (beta)' })
+    const sw = await screen.findByRole('switch', { name: 'Apps' })
     await waitFor(() => expect((sw as HTMLButtonElement).disabled).toBe(false))
     expect(sw.getAttribute('aria-checked')).toBe('true')
     gets({ 'app/box': () => { throw APPS_OFF } })
@@ -137,7 +137,7 @@ describe('the Apps (beta) switch', () => {
     gets({ 'app/box': () => doctor() })
     render(<AppsServerSection />)
     await screen.findByTestId('apps-switch-owner-only')
-    const sw = screen.getByRole('switch', { name: 'Apps (beta)' }) as HTMLButtonElement
+    const sw = screen.getByRole('switch', { name: 'Apps' }) as HTMLButtonElement
     expect(sw.disabled).toBe(true)
     expect((screen.getByTestId('apps-engine-install') as HTMLButtonElement).disabled).toBe(true)
   })
@@ -146,7 +146,7 @@ describe('the Apps (beta) switch', () => {
     gets({ 'app/box': () => doctor() })
     h.settingsUpdate.mockRejectedValue(new Error('settings_update 403: {"error":"updating \\"apps\\" requires the Owner role"}'))
     render(<AppsServerSection />)
-    const sw = await screen.findByRole('switch', { name: 'Apps (beta)' })
+    const sw = await screen.findByRole('switch', { name: 'Apps' })
     await waitFor(() => expect((sw as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(sw)
     const notice = await screen.findByTestId('apps-server-notice')
@@ -161,7 +161,7 @@ describe('the Apps (beta) switch', () => {
     render(<AppsServerSection />)
     await screen.findByTestId('apps-off')
     expect(screen.queryByTestId('apps-doctor')).toBeNull()
-    const sw = screen.getByRole('switch', { name: 'Apps (beta)' })
+    const sw = screen.getByRole('switch', { name: 'Apps' })
     expect(sw.getAttribute('aria-checked')).toBe('false')
     await waitFor(() => expect((sw as HTMLButtonElement).disabled).toBe(false))
     gets({ 'app/box': () => doctor() })
@@ -440,11 +440,12 @@ describe('Undo box setup', () => {
 })
 
 describe('independent of the per-agent switches', () => {
-  it('shows no agent switch of its own (they stay on the Agent tab)', async () => {
+  it('shows no agent switch of its own (they stay on the Permissions tab)', async () => {
     gets({ 'app/box': () => doctor() })
     render(<AppsServerSection />)
     await screen.findByTestId('apps-doctor')
-    expect(screen.getAllByRole('switch').map((s) => s.getAttribute('aria-label'))).toEqual(['Apps (beta)'])
+    expect(screen.getAllByRole('switch').map((s) => s.getAttribute('aria-label'))).toEqual(['Apps'])
+    expect(screen.getByText('Set on each agent’s card, under Permissions.')).toBeTruthy()
     expect(h.daemonCliPost).not.toHaveBeenCalled()
   })
 })

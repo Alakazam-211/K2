@@ -12,7 +12,7 @@
 //                  page is just the switch), the machines this server can use
 //                  (`ComputeAccessParts`), and Add a machine (an enroll code).
 //                  Which agents may use compute is NOT set on this page: it's
-//                  the Agent tab's "Allow compute nodes" (Rosson 2026-10-11);
+//                  the Permissions tab's "Let this agent use compute nodes";
 //                  the page links there.
 //   Node settings  per node: confirm, pause / drain / resume, rename, remove,
 //                  the workspaces that may use it, sharing

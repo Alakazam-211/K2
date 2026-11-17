@@ -366,7 +366,7 @@ describe('AddConnectionPicker: honest states', () => {
       throw new DaemonHttpError('not found', 404, null)
     }
     render(<Harness />)
-    await screen.findByText(/Federation is off on this server/)
+    await screen.findByText(/Connect agents across servers is off on this server/)
     expect(rowLabels('local')).toEqual(['Billing', 'Cortana'])
     expect(cli.calls.map((c) => c.route)).toEqual(['federation/peer-rosters', 'federation/peers'])
   })

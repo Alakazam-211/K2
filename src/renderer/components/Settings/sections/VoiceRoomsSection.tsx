@@ -74,7 +74,7 @@ export function hostingView(h: VoiceHosting): HostingView | null {
     case 'preview_off':
       return { line: 'Voice rooms are a preview, and they’re off on this server.', tone: 'info' }
     case 'sew_off':
-      return { line: 'Voice rooms need Chat / Voice Hosting, which isn’t on for K2 sign-ins on this server.', tone: 'warn', link: 'chat' }
+      return { line: 'Voice rooms need chat and voice, which isn’t on for K2 sign-ins on this server.', tone: 'warn', link: 'chat' }
     case 'voice_off':
     case 'sew_start_failed':
       return { line: 'Voice isn’t set up on this server yet.', tone: 'warn', link: 'chat' }

@@ -50,7 +50,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       },
       {
         noun: 'chat',
-        blurb: 'Chat inside Spaces, as the agent: read, post, reply, DM; community admin with Manage Chat / Voice Hosting.',
+        blurb: 'Chat inside Spaces, as the agent: read, post, reply, DM; community admin with Manage chat and voice.',
         example: 'k2 chat send hearth/general "deploy done"',
       },
       {
@@ -256,7 +256,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'tunnel', blurb: 'The tunnel to your *.k2.dev address.', example: 'k2 tunnel status' },
       { noun: 'connect', blurb: 'Pair a k2.dev subdomain to this device (headless login).', example: 'k2 connect status' },
       { noun: 'remote-session', blurb: 'Owner/admin remote shells behind grants.', example: 'k2 remote-session status' },
-      { noun: 'fed', blurb: `Federation: pair with another ${PRODUCT_NAME} server so agents can message across.`, example: 'k2 fed peers' },
+      { noun: 'fed', blurb: `Connect agents across servers: pair with another ${PRODUCT_NAME} server so agents can message across.`, example: 'k2 fed peers' },
     ],
   },
   {
@@ -275,7 +275,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'update', blurb: 'Update the K2 app (the CLI updates with it).', example: 'k2 update --app' },
       {
         noun: 'hostchat',
-        blurb: 'Chat / Voice Hosting on this Linux box: the chat and voice server, powered by Sew.',
+        blurb: 'Chat and voice on this Linux server: the chat and voice server, powered by Sew.',
         example: 'k2 hostchat status',
         note: 'linux-sidecar',
       },

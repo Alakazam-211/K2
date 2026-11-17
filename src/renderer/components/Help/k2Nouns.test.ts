@@ -10,6 +10,10 @@ describe('K2 noun families (Help explorer)', () => {
     expect(K2_EXPLORER_INTRO.toLowerCase()).not.toContain('k2so')
   })
 
+  it('names federation by its Settings switch', () => {
+    expect(items.find((i) => i.noun === 'fed')?.blurb).toMatch(/^Connect agents across servers: /)
+  })
+
   it('tags whoami as sidecar and mail as Linux sidecar', () => {
     expect(items.find((i) => i.noun === 'whoami')?.note).toBe('sidecar')
     expect(items.find((i) => i.noun === 'mail')?.note).toBe('linux-sidecar')

@@ -287,7 +287,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
       <SettingsGroup card title="Apps">
         <SettingSwitchRow
           control={
-            <Toggle checked={appsOn} onChange={(v) => void flipApps(v)} disabled={!isOwner || switchBusy} aria-label="Apps (beta)" />
+            <Toggle checked={appsOn} onChange={(v) => void flipApps(v)} disabled={!isOwner || switchBusy} aria-label="Apps" />
           }
         >
           <div className={`${SETTING_ROW_LABEL} flex items-center gap-2`}>
@@ -303,7 +303,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
             </p>
           ) : null}
         </SettingSwitchRow>
-        <SettingRow label="Which agents may build Apps" hint="Set on each agent’s card, under Agent.">
+        <SettingRow label="Which agents may build Apps" hint="Set on each agent’s card, under Permissions.">
           <Button onClick={() => useSettingsStore.getState().openSettings('projects')} data-testid="apps-open-agents">
             Open Workspaces / Agents
           </Button>

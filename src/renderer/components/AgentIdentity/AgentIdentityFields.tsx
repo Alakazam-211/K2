@@ -647,7 +647,7 @@ export function AgentHandleField({
     const ok = await confirm({
       title: 'Change handle?',
       message:
-        `Changing the handle changes this agent's address (${handle || 'old'}::${tunnelHost ?? 'host'} → ${next}::${tunnelHost ?? 'host'}). Existing federated connections will break until the other side reconnects or updates the handle.`,
+        `Changing the handle changes this agent's address (${handle || 'old'}::${tunnelHost ?? 'host'} → ${next}::${tunnelHost ?? 'host'}). Connections from agents on other servers will break until the other side reconnects or updates the handle.`,
       confirmLabel: 'Change handle',
       destructive: true,
     })

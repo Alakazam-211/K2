@@ -41,7 +41,7 @@ const CONNECT_ERROR_SENTENCES: Record<string, string> = {
   not_owner: "That server isn't on your k2.dev account",
   unknown: "Connect doesn't know that server",
   machine_not_advertised:
-    "That machine hasn't checked in with K2 Connect in the last 10 minutes. Make sure it's on and \"Make this computer a node\" is on, then try again",
+    "That machine hasn't checked in with K2 Connect in the last 10 minutes. Make sure it's on and \"Let a server run jobs on this computer\" is on (Compute → This computer, on that machine), then try again",
   rate_limited: 'Too many one-click requests. Wait a minute and try again',
   invalid_token: 'Your k2.dev sign-in has expired. Sign in again and retry',
   unauthorized: 'Your k2.dev sign-in has expired. Sign in again and retry',

@@ -555,6 +555,11 @@ cmd_heartbeat_wake() {
     # 2. If manager is running → send triage message
     # 3. If manager is asleep → launch with triage prompt
     # Check both agent inboxes and workspace inbox for work
+    # K2_NO_OWNER_FALLBACK with no session passport: refuse as the
+    # connection guard does; the block below never reads the token file.
+    if [ -n "${_k2_no_owner_fallback:-}" ] && [ -z "${SCOPED_TOKEN:-}" ]; then
+        _k2_refuse_owner_fallback
+    fi
     local has_work
     has_work=$(python3 -c "
 import json, sys, subprocess, os
@@ -567,7 +572,7 @@ token = os.environ.get('K5_HOOK_TOKEN') or os.environ.get('K2_HOOK_TOKEN') or os
 if not port:
     try: port = open(os.path.expanduser('$K2_HOME/heartbeat.port')).read().strip()
     except: pass
-if not token:
+if not token and '${_k2_no_owner_fallback:-}' != '1':
     try: token = open(os.path.expanduser('$K2_HOME/heartbeat.token')).read().strip()
     except: pass
 

@@ -124,6 +124,11 @@ _connect_require_daemon() {
             PORT="$(cat "${K2_HOME}/daemon.port" 2>/dev/null)"
         fi
         if [ -z "${TOKEN:-}" ]; then
+            # K2_NO_OWNER_FALLBACK with no session passport: refuse as the
+            # connection guard does, never read the token files.
+            if [ -n "${_k2_no_owner_fallback:-}" ]; then
+                _k2_refuse_owner_fallback
+            fi
             if [ -n "${DISK_OWNER_TOKEN:-}" ]; then
                 TOKEN="$DISK_OWNER_TOKEN"
             elif [ -r "${K2_HOME}/heartbeat.token" ]; then

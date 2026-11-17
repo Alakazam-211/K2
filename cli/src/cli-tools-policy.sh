@@ -761,6 +761,17 @@ case "${1:-}" in
         ;;
 esac
 
+# The virtual-desktop refusal (LD-10): says why and exits 3. The guard below
+# calls it, and so do the commands that read the owner token file
+# themselves (heartbeat wake, the Connect account commands) when
+# K2_NO_OWNER_FALLBACK is set and they have no session passport.
+_k2_refuse_owner_fallback() {
+    echo "Error: k2 won't act as this server's owner here." >&2
+    echo "This program runs on a K2 virtual desktop (K2_NO_OWNER_FALLBACK=1) and has no session passport, so k2 doesn't read the owner token (~/.k2/daemon.token)." >&2
+    echo "Use k2 from a K2 terminal tab, or from your own device signed in to this server." >&2
+    exit 3
+}
+
 # The virtual-desktop guard (LD-10): with no passport, only the pages that
 # never reach the daemon run; everything else (k2 daemon … too, which reads
 # the owner token itself) is refused, saying why.
@@ -768,10 +779,7 @@ _k2_offline_verb=""
 case "${1:-}" in ""|study|help|--help|-h|--schema|version|--version) _k2_offline_verb=1 ;; esac
 for _a in "$@"; do case "$_a" in -h|--help) _k2_offline_verb=1 ;; esac; done
 if [ -n "$_k2_no_owner_fallback" ] && [ -z "$TOKEN" ] && [ -z "$_k2_offline_verb" ]; then
-    echo "Error: k2 won't act as this server's owner here." >&2
-    echo "This program runs on a K2 virtual desktop (K2_NO_OWNER_FALLBACK=1) and has no session passport, so k2 doesn't read the owner token (~/.k2/daemon.token)." >&2
-    echo "Use k2 from a K2 terminal tab, or from your own device signed in to this server." >&2
-    exit 3
+    _k2_refuse_owner_fallback
 fi
 if [ "$_skip_conn_gate" != "1" ] && { [ -z "$PORT" ] || [ -z "$TOKEN" ]; }; then
     echo "Error: Cannot connect to K2." >&2

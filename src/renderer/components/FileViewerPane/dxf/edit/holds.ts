@@ -10,25 +10,47 @@ import type { Hold } from './edit-source'
 
 const norm = (k: string): string => (/^@h:/i.test(k) ? `@h:${k.slice(3).replace(/^0+(?=.)/, '').toUpperCase()}` : k)
 
-/** The holds that cover any of `handles`, in the order given. */
-export function holdsOn(handles: readonly string[], holds: readonly Hold[], rows: readonly ModelRow[], header: Pick<ModelHeader, 'layers' | 'layouts'>): Hold[] {
-  if (!holds.length || !handles.length) return []
-  const byH = new Map(rows.map((r) => [norm(r.h), r]))
-  const layerKey = new Map(header.layers.map((l) => [l.name, norm(l.handle)]))
-  const modelKeys = new Set(header.layouts.filter((l) => l.kind === 'model').flatMap((l) => [norm(l.handle), l.space]))
-  const keysOf = (h: string): Set<string> => {
-    const r = byH.get(norm(h))
-    const out = new Set([norm(h)])
-    if (!r) return out
-    const lk = layerKey.get(r.layer)
-    if (lk) out.add(lk)
-    out.add(`@layer:${r.layer}`)
-    out.add(norm(r.owner))
-    if (r.owner === 'model') for (const k of modelKeys) out.add(k)
-    return out
+type HeaderKeys = Pick<ModelHeader, 'layers' | 'layouts'>
+
+function keyMaps(header: HeaderKeys) {
+  return {
+    layerKey: new Map(header.layers.map((l) => [l.name, norm(l.handle)])),
+    modelKeys: header.layouts.filter((l) => l.kind === 'model').flatMap((l) => [norm(l.handle), l.space]),
   }
-  const covered = handles.map(keysOf)
-  return holds.filter((hd) => hd.keys.some((k) => covered.some((c) => c.has(norm(k)))))
+}
+
+/** Every key whose hold covers row `r`: its own, its layer's, its space's. */
+function rowKeys(r: ModelRow, m: ReturnType<typeof keyMaps>): string[] {
+  const out = [norm(r.h), `@layer:${r.layer}`, norm(r.owner)]
+  const lk = m.layerKey.get(r.layer)
+  if (lk) out.push(lk)
+  if (r.owner === 'model') out.push(...m.modelKeys)
+  return out
+}
+
+/** The holds that cover any of `handles`, in the order given. */
+export function holdsOn(handles: readonly string[], holds: readonly Hold[], rows: readonly ModelRow[], header: HeaderKeys): Hold[] {
+  if (!holds.length || !handles.length) return []
+  const m = keyMaps(header)
+  const want = new Set(handles.map(norm))
+  const covered = new Set([...want, ...rows.filter((r) => want.has(norm(r.h))).flatMap((r) => rowKeys(r, m))])
+  return holds.filter((hd) => hd.keys.some((k) => covered.has(norm(k))))
+}
+
+/** Each row a hold covers, with its first holder's pid: what the drawing marks as held. */
+export function heldHandles(holds: readonly Hold[], rows: readonly ModelRow[], header: HeaderKeys): Map<string, string> {
+  const out = new Map<string, string>()
+  if (!holds.length) return out
+  const m = keyMaps(header)
+  const holder = new Map<string, string>()
+  for (const hd of holds) for (const k of hd.keys) if (!holder.has(norm(k))) holder.set(norm(k), hd.pid)
+  for (const r of rows) {
+    const pid = rowKeys(r, m)
+      .map((k) => holder.get(k))
+      .find((x) => x !== undefined)
+    if (pid) out.set(r.h, pid)
+  }
+  return out
 }
 
 /** The one question before an edit over holds: who, what for, then go ahead or not. */

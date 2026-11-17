@@ -4,6 +4,9 @@
 //   - wheel / trackpad pinch zooms around the cursor,
 //   - drag pans (any mouse button),
 //   - double-click or the Fit button refits.
+// On the drawing model's path the left button selects and moves instead
+// (dxf/edit/): panning is then the middle or right button, or Space with
+// the left.
 // dxf-parser and the converter (`dxfModel.ts`) are a dynamic import, so
 // neither is in this chunk or the start-up bundle. The text arrives from
 // FileViewerPane's normal `fs/read-file` (the room's server, so remote
@@ -11,7 +14,7 @@
 // (over its 10 MB cap, or not UTF-8: old ANSI-codepage DXFs),
 // `DxfHostBytesViewer` reads the bytes instead and decodes them here.
 
-import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useRoom } from '@/components/Room/RoomContext'
 import { isHostSwitchedError } from '@/lib/daemon-cli'
 import { loadHostBinary } from '@/lib/load-host-binary'
@@ -26,6 +29,9 @@ import { setPxPerUnit } from './dxf/model/lines'
 import { SHEET_STYLE } from './dxf/sheet'
 import { pageTextMetrics } from './dxf/text-metrics'
 import { useDxfLiveChanges } from './dxf/useDxfLiveChanges'
+import type { EditSource } from './dxf/edit/edit-source'
+import type { SheetCtx, SheetTool } from './dxf/edit/sheet-tool'
+import { useDxfEdit } from './dxf/edit/useDxfEdit'
 import { framed, viewBounds } from './dxf/view-address'
 
 type Box = { x: number; y: number; w: number; h: number }
@@ -116,7 +122,7 @@ const DxfShapes = memo(function DxfShapes({ nodes }: { nodes: DxfNode[] }) {
   )
 })
 
-export function DxfViewer({ text, filePath, view, changes, model }: {
+export function DxfViewer({ text, filePath, view, changes, model, edits }: {
   text: string
   /** The file: with it, each new version's change is highlighted. */
   filePath?: string
@@ -126,9 +132,16 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
   changes?: CadChangeSource | null
   /** Where the drawing's model comes from instead of the daemon (tests, shots); null reads the text only. */
   model?: DrawingModelSource | null
+  /** Where edits go instead of the daemon (tests, shots); null turns editing off. */
+  edits?: EditSource | null
 }): React.JSX.Element {
   // The model path adds its shapes, what it couldn't draw, and its paper layouts.
-  const [drawing, setDrawing] = useState<(DxfDrawing & Partial<Pick<ModelDrawing, 'shapes' | 'notDrawn' | 'paper'>>) | null>(null)
+  const [drawing, setDrawing] = useState<(DxfDrawing & Partial<Pick<ModelDrawing, 'shapes' | 'notDrawn' | 'paper' | 'header' | 'rows' | 'version'>>) | null>(null)
+  // Read again (after an edit lands, or when the drawing changed under one).
+  const [reads, setReads] = useState(0)
+  const loadedFor = useRef<string | null>(null)
+  const viewFor = useRef<string | null>(null)
+  const toolRef = useRef<SheetTool | null>(null)
   const modelSource = useModelSource(model, filePath)
   const [error, setError] = useState<string | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
@@ -139,7 +152,8 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
 
   useEffect(() => {
     let cancelled = false
-    setDrawing(null)
+    // A new version of the same file keeps its drawing up until the new one is read.
+    if (loadedFor.current !== (filePath ?? '')) setDrawing(null)
     setError(null)
     // Text is sized by the UI font's measured capitals (a DXF height is the cap height).
     // The drawing comes from the server's model when it has one, else from the text.
@@ -147,7 +161,9 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
       .then(async ([m, metrics, load]) => {
         const fromModel = load && modelSource ? await load.loadModel(modelSource, metrics).catch(() => null) : null
         const d = fromModel ?? m.buildDrawing(text, metrics)
-        if (!cancelled) setDrawing(d)
+        if (cancelled) return
+        loadedFor.current = filePath ?? ''
+        setDrawing(d)
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e))
@@ -155,21 +171,24 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
     return () => {
       cancelled = true
     }
-  }, [text, modelSource])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, modelSource, reads])
 
   const fit = drawing?.bounds ? fitBox(drawing.bounds) : null
   const viewKey = typeof view === 'string' ? view : view?.join(' ')
-  const live = useDxfLiveChanges({
-    drawing,
-    filePath,
-    changes,
-    frame: (b) => frameRef.current(b),
-    padUnits: () => {
-      const r = boxRef.current?.getBoundingClientRect()
-      const v = viewRef.current
-      return r && v && r.width && r.height ? 5 * Math.max(v.w / r.width, v.h / r.height) : 0
-    },
-  })
+  const padUnits = (): number => {
+    const r = boxRef.current?.getBoundingClientRect()
+    const v = viewRef.current
+    return r && v && r.width && r.height ? 5 * Math.max(v.w / r.width, v.h / r.height) : 0
+  }
+  const live = useDxfLiveChanges({ drawing, filePath, changes, frame: (b) => frameRef.current(b), padUnits })
+  const modelPart = drawing?.header && drawing.rows && drawing.version !== undefined ? drawing : null
+  const editDrawing = useMemo(
+    () => (modelPart ? { header: modelPart.header!, rows: modelPart.rows!, version: modelPart.version! } : null),
+    [modelPart],
+  )
+  const editing = useDxfEdit({ drawing: editDrawing, filePath, edits, live, reload: () => setReads((n) => n + 1), padUnits })
+  toolRef.current = editing.tool
 
   // Gestures write the viewBox straight to the DOM: no React render per frame.
   // A layout effect: the listeners are bound in the same commit that shows
@@ -190,9 +209,13 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
     const ro = dashed && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => viewRef.current && setPxPerUnit(svg, el, viewRef.current)) : null
     ro?.observe(el)
     const frame = (b: Bounds): void => apply(fitBox(framed(b, drawing!.bounds)))
+    // The same file read again keeps where you were looking.
+    const shown = `${filePath ?? ''}|${viewKey ?? ''}`
     const start = viewBounds(view, drawing!)
-    if (start) frame(start)
+    if (viewFor.current === shown && viewRef.current) apply(viewRef.current)
+    else if (start) frame(start)
     else apply(fit)
+    viewFor.current = shown
     refitRef.current = () => apply(fit)
     frameRef.current = frame
 
@@ -217,11 +240,37 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
       return { x: p.x - (p.x - v.x) * f, y: p.y - (p.y - v.y) * f, w: v.w * f, h: v.h * f }
     }
 
+    // Selecting and moving (the model path), in drawing coordinates.
+    const ctx: SheetCtx = {
+      toDrawing: (cx, cy) => {
+        const p = toSvg(viewRef.current ?? fit, cx, cy)
+        return [p.x, -p.y]
+      },
+      unitsPerPx: () => unitsPerPx(viewRef.current ?? fit).k,
+    }
+    // Space held: the left button pans too.
+    let space = false
+    const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.code !== 'Space' || typing(e.target)) return
+      space = e.type === 'keydown'
+      if (e.target === el) e.preventDefault()
+      el.style.cursor = space ? 'grab' : ''
+    }
+    const noMenu = (e: Event): void => {
+      if (toolRef.current) e.preventDefault()
+    }
+
     // Drag to pan (pointer capture keeps it going outside the pane).
-    let drag: { id: number; x: number; y: number; moved: boolean } | null = null
+    let drag: { id: number; x: number; y: number; moved: boolean; tool?: boolean } | null = null
     const onDown = (e: PointerEvent): void => {
       if (drag) return
-      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false }
+      const tool = toolRef.current
+      if (tool && e.button === 0 && !space) {
+        el.focus({ preventScroll: true })
+        if (tool.down(e, ctx)) drag = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, tool: true }
+      }
+      drag ??= { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false }
       try {
         el.setPointerCapture(e.pointerId)
       } catch {
@@ -231,6 +280,7 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
     const onMove = (e: PointerEvent): void => {
       const v = viewRef.current
       if (!drag || e.pointerId !== drag.id || !v) return
+      if (drag.tool) return toolRef.current?.move(e, ctx)
       const dxPx = e.clientX - drag.x
       const dyPx = e.clientY - drag.y
       if (!drag.moved && Math.abs(dxPx) + Math.abs(dyPx) < DRAG_SLOP_PX) return
@@ -243,6 +293,8 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
     }
     const onUp = (e: PointerEvent): void => {
       if (!drag || e.pointerId !== drag.id) return
+      if (drag.tool && e.type === 'pointerup') toolRef.current?.up(e, ctx)
+      else if (drag.tool) toolRef.current?.cancel()
       drag = null
       el.style.cursor = ''
     }
@@ -292,6 +344,9 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
     el.addEventListener('gesturechange', onGestureChange)
     el.addEventListener('gestureend', onGestureEnd)
     el.addEventListener('dblclick', onDbl)
+    el.addEventListener('contextmenu', noMenu)
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('keyup', onKey)
     return () => {
       el.removeEventListener('pointerdown', onDown)
       el.removeEventListener('pointermove', onMove)
@@ -302,6 +357,9 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
       el.removeEventListener('gesturechange', onGestureChange)
       el.removeEventListener('gestureend', onGestureEnd)
       el.removeEventListener('dblclick', onDbl)
+      el.removeEventListener('contextmenu', noMenu)
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keyup', onKey)
       ro?.disconnect()
       refitRef.current = () => {}
       frameRef.current = () => {}
@@ -338,7 +396,7 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
 
   const b = drawing.bounds
   return (
-    <div className="flex h-full w-full flex-col" data-testid="file-dxf">
+    <div className="flex h-full w-full flex-col" data-testid="file-dxf" onKeyDown={editing.onKey}>
       <div className="flex shrink-0 items-center gap-2 px-3 py-1 text-[11px] text-[var(--color-text-muted)]">
         <span className="min-w-0 flex-1 truncate" data-testid="dxf-stats">
           {drawing.drawn.toLocaleString()} entities · {fmtNum(b.maxX - b.minX)} × {fmtNum(b.maxY - b.minY)} units
@@ -356,31 +414,38 @@ export function DxfViewer({ text, filePath, view, changes, model }: {
           Fit
         </button>
       </div>
+      {editing.viewOnly}
       {live.note}
-      <div
-        ref={boxRef}
-        className="relative min-h-0 flex-1 cursor-grab select-none overflow-hidden"
-        style={{ touchAction: 'none', ...SHEET_STYLE }}
-        data-testid="dxf-sheet"
-      >
-        <svg
-          ref={svgRef}
-          className="block h-full w-full"
-          viewBox={`${fit.x} ${fit.y} ${fit.w} ${fit.h}`}
-          preserveAspectRatio="xMidYMid meet"
-          data-testid="dxf-svg"
+      <div className="flex min-h-0 flex-1">
+        <div
+          ref={boxRef}
+          className={`relative min-h-0 min-w-0 flex-1 select-none overflow-hidden outline-none ${editing.tool ? 'cursor-default' : 'cursor-grab'}`}
+          style={{ touchAction: 'none', ...SHEET_STYLE }}
+          tabIndex={editing.tool ? -1 : undefined}
+          data-testid="dxf-sheet"
         >
-          {drawing.shapes ?? <DxfShapes nodes={drawing.nodes} />}
-          {live.outlines}
-        </svg>
-        {drawing.skippedTotal ? (
-          <div
-            className="pointer-events-none absolute bottom-2.5 left-3 right-3 text-[11px] text-[var(--dxf-note)]"
-            data-testid="dxf-skipped"
+          <svg
+            ref={svgRef}
+            className="block h-full w-full"
+            viewBox={`${fit.x} ${fit.y} ${fit.w} ${fit.h}`}
+            preserveAspectRatio="xMidYMid meet"
+            data-testid="dxf-svg"
           >
-            {`${drawing.skippedTotal} ${drawing.skippedTotal === 1 ? 'entity' : 'entities'} not shown (${skippedLabel(drawing.skipped)})`}
-          </div>
-        ) : null}
+            {drawing.shapes ?? <DxfShapes nodes={drawing.nodes} />}
+            {live.outlines}
+            {editing.marks}
+          </svg>
+          {editing.over}
+          {drawing.skippedTotal ? (
+            <div
+              className="pointer-events-none absolute bottom-2.5 left-3 right-3 text-[11px] text-[var(--dxf-note)]"
+              data-testid="dxf-skipped"
+            >
+              {`${drawing.skippedTotal} ${drawing.skippedTotal === 1 ? 'entity' : 'entities'} not shown (${skippedLabel(drawing.skipped)})`}
+            </div>
+          ) : null}
+        </div>
+        {editing.panel}
       </div>
     </div>
   )

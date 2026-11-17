@@ -20,6 +20,9 @@ export type ModelDrawing = DxfDrawing & {
   /** Paper layouts: listed, drawn later. */
   paper: ModelLayout[]
   version: number
+  /** What the drawing was read from: selection and edits work on these. */
+  header: ModelHeader
+  rows: ModelRow[]
 }
 
 /** Block definitions by digest, per source: a definition that hasn't changed is never fetched again. */
@@ -137,5 +140,7 @@ export async function loadModel(src: DrawingModelSource, metrics: TextMetrics): 
     notDrawn: notDrawnOf(rows),
     paper: header.layouts.filter((l) => l.kind === 'paper'),
     version: header.version,
+    header,
+    rows,
   }
 }

@@ -35,6 +35,7 @@ import { clientRectToCss } from '@/lib/app-zoom'
 import type { HomeChatMessage } from '@/lib/home-chat/api'
 import type { ReplyPreview } from '@/lib/home-chat/chat'
 import { HomeChatReactionChips, HomeChatReactionPicker } from './HomeChatReactions'
+import { useHoverReveal } from './useHoverReveal'
 
 export interface HomeChatRowActions {
   react: (msgId: string, emoji: string) => void
@@ -117,6 +118,11 @@ const BAR_STYLE: CSSProperties = {
   }),
 }
 
+/** Shown, or hidden (and out of the tab order) until placed and wanted. */
+function barReveal(shown: boolean): CSSProperties {
+  return { visibility: shown ? 'visible' : 'hidden', opacity: shown ? 1 : 0, pointerEvents: shown ? 'auto' : 'none' }
+}
+
 const DELETED_STYLE = {
   fontSize: '0.8em',
   fontStyle: 'italic',
@@ -171,7 +177,6 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
   const barRef = useRef<HTMLDivElement | null>(null)
   const reactRef = useRef<HTMLButtonElement | null>(null)
   const washRef = useRef<HTMLSpanElement | null>(null)
-  const [place, setPlace] = useState<ActionBarPlace | null>(null)
   const replyTo = m.replyTo
   const replyState = reply?.state
   const replyFrom = reply ? quoteText(reply).from : ''
@@ -225,18 +230,19 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
   const toggle = useCallback((emoji: string) => actions.react(m.id, emoji), [actions, m.id])
   const who = useCallback((emoji: string) => actions.who(m.id, emoji), [actions, m.id])
 
-  // The bar's place, measured when it is about to show (hover or focus in).
-  const measure = useCallback(() => {
+  // The bar's place, measured once as it appears (useHoverReveal).
+  const measure = useCallback((): ActionBarPlace | null => {
     const row = ref.current
     const bubble = row?.querySelector<HTMLElement>('[data-zen-bubble]')
-    if (!row || !bubble) return
+    if (!row || !bubble) return null
     const r = clientRectToCss(row.getBoundingClientRect())
     const b = clientRectToCss(bubble.getBoundingClientRect())
-    if (r.width === 0) return
+    if (r.width === 0) return null
     const bar = barRef.current?.firstElementChild as HTMLElement | null | undefined
     const size = { width: bar?.offsetWidth || BAR_SIZE_FALLBACK.width, height: bar?.offsetHeight || BAR_SIZE_FALLBACK.height }
-    setPlace(actionBarPlace({ width: r.width }, { left: b.left - r.left, right: b.right - r.left, top: b.top - r.top }, size, mine))
+    return actionBarPlace({ width: r.width }, { left: b.left - r.left, right: b.right - r.left, top: b.top - r.top }, size, mine)
   }, [mine])
+  const { shown, place, handlers: reveal } = useHoverReveal(measure, picker, !m.deleted)
 
   // The jump's wash: shown, then faded out over JUMP_WASH_MS.
   useEffect(() => {
@@ -247,7 +253,7 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
   }, [flash])
 
   const side = mine ? 'right' : 'left'
-  const barPos: CSSProperties = place ? { top: place.top, [side]: place.inset } : { top: BAR_OVER_Y - BAR_SIZE_FALLBACK.height, [mine ? 'left' : 'right']: 0 }
+  const barPos: CSSProperties = place ? { top: place.top, [side]: place.inset } : { top: BAR_OVER_Y - BAR_SIZE_FALLBACK.height, [side]: 0 }
 
   return (
     <div
@@ -256,10 +262,9 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
       data-home-chat-message=""
       data-mine={mine ? '' : undefined}
       data-flash={flash ? '' : undefined}
-      className="group relative flex flex-col rounded-[calc(var(--radius-box)/2)]"
+      className="relative flex flex-col rounded-[calc(var(--radius-box)/2)]"
       style={{ alignItems: mine ? 'flex-end' : 'flex-start', minWidth: 0 }}
-      onPointerEnter={m.deleted ? undefined : measure}
-      onFocusCapture={m.deleted ? undefined : measure}
+      {...reveal}
       {...(m.deleted ? {} : gestures)}
     >
       {flash && (
@@ -300,8 +305,9 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
           ref={barRef}
           data-home-chat-actions=""
           data-inward={place?.inward ? '' : undefined}
-          className="pointer-events-none absolute z-[3] opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
-          style={barPos}
+          data-shown={shown ? '' : undefined}
+          className="absolute z-[3]"
+          style={{ ...barPos, ...barReveal(shown) }}
         >
           <div
             role="toolbar"

@@ -3,7 +3,10 @@
 //   1. Placement: on the bubble's top corner away from the sender (top right
 //      on theirs, top left on yours), a little over its top edge, the same
 //      place on every bubble; flipped inward at the column's edge.
-//   2. A jumped-to message gets a wash, not a flash.
+//   2. It appears without flicker: one hover zone (the message, row
+//      inside), a short delay before it hides, measured once as it appears
+//      and hidden until placed; one message's row at a time.
+//   3. A jumped-to message gets a wash, not a flash.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -11,6 +14,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => undefined), listen: vi.fn(async () => () => undefined) }))
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { HOVER_ROW_HIDE_MS } from './useHoverReveal'
 import { BAR_OVER_X, BAR_OVER_Y, HomeChatMessageRow, actionBarPlace, type HomeChatRowActions } from './HomeChatMessageRow'
 import type { HomeChatMessage } from '@/lib/home-chat/api'
 
@@ -96,13 +100,116 @@ function row(o: Partial<{ flash: boolean; readOnly: boolean; mine: boolean; m: H
   )
 }
 
+/** Rects for a list of rows 80px apart, each with a 200px bubble 20px down. */
+function mockRects(): { bubbleReads: () => number } {
+  let reads = 0
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const row = this.closest<HTMLElement>('[data-home-chat-message]')
+    const y = 100 + 80 * Number(row?.getAttribute('data-zen-message') ?? 0)
+    if (this.hasAttribute('data-home-chat-message')) return DOMRect.fromRect({ x: 0, y, width: 600, height: 80 })
+    if (this.hasAttribute('data-zen-bubble')) {
+      reads++
+      return DOMRect.fromRect({ x: 0, y: y + 20, width: 200, height: 40 })
+    }
+    return DOMRect.fromRect({ x: 0, y: 0, width: 0, height: 0 })
+  })
+  return { bubbleReads: () => reads }
+}
+
+const barOf = (message: Element): HTMLElement => message.querySelector('[data-home-chat-actions]') as HTMLElement
+const isShown = (message: Element): boolean => barOf(message).hasAttribute('data-shown') && barOf(message).style.visibility === 'visible'
+
+describe('the hover row appears without flicker', () => {
+  it('is inside the message (one hover zone), and hidden until placed', () => {
+    mockRects()
+    const { container } = render(row())
+    const message = container.querySelector('[data-home-chat-message]') as HTMLElement
+    expect(message.contains(barOf(message))).toBe(true)
+    // Never shown (nor reachable) before it has a place.
+    expect(barOf(message).style.visibility).toBe('hidden')
+    expect(barOf(message).style.pointerEvents).toBe('none')
+    act(() => {
+      fireEvent.pointerEnter(message, { pointerType: 'mouse' })
+    })
+    expect(isShown(message)).toBe(true)
+  })
+
+  it('leaving hides it only after a short delay; coming back keeps it, unmoved', () => {
+    vi.useFakeTimers()
+    try {
+      const rects = mockRects()
+      const { container } = render(row())
+      const message = container.querySelector('[data-home-chat-message]') as HTMLElement
+      act(() => {
+        fireEvent.pointerEnter(message, { pointerType: 'mouse' })
+      })
+      const at = { left: barOf(message).style.left, top: barOf(message).style.top }
+      expect(rects.bubbleReads()).toBe(1)
+      expect(HOVER_ROW_HIDE_MS).toBeGreaterThanOrEqual(120)
+      expect(HOVER_ROW_HIDE_MS).toBeLessThanOrEqual(200)
+      act(() => {
+        fireEvent.pointerLeave(message, { pointerType: 'mouse' })
+        vi.advanceTimersByTime(HOVER_ROW_HIDE_MS - 40)
+      })
+      expect(isShown(message)).toBe(true)
+      // Back in before the delay ends (an edge crossed): no blink, no re-measure.
+      act(() => {
+        fireEvent.pointerEnter(message, { pointerType: 'mouse' })
+        fireEvent.pointerMove(message, { pointerType: 'mouse' })
+        vi.advanceTimersByTime(HOVER_ROW_HIDE_MS * 2)
+      })
+      expect(isShown(message)).toBe(true)
+      expect(rects.bubbleReads()).toBe(1)
+      expect({ left: barOf(message).style.left, top: barOf(message).style.top }).toEqual(at)
+      act(() => {
+        fireEvent.pointerLeave(message, { pointerType: 'mouse' })
+        vi.advanceTimersByTime(HOVER_ROW_HIDE_MS)
+      })
+      expect(isShown(message)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('moving to another message hides the last one at once: one row at a time', () => {
+    mockRects()
+    const { container } = render(
+      <>
+        {row({ m: { ...msg, id: '1' } })}
+        {row({ m: { ...msg, id: '2' } })}
+      </>,
+    )
+    const [a, b] = Array.from(container.querySelectorAll('[data-home-chat-message]'))
+    act(() => {
+      fireEvent.pointerEnter(a, { pointerType: 'mouse' })
+    })
+    act(() => {
+      fireEvent.pointerLeave(a, { pointerType: 'mouse' })
+      fireEvent.pointerEnter(b, { pointerType: 'mouse' })
+    })
+    expect(isShown(a)).toBe(false)
+    expect(isShown(b)).toBe(true)
+  })
+
+  it('a touch shows nothing (a long press opens the menu instead)', () => {
+    mockRects()
+    const { container } = render(row())
+    const message = container.querySelector('[data-home-chat-message]') as HTMLElement
+    act(() => {
+      fireEvent.pointerEnter(message, { pointerType: 'touch' })
+    })
+    expect(isShown(message)).toBe(false)
+  })
+})
+
 describe('the hover row on a message', () => {
   it('React is an icon button (no text glyph); the row is a toolbar of React, Reply, More', () => {
-    render(row())
+    const { container } = render(row())
     const react = screen.getByTestId('home-chat-react')
     expect(react.querySelector('svg')).not.toBeNull()
     expect(react.textContent).toBe('')
-    const bar = screen.getByRole('toolbar', { name: 'Message actions' })
+    const bar = container.querySelector('[role="toolbar"]') as HTMLElement
+    expect(bar.getAttribute('aria-label')).toBe('Message actions')
     expect([...bar.querySelectorAll('button')].map((b) => b.getAttribute('aria-label'))).toEqual(['React', 'Reply', 'More'])
   })
 

@@ -10,6 +10,14 @@
 //!
 //! The start time is only compared with itself (pid-reuse detection), so
 //! its unit differs per OS and that is fine.
+//!
+//! [`LiveProcessTable::command_name`] answers "what is pid N called": the
+//! kernel's command name (`comm`), the file name the process was started
+//! from, cut to 15 bytes on Linux and 16 on macOS. It comes from the same
+//! read as the facts above (`/proc/<pid>/stat`'s second field on Linux,
+//! `pbi_comm` on macOS), so a process of another user that the walk can
+//! see can be named too. Elsewhere it is `None`. The Rust CLI's passport
+//! rule names a session's processes by it.
 
 use crate::proc_tree::{ProcInfo, ProcessTable};
 
@@ -26,11 +34,22 @@ impl ProcessTable for LiveProcessTable {
     }
 }
 
+impl LiveProcessTable {
+    /// The command name of `pid` (see the module notes), or `None` when
+    /// the pid is not alive or the OS can't say.
+    pub fn command_name(&self, pid: i32) -> Option<String> {
+        if pid <= 0 {
+            return None;
+        }
+        platform::command_name(pid)
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use super::ProcInfo;
 
-    pub fn info(pid: i32) -> Option<ProcInfo> {
+    fn bsd_info(pid: i32) -> Option<libc::proc_bsdinfo> {
         // SAFETY: `proc_bsdinfo` is plain old data; `proc_pidinfo` writes at
         // most `size` bytes into it and returns how many it wrote.
         let mut bsd: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
@@ -47,11 +66,27 @@ mod platform {
         if written != size {
             return None;
         }
+        Some(bsd)
+    }
+
+    pub fn info(pid: i32) -> Option<ProcInfo> {
+        let bsd = bsd_info(pid)?;
         Some(ProcInfo {
             pid,
             ppid: bsd.pbi_ppid as i32,
             start_time: bsd.pbi_start_tvsec.saturating_mul(1_000_000) + bsd.pbi_start_tvusec,
         })
+    }
+
+    /// `pbi_comm`, up to its first NUL (it has none when it fills the
+    /// field).
+    pub fn command_name(pid: i32) -> Option<String> {
+        let bsd = bsd_info(pid)?;
+        let bytes: Vec<u8> = bsd.pbi_comm.iter().map(|c| *c as u8).take_while(|b| *b != 0).collect();
+        if bytes.is_empty() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&bytes).into_owned())
     }
 }
 
@@ -62,6 +97,18 @@ mod platform {
     pub fn info(pid: i32) -> Option<ProcInfo> {
         let raw = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         parse_stat(pid, &raw)
+    }
+
+    pub fn command_name(pid: i32) -> Option<String> {
+        let raw = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        parse_comm(&raw)
+    }
+
+    /// Field 2, `comm`: what is between the first `(` and the last `)`.
+    pub fn parse_comm(raw: &str) -> Option<String> {
+        let open = raw.find('(')?;
+        let close = raw.rfind(')')?;
+        (close > open).then(|| raw[open + 1..close].to_string())
     }
 
     /// Fields after the parenthesised `comm` (which may hold spaces or
@@ -85,6 +132,8 @@ mod platform {
             let info = super::parse_stat(4242, raw).expect("parses");
             assert_eq!(info.ppid, 77);
             assert_eq!(info.start_time, 987654);
+            assert_eq!(super::parse_comm(raw).as_deref(), Some("a) b (c)"));
+            assert_eq!(super::parse_comm("4242 k2-ptyd S 1"), None);
         }
     }
 }
@@ -94,6 +143,10 @@ mod platform {
     use super::ProcInfo;
 
     pub fn info(_pid: i32) -> Option<ProcInfo> {
+        None
+    }
+
+    pub fn command_name(_pid: i32) -> Option<String> {
         None
     }
 }

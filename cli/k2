@@ -31,6 +31,24 @@ if [ -n "${K5_CLI_NOTICE_DONE:-}" ]; then _K5_NOTICE_DONE=1; fi
 _K5_CLI_VIA=""
 if [ "${K5_CLI_VIA:-}" = "rust" ]; then _K5_CLI_VIA="rust"; fi
 
+# The front runs this script from the file it opened and checked, as
+# /dev/fd/N, so $0 names that open file and its folder says nothing. It
+# passes the folder of the program people ran (links resolved) in
+# K5_CLI_SCRIPT_DIR: files shipped beside the CLI (k2-approve,
+# k2-widget-shot.mjs) are looked for there first, then beside $0. Empty
+# counts as unset. It is for this run only: taken out of the environment,
+# so a nested k2 or anything else this script starts never inherits it.
+_K5_SCRIPT_DIR="${K5_CLI_SCRIPT_DIR:-}"
+unset K5_CLI_SCRIPT_DIR
+# bash reads the script through a copy of its own, so the front's N is
+# closed here and the commands this script starts don't inherit it.
+if [ "$_K5_CLI_VIA" = "rust" ]; then
+    case "${0#/dev/fd/}" in
+        "$0"|""|*[!0-9]*|0*|1|2) ;;
+        *) eval "exec ${0#/dev/fd/}<&-" ;;
+    esac
+fi
+
 # One env-name reader. A setting K2 hands this CLI is read under its newest
 # name first: K5_<NAME>, then K2_<NAME>, then K2SO_<NAME>. Empty counts as
 # unset, as `${K2_X:-${K2SO_X:-}}` always did. (The daemon's twin is
@@ -6989,14 +7007,17 @@ for r in data:
 # Signed approvals (prd-signed-approvals-v1): `k2 approve verify|show|key-id`
 # run the k2-approve program on this machine and never ask the daemon: a
 # relying party checks an approval against the keys IT trusts.
-# K2_APPROVE_BIN names the program; else k2-approve beside this script, else
-# on PATH.
+# K2_APPROVE_BIN names the program; else k2-approve beside the program
+# that was run (the front's K5_CLI_SCRIPT_DIR), else beside this script,
+# else on PATH.
 cmd_approve_local() {
     local bin="" self dir approve_bin
     _envn_into approve_bin APPROVE_BIN
     if [ -n "$approve_bin" ]; then
         [ -x "$approve_bin" ] || { echo "k2 approve: K2_APPROVE_BIN=$approve_bin is not a program" >&2; exit 2; }
         bin="$approve_bin"
+    elif [ -n "$_K5_SCRIPT_DIR" ] && [ -x "$_K5_SCRIPT_DIR/k2-approve" ]; then
+        bin="$_K5_SCRIPT_DIR/k2-approve"
     else
         self="$0"
         while [ -L "$self" ]; do
@@ -106888,8 +106909,9 @@ EOF
 
 # k2 zen widget preview --dir <folder> --shot <png> (0.46.3): the daemon
 # answers the shot page (POST /cli/zen/widget/shot, writes nothing); the
-# runner next to this script (k2-widget-shot.mjs) renders it in Playwright's
-# WebKit and writes the PNG.
+# runner (k2-widget-shot.mjs) renders it in Playwright's WebKit and writes
+# the PNG. The runner sits beside the program that was run (the front's
+# K5_CLI_SCRIPT_DIR), else beside this script.
 # _zen_widget_shot <json> <dir> <name> <png> <theme> <zen-theme> <width> <height> <data> <libs> <wait-ms> [key=value...]
 _zen_widget_shot() {
     local as_json="$1" dir="$2" name="$3" png="$4" theme="$5" zen_theme="$6" width="$7" height="$8" data="$9" libs="${10}" wait_ms="${11}"
@@ -106900,9 +106922,13 @@ _zen_widget_shot() {
         case "$n" in ""|*[!0-9]*) [ -z "$n" ] || { echo "Error: --width, --height and --wait-ms are whole numbers" >&2; exit 2; } ;; esac
     done
     [ -z "$data" ] || [ -f "$data" ] || { echo "Error: no --data file $data" >&2; exit 2; }
-    local self runner
-    self="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$0")"
-    runner="$(dirname "$self")/k2-widget-shot.mjs"
+    local self runner=""
+    if [ -n "$_K5_SCRIPT_DIR" ] && [ -f "$_K5_SCRIPT_DIR/k2-widget-shot.mjs" ]; then
+        runner="$_K5_SCRIPT_DIR/k2-widget-shot.mjs"
+    else
+        self="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+        runner="$(dirname "$self")/k2-widget-shot.mjs"
+    fi
     [ -f "$runner" ] || { echo "Error: this K2 has no shot runner ($runner)" >&2; exit 3; }
     command -v node >/dev/null 2>&1 || { echo "Error: --shot needs Node.js and Playwright's WebKit: install Node, then npm install -g playwright && npx playwright install webkit" >&2; exit 3; }
     local extra
@@ -107371,19 +107397,29 @@ print(json.dumps(b))
 }
 
 # ── Agent hire: teams, instances, hire root, sender check (0.45.6) ────
-# prd-agent-hire-templates-v1 "build A": the v1 API hires from an inline
-# recipe (`POST /v1/agents/hire`, an API key with the hire scope). These
-# verbs are the people's side on this box:
-#   k2 agent team [--workspace <ws>] [--json]      who serves me / my team / who I serve
-#   k2 agent team served [--workspace <ws>]        the workspaces this team serves (+ scope)
-#   k2 agent team link <team> <workspace> [--kind serves|helper_of] [--scope JSON] [--mesh]
-#   k2 agent team unlink <link-id>
-#   k2 agent instances [--key <api-key-id>] [--json]
-#   k2 agent instances show <instance>
-#   k2 agent instances hire <recipe.json|-> [--key <idempotency-key>] [--dry-run] [--json]
-#   k2 agent instances retire <instance> [--force]
-#   k2 agent hire-root [set <dir>]
-#   k2 msg who <m_…>                               who really sent a delivery
+# These verbs' help, printed by `k2 agent team --help` and
+# `k2 agent instances --help`. It is spelled out here, not read back from
+# this file with sed on "$0": the Rust front runs the script from an open
+# file (/dev/fd/N), which can't be read again.
+_agent_hire_help() {
+    cat <<'EOF'
+── Agent hire: teams, instances, hire root, sender check (0.45.6) ────
+prd-agent-hire-templates-v1 "build A": the v1 API hires from an inline
+recipe (`POST /v1/agents/hire`, an API key with the hire scope). These
+verbs are the people's side on this box:
+  k2 agent team [--workspace <ws>] [--json]      who serves me / my team / who I serve
+  k2 agent team served [--workspace <ws>]        the workspaces this team serves (+ scope)
+  k2 agent team link <team> <workspace> [--kind serves|helper_of] [--scope JSON] [--mesh]
+  k2 agent team unlink <link-id>
+  k2 agent instances [--key <api-key-id>] [--json]
+  k2 agent instances show <instance>
+  k2 agent instances hire <recipe.json|-> [--key <idempotency-key>] [--dry-run] [--json]
+  k2 agent instances retire <instance> [--force]
+  k2 agent hire-root [set <dir>]
+  k2 msg who <m_…>                               who really sent a delivery
+Inside a K2 terminal `team` and `instances` carry the session passport:
+EOF
+}
 # Inside a K2 terminal `team` and `instances` carry the session passport:
 # an agent reads its own links; it never hires teams, links or retires.
 
@@ -107492,7 +107528,7 @@ cmd_agent_team() {
     local sub="${1:-}"
     case "$sub" in
         --help|-h|help)
-            sed -n '/^# ── Agent hire: teams, instances/,/^# Inside a K2 terminal/p' "$0" | sed 's/^# \{0,1\}//'
+            _agent_hire_help
             return 0 ;;
         link)
             shift
@@ -107547,7 +107583,7 @@ cmd_agent_instances() {
     local sub="${1:-}"
     case "$sub" in
         --help|-h|help)
-            sed -n '/^# ── Agent hire: teams, instances/,/^# Inside a K2 terminal/p' "$0" | sed 's/^# \{0,1\}//'
+            _agent_hire_help
             return 0 ;;
         show)
             local id="${2:-}" as_json=false

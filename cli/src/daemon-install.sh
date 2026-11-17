@@ -559,14 +559,17 @@ for r in data:
 # Signed approvals (prd-signed-approvals-v1): `k2 approve verify|show|key-id`
 # run the k2-approve program on this machine and never ask the daemon: a
 # relying party checks an approval against the keys IT trusts.
-# K2_APPROVE_BIN names the program; else k2-approve beside this script, else
-# on PATH.
+# K2_APPROVE_BIN names the program; else k2-approve beside the program
+# that was run (the front's K5_CLI_SCRIPT_DIR), else beside this script,
+# else on PATH.
 cmd_approve_local() {
     local bin="" self dir approve_bin
     _envn_into approve_bin APPROVE_BIN
     if [ -n "$approve_bin" ]; then
         [ -x "$approve_bin" ] || { echo "k2 approve: K2_APPROVE_BIN=$approve_bin is not a program" >&2; exit 2; }
         bin="$approve_bin"
+    elif [ -n "$_K5_SCRIPT_DIR" ] && [ -x "$_K5_SCRIPT_DIR/k2-approve" ]; then
+        bin="$_K5_SCRIPT_DIR/k2-approve"
     else
         self="$0"
         while [ -L "$self" ]; do

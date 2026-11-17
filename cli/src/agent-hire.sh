@@ -1,17 +1,27 @@
 # ── Agent hire: teams, instances, hire root, sender check (0.45.6) ────
-# prd-agent-hire-templates-v1 "build A": the v1 API hires from an inline
-# recipe (`POST /v1/agents/hire`, an API key with the hire scope). These
-# verbs are the people's side on this box:
-#   k2 agent team [--workspace <ws>] [--json]      who serves me / my team / who I serve
-#   k2 agent team served [--workspace <ws>]        the workspaces this team serves (+ scope)
-#   k2 agent team link <team> <workspace> [--kind serves|helper_of] [--scope JSON] [--mesh]
-#   k2 agent team unlink <link-id>
-#   k2 agent instances [--key <api-key-id>] [--json]
-#   k2 agent instances show <instance>
-#   k2 agent instances hire <recipe.json|-> [--key <idempotency-key>] [--dry-run] [--json]
-#   k2 agent instances retire <instance> [--force]
-#   k2 agent hire-root [set <dir>]
-#   k2 msg who <m_…>                               who really sent a delivery
+# These verbs' help, printed by `k2 agent team --help` and
+# `k2 agent instances --help`. It is spelled out here, not read back from
+# this file with sed on "$0": the Rust front runs the script from an open
+# file (/dev/fd/N), which can't be read again.
+_agent_hire_help() {
+    cat <<'EOF'
+── Agent hire: teams, instances, hire root, sender check (0.45.6) ────
+prd-agent-hire-templates-v1 "build A": the v1 API hires from an inline
+recipe (`POST /v1/agents/hire`, an API key with the hire scope). These
+verbs are the people's side on this box:
+  k2 agent team [--workspace <ws>] [--json]      who serves me / my team / who I serve
+  k2 agent team served [--workspace <ws>]        the workspaces this team serves (+ scope)
+  k2 agent team link <team> <workspace> [--kind serves|helper_of] [--scope JSON] [--mesh]
+  k2 agent team unlink <link-id>
+  k2 agent instances [--key <api-key-id>] [--json]
+  k2 agent instances show <instance>
+  k2 agent instances hire <recipe.json|-> [--key <idempotency-key>] [--dry-run] [--json]
+  k2 agent instances retire <instance> [--force]
+  k2 agent hire-root [set <dir>]
+  k2 msg who <m_…>                               who really sent a delivery
+Inside a K2 terminal `team` and `instances` carry the session passport:
+EOF
+}
 # Inside a K2 terminal `team` and `instances` carry the session passport:
 # an agent reads its own links; it never hires teams, links or retires.
 
@@ -120,7 +130,7 @@ cmd_agent_team() {
     local sub="${1:-}"
     case "$sub" in
         --help|-h|help)
-            sed -n '/^# ── Agent hire: teams, instances/,/^# Inside a K2 terminal/p' "$0" | sed 's/^# \{0,1\}//'
+            _agent_hire_help
             return 0 ;;
         link)
             shift
@@ -175,7 +185,7 @@ cmd_agent_instances() {
     local sub="${1:-}"
     case "$sub" in
         --help|-h|help)
-            sed -n '/^# ── Agent hire: teams, instances/,/^# Inside a K2 terminal/p' "$0" | sed 's/^# \{0,1\}//'
+            _agent_hire_help
             return 0 ;;
         show)
             local id="${2:-}" as_json=false

@@ -89,6 +89,7 @@ part_web() {
     step "the CLI test helper picks the program";  bash tests/cli/cli_under_test_helper.sh
     step "CLI help names no machine of ours";      bash tests/cli/help_node_names.sh
     step "k2 answers the same under every name";   bash tests/cli/called_as.sh
+    step "k2 finds the files shipped beside it";   bash tests/cli/cli_script_dir.sh
     step "k5-cli is built but not shipped";        bash tests/packaging/k5_cli_not_shipped.sh
     step "k2 picks a workspace's dot-dir as the daemon does"; bash tests/cli/ws_dot_dir.sh
     step "urlencode never sends a value raw"; bash tests/cli/urlencode_bytes.sh

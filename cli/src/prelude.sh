@@ -31,6 +31,24 @@ if [ -n "${K5_CLI_NOTICE_DONE:-}" ]; then _K5_NOTICE_DONE=1; fi
 _K5_CLI_VIA=""
 if [ "${K5_CLI_VIA:-}" = "rust" ]; then _K5_CLI_VIA="rust"; fi
 
+# The front runs this script from the file it opened and checked, as
+# /dev/fd/N, so $0 names that open file and its folder says nothing. It
+# passes the folder of the program people ran (links resolved) in
+# K5_CLI_SCRIPT_DIR: files shipped beside the CLI (k2-approve,
+# k2-widget-shot.mjs) are looked for there first, then beside $0. Empty
+# counts as unset. It is for this run only: taken out of the environment,
+# so a nested k2 or anything else this script starts never inherits it.
+_K5_SCRIPT_DIR="${K5_CLI_SCRIPT_DIR:-}"
+unset K5_CLI_SCRIPT_DIR
+# bash reads the script through a copy of its own, so the front's N is
+# closed here and the commands this script starts don't inherit it.
+if [ "$_K5_CLI_VIA" = "rust" ]; then
+    case "${0#/dev/fd/}" in
+        "$0"|""|*[!0-9]*|0*|1|2) ;;
+        *) eval "exec ${0#/dev/fd/}<&-" ;;
+    esac
+fi
+
 # One env-name reader. A setting K2 hands this CLI is read under its newest
 # name first: K5_<NAME>, then K2_<NAME>, then K2SO_<NAME>. Empty counts as
 # unset, as `${K2_X:-${K2SO_X:-}}` always did. (The daemon's twin is

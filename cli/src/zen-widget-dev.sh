@@ -351,8 +351,9 @@ EOF
 
 # k2 zen widget preview --dir <folder> --shot <png> (0.46.3): the daemon
 # answers the shot page (POST /cli/zen/widget/shot, writes nothing); the
-# runner next to this script (k2-widget-shot.mjs) renders it in Playwright's
-# WebKit and writes the PNG.
+# runner (k2-widget-shot.mjs) renders it in Playwright's WebKit and writes
+# the PNG. The runner sits beside the program that was run (the front's
+# K5_CLI_SCRIPT_DIR), else beside this script.
 # _zen_widget_shot <json> <dir> <name> <png> <theme> <zen-theme> <width> <height> <data> <libs> <wait-ms> [key=value...]
 _zen_widget_shot() {
     local as_json="$1" dir="$2" name="$3" png="$4" theme="$5" zen_theme="$6" width="$7" height="$8" data="$9" libs="${10}" wait_ms="${11}"
@@ -363,9 +364,13 @@ _zen_widget_shot() {
         case "$n" in ""|*[!0-9]*) [ -z "$n" ] || { echo "Error: --width, --height and --wait-ms are whole numbers" >&2; exit 2; } ;; esac
     done
     [ -z "$data" ] || [ -f "$data" ] || { echo "Error: no --data file $data" >&2; exit 2; }
-    local self runner
-    self="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$0")"
-    runner="$(dirname "$self")/k2-widget-shot.mjs"
+    local self runner=""
+    if [ -n "$_K5_SCRIPT_DIR" ] && [ -f "$_K5_SCRIPT_DIR/k2-widget-shot.mjs" ]; then
+        runner="$_K5_SCRIPT_DIR/k2-widget-shot.mjs"
+    else
+        self="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+        runner="$(dirname "$self")/k2-widget-shot.mjs"
+    fi
     [ -f "$runner" ] || { echo "Error: this K2 has no shot runner ($runner)" >&2; exit 3; }
     command -v node >/dev/null 2>&1 || { echo "Error: --shot needs Node.js and Playwright's WebKit: install Node, then npm install -g playwright && npx playwright install webkit" >&2; exit 3; }
     local extra

@@ -148,10 +148,11 @@ import VoiceButton from './VoiceButton'
 import CallLayer from './CallLayer'
 import CallWindow from './CallWindow'
 import { STAGE_INSET } from './VideoStage'
+import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 import { __resetCallExpandForTests, useCallExpand } from '@/stores/call-expand'
 import { __resetCallShareForTests, useCallShare } from '@/stores/call-share'
 import { __resetCallPopoutForTests, setCallPopoutBridge, useCallPopout, type CallPopoutBridge } from '@/stores/call-popout'
-import { CALL_EXPAND_MARGIN, CALL_HAND_BACK_KEY, CALL_POPPED_FROM_KEY, CALL_SHARE_PICK_KEY } from '@/lib/voice/call-view'
+import { CALL_HAND_BACK_KEY, CALL_POPPED_FROM_KEY, CALL_SHARE_PICK_KEY } from '@/lib/voice/call-view'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { voice } from '@/stores/voice'
 import { video } from '@/stores/video'
@@ -791,7 +792,7 @@ describe('labels on the picture', () => {
 })
 
 describe('full screen: the call over K2, inside the app', () => {
-  it("the stage's Full screen opens the call over K2 with a margin, never OS full screen; Exit full screen puts the stage back", async () => {
+  it("the stage's Full screen opens the call over the whole window under the top bar, never OS full screen; Exit full screen puts the stage back", async () => {
     installFullscreenApi()
     await inCall()
     await cameraOn()
@@ -803,9 +804,19 @@ describe('full screen: the call over K2, inside the app', () => {
     expect(view.getAttribute('role')).toBe('dialog')
     expect(view.getAttribute('aria-modal')).toBe('true')
     expect(view.getAttribute('aria-label')).toBe('Standup, full screen')
-    // A margin all round, inside the window; over the scrim.
-    expect(view.style.width).toBe(`calc(var(--k2-vw) - ${CALL_EXPAND_MARGIN * 2}px)`)
-    expect(view.style.height).toBe(`calc(var(--k2-vh) - ${CALL_EXPAND_MARGIN * 2}px)`)
+    // The whole window under the top bar, to the window's own inset: its top
+    // edge is the top bar's bottom edge, never across it, and nothing of the
+    // page shows round it or through it (an opaque fill, no Frost). The top
+    // bar stays in view, dimmed by the scrim, and a click there exits.
+    expect(view.className).toMatch(/\bfixed\b/)
+    expect(view.style.top).toBe(`calc(var(--inset-window) + ${TOPBAR_HEIGHT_CSS})`)
+    expect(view.style.left).toBe('var(--inset-window)')
+    expect(view.style.right).toBe('var(--inset-window)')
+    expect(view.style.bottom).toBe('var(--inset-window)')
+    expect(view.className).toContain('bg-[var(--color-bg)]')
+    expect(view.closest('[data-material="frost"]')).toBeNull()
+    expect(view.hasAttribute('data-material')).toBe(false)
+    expect(Number(view.style.zIndex)).toBeGreaterThan(Number(screen.getByTestId('call-expanded-scrim').style.zIndex))
     expect(screen.getByTestId('call-expanded-scrim').dataset.scrim).toBe('')
     expect(fsCalls).toEqual([])
     // The stage gives way; the video is drawn once, in the view.

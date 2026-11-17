@@ -20,10 +20,6 @@ export function isCallExpandChord(e: KeyComboEventLike, keybindings: Record<stri
   return keyEventMatchesCombo(e, effectiveKeybinding(keybindings, CALL_EXPAND_HOTKEY, isMac))
 }
 
-/** Full screen's margin from the window's edges on every side (px): the
- *  page shows round it, so it reads as K2's, and a click there exits it. */
-export const CALL_EXPAND_MARGIN = 32
-
 // ── the call's own window ───────────────────────────────────────────
 
 export const CALL_WINDOW_LABEL = 'window-call'

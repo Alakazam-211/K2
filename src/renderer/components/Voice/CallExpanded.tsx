@@ -1,11 +1,13 @@
 // The call full screen, inside K2's window (never the OS's full screen, which
-// is the call window's own): the call grows to nearly the whole window, a
-// margin clear of its edges on every side, over the dim scrim. With a screen
+// is the call window's own): the call covers the whole window under the top
+// bar, to the window's own inset, opaque, so nothing of the page shows round
+// it or through it. Its top edge is the top bar's bottom edge; the top bar
+// stays in view, dimmed by the scrim. With a screen
 // share, the share is in the middle and the people in a column of smaller
 // tiles on the left (CallStage); with none, the grid. The call's controls
 // (mute, deafen, camera, share, leave) sit along its bottom.
 //
-// Exit full screen (top right), a click on the scrim round it, or Esc put it
+// Exit full screen (top right), a click on the dimmed top bar, or Esc put it
 // back as it was: the stage, or the slim bar (Esc on a zoomed-in share takes
 // it back to fit first). Focus moves to Exit full screen on open, stays in
 // the view while it's open, and goes back to the Full screen button on exit.
@@ -16,11 +18,12 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/Button'
-import { DialogFrame, DialogScrim } from '@/components/ui/Dialog'
+import { DialogScrim } from '@/components/ui/Dialog'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { Surface } from '@/components/ui/Surface'
 import { ExpandIcon } from '@/components/icons/K2Icons'
 import { CALL_EXPANDED_Z } from '@/lib/overlay-layers'
-import { CALL_EXPAND_MARGIN } from '@/lib/voice/call-view'
+import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 import { returnFocusAfterShrink, shrinkCall, useCallExpand } from '@/stores/call-expand'
 import type { VideoController } from '@/stores/video-core'
 import type { VoiceCall } from '@/stores/voice-core'
@@ -38,6 +41,15 @@ export interface CallExpandedProps {
   /** The wave button (CallControls), with the native engine. */
   noiseRemoval?: boolean | null
 }
+
+/** Where it draws: the window under the top bar, to the window's inset (0 in
+ *  Terminal, the panes' edge in Glass). */
+const FULL_SCREEN_AREA = {
+  top: `calc(var(--inset-window) + ${TOPBAR_HEIGHT_CSS})`,
+  left: 'var(--inset-window)',
+  right: 'var(--inset-window)',
+  bottom: 'var(--inset-window)',
+} as const
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
@@ -61,6 +73,8 @@ function keepFocusIn(e: React.KeyboardEvent<HTMLElement>): void {
 function View({ call, video, actions, noiseRemoval }: CallExpandedProps): React.JSX.Element {
   const time = useCallDuration(call.connectedAt)
   const shrinkRef = useRef<HTMLButtonElement>(null)
+  const viewRef = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: true, ref: viewRef, kind: 'modal' })
   useEffect(() => {
     shrinkRef.current?.focus()
     const onKey = (e: KeyboardEvent): void => {
@@ -84,14 +98,14 @@ function View({ call, video, actions, noiseRemoval }: CallExpandedProps): React.
   return (
     <>
       <DialogScrim zIndex={CALL_EXPANDED_Z} data-testid="call-expanded-scrim" onClick={() => shrinkCall()} style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties} />
-      <DialogFrame
-        zIndex={CALL_EXPANDED_Z + 1}
+      <div
+        ref={viewRef}
         role="dialog"
         aria-modal
         aria-label={`${callTitle(call)}, full screen`}
         data-testid="call-expanded"
-        className="flex flex-col overflow-hidden"
-        style={{ width: `calc(var(--k2-vw) - ${CALL_EXPAND_MARGIN * 2}px)`, height: `calc(var(--k2-vh) - ${CALL_EXPAND_MARGIN * 2}px)`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        className="no-drag fixed flex flex-col overflow-hidden rounded-[var(--radius-box)] bg-[var(--color-bg)]"
+        style={{ ...FULL_SCREEN_AREA, zIndex: CALL_EXPANDED_Z + 1, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         onKeyDown={keepFocusIn}
       >
         <header className="flex flex-shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 py-2">
@@ -117,7 +131,7 @@ function View({ call, video, actions, noiseRemoval }: CallExpandedProps): React.
           <ScreenPicker ctl={video} />
           <VideoNoticeLine ctl={video} noticeOnly />
         </footer>
-      </DialogFrame>
+      </div>
     </>
   )
 }

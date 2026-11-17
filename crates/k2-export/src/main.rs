@@ -17,6 +17,10 @@ static USED: AtomicU64 = AtomicU64::new(0);
 static CAP: AtomicU64 = AtomicU64::new(0);
 static FRAME_PTR: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
 static FRAME_LEN: AtomicUsize = AtomicUsize::new(0);
+/// Windows: stdout's handle, taken with the cap so [`Counting::die`] needn't
+/// allocate to reach it.
+#[cfg(windows)]
+static OUT_HANDLE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 impl Counting {
     fn over(&self, add: usize) -> bool {
@@ -46,7 +50,28 @@ impl Counting {
                     off += w as usize;
                 }
             }
+            #[cfg(windows)]
+            {
+                use std::io::Write as _;
+                use std::os::windows::io::FromRawHandle as _;
+                let h = OUT_HANDLE.load(Ordering::Acquire);
+                if !h.is_null() {
+                    // SAFETY: stdout's handle, borrowed (ManuallyDrop never closes
+                    // it); p/n describe a leaked, immutable Vec<u8>; a File write is
+                    // WriteFile, which doesn't allocate.
+                    let mut out = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_handle(h) });
+                    let _ = out.write_all(unsafe { std::slice::from_raw_parts(p, n) });
+                }
+            }
         }
+        // Windows: abort goes through Windows Error Reporting, which holds the
+        // process for seconds (past a thumbnail's wall); the answer is written,
+        // so end now.
+        #[cfg(windows)]
+        unsafe {
+            libc::_exit(3)
+        }
+        #[cfg(not(windows))]
         std::process::abort()
     }
 }
@@ -88,6 +113,11 @@ fn set_memory_cap(cap: u64, frame: Vec<u8>) {
     let frame: &'static mut [u8] = Box::leak(frame.into_boxed_slice());
     FRAME_LEN.store(frame.len(), Ordering::Release);
     FRAME_PTR.store(frame.as_mut_ptr(), Ordering::Release);
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle as _;
+        OUT_HANDLE.store(std::io::stdout().as_raw_handle(), Ordering::Release);
+    }
     CAP.store(cap, Ordering::Release);
 }
 

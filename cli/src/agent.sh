@@ -2865,7 +2865,7 @@ cmd_agent_list() {
     rc=$?
     set -e
     if [ -z "$resp" ]; then
-        if [ "$rc" -eq "$_CLI_LOCAL_TRANSPORT_DENIED" ]; then
+        if [ "$rc" -eq "$_CLI_LOCAL_TRANSPORT_DENIED" ] || [ "$rc" -eq "$_CLI_TMPDIR_UNWRITABLE" ]; then
             _agent_err "local_transport_denied" "local restriction, daemon health unobserved"
         else
             _agent_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"

@@ -784,38 +784,45 @@ unset _skip_conn_gate
 BASE_URL="http://${HOST}:${PORT}"
 
 # HTTP helper
-# 75 = local_transport_denied (unused by curl 8.x). Survives $(cli_request)
-# subshells; curl 7 / connection refused stay daemon_unreachable.
+# 75 = local_transport_denied: curl 7, a connect the OS refused locally
+# (EPERM, EACCES, no IPv6 loopback). Nothing was sent.
+# 76 = tmpdir_unwritable: curl failed while TMPDIR can't be used. The
+# request may have gone out (cli_send never sends such a POST again).
+# Neither is a curl 8.x code; both survive $(cli_request) subshells.
+# A plain refused connect stays curl 7 (daemon_unreachable).
 _CLI_LOCAL_TRANSPORT_DENIED=75
+_CLI_TMPDIR_UNWRITABLE=76
 
-# True when curl/OS failure is a local restriction (daemon health unobserved).
-_cli_transport_is_denied() {
+# _cli_transport_failure RC ERR: 75 or 76 on stdout when the failure is a
+# local restriction (see above), nothing otherwise.
+_cli_transport_failure() {
     local rc="$1" err="$2"
+    [ "$rc" -ne 0 ] || return 0
     if [[ "$err" == *[Cc]onnection\ refused* ]]; then
-        return 1
-    fi
-    if [[ "$err" == *[Oo]peration\ not\ permitted* || "$err" == *EPERM* \
-       || "$err" == *[Pp]ermission\ denied* || "$err" == *EACCES* ]]; then
         return 0
     fi
-    if [[ "$err" == *Address\ family\ not\ supported* \
-       || "$err" == *Protocol\ family\ not\ supported* ]]; then
-        return 0
-    fi
-    if [[ "$err" == *"::1"* && ( "$err" == *Network\ is\ unreachable* \
-       || "$err" == *No\ route\ to\ host* ) ]]; then
-        return 0
-    fi
-    if [[ "$err" == *temporary\ file* || "$err" == *temp\ file* || "$err" == *TMPDIR* ]]; then
-        return 0
-    fi
-    if [ "$rc" -ne 0 ]; then
-        local td="${TMPDIR:-/tmp}"
-        if [ ! -d "$td" ] || [ ! -w "$td" ]; then
-            return 0
+    if [ "$rc" -eq 7 ]; then
+        if [[ "$err" == *[Oo]peration\ not\ permitted* || "$err" == *EPERM* \
+           || "$err" == *[Pp]ermission\ denied* || "$err" == *EACCES* ]]; then
+            echo "$_CLI_LOCAL_TRANSPORT_DENIED"; return 0
+        fi
+        if [[ "$err" == *Address\ family\ not\ supported* \
+           || "$err" == *Protocol\ family\ not\ supported* ]]; then
+            echo "$_CLI_LOCAL_TRANSPORT_DENIED"; return 0
+        fi
+        if [[ "$err" == *"::1"* && ( "$err" == *Network\ is\ unreachable* \
+           || "$err" == *No\ route\ to\ host* ) ]]; then
+            echo "$_CLI_LOCAL_TRANSPORT_DENIED"; return 0
         fi
     fi
-    return 1
+    if [[ "$err" == *temporary\ file* || "$err" == *temp\ file* || "$err" == *TMPDIR* ]]; then
+        echo "$_CLI_TMPDIR_UNWRITABLE"; return 0
+    fi
+    local td="${TMPDIR:-/tmp}"
+    if [ ! -d "$td" ] || [ ! -w "$td" ]; then
+        echo "$_CLI_TMPDIR_UNWRITABLE"
+    fi
+    return 0
 }
 
 # Body on stdout. -v so modern curl's OS errno (EPERM vs refused) is visible.
@@ -852,10 +859,9 @@ _cli_curl() {
     if [ "$rc" -eq 0 ]; then
         return 0
     fi
-    if _cli_transport_is_denied "$rc" "$err"; then
-        return "$_CLI_LOCAL_TRANSPORT_DENIED"
-    fi
-    return "$rc"
+    local local_rc
+    local_rc="$(_cli_transport_failure "$rc" "$err")"
+    return "${local_rc:-$rc}"
 }
 
 # k2-ptyd S5 (P47): the daemon's pre-ready 503 (`"state":"migrating"`):

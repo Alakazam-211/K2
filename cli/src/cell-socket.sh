@@ -114,11 +114,18 @@ _uds_eligible() {
 # When a per-cell scoped socket is present AND the endpoint is UDS-eligible,
 # try the matching `<tcp_fn>_uds` arm; on success (rc==0, non-empty, and NOT
 # the daemon's "route not served on cell socket" 404 sentinel) print + return.
-# Otherwise fall through to the TCP arm `<tcp_fn>`.
+# Otherwise fall through to the TCP arm `<tcp_fn>`, except for a POST (below).
 #   UDS arm  → $SCOPED_TOKEN (Bearer)
 #   TCP arm  → $TOKEN, which _cli_apply_auth_for_verb already chose:
 #              Open tools may be disk-owner (COMPAT-58); ID/locked tools are
 #              SCOPED_TOKEN only (never the owner inversion).
+#
+# 0.46.15: a POST goes again over TCP only when the cell socket took none
+# of it: the connect failed (curl 7, or 75 when the OS refused it
+# locally) or the daemon answered "not served on cell socket". Any other
+# failure (a timeout, an empty or broken reply, 76 with TMPDIR unusable)
+# may have run it, so it is not sent again: _cli_send_unanswered says so.
+# GETs keep the fallback. _K2_SEND_NO_RESEND=1 gives a GET the POST rule too.
 cli_send() {
     local fn="$1" endpoint="$2"; shift 2
     local sock; sock="$(_hook_sock)"
@@ -136,23 +143,45 @@ cli_send() {
         # fallback, and the caller printed an empty answer (0.46.12:
         # `k2 inbox read` → "no usable answer: ''" from a session whose
         # socket nobody served).
-        local out rc=0
+        local out rc=0 t0="$SECONDS"
         out="$(_K2_NOANSWER_SOFT=1 "${fn}_uds" "$endpoint" "$@")" || rc=$?
         if [ "$rc" -eq 0 ] && [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]]; then
             printf '%s' "$out"
             return 0
         fi
-        # 0.46.15: a send whose daemon can't dedupe it (no `send-once`)
-        # never goes again over TCP after a socket try that may have run
-        # (no answer in time, or an empty one): that was a second copy.
-        if [ "${_K2_SEND_NO_RESEND:-0}" = 1 ]; then
+        if _cli_send_is_post "$fn" || [ "${_K2_SEND_NO_RESEND:-0}" = 1 ]; then
             case "$rc" in
-                28|52) printf '%s' "$out"; return "$rc" ;;
-                0) if [ -z "$out" ]; then return 0; fi ;;
+                7|"$_CLI_LOCAL_TRANSPORT_DENIED") ;;
+                *)
+                    if [[ "$out" != *"not served on cell socket"* ]]; then
+                        _cli_send_unanswered "$endpoint" "$t0" "$rc" "$out"
+                        return
+                    fi
+                    ;;
             esac
         fi
     fi
     "$fn" "$endpoint" "$@"
+}
+
+# The TCP arms cli_send takes. cli_request is the only GET; any other
+# (cli_request_post, cli_post_form, cli_post_json, cli_post, or one added
+# later) counts as a POST.
+_cli_send_is_post() {
+    [ "$1" != cli_request ]
+}
+
+# _cli_send_unanswered ENDPOINT T0 RC OUT: a send over the cell socket that
+# may have run and is not sent again. A caller that reports for itself
+# (_K2_NOANSWER_SOFT=1, as _k2_idem_send) gets OUT and RC back; otherwise
+# the line below, and the command ends with 1.
+_cli_send_unanswered() {
+    if [ "${_K2_NOANSWER_SOFT:-0}" = 1 ]; then
+        printf '%s' "$4"
+        return "$3"
+    fi
+    echo "Error: K2's server didn't answer $1 ($((SECONDS - $2)) s); the request may have been applied. Check before running it again." >&2
+    _k2_end_command 1
 }
 
 # BEGIN_CLI_SEND_TCP_LOCK
@@ -184,21 +213,21 @@ _cli_skip_uds() {
 cli_send_json() {
     local method="$1" path="$2" payload="${3:-}"
     local mt="${_K2_SEND_MAX_TIME:-60}"
-    local sock out="" _K2_CFG=""
+    local sock out="" _K2_CFG="" rc=0 t0="$SECONDS"
     sock="$(_hook_sock)"
     if ! _cli_skip_uds && [ -n "$sock" ] && [ -S "$sock" ] && [ -n "${SCOPED_TOKEN:-}" ]; then
         _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
         if [ "$method" = "GET" ]; then
             [ -n "$payload" ] && _k2_cfg_add data "$payload"
             out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost${path}" \
-                --connect-timeout 5 --max-time "$mt" -w $'\n%{http_code}' 2>/dev/null)" || out=""
+                --connect-timeout 5 --max-time "$mt" -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
         else
             _k2_cfg_add data-raw "$payload"
             out="$(_k2_curl "$_K2_CFG" -s -X POST --unix-socket "$sock" "http://localhost${path}" \
                 --connect-timeout 5 --max-time "$mt" -H "Content-Type: application/json" \
-                -w $'\n%{http_code}' 2>/dev/null)" || out=""
+                -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
         fi
-        if [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
+        if [ "$rc" -eq 0 ] && [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
             if _cli_retry_with_healed_passport "$out"; then
                 cli_send_json "$method" "$path" "$payload"
                 return $?
@@ -206,6 +235,13 @@ cli_send_json() {
             _permission_note "$out"
             printf '%s' "$out"
             return 0
+        fi
+        # 0.46.15: a POST goes again over TCP only after a failed connect
+        # (curl 7) or "not served on cell socket", as cli_send. Soft
+        # callers get status 000, the TCP arm's "no answer".
+        if [ "$method" != "GET" ] && [ "$rc" -ne 7 ] && [[ "$out" != *"not served on cell socket"* ]]; then
+            _cli_send_unanswered "$path" "$t0" 0 $'\n000'
+            return
         fi
     fi
     _K2_CFG=""
@@ -423,12 +459,12 @@ _k2_idem_init() {
         exit 1
     fi
 }
-# True when a send got no answer: curl timed out (28) or the connection
-# closed empty (52), nothing came back, or the daemon says the first try
-# with this key still runs (409 in_progress).
+# True when a send got no answer: curl timed out (28), the connection
+# closed empty (52) or broke while receiving (56), nothing came back, or
+# the daemon says the first try with this key still runs (409 in_progress).
 _k2_idem_unanswered() {
     local rc="$1" out="$2"
-    case "$rc" in 28|52) return 0 ;; esac
+    case "$rc" in 28|52|56) return 0 ;; esac
     [ "$rc" = 0 ] && [ -z "$out" ] && return 0
     [[ "$out" == *'"code":"in_progress"'* ]] && return 0
     return 1

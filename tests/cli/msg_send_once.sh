@@ -14,7 +14,8 @@
 # `"replayed": true` (a Thread post's `clientMsgId`: `"duplicate": true`),
 # and a repeat while the first still runs waits for it. Its first answer
 # per key can be slowed past the CLI's request limit (_K2_POST_MAX_TIME).
-# The cell socket is served too, so the socket-then-TCP fallback is covered.
+# The cell socket is served too: the tries stay on it (a POST that may
+# have run never goes again over TCP).
 # /boot-status lists `send-once` (the daemon's promise that it drops a
 # repeated key) unless the FEATURES file says `none`: then the CLI sends
 # once, never again over TCP, and says to check before resending.
@@ -257,8 +258,8 @@ n_tries="$(keys_for /cli/workspace/msg | wc -l | tr -d ' ')"
 n_keys="$(keys_for /cli/workspace/msg | sort -u | wc -l | tr -d ' ')"
 k1="$(keys_for /cli/workspace/msg | head -1)"
 [ "$n_keys" = 1 ] && [ "$k1" != "-" ] && ok || bad "msg: every try carries one key, saw: $(keys_for /cli/workspace/msg | tr '\n' ' ')"
-grep -q "^uds POST /cli/workspace/msg" "$LOG" && grep -q "^tcp POST /cli/workspace/msg" "$LOG" && ok \
-    || bad "msg: the cell socket try and the TCP fallback both went: $(cat "$LOG")"
+[ "$(grep -c "^uds POST /cli/workspace/msg" "$LOG" || true)" -ge 2 ] && ! grep -q "^tcp POST /cli/workspace/msg" "$LOG" && ok \
+    || bad "msg: every try stays on the cell socket (a POST that may have run is not resent over TCP): $(cat "$LOG")"
 printf '%s' "$ERR" | grep -q "already had this send" && ok || bad "msg: the replay note: $ERR"
 no_footer "msg after a retry"
 

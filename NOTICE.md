@@ -475,7 +475,7 @@ core (off by default), and reads drawings only: K2 saves no drawing edits yet.
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-cad` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md`, `PROVENANCE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-cad`, `v0.1.0` (its release commit `e551975`; the tag is not cut yet) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-cad`, tag `v0.1.0` (`e551975`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project, and one table of data taken from one (below); `PROVENANCE.md` says what each part was written from. Its tables are written in its own words from the DXF reference and the Open Design Specification for .dwg files, read as sources of facts; no text or tables are copied from them |
 | **Dependencies** | the kit only (above) |
 | **Formats** | DXF and DWG are trademarks of their owner. These readers read files in those formats; they are not affiliated with, endorsed by or sponsored by that owner, and make no compatibility claim. The names are used here only to name the file formats |
@@ -520,7 +520,7 @@ daemon, behind the CAD core (off by default).
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-av` (depends on `../k2-mpc-cad` and `../k2-mpc-base`), with its own `NOTICE.md`, `PROVENANCE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-av`, `v0.1.0` (its release commit `5caa5c6`, beside k2-mpc-cad v0.1.0; the tag is not cut yet) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-av`, tag `v0.1.0` (`5caa5c6`, beside k2-mpc-cad v0.1.0) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project; `PROVENANCE.md` says what each part was written from |
 | **Dependencies** | the kit and the CAD pack (above) |
 | **Formats** | DXF and DWG are trademarks of their owner; they are named here only to name the file formats |

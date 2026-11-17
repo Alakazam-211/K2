@@ -254,11 +254,17 @@ pub fn bat_arg(arg: &str) -> Option<String> {
 #[cfg(windows)]
 const SHIM_MAX_BYTES: u64 = 16 << 10;
 
-/// An npm shim (cmd-shim: `claude.cmd`, `codex.cmd`, `gemini.cmd`…) runs
-/// one target with `%*`: `"%_prog%" "%dp0%\…\cli.js" %*` (node, or the
-/// shim's own `node.exe` beside it) or `"%dp0%\…\x.exe" %*`. Returns that
-/// program and the arguments before the caller's: `(node, [script])` or
-/// `(exe, [])`. `None` for anything else (it then runs as a batch file).
+/// A shim `.cmd` that runs one target with `%*`, as package managers
+/// write them; returns that program and the arguments before the
+/// caller's. `None` for anything else (it then runs as a batch file).
+///
+/// - npm's and yarn's (cmd-shim) and pnpm's (`@pnpm/cmd-shim`):
+///   `"%_prog%" "%dp0%\…\cli.js" %*`, `"%~dp0\node.exe" "%~dp0\…\cli.js" %*`,
+///   `node "%~dp0\…\cli.js" %*`, `@"C:\…\node.exe" "%~dp0\…\cli.js" %*`
+///   (the target may also be an absolute path): `(node, [script])`, node
+///   being the shim's own, the one it names, or the one on PATH; or
+///   `"%dp0%\…\x.exe" %*`: `(exe, [])`.
+/// - Volta's: `volta run %~n0 %*`: `(volta.exe, ["run", <shim name>])`.
 fn npm_shim(
     cmd: &Path,
     dirs: &[PathBuf],
@@ -268,48 +274,71 @@ fn npm_shim(
 ) -> Option<(String, Vec<String>)> {
     let text = read(cmd)?;
     let line = text.lines().map(str::trim).filter(|l| l.ends_with("%*")).last()?;
-    let body = line[..line.len() - 2].trim_end();
-    let start = body.rfind("\"%dp0%\\").or_else(|| body.rfind("\"%~dp0\\"))?;
-    let quoted = &body[start + 1..];
-    let end = quoted.find('"')?;
-    // The path must be the last thing before `%*` (no fixed arguments).
-    if end + 1 != quoted.len() {
-        return None;
-    }
-    let rel = quoted[..end].strip_prefix("%dp0%\\").or_else(|| quoted[..end].strip_prefix("%~dp0\\"))?;
-    if rel.is_empty() || rel.contains(['%', '"', '!', '^']) {
-        return None;
-    }
+    let body = line[..line.len() - 2].trim().trim_start_matches('@').trim();
     let dir = cmd.parent()?;
-    let target = dir.join(rel);
+    let is_exe = |p: &Path| p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("exe"));
+    let on_path_exe = |name: &str| find_on_path(name, dirs, pathext, exists).filter(|p| is_exe(p));
+
+    // Volta: the tool is the shim's own name.
+    if body.eq_ignore_ascii_case("volta run %~n0") {
+        let name = cmd.file_stem()?.to_str()?.to_string();
+        let volta = on_path_exe("volta")?;
+        return Some((volta.to_string_lossy().into_owned(), vec!["run".into(), name]));
+    }
+
+    // The target: the quoted path that ends the line (no fixed arguments after it).
+    let quoted = body.strip_suffix('"')?;
+    let open = quoted.rfind('"')?;
+    let target = shim_path(dir, &quoted[open + 1..])?;
     if !exists(&target) {
         return None;
     }
     let target = target.to_string_lossy().into_owned();
     let lower = target.to_ascii_lowercase();
-    let prefix = body[..start].trim_end();
-    let by_node = prefix.ends_with("\"%_prog%\"") || prefix.ends_with("node") || prefix.to_ascii_lowercase().ends_with("node.exe\"");
+    let prefix = quoted[..open].trim_end();
+    let prefix_lower = prefix.to_ascii_lowercase();
+    let by_node = prefix.ends_with("\"%_prog%\"") || prefix_lower.ends_with("node") || prefix_lower.ends_with("node.exe\"");
     if by_node {
         if ![".js", ".cjs", ".mjs"].iter().any(|e| lower.ends_with(e)) {
             return None;
         }
-        let beside = dir.join("node.exe");
-        let node = if exists(&beside) {
-            beside.to_string_lossy().into_owned()
-        } else {
-            let n = find_on_path("node", dirs, pathext, exists)?;
-            if !n.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("exe")) {
-                return None;
-            }
-            n.to_string_lossy().into_owned()
-        };
-        return Some((node, vec![target]));
+        // The node the shim names (`"…\node.exe"`), else its own, else PATH's.
+        let named = prefix_lower
+            .ends_with("node.exe\"")
+            .then(|| prefix[..prefix.len() - 1].rfind('"').map(|q| &prefix[q + 1..prefix.len() - 1]))
+            .flatten()
+            .and_then(|p| shim_path(dir, p))
+            .filter(|p| exists(p));
+        let beside = Some(dir.join("node.exe")).filter(|p| exists(p));
+        let node = named.or(beside).or_else(|| on_path_exe("node"))?;
+        return Some((node.to_string_lossy().into_owned(), vec![target]));
     }
     // No interpreter: the line is the path alone (or follows cmd-shim's `&`).
     if (prefix.is_empty() || prefix.ends_with('&')) && lower.ends_with(".exe") {
         return Some((target, Vec::new()));
     }
     None
+}
+
+/// A path as a shim writes it: `%dp0%\…` or `%~dp0\…` (the shim's folder)
+/// or absolute; `None` for anything with cmd.exe syntax left in it.
+fn shim_path(dir: &Path, written: &str) -> Option<PathBuf> {
+    let (base, rest) = if let Some(rest) = written.strip_prefix("%dp0%\\").or_else(|| written.strip_prefix("%~dp0\\")) {
+        (Some(dir), rest)
+    } else {
+        (None, written)
+    };
+    if rest.is_empty() || rest.contains(['%', '"', '!', '^', '&', '|', '<', '>']) {
+        return None;
+    }
+    match base {
+        Some(dir) => Some(dir.join(rest)),
+        None => {
+            let b = rest.as_bytes();
+            let absolute = (b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')) || rest.starts_with("\\\\");
+            absolute.then(|| PathBuf::from(rest))
+        }
+    }
 }
 
 /// cmd.exe's own commands: they are in cmd.exe, not files a spawn can find.
@@ -664,6 +693,60 @@ mod tests {
         let fixed = |_: &Path| Some("\"%dp0%\\node_modules\\x\\x.exe\" --fixed %*\r\n".to_string());
         let r = for_ok(Launcher::Pty, "claude", &[], &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), fixed);
         assert_eq!(r.0, "cmd.exe");
+    }
+
+    #[test]
+    fn pnpm_and_volta_shims_run_their_target_without_cmd_exe() {
+        let pnpm = PathBuf::from(r"C:\Users\x\AppData\Local\pnpm");
+        let volta_bin = PathBuf::from(r"C:\Users\x\AppData\Local\Volta\bin");
+        let volta_exe = PathBuf::from(r"C:\Program Files\Volta").join("volta.exe");
+        let node = PathBuf::from(r"C:\Program Files\nodejs").join("node.exe");
+        let pinned_node = PathBuf::from(r"C:\tools\node22").join("node.exe");
+        let cli = pnpm.join(r"global\5\node_modules\@anthropic-ai\claude-code\cli.js").to_string_lossy().into_owned();
+        let abs_cli = PathBuf::from(r"C:\pkgs").join("cli.js");
+        let files: HashSet<PathBuf> = [
+            pnpm.join("claude.cmd"),
+            pnpm.join("pinned.cmd"),
+            volta_bin.join("claude.cmd"),
+            volta_exe.clone(),
+            node.clone(),
+            pinned_node.clone(),
+            PathBuf::from(&cli),
+            abs_cli.clone(),
+        ]
+        .into_iter()
+        .collect();
+        // @pnpm/cmd-shim: NODE_PATH, then the node.exe-or-PATH branches.
+        let pnpm_shim = "@SETLOCAL\r\n@SET \"NODE_PATH=C:\\Users\\x\\AppData\\Local\\pnpm\\global\\5\\node_modules;%NODE_PATH%\"\r\n@IF EXIST \"%~dp0\\node.exe\" (\r\n  \"%~dp0\\node.exe\"  \"%~dp0\\global\\5\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n) ELSE (\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node  \"%~dp0\\global\\5\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n)\r\n";
+        // @pnpm/cmd-shim with a pinned node and an absolute target: one line.
+        let pinned_shim = format!("@SETLOCAL\r\n@\"{}\"  \"{}\" %*\r\n", pinned_node.display(), abs_cli.display());
+        let volta_shim = "@echo off\r\nvolta run %~n0 %*\r\n";
+        let read = |p: &Path| -> Option<String> {
+            let parent = p.parent()?.to_path_buf();
+            let name = p.file_name()?.to_str()?;
+            Some(match (name, parent == volta_bin) {
+                ("claude.cmd", true) => volta_shim.to_string(),
+                ("claude.cmd", false) => pnpm_shim.to_string(),
+                ("pinned.cmd", false) => pinned_shim.clone(),
+                _ => return None,
+            })
+        };
+        let prompt = "line one & \"two\"\n%PATH% | three".to_string();
+        let args = vec!["--append-system-prompt".to_string(), prompt.clone()];
+        let path = format!(r"{};C:\Program Files\nodejs;C:\Program Files\Volta", pnpm.display());
+        for launcher in [Launcher::Pty, Launcher::Std] {
+            let r = for_ok(launcher, "claude", &args, &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
+            assert_eq!(r, (node.to_string_lossy().into_owned(), vec![cli.clone(), "--append-system-prompt".into(), prompt.clone()]), "pnpm {launcher:?}");
+            let r = for_ok(launcher, "pinned", &args, &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
+            assert_eq!(r, (pinned_node.to_string_lossy().into_owned(), vec![abs_cli.to_string_lossy().into_owned(), "--append-system-prompt".into(), prompt.clone()]), "pinned {launcher:?}");
+            let volta_path = format!(r"{};C:\Program Files\Volta", volta_bin.display());
+            let r = for_ok(launcher, "claude", &args, &volta_path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
+            assert_eq!(r, (volta_exe.to_string_lossy().into_owned(), vec!["run".into(), "claude".into(), "--append-system-prompt".into(), prompt.clone()]), "volta {launcher:?}");
+        }
+        // Volta's shim with no volta.exe on PATH: a batch file, so this argument is refused.
+        let no_volta: HashSet<PathBuf> = files.iter().filter(|p| **p != volta_exe).cloned().collect();
+        let r = resolve_for(Launcher::Pty, "claude", &args, &volta_bin.to_string_lossy(), ".EXE;.CMD", "cmd.exe", exists_in(&no_volta), read);
+        assert_eq!(r, Err(Refused { program: "claude".into() }));
     }
 
     /// Windows only (it runs cmd.exe): what a batch file and a built-in get

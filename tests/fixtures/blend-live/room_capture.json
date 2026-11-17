@@ -1,0 +1,4123 @@
+{
+  "after_write": [],
+  "cores": {
+    "boardFilePreview": false,
+    "canChange": true,
+    "cores": [
+      {
+        "description": ".md and .markdown files. Opens beside the workspace's agent, with live editing, presence and history.",
+        "id": "markdown",
+        "lastChange": null,
+        "name": "Markdown core",
+        "on": false,
+        "open": {
+          "files": 0,
+          "participants": 0,
+          "paths": []
+        },
+        "short": ".md and .markdown files",
+        "status": "beta",
+        "view": "live"
+      },
+      {
+        "description": "Code, config, plain text, logs, HTML/XML/SVG and diagram sources, and CSV/TSV as text.",
+        "id": "text",
+        "lastChange": null,
+        "name": "Text and code core",
+        "on": false,
+        "open": {
+          "files": 0,
+          "participants": 0,
+          "paths": []
+        },
+        "short": "code, config, plain text, logs, CSV/TSV as text",
+        "status": "beta",
+        "view": "live"
+      },
+      {
+        "description": "PSD, CAD, 3D and .blend files, images, PDFs, office files and the rest. These open the usual way, with a panel beside them: who's here, a lock, versions and restore, conflict copies and approvals.",
+        "id": "any-file",
+        "lastChange": {
+          "at": 1794888959,
+          "by": "owner-token",
+          "closed": 0,
+          "failed": [],
+          "on": true,
+          "written": 0
+        },
+        "name": "Any other file",
+        "on": true,
+        "open": {
+          "files": 0,
+          "participants": 0,
+          "paths": []
+        },
+        "short": "PSD, CAD, 3D and .blend files, images, PDFs and the rest: presence, a lock, versions",
+        "status": "beta",
+        "view": "none"
+      },
+      {
+        "description": "A whiteboard Garden for you and your agents. Single-person for now. Off: Board Gardens show a placeholder and agents' k2 board calls are refused; your boards are kept.",
+        "id": "board",
+        "lastChange": null,
+        "name": "Board",
+        "on": false,
+        "open": {
+          "files": 0,
+          "participants": 0,
+          "paths": []
+        },
+        "short": "the Board Garden (a whiteboard for you and your agents)",
+        "status": "beta",
+        "view": "garden"
+      },
+      {
+        "description": ".pptx decks. Agents read and change slides and shapes with deck verbs (slide list, shape text, shape move), and a save from your presentation app is taken in by slide and shape. Decks still open the usual way: there's no live view yet. Off: a .pptx is an any-file doc.",
+        "id": "slides",
+        "lastChange": null,
+        "name": "Slides core",
+        "on": false,
+        "open": {
+          "files": 0,
+          "participants": 0,
+          "paths": []
+        },
+        "short": ".pptx decks: slide and shape verbs for agents",
+        "status": "beta",
+        "view": "none"
+      },
+      {
+        "description": ".otio, .fcpxml and .prproj video timelines. Agents read tracks, clips and markers, and change .otio timelines with clip and marker verbs; a save from your editing app is taken in by clip. Off: these are any-file docs.",
+        "id": "timeline",
+        "lastChange": null,
+        "name": "Timeline core",
+        "on": false,
+        "open": {
+          "files": 0,
+          "participants": 0,
+          "paths": []
+        },
+        "short": ".otio, .fcpxml and .prproj timelines: clip and marker verbs for agents",
+        "status": "beta",
+        "view": "none"
+      },
+      {
+        "description": "Photoplot and drill files for circuit boards (.gbr, .drl and their layer files). Agents read apertures, features and holes, and compare versions; nobody writes them through K2. Off: these are any-file docs.",
+        "id": "fab",
+        "lastChange": null,
+        "name": "PCB fabrication core",
+        "on": false,
+        "open": {
+          "files": 0,
+          "participants": 0,
+          "paths": []
+        },
+        "short": "photoplot and drill files: read-only feature and hole verbs for agents",
+        "status": "beta",
+        "view": "none"
+      },
+      {
+        "description": ".blend scenes, read only for now. Agents read collections and objects, a save from your 3D app is taken in by object, and the scene's cameras and objects get previews. Editing .blend files through K2 comes in a later release. Off: a .blend is an any-file doc.",
+        "id": "blend",
+        "lastChange": {
+          "at": 1794888959,
+          "by": "owner-token",
+          "closed": 0,
+          "failed": [],
+          "on": true,
+          "written": 0
+        },
+        "name": "3D scene core",
+        "on": true,
+        "open": {
+          "files": 0,
+          "participants": 0,
+          "paths": []
+        },
+        "short": ".blend scenes (read only): object reads for agents, scene previews",
+        "status": "beta",
+        "view": "none"
+      }
+    ],
+    "file": {
+      "core": "blend",
+      "liveView": false,
+      "on": true
+    },
+    "later": [
+      "CSV grid",
+      "Word"
+    ],
+    "ok": true
+  },
+  "watch": [
+    {
+      "pages": 10,
+      "schema": {
+        "composite": [
+          {
+            "list": "colls",
+            "map": "coll_props"
+          },
+          {
+            "list": "objs",
+            "map": "obj_props"
+          }
+        ],
+        "name": "blend",
+        "roots": [
+          {
+            "kind": "list",
+            "name": "colls"
+          },
+          {
+            "kind": "list",
+            "name": "objs"
+          },
+          {
+            "kind": "map",
+            "name": "coll_props"
+          },
+          {
+            "kind": "map",
+            "name": "obj_props"
+          },
+          {
+            "kind": "map",
+            "name": "scene"
+          }
+        ]
+      },
+      "seq": 1,
+      "type": "keyed_snapshot",
+      "upto": 1,
+      "view": {
+        "containers": [
+          {
+            "derived": {
+              "current_scene": "true"
+            },
+            "fonts": [],
+            "has_fields": [],
+            "hidden": false,
+            "key": "@coll:1",
+            "layout": null,
+            "position": 1,
+            "render_hash": null,
+            "title": "Scene",
+            "unit_count": 4
+          },
+          {
+            "fonts": [],
+            "has_fields": [],
+            "hidden": false,
+            "key": "@coll:2",
+            "layout": null,
+            "parent": "@coll:1",
+            "position": 2,
+            "render_hash": null,
+            "title": "Room",
+            "unit_count": 7
+          },
+          {
+            "fonts": [],
+            "has_fields": [],
+            "hidden": false,
+            "key": "@coll:3",
+            "layout": null,
+            "parent": "@coll:1",
+            "position": 3,
+            "render_hash": null,
+            "title": "Furniture",
+            "unit_count": 9
+          },
+          {
+            "fonts": [],
+            "has_fields": [],
+            "hidden": false,
+            "key": "@coll:4",
+            "layout": null,
+            "parent": "@coll:3",
+            "position": 4,
+            "render_hash": null,
+            "title": "Props",
+            "unit_count": 5
+          },
+          {
+            "fonts": [],
+            "has_fields": [],
+            "hidden": false,
+            "key": "@coll:0",
+            "layout": null,
+            "position": 5,
+            "render_hash": null,
+            "title": null,
+            "unit_count": 1
+          }
+        ],
+        "fonts": [],
+        "layouts": [],
+        "page": null,
+        "rev": 1,
+        "schema": {
+          "container_derived": [
+            "current_scene"
+          ],
+          "container_fields": {
+            "hidden": "hidden",
+            "layout": null,
+            "parent": "parent",
+            "title": "name"
+          },
+          "container_id_field": null,
+          "containers": "colls",
+          "derived": {
+            "containers": [],
+            "units": []
+          },
+          "field_class": {
+            "also": "meta",
+            "coll": "meta",
+            "data": "meta",
+            "edit": "meta",
+            "hidden": "visibility",
+            "name": "text",
+            "nid": "meta",
+            "norender": "visibility",
+            "noselect": "visibility",
+            "parent": "meta",
+            "quat": "geometry",
+            "rotmode": "meta",
+            "xform": "geometry"
+          },
+          "geometry": null,
+          "native_unit": "scene-unit",
+          "page": null,
+          "space": {
+            "container_fields": [],
+            "precision": "f32",
+            "unit_fields": [
+              "xform",
+              "rotmode",
+              "quat",
+              "parent"
+            ]
+          },
+          "unit_container_field": "coll",
+          "unit_derived": [
+            "transform",
+            "data",
+            "mesh_hash",
+            "hidden_by"
+          ],
+          "unit_fields": {
+            "alt": null,
+            "editable_text": null,
+            "hidden": "hidden",
+            "kind": {
+              "list_value": true
+            },
+            "name": "name",
+            "placeholder": null,
+            "text": null
+          },
+          "units": "objs"
+        },
+        "space": {
+          "handed": "right",
+          "length_unit": "scene-unit",
+          "metres_per_unit": 1,
+          "up": "z"
+        },
+        "tier": "live",
+        "version": null
+      }
+    },
+    {
+      "live": [
+        [
+          "@coll:1",
+          "scene"
+        ],
+        [
+          "@coll:2",
+          "collection"
+        ],
+        [
+          "@coll:3",
+          "collection"
+        ],
+        [
+          "@coll:4",
+          "collection"
+        ],
+        [
+          "@coll:0",
+          "none"
+        ]
+      ],
+      "page": 1,
+      "pages": 10,
+      "root": "colls",
+      "seq": 2,
+      "type": "keyed_page",
+      "upto": 1
+    },
+    {
+      "live": [
+        [
+          "@obj:1",
+          "camera"
+        ],
+        [
+          "@obj:2",
+          "light"
+        ],
+        [
+          "@obj:3",
+          "light"
+        ],
+        [
+          "@obj:4",
+          "mesh"
+        ],
+        [
+          "@obj:5",
+          "mesh"
+        ],
+        [
+          "@obj:6",
+          "mesh"
+        ],
+        [
+          "@obj:7",
+          "mesh"
+        ],
+        [
+          "@obj:8",
+          "mesh"
+        ],
+        [
+          "@obj:9",
+          "mesh"
+        ],
+        [
+          "@obj:10",
+          "mesh"
+        ],
+        [
+          "@obj:11",
+          "mesh"
+        ],
+        [
+          "@obj:12",
+          "mesh"
+        ],
+        [
+          "@obj:13",
+          "mesh"
+        ],
+        [
+          "@obj:14",
+          "mesh"
+        ],
+        [
+          "@obj:15",
+          "mesh"
+        ],
+        [
+          "@obj:16",
+          "mesh"
+        ],
+        [
+          "@obj:17",
+          "mesh"
+        ],
+        [
+          "@obj:18",
+          "mesh"
+        ],
+        [
+          "@obj:19",
+          "mesh"
+        ],
+        [
+          "@obj:20",
+          "mesh"
+        ],
+        [
+          "@obj:21",
+          "mesh"
+        ],
+        [
+          "@obj:22",
+          "empty"
+        ],
+        [
+          "@obj:23",
+          "mesh"
+        ],
+        [
+          "@obj:24",
+          "empty"
+        ],
+        [
+          "@obj:25",
+          "empty"
+        ],
+        [
+          "@obj:26",
+          "camera"
+        ]
+      ],
+      "page": 2,
+      "pages": 10,
+      "root": "objs",
+      "seq": 3,
+      "type": "keyed_page",
+      "upto": 1
+    },
+    {
+      "entries": [
+        [
+          "@coll:1",
+          "hidden",
+          "0"
+        ],
+        [
+          "@coll:1",
+          "name",
+          "Scene"
+        ],
+        [
+          "@coll:1",
+          "nid",
+          "@sc:Scene"
+        ],
+        [
+          "@coll:2",
+          "hidden",
+          "0"
+        ],
+        [
+          "@coll:2",
+          "name",
+          "Room"
+        ],
+        [
+          "@coll:2",
+          "nid",
+          "@gr:Room"
+        ],
+        [
+          "@coll:2",
+          "parent",
+          "c1"
+        ],
+        [
+          "@coll:3",
+          "hidden",
+          "0"
+        ],
+        [
+          "@coll:3",
+          "name",
+          "Furniture"
+        ],
+        [
+          "@coll:3",
+          "nid",
+          "@gr:Furniture"
+        ],
+        [
+          "@coll:3",
+          "parent",
+          "c1"
+        ],
+        [
+          "@coll:4",
+          "hidden",
+          "0"
+        ],
+        [
+          "@coll:4",
+          "name",
+          "Props"
+        ],
+        [
+          "@coll:4",
+          "nid",
+          "@gr:Props"
+        ],
+        [
+          "@coll:4",
+          "parent",
+          "c3"
+        ]
+      ],
+      "page": 3,
+      "pages": 10,
+      "root": "coll_props",
+      "seq": 4,
+      "type": "keyed_page",
+      "upto": 1
+    },
+    {
+      "entries": [
+        [
+          "@obj:1",
+          "coll",
+          "c1"
+        ],
+        [
+          "@obj:1",
+          "data",
+          "camera @ca:Camera"
+        ],
+        [
+          "@obj:1",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:1",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:1",
+          "name",
+          "Camera"
+        ],
+        [
+          "@obj:1",
+          "nid",
+          "@ob:Camera"
+        ],
+        [
+          "@obj:1",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:1",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:1",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:1",
+          "xform",
+          "-2.6,-3.4,1.35,1.4137167,0,-0.62831855,1,1,1"
+        ],
+        [
+          "@obj:10",
+          "coll",
+          "c3"
+        ],
+        [
+          "@obj:10",
+          "data",
+          "mesh @me:Table"
+        ],
+        [
+          "@obj:10",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:10",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:10",
+          "name",
+          "Table"
+        ],
+        [
+          "@obj:10",
+          "nid",
+          "@ob:Table"
+        ],
+        [
+          "@obj:10",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:10",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:10",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:10",
+          "xform",
+          "0.6,0.4,0,0,0,0,1,1,1"
+        ],
+        [
+          "@obj:11",
+          "coll",
+          "c3"
+        ],
+        [
+          "@obj:11",
+          "data",
+          "mesh @me:Chair"
+        ],
+        [
+          "@obj:11",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:11",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:11",
+          "name",
+          "Chair.001"
+        ],
+        [
+          "@obj:11",
+          "nid",
+          "@ob:Chair.001"
+        ],
+        [
+          "@obj:11",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:11",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:11",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:11",
+          "xform",
+          "0.6,-0.35,0,0,0,0,1,1,1"
+        ],
+        [
+          "@obj:12",
+          "coll",
+          "c3"
+        ],
+        [
+          "@obj:12",
+          "data",
+          "mesh @me:Chair"
+        ],
+        [
+          "@obj:12",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:12",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:12",
+          "name",
+          "Chair.002"
+        ],
+        [
+          "@obj:12",
+          "nid",
+          "@ob:Chair.002"
+        ],
+        [
+          "@obj:12",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:12",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:12",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:12",
+          "xform",
+          "0.6,1.15,0,0,0,3.1415927,1,1,1"
+        ],
+        [
+          "@obj:13",
+          "coll",
+          "c3"
+        ],
+        [
+          "@obj:13",
+          "data",
+          "mesh @me:Chair"
+        ],
+        [
+          "@obj:13",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:13",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:13",
+          "name",
+          "Chair.003"
+        ],
+        [
+          "@obj:13",
+          "nid",
+          "@ob:Chair.003"
+        ],
+        [
+          "@obj:13",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:13",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:13",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:13",
+          "xform",
+          "-0.15,0.4,0,0,0,-1.5707964,1,1,1"
+        ],
+        [
+          "@obj:14",
+          "coll",
+          "c3"
+        ],
+        [
+          "@obj:14",
+          "data",
+          "mesh @me:Chair"
+        ],
+        [
+          "@obj:14",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:14",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:14",
+          "name",
+          "Chair.004"
+        ],
+        [
+          "@obj:14",
+          "nid",
+          "@ob:Chair.004"
+        ],
+        [
+          "@obj:14",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:14",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:14",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:14",
+          "xform",
+          "1.35,0.4,0,0,0,1.5707964,1,1,1"
+        ],
+        [
+          "@obj:15",
+          "coll",
+          "c3"
+        ],
+        [
+          "@obj:15",
+          "data",
+          "mesh @me:Sofa"
+        ],
+        [
+          "@obj:15",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:15",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:15",
+          "name",
+          "Sofa"
+        ],
+        [
+          "@obj:15",
+          "nid",
+          "@ob:Sofa"
+        ],
+        [
+          "@obj:15",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:15",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:15",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:15",
+          "xform",
+          "-1.9,-1.2,0,0,0,1.5707964,1,1,1"
+        ],
+        [
+          "@obj:16",
+          "coll",
+          "c3"
+        ],
+        [
+          "@obj:16",
+          "data",
+          "mesh @me:Shelf"
+        ],
+        [
+          "@obj:16",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:16",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:16",
+          "name",
+          "Shelf"
+        ],
+        [
+          "@obj:16",
+          "nid",
+          "@ob:Shelf"
+        ],
+        [
+          "@obj:16",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:16",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:16",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:16",
+          "xform",
+          "2.6,2.2,0,0,0,0,1,1,1"
+        ],
+        [
+          "@obj:17",
+          "coll",
+          "c3"
+        ],
+        [
+          "@obj:17",
+          "data",
+          "mesh @me:Book"
+        ],
+        [
+          "@obj:17",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:17",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:17",
+          "name",
+          "Book.001"
+        ],
+        [
+          "@obj:17",
+          "nid",
+          "@ob:Book.001"
+        ],
+        [
+          "@obj:17",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:17",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:17",
+          "parent",
+          "o16"
+        ],
+        [
+          "@obj:17",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:17",
+          "xform",
+          "-0.3,0,1.12,0,0,0,1,1,1"
+        ],
+        [
+          "@obj:18",
+          "coll",
+          "c3"
+        ],
+        [
+          "@obj:18",
+          "data",
+          "mesh @me:Book"
+        ],
+        [
+          "@obj:18",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:18",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:18",
+          "name",
+          "Book.002"
+        ],
+        [
+          "@obj:18",
+          "nid",
+          "@ob:Book.002"
+        ],
+        [
+          "@obj:18",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:18",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:18",
+          "parent",
+          "o16"
+        ],
+        [
+          "@obj:18",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:18",
+          "xform",
+          "-0.05,0,1.12,0,0.17453292,0,1,1,1"
+        ],
+        [
+          "@obj:19",
+          "also",
+          "c3"
+        ],
+        [
+          "@obj:19",
+          "coll",
+          "c2"
+        ],
+        [
+          "@obj:19",
+          "data",
+          "mesh @me:Lamp"
+        ],
+        [
+          "@obj:19",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:19",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:19",
+          "name",
+          "Floor lamp"
+        ],
+        [
+          "@obj:19",
+          "nid",
+          "@ob:Floor%20lamp"
+        ],
+        [
+          "@obj:19",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:19",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:19",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:19",
+          "xform",
+          "-2.55,1.95,0,0,0,0,1,1,1"
+        ],
+        [
+          "@obj:2",
+          "coll",
+          "c1"
+        ],
+        [
+          "@obj:2",
+          "data",
+          "light @la:Area"
+        ],
+        [
+          "@obj:2",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:2",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:2",
+          "name",
+          "Key light"
+        ],
+        [
+          "@obj:2",
+          "nid",
+          "@ob:Key%20light"
+        ],
+        [
+          "@obj:2",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:2",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:2",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:2",
+          "xform",
+          "3.2,-2.4,4.6,0.6632251,0,0.55850536,1,1,1"
+        ],
+        [
+          "@obj:20",
+          "coll",
+          "c4"
+        ],
+        [
+          "@obj:20",
+          "data",
+          "mesh @me:Vase"
+        ],
+        [
+          "@obj:20",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:20",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:20",
+          "name",
+          "Vase"
+        ],
+        [
+          "@obj:20",
+          "nid",
+          "@ob:Vase"
+        ],
+        [
+          "@obj:20",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:20",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:20",
+          "parent",
+          "o10"
+        ],
+        [
+          "@obj:20",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:20",
+          "xform",
+          "0,0,0.76,0,0,0,1,1,1"
+        ],
+        [
+          "@obj:21",
+          "coll",
+          "c4"
+        ],
+        [
+          "@obj:21",
+          "data",
+          "mesh @me:Mug"
+        ],
+        [
+          "@obj:21",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:21",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:21",
+          "name",
+          "Mug"
+        ],
+        [
+          "@obj:21",
+          "nid",
+          "@ob:Mug"
+        ],
+        [
+          "@obj:21",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:21",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:21",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:21",
+          "xform",
+          "2.75,2.15,0.62,0,0,0,1,1,1"
+        ],
+        [
+          "@obj:22",
+          "coll",
+          "c4"
+        ],
+        [
+          "@obj:22",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:22",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:22",
+          "name",
+          "Clock"
+        ],
+        [
+          "@obj:22",
+          "nid",
+          "@ob:Clock"
+        ],
+        [
+          "@obj:22",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:22",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:22",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:22",
+          "xform",
+          "-0.6,2.44,0.86,1.5707964,0,0,1,1,1"
+        ],
+        [
+          "@obj:23",
+          "coll",
+          "c4"
+        ],
+        [
+          "@obj:23",
+          "data",
+          "mesh @me:Hand"
+        ],
+        [
+          "@obj:23",
+          "edit",
+          "a"
+        ],
+        [
+          "@obj:23",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:23",
+          "name",
+          "Clock hand"
+        ],
+        [
+          "@obj:23",
+          "nid",
+          "@ob:Clock%20hand"
+        ],
+        [
+          "@obj:23",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:23",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:23",
+          "parent",
+          "o22"
+        ],
+        [
+          "@obj:23",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:23",
+          "xform",
+          "0,0,0.01,0,0,0.5934119,1,1,1"
+        ],
+        [
+          "@obj:24",
+          "coll",
+          "c4"
+        ],
+        [
+          "@obj:24",
+          "edit",
+          "0"
+        ],
+        [
+          "@obj:24",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:24",
+          "name",
+          "Plant"
+        ],
+        [
+          "@obj:24",
+          "nid",
+          "@li:plants.blend/ob:Plant"
+        ],
+        [
+          "@obj:24",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:24",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:24",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:24",
+          "xform",
+          "2.3,-1.9,0,0,0,0,1,1,1"
+        ],
+        [
+          "@obj:25",
+          "coll",
+          "c0"
+        ],
+        [
+          "@obj:25",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:25",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:25",
+          "name",
+          "Measure guide"
+        ],
+        [
+          "@obj:25",
+          "nid",
+          "@ob:Measure%20guide"
+        ],
+        [
+          "@obj:25",
+          "norender",
+          "1"
+        ],
+        [
+          "@obj:25",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:25",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:25",
+          "xform",
+          "0,0,0,0,0,0,0.5,0.5,0.5"
+        ],
+        [
+          "@obj:26",
+          "coll",
+          "c1"
+        ],
+        [
+          "@obj:26",
+          "data",
+          "camera @ca:Camera.001"
+        ],
+        [
+          "@obj:26",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:26",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:26",
+          "name",
+          "Camera.001"
+        ],
+        [
+          "@obj:26",
+          "nid",
+          "@ob:Camera.001"
+        ],
+        [
+          "@obj:26",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:26",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:26",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:26",
+          "xform",
+          "1.75,-0.75,1.3,1.2915436,0,0.7679449,1,1,1"
+        ],
+        [
+          "@obj:3",
+          "coll",
+          "c1"
+        ],
+        [
+          "@obj:3",
+          "data",
+          "light @la:Area.001"
+        ],
+        [
+          "@obj:3",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:3",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:3",
+          "name",
+          "Fill light"
+        ],
+        [
+          "@obj:3",
+          "nid",
+          "@ob:Fill%20light"
+        ],
+        [
+          "@obj:3",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:3",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:3",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:3",
+          "xform",
+          "-4.1,-1.6,3.3,0.9075712,0,-1.012291,1,1,1"
+        ],
+        [
+          "@obj:4",
+          "coll",
+          "c2"
+        ],
+        [
+          "@obj:4",
+          "data",
+          "mesh @me:Plane"
+        ],
+        [
+          "@obj:4",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:4",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:4",
+          "name",
+          "Floor"
+        ],
+        [
+          "@obj:4",
+          "nid",
+          "@ob:Floor"
+        ],
+        [
+          "@obj:4",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:4",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:4",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:4",
+          "xform",
+          "0,0,0,0,0,0,3,2.5,1"
+        ],
+        [
+          "@obj:5",
+          "coll",
+          "c2"
+        ],
+        [
+          "@obj:5",
+          "data",
+          "mesh @me:Wall"
+        ],
+        [
+          "@obj:5",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:5",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:5",
+          "name",
+          "Wall.Back"
+        ],
+        [
+          "@obj:5",
+          "nid",
+          "@ob:Wall.Back"
+        ],
+        [
+          "@obj:5",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:5",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:5",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:5",
+          "xform",
+          "0,2.5,0.6,1.5707964,0,0,3,0.6,1"
+        ],
+        [
+          "@obj:6",
+          "coll",
+          "c2"
+        ],
+        [
+          "@obj:6",
+          "data",
+          "mesh @me:Wall"
+        ],
+        [
+          "@obj:6",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:6",
+          "hidden",
+          "1"
+        ],
+        [
+          "@obj:6",
+          "name",
+          "Wall.Left"
+        ],
+        [
+          "@obj:6",
+          "nid",
+          "@ob:Wall.Left"
+        ],
+        [
+          "@obj:6",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:6",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:6",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:6",
+          "xform",
+          "-3,0,0.6,1.5707964,0,1.5707964,2.5,0.6,1"
+        ],
+        [
+          "@obj:7",
+          "coll",
+          "c2"
+        ],
+        [
+          "@obj:7",
+          "data",
+          "mesh @me:Window"
+        ],
+        [
+          "@obj:7",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:7",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:7",
+          "name",
+          "Window"
+        ],
+        [
+          "@obj:7",
+          "nid",
+          "@ob:Window"
+        ],
+        [
+          "@obj:7",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:7",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:7",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:7",
+          "xform",
+          "1.2,2.46,0.72,1.5707964,0,0,0.7,0.3,1"
+        ],
+        [
+          "@obj:8",
+          "coll",
+          "c2"
+        ],
+        [
+          "@obj:8",
+          "data",
+          "mesh @me:Rug"
+        ],
+        [
+          "@obj:8",
+          "edit",
+          "1"
+        ],
+        [
+          "@obj:8",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:8",
+          "name",
+          "Rug"
+        ],
+        [
+          "@obj:8",
+          "nid",
+          "@ob:Rug"
+        ],
+        [
+          "@obj:8",
+          "norender",
+          "0"
+        ],
+        [
+          "@obj:8",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:8",
+          "rotmode",
+          "xyz"
+        ],
+        [
+          "@obj:8",
+          "xform",
+          "0.2,-0.3,0.005,0,0,0,1.6,1.1,1"
+        ],
+        [
+          "@obj:9",
+          "coll",
+          "c2"
+        ],
+        [
+          "@obj:9",
+          "data",
+          "mesh @me:Fan"
+        ],
+        [
+          "@obj:9",
+          "edit",
+          "t"
+        ],
+        [
+          "@obj:9",
+          "hidden",
+          "0"
+        ],
+        [
+          "@obj:9",
+          "name",
+          "Ceiling fan"
+        ],
+        [
+          "@obj:9",
+          "nid",
+          "@ob:Ceiling%20fan"
+        ],
+        [
+          "@obj:9",
+          "norender",
+          "1"
+        ],
+        [
+          "@obj:9",
+          "noselect",
+          "0"
+        ],
+        [
+          "@obj:9",
+          "quat",
+          "0.9238795,0,0,0.38268343"
+        ],
+        [
+          "@obj:9",
+          "rotmode",
+          "quaternion"
+        ],
+        [
+          "@obj:9",
+          "xform",
+          "0,0,2.75,0,0,0,1,1,1"
+        ]
+      ],
+      "page": 4,
+      "pages": 10,
+      "root": "obj_props",
+      "seq": 5,
+      "type": "keyed_page",
+      "upto": 1
+    },
+    {
+      "entries": [
+        [
+          "endian",
+          null,
+          "little"
+        ],
+        [
+          "header",
+          null,
+          "classic"
+        ],
+        [
+          "mark/c",
+          null,
+          "4"
+        ],
+        [
+          "mark/o",
+          null,
+          "26"
+        ],
+        [
+          "name_max",
+          null,
+          "63"
+        ],
+        [
+          "pointer_size",
+          null,
+          "8"
+        ],
+        [
+          "storage",
+          null,
+          "none"
+        ],
+        [
+          "unit_scale",
+          null,
+          "1"
+        ],
+        [
+          "version",
+          null,
+          "4.02"
+        ]
+      ],
+      "page": 5,
+      "pages": 10,
+      "root": "scene",
+      "seq": 6,
+      "type": "keyed_page",
+      "upto": 1
+    },
+    {
+      "page": 6,
+      "pages": 10,
+      "root": "objs",
+      "seq": 7,
+      "type": "keyed_page",
+      "units": {
+        "container": "@coll:1",
+        "from": 0,
+        "next": null,
+        "total": 4,
+        "units": [
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:1",
+            "derived": {
+              "data": "camera @ca:Camera",
+              "transform": "loc -2.6,-3.4,1.35 rot 1.4137167,0,-0.62831855 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:1",
+            "kind": "camera",
+            "live": true,
+            "name": "Camera",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      -2.6,
+                      -3.4,
+                      1.35
+                    ],
+                    "rot": {
+                      "angles": [
+                        1.4137167,
+                        0,
+                        -0.62831855
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 0
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:1",
+            "derived": {
+              "data": "light @la:Area",
+              "transform": "loc 3.2,-2.4,4.6 rot 0.6632251,0,0.55850536 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:2",
+            "kind": "light",
+            "live": true,
+            "name": "Key light",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      3.2,
+                      -2.4,
+                      4.6
+                    ],
+                    "rot": {
+                      "angles": [
+                        0.6632251,
+                        0,
+                        0.55850536
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 1
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:1",
+            "derived": {
+              "data": "light @la:Area.001",
+              "transform": "loc -4.1,-1.6,3.3 rot 0.9075712,0,-1.012291 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:3",
+            "kind": "light",
+            "live": true,
+            "name": "Fill light",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      -4.1,
+                      -1.6,
+                      3.3
+                    ],
+                    "rot": {
+                      "angles": [
+                        0.9075712,
+                        0,
+                        -1.012291
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 2
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:1",
+            "derived": {
+              "data": "camera @ca:Camera.001",
+              "transform": "loc 1.75,-0.75,1.3 rot 1.2915436,0,0.7679449 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:26",
+            "kind": "camera",
+            "live": true,
+            "name": "Camera.001",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      1.75,
+                      -0.75,
+                      1.3
+                    ],
+                    "rot": {
+                      "angles": [
+                        1.2915436,
+                        0,
+                        0.7679449
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 3
+          }
+        ]
+      },
+      "upto": 1
+    },
+    {
+      "page": 7,
+      "pages": 10,
+      "root": "objs",
+      "seq": 8,
+      "type": "keyed_page",
+      "units": {
+        "container": "@coll:2",
+        "from": 0,
+        "next": null,
+        "total": 7,
+        "units": [
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:2",
+            "derived": {
+              "data": "mesh @me:Plane",
+              "mesh_hash": "b6e0ee01624ee3c4a375344d35d5c10b221fea5e9b1b4b197bdf3252b7633d15",
+              "transform": "loc 0,0,0 rot 0,0,0 scale 3,2.5,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:4",
+            "kind": "mesh",
+            "live": true,
+            "name": "Floor",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      0,
+                      0,
+                      0
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      3,
+                      2.5,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 0
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:2",
+            "derived": {
+              "data": "mesh @me:Wall",
+              "mesh_hash": "9f04344c2fb3b9e72d3f8fc1d1b02cc73b0a11f8041cc16e01bc1bae3fe98952",
+              "transform": "loc 0,2.5,0.6 rot 1.5707964,0,0 scale 3,0.6,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:5",
+            "kind": "mesh",
+            "live": true,
+            "name": "Wall.Back",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      0,
+                      2.5,
+                      0.6
+                    ],
+                    "rot": {
+                      "angles": [
+                        1.5707964,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      3,
+                      0.6,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 1
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:2",
+            "derived": {
+              "data": "mesh @me:Wall",
+              "hidden_by": "self",
+              "mesh_hash": "9f04344c2fb3b9e72d3f8fc1d1b02cc73b0a11f8041cc16e01bc1bae3fe98952",
+              "transform": "loc -3,0,0.6 rot 1.5707964,0,1.5707964 scale 2.5,0.6,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": true,
+            "key": "@obj:6",
+            "kind": "mesh",
+            "live": true,
+            "name": "Wall.Left",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      -3,
+                      0,
+                      0.6
+                    ],
+                    "rot": {
+                      "angles": [
+                        1.5707964,
+                        0,
+                        1.5707964
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      2.5,
+                      0.6,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 2
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:2",
+            "derived": {
+              "data": "mesh @me:Window",
+              "mesh_hash": "03cd3d78a73ffa3944f87c533b4c01752d1af42d97847da41230dd54bedfc52f",
+              "transform": "loc 1.2,2.46,0.72 rot 1.5707964,0,0 scale 0.7,0.3,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:7",
+            "kind": "mesh",
+            "live": true,
+            "name": "Window",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      1.2,
+                      2.46,
+                      0.72
+                    ],
+                    "rot": {
+                      "angles": [
+                        1.5707964,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      0.7,
+                      0.3,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 3
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:2",
+            "derived": {
+              "data": "mesh @me:Rug",
+              "mesh_hash": "fe18afa25835dfe87a7039a407b3de2a20305b9b673a7fef714e5482ef3109c6",
+              "transform": "loc 0.2,-0.3,0.005 rot 0,0,0 scale 1.6,1.1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:8",
+            "kind": "mesh",
+            "live": true,
+            "name": "Rug",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      0.2,
+                      -0.3,
+                      0.005
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1.6,
+                      1.1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 4
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:2",
+            "derived": {
+              "data": "mesh @me:Fan",
+              "mesh_hash": "d20c55d48c8e3705df7f06bcc53781708f180b9b2602f4d5bd105520db955b60",
+              "transform": "loc 0,0,2.75 rot 0,0,0 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:9",
+            "kind": "mesh",
+            "live": true,
+            "name": "Ceiling fan",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      0,
+                      0,
+                      2.75
+                    ],
+                    "rot": {
+                      "quat": [
+                        0.9238795,
+                        0,
+                        0,
+                        0.38268343
+                      ]
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 5
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:2",
+            "derived": {
+              "data": "mesh @me:Lamp",
+              "mesh_hash": "e54b6dd990eeab2b39f79fd244c067c8288a11ee12733eccce1294e76e0baa75",
+              "transform": "loc -2.55,1.95,0 rot 0,0,0 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:19",
+            "kind": "mesh",
+            "live": true,
+            "name": "Floor lamp",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      -2.55,
+                      1.95,
+                      0
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 6
+          }
+        ]
+      },
+      "upto": 1
+    },
+    {
+      "page": 8,
+      "pages": 10,
+      "root": "objs",
+      "seq": 9,
+      "type": "keyed_page",
+      "units": {
+        "container": "@coll:3",
+        "from": 0,
+        "next": null,
+        "total": 9,
+        "units": [
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:3",
+            "derived": {
+              "data": "mesh @me:Table",
+              "mesh_hash": "48d6123c6c2daf2c9df3fb2b38dc928a9868d40d214e4a25212f7114c9e121be",
+              "transform": "loc 0.6,0.4,0 rot 0,0,0 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:10",
+            "kind": "mesh",
+            "live": true,
+            "name": "Table",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      0.6,
+                      0.4,
+                      0
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 0
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:3",
+            "derived": {
+              "data": "mesh @me:Chair",
+              "mesh_hash": "6f56846b8f4c2e1cdff28cfea06d5265995cad396873a915c4117879cc4d82f7",
+              "transform": "loc 0.6,-0.35,0 rot 0,0,0 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:11",
+            "kind": "mesh",
+            "live": true,
+            "name": "Chair.001",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      0.6,
+                      -0.35,
+                      0
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 1
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:3",
+            "derived": {
+              "data": "mesh @me:Chair",
+              "mesh_hash": "6f56846b8f4c2e1cdff28cfea06d5265995cad396873a915c4117879cc4d82f7",
+              "transform": "loc 0.6,1.15,0 rot 0,0,3.1415927 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:12",
+            "kind": "mesh",
+            "live": true,
+            "name": "Chair.002",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      0.6,
+                      1.15,
+                      0
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        3.1415927
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 2
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:3",
+            "derived": {
+              "data": "mesh @me:Chair",
+              "mesh_hash": "6f56846b8f4c2e1cdff28cfea06d5265995cad396873a915c4117879cc4d82f7",
+              "transform": "loc -0.15,0.4,0 rot 0,0,-1.5707964 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:13",
+            "kind": "mesh",
+            "live": true,
+            "name": "Chair.003",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      -0.15,
+                      0.4,
+                      0
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        -1.5707964
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 3
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:3",
+            "derived": {
+              "data": "mesh @me:Chair",
+              "mesh_hash": "6f56846b8f4c2e1cdff28cfea06d5265995cad396873a915c4117879cc4d82f7",
+              "transform": "loc 1.35,0.4,0 rot 0,0,1.5707964 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:14",
+            "kind": "mesh",
+            "live": true,
+            "name": "Chair.004",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      1.35,
+                      0.4,
+                      0
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        1.5707964
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 4
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:3",
+            "derived": {
+              "data": "mesh @me:Sofa",
+              "mesh_hash": "ef56c1bfd6cf027095a64337e4c4e63016ac982edfc045c9113e0dc7429f1cf6",
+              "transform": "loc -1.9,-1.2,0 rot 0,0,1.5707964 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:15",
+            "kind": "mesh",
+            "live": true,
+            "name": "Sofa",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      -1.9,
+                      -1.2,
+                      0
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        1.5707964
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 5
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:3",
+            "derived": {
+              "data": "mesh @me:Shelf",
+              "mesh_hash": "2320a852d9d275c43b85362d55e85ac0294f0615c8600f89dc60cfc98aafd72b",
+              "transform": "loc 2.6,2.2,0 rot 0,0,0 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:16",
+            "kind": "mesh",
+            "live": true,
+            "name": "Shelf",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      2.6,
+                      2.2,
+                      0
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 6
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:3",
+            "derived": {
+              "data": "mesh @me:Book",
+              "mesh_hash": "ca007e73cc9fda0edb9095ab5cf92e2b1490a59f995c8b88f0df2324b8b2019c",
+              "transform": "loc -0.3,0,1.12 rot 0,0,0 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:17",
+            "kind": "mesh",
+            "live": true,
+            "name": "Book.001",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": "@obj:16",
+              "steps": [
+                {
+                  "matrix": [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1
+                  ]
+                },
+                {
+                  "trs": {
+                    "loc": [
+                      -0.3,
+                      0,
+                      1.12
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 7
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:3",
+            "derived": {
+              "data": "mesh @me:Book",
+              "mesh_hash": "ca007e73cc9fda0edb9095ab5cf92e2b1490a59f995c8b88f0df2324b8b2019c",
+              "transform": "loc -0.05,0,1.12 rot 0,0.17453292,0 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:18",
+            "kind": "mesh",
+            "live": true,
+            "name": "Book.002",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": "@obj:16",
+              "steps": [
+                {
+                  "matrix": [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1
+                  ]
+                },
+                {
+                  "trs": {
+                    "loc": [
+                      -0.05,
+                      0,
+                      1.12
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0.17453292,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 8
+          }
+        ]
+      },
+      "upto": 1
+    },
+    {
+      "page": 9,
+      "pages": 10,
+      "root": "objs",
+      "seq": 10,
+      "type": "keyed_page",
+      "units": {
+        "container": "@coll:4",
+        "from": 0,
+        "next": null,
+        "total": 5,
+        "units": [
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:4",
+            "derived": {
+              "data": "mesh @me:Vase",
+              "mesh_hash": "7eb882bed65bc8faaf8e1088ee72bb3c98032925eea9dd3069ff252277ae5c3c",
+              "transform": "loc 0,0,0.76 rot 0,0,0 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:20",
+            "kind": "mesh",
+            "live": true,
+            "name": "Vase",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": "@obj:10",
+              "steps": [
+                {
+                  "matrix": [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1
+                  ]
+                },
+                {
+                  "trs": {
+                    "loc": [
+                      0,
+                      0,
+                      0.76
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 0
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:4",
+            "derived": {
+              "data": "mesh @me:Mug",
+              "mesh_hash": "a2a13bac94ba934e1135fed75c3c66cc60972b4c24d10f8327d160ac364cfcae",
+              "transform": "loc 2.75,2.15,0.62 rot 0,0,0 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:21",
+            "kind": "mesh",
+            "live": true,
+            "name": "Mug",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      2.75,
+                      2.15,
+                      0.62
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 1
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:4",
+            "derived": {
+              "transform": "loc -0.6,2.44,0.86 rot 1.5707964,0,0 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:22",
+            "kind": "empty",
+            "live": true,
+            "name": "Clock",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      -0.6,
+                      2.44,
+                      0.86
+                    ],
+                    "rot": {
+                      "angles": [
+                        1.5707964,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 2
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:4",
+            "derived": {
+              "data": "mesh @me:Hand",
+              "mesh_hash": "3d62d8203590e137778da9993ed4af14889b392ed560fc763624c210e66564b0",
+              "transform": "loc 0,0,0.01 rot 0,0,0.5934119 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:23",
+            "kind": "mesh",
+            "live": true,
+            "name": "Clock hand",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "approx": "driven",
+              "relative_to": "@obj:22",
+              "steps": [
+                {
+                  "matrix": [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1
+                  ]
+                },
+                {
+                  "trs": {
+                    "loc": [
+                      0,
+                      0,
+                      0.01
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        0.5934119
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 3
+          },
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:4",
+            "derived": {
+              "transform": "loc 2.3,-1.9,0 rot 0,0,0 scale 1,1,1"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:24",
+            "kind": "empty",
+            "live": true,
+            "name": "Plant",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      2.3,
+                      -1.9,
+                      0
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 4
+          }
+        ]
+      },
+      "upto": 1
+    },
+    {
+      "page": 10,
+      "pages": 10,
+      "root": "objs",
+      "seq": 11,
+      "type": "keyed_page",
+      "units": {
+        "container": "@coll:0",
+        "from": 0,
+        "next": null,
+        "total": 1,
+        "units": [
+          {
+            "alt": null,
+            "approx_box": false,
+            "bbox": null,
+            "bbox_inherited": false,
+            "container": "@coll:0",
+            "derived": {
+              "transform": "loc 0,0,0 rot 0,0,0 scale 0.5,0.5,0.5"
+            },
+            "editable_text": null,
+            "fields": [],
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "hidden": false,
+            "key": "@obj:25",
+            "kind": "empty",
+            "live": true,
+            "name": "Measure guide",
+            "name_is_generic": null,
+            "parent": null,
+            "placeholder": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [
+                      0,
+                      0,
+                      0
+                    ],
+                    "rot": {
+                      "angles": [
+                        0,
+                        0,
+                        0
+                      ],
+                      "euler": "XYZ"
+                    },
+                    "scale": [
+                      0.5,
+                      0.5,
+                      0.5
+                    ]
+                  }
+                }
+              ]
+            },
+            "rot": 0,
+            "text": null,
+            "z": 0
+          }
+        ]
+      },
+      "upto": 1
+    },
+    {
+      "event": {
+        "client": 6199336491168319,
+        "kind": "selection",
+        "selection": {
+          "keys": [
+            "@obj:1"
+          ],
+          "root": "objs"
+        },
+        "who": "person:owner"
+      },
+      "type": "roster_event"
+    }
+  ],
+  "welcome": [
+    {
+      "access_owner": {
+        "colour": "#8c62c4",
+        "id": "person:owner",
+        "kind": "person",
+        "name": "Owner"
+      },
+      "client": 1853491844619466,
+      "comments": {
+        "next": null,
+        "threads": []
+      },
+      "core": "blend",
+      "family": "scene",
+      "features": [
+        "keyed_watch",
+        "view_address",
+        "presence"
+      ],
+      "mode": "scene",
+      "path": "room.blend",
+      "previews": {
+        "containers": [
+          {
+            "hidden": false,
+            "key": "@scene:main",
+            "position": 1,
+            "render_hash": "2ac00dc8a9126eaad18a7a834f8e8b42",
+            "title": "Scene"
+          },
+          {
+            "camera": {
+              "active": true,
+              "lens_mm": 50,
+              "sensor_fit": "auto",
+              "sensor_mm": [
+                36,
+                24
+              ]
+            },
+            "hidden": false,
+            "key": "@cam:1",
+            "position": 2,
+            "render_hash": "b01f6f17c5a34778a9380f8ddfb67ff6",
+            "title": "Camera"
+          },
+          {
+            "camera": {
+              "active": false,
+              "lens_mm": 50,
+              "sensor_fit": "auto",
+              "sensor_mm": [
+                36,
+                24
+              ]
+            },
+            "hidden": false,
+            "key": "@cam:26",
+            "position": 3,
+            "render_hash": "13da6d92232466012afc22458a7a0f84",
+            "title": "Camera.001"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                1,
+                1,
+                0
+              ],
+              "min": [
+                -1,
+                -1,
+                -0.02
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:4",
+            "position": 4,
+            "render_hash": "7cd1f5865cb72ff732897c1ff7bc9c22",
+            "title": "Floor"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                1,
+                1,
+                0
+              ],
+              "min": [
+                -1,
+                -1,
+                -0.05
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:5",
+            "position": 5,
+            "render_hash": "47333bc506365cdfaf4f3fec50b34ae4",
+            "title": "Wall.Back"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                1,
+                1,
+                0
+              ],
+              "min": [
+                -1,
+                -1,
+                -0.05
+              ]
+            },
+            "hidden": true,
+            "hidden_by": "self",
+            "key": "@obj:6",
+            "position": 6,
+            "render_hash": "fdd3124ac5b1cc5d0c8a4771a9f941ba",
+            "title": "Wall.Left"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                1,
+                1,
+                0.02
+              ],
+              "min": [
+                -1,
+                -1,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:7",
+            "position": 7,
+            "render_hash": "c24ecf9ddac4002d5198dbda71e257ea",
+            "title": "Window"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                1,
+                1,
+                0.01
+              ],
+              "min": [
+                -1,
+                -1,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:8",
+            "position": 8,
+            "render_hash": "b6b1fe1fe457272c372d74cd6e9cf536",
+            "title": "Rug"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                0.65,
+                0.65,
+                0.25
+              ],
+              "min": [
+                -0.65,
+                -0.65,
+                -0.1
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:9",
+            "position": 9,
+            "render_hash": "03e1963a5a3e297d7b06da34d2c50496",
+            "title": "Ceiling fan"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                0.5,
+                0.35,
+                0.76
+              ],
+              "min": [
+                -0.5,
+                -0.35,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:10",
+            "position": 10,
+            "render_hash": "2913849bda4325ebbddfe64b4e526172",
+            "title": "Table"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                0.22,
+                0.22,
+                0.92
+              ],
+              "min": [
+                -0.22,
+                -0.22,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:11",
+            "position": 11,
+            "render_hash": "a8cd9e6a1182af04f7c8ca915739e71e",
+            "title": "Chair.001"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                0.22,
+                0.22,
+                0.92
+              ],
+              "min": [
+                -0.22,
+                -0.22,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:12",
+            "position": 12,
+            "render_hash": "a08e3fd90c45b1c397e9270af9d426f3",
+            "title": "Chair.002"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                0.22,
+                0.22,
+                0.92
+              ],
+              "min": [
+                -0.22,
+                -0.22,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:13",
+            "position": 13,
+            "render_hash": "23f5e77eb0afcd9caec66672700043f7",
+            "title": "Chair.003"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                0.22,
+                0.22,
+                0.92
+              ],
+              "min": [
+                -0.22,
+                -0.22,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:14",
+            "position": 14,
+            "render_hash": "eb6f514c5a538d7bb2aaeb1b251edea0",
+            "title": "Chair.004"
+          },
+          {
+            "bounds": {
+              "approx": true,
+              "approx_reason": "modifiers",
+              "max": [
+                0.9,
+                0.4,
+                0.85
+              ],
+              "min": [
+                -0.9,
+                -0.4,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:15",
+            "position": 15,
+            "render_hash": "419333bf4790d7eae55950d1d4b1bd59",
+            "title": "Sofa"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                0.5,
+                0.15,
+                1.12
+              ],
+              "min": [
+                -0.5,
+                -0.15,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:16",
+            "position": 16,
+            "render_hash": "05b82e1ae4c588fa753fc933f2b86377",
+            "title": "Shelf"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                0.02,
+                0.1,
+                0.24
+              ],
+              "min": [
+                -0.02,
+                -0.1,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:17",
+            "position": 17,
+            "render_hash": "3aff1296bc45780431f51348b2b97342",
+            "title": "Book.001"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                0.02,
+                0.1,
+                0.24
+              ],
+              "min": [
+                -0.02,
+                -0.1,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:18",
+            "position": 18,
+            "render_hash": "450d8c9653845995476170401da7db32",
+            "title": "Book.002"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                0.2,
+                0.2,
+                1.75
+              ],
+              "min": [
+                -0.2,
+                -0.2,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:19",
+            "position": 19,
+            "render_hash": "8c8dd46374705f4dc05e6ad3249c2052",
+            "title": "Floor lamp"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                0.07,
+                0.07,
+                0.28
+              ],
+              "min": [
+                -0.07,
+                -0.07,
+                0
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:20",
+            "position": 20,
+            "render_hash": "f0f18b019962b3fb139518c37bcb5455",
+            "title": "Vase"
+          },
+          {
+            "bounds": {
+              "approx": false,
+              "max": [
+                0.04,
+                0.04,
+                0.08
+              ],
+              "min": [
+                -0.04,
+                -0.04,
+                -0.02
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:21",
+            "position": 21,
+            "render_hash": "31c724bfca3c93dbba3a9a6aa63ffe62",
+            "title": "Mug"
+          },
+          {
+            "bounds": {
+              "approx": true,
+              "approx_reason": "driven",
+              "max": [
+                0.01,
+                0.15,
+                0.005
+              ],
+              "min": [
+                -0.01,
+                0,
+                -0.005
+              ]
+            },
+            "hidden": false,
+            "key": "@obj:23",
+            "position": 22,
+            "render_hash": "a47c5ca4cc2dc65d1fa3c5edc594ea32",
+            "title": "Clock hand"
+          },
+          {
+            "hidden": false,
+            "key": "@turntable:0",
+            "position": 23,
+            "render_hash": "a170c367638ce4b62eb63002ec99e8c5",
+            "title": "Turntable 1"
+          },
+          {
+            "hidden": false,
+            "key": "@turntable:1",
+            "position": 24,
+            "render_hash": "95a2f5749c6cc87c22cf3f1fae875637",
+            "title": "Turntable 2"
+          },
+          {
+            "hidden": false,
+            "key": "@turntable:2",
+            "position": 25,
+            "render_hash": "9d27f56f41a61cd3d8e2ce06b7824c70",
+            "title": "Turntable 3"
+          },
+          {
+            "hidden": false,
+            "key": "@turntable:3",
+            "position": 26,
+            "render_hash": "15001abda2fec6ff186cccd50f20c2c7",
+            "title": "Turntable 4"
+          },
+          {
+            "hidden": false,
+            "key": "@turntable:4",
+            "position": 27,
+            "render_hash": "3ddc5e1946120a23f2b83624056481e4",
+            "title": "Turntable 5"
+          },
+          {
+            "hidden": false,
+            "key": "@turntable:5",
+            "position": 28,
+            "render_hash": "79a71ddc0df9dc52fca1cbcb1bcf3d66",
+            "title": "Turntable 6"
+          },
+          {
+            "hidden": false,
+            "key": "@turntable:6",
+            "position": 29,
+            "render_hash": "5c939f2fff7b9d9a7787bd0fc4e5310b",
+            "title": "Turntable 7"
+          },
+          {
+            "hidden": false,
+            "key": "@turntable:7",
+            "position": 30,
+            "render_hash": "970a34a968e772c05d8edca6adeedf3d",
+            "title": "Turntable 8"
+          }
+        ],
+        "kind": "scene",
+        "page": null,
+        "rev": 1
+      },
+      "read_only_reason": "K2 can't save .blend edits yet; this file opens read-only.",
+      "rights": "read",
+      "root": "colls",
+      "self": "person:owner",
+      "turn_idle_ms": 120000,
+      "type": "welcome",
+      "version": 1,
+      "wire": 3
+    },
+    {
+      "event": {
+        "kind": "snapshot",
+        "members": [
+          {
+            "away": false,
+            "colour": "#8c62c4",
+            "cursor": null,
+            "devices": [
+              {
+                "client": 1853491844619466,
+                "cursor": null
+              }
+            ],
+            "handle": "person:owner",
+            "kind": "person",
+            "name": "Owner",
+            "rights": "read",
+            "role": "viewer"
+          }
+        ],
+        "version": 1,
+        "watching": 0
+      },
+      "type": "roster_event"
+    }
+  ],
+  "write": {
+    "body": {
+      "error": {
+        "code": "blend_writer_disabled",
+        "exit": 3,
+        "hint": "K2 can't save .blend edits yet; this file opens read-only.",
+        "path": "room.blend"
+      },
+      "ok": false
+    },
+    "status": 409
+  }
+}

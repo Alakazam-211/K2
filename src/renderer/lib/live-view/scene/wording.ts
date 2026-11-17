@@ -104,7 +104,6 @@ export const VERB_WORD: Record<string, string> = { 'object place': 'move', 'obje
 /** The BLEND writer is off (edits to a .blend are refused, 409 with this code, until it's proven). */
 export const BLEND_WRITER_OFF = 'blend_writer_disabled'
 const WHY: Record<string, string> = { blend_driven: 'animation drives it', blend_rotation_mode: 'it turns by quaternion', blend_not_editable: 'it’s linked from another file', [BLEND_WRITER_OFF]: `${PRODUCT_NAME} can’t save changes to .blend files yet` }
-/** Why a refusal with no holder happened, in words. */
 /** Why, in words: the refusal's own hint when it has one, else the scene's words for its code. Never the code itself. */
 export const refusalWhy = (code: string, hint?: string | null): string => (hint && hint.trim()) || WHY[code] || 'it can’t change right now'
 

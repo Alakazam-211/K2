@@ -436,3 +436,44 @@ fn a_refused_cell_socket_sends_nothing_and_tcp_answers() {
     assert_eq!(d.counts(), (0, 3));
     std::fs::remove_file(&dead).unwrap();
 }
+
+/// The daemon's version comes back with the answer when it is shaped like
+/// one, on every kind of call; anything else is no version.
+#[test]
+fn the_server_version_comes_back_with_the_answer() {
+    let s = stub("ver");
+    let v = |value: &str| Reply::Headed(200, vec![("X-K5-Server-Version".into(), value.into())], r#"{"ok":true}"#.into());
+    s.reset(&[v("0.46.16"), v("0.46.17"), v("not a version"), Reply::Answer(200, "{}".into())]);
+    let mut c = owner(s.port);
+    let r = c.call(Channel::Tcp, "/cli/x", Call::Request(&[])).unwrap();
+    assert_eq!(r.server_version.as_deref(), Some("0.46.16"));
+    let r = c.call(Channel::Tcp, "/cli/x", Call::PostJson(b"{}")).unwrap();
+    assert_eq!(r.server_version.as_deref(), Some("0.46.17"));
+    let r = c.call(Channel::Tcp, "/cli/x", Call::Request(&[])).unwrap();
+    assert_eq!(r.server_version, None);
+    let r = c.call(Channel::Tcp, "/cli/x", Call::Request(&[])).unwrap();
+    assert_eq!(r.server_version, None);
+    assert_eq!(s.left(), 0);
+}
+
+/// The public GET: the path as given, no token, no project, nothing of
+/// the owner's, on a client with no credential.
+#[test]
+fn the_public_get_carries_no_credential() {
+    let s = stub("pub");
+    s.reset(&[Reply::Answer(200, r#"{"version":"x"}"#.into())]);
+    let mut c = Client::new("127.0.0.1", s.port, "/p", Auth::None);
+    c.pause = PAUSE;
+    let r = c.get_public("/boot-status").unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    let log = s.log();
+    assert_eq!(log.len(), 1);
+    let want = format!(
+        "GET /boot-status HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUser-Agent: k5/{v}\r\nAccept: */*\r\nX-K5-Cli-Version: {v}\r\nX-K5-Cli-Via: native\r\n\r\n",
+        s.port,
+        v = k5_cli::embedded::version()
+    );
+    assert_eq!(text(&log[0].bytes), want);
+    assert!(matches!(c.call(Channel::Tcp, "/cli/x", Call::Request(&[])), Err(Error::NoCredential { .. })));
+    assert_eq!(s.log().len(), 1, "nothing more was sent");
+}

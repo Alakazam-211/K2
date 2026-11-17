@@ -4,6 +4,7 @@
 
 use super::encode::quote;
 use super::permission::{self, Note};
+use super::skew;
 use super::wire::{self, Answer, Body, Failure, Method, Request, Target};
 use k2_client::brand::PRODUCT_NAME;
 use std::fmt;
@@ -40,6 +41,11 @@ pub const VIA_NATIVE: &str = "native";
 pub const VERSION_HEADER: &str = "X-K5-Cli-Version";
 /// Set to `1` when the passport rule would refuse the call (slice 7).
 pub const WOULD_REFUSE_HEADER: &str = "X-K5-Would-Refuse";
+/// Set to `disk` on a call made as the owner with the token read from
+/// the K2 home's files, never with a passport (slice 10).
+pub const OWNER_SOURCE_HEADER: &str = "X-K5-Owner-Source";
+/// Its one value.
+pub const OWNER_SOURCE_DISK: &str = "disk";
 
 /// A session passport. Never empty, so an empty Bearer is never sent.
 #[derive(Clone, PartialEq, Eq)]
@@ -69,6 +75,9 @@ impl fmt::Debug for Passport {
 /// on any channel (PRD 13.9 #4): a refusal is the passport's answer.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Auth {
+    /// No credential: only [`Client::get_public`] goes out. Every other
+    /// call is [`Error::NoCredential`], never sent.
+    None,
     /// No passport: the owner token, over TCP only.
     Owner(String),
     /// A passport: the Bearer on the cell socket at `sock`, and `token=`
@@ -79,6 +88,7 @@ pub enum Auth {
 impl fmt::Debug for Auth {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Auth::None => f.write_str("None"),
             Auth::Owner(_) => f.write_str("Owner(..)"),
             Auth::Passport { sock, .. } => f.debug_struct("Passport").field("sock", sock).finish_non_exhaustive(),
         }
@@ -169,6 +179,9 @@ enum Kind {
     PostJsonStdin,
     SendJsonGet,
     SendJsonPost,
+    /// A GET with no credential and no query of ours, over TCP: what
+    /// anyone may read (`/boot-status`).
+    Public,
 }
 
 impl Kind {
@@ -178,7 +191,7 @@ impl Kind {
     }
     /// A connect that timed out is tried again (`_cli_curl`).
     fn retries_connect_timeout(self) -> bool {
-        matches!(self, Kind::Request | Kind::RequestPost)
+        matches!(self, Kind::Request | Kind::RequestPost | Kind::Public)
     }
     /// The status is read, so a 5xx with an empty body is "no answer".
     fn reads_status(self) -> bool {
@@ -189,13 +202,14 @@ impl Kind {
         !matches!(self, Kind::PostJsonStdin | Kind::SendJsonGet | Kind::SendJsonPost)
     }
     /// A refused passport is tried again with a healed one, on either
-    /// channel. Not a body from stdin.
+    /// channel. Not a body from stdin, nor a call with no credential.
     fn heals(self) -> bool {
-        self != Kind::PostJsonStdin
+        !matches!(self, Kind::PostJsonStdin | Kind::Public)
     }
-    /// `_permission_note` runs on the answer. Not a body from stdin.
+    /// `_permission_note` runs on the answer. Not a body from stdin, nor a
+    /// call with no credential.
     fn notes_permission(self) -> bool {
-        self != Kind::PostJsonStdin
+        !matches!(self, Kind::PostJsonStdin | Kind::Public)
     }
     /// The body is read from stdin: nothing is ever tried twice. Only
     /// then: the shell's `@-` rule is an argument that is exactly `@-`,
@@ -215,6 +229,10 @@ pub struct Response {
     /// call ([`permission::note`]). Printing it is the caller's
     /// ([`Note::print`]).
     pub permission: Option<Note>,
+    /// The daemon's version from the answer's head, when it named one
+    /// shaped like a version ([`skew::clean`]). The client has already
+    /// compared it with its own ([`skew::note`]).
+    pub server_version: Option<String>,
 }
 
 /// A request the daemon never answered: the shell's one line for it
@@ -258,6 +276,9 @@ pub enum Error {
     BadTarget { target: String, byte: u8 },
     /// A cell-socket call without a passport and its socket.
     NoCellSocket { endpoint: String },
+    /// A call that needs a credential, on a client with none
+    /// ([`Auth::None`]).
+    NoCredential { endpoint: String },
     /// A POST went out on the cell socket and no usable answer came back
     /// (no answer in time, a connection closed or reset before the answer
     /// ended, or a 5xx with an empty body). The daemon may have run it,
@@ -275,6 +296,7 @@ impl fmt::Display for Error {
             Error::Broken { endpoint, why } => write!(f, "the request to {endpoint} failed: {why}"),
             Error::BadTarget { target, byte } => write!(f, "won't send {target:?}: byte 0x{byte:02x} can't be in a URL"),
             Error::NoCellSocket { endpoint } => write!(f, "no session passport and cell socket for {endpoint}"),
+            Error::NoCredential { endpoint } => write!(f, "no owner token or session passport for {endpoint}"),
             Error::MaybeApplied { endpoint, waited } => write!(
                 f,
                 "Error: {PRODUCT_NAME}'s server didn't answer {endpoint} ({waited} s); the request may have been applied. Check before running it again."
@@ -350,7 +372,12 @@ pub struct Client {
     pub auth: Auth,
     /// The passport rule would refuse the call: `X-K5-Would-Refuse: 1`.
     pub would_refuse: bool,
-    /// For `User-Agent: k5/<version>` and `X-K5-Cli-Version`.
+    /// The owner token came from the K2 home's files:
+    /// `X-K5-Owner-Source: disk` on every call made with it. Never sent
+    /// with a passport or no credential.
+    pub owner_from_disk: bool,
+    /// For `User-Agent: k5/<version>` and `X-K5-Cli-Version`, and the
+    /// version a server's is compared with ([`skew`]).
     pub version: String,
     /// `_cli_skip_uds`: a remote host was applied; never the cell socket.
     pub force_tcp: bool,
@@ -377,6 +404,7 @@ impl Client {
             project: project.into(),
             auth,
             would_refuse: false,
+            owner_from_disk: false,
             version: crate::embedded::version().to_string(),
             force_tcp: false,
             post_max_time: None,
@@ -392,7 +420,7 @@ impl Client {
     pub fn passport(&self) -> Option<&Passport> {
         match &self.auth {
             Auth::Passport { passport, .. } => Some(passport),
-            Auth::Owner(_) => None,
+            Auth::Owner(_) | Auth::None => None,
         }
     }
 
@@ -421,6 +449,14 @@ impl Client {
             }
         }
         self.call_from(Channel::Tcp, endpoint, call, t0).map_err(|f| f.error)
+    }
+
+    /// A GET of `path` as it is, over TCP, with no credential and no query
+    /// of ours: no `token=`, no `project=`, no Bearer. For what the daemon
+    /// shows anyone on this machine (`/boot-status`). A refused or timed
+    /// out connect is tried again as `cli_request`'s is; no heal, no note.
+    pub fn get_public(&mut self, path: &str) -> Result<Response, Error> {
+        self.run(Kind::Public, Channel::Tcp, path, &[], &[], Instant::now()).map_err(|f| f.error)
     }
 
     /// `cli_post_json_stdin`: a JSON body that was read from stdin, over
@@ -517,7 +553,8 @@ impl Client {
         } else {
             None
         };
-        Ok(Response { status: answer.status, body: answer.body, channel, permission })
+        let server_version = answer.server_version.as_deref().and_then(skew::clean).map(str::to_string);
+        Ok(Response { status: answer.status, body: answer.body, channel, permission, server_version })
     }
 
     /// Switches to a healed passport, once per client.
@@ -545,7 +582,7 @@ impl Client {
         match kind {
             Kind::PostForm | Kind::PostJson => self.post_max_time.unwrap_or(MAX_TIME),
             Kind::SendJsonGet | Kind::SendJsonPost => self.send_max_time.unwrap_or(SEND_JSON_MAX_TIME),
-            Kind::Request | Kind::RequestPost | Kind::PostJsonStdin => MAX_TIME,
+            Kind::Request | Kind::RequestPost | Kind::PostJsonStdin | Kind::Public => MAX_TIME,
         }
     }
 
@@ -572,7 +609,15 @@ impl Client {
         loop {
             let deadline = Instant::now() + max;
             match wire::connect(&target, CONNECT_TIMEOUT, deadline) {
-                Ok(mut conn) => return wire::exchange(&mut conn, &request, deadline),
+                Ok(mut conn) => {
+                    let r = wire::exchange(&mut conn, &request, deadline);
+                    // Every answer, a retried one too: the compare is on
+                    // what came back, never a request of its own.
+                    if let Ok(a) = &r {
+                        skew::note(&self.version, a.server_version.as_deref());
+                    }
+                    return r;
+                }
                 Err(Failure::Connect(e)) => {
                     if kind.once() || tries >= TRIES {
                         return Err(Failure::Connect(e));
@@ -610,10 +655,12 @@ impl Client {
         (p != port).then_some(p)
     }
 
-    fn tcp_token(&self) -> &str {
+    /// The TCP token. Only [`Kind::Public`] goes out with none.
+    fn tcp_token(&self) -> Option<&str> {
         match &self.auth {
-            Auth::Owner(t) => t,
-            Auth::Passport { passport, .. } => passport.as_str(),
+            Auth::None => None,
+            Auth::Owner(t) => Some(t.as_str()),
+            Auth::Passport { passport, .. } => Some(passport.as_str()),
         }
     }
 
@@ -637,9 +684,16 @@ impl Client {
         }
         headers.push((VERSION_HEADER.into(), self.version.clone()));
         headers.push((VIA_HEADER.into(), VIA_NATIVE.into()));
+        if self.owner_from_disk && matches!(self.auth, Auth::Owner(_)) && kind != Kind::Public {
+            headers.push((OWNER_SOURCE_HEADER.into(), OWNER_SOURCE_DISK.into()));
+        }
 
         let tcp = channel == Channel::Tcp;
-        let token = self.tcp_token();
+        let token = match (kind, self.tcp_token()) {
+            (Kind::Public, _) => "",
+            (_, Some(t)) => t,
+            (_, None) => return Err(Error::NoCredential { endpoint: endpoint.to_string() }),
+        };
         let with_project = || format!("token={token}&project={}", quote(&self.project));
         let joined = args.join("&");
         let json = |headers: &mut Vec<(String, String)>| {
@@ -708,6 +762,7 @@ impl Client {
                 let path = if tcp { format!("{endpoint}?token={}", quote(token)) } else { endpoint.to_string() };
                 (Method::Post, path, json(&mut headers))
             }
+            Kind::Public => (Method::Get, endpoint.to_string(), None),
         };
         wire::check_target(&path).map_err(|byte| Error::BadTarget { target: path.clone(), byte })?;
         let request = Request { method, target: path, host, user_agent: format!("k5/{}", self.version), headers, body };
@@ -773,6 +828,7 @@ mod tests {
         // Never printed.
         assert_eq!(format!("{:?}", Passport::new("s.secret").unwrap()), "Passport(..)");
         assert_eq!(format!("{:?}", Auth::Owner("owner-secret".into())), "Owner(..)");
+        assert_eq!(format!("{:?}", Auth::None), "None");
     }
 
     #[test]
@@ -796,6 +852,7 @@ mod tests {
             (PostJsonStdin, false, false, false, false, false, false, true),
             (SendJsonGet, false, false, false, false, true, true, false),
             (SendJsonPost, false, false, false, false, true, true, false),
+            (Public, false, true, false, true, false, false, false),
         ];
         for (k, m, c, s, n, h, p, o) in rows {
             assert_eq!(
@@ -830,6 +887,7 @@ mod tests {
             (Kind::PostJsonStdin, 30),
             (Kind::SendJsonGet, 330),
             (Kind::SendJsonPost, 330),
+            (Kind::Public, 30),
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }
@@ -841,6 +899,43 @@ mod tests {
         assert!(matches!(c.call(Channel::Uds, "/cli/inbox/list", Call::Request(&[])), Err(Error::NoCellSocket { .. })));
         let mut c = Client::new("127.0.0.1", 1, "/p", Auth::Passport { passport: Passport::new("s.x").unwrap(), sock: None });
         assert!(matches!(c.call(Channel::Uds, "/cli/inbox/list", Call::Request(&[])), Err(Error::NoCellSocket { .. })));
+    }
+
+    /// With no credential only the public GET is built; every other call
+    /// is refused before anything is sent (port 1: nothing listens).
+    #[test]
+    fn no_credential_sends_only_the_public_get() {
+        let mut c = Client::new("127.0.0.1", 1, "/p", Auth::None);
+        for call in [Call::Request(&[]), Call::RequestPost(&[]), Call::PostForm(&["a=b"]), Call::PostJson(b"{}")] {
+            assert!(matches!(c.call(Channel::Tcp, "/cli/x", call), Err(Error::NoCredential { .. })), "{call:?}");
+        }
+        assert!(matches!(c.post_json_stdin("/cli/x", b"{}"), Err(Error::NoCredential { .. })));
+        assert!(matches!(c.send_json(false, "/cli/x", ""), Err(Error::NoCredential { .. })));
+        let (_, r) = c.build(Kind::Public, Channel::Tcp, "/boot-status", &[], &[]).unwrap();
+        assert_eq!(r.target, "/boot-status");
+        assert_eq!(r.method, Method::Get);
+        assert!(r.body.is_none());
+        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, [VERSION_HEADER, VIA_HEADER]);
+    }
+
+    /// `X-K5-Owner-Source: disk` after the Via, only on an owner's call
+    /// whose token came from disk, never on the public GET.
+    #[test]
+    fn the_owner_source_header() {
+        let names = |c: &Client, kind: Kind| -> Vec<(String, String)> { c.build(kind, Channel::Tcp, "/cli/x", &[], &[]).unwrap().1.headers };
+        let mut c = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
+        assert!(names(&c, Kind::Request).iter().all(|(n, _)| n != OWNER_SOURCE_HEADER));
+        c.owner_from_disk = true;
+        c.would_refuse = true;
+        let got = names(&c, Kind::Request);
+        let order: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(order, [WOULD_REFUSE_HEADER, VERSION_HEADER, VIA_HEADER, OWNER_SOURCE_HEADER]);
+        assert_eq!(got[3].1, "disk");
+        assert!(names(&c, Kind::Public).iter().all(|(n, _)| n != OWNER_SOURCE_HEADER));
+        let mut p = Client::new("127.0.0.1", 1, "/p", Auth::Passport { passport: Passport::new("s.x").unwrap(), sock: None });
+        p.owner_from_disk = true;
+        assert!(names(&p, Kind::Request).iter().all(|(n, _)| n != OWNER_SOURCE_HEADER), "never with a passport");
     }
 
     #[test]

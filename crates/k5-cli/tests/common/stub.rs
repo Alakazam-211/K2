@@ -17,6 +17,8 @@ use std::time::Duration;
 pub enum Reply {
     /// A status and a JSON body.
     Answer(u16, String),
+    /// The same, with these header lines too, after `Content-Type`.
+    Headed(u16, Vec<(String, String)>, String),
     /// Writes `content` to `file`, then answers.
     WriteThen { file: PathBuf, content: String, status: u16, body: String },
     /// Reads the request, waits, and closes with nothing sent.
@@ -133,11 +135,12 @@ fn serve<S: Read + Write>(mut conn: S, channel: &'static str, state: &Mutex<Stat
         s.log.push(Logged { channel, bytes: got });
         s.queue.pop_front().unwrap_or(Reply::Answer(200, r#"{"ok":true}"#.to_string()))
     };
-    let (status, body) = match reply {
-        Reply::Answer(status, body) => (status, body),
+    let (status, extra, body) = match reply {
+        Reply::Answer(status, body) => (status, Vec::new(), body),
+        Reply::Headed(status, extra, body) => (status, extra, body),
         Reply::WriteThen { file, content, status, body } => {
             std::fs::write(&file, content).unwrap_or_else(|e| panic!("write {}: {e}", file.display()));
-            (status, body)
+            (status, Vec::new(), body)
         }
         Reply::Hang(d) => {
             std::thread::sleep(d);
@@ -145,8 +148,9 @@ fn serve<S: Read + Write>(mut conn: S, channel: &'static str, state: &Mutex<Stat
         }
         Reply::Close => return,
     };
+    let extra: String = extra.iter().map(|(n, v)| format!("{n}: {v}\r\n")).collect();
     let out = format!(
-        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = conn.write_all(out.as_bytes());

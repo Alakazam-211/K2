@@ -10,6 +10,7 @@
 //!
 //! - [`wire`]: one exchange, written as curl writes it.
 //! - [`client`]: the calls, their tries and time limits.
+//! - [`skew`]: the one line when the daemon's version is not the binary's.
 //! - [`permission`]: the refusal's closing line.
 //! - [`encode`]: the query escaping (Python's `quote`).
 //!
@@ -27,7 +28,10 @@
 //!    `native` here. The shell's two are put in front of the command
 //!    line's `-H`s, the Via first, so the would-refuse line ends up above
 //!    it.
-//! 4. A custom `Content-Type`, when the call has one.
+//! 4. `X-K5-Owner-Source: disk`, on a call made as the owner with the
+//!    token read from the K2 home's files (the shell's last hand-over
+//!    header). Never with a passport.
+//! 5. A custom `Content-Type`, when the call has one.
 //!
 //! `Host` is `<HOST>:<PORT>` over TCP and `localhost` on the cell socket
 //! (its URL is `http://localhost<path>`). `<P>` is `PROJECT` escaped by
@@ -46,6 +50,7 @@
 //! | `cli_post_json_stdin` | as `cli_post_json` | none |
 //! | `cli_send_json GET` | `GET <ep>?token=<curl-escaped T>&payload` (-G) | `GET <ep>?payload` (-G) |
 //! | `cli_send_json POST` | `POST <ep>?token=<quoted T>`, JSON | `POST <ep>`, JSON |
+//! | (none: [`client::Client::get_public`]) | `GET <ep>`: no token, no `project=`, no Owner-Source | none |
 //!
 //! An endpoint that already has a `?` gets the `-G` query, and
 //! `cli_request_post`'s, after `&`; the other POST forms always add `?`,
@@ -105,6 +110,14 @@
 //! `gave an empty answer to <ep> after <n> s`), instead of a JSON parse
 //! error. `cli_post_json_stdin` and `cli_send_json` have no such line.
 //!
+//! # The daemon's version
+//!
+//! Every answer's `X-K5-Server-Version` ([`wire::SERVER_VERSION_HEADER`])
+//! is compared with the binary's version as it comes in, a retried one
+//! too. The first that differs prints [`skew::line`] on stderr, once per
+//! process ([`skew::note`]); the call goes on. No header, no line. The
+//! shell CLI doesn't compare yet.
+//!
 //! # Where this differs from the shell, on purpose
 //!
 //! - `User-Agent: k5/<version>` for curl's, and `X-K5-Cli-Version:
@@ -138,6 +151,7 @@
 pub mod client;
 pub mod encode;
 pub mod permission;
+pub mod skew;
 pub mod wire;
 
 pub use client::{Auth, Call, Channel, Client, Error, Healer, NoAnswer, Passport, Response, SecretsDir};

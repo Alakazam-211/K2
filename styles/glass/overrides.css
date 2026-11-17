@@ -713,11 +713,15 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 /* The body under the strip: the pane's surface, rounded at the top. A pane's own
-   header band is that surface too, so the wave runs into it. */
+   header band is that surface too, so the wave runs into it. It clips to that
+   curve with a clip-path: the rounded overflow clip in the markup let a backdrop
+   blur inside (the Thread's top band, over your blue bubbles) paint square into
+   both top corners, over the strip. */
 [data-style="glass"] [data-toast-host="workspace"]:not([data-zen-root] *) {
   --color-bg-stripe: var(--color-bg);
   background: var(--k2-wave-fill);
   border-radius: var(--k2-body-r) var(--k2-body-r) 0 0;
+  clip-path: inset(0 round var(--k2-body-r) var(--k2-body-r) 0 0);
 }
 [data-style="glass"] [data-room-tab-bar]:not([data-zen-root] *) {
   background: var(--k2-strip-fill);
@@ -881,9 +885,23 @@
   --k2-body-r: calc(var(--radius-box) - 9px);
   background: var(--k2-strip-fill);
 }
+/* The part of a tile that reaches its bottom edge, where the tile doesn't clip as
+   a whole (a Projects tile's body; the Project chat, whose resize edge hangs past
+   its drawer): clipped to the tile's inner curve, the radius less the rim. Their
+   square fill and fades covered the rim's curve, so the bottom corners read darker
+   (lighter in Veil). A clip-path, as above: a backdrop blur inside a rounded
+   overflow clip still painted square into the corner. */
+[data-style="glass"] .k2-tile-foot:not([data-zen-root] *) {
+  overflow: hidden;
+  border-bottom-left-radius: calc(var(--radius-box) - var(--tile-edge-width));
+  border-bottom-right-radius: calc(var(--radius-box) - var(--tile-edge-width));
+  clip-path: inset(0 round 0 0 calc(var(--radius-box) - var(--tile-edge-width)) calc(var(--radius-box) - var(--tile-edge-width)));
+}
 [data-style="glass"] [data-pane-group-id]:not([data-pane-solo]) > [data-toast-host="pane"]:not([data-zen-root] *) {
   background: var(--k2-wave-fill);
   border-radius: var(--k2-body-r) var(--k2-body-r) 0 0;
+  /* Clipped to the curve as the room's body above, so a blur inside keeps to it. */
+  clip-path: inset(0 round var(--k2-body-r) var(--k2-body-r) 0 0);
 }
 [data-style="glass"] [data-pane-tab-bar] [data-pane-tab-id]:not([data-zen-root] *) {
   position: relative;

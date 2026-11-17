@@ -25,6 +25,13 @@ const ELEVATION_SHADOW: Record<number, string> = {
   5: '[box-shadow:var(--ring-surface),var(--shadow-5)]',
 }
 
+/** The class for the part of a tile that reaches its bottom edge, when the
+ *  tile itself doesn't clip (the Project chat's resize edge hangs past its
+ *  drawer; a Projects tile's body). A Style that rounds its tiles clips
+ *  that part to the tile's inner curve (Glass: styles/glass/overrides.css),
+ *  so its square fill and its fades never cover the rim's curve. */
+export const TILE_FOOT_CLIP = 'k2-tile-foot'
+
 export interface SurfaceProps extends React.HTMLAttributes<HTMLDivElement> {
   /** Which background slot to paint. Default 'surface'. */
   role2?: 'canvas' | 'solid' | 'surface' | 'elevated' | 'inset' | 'stripe'

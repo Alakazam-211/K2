@@ -106,6 +106,7 @@ import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import { newClientMsgId, POST_IDEMPOTENCY_FEATURE } from '@/components/SessionView/threadOutbox'
 import { clientToCssPx } from '@/lib/app-zoom'
 import { PROJECT_BAR_ROW_HEIGHT } from './project-bar-height'
+import { TILE_FOOT_CLIP } from '@/components/ui'
 
 // Resize-handle hit-area thickness (px), centered on the panel's left
 // border (the dashboard's DIVIDER_HIT_PX idiom).
@@ -523,8 +524,11 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
           </StateCanvas>
         </div>
       )}
+      {/* At the chat's foot: it clips to the drawer tile's inner curve (the
+          drawer can't clip, its resize edge hangs past it), or its square
+          canvas covers the rim's curve at the bottom corners. */}
       <ThreadChatScope
-        className={chatState ? 'flex-shrink-0 flex flex-col' : 'flex-1 flex flex-col min-h-0'}
+        className={`${chatState ? 'flex-shrink-0 flex flex-col' : 'flex-1 flex flex-col min-h-0'} ${TILE_FOOT_CLIP}`}
         style={{ background: 'var(--zen-canvas)' }}
         testId="project-chat-thread"
       >

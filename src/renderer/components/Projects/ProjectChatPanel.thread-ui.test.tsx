@@ -45,6 +45,7 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { __resetUnreadForTests, useUnreadStore } from '@/stores/unread'
 import { __resetActivityForTests, __seedActivityForTests, type ActivityRow } from '@/stores/activity'
 import { usePromptStashStore } from '@/stores/prompt-stash'
+import { TILE_FOOT_CLIP } from '@/components/ui/Surface'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -190,6 +191,12 @@ describe('project chat in the Thread look', () => {
       expect(root.querySelector('.chat-message')).toBeNull()
     })
   }
+
+  it('the Thread at the chat’s foot clips to the drawer tile’s inner curve (the drawer itself can’t: its resize edge hangs past it)', async () => {
+    await mount()
+    const scope = screen.getByTestId('project-chat-thread')
+    for (const c of TILE_FOOT_CLIP.split(/\s+/)) expect(scope.classList).toContain(c)
+  })
 
   it('Enter sends over the project chat route; the delivered line rides under the sent message', async () => {
     await mount()

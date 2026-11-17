@@ -4,7 +4,7 @@
 
 import type React from 'react'
 import { useLayoutEffect, useRef, useState } from 'react'
-import { DialogCloseButton, Surface } from '@/components/ui'
+import { DialogCloseButton, Surface, TILE_FOOT_CLIP } from '@/components/ui'
 import { MoonIcon } from '@/components/icons/K2Icons'
 import { THREAD_FLOATS_HOST_ATTR } from '@/components/SessionView/threadFloats'
 import type { TileView } from './tile-view'
@@ -230,7 +230,10 @@ export function PaneChrome({
           </div>
         </div>
       )}
-      <div className="flex-1 min-h-0 min-w-0">{children}</div>
+      {/* The body clips to the tile's inner curve: Glass rounds the tile,
+          and a Thread's square fill and fades covered the rim's curve at
+          the bottom corners. */}
+      <div className={`flex-1 min-h-0 min-w-0 ${TILE_FOOT_CLIP}`}>{children}</div>
     </Surface>
   )
 }

@@ -3,7 +3,7 @@
  *  consumes semantics: <Surface>, <Button variant>, <Callout tone>, …
  *  See .k2/prds/prd-style-system-v1.md §4. */
 export { cx } from './cx'
-export { Surface } from './Surface'
+export { Surface, TILE_FOOT_CLIP } from './Surface'
 export type { SurfaceProps } from './Surface'
 export { Button } from './Button'
 export type { ButtonProps } from './Button'

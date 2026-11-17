@@ -1,0 +1,21 @@
+MPC-E167 native_beta_off (sessions and edits)
+exit:     2
+message:  the native engine (a Beta) is off on this host: a new doc can't be made on it
+next:     Nothing was made. Make the doc on the standard engine, or ask the host's owner to turn the native engine Beta on. Docs already on the native engine open and save as usual.
+rule:     the native engine (a Beta): off by default, chosen only when a doc is made
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E167",
+  "name": "native_beta_off",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "the native engine (a Beta) is off on this host: a new doc can't be made on it",
+  "next": "Nothing was made. Make the doc on the standard engine, or ask the host's owner to turn the native engine Beta on. Docs already on the native engine open and save as usual.",
+  "rule": "the native engine (a Beta): off by default, chosen only when a doc is made",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

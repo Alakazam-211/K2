@@ -51,6 +51,17 @@ pub struct ToolOutput {
     pub(crate) result: Option<Box<super::ResultData>>,
 }
 
+/// The warning a pack's structured read verb gives when the doc's file can't be rendered at the
+/// version it read (`ReadHead::render_failed`): the read is the doc's; the file still holds what
+/// was last synced, and the doc can't be written back until the change it can't write is undone.
+fn unrendered_note(name: &str, e: &crate::session::SessionError) -> String {
+    format!(
+        "note: {name} can't be written back at this version ({}: {e}); this read is the doc's, \
+         the file holds what was last synced",
+        crate::errors::Refusal::report(e).id()
+    )
+}
+
 /// What a structured edit verb named and touched, kept for a refusal's frame on the keyed
 /// watch ([`Session::run_structured`]).
 #[derive(Default)]
@@ -246,6 +257,22 @@ impl ToolOutput {
         self.result.as_deref().and_then(|r| r.value.as_ref())
     }
 
+    /// **The version this call made**, if it made one: an edit's new version (a live doc's change,
+    /// or a blob doc's verb, `docs/SESSIONS.md`, "Verbs on a blob doc"); `None` for a read, a
+    /// refusal, a dry run and an edit that changed nothing. A host tells its clients about a
+    /// tier-0 doc's new version from it, as from a write's `BlobWriteResult` (the kit has no
+    /// event for one).
+    pub fn version_made(&self) -> Option<Seq> {
+        if let Some(b) = self.result.as_deref().and_then(|r| r.blob.as_deref()) {
+            let hidden = plant_on!(
+                crate::differential::tier0_verb_mutant()
+                    == Some(crate::differential::Tier0VerbMutant::VersionMadeHidden)
+            );
+            return if hidden { None } else { b.after };
+        }
+        self.changed.as_ref().map(|c| c.version)
+    }
+
     /// The units the call's change wrote, by address and field, when the call asked for its
     /// result (at most [`super::UNITS_MAX`]); empty otherwise.
     pub fn changed_units(&self) -> &[super::ChangedUnit] {
@@ -392,6 +419,7 @@ impl Session {
             kind,
             args,
             pack: Some(self.pack()),
+            dry_run: false,
         };
         Ok(with_result(&call, out, || {
             self.status().map(|s| s.version).unwrap_or_default()
@@ -586,6 +614,13 @@ impl Session {
             if refusal.is_none() && out.exit == exit::OK {
                 self.verb_view_time(conn, out.viewing.as_deref(), out.time.as_ref());
             }
+            // the file can't be rendered at this version: the read is the doc's all the same
+            let mut warnings = Warnings::default();
+            warnings.extend(
+                read.render_failed
+                    .as_ref()
+                    .map(|e| unrendered_note(&name, e)),
+            );
             return Ok(ToolOutput {
                 stdout: out.stdout,
                 stderr_summary: summary,
@@ -596,7 +631,7 @@ impl Session {
                 notes,
                 for_edit: for_edit.map(Box::new),
                 refusal,
-                warnings: Warnings::default(),
+                warnings,
                 result: out.result.filter(|_| opts.result_json),
             });
         }
@@ -671,11 +706,22 @@ impl Session {
             parts = o.result;
             Ok::<_, ToolError>((o.edits, o.cells))
         });
-        let (changed, notes) = match res {
+        let (mut changed, notes) = match res {
             Ok(r) => r,
             Err(EditWithError::Compute(e)) => return Err(e.into()),
             Err(EditWithError::Session(e)) => return Err(e.into()),
         };
+        // the verb's own view and playhead are the change's ([`crate::session::ViewAt`])
+        if let Some(v) = changed.as_mut().and_then(|c| c.view.as_mut()) {
+            if let Some(a) = seen
+                .viewing
+                .as_deref()
+                .and_then(crate::session::view_address_ok)
+            {
+                v.address = Some(a);
+            }
+            v.time = seen.time.clone();
+        }
         let (stdout, exit) = report.unwrap_or((Vec::new(), exit::OK));
         let (version, mut summary) = match &changed {
             Some(c) => (
@@ -852,6 +898,7 @@ impl Session {
             guard.turn,
             guard.verb,
             guard.result.then_some(&mut base),
+            false,
             |live| {
                 let mut o = f(live).map_err(Stop::Tool)?;
                 let text = o.text.take();

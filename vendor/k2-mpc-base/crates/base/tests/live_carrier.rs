@@ -1432,8 +1432,9 @@ fn the_planted_read_encodes_is_caught_by_name() {
 
 /// A read that renders nothing is still told when the doc's file can't be rendered: the failure
 /// the last rendering found (the sync's, here a flush's) is kept with the doc's version, and a
-/// structured read at that version reports it without encoding; once the doc changes, the read
-/// passes, and the next sync renders again.
+/// structured read at that version gives its result with a warning naming it, without encoding
+/// (before the render net, it returned the failure instead of its result); once the doc
+/// changes, the read gives no warning, and the next sync renders again.
 #[test]
 fn a_read_reports_a_render_failure_without_encoding() {
     let f = fx("render-fails", true);
@@ -1446,14 +1447,20 @@ fn a_read_reports_a_render_failure_without_encoding() {
     let e = s.flush(bot).expect_err("the sync can't render the file");
     assert!(e.to_string().contains("a planted failure"), "{e}");
     let before = f.pack.encodes();
-    let e = list(&s).expect_err("the read is told");
-    assert!(format!("{e:?}").contains("a planted failure"), "{e:?}");
+    let o = list(&s).expect("the read gives its result");
+    assert_eq!(o.stdout, b"s1\ns2\n");
+    let w = o.warnings.lines();
+    assert!(
+        w.len() == 1 && w[0].contains("a planted failure") && w[0].contains("MPC-E517"),
+        "the read is told: {w:?}"
+    );
     assert_eq!(f.pack.encodes(), before, "the read encoded nothing");
-    // the doc changes: no rendering at this version has failed, so the read passes
+    // the doc changes: no rendering at this version has failed, so the read gives no warning
     f.pack.failing.store(false, Ordering::SeqCst);
     set_quiet(&s, bot, "s2", "title", "B2");
     let o = list(&s).unwrap();
     assert_eq!(o.stdout, b"s1\ns2\n");
+    assert!(o.warnings.is_empty(), "{:?}", o.warnings);
     assert_eq!(f.pack.encodes(), before, "still no encode on a read");
     assert!(s.flush(bot).unwrap().written);
     assert_eq!(f.bytes(), F2);

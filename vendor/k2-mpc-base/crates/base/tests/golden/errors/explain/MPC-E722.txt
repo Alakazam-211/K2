@@ -1,0 +1,21 @@
+MPC-E722 keys_reissued (tier 0 and blobs)
+exit:     1
+message:  version {save}'s writer reissues node keys: a diff across it pairs nothing
+next:     Another program saved the file at version details.save, and the file type's pack says that program renumbers node keys: across that save a key may name another thing, so a diff across it would pair the wrong nodes. Nothing was read. Diff from details.safe_from to details.to instead, or compare the two versions' outlines.
+rule:     the tier-0 reads across an outside save
+verbs:    a structure index's verbs (named by the file type's pack) and node claims; a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E722",
+  "name": "keys_reissued",
+  "area": "tier 0 and blobs",
+  "exit": 1,
+  "message": "version {save}'s writer reissues node keys: a diff across it pairs nothing",
+  "next": "Another program saved the file at version details.save, and the file type's pack says that program renumbers node keys: across that save a key may name another thing, so a diff across it would pair the wrong nodes. Nothing was read. Diff from details.safe_from to details.to instead, or compare the two versions' outlines.",
+  "rule": "the tier-0 reads across an outside save",
+  "verbs": ["@index", "(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -230,9 +230,10 @@ They sit outside the doc's numbering: none of them takes or moves a version.
   watcher).
 - **`view_address`**: the view this connection is looking at, by address (any address the kit's
   grammar reads, a bare key included; at most 512 bytes, `PRESENCE_ADDRESS_MAX`; `MPC-E114`
-  otherwise). The kit doesn't resolve it. Needs read; a watcher is refused (`MPC-E305`). A pack's
-  verb sets its agent's (`StructOutput::viewing`), and a host sets one for any connection (an
-  agent's, when it renders a still for it). Not to be confused with `view`, a text doc's lines.
+  otherwise). The kit doesn't resolve it. Needs read; a watcher is refused (`MPC-E305`). Every
+  verb an agent runs sets its agent's to where its change is (its result's `view.address`; a
+  pack's verb may name its own, `StructOutput::viewing`), a person's never, and a host sets one
+  for any connection (an agent's, when it renders a still for it). Not to be confused with `view`, a text doc's lines.
 - **`time_position`**: this connection's playhead. `at` is a decimal integer string (an optional
   `-`, digits, no leading zero, within 64 bits) in the pack's unit, the view schema's `time_unit`
   (a timeline's ticks): never a float. `state` is `playing` or `paused`; `in` (optional) what it

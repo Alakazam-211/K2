@@ -1,0 +1,15 @@
+[package]
+name = "mpce-order"
+license = "MIT OR Apache-2.0"
+description = "Reference model of the slot order: FugueMax over opaque slot IDs. Knows nothing of registers (no dependency on mpce-reg)."
+# Standalone on purpose (no workspace inheritance), as mpce-model: consumers copy crates/ by git subtree.
+edition = "2021"
+publish = false
+version = "0.1.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+# No dependencies. A layer check fails if this crate ever reaches mpce-reg, directly or
+# transitively.
+[dependencies]

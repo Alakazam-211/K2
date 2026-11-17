@@ -487,6 +487,231 @@ pub fn with_tier0_mutant<R>(mutant: Tier0Mutant, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// A fault planted in the tier-0 verb path (`session/tier0/verbs.rs`: a pack's verb the kit
+/// runs on a blob doc, its plan, the applier, the checks, the dry run and the record), so the
+/// rows of `tests/tier0_verbs.rs` show they catch each one, at their own assertions. Installed
+/// per thread by [`with_tier0_verb_mutant`], or named by `MPC_T0V_MUTANT` for a whole test run
+/// (an unknown name stops the run, naming it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Tier0VerbMutant {
+    /// The applier copies one byte twice: the last byte of the stretch before each span but
+    /// its final one (a byte the plan never named changes).
+    ApplierOffByOne,
+    /// A plan's spans are taken unchecked: out of order, overlapping, outside the file, over
+    /// the caps.
+    PlanUnchecked,
+    /// The output's index diff isn't held to what the plan declared (a strayed node lands).
+    StrayUnchecked,
+    /// An output the pack's index refuses is taken anyway (its diff empty): it lands.
+    OutputIndexSkipped,
+    /// The result's changed units are the pack's `touched` and `created`, not the index diff.
+    UnitsFromPlan,
+    /// A `merge: Lease` verb runs without the caller's own lease.
+    LeaseOnlyIgnored,
+    /// A verb-made version is stored without its verb (`blob_verbs`).
+    VerbNotRecordedBlob,
+    /// The commit doesn't check that head is still the version the plan was made on.
+    CommitWithoutRecheck,
+    /// An agent's verb touching another participant's node claim lands under
+    /// `ClaimPolicy::Respect`.
+    ClaimUnchecked,
+    /// A verb on a doc over the merge bound carries no `merge_over_bound` note.
+    MergeNoteMissing,
+    /// A dry run commits its version.
+    Commits,
+    /// A dry run takes the auto lease (and leaves it).
+    TakesLease,
+    /// A dry run is charged to the edit rate bucket.
+    ChargesRate,
+    /// A dry run moves its caller's presence (their last edit).
+    MovesPresence,
+    /// A dry run asks for the output's index job.
+    StoresIndex,
+    /// A dry run leaves its uncommitted put open.
+    LeavesPut,
+    /// A dry run writes the file back.
+    WritesBack,
+    /// A dry run skips a guard the real run makes (`--if-version`).
+    SkipsGuards,
+    /// The test pack's verb reads hidden state (a counter): two identical calls differ.
+    PackImpure,
+    /// The registry takes a blob pack's verbs and refusals unchecked.
+    RegistryUnchecked,
+    /// An erasure leaves the erased participant's verbs (`blob_verbs`).
+    VerbKeptOnErase,
+    /// A verb's output doesn't say the version it made (`ToolOutput::version_made`).
+    VersionMadeHidden,
+    /// A verb's view names the first changed node's place, not the last's.
+    ViewFirstNode,
+    /// A seeded index row's minted keys are minted afresh instead of carried from the version
+    /// before (what the host's job would record differs).
+    SeedWithoutCarry,
+    /// A verb's version isn't indexed from its output: the next verb waits for the host's job.
+    SeedSkipped,
+    /// The judge is skipped across outside saves: a reused key reads as the same node.
+    ReuseReadsAttached,
+    /// An anchor across an outside save is judged against its original fingerprint, not the
+    /// node just before the save.
+    JudgeAgainstFingerprint,
+    /// A diff's crossed saves don't count the keys they kept.
+    KeysKeptUncounted,
+    /// Blame rows that end on an outside save aren't labelled.
+    BlameLabelMissing,
+    /// A save the pack says reissues keys is answered across, as if unknown.
+    ReissuesAnswered,
+    /// The state an index job records for an anchor is judged by its fingerprint alone, not
+    /// across the outside saves as a read judges it.
+    StoredJudgeByFingerprint,
+    /// The state an index job records skips an outside save whose version before it has no
+    /// stored keys yet, where a read would mint them and judge it.
+    StoredSkipsUnminted,
+    /// `--base V` refuses whenever head moved since `V`, as the whole-doc guard did.
+    BaseWholeDoc,
+    /// `--base V` is not checked per node: a call lands over a change made since `V`.
+    BaseIgnored,
+    /// `--base V` checks per node only: two changes to one node always overlap.
+    BaseNodeLevelOnly,
+    /// `--base V` runs the verb at head only: a node that left the selection since `V` escapes.
+    BaseHeadOnly,
+    /// Keys a verb creates are conflict candidates: two concurrent adds collide.
+    CreatedKeysConflict,
+    /// An outside save between `V` and head is taken as keeping node keys.
+    PairingAssumed,
+    /// Keys the kit minted pass `--base` as if they were the file's own.
+    WeakKeyGuarded,
+    /// `--base V` compares against `V`'s index where it should read head's: nothing reads as
+    /// moved, so a change made since lands twice.
+    PlanOnStaleHead,
+    /// A verb that finds head's index not yet recorded plans on the version before head: the
+    /// edit just committed is lost.
+    SeedGapLoses,
+    /// A verb's result leaves out its word.
+    WordDropped,
+    /// Only a held node itself is checked against an agent's change, not its reach.
+    ReachIgnored,
+    /// A hold's reach is what it covered when taken: members added since escape it.
+    ReachAtHoldTime,
+    /// The agent-write check is run in the verb path under `AgentWrites::VerbsOnly`: an
+    /// agent's verbs are refused as its whole-file writes are.
+    VerbsOnlyCheckInVerbPath,
+}
+
+impl Tier0VerbMutant {
+    /// The mutant `MPC_T0V_MUTANT` names: its name in kebab case.
+    pub fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "applier-off-by-one" => Self::ApplierOffByOne,
+            "plan-unchecked" => Self::PlanUnchecked,
+            "stray-unchecked" => Self::StrayUnchecked,
+            "output-index-skipped" => Self::OutputIndexSkipped,
+            "units-from-plan" => Self::UnitsFromPlan,
+            "lease-only-ignored" => Self::LeaseOnlyIgnored,
+            "verb-not-recorded-blob" => Self::VerbNotRecordedBlob,
+            "commit-without-recheck" => Self::CommitWithoutRecheck,
+            "claim-unchecked" => Self::ClaimUnchecked,
+            "merge-note-missing" => Self::MergeNoteMissing,
+            "commits" => Self::Commits,
+            "takes-lease" => Self::TakesLease,
+            "charges-rate" => Self::ChargesRate,
+            "moves-presence" => Self::MovesPresence,
+            "stores-index" => Self::StoresIndex,
+            "leaves-put" => Self::LeavesPut,
+            "writes-back" => Self::WritesBack,
+            "skips-guards" => Self::SkipsGuards,
+            "pack-impure" => Self::PackImpure,
+            "registry-unchecked" => Self::RegistryUnchecked,
+            "verb-kept-on-erase" => Self::VerbKeptOnErase,
+            "version-made-hidden" => Self::VersionMadeHidden,
+            "view-first-node" => Self::ViewFirstNode,
+            "seed-without-carry" => Self::SeedWithoutCarry,
+            "seed-skipped" => Self::SeedSkipped,
+            "reuse-reads-attached" => Self::ReuseReadsAttached,
+            "judge-against-fingerprint" => Self::JudgeAgainstFingerprint,
+            "keys-kept-uncounted" => Self::KeysKeptUncounted,
+            "blame-label-missing" => Self::BlameLabelMissing,
+            "reissues-answered" => Self::ReissuesAnswered,
+            "stored-judge-by-fingerprint" => Self::StoredJudgeByFingerprint,
+            "stored-skips-unminted" => Self::StoredSkipsUnminted,
+            "base-whole-doc" => Self::BaseWholeDoc,
+            "base-ignored" => Self::BaseIgnored,
+            "base-node-level-only" => Self::BaseNodeLevelOnly,
+            "base-head-only" => Self::BaseHeadOnly,
+            "created-keys-conflict" => Self::CreatedKeysConflict,
+            "pairing-assumed" => Self::PairingAssumed,
+            "weak-key-guarded" => Self::WeakKeyGuarded,
+            "plan-on-stale-head" => Self::PlanOnStaleHead,
+            "seed-gap-loses" => Self::SeedGapLoses,
+            "word-dropped" => Self::WordDropped,
+            "reach-ignored" => Self::ReachIgnored,
+            "reach-at-hold-time" => Self::ReachAtHoldTime,
+            "verbs-only-check-in-verb-path" => Self::VerbsOnlyCheckInVerbPath,
+            _ => return None,
+        })
+    }
+}
+
+thread_local! {
+    static TIER0_VERB_MUTANT: std::cell::Cell<Option<Tier0VerbMutant>> = const { std::cell::Cell::new(None) };
+}
+
+thread_local! {
+    static SEED_GAP_HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+}
+
+/// Run `f` with `hook` called once on this thread in a tier-0 verb's gap: after its version is
+/// committed and its own lease released, before the version's index (from the verb's output)
+/// is recorded. A test runs another participant's call there.
+pub fn with_seed_gap_hook<R>(hook: impl FnOnce() + 'static, f: impl FnOnce() -> R) -> R {
+    SEED_GAP_HOOK.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    let r = f();
+    SEED_GAP_HOOK.with(|h| *h.borrow_mut() = None);
+    r
+}
+
+/// How many seed-gap hooks are running (any thread): the planted fault
+/// [`Tier0VerbMutant::SeedGapLoses`] bites only inside one, so the rows that race without
+/// the hook aren't left to timing.
+static IN_SEED_GAP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The gap's hook, if one is set: taken, so a call made from it doesn't run it again.
+pub(crate) fn seed_gap_hook() {
+    let hook = SEED_GAP_HOOK.with(|h| h.borrow_mut().take());
+    if let Some(hook) = hook {
+        IN_SEED_GAP.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        hook();
+        IN_SEED_GAP.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Whether a seed-gap hook is running ([`with_seed_gap_hook`]).
+pub(crate) fn in_seed_gap() -> bool {
+    IN_SEED_GAP.load(std::sync::atomic::Ordering::SeqCst) > 0
+}
+
+/// The verb path's fault planted on this thread, else the one `MPC_T0V_MUTANT` names, if any.
+pub fn tier0_verb_mutant() -> Option<Tier0VerbMutant> {
+    TIER0_VERB_MUTANT.with(|m| m.get()).or_else(|| {
+        let v = std::env::var("MPC_T0V_MUTANT").ok()?;
+        Some(
+            Tier0VerbMutant::named(&v)
+                .unwrap_or_else(|| panic!("MPC_T0V_MUTANT={v}: not a tier-0 verb mutant")),
+        )
+    })
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_tier0_verb_mutant<R>(mutant: Tier0VerbMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<Tier0VerbMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            TIER0_VERB_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(TIER0_VERB_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
 /// A fault planted in the text → tier 0 demotion
 /// ([`crate::session::SessionManager::demote_text_file`]), so the rows that should catch it
 /// (`tests/demote.rs`) can show they do. Installed per thread by [`with_demote_mutant`].
@@ -589,6 +814,14 @@ pub enum KeyedMutant {
     /// settle has rendered the doc that took it, as before, so that rendering splices into the
     /// bytes, and pairs with the keys, of the sync point before the save.
     SettleBeforeCarrier,
+    /// "edit check dropped": a live change commits without the pack's check
+    /// (`Pack::check_edit`), as before the hook, so a change the write-back can't write is
+    /// taken.
+    EditCheckDropped,
+    /// "read replays render failure": a structured read verb returns the failure the last
+    /// rendering found at the doc's version as its error, as before, instead of its result
+    /// with a warning.
+    ReadReplaysRenderFailure,
 }
 
 thread_local! {
@@ -1192,6 +1425,18 @@ pub enum ErgoMutant {
     JsonLeaksToText,
     /// The result leaves out the name of its typed data's shape (`data_spec: null`).
     DataSpecDropped,
+    /// An edit's view is dropped from its result (`view: null`).
+    ViewDropped,
+    /// An edit's view takes the first container it touched, not the last.
+    ViewFirstContainer,
+    /// A unit the change deleted is listed live in its view.
+    ViewDeletedLive,
+    /// A person's verb moves their view address to its change.
+    ViewMovesPerson,
+    /// A text change's view takes the outermost named span holding it, not the innermost.
+    ViewSectionOuter,
+    /// A verb's own view address is taken unchecked by the grammar.
+    ViewAddressUnchecked,
 }
 
 impl ErgoMutant {
@@ -1203,6 +1448,12 @@ impl ErgoMutant {
             "envelope-drops-base" => Self::EnvelopeDropsBase,
             "json-leaks-to-text" => Self::JsonLeaksToText,
             "data-spec-dropped" => Self::DataSpecDropped,
+            "view-dropped" => Self::ViewDropped,
+            "view-first-container" => Self::ViewFirstContainer,
+            "view-deleted-live" => Self::ViewDeletedLive,
+            "view-moves-person" => Self::ViewMovesPerson,
+            "view-section-outer" => Self::ViewSectionOuter,
+            "view-address-unchecked" => Self::ViewAddressUnchecked,
             _ => return None,
         })
     }

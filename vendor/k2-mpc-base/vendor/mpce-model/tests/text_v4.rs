@@ -1,4 +1,4 @@
-//! v0.4.1 API: `Doc::span_ids` for the kit's span purge (`erase.span_includes_tombstones`):
+//! v0.4.1 API: `Doc::span_ids` for a span purge (`erase.span_includes_tombstones`):
 //! `purge_as(agent, &span_ids(start, end)?)`. Fixtures (a typo-fixed secret inside the
 //! selection, a deleted copy just outside it, boundary refusals, multi-byte text, tombstones
 //! from another replica's concurrent edits) and a seeded property (`MPCE_PROP_SEEDS`).

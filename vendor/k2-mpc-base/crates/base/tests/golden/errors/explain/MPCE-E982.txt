@@ -1,0 +1,21 @@
+MPCE-E982 outbound_frame_too_large (limits)
+exit:     2
+message:  the engine refused to send an update as one frame: it is over a limit
+next:     Nothing was sent or changed. The update is over frame_bytes or past a limit of the receiver's causal check (details.cause; for a causal limit, details.limit, details.value and details.max). Send it in parts: the kit's parts encoders cut it at run boundaries, each part within every limit.
+rule:     the MPCE seam (stable codes)
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E982",
+  "name": "outbound_frame_too_large",
+  "area": "limits",
+  "exit": 2,
+  "message": "the engine refused to send an update as one frame: it is over a limit",
+  "next": "Nothing was sent or changed. The update is over frame_bytes or past a limit of the receiver's causal check (details.cause; for a causal limit, details.limit, details.value and details.max). Send it in parts: the kit's parts encoders cut it at run boundaries, each part within every limit.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

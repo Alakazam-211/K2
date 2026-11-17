@@ -324,13 +324,25 @@ impl Session {
         if m.p.kind != ParticipantKind::Agent || m.watcher {
             return;
         }
-        let Some((vs, _)) = self.grid_slot() else {
+        let Some((focus, cells)) = self.cells_of_report(st, i, report) else {
             return;
         };
+        st.members[i].elem.cells_moved(focus, cells);
+    }
+
+    /// What a grid verb's report gives member `i` ([`Session::verb_cells`]): the focus on its
+    /// container and its cells there (`None` cells: none). `None` without a grid slot, or for a
+    /// container the grid doesn't number. Reads only: the change's view takes the same
+    /// ([`super::view_at::ViewAt::cells`]).
+    pub(super) fn cells_of_report(
+        &self,
+        st: &State,
+        i: usize,
+        report: CellsReport,
+    ) -> Option<(ElemFocus, Option<Cells>)> {
+        let (vs, _) = self.grid_slot()?;
         let container = report.container().clone();
-        let Some(g) = self.grid_numbers(st, &container) else {
-            return;
-        };
+        let g = self.grid_numbers(st, &container)?;
         let (max_rows, max_cols) = g.max();
         let cells = match report {
             CellsReport::Written { ranges, .. } => {
@@ -389,9 +401,7 @@ impl Session {
                 )),
             },
         };
-        st.members[i]
-            .elem
-            .cells_moved(ElemFocus::new(vs.containers, container), cells);
+        Some((ElemFocus::new(vs.containers, container), cells))
     }
 
     // ----- claims -----

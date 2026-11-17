@@ -1,0 +1,21 @@
+MPC-E727 output_unreadable (tier 0 and blobs)
+exit:     2
+message:  the file type's index refuses the verb's output
+next:     The file the verb would write can't be read back by the file type's own index. Nothing was written. This is a bug in the file type's pack: report it.
+rule:     the tier-0 verb path: the output check
+verbs:    a file type's own verbs on a blob doc (named by its pack)
+status:   live
+--- json
+{
+  "id": "MPC-E727",
+  "name": "output_unreadable",
+  "area": "tier 0 and blobs",
+  "exit": 2,
+  "message": "the file type's index refuses the verb's output",
+  "next": "The file the verb would write can't be read back by the file type's own index. Nothing was written. This is a bug in the file type's pack: report it.",
+  "rule": "the tier-0 verb path: the output check",
+  "verbs": ["@blob_verb"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

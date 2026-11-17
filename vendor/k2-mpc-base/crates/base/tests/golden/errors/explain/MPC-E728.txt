@@ -1,0 +1,21 @@
+MPC-E728 verb_too_large (tier 0 and blobs)
+exit:     2
+message:  {what} is {size}, over the limit of {limit}
+next:     The call is over one of the kit's bounds for a verb on this file (details.what and details.limit name it). Nothing was written. Narrow the call (fewer nodes at a time).
+rule:     the tier-0 verb path: the bounds
+verbs:    a file type's own verbs on a blob doc (named by its pack)
+status:   live
+--- json
+{
+  "id": "MPC-E728",
+  "name": "verb_too_large",
+  "area": "tier 0 and blobs",
+  "exit": 2,
+  "message": "{what} is {size}, over the limit of {limit}",
+  "next": "The call is over one of the kit's bounds for a verb on this file (details.what and details.limit name it). Nothing was written. Narrow the call (fewer nodes at a time).",
+  "rule": "the tier-0 verb path: the bounds",
+  "verbs": ["@blob_verb"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

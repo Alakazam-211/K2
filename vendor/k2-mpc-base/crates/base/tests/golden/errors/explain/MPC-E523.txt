@@ -1,0 +1,21 @@
+MPC-E523 purge_doc_open (store)
+exit:     6
+message:  doc {doc} is open in another live instance; a native doc is purged only while the purging instance alone holds it, so nothing was written
+next:     A purge is refused, with nothing written, while any live instance other than the purging one holds the doc open: that instance (another session's load of the doc, or a copy of its records) would still hold the purged content in memory. Unload the doc's other instances, then purge again.
+rule:     no purge of an open doc
+verbs:    purge
+status:   live
+--- json
+{
+  "id": "MPC-E523",
+  "name": "purge_doc_open",
+  "area": "store",
+  "exit": 6,
+  "message": "doc {doc} is open in another live instance; a native doc is purged only while the purging instance alone holds it, so nothing was written",
+  "next": "A purge is refused, with nothing written, while any live instance other than the purging one holds the doc open: that instance (another session's load of the doc, or a copy of its records) would still hold the purged content in memory. Unload the doc's other instances, then purge again.",
+  "rule": "no purge of an open doc",
+  "verbs": ["purge"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

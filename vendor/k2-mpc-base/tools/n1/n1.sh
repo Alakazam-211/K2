@@ -196,6 +196,22 @@
 #                                                refuses the two that set native. The last line
 #                                                is `N-1 FORMAT OK`.
 #
+# A file type's own verbs on a blob doc (`blob_verbs`, after v0.21.0):
+#
+#   tools/n1/n1.sh layout-verbs <previous rev> <dir>   no cargo: <dir>/old is the previous
+#                                                release's kit, <dir>/verbs the consumer
+#                                                (tools/n1/consumer-verbs)
+#   tools/n1/n1.sh node-verbs <dir>              on a build node, from the repo root: this
+#                                                build's `n1_verbs_producer` writes two blob
+#                                                docs, each with a version a verb made; the
+#                                                previous release reads the versions, writes one,
+#                                                is refused a rewrite naming `blob_verbs`
+#                                                (NewerData) and deletes a doc; this build's
+#                                                `n1_verbs_after` finds the deleted doc's rows
+#                                                swept at its open, reads the verb back and
+#                                                rewrites. The last line is `N-1 VERBS OK`.
+#
+#
 # The rows depend on the previous release: the node modes read each kit's crate version from
 # its manifest and hand it to the rows (K2MB_N1_READER, the build whose consumer ran on a store;
 # K2MB_N1_PREV, the previous release). Against a release that doesn't know a table (v0.14.0 and
@@ -228,7 +244,7 @@ tree_of() {
     git -C "$1" archive "$2" | tar -x -C "$3"
   fi
 }
-MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-pairing <tag> <dir> | node-pairing <dir> | layout-index <tag> <dir> | node-index <dir> | layout-demote <tag> <dir> | node-demote <dir> | layout-format <tag> <dir> | node-format <dir> | layout-opened <tag> <dir> | node-opened <dir>}
+MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-pairing <tag> <dir> | node-pairing <dir> | layout-index <tag> <dir> | node-index <dir> | layout-demote <tag> <dir> | node-demote <dir> | layout-format <tag> <dir> | node-format <dir> | layout-opened <tag> <dir> | node-opened <dir> | layout-verbs <rev> <dir> | node-verbs <dir>}
 case $MODE in
   layout)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
@@ -506,6 +522,28 @@ case $MODE in
     echo "== this build again"
     K2MB_N1_OUT="$OUT/opened" cargo test -p k2-mpc-base --test opened n1_opened_after -- --ignored --nocapture
     echo "N-1 OPENED OK"
+    ;;
+  layout-verbs)
+    TAG=${2:?previous release rev}; OUT=${3:?dir}
+    ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+    rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/verbs"
+    tree_of "$ROOT" "$TAG" "$OUT/old"
+    sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
+    rm "$OUT/old/Cargo.toml.bak"
+    cp -R "$ROOT/tools/n1/consumer-verbs/." "$OUT/verbs/"
+    cp "$OUT/old/Cargo.lock" "$OUT/verbs/Cargo.lock"
+    echo "laid out: $OUT (old = $TAG)"
+    ;;
+  node-verbs)
+    OUT=${2:?dir}
+    OUT=$(cd "$OUT" && pwd)
+    echo "== this build writes the verbs' versions"
+    K2MB_N1_OUT="$OUT/verbs" cargo test -p k2-mpc-base --test tier0_verbs n1_verbs_producer -- --ignored --nocapture
+    echo "== the previous release ($(kit_version "$OUT/old"))"
+    (cd "$OUT/verbs" && cargo run -q)
+    echo "== this build again"
+    K2MB_N1_OUT="$OUT/verbs" cargo test -p k2-mpc-base --test tier0_verbs n1_verbs_after -- --ignored --nocapture
+    echo "N-1 VERBS OK"
     ;;
   *) echo "n1.sh: unknown mode $MODE" >&2; exit 2 ;;
 esac

@@ -1,0 +1,15 @@
+[package]
+name = "mpce-reg"
+license = "MIT OR Apache-2.0"
+description = "Reference model of per-element registers: a grow-only set of one element's ops plus a pure read. Knows nothing of slot order (no dependency on mpce-order)."
+# Standalone on purpose (no workspace inheritance), as mpce-model: consumers copy crates/ by git subtree.
+edition = "2021"
+publish = false
+version = "0.1.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+# No dependencies. A layer check fails if this crate ever reaches mpce-order, directly or
+# transitively.
+[dependencies]

@@ -187,6 +187,39 @@ pub struct NodeChange {
     /// With [`NodeChangeKind::Props`]: `kind`, `visible`, `bounds`, `attrs.<name>`,
     /// `flags.<name>`, or `record` (the record changed in a way no field shows).
     pub props: Vec<String>,
+    /// Whether the key names the same thing across the outside saves the diff spans
+    /// ([`IndexDiff::saves`]): `None` when it crosses none, or none in doubt.
+    pub identity: Option<Identity>,
+}
+
+/// A diff row's key across an outside save ([`NodeChange::identity`]; `docs/SESSIONS.md`,
+/// "Across an outside save").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Identity {
+    /// The pack's judge, the node before the save against the node after it, doubts the key
+    /// names the same thing after save `save` (`judged`: `kind_changed` or `identity_doubt`).
+    Doubt {
+        save: VersionId,
+        judged: &'static str,
+    },
+    /// The index of `not_indexed` (the save, or the version before it) isn't there: the key
+    /// wasn't judged across that save.
+    Unchecked { not_indexed: VersionId },
+}
+
+/// One outside save a diff spans ([`IndexDiff::saves`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SaveCrossing {
+    /// The save's version.
+    pub version: VersionId,
+    /// What the pack says of its writer ([`crate::session::SavePairing`]'s word), or
+    /// `unchecked` when an index needed to ask is missing.
+    pub pairing: &'static str,
+    /// The keys present on both sides of the save, of those present before it; `None` when an
+    /// index is missing.
+    pub keys_kept: Option<(u32, u32)>,
 }
 
 /// [`crate::session::BlobSession::index_diff`]: every node that changed from `from` to `to`,
@@ -197,6 +230,9 @@ pub struct IndexDiff {
     pub from: VersionId,
     pub to: VersionId,
     pub changes: Vec<NodeChange>,
+    /// The outside saves in `(from, to]`, oldest first: what the pack says of each, and how many
+    /// keys each kept. Empty when the span holds none.
+    pub saves: Vec<SaveCrossing>,
 }
 
 /// Who last changed one node ([`IndexBlame`]).
@@ -214,6 +250,12 @@ pub struct NodeBlame {
     /// False when the walk stopped before finding where the node came from
     /// ([`IndexBlame::stopped_at`]): `version` is then the oldest one it could look at.
     pub settled: bool,
+    /// `version` is an outside save (another program's): the node was changed in it, or its
+    /// key renumbered by it (`ends_on: "outside_save"` in the JSON).
+    pub outside_save: bool,
+    /// The verb the kit ran to make `version`, when a pack's verb made it
+    /// ([`crate::store::BlobVersion::verb`]); `None` otherwise.
+    pub verb: Option<String>,
 }
 
 /// [`crate::session::BlobSession::index_blame`]: per node of a version, in outline order, the
@@ -706,6 +748,7 @@ pub(crate) fn diff(a: &IndexView, b: &IndexView) -> Vec<NodeChange> {
                 name_then: None,
                 changes: [NodeChangeKind::Added].into(),
                 props: Vec::new(),
+                identity: None,
             });
             continue;
         };
@@ -737,6 +780,7 @@ pub(crate) fn diff(a: &IndexView, b: &IndexView) -> Vec<NodeChange> {
                 name_then: Some(na.name.clone()),
                 changes,
                 props: p,
+                identity: None,
             });
         }
     }
@@ -749,6 +793,7 @@ pub(crate) fn diff(a: &IndexView, b: &IndexView) -> Vec<NodeChange> {
                 name_then: Some(na.name.clone()),
                 changes: [NodeChangeKind::Removed].into(),
                 props: Vec::new(),
+                identity: None,
             });
         }
     }
@@ -899,7 +944,7 @@ impl NodeRead {
 
 impl NodeChange {
     pub(crate) fn to_value(&self) -> Value {
-        Value::obj([
+        let mut v = Value::obj([
             ("key", Value::from(self.key.as_str())),
             ("name_now", Value::from(self.name_now.as_deref())),
             ("name_then", Value::from(self.name_then.as_deref())),
@@ -916,13 +961,28 @@ impl NodeChange {
                 "props",
                 Value::List(self.props.iter().map(|p| Value::from(p.as_str())).collect()),
             ),
-        ])
+        ]);
+        // only a row that crosses an outside save in doubt says so: the others are as before
+        if let (Some(i), Value::Obj(fields)) = (self.identity, &mut v) {
+            match i {
+                Identity::Doubt { save, judged } => {
+                    fields.push(("identity".into(), Value::from("doubt")));
+                    fields.push(("identity_save".into(), Value::from(save)));
+                    fields.push(("identity_judged".into(), Value::from(judged)));
+                }
+                Identity::Unchecked { not_indexed } => {
+                    fields.push(("identity".into(), Value::from("unchecked")));
+                    fields.push(("not_indexed".into(), Value::from(not_indexed)));
+                }
+            }
+        }
+        v
     }
 }
 
 impl NodeBlame {
     pub(crate) fn to_value(&self) -> Value {
-        Value::obj([
+        let mut v = Value::obj([
             ("key", Value::from(self.key.as_str())),
             ("version", Value::from(self.version)),
             ("author", Value::from(self.author.as_str())),
@@ -931,7 +991,12 @@ impl NodeBlame {
             ("via", Value::from(self.via.as_str())),
             ("on_behalf_of", Value::from(self.on_behalf_of.as_deref())),
             ("settled", Value::from(self.settled)),
-        ])
+            ("verb", Value::from(self.verb.as_deref())),
+        ]);
+        if let (true, Value::Obj(fields)) = (self.outside_save, &mut v) {
+            fields.push(("ends_on".into(), Value::from("outside_save")));
+        }
+        v
     }
 }
 
@@ -1023,13 +1088,30 @@ impl NodesRead {
 
 impl IndexDiff {
     pub(crate) fn frame(&self) -> Frame {
+        // the outside saves it spans, only when there are some: a diff across none is as before
+        let mut tail = Vec::new();
+        if !self.saves.is_empty() {
+            let saves = self.saves.iter().map(|c| {
+                Value::obj([
+                    ("version", Value::from(c.version)),
+                    ("pairing", Value::from(c.pairing)),
+                    (
+                        "keys_kept",
+                        c.keys_kept.map_or(Value::Null, |(kept, of)| {
+                            Value::obj([("kept", Value::from(kept)), ("of", Value::from(of))])
+                        }),
+                    ),
+                ])
+            });
+            tail.push(("saves", Value::List(saves.collect())));
+        }
         Frame {
             head: vec![
                 ("from", Value::from(self.from)),
                 ("to", Value::from(self.to)),
             ],
             items: "changes",
-            tail: Vec::new(),
+            tail,
         }
     }
 

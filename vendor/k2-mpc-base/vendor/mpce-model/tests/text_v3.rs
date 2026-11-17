@@ -1,6 +1,6 @@
 //! v0.3.0 API: versions (`version`, `text_at`, `list_at`, `blame_at`), restore forward
 //! (`restore_as`), branches (`fork_at`, `merge_from`), purge (`purge_as`, `find_content`); and
-//! seeded property tests for the kit's rules `hist.version_stable`, `hist.restore_forward`,
+//! seeded property tests for the rules `hist.version_stable`, `hist.restore_forward`,
 //! `hist.branch_merge`, `hist.merge_any_base`, `hist.blame_grain`, `erase.purge`,
 //! `erase.no_readmit` and `erase.versions`, with a byte scan for a purged secret and its
 //! planted negative (the `PurgeRule::KeepContent` mutant must be caught).
@@ -92,7 +92,7 @@ fn versions_reproduce_their_state() {
         assert_eq!(f.visible(), d.list_at(v).unwrap());
         assert_eq!(&f.version(), v);
     }
-    // blame at a version (E-HIST-4: per character)
+    // blame at a version (per character)
     assert!(d.blame_at(&v1).unwrap().iter().all(|(_, id)| id.agent == 101));
     let b2 = d.blame_at(&v2).unwrap();
     assert_eq!(b2.iter().map(|(c, _)| *c).collect::<String>(), "hello \nworld");

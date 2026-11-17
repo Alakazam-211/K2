@@ -1,0 +1,21 @@
+MPC-E525 cut_doc_open (store)
+exit:     6
+message:  doc {doc} is open in another live instance; a native doc is cut only while the cutting instance alone holds it, so nothing was cut
+next:     A cut replaces a native doc's engine records with a new generation, and another live instance of the doc (another session's load of it, or a copy of its records) still reads the one it replaces, so nothing was written. Unload the doc's other instances; its next idle tick or unload cuts it.
+rule:     no cut of an open doc
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E525",
+  "name": "cut_doc_open",
+  "area": "store",
+  "exit": 6,
+  "message": "doc {doc} is open in another live instance; a native doc is cut only while the cutting instance alone holds it, so nothing was cut",
+  "next": "A cut replaces a native doc's engine records with a new generation, and another live instance of the doc (another session's load of it, or a copy of its records) still reads the one it replaces, so nothing was written. Unload the doc's other instances; its next idle tick or unload cuts it.",
+  "rule": "no cut of an open doc",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

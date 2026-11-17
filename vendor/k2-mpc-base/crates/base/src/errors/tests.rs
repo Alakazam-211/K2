@@ -46,6 +46,21 @@ fn store_errors_with(x: &str) -> Vec<StoreError> {
             stored: "mpce".into(),
             stored_format: 1,
         },
+        S::NonceReused { doc: 3 },
+        S::PurgeDocOpen { doc: 3 },
+        S::CutPendingRecords { doc: 3, changes: 2 },
+        S::CutDocOpen { doc: 3 },
+        S::NativeFormatUnread {
+            stored: "mpce".into(),
+            found: 2,
+            oldest: 1,
+            newest: 1,
+        },
+        S::NativeSnapshotRefused {
+            doc: 3,
+            stored: "mpce".into(),
+            stored_format: 1,
+        },
         S::NewerData {
             table: "later_kit".into(),
         },
@@ -111,6 +126,8 @@ fn doc_errors_with(x: &str) -> Vec<DocError> {
         D::ReplicaLagging,
         D::VectorNeedsParts { entries: 10_000 },
         D::NeedsStateTransfer,
+        D::NativeOneReplica,
+        D::NativeNoYjs,
         D::Hunk(HunkError::Order { index: 1 }),
         D::Hunk(HunkError::Range { index: 1 }),
         D::Hunk(HunkError::Empty { index: 1 }),
@@ -189,6 +206,13 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
             stored: "mpce".into(),
             stored_format: 1,
         },
+        S::NativeBetaOff,
+        S::NativeTextCap {
+            limit: 4 << 20,
+            would_be: (4 << 20) + 4,
+        },
+        S::NativeNoTier0 { verb: "demote" },
+        S::NativeNoTier0 { verb: "promote" },
         S::BadParticipant(x.into()),
         S::BadPosition(x.into()),
         S::LinesUnknown { address: x.into() },
@@ -347,6 +371,50 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
             limit: 25_000,
             would_be: 25_001,
             from: crate::session::LimitSource::HostWide,
+        },
+        S::PackRefused(crate::session::PackRefusal {
+            code: "XYZ-E002",
+            message: x.into(),
+        }),
+        S::BaseUnrendered { base: 7 },
+        S::NeedsLease {
+            verb: "part set".into(),
+            ttl_ms: 300_000,
+        },
+        S::BadPlan { why: x.into() },
+        S::KeysReissued {
+            save: 3,
+            safe_from: 3,
+            to: 5,
+        },
+        S::BaseAcrossUnprovenSave {
+            save: 4,
+            base: 3,
+            head: 5,
+            addresses: vec!["@n:2".into()],
+        },
+        S::BaseMoved {
+            base: 3,
+            head: 5,
+            addresses: vec!["@n:2".into()],
+            conflicts: Vec::new(),
+        },
+        S::BaseWeakKey {
+            head: 5,
+            keys: vec!["r1.0".into()],
+        },
+        S::Strayed {
+            keys: vec!["@n:2".into()],
+        },
+        S::OutputUnreadable { why: x.into() },
+        S::VerbTooLarge {
+            what: "the version a whole-file verb reads",
+            size: 10,
+            limit: 5,
+        },
+        S::NotAsPreviewed {
+            expected: "sha256:00".into(),
+            actual: "sha256:11".into(),
         },
         S::FacetConflict(vec![crate::session::FacetConflict {
             root: "rows".into(),
@@ -561,6 +629,7 @@ fn entries_name_real_verbs() {
                     | "@run_tool"
                     | "@pack"
                     | "@index"
+                    | "@blob_verb"
                     | "(sync)"
                     | "(host)"
             ) || kit.iter().any(|r| r.get(v).is_some())
@@ -614,6 +683,218 @@ fn every_variant_maps_to_a_live_id_with_its_exit() {
     assert_eq!(
         UndoOutcome::HistoryLost.refusal().unwrap().exit(),
         UndoOutcome::HistoryLost.exit()
+    );
+}
+
+/// Every native-engine refusal exits as its standard-engine twin does, so the CLI exit class a
+/// host or an agent branches on never depends on the doc's engine: each native refusal is
+/// paired with the refusal the standard engine gives in the same situation, and both exits
+/// (the CLI's and the registry's) must match. A native refusal with no standard counterpart
+/// (the native sync wire's, the cut's) names the class it was ruled into instead. Every kit
+/// entry that is the native engine's (its name, or the reason it is reached, names the native
+/// engine) must be in the table, so a new native refusal can't land without its twin.
+/// `MPC_BETA_PLANT=native-exit-drift` (a native refusal's exit moved off its twin's) fails at
+/// the pair's assert.
+#[test]
+fn native_refusals_exit_as_their_standard_twins() {
+    use crate::session::Declined;
+    use SessionError as S;
+    use StoreError as St;
+    let doc = |d: DocError| S::Doc(d);
+    let malformed = || doc(DocError::Malformed("sync bytes this doc can't take".into()));
+    // (native refusal, its standard twin or the class it was ruled into, the situation)
+    let pairs: Vec<(SessionError, Result<SessionError, u8>, &str)> = vec![
+        (
+            doc(DocError::RootKindNotNative {
+                root: "rows".into(),
+                kind: Kind::MovableList,
+            }),
+            Ok(doc(DocError::Unsupported(Kind::Tree))),
+            "a root kind the doc's engine doesn't take",
+        ),
+        (
+            doc(DocError::ReplicaLagging),
+            Err(2),
+            "the native sync wire's own",
+        ),
+        (
+            doc(DocError::VectorNeedsParts { entries: 10_000 }),
+            Err(2),
+            "the native sync wire's own",
+        ),
+        (
+            doc(DocError::NeedsStateTransfer),
+            Err(2),
+            "the native sync wire's own",
+        ),
+        (
+            doc(DocError::NativeOneReplica),
+            Ok(malformed()),
+            "sync bytes the doc can't take",
+        ),
+        (
+            doc(DocError::NativeNoYjs),
+            Ok(malformed()),
+            "sync bytes the doc can't take",
+        ),
+        (
+            S::NativeBetaOff,
+            Err(2),
+            "a create the host's Beta switch refuses (ruled exit 2)",
+        ),
+        (
+            S::NativeEngineMissing {
+                stored: "mpce".into(),
+                stored_format: 1,
+            },
+            Ok(S::EngineMismatch {
+                stored: "loro-1.0".into(),
+                stored_format: 1,
+                engine: "yrs-0.28".into(),
+                engine_format: 2,
+            }),
+            "a doc this build's engine can't read",
+        ),
+        (
+            S::Store(St::NativeEngineMissing {
+                stored: "mpce".into(),
+                stored_format: 1,
+            }),
+            Ok(S::Store(St::ForeignEngine {
+                stored: "loro-1.0".into(),
+                stored_format: 1,
+            })),
+            "a doc this build's engine can't read, at the store",
+        ),
+        (
+            S::Store(St::NativeFormatUnread {
+                stored: "mpce".into(),
+                found: 2,
+                oldest: 1,
+                newest: 1,
+            }),
+            Ok(S::Store(St::Newer { found: 99 })),
+            "a stored format newer than this build reads",
+        ),
+        (
+            S::Store(St::NativeSnapshotRefused {
+                doc: 3,
+                stored: "mpce".into(),
+                stored_format: 1,
+            }),
+            Ok(S::Store(St::ForeignEngine {
+                stored: "loro-1.0".into(),
+                stored_format: 1,
+            })),
+            "a store call the doc's engine doesn't take",
+        ),
+        (
+            S::Store(St::NonceReused { doc: 3 }),
+            Ok(S::Store(St::Corrupt("log entry"))),
+            "store damage",
+        ),
+        (
+            S::Store(St::PurgeDocOpen { doc: 3 }),
+            Err(6),
+            "the native purge's own",
+        ),
+        (
+            S::Store(St::CutPendingRecords { doc: 3, changes: 2 }),
+            Err(6),
+            "the native cut's own",
+        ),
+        (
+            S::Store(St::CutDocOpen { doc: 3 }),
+            Err(6),
+            "the native cut's own",
+        ),
+        (
+            S::NativeTextCap {
+                limit: 4 << 20,
+                would_be: (4 << 20) + 4,
+            },
+            Ok(S::AtLimit {
+                what: "cells",
+                limit: 10,
+                would_be: 11,
+            }),
+            "a change past a doc's size limit",
+        ),
+        (
+            S::NativeNoTier0 { verb: "demote" },
+            Ok(S::Declined(Declined {
+                code: "not_text",
+                message: "a structured doc isn't plain text".into(),
+            })),
+            "a doc that can't be demoted to tier 0",
+        ),
+        (
+            S::NativeNoTier0 { verb: "promote" },
+            Ok(S::PackMismatch {
+                stored: "markdown".into(),
+                pack: "blob".into(),
+            }),
+            "a promotion asked at a key that holds no tier-0 doc",
+        ),
+    ];
+    let mut covered: BTreeSet<&str> = BTreeSet::new();
+    let mut twins = 0;
+    for (native, twin, why) in &pairs {
+        let r = native.report();
+        let exit = session_exit(native);
+        assert_eq!(
+            r.exit(),
+            exit,
+            "row: {} ({why}): the registry's exit",
+            r.id()
+        );
+        match twin {
+            Ok(t) => {
+                assert_eq!(
+                    exit,
+                    session_exit(t),
+                    "row: {} exits as its standard twin {} ({why})",
+                    r.id(),
+                    t.report().id()
+                );
+                assert_eq!(
+                    t.report().exit(),
+                    session_exit(t),
+                    "control: the twin's own"
+                );
+                twins += 1;
+            }
+            Err(class) => assert_eq!(
+                exit,
+                *class,
+                "row: {} ({why}) exits in its ruled class",
+                r.id()
+            ),
+        }
+        covered.insert(r.id());
+    }
+    let native: Vec<&str> = KIT
+        .iter()
+        .filter(|e| {
+            e.name.contains("native")
+                || matches!(e.reach, Reach::Indirect(why) if why.contains("native"))
+        })
+        .map(|e| e.id)
+        .collect();
+    assert!(
+        native.len() >= 12,
+        "control: the native entries found: {native:?}"
+    );
+    for id in &native {
+        assert!(
+            covered.contains(id),
+            "row: native refusal {id} has no standard twin or ruled class in the table"
+        );
+    }
+    println!(
+        "NATIVE-EXITS pairs={} twins={twins} native_entries={}",
+        pairs.len(),
+        native.len()
     );
 }
 
@@ -861,6 +1142,8 @@ fn kit_verb_names() -> BTreeSet<&'static str> {
         .iter()
         .chain(crate::parity::ANNOTATION_VERBS)
         .map(|v| v.name)
+        // the kit's own names for an index pack's reads (`outline`, `node`) and `claim`
+        .chain(crate::parity::INDEX_KIT_WORDS.iter().copied())
         .chain(META_VERBS.iter().map(|(n, _)| *n))
         .chain(crate::table::verbs::VERBS.iter().map(|v| v.name()))
         .collect()

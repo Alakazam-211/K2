@@ -1,0 +1,21 @@
+MPC-E729 not_as_previewed (tier 0 and blobs)
+exit:     1
+message:  the bytes this call would store are not the ones previewed (expected {expected}, now {actual})
+next:     The call carried the digest its dry run showed (--expect), and the bytes it would store now differ: the file changed since, or the call did. Nothing was written. Run the dry run again, show it, and use its digest.
+rule:     the tier-0 verb path: the dry-run contract
+verbs:    a file type's own verbs on a blob doc (named by its pack)
+status:   live
+--- json
+{
+  "id": "MPC-E729",
+  "name": "not_as_previewed",
+  "area": "tier 0 and blobs",
+  "exit": 1,
+  "message": "the bytes this call would store are not the ones previewed (expected {expected}, now {actual})",
+  "next": "The call carried the digest its dry run showed (--expect), and the bytes it would store now differ: the file changed since, or the call did. Nothing was written. Run the dry run again, show it, and use its digest.",
+  "rule": "the tier-0 verb path: the dry-run contract",
+  "verbs": ["@blob_verb"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

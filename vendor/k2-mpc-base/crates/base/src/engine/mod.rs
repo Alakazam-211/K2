@@ -41,8 +41,8 @@ pub(crate) const ENGINE_FAMILY: &str = "yrs";
 
 /// A native doc's stamp name: the native engine's family alone, with no version, so a
 /// re-vendor of the engine reads the docs the previous one wrote. It is the name the engine
-/// stamps in its own records (its codec's engine name; a row holds the two equal). A
-/// doc stamped so is read only by a build with the native engine; a build without it knows the
+/// stamps in its own records (its codec's engine name; a row holds the two equal). A doc
+/// stamped so is read only by a build with the native engine; a build without it knows the
 /// stamp (every build does) and refuses that doc alone with `MPC-E169`, while the store and its
 /// other docs work.
 pub(crate) const NATIVE_ENGINE_NAME: &str = "mpce";
@@ -167,11 +167,18 @@ pub(crate) struct Made {
 pub(crate) const NO_ENGINE: &str = "none";
 
 /// Whether this build may change the stored rows of a doc stamped `engine` / `format`
-/// (delete, purge; v0.10.1): a tier-0 doc ([`NO_ENGINE`]: no engine state) or one this
-/// build's engine reads ([`reads_stamp`]). A doc another engine wrote may hold rows in tables
-/// this build doesn't know, so erasing only the rows it knows would leave the rest behind.
+/// (delete, purge; v0.10.1): a tier-0 doc ([`NO_ENGINE`]: no engine state), one this
+/// build's engine reads ([`reads_stamp`]), or, with the native engine, a native doc at a
+/// store format it reads ([`NATIVE_FORMATS_READ`]): its engine store is in tables this build
+/// knows. A doc another engine wrote may hold rows in tables this build doesn't know, so
+/// erasing only the rows it knows would leave the rest behind.
 pub(crate) fn owns_stamp(engine: &str, format: u32) -> bool {
-    engine == NO_ENGINE || reads_stamp(engine, format)
+    engine == NO_ENGINE || reads_stamp(engine, format) || owns_native(engine, format)
+}
+
+/// Without the native engine, no native doc is this build's to change.
+fn owns_native(_: &str, _: u32) -> bool {
+    false
 }
 
 /// One run of a text root's live text inserted by one client with consecutive clocks
@@ -218,6 +225,15 @@ pub(crate) trait EngineDoc: Sized + Send {
     /// Text root `root`'s current text. Fallible: a root the doc doesn't hold is an
     /// error ([`DocError::Malformed`]).
     fn text(&self, root: &str) -> Result<String, DocError>;
+    /// Check `hunks` against text root `root`'s current text, by
+    /// [`crate::text::diff::validate`]'s rules and with its errors. By default on the whole
+    /// text ([`EngineDoc::text`]); an engine that reads a text's length and a range of it
+    /// checks each hunk's ends alone, so an edit's check costs its hunks, not the text.
+    fn check_hunks(&self, root: &str, hunks: &[crate::text::diff::Hunk]) -> Result<(), DocError> {
+        let text = self.text(root)?;
+        crate::text::diff::validate(&text, hunks)?;
+        Ok(())
+    }
     fn state_vector(&self) -> Vec<u8>;
     /// [`EngineDoc::state_vector`], typed: an engine whose vector can be past one frame
     /// refuses there ([`DocError::VectorNeedsParts`]) instead. Yrs's never is.
@@ -318,6 +334,10 @@ impl EngineDoc for Engine {
 
     fn text(&self, root: &str) -> Result<String, DocError> {
         on_engine!(self, d => d.text(root))
+    }
+
+    fn check_hunks(&self, root: &str, hunks: &[crate::text::diff::Hunk]) -> Result<(), DocError> {
+        on_engine!(self, d => d.check_hunks(root, hunks))
     }
 
     fn state_vector(&self) -> Vec<u8> {
@@ -659,14 +679,15 @@ mod tests {
     }
 
     /// Delete and purge (v0.10.1): a tier-0 doc and this engine's are this build's to change;
-    /// another engine's, or this engine at another format, are not.
+    /// another engine's, or this engine at another format, are not. A native doc is this
+    /// build's with the native engine, at a store format it reads, and never without it.
     #[test]
     fn this_build_owns_tier0_docs_and_its_engines_only() {
         assert!(owns_stamp(NO_ENGINE, 0));
         assert!(owns_stamp(ENGINE_NAME, ENGINE_FORMAT));
         assert!(owns_stamp("", 0));
-        assert!(!owns_stamp("mpce-0.1", 1));
         assert!(!owns_stamp("loro-1.0", ENGINE_FORMAT));
         assert!(!owns_stamp(ENGINE_NAME, ENGINE_FORMAT + 1));
+        assert!(!owns_stamp("mpce-0.1", 1));
     }
 }

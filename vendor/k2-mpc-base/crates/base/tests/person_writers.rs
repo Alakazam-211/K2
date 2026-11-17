@@ -364,8 +364,15 @@ fn yrs_log_replay(store: &DocStore, id: DocId, expect: &str) {
 /// The row's writer schedule (the import, then each edit as its writer, with the hunks the
 /// session applied) made on a fresh doc of `engine`, and each change delivered to a second one
 /// through the client admission as its writer's (Yrs: no skip, no foreign content; native:
-/// contiguity and E195): both end at the session's text.
+/// contiguity and E195): both end at the session's text. A native doc keeps one replica (the
+/// Beta: its public sync calls refuse, `MPC-E166`), so the native column delivers through the
+/// conformance hook that runs the same admission code ([`replica::deliver_from`]).
 fn schedule_replay(engine: &str, new: impl Fn() -> Doc, trace: &Trace, expect: &str) {
+    use k2_mpc_base::conformance::replica;
+    let deliver = |b: &mut Doc, u: &[u8], client: ClientId| match engine {
+        "native" => replica::deliver_from(b, u, client),
+        _ => b.apply_client_update(u, client),
+    };
     let (mut a, mut b) = (new(), new());
     const IMPORT: ClientId = 3;
     let import = vec![Edit::Text {
@@ -380,7 +387,7 @@ fn schedule_replay(engine: &str, new: impl Fn() -> Doc, trace: &Trace, expect: &
         .edit_as(IMPORT, &import)
         .unwrap()
         .expect("the import changes");
-    b.apply_client_update(&u, IMPORT).unwrap();
+    deliver(&mut b, &u, IMPORT).unwrap();
     for (n, (client, hunks)) in trace.0.iter().enumerate() {
         let e = vec![Edit::Text {
             root: ROOT.into(),
@@ -390,7 +397,7 @@ fn schedule_replay(engine: &str, new: impl Fn() -> Doc, trace: &Trace, expect: &
             .edit_as(*client, &e)
             .unwrap_or_else(|err| panic!("{engine}: edit {n} as {client}: {err}"))
             .expect("a change");
-        b.apply_client_update(&u, *client)
+        deliver(&mut b, &u, *client)
             .unwrap_or_else(|err| panic!("{engine}: admission of edit {n} as {client}: {err}"));
     }
     assert_eq!(a.text(ROOT).unwrap(), expect, "{engine}: the doc's text");

@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-base"
-version = "0.21.0"
+version = "0.22.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -48,6 +48,11 @@ redb = "2"
 # The meta engine for leftmost-first search and captures, the lazy DFA for POSIX
 # leftmost-longest match ends.
 regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "perf", "unicode", "meta", "hybrid", "nfa-pikevm", "nfa-backtrack", "dfa-onepass"] }
+
+# The allocator's call that returns freed pages to the OS after a cut (`src/memory.rs`):
+# glibc only. MIT OR Apache-2.0; already in the lock through the store library.
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 k2-mpc-base = { path = ".", features = ["untrusted-wire", "differential", "test-support", "conformance"] }

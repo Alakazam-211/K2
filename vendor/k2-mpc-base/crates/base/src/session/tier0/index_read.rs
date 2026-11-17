@@ -8,14 +8,34 @@
 
 use super::struct_index::Target;
 use super::*;
+use crate::index::read::NodeChangeKind;
 use crate::index::read::{self, ReadRefusal, Walk};
 use crate::index::{
-    IndexBlame, IndexDiff, IndexView, ListQuery, NodeBlame, NodeKey, NodeLabel, NodesRead, Outline,
-    BLAME_WALK_MAX,
+    Identity, IndexBlame, IndexDiff, IndexView, ListQuery, NodeBlame, NodeKey, NodeLabel,
+    NodesRead, Outline, SaveCrossing, BLAME_WALK_MAX,
 };
 
 /// The most addresses one node read takes (`show`, `claim --node`).
 pub const INDEX_ADDRS_MAX: usize = 256;
+
+/// An outside save a read crosses (`docs/SESSIONS.md`, "Across an outside save"): the save,
+/// the indexes of the version before it and of the save (when both are there), and what the
+/// pack says of its writer.
+pub(super) struct Crossing {
+    pub(super) save: VersionId,
+    /// (before, after).
+    pub(super) views: Option<(IndexView, IndexView)>,
+    /// The version whose index is missing (the save, or the version before it).
+    pub(super) missing: Option<VersionId>,
+    /// `None`: not asked (an index is missing).
+    pub(super) pairing: Option<SavePairing>,
+}
+
+/// Whether `v` is an outside save: another program's save taken in, or kept as a conflict
+/// (never the kit's write, a verb's, a restore or a merge).
+pub(super) fn is_outside_save(v: &BlobVersion) -> bool {
+    v.reason == BlobReason::External
+}
 
 impl BlobSession {
     /// Admit `conn` for a structure read of `versions` (`None`: the current one): read, and
@@ -137,11 +157,147 @@ impl BlobSession {
         let (spec, t) = self.admit_index(conn, &[Some(from), Some(to)], true, Action::History)?;
         let a = self.load_view(&t[0], &spec)?;
         let b = self.load_view(&t[1], &spec)?;
+        let mut changes = read::diff(&a, &b);
+        let versions = t[1].store.blob_versions(self.doc_id)?;
+        let crossings = self.crossings(&spec, &t[1].store, &t[1].space, &versions, from, to)?;
+        // a save whose writer reissues keys: nothing pairs across it
+        let reissued = crossings
+            .iter()
+            .rev()
+            .find(|c| c.pairing == Some(SavePairing::Reissues));
+        if let Some(c) = reissued.filter(|_| {
+            !plant_on!(
+                crate::differential::tier0_verb_mutant()
+                    == Some(crate::differential::Tier0VerbMutant::ReissuesAnswered)
+            )
+        }) {
+            return Err(SessionError::KeysReissued {
+                save: c.save,
+                safe_from: c.save,
+                to,
+            });
+        }
+        for ch in &mut changes {
+            if ch.changes.contains(&NodeChangeKind::Added)
+                || ch.changes.contains(&NodeChangeKind::Removed)
+            {
+                continue;
+            }
+            for c in &crossings {
+                match (&c.views, c.pairing) {
+                    (_, Some(SavePairing::Proven)) => {}
+                    (Some((before, after)), _) => {
+                        if let (Some(was), Some(now)) =
+                            (node_of(before, &ch.key), node_of(after, &ch.key))
+                        {
+                            if let Some(judged) = self.judged_across(&was.fingerprint, now) {
+                                ch.identity = Some(Identity::Doubt {
+                                    save: c.save,
+                                    judged,
+                                });
+                                break;
+                            }
+                        }
+                    }
+                    (None, _) => {
+                        if ch.identity.is_none() {
+                            ch.identity = c.missing.map(|v| Identity::Unchecked { not_indexed: v });
+                        }
+                    }
+                }
+            }
+        }
+        let uncounted = plant_on!(
+            crate::differential::tier0_verb_mutant()
+                == Some(crate::differential::Tier0VerbMutant::KeysKeptUncounted)
+        );
+        let saves = crossings
+            .iter()
+            .map(|c| SaveCrossing {
+                version: c.save,
+                pairing: c.pairing.map_or("unchecked", SavePairing::name),
+                keys_kept: c
+                    .views
+                    .as_ref()
+                    .filter(|_| !uncounted)
+                    .map(|(before, after)| keys_kept(before, after)),
+            })
+            .collect();
         Ok(IndexDiff {
             from,
             to,
-            changes: read::diff(&a, &b),
+            changes,
+            saves,
         })
+    }
+
+    /// The outside saves in `(from, to]` of `versions` (the doc's, oldest first), each with
+    /// the indexes of the version before it and of the save, read from the stored rows, and
+    /// what the pack says of its writer ([`BlobPack::save_pairing`]). An index that isn't
+    /// there leaves the save unchecked.
+    pub(super) fn crossings(
+        &self,
+        spec: &IndexSpec,
+        store: &Arc<DocStore>,
+        space: &str,
+        versions: &[(VersionId, BlobVersion)],
+        from: VersionId,
+        to: VersionId,
+    ) -> Result<Vec<Crossing>> {
+        let load = |v: VersionId, ver: &BlobVersion| -> Result<Option<IndexView>> {
+            let t = Target {
+                store: store.clone(),
+                space: space.to_owned(),
+                version: v,
+                ver: ver.clone(),
+            };
+            match self.load_view(&t, spec) {
+                Ok(view) => Ok(Some(view)),
+                // the store failing is the read failing; any other miss leaves it unchecked
+                Err(e @ SessionError::Store(_)) => Err(e),
+                Err(_) => Ok(None),
+            }
+        };
+        let mut out = Vec::new();
+        for (k, (vid, ver)) in versions.iter().enumerate() {
+            if k == 0 || *vid <= from || *vid > to || !is_outside_save(ver) {
+                continue;
+            }
+            let (pvid, pver) = &versions[k - 1];
+            let before = load(*pvid, pver)?;
+            let after = load(*vid, ver)?;
+            let missing = match (&before, &after) {
+                (None, _) => Some(*pvid),
+                (_, None) => Some(*vid),
+                _ => None,
+            };
+            let (views, pairing) = match (before, after) {
+                (Some(before), Some(after)) => {
+                    let pairing = self.pack.save_pairing(&SaveFacts {
+                        version: *vid,
+                        kept_conflict: ver.conflict_copy.is_some(),
+                        before: &before,
+                        after: &after,
+                    });
+                    (Some((before, after)), Some(pairing))
+                }
+                _ => (None, None),
+            };
+            out.push(Crossing {
+                save: *vid,
+                views,
+                missing,
+                pairing,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The pack's judgment of a key across an outside save ([`BlobPack::judge_across_save`]):
+    /// `was` the node just before the save, `now` the node in it. `kind_changed` or
+    /// `identity_doubt` when in doubt.
+    pub(super) fn judged_across(&self, was: &Fingerprint, now: &IndexNode) -> Option<&'static str> {
+        judged_across(&*self.pack, was, now)
     }
 
     /// **Blame by node** (on the structure): for every node of version `version` (`None`:
@@ -227,6 +383,14 @@ impl BlobSession {
                 Some(b) => (*b).clone(),
                 None => t.ver.clone(),
             };
+            let settled = settled_all || !open.contains(&i);
+            // a row that ends on an outside save says so (changed in it, or renumbered by it)
+            let outside_save = settled
+                && is_outside_save(&b)
+                && !plant_on!(
+                    crate::differential::tier0_verb_mutant()
+                        == Some(crate::differential::Tier0VerbMutant::BlameLabelMissing)
+                );
             rows.push(NodeBlame {
                 key: view.nodes[i].key.clone(),
                 version: v,
@@ -235,7 +399,9 @@ impl BlobSession {
                 at_ms: b.at_ms,
                 via: b.via,
                 on_behalf_of: b.on_behalf_of,
-                settled: settled_all || !open.contains(&i),
+                settled,
+                verb: b.verb,
+                outside_save,
             });
         }
         Ok(IndexBlame {
@@ -305,5 +471,43 @@ fn read_err(e: ReadRefusal) -> SessionError {
     match e {
         ReadRefusal::Parse(e) => SessionError::BadPosition(e.to_string()),
         ReadRefusal::Report(r) => SessionError::IndexRead(r),
+    }
+}
+
+/// The keys present on both sides of a save, of those present before it.
+fn keys_kept(before: &IndexView, after: &IndexView) -> (u32, u32) {
+    let now: std::collections::HashSet<&str> = after.nodes.iter().map(|n| n.key.as_str()).collect();
+    let kept = before
+        .nodes
+        .iter()
+        .filter(|n| now.contains(n.key.as_str()))
+        .count();
+    (
+        u32::try_from(kept).unwrap_or(u32::MAX),
+        u32::try_from(before.nodes.len()).unwrap_or(u32::MAX),
+    )
+}
+
+/// The node holding `key` in `v`, if any.
+pub(super) fn node_of<'a>(v: &'a IndexView, key: &NodeKey) -> Option<&'a IndexNode> {
+    v.nodes.iter().find(|n| &n.key == key)
+}
+
+/// [`BlobPack::judge_across_save`] as a word: `kind_changed` or `identity_doubt` when in doubt.
+pub(super) fn judged_across(
+    pack: &dyn BlobPack,
+    was: &Fingerprint,
+    now: &IndexNode,
+) -> Option<&'static str> {
+    if plant_on!(
+        crate::differential::tier0_verb_mutant()
+            == Some(crate::differential::Tier0VerbMutant::ReuseReadsAttached)
+    ) {
+        return None;
+    }
+    match pack.judge_across_save(was, None, now) {
+        AnchorJudgment::KindChanged => Some("kind_changed"),
+        AnchorJudgment::IdentityDoubt => Some("identity_doubt"),
+        _ => None,
     }
 }

@@ -29,6 +29,7 @@ use super::presence::{self, Presence};
 use super::ratelimit::Bucket;
 
 mod annot;
+mod base;
 mod index_page;
 mod index_read;
 mod index_tool;
@@ -36,6 +37,7 @@ mod node_claims;
 mod opened;
 mod promote;
 mod struct_index;
+mod verbs;
 use crate::anchor::{AnchorJudgment, AnchorRules, CandidateWhy};
 use crate::blob::{
     BlobError, BlobId, BlobReader, BlobStore, CheapSet, HintSource, LockWait, VersionPut,
@@ -49,6 +51,10 @@ pub use index_read::INDEX_ADDRS_MAX;
 pub use node_claims::NODE_CLAIM_ROOT;
 pub use promote::{Promoted, Promotion};
 pub use struct_index::{IndexInput, IndexJob};
+pub use verbs::{
+    BlobPlan, BlobVerb, BlobVerbCtx, BlobVerbFn, BlobVerbKind, BlobVerbOut, BlobVerbRefused,
+    MergeBound, Span, VerbInput, VerbMerge,
+};
 
 /// The participant a pack's merge of a conflicting save is attributed to (tier 0.5).
 pub const MERGE_PID: &str = "kit:merge";
@@ -233,8 +239,9 @@ pub trait BlobPack: Send + Sync {
 
     /// Whether an agent may `write` this type. Default [`AgentWrites::Allowed`]. A pack that
     /// never takes agent-written bytes returns [`AgentWrites::Refused`]: `write` and
-    /// `expect_save` by a [`ParticipantKind::Agent`] are then refused (`MPC-E715`); a restore
-    /// makes no new bytes and stays allowed.
+    /// `expect_save` by a [`ParticipantKind::Agent`] are then refused (`MPC-E715`), its verbs
+    /// too; [`AgentWrites::VerbsOnly`] refuses an agent's `write` and `expect_save` the same way
+    /// and admits its verbs. A restore makes no new bytes and stays allowed.
     fn agent_writes(&self) -> AgentWrites {
         AgentWrites::Allowed
     }
@@ -262,6 +269,116 @@ pub trait BlobPack: Send + Sync {
     fn chunk_hints_up_to(&self) -> u64 {
         0
     }
+
+    /// **The file type's own verbs** (`docs/SESSIONS.md`, "Verbs on a blob doc"): each a pure
+    /// function from a version's bytes and its arguments to a plan, the byte ranges to replace
+    /// ([`BlobPlan`]); the kit applies the plan, checks the output with the pack's own index,
+    /// and records one version. [`BlobSession::run_tool`] runs them;
+    /// [`crate::parity::Registry::for_blob_pack`] lists them and checks them. Default: none.
+    fn verbs(&self) -> &'static [BlobVerb] {
+        &[]
+    }
+
+    /// **Whether an outside save keeps this file type's node keys** (`docs/SESSIONS.md`, "Across
+    /// an outside save"): asked of each version another program saved (an outside save taken
+    /// in, or one kept as a conflict) when a structure read crosses it, with the version's index
+    /// and the index of the version before it ([`SaveFacts`]). [`SavePairing::Proven`]: the
+    /// kit answers diffs and anchors across it plainly; [`SavePairing::Reissues`]: a diff
+    /// across it is refused (`MPC-E722`) and an anchor across it is never attached;
+    /// [`SavePairing::Unknown`]: the kit judges each key it pairs across the save, the node
+    /// before against the node after ([`BlobPack::judge_across_save`]). Kit writes, verbs and
+    /// merges aren't asked: the kit made them. Bounded, no I/O. Default: `Unknown`.
+    fn save_pairing(&self, facts: &SaveFacts<'_>) -> SavePairing {
+        let _ = facts;
+        SavePairing::Unknown
+    }
+
+    /// Whether `now`, the node holding a key in an outside save, is the node `was` (the node
+    /// holding it in the version just before the save) describes ([`BlobPack::save_pairing`]
+    /// `Unknown`). Default: this pack's [`BlobPack::judge_anchor`], then, where it finds the same
+    /// node, the kit's tighter rule across a save
+    /// ([`crate::anchor::judge_across_save_by_default`]: renamed and either its content changed
+    /// or it moved past its diagonal). A pack with a judge of its own that should stand alone
+    /// across a save returns its own here. Bounded, no I/O.
+    fn judge_across_save(
+        &self,
+        was: &Fingerprint,
+        hint: Option<&str>,
+        now: &IndexNode,
+    ) -> AnchorJudgment {
+        match self.judge_anchor(was, hint, now) {
+            AnchorJudgment::Same | AnchorJudgment::HintOff => {
+                crate::anchor::judge_across_save_by_default(was, now)
+            }
+            other => other,
+        }
+    }
+
+    /// **How far a hold on a node of `kind` reaches** (`docs/SESSIONS.md`, "Claims on nodes"):
+    /// under [`crate::session::ClaimPolicy::Respect`] an agent's verb that changes a node
+    /// inside the reach of a node someone else holds is refused (`MPC-E301`), the reach read at
+    /// the version the verb runs on. Bounded, no I/O. Default [`HoldReach::Node`].
+    fn hold_reach(&self, kind: &str) -> HoldReach {
+        let _ = kind;
+        HoldReach::Node
+    }
+
+    /// The pack's own refusals, by id (`<PACK>-Ennn`, the index's pack name upper-cased), as
+    /// [`super::Pack::errors`]: what its verbs return as [`BlobVerbRefused::pack`]. Default:
+    /// none.
+    fn errors(&self) -> &'static [crate::errors::ErrorEntry] {
+        &[]
+    }
+}
+
+/// How far a hold (a claim on nodes) on a node of one kind reaches ([`BlobPack::hold_reach`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HoldReach {
+    /// The node itself.
+    Node,
+    /// The node and everything under it (a block: its definition).
+    Subtree,
+    /// The node and every node whose attribute `attr` is the node's key (a layer: each entity
+    /// on it), at the version a verb runs on, so members added after the hold are covered.
+    Members(&'static str),
+}
+
+/// Whether an outside save keeps a file type's node keys ([`BlobPack::save_pairing`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SavePairing {
+    /// The writer keeps every key's meaning: answers across the save are plain.
+    Proven,
+    /// Not known: each key paired across the save is judged, node before against node after.
+    Unknown,
+    /// The writer reissues keys (a key may name another thing after the save): diffs across it
+    /// are refused, anchors across it are never attached.
+    Reissues,
+}
+
+impl SavePairing {
+    /// Its word: `proven`, `unknown`, `reissues`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            SavePairing::Proven => "proven",
+            SavePairing::Unknown => "unknown",
+            SavePairing::Reissues => "reissues",
+        }
+    }
+}
+
+/// What [`BlobPack::save_pairing`] judges an outside save by: the save's version and its index
+/// (`after`, its root attributes in `after.attrs`), and the index of the version before it
+/// (`before`), both read from the stored rows.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct SaveFacts<'a> {
+    pub version: VersionId,
+    /// The save was kept as a conflict (the version it replaced went to a conflict copy).
+    pub kept_conflict: bool,
+    pub before: &'a crate::index::IndexView,
+    pub after: &'a crate::index::IndexView,
 }
 
 /// A tier-0 pack's cut hints ([`BlobPack::chunk_hints`]), as the blob store takes them with a
@@ -284,8 +401,13 @@ impl HintSource for PackHints<'_> {
 pub enum AgentWrites {
     /// Agents write as anyone with edit.
     Allowed,
-    /// Agents can't write this type: they propose (a new file, a comment).
+    /// Agents can't write this type: they propose (a new file, a comment). Its verbs refuse
+    /// them too.
     Refused,
+    /// Agents change this type only through its verbs ([`BlobPack::verbs`]), which the kit
+    /// checks: an agent's whole-file `write` and `expect_save` are refused (`MPC-E715`); its
+    /// verbs run as anyone's.
+    VerbsOnly,
 }
 
 /// A blob pack's anchor rules ([`BlobPack::judge_anchor`], [`BlobPack::anchor_candidate`]).
@@ -654,6 +776,11 @@ pub struct BlobLogEntry {
     pub approval: Option<ApprovalState>,
     /// The host-given turn of the call that set it ([`BlobVersion::turn`]).
     pub turn: Option<crate::turn::Turn>,
+    /// The verb the kit ran to make it ([`BlobVersion::verb`]): `None` for every version no
+    /// verb made.
+    pub verb: Option<String>,
+    /// A batch's calls ([`BlobVersion::calls`]); empty otherwise.
+    pub calls: Vec<String>,
 }
 
 /// Returned by [`BlobSession::status`]. Metadata only.
@@ -674,6 +801,10 @@ pub struct BlobStatus {
     /// Where the current version's structure index stands ([`BlobSession::index_status`]);
     /// `None` for a type with no index ([`BlobPack::index_spec`]).
     pub index: Option<crate::index::IndexStatus>,
+    /// The merge bound against the current version ([`MergeBound`]): for a type whose pack can
+    /// merge an outside save ([`BlobPack::can_merge`]), whether the file is small enough for
+    /// it ([`Config::blob_merge_max_bytes`]); `None` for a type that can't merge.
+    pub merge: Option<MergeBound>,
 }
 
 /// A conflict copy the kit wrote and recorded ([`BlobStatus::conflict_copies`]).
@@ -933,6 +1064,8 @@ pub(super) fn blob_log(
                 conflict_copy,
                 approval: approvals.get(&id).copied(),
                 turn: v.turn,
+                verb: v.verb,
+                calls: v.calls,
             }
         })
         .collect())
@@ -1250,10 +1383,32 @@ impl BlobSession {
 
     /// [`BlobPack::agent_writes`]: an agent can't write a type that refuses it. Checked once
     /// edit rights are known: an agent without them is told that first.
+    /// An agent's whole-file write (`write`, `expect_save`): refused under
+    /// [`AgentWrites::Refused`] and [`AgentWrites::VerbsOnly`] (`MPC-E715`).
     fn check_agent_write(&self, st: &BState, i: usize) -> Result<()> {
         if st.members[i].p.kind == ParticipantKind::Agent
-            && self.pack.agent_writes() == AgentWrites::Refused
+            && matches!(
+                self.pack.agent_writes(),
+                AgentWrites::Refused | AgentWrites::VerbsOnly
+            )
         {
+            return Err(SessionError::AgentWriteRefused);
+        }
+        Ok(())
+    }
+
+    /// An agent's verb: refused under [`AgentWrites::Refused`] only (`MPC-E715`); a
+    /// [`AgentWrites::VerbsOnly`] pack admits it (the planted fault: refused there too).
+    fn check_agent_verb(&self, st: &BState, i: usize) -> Result<()> {
+        let refused = match self.pack.agent_writes() {
+            AgentWrites::Refused => true,
+            AgentWrites::VerbsOnly => plant_on!(
+                crate::differential::tier0_verb_mutant()
+                    == Some(crate::differential::Tier0VerbMutant::VerbsOnlyCheckInVerbPath)
+            ),
+            _ => false,
+        };
+        if st.members[i].p.kind == ParticipantKind::Agent && refused {
             return Err(SessionError::AgentWriteRefused);
         }
         Ok(())
@@ -1913,6 +2068,7 @@ impl BlobSession {
             disk: Self::disk_state(&st),
             conflict_copies,
             index,
+            merge: self.merge_bound(st.cur.size),
         })
     }
 

@@ -93,6 +93,11 @@ impl Refusal for SessionError {
             } => rep(&r::NATIVE_ENGINE_MISSING, msg)
                 .with("stored", stored)
                 .with("stored_format", *stored_format),
+            S::NativeBetaOff => rep(&r::NATIVE_BETA_OFF, msg),
+            S::NativeTextCap { limit, would_be } => rep(&r::NATIVE_TEXT_CAP, msg)
+                .with("limit", *limit)
+                .with("would_be", *would_be),
+            S::NativeNoTier0 { verb } => rep(&r::NATIVE_NO_TIER0, msg).with("verb", *verb),
             S::BadParticipant(_) => rep(&r::BAD_PARTICIPANT, msg),
             S::BadPosition(_) => rep(&r::BAD_POSITION, msg),
             S::BadEdit(_) => rep(&r::BAD_EDIT, msg),
@@ -142,6 +147,76 @@ impl Refusal for SessionError {
                 .with("version", *version)
                 .with("retry_after_ms", *retry_after_ms),
             S::AgentWriteRefused => rep(&r::AGENT_WRITE_REFUSED, msg),
+            S::NeedsLease { verb, ttl_ms } => rep(&r::NEEDS_LEASE, msg)
+                .with("verb", verb)
+                .with("ttl_ms", *ttl_ms),
+            S::KeysReissued {
+                save,
+                safe_from,
+                to,
+            } => rep(&r::KEYS_REISSUED, msg)
+                .with("save", *save)
+                .with("safe_from", *safe_from)
+                .with("to", *to),
+            S::BaseAcrossUnprovenSave {
+                save,
+                base,
+                head,
+                addresses,
+            } => rep(&r::BASE_ACROSS_UNPROVEN_SAVE, msg)
+                .with("save", *save)
+                .with("base", *base)
+                .with("head", *head)
+                .with(
+                    "addresses",
+                    Value::list(addresses.iter().map(String::as_str)),
+                ),
+            S::BaseMoved {
+                base,
+                head,
+                addresses,
+                conflicts,
+            } => rep(&r::BASE_MOVED, msg)
+                .with("base", *base)
+                .with("head", *head)
+                .with(
+                    "addresses",
+                    Value::list(addresses.iter().map(String::as_str)),
+                )
+                .with(
+                    "conflicts",
+                    Value::List(
+                        conflicts
+                            .iter()
+                            .map(|c| {
+                                Value::obj([
+                                    ("address", Value::from(c.address.as_str())),
+                                    ("root", Value::from("index")),
+                                    ("key", Value::from(c.key.as_str())),
+                                    ("field", Value::from(c.field.as_str())),
+                                    ("by", Value::from(c.by.as_str())),
+                                    ("change", Value::from(c.change)),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            S::BaseWeakKey { head, keys } => rep(&r::BASE_WEAK_KEY, msg)
+                .with("head", *head)
+                .with("keys", Value::list(keys.iter().map(String::as_str))),
+            S::BadPlan { why } => rep(&r::BAD_PLAN, msg).with("why", why),
+            S::Strayed { keys } => rep(&r::STRAYED, msg).with(
+                "keys",
+                Value::List(keys.iter().map(|k| Value::from(k.as_str())).collect()),
+            ),
+            S::OutputUnreadable { why } => rep(&r::OUTPUT_UNREADABLE, msg).with("why", why),
+            S::VerbTooLarge { what, size, limit } => rep(&r::VERB_TOO_LARGE, msg)
+                .with("what", *what)
+                .with("size", *size)
+                .with("limit", *limit),
+            S::NotAsPreviewed { expected, actual } => rep(&r::NOT_AS_PREVIEWED, msg)
+                .with("expected", expected)
+                .with("actual", actual),
             S::NoAnnotation { thread, comment } => {
                 let out = rep(&r::NO_ANNOTATION, msg).with("thread", thread.to_string());
                 match comment {
@@ -231,6 +306,10 @@ impl Refusal for SessionError {
             S::KeySpaceFull { prefix, tag } => rep(&r::KEY_SPACE_FULL, msg)
                 .with("prefix", prefix)
                 .with("tag", tag),
+            S::PackRefused(p) => rep(&r::PACK_REFUSED, msg)
+                .with("code", p.code)
+                .with("reason", p.message.as_str()),
+            S::BaseUnrendered { base } => rep(&r::BASE_UNRENDERED, msg).with("base", *base),
             S::KeyedAtLimit {
                 limit,
                 would_be,
@@ -386,6 +465,34 @@ fn store(e: &StoreError, msg: String) -> ErrorReport {
         } => rep(&r::NATIVE_ENGINE_MISSING, msg)
             .with("stored", stored)
             .with("stored_format", *stored_format),
+        S::NonceReused { doc } => rep(&r::STORE_NONCE_REUSED, msg).with("doc", *doc),
+        S::PurgeDocOpen { doc } => rep(&r::PURGE_DOC_OPEN, msg).with("doc", *doc),
+        S::CutPendingRecords { doc, changes } => rep(&r::CUT_PENDING_RECORDS, msg)
+            .with("doc", *doc)
+            .with("changes", *changes),
+        S::CutDocOpen { doc } => rep(&r::CUT_DOC_OPEN, msg).with("doc", *doc),
+        S::NativeSnapshotRefused {
+            doc,
+            stored,
+            stored_format,
+        } => rep(&r::ENGINE_MISMATCH, msg)
+            .with("doc", *doc)
+            .with("stored", stored)
+            .with("stored_format", *stored_format)
+            .with("engine", crate::engine::ENGINE_NAME)
+            .with("engine_format", crate::engine::ENGINE_FORMAT),
+        S::NativeFormatUnread {
+            stored,
+            found,
+            oldest,
+            newest,
+        } => rep(&r::ENGINE_MISMATCH, msg)
+            .with("stored", stored)
+            .with("stored_format", *found)
+            .with("engine", stored)
+            .with("engine_format", *newest)
+            .with("oldest", *oldest)
+            .with("newest", *newest),
         S::NewerData { table } => rep(&r::STORE_NEWER, msg).with("table", table.as_str()),
         S::MarksLost(d) => rep(&r::BASE_EXPIRED, msg).with("doc", *d),
         S::Corrupt(what) => rep(&r::STORE_CORRUPT, msg).with("what", *what),
@@ -500,6 +607,8 @@ fn doc(e: &DocError, msg: String) -> ErrorReport {
             rep(&r::VECTOR_NEEDS_PARTS, msg).with("entries", *entries)
         }
         D::NeedsStateTransfer => rep(&r::NEEDS_STATE_TRANSFER, msg),
+        D::NativeOneReplica => rep(&r::NATIVE_ONE_REPLICA, msg),
+        D::NativeNoYjs => rep(&r::NATIVE_NO_YJS, msg),
     }
 }
 

@@ -56,6 +56,8 @@ const ANNOT_CHANGE: &[&str] = &[
 /// A structure index's verbs (`Registry::for_blob_pack`: the pack names them), and the host
 /// calls under them.
 const INDEX_HOST: &[&str] = &["@index", "(host)"];
+/// A file type's own verbs on a blob doc (the tier-0 verb path; `Registry::for_blob_pack`).
+const BLOB_VERB: &[&str] = &["@blob_verb"];
 
 // The board file type's verbs (830–869): data, as its rows name them.
 /// The verbs whose change names the settings' rev: `meta`, and raw ops (`apply`, `inverse`).
@@ -665,6 +667,28 @@ NEEDS_STATE_TRANSFER = e("MPC-E165", "needs_state_transfer", Session, 2,
      the catch-up and don't close the peer: it isn't at fault.")
     .indirect("a native replica behind a peer's cut (feature native)");
 
+NATIVE_ONE_REPLICA = e("MPC-E166", "native_one_replica", Session, 2,
+    "the native engine (a Beta): one replica, the host's", SYNC,
+    "this doc is on the native engine (a Beta), which keeps one copy, on the host; it can't be \
+     synced to another copy",
+    "Nothing was sent or applied. People and agents edit this doc through the host's verbs, \
+     on the host's one copy. To sync copies of it, switch the doc back to the standard engine.")
+    .indirect("sync bytes for a native doc: a second replica (feature native)");
+
+NATIVE_BETA_OFF = e("MPC-E167", "native_beta_off", Session, 2,
+    "the native engine (a Beta): off by default, chosen only when a doc is made", HOST,
+    "the native engine (a Beta) is off on this host: a new doc can't be made on it",
+    "Nothing was made. Make the doc on the standard engine, or ask the host's owner to turn the \
+     native engine Beta on. Docs already on the native engine open and save as usual.")
+    .indirect("a host making a doc on the native engine with the Beta off (feature native)");
+
+NATIVE_NO_YJS = e("MPC-E168", "native_no_yjs", Session, 2,
+    "the native engine (a Beta): no Yjs sync", SYNC,
+    "this doc is on the native engine; Yjs sync bytes can't reach it",
+    "Nothing was applied. A doc on the native engine takes no Yjs sync: edit it through the \
+     host's verbs, or switch the doc back to the standard engine to sync it with Yjs.")
+    .indirect("Yjs sync bytes for a native doc (feature native)");
+
 NATIVE_ENGINE_MISSING = e("MPC-E169", "native_engine_missing", Session, 6,
     "the native engine: a build without it refuses its docs one by one", ANY,
     "this doc is on the native engine (format {stored_format}), which this build \
@@ -1044,10 +1068,11 @@ PATH_TAKEN = e("MPC-E504", "path_taken", Store, 6, "K-DISK-14", &["mv"],
      first.");
 
 STORE_LOCKED = e("MPC-E505", "store_locked", Store, 6, "K-OFF-2", ANY,
-    "store still locked by another process after waiting",
-    "Another process holds the store (a daemon hand-off in progress). Retry in a few \
-     seconds.")
-    .indirect("a second process holding the store");
+    "Another process has this document open: its store is held by another opener",
+    "Another process has this document open. Nothing was read or changed. Close it there (or \
+     let its hand-off finish), then open it again; a host can open with a wait instead \
+     (DocStore::open_with_retry), which takes the store once the other opener lets it go.")
+    .indirect("a second opener of a store another holds (another process, or this one)");
 
 NAMED_VERSION = e("MPC-E506", "named_version", Store, 6, "K-HIST-6", &["(host)"],
     "version {version} of doc {doc} is named; retention never deletes named versions",
@@ -1155,6 +1180,42 @@ PAIRING_MISMATCH = e("MPC-E521", "pairing_mismatch", Store, 1, "the carrier's pa
      was and the doc keeps every change. Report it; an app's next save of the file sets the \
      pairing again.")
     .indirect("a file type's pairing that doesn't fit its file");
+
+STORE_NONCE_REUSED = e("MPC-E522", "store_nonce_reused", Store, 6, "the store nonce", ANY,
+    "the engine store's nonce is already doc {doc}'s in this store; a store nonce is never \
+     reused, so nothing was written",
+    "Each engine store (a native doc's records) is made with its own nonce, and one store never \
+     uses a nonce twice, so two engine stores under the same keys never verify each other's \
+     records. This one's nonce is already another doc's here (a deleted doc's too), so nothing \
+     was written, or, at open, the store holds two engine stores with one nonce and is \
+     refused. Report it: the kit makes a fresh nonce for every new engine store.")
+    .indirect("an engine store whose nonce this store already used");
+
+PURGE_DOC_OPEN = e("MPC-E523", "purge_doc_open", Store, 6, "no purge of an open doc", &["purge"],
+    "doc {doc} is open in another live instance; a native doc is purged only while the \
+     purging instance alone holds it, so nothing was written",
+    "A purge is refused, with nothing written, while any live instance other than the \
+     purging one holds the doc open: that instance (another session's load of the doc, or a \
+     copy of its records) would still hold the purged content in memory. Unload the doc's \
+     other instances, then purge again.")
+    .indirect("a purge of a native doc another live instance holds open");
+
+CUT_PENDING_RECORDS = e("MPC-E524", "cut_pending_records", Store, 6, "a cut after the commit", HOST,
+    "doc {doc} holds {changes} changes not yet committed; a native doc is cut only once its \
+     changes are in the store, so nothing was cut",
+    "A cut folds a native doc's engine records into a new generation, and a change whose \
+     record isn't committed yet would be folded in without its log row, so nothing changed. \
+     Commit the doc's pending changes (or its pending purge), then cut again.")
+    .indirect("a native doc's cut asked before its pending changes were committed");
+
+CUT_DOC_OPEN = e("MPC-E525", "cut_doc_open", Store, 6, "no cut of an open doc", HOST,
+    "doc {doc} is open in another live instance; a native doc is cut only while the cutting \
+     instance alone holds it, so nothing was cut",
+    "A cut replaces a native doc's engine records with a new generation, and another live \
+     instance of the doc (another session's load of it, or a copy of its records) still reads \
+     the one it replaces, so nothing was written. Unload the doc's other instances; its next \
+     idle tick or unload cuts it.")
+    .indirect("a cut of a native doc another live instance holds open");
 
 // ---------------------------------------------------------------- 6xx erasure
 
@@ -1306,12 +1367,105 @@ INDEX_STALE = e("MPC-E717", "index_stale", Blob, 1, "structure index", &["(host)
         "That version changed while its index was being built; see which versions the doc has \
          now.");
 
+NEEDS_LEASE = e("MPC-E718", "needs_lease", Blob, 2, "the tier-0 verb path: merge or lease",
+    BLOB_VERB,
+    "{verb} edits this file only under your own lease; take it first ({ttl_ms} ms by default)",
+    "This verb's changes aren't covered by the file type's merge, so it runs only while you \
+     hold the file's lease: a person's app saving meanwhile then keeps both copies instead of \
+     merging your work away. Nothing was written. Take the lease (details.ttl_ms is the \
+     default length), run the verb again, and release the lease when done.")
+    .step("lease", &["--ttl", "{ttl_ms}"],
+        "This verb runs only under your own lease; take it, then run the verb again.");
+
+BASE_ACROSS_UNPROVEN_SAVE = e("MPC-E719", "base_across_unproven_save", Blob, 1,
+    "the tier-0 verb path: --base across an outside save", BLOB_VERB,
+    "version {save} is another program's save, not proven to keep node keys: --base {base} \
+     can't pair {addresses} across it (head {head})",
+    "Another program saved the file after the version you read (details.save), and the file \
+     type's pack can't prove that program keeps node keys: a key may name another thing now. \
+     Nothing was written. Read the nodes again at head (details.head), redo your change on \
+     what you read, and call again with --base details.head.")
+    .step("node", &["{addresses}"],
+        "Another program saved the file since the version you read; read the nodes again at \
+         head and redo the change on what you read.");
+
 BLOB_REF_UNKNOWN = e("MPC-E720", "blob_ref_unknown", Blob, 4, "blob references in keyed docs",
     &["@pack", "(host)"],
     "no blob {blob} in this doc's space",
     "The value names a blob this doc's space doesn't hold: it was never stored here, it was \
      collected, or it belongs to another space. Nothing was applied. Store the bytes in this \
      doc's space, then send the change again with the id that returned.");
+
+NATIVE_NO_TIER0 = e("MPC-E721", "native_no_tier0", Blob, 4,
+    "the native engine (a Beta): no move to or from tier 0", HOST,
+    "this doc is on the native engine (a Beta), which doesn't move to or from tier 0 ({verb})",
+    "Nothing changed: the doc is still on the native engine, as it was. In the Beta a doc on \
+     the native engine can't become a tier-0 doc, or be made from one. Switch the doc back to \
+     the standard engine first, then move it.")
+    .indirect("a host demoting or promoting a doc on the native engine (feature native)");
+
+KEYS_REISSUED = e("MPC-E722", "keys_reissued", Blob, 1, "the tier-0 reads across an outside save",
+    INDEX_HOST,
+    "version {save}'s writer reissues node keys: a diff across it pairs nothing",
+    "Another program saved the file at version details.save, and the file type's pack says \
+     that program renumbers node keys: across that save a key may name another thing, so a \
+     diff across it would pair the wrong nodes. Nothing was read. Diff from details.safe_from \
+     to details.to instead, or compare the two versions' outlines.");
+
+BASE_MOVED = e("MPC-E723", "base_moved", Blob, 1, "the tier-0 verb path: --base per node",
+    BLOB_VERB,
+    "{addresses} changed since --base {base} (head {head}); nothing applied",
+    "Someone changed the nodes your call changes after the version you read (details.base), \
+     in a way that overlaps your change: each is in details.conflicts with the field, who \
+     changed it and in which version. Nothing was written. Read them again at head, redo your \
+     change on what you read, and call again with --base details.head.")
+    .step("node", &["{addresses}"],
+        "The nodes you change were changed since the version you read; read them again at \
+         head and redo the change on what you read.");
+
+BASE_WEAK_KEY = e("MPC-E724", "base_weak_key", Blob, 2, "the tier-0 verb path: --base per node",
+    BLOB_VERB,
+    "{keys} have no key of the file's own: --base can't pair them; guard the call with \
+     --if-version {head}",
+    "The nodes your call changes have no ID in the file, so the kit named them itself, and it \
+     can't be sure such a name means the same node in another version. Nothing was written. \
+     Read the doc at head (details.head) and call again with --if-version details.head \
+     instead of --base.")
+    .step("status", &[],
+        "These nodes can't be paired across versions; check the doc's head, then guard the \
+         call with that version instead.");
+
+BAD_PLAN = e("MPC-E725", "bad_plan", Blob, 2, "the tier-0 verb path: the plan", BLOB_VERB,
+    "the verb's plan is refused: {why}",
+    "The file type's verb described its change in a way the kit refuses (its byte ranges out \
+     of order, overlapping, outside the file or over a limit, or a read verb that changes \
+     bytes). Nothing was written. This is a bug in the file type's pack: report it.");
+
+STRAYED = e("MPC-E726", "strayed", Blob, 2, "the tier-0 verb path: the output check", BLOB_VERB,
+    "the verb's output changed nodes its plan didn't name: {keys}",
+    "The kit read the verb's output with the file type's own index and found changes to nodes \
+     the verb didn't say it would touch (details.keys). Nothing was written. This is a bug in \
+     the file type's pack: report it.");
+
+OUTPUT_UNREADABLE = e("MPC-E727", "output_unreadable", Blob, 2,
+    "the tier-0 verb path: the output check", BLOB_VERB,
+    "the file type's index refuses the verb's output",
+    "The file the verb would write can't be read back by the file type's own index. Nothing \
+     was written. This is a bug in the file type's pack: report it.");
+
+VERB_TOO_LARGE = e("MPC-E728", "verb_too_large", Blob, 2, "the tier-0 verb path: the bounds",
+    BLOB_VERB,
+    "{what} is {size}, over the limit of {limit}",
+    "The call is over one of the kit's bounds for a verb on this file (details.what and \
+     details.limit name it). Nothing was written. Narrow the call (fewer nodes at a time).");
+
+NOT_AS_PREVIEWED = e("MPC-E729", "not_as_previewed", Blob, 1,
+    "the tier-0 verb path: the dry-run contract", BLOB_VERB,
+    "the bytes this call would store are not the ones previewed (expected {expected}, now \
+     {actual})",
+    "The call carried the digest its dry run showed (--expect), and the bytes it would store \
+     now differ: the file changed since, or the call did. Nothing was written. Run the dry run \
+     again, show it, and use its digest.");
 
 // ---------------------------------------------------------------- 8xx structured and CSV
 // the CSV grid work: wired in v0.10.0; the walk in
@@ -1419,18 +1573,36 @@ KEYED_AT_LIMIT = e("MPC-E822", "keyed_at_limit", Structured, 2, "K-CSV-7 (keyed 
         "The doc is at its live size limit; read it, remove elements or fields it doesn't \
          need any more, then make the change again.");
 
-// 823: a pack's refusal in the text form (`refused: <code>: <why>`, exit 2) whose code the pack
-// registers no entry for (Pack::errors): the stop-gap until each pack registers its codes.
+// 823: a pack's refusal by its own code: a verb's in the text form (`refused: <code>: <why>`,
+// exit 2) whose code the pack registers no entry for (Pack::errors), the stop-gap until each
+// pack registers its codes; and a live change the pack's check refuses (Pack::check_edit,
+// whoever makes it: a person's edit, a host's, an agent's verb, undo, restore).
 
 PACK_REFUSED = e("MPC-E823", "pack_refused", Structured, 2,
-    "a pack's refusal by code (its own ids: Pack::errors)", &["@pack"],
+    "a pack's refusal by code (its own ids: Pack::errors; its check of a change: \
+     Pack::check_edit)", &["@pack", "@change", "(sync)", "(host)"],
     "{code}: the pack refused the call",
-    "The file type's own verb refused the call: details.code is its reason, details.next its \
-     own way forward. Nothing was applied. Do what details.next says. (The pack has no id of \
-     its own for this code yet.)")
-    .indirect("a keyed pack's verb printing its refusal as text (tests/agent_results.rs)");
+    "The file type refused the call or the change: details.code is its own code for why \
+     (details.reason, for a change its check refused), details.next its own way forward when \
+     it gives one. Nothing was applied and the version didn't move. Do what details.next \
+     says; for a change the file type can't write to its file, make it through the file \
+     type's own verbs, or leave that part of the doc as it is.")
+    .indirect("a keyed pack's verb printing its refusal as text (tests/agent_results.rs), or \
+               its check of a live change (tests/pack_check_edit.rs)");
 
-// 824–829: free, for structured docs.
+// 824: a whole-file write from a read given while the file couldn't be rendered
+// (`ReadResult::render_failed`: the bytes it gave are the file as last synced)
+
+BASE_UNRENDERED = e("MPC-E824", "base_unrendered", Structured, 2, "render net",
+    &["write"],
+    "version {base} was read while the file couldn't be written back; nothing applied",
+    "Nothing was applied: the read of version details.base was given while the file couldn't \
+     be rendered, so its bytes were the file as last synced, not that version, and a write \
+     made from them can't be merged at it. Change the doc through the file type's verbs, \
+     which never need the file's bytes; once the file renders again, read it and write from \
+     that read.");
+
+// 825–829: free, for structured docs.
 
 // 830–869: the board file type's own agent verbs (k2-mpc-board), run by its host on the file
 // itself and listed with Registry::for_file. Each row names `@file`, then the board verbs
@@ -1790,6 +1962,14 @@ WRITERS_DOC_CAP = e("MPC-E908", "writers_doc_cap", Limits, 2, "writers (writers_
     .step("cat", &[],
         "The doc holds all the writers it allows, so this connection is read-only; read it, and \
          don't retry in a loop.");
+
+NATIVE_TEXT_CAP = e("MPC-E909", "native_text_cap", Limits, 2,
+    "the native engine (a Beta): a doc's live text", CHANGE,
+    "this doc's live text would be {would_be} bytes, past the native engine's {limit}-byte cap",
+    "Nothing was applied, and nothing in the doc was dropped. A doc on the native engine (a \
+     Beta) holds at most details.limit bytes of live text, all its text together. Make the \
+     change smaller or remove text first; or switch the doc back to the standard engine.")
+    .indirect("an edit past a native doc's live-text cap (feature native)");
 }
 
 registry! { ENGINE:
@@ -1907,5 +2087,21 @@ OWN_LINE_PARENTS = e("MPCE-E1000", "own_line_parents", Session, 2,
     "the engine refused the change: it names more than one parent on one agent's line",
     "Nothing changed. Name only the latest parent on each agent's line. At a load, the store \
      holds a run no released writer makes: restore the document from another copy.")
+    .indirect("the native engine's admission (feature native)");
+
+OUTBOUND_FRAME_TOO_LARGE = e("MPCE-E982", "outbound_frame_too_large", Limits, 2,
+    "the MPCE seam (stable codes)", SYNC,
+    "the engine refused to send an update as one frame: it is over a limit",
+    "Nothing was sent or changed. The update is over frame_bytes or past a limit of the \
+     receiver's causal check (details.cause; for a causal limit, details.limit, details.value \
+     and details.max). Send it in parts: the kit's parts encoders cut it at run boundaries, \
+     each part within every limit.")
+    .indirect("the native engine's encoders (feature native)");
+
+REQUEST_MALFORMED = e("MPCE-E986", "request_malformed", Limits, 2,
+    "the MPCE seam (stable codes)", SYNC,
+    "the engine refused a request of parts: it is malformed",
+    "Nothing changed. A request of parts is empty, or holds several parts outside a relay: the \
+     kit made it wrong, so don't retry it as it is; drop the answer and report it.")
     .indirect("the native engine's admission (feature native)");
 }

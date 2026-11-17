@@ -1,0 +1,27 @@
+MPC-E719 base_across_unproven_save (tier 0 and blobs)
+exit:     1
+message:  version {save} is another program's save, not proven to keep node keys: --base {base} can't pair {addresses} across it (head {head})
+next:     Another program saved the file after the version you read (details.save), and the file type's pack can't prove that program keeps node keys: a key may name another thing now. Nothing was written. Read the nodes again at head (details.head), redo your change on what you read, and call again with --base details.head.
+step:     node; args: {addresses}; why: Another program saved the file since the version you read; read the nodes again at head and redo the change on what you read.
+rule:     the tier-0 verb path: --base across an outside save
+verbs:    a file type's own verbs on a blob doc (named by its pack)
+status:   live
+--- json
+{
+  "id": "MPC-E719",
+  "name": "base_across_unproven_save",
+  "area": "tier 0 and blobs",
+  "exit": 1,
+  "message": "version {save} is another program's save, not proven to keep node keys: --base {base} can't pair {addresses} across it (head {head})",
+  "next": "Another program saved the file after the version you read (details.save), and the file type's pack can't prove that program keeps node keys: a key may name another thing now. Nothing was written. Read the nodes again at head (details.head), redo your change on what you read, and call again with --base details.head.",
+  "next_step": {
+    "verb": "node",
+    "args": ["{addresses}"],
+    "why": "Another program saved the file since the version you read; read the nodes again at head and redo the change on what you read."
+  },
+  "rule": "the tier-0 verb path: --base across an outside save",
+  "verbs": ["@blob_verb"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

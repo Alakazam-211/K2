@@ -318,11 +318,21 @@ impl BlobSession {
         argv: &[String],
         opts: &ToolOptions,
     ) -> std::result::Result<ToolOutput, ToolRunError> {
-        let out = self.run_tool_text(conn, argv, opts);
-        if !opts.result_json {
+        // the pack's own verbs (the tier-0 verb path), before everything else of the pack's
+        let blob = self.blob_verb_of(argv);
+        let as_data =
+            opts.result_json || blob.is_some_and(|(_, w)| super::verbs::wants_json(&argv[w..]));
+        let out = match blob {
+            Some((v, w)) => self.run_blob_verb(conn, v, &argv[w..], opts, as_data),
+            None => self.run_tool_text(conn, argv, opts),
+        };
+        if !as_data {
             return out;
         }
-        let form = crate::parity::verb_form(argv);
+        let (form, dry_run) = match blob {
+            Some((v, w)) => (v.name.to_owned(), super::verbs::wants_dry_run(&argv[w..])),
+            None => (crate::parity::verb_form(argv), false),
+        };
         let kind = crate::parity::Registry::for_blob_pack(self.pack.as_ref())
             .ok()
             .and_then(|r| {
@@ -337,6 +347,7 @@ impl BlobSession {
             kind,
             args: &argv[words..],
             pack: None,
+            dry_run,
         };
         Ok(crate::tools::with_result(&call, out, || {
             self.status().map(|s| s.version).unwrap_or_default()

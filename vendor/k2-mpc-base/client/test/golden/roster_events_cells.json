@@ -169,6 +169,12 @@
             ]
           },
           "client": 4711
+        },
+        {
+          "kind": "view_address",
+          "who": "agent:atlas",
+          "view_address": "@sheet:1",
+          "client": 4711
         }
       ]
     },
@@ -394,6 +400,12 @@
             "ranges": []
           },
           "client": 4711
+        },
+        {
+          "kind": "view_address",
+          "who": "agent:atlas",
+          "view_address": "@sheet:2",
+          "client": 4711
         }
       ]
     },
@@ -432,6 +444,12 @@
             "ranges": []
           },
           "client": 4711
+        },
+        {
+          "kind": "view_address",
+          "who": "agent:atlas",
+          "view_address": "@sheet:5",
+          "client": 4711
         }
       ]
     },
@@ -469,6 +487,12 @@
             },
             "ranges": []
           },
+          "client": 4711
+        },
+        {
+          "kind": "view_address",
+          "who": "agent:atlas",
+          "view_address": "@sheet:1",
           "client": 4711
         }
       ]

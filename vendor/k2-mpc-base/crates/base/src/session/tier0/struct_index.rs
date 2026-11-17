@@ -55,7 +55,7 @@ pub(super) struct Target {
     pub(super) ver: BlobVersion,
 }
 
-fn limits_of(c: &Config) -> IndexLimits {
+pub(super) fn limits_of(c: &Config) -> IndexLimits {
     IndexLimits::new(
         c.blob_index_max_nodes,
         INDEX_DEPTH_MAX,
@@ -111,6 +111,9 @@ pub struct IndexJob {
     size: u64,
     limits: IndexLimits,
     id: u64,
+    /// Recorded from a verb's output index at its commit ([`IndexJob::seed`]), not by reading
+    /// the version.
+    seeded: bool,
     _slot: Slot,
 }
 
@@ -169,6 +172,19 @@ impl IndexJob {
         drain(&mut input.reader)?;
         let outcome = IndexOutcome::from_wire(wire, &self.limits)?;
         self.finish(outcome)
+    }
+
+    /// Record the index a verb already read from its output (`docs/SESSIONS.md`, "Verbs on a
+    /// blob doc"): the pack's draft of exactly the bytes this version holds (the kit applied the
+    /// same plan to the same verified reader), recorded as [`IndexJob::run`] records a draft: the
+    /// same checks, limits, keyed row, minted keys and events. So an agent's next verb finds the
+    /// index in place instead of waiting for the host's job.
+    pub(super) fn seed(
+        mut self,
+        draft: crate::index::IndexDraft,
+    ) -> std::result::Result<IndexStatus, IndexJobError> {
+        self.seeded = true;
+        self.finish(IndexOutcome::Draft(draft))
     }
 
     fn finish(self, outcome: IndexOutcome) -> std::result::Result<IndexStatus, IndexJobError> {
@@ -269,6 +285,7 @@ impl IndexJob {
                 self.doc,
                 &key,
                 || self.recorded_view(sp.no),
+                |v, ver| self.stored_view(sp.no, v, &ver.blob),
             );
         }
         Ok(status)
@@ -277,24 +294,45 @@ impl IndexJob {
     /// The version's index as just recorded (the row and its keys, read back), for the
     /// anchors; `None` when it can't be read (it moved since: nothing to observe).
     fn recorded_view(&self, no: u64) -> Option<IndexView> {
-        let raw = self
-            .store
-            .blob_struct_row(no, &self.blob, self.spec.pack, self.spec.format)
-            .ok()??;
-        let StructRow::Ready(ready) = dec_struct_row(&raw).ok()? else {
-            return None;
-        };
-        let keys = if needs_mint(&ready) {
-            let b = self.store.blob_struct_keys(self.doc, self.version).ok()??;
-            let k = dec_keys_row(&b).ok()?;
-            if !k.is_for(self.spec.pack, self.spec.format) {
+        self.stored_view(no, self.version, &self.blob)
+    }
+
+    /// Version `version`'s index (its bytes `blob`) as recorded: its row in this format or the
+    /// older one the spec reads, with its keys as a read takes them ([`ensure_keys_in`]: the
+    /// stored ones, else minted, carried from a neighbour and stored, exactly as a read of the
+    /// version mints them); `None` when it isn't there.
+    fn stored_view(&self, no: u64, version: VersionId, blob: &BlobId) -> Option<IndexView> {
+        let formats = [Some(self.spec.format), self.spec.older_format];
+        formats.into_iter().flatten().find_map(|format| {
+            let raw = self
+                .store
+                .blob_struct_row(no, blob, self.spec.pack, format)
+                .ok()??;
+            let StructRow::Ready(ready) = dec_struct_row(&raw).ok()? else {
                 return None;
-            }
-            k
-        } else {
-            KeysRow::default()
-        };
-        view_of(self.version, ready, &keys).ok()
+            };
+            let keys = if !needs_mint(&ready) {
+                KeysRow::default()
+            } else if plant_on!(
+                crate::differential::tier0_verb_mutant()
+                    == Some(crate::differential::Tier0VerbMutant::StoredSkipsUnminted)
+            ) {
+                // the planted fault: a version whose keys were never recorded is skipped
+                let b = self.store.blob_struct_keys(self.doc, version).ok()??;
+                let k = dec_keys_row(&b).ok()?;
+                if !k.is_for(self.spec.pack, format) {
+                    return None;
+                }
+                k
+            } else {
+                let spec = IndexSpec {
+                    format,
+                    ..self.spec
+                };
+                ensure_keys_in(&self.store, self.doc, version, no, blob, &spec, &ready).ok()?
+            };
+            view_of(version, ready, &keys).ok()
+        })
     }
 
     fn to_row(
@@ -333,6 +371,12 @@ impl IndexJob {
                 ),
                 Ok(shape) => {
                     let ready = build_row(&d, &shape, space_key);
+                    // the planted fault: a seeded row's keys minted afresh, not carried
+                    let carry = !(self.seeded
+                        && plant_on!(
+                            crate::differential::tier0_verb_mutant()
+                                == Some(crate::differential::Tier0VerbMutant::SeedWithoutCarry)
+                        ));
                     let keys = if needs_mint(&ready) {
                         Some(minted(
                             &self.store,
@@ -342,6 +386,7 @@ impl IndexJob {
                             &self.blob,
                             &self.spec,
                             &ready,
+                            carry,
                         )?)
                     } else {
                         None
@@ -358,9 +403,48 @@ impl IndexJob {
     }
 }
 
+/// Version `version`'s minted keys as a read takes them: the stored ones for this pack and
+/// format, else minted (carried from a neighbour, [`minted`]) and stored. The one rule for a
+/// read of the version and for an index job's anchors ([`IndexJob`]'s recorded indexes), so
+/// both see the same keys.
+fn ensure_keys_in(
+    store: &DocStore,
+    doc: DocId,
+    version: VersionId,
+    no: u64,
+    blob: &BlobId,
+    spec: &IndexSpec,
+    ready: &crate::index::ReadyRow,
+) -> Result<KeysRow> {
+    if let Some(b) = store.blob_struct_keys(doc, version)? {
+        let keys = dec_keys_row(&b)?;
+        if keys.is_for(spec.pack, spec.format) {
+            return Ok(keys);
+        }
+    }
+    let keys = minted(store, doc, version, no, blob, spec, ready, true)?;
+    let stored = store.blob_struct_put_keys(
+        doc,
+        version,
+        blob,
+        spec.pack,
+        spec.format,
+        &enc_keys_row(&keys),
+    )?;
+    // purged while this read was minting
+    let Some(stored) = stored else {
+        return Err(SessionError::NotIndexed {
+            version,
+            why: NotIndexedWhy::Purged,
+        });
+    };
+    Ok(dec_keys_row(&stored)?)
+}
+
 /// Minted keys for `ready` at `version`: the same content's keys when the doc already has this
 /// blob (a restore: same bytes, same keys), else carried from the nearest indexed version of
-/// the doc.
+/// the doc (`carry`; false only for a planted fault).
+#[allow(clippy::too_many_arguments)]
 fn minted(
     store: &DocStore,
     doc: DocId,
@@ -369,13 +453,18 @@ fn minted(
     blob: &BlobId,
     spec: &IndexSpec,
     ready: &crate::index::ReadyRow,
+    carry: bool,
 ) -> std::result::Result<KeysRow, crate::store::StoreError> {
     if let Some(keys) =
         store.blob_struct_keys_of_blob(doc, version, blob, spec.pack, spec.format)?
     {
         return dec_keys_row(&keys);
     }
-    let neighbour = store.blob_struct_neighbour(doc, version, no, spec.pack, spec.format)?;
+    let neighbour = if carry {
+        store.blob_struct_neighbour(doc, version, no, spec.pack, spec.format)?
+    } else {
+        None
+    };
     let neighbour = match neighbour {
         Some((row, keys)) => match dec_struct_row(&row)? {
             StructRow::Ready(r) => Some((r, dec_keys_row(&keys)?)),
@@ -393,7 +482,7 @@ fn minted(
 }
 
 impl BlobSession {
-    fn index_target(&self, version: Option<VersionId>) -> Result<Target> {
+    pub(super) fn index_target(&self, version: Option<VersionId>) -> Result<Target> {
         let st = self.lock()?;
         self.target_of(&st, version)
     }
@@ -519,8 +608,71 @@ impl BlobSession {
             size: t.ver.size,
             limits: limits_of(&self.config),
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            seeded: false,
             _slot: slot,
         }))
+    }
+
+    /// **Test-only:** version `version`'s stored index (its row and minted keys, encoded) beside
+    /// what an index job would record for it now (the pack's reader on the version's stored
+    /// bytes, the job's own row, keys and limits; nothing recorded). A row a verb's commit
+    /// seeded must equal the job's.
+    #[cfg(any(test, feature = "differential"))]
+    #[allow(clippy::type_complexity)]
+    pub fn index_rows_for_tests(
+        &self,
+        version: VersionId,
+    ) -> Result<(
+        (Option<Vec<u8>>, Option<Vec<u8>>),
+        (Vec<u8>, Option<Vec<u8>>),
+    )> {
+        let spec = self
+            .pack
+            .index_spec()
+            .ok_or(SessionError::IndexUnsupported)?;
+        let t = self.index_target(Some(version))?;
+        let broken = |e: IndexJobError| SessionError::Broken(e.to_string());
+        let sp = t
+            .store
+            .blob_space(&t.space)?
+            .ok_or_else(|| SessionError::Broken("no space".into()))?;
+        let stored = (
+            t.store
+                .blob_struct_row(sp.no, &t.ver.blob, spec.pack, spec.format)?,
+            t.store.blob_struct_keys(self.doc_id, version)?,
+        );
+        let slot = self
+            .index_flight
+            .claim(t.ver.blob)
+            .ok_or_else(|| SessionError::Broken("a job is out for these bytes".into()))?;
+        let job = IndexJob {
+            host: self.host.clone(),
+            store: t.store.clone(),
+            blobs: self.blobs.clone(),
+            pack: self.pack.clone(),
+            spec,
+            doc: self.doc_id,
+            version,
+            space: t.space.clone(),
+            blob: t.ver.blob,
+            size: t.ver.size,
+            limits: limits_of(&self.config),
+            id: 0,
+            seeded: false,
+            _slot: slot,
+        };
+        let mut reader = self.blobs.reader_of(&t.space, self.doc_id, &t.ver.blob)?;
+        let out = self.pack.index(&mut reader, t.ver.size, &job.limits);
+        drain(&mut reader).map_err(broken)?;
+        let outcome = match out {
+            Ok(d) => IndexOutcome::Draft(d),
+            Err(r) => IndexOutcome::Refused(r),
+        };
+        let (row, keys, _) = job.to_row(outcome, &sp.key, sp.no).map_err(broken)?;
+        Ok((
+            stored,
+            (enc_struct_row(&row), keys.as_ref().map(enc_keys_row)),
+        ))
     }
 
     /// Version `version`'s index (`None`: the current one): every node, with its key, keyed
@@ -540,6 +692,77 @@ impl BlobSession {
     /// The index of `t`'s version: [`BlobSession::index_view`] once the target is known. Takes
     /// no session lock (a caller may hold it): store reads, and the minted keys' first write.
     pub(super) fn load_view(&self, t: &Target, spec: &IndexSpec) -> Result<IndexView> {
+        let (ready, keys) = self.load_parts(t, spec)?;
+        Ok(view_of(t.version, ready, &keys)?)
+    }
+
+    /// The index of a verb's output (`docs/SESSIONS.md`, "Verbs on a blob doc"), built in memory
+    /// as an index job would record it for `version`, the version the output would be: the
+    /// draft checked against the limits, its hashes keyed by the doc's space, and minted keys
+    /// carried from `t`'s version (the one the verb read). Nothing is stored. A draft the kit
+    /// would not record is [`SessionError::OutputUnreadable`].
+    pub(super) fn output_view(
+        &self,
+        t: &Target,
+        spec: &IndexSpec,
+        draft: &crate::index::IndexDraft,
+        version: VersionId,
+    ) -> Result<IndexView> {
+        let unreadable = |why: String| SessionError::OutputUnreadable { why };
+        if draft.has_view_items() && spec.older().is_none() {
+            return Err(unreadable(
+                "view items from a pack whose index spec names no older format".to_owned(),
+            ));
+        }
+        let limits = limits_of(&self.config);
+        let shape = match draft.shape(&limits) {
+            Ok(shape) => shape,
+            Err(DraftFault::Malformed(m)) => return Err(unreadable(m)),
+            Err(DraftFault::Over(why)) => return Err(unreadable(why.to_string())),
+        };
+        let sp = t
+            .store
+            .blob_space(&t.space)?
+            .ok_or(SessionError::NotIndexed {
+                version: t.version,
+                why: NotIndexedWhy::Purged,
+            })?;
+        let ready = build_row(draft, &shape, &sp.key);
+        let row = StructRow::Ready(ready);
+        let bytes = enc_struct_row(&row).len() as u64;
+        if bytes > limits.max_stored_bytes {
+            return Err(unreadable(
+                NotIndexedWhy::IndexTooBig {
+                    bytes,
+                    limit: limits.max_stored_bytes,
+                }
+                .to_string(),
+            ));
+        }
+        let StructRow::Ready(ready) = row else {
+            unreachable!("built as ready")
+        };
+        let keys = if needs_mint(&ready) {
+            let (was, was_keys) = self.load_parts(t, spec)?;
+            mint_keys(
+                version,
+                &ready,
+                Some((&was, &was_keys)),
+                spec.pack,
+                spec.format,
+            )
+        } else {
+            KeysRow::default()
+        };
+        Ok(view_of(version, ready, &keys)?)
+    }
+
+    /// The row and keys [`BlobSession::load_view`] reads.
+    fn load_parts(
+        &self,
+        t: &Target,
+        spec: &IndexSpec,
+    ) -> Result<(crate::index::ReadyRow, KeysRow)> {
         #[cfg(any(test, feature = "differential"))]
         crate::differential::count_index_load(matches!(
             self.state.try_lock(),
@@ -578,7 +801,7 @@ impl BlobSession {
         } else {
             KeysRow::default()
         };
-        Ok(view_of(t.version, ready, &keys)?)
+        Ok((ready, keys))
     }
 
     /// The version's minted keys, minting them now if this row was reused (a restore or the
@@ -590,13 +813,7 @@ impl BlobSession {
         spec: &IndexSpec,
         ready: &crate::index::ReadyRow,
     ) -> Result<KeysRow> {
-        if let Some(b) = t.store.blob_struct_keys(self.doc_id, t.version)? {
-            let keys = dec_keys_row(&b)?;
-            if keys.is_for(spec.pack, spec.format) {
-                return Ok(keys);
-            }
-        }
-        let keys = minted(
+        ensure_keys_in(
             &t.store,
             self.doc_id,
             t.version,
@@ -604,23 +821,7 @@ impl BlobSession {
             &t.ver.blob,
             spec,
             ready,
-        )?;
-        let stored = t.store.blob_struct_put_keys(
-            self.doc_id,
-            t.version,
-            &t.ver.blob,
-            spec.pack,
-            spec.format,
-            &enc_keys_row(&keys),
-        )?;
-        // purged while this read was minting
-        let Some(stored) = stored else {
-            return Err(SessionError::NotIndexed {
-                version: t.version,
-                why: NotIndexedWhy::Purged,
-            });
-        };
-        Ok(dec_keys_row(&stored)?)
+        )
     }
 
     /// After a version commits: tell the host a job would help, if the pack indexes, the

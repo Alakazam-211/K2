@@ -25,6 +25,16 @@
 //! - `conflicts`: a `--base` conflict's units, by address and field, who wrote each and in which
 //!   change (the error's `details.conflicts` stays as it was).
 //! - `notes` (each heads-up as data, with its line as `text`) and `warnings` (lines).
+//! - `view`: where an edit's change is ([`crate::session::ViewAt`]: the primary view address,
+//!   the containers and units it touched, a grid verb's cells, its lines, the verb's
+//!   playhead), as of `version.after`; null when it made no change.
+//! - `dry_run`: whether the call was a dry run (`docs/SESSIONS.md`, "Dry run: one contract for
+//!   every tier"); false on every call that isn't.
+//!
+//! On a blob doc, a pack verb's edit (the tier-0 verb path) fills `changed` from the structure
+//! index's diff of the version it read and its output: `counts` per node kind (`kind`, `added`,
+//! `removed`, `changed`), `units` by node, `lines` null, and `bytes` (`size_before`,
+//! `size_after`, `spans`, `removed`, `inserted`, `after_digest`); `bytes` is null on a live doc.
 //!
 //! A new field never changes the version; a field renamed, removed or given another type does.
 
@@ -52,6 +62,8 @@ pub const RESULT_FIELDS: &[&str] = &[
     "conflicts",
     "notes",
     "warnings",
+    "view",
+    "dry_run",
 ];
 
 /// The most changed units one result lists; the rest are counted (`units_more`).
@@ -109,6 +121,22 @@ pub(crate) struct ResultData {
     pub(crate) data_spec: Option<(&'static str, u32)>,
     pub(crate) next_page: Option<(&'static str, Vec<String>)>,
     pub(crate) value: Option<Value>,
+    /// A blob doc's verb (the tier-0 verb path): the version it made and its `changed`.
+    pub(crate) blob: Option<Box<BlobResult>>,
+    /// Notes as data beside the heads-up notes (a tier-0 verb's `lease_only`,
+    /// `merge_over_bound`), each `{kind, ..., text}`.
+    pub(crate) notes: Vec<Value>,
+}
+
+/// A tier-0 verb's part of its result ([`ResultData::blob`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct BlobResult {
+    /// The version made (none: a dry run, a read, a refusal, no change).
+    pub(crate) after: Option<Seq>,
+    /// The result's `changed` (none: nothing would change).
+    pub(crate) changed: Option<Value>,
+    /// The result's `view` (none: nothing would change).
+    pub(crate) view: Option<Value>,
 }
 
 /// Whether the units are planted as losing their addresses (test-only).
@@ -258,6 +286,8 @@ pub(crate) struct Call<'a> {
     pub(crate) kind: Option<&'static str>,
     pub(crate) args: &'a [String],
     pub(crate) pack: Option<&'a dyn Pack>,
+    /// The call asked for a dry run (a tier-0 verb's `--dry-run`).
+    pub(crate) dry_run: bool,
 }
 
 /// A `--base` conflict's units ([`ErrorReport`]'s `details.conflicts`), by address and field.
@@ -336,17 +366,22 @@ pub(crate) fn value(call: &Call<'_>, o: &super::ToolOutput, err: bool) -> Value 
                 _ => None,
             };
             let base = if planted_drops_base() { None } else { base };
+            let after = match &rd.blob {
+                Some(b) => b.after,
+                None => o.changed.as_ref().map(|c| c.version),
+            };
             Value::obj([
                 ("base", Value::from(base)),
-                ("after", Value::from(o.changed.as_ref().map(|c| c.version))),
+                ("after", Value::from(after)),
                 ("if_version", Value::from(if_version)),
                 ("base_given", Value::from(base_given)),
             ])
         }
     };
-    let changed = match &o.changed {
-        None => Value::Null,
-        Some(c) => {
+    let changed = match (&rd.blob, &o.changed) {
+        (Some(b), _) => b.changed.clone().unwrap_or(Value::Null),
+        (None, None) => Value::Null,
+        (None, Some(c)) => {
             let counts = c.elems.iter().map(|e| {
                 Value::obj([
                     ("root", Value::from(e.root.as_str())),
@@ -389,6 +424,7 @@ pub(crate) fn value(call: &Call<'_>, o: &super::ToolOutput, err: bool) -> Value 
                 ),
                 ("units_more", Value::from(rd.capture.more)),
                 ("lines", lines),
+                ("bytes", Value::Null),
             ])
         }
     };
@@ -440,11 +476,30 @@ pub(crate) fn value(call: &Call<'_>, o: &super::ToolOutput, err: bool) -> Value 
         ("conflicts", conflicts(call.pack, o.refusal.as_ref())),
         (
             "notes",
-            Value::List(o.notes.notes.iter().map(note_value).collect()),
+            Value::List(
+                o.notes
+                    .notes
+                    .iter()
+                    .map(note_value)
+                    .chain(rd.notes.iter().cloned())
+                    .collect(),
+            ),
         ),
         (
             "warnings",
             Value::list(o.warnings.lines().iter().map(String::as_str)),
         ),
+        (
+            "view",
+            match &rd.blob {
+                Some(b) => b.view.clone().unwrap_or(Value::Null),
+                None => o
+                    .changed
+                    .as_ref()
+                    .and_then(|c| c.view.as_deref())
+                    .map_or(Value::Null, crate::session::ViewAt::to_value),
+            },
+        ),
+        ("dry_run", Value::from(call.dry_run)),
     ])
 }

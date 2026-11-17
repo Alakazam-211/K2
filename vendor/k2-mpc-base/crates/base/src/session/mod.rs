@@ -26,6 +26,7 @@
 mod awareness;
 mod carry;
 mod config;
+mod cut_queue;
 mod disk;
 mod error;
 mod foreign;
@@ -79,11 +80,12 @@ pub use awareness::{
     OVERWRITE_PENDING_MAX, OVERWRITE_TEXT_MAX, OVERWRITE_VALUE_MAX,
 };
 pub use config::{
-    Config, KeyedLimit, LimitSource, DEFAULT_BLAME_CHECK_EVERY, DEFAULT_BLAME_CHECK_EVERY_LARGE,
-    DEFAULT_BLAME_CHECK_LARGE_AT, WRITERS_NOTICE_MAX,
+    CadenceError, Config, CutCadence, CutQueueError, CutQueueSettings, KeyedLimit, LimitSource,
+    DEFAULT_BLAME_CHECK_EVERY, DEFAULT_BLAME_CHECK_EVERY_LARGE, DEFAULT_BLAME_CHECK_LARGE_AT,
+    WRITERS_NOTICE_MAX,
 };
 pub use disk::{file_identity, is_write_temp, DiskCheck, DiskState, FileIdentity, FlushOutcome};
-pub use error::{DroppedBy, EditWithError, ElemsClaim, NodesClaim, SessionError};
+pub use error::{BaseConflict, DroppedBy, EditWithError, ElemsClaim, NodesClaim, SessionError};
 pub use host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, PurgedScope, Rights};
 #[cfg(feature = "conformance")]
 pub use live::CharBlame;
@@ -102,15 +104,17 @@ pub use live::{
     EditAtBase, EditOptions, EditResult, FileBytes, FileCodec, FileCopy, HistoryOptions,
     JoinOptions, Joined, LogItem, LogQuery, NotReached, PurgeOutcome, PurgeRequest, PurgeScope,
     ReadResult, RightsChange, Session, SettingsChanged, Status, SyncDrift, UndoMode, UndoOutcome,
-    UndoRequest, WriteOptions, WriteOutcome, WriteReport, WriterLease, DEMOTED, DEVICE_KEY_MAX,
+    UndoRequest, ViewAt, ViewUnit, WriteOptions, WriteOutcome, WriteReport, WriterLease, DEMOTED,
+    DEVICE_KEY_MAX,
 };
 pub(crate) use live::{Shown, VerbRefused};
-pub use manager::{PoolStats, SessionManager, TickReport};
+pub use manager::{DocEngine, OpenOptions, PoolStats, SessionManager, TickReport};
 pub use opened::{Opened, OpenedAt, OpenedVia};
 pub use pack::{
     default_reconcile, elem_of_map_key, list_pairing, Declined, Pack, PackContent, PackError,
-    Pairing, Reconciled, SpliceError, TextFilePack, VerbState,
+    PackRefusal, Pairing, Reconciled, SpliceError, TextFilePack, TextUnit, VerbState,
 };
+pub(crate) use participant::view_address_ok;
 pub use participant::{
     CellCursor, ConnId, CursorAt, Device, ElemFocus, ElemRange, ElemSelection, Participant,
     ParticipantKind, PlayState, Point, Rect, Role, RosterEntry, Stay, TimePosition,
@@ -121,10 +125,12 @@ pub use position::{At, Cursor, LineCol, LineRange};
 pub use roster::{ClaimActor, RosterEvent, RosterMember, Who};
 pub use tier0::{
     conflict_copy_name, AgentWrites, AnyFile, BlobApproval, BlobAuthor, BlobBlame, BlobLogEntry,
-    BlobLogKind, BlobMerge, BlobPack, BlobRead, BlobSession, BlobStatus, BlobWriteOptions,
-    BlobWriteResult, ConflictCopy, IndexInput, IndexJob, LeaseInfo, Lineage, NotRecorded, Promoted,
-    Promotion, SaveBase, SaveMerge, SaveTicket, INDEX_ADDRS_MAX, LINEAGE_VERSIONS_READ, MERGE_PID,
-    NODE_CLAIM_ROOT, REGION_MAX_BYTES, SAVE_TICKETS_KEPT,
+    BlobLogKind, BlobMerge, BlobPack, BlobPlan, BlobRead, BlobSession, BlobStatus, BlobVerb,
+    BlobVerbCtx, BlobVerbFn, BlobVerbKind, BlobVerbOut, BlobVerbRefused, BlobWriteOptions,
+    BlobWriteResult, ConflictCopy, HoldReach, IndexInput, IndexJob, LeaseInfo, Lineage, MergeBound,
+    NotRecorded, Promoted, Promotion, SaveBase, SaveFacts, SaveMerge, SavePairing, SaveTicket,
+    Span, VerbInput, VerbMerge, INDEX_ADDRS_MAX, LINEAGE_VERSIONS_READ, MERGE_PID, NODE_CLAIM_ROOT,
+    REGION_MAX_BYTES, SAVE_TICKETS_KEPT,
 };
 pub use undo::{ConflictKind, ConflictRegion};
 pub use view::View;
@@ -132,11 +138,15 @@ pub use view::View;
 #[cfg(test)]
 mod blob_ref_tests;
 #[cfg(test)]
+mod cut_queue_tests;
+#[cfg(test)]
 mod disk_crash_tests;
 #[cfg(test)]
 mod engine_check_tests;
 #[cfg(test)]
 mod manager_tests;
+#[cfg(test)]
+mod native_beta_tests;
 #[cfg(test)]
 mod one_writer_tests;
 #[cfg(test)]

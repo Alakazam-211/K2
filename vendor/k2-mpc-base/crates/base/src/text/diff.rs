@@ -130,23 +130,32 @@ pub fn apply(old: &str, hunks: &[Hunk]) -> String {
 
 /// Check hunks against `old`: in order, non-overlapping, in range, on char boundaries, non-empty.
 pub fn validate(old: &str, hunks: &[Hunk]) -> Result<(), HunkError> {
+    validate_by(old.len(), |at| Ok(old.is_char_boundary(at)), hunks)
+}
+
+/// [`validate`] for a text known by its length `len` in bytes and a check of its char
+/// boundaries, `boundary(at)` (asked only for `at <= len`, once a hunk's range is in order and
+/// within the text), so a caller can check hunks without the whole text: the same rules, in
+/// the same order, with the same [`HunkError`]s. An error of the check itself is returned as
+/// it is.
+pub(crate) fn validate_by<E: From<HunkError>>(
+    len: usize,
+    mut boundary: impl FnMut(usize) -> Result<bool, E>,
+    hunks: &[Hunk],
+) -> Result<(), E> {
     let mut prev_end = 0usize;
     let mut prev_insert_at = None;
     for (index, h) in hunks.iter().enumerate() {
-        if h.start > h.end
-            || h.end > old.len()
-            || !old.is_char_boundary(h.start)
-            || !old.is_char_boundary(h.end)
-        {
-            return Err(HunkError::Range { index });
+        if h.start > h.end || h.end > len || !boundary(h.start)? || !boundary(h.end)? {
+            return Err(HunkError::Range { index }.into());
         }
         if index > 0
             && (h.start < prev_end || (h.is_insertion() && prev_insert_at == Some(h.start)))
         {
-            return Err(HunkError::Order { index });
+            return Err(HunkError::Order { index }.into());
         }
         if h.is_insertion() && h.insert.is_empty() {
-            return Err(HunkError::Empty { index });
+            return Err(HunkError::Empty { index }.into());
         }
         prev_insert_at = h.is_insertion().then_some(h.start);
         prev_end = h.end;

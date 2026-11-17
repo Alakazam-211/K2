@@ -10,7 +10,8 @@
 #   licence      every file in LICENCE_FILES is at the root, tracked and not empty.
 #   paths        no tracked path has a component named mpce* (a directory `mpce-x`, a file
 #                `mpce.rs`, `mpce_x.rs`...) unless its crate name is in PUBLIC_ENGINE_CRATES,
-#                and no directory vendor/mpce* other than those crates' exists on disk.
+#                and no directory vendor/mpce* other than those crates' exists on disk. A directory
+#                in REFUSED_VENDOR_DIRS is refused by name, even if the allowlist ever names it.
 #   manifests    no Cargo.toml and no Cargo.lock anywhere in the tree names an `mpce-*` /
 #                `mpce_*` crate outside PUBLIC_ENGINE_CRATES (dependencies, [patch],
 #                [workspace.dependencies], features, lock entries; comments included), each
@@ -45,7 +46,8 @@
 #                an entry that matches no such line blocks too. A TEXT_BASE that is missing,
 #                untracked, not one full sha or not an ancestor of HEAD blocks, as does a
 #                root with no git history. Exempt: TEXT_EXCEPTIONS and the two lists' own lines.
-#   labels       no line of a kept text file (vendor/ aside; a CHANGELOG included) holds an
+#   labels       no line of a kept text file (vendor/ aside, and TEXT_EXCEPTIONS' entries that
+#                quote a vendor/ line; a CHANGELOG included) holds an
 #                internal label, each pattern in LABEL_PATTERNS named by its kind: a requirement
 #                id (`K-BR-12`) outside the error registry's rule column, an ask label (`K5`), a
 #                plan slice, a numbered contract gap, a `KC` item, or a pointer to a PRD. The rule
@@ -79,8 +81,13 @@
 set -eu
 
 # ---- The allowlist: the one place to change it. -------------------------------------------
-# Engine crates a public cut may carry (already public). Space-separated crate names.
-PUBLIC_ENGINE_CRATES="mpce-model"
+# Engine crates a public cut may carry (already public): the reference model and the two layers
+# it composes (std only, test-only). Space-separated crate names.
+PUBLIC_ENGINE_CRATES="mpce-model mpce-order mpce-reg"
+# Vendor directories a public cut never carries, whatever PUBLIC_ENGINE_CRATES says: the engine's
+# licence copies. The root LICENSE-MIT and LICENSE-APACHE, byte for byte the engine commit's,
+# cover the vendored crates (vendor/README.md says so).
+REFUSED_VENDOR_DIRS="mpce-licences"
 # Cargo features a public cut removes with their code (the native engine's; the entry points
 # of the trees below): never declared or requested in a public cut.
 NATIVE_FEATURES="native fuzzing"
@@ -175,9 +182,15 @@ awk -v allow="$PUBLIC_ENGINE_CRATES" '
       if (!(name in ok)) { print "check-public-cut: paths: " p " (engine-only path component " c[i] ")"; break }
     }
   }' "$LIST" >> "$OUT"
+for r in $REFUSED_VENDOR_DIRS; do
+  case " $PUBLIC_ENGINE_CRATES " in *" $r "*) bad "paths: PUBLIC_ENGINE_CRATES names $r, which a public cut never carries" ;; esac
+done
 for d in vendor/mpce*; do
   [ -e "$d" ] || continue
   n=${d#vendor/}
+  case " $REFUSED_VENDOR_DIRS " in
+    *" $n "*) bad "paths: $d exists (refused by name: the root licence files cover the vendored crates)"; continue ;;
+  esac
   case " $PUBLIC_ENGINE_CRATES " in *" $n "*) ;; *) bad "paths: $d exists (engine-only vendor directory)" ;; esac
 done
 
@@ -517,24 +530,29 @@ rm -f "$TBASE"
 
 # ---- labels ---------------------------------------------------------------------------------
 # Every kept text file but vendor/ and LABEL_EXEMPT (binary files: grep -I). The rule column is
-# taken out first where it is data; then each pattern is tried on what is left of the line.
+# taken out first where it is data; then each pattern is tried on what is left of the line. An
+# entry of TEXT_EXCEPTIONS that quotes a vendored line (`vendor/...: TEXT`) is set aside as that
+# line is: a vendored tree is upstream's text, kept byte for byte.
 grep -Ev '^vendor/' "$LIST" | while IFS= read -r f; do
   [ -f "$f" ] || continue
   case " $LABEL_EXEMPT " in *" $f "*) continue ;; esac
   grep -Iq . "$f" 2>/dev/null || continue
   printf '%s\n' "$f"
 done | LABEL_PATTERNS="$LABEL_PATTERNS" LABEL_PROSE_PATTERNS="$LABEL_PROSE_PATTERNS" \
-  ENGINE_CODES="$(grep -oE 'e\("MPCE-E[0-9]+"' crates/base/src/errors/registry.rs 2>/dev/null | grep -oE 'MPCE-E[0-9]+' | tr '\n' ' ')" awk '
+  ENGINE_CODES="$(grep -oE 'e\("MPCE-E[0-9]+"' crates/base/src/errors/registry.rs 2>/dev/null | grep -oE 'MPCE-E[0-9]+' | tr '\n' ' ')" \
+  TEXT_EXCEPTIONS="$TEXT_EXCEPTIONS" awk '
   BEGIN {
     n = split(ENVIRON["LABEL_PATTERNS"], row, "\n"); for (i = 1; i <= n; i++) { k = index(row[i], "="); kind[i] = substr(row[i], 1, k - 1); rx[i] = substr(row[i], k + 1) }
     m = split(ENVIRON["LABEL_PROSE_PATTERNS"], row, "\n"); for (i = 1; i <= m; i++) { k = index(row[i], "="); pkind[i] = substr(row[i], 1, k - 1); prx[i] = substr(row[i], k + 1) }
     split(ENVIRON["ENGINE_CODES"], ec, " "); for (i in ec) known[ec[i]] = 1
   }
   {
-    file = $0; ln = 0; md = (file ~ /\.md$/)
+    file = $0; ln = 0; md = (file ~ /\.md$/); exl = (file == ENVIRON["TEXT_EXCEPTIONS"])
     reg = (file ~ /(^|\/)errors\/registry\.rs$/); errs = (file == "docs/ERRORS.md"); gold = (file ~ /\/golden\/errors\//)
     while ((getline line < file) > 0) {
       ln++
+      # a reviewed vendored line, quoted: vendor/ is set aside
+      if (exl && line ~ /^vendor\//) continue
       # the registry rule column: no release-line or amendment label
       if (reg && match(line, /e\("MPC-E[0-9]+", *"[a-z0-9_]+", *[A-Za-z]+, *[0-9]+, *"[^"]*"/)) {
         rule = substr(line, RSTART, RLENGTH); sub(/.*, *"/, "", rule); sub(/"$/, "", rule)

@@ -11,10 +11,13 @@
 //! [`crate::blob::BlobStore::gc`] removes a blob nothing else references once the grace runs
 //! out.
 //!
-//! Left alone: `meta` (doc ids are never reused), the host's table (`host`, opaque to the
-//! kit: erasing a deleted doc's or space's rows there is the host's job), and a space's blob
-//! key (`blob_spaces`; [`crate::blob::BlobStore::purge_space_key`] destroys it and every blob
-//! of the space at once).
+//! The store's native bit (`meta`) is cleared in the same transaction when the doc held the
+//! store's last engine store (`features.rs`).
+//!
+//! Left alone: `meta` (doc ids are never reused; the native bit aside), the host's table
+//! (`host`, opaque to the kit: erasing a deleted doc's or space's rows there is the host's
+//! job), and a space's blob key (`blob_spaces`; [`crate::blob::BlobStore::purge_space_key`]
+//! destroys it and every blob of the space at once).
 //!
 //! A new per-doc table goes in [`super::DOC_TABLES`] (v0.9.7: one list for the delete, the
 //! rewrite and `tables_holding`). `tables_holding` (tests only) panics on a table in the
@@ -50,6 +53,8 @@ fn delete_in(w: &WriteTransaction, id: DocId, now: u64) -> Result<DocKey, StoreE
     // the tier-0 tables, doc_blob_refs and live_carriers: their blob references are released
     // first
     blob::delete_rows(w, id, &key.space, now)?;
+    // the store's last engine store gone: the native bit goes in the same transaction
+    super::features::clear_native_if_none(w)?;
     Ok(key)
 }
 

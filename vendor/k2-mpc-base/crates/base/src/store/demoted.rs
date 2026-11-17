@@ -60,6 +60,7 @@ pub(super) const KEPT: &[&str] = &[
     "blob_approvals",
     "blob_struct_keys",
     "blob_turns",
+    "blob_verbs",
     "annot_threads",
     "annot_comments",
     "annot_log",
@@ -243,6 +244,9 @@ impl DocStore {
                     t.erase(&w, id)?;
                 }
             }
+            // a native doc's engine store went with them: the store's last one takes the
+            // native bit with it (as a delete does)
+            super::features::clear_native_if_none(&w)?;
             // the blob doc
             w.open_table(DOCS)?
                 .insert(id, enc_meta(p.meta).as_slice())?;

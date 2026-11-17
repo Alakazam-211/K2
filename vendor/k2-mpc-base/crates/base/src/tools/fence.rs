@@ -9,7 +9,7 @@
 //! ┄┄ doc 7f3a9c0e1d2b4a68 END notes.md ┄┄
 //! ```
 //!
-//! The nonce is random per call (64 bits from `/dev/urandom`, or, where that can't be read,
+//! The nonce is random per call (64 bits from the OS generator, or, where that can't be read,
 //! a mix of a per-process random hasher key, the clock and a counter), so text in the doc
 //! can't contain the END marker in advance. As a backstop a nonce that happens to occur in
 //! the output is redrawn. The host can supply its own nonce. The fence is defence in depth;

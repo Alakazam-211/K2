@@ -210,6 +210,23 @@ pub struct VerbSpec {
     /// The verb this one is another name for, when that verb's name is a pack's
     /// ([`Registry::for_blob_pack`]'s `outline` and `node`); [`ALIASES`] holds the kit's own.
     alias: Option<&'static str>,
+    /// A blob pack's own verb ([`crate::session::BlobPack::verbs`]): how it merges and reads
+    /// its input; `None` for every other verb.
+    pub blob: Option<BlobVerbFacts>,
+}
+
+/// What `capabilities` says of a blob pack's own verb ([`VerbSpec::blob`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BlobVerbFacts {
+    /// An edit verb's merge: `pack` (the pack's merge covers it) or `lease` (only under the
+    /// caller's own lease); `None` for a read verb.
+    pub merge: Option<&'static str>,
+    /// `stream` or `whole`.
+    pub input: &'static str,
+    /// An edit verb's past-tense word ([`crate::session::BlobVerb::word`]); `None` for a read
+    /// verb.
+    pub word: Option<&'static str>,
 }
 
 impl VerbSpec {
@@ -238,6 +255,12 @@ impl VerbSpec {
             }
             Source::File => false,
         }
+    }
+
+    /// Whether it is a blob pack's own verb ([`crate::session::BlobPack::verbs`],
+    /// [`Registry::for_blob_pack`]): the error registry's `@blob_verb` group.
+    pub fn is_blob_verb(&self) -> bool {
+        self.source == Source::Pack && self.blob.is_some()
     }
 
     /// Whether it is one of the annotation verbs ([`ANNOTATION_VERBS`]).
@@ -281,7 +304,7 @@ impl VerbSpec {
 }
 
 /// The words [`Registry::for_blob_pack`] gives a structure index besides the pack's names.
-const INDEX_KIT_WORDS: &[&str] = &["outline", "node", "claim"];
+pub(crate) const INDEX_KIT_WORDS: &[&str] = &["outline", "node", "claim"];
 
 const LIST_USAGE: &str = "[--version V] [--depth N] [--kind K] [--tree] [--cursor C] \
      [--no-truncate] [--json] (the outline, each node's #N; another version: +history)";
@@ -322,6 +345,7 @@ const fn index_verb(
         positions,
         serves_named: &[],
         alias: None,
+        blob: None,
     }
 }
 
@@ -382,6 +406,7 @@ const fn kit(
         positions: None,
         serves_named: &[],
         alias: None,
+        blob: None,
     }
 }
 
@@ -1159,8 +1184,16 @@ pub struct Registry {
 /// `pack`'s own refusals ([`crate::session::Pack::errors`]), checked as [`Registry::for_pack`]
 /// says.
 fn pack_errors(pack: &dyn Pack) -> Result<&'static [crate::errors::ErrorEntry], RegistryError> {
-    let errors = pack.errors();
-    let prefix = format!("{}-E", pack.schema().name.to_ascii_uppercase());
+    checked_errors(pack.errors(), pack.schema().name)
+}
+
+/// `errors`, a pack's own refusals under its name `pack`, checked as [`Registry::for_pack`]
+/// says.
+fn checked_errors(
+    errors: &'static [crate::errors::ErrorEntry],
+    pack: &str,
+) -> Result<&'static [crate::errors::ErrorEntry], RegistryError> {
+    let prefix = format!("{}-E", pack.to_ascii_uppercase());
     for (i, e) in errors.iter().enumerate() {
         let digits = e.id.strip_prefix(prefix.as_str()).unwrap_or("");
         if digits.len() < 3 || !digits.bytes().all(|b| b.is_ascii_digit()) {
@@ -1283,6 +1316,7 @@ impl Registry {
                 positions: None,
                 serves_named: v.serves,
                 alias: None,
+                blob: None,
             });
         }
         Ok(r)
@@ -1398,6 +1432,7 @@ impl Registry {
                 positions: v.declared_positions(),
                 serves_named: &[],
                 alias: None,
+                blob: None,
             });
         }
         Ok(r)
@@ -1442,7 +1477,7 @@ impl Registry {
     pub fn for_blob_pack(pack: &dyn crate::session::BlobPack) -> Result<Self, RegistryError> {
         let mut r = Self::for_tier(Tier::Blob).with_annotations();
         let Some(spec) = pack.index_spec() else {
-            return Ok(r);
+            return r.with_blob_verbs(pack);
         };
         let v = spec.verbs;
         let mut names = vec![v.list, v.show, v.diff, v.blame];
@@ -1575,7 +1610,158 @@ impl Registry {
             OK01,
             None,
         ));
-        Ok(r)
+        r.with_blob_verbs(pack)
+    }
+
+    /// [`Registry::for_blob_pack`]'s last step: the pack's own verbs
+    /// ([`crate::session::BlobPack::verbs`]) as [`Source::Pack`] verbs of [`Tier::Blob`] that
+    /// run through [`crate::session::BlobSession::run_tool`], and its own refusals
+    /// ([`crate::session::BlobPack::errors`], under its index's pack name). Refused: a name
+    /// that isn't one or two lowercase words; a first word that is a kit verb's (any tier, the
+    /// structure index's own words and the annotation verbs' included), or a name the
+    /// registry already holds (the index's verbs), or `batch`; twice; an edit verb on a pack
+    /// with no structure index, or with no merge; `merge: Pack` on a pack that can't merge
+    /// ([`crate::session::BlobPack::can_merge`]); a read verb with a merge; a verb serving no
+    /// person action; an exit outside the kit's table (0 to 8); and refusals as
+    /// [`Registry::for_pack`] checks them (an id other than `<PACK>-Ennn`, the index's pack name
+    /// upper-cased; refusals with no index to name them).
+    fn with_blob_verbs(
+        mut self,
+        pack: &dyn crate::session::BlobPack,
+    ) -> Result<Self, RegistryError> {
+        use crate::session::{BlobVerb, BlobVerbKind, VerbInput, VerbMerge};
+        let spec_of = |v: &BlobVerb, merge: Option<VerbMerge>| {
+            let read = v.kind == BlobVerbKind::Read;
+            VerbSpec {
+                name: v.name,
+                kind: if read { VerbKind::Read } else { VerbKind::Edit },
+                needs: if read { NR } else { NE },
+                api: TOOL,
+                serves: v.serves,
+                usage: v.usage,
+                exits: v.exits,
+                source: Source::Pack,
+                tiers: BLOB,
+                positions: None,
+                serves_named: &[],
+                alias: None,
+                blob: Some(BlobVerbFacts {
+                    merge: merge.map(|m| match m {
+                        VerbMerge::Pack => "pack",
+                        VerbMerge::Lease => "lease",
+                    }),
+                    input: match v.input {
+                        VerbInput::Stream => "stream",
+                        VerbInput::Whole => "whole",
+                    },
+                    word: (!read).then_some(v.word),
+                }),
+            }
+        };
+        // the planted fault: every verb and refusal taken unchecked
+        if plant_on!(
+            crate::differential::tier0_verb_mutant()
+                == Some(crate::differential::Tier0VerbMutant::RegistryUnchecked)
+        ) {
+            self.errors = pack.errors();
+            for v in pack.verbs() {
+                self.verbs.push(spec_of(v, v.merge));
+            }
+            return Ok(self);
+        }
+        let spec = pack.index_spec();
+        let errors = pack.errors();
+        if !errors.is_empty() {
+            let Some(spec) = spec else {
+                return Err(RegistryError(
+                    "a blob pack's refusals need a structure index to name them (its pack name)"
+                        .to_owned(),
+                ));
+            };
+            self.errors = checked_errors(errors, spec.pack)?;
+        }
+        let verbs = pack.verbs();
+        for (k, v) in verbs.iter().enumerate() {
+            let name = v.name;
+            let words: Vec<&str> = name.split(' ').collect();
+            let word_ok = |w: &str| {
+                !w.is_empty()
+                    && !w.starts_with('-')
+                    && w.bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            };
+            if words.len() > 2 || !words.iter().all(|w| word_ok(w)) {
+                return Err(RegistryError(format!(
+                    "blob verb {name:?}: one or two lowercase words"
+                )));
+            }
+            let taken = crate::tools::is_kit_verb(words[0])
+                || INDEX_KIT_WORDS.contains(&words[0])
+                || words[0] == "batch"
+                || ANNOTATION_VERBS
+                    .iter()
+                    .any(|a| a.name.split(' ').next() == Some(words[0]))
+                || KIT_VERBS
+                    .iter()
+                    .any(|kv| kv.name.split(' ').next() == Some(words[0]))
+                || self.get(name).is_some();
+            if taken {
+                return Err(RegistryError(format!(
+                    "blob verb {name:?} is already a verb (the kit's would win)"
+                )));
+            }
+            if verbs[..k].iter().any(|o| o.name == name) {
+                return Err(RegistryError(format!("blob verb {name:?} twice")));
+            }
+            if v.serves.is_empty() {
+                return Err(RegistryError(format!(
+                    "blob verb {name:?} serves no person action"
+                )));
+            }
+            if v.exits.iter().any(|e| *e > TOO_OLD) {
+                return Err(RegistryError(format!(
+                    "blob verb {name:?}: an exit outside the kit's table (0 to {TOO_OLD})"
+                )));
+            }
+            let read = v.kind == BlobVerbKind::Read;
+            let merge = match (read, v.merge) {
+                (true, None) => None,
+                (true, Some(_)) => {
+                    return Err(RegistryError(format!(
+                        "blob verb {name:?}: a read verb has no merge"
+                    )))
+                }
+                (false, None) => {
+                    return Err(RegistryError(format!(
+                        "blob verb {name:?}: an edit verb says how it merges (pack or lease)"
+                    )))
+                }
+                (false, Some(m)) => Some(m),
+            };
+            if !read && spec.is_none() {
+                return Err(RegistryError(format!(
+                    "blob verb {name:?}: an edit verb needs the pack's structure index (the kit \
+                     checks its output with it)"
+                )));
+            }
+            if merge == Some(VerbMerge::Pack) && !pack.can_merge() {
+                return Err(RegistryError(format!(
+                    "blob verb {name:?}: merge: Pack on a pack that can't merge (use Lease)"
+                )));
+            }
+            let said = !v.word.is_empty()
+                && v.word
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b == b' ' || b == b'-');
+            if !read && !said {
+                return Err(RegistryError(format!(
+                    "blob verb {name:?}: an edit verb needs its past-tense word for results \
+                     (lowercase, not empty; BlobVerb::with_word)"
+                )));
+            }
+            self.verbs.push(spec_of(v, merge));
+        }
+        Ok(self)
     }
 
     /// Every verb, kit verbs first.

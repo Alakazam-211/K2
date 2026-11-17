@@ -7,8 +7,8 @@
 //! This build can't make a native doc, so its rows are written by hand through redb, with the
 //! table definitions a build with the native engine writes them under (here, not the kit's):
 //! the native stamp, a generation row, a record and the record's nonce, the store stamped
-//! format 8 with the native bit. A store the native engine itself wrote is checked by the
-//! native engine's own N−1 run, outside this tree (`tools/n1/n1.sh` has no such mode).
+//! format 8 with the native bit. A store the native engine itself wrote is opened the same way
+//! by `tools/n1/n1.sh node-native-mixed`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

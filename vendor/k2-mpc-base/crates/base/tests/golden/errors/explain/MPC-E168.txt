@@ -1,0 +1,21 @@
+MPC-E168 native_no_yjs (sessions and edits)
+exit:     2
+message:  this doc is on the native engine; Yjs sync bytes can't reach it
+next:     Nothing was applied. A doc on the native engine takes no Yjs sync: edit it through the host's verbs, or switch the doc back to the standard engine to sync it with Yjs.
+rule:     the native engine (a Beta): no Yjs sync
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E168",
+  "name": "native_no_yjs",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "this doc is on the native engine; Yjs sync bytes can't reach it",
+  "next": "Nothing was applied. A doc on the native engine takes no Yjs sync: edit it through the host's verbs, or switch the doc back to the standard engine to sync it with Yjs.",
+  "rule": "the native engine (a Beta): no Yjs sync",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

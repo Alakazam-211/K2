@@ -1,0 +1,21 @@
+MPC-E721 native_no_tier0 (tier 0 and blobs)
+exit:     4
+message:  this doc is on the native engine (a Beta), which doesn't move to or from tier 0 ({verb})
+next:     Nothing changed: the doc is still on the native engine, as it was. In the Beta a doc on the native engine can't become a tier-0 doc, or be made from one. Switch the doc back to the standard engine first, then move it.
+rule:     the native engine (a Beta): no move to or from tier 0
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E721",
+  "name": "native_no_tier0",
+  "area": "tier 0 and blobs",
+  "exit": 4,
+  "message": "this doc is on the native engine (a Beta), which doesn't move to or from tier 0 ({verb})",
+  "next": "Nothing changed: the doc is still on the native engine, as it was. In the Beta a doc on the native engine can't become a tier-0 doc, or be made from one. Switch the doc back to the standard engine first, then move it.",
+  "rule": "the native engine (a Beta): no move to or from tier 0",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

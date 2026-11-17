@@ -449,8 +449,7 @@ impl BlobSession {
             });
         }
 
-        // the switch: one transaction
-        doc.check_storable()?;
+        // the switch: one transaction (a promoted doc is made on Yrs, the standard engine)
         let old = store.meta(self.doc_id)?;
         let hash_key = fresh_key()?;
         let hash = file_hash(&hash_key, &current_bytes);

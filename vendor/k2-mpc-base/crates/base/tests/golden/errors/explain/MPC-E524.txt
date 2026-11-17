@@ -1,0 +1,21 @@
+MPC-E524 cut_pending_records (store)
+exit:     6
+message:  doc {doc} holds {changes} changes not yet committed; a native doc is cut only once its changes are in the store, so nothing was cut
+next:     A cut folds a native doc's engine records into a new generation, and a change whose record isn't committed yet would be folded in without its log row, so nothing changed. Commit the doc's pending changes (or its pending purge), then cut again.
+rule:     a cut after the commit
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E524",
+  "name": "cut_pending_records",
+  "area": "store",
+  "exit": 6,
+  "message": "doc {doc} holds {changes} changes not yet committed; a native doc is cut only once its changes are in the store, so nothing was cut",
+  "next": "A cut folds a native doc's engine records into a new generation, and a change whose record isn't committed yet would be folded in without its log row, so nothing changed. Commit the doc's pending changes (or its pending purge), then cut again.",
+  "rule": "a cut after the commit",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

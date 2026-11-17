@@ -1,9 +1,8 @@
 //! Movable trees (the reference model for trees): Kleppmann, Mulligan, Gomes & Beresford, "A
 //! highly-available move operation for replicated trees", IEEE TPDS 33(7), 2021 (cited as
-//! [Move]), composed with K2's additions: FugueMax sibling order per parent, the causal
-//! skeleton (amendment `g1-tree-causality` r2: E-CORE-12, E-TREE-4) and the rescue projection.
-//! The Quint model is `spec/quint/tree.qnt`; this model replays its ITF traces
-//! (`src/bin/tree_itf_replay.rs`).
+//! [Move]), composed with these additions: FugueMax sibling order per parent, the causal
+//! skeleton and the rescue projection. A Quint model of the same rules exists; this model replays
+//! its ITF traces (`src/bin/tree_itf_replay.rs`).
 //!
 //! ## The core: [Move] Fig. 4
 //! [`fig4`] is Fig. 4 transcribed line by line (generic over `'t`, `'n`, `'m`, recursion kept),
@@ -35,12 +34,11 @@
 //! `i` takes as left origin the `i`-th live element (or start) and as right origin the next
 //! element after it, tombstones included, as in the Quint model.
 //!
-//! ## The projection (E-TREE-4, daemon-side)
+//! ## The projection (host-side)
 //! [`Replica::projection`] is a pure function of the tree-op set and happened-before (from the
 //! skeleton); nothing is frozen. Old parents and skip status come from a replay of the op set
-//! in timestamp order ([`Replica::seq_log`]), never from the resident log. The rules are K2
-//! Cores' ruling of 2026-10-28 (the "core path" rule; it replaced a walk that stopped at the
-//! first *visible* node, which with 4 nodes let two rescued roots be each other's visible
+//! in timestamp order ([`Replica::seq_log`]), never from the resident log. The rule is the
+//! "core path" rule (it replaced a walk that stopped at the first *visible* node, which with 4 nodes let two rescued roots be each other's visible
 //! parent: `tf_mutual_rescue_cycle`).
 //! - core parent `cp(n)`: Fig. 4's `get_parent`; n is deleted if `cp(n)` is TRASH; its
 //!   effective move `E(n)` is the meta of its triple (for a deleted d, its delete). The
@@ -241,7 +239,7 @@ pub mod fig4 {
 }
 
 // ---------------------------------------------------------------------------------------
-// K2's composition: types
+// The composition: types
 
 /// A node ID. [`NodeId::ROOT`] and [`NodeId::TRASH`] are the two roots; every other node is
 /// created by a move of a fresh ID (IDs are chosen by the caller and must be globally unique).
@@ -364,7 +362,7 @@ impl From<TreeError> for MoveError {
     }
 }
 
-/// The model or one of the Quint model's mutants (`VARIANT` in `tree.qnt`). Mutants exist to
+/// The model or one of the Quint model's mutants (its `VARIANT`). Mutants exist to
 /// prove the fixtures and property tests have teeth; real replicas use `Correct`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord)]
 pub enum Variant {
@@ -403,7 +401,7 @@ impl Variant {
         Variant::CompactTreeStructure,
     ];
 
-    /// The name of the variant in `tree.qnt`.
+    /// The name of the variant in the Quint model.
     pub fn quint_name(self) -> &'static str {
         match self {
             Variant::Correct => "correct",
@@ -427,7 +425,7 @@ impl Variant {
 /// How several rescued roots at one spot are ordered.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SameSpotOrder {
-    /// K2 Cores' rule: the pre-order of the rebuilt pre-delete tree (module docs); the Quint
+    /// The rule: the pre-order of the rebuilt pre-delete tree (module docs); the Quint
     /// model orders the same way
     PreDeletePreorder,
     /// by node ID (the Quint model's earlier simplification; kept for comparison)
@@ -510,7 +508,7 @@ impl VisibleTree {
     }
 }
 
-/// A conflict report (E-TREE-4): cycle-skips per (mover, node, op), rescues per (node, delete).
+/// A conflict report: cycle-skips per (mover, node, op), rescues per (node, delete).
 ///
 /// Identity is the key only: `CycleSkip` by (mover, node, op), `Rescue` by (node, delete).
 /// `PartialEq`, `Ord` and `Hash` compare [`ConflictReport::key`] and ignore `walked_past`

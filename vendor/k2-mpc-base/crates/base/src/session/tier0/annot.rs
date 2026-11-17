@@ -468,7 +468,47 @@ impl BlobSession {
         let (view, ix) = self.view_near(store, views, at).ok().flatten()?;
         let mut r = resolve_in(a, view.version, &view.nodes, &ix, &rules);
         r.current = view.version == at;
+        // found and the same by its fingerprint: is it still the same across an outside save?
+        if judged_across_saves(r.state) {
+            if let Some(d) = self.doubt_across_saves(store, views, a, view.version) {
+                r.state = AnchorState::Suspect(d);
+            }
+        }
         Some(r)
+    }
+
+    /// Version `v`'s own index (not an earlier one's), cached in `views`; `None` when it has
+    /// none just now.
+    fn exact_view(&self, views: &mut Views, v: VersionId) -> Option<Indexed> {
+        if let Some(got) = views.by_version.get(&v) {
+            return got.clone();
+        }
+        let got = self.index_view(Some(v)).ok().map(|view| {
+            let ix = NodeIndex::new(&view.nodes);
+            (Arc::new(view), Arc::new(ix))
+        });
+        views.by_version.insert(v, got.clone());
+        got
+    }
+
+    /// An anchor found at `to` and the same by its fingerprint, across each outside save after
+    /// it was made (`docs/SESSIONS.md`, "Across an outside save"): judged as a diff row is, the
+    /// node in the version just before the save against the node in the save, never against
+    /// the fingerprint the anchor was made with (an honest rename, then an honest content
+    /// edit, would look like another node). A save the pack says reissues keys leaves it in
+    /// doubt; a proven one passes; one with an index missing isn't judged. The doubt is the
+    /// existing [`AnchorDoubt::IdentityDoubt`] or [`AnchorDoubt::KindChanged`]: no new stored
+    /// state.
+    fn doubt_across_saves(
+        &self,
+        store: &DocStore,
+        views: &mut Views,
+        a: &Anchor,
+        to: VersionId,
+    ) -> Option<crate::anchor::AnchorDoubt> {
+        let versions = store.blob_versions(self.doc_id).ok()?;
+        let mut view = |v: VersionId, _: &BlobVersion| self.exact_view(views, v).map(|x| x.0);
+        doubt_across(&*self.pack, &versions, a, to, &mut view)
     }
 
     /// A thread as `who` may see it, resolved at `at`. A reader without history sees no copy
@@ -1088,7 +1128,9 @@ impl BlobSession {
     /// thread changed meanwhile and any version purged meanwhile; emit
     /// [`AuditEvent::AnchorState`] for each applied state change. Records only: no thread is
     /// moved, and an anchor a purge cleared gets no `last_seen` back until a re-anchor.
-    /// `view` is read only when the doc has a node anchor.
+    /// `view` is read only when the doc has a node anchor. An anchor found and the same by its
+    /// fingerprint is judged across the outside saves after it was made as a read judges it
+    /// ([`doubt_across`]), `stored` giving each earlier version's own recorded index.
     pub(super) fn observe_anchors(
         store: &DocStore,
         host: &dyn Host,
@@ -1096,6 +1138,7 @@ impl BlobSession {
         doc: DocId,
         key: &DocKey,
         view: impl FnOnce() -> Option<IndexView>,
+        mut stored: impl FnMut(VersionId, &BlobVersion) -> Option<IndexView>,
     ) {
         let Ok(threads) = store.annot_node_threads(doc) else {
             return;
@@ -1109,10 +1152,32 @@ impl BlobSession {
         let v = view.version;
         let ix = NodeIndex::new(&view.nodes);
         let rules = PackRules(pack);
+        let versions = store.blob_versions(doc).unwrap_or_default();
+        let view = Arc::new(view);
+        let mut cache: HashMap<VersionId, Option<Arc<IndexView>>> = HashMap::new();
+        cache.insert(v, Some(view.clone()));
+        let mut load = |at: VersionId, ver: &BlobVersion| {
+            cache
+                .entry(at)
+                .or_insert_with(|| stored(at, ver).map(Arc::new))
+                .clone()
+        };
         let mut updates: Vec<Observed> = Vec::new();
         let mut changes: Vec<crate::annot::StateChange> = Vec::new();
         for (id, rec) in threads {
-            let r = resolve_in(&rec.anchor, v, &view.nodes, &ix, &rules);
+            let mut r = resolve_in(&rec.anchor, v, &view.nodes, &ix, &rules);
+            // across an outside save, as a read judges it (the planted fault: by the
+            // fingerprint alone)
+            if judged_across_saves(r.state)
+                && !plant_on!(
+                    crate::differential::tier0_verb_mutant()
+                        == Some(crate::differential::Tier0VerbMutant::StoredJudgeByFingerprint)
+                )
+            {
+                if let Some(d) = doubt_across(pack, &versions, &rec.anchor, v, &mut load) {
+                    r.state = AnchorState::Suspect(d);
+                }
+            }
             let mut new = rec.clone();
             let mut changed = false;
             if planted!(AutoReanchor) {
@@ -1169,6 +1234,78 @@ impl BlobSession {
             }
         }
     }
+}
+
+/// The doubt on anchor `a`, found at `to` and the same by its fingerprint, across each outside
+/// save in `versions` (the doc's, oldest first) after the version it was made at: the one rule
+/// for a read ([`BlobSession::thread`]) and for the state an index job records
+/// ([`BlobSession::observe_anchors`]), so the two never disagree (`docs/SESSIONS.md`, "Across
+/// an outside save"). `view` gives a version's own index (`None`: not there, so that save
+/// isn't judged).
+fn doubt_across(
+    pack: &dyn BlobPack,
+    versions: &[(VersionId, BlobVersion)],
+    a: &Anchor,
+    to: VersionId,
+    view: &mut dyn FnMut(VersionId, &BlobVersion) -> Option<Arc<IndexView>>,
+) -> Option<crate::anchor::AnchorDoubt> {
+    use crate::anchor::AnchorDoubt;
+    let key = a.key()?;
+    for (k, (vid, ver)) in versions.iter().enumerate() {
+        if k == 0
+            || *vid <= a.created_version
+            || *vid > to
+            || !super::index_read::is_outside_save(ver)
+        {
+            continue;
+        }
+        let (prev, pver) = &versions[k - 1];
+        let (Some(before), Some(after)) = (view(*prev, pver), view(*vid, ver)) else {
+            continue;
+        };
+        let pairing = pack.save_pairing(&SaveFacts {
+            version: *vid,
+            kept_conflict: ver.conflict_copy.is_some(),
+            before: &before,
+            after: &after,
+        });
+        let answered = plant_on!(
+            crate::differential::tier0_verb_mutant()
+                == Some(crate::differential::Tier0VerbMutant::ReissuesAnswered)
+        );
+        match pairing {
+            SavePairing::Proven => continue,
+            SavePairing::Reissues if !answered => return Some(AnchorDoubt::IdentityDoubt),
+            _ => {}
+        }
+        let node_of = super::index_read::node_of;
+        let (Some(was), Some(now)) = (node_of(&before, key), node_of(&after, key)) else {
+            continue;
+        };
+        // the planted fault: the fingerprint the anchor was made with, not the node before
+        let was = if plant_on!(
+            crate::differential::tier0_verb_mutant()
+                == Some(crate::differential::Tier0VerbMutant::JudgeAgainstFingerprint)
+        ) {
+            a.fingerprint.as_ref().unwrap_or(&was.fingerprint)
+        } else {
+            &was.fingerprint
+        };
+        match super::index_read::judged_across(pack, was, now) {
+            Some("kind_changed") => return Some(AnchorDoubt::KindChanged),
+            Some(_) => return Some(AnchorDoubt::IdentityDoubt),
+            None => {}
+        }
+    }
+    None
+}
+
+/// Found and the same by its fingerprint: the states a doubt across a save may change.
+fn judged_across_saves(state: AnchorState) -> bool {
+    matches!(
+        state,
+        AnchorState::Attached | AnchorState::HintStale | AnchorState::Hidden
+    )
 }
 
 /// The node of `view` with key `k`, through its key map.

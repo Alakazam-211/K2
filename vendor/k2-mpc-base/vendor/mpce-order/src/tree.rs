@@ -133,6 +133,16 @@ impl<K: Copy + Ord> Tree<K> {
         }
     }
 
+    /// A node's (or the root's) children on one side, in sibling order (empty if unknown).
+    pub fn children(&self, p: Parent<K>, side: Side) -> Vec<K> {
+        self.kids(p, side).cloned().unwrap_or_default()
+    }
+
+    /// A node's right origin.
+    pub fn right_origin_of(&self, id: K) -> Option<Origin<K>> {
+        self.node(id).map(|n| n.right_origin)
+    }
+
     /// Whether a node (or the root) has right children.
     pub fn has_right_children(&self, p: Parent<K>) -> bool {
         self.kids(p, Side::Right).is_some_and(|v| !v.is_empty())

@@ -12,7 +12,7 @@ engine update itself. Nothing here decodes bytes from a client (`untrusted-wire`
 | Type | Who provides it | What it is |
 |---|---|---|
 | `Host` | host | `rights(who, key)`, `now_ms()`, `on_event(&AuditEvent)`; tier 0: `conflict_dir(file)` (default: beside the file), `conflict_copy_name(file_name, at_ms, who)` (default `None`: the pack's name) |
-| `Pack` | each file type | `schema()`, `decode(bytes)`, `encode(content, codec)`, `normalize_input(root, text)`, `verbs()` (its own edit verbs, default none), `writes_bom(root, codec)` (default: from `encode`; [Writing a BOM file](#writing-a-bom-file)), `check_merged(root, text)` (default: every text passes; see "A merge the pack refuses" under Outside edits) |
+| `Pack` | each file type | `schema()`, `decode(bytes)`, `encode(content, codec)`, `normalize_input(root, text)`, `verbs()` (its own edit verbs, default none), `writes_bom(root, codec)` (default: from `encode`; [Writing a BOM file](#writing-a-bom-file)), `check_merged(root, text)` (default: every text passes; see "A merge the pack refuses" under Outside edits), `checks_edits()` and `check_edit(view, edits)` (default: not asked; see [A pack's check of every live change](#a-packs-check-of-every-live-change)) |
 | `TextFilePack` | kit | a plain-text pack in one line: `TextFilePack::new("markdown", 4 << 20)` (root `source`) |
 | `SessionManager` | kit | one per store: `open`, `open_file`, `get`, `loaded_keys`, `rekey`, `tick`, `poll_disk`, `expire_idle`, `unload_idle`, `recheck_rights`, `delete_doc`, `delete_space`, `stats`, `release`; tier 0: `with_blob_store`, `open_blob`, `open_blob_file`, `get_blob`, `promote_blob_file`, `promote_blob` ([Tier 0 → text](#tier-0--text-v092)), `demote_text_file`, `demote_text` ([Text → tier 0](#text--tier-0)) |
 | `Session` | kit | one per loaded doc (`Arc<Session>`, `Send + Sync`) |
@@ -51,10 +51,13 @@ must not call back into the kit, or they deadlock. Events carry metadata only, n
      and this build doesn't include it. That doc alone is refused, nothing of it read or
      changed; the store and its other docs work (`MPC-E169`, exit 6). It is its own variant,
      never `Store(_)`, on every session call that meets such a doc (open, delete).
+   - `NativeBetaOff`: a create on the native engine with the Beta off (`MPC-E167`, exit 2;
+     [The native engine (a Beta)](#the-native-engine-a-beta)).
 
    `open_file(pack, &key, path, root)` is the same for a doc that lives in a file, which
    the session then keeps in sync ([Disk sync](#disk-sync)). `open` stays for docs without a
-   file (tests, in-memory use).
+   file (tests, in-memory use). `open_with` and `open_file_with` take `OpenOptions`: the
+   engine a doc they make runs on (`DocEngine`, the standard engine by default).
 3. Join to get a **connection**. Each call returns `Joined { conn: ConnId, client, version,
    replaced }` (`replaced` is `None` except from `join_replacing`).
    - `join(participant, Stay)` always opens a new connection. Use it for anything with its own
@@ -95,6 +98,14 @@ must not call back into the kit, or they deadlock. Events carry metadata only, n
 7. `release()` is for process hand-off. Every file is written back, every session closes,
    and later calls on them fail with `Released`. The kit drops its store handles. Once the host drops its own, the redb file
    is free for the next process (`DocStore::open_with_retry`).
+
+   **One opener per store.** The store library takes an exclusive OS lock on the store file
+   when a `DocStore` opens it and holds it for the store's life; the OS drops it when the
+   process exits, however it ends, and no lock file is left behind. A second opener, in this
+   process or another, is refused `StoreError::Locked` (`MPC-E505` `store_locked`, exit 6:
+   "Another process has this document open"), before anything is read or written.
+   `DocStore::open_with_retry(path, wait)` waits for the holder instead, and is refused the
+   same way past its deadline.
 8. Deleting: `delete_doc(&key)` / `delete_space(space)` close the loaded sessions of those
    docs, then erase them from the store ([Deleting docs](#deleting-docs)).
 
@@ -134,18 +145,29 @@ opened by a text pack is still `PackMismatch`.
 - **A native doc in a build without the native engine** is refused on its own: opening,
   deleting or loading it gives `NativeEngineMissing` (`MPC-E169`, exit 6; the store's
   `StoreError::NativeEngineMissing`, a session's `SessionError::NativeEngineMissing`), its rows
-  never read or changed. The store opens, and its other docs open, edit and save as usual.
+  never read or changed. The store opens, and its other docs open, edit and save as usual. A
+  build with the native engine deletes a native doc like any doc it owns, its engine store
+  with it.
 
 ### Native documents: keys
 
-A document on the native engine (feature `native`; not for hosts until the switch) needs two
+A document on the native engine (feature `native`; a Beta, below) needs two
 keys, `NativeKeys`: its equivocation-digest key and its store secret. In the engine's words,
 and in `MPCE-E566`'s, "the store" is one document's records, so both keys are **per
-document**. A session gets them from the host per document (`NativeKeysFor::keys`; sessions
-don't store native documents yet, so nothing calls it yet). The host's duties:
+document**. A session gets them from the host per document (`NativeKeysFor::keys`, given to the
+manager with `SessionManager::with_native_keys`; asked when a native document is made or
+loaded). It asks by the document's `NativeDocId`: the store's salt (16 random bytes the store
+mints once, at its first ask, and keeps in two `meta` rows, which kits without the native engine
+copy through and never read) and the document's id in that store (reserved before a create, so
+the keys exist before its first records). Both stay the same for the document's life, a rename
+included, and no two documents share them, in one store or in two. The `DocKey` comes too, for
+the host's own records; a rename changes it, so keys are never derived from it. The host's
+duties:
 
-- **Make both** from its own CSPRNG: two independent 32-byte values, one pair per document.
-  The kit makes neither and has no random source for them.
+- **Make both** unpredictable and distinct, one pair per document, neither computable from the
+  other without the host's secret: from its CSPRNG, or derived from `NativeDocId::bytes()` under
+  a master secret of its own (for example HKDF-SHA256 with a distinct label for each key). The
+  kit makes neither.
 - **Keep them together, outside the store:** never in the kit's store file, and pass both on
   every open of that document.
 - **Never reuse them** for another document, and never make new ones for a document that has
@@ -154,12 +176,84 @@ don't store native documents yet, so nothing calls it yet). The host's duties:
   the kit recovers them.
 - **Rotation isn't supported.**
 
-Once sessions store native documents, one the host has no keys for (`keys` gives `None`)
-is refused with [`MPCE-E566`](ERRORS.md#engine-ids-mpce-ennn) `store_secret_missing`, and
-nothing is written.
+A native document the host has no keys for (`keys` gives `None`, or the manager has no
+`NativeKeysFor`) is refused with [`MPCE-E566`](ERRORS.md#engine-ids-mpce-ennn)
+`store_secret_missing`, and nothing is written.
 Its next step says the same: "The host supplies the store's secret and keeps it outside the
 store; pass it on every open. Never make a new secret for a store that has native records."
 `NativeKeys`'s `Debug` prints neither value, and nothing serialises it.
+
+### The native engine (a Beta)
+
+With feature `native`, a host may make a text document on the native engine instead of the
+standard one (Yrs). It is a Beta: off by default, text file types only.
+
+- **The engine is chosen when the document is made, and only then.**
+  `SessionManager::open_with` / `open_file_with` take `OpenOptions { engine }`
+  (`DocEngine::Standard`, the default, or `DocEngine::Native`). Opening a stored document loads
+  it on the engine its stamp names, whatever the options say.
+- **The switch:** `Config::native_beta` (default `false`). With it off, a create on the native
+  engine is refused before anything is read or made, `MPC-E167` `native_beta_off` (exit 2,
+  `SessionError::NativeBetaOff`). Documents already on the native engine open, edit and save
+  whatever it says.
+- **One replica, several participants.** A native document has one replica: the host's
+  server-side document. People (the live hunk channel, `edit_at_base`), agents (the verbs, `write
+  --base`) and readers (change events, a snapshot and `events_since`) all join it through the
+  session's calls, each participant its own writer, with presence, claims, undo per participant
+  and attribution as on Yrs. Nothing in a session takes or gives sync bytes; the `Doc`'s own sync
+  calls refuse a native document's sync bytes (`MPC-E166` `native_one_replica`) and Yjs bytes
+  (`MPC-E168` `native_no_yjs`), exit 2, nothing applied.
+- **Every change is durable with its engine records:** the change's log row names the engine's
+  change by position, and its records are written in the same transaction (an import's with the
+  document it makes).
+- **The disk replica is text only:** the file's texts at the sync point, stored in the synced
+  state in a kit-neutral form (never engine bytes). An outside save is merged from those texts,
+  as on Yrs; a write-back stores the document's texts, with no engine encode.
+- **The live-text cap:** a native document's live text, its text roots together, stays within
+  the native engine's limit on the text one change may carry (4 MiB at its default limits, which
+  the kit never changes). An edit that would grow it past is refused with the cap's own code,
+  `SessionError::NativeTextCap` (`MPC-E909` `native_text_cap`, exit 2, as the standard engine's
+  size limits): nothing applied, nothing dropped. An edit that shrinks
+  it always applies. An outside save that would grow it past is declined (`too_large`); the
+  document stays as it was.
+- **Purge** runs as on Yrs: the owner's purge, whatever its scope, purges the kit's tables, and
+  the native engine erases every deleted element of the document's text everywhere its records
+  hold it (on Yrs the document keeps no deleted content); the live text stays. The engine's
+  purge is one change, logged as a change of no text by the owner, written with the rewrites of
+  the records that held erased content and the kit's purge in one store transaction. Another live
+  instance of the document refuses it (`MPC-E523`), nothing written.
+- **No move to or from tier 0:** demoting a native document, or promoting at its key, is refused
+  (`SessionError::NativeNoTier0`, `MPC-E721` `native_no_tier0`, exit 4, as the standard engine's
+  refusals of those calls), nothing changed.
+- **The cut cadence is a host setting,** `Config::native_cut_cadence` (a `CutCadence`): a live
+  cut once the changes since the last cut reach `min(ceiling, max(floor, n / divisor))` of the
+  document's `n` changes. The default, `CutCadence::BETA`, is `min(200, max(100, n / 30))`;
+  `CutCadence::new` refuses a floor of 0, a floor over the ceiling, a ceiling past 10,000 and a
+  divisor of 0 (`CadenceError`). A document takes the setting at its next open.
+- **The cut queue's settings are host settings,** `Config::native_cut_queue` (a
+  `CutQueueSettings`, listed by `capabilities` as `native_cut_idle_ms`, `native_cut_duty_pct`
+  and `native_cut_slow_ms`). A cut is background work that competes with editing, so the
+  manager queues the native documents that are due and runs their cuts one at a time:
+  - one entry per document, ordered forced first (a document at twice its cadence, or past its
+    size budget), then the most changes since its last cut, then the oldest;
+  - a cut that isn't forced runs only when no native commit came for `native_cut_idle_ms`
+    (default 250 ms); a forced one runs while editing goes on;
+  - cuts take at most `native_cut_duty_pct` of the time (default 10%): after a cut that took
+    `d` ms, none starts for `d * (100 / duty - 1)` ms (1.8 s after a 200 ms cut), forced ones
+    included;
+  - a refused cut stays queued and is tried again after that gap;
+  - a cut over `native_cut_slow_ms` (default 250 ms) is reported slow (report only).
+
+  `CutQueueSettings::new` refuses an idle window of 0 or past a minute, a duty outside 1% to
+  50% and a slow threshold of 0 (`CutQueueError`). **The queue is per `SessionManager`, so a
+  host runs one manager per process** (as it does already, one per store): only then is one
+  cut at a time a rule for the whole host. The queue runs native cuts once the native engine's
+  single-replica mode is in the kit; until then nothing is queued.
+- **Exit codes:** every native refusal exits as the standard engine's refusal in the same
+  situation (or, with none, in the class it was ruled into); a row holds the table.
+- **Not yet:** a native document's log isn't compacted (its compaction is the engine's cut, which
+  waits for the engine's single-replica mode), so its history grows with every change;
+  conversion between the engines isn't there.
 
 ## Identity, connections and attribution
 
@@ -350,17 +444,19 @@ it (`PackVerb::name`): `shape move`, `replace-section`. The kit sets it; a host 
 **Where it goes:** the change record, in the change's own transaction (`change_verbs` `(doc,
 seq)`; a change without one has no row), `ChangeEvent::verb` (the push and `events_since`, read
 back from the store, so after a restart too) and `ChangeInfo::verb` (`log`, `change`). An App
-viewer sees it as everyone does: it names the pack's verb, never a participant. Tier 0 has no
-pack verb that records a version, so a blob version has none.
+viewer sees it as everyone does: it names the pack's verb, never a participant. On a tier-0 doc,
+a version a file type's own verb made carries the verb the same way
+([Verbs on a blob doc](#verbs-on-a-blob-doc)): `blob_verbs` `(doc, version)`, read back as
+`BlobVersion::verb`, `BlobLogEntry::verb` and `NodeBlame::verb`; a version no verb made has none.
 
 **Erasure clears it, as it clears turns.** A participant's erasure removes the verb of every
 change they made and of every change an agent made on their behalf, in the erasure's own
 transaction. A content purge leaves verbs, as it leaves turns, authors and times.
 
-**Older kits (N−1):** `change_verbs` is additive on the terms of `change_turns` (above): created
-by the first change a pack verb made, read as "no verb" without it; an older kit reads and writes
-the store as before, refuses a rewrite with `MPC-E502` naming the table, and leaves a deleted
-doc's rows for an open here to remove.
+**Older kits (N−1):** `change_verbs` and `blob_verbs` are additive on the terms of
+`change_turns` (above): each created by the first change (or tier-0 version) a verb made, read as
+"no verb" without it; an older kit reads and writes the store as before, refuses a rewrite with
+`MPC-E502` naming the table, and leaves a deleted doc's rows for an open here to remove.
 
 ## Rights
 
@@ -395,7 +491,10 @@ can revert this").
 - `version`;
 - `contributors_since_last_read`: other pids that changed the doc since this pid's previous
   read (through any of its connections), oldest first, excluding the import. On a first read,
-  it covers changes since the session loaded.
+  it covers changes since the session loaded;
+- `render_failed`: `None`, or the pack's error when it can't render the doc as its file now;
+  `bytes` are then the file as last synced, not the doc's
+  ([When the file can't be rendered](#when-the-file-cant-be-rendered)).
 
 Every read records a **read base**: that version's text, valid for `write_base`. The cache
 belongs to the doc. It keeps the last `read_bases_max` (64) versions, each for
@@ -913,6 +1012,8 @@ Carets and views (per connection):
     - **people are never moved:** a person's own verb leaves their presence where they put it.
       Nor is a watcher's (it has none), nor any on a table, whose presence is its own (rows,
       columns, cells);
+    - **view address:** the change's primary view address (`view.address` of its result,
+      "A call's result as data"), on every verb through `run_tool`, a text doc's too;
     - a raw write (`edit_ops`), an undo, a redo, a revert or a restore is no verb and moves
       nothing. Later calls (`set_focus`, `set_selection`, a claim, the next verb) override it,
       and the roster carries it at the next flush.
@@ -1739,8 +1840,9 @@ Option<Fence>, notes: Notes, for_edit: Option<Box<ForEdit>> }` (`notes` and `for
   hunk failed, exact `replace` found no match or more than one). A "no" is not an error.
 
 **The fence.** `Fence { nonce, name, version, contributors }`: a fresh
-64-bit nonce per call from `/dev/urandom` (or, when that can't be read, a per-process random
-hasher key mixed with the clock and a counter), redrawn if it occurs in the output;
+64-bit nonce per call from the OS generator (`/dev/urandom`, or `RtlGenRandom` on Windows;
+when that can't be read, a per-process random hasher key mixed with the clock and a counter),
+redrawn if it occurs in the output;
 `with_nonce(..)` takes the host's own. `begin(prefix, label)` / `end(prefix)` render the
 lines; the host picks the prefix (its CLI's name), renders pids (`Sam (person)`) and decides
 `--fence` / `--no-fence`. Control characters in names are replaced, so a name can't break a
@@ -1878,12 +1980,14 @@ order):
 | `schema`, `verb`, `kind` | `mpc.result/1`; the verb's registry name; `read` or `edit` (null when the call named no verb) |
 | `ok`, `exit` | the exit is 0; the exit, as in text |
 | `version` | a read's `{read}`; an edit's `{base, after, if_version, base_given}`: the version the verb computed on, the version it made (null when it made none), the call's `--if-version` and `--base` |
-| `changed` | null when nothing changed; else `{counts, units, units_more, lines}`: counts per structured root; each unit the change wrote (at most `tools::UNITS_MAX`, the rest counted); a text edit's line ranges and counts |
+| `changed` | null when nothing changed; else `{counts, units, units_more, lines, bytes}`: counts per structured root; each unit the change wrote (at most `tools::UNITS_MAX`, the rest counted); a text edit's line ranges and counts; `bytes` null (a tier-0 verb's: [Verbs on a blob doc](#verbs-on-a-blob-doc)) |
 | `data`, `data_schema`, `data_spec` | the verb's payload (`StructOutput::data`; `data_schema` is `typed`), else its stdout as `{"text": ...}` (`text`); `data_spec` names the typed data's shape and its version, `<name>/<version>` (`StructOutput::data_spec`), or is null |
 | `page` | `{next: {verb, args}}`, the call that reads the next page (`StructOutput::next_page`), or null |
 | `error` | the refusal as `explain --json` has it (`ErrorReport::to_value`), or null |
 | `conflicts` | a `--base` conflict's units: `{address, root, key, field, facet, by, change}` |
 | `notes`, `warnings` | each heads-up note as data (its line in `text`); the call's warnings |
+| `view` | where an edit's change is, as of `version.after` (`session::ViewAt`, below); null when it made no change |
+| `dry_run` | whether the call was a dry run ([Dry run](#dry-run-one-contract-for-every-tier)); false on every other call |
 
 - **A changed unit** (`tools::ChangedUnit`, also `ToolOutput::changed_units`) is `{address,
   root, key, field, op, before, after}`: a list element by its address (`Pack::address_of`); a
@@ -1900,6 +2004,99 @@ order):
   prints its own `next:` line.
 - **Versioning.** A new field never changes `mpc.result/1`; a field renamed, removed or given
   another type does. `capabilities` names it (`result_schema`).
+- **Where a change is: `view`** (`session::ViewAt`, also `EditResult::view`). The addresses a
+  person's view and a still use, so an agent can read back exactly what it changed or ask for a
+  still of it: `{address, containers, units, units_more, cells, lines, time}`.
+  - `containers`: every live container the change touched, in the order of its ops, each once;
+    `units`: the elements it touched in the list root of the last one, in order (at most 256,
+    the last ones; the rest counted in `units_more`), each with `live` (false: the change
+    deleted it). They are the focus and selection an agent's verb gives its presence ("An
+    agent's verbs move its presence"), from the same reads.
+  - `address`, the **primary view address**: the verb's own (`StructOutput::viewing`) when the
+    grammar reads it; with a 3D slot (`ViewSchema::space`) the last live unit touched; else the
+    last container touched; a container the change deleted gives the next live one in its list,
+    else the previous one; a text doc's innermost named span holding its first changed line
+    (`Pack::text_units`, as a Markdown heading's section), else `L<first>`; a grid verb's cells'
+    container; null when nothing it touched has a place.
+  - `cells`: a grid verb's cells (`StructOutput::writing`), as its agent's `cells` presence;
+    `lines`: a text change's line ranges in the new text, each with its address `L<first>`;
+    `time`: the playhead the verb set (`StructOutput::time_position`).
+  - **An agent's verb moves its view address there** (as its focus and selection), so a person
+    sees where the agent is working; a person's, a watcher's never moves, and following an
+    agent is the person's own choice.
+  - Worked out after the change applied, under its lock, only when the call asked for its result
+    or an agent's verb made it. A host's own calls ask with `EditOptions::view`,
+    `WriteOptions::view` and `UndoRequest::view`.
+
+### Dry run: one contract for every tier
+
+A **dry run** is an edit call made with `--dry-run` (on the command line; the kit takes it out of
+the verb's arguments, as it does `--if-version`) or with the host's dry-run option. It runs the
+call up to its commit and stops there, so an agent can show a person exactly what it is about to
+do. One contract holds for every verb that takes it, on a live doc and on a tier-0 doc, and
+neither tier may weaken it. Each verb that takes `--dry-run` says so in its usage and in
+`capabilities`; the result's field for it, `dry_run`, is in the `mpc.result/1` table above. Today
+the verbs that take it are a file type's own verbs on a tier-0 doc
+([Verbs on a blob doc](#verbs-on-a-blob-doc)); on a live doc no verb takes it yet.
+
+**The result** is the real run's result as it would be at this head, with only these
+differences:
+
+- it says it is a dry run, and the version it made (`version.after`) is null;
+- `changed` is what the real run would change: the same counts, units, lines and (tier 0)
+  bytes, with the same values;
+- on a tier-0 doc it gives the digest of the bytes the real run would store;
+- stderr's summary reads `would edit <name> (...) · v<head> (dry run, nothing applied)`.
+
+Everything else is the same bytes as the real run's: stdout, the exit, `data`, `error`,
+`conflicts`, `notes`, `warnings`, and the result's view of the change (where it is), which a dry
+run reports but never sets: nobody's view, focus or selection moves.
+
+**What a dry run promises:**
+
+1. **No write.** No change or version is recorded, no blob is committed, no conflict copy is
+   made, the file on disk isn't written, and no index row is stored.
+2. **No lease change.** It takes no lease (not even the one a write takes for its own length).
+   A lease someone else holds is checked as the real run checks it, and refuses the same way.
+3. **The same refusals.** Every check the real run makes before its commit runs, in the same
+   order, with the same id, exit, `next_step` and `conflicts`: rights, a declined file, agent
+   writes, the lease, a verb that needs the caller's lease, `--if-version`, `--base`, the claim
+   policy, the pack's own refusals, the kit's checks of the pack's output, and every size
+   limit. The only check a dry run can't make is the commit's own recheck (the doc moved while
+   the call ran), which the real run reports itself.
+4. **No trace.** No log, history or activity entry; no change, version or audit event beyond a
+   read's; the caller's presence, view region and time don't move, and no person's view
+   follows it; no claim starts or ends; no refusal is recorded on a watch; no index job is
+   asked for; storage it used is released. It is **charged as a read**, never from the edit
+   rate bucket, so a dry run followed by the real run can't make the real one wait.
+5. **Equal to the real run.** For the same connection, the same head, and the same arguments
+   and input, the real run with `--if-version <head>` gives exactly the dry run's result but for
+   the differences listed above; on a tier-0 doc it stores the bytes whose digest the dry run
+   gave.
+6. **The pack can't tell.** No flag reaches a pack's verb: it computes the same thing either
+   way. A verb whose answer differs between two identical calls is a pack bug.
+
+**What it doesn't promise:** that the real run succeeds later. When the doc moves, the real
+run's guards decide, and the agent runs the dry run again. On a tier-0 doc, the real run may
+carry `--expect <digest>`: it then refuses, writing nothing, unless the bytes it would store
+are the ones the dry run showed.
+
+**Rows** (the kit's harness, over every pack's edit fixtures, each with a planted fault it must
+catch at the step it asserts):
+
+- **the dry run matches the real run:** stdout, exit, `error`, `conflicts` and `data` are equal,
+  and the dry run's `changed` equals the real run's effect **computed independently** (on a live
+  doc, a by-key diff of the views before and after; on a tier-0 doc, the byte ranges and the
+  structure-index diff between the two stored versions), and its digest is the stored bytes';
+- **a dry run leaves no trace:** the version, the log, the blob versions, the file's bytes and
+  stat, the lease, the rate bucket, presence and view region, claims, the events a subscriber
+  sees, the index rows and the blob store's open writes are all unchanged;
+- **a dry run refuses alike:** for each refusal fixture, the dry run's error equals the real
+  run's (id, exit, `next_step`, `conflicts`);
+- **the pack's verb is pure** (each pack): two identical dry runs, then the real run, agree.
+
+`patch --dry-run` came before this contract and keeps its own rule (it applies nothing, and
+takes a rate-limit token) until it is brought under the contract, a change of its own.
 
 ## Status and the pool
 
@@ -2250,6 +2447,7 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 | Field | Default | Effect |
 |---|---|---|
 | `blob_index_max_bytes` / `blob_index_max_nodes` / `blob_index_max_stored_bytes` | 2 GiB / 100,000 / 64 MiB | [The structure index](#the-structure-index)'s caps: the file size a job runs for, nodes in one index, a row's stored size |
+| `blob_verb_max_bytes` / `blob_verb_max_spans` / `blob_verb_max_insert_bytes` | 256 MiB / 1,000,000 / 256 MiB | [Verbs on a blob doc](#verbs-on-a-blob-doc): the version a whole-file verb reads, the ranges and the new bytes of one plan |
 | `editor_window_ms` | 30 s | editor role window |
 | `outside_note_window_ms` / `outside_note_text_keep_ms` | 24 h / 24 h | [When an outside save removes someone's text](#when-an-outside-save-removes-someones-text): the rule's window, and how long a note holds its text |
 | `idle_leave_ms` | 60 s | connections without a hold close |
@@ -2308,6 +2506,7 @@ Every error below, and every refusal outcome, has a stable id (`MPC-Ennn`; amend
 | `PackMismatch` | stored doc belongs to another pack | 4 |
 | `EngineMismatch { stored, stored_format, engine, engine_format }` | the stored doc was written by another engine, or another stored-state format, than this build runs; not loaded, nothing changed (v0.10.1). Error id `MPC-E520` `engine_mismatch` | 6 |
 | `NativeEngineMissing { stored, stored_format }` | the stored doc is on the native engine, which this build doesn't include: that doc alone is refused (open, delete), nothing of it read or changed; the store and its other docs work. Error id `MPC-E169` `native_engine_missing` | 6 |
+| `NativeBetaOff` | a create on the native engine (`OpenOptions::engine`) while `Config::native_beta` is off: nothing read or made; docs already on the native engine still open. Error id `MPC-E167` `native_beta_off` | 2 |
 | `BadParticipant` / `BadPosition` / `BadEdit` / `Doc(_)` | bad input; nothing changed | 2 |
 | `Doc(DocError::Unaccepted)` | hardening: a client update carries content the kit never uses (subdocuments): refused at ingress, before anything is applied (v0.9.5). Error id `MPC-E152` `unaccepted` (`doc::RESERVED_ERROR_ID_UNACCEPTED`) | 3 |
 | `Doc(DocError::Quarantined)` | hardening: a stored doc holds such content: quarantined, never loaded as live (the store-load scan, v0.9.5). Error id `MPC-E518` `quarantined` (`doc::RESERVED_ERROR_ID_QUARANTINED`) | 3 |
@@ -3072,7 +3271,9 @@ pack hands the kit raw digests (`Digest`), and the kit stores only `HMAC-SHA256(
 from the space key, digest)`: not comparable across spaces, and no plain content hash.
 
 **Agents.** `BlobPack::agent_writes` (default allowed); `AgentWrites::Refused` makes an agent's
-`write` and `expect_save` refuse `MPC-E715` (exit 2). Restores are allowed: they make no new
+`write` and `expect_save` refuse `MPC-E715` (exit 2), and the type's own verbs too;
+`AgentWrites::VerbsOnly` refuses an agent's `write` and `expect_save` the same way and admits
+its verbs ("Verbs on a blob doc"), whose output the kit checks with the pack's own index. Restores are allowed: they make no new
 bytes. `ParticipantKind::App` viewers are not covered: an App is not an agent, and writes as its
 host grants.
 
@@ -3337,6 +3538,54 @@ resolves the address with `index_nodes` at the version it exports, so an exporte
 name or a position, and an exporter that can't write a node's kind refuses with
 `ExportError::NeedsRenderer` (`MPC-E716`, exit 4). The kit runs no exporter.
 
+### Across an outside save
+
+A node key is the kit's to keep only while the kit writes the file. When another program saves it
+(an outside save taken in by `file_changed` or the stat backup, or one kept as a conflict: a
+version whose reason is `External`), the file type's own index reads the new bytes and the keys
+pair by what that program wrote: a writer that renumbers its objects can give an old key to
+another thing. Kit writes, verbs, restores and merges are not outside saves.
+
+**The pack says what it knows of the writer: `BlobPack::save_pairing(&SaveFacts) ->
+SavePairing`**, asked of each outside save a read crosses, with the save's version, whether it was
+kept as a conflict, and the indexes of the version before it and of the save (read from the stored
+rows; the root attributes are in each index's `attrs`). Default `Unknown`.
+
+- `Proven`: the writer keeps every key's meaning. Answers across the save are plain.
+- `Unknown`: each key present on both sides of the save is judged, **the node in the version just
+  before the save against the node in the save** (`BlobPack::judge_across_save`), never against
+  an anchor's original fingerprint: an honest rename by one write and an honest content edit by
+  another stay the same node. The default judge is the pack's `judge_anchor`, then the kit's
+  tighter rule across a save (`anchor::judge_across_save_by_default`): another kind is
+  `kind_changed`; renamed **and** either its content changed or it moved past its old diagonal
+  (counted only when both bounds are known) is `identity_doubt`. A pack whose own judge should
+  stand alone across a save overrides `judge_across_save`.
+- `Reissues`: the writer is known to reissue keys. A diff across it is refused and an anchor
+  across it is never `attached`.
+
+**`index_diff`** carries, per outside save in `(from, to]` (oldest first), `saves`: its version,
+`pairing` (`proven`, `unknown`, `reissues`, or `unchecked` when an index needed to ask is
+missing) and `keys_kept: {kept, of}` (the keys present on both sides, of those present before it;
+null when an index is missing). A row in doubt carries `identity: "doubt"` with `identity_save`
+(the save's version) and `identity_judged` (`kind_changed` or `identity_doubt`); a row whose
+crossing couldn't be judged, `identity: "unchecked"` with `not_indexed` (the version with no
+index). Rows that cross no save, or no save in doubt, are as before; so is a diff that spans no
+outside save (no `saves`). An added or removed row isn't judged. A save whose pack says
+`Reissues` refuses the whole diff: `MPC-E722 keys_reissued`, exit 1, `details.save` the newest
+such save, and the widest diff that doesn't cross one, `details.safe_from` to `details.to`.
+
+**Anchors** found at a version and the same by their fingerprint are judged across each outside
+save after the version they were made at, the same way: a doubt reads `suspect` with the existing
+`identity_doubt` or `kind_changed` (no new stored state); a `Reissues` save leaves them
+`suspect`, never `attached`. The state an index job records for each anchor (and its
+`AnchorState` event) is judged the same way, from the recorded indexes, with a version's keys
+taken as a read takes them (minted, carried and stored when none were recorded yet), so a read
+and the recorded state never disagree.
+
+**`index_blame`** walks on through outside saves; a settled row whose version is an outside save
+says so: `ends_on: "outside_save"` (`NodeBlame::outside_save`). The node was changed in that
+save, or its key renumbered by it.
+
 ### Claims on nodes
 
 `claim_nodes(conn, keys, ttl_ms, note)`, `renew_claim`, `release_claim`, `claims`: the CSV
@@ -3346,7 +3595,18 @@ key must be a node now; no index yet: `MPC-E713`), lasts `claim_default_ms` unle
 restore or a lease (the lease guards the file); nothing in the write path reads claims. Another
 participant's live claim on one of the same nodes refuses a new one: `SessionError::NodesClaimed`,
 `MPC-E301` `claimed`, exit 5. Limits as any claim's (`claims_max`, `claims_per_participant`, 256
-nodes, a 1 KiB note). Memory only.
+nodes, a 1 KiB note). Memory only. The one place a node claim refuses anything: under
+`ClaimPolicy::Respect`, an **agent's** file-type verb whose change touches a node someone else
+claims ([Verbs on a blob doc](#verbs-on-a-blob-doc)).
+
+**A hold's reach.** A pack says, per node kind, how far a hold on a node of that kind reaches
+(`BlobPack::hold_reach`): `HoldReach::Node` (the node; the default), `Subtree` (the node and
+everything under it: a block's definition) or `Members(attr)` (the node and every node whose
+attribute `attr` is the node's key: each entity on a layer). Under `ClaimPolicy::Respect` an
+agent's verb is refused (`MPC-E301`, naming the holder) when a node it changes is inside the
+reach of a node someone else holds, the reach read at the version the verb runs on and in its
+output: a member put on a held layer after the hold is covered. A person's change is never
+refused.
 
 It ends on release, expiry, its connection leaving (`ClaimEnd::Left`), and `ClaimEnd::Deleted`
 once a version's index holds none of its nodes (checked when that index exists; a claim isn't
@@ -3360,6 +3620,161 @@ for text. The verbs: `claim --node ADDR... [--version V] [--ttl MS] [--note TEXT
 `#N` names its version, `MPC-E171` under `PositionalMode::Refuse`; a missing address claims
 nothing, `MPC-E172`), `claim --renew [--id ID] [--ttl MS]`, `claim --release [--id ID]` (exit 1:
 none), all through `run_tool`.
+
+### Verbs on a blob doc
+
+A file type's pack may give its blob docs **verbs of its own** (`BlobPack::verbs`): `part set`,
+`slide add`. A verb is a pure function from a version's bytes and its arguments to a **plan**
+(`BlobPlan`): the byte ranges to replace (`Span { at, len, with }`; `len` 0 is an insert),
+in order of `at`, none overlapping (an insert at the offset where a replaced range starts goes
+first). The pack never writes the output: **the kit applies the plan**, copying every other byte
+from its own verified reader of the version, so every byte outside the ranges is the input's by
+construction. `BlobSession::run_tool` runs them, before the structure index's verbs;
+`Registry::for_blob_pack` lists them (`Source::Pack`, tier `blob`, through `run_tool`), and
+`capabilities` gives each one's `merge`, `input` and `word`.
+
+**A verb** (`BlobVerb::edit` or `BlobVerb::read`) has a name of one or two lowercase words, a
+usage line, its exits, the person actions it serves, and:
+
+- `input`: `VerbInput::Stream` (a verified stream it must not hold whole: any size) or
+  `VerbInput::Whole` (read into memory; a version over `blob_verb_max_bytes` refuses `MPC-E728`
+  before the verb runs);
+- an edit verb's `merge`: `VerbMerge::Pack` (the pack's merge covers what it changes:
+  `can_merge()` must be true) or `VerbMerge::Lease` (it runs only while the caller holds the
+  lease themselves, `MPC-E718` without it, and every result carries the note `lease_only`: a save
+  by a person's app meanwhile keeps both copies instead of merging the agent's work away);
+- an edit verb's `word` (`BlobVerb::with_word`): its past tense for results (`moved`,
+  `renamed`), lowercase, never empty. `capabilities` lists it, and the verb's result carries it
+  as kit data (`changed.word`), on a dry run and a real run alike.
+
+The function gets a `BlobVerbCtx` (the version, its size, its structure index as stored, with
+`node(addr)`, `json()`, the merge bound and the plan caps) and the arguments after the verb's
+words, with the kit's own flags taken out (`--if-version`, `--base`, `--dry-run`, `--expect`,
+`--json`, before any `--`). It returns `BlobVerbOut`: the plan (none for a read), stdout, `data`,
+the node keys it changes (`touched`) and adds (`created`), and optionally the address it is
+about (`viewing`); or `BlobVerbRefused`: a usage error (exit 2), or one of the pack's own
+refusals by id (`BlobPack::errors`, `<PACK>-Ennn` under the index's pack name), reported as a
+live pack's are.
+
+**The registry refuses** a pack whose verbs break the rules (and such a pack's verbs run
+nothing, exit 2): a name that isn't one or two lowercase words; a first word that is a kit
+verb's (any tier, `outline`, `node`, `claim`, the annotation verbs' and `batch` included) or a
+name the index already has; a name twice; an edit verb on a pack with no structure index (the
+kit checks every output with it), or with no merge; `VerbMerge::Pack` on a pack that can't
+merge; a verb serving no person action; an exit outside the kit's table; an edit verb with no
+word, or one not lowercase; refusals with another pack's prefix.
+
+**One edit, step by step:**
+
+1. **Admit, under the session lock:** edit rights, the edit rate bucket, a declined file, agent
+   writes (`MPC-E715`), someone else's lease (`MPC-E701`, exit 5), a `merge: Lease` verb without
+   the caller's own lease (`MPC-E718`), then `--if-version V` (head must be `V`, else
+   `MPC-E110`). `--base V` newer than head is `MPC-E110`; head itself is the plain case; an
+   older `V` is checked per node (below, "`--base` per node"). The edit takes the write's own
+   lease for its length when nobody holds one, as `write` does.
+2. **Plan, off the lock:** the verb runs on head, whose structure index must exist (a version
+   a verb made has it at once, below; another, an outside save say, waits for the host's index
+   job: until then `MPC-E713`, retry); the plan is checked (in order, apart, inside
+   the version, at most `blob_verb_max_spans` ranges and `blob_verb_max_insert_bytes` new bytes;
+   otherwise `MPC-E725`, a pack bug; a read verb returning ranges is one too), then applied over a
+   verified reader of head, streaming into the blob store, uncommitted. An empty plan changes
+   nothing: exit 0, `changed` null, no version.
+3. **Check, off the lock:** the plan is applied again, read by the pack's own index, and the
+   output's index is built in memory as an index job would record it; the pack refusing it is
+   `MPC-E727`. The output's index diff against head's must name only nodes the verb declared
+   (`touched`, `created`), else `MPC-E726` (`details.keys`). `--expect DIGEST`: the output's
+   digest must be `DIGEST`, else `MPC-E729`.
+4. **Commit, under the lock:** the caller is admitted again and the leases checked again. When
+   head moved meanwhile (an outside save), the verb plans once more on the new head (nothing was
+   committed, so nothing applies twice; a `--base` call is checked per node again on the new
+   head); a second move, or a move under `--if-version`, is `MPC-E110`. Under `ClaimPolicy::Respect` an agent's change to a node someone else claims is
+   `MPC-E301` (exit 5). Then one version (`BlobReason::Write`, author, via, on-behalf-of, the
+   host's turn), its verb in `blob_verbs` in the same transaction, the write-back and the index
+   job asked for, as a write's. The same bytes as head record nothing.
+
+5. **Its index, off the lock:** the version's structure index is recorded from the pack's
+   draft the check already read (the same bytes), exactly as the host's index job records one:
+   the same checks and limits, the keyed row, minted keys carried from the version before, and
+   `AuditEvent::IndexReady`. So an agent's next verb doesn't wait for a job; the job the commit
+   asked for (`IndexWanted`) finds nothing to do. A dry run records none.
+
+**`--base` per node.** `--base V` with `V` older than head means "I read version `V`: apply my
+call to head if nothing it changes was changed since `V` in a way that overlaps." In order:
+
+1. `V`'s index and head's must exist: pending, `MPC-E713` (retry); none, `MPC-E712`.
+2. **The verb runs at `V` too**, on `V`'s bytes and index, and its output is read with the pack's
+   index as at head: its change there (`D_V`) beside its change at head (`D_H`). A node that left
+   the call's selection since `V` is in `D_V` only, and still checked.
+3. **Another program's saves** in `(V, head]` must be ones the pack proves keep node keys
+   (`BlobPack::save_pairing`, `Proven`); otherwise `MPC-E719 base_across_unproven_save`, exit 1,
+   naming the save (`details.save`) and the call's nodes (`details.addresses`; `next_step`
+   reads them at head). The kit's own writes, verbs and merges between are fine.
+4. **What changed since `V`** is the index diff from `V` to head. A node in `D_V` or `D_H` that
+   is in it, where the two changes overlap, refuses `MPC-E723 base_moved`, exit 1. Two changes
+   overlap when either is `added`, `removed`, `moved`, `renamed` or `content`; when both change
+   the text (text is a field of its own); or when both are `props` sharing an entry
+   (`attrs.<name>`, `bounds`, ...). `details.conflicts` lists each as `{address, root:
+   "index", key, field, by, change}`: the field, and who changed it in which version (the
+   newest version since `V` whose index shows the node changed). Keys the verb creates (absent
+   from `V` in `D_V`, from head in `D_H`) are never in conflict, so two concurrent adds land.
+5. **Keys the kit minted** (the file gives the node no ID of its own) in `D_V` or `D_H`, created
+   ones aside, refuse `MPC-E724 base_weak_key`, exit 2: guard such a call with `--if-version`
+   head instead.
+6. Otherwise the plan made at head is committed: the result's `version.base` is head and
+   `version.base_given` is `V`.
+
+A dry run makes the same checks in the same order and refuses alike.
+
+Any refusal writes nothing: the uncommitted put is released and the write's own lease ends.
+Messages never quote file content.
+
+**Telling clients:** the kit has no event for a tier-0 doc's new version. A host tells its
+clients from the call's answer: `ToolOutput::version_made()` is the version a verb made (`None`
+for a read, a refusal, a dry run, or no change), as `BlobWriteResult::{changed, version}` is for
+a write. A verb's version comes with the same audit events as a write's.
+
+**The result** (`mpc.result/1`, a verb's `--json` or the host's option): `version` `{base, after,
+if_version, base_given}`; `data` the verb's (else its stdout as text); and `changed` from the
+index diff of head and the output, not from what the pack declared:
+
+- `counts`: per node kind, `{kind, added, removed, changed}`;
+- `units`: by node, `address` and `key` the node's key, `root` `index`: an added node is an
+  `insert`, a removed one a `delete`, a moved one a `move`, a renamed one or one with other
+  content or text a `set` (`field` null), and each changed property a `set` of that field
+  (`attrs.layer`, `bounds`...; `before` and `after` its values for an attribute);
+- `lines` null; `bytes` `{size_before, size_after, spans, removed, inserted, after_digest}`,
+  `after_digest` being `sha256:<hex>` of the bytes the call stores (or would store).
+
+`view` (the shape every edit result has) says where the change is: its `units` are the changed
+index nodes in the diff's order (`live` false for a removed one), its `containers` their
+containers in the output version (the nodes of the pack's `BlobView::container_kind` above
+them; the last touched last), and its `address` the verb's own (`BlobVerbOut::viewing`, when
+the address grammar reads it), else the container of the **last** changed node, else that
+node. `cells`, `lines` and `time` are null on this tier; a read and a call that changed nothing
+have none. A dry run's `view` is the real run's, and nothing is set from it (a tier-0 doc's
+presence has no view address: its region stays the participant's own).
+
+`notes` carry, as data, `lease_only` (above) and `merge_over_bound` `{size, max_bytes}` on
+every verb result (a read's too) on a doc whose pack can merge and whose current version is over
+`blob_merge_max_bytes`: "over the merge bound: if a person's app saves this file while you edit
+it, both are kept as copies". `status()`'s `merge` gives the same bound as `{max_bytes, size,
+fits}` (null for a pack that can't merge), and `BlobVerbCtx::merge()` hands it to a pack's own
+info verb. In text, the notes are `note: ` lines on stderr.
+
+**A dry run** (`--dry-run`) is the call up to its commit, by the contract in
+[Dry run](#dry-run-one-contract-for-every-tier): every check above in the same order (the
+commit's own recheck aside), charged as a read, no lease taken, the put released, nothing
+recorded, written or asked for; `dry_run: true`, `version.after` null, and everything else the
+real run's, `changed.bytes.after_digest` included. The real run with `--expect <that digest>`
+stores exactly those bytes or refuses `MPC-E729`. A read verb refuses `--dry-run`, `--expect`,
+`--if-version` and `--base` (exit 2).
+
+**Records:** `blob_verbs` `(doc, version)` holds the verb's name and, for a batch, its calls
+(names only: **no arguments are stored**, they can hold content). It is written in the version's
+own transaction, created lazily, removed with a version retention deletes and by a participant's
+erasure (their versions and those made on their behalf), and kept by a content purge; a
+promotion's tier-0 history carries it. An older kit reads and writes such a store as before and
+refuses its rewrite (`MPC-E502`).
 
 ### Tier 0 → text (v0.9.2)
 
@@ -3732,7 +4147,8 @@ damage (`MPC-E503`). **A store holding native docs opens on a build without the 
 engine**: it refuses those docs one by one (`MPC-E169`, above) and serves the rest, and a
 rewrite (a purge's, a compaction's, a host's) copies the engine store's tables
 (`native_records`, `native_gens`, `native_nonces`) through byte for byte. A table it doesn't
-know is still refused, never dropped (`NewerData`). **Format 7 is retired, never written**: a store stamped 7 is
+know is still refused, never dropped (`NewerData`). **The bit is cleared by the transaction that removes the store's last engine store** (the last
+native doc's delete, a space's delete, a demotion), and the format stays 8. **Format 7 is retired, never written**: a store stamped 7 is
 refused at open (`NeverWritten`, `MPC-E503`), its bytes unchanged. This build writes format 8
 (`STORE_FORMAT_CHUNKED`): a store's first chunked version stamps it, in its own transaction
 ([Chunked versions](#chunked-versions)); a structured doc still stamps 6
@@ -4095,8 +4511,10 @@ bytes, the **carrier**, and hands them to the pack (`session/live/carrier.rs`,
   line numbers (positions in the rendered file) and so fail as before when it can't be
   rendered. A reader is still told when the doc's file can't be rendered: the last rendering
   of the live doc (a write-back, a sync check, a flush) keeps its failure with the doc's
-  version, and a structured read at that version returns that error without encoding; once
-  the doc changes, the next rendering decides again.
+  version, and a structured read at that version gives its result with a warning naming that
+  error, without encoding (**changed in the render net**: before, it returned the error in
+  place of its result; [When the file can't be rendered](#when-the-file-cant-be-rendered)); once the
+  doc changes, the next rendering decides again.
 - **An open renders only what it doesn't know.** Opening the file compares it with
   the sync point by hash, never by rendering the doc, when the store knows what the doc renders
   as: a fact recorded where the kit learns it (a write-back, which rendered the doc and wrote
@@ -4206,6 +4624,70 @@ the index through every change (`view_derive_change` answering `true`) instead o
 built whole for the rest of the session. A new pairing on the same carrier (a sync point that
 moved no byte) builds the index whole once; the pack's decode of the carrier is kept. No wire
 or store change.
+
+## A file the pack can't write
+
+A pack whose write-back can refuse a content (a splice that can't express a change: a driven
+value, a list insert, a field it doesn't write) must never leave the doc holding what its file
+can't. Two pieces: the pack refuses such a change up front, and the session stays readable if a
+doc can't be rendered anyway.
+
+### A pack's check of every live change
+
+- **The hook.** `Pack::checks_edits() -> bool` (default `false`) opts in;
+  `Pack::check_edit(view, edits) -> Result<(), PackRefusal>` (default: every change passes)
+  judges a change. `view` is the doc before the change, `edits` the change as the session
+  applies it (normalized). Pure and bounded (O(edits)), no I/O, and in agreement with the
+  write-back (the pack's write-back and its check share their rules). A pack that doesn't opt
+  in is never asked and no view is built for it.
+- **Every writer is asked**, people included, at the one place every live change passes
+  (`Session::commit`): an edit (`edit_ops`, `edit_ops_with`, `edit`, `replace_text`), a pack
+  verb's change, a host's, `write --base`, the hunk channel (`edit_at_base`), undo, redo,
+  revert, restore, a table's undo. A change of several steps (an undo of several batches) is
+  asked step by step, each on the doc after the steps before it; a later step's refusal
+  reloads the doc from the store, as any later step's failure does.
+- **Not asked:** an outside save and the import (they are the file), and a purge's removal
+  (erasure always goes through; the net below covers a purge that leaves the doc unrenderable).
+- **A refusal** is `SessionError::PackRefused(PackRefusal { code, message })`: **`MPC-E823`
+  `pack_refused`** (exit 2), the pack's own code in `details.code` and why in
+  `details.reason`. It comes back at the call; nothing applies, the version doesn't move, no
+  change event, no undo entry.
+- Rows: `tests/pack_check_edit.rs` (a person's edit, an agent's verb and computed edit, an
+  undo, an accepted change, a pack that doesn't opt in, a text doc, a purge); plant
+  `KeyedMutant::EditCheckDropped`, caught by the person's row alone.
+
+### When the file can't be rendered
+
+If the pack can't render the doc as its file at its version anyway (a pack that doesn't check
+its changes, a purge's removal, a pairing that doesn't fit, `MPC-E521`), the doc stays
+readable:
+
+- **A whole read** (`Session::read`) gives the doc's `content` and `text_by_root` at its
+  version, with `bytes` **the file as last synced** (the carrier the session keeps; empty for
+  a pack that keeps none) and `ReadResult::render_failed` the pack's error. Nothing moves: no
+  pairing is made, no rendering recorded, no carrier taken; the doc stays dirty, and the next
+  rendering that works writes the doc, not the synced bytes.
+- **A pack's structured read verb** on a keyed doc gives its result, with a warning (one
+  `note:` line in `ToolOutput::warnings` naming the error's id) when the last rendering at the
+  doc's version failed. It never renders.
+- **Still failing, as before** (they print or take positions in the rendered file, which the
+  synced bytes would get wrong): the kit's text read verbs (`cat` and the rest), a table's read
+  verbs and line addresses (`MPC-E176`, `MPC-E177`), `file_now`, `file_at`, an export, a flush.
+- **The tick** reports a write-back that can't render the doc **once per version**: the first
+  tick's error goes in `TickReport::errors`; later ticks at that version skip the write-back
+  while the failure stands. A new version (a change, an undo), or a new carrier (an outside
+  save), tries again. A disk error is retried every tick, as before.
+- **No base from the synced bytes.** A whole read given the synced bytes isn't that version's
+  file, so its version is no base for a whole-file write: `write --base` (text), a table's
+  `write --base` and `write --base live` with `--seen` at such a version are
+  **`MPC-E824` `base_unrendered`** (exit 2), nothing applied. The session keeps those versions
+  in memory as ranges, at most 32; past that the two oldest ranges merge into one, which
+  refuses the versions between them too (it only refuses more: the writer reads again, and
+  writes once the file renders). A reload forgets them, as it forgets read bases.
+- Rows: `tests/render_net.rs` (the whole read, the structured read and its plant
+  `KeyedMutant::ReadReplaysRenderFailure`, three ticks giving one report, the base guard on a
+  table and a text doc, no pairing and the doc dirty); the changed rows in
+  `tests/live_carrier.rs` and `tests/live_paired.rs`.
 
 ## Store: the host's table
 

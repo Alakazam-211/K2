@@ -801,6 +801,9 @@ impl Person<'_> {
 /// What a verb returned (besides its exit code).
 #[derive(Debug)]
 #[non_exhaustive]
+// a value per call of the parity harness, never kept in bulk: its size is no cost, and boxing
+// the call's output would change the variant every pack's harness matches on
+#[allow(clippy::large_enum_variant)]
 pub enum VerbValue {
     None,
     Tool(ToolOutput),

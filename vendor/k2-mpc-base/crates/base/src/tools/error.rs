@@ -125,6 +125,12 @@ impl ToolRunError {
 /// (`store_exit`).
 pub fn session_exit(e: &SessionError) -> u8 {
     use crate::blob::BlobError;
+    // the plant: a native refusal's exit moved off its standard twin's
+    if crate::beta_plant::planted("native-exit-drift")
+        && matches!(e, SessionError::NativeNoTier0 { .. })
+    {
+        return exit::USAGE;
+    }
     match e {
         SessionError::Forbidden { .. }
         | SessionError::NotCommentAuthor { .. }
@@ -146,6 +152,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::UnknownElem { .. }
         | SessionError::BlobRefUnknown { .. }
         | SessionError::OpenedUnknown { .. }
+        | SessionError::NativeNoTier0 { .. }
         | SessionError::Blob(BlobError::CacheKeyDestroyed { .. })
         | SessionError::Blob(BlobError::NotFound(_) | BlobError::TooLarge { .. }) => {
             exit::NOT_FOUND
@@ -164,15 +171,25 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::SelectionTooLarge { .. }
         | SessionError::AtLimit { .. }
         | SessionError::KeyedAtLimit { .. }
+        | SessionError::PackRefused(_)
+        | SessionError::BaseUnrendered { .. }
         | SessionError::NeedsBase
         | SessionError::IndexUnsupported
         | SessionError::AgentWriteRefused
+        | SessionError::NeedsLease { .. }
+        | SessionError::BaseWeakKey { .. }
+        | SessionError::BadPlan { .. }
+        | SessionError::Strayed { .. }
+        | SessionError::OutputUnreadable { .. }
+        | SessionError::VerbTooLarge { .. }
         | SessionError::BadAnnotation(_)
         | SessionError::AnnotationCap { .. }
         | SessionError::WritersFull { .. }
         | SessionError::KeyNotOwn { .. }
         | SessionError::KeySpaceFull { .. }
         | SessionError::OpenedNoFile
+        | SessionError::NativeBetaOff
+        | SessionError::NativeTextCap { .. }
         | SessionError::Doc(_) => exit::USAGE,
         SessionError::Held { .. } | SessionError::ClaimContended { .. } => exit::HELD,
         SessionError::Leased { .. }
@@ -188,6 +205,10 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::BaseExpired { .. }
         | SessionError::OpenedGone { .. } => exit::TOO_OLD,
         SessionError::Stale { .. }
+        | SessionError::NotAsPreviewed { .. }
+        | SessionError::KeysReissued { .. }
+        | SessionError::BaseAcrossUnprovenSave { .. }
+        | SessionError::BaseMoved { .. }
         | SessionError::IndexPending { .. }
         | SessionError::FacetConflict(_)
         | SessionError::Disk(_)
@@ -226,6 +247,12 @@ fn store_exit(e: &crate::store::StoreError) -> u8 {
         | S::RewriteNewer { .. }
         | S::ForeignEngine { .. }
         | S::NativeEngineMissing { .. }
+        | S::NativeFormatUnread { .. }
+        | S::NativeSnapshotRefused { .. }
+        | S::NonceReused { .. }
+        | S::PurgeDocOpen { .. }
+        | S::CutPendingRecords { .. }
+        | S::CutDocOpen { .. }
         | S::NewerData { .. }
         | S::Corrupt(_)
         | S::ClockOverflow(_)
@@ -391,6 +418,21 @@ mod tests {
                 stored_format: 1,
             },
             S::NativeEngineMissing {
+                stored: "mpce".into(),
+                stored_format: 1,
+            },
+            S::NonceReused { doc: 3 },
+            S::PurgeDocOpen { doc: 3 },
+            S::CutPendingRecords { doc: 3, changes: 2 },
+            S::CutDocOpen { doc: 3 },
+            S::NativeFormatUnread {
+                stored: "mpce".into(),
+                found: 2,
+                oldest: 1,
+                newest: 1,
+            },
+            S::NativeSnapshotRefused {
+                doc: 3,
                 stored: "mpce".into(),
                 stored_format: 1,
             },

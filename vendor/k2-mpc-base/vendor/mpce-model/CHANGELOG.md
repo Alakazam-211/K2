@@ -1,14 +1,13 @@
 # Changelog: mpce-model
 
-Reference models for the MPC engine (the oracle of record). Std only, `#![forbid(unsafe_code)]`,
+Reference models for the engine (the oracle of record). Std only, `#![forbid(unsafe_code)]`,
 never published, never a dependency of shipped code. Consumers pull this crate by git subtree on
 the `crates/mpce-model` prefix and pin a tag `mpce-model-vX.Y.Z`.
 
 ## v0.4.1 (tag `mpce-model-v0.4.1`)
 Span purge, the restore contract note, and one informational field on tree rescue reports.
 Std only, `#![forbid(unsafe_code)]`.
-- **`text::Doc::span_ids(start, end) -> Result<Vec<Id>, DocError>`** for the kit's span purge
-  (`erase.span_includes_tombstones`): `purge_as(agent, &span_ids(start, end)?)`. Offsets are
+- **`text::Doc::span_ids(start, end) -> Result<Vec<Id>, DocError>`** for a host's span purge: `purge_as(agent, &span_ids(start, end)?)`. Offsets are
   UTF-8 byte offsets into the current visible text, `start < end`. The result, in list order
   (tombstones included), is the element of the span's first visible character through the
   element of its last, inclusive, plus every tombstone strictly between them; tombstones just
@@ -18,10 +17,10 @@ Std only, `#![forbid(unsafe_code)]`.
   (offsets are checked first, `start` then `end`), and **`BadHunks`** for an empty or reversed
   span (`start >= end`; no new `DocError` variant, so exhaustive matches keep compiling).
   Read-only.
-- **`restore_as` is model-internal, not the `hist.restore_*` contract.** Restore is a kit
+- **`restore_as` is model-internal, not the `hist.restore_*` contract.** Restore is a host-level
   operation for every engine, `edit_as(agent, diff::hunks(text(), text_at(V)))`, so
   `hist.restore_minimal` holds by construction. Behaviour unchanged; doc comment says so.
-- **`tree_move`: rescue reports carry `walked_past: Vec<NodeId>`** (approved by K2 Cores),
+- **`tree_move`: rescue reports carry `walked_past: Vec<NodeId>`**,
   the deleted nodes the projection's display walk passed on its way to the visible parent,
   nearest first ("shown under V because B was deleted, and its former parents C, D"). On
   `Rescue` (the projection's display info) and on `ConflictReport::Rescue { node, delete,
@@ -42,9 +41,8 @@ Std only, `#![forbid(unsafe_code)]`.
   the fixtures; the report identity ignores it).
 
 ## v0.4.0 (tag `mpce-model-v0.4.0`)
-The tree reference model, `tree_move` (the oracle of record for trees; PRD E-TREE-1..5, amendment
-`g1-tree-causality` r2 for E-CORE-12 and E-TREE-4). Std only; nothing in `text`, `tree` or
-`check` changed. Cross-checked against `spec/quint/tree.qnt` by ITF replay.
+The tree reference model, `tree_move` (the oracle of record for trees). Std only; nothing in `text`, `tree` or
+`check` changed. Cross-checked against the Quint tree model by ITF replay.
 - **`fig4`**: Kleppmann et al., TPDS 2021, Fig. 4 transcribed line by line and generic over
   `T: Ord`, `N`, `M` (`Move`, `LogMove`, `Tree`, `State`, `get_parent` with the exact `∃!parent.
   ∃!meta` semantics, `ancestor`, `do_op`, `undo_op`, `redo_op`, recursive `apply_op`, `apply_ops`,
@@ -65,11 +63,11 @@ The tree reference model, `tree_move` (the oracle of record for trees; PRD E-TRE
   truncates its resident-log entries (S = `stability_point()`); T and the skeleton stay. A later
   move below S is refused (`MoveError::BelowStability`). `snapshot()`/`Replica::load()`: what an
   engine persists (no parents for compacted events); the per-parent lists are rebuilt.
-- **Projection** (daemon-side): `projection()` / `projection_with(Causality::{Skeleton,
+- **Projection** (host-side): `projection()` / `projection_with(Causality::{Skeleton,
   Graph(&g)})` -> `VisibleTree { nodes: NodeView { status, parent, rescue: Option<Rescue {
   anchor, deletes }>, reasons }, children }`; `reports()` / `reports_of(&VisibleTree)`:
-  `ConflictReport::{CycleSkip { mover, node, op }, Rescue { node, delete }}`. The rules are **K2
-  Cores' core-path ruling (2026-10-28)**, identical in `spec/quint/tree.qnt`:
+  `ConflictReport::{CycleSkip { mover, node, op }, Rescue { node, delete }}`. The rules are the
+  **core-path rule**, identical in the Quint tree model:
   1. **The walk stops only at a core-visible node** (one reaching ROOT through core parents),
      else ROOT (revisit, TRASH, no live old parent). It decides only where a rescue root is
      shown, so rescued subtrees always hang off the core-visible tree and the visible tree is
@@ -100,7 +98,7 @@ The tree reference model, `tree_move` (the oracle of record for trees; PRD E-TRE
   rule `RescueAnyNotEvery` tests "any delete the display walk passes" (over the core path's
   single delete "any" would equal "every").
 - Tests (`tests/tree_move.rs`): Fig. 4 over every delivery order; the 19 fixtures of
-  `tree_fixtures.qnt` (`tree_fixtures`, 3 nodes; `tree_fixtures4`, 4 nodes), invariants after
+  the Quint tree model (`tree_fixtures`, 3 nodes; `tree_fixtures4`, 4 nodes), invariants after
   every step, including `tf_mutual_rescue_cycle` (now X and Y both under ROOT, acyclic),
   `tf_rescued_despite_seen_delete_up_the_walk`, `tf_nested_rescue_beside`,
   `tf_same_spot_oldp_loop` and `tf_stable_pair_pulled_into_rescue`; every mutant fails fixtures
@@ -109,23 +107,21 @@ The tree reference model, `tree_move` (the oracle of record for trees; PRD E-TRE
   moves/creates/deletes/restores/non-tree events, random causal delivery and partial syncs,
   compaction at random critical points, events integrated over compacted parents, restarts from
   snapshots, an uncompacted twin per replica; full sync at the end.
-- Fixture results changed by the ruling: `tf_nested_outer_after_move` (C is now rescued: its
+- Fixture results changed by the core-path rule: `tf_nested_outer_after_move` (C is now rescued: its
   core path has only B, whose delete is concurrent; A's delete, which saw the move, is up the
   walk); `tf_nested_both_concurrent` and `tf_truncation_counterexample` report only the core
   path's delete.
-- Tools: `src/bin/tree_itf_replay.rs` (ITF replay of `tree.qnt` through
-  `tools/refmodel/itf_tree.qnt`, which exports the projection as a lagged variable),
-  `tools/refmodel/tree_itf.sh`; the ITF JSON reader moved to `src/bin/shared/itf_json.rs` (shared
+- Tools: `src/bin/tree_itf_replay.rs` (ITF replay of the Quint tree model, whose wrapper exports
+  the projection as a lagged variable); the ITF JSON reader moved to `src/bin/shared/itf_json.rs` (shared
   with `itf_replay`, now with boolean values).
 
 ## v0.3.0 (tag `mpce-model-v0.3.0`)
-Text versions, branches, restore and purge on `text::Doc` (inherent methods, std only; PRD engine
-half E-HIST-1/2/4/8/9, E-ERASE-1..8).
+Text versions, branches, restore and purge on `text::Doc` (inherent methods, std only).
 - **Versions.** `pub type Version = BTreeSet<Id>` (a set of event IDs standing for its causal
   closure; normally a frontier). `version() -> Version` (the frontier).
   `text_at(&v) -> Result<String, DocError>`, `list_at(&v) -> Result<Vec<Id>, DocError>` (visible
   IDs) and `blame_at(&v) -> Result<Vec<(char, Id)>, DocError>`: the state of exactly the closure
-  of `v`, minus content purged as far as this replica knows (E-HIST-1, E-ERASE-7). A version
+  of `v`, minus content purged as far as this replica knows. A version
   naming an unknown event is refused with the new `DocError::UnknownVersion { id }`.
 - **Restore forward.** `restore_as(agent, &v) -> Result<Vec<Event>, DocError>`: one atomic
   `edit_as` batch by `agent` after which (with no concurrent events) `text() == text_at(v)`;
@@ -147,9 +143,9 @@ half E-HIST-1/2/4/8/9, E-ERASE-1..8).
   are stored, logged and sent content-less (`log()`, `event()`, `diff_events`). Purge knowledge
   only grows: a content-less copy of a known insert erases the local content; a content-bearing
   copy of a purged insert is accepted as known and its content dropped (never re-admitted, never
-  a `Conflict`, E-ERASE-6); any other difference under a known ID is still a `Conflict`. A
+  a `Conflict`); any other difference under a known ID is still a `Conflict`. A
   content-less insert received before its purge event is invisible (not yet deleted); once every
-  replica has every event all agree. No digest of purged content is kept (E-ERASE-3/9).
+  replica has every event all agree. No digest of purged content is kept.
   `is_purged(id)`. `find_content(needle) -> Vec<Vec<Id>>`: every occurrence in all content held,
   tombstones included (the list order with tombstones, the visible text of every state in this
   replica's log, and each event's author's state), for a purge by text.
@@ -167,10 +163,10 @@ half E-HIST-1/2/4/8/9, E-ERASE-1..8).
   convergence, version stability, `text_at(v) == fork_at(v).text()`).
 
 ## v0.2.2 (tag `mpce-model-v0.2.2`)
-- Tests only: the property test now also checks that an **expanding** anchored range (start `Side::Left` at s, end `Side::Right` at e) **never inverts** under random concurrent edits, partial syncs and deletes covering the range, after every step and after the full sync; plus a unit test showing the opposite (contracting) convention inverts when someone types into an empty range. Ranges for claims and views must be anchored expanding (adopted in the kit's presence brief).
+- Tests only: the property test now also checks that an **expanding** anchored range (start `Side::Left` at s, end `Side::Right` at e) **never inverts** under random concurrent edits, partial syncs and deletes covering the range, after every step and after the full sync; plus a unit test showing the opposite (contracting) convention inverts when someone types into an empty range. Ranges for claims and views must be anchored expanding.
 
 ## v0.2.1 (tag `mpce-model-v0.2.1`)
-- `edit_as` accepts **touching** hunks exactly as the kit's `diff::validate` does: the next hunk may start at the previous hunk's end, including an insert followed by a hunk starting at the same offset; only overlaps and **two pure inserts at one offset** are refused (`BadHunks`). Touching hunks apply in order, the same as one coalesced hunk (spec D2). v0.2.0 also refused an insert followed by a non-empty hunk at the same offset.
+- `edit_as` accepts **touching** hunks exactly as a host's hunk validation does: the next hunk may start at the previous hunk's end, including an insert followed by a hunk starting at the same offset; only overlaps and **two pure inserts at one offset** are refused (`BadHunks`). Touching hunks apply in order, and the result equals applying the one hunk they coalesce into. v0.2.0 also refused an insert followed by a non-empty hunk at the same offset.
 
 ## v0.2.0 (tag `mpce-model-v0.2.0`, after review)
 New on `text::Doc` (inherent methods, std only):
@@ -180,7 +176,7 @@ New on `text::Doc` (inherent methods, std only):
 - `edit_as(agent, &[Hunk { start, end, insert }]) -> Result<Vec<Event>, DocError>`: UTF-8 byte
   offsets into the current visible text; hunks sorted by `start` (strictly increasing) and
   non-overlapping (`end <= next.start`; adjacent is fine), else `BadHunks`; an offset past the end
-  is `OutOfRange`, one inside a scalar is `NotCharBoundary { offset }` (E-TEXT-9). Each hunk deletes
+  is `OutOfRange`, one inside a scalar is `NotCharBoundary { offset }`. Each hunk deletes
   its range, then inserts its text at that spot; one event per character, consecutive seqs for
   the agent, continuing after the agent's highest known seq (a returning agent). One atomic batch:
   on any error nothing changes (no events, no seq consumed).
@@ -189,8 +185,8 @@ New on `text::Doc` (inherent methods, std only):
 - `deliver_all(&[Event]) -> Result<usize, DocError>`: any input order, duplicates allowed;
   delivered in a causal order; atomic (on `MissingDeps`/`Conflict` nothing changes); returns the
   number of new events.
-- `blame() -> Vec<(char, Id)>`: each visible character with its inserting event (E-TEXT-11).
-- Anchors (E-TEXT-10): `anchor(byte_offset, Side) -> Result<Anchor, DocError>` and
+- `blame() -> Vec<(char, Id)>`: each visible character with its inserting event.
+- Anchors: `anchor(byte_offset, Side) -> Result<Anchor, DocError>` and
   `resolve(&Anchor) -> Result<usize, DocError>` (a byte offset). `Anchor { elem: Option<Id>, side }`
   (`Side` is `tree::Side`): `Right` sticks to the character after the offset, `Left` to the one
   before; `elem: None` is the document start (`Left`) or end (`Right`). A deleted element resolves
@@ -215,7 +211,7 @@ New on `text::Doc` (inherent methods, std only):
   re-delivery is a no-op), `sync_from(&Doc)`, `text`, `visible`, `list_with_tombstones`,
   `frontier`, `log`, `has`, `event`, `is_deleted`, `origins`.
 - Agent IDs are `u64`; `Id(agent, seq)` orders lexicographically, agent numerically: the same order
-  as the kit's Yrs client IDs, so scripts with clients 101/102/103 run unchanged.
+  as the client IDs of the fixtures' scripts, so scripts with clients 101/102/103 run unchanged.
 - `check`: `def4`, `def4_with` (Def. 4 (1)–(3) with Lemma 5's exception) and `strong_list_spec`,
   returning typed violations.
 - Validated by: fixture tests (separating case `[apfe]`, paper A.1.9 `xab`, three-writer script

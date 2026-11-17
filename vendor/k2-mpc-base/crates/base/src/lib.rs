@@ -61,6 +61,10 @@
 //!
 //! Planned here (see `docs/ARCHITECTURE.md`): sync transport.
 
+// No unsafe code, but for two allowed calls: glibc's malloc_trim (`memory.rs`) and, on Windows,
+// the OS random generator, RtlGenRandom (`hash.rs`).
+#![deny(unsafe_code)]
+
 /// A profile scope (v0.9.7, test-only): with the `differential` feature (or in the kit's
 /// tests) it times the rest of the enclosing block under `$name`
 /// (`differential::profile_take`); otherwise it is nothing.
@@ -156,6 +160,7 @@ compile_error!(
 pub mod addr;
 pub mod anchor;
 pub mod annot;
+mod beta_plant;
 pub mod blob;
 pub mod codec;
 pub mod conformance;
@@ -170,6 +175,7 @@ pub mod grid;
 mod hash;
 pub mod ids;
 pub mod index;
+mod memory;
 pub mod mint;
 pub mod parity;
 pub mod placement;

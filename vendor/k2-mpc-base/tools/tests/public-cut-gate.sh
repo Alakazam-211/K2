@@ -153,6 +153,17 @@ tp_exception() {
     && sed '$d' "$D/docs/POSITIONS.md" > "$D/positions.tmp" && mv "$D/positions.tmp" "$D/docs/POSITIONS.md" && tp_commit "only the reviewed line" \
     && expect_text exception-covered "$D" 0
 }
+# an entry quoting a vendored line is set aside by the labels rule, as vendor/ is; one quoting a
+# kept line is not (both the entry and the line are found)
+tp_exception_label() {
+  tp_new exception-label-vendor && tp_line vendor/yrs/PLANTED.md "A planted line with $TA, K-AB-1." \
+    && printf 'vendor/yrs/PLANTED.md: A planted line with %s, K-AB-1.\n' "$TA" >> "$D/$TEXT_EXCEPTIONS" && tp_commit plant \
+    && expect_text exception-label-vendor "$D" 0 \
+    && tp_new exception-label-kit && tp_line docs/POSITIONS.md "A planted line with $TA, K-AB-1." && N=$L \
+    && tp_line "$TEXT_EXCEPTIONS" "docs/POSITIONS.md: A planted line with $TA, K-AB-1." && tp_commit plant \
+    && expect_text exception-label-kit "$D" 1 "check-public-cut: labels: docs/POSITIONS.md:$N: requirement id" \
+      "check-public-cut: labels: $TEXT_EXCEPTIONS:$L: requirement id"
+}
 tp_exception_stale() {
   tp_new exception-stale && tp_line "$TEXT_EXCEPTIONS" "docs/POSITIONS.md: a line nobody added" && tp_commit plant \
     && expect_text exception-stale "$D" 1 "$FIND $TEXT_EXCEPTIONS:$L: no added line with a term matches this entry"
@@ -251,6 +262,7 @@ tp_code_plain_word() { tp_new code-plain-word && tp_line "$RSF" "    and a $TO i
 text_plants() {
   "$1" plant_text_md tp_md; "$1" plant_text_comment tp_comment; "$1" plant_text_test_name tp_test_name; "$1" plant_text_wrap tp_wrap
   "$1" plant_text_not_added tp_not_added; "$1" plant_text_exception tp_exception; "$1" plant_text_exception_stale tp_exception_stale
+  "$1" plant_text_exception_label tp_exception_label
   "$1" plant_text_own_script tp_own_script; "$1" plant_text_base_missing tp_base_missing; "$1" plant_text_base_short tp_base_short
   "$1" plant_text_base_foreign tp_base_foreign; "$1" plant_text_exceptions_exact tp_exceptions_exact
   "$1" plant_dropped_file tp_dropped_file; "$1" plant_dropped_file2 tp_dropped_file2; "$1" plant_dropped_untracked tp_dropped_untracked
@@ -306,6 +318,11 @@ case ${PART:-none} in
       timed plant_licence_missing expect_block licence "$P-lic" "licence: LICENSE-MIT missing or empty at the root"
       cp -R "$P" "$P-vend"; mkdir -p "$P-vend/vendor/mpce-newthing/src"; printf '[package]\nname = "mpce-newthing"\n' > "$P-vend/vendor/mpce-newthing/Cargo.toml"
       timed plant_new_engine_crate expect_block vendor "$P-vend" "paths: vendor/mpce-newthing exists" "vendor/mpce-newthing/Cargo.toml:2: [package] name: names mpce-newthing"
+      # the engine's licence copies, refused by name, and so even when the allowlist names them
+      cp -R "$P" "$P-mlic"; mkdir -p "$P-mlic/vendor/mpce-licences"; cp "$P/LICENSE-MIT" "$P/LICENSE-APACHE" "$P-mlic/vendor/mpce-licences/"
+      timed plant_engine_licences expect_block engine-licences "$P-mlic" "paths: vendor/mpce-licences exists (refused by name: the root licence files cover the vendored crates)"
+      cp -R "$P-mlic" "$P-mlal"; sed 's/^PUBLIC_ENGINE_CRATES="\(.*\)"$/PUBLIC_ENGINE_CRATES="\1 mpce-licences"/' "$P/tools/check-public-cut.sh" > "$P-mlal/tools/check-public-cut.sh"
+      timed plant_engine_licences_allowed expect_block engine-licences-allowed "$P-mlal" "paths: PUBLIC_ENGINE_CRATES names mpce-licences, which a public cut never carries" "paths: vendor/mpce-licences exists (refused by name: the root licence files cover the vendored crates)"
       cp -R "$P" "$P-dev"; awk '{ print } /^\[dev-dependencies\]/ { print "mpce-core = { path = \"../../vendor/mpce-core\", features = [\"verify-shortcuts\"] }" }' "$P/crates/base/Cargo.toml" > "$P-dev/crates/base/Cargo.toml"
       timed plant_dev_dependency expect_block dev-dependency "$P-dev" "[dev-dependencies] mpce-core: names mpce-core"
       cp -R "$P" "$P-tgt"; printf "\n[target.'cfg(unix)'.dependencies]\nmpce-sync = { path = \"../../vendor/mpce-sync\" }\n" >> "$P-tgt/crates/base/Cargo.toml"

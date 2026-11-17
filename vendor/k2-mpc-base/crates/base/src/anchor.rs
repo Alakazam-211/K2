@@ -370,6 +370,28 @@ pub fn judge_by_default(was: &Fingerprint, now: &IndexNode) -> AnchorJudgment {
     AnchorJudgment::Same
 }
 
+/// The kit's judgment **across an outside save** (`docs/SESSIONS.md`, "Across an outside
+/// save"): `was` is the node in the version just before the save, `now` the node in the save.
+/// Tighter than [`judge_by_default`], which lets a renamed node with other content through when
+/// the pack sets no bounds:
+///
+/// - another kind: [`AnchorJudgment::KindChanged`];
+/// - renamed **and** either its content changed (a content hash on one side only counts as a
+///   change) or it moved by more than its old diagonal (counted only when both bounds are
+///   known): [`AnchorJudgment::IdentityDoubt`];
+/// - otherwise [`AnchorJudgment::Same`].
+pub fn judge_across_save_by_default(was: &Fingerprint, now: &IndexNode) -> AnchorJudgment {
+    if was.kind != now.kind {
+        return AnchorJudgment::KindChanged;
+    }
+    let renamed = was.name != now.name;
+    let content_changed = was.content != now.content_hash;
+    if renamed && (content_changed || jumped(was.bounds, now.bounds)) {
+        return AnchorJudgment::IdentityDoubt;
+    }
+    AnchorJudgment::Same
+}
+
 /// The kit's candidate rule: a node of the same kind that shares a weak ID with the
 /// fingerprint ([`CandidateWhy::FingerprintMatch`]), or has its (non-empty) name
 /// ([`CandidateWhy::SameKindAndName`]).

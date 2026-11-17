@@ -214,7 +214,7 @@ pub enum BlobError {
     Io(String),
     #[error(transparent)]
     Store(#[from] StoreError),
-    /// No randomness source for a space key (the kit reads `/dev/urandom`).
+    /// No randomness source for a space key (the OS generator: `/dev/urandom`, or `RtlGenRandom` on Windows).
     #[error("no randomness source: {0}")]
     NoRandom(String),
     /// The space key a host cache key of `generation` was derived from is destroyed
@@ -564,6 +564,13 @@ impl BlobStore {
     /// The writer of a put of `id` in `space` has taken its reference (or given up on it): the
     /// put no longer waits. The kit's own writers call it after the transaction that references
     /// what they put; a put nobody settles stops waiting after [`BlobConfig::gc_grace_ms`].
+    /// How many puts wait for their reference now (test-only: a put a caller never finished
+    /// stays counted).
+    #[cfg(any(test, feature = "differential"))]
+    pub fn waiting_puts(&self) -> u64 {
+        self.waiting().values().map(|(n, _)| u64::from(*n)).sum()
+    }
+
     pub(crate) fn settle(&self, space: &str, id: &BlobId) {
         let Ok(Some(k)) = self.docs.blob_space(space) else {
             return;

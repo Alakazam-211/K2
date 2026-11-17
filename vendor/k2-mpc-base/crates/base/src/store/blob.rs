@@ -66,6 +66,7 @@ pub(super) fn put_version(
     w.open_table(BLOB_VERSIONS)?
         .insert((id, vid), enc_version(v).as_slice())?;
     super::turns::put_in(w, super::turns::BLOB_TURNS, id, vid, v.turn.as_ref())?;
+    super::verbs::put_blob_in(w, id, vid, v.verb.as_deref(), &v.calls)?;
     if let Some(p) = &v.on_behalf_of {
         w.open_table(BLOB_APPROVALS)?.insert(
             (id, vid),
@@ -244,6 +245,14 @@ pub struct BlobVersion {
     /// not this record): `None` for a person's, a shell's, the kit's own, a version made before
     /// turns, and after an erasure of its author (or of the person it was set for).
     pub turn: Option<crate::turn::Turn>,
+    /// The verb the kit ran to make it, when a pack's verb made it through
+    /// [`crate::session::BlobSession::run_tool`] (the `blob_verbs` table, not this record):
+    /// `None` for a whole-file write, a restore, an outside save, a merge, the import, a
+    /// version made before verbs, and after an erasure of its author (or of the person it was
+    /// set for). `batch` for a batch, whose calls are [`BlobVersion::calls`].
+    pub verb: Option<String>,
+    /// A batch's calls, each by its verb name, in order; empty for any other version.
+    pub calls: Vec<String>,
 }
 
 impl BlobVersion {
@@ -272,6 +281,8 @@ impl BlobVersion {
             conflict_copy: None,
             redacted: false,
             turn: None,
+            verb: None,
+            calls: Vec::new(),
         }
     }
 }
@@ -291,14 +302,20 @@ fn r_opt_u64(r: &mut R<'_>) -> Result<Option<u64>, StoreError> {
     }
 }
 
-/// `v` with its turn from `tt` (the `blob_turns` table, if the store has one).
+/// `v` with its turn from `tt` (the `blob_turns` table, if the store has one) and its verb from
+/// `vt` (the `blob_verbs` table, if it has one).
 fn with_turn(
     tt: &turns::ReadTurns,
+    vt: &turns::ReadTurns,
     id: DocId,
     vid: VersionId,
     mut v: BlobVersion,
 ) -> Result<BlobVersion, StoreError> {
     v.turn = turns::get(tt, id, vid)?;
+    if let Some((verb, calls)) = super::verbs::get_blob(vt, id, vid)? {
+        v.verb = Some(verb);
+        v.calls = calls;
+    }
     Ok(v)
 }
 
@@ -342,6 +359,8 @@ pub(super) fn dec_version(b: &[u8]) -> Result<BlobVersion, StoreError> {
         conflict_copy: r.opt_str()?,
         redacted: ver >= 2 && r.u8()? != 0,
         turn: None,
+        verb: None,
+        calls: Vec::new(),
     };
     r.end()?;
     Ok(v)
@@ -914,6 +933,7 @@ impl DocStore {
     pub fn blob_versions(&self, id: DocId) -> Result<Vec<(VersionId, BlobVersion)>, StoreError> {
         let r = self.begin_read()?;
         let tt = turns::open_read(&r, turns::BLOB_TURNS)?;
+        let vt = turns::open_read(&r, super::verbs::BLOB_VERBS)?;
         let mut out = Vec::new();
         for kv in r
             .open_table(BLOB_VERSIONS)?
@@ -921,7 +941,7 @@ impl DocStore {
         {
             let (k, v) = kv?;
             let vid = k.value().1;
-            out.push((vid, with_turn(&tt, id, vid, dec_version(v.value())?)?));
+            out.push((vid, with_turn(&tt, &vt, id, vid, dec_version(v.value())?)?));
         }
         Ok(out)
     }
@@ -930,8 +950,9 @@ impl DocStore {
         let r = self.begin_read()?;
         let t = r.open_table(BLOB_VERSIONS)?;
         let tt = turns::open_read(&r, turns::BLOB_TURNS)?;
+        let vt = turns::open_read(&r, super::verbs::BLOB_VERBS)?;
         let v = t.get((id, vid))?.ok_or(StoreError::NoVersion(id, vid))?;
-        with_turn(&tt, id, vid, dec_version(v.value())?)
+        with_turn(&tt, &vt, id, vid, dec_version(v.value())?)
     }
 
     /// The latest version of a blob doc: its current content.
@@ -939,10 +960,11 @@ impl DocStore {
         let r = self.begin_read()?;
         let t = r.open_table(BLOB_VERSIONS)?;
         let tt = turns::open_read(&r, turns::BLOB_TURNS)?;
+        let vt = turns::open_read(&r, super::verbs::BLOB_VERBS)?;
         let last = t.range((id, 0)..=(id, u64::MAX))?.next_back().transpose()?;
         let (k, v) = last.ok_or(StoreError::NoDoc(id))?;
         let vid = k.value().1;
-        Ok((vid, with_turn(&tt, id, vid, dec_version(v.value())?)?))
+        Ok((vid, with_turn(&tt, &vt, id, vid, dec_version(v.value())?)?))
     }
 
     /// Name (or rename) a blob doc's version.
@@ -1004,6 +1026,7 @@ impl DocStore {
             }
             t.remove((id, vid))?;
             turns::remove_in(&w, turns::BLOB_TURNS, id, &[vid])?;
+            turns::remove_in(&w, super::verbs::BLOB_VERBS, id, &[vid])?;
             #[cfg(any(test, feature = "differential"))]
             let keep_keys = crate::differential::index_mutant()
                 == Some(crate::differential::IndexMutant::DeleteKeepsKeys);

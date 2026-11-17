@@ -9,19 +9,22 @@
 //! - **At open, before anything else reads or writes the store**, a kit refuses a word naming a
 //!   bit it doesn't know, by name ([`StoreError::UnknownFeatures`]); a format-8 store without
 //!   its word, or a word in a store below format 8, is damage ([`StoreError::Corrupt`]).
-//! - **The native bit** and the store's engine stores are one fact, checked at open both ways
-//!   by their rows (this kit doesn't read the engine's records): a store with the bit and no
-//!   engine store is refused ([`StoreError::NativeWithoutEngine`]), and engine records in a
-//!   store without the bit are damage. **A build without the native engine opens a store
-//!   holding native docs**: it refuses those docs one by one
-//!   ([`StoreError::NativeEngineMissing`], `MPC-E169`), never the store, so the store's other
-//!   docs work, and a rewrite copies the engine store's tables through (`native.rs`).
+//! - **The native bit** and the store's engine stores are one fact, checked at open both ways:
+//!   a store with the bit and no engine store is refused ([`StoreError::NativeWithoutEngine`]),
+//!   and engine records in a store without the bit are damage. With the native engine the
+//!   check also reads each engine store's record 0 (`native.rs`); without it, their rows alone.
+//!   **A build without the native engine opens a store holding native docs**: it refuses those
+//!   docs one by one ([`StoreError::NativeEngineMissing`], `MPC-E169`), never the store, so the
+//!   store's other docs work, and a rewrite copies the engine store's tables through
+//!   (`native.rs`).
 //! - **Format 7 was never written** (it was declared for the native engine's stores, and no
 //!   shipped host turned that engine on): a format-7 store is refused at open, before anything
 //!   reads it ([`StoreError::NeverWritten`]).
 //!
 //! A store's first chunked version stamps format 8 with [`FEATURE_CHUNKED`], lazily, in its own
-//! transaction (`chunks.rs`), and the stamp is never lowered. Kits v0.14.0 to v0.18.0 read up to
+//! transaction (`chunks.rs`), and the stamp is never lowered. The native bit is set by a
+//! store's first engine store (`native.rs`) and cleared by the transaction that removes its
+//! last one ([`clear_native_if_none`]): the format stays 8. Kits v0.14.0 to v0.18.0 read up to
 //! format 7 and refuse a format-8 store at open ([`StoreError::Newer`]), its bytes unchanged.
 
 use redb::Database;
@@ -111,8 +114,8 @@ pub(super) fn check_stamp(db: &Database) -> Result<Option<u64>, StoreError> {
             if unknown != 0 && !planted(plant::FormatPlant::UnknownFeatureIgnored) {
                 return Err(StoreError::UnknownFeatures { found: f, unknown });
             }
-            // the bit against the engine stores, by their rows: without the native engine its
-            // native docs are refused one by one, later
+            // the bit against the engine stores: with the native engine, their records too;
+            // without it, their rows alone (its native docs are refused one by one, later)
             super::native::check_held(&r, w & FEATURE_NATIVE != 0)?;
             Ok(Some(f))
         }
@@ -122,6 +125,25 @@ pub(super) fn check_stamp(db: &Database) -> Result<Option<u64>, StoreError> {
         super::native::check_held(&r, false)?;
     }
     Ok(checked)
+}
+
+/// Clear the native bit in `w`'s transaction when the store holds no engine store any more:
+/// the transaction that removes a store's last engine store (its last native doc's delete, or
+/// a space's) clears it, so no store is left with the bit and no engine store, which every
+/// build refuses at open. The format stays: it is never lowered, and a format-8 store's word
+/// may be 0. Called after the removal, in the same transaction.
+pub(super) fn clear_native_if_none(w: &redb::WriteTransaction) -> Result<(), StoreError> {
+    use redb::ReadableTable;
+    let mut meta = w.open_table(META)?;
+    let word = meta.get(REQUIRED_FEATURES)?.map_or(0, |v| v.value());
+    if word & FEATURE_NATIVE == 0 || planted(plant::FormatPlant::NativeBitKept) {
+        return Ok(());
+    }
+    let held = w.open_table(super::native::NATIVE_GENS)?.first()?.is_some();
+    if !held {
+        meta.insert(REQUIRED_FEATURES, word & !FEATURE_NATIVE)?;
+    }
+    Ok(())
 }
 
 /// The plant `native-unchecked`: the open doesn't check the native bit (test builds only).
@@ -184,6 +206,8 @@ pub(crate) mod plant {
         NativeStoreRefusedWhole,
         /// A rewrite leaves out the engine store's tables (`native-tables-dropped`).
         NativeTablesDropped,
+        /// The native bit is kept when the store's last engine store goes (`native-bit-kept`).
+        NativeBitKept,
     }
 
     #[cfg(test)]
@@ -202,6 +226,7 @@ pub(crate) mod plant {
                     "native-unchecked" => FormatPlant::NativeUnchecked,
                     "native-store-refused-whole" => FormatPlant::NativeStoreRefusedWhole,
                     "native-tables-dropped" => FormatPlant::NativeTablesDropped,
+                    "native-bit-kept" => FormatPlant::NativeBitKept,
                     _ => return None,
                 })
             }

@@ -1,0 +1,21 @@
+MPCE-E986 request_malformed (limits)
+exit:     2
+message:  the engine refused a request of parts: it is malformed
+next:     Nothing changed. A request of parts is empty, or holds several parts outside a relay: the kit made it wrong, so don't retry it as it is; drop the answer and report it.
+rule:     the MPCE seam (stable codes)
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E986",
+  "name": "request_malformed",
+  "area": "limits",
+  "exit": 2,
+  "message": "the engine refused a request of parts: it is malformed",
+  "next": "Nothing changed. A request of parts is empty, or holds several parts outside a relay: the kit made it wrong, so don't retry it as it is; drop the answer and report it.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

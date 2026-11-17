@@ -328,6 +328,16 @@ pub struct Config {
     /// The structure index: a row over this many bytes is recorded as not indexed (the
     /// index has its own bound, whatever the file's size). Default 64 MiB.
     pub blob_index_max_stored_bytes: u64,
+    /// The tier-0 verb path: a verb that reads its version whole (`VerbInput::Whole`) is
+    /// refused on a version over this many bytes (`MPC-E728`), before it runs. A streaming
+    /// verb isn't bounded by it. Default 256 MiB.
+    pub blob_verb_max_bytes: u64,
+    /// The tier-0 verb path: the most byte ranges one verb's plan may replace (`MPC-E725`
+    /// past it). Default 1,000,000.
+    pub blob_verb_max_spans: u64,
+    /// The tier-0 verb path: the most new bytes one verb's plan may hold, over all its ranges
+    /// (`MPC-E725` past it). Default 256 MiB.
+    pub blob_verb_max_insert_bytes: u64,
     /// Annotations: the longest comment body, in bytes (`MPC-E907` past it). Default 16 KiB.
     pub annot_body_max_bytes: u64,
     /// Annotations: the most comment threads in one doc. Default 10,000.
@@ -384,6 +394,248 @@ pub struct Config {
     /// lower of its pack's recommended default and the host-wide limit. Read at every open and
     /// every change, so a change here applies to a doc's next change. Default: empty.
     pub keyed_max_entries_by_pack: BTreeMap<String, usize>,
+
+    // --- the native engine (a Beta) ---
+    /// Whether a new doc may be made on the native engine (a Beta): a host asks for it when it
+    /// creates the doc ([`super::OpenOptions::engine`]), the only time a doc's engine is
+    /// chosen. Off, such a create is refused (`MPC-E167` `native_beta_off`, exit 2) and nothing
+    /// is made. Docs already on the native engine open, edit and save whatever this says.
+    /// Default false.
+    pub native_beta: bool,
+    /// When a native doc's records are cut (feature `native`): after a commit, once the
+    /// changes since its last cut reach `min(ceiling, max(floor, n / divisor))` of its `n`
+    /// changes in total ([`CutCadence::every`]). Default [`CutCadence::BETA`]:
+    /// `min(200, max(100, n / 30))`, the threshold measured for the Beta. A host sets its own
+    /// through [`CutCadence::new`], which refuses a cadence outside its bounds; a doc takes the
+    /// setting at its next open.
+    pub native_cut_cadence: CutCadence,
+    /// When the host-wide cut queue runs a native doc's cut (feature `native`): only after
+    /// `idle_ms` with no native commit (a forced cut need not wait for it), at most
+    /// `duty_pct`% of the time (after a cut that took `d` ms, none for `d * (100 / duty_pct -
+    /// 1)` ms, forced ones too), and a cut over `slow_ms` is reported slow. Default
+    /// [`CutQueueSettings::BETA`]: idle 250 ms, duty 10%, slow 250 ms. A host sets its own
+    /// through [`CutQueueSettings::new`], which refuses values outside its bounds. The queue is
+    /// per [`super::SessionManager`]: a host runs one manager per process, so one cut runs at a
+    /// time on the host. Listed as `native_cut_idle_ms`, `native_cut_duty_pct` and
+    /// `native_cut_slow_ms`.
+    pub native_cut_queue: CutQueueSettings,
+}
+
+/// When the host-wide cut queue runs a native doc's cut ([`Config::native_cut_queue`]). Made
+/// only by [`CutQueueSettings::new`] (checked) or [`CutQueueSettings::BETA`], so every value is
+/// in bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CutQueueSettings {
+    idle_ms: u64,
+    duty_pct: u64,
+    slow_ms: u64,
+}
+
+/// Why [`CutQueueSettings::new`] refused the queue's settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum CutQueueError {
+    /// The idle window is 0 (a cut would run between two edits) or past
+    /// [`CutQueueSettings::IDLE_MOST_MS`] (a busy doc would wait for its forced cut).
+    #[error("the cut queue's idle window ({idle_ms} ms) must be from 1 to {most} ms")]
+    IdleOutOfRange { idle_ms: u64, most: u64 },
+    /// The duty is outside [`CutQueueSettings::DUTY_LEAST`]..=[`CutQueueSettings::DUTY_MOST`].
+    #[error("the cut queue's duty ({duty_pct}%) must be from {least}% to {most}%")]
+    DutyOutOfRange {
+        duty_pct: u64,
+        least: u64,
+        most: u64,
+    },
+    /// A slow-cut threshold of 0 would report every cut.
+    #[error("the cut queue's slow-cut threshold must be at least 1 ms")]
+    SlowZero,
+}
+
+impl CutQueueSettings {
+    /// The Beta's settings, the default: idle 250 ms (the native engine's idle window), duty
+    /// 10% (a 200 ms cut is followed by 1.8 s with no cut), slow 250 ms.
+    pub const BETA: CutQueueSettings = CutQueueSettings {
+        idle_ms: 250,
+        duty_pct: 10,
+        slow_ms: 250,
+    };
+
+    /// The longest idle window: one minute.
+    pub const IDLE_MOST_MS: u64 = 60_000;
+    /// The least duty, in percent.
+    pub const DUTY_LEAST: u64 = 1;
+    /// The most duty, in percent: cuts never take more than half the time.
+    pub const DUTY_MOST: u64 = 50;
+
+    /// The queue's settings, checked: `1 <= idle_ms <= IDLE_MOST_MS`, `DUTY_LEAST <= duty_pct
+    /// <= DUTY_MOST` and `slow_ms >= 1`, else refused with the reason.
+    pub fn new(idle_ms: u64, duty_pct: u64, slow_ms: u64) -> Result<Self, CutQueueError> {
+        if idle_ms == 0 || idle_ms > Self::IDLE_MOST_MS {
+            return Err(CutQueueError::IdleOutOfRange {
+                idle_ms,
+                most: Self::IDLE_MOST_MS,
+            });
+        }
+        if !(Self::DUTY_LEAST..=Self::DUTY_MOST).contains(&duty_pct) {
+            return Err(CutQueueError::DutyOutOfRange {
+                duty_pct,
+                least: Self::DUTY_LEAST,
+                most: Self::DUTY_MOST,
+            });
+        }
+        if slow_ms == 0 {
+            return Err(CutQueueError::SlowZero);
+        }
+        Ok(CutQueueSettings {
+            idle_ms,
+            duty_pct,
+            slow_ms,
+        })
+    }
+
+    /// No native commit for this long (ms) and the host is idle: a cut that isn't forced runs
+    /// only then.
+    pub const fn idle_ms(&self) -> u64 {
+        self.idle_ms
+    }
+
+    /// The most of the time cuts may take, in percent.
+    pub const fn duty_pct(&self) -> u64 {
+        self.duty_pct
+    }
+
+    /// A cut that took longer than this (ms) is reported slow.
+    pub const fn slow_ms(&self) -> u64 {
+        self.slow_ms
+    }
+
+    /// After a cut that took `d` ms, how long (ms) no cut may start: `d * (100 / duty_pct -
+    /// 1)`, rounded up.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn duty_gap_ms(&self, d: u64) -> u64 {
+        d.saturating_mul(100 - self.duty_pct)
+            .div_ceil(self.duty_pct)
+    }
+}
+
+impl Default for CutQueueSettings {
+    fn default() -> Self {
+        Self::BETA
+    }
+}
+
+/// When a native doc's records are cut ([`Config::native_cut_cadence`]): a live cut once the
+/// changes since the last cut reach [`CutCadence::every`] of the doc's changes in total. Made
+/// only by [`CutCadence::new`] (checked) or [`CutCadence::BETA`], so every value is in bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CutCadence {
+    floor: u64,
+    ceiling: u64,
+    divisor: u64,
+}
+
+/// Why [`CutCadence::new`] refused a cadence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum CadenceError {
+    /// A floor of 0 would cut after every change.
+    #[error("the cut cadence's floor must be at least 1")]
+    FloorZero,
+    /// The floor is above the ceiling.
+    #[error("the cut cadence's floor ({floor}) is above its ceiling ({ceiling})")]
+    FloorOverCeiling { floor: u64, ceiling: u64 },
+    /// The ceiling is past [`CutCadence::CEILING_MOST`].
+    #[error("the cut cadence's ceiling ({ceiling}) is past the most it may be ({most})")]
+    CeilingTooHigh { ceiling: u64, most: u64 },
+    /// A divisor of 0.
+    #[error("the cut cadence's divisor must be at least 1")]
+    DivisorZero,
+}
+
+impl CutCadence {
+    /// The Beta's cadence, the default: `min(200, max(100, n / 30))`, the largest threshold
+    /// whose measured load stays at the Beta's bar.
+    pub const BETA: CutCadence = CutCadence {
+        floor: 100,
+        ceiling: 200,
+        divisor: 30,
+    };
+
+    /// The most a ceiling may be: a native doc's uncut tail stays a bounded part of its load.
+    pub const CEILING_MOST: u64 = 10_000;
+
+    /// A cadence of `min(ceiling, max(floor, n / divisor))`, checked: `1 <= floor <= ceiling
+    /// <= CEILING_MOST` and `divisor >= 1`, else refused with the reason.
+    pub fn new(floor: u64, ceiling: u64, divisor: u64) -> Result<Self, CadenceError> {
+        // the plant: any cadence taken unchecked
+        if crate::beta_plant::planted("cadence-unchecked") {
+            return Ok(CutCadence {
+                floor,
+                ceiling,
+                divisor,
+            });
+        }
+        if floor == 0 {
+            return Err(CadenceError::FloorZero);
+        }
+        if floor > ceiling {
+            return Err(CadenceError::FloorOverCeiling { floor, ceiling });
+        }
+        if ceiling > Self::CEILING_MOST {
+            return Err(CadenceError::CeilingTooHigh {
+                ceiling,
+                most: Self::CEILING_MOST,
+            });
+        }
+        if divisor == 0 {
+            return Err(CadenceError::DivisorZero);
+        }
+        Ok(CutCadence {
+            floor,
+            ceiling,
+            divisor,
+        })
+    }
+
+    /// The changes since the last cut at which a doc of `n` changes in total is cut:
+    /// `min(ceiling, max(floor, n / divisor))`.
+    pub const fn every(&self, n: u64) -> u64 {
+        let v = n / self.divisor;
+        let v = if v < self.floor { self.floor } else { v };
+        if v > self.ceiling {
+            self.ceiling
+        } else {
+            v
+        }
+    }
+
+    /// The most changes since the last cut that the after-edit check cuts: past it the doc's
+    /// store is a large uncut one, cut at the idle tick or the unload. Twice the ceiling, so a
+    /// host that checks once per commit of a batch never meets it.
+    pub const fn live_cut_most(&self) -> u64 {
+        2 * self.ceiling
+    }
+
+    /// The floor: a live cut never comes before this many changes since the last.
+    pub const fn floor(&self) -> u64 {
+        self.floor
+    }
+
+    /// The ceiling: a live cut always comes by this many changes since the last.
+    pub const fn ceiling(&self) -> u64 {
+        self.ceiling
+    }
+
+    /// Between them, one change in this many of the doc's total.
+    pub const fn divisor(&self) -> u64 {
+        self.divisor
+    }
+}
+
+impl Default for CutCadence {
+    fn default() -> Self {
+        Self::BETA
+    }
 }
 
 /// Which setting a keyed doc's live size limit came from ([`Config::keyed_limit`]).
@@ -571,6 +823,9 @@ impl Config {
             blob_index_max_bytes,
             blob_index_max_nodes,
             blob_index_max_stored_bytes,
+            blob_verb_max_bytes,
+            blob_verb_max_spans,
+            blob_verb_max_insert_bytes,
             annot_body_max_bytes,
             annot_threads_max,
             annot_comments_max,
@@ -584,6 +839,9 @@ impl Config {
             // per file type, not one number: a refusal names the limit that applied
             // (`limit`, `limit_source`), and a host shows a type's with `keyed_limit`
             keyed_max_entries_by_pack: _,
+            native_beta,
+            native_cut_cadence,
+            native_cut_queue,
         } = self;
         vec![
             ("editor_window_ms", *editor_window_ms),
@@ -665,6 +923,9 @@ impl Config {
             ("blob_index_max_bytes", *blob_index_max_bytes),
             ("blob_index_max_nodes", u64::from(*blob_index_max_nodes)),
             ("blob_index_max_stored_bytes", *blob_index_max_stored_bytes),
+            ("blob_verb_max_bytes", *blob_verb_max_bytes),
+            ("blob_verb_max_spans", *blob_verb_max_spans),
+            ("blob_verb_max_insert_bytes", *blob_verb_max_insert_bytes),
             ("annot_body_max_bytes", *annot_body_max_bytes),
             ("annot_threads_max", *annot_threads_max),
             ("annot_comments_max", *annot_comments_max),
@@ -675,6 +936,13 @@ impl Config {
             ("grid_max_rows", *grid_max_rows as u64),
             ("grid_max_value_len", *grid_max_value_len as u64),
             ("keyed_max_entries", *keyed_max_entries as u64),
+            ("native_beta", u64::from(*native_beta)),
+            ("native_cut_floor", native_cut_cadence.floor()),
+            ("native_cut_ceiling", native_cut_cadence.ceiling()),
+            ("native_cut_divisor", native_cut_cadence.divisor()),
+            ("native_cut_idle_ms", native_cut_queue.idle_ms()),
+            ("native_cut_duty_pct", native_cut_queue.duty_pct()),
+            ("native_cut_slow_ms", native_cut_queue.slow_ms()),
         ]
     }
 }
@@ -774,6 +1042,9 @@ impl Default for Config {
             blob_index_max_bytes: 2 << 30,
             blob_index_max_nodes: 100_000,
             blob_index_max_stored_bytes: 64 << 20,
+            blob_verb_max_bytes: 256 << 20,
+            blob_verb_max_spans: 1_000_000,
+            blob_verb_max_insert_bytes: 256 << 20,
             annot_body_max_bytes: 16 << 10,
             annot_threads_max: 10_000,
             annot_comments_max: 1_000,
@@ -787,6 +1058,9 @@ impl Default for Config {
             // measurement (the pptx plan's M1) sets this one
             keyed_max_entries: 25_000,
             keyed_max_entries_by_pack: BTreeMap::new(),
+            native_beta: false,
+            native_cut_cadence: CutCadence::BETA,
+            native_cut_queue: CutQueueSettings::BETA,
         }
     }
 }

@@ -1,0 +1,27 @@
+MPC-E724 base_weak_key (tier 0 and blobs)
+exit:     2
+message:  {keys} have no key of the file's own: --base can't pair them; guard the call with --if-version {head}
+next:     The nodes your call changes have no ID in the file, so the kit named them itself, and it can't be sure such a name means the same node in another version. Nothing was written. Read the doc at head (details.head) and call again with --if-version details.head instead of --base.
+step:     status; why: These nodes can't be paired across versions; check the doc's head, then guard the call with that version instead.
+rule:     the tier-0 verb path: --base per node
+verbs:    a file type's own verbs on a blob doc (named by its pack)
+status:   live
+--- json
+{
+  "id": "MPC-E724",
+  "name": "base_weak_key",
+  "area": "tier 0 and blobs",
+  "exit": 2,
+  "message": "{keys} have no key of the file's own: --base can't pair them; guard the call with --if-version {head}",
+  "next": "The nodes your call changes have no ID in the file, so the kit named them itself, and it can't be sure such a name means the same node in another version. Nothing was written. Read the doc at head (details.head) and call again with --if-version details.head instead of --base.",
+  "next_step": {
+    "verb": "status",
+    "args": [],
+    "why": "These nodes can't be paired across versions; check the doc's head, then guard the call with that version instead."
+  },
+  "rule": "the tier-0 verb path: --base per node",
+  "verbs": ["@blob_verb"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

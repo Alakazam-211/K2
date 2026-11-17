@@ -3,6 +3,13 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.22.0 (kit tag v0.22.0)
+
+Still wire 3, with no API change. `WIRE.md` says that an agent's `view_address` follows each verb
+it runs, to where its change is (its result's `view.address`), and that a person's never moves:
+a host relays those presence changes as before. Tests: `test/golden/roster_events_cells.json`
+holds them.
+
 ## 0.21.0 (kit tag v0.21.0)
 
 Still wire 3; every addition is optional, and a host that sends none of it behaves as before.

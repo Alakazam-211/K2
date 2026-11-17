@@ -1444,6 +1444,8 @@ fn every_table_is_listed_once() {
         "blob_turns".to_owned(),
         // the pack verb of a live change, with the first change a pack verb made
         "change_verbs".to_owned(),
+        // the verb that made a tier-0 version, with the first version a verb made
+        "blob_verbs".to_owned(),
         // a live doc's carrier and its versions', with the first
         "live_carriers".to_owned(),
         "version_carriers".to_owned(),
@@ -2421,6 +2423,75 @@ fn a_doc_of_another_engine_is_refused_whole_at_load() {
         );
         assert_eq!(crate::errors::Refusal::report(&e).id(), "MPC-E169");
     }
+}
+
+/// A native doc takes no snapshot: [`DocStore::compact`] refuses it before anything is written
+/// (its state is its engine's records, each under the engine's checksum and MAC; a snapshot
+/// would be a bare engine frame on disk). With the native engine, `NativeSnapshotRefused`
+/// (`MPC-E520`); without it, that doc's own `NativeEngineMissing` (`MPC-E169`). The doc's log
+/// rows and its snapshot slot are as they were. A Yrs doc in the same store still compacts.
+/// `MPC_ENTRY_PLANT=native-snapshot-unguarded` (the snapshot written) fails at the refusal.
+#[test]
+fn a_native_doc_takes_no_snapshot() {
+    plant::under(plant::EntryPlant::NativeSnapshotUnguarded, || {
+        let t = TmpDir::new("native-no-snapshot");
+        let s = DocStore::open(t.db()).unwrap();
+        let id = s.create(&meta("a.md")).unwrap();
+        s.append(id, &[native_entry("a", 5, 1), native_entry("a", 5, 2)])
+            .unwrap();
+        let native = DocMeta {
+            engine: "mpce".into(),
+            engine_format: 1,
+            ..s.meta(id).unwrap()
+        };
+        s.put_meta(id, &native).unwrap();
+        let rows = |s: &DocStore| {
+            let r = s.begin_read().unwrap();
+            let log: Vec<(u64, Vec<u8>)> = r
+                .open_table(UPDATES)
+                .unwrap()
+                .range((id, 0)..=(id, u64::MAX))
+                .unwrap()
+                .map(|kv| {
+                    let (k, v) = kv.unwrap();
+                    (k.value().1, v.value().to_vec())
+                })
+                .collect();
+            let snap = r
+                .open_table(SNAPSHOTS)
+                .unwrap()
+                .get(id)
+                .unwrap()
+                .map(|v| v.value().to_vec());
+            (log, snap)
+        };
+        let before = rows(&s);
+        assert_eq!(before.0.len(), 2, "the doc's two log rows");
+        assert_eq!(before.1, None, "no snapshot before");
+        let r = s.compact(id, 2, b"an engine frame");
+        assert!(r.is_err(), "row: a native doc's snapshot is refused: {r:?}");
+        let e = r.unwrap_err();
+        {
+            assert_eq!(
+                e,
+                StoreError::NativeEngineMissing {
+                    stored: "mpce".into(),
+                    stored_format: 1,
+                },
+                "row: a native doc's snapshot is refused"
+            );
+            assert_eq!(crate::errors::Refusal::report(&e).id(), "MPC-E169");
+        }
+        assert_eq!(rows(&s), before, "nothing written");
+        // a Yrs doc of the same store compacts as before
+        let y = s.create(&meta("b.md")).unwrap();
+        let mut doc = Doc::new(S).unwrap();
+        let u = doc.replace_text_as(5, "source", "one\n").unwrap().unwrap();
+        s.append(y, &[entry("a", 5, u)]).unwrap();
+        let state = doc.encode_state().unwrap();
+        s.compact(y, 1, &state).unwrap();
+        assert_eq!(s.load(y).unwrap().snapshot, Some((1, state)));
+    });
 }
 
 /// A native entry never reaches the Yrs replay: [`Loaded::yrs_updates`] is all or nothing, so

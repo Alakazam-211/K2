@@ -78,6 +78,7 @@ mod run;
 mod sed;
 mod udiff;
 
+pub(crate) use args::take_guards;
 pub use error::{exit, session_exit, ToolError, ToolRunError};
 pub use fence::{random_nonce, Fence};
 pub(crate) use result::{units_of as result_units, Capture, ResultData};

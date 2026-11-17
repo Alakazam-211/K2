@@ -1,5 +1,5 @@
-//! Replay ITF traces of `spec/quint/text.qnt` (from `quint run --out-itf`) on the text
-//! reference model (PRD E-PROOF-7).
+//! Replay ITF traces of the Quint text model (from `quint run --out-itf`) on the text
+//! reference model.
 //!
 //! `itf_replay [--rule fuguemax|fugue] [--expect-mismatch] <trace.itf.json | dir>...`
 //!

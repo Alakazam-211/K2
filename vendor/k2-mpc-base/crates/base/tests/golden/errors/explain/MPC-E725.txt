@@ -1,0 +1,21 @@
+MPC-E725 bad_plan (tier 0 and blobs)
+exit:     2
+message:  the verb's plan is refused: {why}
+next:     The file type's verb described its change in a way the kit refuses (its byte ranges out of order, overlapping, outside the file or over a limit, or a read verb that changes bytes). Nothing was written. This is a bug in the file type's pack: report it.
+rule:     the tier-0 verb path: the plan
+verbs:    a file type's own verbs on a blob doc (named by its pack)
+status:   live
+--- json
+{
+  "id": "MPC-E725",
+  "name": "bad_plan",
+  "area": "tier 0 and blobs",
+  "exit": 2,
+  "message": "the verb's plan is refused: {why}",
+  "next": "The file type's verb described its change in a way the kit refuses (its byte ranges out of order, overlapping, outside the file or over a limit, or a read verb that changes bytes). Nothing was written. This is a bug in the file type's pack: report it.",
+  "rule": "the tier-0 verb path: the plan",
+  "verbs": ["@blob_verb"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

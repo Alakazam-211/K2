@@ -34,7 +34,8 @@
       }
     ],
     "units_more": 0,
-    "lines": null
+    "lines": null,
+    "bytes": null
   },
   "data": {
     "text": "set @s:s1 color\n"
@@ -45,5 +46,20 @@
   "error": null,
   "conflicts": [],
   "notes": [],
-  "warnings": []
+  "warnings": [],
+  "view": {
+    "address": "@s:s1",
+    "containers": ["@s:s1"],
+    "units": [
+      {
+        "address": "@s:s1",
+        "live": true
+      }
+    ],
+    "units_more": 0,
+    "cells": null,
+    "lines": [],
+    "time": null
+  },
+  "dry_run": false
 }

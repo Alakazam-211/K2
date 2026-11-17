@@ -9,6 +9,8 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 mod at_base;
+#[cfg(test)]
+mod beta_hooks;
 mod blame;
 mod blob_refs;
 mod carrier;
@@ -16,6 +18,7 @@ mod cells;
 mod claims;
 mod copies;
 mod demote;
+mod edit_check;
 mod elem_claims;
 mod elem_presence;
 mod grid;
@@ -27,18 +30,26 @@ mod group;
 mod history;
 mod keyed_view;
 mod mint;
+mod native;
+mod native_purge;
 #[cfg(test)]
 mod next_change_tests;
 mod opened;
 mod purge;
 mod removed;
+mod render_net;
+mod text_cap;
+mod text_replica;
 mod tier0_history;
 mod verb_state;
+mod view_at;
 mod view_index;
 mod watch;
 mod writers;
 
 pub use at_base::{CursorAtVersion, CursorDrop, EditAtBase};
+#[cfg(test)]
+pub(crate) use beta_hooks::is_text_replica_for_tests;
 #[cfg(feature = "conformance")]
 pub use blame::CharBlame;
 pub use blame::{Blame, BlameLine};
@@ -49,7 +60,9 @@ pub use grid::{
     GridWriteOptions, GridWriteReport, HiddenCellWrite, PlaceBlame, StructureBlame,
 };
 pub use history::{DiffOutput, LogItem, LogQuery};
+pub(crate) use native::KeysSource;
 pub use purge::{NotReached, PurgeOutcome, PurgeRequest, PurgeScope};
+pub use view_at::{ViewAt, ViewUnit};
 pub(crate) use watch::VerbRefused;
 pub use watch::{
     keyed_state_json, watch_state_json, KeyedWatch, OutsideSaveCopy, OutsideSaveOutcome,
@@ -319,6 +332,13 @@ pub struct ReadResult {
     /// Who else changed the doc since this participant's previous read (or, on a first read,
     /// since the session loaded), oldest first. Excludes the caller and the import.
     pub contributors_since_last_read: Vec<String>,
+    /// `Some`: the file type can't render the doc as its file now (the pack's error, e.g.
+    /// `MPC-E517` or `MPC-E521`), so `bytes` are **the file as last synced** (the carrier the
+    /// session keeps; empty for a pack that keeps none), not the doc's; `content` and
+    /// `text_by_root` are the doc's, at `version`. Such a read's version is no base for a
+    /// whole-file write ([`SessionError::BaseUnrendered`], `MPC-E824`). `None`: `bytes` are the
+    /// doc's file (docs/SESSIONS.md, "When the file can't be rendered").
+    pub render_failed: Option<SessionError>,
 }
 
 /// A structured read's head ([`Session::read_view_with`]): the version read and who else changed
@@ -328,6 +348,10 @@ pub struct ReadResult {
 pub(crate) struct ReadHead {
     pub version: Seq,
     pub contributors_since_last_read: Vec<String>,
+    /// The failure the last rendering of the doc as its file found at this version (a
+    /// write-back, a sync check, a flush), if any: a structured read gives its result with it
+    /// as a warning.
+    pub render_failed: Option<SessionError>,
 }
 
 /// Returned by an applied edit.
@@ -345,6 +369,10 @@ pub struct EditResult {
     /// Cells it wrote into a deleted row or column (kept, hidden: contract §1.6), each with
     /// who deleted the row or column (reported to the writer and the deleter).
     pub hidden: Vec<HiddenCellWrite>,
+    /// Where the change is ([`ViewAt`]), when the call asked for it
+    /// ([`EditOptions::view()`], [`WriteOptions::view()`], [`UndoRequest::view`], or a result
+    /// through `run_tool`); `None` otherwise.
+    pub view: Option<Box<ViewAt>>,
 }
 
 /// Returned by [`Session::write_base`].
@@ -396,6 +424,8 @@ pub struct EditOptions {
     /// The pack verb this edit runs for ([`ChangeInfo::verb`]): set by the kit's own verb
     /// runner (`run_tool`), never by a host, so a host's edit is never a verb's.
     pub(crate) verb: Option<&'static str>,
+    /// Work out where the change is ([`EditResult::view`]; default `false`: `None`).
+    pub view: bool,
 }
 
 impl EditOptions {
@@ -433,6 +463,12 @@ impl EditOptions {
     /// never invents one: without it the change has none.
     pub fn turn(mut self, turn: Turn) -> Self {
         self.turn = Some(turn);
+        self
+    }
+
+    /// Work out where the change is ([`EditResult::view`]).
+    pub fn view(mut self, on: bool) -> Self {
+        self.view = on;
         self
     }
 
@@ -488,6 +524,8 @@ pub struct WriteOptions {
     pub policy: ClaimPolicy,
     /// The host-given turn of this call ([`EditOptions::turn`]).
     pub turn: Option<Turn>,
+    /// Work out where the change is ([`EditResult::view`], as [`EditOptions::view()`]).
+    pub view: bool,
 }
 
 impl WriteOptions {
@@ -504,6 +542,12 @@ impl WriteOptions {
     /// The host-given turn, as [`EditOptions::turn`].
     pub fn turn(mut self, turn: Turn) -> Self {
         self.turn = Some(turn);
+        self
+    }
+
+    /// Work out where the change is, as [`EditOptions::view()`].
+    pub fn view(mut self, on: bool) -> Self {
+        self.view = on;
         self
     }
 }
@@ -605,6 +649,8 @@ pub struct UndoRequest {
     pub for_person: Option<String>,
     /// The host-given turn of this call ([`EditOptions::turn`]): on every change it makes.
     pub turn: Option<Turn>,
+    /// Work out where its changes are ([`EditResult::view`], as [`EditOptions::view()`]).
+    pub view: bool,
 }
 
 impl Default for UndoRequest {
@@ -614,6 +660,7 @@ impl Default for UndoRequest {
             mode: UndoMode::All,
             for_person: None,
             turn: None,
+            view: false,
         }
     }
 }
@@ -1042,6 +1089,16 @@ struct State {
     /// at (the pack's error), cleared by one that succeeds: a read that renders nothing reports
     /// it while the doc is still at that version.
     render_failed: std::cell::RefCell<Option<(Seq, SessionError)>>,
+    /// The doc's version when the tick last reported that its write-back can't render it: the
+    /// next ticks at that version don't try again while the failure stands (`render_failed`),
+    /// so a doc that can't be written back is reported once per version
+    /// (`live/render_net.rs`).
+    render_reported: Option<Seq>,
+    /// The versions whose whole read was given with the synced bytes because the file couldn't
+    /// be rendered ([`ReadResult::render_failed`]), as ranges: a whole-file write from one is
+    /// refused (`MPC-E824`). At most [`render_net::UNRENDERED_RANGES_MAX`] ranges; past that
+    /// the two oldest merge, which only refuses more (`live/render_net.rs`).
+    unrendered_reads: Vec<(Seq, Seq)>,
     /// A grid's axes and line map as the roster last read them, with the doc's version and
     /// codec they were read at (the roster push's flush reads them for every caret: O(doc)
     /// to build, so built once per change, not once per flush; v0.10.0).
@@ -1049,6 +1106,10 @@ struct State {
     /// The change being committed goes on no undo stack (`rows drop-deleted`, spec v1.10
     /// S11); set right before the commit, which takes it.
     no_stack: bool,
+    /// The change being committed is a purge's removal: the pack's check
+    /// ([`Pack::check_edit`]) isn't asked (erasure always goes through); set right before the
+    /// commit, which takes it.
+    unchecked: bool,
     /// The rows the next change marks (a text's non-exact pairs, [`NewChange::row_marks`]).
     next_row_marks: Vec<crate::elem::Key>,
     /// The next change remaps the columns (a text's non-exact column mapping).
@@ -1066,6 +1127,9 @@ struct State {
     /// What the grid verb about to commit wrote ([`crate::tools::StructOutput::cells`]): set
     /// right before the commit by the verb's entry, taken by it (as `next_verb`).
     next_cells: Option<crate::grid::CellsReport>,
+    /// Who asked for the view of the change about to commit ([`ViewAt`]): set right before the
+    /// commit by the call's entry, taken by it (as `next_verb`).
+    next_view: view_at::ViewWant,
     /// Conformance only: outside saves record their writes with no identity, as a write
     /// merged in from elsewhere whose writer the engine doesn't report (Yrs only).
     #[cfg(feature = "conformance")]
@@ -1191,11 +1255,37 @@ enum Replica {
         /// The runtime checks' settings (`Session::checked`): every, scale, position.
         checks: (u32, u64, u32),
     },
+    /// A native doc's replica: the file's texts at the sync point, every text root's in schema
+    /// order, and nothing else (`live/native.rs`): no engine copy.
+    Text(Vec<(&'static str, String)>),
 }
 
 impl Replica {
-    /// The replica, decoded now if it wasn't yet.
+    /// Root `root`'s text as the file holds it at the sync point.
+    fn text(&mut self, root: &str) -> std::result::Result<String, DocError> {
+        if let Replica::Text(texts) = self {
+            return texts
+                .iter()
+                .find(|(r, _)| *r == root)
+                .map(|(_, t)| t.clone())
+                .ok_or_else(|| DocError::Malformed(format!("no text root {root:?}")));
+        }
+        self.get()?.text(root)
+    }
+
+    /// Whether this is a native doc's text-only replica.
+    fn is_text(&self) -> bool {
+        matches!(self, Replica::Text(_))
+    }
+
+    /// The replica, decoded now if it wasn't yet. A text-only replica has no doc
+    /// ([`DocError::Malformed`]): its callers read its texts ([`Replica::text`]).
     fn get(&mut self) -> std::result::Result<&mut Doc, DocError> {
+        if self.is_text() {
+            return Err(DocError::Malformed(
+                "a native doc's disk replica holds its texts, not a doc".into(),
+            ));
+        }
         if let Replica::Stored {
             state,
             schema,
@@ -1210,7 +1300,7 @@ impl Replica {
         }
         match self {
             Replica::Doc(d) => Ok(d),
-            Replica::Stored { .. } => unreachable!("decoded above"),
+            Replica::Stored { .. } | Replica::Text(_) => unreachable!("decoded above"),
         }
     }
 
@@ -1219,7 +1309,7 @@ impl Replica {
     fn loaded(&mut self) -> Option<&mut Doc> {
         match self {
             Replica::Doc(d) => Some(d),
-            Replica::Stored { .. } => None,
+            Replica::Stored { .. } | Replica::Text(_) => None,
         }
     }
 }
@@ -1253,6 +1343,9 @@ pub struct Session {
     /// The manager's blob store, for a doc promoted from tier 0 that kept tier-0 history
     /// (v0.9.2; `tier0_history.rs`). Set by the manager when it has one.
     blobs: std::sync::OnceLock<Arc<crate::blob::BlobStore>>,
+    /// Where a native doc's keys come from (the manager's; `live/native.rs`): its reload after
+    /// a failed write asks them again.
+    keys: KeysSource,
 }
 
 /// Whether a structured change's stream re-identified elements: a list insert, delete,
@@ -1498,13 +1591,21 @@ fn take_d1_extra() -> Vec<(usize, usize)> {
     Vec::new()
 }
 
+/// The engine a stored doc's stamp names, as this build reads it ([`check_engine`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoredEngine {
+    Yrs,
+}
+
 /// Refuse a stored doc another engine wrote, before any of its state is read (v0.10.1):
 /// [`SessionError::EngineMismatch`] unless its stamp is this engine's
-/// ([`crate::engine::reads_stamp`]; an unstamped doc is). Without the native engine, a native
-/// doc is [`SessionError::NativeEngineMissing`] (`MPC-E169`): that doc alone is refused.
-fn check_engine(meta: &DocMeta) -> Result<()> {
+/// ([`crate::engine::reads_stamp`]; an unstamped doc is). With the native engine, a native doc
+/// at a store format it reads loads on it (another format: `NativeFormatUnread`). Without the
+/// native engine, a native doc is [`SessionError::NativeEngineMissing`] (`MPC-E169`): that doc
+/// alone is refused.
+fn check_engine(meta: &DocMeta) -> Result<StoredEngine> {
     if reads_stamp(&meta.engine, meta.engine_format) {
-        return Ok(());
+        return Ok(StoredEngine::Yrs);
     }
     if crate::engine::native_stamp(&meta.engine) {
         return Err(SessionError::NativeEngineMissing {
@@ -1592,6 +1693,7 @@ impl Session {
         pack: Arc<dyn Pack>,
         store: Arc<DocStore>,
         init: Init,
+        keys: &KeysSource,
     ) -> Result<Self> {
         let Init {
             doc_id,
@@ -1625,6 +1727,7 @@ impl Session {
             doc_id,
             last_used_ms: AtomicU64::new(now),
             blobs: std::sync::OnceLock::new(),
+            keys: keys.clone(),
             state: Mutex::new(State {
                 key: meta.key,
                 store: Some(store),
@@ -1681,8 +1784,11 @@ impl Session {
                 view_by_change: None,
                 view_carrier_before: None,
                 render_failed: std::cell::RefCell::new(None),
+                render_reported: None,
+                unrendered_reads: Vec::new(),
                 grid_now: std::cell::RefCell::new(None),
                 no_stack: false,
+                unchecked: false,
                 next_row_marks: Vec::new(),
                 next_col_remap: false,
                 next_note_rows: Vec::new(),
@@ -1690,6 +1796,7 @@ impl Session {
                 next_turn: None,
                 next_verb: None,
                 next_cells: None,
+                next_view: view_at::ViewWant::default(),
                 #[cfg(feature = "conformance")]
                 outside_without_identity: false,
                 group_hint: None,
@@ -1698,13 +1805,14 @@ impl Session {
         })
     }
 
-    /// Load a stored doc.
+    /// Load a stored doc, on the engine its stamp names (`live/native.rs`).
     pub(crate) fn load(
         host: Arc<dyn Host>,
         config: Arc<Config>,
         pack: Arc<dyn Pack>,
         store: Arc<DocStore>,
         doc_id: DocId,
+        keys: &KeysSource,
     ) -> Result<Self> {
         timed!(Load);
         let schema = pack.schema();
@@ -1715,27 +1823,13 @@ impl Session {
                 pack: schema.name.to_owned(),
             });
         }
-        check_engine(&meta)?;
-        let loaded = {
-            timed!(LoadStoreRead);
-            store.load(doc_id)?
-        };
-        let mut doc = Doc::from_store(schema, &loaded)?;
-        doc.set_edit_check_every(config.edit_check_every);
-        doc.set_edit_check_scale(config.edit_check_scale_units);
-        doc.set_position_check_every(config.position_check_every);
-        let snap_seq = loaded.snapshot.as_ref().map_or(0, |(s, _)| *s);
-        let version = loaded.updates.last().map_or(snap_seq, |(s, _)| *s);
-        let log_bytes: u64 = loaded.updates.iter().map(|(_, e)| e.body.yrs_len()).sum();
-        let state_bytes = loaded.snapshot.as_ref().map_or(0, |(_, s)| s.len() as u64) + log_bytes;
-        let mut authors: VecDeque<(Seq, String)> = loaded
-            .updates
-            .iter()
-            .map(|(s, e)| (*s, e.author.clone()))
-            .collect();
-        while authors.len() > AUTHORS_KEPT {
-            authors.pop_front();
-        }
+        let native::LoadedDoc {
+            doc,
+            version,
+            log,
+            state_bytes,
+            authors,
+        } = native::load_doc(&store, doc_id, &meta, schema, &config, keys)?;
         let now = host.now_ms();
         blob_refs::heal_at_load(&store, doc_id, &doc, pack.blob_ref_roots(), now)?;
         let init = Init {
@@ -1743,16 +1837,18 @@ impl Session {
             meta,
             doc,
             version,
-            log: (loaded.updates.len() as u64, log_bytes),
+            log,
             state_bytes,
             authors,
             now,
         };
-        Self::build(host, config, pack, store, init)
+        Self::build(host, config, pack, store, init, keys)
     }
 
     /// Create a doc at `key` from file bytes, imported by [`IMPORT_PID`], with an import
-    /// version, all in one store transaction.
+    /// version, all in one store transaction, on `engine` (the native engine: its first
+    /// engine records in that transaction too, under the keys the host gives for `key`).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn import(
         host: Arc<dyn Host>,
         config: Arc<Config>,
@@ -1760,17 +1856,25 @@ impl Session {
         store: Arc<DocStore>,
         key: DocKey,
         bytes: &[u8],
+        keys: &KeysSource,
+        engine: super::DocEngine,
     ) -> Result<Self> {
         let schema = pack.schema();
         let structured = schema.roots.iter().any(|(_, k)| *k != Kind::Text);
         let content = pack.decode(bytes).map_err(SessionError::Declined)?;
         let ordered = ordered_roots(&schema, content.roots)?;
-        let mut doc = Doc::new(schema)?;
+        let (mut doc, native_base): (Doc, Option<(u64, DocId)>) = {
+            let (super::DocEngine::Standard, _) = (engine, keys);
+            (Doc::new(schema)?, None)
+        };
         doc.set_edit_check_every(config.edit_check_every);
         doc.set_edit_check_scale(config.edit_check_scale_units);
         doc.set_position_check_every(config.position_check_every);
         let client = mint_client_id();
         let edits = grid::import_edits(&ordered);
+        // a native doc's live text fits its cap from the start (an empty doc's texts before)
+        let empty: Vec<(&'static str, String)> = texts_of(&doc, &schema)?;
+        text_cap::check_text_cap(&doc, &empty, &edits)?;
         let made = doc.edit_made(client, &edits)?;
         let (made, firsts) = (made.edited, made.firsts);
         let update = made.update;
@@ -1788,24 +1892,28 @@ impl Session {
             .map(|(_, f)| f)
             .collect();
         let now = host.now_ms();
-        doc.check_storable()?;
+        let (engine_name, engine_format) = native::stamp(native_base.is_some());
         let meta = DocMeta {
             key,
             pack: schema.name.to_owned(),
-            engine: ENGINE_NAME.to_owned(),
-            engine_format: ENGINE_FORMAT,
+            engine: engine_name.to_owned(),
+            engine_format,
             codec: content.codec.clone(),
             created_ms: now,
             synced_hash: None,
             synced_seq: 0,
             declined: None,
         };
+        let native_at: Option<u64> = None;
         let entry = update.map(|u| LogEntry {
             author: IMPORT_PID.to_owned(),
             client,
             at_ms: now,
             via: "disk".to_owned(),
-            body: EntryBody::Yrs(u),
+            body: match native_at {
+                Some(at) => EntryBody::Native(crate::store::NativeRef { at }),
+                None => EntryBody::Yrs(u),
+            },
             on_behalf_of: None,
         });
         let version = Version {
@@ -1819,10 +1927,14 @@ impl Session {
         };
         // the bytes are the file's: the doc as imported is what the file holds
         let hash_key = crate::store::fresh_key()?;
+        // a native doc's disk replica is its texts (`live/native.rs`), never engine bytes
         let sync = SyncState {
             hash: file_hash(&hash_key, bytes),
             seq: 0,
-            state: doc.encode_state()?,
+            state: match native_base {
+                Some(_) => text_replica::encode_texts(&texts_of(&doc, &schema)?),
+                None => doc.encode_state()?,
+            },
         };
         let change = NewChange {
             info: ChangeInfo {
@@ -1877,15 +1989,22 @@ impl Session {
             note_rows: Vec::new(),
             blob_refs: BlobRefScan::of(pack.blob_ref_roots()),
         };
-        let (doc_id, seq, _) = store.create_imported_synced(
-            &meta,
-            client,
-            IMPORT_PID,
-            entry.as_ref(),
-            &version,
-            Some((&sync, &hash_key)),
-            Some(&change),
-        )?;
+        let created: Option<(DocId, Option<Seq>)> = None;
+        let (doc_id, seq) = match created {
+            Some(c) => c,
+            None => {
+                let (doc_id, seq, _) = store.create_imported_synced(
+                    &meta,
+                    client,
+                    IMPORT_PID,
+                    entry.as_ref(),
+                    &version,
+                    Some((&sync, &hash_key)),
+                    Some(&change),
+                )?;
+                (doc_id, seq)
+            }
+        };
         // a pack that keeps a carrier renders the doc by splicing it into the bytes it was read
         // from, which give it back unchanged (the carrier's contract: an untouched doc writes
         // back byte for byte): the doc as imported is known to render as the file, and opening
@@ -1905,17 +2024,26 @@ impl Session {
         if let Some(s) = seq {
             authors.push_back((s, IMPORT_PID.to_owned()));
         }
+        // a native doc keeps no kit bytes: its live text stands in for its size
+        let state_bytes = match native_base {
+            Some(_) => ordered
+                .iter()
+                .filter_map(|(_, n)| n.as_text())
+                .map(|t| t.len() as u64)
+                .sum(),
+            None => ub,
+        };
         let init = Init {
             doc_id,
             meta,
             doc,
             version: seq.unwrap_or(0),
             log: (u64::from(seq.is_some()), ub),
-            state_bytes: ub,
+            state_bytes,
             authors,
             now,
         };
-        Self::build(host, config, pack, store, init)
+        Self::build(host, config, pack, store, init, keys)
     }
 
     // ----- plumbing -----
@@ -3080,31 +3208,29 @@ impl Session {
         Ok((read, r, notes, for_edit))
     }
 
+    /// [`Session::read`] under the lock: the doc, with the synced bytes and the failure when
+    /// the file can't be rendered (`live/render_net.rs`), which makes its version no base for
+    /// a whole-file write.
     fn read_locked(&self, st: &mut State, i: usize, now: u64) -> Result<ReadResult> {
-        let read = self.read_unmarked(st, i)?;
+        let read = self.read_or_synced(st, i)?;
+        if read.render_failed.is_some() {
+            Self::note_unrendered_read(st, read.version);
+        }
         self.mark_read(st, i, read.version, now);
         Ok(read)
     }
 
-    /// The doc as a read gives it, and who changed it since the caller last read. Nothing moves
-    /// until [`Session::mark_read`], so a verb that then fails leaves no trace.
+    /// The doc as a read of the file gives it, and who changed it since the caller last read:
+    /// the kit's text read verbs and a table's read verbs, which print and take positions in
+    /// the rendered file, so a file that can't be rendered fails them (the pack's error), as
+    /// it always did. Nothing moves until [`Session::mark_read`], so a verb that then fails
+    /// leaves no trace.
     fn read_unmarked(&self, st: &State, i: usize) -> Result<ReadResult> {
-        let ReadHead {
-            version,
-            contributors_since_last_read: contributors,
-        } = Self::read_head(st, i);
-        let content = self.content(st)?;
-        let bytes = self.encode_live(st, &content, &st.codec)?;
-        Ok(ReadResult {
-            bytes,
-            text_by_root: content
-                .iter()
-                .filter_map(|(r, n)| Some((r.clone(), n.as_text()?.to_owned())))
-                .collect(),
-            content,
-            version,
-            contributors_since_last_read: contributors,
-        })
+        let mut read = self.read_or_synced(st, i)?;
+        if let Some(e) = read.render_failed.take() {
+            return Err(e);
+        }
+        Ok(read)
     }
 
     /// A read's version and who changed the doc since the caller last read, without the doc's
@@ -3126,6 +3252,7 @@ impl Session {
         ReadHead {
             version: st.version,
             contributors_since_last_read: contributors,
+            render_failed: Self::render_failure(st),
         }
     }
 
@@ -3324,8 +3451,10 @@ impl Session {
         policy: ClaimPolicy,
         f: impl FnOnce(&str) -> std::result::Result<String, E>,
     ) -> std::result::Result<Option<EditResult>, EditWithError<E>> {
-        self.edit_with_impl(conn, root, policy, None, None, None, None, None, None, f)
-            .map(|(r, _)| r)
+        self.edit_with_impl(
+            conn, root, policy, None, None, None, None, None, None, false, f,
+        )
+        .map(|(r, _)| r)
     }
 
     /// [`Session::edit_with`] with the host's [`EditOptions`]: the claim policy (as
@@ -3356,6 +3485,7 @@ impl Session {
             opts.turn,
             opts.verb,
             None,
+            opts.view,
             f,
         )
         .map(|(r, _)| r)
@@ -3392,9 +3522,14 @@ impl Session {
         turn: Option<Turn>,
         pack_verb: Option<&'static str>,
         base: Option<&mut Option<Seq>>,
+        view: bool,
         f: impl FnOnce(&str) -> std::result::Result<String, E>,
     ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
         prof!("session.edit_with");
+        let want_view = view_at::ViewWant {
+            result: view || base.is_some(),
+            verb: verb.is_some(),
+        };
         let now = self.now();
         let mut st = {
             prof!("session.lock");
@@ -3441,6 +3576,7 @@ impl Session {
         st.group_hint = group;
         st.next_turn = turn;
         st.next_verb = pack_verb;
+        st.next_view = want_view;
         let res = self.commit_edit(&mut st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
         // a verb returns its notes; the host's own edit calls return only the result, so they
         // leave waiting notes where they are (taken, they'd be lost)
@@ -3527,6 +3663,7 @@ impl Session {
             hunks,
         }];
         st.next_turn = opts.turn;
+        st.next_view.result = opts.view;
         self.commit_edit(&mut st, i, edits, ChangeKind::Edit, None, now, Vec::new())
     }
 
@@ -3597,6 +3734,7 @@ impl Session {
         let st = &mut *st;
         let i = self.admit_edit(st, conn, Action::WriteBase, now)?;
         self.check_backlog(st, i)?;
+        Self::check_rendered_base(st, base)?;
         let live = self.text_of(st, root)?.1.to_owned();
         let base_text = {
             timed!(WriteBaseBaseText);
@@ -3678,6 +3816,7 @@ impl Session {
                 }];
                 st.verb_hint = Some("write --base".to_owned());
                 st.next_turn = opts.turn;
+                st.next_view.result = opts.view;
                 let res =
                     self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
                 let notes = self.edit_notes(st, i, &res, now, true);
@@ -3813,6 +3952,7 @@ impl Session {
             })
             .collect();
         st.next_turn = req.turn;
+        st.next_view.result = req.view;
         let (result, done) = self.commit(st, i, commit_steps, now, Vec::new())?;
         let consumed = Self::take_batches(st, &pid, origin, &picked[..n]);
         for ((inv, d), b) in inverses.into_iter().zip(done).zip(consumed) {
@@ -4156,6 +4296,10 @@ impl Session {
         let turn = st.next_turn.take();
         let pack_verb = st.next_verb.take();
         let cells_report = st.next_cells.take();
+        let want_view = std::mem::take(&mut st.next_view);
+        // a purge's removal is never the pack's to refuse (erasure always goes through); taken
+        // first, so no exit below leaves it for the next change
+        let checked = !std::mem::take(&mut st.unchecked);
         let verb = st.verb_hint.take().unwrap_or_else(|| {
             kind_verb(steps.first().map_or(ChangeKind::Edit, |s| s.kind)).to_owned()
         });
@@ -4199,6 +4343,15 @@ impl Session {
             }
             _ => Vec::new(),
         };
+        // the change's view, when asked for ([`ViewAt`]): what its edits name, in order
+        let view_named = match (want_view.any() && self.structured, verb_named.is_empty()) {
+            (true, true) => {
+                let owned: Vec<Edit> = steps.iter().flat_map(|s| s.edits.clone()).collect();
+                elem_presence::touched_in_order(self.pack.composite(), &owned)
+            }
+            (true, false) => verb_named.clone(),
+            (false, _) => Vec::new(),
+        };
         let version_before = st.version;
         let mut applied: Vec<Applied> = Vec::new();
         let mut which: Vec<Option<usize>> = Vec::with_capacity(n_steps);
@@ -4209,10 +4362,18 @@ impl Session {
                     == Some(crate::differential::ApplyFault::LaterStepRefused);
             #[cfg(not(any(test, feature = "differential")))]
             let refused = false;
+            // the pack's check of the step, on the doc after the steps before it: a later
+            // step's refusal reloads the doc as any later step's does
             let result = if refused {
                 Err(SessionError::BadEdit("a planted refusal".into()))
             } else {
-                self.apply_local(st, i, step.edits, step.restores, step.elem_restores)
+                match checked {
+                    true => self.check_edit(st, &step.edits),
+                    false => Ok(()),
+                }
+                .and_then(|()| {
+                    self.apply_local(st, i, step.edits, step.restores, step.elem_restores)
+                })
             };
             match result {
                 Ok(Some(mut a)) => {
@@ -4284,17 +4445,31 @@ impl Session {
         // entries (an entry's body is the doc engine's: the bytes to send are kept here)
         let catching_up = st.disk.as_ref().is_some_and(|d| d.catch_up.is_some());
         let mut caught = Vec::new();
+        // a native doc's changes are its engine's records, pending until this commit writes
+        // them: each log row names its change by position (`live/native.rs`)
+        let native = match self.native_pending(st, applied.len()) {
+            Ok(n) => n,
+            Err(e) => {
+                self.recover(st, &e.to_string());
+                return Err(e);
+            }
+        };
+        let mut positions = native.as_ref().map(|(_, p)| p.iter().copied());
         for a in &mut applied {
             let update = std::mem::take(&mut a.update);
             if catching_up {
                 caught.push(update.clone());
             }
+            let body = match positions.as_mut().and_then(Iterator::next) {
+                Some(at) => EntryBody::Native(crate::store::NativeRef { at }),
+                None => EntryBody::Yrs(update),
+            };
             entries.push(LogEntry {
                 author: pid.clone(),
                 client,
                 at_ms: now,
                 via: via.clone(),
-                body: EntryBody::Yrs(update),
+                body,
                 on_behalf_of: obo.clone(),
             });
             // the rows a text left on their keys by a non-exact pairing; and a marked row an
@@ -4352,11 +4527,15 @@ impl Session {
         // person-writer rows changed since the last change landed ride in its transaction
         st.writers.writable(client);
         let writer_rows = st.writers.dirty();
-        let appended = self.store(st).and_then(|s| {
-            prof!("commit.store");
-            planted_store_commit_fails()?;
-            Ok(s.commit_changes_with(self.doc_id, &entries, &changes, &versions, &writer_rows)?)
-        });
+        let records = native.map(|(r, _)| r);
+        let appended = self.commit_rows(
+            st,
+            &entries,
+            &changes,
+            &versions,
+            &writer_rows,
+            records.as_deref(),
+        );
         let seqs = match appended {
             Ok(s) => s,
             Err(e) => {
@@ -4487,6 +4666,13 @@ impl Session {
             prof!("commit.elem_presence");
             self.elem_presence_after(st, Some(&streams));
         }
+        // a grid verb's cells for the view, read as its agent's would be (before they move)
+        let view_cells = match want_view.any() {
+            true => cells_report
+                .clone()
+                .and_then(|r| self.cells_of_report(st, i, r)?.1),
+            false => None,
+        };
         {
             prof!("commit.verb_presence");
             self.verb_presence(st, i, &verb_named, &streams);
@@ -4553,6 +4739,18 @@ impl Session {
             prof!("commit.compact");
             self.maybe_compact(st);
         }
+        let view = {
+            prof!("commit.view");
+            self.change_view(
+                st,
+                i,
+                want_view,
+                &view_named,
+                &streams,
+                &changed,
+                view_cells,
+            )
+        };
         let done = which
             .into_iter()
             .map(|w| w.and_then(|k| regions_of[k].take()))
@@ -4565,9 +4763,32 @@ impl Session {
                 lines_removed: removed,
                 elems,
                 hidden,
+                view,
             },
             done,
         ))
+    }
+
+    /// A change's one store transaction: its log rows, summaries, versions and person-writer
+    /// rows, and a native doc's engine `records` (its pending ones, which then leave the doc's
+    /// pending tail). Returns the log positions.
+    fn commit_rows(
+        &self,
+        st: &mut State,
+        entries: &[LogEntry],
+        changes: &[NewChange],
+        versions: &[Version],
+        writers: &[(ClientId, String, crate::store::PersonWriterRow)],
+        records: Option<&[Vec<u8>]>,
+    ) -> Result<Vec<Seq>> {
+        prof!("commit.store");
+        let s = self.store(st)?.clone();
+        planted_store_commit_fails()?;
+        debug_assert!(
+            records.is_none(),
+            "engine records without the native engine"
+        );
+        Ok(s.commit_changes_with(self.doc_id, entries, changes, versions, writers)?)
     }
 
     /// The rows and the column mapping an undo, redo, revert or restore marks again: what it
@@ -4727,6 +4948,8 @@ impl Session {
                 }
             }
         }
+        // a native doc's live text stays within its cap (`live/native.rs`), nothing applied
+        text_cap::check_text_cap(&st.doc, &st.texts, &canon)?;
         let clock_before = st.doc.clock_of(client);
         let made = st.doc.edit_made(client, &canon)?;
         let Some(update) = made.edited.update else {
@@ -5163,26 +5386,30 @@ impl Session {
     fn recover(&self, st: &mut State, error: &str) {
         let reloaded = (|| -> Result<_> {
             let store = self.store(st)?;
-            check_engine(&store.meta(self.doc_id)?)?;
-            let loaded = store.load(self.doc_id)?;
-            let mut doc = Doc::from_store(self.schema, &loaded)?;
-            doc.set_edit_check_every(self.config.edit_check_every);
-            doc.set_edit_check_scale(self.config.edit_check_scale_units);
-            doc.set_position_check_every(self.config.position_check_every);
-            let texts = texts_of(&doc, &self.schema)?;
-            let snap = loaded.snapshot.as_ref().map_or(0, |(s, _)| *s);
-            let version = loaded.updates.last().map_or(snap, |(s, _)| *s);
-            Ok((doc, texts, version, loaded))
+            let meta = store.meta(self.doc_id)?;
+            // on the engine its stamp names; a native doc's records the store holds (its
+            // pending ones, never committed, are dropped with the old instance)
+            let loaded = native::load_doc(
+                store,
+                self.doc_id,
+                &meta,
+                self.schema,
+                &self.config,
+                &self.keys,
+            )?;
+            let texts = texts_of(&loaded.doc, &self.schema)?;
+            Ok((texts, loaded))
         })();
         match reloaded {
-            Ok((doc, texts, version, loaded)) => {
-                st.doc = doc;
+            Ok((texts, loaded)) => {
+                let version = loaded.version;
+                st.doc = loaded.doc;
                 st.texts = texts;
                 st.version = version;
                 // reloaded: any field may differ from what a range was set on
                 self.elem_presence_after(st, None);
-                st.log_entries = loaded.updates.len() as u64;
-                st.log_bytes = loaded.updates.iter().map(|(_, e)| e.body.yrs_len()).sum();
+                st.log_entries = loaded.log.0;
+                st.log_bytes = loaded.log.1;
                 for m in &mut st.members {
                     m.cursor = None;
                     m.view = None;
@@ -5239,6 +5466,11 @@ impl Session {
     }
 
     fn compact(&self, st: &mut State) {
+        // a native doc's compaction is the engine's cut, which waits for its single-replica
+        // mode: its log isn't folded into a kit snapshot
+        if st.doc.is_native() {
+            return;
+        }
         // never compact from a doc that can't be trusted: reload it instead
         let state = match st.doc.encode_state() {
             Ok(s) => s,
@@ -5822,6 +6054,20 @@ impl Session {
         let Some(d) = st.disk.as_mut() else {
             return Ok(out);
         };
+        if d.replica.is_text() {
+            // a native doc's replica is the file's texts: they must be the doc's
+            if !out.is_empty() || !clean {
+                return Ok(out);
+            }
+            for (root, text) in &st.texts {
+                if d.replica.text(root)? != *text {
+                    out.push(SyncDrift::Text {
+                        root: (*root).to_owned(),
+                    });
+                }
+            }
+            return Ok(out);
+        }
         let replica = d.replica.get()?;
         if replica.unresolved() {
             out.push(SyncDrift::Pending { replica: true });
@@ -6054,22 +6300,23 @@ impl Session {
         }
         let store = self.store(st)?.clone();
         let (synced, pending) = store.sync_states(self.doc_id)?;
-        // the replica stays encoded until the disk path first needs it (v0.9.8)
-        let stored = |state: Vec<u8>| Replica::Stored {
-            state,
-            schema: self.schema,
-            checks: (
-                self.config.edit_check_every,
-                self.config.edit_check_scale_units,
-                self.config.position_check_every,
-            ),
-        };
+        // the replica stays encoded until the disk path first needs it (v0.9.8); a native
+        // doc's is its texts (`live/native.rs`)
         let (replica, replica_bytes, hash, seq) = match synced {
             Some(s) => {
                 let n = s.state.len() as u64;
-                (stored(s.state), n, s.hash, s.seq)
+                (self.replica_from_state(st, s.state)?, n, s.hash, s.seq)
             }
             // a doc from before disk sync: take its content as what the file held
+            None if st.doc.is_native() => {
+                let state = self.replica_state(st)?;
+                (
+                    Replica::Text(st.texts.clone()),
+                    state.len() as u64,
+                    file_hash(&st.hash_key, &self.render(st)?),
+                    st.version,
+                )
+            }
             None => {
                 let state = st.doc.encode_state()?;
                 (
@@ -6080,6 +6327,8 @@ impl Session {
                 )
             }
         };
+        // a text-only replica has no updates to catch up with: a write-back takes the texts
+        let text_replica = replica.is_text();
         let key = st.hash_key;
         let on_disk = match disk::probe(path, root) {
             Ok(Probe::File { real, .. }) => {
@@ -6133,10 +6382,10 @@ impl Session {
             last_change_ms: now,
             last_check_ms: now,
             external_client: None,
-            catch_up: in_step.then(Vec::new),
+            catch_up: (in_step && !text_replica).then(Vec::new),
             writebacks: 0,
             caught_up: 0,
-            step_from_store: in_step,
+            step_from_store: in_step && !text_replica,
             hold_until: None,
         };
         // does `stored` (keyed, or a format-2 plain hash) name the file's bytes?
@@ -6153,12 +6402,15 @@ impl Session {
                 meta.synced_hash = Some(p.hash.clone());
                 meta.synced_seq = p.seq;
                 store.promote_pending_sync(self.doc_id, &meta)?;
-                d.replica = Replica::Doc(self.checked(Doc::load(self.schema, &p.state)?));
+                d.replica = match text_replica {
+                    true => Replica::Text(text_replica::decode_texts(&self.schema, &p.state)?),
+                    false => Replica::Doc(self.checked(Doc::load(self.schema, &p.state)?)),
+                };
                 d.replica_bytes = p.state.len() as u64;
                 d.synced_hash = p.hash;
                 d.synced_seq = p.seq;
                 // a write-back's state: the doc's at `p.seq`, the file's bytes
-                d.catch_up = (p.seq == st.version).then(Vec::new);
+                d.catch_up = (p.seq == st.version && !text_replica).then(Vec::new);
                 d.step_from_store = d.catch_up.is_some();
             } else {
                 store.clear_pending_sync(self.doc_id)?;
@@ -6213,8 +6465,20 @@ impl Session {
             now.saturating_sub(since) >= c.write_max_delay_ms
                 || now.saturating_sub(d.last_change_ms) >= c.write_quiet_ms
         }) && !d.missing
-            && st.declined.is_none();
-        let written = due && self.write_back(st, now)?;
+            && st.declined.is_none()
+            && !Self::render_reported(st);
+        // a write-back that can't render the doc is reported once per version
+        // (`live/render_net.rs`); a disk error is retried every tick
+        let written = match due {
+            true => match self.write_back(st, now) {
+                Ok(w) => w,
+                Err(e) => {
+                    Self::note_render_reported(st);
+                    return Err(e);
+                }
+            },
+            false => false,
+        };
         Ok((check, written))
     }
 
@@ -6607,13 +6871,7 @@ impl Session {
             let Some(t) = n.as_text() else {
                 unreachable!("`ordered_roots` takes text roots only")
             };
-            let synced = st
-                .disk
-                .as_mut()
-                .expect("has disk")
-                .replica
-                .get()?
-                .text(root)?;
+            let synced = st.disk.as_mut().expect("has disk").replica.text(root)?;
             let saved = {
                 timed!(IngestDiff);
                 diff::hunks(&synced, t)
@@ -6707,6 +6965,22 @@ impl Session {
             }
             self.settle_saved(st, bytes, now)?;
             return Ok(DiskCheck::Unchanged);
+        }
+        // a native doc's live text stays within its cap: a save that would grow it past is
+        // declined (the file is kept as it is; nothing in the doc is dropped)
+        if let Err(SessionError::NativeTextCap { limit, would_be }) =
+            text_cap::check_text_cap(&st.doc, &st.texts, &edits)
+        {
+            return self.decline(
+                st,
+                Declined {
+                    code: "too_large",
+                    message: format!(
+                        "the save would make the doc's live text {would_be} bytes; a doc on the \
+                         native engine holds at most {limit}"
+                    ),
+                },
+            );
         }
         let client = self.external_client(st)?;
         // D1 (undo spec v1.10, the authored-ranges amendment): an outside save is a
@@ -7003,25 +7277,39 @@ impl Session {
             seq,
             state: replica_state,
         };
+        // a native doc's change is its engine's record, pending until this commit writes it
+        let native = match self.native_pending(st, 1) {
+            Ok(n) => n,
+            Err(e) => {
+                self.recover(st, &e.to_string());
+                return Err(e);
+            }
+        };
         let entry = LogEntry {
             author: EXTERNAL_PID.to_owned(),
             client,
             at_ms: now,
             via: "disk".to_owned(),
-            body: EntryBody::Yrs(update),
+            body: match &native {
+                Some((_, at)) => EntryBody::Native(crate::store::NativeRef { at: at[0] }),
+                None => EntryBody::Yrs(update),
+            },
             on_behalf_of: None,
         };
-        if let Err(e) = store.commit_disk(
-            self.doc_id,
+        let committed = self.commit_disk_rows(
+            st,
+            &store,
             seq,
             std::slice::from_ref(&entry),
             std::slice::from_ref(&change),
             &versions,
             &meta,
             &sync,
-        ) {
+            native.map(|(r, _)| r).as_deref(),
+        );
+        if let Err(e) = committed {
             self.recover(st, &e.to_string());
-            return Err(e.into());
+            return Err(e);
         }
         // bookkeeping, as for any change
         let mut regions = Vec::new();
@@ -7110,6 +7398,38 @@ impl Session {
         settled?;
         self.maybe_compact(st);
         Ok(DiskCheck::Ingested { version: seq })
+    }
+
+    /// An outside save's one store transaction ([`DocStore::commit_disk`]), and a native doc's
+    /// engine `records` with it (its pending ones, which then leave the doc's pending tail).
+    #[allow(clippy::too_many_arguments)]
+    fn commit_disk_rows(
+        &self,
+        st: &mut State,
+        store: &DocStore,
+        expect_first: Seq,
+        entries: &[LogEntry],
+        changes: &[NewChange],
+        versions: &[Version],
+        meta: &DocMeta,
+        sync: &SyncState,
+        records: Option<&[Vec<u8>]>,
+    ) -> Result<()> {
+        debug_assert!(
+            records.is_none(),
+            "engine records without the native engine"
+        );
+        let _ = st;
+        store.commit_disk(
+            self.doc_id,
+            expect_first,
+            entries,
+            changes,
+            versions,
+            meta,
+            sync,
+        )?;
+        Ok(())
     }
 
     /// [`Session::settle_dirty`] after an outside save the store has, `bytes` the save. First
@@ -7218,7 +7538,7 @@ impl Session {
             );
             return Ok(());
         }
-        let state = match st.doc.encode_state() {
+        let state = match self.replica_state(st) {
             Ok(s) => s,
             Err(e) => {
                 self.recover(st, &e.to_string());
@@ -7290,7 +7610,7 @@ impl Session {
         }
         if held {
             // the stored synced state is the doc's
-            let state = st.doc.encode_state()?;
+            let state = self.replica_state(st)?;
             // the replica becomes the doc as a write-back makes it (v0.9.7): brought forward
             // by the updates the doc took since its last sync (the merged save's included),
             // reloaded from `state` only when those aren't known. Then in step
@@ -7298,6 +7618,19 @@ impl Session {
             return Ok((state, true));
         }
         let d = st.disk.as_mut().expect("has disk");
+        if d.replica.is_text() {
+            // a native doc's replica is the file's texts, whatever the doc holds
+            let texts: Vec<(&'static str, String)> = file
+                .iter()
+                .filter_map(|(root, n)| {
+                    let root = self.schema.roots.iter().find(|(r, _)| r == root)?.0;
+                    Some((root, n.as_text()?.to_owned()))
+                })
+                .collect();
+            let state = text_replica::encode_texts(&texts);
+            d.replica = Replica::Text(texts);
+            return Ok((state, false));
+        }
         // the replica takes a save the doc never holds (a client of its own, below): the next
         // write-back replaces it whole (v0.9.7), never brings it forward
         d.catch_up = None;
@@ -7348,8 +7681,10 @@ impl Session {
         }
         // the disk replica, decoded now if a reopen left it encoded (v0.9.8): a stored sync
         // state that doesn't decode fails the write-back here, before anything is written,
-        // with the error opening the doc gave before v0.9.8
-        d.replica.get()?;
+        // with the error opening the doc gave before v0.9.8 (a native doc's is its texts)
+        if !d.replica.is_text() {
+            d.replica.get()?;
+        }
         let real = match disk::probe(&d.path, &d.root) {
             Ok(Probe::File { real, .. }) => real,
             Ok(_) => {
@@ -7363,7 +7698,7 @@ impl Session {
         };
         let encoded = {
             prof!("wb.encode_state");
-            st.doc.encode_state()
+            self.replica_state(st)
         };
         let state = match encoded {
             Ok(s) => s,
@@ -7461,6 +7796,15 @@ impl Session {
         let version = st.version;
         let every = u64::from(self.config.writeback_check_every);
         let d = st.disk.as_mut().expect("has disk");
+        if d.replica.is_text() {
+            // a native doc's replica takes the doc's texts: no engine state, no catch-up
+            let texts = self.doc_texts(&st.doc)?;
+            d.writebacks += 1;
+            d.replica = Replica::Text(texts);
+            d.catch_up = None;
+            let _ = state;
+            return Ok(());
+        }
         // a replica a reopen left encoded is decoded first (v0.9.8): a stored sync state that
         // doesn't decode is an error, never replaced unseen by the reload below
         d.replica.get()?;
@@ -7557,9 +7901,16 @@ impl Session {
             st.codec = meta.codec;
             st.declined = meta.declined;
         }
+        let text_replica = st.doc.is_native();
         if let (Some(d), Ok((Some(s), _))) = (st.disk.as_mut(), store.sync_states(self.doc_id)) {
-            if let Ok(r) = Doc::load(self.schema, &s.state).map(|d| self.checked(d)) {
-                d.replica = Replica::Doc(r);
+            let loaded = match text_replica {
+                true => text_replica::decode_texts(&self.schema, &s.state).map(Replica::Text),
+                false => Doc::load(self.schema, &s.state)
+                    .map(|d| Replica::Doc(self.checked(d)))
+                    .map_err(SessionError::from),
+            };
+            if let Ok(r) = loaded {
+                d.replica = r;
                 d.replica_bytes = s.state.len() as u64;
                 d.synced_hash = s.hash;
                 d.synced_seq = s.seq;

@@ -327,6 +327,10 @@ pub(crate) struct WindowRow {
     pub client: Option<crate::doc::ClientId>,
 }
 
+pub(super) type NativeGenOf = std::convert::Infallible;
+
+pub(super) type GensKeyOf = std::convert::Infallible;
+
 /// The persisted revert record of one change (undo spec U22).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RevertRecord {
@@ -1152,15 +1156,25 @@ impl DocStore {
         versions: &[Version],
         writers: &[(crate::doc::ClientId, String, super::PersonWriterRow)],
     ) -> Result<Vec<Seq>, StoreError> {
+        self.commit_in(id, entries, changes, versions, writers, None)
+            .map(|(seqs, _)| seqs)
+    }
+
+    /// A commit's kit rows in `w`: the entries (their positions returned), each entry's client
+    /// owner row when it has none, the person-writer rows, the changes and the versions.
+    pub(super) fn kit_rows_in(
+        &self,
+        w: &redb::WriteTransaction,
+        id: DocId,
+        entries: &[super::LogEntry],
+        changes: &[NewChange],
+        versions: &[Version],
+        writers: &[(crate::doc::ClientId, String, super::PersonWriterRow)],
+    ) -> Result<Vec<Seq>, StoreError> {
         debug_assert_eq!(entries.len(), changes.len());
-        // profile scopes (test-only, perf_kit): nothing in a host's build
-        let w = {
-            prof!("store.begin_write");
-            self.begin_write()?
-        };
         let seqs = {
             prof!("store.append");
-            self.append_in(&w, id, entries)?
+            self.append_in(w, id, entries)?
         };
         {
             let mut owners = w.open_table(super::CLIENTS)?;
@@ -1170,15 +1184,41 @@ impl DocStore {
                 }
             }
         }
-        super::put_person_writers_in(&w, id, writers)?;
+        super::put_person_writers_in(w, id, writers)?;
         {
             prof!("store.put_changes");
-            put_changes(&w, id, &seqs, changes)?;
+            put_changes(w, id, &seqs, changes)?;
         }
         {
             prof!("store.put_versions");
-            super::put_versions(&w, id, versions)?;
+            super::put_versions(w, id, versions)?;
         }
+        Ok(seqs)
+    }
+
+    /// The one commit transaction: entries, owners, writers, changes, versions, and (a native
+    /// doc's) engine records.
+    #[allow(clippy::type_complexity)]
+    fn commit_in(
+        &self,
+        id: DocId,
+        entries: &[super::LogEntry],
+        changes: &[NewChange],
+        versions: &[Version],
+        writers: &[(crate::doc::ClientId, String, super::PersonWriterRow)],
+        native: Option<(&GensKeyOf, &[&[u8]])>,
+    ) -> Result<(Vec<Seq>, Option<NativeGenOf>), StoreError> {
+        debug_assert_eq!(entries.len(), changes.len());
+        // profile scopes (test-only, perf_kit): nothing in a host's build
+        let w = {
+            prof!("store.begin_write");
+            self.begin_write()?
+        };
+        let seqs = self.kit_rows_in(&w, id, entries, changes, versions, writers)?;
+        let gen = {
+            debug_assert!(native.is_none(), "engine records without the native engine");
+            None
+        };
         #[cfg(test)]
         if INTERRUPT_COMMIT.with(std::cell::Cell::get) == Some(CommitInterrupt::Before) {
             return Err(StoreError::Corrupt("test: interrupted before the commit"));
@@ -1199,7 +1239,7 @@ impl DocStore {
             }
             w.commit()?;
         }
-        Ok(seqs)
+        Ok((seqs, gen))
     }
 
     /// Test-only: damage change `seq`'s record, as a bad disk would.

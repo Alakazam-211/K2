@@ -68,6 +68,12 @@ impl ElemPresence {
         self.cells = cells;
     }
 
+    /// An agent's verb's change is at `address` ([`super::view_at::ViewAt::address`]): its view
+    /// address moves there, as its focus and selection follow what the verb touched.
+    pub(super) fn verb_viewed(&mut self, address: String) {
+        self.view_address = Some(address);
+    }
+
     /// An agent's verb changed elements ([`Session::verb_presence`]): its focus moves to `focus`
     /// (when a touched element has a live container), and its selection is replaced by
     /// `selection` (`None`: none of what it touched is live).

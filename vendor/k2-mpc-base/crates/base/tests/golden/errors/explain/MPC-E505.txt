@@ -1,7 +1,7 @@
 MPC-E505 store_locked (store)
 exit:     6
-message:  store still locked by another process after waiting
-next:     Another process holds the store (a daemon hand-off in progress). Retry in a few seconds.
+message:  Another process has this document open: its store is held by another opener
+next:     Another process has this document open. Nothing was read or changed. Close it there (or let its hand-off finish), then open it again; a host can open with a wait instead (DocStore::open_with_retry), which takes the store once the other opener lets it go.
 rule:     K-OFF-2
 verbs:    any verb on a doc
 status:   live
@@ -11,8 +11,8 @@ status:   live
   "name": "store_locked",
   "area": "store",
   "exit": 6,
-  "message": "store still locked by another process after waiting",
-  "next": "Another process holds the store (a daemon hand-off in progress). Retry in a few seconds.",
+  "message": "Another process has this document open: its store is held by another opener",
+  "next": "Another process has this document open. Nothing was read or changed. Close it there (or let its hand-off finish), then open it again; a host can open with a wait instead (DocStore::open_with_retry), which takes the store once the other opener lets it go.",
   "rule": "K-OFF-2",
   "verbs": ["*"],
   "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],

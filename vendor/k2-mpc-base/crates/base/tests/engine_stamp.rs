@@ -182,8 +182,10 @@ fn a_doc_stamped_by_another_engine_refuses_to_load() {
 
 /// The same through `open_file` (a doc that lives in a file): refused before the file is
 /// attached or read. A native doc's stamp: without the native engine, refused as that doc's
-/// own (`MPC-E169`, its own variant); with it, sessions don't take native docs yet
-/// (`MPC-E520`).
+/// own (`MPC-E169`, its own variant); with it, the doc loads on the native engine, and this
+/// doc (a Yrs log under a native stamp) is refused by the store's own check as damage
+/// (`MPC-E503`, "log entry engine"), before anything is read for keys (restated with the Beta's
+/// session wiring; before it, `MPC-E520`).
 #[test]
 fn open_file_refuses_another_engines_doc() {
     let f = fx("file");

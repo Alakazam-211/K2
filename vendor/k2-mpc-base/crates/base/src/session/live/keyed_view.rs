@@ -221,6 +221,18 @@ impl Session {
     /// doc's version (not deleted there, and known to the engine, O(log n) and O(1)), so a
     /// change's presence bookkeeping doesn't make the engine rebuild the list's order; else
     /// the engine's order (`Doc::elem`).
+    /// The live element at index `i` of list root `root`, from the live view when it is at the
+    /// doc's version (O(1), no entry read); `None` otherwise (no view kept, or no such index):
+    /// never a scan of the list.
+    pub(super) fn live_elem_at(&self, st: &State, root: &str, i: usize) -> Option<Key> {
+        let v = st.live_view.as_ref().filter(|v| v.seq == st.version)?;
+        let (_, r) = v.state.roots.iter().find(|(r, _)| r == root)?;
+        match r {
+            KeyedRoot::List { live, .. } => live.get(i).map(|(k, _)| k.clone()),
+            _ => None,
+        }
+    }
+
     pub(super) fn elem_live(&self, st: &State, root: &str, key: &Key) -> bool {
         let fast = self.keeps_view().then(|| {
             let v = st.live_view.as_ref().filter(|v| v.seq == st.version)?;

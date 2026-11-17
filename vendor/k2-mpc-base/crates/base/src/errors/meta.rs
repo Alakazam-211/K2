@@ -196,6 +196,7 @@ impl Verbs {
             "@run_tool" => v.runs_through_run_tool(),
             "@pack" => v.source == Source::Pack,
             "@index" => v.is_index(),
+            "@blob_verb" => v.is_blob_verb(),
             name => name == v.name && file_row == file_verb,
         })
     }
@@ -235,6 +236,7 @@ fn verbs_text(e: &ErrorEntry) -> String {
             "@index" => "a structure index's verbs (named by the file type's pack) and node \
                          claims"
                 .to_owned(),
+            "@blob_verb" => "a file type's own verbs on a blob doc (named by its pack)".to_owned(),
             "(sync)" => "an editor's sync connection (no verb)".to_owned(),
             "(host)" => "a host call (no verb)".to_owned(),
             v => v.to_owned(),
@@ -472,7 +474,7 @@ pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
         .chain(verbs.pack_errors.iter().copied())
         .collect();
     let verb_rows = verbs.all.iter().map(|v| {
-        Value::obj([
+        let mut row = Value::obj([
             ("name", Value::from(v.name)),
             ("kind", Value::from(kind_word(v.kind))),
             ("tiers", Value::list(v.tiers.iter().map(|t| tier_word(*t)))),
@@ -509,7 +511,14 @@ pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
                         .map(|e| e.id),
                 ),
             ),
-        ])
+        ]);
+        // a blob pack's own verb also says how it merges and reads its input
+        if let (Some(b), Value::Obj(fields)) = (v.blob, &mut row) {
+            fields.push(("merge".to_owned(), Value::from(b.merge)));
+            fields.push(("input".to_owned(), Value::from(b.input)));
+            fields.push(("word".to_owned(), Value::from(b.word)));
+        }
+        row
     });
     let parity = PersonAction::ALL.iter().map(|a| {
         Value::obj([

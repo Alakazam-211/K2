@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -969,6 +969,24 @@
       "status": "live"
     },
     {
+      "id": "MPC-E166",
+      "name": "native_one_replica",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E167",
+      "name": "native_beta_off",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E168",
+      "name": "native_no_yjs",
+      "exit": 2,
+      "status": "live"
+    },
+    {
       "id": "MPC-E169",
       "name": "native_engine_missing",
       "exit": 6,
@@ -1341,6 +1359,30 @@
       "status": "live"
     },
     {
+      "id": "MPC-E522",
+      "name": "store_nonce_reused",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E523",
+      "name": "purge_doc_open",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E524",
+      "name": "cut_pending_records",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E525",
+      "name": "cut_doc_open",
+      "exit": 6,
+      "status": "live"
+    },
+    {
       "id": "MPC-E601",
       "name": "purge_current_version",
       "exit": 2,
@@ -1461,9 +1503,75 @@
       "status": "live"
     },
     {
+      "id": "MPC-E718",
+      "name": "needs_lease",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E719",
+      "name": "base_across_unproven_save",
+      "exit": 1,
+      "status": "live"
+    },
+    {
       "id": "MPC-E720",
       "name": "blob_ref_unknown",
       "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E721",
+      "name": "native_no_tier0",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E722",
+      "name": "keys_reissued",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E723",
+      "name": "base_moved",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E724",
+      "name": "base_weak_key",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E725",
+      "name": "bad_plan",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E726",
+      "name": "strayed",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E727",
+      "name": "output_unreadable",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E728",
+      "name": "verb_too_large",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E729",
+      "name": "not_as_previewed",
+      "exit": 1,
       "status": "live"
     },
     {
@@ -1529,6 +1637,12 @@
     {
       "id": "MPC-E823",
       "name": "pack_refused",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E824",
+      "name": "base_unrendered",
       "exit": 2,
       "status": "live"
     },
@@ -1755,6 +1869,12 @@
       "status": "live"
     },
     {
+      "id": "MPC-E909",
+      "name": "native_text_cap",
+      "exit": 2,
+      "status": "live"
+    },
+    {
       "id": "MPCE-E199",
       "name": "ref_not_in_past",
       "exit": 2,
@@ -1841,6 +1961,18 @@
     {
       "id": "MPCE-E1000",
       "name": "own_line_parents",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E982",
+      "name": "outbound_frame_too_large",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E986",
+      "name": "request_malformed",
       "exit": 2,
       "status": "live"
     }

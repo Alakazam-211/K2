@@ -250,6 +250,8 @@ pub struct CharBlame {
 /// the kept map, and the store to read provenance rows from.
 struct Check {
     state: Vec<u8>,
+    /// What a copy of the doc needs, on its engine (a native doc's under its keys).
+    copier: crate::doc::DocCopier,
     texts: Vec<(&'static str, String)>,
     kept: super::super::prov::Prov,
     version: Seq,
@@ -487,6 +489,7 @@ impl Session {
             let check = if sampled {
                 Some(Check {
                     state: st.doc.encode_state()?,
+                    copier: st.doc.copier(),
                     texts: st.texts.clone(),
                     kept: prov.clone(),
                     version: st.version,
@@ -502,7 +505,7 @@ impl Session {
         };
         // the sampled check, off the session's lock (v0.9.7): the rebuild walks a copy of
         // the doc, O(doc), while participants keep editing
-        let copy = Doc::load(self.schema, &check.state)?;
+        let copy = check.copier.load(&check.state)?;
         let fresh = Self::prov_from(self.doc_id, &copy, &check.texts, &check.store)?;
         #[cfg(any(test, feature = "differential"))]
         crate::differential::blame_check_hook();

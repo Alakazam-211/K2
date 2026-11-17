@@ -1,9 +1,9 @@
 MPC-E823 pack_refused (structured and CSV)
 exit:     2
 message:  {code}: the pack refused the call
-next:     The file type's own verb refused the call: details.code is its reason, details.next its own way forward. Nothing was applied. Do what details.next says. (The pack has no id of its own for this code yet.)
-rule:     a pack's refusal by code (its own ids: Pack::errors)
-verbs:    a pack's own verbs
+next:     The file type refused the call or the change: details.code is its own code for why (details.reason, for a change its check refused), details.next its own way forward when it gives one. Nothing was applied and the version didn't move. Do what details.next says; for a change the file type can't write to its file, make it through the file type's own verbs, or leave that part of the doc as it is.
+rule:     a pack's refusal by code (its own ids: Pack::errors; its check of a change: Pack::check_edit)
+verbs:    a pack's own verbs; insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs); an editor's sync connection (no verb); a host call (no verb)
 status:   live
 --- json
 {
@@ -12,10 +12,10 @@ status:   live
   "area": "structured and CSV",
   "exit": 2,
   "message": "{code}: the pack refused the call",
-  "next": "The file type's own verb refused the call: details.code is its reason, details.next its own way forward. Nothing was applied. Do what details.next says. (The pack has no id of its own for this code yet.)",
-  "rule": "a pack's refusal by code (its own ids: Pack::errors)",
-  "verbs": ["@pack"],
-  "returned_by": [],
+  "next": "The file type refused the call or the change: details.code is its own code for why (details.reason, for a change its check refused), details.next its own way forward when it gives one. Nothing was applied and the version didn't move. Do what details.next says; for a change the file type can't write to its file, make it through the file type's own verbs, or leave that part of the doc as it is.",
+  "rule": "a pack's refusal by code (its own ids: Pack::errors; its check of a change: Pack::check_edit)",
+  "verbs": ["@pack", "@change", "(sync)", "(host)"],
+  "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
   "status": "live",
   "since_or_until": null
 }

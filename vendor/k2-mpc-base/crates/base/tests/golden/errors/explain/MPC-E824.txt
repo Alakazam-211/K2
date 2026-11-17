@@ -1,0 +1,21 @@
+MPC-E824 base_unrendered (structured and CSV)
+exit:     2
+message:  version {base} was read while the file couldn't be written back; nothing applied
+next:     Nothing was applied: the read of version details.base was given while the file couldn't be rendered, so its bytes were the file as last synced, not that version, and a write made from them can't be merged at it. Change the doc through the file type's verbs, which never need the file's bytes; once the file renders again, read it and write from that read.
+rule:     render net
+verbs:    write
+status:   live
+--- json
+{
+  "id": "MPC-E824",
+  "name": "base_unrendered",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "version {base} was read while the file couldn't be written back; nothing applied",
+  "next": "Nothing was applied: the read of version details.base was given while the file couldn't be rendered, so its bytes were the file as last synced, not that version, and a write made from them can't be merged at it. Change the doc through the file type's verbs, which never need the file's bytes; once the file renders again, read it and write from that read.",
+  "rule": "render net",
+  "verbs": ["write"],
+  "returned_by": ["write"],
+  "status": "live",
+  "since_or_until": null
+}

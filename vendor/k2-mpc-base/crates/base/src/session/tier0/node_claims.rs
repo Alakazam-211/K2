@@ -4,7 +4,9 @@
 //!
 //! - **Advisory.** A claim never refuses a write, a restore or a lease: the lease guards the
 //!   file, and a claim only tells the others (the roster, `claims`, the events). Nothing in
-//!   the write path reads claims.
+//!   the write path reads claims; the one reader is a file type's own verb under
+//!   [`crate::session::ClaimPolicy::Respect`], which refuses an agent's change to a node someone
+//!   else claims (`verbs.rs`).
 //! - **By key.** A claim names node keys, which carry across versions; it never grows. Two
 //!   participants can't claim the same node: the second is refused [`SessionError::
 //!   NodesClaimed`] (exit 5, as any claim). The same participant may hold several.
@@ -19,7 +21,7 @@ use std::collections::BTreeSet;
 
 use super::*;
 use crate::index::read::Walk;
-use crate::index::NodeKey;
+use crate::index::{IndexView, NodeKey};
 use crate::session::awareness::{
     ClaimEnd, ClaimId, ClaimInfo, ClaimSpan, CLAIM_KEYS_MAX, CLAIM_NOTE_MAX,
 };
@@ -42,6 +44,10 @@ pub(super) struct NodeClaim {
     note: Option<String>,
     /// The version whose index last held its nodes.
     seen: VersionId,
+    /// Test-only: the members its nodes' reach covered when it was taken (the planted fault
+    /// [`crate::differential::Tier0VerbMutant::ReachAtHoldTime`] reads these, not the reach
+    /// at the verb's version); empty otherwise.
+    members_then: BTreeSet<NodeKey>,
     /// `#N` of its first and last node there: what [`ClaimInfo::lines`] shows.
     shown: (usize, usize),
 }
@@ -224,6 +230,40 @@ impl BlobSession {
         st.node_claims.iter().any(|c| c.pid != pid)
     }
 
+    /// Another participant's live node claim (not `pid`'s) naming one of `keys`, as the
+    /// refusal it makes ([`SessionError::NodesClaimed`]): what a verb under
+    /// [`crate::session::ClaimPolicy::Respect`] checks for an agent. Expired claims end first.
+    pub(super) fn node_claim_against(
+        &self,
+        st: &mut BState,
+        pid: &str,
+        keys: &BTreeSet<NodeKey>,
+        now: u64,
+    ) -> Option<SessionError> {
+        self.sweep_node_claims(st, now);
+        let at_hold_time = plant_on!(
+            crate::differential::tier0_verb_mutant()
+                == Some(crate::differential::Tier0VerbMutant::ReachAtHoldTime)
+        );
+        st.node_claims
+            .iter()
+            .find(|c| {
+                c.pid != pid
+                    && (!c.keys.is_disjoint(keys)
+                        || (at_hold_time && !c.members_then.is_disjoint(keys)))
+            })
+            .map(|c| {
+                SessionError::NodesClaimed(Box::new(NodesClaim {
+                    id: c.id,
+                    by: c.pid.clone(),
+                    name: c.name.clone(),
+                    keys: c.keys.intersection(keys).cloned().collect(),
+                    remaining_ms: c.expires_ms.saturating_sub(now),
+                    note: c.note.clone(),
+                }))
+            })
+    }
+
     /// The live node claims, as `conn` may see them (for the roster).
     pub(super) fn node_claims_of(st: &BState, pid: &str, now: u64) -> Vec<ClaimInfo> {
         st.node_claims
@@ -327,6 +367,14 @@ impl BlobSession {
                 "you hold {mine} claims here (the most); release one"
             )));
         }
+        let members_then = if plant_on!(
+            crate::differential::tier0_verb_mutant()
+                == Some(crate::differential::Tier0VerbMutant::ReachAtHoldTime)
+        ) {
+            members_of(&*self.pack, &view, &keys)
+        } else {
+            BTreeSet::new()
+        };
         let c = NodeClaim {
             id: ClaimId::fresh(),
             pid,
@@ -338,6 +386,7 @@ impl BlobSession {
             expires_ms: now.saturating_add(ttl),
             note,
             seen: st.vid,
+            members_then,
         };
         self.emit(AuditEvent::ClaimTaken {
             key: st.key.clone(),
@@ -489,4 +538,74 @@ impl BlobSession {
         self.sweep_node_claims(st, now);
         Ok(st.node_claims.iter().map(|c| c.info(now)).collect())
     }
+}
+
+/// The nodes an agent's change to `touched` reaches into, for the claim check: each touched node
+/// (in any of `views`, the version the verb runs on and its output), each ancestor whose kind
+/// holds its subtree ([`HoldReach::Subtree`]), and each node whose kind holds its members
+/// ([`HoldReach::Members`]) that a touched node names in that attribute. A hold on any of them
+/// covers the change. `members: false` leaves the members out (the planted fault
+/// [`crate::differential::Tier0VerbMutant::ReachAtHoldTime`] adds those taken at hold time).
+pub(super) fn reach_of(
+    pack: &dyn BlobPack,
+    views: &[&IndexView],
+    touched: &BTreeSet<NodeKey>,
+    members: bool,
+) -> BTreeSet<NodeKey> {
+    let mut out = touched.clone();
+    for view in views {
+        let by_key: std::collections::HashMap<&str, &crate::index::IndexNode> =
+            view.nodes.iter().map(|n| (n.key.as_str(), n)).collect();
+        for k in touched {
+            let Some(n) = by_key.get(k.as_str()) else {
+                continue;
+            };
+            // ancestors holding their subtree
+            let mut up = n.parent.as_ref();
+            let mut steps = 0usize;
+            while let Some(p) = up.and_then(|p| by_key.get(p.as_str())) {
+                if pack.hold_reach(&p.kind) == HoldReach::Subtree {
+                    out.insert(p.key.clone());
+                }
+                up = p.parent.as_ref();
+                steps += 1;
+                if steps > view.nodes.len() {
+                    break;
+                }
+            }
+            // nodes holding their members, named in the touched node's attributes
+            if members {
+                for v in n.attrs.values() {
+                    if let Some(h) = by_key.get(v.as_str()) {
+                        if let HoldReach::Members(attr) = pack.hold_reach(&h.kind) {
+                            if n.attrs.get(attr) == Some(v) {
+                                out.insert(h.key.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The members of the held nodes `held` in `view` ([`HoldReach::Members`]): each node whose
+/// attribute names one of them.
+fn members_of(
+    pack: &dyn BlobPack,
+    view: &IndexView,
+    held: &BTreeSet<NodeKey>,
+) -> BTreeSet<NodeKey> {
+    let mut out = BTreeSet::new();
+    for h in view.nodes.iter().filter(|h| held.contains(&h.key)) {
+        if let HoldReach::Members(attr) = pack.hold_reach(&h.kind) {
+            for n in &view.nodes {
+                if n.attrs.get(attr).map(String::as_str) == Some(h.key.as_str()) {
+                    out.insert(n.key.clone());
+                }
+            }
+        }
+    }
+    out
 }

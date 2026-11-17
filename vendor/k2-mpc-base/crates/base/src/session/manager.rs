@@ -22,6 +22,38 @@ use super::tier0::{AnyFile, BlobPack, BlobSession, PackHints, Promotion};
 use crate::blob::{BlobError, BlobStore, CheapSet, LockWait, VersionPut};
 use crate::store::{DocKey, DocStore, Seq, VersionId, BLOB_DOC_PACK};
 
+/// The engine a new doc is made on ([`OpenOptions::engine`]). A doc's engine is chosen once,
+/// when it is made: opening a stored doc loads it on the engine its stamp names, whatever the
+/// options say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum DocEngine {
+    /// The standard engine (Yrs). The default.
+    #[default]
+    Standard,
+}
+
+/// How [`SessionManager::open_with`] and [`SessionManager::open_file_with`] open a doc. Start
+/// from [`OpenOptions::new`] (the same as [`SessionManager::open`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OpenOptions {
+    /// The engine a doc made by this open runs on; ignored when the doc exists.
+    pub engine: DocEngine,
+}
+
+impl OpenOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The engine a doc made by this open runs on ([`DocEngine`]).
+    pub fn engine(mut self, engine: DocEngine) -> Self {
+        self.engine = engine;
+        self
+    }
+}
+
 /// Returned by [`SessionManager::stats`] (for the host's doctor/status).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -83,6 +115,12 @@ struct Pool {
     /// reaches them; delivery checks read access and the hold). Bounded: per doc as any waiting
     /// notes, [`PARKED_TEXT_MAX`] of text in all, [`PARKED_DOCS_MAX`] docs. Gone at a restart.
     parked: HashMap<DocKey, HashMap<String, Vec<Note>>>,
+    /// The host-wide cut queue ([`super::cut_queue`], [`Config::native_cut_queue`]): one per
+    /// manager, and a host runs one manager per process, so one native cut runs at a time on
+    /// the host. It runs native cuts once the native engine's single-replica mode is vendored;
+    /// until then nothing queues.
+    #[allow(dead_code)]
+    cut_queue: super::cut_queue::CutQueue<DocKey>,
 }
 
 /// The most docs [`Pool::parked`] keeps notes for; past it the doc whose latest note is oldest
@@ -93,7 +131,9 @@ const PARKED_DOCS_MAX: usize = 1024;
 /// fact stays, and says so).
 const PARKED_TEXT_MAX: usize = 64 << 20;
 
-/// Owns the loaded sessions of one store. One per process; thread-safe.
+/// Owns the loaded sessions of one store. One per process; thread-safe. A host runs one
+/// manager per process: the native engine's cut queue ([`Config::native_cut_queue`]) is per
+/// manager, so its one-cut-at-a-time rule holds for the host only then.
 ///
 /// A session is **unloadable** when it has no connections and nobody else holds its
 /// `Arc` (only the pool does). Unloading never loses anything: every change is already
@@ -107,14 +147,19 @@ pub struct SessionManager {
     config: Arc<Config>,
     pool: Mutex<Pool>,
     blobs: Option<Arc<BlobStore>>,
+    /// Where native docs' keys come from (feature `native`; none: a native doc is refused,
+    /// `MPCE-E566`).
+    keys: super::live::KeysSource,
 }
 
 impl SessionManager {
     pub fn new(store: Arc<DocStore>, host: Arc<dyn Host>, config: Config) -> Self {
+        let cut_queue = super::cut_queue::CutQueue::new(config.native_cut_queue);
         Self {
             host,
             config: Arc::new(config),
             pool: Mutex::new(Pool {
+                cut_queue,
                 parked: HashMap::new(),
                 store: Some(store),
                 sessions: HashMap::new(),
@@ -122,6 +167,7 @@ impl SessionManager {
                 unloaded_total: 0,
             }),
             blobs: None,
+            keys: super::live::KeysSource::default(),
         }
     }
 
@@ -158,6 +204,20 @@ impl SessionManager {
         key: &DocKey,
         initial_bytes: Option<&[u8]>,
     ) -> Result<Arc<Session>> {
+        self.open_with(pack, key, initial_bytes, &OpenOptions::default())
+    }
+
+    /// [`SessionManager::open`] with options: a doc it makes (from `initial_bytes`) is made on
+    /// `opts.engine`. A stored doc opens on the engine its stamp names, whatever `opts` says.
+    /// `DocEngine::Native` (feature `native`) with [`Config::native_beta`] off is refused before anything is
+    /// read or made ([`SessionError::NativeBetaOff`], `MPC-E167`).
+    pub fn open_with(
+        &self,
+        pack: Arc<dyn Pack>,
+        key: &DocKey,
+        initial_bytes: Option<&[u8]>,
+        opts: &OpenOptions,
+    ) -> Result<Arc<Session>> {
         let mut pool = self.pool()?;
         let store = pool.store.clone().ok_or(SessionError::Released)?;
         if pool.blob_sessions.contains_key(key) {
@@ -177,16 +237,28 @@ impl SessionManager {
             return Ok(s.clone());
         }
         let session = match store.find(key)? {
-            Some(id) => Session::load(self.host.clone(), self.config.clone(), pack, store, id)?,
+            Some(id) => Session::load(
+                self.host.clone(),
+                self.config.clone(),
+                pack,
+                store,
+                id,
+                &self.keys,
+            )?,
             None => match initial_bytes {
-                Some(b) => Session::import(
-                    self.host.clone(),
-                    self.config.clone(),
-                    pack,
-                    store,
-                    key.clone(),
-                    b,
-                )?,
+                Some(b) => {
+                    self.check_engine_choice(opts)?;
+                    Session::import(
+                        self.host.clone(),
+                        self.config.clone(),
+                        pack,
+                        store,
+                        key.clone(),
+                        b,
+                        &self.keys,
+                        opts.engine,
+                    )?
+                }
                 None => return Err(SessionError::NotFound(key.clone())),
             },
         };
@@ -220,9 +292,30 @@ impl SessionManager {
         path: &Path,
         root: &Path,
     ) -> Result<Arc<Session>> {
+        self.open_file_with(pack, key, path, root, &OpenOptions::default())
+    }
+
+    /// [`SessionManager::open_file`] with options: a doc it imports from the file is made on
+    /// `opts.engine` ([`SessionManager::open_with`]'s rules).
+    pub fn open_file_with(
+        &self,
+        pack: Arc<dyn Pack>,
+        key: &DocKey,
+        path: &Path,
+        root: &Path,
+        opts: &OpenOptions,
+    ) -> Result<Arc<Session>> {
         // An error's paths, as the host may show them (inside the root, relative)
-        self.open_file_in(pack, key, path, root)
+        self.open_file_in(pack, key, path, root, opts)
             .map_err(|e| e.redacted(root))
+    }
+
+    /// The engine a create asks for, against the Beta switch: the native engine only while
+    /// [`Config::native_beta`] is on ([`SessionError::NativeBetaOff`], `MPC-E167`, before
+    /// anything is read or made).
+    fn check_engine_choice(&self, opts: &OpenOptions) -> Result<()> {
+        let _ = opts;
+        Ok(())
     }
 
     fn open_file_in(
@@ -231,6 +324,7 @@ impl SessionManager {
         key: &DocKey,
         path: &Path,
         root: &Path,
+        opts: &OpenOptions,
     ) -> Result<Arc<Session>> {
         let root = std::fs::canonicalize(root)
             .ok()
@@ -250,8 +344,10 @@ impl SessionManager {
             let loaded = pool.sessions.contains_key(key) || store.find(key)?.is_some();
             drop(pool);
             if loaded {
-                self.open(pack, key, None)?
+                self.open_with(pack, key, None, opts)?
             } else {
+                // refused before the file is read
+                self.check_engine_choice(opts)?;
                 let Probe::File { real, .. } = &probed else {
                     return Err(SessionError::NotFound(key.clone()));
                 };
@@ -268,7 +364,7 @@ impl SessionManager {
                     }
                     Err(e) => return Err(SessionError::Disk(format!("{}: {e}", real.display()))),
                 };
-                self.open(pack, key, Some(&bytes))?
+                self.open_with(pack, key, Some(&bytes), opts)?
             }
         };
         // outside the pool lock (file I/O); our handle keeps the session from unloading
@@ -563,8 +659,9 @@ impl SessionManager {
     /// the blob session closes ([`AuditEvent::Promoted`] names its connections) and the
     /// text session opens on the file. Returns it and what each version became.
     ///
-    /// Errors (nothing changed): [`SessionError::NotFound`]; [`SessionError::PackMismatch`]
-    /// when the doc at `key` isn't a blob doc; [`SessionError::Leased`] while anyone holds
+    /// Errors (nothing changed): [`SessionError::NotFound`]; [`SessionError::NativeNoTier0`]
+    /// when the doc at `key` is on the native engine (a Beta; exit 4, as `PackMismatch`);
+    /// [`SessionError::PackMismatch`] when the doc at `key` isn't a blob doc; [`SessionError::Leased`] while anyone holds
     /// the lease; [`SessionError::Declined`] when the current version doesn't decode (the
     /// pack's reason); [`SessionError::Disk`] when the file can't be written back first;
     /// [`SessionError::NoBlobStore`].
@@ -601,6 +698,12 @@ impl SessionManager {
             .find(key)?
             .ok_or_else(|| SessionError::NotFound(key.clone()))?;
         let meta = store.meta(id)?;
+        // a native doc's key: in the Beta it doesn't move to or from tier 0
+        if crate::engine::native_stamp(&meta.engine)
+            && !crate::beta_plant::planted("native-promotes")
+        {
+            return Err(SessionError::NativeNoTier0 { verb: "promote" });
+        }
         if meta.pack != BLOB_DOC_PACK {
             return Err(SessionError::PackMismatch {
                 stored: meta.pack,

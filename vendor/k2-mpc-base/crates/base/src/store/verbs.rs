@@ -11,7 +11,13 @@
 //! transaction, so a row never disagrees with its change. A change no pack verb made (a raw
 //! write, a kit tool, an outside save, an undo, a redo, a revert, a restore, anything before
 //! this kit) has no row, and a store without the table, or without a change's row, reads as "no
-//! verb". Tier 0 has no pack verb that records a version, so there is no blob table.
+//! verb".
+//!
+//! - `blob_verbs`: `(doc, version)` → the verb a tier-0 version was made by when the kit ran a
+//!   pack's verb on the doc (`BlobSession::run_tool`: `part set`, a batch and its calls). The same
+//!   terms: created lazily by the first verb-made version, in that version's own transaction; a
+//!   version no verb made (a whole-file write, a restore, an outside save, a merge, the import)
+//!   has none. **No arguments are stored**: they can hold the doc's content.
 //!
 //! **An older kit** reads and writes such a store as before (its changes get no rows), refuses a
 //! rewrite, and so a purge or an erasure, before changing anything (`StoreError::NewerData`,
@@ -32,8 +38,16 @@ use super::{DocId, StoreError};
 pub(super) const CHANGE_VERBS: TableDefinition<(u64, u64), &[u8]> =
     TableDefinition::new("change_verbs");
 
+/// `(doc, version)` → the verb that made a tier-0 version, and a batch's calls (record
+/// version 1).
+pub(super) const BLOB_VERBS: TableDefinition<(u64, u64), &[u8]> =
+    TableDefinition::new("blob_verbs");
+
 /// At most this many bytes of a verb id are stored (a pack's verb names are a word or two).
 pub(super) const VERB_MAX: usize = 64;
+
+/// At most this many calls one tier-0 record keeps (a batch's).
+pub(super) const CALLS_MAX: usize = 1024;
 
 pub(super) fn enc_verb(v: &str) -> Vec<u8> {
     let mut w = W::default();
@@ -82,6 +96,70 @@ pub(super) fn get(t: &ReadTurns, id: DocId, seq: u64) -> Result<Option<String>, 
     Ok(t.get((id, seq))?.and_then(|v| dec_verb(v.value())))
 }
 
+/// A tier-0 version's record: version 1, the verb, then the calls (each a verb name; empty
+/// unless it is a batch).
+pub(super) fn enc_blob_verb(verb: &str, calls: &[String]) -> Vec<u8> {
+    let mut w = W::default();
+    w.u8(1).str(verb).strs(calls);
+    w.0
+}
+
+/// `None` for a record this kit can't read (another version, an empty or over-long id, too
+/// many calls): read as no verb.
+pub(super) fn dec_blob_verb(b: &[u8]) -> Option<(String, Vec<String>)> {
+    let mut r = R::new(b, "blob verb");
+    if r.u8().ok()? != 1 {
+        return None;
+    }
+    let verb = r.str().ok()?;
+    let calls = r.strs().ok()?;
+    r.end().ok()?;
+    let ok = |s: &String| !s.is_empty() && s.len() <= VERB_MAX;
+    (ok(&verb) && calls.len() <= CALLS_MAX && calls.iter().all(ok)).then_some((verb, calls))
+}
+
+/// Write version `vid`'s verb in `w`, the version's own transaction (creating the table with
+/// its first row). No verb writes nothing.
+pub(super) fn put_blob_in(
+    w: &WriteTransaction,
+    id: DocId,
+    vid: u64,
+    verb: Option<&str>,
+    calls: &[String],
+) -> Result<(), StoreError> {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::tier0_verb_mutant()
+        == Some(crate::differential::Tier0VerbMutant::VerbNotRecordedBlob)
+    {
+        return Ok(());
+    }
+    let Some(v) = verb.filter(|v| !v.is_empty() && v.len() <= VERB_MAX) else {
+        return Ok(());
+    };
+    let calls: Vec<String> = calls
+        .iter()
+        .filter(|c| !c.is_empty() && c.len() <= VERB_MAX)
+        .take(CALLS_MAX)
+        .cloned()
+        .collect();
+    w.open_table(BLOB_VERBS)?
+        .insert((id, vid), enc_blob_verb(v, &calls).as_slice())?;
+    Ok(())
+}
+
+/// The verb and calls of `(id, vid)` in a table [`super::turns::open_read`] gave for
+/// [`BLOB_VERBS`].
+pub(super) fn get_blob(
+    t: &ReadTurns,
+    id: DocId,
+    vid: u64,
+) -> Result<Option<(String, Vec<String>)>, StoreError> {
+    let Some(t) = t else {
+        return Ok(None);
+    };
+    Ok(t.get((id, vid))?.and_then(|v| dec_blob_verb(v.value())))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,6 +181,35 @@ mod tests {
             dec_verb(&enc_verb(&"x".repeat(VERB_MAX + 1))),
             None,
             "an id past the cap is none"
+        );
+    }
+
+    #[test]
+    fn a_blob_row_round_trips_and_another_version_reads_as_none() {
+        let calls = vec!["layer rename".to_owned(), "entity move".to_owned()];
+        assert_eq!(
+            dec_blob_verb(&enc_blob_verb("batch", &calls)),
+            Some(("batch".to_owned(), calls.clone()))
+        );
+        assert_eq!(
+            dec_blob_verb(&enc_blob_verb("part set", &[])),
+            Some(("part set".to_owned(), Vec::new()))
+        );
+        let mut other = enc_blob_verb("part set", &[]);
+        other[0] = 2;
+        assert_eq!(dec_blob_verb(&other), None);
+        let mut long = enc_blob_verb("part set", &[]);
+        long.push(0);
+        assert_eq!(
+            dec_blob_verb(&long),
+            None,
+            "a longer record is another layout"
+        );
+        assert_eq!(dec_blob_verb(&enc_blob_verb("", &[])), None);
+        assert_eq!(
+            dec_blob_verb(&enc_blob_verb("batch", &[String::new()])),
+            None,
+            "an empty call is none"
         );
     }
 }

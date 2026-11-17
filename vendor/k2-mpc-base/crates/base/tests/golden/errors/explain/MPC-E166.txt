@@ -1,0 +1,21 @@
+MPC-E166 native_one_replica (sessions and edits)
+exit:     2
+message:  this doc is on the native engine (a Beta), which keeps one copy, on the host; it can't be synced to another copy
+next:     Nothing was sent or applied. People and agents edit this doc through the host's verbs, on the host's one copy. To sync copies of it, switch the doc back to the standard engine.
+rule:     the native engine (a Beta): one replica, the host's
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E166",
+  "name": "native_one_replica",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "this doc is on the native engine (a Beta), which keeps one copy, on the host; it can't be synced to another copy",
+  "next": "Nothing was sent or applied. People and agents edit this doc through the host's verbs, on the host's one copy. To sync copies of it, switch the doc back to the standard engine.",
+  "rule": "the native engine (a Beta): one replica, the host's",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

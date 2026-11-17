@@ -1,0 +1,27 @@
+MPC-E723 base_moved (tier 0 and blobs)
+exit:     1
+message:  {addresses} changed since --base {base} (head {head}); nothing applied
+next:     Someone changed the nodes your call changes after the version you read (details.base), in a way that overlaps your change: each is in details.conflicts with the field, who changed it and in which version. Nothing was written. Read them again at head, redo your change on what you read, and call again with --base details.head.
+step:     node; args: {addresses}; why: The nodes you change were changed since the version you read; read them again at head and redo the change on what you read.
+rule:     the tier-0 verb path: --base per node
+verbs:    a file type's own verbs on a blob doc (named by its pack)
+status:   live
+--- json
+{
+  "id": "MPC-E723",
+  "name": "base_moved",
+  "area": "tier 0 and blobs",
+  "exit": 1,
+  "message": "{addresses} changed since --base {base} (head {head}); nothing applied",
+  "next": "Someone changed the nodes your call changes after the version you read (details.base), in a way that overlaps your change: each is in details.conflicts with the field, who changed it and in which version. Nothing was written. Read them again at head, redo your change on what you read, and call again with --base details.head.",
+  "next_step": {
+    "verb": "node",
+    "args": ["{addresses}"],
+    "why": "The nodes you change were changed since the version you read; read them again at head and redo the change on what you read."
+  },
+  "rule": "the tier-0 verb path: --base per node",
+  "verbs": ["@blob_verb"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,9 +1,9 @@
-//! Fixtures for the text reference model, with K2's harness semantics: replica Rk edits as
+//! Fixtures for the text reference model, with this harness's semantics: replica Rk edits as
 //! client ids[k]; `ins(c, at, ch)` inserts at offset `at` of c's visible text; `sync(f, t)`
 //! delivers every event f has that t lacks; a script ends with a full sync over every
 //! ordered pair (Ra, Rb), a != b, in replica order. A seed text is authored by client 2.
-//! Expected values: oracles/scripts/fixed.txt (Diamond Types 1.0 / Loro) and the Fugue
-//! paper; the same fixtures as spec/quint/text_fixtures.qnt.
+//! Expected values: independent implementations and the Fugue paper; the same fixtures as the
+//! Quint text model's.
 
 use mpce_model::check::{def4, def4_with, strong_list_spec, Def4Violation};
 use mpce_model::text::{Doc, Id};
@@ -79,7 +79,7 @@ fn fm(ids: &[u64], seed: &str) -> Net {
 
 #[test]
 fn yata_separating_case() {
-    // R0, R1, R2 = 102, 103, 101; Yrs/Yjs give [pfae]
+    // R0, R1, R2 = 102, 103, 101; the YATA order gives [pfae]
     let mut n = fm(&[102, 103, 101], "[]");
     n.ins(103, 1, 'e');
     n.sync(103, 101);
@@ -105,7 +105,7 @@ fn yata_paper_a19() {
     assert_eq!(n.converged(), "xab");
 }
 
-/// The kit's three-writer script (text.rs:148) with writer ids `ids` (R0, R1, R2).
+/// The three-writer script with writer ids `ids` (R0, R1, R2).
 fn three_writer(ids: [u64; 3]) -> String {
     let mut n = fm(&ids, "[]");
     let runs = ["cba", "fed", "zyx"];
@@ -126,7 +126,7 @@ fn three_writer(ids: [u64; 3]) -> String {
 
 #[test]
 fn three_writer_all_permutations() {
-    // fixed.txt: Yrs, Yjs, DT and Loro agree on all six
+    // independent implementations agree on all six
     assert_eq!(three_writer([101, 102, 103]), "[abdecfxyz]");
     assert_eq!(three_writer([101, 103, 102]), "[abdecxyzf]");
     assert_eq!(three_writer([102, 101, 103]), "[defabcxyz]");
@@ -170,8 +170,8 @@ fn paper_fig7() {
     assert_eq!(n.converged(), "AXYBC");
 }
 
-/// fixed.txt accept-clean-dtonly (R0, R1, R2 = 101, 102, 103).
-fn dtonly(rule: SiblingRule) -> Net {
+/// The case where FugueMax and plain Fugue order differently (R0, R1, R2 = 101, 102, 103).
+fn reference_only(rule: SiblingRule) -> Net {
     let mut n = Net::new(&[101, 102, 103], "[]", rule);
     if rule == SiblingRule::Fugue {
         // plain Fugue violates Def. 4 here, so the same script runs without per-step checks
@@ -205,11 +205,11 @@ fn dtonly(rule: SiblingRule) -> Net {
 }
 
 #[test]
-fn fugue_vs_fuguemax_dtonly() {
-    // DT gives [efap] (FugueMax); Loro and Yrs [eafp] (plain Fugue's order here)
-    let max = dtonly(SiblingRule::FugueMax);
+fn fugue_vs_fuguemax_reference_only() {
+    // FugueMax gives [efap]; plain Fugue's order here is [eafp]
+    let max = reference_only(SiblingRule::FugueMax);
     assert_eq!(max.converged(), "[efap]");
-    let fugue = dtonly(SiblingRule::Fugue);
+    let fugue = reference_only(SiblingRule::Fugue);
     assert_eq!(fugue.converged(), "[eafp]");
     // the checker accepts FugueMax's order and rejects Fugue's on (2), not (1) or (3)
     let d = &fugue.reps[&101];
@@ -218,7 +218,7 @@ fn fugue_vs_fuguemax_dtonly() {
 
 #[test]
 fn min_any1_and_accept_clean2() {
-    // fixed.txt min-any1 (R0, R1, R2 = 103, 101, 102): dt/loro [pea]
+    // min-any1 (R0, R1, R2 = 103, 101, 102): independent implementations give [pea]
     let mut n = fm(&[103, 101, 102], "[]");
     n.ins(103, 1, 'a');
     n.ins(102, 1, 'p');
@@ -226,7 +226,7 @@ fn min_any1_and_accept_clean2() {
     n.ins(101, 1, 'e');
     n.full_sync();
     assert_eq!(n.converged(), "[pea]");
-    // fixed.txt accept-clean2 (R0, R1, R2 = 103, 102, 104): dt/loro [aeqp]
+    // accept-clean2 (R0, R1, R2 = 103, 102, 104): independent implementations give [aeqp]
     let mut n = fm(&[103, 102, 104], "[]");
     n.ins(104, 1, 'p');
     n.ins(103, 1, 'a');

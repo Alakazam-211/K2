@@ -2,3 +2,5 @@
 # line: PATH: TEXT, TEXT being the whole added line with its leading and trailing whitespace
 # trimmed. A changed line, or another line in the same file, is not covered. Cleared whenever
 # tools/public-text-base moves: an entry matching no added line blocks the tag.
+vendor/mpce-model/src/bin/lmm_itf_replay.rs: .unwrap_or_else(|p| (Err(format!("panic: {:?}", p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())))), Cov::default()));
+vendor/mpce-model/src/map.rs: /// an edit whose root is no longer the live root at its key: kept with

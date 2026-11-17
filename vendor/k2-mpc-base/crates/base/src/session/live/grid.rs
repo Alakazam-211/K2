@@ -2019,6 +2019,7 @@ impl Session {
             }
         }
         st.next_turn = opts.turn;
+        st.next_view.result = opts.view;
         self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())
     }
 
@@ -2069,6 +2070,7 @@ impl Session {
         mut capture: Option<&mut crate::tools::Capture>,
         f: impl FnOnce(&View, Option<&View>, &dyn VerbHistory) -> std::result::Result<VerbEdits, E>,
     ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
+        let want_result = capture.is_some();
         let now = self.now();
         let mut guard = self.lock()?;
         let st = &mut *guard;
@@ -2144,6 +2146,10 @@ impl Session {
         st.next_turn = opts.turn;
         st.next_verb = opts.verb;
         st.next_cells = cells;
+        st.next_view = super::view_at::ViewWant {
+            result: want_result || opts.view,
+            verb: verb.is_some(),
+        };
         let v = st.version;
         let res = self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
         let notes = {
@@ -2173,17 +2179,21 @@ impl Session {
         // a table's read verbs print and take line numbers, positions in its rendered file:
         // they read the file, and fail when it can't be rendered. Any other keyed doc's read
         // is the keyed state only: no content copy, no rendering, no "does the file hold the
-        // doc" check; a failure the last rendering found at this version is reported from the
-        // session's state
+        // doc" check; a failure the last rendering found at this version comes back with the
+        // result (`ReadHead::render_failed`), a warning, never in its place
         if self.is_grid() || planted_read_encodes() {
             self.read_unmarked(st, i)?;
-        } else if let Some(e) = Self::render_failure(st) {
-            return Err(e);
         }
         let read = {
             prof!("read.head");
             Self::read_head(st, i)
         };
+        if let (true, Some(e)) = (
+            super::render_net::planted_read_replays_render_failure(),
+            &read.render_failed,
+        ) {
+            return Err(e.clone());
+        }
         // a keyed doc's live view (no copy), a table's keyed state; the plant reads every root
         let view = {
             prof!("read.view");
@@ -2472,6 +2482,7 @@ impl Session {
                 "write --base by key is for tables".into(),
             ));
         }
+        Self::check_rendered_base(st, base)?;
         let report = |outcome| GridWriteReport {
             outcome,
             skipped: Vec::new(),
@@ -2587,6 +2598,7 @@ impl Session {
                 "write --base live by key is for tables".into(),
             ));
         }
+        Self::check_rendered_base(st, seen)?;
         if seen != st.version {
             return self.write_live_stale(st, i, seen, body, opts, now);
         }

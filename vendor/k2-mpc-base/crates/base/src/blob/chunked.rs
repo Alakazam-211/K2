@@ -875,8 +875,7 @@ impl BlobStore {
                 }
             }
             stop_at(StepShim::Renamed)?;
-            crate::hash::sync_dir(&folder)
-                .map_err(|e| io_err("syncing a segment's folder", e))?;
+            crate::hash::sync_dir(&folder).map_err(|e| io_err("syncing a segment's folder", e))?;
             chunk_work!(folder_syncs);
             stop_at(StepShim::FolderSynced)?;
             put.commit.segment = Some((seg_no, std::mem::take(&mut seg.list)));

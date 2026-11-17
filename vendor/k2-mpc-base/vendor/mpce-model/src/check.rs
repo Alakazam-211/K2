@@ -1,7 +1,7 @@
-//! The automated Def. 4 checker and the strong-list-spec check (PRD: adjudicates oracle
+//! The automated Def. 4 checker and the strong-list-spec check (it adjudicates oracle
 //! mismatches). Generic over element IDs `K`, whose `Ord` is the ID order.
 //!
-//! Interpretations, as accepted by K2 Cores for the Quint model (`spec/quint/text.qnt`):
+//! Interpretations, as in the Quint text model:
 //! - a list state is the element sequence *including tombstones*; the origins are those
 //!   recorded at insertion (§V-A defines the right origin over the tombstone-inclusive list);
 //! - A and B in Def. 4 range over elements, not `start`/`end`;

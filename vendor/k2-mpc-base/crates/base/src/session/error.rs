@@ -2,11 +2,25 @@
 
 use super::awareness::ClaimId;
 use super::host::Need;
-use super::pack::{Declined, PackError};
+use super::pack::{Declined, PackError, PackRefusal};
 use super::participant::ConnId;
 use crate::doc::DocError;
 use crate::elem::Key;
 use crate::store::{DocKey, Seq, StoreError};
+
+/// One node of a tier-0 verb's `--base` refusal ([`SessionError::BaseMoved`]): the node
+/// (`address`, its key), the field both changes touch (a props entry such as `attrs.layer`, or
+/// `text`, or the node-level change: `added`, `removed`, `moved`, `renamed`, `content`), and
+/// who changed it since the base, in which version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BaseConflict {
+    pub address: String,
+    pub key: String,
+    pub field: String,
+    pub by: String,
+    pub change: crate::store::VersionId,
+}
 
 /// Who holds the index nodes a claim was refused on ([`SessionError::NodesClaimed`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +126,35 @@ pub enum SessionError {
          doesn't have"
     )]
     NativeEngineMissing { stored: String, stored_format: u32 },
+    /// A host asked for a new doc on the native engine (a Beta) while the Beta is off
+    /// ([`super::Config::native_beta`]): nothing was read or made. Docs already on the native
+    /// engine open whatever the switch says. `MPC-E167` `native_beta_off`. Exit 2.
+    #[error("the native engine (a Beta) is off on this host: a new doc can't be made on it")]
+    NativeBetaOff,
+    /// A change would grow a doc on the native engine (a Beta) past its live-text cap: its
+    /// text roots together over the engine's per-change string limit (`string_bytes_per_op`,
+    /// 4 MiB at the engine's default limits, which the kit never changes). Nothing applied,
+    /// and nothing already in the doc is dropped. `MPC-E909` `native_text_cap`. Exit 2, as
+    /// [`SessionError::AtLimit`] (the standard engine's size limits).
+    #[error(
+        "this doc's live text would be {would_be} bytes, past the native engine's {limit}-byte \
+         cap"
+    )]
+    NativeTextCap {
+        limit: usize,
+        /// What the change would have made it.
+        would_be: usize,
+    },
+    /// A host asked to demote a doc on the native engine (a Beta) to tier 0, or to promote a
+    /// tier-0 doc whose key holds one (`verb`: `demote` or `promote`): in the Beta a native
+    /// doc doesn't move to or from tier 0. Nothing changed. `MPC-E721` `native_no_tier0`.
+    /// Exit 4, as the standard engine's refusals of the same calls
+    /// ([`SessionError::Declined`] `not_text`, [`SessionError::PackMismatch`]).
+    #[error(
+        "this doc is on the native engine (a Beta), which doesn't move to or from tier 0 \
+         ({verb})"
+    )]
+    NativeNoTier0 { verb: &'static str },
     #[error("bad participant: {0}")]
     BadParticipant(String),
     #[error("bad position: {0}")]
@@ -279,6 +322,88 @@ pub enum SessionError {
     /// `MPC-E715`, exit 2.
     #[error("an agent can't write this file type")]
     AgentWriteRefused,
+    /// A pack's verb that runs only under the caller's own lease (`merge: Lease`,
+    /// [`super::BlobVerb`]) was called without it: take the lease (`ttl_ms`, the default), then
+    /// call again. Nothing was written. `MPC-E718`, exit 2.
+    #[error(
+        "{verb} edits this file only under your own lease; take it first ({ttl_ms} ms by default)"
+    )]
+    NeedsLease { verb: String, ttl_ms: u64 },
+    /// A structure diff spans an outside save whose writer the file type's pack says reissues
+    /// node keys ([`super::SavePairing::Reissues`]): across it a key may name another thing, so
+    /// the kit pairs nothing. The widest diff that doesn't cross a save like it is
+    /// `safe_from` to `to`. `MPC-E722`, exit 1.
+    #[error("version {save}'s writer reissues node keys: a diff across it pairs nothing")]
+    KeysReissued {
+        save: crate::store::VersionId,
+        safe_from: crate::store::VersionId,
+        to: crate::store::VersionId,
+    },
+    /// A tier-0 verb's `--base V` spans an outside save (another program's) whose writer the
+    /// file type's pack doesn't prove keeps node keys ([`super::SavePairing`] `Unknown` or
+    /// `Reissues`): across it a key may name another thing, so the call can't be paired with
+    /// what was read at `base`. Nothing was written. `MPC-E719`, exit 1.
+    #[error(
+        "version {save} is another program's save, not proven to keep node keys: --base {base} \
+         can't pair {} across it (head {head})",
+        .addresses.join(" ")
+    )]
+    BaseAcrossUnprovenSave {
+        save: crate::store::VersionId,
+        base: crate::store::VersionId,
+        head: crate::store::VersionId,
+        addresses: Vec<String>,
+    },
+    /// A tier-0 verb's `--base V`: a node it changes was changed since `base` in a way that
+    /// overlaps (`conflicts`, each with who changed it and in which version). Nothing was
+    /// written. `MPC-E723`, exit 1.
+    #[error(
+        "{} changed since --base {base} (head {head}); nothing applied",
+        .addresses.join(" ")
+    )]
+    BaseMoved {
+        base: crate::store::VersionId,
+        head: crate::store::VersionId,
+        addresses: Vec<String>,
+        conflicts: Vec<BaseConflict>,
+    },
+    /// A tier-0 verb's `--base V` would change nodes whose keys the kit minted (the file gives
+    /// them no ID of its own), which can't be paired across versions for sure. Nothing was
+    /// written. `MPC-E724`, exit 2.
+    #[error(
+        "{} have no key of the file's own: --base can't pair them; guard the call with \
+         --if-version {head}",
+        .keys.join(" ")
+    )]
+    BaseWeakKey {
+        head: crate::store::VersionId,
+        keys: Vec<String>,
+    },
+    /// A pack's verb returned a plan the kit refuses (its spans out of order, overlapping,
+    /// outside the file or over a cap; or spans from a read verb): a pack bug. Nothing was
+    /// written. `MPC-E725`, exit 2.
+    #[error("the verb's plan is refused: {why}")]
+    BadPlan { why: String },
+    /// A pack's verb changed nodes its plan didn't declare (`strayed`, by key): a pack bug.
+    /// Nothing was written. `MPC-E726`, exit 2.
+    #[error("the verb's output changed nodes its plan didn't name: {}", .keys.join(", "))]
+    Strayed { keys: Vec<String> },
+    /// The file type's own index refuses the verb's output: a pack bug. Nothing was written.
+    /// `MPC-E727`, exit 2.
+    #[error("the file type's index refuses the verb's output")]
+    OutputUnreadable { why: String },
+    /// A verb's call is over a bound (`what`: the version a whole-file verb reads, the spans of
+    /// its plan...), named with the limit. Nothing was written. `MPC-E728`, exit 2.
+    #[error("{what} is {size}, over the limit of {limit}")]
+    VerbTooLarge {
+        what: &'static str,
+        size: u64,
+        limit: u64,
+    },
+    /// `--expect DIGEST`: the bytes the call would store aren't the ones its dry run showed.
+    /// Nothing was written. `MPC-E729`, exit 1.
+    #[error("the bytes this call would store are not the ones previewed (expected {expected}, now {actual})")]
+    NotAsPreviewed { expected: String, actual: String },
     /// No annotation thread `thread` in this doc (or no comment `comment` on it). `MPC-E320`,
     /// exit 4.
     #[error("{}", no_annotation_text(*thread, *comment))]
@@ -317,8 +442,7 @@ pub enum SessionError {
     Pack(#[from] PackError),
     /// A grid change would take the table past a size limit: nothing applied,
     /// and nothing already in the table is dropped. Exit 2. `what` is `cells`, `columns` or
-    /// `rows` (blank rows included);
-    /// or `value bytes` for a cell value or column name longer than
+    /// `rows` (blank rows included); or `value bytes` for a cell value or column name longer than
     /// `Config::grid_max_value_len` (`would_be` is its length). A keyed doc that isn't a table
     /// has its own, [`SessionError::KeyedAtLimit`] (before, this with `what` `elements and
     /// fields`, which still maps to `MPC-E822`).
@@ -343,6 +467,21 @@ pub enum SessionError {
         would_be: usize,
         from: super::LimitSource,
     },
+    /// A live change the doc's file type refuses ([`super::Pack::check_edit`]): its
+    /// write-back couldn't write it. Nothing applied and the version didn't move. `MPC-E823`
+    /// `pack_refused`, exit 2; the pack's own code is in the report's details (`code`).
+    #[error("the file type refuses this change: {0}")]
+    PackRefused(PackRefusal),
+    /// A whole-file write (`write --base V`, a table's `write --base` or `--seen V`) from a
+    /// version whose whole read was given while the file couldn't be rendered
+    /// ([`super::ReadResult::render_failed`]): that read's bytes were the file as last synced,
+    /// not version V, so nothing written from them can be merged at V. Nothing applied.
+    /// `MPC-E824` `base_unrendered`, exit 2.
+    #[error(
+        "version {base} was read while the file couldn't be written back: that read's bytes \
+         are the file as last synced, not version {base}; nothing applied"
+    )]
+    BaseUnrendered { base: Seq },
     /// An insert into a root whose pack declares tagged keys ([`super::Pack::tagged_keys`])
     /// names a key that isn't `<prefix><n>.<tag>` with a declared prefix and the inserting
     /// connection's own writer tag `tag`. Nothing applied. Exit 2.
@@ -464,6 +603,10 @@ impl SessionError {
                 ..d
             }),
             SessionError::Pack(p) => SessionError::Pack(PackError(r(&p.0, root))),
+            SessionError::PackRefused(p) => SessionError::PackRefused(PackRefusal {
+                message: r(&p.message, root),
+                ..p
+            }),
             SessionError::PairingMismatch { reason } => SessionError::PairingMismatch {
                 reason: r(&reason, root),
             },

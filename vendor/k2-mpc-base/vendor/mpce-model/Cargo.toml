@@ -1,5 +1,6 @@
 [package]
 name = "mpce-model"
+license = "MIT OR Apache-2.0"
 description = "Reference models: slow, obvious implementations of every MPC primitive; the oracle of record for the engine."
 # Standalone on purpose (no workspace inheritance): consumers copy this directory by git subtree.
 edition = "2021"
@@ -10,3 +11,7 @@ version = "0.4.1"
 unsafe_code = "forbid"
 
 [dependencies]
+# The two layers. This crate composes them (list, mlist); they never see
+# each other. A consumer copying crates/mpce-model by git subtree copies these two beside it.
+mpce-order = { path = "../mpce-order" }
+mpce-reg = { path = "../mpce-reg" }

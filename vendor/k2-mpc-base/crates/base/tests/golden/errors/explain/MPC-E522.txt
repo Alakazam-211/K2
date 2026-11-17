@@ -1,0 +1,21 @@
+MPC-E522 store_nonce_reused (store)
+exit:     6
+message:  the engine store's nonce is already doc {doc}'s in this store; a store nonce is never reused, so nothing was written
+next:     Each engine store (a native doc's records) is made with its own nonce, and one store never uses a nonce twice, so two engine stores under the same keys never verify each other's records. This one's nonce is already another doc's here (a deleted doc's too), so nothing was written, or, at open, the store holds two engine stores with one nonce and is refused. Report it: the kit makes a fresh nonce for every new engine store.
+rule:     the store nonce
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E522",
+  "name": "store_nonce_reused",
+  "area": "store",
+  "exit": 6,
+  "message": "the engine store's nonce is already doc {doc}'s in this store; a store nonce is never reused, so nothing was written",
+  "next": "Each engine store (a native doc's records) is made with its own nonce, and one store never uses a nonce twice, so two engine stores under the same keys never verify each other's records. This one's nonce is already another doc's here (a deleted doc's too), so nothing was written, or, at open, the store holds two engine stores with one nonce and is refused. Report it: the kit makes a fresh nonce for every new engine store.",
+  "rule": "the store nonce",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

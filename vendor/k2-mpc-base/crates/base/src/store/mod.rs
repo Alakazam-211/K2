@@ -44,7 +44,7 @@ mod verbs;
 
 pub(crate) use annot::{AnnotFail, Committed, Observed};
 pub use blob::{BlobReason, BlobVersion, BLOB_DOC_PACK};
-pub(crate) use blob::{BlobSync, SpaceKey};
+pub(crate) use blob::{BlobSync, PurgedBlob, SpaceKey};
 pub(crate) use blob_refs::BlobRefScan;
 pub(crate) use blob_struct::{StructCommitted, StructPut};
 pub(crate) use chunks::{
@@ -68,6 +68,7 @@ pub use history::{ChangeInfo, ChangeKind, RootHunks, VersionInfo};
 pub(crate) use history::{CommitInterrupt, INTERRUPT_COMMIT};
 pub(crate) use live_carrier::{Released, LIVE_SLOT};
 pub use live_copies::LiveCopyRow;
+
 pub(crate) use opened::OpenedRec;
 pub(crate) use promote::PromoteRows;
 #[cfg(test)]
@@ -174,6 +175,9 @@ use enc::{R, W};
 ///
 ///   One more on the same terms (after v0.14.0), `change_verbs` (the pack verb that made a live
 ///   change; `verbs.rs`), created lazily by the first change a pack verb made.
+///
+///   One more on the same terms, `blob_verbs` (the verb the kit ran to make a tier-0 version, and
+///   a batch's calls; `verbs.rs`), created lazily by the first version a verb made.
 ///
 ///   One more on the same terms, `doc_blob_refs` (the blobs a doc's values name; `blob_refs.rs`),
 ///   created lazily by the first name. Its counts are in `blobs`, so an older kit's blob GC
@@ -403,6 +407,10 @@ pub(super) const ADDITIVE_TABLES: &[Additive] = &[
         on_orphan: None,
     },
     Additive {
+        rows: DocRows::Pair(verbs::BLOB_VERBS),
+        on_orphan: None,
+    },
+    Additive {
         rows: DocRows::One(live_carrier::LIVE_CARRIERS),
         on_orphan: Some(live_carrier::release_orphan),
     },
@@ -585,6 +593,7 @@ pub(super) const DOC_TABLES: &[(DocRows, Erase)] = &[
     (DocRows::Pair(turns::CHANGE_TURNS), Erase::Range),
     (DocRows::Pair(turns::BLOB_TURNS), Erase::Range),
     (DocRows::Pair(verbs::CHANGE_VERBS), Erase::Range),
+    (DocRows::Pair(verbs::BLOB_VERBS), Erase::Range),
     (DocRows::One(live_carrier::LIVE_CARRIERS), Erase::Blob),
     (DocRows::Pair(live_carrier::VERSION_CARRIERS), Erase::Blob),
     (DocRows::Pair(live_carrier::CARRIER_PAIRINGS), Erase::Range),
@@ -821,6 +830,70 @@ pub enum StoreError {
          doesn't have"
     )]
     NativeEngineMissing { stored: String, stored_format: u32 },
+    /// A new engine store's nonce is one an engine store of this store already used (a doc's,
+    /// kept after its delete): a nonce is never reused within one store, so two engine stores
+    /// under the same keys never verify each other's records. Refused before anything is
+    /// written, and at open for a store that holds two (`MPC-E522` `store_nonce_reused`).
+    /// Exit 6.
+    #[error(
+        "the engine store's nonce is already doc {doc}'s in this store; a store nonce is \
+         never reused, so nothing was written"
+    )]
+    NonceReused { doc: u64 },
+    /// A native doc's purge is refused, with nothing written, while any live instance other
+    /// than the purging one holds the doc open: that instance (another session's load of the
+    /// doc, or a copy of its records) would still hold the purged content in memory (`MPC-E523`
+    /// `purge_doc_open`). Exit 6.
+    #[error(
+        "doc {doc} is open in another live instance; a native doc is purged only while the \
+         purging instance alone holds it, so nothing was written"
+    )]
+    PurgeDocOpen { doc: u64 },
+    /// A native doc's cut asked while changes the doc took aren't committed yet (their records
+    /// in its pending tail, or a pending purge): the cut would fold a change in without its log
+    /// row, so it is refused before anything changes (`MPC-E524` `cut_pending_records`). Commit
+    /// first, then cut. Exit 6.
+    #[error(
+        "doc {doc} holds {changes} changes not yet committed; a native doc is cut only once \
+         its changes are in the store, so nothing was cut"
+    )]
+    CutPendingRecords { doc: u64, changes: u64 },
+    /// A native doc's cut while any live instance other than the cutting one holds the doc
+    /// open (another session's load of it, or a copy of its records): that instance reads the
+    /// generation the cut replaces, so the cut is refused before anything is written
+    /// (`MPC-E525` `cut_doc_open`). Exit 6.
+    #[error(
+        "doc {doc} is open in another live instance; a native doc is cut only while the \
+         cutting instance alone holds it, so nothing was cut"
+    )]
+    CutDocOpen { doc: u64 },
+    /// A native doc (its stamp is the native engine's) at a store format the vendored engine
+    /// doesn't read: refused whole before any of its records is read. `MPC-E520`
+    /// `engine_mismatch`, as another engine's doc; the details name the doc's format and the
+    /// formats this build reads. Exit 6.
+    #[error(
+        "this doc was written by the native engine at store format {found}; this build reads \
+         formats {oldest} to {newest}"
+    )]
+    NativeFormatUnread {
+        stored: String,
+        found: u32,
+        oldest: u32,
+        newest: u32,
+    },
+    /// A snapshot asked for a native doc ([`DocStore::compact`]), with the native engine: a
+    /// native doc's state is its engine's records, never a snapshot, so nothing is written.
+    /// `MPC-E520` `engine_mismatch` (a snapshot is the kit's own engine state, not the native
+    /// engine's). Exit 6.
+    #[error(
+        "doc {doc} is on the native engine: its state is its engine's records, so it takes no \
+         snapshot; nothing was written"
+    )]
+    NativeSnapshotRefused {
+        doc: u64,
+        stored: String,
+        stored_format: u32,
+    },
     /// A structured doc's row marks can't be read (`row_marks` is missing): a base can't be
     /// vouched for, so a keyed write naming one is refused as expired (fail closed).
     #[error("doc {0}: the row marks are missing; read the doc again and retry")]
@@ -846,7 +919,11 @@ pub enum StoreError {
     KeyTaken(DocKey),
     #[error("no version {1} for doc {0}")]
     NoVersion(DocId, VersionId),
-    #[error("store still locked by another process after waiting")]
+    /// Another opener holds the store: the store library's exclusive lock on the store file,
+    /// held for a [`DocStore`]'s life and dropped by the OS when its process exits (however it
+    /// ends). Refused before anything is read or written; [`DocStore::open_with_retry`]
+    /// waits for it instead, up to a deadline.
+    #[error("Another process has this document open: its store is held by another opener")]
     Locked,
     #[error("version {1} of doc {0} is named; retention never deletes named versions")]
     NamedVersion(DocId, VersionId),
@@ -870,7 +947,7 @@ pub enum StoreError {
     /// Tier 0: version {1} of blob doc {0} is its current content and can't be deleted.
     #[error("version {1} of doc {0} is its current content")]
     CurrentVersion(DocId, VersionId),
-    /// No randomness source for a new key (the kit reads `/dev/urandom`).
+    /// No randomness source for a new key (the OS generator: `/dev/urandom`, or `RtlGenRandom` on Windows).
     #[error("no randomness source: {0}")]
     NoRandom(String),
     /// Tier 0: version {1} of blob doc {0} was purged; its content is gone.
@@ -939,6 +1016,19 @@ fn dec_doc_key(b: &[u8]) -> Result<[u8; 32], StoreError> {
         .map_err(|_| StoreError::Corrupt("doc key"))?;
     r.end()?;
     Ok(k)
+}
+
+/// Test builds only: the plant `store-lock-untyped` (`MPC_STORE_PLANT`): the store library's
+/// refusal of a second opener passed through untyped, as before it was typed.
+#[cfg(test)]
+fn lock_untyped() -> bool {
+    std::env::var("MPC_STORE_PLANT").as_deref() == Ok("store-lock-untyped")
+}
+
+/// Outside test builds: nothing is planted.
+#[cfg(not(test))]
+fn lock_untyped() -> bool {
+    false
 }
 
 /// A fresh random key.
@@ -1362,8 +1452,7 @@ pub(crate) const LOG_ENTRY_ENGINE: &str = "log entry engine";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EntryEngine {
     Yrs,
-    /// No stamp maps here in this build (native docs get their own later); the check is
-    /// ready for it.
+    /// A native doc's (feature `native`: its stamp is the native engine's).
     #[cfg_attr(not(test), allow(dead_code))]
     Native,
 }
@@ -1373,6 +1462,9 @@ impl EntryEngine {
     /// ([`DocStore::check_owned`]: Yrs's, an unstamped one, or a tier-0 one) logs Yrs
     /// entries. Another engine's doc is refused whole ([`StoreError::ForeignEngine`]),
     /// before any of its entries is decoded.
+    /// With the native engine, a native doc logs native entries, at a store format the
+    /// vendored engine reads ([`crate::engine::NATIVE_FORMATS_READ`]), else
+    /// [`StoreError::NativeFormatUnread`].
     pub(crate) fn of(meta: &DocMeta) -> Result<Self, StoreError> {
         DocStore::check_owned(meta)?;
         Ok(EntryEngine::Yrs)
@@ -1840,12 +1932,23 @@ impl DocStore {
         &self.path
     }
 
-    /// Open (or create) the store at `path`.
+    /// Open (or create) the store at `path`. One opener at a time: the store library takes an
+    /// exclusive OS lock on the store file and holds it for the store's life (the OS drops it
+    /// when the process exits, however it ends; no lock file is left). A store another opener
+    /// holds, in this process or another, is refused [`StoreError::Locked`] (`MPC-E505`) before
+    /// anything is read or written; [`DocStore::open_with_retry`] waits instead.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let path = path.as_ref().to_owned();
-        // a rewrite a crash interrupted left its temp file: the store itself is whole
+        let db = match Database::create(&path) {
+            Ok(db) => db,
+            Err(redb::DatabaseError::DatabaseAlreadyOpen) if !lock_untyped() => {
+                return Err(StoreError::Locked)
+            }
+            Err(e) => return Err(e.into()),
+        };
+        // an interrupted rewrite left its temp file: the store itself is whole (removed
+        // only once this opener holds the store, so another's rewrite in flight is left alone)
         let _ = std::fs::remove_file(rewrite::temp_path(&path));
-        let db = Database::create(&path)?;
         // what the store says it is, checked from a read transaction before anything else
         // reads or writes it (`features.rs`): format 7 (never written), a format above what
         // this build reads, and format 8's features word. A format this build reads but
@@ -1917,12 +2020,14 @@ impl DocStore {
     }
 
     /// [`StoreError::ForeignEngine`] unless this build may change doc `meta`'s rows: a
-    /// tier-0 doc or one its engine reads ([`crate::engine::owns_stamp`]). Delete and purge
-    /// check it in their own transaction (v0.10.1).
+    /// tier-0 doc, one its engine reads, or, with the native engine, a native doc at a store
+    /// format it reads ([`crate::engine::owns_stamp`]). Delete and purge check it in their own
+    /// transaction (v0.10.1).
     /// Without the native engine, a native doc is [`StoreError::NativeEngineMissing`]: that
     /// doc alone is refused.
     pub(crate) fn check_owned(meta: &DocMeta) -> Result<(), StoreError> {
-        if crate::engine::owns_stamp(&meta.engine, meta.engine_format) {
+        let owned = crate::engine::owns_stamp(&meta.engine, meta.engine_format);
+        if owned {
             return Ok(());
         }
         if crate::engine::native_stamp(&meta.engine) {
@@ -2008,7 +2113,8 @@ impl DocStore {
         ])
     }
 
-    /// Open, retrying while another process (a daemon handing off) still holds the lock.
+    /// [`DocStore::open`], waiting up to `wait` while another opener holds the store (a daemon
+    /// handing off, say); past it, refused [`StoreError::Locked`] (`MPC-E505`).
     pub fn open_with_retry(path: impl AsRef<Path>, wait: Duration) -> Result<Self, StoreError> {
         let deadline = Instant::now() + wait;
         loop {
@@ -2087,6 +2193,25 @@ impl DocStore {
         change: Option<&NewChange>,
     ) -> Result<(DocId, Option<Seq>, VersionId), StoreError> {
         let w = self.begin_write()?;
+        let out =
+            Self::create_imported_in(&w, meta, client, owner, entry, version, sync, change, None)?;
+        w.commit()?;
+        Ok(out)
+    }
+
+    /// The rows of [`DocStore::create_imported_synced`] in `w`.
+    #[allow(clippy::too_many_arguments)]
+    fn create_imported_in(
+        w: &redb::WriteTransaction,
+        meta: &DocMeta,
+        client: ClientId,
+        owner: &str,
+        entry: Option<&LogEntry>,
+        version: &Version,
+        sync: Option<(&SyncState, &[u8; 32])>,
+        change: Option<&NewChange>,
+        reserved: Option<DocId>,
+    ) -> Result<(DocId, Option<Seq>, VersionId), StoreError> {
         let out = {
             let id = {
                 let mut paths = w.open_table(PATHS)?;
@@ -2094,9 +2219,21 @@ impl DocStore {
                 if paths.get(k.as_str())?.is_some() {
                     return Err(StoreError::KeyTaken(meta.key.clone()));
                 }
-                let mut m = w.open_table(META)?;
-                let id = m.get("next_doc_id")?.map(|v| v.value()).unwrap_or(1);
-                m.insert("next_doc_id", id + 1)?;
+                let id = match reserved {
+                    // reserved earlier (`reserve_doc_id`): the counter is already past it
+                    Some(id) => {
+                        if w.open_table(DOCS)?.get(id)?.is_some() {
+                            return Err(StoreError::Corrupt("a reserved doc id already in use"));
+                        }
+                        id
+                    }
+                    None => {
+                        let mut m = w.open_table(META)?;
+                        let id = m.get("next_doc_id")?.map(|v| v.value()).unwrap_or(1);
+                        m.insert("next_doc_id", id + 1)?;
+                        id
+                    }
+                };
                 paths.insert(k.as_str(), id)?;
                 id
             };
@@ -2104,9 +2241,9 @@ impl DocStore {
             w.open_table(CLIENTS)?.insert((id, client), owner)?;
             let seq = match entry {
                 Some(e) => {
-                    put_entry(&w, id, 1, e)?;
+                    put_entry(w, id, 1, e)?;
                     if let Some(c) = change {
-                        history::put_changes(&w, id, &[1], std::slice::from_ref(c))?;
+                        history::put_changes(w, id, &[1], std::slice::from_ref(c))?;
                     }
                     Some(1)
                 }
@@ -2115,7 +2252,7 @@ impl DocStore {
             let mut v = version.clone();
             v.seq = seq.unwrap_or(0);
             if is_typed(&v) {
-                structured::upgrade(&w)?;
+                structured::upgrade(w)?;
             }
             w.open_table(VERSIONS)?
                 .insert((id, 1), enc_version(&v).as_slice())?;
@@ -2131,7 +2268,6 @@ impl DocStore {
             }
             (id, seq, 1)
         };
-        w.commit()?;
         Ok(out)
     }
 
@@ -2272,11 +2408,27 @@ impl DocStore {
 
     /// Write `state` as the snapshot at position `upto` and drop log entries up to it, in one
     /// transaction. `state` must contain every update up to `upto`.
+    ///
+    /// A native doc takes no snapshot: its state is its engine's records, each checked by the
+    /// engine (a checksum and a MAC), and a snapshot would put a bare engine frame on disk.
+    /// Refused before anything is written: [`StoreError::NativeSnapshotRefused`] with the
+    /// native engine, [`StoreError::NativeEngineMissing`] without it (that doc alone).
     pub fn compact(&self, id: DocId, upto: Seq, state: &[u8]) -> Result<(), StoreError> {
         let w = self.begin_write()?;
         {
-            if w.open_table(DOCS)?.get(id)?.is_none() {
-                return Err(StoreError::NoDoc(id));
+            let meta = match w.open_table(DOCS)?.get(id)? {
+                Some(m) => dec_meta(m.value())?,
+                None => return Err(StoreError::NoDoc(id)),
+            };
+            #[cfg(test)]
+            let unguarded = plant::planted(plant::EntryPlant::NativeSnapshotUnguarded);
+            #[cfg(not(test))]
+            let unguarded = false;
+            if crate::engine::native_stamp(&meta.engine) && !unguarded {
+                return Err(StoreError::NativeEngineMissing {
+                    stored: meta.engine,
+                    stored_format: meta.engine_format,
+                });
             }
             w.open_table(SNAPSHOTS)?
                 .insert(id, enc_snapshot(upto, state).as_slice())?;
@@ -2525,6 +2677,32 @@ impl DocStore {
         meta: &DocMeta,
         synced: &SyncState,
     ) -> Result<Vec<Seq>, StoreError> {
+        self.commit_disk_in(
+            id,
+            expect_first,
+            entries,
+            changes,
+            versions,
+            meta,
+            synced,
+            None,
+        )
+        .map(|(seqs, _)| seqs)
+    }
+
+    /// The one disk commit transaction (a native doc's engine records too).
+    #[allow(clippy::too_many_arguments)]
+    fn commit_disk_in(
+        &self,
+        id: DocId,
+        expect_first: Seq,
+        entries: &[LogEntry],
+        changes: &[NewChange],
+        versions: &[Version],
+        meta: &DocMeta,
+        synced: &SyncState,
+        native: Option<(&history::GensKeyOf, &[&[u8]])>,
+    ) -> Result<(Vec<Seq>, Option<history::NativeGenOf>), StoreError> {
         let w = self.begin_write()?;
         let seqs = self.append_in(&w, id, entries)?;
         if let Some(&first) = seqs.first() {
@@ -2547,8 +2725,12 @@ impl DocStore {
             t.insert((id, SYNCED), enc_sync(synced).as_slice())?;
             t.remove((id, PENDING))?;
         }
+        let gen = {
+            debug_assert!(native.is_none(), "engine records without the native engine");
+            None
+        };
         w.commit()?;
-        Ok(seqs)
+        Ok((seqs, gen))
     }
 
     /// Record a write-back about to happen (before the file is renamed into place), so a
@@ -2860,6 +3042,9 @@ pub(crate) mod plant {
         /// [`super::Loaded::yrs_updates`] skips a native entry instead of refusing the log
         /// (`native-via-yrs-replay`).
         NativeViaYrsReplay,
+        /// [`super::DocStore::compact`] writes a native doc's snapshot instead of refusing it
+        /// (`native-snapshot-unguarded`).
+        NativeSnapshotUnguarded,
     }
 
     impl EntryPlant {
@@ -2868,6 +3053,7 @@ pub(crate) mod plant {
                 "yrs-as-version-4" => EntryPlant::YrsAsVersion4,
                 "load-skips-engine-check" => EntryPlant::LoadSkipsEngineCheck,
                 "native-via-yrs-replay" => EntryPlant::NativeViaYrsReplay,
+                "native-snapshot-unguarded" => EntryPlant::NativeSnapshotUnguarded,
                 _ => return None,
             })
         }
@@ -2907,6 +3093,8 @@ pub(crate) mod plant {
 
 #[cfg(test)]
 mod features_tests;
+#[cfg(test)]
+mod lock_tests;
 #[cfg(test)]
 mod native_absent_tests;
 #[cfg(test)]

@@ -1,0 +1,27 @@
+MPC-E718 needs_lease (tier 0 and blobs)
+exit:     2
+message:  {verb} edits this file only under your own lease; take it first ({ttl_ms} ms by default)
+next:     This verb's changes aren't covered by the file type's merge, so it runs only while you hold the file's lease: a person's app saving meanwhile then keeps both copies instead of merging your work away. Nothing was written. Take the lease (details.ttl_ms is the default length), run the verb again, and release the lease when done.
+step:     lease; args: --ttl {ttl_ms}; why: This verb runs only under your own lease; take it, then run the verb again.
+rule:     the tier-0 verb path: merge or lease
+verbs:    a file type's own verbs on a blob doc (named by its pack)
+status:   live
+--- json
+{
+  "id": "MPC-E718",
+  "name": "needs_lease",
+  "area": "tier 0 and blobs",
+  "exit": 2,
+  "message": "{verb} edits this file only under your own lease; take it first ({ttl_ms} ms by default)",
+  "next": "This verb's changes aren't covered by the file type's merge, so it runs only while you hold the file's lease: a person's app saving meanwhile then keeps both copies instead of merging your work away. Nothing was written. Take the lease (details.ttl_ms is the default length), run the verb again, and release the lease when done.",
+  "next_step": {
+    "verb": "lease",
+    "args": ["--ttl", "{ttl_ms}"],
+    "why": "This verb runs only under your own lease; take it, then run the verb again."
+  },
+  "rule": "the tier-0 verb path: merge or lease",
+  "verbs": ["@blob_verb"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -818,8 +818,10 @@ impl Session {
         // every step's change gets the call's turn; none is left for a later change when the
         // reversal stops before committing (a conflict, a refusal)
         st.next_turn = req.turn;
+        st.next_view.result = req.view;
         let out = self.reverse_records(st, i, changes, partial, kind, None, Some(&mut taken), now);
         st.next_turn = None;
+        st.next_view = super::view_at::ViewWant::default();
         let out = out?;
         if let UndoOutcome::Applied { .. } = &out {
             let consumed = Self::take_batches(st, &pid, origin, &picked[..taken.len()]);

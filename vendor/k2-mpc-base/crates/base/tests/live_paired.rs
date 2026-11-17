@@ -1000,16 +1000,22 @@ fn row_a_pairing_that_does_not_fit_is_refused_typed() -> Result<(), String> {
     need(s.status().map(|x| x.version) == Ok(v), ROW, || {
         "the doc keeps the edit".into()
     })?;
+    // a structured read gives its result, told by a warning naming the refusal (before the
+    // render net, it returned the refusal instead of its result)
     let read = s.run_tool(bot, ROWS, &["row".into(), "list".into()], b"");
     need(
-        matches!(
-            read,
-            Err(k2_mpc_base::tools::ToolRunError::Session(
-                SessionError::PairingMismatch { .. }
-            ))
-        ),
+        matches!(&read, Ok(o) if o.warnings.lines().len() == 1
+            && o.warnings.lines()[0].contains("MPC-E521")),
         ROW,
-        || format!("a structured read is told, typed: {read:?}"),
+        || format!("a structured read is told, by a warning: {read:?}"),
+    )?;
+    // a whole read gives the doc with the file as last written, and the refusal, typed
+    let whole = s.read(bot);
+    need(
+        matches!(&whole, Ok(r) if r.bytes == F1.as_bytes()
+            && matches!(r.render_failed, Some(SessionError::PairingMismatch { .. }))),
+        ROW,
+        || format!("a whole read is told, typed: {whole:?}"),
     )?;
     let e = SessionError::PairingMismatch { reason: "x".into() };
     need(
@@ -1200,11 +1206,26 @@ fn the_planted_dirty_save_merged_by_key_is_caught_by_name() {
 
 // ---------- a save the pack re-keys: its carrier and pairing before anything renders ----------
 
-/// `row list` as `c`, the error as text (the row reports it instead of unwinding).
+/// `row list` as `c`, the error as text (the row reports it instead of unwinding); a warning
+/// (the file can't be rendered at the doc's version) is an error here too.
 fn row_list_of(s: &Session, c: ConnId) -> Result<String, String> {
-    s.run_tool(c, ROWS, &["row".into(), "list".into()], b"")
-        .map(|o| String::from_utf8(o.stdout).unwrap())
-        .map_err(|e| e.to_string())
+    let o = s
+        .run_tool(c, ROWS, &["row".into(), "list".into()], b"")
+        .map_err(|e| e.to_string())?;
+    match o.warnings.is_empty() {
+        true => Ok(String::from_utf8(o.stdout).unwrap()),
+        false => Err(format!("warnings: {:?}", o.warnings.lines())),
+    }
+}
+
+/// The file's bytes a whole read as `c` gives; a read given the synced bytes because the file
+/// can't be rendered (`render_failed`) is an error here.
+fn file_read(s: &Session, c: ConnId) -> Result<Vec<u8>, String> {
+    let r = s.read(c).map_err(|e| e.to_string())?;
+    match r.render_failed {
+        None => Ok(r.bytes),
+        Some(e) => Err(format!("the file can't be rendered: {e}")),
+    }
 }
 
 /// The id of the version an outside save cut at `seq`.
@@ -1248,7 +1269,7 @@ fn row_a_rekeyed_save_is_the_carrier_before_any_rendering() -> Result<(), String
     need(disk == Ok(Some(DiskState::Clean)), ROW, || {
         format!("the doc holds the save, clean: {disk:?}")
     })?;
-    let got = s.read(bot).map(|b| b.bytes);
+    let got = file_read(&s, bot);
     need(got.as_deref() == Ok(SAVE.as_bytes()), ROW, || {
         format!("the file read after the save is the save: {got:?}")
     })?;
@@ -1317,7 +1338,7 @@ fn row_a_rekeyed_save_on_unwritten_changes_keeps_both() -> Result<(), String> {
     need(kept_bytes.as_deref() == Ok(KITS.as_bytes()), ROW, || {
         format!("the kept version's file is the kit's version: {kept_bytes:?}")
     })?;
-    let got = s.read(bot).map(|b| b.bytes);
+    let got = file_read(&s, bot);
     need(got.as_deref() == Ok(SAVE.as_bytes()), ROW, || {
         format!("the save is the live doc exactly: {got:?}")
     })?;

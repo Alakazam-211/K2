@@ -1,7 +1,7 @@
 //! v0.4.0: the tree reference model (`mpce_model::tree_move`).
 //!
 //! - Fig. 4 unit tests (the transcription converges over every delivery order).
-//! - The fixtures of `spec/quint/tree_fixtures.qnt` (modules `tree_fixtures`, nodes A = 2,
+//! - The fixtures of the Quint tree model (modules `tree_fixtures`, nodes A = 2,
 //!   B = 3, C = 4, and `tree_fixtures4`, plus D = 5; all created under ROOT by the seed; agents
 //!   1, 2, 3), ported one to one. As in Quint, every invariant (`check_replica` on each replica
 //!   and the ghost, with the full graph; and `check_converge` over the replicas, the ghost and an
@@ -360,7 +360,7 @@ fn fig4_apply_ops_converges_over_every_order() {
 }
 
 // ---------------------------------------------------------------------------------------
-// The fixtures of tree_fixtures.qnt
+// The fixtures of the Quint tree model
 
 type Fixture = (&'static str, fn(Variant) -> Result<(), String>);
 
@@ -492,7 +492,7 @@ fn tf_nested_inner_after_move(v: Variant) -> Result<(), String> {
 
 /// (ii) B deleted concurrently with the move of C under B, A deleted by the mover after its
 /// move. The rescue is decided on C's core path (C, B, TRASH): B's delete is concurrent, so C
-/// is rescued (K2 Cores' ruling; it was hidden under the earlier "every delete on the walk"
+/// is rescued (the core-path rule; it was hidden under the earlier "every delete on the walk"
 /// reading, A's delete having seen the move). It shows under ROOT at A's spot, reported
 /// against B's delete only.
 fn tf_nested_outer_after_move(v: Variant) -> Result<(), String> {
@@ -725,7 +725,7 @@ fn tf_stable_pair_pulled_into_rescue(v: Variant) -> Result<(), String> {
     Ok(())
 }
 
-/// Same-spot order (K2 Cores' rule): D under A; A deleted by agent 1; concurrently agent 2
+/// Same-spot order (the pre-delete pre-order rule): D under A; A deleted by agent 1; concurrently agent 2
 /// moves B under D and C under A before D. Both are rescued at A's spot in ROOT; the rebuilt
 /// pre-delete tree's pre-order there is A, C, D, B, so ROOT shows [C, B] (node ID order would
 /// give [B, C]).
@@ -817,7 +817,7 @@ fn tf_nested_rescue_beside(v: Variant) -> Result<(), String> {
     Ok(())
 }
 
-/// The gap K2 Cores' ruling closes (X = A, Y = B, P = C, Q = D): agent 1 puts P under X and Q
+/// The gap the core-path rule closes (X = A, Y = B, P = C, Q = D): agent 1 puts P under X and Q
 /// under Y, syncs, then deletes P (old parent X) and Q (old parent Y); concurrently agent 2
 /// moves Y under P and X under Q. Both moves are concurrent with the delete on their core path
 /// (X: Q's; Y: P's), so X and Y are rescued. The old walk stopped at the first visible node and

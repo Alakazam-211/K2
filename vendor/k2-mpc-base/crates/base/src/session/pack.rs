@@ -35,6 +35,23 @@ impl fmt::Display for Declined {
     }
 }
 
+/// Why a pack refuses a live change ([`Pack::check_edit`]): the pack's own stable code (its
+/// registered id, e.g. `XYZ-E002`, or a name) and why, in words. The kit refuses the change
+/// with it as `MPC-E823` `pack_refused` (the code in the report's details).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackRefusal {
+    /// The pack's own stable code.
+    pub code: &'static str,
+    /// Why, in words: what the change does that the file type can't write.
+    pub message: String,
+}
+
+impl fmt::Display for PackRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} ({})", self.message, self.code)
+    }
+}
+
 /// What [`Pack::reconcile`] made of a file's new bytes: the edits that make the doc as the
 /// file last held it into what the file holds now (one change, applied **by key**), and the
 /// file's codec settings now (an outside save can change the dialect).
@@ -338,6 +355,29 @@ pub trait Pack: Send + Sync {
         Ok(())
     }
 
+    /// Whether the kit asks [`Pack::check_edit`] of every live change. Default `false`: the
+    /// hook is never called and no [`View`] is built for it, so a pack that doesn't opt in
+    /// pays nothing.
+    fn checks_edits(&self) -> bool {
+        false
+    }
+
+    /// Whether the file type can take a live change (asked only when
+    /// [`Pack::checks_edits`]). Every writer's change is asked, people's included: an edit, a
+    /// pack verb's, a host's, `write --base`, the hunk channel, undo, redo, revert, restore.
+    /// Not asked: an outside save and the import (they are the file), and a purge's removal
+    /// (erasure always goes through). `view` is the doc before the change (for a change of
+    /// several steps, an undo of several batches, the doc after the steps before it), `edits`
+    /// the change as the session applies it (normalized). A refusal is `MPC-E823`
+    /// `pack_refused` at the call: nothing applies and the version doesn't move. So a pack
+    /// whose write-back can refuse a content (a splice that can't express it) refuses it
+    /// here instead, and the doc never holds what it can't write. Pure and bounded
+    /// (O(edits)), no I/O; it must agree with the write-back. Default: every change passes.
+    fn check_edit(&self, view: &View, edits: &[Edit]) -> Result<(), PackRefusal> {
+        let _ = (view, edits);
+        Ok(())
+    }
+
     /// Whether `view` may be a keyed doc's content after the kit merged an outside save into
     /// it field by field, from the version the app opened ([`super::Session::note_opened`]):
     /// two changes that were each valid can make a state the format's rules forbid (two clips
@@ -480,6 +520,16 @@ pub trait Pack: Send + Sync {
     /// appears once: the first pair naming it is the one read. Default: none.
     fn composite(&self) -> &'static [(&'static str, &'static str)] {
         &[]
+    }
+
+    /// **Named spans of a text doc** (a text pack's sections: a Markdown heading's): each
+    /// with its address and its lines in `text`, the text of root `root`. The kit reads them
+    /// for where a text change is ([`super::ViewAt`]: the innermost span holding its first
+    /// changed line, and the spans holding each range), only when a call asked for that or an
+    /// agent's verb made the change. Pure and bounded (O(text)), no I/O. Default: none.
+    fn text_units(&self, root: &str, text: &str) -> Vec<TextUnit> {
+        let _ = (root, text);
+        Vec::new()
     }
 
     /// The container element `key` of the list root `root` sits in, as `(list root, key)`
@@ -722,6 +772,36 @@ pub trait Pack: Send + Sync {
             content.table().ok().map(|t| t.line_map())
         } else {
             None
+        }
+    }
+}
+
+/// A named span of a text doc's text ([`Pack::text_units`]): its address (one the kit's grammar
+/// reads, as `@h:goals`), what it is (`heading`), its name, and its lines, 1-based inclusive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TextUnit {
+    pub address: String,
+    pub what: &'static str,
+    pub name: String,
+    pub first: usize,
+    pub last: usize,
+}
+
+impl TextUnit {
+    pub fn new(
+        address: impl Into<String>,
+        what: &'static str,
+        name: impl Into<String>,
+        first: usize,
+        last: usize,
+    ) -> Self {
+        TextUnit {
+            address: address.into(),
+            what,
+            name: name.into(),
+            first,
+            last,
         }
     }
 }

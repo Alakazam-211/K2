@@ -3,19 +3,19 @@
 //!
 //! Positions: `insert`/`delete` take char (Unicode scalar) indices; `edit_as`, `anchor` and
 //! `resolve` take UTF-8 byte offsets into the visible text and refuse offsets that are not
-//! scalar boundaries (E-TEXT-9).
+//! scalar boundaries.
 //!
 //! An event is an insert, a delete or a purge. Its parents are the creating replica's
 //! frontier. `seq` counts the agent's events (all kinds) from 0, as in the Quint model.
 //! An insert carries what Algorithm 1 broadcasts (the node's parent and side, and, for
 //! FugueMax, its right origin) and also its left origin, which Def. 4 needs.
 //!
-//! Versions (E-HIST): a [`Version`] is a set of event IDs standing for its causal closure
+//! Versions: a [`Version`] is a set of event IDs standing for its causal closure
 //! (normally a frontier). `text_at`/`list_at`/`blame_at` read the state of exactly that
 //! closure; `fork_at` makes a replica holding it; `restore_as` moves the text forward to it
 //! with new events; `merge_from` merges a branch.
 //!
-//! Purge (E-ERASE): `purge_as` emits a `Op::Purge` event (IDs only) that deletes its targets
+//! Purge: `purge_as` emits a `Op::Purge` event (IDs only) that deletes its targets
 //! and erases their characters everywhere it is delivered: the insert events keep their IDs,
 //! parents, origins and placement, and their `value` becomes `None`. A replica stores and
 //! sends purged inserts content-less, so `log()`, `event()` and `diff_events` never carry
@@ -52,7 +52,7 @@ impl fmt::Debug for Id {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Op {
     Insert {
-        /// the character; `None` once its content is purged (E-ERASE)
+        /// the character; `None` once its content is purged
         value: Option<char>,
         left: Origin<Id>,
         right: Origin<Id>,
@@ -62,7 +62,7 @@ pub enum Op {
     Delete {
         target: Id,
     },
-    /// E-ERASE: delete every target that is still live and erase the content of each (their
+    /// delete every target that is still live and erase the content of each (their
     /// insert events become content-less). Targets are inserts in the event's causal past.
     Purge {
         targets: BTreeSet<Id>,
@@ -77,7 +77,7 @@ pub type Version = BTreeSet<Id>;
 /// negative (as `SiblingRule::Fugue` is for FugueMax checks); real replicas use `Erase`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PurgeRule {
-    /// E-ERASE: a purge deletes its targets and erases their characters
+    /// a purge deletes its targets and erases their characters
     Erase,
     /// mutant: a purge deletes its targets but keeps their characters
     KeepContent,
@@ -100,7 +100,7 @@ pub enum DocError {
     UnknownTarget,
     /// an event whose ID is known with different content (equivocation)
     Conflict,
-    /// a byte offset that is not a UTF-8 scalar boundary of the visible text (E-TEXT-9)
+    /// a byte offset that is not a UTF-8 scalar boundary of the visible text
     NotCharBoundary { offset: usize },
     /// hunks not sorted by start, or overlapping, or a hunk with `start > end`; also an empty
     /// or reversed span for `span_ids` (`start >= end`)
@@ -123,7 +123,7 @@ pub struct Hunk {
     pub insert: String,
 }
 
-/// A stable position (E-TEXT-10): an element plus a side. `Side::Right`: the gap just before
+/// A stable position: an element plus a side. `Side::Right`: the gap just before
 /// the element (the anchor sticks to the character after it); `Side::Left`: the gap just after
 /// the element (it sticks to the character before it). `elem: None` is the start of the
 /// document (`Side::Left`) or its end (`Side::Right`). A deleted element resolves to the gap
@@ -266,9 +266,9 @@ impl Doc {
                 }
             }
             if let Some(n) = hunks.get(i + 1) {
-                // Same rule as the kit's diff::validate: hunks may touch (n.start == h.end) but not
+                // Same rule as a host's hunk validation: hunks may touch (n.start == h.end) but not
                 // overlap, and two pure inserts at one offset are refused (their order would be
-                // ambiguous). Touching hunks apply in order, the same as one coalesced hunk (spec D2).
+                // ambiguous). Touching hunks apply in order, the same as one coalesced hunk.
                 let both_pure_inserts_same_spot =
                     h.start == h.end && n.start == n.end && n.start == h.start;
                 if n.start < h.end || n.start < h.start || both_pure_inserts_same_spot {
@@ -298,7 +298,7 @@ impl Doc {
     /// Deliver an event (causal broadcast). Ok(true) if it was new, Ok(false) if it was
     /// already known. Re-delivery changes nothing, except that purge knowledge only grows: a
     /// content-less copy of a known insert erases the local content, and a content-bearing
-    /// copy of a purged insert is accepted and its content dropped (E-ERASE-6). The same ID
+    /// copy of a purged insert is accepted and its content dropped. The same ID
     /// with any other difference is a `Conflict`.
     pub fn deliver(&mut self, e: &Event) -> Result<bool, DocError> {
         if let Some(old) = self.events.get(&e.id) {
@@ -457,8 +457,8 @@ impl Doc {
         order.iter().copied().filter(|x| c.contains(x) && !gone.contains(x) && self.ch(*x).is_some()).collect()
     }
 
-    /// The visible elements at version `v` (E-HIST-1): the state of exactly the causal closure
-    /// of `v`, minus content purged as far as this replica knows (E-ERASE-7). The same as
+    /// The visible elements at version `v`: the state of exactly the causal closure
+    /// of `v`, minus content purged as far as this replica knows. The same as
     /// `fork_at(v)?.visible()` (the list order of a causally closed subset is the restriction
     /// of the full order; tested).
     pub fn list_at(&self, v: &Version) -> Result<Vec<Id>, DocError> {
@@ -471,12 +471,12 @@ impl Doc {
         Ok(self.list_at(v)?.into_iter().filter_map(|x| self.ch(x)).collect())
     }
 
-    /// Blame at version `v` (E-HIST-4): each character visible at `v` with its inserting event.
+    /// Blame at version `v`: each character visible at `v` with its inserting event.
     pub fn blame_at(&self, v: &Version) -> Result<Vec<(char, Id)>, DocError> {
         Ok(self.list_at(v)?.into_iter().filter_map(|x| self.ch(x).map(|c| (c, x))).collect())
     }
 
-    /// A replica holding exactly the causal closure of `v` (a branch, E-HIST-8), with this
+    /// A replica holding exactly the causal closure of `v` (a branch), with this
     /// replica's agent, sibling rule and purge rule. Content purged here stays purged there.
     /// Edit it with `edit_as`; merge it back with `merge_from` (either way). Its seqs for each
     /// agent start after the highest this replica had, so an agent may edit the branch without
@@ -496,7 +496,7 @@ impl Doc {
         Ok(d)
     }
 
-    /// Merge another replica (a branch, or any replica) into this one (E-HIST-9): deliver
+    /// Merge another replica (a branch, or any replica) into this one: deliver
     /// every event `other` has that this replica lacks. The same as
     /// `deliver_all(&other.diff_events(self.frontier()))`; idempotent; atomic. Returns the
     /// number of new events.
@@ -505,16 +505,15 @@ impl Doc {
         self.deliver_all(&diff)
     }
 
-    /// **Model-internal, not the `hist.restore_*` contract.** Restore is a kit operation for
+    /// **Model-internal, not the `hist.restore_*` contract.** Restore is a host-level operation for
     /// every engine, `edit_as(agent, diff::hunks(text(), text_at(V)))`, so `hist.restore_minimal`
     /// holds by construction; this method is the model's own restore, kept for its tests.
     ///
-    /// Restore forward to version `v` (E-HIST-2): new events by `agent` (history is never
+    /// Restore forward to version `v`: new events by `agent` (history is never
     /// rewritten) after which, with no concurrent events, `text() == text_at(v)`. Visible
     /// characters not visible at `v` are deleted; characters visible at `v` but deleted now
     /// are inserted again as new content (new IDs, attributed to `agent`) at the gap where
-    /// they were. Purged content is not visible at `v`, so it comes back as nothing
-    /// (E-ERASE-7). One atomic `edit_as` batch; nothing to do gives no events.
+    /// they were. Purged content is not visible at `v`, so it comes back as nothing. One atomic `edit_as` batch; nothing to do gives no events.
     pub fn restore_as(&mut self, agent: u64, v: &Version) -> Result<Vec<Event>, DocError> {
         let order = self.tree.order();
         let then: BTreeSet<Id> = self.visible_in(&order, &self.closure(v)?).into_iter().collect();
@@ -544,7 +543,7 @@ impl Doc {
         self.edit_as(agent, &hunks)
     }
 
-    /// Purge (E-ERASE-1): one event by `agent` (parents: the current frontier) that deletes
+    /// Purge: one event by `agent` (parents: the current frontier) that deletes
     /// every still-live element of `ids` and erases the content of every one of them (their
     /// insert events keep IDs, parents and origins, and become content-less here and wherever
     /// the purge is delivered). `ids` must be known inserts (`UnknownTarget`) and not empty
@@ -561,7 +560,7 @@ impl Doc {
         Ok(e)
     }
 
-    /// The elements of a span purge (the kit's `erase.span_includes_tombstones`), for
+    /// The elements of a span purge (`erase.span_includes_tombstones`), for
     /// `purge_as(agent, &span_ids(start, end)?)`. `start..end` are UTF-8 byte offsets into the
     /// current visible text, `start < end`. The result, in list order (tombstones included), is
     /// the element of the span's first visible character through the element of its last, both
@@ -633,7 +632,7 @@ impl Doc {
         out
     }
 
-    /// A stable anchor at a byte offset of the visible text (E-TEXT-10). `Side::Right` sticks
+    /// A stable anchor at a byte offset of the visible text. `Side::Right` sticks
     /// to the character after the offset, `Side::Left` to the character before it; with no such
     /// character it is the document's end or start.
     pub fn anchor(&self, byte_offset: usize, side: Side) -> Result<Anchor, DocError> {

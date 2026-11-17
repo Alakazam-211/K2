@@ -45,9 +45,9 @@ mod row;
 
 pub use draft::{cut_text, index_to_wire, DraftNode, IndexDraft, IndexOutcome, IndexRefused};
 pub use read::{
-    IndexBlame, IndexDiff, ListQuery, MissingAddress, NodeBlame, NodeChange, NodeChangeKind,
-    NodeLabel, NodeRead, NodesRead, Outline, OutlineNode, BLAME_WALK_MAX, CANDIDATES_MAX,
-    READ_BUDGET, READ_BUDGET_MIN,
+    Identity, IndexBlame, IndexDiff, ListQuery, MissingAddress, NodeBlame, NodeChange,
+    NodeChangeKind, NodeLabel, NodeRead, NodesRead, Outline, OutlineNode, SaveCrossing,
+    BLAME_WALK_MAX, CANDIDATES_MAX, READ_BUDGET, READ_BUDGET_MIN,
 };
 
 pub(crate) use align::mint_keys;

@@ -38,7 +38,7 @@ use crate::elem::{
 };
 use crate::engine::{BlameRun, Engine, EngineDoc};
 use crate::schema::{Kind, Schema};
-use crate::text::diff::{self, Hunk, HunkError};
+use crate::text::diff::{Hunk, HunkError};
 
 /// A participant's client ID. 53 bits, so it is safe as a JavaScript number.
 pub type ClientId = u64;
@@ -166,6 +166,19 @@ pub enum DocError {
     /// to be retried, and the peer isn't at fault. Error id `MPC-E165`.
     #[error("the peer's history is compacted past this doc's state: it needs a state transfer")]
     NeedsStateTransfer,
+    /// The doc is on the native engine (a Beta), which keeps one replica, the host's: sync
+    /// bytes for it (a second replica: a state vector, an update) are refused, nothing sent or
+    /// applied. People and agents edit it through the host's session verbs. Error id
+    /// `MPC-E166` (`native_one_replica`).
+    #[error(
+        "this doc is on the native engine (a Beta), which keeps one copy, on the host; it can't \
+         be synced to another copy"
+    )]
+    NativeOneReplica,
+    /// Yjs sync bytes (anything but the native engine's own wire) for a doc on the native
+    /// engine: refused, nothing applied. Error id `MPC-E168` (`native_no_yjs`).
+    #[error("this doc is on the native engine; Yjs sync bytes can't reach it")]
+    NativeNoYjs,
 }
 
 /// A root's content as plain data, independent of the engine (versions, export, restore).
@@ -258,6 +271,19 @@ fn check_schema(schema: &Schema) -> Result<(), DocError> {
         }
     }
     Ok(())
+}
+
+/// A copy maker for one doc ([`Doc::copier`]): a check that walks a copy of the doc makes it
+/// off the session's lock from the state it took under the lock.
+pub(crate) struct DocCopier {
+    schema: Schema,
+}
+
+impl DocCopier {
+    /// A doc holding `state` (the doc's [`Doc::encode_state`]), on the doc's engine.
+    pub(crate) fn load(&self, state: &[u8]) -> Result<Doc, DocError> {
+        Doc::load(self.schema, state)
+    }
 }
 
 impl Doc {
@@ -540,10 +566,23 @@ impl Doc {
         self.inner.encode_state()
     }
 
-    /// What a peer with state vector `remote_sv` lacks, in the wire format (sync step 2).
+    /// What a peer with state vector `remote_sv` lacks, in the wire format (sync step 2). A
+    /// doc on the native engine keeps one replica: refused ([`DocError::NativeOneReplica`],
+    /// `MPC-E166`; Yjs bytes [`DocError::NativeNoYjs`], `MPC-E168`).
     #[cfg(feature = "untrusted-wire")]
     pub fn encode_diff(&self, remote_sv: &[u8]) -> Result<Vec<u8>, DocError> {
+        self.one_replica(remote_sv)?;
         self.inner.encode_diff(remote_sv)
+    }
+
+    /// The native engine Beta's rule for sync bytes (feature `native`): a native doc keeps one
+    /// replica, the host's, so no sync bytes reach it. The native engine's own wire (its
+    /// frame magic) is a second replica, `MPC-E166`; anything else is Yjs's, `MPC-E168`.
+    /// Nothing is decoded. A Yrs doc passes.
+    #[cfg(feature = "untrusted-wire")]
+    fn one_replica(&self, bytes: &[u8]) -> Result<(), DocError> {
+        let _ = bytes;
+        Ok(())
     }
 
     /// Check an update from a connection that owns client `allowed`, without applying it:
@@ -555,22 +594,26 @@ impl Doc {
     /// known ones are skipped), so even forged content under a known ID changes nothing.
     /// Any block from another client past this doc's state is
     /// [`DocError::ForeignClient`]. `inserts_from` lists only clients with new content.
+    /// On a doc on the native engine, refused as [`Doc::encode_diff`] is.
     #[cfg(feature = "untrusted-wire")]
     pub fn check_client_update(
         &self,
         update: &[u8],
         allowed: ClientId,
     ) -> Result<UpdateInfo, DocError> {
+        self.one_replica(update)?;
         self.client_checked(update, allowed)
     }
 
-    /// Check, then apply, an update from a connection that owns client `allowed`.
+    /// Check, then apply, an update from a connection that owns client `allowed`. On a doc on
+    /// the native engine, refused as [`Doc::encode_diff`] is, nothing applied.
     #[cfg(feature = "untrusted-wire")]
     pub fn apply_client_update(
         &mut self,
         update: &[u8],
         allowed: ClientId,
     ) -> Result<UpdateInfo, DocError> {
+        self.one_replica(update)?;
         self.client_applied(update, allowed)
     }
 
@@ -642,8 +685,10 @@ impl Doc {
         for e in edits {
             match e {
                 Edit::Text { root, hunks } => {
-                    let current = self.text(root)?;
-                    diff::validate(&current, hunks)?;
+                    // checked by the engine: one that reads a range of a text checks each
+                    // hunk's ends, not the whole text
+                    self.root(root, Kind::Text)?;
+                    self.inner.check_hunks(root, hunks)?;
                     text |= !hunks.is_empty();
                 }
                 Edit::List { root, .. } => self.root(root, Kind::MovableList)?,
@@ -766,11 +811,18 @@ impl Doc {
         self.inner.units()
     }
 
-    /// Whether a session may store this doc: until native docs get their own
-    /// stamp and record format, only a doc on Yrs (a native doc would be stamped as Yrs's).
-    /// Every doc a session makes or loads is on Yrs today; this holds that line.
-    pub(crate) fn check_storable(&self) -> Result<(), DocError> {
-        Ok(())
+    /// Whether the doc runs on the native engine: never, without feature `native`.
+    pub(crate) fn is_native(&self) -> bool {
+        false
+    }
+
+    /// What a copy of this doc needs, taken under the session's lock: the copy itself
+    /// ([`DocCopier::load`]) is made off it (blame's sampled check). A Yrs doc's copy loads
+    /// its state; a native doc's under its own keys.
+    pub(crate) fn copier(&self) -> DocCopier {
+        DocCopier {
+            schema: self.schema,
+        }
     }
 
     /// How the doc's engine numbers what a change inserts ([`crate::engine::IdOrder`]): the
@@ -966,6 +1018,7 @@ thread_local! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::text::diff;
 
     const ONE_TEXT: Schema = Schema {
         name: "t",

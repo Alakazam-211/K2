@@ -156,6 +156,9 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E163` | `replica_lagging` | 2 | the MPCE seam (stable codes): one host, one engine version | `(sync)` | live |
 | `MPC-E164` | `vector_needs_parts` | 2 | the MPCE seam (stable codes): a vector is never sent smaller or empty | `(sync)` | live |
 | `MPC-E165` | `needs_state_transfer` | 2 | the MPCE seam (stable codes): a replica behind a cut | `(sync)` | live |
+| `MPC-E166` | `native_one_replica` | 2 | the native engine (a Beta): one replica, the host's | `(sync)` | live |
+| `MPC-E167` | `native_beta_off` | 2 | the native engine (a Beta): off by default, chosen only when a doc is made | `(host)` | live |
+| `MPC-E168` | `native_no_yjs` | 2 | the native engine (a Beta): no Yjs sync | `(sync)` | live |
 | `MPC-E169` | `native_engine_missing` | 6 | the native engine: a build without it refuses its docs one by one | `*` | live |
 | `MPC-E170` | `ambiguous_address` | 2 | K-ADDR-2, K-EXIT-1 | `@pack` | live |
 | `MPC-E171` | `positional_needs_version` | 2 | K-ADDR-3 | `@change` | live |
@@ -552,6 +555,30 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Exit:** 2
 - **Reached by:** a native replica behind a peer's cut (feature native)
 
+### MPC-E166 `native_one_replica`
+
+- **Message:** `this doc is on the native engine (a Beta), which keeps one copy, on the host; it can't be synced to another copy`
+- **Next:** Nothing was sent or applied. People and agents edit this doc through the host's verbs, on the host's one copy. To sync copies of it, switch the doc back to the standard engine.
+- **Rule:** the native engine (a Beta): one replica, the host's
+- **Exit:** 2
+- **Reached by:** sync bytes for a native doc: a second replica (feature native)
+
+### MPC-E167 `native_beta_off`
+
+- **Message:** `the native engine (a Beta) is off on this host: a new doc can't be made on it`
+- **Next:** Nothing was made. Make the doc on the standard engine, or ask the host's owner to turn the native engine Beta on. Docs already on the native engine open and save as usual.
+- **Rule:** the native engine (a Beta): off by default, chosen only when a doc is made
+- **Exit:** 2
+- **Reached by:** a host making a doc on the native engine with the Beta off (feature native)
+
+### MPC-E168 `native_no_yjs`
+
+- **Message:** `this doc is on the native engine; Yjs sync bytes can't reach it`
+- **Next:** Nothing was applied. A doc on the native engine takes no Yjs sync: edit it through the host's verbs, or switch the doc back to the standard engine to sync it with Yjs.
+- **Rule:** the native engine (a Beta): no Yjs sync
+- **Exit:** 2
+- **Reached by:** Yjs sync bytes for a native doc (feature native)
+
 ### MPC-E169 `native_engine_missing`
 
 - **Message:** `this doc is on the native engine (format {stored_format}), which this build doesn't have`
@@ -935,6 +962,10 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E519` | `closed` | 1 | K-OFF-2 | `*` | live |
 | `MPC-E520` | `engine_mismatch` | 6 | K-FMT-2, K-FMT-4 | `*` | live |
 | `MPC-E521` | `pairing_mismatch` | 1 | the carrier's pairing | `*` | live |
+| `MPC-E522` | `store_nonce_reused` | 6 | the store nonce | `*` | live |
+| `MPC-E523` | `purge_doc_open` | 6 | no purge of an open doc | `purge` | live |
+| `MPC-E524` | `cut_pending_records` | 6 | a cut after the commit | `(host)` | live |
+| `MPC-E525` | `cut_doc_open` | 6 | no cut of an open doc | `(host)` | live |
 
 ### MPC-E501 `store_failed`
 
@@ -969,11 +1000,11 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 ### MPC-E505 `store_locked`
 
-- **Message:** `store still locked by another process after waiting`
-- **Next:** Another process holds the store (a daemon hand-off in progress). Retry in a few seconds.
+- **Message:** `Another process has this document open: its store is held by another opener`
+- **Next:** Another process has this document open. Nothing was read or changed. Close it there (or let its hand-off finish), then open it again; a host can open with a wait instead (DocStore::open_with_retry), which takes the store once the other opener lets it go.
 - **Rule:** K-OFF-2
 - **Exit:** 6
-- **Reached by:** a second process holding the store
+- **Reached by:** a second opener of a store another holds (another process, or this one)
 
 ### MPC-E506 `named_version`
 
@@ -1103,6 +1134,38 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Exit:** 1
 - **Reached by:** a file type's pairing that doesn't fit its file
 
+### MPC-E522 `store_nonce_reused`
+
+- **Message:** `the engine store's nonce is already doc {doc}'s in this store; a store nonce is never reused, so nothing was written`
+- **Next:** Each engine store (a native doc's records) is made with its own nonce, and one store never uses a nonce twice, so two engine stores under the same keys never verify each other's records. This one's nonce is already another doc's here (a deleted doc's too), so nothing was written, or, at open, the store holds two engine stores with one nonce and is refused. Report it: the kit makes a fresh nonce for every new engine store.
+- **Rule:** the store nonce
+- **Exit:** 6
+- **Reached by:** an engine store whose nonce this store already used
+
+### MPC-E523 `purge_doc_open`
+
+- **Message:** `doc {doc} is open in another live instance; a native doc is purged only while the purging instance alone holds it, so nothing was written`
+- **Next:** A purge is refused, with nothing written, while any live instance other than the purging one holds the doc open: that instance (another session's load of the doc, or a copy of its records) would still hold the purged content in memory. Unload the doc's other instances, then purge again.
+- **Rule:** no purge of an open doc
+- **Exit:** 6
+- **Reached by:** a purge of a native doc another live instance holds open
+
+### MPC-E524 `cut_pending_records`
+
+- **Message:** `doc {doc} holds {changes} changes not yet committed; a native doc is cut only once its changes are in the store, so nothing was cut`
+- **Next:** A cut folds a native doc's engine records into a new generation, and a change whose record isn't committed yet would be folded in without its log row, so nothing changed. Commit the doc's pending changes (or its pending purge), then cut again.
+- **Rule:** a cut after the commit
+- **Exit:** 6
+- **Reached by:** a native doc's cut asked before its pending changes were committed
+
+### MPC-E525 `cut_doc_open`
+
+- **Message:** `doc {doc} is open in another live instance; a native doc is cut only while the cutting instance alone holds it, so nothing was cut`
+- **Next:** A cut replaces a native doc's engine records with a new generation, and another live instance of the doc (another session's load of it, or a copy of its records) still reads the one it replaces, so nothing was written. Unload the doc's other instances; its next idle tick or unload cuts it.
+- **Rule:** no cut of an open doc
+- **Exit:** 6
+- **Reached by:** a cut of a native doc another live instance holds open
+
 ## 6xx: erasure
 
 | Id | Name | Exit | Rule | Verbs | Status |
@@ -1155,7 +1218,18 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E715` | `agent_write_refused` | 2 | structure index | `write` | live |
 | `MPC-E716` | `export_needs_renderer` | 4 | structure index | `@index`, `(host)` | live |
 | `MPC-E717` | `index_stale` | 1 | structure index | `(host)` | live |
+| `MPC-E718` | `needs_lease` | 2 | the tier-0 verb path: merge or lease | `@blob_verb` | live |
+| `MPC-E719` | `base_across_unproven_save` | 1 | the tier-0 verb path: --base across an outside save | `@blob_verb` | live |
 | `MPC-E720` | `blob_ref_unknown` | 4 | blob references in keyed docs | `@pack`, `(host)` | live |
+| `MPC-E721` | `native_no_tier0` | 4 | the native engine (a Beta): no move to or from tier 0 | `(host)` | live |
+| `MPC-E722` | `keys_reissued` | 1 | the tier-0 reads across an outside save | `@index`, `(host)` | live |
+| `MPC-E723` | `base_moved` | 1 | the tier-0 verb path: --base per node | `@blob_verb` | live |
+| `MPC-E724` | `base_weak_key` | 2 | the tier-0 verb path: --base per node | `@blob_verb` | live |
+| `MPC-E725` | `bad_plan` | 2 | the tier-0 verb path: the plan | `@blob_verb` | live |
+| `MPC-E726` | `strayed` | 2 | the tier-0 verb path: the output check | `@blob_verb` | live |
+| `MPC-E727` | `output_unreadable` | 2 | the tier-0 verb path: the output check | `@blob_verb` | live |
+| `MPC-E728` | `verb_too_large` | 2 | the tier-0 verb path: the bounds | `@blob_verb` | live |
+| `MPC-E729` | `not_as_previewed` | 1 | the tier-0 verb path: the dry-run contract | `@blob_verb` | live |
 
 ### MPC-E701 `leased`
 
@@ -1292,12 +1366,94 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Rule:** structure index
 - **Exit:** 1
 
+### MPC-E718 `needs_lease`
+
+- **Message:** `{verb} edits this file only under your own lease; take it first ({ttl_ms} ms by default)`
+- **Next:** This verb's changes aren't covered by the file type's merge, so it runs only while you hold the file's lease: a person's app saving meanwhile then keeps both copies instead of merging your work away. Nothing was written. Take the lease (details.ttl_ms is the default length), run the verb again, and release the lease when done.
+- **Next step:** `lease` with `--ttl` `{ttl_ms}`. This verb runs only under your own lease; take it, then run the verb again.
+- **Rule:** the tier-0 verb path: merge or lease
+- **Exit:** 2
+
+### MPC-E719 `base_across_unproven_save`
+
+- **Message:** `version {save} is another program's save, not proven to keep node keys: --base {base} can't pair {addresses} across it (head {head})`
+- **Next:** Another program saved the file after the version you read (details.save), and the file type's pack can't prove that program keeps node keys: a key may name another thing now. Nothing was written. Read the nodes again at head (details.head), redo your change on what you read, and call again with --base details.head.
+- **Next step:** `node` with `{addresses}`. Another program saved the file since the version you read; read the nodes again at head and redo the change on what you read.
+- **Rule:** the tier-0 verb path: --base across an outside save
+- **Exit:** 1
+
 ### MPC-E720 `blob_ref_unknown`
 
 - **Message:** `no blob {blob} in this doc's space`
 - **Next:** The value names a blob this doc's space doesn't hold: it was never stored here, it was collected, or it belongs to another space. Nothing was applied. Store the bytes in this doc's space, then send the change again with the id that returned.
 - **Rule:** blob references in keyed docs
 - **Exit:** 4
+
+### MPC-E721 `native_no_tier0`
+
+- **Message:** `this doc is on the native engine (a Beta), which doesn't move to or from tier 0 ({verb})`
+- **Next:** Nothing changed: the doc is still on the native engine, as it was. In the Beta a doc on the native engine can't become a tier-0 doc, or be made from one. Switch the doc back to the standard engine first, then move it.
+- **Rule:** the native engine (a Beta): no move to or from tier 0
+- **Exit:** 4
+- **Reached by:** a host demoting or promoting a doc on the native engine (feature native)
+
+### MPC-E722 `keys_reissued`
+
+- **Message:** `version {save}'s writer reissues node keys: a diff across it pairs nothing`
+- **Next:** Another program saved the file at version details.save, and the file type's pack says that program renumbers node keys: across that save a key may name another thing, so a diff across it would pair the wrong nodes. Nothing was read. Diff from details.safe_from to details.to instead, or compare the two versions' outlines.
+- **Rule:** the tier-0 reads across an outside save
+- **Exit:** 1
+
+### MPC-E723 `base_moved`
+
+- **Message:** `{addresses} changed since --base {base} (head {head}); nothing applied`
+- **Next:** Someone changed the nodes your call changes after the version you read (details.base), in a way that overlaps your change: each is in details.conflicts with the field, who changed it and in which version. Nothing was written. Read them again at head, redo your change on what you read, and call again with --base details.head.
+- **Next step:** `node` with `{addresses}`. The nodes you change were changed since the version you read; read them again at head and redo the change on what you read.
+- **Rule:** the tier-0 verb path: --base per node
+- **Exit:** 1
+
+### MPC-E724 `base_weak_key`
+
+- **Message:** `{keys} have no key of the file's own: --base can't pair them; guard the call with --if-version {head}`
+- **Next:** The nodes your call changes have no ID in the file, so the kit named them itself, and it can't be sure such a name means the same node in another version. Nothing was written. Read the doc at head (details.head) and call again with --if-version details.head instead of --base.
+- **Next step:** `status`. These nodes can't be paired across versions; check the doc's head, then guard the call with that version instead.
+- **Rule:** the tier-0 verb path: --base per node
+- **Exit:** 2
+
+### MPC-E725 `bad_plan`
+
+- **Message:** `the verb's plan is refused: {why}`
+- **Next:** The file type's verb described its change in a way the kit refuses (its byte ranges out of order, overlapping, outside the file or over a limit, or a read verb that changes bytes). Nothing was written. This is a bug in the file type's pack: report it.
+- **Rule:** the tier-0 verb path: the plan
+- **Exit:** 2
+
+### MPC-E726 `strayed`
+
+- **Message:** `the verb's output changed nodes its plan didn't name: {keys}`
+- **Next:** The kit read the verb's output with the file type's own index and found changes to nodes the verb didn't say it would touch (details.keys). Nothing was written. This is a bug in the file type's pack: report it.
+- **Rule:** the tier-0 verb path: the output check
+- **Exit:** 2
+
+### MPC-E727 `output_unreadable`
+
+- **Message:** `the file type's index refuses the verb's output`
+- **Next:** The file the verb would write can't be read back by the file type's own index. Nothing was written. This is a bug in the file type's pack: report it.
+- **Rule:** the tier-0 verb path: the output check
+- **Exit:** 2
+
+### MPC-E728 `verb_too_large`
+
+- **Message:** `{what} is {size}, over the limit of {limit}`
+- **Next:** The call is over one of the kit's bounds for a verb on this file (details.what and details.limit name it). Nothing was written. Narrow the call (fewer nodes at a time).
+- **Rule:** the tier-0 verb path: the bounds
+- **Exit:** 2
+
+### MPC-E729 `not_as_previewed`
+
+- **Message:** `the bytes this call would store are not the ones previewed (expected {expected}, now {actual})`
+- **Next:** The call carried the digest its dry run showed (--expect), and the bytes it would store now differ: the file changed since, or the call did. Nothing was written. Run the dry run again, show it, and use its digest.
+- **Rule:** the tier-0 verb path: the dry-run contract
+- **Exit:** 1
 
 ## 8xx: structured and CSV
 It covers structured file types too, a board's own verbs included (MPC-E830 to E859; E860 to E869 are kept for the board's live verbs).
@@ -1314,7 +1470,8 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 | `MPC-E820` | `key_not_own` | 2 | writer-tagged keys | `@change` | live |
 | `MPC-E821` | `key_space_full` | 2 | writer-tagged keys | `(host)` | live |
 | `MPC-E822` | `keyed_at_limit` | 2 | K-CSV-7 (keyed docs) | `@change` | live |
-| `MPC-E823` | `pack_refused` | 2 | a pack's refusal by code (its own ids: Pack::errors) | `@pack` | live |
+| `MPC-E823` | `pack_refused` | 2 | a pack's refusal by code (its own ids: Pack::errors; its check of a change: Pack::check_edit) | `@pack`, `@change`, `(sync)`, `(host)` | live |
+| `MPC-E824` | `base_unrendered` | 2 | render net | `write` | live |
 | `MPC-E830` | `conflict` | 1 | board file: object revs | `@file`, `update`, `delete`, `resolve`, `lock`, `check-set`, `check-remove`, `table-cell`, `table-remove-row`, `table-remove-column`, `move`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `apply`, `inverse` | live |
 | `MPC-E831` | `exists` | 1 | board file: unique ids | `@file`, `put-back`, `apply`, `inverse` | live |
 | `MPC-E832` | `busy` | 1 | board file: the save guard | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `apply`, `inverse` | live |
@@ -1427,10 +1584,17 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 ### MPC-E823 `pack_refused`
 
 - **Message:** `{code}: the pack refused the call`
-- **Next:** The file type's own verb refused the call: details.code is its reason, details.next its own way forward. Nothing was applied. Do what details.next says. (The pack has no id of its own for this code yet.)
-- **Rule:** a pack's refusal by code (its own ids: Pack::errors)
+- **Next:** The file type refused the call or the change: details.code is its own code for why (details.reason, for a change its check refused), details.next its own way forward when it gives one. Nothing was applied and the version didn't move. Do what details.next says; for a change the file type can't write to its file, make it through the file type's own verbs, or leave that part of the doc as it is.
+- **Rule:** a pack's refusal by code (its own ids: Pack::errors; its check of a change: Pack::check_edit)
 - **Exit:** 2
-- **Reached by:** a keyed pack's verb printing its refusal as text (tests/agent_results.rs)
+- **Reached by:** a keyed pack's verb printing its refusal as text (tests/agent_results.rs), or its check of a live change (tests/pack_check_edit.rs)
+
+### MPC-E824 `base_unrendered`
+
+- **Message:** `version {base} was read while the file couldn't be written back; nothing applied`
+- **Next:** Nothing was applied: the read of version details.base was given while the file couldn't be rendered, so its bytes were the file as last synced, not that version, and a write made from them can't be merged at it. Change the doc through the file type's verbs, which never need the file's bytes; once the file renders again, read it and write from that read.
+- **Rule:** render net
+- **Exit:** 2
 
 ### MPC-E830 `conflict`
 
@@ -1700,6 +1864,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 | `MPC-E905` | `claim_waiters_cap` | 2 | claims (claim_waiters_max) | `(host)` | live |
 | `MPC-E907` | `annotation_cap` | 2 | K-ANN-1 (annot_* limits) | `comment`, `reply`, `resolve`, `resolve --reopen`, `reanchor` | live |
 | `MPC-E908` | `writers_doc_cap` | 2 | writers (writers_max) | `@change` | live |
+| `MPC-E909` | `native_text_cap` | 2 | the native engine (a Beta): a doc's live text | `@change` | live |
 
 ### MPC-E901 `rate_limited`
 
@@ -1755,6 +1920,14 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Rule:** writers (writers_max)
 - **Exit:** 2
 
+### MPC-E909 `native_text_cap`
+
+- **Message:** `this doc's live text would be {would_be} bytes, past the native engine's {limit}-byte cap`
+- **Next:** Nothing was applied, and nothing in the doc was dropped. A doc on the native engine (a Beta) holds at most details.limit bytes of live text, all its text together. Make the change smaller or remove text first; or switch the doc back to the standard engine.
+- **Rule:** the native engine (a Beta): a doc's live text
+- **Exit:** 2
+- **Reached by:** an edit past a native doc's live-text cap (feature native)
+
 ## Engine ids (MPCE-Ennn)
 
 Reserved for the engine, which allocates its ranges (decode, admission and security, schema, history, store) itself. Its codes cross the seam as these strings, never as enum ordinals; a code this build doesn't list is reported as `MPC-E161` with `details.code`.
@@ -1774,3 +1947,5 @@ Reserved for the engine, which allocates its ranges (decode, admission and secur
 - `MPCE-E995` `merge_not_a_fold`
 - `MPCE-E997` `causal_check_over_limit`
 - `MPCE-E1000` `own_line_parents`
+- `MPCE-E982` `outbound_frame_too_large`
+- `MPCE-E986` `request_malformed`

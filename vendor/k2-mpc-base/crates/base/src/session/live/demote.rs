@@ -110,8 +110,9 @@ impl Session {
     /// session is closed; on any error nothing changed (blobs put on the way are collected
     /// after the grace).
     ///
-    /// Errors: [`SessionError::Declined`] `not_text` for a structured doc or a pack that keeps
-    /// a carrier; [`SessionError::BadPath`] for a doc that lives in a file when `file` is
+    /// Errors: [`SessionError::NativeNoTier0`] for a doc on the native engine (a Beta; exit 4,
+    /// as `not_text`); [`SessionError::Declined`] `not_text` for a structured doc or a pack that
+    /// keeps a carrier; [`SessionError::BadPath`] for a doc that lives in a file when `file` is
     /// `None`; [`SessionError::Declined`] `too_large` when the file is over the blob limit; a
     /// disk, blob or store error.
     pub(crate) fn demote(
@@ -123,6 +124,10 @@ impl Session {
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;
+        // a native doc doesn't move to tier 0 in the Beta: refused before anything is read
+        if st.doc.is_native() && !crate::beta_plant::planted("native-demotes") {
+            return Err(SessionError::NativeNoTier0 { verb: "demote" });
+        }
         if self.structured || self.pack.wants_carrier() {
             return Err(SessionError::Declined(Declined {
                 code: "not_text",

@@ -349,8 +349,8 @@ fn board_rows_name_the_boards_verbs() {
         "the rows only a host call returns"
     );
     // the reserved and free ids hold nothing yet (822 is a keyed doc's size limit, 823 a
-    // pack's refusal in text)
-    for n in (824..=829).chain(860..=869) {
+    // pack's refusal by its own code, 824 a whole-file write from a read given the synced bytes)
+    for n in (825..=829).chain(860..=869) {
         assert!(
             errors::lookup(&n.to_string()).is_none(),
             "MPC-E{n} is taken"
@@ -1443,6 +1443,17 @@ fn walk() -> Seen {
         None,
         false,
     )); // E177
+
+    // a whole read given while the file can't be rendered (the synced bytes): its version is
+    // no base for a whole-file write (tests/render_net.rs)
+    let read = s.read(p).unwrap();
+    assert!(read.render_failed.is_some(), "{read:?}");
+    seen.res(s.write_base_grid(
+        p,
+        read.version,
+        b"id,city\nk1,Lima\n",
+        &k2_mpc_base::session::GridWriteOptions::default(),
+    )); // E824
     no_render.store(false, Ordering::SeqCst);
 
     // an agent's edit by line with no version, where the host refuses it
@@ -1460,6 +1471,8 @@ fn walk() -> Seen {
 
     // ---- the structure index (711-717)
     index_walk(&mut seen);
+    // ---- the tier-0 verb path (721, 725-729)
+    verb_walk(&mut seen);
     // ---- comment threads (116, 117, 320, 321, 906)
     annot_walk(&mut seen);
     seen
@@ -1607,6 +1620,135 @@ fn index_walk(seen: &mut Seen) {
     let mut show = argv(&["part", "show", "--no-truncate"]);
     show.extend(std::iter::repeat("@n:1".to_owned()).take(80));
     seen.tool(s.run_tool(c, &show, &opts)); // E175
+}
+
+/// The tier-0 verb path's refusals (E718, E725-E729), each through `BlobSession::run_tool` on
+/// the index test pack's verbs.
+fn verb_walk(seen: &mut Seen) {
+    use index_pack::{file, IxPack, VERB_SET};
+    let pack = || IxPack {
+        verbs: VERB_SET,
+        merge: true,
+        ..IxPack::default()
+    };
+    let two = file(&["@n:1|k|a|-|1|-|-", "@n:2|k|b|-|1|-|-"]);
+    let open = |f: &Fx, name: &str| {
+        let s = f
+            .mgr
+            .open_blob(Arc::new(pack()), &key(name), Some(&mut &two[..]))
+            .unwrap();
+        s.index_job(None).unwrap().unwrap().run().unwrap();
+        f.grant("vw", Rights::full());
+        let c = s
+            .join(who("vw", ParticipantKind::Person), Stay::Held)
+            .unwrap()
+            .conn;
+        (s, c)
+    };
+    let opts = k2_mpc_base::tools::ToolOptions::default();
+    let f = fx("verbs", |c| c.blob_verb_max_bytes = 8);
+    let (s, c) = open(&f, "v.idx");
+    seen.tool(s.run_tool(c, &argv(&["part", "guard", "@n:1", "name", "z"]), &opts)); // E718
+    seen.tool(s.run_tool(c, &argv(&["part", "bad", "outside"]), &opts)); // E725
+    seen.tool(s.run_tool(c, &argv(&["part", "bad", "stray", "@n:1", "@n:2"]), &opts)); // E726
+    seen.tool(s.run_tool(c, &argv(&["part", "bad", "garble"]), &opts)); // E727
+    seen.tool(s.run_tool(c, &argv(&["part", "add", "@n:3", "k", "c"]), &opts)); // E728
+    seen.tool(s.run_tool(
+        c,
+        &argv(&["part", "set", "@n:1", "name", "z", "--expect", "sha256:00"]),
+        &opts,
+    )); // E729
+
+    // a diff across an outside save whose writer the pack says reissues keys
+    let ws = f.ws();
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("r.idx"), &two).unwrap();
+    let reissues = IxPack {
+        pairing: Some(k2_mpc_base::session::SavePairing::Reissues),
+        ..IxPack::default()
+    };
+    let s = f
+        .mgr
+        .open_blob_file(Arc::new(reissues), &key("r.idx"), &ws.join("r.idx"), &ws)
+        .unwrap();
+    // the bytes may be indexed already (an index row is the bytes')
+    if let Some(j) = s.index_job(None).unwrap() {
+        j.run().unwrap();
+    }
+    f.grant("vw", Rights::full());
+    let c = s
+        .join(who("vw", ParticipantKind::Person), Stay::Held)
+        .unwrap()
+        .conn;
+    let v1 = s.status().unwrap().version;
+    std::fs::write(ws.join("r.idx"), file(&["@n:1|k|a|-|1|-|-"])).unwrap();
+    s.file_changed().unwrap();
+    // the bytes may be indexed already (an index row is the bytes')
+    if let Some(j) = s.index_job(None).unwrap() {
+        j.run().unwrap();
+    }
+    let v2 = s.status().unwrap().version;
+    seen.res(s.index_diff(c, v1, v2)); // E722
+
+    // `--base` per node: E723 (changed since), E724 (a key the kit minted), E719 (across an
+    // outside save)
+    let base_pack = || IxPack {
+        verbs: index_pack::BASE_SET,
+        merge: true,
+        ..IxPack::default()
+    };
+    let open_base = |name: &str, bytes: &[u8]| {
+        std::fs::write(ws.join(name), bytes).unwrap();
+        let s = f
+            .mgr
+            .open_blob_file(Arc::new(base_pack()), &key(name), &ws.join(name), &ws)
+            .unwrap();
+        if let Some(j) = s.index_job(None).unwrap() {
+            j.run().unwrap();
+        }
+        let c = s
+            .join(who("vw", ParticipantKind::Person), Stay::Held)
+            .unwrap()
+            .conn;
+        let v = s.status().unwrap().version.to_string();
+        (s, c, v)
+    };
+    let index_head = |s: &k2_mpc_base::session::BlobSession| {
+        if let Some(j) = s.index_job(None).unwrap() {
+            j.run().unwrap();
+        }
+    };
+    let (s, c, v) = open_base("m.idx", &file(&["@n:1|k|a|-|1|-|-", "@n:2|k|b|-|1|-|-"]));
+    s.run_tool(c, &argv(&["part", "set", "@n:1", "note", "x"]), &opts)
+        .unwrap();
+    index_head(&s);
+    seen.tool(s.run_tool(
+        c,
+        &argv(&["part", "set", "@n:1", "note", "y", "--base", &v]),
+        &opts,
+    )); // E723
+    let (s, c, v) = open_base("w.idx", &file(&["-|k|a|-|1|-|-", "-|k|b|-|1|-|-"]));
+    s.run_tool(c, &argv(&["part", "named", "b", "note", "x"]), &opts)
+        .unwrap();
+    index_head(&s);
+    seen.tool(s.run_tool(
+        c,
+        &argv(&["part", "named", "a", "note", "y", "--base", &v]),
+        &opts,
+    )); // E724
+    let (s, c, v) = open_base("o.idx", &file(&["@n:1|k|a|-|1|-|-", "@n:2|k|b|-|1|-|-"]));
+    std::fs::write(
+        ws.join("o.idx"),
+        file(&["@n:1|k|a|-|1|-|z", "@n:2|k|b|-|1|-|-"]),
+    )
+    .unwrap();
+    s.file_changed().unwrap();
+    index_head(&s);
+    seen.tool(s.run_tool(
+        c,
+        &argv(&["part", "set", "@n:2", "note", "y", "--base", &v]),
+        &opts,
+    )); // E719
 }
 
 /// "Every id is reachable or retired": every live id the registry marks `Reach::Verb` is

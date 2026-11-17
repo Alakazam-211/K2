@@ -342,8 +342,8 @@ fn property_three_replicas_random_edits_and_partial_syncs() {
 
 #[test]
 fn touching_hunks_apply_like_one_coalesced_hunk() {
-    // Matches the kit's diff::validate: touching (n.start == prev.end) is fine unless both are pure
-    // inserts at one offset; the result equals the single coalesced hunk (spec D2).
+    // Matches a host's hunk validation: touching (n.start == prev.end) is fine unless both are pure
+    // inserts at one offset; the result equals the single coalesced hunk.
     let cases: &[(&[Hunk], Hunk)] = &[
         (&[h(2, 5, "X"), h(5, 5, "Y")], h(2, 5, "XY")), // replace then insert at its end
         (&[h(2, 5, ""), h(5, 7, "Z")], h(2, 7, "Z")),   // delete then replace

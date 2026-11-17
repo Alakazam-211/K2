@@ -231,6 +231,7 @@ pub(crate) fn os_random(buf: &mut [u8]) -> std::io::Result<()> {
 
 /// Fill `buf` from the OS's random source (Windows: `RtlGenRandom`).
 #[cfg(windows)]
+#[allow(unsafe_code)] // the one FFI call below; see its SAFETY note
 pub(crate) fn os_random(buf: &mut [u8]) -> std::io::Result<()> {
     #[link(name = "advapi32")]
     extern "system" {
@@ -376,5 +377,81 @@ mod tests {
         assert!(!legacy_matches(&sha256(b"secret"), b"other"));
         let (a, b) = (random32().unwrap(), random32().unwrap());
         assert_ne!(a, b);
+    }
+
+    /// No 64-byte stretch of `buf` is left all `sentinel`: each whole 64-byte chunk, and the
+    /// last 64 bytes (the whole buffer, if shorter), so a short tail is judged in a full window.
+    /// A fill that stopped short leaves its tail at the sentinel. A real 64-byte run of one
+    /// value has odds of 2^-512; a short buffer's (16 bytes or more) 2^-128.
+    fn filled_past(buf: &[u8], sentinel: u8) -> bool {
+        let stuck = |w: &[u8]| w.iter().all(|&x| x == sentinel);
+        let tail = &buf[buf.len() - buf.len().min(64)..];
+        !buf.chunks_exact(64).any(stuck) && !stuck(tail)
+    }
+
+    #[test]
+    fn os_random_fills_the_whole_buffer_and_calls_differ() {
+        // 32 MiB + 1 KiB is above the most one read of the unix generator returns (32 MiB - 1),
+        // so the fill must loop. The Windows generator's chunk is u32::MAX bytes (4 GiB), too
+        // large for a unit row; the Windows check builds and lints that arm.
+        const BIG: usize = (32 << 20) + 1024;
+        for n in [16usize, 31, 32, 33, 64, 65, 4096, 1 << 20, BIG] {
+            for sentinel in [0x00u8, 0xff] {
+                let mut a = vec![sentinel; n];
+                os_random(&mut a).unwrap();
+                assert!(
+                    filled_past(&a, sentinel),
+                    "len {n}: a stretch left at {sentinel:#x}"
+                );
+                let mut b = vec![sentinel; n];
+                os_random(&mut b).unwrap();
+                assert!(
+                    filled_past(&b, sentinel),
+                    "len {n}: a stretch left at {sentinel:#x}"
+                );
+                assert_ne!(a, b, "len {n}: two calls gave the same bytes");
+            }
+        }
+        // an empty buffer is filled trivially, and a short one at all
+        os_random(&mut []).unwrap();
+        os_random(&mut [0u8; 1]).unwrap();
+        // random32 and the fence's nonce take the same source
+        assert_ne!(random32().unwrap(), random32().unwrap());
+        assert_ne!(crate::tools::random_nonce(), crate::tools::random_nonce());
+    }
+
+    fn sync_dir_scratch(tag: &str) -> std::path::PathBuf {
+        let name = format!("k2mb-sync-dir-{tag}-{}", std::process::id());
+        let d = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    /// Unix: the folder really is opened and synced, so a missing folder is an error. (Linux
+    /// nodes can't run the Windows arm; `sync_dir_is_a_no_op_on_windows` is that arm's row, and
+    /// the Windows check builds and lints it.)
+    #[cfg(not(windows))]
+    #[test]
+    fn sync_dir_opens_and_syncs_the_folder_on_unix() {
+        let d = sync_dir_scratch("unix");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("f"), b"x").unwrap();
+        sync_dir(&d).unwrap();
+        let missing = d.join("missing");
+        let e = sync_dir(&missing).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// Windows: nothing to do, so even a missing folder is fine (opening a folder as a file is
+    /// access denied there; NTFS journals the entries).
+    #[cfg(windows)]
+    #[test]
+    fn sync_dir_is_a_no_op_on_windows() {
+        let d = sync_dir_scratch("windows");
+        std::fs::create_dir_all(&d).unwrap();
+        sync_dir(&d).unwrap();
+        sync_dir(&d.join("missing")).unwrap();
+        std::fs::remove_dir_all(&d).unwrap();
     }
 }

@@ -1,5 +1,5 @@
-//! Replay ITF traces of `spec/quint/tree.qnt` (exported through the wrapper
-//! `tools/refmodel/itf_tree.qnt`) on the tree reference model (`mpce_model::tree_move`).
+//! Replay ITF traces of the Quint tree model on the tree reference model
+//! (`mpce_model::tree_move`).
 //!
 //! `tree_itf_replay [--variant NAME] [--same-spot preorder|node-id] [--inv] [--expect-mismatch]
 //! <trace.itf.json | dir>...`
@@ -110,7 +110,7 @@ fn f<'a>(j: &'a J, k: &str) -> &'a J {
 fn nat(j: &J) -> u64 {
     j.int() as u64
 }
-fn map<'a>(j: &'a J) -> impl Iterator<Item = (&'a J, &'a J)> {
+fn map(j: &J) -> impl Iterator<Item = (&J, &J)> {
     j.items("#map").iter().map(|kv| {
         let kv = kv.list();
         (&kv[0], &kv[1])

@@ -393,6 +393,18 @@ pub(crate) fn presence_address(what: &str, address: &str) -> super::error::Resul
     Ok(address.to_owned())
 }
 
+/// `address` as a view address stores it ([`super::Session::set_view_address`]), or `None` when
+/// the grammar refuses it (a pack's bug: the kit leaves its view as it was).
+pub(crate) fn view_address_ok(address: &str) -> Option<String> {
+    if plant_on!(
+        crate::differential::ergo_mutant()
+            == Some(crate::differential::ErgoMutant::ViewAddressUnchecked)
+    ) {
+        return Some(address.to_owned());
+    }
+    presence_address("the view address", address).ok()
+}
+
 /// A decimal integer as a time position writes one: an optional `-`, then digits with no
 /// leading zero (`0` alone), within an `i64`.
 fn decimal_int(s: &str) -> Option<i64> {

@@ -507,6 +507,8 @@ impl Session {
                 // a purge's removal is no authorship: roots given (none put back), so D1
                 // leaves it as it is (v0.9.7)
                 let none = vec![None; edits.len()];
+                // erasure always goes through: the pack's check isn't asked (`Pack::check_edit`)
+                st.unchecked = true;
                 removed = Some(self.commit_edit_restoring(
                     st,
                     i,
@@ -611,15 +613,23 @@ impl Session {
         if !self.structured {
             self.withhold_notes(st);
         }
-        // the new state: re-encoded from the live doc (GC on: no deleted content)
-        let state = match st.doc.encode_state() {
-            Ok(s) => s,
-            Err(e) => {
-                self.recover(st, &e.to_string());
-                return Err(e.into());
-            }
+        // the new state: re-encoded from the live doc (GC on: no deleted content). A native
+        // doc keeps no snapshot: its engine erases every deleted element in its own records,
+        // in the store transaction below (`live/native_purge.rs`), and the doc stays as it is
+        let native = st.doc.is_native();
+        let (state, fresh) = if native {
+            (Vec::new(), None)
+        } else {
+            let state = match st.doc.encode_state() {
+                Ok(s) => s,
+                Err(e) => {
+                    self.recover(st, &e.to_string());
+                    return Err(e.into());
+                }
+            };
+            let doc = self.checked(Doc::load(self.schema, &state)?);
+            (state, Some(doc))
         };
-        let doc = self.checked(Doc::load(self.schema, &state)?);
         if !file_holds_live {
             // the replica is kept below (re-encoded): if the doc still renders to the synced
             // bytes (the file missing, say), it must be the doc's elements, not an older copy
@@ -641,7 +651,11 @@ impl Session {
             Some(SyncState {
                 hash: file_hash(&key, &self.render(st)?),
                 seq: st.version,
-                state: state.clone(),
+                state: if native {
+                    self.replica_state(st)?
+                } else {
+                    state.clone()
+                },
             })
         } else {
             let stored = store.sync_states(self.doc_id)?.0;
@@ -663,13 +677,21 @@ impl Session {
                     Some(SyncState {
                         hash: bytes.map_or_else(Vec::new, |b| file_hash(&key, &b)),
                         seq: d.synced_seq,
-                        state: d.replica.get()?.encode_state()?,
+                        state: match &d.replica {
+                            // a native doc's replica is the file's texts: nothing to re-encode
+                            Replica::Text(t) => text_replica::encode_texts(t),
+                            _ => d.replica.get()?.encode_state()?,
+                        },
                     })
                 }
                 (None, Some(s)) => Some(SyncState {
                     hash: Vec::new(),
                     seq: s.seq,
-                    state: Doc::load(self.schema, &s.state)?.encode_state()?,
+                    state: if native {
+                        s.state
+                    } else {
+                        Doc::load(self.schema, &s.state)?.encode_state()?
+                    },
                 }),
                 (None, None) => None,
             }
@@ -695,7 +717,10 @@ impl Session {
             erase: erase.as_ref().map(|(a, b)| (a.as_str(), b.as_str())),
             elems,
             ref_roots: self.pack.blob_ref_roots(),
-            live_refs: blob_refs::live_names(&doc, self.pack.blob_ref_roots())?,
+            live_refs: blob_refs::live_names(
+                fresh.as_ref().unwrap_or(&st.doc),
+                self.pack.blob_ref_roots(),
+            )?,
             now,
         };
         // a grid doc's waiting notes hold capped values: a purge takes them all, keeping the
@@ -716,11 +741,17 @@ impl Session {
         // a keyed doc's conflict copies, with what each kept version renders before the purge
         let copies = self.copies_before_purge(st)?;
         let whole_versions = purge.versions.clone();
-        let (mut counts, released) = store.purge_doc(self.doc_id, &purge)?;
+        let (mut counts, released) = match fresh {
+            Some(doc) => {
+                let out = store.purge_doc(self.doc_id, &purge)?;
+                // memory follows the store
+                st.doc = doc;
+                out
+            }
+            None => self.purge_native_records(st, &store, i, &purge, now)?,
+        };
         counts.undo_batches = undo_batches;
         counts.read_bases = read_bases;
-        // memory follows the store
-        st.doc = doc;
         // counted again on next need (the re-encoded doc's deleted elements may differ), and
         // a keyed doc's live view read afresh (values may be erased)
         st.keyed_size = None;
@@ -740,9 +771,20 @@ impl Session {
         self.reload_writers(st)?;
         st.log_entries = 0;
         st.log_bytes = 0;
-        st.state_bytes = state.len() as u64;
-        if let (Some(d), Some(s)) = (st.disk.as_mut(), &sync) {
-            d.replica = Replica::Doc(self.checked(Doc::load(self.schema, &s.state)?));
+        st.state_bytes = if native {
+            st.texts.iter().map(|(_, t)| t.len() as u64).sum()
+        } else {
+            state.len() as u64
+        };
+        let replica = match &sync {
+            Some(s) if native => Some(self.replica_from_state(st, s.state.clone())?),
+            Some(s) => Some(Replica::Doc(
+                self.checked(Doc::load(self.schema, &s.state)?),
+            )),
+            None => None,
+        };
+        if let (Some(d), Some(s), Some(replica)) = (st.disk.as_mut(), &sync, replica) {
+            d.replica = replica;
             d.replica_bytes = s.state.len() as u64;
             d.synced_hash = s.hash.clone();
             d.synced_seq = s.seq;

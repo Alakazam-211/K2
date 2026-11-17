@@ -5,7 +5,10 @@
 //! - **Log** (`updates`): every entry up to the purge's head becomes `redacted {byte
 //!   length}`; its author, client, time, surface and `on_behalf_of` stay. A new snapshot at
 //!   the head (the state re-encoded from the live doc, so no deleted content rides along as
-//!   CRDT tombstones) replaces what they held.
+//!   CRDT tombstones) replaces what they held. A native doc's log rows hold no content (its
+//!   change's apply position only): they are counted ([`PurgeCounts::native_log_rows`]) and
+//!   kept, and it gets no snapshot; the engine's own purge rewrites its records
+//!   (`native_purge.rs`).
 //! - **Snapshot**: that new snapshot.
 //! - **Versions**: the targeted ones lose all their content, the others the spans the
 //!   needles cover; entries (and names) stay, with their [`Redaction`]s.
@@ -53,8 +56,8 @@ use crate::elem::Value;
 use super::{
     dec_approval, dec_entry_full, dec_meta, dec_version_full, enc_approval, enc_doc_key,
     enc_entry_as, enc_meta, enc_snapshot, enc_sync, enc_version_redacted, ApprovalState, DocId,
-    DocStore, EntryEngine, Needles, Neutral, Redaction, Seq, StoreError, SyncState, APPROVALS,
-    CLIENTS, DOCS, DOC_KEYS, PENDING, SNAPSHOTS, SYNC, SYNCED, UPDATES, VERSIONS,
+    DocStore, EntryBody, EntryEngine, Needles, Neutral, Redaction, Seq, StoreError, SyncState,
+    APPROVALS, CLIENTS, DOCS, DOC_KEYS, PENDING, SNAPSHOTS, SYNC, SYNCED, UPDATES, VERSIONS,
 };
 
 /// Which records a purge takes whole (by change seq, or by version id).
@@ -165,6 +168,19 @@ pub struct PurgeCounts {
     /// Annotations: anchors that lost their copy of a node's name or the pack's hint (a
     /// version purge, an annotation purge).
     pub anchors: u64,
+    /// A native doc's log rows reached and kept: a native row holds no content (the engine's
+    /// records do, rewritten by the engine's own purge), so it is counted, never redacted.
+    pub native_log_rows: u64,
+}
+
+/// Without the native engine: never planted.
+fn native_rows_redacted() -> bool {
+    false
+}
+
+/// Without the native engine: never planted.
+fn native_snapshot_written() -> bool {
+    false
 }
 
 /// Replace `pid` by the pseudonym in `s`; returns whether it did.
@@ -251,7 +267,14 @@ impl DocStore {
     }
 }
 
-fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCounts, StoreError> {
+/// The purge's kit rows in `w` (module docs). A native doc's log rows are counted, never
+/// redacted, and it gets no state snapshot: its content is the engine's records, which its
+/// purge rewrites in the same transaction (`native_purge.rs`).
+pub(super) fn purge_in(
+    w: &WriteTransaction,
+    id: DocId,
+    p: &DocPurge<'_>,
+) -> Result<PurgeCounts, StoreError> {
     let mut c = PurgeCounts::default();
     let er = p.erase;
     let mut meta = {
@@ -270,24 +293,31 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
             .collect::<Result<_, _>>()?;
         for (seq, b) in rows {
             let (mut e, red) = dec_entry_full(&b)?;
-            // every entry is of the doc's engine (as at load), so each is a Yrs one here
+            // every entry is of the doc's engine (as at load)
             engine.check(&e.body)?;
-            let mut changed = red.is_none();
-            if changed {
+            let native = matches!(e.body, EntryBody::Native(_));
+            // a native row holds no content: counted and kept as it is
+            let counted = native && !native_rows_redacted();
+            let mut changed = !counted && red.is_none();
+            if counted {
+                c.native_log_rows += 1;
+            } else if changed {
                 c.log_entries += 1;
             }
-            let n = red.unwrap_or(e.body.yrs_len());
+            let n = (!native).then(|| red.unwrap_or(e.body.yrs_len()));
             if rename(&mut e.author, er) | rename_opt(&mut e.on_behalf_of, er) {
                 c.attributions += 1;
                 changed = true;
             }
             if changed {
-                t.insert((id, seq), enc_entry_as(&e, Some(n)).as_slice())?;
+                t.insert((id, seq), enc_entry_as(&e, n).as_slice())?;
             }
         }
     }
-    w.open_table(SNAPSHOTS)?
-        .insert(id, enc_snapshot(p.head, p.state).as_slice())?;
+    if engine != EntryEngine::Native || native_snapshot_written() {
+        w.open_table(SNAPSHOTS)?
+            .insert(id, enc_snapshot(p.head, p.state).as_slice())?;
+    }
     // versions
     {
         let mut t = w.open_table(VERSIONS)?;

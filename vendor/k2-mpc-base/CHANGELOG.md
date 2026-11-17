@@ -1,5 +1,403 @@
 # Changelog
 
+## v0.22.0
+
+A host release on v0.21.0. The crate version is `0.22.0`; the client's is `0.22.0`. The live
+wire stays version 3. No store needs a migration: `STORE_FORMAT` stays 6, `STORE_FORMAT_BASE` 5
+and `STORE_FORMAT_READ` 8. Pairs with the markdown, text, board, csv, psd, pptx, timeline and fab
+pack tags of this release.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.21.0 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it). The native engine stays off. The
+reference model's vendored copy is in it, at one engine commit (`vendor/README.md`).
+
+### Breaking
+
+- **`ReadResult::render_failed: Option<SessionError>`, a new field.** `ReadResult` is
+  `#[non_exhaustive]`; a host that destructures it whole adds `..`. When the pack can't render
+  the doc as its file, `Session::read` gives the doc's content with `bytes` the file as last
+  synced and the pack's error here, where it failed before.
+- **A pack's structured read verb gives its result with a warning** (`ToolOutput::warnings`,
+  naming the error's id) when the last rendering at the doc's version failed, where it returned
+  that failure before.
+- **`MPC-E823` `pack_refused` covers every refused live change**, not only a pack verb's text
+  refusal: `SessionError::PackRefused`, from a person's edit, a host's, an agent's verb,
+  `write --base`, undo, redo, revert and restore, on `@change`, the sync connection and the
+  host's calls, with `details.code` (the pack's own) and `details.reason`.
+- **`DocStore::open` refuses a store another opener holds with `StoreError::Locked`**
+  (`MPC-E505` `store_locked`, exit 6), where the store library's refusal came through as
+  `StoreError::Db`.
+- **A blob pack's edit verb needs its word** (`BlobVerb::with_word`): the registry refuses an
+  edit verb without one.
+- **Results say more** (`mpc.result/1`): every result ends with `dry_run`, after `view`, the
+  change's place; `changed` gains `bytes`. The schema's name is unchanged and every field is
+  added; a reader that compares a result whole (a saved golden) sees the new fields.
+
+### What changes for K2
+
+- **A file the pack can't write stays readable.** Show `ReadResult::bytes` as the file as last
+  synced, with `render_failed`. Map `SessionError::PackRefused` (`MPC-E823`) wherever a change
+  can be refused, and the new `SessionError::BaseUnrendered` (`MPC-E824` `base_unrendered`, exit
+  2): a whole-file write from a version whose whole read gave the synced bytes. A tick reports a
+  render failure once per version.
+- **A pack may check every live change** (`Pack::checks_edits`, `Pack::check_edit`,
+  `PackRefusal`); a pack that doesn't opt in is unchanged.
+- **Verbs on a blob doc (tier 0):** `BlobSession::run_tool` runs a file type's own verbs;
+  `Registry::for_blob_pack` lists them. **`ToolOutput::version_made()`** gives the version a call
+  made: a host tells its clients about a tier-0 doc's new version from it. `AgentWrites::VerbsOnly`
+  refuses an agent's whole-file write (`MPC-E715`) and runs its verbs. `--base V` works per node
+  (`MPC-E719`, `MPC-E723`, `MPC-E724`). New refusals: `MPC-E718` `needs_lease`, `MPC-E722`
+  `keys_reissued`, `MPC-E725` to `MPC-E729`; a blob pack's own (`BlobPack::errors`).
+- **A store where a verb on a blob doc made a version holds `blob_verbs` rows:** v0.21.0 opens,
+  reads and writes it, and refuses to rewrite it (`MPC-E502`), as for `change_verbs`.
+- **Where a change is:** `view` in every edit result; `EditOptions::view`, `WriteOptions::view`
+  and `UndoRequest::view` ask for it on a host's own calls (off by default). **An agent's view
+  address follows each verb it runs**, to its change; a person's never moves.
+- **Structure reads across an outside save:** `BlobPack::save_pairing` (default `Unknown`) and
+  `BlobPack::judge_across_save` say what a save keeps; `IndexDiff::saves`,
+  `NodeChange::identity` and `NodeBlame::outside_save` report it.
+- **Windows:** live and blob docs open (random keys from the OS generator), and folder syncs are
+  skipped there.
+- **One `SessionManager` per process**, so the native engine's cut queue runs one cut at a time
+  host-wide. The native engine stays off (`Config::native_beta`, default off); this tag's tree
+  doesn't build it.
+- **`libc`** is a dependency on glibc targets only (MIT OR Apache-2.0, already in the lock); a
+  pack's lock gains it at its next kit update.
+- **Notice, carried:** the result shape for a grid's `cell get --json` and the tier-0 index
+  verbs' `--json`, which v0.21.0's notice announced for this release, is not in this release; it
+  is still planned. Those verbs print their own JSON, as in v0.21.0.
+- **Client 0.22.0:** no API change; `WIRE.md` says an agent's view address follows its verbs.
+- **No store migration, wire still 3.** N−1 is checked both ways against v0.21.0 in every mode,
+  including a store holding `blob_verbs` rows.
+
+### Overview
+
+A file the pack can't write stays readable, and a pack may refuse a live change before it
+applies; a file type's own verbs on a blob doc, with `--base` per node and verbs-only agents;
+where each change is, in every result; structure reads across another program's save; a typed
+refusal for a store another process holds; Windows fixes; the native engine's Beta settings
+(off in this tag).
+
+### A pack's check of every live change, and a read that survives a failed render
+
+`docs/SESSIONS.md`, "A file the pack can't write". Before this release, a person's direct edit
+the pack's write-back can't write (for a splice: a driven value, a list insert, a field it
+doesn't write) was taken; the write-back then failed, and from then on every whole read, every
+structured read verb, every preview and export of the doc failed, and every tick reported the
+failure again. No format or wire change.
+
+- **Breaking: `ReadResult::render_failed: Option<SessionError>` (new field).** `ReadResult` was
+  already `#[non_exhaustive]`, so no host builds one; a host that destructures it whole adds
+  `..`. When the pack can't render the doc as its file now, `Session::read` gives the doc's
+  content and text with `bytes` the file **as last synced** (the carrier; empty for a pack that
+  keeps none) and the pack's error here, instead of failing. A host shows those bytes as the
+  file as last synced, with the error.
+- **Breaking (a behaviour change): a pack's structured read verb gives its result with a
+  warning** (one `note:` line in `ToolOutput::warnings`, naming the error's id) when the last
+  rendering at the doc's version failed. Before, it returned that failure in place of its
+  result (the old "a structured read at that version returns that error" in SESSIONS.md, now
+  rewritten). The rows that asserted the old behaviour, changed openly:
+  `tests/live_carrier.rs` `a_read_reports_a_render_failure_without_encoding` (Ok with the
+  warning, still no encode) and `tests/live_paired.rs`
+  `row_a_pairing_that_does_not_fit_is_refused_typed` (the structured read is Ok with a warning
+  naming `MPC-E521`; a whole read gives the synced bytes and the refusal, typed). Two rows of
+  `tests/live_paired.rs` whose read after a re-keyed save passed only because nothing failed
+  now say so: their `row list` and whole read refuse a warning or `render_failed`.
+- **Unchanged: what reads the rendered file still fails** when it can't be rendered, as
+  before: the kit's text read verbs, a table's read verbs and line addresses, `file_now`,
+  `file_at`, an export, a flush.
+- **The tick reports a render failure once per version.** A write-back that can't render the
+  doc is reported in the first tick's `TickReport::errors`; later ticks at that version don't
+  try again while the failure stands. A new version or a new carrier tries again; a disk error is
+  still retried every tick.
+- **New `Pack::checks_edits()` (default `false`) and `Pack::check_edit(view, edits) ->
+  Result<(), PackRefusal>` (default: accept),** with the new `PackRefusal { code, message }`.
+  A pack that opts in is asked of every live change before it applies, whoever makes it: a
+  person's edit, a host's, an agent's verb, `write --base`, the hunk channel, undo, redo,
+  revert, restore; step by step for a change of several steps. Not asked: outside saves, the
+  import, and a purge's removal (erasure always goes through). Every other pack is unchanged.
+- **Errors.** A refused change is `SessionError::PackRefused`, **`MPC-E823` `pack_refused`**
+  (exit 2), the entry a pack's text-form verb refusal already used, now also listed for every
+  change (`@change`, the sync connection, the host): `details.code` is the pack's own code,
+  `details.reason` why; nothing applied, the version unmoved. New **`MPC-E824`
+  `base_unrendered`** (exit 2), `SessionError::BaseUnrendered { base }`: a whole-file write
+  (`write --base`, a table's `write --base` or `--seen`) from a version whose whole read was
+  given the synced bytes. The session keeps those versions in memory, at most 32 ranges (past
+  that the two oldest merge, which only refuses more); a reload forgets them.
+- **Tests:** `tests/pack_check_edit.rs` (a person's edit, an agent's verb and computed edit, an
+  undo, an accepted change, a pack that doesn't opt in, a text doc, a purge's removal) and
+  `tests/render_net.rs` (the whole read, the structured read, three ticks giving one report, the
+  base guard on a table and a text doc, no pairing made and the doc still dirty). Plants
+  (`KeyedMutant`), each caught by one row by name: `EditCheckDropped` (the commit doesn't ask
+  the pack) and `ReadReplaysRenderFailure` (the old replay).
+
+### Verbs on a blob doc (additive)
+
+- **A file type's own verbs on a tier-0 doc** (`BlobPack::verbs`, `BlobVerb`): a verb returns a
+  plan, the byte ranges to replace (`BlobPlan`, `Span`); the kit applies it, copying every other
+  byte from its verified reader, checks the output with the pack's own index (a node the verb
+  didn't declare refuses), and records one version with the verb. `BlobSession::run_tool` runs
+  them; `Registry::for_blob_pack` lists and checks them (`capabilities` gives each one's `merge`
+  and `input`). `docs/SESSIONS.md`, "Verbs on a blob doc".
+- **Merge or lease:** an edit verb says whether the pack's merge covers it (`VerbMerge::Pack`) or
+  it runs only under the caller's own lease (`VerbMerge::Lease`, the note `lease_only`).
+- **Guards:** `--if-version`, the lease, agent writes, and, under `ClaimPolicy::Respect`, an
+  agent's change to a node someone else claims (`MPC-E301`). Head moving during the plan: one
+  more plan, then `MPC-E110`.
+- **`--base V` per node:** a call that read an older version lands on head unless a node it
+  changes (at `V` or at head: the verb runs at both) was changed since in a way that overlaps
+  (`MPC-E723 base_moved`, with `conflicts`); text is a field of its own, attributes field by
+  field, and keys a verb creates never conflict. Another program's save in between that the
+  pack doesn't prove keeps keys refuses `MPC-E719 base_across_unproven_save`; keys the kit
+  minted refuse `MPC-E724 base_weak_key` (use `--if-version`). `docs/SESSIONS.md`, "`--base` per
+  node".
+- **`AgentWrites::VerbsOnly`:** a file type whose agents change it only through its verbs: an
+  agent's whole-file `write` and `expect_save` refuse `MPC-E715`, its verbs run.
+  `AgentWrites::Refused` and `Allowed` are unchanged (`Refused` refuses verbs too).
+- **`BlobVerb::word`** (`with_word`): an edit verb's past-tense word for results, required
+  (lowercase, not empty: the registry refuses an edit verb without one), listed in
+  `capabilities` and carried in the verb's result as `changed.word`. A pack's edit verbs need a
+  word at their next kit update.
+- **A hold's reach per node kind** (`BlobPack::hold_reach`, `HoldReach::Node`, `Subtree`,
+  `Members(attr)`): under `ClaimPolicy::Respect` an agent's verb changing a node inside the reach
+  of someone else's hold is refused (`MPC-E301`), the reach read at the version the verb runs
+  on.
+- **The dry run** (`--dry-run`) on these verbs, by the one contract for every tier, and
+  `--expect DIGEST` on the real run.
+- **New refusals:** `MPC-E718 needs_lease`, `E725 bad_plan`, `E726 strayed`, `E727
+  output_unreadable`, `E728 verb_too_large`, `E729 not_as_previewed`; a blob pack's own refusals
+  (`BlobPack::errors`).
+- **The result** (`mpc.result/1`): a new field `dry_run` at the end (after `view`), on every
+  result, and a tier-0 verb's `view` (its changed nodes, their containers, the last one's place);
+  `changed` gains `bytes` (null on a live doc; a tier-0 verb's sizes, ranges and digest), and a tier-0
+  verb's `changed` comes from the index diff. The saved result goldens changed only by these
+  fields.
+- **Records:** `blob_verbs`, one more additive table on the terms of `change_verbs` (an older kit
+  refuses a rewrite of a store holding it, `MPC-E502`); `BlobVersion::verb` and `calls`,
+  `BlobLogEntry::verb` and `calls`, `NodeBlame::verb` (and `verb` in the index blame's JSON).
+- **A verb's version is indexed at its commit**, from the output its check read, exactly as the
+  host's index job would record it (row, minted keys, limits, `IndexReady`), so the next verb
+  doesn't wait for a job.
+- **`ToolOutput::version_made()`**: the version a call made, if any (a live edit's, or a tier-0
+  verb's): a host tells its clients about a tier-0 doc's new version from it, as from a write's
+  `BlobWriteResult`.
+- **`BlobStatus::merge`**: the merge bound against the current version (`MergeBound`), and the
+  note `merge_over_bound` on every verb result over it.
+- **Limits:** `blob_verb_max_bytes` (256 MiB), `blob_verb_max_spans` (1,000,000),
+  `blob_verb_max_insert_bytes` (256 MiB).
+
+### Structure reads across an outside save (additive)
+
+- **`BlobPack::save_pairing(&SaveFacts) -> SavePairing`** (`Proven`, `Unknown`, `Reissues`;
+  default `Unknown`): what a file type knows of whether another program's save keeps its node
+  keys. Asked of each outside save a structure read crosses. `docs/SESSIONS.md`, "Across an
+  outside save".
+- **`BlobPack::judge_across_save`** and `anchor::judge_across_save_by_default`: a key across an
+  outside save is judged the node just before the save against the node in it; the default is the
+  pack's own judge, then renamed and either content changed or moved past its diagonal (only when
+  both bounds are known) reads as a doubt.
+- **`index_diff`**: `IndexDiff::saves` (`SaveCrossing`: version, pairing, `keys_kept`), and
+  `NodeChange::identity` (`Identity::Doubt`, `Identity::Unchecked`); in the JSON, `saves` in the
+  tail and `identity` on a row only when there is one. A save whose pack says `Reissues` refuses:
+  new **`MPC-E722 keys_reissued`**, exit 1.
+- **Anchors** read across an outside save are judged the same way (`suspect`, the existing
+  doubts); a `Reissues` save leaves them `suspect`. The state an index job records (and its
+  `AnchorState` event) is judged the same way, minting a version's keys as a read does when
+  none were recorded.
+- **`index_blame`**: `NodeBlame::outside_save` (`ends_on: "outside_save"` in the JSON).
+
+### Where a change is: the view in every edit result (additive)
+
+- **`view` in a call's result** (`mpc.result/1`, after `warnings`), and `EditResult::view`
+  (`session::ViewAt`, `ViewUnit`): where an edit's change is, by the addresses a person's view
+  and a still use, as of the version it made: the primary view address, the containers and
+  units it touched (each unit live or deleted), a grid verb's cells, a text change's lines,
+  the verb's playhead. Null when the call changed nothing. `docs/SESSIONS.md`, "A call's
+  result as data", has the rules: the last container touched wins; with a 3D slot the address
+  is the last unit; a deleted container's is the next one, else the previous one; a text doc's
+  is the innermost named span holding the change, else `L<first>`; a verb may name its own
+  (`StructOutput::viewing`).
+- **`Pack::text_units`** (default none, `session::TextUnit`): a text pack's named spans (a
+  Markdown heading's section), each with its address and lines, for a text change's view.
+- **An agent's verb moves its view address** to its change, as it moves the agent's focus and
+  selection; a person's never moves. Every verb through `run_tool`, a text doc's too.
+- **A host asks for the view** of its own calls with `EditOptions::view`, `WriteOptions::view`
+  and `UndoRequest::view` (default off: `EditResult::view` is `None`).
+- **Known limits** (each held by `known_limits_of_the_view`, which fails when one stops
+  holding): a revert and a restore give no view (`HistoryOptions` has no view option yet); a
+  grid host write (`write_base_grid`, `write_live_grid`) gives none; a grid-slot change's cells
+  come only from a verb's report (`StructOutput::writing`), so cells written with no report give
+  `cells: null`.
+- Test-only: the plants `view-dropped`, `view-first-container`, `view-deleted-live`,
+  `view-moves-person`, `view-section-outer` and `view-address-unchecked`
+  (`differential::ErgoMutant`), in the plants part (`tests/view_address.rs`).
+
+### One opener per store, refused typed (a fix)
+
+`docs/SESSIONS.md`, "Lifecycle", item 7. No format change.
+
+- **`DocStore::open` refuses a store another opener holds with `StoreError::Locked`**
+  (`MPC-E505` `store_locked`, exit 6), before anything is read or written. Before this, the
+  store library's refusal (it holds an exclusive OS lock on the store file for the store's
+  life) came through untyped, as `StoreError::Db`. `DocStore::open_with_retry` still waits for
+  the holder, and gives the same refusal past its deadline.
+- **`MPC-E505`'s wording:** "Another process has this document open", with a next step to
+  close it there or open with a wait (it named a daemon hand-off only).
+- **An open leaves another opener's rewrite in flight alone:** the temp file an interrupted
+  rewrite left is removed only once the opener holds the store.
+- **For hosts:** match `StoreError::Locked` on any open, not only after a wait.
+- **Tests:** `store/lock_tests.rs`: two opens in one process; a second process (the test binary
+  run again) holding the store refuses this one's open, and once it is killed the store opens
+  here with no lock file left behind; the wait takes the store when the holder exits and refuses
+  past its deadline. They also guard that the store library still locks its file. Plant
+  `MPC_STORE_PLANT=store-lock-untyped`, caught at the second open's assert.
+
+### Windows: random keys from the OS generator; folder fsync is unix-only (from K2)
+
+No format change; unix behaviour is unchanged.
+
+- **Random keys on Windows:** doc hash keys, blob space keys and the fence's nonce come from the
+  system generator (`RtlGenRandom`, advapi32) there, which has no `/dev/urandom`. Before this,
+  every live or blob doc open on Windows failed with `MPC-E509` / `MPC-E707` ("no randomness
+  source"). Unix still reads `/dev/urandom`.
+- **Folder fsync is unix-only:** Windows refuses to open a folder as a file ("Access is
+  denied"), and NTFS journals a folder's entries, so the folder sync after placing a blob, a
+  chunked blob's folders and segments, a compacted segment, a store rewrite and a doc's
+  write-back is skipped there. Before this, each of those failed on Windows.
+- **Tests:** `hash.rs`: the OS generator fills buffers of several sizes whole (up to one above
+  the most a single unix read returns) and two calls differ; on unix the folder sync opens the
+  folder (a missing one is refused); on Windows it is a no-op (that row runs on Windows only).
+
+### The native engine as a Beta in sessions (feature `native`, off by default)
+
+`docs/SESSIONS.md`, "The native engine (a Beta)". No store format change.
+
+- **A host chooses a doc's engine when it makes the doc, and only then:**
+  `SessionManager::open_with` and `open_file_with` take `OpenOptions { engine }`
+  (`DocEngine::Standard`, the default, or `DocEngine::Native`). A stored doc opens on the engine
+  its stamp names, whatever the options say. `open` and `open_file` are unchanged.
+- **The Beta switch, `Config::native_beta`** (default off; listed by `capabilities`). With it off,
+  a create on the native engine is refused before anything is read or made: `MPC-E167`
+  `native_beta_off`, exit 2, `SessionError::NativeBetaOff`. Docs already on the native engine
+  open, edit and save whatever it says.
+- **Keys:** `SessionManager::with_native_keys` takes the host's `NativeKeysFor`; it is asked when a
+  native doc is made or loaded, by the doc's `NativeDocId` beside its `DocKey`:
+  `NativeKeysFor::keys(&self, doc: &DocKey, id: &NativeDocId)`. A `NativeDocId` is the store's
+  salt (16 random bytes, minted once per store, in two `meta` rows that kits without the native
+  engine copy through and never read) and the doc's id there (reserved before a create): stable
+  for the doc's life, a rename included, and never another doc's, in one store or in two. A host
+  derives the doc's keys from it (`NativeDocId::bytes`), never from the path. Without keys for a
+  doc, it is refused (`MPCE-E566`) and nothing is written.
+- **A session holds a native doc:** an import makes it with its first engine records in the
+  same transaction as the doc; a load reads it by the engine's own record load; every change
+  (edits, live edits at a base, `write --base`, undo, redo, revert, restore, outside saves) is
+  logged as a native log row naming the engine's change, its records written in the change's own
+  transaction, person-writer rows included. People and agents join one replica, the host's, each
+  its own writer, as on Yrs: presence, claims, undo per participant, blame and change events
+  work as they do there.
+- **A native doc's disk replica is text only:** the file's texts at the sync point, stored in the
+  synced state in a kit-neutral form, never engine bytes; a write-back makes no engine encode. An
+  outside save is merged from those texts, as on Yrs.
+- **The live-text cap:** a native doc's live text (its text roots together) stays within the
+  native engine's limit on the text one change may carry (4 MiB at its default limits; the kit
+  never changes them). An edit that would grow it past is refused with its own code,
+  `SessionError::NativeTextCap` (`MPC-E909` `native_text_cap`, exit 2, as the standard engine's
+  size limits), nothing applied and nothing dropped; an outside save that would is declined
+  (`too_large`), the doc as it was.
+- **One replica:** a native doc's `Doc::encode_diff`, `check_client_update` and
+  `apply_client_update` (feature `untrusted-wire`) refuse its own sync bytes, `MPC-E166`
+  `native_one_replica`, and Yjs bytes, `MPC-E168` `native_no_yjs` (both exit 2, nothing
+  applied): `DocError::NativeOneReplica`, `DocError::NativeNoYjs`.
+- **Purge:** an owner's purge of a native doc, whatever its scope, purges the kit's tables as on
+  Yrs and has the native engine erase every deleted element of the doc's text everywhere its
+  records hold it, its live text kept (a Yrs doc keeps no deleted content). The engine's purge is
+  one change, logged as a change of no text by the owner; its records, the rewrites of earlier
+  records, the log rows and the kit's purge are written in one store transaction. Another live
+  instance of the doc refuses it, `MPC-E523` `purge_doc_open`.
+- **No move to or from tier 0:** demoting a native doc, or promoting at its key, is refused
+  `SessionError::NativeNoTier0` (`MPC-E721` `native_no_tier0`, exit 4, as the standard engine's
+  refusals of those calls), nothing changed.
+- **The cut cadence, a host setting:** `Config::native_cut_cadence`, a `CutCadence` (listed by
+  `capabilities` as `native_cut_floor`, `native_cut_ceiling`, `native_cut_divisor`): a live cut
+  once the changes since the last cut reach `min(ceiling, max(floor, n / divisor))`. The
+  default, `CutCadence::BETA`, is `min(200, max(100, n / 30))`; `CutCadence::new` refuses a
+  floor of 0, a floor over the ceiling, a ceiling past 10,000 and a divisor of 0
+  (`CadenceError`). A doc takes the setting at its next open.
+- **Exit codes:** every native refusal exits as the standard engine's refusal in the same
+  situation, or in the class it was ruled into where there is none (a row holds the table).
+- **Not yet in the Beta:** a native doc's log isn't compacted (its compaction is the engine's
+  cut, which waits for the engine's single-replica mode), and conversion between engines isn't
+  there.
+- **For hosts:** match `SessionError::NativeBetaOff`, `SessionError::NativeTextCap`,
+  `SessionError::NativeNoTier0` and the two `DocError` variants (non-exhaustive enums,
+  additive); `Config` has two more fields (non-exhaustive, additive); implement
+  `NativeKeysFor::keys` with its `NativeDocId` argument.
+- **Tests:** `session/native_beta_tests.rs`: the switch and the choice, a person and an agent on
+  one replica, person-writer rows on the native commit, the verbs ending alike on both engines,
+  blame's sampled check, outside saves through the text replica, the live-text cap and the
+  default limits, sync bytes refused, keys by the store's salt and the doc's id, a purge, tier 0
+  refused, the cut cadence; each row runs on Yrs and on the native engine where it applies.
+  `errors/tests.rs`: every native refusal exits as its standard twin. Plants (`MPC_BETA_PLANT`), one per run, each caught by its row. `tests/person_writers.rs`'s
+  native column delivers through the conformance hook (the same admission code), since a native
+  doc's public sync calls refuse.
+
+### The native engine's cut queue: its settings (additive)
+
+`docs/SESSIONS.md`, "The native engine (a Beta)". No format change.
+
+- **New `Config::native_cut_queue`, a `CutQueueSettings`,** listed by `capabilities` as
+  `native_cut_idle_ms` (default 250), `native_cut_duty_pct` (default 10) and
+  `native_cut_slow_ms` (default 250). They say when the host-wide cut queue runs a native
+  document's cut: one at a time; one entry per document, forced ones first (twice the cadence,
+  or past the size budget), then the most changes since the last cut, then the oldest; a cut
+  that isn't forced only after `native_cut_idle_ms` with no native commit; at most
+  `native_cut_duty_pct` of the time (after a cut of `d` ms, none for `d * (100 / duty - 1)` ms,
+  forced ones included); a refused cut stays queued and is tried again after that gap; a cut
+  over `native_cut_slow_ms` is reported slow.
+- `CutQueueSettings::new` checks them: it refuses an idle window of 0 or past a minute, a duty
+  outside 1% to 50% and a slow threshold of 0, with a `CutQueueError` naming the bound.
+- **For hosts: one `SessionManager` per process.** The queue is per manager, so the
+  one-cut-at-a-time rule holds for the whole host only with one manager in the process.
+- The queue runs native cuts once the native engine's single-replica mode is in the kit; until
+  then nothing is queued, and the settings change nothing.
+- **Tests:** `session/cut_queue_tests.rs`, on a fake clock: one cut at a time, idle, a forced cut
+  while editing goes on, the duty gap after a measured cut (a forced one waits it out too), the
+  order, a refused cut kept and tried again, the slow report, one entry per document, and the
+  settings' checks and defaults. Plants (`MPC_BETA_PLANT`), one per run, each caught at its
+  row's assert: `queue-runs-two`, `idle-ignored`, `duty-ignored`, `forced-waits-for-idle`,
+  `refused-dropped`.
+
+### Freed memory handed back to the OS after a cut (glibc)
+
+- `memory::release_freed` (internal, for the native engine's cut queue) asks the allocator to
+  return every free page to the OS: glibc's `malloc_trim(0)`, which returns free pages from every
+  arena, not only from the top of the heap. On other platforms it does nothing yet; a call is
+  added there only where a row shows it returns at least a quarter of the freed memory.
+- **The kit's first unsafe block: glibc `malloc_trim`, behind a target cfg.** The crate now
+  denies unsafe code (`#![deny(unsafe_code)]`), with the one call allowed and its safety
+  argued at the call.
+- `libc` is a dependency on glibc targets only (MIT OR Apache-2.0; already in the lock through
+  the store library).
+- **Tests:** `memory::tests::freed_memory_leaves_the_process` (glibc): 256 MiB of small blocks
+  resident, fifteen in sixteen freed, and resident memory drops by at least 64 MiB after the
+  call. Plant `MPC_BETA_PLANT=release-skipped`, caught at the drop's assert.
+
+### A native doc takes no snapshot
+
+- **`DocStore::compact` refuses a native doc** before anything is written: its state is its
+  engine's records, each under the engine's own checksum and MAC, never a snapshot. With the
+  native engine it is `StoreError::NativeSnapshotRefused` (`MPC-E520` `engine_mismatch`, exit 6);
+  without it, that doc's own `NativeEngineMissing` (`MPC-E169`). A Yrs doc compacts as before.
+- **Tests:** a native doc's compact refused on both builds, plant
+  `MPC_ENTRY_PLANT=native-snapshot-unguarded`, caught at its row's own assertion.
+
+### The reference model at one engine commit (vendored; test-only)
+
+- The reference model and the two layers it composes are vendored at one engine commit, each
+  directory byte for byte that crate's directory there (`vendor/README.md`). Std only; nothing a
+  host builds depends on them.
+
+
 ## v0.21.0
 
 A host release on v0.20.0. The crate version is `0.21.0`; the client's is `0.21.0`. The live

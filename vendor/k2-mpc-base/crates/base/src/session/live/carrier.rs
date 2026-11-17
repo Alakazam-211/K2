@@ -181,7 +181,11 @@ impl Session {
             .disk
             .as_mut()
             .ok_or_else(|| SessionError::Disk("no disk replica to pair the carrier".into()))?;
-        let content = self.content_of(d.replica.get()?)?;
+        let content = match &d.replica {
+            // a native doc's replica is the file's texts
+            super::Replica::Text(texts) => super::neutral(texts),
+            _ => self.content_of(d.replica.get()?)?,
+        };
         self.make_pairing(&content, &codec)
     }
 
@@ -291,10 +295,15 @@ impl Session {
         let pairing = match stored {
             Some(p) => Some(p),
             None => {
-                let made = Doc::load(self.schema, &synced.state)
-                    .map_err(SessionError::from)
-                    .and_then(|d| self.content_of(&d))
-                    .and_then(|c| self.make_pairing(&c, &st.codec));
+                let content = match st.doc.is_native() {
+                    // a native doc's synced state is the file's texts (`live/native.rs`)
+                    true => super::text_replica::decode_texts(&self.schema, &synced.state)
+                        .map(|t| super::neutral(&t)),
+                    false => Doc::load(self.schema, &synced.state)
+                        .map_err(SessionError::from)
+                        .and_then(|d| self.content_of(&d)),
+                };
+                let made = content.and_then(|c| self.make_pairing(&c, &st.codec));
                 match made {
                     Ok(p) => {
                         let _ = store.set_carrier_pairing(self.doc_id, synced.seq, &p.to_bytes());

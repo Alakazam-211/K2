@@ -22,7 +22,7 @@
 #   base-d       the kit: disk, if_version, blame, blame_incremental (blame_cost is ignored: a
 #                measurement), and position_index with its planted engine bugs (v0.9.7)
 #   errors       the kit: error_ids (the registry snapshot, explain goldens, ERRORS.md, the walk), tools_session, pack_verbs, and the mpc example
-#   base-b       the kit: tier 0's integration tests (tier0, tier0_large, promote, demote), the parity harnesses (parity, parity_blob, parity_grid) and erasure
+#   base-b       the kit: tier 0's integration tests (tier0, tier0_large, tier0_verbs, tier0_outside, tier0_base, promote, demote), the parity harnesses (parity, parity_blob, parity_grid) and erasure
 #   spec-undo    the undo spec suite, its mutant tests included
 #   wire-guard   the untrusted-wire build guard (tools/tests/wire-guard.sh), and the native
 #                engine's absence without its feature
@@ -67,8 +67,8 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
           # the pack template's carrier-row check (scripts/pack-checks/carrier-row.sh), self-test
           timed carrier_row_selftest sh tools/test-carrier-row.sh
           ;;
-  base-b) timed build cargo test -p k2-mpc-base --test tier0 --test tier0_large --test promote --test demote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit --no-run
-          timed base_b tests -p k2-mpc-base --test tier0 --test tier0_large --test promote --test demote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit ;;
+  base-b) timed build cargo test -p k2-mpc-base --test tier0 --test tier0_large --test tier0_verbs --test tier0_outside --test tier0_base --test promote --test demote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit --no-run
+          timed base_b tests -p k2-mpc-base --test tier0 --test tier0_large --test tier0_verbs --test tier0_outside --test tier0_base --test promote --test demote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit ;;
   base-c) timed build cargo test -p k2-mpc-base --test soak --test edit_paths --test edit_cost --test history --test presence --test sessions --test roster --test app_view --test overflow --no-run
           timed base_c tests -p k2-mpc-base --test soak --test edit_paths --test edit_cost --test history --test presence --test sessions --test roster --test app_view --test overflow ;;
   base-d) timed build cargo test -p k2-mpc-base --test disk --test if_version --test blame --test blame_incremental --test blame_cost --no-run
@@ -139,6 +139,270 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
             'k2-mpc-base::agent_results/text_unchanged_with_json_off' \
             crates/base/tests/agent_results.rs 'text stays the default' MPC_ERGO_MUTANT=json-leaks-to-text \
             -- tests -p k2-mpc-base --test agent_results text_unchanged_with_json_off
+          # the view plants (differential::ErgoMutant, MPC_ERGO_MUTANT): each fails the rows of
+          # tests/view_address.rs that read what it breaks, at their own assertions
+          timed control_view_address control view-address -- tests -p k2-mpc-base --test view_address
+          timed plant_view_dropped plant view-dropped \
+            'k2-mpc-base::view_address/edit_result_has_view
+             k2-mpc-base::view_address/view_is_the_presence
+             k2-mpc-base::view_address/view_on_delete
+             k2-mpc-base::view_address/view_3d_is_the_unit
+             k2-mpc-base::view_address/view_never_moves_a_person
+             k2-mpc-base::view_address/view_time
+             k2-mpc-base::view_address/view_address_is_grammar
+             k2-mpc-base::view_address/view_text_lines
+             k2-mpc-base::view_address/view_markdown_section
+             k2-mpc-base::view_address/view_host_run
+             k2-mpc-base::view_address/known_limits_of_the_view
+             k2-mpc-base::view_address/view_multi_step_undo' \
+            crates/base/tests/view_address.rs '' MPC_ERGO_MUTANT=view-dropped \
+            -- tests -p k2-mpc-base --test view_address
+          timed plant_view_first_container plant view-first-container \
+            'k2-mpc-base::view_address/view_is_the_presence' \
+            crates/base/tests/view_address.rs 'the view is the presence' MPC_ERGO_MUTANT=view-first-container \
+            -- tests -p k2-mpc-base --test view_address
+          timed plant_view_deleted_live plant view-deleted-live \
+            'k2-mpc-base::view_address/view_on_delete' \
+            crates/base/tests/view_address.rs 'a deleted unit is not live' MPC_ERGO_MUTANT=view-deleted-live \
+            -- tests -p k2-mpc-base --test view_address
+          timed plant_view_moves_person plant view-moves-person \
+            'k2-mpc-base::view_address/view_never_moves_a_person' \
+            crates/base/tests/view_address.rs "a person's view never moves" MPC_ERGO_MUTANT=view-moves-person \
+            -- tests -p k2-mpc-base --test view_address
+          timed plant_view_section_outer plant view-section-outer \
+            'k2-mpc-base::view_address/view_markdown_section
+             k2-mpc-base::view_address/view_host_run' \
+            crates/base/tests/view_address.rs '' MPC_ERGO_MUTANT=view-section-outer \
+            -- tests -p k2-mpc-base --test view_address
+          timed plant_view_address_unchecked plant view-address-unchecked \
+            'k2-mpc-base::view_address/view_address_is_grammar' \
+            crates/base/tests/view_address.rs 'a view address the grammar refuses is left out' MPC_ERGO_MUTANT=view-address-unchecked \
+            -- tests -p k2-mpc-base --test view_address
+          # the tier-0 verb path's plants (differential::Tier0VerbMutant, MPC_T0V_MUTANT): each
+          # fails the rows of tests/tier0_verbs.rs that read what it breaks, at their own
+          # assertions
+          timed control_tier0_verbs control tier0-verbs -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_applier_off_by_one plant t0v-applier-off-by-one \
+            'k2-mpc-base::tier0_verbs/copy_exact
+             k2-mpc-base::tier0_verbs/dry_run_matches_real' \
+            crates/base/tests/tier0_verbs.rs "the bytes outside the spans are the input's" MPC_T0V_MUTANT=applier-off-by-one \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_plan_unchecked plant t0v-plan-unchecked \
+            'k2-mpc-base::tier0_verbs/plan_checked' \
+            crates/base/tests/tier0_verbs.rs 'is refused as a bad plan (E725)' MPC_T0V_MUTANT=plan-unchecked \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_stray_unchecked plant t0v-stray-unchecked \
+            'k2-mpc-base::tier0_verbs/strayed_refused' \
+            crates/base/tests/tier0_verbs.rs "a neighbour's change refuses E726" MPC_T0V_MUTANT=stray-unchecked \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_output_index_skipped plant t0v-output-index-skipped \
+            'k2-mpc-base::tier0_verbs/output_checked' \
+            crates/base/tests/tier0_verbs.rs 'an output the index refuses gives E727' MPC_T0V_MUTANT=output-index-skipped \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_units_from_plan plant t0v-units-from-plan \
+            'k2-mpc-base::tier0_verbs/units_from_index
+             k2-mpc-base::tier0_verbs/dry_run_matches_real' \
+            crates/base/tests/tier0_verbs.rs "the changed units are the index diff's" MPC_T0V_MUTANT=units-from-plan \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_lease_only_ignored plant t0v-lease-only-ignored \
+            'k2-mpc-base::tier0_verbs/lease_only' \
+            crates/base/tests/tier0_verbs.rs "without the caller's own lease, E718" MPC_T0V_MUTANT=lease-only-ignored \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_verb_not_recorded_blob plant t0v-verb-not-recorded-blob \
+            'k2-mpc-base::tier0_verbs/verb_recorded' \
+            crates/base/tests/tier0_verbs.rs "the verb's record holds" MPC_T0V_MUTANT=verb-not-recorded-blob \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_commit_without_recheck plant t0v-commit-without-recheck \
+            'k2-mpc-base::tier0_verbs/head_moved_mid_plan' \
+            crates/base/tests/tier0_verbs.rs 'one more plan, then stale (E110)' MPC_T0V_MUTANT=commit-without-recheck \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_claim_unchecked plant t0v-claim-unchecked \
+            'k2-mpc-base::tier0_verbs/claims_respected' \
+            crates/base/tests/tier0_verbs.rs 'refuses E301' MPC_T0V_MUTANT=claim-unchecked \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_merge_note_missing plant t0v-merge-note-missing \
+            'k2-mpc-base::tier0_verbs/merge_bound_shown' \
+            crates/base/tests/tier0_verbs.rs 'merge_over_bound on a verb over the bound' MPC_T0V_MUTANT=merge-note-missing \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_commits plant t0v-commits \
+            'k2-mpc-base::tier0_verbs/dry_run_matches_real
+             k2-mpc-base::tier0_verbs/dry_run_leaves_no_trace
+             k2-mpc-base::tier0_verbs/dry_run_pack_is_pure
+             k2-mpc-base::tier0_verbs/expect_takes_the_previewed_digest
+             k2-mpc-base::tier0_verbs/view_on_blob_doc
+             k2-mpc-base::tier0_verbs/verb_word
+             k2-mpc-base::tier0_verbs/verbs_only_admits_verbs' \
+            crates/base/tests/tier0_verbs.rs 'a dry run commits nothing' MPC_T0V_MUTANT=commits \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_takes_lease plant t0v-takes-lease \
+            'k2-mpc-base::tier0_verbs/dry_run_leaves_no_trace' \
+            crates/base/tests/tier0_verbs.rs 'a dry run takes no lease' MPC_T0V_MUTANT=takes-lease \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_charges_rate plant t0v-charges-rate \
+            'k2-mpc-base::tier0_verbs/dry_run_leaves_no_trace' \
+            crates/base/tests/tier0_verbs.rs 'a dry run is charged as a read' MPC_T0V_MUTANT=charges-rate \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_moves_presence plant t0v-moves-presence \
+            'k2-mpc-base::tier0_verbs/dry_run_leaves_no_trace' \
+            crates/base/tests/tier0_verbs.rs 'a dry run moves no presence' MPC_T0V_MUTANT=moves-presence \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_stores_index plant t0v-stores-index \
+            'k2-mpc-base::tier0_verbs/dry_run_leaves_no_trace' \
+            crates/base/tests/tier0_verbs.rs 'a dry run emits no event' MPC_T0V_MUTANT=stores-index \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_leaves_put plant t0v-leaves-put \
+            'k2-mpc-base::tier0_verbs/dry_run_leaves_no_trace' \
+            crates/base/tests/tier0_verbs.rs 'a dry run leaves no open put' MPC_T0V_MUTANT=leaves-put \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_writes_back plant t0v-writes-back \
+            'k2-mpc-base::tier0_verbs/dry_run_leaves_no_trace' \
+            crates/base/tests/tier0_verbs.rs 'a dry run leaves the file as it was' MPC_T0V_MUTANT=writes-back \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_skips_guards plant t0v-skips-guards \
+            'k2-mpc-base::tier0_verbs/dry_run_refuses_alike' \
+            crates/base/tests/tier0_verbs.rs 'the dry run refuses as the real run does' MPC_T0V_MUTANT=skips-guards \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_pack_impure plant t0v-pack-impure \
+            'k2-mpc-base::tier0_verbs/dry_run_pack_is_pure' \
+            crates/base/tests/tier0_verbs.rs 'the pack is pure' MPC_T0V_MUTANT=pack-impure \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_registry_unchecked plant t0v-registry-unchecked \
+            'k2-mpc-base::tier0_verbs/registry_rules
+             k2-mpc-base::tier0_verbs/verb_word' \
+            crates/base/tests/tier0_verbs.rs 'the registry refuses each bad pack' MPC_T0V_MUTANT=registry-unchecked \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_verb_kept_on_erase plant t0v-verb-kept-on-erase \
+            'k2-mpc-base::tier0_verbs/verb_recorded' \
+            crates/base/tests/tier0_verbs.rs "the verb's record holds" MPC_T0V_MUTANT=verb-kept-on-erase \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_version_made_hidden plant t0v-version-made-hidden \
+            'k2-mpc-base::tier0_verbs/verb_version_event' \
+            crates/base/tests/tier0_verbs.rs "a verb's version is told as a write's" MPC_T0V_MUTANT=version-made-hidden \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_view_first_node plant t0v-view-first-node \
+            'k2-mpc-base::tier0_verbs/view_on_blob_doc' \
+            crates/base/tests/tier0_verbs.rs "the view is the last changed node's place" MPC_T0V_MUTANT=view-first-node \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_seed_without_carry plant t0v-seed-without-carry \
+            'k2-mpc-base::tier0_verbs/seeded_index_is_the_jobs' \
+            crates/base/tests/tier0_verbs.rs 'the seeded index is the job' MPC_T0V_MUTANT=seed-without-carry \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_seed_skipped plant t0v-seed-skipped \
+            'k2-mpc-base::tier0_verbs/seeded_index_is_the_jobs
+             k2-mpc-base::tier0_verbs/next_verb_needs_no_job' \
+            crates/base/tests/tier0_verbs.rs 'the seeded index' MPC_T0V_MUTANT=seed-skipped \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_word_dropped plant t0v-word-dropped \
+            'k2-mpc-base::tier0_verbs/verb_word' \
+            crates/base/tests/tier0_verbs.rs 'the word is in capabilities and in the result' MPC_T0V_MUTANT=word-dropped \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          timed plant_t0v_verbs_only_check_in_verb_path plant t0v-verbs-only-check-in-verb-path \
+            'k2-mpc-base::tier0_verbs/verbs_only_admits_verbs' \
+            crates/base/tests/tier0_verbs.rs 'its verb lands' MPC_T0V_MUTANT=verbs-only-check-in-verb-path \
+            -- tests -p k2-mpc-base --test tier0_verbs
+          # the reads across an outside save (tests/tier0_outside.rs): each plant alone
+          timed control_tier0_outside control tier0-outside -- tests -p k2-mpc-base --test tier0_outside
+          timed plant_t0o_reuse_reads_attached plant t0o-reuse-reads-attached \
+            'k2-mpc-base::tier0_outside/outside_reuse_save
+             k2-mpc-base::tier0_outside/outside_stored_state_matches_read
+             k2-mpc-base::tier0_outside/outside_minted_keys_stored_matches_read' \
+            crates/base/tests/tier0_outside.rs 'a reused key reads in doubt' MPC_T0V_MUTANT=reuse-reads-attached \
+            -- tests -p k2-mpc-base --test tier0_outside
+          timed plant_t0o_judge_against_fingerprint plant t0o-judge-against-fingerprint \
+            'k2-mpc-base::tier0_outside/outside_two_honest_edits
+             k2-mpc-base::tier0_outside/outside_stored_state_matches_read' \
+            crates/base/tests/tier0_outside.rs 'read no doubt' MPC_T0V_MUTANT=judge-against-fingerprint \
+            -- tests -p k2-mpc-base --test tier0_outside
+          timed plant_t0o_keys_kept_uncounted plant t0o-keys-kept-uncounted \
+            'k2-mpc-base::tier0_outside/outside_churn_save' \
+            crates/base/tests/tier0_outside.rs 'keys_kept 0 of 3' MPC_T0V_MUTANT=keys-kept-uncounted \
+            -- tests -p k2-mpc-base --test tier0_outside
+          timed plant_t0o_blame_label_missing plant t0o-blame-label-missing \
+            'k2-mpc-base::tier0_outside/outside_kit_write_between' \
+            crates/base/tests/tier0_outside.rs 'labels the rows that end on an outside save' MPC_T0V_MUTANT=blame-label-missing \
+            -- tests -p k2-mpc-base --test tier0_outside
+          timed plant_t0o_reissues_answered plant t0o-reissues-answered \
+            'k2-mpc-base::tier0_outside/outside_reissues_refuses' \
+            crates/base/tests/tier0_outside.rs 'refuses E722' MPC_T0V_MUTANT=reissues-answered \
+            -- tests -p k2-mpc-base --test tier0_outside
+          timed plant_t0o_stored_judge_by_fingerprint plant t0o-stored-judge-by-fingerprint \
+            'k2-mpc-base::tier0_outside/outside_stored_state_matches_read
+             k2-mpc-base::tier0_outside/outside_minted_keys_stored_matches_read' \
+            crates/base/tests/tier0_outside.rs "the recorded state (and its event) is the read's" MPC_T0V_MUTANT=stored-judge-by-fingerprint \
+            -- tests -p k2-mpc-base --test tier0_outside
+          timed plant_t0o_stored_skips_unminted plant t0o-stored-skips-unminted \
+            'k2-mpc-base::tier0_outside/outside_minted_keys_stored_matches_read' \
+            crates/base/tests/tier0_outside.rs 'across a version whose keys were never recorded' MPC_T0V_MUTANT=stored-skips-unminted \
+            -- tests -p k2-mpc-base --test tier0_outside
+          # per-node --base, two agents and the seed gap (tests/tier0_base.rs): each plant alone
+          timed control_tier0_base control tier0-base -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_base_whole_doc plant t0b-base-whole-doc \
+            'k2-mpc-base::tier0_base/base_lands_untouched
+             k2-mpc-base::tier0_base/base_refuses_moved
+             k2-mpc-base::tier0_base/base_field_level
+             k2-mpc-base::tier0_base/base_selector_at_v
+             k2-mpc-base::tier0_base/base_created_keys_never_conflict
+             k2-mpc-base::tier0_base/base_unproven_writer
+             k2-mpc-base::tier0_base/weak_key_if_version
+             k2-mpc-base::tier0_base/base_dry_run_refuses_alike
+             k2-mpc-base::tier0_base/two_agents_one_drawing' \
+            crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=base-whole-doc \
+            -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_base_ignored plant t0b-base-ignored \
+            'k2-mpc-base::tier0_base/base_refuses_moved
+             k2-mpc-base::tier0_base/base_selector_at_v
+             k2-mpc-base::tier0_base/base_dry_run_refuses_alike
+             k2-mpc-base::tier0_base/two_agents_one_drawing' \
+            crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=base-ignored \
+            -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_base_node_level_only plant t0b-base-node-level-only \
+            'k2-mpc-base::tier0_base/base_field_level
+             k2-mpc-base::tier0_base/base_refuses_moved
+             k2-mpc-base::tier0_base/two_agents_one_drawing' \
+            crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=base-node-level-only \
+            -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_base_head_only plant t0b-base-head-only \
+            'k2-mpc-base::tier0_base/base_selector_at_v
+             k2-mpc-base::tier0_base/two_agents_one_drawing' \
+            crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=base-head-only \
+            -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_created_keys_conflict plant t0b-created-keys-conflict \
+            'k2-mpc-base::tier0_base/base_created_keys_never_conflict
+             k2-mpc-base::tier0_base/two_agents_one_drawing' \
+            crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=created-keys-conflict \
+            -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_pairing_assumed plant t0b-pairing-assumed \
+            'k2-mpc-base::tier0_base/base_unproven_writer
+             k2-mpc-base::tier0_base/base_dry_run_refuses_alike' \
+            crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=pairing-assumed \
+            -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_weak_key_guarded plant t0b-weak-key-guarded \
+            'k2-mpc-base::tier0_base/weak_key_if_version
+             k2-mpc-base::tier0_base/base_dry_run_refuses_alike' \
+            crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=weak-key-guarded \
+            -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_plan_on_stale_head plant t0b-plan-on-stale-head \
+            'k2-mpc-base::tier0_base/base_refuses_moved
+             k2-mpc-base::tier0_base/base_selector_at_v
+             k2-mpc-base::tier0_base/base_dry_run_refuses_alike
+             k2-mpc-base::tier0_base/two_agents_one_drawing' \
+            crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=plan-on-stale-head \
+            -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_seed_gap_loses plant t0b-seed-gap-loses \
+            'k2-mpc-base::tier0_base/seed_gap_race
+             k2-mpc-base::tier0_base/wait_and_retry_hides_gap' \
+            crates/base/tests/tier0_base.rs 'never a lost edit' MPC_T0V_MUTANT=seed-gap-loses \
+            -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_reach_ignored plant t0b-reach-ignored \
+            'k2-mpc-base::tier0_base/hold_layer_covers_members
+             k2-mpc-base::tier0_base/hold_block_covers_subtree
+             k2-mpc-base::tier0_base/two_agents_one_drawing' \
+            crates/base/tests/tier0_base.rs "a hold's reach" MPC_T0V_MUTANT=reach-ignored \
+            -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_reach_at_hold_time plant t0b-reach-at-hold-time \
+            'k2-mpc-base::tier0_base/hold_layer_covers_members' \
+            crates/base/tests/tier0_base.rs "a hold's reach" MPC_T0V_MUTANT=reach-at-hold-time \
+            -- tests -p k2-mpc-base --test tier0_base
           # the opened-pin plants (differential::OpenedMutant, MPC_OPENED_MUTANT): each fails the
           # rows of tests/opened.rs that read what it breaks, at their own assertions
           timed control_opened control opened -- tests -p k2-mpc-base --test opened

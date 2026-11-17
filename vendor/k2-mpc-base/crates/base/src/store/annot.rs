@@ -1060,6 +1060,14 @@ impl DocStore {
             }
             drop(t);
             super::turns::erase_in(&w, super::turns::BLOB_TURNS, doc, &theirs)?;
+            // and their verbs, on the same terms (`verbs.rs`)
+            let keep = plant_on!(
+                crate::differential::tier0_verb_mutant()
+                    == Some(crate::differential::Tier0VerbMutant::VerbKeptOnErase)
+            );
+            if !keep {
+                super::turns::remove_in(&w, super::verbs::BLOB_VERBS, doc, &theirs)?;
+            }
         }
         {
             let mut t = w.open_table(BLOB_APPROVALS)?;

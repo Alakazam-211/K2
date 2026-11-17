@@ -81,7 +81,9 @@ pub use harness::{
     OBSERVER,
 };
 pub use index_cases::kit_index_cases;
+#[cfg(test)]
+pub(crate) use registry::INDEX_KIT_WORDS;
 pub use registry::{
-    verb_form, Api, FileVerb, Registry, RegistryError, Source, Tier, VerbKind, VerbSpec, ALIASES,
-    ANNOTATION_VERBS, KIT_VERBS, RUN_TOOL_VERBS,
+    verb_form, Api, BlobVerbFacts, FileVerb, Registry, RegistryError, Source, Tier, VerbKind,
+    VerbSpec, ALIASES, ANNOTATION_VERBS, KIT_VERBS, RUN_TOOL_VERBS,
 };

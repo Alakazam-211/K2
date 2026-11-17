@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { dmCallButtonState, type DmCallView } from './HomeChatCallControls'
-import { HomeChatCallButton, HomeChatCallingBar, HomeChatCallRecord, HomeChatCallStrip, HomeChatRingCard, ringLayerTop } from './HomeChatCall'
+import { HomeChatCallButton, HomeChatCallingBar, HomeChatCallRecord, HomeChatCallStrip, HomeChatRingCard, RING_DOCK_BELOW, ringLayerPlace, ringLayerTop } from './HomeChatCall'
 
 afterEach(cleanup)
 
@@ -64,6 +64,42 @@ describe('DM call pieces', () => {
     expect(ringLayerTop(null)).toBe(56)
     expect(ringLayerTop(40)).toBe(56)
     expect(ringLayerTop(92)).toBe(100)
+  })
+
+  /** The open chat's header (CSS px). */
+  const header = (left: number, width: number) => ({ top: 48, bottom: 94, left, right: left + width, width, height: 46 })
+
+  it('a wide chat: the full card floats at the top right, under the header', () => {
+    expect(ringLayerPlace(header(260, 1160))).toEqual({ mode: 'float', top: 102 })
+    expect(ringLayerPlace(null)).toEqual({ mode: 'float', top: 56 })
+    // A header with no layout yet (no width): the float, never a zero-wide dock.
+    expect(ringLayerPlace({ top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 })).toEqual({ mode: 'float', top: 56 })
+  })
+
+  it('a narrow chat: the card goes compact and docks over the header, across its width, so the conversation stays clear', () => {
+    expect(RING_DOCK_BELOW).toBeGreaterThan(525)
+    expect(ringLayerPlace(header(275, 525))).toEqual({ mode: 'dock', top: 48, left: 275, width: 525, height: 46 })
+    expect(ringLayerPlace(header(275, RING_DOCK_BELOW))).toEqual({ mode: 'float', top: 102 })
+  })
+
+  it('the compact card: one line, the name, "is calling you", Decline and Answer, still obvious', () => {
+    const accept = vi.fn()
+    render(<HomeChatRingCard compact callerName="Ana Ruiz" username="ana" picture={null} silent={false} serverLabel={null} onAccept={accept} onDecline={() => {}} />)
+    const card = screen.getByTestId('home-chat-ring-card')
+    expect(card.dataset.compact).toBe('true')
+    expect(card.getAttribute('role')).toBe('alertdialog')
+    // One row filling the header's box, not the 18rem column.
+    expect(card.className).toMatch(/\bflex-row\b/)
+    expect(card.className).toMatch(/\bh-full\b/)
+    expect(card.className).not.toMatch(/\bw-72\b/)
+    expect(card.textContent).toContain('Ana Ruiz')
+    expect(card.textContent).toContain('is calling you')
+    // The same look as the full card: Frost in Glass, a cut tile in Terminal.
+    expect(card.getAttribute('data-material')).toBe('frost')
+    expect(card.getAttribute('data-k2-chamfer')).toBe('surface')
+    for (const id of ['home-chat-ring-decline', 'home-chat-ring-accept']) expect(screen.getByTestId(id).className).toContain('min-h-8')
+    fireEvent.click(screen.getByTestId('home-chat-ring-accept'))
+    expect(accept).toHaveBeenCalledTimes(1)
   })
 
   it('the caller’s bar: Cancel while it rings, Call again after a decline or no answer', () => {

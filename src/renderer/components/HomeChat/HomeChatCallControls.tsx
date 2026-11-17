@@ -45,7 +45,7 @@ import { hostPool } from '@/lib/host-pool-instance'
 import { hostIsVoiceChatOnly } from '@/lib/voice-chat-only'
 import { CALL_RING_Z } from '@/lib/overlay-layers'
 import { useStore } from 'zustand'
-import { HomeChatCallingBar, HomeChatCallStrip, HomeChatRingCard, ringLayerTop, type CallButtonState } from './HomeChatCall'
+import { HomeChatCallingBar, HomeChatCallStrip, HomeChatRingCard, ringLayerPlace, type CallButtonState, type RingLayerPlace } from './HomeChatCall'
 import { serverLabelFor } from './serverLabel'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { ConversationCallPlace } from '@/components/Voice/CallPlace'
@@ -195,16 +195,18 @@ export function HomeChatCallLayer(): JSX.Element | null {
   const layerRef = useRef<HTMLDivElement>(null)
   useBrowserOverlay({ active: rings.length > 0, ref: layerRef, kind: 'popover', watch: rings.length })
 
-  // Under the open chat's header, so its Call and Members stay in reach;
-  // just under the top bar on a page with no chat header. A ring shows on
-  // every page, so the header can come and go while it rings: look again
-  // now and then as well as on resize.
-  const [top, setTop] = useState(() => ringLayerTop(null))
+  // Under the open chat's header, so its Call and Members stay in reach; in
+  // a narrow chat, one line over the header itself, so the conversation
+  // stays clear (ringLayerPlace); just under the top bar on a page with no
+  // chat header. A ring shows on every page, so the header can come and go
+  // while it rings: look again now and then as well as on resize.
+  const [place, setPlace] = useState<RingLayerPlace>(() => ringLayerPlace(null))
   useLayoutEffect(() => {
     if (rings.length === 0) return
     const read = (): void => {
       const header = document.querySelector('[data-testid="home-chat-header"]')
-      setTop(ringLayerTop(header ? clientRectToCss(header.getBoundingClientRect()).bottom : null))
+      const next = ringLayerPlace(header ? clientRectToCss(header.getBoundingClientRect()) : null)
+      setPlace((was) => (JSON.stringify(was) === JSON.stringify(next) ? was : next))
     }
     read()
     window.addEventListener('resize', read)
@@ -219,9 +221,14 @@ export function HomeChatCallLayer(): JSX.Element | null {
   return (
     <div
       ref={layerRef}
-      className="pointer-events-none fixed right-4 flex flex-col gap-2"
-      style={{ top, zIndex: CALL_RING_Z }}
+      className={`pointer-events-none fixed flex flex-col gap-2 ${place.mode === 'float' ? 'right-4' : ''}`}
+      style={
+        place.mode === 'dock'
+          ? { top: place.top, left: place.left, width: place.width, zIndex: CALL_RING_Z }
+          : { top: place.top, zIndex: CALL_RING_Z }
+      }
       data-testid="home-chat-call-layer"
+      data-place={place.mode}
     >
       {rings.map((r) => {
         const people = byHost[r.hostKey]?.people?.people ?? []
@@ -229,8 +236,9 @@ export function HomeChatCallLayer(): JSX.Element | null {
         const name = who?.displayName ?? UNKNOWN_CALLER
         const k = `${r.hostKey}|${r.callId}`
         return (
-          <div key={k} className="pointer-events-auto">
+          <div key={k} className="pointer-events-auto" style={place.mode === 'dock' ? { height: place.height } : undefined}>
             <HomeChatRingCard
+              compact={place.mode === 'dock'}
               callerName={name}
               username={who?.username ?? name}
               picture={who?.picture ?? null}

@@ -14,6 +14,7 @@
 // - `HomeChatCallButton`: the call button in the DM header.
 
 import type { JSX } from 'react'
+import type { CssRect } from '@/lib/app-zoom'
 import type { CallRecordLine } from '@/lib/home-chat/calls'
 import { formatCallDuration } from '@/lib/home-chat/calls'
 import { Button } from '@/components/ui/Button'
@@ -31,6 +32,27 @@ export function ringLayerTop(headerBottom: number | null): number {
   return headerBottom === null ? RING_LAYER_MIN_TOP : Math.max(RING_LAYER_MIN_TOP, Math.round(headerBottom + 8))
 }
 
+/** A chat narrower than this (CSS px) docks the ring card over its header:
+ *  the full card would cover the first messages and "Earlier messages". */
+export const RING_DOCK_BELOW = 640
+
+export type RingLayerPlace =
+  | { mode: 'float'; top: number }
+  | { mode: 'dock'; top: number; left: number; width: number; height: number }
+
+/** Where the ring cards go. A wide chat: the full card floats at the top
+ *  right, under the header (ringLayerTop). A narrow one: the card goes
+ *  compact (one line) and sits over the header's own box, across its width,
+ *  so the conversation stays clear; the header's controls come back when
+ *  the ring ends, and Answer and Decline are what matters while it rings. */
+export function ringLayerPlace(header: CssRect | null): RingLayerPlace {
+  // A header with no width has no layout (hidden, or a test DOM): float.
+  if (header && header.width > 0 && header.width < RING_DOCK_BELOW) {
+    return { mode: 'dock', top: header.top, left: header.left, width: header.width, height: header.height }
+  }
+  return { mode: 'float', top: ringLayerTop(header ? header.bottom : null) }
+}
+
 /** Someone is calling you. A floating card: Frost with the float shadow in
  *  Glass (floatMaterial), a solid raised tile with cut corners in Terminal
  *  (the chamfer-float wrapper carries its shadow). Answer is the filled
@@ -45,6 +67,7 @@ export function HomeChatRingCard({
   onAccept,
   onDecline,
   busy = false,
+  compact = false,
 }: {
   callerName: string
   /** Their username on that server (the avatar's colour). */
@@ -57,38 +80,56 @@ export function HomeChatRingCard({
   onAccept: () => void
   onDecline: () => void
   busy?: boolean
+  /** One line across a narrow chat's header (ringLayerPlace's dock). */
+  compact?: boolean
 }): JSX.Element {
+  const line = `${silent ? 'is calling you (silent)' : 'is calling you'}${serverLabel ? ` · ${serverLabel}` : ''}`
+  const buttons = (
+    <>
+      <Button variant="danger-quiet" size="md" className="min-h-8 shrink-0" data-testid="home-chat-ring-decline" disabled={busy} onClick={onDecline}>
+        Decline
+      </Button>
+      <Button variant="accent" size="md" className="min-h-8 shrink-0" data-testid="home-chat-ring-accept" disabled={busy} onClick={onAccept}>
+        Answer
+      </Button>
+    </>
+  )
+  const card = {
+    role: 'alertdialog',
+    'aria-label': `${callerName} is calling you`,
+    'data-testid': 'home-chat-ring-card',
+    'data-silent': silent ? 'true' : 'false',
+    'data-compact': compact ? 'true' : undefined,
+    'data-k2-chamfer': 'surface',
+    ...floatMaterial('popover', 'frost'),
+  }
+  const look = 'rounded-[var(--radius-box)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] [box-shadow:var(--shadow-3)]'
+  if (compact) {
+    return (
+      <div data-k2-chamfer-float="" className="h-full">
+        <div {...card} className={`flex h-full flex-row items-center gap-2 px-3 ${look}`}>
+          <HomeChatPersonAvatar username={username} name={callerName} picture={picture} size={28} />
+          <div className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-text-primary)]">
+            <span data-testid="home-chat-ring-name">{callerName}</span> <span className="text-[11px] text-[var(--color-text-muted)]">{line}</span>
+          </div>
+          {buttons}
+        </div>
+      </div>
+    )
+  }
   return (
     <div data-k2-chamfer-float="">
-      <div
-        role="alertdialog"
-        aria-label={`${callerName} is calling you`}
-        data-testid="home-chat-ring-card"
-        data-silent={silent ? 'true' : 'false'}
-        data-k2-chamfer="surface"
-        {...floatMaterial('popover', 'frost')}
-        className="flex w-72 flex-col gap-3 rounded-[var(--radius-box)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3 [box-shadow:var(--shadow-3)]"
-      >
+      <div {...card} className={`flex w-72 flex-col gap-3 p-3 ${look}`}>
         <div className="flex min-w-0 items-center gap-3">
           <HomeChatPersonAvatar username={username} name={callerName} picture={picture} size={36} />
           <div className="min-w-0 flex-1">
             <div className="line-clamp-2 break-words text-[13px] text-[var(--color-text-primary)]" data-testid="home-chat-ring-name">
               {callerName}
             </div>
-            <div className="text-[11px] text-[var(--color-text-muted)]">
-              {silent ? 'is calling you (silent)' : 'is calling you'}
-              {serverLabel ? ` · ${serverLabel}` : ''}
-            </div>
+            <div className="text-[11px] text-[var(--color-text-muted)]">{line}</div>
           </div>
         </div>
-        <div className="flex justify-end gap-2">
-          <Button variant="danger-quiet" size="md" className="min-h-8" data-testid="home-chat-ring-decline" disabled={busy} onClick={onDecline}>
-            Decline
-          </Button>
-          <Button variant="accent" size="md" className="min-h-8" data-testid="home-chat-ring-accept" disabled={busy} onClick={onAccept}>
-            Answer
-          </Button>
-        </div>
+        <div className="flex justify-end gap-2">{buttons}</div>
       </div>
     </div>
   )

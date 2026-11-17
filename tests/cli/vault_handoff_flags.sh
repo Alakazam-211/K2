@@ -226,6 +226,31 @@ for f in "--scope ws:acme" "--workspace acme"; do
     fi
 done
 
+echo "== an agent is known by its passport under any name =="
+# K5_, K2_ or K2SO_HOOK_TOKEN alone is a K2 terminal: --scope and
+# --workspace are refused (exit 2) before anything is sent. A HOOK_SOCK
+# alone carries no passport, so the tool policy refuses it first (exit 3);
+# either way nothing reaches the daemon.
+no_hook() { env -u K5_HOOK_SOCK -u K5_HOOK_TOKEN -u K2_HOOK_SOCK -u K2_HOOK_TOKEN -u K2SO_HOOK_SOCK -u K2SO_HOOK_TOKEN "$@"; }
+for name in K5_HOOK_TOKEN K2_HOOK_TOKEN K2SO_HOOK_TOKEN K5_HOOK_SOCK K2_HOOK_SOCK K2SO_HOOK_SOCK; do
+    case "$name" in *TOKEN) want=2 why="${name} alone" ;; *) want=3 why="${name} alone (no passport)" ;; esac
+    for f in "--scope ws:acme" "--workspace acme"; do
+        before="$(wc -l < "$LOG")"
+        set +e
+        # shellcheck disable=SC2086
+        no_hook "$name=agent-x" K2_PORT="$PORT" "$K2" vault send K --to bob $f >/dev/null 2>"$SANDBOX/err"
+        rc=$?
+        set -e
+        said=1
+        [ "$want" = 3 ] || grep -Fq -- "${f%% *} is for people" "$SANDBOX/err" || said=0
+        if [ "$rc" = "$want" ] && [ "$said" = 1 ] && [ "$(wc -l < "$LOG")" = "$before" ]; then
+            ok "$why: send $f refused, nothing sent"
+        else
+            bad "$why: send $f: exit $rc (wanted $want), $(( $(wc -l < "$LOG") - before )) sent, stderr $(printf %q "$(cat "$SANDBOX/err")")"
+        fi
+    done
+done
+
 echo "== incoming, sent, asks: --workspace in the query =="
 for verb in incoming sent asks; do
     r="$(sent vault "$verb" --workspace acme)"

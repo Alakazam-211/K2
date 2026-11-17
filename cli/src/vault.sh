@@ -767,7 +767,7 @@ _vault_handoff() {
         fi
         # In a K2 terminal the daemon sends the agent's own workspace's
         # secret, whatever --scope or --workspace says: refuse, don't drop.
-        if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ]; then
+        if _envn_any HOOK_SOCK HOOK_TOKEN; then
             [ -z "$scope" ] || { echo "usage: --scope is for people; an agent sends its own workspace's secret (drop --scope)" >&2; exit 2; }
             [ -z "$workspace" ] || { echo "usage: --workspace is for people; an agent sends its own workspace's secret (drop --workspace)" >&2; exit 2; }
         fi

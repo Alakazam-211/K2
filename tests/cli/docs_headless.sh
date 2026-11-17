@@ -237,10 +237,10 @@ printf 'png bytes\n' >"$A/notes/off.png"
 before_md="$(python3 -c 'import os,sys; s=os.stat(sys.argv[1]); print(open(sys.argv[1],"rb").read().hex(), s.st_mtime_ns)' "$A/notes/plan.md")"
 owner GET /cli/docs/cores
 want 200 "cores list"
-jok "$BODY" '[c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board", "slides"] and not any(c["on"] for c in j["cores"]) and j["canChange"] is True' "cores: five rows, all off; the owner may change them"
+jok "$BODY" '[c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend"] and not any(c["on"] for c in j["cores"]) and j["canChange"] is True' "cores: eight rows, all off; the owner may change them"
 agent GET /cli/docs/cores
 want 200 "agent cores list"
-jok "$BODY" 'j["canChange"] is False and len(j["cores"]) == 5' "an agent may read the cores, never change them"
+jok "$BODY" 'j["canChange"] is False and len(j["cores"]) == 8' "an agent may read the cores, never change them"
 for rp in "GET /cli/docs/read" "GET /cli/docs/who" "GET /cli/docs/log" "GET /cli/docs/status" "POST /cli/docs/edit" "POST /cli/docs/open" "POST /cli/docs/flush" "POST /cli/docs/export"; do
     m="${rp%% *}"; r="${rp#* }"
     if [ "$m" = GET ]; then owner GET "$r" "" "workspace=$A&path=notes/plan.md"
@@ -264,7 +264,7 @@ agent POST /cli/settings/update '{"multiplayerCores":{"markdown":true}}'
 owner GET /cli/docs/cores; jok "$BODY" 'not any(c["on"] for c in j["cores"])' "an agent can't turn a core on (its cell socket doesn't route settings/update)"
 owner POST /cli/settings/update '{"multiplayerCores":{"word":true}}'
 want 400 "unknown core"
-case "$BODY" in *"multiplayerCores.word: no such core (markdown, text, any-file, board, slides)"*) ;; *) fail "unknown core refusal: $BODY" ;; esac
+case "$BODY" in *"multiplayerCores.word: no such core (markdown, text, any-file, board, slides, timeline, fab, blend)"*) ;; *) fail "unknown core refusal: $BODY" ;; esac
 ok "an unknown core is refused"
 rm -f "$A/notes/off.png"
 
@@ -501,7 +501,7 @@ ok "undo, who"
 echo "== k2 doc history (kit C7a) =="
 cli agent "$B" doc append --json --text $'revert me\n' home.md
 want_rc 0 "append to revert"
-CH="$(jq_ "$OUT" 'j["version"]')"
+CH="$(jq_ "$OUT" 'j["version"]["after"]')"
 cli agent "$B" doc revert "$CH" home.md
 want_rc 0 "revert"
 cli agent "$B" doc grep -c "revert me" home.md
@@ -638,6 +638,7 @@ mk "$WORK/other.bin" 2 1000
 mk "$WORK/logo.big" 3 $((3 * 1024 * 1024))
 mk "$WORK/outside.png" 4 2048
 mk "$WORK/app-save.png" 5 2048
+mk "$WORK/outside2.png" 7 2048
 
 owner GET /cli/docs/status "" "workspace=$B&path=img/logo.png"
 want 200 "tier-0 status"
@@ -739,17 +740,27 @@ cli agent "$B" doc show --version "$TV0" scan.jpg; want_rc 0 "show to stdout"
 [ "$OUT" = "plain text" ] || fail "show --version to stdout: '$OUT'"
 ok "show --version prints text bytes to a pipe"
 
+# The file holds the agent's restore, a version the kit wrote, and nothing
+# says the app saw it (kit v0.14.0): an app's save over it keeps both, the
+# save current and the agent's version a copy named after the agent.
 put "$WORK/outside.png" "$B/img/logo.png"
-t0_wait "$B" img/logo.png 'j["current"]["reason"] == "external" and j["current"]["author"] == "kit:external" and not j["conflictCopies"]' "an outside save"
-ok "an outside save without a lease is a new version by kit:external (no conflict copy)"
+t0_wait "$B" img/logo.png 'j["current"]["reason"] == "external" and j["current"]["author"] == "kit:external" and len(j["conflictCopies"]) == 1' "an outside save over the agent's restore"
+mine="$B/$(jq_ "$BODY" 'j["conflictCopies"][0]["path"]')"
+case "$mine" in *"/.k2/conflicts/logo (beta's version).png") ;; *) fail "the agent's copy name: $mine" ;; esac
+cmp -s "$mine" "$WORK/logo.v0" || fail "the agent's copy doesn't hold its restore"
+ok "an outside save over the agent's restore keeps both: the save is current, the restore a copy named after the agent"
+put "$WORK/outside2.png" "$B/img/logo.png"
+t0_wait "$B" img/logo.png "j['current']['reason'] == 'external' and j['current']['author'] == 'kit:external' and j['current']['size'] == $(wc -c <"$WORK/outside2.png") and len(j['conflictCopies']) == 1" "an outside save over an outside save"
+ok "an outside save over an outside save, without a lease, is a new version by kit:external (no new copy)"
 cli agent "$B" doc lease img/logo.png; want_rc 0 "lease before the app's save"
 put "$WORK/app-save.png" "$B/img/logo.png"
-t0_wait "$B" img/logo.png 'len(j["conflictCopies"]) == 1 and j["current"]["reason"] == "external" and j["current"]["conflictCopy"]' "a save under the lease"
+t0_wait "$B" img/logo.png 'len(j["conflictCopies"]) == 2 and j["current"]["reason"] == "external" and j["current"]["conflictCopy"]' "a save under the lease"
 cmp -s "$B/img/logo.png" "$WORK/app-save.png" || fail "the app's save didn't stay current"
-copy="$B/$(jq_ "$BODY" 'j["conflictCopies"][0]["path"]')"
-case "$copy" in *"/.k2/conflicts/logo (conflict "*").png") ;; *) fail "conflict copy name: $copy" ;; esac
+copy="$B/$(jq_ "$BODY" '[c["path"] for c in j["conflictCopies"] if not c["path"].endswith("logo (beta'"'"'s version).png")][0]')"
+# Saved under beta's lease: the copy is named after the holder, beside the first one.
+case "$copy" in *"/.k2/conflicts/logo (beta's version) 2.png") ;; *) fail "conflict copy name: $copy ($BODY)" ;; esac
 [ "$(cat "$B/.k2/conflicts/.gitignore")" = "*" ] || fail "no * .gitignore in .k2/conflicts"
-cmp -s "$copy" "$WORK/outside.png" || fail "the conflict copy doesn't hold the replaced content"
+cmp -s "$copy" "$WORK/outside2.png" || fail "the conflict copy doesn't hold the replaced content"
 ok "a save under someone's lease keeps both: the save is current, the replaced content a version and a conflict copy"
 note=""
 for _ in $(seq 1 80); do
@@ -759,7 +770,7 @@ for _ in $(seq 1 80); do
 done
 [ -n "$note" ] || fail "no inbox note for the conflicting save under $B/.k2/inbox"
 ok "the conflicting save leaves an inbox note"
-cli agent "$B" doc status img/logo.png; want_rc 0 "status lists the copy"; has "$OUT" "conflict copy: .k2/conflicts/logo (conflict" "status lists the copy"
+cli agent "$B" doc status img/logo.png; want_rc 0 "status lists the copy"; has "$OUT" "conflict copy: .k2/conflicts/logo (beta's version) 2.png" "status lists the copy"
 cli agent "$B" doc unlock img/logo.png; want_rc 0 "unlock after the conflict"
 
 python3 -c 'import sys; open(sys.argv[1],"wb").write(b"\0" * (int(sys.argv[2]) * 1048576 + 1))' "$B/big.bin" "$T0_CAP"

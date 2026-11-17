@@ -126,10 +126,10 @@ const NavWorktreeRow = React.memo(function NavWorktreeRow({
     <>
       <NavRowDivider />
       <button
-        className={`w-full flex items-center gap-2 px-3 text-left text-[11px] transition-colors cursor-default no-drag ${
-          isSelected
-            ? 'bg-white/[0.06] text-[var(--color-text-primary)]'
-            : 'text-[var(--color-text-muted)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
+        // Like the agent row above it: the text never dims for being
+        // unselected; hover and selection show in the background.
+        className={`w-full flex items-center gap-2 px-3 text-left text-[11px] text-[var(--color-text-primary)] transition-colors cursor-default no-drag ${
+          isSelected ? 'bg-white/[0.06]' : 'hover:bg-white/[0.04]'
         }`}
         style={{
           height: '32px',
@@ -200,7 +200,12 @@ export function NavRowDivider(): React.JSX.Element {
  *  the first line, a 14px second line 2px below it (tags, working glyph,
  *  shortcut).
  *  Agents' `SingleProjectItem` and the Home roster both render through it
- *  so the two sidebars stay one look. */
+ *  so the two sidebars stay one look.
+ *  The text never dims for being unselected (Rosson 2026-11-17): the name
+ *  is primary text in every state, and the second line's muted text reads
+ *  at the secondary tier at rest too (globals.css, `data-nav-agent-row`).
+ *  Hover and selection show only through the background and the accent
+ *  bar; `dimmed` is the one fade, for a row whose server is out of reach. */
 export function AgentRowButton({
   isActive,
   color,
@@ -230,10 +235,8 @@ export function AgentRowButton({
 }): React.JSX.Element {
   return (
     <button
-      className={`w-full flex items-stretch gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
-        isActive
-          ? 'bg-white/[0.06] text-[var(--color-text-primary)]'
-          : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
+      className={`w-full flex items-stretch gap-2.5 px-3 py-2 text-left text-sm text-[var(--color-text-primary)] transition-colors ${
+        isActive ? 'bg-white/[0.06]' : 'hover:bg-white/[0.04]'
       }${dimmed ? ' opacity-60' : ''}`}
       style={{
         borderLeft: isActive ? `2px solid ${color}` : '2px solid transparent'
@@ -243,6 +246,7 @@ export function AgentRowButton({
       title={title}
       aria-current={isActive ? 'true' : undefined}
       data-agent-row=""
+      data-nav-agent-row=""
     >
       <div className="flex items-center flex-shrink-0">{avatar}</div>
       <div className="flex flex-col justify-center min-w-0 flex-1">

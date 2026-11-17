@@ -1653,8 +1653,12 @@ html[data-scheme="light"] [data-agent-row]:not([aria-current="true"]):hover:not(
    quiet. Any item its list marks current (aria-current) or selected
    (aria-selected on an option, a tree item or a grid row) steps up too.
    Settings' own list rows do it through SETTING_LIST_ROW_HOVER and
-   SETTING_LIST_ROW_BAND. Gardens keep their own look. */
-:is([data-agent-row], [role="option"], [role="treeitem"], :is([role="menu"], [role="listbox"], [data-context-menu], [data-setting-dropdown-menu]) :is(button, [role^="menuitem"], [role="option"])):is(:hover, :focus-visible, [data-highlighted], [data-selected]):not(:disabled, [aria-disabled="true"]):not([data-zen-root], [data-zen-root] *, [data-k2-thread-zen] *),
+   SETTING_LIST_ROW_BAND. The Home and Agents navs' rows (data-nav-agent-row)
+   take the step at rest too: a row's text never dims for being unselected,
+   hover and selection show only in its background (Rosson 2026-11-17).
+   Gardens keep their own look. */
+[data-nav-agent-row]:not([data-zen-root] *, [data-k2-thread-zen] *),
+:is([data-agent-row],[role="option"], [role="treeitem"], :is([role="menu"], [role="listbox"], [data-context-menu], [data-setting-dropdown-menu]) :is(button, [role^="menuitem"], [role="option"])):is(:hover, :focus-visible, [data-highlighted], [data-selected]):not(:disabled, [aria-disabled="true"]):not([data-zen-root], [data-zen-root] *, [data-k2-thread-zen] *),
 :is([aria-current="true"], [aria-current="page"], :is([role="option"], [role="treeitem"], [role="row"])[aria-selected="true"]):not([data-zen-root], [data-zen-root] *, [data-k2-thread-zen] *) {
   --color-text-muted: var(--color-text-secondary);
 }

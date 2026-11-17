@@ -955,7 +955,9 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                         if crate::usage_store::single_record_on() || crate::usage_switch::follow_live_owner(tool.as_str()) {
                             crate::session_events::emit_subscription_usage_changed(Some(tool.as_str()), None, "switch");
                         }
-                        recheck_after_switch(tool, out.from.clone());
+                        // An outgoing token the CLIs lost holds an older
+                        // copy: not probed (or refreshed) right now.
+                        recheck_after_switch(tool, out.from.clone().filter(|_| !out.outgoing_unsaved));
                     }
                     crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));
                     let account = entry_json(&out.to, true).unwrap_or(Value::Null);

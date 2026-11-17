@@ -1498,6 +1498,13 @@ impl wallet::Refresher for DaemonRefresher {
 
 // ── Usage of idle slots ─────────────────────────────────────────────
 
+/// Is a Claude slot's access token (as the slot holds it now) expired or
+/// within a minute of it? Read again under the slot lock, so a refresher
+/// queued behind another doesn't refresh (and rotate) the same login twice.
+fn claude_slot_expired(id: &str) -> bool {
+    slots::slot_meta(Tool::Claude, id).expires_at.is_some_and(|x| x <= chrono::Utc::now().timestamp() + 60)
+}
+
 /// Probe usage for one idle login and store the snapshot. Never runs for
 /// the active login (its row is the shared cache) and never under
 /// air-gap. Never holds the tool lock or the database across a vendor
@@ -1543,20 +1550,33 @@ pub(crate) fn probe_idle_usage_with(entry: &Entry, claude_get: &dyn Fn(&str) -> 
     if slot_lock.is_some() && live_or_default(tool, &entry.id) {
         return Ok(());
     }
+    // Codex / Grok renew their token in the slot while they read usage:
+    // never run them on a copy of the live login (by account).
+    if slot_lock.is_some() && k2_core::llm_accounts::identity::is_live_login(tool, &entry.id) {
+        k2_core::log_debug!("[llm-accounts] usage {}/{}: end (skipped: the live login; its CLIs refresh it)", tool.as_str(), entry.id);
+        return Ok(());
+    }
     let claude_token = if tool == Tool::Claude {
         let meta = slots::slot_meta(tool, &entry.id);
         let expired = meta.expires_at.map(|x| x <= chrono::Utc::now().timestamp() + 60).unwrap_or(false);
-        // Never refresh a slot a running CLI owns, or a copy of the live
-        // sign-in: either refresh would revoke that CLI's token (LT-A16,
-        // LT-A10). The reading then uses the token as it is.
-        let may_refresh = || !slot_in_use(&entry.id) && !k2_core::llm_accounts::identity::shares_live_grant(tool, &entry.id);
-        if expired && meta.has_refresh && may_refresh() {
+        // Never refresh a slot a running CLI owns, or the live login (by
+        // account, LT-A10): either refresh would send a refresh token a CLI
+        // owns or already rotated away (LT-A16). Nor a token marked "sign in
+        // again": its refresh token was refused twice. The reading then
+        // uses the token as it is (a 401 there marks the reading, never the
+        // token).
+        let may_refresh = || !slot_in_use(&entry.id) && !k2_core::llm_accounts::identity::is_live_login(tool, &entry.id);
+        if expired && meta.has_refresh && entry.state != state::NEEDS_LOGIN && may_refresh() {
             match store::lock_slot(tool, &entry.id, Duration::from_secs(5)) {
                 // Again under the slot lock: a switch may have made it live.
                 Ok(_slot) if !live_or_default(tool, &entry.id) && may_refresh() => {
-                    if let Err(err) = wallet::claude_refresh_slot(&entry.id, &post_json) {
-                        let err = if wallet_core::looks_like_secret(&err) { "refresh failed".to_string() } else { err };
-                        k2_core::log_debug!("[llm-accounts] usage claude/{}: not refreshed ({err})", entry.id);
+                    // Single flight: a refresher that held the lock before
+                    // this one may have refreshed it already.
+                    if claude_slot_expired(&entry.id) {
+                        if let Err(err) = wallet::claude_refresh_slot(&entry.id, &post_json) {
+                            let err = if wallet_core::looks_like_secret(&err) { "refresh failed".to_string() } else { err };
+                            k2_core::log_debug!("[llm-accounts] usage claude/{}: not refreshed ({err})", entry.id);
+                        }
                     }
                 }
                 Ok(_) => return Ok(()),
@@ -1644,18 +1664,28 @@ pub(crate) fn slot_usage_check(entry: &Entry, claude_get: &dyn Fn(&str) -> Resul
             }
         }
     };
+    // Codex / Grok renew their token in the slot while they read usage:
+    // never on a copy of the live login (by account).
+    if slot_lock.is_some() && k2_core::llm_accounts::identity::is_live_login(tool, &entry.id) {
+        k2_core::log_debug!("[usage] {}/{}: skipped (the live login; its CLIs refresh it)", tool.as_str(), entry.id);
+        return None;
+    }
     let claude_token = if tool == Tool::Claude {
         let meta = slots::slot_meta(tool, &entry.id);
         let expired = meta.expires_at.map(|x| x <= chrono::Utc::now().timestamp() + 60).unwrap_or(false);
-        // Never refresh a slot a running CLI owns or a copy of the live
-        // sign-in (LT-A16, LT-A10): the reading uses the token as it is.
-        let may_refresh = || !slot_in_use(&entry.id) && !k2_core::llm_accounts::identity::shares_live_grant(tool, &entry.id);
-        if expired && meta.has_refresh && may_refresh() {
+        // Never refresh a slot a running CLI owns, the live login (by
+        // account), or a token marked "sign in again" (LT-A16, LT-A10): the
+        // reading uses the token as it is.
+        let may_refresh = || !slot_in_use(&entry.id) && !k2_core::llm_accounts::identity::is_live_login(tool, &entry.id);
+        if expired && meta.has_refresh && entry.state != state::NEEDS_LOGIN && may_refresh() {
             match store::lock_slot(tool, &entry.id, Duration::from_secs(5)) {
                 Ok(_slot) if !live_or_default(tool, &entry.id) && may_refresh() => {
-                    if let Err(err) = wallet::claude_refresh_slot(&entry.id, &post_json) {
-                        let err = if wallet_core::looks_like_secret(&err) { "refresh failed".to_string() } else { err };
-                        k2_core::log_debug!("[usage] claude/{}: not refreshed ({err})", entry.id);
+                    // Single flight (see `probe_idle_usage_with`).
+                    if claude_slot_expired(&entry.id) {
+                        if let Err(err) = wallet::claude_refresh_slot(&entry.id, &post_json) {
+                            let err = if wallet_core::looks_like_secret(&err) { "refresh failed".to_string() } else { err };
+                            k2_core::log_debug!("[usage] claude/{}: not refreshed ({err})", entry.id);
+                        }
                     }
                 }
                 Ok(_) => {}

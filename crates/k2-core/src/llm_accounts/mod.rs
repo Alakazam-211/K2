@@ -748,3 +748,5 @@ mod tests;
 mod pins_tests;
 #[cfg(test)]
 mod identity_tests;
+#[cfg(test)]
+mod rotation_tests;

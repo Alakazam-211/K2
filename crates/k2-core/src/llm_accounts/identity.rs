@@ -233,16 +233,87 @@ pub fn same_grant(tool: Tool, a: &[u8], b: &[u8]) -> bool {
     matches!((refresh_token_of(tool, a), refresh_token_of(tool, b)), (Some(x), Some(y)) if x == y)
 }
 
-/// Does this slot hold the same sign-in as the tool's live store (LT-A10)?
-/// Then K2 must never refresh it: the refresh would revoke the live CLI's
-/// token. A live store K2 can't read counts as "maybe": skip.
-pub fn shares_live_grant(tool: Tool, id: &str) -> bool {
+/// The account the tool's live store names, without the network: the
+/// credential itself (Codex, Grok), else (Claude) `oauthAccount` in the
+/// live `~/.claude.json`, whoever wrote it last (a K2 switch writes it for
+/// the sign-in it puts live; a `/login` makes Claude rewrite it). Used to
+/// keep K2's hands off the live login, and to read its newer tokens back
+/// into that account's own token.
+pub fn live_account(tool: Tool, live: &[u8]) -> Option<(AccountIdentity, Source)> {
+    if let Some(id) = cred_identity(tool, live) {
+        return Some((id, Source::Credential));
+    }
+    if tool == Tool::Claude {
+        if let Some(id) = live_profile().as_ref().and_then(AccountIdentity::from_oauth_account) {
+            return Some((id, Source::ClaudeConfig));
+        }
+    }
+    None
+}
+
+/// The account a token's slot is for, without the network: its record,
+/// else the credential (Codex, Grok), else (Claude) its slot's profile.
+fn slot_account(tool: Tool, id: &str, slot: &[u8]) -> Option<AccountIdentity> {
+    if let Some(r) = read_record(tool, id) {
+        return Some(r.identity());
+    }
+    if let Some(i) = cred_identity(tool, slot) {
+        return Some(i);
+    }
+    if tool == Tool::Claude {
+        return slot_profile(id).and_then(|(v, _)| AccountIdentity::from_oauth_account(&v));
+    }
+    None
+}
+
+/// What the tool's live store is to a token's slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveRelation {
+    /// Another account, or nothing live.
+    Unrelated,
+    /// The very same sign-in (the same refresh token).
+    SameSignIn,
+    /// The same account. After the CLIs refresh the live store its refresh
+    /// token has rotated, so the slot's copy no longer matches token for
+    /// token, but it is still the login the CLIs run on: refreshing the
+    /// slot's copy sends a rotated-away refresh token (invalid_grant).
+    SameAccount,
+    /// K2 can't read the live store: treated as live (skip).
+    Unreadable,
+}
+
+/// [`LiveRelation`] for bytes already read.
+pub fn live_relation_of(tool: Tool, id: &str, slot: &[u8], live: &[u8]) -> LiveRelation {
+    if same_grant(tool, slot, live) {
+        return LiveRelation::SameSignIn;
+    }
+    match (live_account(tool, live), slot_account(tool, id, slot)) {
+        (Some((l, _)), Some(s)) if l.same_account(&s) == Some(true) => LiveRelation::SameAccount,
+        _ => LiveRelation::Unrelated,
+    }
+}
+
+/// Is this token's slot the login the tool's CLIs run on right now
+/// (LT-A10)? Then K2 never refreshes it: the CLIs own its refresh, and a
+/// refresh by K2 would rotate the refresh token under them (or send one
+/// they already rotated away). Matched by ACCOUNT, not only by refresh
+/// token: the first CLI refresh rotates the live refresh token, and the
+/// slot's older copy then differs while still being the same login (field
+/// report 2026-11-17: keep-warm and the usage probe refreshed such copies
+/// and got 400 invalid_grant). A live store K2 can't read counts as live.
+pub fn is_live_login(tool: Tool, id: &str) -> bool {
     let Ok(Some(slot)) = slots::read_slot(tool, id) else { return false };
     match store::read_live(tool) {
-        Ok(Some(live)) => same_grant(tool, &slot, &live),
+        Ok(Some(live)) => live_relation_of(tool, id, &slot, &live) != LiveRelation::Unrelated,
         Ok(None) => false,
         Err(_) => true,
     }
+}
+
+/// Does this slot hold the same sign-in as the tool's live store, or the
+/// same account ([`is_live_login`])? Kept under its old name for callers.
+pub fn shares_live_grant(tool: Tool, id: &str) -> bool {
+    is_live_login(tool, id)
 }
 
 // ── The recorded account (LT-A1) ────────────────────────────────────

@@ -333,12 +333,16 @@ fn keep_warm_refreshes_due_idle_slots_only() {
     let live: serde_json::Value = serde_json::from_slice(&read_live_claude(&h)).unwrap();
     assert_eq!(live["claudeAiOauth"]["refreshToken"], format!("{MARKER}-refresh-a"), "active slot never refreshed by K2");
     let _ = a;
-    // A permanent failure marks the idle login needs_login.
+    // A permanent failure of the same bytes on two passes marks the idle
+    // login needs_login (one refusal is only noted).
     store::write_slot(Tool::Claude, &b.id, &claude_cred("b", now() * 1000 + 60_000)).unwrap();
     let bad = FakeRefresher { calls: AtomicUsize::new(0), fail_with: Some("400 invalid_grant".into()) };
     let res = wallet::keep_warm(&conn, &bad, now(), &|_| false).unwrap();
     assert_eq!(res.len(), 1);
     assert!(!res[0].refreshed);
+    assert_eq!(get(&conn, &b.id).unwrap().unwrap().state, state::SIGNED_IN, "one refusal is not a sign-out");
+    let res = wallet::keep_warm(&conn, &bad, now(), &|_| false).unwrap();
+    assert_eq!(res.len(), 1);
     assert_eq!(get(&conn, &b.id).unwrap().unwrap().state, state::NEEDS_LOGIN);
     // Air-gap: nothing at all.
     let airgap = crate::test_env::EnvVar::set("K2_AIRGAP", "1");

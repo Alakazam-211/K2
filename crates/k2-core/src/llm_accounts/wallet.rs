@@ -229,6 +229,97 @@ fn expires_of(tool: Tool, b: &[u8]) -> i64 {
     store::parse_meta(tool, b).expires_at.unwrap_or(i64::MIN)
 }
 
+// ── The live login's newer tokens (field report 2026-11-17) ─────────
+//
+// Every CLI on the server shares the tool's live store and refreshes it;
+// each refresh rotates the refresh token. K2's slot copy of that login
+// goes stale at the first one. K2 never refreshes such a copy
+// ([`identity::is_live_login`]); it reads the newer set back instead.
+
+/// The live store holds something that isn't a whole sign-in (Claude:
+/// no `claudeAiOauth` token): the CLIs lost their login. Said once per
+/// distinct live content, so a pass every 30 minutes doesn't repeat it.
+fn note_live_lost(tool: Tool, live: &[u8], why: &str) {
+    static SEEN: std::sync::Mutex<[Option<[u8; 32]>; 4]> = std::sync::Mutex::new([None; 4]);
+    let fp = fingerprint(live);
+    let mut seen = SEEN.lock().unwrap_or_else(|p| p.into_inner());
+    if seen[tool_index(tool)] == Some(fp) {
+        return;
+    }
+    seen[tool_index(tool)] = Some(fp);
+    crate::log_debug!(
+        "[llm-accounts] {}: live sign-in lost ({why}): the CLIs' own credentials file has no usable login; K2 copies nothing from it into a saved token",
+        tool.as_str()
+    );
+}
+
+/// Read the live sign-in back into token `e`'s slot when it is the same
+/// login ([`identity::live_relation_of`]) and newer (a later expiry):
+/// the newest token set always wins, and K2 never writes an older copy
+/// over a newer one. The caller holds `e`'s slot lock. `Ok(true)` when the
+/// slot now holds the live bytes.
+pub(crate) fn adopt_newer_live(tool: Tool, e: &Entry) -> Result<bool, WalletError> {
+    if !tool.subscription_supported() || e.is_api_key() {
+        return Ok(false);
+    }
+    let Some(live) = store::read_live(tool)? else { return Ok(false) };
+    if let Err(why) = store::validate_cred(tool, &live) {
+        note_live_lost(tool, &live, &why);
+        return Ok(false);
+    }
+    let Some(slot) = slots::read_slot(tool, &e.id)? else { return Ok(false) };
+    if slot == live {
+        return Ok(true);
+    }
+    let rel = identity::live_relation_of(tool, &e.id, &slot, &live);
+    if rel == identity::LiveRelation::Unrelated || expires_of(tool, &live) <= expires_of(tool, &slot) {
+        return Ok(false);
+    }
+    let who = identity::live_account(tool, &live);
+    let incoming = match (rel, &who) {
+        (identity::LiveRelation::SameSignIn, _) => Incoming::Unknown,
+        (_, Some((w, src))) => Incoming::Known(w, *src),
+        _ => return Ok(false),
+    };
+    match file_bytes(tool, &e.id, Some(e), &live, incoming, identity::origin::IMPORT) {
+        Ok(()) => {
+            crate::log_debug!("[llm-accounts] {}/{}: read back the live sign-in's newer tokens (the CLI refreshed it)", tool.as_str(), e.id);
+            Ok(true)
+        }
+        Err(err) => {
+            crate::log_debug!("[llm-accounts] {}/{}: live sign-in not read back ({})", tool.as_str(), e.id, err.code());
+            Ok(false)
+        }
+    }
+}
+
+/// A refresh token the vendor refused once (token id → fingerprint of
+/// the slot bytes it refused). A login is marked "sign in again" only when
+/// the SAME bytes are refused a second time on a later, fresh read; new
+/// bytes (a sign-in, a read-back) start over. In memory: a restart costs
+/// one more try per dead token, never a false sign-out.
+fn refused_once() -> &'static std::sync::Mutex<std::collections::HashMap<String, [u8; 32]>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, [u8; 32]>>> = std::sync::OnceLock::new();
+    M.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Record a permanent refusal of `bytes` for token `id`: `true` when it is
+/// the second refusal of the same bytes (confirmed dead).
+fn refusal_confirmed(id: &str, bytes: &[u8]) -> bool {
+    let fp = fingerprint(bytes);
+    let mut m = refused_once().lock().unwrap_or_else(|p| p.into_inner());
+    if m.get(id) == Some(&fp) {
+        m.remove(id);
+        return true;
+    }
+    m.insert(id.to_string(), fp);
+    false
+}
+
+fn clear_refusal(id: &str) {
+    refused_once().lock().unwrap_or_else(|p| p.into_inner()).remove(id);
+}
+
 /// A label for an account's new token: its email (cut to the label rule),
 /// else "<Tool> outside K2"; unique.
 fn account_label(conn: &Connection, tool: Tool, who: &AccountIdentity) -> Result<String, WalletError> {
@@ -1286,6 +1377,11 @@ pub struct SwitchOutcome {
     pub verified_by: Option<Source>,
     /// The outgoing live login was saved back to its slot.
     pub saved_outgoing: bool,
+    /// The live store held no usable sign-in (the CLIs lost their login,
+    /// e.g. no `claudeAiOauth` token), so the outgoing token kept its own,
+    /// older copy. Nothing probes or refreshes that copy right after the
+    /// switch: its refresh token may be one the CLIs rotated away.
+    pub outgoing_unsaved: bool,
     /// The incoming slot was refreshed before the swap.
     pub refreshed: bool,
     pub already_active: bool,
@@ -1372,12 +1468,18 @@ pub fn precheck(tool: Tool, target: &Entry, gen: Generation, refresher: Option<&
         // A keep-warm refresh of this very slot may be running: answer
         // `busy` soon rather than wait it out.
         let _slot = store::lock_slot(tool, &target.id, SWITCH_SLOT_WAIT)?;
-        let meta = slots::slot_meta(tool, &target.id);
-        let expiring = meta.expires_at.map(|x| x <= now() + 300).unwrap_or(false);
-        // Never refresh a copy of the live sign-in (LT-A10).
-        if expiring && meta.has_refresh && !crate::airgap::enabled() && !identity::shares_live_grant(tool, &target.id) {
-            if let Some(r) = refresher {
-                pre.refresh = Some(r.refresh(tool, &target.id));
+        // Never refresh the live login (LT-A10, by account): read its
+        // newer tokens back instead, so the swap never writes an older
+        // copy over the CLIs' own.
+        if identity::is_live_login(tool, &target.id) {
+            adopt_newer_live(tool, target)?;
+        } else {
+            let meta = slots::slot_meta(tool, &target.id);
+            let expiring = meta.expires_at.map(|x| x <= now() + 300).unwrap_or(false);
+            if expiring && meta.has_refresh && !crate::airgap::enabled() {
+                if let Some(r) = refresher {
+                    pre.refresh = Some(r.refresh(tool, &target.id));
+                }
             }
         }
     }
@@ -1469,6 +1571,7 @@ fn switch_inner(
         profile_swapped: profile,
         verified_by: verified,
         saved_outgoing: saved,
+        outgoing_unsaved: false,
         refreshed,
         already_active: already,
         adopted: Vec::new(),
@@ -1548,13 +1651,19 @@ fn switch_inner(
     // its store after this read, `write_live_expecting` refuses with
     // `changed` instead of overwriting the refreshed token.
     let live_fp = live_raw.as_deref().map(fingerprint);
-    let live = live_raw.filter(|bytes| match store::validate_cred(tool, bytes) {
-        Ok(()) => true,
-        Err(why) => {
-            crate::log_debug!("[llm-accounts] {}: live login not saved back ({why})", tool.as_str());
-            false
-        }
-    });
+    let mut live_lost = false;
+    let live = match live_raw {
+        Some(bytes) => match store::validate_cred(tool, &bytes) {
+            Ok(()) => Some(bytes),
+            Err(why) => {
+                crate::log_debug!("[llm-accounts] {}: live login not saved back ({why})", tool.as_str());
+                note_live_lost(tool, &bytes, &why);
+                live_lost = true;
+                None
+            }
+        },
+        None => None,
+    };
     if let Some(c) = pre_creds {
         if live.as_deref().map(fingerprint) != c.live.as_ref().map(|(fp, _)| *fp) {
             return Err(changed(tool));
@@ -1587,9 +1696,16 @@ fn switch_inner(
                 match v {
                     identity::Verdict::Match => {
                         let _owner_slot = if oe.id == target.id { None } else { Some(store::lock_slot(tool, &oe.id, LOCK_WAIT)?) };
-                        file_bytes(tool, &oe.id, Some(&oe), bytes, Incoming::of(actual.as_ref()), identity::origin::IMPORT)?;
-                        let m = store::parse_meta(tool, bytes);
-                        update_meta(conn, &oe.id, &MetaUpdate { expires_at: Some(m.expires_at), state: Some(state::SIGNED_IN.into()), ..Default::default() })?;
+                        // Only a newer set is saved back: never an older
+                        // copy over the slot's newer one.
+                        let slot_newer = matches!(slots::read_slot(tool, &oe.id), Ok(Some(s)) if expires_of(tool, &s) > expires_of(tool, bytes));
+                        if slot_newer {
+                            crate::log_debug!("[llm-accounts] {}: {} keeps its own, newer saved sign-in (the live one is older)", tool.as_str(), oe.id);
+                        } else {
+                            file_bytes(tool, &oe.id, Some(&oe), bytes, Incoming::of(actual.as_ref()), identity::origin::IMPORT)?;
+                            let m = store::parse_meta(tool, bytes);
+                            update_meta(conn, &oe.id, &MetaUpdate { expires_at: Some(m.expires_at), state: Some(state::SIGNED_IN.into()), ..Default::default() })?;
+                        }
                         saved = true;
                     }
                     identity::Verdict::Mismatch(w, src) => {
@@ -1629,17 +1745,31 @@ fn switch_inner(
         Some(o) => get(conn, o)?.and_then(|e| identity::expected_identity(tool, &e)),
         None => None,
     };
+    //    The CLIs lost the outgoing login: its token keeps its older copy,
+    //    which may hold a refresh token they rotated away. Say so on it.
+    if live_lost {
+        if let Some(o) = owner.as_deref().filter(|o| *o != target.id) {
+            update_meta(conn, o, &MetaUpdate {
+                detail: Some(Some("Its CLIs lost this sign-in before the switch, so K2 kept its older saved copy. If it fails, sign it in again.".into())),
+                ..Default::default()
+            })?;
+        }
+    }
     // 2. Lazy refresh of the incoming idle slot (phase 1 already did it
-    //    in the two-phase switch; here only its result is recorded).
+    //    in the two-phase switch; here only its result is recorded). The
+    //    live login (by account) is never refreshed here (LT-A10): its
+    //    newer tokens are read back into its slot instead.
     let refresh_result = match pre {
         Some(p) => p.refresh.clone(),
+        None if identity::is_live_login(tool, &target.id) => {
+            adopt_newer_live(tool, &target)?;
+            None
+        }
         None => {
             let meta = slots::slot_meta(tool, &target.id);
             let expiring = meta.expires_at.map(|x| x <= now() + 300).unwrap_or(false);
             match refresher {
-                Some(r) if expiring && meta.has_refresh && !crate::airgap::enabled() && !identity::shares_live_grant(tool, &target.id) => {
-                    Some(r.refresh(tool, &target.id))
-                }
+                Some(r) if expiring && meta.has_refresh && !crate::airgap::enabled() => Some(r.refresh(tool, &target.id)),
                 _ => None,
             }
         }
@@ -1732,6 +1862,7 @@ fn switch_inner(
     }
     let verified = incoming_actual.as_ref().map(|(_, s)| *s).filter(|s| matches!(s, Source::Vendor | Source::Credential));
     let mut out = outcome(saved, refreshed, false, profile_swapped, verified);
+    out.outgoing_unsaved = live_lost;
     out.adopted = adopted;
     out.needs_sign_in = needs_sign_in;
     Ok(out)
@@ -2210,7 +2341,15 @@ pub fn keep_warm_with(
         for tool in Tool::SUBSCRIPTION {
             let owner = live_owner(conn, tool)?;
             for e in list_for(conn, tool)? {
-                if owner.as_deref() == Some(e.id.as_str()) || e.state == state::SIGNING_IN || e.is_api_key() || in_use(&e.id) {
+                // A token marked "sign in again" holds a refresh token the
+                // vendor refused twice: K2 stops sending it until a new
+                // sign-in (or a read-back) puts it back to signed in.
+                if owner.as_deref() == Some(e.id.as_str())
+                    || e.state == state::SIGNING_IN
+                    || e.state == state::NEEDS_LOGIN
+                    || e.is_api_key()
+                    || in_use(&e.id)
+                {
                     continue;
                 }
                 let meta = slots::slot_meta(tool, &e.id);
@@ -2250,44 +2389,75 @@ fn warm_one(
 ) -> Result<Option<WarmResult>, WalletError> {
     // Phase 2: this login's slot lock only. It also blocks a pinned
     // session from starting on this login mid-refresh, and a switch to it.
+    // Every K2 refresher of a slot (keep-warm, the usage probe, a switch)
+    // takes this lock: one refresh per login at a time.
     let Ok(_slot) = store::lock_slot(tool, &e.id, Duration::from_secs(5)) else { return Ok(None) };
     // Re-check under it: a switch may have made it live, or a pinned
     // session may have started on it.
-    if with_db(db, |conn| still_idle(conn, tool, &e.id, in_use))?.is_none() {
+    let Some(cur) = with_db(db, |conn| still_idle(conn, tool, &e.id, in_use))? else {
+        return Ok(None);
+    };
+    // Never refresh the live login (LT-A10), matched by account: the CLIs
+    // own its refresh, and a refresh here would send a refresh token they
+    // may already have rotated away. Its newer tokens are read back.
+    if identity::is_live_login(tool, &cur.id) {
+        if adopt_newer_live(tool, &cur)? {
+            let m = slots::slot_meta(tool, &cur.id);
+            with_db(db, |conn| {
+                update_meta(conn, &cur.id, &MetaUpdate { expires_at: Some(m.expires_at), state: Some(state::SIGNED_IN.into()), detail: Some(None), ..Default::default() })
+            })?;
+            clear_refusal(&cur.id);
+        }
+        crate::log_debug!("[llm-accounts] keep-warm {}/{}: skipped (the live login; its CLIs refresh it)", tool.as_str(), cur.id);
         return Ok(None);
     }
-    // Never refresh a copy of the live sign-in: the refresh would revoke
-    // the live CLI's token (LT-A10).
-    if identity::shares_live_grant(tool, &e.id) {
+    // Single flight: another refresher may have refreshed it while this
+    // pass waited for the lock. Due again only by the slot as it is now.
+    if !warm_due(tool, &slots::slot_meta(tool, &cur.id), &cur, now_secs) {
         return Ok(None);
     }
+    let before = slots::read_slot(tool, &cur.id)?;
     let t0 = std::time::Instant::now();
-    crate::log_debug!("[llm-accounts] keep-warm {}/{}: start", tool.as_str(), e.id);
-    let res = refresher.refresh(tool, &e.id);
+    crate::log_debug!("[llm-accounts] keep-warm {}/{}: start", tool.as_str(), cur.id);
+    let res = refresher.refresh(tool, &cur.id);
+    // A refused refresh token: the CLI may have just made this login live
+    // and rotated it. Read the live store back first; never mark on that.
+    let read_back = match &res {
+        Err(err) if refresh_error_is_permanent(err) => adopt_newer_live(tool, &cur)?,
+        _ => false,
+    };
+    let after = slots::read_slot(tool, &cur.id)?;
     // Whose sign-in the refreshed slot holds (the access token is fresh,
     // so the vendor can say): asked here, with no lock but the slot's;
     // phase 3 uses the answer for exactly these bytes.
-    let answer = match &res {
-        Ok(()) => slots::read_slot(tool, &e.id).ok().flatten().map(|b| (fingerprint(&b), refresher.identify(tool, &b))),
-        Err(_) => None,
+    let answer = match (&res, &after) {
+        (Ok(()), Some(b)) => Some((fingerprint(b), refresher.identify(tool, b))),
+        _ => None,
     };
     let vendor_ms = t0.elapsed().as_millis();
     // Phase 3: the tool lock, then the database, briefly.
     let tl = match store::lock_tool_as(tool, COMMIT_WAIT, "saving an idle token's refresh") {
         Ok(l) => l,
         Err(err) => {
-            crate::log_debug!("[llm-accounts] keep-warm {}/{}: end (not recorded: {}), vendor {vendor_ms} ms", tool.as_str(), e.id, err.code());
+            crate::log_debug!("[llm-accounts] keep-warm {}/{}: end (not recorded: {}), vendor {vendor_ms} ms", tool.as_str(), cur.id, err.code());
             return Ok(None);
         }
     };
     let ident = |_: Tool, b: &[u8]| answer.as_ref().filter(|(fp, _)| *fp == fingerprint(b)).and_then(|(_, who)| who.clone());
     let out = with_db(db, |conn| -> Result<Option<WarmResult>, WalletError> {
-        let Some(e) = still_idle(conn, tool, &e.id, in_use)? else {
-            crate::log_debug!("[llm-accounts] keep-warm {}/{}: the token changed meanwhile; result dropped", tool.as_str(), e.id);
+        let Some(e) = still_idle(conn, tool, &cur.id, in_use)? else {
+            crate::log_debug!("[llm-accounts] keep-warm {}/{}: the token changed meanwhile; result dropped", tool.as_str(), cur.id);
             return Ok(None);
         };
+        if read_back {
+            let m = slots::slot_meta(tool, &e.id);
+            update_meta(conn, &e.id, &MetaUpdate { expires_at: Some(m.expires_at), state: Some(state::SIGNED_IN.into()), detail: Some(None), ..Default::default() })?;
+            clear_refusal(&e.id);
+            return Ok(Some(WarmResult { id: e.id, tool: tool.as_str().into(), refreshed: false, error: None, adopted: None }));
+        }
         match &res {
             Ok(()) => {
+                clear_refusal(&e.id);
                 // The drift check (LT-A9).
                 if let Some(moved) = heal_drift(conn, tool, &e, Some(&ident), None, Some(&e.id))? {
                     return Ok(Some(WarmResult { id: e.id, tool: tool.as_str().into(), refreshed: true, error: None, adopted: Some(moved) }));
@@ -2311,7 +2481,23 @@ fn warm_one(
                 let detail = if super::looks_like_secret(err) { "refresh failed".to_string() } else { err.clone() };
                 let mut u = MetaUpdate { detail: Some(Some(detail.clone())), ..Default::default() };
                 if refresh_error_is_permanent(err) {
-                    u.state = Some(state::NEEDS_LOGIN.into());
+                    match (&before, &after) {
+                        // The same bytes refused twice, on two fresh reads:
+                        // that refresh token is dead.
+                        (Some(b), Some(a)) if a == b => {
+                            if refusal_confirmed(&e.id, b) {
+                                crate::log_debug!("[llm-accounts] keep-warm {}/{}: refresh token refused twice ({detail}); marked sign in again", tool.as_str(), e.id);
+                                u.state = Some(state::NEEDS_LOGIN.into());
+                                u.detail = Some(Some(format!("The provider refused this token's saved sign-in twice ({detail}). Sign it in again.")));
+                            } else {
+                                crate::log_debug!("[llm-accounts] keep-warm {}/{}: refresh token refused once ({detail}); checked again next pass", tool.as_str(), e.id);
+                                u.detail = Some(Some(format!("The provider refused this token's saved sign-in once ({detail}); K2 checks again on its next pass.")));
+                            }
+                        }
+                        // The slot changed under the refresh (a CLI wrote
+                        // it): the refusal says nothing about the new bytes.
+                        _ => clear_refusal(&e.id),
+                    }
                 }
                 update_meta(conn, &e.id, &u)?;
                 Ok(Some(WarmResult { id: e.id, tool: tool.as_str().into(), refreshed: false, error: Some(detail), adopted: None }))
@@ -2321,9 +2507,10 @@ fn warm_one(
     crate::log_debug!(
         "[llm-accounts] keep-warm {}/{}: end ({}), vendor {vendor_ms} ms, tool lock {} ms",
         tool.as_str(),
-        e.id,
+        cur.id,
         match &out {
             Some(r) if r.refreshed => "refreshed",
+            Some(r) if r.error.is_none() => "read back from the live login",
             Some(_) => "refresh failed",
             None => "dropped",
         },

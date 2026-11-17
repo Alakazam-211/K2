@@ -43,7 +43,9 @@ TROOT="$tmp/root"
 mkdir -p "$TREE/scripts" "$TREE/crates/k2-release-keys/src" "$TROOT" "$tmp/keys" "$tmp/home"
 cp -R "$REPO/scripts/k2sign" "$TREE/scripts/"
 mkdir -p "$TREE/scripts/lib"
-cp "$REPO/scripts/lib/sign-updater.sh" "$REPO/scripts/lib/sign-approve.sh" "$REPO/scripts/lib/check-daemon-asset.py" "$TREE/scripts/lib/"
+# sign-updater.sh sources its sibling k2-signer.sh (the client path's door),
+# so the tree carries it too.
+cp "$REPO/scripts/lib/sign-updater.sh" "$REPO/scripts/lib/k2-signer.sh" "$REPO/scripts/lib/sign-approve.sh" "$REPO/scripts/lib/check-daemon-asset.py" "$TREE/scripts/lib/"
 cp "$REPO/crates/k2-release-keys/src/lib.rs" "$TREE/crates/k2-release-keys/src/lib.rs"
 
 # Throwaway U1 (Tauri form: base64 of the minisign secret key file), U3.

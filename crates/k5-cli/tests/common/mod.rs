@@ -41,6 +41,19 @@ pub fn cli_script() -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
+/// `cli/src/router.sh`, the shell router.
+pub fn router() -> String {
+    let path = cli_src().join("router.sh");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+/// `cli/src/schema-head.sh`, which lists the router words left out of
+/// `--schema` on purpose.
+pub fn schema_head() -> String {
+    let path = cli_src().join("schema-head.sh");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
 /// `cli/src/prelude.sh`.
 pub fn prelude() -> String {
     let path = cli_src().join("prelude.sh");

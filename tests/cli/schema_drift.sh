@@ -13,6 +13,12 @@
 #
 # No daemon: --schema needs none. HOME is sandboxed. Requires python3; a
 # missing python3 is a FAIL, not a skip.
+#
+# SCHEMA_DRIFT_LIST=1 also prints what it read, one per line, before the
+# verdict: `arm <words joined by |>`, `left-out <word> <reason>` and
+# `alias <word> <target>`. The Rust CLI's route table test
+# (crates/k5-cli/tests/route_table.rs) reads the router with its own port
+# of this parser and checks the two read the same.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -34,7 +40,7 @@ mkdir -p "$HOME"
 "$K2_CLI" --schema >"$WORK/schema.json"
 
 python3 - "$ROUTER" "$HEAD_PART" "$WORK/schema.json" <<'PY'
-import json, re, sys
+import json, os, re, sys
 
 router_path, head_path, schema_path = sys.argv[1:4]
 
@@ -84,6 +90,14 @@ for l in m.group(1).split("\n"):
 
 doc = json.load(open(schema_path, encoding="utf-8"))
 heads = {c["name"].split()[0] for c in doc["commands"]}
+
+if os.environ.get("SCHEMA_DRIFT_LIST") == "1":
+    for arm in arms:
+        print("arm " + "|".join(arm))
+    for w, why in left_out.items():
+        print("left-out %s %s" % (w, why))
+    for alias, target in ALIASES.items():
+        print("alias %s %s" % (alias, target))
 
 problems = []
 router_words = {w for arm in arms for w in arm}

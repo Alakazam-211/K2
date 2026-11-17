@@ -132,6 +132,20 @@ describe('the tiles', () => {
     expect(within(tile).getByTestId('video-tile-media').contains(within(tile).getByTestId('video-canvas'))).toBe(true)
   })
 
+  it("a tile's name sits on the look's chip: a pill in Glass, a cut chip in Terminal, on the media label colours", async () => {
+    const s = setup([fakeTrack('7')])
+    render(<VideoStage ctl={s.ctl} people={people} title="Standup" />)
+    await ready(s)
+    const label = within(await screen.findByTestId('video-tile')).getByTestId('video-tile-label')
+    expect(label.getAttribute('data-k2-chamfer')).toBe('chip')
+    expect(label.className).toContain('rounded-[var(--radius-pill)]')
+    expect(label.className).toContain('bg-[var(--color-media-label-bg)]')
+    expect(label.className).toContain('text-[var(--color-media-label-text)]')
+    // Off the tile's edge, not flush in its corner.
+    expect(label.className).toMatch(/\bbottom-1\.5\b/)
+    expect(label.className).toMatch(/\bleft-1\.5\b/)
+  })
+
   it('picks columns for the tile count', () => {
     expect([1, 2, 4, 5, 9, 10].map(gridColumns)).toEqual([1, 2, 2, 3, 3, 4])
   })

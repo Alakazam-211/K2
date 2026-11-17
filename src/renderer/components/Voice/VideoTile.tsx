@@ -1,8 +1,9 @@
 // Video in voice rooms: one tile. A canvas the tile's sink draws on, the
 // person's name and mic at its bottom left, and in place of the picture: their
 // avatar while the camera's off, or a line saying why it's paused. A tile may
-// carry one more label at its bottom right (the floating tile's call time). Labels sit on the picture on a chip of their own
-// (`--color-media-label-*`), readable on any video in every Style. A
+// carry one more label at its bottom right (the floating tile's call time).
+// Labels sit on the picture on the look's chip (`--color-media-label-*`),
+// readable on any video in every Style. A
 // `zoomable` tile (a share in the middle, the call view's grid) lets this
 // viewer zoom in and move around its picture (TileZoom).
 //
@@ -12,7 +13,7 @@
 // picture that doesn't fill it, and in place of one, is that surface, never
 // a black box.
 
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
 import PresenceAvatar from '@/components/Presence/PresenceAvatar'
 import { MicOffIcon } from '@/components/icons/K2Icons'
 import { pausedText, type VideoTile as Tile } from '@/lib/voice/video-labels'
@@ -35,9 +36,16 @@ function placeholderLine(t: Tile): string | null {
   }
 }
 
-/** A label drawn on the picture: the name's chip, the time's. */
+/** A label drawn on the picture: the name's chip, the time's. The look's
+ *  chip: a pill in Glass (`--radius-pill`); in Terminal a cut chip where the
+ *  element carries `data-k2-chamfer="chip"` (CHIP_CUT). Its colours read at
+ *  4.5:1 or better over any picture, white ones included. */
 export const MEDIA_LABEL =
-  'flex max-w-full items-center gap-1 bg-[var(--color-media-label-bg)] px-1.5 py-0.5 text-[11px] leading-[14px] text-[var(--color-media-label-text)]'
+  'flex min-w-0 items-center gap-1 rounded-[var(--radius-pill)] bg-[var(--color-media-label-bg)] px-2 py-0.5 text-[11px] leading-[14px] text-[var(--color-media-label-text)]'
+
+/** A media label's Terminal cut, with no edge drawn on it (the chip has no
+ *  border; the cut's edge would otherwise take the text colour). */
+export const CHIP_CUT = { 'data-k2-chamfer': 'chip', style: { '--k2-ch-w': '0px' } as CSSProperties } as const
 
 export interface VideoTileProps {
   tile: Tile
@@ -139,7 +147,12 @@ export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = 
           </div>
         ) : null}
       </div>
-      <div data-testid="video-tile-label" data-at="bottom-left" className={`absolute bottom-0 left-0 ${MEDIA_LABEL} ${corner ? 'max-w-[60%]' : ''}`}>
+      <div
+        data-testid="video-tile-label"
+        data-at="bottom-left"
+        {...CHIP_CUT}
+        className={`absolute bottom-1.5 left-1.5 ${MEDIA_LABEL} ${corner ? 'max-w-[60%]' : 'max-w-[calc(100%-12px)]'}`}
+      >
         {tile.audioMuted ? (
           <span data-testid="video-tile-muted" title="Microphone off" className="flex">
             <MicOffIcon size={12} />
@@ -150,7 +163,7 @@ export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = 
         </span>
       </div>
       {corner ? (
-        <div data-testid="video-tile-corner" data-at="bottom-right" className={`absolute bottom-0 right-0 ${MEDIA_LABEL}`}>
+        <div data-testid="video-tile-corner" data-at="bottom-right" {...CHIP_CUT} className={`absolute bottom-1.5 right-1.5 ${MEDIA_LABEL}`}>
           {corner}
         </div>
       ) : null}

@@ -114,7 +114,7 @@ describe('one Home', () => {
     const out = addAgentToHomeFromMenu('local', atlas)
     expect(out).toEqual({ kind: 'already', homeId: 'h1' })
     expect(rowsOf('h1')).toEqual(['atlas::local'])
-    expect(toasts()).toEqual([{ message: 'Already on My Home', type: 'info' }])
+    expect(toasts()).toEqual([{ message: 'Already in My Home', type: 'info' }])
   })
 })
 
@@ -183,7 +183,7 @@ describe('several Homes', () => {
     const mine = screen.getByLabelText(/My Home/) as HTMLInputElement
     expect(mine.checked).toBe(true)
     expect(mine.disabled).toBe(true)
-    expect(screen.getByText('Already added')).toBeTruthy()
+    expect(screen.getByText('Already in it')).toBeTruthy()
     // The selected Home already has it, so nothing starts ticked: Add is off.
     const add = screen.getByRole('button', { name: 'Add' }) as HTMLButtonElement
     expect(add.disabled).toBe(true)

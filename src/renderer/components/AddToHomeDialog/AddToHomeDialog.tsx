@@ -14,6 +14,7 @@ import { useAddToHomeDialogStore } from '@/stores/add-to-home-dialog'
 import { useHomesStore } from '@/stores/homes'
 import { useToastStore } from '@/stores/toast'
 import { addWorkspaceToHome, addedToHomesMessage, homeAddressFor, homeHasAddress } from '@/lib/add-to-home'
+import { ALREADY_IN_GROUP_NOTE, CURRENT_GROUP_NOTE, GROUPS_LABEL } from '@/components/Home/groups/group-copy'
 
 export default function AddToHomeDialog(): React.JSX.Element | null {
   const isOpen = useAddToHomeDialogStore((s) => s.isOpen)
@@ -103,9 +104,9 @@ export default function AddToHomeDialog(): React.JSX.Element | null {
         <div className="px-5 pt-5 pb-3">
           <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Add {workspace.name} to Home</h2>
           <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
-            {everyHomeHasIt ? 'It is already on every Home.' : 'Pick the Homes to add it to.'}
+            {everyHomeHasIt ? 'It’s already in every group.' : 'Pick the groups to add it to.'}
           </p>
-          <ul className="mt-3 flex flex-col max-h-[calc(var(--k2-vh)*0.5)] overflow-y-auto" aria-label="Homes">
+          <ul className="mt-3 flex flex-col max-h-[calc(var(--k2-vh)*0.5)] overflow-y-auto" aria-label={GROUPS_LABEL}>
             {homes.map((h) => {
               const has = already.has(h.id)
               const ref = !has && firstEnabled ? firstBox : undefined
@@ -130,9 +131,9 @@ export default function AddToHomeDialog(): React.JSX.Element | null {
                     />
                     <span className="truncate flex-1">{h.name}</span>
                     {has ? (
-                      <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">Already added</span>
+                      <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">{ALREADY_IN_GROUP_NOTE}</span>
                     ) : h.id === selectedId ? (
-                      <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">Current</span>
+                      <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">{CURRENT_GROUP_NOTE}</span>
                     ) : null}
                   </label>
                 </li>

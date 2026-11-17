@@ -428,7 +428,7 @@ describe('Home — the Agents page shell', () => {
     // Entering Home opened the top row; clear it to click one.
     act(() => useProjectsStore.setState({ activeProjectId: null, activeWorkspaceId: null }))
     // Nothing selected: Agents empty state, Home wording, no drawers.
-    expect(screen.getByText('Pick an agent on this Home')).toBeTruthy()
+    expect(screen.getByText('Pick an agent in this group')).toBeTruthy()
     expect(screen.queryByTestId('drawer-files')).toBeNull()
 
     fireEvent.click(rowOf('Cortana'))
@@ -437,7 +437,7 @@ describe('Home — the Agents page shell', () => {
     expect(usePageViewStore.getState().page).toBe('home')
     // The room opens in the main area; the sidebar still shows the Home roster.
     expect(within(roomArea()).getByTestId('terminal-area').getAttribute('data-cwd')).toBe('/w/cortana')
-    expect(screen.queryByText('Pick an agent on this Home')).toBeNull()
+    expect(screen.queryByText('Pick an agent in this group')).toBeNull()
     expect(rowOf('Cortana').getAttribute('aria-current')).toBe('true')
     expect(homeSidebar().querySelectorAll('[data-agent-row]').length).toBe(3)
   })
@@ -447,7 +447,7 @@ describe('Home — the Agents page shell', () => {
     // After entry (which opened the top row), the Agents page's pick moves
     // to an agent not on this Home.
     act(() => useProjectsStore.getState().setActiveProject('pn'))
-    expect(screen.getByText('Pick an agent on this Home')).toBeTruthy()
+    expect(screen.getByText('Pick an agent in this group')).toBeTruthy()
     expect(roomArea().style.display).toBe('none')
     expect(screen.getByText('No workspace selected')).toBeTruthy()
   })
@@ -457,12 +457,12 @@ describe('Home — the Agents page shell', () => {
     for (const r of [...home.rows]) useHomesStore.getState().removeRow(home.id, r.address)
     render(<Shell />)
     expect(screen.getByText('Add an agent to get started', { selector: '[data-room-empty] p' })).toBeTruthy()
-    // The group's own empty state, centred in the list: its name, the hint
+    // The group's own empty state, centred in the list: "This group is empty", the hint
     // and a small + that opens Add to Home (focus comes back to it).
     const note = homeSidebar().querySelector('[data-home-empty]') as HTMLElement
     expect(note.getAttribute('role')).toBe('status')
     expect(note.className).toContain('absolute inset-0 flex flex-col items-center justify-center')
-    expect(note.querySelector('b')?.textContent).toBe('Group 1 is empty')
+    expect(note.querySelector('b')?.textContent).toBe('This group is empty')
     expect(within(note).getByText('Add agents with + below.')).toBeTruthy()
     expect(within(homeSidebar()).queryByText('No agents on this Home yet')).toBeNull()
     const plus = within(note).getByRole('button', { name: 'Add to Group 1' })

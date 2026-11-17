@@ -106,7 +106,7 @@ function pickerRow(
     detail: handle,
     avatar,
     state: taken ? 'checked' : 'pickable',
-    title: taken ? `Already on ${home.name}` : `Add ${w.name} to ${home.name}`,
+    title: taken ? `Already in ${home.name}` : `Add ${w.name} to ${home.name}`,
     keywords: [w.path ?? '', handle],
   }
 }
@@ -537,7 +537,7 @@ function FromServerList({
       } else if (!hasQuery && rows.length === 0) {
         status = <p className={statusClass}>No agents</p>
       } else if (!hasQuery && rows.every((r) => r.state === 'checked')) {
-        status = <p className={statusClass}>Every agent here is already on this Home</p>
+        status = <p className={statusClass}>Every agent here is already in this group</p>
       }
       return { key: s.key, label: s.label, count: listing.kind === 'ok' ? undefined : null, status, rows }
     })

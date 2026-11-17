@@ -131,13 +131,13 @@ import {
   type ZenAgentsMoveTarget,
 } from '@/lib/zen/zen-agents-order'
 
-export const ZEN_EMPTY_HOME = 'This Home has no agents yet. Use Add agent to add some.'
+export const ZEN_EMPTY_HOME = 'This group has no agents yet. Use Add agent to add some.'
 export const ZEN_EMPTY_SERVER = 'No agents on this server yet.'
 export const ZEN_EMPTY_FOCUS_GROUP = 'No agents in this focus group.'
 export const ZEN_EMPTY_LIST = 'Nothing listed yet'
 /** CA12: the list mode footer. */
 export const zenOthersNeedYou = (n: number): string => (n === 1 ? '1 other needs you' : `${n} others need you`)
-export const zenAgentNotOnHome = (agent: string, home: string): string => `${agent} isn’t on ${home}.`
+export const zenAgentNotOnHome = (agent: string, home: string): string => `${agent} isn’t in ${home}.`
 
 function propString(props: Record<string, unknown>, name: string): string | null {
   const v = props[name]
@@ -197,13 +197,13 @@ function HomePicker({
   })
   return (
     <div className="relative flex min-w-0 items-center gap-1.5" data-zen-home-picker="">
-      <span style={{ color: 'var(--zen-text-muted)' }}>Home:</span>
+      <span style={{ color: 'var(--zen-text-muted)' }}>Group:</span>
       <button
         ref={menu.anchorRef}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Show another Home here"
+        title="Show another group here"
         data-zen-home-picker-button=""
         data-zen-soft-button=""
         {...ZEN_GLASS_PILL_PROPS}
@@ -219,7 +219,7 @@ function HomePicker({
           fontWeight: 600,
         }}
       >
-        <span className="max-w-[10rem] truncate">{current?.name ?? 'Pick a Home'}</span>
+        <span className="max-w-[10rem] truncate">{current?.name ?? 'Pick a group'}</span>
         <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden style={{ color: 'var(--zen-text-muted)' }}>
           <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -892,7 +892,7 @@ function AddAgentRow({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element
         ref={ref}
         type="button"
         aria-haspopup="dialog"
-        title="Add an agent to this Home"
+        title="Add an agent to this group"
         onClick={onClick}
         data-zen-add-agent=""
         data-zen-soft-button=""
@@ -1091,7 +1091,7 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
     if (view.order !== null) {
       items.push({
         id: 'reset-order',
-        label: listMode ? 'Reset to the list’s order' : workspaces ? 'Reset order' : 'Reset to the Home’s order',
+        label: listMode ? 'Reset to the list’s order' : workspaces ? 'Reset order' : 'Reset to the group’s order',
         run: () => {
           void setZenAgentsView(gardenId, { order: null })
           setSpoken('Order reset')
@@ -1220,7 +1220,7 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
             : listMode
               ? ZEN_EMPTY_LIST
               : agent
-                ? zenAgentNotOnHome(agent, home?.name ?? 'this Home')
+                ? zenAgentNotOnHome(agent, home?.name ?? 'this group')
                 : ZEN_EMPTY_HOME}
         </div>
       ) : (

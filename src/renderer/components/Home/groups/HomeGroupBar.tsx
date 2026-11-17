@@ -56,6 +56,7 @@ import { pageBar, revealInBar, useGroupBarScroll } from './group-bar-scroll'
 import { GROUP_SWIPE_PROGRESS_VAR, useGroupSwipeInk } from './group-bar-ink'
 import GroupBarTip from './GroupBarTip'
 import GroupEditModal from './GroupEditModal'
+import { GROUPS_LABEL } from './group-copy'
 import './home-groups.css'
 
 export interface GroupBarItem {
@@ -263,7 +264,7 @@ export default function HomeGroupBar({
     <div
       ref={rootRef}
       role="toolbar"
-      aria-label="Groups"
+      aria-label={GROUPS_LABEL}
       aria-orientation={orientation}
       data-home-group-bar={orientation}
       data-swiping={swipe ? '' : undefined}

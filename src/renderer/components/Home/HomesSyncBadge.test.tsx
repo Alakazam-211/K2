@@ -25,7 +25,7 @@ describe('HomesSyncBadge', () => {
     expect(homesSyncBadgeView(st({ phase: 'synced' }))).toEqual({
       tone: 'ok',
       glyph: 'computer',
-      title: 'Homes sync with This computer',
+      title: 'Home sync with This computer',
     })
     expect(homesSyncBadgeView(st({ phase: 'synced', pending: 2 }))?.tone).toBe('paused')
     const off = homesSyncBadgeView(st({ phase: 'offline', pending: 3 }))
@@ -42,7 +42,7 @@ describe('HomesSyncBadge', () => {
     act(() => useHomesSyncStatus.setState(st({ phase: 'synced' })))
     const badge = screen.getByTestId('homes-sync-badge')
     expect(badge.getAttribute('data-tone')).toBe('ok')
-    expect(badge.getAttribute('title')).toBe('Homes sync with This computer')
+    expect(badge.getAttribute('title')).toBe('Home sync with This computer')
     act(() => useHomesSyncStatus.setState(st({ phase: 'offline', pending: 1 })))
     expect(screen.getByTestId('homes-sync-badge').getAttribute('data-tone')).toBe('paused')
     expect(screen.getByTestId('homes-sync-badge').getAttribute('title')).toBe('Sync paused · 1 change waiting for This computer')

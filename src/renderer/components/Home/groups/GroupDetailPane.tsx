@@ -12,7 +12,7 @@
 // Delete is pinned to the bottom: quiet, it asks once inline, and it is off
 // on the last group with the reason in words.
 //
-// Presentational apart from the Agents segment, which reads the Homes store;
+// Presentational apart from the Agents segment, which reads the groups store;
 // every other change goes out through a callback.
 
 import { useEffect, useId, useRef, useState } from 'react'
@@ -25,6 +25,7 @@ import GroupIconPicker from './GroupIconPicker'
 import { GROUP_DIALOG_FOOT_CLASS } from './group-bar-look'
 import GroupAgentsPane from './GroupAgentsPane'
 import type { GroupBarItem, GroupRenameResult } from './HomeGroupBar'
+import { GROUP_NAME_LABEL, LAST_GROUP_TEXT } from './group-copy'
 
 /** The right pane's two segments. */
 export type GroupDetailTab = 'agents' | 'icon'
@@ -105,7 +106,7 @@ export default function GroupDetailPane({
       <div className="flex flex-shrink-0 flex-col px-5 pt-3.5">
         <div className="mb-1.5 flex items-center gap-1.5">
           <label htmlFor={nameId} className={LABEL}>
-            Name
+            {GROUP_NAME_LABEL}
           </label>
           {saved && (
             <span role="status" className="ml-auto inline-flex items-center gap-1 text-[10px] font-medium text-[var(--color-text-muted)]" data-group-saved="">
@@ -219,7 +220,7 @@ export default function GroupDetailPane({
               ref={delRef}
               type="button"
               disabled={!canDelete}
-              title={canDelete ? `Delete “${group.name}”` : 'The last group can’t be deleted'}
+              title={canDelete ? `Delete “${group.name}”` : LAST_GROUP_TEXT}
               aria-describedby={canDelete ? undefined : `${uid}-why`}
               data-group-delete=""
               data-k2-focus=""
@@ -231,7 +232,7 @@ export default function GroupDetailPane({
             </button>
             {!canDelete && (
               <span id={`${uid}-why`} className="text-[11px] text-[var(--color-text-muted)]">
-                The last group can’t be deleted.
+                {LAST_GROUP_TEXT}
               </span>
             )}
           </>

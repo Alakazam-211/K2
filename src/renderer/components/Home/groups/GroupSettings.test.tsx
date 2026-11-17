@@ -167,7 +167,7 @@ describe('the settings pane', () => {
     unmount()
     render(<GroupEditModal {...props({ groups: [G[1]] })} />)
     const del = detail().querySelector('[data-group-delete]') as HTMLButtonElement
-    expect([del.disabled, del.title]).toEqual([true, 'The last group can’t be deleted'])
+    expect([del.disabled, del.title]).toEqual([true, 'The last group can’t be deleted.'])
   })
 
   it('after a delete, "<Name> deleted." and Undo at the foot of the list, which restores it at its old index', () => {

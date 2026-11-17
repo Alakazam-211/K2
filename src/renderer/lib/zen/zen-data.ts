@@ -2100,10 +2100,10 @@ export function installZenDataVerbs(): () => void {
     // G27: the Agents widget's own Home (view state; never `selectHome`).
     registerZenVerb('agents.home', (ctx) => zenHomeIdForCtx(ctx)),
     registerZenVerb('agents.setHome', (ctx, id) => {
-      const homeId = str(id, 'a Home id')
-      if (!useHomesStore.getState().homes.some((h) => h.id === homeId)) throw new Error(`zen: no Home ${homeId}`)
+      const homeId = str(id, 'a group id')
+      if (!useHomesStore.getState().homes.some((h) => h.id === homeId)) throw new Error(`zen: no group ${homeId}`)
       const view = viewOf(ctx)
-      if (view.homeId === null) throw new Error(`zen: widget ${ctx.widgetId} shows no Home`)
+      if (view.homeId === null) throw new Error(`zen: widget ${ctx.widgetId} shows no group`)
       useZenGardenHomesStore.getState().setPick(view.key, homeId)
       // A conversation from the old Home closes with it.
       const open = selection.get(view.key)

@@ -169,7 +169,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   permissions: 'Accessibility',
   'dictation-lab': 'Dictation Lab (dev)',
   companion: 'K2 Companion',
-  'homes-sync': 'Homes Sync',
+  'homes-sync': 'Home Sync',
   connections: 'Connected Servers',
   'k2-connect': 'Tunnel',
   domains: 'Custom Domains',

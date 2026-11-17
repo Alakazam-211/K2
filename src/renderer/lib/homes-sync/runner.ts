@@ -353,7 +353,7 @@ export class HomesSyncRunner {
     }
     if (!this.d.store.getState().storageOk) {
       // A storage error: never sync an in-memory seed over real Homes.
-      this.setStatus({ phase: 'error', error: 'Homes could not be read on this computer' }, st)
+      this.setStatus({ phase: 'error', error: 'Your groups couldn’t be read on this computer' }, st)
       return
     }
     this.setStatus({ phase: 'syncing', error: null }, st)
@@ -409,7 +409,7 @@ export class HomesSyncRunner {
         // Not registered (a wiped server DB): register again next round.
         this.registeredEpoch = null
         this.again = this.failures++ < 1
-        this.setStatus({ phase: 'error', error: 'This computer is not registered for Homes sync yet' })
+        this.setStatus({ phase: 'error', error: 'This computer isn’t registered for Home sync yet' })
         return
       }
       if (status === 403 || status === 404) {
@@ -516,23 +516,23 @@ export function statusLine(s: HomesSyncStatus): string {
     case 'synced':
       if (s.localOnly > 0) {
         const n = s.localOnly
-        return `Homes sync with ${where} · Not synced: ${n} ${n === 1 ? 'person or channel' : 'people and channels'} (your home server needs K2 0.46.13 or later)`
+        return `Home sync with ${where} · Not synced: ${n} ${n === 1 ? 'person or channel' : 'people and channels'} (your home server needs K2 0.46.13 or later)`
       }
-      return s.pending > 0 ? `Homes sync with ${where} · ${s.pending} waiting` : `Homes sync with ${where}`
+      return s.pending > 0 ? `Home sync with ${where} · ${s.pending} waiting` : `Home sync with ${where}`
     case 'syncing':
-      return `Homes sync with ${where} · syncing…`
+      return `Home sync with ${where} · syncing…`
     case 'offline':
       return s.pending > 0
         ? `Sync paused · ${s.pending} change${s.pending === 1 ? '' : 's'} waiting for ${where}`
         : `Sync paused · ${where} can’t be reached`
     case 'removed':
-      return `This computer was removed from Homes sync on ${where}`
+      return `This computer was removed from Home sync on ${where}`
     case 'unsupported':
-      return `${where} doesn’t sync Homes (update K2 there)`
+      return `${where} doesn’t sync groups (update K2 there)`
     case 'error':
-      return `Homes sync with ${where} hit a problem${s.error ? `: ${s.error}` : ''}`
+      return `Home sync with ${where} hit a problem${s.error ? `: ${s.error}` : ''}`
     case 'off':
     default:
-      return 'Homes sync is off: Homes stay on this computer'
+      return 'Home sync is off: groups stay on this computer'
   }
 }

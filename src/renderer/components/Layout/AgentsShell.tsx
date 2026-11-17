@@ -115,7 +115,7 @@ export default function AgentsShell({
   const emptyHint = onHome
     ? homeEmpty
       ? 'Add an agent to get started'
-      : 'Pick an agent on this Home'
+      : 'Pick an agent in this group'
     : 'Add a workspace to get started'
 
   return (

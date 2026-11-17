@@ -63,6 +63,7 @@ import { useHomeGroups } from './groups/useHomeGroups'
 import { GroupSwipeStrip } from './groups/GroupSwipeSlide'
 import { useRowFlip } from './groups/useRowFlip'
 import { HomeRowCaption, HomeRowPinMark } from './groups/HomeRowCaption'
+import { GROUP_EMPTY_TEXT, removeFromGroupLabel } from './groups/group-copy'
 import { MAX_PINS, displayRows, isPinned, pinnedRows, planRowDrop, shortcutIndexFor } from '@/lib/home-row-order'
 import { HomeAddButton, HomeNavFooterRow } from './HomeNavFooter'
 import { AddToHomeHost } from './AddToHomeModal'
@@ -205,7 +206,7 @@ export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: H
   if (roomOpen) items.push({ id: 'home-close-room', label: 'Close room' })
   if (items.length > 0) items.push({ id: 'home-sep', label: '', type: 'separator' })
   items.push(pinMenuItem(home, row))
-  items.push({ id: 'home-remove', label: `Remove from ${home.name}` })
+  items.push({ id: 'home-remove', label: removeFromGroupLabel(home.name) })
 
   // On Glass a clear frost: the list shows through, blurred (K2 Design).
   const clicked = await showContextMenu(items, { look: 'clear' })
@@ -512,7 +513,7 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
   )
 }
 
-/** An empty group, centred and calm in the list area: "<Group> is empty",
+/** An empty group, centred and calm in the list area: "This group is empty",
  *  "Add agents with + below." and a small + (the footer's) that opens Add
  *  to Home; focus comes back to it when that closes. `preview`: the group
  *  a swipe heads to, drawn but not live. */
@@ -524,9 +525,7 @@ function EmptyGroupNote({ name, preview = false }: { name: string; preview?: boo
       className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 p-4 text-center"
       data-home-empty=""
     >
-      <b className="max-w-full truncate type-heading text-[var(--color-text-primary)]" title={`${name} is empty`}>
-        {name} is empty
-      </b>
+      <b className="max-w-full truncate type-heading text-[var(--color-text-primary)]">{GROUP_EMPTY_TEXT}</b>
       <span className="type-hint text-[var(--color-text-secondary)]">Add agents with + below.</span>
       {preview ? (
         <span className="mt-1.5 h-8 w-8" />

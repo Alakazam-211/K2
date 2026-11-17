@@ -34,6 +34,7 @@ import GroupList, { type GroupListUndo } from './GroupList'
 import GroupDetailPane, { type GroupDetailTab } from './GroupDetailPane'
 import { GROUP_DIALOG_HEIGHT_SHARE, GROUP_DIALOG_LIST_PX, GROUP_DIALOG_MARGIN, GROUP_DIALOG_MAX, GROUP_DIALOG_TWO_PANE_MIN } from './group-bar-look'
 import type { GroupBarItem, GroupRenameResult } from './HomeGroupBar'
+import { GROUPS_LABEL } from './group-copy'
 
 export interface GroupEditModalProps {
   groups: readonly GroupBarItem[]
@@ -184,7 +185,7 @@ export default function GroupEditModal({
       <DialogFrame
         role="dialog"
         aria-modal="true"
-        aria-label="Groups"
+        aria-label={GROUPS_LABEL}
         data-group-edit-modal=""
         data-one-pane={onePane ? '' : undefined}
         data-view={onePane ? view : 'two'}
@@ -260,7 +261,7 @@ export default function GroupEditModal({
               </>
             ) : (
               <h2 className="m-0 min-w-0 flex-1 truncate text-[15px] font-semibold text-[var(--color-text-primary)]">
-                Groups
+                {GROUPS_LABEL}
                 <span className="ml-1.5 text-[11px] font-normal text-[var(--color-text-muted)]">{groups.length}</span>
               </h2>
             )}

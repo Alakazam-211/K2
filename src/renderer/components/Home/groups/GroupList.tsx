@@ -17,6 +17,7 @@ import { K2_ICON_PX, K2_ICON_STROKE } from '@/components/icons/K2Icons'
 import { GroupGlyph } from './GroupGlyph'
 import type { GroupBarItem } from './HomeGroupBar'
 import { GROUP_DIALOG_FOOT_CLASS } from './group-bar-look'
+import { GROUPS_LABEL, NEW_GROUP_LABEL } from './group-copy'
 
 export interface GroupListProps {
   groups: readonly GroupBarItem[]
@@ -116,7 +117,7 @@ export default function GroupList({
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-group-list="">
       <ScrollEdgeFrame className="min-h-0 flex-1" scrollClassName="overflow-y-auto overflow-x-hidden p-2" tint={DIALOG_EDGE_TINT} heavy testId="group-list-frame">
-        <ul ref={listRef} className="m-0 flex list-none flex-col p-0" role="listbox" aria-label="Groups" data-group-list-rows="">
+        <ul ref={listRef} className="m-0 flex list-none flex-col p-0" role="listbox" aria-label={GROUPS_LABEL} data-group-list-rows="">
           {groups.map((g, i) => {
             const selected = g.id === selectedId
             const lit = selected && !drill
@@ -237,7 +238,7 @@ export default function GroupList({
           }}
         >
           <PlusIcon size={K2_ICON_PX} strokeWidth={K2_ICON_STROKE} strokeLinecap="square" strokeLinejoin="miter" aria-hidden="true" />
-          New group
+          {NEW_GROUP_LABEL}
         </button>
       </div>
     </div>

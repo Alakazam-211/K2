@@ -118,7 +118,7 @@ Garden: a personal page that lives on this computer. Nobody else on the
 server sees it.
 
 THE FIRST TWO
-  Garden 1   the texting page: a Home's agents beside a conversation.
+  Garden 1   the texting page: a Home group's agents beside a conversation.
   Garden 2   empty: "Ask your agents to add things to this Garden", with
              Ask my agent and Start with the default.
   Every new Garden starts empty too (k2 zen garden new <name> --texting
@@ -239,8 +239,8 @@ k2 zen validate prints (line 3 is that widget's first key):
 Fix: place a zen-toggle too (k2 zen guide required).
 
 CONTENT WIDGETS (in a column they need id, kind and column = n)
-  agents        a Home's agents with live status and their last message:
-                home = "<Home>" for the whole Home, or agent = "<name>"
+  agents        a Home group's agents with live status and last message:
+                home = "<group name>" for the whole group, or agent = "<name>"
                 for one agent (mode follows); home-picker, order,
                 server-tag, preview, status, pins,
                 pin-limit, settings, recent-first, unread;

@@ -125,7 +125,7 @@ interface RailItem {
 }
 
 export const ZEN_NAV_RAIL_ITEMS: readonly RailItem[] = [
-  { page: 'home', name: PAGE_TAB_LABELS.home.name, title: `${PAGE_TAB_LABELS.home.name} — the texting view of your Homes`, Icon: HomeIcon },
+  { page: 'home', name: PAGE_TAB_LABELS.home.name, title: `${PAGE_TAB_LABELS.home.name} — the texting view of your groups`, Icon: HomeIcon },
   { page: 'agents', name: PAGE_TAB_LABELS.agents.name, title: `${PAGE_TAB_LABELS.agents.name} — this server’s agents, in Zen`, Icon: AgentsIcon },
   { page: 'projects', name: PAGE_TAB_LABELS.projects.name, title: `${PAGE_TAB_LABELS.projects.name} — in Zen`, Icon: ProjectsIcon },
   { page: 'tickets', name: PAGE_TAB_LABELS.feedback.name, title: `${PAGE_TAB_LABELS.feedback.title}, in Zen`, Icon: TicketsIcon },

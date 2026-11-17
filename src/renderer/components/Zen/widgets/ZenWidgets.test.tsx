@@ -805,7 +805,7 @@ describe('Agents widget', () => {
     await pickWidgetHome('h2')
     await waitFor(() =>
       expect(document.querySelector('[data-zen-agents-empty]')?.textContent).toBe(
-        'This Home has no agents yet. Use Add agent to add some.',
+        'This group has no agents yet. Use Add agent to add some.',
       ),
     )
     expect(useHomesStore.getState().selectedId).toBe('h1')
@@ -3018,7 +3018,7 @@ describe('the Agents widget’s Home picker (G27, TG4.4)', () => {
     )
     await waitFor(() =>
       expect(document.querySelector('[data-zen-agents-empty]')?.textContent).toBe(
-        'This Home has no agents yet. Use Add agent to add some.',
+        'This group has no agents yet. Use Add agent to add some.',
       ),
     )
     expect(document.querySelector('[data-zen-home-picker-button]')?.textContent).toContain('Personal')
@@ -3390,7 +3390,7 @@ describe('built-in widgets: modes and layout (G38, answer 5)', () => {
     ]
     h.pages['g-layout'].layout = { kind: 'columns', split: [100] }
     await mountGarden('k2.blank@1')
-    await waitFor(() => expect(document.querySelector('[data-zen-agents-empty]')?.textContent).toBe('sales isn’t on Personal.'))
+    await waitFor(() => expect(document.querySelector('[data-zen-agents-empty]')?.textContent).toBe('sales isn’t in Personal.'))
   })
 })
 

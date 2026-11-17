@@ -1,9 +1,10 @@
-// Settings → Network → Homes Sync (homes-sync-v1, 0.46.1).
+// Settings → Network → Home Sync (homes-sync-v1, 0.46.1). People see the
+// sections inside Home as groups; the feature is Home sync.
 //
 // Rosson (ticket 4f537560): one home server per person, local-first. The
 // desktop syncs its Homes with its own daemon; a phone picks its server and
 // that server lists the devices syncing from it. Here: this computer's sync
-// state, "Change Home Sync" / "Sync again", and the devices syncing their Homes
+// state, "Change Home sync" / "Sync again", and the devices syncing their Homes
 // from this computer, each with Remove. No "personal device" labels.
 //
 // Card groups: This computer (a status row with a dot and the one action),
@@ -47,9 +48,9 @@ export const HOMES_SYNC_MANIFEST: SettingEntry[] = [
   {
     id: 'homes-sync.devices',
     section: 'homes-sync',
-    label: 'Homes Sync',
-    description: 'Keep your Homes in step between this computer and your phone; see and remove synced devices',
-    keywords: ['homes', 'home', 'sync', 'devices', 'phone', 'companion', 'my home'],
+    label: 'Home Sync',
+    description: 'Keep your groups in step between this computer and your phone; see and remove synced devices',
+    keywords: ['groups', 'homes', 'home', 'sync', 'devices', 'phone', 'companion', 'my home'],
   },
 ]
 
@@ -89,7 +90,7 @@ export function homesStatusView(
     return {
       tone: 'neutral',
       title: 'Off for this computer',
-      hint: 'Its Homes stay here and don’t sync with your phone. Turn it on to keep them in step.',
+      hint: 'Its groups stay here and don’t sync with your phone. Turn it on to keep them in step.',
       reason: null,
     }
   }
@@ -115,42 +116,42 @@ export function homesStatusView(
         hint:
           s.pending > 0
             ? `This computer’s K2 server can’t be reached. ${changes(s.pending)} wait here and sync when it’s back.`
-            : 'This computer’s K2 server can’t be reached. Homes sync again when it’s back.',
+            : 'This computer’s K2 server can’t be reached. Groups sync again when it’s back.',
         reason: null,
       }
     case 'removed':
       return {
         tone: 'warn',
-        title: 'Taken off Homes Sync',
-        hint: 'This computer was removed from Homes Sync. Its Homes are still here; sync again to rejoin.',
+        title: 'Taken off Home sync',
+        hint: 'This computer was removed from Home sync. Its groups are still here; sync again to rejoin.',
         reason: null,
       }
     case 'unsupported':
       return {
         tone: 'neutral',
         title: 'Not available here',
-        hint: 'This computer’s K2 server doesn’t sync Homes. Update K2 to turn it on.',
+        hint: 'This computer’s K2 server doesn’t sync groups. Update K2 to turn it on.',
         reason: null,
       }
     case 'error':
       return {
         tone: 'error',
         title: 'Couldn’t sync',
-        hint: 'Homes Sync hit a problem and tries again by itself. Your Homes here are unchanged.',
+        hint: 'Home sync hit a problem and tries again by itself. Your groups here are unchanged.',
         reason: s.error,
       }
     case 'off':
     default:
-      return { tone: 'neutral', title: 'Starting…', hint: 'Homes Sync starts in a moment.', reason: null }
+      return { tone: 'neutral', title: 'Starting…', hint: 'Home sync starts in a moment.', reason: null }
   }
 }
 
 function Header(): React.JSX.Element {
   return (
     <header className="min-w-0">
-      <h2 className="type-title text-[var(--color-text-primary)]">Homes Sync</h2>
+      <h2 className="type-title text-[var(--color-text-primary)]">Home Sync</h2>
       <p className={`${SETTING_ROW_HINT} mt-1`}>
-        Keep your Homes the same on this computer and your phone. Each device keeps its own copy, so Home opens even offline,
+        Keep your groups the same on this computer and your phone. Each device keeps its own copy, so Home opens even offline,
         and changes made apart are combined when they meet again.
       </p>
     </header>
@@ -249,7 +250,7 @@ export function HomesSyncSection(props: {
       // put it back, so this computer keeps syncing as the page says.
       writeControl(kv, { enabled: true, epoch: readControl(kv).epoch })
       setEnabled(true)
-      setThisOutcome({ kind: 'failed', text: 'Couldn’t take this computer off Homes Sync.', reason: daemonErrorText(err) })
+      setThisOutcome({ kind: 'failed', text: 'Couldn’t take this computer off Home sync.', reason: daemonErrorText(err) })
       return false
     } finally {
       setBusy(false)
@@ -257,24 +258,24 @@ export function HomesSyncSection(props: {
   }
 
   // Rosson 11-11: "Stop syncing" read as a scare word. The button says
-  // "Change Home Sync"; turning it off is a choice inside, with what it
+  // "Change Home sync"; turning it off is a choice inside, with what it
   // keeps spelled out.
   const change = async (): Promise<void> => {
     setThisOutcome(null)
     const ok = await useConfirmDialogStore.getState().confirm({
-      title: 'Change Home Sync',
+      title: 'Change Home sync',
       message:
-        'This computer keeps its Homes in step with your phone through this computer’s K2 server. You can turn that off for this computer: its Homes stay here, nothing is deleted, and you can turn it back on at any time.',
+        'This computer keeps its groups in step with your phone through this computer’s K2 server. You can turn that off for this computer: its groups stay here, nothing is deleted, and you can turn it back on at any time.',
       confirmLabel: 'Turn off for this computer',
     })
     if (!ok) return
-    if (await turnOff()) setThisOutcome({ kind: 'done', text: 'Homes Sync is off for this computer. Its Homes stay here.' })
+    if (await turnOff()) setThisOutcome({ kind: 'done', text: 'Home sync is off for this computer. Its groups stay here.' })
   }
 
   const start = (): void => {
     startSyncing(kv)
     setEnabled(true)
-    setThisOutcome({ kind: 'done', text: 'Homes Sync is on. This computer joins the list in a moment.' })
+    setThisOutcome({ kind: 'done', text: 'Home sync is on. This computer joins the list in a moment.' })
     // The runner registers this computer; the list follows.
     setTimeout(() => void refresh(), 1500)
   }
@@ -284,21 +285,21 @@ export function HomesSyncSection(props: {
     const ok = await useConfirmDialogStore.getState().confirm({
       title: d.current ? 'Remove this computer?' : `Remove ${d.name}?`,
       message: d.current
-        ? 'This computer stops syncing its Homes. Its Homes stay as they are here, and you can turn Homes Sync back on at any time.'
-        : `${d.name} stops syncing its Homes with this computer. Its Homes stay on that device, and it can sync again later from its own settings.`,
+        ? 'This computer stops syncing its groups. Its groups stay as they are here, and you can turn Home sync back on at any time.'
+        : `${d.name} stops syncing its groups with this computer. Its groups stay on that device, and it can sync again later from its own settings.`,
       confirmLabel: 'Remove',
       destructive: true,
     })
     if (!ok) return
     if (d.current) {
-      if (await turnOff()) setListOutcome({ kind: 'done', text: 'Removed this computer. Its Homes stay here.' })
+      if (await turnOff()) setListOutcome({ kind: 'done', text: 'Removed this computer. Its groups stay here.' })
       return
     }
     setBusy(true)
     try {
       await transport.remove(d.deviceId)
       await refresh()
-      setListOutcome({ kind: 'done', text: `Removed ${d.name}. Its Homes stay on it.` })
+      setListOutcome({ kind: 'done', text: `Removed ${d.name}. Its groups stay on it.` })
     } catch (err) {
       setListOutcome({ kind: 'failed', text: `Couldn’t remove ${d.name}.`, reason: daemonErrorText(err) })
     } finally {
@@ -312,11 +313,11 @@ export function HomesSyncSection(props: {
         <Header />
         <SettingsLoadState
           kind="empty"
-          title="This computer’s K2 server doesn’t sync Homes yet"
+          title="This computer’s K2 server doesn’t sync groups yet"
           action={<Button onClick={openUpdates}>Check for updates</Button>}
           testId="homes-sync-unsupported"
         >
-          Update K2 on this computer to 0.46.1 or newer, then come back here to turn on Homes Sync. Your Homes stay on this
+          Update K2 on this computer to 0.46.1 or newer, then come back here to turn on Home sync. Your groups stay on this
           computer until then.
         </SettingsLoadState>
       </div>
@@ -335,7 +336,7 @@ export function HomesSyncSection(props: {
       action={<Button onClick={retry}>Try again</Button>}
       testId="homes-sync-devices-error"
     >
-      {loadError.plain} Your Homes are unchanged.
+      {loadError.plain} Your groups are unchanged.
     </SettingsLoadState>
   ) : devices === null ? (
     <SettingsLoadState kind="loading" title="Loading devices…" testId="homes-sync-devices-loading" />
@@ -370,7 +371,7 @@ export function HomesSyncSection(props: {
               </div>
               {enabled && !removed ? (
                 <Button variant="quiet" className="flex-shrink-0" disabled={busy} onClick={() => void change()}>
-                  Change Home Sync
+                  Change Home sync
                 </Button>
               ) : (
                 <Button variant="accent" className="flex-shrink-0" disabled={busy} onClick={start}>
@@ -386,7 +387,7 @@ export function HomesSyncSection(props: {
       <section>
         <SettingsGroup
           title="Devices syncing from this computer"
-          hint="Phones and computers that keep their Homes here. Removing one stops its sync; its Homes stay on it. Your prompt stash syncs with them too, and its files stay on the device that saved them."
+          hint="Phones and computers that keep their groups here. Removing one stops its sync; its groups stay on it. Your prompt stash syncs with them too, and its files stay on the device that saved them."
           card
           state={listState}
           testId="homes-sync-devices"

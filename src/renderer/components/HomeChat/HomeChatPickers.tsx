@@ -204,7 +204,7 @@ export function AddPersonPanel({ home, onAddRow, onBack, autoFocus = true }: Hom
               avatar: personAvatar(p),
               state: taken ? 'checked' : ready ? 'pickable' : 'disabled',
               title: taken
-                ? `Already on ${home.name}`
+                ? `Already in ${home.name}`
                 : ready
                   ? `Add ${p.displayName} to ${home.name}`
                   : `${p.displayName}'s chat is still being set up`,
@@ -310,7 +310,7 @@ export function AddChannelPanel({ home, onAddRow, onBack, autoFocus = true }: Ho
           detail: c.inviteOnly ? 'Invite only' : 'Open',
           avatar: channelGlyph(c.inviteOnly),
           state: taken ? 'checked' : 'pickable',
-          title: taken ? `Already on ${home.name}` : `Add ${c.name} to ${home.name}`,
+          title: taken ? `Already in ${home.name}` : `Add ${c.name} to ${home.name}`,
         }
       })
       const own =

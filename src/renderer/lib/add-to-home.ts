@@ -77,14 +77,14 @@ export function addAgentToHomeFromMenu(hostKey: string, w: ListedWorkspace): Add
   const address = homeAddressFor(hostKey, w)
   const toast = useToastStore.getState().addToast
   if (!address) {
-    toast(`${w.name} has no address yet, so it can't go on a Home.`, 'error')
+    toast(`${w.name} has no address yet, so it can’t go in a group.`, 'error')
     return { kind: 'no-handle' }
   }
   const { homes } = useHomesStore.getState()
   if (homes.length === 1) {
     const home = homes[0]
     if (homeHasAddress(home, address)) {
-      toast(`Already on ${home.name}`, 'info', 3000)
+      toast(`Already in ${home.name}`, 'info', 3000)
       return { kind: 'already', homeId: home.id }
     }
     addWorkspaceToHome(home, hostKey, w)
@@ -99,5 +99,5 @@ export function addAgentToHomeFromMenu(hostKey: string, w: ListedWorkspace): Add
 export function addedToHomesMessage(names: string[]): string {
   if (names.length === 1) return `Added to ${names[0]}`
   if (names.length === 2) return `Added to ${names[0]} and ${names[1]}`
-  return `Added to ${names.length} Homes`
+  return `Added to ${names.length} groups`
 }

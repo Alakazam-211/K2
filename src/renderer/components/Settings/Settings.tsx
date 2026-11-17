@@ -268,9 +268,9 @@ export function settingsNav({
         { id: 'domains', label: 'Custom Domains' },
         { id: 'connections', label: 'Connected Servers' },
         { id: 'companion', label: 'K2 Companion' },
-        // homes-sync-v1 (0.46.1): your Homes between this computer and your
+        // homes-sync-v1 (0.46.1): your groups between this computer and your
         // phone; the devices syncing from this server, with Remove.
-        { id: 'homes-sync', label: 'Homes Sync' },
+        { id: 'homes-sync', label: 'Home Sync' },
         // No Gardens page here (web): External Data stays reachable.
         ...(zenGardens ? [] : [{ id: 'data-sources' as const, label: 'External Data' }]),
       ],

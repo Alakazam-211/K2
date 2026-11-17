@@ -76,7 +76,7 @@ function Header({ readOnly }: { readOnly: boolean }): React.JSX.Element {
         {readOnly && <Tag tone="muted">View only</Tag>}
       </h2>
       <p className={`${SETTING_ROW_HINT} mt-1`}>
-        Show Grok Bot agents from this server’s computer in Agents and on your Homes, tagged Grok Bot. Off until you turn
+        Show Grok Bot agents from this server’s computer in Agents and on Home, tagged Grok Bot. Off until you turn
         it on.
       </p>
       {readOnly && (
@@ -250,7 +250,7 @@ export function LocalGrokBotsSection(): React.JSX.Element {
             testId="grokbots-member-status"
           >
             {settings.show
-              ? 'Its agents and their chats appear in Agents and on your Homes, tagged Grok Bot.'
+              ? 'Its agents and their chats appear in Agents and on Home, tagged Grok Bot.'
               : 'Its agents and chats stay out of K2.'}
           </StatusRow>
         ) : found && found.installed ? (
@@ -296,7 +296,7 @@ export function LocalGrokBotsSection(): React.JSX.Element {
         >
           <div className={SETTING_ROW_LABEL}>{SHOW_LABEL}</div>
           <div className={SETTING_ROW_HINT}>
-            List its agents in Agents and on your Homes and read their chats, for the user K2 runs as. Agents and App guests
+            List its agents in Agents and on Home and read their chats, for the user K2 runs as. Agents and App guests
             never see them.
           </div>
           {showWaits && (

@@ -636,7 +636,7 @@ other computer. This prints it for every Garden, or the one named (an id
 or a name):
 
   order   the person's order (full row addresses, first first), on top of
-          the widget's own order (the Home's, or a list-from list's);
+          the widget's own order (the Home group's, or a list-from list's);
           "the widget's own" until they drag.
   pins    the Garden's own pins once they pinned or unpinned there ("none"
           = they unpinned all); until then each agent's workspace pin.

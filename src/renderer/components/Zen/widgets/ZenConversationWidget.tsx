@@ -290,7 +290,7 @@ export interface ZenConversationPicker {
 }
 
 /** The second line of a card for an agent that isn't found. */
-export const zenPickMissingText = (name: string): string => `${name} isn’t on this Home.`
+export const zenPickMissingText = (name: string): string => `${name} isn’t in this group.`
 
 /** `pick = "all"` before anyone is picked: the header and the body. */
 export const ZEN_PICK_NONE_LABEL = 'Pick an agent'
@@ -1062,9 +1062,9 @@ export function ZenConversationWidget({ bridge, decl }: ZenWidgetProps): React.J
           style={{ padding: 24, color: 'var(--zen-text-muted)' }}
         >
           {pick
-            ? `None of ${pick.join(', ')} is on this Home.`
+            ? `None of ${pick.join(', ')} is in this group.`
             : pinned
-            ? `${String(decl.props.agent)} isn’t on this Home.`
+            ? `${String(decl.props.agent)} isn’t in this group.`
             : rows.length > 0
               ? 'Pick an agent to message.'
               : ''}

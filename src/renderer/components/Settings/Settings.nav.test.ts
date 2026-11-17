@@ -44,9 +44,9 @@ describe('Settings nav Apps', () => {
         "{ id: 'domains', label: 'Custom Domains' },",
         "{ id: 'connections', label: 'Connected Servers' },",
         "{ id: 'companion', label: 'K2 Companion' },",
-        '// homes-sync-v1 (0.46.1): your Homes between this computer and your',
+        '// homes-sync-v1 (0.46.1): your groups between this computer and your',
         '// phone; the devices syncing from this server, with Remove.',
-        "{ id: 'homes-sync', label: 'Homes Sync' },",
+        "{ id: 'homes-sync', label: 'Home Sync' },",
       ].join('\n        '),
     )
     // External Data is in Network only where Gardens are hidden (web, Windows).

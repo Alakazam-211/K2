@@ -362,7 +362,7 @@ describe('Conversation with `pick`: the header is the drop-down', () => {
     const none = fakeBridge([])
     await mount(none, ['ghost', 'phantom'])
     expect(shown()).toBeNull()
-    expect(el('[data-zen-conversation-none]').textContent).toBe('None of ghost, phantom is on this Home.')
+    expect(el('[data-zen-conversation-none]').textContent).toBe('None of ghost, phantom is in this group.')
     expect(none.opened).toEqual([])
   })
 })

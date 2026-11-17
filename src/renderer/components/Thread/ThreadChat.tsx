@@ -288,6 +288,9 @@ export interface ThreadChatComposerProps {
   /** On the box's top edge: the activity drawer (`ZenActivityDrawer`) of
    *  the session this chat posts to. */
   drawer?: ReactNode
+  /** Over the drawer, on the box's edge: the reply bar (`ThreadReplyBar`),
+   *  where the desktop Thread's box has it. */
+  chips?: ReactNode
   /** Runs first; `preventDefault` there skips the send keys. */
   onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void
   testId?: string
@@ -322,6 +325,7 @@ export function ThreadChatComposer({
   above,
   leading,
   drawer,
+  chips,
   onKeyDown,
   testId,
   canSendEmpty = false,
@@ -410,7 +414,7 @@ export function ThreadChatComposer({
       <div className="flex min-w-0 items-end" style={{ gap: 8 }}>
         {leading}
         <div className="flex min-w-0 flex-1 flex-col" style={disabled ? { opacity: 0.6 } : undefined}>
-          <ThreadComposeBox stacked={stacked} drawer={drawer}>
+          <ThreadComposeBox stacked={stacked} chips={chips} drawer={drawer}>
             {tools}
             <div className="relative min-w-0 flex-1" style={{ alignSelf: 'center', ...threadComposeTextSlotStyle(stacked) }}>
               {ownHint && value.length === 0 && placeholder ? (

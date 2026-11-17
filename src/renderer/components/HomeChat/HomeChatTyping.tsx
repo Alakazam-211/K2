@@ -8,6 +8,10 @@
 // in and out. A small canvas-coloured backing keeps it readable over the
 // messages scrolling under it. The words are one polite live region, so a
 // screen reader hears "Ana is typing" once, not every dot.
+//
+// Under a reply bar (`under`) the line takes its room while someone types,
+// so the bar stands over it as the Thread's bar stands over its activity
+// ear, and comes back down when the typing stops.
 
 import type { CSSProperties, JSX } from 'react'
 import { typingLine } from '@/lib/home-chat/chat'
@@ -17,6 +21,10 @@ import { typingLine } from '@/lib/home-chat/chat'
 export function typingWords(names: readonly string[]): string {
   return typingLine(names).replace(/…$/, '')
 }
+
+/** The line's height plus its gap over the box (px): the room it takes
+ *  under a reply bar. */
+export const TYPING_LINE_ROOM_PX = 22
 
 const SLOT: CSSProperties = { position: 'relative', height: 0, zIndex: 1 }
 const LINE: CSSProperties = {
@@ -38,10 +46,10 @@ const LINE: CSSProperties = {
 }
 const DOT: CSSProperties = { width: 4, height: 4, background: 'currentColor', display: 'inline-block' }
 
-export function HomeChatTyping({ names }: { names: readonly string[] }): JSX.Element {
+export function HomeChatTyping({ names, under = false }: { names: readonly string[]; under?: boolean }): JSX.Element {
   const on = names.length > 0
   return (
-    <div style={SLOT} data-home-chat-typing-slot="">
+    <div style={under && on ? { ...SLOT, height: TYPING_LINE_ROOM_PX } : SLOT} data-home-chat-typing-slot="">
       <div
         data-testid="home-chat-typing"
         data-on={on ? '' : undefined}

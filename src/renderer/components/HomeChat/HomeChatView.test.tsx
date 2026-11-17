@@ -183,8 +183,25 @@ describe('Home chat view', () => {
       fireEvent.click(row.querySelector('[data-testid="home-chat-reply"]') as HTMLElement)
     })
     const chip = await screen.findByTestId('thread-reply-chip')
-    expect(chip.textContent).toContain('Replying to Alex: second')
+    expect(chip.textContent).toContain('Replying to Alex')
+    expect(chip.querySelector('[data-reply-chip-text]')?.textContent).toBe('second')
     expect(chip.textContent).not.toContain('line two')
+    // The agent Thread's reply bar, on the box's edge: the same component,
+    // in the row over the typing line, never a note above the box.
+    expect(chip.hasAttribute('data-thread-reply-bar')).toBe(true)
+    expect(chip.closest('[data-thread-reply-row]')).toBeTruthy()
+    const compose = screen.getByTestId('home-chat-compose')
+    const box = compose.querySelector('[data-zen-compose-box]') as HTMLElement
+    expect(chip.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Esc in the box cancels it.
+    await act(async () => {
+      fireEvent.keyDown(screen.getByTestId('home-chat-input'), { key: 'Escape' })
+    })
+    expect(screen.queryByTestId('thread-reply-chip')).toBeNull()
+    await act(async () => {
+      fireEvent.click(row.querySelector('[data-testid="home-chat-reply"]') as HTMLElement)
+    })
+    await screen.findByTestId('thread-reply-chip')
     const input = screen.getByTestId('home-chat-input') as HTMLTextAreaElement
     await act(async () => {
       fireEvent.change(input, { target: { value: 'agreed' } })

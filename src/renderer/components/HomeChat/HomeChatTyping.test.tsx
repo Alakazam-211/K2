@@ -3,7 +3,7 @@
 // or several, and a slot of no height so the message box never moves.
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
-import { HomeChatTyping, typingWords } from './HomeChatTyping'
+import { HomeChatTyping, TYPING_LINE_ROOM_PX, typingWords } from './HomeChatTyping'
 
 afterEach(() => cleanup())
 
@@ -33,5 +33,13 @@ describe('typing bar', () => {
     expect(container.querySelector<HTMLElement>('[data-home-chat-typing-slot]')).toBe(slot)
     expect(slot.style.height).toBe('0px')
     expect(screen.getByTestId('home-chat-typing').style.opacity).toBe('1')
+  })
+
+  it('under a reply bar it takes its line while someone types, so the bar stands above it (the Thread\'s ear)', () => {
+    const { rerender, container } = render(<HomeChatTyping names={[]} under />)
+    const slot = container.querySelector<HTMLElement>('[data-home-chat-typing-slot]')!
+    expect(slot.style.height).toBe('0px')
+    rerender(<HomeChatTyping names={['Ana']} under />)
+    expect(slot.style.height).toBe(`${TYPING_LINE_ROOM_PX}px`)
   })
 })

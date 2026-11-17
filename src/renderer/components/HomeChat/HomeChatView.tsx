@@ -11,7 +11,7 @@
 // What differs from the Thread:
 //   - the activity bar shows who is typing (§9), not agent activity;
 //   - reactions under bubbles (§10) and a hover row: React, Reply, ⋯;
-//   - Reply: "Replying to X: first line…" above the box (× or Esc), sent as
+//   - Reply: the agent Thread's reply bar on the box's edge (× or Esc), sent as
 //     Sew's inline `reference {message_id, kind:"reply"}` (§11); the sent
 //     bubble's quote strip jumps to the original, paging back for it;
 //   - names over every run in a channel; in a DM only the other person's;
@@ -37,7 +37,7 @@ import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadLoadOlder, ThreadWindowSpac
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { useThreadTextCapPx } from '@/components/SessionView/useThreadTextCap'
 import { threadComposeCapWidth, threadTextColumnStyle } from '@/components/SessionView/threadTextWidth'
-import { ThreadReplyChip } from '@/components/Thread/ThreadMessageMenu'
+import { ThreadReplyBar } from '@/components/Thread/ThreadReplyBar'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
 import { usePrependHold } from '@/components/Thread/usePrependHold'
 import { threadRunWindow } from '@/components/Thread/threadRuns'
@@ -618,7 +618,16 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
             }}
             // The activity bar's place: who is typing (§9), never agent work.
             // Always there and of no height, so the box never moves.
-            drawer={<HomeChatTyping names={typingNames} />}
+            drawer={<HomeChatTyping names={typingNames} under={reply !== null} />}
+            // The agent Thread's reply bar, on the box's edge (× or Esc).
+            chips={
+              reply ? (
+                <ThreadReplyBar
+                  target={{ id: reply.id, seq: 0, from: reply.from, addr: '', text: firstLine(reply.text) || reply.text, part: false }}
+                  onCancel={() => setReply(null)}
+                />
+              ) : undefined
+            }
             above={
               <>
                 {jumpMiss && (
@@ -639,13 +648,6 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
                   <ThreadChatNote error testId="home-chat-send-error">
                     {homeChatSendFailedLine(sendError)}
                   </ThreadChatNote>
-                )}
-                {reply && (
-                  <ThreadReplyChip
-                    named
-                    target={{ id: reply.id, seq: 0, from: reply.from, addr: '', text: firstLine(reply.text) || reply.text, part: false }}
-                    onCancel={() => setReply(null)}
-                  />
                 )}
               </>
             }

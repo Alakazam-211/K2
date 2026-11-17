@@ -18,7 +18,8 @@
 //   solid tile.
 // - Terminal: a solid raised surface, the control edge, cut corners.
 //
-// A Garden's box (ZenCompose) and Home chat keep ThreadReplyChip.
+// Home's DMs and channels use this bar too (ThreadChatComposer's `chips`).
+// A Garden's box (ZenCompose) keeps ThreadReplyChip.
 
 import { useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { threadReplyFirstLine, threadReplyQuote, type ThreadReplyTarget } from '@/lib/thread-reply'

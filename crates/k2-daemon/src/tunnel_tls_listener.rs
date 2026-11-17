@@ -2741,9 +2741,14 @@ mod tests {
         // connection, all held, on top of whatever the other tests have open.
         // Boot raises the limit, but a test binary starts with the one it
         // inherited, so this has to raise it too.
-        k2_core::raise_nofile_limit();
-        let soft = k2_core::nofile_soft_limit().expect("RLIMIT_NOFILE");
-        assert!(soft >= 4 * 200 + 512, "soft RLIMIT_NOFILE {soft} too low to hold 200 connections");
+        // (Unix only: Windows has no descriptor limit to raise; the 200
+        // connections below run there too.)
+        #[cfg(unix)]
+        {
+            k2_core::raise_nofile_limit();
+            let soft = k2_core::nofile_soft_limit().expect("RLIMIT_NOFILE");
+            assert!(soft >= 4 * 200 + 512, "soft RLIMIT_NOFILE {soft} too low to hold 200 connections");
+        }
         let _home = crate::test_support::TempHome::new();
         let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
         crate::apps::guard::reload();

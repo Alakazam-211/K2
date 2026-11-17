@@ -14,8 +14,9 @@
 //!   parenting other than to the object itself (`partype` not 0: a bone, vertices), whose world
 //!   matrix depends on what the slot doesn't hold; delta transforms that aren't identity; a
 //!   rotation mode or a field the file doesn't give; no carrier.
-//! - **Driven** (animation, drivers or a constraint: [`super::model::driven`]): the placement
-//!   with `approx` `driven`; the stored numbers are the base the app recomputes from.
+//! - **Driven** (a transform channel animated or driven, or a constraint:
+//!   [`super::model::driven`]): the placement with `approx` `driven`; the stored numbers are the
+//!   base the app recomputes from.
 //!
 //! **The own-fields rule.** A placement reads its object's own fields (`xform`, `rotmode`,
 //! `quat`, `parent`: the slot's [`SpaceSlot::unit_fields`]) and the carrier. The carrier's
@@ -44,7 +45,7 @@ use k2_mpc_base::view_index::{ViewCarrier, ViewSource};
 
 use super::model::{self, f, parse_floats, prop, s, LiveLimits, PlaceFacts, OBJS, OBJ_PROPS};
 use super::view::address_of;
-use crate::meshread::read::{choose_scene, decode, read_inner, Decoded};
+use crate::meshread::read::{carrier_read, choose_scene, decode, CarrierRead, Decoded};
 use crate::meshread::MeshReadLimits;
 use crate::mutant;
 use crate::scene::ROTATION_MODES;
@@ -214,9 +215,10 @@ pub struct CarrierScene {
 }
 
 impl CarrierScene {
-    /// The scene of a decoded carrier `d`; mesh hashes from its mesh read under `limits`
-    /// (none when the read refuses).
-    fn of(d: &Decoded, limits: &MeshReadLimits) -> CarrierScene {
+    /// The scene of a decoded carrier `d`, and its mesh read under `limits` as the reuse keeps
+    /// it ([`CarrierRead`]); mesh hashes from that read (none, and no read kept, when it
+    /// refuses).
+    fn of(d: &Decoded, limits: &MeshReadLimits) -> (CarrierScene, Option<CarrierRead>) {
         let blocks = model::coll_blocks(&d.model);
         let (s, _) = choose_scene(&d.file, &d.raw, &d.model);
         let drawn = if mutant::active("CurrentSceneFirst") {
@@ -229,33 +231,39 @@ impl CarrierScene {
             s.and_then(|s| blocks.iter().position(|&b| b == s))
         };
         let mut mesh_hashes = HashMap::new();
-        if let Ok((_, by_obj)) = read_inner(d, None, limits) {
+        let read = carrier_read(d, limits).map(|(read, by_obj)| {
             for (oi, hash) in by_obj {
                 if let Some(o) = d.scene.objs.get(oi) {
                     mesh_hashes.insert(o.data.clone(), hash);
                 }
             }
-        }
-        CarrierScene {
+            read
+        });
+        let scene = CarrierScene {
             children: model::coll_children(&d.model),
             parents: d.scene.colls.iter().map(|c| c.parent).collect(),
             colls: d.scene.colls.len(),
             drawn,
             mesh_hashes,
-        }
+        };
+        (scene, read)
     }
 }
 
 /// The carrier as the view reads it, decoded once per carrier
 /// ([`ViewCarrier::decoded`]): each object's data and [`PlaceFacts`], in the decode's
 /// order (the order the carrier's pairing keys), and each paired key's place in it, worked out
-/// once and checked on every use; and its scene ([`CarrierScene`]).
+/// once and checked on every use; its scene ([`CarrierScene`]); and its mesh read as the
+/// reuse keeps it ([`CarrierRead`], for [`super::reuse::live_k2scene`]): the read's data
+/// section, shared, not the whole-file decode.
 #[derive(Debug)]
 pub struct CarrierView {
     objs: Vec<CarrierObj>,
     at: Mutex<HashMap<Key, usize>>,
     /// The carrier's scene.
     pub scene: CarrierScene,
+    /// The carrier's mesh read, kept; `None` when it refuses.
+    pub(crate) mesh_read: Option<CarrierRead>,
 }
 
 impl CarrierView {
@@ -264,7 +272,7 @@ impl CarrierView {
     pub fn read(bytes: &[u8], limits: &LiveLimits) -> Option<CarrierView> {
         let mesh_limits = MeshReadLimits::with_live(*limits);
         let d = decode(bytes, &mesh_limits).ok()?;
-        let scene = CarrierScene::of(&d, &mesh_limits);
+        let (scene, mesh_read) = CarrierScene::of(&d, &mesh_limits);
         Some(CarrierView {
             objs: d
                 .scene
@@ -277,6 +285,7 @@ impl CarrierView {
                 .collect(),
             at: Mutex::new(HashMap::new()),
             scene,
+            mesh_read,
         })
     }
 
@@ -375,6 +384,7 @@ pub fn view_placement(source: ViewSource<'_>, key: &Key, limits: &LiveLimits) ->
                         objs: cv.objs.clone(),
                         at: Mutex::new(HashMap::new()),
                         scene: cv.scene.clone(),
+                        mesh_read: None,
                     })
                 })
                 .clone()

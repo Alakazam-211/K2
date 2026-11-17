@@ -45,9 +45,10 @@
 //! isn't identity (`delta_transform`), a parenting other than to an object
 //! (`parent_not_object`) or to something not listed (`parent_unlisted`), a world matrix that
 //! can't be composed (`transform_unplaced`) or isn't finite (`transform_not_finite`), a mesh
-//! the reader refuses or that has no triangle (the mesh's own word, [`MeshSkip::word`]); a
-//! camera with no camera data the read can use (`camera_no_data`), or one [`super::camera`]
-//! refuses (its word: `camera_not_perspective`, `camera_sensor_fit_unknown`...).
+//! the reader refuses or that has no triangle (the mesh's own word,
+//! [`mesh::MeshSkip::word`]); a camera with no camera data the read can use (`camera_no_data`),
+//! or one [`super::camera`] refuses (its word: `camera_not_perspective`,
+//! `camera_sensor_fit_unknown`...).
 //!
 //! **Bounds first.** The objects, cameras and meshes are counted against [`MeshReadLimits`];
 //! then the read's heap is worked out from the decoded file's sizes and each mesh's counts (from
@@ -56,6 +57,7 @@
 //! written, after the loose vertices are dropped, by the writer's own checks.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use k2_mpc_base::doc::Neutral;
 use k2_mpc_base::elem::Key;
@@ -65,18 +67,20 @@ use k2_mpc_base::session::Pairing;
 use super::camera::{self, CameraData, Render};
 use super::hidden::{HiddenBy, HiddenWalk};
 use super::k2scene::{
-    self, Hidden, LeftOut, Scene, SceneCamera, SceneMesh, SceneObject, MAX_MODIFIERS,
+    self, Hidden, LeftOut, MeshHead, Scene, SceneCamera, SceneMesh, SceneObject, MAX_MODIFIERS,
     MAX_MODIFIER_BYTES,
 };
-use super::mesh::{self, MeshCounts, MeshSkip};
+use super::mesh::{self, MeshCounts};
 use super::tri::TriCounts;
 use super::{at_most, MeshReadError, MeshReadLimits};
-use crate::live::model::{self, coll_blocks, coll_children, key_num, LiveObj, LiveScene, Parent};
+use crate::live::model::{
+    self, coll_blocks, coll_children, key_num, LiveColl, LiveObj, LiveScene, Parent,
+};
 use crate::live::{address_of, place, OBJS, OBJ_PROPS};
 use crate::mutant;
 use crate::reader::{read_blend, BlendFile, Block, Target};
 use crate::scene::{read_scene, Detail, IdBlock, SceneModel, LIST_MAX};
-use crate::write::{decompress, WRITE_FROM, WRITE_TO};
+use crate::write::decompress;
 
 /// This read's own revision: a host keys its cache of the output by the version and this.
 pub const MESH_READ_FORMAT: u32 = 1;
@@ -254,7 +258,7 @@ pub fn decode(bytes: &[u8], limits: &MeshReadLimits) -> Result<Decoded, MeshRead
     let file = read_blend(&mut &raw[..], &live.read)
         .map_err(model::read_declined)
         .map_err(declined)?;
-    if !(WRITE_FROM..=WRITE_TO).contains(&file.header.version) {
+    if !crate::scene::reads(file.header.version) {
         return Err(MeshReadError::Declined {
             code: "live_version",
         });
@@ -483,9 +487,18 @@ fn object_keys(d: &Decoded, pairing: Option<&Pairing>) -> Result<Vec<Key>, MeshR
     let Some(p) = pairing else {
         return Ok(d.scene.minted_keys().1);
     };
+    let keys = p.keys(OBJS).ok_or(MeshReadError::Pairing {
+        what: "no keys for the objects",
+    })?;
+    check_object_keys(keys, d.scene.objs.len())?;
+    Ok(keys.to_vec())
+}
+
+/// The checks on a pairing's object keys for a decode of `objects` objects: as many keys, each
+/// `oN`, none twice.
+pub(crate) fn check_object_keys(keys: &[Key], objects: usize) -> Result<(), MeshReadError> {
     let bad = |what| MeshReadError::Pairing { what };
-    let keys = p.keys(OBJS).ok_or(bad("no keys for the objects"))?;
-    if keys.len() != d.scene.objs.len() {
+    if keys.len() != objects {
         return Err(bad("the object keys don't fit the objects"));
     }
     let mut seen = HashSet::new();
@@ -497,11 +510,87 @@ fn object_keys(d: &Decoded, pairing: Option<&Pairing>) -> Result<Vec<Key>, MeshR
             return Err(bad("an object key is given twice"));
         }
     }
-    Ok(keys.to_vec())
+    Ok(())
+}
+
+/// What the read takes of one object from the file, beside what the live store holds of it
+/// (its name, key, holders, own flag and transform). Kept per carrier ([`CarrierRead`]), so a
+/// live state's K2SCENE1 is written without the file.
+#[derive(Debug, Clone)]
+pub(crate) struct FileObj {
+    /// Linked from a library.
+    pub library: bool,
+    /// It instances a collection.
+    pub instances: bool,
+    /// A mesh object's `Mesh` block, or why it has none the read draws (`no_mesh`,
+    /// `linked_mesh`).
+    pub mesh: Result<u32, &'static str>,
+    /// A camera object's data, when its record gives it.
+    pub camera: Option<CameraData>,
+    /// The scene drawn's own camera.
+    pub scene_camera: bool,
+    /// A mesh object's modifiers.
+    pub modifiers: Vec<String>,
+    /// It has more modifiers than those.
+    pub more_modifiers: bool,
+}
+
+/// What the read takes of each of the decode's objects from the file (`obj_ids` their places
+/// in the model; `scene_camera` the scene drawn's camera, by its place in the model).
+fn file_objs(d: &Decoded, obj_ids: &[usize], scene_camera: Option<usize>) -> Vec<FileObj> {
+    let (file, raw, ids) = (&d.file, &d.raw[..], &d.model.ids);
+    let records = d.model.cameras();
+    let record_of: HashMap<&str, usize> = records
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.object.as_str(), i))
+        .collect();
+    obj_ids
+        .iter()
+        .enumerate()
+        .map(|(oi, &mi)| {
+            let o = &d.scene.objs[oi];
+            let id = &ids[mi];
+            let is_mesh = o.kind == "mesh";
+            let mesh = match &id.detail {
+                _ if !is_mesh => Err("no_mesh"),
+                Detail::Object { data: Some(di), .. } => {
+                    if ids[*di].struct_name != "Mesh" || ids[*di].library.is_some() {
+                        Err("linked_mesh")
+                    } else {
+                        Ok(ids[*di].block)
+                    }
+                }
+                _ => Err("no_mesh"),
+            };
+            let (modifiers, more_modifiers) = if is_mesh {
+                modifiers(file, raw, id.block)
+            } else {
+                (Vec::new(), false)
+            };
+            let camera = if o.kind == "camera" {
+                let object_key = id.key.clone().unwrap_or_else(|| format!("#{mi}"));
+                record_of
+                    .get(object_key.as_str())
+                    .and_then(|&r| camera_data(&records[r].fields))
+            } else {
+                None
+            };
+            FileObj {
+                library: id.library.is_some(),
+                instances: instances_collection(file, raw, id.block),
+                mesh,
+                camera,
+                scene_camera: scene_camera == Some(mi),
+                modifiers,
+                more_modifiers,
+            }
+        })
+        .collect()
 }
 
 /// One object to write, before its mesh is known to read.
-struct Candidate {
+pub(crate) struct Candidate {
     /// Its place among the live scene's objects.
     obj: usize,
     name: String,
@@ -514,19 +603,207 @@ struct Candidate {
     driven: bool,
 }
 
-/// The heap a read needs at most, in bytes, worked out before any mesh array or the output is
-/// allocated: the decoded file as it is held (the decompressed bytes at their capacity, the
+/// One object as the read takes it: its place among the decode's objects (`oi`), its live name,
+/// its key's number, the collections holding it (by their place in the decode's collections)
+/// and its own viewport flag; the decode's object (its type, its parent and its placement's
+/// facts) and what the read takes of it from the file.
+pub(crate) struct ObjIn<'a> {
+    pub oi: usize,
+    pub name: &'a str,
+    pub num: u64,
+    pub holders: Vec<usize>,
+    pub hidden: bool,
+    pub live: &'a LiveObj,
+    pub file: &'a FileObj,
+}
+
+/// The objects and cameras of the scene drawn, gathered before any mesh is read.
+#[derive(Default)]
+pub(crate) struct Gathered {
+    cands: Vec<Candidate>,
+    cams: Vec<SceneCamera>,
+    /// Each camera's place among the decode's objects.
+    cam_of: Vec<usize>,
+    left: Vec<LeftOut>,
+    skipped: Vec<Skipped>,
+    collection_instances: u64,
+}
+
+/// An object's world matrix, or why it has none the read draws: its delta transforms, its
+/// parenting, then its placement through its parents' (`places`, by address) by the kit's
+/// `world_matrix`; `stale` in its place under a plant.
+pub(crate) fn world_of(
+    o: &LiveObj,
+    address: &str,
+    places: &HashMap<String, Option<Placement>>,
+    stale: Option<Mat4>,
+) -> Result<Mat4, &'static str> {
+    if !o.place.deltas_identity {
+        return Err("delta_transform");
+    }
+    match &o.parent {
+        Parent::Other(_) => return Err("parent_unlisted"),
+        Parent::Obj(_) if o.place.partype != Some(0) => return Err("parent_not_object"),
+        _ => {}
+    }
+    let w = stale.or_else(|| {
+        world_matrix(address, |a| match places.get(a) {
+            Some(Some(p)) => Link::Placed(p),
+            Some(None) => Link::Unplaced,
+            None => Link::NotShown,
+        })
+    });
+    let w = w.ok_or("transform_unplaced")?;
+    if !w.iter().all(|x| x.is_finite() && (*x as f32).is_finite()) {
+        return Err("transform_not_finite");
+    }
+    Ok(w)
+}
+
+/// The mesh objects and cameras of `objs` the scene drawn holds (`walk`), in their order: each
+/// placed (`placed`), hidden by the shared rule, its mesh's block named; each camera's view
+/// from its world matrix, its data and the render size; what is left out, and why.
+pub(crate) fn gather<'a>(
+    objs: impl IntoIterator<Item = ObjIn<'a>>,
+    walk: Option<&HiddenWalk>,
+    render: Option<&Render>,
+    placed: &dyn Fn(&ObjIn<'a>) -> Result<Mat4, &'static str>,
+) -> Gathered {
+    let mut cands: Vec<Candidate> = Vec::new();
+    let mut cams: Vec<SceneCamera> = Vec::new();
+    let mut cam_of: Vec<usize> = Vec::new();
+    let mut left: Vec<LeftOut> = Vec::new();
+    let mut skipped: Vec<Skipped> = Vec::new();
+    let mut collection_instances = 0u64;
+    for x in objs {
+        let o = x.live;
+        if !walk.is_some_and(|w| w.holds(&x.holders)) {
+            continue;
+        }
+        if x.file.instances {
+            collection_instances += 1;
+        }
+        let is_camera = o.kind == "camera";
+        if o.kind != "mesh" && !is_camera {
+            continue;
+        }
+        let (num, name) = (x.num, x.name);
+        let mut skip = |reason: &'static str| {
+            if is_camera && !mutant::active("LeftOutUnlisted") {
+                left.push(LeftOut {
+                    name: name.to_owned(),
+                    key: (num > 0).then(|| format!("@cam:{num}")),
+                    reason: reason.to_owned(),
+                });
+            }
+            skipped.push(Skipped {
+                name: name.to_owned(),
+                reason,
+            })
+        };
+        if x.file.library {
+            skip("linked_object");
+            continue;
+        }
+        if is_camera {
+            let w = match placed(&x) {
+                Ok(w) => w,
+                Err(r) => {
+                    skip(r);
+                    continue;
+                }
+            };
+            let Some(data) = x.file.camera else {
+                skip("camera_no_data");
+                continue;
+            };
+            match camera::camera(&w, &data, render) {
+                Ok(l) => {
+                    let key = if mutant::active("CameraKeyFromCameraIndex") {
+                        // planted: the camera's key from its place among the cameras
+                        format!("@cam:{}", cams.len() + 1)
+                    } else {
+                        format!("@cam:{num}")
+                    };
+                    cams.push(SceneCamera {
+                        id: name.to_owned(),
+                        key,
+                        position: l.position,
+                        target: None,
+                        forward: Some(l.forward),
+                        up: l.up,
+                        yfov: l.yfov,
+                        aspect: Some(l.aspect),
+                        znear: Some(l.znear),
+                        active: Some(x.file.scene_camera),
+                        lens_mm: Some(l.lens_mm),
+                        sensor_mm: Some(l.sensor_mm),
+                        sensor_fit: Some(l.fit),
+                    });
+                    cam_of.push(x.oi);
+                }
+                Err(r) => skip(r),
+            }
+            continue;
+        }
+        let mesh_block = match x.file.mesh {
+            Ok(b) => b,
+            Err(r) => {
+                skip(r);
+                continue;
+            }
+        };
+        let w = match placed(&x) {
+            Ok(w) => w,
+            Err(r) => {
+                skip(r);
+                continue;
+            }
+        };
+        let hidden = match walk.and_then(|w| w.of(x.hidden, &x.holders)) {
+            Some(HiddenBy::Itself) => Some(Hidden::Itself),
+            Some(HiddenBy::Collection(_)) => Some(Hidden::Collection),
+            None => None,
+        };
+        if hidden.is_some() && mutant::active("HiddenDropped") {
+            continue;
+        }
+        cands.push(Candidate {
+            obj: x.oi,
+            name: name.to_owned(),
+            key: format!("@obj:{num}"),
+            mesh_block,
+            transform: w.map(|x| x as f32),
+            hidden,
+            modifiers: x.file.modifiers.clone(),
+            more_modifiers: x.file.more_modifiers,
+            driven: o.place.driven,
+        });
+    }
+    Gathered {
+        cands,
+        cams,
+        cam_of,
+        left,
+        skipped,
+        collection_instances,
+    }
+}
+
+/// The mesh blocks the candidates use, each once, in file order, with the counts of objects,
+/// cameras and meshes checked against `limits`.
+fn bounded_blocks(g: &Gathered, limits: &MeshReadLimits) -> Result<BTreeSet<u32>, MeshReadError> {
+    at_most("objects", g.cands.len() as u64, limits.max_objects)?;
+    at_most("cameras", g.cams.len() as u64, limits.max_cameras)?;
+    let blocks: BTreeSet<u32> = g.cands.iter().map(|c| c.mesh_block).collect();
+    at_most("meshes", blocks.len() as u64, limits.max_meshes)?;
+    Ok(blocks)
+}
+
+/// The heap the decoded file takes as it is held: the decompressed bytes at their capacity, the
 /// blocks and the bodies kept, the schema, the model and the live scene, a generous figure per
-/// element), the objects and cameras gathered, every mesh as written (its vertices as stored:
-/// the loose ones are only dropped while reading), the largest mesh's reading scratch (its
-/// arrays, its triangles, the compaction's map and renumbered triangles), and the output (the
-/// header at twice its largest text, and the data).
-fn heap_estimate(
-    d: &Decoded,
-    cands: &[Candidate],
-    cams: &[SceneCamera],
-    counts: &BTreeMap<u32, MeshCounts>,
-) -> u64 {
+/// element ([`heap_estimate`]'s first part).
+fn decoded_heap(d: &Decoded) -> u64 {
     let file = &d.file;
     let n = |x: usize| x as u64;
     let kept: u64 = (0..file.blocks.len())
@@ -539,12 +816,27 @@ fn heap_estimate(
         .filter(|b| &b.head.code == b"DNA1")
         .map(|b| b.head.len)
         .sum();
-    let decoded = n(d.raw.capacity())
+    n(d.raw.capacity())
         + kept
         + 2 * sdna
         + n(file.blocks.len()) * (n(std::mem::size_of::<Block>()) + 96)
         + n(d.model.ids.len()) * (n(std::mem::size_of::<IdBlock>()) + 2048)
-        + n(d.scene.objs.len() + d.scene.colls.len()) * 4096;
+        + n(d.scene.objs.len() + d.scene.colls.len()) * 4096
+}
+
+/// The heap a read needs at most, in bytes, worked out before any mesh array or the output is
+/// allocated: the decoded file as it is held (`decoded`, [`decoded_heap`]), the objects and
+/// cameras gathered, every mesh as written (its vertices as stored: the loose ones are only
+/// dropped while reading), the largest mesh's reading scratch (its arrays, its triangles, the
+/// compaction's map and renumbered triangles), and the output (the header at twice its largest
+/// text, and the data).
+fn heap_estimate(
+    decoded: u64,
+    cands: &[Candidate],
+    cams: &[SceneCamera],
+    counts: &BTreeMap<u32, MeshCounts>,
+) -> u64 {
+    let n = |x: usize| x as u64;
     let words = |v: &[String]| v.iter().map(|m| n(m.len()) + 32).sum::<u64>();
     let gathered: u64 = cands
         .iter()
@@ -576,278 +868,28 @@ fn heap_estimate(
     decoded + gathered + meshes + scratch + header + meshes + 16
 }
 
-/// The read of a decoded version under `limits`, its objects keyed as an import mints.
-pub fn read_decoded(d: &Decoded, limits: &MeshReadLimits) -> Result<MeshRead, MeshReadError> {
-    read_decoded_paired(d, None, limits)
-}
-
-/// The read of a decoded version under `limits`, its objects keyed by `pairing` when given.
-pub fn read_decoded_paired(
-    d: &Decoded,
-    pairing: Option<&Pairing>,
-    limits: &MeshReadLimits,
-) -> Result<MeshRead, MeshReadError> {
-    read_inner(d, pairing, limits).map(|(r, _)| r)
-}
-
-/// [`read_decoded_paired`], and each written object's place among the live scene's objects
-/// with its mesh's content hash.
-pub(crate) fn read_inner(
-    d: &Decoded,
-    pairing: Option<&Pairing>,
-    limits: &MeshReadLimits,
-) -> Result<(MeshRead, Vec<(usize, String)>), MeshReadError> {
-    let (file, raw, ids) = (&d.file, &d.raw[..], &d.model.ids);
-    let mut report = MeshReport::default();
-    let obj_ids: Vec<usize> = ids
-        .iter()
-        .enumerate()
-        .filter(|(_, id)| matches!(id.detail, Detail::Object { .. }) && id.struct_name == "Object")
-        .map(|(i, _)| i)
-        .collect();
-    if obj_ids.len() != d.scene.objs.len() {
-        return Err(MeshReadError::Invalid {
-            what: "the live scene's objects aren't the model's",
-        });
-    }
-    let ok = object_keys(d, pairing)?;
-    let (scene_i, from) = choose_scene(file, raw, &d.model);
-    report.scene_from = from;
-    report.scene = scene_i.map(|s| ids[s].name.clone());
-    let walk = scene_i.and_then(|s| scene_walk(&d.model, &d.scene, s));
-    let render = scene_i.and_then(|s| render_of(file, raw, ids[s].block));
-    let scene_camera = scene_i.and_then(|s| match &ids[s].detail {
-        Detail::Scene { camera, .. } => *camera,
-        _ => None,
-    });
-
-    // every object's placement, by address, as the live view places it
-    let (ck, _) = d.scene.minted_keys();
-    let content = d.scene.to_content(&ck, &ok, d.scene.minted_marks());
-    let empty = BTreeMap::new();
-    let props = content
-        .iter()
-        .find_map(|(r, x)| match x {
-            Neutral::Map(m) if r == OBJ_PROPS => Some(m),
-            _ => None,
-        })
-        .unwrap_or(&empty);
-    let mut places: HashMap<String, Option<Placement>> = HashMap::new();
-    for (o, k) in d.scene.objs.iter().zip(&ok) {
-        let mut p = place::placement(&place::ObjFields::of(props, k), &o.place);
-        if let Some(p) = &mut p {
-            p.precision = Precision::F32;
-        }
-        places.insert(address_of(OBJS, k), p);
-    }
-    // an object's world matrix, or why it has none the read draws
-    let placed = |oi: usize, mi: usize| -> Result<Mat4, &'static str> {
-        let o = &d.scene.objs[oi];
-        if !o.place.deltas_identity {
-            return Err("delta_transform");
-        }
-        match &o.parent {
-            Parent::Other(_) => return Err("parent_unlisted"),
-            Parent::Obj(_) if o.place.partype != Some(0) => return Err("parent_not_object"),
-            _ => {}
-        }
-        let stale = if mutant::active("StoredMatrixUsed") {
-            cached_world(file, raw, ids[mi].block)
-        } else {
-            None
-        };
-        let w = stale.or_else(|| {
-            world_matrix(&address_of(OBJS, &ok[oi]), |a| match places.get(a) {
-                Some(Some(p)) => Link::Placed(p),
-                Some(None) => Link::Unplaced,
-                None => Link::NotShown,
-            })
-        });
-        let w = w.ok_or("transform_unplaced")?;
-        if !w.iter().all(|x| x.is_finite() && (*x as f32).is_finite()) {
-            return Err("transform_not_finite");
-        }
-        Ok(w)
-    };
-    let records = d.model.cameras();
-    let record_of: HashMap<&str, usize> = records
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.object.as_str(), i))
-        .collect();
-
-    let mut cands: Vec<Candidate> = Vec::new();
-    let mut cams: Vec<SceneCamera> = Vec::new();
-    let mut left: Vec<LeftOut> = Vec::new();
-    for (oi, &mi) in obj_ids.iter().enumerate() {
-        let o = &d.scene.objs[oi];
-        let hs = holders(o);
-        if !walk.as_ref().is_some_and(|w| w.holds(&hs)) {
-            continue;
-        }
-        let id = &ids[mi];
-        if instances_collection(file, raw, id.block) {
-            report.collection_instances += 1;
-        }
-        let is_camera = o.kind == "camera";
-        if o.kind != "mesh" && !is_camera {
-            continue;
-        }
-        let num = key_num(ok[oi].as_str(), 'o').unwrap_or(0);
-        let mut skip = |reason: &'static str| {
-            if is_camera && !mutant::active("LeftOutUnlisted") {
-                left.push(LeftOut {
-                    name: o.name.clone(),
-                    key: (num > 0).then(|| format!("@cam:{num}")),
-                    reason: reason.to_owned(),
-                });
-            }
-            report.skipped.push(Skipped {
-                name: o.name.clone(),
-                reason,
-            })
-        };
-        if id.library.is_some() {
-            skip("linked_object");
-            continue;
-        }
-        if is_camera {
-            let w = match placed(oi, mi) {
-                Ok(w) => w,
-                Err(r) => {
-                    skip(r);
-                    continue;
-                }
-            };
-            let object_key = id.key.clone().unwrap_or_else(|| format!("#{mi}"));
-            let Some(data) = record_of
-                .get(object_key.as_str())
-                .and_then(|&r| camera_data(&records[r].fields))
-            else {
-                skip("camera_no_data");
-                continue;
-            };
-            match camera::camera(&w, &data, render.as_ref()) {
-                Ok(l) => {
-                    let key = if mutant::active("CameraKeyFromCameraIndex") {
-                        // planted: the camera's key from its place among the cameras
-                        format!("@cam:{}", cams.len() + 1)
-                    } else {
-                        format!("@cam:{num}")
-                    };
-                    cams.push(SceneCamera {
-                        id: o.name.clone(),
-                        key,
-                        position: l.position,
-                        target: None,
-                        forward: Some(l.forward),
-                        up: l.up,
-                        yfov: l.yfov,
-                        aspect: Some(l.aspect),
-                        znear: Some(l.znear),
-                        active: Some(scene_camera == Some(mi)),
-                        lens_mm: Some(l.lens_mm),
-                        sensor_mm: Some(l.sensor_mm),
-                        sensor_fit: Some(l.fit),
-                    });
-                }
-                Err(r) => skip(r),
-            }
-            continue;
-        }
-        let data = match &id.detail {
-            Detail::Object { data, .. } => *data,
-            _ => None,
-        };
-        let Some(di) = data else {
-            skip("no_mesh");
-            continue;
-        };
-        if ids[di].struct_name != "Mesh" || ids[di].library.is_some() {
-            skip("linked_mesh");
-            continue;
-        }
-        let w = match placed(oi, mi) {
-            Ok(w) => w,
-            Err(r) => {
-                skip(r);
-                continue;
-            }
-        };
-        let hidden = match walk.as_ref().and_then(|w| w.of(o.hide[0], &hs)) {
-            Some(HiddenBy::Itself) => Some(Hidden::Itself),
-            Some(HiddenBy::Collection(_)) => Some(Hidden::Collection),
-            None => None,
-        };
-        if hidden.is_some() && mutant::active("HiddenDropped") {
-            continue;
-        }
-        let (modifiers, more_modifiers) = modifiers(file, raw, id.block);
-        cands.push(Candidate {
-            obj: oi,
-            name: o.name.clone(),
-            key: format!("@obj:{num}"),
-            mesh_block: ids[di].block,
-            transform: w.map(|x| x as f32),
-            hidden,
-            modifiers,
-            more_modifiers,
-            driven: o.place.driven,
-        });
-    }
-
-    // bounds before any array: objects, cameras, meshes, then the heap from their counts
-    at_most("objects", cands.len() as u64, limits.max_objects)?;
-    at_most("cameras", cams.len() as u64, limits.max_cameras)?;
-    let blocks: BTreeSet<u32> = cands.iter().map(|c| c.mesh_block).collect();
-    at_most("meshes", blocks.len() as u64, limits.max_meshes)?;
-    let mut counts = BTreeMap::new();
-    for &b in &blocks {
-        if let Ok(c) = mesh::counts(file, raw, b) {
-            counts.insert(b, c);
-        }
-    }
-    report.heap = heap_estimate(d, &cands, &cams, &counts);
-    if !mutant::active("HeapUnchecked") {
-        at_most("heap", report.heap, limits.max_heap_bytes)?;
-    }
-    if mutant::active("LimitBeforeCompaction") {
-        // planted: the stored vertices counted, the loose ones with them
-        let v = counts.values().map(|c| u64::from(c.vertices)).sum();
-        at_most("vertices", v, limits.max_vertices)?;
-    }
-
-    // the meshes, each once, in their file order
-    let mut meshes: Vec<SceneMesh> = Vec::new();
-    let mut index: HashMap<u32, Result<u32, MeshSkip>> = HashMap::new();
-    for &b in &blocks {
-        let got = mesh::read_mesh(file, raw, b, limits.ear_clip_max_corners, &mut report.tri);
-        index.insert(
-            b,
-            got.map(|(_, m)| {
-                meshes.push(m);
-                (meshes.len() - 1) as u32
-            }),
-        );
-    }
+/// The objects written from the candidates, in order, and each one's place among the decode's
+/// objects: each with its mesh's index (`mesh_of`: a block's mesh index, or the word its mesh
+/// is skipped by; `None` passes the object over), the report's counts and skips kept as it goes.
+fn objects_of(
+    cands: Vec<Candidate>,
+    mesh_of: &mut dyn FnMut(u32) -> Option<Result<u32, &'static str>>,
+    report: &mut MeshReport,
+) -> (Vec<SceneObject>, Vec<usize>) {
     let mut objects = Vec::new();
     let mut of_obj = Vec::new();
     for c in cands {
-        let mut mesh = match index.get(&c.mesh_block) {
-            Some(Ok(i)) => *i,
-            Some(Err(e)) => {
+        let mesh = match mesh_of(c.mesh_block) {
+            Some(Ok(i)) => i,
+            Some(Err(word)) => {
                 report.skipped.push(Skipped {
                     name: c.name,
-                    reason: e.word(),
+                    reason: word,
                 });
                 continue;
             }
             None => continue,
         };
-        if mutant::active("InstancesDuplicated") {
-            meshes.push(meshes[mesh as usize].clone());
-            mesh = (meshes.len() - 1) as u32;
-        }
         report.hidden += u64::from(c.hidden.is_some());
         report.transform_not_evaluated += u64::from(c.driven);
         report.modifiers_truncated += u64::from(c.more_modifiers);
@@ -871,10 +913,170 @@ pub(crate) fn read_inner(
             hidden: c.hidden,
         });
     }
+    (objects, of_obj)
+}
+
+/// The read of a decoded version under `limits`, its objects keyed as an import mints.
+pub fn read_decoded(d: &Decoded, limits: &MeshReadLimits) -> Result<MeshRead, MeshReadError> {
+    read_decoded_paired(d, None, limits)
+}
+
+/// The read of a decoded version under `limits`, its objects keyed by `pairing` when given.
+pub fn read_decoded_paired(
+    d: &Decoded,
+    pairing: Option<&Pairing>,
+    limits: &MeshReadLimits,
+) -> Result<MeshRead, MeshReadError> {
+    read_inner(d, pairing, limits).map(|(r, _)| r)
+}
+
+/// What [`read_inner`] gives beside its output: what a carrier keeps of its read
+/// ([`CarrierRead`]).
+pub(crate) struct ReadParts {
+    /// Each written object's place among the live scene's objects, with its mesh's hash.
+    pub by_obj: Vec<(usize, String)>,
+    files: Vec<FileObj>,
+    render: Option<Render>,
+    blocks: HashMap<u32, Result<u32, &'static str>>,
+    counts: HashMap<u32, MeshCounts>,
+    decoded_heap: u64,
+    meshes: Vec<MeshHead>,
+    objects: Vec<(usize, SceneObject)>,
+    cameras: Vec<(usize, SceneCamera)>,
+}
+
+/// [`read_decoded_paired`], and what a carrier keeps of the read ([`ReadParts`]).
+pub(crate) fn read_inner(
+    d: &Decoded,
+    pairing: Option<&Pairing>,
+    limits: &MeshReadLimits,
+) -> Result<(MeshRead, ReadParts), MeshReadError> {
+    let (file, raw, ids) = (&d.file, &d.raw[..], &d.model.ids);
+    let mut report = MeshReport::default();
+    let obj_ids: Vec<usize> = ids
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| matches!(id.detail, Detail::Object { .. }) && id.struct_name == "Object")
+        .map(|(i, _)| i)
+        .collect();
+    if obj_ids.len() != d.scene.objs.len() {
+        return Err(MeshReadError::Invalid {
+            what: "the live scene's objects aren't the model's",
+        });
+    }
+    let ok = object_keys(d, pairing)?;
+    let (scene_i, from) = choose_scene(file, raw, &d.model);
+    report.scene_from = from;
+    report.scene = scene_i.map(|s| ids[s].name.clone());
+    let walk = scene_i.and_then(|s| scene_walk(&d.model, &d.scene, s));
+    let render = scene_i.and_then(|s| render_of(file, raw, ids[s].block));
+    let scene_camera = scene_i.and_then(|s| match &ids[s].detail {
+        Detail::Scene { camera, .. } => *camera,
+        _ => None,
+    });
+    let files = file_objs(d, &obj_ids, scene_camera);
+
+    // every object's placement, by address, as the live view places it
+    let (ck, _) = d.scene.minted_keys();
+    let content = d.scene.to_content(&ck, &ok, d.scene.minted_marks());
+    let empty = BTreeMap::new();
+    let props = content
+        .iter()
+        .find_map(|(r, x)| match x {
+            Neutral::Map(m) if r == OBJ_PROPS => Some(m),
+            _ => None,
+        })
+        .unwrap_or(&empty);
+    let mut places: HashMap<String, Option<Placement>> = HashMap::new();
+    for (o, k) in d.scene.objs.iter().zip(&ok) {
+        let mut p = place::placement(&place::ObjFields::of(props, k), &o.place);
+        if let Some(p) = &mut p {
+            p.precision = Precision::F32;
+        }
+        places.insert(address_of(OBJS, k), p);
+    }
+    let placed = |x: &ObjIn<'_>| -> Result<Mat4, &'static str> {
+        let stale = if mutant::active("StoredMatrixUsed") {
+            cached_world(file, raw, ids[obj_ids[x.oi]].block)
+        } else {
+            None
+        };
+        world_of(x.live, &address_of(OBJS, &ok[x.oi]), &places, stale)
+    };
+    let objs = d.scene.objs.iter().enumerate().map(|(oi, o)| ObjIn {
+        oi,
+        name: &o.name,
+        num: key_num(ok[oi].as_str(), 'o').unwrap_or(0),
+        holders: holders(o),
+        hidden: o.hide[0],
+        live: o,
+        file: &files[oi],
+    });
+    let g = gather(objs, walk.as_ref(), render.as_ref(), &placed);
+
+    // bounds before any array: objects, cameras, meshes, then the heap from their counts
+    let blocks = bounded_blocks(&g, limits)?;
+    let mut counts = BTreeMap::new();
+    for &b in &blocks {
+        if let Ok(c) = mesh::counts(file, raw, b) {
+            counts.insert(b, c);
+        }
+    }
+    let decoded = decoded_heap(d);
+    report.heap = heap_estimate(decoded, &g.cands, &g.cams, &counts);
+    if !mutant::active("HeapUnchecked") {
+        at_most("heap", report.heap, limits.max_heap_bytes)?;
+    }
+    if mutant::active("LimitBeforeCompaction") {
+        // planted: the stored vertices counted, the loose ones with them
+        let v = counts.values().map(|c| u64::from(c.vertices)).sum();
+        at_most("vertices", v, limits.max_vertices)?;
+    }
+    let Gathered {
+        cands,
+        cams,
+        cam_of,
+        left,
+        skipped,
+        collection_instances,
+    } = g;
+    report.skipped = skipped;
+    report.collection_instances = collection_instances;
+
+    // the meshes, each once, in their file order
+    let mut meshes: Vec<SceneMesh> = Vec::new();
+    let mut index: HashMap<u32, Result<u32, &'static str>> = HashMap::new();
+    for &b in &blocks {
+        let got = mesh::read_mesh(file, raw, b, limits.ear_clip_max_corners, &mut report.tri);
+        index.insert(
+            b,
+            got.map(|(_, m)| {
+                meshes.push(m);
+                (meshes.len() - 1) as u32
+            })
+            .map_err(|e| e.word()),
+        );
+    }
+    let (mut objects, of_obj) = objects_of(
+        cands,
+        &mut |b| {
+            let got = index.get(&b).copied()?;
+            Some(got.map(|i| {
+                if mutant::active("InstancesDuplicated") {
+                    meshes.push(meshes[i as usize].clone());
+                    (meshes.len() - 1) as u32
+                } else {
+                    i
+                }
+            }))
+        },
+        &mut report,
+    );
     // a mesh no written object uses (all its objects skipped) isn't written
     let used: BTreeSet<u32> = objects.iter().map(|o| o.mesh).collect();
+    let mut renumber: HashMap<u32, u32> = (0..meshes.len() as u32).map(|i| (i, i)).collect();
     if used.len() != meshes.len() {
-        let mut renumber = HashMap::new();
+        renumber.clear();
         let mut kept = Vec::new();
         for (i, m) in meshes.into_iter().enumerate() {
             if used.contains(&(i as u32)) {
@@ -927,9 +1129,221 @@ pub(crate) fn read_inner(
         })
         .collect();
     let by_obj = of_obj
-        .into_iter()
+        .iter()
         .zip(&scene.objects)
-        .map(|(oi, o)| (oi, hashes[o.mesh as usize].clone()))
+        .map(|(&oi, o)| (oi, hashes[o.mesh as usize].clone()))
         .collect();
-    Ok((MeshRead { k2scene, report }, by_obj))
+    // each block read: its mesh's index in the output, or its skip word
+    let blocks = index
+        .into_iter()
+        .filter_map(|(b, got)| match got {
+            Ok(i) => renumber.get(&i).map(|&j| (b, Ok(j))),
+            Err(w) => Some((b, Err(w))),
+        })
+        .collect();
+    let mesh_heads = scene
+        .meshes
+        .iter()
+        .zip(&hashes)
+        .map(|(m, h)| MeshHead {
+            vertices: m.positions.len() as u64,
+            triangles: m.triangles.len() as u64,
+            hash: h.clone(),
+        })
+        .collect();
+    let Scene {
+        objects, cameras, ..
+    } = scene;
+    let parts = ReadParts {
+        by_obj,
+        files,
+        render,
+        blocks,
+        counts: counts.into_iter().collect(),
+        decoded_heap: decoded,
+        meshes: mesh_heads,
+        objects: of_obj.into_iter().zip(objects).collect(),
+        cameras: cam_of.into_iter().zip(cameras).collect(),
+    };
+    Ok((MeshRead { k2scene, report }, parts))
+}
+
+/// What a carrier keeps of its mesh read, to write a live state's K2SCENE1 without reading the
+/// file again ([`crate::live::reuse`]): the read's data section, shared and never copied, with
+/// its content id; each mesh's counts and hash; each mesh block the read read, with its mesh's
+/// index or the word it is skipped by, and its stored counts; the decoded file's heap figure;
+/// what the read takes of each object from the file; the render size; the read's objects and
+/// cameras by their place among the decode's objects; the decode's objects and collections as
+/// the live store holds them. Built once per carrier ([`crate::live::place::CarrierView`]);
+/// the whole-file decode isn't kept.
+pub struct CarrierRead {
+    pub(crate) data: Arc<[u8]>,
+    pub(crate) id: String,
+    pub(crate) meshes: Vec<MeshHead>,
+    pub(crate) blocks: HashMap<u32, Result<u32, &'static str>>,
+    pub(crate) counts: HashMap<u32, MeshCounts>,
+    pub(crate) decoded_heap: u64,
+    pub(crate) files: Vec<FileObj>,
+    pub(crate) render: Option<Render>,
+    /// The read's objects, in order, each with its place among the decode's objects.
+    pub(crate) objects: Vec<(usize, SceneObject)>,
+    /// The read's cameras, the same way.
+    pub(crate) cameras: Vec<(usize, SceneCamera)>,
+    /// The decode's objects, in its order (the order the carrier's pairing keys).
+    pub(crate) objs: Vec<LiveObj>,
+    /// The decode's collections, the same way.
+    pub(crate) colls: Vec<LiveColl>,
+}
+
+impl std::fmt::Debug for CarrierRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CarrierRead({} data bytes, {} meshes, {} objects, {} cameras)",
+            self.data.len(),
+            self.meshes.len(),
+            self.objects.len(),
+            self.cameras.len()
+        )
+    }
+}
+
+/// The content id of a data section: SHA-256 of its bytes, lowercase hex.
+pub fn data_id(data: &[u8]) -> String {
+    let mut d = k2_mpc_base::index::Digest::stream();
+    if mutant::active("CarrierIdStale") {
+        // planted: the id from the data's length, not its bytes
+        d.update(&(data.len() as u64).to_le_bytes());
+    } else {
+        d.update(data);
+    }
+    let mut s = String::with_capacity(64);
+    for b in d.finish().as_bytes() {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// The read of a carrier `d` (keyed as an import mints: the data section doesn't depend on the
+/// keys) under `limits`, kept for the reuse ([`CarrierRead`]), with each written object's mesh
+/// hash by its place among the decode's objects; `None` when the read refuses.
+pub(crate) fn carrier_read(
+    d: &Decoded,
+    limits: &MeshReadLimits,
+) -> Option<(CarrierRead, Vec<(usize, String)>)> {
+    let (read, parts) = read_inner(d, None, limits).ok()?;
+    let out = read.k2scene;
+    let hlen = u32::from_le_bytes(out.get(8..12)?.try_into().ok()?);
+    let at = usize::try_from(k2scene::align4(k2scene::PREFIX + u64::from(hlen))).ok()?;
+    let data: Arc<[u8]> = Arc::from(out.get(at..)?);
+    drop(out);
+    let id = data_id(&data);
+    let ReadParts {
+        by_obj,
+        files,
+        render,
+        blocks,
+        counts,
+        decoded_heap,
+        meshes,
+        objects,
+        cameras,
+    } = parts;
+    Some((
+        CarrierRead {
+            data,
+            id,
+            meshes,
+            blocks,
+            counts,
+            decoded_heap,
+            files,
+            render,
+            objects,
+            cameras,
+            objs: d.scene.objs.clone(),
+            colls: d.scene.colls.clone(),
+        },
+        by_obj,
+    ))
+}
+
+/// Why a live state's K2SCENE1 can't be written over its carrier's read.
+#[derive(Debug)]
+pub(crate) enum RewriteError {
+    /// A drawn object's mesh is one the carrier's read didn't read (its address).
+    MeshNotHeld(String),
+    /// The meshes the output would hold aren't the carrier's.
+    MeshesChanged,
+    /// A limit, or a writer check.
+    Read(MeshReadError),
+}
+
+impl From<MeshReadError> for RewriteError {
+    fn from(e: MeshReadError) -> Self {
+        RewriteError::Read(e)
+    }
+}
+
+/// What [`rewrite`] writes: the first part of the K2SCENE1 (to be followed by the carrier's data
+/// section), and its objects and cameras, each with its place among the decode's objects.
+pub(crate) struct Rewritten {
+    pub header: Vec<u8>,
+    pub objects: Vec<(usize, SceneObject)>,
+    pub cameras: Vec<(usize, SceneCamera)>,
+}
+
+/// The first part of the K2SCENE1 of gathered objects and cameras `g` over the carrier's read
+/// `cr`, through the read's own steps: the same bounds and heap figure (the carrier's decoded
+/// file's, with the gathered objects' and the meshes' counts), each object's mesh from the
+/// blocks the carrier's read read, the same writer checks and header text. Refused when a drawn
+/// object's mesh isn't one the carrier's read read, or the meshes written wouldn't be exactly
+/// the carrier's (the data section would differ).
+pub(crate) fn rewrite(
+    g: Gathered,
+    cr: &CarrierRead,
+    limits: &MeshReadLimits,
+) -> Result<Rewritten, RewriteError> {
+    let blocks = bounded_blocks(&g, limits)?;
+    if let Some(c) = g
+        .cands
+        .iter()
+        .find(|c| !cr.blocks.contains_key(&c.mesh_block))
+    {
+        return Err(RewriteError::MeshNotHeld(c.key.clone()));
+    }
+    let counts: BTreeMap<u32, MeshCounts> = blocks
+        .iter()
+        .filter_map(|b| cr.counts.get(b).map(|c| (*b, *c)))
+        .collect();
+    let heap = heap_estimate(cr.decoded_heap, &g.cands, &g.cams, &counts);
+    if !mutant::active("HeapUnchecked") {
+        at_most("heap", heap, limits.max_heap_bytes)?;
+    }
+    let Gathered {
+        cands,
+        cams,
+        cam_of,
+        left,
+        ..
+    } = g;
+    let mut scratch = MeshReport::default();
+    let (objects, of_obj) = objects_of(cands, &mut |b| cr.blocks.get(&b).copied(), &mut scratch);
+    let used: BTreeSet<u32> = objects.iter().map(|o| o.mesh).collect();
+    if used.len() != cr.meshes.len() {
+        return Err(RewriteError::MeshesChanged);
+    }
+    let header = k2scene::write_header(
+        &cr.meshes,
+        &objects,
+        &cams,
+        &left,
+        cr.data.len() as u64,
+        limits,
+    )?;
+    Ok(Rewritten {
+        header,
+        objects: of_obj.into_iter().zip(objects).collect(),
+        cameras: cam_of.into_iter().zip(cams).collect(),
+    })
 }

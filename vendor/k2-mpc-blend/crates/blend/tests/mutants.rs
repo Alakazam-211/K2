@@ -3,8 +3,16 @@
 //! fails the run, so these rows are shown to be able to fail.
 #![cfg(feature = "mutants")]
 
+mod builds_support;
+mod check_edit_support;
+mod driven_support;
+mod edit_hook_support;
 mod live_support;
+mod merged_view_support;
 mod meshread_support;
+mod newer_support;
+mod reuse_support;
+mod scenes_support;
 mod support;
 
 use k2_mpc_base::session::{BlobMerge, BlobPack};
@@ -84,7 +92,7 @@ fn loc_of(bytes: &[u8], key: &str) -> Result<String, String> {
 
 /// A file newer than the pinned versions: its values stay numbers, nothing is named or hidden.
 fn leg_names_newer() -> Result<(), String> {
-    let mut b = SceneBuilder::new(k2_mpc_blend::HeaderForm::Classic, 8, false, 503, false);
+    let mut b = SceneBuilder::new(k2_mpc_blend::HeaderForm::Classic, 8, false, 504, false);
     b.scene("Scene", &["A"], &[], None);
     b.object(
         "A",
@@ -196,6 +204,31 @@ fn leg_unique() -> Result<(), String> {
     }
 }
 
+/// The writer's newest version in [`in_gap`]'s rows: 5.01, so 5.02 and 5.03 are read but not
+/// written.
+const GAP: u16 = 501;
+
+/// `row` with the writer's range set back to [`GAP`] (`mutant::in_gap`): no release read today
+/// sits past the ones written, so the rows of that state run in this gap.
+fn in_gap(row: Leg) -> Result<(), String> {
+    mutant::in_gap(GAP, row)
+}
+
+/// The mesh read draws 5.02 and 5.03 in the gap: reading doesn't stop at the writer's range.
+fn gap_mesh_read() -> Result<(), String> {
+    in_gap(newer_support::row_mesh_read_newer)
+}
+
+/// 5.02 and 5.03 named in the gap: the names don't stop at the writer's range.
+fn gap_names() -> Result<(), String> {
+    in_gap(newer_support::row_names_newer)
+}
+
+/// A doc of 5.02 and 5.03 in the gap is read-only, every edit refused by its code.
+fn gap_live_read_only() -> Result<(), String> {
+    in_gap(newer_support::row_live_read_only)
+}
+
 const MUTANTS: &[(&str, Leg)] = &[
     ("merge_agent_wins", leg_held),
     ("merge_no_carried_keys", leg_carried),
@@ -204,12 +237,36 @@ const MUTANTS: &[(&str, Leg)] = &[
     ("pack_merges_clash", leg_clash_whole_file),
     ("write_wrong_offset", leg_offset),
     ("write_names_not_unique", leg_unique),
+    // a change to a channel an action animates written (`driven_support/mod.rs`)
+    ("DrivenChannelWritten", driven_support::row_driven_z_refused),
+    // a flip of a visibility bit an action animates written; a transform written under
+    // constraints with no warning (`driven_support/mod.rs`)
+    ("DrivenBitWritten", driven_support::row_driven_bit_refused),
+    (
+        "ConstrainedUnwarned",
+        driven_support::row_constrained_written_with_warning,
+    ),
     // the live pack's plants, each caught by its row (`live_support/rows.rs`)
     (
         "RenameKeepsNid",
         rows::row_rename_keeps_key_through_app_save,
     ),
     ("DrivenPlaced", rows::row_driven_and_unwritable_refused),
+    // a change to a driven transform taken by the live rules (`live::check_edit`)
+    (
+        "CheckEditPassesDriven",
+        check_edit_support::row_check_edit_refuses_driven_xform,
+    ),
+    // the kit's edit check never asked (`BlendLive::checks_edits` false): a person's edit of a
+    // driven channel taken (`newer_support/mod.rs`)
+    (
+        "EditCheckOff",
+        newer_support::row_person_edit_of_driven_channel,
+    ),
+    (
+        "LiveAnimatedBitFlipped",
+        rows::row_live_visibility_refused_on_animated_bits,
+    ),
     (
         "QuatWrittenAsEuler",
         rows::row_driven_and_unwritable_refused,
@@ -240,6 +297,25 @@ const MUTANTS: &[(&str, Leg)] = &[
     ("PlacementByPosition", rows::row_move_keeps_placements),
     // a newer file's values named as the pinned versions name them
     ("NamesPastPinned", leg_names_newer),
+    // files of 5.02 and 5.03 written: the writer's range left at 5.01, a version past the ones
+    // read written (`newer_support/mod.rs`)
+    ("WritesStopAt501", newer_support::row_writer_newer),
+    ("WritesPastRead", newer_support::row_writer_newer),
+    // the reads past the writer's range, in a gap: read only up to the writer's versions, read
+    // past 5.03, named only up to the writer's, a read-only write-back refused without its
+    // code, a read-only doc's verbs applied
+    ("ReadStopsAtWritten", gap_mesh_read),
+    ("ReadPastRange", newer_support::row_mesh_read_newer),
+    ("NamesStopAtWritten", gap_names),
+    ("ReadOnlyCodeDropped", gap_live_read_only),
+    ("ReadOnlyVerbsWrite", gap_live_read_only),
+    // a link placeholder's kind looked up by its block's code (`ID`), not its stored name's
+    (
+        "PlaceholderKindByBlockCode",
+        newer_support::row_placeholder_kind,
+    ),
+    // a kept build changed on disk: its sha256 isn't the manifest's
+    ("FixtureByteChanged", builds_support::row_kept_builds),
     // a live refusal printed as text only, with no registered entry
     ("RefusalAsText", rows::row_refusal_is_its_registered_entry),
     // the scene read's cameras: a camera named by its data, not its object; two names swapped
@@ -285,18 +361,38 @@ const MUTANTS: &[(&str, Leg)] = &[
         "CurrentSceneFirst",
         live_support::view_rows::row_view_current_scene,
     ),
+    // a merged doc: every one refused (the kit's default), every one taken
+    (
+        "MergedViewRefusesAll",
+        merged_view_support::row_pinned_resave_merges,
+    ),
+    (
+        "MergedViewUnchecked",
+        merged_view_support::row_pinned_duplicate_name_keeps_both,
+    ),
+    // the reuse: the carrier's transform kept, the id from the data's length only, the file
+    // decoded on every call, the data copied, every key listed as changed
+    ("ReuseStaleTransform", reuse_support::row_reuse_parity),
+    ("CarrierIdStale", reuse_support::row_reuse_carrier_id),
+    ("ReuseRereads", reuse_support::row_reuse_no_decode),
+    ("ReuseCopiesData", reuse_support::row_reuse_shared_data),
+    ("ReuseChangedAll", reuse_support::row_reuse_key_lists),
     // the zstd decoder left at its own window bound, not the reader's limit
     (
         "ZstdWindowAtDecoderDefault",
         support::zstd::row_window_over_decoder_default,
     ),
-    // the streaming index left at the reader's 64 GiB, whatever its limits say
+    // the streaming index left at 64 GiB, whatever its limits say
     ("IndexDecodeUnbounded", support::zstd::row_index_cap),
-    // the pack's whole-file default left at the reader's 64 GiB
+    // the reader's own default raw cap left at 64 GiB
+    ("ReadDefaultUnbounded", support::zstd::row_read_default_cap),
+    // the pack's whole-file default left at 64 GiB
     (
         "WholeFileDefaultUnbounded",
         support::row_whole_file_default_bounded,
     ),
+    // a generated scene's master collection written without the embedded flag
+    ("EmbeddedFlagDropped", scenes_support::row_embedded_flag),
 ];
 
 /// Every mutant, or with `BLEND_MUTANT_ONLY` set, only the one it names (one plant per run).

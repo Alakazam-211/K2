@@ -8,29 +8,35 @@
 //!   differs from the carrier's collections or objects is [`SpliceError::PairingMismatch`], and
 //!   nothing is spliced (the kit refuses the write-back, `MPC-E521`, the file as it was).
 //! - **Live v1 writes exactly what the writer patches in place:** an object's `xform`
-//!   (location, Euler rotation, scale), its three visibility bits, and its name with its `nid`.
-//!   Anything else that differs (an object or collection added, removed or moved, another field)
-//!   is a [`PackError`]: never written by guess.
+//!   (location, Euler rotation, scale), its three visibility bits, and its name with its `nid`,
+//!   by the live rules ([`super::check`], the ones the kit's edit check asks of every live
+//!   change before it applies): anything else that differs (an object or collection added,
+//!   removed or moved, another field, a driven transform, a visibility with an animated bit, a
+//!   rotation on an object that rotates another way, an object nothing writes, a name the file
+//!   can't hold) is a [`PackError`] whose text starts with the rule's registered code when it
+//!   has one (`blend_driven: `): never written by guess. A writer's refusal past them reads the same way for a driven channel
+//!   (`blend_driven: location[2] is driven (...)`), as `the writer refused: ...` for any other.
 //! - **Addresses are the carrier's file keys** (its `nid` before a rename), as the writer takes
 //!   them.
 //! - **Untouched is byte for byte:** with no difference, the carrier is returned as it is,
 //!   compressed or not. A compressed file with a change is stored again whole (the writer's own
 //!   rule): its content is the patched file's, its outer bytes differ.
 //! - **The result is read again** and must hold the live content under the same pairing.
+//! - **A file of a release read but not written would be read-only** ([`model::writes_back`]):
+//!   untouched, it is the carrier; any change is a [`PackError`] whose text starts with
+//!   `live_read_only: ` ([`super::errors::READ_ONLY`]), and nothing is written. The writer writes
+//!   every release read, so no file is one.
 
 use std::collections::BTreeMap;
 
 use k2_mpc_base::doc::Neutral;
 use k2_mpc_base::elem::{Key, Value};
 use k2_mpc_base::session::{PackError, Pairing, SpliceError};
-use k2_mpc_base::table::CELL_SEP;
 
-use super::model::{
-    self, f, parse_floats, LiveLimits, LiveScene, COLLS, COLL_PROPS, OBJS, OBJ_PROPS,
-};
+use super::check::{self, fields_of};
+use super::model::{self, f, LiveLimits, LiveScene, COLLS, COLL_PROPS, OBJS, OBJ_PROPS, SCENE};
 use crate::mutant;
-use crate::scene::key_of;
-use crate::write::{write, Change, Edit};
+use crate::write::{write, WriteError};
 
 fn err(m: impl Into<String>) -> SpliceError {
     SpliceError::Pack(PackError(m.into()))
@@ -51,15 +57,6 @@ fn map<'a>(
         Some((_, Neutral::Map(m))) => Ok(m),
         _ => Err(format!("the content has no map root {root}")),
     }
-}
-
-/// One element's fields of a composite map: `field -> value`.
-fn fields_of<'a>(m: &'a BTreeMap<String, Value>, k: &Key) -> BTreeMap<&'a str, &'a str> {
-    let start = format!("{}{CELL_SEP}", k.as_str());
-    m.range(start.clone()..)
-        .take_while(|(key, _)| key.starts_with(&start))
-        .map(|(key, v)| (&key[start.len()..], v.as_str().unwrap_or("")))
-        .collect()
 }
 
 /// The keys the carrier's units take: the pairing's, checked against the carrier's counts.
@@ -110,14 +107,22 @@ fn paired_keys(
     Ok((ck.to_vec(), ok.to_vec()))
 }
 
-/// The writer's edits that make the keyed carrier `old` (under `ok`) into the live `content`, or
-/// why it can't be written.
-fn diff(
-    scene: &LiveScene,
-    old: &[(String, Neutral)],
-    content: &[(String, Neutral)],
-    ok: &[Key],
-) -> Result<Vec<Edit>, String> {
+/// The change from the keyed carrier `old` to the live `content`, as the live rules take it
+/// ([`check`]), or why `content` can't be read as one.
+fn changes<'a>(
+    old: &'a [(String, Neutral)],
+    content: &'a [(String, Neutral)],
+) -> Result<check::Change<'a>, String> {
+    let live = list(old, OBJS)?;
+    let props = map(old, OBJ_PROPS)?;
+    let mut c = check::Change {
+        list: None,
+        colls: false,
+        objs: Vec::new(),
+        live,
+        props,
+        name_max: check::name_max(map(old, SCENE).ok()),
+    };
     for root in [COLLS, OBJS] {
         let (a, b) = (list(old, root)?, list(content, root)?);
         if a != b {
@@ -132,7 +137,7 @@ fn diff(
                     |(k, v)| format!("{} ({})", k.as_str(), v.as_str().unwrap_or("")),
                 )
             };
-            return Err(format!(
+            c.list = Some(format!(
                 "the live `{root}` differ from the file's in their elements, order or kinds \
                  (at {at}: the file's {}, the live {}; {} and {} in all): live v1 adds, removes \
                  and moves none",
@@ -141,111 +146,39 @@ fn diff(
                 a.len(),
                 b.len()
             ));
+            return Ok(c);
         }
     }
     if map(old, COLL_PROPS)? != map(content, COLL_PROPS)? {
-        return Err("a collection's field differs from the file's: live v1 writes none".into());
+        c.colls = true;
+        return Ok(c);
     }
-    let (op_old, op_new) = (map(old, OBJ_PROPS)?, map(content, OBJ_PROPS)?);
-    if op_old == op_new {
-        return Ok(Vec::new());
-    }
-    let mut edits = Vec::new();
-    for (o, k) in scene.objs.iter().zip(ok) {
-        let (a, b) = (fields_of(op_old, k), fields_of(op_new, k));
-        if a == b {
-            continue;
-        }
-        let addr = super::address_of(OBJS, k);
-        if o.nid.is_empty() {
-            return Err(format!("{addr} has no file key: the writer can't name it"));
-        }
-        let mut names: Vec<&str> = a.keys().chain(b.keys()).copied().collect();
-        names.sort_unstable();
-        names.dedup();
-        let mut vis: [Option<bool>; 3] = [None; 3];
-        for n in names {
-            let (x, y) = (a.get(n).copied(), b.get(n).copied());
-            if x == y {
-                continue;
-            }
-            match n {
-                f::XFORM => {
-                    let (Some(x), Some(y)) = (x, y) else {
-                        return Err(format!("{addr}: its xform was added or removed"));
-                    };
-                    let (Some(p), Some(q)) = (parse_floats::<9>(x), parse_floats::<9>(y)) else {
-                        return Err(format!("{addr}: an xform isn't nine finite numbers"));
-                    };
-                    let part = |v: &[f32; 9], i: usize| [v[i], v[i + 1], v[i + 2]];
-                    let same = |i: usize| {
-                        part(&p, i)
-                            .iter()
-                            .zip(part(&q, i))
-                            .all(|(u, w)| u.to_bits() == w.to_bits())
-                    };
-                    if !same(0) {
-                        edits.push(Edit::new(o.nid.clone(), Change::Location(part(&q, 0))));
-                    }
-                    if !same(3) {
-                        edits.push(Edit::new(o.nid.clone(), Change::Rotation(part(&q, 3))));
-                    }
-                    if !same(6) {
-                        edits.push(Edit::new(o.nid.clone(), Change::Scale(part(&q, 6))));
-                    }
-                }
-                f::HIDDEN | f::NOSELECT | f::NORENDER => {
-                    let on = match y {
-                        Some("1") => true,
-                        Some("0") => false,
-                        _ => return Err(format!("{addr}: {n} isn't 0 or 1")),
-                    };
-                    let i = [f::HIDDEN, f::NOSELECT, f::NORENDER]
-                        .iter()
-                        .position(|x| *x == n)
-                        .expect("one of the three");
-                    vis[i] = Some(on);
-                }
-                f::NAME => {
-                    let Some(new) = y else {
-                        return Err(format!("{addr}: its name was removed"));
-                    };
-                    let want = key_of("OB", new.as_bytes(), None);
-                    if b.get(f::NID).copied() != want.as_deref() {
-                        return Err(format!(
-                            "{addr}: renamed, but its nid isn't the new name's file key"
-                        ));
-                    }
-                }
-                f::NID => {
-                    if a.get(f::NAME) == b.get(f::NAME) {
-                        return Err(format!("{addr}: its nid changed without its name"));
-                    }
-                }
-                other => {
-                    return Err(format!(
-                        "{addr}: its field {other} differs from the file's: live v1 doesn't \
-                         write it"
-                    ))
-                }
+    let op_new = map(content, OBJ_PROPS)?;
+    if props != op_new {
+        for (k, _) in live {
+            let (before, after) = (fields_of(props, k), fields_of(op_new, k));
+            if before != after {
+                c.objs.push(check::Touched {
+                    key: k,
+                    before,
+                    after,
+                });
             }
         }
-        if vis.iter().any(Option::is_some) {
-            edits.push(Edit::new(
-                o.nid.clone(),
-                Change::Visibility {
-                    viewport: vis[0],
-                    select: vis[1],
-                    render: vis[2],
-                },
-            ));
-        }
-        if a.get(f::NAME) != b.get(f::NAME) {
-            let new = b.get(f::NAME).copied().unwrap_or("");
-            edits.push(Edit::new(o.nid.clone(), Change::Name(new.to_owned())));
-        }
     }
-    Ok(edits)
+    Ok(c)
+}
+
+/// The writer's refusal as the write-back's `PackError` text: a driven channel's with its
+/// registered code first (`blend_driven: location[2] is driven (...)`), as the live rules'
+/// refusals read; any other in the writer's words after `the writer refused: ` (each has a
+/// registered code as a file verb's refusal, [`crate::verbs::VerbError::entry`], none written
+/// here: the live rules refuse those changes first).
+pub(crate) fn writer_refused(e: &WriteError) -> String {
+    match e {
+        WriteError::Driven { .. } => format!("{}: {e}", super::errors::DRIVEN.name),
+        _ => format!("the writer refused: {e}"),
+    }
 }
 
 /// The live `content` spliced into `carrier` under `pairing` (the module's rules).
@@ -259,12 +192,19 @@ pub fn encode_from_paired(
         model::read(carrier, limits).map_err(|d| err(format!("the carrier doesn't read: {d}")))?;
     let (ck, ok) = paired_keys(&scene, pairing, content)?;
     let old = scene.to_content(&ck, &ok, (0, 0));
-    let edits = diff(&scene, &old, content, &ok).map_err(err)?;
+    let version = scene.version();
+    // the live rules, one for the write-back and the kit's edit check (`check_edit`); a file of a
+    // release read but not written: untouched is the carrier, any change refused with the code
+    // first (no release read is one: the writer writes them all)
+    let edits = match changes(&old, content) {
+        Ok(c) => check::judge(version, &c).map_err(|r| r.text()),
+        Err(why) => Err(check::read_only(version).map_or(why, |r| r.text())),
+    };
+    let edits = edits.map_err(err)?;
     if edits.is_empty() && !mutant::active("EncodeReserialises") {
         return Ok(carrier.to_vec());
     }
-    let written = write(carrier, &edits, &limits.read)
-        .map_err(|e| err(format!("the writer refused: {e}")))?;
+    let written = write(carrier, &edits, &limits.read).map_err(|e| err(writer_refused(&e)))?;
     // the result holds the live content under the same pairing
     let back = model::read(&written.bytes, limits)
         .map_err(|d| err(format!("the written file doesn't read: {d}")))?;
@@ -281,4 +221,34 @@ pub fn encode_from_paired(
         }
     }
     Ok(written.bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::writer_refused;
+    use crate::write::WriteError;
+
+    /// The writer's driven refusal reaches the kit with its registered code first
+    /// (`blend_driven: `), as the read-only refusal does; another refusal keeps the writer's
+    /// words after `the writer refused: `.
+    #[test]
+    fn a_driven_refusal_carries_its_code() {
+        let driven = WriteError::Driven {
+            channel: "location[2]".into(),
+            why: "an action drives it".into(),
+        };
+        let text = writer_refused(&driven);
+        assert!(
+            text.starts_with("blend_driven: location[2] is driven (an action drives it)"),
+            "{text}"
+        );
+        let mode = WriteError::RotationMode {
+            mode: "quaternion".into(),
+        };
+        let text = writer_refused(&mode);
+        assert_eq!(
+            text,
+            "the writer refused: the object rotates by quaternion, not by Euler angles"
+        );
+    }
 }

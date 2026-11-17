@@ -1,4 +1,4 @@
 # scripts/check-labels.sh's allowlist of commit refs: the commit of a released tag of this repo,
 # one hash per line as public text names it (7 to 40 lower-case hex digits), with the tag in a
 # comment. Nothing else belongs here: an unreleased commit is named by what it does, a kit
-# commit by the kit release that holds it. Empty: this repo has no released tag yet.
+# commit by the kit release that holds it.

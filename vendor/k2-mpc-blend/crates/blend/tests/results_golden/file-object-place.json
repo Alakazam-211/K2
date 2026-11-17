@@ -5,6 +5,7 @@
     "object": "@ob:Cube",
     "location": [1, 2, 3],
     "rotation": null,
-    "scale": [2, 2, 2]
+    "scale": [2, 2, 2],
+    "warnings": []
   }
 }

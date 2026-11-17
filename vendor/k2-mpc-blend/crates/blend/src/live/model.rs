@@ -22,7 +22,9 @@
 //! key, or its file key when the parent isn't listed), `xform` (**one field**:
 //! `lx,ly,lz,rx,ry,rz,sx,sy,sz`, each `f32` as its shortest round-trip decimal), `rotmode`
 //! (the rotation mode's word), `quat` (`w,x,y,z`, when it rotates by quaternion), `hidden`,
-//! `noselect`, `norender` (`restrictflag` bits 1, 2 and 4, `0`/`1`) and `edit` ([`EditMode`]).
+//! `noselect`, `norender` (`restrictflag` bits 1, 2 and 4, `0`/`1`), `edit` ([`EditMode`]) and
+//! `visanim` (the visibility bits something animates, as their F-curves name them,
+//! comma-separated: `hide_viewport,hide_render`; only when one is, [`animated_bits`]).
 //!
 //! **Collection fields:** `name`, `nid` (`@gr:Props`, a scene `@sc:Scene`), `parent` (the
 //! collection or scene holding it first, by live key) and `hidden` (a collection's own viewport
@@ -30,19 +32,37 @@
 //!
 //! **Keys are minted** (`c<n>`, `o<n>`, in file order at import): a file's names don't fit the
 //! kit's key grammar, and a key is only as stable as the name. The marks (`mark/c`, `mark/o`)
-//! never go down. **Declines:** a file the reader refuses; a version outside the writer's
-//! ([`crate::write::WRITE_FROM`] to [`crate::write::WRITE_TO`], `live_version`); a pointer the
+//! never go down. **Declines:** a file the reader refuses; a version outside the ones read
+//! ([`crate::scene::READ_FROM`] to [`crate::scene::READ_TO`], `live_version`); a pointer the
 //! model couldn't resolve on a listed object, collection or scene (`live_ambiguous`); a
 //! transform that isn't finite (`live_value`); a file over [`LiveLimits::max_file_bytes`]
 //! (`live_too_large`).
 //!
-//! **What drives a transform** (`edit` `a`): an object whose own pointers, read by the names the
-//! file gives them, show animation data holding an action, NLA tracks or drivers (`adt`), a
-//! constraint (`constraints`), or an action named on the object itself (`action`). The app
-//! recomputes such a transform on load, so a placement wouldn't stick (**HYPOTHESIS**, to be
-//! confirmed on saved files; refusing is the safe side). Read by field name only, nothing
-//! modelled: an action that animates something other than the transform marks the object too
-//! (refused, never wrong). A file whose schema has no such fields marks nothing.
+//! **Written back:** every version the live tier reads is one the writer writes
+//! ([`writes_back`]). Kept for a release read before it is written: a file past the writer's
+//! versions ([`crate::write::written_to`]) would open and read as any other (the scene map's
+//! `version` says which), but nothing would be written to it: each live edit verb and each
+//! write-back of a change refused, `live_read_only` ([`super::errors::READ_ONLY`]); untouched,
+//! the write-back the file's own bytes. No version read is one.
+//!
+//! **What drives a transform** (`edit` `a`), read by [`crate::anim`], the reading the writer
+//! takes too: a constraint (`constraints`); an action (the object's own, or an NLA strip's) or a
+//! driver whose F-curve animates a property of the transform (`location`, a rotation, `scale`,
+//! their deltas, `rotation_mode`); or animation data the reading can't follow. The program
+//! evaluates an animated channel when it opens the file and keeps the result, so a value
+//! written there doesn't hold (`PROVENANCE.md`: seen in its 5.2.4 and 5.3.0); a constraint acts
+//! on the placement the channels give. An action that animates only other properties leaves the
+//! transform undriven. A file whose schema has no such fields marks nothing. The live tier
+//! holds one `edit` per object, so a driven channel refuses the whole placement live; the
+//! writer, on a file, refuses only a change to a driven channel.
+//!
+//! **What animates a visibility bit** (`visanim`), by the same reading: an action (the object's
+//! own, or an NLA strip's) or a driver whose F-curve names the bit's property (`hide_viewport`,
+//! `hide_select`, `hide_render`), or animation data the reading can't follow (all three). The
+//! live `object visibility` refuses an object with any animated bit, a flip of a bit nothing
+//! animates among them too: the write-back goes through the writer, which refuses a flip of an
+//! animated bit, so the live doc and the file never disagree on a bit. The writer, on a file,
+//! refuses only a flip of an animated bit.
 //!
 //! **What only the file holds** ([`PlaceFacts`], on each [`LiveObj`], never in the store): how
 //! an object is parented (`partype`), its parent inverse matrix (`parentinv`), its axis and
@@ -60,9 +80,9 @@ use crate::compress::Compression;
 use crate::error::{ReadError, ReadLimits};
 use crate::header::HeaderForm;
 use crate::mutant;
-use crate::reader::{read_blend, BlendFile, Endian, Target};
+use crate::reader::{read_blend, BlendFile, Endian};
 use crate::scene::{read_scene, Detail, IdBlock, SceneModel};
-use crate::write::{decompress, WRITE_FROM, WRITE_TO};
+use crate::write::decompress;
 
 /// The collections' list root.
 pub const COLLS: &str = "colls";
@@ -91,6 +111,7 @@ pub mod f {
     pub const NOSELECT: &str = "noselect";
     pub const NORENDER: &str = "norender";
     pub const EDIT: &str = "edit";
+    pub const VISANIM: &str = "visanim";
 }
 
 /// The scene map's keys: the file's facts, then the key marks (the highest `c<n>` and `o<n>`
@@ -155,13 +176,14 @@ impl Default for LiveLimits {
 /// What an object's transform and fields allow live ([`f::EDIT`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditMode {
-    /// `1`: place, visibility and rename.
+    /// `1`: place, visibility and rename (visibility unless a bit is animated, [`f::VISANIM`]).
     Full,
     /// `t`: its rotation isn't Euler (quaternion or axis and angle): `--rot` is refused; the
-    /// location, scale, visibility and name are written.
+    /// location, scale, visibility (unless a bit is animated) and name are written.
     NoRotation,
     /// `a`: animation, a driver or a constraint drives its transform: `object place` is refused
-    /// (the app would recompute it on load); visibility and name are written.
+    /// (the app would recompute it on load); visibility (unless a bit is animated) and name are
+    /// written.
     Driven,
     /// `0`: nothing is written (linked from a library, or a field the writer can't find).
     Never,
@@ -265,6 +287,9 @@ pub struct LiveObj {
     pub hide: [bool; 3],
     /// What may be written live.
     pub edit: EditMode,
+    /// The visibility bits something animates ([`animated_bits`]), as their F-curves name them:
+    /// the live `object visibility` refuses the object when there is one.
+    pub vis_animated: Vec<&'static str>,
     /// What only the file holds of its placement ([`PlaceFacts`]): never in the store; the
     /// view's placement reads it from the carrier.
     pub place: PlaceFacts,
@@ -338,7 +363,11 @@ fn int_of(file: &BlendFile, s: u32, body: &[u8], name: &str) -> Read<i64> {
 
 /// What only the file holds of the placement of the object in `block` ([`PlaceFacts`]).
 pub fn place_facts(file: &BlendFile, block: u32) -> PlaceFacts {
-    let driven = driven(file, block);
+    facts_of(file, block, driven(file, block))
+}
+
+/// [`place_facts`], its transform `driven` as the reading gives it.
+fn facts_of(file: &BlendFile, block: u32, driven: bool) -> PlaceFacts {
     let s = file.blocks[block as usize].head.sdna;
     let Some(body) = file.body(block) else {
         return PlaceFacts {
@@ -525,8 +554,7 @@ pub fn read(bytes: &[u8], limits: &LiveLimits) -> Result<LiveScene, Declined> {
     }
     let (how, raw) = decompress(bytes, &limits.read).map_err(read_declined)?;
     let file = read_blend(&mut &raw[..], &limits.read).map_err(read_declined)?;
-    let v = file.header.version;
-    if !(WRITE_FROM..=WRITE_TO).contains(&v) {
+    if !crate::scene::reads(file.header.version) {
         return Err(decline(
             "live_version",
             super::errors::live_version_message(&file.header.version_text()),
@@ -570,50 +598,25 @@ fn field<'a>(id: &'a IdBlock, n: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-/// A pointer field of struct `s` at `path` (`adt`, `constraints.first`) in `body`: `Some(0)` for
-/// null, `None` when the schema has no such single pointer (the reader can't tell).
-fn ptr_at(file: &BlendFile, s: u32, body: &[u8], path: &str) -> Option<u64> {
-    let (at, f) = file.sdna.field_path(s, path)?;
-    if f.pointer_depth != 1 || f.function_pointer {
-        return None;
-    }
-    file.endian().ptr(body, at as usize)
+/// Whether the object in `block` has its transform driven: a constraint, or an action (its own,
+/// or an NLA strip's) or a driver animating a property of its transform, or animation data the
+/// reading can't follow ([`crate::anim::Drives::transform`]): the one reading the writer's
+/// refusal of a driven channel takes too. An action animating no transform property leaves the
+/// transform undriven.
+pub fn driven(file: &BlendFile, block: u32) -> bool {
+    crate::anim::drives(file, block).transform()
 }
 
-/// Whether the object in `block` has its transform driven: animation data holding an action,
-/// NLA tracks or drivers, or a constraint. A field the schema has whose pointer the reader can't
-/// follow counts as driven; a field the schema lacks counts as nothing.
-pub fn driven(file: &BlendFile, block: u32) -> bool {
-    let s = file.blocks[block as usize].head.sdna;
-    let Some(body) = file.body(block) else {
-        return true;
-    };
-    let has = |path: &str| file.sdna.field_path(s, path).is_some();
-    // a constraint; an action named on the object itself (an older field the schemas still
-    // carry): counted as driving it, the safe side
-    for path in ["constraints.first", "action"] {
-        if has(path) && ptr_at(file, s, body, path) != Some(0) {
-            return true;
-        }
-    }
-    if !has("adt") {
-        return false;
-    }
-    let adt = match ptr_at(file, s, body, "adt") {
-        Some(0) => return false,
-        Some(p) => p,
-        None => return true,
-    };
-    let Target::Block(b) = file.resolve(adt, block) else {
-        return true;
-    };
-    let as_ = file.blocks[b as usize].head.sdna;
-    let Some(ab) = file.body(b) else {
-        return true;
-    };
-    ["action", "nla_tracks.first", "drivers.first"]
+/// The visibility bits `d` says something animates ([`crate::anim::Drives::driven_any`] of each
+/// of [`crate::anim::VISIBILITY_PATHS`]), as their F-curves name them, in that order: the
+/// reading the writer's refusal of a flipped bit takes too. All three when the reading can't
+/// follow the object's animation; none when nothing animates one.
+pub fn animated_bits(d: &crate::anim::Drives) -> Vec<&'static str> {
+    crate::anim::VISIBILITY_PATHS
         .iter()
-        .any(|p| ptr_at(file, as_, ab, p) != Some(0))
+        .filter(|(path, _)| d.driven_any(path).is_some())
+        .map(|(path, _)| *path)
+        .collect()
 }
 
 /// The model's indexes of the collections the live scene lists, in its order (the file's):
@@ -804,7 +807,9 @@ pub fn from_model(
             && xform.is_some()
             && flag.is_some()
             && id.spans.iter().any(|s| s.field == "name" && s.len > 3);
-        let place = place_facts(file, id.block);
+        let drives = crate::anim::drives(file, id.block);
+        let place = facts_of(file, id.block, drives.transform());
+        let vis_animated = animated_bits(&drives);
         let edit = if !writable {
             EditMode::Never
         } else if place.driven {
@@ -834,6 +839,7 @@ pub fn from_model(
             quat,
             hide,
             edit,
+            vis_animated,
             place,
         });
     }
@@ -871,7 +877,38 @@ pub fn from_model(
     })
 }
 
+/// A file version as the scene map's `version` writes it (`5.03` is 503); `None` for any other
+/// text.
+pub fn version_of_text(t: &str) -> Option<u16> {
+    let (major, minor) = t.split_once('.')?;
+    let digits = |x: &str| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit());
+    if !digits(major) || minor.len() != 2 || !digits(minor) {
+        return None;
+    }
+    major
+        .parse::<u16>()
+        .ok()?
+        .checked_mul(100)?
+        .checked_add(minor.parse().ok()?)
+}
+
+/// Whether a live doc of a file of `version` (the scene map's `version`, as text) is written
+/// back: the writer's versions ([`crate::write::writes`]), every version the live tier reads. A
+/// doc whose version text doesn't read is read-only, and so would be one of a version read but
+/// not written.
+pub fn writes_back(version: &str) -> bool {
+    version_of_text(version).is_some_and(crate::write::writes)
+}
+
 impl LiveScene {
+    /// The file's version as the scene map writes it (`5.03`).
+    pub fn version(&self) -> &str {
+        self.facts
+            .iter()
+            .find(|(k, _)| *k == s::VERSION)
+            .map_or("", |(_, v)| v.as_str())
+    }
+
     /// The keys an import mints: `c1..` for the collections in order (`c0` for no collection),
     /// `o1..` for the objects.
     pub fn minted_keys(&self) -> (Vec<Key>, Vec<Key>) {
@@ -967,6 +1004,9 @@ impl LiveScene {
             put(f::NOSELECT, u8::from(o.hide[1]).to_string());
             put(f::NORENDER, u8::from(o.hide[2]).to_string());
             put(f::EDIT, o.edit.as_str().to_owned());
+            if !o.vis_animated.is_empty() {
+                put(f::VISANIM, o.vis_animated.join(","));
+            }
         }
         (cp, op)
     }

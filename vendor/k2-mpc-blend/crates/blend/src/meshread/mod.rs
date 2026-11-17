@@ -3,7 +3,8 @@
 //!
 //! - [`k2scene`]: the K2SCENE1 writer. Every count is checked against [`MeshReadLimits`] and the
 //!   output's exact length is computed from the counts before one buffer of that length is
-//!   filled. With the test-only `testgen` or `fuzzing` feature, `check` reads a K2SCENE1 back
+//!   filled; [`k2scene::write_header`] writes the header part alone, with the same checks and
+//!   text, for a data section already written. With the test-only `testgen` or `fuzzing` feature, `check` reads a K2SCENE1 back
 //!   strictly: the rules a renderer applies, written from the layout's description.
 //! - [`tri`]: polygons to triangles with the file's corner order kept: a fan for a convex
 //!   polygon, ear clipping for a concave one; always `n - 2` triangles for `n` corners.
@@ -11,6 +12,9 @@
 //!   objects (each by its address; world matrices composed from their stored location,
 //!   rotation and scale; hidden ones kept and marked; modifiers named), its perspective
 //!   cameras, each mesh once with its content hash, and a report of what was left out and why.
+//!   Its steps over the decode's objects are shared with the live tier's reuse
+//!   ([`crate::live::reuse`]), which keeps a carrier's read ([`read::CarrierRead`]) and writes a
+//!   live state's header over its data section.
 //! - [`hidden`]: the hidden-by rule, one for the mesh read and the live view.
 //! - [`camera`]: a camera's view from its world matrix, its data and the render size, with a
 //!   fixed arc tangent.

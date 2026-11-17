@@ -206,8 +206,9 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-base"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
+ "libc",
  "redb",
  "regex-automata",
  "thiserror",
@@ -216,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-blend"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "flate2",
  "k2-mpc-base",

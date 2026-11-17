@@ -12,7 +12,8 @@ use crate::reader::Code;
 mod scene;
 pub mod scenes;
 pub use scene::{
-    CameraSpec, Driven, MeshLayouts, MeshSpec, ObjectSpec, Render, SceneBuilder, IDENTITY,
+    CameraSpec, Channel, Driven, MeshLayouts, MeshSpec, ObjectSpec, Render, SceneBuilder,
+    ACTION_SLOTS_FROM, CONSTRAINT_STRUCTS, EMBEDDED_ID_FLAG, IDENTITY,
 };
 
 /// A schema to write: types with their lengths, and structs of (type, name) fields.
@@ -667,7 +668,7 @@ impl Body {
 }
 
 /// Old addresses for a test file, handed out in order.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Addresses {
     next: u64,
     named: HashMap<String, u64>,

@@ -11,6 +11,13 @@
 //! decoded once more to check the encoder: its own bytes differ, its content is the patched
 //! file's.
 //!
+//! **Cached fields stay too.** The writer leaves three cached fields as they are, which the
+//! program refreshes on load, as its reopening of our writes shows (`PROVENANCE.md`): an
+//! object's `constinv` (its constraint stack's stored inverse) after a location written under
+//! constraints, and its `base_flag` and its view layer `Base`'s `flag` after a hide. Our reader,
+//! the mesh read and the live view read a hide from `restrictflag` alone
+//! (`tests/cached_flags.rs`).
+//!
 //! **Addresses** are the input file's keys: every edit in a list names its object as the file
 //! held it, a rename earlier in the list included. The last change to a field wins.
 //!
@@ -20,7 +27,26 @@
 //! another file); a field the file's schema doesn't have, or has with another type or size; an
 //! Euler rotation for an object that rotates by quaternion or axis and angle; a name that is
 //! empty, holds a NUL, doesn't fit, or another object of the file has; a value that isn't
-//! finite. Nothing is written in part: an edit list is applied whole or refused.
+//! finite; a change to a **driven channel** ([`WriteError::Driven`]). Nothing is written in
+//! part: an edit list is applied whole or refused.
+//!
+//! **A driven channel** is one component of the location, Euler rotation or scale, or one
+//! visibility bit, that an action (the object's own, or an NLA strip's) or a driver animates
+//! ([`crate::anim`], the live tier's reading too): the program evaluates the animation when it
+//! opens the file and keeps the result, so a value written there doesn't hold (`PROVENANCE.md`).
+//! The writer compares each component a change gives with the one the input file stores, bit
+//! for bit: a change that keeps a driven component's stored value doesn't write it, and is
+//! written (a location's x and y, its animated z kept). A visibility bit is its own channel,
+//! named by its property ([`crate::anim::VISIBILITY_PATHS`]: `hide_viewport`, `hide_select`,
+//! `hide_render`): a change that flips an animated bit is refused, one that keeps it as stored is
+//! written with the other bits. An Euler rotation is refused too when the rotation mode is
+//! animated; animation data the reading can't follow drives every component and every bit.
+//!
+//! **A constraint** drives no channel: the stored values hold under it, so a transform written
+//! to an object with constraints is written. The program's constraints decide where it shows
+//! the object, so the write comes with a warning ([`WriteWarning::Constrained`],
+//! `blend_constrained`, in [`Written::warnings`]) naming each kind of constraint the object has
+//! (the live tier, placing the object as the program shows it, refuses it whole).
 //!
 //! **A rename** writes the name field only (the rest of the field zeroed). Other files that link
 //! the object by name don't follow it.
@@ -28,15 +54,39 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
+use crate::anim::{drives, Drives, UNKNOWN_KIND, VISIBILITY_PATHS};
 use crate::compress::{self, Compression};
 use crate::error::{ReadError, ReadLimits};
 use crate::reader::{read_blend, BlendFile, Endian};
-use crate::scene::{key_of, read_scene, FieldSpan, IdBlock, SceneModel, NAMES_FROM, NAMES_TO};
+use crate::scene::{key_of, read_scene, FieldSpan, IdBlock, SceneModel, NAMES_FROM};
 
 /// The oldest file version the writer writes.
 pub const WRITE_FROM: u16 = NAMES_FROM;
-/// The newest file version the writer writes.
-pub const WRITE_TO: u16 = NAMES_TO;
+/// The newest file version the writer writes: the newest whose saves of the writer's patches
+/// the program read back (`PROVENANCE.md`), the newest the reader reads too
+/// ([`crate::scene::READ_TO`]). The writer refuses a newer one, [`WriteError::Version`].
+pub const WRITE_TO: u16 = 503;
+
+/// The newest file version the writer writes: [`WRITE_TO`]. With the test-only `mutants`
+/// feature, a row may set it back ([`crate::mutant::gap`]) to check what a live doc does with a
+/// release read but not written, which no release read today is.
+pub fn written_to() -> u16 {
+    crate::mutant::gap().unwrap_or(WRITE_TO)
+}
+
+/// Whether the writer writes a file of `version` ([`WRITE_FROM`] to [`written_to`]): the one
+/// rule the writer, the file verbs and the live tier's write-back take.
+pub fn writes(version: u16) -> bool {
+    if crate::mutant::active("WritesStopAt501") {
+        // planted: the writer's range left where it was before 5.02 and 5.03 were written
+        return (WRITE_FROM..=501).contains(&version);
+    }
+    if crate::mutant::active("WritesPastRead") {
+        // planted: a version past the ones read is written
+        return (WRITE_FROM..=crate::scene::READ_TO + 1).contains(&version);
+    }
+    (WRITE_FROM..=written_to()).contains(&version)
+}
 /// The most bytes of the file one zstd frame the writer makes holds.
 pub const ZSTD_FRAME: usize = 8 << 20;
 
@@ -129,12 +179,81 @@ pub enum WriteError {
     /// A value that isn't finite.
     #[error("a value isn't finite")]
     Value,
+    /// A change to a channel an action or a driver animates ([`crate::anim`]): the program
+    /// recomputes it when it opens the file, so the value written wouldn't hold. A visibility
+    /// bit is refused only when the change flips it.
+    #[error(
+        "{channel} is driven ({why}): the program recomputes it when it opens the file, so a \
+         value written there wouldn't hold"
+    )]
+    Driven {
+        /// The channel, as its F-curve names it: `location[2]`, `rotation_euler[0]`,
+        /// `scale[1]`, `rotation_mode`, or a visibility bit's property, `hide_viewport`.
+        channel: String,
+        /// What drives it (`an action drives it`), or why the reading can't tell (fixed text).
+        why: String,
+    },
     /// The writer's own check of the result failed: nothing is returned.
     #[error("the written file didn't check: {why}")]
     Check {
         /// What disagreed (fixed text).
         why: &'static str,
     },
+}
+
+/// A heads-up that comes with a written file ([`Written::warnings`]): the change was written,
+/// and something else decides what the program shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WriteWarning {
+    /// A transform (location, rotation or scale) written to an object that has constraints:
+    /// the stored values hold, and the program's constraints decide where it shows the object,
+    /// so the placement shown may not move.
+    Constrained {
+        /// The object's key in the input file (`@ob:Held`).
+        object: String,
+        /// Each kind of constraint the object has, once, in the list's order
+        /// ([`crate::anim::Drives::constraint_kinds`]).
+        kinds: Vec<String>,
+    },
+}
+
+/// [`WriteWarning::Constrained`]'s code.
+pub const CONSTRAINED: &str = "blend_constrained";
+
+impl WriteWarning {
+    /// The warning's code: [`CONSTRAINED`].
+    pub fn code(&self) -> &'static str {
+        match self {
+            WriteWarning::Constrained { .. } => CONSTRAINED,
+        }
+    }
+
+    /// The object it is about, by key.
+    pub fn object(&self) -> &str {
+        match self {
+            WriteWarning::Constrained { object, .. } => object,
+        }
+    }
+
+    /// The warning as one `note: ` line for stderr, naming its code, as the kit's warnings
+    /// read.
+    pub fn note(&self) -> String {
+        format!("note: {self} ({})", self.code())
+    }
+}
+
+impl std::fmt::Display for WriteWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WriteWarning::Constrained { object, kinds } => write!(
+                f,
+                "{object}'s transform is written, and its constraints ({}) decide where the \
+                 program shows it: the placement shown may not move",
+                kinds.join(", ")
+            ),
+        }
+    }
 }
 
 /// A written file.
@@ -147,6 +266,9 @@ pub struct Written {
     pub compression: Compression,
     /// The fields written, with their places in the decompressed file.
     pub patched: Vec<FieldSpan>,
+    /// The heads-ups the write comes with, one per object at most per kind
+    /// ([`WriteWarning`]); empty for most writes.
+    pub warnings: Vec<WriteWarning>,
 }
 
 /// The file decompressed whole, under `limits`.
@@ -267,6 +389,43 @@ fn put_uint(b: &mut [u8], at: usize, len: usize, e: Endian, v: u64) {
     }
 }
 
+/// The refusal of a change to `channel`, driven as `d` says (`by` its [`Drives::driven`]).
+fn driven_error(d: &Drives, channel: String, by: &str) -> WriteError {
+    let why = if d.unknown.is_some() {
+        format!("the reader can't tell what drives it: {by}")
+    } else {
+        format!("{by} drives it")
+    };
+    WriteError::Driven { channel, why }
+}
+
+/// Refuses a change to a driven component of the property at `path`: each of `v` against the
+/// one the input file `raw` stores at `at`, bit for bit; one kept isn't written.
+fn refuse_driven(
+    d: &Drives,
+    path: &str,
+    v: &[f32; 3],
+    raw: &[u8],
+    at: usize,
+    e: Endian,
+) -> Result<(), WriteError> {
+    if crate::mutant::active("DrivenChannelWritten") {
+        return Ok(());
+    }
+    for (i, x) in v.iter().enumerate() {
+        let kept = e
+            .f32(raw, at + 4 * i)
+            .is_some_and(|was| was.to_bits() == x.to_bits());
+        if kept {
+            continue;
+        }
+        if let Some(by) = d.driven(path, i) {
+            return Err(driven_error(d, format!("{path}[{i}]"), by));
+        }
+    }
+    Ok(())
+}
+
 /// What a written object should read as, folded from the edits.
 #[derive(Debug, Default)]
 struct Want {
@@ -283,7 +442,7 @@ pub fn write(bytes: &[u8], edits: &[Edit], limits: &ReadLimits) -> Result<Writte
     let (how, raw) = decompress(bytes, limits)?;
     let file = read_blend(&mut &raw[..], limits)?;
     let version = file.header.version;
-    if !(WRITE_FROM..=WRITE_TO).contains(&version) {
+    if !writes(version) {
         return Err(WriteError::Version { version });
     }
     let model = read_scene(&file)?;
@@ -291,6 +450,10 @@ pub fn write(bytes: &[u8], edits: &[Edit], limits: &ReadLimits) -> Result<Writte
     let mut out = raw.clone();
     let mut patched: Vec<FieldSpan> = Vec::new();
     let mut wants: BTreeMap<String, Want> = BTreeMap::new();
+    // what drives each edited object's channels, read once
+    let mut anims: BTreeMap<u32, Drives> = BTreeMap::new();
+    // the objects with constraints whose transform an edit writes, in the edits' order
+    let mut constrained: Vec<(String, Vec<String>)> = Vec::new();
     // the names the file's own objects hold, as the edits go
     let mut names: BTreeMap<Vec<u8>, String> = model
         .ids
@@ -300,7 +463,22 @@ pub fn write(bytes: &[u8], edits: &[Edit], limits: &ReadLimits) -> Result<Writte
         .collect();
     for edit in edits {
         let id = object(&model, &edit.object)?;
+        let d = anims
+            .entry(id.block)
+            .or_insert_with(|| drives(&file, id.block));
         let want = wants.entry(edit.object.clone()).or_default();
+        let transform = matches!(
+            edit.change,
+            Change::Location(_) | Change::Rotation(_) | Change::Scale(_)
+        );
+        if transform && d.constraint && !constrained.iter().any(|(k, _)| *k == edit.object) {
+            let kinds = if d.constraint_kinds.is_empty() {
+                vec![UNKNOWN_KIND.to_owned()]
+            } else {
+                d.constraint_kinds.clone()
+            };
+            constrained.push((edit.object.clone(), kinds));
+        }
         let s = match &edit.change {
             Change::Location(v) => {
                 let s = span(id, &["loc"], "loc", &["float"], Some(12))?;
@@ -310,6 +488,7 @@ pub fn write(bytes: &[u8], edits: &[Edit], limits: &ReadLimits) -> Result<Writte
                     0
                 };
                 put_f32s(&mut out, s.offset as usize + shift, v, e)?;
+                refuse_driven(d, "location", v, &raw, s.offset as usize, e)?;
                 want.loc = Some(*v);
                 s
             }
@@ -321,12 +500,24 @@ pub fn write(bytes: &[u8], edits: &[Edit], limits: &ReadLimits) -> Result<Writte
                     }
                 }
                 put_f32s(&mut out, s.offset as usize, v, e)?;
+                refuse_driven(d, "rotation_euler", v, &raw, s.offset as usize, e)?;
+                let at = s.offset as usize;
+                let turned = (0..3).any(|i| {
+                    e.f32(&raw, at + 4 * i)
+                        .is_none_or(|was| was.to_bits() != v[i].to_bits())
+                });
+                if let Some(by) = d.driven_any("rotation_mode").filter(|_| turned) {
+                    if !crate::mutant::active("DrivenChannelWritten") {
+                        return Err(driven_error(d, "rotation_mode".to_owned(), by));
+                    }
+                }
                 want.rot = Some(*v);
                 s
             }
             Change::Scale(v) => {
                 let s = span(id, &["scale", "size"], "size", &["float"], Some(12))?;
                 put_f32s(&mut out, s.offset as usize, v, e)?;
+                refuse_driven(d, "scale", v, &raw, s.offset as usize, e)?;
                 want.scale = Some(*v);
                 s
             }
@@ -350,11 +541,19 @@ pub fn write(bytes: &[u8], edits: &[Edit], limits: &ReadLimits) -> Result<Writte
                         field: "restrictflag",
                     });
                 }
+                let stored = get_uint(&raw, at, len, e);
                 let mut v = get_uint(&out, at, len, e);
-                for (i, (on, bit)) in [(viewport, 1u64), (select, 2), (render, 4)]
+                for (i, (on, (path, bit))) in [viewport, select, render]
                     .into_iter()
+                    .zip(VISIBILITY_PATHS.iter().copied())
                     .enumerate()
                 {
+                    let flips = on.is_some_and(|on| on != (stored & bit != 0));
+                    if let Some(by) = d.driven_any(path).filter(|_| flips) {
+                        if !crate::mutant::active("DrivenBitWritten") {
+                            return Err(driven_error(d, path.to_owned(), by));
+                        }
+                    }
                     match on {
                         Some(true) => v |= bit,
                         Some(false) => v &= !bit,
@@ -406,10 +605,19 @@ pub fn write(bytes: &[u8], edits: &[Edit], limits: &ReadLimits) -> Result<Writte
     }
     check(&file, &raw, &out, &patched, &model, &wants, limits)?;
     let bytes = store(out, how)?;
+    let warnings = if crate::mutant::active("ConstrainedUnwarned") {
+        Vec::new()
+    } else {
+        constrained
+            .into_iter()
+            .map(|(object, kinds)| WriteWarning::Constrained { object, kinds })
+            .collect()
+    };
     Ok(Written {
         bytes,
         compression: how,
         patched,
+        warnings,
     })
 }
 

@@ -24,8 +24,15 @@
 //! **Kinds.** A data-block's kind is its struct's name in plain words (`Object` is `object`,
 //! `Lamp` and `Light` are `light`, `Group` and `Collection` are `collection`); a struct this
 //! reader has no word for is its name in lower case. An object's `data_type` is its data's
-//! kind, or `empty` without data. A data-block whose struct is the bare `ID` (a placeholder for
-//! one linked from another file) takes the kind its code has elsewhere in the file.
+//! kind, or `empty` without data.
+//!
+//! **Link placeholders.** A save can hold a data-block linked from another file as its bare `ID`
+//! header only: block code and struct `ID`, its type only in its stored name's first two bytes
+//! (`OBPlant`). It takes the kind of that type code, as the file's own data-blocks of the code
+//! have it (`OB` is `object`, `ME` `mesh`); a code no other data-block of the file has leaves it
+//! `id`. It stays linked (its library), and holds nothing of its kind here: no fields, named
+//! values, hidden flag, material slots or [`Detail`] (what it holds is in its library). Its
+//! [`IdBlock::code`] and key are its block's: `@li:plants.blend/id:Plant`.
 //!
 //! **Keys.** A data-block's name is unique among the data-blocks of its type in one file (or
 //! one library), so its key is its two-letter type code and its name: `@ob:Cube`; one linked
@@ -75,7 +82,27 @@ pub const UI_STRUCTS: &[&str] = &["wmWindowManager", "WorkSpace", "bScreen"];
 pub const NAMES_FROM: u16 = 306;
 /// The newest file version whose flags and values are named: the newest release whose saves
 /// pinned them (`PROVENANCE.md`).
-pub const NAMES_TO: u16 = 501;
+pub const NAMES_TO: u16 = 503;
+/// The oldest file version the mesh read and the live tier read: [`NAMES_FROM`].
+pub const READ_FROM: u16 = NAMES_FROM;
+/// The newest file version the mesh read and the live tier read: [`NAMES_TO`], the newest the
+/// writer writes too ([`crate::write::WRITE_TO`]). A live doc of a file read past the writer's
+/// versions would be read-only; no version read is one.
+pub const READ_TO: u16 = NAMES_TO;
+
+/// Whether the mesh read and the live tier read a file of `version` ([`READ_FROM`] to
+/// [`READ_TO`]); anything else they decline, `live_version`.
+pub fn reads(version: u16) -> bool {
+    if crate::mutant::active("ReadStopsAtWritten") {
+        // planted: the versions read stop at the writer's
+        return (READ_FROM..=crate::write::written_to()).contains(&version);
+    }
+    if crate::mutant::active("ReadPastRange") {
+        // planted: a version past the ones read is read
+        return version >= READ_FROM;
+    }
+    (READ_FROM..=READ_TO).contains(&version)
+}
 /// An object's `restrictflag` bits.
 pub const OBJECT_HIDE_BITS: &[(i64, &str)] =
     &[(1, "hide_viewport"), (2, "hide_select"), (4, "hide_render")];
@@ -126,7 +153,12 @@ fn name_values(
     version: u16,
 ) -> (Vec<(String, String)>, Option<bool>) {
     let mut named = Vec::new();
-    let past = version > NAMES_TO && !crate::mutant::active("NamesPastPinned");
+    let past = if crate::mutant::active("NamesStopAtWritten") {
+        // planted: the names stop at the writer's versions
+        version > crate::write::written_to()
+    } else {
+        version > NAMES_TO && !crate::mutant::active("NamesPastPinned")
+    };
     if version < NAMES_FROM || past {
         return (named, None);
     }
@@ -196,7 +228,8 @@ pub struct FieldSpan {
 pub struct IdBlock {
     /// Its block's index in [`BlendFile::blocks`].
     pub block: u32,
-    /// The two-letter type code (`OB`).
+    /// The two-letter type code (`OB`): its block's, so `ID` for a link placeholder (see the
+    /// module).
     pub code: String,
     /// Its struct's name (`Object`).
     pub struct_name: String,
@@ -695,7 +728,7 @@ impl<'a> Model<'a> {
 
     fn run(mut self) -> Result<SceneModel, ReadError> {
         let file = self.file;
-        // the codes' structs, for placeholders of linked data-blocks
+        // the codes' structs, for link placeholders (by their stored names' type codes)
         let mut code_struct: HashMap<[u8; 2], String> = HashMap::new();
         for b in &file.blocks {
             if b.is_id() {
@@ -747,8 +780,14 @@ impl<'a> Model<'a> {
             // the stored name starts with the type code
             let name_bytes = raw_name.get(2..).unwrap_or(&[]).to_vec();
             let kind = if struct_name == "ID" {
-                code_struct
-                    .get(&[b.head.code[0], b.head.code[1]])
+                // a link placeholder: its type is its stored name's type code
+                let code = if crate::mutant::active("PlaceholderKindByBlockCode") {
+                    // planted: the type looked up by the block's code (`ID`)
+                    Some([b.head.code[0], b.head.code[1]])
+                } else {
+                    raw_name.get(..2).map(|c| [c[0], c[1]])
+                };
+                code.and_then(|c| code_struct.get(&c))
                     .map_or_else(|| "id".to_owned(), |n| kind_of(n.as_str()))
             } else {
                 kind_of(&struct_name)
@@ -975,13 +1014,16 @@ impl<'a> Model<'a> {
         let block = self.ids[n].block;
         let s = file.blocks[block as usize].head.sdna;
         let kind = self.ids[n].kind.clone();
+        // a link placeholder holds nothing of its kind: only its `ID` header
+        let placeholder = self.ids[n].struct_name == "ID";
         let Some(body) = file.body(block) else {
             return;
         };
         // fields, with their places
         let mut fields = Vec::new();
         let mut spans = Vec::new();
-        for names in fields_for(&kind) {
+        let reads: &[&[&str]] = if placeholder { &[] } else { fields_for(&kind) };
+        for names in reads {
             let Some(f) = file.sdna.field_any(s, names) else {
                 continue;
             };
@@ -1000,10 +1042,11 @@ impl<'a> Model<'a> {
         self.ids[n].named = named;
         self.ids[n].hidden = hidden;
         self.ids[n].spans.extend(spans);
-        if self.ids[n].struct_name != "ID" {
+        if !placeholder {
             self.ids[n].materials = self.slots(block, s);
         }
         let detail = match kind.as_str() {
+            _ if placeholder => Detail::Other,
             "scene" => {
                 let master = self.ptr_field(block, 0, s, "master_collection");
                 let (objects, collections) = match master.map(|p| file.resolve(p, block)) {
@@ -1024,15 +1067,15 @@ impl<'a> Model<'a> {
                     world: self.id_field(block, s, "world"),
                 }
             }
-            "collection" if self.ids[n].struct_name != "ID" => Detail::Collection {
+            "collection" => Detail::Collection {
                 objects: self.list(block, s, "gobject"),
                 collections: self.list(block, s, "children"),
             },
-            "object" if self.ids[n].struct_name != "ID" => Detail::Object {
+            "object" => Detail::Object {
                 data: self.id_field(block, s, "data"),
                 parent: self.id_field(block, s, "parent"),
             },
-            "library" if self.ids[n].struct_name != "ID" => {
+            "library" => {
                 let file_name = ["filepath", "name"].iter().find_map(|f| {
                     let fd = file.sdna.field(s, f)?;
                     if fd.is_pointer() || file.sdna.type_name(fd.type_index) != "char" {

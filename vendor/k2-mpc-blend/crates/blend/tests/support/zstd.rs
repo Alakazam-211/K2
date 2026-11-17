@@ -189,3 +189,67 @@ pub fn many_block_bomb() -> Vec<u8> {
     blocks.extend((0..16_384).map(|_| Block::Rle(0x55, BLOCK_MAX)));
     frame(17, &blocks)
 }
+
+/// One block header of the classic form (8-byte pointers, little-endian) whose body is
+/// [`LONG_BODY`] bytes: the code `TEST`, the length, an address, schema index 0, count 1.
+fn long_block_header() -> Vec<u8> {
+    let mut h = b"TEST".to_vec();
+    h.extend_from_slice(&(LONG_BODY as i32).to_le_bytes());
+    h.extend_from_slice(&0x1000u64.to_le_bytes());
+    h.extend_from_slice(&0i32.to_le_bytes());
+    h.extend_from_slice(&1i32.to_le_bytes());
+    h
+}
+
+/// The body length of each block of [`past_default_bomb`]: 2 GiB less 64 KiB.
+pub const LONG_BODY: u64 = 0x7FFF_0000;
+
+/// A stream that decodes to just past 4 GiB: a classic header and three long blocks
+/// ([`long_block_header`]), the first two with their whole [`LONG_BODY`], the third with 256 KiB
+/// of its body, every body run-length encoded; about 128 KiB in. Its decoded length is returned
+/// beside it.
+pub fn past_default_bomb() -> (Vec<u8>, u64) {
+    let mut head = b"BLENDER-v300".to_vec();
+    head.extend_from_slice(&long_block_header());
+    let next = long_block_header();
+    let full = (LONG_BODY / u64::from(BLOCK_MAX)) as usize;
+    let rest = (LONG_BODY % u64::from(BLOCK_MAX)) as u32;
+    let body = |blocks: &mut Vec<Block<'_>>| {
+        blocks.extend((0..full).map(|_| Block::Rle(0x55, BLOCK_MAX)));
+        if rest > 0 {
+            blocks.push(Block::Rle(0x55, rest));
+        }
+    };
+    let mut blocks = vec![Block::Raw(&head)];
+    body(&mut blocks);
+    blocks.push(Block::Raw(&next));
+    body(&mut blocks);
+    blocks.push(Block::Raw(&next));
+    blocks.extend((0..2).map(|_| Block::Rle(0x55, BLOCK_MAX)));
+    let total =
+        head.len() as u64 + 2 * next.len() as u64 + 2 * LONG_BODY + 2 * u64::from(BLOCK_MAX);
+    (frame(17, &blocks), total)
+}
+
+/// The reader's own default limits refuse a stream that decodes to just past 4 GiB, typed, by
+/// the raw cap ([`ReadLimits::max_raw_bytes`], 4 GiB). The heap is the caller's to measure. Each
+/// step's failure names the step.
+pub fn row_read_default_cap() -> Result<(), String> {
+    let (bytes, total) = past_default_bomb();
+    if total <= 4 << 30 {
+        return Err(format!(
+            "read default, step the stream decodes past 4 GiB: {total}"
+        ));
+    }
+    match read_blend(&mut &bytes[..], &ReadLimits::default()) {
+        Err(k2_mpc_blend::ReadError::Limit { what, limit })
+            if what == "bytes after decompression" && limit == 4 << 30 =>
+        {
+            Ok(())
+        }
+        other => Err(format!(
+            "read default, step refused by the 4 GiB cap: {:?}",
+            other.map(|f| f.raw_len)
+        )),
+    }
+}

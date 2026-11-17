@@ -108,6 +108,7 @@ pub const VIEW: ViewSchema = ViewSchema {
         (f::PARENT, FieldClass::Meta),
         (f::ROTMODE, FieldClass::Meta),
         (f::EDIT, FieldClass::Meta),
+        (f::VISANIM, FieldClass::Meta),
     ],
     unit_derived: DERIVED,
     container_derived: CONTAINER_DERIVED,

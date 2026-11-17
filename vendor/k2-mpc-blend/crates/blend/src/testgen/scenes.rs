@@ -10,14 +10,16 @@
 //! | `living_room_zstd.blend` | [`living_room_zstd`]: the same room, stored zstd |
 //! | `living_room_hidden.blend` | [`living_room_hidden`]: the same room, its `Props` collection hidden |
 //! | `three_cameras.blend` | [`three_cameras`]: three perspective cameras, one orthographic, a mesh |
-//! | `driven_quat.blend` | [`driven_quat`]: an object an action drives, one turned by quaternion, one plain |
+//! | `driven_quat.blend` | [`driven_quat`]: an object whose location's z an action animates, one turned by quaternion, one plain |
 //! | `instanced.blend` | [`instanced`]: one mesh four objects share, and one object with its own |
 //! | `large.blend` | [`large`]: 2,000 mesh objects in 100 collections, sharing 50 meshes |
 //! | `empty_scene.blend` | [`empty_scene`]: a camera and an empty, no mesh |
 
 use std::f32::consts::{FRAC_1_SQRT_2, FRAC_PI_2, FRAC_PI_4, PI};
 
-use super::{zstd_seekable, CameraSpec, Driven, MeshLayouts, MeshSpec, ObjectSpec, SceneBuilder};
+use super::{
+    zstd_seekable, CameraSpec, Driven, MeshLayouts, MeshSpec, ObjectSpec, Render, SceneBuilder,
+};
 
 /// A function that writes one scene file's bytes.
 pub type WriteScene = fn() -> Vec<u8>;
@@ -32,6 +34,8 @@ pub const ALL: &[(&str, WriteScene)] = &[
     ("instanced.blend", instanced),
     ("large.blend", large),
     ("empty_scene.blend", empty_scene),
+    ("camera_fits_wide.blend", camera_fits_wide),
+    ("camera_fits_tall.blend", camera_fits_tall),
 ];
 
 /// The version every scene is written at: 4.02, attribute-layer meshes, the classic header.
@@ -85,7 +89,7 @@ pub fn box_mesh(min: [f32; 3], max: [f32; 3]) -> MeshSpec {
 /// A builder for a scene file at [`VERSION`]: meshes in attribute layers, cameras with their
 /// sensors, scenes with their render settings (1920 by 1080, square pixels).
 fn builder() -> SceneBuilder {
-    SceneBuilder::meshes(VERSION, MeshLayouts::LAYERS)
+    SceneBuilder::saved(VERSION, MeshLayouts::LAYERS)
 }
 
 /// An object of type `ty` with data `data` (`ME:Cube`), placed by `xform` (location, Euler
@@ -349,7 +353,7 @@ pub const ROOM_LIBRARY: (&str, &str) = ("plants.blend", "//plants.blend");
 /// linked from `//plants.blend`); a measure guide no collection holds, off in renders. The left
 /// wall is hidden in viewports. Stored plain.
 pub fn living_room() -> Vec<u8> {
-    living_room_with(0)
+    living_room_edited(&RoomEdits::default())
 }
 
 /// [`living_room`] stored zstd, in seekable frames.
@@ -360,35 +364,57 @@ pub fn living_room_zstd() -> Vec<u8> {
 /// [`living_room`] with its `Props` collection hidden in viewports: the left wall hidden by its
 /// own flag, the vase, the mug and the clock's hand by their collection.
 pub fn living_room_hidden() -> Vec<u8> {
-    living_room_with(1)
+    living_room_edited(&RoomEdits {
+        props_hidden: true,
+        ..RoomEdits::default()
+    })
 }
 
-/// The living room with `Props`'s `flag` as given.
-fn living_room_with(props_flag: u8) -> Vec<u8> {
+/// Changes to the living room, written as a file that holds them ([`living_room_edited`]): the
+/// file a live state over the room would read as, for the states a write-back doesn't write.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RoomEdits {
+    /// `Props` hidden in viewports.
+    pub props_hidden: bool,
+    /// An object of `Props` (its name) held by `Room` instead, after `Room`'s own objects.
+    pub to_room: Option<&'static str>,
+    /// An object (its name) left out: no block, and no collection or scene holds it.
+    pub without: Option<&'static str>,
+    /// A mesh (its name) whose box reaches twice as far: the same counts, other positions.
+    pub grown: Option<&'static str>,
+}
+
+/// The living room with `e`'s changes; with none, [`living_room`] byte for byte.
+pub fn living_room_edited(e: &RoomEdits) -> Vec<u8> {
+    let keep = |names: &[&'static str]| -> Vec<&'static str> {
+        names
+            .iter()
+            .copied()
+            .filter(|n| Some(*n) != e.without && Some(*n) != e.to_room)
+            .collect()
+    };
     let mut b = builder();
     b.file_global(Some("Scene"));
     b.scene(
         "Scene",
-        &["Camera", "Key light", "Fill light", "Camera.001"],
+        &keep(&["Camera", "Key light", "Fill light", "Camera.001"]),
         &["Room", "Furniture"],
         Some("Camera"),
     );
-    b.collection(
-        "Room",
-        &[
-            "Floor",
-            "Wall.Back",
-            "Wall.Left",
-            "Window",
-            "Rug",
-            "Ceiling fan",
-            "Floor lamp",
-        ],
-        &[],
-    );
+    let mut room = keep(&[
+        "Floor",
+        "Wall.Back",
+        "Wall.Left",
+        "Window",
+        "Rug",
+        "Ceiling fan",
+        "Floor lamp",
+    ]);
+    room.extend(e.to_room.filter(|n| Some(*n) != e.without));
+    b.collection("Room", &room, &[]);
     b.collection(
         "Furniture",
-        &[
+        &keep(&[
             "Table",
             "Chair.001",
             "Chair.002",
@@ -399,17 +425,20 @@ fn living_room_with(props_flag: u8) -> Vec<u8> {
             "Book.001",
             "Book.002",
             "Floor lamp",
-        ],
+        ]),
         &["Props"],
     );
     b.collection_flagged(
         "Props",
-        &["Vase", "Mug", "Clock", "Clock hand", "Plant"],
+        &keep(&["Vase", "Mug", "Clock", "Clock hand", "Plant"]),
         &[],
-        props_flag,
+        u8::from(e.props_hidden),
     );
     let (lib, path) = ROOM_LIBRARY;
     for o in &ROOM_OBJECTS {
+        if Some(o.name) == e.without {
+            continue;
+        }
         let mut spec = placed(o.ty, o.data, o.xform);
         spec.parent = o.parent.map(str::to_owned);
         match o.name {
@@ -436,9 +465,15 @@ fn living_room_with(props_flag: u8) -> Vec<u8> {
     b.light_of("Area", AREA, 1000.0);
     b.light_of("Area.001", AREA, 400.0);
     for (name, min, max) in &ROOM_MESHES {
-        b.mesh_with(name, &box_mesh(*min, *max), MeshLayouts::LAYERS);
+        let max = if Some(*name) == e.grown {
+            max.map(|v| 2.0 * v)
+        } else {
+            *max
+        };
+        b.mesh_with(name, &box_mesh(*min, max), MeshLayouts::LAYERS);
     }
-    b.action();
+    // the clock's hand turns about Z
+    b.action_with(&[(1, &[("rotation_euler", 2)])]);
     b.bytes()
 }
 
@@ -492,8 +527,9 @@ pub fn three_cameras() -> Vec<u8> {
     b.bytes()
 }
 
-/// A camera looking at three boxes: `Driven` (an action drives it), `Turned` (by quaternion, a
-/// quarter turn about Z) and `Lamp, B: 2` (plain; its name holds a comma and a colon).
+/// A camera looking at three boxes: `Driven` (an action animates its location's z), `Turned`
+/// (by quaternion, a quarter turn about Z) and `Lamp, B: 2` (plain; its name holds a comma and a
+/// colon).
 pub fn driven_quat() -> Vec<u8> {
     let mut b = builder();
     b.file_global(Some("Scene"));
@@ -534,7 +570,7 @@ pub fn driven_quat() -> Vec<u8> {
         &box_mesh([-0.5, -0.25, 0.0], [0.5, 0.25, 1.0]),
         MeshLayouts::LAYERS,
     );
-    b.action();
+    b.action_with(&[(1, &[("location", 2)])]);
     b.bytes()
 }
 
@@ -694,4 +730,69 @@ pub fn empty_scene() -> Vec<u8> {
     );
     b.camera_with("Camera", &CameraSpec::default());
     b.bytes()
+}
+
+/// The cameras of [`camera_fits_wide`] and [`camera_fits_tall`]: one per sensor fit (`0`
+/// automatic, `1` horizontal, `2` vertical), each with its own lens and sensor, as
+/// `(object, data, lens, sensor width, sensor height, fit)`.
+pub const FIT_CAMERAS: [(&str, &str, f32, f32, f32, u8); 3] = [
+    ("Fit.Auto", "Fit.Auto", 50.0, 36.0, 24.0, 0),
+    ("Fit.Horizontal", "Fit.Horizontal", 35.0, 32.0, 18.0, 1),
+    ("Fit.Vertical", "Fit.Vertical", 85.0, 30.0, 20.0, 2),
+];
+
+/// A box and the three [`FIT_CAMERAS`], `Fit.Auto` the scene's camera, rendered at `render`.
+fn camera_fits(render: Render) -> Vec<u8> {
+    let mut b = builder();
+    b.render = render;
+    b.file_global(Some("Scene"));
+    let mut all: Vec<&str> = FIT_CAMERAS.iter().map(|c| c.0).collect();
+    all.push("Box");
+    b.scene("Scene", &all, &[], Some("Fit.Auto"));
+    let places = [
+        [7.0, -7.0, 5.0, 1.1, 0.0, FRAC_PI_4, 1.0, 1.0, 1.0],
+        [0.0, -9.0, 3.0, 1.3, 0.0, 0.0, 1.0, 1.0, 1.0],
+        [-8.0, -8.0, 4.0, 1.2, 0.0, -FRAC_PI_4, 1.0, 1.0, 1.0],
+    ];
+    for (c, xform) in FIT_CAMERAS.iter().zip(places) {
+        let data = format!("CA:{}", c.1);
+        b.object(c.0, &placed(CAMERA, Some(data.as_str()), xform));
+    }
+    b.object(
+        "Box",
+        &placed(
+            MESH,
+            Some("ME:Box"),
+            [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        ),
+    );
+    for c in FIT_CAMERAS {
+        b.camera_with(
+            c.1,
+            &CameraSpec {
+                lens: c.2,
+                sensor: [c.3, c.4],
+                fit: c.5,
+                ..CameraSpec::default()
+            },
+        );
+    }
+    b.mesh_with("Box", &box_mesh([-1.0; 3], [1.0; 3]), MeshLayouts::LAYERS);
+    b.bytes()
+}
+
+/// The fit cameras rendered wide: 1920 x 1080, square pixels.
+pub fn camera_fits_wide() -> Vec<u8> {
+    camera_fits(Render::default())
+}
+
+/// The fit cameras rendered tall: 1080 x 1920, pixels twice as tall as wide (the image's aspect
+/// under 1, so the automatic fit spans the height).
+pub fn camera_fits_tall() -> Vec<u8> {
+    camera_fits(Render {
+        xsch: 1080,
+        ysch: 1920,
+        xasp: 1.0,
+        yasp: 2.0,
+    })
 }

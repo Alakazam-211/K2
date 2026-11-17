@@ -157,6 +157,54 @@ and its numbers, and quotes nothing from the file:
 | `pairing_mismatch` | the keys given for the version don't fit its objects (their count differs) |
 | `invalid` | a value the writer would refuse to write (a fault of the pack, never of the file) |
 
+### A live state's K2SCENE1, without a whole read
+
+While a doc is live, a host makes the K2SCENE1 of its live state without reading the file again
+(`live::live_k2scene(state, carrier, limits)`, called with the state and carrier the kit hands
+the pack's view hook). No live change makes or changes geometry, so every mesh, and its hash, is
+the carrier's (the version the kit last read from the file or wrote to it); only the header
+changes. The output comes in **two parts**:
+
+- `header`: `magic`, `hlen`, the header and its pad, exactly as above;
+- `data`: the carrier's data section, shared: every call over one carrier returns the same
+  allocation, never a copy. Mesh offsets are relative to it, so a header of another length
+  changes only the pad.
+
+`header ++ data` is byte for byte the whole read (`meshread::mesh_read_paired`) of a version that
+holds the live state under its keys: the version a write-back of the state produces, for a
+state the write-back writes. A host that needs one buffer joins the two; one that can send the
+parts separately skips a copy of the data.
+
+**`carrier_id`**: SHA-256 of `data`, 64 lowercase hex digits. Equal across calls exactly when the
+data section is byte-identical: through live edits, through a write-back or an outside save
+that changes no mesh. A host keeps what it built from the data (its buffers) by it.
+
+**Three lists, as hints** (`@obj:N`, `@cam:N`), comparing the output's objects and cameras with
+the carrier's own read under the same keys: `changed` (in both, written differently: a move, a
+turn, a parent's move, a hide, a rename), `added` (in this output only, as when an object is
+brought into the scene drawn), `deleted` (in the carrier's read only: deleted, or out of the
+scene drawn). Objects come first, then cameras. The header is what counts; the lists say what
+to draw again.
+
+**Declined**, each with a fixed code, and every one with the same fallback: the whole read of
+the version a write-back of the live state produces.
+
+| Code | When |
+|---|---|
+| `reuse_no_carrier_read` | the carrier's own read refused (a limit), or the carrier doesn't read live |
+| `reuse_pairing` | the carrier has no pairing, or one that doesn't fit its objects and collections |
+| `reuse_mesh_not_held` | a drawn object's mesh is one the carrier's read doesn't hold |
+| `reuse_no_facts` | a drawn object the carrier holds no facts for: added since the carrier, or its data changed |
+| `reuse_drawn_scene` | the scene drawn's master collection was deleted |
+| `reuse_collections` | a collection added, deleted or moved, or its kind or parent changed |
+| `reuse_meshes_changed` | a mesh of the carrier's read that no drawn object uses: the data section would differ |
+| `reuse_unsupported` | the objects' order, an object's type, parent, rotation mode or quaternion changed, its name removed, a collection holding it not listed, or a parent or the scene's camera deleted |
+| `too_large`, `invalid` | a limit crossed, or a writer check (as for the whole read) |
+
+The carrier is decoded once per carrier (by the view, or the first call); no call decodes a
+file. The carrier's read is kept while the carrier is: its data section (at most the output
+limit, 256 MiB by default), not the whole-file decode.
+
 ## The live view
 
 The kit's keyed watch carries the view index (the kit's wire reference: the keyed watch, view

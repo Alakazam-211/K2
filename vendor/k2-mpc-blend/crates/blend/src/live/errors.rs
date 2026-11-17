@@ -15,13 +15,32 @@
 //!   file's bytes, each [`crate::verbs::VerbError`] reported by its entry
 //!   ([`crate::verbs::VerbError::report`]). A usage error, a stale base and the session's own
 //!   refusals are the kit's entries.
+//! - **A live doc that is read-only** (E024): kept for a release the live tier reads before the
+//!   writer writes it. Such a doc would refuse each live edit verb with it, and each write-back
+//!   of a change would fail with its code first (`live_read_only: ...`, the kit's `PackError`).
+//!   The writer writes every release the live tier reads (3.06 to 5.03), so no file reaches it.
+//! - **A live change the live rules refuse** (the kit's edit check, [`super::BlendLive`]'s
+//!   `Pack::check_edit`): the kit refuses it at the call as its own `pack_refused` (`MPC-E823`,
+//!   exit 2), the code here as `details.code` and why as `details.reason`. A rule with an entry
+//!   gives its code (`blend_driven`, `blend_rotation_mode`, `blend_not_editable`, `blend_name`,
+//!   `live_read_only`); every other rule (a list op, a collection's field, a field live v1
+//!   doesn't write, a value its field can't hold) gives `blend_live_change` (E025).
 //!
-//! The releases a live file may come from, `3.06 to 5.01` in the texts below, are
-//! [`crate::write::WRITE_FROM`] and [`crate::write::WRITE_TO`] (`tests/results.rs` holds the
-//! texts to them).
+//! The releases a file is read from, `3.06 to 5.03` in the texts below, are
+//! [`crate::scene::READ_FROM`] and [`crate::scene::READ_TO`]; the releases it is written to,
+//! `3.06 to 5.03` too, are [`crate::write::WRITE_FROM`] and [`crate::write::WRITE_TO`]
+//! (`tests/results.rs` holds the texts to them).
 
 use k2_mpc_base::errors::ErrorEntry;
 use k2_mpc_base::tools::exit::{NOT_FOUND, USAGE};
+
+/// The live edit verbs, and the host's write-back.
+const LIVE_EDITS: &[&str] = &[
+    "object place",
+    "object visibility",
+    "object rename",
+    "(host)",
+];
 
 /// The verbs of the file verbs' entries: the kit's `@file`, then each file verb by name.
 const FILE_VERBS: &[&str] = &[
@@ -67,21 +86,30 @@ pub const NOT_EDITABLE: ErrorEntry = ErrorEntry::pack(
     "Read the object's fields: its key says where it comes from, `edit` what is written.",
 );
 
-/// A transform that animation, drivers or a constraint drive.
+/// A transform that animation, drivers or a constraint drive: a live placement of it; a live
+/// `object visibility` on an object with an animated visibility bit; or a file verb's (or the
+/// writer's) change to a channel an action or a driver animates (a component of the transform,
+/// or a visibility bit it flips).
 pub const DRIVEN: ErrorEntry = ErrorEntry::pack(
     "BLEND-E002",
     "blend_driven",
     USAGE,
-    "its transform is driven",
-    "Animation, drivers or a constraint drive the object's transform, so the app recomputes it \
-     when it loads the file and a placement written here wouldn't hold. Nothing was applied. \
-     Change what drives it in the app, or place another object; its visibility and name are \
-     still written.",
+    "a channel it changes is driven",
+    "An action, an NLA strip or a driver animates the channel (a component of the transform, \
+     or a visibility bit), or a constraint acts on the transform, so the program recomputes it \
+     when it opens the file and a value written here wouldn't hold. Nothing was applied. Change \
+     what drives it in the app. A file verb still writes a channel nothing drives and a bit it \
+     keeps as stored (`details.channel` names the one refused: `location[2]`, \
+     `hide_viewport`), and a transform under constraints (with the warning \
+     `blend_constrained`). Live, a driven transform refuses the whole placement, and any \
+     animated visibility bit the whole `object visibility` (`details.channel` names the bits: \
+     `hide_viewport,hide_render`). Its name is still written.",
 )
 .step(
     "object show",
     &["{address}"],
-    "Read the object's fields: `edit` is `a` when its transform is driven.",
+    "Read the object's fields: `edit` is `a` when its transform is driven; `visanim` names its \
+     animated visibility bits.",
 );
 
 /// `--rot` on an object that rotates by quaternion or by axis and angle.
@@ -154,9 +182,9 @@ pub const LIVE_VERSION: ErrorEntry = with_verbs(
         "live_version",
         NOT_FOUND,
         "Nothing was read: this file was saved by a newer (or older) release of the program that \
-         wrote it (format {format}) than this pack has checked (3.06 to 5.01).",
+         wrote it (format {format}) than this pack has checked (3.06 to 5.03).",
         "Its saves are being checked; until then, open it read-only as a file, or save a copy \
-         with a release from 3.06 to 5.01 if you have one.",
+         with a release from 3.06 to 5.03 if you have one.",
     )
     .step(
         "object list",
@@ -295,9 +323,9 @@ pub const FILE_VERSION: ErrorEntry = with_verbs(
         "blend_version",
         USAGE,
         "Nothing was applied: this file was saved by a newer (or older) release of the program \
-         that wrote it than this pack has checked (3.06 to 5.01).",
+         that wrote it than this pack has checked (3.06 to 5.03).",
         "Its saves are being checked; until then, read it read-only as a file, or save a copy \
-         with a release from 3.06 to 5.01 if you have one.",
+         with a release from 3.06 to 5.03 if you have one.",
     )
     .step(
         "scene list",
@@ -414,6 +442,60 @@ pub const MESH_PAIRING: ErrorEntry = with_verbs(
     &["@file", "scene meshes"],
 );
 
+/// A live doc of a file of a release the live tier reads but the writer doesn't write: kept
+/// for a release read before it is written. The writer writes every release the live tier
+/// reads today ([`crate::write::WRITE_TO`] is [`crate::scene::READ_TO`]), so no file reaches
+/// it; `{written}` in its message is the releases written ([`written_releases`]).
+pub const READ_ONLY: ErrorEntry = with_verbs(
+    ErrorEntry::pack(
+        "BLEND-E024",
+        "live_read_only",
+        USAGE,
+        "Nothing was applied: this pack reads files of this release of the program that wrote \
+         them (format {format}) live, but doesn't write them back yet (it writes {written}).",
+        "The scene opens live and reads as its file holds it; a change is written back once \
+         this pack has checked the release's saves. Read it; to change it here, save a copy with \
+         a release this pack writes, if you have one.",
+    )
+    .step(
+        "scene list",
+        &[],
+        "Read the scene's collections and objects, as the file holds them.",
+    ),
+    LIVE_EDITS,
+);
+
+// ---------- the kit's edit check ----------
+
+/// The verbs a live change comes from: an edit's (a person's, a host's), a pack verb's, and
+/// the history's (undo, redo, revert, restore).
+const CHANGES: &[&str] = &["@change", "@history", "(host)"];
+
+/// A live change the live rules refuse with no code of their own ([`super::check::Rule::code`]
+/// is `None`): an element of the lists added, removed, moved or retyped; a collection's field;
+/// an object field live v1 doesn't write; a value its field can't hold; a name without its
+/// `nid`; an object with no file key; a root the live schema doesn't have. The kit's edit check
+/// gives it as `details.code` of its `pack_refused`.
+pub const LIVE_CHANGE: ErrorEntry = with_verbs(
+    ErrorEntry::pack(
+        "BLEND-E025",
+        "blend_live_change",
+        USAGE,
+        "the live scene's write-back can't write this change",
+        "Live, a scene is written back by patching only an object's transform, its three \
+         visibility bits and its name into the file: no collection or object is added, removed, \
+         moved or retyped, and no collection's field or other object field changes. Nothing was \
+         applied. Change the objects through the live verbs (`object place`, `object \
+         visibility`, `object rename`), or anything else in the app.",
+    )
+    .step(
+        "scene list",
+        &[],
+        "Read the scene's collections and objects, as the file holds them.",
+    ),
+    CHANGES,
+);
+
 /// The pack's own refusals, in id order.
 pub const ERRORS: &[ErrorEntry] = &[
     NOT_EDITABLE,
@@ -439,6 +521,8 @@ pub const ERRORS: &[ErrorEntry] = &[
     MESH_DECLINED,
     MESH_INVALID,
     MESH_PAIRING,
+    READ_ONLY,
+    LIVE_CHANGE,
 ];
 
 /// The entry whose code is `code`, among [`ERRORS`]: a verb's code, or a decline's
@@ -452,16 +536,25 @@ pub fn release(version: u16) -> String {
     format!("{}.{:02}", version / 100, version % 100)
 }
 
-/// The releases a live file may come from, as the texts name them: `3.06 to 5.01`.
+/// The releases a file is read from, as the texts name them: `3.06 to 5.03`.
 pub fn checked_releases() -> String {
     format!(
         "{} to {}",
-        release(crate::write::WRITE_FROM),
-        release(crate::write::WRITE_TO)
+        release(crate::scene::READ_FROM),
+        release(crate::scene::READ_TO)
     )
 }
 
-/// [`LIVE_VERSION`]'s message for a file of format `format` (`5.02`).
+/// The releases a file is written to, as the texts name them: `3.06 to 5.03`.
+pub fn written_releases() -> String {
+    format!(
+        "{} to {}",
+        release(crate::write::WRITE_FROM),
+        release(crate::write::written_to())
+    )
+}
+
+/// [`LIVE_VERSION`]'s message for a file of format `format` (`5.04`).
 pub fn live_version_message(format: &str) -> String {
     format!(
         "Nothing was read: this file was saved by a newer (or older) release of the program \
@@ -470,12 +563,26 @@ pub fn live_version_message(format: &str) -> String {
     )
 }
 
-/// [`FILE_VERSION`]'s message, for a file of format `format` when it is known.
-pub fn file_version_message(format: Option<&str>) -> String {
+/// [`READ_ONLY`]'s message for a file of format `format` (`5.04`).
+pub fn read_only_message(format: &str) -> String {
+    format!(
+        "Nothing was applied: this pack reads files of this release of the program that wrote \
+         them (format {format}) live, but doesn't write them back yet (it writes {}).",
+        written_releases()
+    )
+}
+
+/// [`FILE_VERSION`]'s message, for a file of format `format` when it is known: a writer's
+/// refusal names the releases written (`written`), a read's the releases read.
+pub fn file_version_message(format: Option<&str>, written: bool) -> String {
     let of = format.map_or_else(String::new, |f| format!(" (format {f})"));
+    let range = if written {
+        written_releases()
+    } else {
+        checked_releases()
+    };
     format!(
         "Nothing was applied: this file was saved by a newer (or older) release of the program \
-         that wrote it{of} than this pack has checked ({}).",
-        checked_releases()
+         that wrote it{of} than this pack has checked ({range}).",
     )
 }

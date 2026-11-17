@@ -1,7 +1,7 @@
 # k2-mpc-blend
 
 The BLEND pack for the multiplayer kit: 3D scene files that people and agents work on at once.
-BLEND files are read in; those of format versions 3.06 to 5.01 also open live and are written
+BLEND files are read in; those of format versions 3.06 to 5.03 also open live and are written
 back, and files of other format versions, older ones among them, are read only. What is written
 is an object's fixed-size fields: its location, rotation and scale, its visibility bits, and its
 name inside the name field. Every other byte of the file stays as it was.
@@ -35,7 +35,14 @@ save as the file and the agent's version beside it).
   another save of the same scene digests the same.
 - **`write`**: an object's location, rotation, scale, visibility bits and name, patched in place
   where the file's schema puts them, every other byte kept, the result read again before it is
-  returned; anything it can't prove safe is refused, typed.
+  returned; anything it can't prove safe is refused, typed, a change to a channel an action or
+  a driver animates among them, a visibility bit it flips too (the program recomputes it when
+  it opens the file; `anim`, the live tier's reading too). The program animates `hide_viewport`
+  and `hide_render`, not `hide_select`: its own tools refuse to key `hide_select` (not
+  animatable), so a refused `hide_select` flip comes only from a file another tool made with an
+  F-curve or a driver on it; the writer refuses whichever bit such a curve names. A transform
+  written to an object with constraints is written, with a warning naming their kinds
+  (`blend_constrained`).
 - **`merge`**: the three-way merge of a person's app save with the agent's version, by object
   and field: the person's save is the file and the agent's changes are replayed onto it. A
   field both changed is reported, never decided by who saved last; until the kit keeps held
@@ -61,8 +68,19 @@ save as the file and the agent's version beside it).
   scale in the file's own form, its parent and the parent inverse); agents' verbs on it
   (`scene list`, `collection show`, `object show`, `object place`,
   `object visibility`, `object rename --break-links`); and a write-back that patches the changed
-  fields into the file the kit keeps (its carrier), paired by the kit's pairing table.
-  Everything else in the file never enters the live store. Each verb's call returns the kit's
+  fields into the file the kit keeps (its carrier), paired by the kit's pairing table, by the
+  live rules (`live::check_edit`). The pack opts in to the kit's edit check
+  (`Pack::check_edit`): every live change, whoever makes it (a person's edit, an agent's verb,
+  undo, restore), is asked by the same rules before it applies, and one the write-back can't
+  write is refused at the call (the kit's `pack_refused`, `MPC-E823`, with the rule's code), so
+  a host may let people edit a live scene directly. An app's
+  save after the kit wrote the file keeps both, unless the host noted the version the app
+  opened (the kit's `note_opened`): then the kit merges the save field by field and the pack
+  checks the merged doc (`live::merged`), keeping both for one the format forbids (two objects
+  of one name).
+  A driven transform refuses `object place`, and an object with any animated visibility bit
+  refuses `object visibility` (`blend_driven`), so the live doc never holds what the writer
+  wouldn't write. Everything else in the file never enters the live store. Each verb's call returns the kit's
   result object as data (`mpc.result/1`, `data_spec` `blend.<verb>/1`), and every refusal of the
   verbs and of the live tier's open is registered (`live::errors`, ids `BLEND-Ennn`).
 - **`fuzz/`**: cargo-fuzz targets on the reader and the model, the index, and the writer: test
@@ -78,8 +96,8 @@ The pack takes the kit by path: `crates/blend/Cargo.toml` names
 release `CHANGELOG.md` names. A host vendors both side by side: the kit at `vendor/k2-mpc-base`,
 this pack at `vendor/k2-mpc-blend`. `Cargo.lock` is committed. A public reader gets the kit
 from K2's repository, https://github.com/Alakazam-211/K2, where it is vendored at
-`vendor/k2-mpc-base`: check that folder out beside this repo as `k2-mpc-base`. Kit v0.21.0, the
-release this pack pairs with, is vendored there from the K2 release that vendors kit v0.21.0
+`vendor/k2-mpc-base`: check that folder out beside this repo as `k2-mpc-base`. Kit v0.22.0, the
+release this pack pairs with, is vendored there from the K2 release that vendors kit v0.22.0
 on.
 
 Build and test: `scripts/check.sh`. One of its steps, `scripts/check-private.sh`, **fails without

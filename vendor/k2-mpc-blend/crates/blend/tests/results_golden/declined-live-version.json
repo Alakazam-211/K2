@@ -1,10 +1,10 @@
 {
   "code": "live_version",
-  "message": "Nothing was read: this file was saved by a newer (or older) release of the program that wrote it (format 2.80) than this pack has checked (3.06 to 5.01).",
+  "message": "Nothing was read: this file was saved by a newer (or older) release of the program that wrote it (format 2.80) than this pack has checked (3.06 to 5.03).",
   "kit_report": {
     "id": "MPC-E407",
     "exit": 4,
-    "message": "live editing is off: Nothing was read: this file was saved by a newer (or older) release of the program that wrote it (format 2.80) than this pack has checked (3.06 to 5.01). (live_version)",
+    "message": "live editing is off: Nothing was read: this file was saved by a newer (or older) release of the program that wrote it (format 2.80) than this pack has checked (3.06 to 5.03). (live_version)",
     "details": {
       "code": "live_version"
     }
@@ -13,8 +13,8 @@
     "id": "BLEND-E007",
     "name": "live_version",
     "exit": 4,
-    "message": "Nothing was read: this file was saved by a newer (or older) release of the program that wrote it (format {format}) than this pack has checked (3.06 to 5.01).",
-    "next": "Its saves are being checked; until then, open it read-only as a file, or save a copy with a release from 3.06 to 5.01 if you have one.",
+    "message": "Nothing was read: this file was saved by a newer (or older) release of the program that wrote it (format {format}) than this pack has checked (3.06 to 5.03).",
+    "next": "Its saves are being checked; until then, open it read-only as a file, or save a copy with a release from 3.06 to 5.03 if you have one.",
     "next_step": {
       "verb": "object list",
       "args": [],

@@ -6,6 +6,7 @@
 //! text.
 
 mod live_support;
+mod scenes_support;
 
 use std::collections::BTreeSet;
 
@@ -822,6 +823,8 @@ fn scenes_hold_no_path_user_or_machine_text() {
             "instanced.blend",
             "large.blend",
             "empty_scene.blend",
+            "camera_fits_wide.blend",
+            "camera_fits_tall.blend",
         ]
     );
     let mut scanned = 0usize;
@@ -849,4 +852,67 @@ fn scenes_are_the_same_bytes_every_time() {
         assert!(a == b, "{name} differs between two writes");
     }
     println!("{} files written twice, the same", scenes::ALL.len());
+}
+
+/// The fit cameras' vertical field of view, by the mapping `meshread::camera` documents: the
+/// aspect `a` from the render size and pixel aspect; fit horizontal, and automatic with `a >= 1`,
+/// `2 atan(sx / (2 L a))`; vertical `2 atan(sy / (2 L))`; automatic with `a < 1`
+/// `2 atan(sx / (2 L))`. The program's own value per camera comes from the round trip.
+fn fits_row(name: &str, bytes: &[u8], w: f64, h: f64) {
+    let a = w / h;
+    let (r, c) = meshes(bytes);
+    assert_eq!(c.scene.cameras.len(), 3, "{name}: cameras written");
+    assert!(
+        r.report.cameras.iter().any(|k| k.active),
+        "{name}: the active camera"
+    );
+    for (cam, (id, _, lens, sx, sy, fit)) in c.scene.cameras.iter().zip(scenes::FIT_CAMERAS) {
+        assert_eq!(cam.id, id, "{name}: the cameras' order");
+        let (l, sx, sy) = (f64::from(lens), f64::from(sx), f64::from(sy));
+        let want = match fit {
+            1 => 2.0 * (sx / (2.0 * l * a)).atan(),
+            2 => 2.0 * (sy / (2.0 * l)).atan(),
+            _ if a >= 1.0 => 2.0 * (sx / (2.0 * l * a)).atan(),
+            _ => 2.0 * (sx / (2.0 * l)).atan(),
+        };
+        assert!(
+            (f64::from(cam.yfov) - want).abs() <= 1e-6,
+            "{name}: {id}: yfov {} vs {want}",
+            cam.yfov
+        );
+        let aspect = cam.aspect.expect("an aspect");
+        assert!(
+            (f64::from(aspect) - a).abs() <= 1e-6 * a,
+            "{name}: {id}: aspect {aspect} vs {a}"
+        );
+        assert_eq!(cam.lens_mm, Some(lens), "{name}: {id}: lens");
+        assert_eq!(cam.znear, Some(0.1), "{name}: {id}: near clip");
+    }
+    let fits: Vec<_> = c.scene.cameras.iter().map(|k| k.sensor_fit).collect();
+    println!("{name}: 3 cameras, aspect {a:.4}, fits {fits:?}");
+}
+
+#[test]
+fn camera_fits_give_the_vertical_field_of_view_per_fit() {
+    fits_row("fits wide", &scenes::camera_fits_wide(), 1920.0, 1080.0);
+    fits_row(
+        "fits tall",
+        &scenes::camera_fits_tall(),
+        1080.0,
+        1920.0 * 2.0,
+    );
+}
+
+#[test]
+fn scenes_embedded_ids_carry_the_embedded_flag() {
+    if let Err(e) = scenes_support::row_embedded_flag() {
+        panic!("{e}");
+    }
+}
+
+#[test]
+fn scenes_hold_view_layers_tool_settings_and_render_views() {
+    if let Err(e) = scenes_support::row_saved_structs() {
+        panic!("{e}");
+    }
 }

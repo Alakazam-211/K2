@@ -843,6 +843,198 @@ pub fn row_driven_and_unwritable_refused() -> Result<(), String> {
     )
 }
 
+// ---------- a visibility bit something animates ----------
+
+/// `object visibility` on an object with any animated visibility bit
+/// ([`super::blinking_scene`]: an action's, a driver's, animation the reading can't follow) is
+/// refused whole, typed: `blend_driven`, the entry's exit, the bits named as their F-curves name
+/// them (the message and `details.channel`), `object show` next; a flip of a bit nothing animates
+/// on such an object too, so the live doc and the file never disagree on a bit. Nothing
+/// applies: the doc is as it was. Accepted, the call is reported with what the write-back makes
+/// of it. An object nothing animates, and one whose transform only is animated (`Mover`, by a
+/// driver; the outliner scene's `Walker`, by an action), flip theirs and write them back.
+/// Untouched, the file writes back byte for byte (the kit's `carrier_judge`).
+pub fn row_live_visibility_refused_on_animated_bits() -> Result<(), String> {
+    const ROW: &str = "row_live_visibility_refused_on_animated_bits";
+    let bytes = super::blinking_scene();
+    match carrier_judge(
+        Arc::new(BlendLive::default()),
+        &[("blinking.blend", bytes.as_slice())],
+    ) {
+        Ok(CarrierVerdict::ByteExact { files: 1 }) => {}
+        other => return Err(format!("{ROW}: untouched: {other:?}")),
+    }
+    let (f, s) = open("animated-bits", &bytes);
+    let a = f.agent(&s);
+    let c0 = read_content(ROW, &s, a)?;
+    let at =
+        |n: &str| -> Result<String, String> { Ok(format!("@obj:{}", &obj(&c0, n, ROW)?[1..])) };
+    let v0 = s.status().map_err(|e| format!("{ROW}: {e}"))?.version;
+    let entry = errors::by_code("blend_driven")
+        .ok_or_else(|| format!("{ROW}: blend_driven has no entry"))?;
+    let blinking = at("Blinking")?;
+    let o = run_based(
+        &s,
+        a,
+        &["object", "visibility", &blinking, "--viewport", "off"],
+    )
+    .map_err(|e| format!("{ROW}: {e}"))?;
+    let text = stdout(&o);
+    if o.exit == 0 {
+        let back = match s.flush(a) {
+            Ok(w) => format!("written: {}", w.written),
+            Err(e) => format!("refused: {e}"),
+        };
+        return Err(format!(
+            "{ROW}: text: Blinking --viewport off accepted live; the write-back: {back}"
+        ));
+    }
+    need(
+        o.exit == entry.exit
+            && text.starts_with("refused: blend_driven: ")
+            && text.contains("hide_viewport")
+            && text.contains(&format!("next: object show {blinking}\n")),
+        ROW,
+        || format!("text: exit {}: {text}", o.exit),
+    )?;
+    for (name, flags, bits) in [
+        ("Blinking", ["--viewport", "off"], "hide_viewport"),
+        // a bit nothing animates, on an object with an animated one: refused too
+        ("Blinking", ["--render", "off"], "hide_viewport"),
+        ("Ghost", ["--render", "off"], "hide_render"),
+        ("Ghost", ["--viewport", "off"], "hide_render"),
+        (
+            "Lost",
+            ["--select", "off"],
+            "hide_viewport,hide_select,hide_render",
+        ),
+    ] {
+        let addr = at(name)?;
+        let mut argv = vec!["object", "visibility", addr.as_str()];
+        argv.extend(flags);
+        argv.push("--json");
+        let o = run_based(&s, a, &argv).map_err(|e| format!("{ROW}: {argv:?}: {e}"))?;
+        if o.exit == 0 {
+            let back = match s.flush(a) {
+                Ok(w) => format!("written: {}", w.written),
+                Err(e) => format!("refused: {e}"),
+            };
+            return Err(format!(
+                "{ROW}: {name} {flags:?}: accepted live; the write-back: {back}"
+            ));
+        }
+        let r = o
+            .result()
+            .ok_or_else(|| format!("{ROW}: {argv:?}: --json gives no result"))?;
+        let error = r.get("error").unwrap_or(&Json::Null);
+        let detail = |k: &str| {
+            error
+                .get("details")
+                .and_then(|d| d.get(k))
+                .and_then(Json::as_str)
+        };
+        let next_verb = error
+            .get("next_step")
+            .and_then(|n| n.get("verb"))
+            .and_then(Json::as_str);
+        let next = format!("object show {addr}");
+        need(
+            o.exit == entry.exit
+                && o.exit == 2
+                && error.get("id").and_then(Json::as_str) == Some(entry.id)
+                && detail("code") == Some("blend_driven")
+                && detail("address") == Some(addr.as_str())
+                && detail("channel") == Some(bits)
+                && detail("next") == Some(next.as_str())
+                && next_verb == Some("object show")
+                && error
+                    .get("message")
+                    .and_then(Json::as_str)
+                    .is_some_and(|m| m.contains(bits)),
+            ROW,
+            || {
+                format!(
+                    "{name} {flags:?}: exit {}, error {}; want blend_driven naming {bits}",
+                    o.exit,
+                    error.to_json()
+                )
+            },
+        )?;
+    }
+    need(
+        s.status().map_err(|e| format!("{ROW}: {e}"))?.version == v0
+            && read_content(ROW, &s, a)? == c0,
+        ROW,
+        || "a refusal changed the live doc".into(),
+    )?;
+    need(f.bytes() == bytes, ROW, || {
+        "the file changed under the refusals".into()
+    })?;
+    verb(
+        ROW,
+        &s,
+        a,
+        &[
+            "object",
+            "visibility",
+            &at("Plain")?,
+            "--viewport",
+            "off",
+            "--render",
+            "off",
+        ],
+    )?;
+    verb(
+        ROW,
+        &s,
+        a,
+        &["object", "visibility", &at("Mover")?, "--select", "off"],
+    )?;
+    flush(ROW, &s, a, "the flips nothing animates")?;
+    let (_, m) = model_of(&f.bytes());
+    let flag = |k: &str| model_field(&m, k, "restrictflag");
+    need(
+        flag("@ob:Plain").as_deref() == Some("5")
+            && flag("@ob:Mover").as_deref() == Some("2")
+            && ["@ob:Blinking", "@ob:Ghost", "@ob:Lost"]
+                .iter()
+                .all(|k| flag(k).as_deref() == Some("0")),
+        ROW,
+        || {
+            format!(
+                "restrictflag: Plain {:?}, Mover {:?}, Blinking {:?}, Ghost {:?}, Lost {:?}",
+                flag("@ob:Plain"),
+                flag("@ob:Mover"),
+                flag("@ob:Blinking"),
+                flag("@ob:Ghost"),
+                flag("@ob:Lost")
+            )
+        },
+    )?;
+    let (f2, s2) = open("animated-transform", &scene());
+    let a2 = f2.agent(&s2);
+    let c2 = read_content(ROW, &s2, a2)?;
+    let walker = format!("@obj:{}", &obj(&c2, "Walker", ROW)?[1..]);
+    verb(
+        ROW,
+        &s2,
+        a2,
+        &["object", "visibility", &walker, "--viewport", "off"],
+    )?;
+    flush(ROW, &s2, a2, "an action's transform only")?;
+    let (_, m2) = model_of(&f2.bytes());
+    need(
+        model_field(&m2, "@ob:Walker", "restrictflag").as_deref() == Some("1"),
+        ROW,
+        || {
+            format!(
+                "Walker's restrictflag {:?}, want 1",
+                model_field(&m2, "@ob:Walker", "restrictflag")
+            )
+        },
+    )
+}
+
 // ---------- a rename names its loss ----------
 
 /// `object rename` without `--break-links` is refused and prints the loss; a name another
@@ -1732,10 +1924,12 @@ pub fn row_placement_arrives_on_add() -> Result<(), String> {
 /// Objects that move between carriers keep their placements: a host's move of the child to
 /// the front of the objects (no new carrier) builds that one unit again, not the whole index,
 /// and every object keeps its placement, the child its parent inverse. Control first: the
-/// child placed through its parent inverse before the move.
+/// child placed through its parent inverse before the move. The live pack refuses a move at the
+/// call (`blend_live_change`), so the row opens the scene with the kit's edit check off
+/// ([`super::unchecked::NoEditCheck`]): its subject is the view's derive of the move.
 pub fn row_move_keeps_placements() -> Result<(), String> {
     const ROW: &str = "row_move_keeps_placements";
-    let (f, s) = open("move", &placed_scene());
+    let (f, s) = super::unchecked::open_unchecked("move", &placed_scene());
     let host = f.person(&s);
     let c = read_content(ROW, &s, host)?;
     let child = obj(&c, "Child", ROW)?;
@@ -1765,8 +1959,8 @@ pub fn row_move_keeps_placements() -> Result<(), String> {
     let after = view(ROW, &s, host);
     let builds = k2_mpc_base::differential::take_view_unit_builds();
     k2_mpc_base::differential::set_view_checks(checks);
-    // (the doc isn't read back as content: live v1's write-back refuses a move, so a read,
-    // which renders the file, would fail; the move is checked by the edit's own result)
+    // (the doc isn't read back as content: live v1's write-back refuses a move, so the file
+    // doesn't render; the move is checked by the edit's own result)
     moved.map_err(|e| format!("{ROW}: move: the move of {child} wasn't taken: {e}"))?;
     let after = after?;
     for u in &before.units {
@@ -2145,10 +2339,13 @@ pub fn row_collection_tree_is_the_files() -> Result<(), String> {
 
 /// A collection moved into another (its `parent` set, as an outliner's drag does) has its new
 /// parent in the view index, and the change frame carries it as `parent_after` on the
-/// collection's delta: `Inner` from `Set` into `Props`. Control first: `Inner` is in `Set`.
+/// collection's delta: `Inner` from `Set` into `Props`. Control first: `Inner` is in `Set`. The
+/// live pack refuses a collection's field at the call (`blend_live_change`), so the row opens
+/// the scene with the kit's edit check off ([`super::unchecked::NoEditCheck`]): its subject is
+/// the view's derive of the change and its frame.
 pub fn row_collection_move_carries_parent_after() -> Result<(), String> {
     const ROW: &str = "row_collection_move_carries_parent_after";
-    let (f, s) = open("coll-move", &scene());
+    let (f, s) = super::unchecked::open_unchecked("coll-move", &scene());
     let host = f.person(&s);
     let ix = view(ROW, &s, host)?;
     let by_title = |ix: &ViewIndex, t: &str| {

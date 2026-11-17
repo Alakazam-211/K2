@@ -21,11 +21,11 @@
     "id": "BLEND-E002",
     "exit": 2,
     "message": "its transform is driven (animation, drivers or a constraint): the app would recompute it on load",
-    "next": "Animation, drivers or a constraint drive the object's transform, so the app recomputes it when it loads the file and a placement written here wouldn't hold. Nothing was applied. Change what drives it in the app, or place another object; its visibility and name are still written.",
+    "next": "An action, an NLA strip or a driver animates the channel (a component of the transform, or a visibility bit), or a constraint acts on the transform, so the program recomputes it when it opens the file and a value written here wouldn't hold. Nothing was applied. Change what drives it in the app. A file verb still writes a channel nothing drives and a bit it keeps as stored (`details.channel` names the one refused: `location[2]`, `hide_viewport`), and a transform under constraints (with the warning `blend_constrained`). Live, a driven transform refuses the whole placement, and any animated visibility bit the whole `object visibility` (`details.channel` names the bits: `hide_viewport,hide_render`). Its name is still written.",
     "next_step": {
       "verb": "object show",
       "args": ["{address}"],
-      "why": "Read the object's fields: `edit` is `a` when its transform is driven."
+      "why": "Read the object's fields: `edit` is `a` when its transform is driven; `visanim` names its animated visibility bits."
     },
     "rule": "the pack's own refusal",
     "details": {
@@ -37,5 +37,7 @@
   },
   "conflicts": [],
   "notes": [],
-  "warnings": []
+  "warnings": [],
+  "view": null,
+  "dry_run": false
 }

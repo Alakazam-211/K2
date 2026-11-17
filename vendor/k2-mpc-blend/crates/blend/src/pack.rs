@@ -99,17 +99,24 @@ pub const VERBS: IndexVerbs = IndexVerbs::new(
     None,
 );
 
-/// The most bytes after decompression the streaming index decodes by default (4 GiB): it never
-/// holds the file, so it may read past the whole-file cap, and the cap bounds the time a small
-/// compressed file can cost it.
-pub const INDEX_MAX_RAW_BYTES: u64 = 4 << 30;
+/// The most bytes after decompression the streaming index decodes by default (4 GiB): the
+/// reader's own default ([`crate::error::DEFAULT_MAX_RAW_BYTES`]). The index never holds the
+/// file, so it may read past the whole-file cap, and the cap bounds the time a small compressed
+/// file can cost it.
+pub const INDEX_MAX_RAW_BYTES: u64 = crate::error::DEFAULT_MAX_RAW_BYTES;
 
-/// The reader's default limits for the streaming index: the reader's own, with the raw cap at
-/// [`INDEX_MAX_RAW_BYTES`].
+/// The reader's default limits for the streaming index: the reader's own
+/// ([`ReadLimits::default`], with the raw cap at [`INDEX_MAX_RAW_BYTES`]).
 pub fn index_read_limits() -> ReadLimits {
+    ReadLimits::default()
+}
+
+/// The reader's default limits with the raw cap at 64 GiB: what the planted bugs below fall back
+/// to.
+fn planted_unbounded() -> ReadLimits {
     let d = ReadLimits::default();
     ReadLimits::new(
-        INDEX_MAX_RAW_BYTES,
+        64 << 30,
         d.max_blocks,
         d.max_retained_bytes,
         d.retain_block_max,
@@ -137,7 +144,7 @@ pub struct BlendPack {
 impl Default for BlendPack {
     fn default() -> Self {
         let limits = if mutant::active("WholeFileDefaultUnbounded") {
-            ReadLimits::default()
+            planted_unbounded()
         } else {
             LiveLimits::default().read
         };
@@ -180,7 +187,7 @@ impl BlobPack for BlendPack {
         _size: u64,
         limits: &IndexLimits,
     ) -> Result<IndexDraft, IndexRefused> {
-        let unbounded = ReadLimits::default();
+        let unbounded = planted_unbounded();
         let read = if mutant::active("IndexDecodeUnbounded") {
             &unbounded
         } else {

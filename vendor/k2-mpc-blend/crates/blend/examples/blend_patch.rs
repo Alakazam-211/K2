@@ -5,8 +5,14 @@
 //!
 //! FIELD is `loc`, `rot` or `scale` (VALUE `x,y,z`), `hide_viewport`, `hide_select` or
 //! `hide_render` (VALUE `true` or `false`), or `name` (VALUE the new name).
+//!
+//! A refusal writes no file: it prints `refused: <code>: <why>` and `next: <step>` (the file
+//! verbs' registered entry, `blend_driven` for a channel an action or a driver animates) and
+//! exits with the verbs' exit (2). A write's warnings (`blend_constrained`) go to stderr, one
+//! `note: ` line each.
 
 use k2_mpc_blend::live::LiveLimits;
+use k2_mpc_blend::verbs::VerbError;
 use k2_mpc_blend::{write, Change, Edit};
 
 fn floats(v: &str) -> [f32; 3] {
@@ -51,8 +57,21 @@ fn main() {
         })
         .collect();
     let bytes = std::fs::read(input).expect("the input file");
-    let w = write(&bytes, &edits, &LiveLimits::default().read).expect("the writer writes");
+    let w = match write(&bytes, &edits, &LiveLimits::default().read) {
+        Ok(w) => w,
+        Err(e) => {
+            let e = VerbError::from(e);
+            println!("refused: {}: {e}", e.code().unwrap_or("-"));
+            if let Some(step) = e.entry().and_then(|x| x.step) {
+                println!("next: {}: {}", step.verb, step.why);
+            }
+            std::process::exit(i32::from(e.exit()));
+        }
+    };
     std::fs::write(output, &w.bytes).expect("the output file");
+    for warning in &w.warnings {
+        eprintln!("{}", warning.note());
+    }
     println!(
         "patched {} field(s), {:?}: {input} -> {output}",
         w.patched.len(),

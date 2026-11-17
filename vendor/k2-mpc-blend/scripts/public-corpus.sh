@@ -16,6 +16,8 @@ BLEND_PUBLIC_CORPUS=$DIR/corpus BLEND_UNIT_PROBES=$DIR/unit-probes \
   cargo test -q --locked -p k2-mpc-blend --test corpus --test live --test corpus_place --test corpus_mesh -- \
   --ignored --exact --nocapture \
   every_public_file_reads_as_the_checker_says \
+  public_corpus_embedded_ids_carry_the_embedded_flag \
+  public_corpus_scenes_hold_view_layers_tool_settings_and_render_views \
   public_corpus_live \
   public_corpus_placements_match_cached_world_matrices \
   unit_probes_mixed_systems_give_no_scale \

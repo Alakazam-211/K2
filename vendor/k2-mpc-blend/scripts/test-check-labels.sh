@@ -93,8 +93,31 @@ printf '%s  # v0.0.0, planted\n' "$H1" >> "$C/scripts/commit-refs-allow.txt"
 plant README.md "Released at $H1."; run; allowed md-allowlisted; undo
 cp "$T/kept-allow" "$C/scripts/commit-refs-allow.txt"
 
-if [ "$FAILS" -eq 0 ] && [ "$PLANTS" -eq 10 ]; then
-  echo "test-check-labels: ok (the control clean; $PLANTS plants: 6 refused, each with its own finding alone, 4 allowed)"
+# outside a git checkout (a node job's copy): the files under ROOT are read, so a plant there is
+# still found; a folder with no file fails closed (exit 2), never "clean"
+N=$T/nogit
+mkdir -p "$N"
+(cd "$C" && tar -cf - --exclude=.git .) | (cd "$N" && tar -xf -)
+printf '%s\n' "Built on the kit at $H1." >> "$N/README.md"
+set +e; OUT=$(sh "$N/scripts/check-labels.sh" "$N" 2>&1); RC=$?; set -e
+PLANTS=$((PLANTS + 1))
+if [ "$RC" -eq 1 ] && printf '%s\n' "$OUT" | grep -q '^check-labels: README.md:'; then
+  echo "test-check-labels: ok: plant no-git: refused, the copy's files read"
+else
+  fail "plant no-git: not refused outside a git checkout (exit $RC)"; printf '%s\n' "$OUT" | sed 's/^/  /'
+fi
+E=$T/empty
+mkdir -p "$E"
+set +e; OUT=$(sh "$C/scripts/check-labels.sh" "$E" 2>&1); RC=$?; set -e
+PLANTS=$((PLANTS + 1))
+if [ "$RC" -eq 2 ] && printf '%s\n' "$OUT" | grep -q 'no files to read .*(fail closed)'; then
+  echo "test-check-labels: ok: plant no-files: fails closed"
+else
+  fail "plant no-files: not failed closed (exit $RC)"; printf '%s\n' "$OUT" | sed 's/^/  /'
+fi
+
+if [ "$FAILS" -eq 0 ] && [ "$PLANTS" -eq 12 ]; then
+  echo "test-check-labels: ok (the control clean; $PLANTS plants: 7 refused, each with its own finding alone, 4 allowed, 1 failed closed)"
   exit 0
 fi
 echo "test-check-labels: $FAILS failures ($PLANTS plants checked)"

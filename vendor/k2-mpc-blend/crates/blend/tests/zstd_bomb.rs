@@ -182,3 +182,27 @@ fn a_window_within_the_readers_limit_reads() {
         panic!("{e}");
     }
 }
+
+/// The reader's default limits refuse a stream decoding to just past 4 GiB by their raw cap,
+/// typed, with the heap under a small multiple of the 1 MiB cap the other rows use
+/// (`support::zstd::row_read_default_cap`); and the streaming index's default limits are the
+/// reader's own, so the two can't drift apart.
+#[test]
+fn the_readers_default_refuses_a_stream_past_4_gib_in_a_small_heap() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let (row, peak) = peak_of(support::zstd::row_read_default_cap);
+    eprintln!("read default: read_peak_heap_bytes={peak}");
+    if let Err(e) = row {
+        panic!("{e}");
+    }
+    assert!(
+        peak < HEAP_MAX,
+        "the read's heap peak was {peak} bytes, over {HEAP_MAX}"
+    );
+    assert_eq!(
+        k2_mpc_blend::pack::index_read_limits(),
+        ReadLimits::default(),
+        "the streaming index's default limits are the reader's"
+    );
+    assert_eq!(k2_mpc_blend::pack::INDEX_MAX_RAW_BYTES, 4 << 30);
+}

@@ -211,10 +211,13 @@ fn hidden_by(ix: &ViewIndex, row: &str) -> Result<Vec<(String, Option<String>)>,
 
 /// `hidden_by` by the rule: `self` for its own flag, the outermost hidden collection for one
 /// hidden only through collections, none when one way shows it. A person shows `Off`: every
-/// object below it is shown again, those the change didn't touch included.
+/// object below it is shown again, those the change didn't touch included. The live pack
+/// refuses a collection's field at the call (`blend_live_change`), so the row opens the scene
+/// with the kit's edit check off ([`super::unchecked::NoEditCheck`]): its subject is the view's
+/// derive of the change.
 pub fn row_view_hidden_by() -> Result<(), String> {
     const ROW: &str = "row_view_hidden_by";
-    let (f, s) = open("hidden-by", &hidden_scene());
+    let (f, s) = super::unchecked::open_unchecked("hidden-by", &hidden_scene());
     let host = f.person(&s);
     let ix = view(ROW, &s, host)?;
     let off = container(&ix, "Off", ROW)?;

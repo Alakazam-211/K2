@@ -30,6 +30,15 @@
 //! `blend.<verb>/1`): [`SceneList::typed`], [`Verb::typed`] and [`meshes_typed`]. The text form
 //! ([`SceneList::lines`], [`MeshReport::lines`](crate::meshread::MeshReport::lines)) is
 //! unchanged. Each shape is pinned in `tests/results_golden/`.
+//!
+//! **Warnings** ([`WriteWarning`]): an edit that is written can come with heads-ups, the
+//! writer's [`Written::warnings`] ([`apply`]), [`Ran::warnings`] ([`run`]): `blend_constrained`,
+//! a transform written to an object with constraints, which decide where the program shows it.
+//! The kit has no warning a pack's call returns (its `ToolOutput::warnings` are the kit's own
+//! `note: ` lines about a call), so they are the pack's own, in its shape: each edit verb's data
+//! holds them as `warnings` ([`warning_data`]), and each gives its `note: ` line for stderr
+//! ([`WriteWarning::note`]), as the kit's warnings read. A warning is no refusal: its code is
+//! no entry of the pack's refusals, and the exit is 0.
 
 use std::io::Read;
 
@@ -45,7 +54,7 @@ use crate::live::errors as reg;
 use crate::meshread::{mesh_read, MeshRead, MeshReadError, MeshReadLimits};
 use crate::reader::read_blend;
 use crate::scene::{read_scene, Detail, SceneCamera, SceneModel};
-use crate::write::{decompress, write, Change, Edit, WriteError, Written};
+use crate::write::{decompress, write, Change, Edit, WriteError, WriteWarning, Written};
 
 /// The person actions the verbs serve (the host's parity rows, by name).
 pub const ROWS: &[&str] = &[
@@ -78,15 +87,17 @@ pub const VERBS: &[FileVerb] = &[
         "object place",
         ED,
         "@ob:NAME --base V [--loc X,Y,Z] [--rot X,Y,Z] [--scale X,Y,Z] (radians, Euler; an \
-         object rotating by quaternion or axis and angle: exit 2; a stale V: exit 1)",
+         object rotating by quaternion or axis and angle: exit 2; a change to a channel an \
+         action or a driver animates: exit 2; an object with constraints: written, with the \
+         warning blend_constrained; a stale V: exit 1)",
         EDIT,
         &["move, rotate or scale an object"],
     ),
     FileVerb::new(
         "object visibility",
         ED,
-        "@ob:NAME --base V [--viewport on|off] [--select on|off] [--render on|off] (a stale V: \
-         exit 1)",
+        "@ob:NAME --base V [--viewport on|off] [--select on|off] [--render on|off] (a bit an \
+         action or a driver animates, flipped: exit 2; a stale V: exit 1)",
         EDIT,
         &["show or hide an object"],
     ),
@@ -175,6 +186,28 @@ fn triple_data(v: Option<[f32; 3]>) -> Json {
     v.map_or(Json::Null, |v| {
         Json::List(v.iter().map(|x| float_data(*x)).collect())
     })
+}
+
+/// A warning as data: `{code, object, kinds, text}`, `text` its `note: ` line
+/// ([`WriteWarning::note`]); `kinds` each kind of constraint, by the file's schema.
+pub fn warning_data(w: &WriteWarning) -> Json {
+    let kinds = match w {
+        WriteWarning::Constrained { kinds, .. } => kinds,
+    };
+    Json::obj([
+        ("code", Json::from(w.code())),
+        ("object", Json::from(w.object())),
+        (
+            "kinds",
+            Json::List(kinds.iter().map(|k| Json::from(k.as_str())).collect()),
+        ),
+        ("text", Json::from(w.note().as_str())),
+    ])
+}
+
+/// Warnings as data: a list of [`warning_data`].
+fn warnings_data(warnings: &[WriteWarning]) -> Json {
+    Json::List(warnings.iter().map(warning_data).collect())
 }
 
 /// The visibility bits as data: `{viewport, select, render}`, each `true` when hidden (off),
@@ -271,6 +304,7 @@ impl VerbError {
                 WriteError::NotAnObject(_) => "blend_not_an_object",
                 WriteError::Linked(_) | WriteError::Field { .. } => "blend_not_editable",
                 WriteError::RotationMode { .. } => "blend_rotation_mode",
+                WriteError::Driven { .. } => "blend_driven",
                 WriteError::Name { .. } => "blend_name",
                 WriteError::Value => "blend_value",
                 WriteError::Check { .. } => "blend_write_check",
@@ -301,7 +335,9 @@ impl VerbError {
     /// **What a host reports** for `verb`'s refusal: the pack's registered entry, the refusal's
     /// own text as the message (fixed text: nothing quoted from the file), and the details
     /// `code` and `verb`, with `address` (the key the call named), `format` (the file's
-    /// version, `5.02`) or `decline` (the mesh read's decline code) when there is one. A usage
+    /// version, `5.02`), `channel` (a driven channel refused, as its F-curve names it:
+    /// `location[2]`, `hide_viewport`) or `decline` (the mesh read's decline code) when there
+    /// is one. A usage
     /// error, a stale base and the session's refusals are the kit's own reports.
     pub fn report(&self, verb: &str) -> ErrorReport {
         let Some(entry) = self.entry() else {
@@ -319,11 +355,11 @@ impl VerbError {
         };
         let message = match self {
             VerbError::Write(WriteError::Version { version }) => {
-                reg::file_version_message(Some(&reg::release(*version)))
+                reg::file_version_message(Some(&reg::release(*version)), true)
             }
             VerbError::MeshRead(MeshReadError::Declined {
                 code: "live_version",
-            }) => reg::file_version_message(None),
+            }) => reg::file_version_message(None, false),
             _ => self.to_string(),
         };
         let mut r = ErrorReport::new(entry, message)
@@ -338,6 +374,9 @@ impl VerbError {
             ) => r = r.with("address", k.as_str()),
             VerbError::Write(WriteError::Version { version }) => {
                 r = r.with("format", reg::release(*version));
+            }
+            VerbError::Write(WriteError::Driven { channel, .. }) => {
+                r = r.with("channel", channel.as_str());
             }
             VerbError::MeshRead(MeshReadError::Declined { code }) => r = r.with("decline", *code),
             _ => {}
@@ -357,12 +396,23 @@ fn read_code(e: &ReadError) -> &'static str {
 }
 
 impl Verb {
-    /// What the verb writes, as data, once it has run: `blend.file.object-place/1` `{object,
-    /// location, rotation, scale}` (three numbers each, null for one not given),
-    /// `blend.file.object-visibility/1` `{object, hidden: {viewport, select, render}}` (`true`:
-    /// off, null: left as it was), `blend.file.object-rename/1` `{object, name}` (`object` the
-    /// key the call named).
-    pub fn typed(&self) -> Typed {
+    /// What the verb wrote, as data, once it has run, with the `warnings` its write came with
+    /// ([`Written::warnings`], [`Ran::warnings`]): `blend.file.object-place/1` `{object,
+    /// location, rotation, scale, warnings}` (three numbers each, null for one not given),
+    /// `blend.file.object-visibility/1` `{object, hidden: {viewport, select, render},
+    /// warnings}` (`true`: off, null: left as it was), `blend.file.object-rename/1` `{object,
+    /// name, warnings}` (`object` the key the call named; `warnings` a list of
+    /// [`warning_data`], empty for most writes).
+    pub fn typed(&self, warnings: &[WriteWarning]) -> Typed {
+        let mut t = self.typed_data();
+        if let Json::Obj(fields) = &mut t.data {
+            fields.push(("warnings".into(), warnings_data(warnings)));
+        }
+        t
+    }
+
+    /// [`Verb::typed`] without its warnings.
+    fn typed_data(&self) -> Typed {
         match self {
             Verb::Place {
                 object,
@@ -468,7 +518,9 @@ pub struct ListedCollection {
     pub hidden: [Option<bool>; 3],
 }
 
-/// One object, as `scene list` shows it.
+/// One object, as `scene list` shows it. A link placeholder of an object (see
+/// [`crate::scene`]) has its address, name, holders and `linked` only: what it holds is in its
+/// library.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ListedObject {
@@ -476,7 +528,7 @@ pub struct ListedObject {
     pub address: String,
     /// Its name.
     pub name: String,
-    /// Its data's key and kind, or `None` for an empty.
+    /// Its data's key and kind, or `None` for an empty or a link placeholder.
     pub data: Option<(String, String)>,
     /// Its parent's key.
     pub parent: Option<String>,
@@ -502,7 +554,7 @@ pub struct ListedObject {
 pub struct SceneList {
     /// Every collection, in file order.
     pub collections: Vec<ListedCollection>,
-    /// Every object, in file order.
+    /// Every object, in file order, link placeholders of objects among them.
     pub objects: Vec<ListedObject>,
     /// Every camera ([`SceneModel::cameras`]): each object whose data is a camera, in file
     /// order, with its name and the camera's fields.
@@ -705,6 +757,22 @@ pub fn list(bytes: &[u8], limits: &ReadLimits) -> Result<SceneList, VerbError> {
                 hidden: hidden(i),
                 linked: id.library.is_some(),
             }),
+            // a link placeholder of an object: what it holds is in its library
+            _ if id.kind == "object" && id.struct_name == "ID" => {
+                out.objects.push(ListedObject {
+                    address: key(i),
+                    name: id.name.clone(),
+                    data: None,
+                    parent: None,
+                    collections: holders(i),
+                    location: None,
+                    rotation: None,
+                    rotation_mode: None,
+                    scale: None,
+                    hidden: [None; 3],
+                    linked: id.library.is_some(),
+                });
+            }
             _ => {}
         }
     }
@@ -832,15 +900,27 @@ pub fn run_meshes(
     Ok((v, meshes(&bytes, limits)?))
 }
 
+/// An edit verb run through a session ([`run`]): the kit's write, and the warnings the write
+/// came with ([`Written::warnings`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Ran {
+    /// The kit's write.
+    pub write: BlobWriteResult,
+    /// The writer's warnings ([`WriteWarning`]); empty for most writes.
+    pub warnings: Vec<WriteWarning>,
+}
+
 /// An edit verb through a session, on the version the agent read (`base`): refused when the
-/// doc has moved on, written with `base` as the kit's base (checked again at commit).
+/// doc has moved on, written with `base` as the kit's base (checked again at commit), with the
+/// warnings the write came with.
 pub fn run(
     session: &BlobSession,
     conn: ConnId,
     base: VersionId,
     verb: &Verb,
     limits: &ReadLimits,
-) -> Result<BlobWriteResult, VerbError> {
+) -> Result<Ran, VerbError> {
     let (v, bytes) = current(session, conn, limits)?;
     if v != base {
         return Err(VerbError::Stale {
@@ -849,10 +929,14 @@ pub fn run(
         });
     }
     let w = apply(&bytes, verb, limits)?;
-    session
+    let write = session
         .write_bytes(conn, &w.bytes, base)
         .map_err(|e| match e {
             SessionError::Stale { expected, actual } => VerbError::Stale { expected, actual },
             e => VerbError::Session(e),
-        })
+        })?;
+    Ok(Ran {
+        write,
+        warnings: w.warnings,
+    })
 }

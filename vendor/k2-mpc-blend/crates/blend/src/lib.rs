@@ -14,7 +14,9 @@
 //!   write the file (`AgentWrites::Allowed`); their edits come through [`verbs`].
 //! - [`write`](mod@write): fixed-size fields of an object (location, rotation, scale, the visibility bits,
 //!   the name inside its field) patched in place, every other byte kept, checked by reading the
-//!   result again; anything it can't prove safe is refused, typed.
+//!   result again; anything it can't prove safe is refused, typed, a change to a channel an
+//!   action or a driver animates among them ([`anim`]: the one reading of what drives an
+//!   object's channels, the live tier's too).
 //! - [`merge`]: the three-way merge of a person's app save against its base, by object and
 //!   field: the person's save is the file, the agent's changes replayed onto it; a field both
 //!   changed is reported, and kept both whole-file until the kit holds conflicts. It needs the
@@ -37,6 +39,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod anim;
 pub mod compress;
 pub mod error;
 pub mod header;
@@ -63,4 +66,4 @@ pub use pack::{index_blend, merge_known_base, BlendPack};
 pub use reader::{read_blend, BlendFile, Block, BlockHead, Endian, Target};
 pub use scene::{read_scene, Detail, FieldSpan, IdBlock, SceneCamera, SceneModel};
 pub use sdna::{Field, Sdna, StructDef};
-pub use write::{write, Change, Edit, WriteError, Written};
+pub use write::{write, Change, Edit, WriteError, WriteWarning, Written};

@@ -3,6 +3,9 @@
 //! agent's verbs land. Off by default: the host opens a file live only when it chooses to.
 //!
 //! - [`model`]: the roots, their keys and fields, and the file read into them;
+//! - [`check`]: what a live change may be ([`check_edit`]), the one rule of the write-back and
+//!   of the kit's check of every live change before it applies ([`Pack::check_edit`]: a
+//!   person's edit, a host's, an agent's verb, undo, redo, revert, restore);
 //! - [`splice`]: the live content written back into the file by patching only what changed in
 //!   place ([`splice::encode_from_paired`]);
 //! - [`verbs`]: the agent's verbs on the live store, with bounded reads; each gives its payload
@@ -13,6 +16,10 @@
 //! - [`view`]: the kit's view index of the scene, its addresses, and what the pack derives;
 //! - [`place`]: each object's place in 3D on the kit's view slot, from its own fields and what
 //!   only the file holds (the parent inverse, how it is parented, an axis and angle).
+//! - [`merged`]: the pack's rules on a doc the kit merged field by field from an outside save
+//!   ([`Pack::check_merged_view`]).
+//! - [`reuse`]: a live state's K2SCENE1 without reading the file again
+//!   ([`reuse::live_k2scene`]): a new header over the carrier's mesh data, shared.
 //!
 //! **Keys are minted** (`c<n>`, `o<n>`): a file's names don't fit the kit's key grammar, and a
 //! name is no identity (a rename is a new file key). The file key travels as the `nid` field,
@@ -34,11 +41,19 @@
 //! the same data (or, with no data, the same parent); anything else is a new element, under a
 //! key minted past the marks. The kit applies a save only onto a doc equal to the synced state,
 //! and keeps both when the doc holds changes the file doesn't or the kit wrote since the last
-//! outside save.
+//! outside save. When the host noted the version the app opened (the kit's `note_opened`), the
+//! kit merges the save's changes since that version onto the live doc field by field, and this
+//! pack checks the merged doc ([`merged::check_merged`]: one name per object of the file, each
+//! file key its name's, values and holders the store's own); a doc that breaks one keeps both,
+//! as with no version noted. So an app that reopened what the kit wrote and saved it merges,
+//! with the kit's changes kept.
 
+pub mod check;
 pub mod errors;
+pub mod merged;
 pub mod model;
 pub mod place;
+pub mod reuse;
 pub mod splice;
 pub mod verbs;
 pub mod view;
@@ -50,14 +65,17 @@ use k2_mpc_base::elem::{Anchor, Applied, Key, ListOp, MapOp, Value};
 use k2_mpc_base::placement::{Placement, Space};
 use k2_mpc_base::schema::{Kind, Schema};
 use k2_mpc_base::session::{
-    Declined, Pack, PackContent, PackError, Pairing, Reconciled, SpliceError, VerbState, View,
+    Declined, Pack, PackContent, PackError, PackRefusal, Pairing, Reconciled, SpliceError,
+    VerbState, View,
 };
 use k2_mpc_base::view_index::{ViewIndex, ViewSchema, ViewSource, ViewTouched};
 
+pub use check::{check_edit, EditRefusal, Rule};
 pub use model::{
     f, prop, CollKind, EditMode, LiveLimits, LiveScene, COLLS, COLL_PROPS, MAX_FILE_BYTES, OBJS,
     OBJ_PROPS, SCENE,
 };
+pub use reuse::{live_k2scene, LiveK2Scene, ReuseDeclined};
 pub use view::{address_of, key_of};
 
 /// The live schema. Its name is stamped on each stored doc.
@@ -370,6 +388,19 @@ impl Pack for BlendLive {
         true
     }
 
+    /// Every live change is checked before it applies ([`Pack::check_edit`]).
+    fn checks_edits(&self) -> bool {
+        // planted: the kit never asks, so a change the write-back can't write is taken
+        !crate::mutant::active("EditCheckOff")
+    }
+
+    /// A live change by the live rules ([`check_edit`], the write-back's own): refused at the
+    /// call, the kit's `pack_refused` (`MPC-E823`) with the rule's code
+    /// ([`EditRefusal::pack_refusal`]), so the doc never holds what its write-back can't write.
+    fn check_edit(&self, view: &View, edits: &[Edit]) -> Result<(), PackRefusal> {
+        check::check_edit(view, edits).map_err(|r| r.pack_refusal())
+    }
+
     /// The live content patched into `carrier`, its units keyed by `pairing`
     /// ([`splice::encode_from_paired`]). Untouched is the carrier, byte for byte.
     fn encode_from_paired(
@@ -501,6 +532,14 @@ impl Pack for BlendLive {
 
     fn composite(&self) -> &'static [(&'static str, &'static str)] {
         COMPOSITE
+    }
+
+    /// A doc the kit merged field by field from an outside save, from the version the app
+    /// opened: checked by the pack's rules ([`merged::check_merged`]). The hook sees the merged
+    /// doc only; the save becomes the carrier, so the merged doc differs from it only where the
+    /// live doc changed since that version.
+    fn check_merged_view(&self, view: &View) -> Result<(), Declined> {
+        merged::check_merged(view)
     }
 }
 

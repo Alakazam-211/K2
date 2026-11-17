@@ -28,10 +28,11 @@ use std::collections::BTreeSet;
 use k2_mpc_base::errors::{ErrorEntry, ErrorReport, Refusal, Value as Json};
 use k2_mpc_base::parity::Registry;
 use k2_mpc_base::session::{ConnId, Pack, Session};
-use k2_mpc_blend::live::errors::{self, by_code, checked_releases, ERRORS};
+use k2_mpc_blend::live::errors::{self, by_code, checked_releases, written_releases, ERRORS};
 use k2_mpc_blend::live::{verbs as live_verbs, BlendLive};
 use k2_mpc_blend::meshread::{MeshReadError, MeshReadLimits};
-use k2_mpc_blend::testgen::{CameraSpec, MeshLayouts, MeshSpec, ObjectSpec, SceneBuilder};
+use k2_mpc_blend::scene::{READ_FROM, READ_TO};
+use k2_mpc_blend::testgen::{CameraSpec, Driven, MeshLayouts, MeshSpec, ObjectSpec, SceneBuilder};
 use k2_mpc_blend::verbs::{
     apply, list, meshes, meshes_typed, Typed, Verb, VerbError, DATA_VERSION, VERBS,
 };
@@ -263,6 +264,11 @@ fn every_file_verb_refusal_is_an_entry_with_its_exit() {
             mode: "quaternion".into(),
         }
         .into(),
+        WriteError::Driven {
+            channel: "location[2]".into(),
+            why: "an action drives it".into(),
+        }
+        .into(),
         WriteError::Name { why: "empty" }.into(),
         WriteError::Value.into(),
         WriteError::Check { why: "a byte" }.into(),
@@ -326,9 +332,13 @@ fn every_file_verb_refusal_is_an_entry_with_its_exit() {
     );
 }
 
-/// The texts name the releases the writer checks, from `WRITE_FROM` and `WRITE_TO`; a file
-/// from another release is declined live in the wording people read, which never says to save
-/// back to an older release.
+/// The texts name the releases read, from `READ_FROM` and `READ_TO` (the live tier's
+/// decline), and the releases written, from `WRITE_FROM` and `WRITE_TO` (the writer's refusal):
+/// both 3.06 to 5.03. The read-only entry, kept for a release read before it is written, names
+/// no range in its table text (its message takes the releases written as `{written}`, its next
+/// step none), so it never says a release read today is read-only. A file from another release
+/// is declined live in the wording people read, which never says to save back to an older
+/// release.
 #[test]
 fn a_file_from_another_release_is_declined_in_its_wording() {
     let range = checked_releases();
@@ -336,23 +346,57 @@ fn a_file_from_another_release_is_declined_in_its_wording() {
         range,
         format!(
             "{} to {}",
+            errors::release(READ_FROM),
+            errors::release(READ_TO)
+        )
+    );
+    let written = written_releases();
+    assert_eq!(
+        written,
+        format!(
+            "{} to {}",
             errors::release(WRITE_FROM),
             errors::release(WRITE_TO)
         )
     );
-    for e in [errors::LIVE_VERSION, errors::FILE_VERSION] {
+    assert_eq!(range, "3.06 to 5.03");
+    assert_eq!(written, range, "the writer writes every release read");
+    for (e, r) in [
+        (errors::LIVE_VERSION, &range),
+        (errors::FILE_VERSION, &written),
+    ] {
         assert!(
-            e.message.contains(&format!("({range})")),
+            e.message.contains(&format!("({r})")),
             "{}: {}",
             e.id,
             e.message
         );
         assert!(
-            e.next.contains(&format!("from {range} if you have one")),
+            e.next.contains(&format!("from {r} if you have one")),
             "{}",
             e.id
         );
     }
+    let ro = errors::READ_ONLY;
+    assert!(
+        ro.message.contains("{format}") && ro.message.contains("{written}"),
+        "{}: {}",
+        ro.id,
+        ro.message
+    );
+    for text in [ro.message, ro.next] {
+        assert!(
+            !text.contains("3.06") && !text.contains("5.0"),
+            "{}: a release named in the table text: {text}",
+            ro.id
+        );
+    }
+    assert_eq!(
+        errors::read_only_message("5.04"),
+        ro.message
+            .replace("{format}", "5.04")
+            .replace("{written}", &written)
+    );
     let Err(d) = BlendLive::default().decode(&old_release()) else {
         panic!("a 2.80 file is declined live");
     };
@@ -472,6 +516,33 @@ fn each_live_refusal_is_its_registered_entry_pinned() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The live `object visibility` on an object whose `hide_viewport` an action animates
+/// (`live_support::blinking_scene`'s `Blinking`) is refused, `blend_driven`, the bit named:
+/// its result pinned (golden `refused-driven-visibility`).
+#[test]
+fn a_live_flip_on_an_animated_bit_is_its_entry_pinned() {
+    let f = fx("refused-driven-visibility", |_| {});
+    f.write(&live_support::blinking_scene());
+    let s = f.open();
+    let a = f.agent(&s);
+    let mut all = resolve(
+        &s,
+        a,
+        &["object", "visibility", "{Blinking}", "--viewport", "off"],
+    );
+    all.push("--json".to_owned());
+    let all: Vec<&str> = all.iter().map(String::as_str).collect();
+    let out = run_based(&s, a, &all).unwrap_or_else(|e| panic!("the call runs: {e:?}"));
+    let r = out.result().expect("--json gives a result").clone();
+    assert_eq!(get(&r, "ok"), Some(&Json::Bool(false)), "refused");
+    let error = get(&r, "error").expect("an error");
+    let entry = by_code("blend_driven").expect("blend_driven is registered");
+    assert_eq!(text(get(error, "id")), Some(entry.id), "its entry's id");
+    if let Err(e) = kit_view_golden::check_in(DIR, "refused-driven-visibility", &r) {
+        panic!("{e}");
+    }
 }
 
 /// A file verb's answer as a host puts it in a result: the verb, the shape's name and the data.
@@ -601,6 +672,45 @@ fn mesh_scene() -> Vec<u8> {
     b.bytes()
 }
 
+/// `Held`, with a track-to and a child-of constraint, beside `Plain`, at 4.03.
+fn constrained_scene() -> Vec<u8> {
+    let mut b = SceneBuilder::constrained(403);
+    b.scene("Scene", &["Held", "Plain"], &[], None);
+    for (name, driven) in [
+        (
+            "Held",
+            Driven::Constraints(&["bTrackToConstraint", "bChildOfConstraint"]),
+        ),
+        ("Plain", Driven::None),
+    ] {
+        b.object(
+            name,
+            &ObjectSpec {
+                rotmode: 1,
+                driven,
+                ..ObjectSpec::default()
+            },
+        );
+    }
+    b.bytes()
+}
+
+/// `Blinking`, whose `hide_viewport` an action animates, at 4.03.
+fn blinking_scene() -> Vec<u8> {
+    let mut b = SceneBuilder::animated(403);
+    b.scene("Scene", &["Blinking"], &[], None);
+    b.object(
+        "Blinking",
+        &ObjectSpec {
+            rotmode: 1,
+            driven: Driven::Action,
+            ..ObjectSpec::default()
+        },
+    );
+    b.action_with(&[(1, &[("hide_viewport", 0)])]);
+    b.bytes()
+}
+
 fn place(object: &str, loc: Option<[f32; 3]>, rot: Option<[f32; 3]>) -> Verb {
     Verb::Place {
         object: object.into(),
@@ -651,9 +761,17 @@ fn each_file_verbs_answer_is_its_data_pinned() {
             },
         ),
     ] {
-        apply(&b, &v, &l).unwrap_or_else(|e| panic!("{name}: the verb writes: {e}"));
-        got.push((name, typed_value(verb, &v.typed())));
+        let w = apply(&b, &v, &l).unwrap_or_else(|e| panic!("{name}: the verb writes: {e}"));
+        assert!(w.warnings.is_empty(), "{name}: warnings {:?}", w.warnings);
+        got.push((name, typed_value(verb, &v.typed(&w.warnings))));
     }
+    let held = place("@ob:Held", Some([1.0, 2.0, 3.0]), None);
+    let w = apply(&constrained_scene(), &held, &l).expect("a constrained object is written");
+    assert_eq!(w.warnings.len(), 1, "one warning: {:?}", w.warnings);
+    got.push((
+        "file-object-place-constrained",
+        typed_value("object place", &held.typed(&w.warnings)),
+    ));
     let m = meshes(&mesh_scene(), &MeshReadLimits::default()).expect("the scene draws");
     assert_eq!(
         m.report.drawn.len(),
@@ -696,6 +814,29 @@ fn each_file_verb_refusal_is_its_entry_pinned() {
             "object place",
             Some(&errors::ROTATION_MODE),
             refuse(&b, place("@ob:Cube", None, Some([0.1, 0.0, 0.0]))),
+        ),
+        (
+            "file-refused-driven",
+            "object place",
+            Some(&errors::DRIVEN),
+            refuse(
+                &k2_mpc_blend::testgen::scenes::driven_quat(),
+                place("@ob:Driven", Some([-3.0, 2.0, 1.0]), None),
+            ),
+        ),
+        (
+            "file-refused-driven-visibility",
+            "object visibility",
+            Some(&errors::DRIVEN),
+            refuse(
+                &blinking_scene(),
+                Verb::Visibility {
+                    object: "@ob:Blinking".into(),
+                    viewport: Some(true),
+                    select: None,
+                    render: None,
+                },
+            ),
         ),
         (
             "file-refused-name",

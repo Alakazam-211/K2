@@ -3,6 +3,7 @@
 
 use super::{put, Addresses, Body, FileBuilder};
 use crate::header::HeaderForm;
+use crate::mutant;
 
 /// What an object written by [`SceneBuilder::object`] holds.
 #[derive(Debug, Clone)]
@@ -32,6 +33,9 @@ pub struct ObjectSpec {
     /// What drives its transform, in a file whose schema has the animation fields
     /// ([`SceneBuilder::animated`]); ignored otherwise.
     pub driven: Driven,
+    /// The action slot its animation data names (`slot_handle`, and an NLA strip's
+    /// `action_slot_handle`), in a file whose schema has the slots ([`ACTION_SLOTS_FROM`]).
+    pub slot: i32,
     /// Its `type` (0 empty, 1 mesh, 10 light, 11 camera...).
     pub ty: i16,
     /// `partype`: how it is parented (0: to an object).
@@ -51,10 +55,26 @@ pub struct ObjectSpec {
     pub obmat: Option<[f32; 16]>,
 }
 
+/// The ID header's `flag` bit every embedded data-block carries: a scene's master collection,
+/// a node tree inside another data-block (a `DATA` block whose struct embeds an `ID`). Learned
+/// from the program's own saves, from 3.06 on (PROVENANCE.md, "Generated test files"); a file
+/// whose embedded data-block lacks it is one the program repairs on load, or fails to open.
+pub const EMBEDDED_ID_FLAG: i16 = 1024;
+
 /// The identity matrix, column-major.
 pub const IDENTITY: [f32; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
 ];
+
+/// The version from which the scene schema has the action slots, as the program's saves of
+/// 5.02 and 5.03 hold them (`PROVENANCE.md`): an action's F-curves in channel bags, one per
+/// slot (`strip_keyframe_data_array`, `ActionStripKeyframeData`, `ActionChannelBag`), beside
+/// its `curves` list; the slot an object's animation data (`slot_handle`) and an NLA strip
+/// (`action_slot_handle`) name.
+pub const ACTION_SLOTS_FROM: u16 = 500;
+
+/// One channel an F-curve animates: the property's path (`location`) and its array index.
+pub type Channel = (&'static str, i32);
 
 /// What an object's animation data and constraints hold ([`ObjectSpec::driven`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -64,15 +84,25 @@ pub enum Driven {
     None,
     /// Animation data that holds nothing: no action, no NLA track, no driver.
     EmptyAnimData,
-    /// An action, through its animation data.
+    /// An action (`AC:Walk`, [`SceneBuilder::action_with`]), through its animation data.
     Action,
-    /// An NLA track.
+    /// An NLA track holding one strip of the action `AC:Walk`, and no action of its own.
     Nla,
-    /// A driver.
-    Driver,
+    /// A driver of this channel.
+    Driver(Channel),
+    /// Animation data naming NLA tracks the file doesn't hold (a pointer no block has).
+    Dangling,
     /// A constraint.
     Constraint,
+    /// Constraints, in this order, each of the struct named (`bTrackToConstraint`) as its
+    /// `data`: a file whose schema gives a constraint its data
+    /// ([`SceneBuilder::constrained`]). An empty name leaves that constraint's data null.
+    Constraints(&'static [&'static str]),
 }
+
+/// The constraint data structs a [`SceneBuilder::constrained`] file's schema has, named as the
+/// files name them.
+pub const CONSTRAINT_STRUCTS: &[&str] = &["bTrackToConstraint", "bChildOfConstraint"];
 
 impl Default for ObjectSpec {
     fn default() -> Self {
@@ -89,6 +119,7 @@ impl Default for ObjectSpec {
             rotmode: 0,
             lib: None,
             driven: Driven::None,
+            slot: 1,
             ty: 0,
             partype: 0,
             parentinv: IDENTITY,
@@ -103,7 +134,7 @@ impl Default for ObjectSpec {
 /// A scene file to write. `legacy` writes the older shape: `Group` and `GroupObject` for
 /// collections, a scene's objects as `Base` elements, `Lamp` for lights, a library's path in
 /// `name`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SceneBuilder {
     /// The file.
     pub file: FileBuilder,
@@ -111,6 +142,11 @@ pub struct SceneBuilder {
     legacy: bool,
     /// The schema has the objects' animation fields ([`SceneBuilder::animated`]).
     anim: bool,
+    /// The schema has the action slots ([`ACTION_SLOTS_FROM`]).
+    slots: bool,
+    /// An action's F-curves are in its `curves` list too ([`SceneBuilder::action_with`]); `false`
+    /// leaves the list empty, the channel bags alone holding them. `true` by default.
+    pub curves_in_list: bool,
     /// The schema has the objects' placement fields and the scenes' unit settings
     /// ([`SceneBuilder::placed`]).
     place: bool,
@@ -127,6 +163,14 @@ pub struct SceneBuilder {
     mesh: Option<MeshLayouts>,
     /// The render size of each scene written after it is set, in a file with meshes.
     pub render: Render,
+    /// The schema has what a saved scene holds beyond the scene graph ([`SceneBuilder::saved`]).
+    saved: bool,
+    /// What each scene's master collection (`SC:Scene/master`) and each collection (`GR:Room`)
+    /// holds, by address name: its objects and its child collections, in a saved file.
+    holds: Vec<(String, Vec<String>, Vec<String>)>,
+    /// The scenes written, by address name, each with the place its view layer's blocks go (after
+    /// the scene's own), in a saved file.
+    scene_keys: Vec<(String, usize)>,
 }
 
 /// A scene's render size ([`SceneBuilder::render`]): `r.xsch`, `r.ysch`, `r.xasp`, `r.yasp`.
@@ -186,7 +230,17 @@ impl SceneBuilder {
     /// A file of this form, with the scene schema. Names hold 63 bytes before version 5.00,
     /// 255 from it.
     pub fn new(form: HeaderForm, pointer_size: u8, big: bool, version: u16, legacy: bool) -> Self {
-        Self::build(form, pointer_size, big, version, legacy, false, false, None)
+        Self::build(
+            form,
+            pointer_size,
+            big,
+            version,
+            legacy,
+            false,
+            false,
+            None,
+            false,
+        )
     }
 
     /// The modern shape at `version`, its objects with the fields that say what drives their
@@ -202,6 +256,7 @@ impl SceneBuilder {
             true,
             false,
             None,
+            false,
         )
     }
 
@@ -219,6 +274,25 @@ impl SceneBuilder {
             true,
             true,
             None,
+            false,
+        )
+    }
+
+    /// [`SceneBuilder::animated`] whose schema gives each constraint its data, as the files do:
+    /// `bConstraint`'s `data`, pointing to a block of the constraint's own struct, one of
+    /// [`CONSTRAINT_STRUCTS`] ([`Driven::Constraints`]).
+    pub fn constrained(version: u16) -> Self {
+        Self::build_with(
+            HeaderForm::Classic,
+            8,
+            false,
+            version,
+            false,
+            true,
+            false,
+            None,
+            false,
+            true,
         )
     }
 
@@ -232,6 +306,36 @@ impl SceneBuilder {
         anim: bool,
         place: bool,
         mesh: Option<MeshLayouts>,
+        saved: bool,
+    ) -> Self {
+        Self::build_with(
+            form,
+            pointer_size,
+            big,
+            version,
+            legacy,
+            anim,
+            place,
+            mesh,
+            saved,
+            false,
+        )
+    }
+
+    /// [`SceneBuilder::build`], and with `cons` a constraint's `data` and the structs it points
+    /// to ([`SceneBuilder::constrained`]).
+    #[allow(clippy::too_many_arguments)]
+    fn build_with(
+        form: HeaderForm,
+        pointer_size: u8,
+        big: bool,
+        version: u16,
+        legacy: bool,
+        anim: bool,
+        place: bool,
+        mesh: Option<MeshLayouts>,
+        saved: bool,
+        cons: bool,
     ) -> Self {
         let mut file = FileBuilder::new(form, pointer_size, big, version);
         let s = &mut file.schema;
@@ -325,29 +429,90 @@ impl SceneBuilder {
             }
             Some(l) => mesh_schema(s, l),
         }
+        let slots = anim && version >= ACTION_SLOTS_FROM;
         if anim {
-            s.add_struct("bAction", &[("ID", "id"), ("int", "flag"), ("int", "_pad")]);
             s.add_struct(
-                "AnimData",
+                "FCurve",
                 &[
-                    ("bAction", "*action"),
-                    ("bAction", "*tmpact"),
-                    ("ListBase", "nla_tracks"),
-                    ("ListBase", "drivers"),
+                    ("FCurve", "*next"),
+                    ("FCurve", "*prev"),
+                    ("int", "array_index"),
+                    ("int", "_pad"),
+                    ("char", "*rna_path"),
+                ],
+            );
+            let mut action: Vec<(&str, &str)> = vec![("ID", "id")];
+            if slots {
+                s.add_struct(
+                    "ActionChannelBag",
+                    &[
+                        ("int", "slot_handle"),
+                        ("int", "fcurve_array_num"),
+                        ("FCurve", "**fcurve_array"),
+                    ],
+                );
+                s.add_struct(
+                    "ActionStripKeyframeData",
+                    &[
+                        ("ActionChannelBag", "**channelbag_array"),
+                        ("int", "channelbag_array_num"),
+                        ("int", "_pad"),
+                    ],
+                );
+                action.extend([
+                    ("ActionStripKeyframeData", "**strip_keyframe_data_array"),
+                    ("int", "strip_keyframe_data_array_num"),
+                    ("int", "_pad0"),
+                ]);
+            }
+            action.extend([("ListBase", "curves"), ("int", "flag"), ("int", "_pad")]);
+            s.add_struct("bAction", &action);
+            let mut strip: Vec<(&str, &str)> = vec![
+                ("NlaStrip", "*next"),
+                ("NlaStrip", "*prev"),
+                ("ListBase", "strips"),
+                ("bAction", "*act"),
+            ];
+            if slots {
+                strip.extend([("int", "action_slot_handle"), ("int", "_pad0")]);
+            }
+            strip.extend([("float", "start"), ("float", "end")]);
+            s.add_struct("NlaStrip", &strip);
+            s.add_struct(
+                "NlaTrack",
+                &[
+                    ("NlaTrack", "*next"),
+                    ("NlaTrack", "*prev"),
+                    ("ListBase", "strips"),
                     ("int", "flag"),
-                    ("int", "_pad"),
+                    ("int", "index"),
                 ],
             );
-            s.add_struct(
-                "bConstraint",
-                &[
-                    ("bConstraint", "*next"),
-                    ("bConstraint", "*prev"),
-                    ("short", "type"),
-                    ("short", "flag"),
-                    ("int", "_pad"),
-                ],
-            );
+            let mut adt: Vec<(&str, &str)> = vec![("bAction", "*action")];
+            if slots {
+                adt.extend([("int", "slot_handle"), ("int", "_pad0")]);
+            }
+            adt.push(("bAction", "*tmpact"));
+            if slots {
+                adt.extend([("int", "tmp_slot_handle"), ("int", "_pad1")]);
+            }
+            adt.extend([
+                ("ListBase", "nla_tracks"),
+                ("ListBase", "drivers"),
+                ("int", "flag"),
+                ("int", "_pad"),
+            ]);
+            s.add_struct("AnimData", &adt);
+            let mut constraint: Vec<(&str, &str)> =
+                vec![("bConstraint", "*next"), ("bConstraint", "*prev")];
+            if cons {
+                constraint.push(("void", "*data"));
+                for st in CONSTRAINT_STRUCTS {
+                    s.add_struct(st, &[("Object", "*tar"), ("int", "flag"), ("int", "_pad")]);
+                }
+            }
+            constraint.extend([("short", "type"), ("short", "flag"), ("int", "_pad")]);
+            s.add_struct("bConstraint", &constraint);
         }
         let mut object: Vec<(&str, &str)> = vec![
             ("ID", "id"),
@@ -457,18 +622,19 @@ impl SceneBuilder {
                     ("Collection", "*collection"),
                 ],
             );
-            s.add_struct(
-                "Collection",
-                &[
-                    ("ID", "id"),
-                    ("ListBase", "gobject"),
-                    ("ListBase", "children"),
-                    ("uchar", "flag"),
-                    ("uchar", "color_tag"),
-                    ("short", "_pad"),
-                    ("int", "_pad1"),
-                ],
-            );
+            let mut collection: Vec<(&str, &str)> = vec![("ID", "id")];
+            if saved {
+                collection.push(("ID", "*owner_id"));
+            }
+            collection.extend([
+                ("ListBase", "gobject"),
+                ("ListBase", "children"),
+                ("uchar", "flag"),
+                ("uchar", "color_tag"),
+                ("short", "_pad"),
+                ("int", "_pad1"),
+            ]);
+            s.add_struct("Collection", &collection);
             let mut scene: Vec<(&str, &str)> = vec![
                 ("ID", "id"),
                 ("Object", "*camera"),
@@ -480,16 +646,22 @@ impl SceneBuilder {
             }
             if mesh.is_some() {
                 // the render size: pixels and the pixel aspect
-                s.add_struct(
-                    "RenderData",
-                    &[
-                        ("int", "xsch"),
-                        ("int", "ysch"),
-                        ("float", "xasp"),
-                        ("float", "yasp"),
-                    ],
-                );
+                let mut render: Vec<(&str, &str)> = vec![
+                    ("int", "xsch"),
+                    ("int", "ysch"),
+                    ("float", "xasp"),
+                    ("float", "yasp"),
+                ];
+                if saved {
+                    render.push(("ListBase", "views"));
+                }
+                s.add_struct("RenderData", &render);
                 scene.push(("RenderData", "r"));
+            }
+            if saved {
+                saved_schema(s);
+                scene.push(("ToolSettings", "*toolsettings"));
+                scene.push(("ListBase", "view_layers"));
             }
             s.add_struct("Scene", &scene);
             if mesh.is_some() {
@@ -513,12 +685,17 @@ impl SceneBuilder {
             addr: Addresses::default(),
             legacy,
             anim,
+            slots,
+            curves_in_list: true,
             place,
             unit_scale: 1.0,
             unit_system: 1,
             shift: 0,
             mesh,
             render: Render::default(),
+            saved: saved && !legacy,
+            holds: Vec::new(),
+            scene_keys: Vec::new(),
         }
     }
 
@@ -533,7 +710,44 @@ impl SceneBuilder {
         } else {
             HeaderForm::Classic
         };
-        Self::build(form, 8, false, version, false, true, true, Some(layouts))
+        Self::build(
+            form,
+            8,
+            false,
+            version,
+            false,
+            true,
+            true,
+            Some(layouts),
+            false,
+        )
+    }
+
+    /// [`SceneBuilder::meshes`] with what every scene of the program's own saves holds beyond
+    /// the scene graph, named as the files name it (`PROVENANCE.md`, "Generated test files"):
+    /// a scene's tool settings (`toolsettings`, a `ToolSettings`), its render views (`r.views`,
+    /// two `SceneRenderView`s, `left` and `right`) and one view layer (`view_layers`, a
+    /// `ViewLayer`) with a `LayerCollection` tree mirroring the master collection and its
+    /// children and a `Base` for each object the scene holds; a master collection's
+    /// `owner_id`. The view layers are written with the file ([`SceneBuilder::bytes`]), from
+    /// what the scenes and collections hold by then.
+    pub fn saved(version: u16, layouts: MeshLayouts) -> Self {
+        let form = if version >= 500 {
+            HeaderForm::Large
+        } else {
+            HeaderForm::Classic
+        };
+        Self::build(
+            form,
+            8,
+            false,
+            version,
+            false,
+            true,
+            true,
+            Some(layouts),
+            true,
+        )
     }
 
     /// The modern shape, classic header, 8-byte pointers, little-endian, version 4.03.
@@ -689,6 +903,29 @@ impl SceneBuilder {
         self.file.block(b"WO\0\0", "World", a, b.bytes);
     }
 
+    /// A link placeholder: a data-block linked from library `lib` written as its bare `ID`
+    /// header only (block code `ID`, struct `ID`), its type only in its name's first two bytes
+    /// (`code`, `OB`), as the round trip's saves hold a linked object (`PROVENANCE.md`).
+    /// Addressed as `<code>:<name>`, so a collection naming `name` holds it.
+    pub fn link_placeholder(&mut self, code: &str, name: &str, lib: &str) {
+        let (ps, big) = (self.file.pointer_size, self.file.big);
+        let s = &self.file.schema;
+        let mut b = Body::new(s.len_of("ID"), big, ps);
+        let (name_at, us, lib_at) = (
+            s.offset("ID", "name"),
+            s.offset("ID", "us"),
+            s.offset("ID", "lib"),
+        );
+        let mut full = code.as_bytes().to_vec();
+        full.extend(name.as_bytes());
+        b.raw(name_at, &full);
+        b.i32(us, 1);
+        let lp = self.addr(&format!("LI:{lib}"));
+        b.ptr(lib_at, lp);
+        let a = self.addr(&format!("{code}:{name}"));
+        self.file.block(b"ID\0\0", "ID", a, b.bytes);
+    }
+
     /// A window manager: the program's own interface, which gets no node.
     pub fn ui(&mut self) {
         let b = self.id_body("wmWindowManager", "WM", b"WinMan", None, 1);
@@ -795,6 +1032,10 @@ impl SceneBuilder {
                     let p = self.addr(&format!("{key}/constraint"));
                     b.ptr(cons, p).ptr(cons + ps, p);
                 }
+                Driven::Constraints(kinds) => {
+                    let (f, l) = self.heads(&key, "constraints", kinds.len());
+                    b.ptr(cons, f).ptr(cons + ps, l);
+                }
                 _ => {
                     let p = self.addr(&format!("{key}/adt"));
                     b.ptr(adt, p);
@@ -836,7 +1077,7 @@ impl SceneBuilder {
             self.modifiers(&key, &spec.modifiers);
         }
         if anim.is_some() {
-            self.driven(&key, spec.driven);
+            self.driven(&key, spec.driven, spec.slot);
         }
     }
 
@@ -884,8 +1125,9 @@ impl SceneBuilder {
         self.file.raw(b"GLOB", sdna, 0, 1, b.bytes);
     }
 
-    /// The animation data or constraint `driven` names, as DATA blocks of object `key`.
-    fn driven(&mut self, key: &str, driven: Driven) {
+    /// The animation data or constraint `driven` names, as DATA blocks of object `key`, naming
+    /// action slot `slot` in a file with the slots.
+    fn driven(&mut self, key: &str, driven: Driven, slot: i32) {
         let ps = usize::from(self.file.pointer_size);
         let (big, psz) = (self.file.big, self.file.pointer_size);
         if driven == Driven::None {
@@ -899,6 +1141,10 @@ impl SceneBuilder {
             self.file.block(b"DATA", "bConstraint", a, c.bytes);
             return;
         }
+        if let Driven::Constraints(kinds) = driven {
+            self.constraints(key, kinds);
+            return;
+        }
         let s = &self.file.schema;
         let (act, nla, drv, len) = (
             s.offset("AnimData", "action"),
@@ -906,31 +1152,214 @@ impl SceneBuilder {
             s.offset("AnimData", "drivers"),
             s.len_of("AnimData"),
         );
+        let handle = self.slots.then(|| s.offset("AnimData", "slot_handle"));
         let mut d = Body::new(len, big, psz);
+        if let Some(at) = handle {
+            d.i32(at, slot);
+        }
+        let (track, driver) = (format!("{key}/nla"), format!("{key}/driver"));
         match driven {
             Driven::Action => {
                 let p = self.addr("AC:Walk");
                 d.ptr(act, p);
             }
-            Driven::Nla => {
-                let p = self.addr(&format!("{key}/nla"));
+            Driven::Nla | Driven::Dangling => {
+                let p = self.addr(&track);
                 d.ptr(nla, p).ptr(nla + ps, p);
             }
-            Driven::Driver => {
-                let p = self.addr(&format!("{key}/driver"));
+            Driven::Driver(_) => {
+                let p = self.addr(&driver);
                 d.ptr(drv, p).ptr(drv + ps, p);
             }
             _ => {}
         }
         let a = self.addr(&format!("{key}/adt"));
         self.file.block(b"DATA", "AnimData", a, d.bytes);
+        match driven {
+            Driven::Nla => self.nla_track(&track, slot),
+            Driven::Driver((path, index)) => self.fcurve(&driver, (path, index), None, None),
+            _ => {}
+        }
     }
 
-    /// The action an object's [`Driven::Action`] names: `AC:Walk`.
+    /// An NLA track at `at` holding one strip of the action `AC:Walk`, naming slot `slot` in a
+    /// file with the slots.
+    fn nla_track(&mut self, at: &str, slot: i32) {
+        let (big, ps) = (self.file.big, self.file.pointer_size);
+        let p = usize::from(ps);
+        let strip = format!("{at}/strip");
+        let s = &self.file.schema;
+        let (tl, ts) = (s.len_of("NlaTrack"), s.offset("NlaTrack", "strips"));
+        let (sl, sa) = (s.len_of("NlaStrip"), s.offset("NlaStrip", "act"));
+        let (send, handle) = (
+            s.offset("NlaStrip", "end"),
+            self.slots
+                .then(|| s.offset("NlaStrip", "action_slot_handle")),
+        );
+        let sp = self.addr(&strip);
+        let mut t = Body::new(tl, big, ps);
+        t.ptr(ts, sp).ptr(ts + p, sp);
+        let a = self.addr(at);
+        self.file.block(b"DATA", "NlaTrack", a, t.bytes);
+        let ap = self.addr("AC:Walk");
+        let mut b = Body::new(sl, big, ps);
+        b.ptr(sa, ap).f32s(send, &[60.0]);
+        if let Some(h) = handle {
+            b.i32(h, slot);
+        }
+        self.file.block(b"DATA", "NlaStrip", sp, b.bytes);
+    }
+
+    /// The constraint list of object `key` ([`Driven::Constraints`]): one `bConstraint` DATA
+    /// block per constraint, linked by `next` and `prev`, each with its data as a DATA block of
+    /// the struct named after it (null for an empty name).
+    fn constraints(&mut self, key: &str, kinds: &[&str]) {
+        let (big, ps) = (self.file.big, self.file.pointer_size);
+        let addrs: Vec<u64> = (0..kinds.len())
+            .map(|i| self.addr(&format!("{key}/constraints/{i}")))
+            .collect();
+        let s = &self.file.schema;
+        let (len, nx, pv, dt, ty) = (
+            s.len_of("bConstraint"),
+            s.offset("bConstraint", "next"),
+            s.offset("bConstraint", "prev"),
+            s.offset("bConstraint", "data"),
+            s.offset("bConstraint", "type"),
+        );
+        for (i, kind) in kinds.iter().enumerate() {
+            let data = if kind.is_empty() {
+                0
+            } else {
+                self.addr(&format!("{key}/constraints/{i}/data"))
+            };
+            let mut c = Body::new(len, big, ps);
+            c.ptr(nx, addrs.get(i + 1).copied().unwrap_or(0))
+                .ptr(pv, if i == 0 { 0 } else { addrs[i - 1] })
+                .ptr(dt, data)
+                .i16(ty, 2);
+            self.file.block(b"DATA", "bConstraint", addrs[i], c.bytes);
+            if data != 0 {
+                let d = Body::new(self.file.schema.len_of(kind), big, ps);
+                self.file.block(b"DATA", kind, data, d.bytes);
+            }
+        }
+    }
+
+    /// An F-curve at `at` animating `channel`, its path as its own DATA block after it; `next`
+    /// and `prev` by address name.
+    fn fcurve(&mut self, at: &str, channel: Channel, next: Option<&str>, prev: Option<&str>) {
+        let (big, ps) = (self.file.big, self.file.pointer_size);
+        let s = &self.file.schema;
+        let (nx, pv, ai, rp, len) = (
+            s.offset("FCurve", "next"),
+            s.offset("FCurve", "prev"),
+            s.offset("FCurve", "array_index"),
+            s.offset("FCurve", "rna_path"),
+            s.len_of("FCurve"),
+        );
+        let (np, pp) = (self.ptr_or_null(next), self.ptr_or_null(prev));
+        let path = format!("{at}/rna_path");
+        let sp = self.addr(&path);
+        let mut b = Body::new(len, big, ps);
+        b.ptr(nx, np).ptr(pv, pp).i32(ai, channel.1).ptr(rp, sp);
+        let a = self.addr(at);
+        self.file.block(b"DATA", "FCurve", a, b.bytes);
+        let mut text = channel.0.as_bytes().to_vec();
+        text.push(0);
+        self.file.raw(b"DATA", 0, sp, 1, text);
+    }
+
+    /// The action an object's [`Driven::Action`] and [`Driven::Nla`] name: `AC:Walk`, its one
+    /// F-curve animating `location` z ([`SceneBuilder::action_with`]).
     pub fn action(&mut self) {
-        let b = self.id_body("bAction", "AC", b"Walk", None, 1);
+        self.action_with(&[(1, &[("location", 2)])]);
+    }
+
+    /// The action `AC:Walk`, one F-curve per channel of each slot: `(handle, channels)`. In a
+    /// file with the slots ([`ACTION_SLOTS_FROM`]), one channel bag per slot (in one keyframe
+    /// data), and the first slot's F-curves in the `curves` list too unless
+    /// [`SceneBuilder::curves_in_list`] is `false`; in an older file, every slot's in the list.
+    pub fn action_with(&mut self, slots: &[(i32, &[Channel])]) {
+        let ps = usize::from(self.file.pointer_size);
+        let (big, psz) = (self.file.big, self.file.pointer_size);
+        let listed: Vec<Channel> = if !self.slots {
+            slots.iter().flat_map(|(_, c)| c.iter().copied()).collect()
+        } else if self.curves_in_list {
+            slots.first().map(|(_, c)| c.to_vec()).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let names: Vec<String> = (0..listed.len())
+            .map(|i| format!("AC:Walk/curves/{i}"))
+            .collect();
+        let mut b = self.id_body("bAction", "AC", b"Walk", None, 1);
+        let s = &self.file.schema;
+        let cv = s.offset("bAction", "curves");
+        let kfd = self.slots.then(|| {
+            (
+                s.offset("bAction", "strip_keyframe_data_array"),
+                s.offset("bAction", "strip_keyframe_data_array_num"),
+            )
+        });
+        let (f, l) = self.heads("AC:Walk", "curves", listed.len());
+        b.ptr(cv, f).ptr(cv + ps, l);
+        if let Some((arr, num)) = kfd {
+            let p = self.addr("AC:Walk/kfd");
+            b.ptr(arr, p).i32(num, 1);
+        }
         let a = self.addr("AC:Walk");
         self.file.block(b"AC\0\0", "bAction", a, b.bytes);
+        for (i, c) in listed.iter().enumerate() {
+            let next = names.get(i + 1).map(String::as_str);
+            let prev = i.checked_sub(1).map(|j| names[j].as_str());
+            self.fcurve(&names[i], *c, next, prev);
+        }
+        if kfd.is_none() {
+            return;
+        }
+        self.pointer_array("AC:Walk", "kfd", &[Some("AC:Walk/kfd/0".into())]);
+        let s = &self.file.schema;
+        let (kl, ka, kn) = (
+            s.len_of("ActionStripKeyframeData"),
+            s.offset("ActionStripKeyframeData", "channelbag_array"),
+            s.offset("ActionStripKeyframeData", "channelbag_array_num"),
+        );
+        let (bl, bs, bn, ba) = (
+            s.len_of("ActionChannelBag"),
+            s.offset("ActionChannelBag", "slot_handle"),
+            s.offset("ActionChannelBag", "fcurve_array_num"),
+            s.offset("ActionChannelBag", "fcurve_array"),
+        );
+        let bags = self.addr("AC:Walk/bags");
+        let mut k = Body::new(kl, big, psz);
+        k.ptr(ka, bags).i32(kn, slots.len() as i32);
+        let a = self.addr("AC:Walk/kfd/0");
+        self.file
+            .block(b"DATA", "ActionStripKeyframeData", a, k.bytes);
+        let bag_names: Vec<Option<String>> = (0..slots.len())
+            .map(|j| Some(format!("AC:Walk/bags/{j}")))
+            .collect();
+        self.pointer_array("AC:Walk", "bags", &bag_names);
+        for (j, (handle, channels)) in slots.iter().enumerate() {
+            let bag = format!("AC:Walk/bags/{j}");
+            let fcs: Vec<Option<String>> = (0..channels.len())
+                .map(|i| Some(format!("{bag}/fcurves/{i}")))
+                .collect();
+            let arr = self.addr(&format!("{bag}/fcurves"));
+            let mut c = Body::new(bl, big, psz);
+            c.i32(bs, *handle)
+                .i32(bn, channels.len() as i32)
+                .ptr(ba, if channels.is_empty() { 0 } else { arr });
+            let a = self.addr(&bag);
+            self.file.block(b"DATA", "ActionChannelBag", a, c.bytes);
+            if channels.is_empty() {
+                continue;
+            }
+            self.pointer_array(&bag, "fcurves", &fcs);
+            for (i, ch) in channels.iter().enumerate() {
+                self.fcurve(&format!("{bag}/fcurves/{i}"), *ch, None, None);
+            }
+        }
     }
 
     /// A list of elements of struct `elem`, each pointing at one of `targets` (addresses by
@@ -1001,6 +1430,9 @@ impl SceneBuilder {
             b.ptr(ch, f).ptr(ch + ps, l);
         }
         self.file.block(b"GR\0\0", st, a, b.bytes);
+        if self.saved {
+            self.holds.push((key.clone(), obs.clone(), cols.clone()));
+        }
         let elem = if self.legacy {
             "GroupObject"
         } else {
@@ -1062,9 +1494,50 @@ impl SceneBuilder {
                 .f32s(xa, &[rd.xasp])
                 .f32s(ya, &[rd.yasp]);
         }
+        if self.saved {
+            let (ts, vl) = (
+                self.addr(&format!("{key}/toolsettings")),
+                self.addr(&format!("{key}/viewlayer")),
+            );
+            let (vf, vlast) = self.heads(&key, "views", 2);
+            let s = &self.file.schema;
+            let (t, l, v) = (
+                s.offset("Scene", "toolsettings"),
+                s.offset("Scene", "view_layers"),
+                s.offset("Scene", "r") + s.offset("RenderData", "views"),
+            );
+            b.ptr(t, ts)
+                .ptr(l, vl)
+                .ptr(l + ps, vl)
+                .ptr(v, vf)
+                .ptr(v + ps, vlast);
+        }
         self.file.block(b"SC\0\0", "Scene", a, b.bytes);
+        if self.saved {
+            self.tool_settings(&key);
+            self.render_views(&key);
+        }
         // the master collection: embedded, a DATA block of the scene's
         let mut m = self.id_body("Collection", "GR", b"Scene Collection", None, 1);
+        // embedded: flagged so, as the program's own saves flag it
+        let flag =
+            self.file.schema.offset("Collection", "id") + self.file.schema.offset("ID", "flag");
+        let embedded = if mutant::active("EmbeddedFlagDropped") {
+            0
+        } else {
+            EMBEDDED_ID_FLAG
+        };
+        m.i16(flag, embedded);
+        if self.saved {
+            // owned by its scene; the flag and colour tag every sample's master collection has
+            let s = &self.file.schema;
+            let (o, f, c) = (
+                s.offset("Collection", "owner_id"),
+                s.offset("Collection", "flag"),
+                s.offset("Collection", "color_tag"),
+            );
+            m.ptr(o, a).raw(f, &[MASTER_COLLECTION_FLAG]).raw(c, &[255]);
+        }
         let go = self.file.schema.offset("Collection", "gobject");
         let ch = self.file.schema.offset("Collection", "children");
         let cols: Vec<String> = collections.iter().map(|c| format!("GR:{c}")).collect();
@@ -1075,12 +1548,301 @@ impl SceneBuilder {
         self.file.block(b"DATA", "Collection", ma, m.bytes);
         self.elements(&master, "gobject", "CollectionObject", "ob", &obs);
         self.elements(&master, "children", "CollectionChild", "collection", &cols);
+        if self.saved {
+            self.holds.push((master, obs, cols));
+            // its view layer goes here, among the scene's own blocks, when the file is written
+            self.scene_keys.push((key, self.file.blocks.len()));
+        }
     }
 
-    /// The file's bytes.
+    /// The file's bytes; in a saved file ([`SceneBuilder::saved`]), with each scene's view
+    /// layer written from what its master collection holds by now.
     pub fn bytes(&self) -> Vec<u8> {
-        self.file.bytes()
+        if !self.saved || self.scene_keys.is_empty() {
+            return self.file.bytes();
+        }
+        let mut b = self.clone();
+        // from the last scene back, so each place stays where it was
+        for (key, at) in self.scene_keys.iter().rev() {
+            let start = b.file.blocks.len();
+            b.view_layer(key);
+            let written: Vec<_> = b.file.blocks.drain(start..).collect();
+            let tail = b.file.blocks.split_off(*at);
+            b.file.blocks.extend(written);
+            b.file.blocks.extend(tail);
+        }
+        b.file.bytes()
     }
+
+    /// Scene `key`'s tool settings: a `ToolSettings` block with the values every sample's hold
+    /// (the rest zero).
+    fn tool_settings(&mut self, key: &str) {
+        let a = self.addr(&format!("{key}/toolsettings"));
+        let s = &self.file.schema;
+        let o = |f: &str| s.offset("ToolSettings", f);
+        let mut b = Body::new(
+            s.len_of("ToolSettings"),
+            self.file.big,
+            self.file.pointer_size,
+        );
+        b.f32s(o("vgroup_weight"), &[1.0])
+            .f32s(o("doublimit"), &[0.001])
+            .raw(o("object_flag"), &[1])
+            .raw(o("selectmode"), &[1])
+            .raw(o("uvcalc_flag"), &[5])
+            .raw(o("uv_selectmode"), &[1])
+            .f32s(o("uvcalc_margin"), &[0.001])
+            .i32(o("uvcalc_iterations"), 10)
+            .f32s(o("uvcalc_weight_factor"), &[1.0])
+            .f32s(o("proportional_size"), &[1.0])
+            .f32s(o("select_thresh"), &[0.01])
+            .raw(o("autokey_mode"), &[2]);
+        self.file.block(b"DATA", "ToolSettings", a, b.bytes);
+    }
+
+    /// Scene `key`'s render views (`r.views`): `left` (`_L`) and `right` (`_R`).
+    fn render_views(&mut self, key: &str) {
+        let addrs = [
+            self.addr(&format!("{key}/views/0")),
+            self.addr(&format!("{key}/views/1")),
+        ];
+        let s = &self.file.schema;
+        let (next, prev, name, suffix, len) = (
+            s.offset("SceneRenderView", "next"),
+            s.offset("SceneRenderView", "prev"),
+            s.offset("SceneRenderView", "name"),
+            s.offset("SceneRenderView", "suffix"),
+            s.len_of("SceneRenderView"),
+        );
+        for (i, (n, x)) in [("left", "_L"), ("right", "_R")].iter().enumerate() {
+            let mut b = Body::new(len, self.file.big, self.file.pointer_size);
+            b.ptr(next, if i == 0 { addrs[1] } else { 0 })
+                .ptr(prev, if i == 0 { 0 } else { addrs[0] })
+                .raw(name, n.as_bytes())
+                .raw(suffix, x.as_bytes());
+            self.file
+                .block(b"DATA", "SceneRenderView", addrs[i], b.bytes);
+        }
+    }
+
+    /// What the holder `holder` (an address name) holds: its objects and child collections.
+    fn held(&self, holder: &str) -> (Vec<String>, Vec<String>) {
+        self.holds
+            .iter()
+            .find(|(h, _, _)| h == holder)
+            .map(|(_, o, c)| (o.clone(), c.clone()))
+            .unwrap_or_default()
+    }
+
+    /// Scene `key`'s view layer: its layer collections, mirroring the master collection and its
+    /// children (to [`MAX_LAYER_DEPTH`] levels), and a base for each object the scene holds,
+    /// each once, in the order the collections hold them.
+    fn view_layer(&mut self, key: &str) {
+        let vl = self.addr(&format!("{key}/viewlayer"));
+        let master = format!("{key}/master");
+        let root = format!("{key}/viewlayer/lc");
+        self.layer_collections(&[(root.clone(), master.clone())], 0);
+        let mut objects: Vec<String> = Vec::new();
+        let mut stack = vec![(master, 0usize)];
+        while let Some((holder, depth)) = stack.pop() {
+            let (obs, cols) = self.held(&holder);
+            for o in obs {
+                if !objects.contains(&o) {
+                    objects.push(o);
+                }
+            }
+            if depth < MAX_LAYER_DEPTH {
+                stack.extend(cols.into_iter().rev().map(|c| (c, depth + 1)));
+            }
+        }
+        let bases: Vec<u64> = (0..objects.len())
+            .map(|i| self.addr(&format!("{key}/viewlayer/base/{i}")))
+            .collect();
+        let s = &self.file.schema;
+        let o = |f: &str| s.offset("Base", f);
+        let (next, prev, ob, fl, ffc, lcb, len) = (
+            o("next"),
+            o("prev"),
+            o("object"),
+            o("flag"),
+            o("flag_from_collection"),
+            o("local_collections_bits"),
+            s.len_of("Base"),
+        );
+        for (i, name) in objects.iter().enumerate() {
+            let target = self.addr(name);
+            let mut b = Body::new(len, self.file.big, self.file.pointer_size);
+            b.ptr(next, bases.get(i + 1).copied().unwrap_or(0))
+                .ptr(prev, if i == 0 { 0 } else { bases[i - 1] })
+                .ptr(ob, target)
+                .i16(fl, BASE_FLAG)
+                .i16(ffc, BASE_FLAG)
+                .i16(lcb, -1);
+            self.file.block(b"DATA", "Base", bases[i], b.bytes);
+        }
+        let lc = self.addr(&root);
+        let s = &self.file.schema;
+        let o = |f: &str| s.offset("ViewLayer", f);
+        let ps = usize::from(self.file.pointer_size);
+        let mut b = Body::new(s.len_of("ViewLayer"), self.file.big, self.file.pointer_size);
+        b.raw(o("name"), b"ViewLayer")
+            .i16(o("flag"), 5)
+            .ptr(o("object_bases"), bases.first().copied().unwrap_or(0))
+            .ptr(o("object_bases") + ps, bases.last().copied().unwrap_or(0))
+            .ptr(o("layer_collections"), lc)
+            .ptr(o("layer_collections") + ps, lc)
+            .ptr(o("active_collection"), lc)
+            .i32(o("layflag"), 32767)
+            .i32(o("passflag"), 1)
+            .f32s(o("pass_alpha_threshold"), &[0.5])
+            .i16(o("cryptomatte_flag"), 8)
+            .i16(o("cryptomatte_levels"), 6);
+        self.file.block(b"DATA", "ViewLayer", vl, b.bytes);
+    }
+
+    /// Sibling layer collections, each `(its address name, its collection's address name)`,
+    /// with their children below them, `depth` levels down.
+    fn layer_collections(&mut self, siblings: &[(String, String)], depth: usize) {
+        let addrs: Vec<u64> = siblings.iter().map(|(n, _)| self.addr(n)).collect();
+        for (i, (name, coll)) in siblings.iter().enumerate() {
+            let (_, cols) = self.held(coll);
+            let kids: Vec<(String, String)> = if depth < MAX_LAYER_DEPTH {
+                cols.into_iter()
+                    .enumerate()
+                    .map(|(j, c)| (format!("{name}/{j}"), c))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let (first, last) = (
+                kids.first().map(|(n, _)| self.addr(n)).unwrap_or(0),
+                kids.last().map(|(n, _)| self.addr(n)).unwrap_or(0),
+            );
+            let target = self.addr(coll);
+            let s = &self.file.schema;
+            let o = |f: &str| s.offset("LayerCollection", f);
+            let ps = usize::from(self.file.pointer_size);
+            let mut b = Body::new(
+                s.len_of("LayerCollection"),
+                self.file.big,
+                self.file.pointer_size,
+            );
+            b.ptr(o("next"), addrs.get(i + 1).copied().unwrap_or(0))
+                .ptr(o("prev"), if i == 0 { 0 } else { addrs[i - 1] })
+                .ptr(o("collection"), target)
+                .ptr(o("layer_collections"), first)
+                .ptr(o("layer_collections") + ps, last)
+                .i16(o("local_collections_bits"), -1);
+            self.file
+                .block(b"DATA", "LayerCollection", addrs[i], b.bytes);
+            if !kids.is_empty() {
+                self.layer_collections(&kids, depth + 1);
+            }
+        }
+    }
+}
+
+/// How deep a view layer's layer collections and the walk for its bases go (a collection tree
+/// that loops stops there).
+pub const MAX_LAYER_DEPTH: usize = 64;
+
+/// The `flag` and `flag_from_collection` every base of the samples holds for an object not
+/// selected.
+pub const BASE_FLAG: i16 = 214;
+
+/// The `flag` every sample's master collection holds.
+pub const MASTER_COLLECTION_FLAG: u8 = 32;
+
+/// The structs a saved file's scenes hold beyond the scene graph ([`SceneBuilder::saved`]),
+/// each with the fields the samples' schemas give it, by name, up to the last one written.
+fn saved_schema(s: &mut super::SchemaBuilder) {
+    s.add_struct(
+        "LayerCollection",
+        &[
+            ("LayerCollection", "*next"),
+            ("LayerCollection", "*prev"),
+            ("Collection", "*collection"),
+            ("void", "*_pad1"),
+            ("short", "flag"),
+            ("short", "runtime_flag"),
+            ("char", "_pad[4]"),
+            ("ListBase", "layer_collections"),
+            ("short", "local_collections_bits"),
+            ("short", "_pad2[3]"),
+        ],
+    );
+    s.add_struct(
+        "Base",
+        &[
+            ("Base", "*next"),
+            ("Base", "*prev"),
+            ("Object", "*object"),
+            ("Base", "*base_orig"),
+            ("int", "lay"),
+            ("short", "flag"),
+            ("short", "flag_from_collection"),
+            ("short", "flag_legacy"),
+            ("short", "local_view_bits"),
+            ("short", "local_collections_bits"),
+            ("char", "_pad1[2]"),
+        ],
+    );
+    s.add_struct(
+        "ViewLayer",
+        &[
+            ("ViewLayer", "*next"),
+            ("ViewLayer", "*prev"),
+            ("char", "name[64]"),
+            ("short", "flag"),
+            ("char", "_pad[6]"),
+            ("ListBase", "object_bases"),
+            ("SceneStats", "*stats"),
+            ("Base", "*basact"),
+            ("ListBase", "layer_collections"),
+            ("LayerCollection", "*active_collection"),
+            ("int", "layflag"),
+            ("int", "passflag"),
+            ("float", "pass_alpha_threshold"),
+            ("short", "cryptomatte_flag"),
+            ("short", "cryptomatte_levels"),
+            ("char", "_pad1[4]"),
+            ("int", "samples"),
+        ],
+    );
+    s.add_struct(
+        "SceneRenderView",
+        &[
+            ("SceneRenderView", "*next"),
+            ("SceneRenderView", "*prev"),
+            ("char", "name[64]"),
+            ("char", "suffix[64]"),
+            ("int", "viewflag"),
+            ("char", "_pad2[4]"),
+        ],
+    );
+    s.add_struct(
+        "ToolSettings",
+        &[
+            ("float", "vgroup_weight"),
+            ("float", "doublimit"),
+            ("char", "automerge"),
+            ("char", "object_flag"),
+            ("char", "selectmode"),
+            ("char", "unwrapper"),
+            ("char", "uvcalc_flag"),
+            ("char", "uv_flag"),
+            ("char", "uv_selectmode"),
+            ("char", "uv_sticky"),
+            ("float", "uvcalc_margin"),
+            ("int", "uvcalc_iterations"),
+            ("float", "uvcalc_weight_factor"),
+            ("float", "proportional_size"),
+            ("float", "select_thresh"),
+            ("short", "keying_flag"),
+            ("char", "autokey_mode"),
+            ("char", "keyframe_type"),
+        ],
+    );
 }
 
 /// The modifier structs a file with meshes has ([`ObjectSpec::modifiers`]): each a

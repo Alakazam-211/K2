@@ -264,9 +264,10 @@ fn an_agent_runs_verbs_on_the_version_it_read() {
         &limits(),
     )
     .expect("check: the verb runs");
-    assert!(r.version > v1);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    assert!(r.write.version > v1);
     let (v2, l) = run_list(&s, bot, &limits()).unwrap();
-    assert_eq!(v2, r.version);
+    assert_eq!(v2, r.write.version);
     assert_eq!(l.objects[1].location.as_deref(), Some("5,0,0"));
     // the version it read is gone: refused, nothing written
     let e = run(
@@ -302,7 +303,7 @@ fn an_agent_runs_verbs_on_the_version_it_read() {
     let r = run(
         &s,
         bot,
-        r.version,
+        r.write.version,
         &Verb::Visibility {
             object: "@ob:Hero".into(),
             viewport: Some(true),
@@ -313,7 +314,7 @@ fn an_agent_runs_verbs_on_the_version_it_read() {
     )
     .unwrap();
     let (v, l) = run_list(&s, bot, &limits()).unwrap();
-    assert_eq!(v, r.version);
+    assert_eq!(v, r.write.version);
     let hero = l.objects.iter().find(|o| o.address == "@ob:Hero").unwrap();
     assert_eq!(hero.location.as_deref(), Some("5,0,0"));
     assert_eq!(hero.hidden[0], Some(true));

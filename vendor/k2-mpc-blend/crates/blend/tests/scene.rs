@@ -535,7 +535,7 @@ fn flags_and_values_are_named_from_the_pinned_versions_on() {
     assert_eq!(field(&m, "@ob:Child", "restrictflag"), Some("5"));
 
     // a file newer than the pinned versions: numbers only, nothing hidden, until saves pin them
-    for version in [502, 503] {
+    for version in [504, 600] {
         let mut new = SceneBuilder::new(HeaderForm::Classic, 8, false, version, false);
         studio(&mut new, [0.0; 3]);
         let m = model_of(&new.bytes());

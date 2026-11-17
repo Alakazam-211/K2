@@ -1,0 +1,44 @@
+{
+  "schema": "mpc.result/1",
+  "verb": "object visibility",
+  "kind": "edit",
+  "ok": false,
+  "exit": 2,
+  "version": {
+    "base": 1,
+    "after": null,
+    "if_version": null,
+    "base_given": 1
+  },
+  "changed": null,
+  "data": {
+    "text": "refused: blend_driven: its visibility is animated (hide_viewport): the app would recompute it on load, and live any animated bit refuses the call\nnext: object show @obj:1\n"
+  },
+  "data_schema": "text",
+  "data_spec": null,
+  "page": null,
+  "error": {
+    "id": "BLEND-E002",
+    "exit": 2,
+    "message": "its visibility is animated (hide_viewport): the app would recompute it on load, and live any animated bit refuses the call",
+    "next": "An action, an NLA strip or a driver animates the channel (a component of the transform, or a visibility bit), or a constraint acts on the transform, so the program recomputes it when it opens the file and a value written here wouldn't hold. Nothing was applied. Change what drives it in the app. A file verb still writes a channel nothing drives and a bit it keeps as stored (`details.channel` names the one refused: `location[2]`, `hide_viewport`), and a transform under constraints (with the warning `blend_constrained`). Live, a driven transform refuses the whole placement, and any animated visibility bit the whole `object visibility` (`details.channel` names the bits: `hide_viewport,hide_render`). Its name is still written.",
+    "next_step": {
+      "verb": "object show",
+      "args": ["{address}"],
+      "why": "Read the object's fields: `edit` is `a` when its transform is driven; `visanim` names its animated visibility bits."
+    },
+    "rule": "the pack's own refusal",
+    "details": {
+      "code": "blend_driven",
+      "next": "object show @obj:1",
+      "verb": "object visibility",
+      "address": "@obj:1",
+      "channel": "hide_viewport"
+    }
+  },
+  "conflicts": [],
+  "notes": [],
+  "warnings": [],
+  "view": null,
+  "dry_run": false
+}

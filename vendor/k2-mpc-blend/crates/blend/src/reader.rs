@@ -289,8 +289,23 @@ impl Raw<'_> {
     }
 }
 
+#[cfg(feature = "testgen")]
+thread_local! {
+    /// The files [`read_blend`] began to read on this thread (a test build's count).
+    static READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The files [`read_blend`] began to read on this thread since the last call, and the count
+/// set back to 0: a test build's count of file decodes (the `testgen` feature only).
+#[cfg(feature = "testgen")]
+pub fn take_reads() -> u64 {
+    READS.with(|r| r.replace(0))
+}
+
 /// Reads a whole file from `src` under `limits`: forward only, stopping after the end block.
 pub fn read_blend(src: &mut dyn Read, limits: &ReadLimits) -> Result<BlendFile, ReadError> {
+    #[cfg(feature = "testgen")]
+    READS.with(|r| r.set(r.get() + 1));
     let opened = compress::open(src, limits)?;
     let compression = opened.compression;
     let mut raw = Raw {

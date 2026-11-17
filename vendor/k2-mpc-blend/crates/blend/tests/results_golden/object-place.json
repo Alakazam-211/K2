@@ -34,7 +34,8 @@
       }
     ],
     "units_more": 0,
-    "lines": null
+    "lines": null,
+    "bytes": null
   },
   "data": {
     "object": "@obj:2",
@@ -51,5 +52,20 @@
   "error": null,
   "conflicts": [],
   "notes": [],
-  "warnings": []
+  "warnings": [],
+  "view": {
+    "address": "@obj:2",
+    "containers": ["@coll:2"],
+    "units": [
+      {
+        "address": "@obj:2",
+        "live": true
+      }
+    ],
+    "units_more": 0,
+    "cells": null,
+    "lines": [],
+    "time": null
+  },
+  "dry_run": false
 }

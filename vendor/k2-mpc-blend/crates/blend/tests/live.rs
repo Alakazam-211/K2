@@ -1,8 +1,8 @@
 //! The live BLEND pack on the kit's session (`k2_mpc_blend::live`): the store and its floats,
 //! the verb and the watcher, the byte-exact row, the splice (a placement, an app's save that adds
 //! an object, a rename chain, a restart, the differential oracle), outside saves keeping both,
-//! what is refused (driven transforms, a rename without `--break-links`, a pairing that doesn't
-//! fit), the declines, and bounded reads. The rows are in `live_support/rows.rs`, shared with
+//! what is refused (driven transforms, visibility on an object with an animated bit, a rename
+//! without `--break-links`, a pairing that doesn't fit), the declines, and bounded reads. The rows are in `live_support/rows.rs`, shared with
 //! the planted bugs (`tests/mutants.rs`).
 //!
 //! `public_corpus_live` reads the public corpus (`BLEND_PUBLIC_CORPUS`, `scripts/fetch-corpus.sh`;
@@ -45,6 +45,7 @@ row_tests! {
     xform_round_trips_bits => rows::row_xform_round_trips_bits,
     rename_keeps_key_through_app_save => rows::row_rename_keeps_key_through_app_save,
     driven_and_unwritable_refused => rows::row_driven_and_unwritable_refused,
+    live_visibility_refused_on_animated_bits => rows::row_live_visibility_refused_on_animated_bits,
     rename_needs_break_links => rows::row_rename_needs_break_links,
     rename_chain_writes_each_name => rows::row_rename_chain_writes_each_name,
     restart_then_verb_writes_exactly => rows::row_restart_then_verb_writes_exactly,

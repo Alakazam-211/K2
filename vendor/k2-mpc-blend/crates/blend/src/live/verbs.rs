@@ -9,7 +9,7 @@
 //! | `collection show @coll:N [--after @obj:N] [--limit N]` | read: the collection, then its objects (type, name, transform, visibility, edit), at most 200 a page |
 //! | `object show @obj:N` | read: every field |
 //! | `object place @obj:N [--loc X,Y,Z] [--rot X,Y,Z] [--scale X,Y,Z]` | set `xform` (one field) |
-//! | `object visibility @obj:N [--viewport on\|off] [--select on\|off] [--render on\|off]` | set `hidden`, `noselect`, `norender` |
+//! | `object visibility @obj:N [--viewport on\|off] [--select on\|off] [--render on\|off]` | set `hidden`, `noselect`, `norender` (refused on an object with an animated bit) |
 //! | `object rename @obj:N --name NAME --break-links` | set `name` and `nid` in one change |
 //!
 //! **Refusals are typed and registered** ([`super::errors::ERRORS`], ids `BLEND-Ennn`): each
@@ -33,6 +33,14 @@
 //!   constraint; the app would recompute it on load) is refused, `blend_driven`; `--rot` on an
 //!   object that rotates by quaternion or axis and angle (`t`), `blend_rotation_mode`; anything
 //!   on an object nothing writes (`0`: linked from a library), `blend_not_editable`.
+//! - `object visibility` on an object with any visibility bit an action, an NLA strip or a
+//!   driver animates (its `visanim` field; the app would recompute the bit on load) is refused
+//!   whole, `blend_driven`, the bits named (`details.channel`: `hide_viewport,hide_render`),
+//!   a call that flips only a bit nothing animates too: the write-back goes through the writer,
+//!   which refuses a flip of an animated bit, so the live doc never holds a bit the file can't.
+//! - Every edit verb on a doc of a file read but not written back (read-only: its scene map's
+//!   `version` past the writer's, which no version read is) is refused, `live_read_only`, before
+//!   anything else of the object is checked.
 //! - `object rename` sets the file key (`nid`) with the name, so the next outside save still
 //!   pairs the object by name. Other files that link the object by its name don't follow
 //!   a rename: the verb says so and is refused (`blend_breaks_links`) unless `--break-links`
@@ -50,8 +58,10 @@ use k2_mpc_base::table::CELL_SEP;
 use k2_mpc_base::tools::exit::{NOT_FOUND, OK, USAGE};
 use k2_mpc_base::tools::{PackVerb, StructEdit, StructOutput, ToolError, VerbCtx};
 
+use super::errors::read_only_message;
 use super::model::{
-    f, floats_text, parse_floats, prop, s, EditMode, COLLS, COLL_PROPS, OBJS, OBJ_PROPS, SCENE,
+    f, floats_text, parse_floats, prop, s, writes_back, EditMode, COLLS, COLL_PROPS, OBJS,
+    OBJ_PROPS, SCENE,
 };
 use super::view::{address_of, key_of, xform_text};
 use crate::mutant;
@@ -94,7 +104,7 @@ pub const VERBS: &[PackVerb] = &[
     ),
     PackVerb::structured_edit(
         "object visibility",
-        "@obj:N [--viewport on|off] [--select on|off] [--render on|off]",
+        "@obj:N [--viewport on|off] [--select on|off] [--render on|off] (an object with any animated visibility bit: exit 2)",
         &[PersonAction::Format],
         EXITS,
         parse_object_visibility,
@@ -331,6 +341,26 @@ fn refuse(code: &str, why: &str, next: &str, addr: &str) -> R {
             USAGE,
         )),
     }
+}
+
+/// A doc of a file the live tier reads but the writer doesn't write refuses every edit (no
+/// version read is one): the registered `live_read_only`, exit 2, before anything else is
+/// checked of the object at `addr`. `None` for a doc that is written back.
+fn read_only(d: &Doc<'_>, addr: &str) -> Option<R> {
+    let version = d
+        .scene
+        .get(s::VERSION)
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if writes_back(version) || mutant::active("ReadOnlyVerbsWrite") {
+        return None;
+    }
+    Some(refuse(
+        "live_read_only",
+        &read_only_message(version),
+        "scene list",
+        addr,
+    ))
 }
 
 /// A collection or object that isn't there: the registered `blend_not_found`, exit 4, with the
@@ -772,6 +802,9 @@ fn parse_object_place(args: &[String]) -> Result<StructEdit, ToolError> {
         if d.obj_pos(&k).is_none() {
             return not_found(&addr);
         }
+        if let Some(r) = read_only(&d, &addr) {
+            return r;
+        }
         match d.edit(&k) {
             EditMode::Never => {
                 return refuse(
@@ -856,6 +889,9 @@ fn parse_object_visibility(args: &[String]) -> Result<StructEdit, ToolError> {
             if d.obj_pos(&k).is_none() {
                 return not_found(&addr);
             }
+            if let Some(r) = read_only(&d, &addr) {
+                return r;
+            }
             if d.edit(&k) == EditMode::Never {
                 return refuse(
                     "blend_not_editable",
@@ -863,6 +899,20 @@ fn parse_object_visibility(args: &[String]) -> Result<StructEdit, ToolError> {
                     &format!("object show {addr}"),
                     &addr,
                 );
+            }
+            // one rule per object: any animated bit refuses the call, whichever bits it sets
+            if let Some(bits) = d.of_(&k, f::VISANIM).filter(|b| !b.is_empty()) {
+                if !mutant::active("LiveAnimatedBitFlipped") {
+                    return refuse(
+                        "blend_driven",
+                        &format!(
+                            "its visibility is animated ({bits}): the app would recompute it on load, and live any animated bit refuses the call"
+                        ),
+                        &format!("object show {addr}"),
+                        &addr,
+                    )
+                    .map(|o| o.detail("channel", bits));
+                }
             }
             let mut ops = Vec::new();
             let mut now = Vec::new();
@@ -907,6 +957,9 @@ fn parse_object_rename(args: &[String]) -> Result<StructEdit, ToolError> {
         let d = Doc::at(ctx);
         if d.obj_pos(&k).is_none() {
             return not_found(&addr);
+        }
+        if let Some(r) = read_only(&d, &addr) {
+            return r;
         }
         if d.edit(&k) == EditMode::Never {
             return refuse(

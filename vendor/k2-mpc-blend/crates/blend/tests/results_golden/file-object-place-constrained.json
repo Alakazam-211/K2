@@ -1,0 +1,18 @@
+{
+  "verb": "object place",
+  "data_spec": "blend.file.object-place/1",
+  "data": {
+    "object": "@ob:Held",
+    "location": [1, 2, 3],
+    "rotation": null,
+    "scale": null,
+    "warnings": [
+      {
+        "code": "blend_constrained",
+        "object": "@ob:Held",
+        "kinds": ["bTrackToConstraint", "bChildOfConstraint"],
+        "text": "note: @ob:Held's transform is written, and its constraints (bTrackToConstraint, bChildOfConstraint) decide where the program shows it: the placement shown may not move (blend_constrained)"
+      }
+    ]
+  }
+}

@@ -324,41 +324,55 @@ pub fn mesh_hash(vertices: u32, triangles: u32, data: &[u8]) -> String {
     hex(d.finish().as_bytes())
 }
 
+/// One mesh as the header lists it: its counts and its content hash ([`mesh_hash`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeshHead {
+    /// Its vertices.
+    pub vertices: u64,
+    /// Its triangles.
+    pub triangles: u64,
+    /// Its content hash, [`HASH_HEX`] lowercase hex digits.
+    pub hash: String,
+}
+
 /// `scene` as K2SCENE1, under `limits`; or a typed refusal, with nothing written.
 pub fn write(scene: &Scene, limits: &MeshReadLimits) -> Result<Vec<u8>, MeshReadError> {
     write_hashed(scene, limits).map(|(out, _)| out)
 }
 
-/// [`write`](fn@write), and each mesh's content hash, in the meshes' order.
-pub fn write_hashed(
-    scene: &Scene,
+/// The checks a K2SCENE1 passes before its header is laid out: the counts of meshes
+/// (`counts`, each mesh's vertices and triangles), objects and cameras; the vertices and
+/// triangles stored and drawn; each object's and camera's own rules.
+fn check_parts(
+    counts: &[(u64, u64)],
+    objects: &[SceneObject],
+    cameras: &[SceneCamera],
     limits: &MeshReadLimits,
-) -> Result<(Vec<u8>, Vec<String>), MeshReadError> {
+) -> Result<(), MeshReadError> {
     let n = |v: usize| v as u64;
-    at_most("meshes", n(scene.meshes.len()), limits.max_meshes)?;
-    at_most("objects", n(scene.objects.len()), limits.max_objects)?;
-    at_most("cameras", n(scene.cameras.len()), limits.max_cameras)?;
+    at_most("meshes", n(counts.len()), limits.max_meshes)?;
+    at_most("objects", n(objects.len()), limits.max_objects)?;
+    at_most("cameras", n(cameras.len()), limits.max_cameras)?;
     let (mut verts, mut tris) = (0u64, 0u64);
-    for m in &scene.meshes {
+    for &(v, t) in counts {
         let u = u64::from(u32::MAX);
-        verts += at_most("vertices of a mesh", n(m.positions.len()), u)?;
-        tris += at_most("triangles of a mesh", n(m.triangles.len()), u)?;
+        verts += at_most("vertices of a mesh", v, u)?;
+        tris += at_most("triangles of a mesh", t, u)?;
     }
     at_most("vertices", verts, limits.max_vertices)?;
     at_most("triangles", tris, limits.max_triangles)?;
     let (mut drawn_v, mut drawn_t) = (0u64, 0u64);
-    for o in &scene.objects {
-        let m = scene
-            .meshes
+    for o in objects {
+        let &(v, t) = counts
             .get(o.mesh as usize)
             .ok_or(invalid("an object names no mesh"))?;
-        drawn_v += n(m.positions.len());
-        drawn_t += n(m.triangles.len());
+        drawn_v += v;
+        drawn_t += t;
     }
     at_most("drawn vertices", drawn_v, limits.max_drawn_vertices)?;
     at_most("drawn triangles", drawn_t, limits.max_drawn_triangles)?;
     let mut keys = std::collections::HashSet::new();
-    for o in &scene.objects {
+    for o in objects {
         if o.id.len() > MAX_ID_BYTES {
             return Err(invalid("an object's id is too long"));
         }
@@ -382,7 +396,7 @@ pub fn write_hashed(
     }
     let mut active = false;
     let mut keys = std::collections::HashSet::new();
-    for c in &scene.cameras {
+    for c in cameras {
         check_camera(c)?;
         if address_num(&c.key, "@cam:").is_none() {
             return Err(invalid("a camera's key isn't @cam:N"));
@@ -397,41 +411,46 @@ pub fn write_hashed(
             active = true;
         }
     }
-    for m in &scene.meshes {
-        if !m.positions.iter().all(|p| finite(p)) {
-            return Err(invalid("a position isn't finite"));
-        }
-        let nv = n(m.positions.len());
-        if m.triangles.iter().flatten().any(|&i| u64::from(i) >= nv) {
-            return Err(invalid("an index is past its mesh's vertices"));
-        }
-    }
+    Ok(())
+}
 
+/// The header's JSON under its cap, and where each mesh's hash starts in it: each mesh of
+/// `meshes` (its vertices, its triangles, its hash) with its hash as given, or zeros in its
+/// place when it has none yet (filled once the data is written).
+fn header_json(
+    meshes: &[(u64, u64, Option<&str>)],
+    objects: &[SceneObject],
+    cameras: &[SceneCamera],
+    left: &[LeftOut],
+    limits: &MeshReadLimits,
+) -> Result<(String, Vec<usize>), MeshReadError> {
     let mut h = Header {
         s: String::new(),
         max: limits.max_header_bytes,
     };
-    let mut hash_at: Vec<usize> = Vec::with_capacity(scene.meshes.len());
+    let mut hash_at: Vec<usize> = Vec::with_capacity(meshes.len());
     let _ = write!(h.s, "{{\"version\":{VERSION},\"up\":\"z\",\"meshes\":[");
-    for (i, m) in scene.meshes.iter().enumerate() {
-        let mut t = m.triangles.len();
+    for (i, &(v, t, hash)) in meshes.iter().enumerate() {
+        let mut t = t;
         if i == 0 && mutant::active("HeaderCountOff") {
             t += 1;
         }
         let sep = if i > 0 { "," } else { "" };
         let _ = write!(
             h.s,
-            "{sep}{{\"vertices\":{},\"triangles\":{t},\"normals\":false,\"hash\":\"",
-            m.positions.len()
+            "{sep}{{\"vertices\":{v},\"triangles\":{t},\"normals\":false,\"hash\":\""
         );
-        // a place for the hash, filled once the data is written
         hash_at.push(h.s.len());
-        h.s.push_str(&"0".repeat(HASH_HEX));
+        match hash {
+            Some(x) => h.s.push_str(x),
+            // a place for the hash, filled once the data is written
+            None => h.s.push_str(&"0".repeat(HASH_HEX)),
+        }
         h.raw("\"}");
         h.capped()?;
     }
     h.raw("],\"objects\":[");
-    for (i, o) in scene.objects.iter().enumerate() {
+    for (i, o) in objects.iter().enumerate() {
         if i > 0 {
             h.raw(",");
         }
@@ -475,7 +494,7 @@ pub fn write_hashed(
         h.capped()?;
     }
     h.raw("],\"cameras\":[");
-    for (i, c) in scene.cameras.iter().enumerate() {
+    for (i, c) in cameras.iter().enumerate() {
         if i > 0 {
             h.raw(",");
         }
@@ -525,9 +544,9 @@ pub fn write_hashed(
         h.capped()?;
     }
     h.raw("]");
-    if !scene.cameras_left_out.is_empty() {
+    if !left.is_empty() {
         h.raw(",\"cameras_left_out\":[");
-        for (i, l) in scene.cameras_left_out.iter().enumerate() {
+        for (i, l) in left.iter().enumerate() {
             if l.name.len() > MAX_ID_BYTES || l.reason.len() > MAX_ID_BYTES {
                 return Err(invalid("a left-out camera's name or reason is too long"));
             }
@@ -549,15 +568,51 @@ pub fn write_hashed(
     }
     h.raw("}");
     h.capped()?;
+    Ok((h.s, hash_at))
+}
 
-    let hlen = at_most("header bytes", h.s.len() as u64, u64::from(u32::MAX))?;
+/// The header's length as written, and where the data section starts: the magic, the length
+/// and the header, padded with zeros to a 4-byte boundary; the whole output checked against
+/// [`MeshReadLimits::max_output_bytes`] with `data` bytes of data after it.
+fn layout(header: &str, data: u64, limits: &MeshReadLimits) -> Result<(u32, u64), MeshReadError> {
+    let hlen = at_most("header bytes", header.len() as u64, u64::from(u32::MAX))?;
     let off = align4(PREFIX + hlen);
-    let data: u64 = scene
+    at_most("output bytes", off + data, limits.max_output_bytes)?;
+    Ok((hlen as u32, off))
+}
+
+/// [`write`](fn@write), and each mesh's content hash, in the meshes' order.
+pub fn write_hashed(
+    scene: &Scene,
+    limits: &MeshReadLimits,
+) -> Result<(Vec<u8>, Vec<String>), MeshReadError> {
+    let n = |v: usize| v as u64;
+    let counts: Vec<(u64, u64)> = scene
         .meshes
         .iter()
-        .map(|m| data_len(n(m.positions.len()), n(m.triangles.len())))
-        .sum();
-    let total = at_most("output bytes", off + data, limits.max_output_bytes)?;
+        .map(|m| (n(m.positions.len()), n(m.triangles.len())))
+        .collect();
+    check_parts(&counts, &scene.objects, &scene.cameras, limits)?;
+    for m in &scene.meshes {
+        if !m.positions.iter().all(|p| finite(p)) {
+            return Err(invalid("a position isn't finite"));
+        }
+        let nv = n(m.positions.len());
+        if m.triangles.iter().flatten().any(|&i| u64::from(i) >= nv) {
+            return Err(invalid("an index is past its mesh's vertices"));
+        }
+    }
+    let heads: Vec<(u64, u64, Option<&str>)> = counts.iter().map(|&(v, t)| (v, t, None)).collect();
+    let (h, hash_at) = header_json(
+        &heads,
+        &scene.objects,
+        &scene.cameras,
+        &scene.cameras_left_out,
+        limits,
+    )?;
+    let data: u64 = counts.iter().map(|&(v, t)| data_len(v, t)).sum();
+    let (hlen, off) = layout(&h, data, limits)?;
+    let total = off + data;
     let total_usize = usize::try_from(total).map_err(|_| MeshReadError::TooLarge {
         what: "output bytes",
         got: total,
@@ -565,8 +620,8 @@ pub fn write_hashed(
     })?;
     let mut out = Vec::with_capacity(total_usize);
     out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&(hlen as u32).to_le_bytes());
-    out.extend_from_slice(h.s.as_bytes());
+    out.extend_from_slice(&hlen.to_le_bytes());
+    out.extend_from_slice(h.as_bytes());
     out.resize(off as usize, 0);
     let mut spans = Vec::with_capacity(scene.meshes.len());
     for m in &scene.meshes {
@@ -600,4 +655,48 @@ pub fn write_hashed(
         hashes.push(hash);
     }
     Ok((out, hashes))
+}
+
+/// The first part of a K2SCENE1 whose data section (`data` bytes) is already written: the
+/// magic, the header's length, the header and its zero pad, for `meshes` (counts and hashes,
+/// in the data's order), `objects`, `cameras` and `left`. The same checks and the same header
+/// text as [`write_hashed`], so this part followed by that data section is the K2SCENE1
+/// [`write_hashed`] gives for the same scene; or a typed refusal, with nothing written.
+pub fn write_header(
+    meshes: &[MeshHead],
+    objects: &[SceneObject],
+    cameras: &[SceneCamera],
+    left: &[LeftOut],
+    data: u64,
+    limits: &MeshReadLimits,
+) -> Result<Vec<u8>, MeshReadError> {
+    let counts: Vec<(u64, u64)> = meshes.iter().map(|m| (m.vertices, m.triangles)).collect();
+    check_parts(&counts, objects, cameras, limits)?;
+    if meshes.iter().any(|m| {
+        m.hash.len() != HASH_HEX
+            || !m
+                .hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        return Err(invalid("a mesh's hash isn't 64 lowercase hex digits"));
+    }
+    let given: u64 = counts.iter().map(|&(v, t)| data_len(v, t)).sum();
+    if given != data {
+        return Err(invalid(
+            "the data section's length isn't the one its meshes' counts give",
+        ));
+    }
+    let heads: Vec<(u64, u64, Option<&str>)> = meshes
+        .iter()
+        .map(|m| (m.vertices, m.triangles, Some(m.hash.as_str())))
+        .collect();
+    let (h, _) = header_json(&heads, objects, cameras, left, limits)?;
+    let (hlen, off) = layout(&h, data, limits)?;
+    let mut out = Vec::with_capacity(off as usize);
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&hlen.to_le_bytes());
+    out.extend_from_slice(h.as_bytes());
+    out.resize(off as usize, 0);
+    Ok(out)
 }

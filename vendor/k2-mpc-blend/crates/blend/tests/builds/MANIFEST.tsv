@@ -1,0 +1,27 @@
+# The program's own builds of the pack's test scenes: the pack's own test data, under its licence
+# (MIT OR Apache-2.0). Each scene was built from scene-spec.json (this folder), then saved by the
+# program's release named in the first column and reopened by it to write values.tsv: its report of
+# every object of these files (25 columns; tests/roundtrip.rs describes them). The tests check each
+# file's sha256 against this list before reading it.
+# release	file	bytes	sha256
+-	scene-spec.json	46466	b4d25d7390ae95bad5c59fa60ad4b09d47f5e0b464c0612997065d479359ae68
+saved by the program's release 5.2.4	5.2.4/camera_fits_tall.blend	323128	4f236014894b4d4bc79b17a6224065d9b446e2a03a21091e40432f5422f44c58
+saved by the program's release 5.2.4	5.2.4/camera_fits_wide.blend	323128	bab3384aaaae41fd4f9bc0e7511592cee8fff277db61f24f602e5e9564193ac3
+saved by the program's release 5.2.4	5.2.4/driven_quat.blend	316665	36916e83cec12b0190752c3129e94c70c6a4ca6f276cd1449edaf485e8e6aa3a
+saved by the program's release 5.2.4	5.2.4/empty_scene.blend	307278	5e64cdaed66a01467c4a8556391ada82d23a1ec97eda3e02cc7ced324cc94660
+saved by the program's release 5.2.4	5.2.4/instanced.blend	322178	0750b58f8ef808701f0704423bc167b55be111ffe37e21c6984eb38bd21cf66f
+saved by the program's release 5.2.4	5.2.4/living_room_hidden.blend	415569	0805131210808ba317fdaeb12a84652a9a29f65f4ebc1d894748abdbe8e39a0c
+saved by the program's release 5.2.4	5.2.4/living_room.blend	415569	945807b0981bd7bdfff605f2004223ca752ac0a4a1faaa959fe76a058015a775
+saved by the program's release 5.2.4	5.2.4/plants.blend	301246	a6a2bd3050dc3a2da83d9b6ffdd0cfe9b4c2fb6631d3aecb11187ed774ea7e61
+saved by the program's release 5.2.4	5.2.4/three_cameras.blend	329160	7e6ebdf70908139888905c7af56ef627c5595026881eaf2b25f19f80db133e20
+reported by the program's release 5.2.4	5.2.4/values.tsv	34243	383785a9026d8848148f12d818547fc5d2671112c40fb0a69410fcacc3c0d0e5
+saved by the program's release 5.3.0	5.3.0/camera_fits_tall.blend	326720	afd3dcf2717fffb9eafab237279375119dbf458db90661647bf3349a308ecb5c
+saved by the program's release 5.3.0	5.3.0/camera_fits_wide.blend	326720	140250f849a19deb76c346cb4a01c1ad4ba1cfb8745d8e83382aff3fbdaa2c60
+saved by the program's release 5.3.0	5.3.0/driven_quat.blend	320257	310849dc318cdb2ea0fc78e50757cc34718605780bcb0f99221b74229d5deec2
+saved by the program's release 5.3.0	5.3.0/empty_scene.blend	310854	6be3ddff24d04351329e5c17fef3a1f0ad4f5c7fdd357cfd022098f1dcf04bc8
+saved by the program's release 5.3.0	5.3.0/instanced.blend	325786	5e53c7dabe8fa74a130ee61f946d497cc46483d4817e278ce5759f958edef1a4
+saved by the program's release 5.3.0	5.3.0/living_room_hidden.blend	419337	34eb14f47fb5afa87cda84e0e9011caf18039a7d42233f0e6a7d37b7841b3ad5
+saved by the program's release 5.3.0	5.3.0/living_room.blend	419337	6eb0f3d7f45925f799e758da4b1fb25aa32406a44b6879057e495bde2744beb6
+saved by the program's release 5.3.0	5.3.0/plants.blend	304814	30b76e32c39e49e47d4a57174c68e19474bce013d6224bfeeae53e2ab2aa3f1c
+saved by the program's release 5.3.0	5.3.0/three_cameras.blend	332760	e1872aec1699057340ba80b78a0c6260dc9433ad1209f1e59148b3c03d44b7e3
+reported by the program's release 5.3.0	5.3.0/values.tsv	34243	383785a9026d8848148f12d818547fc5d2671112c40fb0a69410fcacc3c0d0e5

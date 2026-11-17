@@ -17,6 +17,8 @@ use k2_mpc_blend::{
     ReadLimits, SceneModel,
 };
 
+mod scenes_support;
+
 const MANIFEST: &str = include_str!("corpus/manifest.tsv");
 const EXPECTED: &str = include_str!("corpus/expected.tsv");
 
@@ -175,4 +177,63 @@ fn every_public_file_reads_as_the_checker_says() {
         "rows for files not in the manifest: {:?}",
         expected.keys()
     );
+}
+
+/// The rule the generated files follow, in the program's own saves: from 3.06 (the first
+/// version with collections in the corpus) every embedded ID (a scene's master collection, a
+/// node tree inside another data-block) carries the embedded flag, one master collection per
+/// scene.
+#[test]
+#[ignore = "the public corpus: scripts/public-corpus.sh runs it"]
+fn public_corpus_embedded_ids_carry_the_embedded_flag() {
+    let dir = std::env::var_os("BLEND_PUBLIC_CORPUS")
+        .map(PathBuf::from)
+        .expect("BLEND_PUBLIC_CORPUS: the public corpus's folder (scripts/fetch-corpus.sh)");
+    let mut checked = 0;
+    for name in names() {
+        let bytes = std::fs::read(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let f = scenes_support::embedded_ids(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        if f.version < 306 {
+            continue;
+        }
+        if let Err(e) = scenes_support::check_embedded(name, &f.ids, f.scenes) {
+            panic!("{e}");
+        }
+        let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
+        for e in &f.ids {
+            *kinds.entry(e.struct_name.as_str()).or_default() += 1;
+        }
+        println!(
+            "{name} ({}): {} scenes, {} embedded IDs {kinds:?}, each flagged",
+            f.version,
+            f.scenes,
+            f.ids.len()
+        );
+        checked += 1;
+    }
+    assert!(checked >= 6, "files from 3.06 on: {checked}");
+}
+
+/// What the generated files hold beyond the scene graph, in the program's own saves: every scene
+/// from 3.06 on has tool settings, the render views `left` and `right`, one view layer whose
+/// layer collections mirror its master collection and children, and a base for every object it
+/// holds.
+#[test]
+#[ignore = "the public corpus: scripts/public-corpus.sh runs it"]
+fn public_corpus_scenes_hold_view_layers_tool_settings_and_render_views() {
+    let dir = std::env::var_os("BLEND_PUBLIC_CORPUS")
+        .map(PathBuf::from)
+        .expect("BLEND_PUBLIC_CORPUS: the public corpus's folder (scripts/fetch-corpus.sh)");
+    let mut checked = 0;
+    for name in names() {
+        let bytes = std::fs::read(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let f = scenes_support::embedded_ids(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        if f.version < 306 {
+            continue;
+        }
+        let c = scenes_support::saved_structs(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        println!("{name} ({}): {c:?}", f.version);
+        checked += 1;
+    }
+    assert!(checked >= 6, "files from 3.06 on: {checked}");
 }

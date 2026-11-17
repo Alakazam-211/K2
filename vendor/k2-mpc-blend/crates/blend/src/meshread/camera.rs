@@ -12,7 +12,8 @@
 //!   `2 atan(sx / (2 L))` (the sensor's width spans the larger side, the height). It must lie in
 //!   (0, pi) (`camera_bad_fov`).
 //! - **The sensor fit's values** are `0` auto, `1` horizontal, `2` vertical (`PROVENANCE.md`,
-//!   "Cameras": only `0` is seen in the sample files); any other is `camera_sensor_fit_unknown`.
+//!   "Cameras": pinned by the program's own field of view for a camera in each fit); any other
+//!   is `camera_sensor_fit_unknown`.
 //!   Only perspective cameras (`type` 0) are written (`camera_not_perspective`).
 //!
 //! **Deterministic:** `f64` with a fixed order of operations, `sqrt` (correctly rounded), and

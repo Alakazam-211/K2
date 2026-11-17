@@ -102,6 +102,11 @@ fn world_matrices_are_composed() {
 }
 
 #[test]
+fn world_matrices_equal_an_independent_composition() {
+    run(rows::row_world_composed());
+}
+
+#[test]
 fn objects_left_out_are_named_with_reasons() {
     run(rows::row_left_out());
 }

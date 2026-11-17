@@ -44,11 +44,24 @@ impl ReadLimits {
     }
 }
 
+/// The reader's default cap on the bytes after decompression (4 GiB). The reader streams, so its
+/// memory stays bounded at any cap; this one bounds the decoding a small compressed file can
+/// cost. It is above every whole-file cap the pack uses (the live tier's 512 MiB), and the
+/// streaming index's default ([`crate::pack::INDEX_MAX_RAW_BYTES`] is this value). A host that
+/// reads larger files passes its own [`ReadLimits`].
+pub const DEFAULT_MAX_RAW_BYTES: u64 = 4 << 30;
+
 impl Default for ReadLimits {
-    /// 64 GiB of file, 4 million blocks, 256 MiB kept, data blocks up to 64 KiB kept, a schema up
-    /// to 16 MiB, zstd windows up to 64 MiB.
+    /// [`DEFAULT_MAX_RAW_BYTES`] (4 GiB) after decompression, 4 million blocks, 256 MiB kept, data
+    /// blocks up to 64 KiB kept, a schema up to 16 MiB, zstd windows up to 64 MiB.
     fn default() -> Self {
-        Self::new(64 << 30, 4_000_000, 256 << 20, 64 << 10, 16 << 20, 64 << 20)
+        let raw = if crate::mutant::active("ReadDefaultUnbounded") {
+            // planted: the raw cap at 64 GiB, a minute or more of decoding per hostile file
+            64 << 30
+        } else {
+            DEFAULT_MAX_RAW_BYTES
+        };
+        Self::new(raw, 4_000_000, 256 << 20, 64 << 10, 16 << 20, 64 << 20)
     }
 }
 

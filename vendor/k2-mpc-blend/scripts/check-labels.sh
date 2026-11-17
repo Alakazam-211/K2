@@ -17,7 +17,8 @@
 # commit may be named when scripts/commit-refs-allow.txt lists it (one hash per line, `#`
 # comments; that file isn't read for refs). scripts/test-check-labels.sh is the self-test.
 #
-#   scripts/check-labels.sh [ROOT]     exit 0 clean, 1 findings (each `check-labels: PATH:LINE: KIND`)
+#   scripts/check-labels.sh [ROOT]     exit 0 clean, 1 findings (each `check-labels: PATH:LINE: KIND`),
+#                                      2 no files read (fail closed)
 set -eu
 export LC_ALL=C
 cd "${1:-$(dirname "$0")/..}"
@@ -43,8 +44,20 @@ finding label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])F[0-9][0-9]?([^A-Za-z0-9_:'"'"'"]|: 
 run label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])V([0-79]|[1-9][0-9])([^A-Za-z0-9_:'"'"'"]|: |$)'
 # This repo's own plan labels (KIND=regex lines, or empty).
 PACK_LABELS='plan label=(^|[^A-Za-z0-9_])(B([0-9]|10)b?|Q-B[0-9]+|M[12]|S1)([^A-Za-z0-9_]|$)'
-OUT=$(mktemp); trap 'rm -f "$OUT"' EXIT
-git ls-files | grep -v -e '^scripts/check-labels\.sh$' -e "^$ALLOW\$" | while IFS= read -r f; do
+OUT=$(mktemp); LIST=$(mktemp); trap 'rm -f "$OUT" "$LIST"' EXIT
+# The files: `git ls-files` in a git checkout, else every file under ROOT (a node job's copy);
+# none at all fails closed, so a check that read nothing never passes.
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git ls-files > "$LIST"
+else
+  find . -type f ! -path './target/*' ! -path './.git/*' | sed 's|^\./||' > "$LIST"
+fi
+FILES=$(grep -c . "$LIST" || true)
+if [ "${FILES:-0}" -eq 0 ]; then
+  echo "check-labels: no files to read under $(pwd) (fail closed)" >&2
+  exit 2
+fi
+grep -v -e '^scripts/check-labels\.sh$' -e "^$ALLOW\$" "$LIST" | while IFS= read -r f; do
   [ -f "$f" ] && grep -Iq . "$f" 2>/dev/null && printf '%s\n' "$f"
 done | PATS="$LABEL_PATTERNS
 $PACK_LABELS" PROSE="$PROSE_PATTERNS" ALLOW="$ALLOW" awk '
@@ -83,4 +96,4 @@ $PACK_LABELS" PROSE="$PROSE_PATTERNS" ALLOW="$ALLOW" awk '
     }
     close(file) }' > "$OUT"
 if [ -s "$OUT" ]; then cat "$OUT"; echo "check-labels: $(wc -l < "$OUT" | tr -d ' ') finding(s)" >&2; exit 1; fi
-echo "check-labels: clean ($(git ls-files | wc -l | tr -d ' ') files)"
+echo "check-labels: clean ($FILES files)"

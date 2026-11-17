@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-blend"
-version = "0.1.0"
+version = "0.3.0"
 description = "Reads BLEND scene files: a type pack for the multiplayer kit."
 edition.workspace = true
 rust-version.workspace = true
@@ -20,7 +20,7 @@ mutants = []
 [dependencies]
 # The kit (k2-mpc-base), by path: its checkout sits beside this repo's (a host vendors both side
 # by side: vendor/k2-mpc-base beside vendor/k2-mpc-blend), at the kit release CHANGELOG.md
-# names (v0.21.0: results as data, their shape named, and a pack's registered refusals). Run
+# names (v0.22.0: the pack's edit check, a read that survives a failed render). Run
 # `cargo update -p k2-mpc-base` and commit the lock when it moves.
 k2-mpc-base = { path = "../../../k2-mpc-base/crates/base" }
 # The same major as the kit's, so a host gets one copy. MIT OR Apache-2.0.

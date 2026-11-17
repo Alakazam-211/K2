@@ -10,14 +10,19 @@
 k2-mpc-blend|lib|k2_mpc_blend||check
 k2-mpc-blend|doctest|k2_mpc_blend||excluded: the crate's docs hold no runnable example
 k2-mpc-blend|example|blend_patch||built-only:check: test tooling for the headless round trip (PROVENANCE.md)
+k2-mpc-blend|example|blend_live_edit||built-only:check: test tooling for the headless round trip's live write-backs (PROVENANCE.md); tests/newer.rs runs its function
 k2-mpc-blend|example|blend_scenes||built-only:check: writes the test scenes to a folder
 k2-mpc-blend|example|fuzz_seeds||built-only:check: writes the fuzz targets' seed files
 k2-mpc-blend|feature|fuzzing||check
 k2-mpc-blend|feature|mutants||check
 k2-mpc-blend|feature|testgen||check
+k2-mpc-blend|test|builds||check
+k2-mpc-blend|test|cached_flags||check
+k2-mpc-blend|test|check_edit||check
 k2-mpc-blend|test|corpus||check
 k2-mpc-blend|test|corpus_mesh||check
 k2-mpc-blend|test|corpus_place||check
+k2-mpc-blend|test|edit_hook||check
 k2-mpc-blend|test|fuzz_seeds||check
 k2-mpc-blend|test|kit_view||check
 k2-mpc-blend|test|live||check
@@ -25,6 +30,7 @@ k2-mpc-blend|test|live_scale||check
 k2-mpc-blend|test|live_storage||check
 k2-mpc-blend|test|matrix||check
 k2-mpc-blend|test|merge||check
+k2-mpc-blend|test|newer||check
 k2-mpc-blend|test|meshread||check
 k2-mpc-blend|test|meshread_scale||check
 k2-mpc-blend|test|outside_save||check
@@ -33,13 +39,17 @@ k2-mpc-blend|test|pack_session||check
 k2-mpc-blend|test|reader||check
 k2-mpc-blend|test|reader_memory||check
 k2-mpc-blend|test|results||check
+k2-mpc-blend|test|reuse||check
+k2-mpc-blend|test|reuse_memory||check
 k2-mpc-blend|test|roundtrip||check,roundtrip
+k2-mpc-blend|test|save_after_writeback||check
 k2-mpc-blend|test|saved||check
 k2-mpc-blend|test|scene||check
 k2-mpc-blend|test|scenes||check
 k2-mpc-blend|test|verbs||check
 k2-mpc-blend|test|watch_turn||check
 k2-mpc-blend|test|write||check
+k2-mpc-blend|test|write_driven||check
 k2-mpc-blend|test|zstd_bomb||check
 k2-mpc-blend|test|mutants|mutants|check
 

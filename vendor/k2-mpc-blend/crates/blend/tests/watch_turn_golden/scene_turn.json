@@ -85,7 +85,8 @@
                 "data": "meta",
                 "parent": "meta",
                 "rotmode": "meta",
-                "edit": "meta"
+                "edit": "meta",
+                "visanim": "meta"
               },
               "derived": {
                 "containers": [],
@@ -652,6 +653,12 @@
             "keys": ["@obj:3"]
           },
           "client": 2
+        },
+        {
+          "kind": "view_address",
+          "who": "atlas",
+          "view_address": "@obj:3",
+          "client": 2
         }
       ]
     },
@@ -737,6 +744,12 @@
             "root": "objs",
             "keys": ["@obj:5"]
           },
+          "client": 2
+        },
+        {
+          "kind": "view_address",
+          "who": "atlas",
+          "view_address": "@obj:5",
           "client": 2
         }
       ]

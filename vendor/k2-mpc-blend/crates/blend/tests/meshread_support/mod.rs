@@ -2379,3 +2379,174 @@ pub fn row_hidden_by_vectors() -> Row {
     );
     Ok(())
 }
+
+// ---------- world matrices composed in the test alone ----------
+
+/// `a * b`, column-major 4x4, in `f64`.
+fn mul64(a: &[f64; 16], b: &[f64; 16]) -> [f64; 16] {
+    let mut out = [0.0; 16];
+    for col in 0..4 {
+        for row in 0..4 {
+            out[col * 4 + row] = (0..4).map(|k| a[k * 4 + row] * b[col * 4 + k]).sum();
+        }
+    }
+    out
+}
+
+const IDENTITY64: [f64; 16] = [
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+];
+
+/// A rotation of `angle` radians about axis `axis` (0 x, 1 y, 2 z), column-major.
+fn about(axis: usize, angle: f64) -> [f64; 16] {
+    let (sn, cs) = angle.sin_cos();
+    let mut m = IDENTITY64;
+    let (i, j) = ((axis + 1) % 3, (axis + 2) % 3);
+    m[i * 4 + i] = cs;
+    m[i * 4 + j] = sn;
+    m[j * 4 + i] = -sn;
+    m[j * 4 + j] = cs;
+    m
+}
+
+/// The rotation of a unit quaternion `w, x, y, z`, column-major.
+fn quat64(q: [f32; 4]) -> [f64; 16] {
+    let [w, x, y, z] = q.map(f64::from);
+    let mut m = IDENTITY64;
+    m[0] = 1.0 - 2.0 * (y * y + z * z);
+    m[1] = 2.0 * (x * y + w * z);
+    m[2] = 2.0 * (x * z - w * y);
+    m[4] = 2.0 * (x * y - w * z);
+    m[5] = 1.0 - 2.0 * (x * x + z * z);
+    m[6] = 2.0 * (y * z + w * x);
+    m[8] = 2.0 * (x * z + w * y);
+    m[9] = 2.0 * (y * z - w * x);
+    m[10] = 1.0 - 2.0 * (x * x + y * y);
+    m
+}
+
+/// One object of [`row_world_composed`]: name, parent, location, rotation mode (`rotmode`),
+/// Euler angles, quaternion, scale.
+type Posed = (
+    &'static str,
+    Option<&'static str>,
+    [f32; 3],
+    i16,
+    [f32; 3],
+    [f32; 4],
+    [f32; 3],
+);
+
+/// A chain `A` (XYZ) holding `B` (ZXY) holding `C` (a quaternion), and `D` (YZX) alone.
+const POSED: [Posed; 4] = [
+    (
+        "A",
+        None,
+        [1.0, 2.0, 3.0],
+        1,
+        [0.3, -0.7, 1.1],
+        [1.0, 0.0, 0.0, 0.0],
+        [1.0, 2.0, 0.5],
+    ),
+    (
+        "B",
+        Some("A"),
+        [0.5, -1.0, 0.25],
+        5,
+        [0.4, 0.9, -1.3],
+        [1.0, 0.0, 0.0, 0.0],
+        [0.5, 0.5, 2.0],
+    ),
+    (
+        "C",
+        Some("B"),
+        [-2.0, 0.0, 1.5],
+        0,
+        [0.0; 3],
+        [0.8, 0.2, -0.4, 0.4],
+        [1.5, 1.0, 1.0],
+    ),
+    (
+        "D",
+        None,
+        [4.0, -3.0, 0.0],
+        4,
+        [-0.6, 0.2, 2.4],
+        [1.0, 0.0, 0.0, 0.0],
+        [1.0, 1.0, 3.0],
+    ),
+];
+
+/// The world matrix of `name` composed in `f64` from [`POSED`], in this row alone: translation,
+/// then rotation (Euler in the order its mode names, the first letter applied first; or the
+/// quaternion), then scale, under the parent's (identity parent inverses).
+fn posed_world(name: &str) -> [f64; 16] {
+    let p = POSED.iter().find(|p| p.0 == name).expect("posed");
+    let (_, parent, loc, mode, rot, quat, scale) = *p;
+    let mut m = IDENTITY64;
+    m[12] = f64::from(loc[0]);
+    m[13] = f64::from(loc[1]);
+    m[14] = f64::from(loc[2]);
+    let order: &[usize] = match mode {
+        1 => &[0, 1, 2],
+        2 => &[0, 2, 1],
+        3 => &[1, 0, 2],
+        4 => &[1, 2, 0],
+        5 => &[2, 0, 1],
+        6 => &[2, 1, 0],
+        _ => &[],
+    };
+    if order.is_empty() {
+        m = mul64(&m, &quat64(quat));
+    }
+    for &axis in order.iter().rev() {
+        m = mul64(&m, &about(axis, f64::from(rot[axis])));
+    }
+    let mut s = IDENTITY64;
+    for k in 0..3 {
+        s[k * 4 + k] = f64::from(scale[k]);
+    }
+    m = mul64(&m, &s);
+    match parent {
+        Some(pn) => mul64(&posed_world(pn), &m),
+        None => m,
+    }
+}
+
+/// The mesh read's world matrices at 5.03 equal a composition in this row alone, in `f64`: Euler
+/// rotations in three orders (XYZ, ZXY, YZX), a quaternion, scales that differ by axis, and a
+/// two-level parent chain.
+pub fn row_world_composed() -> Row {
+    let row = "world composed";
+    let mut b = SceneBuilder::meshes(503, MeshLayouts::STORE);
+    b.file_global(Some("S"));
+    b.scene("S", &["A", "B", "C", "D"], &[], None);
+    for (name, parent, loc, mode, rot, quat, scale) in POSED {
+        b.object(
+            name,
+            &ObjectSpec {
+                parent: parent.map(str::to_owned),
+                loc,
+                rot,
+                quat,
+                scale,
+                rotmode: mode,
+                ..mesh_obj("Cube")
+            },
+        );
+    }
+    b.mesh_with("Cube", &cube_spec(), MeshLayouts::STORE);
+    let (_, c) = read_ok(row, &b.bytes())?;
+    let mut n = 0;
+    for o in &c.scene.objects {
+        let want = posed_world(&o.id);
+        for (i, (&a, &w)) in o.transform.iter().zip(&want).enumerate() {
+            let close = (f64::from(a) - w).abs() <= 1e-5 * f64::from(a).abs().max(w.abs()).max(1.0);
+            step(row, &o.id, close, format!("[{i}]: read {a}, composed {w}"))?;
+        }
+        n += 1;
+    }
+    step(row, "every object", n == POSED.len(), n)?;
+    println!("world composed: {n} objects");
+    Ok(())
+}

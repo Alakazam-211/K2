@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 pub mod rows;
+pub mod unchecked;
 pub mod view_rows;
 
 use std::fs;
@@ -286,6 +287,8 @@ pub struct Opts {
     /// `Set`, last in the file: `Axis` (an axis and angle), `Nudged` (a delta location) and
     /// `Boned` (parented to the cube other than to the object itself, `partype` 4).
     pub placed: bool,
+    /// The file version the scene is written at (4.03 by default).
+    pub version: u16,
 }
 
 impl Default for Opts {
@@ -299,6 +302,7 @@ impl Default for Opts {
             added_first: false,
             dup: false,
             placed: false,
+            version: 403,
         }
     }
 }
@@ -387,11 +391,11 @@ fn typed(spec: ObjectSpec) -> ObjectSpec {
 /// - `Loose`: in no collection (`c0`); `Far`: linked from `lib` (`edit` `0`).
 pub fn outliner(o: &Opts) -> Vec<u8> {
     let mut b = if o.placed {
-        let mut b = SceneBuilder::placed(403);
+        let mut b = SceneBuilder::placed(o.version);
         b.unit_scale = UNIT_SCALE;
         b
     } else {
-        SceneBuilder::animated(403)
+        SceneBuilder::animated(o.version)
     };
     b.shift = o.shift;
     let (cube, lamp) = (o.cube.as_str(), o.lamp.as_str());
@@ -551,6 +555,38 @@ pub fn outliner(o: &Opts) -> Vec<u8> {
 /// The outliner scene with its defaults.
 pub fn scene() -> Vec<u8> {
     outliner(&Opts::default())
+}
+
+/// Objects whose visibility bits are animated, at 4.03: `Blinking` (the action `AC:Walk`, which
+/// animates `hide_viewport`), `Ghost` (a driver of `hide_render`) and `Lost` (animation data
+/// naming NLA tracks the file doesn't hold: every bit counts as animated); `Mover` (a driver of
+/// its location x, its transform only) and `Plain` (nothing animated).
+pub fn blinking_scene() -> Vec<u8> {
+    let mut b = SceneBuilder::animated(403);
+    b.scene(
+        "Scene",
+        &["Blinking", "Ghost", "Lost", "Mover", "Plain"],
+        &[],
+        None,
+    );
+    for (name, x, driven) in [
+        ("Blinking", 1.0, Driven::Action),
+        ("Ghost", 2.0, Driven::Driver(("hide_render", 0))),
+        ("Lost", 3.0, Driven::Dangling),
+        ("Mover", 4.0, Driven::Driver(("location", 0))),
+        ("Plain", 5.0, Driven::None),
+    ] {
+        b.object(
+            name,
+            &euler(ObjectSpec {
+                loc: [x, 0.0, 0.0],
+                driven,
+                ..ObjectSpec::default()
+            }),
+        );
+    }
+    b.action_with(&[(1, &[("hide_viewport", 0)])]);
+    b.bytes()
 }
 
 /// A file with the placement fields of one scene per `(unit.system, unit.scale_length)`, each

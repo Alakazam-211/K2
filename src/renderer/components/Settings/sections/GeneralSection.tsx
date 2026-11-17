@@ -74,7 +74,7 @@ import { AppFontRows } from '../shared/AppFontRows'
 import { ChatLinkCopyRow } from './ChatLinkCopyRow'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
 import { PostalServerSwitch } from './PostalServerSwitch'
-import { K5CliBetaRow } from './K5CliBetaRow'
+import { K5_CLI_LABEL, K5CliBetaRow } from './K5CliBetaRow'
 import { YourAccountRow } from './YourAccountRow'
 import { OwnerTimezoneRow } from './OwnerTimezoneRow'
 import { GitToolsRow } from '@/components/GitTools/GitToolsNotice'
@@ -594,6 +594,9 @@ interface CliPathStatus {
 interface CliStatus {
   installed: boolean
   installedVersion: string | null
+  /** What runs there (k2_client::cli_install::CliKind): the shell script, or
+   *  the k5 program while the owner's "New k5 command (Beta)" has it. */
+  installedRuns?: 'script' | 'binary' | null
   bundledVersion: string | null
   updateAvailable: boolean
   packageManaged?: boolean
@@ -623,6 +626,14 @@ function tildePath(path: string, userBin: string | undefined): string {
   const home = userBin?.endsWith('/.local/bin') ? userBin.slice(0, -'/.local/bin'.length) : null
   if (home && (path === home || path.startsWith(`${home}/`))) return `~${path.slice(home.length)}`
   return path
+}
+
+/** What is installed: its version, and the k5 program when that is what
+ *  runs (a link to it is the program, never "stale"). */
+export function cliInstalledLine(status: Pick<CliStatus, 'installedVersion' | 'installedRuns'>): string {
+  const v = status.installedVersion || 'unknown'
+  if (status.installedRuns === 'binary') return `Version ${v} installed: the k5 program (${K5_CLI_LABEL}).`
+  return `Version ${v} installed.`
 }
 
 /** The sentence about new Terminal windows (the PATH line only reaches new ones). */
@@ -726,7 +737,7 @@ function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
     if (readError) return `${lead} Couldn't tell whether it's installed.`
     if (!status) return `${lead} Checking…`
     if (!status.installed) return `${lead} Not installed.`
-    const v = `Version ${status.installedVersion || 'unknown'} installed.`
+    const v = cliInstalledLine(status)
     const where = status.symlinkPath ? ` It's at ${tildePath(status.symlinkPath, userBin)}.` : ''
     const pathLine = cliPathSentence(status)
     const tail = `${where}${pathLine ? ` ${pathLine}` : ''}`

@@ -333,6 +333,13 @@ impl Choice {
             Choice::Script { .. } => None,
         }
     }
+
+    /// What a link should point at: the binary when the links run it, else
+    /// the bundled `script`. Settings judges a link against this, so a link
+    /// to the binary is current while the switch has it.
+    pub fn target<'a>(&'a self, script: &'a Path) -> &'a Path {
+        self.binary().unwrap_or(script)
+    }
 }
 
 /// The owner's switch (`k5CliBeta`) from `settings.json`.
@@ -1231,7 +1238,7 @@ impl Names {
     /// shim either way.
     #[cfg(unix)]
     pub fn heal_at(&self, home: &Path, input: &HealInput, runs: &Choice) -> Result<HealReport, String> {
-        let target = runs.binary().unwrap_or(input.cli);
+        let target = runs.target(input.cli);
         let binary = runs.binary().is_some();
         let bin = user_bin_dir(home);
         let mut swept = self.sweep_temp_links(&bin);
@@ -1409,6 +1416,49 @@ pub fn remove_our_links(dir: &Path, names: &[&str]) -> Result<Vec<PathBuf>, Stri
 }
 
 // ── Status (Settings) ───────────────────────────────────────────────────
+
+/// What an installed `k2` runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CliKind {
+    Script,
+    Binary,
+}
+
+/// What runs at an installed `k2`, and its version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledCli {
+    pub runs: CliKind,
+    pub version: Option<String>,
+}
+
+/// What runs at `path` (links followed), for Settings: the script and its
+/// `K2_CLI_VERSION` (or a pre-rename `K2SO_CLI_VERSION`), or the k5 binary
+/// and the version its mark carries (`want`, the bundled script's, when the
+/// binary carries it, else the first). Read, never run. `None` when it isn't
+/// the K2 CLI.
+pub fn installed_cli(path: &Path, want: Option<&str>) -> Option<InstalledCli> {
+    if is_k5_binary(path) {
+        let found = fs::read(path).map(|b| binary_versions(&b)).unwrap_or_default();
+        let version = match want {
+            Some(w) if found.iter().any(|v| v == w) => Some(w.to_string()),
+            _ => found.into_iter().next(),
+        };
+        return Some(InstalledCli { runs: CliKind::Binary, version });
+    }
+    if !is_k2_cli_script(path) {
+        return None;
+    }
+    let head = head_of(path)?;
+    let text = String::from_utf8_lossy(&head);
+    let version = text.lines().skip(1).take(40).find_map(|l| {
+        let v = l.strip_prefix("K2_CLI_VERSION=").or_else(|| l.strip_prefix("K2SO_CLI_VERSION="))?;
+        let v = v.trim().trim_matches('"');
+        (!v.is_empty()).then(|| v.to_string())
+    });
+    Some(InstalledCli { runs: CliKind::Script, version })
+}
 
 /// Where `k2` is and whether a new Terminal window will find it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -755,3 +755,62 @@ fn the_uninstall_removes_k2_s_k5_links_and_never_someone_else_s() {
     assert!(our_links_in(&sys, &UNINSTALL_NAMES).is_empty());
     assert!(sys.join("k5").is_dir());
 }
+
+// ── Status (Settings) ───────────────────────────────────────────────────
+
+/// K2's ruling (slice 10c(iii)): Settings shows a link to the binary as the
+/// binary with its version, not "stale". A link is judged against what the
+/// links should run (`Choice::target`), and `installed_cli` reads what runs
+/// there and its version from the file, never by running it.
+#[test]
+fn settings_shows_a_link_to_the_binary_as_the_binary_with_its_version() {
+    let home = TempHome::new();
+    let h = home.path();
+    let (cli, shim) = make_bundle(h, "Applications");
+    let binary = put_binary(h, "Applications", "0.46.11");
+    let k2 = user_bin_dir(h).join("k2");
+
+    // Off: the links run the script; it is current, a script of 0.46.11.
+    heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal off");
+    let runs = choice_for_script(switch_on(), &cli);
+    assert_eq!(runs.target(&cli), cli.as_path());
+    assert_eq!(link_state(&k2, runs.target(&cli)), LinkState::Current);
+    let script = InstalledCli { runs: CliKind::Script, version: Some("0.46.11".to_string()) };
+    assert_eq!(installed_cli(&k2, Some("0.46.11")), Some(script));
+
+    // On: k2 is a link to the binary. Against the choice it is current, and
+    // what runs is the binary, version 0.46.11.
+    switch(true);
+    heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal on");
+    let runs = choice_for_script(switch_on(), &cli);
+    assert_eq!(runs.target(&cli), binary.as_path());
+    assert_eq!(link_target(&k2), binary);
+    assert_eq!(link_state(&k2, runs.target(&cli)), LinkState::Current, "not stale");
+    let bin = InstalledCli { runs: CliKind::Binary, version: Some("0.46.11".to_string()) };
+    assert_eq!(installed_cli(&k2, Some("0.46.11")), Some(bin.clone()));
+    assert_eq!(installed_cli(&k5(h), None), Some(bin), "k5 too, the version from its mark");
+    assert_eq!(
+        serde_json::to_value(installed_cli(&k2, None).expect("installed")).expect("json"),
+        serde_json::json!({"runs": "binary", "version": "0.46.11"}),
+        "the shape the renderer reads"
+    );
+    // A link to the script left elsewhere is now the stale one.
+    let left = h.join("usr-local-bin-k2");
+    std::os::unix::fs::symlink(&cli, &left).unwrap();
+    assert_eq!(link_state(&left, runs.target(&cli)), LinkState::Stale { target: cli.clone() });
+
+    // A binary of another release: its own version, so Settings offers the
+    // update, and the heal goes back to the script.
+    fs::write(&binary, binary_body("0.46.10")).unwrap();
+    let old = InstalledCli { runs: CliKind::Binary, version: Some("0.46.10".to_string()) };
+    assert_eq!(installed_cli(&k2, Some("0.46.11")), Some(old));
+
+    // A pre-rename script reads its old marker; a GUI program named k2 is
+    // not the K2 CLI at all.
+    let legacy = h.join("legacy-k2");
+    fs::write(&legacy, "#!/bin/bash\nK2SO_CLI_VERSION=\"0.39.0\"\n").unwrap();
+    assert_eq!(installed_cli(&legacy, None), Some(InstalledCli { runs: CliKind::Script, version: Some("0.39.0".to_string()) }));
+    let gui = h.join("usr-bin-k2");
+    fs::write(&gui, b"\x7fELF\x02\x01\x01\x00 no mark").unwrap();
+    assert_eq!(installed_cli(&gui, None), None);
+}

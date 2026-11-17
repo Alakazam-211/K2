@@ -49,7 +49,7 @@ vi.mock('@/lib/git-tools', async (importOriginal) => {
 })
 vi.mock('./useNotifyPrefs', () => ({ threadPushAvailable: () => false }))
 
-import { GeneralSection } from './GeneralSection'
+import { cliInstalledLine, GeneralSection } from './GeneralSection'
 import { useSettingsStore } from '@/stores/settings'
 import { useUpdateStore } from '@/stores/update'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -199,6 +199,33 @@ describe('Settings → General', () => {
     await waitFor(() => expect(row('general.cli-version').textContent).toContain("It's at /usr/local/bin/k2. New Terminal windows find it."))
     expect(within(row('general.cli-version')).queryByRole('button', { name: 'Remove the PATH line' })).toBeNull()
     expect(within(row('general.cli-version')).queryByRole('button', { name: 'Add the PATH line' })).toBeNull()
+  })
+
+  // K2's ruling (slice 10c(iii)): with "New k5 command (Beta)" on, k2 is a
+  // link to the k5 program. The row shows the program and its version, and
+  // the link reads current (the status judges it against what the links
+  // run), so no "Also install" or update is offered.
+  it('a link to the k5 program shows as the program with its version, not stale', async () => {
+    tauri.cli = installedMac({ installedRuns: 'binary', systemLink: { state: 'current' } })
+    render(<GeneralSection />)
+    await waitFor(() =>
+      expect(row('general.cli-version').textContent).toContain(
+        "Version 0.46.11 installed: the k5 program (New k5 command (Beta)). It's at ~/.local/bin/k2.",
+      ),
+    )
+    expect(within(row('general.cli-version')).queryByRole('button', { name: 'Also install in /usr/local/bin' })).toBeNull()
+    expect(within(row('general.cli-version')).queryByRole('button', { name: /Update to/ })).toBeNull()
+  })
+
+  it('the installed line names the k5 program only when that is what runs', () => {
+    expect(cliInstalledLine({ installedVersion: '0.46.15', installedRuns: 'binary' })).toBe(
+      'Version 0.46.15 installed: the k5 program (New k5 command (Beta)).',
+    )
+    expect(cliInstalledLine({ installedVersion: '0.46.15', installedRuns: 'script' })).toBe('Version 0.46.15 installed.')
+    expect(cliInstalledLine({ installedVersion: '0.46.15' })).toBe('Version 0.46.15 installed.')
+    expect(cliInstalledLine({ installedVersion: null, installedRuns: 'binary' })).toBe(
+      'Version unknown installed: the k5 program (New k5 command (Beta)).',
+    )
   })
 
   it('a failed update names the failure and offers Try again and the release page', () => {

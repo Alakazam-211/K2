@@ -439,10 +439,12 @@ fn cli_install_status_now() -> Result<serde_json::Value, String> {
         let bundled_version = bundled.as_ref().and_then(|p| read_cli_version(p));
         let found = linux_installed_cli();
         let package_managed = found.as_ref().is_some_and(|p| k2_client::cli_copy::is_distro_package(p));
-        let installed_version = found.as_ref().and_then(|p| {
-            let actual = dunce::canonicalize(&p).unwrap_or_else(|_| p.clone());
-            read_cli_version(&actual)
-        });
+        // The script or the k5 binary (a link the daemon made while the
+        // switch is on), with its version.
+        let installed_cli = found
+            .as_ref()
+            .and_then(|p| k2_client::cli_install::installed_cli(p, bundled_version.as_deref()));
+        let installed_version = installed_cli.as_ref().and_then(|c| c.version.clone());
         let update_available = if package_managed {
             false
         } else {
@@ -456,6 +458,7 @@ fn cli_install_status_now() -> Result<serde_json::Value, String> {
             "bundledPath": bundled_path,
             "bundledVersion": bundled_version,
             "installedVersion": installed_version,
+            "installedRuns": installed_cli.map(|c| c.runs),
             "updateAvailable": update_available,
             "path": path_status(),
         }));
@@ -469,7 +472,13 @@ fn cli_install_status_now() -> Result<serde_json::Value, String> {
 
         let user_link_path = k2_client::paths::home_dir().map(|h| ci::user_bin_dir(&h).join("k2"));
         let system_link_path = Path::new(CLI_SYMLINK_PATH);
-        let state_of = |link: &Path| bundled.as_deref().map(|b| ci::link_state(link, b));
+        // A link is judged against what the links should run: the k5 binary
+        // while the owner's switch has it (then a link to it is current, not
+        // stale), else the bundled script.
+        let runs = bundled.as_deref().map(|b| ci::choice_for_script(ci::switch_on(), b));
+        let state_of = |link: &Path| {
+            bundled.as_deref().zip(runs.as_ref()).map(|(b, r)| ci::link_state(link, r.target(b)))
+        };
         let user_link = user_link_path.as_deref().and_then(state_of);
         let system_link = state_of(system_link_path);
         let path = path_status();
@@ -489,10 +498,8 @@ fn cli_install_status_now() -> Result<serde_json::Value, String> {
             .as_ref()
             .and_then(|p| fs::read_link(p).ok())
             .map(|p| p.to_string_lossy().to_string());
-        let installed_version = installed_at.as_ref().and_then(|p| {
-            let actual = dunce::canonicalize(p).unwrap_or_else(|_| p.clone());
-            read_cli_version(&actual)
-        });
+        let installed_cli = installed_at.as_ref().and_then(|p| ci::installed_cli(p, bundled_version.as_deref()));
+        let installed_version = installed_cli.as_ref().and_then(|c| c.version.clone());
         let update_available =
             version_is_newer(bundled_version.as_deref(), installed_version.as_deref());
 
@@ -507,6 +514,8 @@ fn cli_install_status_now() -> Result<serde_json::Value, String> {
             "bundledPath": bundled_path,
             "bundledVersion": bundled_version,
             "installedVersion": installed_version,
+            "installedRuns": installed_cli.map(|c| c.runs),
+            "runs": runs,
             "updateAvailable": update_available,
             "userLinkPath": user_link_path.as_ref().map(|p| p.display().to_string()),
             "userLink": user_link,
@@ -659,7 +668,11 @@ fn cli_install_system_now() -> Result<String, String> {
         let legacy_shim = find_cli_script_named("k2so");
         ensure_cli_executable(&cli_script, &legacy_shim);
         let symlink_path = Path::new(CLI_SYMLINK_PATH);
-        if let ci::LinkState::Foreign { what } = ci::link_state(symlink_path, &cli_script) {
+        // What the links run (the k5 binary while the owner's switch has
+        // it, else the script), so this link matches ~/.local/bin/k2.
+        let runs = ci::choice_for_script(ci::switch_on(), &cli_script);
+        let target = runs.target(&cli_script);
+        if let ci::LinkState::Foreign { what } = ci::link_state(symlink_path, target) {
             return Err(format!("{CLI_SYMLINK_PATH} is {what}, not K2's, so K2 left it alone."));
         }
         // The alias only where an earlier install left one, and only over
@@ -695,7 +708,7 @@ fn cli_install_system_now() -> Result<String, String> {
         }
 
         // No prompt when the folder is writable (Intel Homebrew, a chowned prefix).
-        if ci::ensure_link(symlink_path, &cli_script, false).is_ours() {
+        if ci::ensure_link(symlink_path, target, false).is_ours() {
             if let Some(shim) = &legacy_shim {
                 let _ = ci::ensure_link(Path::new(CLI_LEGACY_SYMLINK_PATH), shim, false);
             }
@@ -709,7 +722,7 @@ fn cli_install_system_now() -> Result<String, String> {
             .unwrap_or_default();
         let script = format!(
             "do shell script \"ln -sf '{}' '{}'{}\" with prompt \"K2 needs to install the k2 command-line tool in /usr/local/bin.\" with administrator privileges",
-            cli_script.display(),
+            target.display(),
             CLI_SYMLINK_PATH,
             legacy_ln
         );

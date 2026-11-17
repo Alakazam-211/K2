@@ -13,7 +13,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
@@ -69,7 +69,7 @@ STUB_PORT="$(cat "$T/stub.port")"
 sup() {
     : > "$T/requests.log"
     RC=0
-    OUT="$(K2_PORT="$STUB_PORT" bash "$K2_CLI" notifications email suppressions "$@" 2>"$T/stderr")" || RC=$?
+    OUT="$(K2_PORT="$STUB_PORT" "$K2_CLI" notifications email suppressions "$@" 2>"$T/stderr")" || RC=$?
     ERR="$(cat "$T/stderr")"
 }
 # sent <case> <exact log line>: exit 0 and exactly that one request.

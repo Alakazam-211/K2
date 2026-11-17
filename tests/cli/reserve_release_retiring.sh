@@ -11,7 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
 
@@ -73,7 +73,7 @@ k2_as() {
     local -a envs=(K2_PORT="$STUB_PORT" K2_PROJECT_PATH="$WS")
     [ -n "$name" ] && envs+=(K2_AGENT_NAME="$name")
     RC=0
-    OUT="$(env -u K2_AGENT_NAME -u K2SO_AGENT_NAME "${envs[@]}" bash "$K2_CLI" "$@" 2>"$T/stderr")" || RC=$?
+    OUT="$(env -u K2_AGENT_NAME -u K2SO_AGENT_NAME "${envs[@]}" "$K2_CLI" "$@" 2>"$T/stderr")" || RC=$?
     ERR="$(cat "$T/stderr")"
 }
 

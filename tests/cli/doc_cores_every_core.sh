@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 CORES_RS="$PROJECT_ROOT/crates/k2-core/src/docs_cores.rs"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }

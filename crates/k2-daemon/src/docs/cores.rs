@@ -676,7 +676,7 @@ pub(crate) mod tests {
         assert_eq!(core_of_path("photo.png"), "any-file");
         assert_eq!(core_of_path("deck.pptx"), "slides");
         assert_eq!(core_of_path("a/Talk.PPTX"), "slides");
-        for p in ["art/poster.psd", "scene.blend1", "part.dgn", "gear.step", "print.stl", "model.fbx", "deck.pptx.zip", "deck.ppt", "plan.dxf.bak"] {
+        for p in ["art/poster.psd", "scene.blend1", "part.dgn", "gear.step", "print.stl", "model.fbx", "deck.pptx.zip", "deck.ppt", "plan.dxf.zip"] {
             assert_eq!(core_of_path(p), "any-file", "{p}");
         }
         assert_ne!(core_of_path(".pptx"), "slides", "a name with nothing before the dot isn't a deck");

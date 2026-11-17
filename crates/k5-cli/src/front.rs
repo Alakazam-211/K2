@@ -1,9 +1,12 @@
 //! What the front does with a command line: answer it itself, or hand it
 //! to the shell CLI.
 //!
-//! Today it answers only the version. Everything else falls through,
-//! byte for byte ([`crate::fallthrough`]).
+//! The route table ([`crate::route`]) says who answers. Today its one
+//! `Native` row is the version, and the front answers it only with
+//! nothing after it. Everything else falls through, byte for byte
+//! ([`crate::fallthrough`]).
 
+use crate::route::{self, Noun, Owner};
 use std::ffi::OsString;
 
 /// Where a command line goes.
@@ -17,10 +20,21 @@ pub enum Route {
 
 /// The route for the arguments after `argv[0]`.
 pub fn route(args: &[OsString]) -> Route {
-    match args {
-        [one] if one == "--version" || one == "-v" || one == "version" => Route::Version,
+    let found = route::find(route::TABLE, args);
+    match (found.owner, found.noun) {
+        (Owner::Native, Some(noun)) => native(noun, args),
+        // Nothing is `Spec` yet: there is no runner for it.
         _ => Route::Fallthrough,
     }
+}
+
+/// The front's own code for a `Native` row. A form it does not take
+/// falls through.
+fn native(noun: &Noun, args: &[OsString]) -> Route {
+    if noun.names("version") && args.len() == 1 {
+        return Route::Version;
+    }
+    Route::Fallthrough
 }
 
 /// What the version prints: the shell CLI's line, `k2 <version>`
@@ -69,6 +83,26 @@ mod tests {
     fn an_argument_that_is_not_utf8_falls_through() {
         use std::os::unix::ffi::OsStringExt;
         assert_eq!(route(&[OsString::from_vec(b"--version\xff".to_vec())]), Route::Fallthrough);
+    }
+
+    /// A `Native` row is one the front has code for, under each of its
+    /// words; and no row is `Spec` while there is no runner for it.
+    #[test]
+    fn every_native_row_is_answered_here() {
+        for noun in route::TABLE {
+            let mut owners = std::iter::once(noun.owner).chain(noun.verbs.iter().map(|v| v.owner));
+            assert!(owners.all(|o| o != Owner::Spec), "{:?} is Spec", noun.words);
+            if noun.owner == Owner::Native {
+                for word in noun.words {
+                    assert_ne!(route(&args(&[*word])), Route::Fallthrough, "{word} is Native but falls through");
+                }
+            }
+            for verb in noun.verbs.iter().filter(|v| v.owner == Owner::Native) {
+                for word in verb.words {
+                    assert_ne!(route(&args(&[noun.words[0], *word])), Route::Fallthrough, "{:?} {word}", noun.words);
+                }
+            }
+        }
     }
 
     #[test]

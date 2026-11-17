@@ -25,8 +25,12 @@
 //!   variables the front hands the shell when a verb falls through.
 //! - [`home`]: the K2 home and a workspace's private folder, by k2-client's
 //!   rules.
+//! - [`route`]: the route table, one row per arm of the shell router's
+//!   top-level `case`: who answers each command (the binary, its
+//!   `--schema` entry, or the shell CLI).
 //! - [`front`]: what the binary (`src/main.rs`, `k5-cli`) does with a
-//!   command line: `--version` here, everything else to the shell CLI.
+//!   command line, by the route table: `--version` here, everything else
+//!   to the shell CLI.
 //! - [`fallthrough`]: handing a verb to the shell CLI, byte for byte, from
 //!   the copy of `cli/k2` packed into the binary ([`embedded`]).
 //! - [`passport`]: the passport rule the front applies before a verb
@@ -41,4 +45,5 @@ pub mod home;
 pub mod notice;
 pub mod out;
 pub mod passport;
+pub mod route;
 pub mod transport;

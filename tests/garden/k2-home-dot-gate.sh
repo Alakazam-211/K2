@@ -25,7 +25,7 @@ lacks() {
     pass=$((pass + 1))
 }
 
-mkdir -p "$T/crates/a/src" "$T/crates/a/tests" "$T/crates/k2-client/src" "$T/crates/k2-core/src" "$T/src-tauri/src" "$T/crates/a/target"
+mkdir -p "$T/crates/a/src" "$T/crates/a/tests" "$T/crates/k2-client/src" "$T/src-tauri/src" "$T/crates/a/target"
 cat > "$T/crates/a/src/old.rs" <<'RS'
 // home.join(".k2") in a comment is not counted
 /// nor in a doc comment: root.join(".k2")
@@ -48,7 +48,7 @@ mod tests {
 fn f(home: &Path) -> PathBuf { home.join(".k2") }
 RS
 printf 'pub const HOME_DIR_NAME: &str = ".k2";\nfn x(h: &Path) -> PathBuf { h.join(".k2") }\n' > "$T/crates/k2-client/src/paths.rs"
-printf 'fn y(r: &Path) -> PathBuf { r.join(".k2") }\n' > "$T/crates/k2-core/src/workspace_dir.rs"
+printf 'fn y(r: &Path) -> PathBuf { r.join(".k2") }\n' > "$T/crates/k2-client/src/workspace_dir.rs"
 printf 'fn t() { let p = home.join(".k2"); }\n' > "$T/crates/a/tests/it.rs"
 printf 'fn t() { let p = home.join(".k2"); }\n' > "$T/crates/a/src/old_tests.rs"
 printf 'fn t() { let p = home.join(".k2"); }\n' > "$T/crates/a/target/built.rs"

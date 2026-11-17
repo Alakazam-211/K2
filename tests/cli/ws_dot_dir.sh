@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The CLI picks a workspace's dot-dir by the daemon's rule
-# (crates/k2-core/src/workspace_dir.rs, workspace_dot_dir): .k2 when it
+# (crates/k2-client/src/workspace_dir.rs, workspace_dot_dir): .k2 when it
 # is a folder, else .k2so when that is a folder, else .k2. The two used
 # to disagree for a workspace with neither folder: the CLI said .k2so.
 # No daemon is needed: every case stops before the first request.

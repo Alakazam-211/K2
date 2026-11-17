@@ -1,5 +1,9 @@
 //! Per-workspace dot-dir resolution (`<project>/.k2` vs `<project>/.k2so`).
 //!
+//! Here in k2-client so the daemon, the app and the Rust CLI share one
+//! rule; `k2_core::workspace_dir` and `k2_core::workspace_dot_dir` re-export
+//! it. The shell CLI's `_ws_dot_dir` (cli/src/prelude.sh) is its twin.
+//!
 //! 0.40.x: NEW workspaces create `.k2/`. Existing `.k2so/` workspaces are
 //! matched and kept exactly as-is — the resolver checks for a real `.k2/`
 //! dir, then a real `.k2so/` dir, and only falls back to creating `.k2/`

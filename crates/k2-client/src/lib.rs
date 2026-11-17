@@ -7,7 +7,8 @@
 //! bundle layout, the one-time home + launchd-label migrations, the macOS
 //! keychain writer and the Connect account-session item, release SHA256SUMS,
 //! Design-mode note clamps, editor discovery, perf timers, the air-gap env
-//! switch and a read-only view of three `settings.json` fields.
+//! switch, a read-only view of three `settings.json` fields, the registry
+//! of setting names and which folder is a workspace's private one.
 //!
 //! `k2-core` depends on this crate and re-exports every module at its old
 //! `k2_core::<module>` path, so daemon code is unchanged. Real logic (DB,
@@ -72,3 +73,5 @@ pub mod wake;
 pub mod win_autostart;
 #[cfg(windows)]
 pub mod win_cli;
+/// A workspace's private folder: `.k2`, or an older workspace's `.k2so`.
+pub mod workspace_dir;

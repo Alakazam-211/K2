@@ -261,8 +261,10 @@ pub mod private_home;
 pub mod session_archive;
 pub mod session_homes;
 pub use k2_client::migration_launchd;
-pub mod workspace_dir;
-pub use workspace_dir::workspace_dot_dir;
+// The workspace dot-dir rule lives in k2-client so the thin clients (the
+// app, the Rust CLI) pick the same folder as the daemon.
+pub use k2_client::workspace_dir;
+pub use k2_client::workspace_dir::workspace_dot_dir;
 pub mod db_ops;
 pub mod inject_flow;
 // The VALIDATE stage: oxc parse + lints for Garden widgets and Apps

@@ -9,7 +9,7 @@ A path into the K2 home comes from `k2_core::paths::k2_home()` (or
 `k2_home_in(home)` for a given user home, `k2_home_opt()` with a fallback);
 a path into a workspace's folder comes from `k2_core::workspace_dot_dir()`.
 Those two modules (crates/k2-client/src/paths.rs and
-crates/k2-core/src/workspace_dir.rs) are the only places that spell the
+crates/k2-client/src/workspace_dir.rs) are the only places that spell the
 name. Everything else that still does is listed in
 scripts/k2-home-dot-allowlist.txt, one line each:
 
@@ -36,7 +36,7 @@ import sys
 
 SKIP_DIRS = {"target", "node_modules", ".git", "binaries", "tests", "benches", "fuzz", "fixtures"}
 TEST_FILE = re.compile(r"(^tests\.rs$|_tests?\.rs$|^test_.*\.rs$)")
-HELPERS = {"crates/k2-client/src/paths.rs", "crates/k2-core/src/workspace_dir.rs"}
+HELPERS = {"crates/k2-client/src/paths.rs", "crates/k2-client/src/workspace_dir.rs"}
 COUNTED = re.compile(r'join\("\.k2["/]|"\.k2"')
 STRINGS = re.compile(r'"(\\.|[^"\\])*"')
 

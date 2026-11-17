@@ -1,5 +1,5 @@
 # k2-home-gate, the .k2 half (scripts/k2-home-dot-gate.py).
-# Rust lines outside the two path helpers (k2_client::paths, k2_core::workspace_dir)
+# Rust lines outside the two path helpers (k2_client::paths, k2_client::workspace_dir)
 # that still spell the `.k2` folder name. Format, one line each:
 #   <repo-relative path> :: <text the line contains> :: <why it stays>
 # Every entry needs a reason. An entry that matches nothing fails the gate:

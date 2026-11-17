@@ -15,12 +15,20 @@ set -euo pipefail
 
 # The name this script was called by: k2, or k5 once a link of that name
 # exists. Anything else (a copy under another name, a test's path) counts
-# as k2. Nothing reads it yet; the notice that tells callers of k2 to use
-# k5 will.
-case "${0##*/}" in
+# as k2. The Rust front (k5-cli) runs this script for the commands it does
+# not handle itself, from a path whose name may be neither, so it passes
+# the name it was called by in K5_CLI_CALLED_AS: that wins over $0 when it
+# says k2 or k5, and any other value is ignored. Nothing reads the name
+# yet; the notice that tells callers of k2 to use k5 will.
+_k2_name="${0##*/}"
+case "${K5_CLI_CALLED_AS:-}" in
+    k2|k5) _k2_name="$K5_CLI_CALLED_AS" ;;
+esac
+case "$_k2_name" in
     k5) _K2_CALLED_AS="k5" ;;
     *)  _K2_CALLED_AS="k2" ;;
 esac
+unset _k2_name
 
 # One env-name reader. A setting K2 hands this CLI is read under its newest
 # name first: K5_<NAME>, then K2_<NAME>, then K2SO_<NAME>. Empty counts as

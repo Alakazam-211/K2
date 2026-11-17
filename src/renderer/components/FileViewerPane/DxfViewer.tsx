@@ -19,6 +19,9 @@ import { useDocVersion } from './useDocVersion'
 import { ViewerNote } from './ViewerNote'
 import type { Bounds, DxfDrawing, DxfNode } from './dxfModel'
 import type { CadChangeSource } from './dxf/cad-change-source'
+import type { ModelDrawing } from './dxf/model/load'
+import { LayoutsNote, NotDrawnNote, useModelSource } from './dxf/model/ModelStats'
+import type { DrawingModelSource } from './dxf/model/source'
 import { pageTextMetrics } from './dxf/text-metrics'
 import { useDxfLiveChanges } from './dxf/useDxfLiveChanges'
 import { framed, viewBounds } from './dxf/view-address'
@@ -111,7 +114,7 @@ const DxfShapes = memo(function DxfShapes({ nodes }: { nodes: DxfNode[] }) {
   )
 })
 
-export function DxfViewer({ text, filePath, view, changes }: {
+export function DxfViewer({ text, filePath, view, changes, model }: {
   text: string
   /** The file: with it, each new version's change is highlighted. */
   filePath?: string
@@ -119,8 +122,12 @@ export function DxfViewer({ text, filePath, view, changes }: {
   view?: string | readonly string[]
   /** Where changes come from instead of the daemon (tests, shots); null turns the highlight off. */
   changes?: CadChangeSource | null
+  /** Where the drawing's model comes from instead of the daemon (tests, shots); null reads the text only. */
+  model?: DrawingModelSource | null
 }): React.JSX.Element {
-  const [drawing, setDrawing] = useState<DxfDrawing | null>(null)
+  // The model path adds its shapes, what it couldn't draw, and its paper layouts.
+  const [drawing, setDrawing] = useState<(DxfDrawing & Partial<Pick<ModelDrawing, 'shapes' | 'notDrawn' | 'paper'>>) | null>(null)
+  const modelSource = useModelSource(model, filePath)
   const [error, setError] = useState<string | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
@@ -133,9 +140,11 @@ export function DxfViewer({ text, filePath, view, changes }: {
     setDrawing(null)
     setError(null)
     // Text is sized by the UI font's measured capitals (a DXF height is the cap height).
-    Promise.all([import('./dxfModel'), pageTextMetrics()])
-      .then(([m, metrics]) => {
-        const d = m.buildDrawing(text, metrics)
+    // The drawing comes from the server's model when it has one, else from the text.
+    Promise.all([import('./dxfModel'), pageTextMetrics(), modelSource ? import('./dxf/model/load') : null])
+      .then(async ([m, metrics, load]) => {
+        const fromModel = load && modelSource ? await load.loadModel(modelSource, metrics).catch(() => null) : null
+        const d = fromModel ?? m.buildDrawing(text, metrics)
         if (!cancelled) setDrawing(d)
       })
       .catch((e: unknown) => {
@@ -144,7 +153,7 @@ export function DxfViewer({ text, filePath, view, changes }: {
     return () => {
       cancelled = true
     }
-  }, [text])
+  }, [text, modelSource])
 
   const fit = drawing?.bounds ? fitBox(drawing.bounds) : null
   const viewKey = typeof view === 'string' ? view : view?.join(' ')
@@ -326,7 +335,9 @@ export function DxfViewer({ text, filePath, view, changes }: {
         <span className="min-w-0 flex-1 truncate" data-testid="dxf-stats">
           {drawing.drawn.toLocaleString()} entities · {fmtNum(b.maxX - b.minX)} × {fmtNum(b.maxY - b.minY)} units
           {drawing.layers > 1 ? ` · ${drawing.layers} layers` : ''}
+          {drawing.paper?.length ? <LayoutsNote paper={drawing.paper} /> : null}
         </span>
+        {drawing.notDrawn?.count ? <NotDrawnNote nd={drawing.notDrawn} /> : null}
         <button
           type="button"
           className="px-1.5 py-0.5 text-[10px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
@@ -350,7 +361,7 @@ export function DxfViewer({ text, filePath, view, changes }: {
           preserveAspectRatio="xMidYMid meet"
           data-testid="dxf-svg"
         >
-          <DxfShapes nodes={drawing.nodes} />
+          {drawing.shapes ?? <DxfShapes nodes={drawing.nodes} />}
           {live.outlines}
         </svg>
         {drawing.skippedTotal ? (

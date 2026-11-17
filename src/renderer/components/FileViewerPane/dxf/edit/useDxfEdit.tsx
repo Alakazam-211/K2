@@ -26,7 +26,7 @@ export function useDxfEdit(p: {
   filePath: string | undefined
   /** A source to use instead of the daemon's (tests, shots); null turns editing off. */
   edits: EditSource | null | undefined
-  live: { showOwn: (c: CadChange) => void; meet: (pids: readonly string[]) => void; slots: ReadonlyMap<string, PresenceSlot> }
+  live: { showOwn: (c: CadChange, digest?: string | null) => void; meet: (pids: readonly string[]) => void; slots: ReadonlyMap<string, PresenceSlot> }
   reload: () => void
   /** A few screen pixels in drawing units, to pad the outlines. */
   padUnits: () => number
@@ -37,6 +37,7 @@ export function useDxfEdit(p: {
   panel: React.ReactNode
   viewOnly: React.ReactNode
   onKey: (e: React.KeyboardEvent) => void
+  goViewOnly: (words: string) => void
 } {
   const scope = useOptionalRoom()?.scope ?? null
   const daemon = useMemo(() => (scope ? daemonEditSource(scope) : null), [scope])
@@ -76,7 +77,7 @@ export function useDxfEdit(p: {
 
   const held = useMemo(() => (p.drawing ? heldHandles(edit.holds, edit.rows, p.drawing.header) : new Map<string, string>()), [edit.holds, edit.rows, p.drawing])
 
-  if (!p.drawing) return { tool: null, marks: null, over: null, panel: null, viewOnly: null, onKey: () => {} }
+  if (!p.drawing) return { tool: null, marks: null, over: null, panel: null, viewOnly: null, onKey: () => {}, goViewOnly: edit.goViewOnly }
 
   const onKey = (e: React.KeyboardEvent): void => {
     if (e.key !== 'Escape' || e.defaultPrevented) return
@@ -88,6 +89,7 @@ export function useDxfEdit(p: {
   return {
     tool,
     onKey,
+    goViewOnly: edit.goViewOnly,
     marks: (
       <>
         <EditMarks selection={edit.selection} byHandle={edit.byHandle} held={held} slots={p.live.slots} pad={p.padUnits()} />

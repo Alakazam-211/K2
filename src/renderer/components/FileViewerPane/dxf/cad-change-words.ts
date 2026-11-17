@@ -28,6 +28,7 @@ export const PAST_VERB: Record<string, string> = {
   'layer add': 'added',
   'block set': 'changed',
   revert: 'undid',
+  undo: 'undid',
 }
 
 const BY_OP: Record<string, string> = { added: 'added', removed: 'deleted', changed: 'changed' }

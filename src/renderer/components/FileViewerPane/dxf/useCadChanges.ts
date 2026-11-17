@@ -6,6 +6,8 @@
 // or until dismissed. Undo reverts the note's versions, newest first, and
 // stops at the first refusal, keeping its words. Your own edit is shown the
 // moment it lands, from its result, and its version isn't asked about again.
+// A server with no change feed answers no change: the drawing is read again
+// and, when the version names who, the note says "Atlas changed the drawing".
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useReducedMotion } from '@/hooks/useReducedMotion'
@@ -28,25 +30,54 @@ export type UndoState = { kind: 'idle' } | { kind: 'busy' } | { kind: 'done' } |
 
 export type CadChanges = {
   change: CadChange | null
+  /** The newest version seen of the file (from any writer, you too), or null before any. */
+  head: number | null
+  /** Who changed the drawing, when the server can't say what changed: "Atlas changed the drawing". */
+  quiet: string | null
+  /** The drawing's digest after your own latest change (what Undo sends), or null. */
+  digest: string | null
   /** The outlines: shown, fading, or gone. */
   phase: 'on' | 'fading' | null
   slots: ReadonlyMap<string, PresenceSlot>
   undoState: UndoState
-  undo: (versions: readonly number[]) => void
+  undo: (versions: readonly number[], expectDigest: string) => void
   dismiss: () => void
-  /** Show your own landed edit at once (its version's event is then not asked about again). */
-  showOwn: (c: CadChange) => void
+  /** Show your own landed edit at once, with the drawing's digest after it (its version's event is then not asked about again). */
+  showOwn: (c: CadChange, digest?: string | null) => void
   /** Give these people presence colours now (an agent holding something before it changes anything). */
   meet: (pids: readonly string[]) => void
 }
 
-export function useCadChanges(source: CadChangeSource | null, scope: ServerScope | null, path: string | null): CadChanges {
+/** The name a version event gives its writer, when it gives one. */
+function writerOf(e: object): string | null {
+  const by = (e as { by?: unknown }).by
+  if (typeof by === 'string' && by.trim()) return by.trim()
+  if (by && typeof by === 'object' && typeof (by as { name?: unknown }).name === 'string') return ((by as { name: string }).name || '').trim() || null
+  return null
+}
+
+export function useCadChanges(
+  source: CadChangeSource | null,
+  scope: ServerScope | null,
+  path: string | null,
+  hooks: {
+    /** A new version of the file arrived (not your own), or an undo landed or found the drawing moved: read it again. */
+    onVersion?: (version: number | null) => void
+    /** Undo found the drawing can't be changed here: open it view only, with these words. */
+    onOff?: (words: string) => void
+  } = {},
+): CadChanges {
   const reduced = useReducedMotion()
   const [change, setChange] = useState<CadChange | null>(null)
   const [phase, setPhase] = useState<'on' | 'fading' | null>(null)
   const [lit, setLit] = useState(0)
   const [slots, setSlots] = useState<ReadonlyMap<string, PresenceSlot>>(new Map())
   const [undoState, setUndoState] = useState<UndoState>({ kind: 'idle' })
+  const [head, setHead] = useState<number | null>(null)
+  const [quiet, setQuiet] = useState<string | null>(null)
+  const [digest, setDigest] = useState<string | null>(null)
+  const cbs = useRef(hooks)
+  cbs.current = hooks
   const run = useRef<{ from: number; to: number; at: number } | null>(null)
   const seen = useRef<number | null>(null)
   const seq = useRef(0)
@@ -57,16 +88,32 @@ export function useCadChanges(source: CadChangeSource | null, scope: ServerScope
     seen.current = null
     setChange(null)
     setPhase(null)
+    setHead(null)
+    setQuiet(null)
     if (!source || !scope || !path) return
     return onDocVersionChanged(scope, (e) => {
-      if (docEventFilePath(e) !== path || e.version === seen.current) return
+      if (docEventFilePath(e) !== path) return
+      setHead((h) => (h === null || e.version > h ? e.version : h))
+      if (e.version === seen.current) return
       seen.current = e.version
+      cbs.current.onVersion?.(e.version)
+      const who = writerOf(e)
       const now = Date.now()
       const r = run.current
       const from = r && e.version === r.to + 1 && now - r.at < RUN_MS ? r.from : e.version - 1
       const mine = ++seq.current
       void source.change(path, from, e.version).then((c) => {
-        if (mine !== seq.current || !c) return
+        if (mine !== seq.current) return
+        // No change feed on this server: the drawing is read again, and the note says who, with no outlines.
+        if (!c) {
+          if (who) {
+            setChange(null)
+            setPhase(null)
+            setQuiet(`${who} changed the drawing`)
+          }
+          return
+        }
+        setQuiet(null)
         run.current = { from, to: e.version, at: Date.now() }
         // Everyone seen while the drawing is open keeps their colour.
         for (const a of changeAuthors(c)) if (!authors.current.includes(a)) authors.current.push(a)
@@ -95,24 +142,34 @@ export function useCadChanges(source: CadChangeSource | null, scope: ServerScope
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lit])
 
+  const showOwnRef = useRef<(c: CadChange, digest?: string | null) => void>(() => {})
   const undo = useCallback(
-    (versions: readonly number[]) => {
+    (versions: readonly number[], expectDigest: string) => {
       if (!source || !path || !versions.length) return
       setUndoState({ kind: 'busy' })
       void (async () => {
-        for (const v of versions) {
-          const r = await source.revert(path, v)
-          if (!r.ok) return setUndoState({ kind: 'refused', words: r.words })
+        // Undo-last: one version, the head.
+        const r = await source.revert(path, versions[0], expectDigest)
+        if (!r.ok) {
+          setUndoState({ kind: 'refused', words: r.words })
+          if (r.off) cbs.current.onOff?.(r.off)
+          if (r.reload) cbs.current.onVersion?.(null)
+          return
         }
-        setUndoState({ kind: 'done' })
+        if (r.change) showOwnRef.current(r.change, null)
+        else setUndoState({ kind: 'done' })
+        cbs.current.onVersion?.(r.change?.to ?? null)
       })()
     },
     [source, path],
   )
 
-  const showOwn = useCallback((c: CadChange) => {
+  const showOwn = useCallback((c: CadChange, after: string | null = null) => {
+    setDigest(after)
     seq.current++
     seen.current = c.to
+    setHead((h) => (h === null || c.to > h ? c.to : h))
+    setQuiet(null)
     // Your own version starts no run: the next version by anyone is told on its own.
     run.current = null
     setChange(c)
@@ -120,6 +177,8 @@ export function useCadChanges(source: CadChangeSource | null, scope: ServerScope
     setPhase('on')
     setLit((n) => n + 1)
   }, [])
+
+  showOwnRef.current = showOwn
 
   const meet = useCallback((pids: readonly string[]) => {
     const fresh = pids.filter((a) => !authors.current.includes(a))
@@ -132,7 +191,8 @@ export function useCadChanges(source: CadChangeSource | null, scope: ServerScope
     run.current = null
     setChange(null)
     setPhase(null)
+    setQuiet(null)
   }, [])
 
-  return { change, phase, slots, undoState, undo, dismiss, showOwn, meet }
+  return { change, head, quiet, digest, phase, slots, undoState, undo, dismiss, showOwn, meet }
 }

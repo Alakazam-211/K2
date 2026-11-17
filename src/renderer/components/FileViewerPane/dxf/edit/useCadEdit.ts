@@ -44,6 +44,8 @@ export type CadEdit = {
   busy: boolean
   message: string | null
   prompt: EditPrompt | null
+  /** The drawing can't be changed here after all (an undo found out): view only, with these words. */
+  goViewOnly: (words: string) => void
   move: (dx: number, dy: number) => Promise<boolean>
   relabel: (insert: string, tag: string, value: string, nth: number | null) => Promise<boolean>
 }
@@ -52,7 +54,7 @@ export function useCadEdit(p: {
   drawing: EditDrawing | null
   filePath: string | undefined
   source: EditSource | null
-  showOwn: (c: CadChange) => void
+  showOwn: (c: CadChange, digest?: string | null) => void
   reload: () => void
   meet: (pids: readonly string[]) => void
 }): CadEdit {
@@ -169,7 +171,7 @@ export function useCadEdit(p: {
         if (out.kind === 'unchanged') return true
         if (out.kind === 'done') {
           const c = ownChange(out.result)
-          if (c) cb.current.showOwn(c)
+          if (c) cb.current.showOwn(c, out.result.afterDigest)
           setPending(out.result.after)
           cb.current.reload()
           return true
@@ -196,5 +198,7 @@ export function useCadEdit(p: {
     [run],
   )
 
-  return { rows, byHandle, selection, select, canEdit, editable, viewOnly, unit, holds, canMove, busy, message, prompt, move, relabel }
+  const goViewOnly = useCallback((words: string) => setOff(words), [])
+
+  return { rows, byHandle, selection, select, canEdit, editable, viewOnly, unit, holds, canMove, busy, message, prompt, goViewOnly, move, relabel }
 }

@@ -100,17 +100,30 @@ describe('DxfViewer: a new version is highlighted', () => {
     expect(screen.queryByTestId('dxf-change-layer')).toBeNull()
   })
 
-  it('Undo reverts that version; a refusal shows its own words', async () => {
-    const source = fixtureCadChangeSource({ '42': change('move') }, { 42: { ok: false, words: 'Sam moved this line since. Undo Sam’s move first.' } })
-    await open(source)
+  it('someone else’s change has no Undo: only your own latest change can be undone', async () => {
+    await open(fixtureCadChangeSource({ '42': change('move') }))
     await arrive(42)
+    expect(screen.getByTestId('dxf-change-note').textContent).toContain('Atlas moved a line on A-WALL')
+    expect(screen.queryByTestId('dxf-change-undo')).toBeNull()
+  })
+
+  it('no change feed: the drawing is read again, with a quiet line naming who when the version says, and no outlines', async () => {
+    const source = fixtureCadChangeSource({})
+    await open(source)
     await act(async () => {
-      fireEvent.click(screen.getByTestId('dxf-change-undo'))
+      for (const fn of bus.handlers) fn({ kind: 'doc_version_changed', projectId: 'p', workspace: '/ws', rel: 'drawings/plan.dxf', version: 42, by: { name: 'Atlas' } } as DocVersionChangedEvent)
       await vi.advanceTimersByTimeAsync(0)
     })
-    expect(source.calls.revert).toEqual([[PATH, 42]])
-    expect(screen.getByTestId('dxf-change-note').textContent).toContain('Sam moved this line since. Undo Sam’s move first.')
+    const words = screen.getByTestId('dxf-change-words')
+    expect(words.textContent).toBe('Atlas changed the drawing')
+    expect(words.getAttribute('data-muted')).toBe('')
+    expect(marks()).toHaveLength(0)
     expect(screen.queryByTestId('dxf-change-undo')).toBeNull()
+    expect(screen.queryByTestId('dxf-change-show')).toBeNull()
+    // A version that doesn't say who: read again, no line.
+    fireEvent.click(screen.getByTestId('dxf-change-dismiss'))
+    await arrive(43)
+    expect(screen.queryByTestId('dxf-change-note')).toBeNull()
   })
 
   it('versions in a row are one note: the range from the first, "Atlas made 3 changes"', async () => {

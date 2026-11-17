@@ -11,13 +11,17 @@ import type { ToolResult } from './tool-result'
 export function ownChange(r: ToolResult): CadChange | null {
   if (!r.ok || r.dryRun || r.after === null || !r.data || typeof r.data !== 'object') return null
   const data = r.data as Record<string, unknown>
-  const after = r.after
+  return asOwn(data, r.after - 1, r.after, typeof data.verb === 'string' ? data.verb : r.verb)
+}
+
+/** A change you made (a verb's, or an undo's), as yours: one version, by you. */
+export function asOwn(data: Record<string, unknown>, from: number, to: number, verb: string): CadChange | null {
   const rows = Array.isArray(data.entities) ? data.entities : []
   return parseCadChange({
     ...data,
-    from: after - 1,
-    to: after,
-    versions: [{ version: after, by: { pid: SELF_PID, name: 'You', kind: 'person' }, verb: typeof data.verb === 'string' ? data.verb : r.verb }],
-    entities: rows.map((e) => (e && typeof e === 'object' ? { ...e, by: SELF_PID, version: after } : e)),
+    from,
+    to,
+    versions: [{ version: to, by: { pid: SELF_PID, name: 'You', kind: 'person' }, verb }],
+    entities: rows.map((e) => (e && typeof e === 'object' ? { ...e, by: SELF_PID, version: to } : e)),
   })
 }

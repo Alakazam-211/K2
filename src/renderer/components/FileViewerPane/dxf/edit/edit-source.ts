@@ -114,6 +114,11 @@ export function sameFile(path: string, rel: unknown, workspace?: unknown): boole
 /** Servers that refused a drawing save this session, with their words. */
 const writerOffBy = new Map<string, string>()
 
+/** A server refused a drawing save (an edit or an undo): its words, kept for the session. */
+export function noteWriterOff(hostKey: string, words: string): void {
+  writerOffBy.set(hostKey, words)
+}
+
 export function daemonEditSource(scope: ServerScope): EditSource {
   return {
     canWrite: scopeMayWrite(scope, TOOL_ROUTE),
@@ -122,7 +127,7 @@ export function daemonEditSource(scope: ServerScope): EditSource {
         return parseToolReply(await daemonCliPost<unknown>(scope, TOOL_ROUTE, { path, argv: [...argv], json: true })) ?? localRefusal(NO_ROUTE)
       } catch (e) {
         const r = refusalOfError(e)
-        if (r.error?.id === WRITER_OFF) writerOffBy.set(scope.hostKey, r.error.message)
+        if (r.error?.id === WRITER_OFF) noteWriterOff(scope.hostKey, r.error.message)
         return r
       }
     },

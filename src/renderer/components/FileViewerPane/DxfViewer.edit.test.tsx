@@ -11,16 +11,28 @@
 //     text's value shown read only;
 //   - an agent's hold: marked, and asked about once before an edit, never
 //     edited over silently;
-//   - view only (DWG) and the viewer's own reading (no handles): no edit controls.
+//   - view only (DWG) and the viewer's own reading (no handles): no edit controls;
+//   - Undo: only on your own latest change, gone once a newer version arrives;
+//     a landed undo shows as yours; a refusal is calm; with no change feed,
+//     someone else's version reads the drawing again.
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 
+const bus = vi.hoisted(() => ({ handlers: new Set<(e: DocVersionChangedEvent) => void>() }))
+vi.mock('@/stores/session-events', async (orig) => ({
+  ...(await orig<typeof import('@/stores/session-events')>()),
+  onDocVersionChanged: (_scope: unknown, fn: (e: DocVersionChangedEvent) => void) => {
+    bus.handlers.add(fn)
+    return () => void bus.handlers.delete(fn)
+  },
+}))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => undefined), listen: vi.fn(async () => () => undefined) }))
 
+import type { DocVersionChangedEvent } from '@/stores/session-events'
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { DxfViewer } from './DxfViewer'
 import { fakeCadWorld, type FakeWorld } from './dxf/edit/fake-world'
@@ -151,6 +163,75 @@ describe('selecting', () => {
     expect(selected()).toEqual([])
     drag([-1, 5.5], [11, 7.5])
     expect(selected()).toEqual([])
+  })
+})
+
+/** A version from any writer, as the server announces it. */
+async function arrive(version: number): Promise<void> {
+  await act(async () => {
+    for (const fn of bus.handlers) fn({ kind: 'doc_version_changed', projectId: 'p', workspace: '/ws', rel: 'sampler.dxf', version })
+    await new Promise((r) => setTimeout(r, 0))
+  })
+}
+
+/** Select the three walls and move them 5 to the right with Move by. */
+async function moveWalls(): Promise<void> {
+  click('@h:41')
+  click('@h:A00', true)
+  click('@h:A01', true)
+  fireEvent.change(screen.getByTestId('dxf-move-dx'), { target: { value: '5' } })
+  await act(async () => {
+    fireEvent.click(screen.getByTestId('dxf-move-go'))
+  })
+  await screen.findByTestId('dxf-change-undo')
+}
+
+describe('undo', () => {
+  it('your own latest change has Undo; it sends the head and its digest, and the undo shows as yours with no Undo', async () => {
+    await open()
+    await moveWalls()
+    await waitFor(() => expect(Number(shape('@h:41').getAttribute('x1'))).toBeCloseTo(5, 6))
+    const digest = world.edits.calls[1][world.edits.calls[1].indexOf('--expect') + 1]
+    const revert = vi.spyOn(world.changes, 'revert')
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dxf-change-undo'))
+    })
+    expect(revert).toHaveBeenCalledWith(PATH, 8, digest)
+    await waitFor(() => expect(screen.getByTestId('dxf-change-words').textContent).toBe('You undid 3 lines on A-WALL'))
+    expect(screen.queryByTestId('dxf-change-undo')).toBeNull()
+    // The drawing is read again: the walls are back.
+    await waitFor(() => expect(Number(shape('@h:41').getAttribute('x1'))).toBeCloseTo(0, 6))
+  })
+
+  it('Undo is gone once a newer version arrives, from anyone', async () => {
+    await open()
+    await moveWalls()
+    world.agentMove(['@h:42'], 0, 1)
+    await arrive(9)
+    expect(screen.queryByTestId('dxf-change-undo')).toBeNull()
+  })
+
+  it('someone changed it after: the refusal is calm (muted, not red), and Undo goes', async () => {
+    await open()
+    await moveWalls()
+    // Someone else's version that hasn't reached this viewer yet.
+    world.agentMove(['@h:42'], 0, 1)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dxf-change-undo'))
+    })
+    const words = await screen.findByText('Someone changed the drawing after this, so it can’t be undone.')
+    expect(words.getAttribute('data-muted')).toBe('')
+    expect(words.className).toContain('--color-text-secondary')
+    expect(document.querySelector('[class*="text-[var(--color-status-error"], [class*="text-[var(--color-danger"]')).toBeNull()
+    expect(screen.queryByTestId('dxf-change-undo')).toBeNull()
+  })
+
+  it('no change feed: someone else’s version reads the drawing again, with no outlines', async () => {
+    await open()
+    world.agentMove(['@h:41'], 0, 3)
+    await arrive(8)
+    await waitFor(() => expect(Number(shape('@h:41').getAttribute('y1'))).toBeCloseTo(5, 6))
+    expect(screen.queryAllByTestId('dxf-change-mark')).toHaveLength(0)
   })
 })
 
@@ -340,7 +421,7 @@ describe('when the server can’t save drawing edits', () => {
     expect(screen.queryByTestId('dxf-edit-message')).toBeNull()
     expect(screen.getByTestId('dxf-edit-view-only').textContent).toBe('View only')
     expect(screen.getByTestId('file-dxf').textContent!.split(HINT)).toHaveLength(2)
-    expect(document.querySelector('[class*="--color-status-error"], [class*="--color-danger"]')).toBeNull()
+    expect(document.querySelector('[class*="text-[var(--color-status-error"], [class*="text-[var(--color-danger"]')).toBeNull()
     // The dry run was the only call: nothing was written.
     expect(world.edits.calls).toHaveLength(1)
     expect(world.edits.calls[0]).toContain('--dry-run')

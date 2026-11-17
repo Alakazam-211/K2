@@ -83,11 +83,15 @@ export function ChangeNote(p: {
   undoState: UndoState
   canUndo: boolean
   canShow: boolean
+  /** Who changed it, with no outlines: secondary text. */
+  quiet?: boolean
   onShow: () => void
   onUndo: () => void
   onDismiss: () => void
 }): React.JSX.Element {
   const refused = p.undoState.kind === 'refused' ? p.undoState.words : null
+  // Undo's refusal is calm: muted, never the error colour.
+  const muted = p.quiet || refused !== null
   return (
     <div
       role="status"
@@ -102,7 +106,7 @@ export function ChangeNote(p: {
           </svg>
         ))}
       </span>
-      <span className="min-w-0 flex-1 truncate" data-testid="dxf-change-words">
+      <span className={`min-w-0 flex-1 truncate${muted ? ' text-[var(--color-text-secondary)]' : ''}`} data-testid="dxf-change-words" data-muted={muted ? '' : undefined}>
         {refused ?? (p.undoState.kind === 'done' ? `${p.text} · Undone` : p.text)}
       </span>
       {p.canShow ? (

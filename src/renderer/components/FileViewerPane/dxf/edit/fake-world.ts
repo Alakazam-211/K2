@@ -6,7 +6,7 @@
 // stale `--expect` or an overlap since `--base` is refused with the pack's
 // id. A person is never refused by a hold. Each landed call makes a version.
 
-import type { CadChangeSource } from '../cad-change-source'
+import { revertDone, revertRefused, type CadChangeSource } from '../cad-change-source'
 import { fixtureDrawingSource, type DrawingModelSource } from '../model/source'
 import type { ModelHeader, ModelPage, ModelRow } from '../model/types'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
@@ -72,6 +72,9 @@ export function fakeCadWorld(
   const calls: string[][] = []
   const src = fixtureDrawingSource({ header, pages })
   let lastDry: string | null = null
+  /** Each landed version: the rows before it, and the bytes' digest after it (what Undo checks). */
+  const history = new Map<number, { before: ModelRow[]; digest: string; verb: string }>()
+  let headDigest = 'sha256:fake-start'
 
   const bump = (rows: ModelRow[], fields: string[]): number => {
     header = { ...header, version: header.version + 1 }
@@ -147,8 +150,11 @@ export function fakeCadWorld(
     }
     if (expect !== lastDry) return refuse(verb, base, 'MPC-E729', 'not the dry run’s bytes')
     const page = pages.model[0]
+    const before = page.entities
     page.entities = page.entities.map((r) => next.rows.find((n) => n.h === r.h) ?? r)
     const after = bump(next.rows, fields)
+    headDigest = expect ?? ''
+    history.set(after, { before, digest: headDigest, verb })
     return result(verb, after - 1, { version: { base: after - 1, after, if_version: null, base_given: base }, changed: bytes(expect ?? ''), data })
   }
 
@@ -177,8 +183,25 @@ export function fakeCadWorld(
       async change() {
         return null
       },
-      async revert() {
-        return { ok: true }
+      // Undo-last: the head only, against its digest; it answers the undo's change.
+      async revert(_p, version, expectDigest) {
+        const h = history.get(version)
+        const refuse = (code: string, hint: string) => revertRefused(new DaemonHttpError(hint, 409, code, { code, hint, exit: 2 }))
+        if (opts.writerOff) return revertRefused(new DaemonHttpError(opts.writerOff, 409, 'cad_writer_disabled', { code: 'cad_writer_disabled', hint: opts.writerOff, exit: 3 }))
+        if (!h) return refuse('no_earlier_version', 'nothing earlier')
+        if (version !== header.version) return refuse('cad_undo_not_latest', 'someone changed the drawing after this; undo isn’t possible')
+        if (expectDigest !== headDigest) return refuse('cad_expect_stale', 'the drawing moved')
+        const page = pages.model[0]
+        const now = page.entities
+        page.entities = h.before
+        const changed = now.filter((r) => !h.before.includes(r))
+        const to = bump(h.before.filter((r) => changed.some((c) => c.h === r.h)), ['geom'])
+        headDigest = `sha256:fake-undo-${to}`
+        const entities = changed.map((r) => {
+          const was = h.before.find((b) => b.h === r.h)!
+          return { address: r.h, op: 'changed', kind: r.kind, layer: r.layer, owner: 'model', fields: ['geom'], bbox_before: r.bbox, bbox_after: was.bbox, bbox_q: r.bbox_q ?? 'exact', version: to, by: 'p_you', identity: null }
+        })
+        return revertDone({ ok: true, path: _p, reverted: version, to, version: to, digest: headDigest, change: { schema: 'cad.change/1', format: 'dxf', from: version, to, pairing: 'kept', versions: [], entities, tables: [], blocks: [], verb: 'undo' } })
       },
     },
     agentMove(handles, dx, dy) {

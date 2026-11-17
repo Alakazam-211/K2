@@ -33,16 +33,18 @@
 //! (its URL is `http://localhost<path>`). `<P>` is `PROJECT` escaped by
 //! [`encode::quote`]; `<T>` the TCP token (the owner's, or the passport);
 //! `args` the caller's pre-escaped `key=value` pairs, joined by `&`.
-//! Lower case `%xx` marks a query curl's `-G` wrote ([`wire::curl_get_query`]):
+//! "(-G)" marks a query the shell hands curl's `-G`: its `%XX` escapes go
+//! out in upper case here ([`wire::curl_get_query`]), where curl 8.5 and
+//! 8.7 write them in lower case and curl 8.23 as given:
 //!
 //! | call | TCP | cell socket |
 //! |---|---|---|
-//! | `cli_request` | `GET <ep>?token=<T>&project=<P>&args` (lower) | `GET <ep>?args` (lower; no `?` with no args) |
+//! | `cli_request` | `GET <ep>?token=<T>&project=<P>&args` (-G) | `GET <ep>?args` (-G; no `?` with no args) |
 //! | `cli_request_post` | `POST <ep>?token=<T>&project=<P>&args`, empty body, curl's form type | `POST <ep>?args`, likewise |
 //! | `cli_post_form` | `POST <ep>?token=<T>&project=<P>`, body `args`, `Content-Type: application/x-www-form-urlencoded` | `POST <ep>`, likewise |
 //! | `cli_post_json` | `POST <ep>?token=<T>` (no `project=`), `Content-Type: application/json` | `POST <ep>`, likewise |
 //! | `cli_post_json_stdin` | as `cli_post_json` | none |
-//! | `cli_send_json GET` | `GET <ep>?token=<curl-escaped T>&payload` (lower) | `GET <ep>?payload` (lower) |
+//! | `cli_send_json GET` | `GET <ep>?token=<curl-escaped T>&payload` (-G) | `GET <ep>?payload` (-G) |
 //! | `cli_send_json POST` | `POST <ep>?token=<quoted T>`, JSON | `POST <ep>`, JSON |
 //!
 //! An endpoint that already has a `?` gets the `-G` query, and

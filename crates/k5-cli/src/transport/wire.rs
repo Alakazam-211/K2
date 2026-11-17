@@ -1,8 +1,8 @@
 //! One HTTP/1.1 exchange on one connection, written byte for byte as curl
 //! writes it for the shell CLI's calls, and the answer read back.
 //!
-//! What curl sends (curl 8.5 on Linux and 8.7 on macOS; the parity test
-//! `tests/transport_parity.rs` holds the two the same on every run):
+//! What curl sends (curl 8.5 on Linux, 8.7 on macOS and 8.23; the parity
+//! test `tests/transport_parity.rs` holds the two the same on every run):
 //!
 //! ```text
 //! <METHOD> <target> HTTP/1.1
@@ -23,10 +23,12 @@
 //! sends either.
 //!
 //! The target: curl sends a URL's path and query as they are written,
-//! with one exception, `-G`. The data `-G` appends to the URL (after `?`,
-//! or `&` when the URL has a query) has every `%XX` escape's hex in lower
-//! case: `%2F` goes out as `%2f` ([`curl_get_query`]). Only the appended
-//! part changes; a query already in the URL keeps its case. A space or a
+//! but for the data `-G` appends to the URL (after `?`, or `&` when the
+//! URL has a query): curl 8.5 and 8.7 write each `%XX` escape's hex there
+//! in lower case, and curl 8.23 no longer does. Here those escapes go out
+//! in upper case, as RFC 3986 asks (`%2f` goes out as `%2F`;
+//! [`curl_get_query`]); the daemon decodes either. Only the appended part
+//! changes; a query already in the URL keeps its case. A space or a
 //! control byte in the URL makes curl fail before it connects (exit 3),
 //! and a `#` cuts the URL there (the fragment); [`check_target`] refuses
 //! all three instead.
@@ -112,9 +114,9 @@ impl Request {
     }
 }
 
-/// The data curl's `-G` appends to a URL, as curl sends it: the hex of
-/// each `%XX` escape in lower case. A `%` not followed by two hex digits
-/// stays as it is.
+/// The data `-G` appends to a URL, with the hex of each `%XX` escape in
+/// upper case (RFC 3986; curl's own case changed between versions). A `%`
+/// not followed by two hex digits stays as it is.
 pub fn curl_get_query(data: &str) -> String {
     let bytes = data.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -122,8 +124,8 @@ pub fn curl_get_query(data: &str) -> String {
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() && bytes[i + 1].is_ascii_hexdigit() && bytes[i + 2].is_ascii_hexdigit() {
             out.push(b'%');
-            out.push(bytes[i + 1].to_ascii_lowercase());
-            out.push(bytes[i + 2].to_ascii_lowercase());
+            out.push(bytes[i + 1].to_ascii_uppercase());
+            out.push(bytes[i + 2].to_ascii_uppercase());
             i += 3;
         } else {
             out.push(bytes[i]);
@@ -131,7 +133,7 @@ pub fn curl_get_query(data: &str) -> String {
         }
     }
     // Only ASCII bytes changed case, so the text is still UTF-8.
-    String::from_utf8(out).expect("lower-casing ASCII hex keeps UTF-8")
+    String::from_utf8(out).expect("upper-casing ASCII hex keeps UTF-8")
 }
 
 /// `url` with `-G` data appended, as curl joins them: `?` when the URL
@@ -531,13 +533,13 @@ mod tests {
     }
 
     #[test]
-    fn get_data_has_lower_case_escapes() {
-        assert_eq!(curl_get_query("project=%2Ftmp%2Fa%20b&x=%7E"), "project=%2ftmp%2fa%20b&x=%7e");
+    fn get_data_has_upper_case_escapes() {
+        assert_eq!(curl_get_query("project=%2ftmp%2Fa%20b&x=%7e"), "project=%2Ftmp%2Fa%20b&x=%7E");
         // Not escapes: left alone.
         assert_eq!(curl_get_query("a=%zz&b=%2&c=%"), "a=%zz&b=%2&c=%");
-        assert_eq!(curl_get_query("A=B%C3%A9"), "A=B%c3%a9");
-        assert_eq!(append_get_query("/cli/x", "a=%2F"), "/cli/x?a=%2f");
-        assert_eq!(append_get_query("/cli/x?y=%2F", "a=%2F"), "/cli/x?y=%2F&a=%2f");
+        assert_eq!(curl_get_query("a=b%c3%a9"), "a=b%C3%A9");
+        assert_eq!(append_get_query("/cli/x", "a=%2f"), "/cli/x?a=%2F");
+        assert_eq!(append_get_query("/cli/x?y=%2f", "a=%2f"), "/cli/x?y=%2f&a=%2F");
     }
 
     #[test]

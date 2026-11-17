@@ -92,7 +92,7 @@ fn a_daemon_that_comes_up_between_tries_answers() {
     let r = c.call(Channel::Tcp, "/cli/x", Call::Request(&[])).unwrap();
     assert_eq!((r.status, r.body.as_slice()), (200, &b"{}"[..]));
     let got = text(&up.join().unwrap());
-    assert!(got.starts_with("GET /cli/x?token=owner-tok&project=%2fp HTTP/1.1\r\n"), "{got}");
+    assert!(got.starts_with("GET /cli/x?token=owner-tok&project=%2Fp HTTP/1.1\r\n"), "{got}");
 }
 
 #[test]

@@ -14,10 +14,15 @@
 //! - `User-Agent`: `curl/<version>` from bash, `k5/<version>` here;
 //! - `X-K5-Cli-Version: <version>`: sent here only, dropped;
 //! - `X-K5-Cli-Via`: `fallthrough` from bash (the front ran it,
-//!   `_K5_CLI_VIA=rust`), `native` here.
+//!   `_K5_CLI_VIA=rust`), `native` here;
+//! - the case of each `%XX` escape's hex in the query (after the first
+//!   `?` of the request line), never in the path, a header or the body:
+//!   curl 8.5 and 8.7 write the escapes `-G` appends in lower case, curl
+//!   8.23 no longer changes them, and the client sends upper case (K2's
+//!   ruling; the daemon decodes either).
 //!
 //! Everything else is compared byte for byte: the request line and its
-//! query, every other header and its place (curl's order is fixed, so the
+//! query (but for that case), every other header and its place (curl's order is fixed, so the
 //! order is compared too), and the body. Each row also says how many
 //! requests both must send (so a retry row proves its retry), and checks
 //! the answer the caller gets: bash's stdout against the response body,
@@ -232,7 +237,10 @@ fn normalise(r: &Logged, rust: bool, row: &str) -> String {
     let (head, body) = text.split_once("\r\n\r\n").unwrap_or_else(|| panic!("{row}: a request with no head: {text:?}"));
     let (mut ua, mut via, mut ver) = (0, 0, 0);
     let mut lines: Vec<String> = Vec::new();
-    for line in head.split("\r\n") {
+    let mut head_lines = head.split("\r\n");
+    let request_line = head_lines.next().unwrap_or_else(|| panic!("{row}: no request line"));
+    lines.push(fold_query_escapes(request_line));
+    for line in head_lines {
         let masked = if rust {
             if line == format!("User-Agent: k5/{version}") {
                 ua += 1;
@@ -260,6 +268,36 @@ fn normalise(r: &Logged, rust: bool, row: &str) -> String {
     let side = if rust { "rust" } else { "bash" };
     assert_eq!((ua, via, ver), (1, 1, usize::from(rust)), "{row} ({side}): the masked lines in {text:?}");
     format!("[{}]\n{}\n\n{body}", r.channel, lines.join("\n"))
+}
+
+/// The request line with the hex of each `%XX` escape in its query in
+/// upper case. curl 8.23 stopped lower-casing the escapes `-G` appends
+/// (8.5 and 8.7 still do), so only their case may differ; the path is
+/// left alone.
+fn fold_query_escapes(request_line: &str) -> String {
+    let Some((before, query)) = request_line.split_once('?') else {
+        return request_line.to_string();
+    };
+    let (query, after) = query.rsplit_once(' ').unwrap_or_else(|| panic!("no HTTP version after the query: {request_line:?}"));
+    let b = query.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit() {
+            out.extend_from_slice(&[b'%', b[i + 1].to_ascii_uppercase(), b[i + 2].to_ascii_uppercase()]);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    format!("{before}?{} {after}", String::from_utf8(out).expect("upper-casing ASCII hex keeps UTF-8"))
+}
+
+#[test]
+fn the_fold_touches_the_query_only() {
+    assert_eq!(fold_query_escapes("GET /cli/a%2fb?x=%2f%c3%a9&y=%zz HTTP/1.1"), "GET /cli/a%2fb?x=%2F%C3%A9&y=%zz HTTP/1.1");
+    assert_eq!(fold_query_escapes("POST /cli/a%2fb HTTP/1.1"), "POST /cli/a%2fb HTTP/1.1");
 }
 
 /// `(the line with its seconds as <n>, the seconds)`.

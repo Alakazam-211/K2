@@ -131,7 +131,7 @@ has "$OUT" "  slides     off   Slides core (Beta): .pptx decks: slide and shape 
 has "$OUT" "  timeline   off   Timeline core (Beta): .otio, .fcpxml and .prproj timelines: clip and marker verbs for agents" "timeline row"
 has "$OUT" "  fab        off   PCB fabrication core (Beta): photoplot and drill files: read-only feature and hole verbs for agents" "fab row"
 has "$OUT" "  blend      off   3D scene core (Beta): .blend scenes (read only): object reads for agents, scene previews" "blend row"
-has "$OUT" "  cad        off   CAD drawing core (Beta): .dxf and .dwg drawings (read only): drawing reads for agents" "cad row"
+has "$OUT" "  cad        off   CAD drawing core (Beta): .dxf and .dwg drawings: drawing reads, .dxf edit verbs (a .dwg is read only)" "cad row"
 has "$OUT" "While a core is off, k2 doc refuses its files (core_off, exit 3) and people open them the usual way." "list footer"
 ok "k2 doc cores lists nine cores, all off"
 cli -- doc cores --json

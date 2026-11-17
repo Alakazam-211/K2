@@ -252,7 +252,7 @@ docs. Agents never write .fcpxml, .prproj, photoplot or drill files.
   k2 doc scene list|collection show @coll:N|object show @obj:N <f>
   .blend files are read only for now: object place, visibility and rename,
   write, restore and undo are refused (blend_writer_disabled, exit 3)
-  cad core: .dxf and .dwg drawings (DWG 2004 to 2018), read only for now
+  cad core: .dxf and .dwg drawings (DWG 2004 to 2018); a .dwg is read only
   k2 doc entity list|show|diff|blame <f>    a .dxf's layers, blocks and entities
   k2 doc cad <read verb> [args] <f>         the drawing's own reads, of its
                                       current version (k2 doc cad --help):
@@ -262,7 +262,14 @@ docs. Agents never write .fcpxml, .prproj, photoplot or drill files.
                                       draw page; on a .dxf also header get, check
   k2 doc av read|summary --config <file> <f|folder>...   the AV reading of a
                                       set of drawings (k2 doc av --help)
-  write, restore and undo on a drawing are refused (cad_writer_disabled, exit 3)
+  A .dxf changes through its edit verbs, for people and agents (--dry-run,
+  then --base V --expect sha256:...; --json for the result as data):
+  k2 doc attrib set @h:INSERT --tag T --value V <f>
+  k2 doc entity set @h:E... [--layer L] [--color N] [--ltype NAME] <f>
+  k2 doc entity move @h:E... --by dx,dy --unit U <f>
+  k2 doc entity add line|polyline|text ... --unit U <f> · entity delete @h:E... <f>
+  Whole-file writes, restore and undo of a drawing, and any .dwg edit, are
+  refused (cad_writer_disabled, exit 3)
 Comments on any-file docs (pinned to the whole file, or on PSD/PSB files to
 a layer). They need edit, or a share with --comment; they make no version.
   k2 doc comment --doc|--node ADDR --body "text" [--mention P]... [--proposal FILE]... <f>
@@ -816,8 +823,8 @@ taken in first). It never opens the drawing for anyone: no presence.
 
 A read that has more prints the next call on stderr ("more: ..."). --json
 prints the whole answer: path, version, verb, shape, stdout, data, next.
-Drawings are read only for now: K2 can't save drawing edits yet
-(cad_writer_disabled, exit 3).
+A .dxf changes through its edit verbs (k2 doc --help); whole-file saves of
+a drawing, and a .dwg, are refused (cad_writer_disabled, exit 3).
 Exit: 0 ok · 2 bad usage, a drawing that doesn't read, or a stale cursor
 (the drawing changed: start again) · 3 refused (core_off: the CAD core is
 off) · 4 an address that names nothing.
@@ -1523,8 +1530,8 @@ Which core a file needs, by its name:
               layer files, .drl, .xnc, .xln, .ncd): feature and hole reads,
               never written
   blend       .blend scenes: object reads (read only for now)
-  cad         .dxf and .dwg drawings: drawing reads and the AV reading of a
-              set (read only for now)
+  cad         .dxf and .dwg drawings: drawing reads, the AV reading of a set,
+              and .dxf edit verbs (a .dwg is read only)
   A text file too large or too odd to edit live (it is then an any-file doc)
   still needs its own core: a big .md needs markdown, not any-file.
 
@@ -1752,7 +1759,7 @@ cmd_doc() {
             fi ;;
         cat|head|wc|grep|sed|patch|apply|append|insert|replace|delete)
             _doc_tool "$verb" "$@" ;;
-        layer|outline|node|comment|reply|resolve|comments|reanchor|clip|track|marker|media|timeline|feature|hole|object|scene|collection|entity)
+        layer|outline|node|comment|reply|resolve|comments|reanchor|clip|track|marker|media|timeline|feature|hole|object|scene|collection|entity|attrib)
             # Any-file docs, through the docs kit: comments (any file);
             # PSD/PSB files' layer index (k2 doc --help, "PSD/PSB files");
             # timeline, fab, BLEND and DXF files' index verbs, and a live

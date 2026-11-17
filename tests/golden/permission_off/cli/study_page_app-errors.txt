@@ -565,8 +565,15 @@ STATIC (static Apps (a built folder, no process))
 
 DOCS (multiplayer docs: k2 doc (the CAD core's drawings))
   cad_writer_disabled (exit 3)
-      fix: Read the drawing with k2 doc cad <read verb> <file> (k2 doc cad
-      --help); change it in your CAD app, and its save is taken in.
+      fix: Change a .dxf with its edit verbs (k2 doc entity
+      move|set|add|delete, attrib set; k2 doc cad --help); change a .dwg in
+      your CAD app, and its save is taken in.
+  cad_undo_not_latest (exit 3)
+      fix: Read the drawing again and change it with the edit verbs instead
+      (k2 doc cad --help).
+  cad_expect_stale (exit 3)
+      fix: Read the drawing again (its new version and digest), then undo or
+      edit from there.
 
 HOMES (a person's Home groups, synced between their devices)
   builtin_group (exit 3)

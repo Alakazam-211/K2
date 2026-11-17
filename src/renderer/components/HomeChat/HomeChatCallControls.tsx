@@ -29,6 +29,7 @@ import {
   convOfDmRoom,
   declineDmCall,
   dmCallRoom,
+  dmRoomId,
   ringDmCallAgain,
 } from '@/lib/home-chat/calls'
 import { startRingSound, stopRingSound } from '@/lib/home-chat/ring-sound'
@@ -47,6 +48,7 @@ import { useStore } from 'zustand'
 import { HomeChatCallingBar, HomeChatCallStrip, HomeChatRingCard } from './HomeChatCall'
 import { serverLabelFor } from './serverLabel'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { ConversationCallPlace } from '@/components/Voice/CallPlace'
 
 function toastError(e: unknown): void {
   useToastStore.getState().addToast(daemonErrorText(e) || String(e), 'error')
@@ -138,13 +140,18 @@ export function useDmCall(hostKey: string, conv: string | null, name: string, me
   return { calling, strip, call, cancel, callAgain, leave, toggleMute }
 }
 
-/** The DM's call bars, drawn under its header. */
-export function HomeChatDmCallBars({ view, name }: { view: DmCallView; name: string }): JSX.Element | null {
+/** The DM's call bars, drawn under its header. In the call here, the call
+ *  lives at the top of its conversation (ConversationCallPlace: the stage
+ *  with its video, or the slim bar); where this app has no engine for it
+ *  (the web client's seats), the DM's own strip. */
+export function HomeChatDmCallBars({ view, name, hostKey, conv }: { view: DmCallView; name: string; hostKey: string; conv: string | null }): JSX.Element | null {
   if (view.calling) {
     return <HomeChatCallingBar name={name} state={view.calling} onCancel={view.cancel} onCallAgain={view.callAgain} />
   }
   if (view.strip) {
-    return <HomeChatCallStrip seconds={view.strip.seconds} muted={view.strip.muted} elsewhere={view.strip.elsewhere} onMute={view.toggleMute} onLeave={view.leave} />
+    const strip = <HomeChatCallStrip seconds={view.strip.seconds} muted={view.strip.muted} elsewhere={view.strip.elsewhere} onMute={view.toggleMute} onLeave={view.leave} />
+    if (view.strip.elsewhere || !conv) return strip
+    return <ConversationCallPlace hostKey={hostKey} roomId={dmRoomId(conv)} fallback={strip} />
   }
   return null
 }

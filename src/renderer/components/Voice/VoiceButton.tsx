@@ -21,7 +21,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { headsetState } from './voice-labels'
 import VoicePopover from './VoicePopover'
 import CallControls from './CallControls'
-import { useCallNoiseRemoval, useCallStageShown, useCallVideoHere } from './CallLayer'
+import { useCallInItsConversation, useCallNoiseRemoval, useCallStageShown, useCallVideoHere } from './CallLayer'
 import { CompactButton } from './CallViewButtons'
 import { useCallPlace } from '@/stores/call-place'
 import VideoDemo from './VideoDemo'
@@ -58,12 +58,13 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
   const engineKind = useVoice((s) => s.engineKind)
   const [demo, setDemo] = useState(false)
   // In a call: Mute, Deafen, Camera and Hang up beside the headset, unless
-  // the call's stage is up in this window, with its own. Folded (Compact),
-  // Expand opens the stage again.
+  // the call's stage is up in this window, or its conversation is on screen
+  // here with the call at its top. Folded (Compact), Expand opens the stage.
   const stageShown = useCallStageShown()
   const videoHere = useCallVideoHere()
   const compact = useCallPlace((s) => s.compact)
-  const showControls = call !== null && engineKind === 'native' && !stageShown
+  const inConversation = useCallInItsConversation()
+  const showControls = call !== null && engineKind === 'native' && !stageShown && !inConversation
   const [, setTick] = useState(0)
 
   const close = useCallback(() => voice.setPopoverOpen(false), [])

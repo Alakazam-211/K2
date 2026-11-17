@@ -9,6 +9,7 @@ import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import { Surface } from '@/components/ui'
+import { RoomCallBand } from '@/components/Voice/CallPlace'
 import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 
 interface FocusLayoutProps {
@@ -90,7 +91,11 @@ export default function FocusLayout({
         )}
 
         {/* Main content (terminal) */}
-        <div className="flex-1 overflow-hidden">{children}</div>
+        {/* A voice room call's stage sits at the top of the content, the page under it. */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <RoomCallBand />
+          <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+        </div>
 
         {/* Right auxiliary panel */}
         {rightPanel && (

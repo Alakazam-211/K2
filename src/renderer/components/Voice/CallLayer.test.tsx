@@ -72,7 +72,7 @@ vi.mock('@/stores/voice', async () => {
       join: async (_s: ServerScope, roomId: string) => ({
         callId: `call-${roomId}`,
         roomId,
-        roomName: 'Standup',
+        roomName: roomId.startsWith('dm:') ? 'Ada' : 'Standup',
         signalUrl: 'wss://voice.sewlab.k2.dev',
         mediaToken: 't',
         e2ee: null,
@@ -148,6 +148,8 @@ import { video } from '@/stores/video'
 import { __resetCallPlaceForTests, useCallPlace } from '@/stores/call-place'
 import { fakeTrack } from '@/lib/voice/fake-video-engine'
 import { overlayClaims, resetBrowserOverlaysForTest } from '@/lib/browser-overlay'
+import { dmCallRoom } from '@/lib/home-chat/calls'
+import { ConversationCallPlace, RoomCallBand } from './CallPlace'
 
 const list: VoiceRoomsList = {
   hosting: { state: 'ok', line: 'Voice rooms are on.', detail: null },
@@ -173,18 +175,28 @@ function entry(hostKey: string): HostEntry {
   }
 }
 
+/** The app's window: the top bar's headset, the window's call layer, and
+ *  the content area, with a voice room's band at its top. */
+function AppWindow({ children }: { children?: React.ReactNode }): React.JSX.Element {
+  return (
+    <>
+      <VoiceButton />
+      <CallLayer />
+      <div data-testid="content-area">
+        <RoomCallBand />
+        <div data-testid="page">{children}</div>
+      </div>
+    </>
+  )
+}
+
 /** In a call on the native engine (the fake seat engine, drawn as native),
  *  with the top bar's headset and the window's call layer mounted. */
 async function inCall(): Promise<void> {
   h.entries = { 'sewlab.k2.dev': entry('sewlab.k2.dev') }
   h.lists = { 'sewlab.k2.dev': list }
   act(() => voice.recompute())
-  render(
-    <>
-      <VoiceButton />
-      <CallLayer />
-    </>,
-  )
+  render(<AppWindow />)
   fireEvent.click(screen.getByTestId('voice-button'))
   fireEvent.click(await screen.findByTestId('voice-join'))
   await waitFor(() => expect(voice.store.getState().call?.phase).toBe('connected'))
@@ -193,6 +205,33 @@ async function inCall(): Promise<void> {
     voice.store.setState({ engineKind: 'native' })
   })
   if (h.videoPreview) await waitFor(() => expect(video.store.getState().availability).toBe('ready'))
+}
+
+const DM_HOST = 'sewlab.k2.dev'
+
+/** A DM's view: its call's place above its messages. */
+function DmView({ conv = '42' }: { conv?: string }): React.JSX.Element {
+  return (
+    <div data-testid="dm-view">
+      <ConversationCallPlace hostKey={DM_HOST} roomId={`dm:${conv}`} fallback={<div data-testid="dm-seat-strip" />} />
+      <div data-testid="dm-messages" />
+    </div>
+  )
+}
+
+/** In a DM call with Ada (conversation 42), its DM open (`open`) or not. */
+async function inDmCall(open = true): Promise<ReturnType<typeof render>> {
+  h.entries = { [DM_HOST]: entry(DM_HOST) }
+  h.lists = { [DM_HOST]: list }
+  act(() => voice.recompute())
+  const r = render(<AppWindow>{open ? <DmView /> : null}</AppWindow>)
+  await act(async () => {
+    await voice.join(DM_HOST, dmCallRoom('42', 'Ada'))
+  })
+  await waitFor(() => expect(voice.store.getState().call?.phase).toBe('connected'))
+  act(() => voice.store.setState({ engineKind: 'native' }))
+  if (h.videoPreview) await waitFor(() => expect(video.store.getState().availability).toBe('ready'))
+  return r
 }
 
 /** Camera on, through the top bar's button: the stage comes up. */
@@ -279,11 +318,13 @@ describe('video on: the stage, and the top bar gives way', () => {
     const stage = await cameraOn()
     expect(within(stage).getByTestId('video-tile').dataset.track).toBe('local:camera')
     expect(screen.queryByTestId('call-topbar-controls')).toBeNull()
-    expect(inStage('video-stage-mute')).toBeTruthy()
-    expect(inStage('video-stage-leave')).toBeTruthy()
+    expect(inStage('call-overlay-mute')).toBeTruthy()
+    expect(inStage('call-overlay-leave')).toBeTruthy()
+    // On the call's bar, as in full screen and the call's own window.
+    expect(inStage('call-control-bar').contains(inStage('call-overlay-mute'))).toBe(true)
     // No floating tile anywhere.
     expect(screen.queryByTestId('call-tile')).toBeNull()
-    fireEvent.click(inStage('video-camera'))
+    fireEvent.click(inStage('call-overlay-camera'))
     await waitFor(() => expect(screen.queryByTestId('video-stage')).toBeNull())
     expect(screen.getByTestId('call-topbar-controls')).toBeTruthy()
   })
@@ -333,9 +374,9 @@ describe('video on: the stage, and the top bar gives way', () => {
   it("the stage's buttons drive the engine, and Leave call takes the stage with the call", async () => {
     await inCall()
     await cameraOn()
-    fireEvent.click(inStage('video-stage-mute'))
+    fireEvent.click(inStage('call-overlay-mute'))
     expect(h.voiceEngine?.calls).toContain('muted true')
-    fireEvent.click(inStage('video-stage-leave'))
+    fireEvent.click(inStage('call-overlay-leave'))
     await waitFor(() => expect(voice.store.getState().call).toBeNull())
     expect(screen.queryByTestId('video-stage')).toBeNull()
   })
@@ -355,6 +396,93 @@ describe('video on: the stage, and the top bar gives way', () => {
   })
 })
 
+describe('the call lives in its place: a DM call in its conversation, a voice room at the top of the page', () => {
+  it("a voice room's stage sits at the top of the content area, in the page, with the page under it", async () => {
+    await inCall()
+    const stage = await cameraOn()
+    const area = screen.getByTestId('content-area')
+    expect(area.contains(stage)).toBe(true)
+    expect(area.firstElementChild?.contains(stage)).toBe(true)
+    expect(area.lastElementChild).toBe(screen.getByTestId('page'))
+    // In the flow of the page: never fixed over it.
+    for (let el: HTMLElement | null = stage; el && el !== area; el = el.parentElement) expect(el.className).not.toMatch(/\bfixed\b/)
+  })
+
+  it("voice only: the DM shows the slim bar above its messages, with the call's name, time and controls; the top bar gives way", async () => {
+    await inDmCall()
+    const view = screen.getByTestId('dm-view')
+    const bar = within(view).getByTestId('call-bar')
+    expect(view.firstElementChild?.contains(bar)).toBe(true)
+    expect(view.lastElementChild).toBe(screen.getByTestId('dm-messages'))
+    expect(within(bar).getByTestId('call-bar-title').textContent).toBe('Call with Ada')
+    await waitFor(() => expect(within(bar).getByTestId('call-bar-time').textContent).toMatch(/^\d+:\d\d$/))
+    // Its controls are here; the top bar has none of its own.
+    expect(screen.getAllByTestId('call-topbar-controls')).toHaveLength(1)
+    expect(bar.contains(screen.getByTestId('call-topbar-controls'))).toBe(true)
+    expect(within(bar).getByTestId('call-control-bar').contains(within(bar).getByTestId('call-topbar-mute'))).toBe(true)
+    fireEvent.click(within(bar).getByTestId('call-topbar-mute'))
+    expect(voice.store.getState().call?.muted).toBe(true)
+    // Nothing to expand without video; the band at the page's top is a voice room's, not a DM's.
+    expect(screen.queryByTestId('call-bar-expand')).toBeNull()
+    expect(screen.queryByTestId('video-stage')).toBeNull()
+  })
+
+  it('video on: the stage sits at the top of the DM, messages below; Compact folds it into the slim bar there, and Expand opens it again', async () => {
+    await inDmCall()
+    const view = screen.getByTestId('dm-view')
+    fireEvent.click(within(view).getByTestId('call-topbar-camera'))
+    const stage = await within(view).findByTestId('video-stage')
+    expect(view.firstElementChild?.contains(stage)).toBe(true)
+    expect(view.lastElementChild).toBe(screen.getByTestId('dm-messages'))
+    expect(within(stage).getByTestId('video-tile').dataset.track).toBe('local:camera')
+    // Once: not in the band, not in the top bar.
+    expect(screen.getAllByTestId('video-stage')).toHaveLength(1)
+    expect(screen.queryByTestId('call-topbar-controls')).toBeNull()
+    fireEvent.click(within(stage).getByTestId('video-stage-compact'))
+    expect(screen.queryByTestId('video-stage')).toBeNull()
+    const bar = within(view).getByTestId('call-bar')
+    const expand = within(bar).getByTestId('call-bar-expand')
+    expect(screen.getAllByTestId('call-bar-expand')).toHaveLength(1)
+    fireEvent.click(expand)
+    expect(await within(view).findByTestId('video-stage')).toBeTruthy()
+  })
+
+  it("away from the DM, its stage is drawn nowhere and the top bar has the call; opening the DM brings the stage back", async () => {
+    const r = await inDmCall()
+    fireEvent.click(within(screen.getByTestId('dm-view')).getByTestId('call-topbar-camera'))
+    await screen.findByTestId('video-stage')
+    r.rerender(<AppWindow />)
+    expect(screen.queryByTestId('video-stage')).toBeNull()
+    expect(screen.getByTestId('call-topbar-controls')).toBeTruthy()
+    await waitFor(() => expect(video.sinks()).toEqual([]), { timeout: 3500 })
+    r.rerender(
+      <AppWindow>
+        <DmView />
+      </AppWindow>,
+    )
+    expect(await within(screen.getByTestId('dm-view')).findByTestId('video-stage')).toBeTruthy()
+  })
+
+  it("another DM shows nothing of this call, and a call without the app's engine keeps the DM's own strip", async () => {
+    const r = await inDmCall()
+    r.rerender(
+      <AppWindow>
+        <DmView conv="43" />
+      </AppWindow>,
+    )
+    expect(within(screen.getByTestId('dm-view')).queryByTestId('call-bar')).toBeNull()
+    expect(within(screen.getByTestId('dm-view')).queryByTestId('dm-seat-strip')).toBeNull()
+    r.rerender(
+      <AppWindow>
+        <DmView />
+      </AppWindow>,
+    )
+    act(() => voice.store.setState({ engineKind: 'seat' }))
+    expect(within(screen.getByTestId('dm-view')).getByTestId('dm-seat-strip')).toBeTruthy()
+    expect(screen.queryByTestId('call-bar')).toBeNull()
+  })
+})
+
 describe("camera and screen from the call's controls (Sew's plugin video)", () => {
   it("the camera's first press asks the OS (the plugin never does), and a refusal says why with the way to the settings", async () => {
     h.videoOpts = { cameraPermission: 'prompt', cameraPrompt: 'granted' }
@@ -363,7 +491,7 @@ describe("camera and screen from the call's controls (Sew's plugin video)", () =
     expect(h.videoEngine?.calls.slice(0, 3)).toEqual(['camera_permission', 'request_camera_permission', 'camera {"on":true}'])
     // Then the self-view's sink.
     await waitFor(() => expect(video.sinks().map((x) => x.track)).toEqual(['local:camera']))
-    fireEvent.click(inStage('video-camera'))
+    fireEvent.click(inStage('call-overlay-camera'))
     await waitFor(() => expect(screen.queryByTestId('video-stage')).toBeNull())
     // Denied now (System Settings): the press asks nothing and says so.
     if (!h.videoEngine) throw new Error('no video engine')
@@ -383,15 +511,15 @@ describe("camera and screen from the call's controls (Sew's plugin video)", () =
     expect(h.videoEngine?.calls).toContain('screen {"on":true}')
     expect(within(stage).getByTestId('video-tile').dataset.track).toBe('local:screen')
     await waitFor(() => expect(video.sinks().map((s) => s.track)).toEqual(['local:screen']))
-    fireEvent.click(inStage('video-screen'))
+    fireEvent.click(inStage('call-overlay-screen'))
     await waitFor(() => expect(screen.queryByTestId('video-stage')).toBeNull())
     expect(h.videoEngine?.calls).toContain('screen {"on":false}')
   })
 
-  it("where the OS only lists, the stage's Choose screen shows the list under it, in K2's own menu", async () => {
+  it("where the OS only lists, the stage's Share screen shows the list under it, in K2's own menu", async () => {
     await inCall()
     await cameraOn()
-    fireEvent.click(inStage('video-screen-pick'))
+    fireEvent.click(inStage('call-overlay-screen'))
     await screen.findByTestId('video-screen-picker')
     expect(h.videoEngine?.calls).toContain('screen_sources')
     fireEvent.click(screen.getByTestId('video-screen-source'))
@@ -456,7 +584,7 @@ describe('labels on the picture', () => {
     await inCall()
     act(() => h.videoEngine?.setTracks([fakeTrack('7')]))
     await screen.findByTestId('video-stage')
-    fireEvent.click(inStage('video-camera'))
+    fireEvent.click(inStage('call-overlay-camera'))
     await waitFor(() => expect(within(screen.getByTestId('video-grid')).getAllByTestId('video-tile-label')).toHaveLength(2))
     for (const l of within(screen.getByTestId('video-grid')).getAllByTestId('video-tile-label')) {
       expect(l.className).toContain('bg-[var(--color-media-label-bg)]')

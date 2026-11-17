@@ -7,6 +7,7 @@ import { useSidebarDisplayWidth, useSidebarStore } from '../../stores/sidebar'
 import { usePanelsStore } from '../../stores/panels'
 import AnimatedDrawer from './AnimatedDrawer'
 import { useSidebarFloorMotion } from './sidebar-floor-motion'
+import { RoomCallBand } from '@/components/Voice/CallPlace'
 
 interface LayoutProps {
   /** Content for the primary sidebar (projects list) — shown when expanded */
@@ -82,7 +83,11 @@ export default function Layout({
         )}
 
         {/* Main content (terminal) */}
-        <div className="flex-1 overflow-hidden">{children}</div>
+        {/* A voice room call's stage sits at the top of the content, the page under it. */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <RoomCallBand />
+          <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+        </div>
 
         {/* Right auxiliary panel (tabbed) */}
         {rightPanel && (

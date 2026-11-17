@@ -121,6 +121,7 @@ vi.mock('@/stores/video', async () => {
 
 import VoiceButton from './VoiceButton'
 import CallLayer from './CallLayer'
+import { RoomCallBand } from './CallPlace'
 import { voice } from '@/stores/voice'
 import { overlayClaims } from '@/lib/browser-overlay'
 import { FrostCapsule, expectOnPopoverLayer } from '@/test-utils/popover-layer'
@@ -544,6 +545,7 @@ describe('video in the call (videoRoomsPreview)', () => {
       <>
         <VoiceButton />
         <CallLayer />
+        <RoomCallBand />
       </>,
     )
     fireEvent.click(screen.getByTestId('voice-button'))
@@ -573,9 +575,11 @@ describe('video in the call (videoRoomsPreview)', () => {
     const stage = await screen.findByTestId('video-stage')
     expect(within(stage).getByTestId('video-tile').dataset.track).toBe('local:camera')
     expect(screen.queryByTestId('call-tile')).toBeNull()
-    expect(screen.getAllByTestId('video-camera').map((b) => b.getAttribute('aria-label'))).toEqual(['Turn camera off', 'Turn camera off'])
+    expect(screen.getAllByTestId('video-camera').map((b) => b.getAttribute('aria-label'))).toEqual(['Turn camera off'])
+    // The stage's controls sit on the call's bar.
+    expect(within(stage).getByTestId('call-control-bar').contains(within(stage).getByTestId('call-overlay-camera'))).toBe(true)
     expect(screen.getByTestId('video-demo-open')).toBeTruthy()
-    fireEvent.click(within(stage).getByTestId('video-stage-leave'))
+    fireEvent.click(within(stage).getByTestId('call-overlay-leave'))
     await waitFor(() => expect(screen.queryByTestId('video-stage')).toBeNull())
     expect(voice.store.getState().call).toBeNull()
   })

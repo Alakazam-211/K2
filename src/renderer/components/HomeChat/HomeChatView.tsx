@@ -508,7 +508,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
           </button>
         )}
       </div>
-      {dm && <HomeChatDmCallBars view={dmCall} name={title} />}
+      {dm && <HomeChatDmCallBars view={dmCall} name={title} hostKey={hostKey} conv={conv} />}
       {membersOpen && target.kind === 'channel' && (
         <HomeChatMembersSheet target={target} onClose={() => setMembersOpen(false)} onChanged={reloadChannel} />
       )}

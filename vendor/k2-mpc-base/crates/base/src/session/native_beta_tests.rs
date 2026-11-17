@@ -90,7 +90,11 @@ fn config(beta: bool) -> Config {
 }
 
 fn manager(store: &Arc<DocStore>, host: &Arc<H>, c: Config) -> SessionManager {
-    let m = SessionManager::new(store.clone(), host.clone(), c);
+    with_test_keys(SessionManager::new(store.clone(), host.clone(), c))
+}
+
+/// The manager as it is: a build without the native engine has no key service to give it.
+fn with_test_keys(m: SessionManager) -> SessionManager {
     m
 }
 

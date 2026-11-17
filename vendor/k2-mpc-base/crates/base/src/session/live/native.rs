@@ -15,15 +15,9 @@ use crate::session::config::Config;
 use crate::session::error::Result;
 use crate::store::{DocId, DocMeta, DocStore, Seq};
 
-/// Where a session gets its native docs' keys (feature `native`): the manager's
-/// [`crate::session::NativeKeysFor`], when it was given one. Without it every native doc is
-/// refused (`MPCE-E566`) and nothing is written.
+/// Where a session would get its native docs' keys: a build without the native engine has none.
 #[derive(Clone, Default)]
-pub(crate) struct KeysSource {
-}
-
-impl KeysSource {
-}
+pub(crate) struct KeysSource {}
 
 /// A stored doc as a load reads it, on the engine its stamp names.
 pub(super) struct LoadedDoc {

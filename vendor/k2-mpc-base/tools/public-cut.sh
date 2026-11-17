@@ -66,7 +66,9 @@
 # goes. The root README.md gets one fixed paragraph saying what the cut leaves out.
 #
 # The lockfile. The script prunes every Cargo.lock that has a removed package itself, by
-# text: the removed packages, every package no longer reachable from the workspace's members,
+# text: the removed packages, every package unreachable from the workspace's members
+# (a member reaching only the dependencies its cut manifest still declares, so one a drop block
+# removed goes with everything only it reached),
 # their names in `dependencies` lists (a list left empty goes), and a reference made
 # unambiguous by the removals written as cargo writes it (`"name"` once one version is
 # left: the only changed lines). Nothing is upgraded: no version, source or checksum line
@@ -612,6 +614,33 @@ roots() {   # $1: the directory of a Cargo.lock
     done
   )
 }
+# the dependency names each member's manifest declares, as "PACKAGE DEP" lines: every table whose
+# header ends in `dependencies` (its [target.'cfg(..)'.*] forms too) or is `[*dependencies.NAME]`,
+# each key and each `package = "..."` (a renamed dependency). After the manifest edits above, so a
+# dependency a drop block removed is not declared: the lock keeps no edge to it.
+declared() {   # $1: the directory of a Cargo.lock
+  (
+    cd "$1"
+    for m in Cargo.toml $(awk '/^\[workspace\]/{w=1;next} /^\[/{w=0} w && /^members[ \t]*=/{f=1} f{print; if (/\]/) exit}' Cargo.toml | sed 's/.*=//' | tr -d '[]",' | tr ' \t' '\n\n' | sed '/^$/d; s|$|/Cargo.toml|'); do
+      [ -f "$m" ] || continue
+      awk '
+        /^\[package\]/ { s = 1; t = 0; next }
+        /^\[/ {
+          s = 0; h = $0; sub(/[ \t]*#.*/, "", h); gsub(/^\[|\][ \t]*$/, "", h); gsub(/"|\047/, "", h)
+          t = (h ~ /(^|\.)(dev-|build-)?dependencies$/); n = ""
+          if (h ~ /(^|\.)(dev-|build-)?dependencies\.[A-Za-z0-9_-]+$/) { n = h; sub(/.*\./, "", n); D[n] = 1; t = 2 }
+          next
+        }
+        s && /^name[ \t]*=/ { p = $0; gsub(/.*=[ \t]*"|".*/, "", p) }
+        t == 1 && /^[ \t]*"?[A-Za-z0-9_-]+"?[ \t]*=/ {
+          k = $0; sub(/^[ \t]*/, "", k); sub(/[ \t]*=.*/, "", k); gsub(/"/, "", k); D[k] = 1
+          if (match($0, /package[ \t]*=[ \t]*"[^"]+"/)) { q = substr($0, RSTART, RLENGTH); sub(/^package[ \t]*=[ \t]*"/, "", q); sub(/"$/, "", q); D[q] = 1 }
+        }
+        t == 2 && /^[ \t]*package[ \t]*=/ { q = $0; gsub(/.*=[ \t]*"|".*/, "", q); D[q] = 1 }
+        END { for (k in D) print p, k }' "$m"
+    done
+  )
+}
 for lf in $(git ls-files '*Cargo.lock' | grep -v '^vendor/'); do
   [ -f "$lf" ] || continue
   DROP=
@@ -629,7 +658,9 @@ for lf in $(git ls-files '*Cargo.lock' | grep -v '^vendor/'); do
     cat "$LOCKFILE" > "$lf"; echo "  replaced $lf from $LOCKFILE"; continue
   fi
   R=$(roots "$(dirname "$lf")") || die "no roots for $lf"
-  awk -v drop="$DROP" -v roots="$(echo $R)" '
+  DECL=$(declared "$(dirname "$lf")" | tr ' ' ':' | tr '\n' ' ')
+  [ -n "$DECL" ] || die "no declared dependencies read for $lf"
+  awk -v drop="$DROP" -v roots="$(echo $R)" -v decl="$DECL" '
     function flush() { if (cur) { sub(/\n+$/, "", blk); np++; T[np] = blk; NM[np] = nm; VR[np] = vr; SR[np] = sr; ND[np] = nd; for (z = 1; z <= nd; z++) DP[np, z] = dl[z] }; cur = 0; blk = ""; nm = vr = sr = ""; nd = 0 }
     /^\[\[package\]\]/ { flush(); cur = 1; blk = $0 "\n"; next }
     /^\[/ && !/^\[\[package\]\]/ { flush(); tail = tail $0 "\n"; intail = 1; next }
@@ -660,7 +691,8 @@ for lf in $(git ls-files '*Cargo.lock' | grep -v '^vendor/'); do
       sub(/\n+$/, "", head)
       nd0 = split(drop, X, " "); for (z = 1; z <= nd0; z++) gone[X[z]] = 1
       nr = split(roots, ROOTS, " ")
-      for (z = 1; z <= np; z++) for (y = 1; y <= nr; y++) if (NM[z] == ROOTS[y] && SR[z] == "") { keep[z] = 1; Q[++qn] = z }
+      nc = split(decl, C, " "); for (z = 1; z <= nc; z++) { split(C[z], cp, ":"); DECL[cp[1] " " cp[2]] = 1 }
+      for (z = 1; z <= np; z++) for (y = 1; y <= nr; y++) if (NM[z] == ROOTS[y] && SR[z] == "") { keep[z] = 1; isroot[z] = 1; Q[++qn] = z }
       if (!qn) { print "public-cut: no root package found in the lock" > "/dev/stderr"; exit 3 }
       for (qi = 1; qi <= qn; qi++) {
         z = Q[qi]
@@ -668,6 +700,8 @@ for lf in $(git ls-files '*Cargo.lock' | grep -v '^vendor/'); do
           t = resolve(DP[z, y])
           if (!t) { print "public-cut: an unresolved lock reference: " DP[z, y] > "/dev/stderr"; exit 3 }
           if (gone[NM[t]]) continue
+          # a member reaches only what its manifest still declares (a dependency a drop block removed goes)
+          if (isroot[z] && !((NM[z] " " NM[t]) in DECL)) { cut_edge[z, y] = 1; continue }
           if (!keep[t]) { keep[t] = 1; Q[++qn] = t }
         }
       }
@@ -678,7 +712,7 @@ for lf in $(git ls-files '*Cargo.lock' | grep -v '^vendor/'); do
         printf "\n%s\n", T[z]
         nk = 0
         for (y = 1; y <= ND[z]; y++) {
-          t = resolve(DP[z, y]); if (!keep[t]) continue
+          t = resolve(DP[z, y]); if (!keep[t] || ((z, y) in cut_edge)) continue
           if (byname[NM[t]] == 1) r = NM[t]; else if (bynv[NM[t] " " VR[t]] == 1) r = NM[t] " " VR[t]; else r = NM[t] " " VR[t] " (" SR[t] ")"
           K[++nk] = r
         }

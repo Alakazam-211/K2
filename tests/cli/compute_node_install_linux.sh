@@ -38,6 +38,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+. "$SCRIPT_DIR/_cli_under_test.sh"
 TARGET="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
 HUMAN="k2cthuman"
 BIN_DIR="/tmp/k2ct-bin"
@@ -80,7 +81,7 @@ echo "== binaries"
 install -d -m 0755 "$BIN_DIR"
 install -m 0755 "$TARGET/debug/k2-daemon" "$BIN_DIR/k2-daemon"
 install -m 0755 "$TARGET/debug/k2-node" "$BIN_DIR/k2-node"
-install -m 0755 "$PROJECT_ROOT/cli/k2" "$BIN_DIR/k2"
+install -m 0755 "$CLI_UNDER_TEST" "$BIN_DIR/k2"
 install -d -m 0755 "$BIN_DIR/scripts"
 cp "$PROJECT_ROOT"/scripts/node/*.sh "$BIN_DIR/scripts/"
 

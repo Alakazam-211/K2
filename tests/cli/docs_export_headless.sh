@@ -382,7 +382,7 @@ if grep '"doc-exported"' "$audit" | grep -q '# Plan\|one\\ntwo'; then fail "doc 
 ok "one doc-exported line per export, refusals and failures too, metadata only"
 
 echo "== k2 doc export (the CLI) =="
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_UNDER_TEST"
 cli() {
     local who="$1" cwd="$2"; shift 2
     local -a envs=(HOME="$SB" K2_HOST=127.0.0.1 K2_PORT="$DPORT")

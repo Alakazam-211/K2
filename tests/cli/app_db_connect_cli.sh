@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CLI="$ROOT/cli/k2"
+. "$ROOT/tests/cli/_cli_under_test.sh"; CLI="$CLI_UNDER_TEST"
 source "$ROOT/tests/cli/_hermetic_cli.sh"
 hermetic_cli_env
 

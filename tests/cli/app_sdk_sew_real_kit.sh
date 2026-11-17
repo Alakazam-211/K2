@@ -16,7 +16,7 @@ set -euo pipefail
 KIT="${1:?usage: $0 <sew-app-kit-<v>.tar.gz> [k2-daemon]}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 DAEMON="${2:-${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}/debug/k2-daemon}"
 [ -x "$DAEMON" ] || { echo "FAIL: $DAEMON not built (cargo build -p k2-daemon)" >&2; exit 1; }
 [ -f "$KIT" ] || { echo "FAIL: no kit at $KIT" >&2; exit 1; }

@@ -9,7 +9,7 @@
 # in Rust (k2-core board::tests, k2-daemon board_routes_tests).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-K2="$here/../../cli/k2"
+. "$here/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 source "$here/_hermetic_cli.sh"
 hermetic_cli_env
 

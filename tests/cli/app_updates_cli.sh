@@ -9,7 +9,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-K2="$(cd "$SCRIPT_DIR/../.." && pwd)/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2="$CLI_UNDER_TEST"
 for v in $(env | grep -E '^K2(SO)?_' | cut -d= -f1); do unset "$v"; done
 SANDBOX="$(mktemp -d /tmp/k2upd-XXXXXX)"
 trap 'rm -rf "$SANDBOX"' EXIT

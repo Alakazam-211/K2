@@ -240,7 +240,7 @@ want 200 "cores list"
 jok "$BODY" '[c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board", "slides", "timeline", "fab", "blend", "cad"] and not any(c["on"] for c in j["cores"]) and j["canChange"] is True' "cores: nine rows, all off; the owner may change them"
 agent GET /cli/docs/cores
 want 200 "agent cores list"
-jok "$BODY" 'j["canChange"] is False and len(j["cores"]) == 8' "an agent may read the cores, never change them"
+jok "$BODY" 'j["canChange"] is False and len(j["cores"]) == 9' "an agent may read the cores, never change them"
 for rp in "GET /cli/docs/read" "GET /cli/docs/who" "GET /cli/docs/log" "GET /cli/docs/status" "POST /cli/docs/edit" "POST /cli/docs/open" "POST /cli/docs/flush" "POST /cli/docs/export"; do
     m="${rp%% *}"; r="${rp#* }"
     if [ "$m" = GET ]; then owner GET "$r" "" "workspace=$A&path=notes/plan.md"

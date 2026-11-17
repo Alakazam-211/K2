@@ -133,12 +133,15 @@ fn project_group_show_members_carry_session_liveness() {
     // key `lookup-by-agent` and the canonical spawn use).
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
     let _enter = rt.enter();
+    // A program that stays up on every OS (Windows has no `cat`).
+    let (program, args) = k2_core::test_env::sleep_command(600);
     let session = k2_core::test_env::spawn_plain_pty(k2_core::terminal::DaemonPtyConfig {
-        program: Some("cat".to_string()),
-        cwd: Some(std::path::PathBuf::from("/tmp")),
+        program: Some(program),
+        args,
+        cwd: Some(std::env::temp_dir()),
         ..Default::default()
     })
-    .expect("spawn cat");
+    .expect("spawn a long-lived program");
     crate::v2_session_map::register(live_id.clone(), session.clone());
 
     let after = ok_json(show(&gid));

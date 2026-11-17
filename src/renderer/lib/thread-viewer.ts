@@ -74,11 +74,29 @@ export function isAgentThreadAuthor(author: ThreadAuthor | null): boolean {
   return author?.kind === AGENT_AUTHOR_KIND
 }
 
+/** K2's own notice (`{kind: "system"}`, no login). Only the daemon sets it:
+ *  it strips the field from every person's, agent's and guest's post. */
+export const SYSTEM_AUTHOR_KIND = 'system'
+
+/** `doc.author` on one of K2's own notices. */
+export interface SystemThreadAuthor {
+  kind: typeof SYSTEM_AUTHOR_KIND
+}
+
+/** Is `raw` (a doc's `author`, as sent) K2's own stamp? The exact kind,
+ *  so a look-alike never passes. */
+export function isSystemThreadAuthor(raw: unknown): raw is SystemThreadAuthor {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false
+  return (raw as Record<string, unknown>).kind === SYSTEM_AUTHOR_KIND
+}
+
 /** A person's post (a person, an app guest, an imported person): a
  *  stamp that is not an agent's, or a `via=compose` doc from before the
  *  field. An agent's post (the `agent` stamp, or no stamp and not
  *  compose) and K2's own notes are not. */
 export function isPersonThreadPost(doc: { via?: string | null; author?: unknown }): boolean {
+  // K2's own notice is never a person's, whatever else it carries.
+  if (isSystemThreadAuthor(doc.author)) return false
   const author = parseThreadAuthor(doc.author)
   if (author) return !isAgentThreadAuthor(author)
   return doc.via === 'compose'
@@ -115,6 +133,7 @@ export function isOwnThreadPost(
   doc: { via?: string | null; author?: unknown; mine?: unknown },
   viewer: ThreadViewer | null,
 ): boolean {
+  if (isSystemThreadAuthor(doc.author)) return false
   if (typeof doc.mine === 'boolean') return doc.mine
   const author = parseThreadAuthor(doc.author)
   if (author) return isViewerAuthor(author, viewer)

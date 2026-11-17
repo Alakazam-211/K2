@@ -35,6 +35,19 @@ export interface SessionViewChoice {
    *  one hides the terminal, and revealing the terminal closes it. */
   threadPanel: ThreadPanelKind | null
   setThreadPanel: (next: ThreadPanelKind | null) => void
+  /** Put the terminal on screen: Thread view reveals it, Chatter (or a
+   *  Split without a terminal side) switches to Terminal view; where it
+   *  already shows, nothing changes. */
+  openTerminal: () => void
+}
+
+/** What "open the terminal" does from a view: reveal it beside the Thread,
+ *  switch to the Terminal view, or nothing (it is on screen). */
+export function openTerminalStep(view: SessionViewTab, sides: SessionSplitSides): 'reveal' | 'switch' | null {
+  if (view === 'thread') return 'reveal'
+  if (view === 'chatter') return 'switch'
+  if (view === 'split') return sides.left === 'terminal' || sides.right === 'terminal' ? null : 'switch'
+  return null
 }
 
 /** Which server's view memory a room reads and writes: the ROOM's server.
@@ -217,6 +230,12 @@ export function useSessionViewTab(
     [terminalKey, terminalRevealedNow],
   )
 
+  const openTerminal = useCallback(() => {
+    const step = openTerminalStep(shownRef.current.tab, shownRef.current.sides)
+    if (step === 'reveal') setTerminalRevealed(true)
+    else if (step === 'switch') setViewTab('terminal')
+  }, [setTerminalRevealed, setViewTab])
+
   return {
     viewTab,
     setViewTab,
@@ -229,5 +248,6 @@ export function useSessionViewTab(
     terminalRevealKey: terminalKey,
     threadPanel: panelMemo.panel,
     setThreadPanel,
+    openTerminal,
   }
 }

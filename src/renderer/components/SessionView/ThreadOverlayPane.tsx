@@ -57,6 +57,7 @@ import {
   type ThreadSenderSlot,
 } from '@/components/Thread/threadSenders'
 import { threadRunEnds, threadRunStarts } from '@/components/Thread/threadRuns'
+import { isSystemNoticeItem } from '@/components/Thread/systemNotice'
 import { threadReceiptFor, threadReceiptRow, type ThreadReceipt } from '@/components/Thread/threadReceipt'
 import { useReducedMotion } from '@/hooks/useReducedMotion'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
@@ -101,8 +102,9 @@ function paneRow(
     // A pending bubble is always this window's own send (as ThreadItemRow).
     mine: it.pending ? true : threadAuthorLabel(it.doc, viewer, currentAddr, pastAddresses).mine,
     at: it.doc.created_at,
-    // thread-message-delete-v1: its "Message deleted" line stands alone.
-    deleted: it.doc.deleted === true,
+    // thread-message-delete-v1: its "Message deleted" line stands alone,
+    // and so does a K2 notice's row (the agent's run ends before it).
+    deleted: it.doc.deleted === true || isSystemNoticeItem(it),
   }
 }
 
@@ -158,7 +160,8 @@ export function threadPaneReceipt(
   const rows = visible.map((it) => ({
     mine: it.pending ? true : threadAuthorLabel(it.doc, o.viewer, o.currentAddr, o.pastAddresses).mine,
     confirmed: !it.pending,
-    agent: !it.pending && !isPersonPost(it.doc),
+    // A K2 notice (say, "didn't take the message") is not the agent reading it.
+    agent: !it.pending && !isPersonPost(it.doc) && !isSystemNoticeItem(it),
     at: it.doc.created_at,
     // thread-message-delete-v1: a deleted message never carries it.
     deleted: it.doc.deleted === true,

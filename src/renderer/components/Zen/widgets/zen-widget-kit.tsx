@@ -11,6 +11,7 @@ import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenAgentRow, ZenThreadView } from '@/lib/zen/zen-data'
 import { agentLookColor, agentLookTextOn } from '@/lib/agent-look'
 import { THREAD_ZEN_CSS } from '@/components/Thread/ThreadZenKit'
+import { THREAD_SYSTEM_NOTICE_CSS } from '@/components/Thread/ThreadSystemNotice'
 
 /** The Home's rows, live (`agents.list` + `agents.subscribe`). */
 export function useZenRows(bridge: ZenWidgetBridge): ZenAgentRow[] {
@@ -132,6 +133,7 @@ export const ZEN_WIDGET_CSS = `
 [data-zen-root] [data-zen-agent-row] { animation: zen-row-in ${anim('rowIn', 220)} both; }
 [data-zen-root] [data-zen-conversation-body] { animation: zen-fade-in ${anim('conversationSwitch', 180)} both; }
 ${THREAD_ZEN_CSS}
+${THREAD_SYSTEM_NOTICE_CSS}
 [data-zen-root] [data-zen-home-menu] [data-zen-home-option]:hover { background: var(--zen-surface); }
 [data-zen-root] [data-zen-focus-group-picker] [data-focus-group-trigger] { border-radius: 999px; padding: 2px 10px; background: transparent; }
 [data-zen-root] [data-zen-focus-group-menu] { border-radius: var(--zen-radius); overflow: hidden; background: var(--zen-surface-raised); }

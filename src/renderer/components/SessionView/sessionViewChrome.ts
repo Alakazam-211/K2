@@ -36,6 +36,9 @@ export interface SessionViewChromeValue {
   /** An agent tile (Projects): the whole tile switches views, and Ctrl+`
    *  switches it, so the chord never reaches the PTY in any view. */
   viewSwitch?: boolean
+  /** Put the agent's terminal on screen (a K2 notice's "Open its
+   *  terminal"). Undefined: this chrome can't, and the button isn't drawn. */
+  openTerminal?: () => void
 }
 
 export const SessionViewChromeContext = createContext<SessionViewChromeValue | null>(null)

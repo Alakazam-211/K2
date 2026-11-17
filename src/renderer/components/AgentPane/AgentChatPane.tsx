@@ -963,6 +963,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     terminalRevealKey,
     threadPanel,
     setThreadPanel,
+    openTerminal,
   } = useSessionViewTab(overlayConv, room.scope, projectId, {
     // The conversation is named late (an asleep agent woken, the first
     // ensure's answer) or changes under this pane (a respawn): a view the
@@ -1614,6 +1615,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         threadPanel={threadPanel}
         setThreadPanel={setThreadPanel}
         projectPath={projectPath}
+        openTerminal={openTerminal}
       >
         <TerminalPane
           // Remount on each daemon respawn so TerminalPane re-attaches to
@@ -1795,6 +1797,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     terminalRevealKey,
     threadPanel,
     setThreadPanel,
+    openTerminal,
   } = useSessionViewTab(overlayConv, room.scope, projectId)
   // Split view's Thread column floats the picture and name, search and the
   // workspace's bell (SplitColumnFloats).
@@ -2177,6 +2180,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
         threadPanel={threadPanel}
         setThreadPanel={setThreadPanel}
         projectPath={projectPath}
+        openTerminal={openTerminal}
       >
         <TerminalPane
           key={refreshNonce}

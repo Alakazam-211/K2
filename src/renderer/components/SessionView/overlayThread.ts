@@ -9,7 +9,7 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 import { httpCodeOf, httpStatusOf } from '@/lib/daemon-http-error'
 import { threadAttachmentRefusalText } from '@/lib/thread-compose-attachments'
-import { parseThreadAuthor, type ThreadAuthor } from '@/lib/thread-viewer'
+import { isSystemThreadAuthor, parseThreadAuthor, SYSTEM_AUTHOR_KIND, type SystemThreadAuthor, type ThreadAuthor } from '@/lib/thread-viewer'
 import {
   kickOutbox,
   newClientMsgId,
@@ -92,7 +92,9 @@ function docExtras(src: Record<string, unknown>): DocExtras {
       out.widget = { widget: o.widget, garden: o.garden }
     }
   }
-  const author = parseThreadAuthor(src.author)
+  // K2's own notice: `{kind: "system"}` has no login, so it is carried as
+  // sent (the socket's copy is the same) and drawn as a notice row.
+  const author: OverlayDoc['author'] = isSystemThreadAuthor(src.author) ? { kind: SYSTEM_AUTHOR_KIND } : parseThreadAuthor(src.author)
   if (author) out.author = author
   const design = coerceDesign(src.design)
   if (design) out.design = design
@@ -387,7 +389,7 @@ export interface OverlayDoc {
    *  Absent on K2's own notes and on agent posts from before 0.46.13;
    *  `isOwnThreadPost` decides "You" and `isAgentThreadPost` /
    *  `isPersonThreadPost` (lib/thread-viewer) who sent it. */
-  author?: ThreadAuthor | null
+  author?: ThreadAuthor | SystemThreadAuthor | null
   /** thread-mine-v1 (0.46.8): the daemon's answer to "is this the reader's
    *  own post?", for the credential that read it (every read page, frame
    *  and post answer, on a person's post). It wins over the client's own

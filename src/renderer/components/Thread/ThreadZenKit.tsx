@@ -59,6 +59,8 @@ import {
 } from './ThreadMessageMenu'
 
 import { THREAD_JUMP_PILL_CSS } from './ThreadJumpPill'
+import { THREAD_SYSTEM_NOTICE_CSS, ThreadSystemNoticeRow } from './ThreadSystemNotice'
+import { parseSystemNotice } from './systemNotice'
 import { FOOTER_BLUR_LAYERS, FOOTER_TINT_STOPS, FOOTER_TINT_STOPS_OPAQUE } from '@/components/ui/scrollEdgeLayers'
 import {
   CHAMFER_CUT,
@@ -341,7 +343,7 @@ export function ThreadFooterFade({ top }: { top?: number | null }): JSX.Element 
 }
 
 export function ThreadZenStyles(): JSX.Element {
-  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_TAIL_CSS + THREAD_FOOTER_FADE_CSS + THREAD_SENDER_CSS + THREAD_JUMP_PILL_CSS}</style>
+  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_TAIL_CSS + THREAD_FOOTER_FADE_CSS + THREAD_SENDER_CSS + THREAD_JUMP_PILL_CSS + THREAD_SYSTEM_NOTICE_CSS}</style>
 }
 
 /** The message list's padding and the space between messages (the
@@ -420,6 +422,8 @@ const DELETED_LINE_STYLE: CSSProperties = {
 }
 /** What a deleted post says, to everyone. */
 export const THREAD_DELETED_LINE = 'Message deleted'
+/** A K2 notice's row: the whole column's width. */
+const SYSTEM_ROW_STYLE: CSSProperties = { alignSelf: 'stretch', display: 'flex', flexDirection: 'column', minWidth: 0 }
 
 export interface ThreadBubbleProps {
   item: OverlayThreadItem
@@ -731,6 +735,24 @@ export const ThreadBubble = memo(function ThreadBubble({
         <span data-thread-deleted="" role="note" style={DELETED_LINE_STYLE}>
           {THREAD_DELETED_LINE}
         </span>
+      </div>
+    )
+  }
+  // K2's own notice (the daemon's system stamp, never the words): a row
+  // across the column, not the agent's bubble. No picture, name or menu.
+  const system = parseSystemNotice(item)
+  if (system) {
+    return (
+      <div
+        data-zen-message={item.id}
+        data-testid="thread-item"
+        data-kind={kind}
+        data-seq={item.seq}
+        data-thread-system-row=""
+        data-zen-message-still={still ? '' : undefined}
+        style={SYSTEM_ROW_STYLE}
+      >
+        <ThreadSystemNoticeRow item={item} notice={system} />
       </div>
     )
   }

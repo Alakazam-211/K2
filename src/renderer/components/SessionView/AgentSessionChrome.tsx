@@ -108,6 +108,7 @@ export function AgentSessionChrome({
     terminalRevealKey,
     threadPanel,
     setThreadPanel,
+    openTerminal,
   } = useSessionViewTab(sessionKey, room.scope, null, { carryOnRekey: true }) // the conversation can be adopted late (TR14)
   // Reported by the TerminalPane below (its phase).
   const [terminalLive, setTerminalLive] = useState(false)
@@ -180,8 +181,9 @@ export function AgentSessionChrome({
       threadPanel,
       setThreadPanel,
       projectPath: cwd,
+      openTerminal,
     }),
-    [viewTab, splitLeft, splitRight, addr, addrProblem, onRetryAddr, conversationId, agentName, title, terminalRevealed, terminalRevealKey, threadPanel, setThreadPanel, cwd],
+    [viewTab, splitLeft, splitRight, addr, addrProblem, onRetryAddr, conversationId, agentName, title, terminalRevealed, terminalRevealKey, threadPanel, setThreadPanel, cwd, openTerminal],
   )
   // The columns and the Thread are drawn here, outside the refresh remount,
   // so a refresh rebuilds only the pane (SessionColumns.tsx).
@@ -504,6 +506,7 @@ export function PinnedSessionBody({
   projectPath,
   splitFloats,
   viewSwitch,
+  openTerminal,
   children,
 }: {
   viewTab: SessionViewTab
@@ -527,6 +530,9 @@ export function PinnedSessionBody({
   /** An agent tile (Projects): views switch the whole tile (`viewSwitch` on
    *  the chrome). */
   viewSwitch?: boolean
+  /** Put the terminal on screen (`useSessionViewTab`): a K2 notice's
+   *  "Open its terminal". Absent: that button isn't drawn. */
+  openTerminal?: () => void
   children: ReactNode
 }): JSX.Element {
   const chrome = useMemo<SessionViewChromeValue>(
@@ -544,8 +550,9 @@ export function PinnedSessionBody({
       setThreadPanel,
       projectPath,
       viewSwitch,
+      openTerminal,
     }),
-    [viewTab, splitLeft, splitRight, addr, conversationId, agentName, displayName, terminalRevealed, terminalRevealKey, threadPanel, setThreadPanel, projectPath, viewSwitch],
+    [viewTab, splitLeft, splitRight, addr, conversationId, agentName, displayName, terminalRevealed, terminalRevealKey, threadPanel, setThreadPanel, projectPath, viewSwitch, openTerminal],
   )
   // The session's columns are drawn here, around the terminal pane
   // (`children`), so a respawn that rebuilds the pane keeps the Thread, its

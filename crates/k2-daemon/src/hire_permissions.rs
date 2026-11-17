@@ -188,7 +188,7 @@ pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> StepOut {
     let handle = handle_for(inp.path, target.as_ref());
     let mut out = StepOut::default();
     for want in targets(inp.cards, inp.suggested) {
-        if inp.declined.iter().any(|d| *d == want) {
+        if inp.declined.contains(&want) {
             out.rows.push(Decision::new(want.clone(), "declined", Some("left off at hire; a re-run leaves it off too".into()), None));
             record(inp, &target, &want, "declined", None);
             continue;

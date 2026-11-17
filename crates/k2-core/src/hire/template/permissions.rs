@@ -113,7 +113,7 @@ pub(crate) fn run(inp: &StepIn<'_>) -> StepOut {
 pub fn suggest_only(inp: &StepIn<'_>, reason: Option<&str>) -> StepOut {
     let mut out = StepOut::default();
     for target in targets(inp.cards, inp.suggested) {
-        let declined = inp.declined.iter().any(|d| *d == target);
+        let declined = inp.declined.contains(&target);
         out.rows.push(Decision::new(
             target,
             if declined { "declined" } else { "suggest" },

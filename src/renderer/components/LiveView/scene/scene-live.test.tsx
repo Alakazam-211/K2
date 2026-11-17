@@ -128,3 +128,17 @@ describe('a .blend this release can’t save (the BLEND writer off)', () => {
     expect(b.container.textContent).toBe('Read only')
   })
 })
+
+describe('the BLEND writer on', () => {
+  it('write and claims in the welcome: no read-only chip, and the section is “People and holds”', async () => {
+    const t = scripted({ ...WELCOME, features: ['keyed_watch', 'view_address', 'presence', 'claims'] } as unknown as LiveWelcome)
+    render(<SceneLive scope={{} as ServerScope} filePath="/ws/scenes/set.blend" width={1440} createTransport={() => t} />)
+    await waitFor(() => expect(t.connects).toBe(1))
+    await act(async () => {
+      t.push({ type: 'roster_event', event: ROSTER })
+      for (const f of STEPS[0].watch!) t.push(f)
+    })
+    expect(screen.getByTestId('lv-state').getAttribute('data-state')).not.toBe('read-only-file')
+    expect(screen.getByTestId('lv-scene-head-people').textContent).toContain('People and holds')
+  })
+})

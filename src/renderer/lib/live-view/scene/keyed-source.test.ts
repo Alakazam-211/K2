@@ -235,3 +235,33 @@ describe('the BLEND writer off (this release: edits refused, no claims)', () => 
     expect(o.snap().refusal?.why).toBe('Saving .blend files comes in a later release.')
   })
 })
+
+describe('the BLEND writer switched on (a later release, behind a switch)', () => {
+  const OTHER = { type: 'verb_refused', at_ms: T0 + 3000, actor: { id: 'bolt', name: 'bolt', kind: 'agent', colour: '#2b8a3e' }, client: 3, turn: 'turn-9', verb: 'object place', unit: '@obj:5', code: 'blend_driven', holder: null, claim: null }
+
+  it('write and no reason: no read-only chip; claims too: holds show', () => {
+    const o = open({ upto: 'claim' })
+    expect(o.snap().readOnly).toBeUndefined()
+    expect(o.snap().scene.holds).toBe(true)
+    expect(o.src.state().claims).toHaveLength(1)
+  })
+
+  it('a reconnect whose welcome gains write drops the chip, without a reload; gaining claims brings holds', () => {
+    const o = open({ welcome: { ...WELCOME, rights: 'read', read_only_reason: 'K2 can’t save .blend edits yet; this file opens read-only.', features: ['keyed_watch', 'view_address', 'presence'] } as KeyedWelcome })
+    expect(o.snap().readOnly).toBeTruthy()
+    expect(o.snap().scene.holds).toBe(false)
+    o.src.reconnected({ ...WELCOME, client: 7 })
+    expect(o.snap().readOnly).toBeUndefined()
+    expect(o.snap().scene.holds).toBe(true)
+    // and back: a welcome that loses write puts the chip back
+    o.src.reconnected({ ...WELCOME, client: 8, rights: 'read' } as KeyedWelcome)
+    expect(o.snap().readOnly).toBeTruthy()
+  })
+
+  it('with write, a refusal with another code still shows its callout', () => {
+    const o = open()
+    o.t.push(OTHER)
+    expect(o.src.state().callout?.r).toMatchObject({ code: 'blend_driven', unit: '@obj:5' })
+    expect(o.snap().refusal).toMatchObject({ actor: 'Bolt', why: 'animation drives it' })
+  })
+})

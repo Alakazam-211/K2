@@ -114,10 +114,7 @@ export class KeyedWatchSceneSource implements LiveSource {
     this.watch = new KeyedWatch(this.t, welcome)
     this.presence = new PresenceChannel(this.t, welcome)
     // Holds only when the host takes claims: never made up.
-    this.claimsOn = (welcome.features ?? []).includes('claims') || this.presence.claimsSupported
-    // Read only up front: no write right (TODO(K2): confirm `read_only_reason`, K2's proposal), with the host's words when it gives them.
-    const reason = (welcome as { read_only_reason?: string | null }).read_only_reason
-    this.readOnly = welcome.rights !== 'edit' || reason ? (reason || READ_ONLY_WORDS) : null
+    this.fromWelcome(welcome)
     if (this.myView !== null) this.presence.setViewAddress(this.myView)
     this.wire()
     this.changed()
@@ -127,7 +124,19 @@ export class KeyedWatchSceneSource implements LiveSource {
   reconnected(welcome: KeyedWelcome): void {
     this.watch?.reconnected(welcome)
     this.presence?.reconnected(welcome)
+    // The host may have switched the writer or claims on (or off) while the tab was open: read the new welcome.
+    this.fromWelcome(welcome)
+    if (!this.claimsOn && this.S.claims.length) this.S.claims = []
     this.setConnection(null)
+  }
+
+  /** What a welcome says about this tab: whether holds show (the host takes claims) and whether it's read only, and why. */
+  private fromWelcome(welcome: KeyedWelcome): void {
+    this.S.rights = welcome.rights ?? this.S.rights
+    this.claimsOn = (welcome.features ?? []).includes('claims') || !!this.presence?.claimsSupported
+    // Read only up front: no write right (TODO(K2): confirm `read_only_reason`, K2's proposal), with the host's words when it gives them.
+    const reason = (welcome as { read_only_reason?: string | null }).read_only_reason
+    this.readOnly = welcome.rights !== 'edit' || reason ? (reason || READ_ONLY_WORDS) : null
   }
 
   /** The socket is down: `reconnecting` while the caller retries, `failed` when it stopped. */

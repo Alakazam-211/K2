@@ -25,15 +25,18 @@ set -euo pipefail
 #                       when something does, it skips it on _K5_NOTICE_DONE.
 #   K5_CLI_VIA=rust     the call came through the front: every daemon
 #                       request then says so (X-K5-Cli-Via: fallthrough,
-#                       added in _k2_curl). Any other value is ignored.
+#                       and the command's noun, from _k5_headers). Any
+#                       other value is ignored.
 _K5_NOTICE_DONE=""
 if [ -n "${K5_CLI_NOTICE_DONE:-}" ]; then _K5_NOTICE_DONE=1; fi
 _K5_CLI_VIA=""
 if [ "${K5_CLI_VIA:-}" = "rust" ]; then _K5_CLI_VIA="rust"; fi
+# The router's top-level word, for X-K5-Cli-Noun. The router sets it.
+_K5_CLI_NOUN=""
 # K5_CLI_WOULD_REFUSE=1: the front's passport rule would refuse this call
 # (no passport inside an agent session). It only counts for now: with
 # _K5_CLI_VIA=rust, every daemon request says so (X-K5-Would-Refuse: 1,
-# added in _k2_curl). Any other value is ignored.
+# from _k5_headers). Any other value is ignored.
 _K5_WOULD_REFUSE=""
 if [ "${K5_CLI_WOULD_REFUSE:-}" = "1" ]; then _K5_WOULD_REFUSE=1; fi
 # Read once, here: none of them reaches a process this script starts, so a

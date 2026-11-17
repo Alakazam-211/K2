@@ -1,4 +1,9 @@
 # ── Router ───────────────────────────────────────────────────────────
+# First, the word the case below dispatches on, as typed (an alias stays
+# the alias) and never what follows it: every daemon request of a call
+# the Rust front handed over names it in X-K5-Cli-Noun (see _k5_headers).
+_K5_CLI_NOUN="${1:-help}"
+
 # Select TCP credential by catalog mode BEFORE any verb handler runs.
 # ID/locked tools in a scoped cell keep SCOPED_TOKEN; Open tools may
 # invert to DISK_OWNER_TOKEN (COMPAT-58). See _cli_apply_auth_for_verb.

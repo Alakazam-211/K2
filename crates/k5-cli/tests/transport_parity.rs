@@ -229,13 +229,16 @@ fn client(w: &Work, row: &Row, port: u16) -> Client {
     c
 }
 
-/// A logged request with the three expected differences masked, each
-/// counted.
+/// A logged request with the expected differences masked, each counted:
+/// the User-Agent, `X-K5-Cli-Version` (the binary's only), `X-K5-Cli-Via`
+/// (native or fallthrough), and the shell's `X-K5-Cli-Noun` (its router
+/// never ran here, so it names no noun: `other`). The binary sends no
+/// noun.
 fn normalise(r: &Logged, rust: bool, row: &str) -> String {
     let version = k5_cli::embedded::version();
     let text = String::from_utf8(r.bytes.clone()).unwrap_or_else(|_| panic!("{row}: a request that is not UTF-8"));
     let (head, body) = text.split_once("\r\n\r\n").unwrap_or_else(|| panic!("{row}: a request with no head: {text:?}"));
-    let (mut ua, mut via, mut ver) = (0, 0, 0);
+    let (mut ua, mut via, mut ver, mut noun) = (0, 0, 0, 0);
     let mut lines: Vec<String> = Vec::new();
     let mut head_lines = head.split("\r\n");
     let request_line = head_lines.next().unwrap_or_else(|| panic!("{row}: no request line"));
@@ -260,13 +263,16 @@ fn normalise(r: &Logged, rust: bool, row: &str) -> String {
         } else if line == "X-K5-Cli-Via: fallthrough" {
             via += 1;
             Some("X-K5-Cli-Via: <via>")
+        } else if line == "X-K5-Cli-Noun: other" {
+            noun += 1;
+            continue;
         } else {
             None
         };
         lines.push(masked.map(str::to_string).unwrap_or_else(|| line.to_string()));
     }
     let side = if rust { "rust" } else { "bash" };
-    assert_eq!((ua, via, ver), (1, 1, usize::from(rust)), "{row} ({side}): the masked lines in {text:?}");
+    assert_eq!((ua, via, ver, noun), (1, 1, usize::from(rust), usize::from(!rust)), "{row} ({side}): the masked lines in {text:?}");
     format!("[{}]\n{}\n\n{body}", r.channel, lines.join("\n"))
 }
 

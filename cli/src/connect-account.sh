@@ -135,9 +135,11 @@ _connect_require_daemon() {
             if [ -n "${DISK_OWNER_TOKEN:-}" ]; then
                 TOKEN="$DISK_OWNER_TOKEN"
             elif [ -r "${K2_HOME}/heartbeat.token" ]; then
-                TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
+                DISK_OWNER_TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
+                TOKEN="$DISK_OWNER_TOKEN"
             elif [ -r "${K2_HOME}/daemon.token" ]; then
-                TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)"
+                DISK_OWNER_TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)"
+                TOKEN="$DISK_OWNER_TOKEN"
             fi
         fi
         BASE_URL="http://${HOST}:${PORT}"

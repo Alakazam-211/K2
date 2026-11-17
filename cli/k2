@@ -25,15 +25,18 @@ set -euo pipefail
 #                       when something does, it skips it on _K5_NOTICE_DONE.
 #   K5_CLI_VIA=rust     the call came through the front: every daemon
 #                       request then says so (X-K5-Cli-Via: fallthrough,
-#                       added in _k2_curl). Any other value is ignored.
+#                       and the command's noun, from _k5_headers). Any
+#                       other value is ignored.
 _K5_NOTICE_DONE=""
 if [ -n "${K5_CLI_NOTICE_DONE:-}" ]; then _K5_NOTICE_DONE=1; fi
 _K5_CLI_VIA=""
 if [ "${K5_CLI_VIA:-}" = "rust" ]; then _K5_CLI_VIA="rust"; fi
+# The router's top-level word, for X-K5-Cli-Noun. The router sets it.
+_K5_CLI_NOUN=""
 # K5_CLI_WOULD_REFUSE=1: the front's passport rule would refuse this call
 # (no passport inside an agent session). It only counts for now: with
 # _K5_CLI_VIA=rust, every daemon request says so (X-K5-Would-Refuse: 1,
-# added in _k2_curl). Any other value is ignored.
+# from _k5_headers). Any other value is ignored.
 _K5_WOULD_REFUSE=""
 if [ "${K5_CLI_WOULD_REFUSE:-}" = "1" ]; then _K5_WOULD_REFUSE=1; fi
 # Read once, here: none of them reaches a process this script starts, so a
@@ -858,6 +861,41 @@ _k2_cfg_auth() {
     _k2_cfg_add header "Authorization: Bearer $1"
 }
 
+# The hand-over headers. A call the Rust front handed to this script
+# (K5_CLI_VIA=rust, read into _K5_CLI_VIA by the prelude) says so on every
+# request to the daemon, over the cell socket and TCP alike (_k2_curl),
+# in this order:
+#   X-K5-Would-Refuse: 1       only when the front's passport rule would
+#                              refuse the call (K5_CLI_WOULD_REFUSE=1, read
+#                              into _K5_WOULD_REFUSE)
+#   X-K5-Cli-Via: fallthrough  always
+#   X-K5-Cli-Noun: <noun>      always: the router's top-level word, as
+#                              typed (_K5_CLI_NOUN). `other` when it is not
+#                              a-z then up to 31 of a-z, 0-9 and -, or the
+#                              router has not read it yet
+#   X-K5-Owner-Source: disk    only when the call has no passport
+#                              (SCOPED_TOKEN empty) and runs on the owner
+#                              token read from disk (DISK_OWNER_TOKEN);
+#                              never with a passport
+# Without _K5_CLI_VIA=rust, none of them. They are not secrets, so they
+# ride argv. The daemon reads headers by name and ignores the ones it
+# doesn't know. _k5_headers sets the array _K5_HDRS to them, one
+# `Name: value` per element.
+_K5_NOUN_RE='^[abcdefghijklmnopqrstuvwxyz][abcdefghijklmnopqrstuvwxyz0123456789-]{0,31}$'
+_k5_headers() {
+    _K5_HDRS=()
+    [ "${_K5_CLI_VIA:-}" = "rust" ] || return 0
+    local noun="${_K5_CLI_NOUN:-}"
+    [[ "$noun" =~ $_K5_NOUN_RE ]] || noun=other
+    if [ "${_K5_WOULD_REFUSE:-}" = "1" ]; then
+        _K5_HDRS+=("X-K5-Would-Refuse: 1")
+    fi
+    _K5_HDRS+=("X-K5-Cli-Via: fallthrough" "X-K5-Cli-Noun: ${noun}")
+    if [ -z "${SCOPED_TOKEN:-}" ] && [ -n "${DISK_OWNER_TOKEN:-}" ] && [ "${TOKEN:-}" = "$DISK_OWNER_TOKEN" ]; then
+        _K5_HDRS+=("X-K5-Owner-Source: disk")
+    fi
+}
+
 # _k2_curl CFG curl-args… — run curl with CFG (config lines) on stdin.
 # CFG empty → plain curl. The caller's stdin is NOT available to curl.
 #
@@ -874,15 +912,9 @@ _k2_cfg_auth() {
 # ~/.k2/daemon.port, when that one differs (the daemon came back on
 # another port).
 #
-# A call the Rust front handed to this script (K5_CLI_VIA=rust, read into
-# _K5_CLI_VIA by the prelude) tells the daemon so on every request, over
-# the cell socket and TCP alike: `X-K5-Cli-Via: fallthrough`. It is not a
-# secret, so it rides argv. The daemon reads headers by name and ignores
-# the ones it doesn't know. A caller that talks to something other than
-# the daemon sets _K2_CURL_NOT_DAEMON=1 for that call.
-# When the front's passport rule would refuse the call (K5_CLI_WOULD_REFUSE=1,
-# read into _K5_WOULD_REFUSE), those requests also carry
-# `X-K5-Would-Refuse: 1`, and only then. It changes nothing else.
+# Every daemon request also carries the hand-over headers (_k5_headers),
+# first on the argv, in their order. A caller that talks to something
+# other than the daemon sets _K2_CURL_NOT_DAEMON=1 for that call: none.
 #
 # Loopback (127.0.0.1, ::1, localhost) and plain http never use a proxy;
 # HTTPS to a remote K2 may use the person's proxy (a CONNECT tunnel hides
@@ -986,13 +1018,10 @@ _k2_stdin_secrets() {
 _K2_CURL_TRIES=4
 _k2_curl() {
     local cfg="$1"; shift
-    local try=1 rc once=0 a
+    local try=1 rc once=0 a i
     for a in "$@"; do
         case "$a" in @-|-T) once=1 ;; esac
     done
-    if [ "${_K5_CLI_VIA:-}" = "rust" ] && [ -z "${_K2_CURL_NOT_DAEMON:-}" ]; then
-        set -- -H "X-K5-Cli-Via: fallthrough" "$@"
-    fi
     if [ -z "${_K2_CURL_NOT_DAEMON:-}" ]; then
         local url="" l
         for a in "$@"; do
@@ -1006,9 +1035,10 @@ _k2_curl() {
         if _k2_direct_url "$url"; then
             set -- --noproxy '*' "$@"
         fi
-    fi
-    if [ "${_K5_CLI_VIA:-}" = "rust" ] && [ "${_K5_WOULD_REFUSE:-}" = "1" ] && [ -z "${_K2_CURL_NOT_DAEMON:-}" ]; then
-        set -- -H "X-K5-Would-Refuse: 1" "$@"
+        _k5_headers
+        for ((i = ${#_K5_HDRS[@]} - 1; i >= 0; i--)); do
+            set -- -H "${_K5_HDRS[$i]}" "$@"
+        done
     fi
     while :; do
         rc=0
@@ -49640,9 +49670,11 @@ _connect_require_daemon() {
             if [ -n "${DISK_OWNER_TOKEN:-}" ]; then
                 TOKEN="$DISK_OWNER_TOKEN"
             elif [ -r "${K2_HOME}/heartbeat.token" ]; then
-                TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
+                DISK_OWNER_TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
+                TOKEN="$DISK_OWNER_TOKEN"
             elif [ -r "${K2_HOME}/daemon.token" ]; then
-                TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)"
+                DISK_OWNER_TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)"
+                TOKEN="$DISK_OWNER_TOKEN"
             fi
         fi
         BASE_URL="http://${HOST}:${PORT}"
@@ -113286,6 +113318,11 @@ cmd_organization() {
 # END_CLI_ORGANIZATION
 
 # ── Router ───────────────────────────────────────────────────────────
+# First, the word the case below dispatches on, as typed (an alias stays
+# the alias) and never what follows it: every daemon request of a call
+# the Rust front handed over names it in X-K5-Cli-Noun (see _k5_headers).
+_K5_CLI_NOUN="${1:-help}"
+
 # Select TCP credential by catalog mode BEFORE any verb handler runs.
 # ID/locked tools in a scoped cell keep SCOPED_TOKEN; Open tools may
 # invert to DISK_OWNER_TOKEN (COMPAT-58). See _cli_apply_auth_for_verb.

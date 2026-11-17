@@ -18,9 +18,15 @@
 #                       rule, count-only). Any other value, or without
 #                       VIA=rust: no request does. Never to the control
 #                       plane.
+# With K5_CLI_VIA=rust every daemon request also carries
+#   X-K5-Cli-Noun: <the router's first word, as typed>, `other` when that
+#                       word is not [a-z][a-z0-9-]{0,31};
+#   X-K5-Owner-Source: disk, only when there is no passport and the call
+#                       runs on the owner token read from disk.
+# Without VIA none of the four goes anywhere.
 #
 # A python stub daemon (TCP, a cell socket and vault.sock) logs, per
-# request, the transport, method, path, the X-K5-Cli-Via values and a
+# request, the transport, method, path, the four headers' values and a
 # digest of the rest (headers it reads, body hash, whether a token came).
 # No token values are logged. No live K2, HOME is a temp dir.
 # bash-only: pins the bash side of the Rust hand-over, read from a bash -x trace.
@@ -69,6 +75,8 @@ class H(BaseHTTPRequestHandler):
             "path": u.path,
             "via": self.headers.get_all("X-K5-Cli-Via") or [],
             "refuse": self.headers.get_all("X-K5-Would-Refuse") or [],
+            "noun": self.headers.get_all("X-K5-Cli-Noun") or [],
+            "owner": self.headers.get_all("X-K5-Owner-Source") or [],
             "content_type": self.headers.get("Content-Type") or "",
             "tty": self.headers.get("X-K2-Tty") or "",
             "has_token": "token" in urllib.parse.parse_qs(u.query),
@@ -160,20 +168,27 @@ expect() {
     fi
 }
 
-# one <transport> <via setting> <want>: a GET and a form POST.
-# The via setting is `unset` or `=<value>`.
+# one <transport> <via setting> <want>: a GET and a form POST. With the
+# header, the noun is the first word only (`heartbeat`, not `heartbeat
+# list`); without it, no noun. A session has a passport: never
+# X-K5-Owner-Source. The via setting is `unset` or `=<value>`.
 one() {
-    local transport="$1" via="$2" want="$3" pre=()
+    local transport="$1" via="$2" want="$3" pre=() get_noun=- post_noun=-
     case "$via" in
         unset) pre=() ;;
         =*) pre=(K5_CLI_VIA="${via#=}") ;;
     esac
+    [ "$want" = - ] || { get_noun=heartbeat; post_noun=msg; }
     : >"$WORK/requests.log"
     "$transport" ${pre[@]+"${pre[@]}"} "$K2_CLI" heartbeat list --json >/dev/null 2>&1 || true
     expect "$transport GET, K5_CLI_VIA $via: $want" "$transport" /cli/heartbeat/list "$want"
+    FIELD=noun expect "$transport GET, K5_CLI_VIA $via: X-K5-Cli-Noun $get_noun" "$transport" /cli/heartbeat/list "$get_noun"
+    FIELD=owner expect "$transport GET, K5_CLI_VIA $via, a passport: no X-K5-Owner-Source" "$transport" /cli/heartbeat/list -
     : >"$WORK/requests.log"
     "$transport" ${pre[@]+"${pre[@]}"} "$K2_CLI" msg some-ws "hello" >/dev/null 2>&1 || true
     expect "$transport POST, K5_CLI_VIA $via: $want" "$transport" /cli/workspace/msg "$want"
+    FIELD=noun expect "$transport POST, K5_CLI_VIA $via: X-K5-Cli-Noun $post_noun" "$transport" /cli/workspace/msg "$post_noun"
+    FIELD=owner expect "$transport POST, K5_CLI_VIA $via, a passport: no X-K5-Owner-Source" "$transport" /cli/workspace/msg -
 }
 
 echo "== X-K5-Cli-Via =="
@@ -215,6 +230,58 @@ done
 clean_env K5_CLI_VIA=rust K5_CLI_WOULD_REFUSE=1 "$K2_CLI" heartbeat list --json >/dev/null 2>&1 || true
 FIELD=refuse expect "owner token, VIA=rust and WOULD_REFUSE=1: X-K5-Would-Refuse 1" tcp /cli/heartbeat/list 1
 
+echo "== X-K5-Owner-Source =="
+# owner <want> <label> <env…>: a GET and a form POST, over TCP.
+owner() {
+    local want="$1" label="$2"; shift 2
+    : >"$WORK/requests.log"
+    clean_env "$@" "$K2_CLI" heartbeat list --json >/dev/null 2>&1 || true
+    FIELD=owner expect "GET, $label: X-K5-Owner-Source $want" tcp /cli/heartbeat/list "$want"
+    : >"$WORK/requests.log"
+    clean_env "$@" "$K2_CLI" msg some-ws "hello" >/dev/null 2>&1 || true
+    FIELD=owner expect "POST, $label: X-K5-Owner-Source $want" tcp /cli/workspace/msg "$want"
+}
+owner disk "no passport, the owner token from disk, VIA=rust" K5_CLI_VIA=rust
+owner - "no passport, the owner token from disk, VIA unset"
+owner - "the owner token from disk, VIA=RUST" K5_CLI_VIA=RUST
+owner - "a passport, VIA=rust" K5_CLI_VIA=rust K2_HOOK_TOKEN=sessA.passport
+# The same secret given as the session's token is not read from disk.
+owner - "the owner's token from the environment, VIA=rust" K5_CLI_VIA=rust K2_HOOK_TOKEN=owner-test-token
+: >"$WORK/requests.log"
+clean_env K5_CLI_VIA=rust "$K2_CLI" heartbeat list --json >/dev/null 2>&1 || true
+expect "owner from disk, VIA=rust: X-K5-Cli-Via fallthrough beside it" tcp /cli/heartbeat/list fallthrough
+FIELD=noun expect "owner from disk, VIA=rust: X-K5-Cli-Noun heartbeat beside it" tcp /cli/heartbeat/list heartbeat
+FIELD=refuse expect "owner from disk, VIA=rust: no X-K5-Would-Refuse without WOULD_REFUSE=1" tcp /cli/heartbeat/list -
+
+echo "== X-K5-Cli-Noun: an alias is the word as typed =="
+: >"$WORK/requests.log"
+tcp K5_CLI_VIA=rust "$K2_CLI" tickets list --json >/dev/null 2>&1 || true
+FIELD=noun expect "k2 tickets list: X-K5-Cli-Noun tickets" tcp /cli/feedback/list tickets
+: >"$WORK/requests.log"
+tcp K5_CLI_VIA=rust "$K2_CLI" feedback list --json >/dev/null 2>&1 || true
+FIELD=noun expect "k2 feedback list: X-K5-Cli-Noun feedback" tcp /cli/feedback/list feedback
+
+echo "== X-K5-Cli-Noun: a word the daemon would not take is sent as other =="
+# _k5_headers on its own, from the bash source, for nouns no router arm
+# reaches a daemon with.
+LIB="$WORK/k5-headers.sh"
+sed -n '/^# BEGIN_CLI_CURL_CFG$/,/^# END_CLI_CURL_CFG$/p' "$K2_CLI" >"$LIB"
+grep -q '^_k5_headers() {' "$LIB" || { echo "FAIL: no _k5_headers in the curl block of $K2_CLI" >&2; exit 1; }
+# noun_of <noun>: the X-K5-Cli-Noun value _k5_headers gives it.
+noun_of() {
+    bash -c 'set -euo pipefail; . "$1"; _K5_CLI_VIA=rust _K5_CLI_NOUN="$2"; _k5_headers
+        for h in "${_K5_HDRS[@]}"; do case "$h" in "X-K5-Cli-Noun: "*) printf "%s
+" "${h#X-K5-Cli-Noun: }" ;; esac; done' _ "$LIB" "$1"
+}
+for n in heartbeat a k9 app-update a-1 "$(printf 'a%.0s' $(seq 1 32))"; do
+    got="$(noun_of "$n")"
+    if [ "$got" = "$n" ]; then ok "noun '$n' is sent as is"; else bad "noun '$n' gave '$got'"; fi
+done
+for n in "" Heartbeat HEARTBEAT 9lives -h --schema "heart beat" "heartbeat list" a_b "a.b" "héllo" "$(printf 'a%.0s' $(seq 1 33))" "a"$'\n'"b" "msg;x"; do
+    got="$(noun_of "$n")"
+    if [ "$got" = other ]; then ok "noun '$n' is sent as other"; else bad "noun '$n' gave '$got', wanted other"; fi
+done
+
 echo "== the Connect control plane is not the daemon =="
 printf '{"token":"k2c_test-connect","subdomain":"me"}' >"$WORK/home/.k2/tunnel.json"
 chmod 600 "$WORK/home/.k2/tunnel.json"
@@ -240,11 +307,12 @@ echo >>'$WORK/argv.log'
 exec '$REAL_CURL' "\$@"
 SHIM
 chmod +x "$WORK/shim/curl"
-HDR_ARGV="$(printf '%q ' -H "X-K5-Cli-Via: fallthrough")"
-# An owner terminal: no session, so the vault calls go to vault.sock.
+# An owner terminal: no session, so the vault calls go to vault.sock, and
+# the call runs on the owner token from disk (X-K5-Owner-Source: disk).
 owner_shim() { clean_env PATH="$WORK/shim:$PATH" "$@"; }
 # site_run <tag> <stdin> <transport> <path> <argv match> <cmd…>: run once,
-# keep the matching requests (via split off) and curl argvs.
+# keep the matching requests (the four headers split off, as
+# via|noun|owner|refuse) and curl argvs.
 site_run() {
     local tag="$1" input="$2" transport="$3" path="$4" match="$5"; shift 5
     : >"$WORK/requests.log"; : >"$WORK/argv.log"
@@ -256,8 +324,7 @@ rows = [json.loads(l) for l in open(log)]
 hits = [r for r in rows if r["transport"] == transport and r["path"] == path]
 with open(out + ".via", "w") as f:
     for r in hits:
-        f.write((",".join(r.pop("via")) or "-") + "\n")
-        r.pop("refuse")
+        f.write("|".join(",".join(r.pop(k)) or "-" for k in ("via", "noun", "owner", "refuse")) + "\n")
 with open(out + ".req", "w") as f:
     for r in hits:
         f.write(json.dumps(r, sort_keys=True) + "\n")
@@ -265,36 +332,41 @@ PY
     grep -F -- "$match" "$WORK/argv.log" >"$WORK/$tag.argv" || true
 }
 # site <label> <stdin> <transport> <path> <argv match> <max-time> <cmd…>
+# (cmd is "$K2_CLI" <noun> …).
 site() {
     local label="$1" input="$2" transport="$3" path="$4" match="$5" mt="$6"; shift 6
+    local noun="$2" hdr_argv
+    hdr_argv="$(printf '%q ' -H "X-K5-Cli-Via: fallthrough" -H "X-K5-Cli-Noun: $noun" -H "X-K5-Owner-Source: disk")"
     site_run off "$input" "$transport" "$path" "$match" "$@"
     site_run on "$input" "$transport" "$path" "$match" K5_CLI_VIA=rust "$@"
     if [ ! -s "$WORK/off.req" ] || [ ! -s "$WORK/off.argv" ]; then
         bad "$label: no request or no curl argv seen ($(tail -2 "$WORK/requests.log" | tr '\n' ' '))"
         return
     fi
-    if [ -z "$(grep -vx -- - "$WORK/off.via")" ]; then
+    if [ -z "$(grep -vxF -- "-|-|-|-" "$WORK/off.via")" ]; then
         ok "$label: no header when VIA is unset"
     else
         bad "$label: a header without VIA ($(tr '\n' ' ' <"$WORK/off.via"))"
     fi
-    if [ -s "$WORK/on.via" ] && [ -z "$(grep -vx fallthrough "$WORK/on.via")" ]; then
-        ok "$label: X-K5-Cli-Via: fallthrough with VIA=rust"
+    if [ -s "$WORK/on.via" ] && [ -z "$(grep -vxF -- "fallthrough|$noun|disk|-" "$WORK/on.via")" ]; then
+        ok "$label: X-K5-Cli-Via: fallthrough, X-K5-Cli-Noun: $noun and X-K5-Owner-Source: disk with VIA=rust"
     else
-        bad "$label: with VIA=rust got '$(tr '\n' ' ' <"$WORK/on.via")'"
+        bad "$label: with VIA=rust got '$(tr '\n' ' ' <"$WORK/on.via")', wanted fallthrough|$noun|disk|- on each"
     fi
     if cmp -s "$WORK/off.req" "$WORK/on.req"; then
         ok "$label: the request is otherwise the same"
     else
         bad "$label: the request changed ($(diff "$WORK/off.req" "$WORK/on.req" | tr '\n' ' '))"
     fi
-    # Each VIA=rust argv holds the header once; without it, it is the
-    # unset run's argv.
-    local on_less n_hdr
-    n_hdr="$(grep -cF -- "$HDR_ARGV" "$WORK/on.argv" || true)"
-    on_less="$(while IFS= read -r l; do printf '%s\n' "${l/"$HDR_ARGV"/}"; done <"$WORK/on.argv")"
+    # Each VIA=rust argv holds the headers once, together and in order;
+    # without them, it is the unset run's argv.
+    local on_less n_hdr=0 l
+    while IFS= read -r l; do
+        [[ "$l" != *"$hdr_argv"* ]] || n_hdr=$((n_hdr + 1))
+    done <"$WORK/on.argv"
+    on_less="$(while IFS= read -r l; do printf '%s\n' "${l/"$hdr_argv"/}"; done <"$WORK/on.argv")"
     if [ "$n_hdr" = "$(wc -l <"$WORK/on.argv" | tr -d ' ')" ] && [ "$on_less" = "$(cat "$WORK/off.argv")" ]; then
-        ok "$label: curl argv is the same but for the header"
+        ok "$label: curl argv is the same but for the headers"
     else
         bad "$label: curl argv changed (off: $(cat "$WORK/off.argv") on: $(cat "$WORK/on.argv"))"
     fi

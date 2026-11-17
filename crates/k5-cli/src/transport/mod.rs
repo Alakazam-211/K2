@@ -46,7 +46,9 @@
 //! | `cli_send_json POST` | `POST <ep>?token=<quoted T>`, JSON | `POST <ep>`, JSON |
 //!
 //! An endpoint that already has a `?` gets the `-G` query after `&`; the
-//! POST forms always add `?`, as the shell writes them.
+//! POST forms always add `?`, as the shell writes them. The shell gives
+//! curl a `-G` query from its caller as `data-raw`, so one that starts
+//! with `@` is sent as written (never read as a file), as here.
 //!
 //! The per-verb headers are not the shared functions': `X-K2-Tty`
 //! (`k2 vault`, `k2 migrate`, `k2 clone`), `X-K2-Pane`, `X-K2-Agent-Pid`

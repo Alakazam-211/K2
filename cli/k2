@@ -2057,7 +2057,7 @@ cli_request_uds() {
     local _K2_CFG="" out rc=0 try=1 t0="${_K2_REQ_T0:-$SECONDS}"
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     if [ -n "$params" ]; then
-        _k2_cfg_add data "$params"
+        _k2_cfg_add data-raw "$params"
     fi
     while :; do
         rc=0
@@ -2280,7 +2280,8 @@ _cli_skip_uds() {
 
 # BEGIN_CLI_SEND_JSON
 # cli_send_json METHOD PATH [payload] → "<body>\n<status>" on stdout.
-# GET payload = a pre-urlencoded query; POST payload = a JSON body.
+# GET payload = a pre-urlencoded query; POST payload = a JSON body. A GET
+# query goes to curl as `data-raw`, sent as written: never read as a file.
 # The JSON twin of cli_send that keeps the HTTP status (so callers can
 # print the daemon's {"error","code"} and exit 3) and, unlike
 # cli_request_post_uds, sends a real JSON body over the cell socket.
@@ -2305,7 +2306,7 @@ cli_send_json() {
     if ! _cli_skip_uds && [ -n "$sock" ] && [ -S "$sock" ] && [ -n "${SCOPED_TOKEN:-}" ]; then
         _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
         if [ "$method" = "GET" ]; then
-            [ -n "$payload" ] && _k2_cfg_add data "$payload"
+            [ -n "$payload" ] && _k2_cfg_add data-raw "$payload"
             out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost${path}" \
                 --connect-timeout 5 --max-time "$mt" -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
         else
@@ -2338,7 +2339,7 @@ cli_send_json() {
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
         _k2_cfg_auth "$_K2_TCP_TOKEN"
-        [ -n "$payload" ] && _k2_cfg_add data "$payload"
+        [ -n "$payload" ] && _k2_cfg_add data-raw "$payload"
         out="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time "$mt" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
     else

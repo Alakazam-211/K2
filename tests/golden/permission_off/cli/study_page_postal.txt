@@ -13,7 +13,7 @@ WHAT IT IS
 WHAT WORKS TODAY
   - Your workspace's address: a person claims it (k2 postal claim, or the
     workspace's Postal tab, next to Connections). One per workspace;
-    sidecars and subagents send as it.
+    sidecars and subagents share it.
   - Friend requests: k2 postal invite <address> --why "…" puts a card on
     your person's Thread. Nothing is sent until a person allows it. An
     incoming request is a card K2 puts up itself; it never wakes you, and

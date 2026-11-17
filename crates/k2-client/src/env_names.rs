@@ -60,7 +60,7 @@ pub const WATCHDOG_POLL_SECS: &[&str] = &["K5_WATCHDOG_POLL_SECS", "K2SO_WATCHDO
 // reads cli/src and fails when a read there and an entry here differ.
 //
 // Not here: `K2_AIRGAP`, the one setting the shell reads under one name
-// and counts as set even when empty (`crate::airgap`), and the three
+// and counts as set even when empty (`crate::airgap`), and the
 // `K5_CLI_*` names the Rust front hands the shell (one name each).
 
 /// The daemon's port, for a terminal K2 started.

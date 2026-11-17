@@ -37,16 +37,20 @@ pub const NOTICE_DONE_VAR: &str = "K5_CLI_NOTICE_DONE";
 pub const VIA_VAR: &str = "K5_CLI_VIA";
 /// The one value of [`VIA_VAR`] the shell acts on.
 pub const VIA_RUST: &str = "rust";
+/// The variable that tells the shell the passport rule would refuse the
+/// call (`crate::passport`): `1`, or not set at all. Its daemon requests
+/// then carry `X-K5-Would-Refuse: 1`.
+pub const WOULD_REFUSE_VAR: &str = "K5_CLI_WOULD_REFUSE";
 /// The variable that tells the shell the folder of the program people ran
 /// (links resolved), where it looks first for the files shipped beside
 /// the CLI (`k2-approve`, `k2-widget-shot.mjs`). The front runs the script
 /// as `/dev/fd/N`, so the folder of the shell's `$0` says nothing. It is a
 /// path, so it is not in [`CalledAs::fallthrough_env`]; the front sets it
-/// beside those three ([`crate::fallthrough::command`]).
+/// beside the three fixed ones ([`crate::fallthrough::command`]).
 pub const SCRIPT_DIR_VAR: &str = "K5_CLI_SCRIPT_DIR";
 /// Every variable the front hands the shell. Each is one name, not a
 /// setting read under three.
-pub const FRONT_VARS: [&str; 4] = [CALLED_AS_VAR, NOTICE_DONE_VAR, VIA_VAR, SCRIPT_DIR_VAR];
+pub const FRONT_VARS: [&str; 5] = [CALLED_AS_VAR, NOTICE_DONE_VAR, VIA_VAR, WOULD_REFUSE_VAR, SCRIPT_DIR_VAR];
 
 /// Which of the command's two names it was called by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,12 +246,14 @@ mod tests {
         }
     }
 
-    /// The front's variables: the three fixed ones, then the folder.
+    /// The front's variables: the three fixed ones, the passport rule's
+    /// count, then the folder.
     #[test]
-    fn the_front_hands_on_four_names() {
+    fn the_front_hands_on_five_names() {
         let fixed: Vec<&str> = K2Name.fallthrough_env().iter().map(|(k, _)| *k).collect();
         assert_eq!(FRONT_VARS[..3], fixed[..]);
-        assert_eq!(FRONT_VARS[3], "K5_CLI_SCRIPT_DIR");
+        assert_eq!(FRONT_VARS[3], "K5_CLI_WOULD_REFUSE");
+        assert_eq!(FRONT_VARS[4], "K5_CLI_SCRIPT_DIR");
     }
 
     /// The brand's command name is the k2 side today, and its aliases count

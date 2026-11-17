@@ -25,6 +25,8 @@
 //!   command line: `--version` here, everything else to the shell CLI.
 //! - [`fallthrough`]: handing a verb to the shell CLI, byte for byte, from
 //!   the copy of `cli/k2` packed into the binary ([`embedded`]).
+//! - [`passport`]: the passport rule the front applies before a verb
+//!   falls through. It only counts for now.
 
 pub mod called_as;
 pub mod embedded;
@@ -34,4 +36,5 @@ pub mod front;
 pub mod home;
 pub mod notice;
 pub mod out;
+pub mod passport;
 pub mod transport;

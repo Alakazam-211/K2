@@ -16,7 +16,7 @@
 # one fixed refusal and logs the request line + headers. No real daemon,
 # no ~/.k2, no keychain.
 #
-# Normalizer (documented; it never drops a line or a field):
+# Normalizer (documented; on the bash CLI it never drops a line or a field):
 #   * the CLI's OWN version (K2_CLI_VERSION, bumped by release.sh) → <K2_CLI_VERSION>,
 #     only where the CLI prints it as its version: `k2 --schema`'s top-level
 #     `"version": "…"` field and a `k2 <version>` line. Prose that names a
@@ -34,12 +34,28 @@
 #     "<bytes without it>+<k>x<SANDBOX>" (still exact; the path's length
 #     differs between macOS /private/tmp and Linux /tmp)
 #   * a `User-Agent: curl/x.y.z` / `Python-urllib/x.y` value → …/<VERSION>
+#   * ONLY when the CLI under test is not the bash source (the k5 binary,
+#     K5_CLI_UNDER_TEST): a request log line that is exactly
+#     `> X-K5-Cli-Via: fallthrough` or `> X-K5-Cli-Via: native` is dropped.
+#     The binary hands a verb it doesn't answer to the bash with
+#     K5_CLI_VIA=rust, and the bash then marks every daemon request with
+#     that one header on each request it sends with curl
+#     (tests/cli/k5_cli_via.sh); the goldens are bash's bytes. It is
+#     counted, not trusted: each request in the log sent by curl
+#     (`User-Agent: curl/…`) must carry exactly one such line and any other
+#     request none (the bash's embedded python, e.g. `k2 project create`,
+#     does not mark its calls), so the lines dropped equal the curl
+#     requests sent (none with no request). Anything else fails the capture
+#     loudly, naming it and the counts. On the bash CLI none of this runs: a
+#     Via line there stays and fails against its golden.
 #
 # Modes:
 #   bash tests/cli/permission_off_golden.sh              compare (fails loudly on any diff or missing fixture)
 #   PERMISSION_GOLDEN_BLESS=1 bash tests/cli/permission_off_golden.sh
 #                                                        (re)capture — only from a base WITHOUT cards code,
-#                                                        e.g. after another lane changes help text (S10, lane I)
+#                                                        e.g. after another lane changes help text (S10, lane I).
+#                                                        Only from the bash CLI: refused when
+#                                                        K5_CLI_UNDER_TEST names another program.
 #
 # Named exceptions (§2.4): none on the CLI side. The Thread hygiene fixes and
 # the keep-as-mine card are daemon-side and have their own tests.
@@ -56,6 +72,14 @@ K2="${PERMISSION_GOLDEN_CLI:-$CLI_UNDER_TEST}"
 K2_SRC="${PERMISSION_GOLDEN_CLI:-$CLI_BASH_SOURCE}"
 GOLDEN="$PROJECT_ROOT/tests/golden/permission_off/cli"
 BLESS="${PERMISSION_GOLDEN_BLESS:-0}"
+# The k5 binary under test: its requests carry the fallthrough marker (see
+# the normalizer notes above). Goldens are captured from the bash only.
+VIA_MODE=0
+[ "$CLI_UNDER_TEST" = "$CLI_BASH_SOURCE" ] || VIA_MODE=1
+if [ "$BLESS" = "1" ] && [ "$VIA_MODE" = "1" ]; then
+    echo "FAIL: PERMISSION_GOLDEN_BLESS=1 captures goldens from the bash CLI only, not from $CLI_UNDER_TEST (unset K5_CLI_UNDER_TEST)" >&2
+    exit 1
+fi
 
 for v in $(env | grep -E '^K2(SO)?_' | cut -d= -f1); do unset "$v"; done
 
@@ -131,7 +155,8 @@ mkdir -p "$HOME" "$SANDBOX/ws"
 cd "$SANDBOX/ws"
 
 normalize() {
-    # stdin → stdout. Never drops a line.
+    # stdin → stdout. Never drops a line (the Via lines go before it, in
+    # drop_via, and only for the binary).
     python3 -I -c '
 import re, sys
 ver, port, sandbox = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -169,6 +194,45 @@ sys.stdout.write(t)
 ' "$CLI_VERSION" "$PORT" "$SANDBOX"
 }
 
+# drop_via <capture> <log> <out>: the binary's request log without its
+# X-K5-Cli-Via lines. Drops only a line that is exactly the header, and
+# fails (non-zero, naming the capture and the counts) unless every request
+# sent by curl carries exactly one and every other request none, so the
+# lines dropped equal the curl requests sent.
+drop_via() {
+    python3 -I -c '
+import re, sys
+name, src, dst = sys.argv[1], sys.argv[2], sys.argv[3]
+request = re.compile(r"> [A-Z]+ /")
+via = re.compile(r"> X-K5-Cli-Via: (fallthrough|native)\r?")
+with open(src, encoding="utf-8", errors="surrogateescape", newline="") as f:
+    lines = f.read().split("\n")
+curl_agent = re.compile(r"> User-Agent: curl/")
+# Per request: [marker lines dropped, sent by curl].
+kept, per_request, stray = [], [], 0
+for line in lines:
+    if request.match(line):
+        per_request.append([0, False])
+    elif per_request and curl_agent.match(line):
+        per_request[-1][1] = True
+    if via.fullmatch(line):
+        if per_request:
+            per_request[-1][0] += 1
+        else:
+            stray += 1
+        continue
+    kept.append(line)
+requests = len(per_request)
+by_curl = sum(1 for _, c in per_request if c)
+dropped = sum(n for n, _ in per_request) + stray
+if dropped != by_curl or stray or any(n != (1 if c else 0) for n, c in per_request):
+    sys.stderr.write("  FAIL: %s: dropped %d X-K5-Cli-Via line(s) for %d request(s) in the log, %d of them sent by curl; want exactly one per curl request and none on any other\n" % (name, dropped, requests, by_curl))
+    sys.exit(1)
+with open(dst, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
+    f.write("\n".join(kept))
+' "$1" "$2" "$3"
+}
+
 pass=0
 fail=0
 blessed=0
@@ -188,6 +252,14 @@ capture() {
         *) echo "FAIL: bad mode $mode" >&2; exit 1 ;;
     esac
     set -e
+    local reqlog="$LOG"
+    if [ "$VIA_MODE" = "1" ]; then
+        reqlog="$SANDBOX/requests.via-dropped"
+        if ! drop_via "$name" "$LOG" "$reqlog"; then
+            fail=$((fail + 1))
+            return
+        fi
+    fi
     local got="$SANDBOX/got"
     {
         printf '$ k2'
@@ -199,7 +271,7 @@ capture() {
         printf -- '--- stderr\n'
         cat "$err"
         printf -- '--- requests\n'
-        cat "$LOG"
+        cat "$reqlog"
     } | normalize > "$got"
     local want="$GOLDEN/$name.txt"
     if [ "$BLESS" = "1" ]; then

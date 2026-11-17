@@ -80,9 +80,9 @@ export function useCadEdit(p: {
       live = false
     }
   }, [source, filePath])
-  // The file can't be changed here: its kind, its header's words, the server's, or this server refused a save this session.
+  // The file can't be changed here: the server's own words first, then its kind or its header's `writer`, or this server refused a save this session.
   const viewOnly = useMemo(
-    () => (drawing ? (viewOnlyWhy(drawing.header, drawing.rows) ?? readOnly ?? off ?? source?.writerOff() ?? null) : null),
+    () => (drawing ? (readOnly ?? viewOnlyWhy(drawing.header, drawing.rows) ?? off ?? source?.writerOff() ?? null) : null),
     [drawing, readOnly, off, source],
   )
   const waiting = pending !== null && (drawing?.version ?? 0) < pending

@@ -354,6 +354,22 @@ describe('when the server can’t save drawing edits', () => {
     expect(screen.queryByTestId('dxf-move-by')).toBeNull()
   })
 
+  it('the host’s writer, the header’s first key: the drawing reads as ever, and false is view only', async () => {
+    const { writer: _w, ...rest } = HEADER as ModelHeader & { writer?: boolean }
+    await open({ header: { writer: false, ...rest } as ModelHeader })
+    expect(Object.keys((await world.model.header())!)[0]).toBe('writer')
+    expect(screen.getByTestId('dxf-shapes').getAttribute('data-source')).toBe('model')
+    expect(screen.getByTestId('dxf-stats').textContent).toMatch(/^49 entities/)
+    expect(screen.getByTestId('dxf-view-only').textContent).toBe('K2 can’t save drawing edits yet; this file opens read-only.')
+    click('@h:41')
+    expect(screen.queryByTestId('dxf-move-by')).toBeNull()
+  })
+
+  it('docs/cores’ reason wins over the header’s writer: false, as the server’s own words', async () => {
+    await open({ header: { writer: false, ...HEADER } as ModelHeader, readOnly: 'Drawings open read-only until the edit side is on.' })
+    expect((await screen.findByTestId('dxf-view-only')).textContent).toBe('Drawings open read-only until the edit side is on.')
+  })
+
   it('the host’s header says writer: false: view only up front, in its words, with no Move or attribute controls', async () => {
     await open({ header: { ...HEADER, writer: false, read_only_reason: 'Drawing edits are off on this server.' } })
     expect(screen.getByTestId('dxf-view-only').textContent).toBe('Drawing edits are off on this server.')

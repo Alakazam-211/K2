@@ -13,9 +13,10 @@ import { DaemonHttpError } from '@/lib/daemon-http-error'
 
 const cli = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
 vi.mock('@/lib/daemon-cli', () => ({ daemonCliGet: cli.get, daemonCliPost: cli.post }))
-const bus = vi.hoisted(() => ({ fns: new Set<(e: { rel: string; change: string }) => void>() }))
+type StructureEvent = { workspace?: string | null; rel: string; change: string }
+const bus = vi.hoisted(() => ({ fns: new Set<(e: StructureEvent) => void>() }))
 vi.mock('@/stores/session-events', () => ({
-  onDocStructureChanged: (_s: unknown, fn: (e: { rel: string; change: string }) => void) => {
+  onDocStructureChanged: (_s: unknown, fn: (e: StructureEvent) => void) => {
     bus.fns.add(fn)
     return () => void bus.fns.delete(fn)
   },
@@ -187,23 +188,32 @@ describe('daemonEditSource', () => {
     expect(await src.readOnly('/w/a.dxf')).toBeNull()
     cli.get.mockRejectedValueOnce(new Error('offline'))
     expect(await src.readOnly('/w/a.dxf')).toBeNull()
-    expect(readOnlyOf({ file: { readOnlyReason: ' x ' } })).toBe('x')
+    expect(readOnlyOf({ file: { core: 'cad', on: true, liveView: false, read_only_reason: ' x ' } })).toBe('x')
+    expect(readOnlyOf({ file: { core: 'cad', on: true, liveView: false } })).toBeNull()
+    expect(readOnlyOf({ read_only_reason: 'not where it lives' })).toBeNull()
   })
 
   it('holds are read again when a claim on this file is taken or ends', () => {
     const fn = vi.fn()
     const off = src.onHoldsChanged('/ws/drawings/a.dxf', fn)
     for (const f of bus.fns) {
-      f({ rel: 'drawings/a.dxf', change: 'claim_taken' })
+      f({ workspace: '/ws', rel: 'drawings/a.dxf', change: 'claim_taken' })
+      f({ workspace: '/ws/', rel: 'drawings/a.dxf', change: 'claim_ended' })
+      f({ workspace: '/ws', rel: 'drawings/a.dxf', change: 'annotation' })
+      f({ workspace: '/ws', rel: 'drawings/b.dxf', change: 'claim_taken' })
+      // Another workspace with the same path in it: not this file.
+      f({ workspace: '/other', rel: 'drawings/a.dxf', change: 'claim_taken' })
+      // No workspace on the event: the path's end.
+      f({ workspace: null, rel: 'drawings/a.dxf', change: 'claim_taken' })
       f({ rel: 'drawings/a.dxf', change: 'claim_ended' })
-      f({ rel: 'drawings/a.dxf', change: 'annotation' })
-      f({ rel: 'drawings/b.dxf', change: 'claim_taken' })
     }
-    expect(fn).toHaveBeenCalledTimes(2)
+    expect(fn).toHaveBeenCalledTimes(4)
     off()
     expect(bus.fns.size).toBe(0)
     expect(sameFile('/ws/a.dxf', 'a.dxf')).toBe(true)
     expect(sameFile('/ws/ba.dxf', 'a.dxf')).toBe(false)
+    expect(sameFile('/ws/a.dxf', 'a.dxf', '/ws')).toBe(true)
+    expect(sameFile('/other/ws/a.dxf', 'a.dxf', '/ws')).toBe(false)
   })
 
   it('holds: agents’ claims by their node keys, each with what it’s for, from who’s on the file', async () => {

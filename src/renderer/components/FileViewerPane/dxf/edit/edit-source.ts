@@ -94,15 +94,22 @@ export function parseHolds(body: unknown): Hold[] {
   return out
 }
 
-/** `docs/cores?path=`'s read-only words for the file's core, read tolerantly. */
+/** `docs/cores?path=`'s `file.read_only_reason`: why a drawing opens read only, in the server's words, or null. */
 export function readOnlyOf(body: unknown): string | null {
   const file = isObj(body) && isObj(body.file) ? body.file : null
-  return file ? (text(file.read_only_reason) ?? text(file.readOnlyReason)) : null
+  return file ? text(file.read_only_reason) : null
 }
 
-/** Whether a structure event's file is `path` (it names the file by its path in the workspace). */
-export const sameFile = (path: string, rel: unknown): boolean =>
-  typeof rel === 'string' && rel !== '' && (path === rel || path.endsWith(`/${rel.replace(/^\/+/, '')}`))
+/**
+ * Whether a structure event names the file at `path`: its workspace folder and
+ * path in it, exactly; when the event has no workspace, by the path's end.
+ */
+export function sameFile(path: string, rel: unknown, workspace?: unknown): boolean {
+  if (typeof rel !== 'string' || rel === '') return false
+  const r = rel.replace(/^\/+/, '')
+  if (typeof workspace === 'string' && workspace !== '') return path === `${workspace.replace(/\/+$/, '')}/${r}`
+  return path === rel || path.endsWith(`/${r}`)
+}
 
 /** Servers that refused a drawing save this session, with their words. */
 const writerOffBy = new Map<string, string>()
@@ -128,7 +135,7 @@ export function daemonEditSource(scope: ServerScope): EditSource {
     },
     onHoldsChanged(path, fn) {
       return onDocStructureChanged(scope, (e) => {
-        if ((e.change === 'claim_taken' || e.change === 'claim_ended') && sameFile(path, e.rel)) fn()
+        if ((e.change === 'claim_taken' || e.change === 'claim_ended') && sameFile(path, e.rel, e.workspace)) fn()
       })
     },
     async readOnly(path) {

@@ -38,6 +38,8 @@ export type ModelRow = {
   why?: string
   bbox: Box4 | null
   bbox_q?: string
+  /** Why the edit verbs won't change it (`hatch`, `assoc`, …), when the model says; absent or `1` when they will. */
+  edit?: string
   // Each kind's own fields; read by the renderer kind by kind.
   geom?: Record<string, unknown> | null
 }
@@ -62,6 +64,7 @@ export type ModelLayer = {
   lw_mm?: number
   on: boolean
   frozen: boolean
+  locked?: boolean
 }
 
 /** A linetype: its pattern in drawing units (positive a dash, negative a gap, 0 a dot). */
@@ -97,6 +100,10 @@ export type ModelLayout = {
 export type ModelHeader = {
   schema: 'cad.drawing.header/1'
   version: number
+  /** `dxf` or `dwg`. */
+  format?: string
+  /** The file's format version (`AC1032`); AC1015 is DXF 2000. */
+  acadver?: string
   units?: { word?: string; insunits?: number }
   extents?: { stated: Box4 | null; computed: Box4 | null }
   settings?: { pdmode?: number; pdsize?: number; fillmode?: boolean; lwdisplay?: boolean; ltscale?: number; lwdefault_mm?: number }

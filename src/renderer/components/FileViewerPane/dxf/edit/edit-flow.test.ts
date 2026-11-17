@@ -131,15 +131,18 @@ describe('daemonEditSource', () => {
     expect((await src.run('/w/a.dxf', ['x'])).error?.id).toBe('MPC-E110')
   })
 
-  it('holds: agents’ claims by their node keys, from who’s on the file', async () => {
+  it('holds: agents’ claims by their node keys, each with what it’s for, from who’s on the file', async () => {
     cli.get.mockResolvedValue({
       roster: [
-        { pid: 'p_atlas', name: 'Atlas', kind: 'agent', claims: [{ nodes: ['@h:41', '@h:A00'], hold: true }, { nodes: null }] },
+        { pid: 'p_atlas', name: 'Atlas', kind: 'agent', claims: [{ nodes: ['@h:41', '@h:A00'], hold: true, note: 'moving the doors' }, { nodes: null }, { nodes: ['@h:61'], note: ' ' }] },
         { pid: 'p_sam', name: 'Sam', kind: 'person', claims: [{ nodes: ['@h:42'] }] },
         { pid: 'p_kai', name: 'Kai', kind: 'agent', claims: [] },
       ],
     })
-    expect(await src.holds('/w/a.dxf')).toEqual([{ pid: 'p_atlas', name: 'Atlas', keys: ['@h:41', '@h:A00'] }])
+    expect(await src.holds('/w/a.dxf')).toEqual([
+      { pid: 'p_atlas', name: 'Atlas', note: 'moving the doors', keys: ['@h:41', '@h:A00'] },
+      { pid: 'p_atlas', name: 'Atlas', note: null, keys: ['@h:61'] },
+    ])
     expect(cli.get).toHaveBeenCalledWith(scope, WHO_ROUTE, { path: '/w/a.dxf' })
     cli.get.mockRejectedValueOnce(new Error('offline'))
     expect(await src.holds('/w/a.dxf')).toEqual([])

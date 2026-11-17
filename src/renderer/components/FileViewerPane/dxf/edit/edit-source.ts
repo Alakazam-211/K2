@@ -9,8 +9,8 @@ import { DaemonHttpError, errorMessage, httpCodeOf, httpStatusOf } from '@/lib/d
 import { scopeMayWrite, type ServerScope } from '@/kessel/server-scope'
 import { localRefusal, parseToolResult, type ToolResult } from './tool-result'
 
-/** An agent's hold: who, and the keys it covers (`@h:<HANDLE>` of an entity, a layer, a block or a layout). */
-export type Hold = { pid: string; name: string; keys: string[] }
+/** An agent's hold: who, what for (the claim's note), and the keys it covers (`@h:<HANDLE>` of an entity, a layer, a block or a layout). */
+export type Hold = { pid: string; name: string; note: string | null; keys: string[] }
 
 export interface EditSource {
   /** May this viewer change the file at all (a view-only room may not). */
@@ -48,16 +48,19 @@ export function refusalOfError(e: unknown): ToolResult {
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-/** Agents' claims from `docs/who`'s roster: each claim's node keys under its holder. */
+/** Agents' claims from `docs/who`'s roster: one hold per claim on nodes, with its holder and its note. */
 export function parseHolds(body: unknown): Hold[] {
   const roster = isObj(body) && Array.isArray(body.roster) ? body.roster : []
   const out: Hold[] = []
   for (const e of roster) {
     if (!isObj(e) || e.kind !== 'agent' || typeof e.pid !== 'string') continue
-    const keys = (Array.isArray(e.claims) ? e.claims : []).flatMap((c) =>
-      isObj(c) && Array.isArray(c.nodes) ? c.nodes.filter((k): k is string => typeof k === 'string') : [],
-    )
-    if (keys.length) out.push({ pid: e.pid, name: typeof e.name === 'string' && e.name ? e.name : 'An agent', keys })
+    const name = typeof e.name === 'string' && e.name ? e.name : 'An agent'
+    for (const c of Array.isArray(e.claims) ? e.claims : []) {
+      if (!isObj(c) || !Array.isArray(c.nodes)) continue
+      const keys = c.nodes.filter((k): k is string => typeof k === 'string')
+      const note = typeof c.note === 'string' && c.note.trim() ? c.note.trim() : null
+      if (keys.length) out.push({ pid: e.pid, name, note, keys })
+    }
   }
   return out
 }

@@ -306,6 +306,12 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'help', blurb: 'Daily verbs; `--advanced` for the power-user ones.', example: 'k2 help --advanced' },
       { noun: 'whats-new', blurb: 'Release notes.' },
       { noun: 'version', blurb: 'CLI version.', example: 'k2 version' },
+      {
+        noun: 'cli',
+        blurb: 'The k5 binary only: which command families it answers itself, and how often the rest fall through.',
+        example: 'k2 cli status',
+        beta: true,
+      },
       { noun: '--schema', blurb: 'Every verb as JSON, for agents.', example: 'k2 --schema' },
     ],
   },

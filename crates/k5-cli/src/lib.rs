@@ -32,8 +32,9 @@
 //!   top-level `case`: who answers each command (the binary, its
 //!   `--schema` entry, or the shell CLI).
 //! - [`front`]: what the binary (`src/main.rs`, `k5-cli`) does with a
-//!   command line, by the route table: `--version` and `--version
-//!   --check` ([`check`]) here, everything else to the shell CLI.
+//!   command line, by the route table: `--version`, `--version --check`
+//!   ([`check`]) and `cli status` ([`cli_status`]) here, everything else
+//!   to the shell CLI.
 //! - [`fallthrough`]: handing a verb to the shell CLI, byte for byte, from
 //!   the copy of `cli/k2` packed into the binary ([`embedded`]).
 //! - [`passport`]: the passport rule the front applies before a verb
@@ -41,6 +42,7 @@
 
 pub mod called_as;
 pub mod check;
+pub mod cli_status;
 pub mod daemon;
 pub mod embedded;
 pub mod exit;

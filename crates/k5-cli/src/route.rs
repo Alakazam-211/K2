@@ -194,6 +194,7 @@ pub static TABLE: &[Noun] = &[
     bash(&["app-update"]),
     bash(&["update"]),
     native(&["version", "--version", "-v"]),
+    native(&["cli"]),
     bash(&["--schema", "schema"]),
     bash(&["study"]),
     bash(&["explain"]),
@@ -262,6 +263,7 @@ mod tests {
         assert_eq!(owner(TABLE, &["version"]), Owner::Native);
         assert_eq!(owner(TABLE, &["--version", "x"]), Owner::Native);
         assert_eq!(owner(TABLE, &["-v"]), Owner::Native);
+        assert_eq!(owner(TABLE, &["cli", "status"]), Owner::Native);
         // No word and an empty word are `help`.
         for list in [&[][..], &[""], &["", "version"]] {
             let found = find(TABLE, &args(list));

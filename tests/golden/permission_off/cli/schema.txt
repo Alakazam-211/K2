@@ -8061,6 +8061,15 @@ exit: 0
       "flags": []
     },
     {
+      "name": "cli status",
+      "usage": "k2 cli status [--json]",
+      "description": "Answered by the k5 binary only (the shell CLI says so and exits 2): which command families the binary answers itself (native), from their --schema entry (spec) or hands to the shell CLI (bash), and its version. For the owner, how many calls of each family fell through to the shell CLI (GET /cli/cli-usage); with a passport, or the daemon down, the table alone and one line on stderr. Exit 0.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "One JSON document: {version, native, spec, bash, counts (shown, owner-only or unavailable), families: [{family, words, owner, fallthroughs, verbs}]}."}
+      ]
+    },
+    {
       "name": "--schema",
       "usage": "k2 --schema [json]",
       "description": "Print this command-surface manifest as JSON (one call to load the whole CLI surface).",

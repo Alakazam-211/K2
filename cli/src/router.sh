@@ -941,6 +941,14 @@ case "${1:-help}" in
     version|--version|-v)
         echo "k2 $K2_CLI_VERSION"
         ;;
+    cli)
+        # `k5 cli status` (which families the k5 binary answers itself,
+        # and the owner's fallthrough counts) is the binary's own verb;
+        # this script has none. The arm keeps the binary's route table,
+        # --schema and this router in step (tests/route_table.rs).
+        echo "k5 cli status is answered by the k5 binary: run k5 cli status" >&2
+        exit 2
+        ;;
     --schema|schema)
         # GH#8 #4: dump the full command surface as JSON so an agent
         # loads every verb + flags + a one-line description in ONE call,

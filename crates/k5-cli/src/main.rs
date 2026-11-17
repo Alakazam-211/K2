@@ -1,6 +1,6 @@
-//! `k5-cli`: the k5 command line's front. It answers `--version` and
-//! `--version --check` itself and hands every other verb to the shell CLI
-//! it carries ([`k5_cli::fallthrough`]). Before a verb
+//! `k5-cli`: the k5 command line's front. It answers `--version`,
+//! `--version --check` and `cli status` itself and hands every other verb
+//! to the shell CLI it carries ([`k5_cli::fallthrough`]). Before a verb
 //! falls through, the passport rule ([`k5_cli::passport`]) runs; for now
 //! it only counts. The binary's own requests carry its verdict too.
 //!
@@ -12,7 +12,7 @@
 use k5_cli::called_as::CalledAs;
 use k5_cli::exit::Exit;
 use k5_cli::front::{self, Route};
-use k5_cli::{check, daemon, embedded, fallthrough, out, passport};
+use k5_cli::{check, cli_status, daemon, embedded, fallthrough, out, passport};
 use std::ffi::OsString;
 
 /// Writes `text` to stdout; the exit after it.
@@ -45,6 +45,24 @@ fn version_check(args: &[OsString]) -> Exit {
     }
 }
 
+/// `cli status [--json]`.
+fn cli_status(args: &[OsString], json: bool) -> Exit {
+    let counts = match daemon::current() {
+        Err(e) => cli_status::Counts::Unavailable(e.to_string()),
+        Ok(s) => match s.client(passport::current(args).would_refuse()) {
+            Ok(mut c) => cli_status::fetch(&mut c),
+            Err(e) => cli_status::Counts::Unavailable(e.to_string()),
+        },
+    };
+    let status = cli_status::status(k5_cli::route::TABLE, embedded::version(), counts);
+    let text = if json { status.json() } else { status.table() };
+    let exit = print(&text, Exit::Ok);
+    if let Some(line) = status.note() {
+        out::stderr_line(&line);
+    }
+    exit
+}
+
 fn main() {
     let mut argv = std::env::args_os();
     let argv0 = argv.next().unwrap_or_default();
@@ -53,6 +71,8 @@ fn main() {
     let exit = match front::route(&args) {
         Route::Version => print(&front::version_line(embedded::version()), Exit::Ok),
         Route::VersionCheck => version_check(&args),
+        Route::CliStatus { json } => cli_status(&args, json),
+        Route::CliHelp => print(cli_status::HELP, Exit::Ok),
         Route::Fallthrough => {
             // The passport rule, count-only: the shell is told when the
             // call would be refused, and a value the caller set never

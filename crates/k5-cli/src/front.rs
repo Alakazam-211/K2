@@ -1,10 +1,10 @@
 //! What the front does with a command line: answer it itself, or hand it
 //! to the shell CLI.
 //!
-//! The route table ([`crate::route`]) says who answers. Today its one
-//! `Native` row is the version, and the front answers it alone or as
-//! exactly `--version --check`. A form the front's code does not take
-//! falls through, as does everything else, byte for byte
+//! The route table ([`crate::route`]) says who answers. Its `Native` rows
+//! are the version (alone, or exactly `--version --check`) and `cli`
+//! (`cli status [--json]` and its help). A form the front's code does not
+//! take falls through, as does everything else, byte for byte
 //! ([`crate::fallthrough`]).
 
 use crate::route::{self, Noun, Owner};
@@ -18,6 +18,11 @@ pub enum Route {
     /// Exactly `--version --check`: the version, then the server's
     /// ([`crate::check`]).
     VersionCheck,
+    /// `cli status`, `cli status --json` ([`crate::cli_status`]).
+    CliStatus { json: bool },
+    /// `cli` alone, `cli --help`, `cli -h`, `cli help`, and `cli status`
+    /// with `--help` or `-h`.
+    CliHelp,
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
@@ -43,6 +48,14 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
         return match words.as_slice() {
             [_] => Route::Version,
             ["--version", "--check"] => Route::VersionCheck,
+            _ => Route::Fallthrough,
+        };
+    }
+    if noun.names("cli") {
+        return match words.get(1..).unwrap_or_default() {
+            [] | ["--help" | "-h" | "help"] | ["status", "--help" | "-h"] => Route::CliHelp,
+            ["status"] => Route::CliStatus { json: false },
+            ["status", "--json"] => Route::CliStatus { json: true },
             _ => Route::Fallthrough,
         };
     }
@@ -100,11 +113,33 @@ mod tests {
         assert_eq!(route(&args(&["--version", "--check"])), Route::VersionCheck);
     }
 
+    #[test]
+    fn the_cli_forms() {
+        assert_eq!(route(&args(&["cli", "status"])), Route::CliStatus { json: false });
+        assert_eq!(route(&args(&["cli", "status", "--json"])), Route::CliStatus { json: true });
+        for help in [&["cli"][..], &["cli", "--help"], &["cli", "-h"], &["cli", "help"], &["cli", "status", "--help"], &["cli", "status", "-h"]] {
+            assert_eq!(route(&args(help)), Route::CliHelp, "{help:?}");
+        }
+        // Any other form is the shell's: its `cli` arm points here.
+        for other in [
+            &["cli", "status", "--json", "x"][..],
+            &["cli", "--json", "status"],
+            &["cli", "status", "--bogus"],
+            &["cli", "usage"],
+            &["cli", ""],
+            &["cli", "Status"],
+        ] {
+            assert_eq!(route(&args(other)), Route::Fallthrough, "{other:?}");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_argument_that_is_not_utf8_falls_through() {
         use std::os::unix::ffi::OsStringExt;
         assert_eq!(route(&[OsString::from_vec(b"--version\xff".to_vec())]), Route::Fallthrough);
+        let odd = OsString::from_vec(b"st\xffatus".to_vec());
+        assert_eq!(route(&[OsString::from("cli"), odd]), Route::Fallthrough);
         assert_eq!(route(&[OsString::from("--version"), OsString::from_vec(b"--check\xff".to_vec())]), Route::Fallthrough);
     }
 

@@ -60759,6 +60759,15 @@ cmd_schema() {
       "flags": []
     },
     {
+      "name": "cli status",
+      "usage": "k2 cli status [--json]",
+      "description": "Answered by the k5 binary only (the shell CLI says so and exits 2): which command families the binary answers itself (native), from their --schema entry (spec) or hands to the shell CLI (bash), and its version. For the owner, how many calls of each family fell through to the shell CLI (GET /cli/cli-usage); with a passport, or the daemon down, the table alone and one line on stderr. Exit 0.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "One JSON document: {version, native, spec, bash, counts (shown, owner-only or unavailable), families: [{family, words, owner, fallthroughs, verbs}]}."}
+      ]
+    },
+    {
       "name": "--schema",
       "usage": "k2 --schema [json]",
       "description": "Print this command-surface manifest as JSON (one call to load the whole CLI surface).",
@@ -114310,6 +114319,14 @@ case "${1:-help}" in
         ;;
     version|--version|-v)
         echo "k2 $K2_CLI_VERSION"
+        ;;
+    cli)
+        # `k5 cli status` (which families the k5 binary answers itself,
+        # and the owner's fallthrough counts) is the binary's own verb;
+        # this script has none. The arm keeps the binary's route table,
+        # --schema and this router in step (tests/route_table.rs).
+        echo "k5 cli status is answered by the k5 binary: run k5 cli status" >&2
+        exit 2
         ;;
     --schema|schema)
         # GH#8 #4: dump the full command surface as JSON so an agent

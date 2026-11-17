@@ -143,7 +143,7 @@ pub mod codes {
     /// the job rather than run it with more network.
     pub const JOB_NETWORK_UNAVAILABLE: &str = "job_network_unavailable";
     /// No node this job may use runs jobs at `--network none` (or makes
-    /// dummy interfaces) yet: it needs k2-node 0.46.14.
+    /// dummy interfaces) yet: it needs k2-node 0.46.15.
     pub const JOB_NETWORK_NEEDS_UPDATE: &str = "job_network_needs_update";
 }
 

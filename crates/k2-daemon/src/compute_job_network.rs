@@ -1,4 +1,4 @@
-//! A compute job's own network ask (0.46.14, `k2 compute run --network
+//! A compute job's own network ask (0.46.15, `k2 compute run --network
 //! none`, `--netns-dummy <name>=<addr>/<prefix>`; the rules are
 //! [`k2_core::compute::proto::jobnet`]), on the controller side:
 //!
@@ -22,6 +22,10 @@ use k2_core::compute::store::GrantRow;
 use crate::compute_gpu_ask::{gpu_node_refusal, gpu_refusal, gpu_skip};
 use crate::compute_place::{skip, CandReport, Want};
 use crate::compute_routes::{no, Refusal, R};
+
+/// The k2-node a job's own network ask needs on its node (its first
+/// release with `job-network` and `netns-dummy`), as every hint says it.
+pub(crate) const NODE_VERSION: &str = "0.46.15";
 
 /// The ask from a run request: `network: "none"` and `netnsDummies:
 /// ["sewlane0=10.254.254.1/32"]` (repeatable, implies `none`). `on` and
@@ -91,7 +95,7 @@ pub fn ask_skip(w: &Want, grant: Option<&GrantRow>, offer: &Offer) -> Option<&'s
 pub fn skip_words(w: &Want) -> String {
     let dummies = w.network.as_ref().is_some_and(|n| !n.dummies.is_empty());
     format!(
-        "that can't run a job at --network none{} yet (k2-node older than 0.46.14{})",
+        "that can't run a job at --network none{} yet (k2-node older than {NODE_VERSION}{})",
         if dummies { " with --netns-dummy" } else { "" },
         if dummies { ", or a Mac" } else { "" }
     )
@@ -105,11 +109,11 @@ pub fn needs_update_hint(n: &JobNet, node: Option<&str>) -> String {
         .unwrap_or_else(|| "no node this workspace may use can".into());
     if n.dummies.is_empty() {
         format!(
-            "--network none: {which} run a job with no network yet: that needs k2-node 0.46.14 there and its job wall (Linux: sudo k2-node setup; macOS: Seatbelt). Its owner updates k2-node. {PRODUCT_NAME} never runs the job with more network instead"
+            "--network none: {which} run a job with no network yet: that needs k2-node {NODE_VERSION} there and its job wall (Linux: sudo k2-node setup; macOS: Seatbelt). Its owner updates k2-node. {PRODUCT_NAME} never runs the job with more network instead"
         )
     } else {
         format!(
-            "--netns-dummy: {which} make a job's own network namespace with dummy interfaces yet: that needs a Linux node with k2-node 0.46.14 and its job wall (Macs can't). Its owner updates k2-node. {PRODUCT_NAME} never runs the job with more network instead"
+            "--netns-dummy: {which} make a job's own network namespace with dummy interfaces yet: that needs a Linux node with k2-node {NODE_VERSION} and its job wall (Macs can't). Its owner updates k2-node. {PRODUCT_NAME} never runs the job with more network instead"
         )
     }
 }
@@ -331,7 +335,7 @@ mod tests {
         );
         assert!(
             hint.contains("--netns-dummy")
-                && hint.contains("0.46.14")
+                && hint.contains("0.46.15")
                 && hint.contains("never runs the job with more network"),
             "{hint}"
         );

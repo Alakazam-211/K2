@@ -3238,13 +3238,16 @@ pub(crate) fn receipt_v2_feature_wait() -> frames::Refusal {
 /// [`receipt_v2_feature_wait`]'s code.
 pub const RECEIPT_V2_WAIT: &str = "node_too_old_for_receipt_v2";
 
-/// 0.46.14: a `--network none` / `--netns-dummy` plan waits for a node
+/// 0.46.15: a `--network none` / `--netns-dummy` plan waits for a node
 /// that runs it at that network (its k2-node, or its executor, was rolled
 /// back since submit). Never sent there: it would run with more network.
 pub(crate) fn job_network_feature_wait() -> frames::Refusal {
     frames::Refusal::new(
         k2_core::compute::proto::jobnet::codes::JOB_NETWORK_NEEDS_UPDATE,
-        "the node can't run this job at its --network none (or make its --netns-dummy interfaces) now: it needs k2-node 0.46.14 and its job wall (k2 compute node update <node>)",
+        format!(
+            "the node can't run this job at its --network none (or make its --netns-dummy interfaces) now: it needs k2-node {} and its job wall (k2 compute node update <node>)",
+            crate::compute_job_network::NODE_VERSION
+        ),
     )
 }
 

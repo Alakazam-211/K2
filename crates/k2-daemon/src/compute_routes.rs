@@ -1864,7 +1864,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let gpu = gpu_from(v)?;
     // GPU jobs S6 (`--gpu-mem`): its GPU memory budget, only with `--gpu`.
     let gpu_mem = gpu_mem_from(v, gpu.is_some())?;
-    // 0.46.14 (`--network none`, `--netns-dummy`): the job's own network,
+    // 0.46.15 (`--network none`, `--netns-dummy`): the job's own network,
     // only ever narrower than its node's.
     let network = job_net::from_body(v)?;
     if cache.is_some() && !secret_asks.is_empty() {
@@ -2246,7 +2246,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // of that vendor open to it), and the grant must say `--gpu` unless the
     // caller is the owner or an Admin. Auto-placement already kept only
     // such nodes; a named one is checked here. Never a GPU job on the CPU.
-    // 0.46.14: likewise a `--network` ask only to a node that runs it.
+    // 0.46.15: likewise a `--network` ask only to a node that runs it.
     let refused = job_net::named_refusal(
         &want,
         grant.as_ref(),
@@ -2576,7 +2576,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         cache_ref,
         setup: Vec::new(),
         cpus_burst: None, provenance: crate::compute_provenance::ask(&node_features(&node)), // build statements: `provenance-v1` nodes only
-        // 0.46.14: only ever placed where it runs at that network.
+        // 0.46.15: only ever placed where it runs at that network.
         network: want.network.clone(),
     };
     let job = {
@@ -3212,7 +3212,7 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
     out["placement"] = serde_json::to_value(f.placement).unwrap_or_default();
     out["effective"] = f.effective.cloned().unwrap_or_default();
     out["tier"] = f.tier.as_str().into();
-    // 0.46.14: the job's own network ask, only when it asked.
+    // 0.46.15: the job's own network ask, only when it asked.
     if let Some(net) = f.want.network.as_ref() {
         out["network"] = crate::compute_views::network_json(net);
     }

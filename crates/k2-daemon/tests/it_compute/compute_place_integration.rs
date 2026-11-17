@@ -551,7 +551,7 @@ async fn gpu_jobs_place_only_on_granted_gpu_nodes() {
     compute_ws::test_detach("g-gpu");
 }
 
-/// 0.46.14 (`--network none`, `--netns-dummy`): a job that asks goes only
+/// 0.46.15 (`--network none`, `--netns-dummy`): a job that asks goes only
 /// to a node offering what it needs (`job-network`; `netns-dummy` too for
 /// dummies, which a Mac never offers); an older node is skipped
 /// (`job_network`), and with none left, or named, the job is refused
@@ -580,7 +580,7 @@ async fn network_asks_place_only_on_nodes_that_run_them() {
         r.body
     );
     assert!(
-        r.body.contains("--network none") && r.body.contains("0.46.14"),
+        r.body.contains("--network none") && r.body.contains("0.46.15"),
         "{}",
         r.body
     );

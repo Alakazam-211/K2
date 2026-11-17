@@ -190,7 +190,7 @@ Agents:
                                 own with loopback only; macOS, no remote IP and no
                                 DNS (loopback open). A job can only narrow its
                                 network (on, no-lan: exit 2). Needs k2-node
-                                0.46.14 on the node (else job_network_needs_update,
+                                0.46.15 on the node (else job_network_needs_update,
                                 exit 3). k2 study compute: NETWORK
                  [--netns-dummy NAME=ADDR/PREFIX]  (repeatable, at most 4;
                                 Linux nodes) a dummy interface in the job's own

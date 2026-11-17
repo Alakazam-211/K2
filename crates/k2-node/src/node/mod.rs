@@ -880,7 +880,7 @@ impl Node {
         if !n.dummies.is_empty() && !self.offers_netns_dummy() {
             return Some((
                 codes::JOB_NETWORK_UNAVAILABLE,
-                "--netns-dummy: this node can't make a job's own network namespace (Linux job wall with a 0.46.14 root executor only; Macs can't)".into(),
+                "--netns-dummy: this node can't make a job's own network namespace (Linux job wall with a 0.46.15 root executor only; Macs can't)".into(),
             ));
         }
         None

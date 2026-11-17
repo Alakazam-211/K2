@@ -153,7 +153,7 @@ pub struct Want {
     /// on a unified GPU it (default 2G) counts against the node's memory
     /// beside `--mem` ([`Want::mem_on`]).
     pub gpu_mem: Option<u64>,
-    /// 0.46.14 (`--network none`, `--netns-dummy`): only nodes offering
+    /// 0.46.15 (`--network none`, `--netns-dummy`): only nodes offering
     /// what it needs ([`crate::compute_job_network`]).
     pub network: Option<k2_core::compute::proto::jobnet::JobNet>,
 }
@@ -997,7 +997,7 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     if w.gpu_mem.is_some() {
         f.push(k2_core::compute::proto::gpu::FEATURE_GPU_MEM);
     }
-    // 0.46.14: `job-network`, and `netns-dummy` for dummy interfaces.
+    // 0.46.15: `job-network`, and `netns-dummy` for dummy interfaces.
     f.extend(k2_core::compute::proto::jobnet::plan_features(
         w.network.as_ref(),
     ));
@@ -1066,8 +1066,8 @@ pub mod skip {
     /// A need it can't provide at all (a Rust target where Rust is
     /// a system package with no rustup).
     pub const TOOLS_UNSUPPORTED: &str = "tools_unsupported";
-    /// 0.46.14: a node that can't run the job's `--network` ask (k2-node
-    /// or its executor older than 0.46.14, no job wall, or a Mac for
+    /// 0.46.15: a node that can't run the job's `--network` ask (k2-node
+    /// or its executor older than 0.46.15, no job wall, or a Mac for
     /// `--netns-dummy`).
     pub const JOB_NETWORK: &str = "job_network";
 }
@@ -1214,7 +1214,7 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
             skipped(&mut out, skip::OFFLINE);
             continue;
         };
-        // GPU jobs (0.46.11) and the `--network` ask (0.46.14): before the
+        // GPU jobs (0.46.11) and the `--network` ask (0.46.15): before the
         // feature check, so a node without GPU jobs for this server says
         // `no_gpu`, one that can't run the job's network `job_network`,
         // not `node_too_old`.

@@ -122,6 +122,10 @@ fn first_reason(c: &Cand, w: &Want) -> Option<(&'static str, String)> {
         if !c.node_slot_free() {
             return Some(full());
         }
+        // This server's jobs held here for it go first (0.46.15).
+        if !c.slot_free_behind_line() {
+            return Some((QUEUED_THERE, format!("{} job(s) of this server already wait for it", c.queued)));
+        }
         let ours = v.running + c.pending.jobs;
         if ours >= v.limits.max_running {
             return Some((SHARE_FULL, format!("this server runs {ours} of {} jobs there (its share)", v.limits.max_running)));

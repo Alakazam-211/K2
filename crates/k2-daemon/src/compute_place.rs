@@ -49,6 +49,10 @@ use crate::compute_ws;
 #[path = "compute_place_native.rs"]
 mod native;
 
+/// The line already waiting on a node: its slots and the wait (0.46.15).
+#[path = "compute_place_backlog.rs"]
+mod backlog;
+
 /// Why an auto job waits where it is; a shared node's own slots.
 #[path = "compute_why_not.rs"]
 pub mod why_not;
@@ -380,8 +384,8 @@ pub struct Cand {
     /// This workspace's last job with the same `--cache NAME` ran here
     /// (warmth 3, CE-6, CE-A15).
     pub holds_cache: bool,
-    /// Solo node: this server's estimate of the wait there (P2,
-    /// [`solo_eta`]); `None` on a shared node (it quotes) or offline.
+    /// This server's estimate of the wait there (P2, [`solo_eta`]); on a
+    /// shared node only at the workspace's grant limit ([`backlog::est_wait`]).
     pub est_wait: Option<u64>,
     /// Shared node (0.46.8): this server's jobs still waiting HERE for it
     /// (the `any_hold` minute, not yet in the node's queue, so not in its
@@ -409,9 +413,9 @@ impl Cand {
     }
 
     /// The wait for this ask and its basis: the node's quote (`quote`),
-    /// else this server's estimate on a solo node (`estimate`, P2).
+    /// else (or when longer) this server's estimate (`estimate`, P2, [`backlog::wait`]).
     pub fn wait_eta(&self, w: &Want) -> Option<(u64, &'static str)> {
-        self.eta(w).map(|e| (e + self.held_wait, "quote")).or_else(|| self.est_wait.map(|e| (e, "estimate")))
+        backlog::wait(self, w)
     }
 
     /// Each need's state here (CE-1), profiles expanded.
@@ -459,9 +463,9 @@ impl Cand {
             // a GPU job also needs a free GPU in the offer.
             return self.online
                 && share::starts_now(v, w.cpu_millis, w.mem_bytes)
-                // The node's own slots, every server's jobs (the offer is
-                // newer than a quote, and there without one: why_not).
-                && self.node_slot_free()
+                // The node's own slots, every server's jobs (the offer is newer than a
+                // quote: why_not), behind ours held here for it (backlog).
+                && self.slot_free_behind_line()
                 // Jobs sent (or a mover's hold) since the offer take this
                 // server's running slots there too.
                 && (self.pending.jobs == 0 || v.running + self.pending.jobs < v.limits.max_running)
@@ -1281,7 +1285,7 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
         let pending = pending_for(&n.id, online.then_some(offer.revision), now);
         let recent = recent_for(&n.id, now);
         let holds_cache = cache_at.as_deref() == Some(n.id.as_str());
-        let est_wait = (online && !share::is_shared(&offer)).then(|| waits.eta(&n.id, offer.parallel_max));
+        let est_wait = online.then(|| backlog::est_wait(&waits, &n.id, &offer, grant.as_ref(), &load, &w.ws_id, now)).flatten();
         let held_wait = if share::is_shared(&offer) { waits.held_eta(&n.id, offer.parallel_max) } else { 0 };
         let gen_heads = if online { crate::compute_ws::trusted_heads(&n.id) } else { Vec::new() };
         out.cands.push(Cand { node: n, online, offer, load, queued: queued_all, grant, pending, recent, holds_cache, est_wait, held_wait, gen_heads, ws_id: w.ws_id.clone() });

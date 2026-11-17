@@ -30,6 +30,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Web app
 - **The web app no longer keeps sign-in tokens or passwords in the browser's saved storage.** A sign-in lasts for the browser tab (a reload keeps it); a new tab asks you to sign in again, and the web app has no "Remember password". Anything an older version saved there is removed when the page loads. The desktop app still uses your system keychain.
+- **Compute jobs stop piling up on one node.** K2 now counts the jobs already waiting on a node (for example behind your workspace's one-at-a-time limit there) before it places a new one, so the job goes to a node that can start it now, or to the one with the shorter real wait, even when the busy node has more free CPU. A `--cache` job no longer waits behind such a line for its cache.
 
 ## 0.46.14 — Choose which Thread the main chat keeps
 

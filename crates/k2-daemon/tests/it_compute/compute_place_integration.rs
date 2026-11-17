@@ -2418,3 +2418,126 @@ async fn an_auto_job_moves_when_another_node_frees_and_says_why_until_then() {
     compute_ws::test_detach("e-a");
     compute_ws::test_detach("e-b");
 }
+
+// ── the line already waiting on a node (0.46.15) ─────────────────────
+
+/// A shared node like z13flow on 11-16: 24 CPUs, 64 GB, 2 slots, this
+/// server's share runs 2. Its quote says a 2 GB job starts now: k2-node
+/// quotes for a workspace with nothing there.
+fn line_node_offer(rev: u64, running: u32, queued: u32) -> Offer {
+    let mut o = offer(rev, 60, 64, running);
+    o.parallel_max = 2;
+    o.caps.cpu_millis = 24_000;
+    o.free.cpu_millis = 20_000;
+    o.features.push(FEATURE_QUEUE.to_string());
+    let mut v = shared_view();
+    v.limits.max_running = 2;
+    v.limits.max_cpus = 24;
+    v.limits.max_mem_gb = 32;
+    v.running = running;
+    v.queued = queued;
+    v.quotes = vec![k2_core::compute::proto::share::Quote { cpu_millis: 0, mem_bytes: 2 * GB, starts_now: true, eta_secs: None, eta_p90_secs: None, blocked_by: None }];
+    o.share = Some(v);
+    o
+}
+
+/// The node says `job` waits in its queue at `pos`, held by its
+/// workspace's grant there.
+fn node_queued(node: &str, job: &str, pos: u32) {
+    use k2_core::compute::proto::frames::{JobState, StateUpdate};
+    let queue = k2_core::compute::proto::share::QueuePos { pos, of: None, eta_secs: None, eta_p90_secs: None, blocked_by: Some("workspace_running_full".into()) };
+    let st = StateUpdate {
+        queue: Some(queue),
+        job_id: job.into(),
+        generation: 1,
+        state: JobState::Queued,
+        reason: Some("node_queued".into()),
+        detail: None,
+        at: k2_core::compute::now(),
+        exit: None,
+        src: None,
+        log_seq: 0,
+        outputs: None,
+    };
+    compute_ws::test_frame(node, Frame::State(st));
+}
+
+/// K2 Engine 11-16 (z13flow): a big shared node with free CPU, where this
+/// workspace (1 job at a time there) runs 1 and has 3 waiting, quoted
+/// "starts now". A new auto job goes to the smaller node that starts it
+/// now, not there for its cache (that wait is an hour, not the quote's
+/// 0 s), and never to the idle pinned-only node. Busy everywhere, the
+/// shorter real wait wins. A job waiting on a busy node moves when
+/// another node frees up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_with_a_line_loses_to_one_that_starts_now_and_waiting_jobs_move() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "line");
+    for n in ["ln-big", "ln-small", "ln-pinned"] {
+        active_node(n);
+        grant(n, &me, None, 1);
+    }
+    let mut big = compute_ws::test_attach("ln-big", line_node_offer(1, 0, 0));
+    // The workspace's cache c1 lives on ln-big: its job runs there, and
+    // 3 more wait in the node's queue behind the grant's 1 at a time.
+    let r = run(d.port, OWNER, &me, json!({"node": "ln-big", "cache": "c1"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let first = id_of(&r);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE compute_jobs SET started_at = ?2 WHERE id = ?1", params![first, k2_core::compute::now()]).unwrap();
+    }
+    let mut waiting = Vec::new();
+    for _ in 0..3 {
+        let r = run(d.port, OWNER, &me, json!({"node": "ln-big", "cache": "c1"})).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        waiting.push(id_of(&r));
+    }
+    assert_eq!(assigns(&mut big).len(), 4, "all four went into ln-big's queue");
+    for (i, id) in waiting.iter().enumerate() {
+        node_queued("ln-big", id, i as u32 + 1);
+    }
+    assert!(waiting.iter().all(|id| row(id).node_queued), "the node holds them");
+    compute_ws::test_frame("ln-big", Frame::Offer(line_node_offer(2, 1, 3)));
+    // A smaller idle node with one slot, and a roomy idle pinned-only one.
+    let mut small_offer = offer(1, 16, 16, 0);
+    small_offer.parallel_max = 1;
+    let mut small = compute_ws::test_attach("ln-small", small_offer);
+    let mut pinned = compute_ws::test_attach("ln-pinned", offer(1, 60, 64, 0));
+    pinned_only("ln-pinned", true);
+
+    // A new auto job with --cache c1: ln-small starts it now.
+    let r = run(d.port, OWNER, &me, json!({"cache": "c1"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let p = j(&r)["placement"].clone();
+    assert_eq!((node_of(&r).as_str(), p["startsNow"].as_bool()), ("ln-small", Some(true)), "{p}");
+    let why = p["why"].as_str().unwrap();
+    assert!(why.contains("cache c1 isn't on this node (it was on ln-big, busy ~60 min (estimate))"), "the wait there is its line: {why}");
+    assert_eq!(assigns(&mut small).len(), 1);
+
+    // Busy everywhere now (this workspace runs 1 on each): ln-small's
+    // 15 min beats ln-big's hour, though ln-big quotes "starts now".
+    let r = run(d.port, OWNER, &me, json!({})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let p = j(&r)["placement"].clone();
+    assert_eq!((node_of(&r).as_str(), p["code"].as_str(), p["etaSecs"].as_u64()), ("ln-small", Some("queued_est_wait"), Some(900)), "{p}");
+    let held = id_of(&r);
+    assert_eq!(row(&held).state, "queued");
+
+    // Another node frees up: the waiting job moves there on the next
+    // sweep (never to the pinned-only node).
+    active_node("ln-free");
+    grant("ln-free", &me, None, 1);
+    let mut free = compute_ws::test_attach("ln-free", offer(1, 30, 32, 0));
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert_eq!(row(&held).node_id, "ln-free", "{:?}", row(&held));
+    assert_eq!(assigns(&mut free), vec![held.clone()]);
+    assert!(assigns(&mut pinned).is_empty(), "the pinned-only node got nothing");
+    assert!(waiting.iter().all(|id| row(id).node_id == "ln-big"), "jobs named for ln-big stay");
+    pinned_only("ln-pinned", false);
+    for n in ["ln-big", "ln-small", "ln-pinned", "ln-free"] {
+        compute_ws::test_detach(n);
+    }
+}

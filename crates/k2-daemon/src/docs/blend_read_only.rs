@@ -1,7 +1,7 @@
-//! `.blend` files are read-only in K2 for now (the 3D scene core).
+//! `.blend` files are read-only in K2 for now (the 3D scene core), behind
+//! one switch: [`BLEND_WRITER`].
 //!
-//! A file the BLEND pack writes doesn't open in the program that makes
-//! these files yet, so K2 writes no `.blend` at all: it reads them (the live
+//! While [`BLEND_WRITER`] is false (0.46.15), K2 writes no `.blend` at all: it reads them (the live
 //! scene, the mesh read the previews draw from, the index and the pack's read
 //! verbs) and refuses everything that would write one, with one typed reason,
 //! [`CODE`]. Three layers, each enough on its own:
@@ -22,6 +22,12 @@
 //!
 //! While the blend core is off a `.blend` is an any-file doc, as before the
 //! core: no BLEND pack is involved and nothing here applies.
+//!
+//! **Turning the writer on** is [`BLEND_WRITER`] = `true`: then nobody's
+//! rights are capped, nothing is refused, the live and tier-0 docs open with
+//! the BLEND pack itself ([`live_pack`], [`blob_pack`]: its splice, merge
+//! and agent writes), a scene's welcome keeps the edit right and lists
+//! `claims`, and has no `read_only_reason`.
 
 use std::io::Read;
 
@@ -41,6 +47,62 @@ use k2_mpc_blend::BlendPack;
 use super::blob_packs::{kind_by_name, BlobKind};
 use crate::cli_response::CliResponse;
 
+/// The one switch for writing `.blend` files: off in 0.46.15. Everything
+/// in this module follows [`writer_on`].
+pub const BLEND_WRITER: bool = false;
+
+/// Whether K2 writes `.blend` files: [`BLEND_WRITER`] (unit tests may turn it
+/// on for their own process, [`set_writer_for_test`]).
+pub fn writer_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = *test_writer().lock().unwrap_or_else(|p| p.into_inner()) {
+        return on;
+    }
+    BLEND_WRITER
+}
+
+#[cfg(test)]
+fn test_writer() -> &'static std::sync::Mutex<Option<bool>> {
+    static W: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+    &W
+}
+
+/// Test-only: the writer on or off for this process (`None`: the switch).
+#[cfg(test)]
+pub fn set_writer_for_test(on: Option<bool>) {
+    *test_writer().lock().unwrap_or_else(|p| p.into_inner()) = on;
+}
+
+/// The live pack a scene opens with: the BLEND pack when the writer is on,
+/// else [`SceneReadOnly`].
+pub fn live_pack() -> std::sync::Arc<dyn Pack> {
+    if writer_on() {
+        std::sync::Arc::new(BlendLive::default())
+    } else {
+        std::sync::Arc::new(SceneReadOnly::default())
+    }
+}
+
+/// The tier-0 pack a `.blend` opens with: the BLEND pack when the writer is
+/// on, else [`BlendIndexOnly`].
+pub fn blob_pack() -> std::sync::Arc<dyn BlobPack> {
+    if writer_on() {
+        std::sync::Arc::new(BlendPack::default())
+    } else {
+        std::sync::Arc::new(BlendIndexOnly::default())
+    }
+}
+
+/// What a scene's live welcome adds: `read_only_reason` while it is
+/// read-only ([`writes_off`]), nothing once K2 writes it.
+pub fn welcome_fields(rel: &str) -> Vec<(&'static str, &'static str)> {
+    if writes_off(rel) {
+        vec![(WELCOME_FIELD, WHY)]
+    } else {
+        Vec::new()
+    }
+}
+
 /// The refusal's code.
 pub const CODE: &str = "blend_writer_disabled";
 
@@ -53,9 +115,9 @@ pub const WHY: &str = "K2 can't save .blend edits yet; this file opens read-only
 pub const WELCOME_FIELD: &str = "read_only_reason";
 
 /// Whether `rel` is a `.blend` K2 must not write now: a `.blend` while the
-/// blend core is on.
+/// blend core is on and the writer off ([`writer_on`]).
 pub fn writes_off(rel: &str) -> bool {
-    kind_by_name(rel) == BlobKind::Blend && super::cores::is_on(docs_cores::BLEND)
+    !writer_on() && kind_by_name(rel) == BlobKind::Blend && super::cores::is_on(docs_cores::BLEND)
 }
 
 /// `r` with no edit on a `.blend` K2 must not write ([`writes_off`]):
@@ -254,6 +316,8 @@ mod tests {
     fn a_blend_is_read_only_only_while_its_core_is_on() {
         let _m = super::super::cores::tests::mirror_lock();
         super::super::cores::tests::all_off();
+        assert!(!BLEND_WRITER, "0.46.15 ships with the writer off");
+        set_writer_for_test(None);
         let full = super::super::host::DocRights { read: true, edit: true, history: true, owner: true, comment: false };
         assert_eq!(cap("room.blend", full), full, "the core off: an any-file doc as before");
         assert!(refused(super::super::routes::TOOL, "room.blend", true, None).is_none());
@@ -273,6 +337,48 @@ mod tests {
         let list = vec!["scene".to_string(), "list".into()];
         assert!(refused(super::super::routes::TOOL, "room.blend", false, Some(&list)).is_none(), "a read verb");
         assert!(refused("/cli/docs/write", "notes.md", true, None).is_none(), "another file");
+        assert_eq!(welcome_fields("room.blend"), vec![("read_only_reason", "K2 can't save .blend edits yet; this file opens read-only.")]);
+        super::super::cores::tests::all_off();
+    }
+
+    /// The switch on: no right capped, nothing refused, the BLEND pack
+    /// itself (its merge, its agent writes, its splice), no read-only
+    /// reason; off again, read-only again. One switch decides it all.
+    #[test]
+    fn the_writer_switch_on_lifts_every_layer() {
+        let _m = super::super::cores::tests::mirror_lock();
+        super::super::cores::tests::all_off();
+        super::super::cores::set_for_test("blend", true);
+        let full = super::super::host::DocRights { read: true, edit: true, history: true, owner: true, comment: false };
+        let place = vec!["object".to_string(), "place".into(), "@obj:1".into(), "--loc".into(), "0,0,1".into()];
+        set_writer_for_test(Some(true));
+        assert!(writer_on() && !writes_off("room.blend"));
+        assert_eq!(cap("room.blend", full), full, "the edit right stays");
+        assert!(refused("/cli/docs/write", "room.blend", true, None).is_none());
+        assert!(refused(super::super::routes::TOOL, "room.blend", false, Some(&place)).is_none());
+        assert!(welcome_fields("room.blend").is_empty(), "no read_only_reason");
+        assert!(matches!(blob_pack().agent_writes(), AgentWrites::Allowed), "the BLEND pack's own tier 0");
+        let bytes = k2_mpc_blend::testgen::scenes::living_room();
+        let content = live_pack().decode(&bytes).expect("reads").roots;
+        let pairing = k2_mpc_base::session::list_pairing(&content);
+        let first = pairing.keys(k2_mpc_blend::live::OBJS).and_then(|k| k.first()).expect("an object").clone();
+        let mut renamed = content.clone();
+        for (r, n) in renamed.iter_mut() {
+            if let (true, Neutral::Map(m)) = (r == k2_mpc_blend::live::OBJ_PROPS, n) {
+                m.insert(k2_mpc_blend::live::prop(&first, k2_mpc_blend::live::f::NAME), k2_mpc_base::elem::Value::str("X"));
+            }
+        }
+        let out = live_pack().encode_from_paired(&bytes, &pairing, &renamed, &[1]).unwrap_or_else(|e| panic!("the pack's own splice: {e:?}"));
+        assert_ne!(out, bytes, "a rename is written");
+        set_writer_for_test(Some(false));
+        assert!(writes_off("room.blend"));
+        assert_eq!(cap("room.blend", full).edit, false);
+        assert!(refused("/cli/docs/write", "room.blend", true, None).is_some());
+        assert!(matches!(blob_pack().agent_writes(), AgentWrites::Refused));
+        assert!(live_pack().encode(&content, &[1]).is_err(), "never a file from content alone");
+        assert!(live_pack().encode_from_paired(&bytes, &pairing, &renamed, &[1]).is_err(), "the rename is refused");
+        assert_eq!(welcome_fields("room.blend").len(), 1);
+        set_writer_for_test(None);
         super::super::cores::tests::all_off();
     }
 

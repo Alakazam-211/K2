@@ -730,7 +730,7 @@ pub(crate) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>,
         // One the pack declines (another version, too large, more than one
         // timeline) is a tier-0 doc, indexed by its blob pack.
         target::Tier::Timeline => Arc::new(k2_mpc_timeline::live::TimelineLive::default()),
-        target::Tier::Scene => Arc::new(super::blend_read_only::SceneReadOnly::default()),
+        target::Tier::Scene => super::blend_read_only::live_pack(),
         _ => Arc::new(k2_mpc_markdown::PACK),
     };
     let opened = rt.open(&key, &t.abs, &t.root, pack);

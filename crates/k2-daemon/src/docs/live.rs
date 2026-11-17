@@ -584,8 +584,8 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
             // A `.blend` K2 can't write yet: its `rights` is `read` for
             // everyone, and the welcome says why, so the view shows it from
             // the start (`blend_read_only`).
-            if super::blend_read_only::writes_off(&t.rel) {
-                o.push((super::blend_read_only::WELCOME_FIELD.into(), Value::from(super::blend_read_only::WHY)));
+            for (k, v) in super::blend_read_only::welcome_fields(&t.rel) {
+                o.push((k.into(), Value::from(v)));
             }
         }
         return Ok(Opened {

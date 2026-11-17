@@ -99,8 +99,9 @@ impl BlobKind {
             BlobKind::Prproj => Arc::new(k2_mpc_timeline::PrprojPack),
             BlobKind::Photoplot => Arc::new(k2_mpc_fab::PhotoplotPack),
             BlobKind::Drill => Arc::new(k2_mpc_fab::CommonDrillPack),
-            // Read-only for now: its index, never a merge or an agent write (`blend_read_only`).
-            BlobKind::Blend => Arc::new(super::blend_read_only::BlendIndexOnly::default()),
+            // While the writer switch is off: its index, never a merge or an
+            // agent write (`blend_read_only::BLEND_WRITER`).
+            BlobKind::Blend => super::blend_read_only::blob_pack(),
         }
     }
 }

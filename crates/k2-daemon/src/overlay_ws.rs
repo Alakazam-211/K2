@@ -39,6 +39,14 @@
 //! reader's cursor or mute moves in this Thread on any surface
 //! (`read_live::guest_moved`); owner/Connect sockets never do (they read
 //! `thread_read` on `/cli/sessions/events`).
+//!
+//! Typing (thread-typing-v1, 0.46.15; [`crate::thread_typing`]): a person's
+//! or App guest's `{"t":"typing","thread"}` client frame becomes an
+//! unstored, lossy `{collection:"typing", seq:0, id, member, name, kind,
+//! at}` on a fourth bus, sent to this Thread's other people's sockets (never
+//! the typist's own) and to App guest sockets that opted in with `?ear=1`.
+//! One per 8 s per connection (extras dropped and counted); only someone who
+//! may post in the Thread shows as typing.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -825,6 +833,21 @@ pub async fn serve_overlay_events_connection(
         .filter(|r| r.person)
         .map(|r| r.key);
     let mut guest_rx = crate::read_live::subscribe_guest();
+    // thread-typing-v1: who is typing, on its own bus (a lag skips). The
+    // member this socket skips as its own (every socket of that person),
+    // and a guest hears it only with the ear opt-in (`?ear=1`).
+    let mut typing_rx = crate::thread_typing::subscribe();
+    let own_person: Option<String> = match (skin_pass.as_ref(), viewer_login.clone()) {
+        (Some(pass), _) => Some(crate::thread_typing::own_person_of_pass(pass)),
+        (None, Some(who)) => tokio::task::spawn_blocking(move || crate::thread_typing::own_person_of_login(&who))
+            .await
+            .ok()
+            .flatten(),
+        (None, None) => None,
+    };
+    let hears_typing = !skin || ear_opted_in(&params);
+    // This connection's own send window for its Thread (Sew's 8 s).
+    let mut typing_throttle = crate::thread_typing::Throttle::default();
     let mut keepalive = tokio::time::interval(ping_interval());
     keepalive.tick().await; // burn the immediate first tick
     let mut recheck = crate::socket_access::tick();
@@ -950,6 +973,60 @@ pub async fn serve_overlay_events_connection(
                                     }
                                 })
                                 .await;
+                            }
+                        } else if let Some(thread) = crate::thread_typing::parse_typing(&text) {
+                            // thread-typing-v1: a person's own typing on this
+                            // socket's Thread (never an agent's, never an App's
+                            // own pass). At most one per 8 s per connection:
+                            // extras are dropped and counted. No ack, no error
+                            // frame, no stop frame.
+                            let now = std::time::Instant::now();
+                            if !typing_throttle.due(&conversation, now) {
+                                continue;
+                            }
+                            let conv = conversation.clone();
+                            if let Some(who) = viewer_login.clone() {
+                                if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                                    break;
+                                }
+                                let sent = tokio::task::spawn_blocking(move || {
+                                    crate::thread_typing::typist_of_login(&who)
+                                        .is_some_and(|typist| crate::thread_typing::on_frame(&conv, &thread, typist))
+                                })
+                                .await
+                                .unwrap_or(false);
+                                if sent {
+                                    typing_throttle.sent(&conversation, now);
+                                }
+                            } else if let Some(probe) = probe.as_mut() {
+                                // An App guest: its pass as it resolves NOW must
+                                // still read this Thread, and post in it.
+                                let room = probe.room.clone();
+                                match probe.now().await {
+                                    GuestNow::Send(fresh) => {
+                                        let typist = crate::thread_typing::typist_of_pass(&fresh)
+                                            .filter(|_| crate::thread_typing::pass_may_post(&fresh, &room));
+                                        if let Some(g) = guest_wire.as_mut() {
+                                            g.pass = fresh;
+                                        }
+                                        if let Some(typist) = typist {
+                                            let sent = tokio::task::spawn_blocking(move || {
+                                                crate::thread_typing::on_frame(&conv, &thread, typist)
+                                            })
+                                            .await
+                                            .unwrap_or(false);
+                                            if sent {
+                                                typing_throttle.sent(&conversation, now);
+                                            }
+                                        }
+                                    }
+                                    GuestNow::Hold => {}
+                                    GuestNow::Close(m) => {
+                                        let _ = write.send(m).await;
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -1123,6 +1200,46 @@ pub async fn serve_overlay_events_connection(
                                 break;
                             }
                         }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            event = typing_rx.recv() => {
+                match event {
+                    Ok(frame) => {
+                        // thread-typing-v1: this Thread only, never the
+                        // typist's own sockets; a guest only with the ear.
+                        if !hears_typing || !crate::thread_typing::for_socket(&frame, &conversation, own_person.as_deref()) {
+                            continue;
+                        }
+                        if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                            let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                            break;
+                        }
+                        // A guest's pass as it is now must still read the
+                        // Thread (the same check as a Thread frame's).
+                        if let Some(probe) = probe.as_mut().filter(|p| p.gate.due()) {
+                            match probe.now().await {
+                                GuestNow::Send(fresh) => {
+                                    if let Some(g) = guest_wire.as_mut() {
+                                        g.pass = fresh;
+                                    }
+                                }
+                                GuestNow::Hold => continue,
+                                GuestNow::Close(m) => {
+                                    let _ = write.send(m).await;
+                                    break;
+                                }
+                            }
+                        }
+                        if write.send(Message::Text(crate::thread_typing::wire(&frame))).await.is_err() {
+                            break;
+                        }
+                    }
+                    // Ephemeral: a client holds each name for 10 s from its
+                    // last frame, so a skipped one costs nothing.
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        log_debug!("[daemon/overlay_ws] typing subscriber lagged {n} frames; skipped");
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }

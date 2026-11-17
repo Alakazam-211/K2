@@ -71,7 +71,9 @@ pub const COALESCE: Duration = Duration::from_secs(5);
 /// shared registry lists them with class `viewing`). The chat's
 /// `thread_message`, `thread_moved` and `thread_address` are the inbox
 /// stream's kinds.
-pub const VIEWING_KINDS: &[&str] = &["viewing_ok", "viewing_error", "thread_activity", "thread_activity_reset"];
+/// `thread_typing` (thread-typing-v1, 0.46.15): someone else typing in the
+/// viewed chat (`crate::thread_typing::hub_wire`).
+pub const VIEWING_KINDS: &[&str] = &["viewing_ok", "viewing_error", "thread_activity", "thread_activity_reset", "thread_typing"];
 
 /// One client `viewing` frame.
 #[derive(Debug, Clone, PartialEq, Eq)]

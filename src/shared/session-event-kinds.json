@@ -79,5 +79,6 @@
   "viewing_ok": "viewing",
   "viewing_error": "viewing",
   "thread_activity": "viewing",
-  "thread_activity_reset": "viewing"
+  "thread_activity_reset": "viewing",
+  "thread_typing": "viewing"
 }

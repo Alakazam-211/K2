@@ -82,6 +82,7 @@ features:
   thread-stream-v1
   thread-activity-ear-v1
   thread-activity-rooms-v1
+  thread-typing-v1
   widget-activity-v1
   thread-context-v1
   app-resources-v1

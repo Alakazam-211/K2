@@ -257,6 +257,8 @@ pub mod ticket_attachments;
 pub mod guest_paths;
 // `viewing` frames from the overlay WS: who looks at which Thread (S4).
 pub mod thread_viewers;
+// thread-typing-v1 (0.46.15): `typing` frames on the overlay WS, who is typing.
+pub mod thread_typing;
 // thread-read-v1 (0.46.1): unread/mute routes, live read frames, and the
 // silent badge-correction push.
 pub mod read_routes;

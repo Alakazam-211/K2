@@ -97,6 +97,9 @@ pub async fn serve_session_events_connection(
 
     let subscriber_id = NEXT_SUBSCRIBER_ID.fetch_add(1, Ordering::Relaxed);
     let mut rx = session_events::subscribe();
+    // thread-typing-v1: who is typing in the Thread this socket views (taken
+    // before the hello, so a viewer never misses a frame after its view).
+    let mut typing_rx = crate::thread_typing::subscribe();
 
     // S1 presence — resolve WHO holds this socket and register it in the
     // process-wide presence registry. The dispatcher already auth-gated
@@ -199,6 +202,8 @@ pub async fn serve_session_events_connection(
     // hub-viewing-v1: this socket's registry slot (dropped on every exit
     // path, which clears its view), its one view and the turn receiver.
     let mut views = hub_viewing::ViewState::default();
+    // thread-typing-v1: this connection's send windows, one per Thread (8 s).
+    let mut typing_throttle = crate::thread_typing::Throttle::default();
 
     let mut incoming = crate::socket_access::IncomingCheck::new(&token, &owner_token);
     loop {
@@ -293,6 +298,25 @@ pub async fn serve_session_events_connection(
                     if write.send(Message::Text(text)).await.is_err() {
                         break;
                     }
+                }
+            }
+            // thread-typing-v1: someone else typing in the viewed chat.
+            // Lossy: a lag skips (a client holds a name for 10 s anyway).
+            typed = typing_rx.recv() => {
+                match typed {
+                    Ok(f) => {
+                        let Some(v) = views.view.as_ref() else { continue };
+                        if !crate::thread_typing::for_socket(&f, &v.conversation, person.as_deref()) {
+                            continue;
+                        }
+                        if write.send(Message::Text(crate::thread_typing::hub_wire(&f))).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        log_debug!("[daemon/session_events_ws] subscriber {subscriber_id} typing lagged {n}; skipped");
+                    }
+                    Err(RecvError::Closed) => {}
                 }
             }
             // hub-viewing-v1: the viewed chat's turn frames.
@@ -489,7 +513,29 @@ pub async fn serve_session_events_connection(
                         // ignored, as before.
                         match inbox_stream::parse_subscribe(&text) {
                             None => match hub_viewing::parse(&text) {
-                                None => {}
+                                // thread-typing-v1: `{"t":"typing","thread",
+                                // "conversationId"?}` for the named Thread, else
+                                // the one this socket views. No ack, no error.
+                                None => {
+                                    let Some((thread, named)) = crate::thread_typing::parse_hub_typing(&text) else { continue };
+                                    let conv = named.or_else(|| views.view.as_ref().map(|v| v.conversation.clone()));
+                                    let (Some(conv), Some(who)) = (conv, viewer_login.clone()) else { continue };
+                                    let now = std::time::Instant::now();
+                                    if !typing_throttle.due(&conv, now) {
+                                        continue;
+                                    }
+                                    let c = conv.clone();
+                                    let sent = tokio::task::spawn_blocking(move || {
+                                        hub_viewing::authorize(Some(&who), &c).is_ok()
+                                            && crate::thread_typing::typist_of_login(&who)
+                                                .is_some_and(|typist| crate::thread_typing::on_frame(&c, &thread, typist))
+                                    })
+                                    .await
+                                    .unwrap_or(false);
+                                    if sent {
+                                        typing_throttle.sent(&conv, now);
+                                    }
+                                }
                                 Some(Err((code, hint))) => {
                                     if write.send(Message::Text(hub_viewing::error_json(code, &hint, None))).await.is_err() {
                                         break;

@@ -875,7 +875,7 @@ export interface InboxStreamFrame {
  *  on the hub (K2 Companion). The desktop views on its overlay socket, so
  *  it never gets one. */
 export interface HubViewingFrame {
-  kind: 'viewing_ok' | 'viewing_error' | 'thread_activity' | 'thread_activity_reset'
+  kind: 'viewing_ok' | 'viewing_error' | 'thread_activity' | 'thread_activity_reset' | 'thread_typing'
 }
 
 export interface AppDeployedEvent {

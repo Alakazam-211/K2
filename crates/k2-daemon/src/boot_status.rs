@@ -1060,6 +1060,17 @@ pub const FEATURE_THREAD_ACTIVITY_EAR: &str = "thread-activity-ear-v1";
 /// No SQL migration.
 pub const FEATURE_THREAD_ACTIVITY_ROOMS: &str = "thread-activity-rooms-v1";
 
+/// Who is typing in a Thread (thread-typing-v1, 0.46.15): on `WS
+/// /cli/overlay/events` a person or App guest sends
+/// `{"t":"typing","thread"}`; the Thread's other viewers get
+/// `{collection:"typing", seq:0, id, member, name, kind, at}` (App guests
+/// only with `?ear=1`), at most one per 8 s per connection, lossy, no stop
+/// frame (Sew's rules). The hub (`/cli/sessions/events`, hub-viewing-v1)
+/// takes `{"t":"typing","thread","conversationId"?}` and sends its viewers
+/// `kind: "thread_typing"` frames. `member` is the posts' `author.login`.
+/// See [`crate::thread_typing`]. No SQL migration.
+pub const FEATURE_THREAD_TYPING: &str = crate::thread_typing::FEATURE;
+
 /// The Garden's twin of the ear (0.46.5 activity SDK): a custom widget's
 /// `k2.thread.onActivity` and the `k2-activity@1` library. The renderer
 /// this daemon serves answers it; the frame's hello names it.
@@ -1295,6 +1306,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_THREAD_STREAM);
     out.push(FEATURE_THREAD_ACTIVITY_EAR);
     out.push(FEATURE_THREAD_ACTIVITY_ROOMS);
+    out.push(FEATURE_THREAD_TYPING);
     out.push(FEATURE_WIDGET_ACTIVITY);
     out.push(FEATURE_THREAD_CONTEXT);
     out.push(FEATURE_APP_RESOURCES);
@@ -1520,6 +1532,7 @@ mod tests {
                 "thread-stream-v1",
                 "thread-activity-ear-v1",
                 "thread-activity-rooms-v1",
+                "thread-typing-v1",
                 "widget-activity-v1",
                 "thread-context-v1",
                 "app-resources-v1",

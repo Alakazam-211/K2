@@ -33,4 +33,5 @@ mod must_change_password_integration;
 mod presence_integration;
 mod presence_kick_integration;
 mod room_surfaces_integration;
+mod thread_typing_integration;
 mod viewer_claimer_integration;

@@ -259,6 +259,8 @@ export const SESSION_EVENT_ROUTES = {
   viewing_error: { class: 'viewing', ignored: VIEWING_ONLY },
   thread_activity: { class: 'viewing', ignored: VIEWING_ONLY },
   thread_activity_reset: { class: 'viewing', ignored: VIEWING_ONLY },
+  // thread-typing-v1 (0.46.15): someone typing in the viewed chat.
+  thread_typing: { class: 'viewing', ignored: VIEWING_ONLY },
 } as const satisfies { readonly [K in SessionEventMessage['kind']]: SessionEventRoute }
 
 type Routes = typeof SESSION_EVENT_ROUTES

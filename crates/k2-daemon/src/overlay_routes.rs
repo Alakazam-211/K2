@@ -1286,6 +1286,12 @@ fn skin_from_stamp(pass: &SkinPass) -> String {
     }
 }
 
+/// The `from` an App guest's Thread post carries (thread-typing-v1 names a
+/// typing guest with it, so the line matches their posts).
+pub(crate) fn guest_post_from(pass: &SkinPass) -> String {
+    skin_from_stamp(pass)
+}
+
 /// `dana on App shop; login set up by sales's agent`: what a guest's post
 /// says it is, in the agent's terminal. The tie or the creator stamp says an
 /// agent could know the password. An App's own pass names no person.

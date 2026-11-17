@@ -41,7 +41,7 @@ export function liveTabState({
   outsideSave: OutsideSave | null
   /** The picture (a scene still, a timeline frame) lags the live file. */
   behind?: boolean
-  /** Live, but the file can't be changed here (a format K2 reads but doesn't write back). */
+  /** Live, but the file can't be changed here. */
   readOnly?: boolean
 }): LiveTabState {
   if (tier === 'loading') return 'loading'

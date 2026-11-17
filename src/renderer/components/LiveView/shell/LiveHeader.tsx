@@ -123,7 +123,7 @@ export function LiveHeader({
   kindLabel?: string
   /** None: no chip (a plain file). */
   state?: LiveTabState
-  /** The state's reason, after its word (Read only: K2 writes back .otio only); the word alone once the row gives up its short words. */
+  /** The state's reason (Read only: K2 writes back .otio only); the word alone once the row gives up its short words. */
   stateWhy?: string | null
   sentence: HeaderSentence | null
   /** Right after the sentence (the editors' "Back to my place"); a function gets how much the row gave up. */

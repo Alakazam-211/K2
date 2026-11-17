@@ -11,6 +11,8 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LiveClose, LiveServerFrame, LiveTransport, LiveWelcome } from '@/lib/docs-live-transport'
 import { stateFor } from '@/lib/live-doc-core'
+import { render as renderChip } from '@testing-library/react'
+import { StateChip } from '../shell/StateChip'
 import { backoffMs, keepConnected } from '@/lib/live-view/shared/live-connect'
 import type { ServerScope } from '@/kessel/server-scope'
 
@@ -24,14 +26,14 @@ const ROSTER = { kind: 'snapshot', version: 1, members: [member('ada', 'Ada', 'p
 const WELCOME = { root: '', version: 0, client: 1, self: 'ada', rights: 'edit', features: ['keyed_watch', 'view_address', 'presence'] } as unknown as LiveWelcome
 
 /** A scripted docs socket: connect resolves with the welcome; the test pushes frames and closes. */
-function scripted(): LiveTransport & { push: (f: unknown) => void; drop: (c: LiveClose) => void; connects: number } {
+function scripted(welcome: LiveWelcome = WELCOME): LiveTransport & { push: (f: unknown) => void; drop: (c: LiveClose) => void; connects: number } {
   const frames = new Set<(f: LiveServerFrame) => void>()
   const closes = new Set<(c: LiveClose) => void>()
   const t = {
     connects: 0,
     connect: async () => {
       t.connects++
-      return WELCOME
+      return welcome
     },
     send: () => undefined,
     onFrame: (cb: (f: LiveServerFrame) => void) => (frames.add(cb), () => frames.delete(cb)),
@@ -97,5 +99,32 @@ describe('keeping it connected', () => {
     await waitFor(() => expect(src.reconnected).toHaveBeenCalledTimes(1))
     t.drop({ reason: 'declined', retry: false, code: 'live_version', message: 'a version the pack doesn’t read' } as LiveClose)
     expect(src.refusedAtOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 'live_version' }))
+  })
+})
+
+describe('a .blend this release can’t save (the BLEND writer off)', () => {
+  it('the header says Read only from the start, the why in its tooltip; People promises no holds; Follow and Say stay', async () => {
+    const t = scripted({ ...WELCOME, rights: 'read', read_only_reason: 'K2 can’t save .blend edits yet; this file opens read-only.' } as unknown as LiveWelcome)
+    render(<SceneLive scope={{} as ServerScope} filePath="/ws/scenes/set.blend" width={1440} createTransport={() => t} />)
+    await waitFor(() => expect(t.connects).toBe(1))
+    await act(async () => {
+      t.push({ type: 'roster_event', event: ROSTER })
+      for (const f of STEPS[0].watch!) t.push(f)
+    })
+    const chip = screen.getByTestId('lv-state')
+    expect(chip.getAttribute('data-state')).toBe('read-only-file')
+    expect(chip.textContent).toBe('Read only')
+    expect(chip.getAttribute('title')).toBe('Read only: K2 can’t save .blend edits yet; this file opens read-only.')
+    expect(screen.getByTestId('lv-scene-head-people').textContent).toContain('People')
+    expect(screen.getByTestId('lv-scene-head-people').textContent).not.toContain('holds')
+    expect(screen.getAllByRole('button', { name: /Follow Atlas/ }).length).toBeGreaterThan(0)
+  })
+
+  it('a short why rides after the word (the timeline’s .fcpxml); a long one only in the tooltip', () => {
+    const a = renderChip(<StateChip state="read-only-file" why="K2 writes back .otio only" />)
+    expect(a.container.textContent).toBe('Read only: K2 writes back .otio only')
+    a.unmount()
+    const b = renderChip(<StateChip state="read-only-file" why="K2 can’t save .blend edits yet; this file opens read-only." />)
+    expect(b.container.textContent).toBe('Read only')
   })
 })

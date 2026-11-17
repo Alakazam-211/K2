@@ -33,7 +33,7 @@ const NO_CONTROL: SceneControl = { retryPicture: () => undefined }
 
 /** A scene step: the shell's snapshot and the scene's own state. */
 export interface SceneSnapshot extends SampleSnapshot {
-  scene: { S: SimState; scenario: string; step: number; label: string; fileName: string; control: SceneControl; meshEpoch?: number }
+  scene: { S: SimState; scenario: string; step: number; label: string; fileName: string; control: SceneControl; meshEpoch?: number; /** False: the host takes no claims (no holds shown or promised). */ holds?: boolean }
 }
 
 export const isSceneSnapshot = (s: LiveShellSnapshot): s is SceneSnapshot => 'scene' in s && !!(s as SceneSnapshot).scene
@@ -124,7 +124,7 @@ function refusalOf(S: SimState, r: NonNullable<SimState['callout']>['r'], live: 
     target: nameOf(S.D, r.unit),
     holder: r.holder ? actorOf(r.holder).name : null,
     at_ms: r.at_ms ?? S.at ?? 0,
-    why: r.holder ? null : refusalWhy(r.code),
+    why: r.holder ? null : refusalWhy(r.code, (r as { hint?: string | null }).hint),
     ask: live && S.peers[to.id] ? { id: to.id, name: to.name } : null,
     address: { label: nameOf(S.D, r.unit), address: r.unit },
   }

@@ -75,6 +75,8 @@ function useRoom(root: React.RefObject<HTMLDivElement | null>, narrow: boolean, 
 export function ScenePanel({ snap, followingId, onFollow, offline, narrow }: ShellPanelProps): React.JSX.Element | null {
   const scene = isSceneSnapshot(snap) ? snap.scene : null
   const S = scene?.S
+  // A live host that takes no claims: no holds anywhere, and the section doesn't promise them.
+  const snapHolds = scene?.holds
   const [open, setOpen] = useState<Record<string, boolean>>({})
   useEffect(() => setOpen({}), [narrow])
   const isOpen = (id: SectionId): boolean => open[id] ?? openByDefault(id, narrow)
@@ -158,7 +160,7 @@ export function ScenePanel({ snap, followingId, onFollow, offline, narrow }: She
     <div ref={root} className="lv-scene-panel" data-testid="lv-scene-panel" data-target={target(S, pick) ?? undefined} style={{ minHeight: room.minHeight }}>
       <style>{SCENE_PANEL_CSS}</style>
       {PANEL.map((s) => (
-        <SceneSection key={s.id} id={s.id} title={s.title} count={bodies[s.id].count} flush={bodies[s.id].flush} grow={s.grow} open={isOpen(s.id)} onToggle={() => toggle(s.id)}>
+        <SceneSection key={s.id} id={s.id} title={s.id === 'people' && snapHolds === false ? 'People' : s.title} count={bodies[s.id].count} flush={bodies[s.id].flush} grow={s.grow} open={isOpen(s.id)} onToggle={() => toggle(s.id)}>
           {bodies[s.id].node}
         </SceneSection>
       ))}

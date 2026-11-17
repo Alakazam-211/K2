@@ -23,7 +23,7 @@ import { applyGroup, blankState, finish, type Claim, type Peer, type SimEvent, t
 import type { Scenario } from './turn'
 import type { Actor, Doc, Frame, Refusal } from './types'
 import { SCENE_VIEW } from './view-address'
-import { ACTORS } from './wording'
+import { ACTORS, BLEND_WRITER_OFF } from './wording'
 
 /** The welcome as K2's docs socket sends it for a keyed doc: the kit's, with its features. */
 export type KeyedWelcome = Welcome & { features?: string[]; rights?: string }
@@ -36,6 +36,9 @@ export interface KeyedSceneOptions {
   /** The host clock now (ms). */
   now?: () => number
 }
+
+/** The chip's words when the host gives none (the BLEND writer is off in this release). */
+export const READ_ONLY_WORDS = 'K2 can’t save .blend edits yet; this file opens read-only.'
 
 const EMPTY: Doc = { rev: 0, lists: {}, kinds: {}, props: {}, scene: {}, units: {}, space: null, tier: 'live', removed: {}, added: {} }
 /** The live tab has one "step": now. */
@@ -74,6 +77,8 @@ export class KeyedWatchSceneSource implements LiveSource {
   private onRetry: (() => void) | null = null
   private myView: string | null = null
   private claimsOn = false
+  /** Read only up front, and why (the header's chip); null when you can write. */
+  readOnly: string | null = null
   /** Moves when a unit's mesh changes: the picture asks for new stills. */
   meshEpoch = 0
   /** The pack's refusal at open, when the watch can't be live. */
@@ -110,6 +115,9 @@ export class KeyedWatchSceneSource implements LiveSource {
     this.presence = new PresenceChannel(this.t, welcome)
     // Holds only when the host takes claims: never made up.
     this.claimsOn = (welcome.features ?? []).includes('claims') || this.presence.claimsSupported
+    // Read only up front: no write right (TODO(K2): confirm `read_only_reason`, K2's proposal), with the host's words when it gives them.
+    const reason = (welcome as { read_only_reason?: string | null }).read_only_reason
+    this.readOnly = welcome.rights !== 'edit' || reason ? (reason || READ_ONLY_WORDS) : null
     if (this.myView !== null) this.presence.setViewAddress(this.myView)
     this.wire()
     this.changed()
@@ -190,7 +198,7 @@ export class KeyedWatchSceneSource implements LiveSource {
       w.onChange((c) => this.onChange(c)),
       w.onResync(() => this.group([{ kind: 'loading', v: { phase: 'resync' } }])),
       w.onRefused((e) => this.refusedAtOpen(e)),
-      w.onVerbRefused((r) => this.group([{ kind: 'refused', r: this.refusal(r) }])),
+      w.onVerbRefused((r) => this.onVerbRefused(r)),
       w.onOutsideSave((o) => this.onOutsideSave(o)),
       p.onChange((peers) => this.onPeers(peers)),
       p.onClaims((cs) => this.onClaims(cs)),
@@ -217,6 +225,12 @@ export class KeyedWatchSceneSource implements LiveSource {
     if (this.watch) withDerived(this.S.D, this.watch)
     if (meshesChanged(before, this.S.D).length) this.meshEpoch++
     this.changed()
+  }
+
+  private onVerbRefused(r: VerbRefusedFrame): void {
+    // The chip already says the file is read only: an agent's attempt to write isn't news (no callout, no row).
+    if (this.readOnly && r.code === BLEND_WRITER_OFF) return
+    this.group([{ kind: 'refused', r: this.refusal(r) }])
   }
 
   private refusal(r: VerbRefusedFrame): Refusal {
@@ -289,6 +303,6 @@ export class KeyedWatchSceneSource implements LiveSource {
     const S = finish({ ...this.S, peers: { ...this.S.peers }, claims: [...this.S.claims], log: [...this.S.log] })
     const snap = sceneSnapshot(S, LIVE, 0, this.control)
     const messages = [...snap.messages, ...this.extra].sort((a, b) => a.at_ms - b.at_ms)
-    return { ...snap, size: null, messages, scene: { ...snap.scene, fileName: this.o.fileName, scenario: 'live', label: '', meshEpoch: this.meshEpoch } }
+    return { ...snap, size: null, messages, ...(this.readOnly ? { readOnly: this.readOnly } : {}), scene: { ...snap.scene, fileName: this.o.fileName, scenario: 'live', label: '', meshEpoch: this.meshEpoch, holds: this.claimsOn } }
   }
 }

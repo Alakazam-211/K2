@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 import type { ServerFrame, Transport } from '@k2/mpc-client'
 import { KeyedWatchSceneSource, refusalCode, type KeyedWelcome } from './keyed-source'
 import { hiddenOf, inSceneDrawn } from './overlay'
+import { activityItems } from './panel'
 import type { SceneSnapshot } from './sample-source'
 
 type Step = { step: string; by: string; watch: Record<string, unknown>[] | null }
@@ -184,5 +185,41 @@ describe('KeyedWatchSceneSource on the BLEND pack’s golden', () => {
     expect(inSceneDrawn({ ...D, currentScene: '@coll:9' }, '@obj:3')).toBe(false)
     // the view couldn't pair: no mark, nothing filtered
     expect(inSceneDrawn({ ...D, currentScene: null }, '@obj:3')).toBe(true)
+  })
+})
+
+describe('the BLEND writer off (this release: edits refused, no claims)', () => {
+  const WRITER_OFF = { type: 'verb_refused', at_ms: T0 + 3000, actor: { id: 'atlas', name: 'atlas', kind: 'agent', colour: '#d9480f' }, client: 2, turn: 'turn-9', verb: 'object place', unit: '@obj:3', code: 'blend_writer_disabled', holder: null, claim: null }
+  // What Activity shows (the code stays in the row's tooltip for agents, as on every refusal).
+  const words = (o: ReturnType<typeof open>) => activityItems(o.src.state(), 'set').map((x) => ('text' in x ? String(x.text) : '')).join(' | ')
+
+  it('read only up front: the welcome without write gives the chip’s words, and an agent’s attempt shows nothing', () => {
+    const o = open({ welcome: { ...WELCOME, rights: 'read', read_only_reason: 'K2 can’t save .blend edits yet; this file opens read-only.', features: ['keyed_watch', 'view_address', 'presence'] } as KeyedWelcome })
+    expect(o.snap().readOnly).toBe('K2 can’t save .blend edits yet; this file opens read-only.')
+    o.t.push(WRITER_OFF)
+    expect(o.src.state().callout).toBeNull()
+    expect(o.src.state().log.some((e) => e.kind === 'refused')).toBe(false)
+    // no claims: no holds, and the panel doesn't promise them
+    expect(o.snap().scene.holds).toBe(false)
+  })
+
+  it('no write right and no words: the default words', () => {
+    const o = open({ welcome: { ...WELCOME, rights: 'read' } as KeyedWelcome })
+    expect(o.snap().readOnly).toBe('K2 can’t save .blend edits yet; this file opens read-only.')
+  })
+
+  it('nothing up front: a refused edit says so in plain words, on the callout and in Activity; never the code', () => {
+    const o = open()
+    expect(o.snap().readOnly).toBeUndefined()
+    o.t.push(WRITER_OFF)
+    expect(o.snap().refusal).toMatchObject({ actor: 'Atlas', verb: 'move', target: 'Table', holder: null, why: 'K2 can’t save changes to .blend files yet' })
+    expect(words(o)).toContain('couldn’t move Table: K2 can’t save changes to .blend files yet')
+    expect(words(o)).not.toContain('blend_writer_disabled')
+  })
+
+  it('the refusal’s own hint, when it has one, is the words', () => {
+    const o = open()
+    o.t.push({ ...WRITER_OFF, hint: 'Saving .blend files comes in a later release.' })
+    expect(o.snap().refusal?.why).toBe('Saving .blend files comes in a later release.')
   })
 })

@@ -1277,19 +1277,13 @@ fn parse_since(params: &HashMap<String, String>) -> i64 {
 }
 
 /// Skin overlay + PTY stamp: `SkinPass.username`, never body `from`.
-fn skin_from_stamp(pass: &SkinPass) -> String {
+pub(crate) fn skin_from_stamp(pass: &SkinPass) -> String {
     let u = pass.username.trim();
     if u.is_empty() {
         "skin".to_string()
     } else {
         u.to_string()
     }
-}
-
-/// The `from` an App guest's Thread post carries (thread-typing-v1 names a
-/// typing guest with it, so the line matches their posts).
-pub(crate) fn guest_post_from(pass: &SkinPass) -> String {
-    skin_from_stamp(pass)
 }
 
 /// `dana on App shop; login set up by sales's agent`: what a guest's post

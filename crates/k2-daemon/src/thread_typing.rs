@@ -195,7 +195,7 @@ pub fn typist_of_pass(pass: &k2_core::skin::SkinPass) -> Option<Typist> {
     }
     // A guest's post: `from` and `PostAuthor::guest` login are both the
     // pass username (`thread_sender`).
-    let login = crate::overlay_routes::guest_post_from(pass);
+    let login = crate::overlay_routes::skin_from_stamp(pass);
     Some(Typist { member: login.clone(), name: login, kind: TypistKind::AppGuest, person: reader.key })
 }
 

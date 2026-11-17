@@ -6,6 +6,7 @@
 //!   checked out (no token, a junk token, a bad bearer: nothing counted).
 //! - `GET /cli/cli-usage` is the owner's: the rows, after a flush. A
 //!   passport (either door), a Member login and no token are refused.
+//! - `/boot-status` carries `cliUsage` in the full view only.
 // The cell door is the per-cell Unix socket (cell_server::serve_cell).
 #![cfg(unix)]
 
@@ -17,7 +18,7 @@ use std::time::Duration;
 use k2_core::session::SessionId;
 use k2_daemon::session_token::{CredMode, HookPrincipal, Provider};
 use k2_daemon::test_harness;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
@@ -181,6 +182,8 @@ async fn counts_at_both_doors_after_auth_and_the_owner_reads_them() {
     assert_eq!(r.status, 403, "bad bearer: {}", r.body);
     let r = cell(&sock, "/cli/cli-usage", &passport, &all).await;
     assert_eq!(r.status, 403, "not an agent verb: {}", r.body);
+    let boot = tcp(port, "/boot-status", None, &[]).await.json();
+    assert_eq!(boot["cliUsage"], json!({"fallthrough": {}, "wouldRefuse": 0, "ownerFromDisk": 0}), "nothing counted yet");
 
     // ── TCP, the owner token ─────────────────────────────────────────
     tcp(port, &here, Some(OWNER), &all).await;
@@ -216,7 +219,13 @@ async fn counts_at_both_doors_after_auth_and_the_owner_reads_them() {
         ("would_refuse".to_string(), ws.clone(), 2),
     ];
     want.sort();
+    let usage = json!({"fallthrough": {"heartbeat": 1, "inbox": 1, "msg": 1, "other": 1}, "wouldRefuse": 3, "ownerFromDisk": 2});
+
+    // ── /boot-status: the full view counts from memory, before a flush ─
     assert!(stored().is_empty(), "nothing is written on a request");
+    let full = tcp(port, "/boot-status", None, &[]).await;
+    assert_eq!(full.json()["view"], "full");
+    assert_eq!(full.json()["cliUsage"], usage);
 
     // ── GET /cli/cli-usage: the owner's, after a flush ────────────────
     let r = tcp(port, "/cli/cli-usage", Some(&passport), &[]).await;
@@ -234,7 +243,17 @@ async fn counts_at_both_doors_after_auth_and_the_owner_reads_them() {
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(rows_of(&r.json()), want);
     assert_eq!(stored(), want, "the read flushed the counts to the table");
+    assert_eq!(tcp(port, "/boot-status", None, &[]).await.json()["cliUsage"], usage, "the totals survive the flush");
     // A second read writes nothing more.
     let r = tcp(port, "/cli/cli-usage", Some(OWNER), &[]).await;
     assert_eq!(rows_of(&r.json()), want);
+
+    // ── never in the slim views ───────────────────────────────────────
+    let compat = tcp(d.tunnel_port, "/boot-status", None, &[]).await;
+    assert_eq!(compat.json()["view"], "compat");
+    assert!(compat.json().get("cliUsage").is_none(), "compat has no cliUsage: {}", compat.body);
+    k2_core::app_settings::update(json!({ "bootStatusPublic": "ghost" })).expect("ghost");
+    let public = tcp(d.tunnel_port, "/boot-status", None, &[]).await;
+    assert_eq!(public.json()["view"], "public");
+    assert!(public.json().get("cliUsage").is_none(), "public has no cliUsage: {}", public.body);
 }

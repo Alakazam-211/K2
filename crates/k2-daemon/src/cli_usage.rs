@@ -19,6 +19,7 @@
 //! Counts live in memory and reach the table (`k2_core::cli_usage`,
 //! migration 0308) every [`FLUSH_EVERY`], at shutdown, and when the owner
 //! reads them (`GET /cli/cli-usage`). Nothing is written on a request.
+//! `/boot-status`'s full view shows the totals (`cliUsage`) from memory.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
@@ -304,6 +305,11 @@ pub fn spawn_flush_loop() {
     if let Err(e) = spawned {
         k2_core::log_debug!("[cli-usage] the flush thread did not start: {e}");
     }
+}
+
+/// `/boot-status` full view only.
+pub fn boot_status_value() -> serde_json::Value {
+    COUNTER.boot_status_value()
 }
 
 /// `GET /cli/cli-usage`: the owner (token, or an Owner login) reads every

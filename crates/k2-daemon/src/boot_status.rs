@@ -226,6 +226,10 @@ fn full_body(settings: &k2_core::app_settings::AppSettings) -> serde_json::Value
     // `{checkedAt, stale: […]}` from the health loop's last check; null
     // until the first one (and off Linux).
     body["pgStale"] = crate::pg_stale::boot_status_value();
+    // R1 slice 10: how the k5 CLI is used (fallthrough nouns, would-refuse
+    // and owner-from-disk totals), from memory. Full view only: never the
+    // public or compat body apps and guests see.
+    body["cliUsage"] = crate::cli_usage::boot_status_value();
     // Voice rooms 0.46.8 (S9b): the voice lane and media path, only while
     // the voice tunnel preview is on (the body is unchanged otherwise).
     if k2_core::tunnel::voice_lane::preview_enabled() {
@@ -1708,6 +1712,12 @@ mod tests {
         assert_eq!(full["rootHelper"].is_null(), !cfg!(target_os = "linux"), "{}", full["rootHelper"]);
         assert!(!raw.contains("rootHelper"), "compat has no rootHelper: {raw}");
         assert!(!public.contains("rootHelper"), "public has no rootHelper: {public}");
+        // The k5 CLI's usage counts ride the full view only.
+        for k in ["fallthrough", "wouldRefuse", "ownerFromDisk"] {
+            assert!(full["cliUsage"].get(k).is_some(), "full cliUsage has {k}: {}", full["cliUsage"]);
+        }
+        assert!(!raw.contains("cliUsage"), "compat has no cliUsage: {raw}");
+        assert!(!public.contains("cliUsage"), "public has no cliUsage: {public}");
         assert_eq!(full["webClient"]["enabled"], s.web_client_enabled);
         assert_eq!(full["connectLogin"]["ingress"], "edge");
     }

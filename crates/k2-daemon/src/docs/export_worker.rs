@@ -325,7 +325,9 @@ mod tests {
         let a = b"worker-a".to_vec();
         let ha = sha256_hex(&a);
         let p = versioned_copy(&home, &a, &ha).expect("copy");
-        assert!(p.to_string_lossy().contains(&format!("bin/export/{}-{}", k2_export::proto::VERSION, &ha[..12])), "{p:?}");
+        // By parts: the path is native (backslashes on Windows).
+        let want = Path::new("bin").join("export").join(format!("{}-{}", k2_export::proto::VERSION, &ha[..12])).join(k2_export::proto::BINARY_NAME);
+        assert!(p.ends_with(&want), "{p:?}");
         assert_eq!(std::fs::read(&p).expect("read"), a);
         #[cfg(unix)]
         {

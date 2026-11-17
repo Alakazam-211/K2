@@ -11,6 +11,12 @@ use serde_json::{json, Value};
 use super::*;
 use crate::sidecar_routes::{AgentCaller, Caller};
 
+/// The agent folder `path` is `<…>/k2-agents/<name>`, compared by parts: the
+/// path is native (backslashes on Windows).
+fn under_agents(path: &str, name: &str) -> bool {
+    std::path::Path::new(path).ends_with(std::path::Path::new("k2-agents").join(name))
+}
+
 struct Env {
     _db: k2_core::db::TestDbGuard,
     _home: crate::test_support::TempHome,
@@ -127,7 +133,7 @@ fn the_kessel_route_makes_the_seat_workspace_harness_pinned_chat_cards_and_grant
     let v = status_for(&Actor::owner_token());
     assert_eq!(v["offer"], json!("meet_kessel"), "{v}");
     assert_eq!(v["kessel"], Value::Null);
-    assert!(v["kesselDefaults"]["path"].as_str().expect("path").ends_with("k2-agents/kessel"), "{v}");
+    assert!(under_agents(v["kesselDefaults"]["path"].as_str().expect("path"), "kessel"), "{v}");
 
     let r = post(KESSEL_PATH, json!({ "tool": "codex" }), &Actor::owner_token());
     assert_eq!(r.status, "200 OK", "{}", r.body);
@@ -135,7 +141,7 @@ fn the_kessel_route_makes_the_seat_workspace_harness_pinned_chat_cards_and_grant
     let id = out["workspaceId"].as_str().expect("id").to_string();
     let path = out["path"].as_str().expect("path").to_string();
     assert_eq!(out["name"], json!("Kessel"));
-    assert!(path.ends_with("k2-agents/kessel"), "{path}");
+    assert!(under_agents(&path, "kessel"), "{path}");
 
     // The seat, the harness and pinned chat.
     {
@@ -331,7 +337,7 @@ fn kessels_pinned_chat_hires_the_chief_of_staff_with_only_what_kessel_holds() {
     let cos = out["workspaceId"].as_str().expect("id").to_string();
     let cos_path = out["path"].as_str().expect("path").to_string();
     assert_eq!(out["name"], json!("Max"));
-    assert!(cos_path.ends_with("k2-agents/max"), "{cos_path}");
+    assert!(under_agents(&cos_path, "max"), "{cos_path}");
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -410,7 +416,7 @@ fn kessel_taken_by_another_agent_makes_kessel_as_kessel5() {
     other_agent_holding("w-fan", "kessel");
     let v = status_for(&Actor::owner_token());
     assert_eq!(v["kesselDefaults"]["handle"], json!("kessel5"), "{v}");
-    assert!(v["kesselDefaults"]["path"].as_str().expect("path").ends_with("k2-agents/kessel5"), "{v}");
+    assert!(under_agents(v["kesselDefaults"]["path"].as_str().expect("path"), "kessel5"), "{v}");
     assert_eq!(v["kesselDefaults"]["name"], json!("Kessel"));
     // The sheet sends its prefilled handle back: still the default.
     let r = post(KESSEL_PATH, json!({ "tool": "codex", "handle": "kessel5" }), &Actor::owner_token());
@@ -418,7 +424,7 @@ fn kessel_taken_by_another_agent_makes_kessel_as_kessel5() {
     let out = json_of(&r);
     assert_eq!(out["name"], json!("Kessel"));
     assert_eq!(out["handle"], json!("kessel5"), "{out}");
-    assert!(out["path"].as_str().expect("path").ends_with("k2-agents/kessel5"), "{out}");
+    assert!(under_agents(out["path"].as_str().expect("path"), "kessel5"), "{out}");
 }
 
 #[test]
@@ -427,7 +433,7 @@ fn kessel_left_out_with_kessel_taken_is_kessel5_too() {
     other_agent_holding("w-fan", "kessel");
     let (_, path, handle) = make_kessel();
     assert_eq!(handle, "kessel5");
-    assert!(path.ends_with("k2-agents/kessel5"), "{path}");
+    assert!(under_agents(&path, "kessel5"), "{path}");
 }
 
 #[test]

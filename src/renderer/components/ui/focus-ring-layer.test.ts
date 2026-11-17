@@ -106,3 +106,51 @@ describe('the elements this frees', () => {
     expect(tag).toMatch(/className="absolute right-1\.5 /)
   })
 })
+
+// A plain k2-focus button (no cut of its own, no data-k2-focus ring) in
+// Terminal, and any k2-focus control inside the desktop Thread box (Home
+// chat's hover row, reaction chips), used to fall through to the browser's
+// own ring, which is rounded. Each look draws its ring instead: a solid
+// outline, square in Terminal (its radius tokens are 0) and round in Glass
+// (the control's own pill radius).
+describe('k2-focus rings never fall back to the browser ring', () => {
+  const decl = (r: Rule, prop: string): string | undefined =>
+    (r.nodes.find((d) => d.type === 'decl' && d.prop === prop) as postcss.Declaration | undefined)?.value
+
+  it('Terminal rings a plain k2-focus button with a solid outline', () => {
+    const r = rules(globals, (x) => x.selector.startsWith('html[data-style="terminal"] button.k2-focus') && /:focus-visible/.test(x.selector))
+    expect(r.length).toBe(1)
+    const sel = r[0].selector
+    // Cut controls, data-k2-focus rows and glyph buttons draw their own ring.
+    expect(sel).toContain(':not([data-k2-chamfer], [data-k2-focus], [data-k2-glyph-button])')
+    expect(sel).toContain(':not([data-zen-root] *, [data-k2-thread-zen] *)')
+    expect(decl(r[0], 'outline')).toBe('2px solid var(--color-accent-text)')
+    expect(layersOf(r[0])).toEqual([])
+  })
+
+  it('the desktop Thread box rings its k2-focus controls in both looks, never in a Garden', () => {
+    const r = rules(globals, (x) => x.selector.startsWith('[data-k2-thread-zen] .k2-focus') && /:focus-visible/.test(x.selector))
+    expect(r.length).toBe(1)
+    expect(r[0].selector).toContain(':not([data-zen-root] *)')
+    expect(r[0].selector).not.toMatch(/data-style/)
+    expect(decl(r[0], 'outline')).toBe('2px solid var(--zen-focus-ring)')
+    expect(layersOf(r[0])).toEqual([])
+  })
+
+  it('Terminal radius tokens are square, so those outlines are square there', () => {
+    const tokens = JSON.parse(readFileSync(join(renderer, '..', '..', 'styles', 'terminal', 'tokens.json'), 'utf8')) as {
+      radius: Record<string, { $value: string }>
+    }
+    for (const k of ['field', 'selector', 'pill']) expect(tokens.radius[k].$value, k).toBe('0px')
+  })
+
+  it("Home chat's hover row, reaction chips and Call button opt into k2-focus", () => {
+    const dir = join(renderer, 'components', 'HomeChat')
+    const row = readFileSync(join(dir, 'HomeChatMessageRow.tsx'), 'utf8')
+    expect(row).toMatch(/ACTION_BUTTON_CLASS =\s*'k2-focus /)
+    const chips = readFileSync(join(dir, 'HomeChatReactions.tsx'), 'utf8')
+    expect(chips).toMatch(/data-testid="home-chat-reaction"[\s\S]{0,120}className="k2-focus /)
+    const call = readFileSync(join(dir, 'HomeChatCall.tsx'), 'utf8')
+    expect(call).toMatch(/'k2-focus /)
+  })
+})

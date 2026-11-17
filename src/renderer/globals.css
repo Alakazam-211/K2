@@ -1466,6 +1466,23 @@ html:not([data-style="terminal"]) :is(.k2-focus, .k2-checkbox, .k2-radio):focus-
 html:not([data-style="terminal"]) .k2-focus[class*="[--k2-ch-focus-inner:"]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *) {
   box-shadow: inset 0 0 0 1.5px var(--k2-ch-focus-inner), var(--ring-field);
 }
+/* Terminal: a k2-focus button with no cut of its own (a text button in a
+   header, a call line's link) takes the same solid ring, square because
+   Terminal's radius tokens are 0. Without it the browser's own ring showed,
+   and that one is rounded. Cut controls, data-k2-focus rows and glyph
+   buttons draw their own ring, so they are left out. */
+html[data-style="terminal"] button.k2-focus:not([data-k2-chamfer], [data-k2-focus], [data-k2-glyph-button]):focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  outline: 2px solid var(--color-accent-text);
+  outline-offset: 2px;
+}
+/* Inside the desktop Thread box (the agent Thread, Home chat) a k2-focus
+   control rings in the Thread's own focus colour, 1px out so it clears a
+   tight toolbar: square in Terminal, round in Glass (the control's own
+   radius token). Gardens theme their own Thread and never match. */
+[data-k2-thread-zen] .k2-focus:not([data-k2-focus]):focus-visible:not([data-zen-root] *) {
+  outline: 2px solid var(--zen-focus-ring);
+  outline-offset: 1px;
+}
 
 /* Keyboard focus on a list row or a tab (a role="button" row, a tab-strip tab):
    the element opts in with data-k2-focus and a positioned box (`relative`).

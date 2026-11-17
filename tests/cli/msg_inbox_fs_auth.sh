@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Unit test: msg-inbox fs/upload auth-error detector (passport staging teach).
 # Pure helper only — no daemon.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="${ROOT}/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 
 if [ ! -f "$K2_CLI" ]; then
     echo "FAIL: cli/k2 not found at $K2_CLI" >&2

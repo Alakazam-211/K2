@@ -7,11 +7,12 @@
 # Sandbox daemon under a temp HOME (worktree build), air-gapped, no member
 # launches, an empty agent shim dir so nothing real can spawn. No vault
 # confirm here (that needs a person; the Rust tests cover the mint).
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not executable" >&2; exit 1; }
 command -v jq >/dev/null || { echo "FAIL: jq is required" >&2; exit 1; }
 

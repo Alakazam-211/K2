@@ -10,6 +10,7 @@
 #
 # Pure helpers are sourced from cli/k2 markers / functions. Never touches
 # the real ~/.k2 (HOME is sandboxed). No daemon build.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 
 set -euo pipefail
 
@@ -17,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/_hermetic_cli.sh"
 hermetic_cli_env
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
 

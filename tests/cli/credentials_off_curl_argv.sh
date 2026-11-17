@@ -20,12 +20,13 @@
 # covers workspace swap-canonical (owner and cell).
 #
 # No daemon build, no real ~/.k2 (HOME is a temp dir), no network.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 K2_OPEN="$PROJECT_ROOT/scripts/k2-open"
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
 [ -f "$K2_OPEN" ] || { echo "FAIL: $K2_OPEN not found" >&2; exit 1; }

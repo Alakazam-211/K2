@@ -18,6 +18,7 @@
 #   bash tests/cli/docs_headless.sh --build   (builds first)
 #
 # Every check fails loudly with the response.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 
 set -euo pipefail
 
@@ -416,7 +417,7 @@ if grep -q 'for the owner\|agent line\|# Plan' "$audit"; then fail "doc content 
 ok "share, unshare and approval are audited, with no doc content"
 
 echo "== k2 doc (the CLI, K3) =="
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 # cli <owner|agent> <cwd> <args…> → OUT, ERR, RC. Never a TTY on stdin
 # (stdin: $CLI_IN when set).
 CLI_IN=""

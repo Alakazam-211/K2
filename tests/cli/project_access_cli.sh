@@ -12,12 +12,13 @@
 #   3. Outside K2 (no hook socket, owner token on disk): `k2 project access
 #      off --workspace W` posts agent-access/set {toggle: projects_manage,
 #      value: false} with the owner token; usage errors exit 2.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "FAIL: python3 is required" >&2; exit 1; }
 

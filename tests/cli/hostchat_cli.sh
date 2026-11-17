@@ -29,12 +29,13 @@
 #      0 and prints Sew's one command; failed exits 3 media_rollback_failed
 #      saying Sew itself is rolled back; one request each, never a rerun.
 # Fake values only (example.test, made-up ids). Never touches the real ~/.k2.
+# bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-K2_CLI="$PROJECT_ROOT/cli/k2"
+. "$SCRIPT_DIR/_cli_under_test.sh"; K2_CLI="$CLI_BASH_SOURCE"
 [ -x "$K2_CLI" ] || { echo "FAIL: $K2_CLI not found/executable" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "FAIL: python3 is required" >&2; exit 1; }
 

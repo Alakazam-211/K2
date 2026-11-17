@@ -682,7 +682,7 @@ fn list_from_refusals_each_at_their_line() {
     for prop in ["home = \"Work\"", "home-picker = true"] {
         let clash = LIST_PAGE.replace("[widget.props]\n", &format!("[widget.props]\n{prop}\n"));
         let name = prop.split(' ').next().expect("name");
-        one_error(&page_errors(&f, &g, &clash), 23, &format!("{name} picks a Home or an agent"), prop);
+        one_error(&page_errors(&f, &g, &clash), 23, &format!("{name} picks a group or an agent"), prop);
     }
     // home-picker = false says nothing new: no clash.
     let off = LIST_PAGE.replace("[widget.props]\n", "[widget.props]\nhome-picker = false\n");
@@ -750,7 +750,7 @@ fn pick_refusals_each_at_their_line() {
     // Not with agent or home: one error at the clashing prop (line 8).
     for (prop, needle) in [
         ("agent = \"k2\"", "agent pins one agent, but pick lists the agents"),
-        ("home = \"Work\"", "home picks a Home to look `agent` up in, but pick lists the agents"),
+        ("home = \"Work\"", "home picks a group to look `agent` up in, but pick lists the agents"),
     ] {
         let clash = PICK_PAGE.replace("[widget.props]\n", &format!("[widget.props]\n{prop}\n"));
         let errs = page_errors(&f, &g, &clash);
@@ -826,7 +826,7 @@ fn pick_all_refusals_each_at_their_line() {
     // Not with agent or home (line 8, the clashing prop).
     for (prop, needle) in [
         ("agent = \"k2\"", "agent pins one agent, but pick lists the agents"),
-        ("home = \"Work\"", "home picks a Home to look `agent` up in, but pick lists the agents"),
+        ("home = \"Work\"", "home picks a group to look `agent` up in, but pick lists the agents"),
     ] {
         let clash = alone.replace("[widget.props]\n", &format!("[widget.props]\n{prop}\n"));
         one_error(&page_errors(&f, &g, &clash), 8, needle, prop);

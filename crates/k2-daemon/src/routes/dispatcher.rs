@@ -11038,7 +11038,7 @@ async fn handle_one_request(
                         let body = if stash {
                             r#"{"ok":false,"error":{"code":"body_too_large","hint":"stash push body over 4 MiB: split the batch"}}"#
                         } else {
-                            r#"{"ok":false,"error":{"code":"body_too_large","hint":"Homes push body over 1 MiB"}}"#
+                            r#"{"ok":false,"error":{"code":"body_too_large","hint":"Home sync push body over 1 MiB"}}"#
                         };
                         super::http::refuse_body_too_large(
                             &mut *stream,

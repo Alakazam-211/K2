@@ -20,7 +20,7 @@ use crate::contract::{self, gen, Exposure};
 
 /// Frontmatter description line for the skill file.
 pub const SKILL_DESCRIPTION: &str =
-    "Build Zen Gardens (~/.k2/zen): k2 zen garden, place K2's built-in widgets (a whole Home or one agent) or your own sealed custom widgets (k2 zen widget), themes, tokens, font, motion, validate, reset; agents request, never grant";
+    "Build Zen Gardens (~/.k2/zen): k2 zen garden, place K2's built-in widgets (a whole Home group or one agent) or your own sealed custom widgets (k2 zen widget), themes, tokens, font, motion, validate, reset; agents request, never grant";
 
 fn fmt_num(n: f64) -> String {
     if n.fract() == 0.0 {
@@ -67,7 +67,7 @@ fn generate_k2_zen_skill_off() -> String {
 Zen Mode is a mode of a K2 desktop window. In Zen the window shows a **Garden**:\n\
 a personal page that lives on THIS computer. The human can have as many Gardens\n\
 as they like and switches between them with the Garden switcher (or Cmd+Option+1-9).\n\
-Zen starts with two Gardens. **Garden 1** is the texting page: a Home's agents\n\
+Zen starts with two Gardens. **Garden 1** is the texting page: a group's agents\n\
 beside the conversation with the one picked. **Garden 2** is empty: it's there\n\
 for the human to ask you to build it. Garden 2 and every new Garden start\n\
 **empty**, with \"Ask your agents to add things to this Garden\", an Ask my\n\
@@ -168,7 +168,7 @@ id = \"work\"\n\
 kind = \"agents\"\n\
 column = 0\n\
 [widget.props]\n\
-home = \"Work\"      # the whole Home\n\
+home = \"Work\"      # the whole group\n\
 \n\
 [[widget]]\n\
 id = \"talk\"\n\
@@ -246,36 +246,36 @@ column it is `column` unless you set `orientation = \"row\"` or an `edge`.\n\n"
         s.push_str(&format!("`{kind}` is {what}. Only the template places it; a Garden file can't.\n\n"));
     }
     s.push_str(
-        "### A whole Home, or one agent\n\n\
-- **Whole Home:** `kind = \"agents\"` with `home = \"<Home name or id>\"`: every agent of that\n\
-  Home, with a Conversation beside it (`agents = \"<that widget's id>\"`). Add\n\
-  `home-picker = true` to let the human switch Homes inside the widget.\n\
+        "### A whole group, or one agent\n\n\
+- **Whole group:** `kind = \"agents\"` with `home = \"<group name or id>\"`: every agent of that\n\
+  Home group, with a Conversation beside it (`agents = \"<that widget's id>\"`). Add\n\
+  `home-picker = true` to let the human switch groups inside the widget.\n\
 - **One agent:** `kind = \"agents\"` with `agent = \"<name or address>\"` (and `home` to say\n\
-  which Home it is in): only that agent's row. Or skip the list and pin the\n\
+  which group it is in): only that agent's row. Or skip the list and pin the\n\
   conversation itself: `kind = \"conversation\"` with `agent = \"<name>\"` and `home`.\n\
 - **A few agents, one Conversation:** `kind = \"conversation\"` with `pick = [\"sales\", \"ops\"]`\n\
   (2 to 8): no list beside it; its header is the drop-down. Each agent is looked up by name\n\
-  or address on this computer and the person's Homes on other servers. Not with `agent`,\n\
+  or address on this computer and the person's Home groups on other servers. Not with `agent`,\n\
   `agents` or `home`.\n\
 - **Any agent, one Conversation:** `pick = \"all\"`: the header's drop-down lists every agent,\n\
   with a search field on top; nothing shows until the person picks. On its own it lists this\n\
-  computer's agents and the person's Homes. With `agents = \"<widget id>\"` it lists that\n\
+  computer's agents and the person's Home groups. With `agents = \"<widget id>\"` it lists that\n\
   widget's agents and shares its pick: beside a custom widget, the row `k2.agents.subscribe`\n\
   marks `selected` is the agent the header shows, and `k2.conversation.open(address)` shows\n\
   another (the Kanban's Send board works this way). Not with `agent` or `home`.\n\
 - **A chosen list:** `kind = \"agents\"` with `list-from = \"<custom widget id>\"` (mode `list`):\n\
   the agents that custom widget lists with `k2.agents.show([...])`, in its order, from this\n\
-  computer and the person's Homes on other servers. \"Nothing listed yet\" until it lists some;\n\
+  computer and the person's Home groups on other servers. \"Nothing listed yet\" until it lists some;\n\
   a footer counts the others that need the person. The custom widget must ask for\n\
   `agents:read`. A Conversation following either widget shows the same pick. Not with\n\
   `agent`, `home` or `home-picker`; the Agents view of a nav rail ignores it.\n\
 - **The person's order and pins:** in any Agents widget the person can drag agents into their\n\
   own order (or Alt+Up / Alt+Down) and pin or unpin an agent (the row's menu), per Garden, on\n\
   this computer only (never in the Garden file or Garden sync). Their order beats the widget's\n\
-  (the Home's, or a `list-from` list's); once they pin or unpin in a Garden, that Garden's own\n\
+  (the group's, or a `list-from` list's); once they pin or unpin in a Garden, that Garden's own\n\
   pins replace the agents' workspace pins in its pin grid. You can read both with\n\
   `k2 zen agents-order [<garden>] [--json]`; you can't set them (only the person can, in Zen).\n\
-- Picking a Home in a Garden never changes the Home page.\n\n",
+- Picking a group in a Garden never changes the Home page.\n\n",
     );
 
     s.push_str("## Themes, defaults and your changes\n\n");
@@ -837,7 +837,7 @@ reaches the widget as `k2.config`. A conversation widget can follow it:\n\
 ### No permissions: it works right away\n\n\
 A widget in your own Garden can use every cap its manifest asks for the moment it's\n\
 placed: no review card, no grant, no scope to pick, no sending switch. It reaches the\n\
-agents on this computer plus every agent on the human's Homes (the rooms and servers\n\
+agents on this computer plus every agent in the human's Home groups (the rooms and servers\n\
 they connected in Home); any other address is `not_bound`, and every server still\n\
 checks the human's role. Never write grants.json; there is nothing to grant. K2 keeps\n\
 a few invisible rails: the sealed frame, an audit line per post, and a runaway guard:\n\

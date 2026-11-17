@@ -277,7 +277,7 @@ pub const PICK_ALL: &str = "all";
 pub const WIDGET_KINDS: &[(&str, &str)] = &[
     (
         "agents",
-        "a Home's agents with live status (working, idle, needs you) and their last message; the whole Home, or one agent filtered from it",
+        "a Home group's agents with live status (working, idle, needs you) and their last message; the whole group, or one agent filtered from it",
     ),
     (
         "conversation",
@@ -361,7 +361,7 @@ pub const CUSTOM_PROPS: &[WidgetProp] = &[
         name: "home",
         ty: PropType::Text,
         default: None,
-        doc: "the Home the widget asks to see, by name or id; the human picks the scope when they allow it, and changing this asks again",
+        doc: "the Home group the widget asks to see, by name or id; the human picks the scope when they allow it, and changing this asks again",
     },
     WidgetProp {
         kind: CUSTOM_KIND,
@@ -479,7 +479,7 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
         name: "mode",
         ty: PropType::OneOf(AGENTS_MODES),
         default: None,
-        doc: "`home` shows every agent of the Home (the whole Home surface); `agent` shows one agent filtered from that Home (set `agent`); `list` shows the agents a custom widget chose with k2.agents.show (set `list-from`). Default: `list` when `list-from` is set, `agent` when `agent` is set, else `home`",
+        doc: "`home` shows every agent of the group (the whole group); `agent` shows one agent filtered from that group (set `agent`); `list` shows the agents a custom widget chose with k2.agents.show (set `list-from`). Default: `list` when `list-from` is set, `agent` when `agent` is set, else `home`",
     },
     WidgetProp {
         kind: "agents",
@@ -493,28 +493,28 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
         name: "home",
         ty: PropType::Text,
         default: None,
-        doc: "the Home to show, by name or id. Default: the Garden's starting Home, else the window's Home",
+        doc: "the Home group to show, by name or id. Default: the Garden's starting group, else the window's current group",
     },
     WidgetProp {
         kind: "agents",
         name: "agent",
         ty: PropType::Text,
         default: None,
-        doc: "one agent's name or address in that Home: the widget shows only that agent (`mode = \"agent\"`)",
+        doc: "one agent's name or address in that group: the widget shows only that agent (`mode = \"agent\"`)",
     },
     WidgetProp {
         kind: "agents",
         name: "home-picker",
         ty: PropType::Bool,
         default: Some("false"),
-        doc: "a Home picker in the widget's header; the pick belongs to this Garden and never moves the Home page",
+        doc: "a group picker in the widget's header; the pick belongs to this Garden and never moves the Home page",
     },
     WidgetProp {
         kind: "agents",
         name: "order",
         ty: PropType::OneOf(AGENTS_ORDERS),
         default: Some("\"home\""),
-        doc: "row order: the Home's own order",
+        doc: "row order: the group's own order",
     },
     WidgetProp {
         kind: "agents",
@@ -591,14 +591,14 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
         name: "pick",
         ty: PropType::Names { min: PICK_MIN, max: PICK_MAX, all: true },
         default: None,
-        doc: "the header is a drop-down that switches between these agents, by name or address, from this computer and your Homes on other servers (no Agents widget needed); it badges the others' unread and waiting counts, the first one shows until the person picks (per computer), and one that isn't found is a disabled card; not with `agent`, `agents` or `home`. `pick = \"all\"`: any agent, with a search field at the top of the menu: every agent of the widget it follows (`agents`, which may name a custom widget: the two share one pick), else every agent on this computer and your Homes; nothing shows until the person picks one; not with `agent` or `home`",
+        doc: "the header is a drop-down that switches between these agents, by name or address, from this computer and your Home groups on other servers (no Agents widget needed); it badges the others' unread and waiting counts, the first one shows until the person picks (per computer), and one that isn't found is a disabled card; not with `agent`, `agents` or `home`. `pick = \"all\"`: any agent, with a search field at the top of the menu: every agent of the widget it follows (`agents`, which may name a custom widget: the two share one pick), else every agent on this computer and your Homes; nothing shows until the person picks one; not with `agent` or `home`",
     },
     WidgetProp {
         kind: "conversation",
         name: "home",
         ty: PropType::Text,
         default: None,
-        doc: "with `agent`: the Home to look that agent up in, by name or id",
+        doc: "with `agent`: the Home group to look that agent up in, by name or id",
     },
     WidgetProp {
         kind: "conversation",
@@ -2245,7 +2245,7 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                     let p = prop_at(ctx, "agent");
                     ctx.error(
                         p,
-                        "agent filters the widget to one agent; use mode = \"agent\" (or drop mode), or drop agent to show the whole Home",
+                        "agent filters the widget to one agent; use mode = \"agent\" (or drop mode), or drop agent to show the whole group",
                     );
                     ok = false;
                 }
@@ -2283,7 +2283,7 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                         let p = prop_at(ctx, other);
                         ctx.error(
                             p,
-                            format!("{other} picks a Home or an agent, but list-from shows the list its custom widget picks; drop one of them"),
+                            format!("{other} picks a group or an agent, but list-from shows the list its custom widget picks; drop one of them"),
                         );
                         ok = false;
                     }
@@ -2304,7 +2304,7 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 for (other, why) in [
                     ("agent", "pins one agent"),
                     ("agents", "follows an Agents widget"),
-                    ("home", "picks a Home to look `agent` up in"),
+                    ("home", "picks a group to look `agent` up in"),
                 ] {
                     if all && other == "agents" {
                         continue;
@@ -2314,7 +2314,7 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                         ctx.error(
                             p,
                             format!(
-                                "{other} {why}, but pick lists the agents this Conversation switches between (looked up on this computer and all your Homes); drop one of them"
+                                "{other} {why}, but pick lists the agents this Conversation switches between (looked up on this computer and all your Home groups); drop one of them"
                             ),
                         );
                         ok = false;

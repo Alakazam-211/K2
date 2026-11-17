@@ -74,7 +74,7 @@ pub fn not_a_person() -> CliResponse {
     error(
         "403 Forbidden",
         "homes_person_only",
-        "Homes belong to a person: sign in with your own login (agents, app passes and API keys have no Homes)",
+        "Home groups belong to a person: sign in with your own login (agents, app passes and API keys have no groups)",
     )
 }
 
@@ -93,7 +93,7 @@ fn device_removed(device_id: &str) -> CliResponse {
     error(
         "410 Gone",
         "device_removed",
-        format!("device {device_id} was removed from Homes sync on this server; register it again to sync"),
+        format!("device {device_id} was removed from Home sync on this server; register it again to sync"),
     )
 }
 
@@ -108,7 +108,7 @@ pub fn person_for(actor: &Actor) -> Result<String, CliResponse> {
         PersonRefusal::Reserved => error(
             "403 Forbidden",
             "homes_person_only",
-            "this login's name is one K2 uses for the server's owner and its agents, so it has no Homes; the owner can remove it in Settings → Admin Access and add the person under another name",
+            "this login's name is one K2 uses for the server's owner and its agents, so it has no Home groups; the owner can remove it in Settings → Admin Access and add the person under another name",
         ),
     })
 }
@@ -181,7 +181,7 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor, params: &Ha
     let db = k2_core::db::shared();
     let conn = db.lock();
     if !homes_sync::tables_exist(&conn) {
-        return error("503 Service Unavailable", "not_ready", "Homes sync is not migrated yet");
+        return error("503 Service Unavailable", "not_ready", "Home sync is not migrated yet");
     }
     let now = now_ms();
     let store = |e: rusqlite::Error| error("500 Internal Server Error", "store", e);
@@ -307,7 +307,7 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor, params: &Ha
             };
             match homes_sync::remove_device(&conn, &person, &device, now) {
                 Ok(Removal::Unknown) => {
-                    error("404 Not Found", "unknown_device", format!("no device {device} syncs Homes here"))
+                    error("404 Not Found", "unknown_device", format!("no device {device} uses Home sync here"))
                 }
                 Ok(Removal::AlreadyRemoved) => ok(json!({ "ok": true, "removed": true, "deviceId": device })),
                 Ok(Removal::Removed) => {

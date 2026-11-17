@@ -586,7 +586,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                                 err(
                                     &p,
                                     format!(
-                                        "a widget's binding slot is type \"home\" (a Home, or one agent in it); '{}' isn't one",
+                                        "a widget's binding slot is type \"home\" (a Home group, or one agent in it); '{}' isn't one",
                                         ty.unwrap_or("(none)")
                                     ),
                                 );

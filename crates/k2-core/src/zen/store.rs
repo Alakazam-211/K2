@@ -760,7 +760,7 @@ impl ZenFiles {
         let template = template_choice(template)?;
         if let Some(h) = seed_home {
             if !valid_garden_id(h) {
-                return Err(ZenError::BadRequest(format!("'{h}' is not a Home id")));
+                return Err(ZenError::BadRequest(format!("'{h}' is not a Home group id")));
             }
         }
         let mut list = self.gardens();
@@ -2288,7 +2288,7 @@ pub fn garden_stub(id: &str, name: &str, template: &str) -> String {
     let body = if template == schema::BLANK_TEMPLATE_ID {
         format!(
             "# This Garden starts empty. Place K2's built-in widgets with [layout]\n\
-             # and [[widget]] blocks, for example a Home's agents beside a\n\
+             # and [[widget]] blocks, for example a group's agents beside a\n\
              # conversation:\n\
              #\n\
              #   [layout]\n\
@@ -2302,10 +2302,10 @@ pub fn garden_stub(id: &str, name: &str, template: &str) -> String {
              #\n\
              #   [[widget]]\n\
              #   id = \"agents\"\n\
-             #   kind = \"agents\"          # a whole Home, or one agent (mode = \"agent\")\n\
+             #   kind = \"agents\"          # a whole Home group, or one agent (mode = \"agent\")\n\
              #   column = 0\n\
              #   [widget.props]\n\
-             #   home = \"Work\"            # a Home's name or id\n\
+             #   home = \"Work\"            # a group's name or id\n\
              #\n\
              #   [[widget]]\n\
              #   id = \"talk\"\n\
@@ -2325,7 +2325,7 @@ pub fn garden_stub(id: &str, name: &str, template: &str) -> String {
         )
     } else {
         format!(
-            "# This Garden is the texting page: a Home's agents beside the\n\
+            "# This Garden is the texting page: a group's agents beside the\n\
              # conversation with the one you pick. Theme tables ([colors.light],\n\
              # [font], [shape], ...) restyle this Garden only; [layout] and\n\
              # [[widget]] rearrange K2's built-in widgets (the k2-zen skill has\n\

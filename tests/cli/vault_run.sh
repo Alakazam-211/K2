@@ -14,7 +14,7 @@ K2_CLI="$(cd "$SCRIPT_DIR/../.." && pwd)/cli/k2"
 pass=0
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "  ok $*"; pass=$((pass + 1)); }
-for v in $(env | grep -E '^K2(SO)?_' | cut -d= -f1); do unset "$v"; done
+for v in $(env | grep -E '^K(2|2SO|5)_' | cut -d= -f1); do unset "$v"; done
 
 WORK="$(mktemp -d -t k2-vault-run-XXXXXX)"
 STUB_PID=""
@@ -69,6 +69,7 @@ cat >"$HELPER" <<'EOF'
     for a in "$@"; do printf 'ARG=%s\n' "$a"; done
     printf 'SOCK=%s\n' "${K2_HOOK_SOCK:-}"
     printf 'TOKEN=%s\n' "${K2_HOOK_TOKEN:-}"
+    printf 'TOKEN5=%s\n' "${K5_HOOK_TOKEN:-}"
 } >"$FAKE_HELPER_LOG"
 exit "${FAKE_HELPER_EXIT:-0}"
 EOF
@@ -116,8 +117,16 @@ lines = open(sys.argv[1]).read().splitlines()
 args = [l[4:] for l in lines if l.startswith("ARG=")]
 assert args == ["--vault-run", "--secret", "A", "--secret", "B=OTHER", "--env-file", ".env.k2", "--scope", "server", "--no-mask", "--", "grep", "--help", "--secret", "x"], args
 assert "TOKEN=passport-abc" in lines, lines
+assert "TOKEN5=passport-abc" in lines, lines
 PY
 ok "the CLI execs the daemon's helper; flags before -- only, the child's words stay the child's"
+
+# A session whose passport is under K5_HOOK_TOKEN: the helper gets that one
+# under both names.
+out="$(env HOME="$WORK" K2_PORT="$PORT" K5_HOOK_TOKEN=passport-k5 K2_HOOK_TOKEN=passport-abc FAKE_HELPER_LOG="$WORK/helper.log" "$K2_CLI" vault run --secret A -- true)" || fail "vault run (K5_): $out"
+grep -Fxq "TOKEN=passport-k5" "$WORK/helper.log" && grep -Fxq "TOKEN5=passport-k5" "$WORK/helper.log" \
+    || fail "the helper should get the K5_ passport under K2_ and K5_: $(grep TOKEN "$WORK/helper.log")"
+ok "the helper gets the session's passport under K2_HOOK_TOKEN and K5_HOOK_TOKEN"
 
 out="$(k2s vault run API_KEY -- ls)" || fail "vault run NAME: $out"
 grep -Fxq "ARG=API_KEY" "$WORK/helper.log" || fail "NAME: $(cat "$WORK/helper.log")"

@@ -40448,7 +40448,7 @@ _vault_run() {
         echo "run_helper_missing: the K2 daemon named no usable helper; restart the K2 daemon and try again" >&2
         exit 1
     fi
-    K2_HOOK_SOCK="$(_hook_sock)" K2_HOOK_TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-}}" exec "$helper" --vault-run "${helper_args[@]}" -- "$@"
+    K2_HOOK_SOCK="$(_hook_sock)" K2_HOOK_TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-}}" K5_HOOK_TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-}}" exec "$helper" --vault-run "${helper_args[@]}" -- "$@"
 }
 
 _vault_unknown_verb() {

@@ -424,16 +424,29 @@ mod tests {
             String::from_utf8(out.stdout).expect("UTF-8")
         }
 
-        /// The objects' addresses, as `scene list` gives them.
+        /// The objects' addresses: each collection `scene list` names, then
+        /// the objects `collection show` lists in it.
         fn objects(&self) -> Vec<String> {
+            fn words<'a>(text: &'a str, prefix: &str) -> Vec<&'a str> {
+                let mut out: Vec<&str> = Vec::new();
+                for w in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '@' || c == ':')) {
+                    if w.starts_with(prefix) && !out.contains(&w) {
+                        out.push(w);
+                    }
+                }
+                out
+            }
             let list = self.shown(self.person, &["scene", "list"]);
             let mut out: Vec<String> = Vec::new();
-            for w in list.split(|c: char| !(c.is_ascii_alphanumeric() || c == '@' || c == ':')) {
-                if w.starts_with("@obj:") && !out.iter().any(|o| o == w) {
-                    out.push(w.to_string());
+            for coll in words(&list, "@coll:") {
+                let shown = self.shown(self.person, &["collection", "show", coll]);
+                for o in words(&shown, "@obj:") {
+                    if !out.iter().any(|x| x == o) {
+                        out.push(o.to_string());
+                    }
                 }
             }
-            assert!(!out.is_empty(), "scene list names no object: {list}");
+            assert!(!out.is_empty(), "no collection lists an object: {list}");
             out
         }
     }

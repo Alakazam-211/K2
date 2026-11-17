@@ -444,9 +444,16 @@ exit: 0
     {
       "name": "llm tokens next",
       "usage": "k2 llm tokens next <tool>",
-      "description": "Use the next signed-in subscription as the server default (one click when a session hits its limit). Never automatic. Admin or Owner only (a Member login is refused with admin_required).",
+      "description": "Use the next signed-in subscription as the server default (one click when a session hits its limit). Automatic only when a person turned auto-next on. Admin or Owner only (a Member login is refused with admin_required).",
       "args": [{"name": "tool", "required": true}],
       "flags": []
+    },
+    {
+      "name": "llm tokens auto-next",
+      "usage": "k2 llm tokens auto-next [<tool> on|off] [--json]",
+      "description": "Auto-rotate: K2 presses next by itself when the subscription in use reaches 99% of its limit (skipping subscriptions at their limit; 10-minute cooldown). Off by default. Switching accounts automatically may go against the provider's terms, so a person turns it on with their own confirm (Touch ID or a password); agents and K2 terminals can't. Admin or Owner only.",
+      "args": [{"name": "tool", "required": false}, {"name": "on|off", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON as is."}]
     },
     {
       "name": "llm tokens add-key",

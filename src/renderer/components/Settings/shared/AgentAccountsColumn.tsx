@@ -18,7 +18,8 @@
 // chat can use its own token (workspace settings → Agent → LLM tokens, or
 // the chat header's Token picker); those keep their token. API tokens are
 // billed per token. K2 never switches on its own: "Use next token" is a
-// click.
+// click, unless a person turned on auto-rotate for that provider
+// (`AutoNextRow`: the daemon presses that same Next at 99% of the limit).
 //
 // The server default is always first in its provider's card, as on the
 // phone (Rosson 2026-11-15), so nobody goes hunting for it; the rest keep
@@ -62,6 +63,7 @@ import {
   type LlmTool,
 } from '@/stores/llm-accounts'
 import { LlmLoginSheet, type LoginSheetResult, type LoginSheetStart } from './LlmLoginSheet'
+import { AutoNextRow } from './AutoNextRow'
 import { SIGN_IN_TOOLS, useLlmSignInRequestStore } from '@/stores/llm-sign-in-request'
 import { useClaudeRefresher } from '@/stores/claude-refresher'
 import { Button, Callout, Input, OverflowMenu, Tag, type OverflowMenuItem } from '@/components/ui'
@@ -794,7 +796,11 @@ export function AgentAccountsColumn(): React.JSX.Element {
               {cyclable.length >= 2 ? (
                 <SettingRow
                   label="Hit a usage limit?"
-                  hint={`Move the server default to the next signed-in ${row.label} subscription. K2 never switches on its own.`}
+                  hint={
+                    tool.autoNext?.on
+                      ? `Move the server default to the next signed-in ${row.label} subscription now.`
+                      : `Move the server default to the next signed-in ${row.label} subscription. K2 never switches on its own.`
+                  }
                 >
                   <Button
                     disabled={!doc.canChangeDefault}
@@ -804,6 +810,11 @@ export function AgentAccountsColumn(): React.JSX.Element {
                     Use next token
                   </Button>
                 </SettingRow>
+              ) : null}
+              {/* Auto-rotate: Next pressed by the daemon at 99%, per provider
+                  (like Next). Shown where Next is, and while it's on. */}
+              {canSignIn && (cyclable.length >= 2 || tool.autoNext?.on) ? (
+                <AutoNextRow scope={scope} tool={tool} canChange={doc.canChangeDefault} changeReason={doc.changeDefaultReason} />
               ) : null}
               {row.id === 'claude' && refresher.installed ? (
                 <div className="px-4 py-2.5" data-testid="llm-claude-refresher">

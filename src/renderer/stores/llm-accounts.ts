@@ -93,6 +93,20 @@ export interface LlmTool {
   pins: LlmPin[]
   loginMethod: 'temp_home' | 'live_swap' | null
   accounts: LlmAccount[]
+  /** Auto-rotate (opt-in, per person): absent on older daemons (= off). */
+  autoNext?: LlmAutoNext
+}
+
+/** Auto-rotate for one tool: "Use next token" pressed by the daemon itself
+ *  when the server default reaches 99% of its limit. Off unless a person
+ *  turned it on (with their own confirm). */
+export interface LlmAutoNext {
+  on: boolean
+  /** Who turned it on (`owner-token`, `login:<user>`); people only. */
+  by: string | null
+  /** The daemon's last line ("Switched to … automatically: … reached 99%"). */
+  lastLine: string | null
+  lastLineAt: number | null
 }
 
 export type LoginMode = 'this_computer' | 'other_device'
@@ -213,6 +227,16 @@ export function errorText(e: unknown): string {
   return raw
 }
 
+function parseAutoNext(v: unknown): LlmAutoNext {
+  const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
+  return {
+    on: o.on === true,
+    by: typeof o.by === 'string' ? o.by : null,
+    lastLine: typeof o.lastLine === 'string' && o.lastLine !== '' ? o.lastLine : null,
+    lastLineAt: typeof o.lastLineAt === 'number' && Number.isFinite(o.lastLineAt) ? o.lastLineAt : null,
+  }
+}
+
 function asArray<T>(v: unknown): T[] {
   return Array.isArray(v) ? (v as T[]) : []
 }
@@ -237,6 +261,7 @@ export function parseAccountsDoc(raw: unknown): LlmAccountsDoc {
       pins: asArray<LlmPin>(t.pins),
       loginMethod: (t.loginMethod === 'live_swap' || t.loginMethod === 'temp_home' ? t.loginMethod : null) as LlmTool['loginMethod'],
       accounts: asArray<LlmAccount>(t.accounts),
+      autoNext: parseAutoNext(t.autoNext),
     }
   })
   return {
@@ -775,4 +800,46 @@ export function nextCandidate(doc: LlmAccountsDoc | null, tool: LlmTool): LlmAcc
     }
   }
   return null
+}
+
+// ── Auto-rotate ─────────────────────────────────────────────────────
+
+/** The vault confirm action that turns auto-rotate on (bound to the tool). */
+export const AUTO_NEXT_CONFIRM_ACTION = 'llm-auto-next'
+
+/** Next to the switch: what it does and whose decision it is. */
+export const AUTO_NEXT_NOTE =
+  'When the subscription in use reaches 99% of its limit, K2 switches to the next signed-in one by itself. Switching accounts automatically at the limit may go against the provider’s terms. It’s your decision.'
+
+/** This server offers no password-free confirm: ask for the vault password. */
+export class AutoNextPasswordNeeded extends Error {
+  constructor() {
+    super('enter the vault password to confirm')
+    this.name = 'AutoNextPasswordNeeded'
+  }
+}
+
+/** Turn auto-rotate on for `tool`: the person's own confirm first (Touch ID
+ *  or their login where the server offers it, else the vault password),
+ *  then the switch. Never from an agent: the daemon refuses passports. */
+export async function autoNextOn(scope: ServerScope, tool: string, password?: string): Promise<void> {
+  const start = await daemonCliPost<{ methods?: string[] }>(scope, 'vault/confirm/start', { action: AUTO_NEXT_CONFIRM_ACTION, secretId: tool })
+  const methods = Array.isArray(start?.methods) ? start.methods : []
+  const method = password !== undefined ? 'vault-password' : methods.find((m) => m === 'local-auth')
+  if (!method) throw new AutoNextPasswordNeeded()
+  const { token } = await daemonCliPost<{ token: string }>(scope, 'vault/confirm/finish', {
+    action: AUTO_NEXT_CONFIRM_ACTION,
+    secretId: tool,
+    method,
+    label: `auto-rotate ${tool}`,
+    ...(password !== undefined ? { password } : {}),
+  })
+  await daemonCliPost<unknown>(scope, 'llm/accounts/auto-next/set', { tool, on: true, confirmToken: token })
+  await useLlmAccountsStore.getState().load(scope, { fresh: true })
+}
+
+/** Turn auto-rotate off for `tool` (no confirm). */
+export async function autoNextOff(scope: ServerScope, tool: string): Promise<void> {
+  await daemonCliPost<unknown>(scope, 'llm/accounts/auto-next/set', { tool, on: false })
+  await useLlmAccountsStore.getState().load(scope, { fresh: true })
 }

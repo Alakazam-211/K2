@@ -14,6 +14,7 @@
 //!   `job_network_needs_update` (409, exit 3). Never a job queued where it
 //!   would run with more network.
 
+use k2_core::brand::PRODUCT_NAME;
 use k2_core::compute::proto::frames::Offer;
 use k2_core::compute::proto::jobnet::{self, codes as jn, JobNet, JobNetMode};
 use k2_core::compute::store::GrantRow;
@@ -104,11 +105,11 @@ pub fn needs_update_hint(n: &JobNet, node: Option<&str>) -> String {
         .unwrap_or_else(|| "no node this workspace may use can".into());
     if n.dummies.is_empty() {
         format!(
-            "--network none: {which} run a job with no network yet: that needs k2-node 0.46.14 there and its job wall (Linux: sudo k2-node setup; macOS: Seatbelt). Its owner updates k2-node. K2 never runs the job with more network instead"
+            "--network none: {which} run a job with no network yet: that needs k2-node 0.46.14 there and its job wall (Linux: sudo k2-node setup; macOS: Seatbelt). Its owner updates k2-node. {PRODUCT_NAME} never runs the job with more network instead"
         )
     } else {
         format!(
-            "--netns-dummy: {which} make a job's own network namespace with dummy interfaces yet: that needs a Linux node with k2-node 0.46.14 and its job wall (Macs can't). Its owner updates k2-node. K2 never runs the job with more network instead"
+            "--netns-dummy: {which} make a job's own network namespace with dummy interfaces yet: that needs a Linux node with k2-node 0.46.14 and its job wall (Macs can't). Its owner updates k2-node. {PRODUCT_NAME} never runs the job with more network instead"
         )
     }
 }

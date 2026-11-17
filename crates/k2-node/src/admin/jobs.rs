@@ -47,6 +47,10 @@ use super::exec::Executor;
 
 /// Root-owned, 0644, in the config dir. Written by `k2-node setup`.
 pub const JOBS_FILE: &str = "jobs.toml";
+
+/// The refusal for a unit name that isn't one of this node's job units.
+const NOT_A_JOB_UNIT: &str = "not a K2 job unit";
+
 /// The default job user (Linux).
 pub const DEFAULT_JOB_USER: &str = "k2job";
 /// Every job unit's name starts with this.
@@ -1412,7 +1416,7 @@ impl Executor {
     /// reach the slot that unit belongs to).
     fn with_unit(&self, unit: &str, f: impl FnOnce(&str) -> Result<JobAnswer, String>) -> Result<JobAnswer, AdminRefusal> {
         if !valid_unit(unit) {
-            return Err(refuse(code::BAD_ARGS, "not a K2 job unit"));
+            return Err(refuse(code::BAD_ARGS, NOT_A_JOB_UNIT));
         }
         self.job_user()?;
         f(unit).map_err(|e| refuse(code::FAILED, e))
@@ -1587,7 +1591,7 @@ impl Executor {
                     );
                 }
                 let name = super::netns::netns_name(&unit)
-                    .ok_or_else(|| refuse(code::BAD_ARGS, "not a K2 job unit"))?;
+                    .ok_or_else(|| refuse(code::BAD_ARGS, NOT_A_JOB_UNIT))?;
                 let path = super::netns::make(&name, &s.netns_dummies).map_err(|e| {
                     refuse(
                         k2_node_proto::jobnet::codes::JOB_NETWORK_UNAVAILABLE,

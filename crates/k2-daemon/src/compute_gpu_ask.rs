@@ -5,6 +5,7 @@
 //! ([`gpu_node_refusal`]) and for auto-placement with no node left
 //! ([`gpu_refusal`]). `compute_place` re-exports the placement half.
 
+use k2_core::brand::PRODUCT_NAME;
 use k2_core::compute::codes;
 use k2_core::compute::proto::frames::Offer;
 use k2_core::compute::store::GrantRow;
@@ -86,7 +87,7 @@ pub(crate) fn gpu_node_refusal(code: &str, node: &str, ws: &str) -> Refusal {
         g::NO_GPU_NODE,
         404,
         format!(
-            "--gpu: '{node}' runs no GPU jobs for this server (or none of that vendor). Its owner turns them on at the machine: sudo k2-node admin gpu on --server <this server>; then: k2 compute grant {node} --workspace {ws} --gpu. Or leave the node off and K2 picks one that has a GPU for you"
+            "--gpu: '{node}' runs no GPU jobs for this server (or none of that vendor). Its owner turns them on at the machine: sudo k2-node admin gpu on --server <this server>; then: k2 compute grant {node} --workspace {ws} --gpu. Or leave the node off and {PRODUCT_NAME} picks one that has a GPU for you"
         ),
     )
 }

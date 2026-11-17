@@ -196,6 +196,81 @@ stage is bypassed, sonora's noise suppression stands in (the step-down floor,
 processing thread before the first block, when the capture stream restarts,
 after a capture gap of more than a second and before a retry.
 
+#### The grace window
+
+OS work the stage doesn't control can make a few calls slow: the call
+starting, the audio session activating, a route change, the camera starting,
+the app changing scene. Without help, two such calls in a row are a strike,
+and the stage is bypassed for 10 s over a moment of noise. So for a short
+window after such an event (**1.5 s of capture** by default,
+`ProcessingConfig::stage_grace`, at most 10 s) slow calls **don't count toward
+a strike**:
+
+- **the host opens it** with `AudioEngine::transient_event(TransientEvent)`
+  (`CallStart`, `AudioSessionActivated`, `RouteChange`, `CameraStart`,
+  `AppSceneChange` or `Other`). It never blocks. On phones,
+  `session_activated()` and `route_changed()` open it by themselves;
+- **the engine opens it** when the stage starts and whenever the capture
+  stream starts or restarts (a device opening or reopening, the end of a
+  capture gap);
+- **opening it again** while it is open extends it;
+- **nothing is hidden:** the slow calls are still timed and reported, in
+  `CaptureStageStats::grace_over_budget` (calls over 6 ms that were excused),
+  `grace_blocks`, `max_block_us` and `p99_block_us`, and when a window that
+  excused any closes, `Event::CaptureStage` carries the counts.
+  `CaptureStageStats::grace` says whether a window is open now, and
+  `last_transient` the host's last event;
+- **faults still bypass at once:** the grace covers only the time budget, so
+  a panic or a NaN in the window is bypassed for good as usual.
+
+`Duration::ZERO` turns the grace off: the budget applies from the first call.
+
+1.5 s covers one burst of OS work (an audio unit or stream reopening, a
+scene change) with room to spare, and is short enough that a stage that
+really is too slow is still bypassed about 1.5 s later: at most 150 slow
+blocks get through, against the 10 s of bypass a needless strike costs.
+
+```rust
+use kessel_audio::{
+    AudioEngine, CaptureStage, EngineConfig, NullDevice, ProcessingConfig, TransientEvent,
+};
+use std::time::Duration;
+
+/// Your stage: a noise-removal model, say.
+struct Denoiser;
+
+impl CaptureStage for Denoiser {
+    fn process(&mut self, _block: &mut [f32; 480]) {}
+    fn latency_samples(&self) -> usize {
+        0
+    }
+    fn reset(&mut self) {}
+}
+
+fn main() -> Result<(), kessel_audio::AudioError> {
+    let processing = ProcessingConfig::default()
+        .with_noise_suppression(None) // the stage removes noise
+        .with_capture_stage(Box::new(Denoiser))
+        .with_stage_grace(Duration::from_millis(1_500)); // the default
+    let engine = AudioEngine::start(
+        EngineConfig::null(NullDevice::default()).with_processing(processing),
+    )?;
+
+    // The app moved to the background, or another app came in front:
+    engine.transient_event(TransientEvent::AppSceneChange);
+    // About to start the camera:
+    engine.transient_event(TransientEvent::CameraStart);
+
+    if let Some(stage) = engine.stats().capture_stage {
+        println!(
+            "{} slow calls excused, window open: {}",
+            stage.grace_over_budget, stage.grace
+        );
+    }
+    Ok(())
+}
+```
+
 ### Threads
 
 `AudioEngine` is `Send + Sync` and needs no async runtime. The device
@@ -269,6 +344,13 @@ turns the OS's processing off and keeps the call echo-free:
   neither `ProcessingConfig::noise_suppression` nor the capture stage's
   step-down floor runs, whatever the config says. A capture stage you set
   still runs.
+
+**Known behaviour: no step-down floor on raw capture.** Because raw mode
+runs no noise suppression at all, `stage_fallback_noise_suppression` does
+nothing there: if a capture stage that removes noise runs on raw capture and
+is bypassed (over budget or a fault), the signal goes on unsuppressed until
+the stage's retry, or for good after a fault. This only matters if you run
+such a stage in raw mode. 0.2.1 and 0.2.2 both behave this way.
 
 ```rust,ignore
 use kessel_audio::{AudioEngine, PhoneMode, RawCapture};

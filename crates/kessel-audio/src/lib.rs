@@ -16,7 +16,8 @@
 //!   reference;
 //! - **a capture stage** of your own (a noise-removal model, say) between
 //!   echo cancellation and gain control, held to a time budget with a
-//!   bypass that never shifts the timing ([`CaptureStage`]);
+//!   bypass that never shifts the timing, and a grace window for the host's
+//!   transient events ([`CaptureStage`], [`AudioEngine::transient_event`]);
 //! - **Opus** encode and decode (ropus), 48 kHz mono, 20 ms frames, with
 //!   the caller's bitrate, FEC, DTX and complexity;
 //! - **a jitter buffer per participant** with loss concealment and FEC
@@ -133,5 +134,8 @@ pub use frame::{
 pub use jitter::JitterConfig;
 #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
 pub use phone::{OsEffects, OsVoiceConfig, PhoneMode, PhoneModeChange, RawCapture};
-pub use stage::{CaptureStage, CaptureStageStats, StageBypassReason, MAX_STAGE_LATENCY_SAMPLES};
+pub use stage::{
+    CaptureStage, CaptureStageStats, StageBypassReason, TransientEvent, DEFAULT_STAGE_GRACE,
+    MAX_STAGE_GRACE, MAX_STAGE_LATENCY_SAMPLES,
+};
 pub use stats::{CaptureStats, ParticipantStats, Stats};

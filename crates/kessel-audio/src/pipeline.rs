@@ -46,6 +46,9 @@ pub(crate) struct CoreConfig {
     pub(crate) levels_interval_ms: u32,
     pub(crate) speaking_threshold_dbov: f32,
     pub(crate) max_participants: usize,
+    /// The capture stage's grace window
+    /// ([`crate::ProcessingConfig::stage_grace`]).
+    pub(crate) stage_grace: std::time::Duration,
 }
 
 /// One remote participant's receive chain.
@@ -144,7 +147,7 @@ impl Core {
     ) -> Result<Core, AudioError> {
         let apm = match stage {
             None => Apm::new(cfg.processing),
-            Some(s) => Apm::with_stage(cfg.processing, s)?,
+            Some(s) => Apm::with_stage(cfg.processing, s, cfg.stage_grace)?,
         };
         Self::with_apm(cfg, apm)
     }
@@ -158,7 +161,7 @@ impl Core {
     ) -> Result<Core, AudioError> {
         let apm = match stage {
             None => Apm::new(cfg.processing),
-            Some(s) => Apm::with_stage_clock(cfg.processing, s, clock)?,
+            Some(s) => Apm::with_stage_clock_grace(cfg.processing, s, clock, cfg.stage_grace)?,
         };
         Self::with_apm(cfg, apm)
     }
@@ -417,6 +420,12 @@ impl Core {
     /// gap of more than a second: reset the capture stage.
     pub(crate) fn reset_capture_stage(&mut self) {
         self.apm.reset_stage();
+    }
+
+    /// The host reported a transient event (or the engine did, for one it
+    /// handles itself): open the capture stage's grace window.
+    pub(crate) fn open_stage_grace(&mut self, event: crate::stage::TransientEvent) {
+        self.apm.open_stage_grace(Some(event));
     }
 
     /// Swap in another sonora chain (the phone backend changed mode) and

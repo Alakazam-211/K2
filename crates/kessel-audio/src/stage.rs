@@ -42,6 +42,23 @@ use std::time::{Duration, Instant};
 /// across 100 calls; it is retried after 10 s of capture, and 3 strikes
 /// within 60 s of capture make the bypass permanent (otherwise the count
 /// decays). A panic or a non-finite sample is a fault: bypassed for good.
+///
+/// **The grace window.** OS work the stage doesn't control (the call
+/// starting, the audio session activating, a route change, the camera
+/// starting, the app changing scene) can make a few calls slow. For a
+/// short window after such an event (1.5 s of capture by default,
+/// [`stage_grace`](crate::ProcessingConfig::stage_grace)) slow calls don't
+/// count toward a strike. They are still timed and reported
+/// ([`CaptureStageStats::grace_over_budget`], `max_block_us`,
+/// `p99_block_us`, and an [`Event::CaptureStage`](crate::Event::CaptureStage)
+/// when a window that excused any closes). The host opens the window with
+/// [`AudioEngine::transient_event`](crate::AudioEngine::transient_event); the
+/// engine opens it itself when the stage starts and whenever the capture
+/// stream starts or restarts (a device opening or reopening, the end of a
+/// gap). Opening it again while it is open extends it. The grace covers
+/// only the time budget: a fault bypasses the stage at once, in the window
+/// or not.
+///
 /// A stage that runs too long or misbehaves is bypassed, and the call goes on with
 /// the echo canceller's output, delayed by `latency_samples` so the timing
 /// never shifts; with
@@ -82,6 +99,50 @@ pub(crate) const MAX_STRIKES: usize = 3;
 /// The span the strikes must fall within, in blocks of capture (60 s).
 /// Older strikes no longer count toward a permanent bypass.
 pub(crate) const STRIKE_SPAN_BLOCKS: u64 = 6_000;
+
+/// The default grace window
+/// ([`ProcessingConfig::stage_grace`](crate::ProcessingConfig::stage_grace)):
+/// 1.5 s of capture after a [`TransientEvent`], the stage's start or a
+/// capture stream (re)start, during which slow calls don't count toward a
+/// strike.
+///
+/// Long enough to cover one burst of OS work (an audio unit or stream
+/// reopening, a scene change), short enough that a stage that really is too
+/// slow is still bypassed about 1.5 s later: at most 150 slow blocks get
+/// through, against the 10 s of bypass a needless strike costs.
+pub const DEFAULT_STAGE_GRACE: Duration = Duration::from_millis(1_500);
+
+/// The longest grace window the engine accepts: 10 s, the retry period.
+pub const MAX_STAGE_GRACE: Duration = Duration::from_secs(10);
+
+/// Something the host knows is happening that can stall the processing
+/// thread for a moment, for
+/// [`AudioEngine::transient_event`](crate::AudioEngine::transient_event):
+/// it opens (or extends) the capture stage's grace window, so slow calls
+/// right after it don't count toward a strike (see [`CaptureStage`]).
+///
+/// The kind only says why the window opened (it is kept in
+/// [`CaptureStageStats::last_transient`]); every kind opens the same window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TransientEvent {
+    /// The call is starting (joining, connecting media).
+    CallStart,
+    /// The OS's audio session became active (on iOS,
+    /// `provider(_:didActivate:)`). On the phone backend,
+    /// `AudioEngine::session_activated` reports it by itself.
+    AudioSessionActivated,
+    /// The audio route changed (headphones, Bluetooth, the speaker). On the
+    /// phone backend, `AudioEngine::route_changed` reports it by itself.
+    RouteChange,
+    /// The camera is starting.
+    CameraStart,
+    /// The app changed scene: to or from the background, another app in
+    /// front, picture in picture.
+    AppSceneChange,
+    /// Anything else the host knows to be a short burst of OS work.
+    Other,
+}
 
 /// Why the capture stage was bypassed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -133,8 +194,20 @@ pub struct CaptureStageStats {
     /// The longest single `process` call, microseconds.
     pub max_block_us: u32,
     /// The 99th percentile (nearest rank) of the last 100 calls, or of all
-    /// calls since the last retry or reset if fewer, microseconds.
+    /// calls since the last retry or reset if fewer, microseconds. Calls in a
+    /// grace window are included.
     pub p99_block_us: u32,
+    /// A grace window is open now: slow calls don't count toward a strike
+    /// (see [`CaptureStage`]).
+    pub grace: bool,
+    /// Blocks the stage processed inside a grace window, all of them.
+    pub grace_blocks: u64,
+    /// Of those, calls over the budget (over 6 ms) that didn't count toward
+    /// a strike because of the grace window, all of them. They are in
+    /// `max_block_us` and `p99_block_us` as usual.
+    pub grace_over_budget: u64,
+    /// The last [`TransientEvent`] the host reported, if any.
+    pub last_transient: Option<TransientEvent>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,6 +264,9 @@ pub(crate) struct StageRunner {
     work: [f32; BLOCK_SAMPLES],
     /// Call times, microseconds (a ring of the last `win_len`).
     window: [u32; WINDOW],
+    /// Which of `window`'s calls were in a grace window (they don't count
+    /// toward the percentile rule's strike).
+    graced: [bool; WINDOW],
     sorted: [u32; WINDOW],
     win_len: usize,
     win_pos: usize,
@@ -203,20 +279,33 @@ pub(crate) struct StageRunner {
     dirty: bool,
     /// This block's output was the stage's.
     used_stage: bool,
+    /// The grace window's length, blocks.
+    grace_len: u64,
+    /// The grace window covers the blocks up to this one (`blocks` counts
+    /// from 1).
+    grace_until: u64,
+    /// `grace_over_budget` when the open window opened.
+    grace_mark: u64,
 }
 
 impl StageRunner {
     /// Build before any audio flows (it allocates the delay line), on the
     /// thread that will run it: it resets the stage once, so a stage that
     /// prepares itself in `reset` does so here, not in the first block.
-    pub(crate) fn new(stage: Box<dyn CaptureStage>) -> Result<StageRunner, AudioError> {
-        Self::with_clock(stage, StageClock::Wall)
+    /// `grace` is the grace window's length; the window opens here, for the
+    /// stage's first blocks.
+    pub(crate) fn new(
+        stage: Box<dyn CaptureStage>,
+        grace: Duration,
+    ) -> Result<StageRunner, AudioError> {
+        Self::with_clock(stage, StageClock::Wall, grace)
     }
 
     /// [`StageRunner::new`] timed by `clock`.
     pub(crate) fn with_clock(
         stage: Box<dyn CaptureStage>,
         clock: StageClock,
+        grace: Duration,
     ) -> Result<StageRunner, AudioError> {
         let latency = stage.latency_samples();
         if latency > MAX_STAGE_LATENCY_SAMPLES {
@@ -239,6 +328,7 @@ impl StageRunner {
             pos: 0,
             work: [0.0; BLOCK_SAMPLES],
             window: [0; WINDOW],
+            graced: [false; WINDOW],
             sorted: [0; WINDOW],
             win_len: 0,
             win_pos: 0,
@@ -253,10 +343,16 @@ impl StageRunner {
             changed: false,
             dirty: false,
             used_stage: false,
+            grace_len: grace_blocks(grace),
+            grace_until: 0,
+            grace_mark: 0,
         };
         // The one reset before the first block. A panic here is a fault,
         // like any other.
         runner.reset_stage();
+        // The stage's own start: its first calls can be slow for reasons
+        // that aren't its own (cold caches, page faults, the OS settling).
+        runner.open_grace(None);
         Ok(runner)
     }
 
@@ -275,11 +371,39 @@ impl StageRunner {
         self.stats.fallback_noise_suppression = on;
     }
 
+    /// Open the grace window, or extend the open one, for the next
+    /// `grace_len` blocks of capture. `event` is the host's reason, if it
+    /// gave one. A zero-length window does nothing.
+    pub(crate) fn open_grace(&mut self, event: Option<TransientEvent>) {
+        if event.is_some() {
+            self.stats.last_transient = event;
+        }
+        if self.grace_len == 0 {
+            return;
+        }
+        if !self.stats.grace {
+            self.stats.grace = true;
+            self.grace_mark = self.stats.grace_over_budget;
+        }
+        self.grace_until = self
+            .grace_until
+            .max(self.blocks.saturating_add(self.grace_len));
+    }
+
     /// Process one block in place: the stage's output, or (bypassed) the
     /// input delayed by the stage's latency.
     pub(crate) fn process(&mut self, block: &mut [f32; BLOCK_SAMPLES]) {
         self.blocks += 1;
         self.used_stage = false;
+        let grace = self.blocks <= self.grace_until;
+        if self.stats.grace && !grace {
+            // The window closed. If it excused slow calls, say so now
+            // (`Event::CaptureStage`), so they aren't hidden.
+            self.stats.grace = false;
+            if self.stats.grace_over_budget > self.grace_mark {
+                self.changed = true;
+            }
+        }
         self.work.copy_from_slice(block);
         self.delay_in_place(block);
 
@@ -312,16 +436,23 @@ impl StageRunner {
         self.stats.blocks_processed += 1;
         let us = took.as_micros().min(u32::MAX as u128) as u32;
         self.stats.max_block_us = self.stats.max_block_us.max(us);
+        if grace {
+            self.stats.grace_blocks += 1;
+            if took > P99_BUDGET {
+                self.stats.grace_over_budget += 1;
+            }
+        }
 
         if r.is_err() || !self.work.iter().all(|v| v.is_finite()) {
             self.strike(StageBypassReason::Fault);
             self.stats.blocks_bypassed += 1;
             return;
         }
-        self.push_time(us);
+        self.push_time(us, grace);
         // One late call alone is usually the thread being preempted: it
-        // takes two in a row, or the percentile, to strike.
-        self.slow_run = if took >= HARD_BUDGET {
+        // takes two in a row, or the percentile, to strike. In a grace
+        // window no call counts.
+        self.slow_run = if took >= HARD_BUDGET && !grace {
             self.slow_run + 1
         } else {
             0
@@ -353,7 +484,9 @@ impl StageRunner {
     /// The stream restarted or had a gap: clear the delay line and reset a
     /// running stage. A bypassed stage is reset when it is retried; a stage
     /// that hasn't processed anything since its last reset isn't reset again.
+    /// Either way the grace window opens: a stream (re)start is OS work.
     pub(crate) fn reset(&mut self) {
+        self.open_grace(None);
         self.delay.fill(0.0);
         self.pos = 0;
         match self.mode {
@@ -438,17 +571,20 @@ impl StageRunner {
         }
     }
 
-    fn push_time(&mut self, us: u32) {
+    /// Add a call's time to the window. A call in a grace window (`graced`)
+    /// stays in the percentile reading but doesn't count toward its strike.
+    fn push_time(&mut self, us: u32, graced: bool) {
         let limit = P99_BUDGET.as_micros() as u32;
         if self.win_len == WINDOW {
-            if self.window[self.win_pos] > limit {
+            if self.window[self.win_pos] > limit && !self.graced[self.win_pos] {
                 self.over_p99 -= 1;
             }
         } else {
             self.win_len += 1;
         }
         self.window[self.win_pos] = us;
-        if us > limit {
+        self.graced[self.win_pos] = graced;
+        if us > limit && !graced {
             self.over_p99 += 1;
         }
         self.win_pos = (self.win_pos + 1) % WINDOW;
@@ -473,4 +609,10 @@ impl StageRunner {
         let rank = (n * 99).div_ceil(100).max(1) - 1;
         *s.select_nth_unstable(rank).1
     }
+}
+
+/// A grace window's length in 10 ms blocks, rounded up.
+fn grace_blocks(grace: Duration) -> u64 {
+    let block = Duration::from_millis(10).as_nanos();
+    grace.as_nanos().div_ceil(block).min(u64::MAX as u128) as u64
 }

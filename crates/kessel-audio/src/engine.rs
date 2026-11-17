@@ -19,6 +19,7 @@ use crate::events::{
 };
 use crate::frame::{EncodedFrame, EncoderCfg, FrameRx, RecvFrame, BLOCK_SAMPLES};
 use crate::pipeline::{Core, CoreConfig, Participant, Pause};
+use crate::stage::TransientEvent;
 use crate::stats::Stats;
 use crate::{Backend, EngineConfig};
 use crossbeam_queue::ArrayQueue;
@@ -40,6 +41,8 @@ pub(crate) enum Ctrl {
         why: Pause,
         on: bool,
     },
+    /// Open (or extend) the capture stage's grace window.
+    StageGrace(TransientEvent),
     /// Swap sonora's chain (a phone mode change); built off the processing
     /// thread.
     #[cfg_attr(
@@ -163,6 +166,7 @@ impl Shared {
             levels_interval_ms: cfg.levels_interval_ms,
             speaking_threshold_dbov: cfg.speaking_threshold_dbov,
             max_participants: cfg.max_participants,
+            stage_grace: cfg.processing.stage_grace,
         };
         let mut snapshot = Snapshot::default();
         snapshot.levels.participants.reserve(cfg.max_participants);
@@ -441,6 +445,33 @@ impl AudioEngine {
         self.shared.send_ctrl(Ctrl::Deafen(on));
     }
 
+    /// The host says a transient event happened: OS work that can make the
+    /// capture stage's next few calls slow for reasons that aren't the
+    /// stage's (the call starting, the audio session activating, a route
+    /// change, the camera starting, the app changing scene). It opens the
+    /// stage's grace window, or extends the open one: for the next
+    /// [`ProcessingConfig::stage_grace`](crate::ProcessingConfig::stage_grace)
+    /// of capture (1.5 s by default) slow calls don't count toward a strike,
+    /// so the stage isn't bypassed for 10 s over a moment of scene-change
+    /// noise.
+    ///
+    /// Nothing is hidden: the slow calls are still timed and reported in
+    /// [`Stats::capture_stage`] (`grace_over_budget`, `max_block_us`,
+    /// `p99_block_us`), and when a window that excused any closes,
+    /// [`Event::CaptureStage`] carries the counts. The grace covers only the
+    /// time budget: a fault (a panic, a NaN) bypasses the stage at once.
+    ///
+    /// Call it as the event starts, or just before. Never blocks: the
+    /// processing thread opens the window before its next block. (If its
+    /// command queue is full, the thread has stopped taking commands and
+    /// the call is dropped.) Without a capture stage it does nothing. The
+    /// phone backend's `session_activated` and `route_changed` open the
+    /// window by themselves, and so does every capture stream start or
+    /// restart.
+    pub fn transient_event(&self, event: TransientEvent) {
+        let _ = self.shared.ctrl.push(Ctrl::StageGrace(event));
+    }
+
     /// Suspend the call: for hold (a cellular call), an interruption, or
     /// lost audio focus. No frames are produced and playback is silent until
     /// [`AudioEngine::resume`]; the phone backend also stops its device.
@@ -493,6 +524,7 @@ impl AudioEngine {
         all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
     ))]
     pub fn session_activated(&self) {
+        self.transient_event(TransientEvent::AudioSessionActivated);
         self.phone(PhoneCmd::Session(true));
     }
 
@@ -518,6 +550,7 @@ impl AudioEngine {
         all(feature = "os-voice", any(target_os = "ios", target_os = "android"))
     ))]
     pub fn route_changed(&self) {
+        self.transient_event(TransientEvent::RouteChange);
         self.phone(PhoneCmd::RouteChanged);
     }
 
@@ -709,6 +742,7 @@ fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
                     let old = core.replace_processing(chain);
                     let _ = shared.garbage.push(Garbage::Chain(old));
                 }
+                Ctrl::StageGrace(event) => core.open_stage_grace(event),
             }
         }
         while let Some(item) = shared.recv.pop() {
@@ -884,6 +918,9 @@ fn ctl_main(shared: Arc<Shared>, backend: CtlBackend) {
     let mut last_levels_seq = 0u64;
     type StageKey = (bool, Option<crate::stage::StageBypassReason>, u32, bool);
     let mut last_stage: Option<StageKey> = None;
+    // `grace_over_budget` as last reported in an event, once its window had
+    // closed.
+    let mut reported_excused = 0u64;
     while !shared.stop.load(Ordering::Acquire) {
         while shared.garbage.pop().is_some() {}
 
@@ -945,12 +982,17 @@ fn ctl_main(shared: Arc<Shared>, backend: CtlBackend) {
         }
         if let Some(s) = stage {
             let key = (s.active, s.bypassed, s.strikes, s.permanent);
-            if last_stage != Some(key) {
+            // A closed grace window that excused slow calls is reported too.
+            let excused = !s.grace && s.grace_over_budget != reported_excused;
+            if last_stage != Some(key) || excused {
                 // The first reading is the starting state, not a change.
-                if last_stage.is_some() || !s.active {
+                if last_stage.is_some() || !s.active || excused {
                     shared.emit(Event::CaptureStage(s));
                 }
                 last_stage = Some(key);
+                if !s.grace {
+                    reported_excused = s.grace_over_budget;
+                }
             }
         }
         std::thread::sleep(Duration::from_millis(10));

@@ -10,11 +10,15 @@ use crate::apm::{
 use crate::error::ErrorCode;
 use crate::frame::{EncoderCfg, BLOCK_SAMPLES};
 use crate::pipeline::{Core, CoreConfig};
-use crate::stage::{CaptureStage, CaptureStageStats, StageBypassReason, StageClock, RETRY_BLOCKS};
+use crate::stage::{
+    CaptureStage, CaptureStageStats, StageBypassReason, StageClock, TransientEvent,
+    DEFAULT_STAGE_GRACE, RETRY_BLOCKS,
+};
 use crate::stats::Stats;
 use crate::testkit::{add_into, delay, floor_noise, scale, talker_track, Rng, TALKERS};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 const B: usize = BLOCK_SAMPLES;
 /// Enough for two retries and then some.
@@ -699,6 +703,8 @@ fn wall_clock_smoke_a_sleeping_stage_is_bypassed() {
             armed: armed.clone(),
             prev: [0.0; B],
         }),
+        // No grace window: armed at block 50, inside the default one.
+        Duration::ZERO,
     )
     .expect("stage");
     let out = run(&mut apm, 60, |b, _| {
@@ -821,4 +827,290 @@ fn capture_goes_on_through_a_bypass_and_a_fault() {
         }
         assert_eq!(frames, 200);
     }
+}
+
+// The grace window: slow calls right after a transient event, the stage's
+// start or a stream restart don't count toward a strike, and are still
+// reported.
+
+/// A scripted stage with a grace window of `grace`.
+fn graced(stage: Scripted, script: &Script, grace: Duration) -> Apm {
+    Apm::with_stage_clock_grace(
+        settings(ProcessingConfig::off()),
+        Box::new(stage),
+        script.clock(),
+        grace,
+    )
+    .expect("stage accepted")
+}
+
+/// Run `blocks` blocks; `before(b, apm)` runs before block `b`. Returns the
+/// stats read before each block (after `before`), and after the last
+/// (`seen[blocks]`).
+fn run_seen(
+    apm: &mut Apm,
+    blocks: usize,
+    mut before: impl FnMut(usize, &mut Apm),
+) -> Vec<CaptureStageStats> {
+    let mut seen = Vec::with_capacity(blocks + 1);
+    let _ = run(apm, blocks, |b, apm| {
+        before(b, apm);
+        seen.push(stage_stats(apm));
+    });
+    seen.push(stage_stats(apm));
+    seen
+}
+
+/// The first block whose reading (taken before it) shows a strike.
+fn first_strike(seen: &[CaptureStageStats]) -> Option<usize> {
+    seen.iter().position(|s| s.strikes > 0)
+}
+
+#[test]
+fn slow_calls_in_the_grace_window_are_no_strike_and_the_same_calls_after_it_are() {
+    let (stage, script) = Scripted::new();
+    let mut apm = graced(stage, &script, DEFAULT_STAGE_GRACE);
+    // The stage's own start window (blocks 0..150) passes with fast calls.
+    // At block 200 the host reports a scene change and the stage turns slow
+    // (9 ms, the hard budget) for the whole window: 150 calls. At block 600
+    // the same 9 ms calls come back, with no event.
+    let seen = run_seen(&mut apm, 700, |b, apm| {
+        if b == 200 {
+            apm.open_stage_grace(Some(TransientEvent::AppSceneChange));
+        }
+        let slow = (200..350).contains(&b) || b >= 600;
+        script
+            .cost_us
+            .store(if slow { 9_000 } else { 0 }, Ordering::Relaxed);
+    });
+
+    // In the window: 150 calls of 9 ms, no strike, still the stage's output.
+    let w = seen[350];
+    assert!(
+        w.active && w.strikes == 0 && w.bypassed.is_none(),
+        "slow calls in the grace window struck: {w:?}"
+    );
+    assert!(w.grace, "the window covers blocks 200..350: {w:?}");
+    assert_eq!(w.last_transient, Some(TransientEvent::AppSceneChange));
+    // Still measured and reported: the window's calls, the longest call and
+    // the percentile.
+    assert_eq!(w.grace_over_budget, 150, "{w:?}");
+    assert_eq!(w.grace_blocks, 300, "the start window and this one: {w:?}");
+    assert!(w.max_block_us >= 9_000, "{w:?}");
+    assert!(w.p99_block_us >= 9_000, "{w:?}");
+    // The window closes on block 350; the excused calls still in the
+    // percentile's window don't strike afterwards either.
+    let a = seen[600];
+    assert!(!a.grace && a.active && a.strikes == 0, "{a:?}");
+
+    // The same calls with no window: a strike on the second (block 601).
+    assert_eq!(first_strike(&seen), Some(602), "{:?}", seen[602]);
+    let s = seen[602];
+    assert!(
+        !s.active && s.bypassed == Some(StageBypassReason::Budget) && s.strikes == 1,
+        "{s:?}"
+    );
+    assert_eq!(
+        s.grace_over_budget, 150,
+        "nothing after the window is excused"
+    );
+
+    // Without the event, the window's calls strike at once.
+    let (stage, script) = Scripted::new();
+    let mut apm = graced(stage, &script, DEFAULT_STAGE_GRACE);
+    let seen = run_seen(&mut apm, 400, |b, _| {
+        let slow = (200..350).contains(&b);
+        script
+            .cost_us
+            .store(if slow { 9_000 } else { 0 }, Ordering::Relaxed);
+    });
+    assert_eq!(first_strike(&seen), Some(202));
+}
+
+#[test]
+fn excused_calls_over_6_ms_do_not_count_toward_the_percentile_strike() {
+    let (stage, script) = Scripted::new();
+    // Every 10th call takes 6.3 ms: 10 in every 100, a strike as soon as the
+    // window holds two counted ones.
+    script.slow_every.store(10, Ordering::Relaxed);
+    script.slow_us.store(6_300, Ordering::Relaxed);
+    // The start window covers the first 150 calls.
+    let mut apm = graced(stage, &script, DEFAULT_STAGE_GRACE);
+    let seen = run_seen(&mut apm, 300, |_, _| {});
+    let w = seen[150];
+    assert!(w.active && w.strikes == 0, "{w:?}");
+    assert_eq!(w.grace_over_budget, 15, "{w:?}");
+    assert!(w.p99_block_us >= 6_300, "reported: {w:?}");
+    // After the window: calls 160 and 170 are the first two that count.
+    assert_eq!(first_strike(&seen), Some(170));
+}
+
+#[test]
+fn opening_the_grace_window_again_extends_it() {
+    let (stage, script) = Scripted::new();
+    // A 1 s window: 100 blocks.
+    let mut apm = graced(stage, &script, Duration::from_secs(1));
+    // Slow from block 200 on. The window opens at block 200 (to block 300);
+    // opened again at block 250, it runs to block 350.
+    let seen = run_seen(&mut apm, 400, |b, apm| {
+        if b == 200 {
+            apm.open_stage_grace(Some(TransientEvent::CameraStart));
+        }
+        if b == 250 {
+            apm.open_stage_grace(Some(TransientEvent::RouteChange));
+        }
+        let slow = b >= 200;
+        script
+            .cost_us
+            .store(if slow { 9_000 } else { 0 }, Ordering::Relaxed);
+    });
+    let e = seen[349];
+    assert!(e.grace && e.active && e.strikes == 0, "extended: {e:?}");
+    assert_eq!(e.last_transient, Some(TransientEvent::RouteChange));
+    // Blocks 350 and 351 are the first two outside it.
+    assert_eq!(first_strike(&seen), Some(352), "{:?}", seen[352]);
+    assert_eq!(seen[352].grace_over_budget, 150);
+
+    // An event inside the start window extends that one too.
+    let (stage, script) = Scripted::new();
+    let mut apm = graced(stage, &script, Duration::from_secs(1));
+    script.cost_us.store(9_000, Ordering::Relaxed);
+    let seen = run_seen(&mut apm, 150, |b, apm| {
+        if b == 10 {
+            // The start window runs to block 100; now to block 110.
+            apm.open_stage_grace(Some(TransientEvent::Other));
+        }
+    });
+    assert_eq!(first_strike(&seen), Some(112));
+}
+
+#[test]
+fn a_fault_in_the_grace_window_still_bypasses_at_once() {
+    let setups: [fn(&Script); 2] = [
+        |s| s.panic_on.store(3, Ordering::Relaxed),
+        |s| s.nan_on.store(3, Ordering::Relaxed),
+    ];
+    for setup in setups {
+        let (stage, script) = Scripted::new();
+        setup(&script);
+        // Slow as well, in the start window.
+        script.cost_us.store(9_000, Ordering::Relaxed);
+        let mut apm = graced(stage, &script, DEFAULT_STAGE_GRACE);
+        let seen = run_seen(&mut apm, 20, |_, _| {});
+        let s = seen[3];
+        assert!(s.grace, "still in the window: {s:?}");
+        assert!(
+            !s.active
+                && s.bypassed == Some(StageBypassReason::Fault)
+                && s.permanent
+                && s.strikes == 1,
+            "a fault in the window: {s:?}"
+        );
+        assert!(s.grace_over_budget >= 2, "{s:?}");
+        assert_eq!(
+            script.calls.load(Ordering::Relaxed),
+            3,
+            "never called again"
+        );
+    }
+}
+
+#[test]
+fn a_window_that_excused_calls_is_reported_when_it_closes() {
+    let (stage, script) = Scripted::new();
+    // A 0.5 s window: 50 blocks.
+    let mut apm = graced(stage, &script, Duration::from_millis(500));
+    // The start window passes with nothing to excuse: nothing to report.
+    let _ = run(&mut apm, 100, |_, _| {});
+    assert!(!apm.take_stage_changed(), "nothing was excused");
+    let s = stage_stats(&mut apm);
+    assert!(
+        !s.grace && s.grace_blocks == 50 && s.grace_over_budget == 0,
+        "{s:?}"
+    );
+
+    // A route change; five slow calls in the window.
+    apm.open_stage_grace(Some(TransientEvent::RouteChange));
+    assert!(stage_stats(&mut apm).grace, "open at once");
+    let _ = run(&mut apm, 49, |b, _| {
+        let slow = b < 5;
+        script
+            .cost_us
+            .store(if slow { 9_000 } else { 0 }, Ordering::Relaxed);
+    });
+    let s = stage_stats(&mut apm);
+    assert!(s.grace && s.grace_over_budget == 5, "{s:?}");
+    assert!(!apm.take_stage_changed(), "not while it is open");
+    let _ = run(&mut apm, 2, |_, _| {});
+    // Closed: the engine publishes this reading at once, and its control
+    // thread sends it as an Event::CaptureStage.
+    assert!(apm.take_stage_changed(), "the close is reported");
+    let s = stage_stats(&mut apm);
+    assert!(
+        !s.grace && s.active && s.strikes == 0 && s.grace_over_budget == 5,
+        "{s:?}"
+    );
+    assert!(s.max_block_us >= 9_000, "{s:?}");
+    assert_eq!(s.grace_blocks, 100);
+    assert!(!apm.take_stage_changed(), "once");
+}
+
+#[test]
+fn a_stream_restart_opens_the_grace_window() {
+    let (stage, script) = Scripted::new();
+    let mut apm = graced(stage, &script, Duration::from_millis(500));
+    let seen = run_seen(&mut apm, 200, |b, apm| {
+        if b == 100 {
+            // A device reopening (or the end of a capture gap).
+            apm.reset_stage();
+        }
+        let slow = b >= 100;
+        script
+            .cost_us
+            .store(if slow { 9_000 } else { 0 }, Ordering::Relaxed);
+    });
+    assert!(seen[100].grace, "{:?}", seen[100]);
+    assert_eq!(
+        seen[100].last_transient, None,
+        "the engine's own, not the host's"
+    );
+    // Blocks 100..150 excused; the strike on block 151.
+    assert_eq!(first_strike(&seen), Some(152));
+}
+
+#[test]
+fn the_default_grace_window_is_1_5_s_of_capture() {
+    assert_eq!(DEFAULT_STAGE_GRACE, Duration::from_millis(1_500));
+    assert_eq!(ProcessingConfig::default().stage_grace, DEFAULT_STAGE_GRACE);
+    assert_eq!(ProcessingConfig::off().stage_grace, DEFAULT_STAGE_GRACE);
+    assert_eq!(
+        crate::EngineConfig::default().processing.stage_grace,
+        DEFAULT_STAGE_GRACE
+    );
+    // 150 blocks from the stage's start: a stage slow from its first call
+    // strikes on calls 151 and 152.
+    let (stage, script) = Scripted::new();
+    script.cost_us.store(9_000, Ordering::Relaxed);
+    let mut apm = graced(stage, &script, DEFAULT_STAGE_GRACE);
+    let seen = run_seen(&mut apm, 200, |_, _| {});
+    assert!(seen[150].grace && seen[150].strikes == 0, "{:?}", seen[150]);
+    assert!(!seen[151].grace, "{:?}", seen[151]);
+    assert_eq!(first_strike(&seen), Some(152));
+    assert_eq!(seen[152].grace_over_budget, 150);
+
+    // A length is rounded up to whole 10 ms blocks: 1 ms is one block.
+    let (stage, script) = Scripted::new();
+    script.cost_us.store(9_000, Ordering::Relaxed);
+    let mut apm = graced(stage, &script, Duration::from_millis(1));
+    assert_eq!(first_strike(&run_seen(&mut apm, 10, |_, _| {})), Some(3));
+    // Zero turns it off: 0.2.1's rule, a strike on the second call.
+    let (stage, script) = Scripted::new();
+    script.cost_us.store(9_000, Ordering::Relaxed);
+    let mut apm = graced(stage, &script, Duration::ZERO);
+    let seen = run_seen(&mut apm, 10, |_, apm| {
+        apm.open_stage_grace(Some(TransientEvent::CallStart));
+    });
+    assert_eq!(first_strike(&seen), Some(2));
+    assert!(!seen[1].grace);
+    assert_eq!(seen[1].last_transient, Some(TransientEvent::CallStart));
 }

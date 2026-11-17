@@ -340,6 +340,9 @@ impl EngineConfig {
         if self.processing_poll.is_zero() || self.processing_poll >= Duration::from_millis(10) {
             return bad("processing_poll must be between 0 and 10 ms");
         }
+        if self.processing.stage_grace > crate::stage::MAX_STAGE_GRACE {
+            return bad("processing.stage_grace must be at most 10 s");
+        }
         #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
         if let Backend::OsVoiceProcessing(c) = &self.backend {
             c.validate(self.phone_mode)?;

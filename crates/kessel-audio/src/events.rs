@@ -104,7 +104,9 @@ pub enum Event {
     Levels(Levels),
     /// The capture stage changed state: it was bypassed (over budget, or a
     /// fault), retried, or bypassed for good. Sent when `active`,
-    /// `bypassed`, `strikes` or `permanent` change; the same reading is in
+    /// `bypassed`, `strikes` or `permanent` change, and when a grace window
+    /// closes having excused slow calls (`grace_over_budget` went up; see
+    /// [`crate::AudioEngine::transient_event`]); the same reading is in
     /// [`crate::Stats::capture_stage`].
     CaptureStage(CaptureStageStats),
     /// The phone backend changed mode ([`crate::AudioEngine::set_phone_mode`]),

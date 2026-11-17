@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.2.2
+
+Additions only; code written against 0.2.1 builds unchanged. One default
+changes behaviour: the capture stage's new grace window is on by default
+(see Changed).
+
+### Added
+
+- **A grace window for the capture stage's time budget.** OS work the stage
+  doesn't control (the call starting, the audio session activating, a route
+  change, the camera starting, the app changing scene) can make a few calls
+  slow, and two slow calls in a row used to bypass the stage for 10 s. For
+  a short window after such an event, slow calls don't count toward a
+  strike:
+  - `AudioEngine::transient_event(TransientEvent)`: the host reports the
+    event, opening the window or extending the open one. Never blocks.
+    `TransientEvent` (`#[non_exhaustive]`): `CallStart`,
+    `AudioSessionActivated`, `RouteChange`, `CameraStart`,
+    `AppSceneChange`, `Other`.
+  - `ProcessingConfig::stage_grace` / `with_stage_grace(Duration)`: the
+    window's length, in capture, rounded up to 10 ms blocks. Default
+    `DEFAULT_STAGE_GRACE` (1.5 s), at most `MAX_STAGE_GRACE` (10 s; more is
+    refused with `invalid_config`); `Duration::ZERO` turns it off.
+  - The engine opens the window itself when the stage starts and whenever
+    the capture stream starts or restarts (a device opening or reopening,
+    the end of a capture gap). On the phone backend, `session_activated()`
+    and `route_changed()` open it too.
+  - Nothing is hidden: the slow calls are still timed and reported.
+    `CaptureStageStats` has new fields: `grace` (a window is open now),
+    `grace_blocks`, `grace_over_budget` (calls over 6 ms that the window
+    excused) and `last_transient`. `max_block_us` and `p99_block_us` include
+    the window's calls. `Event::CaptureStage` is also sent when a window
+    that excused slow calls closes.
+  - Faults are unchanged: a panic or a NaN in the window bypasses the stage
+    for good, at once.
+
+### Changed
+
+- With a capture stage and the default config, slow calls in the first
+  1.5 s of capture after the stage starts (and after each capture stream
+  start or restart) no longer strike. A stage that is too slow from its
+  first call is bypassed about 1.5 s later than in 0.2.1. Set
+  `stage_grace` to `Duration::ZERO` for 0.2.1's timing.
+
+### Documented
+
+- Known behaviour, unchanged: the phone backend's raw mode
+  (`PhoneMode::Raw`) runs no noise suppression, so the step-down floor
+  (`stage_fallback_noise_suppression`) never runs there. A noise-removing
+  stage on raw capture that is bypassed leaves the signal unsuppressed
+  until its retry. Now said in the README and on the field's docs.
+
 ## 0.2.1 (2026-11-15)
 
 Additions only; nothing changes for code written against 0.2.0.

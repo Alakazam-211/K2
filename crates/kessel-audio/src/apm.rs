@@ -7,11 +7,14 @@
 
 use crate::error::AudioError;
 use crate::frame::{BLOCK_SAMPLES, SAMPLE_RATE};
-use crate::stage::{CaptureStage, CaptureStageStats, StageRunner};
+use crate::stage::{
+    CaptureStage, CaptureStageStats, StageRunner, TransientEvent, DEFAULT_STAGE_GRACE,
+};
 use sonora::config::{
     AdaptiveDigital, EchoCanceller, FixedDigital, GainController2, HighPassFilter,
     MaxProcessingRate, NoiseSuppression, NoiseSuppressionLevel, Pipeline,
 };
+use std::time::Duration;
 
 /// Noise-suppression strength.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -70,7 +73,25 @@ pub struct ProcessingConfig {
     /// stage with at least that much latency (a shorter one: the suppressed
     /// signal is that much later). `None` turns the floor off: a bypassed
     /// stage leaves no suppression.
+    ///
+    /// Known behaviour: the phone backend's raw mode
+    /// (`PhoneMode::Raw`, iOS and Android) never runs this floor, whatever
+    /// it is set to, as it runs no noise suppression at all. A capture stage
+    /// on raw capture that is bypassed leaves the signal unsuppressed until
+    /// its retry. That only matters for a stage that removes noise on raw
+    /// capture.
     pub stage_fallback_noise_suppression: Option<NoiseSuppressionStrength>,
+    /// The capture stage's grace window: for this long (in capture, rounded
+    /// up to 10 ms blocks) after a
+    /// [`TransientEvent`] ([`crate::AudioEngine::transient_event`]), the
+    /// stage's start or a capture stream (re)start, slow calls don't count
+    /// toward a strike; they are still timed and reported (see
+    /// [`CaptureStage`]). Default [`DEFAULT_STAGE_GRACE`] (1.5 s); at most
+    /// [`crate::MAX_STAGE_GRACE`] (10 s), or [`crate::AudioEngine::start`]
+    /// refuses the config. `Duration::ZERO` turns the grace off: the budget
+    /// applies from the first call, as in 0.2.1. Only applies with a stage
+    /// set.
+    pub stage_grace: Duration,
 }
 
 impl std::fmt::Debug for ProcessingConfig {
@@ -88,6 +109,7 @@ impl std::fmt::Debug for ProcessingConfig {
                 "stage_fallback_noise_suppression",
                 &self.stage_fallback_noise_suppression,
             )
+            .field("stage_grace", &self.stage_grace)
             .finish()
     }
 }
@@ -103,6 +125,7 @@ impl Default for ProcessingConfig {
             high_pass: true,
             capture_stage: None,
             stage_fallback_noise_suppression: Some(NoiseSuppressionStrength::Moderate),
+            stage_grace: DEFAULT_STAGE_GRACE,
         }
     }
 }
@@ -117,6 +140,7 @@ impl ProcessingConfig {
             high_pass: false,
             capture_stage: None,
             stage_fallback_noise_suppression: Some(NoiseSuppressionStrength::Moderate),
+            stage_grace: DEFAULT_STAGE_GRACE,
         }
     }
 
@@ -160,6 +184,12 @@ impl ProcessingConfig {
         ns: Option<NoiseSuppressionStrength>,
     ) -> Self {
         self.stage_fallback_noise_suppression = ns;
+        self
+    }
+
+    /// Set [`stage_grace`](Self::stage_grace).
+    pub fn with_stage_grace(mut self, grace: Duration) -> Self {
+        self.stage_grace = grace;
         self
     }
 
@@ -477,21 +507,35 @@ impl Apm {
     /// noise suppression in one instance, then the stage, then gain control
     /// in a second instance; and the step-down suppressor if it applies.
     /// Build it on the thread that will run it (the stage is reset here).
+    /// `grace` is the stage's grace window ([`ProcessingConfig::stage_grace`]).
     pub(crate) fn with_stage(
         cfg: impl Into<ApmSettings>,
         stage: Box<dyn CaptureStage>,
+        grace: Duration,
     ) -> Result<Self, AudioError> {
-        Self::with_runner(cfg.into(), StageRunner::new(stage)?)
+        Self::with_runner(cfg.into(), StageRunner::new(stage, grace)?)
     }
 
-    /// [`Apm::with_stage`] with the stage timed by `clock` (tests).
+    /// [`Apm::with_stage`] with the stage timed by `clock` and no grace
+    /// window (tests: the budget applies from the first call).
     #[cfg(test)]
     pub(crate) fn with_stage_clock(
         cfg: impl Into<ApmSettings>,
         stage: Box<dyn CaptureStage>,
         clock: crate::stage::StageClock,
     ) -> Result<Self, AudioError> {
-        Self::with_runner(cfg.into(), StageRunner::with_clock(stage, clock)?)
+        Self::with_stage_clock_grace(cfg, stage, clock, Duration::ZERO)
+    }
+
+    /// [`Apm::with_stage`] with the stage timed by `clock` (tests).
+    #[cfg(test)]
+    pub(crate) fn with_stage_clock_grace(
+        cfg: impl Into<ApmSettings>,
+        stage: Box<dyn CaptureStage>,
+        clock: crate::stage::StageClock,
+        grace: Duration,
+    ) -> Result<Self, AudioError> {
+        Self::with_runner(cfg.into(), StageRunner::with_clock(stage, clock, grace)?)
     }
 
     fn with_runner(cfg: ApmSettings, stage: StageRunner) -> Result<Self, AudioError> {
@@ -568,6 +612,14 @@ impl Apm {
         }
         if let Some(sd) = self.chain.step_down.as_mut() {
             sd.reset();
+        }
+    }
+
+    /// Open (or extend) the capture stage's grace window; `event` is the
+    /// host's reason. Without a stage, nothing.
+    pub(crate) fn open_stage_grace(&mut self, event: Option<TransientEvent>) {
+        if let Some(s) = self.stage.as_mut() {
+            s.open_grace(event);
         }
     }
 

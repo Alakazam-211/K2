@@ -57,6 +57,9 @@ pub(crate) fn core_cfg(processing: impl Into<crate::apm::ApmSettings>) -> CoreCo
         levels_interval_ms: 50,
         speaking_threshold_dbov: -45.0,
         max_participants: 8,
+        // No grace window: the budget tests time the stage from its first
+        // call (the grace has its own tests).
+        stage_grace: std::time::Duration::ZERO,
     }
 }
 
@@ -69,6 +72,7 @@ pub(crate) fn aec_only() -> ProcessingConfig {
         high_pass: true,
         capture_stage: None,
         stage_fallback_noise_suppression: None,
+        stage_grace: crate::DEFAULT_STAGE_GRACE,
     }
 }
 

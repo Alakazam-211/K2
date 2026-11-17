@@ -5,7 +5,8 @@ use kessel_audio::bytes::Bytes;
 use kessel_audio::{
     AudioEngine, CaptureSource, CaptureStage, CaptureStageStats, DeviceChoice, DeviceSelection,
     EncodedFrame, EncoderCfg, EngineConfig, ErrorCode, Event, FrameRx, NullDevice,
-    ProcessingConfig, RecvFrame, StageBypassReason, FRAME_SAMPLES,
+    ProcessingConfig, RecvFrame, StageBypassReason, TransientEvent, DEFAULT_STAGE_GRACE,
+    FRAME_SAMPLES, MAX_STAGE_GRACE,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -461,22 +462,28 @@ impl CaptureStage for TestStage {
     }
 }
 
-/// A real-time engine with a [`TestStage`], DTX off (a frame every 20 ms).
+/// A real-time engine with a [`TestStage`], DTX off (a frame every 20 ms),
+/// and no grace window: the budget applies from the first call (the grace
+/// window has its own tests).
 fn staged_engine() -> (AudioEngine, Arc<Ctl>) {
+    staged_engine_with(Duration::ZERO)
+}
+
+/// [`staged_engine`] with a grace window of `grace`.
+fn staged_engine_with(grace: Duration) -> (AudioEngine, Arc<Ctl>) {
     let ctl = Arc::new(Ctl::default());
     let stage = TestStage {
         prev: [0.0; 480],
         ctl: ctl.clone(),
     };
-    let engine = AudioEngine::start(
-        config(realtime_null(Some(Box::new(talker(48_000, 10.0, 10.0)))))
-            .with_encoder(EncoderCfg {
-                dtx: false,
-                ..EncoderCfg::default()
-            })
-            .with_capture_stage(Box::new(stage)),
-    )
-    .expect("start");
+    let mut cfg = config(realtime_null(Some(Box::new(talker(48_000, 10.0, 10.0)))))
+        .with_encoder(EncoderCfg {
+            dtx: false,
+            ..EncoderCfg::default()
+        })
+        .with_capture_stage(Box::new(stage));
+    cfg.processing.stage_grace = grace;
+    let engine = AudioEngine::start(cfg).expect("start");
     (engine, ctl)
 }
 
@@ -594,5 +601,119 @@ fn the_stage_is_reset_after_a_long_gap() {
         }
         assert!(Instant::now() < deadline, "no reset after a 1.3 s gap");
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Poll the stats until `ok` holds for the capture stage's reading.
+fn stage_stats_until(
+    engine: &AudioEngine,
+    within: Duration,
+    what: &str,
+    ok: impl Fn(&CaptureStageStats) -> bool,
+) -> CaptureStageStats {
+    let deadline = Instant::now() + within;
+    loop {
+        let s = engine.stats().capture_stage.expect("stage stats");
+        if ok(&s) {
+            return s;
+        }
+        assert!(Instant::now() < deadline, "{what}: {s:?}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The host's transient event opens the grace window: 9 ms calls in it
+/// don't bypass the stage, are reported (stats, then an event when the
+/// window closes), and the same calls after it bypass the stage.
+#[test]
+fn a_transient_event_holds_off_the_budget_for_the_grace_window() {
+    let (engine, ctl) = staged_engine_with(Duration::from_millis(600));
+    let rx = engine.capture_frames();
+    // The start window (0.6 s from the stage's start and the stream's)
+    // passes.
+    let mut frames = collect(&rx, 50, Duration::from_secs(5));
+    let before = stage_stats_until(&engine, Duration::from_secs(2), "start window", |s| {
+        !s.grace
+    });
+    assert!(before.active, "{before:?}");
+
+    engine.transient_event(TransientEvent::AppSceneChange);
+    // Wait until the processing thread has opened the window (the next
+    // snapshot), then turn the stage slow.
+    let open = stage_stats_until(&engine, Duration::from_secs(2), "window open", |s| {
+        s.grace && s.last_transient == Some(TransientEvent::AppSceneChange)
+    });
+    assert_eq!(open.strikes, before.strikes, "{open:?}");
+    let calls = ctl.calls.load(Ordering::Relaxed);
+    ctl.sleep_us.store(9_000, Ordering::Relaxed);
+    // In the window: slow calls counted, the stage still active.
+    let mid = stage_stats_until(&engine, Duration::from_secs(2), "excused calls", |s| {
+        s.grace_over_budget >= before.grace_over_budget + 2
+    });
+    if mid.grace {
+        assert!(
+            mid.active && mid.strikes == before.strikes,
+            "a strike in the window: {mid:?}"
+        );
+    }
+    // After it: bypassed, on the budget. The first event after the slow
+    // calls began carries them (the window's close, or the bypass if both
+    // landed in one snapshot), with the window closed.
+    // (A report of the start window, if a busy machine made a call there
+    // slow, may still be queued: skip it.)
+    let first = loop {
+        let e = stage_event(&engine, Duration::from_secs(5));
+        if !(e.active && e.grace_over_budget < before.grace_over_budget + 2) {
+            break e;
+        }
+    };
+    assert!(!first.grace, "{first:?}");
+    assert!(
+        first.grace_over_budget >= before.grace_over_budget + 2,
+        "the excused calls are reported: {first:?}"
+    );
+    assert!(first.max_block_us >= 9_000, "{first:?}");
+    let bypass = if first.active {
+        stage_event(&engine, Duration::from_secs(5))
+    } else {
+        first
+    };
+    assert_eq!(
+        bypass.bypassed,
+        Some(StageBypassReason::Budget),
+        "{bypass:?}"
+    );
+    assert!(
+        !bypass.active && bypass.strikes == before.strikes + 1,
+        "{bypass:?}"
+    );
+    // The stage ran through the window: more than two slow calls.
+    assert!(
+        ctl.calls.load(Ordering::Relaxed) > calls + 2,
+        "bypassed inside the window"
+    );
+    frames.extend(collect(&rx, 25, Duration::from_secs(5)));
+    assert_contiguous(&frames);
+}
+
+/// The default grace window is 1.5 s, and more than 10 s is refused.
+#[test]
+fn the_grace_window_defaults_to_1_5_s_and_is_at_most_10_s() {
+    assert_eq!(DEFAULT_STAGE_GRACE, Duration::from_millis(1_500));
+    assert_eq!(MAX_STAGE_GRACE, Duration::from_secs(10));
+    assert_eq!(ProcessingConfig::default().stage_grace, DEFAULT_STAGE_GRACE);
+    assert_eq!(
+        EngineConfig::default().processing.stage_grace,
+        DEFAULT_STAGE_GRACE
+    );
+    let at_most = config(fast_null(None))
+        .with_processing(ProcessingConfig::off().with_stage_grace(MAX_STAGE_GRACE));
+    AudioEngine::start(at_most).expect("10 s is accepted");
+    let over = config(fast_null(None)).with_processing(
+        ProcessingConfig::off().with_stage_grace(MAX_STAGE_GRACE + Duration::from_millis(1)),
+    );
+    match AudioEngine::start(over) {
+        Ok(_) => panic!("a grace window over 10 s was accepted"),
+        Err(e) => assert_eq!(e.code, ErrorCode::InvalidConfig),
     }
 }

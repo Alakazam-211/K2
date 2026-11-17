@@ -1691,7 +1691,7 @@ pub(crate) fn confirm_binding(vault: &LocalVault, action: &str, secret_id: Optio
         } else {
             Err(bad("secretId is add:<age1…> or remove:<fingerprint>"))
         }),
-        BACKUP_EXPORT_CONFIRM => Some(match std::fs::canonicalize(sid) {
+        BACKUP_EXPORT_CONFIRM | crate::vault_routes::presence::BACKUP_EXPORT_INITIAL => Some(match std::fs::canonicalize(sid) {
             Ok(d) if !sid.is_empty() && d.is_dir() => {
                 let d = d.display().to_string();
                 let shown: String = d.chars().filter(|ch| !ch.is_control()).take(120).collect();
@@ -1715,7 +1715,13 @@ fn backup(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], ingress: &str, 
     let b: BackupBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
     let d = b.dest_dir.ok_or_else(|| VaultError::bad_request("dest_required", "where should the snapshot go?"))?;
     let d = std::fs::canonicalize(&d).ok().filter(|p| p.is_dir()).ok_or_else(|| VaultError::not_found("that folder doesn't exist"))?;
-    if !person {
+    let (state, _, _) = vault.recovery_state();
+    if state != "confirmed" {
+        // No recovery key yet: this computer's own user check, for every
+        // caller, bound to this folder.
+        use crate::vault_routes::presence;
+        presence::take(vault, c, presence::BACKUP_EXPORT_INITIAL, Some(&d.display().to_string()), b.confirm_token.as_deref()).map_err(deny)?;
+    } else if !person {
         // The K2 app: a person's confirm for this folder.
         let tok = b.confirm_token.as_deref().ok_or_else(|| {
             deny(VaultError::forbidden(

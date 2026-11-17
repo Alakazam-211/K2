@@ -1017,10 +1017,16 @@ o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.par
                     ;;
                 show-once|rotate)
                     _vault_person_guard
-                    local rb='{}'
-                    if [ "$act" = "rotate" ]; then
-                        local tok
+                    local rb='{}' tok=""
+                    _vault_sock_call GET status
+                    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+                    if ! printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("recovery") == "confirmed" else 1)'; then
+                        # No recovery key yet: this computer's own user check.
+                        tok="$(_vault_confirm_token recovery-setup "" "recovery key")" || exit 3
+                    elif [ "$act" = "rotate" ]; then
                         tok="$(_vault_confirm_token recovery-rotate "" "recovery key")" || exit 3
+                    fi
+                    if [ -n "$tok" ]; then
                         rb="$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")"
                     fi
                     _vault_sock_call POST "recovery/${act}" "$rb"
@@ -1056,11 +1062,15 @@ print()' >&2
             _vault_person_guard
             local tokj='{}'
             _vault_sock_call GET status
+            [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+            local tok
             if printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("confirmPassword") else 1)'; then
-                local tok
                 tok="$(_vault_confirm_token confirm-password-change "" "vault password")" || exit 3
-                tokj="$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")"
+            else
+                # The first one: this computer's own user check.
+                tok="$(_vault_confirm_token vault-password-set "" "vault password")" || exit 3
             fi
+            tokj="$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")"
             local p1="" p2=""
             printf 'New vault password (10+ characters): ' >&2; IFS= read -rs p1 || p1=""; echo >&2
             printf 'Again: ' >&2; IFS= read -rs p2 || p2=""; echo >&2
@@ -1210,9 +1220,16 @@ else:
             else
                 [ -n "${pos[0]:-}" ] || { echo "usage: k2 vault backup <dir>" >&2; exit 2; }
                 _vault_person_guard
-                local d
+                local d btok=""
                 d="$(cd "${pos[0]}" 2>/dev/null && pwd)" || { echo "usage: ${pos[0]} isn't a folder" >&2; exit 2; }
-                _vault_sock_call POST backup "$(python3 -c 'import json,sys; print(json.dumps({"destDir": sys.argv[1]}))' "$d")"
+                _vault_sock_call GET status
+                [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+                if ! printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("recovery") == "confirmed" else 1)'; then
+                    # No recovery key yet: this computer's own user check,
+                    # bound to this folder.
+                    btok="$(_vault_confirm_token backup-export-initial "$d" "")" || exit 3
+                fi
+                _vault_sock_call POST backup "$(python3 -c 'import json,sys; print(json.dumps({"destDir": sys.argv[1], "confirmToken": sys.argv[2] or None}))' "$d" "$btok")"
                 [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
                 printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("wrote %s (%s)" % (v["path"], v["note"]))'
             fi

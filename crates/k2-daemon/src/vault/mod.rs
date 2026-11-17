@@ -39,6 +39,8 @@ pub mod ssh_agent;
 pub mod ssh_agent;
 pub mod systemd_creds;
 pub mod tunnel;
+#[cfg(windows)]
+pub mod windows_presence;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};

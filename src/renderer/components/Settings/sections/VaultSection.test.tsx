@@ -246,9 +246,9 @@ describe('VaultSection', () => {
     expect(screen.getByTestId('vault-recovery-setup').textContent).toContain('The recovery key is set up.')
   })
 
-  it('recovery setup asks for the vault password when the Mac sheet is not offered, and restarts on wrong words', async () => {
+  it('recovery setup asks for the owner login password when the server offers no screen prompt, and restarts on wrong words', async () => {
     postHandler = (route) => {
-      if (route === 'vault/confirm/start') return { methods: ['vault-password'], expiresIn: 60 }
+      if (route === 'vault/confirm/start') return { methods: ['owner-login-password'], expiresIn: 60, server: 'box.k2.dev', login: 'rosa' }
       if (route === 'vault/confirm/finish') return { token: 'tok-p', expiresIn: 60 }
       if (route === 'vault/recovery/show-once') return { id: 'rc-2', phrase: 'a b c d e f g h i j k l m n o p q r s t u v w x', checkWords: [3, 11, 20], recipient: 'age1y' }
       if (route === 'vault/recovery/confirm') throw new Error("those words don't match; start again with show-once")
@@ -263,7 +263,7 @@ describe('VaultSection', () => {
     fireEvent.click(within(screen.getByTestId('dialog-foot')).getByRole('button', { name: 'Confirm' }))
     await screen.findByTestId('vault-recovery-phrase')
     expect(pw.value).toBe('')
-    expect(posts[1].body).toEqual({ action: 'recovery-setup', method: 'vault-password', label: 'recovery key', password: 'correct horse battery' })
+    expect(posts[1].body).toEqual({ action: 'recovery-setup', method: 'owner-login-password', label: 'recovery key', username: 'rosa', password: 'correct horse battery' })
     fireEvent.click(screen.getByTestId('vault-recovery-saved'))
     for (const n of [3, 11, 20]) fireEvent.change(screen.getByTestId(`vault-recovery-word-${n}`), { target: { value: 'nope' } })
     fireEvent.click(screen.getByRole('button', { name: 'Confirm recovery key' }))

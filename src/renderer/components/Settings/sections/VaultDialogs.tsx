@@ -172,21 +172,32 @@ export function ValueField({
 
 // ── Confirm it's you ────────────────────────────────────────────────
 
-type Ask = { step: 'idle' } | { step: 'asking' } | { step: 'mac' } | { step: 'password'; method: string; who: ConfirmIdentity } | { step: 'none' }
+type Ask =
+  | { step: 'idle' }
+  | { step: 'asking' }
+  | { step: 'mac' }
+  | { step: 'pc' }
+  | { step: 'password'; method: string; who: ConfirmIdentity }
+  | { step: 'none' }
 
-/** The vault's person confirm (the Mac's own sheet, or a password): `begin`
- *  resolves with a token, or null when it now waits for a password (or this
- *  server offers no way to confirm); `withPassword` sends the typed one. */
+/** The vault's person confirm (the Mac's own sheet, Windows Hello, or a
+ *  password): `begin` resolves with a token, or null when it now waits for a
+ *  password (or this server offers no way to confirm); `withPassword` sends
+ *  the typed one. The vault's first-setup steps (recovery-setup) are offered
+ *  only this computer's own user check: the Mac's sheet, Windows Hello, an
+ *  owner login's sign-in password on a Linux server, or a Connect login's own
+ *  password. */
 function useVaultConfirm(action: string, secretId: string | undefined, label: string) {
   const [ask, setAsk] = useState<Ask>({ step: 'idle' })
   const pwRef = useRef<HTMLInputElement>(null)
   const [hasPw, setHasPw] = useState(false)
-  const finish = async (method: string, password?: string): Promise<string> => {
+  const finish = async (method: string, password?: string, username?: string): Promise<string> => {
     const { token } = await vaultApi.confirmFinish({
       action,
       ...(secretId !== undefined ? { secretId } : {}),
       method,
       label,
+      ...(username ? { username } : {}),
       ...(password !== undefined ? { password } : {}),
     })
     return token
@@ -196,13 +207,14 @@ function useVaultConfirm(action: string, secretId: string | undefined, label: st
     try {
       const started = await vaultApi.confirmStart(action, secretId)
       const { methods } = started
-      if (methods.includes('local-auth')) {
-        setAsk({ step: 'mac' })
-        const token = await finish('local-auth')
+      const device = methods.includes('local-auth') ? 'local-auth' : methods.includes('windows-hello') ? 'windows-hello' : null
+      if (device) {
+        setAsk({ step: device === 'local-auth' ? 'mac' : 'pc' })
+        const token = await finish(device)
         setAsk({ step: 'idle' })
         return token
       }
-      const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
+      const pw = methods.find((m) => m === 'connect-password' || m === 'owner-login-password' || m === 'vault-password')
       setAsk(pw ? { step: 'password', method: pw, who: readConfirmIdentity(started) } : { step: 'none' })
       return null
     } catch (e) {
@@ -216,7 +228,8 @@ function useVaultConfirm(action: string, secretId: string | undefined, label: st
     const pw = el.value
     el.value = ''
     setHasPw(false)
-    const token = await finish(ask.method, pw)
+    const login = ask.method === 'owner-login-password' ? (ask.who.login ?? undefined) : undefined
+    const token = await finish(ask.method, pw, login)
     setAsk({ step: 'idle' })
     return token
   }
@@ -232,6 +245,7 @@ function ConfirmStep({ c, testId, other }: { c: Confirm; testId: string; other?:
   const id = useId()
   if (c.ask.step === 'asking') return <Waiting text="Asking the vault how to confirm it’s you…" />
   if (c.ask.step === 'mac') return <Waiting text="Confirm on your Mac: use Touch ID or your Mac’s password in the window that opened." />
+  if (c.ask.step === 'pc') return <Waiting text="Confirm on this PC: use Windows Hello or your Windows password in the window that opened." />
   if (c.ask.step === 'password') {
     return (
       <Field

@@ -31,6 +31,9 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::vault::actor::{Channel, VaultCaller};
 
+/// The computer's own user check for the vault's first-setup steps.
+pub(crate) mod presence;
+
 pub const STATUS: &str = "/cli/vault/status";
 pub const LIST: &str = "/cli/vault/list";
 pub const SHOW: &str = "/cli/vault/show";
@@ -2292,6 +2295,9 @@ struct ConfirmBody {
     secret_id: Option<String>,
     method: Option<String>,
     password: Option<String>,
+    /// `owner-login-password` only: which owner login (the only one when
+    /// absent).
+    username: Option<String>,
     /// Shown in the macOS sheet ("reveal STRIPE_KEY").
     label: Option<String>,
     /// `clone-carry` only: the clone request the confirm is for. The
@@ -2350,7 +2356,11 @@ const CONFIRM_ACTIONS: &[&str] = &[
     "rekey",
     "rollback",
     "restore",
-    "recovery-setup",
+    // The vault's first-setup steps: minted only by this computer's own
+    // user check (`presence`), never by the vault password.
+    presence::RECOVERY_SETUP,
+    presence::PASSWORD_SET,
+    presence::BACKUP_EXPORT_INITIAL,
     "recovery-rotate",
     "confirm-password-change",
     "legacy-export",
@@ -2481,6 +2491,9 @@ fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Val
     if !CONFIRM_ACTIONS.contains(&action) {
         return Err(err("bad_action", 400, "unknown confirm action"));
     }
+    if presence::is_action(action) {
+        return presence::start(c, action);
+    }
     let m = methods(vault, c);
     if m.is_empty() {
         return Err(err(
@@ -2529,6 +2542,16 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
     let action = b.action.as_deref().unwrap_or("");
     if !CONFIRM_ACTIONS.contains(&action) {
         return Err(err("bad_action", 400, "unknown confirm action"));
+    }
+    if presence::is_action(action) {
+        // A backup's token is bound to the folder the daemon resolves.
+        let secret_id = match crate::vault_use_routes::confirm_binding(vault, action, b.secret_id.as_deref()) {
+            Some(bound) => Some(bound?.0),
+            None => None,
+        };
+        let method = b.method.as_deref().unwrap_or("");
+        let t = presence::finish(vault, c, action, secret_id.as_deref(), method, b.username.as_deref(), b.password.as_deref(), ingress)?;
+        return Ok(json!({ "token": t, "expiresIn": 60 }));
     }
     if action == crate::clone_vault::CONFIRM_ACTION {
         if let Some(pid) = b.proposal.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -2637,24 +2660,15 @@ pub(crate) fn confirm_check(
     if !CONFIRM_ACTIONS.contains(&action) {
         return Err(err("bad_action", 400, "unknown confirm action"));
     }
+    if presence::is_action(action) {
+        // Only this computer's own user check mints these (`presence`).
+        return Err(presence::required(action));
+    }
     let stamp = c.actor.stamp();
     let res: Result<(), VaultError> = match method {
         "vault-password" => vault.check_confirm_password(password.unwrap_or(""), &stamp),
         "connect-password" => match &c.actor {
-            Actor::Login { username, .. } => {
-                vault.throttle.check()?;
-                match k2_core::connect_users::check_and_record(username, password.unwrap_or("")) {
-                    k2_core::connect_users::LoginOutcome::Ok => {
-                        vault.throttle.record(true);
-                        Ok(())
-                    }
-                    k2_core::connect_users::LoginOutcome::LockedOut => Err(err("confirm_locked", 429, "this login is locked for now")),
-                    k2_core::connect_users::LoginOutcome::BadCreds => {
-                        vault.throttle.record(false);
-                        Err(err("confirm_failed", 403, confirm_failed_hint(username)))
-                    }
-                }
-            }
+            Actor::Login { username, .. } => check_connect_password(vault, username, password.unwrap_or("")),
             _ => Err(err("bad_method", 400, "connect-password is for a Connect login")),
         },
         "local-auth" => local_auth(&format!("K2 vault: {}", reason.chars().filter(|ch| !ch.is_control()).take(160).collect::<String>())),
@@ -2669,6 +2683,22 @@ pub(crate) fn confirm_check(
         Err(e) => {
             crate::vault::auth_audit("vault-confirm", &stamp, &format!("deny {action} via {method}: {}", e.code), ingress);
             Err(e)
+        }
+    }
+}
+
+/// A Connect login's sign-in password (its lockout counts the misses).
+fn check_connect_password(vault: &LocalVault, username: &str, password: &str) -> Result<(), VaultError> {
+    vault.throttle.check()?;
+    match k2_core::connect_users::check_and_record(username, password) {
+        k2_core::connect_users::LoginOutcome::Ok => {
+            vault.throttle.record(true);
+            Ok(())
+        }
+        k2_core::connect_users::LoginOutcome::LockedOut => Err(err("confirm_locked", 429, "this login is locked for now")),
+        k2_core::connect_users::LoginOutcome::BadCreds => {
+            vault.throttle.record(false);
+            Err(err("confirm_failed", 403, confirm_failed_hint(username)))
         }
     }
 }
@@ -2795,45 +2825,32 @@ fn recovery_show(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8], i
     let b: RecoveryBody = parse(body)?;
     let (state, _, _) = vault.recovery_state();
     let confirmed = state == "confirmed";
-    let app_confirmed = match require_person(c, not_person) {
-        Ok(()) => {
-            human_admin(c)?;
-            false
-        }
-        // Settings → Vault (0.45.4): the owner token alone isn't a person,
-        // but a person's confirm is: the Mac's Touch ID / login password
-        // sheet (LocalAuthentication) or the vault password, which only a
-        // person can set. The single-use token for this exact action stands
-        // in for the person channel. Agents (passports) never get here.
+    let deny = |e: VaultError| {
+        crate::vault::auth_audit("vault-recovery", &stamp, &format!("deny show: {}", e.code), ingress);
+        e
+    };
+    match require_person(c, not_person) {
+        Ok(()) => human_admin(c)?,
+        // Settings → Vault (0.45.4): the owner token alone isn't a person;
+        // the single-use token for this exact action stands in for the
+        // person channel. Agents (passports) never get here.
         Err(e) if is_app_owner(c, not_person) => {
-            let action = if confirmed { "recovery-rotate" } else { "recovery-setup" };
-            let Some(token) = b.confirm_token.as_deref() else {
-                crate::vault::auth_audit("vault-recovery", &stamp, &format!("deny show: {}", e.code), ingress);
+            if b.confirm_token.is_none() {
+                let _ = deny(e);
                 return Err(err(
                     "person_required",
                     403,
                     "only a person can do this. In the K2 app use Settings → Vault → Set up recovery key (it asks you to confirm), or run k2 vault recovery show-once from your own SSH login or a terminal outside K2. Agents: don't run it; tell your owner.",
                 ));
-            };
-            if confirmed && path != RECOVERY_ROTATE {
-                return Err(err(
-                    "recovery_exists",
-                    409,
-                    "a recovery key is already confirmed; to replace it run k2 vault recovery rotate (needs a confirm)",
-                ));
             }
-            if let Err(e) = take_proof(vault, c, action, None, Some(token)) {
-                crate::vault::auth_audit("vault-recovery", &stamp, &format!("deny show: {}", e.code), ingress);
-                return Err(e);
-            }
-            true
         }
-        Err(e) => {
-            crate::vault::auth_audit("vault-recovery", &stamp, &format!("deny show: {}", e.code), ingress);
-            return Err(e);
-        }
-    };
-    if confirmed && !app_confirmed {
+        Err(e) => return Err(deny(e)),
+    }
+    if !confirmed {
+        // No recovery key yet: this computer's own user check, for every
+        // caller.
+        presence::take(vault, c, presence::RECOVERY_SETUP, None, b.confirm_token.as_deref()).map_err(deny)?;
+    } else {
         // A new key replaces the old one: confirm first (§12, VS2).
         if path != RECOVERY_ROTATE {
             return Err(err(
@@ -2842,7 +2859,7 @@ fn recovery_show(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8], i
                 "a recovery key is already confirmed; to replace it run k2 vault recovery rotate (needs a confirm)",
             ));
         }
-        take_proof(vault, c, "recovery-rotate", None, b.confirm_token.as_deref())?;
+        take_proof(vault, c, "recovery-rotate", None, b.confirm_token.as_deref()).map_err(deny)?;
     }
     let ch = vault.recovery_begin(&c.actor)?;
     crate::vault::auth_audit("vault-recovery", &stamp, "ok shown once", ingress);
@@ -2899,6 +2916,10 @@ fn confirm_password_set(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingres
         // Changing it: the old password (or a Connect owner login's
         // password) first. Reset otherwise needs the recovery key (VS16).
         take_proof(vault, c, "confirm-password-change", None, b.confirm_token.as_deref())?;
+    } else if let Err(e) = presence::take(vault, c, presence::PASSWORD_SET, None, b.confirm_token.as_deref()) {
+        // The first one: this computer's own user check.
+        crate::vault::auth_audit("vault-confirm-password", &stamp, &format!("deny: {}", e.code), ingress);
+        return Err(e);
     }
     let pw = b.password.as_deref().ok_or_else(|| err("password_required", 400, "type the new vault password"))?;
     vault.set_confirm_password(pw, &c.actor)?;

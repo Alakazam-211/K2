@@ -82,6 +82,63 @@ fn set_server(t: &T, name: &str, value: &str) {
     assert_eq!(s, 200, "{v}");
 }
 
+/// This computer's own user check, faked for this test's thread only:
+/// `method` is what it offers the owner (`None`: nothing), `approve` the
+/// person's answer to a prompt. Cleared on drop.
+struct Presence;
+
+impl Presence {
+    fn offers(method: Option<&'static str>, approve: bool) -> Self {
+        presence::fake::set(Some(presence::fake::Fake { method, approve }));
+        Presence
+    }
+
+    /// The Mac's sheet, approved.
+    fn approving() -> Self {
+        Self::offers(Some(presence::LOCAL_AUTH), true)
+    }
+}
+
+impl Drop for Presence {
+    fn drop(&mut self) {
+        presence::fake::set(None);
+    }
+}
+
+/// A token from this computer's own user check for one first-setup step.
+fn presence_token(t: &T, c: &VaultCaller, action: &str, secret: Option<&str>) -> String {
+    let mut body = json!({ "action": action, "method": presence::LOCAL_AUTH });
+    if let Some(sid) = secret {
+        body["secretId"] = json!(sid);
+    }
+    let (s, v) = call(t, CONFIRM_FINISH, c, body);
+    assert_eq!(s, 200, "{action}: {v}");
+    v["token"].as_str().expect("token").to_string()
+}
+
+/// The first vault password, set by a person at this computer.
+fn set_vault_password(t: &T, pw: &str) {
+    let _p = Presence::approving();
+    let tok = presence_token(t, &owner_tty(), presence::PASSWORD_SET, None);
+    let (s, v) = call(t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": pw, "confirmToken": tok }));
+    assert_eq!(s, 200, "{v}");
+}
+
+/// A recovery key, shown and confirmed by a person at this computer.
+/// Returns the phrase.
+fn set_up_recovery(t: &T) -> String {
+    let _p = Presence::approving();
+    let tok = presence_token(t, &owner_tty(), presence::RECOVERY_SETUP, None);
+    let (s, v) = call(t, RECOVERY_SHOW_ONCE, &owner_tty(), json!({ "confirmToken": tok }));
+    assert_eq!(s, 200, "{v}");
+    let phrase = v["phrase"].as_str().expect("phrase").to_string();
+    let words: Vec<&str> = phrase.split(' ').collect();
+    let (s, v2) = call(t, RECOVERY_CONFIRM, &owner_tty(), json!({ "id": v["id"], "words": [words[2], words[10], words[19]] }));
+    assert_eq!(s, 200, "{v2}");
+    assert_eq!(t.v.status().recovery, "confirmed");
+    phrase
+}
+
 #[test]
 fn sentinel_never_leaves_through_management_routes() {
     let t = vault();
@@ -162,8 +219,7 @@ fn reveal_needs_a_single_use_confirm_bound_to_the_secret() {
     let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner(), json!({ "password": "correct horse battery" }));
     assert_eq!(s, 403, "owner token over TCP isn't a person: {v}");
     assert_eq!(code(&v), "person_required");
-    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery" }));
-    assert_eq!(s, 200, "{v}");
+    set_vault_password(&t, "correct horse battery");
     let a_id = t.v.meta(&k2_vault::Selector::user(k2_vault::Scope::server(), "A"), &Actor::Owner).expect("meta").id;
     let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": "reveal", "secretId": a_id, "method": "vault-password", "password": "wrong password!!" }));
     assert_eq!(s, 403, "{v}");
@@ -195,14 +251,8 @@ fn recovery_is_for_people_even_on_a_fresh_vault() {
     let r = handle_on(&t.v, RECOVERY_SHOW_ONCE, Ok(owner()), b"{}", &HashMap::new(), "vault.sock", Some("runs inside K2 (a K2 terminal or agent)"));
     assert!(r.status.starts_with("403"), "{}", r.body);
     assert!(r.body.contains("runs inside K2"));
-    // A person over the vault socket.
-    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner_tty(), json!({}));
-    assert_eq!(s, 200, "{v}");
-    let phrase = v["phrase"].as_str().expect("phrase").to_string();
-    let words: Vec<&str> = phrase.split(' ').collect();
-    let (s, v) = call(&t, RECOVERY_CONFIRM, &owner_tty(), json!({ "id": v["id"], "words": [words[2], words[10], words[19]] }));
-    assert_eq!(s, 200, "{v}");
-    assert_eq!(t.v.status().recovery, "confirmed");
+    // A person over the vault socket, with this computer's own user check.
+    set_up_recovery(&t);
     // A second show-once doesn't silently replace it.
     let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner_tty(), json!({}));
     assert_eq!(s, 409, "{v}");
@@ -212,8 +262,8 @@ fn recovery_is_for_people_even_on_a_fresh_vault() {
 }
 
 /// 0.45.4 blocker: Settings → Vault (the K2 app, owner token over TCP)
-/// couldn't set up the recovery key at all. A person's confirm (the Mac's
-/// sheet or the vault password) now stands in for the person channel.
+/// couldn't set up the recovery key at all. This computer's own user check
+/// stands in for the person channel.
 #[test]
 fn the_app_sets_up_the_recovery_key_after_a_confirm() {
     let t = vault();
@@ -222,9 +272,8 @@ fn the_app_sets_up_the_recovery_key_after_a_confirm() {
     assert_eq!(s, 403, "{v}");
     assert_eq!(code(&v), "person_required");
     assert!(v["error"]["hint"].as_str().expect("hint").contains("Settings → Vault"), "{v}");
-    // A vault password set by a person (no global LA fake: tests run in parallel).
-    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery" }));
-    assert_eq!(s, 200, "{v}");
+    set_vault_password(&t, "correct horse battery");
+    let _p = Presence::approving();
     // A confirm for another action doesn't count.
     let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": "rekey", "method": "vault-password", "password": "correct horse battery" }));
     assert_eq!(s, 200, "{v}");
@@ -232,10 +281,8 @@ fn the_app_sets_up_the_recovery_key_after_a_confirm() {
     let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner(), json!({ "confirmToken": wrong }));
     assert_eq!(s, 403, "{v}");
     assert_eq!(code(&v), "vault_confirm_required");
-    // The app's confirm for recovery setup.
-    let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": "recovery-setup", "method": "vault-password", "password": "correct horse battery" }));
-    assert_eq!(s, 200, "recovery-setup is a confirm action: {v}");
-    let tok = v["token"].as_str().expect("token").to_string();
+    // The app's confirm for recovery setup: this computer's own check.
+    let tok = presence_token(&t, &owner(), presence::RECOVERY_SETUP, None);
     // Agents never get here, token or not.
     let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &agent("ws1", true), json!({ "confirmToken": tok }));
     assert_eq!(s, 403, "{v}");
@@ -254,9 +301,8 @@ fn the_app_sets_up_the_recovery_key_after_a_confirm() {
     assert_eq!(s, 400, "{v2}");
     assert_eq!(t.v.status().recovery, "unconfirmed");
     // Start again and type the right words back, from the app.
-    let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": "recovery-setup", "method": "vault-password", "password": "correct horse battery" }));
-    assert_eq!(s, 200, "{v}");
-    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner(), json!({ "confirmToken": v["token"] }));
+    let tok = presence_token(&t, &owner(), presence::RECOVERY_SETUP, None);
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner(), json!({ "confirmToken": tok }));
     assert_eq!(s, 200, "{v}");
     let phrase = v["phrase"].as_str().expect("phrase").to_string();
     let words: Vec<&str> = phrase.split(' ').collect();
@@ -265,9 +311,8 @@ fn the_app_sets_up_the_recovery_key_after_a_confirm() {
     assert_eq!(v["recovery"], "confirmed");
     assert_eq!(t.v.status().recovery, "confirmed");
     // Once confirmed, show-once doesn't replace it; rotate needs its own confirm.
-    let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": "recovery-setup", "method": "vault-password", "password": "correct horse battery" }));
-    assert_eq!(s, 200, "{v}");
-    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner(), json!({ "confirmToken": v["token"] }));
+    let tok = presence_token(&t, &owner(), presence::RECOVERY_SETUP, None);
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner(), json!({ "confirmToken": tok }));
     assert_eq!(s, 409, "{v}");
     assert_eq!(code(&v), "recovery_exists");
     let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": "recovery-rotate", "method": "vault-password", "password": "correct horse battery" }));
@@ -281,7 +326,9 @@ fn an_agent_with_the_owner_token_cannot_finish_someone_elses_recovery_without_th
     let t = vault();
     // A person starts on the vault socket; the raw owner token can't
     // confirm without the words only that person saw.
-    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner_tty(), json!({}));
+    let _p = Presence::approving();
+    let tok = presence_token(&t, &owner_tty(), presence::RECOVERY_SETUP, None);
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner_tty(), json!({ "confirmToken": tok }));
     assert_eq!(s, 200, "{v}");
     let (s, v2) = call(&t, RECOVERY_CONFIRM, &owner(), json!({ "id": v["id"], "words": ["abandon", "abandon", "abandon"] }));
     assert_eq!(s, 400, "{v2}");
@@ -742,12 +789,8 @@ fn restoring_a_backup_is_for_people_and_checks_before_replacing() {
     use crate::vault_use_routes::BACKUP;
     let src = vault();
     set_server(&src, "STRIPE_KEY", SENTINEL);
-    let (s, v) = call(&src, RECOVERY_SHOW_ONCE, &owner_tty(), json!({}));
-    assert_eq!(s, 200, "{v}");
-    let phrase = v["phrase"].as_str().expect("phrase").to_string();
+    let phrase = set_up_recovery(&src);
     let words: Vec<&str> = phrase.split(' ').collect();
-    let (s, v) = call(&src, RECOVERY_CONFIRM, &owner_tty(), json!({ "id": v["id"], "words": [words[2], words[10], words[19]] }));
-    assert_eq!(s, 200, "{v}");
     let out = TestDir::new("backup-out");
     let (s, v) = call(&src, BACKUP, &agent("ws1", true), json!({ "destDir": out.path() }));
     assert_eq!(s, 403, "agents don't take backups over the routes: {v}");
@@ -1160,8 +1203,7 @@ fn backup_key_needs_a_person_and_a_confirm() {
     assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
     assert_eq!(t.v.status().holders.len(), 1, "nothing added");
     // A confirm for another key doesn't count; a bad binding is refused.
-    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery" }));
-    assert_eq!(s, 200, "{v}");
+    set_vault_password(&t, "correct horse battery");
     let other = k2_vault::agefmt::Identity::generate().recipient().encode();
     let confirm = |sid: &str| {
         let (s, v) = call(
@@ -1261,6 +1303,9 @@ fn doctor_and_boot_flag_a_backup_key_added_without_a_confirm() {
 fn vault_backup_needs_a_person_or_a_confirm() {
     use crate::vault_use_routes::{BACKUP, BACKUP_EXPORT_CONFIRM};
     let t = vault();
+    // Once a recovery key is confirmed (before that:
+    // `backup_before_recovery_needs_presence`).
+    set_up_recovery(&t);
     let out = TestDir::new("backup-out");
     let dir = std::fs::canonicalize(out.path()).expect("canon").display().to_string();
     let body = json!({ "destDir": dir });
@@ -1275,8 +1320,7 @@ fn vault_backup_needs_a_person_or_a_confirm() {
     assert!(v["error"]["hint"].as_str().expect("hint").ends_with("It can't be requested."), "{v}");
     assert!(!out.path().join("vault.db").exists());
     // The app with a person's confirm for this folder.
-    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery" }));
-    assert_eq!(s, 200, "{v}");
+    set_vault_password(&t, "correct horse battery");
     let (s, v) = call(
         &t,
         CONFIRM_FINISH,
@@ -1319,8 +1363,7 @@ fn a_readable_grant_from_the_owner_token_needs_a_confirm() {
     assert_eq!(s, 200, "a fetch grant: {v}");
     assert_eq!(v["grant"]["delivery"], "fetch");
     // A person with a confirm bound to A.
-    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery" }));
-    assert_eq!(s, 200, "{v}");
+    set_vault_password(&t, "correct horse battery");
     let id = |n: &str| t.v.meta(&k2_vault::Selector::user(k2_vault::Scope::server(), n), &Actor::Owner).expect("meta").id;
     let confirm = |action: &str, sid: &str| {
         let (s, v) = call(
@@ -1655,4 +1698,259 @@ fn use_files_refuse_a_bad_ttl_before_writing() {
         let (s, v) = call(&t, path, &a, body);
         assert_eq!((s, code(&v)), (400, "bad_ttl"), "{path}: {v}");
     }
+}
+
+// ── the vault's first-setup steps: this computer's own user check ──
+
+fn assert_presence_required(s: u16, v: &Value, what: &str) {
+    assert_eq!((s, code(v)), (403, presence::CODE), "{what}: {v}");
+}
+
+#[test]
+fn first_password_set_needs_presence() {
+    let t = vault();
+    let _p = Presence::approving();
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery" }));
+    assert_presence_required(s, &v, "a person at a terminal, no check");
+    assert!(v["error"]["hint"].as_str().expect("hint").contains("k2 vault confirm-password set"), "{v}");
+    assert!(!t.v.has_confirm_password());
+    // The person channel still comes first: the app (owner token over TCP)
+    // never sets it, check or not.
+    let tok = presence_token(&t, &owner(), presence::PASSWORD_SET, None);
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner(), json!({ "password": "correct horse battery", "confirmToken": tok }));
+    assert_eq!((s, code(&v)), (403, "person_required"), "{v}");
+    // With the check: set.
+    let tok = presence_token(&t, &owner_tty(), presence::PASSWORD_SET, None);
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery", "confirmToken": tok.clone() }));
+    assert_eq!(s, 200, "{v}");
+    assert!(t.v.has_confirm_password());
+    // Single use.
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "another horse battery", "confirmToken": tok }));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+}
+
+#[test]
+fn recovery_words_before_a_confirmed_key_need_presence() {
+    let t = vault();
+    let _p = Presence::approving();
+    for c in [owner_tty(), login(Role::Owner)] {
+        let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &c, json!({}));
+        assert_presence_required(s, &v, "show-once");
+        let (s, v) = call(&t, RECOVERY_ROTATE, &c, json!({}));
+        assert_presence_required(s, &v, "rotate with nothing to rotate");
+    }
+    assert_eq!(t.v.status().recovery, "unconfirmed");
+    // A confirm minted by the vault password isn't this computer's check.
+    t.v.set_confirm_password("correct horse battery", &Actor::Owner).expect("vault password");
+    let (s, v) = call(&t, CONFIRM_FINISH, &owner_tty(), json!({ "action": presence::RECOVERY_SETUP, "method": "vault-password", "password": "correct horse battery" }));
+    assert_eq!((s, code(&v)), (400, "bad_method"), "{v}");
+    // With the check: shown once, and finished with the words.
+    let tok = presence_token(&t, &owner_tty(), presence::RECOVERY_SETUP, None);
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner_tty(), json!({ "confirmToken": tok }));
+    assert_eq!(s, 200, "{v}");
+    let words: Vec<String> = v["phrase"].as_str().expect("phrase").split(' ').map(str::to_string).collect();
+    // recovery/confirm finishes only a show-once this daemon handed out.
+    let (s, v2) = call(&t, RECOVERY_CONFIRM, &owner_tty(), json!({ "id": "made-up", "words": [words[2], words[10], words[19]] }));
+    assert_eq!((s, code(&v2)), (409, "recovery_expired"), "{v2}");
+    let (s, v2) = call(&t, RECOVERY_CONFIRM, &owner_tty(), json!({ "id": v["id"], "words": [words[2], words[10], words[19]] }));
+    assert_eq!(s, 200, "{v2}");
+    assert_eq!(t.v.status().recovery, "confirmed");
+}
+
+#[test]
+fn backup_before_recovery_needs_presence() {
+    use crate::vault_use_routes::BACKUP;
+    let t = vault();
+    let _p = Presence::approving();
+    let out = TestDir::new("backup-first");
+    let dir = std::fs::canonicalize(out.path()).expect("canon").display().to_string();
+    let body = json!({ "destDir": dir });
+    // A person at a terminal, a Connect owner, the app, and the owner's own
+    // process on the vault socket with no terminal (a crontab).
+    for c in [owner_tty(), login(Role::Owner), owner()] {
+        let (s, v) = call(&t, BACKUP, &c, body.clone());
+        assert_presence_required(s, &v, "backup");
+    }
+    let r = handle_on(&t.v, BACKUP, Ok(owner()), body.to_string().as_bytes(), &HashMap::new(), "vault.sock", None);
+    assert!(r.status.starts_with("403") && r.body.contains(presence::CODE), "{}", r.body);
+    assert!(!out.path().join("vault.db").exists(), "nothing written");
+    // The app's own backup confirm isn't this computer's check.
+    t.v.set_confirm_password("correct horse battery", &Actor::Owner).expect("vault password");
+    let (s, v) = call(
+        &t,
+        CONFIRM_FINISH,
+        &owner(),
+        json!({ "action": crate::vault_use_routes::BACKUP_EXPORT_CONFIRM, "secretId": dir, "method": "vault-password", "password": "correct horse battery" }),
+    );
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, BACKUP, &owner(), json!({ "destDir": dir, "confirmToken": v["token"] }));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "the app's backup confirm is for another step: {v}");
+    assert!(!out.path().join("vault.db").exists(), "nothing written");
+    // With the check, bound to this folder.
+    let other = TestDir::new("backup-other");
+    let tok = presence_token(&t, &owner_tty(), presence::BACKUP_EXPORT_INITIAL, Some(&other.path().display().to_string()));
+    let (s, v) = call(&t, BACKUP, &owner_tty(), json!({ "destDir": dir, "confirmToken": tok }));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "a token for another folder: {v}");
+    let tok = presence_token(&t, &owner_tty(), presence::BACKUP_EXPORT_INITIAL, Some(&dir));
+    let (s, v) = call(&t, BACKUP, &owner_tty(), json!({ "destDir": dir, "confirmToken": tok }));
+    assert_eq!(s, 200, "{v}");
+    assert!(out.path().join("vault.db").is_file());
+    // Once a recovery key is confirmed, a person at a terminal backs up as
+    // before (vault_backup_needs_a_person_or_a_confirm).
+    set_up_recovery(&t);
+    let out2 = TestDir::new("backup-after");
+    let (s, v) = call(&t, BACKUP, &owner_tty(), json!({ "destDir": out2.path().display().to_string() }));
+    assert_eq!(s, 200, "{v}");
+}
+
+#[test]
+fn a_presence_proof_works_for_its_own_step_only() {
+    use crate::vault_use_routes::BACKUP;
+    let t = vault();
+    let _p = Presence::approving();
+    let out = TestDir::new("backup-bound");
+    let dir = std::fs::canonicalize(out.path()).expect("canon").display().to_string();
+    let tty = owner_tty();
+    // password-set → recovery
+    let tok = presence_token(&t, &tty, presence::PASSWORD_SET, None);
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &tty, json!({ "confirmToken": tok }));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    // recovery → backup
+    let tok = presence_token(&t, &tty, presence::RECOVERY_SETUP, None);
+    let (s, v) = call(&t, BACKUP, &tty, json!({ "destDir": dir, "confirmToken": tok }));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    // backup → password-set
+    let tok = presence_token(&t, &tty, presence::BACKUP_EXPORT_INITIAL, Some(&dir));
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &tty, json!({ "password": "correct horse battery", "confirmToken": tok }));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    // A step's proof doesn't reveal, and a reveal confirm doesn't set up.
+    t.v.set_confirm_password("correct horse battery", &Actor::Owner).expect("vault password");
+    set_server(&t, "A", SENTINEL);
+    let a_id = t.v.meta(&k2_vault::Selector::user(k2_vault::Scope::server(), "A"), &Actor::Owner).expect("meta").id;
+    let tok = presence_token(&t, &owner(), presence::RECOVERY_SETUP, None);
+    let (s, v) = call(&t, REVEAL, &owner(), json!({ "id": a_id, "confirmToken": tok }));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    let (s, v) = call(&t, CONFIRM_FINISH, &tty, json!({ "action": "reveal", "secretId": a_id, "method": "vault-password", "password": "correct horse battery" }));
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &tty, json!({ "confirmToken": v["token"] }));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    // Nothing was set up along the way.
+    assert_eq!(t.v.status().recovery, "unconfirmed");
+    assert!(!out.path().join("vault.db").exists());
+}
+
+#[test]
+fn presence_steps_refuse_when_this_computer_has_no_check() {
+    use crate::vault_use_routes::BACKUP;
+    let t = vault();
+    let _p = Presence::offers(None, true);
+    let out = TestDir::new("backup-none");
+    let dir = std::fs::canonicalize(out.path()).expect("canon").display().to_string();
+    for action in presence::ACTIONS {
+        let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": action }));
+        assert_eq!((s, code(&v)), (409, presence::CODE), "{action}: {v}");
+        assert!(v["error"]["hint"].as_str().expect("hint").contains("k2 users add"), "names the next step: {v}");
+        let (s, v) = call(&t, CONFIRM_FINISH, &owner_tty(), json!({ "action": action, "secretId": dir, "method": presence::LOCAL_AUTH }));
+        assert_eq!((s, code(&v)), (409, presence::CODE), "{action}: {v}");
+    }
+    // The steps themselves: refused, never let through on the person check.
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery" }));
+    assert_eq!((s, code(&v)), (409, presence::CODE), "{v}");
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner_tty(), json!({}));
+    assert_eq!((s, code(&v)), (409, presence::CODE), "{v}");
+    let (s, v) = call(&t, BACKUP, &owner_tty(), json!({ "destDir": dir }));
+    assert_eq!((s, code(&v)), (409, presence::CODE), "{v}");
+    // The vault password doesn't stand in.
+    t.v.set_confirm_password("correct horse battery", &Actor::Owner).expect("vault password");
+    let (s, v) = call(&t, CONFIRM_FINISH, &owner_tty(), json!({ "action": presence::RECOVERY_SETUP, "method": "vault-password", "password": "correct horse battery" }));
+    assert_eq!((s, code(&v)), (409, presence::CODE), "{v}");
+    assert_eq!(t.v.status().recovery, "unconfirmed");
+    assert!(!out.path().join("vault.db").exists());
+}
+
+#[test]
+fn a_declined_presence_check_mints_nothing() {
+    let t = vault();
+    let _p = Presence::offers(Some(presence::LOCAL_AUTH), false);
+    let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": presence::PASSWORD_SET }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["methods"], json!([presence::LOCAL_AUTH]), "only this computer's own check: {v}");
+    let (s, v) = call(&t, CONFIRM_FINISH, &owner_tty(), json!({ "action": presence::PASSWORD_SET, "method": presence::LOCAL_AUTH }));
+    assert_eq!((s, code(&v)), (403, "confirm_failed"), "{v}");
+    // Agents never reach it.
+    let (s, v) = call(&t, CONFIRM_FINISH, &agent("ws1", true), json!({ "action": presence::PASSWORD_SET, "method": presence::LOCAL_AUTH }));
+    assert_eq!((s, code(&v)), (403, "owner_only"), "{v}");
+}
+
+/// A Linux server: an owner login's sign-in password is the check; a
+/// Connect login uses its own password.
+#[test]
+fn owner_login_password_is_the_check_on_a_linux_server() {
+    use k2_core::connect_users::{add_user, set_role, Role as R};
+    let _home = crate::test_support::TempHome::new();
+    let t = vault();
+    let _p = Presence::offers(Some(presence::OWNER_LOGIN_PASSWORD), false);
+    add_user("rosa", "rosas sign-in pw").expect("rosa");
+    set_role("rosa", R::Owner).expect("owner");
+    add_user("lee", "lees sign-in pw").expect("lee");
+    set_role("lee", R::Owner).expect("owner 2");
+    let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": presence::PASSWORD_SET }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["methods"], json!([presence::OWNER_LOGIN_PASSWORD]), "{v}");
+    assert_eq!(v["login"], Value::Null, "two owners: the CLI asks which: {v}");
+    let finish = |user: Option<&str>, pw: &str| {
+        let mut b = json!({ "action": presence::PASSWORD_SET, "method": presence::OWNER_LOGIN_PASSWORD, "password": pw });
+        if let Some(u) = user {
+            b["username"] = json!(u);
+        }
+        call(&t, CONFIRM_FINISH, &owner_tty(), b)
+    };
+    let (s, v) = finish(None, "rosas sign-in pw");
+    assert_eq!((s, code(&v)), (400, "username_required"), "{v}");
+    let (s, v) = finish(Some("rosa"), "wrong password!!");
+    assert_eq!((s, code(&v)), (403, "confirm_failed"), "{v}");
+    let (s, v) = finish(Some("nobody"), "rosas sign-in pw");
+    assert_eq!((s, code(&v)), (403, "confirm_failed"), "{v}");
+    let (s, v) = finish(Some("rosa"), "rosas sign-in pw");
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery", "confirmToken": v["token"] }));
+    assert_eq!(s, 200, "{v}");
+    // A Connect owner login confirms with its own password.
+    let lee = VaultCaller { actor: Actor::Login { username: "lee".into(), role: Role::Owner }, channel: Channel::Login, session_id: None };
+    let (s, v) = call(&t, CONFIRM_START, &lee, json!({ "action": presence::RECOVERY_SETUP }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["methods"], json!([presence::CONNECT_PASSWORD]), "{v}");
+    let (s, v) = call(&t, CONFIRM_FINISH, &lee, json!({ "action": presence::RECOVERY_SETUP, "method": presence::CONNECT_PASSWORD, "password": "lees sign-in pw" }));
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &lee, json!({ "confirmToken": v["token"] }));
+    assert_eq!(s, 200, "{v}");
+}
+
+/// The steps outside the first setup keep their own confirms: changing a
+/// set vault password, rotating a confirmed recovery key, and reveal.
+#[test]
+fn changing_a_set_password_and_rotating_a_confirmed_key_keep_their_confirms() {
+    let t = vault();
+    set_vault_password(&t, "correct horse battery");
+    set_up_recovery(&t);
+    // No presence check offered from here on: these don't need one.
+    let _p = Presence::offers(None, false);
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "another horse battery" }));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    let (s, v) = call(&t, CONFIRM_FINISH, &owner_tty(), json!({ "action": "confirm-password-change", "method": "vault-password", "password": "correct horse battery" }));
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "another horse battery", "confirmToken": v["token"] }));
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, RECOVERY_ROTATE, &owner_tty(), json!({}));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    let (s, v) = call(&t, CONFIRM_FINISH, &owner_tty(), json!({ "action": "recovery-rotate", "method": "vault-password", "password": "another horse battery" }));
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, RECOVERY_ROTATE, &owner_tty(), json!({ "confirmToken": v["token"] }));
+    assert_eq!(s, 200, "{v}");
+    set_server(&t, "A", SENTINEL);
+    let a_id = t.v.meta(&k2_vault::Selector::user(k2_vault::Scope::server(), "A"), &Actor::Owner).expect("meta").id;
+    let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": "reveal", "secretId": a_id, "method": "vault-password", "password": "another horse battery" }));
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, REVEAL, &owner(), json!({ "id": a_id, "confirmToken": v["token"] }));
+    assert_eq!(s, 200, "reveal is unchanged: {v}");
 }

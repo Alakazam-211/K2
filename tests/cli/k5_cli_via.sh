@@ -270,7 +270,7 @@ site "migrate GET on vault.sock (migrate status)" "" vault /cli/migrate/secrets/
     "$K2_CLI" migrate status
 site "migrate POST on vault.sock (import-secrets begin)" "" vault /cli/migrate/secrets/begin "/cli/migrate/secrets/begin" 600 \
     "$K2_CLI" migrate import-secrets begin
-site "vault POST on vault.sock (recovery show-once)" "" vault /cli/vault/recovery/show-once "/cli/vault/recovery/show-once" 180 \
+site "vault POST on vault.sock (recovery show-once's confirm)" "" vault /cli/vault/confirm/start "/cli/vault/confirm/start" 180 \
     "$K2_CLI" vault recovery show-once
 site "vault GET on vault.sock (confirm-password set)" "" vault /cli/vault/status "/cli/vault/status" 180 \
     "$K2_CLI" vault confirm-password set

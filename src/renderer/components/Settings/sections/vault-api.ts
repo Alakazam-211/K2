@@ -154,6 +154,8 @@ export interface VaultConfirmFinishBody {
   secretId?: string
   method: string
   password?: string
+  /** `owner-login-password` only: which owner login. */
+  username?: string
   label?: string
 }
 

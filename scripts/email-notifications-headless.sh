@@ -150,6 +150,30 @@ if [ "$MODE" = service ]; then
     echo "ALL PASS (service mode: the confirm-gated half needs a person's terminal)"
     exit 0
 fi
+[ "$(field error.code)" = vault_presence_required ] || fail "the first vault password needs this computer's own user check: $BODY"
+pass "the first vault password needs this computer's own user check"
+# This computer's own user check: the Mac's sheet (a person approves it), or
+# on Linux an owner login's sign-in password (one made here for the run).
+OWNER_PW="headless-owner-$(date +%s)-pw"
+if [ "$(uname -s)" != Darwin ]; then
+    call POST /cli/users/add "{\"username\":\"headlessowner\",\"password\":\"$OWNER_PW\",\"mustChangePassword\":false}"
+    expect 200 "an owner login for the user check"
+    call POST /cli/users/set-role '{"username":"headlessowner","role":"owner"}'
+    expect 200 "the login is an owner"
+fi
+vault confirm/start '{"action":"vault-password-set"}'
+[ "$STATUS" = 200 ] || fail "confirm start vault-password-set: $BODY"
+case "$(field methods.0)" in
+    local-auth)
+        echo "Approve on this Mac (Touch ID or your login password)…" >&2
+        vault confirm/finish '{"action":"vault-password-set","method":"local-auth"}' ;;
+    owner-login-password)
+        vault confirm/finish "{\"action\":\"vault-password-set\",\"method\":\"owner-login-password\",\"password\":\"$OWNER_PW\"}" ;;
+    *) fail "no user check offered: $BODY" ;;
+esac
+[ "$STATUS" = 200 ] || fail "confirm finish vault-password-set: $BODY"
+PT="$(field token)"
+vault confirm-password/set "{\"password\":\"$VPW\",\"confirmToken\":\"$PT\"}"
 expect 200 "vault confirm password set"
 # A fresh confirm token for (action, secretId).
 token_for() {

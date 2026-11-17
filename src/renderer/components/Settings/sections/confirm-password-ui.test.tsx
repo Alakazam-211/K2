@@ -62,6 +62,7 @@ describe('the password confirm names the server and the login', () => {
     expect(confirmPasswordLabel('connect-password', { login: 'ada' }, 'Shop server')).toBe('Your sign-in password for Shop server (login ada)')
     expect(confirmPasswordLabel('connect-password', {})).toBe('Your sign-in password for this server')
     expect(confirmPasswordLabel('vault-password', { login: 'ada' })).toBe('Your vault password')
+    expect(confirmPasswordLabel('owner-login-password', { server: 'box.k2.dev', login: 'ada' })).toBe('Your sign-in password for box.k2.dev (owner login ada)')
     expect(readConfirmIdentity({ server: ' box.k2.dev ', login: '' })).toEqual({ server: 'box.k2.dev', login: null })
     expect(scopeServerName(PRIMARY)).toBeUndefined()
     expect(scopeServerName({ isPrimary: true, isRemote: true, hostKey: 'box.k2.dev', label: 'x' })).toBe('box.k2.dev')

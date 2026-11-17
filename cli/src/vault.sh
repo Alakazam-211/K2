@@ -388,18 +388,26 @@ if v.get("recoveryHint"):
 }
 
 # Ask the daemon for a confirm token over vault.sock (Touch ID sheet on a
-# Mac, else the vault password typed here). Prints the token.
+# Mac, else the vault password typed here). Prints the token. The vault's
+# first-setup steps (vault-password-set, recovery-setup,
+# backup-export-initial) take this computer's own user check instead: the
+# Mac's sheet, Windows Hello, or on a Linux server an owner login's
+# sign-in password.
 _vault_confirm_token() {
     local action="$1" secret_id="${2:-}" label="${3:-}"
     _vault_sock_call POST "confirm/start" "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1]}))' "$action")"
     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
-    local methods
+    local methods login
     methods="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin).get("methods") or []))')"
+    login="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("login") or "")')"
     local body
+    local first_setup=0
+    case "$action" in vault-password-set|recovery-setup|backup-export-initial) first_setup=1 ;; esac
     # K2_VAULT_CONFIRM_METHOD=vault-password: use the vault password even on
     # a Mac with Touch ID (a headless run, e.g. the two-server harness). The
-    # same check as always: the daemon verifies the vault password.
-    if [ "$(_envn VAULT_CONFIRM_METHOD)" = "vault-password" ]; then
+    # same check as always: the daemon verifies the vault password. Not for
+    # the first-setup steps (the vault password isn't their check).
+    if [ "$first_setup" = 0 ] && [ "$(_envn VAULT_CONFIRM_METHOD)" = "vault-password" ]; then
         case " $methods " in
             *" vault-password "*) methods="vault-password" ;;
             *) echo "no_confirm_method: K2_VAULT_CONFIRM_METHOD=vault-password, but no vault password is set (k2 vault confirm-password set)" >&2; exit 3 ;;
@@ -409,6 +417,22 @@ _vault_confirm_token() {
         *" local-auth "*)
             echo "Approve on this Mac (Touch ID or your login password)…" >&2
             body="$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "local-auth", "label": sys.argv[3]}))' "$action" "$secret_id" "$label")"
+            ;;
+        *" windows-hello "*)
+            echo "Approve on this PC (Windows Hello or your Windows password)…" >&2
+            body="$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "windows-hello"}))' "$action" "$secret_id")"
+            ;;
+        *" owner-login-password "*)
+            local pw=""
+            if [ -z "$login" ]; then
+                printf 'Owner login on this server: ' >&2
+                IFS= read -r login || login=""
+            fi
+            printf 'Sign-in password for owner login %s: ' "$login" >&2
+            IFS= read -rs pw || pw=""
+            echo >&2
+            body="$(printf '%s' "$pw" | python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "owner-login-password", "username": sys.argv[3], "password": sys.stdin.read()}))' "$action" "$secret_id" "$login")"
+            pw=""
             ;;
         *" vault-password "*)
             local pw=""

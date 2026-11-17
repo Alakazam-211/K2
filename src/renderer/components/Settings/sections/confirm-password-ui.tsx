@@ -34,10 +34,11 @@ export function readConfirmIdentity(res: unknown): ConfirmIdentity {
  *  `fallbackServer` (the window's name for that server) stands in when the
  *  daemon didn't name it. */
 export function confirmPasswordLabel(method: string, who: ConfirmIdentity, fallbackServer?: string): string {
-  if (method !== 'connect-password') return 'Your vault password'
+  if (method !== 'connect-password' && method !== 'owner-login-password') return 'Your vault password'
   const server = text(who.server) ?? text(fallbackServer) ?? 'this server'
   const login = text(who.login)
-  return login ? `Your sign-in password for ${server} (login ${login})` : `Your sign-in password for ${server}`
+  const kind = method === 'owner-login-password' ? 'owner login' : 'login'
+  return login ? `Your sign-in password for ${server} (${kind} ${login})` : `Your sign-in password for ${server}`
 }
 
 /** The window's own name for a server, when the daemon didn't name itself:
@@ -56,7 +57,7 @@ export function scopeServerName(
  *  Nothing when the login isn't known (the vault password has none). */
 export function LoginUsernameField({ method, who, testId }: { method: string; who: ConfirmIdentity; testId?: string }): React.JSX.Element | null {
   const login = text(who.login)
-  if (method !== 'connect-password' || !login) return null
+  if ((method !== 'connect-password' && method !== 'owner-login-password') || !login) return null
   return (
     <input
       type="text"

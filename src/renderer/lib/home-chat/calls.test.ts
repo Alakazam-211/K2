@@ -56,8 +56,8 @@ describe('the call record line', () => {
     const at = { ended_at: '2026-11-14T12:01:00Z' }
     // They called (42), you (41) missed it.
     expect(callRecordLine(summary({ ...at, end_reason: 'no_answer', missed_ids: ['41'] }), '41').action).toBe('Call back')
-    // You called (42 is you here); they didn't answer.
-    expect(callRecordLine(summary({ ...at, end_reason: 'no_answer', missed_ids: ['41'] }), '42').action).toBe('Call again')
+    // You called (42 is you here); they didn't answer: "No answer", not a missed call.
+    expect(callRecordLine(summary({ ...at, end_reason: 'no_answer', missed_ids: ['41'] }), '42')).toEqual({ kind: 'no-answer', text: 'No answer', action: 'Call again' })
     // A call that happened.
     expect(callRecordLine(summary({ ...at, end_reason: 'empty', joined_ids: ['42', '41'], duration_ms: 5_000 }), '41').action).toBe('Call again')
     expect(callRecordLine(summary({ ...at, end_reason: 'declined', declined_ids: ['41'] }), '41').action).toBe('Call again')

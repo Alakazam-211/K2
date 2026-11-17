@@ -155,7 +155,7 @@ export function formatCallDuration(ms: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`
 }
 
-export type CallRecordKind = 'live' | 'missed' | 'declined' | 'cancelled' | 'answered' | 'ended'
+export type CallRecordKind = 'live' | 'missed' | 'no-answer' | 'declined' | 'cancelled' | 'answered' | 'ended'
 
 export interface CallRecordLine {
   kind: CallRecordKind
@@ -177,8 +177,9 @@ export function callRecordLine(s: HomeChatCallSummary, me: string | null): CallR
   // Answered: someone besides the caller joined.
   if (s.joinedIds.length >= 2) return { kind: 'answered', text: `Call · ${formatCallDuration(s.durationMs ?? 0)}`, action: again }
   if (s.endReason === 'no_answer' || s.missedIds.length > 0) {
-    const yours = me !== null && s.startedBy === me
-    return { kind: 'missed', text: 'Missed call', action: yours ? again : 'Call back' }
+    // Your own call nobody picked up isn't a missed call: it says so plainly.
+    if (me !== null && s.startedBy === me) return { kind: 'no-answer', text: 'No answer', action: again }
+    return { kind: 'missed', text: 'Missed call', action: 'Call back' }
   }
   return { kind: 'ended', text: 'Call ended', action: again }
 }

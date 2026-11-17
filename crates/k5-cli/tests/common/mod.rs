@@ -57,12 +57,24 @@ pub fn block(text: &str, first: &str, last: &str) -> String {
 /// set to `argv0`; returns its stdout. Fails on any error or stderr.
 #[cfg(unix)]
 pub fn bash(script: &str, argv0: &str, env: &[(&str, &str)]) -> String {
+    run_bash(script, argv0, &[], env)
+}
+
+/// Runs `script` under `bash -c` with `$1...` set to `args`, nothing in
+/// its environment but `PATH`; returns its stdout.
+#[cfg(unix)]
+pub fn bash_args(script: &str, args: &[&str]) -> String {
+    run_bash(script, "bash", args, &[])
+}
+
+#[cfg(unix)]
+fn run_bash(script: &str, argv0: &str, args: &[&str], env: &[(&str, &str)]) -> String {
     let mut cmd = std::process::Command::new("bash");
     cmd.env_clear();
     if let Some(path) = std::env::var_os("PATH") {
         cmd.env("PATH", path);
     }
-    cmd.envs(env.iter().copied()).arg("-c").arg(script).arg(argv0);
+    cmd.envs(env.iter().copied()).arg("-c").arg(script).arg(argv0).args(args);
     let out = cmd.output().unwrap_or_else(|e| panic!("run bash: {e}"));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success() && stderr.is_empty(), "bash failed ({}): {stderr}\nscript:\n{script}", out.status);

@@ -99,7 +99,23 @@ pub fn k2_home() -> PathBuf {
 /// [`k2_home`], or `None` when there is no override and no user home: for
 /// a caller with its own fallback (an error, a temp folder).
 pub fn k2_home_opt() -> Option<PathBuf> {
-    home_override().or_else(|| home_dir().map(|h| k2_home_in(&h)))
+    k2_home_from(crate::env_names::first_set_os(crate::env_names::HOME_OVERRIDE), home_dir).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// The rule of [`k2_home_opt`] over the override as already read and the
+/// user home: the override when one is set, else `<user home>/.k2`, else
+/// `None`. An override that is set but not absolute is an error naming
+/// its variable ([`home_override_from`]). `user_home` is asked only when
+/// there is no override. For a caller that reports the error instead of
+/// panicking (the Rust CLI).
+pub fn k2_home_from(
+    read: Option<(&'static str, std::ffi::OsString)>,
+    user_home: impl FnOnce() -> Option<PathBuf>,
+) -> Result<Option<PathBuf>, crate::env_names::Malformed> {
+    Ok(match home_override_from(read)? {
+        Some(over) => Some(over),
+        None => user_home().map(k2_home_in),
+    })
 }
 
 /// The K2 home inside the user home `home`: `<home>/.k2`. For code that is
@@ -174,6 +190,23 @@ mod tests {
             assert_eq!(err.name, "K2_HOME_OVERRIDE");
             assert!(err.to_string().contains("absolute path"), "{err}");
         }
+    }
+
+    #[test]
+    fn k2_home_from_takes_the_override_then_the_user_home() {
+        let abs = if cfg!(windows) { r"D:\rig\k2-home" } else { "/rig/k2-home" };
+        let user = || Some(PathBuf::from("/Users/someone"));
+        assert_eq!(k2_home_from(None, user), Ok(Some(PathBuf::from("/Users/someone").join(HOME_DIR_NAME))));
+        assert_eq!(k2_home_from(None, || None), Ok(None));
+        let asked = std::cell::Cell::new(false);
+        let got = k2_home_from(Some(("K5_HOME_OVERRIDE", abs.into())), || {
+            asked.set(true);
+            None
+        });
+        assert_eq!(got, Ok(Some(PathBuf::from(abs))));
+        assert!(!asked.get(), "the user home is not asked for when the override is set");
+        let err = k2_home_from(Some(("K2_HOME_OVERRIDE", "".into())), user).expect_err("empty is not absolute");
+        assert_eq!(err.name, "K2_HOME_OVERRIDE");
     }
 
     #[test]

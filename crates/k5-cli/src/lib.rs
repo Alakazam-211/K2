@@ -19,7 +19,10 @@
 //!   Python's `urllib.parse.quote(value, safe='')`.
 //! - [`called_as`]: the name the command was called by (k2 or k5), and the
 //!   variables the front hands the shell when a verb falls through.
+//! - [`home`]: the K2 home and a workspace's private folder, by k2-client's
+//!   rules.
 
 pub mod called_as;
+pub mod home;
 pub mod out;
 pub mod transport;

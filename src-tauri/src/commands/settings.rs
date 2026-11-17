@@ -776,31 +776,22 @@ pub fn cli_uninstall() -> Result<(), String> {
     #[cfg(all(not(windows), not(target_os = "linux")))]
     {
         use k2_client::cli_install as ci;
-        let is_k2_link = |p: &Path| fs::read_link(p).is_ok_and(|t| ci::is_k2_cli_target(&t));
-        // ~/.local/bin: only K2's own links.
+        // ~/.local/bin: only K2's own links (`k2`, `k5`, `k2so`), never a
+        // `k5` that is someone else's (`ci::is_our_link`).
         if let Some(home) = k2_client::paths::home_dir() {
-            for name in [ci::CLI_NAME, ci::LEGACY_NAME] {
-                let link = ci::user_bin_dir(&home).join(name);
-                if is_k2_link(&link) {
-                    fs::remove_file(&link).map_err(|e| format!("remove {}: {e}", link.display()))?;
-                }
-            }
+            ci::remove_our_links(&ci::user_bin_dir(&home), &ci::UNINSTALL_NAMES)?;
         }
 
-        let symlink_path = Path::new(CLI_SYMLINK_PATH);
-        if !is_k2_link(symlink_path) {
+        // /usr/local/bin: K2's `k2` and `k5` links, directly when the folder
+        // is writable, else in one admin prompt.
+        let system = ci::our_links_in(Path::new(ci::SYSTEM_BIN), &[ci::CLI_NAME, ci::K5_NAME]);
+        let left: Vec<&PathBuf> = system.iter().filter(|p| fs::remove_file(p).is_err()).collect();
+        if left.is_empty() {
             return Ok(());
         }
-
-        // Try direct remove first
-        if fs::remove_file(symlink_path).is_ok() {
-            return Ok(());
-        }
-
-        // Fall back to osascript with admin privileges
+        let paths = left.iter().map(|p| format!("'{}'", p.display())).collect::<Vec<_>>().join(" ");
         let script = format!(
-            "do shell script \"rm -f '{}'\" with prompt \"K2 needs to remove its command-line tool from /usr/local/bin.\" with administrator privileges",
-            CLI_SYMLINK_PATH
+            "do shell script \"rm -f {paths}\" with prompt \"K2 needs to remove its command-line tool from /usr/local/bin.\" with administrator privileges"
         );
         let output = k2_client::bg_proc::command("osascript")
             .args(["-e", &script])

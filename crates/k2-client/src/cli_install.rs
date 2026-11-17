@@ -1376,6 +1376,38 @@ pub fn ensure_executable(path: &Path) {
     }
 }
 
+// ── Uninstall (Settings) ────────────────────────────────────────────────
+
+/// The names Settings' uninstall removes from `~/.local/bin`: `k2`, `k5`
+/// and the `k2so` alias, each only when it is K2's ([`is_our_link`]).
+pub const UNINSTALL_NAMES: [&str; 3] = [CLI_NAME, K5_NAME, LEGACY_NAME];
+
+/// True when `path` is a link K2 made: its target is K2's CLI by its place
+/// ([`is_k2_cli_target`]: a bundle's or a checkout's `cli/k2`, or the k5
+/// binary), even when that target is gone. A file, a folder, or a link to
+/// anything else (someone else's `k5`) is not.
+pub fn is_our_link(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+        && fs::read_link(path).is_ok_and(|t| is_k2_cli_target(&t))
+}
+
+/// The `names` in `dir` that are K2's links ([`is_our_link`]), in order.
+pub fn our_links_in(dir: &Path, names: &[&str]) -> Vec<PathBuf> {
+    names.iter().map(|n| dir.join(n)).filter(|p| is_our_link(p)).collect()
+}
+
+/// Remove K2's links among `names` in `dir` (the links themselves, never
+/// what they point at). Returns what went; stops at the first that can't be
+/// removed.
+pub fn remove_our_links(dir: &Path, names: &[&str]) -> Result<Vec<PathBuf>, String> {
+    let mut gone = Vec::new();
+    for link in our_links_in(dir, names) {
+        fs::remove_file(&link).map_err(|e| format!("remove {}: {e}", link.display()))?;
+        gone.push(link);
+    }
+    Ok(gone)
+}
+
 // ── Status (Settings) ───────────────────────────────────────────────────
 
 /// Where `k2` is and whether a new Terminal window will find it.

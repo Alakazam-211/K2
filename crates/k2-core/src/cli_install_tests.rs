@@ -690,3 +690,68 @@ fn the_check_reads_the_marker_without_running_the_binary() {
     assert!(!is_k5_binary(&cli), "the script is not the binary");
     assert!(is_k5_binary(&binary));
 }
+
+// ── Uninstall (Settings) ────────────────────────────────────────────────
+
+/// K2's ruling (slice 10c(iii)): the uninstall takes a `k5` link too, but
+/// only one that is K2's (to the script or the binary); someone else's `k5`
+/// stays, and the binary itself is never touched.
+#[test]
+fn the_uninstall_removes_k2_s_k5_links_and_never_someone_else_s() {
+    let home = TempHome::new();
+    let h = home.path();
+    let (cli, shim) = make_bundle(h, "Applications");
+    let binary = put_binary(h, "Applications", "0.46.11");
+    let body = fs::read(&binary).unwrap();
+    let sys = h.join("usr-local-bin");
+    fs::create_dir_all(&sys).unwrap();
+    let bin = user_bin_dir(h);
+
+    // On: k2 and k5 run the binary in both folders.
+    switch(true);
+    heal(&input(&cli, &shim, Some(&sys), Some(BARE_LOGIN_PATH))).expect("heal on");
+    for d in [&bin, &sys] {
+        assert_eq!(link_target(&d.join("k5")), binary);
+        assert!(is_our_link(&d.join("k2")) && is_our_link(&d.join("k5")));
+    }
+    assert_eq!(our_links_in(&sys, &[CLI_NAME, K5_NAME]), vec![sys.join("k2"), sys.join("k5")]);
+    assert_eq!(remove_our_links(&bin, &UNINSTALL_NAMES).expect("uninstall"), vec![bin.join("k2"), bin.join("k5")]);
+    assert_eq!(remove_our_links(&sys, &[CLI_NAME, K5_NAME]).expect("uninstall"), vec![sys.join("k2"), sys.join("k5")]);
+    for d in [&bin, &sys] {
+        assert!(fs::symlink_metadata(d.join("k2")).is_err() && fs::symlink_metadata(d.join("k5")).is_err());
+    }
+    assert_eq!(fs::read(&binary).unwrap(), body, "the binary itself stays");
+    assert_eq!(read(&cli), CLI_BODY, "the script itself stays");
+
+    // Off after on: k5 runs the script, and is still K2's; so is a k2so
+    // alias and a link to a bundle that is gone.
+    heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal on again");
+    switch(false);
+    heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal off");
+    assert_eq!(link_target(&k5(h)), cli);
+    std::os::unix::fs::symlink(&shim, bin.join("k2so")).unwrap();
+    let old = h.join("Old/K2.app/Contents/MacOS/k5-cli");
+    std::os::unix::fs::symlink(&old, sys.join("k5")).unwrap();
+    assert_eq!(
+        remove_our_links(&bin, &UNINSTALL_NAMES).expect("uninstall"),
+        vec![bin.join("k2"), bin.join("k5"), bin.join("k2so")]
+    );
+    assert_eq!(remove_our_links(&sys, &[CLI_NAME, K5_NAME]).expect("uninstall"), vec![sys.join("k5")]);
+
+    // Someone else's k5: a file, a link to another tool, a folder. Kept.
+    let other = h.join("opt/other/bin/k5");
+    fs::create_dir_all(other.parent().unwrap()).unwrap();
+    fs::write(&other, "#!/bin/sh\necho another k5 tool\n").unwrap();
+    fs::write(bin.join("k5"), "#!/bin/sh\necho mine\n").unwrap();
+    std::os::unix::fs::symlink(&other, sys.join("k5")).unwrap();
+    for d in [&bin, &sys] {
+        assert!(!is_our_link(&d.join("k5")));
+        assert_eq!(remove_our_links(d, &UNINSTALL_NAMES).expect("uninstall"), Vec::<PathBuf>::new());
+    }
+    assert_eq!(read(&bin.join("k5")), "#!/bin/sh\necho mine\n");
+    assert_eq!(link_target(&sys.join("k5")), other);
+    fs::remove_file(sys.join("k5")).unwrap();
+    fs::create_dir_all(sys.join("k5")).unwrap();
+    assert!(our_links_in(&sys, &UNINSTALL_NAMES).is_empty());
+    assert!(sys.join("k5").is_dir());
+}

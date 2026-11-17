@@ -9,7 +9,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ModelHeader, ModelPage, ModelRow } from '../model/types'
 import { attribProblem } from './attrib-value'
-import { holdPrompt, holdsOn } from './holds'
+import { heldHandles, holdPrompt, holdsOn } from './holds'
 import { boxMode, boxSelect, editReason, pickAt, pickable, shiftLock, snapDelta, toggle } from './selection'
 
 const FIX = resolve(__dirname, '../../__fixtures__/drawing-model')
@@ -164,6 +164,14 @@ describe('holds', () => {
     expect(holdsOn(['@h:A00'], [{ ...atlas, keys: ['@layer:A-WALL'] }], ROWS, HEADER)).toEqual([])
     // A handle spelt with leading zeros or lower case is the same handle.
     expect(holdsOn(['@h:A00'], [{ ...atlas, keys: ['@h:0a00'] }], ROWS, HEADER)).toHaveLength(1)
+  })
+  it('a hold on model space’s block record covers everything in model space, never a block’s insides', () => {
+    const header = { ...HEADER, layouts: [], model_space_block: '@h:2B' }
+    const ms = { ...atlas, keys: ['@h:2b'] }
+    expect(holdsOn(['@h:A00'], [ms], ROWS, header)).toEqual([ms])
+    expect(heldHandles([ms], ROWS, header).get('@h:41')).toBe('p_atlas')
+    expect(holdsOn(['@h:35'], [ms], [{ ...row('@h:41'), h: '@h:35', owner: '@h:2D' }], header)).toEqual([])
+    expect(holdsOn(['@h:A00'], [ms], ROWS, { ...header, model_space_block: null })).toEqual([])
   })
   it('asks once, naming who and what for', () => {
     expect(holdPrompt([atlas], 2, 'move')).toBe('Atlas is working on these: moving the doors. Move anyway?')

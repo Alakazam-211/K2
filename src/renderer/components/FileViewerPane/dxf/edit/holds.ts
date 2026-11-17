@@ -1,7 +1,8 @@
 // Agents' holds on a selection. A hold's keys are the CAD pack's index
 // keys, always `@h:<HANDLE>` (upper-case hex, no leading zeros): an
 // entity's, or a layer record's, a block record's or a layout's, which
-// covers everything on or in it (model space's covers all of model space);
+// covers everything on or in it (model space's block record, which the
+// header names as `model_space_block`, covers all of model space);
 // `@doc:dxf` is the whole drawing. Layer and block names come to handles
 // through the drawing's header. A person isn't refused by a hold, so before
 // an edit that touches one the viewer asks once, naming who and what for.
@@ -12,12 +13,14 @@ import type { Hold } from './edit-source'
 
 const norm = (k: string): string => (/^@h:/i.test(k) ? `@h:${k.slice(3).replace(/^0+(?=.)/, '').toUpperCase()}` : k)
 
-type HeaderKeys = Pick<ModelHeader, 'layers' | 'layouts'>
+type HeaderKeys = Pick<ModelHeader, 'layers' | 'layouts' | 'model_space_block'>
 
 function keyMaps(header: HeaderKeys) {
+  const ms = typeof header.model_space_block === 'string' && header.model_space_block ? [norm(header.model_space_block)] : []
   return {
     layerKey: new Map(header.layers.map((l) => [l.name, norm(l.handle)])),
-    modelKeys: header.layouts.filter((l) => l.kind === 'model').flatMap((l) => [norm(l.handle), l.space]),
+    // Model space's block record (the header names it), and its layout's.
+    modelKeys: [...ms, ...header.layouts.filter((l) => l.kind === 'model').flatMap((l) => [norm(l.handle), l.space])],
   }
 }
 

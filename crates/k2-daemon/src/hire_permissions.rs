@@ -431,6 +431,8 @@ fn record(inp: &StepIn<'_>, t: &Option<Target>, action: &str, result: &str, card
 /// Thread exists. `false`: nothing to file yet (no pending cards, no Thread,
 /// or the server's permission cards are off: they stay in the lock for a
 /// later start).
+// Called from the first-start hook, which is off in unit tests.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn file_pending_cards(workspace_id: &str) -> bool {
     file_pending_cards_with(workspace_id, k2_core::permission::gate::server_on())
 }
@@ -468,6 +470,8 @@ pub(crate) fn file_pending_cards_with(workspace_id: &str, cards_on: bool) -> boo
 /// The first-start hook's body: wait (off the caller's thread) for the
 /// agent's Thread, then file its pending cards. A harness whose
 /// conversation id appears only after its first turn gets a few minutes.
+// Called from the first-start hook, which is off in unit tests.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn file_pending_cards_when_ready(workspace_id: &str) {
     let path = match crate::sidecar_routes::workspace_by_id(workspace_id) {
         Some(w) => w.path,

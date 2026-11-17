@@ -27,17 +27,6 @@ fn cli(who: Who, body: Value) -> (u16, Value) {
     (code, serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("json {e}: {}", r.body)))
 }
 
-/// `(target, status)` of every permission row.
-fn perms(v: &Value) -> Vec<(String, String)> {
-    v["rows"]
-        .as_array()
-        .unwrap_or_else(|| panic!("no rows: {v}"))
-        .iter()
-        .filter(|r| r["step"] == "permission")
-        .map(|r| (r["target"].as_str().unwrap().to_string(), r["status"].as_str().unwrap().to_string()))
-        .collect()
-}
-
 fn row<'a>(v: &'a Value, target: &str) -> &'a Value {
     v["rows"].as_array().unwrap().iter().find(|r| r["step"] == "permission" && r["target"] == target).unwrap_or_else(|| panic!("no {target}: {v}"))
 }

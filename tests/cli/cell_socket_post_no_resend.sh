@@ -19,7 +19,8 @@
 #
 # A stub daemon serves loopback TCP and a Unix socket and counts each route
 # per channel. The socket's behaviour per run comes from a mode file:
-#   hang (curl 28), close (52), reset (56), empty (rc 0, empty body),
+#   hang (curl 28), close (52), reset (56; Apple's curl on macOS says 52),
+#   empty (rc 0, empty body),
 #   garbage (not HTTP: status 000), notserved (the daemon's 404).
 # A second socket file is bound and never listens: connect fails (curl 7).
 # The socket file closed to this user (EACCES, which the CLI names 75) still
@@ -217,7 +218,15 @@ probe() {
 probe "$DEAD" close;   [ "$PRC" = 7 ] && ok "dead socket: curl 7" || bad "dead socket: curl $PRC, want 7"
 probe "$SOCK" hang;    [ "$PRC" = 28 ] && ok "hang: curl 28" || bad "hang: curl $PRC, want 28"
 probe "$SOCK" close;   [ "$PRC" = 52 ] && ok "close: curl 52" || bad "close: curl $PRC, want 52"
-probe "$SOCK" reset;   [ "$PRC" = 56 ] && ok "reset: curl 56" || bad "reset: curl $PRC, want 56"
+# A reset after the request: curl 56 on Linux; Apple's curl on macOS
+# reports the same reset as 52. Both are a failure after the request went
+# out, so both take the no-resend path checked below.
+probe "$SOCK" reset
+case "$PRC" in
+    56) ok "reset: curl 56" ;;
+    52) ok "reset: curl 52 (Apple's curl reports a reset as 52)" ;;
+    *) bad "reset: curl $PRC, want 56 (or 52 from Apple's curl)" ;;
+esac
 probe "$SOCK" empty
 [ "$PRC" = 0 ] && [ "$PCODE" = 200 ] && [ -z "$PBODY" ] && ok "empty: curl 0, status 200, empty body" \
     || bad "empty: curl $PRC, status $PCODE, body '$PBODY'"

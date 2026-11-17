@@ -1711,14 +1711,26 @@ async fn skin_daemon_thread_answer_void_caps_and_rooms() {
             .as_str()
             .expect("secret id")
             .to_string();
-        let filled = http(
-            dport,
-            "POST",
-            &format!("/cli/thread/answer?token={sess}"),
-            Some(&format!(
-                r#"{{"addr":"{handle}","id":"{sid}","secret":"{secret_val}"}}"#
-            )),
-        );
+        // The ask above woke the agent; until its session runs, Save is refused
+        // with card_session_gone ("K2 is waking it: try Save again"). Its PTY
+        // takes about half a second to start on Windows, so try again as the
+        // hint says, for at most 15 s.
+        let fill = || {
+            http(
+                dport,
+                "POST",
+                &format!("/cli/thread/answer?token={sess}"),
+                Some(&format!(
+                    r#"{{"addr":"{handle}","id":"{sid}","secret":"{secret_val}"}}"#
+                )),
+            )
+        };
+        let mut filled = fill();
+        let waking_until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while filled.status == 409 && filled.body.contains("card_session_gone") && std::time::Instant::now() < waking_until {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            filled = fill();
+        }
         assert_eq!(filled.status, 200, "secret fill; {}", filled.body);
         assert!(
             !filled.body.contains(secret_val),

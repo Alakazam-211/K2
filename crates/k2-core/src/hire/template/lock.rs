@@ -34,6 +34,10 @@ pub struct TemplateLock {
     /// `cards_pending`. A re-apply never asks these again.
     #[serde(default)]
     pub carded: Vec<String>,
+    /// Suggestions the person left off at hire (`--decline`, the Review's
+    /// unticked boxes). A re-apply leaves them off too (T3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub declined: Vec<String>,
     /// Cards still to file: the agent had no Thread when it was hired.
     /// Whatever starts it first files them once, then clears this (T3).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

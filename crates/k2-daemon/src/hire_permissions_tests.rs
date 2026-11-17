@@ -139,6 +139,10 @@ fn a_declined_suggestion_stays_off() {
     assert!(!crate::first_run_grants::switch_on(id, "compute"), "declined stays off");
     assert!(sink().iter().any(|(e, _, o)| e == AUDIT_EVENT && o.starts_with("declined compute.use")), "{:?}", sink());
     assert!(events("compute.use", "declined") >= 1);
+    // Remembered: a re-run without the decline leaves it off.
+    let (_, again) = cli(Who::Owner, json!({ "template": "developer", "name": name }));
+    assert_eq!(row(&again, "compute.use")["status"], "declined", "{again}");
+    assert!(!crate::first_run_grants::switch_on(id, "compute"));
     // Without a template the field is refused.
     let path = ensure_test_root().join(uniq("plain")).to_string_lossy().into_owned();
     let (st, e) = cli(Who::Owner, json!({ "path": path, "declinePermissions": ["compute.use"] }));

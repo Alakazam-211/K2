@@ -151,7 +151,7 @@ fn refused_hint(action: &str, setting: &str, settings_path: &str, floor: Floor, 
     };
     match cmd {
         Some(c) => format!(
-            "{} can turn on \"{setting}\" for {handle}: {path}, or `{c}` from a terminal outside K2.",
+            "{} can turn on \"{setting}\" for {handle}: {path}, or run `{c}` in their own terminal (an agent can't).",
             who_turns_on(floor)
         ),
         None => format!("{} can turn on \"{setting}\" for {handle}: {path}.", who_turns_on(floor)),
@@ -189,7 +189,7 @@ pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> StepOut {
     let mut out = StepOut::default();
     for want in targets(inp.cards, inp.suggested) {
         if inp.declined.iter().any(|d| *d == want) {
-            out.rows.push(Decision::new(want.clone(), "declined", Some("unticked at hire".into()), None));
+            out.rows.push(Decision::new(want.clone(), "declined", Some("left off at hire; a re-run leaves it off too".into()), None));
             record(inp, &target, &want, "declined", None);
             continue;
         }
@@ -217,7 +217,7 @@ fn cards_row(inp: &StepIn<'_>, h: &Hirer, t: Option<&Target>, handle: &str, card
         Hirer::Person { admin: true, .. } => Ok(()),
         Hirer::Person { .. } => Err(cant("role", "your role can't turn it on (an owner or admin can)")),
         Hirer::Agent { workspace_id } if k2_core::permission::gate::agent_switch_on(workspace_id) => Ok(()),
-        Hirer::Agent { .. } => Err(cant("hirer_lacks", "the hiring agent can't ask for permission cards itself")),
+        Hirer::Agent { .. } => Err(cant("hirer_lacks", "the hiring agent doesn't have it itself, and it is never asked on a card")),
         Hirer::ApiKey => Err(cant("api_key", "an API key turns on no switches")),
     };
     let refuse = |out: &mut StepOut, c: Cant| {

@@ -612,13 +612,20 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
     // turns one off; never asks twice on a card.
     let suggested = t.suggested();
     let asked_before: Vec<String> = prev.as_ref().map(|l| l.carded.clone()).unwrap_or_default();
+    // A decline is remembered: a re-apply leaves it off too.
+    let mut declined: Vec<String> = prev.as_ref().map(|l| l.declined.clone()).unwrap_or_default();
+    for d in inp.declined {
+        if !declined.contains(d) {
+            declined.push(d.clone());
+        }
+    }
     let step_in = super::permissions::StepIn {
         caller: inp.caller,
         path: inp.path,
         template_name: &t.meta.name,
         cards: t.meta.permissions.cards,
         suggested: &suggested,
-        declined: inp.declined,
+        declined: &declined,
         asked_before: &asked_before,
         dry_run: dry,
     };
@@ -668,6 +675,7 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
         granted: permissions.granted.clone(),
         carded: permissions.carded.clone(),
         cards_pending: permissions.cards_pending.clone(),
+        declined: declined.clone(),
         kept: prev.as_ref().map(|l| l.kept.clone()).unwrap_or_default(),
         files,
         // What the text was rendered with: the first apply's, kept after.

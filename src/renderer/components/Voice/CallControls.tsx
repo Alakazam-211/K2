@@ -9,9 +9,18 @@
 // shows dimmed). K2's look: the top bar's icon buttons, and in the tile's
 // strip K2's elevated panel buttons. Every press goes to the voice and video
 // stores, which drive the engine; nothing here holds call state.
+//
+// Outside the top bar the buttons follow the active look: round in Glass
+// (`--radius-pill`) and cut in Terminal (`data-k2-chamfer="control"`), 36px
+// in the headset list and the call view, 40px on the call's bar
+// (CallControlBar: Frost in Glass, a raised cut bar in Terminal). Hang up
+// stays the danger red. Keyboard focus draws the shared ring (`k2-focus`
+// outside Terminal, the cut ring in it), with a line of the label colour on
+// a filled button so it reads on the fill too.
 
 import type { ReactNode } from 'react'
 import { useStore } from 'zustand'
+import { Surface } from '@/components/ui/Surface'
 import {
   HeadphonesIcon,
   MicIcon,
@@ -32,22 +41,61 @@ import type { VideoController } from '@/stores/video-core'
  *  call's own window (the strip's buttons, their own test ids). */
 export type CallControlsVariant = 'topbar' | 'tile' | 'overlay'
 
-/** The tile strip's button (px). */
+/** The floating tile strip's button (px). */
 export const CALL_TILE_BUTTON = 28
-/** The icon inside a tile-strip or headset-list button (px). */
-export const CALL_PANEL_ICON = 15
+/** The headset list's and the call view's buttons (px). */
+export const CALL_PANEL_BUTTON = 36
+/** The call bar's buttons (the expanded view and the call's own window, px). */
+export const CALL_BAR_BUTTON = 40
+/** The icon inside a headset-list or call-view button (px). */
+export const CALL_PANEL_ICON = 17
+/** The icon inside a call bar button (px). */
+const CALL_BAR_ICON = 18
+/** The icon inside a tile-strip button (px). */
+const CALL_TILE_ICON = 15
+
+function buttonSize(variant: CallControlsVariant): number {
+  return variant === 'overlay' ? CALL_BAR_BUTTON : CALL_TILE_BUTTON
+}
+
+function iconSize(variant: CallControlsVariant): number | undefined {
+  return variant === 'overlay' ? CALL_BAR_ICON : variant === 'tile' ? CALL_TILE_ICON : undefined
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
 
 const TOPBAR_ON = 'text-[var(--color-status-error)] hover:bg-[var(--color-bg-elevated)]'
 const TOPBAR_DANGER = 'text-[var(--color-danger)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-danger-hover)]'
-const TILE_BASE = 'border border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-surface)]'
+/** The look's control shape: round in Glass, square here and cut by
+ *  `data-k2-chamfer="control"` in Terminal; the shared focus ring. */
+const SHAPE = 'k2-focus rounded-[var(--radius-pill)]'
+const TILE_BASE =
+  'border border-[var(--color-control-edge)] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-control-hover)]'
 /** Engaged (muted, deafened, the camera on): inverted, as Companion's white. */
-const TILE_ON = 'border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg)]'
+const TILE_ON = 'border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg)] [--k2-ch-focus-inner:var(--color-bg)]'
 /** Hang up: the app's danger color (as the danger Button). */
 const TILE_DANGER =
-  'border border-[var(--color-danger)] bg-[var(--color-danger)] text-[var(--color-on-danger)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)]'
+  'border border-[var(--color-danger)] bg-[var(--color-danger)] text-[var(--color-on-danger)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)] [--k2-ch-focus-inner:var(--color-on-danger)]'
+
+/** The bar the call's controls sit on (the expanded view, the call's own
+ *  window): Frost in Glass, a pill floating over the call (the tiles stay
+ *  solid); a raised bar with cut corners in Terminal. */
+export function CallControlBar({ children, className = '' }: { children: ReactNode; className?: string }): React.JSX.Element {
+  return (
+    <Surface
+      role2="elevated"
+      chamfer
+      data-testid="call-control-bar"
+      data-material="frost"
+      data-frost-shape="pill"
+      data-frost-static=""
+      className={`flex items-center px-2.5 py-2 ${className}`}
+    >
+      {children}
+    </Surface>
+  )
+}
 
 /** The headset list's call row (VoicePopover, VideoCallButtons): the tile
  *  strip's square buttons, but a real `disabled` (the list has no drag). */
@@ -86,8 +134,9 @@ export function CallPanelButton({
       data-testid={testId}
       {...data}
       disabled={disabled}
-      className={`flex shrink-0 items-center justify-center transition-colors disabled:cursor-default disabled:opacity-50 ${look}`}
-      style={{ width: CALL_TILE_BUTTON, height: CALL_TILE_BUTTON, ...noDrag }}
+      data-k2-chamfer="control"
+      className={`flex shrink-0 items-center justify-center transition-colors disabled:cursor-default disabled:opacity-50 ${SHAPE} ${look}`}
+      style={{ width: CALL_PANEL_BUTTON, height: CALL_PANEL_BUTTON, ...noDrag }}
       onClick={onPress}
     >
       {children}
@@ -140,8 +189,9 @@ function CallButton({
       data-testid={testId}
       data-state={state}
       data-on={on ? 'true' : 'false'}
-      className={`relative flex shrink-0 items-center justify-center transition-colors ${look} ${dead ? 'opacity-50' : ''}`}
-      style={variant !== 'topbar' ? { width: CALL_TILE_BUTTON, height: CALL_TILE_BUTTON, ...noDrag } : noDrag}
+      data-k2-chamfer={variant !== 'topbar' ? 'control' : undefined}
+      className={`relative flex shrink-0 items-center justify-center transition-colors ${variant !== 'topbar' ? SHAPE : ''} ${look} ${dead ? 'opacity-50' : ''}`}
+      style={variant !== 'topbar' ? { width: buttonSize(variant), height: buttonSize(variant), ...noDrag } : noDrag}
       onClick={() => {
         if (!dead) onPress()
       }}
@@ -201,7 +251,7 @@ function CameraButton({ variant, video, busy }: { variant: CallControlsVariant; 
       state={local.camera}
       onPress={() => void video.setCamera(!on)}
     >
-      <VideoIcon off={!on} size={variant !== 'topbar' ? 15 : undefined} />
+      <VideoIcon off={!on} size={iconSize(variant)} />
     </CallButton>
   )
 }
@@ -237,7 +287,7 @@ function ScreenButton({ variant, video, busy }: { variant: CallControlsVariant; 
         else void video.loadScreenSources()
       }}
     >
-      <ScreenShareIcon stop={on} size={variant !== 'topbar' ? 15 : undefined} />
+      <ScreenShareIcon stop={on} size={iconSize(variant)} />
     </CallButton>
   )
 }
@@ -266,7 +316,7 @@ export default function CallControls({ variant, call, actions, video, noiseRemov
   const busy = call.phase === 'joining'
   const locked = call.speakDenied ? micBlockedText('speak_denied', call.roomName) : call.serverMuted ? micBlockedText('server_muted', call.roomName) : null
   const micOff = call.muted || call.micDenied || call.deafened || locked !== null
-  const size = variant !== 'topbar' ? 15 : undefined
+  const size = iconSize(variant)
   const rec = recordingButtons({
     perms: call.recordingPerms,
     recording: call.recording,
@@ -277,7 +327,7 @@ export default function CallControls({ variant, call, actions, video, noiseRemov
       data-testid={`call-${variant}-controls`}
       role="group"
       aria-label="Call controls"
-      className={`flex items-center ${variant !== 'topbar' ? 'gap-1.5' : 'gap-0.5'}`}
+      className={`flex items-center ${variant === 'overlay' ? 'gap-2' : variant === 'tile' ? 'gap-1.5' : 'gap-0.5'}`}
     >
       <CallButton
         variant={variant}

@@ -8,7 +8,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { VoiceCall } from '@/stores/voice-core'
-import CallControls, { noiseRemovalLabel, type CallControlsProps } from './CallControls'
+import CallControls, { CALL_BAR_BUTTON, CALL_PANEL_BUTTON, CallControlBar, CallPanelButton, noiseRemovalLabel, type CallControlsProps } from './CallControls'
 
 const call: VoiceCall = {
   hostKey: 'sewlab.k2.dev',
@@ -73,5 +73,61 @@ describe('the wave button', () => {
 
   it('the tooltip words', () => {
     expect([noiseRemovalLabel(true), noiseRemovalLabel(false)]).toEqual(['Noise removal on', 'Noise removal off'])
+  })
+})
+
+describe("the controls' look", () => {
+  it("the call's bar (overlay): 40px buttons, round in Glass and cut in Terminal, with a visible focus ring", () => {
+    render(<CallControls variant="overlay" call={call} actions={actions()} video={null} noiseRemoval />)
+    const buttons = Array.from(screen.getByTestId('call-overlay-controls').querySelectorAll('button'))
+    expect(buttons.length).toBe(4)
+    for (const b of buttons) {
+      expect([b.style.width, b.style.height]).toEqual([`${CALL_BAR_BUTTON}px`, `${CALL_BAR_BUTTON}px`])
+      expect(b.getAttribute('data-k2-chamfer')).toBe('control')
+      expect(b.className).toContain('rounded-[var(--radius-pill)]')
+      expect(b.className).toContain('k2-focus')
+    }
+    expect(CALL_BAR_BUTTON).toBeGreaterThanOrEqual(36)
+    expect(CALL_BAR_BUTTON).toBeLessThanOrEqual(44)
+  })
+
+  it('hang up stays red, with its own focus line on the red', () => {
+    render(<CallControls variant="overlay" call={call} actions={actions()} video={null} />)
+    const leave = screen.getByTestId('call-overlay-leave')
+    expect(leave.className).toContain('bg-[var(--color-danger)]')
+    expect(leave.className).toContain('text-[var(--color-on-danger)]')
+    expect(leave.className).toContain('[--k2-ch-focus-inner:var(--color-on-danger)]')
+  })
+
+  it('the headset list and call view buttons are 36px, cut or round as the bar', () => {
+    render(
+      <CallPanelButton label="Mute" testId="p" onPress={() => {}}>
+        x
+      </CallPanelButton>
+    )
+    const b = screen.getByTestId('p')
+    expect([b.style.width, b.style.height]).toEqual([`${CALL_PANEL_BUTTON}px`, `${CALL_PANEL_BUTTON}px`])
+    expect(CALL_PANEL_BUTTON).toBeGreaterThanOrEqual(36)
+    expect(b.getAttribute('data-k2-chamfer')).toBe('control')
+    expect(b.className).toContain('rounded-[var(--radius-pill)]')
+    expect(b.className).toContain('k2-focus')
+  })
+
+  it('the top bar keeps its own small icon buttons', () => {
+    render(<CallControls variant="topbar" call={call} actions={actions()} video={null} />)
+    expect(screen.getByTestId('call-topbar-mute').getAttribute('data-k2-chamfer')).toBeNull()
+  })
+
+  it('the bar under the call is Frost in Glass (a pill) and a raised cut bar in Terminal', () => {
+    render(
+      <CallControlBar>
+        <span />
+      </CallControlBar>
+    )
+    const bar = screen.getByTestId('call-control-bar')
+    expect(bar.getAttribute('data-material')).toBe('frost')
+    expect(bar.getAttribute('data-frost-shape')).toBe('pill')
+    expect(bar.getAttribute('data-surface')).toBe('elevated')
+    expect(bar.getAttribute('data-k2-chamfer')).toBe('surface')
   })
 })

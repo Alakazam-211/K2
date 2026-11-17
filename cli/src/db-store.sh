@@ -646,7 +646,7 @@ _db_take_workspace_flags() {
                     exit 2
                 fi
                 _wiki_apply_project "$2"
-                export K2_PROJECT_PATH="$PROJECT"
+                export K2_PROJECT_PATH="$PROJECT" K5_PROJECT_PATH="$PROJECT"
                 shift 2 ;;
             --workspace=*|--project=*)
                 local sel="${1#*=}"
@@ -655,7 +655,7 @@ _db_take_workspace_flags() {
                     exit 2
                 fi
                 _wiki_apply_project "$sel"
-                export K2_PROJECT_PATH="$PROJECT"
+                export K2_PROJECT_PATH="$PROJECT" K5_PROJECT_PATH="$PROJECT"
                 shift ;;
             *) _db_ws_args+=("$1"); shift ;;
         esac

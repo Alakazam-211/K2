@@ -149,9 +149,10 @@ _cli_use_healed_passport() {
     t="$(_cli_healed_passport)" || return 1
     [ "${TOKEN:-}" = "${SCOPED_TOKEN:-}" ] && TOKEN="$t"
     SCOPED_TOKEN="$t"
-    export K2_HOOK_TOKEN="$t"
+    # Under the name children read first (K5_) and the current one; the
+    # old K2SO_ name only when the session already had it.
+    export K2_HOOK_TOKEN="$t" K5_HOOK_TOKEN="$t"
     if [ -n "${K2SO_HOOK_TOKEN:-}" ]; then export K2SO_HOOK_TOKEN="$t"; fi
-    if [ -n "${K5_HOOK_TOKEN:-}" ]; then export K5_HOOK_TOKEN="$t"; fi
     return 0
 }
 # A call refused its passport, started before the new one was written (the
@@ -72449,11 +72450,11 @@ cmd_agent_context() {
             --workspace|--project)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "$1 requires a workspace path, name, or uuid"; exit 2; }
                 _wiki_apply_project "$2" || { _agent_err "not_found" "unknown workspace '$2'"; exit 4; }
-                export K2_PROJECT_PATH="$PROJECT"
+                export K2_PROJECT_PATH="$PROJECT" K5_PROJECT_PATH="$PROJECT"
                 shift 2 ;;
             --workspace=*|--project=*)
                 _wiki_apply_project "${1#*=}" || { _agent_err "not_found" "unknown workspace '${1#*=}'"; exit 4; }
-                export K2_PROJECT_PATH="$PROJECT"
+                export K2_PROJECT_PATH="$PROJECT" K5_PROJECT_PATH="$PROJECT"
                 shift ;;
             *) ctx_args+=("$1"); shift ;;
         esac
@@ -95479,7 +95480,7 @@ _db_take_workspace_flags() {
                     exit 2
                 fi
                 _wiki_apply_project "$2"
-                export K2_PROJECT_PATH="$PROJECT"
+                export K2_PROJECT_PATH="$PROJECT" K5_PROJECT_PATH="$PROJECT"
                 shift 2 ;;
             --workspace=*|--project=*)
                 local sel="${1#*=}"
@@ -95488,7 +95489,7 @@ _db_take_workspace_flags() {
                     exit 2
                 fi
                 _wiki_apply_project "$sel"
-                export K2_PROJECT_PATH="$PROJECT"
+                export K2_PROJECT_PATH="$PROJECT" K5_PROJECT_PATH="$PROJECT"
                 shift ;;
             *) _db_ws_args+=("$1"); shift ;;
         esac

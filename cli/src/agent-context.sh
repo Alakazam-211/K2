@@ -439,11 +439,11 @@ cmd_agent_context() {
             --workspace|--project)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "$1 requires a workspace path, name, or uuid"; exit 2; }
                 _wiki_apply_project "$2" || { _agent_err "not_found" "unknown workspace '$2'"; exit 4; }
-                export K2_PROJECT_PATH="$PROJECT"
+                export K2_PROJECT_PATH="$PROJECT" K5_PROJECT_PATH="$PROJECT"
                 shift 2 ;;
             --workspace=*|--project=*)
                 _wiki_apply_project "${1#*=}" || { _agent_err "not_found" "unknown workspace '${1#*=}'"; exit 4; }
-                export K2_PROJECT_PATH="$PROJECT"
+                export K2_PROJECT_PATH="$PROJECT" K5_PROJECT_PATH="$PROJECT"
                 shift ;;
             *) ctx_args+=("$1"); shift ;;
         esac

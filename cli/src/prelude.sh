@@ -149,9 +149,10 @@ _cli_use_healed_passport() {
     t="$(_cli_healed_passport)" || return 1
     [ "${TOKEN:-}" = "${SCOPED_TOKEN:-}" ] && TOKEN="$t"
     SCOPED_TOKEN="$t"
-    export K2_HOOK_TOKEN="$t"
+    # Under the name children read first (K5_) and the current one; the
+    # old K2SO_ name only when the session already had it.
+    export K2_HOOK_TOKEN="$t" K5_HOOK_TOKEN="$t"
     if [ -n "${K2SO_HOOK_TOKEN:-}" ]; then export K2SO_HOOK_TOKEN="$t"; fi
-    if [ -n "${K5_HOOK_TOKEN:-}" ]; then export K5_HOOK_TOKEN="$t"; fi
     return 0
 }
 # A call refused its passport, started before the new one was written (the

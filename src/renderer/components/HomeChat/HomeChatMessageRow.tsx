@@ -36,6 +36,7 @@ import type { HomeChatMessage } from '@/lib/home-chat/api'
 import type { ReplyPreview } from '@/lib/home-chat/chat'
 import { HomeChatReactionChips, HomeChatReactionPicker } from './HomeChatReactions'
 import { useHoverReveal } from './useHoverReveal'
+import { useReducedMotion } from '@/hooks/useReducedMotion'
 
 export interface HomeChatRowActions {
   react: (msgId: string, emoji: string) => void
@@ -118,9 +119,27 @@ const BAR_STYLE: CSSProperties = {
   }),
 }
 
-/** Shown, or hidden (and out of the tab order) until placed and wanted. */
-function barReveal(shown: boolean): CSSProperties {
-  return { visibility: shown ? 'visible' : 'hidden', opacity: shown ? 1 : 0, pointerEvents: shown ? 'auto' : 'none' }
+/** How far the bar rises as it fades in (px). */
+const BAR_LIFT = 3
+const FADE_IN = 'var(--motion-duration-fast) var(--motion-ease-standard)'
+const FADE_OUT = 'calc(var(--motion-duration-fast) * 0.75) var(--motion-ease-standard)'
+
+/** Shown, or hidden (and out of the tab order) until placed and wanted. It
+ *  fades and rises in on the fast motion token and fades out a little
+ *  faster, its visibility waiting for the fade; none of it moves under
+ *  reduced motion. */
+function barReveal(shown: boolean, reduced: boolean): CSSProperties {
+  return {
+    visibility: shown ? 'visible' : 'hidden',
+    opacity: shown ? 1 : 0,
+    pointerEvents: shown ? 'auto' : 'none',
+    transform: shown || reduced ? 'none' : `translateY(${BAR_LIFT}px)`,
+    transition: reduced
+      ? 'none'
+      : shown
+        ? `opacity ${FADE_IN}, transform ${FADE_IN}`
+        : `opacity ${FADE_OUT}, transform ${FADE_OUT}, visibility 0s linear calc(var(--motion-duration-fast) * 0.75)`,
+  }
 }
 
 const DELETED_STYLE = {
@@ -243,6 +262,7 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
     return actionBarPlace({ width: r.width }, { left: b.left - r.left, right: b.right - r.left, top: b.top - r.top }, size, mine)
   }, [mine])
   const { shown, place, handlers: reveal } = useHoverReveal(measure, picker, !m.deleted)
+  const reduced = useReducedMotion()
 
   // The jump's wash: shown, then faded out over JUMP_WASH_MS.
   useEffect(() => {
@@ -307,7 +327,7 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
           data-inward={place?.inward ? '' : undefined}
           data-shown={shown ? '' : undefined}
           className="absolute z-[3]"
-          style={{ ...barPos, ...barReveal(shown) }}
+          style={{ ...barPos, ...barReveal(shown, reduced) }}
         >
           <div
             role="toolbar"

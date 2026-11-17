@@ -8,7 +8,9 @@
 //      and hidden until placed; one message's row at a time.
 //   3. No layout shift: the row, the picker and the who-reacted tip are
 //      out of the flow, so showing them never moves the message column.
-//   4. A jumped-to message gets a wash, not a flash.
+//   4. Motion: it fades and rises a few px in on the fast motion token, and
+//      out a little faster; none under reduced motion.
+//   5. A jumped-to message gets a wash, not a flash.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -249,6 +251,51 @@ describe('showing the row, the picker or the tip never moves the column', () => 
     expect(column.contains(tip)).toBe(false)
     expect(tip.className).toMatch(/\bfixed\b/)
     expect([flow(a), flow(b), column.childElementCount]).toEqual(before)
+  })
+})
+
+function mockReducedMotion(reduce: boolean): void {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((q: string) => ({ matches: reduce && q.includes('reduce'), media: q, addEventListener: () => undefined, removeEventListener: () => undefined })),
+  )
+}
+
+describe('the hover row moves on the motion tokens', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('fades and rises in on the fast token; fades out faster, then leaves the tab order', () => {
+    mockReducedMotion(false)
+    mockRects()
+    const { container } = render(row())
+    const message = container.querySelector('[data-home-chat-message]') as HTMLElement
+    const hidden = barOf(message).style
+    expect(hidden.transform).toMatch(/translateY\([2-4]px\)/)
+    expect(hidden.transition).toContain('opacity calc(var(--motion-duration-fast) * 0.75)')
+    // Visibility waits for the fade, so the fade is seen.
+    expect(hidden.transition).toContain('visibility 0s linear calc(var(--motion-duration-fast) * 0.75)')
+    act(() => {
+      fireEvent.pointerEnter(message, { pointerType: 'mouse' })
+    })
+    const shown = barOf(message).style
+    expect(shown.transform).toBe('none')
+    expect(shown.transition).toContain('opacity var(--motion-duration-fast) var(--motion-ease-standard)')
+    expect(shown.transition).toContain('transform var(--motion-duration-fast) var(--motion-ease-standard)')
+    expect(shown.transition).not.toContain('visibility')
+  })
+
+  it('under reduced motion it just appears and goes', () => {
+    mockReducedMotion(true)
+    mockRects()
+    const { container } = render(row())
+    const message = container.querySelector('[data-home-chat-message]') as HTMLElement
+    expect(barOf(message).style.transition).toBe('none')
+    expect(barOf(message).style.transform).toBe('none')
+    act(() => {
+      fireEvent.pointerEnter(message, { pointerType: 'mouse' })
+    })
+    expect(barOf(message).style.transition).toBe('none')
+    expect(barOf(message).style.transform).toBe('none')
   })
 })
 

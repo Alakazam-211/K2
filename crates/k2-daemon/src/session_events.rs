@@ -765,13 +765,17 @@ pub enum SessionEvent {
     /// client with the file open refreshes its layer panel, pins or roster;
     /// comments catch up with `comments --since <seq>`.
     /// Wire: `{ "kind": "doc_structure_changed", "projectId": "<workspace
-    /// id>", "rel": "<path in it>", "change": "index_ready" |
-    /// "index_not_indexed" | "annotation" | "anchor_state" | "claim_taken" |
-    /// "claim_ended", "version": n|null, "seq": n|null, "thread":
-    /// "ann-N"|null }`.
+    /// id>", "workspace": "<absolute root>"|null, "rel": "<path in it>",
+    /// "change": "index_ready" | "index_not_indexed" | "annotation" |
+    /// "anchor_state" | "claim_taken" | "claim_ended", "version": n|null,
+    /// "seq": n|null, "thread": "ann-N"|null }`. `workspace` is the
+    /// workspace's folder, as `doc_version_changed` names it (a tab matches
+    /// `workspace` + `rel` to its file); null only for a workspace no doc
+    /// in it has opened since the daemon started.
     DocStructureChanged {
         #[serde(rename = "projectId")]
         project_id: String,
+        workspace: Option<String>,
         rel: String,
         change: String,
         version: Option<u64>,

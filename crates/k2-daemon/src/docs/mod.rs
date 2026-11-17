@@ -509,6 +509,7 @@ impl Runtime {
             );
         }
         self.note_opened(key, abs);
+        indexer::note_root(&key.space, root);
         if blob_packs::indexes(&key.path) {
             indexer::on_open(&s, key);
         }

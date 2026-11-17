@@ -76,11 +76,27 @@ impl Change {
     }
 }
 
+/// Each workspace's folder, by its id, noted when a blob doc in it opens
+/// ([`note_root`]): the events below name it (`workspace`) with no database
+/// read, since they are sent with the session locked.
+fn roots() -> &'static Mutex<HashMap<String, String>> {
+    static R: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Remember that workspace `space`'s folder is `root` (a blob doc in it
+/// opened).
+pub fn note_root(space: &str, root: &std::path::Path) {
+    roots().lock().unwrap_or_else(|p| p.into_inner()).insert(space.to_string(), root.to_string_lossy().into_owned());
+}
+
 /// Tell open tabs (`doc_structure_changed`). Called with the session
-/// locked: a broadcast send, nothing else.
+/// locked: a broadcast send and the folder map's lookup, nothing else.
 pub fn changed(key: &DocKey, change: Change, version: Option<VersionId>, seq: Option<u64>, thread: Option<String>) {
+    let workspace = roots().lock().unwrap_or_else(|p| p.into_inner()).get(&key.space).cloned();
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::DocStructureChanged {
         project_id: key.space.clone(),
+        workspace,
         rel: key.path.clone(),
         change: change.word().to_string(),
         version,
@@ -420,6 +436,36 @@ mod tests {
         assert!(matches!(&bad, Outcome::Failed(m) if m.contains("MPC-E714")), "{bad:?}");
         assert_eq!(outcome_of(Err(Fail::Job(IndexJobError::Stale { version: 3, reason: "purged" }))), Outcome::Stale);
         assert!(matches!(outcome_of(Err(Fail::Worker("crashed".into()))), Outcome::Failed(_)));
+    }
+
+    /// `doc_structure_changed` names the workspace's folder (`workspace`,
+    /// as `doc_version_changed` does) beside its id, once a blob doc in it
+    /// opened; before that, null. The other fields are as they were.
+    #[test]
+    fn a_structure_event_names_the_workspace_folder() {
+        let space = format!("ws-folder-{}", uuid::Uuid::new_v4());
+        let k = DocKey { space: space.clone(), path: "site/plan.dxf".into() };
+        let mut rx = crate::session_events::subscribe();
+        let mine = |rx: &mut tokio::sync::broadcast::Receiver<crate::session_events::SessionEvent>| -> serde_json::Value {
+            loop {
+                let ev = rx.try_recv().expect("the event was sent");
+                let v = serde_json::to_value(&ev).expect("event json");
+                if v["projectId"] == serde_json::json!(space) {
+                    return v;
+                }
+            }
+        };
+        changed(&k, Change::ClaimTaken, None, None, None);
+        let before = mine(&mut rx);
+        assert_eq!(before["workspace"], serde_json::Value::Null, "no doc of it opened yet: {before}");
+        note_root(&space, std::path::Path::new("/Users/someone/ws"));
+        changed(&k, Change::ClaimEnded, Some(4), None, None);
+        let v = mine(&mut rx);
+        assert_eq!(
+            v,
+            serde_json::json!({"kind": "doc_structure_changed", "projectId": space, "workspace": "/Users/someone/ws", "rel": "site/plan.dxf",
+                               "change": "claim_ended", "version": 4, "seq": null, "thread": null}),
+        );
     }
 
     #[test]

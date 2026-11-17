@@ -1192,6 +1192,7 @@ mod tests {
             SessionEvent::BoardFileChanged { workspace: "/x/foo".into(), rel: "a.k5board".into(), hash: "sha256-0".into(), by: "agent:x".into() },
             SessionEvent::DocStructureChanged {
                 project_id: "p".into(),
+                workspace: Some("/x/foo".into()),
                 rel: "art/poster.psd".into(),
                 change: "index_ready".into(),
                 version: Some(3),

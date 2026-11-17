@@ -689,6 +689,10 @@ export interface BoardFileChangedEvent {
 export interface DocStructureChangedEvent {
   kind: 'doc_structure_changed'
   projectId: string
+  /** The workspace's folder (as `doc_version_changed`): match `workspace` +
+   *  `/` + `rel` to a tab's file. Null only for a workspace with no doc
+   *  opened since the daemon started. Older daemons don't send it. */
+  workspace?: string | null
   rel: string
   change: 'index_ready' | 'index_not_indexed' | 'annotation' | 'anchor_state' | 'claim_taken' | 'claim_ended'
   version: number | null

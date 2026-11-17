@@ -6,7 +6,9 @@
 //   2. It appears without flicker: one hover zone (the message, row
 //      inside), a short delay before it hides, measured once as it appears
 //      and hidden until placed; one message's row at a time.
-//   3. A jumped-to message gets a wash, not a flash.
+//   3. No layout shift: the row, the picker and the who-reacted tip are
+//      out of the flow, so showing them never moves the message column.
+//   4. A jumped-to message gets a wash, not a flash.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -199,6 +201,54 @@ describe('the hover row appears without flicker', () => {
       fireEvent.pointerEnter(message, { pointerType: 'touch' })
     })
     expect(isShown(message)).toBe(false)
+  })
+})
+
+/** What lays the message out: its in-flow children, as drawn. */
+function flow(message: Element): string[] {
+  return Array.from(message.children)
+    .filter((el) => !/\b(absolute|fixed)\b/.test(el.className) && !['absolute', 'fixed'].includes((el as HTMLElement).style.position))
+    .map((el) => `${el.tagName} ${el.getAttribute('style') ?? ''} ${el.childElementCount}`)
+}
+
+describe('showing the row, the picker or the tip never moves the column', () => {
+  it('the message lays out the same, and what appears is out of the flow', async () => {
+    mockRects()
+    const reacted = { ...msg, reactions: [{ emoji: '👍', count: 2, me: false }] }
+    const { container } = render(
+      <div data-testid="column">
+        {row({ m: { ...reacted, id: '1' } })}
+        {row({ m: { ...msg, id: '2' } })}
+      </div>,
+    )
+    const column = screen.getByTestId('column')
+    const [a, b] = Array.from(container.querySelectorAll('[data-home-chat-message]'))
+    const before = [flow(a), flow(b), column.childElementCount]
+    act(() => {
+      fireEvent.pointerEnter(a, { pointerType: 'mouse' })
+    })
+    expect(isShown(a)).toBe(true)
+    expect(barOf(a).className).toMatch(/\babsolute\b/)
+    expect([flow(a), flow(b), column.childElementCount]).toEqual(before)
+    // The picker: portalled to the page, fixed.
+    await act(async () => {
+      fireEvent.click(a.querySelector('[data-testid="home-chat-react"]') as HTMLElement)
+    })
+    const picker = screen.getByTestId('home-chat-reaction-picker')
+    expect(column.contains(picker)).toBe(false)
+    expect(picker.closest('.fixed')).not.toBeNull()
+    expect([flow(a), flow(b), column.childElementCount]).toEqual(before)
+    await act(async () => {
+      fireEvent.keyDown(screen.getByTestId('home-chat-emoji-search'), { key: 'Escape' })
+    })
+    // The who-reacted tip: portalled too.
+    await act(async () => {
+      fireEvent.mouseEnter(a.querySelector('[data-testid="home-chat-reaction"]') as HTMLElement)
+    })
+    const tip = screen.getByTestId('home-chat-reaction-tip')
+    expect(column.contains(tip)).toBe(false)
+    expect(tip.className).toMatch(/\bfixed\b/)
+    expect([flow(a), flow(b), column.childElementCount]).toEqual(before)
   })
 })
 

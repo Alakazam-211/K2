@@ -11,6 +11,10 @@
 #   k2-node-linux-<arch>
 #   k2-root-helper-linux-<arch>
 #   k2-app-engine-linux-<arch>
+#   k5-cli-linux-<arch>           the k5 command's program, installed beside
+#                                 the daemon; off by default (only the
+#                                 owner's "New k5 command (Beta)" switch
+#                                 points the k2 and k5 links at it)
 #   <each>.sha256                 ("<sha256>  <name>", sha256sum format)
 #   build-info.json               version, commit, tree, toolchain, glibc,
 #                                 OAuth mode, every file's sha256 + bytes
@@ -199,6 +203,7 @@ DAEMON="k2-daemon-linux-$ARCH"
 NODE="k2-node-linux-$ARCH"
 HELPER="k2-root-helper-linux-$ARCH"
 ENGINE="k2-app-engine-linux-$ARCH"
+K5CLI="k5-cli-linux-$ARCH"
 
 echo "Building k2-ptyd for the daemon to embed ($TRIPLE)..."
 k2_ptyd_build_for_embed "$TRIPLE"
@@ -212,6 +217,8 @@ echo "Building k2-root-helper ($TRIPLE)..."
 cargo build --release --target "$TRIPLE" -p k2-root-helper
 echo "Building k2-app-engine ($TRIPLE)..."
 cargo build --release --target "$TRIPLE" -p k2-app-engine
+echo "Building k5-cli ($TRIPLE)..."
+cargo build --release --target "$TRIPLE" -p k5-cli --bin k5-cli
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -219,6 +226,7 @@ cp "$REL/k2-daemon" "$OUT/$DAEMON"
 cp "$REL/k2-node" "$OUT/$NODE"
 cp "$REL/k2-root-helper" "$OUT/$HELPER"
 cp "$REL/k2-app-engine" "$OUT/$ENGINE"
+cp "$REL/k5-cli" "$OUT/$K5CLI"
 
 # The byte checks daemon-binaries.yml runs, before anything leaves the node.
 # release.sh runs them again on what it fetched (scripts/lib/compute-release.sh).
@@ -246,14 +254,17 @@ if [ -n "${K2_NODE_BUILD_COMMIT:-}" ]; then
 fi
 test "$(grep -a -o 'K2_APP_ENGINE_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;' "$OUT/$ENGINE" | wc -l)" = 1 \
     || { echo "FATAL: $ENGINE has no single build marker" >&2; exit 1; }
+# The k5 program carries cli/k2's version (its build.rs; k2-client checks
+# the same mark before the switch may point a link at it).
+python3 -I scripts/lib/check-k5-cli.py "$OUT/$K5CLI" cli/k2 "linux-$ARCH"
 if [ "$OAUTH_MODE" = "baked" ]; then
     assert_daemon_oauth_not_placeholder "$OUT/$DAEMON"
 fi
 # No file holds this node's home or the job user's name (the path maps).
 k2_assert_no_build_paths "$OUT/$DAEMON" "$OUT/$NODE" "$OUT/$HELPER" "$OUT/$ENGINE"
-file "$OUT/$DAEMON" "$OUT/$NODE" "$OUT/$HELPER" "$OUT/$ENGINE"
+file "$OUT/$DAEMON" "$OUT/$NODE" "$OUT/$HELPER" "$OUT/$ENGINE" "$OUT/$K5CLI"
 
-for f in "$DAEMON" "$NODE" "$HELPER" "$ENGINE"; do
+for f in "$DAEMON" "$NODE" "$HELPER" "$ENGINE" "$K5CLI"; do
     (cd "$OUT" && sha256sum "$f" > "$f.sha256")
 done
 
@@ -275,7 +286,7 @@ K2_BI_GLIBC="$(if [ "$CROSS" = 1 ]; then echo "cross: glibc $CROSS_GLIBC (zig $Z
 K2_BI_PTYD="$PTYD_SHA" K2_BI_EXPORT="$EXPORT_SHA" K2_BI_DESKD="$DESKD_SHA" \
 K2_BI_CROSS="$CROSS" K2_BI_HOST="$HOST_ARCH" K2_BI_ZIG_V="$ZIG_V" K2_BI_ZIGBUILD_V="$ZIGBUILD_V" \
 K2_BI_ZIG_SHA="${K2_CROSS_ZIG_TARBALL_SHA256:-}" K2_BI_ZIGBUILD_SHA="${K2_CROSS_ZIGBUILD_CRATE_SHA256:-}" \
-K2_BI_FILES="$DAEMON $NODE $HELPER $ENGINE" \
+K2_BI_FILES="$DAEMON $NODE $HELPER $ENGINE $K5CLI" \
 python3 - <<'PY'
 import hashlib, json, os
 out = os.environ["K2_BI_OUT"]

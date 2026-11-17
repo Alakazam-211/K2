@@ -179,6 +179,20 @@ case "$(uname -s)-$(uname -m)" in
     *) want_line="app engine:     (none installed; nothing to stage)" ;;
 esac
 if printf '%s' "$out" | grep -qF "$want_line"; then pass "dry run: $want_line"; else fail "dry run engine line" "$out"; fi
+# The k5 command's program: on Linux beside the daemon, from the file://
+# manifest's own folder; never on macOS (the app carries it there).
+case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64|Linux-amd64) k5_line="k5 program:     file://$SCRIPT_DIR/fixtures/k5-cli-linux-x86_64 (+ .sha256) -> " ;;
+    Linux-aarch64|Linux-arm64) k5_line="k5 program:     file://$SCRIPT_DIR/fixtures/k5-cli-linux-aarch64 (+ .sha256) -> " ;;
+    *) k5_line="" ;;
+esac
+if [ -n "$k5_line" ]; then
+    if printf '%s' "$out" | grep -qF "$k5_line"; then pass "dry run: the k5 program beside the daemon"; else fail "dry run k5 line" "$out"; fi
+elif printf '%s' "$out" | grep -q "k5 program:"; then
+    fail "dry run k5 line" "only Linux installs k5-cli beside the daemon: $out"
+else
+    pass "dry run: no k5 program off Linux"
+fi
 out="$(K2_APP_ENGINE_PATH="$tmp/no-such-engine" K2_DRY_RUN=1 sh "$ROOT/scripts/install-daemon.sh" --manifest-url "file://$SCRIPT_DIR/fixtures/daemon-latest-with-engine.json" 2>&1)"
 if printf '%s' "$out" | grep -qF "app engine:     (none installed; nothing to stage)"; then pass "no engine installed: nothing staged"; else fail "dry run without engine" "$out"; fi
 

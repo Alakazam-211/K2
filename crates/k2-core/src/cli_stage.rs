@@ -353,7 +353,7 @@ pub fn current_choice() -> k2_client::cli_install::Choice {
 }
 
 /// The k5 binary's tests (they name its file, which this file doesn't:
-/// `tests/packaging/k5_cli_not_shipped.sh`).
+/// `tests/packaging/k5_cli_shipped_off_by_default.sh`).
 #[cfg(all(test, unix))]
 #[path = "cli_stage_binary_tests.rs"]
 mod binary_tests;

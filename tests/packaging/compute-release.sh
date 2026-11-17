@@ -64,6 +64,8 @@ if kind == "linux-bins":
     files[f"k2-node-linux-{arch}"] = elf(node)
     files[f"k2-root-helper-linux-{arch}"] = elf(b"helper K2_ROOT_HELPER_BUILD v=%s proto=9 arch=%s;" % (v.encode(), arch.encode()))
     files[f"k2-app-engine-linux-{arch}"] = elf(b"engine K2_APP_ENGINE_BUILD v=%s proto=1 arch=%s;" % (v.encode(), arch.encode()))
+    k5 = b"k5 K5_CLI_VERSION=%s\x00" % (b"0.0.1" if tamper == "k5_version" else v.encode())
+    files[f"k5-cli-linux-{arch}"] = elf(k5)
     if os.environ.get("GEN_SALT"):
         files[f"k2-node-linux-{arch}"] += os.environ["GEN_SALT"].encode()
     if os.environ.get("GEN_DAEMON_SALT"):
@@ -298,10 +300,10 @@ echo "compute mode staging (stage 1):"
     source "$ROOT/scripts/lib/compute-release.sh"
     K2CR_STATE="$tmp/ok" K2CR_FILES="$tmp/ok-files" K2CR_COLLECTED=1 k2cr_stage "$tmp/dist" > "$tmp/stage.out" 2>&1
 ) && pass "k2cr_stage copies the verified files" || fail "stage" "$(cat "$tmp/stage.out")"
-python3 - "$tmp/dist" "$tmp/ok/staged.txt" <<'PYS' && pass "staged: 4 binaries + .sha256, deb/rpm/AppImage, SHA256SUMS with L3's 3 lines" || fail "staged set" "$(ls "$tmp/dist")"
+python3 - "$tmp/dist" "$tmp/ok/staged.txt" <<'PYS' && pass "staged: 5 binaries (k5-cli too) + .sha256, deb/rpm/AppImage, SHA256SUMS with L3's 3 lines" || fail "staged set" "$(ls "$tmp/dist")"
 import os, sys
 d, staged = sys.argv[1], open(sys.argv[2]).read().split()
-want = {f"{b}-linux-x86_64{x}" for b in ("k2-daemon", "k2-node", "k2-root-helper", "k2-app-engine") for x in ("", ".sha256")}
+want = {f"{b}-linux-x86_64{x}" for b in ("k2-daemon", "k2-node", "k2-root-helper", "k2-app-engine", "k5-cli") for x in ("", ".sha256")}
 want |= {"K2_9.9.9_amd64.deb", "K2-9.9.9-1.x86_64.rpm", "K2_9.9.9_amd64.AppImage", "SHA256SUMS-linux-x86_64.txt"}
 assert set(os.listdir(d)) == want, sorted(set(os.listdir(d)) ^ want)
 assert set(staged) == want, staged
@@ -374,6 +376,7 @@ export GEN_TAMPER=info_version;   check_tamper t-info "build-info of another ver
 export GEN_TAMPER=no_ptyd;        check_tamper t-ptyd "a daemon without k2-ptyd" "does not embed k2-ptyd"
 export GEN_TAMPER=no_export;      check_tamper t-export "a daemon without k2-export" "does not embed k2-export"
 export GEN_TAMPER=no_deskd;       check_tamper t-deskd "a daemon without k2-deskd" "does not embed k2-deskd"
+export GEN_TAMPER=k5_version;     check_tamper t-k5 "a k5-cli of another release" "k5 version marks"
 unset GEN_TAMPER
 export K2_COMPUTE_X86_NODE=stranger-1; check_tamper t-node "a node off the release list" "not a release node"
 unset K2_COMPUTE_X86_NODE
@@ -439,7 +442,7 @@ grep -q 'L2 on k2n10-vin and V2 on k2n11-vin: two nodes' "$tmp/arm.collect" && g
 python3 - "$tmp/arm-dist" "$tmp/arm/staged.txt" <<'PYS' && pass "staged: both arches' binaries + .sha256, and the x86_64 packages" || fail "arm staged set" "$(ls "$tmp/arm-dist")"
 import os, sys
 d, staged = sys.argv[1], open(sys.argv[2]).read().split()
-want = {f"{b}-linux-{a}{x}" for a in ("x86_64", "aarch64") for b in ("k2-daemon", "k2-node", "k2-root-helper", "k2-app-engine") for x in ("", ".sha256")}
+want = {f"{b}-linux-{a}{x}" for a in ("x86_64", "aarch64") for b in ("k2-daemon", "k2-node", "k2-root-helper", "k2-app-engine", "k5-cli") for x in ("", ".sha256")}
 want |= {"K2_9.9.9_amd64.deb", "K2-9.9.9-1.x86_64.rpm", "K2_9.9.9_amd64.AppImage", "SHA256SUMS-linux-x86_64.txt"}
 assert set(os.listdir(d)) == want, sorted(set(os.listdir(d)) ^ want)
 assert set(staged) == want, staged

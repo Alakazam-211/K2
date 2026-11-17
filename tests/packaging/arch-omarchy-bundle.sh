@@ -116,6 +116,9 @@ absent "PKGBUILD does not depend gtk4" "$ARCH/PKGBUILD" "gtk4"
 matches "PKGBUILD installs cli/k2 as /usr/bin/k2" "$ARCH/PKGBUILD" 'cli/k2" "\$\{pkgdir\}/usr/bin/k2"'
 matches "PKGBUILD installs /usr/bin/k2-gui" "$ARCH/PKGBUILD" '\$\{pkgdir\}/usr/bin/k2-gui"'
 matches "PKGBUILD installs /usr/lib/k2/k2-gui" "$ARCH/PKGBUILD" '\$\{pkgdir\}/usr/lib/k2/k2-gui"'
+# The k5 command's program beside the daemon, under its own name (off by
+# default; never as k2 or k5: tests/packaging/k5_cli_shipped_off_by_default.sh).
+matches "PKGBUILD installs /usr/bin/k5-cli beside the daemon" "$ARCH/PKGBUILD" 'release/k5-cli" "\$\{pkgdir\}/usr/bin/k5-cli"'
 matches "desktop Exec=k2-gui" "$ARCH/k2.desktop" '^Exec=k2-gui$'
 if [[ -f "$ARCH/k2.desktop" ]] && grep -Eq '^Exec=k2$' "$ARCH/k2.desktop"; then
     fail "desktop does not Exec=k2 as GUI" "Exec=k2 would steal the CLI name"

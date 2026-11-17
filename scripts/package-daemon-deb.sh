@@ -5,6 +5,11 @@
 #
 # Layout:
 #   /usr/bin/k2-daemon                          — the daemon binary
+#   /usr/bin/k5-cli                             — the k5 command's program,
+#                                                 beside the daemon; off by
+#                                                 default (only the owner's
+#                                                 "New k5 command (Beta)"
+#                                                 switch runs it)
 #   /usr/lib/systemd/user/k2-daemon.service     — systemd USER unit
 #   /usr/lib/systemd/user/k2-daemon-home.service — creates ~/.k2 first
 #
@@ -79,12 +84,20 @@ k2_ptyd_build_for_embed
 k2_deskd_build_for_embed
 cargo build --release -p k2-daemon --bin k2-daemon
 cargo build --release -p k2-node --bin k2-node
+cargo build --release -p k5-cli --bin k5-cli
 BIN="${CARGO_TARGET_DIR:-target}/release/k2-daemon"
 NODE_BIN="${CARGO_TARGET_DIR:-target}/release/k2-node"
+K5_BIN="${CARGO_TARGET_DIR:-target}/release/k5-cli"
 [ -x "$BIN" ] || { echo "package-daemon-deb: FATAL — $BIN missing after build" >&2; exit 1; }
 assert_daemon_oauth_not_placeholder "$BIN"
 assert_daemon_embeds_ptyd "$BIN"
 assert_daemon_embeds_deskd "$BIN"
+case "$(uname -m)" in
+    x86_64 | amd64) K5_KIND=linux-x86_64 ;;
+    aarch64 | arm64) K5_KIND=linux-aarch64 ;;
+    *) echo "package-daemon-deb: FATAL — no k5-cli check for $(uname -m)" >&2; exit 1 ;;
+esac
+python3 -I scripts/lib/check-k5-cli.py "$K5_BIN" cli/k2 "$K5_KIND"
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
@@ -93,6 +106,9 @@ PKGROOT="$STAGE/k2-daemon_${VERSION}_${ARCH}"
 install -D -m 0755 "$BIN" "$PKGROOT/usr/bin/k2-daemon"
 # Compute nodes: installed, never enabled (k2 compute local enable).
 install -D -m 0755 "$NODE_BIN" "$PKGROOT/usr/bin/k2-node"
+# The k5 command's program, where k2-client's cli_install looks for it
+# (beside the daemon). Off by default.
+install -D -m 0755 "$K5_BIN" "$PKGROOT/usr/bin/k5-cli"
 install -d "$PKGROOT/usr/lib/systemd/user"
 cat > "$PKGROOT/usr/lib/systemd/user/k2-daemon.service" <<'UNIT'
 # k2-daemon systemd USER unit — Linux twin of the macOS launchd agent

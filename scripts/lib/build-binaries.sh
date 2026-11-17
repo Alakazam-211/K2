@@ -12,6 +12,9 @@
 #   3. Checks + copies the sidecars into K2.app (nested K2 Daemon.app for
 #      k2-daemon + k2-ptyd; nested K2 Screen.app for k2-deskd;
 #      Contents/MacOS for the rest).
+#   4. The k5 command's program, Contents/MacOS/k5-cli: universal (arm64 +
+#      x86_64), its own cargo call right after the sidecars
+#      (k2_build_mac_k5_cli below).
 #
 # Every cargo call here (and Step 8.5's) runs under the release path maps
 # (scripts/lib/build-paths.sh: $HOME, the checkout and the cargo home never
@@ -146,6 +149,53 @@ _k2_mac_sidecar_cargo() {
     k2_path_mapped cargo build --release "${K2_MAC_SIDECAR_CARGO_ARGS[@]}"
 }
 
+# The k5 command's program (crates/k5-cli), shipped off by default: only
+# the owner's "New k5 command (Beta)" switch points the k2 and k5 links at
+# it, and only k2-client's cli_install guard decides that (never a script;
+# tests/packaging/k5_cli_shipped_off_by_default.sh). Universal, so one file
+# runs on every Mac, in its own cargo call (its two --target builds can't
+# share the sidecars' call, and its features then resolve as if built
+# alone). After the sidecars: cargo locks target/. Its version is the one
+# its build.rs reads from cli/k2, checked here, never written by hand.
+K2_MAC_K5_CLI_TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
+
+# k2_mac_k5_cli_targets_check: rustup has both targets for the pinned Rust
+# (release.sh asks at Step 0.4, before anything is built).
+k2_mac_k5_cli_targets_check() {
+    local have t missing=()
+    command -v rustup >/dev/null 2>&1 \
+        || { echo "FATAL: rustup not found: the universal k5-cli needs its ${K2_MAC_K5_CLI_TARGETS[*]} targets" >&2; return 1; }
+    have="$(rustup target list --installed)" \
+        || { echo "FATAL: rustup target list --installed failed" >&2; return 1; }
+    for t in "${K2_MAC_K5_CLI_TARGETS[@]}"; do
+        grep -qx -- "$t" <<<"$have" || missing+=("$t")
+    done
+    if [ "${#missing[@]}" -gt 0 ]; then
+        echo "FATAL: the pinned Rust has no ${missing[*]} target here (the universal k5-cli): rustup target add ${missing[*]}" >&2
+        return 1
+    fi
+    echo "  k5-cli targets ready: ${K2_MAC_K5_CLI_TARGETS[*]}"
+}
+
+# k2_build_mac_k5_cli <dest>: build both slices, join them at <dest>, and
+# check the result (scripts/lib/check-k5-cli.py: a universal Mach-O with
+# exactly arm64 and x86_64, each carrying cli/k2's version).
+k2_build_mac_k5_cli() {
+    local dest="$1" t tdir="${CARGO_TARGET_DIR:-target}" args=() slices=()
+    k2_mac_k5_cli_targets_check || return 1
+    for t in "${K2_MAC_K5_CLI_TARGETS[@]}"; do
+        args+=(--target "$t")
+        slices+=("$tdir/$t/release/k5-cli")
+    done
+    cargo build --release -p k5-cli --bin k5-cli "${args[@]}" \
+        || { echo "FATAL: k5-cli build (${K2_MAC_K5_CLI_TARGETS[*]}) failed" >&2; return 1; }
+    mkdir -p "$(dirname "$dest")" || return 1
+    lipo -create -output "$dest" "${slices[@]}" \
+        || { echo "FATAL: lipo could not join the k5-cli slices into $dest" >&2; return 1; }
+    chmod 0755 "$dest" || return 1
+    python3 -I "$(dirname "${BASH_SOURCE[0]}")/check-k5-cli.py" "$dest" cli/k2 macos || return 1
+}
+
 # k2_check_bundled_dfn3 <resource-dir>: the built app carries the four
 # DeepFilterNet3 files under dfn3/, and the weights hash to the pin
 # (scripts/fetch-dfn3.sh's DFN3_WEIGHTS_SHA256). Loud on any miss. Run from
@@ -188,6 +238,7 @@ k2_build_mac_binaries() {
         echo ""; echo "  Build 2/2: k2-daemon, k2-power-helper, k2-ptyd, k2-export, k2-deckrender, k2-scenerender, k2-node, k2-menubar, k2-deskd (one cargo call)..."
         _k2_mac_sidecar_cargo \
             || { echo "FATAL: sidecar build (k2-daemon, k2-ptyd, k2-export, k2-deckrender, k2-scenerender, k2-node, k2-menubar, k2-deskd) failed" >&2; return 1; }
+        k2_build_mac_k5_cli "$out/k5-universal/k5-cli" || return 1
     else
         local tdir="${K2_MAC_TAURI_TARGET_DIR:-$PWD/target/tauri}" tpid trc=0 src=0 t0
         case "$tdir" in /*) ;; *) tdir="$PWD/$tdir" ;; esac
@@ -205,7 +256,14 @@ k2_build_mac_binaries() {
             echo "FATAL: sidecar build (k2-daemon, k2-ptyd, k2-export, k2-deckrender, k2-scenerender, k2-node, k2-menubar, k2-deskd) failed (the tauri build was stopped)" >&2
             return 1
         fi
-        echo "  sidecars built ($(( $(date +%s) - t0 ))s); waiting for the tauri build..."
+        echo "  sidecars built ($(( $(date +%s) - t0 ))s); building k5-cli..."
+        if ! k2_build_mac_k5_cli "$out/k5-universal/k5-cli"; then
+            k2_kill_tree "$tpid"
+            wait "$tpid" 2>/dev/null || true
+            echo "FATAL: the k5-cli build failed (the tauri build was stopped)" >&2
+            return 1
+        fi
+        echo "  k5-cli built; waiting for the tauri build..."
         wait "$tpid" || trc=$?
         [ "$trc" = 0 ] || { echo "FATAL: tauri build failed (its lines start with [tauri])" >&2; return 1; }
         [ -d "$tdir/release/bundle/macos/K2.app" ] \
@@ -254,4 +312,11 @@ k2_build_mac_binaries() {
     # user name (the path maps above, proven on the built bytes).
     echo ""; echo "  Checking $app for build paths..."
     k2_assert_no_build_paths "$app" || return 1
+
+    # The k5 command's program, beside the app's executable, where
+    # k2-client's cli_install looks for it (`<X>.app/Contents/MacOS`). Off
+    # by default: the bundle carries it; only the owner's switch runs it.
+    [ -x "$out/k5-universal/k5-cli" ] || { echo "FATAL: k5-cli missing at $out/k5-universal/k5-cli after its build" >&2; return 1; }
+    cp "$out/k5-universal/k5-cli" "$app/Contents/MacOS/k5-cli" || return 1
+    echo "  k5-cli (universal) copied into the bundle."
 }

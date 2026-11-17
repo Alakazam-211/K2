@@ -1082,6 +1082,9 @@ k2dry_step 0.4 "Rust toolchain pin"
 echo ""
 echo "Step 0.4: Rust toolchain pin..."
 k2_rust_pin_check
+# Step 2 builds the k5 command's program universal (arm64 + x86_64): the
+# pinned Rust needs both targets here, checked before anything is built.
+k2_mac_k5_cli_targets_check || exit 1
 
 # ── Step 0.45: Update-signing preflight (SS1/SS2) ──
 k2dry_step 0.45 "Update-signing preflight + key copies test"
@@ -1343,6 +1346,9 @@ k2dry_step 2 "Build K2.app + sidecars"
 # release.sh never bumps crates/k2-ptyd. k2-node rides inside K2.app so
 # Settings → Compute installs it; k2-menubar is staged to ~/.k2/bin on
 # first GUI open. Hardened-runtime signing in Step 3 covers them all.
+# The k5 command's program, Contents/MacOS/k5-cli (universal, its own cargo
+# call after the sidecars), ships off by default: only the owner's switch
+# runs it (k2-client's cli_install decides).
 # OAuth client id/secret already required + exported (require_mail_oauth_build_env).
 echo ""
 echo "Step 2: Building release (K2.app + sidecars)..."
@@ -1387,6 +1393,10 @@ codesign --force --options runtime --timestamp \
 codesign --force --options runtime --timestamp \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-node"
+# The k5 command's program: the same Developer ID, its own identifier
+# (dev.k2.app.k5-cli, never the daemon's), hardened runtime, no
+# entitlements and so no keychain access group. Notarized with the app.
+k2_k5_cli_sign "target/release/bundle/macos/K2.app" "$SIGNING_IDENTITY" || exit 1
 # frpc tunnel sidecar (Tauri externalBin → Contents/MacOS/frpc). Re-sign
 # with hardened runtime so the binary the app stages to ~/.k2/bin/frpc
 # is notarization-covered and runs without a Gatekeeper quarantine block.
@@ -1404,9 +1414,10 @@ codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app"
-echo "  Signed (main + K2 Daemon.app + k2-ptyd + k2-export + k2-deckrender + k2-scenerender + K2 Screen.app + frpc + bundle) with entitlements."
+echo "  Signed (main + K2 Daemon.app + k2-ptyd + k2-export + k2-deckrender + k2-scenerender + K2 Screen.app + k5-cli + frpc + bundle) with entitlements."
 k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
 k2_daemon_helper_verify_signed "target/release/bundle/macos/K2.app"
+k2_k5_cli_verify_signed "target/release/bundle/macos/K2.app" || exit 1
 # K2 Screen: identifier, runtime, team, no forbidden entitlement, and the
 # AMFI exec check (it matters most once a provisioning profile rides in it).
 k2_screen_helper_verify "target/release/bundle/macos/K2.app"
@@ -1519,6 +1530,8 @@ k2_daemon_helper_verify_shipped_deckrender "K2.app"
 k2_daemon_helper_verify_shipped_scenerender "K2.app"
 # K2 Screen (remote desktop): signed, nested and notarized with the app.
 k2_screen_helper_verify_shipped "K2.app"
+# The k5 command's program: signed and notarized with the app.
+k2_k5_cli_verify_shipped "K2.app" || exit 1
 # The background standalone daemon build (Step 3.6): stop now if it failed.
 k2_standalone_macos_daemon_poll "$STANDALONE_STAGE" || exit 1
 
@@ -1536,6 +1549,7 @@ k2_daemon_helper_verify_tarball_export "target/release/bundle/macos/K2.app.tar.g
 k2_daemon_helper_verify_tarball_deckrender "target/release/bundle/macos/K2.app.tar.gz"
 k2_daemon_helper_verify_tarball_scenerender "target/release/bundle/macos/K2.app.tar.gz"
 k2_screen_helper_verify_tarball "target/release/bundle/macos/K2.app.tar.gz"
+k2_k5_cli_verify_tarball "target/release/bundle/macos/K2.app.tar.gz" || exit 1
 
 # Sign the update bundle with the update key. The Tauri app updater reads
 # the signature base64-wrapped (b64), exactly as the tauri signer wrote it.

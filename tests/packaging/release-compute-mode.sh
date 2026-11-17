@@ -382,7 +382,8 @@ assert [x["target"] for x in both] == ["x86_64-unknown-linux-gnu", "aarch64-unkn
 for x in both:
     a = x["target"].split("-")[0]
     assert x == {"target": x["target"], "asset": "k2-daemon-linux-" + a, "root_asset": "k2-root-helper-linux-" + a,
-                 "node_asset": "k2-node-linux-" + a, "engine_asset": "k2-app-engine-linux-" + a, "cross": a == "aarch64"}, x
+                 "node_asset": "k2-node-linux-" + a, "engine_asset": "k2-app-engine-linux-" + a, "cli_asset": "k5-cli-linux-" + a,
+                 "cross": a == "aarch64"}, x
 assert compute[0] == both[1]
 job = s[s.index("  build-linux-daemon:"):s.index("    strategy:")]
 assert "    if: github.event_name != 'push' || vars.LINUX_BUILDS != 'compute-all'\n" in job, job

@@ -26,8 +26,9 @@
 #     by `rev = "<40-hex sha>"`, with no branch or tag, and every git source
 #     in Cargo.lock carries that sha;
 #   - every crate the release builds name (`-p <crate>` in
-#     scripts/macos-daemon-helper-app.sh, scripts/ci/build-linux-bins.sh,
-#     scripts/linux-ptyd-embed.sh and scripts/windows/build-nsis-release.ps1)
+#     scripts/macos-daemon-helper-app.sh, scripts/lib/build-binaries.sh,
+#     scripts/ci/build-linux-bins.sh, scripts/linux-ptyd-embed.sh and
+#     scripts/windows/build-nsis-release.ps1)
 #     is in SHIPPED below, so a new shipped crate can't skip the gate.
 #     tests/packaging/cargo-deny-policy.sh tests both, and the policy itself.
 #
@@ -68,6 +69,7 @@ SHIPPED=(
     "crates/k2-deskd:k2-deskd"
     "crates/k2-root-helper:k2-root-helper"
     "crates/k2-app-engine:k2-app-engine"
+    "crates/k5-cli:k5-cli"
     "crates/k2-signer:k2-signer"
 )
 
@@ -142,7 +144,7 @@ if lock.exists():
             errs.append(f"Cargo.lock {pkg.get('name')} {pkg.get('version')}: git source not locked to its full rev ({src})")
 
 named = set()
-for script in ("scripts/macos-daemon-helper-app.sh", "scripts/ci/build-linux-bins.sh",
+for script in ("scripts/macos-daemon-helper-app.sh", "scripts/lib/build-binaries.sh", "scripts/ci/build-linux-bins.sh",
                "scripts/linux-ptyd-embed.sh", "scripts/windows/build-nsis-release.ps1"):
     f = root / script
     if not f.exists():

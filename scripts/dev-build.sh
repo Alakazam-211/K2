@@ -75,17 +75,20 @@ k2_screen_helper_sign "$APP" "$SIGNING_IDENTITY" || exit 1
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-menubar"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-power-helper"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-node"
+# The k5 command's program: its own identifier, no entitlements.
+k2_k5_cli_sign "$APP" "$SIGNING_IDENTITY" || exit 1
 FRPC_BIN="$APP/Contents/MacOS/frpc"
 if [ -x "$FRPC_BIN" ]; then
     codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$FRPC_BIN"
     echo "  Signed frpc sidecar."
 fi
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP"
-echo "  Signed (main + K2 Daemon.app + frpc + bundle)."
+echo "  Signed (main + K2 Daemon.app + k5-cli + frpc + bundle)."
 k2_daemon_helper_verify "$APP" || exit 1
 k2_daemon_helper_verify_signed "$APP" || exit 1
 k2_screen_helper_verify "$APP" || exit 1
 k2_screen_helper_verify_signed "$APP" || exit 1
+k2_k5_cli_verify_signed "$APP" || exit 1
 
 echo ""; echo "Step 4: launch smoke-test (AMFI exec check)..."
 # `k2 --version` prints and exits before the app starts (0.46.6), so this

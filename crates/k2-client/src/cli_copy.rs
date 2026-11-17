@@ -198,7 +198,7 @@ fn set_exec(f: &fs::File, path: &Path) -> Result<(), String> {
 }
 
 /// The tests name the k5 binary's file, which this file doesn't
-/// (`tests/packaging/k5_cli_not_shipped.sh`).
+/// (`tests/packaging/k5_cli_shipped_off_by_default.sh`).
 #[cfg(test)]
 #[path = "cli_copy_tests.rs"]
 mod tests;

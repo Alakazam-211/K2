@@ -76,15 +76,16 @@ echo "offline checks:"
 rc=0; out="$(bash "$SCRIPT" offline 2>&1)" || rc=$?
 [ "$rc" = 0 ] && pass "the real tree passes" || fail "real tree" "rc=$rc $out"
 
-# A fixture tree: a manifest, a lock and the four release build scripts.
+# A fixture tree: a manifest, a lock and the five release build scripts.
 SHA=85f5c87f93b301823629d920da5bc31015bd64b0
 fixture() {
     local d="$tmp/$1"
-    mkdir -p "$d/scripts/ci" "$d/scripts/windows" "$d/crates/a"
+    mkdir -p "$d/scripts/ci" "$d/scripts/lib" "$d/scripts/windows" "$d/crates/a"
     printf '[package]\nname = "a"\nversion = "0.1.0"\n\n[dependencies]\nfoo = { git = "https://example.test/foo", rev = "%s" }\n' "$SHA" > "$d/crates/a/Cargo.toml"
     printf '[[package]]\nname = "foo"\nversion = "0.1.0"\nsource = "git+https://example.test/foo?rev=%s#%s"\n' "$SHA" "$SHA" > "$d/Cargo.lock"
     printf 'ARGS=(\n    -p k2-daemon --bin k2-daemon\n    -p k2-ptyd --bin k2-ptyd\n)\n' > "$d/scripts/macos-daemon-helper-app.sh"
     printf 'cargo build --release --target "$T" -p k2-root-helper\n' > "$d/scripts/ci/build-linux-bins.sh"
+    printf 'cargo build --release -p k5-cli --bin k5-cli "${args[@]}"\n' > "$d/scripts/lib/build-binaries.sh"
     printf 'cargo build --release -p k2-export --bin k2-export\n' > "$d/scripts/linux-ptyd-embed.sh"
     printf "Run 'cargo build k2-daemon' { cargo build --release -p k2-daemon }\n" > "$d/scripts/windows/build-nsis-release.ps1"
     echo "$d"
@@ -118,12 +119,15 @@ refused "a lock entry without its rev" "Cargo.lock foo 0.1.0: git source not loc
 d="$(fixture newcrate)"
 printf 'cargo build --release --target "$T" -p k2-root-helper\ncargo build --release --target "$T" -p k2-new-worker\n' > "$d/scripts/ci/build-linux-bins.sh"
 refused "a release crate missing from SHIPPED" "builds -p k2-new-worker for release, but it is not in SHIPPED" "$d"
+d="$(fixture newmac)"
+printf 'cargo build --release -p k5-cli --bin k5-cli "${args[@]}"\ncargo build --release -p k2-new-mac-tool\n' > "$d/scripts/lib/build-binaries.sh"
+refused "a Mac build crate missing from SHIPPED" "scripts/lib/build-binaries.sh builds -p k2-new-mac-tool for release, but it is not in SHIPPED" "$d"
 
 echo "stale exceptions and ignores (cargo-deny output per tree, stubbed):"
 # The shipped package names, from the script's SHIPPED list.
 pkgs=()
 while IFS= read -r p; do pkgs+=("$p"); done < <(sed -n '/^SHIPPED=(/,/^)/s/^ *"[^:]*:\([^"]*\)"$/\1/p' "$SCRIPT")
-[ "${#pkgs[@]}" = 12 ] && pass "12 shipped trees listed" || fail "shipped list" "got ${#pkgs[@]}: ${pkgs[*]}"
+[ "${#pkgs[@]}" = 13 ] && pass "13 shipped trees listed" || fail "shipped list" "got ${#pkgs[@]}: ${pkgs[*]}"
 A1=RUSTSEC-2099-0001
 A2=RUSTSEC-2099-0002
 printf '[advisories]\nignore = [\n    { id = "%s", reason = "a test ignore with a long enough reason" },\n    { id = "%s", reason = "a test ignore with a long enough reason" },\n]\n\n[licenses]\nallow = ["MIT"]\n\n[[licenses.exceptions]]\ncrate = "alpha"\nallow = ["CC0-1.0"]\n\n[[licenses.exceptions]]\ncrate = "beta"\nallow = ["MPL-2.0"]\n' "$A1" "$A2" > "$tmp/deny-ex.toml"
@@ -152,7 +156,7 @@ stale_case() {
 # Every entry used somewhere: alpha and A1 by the first tree only, beta and A2 by the last only.
 mkdir -p "$tmp/used"
 for i in "${!pkgs[@]}"; do
-    if [ "$i" = 0 ]; then unused_log beta "$A2"; elif [ "$i" = 11 ]; then unused_log alpha "$A1"; else unused_log alpha beta "$A1" "$A2"; fi > "$tmp/used/${pkgs[$i]}.log"
+    if [ "$i" = 0 ]; then unused_log beta "$A2"; elif [ "$i" = 12 ]; then unused_log alpha "$A1"; else unused_log alpha beta "$A1" "$A2"; fi > "$tmp/used/${pkgs[$i]}.log"
 done
 stale_case used ok
 # alpha unused in every tree (beta still used once): alpha is stale, beta is not.
@@ -160,7 +164,7 @@ mkdir -p "$tmp/stale"
 for i in "${!pkgs[@]}"; do
     if [ "$i" = 3 ]; then unused_log alpha; else unused_log alpha beta; fi > "$tmp/stale/${pkgs[$i]}.log"
 done
-stale_case stale 'exception for "alpha" is unused in all 12 shipped trees'
+stale_case stale 'exception for "alpha" is unused in all 13 shipped trees'
 out="$(run_stale stale)" || true
 [[ "$out" != *'"beta"'* ]] && pass "an exception one tree uses is not called stale" || fail "beta called stale" "$out"
 # A1 matches no tree (A2 matches one): A1 is stale, A2 is not.
@@ -168,7 +172,7 @@ mkdir -p "$tmp/staleignore"
 for i in "${!pkgs[@]}"; do
     if [ "$i" = 7 ]; then unused_log "$A1"; else unused_log "$A1" "$A2"; fi > "$tmp/staleignore/${pkgs[$i]}.log"
 done
-stale_case staleignore "the advisory ignore $A1 matches none of the 12 shipped trees"
+stale_case staleignore "the advisory ignore $A1 matches none of the 13 shipped trees"
 out="$(run_stale staleignore)" || true
 [[ "$out" != *"$A2"* ]] && pass "an ignore one tree matches is not called stale" || fail "$A2 called stale" "$out"
 # A tree with no output at all can't count as using anything.
@@ -179,7 +183,7 @@ stale_case missing "no cargo-deny output for ${pkgs[5]}"
 # The warnings in colour are still read.
 mkdir -p "$tmp/colour"
 for p in "${pkgs[@]}"; do unused_log alpha "$A2" | sed $'s/crate = /\e[1mcrate\e[0m = /; s/{ id = /{ \e[1mid\e[0m = /' > "$tmp/colour/$p.log"; done
-stale_case colour 'exception for "alpha" is unused in all 12 shipped trees'
+stale_case colour 'exception for "alpha" is unused in all 13 shipped trees'
 out="$(run_stale colour)" || true
 [[ "$out" == *"advisory ignore $A2 matches none"* ]] && pass "a coloured ignore warning is read" || fail "coloured ignore" "$out"
 

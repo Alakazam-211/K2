@@ -59,6 +59,57 @@ rm "$mac/$K2_DAEMON_HELPER_SCENERENDER"
 tar -czf "$work/scenerender-missing.tar.gz" -C "$work/ok" K2.app
 if k2_daemon_helper_verify_tarball_scenerender "$work/scenerender-missing.tar.gz" 2>/dev/null; then echo "FAIL: a bundle without k2-scenerender passed"; exit 1; fi
 
+# The k5 command's program: the update bundle carries it at
+# Contents/MacOS/k5-cli, executable.
+k5="$work/ok/K2.app/Contents/MacOS/$K2_K5_CLI_EXE"
+mkdir -p "$(dirname "$k5")"
+printf 'x' > "$k5"; chmod 0755 "$k5"
+tar -czf "$work/k5.tar.gz" -C "$work/ok" K2.app
+k2_k5_cli_verify_tarball "$work/k5.tar.gz" >/dev/null || { echo "FAIL: a bundle with k5-cli was refused"; exit 1; }
+chmod 0644 "$k5"
+tar -czf "$work/k5-noexec.tar.gz" -C "$work/ok" K2.app
+if k2_k5_cli_verify_tarball "$work/k5-noexec.tar.gz" 2>/dev/null; then echo "FAIL: a non-executable k5-cli passed"; exit 1; fi
+rm "$k5"
+tar -czf "$work/k5-missing.tar.gz" -C "$work/ok" K2.app
+if k2_k5_cli_verify_tarball "$work/k5-missing.tar.gz" 2>/dev/null; then echo "FAIL: a bundle without k5-cli passed"; exit 1; fi
+
+# Its signature after Step 3 (k2_k5_cli_verify_signed), with a stub
+# codesign: its own identifier, never the daemon's, the hardened runtime,
+# the daemon's Team ID, no entitlements, and its --version says cli/k2's.
+(
+    k5w="$work/k5sig"; mkdir -p "$k5w/stub" "$k5w/cli" "$k5w/K2.app/Contents/MacOS" "$k5w/K2.app/Contents/Helpers/$K2_DAEMON_HELPER_APP/Contents/MacOS"
+    printf '#!/bin/bash\nK2_CLI_VERSION="9.8.7"\n' > "$k5w/cli/k2"
+    printf '#!/bin/sh\necho "k2 ${STUB_K5_SAYS:-9.8.7}"\n' > "$k5w/K2.app/Contents/MacOS/k5-cli"
+    printf 'x' > "$k5w/K2.app/Contents/Helpers/$K2_DAEMON_HELPER_APP/Contents/MacOS/k2-daemon"
+    chmod 0755 "$k5w/K2.app/Contents/MacOS/k5-cli"
+    cat > "$k5w/stub/codesign" <<'EOF'
+#!/bin/bash
+case "$1" in
+    --verify) exit 0 ;;
+    -dv) case "$2" in
+             *k5-cli) echo "Identifier=${STUB_K5_ID:-dev.k2.app.k5-cli}" >&2
+                      echo "CodeDirectory v=20500 size=1 flags=${STUB_K5_FLAGS:-0x10000(runtime)} hashes=1" >&2
+                      echo "TeamIdentifier=${STUB_K5_TEAM:-TEAM}" >&2 ;;
+             *) echo "Identifier=dev.k2.app.daemon" >&2; echo "TeamIdentifier=TEAM" >&2 ;;
+         esac; exit 0 ;;
+    -d) [ -z "${STUB_K5_ENTS:-}" ] || printf '%s\n' "$STUB_K5_ENTS"; exit 0 ;;
+esac
+exit 1
+EOF
+    chmod +x "$k5w/stub/codesign"
+    cd "$k5w"
+    export PATH="$k5w/stub:$PATH"
+    k2_k5_cli_verify_signed "$k5w/K2.app" >/dev/null || { echo "FAIL: a well-signed k5-cli was refused"; exit 1; }
+    for bad in "STUB_K5_ID=dev.k2.app.daemon" "STUB_K5_ID=k5-cli" "STUB_K5_FLAGS=0x0(none)" "STUB_K5_TEAM=OTHER" \
+               "STUB_K5_ENTS=<dict><key>keychain-access-groups</key></dict>" "STUB_K5_SAYS=1.2.3"; do
+        if env "$bad" bash -c '. "$1/scripts/macos-daemon-helper-app.sh"; k2_k5_cli_verify_signed "$2"' _ "$here" "$k5w/K2.app" >/dev/null 2>&1; then
+            echo "FAIL: k2_k5_cli_verify_signed passed with $bad"; exit 1
+        fi
+    done
+)
+grep -q '^k2_k5_cli_verify_shipped "K2.app" || exit 1$' "$here/scripts/release.sh" || { echo "FAIL: release.sh doesn't check the notarized app's k5-cli"; exit 1; }
+grep -q '^k2_k5_cli_verify_tarball "target/release/bundle/macos/K2.app.tar.gz" || exit 1$' "$here/scripts/release.sh" || { echo "FAIL: release.sh doesn't check the update bundle's k5-cli"; exit 1; }
+
 # ── The standalone macOS daemon embeds the signed k2-ptyd (P84) ──
 # Stubs on PATH: `codesign` accepts the nested k2-ptyd as dev.k2.app.ptyd
 # (or not, with STUB_BAD_SIG=1); `cargo` plays build.rs: it writes a daemon
@@ -128,4 +179,4 @@ grep -q '^k2_daemon_helper_verify_shipped_deckrender "K2.app"$' "$here/scripts/r
 grep -q '^k2_daemon_helper_verify_tarball_deckrender "target/release/bundle/macos/K2.app.tar.gz"$' "$here/scripts/release.sh" || { echo "FAIL: release.sh doesn't check the update bundle's k2-deckrender"; exit 1; }
 grep -q '^k2_daemon_helper_verify_shipped_scenerender "K2.app"$' "$here/scripts/release.sh" || { echo "FAIL: release.sh doesn't check the notarized app's k2-scenerender"; exit 1; }
 grep -q '^k2_daemon_helper_verify_tarball_scenerender "target/release/bundle/macos/K2.app.tar.gz"$' "$here/scripts/release.sh" || { echo "FAIL: release.sh doesn't check the update bundle's k2-scenerender"; exit 1; }
-echo "ok: release k2-ptyd, k2-export, k2-deckrender and k2-scenerender checks"
+echo "ok: release k2-ptyd, k2-export, k2-deckrender, k2-scenerender and k5-cli checks"

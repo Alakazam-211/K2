@@ -361,11 +361,13 @@ pub fn bundle_exe_dir_of_script(script: &Path) -> Option<PathBuf> {
 }
 
 // k5-cli guard: begin
-// tests/packaging/k5_cli_not_shipped.sh holds this file and the other
-// install code to it: the binary's file name is spelled only between these
-// two lines, the const below is read nowhere else, and every function here
-// that returns a path starts with `if !on {`. So no install path leads to
-// the binary while the owner's switch is off.
+// tests/packaging/k5_cli_shipped_off_by_default.sh holds this file and the
+// other install code to it: the binary's file name is spelled only between
+// these two lines, the const below is read nowhere else, and every function
+// here that returns a path starts with `if !on {`. So no install path leads
+// to the binary while the owner's switch is off. The release and the
+// packages ship the binary, under its own name only; this is the one place
+// a link to it is decided.
 
 /// The binary's file name.
 const BINARY_FILE: &str = "k5-cli";

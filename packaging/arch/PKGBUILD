@@ -45,6 +45,7 @@ makedepends=(
     'git'
     'bun'
     'nodejs'
+    'python'
 )
 optdepends=(
     'gnome-keyring: Secret Service provider for K2 Connect tokens'
@@ -158,6 +159,9 @@ build() {
     # Compute nodes: "Make this computer a compute node" installs from
     # this binary (k2-node setup copies it to /usr/local/libexec as root).
     cargo build --release -p k2-node --bin k2-node
+    # The k5 command's program, checked to carry cli/k2's version.
+    cargo build --release -p k5-cli --bin k5-cli
+    python3 -I scripts/lib/check-k5-cli.py "${CARGO_TARGET_DIR}/release/k5-cli" cli/k2 "linux-${CARCH}"
 }
 
 package() {
@@ -170,6 +174,10 @@ package() {
     # Not enabled: the owner turns this machine into a node from Settings →
     # Compute or `k2 compute local enable` (root once, via k2-node setup).
     install -Dm755 "${target}/release/k2-node" "${pkgdir}/usr/bin/k2-node"
+    # The k5 command's program, beside the daemon, where k2-client's
+    # cli_install looks for it. Off by default: only the owner's "New k5
+    # command (Beta)" switch runs it.
+    install -Dm755 "${target}/release/k5-cli" "${pkgdir}/usr/bin/k5-cli"
 
     # O14: PATH k2 is the CLI. GUI is k2-gui even if the crate bin is still `k2`
     # (Darwin Contents/MacOS/k2 must not move).

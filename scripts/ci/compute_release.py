@@ -54,6 +54,9 @@ TEST_KEY_MARKERS = {
     "k2-node": b"K2_NODE_TEST_KEYS_ENABLED",
     "k2-app-engine": b"K2_APP_ENGINE_TEST_KEYS_ENABLED",
 }
+# The k5 command's program carries cli/k2's version, NUL-ended (its build.rs;
+# k2-client's cli_install::check_binary reads the same mark).
+K5_CLI_MARK = rb"K5_CLI_VERSION=([0-9A-Za-z.+-]+)\x00"
 BUILD_MARKERS = {
     "k2-root-helper": rb"K2_ROOT_HELPER_BUILD v=([0-9.]+) proto=[0-9]+ arch=([a-z0-9_]+);",
     "k2-node": rb"K2_NODE_BUILD v=([0-9.]+) proto=[0-9]+ os=linux arch=([a-z0-9_]+);",
@@ -88,8 +91,9 @@ def load(path):
 
 
 def base_of(name):
-    """k2-node-linux-x86_64 → k2-node; k2-root-helper-linux-aarch64 → k2-root-helper."""
-    m = re.match(r"^(k2-[a-z-]+?)-linux-(x86_64|aarch64)$", name)
+    """k2-node-linux-x86_64 → k2-node; k2-root-helper-linux-aarch64 → k2-root-helper;
+    k5-cli-linux-x86_64 → k5-cli."""
+    m = re.match(r"^(k2-[a-z-]+?|k5-cli)-linux-(x86_64|aarch64)$", name)
     return (m.group(1), m.group(2)) if m else (None, None)
 
 
@@ -120,6 +124,10 @@ def byte_checks(path, name, version, arch, info, problems):
                 problems.append(f"{name}: {len(found)} build markers, want exactly 1")
             elif found[0][0].decode() != version or found[0][1].decode() != arch:
                 problems.append(f"{name}: build marker says v={found[0][0].decode()} arch={found[0][1].decode()}, want v={version} arch={arch}")
+        if base == "k5-cli":
+            found = set(re.findall(K5_CLI_MARK, data))
+            if found != {version.encode()}:
+                problems.append(f"{name}: k5 version marks {sorted(v.decode() for v in found)}, want exactly {version}")
         if base == "k2-daemon":
             ptyd = (info or {}).get("ptyd_sha256", "")
             if len(ptyd) != 64 or ptyd.encode() not in data:

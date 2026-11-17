@@ -42,7 +42,7 @@
 #                                        runs; the per-job names below win).
 #                                        Never V1's node: k2n9-vin here
 #                                        needs another K2_COMPUTE_VERIFY_NODE
-#   K2_COMPUTE_X86_NODE      k2n7-vin    L1: daemon, node, root helper, engine
+#   K2_COMPUTE_X86_NODE      k2n7-vin    L1: daemon, node, root helper, engine, k5-cli
 #   K2_COMPUTE_APP_NODE      k2n8-vin    L3: deb, rpm, AppImage
 #   K2_COMPUTE_VERIFY_NODE   k2n9-vin    V1: a second x86 build of the same
 #                                        set on another node; the daemon, root
@@ -476,6 +476,12 @@ k2cr_dual_names() {
     printf '%s' "k2-root-helper-linux-$a,k2-node-linux-$a,k2-app-engine-linux-$a,k2-daemon-linux-$a"
 }
 
+# The Linux binaries a linux-bins job builds and stage 1 publishes, each
+# with its .sha256 (scripts/ci/build-linux-bins.sh). k5-cli, the k5
+# command's program, ships beside the daemon off by default; it is not a
+# dual name (nothing signs it yet).
+K2CR_LINUX_BINS="k2-daemon k2-node k2-root-helper k2-app-engine k5-cli"
+
 # Compute mode (stage 1): copy every verified x86 file into <dist-dir>,
 # where release.sh signs and publishes it. Writes <dist-dir>/
 # SHA256SUMS-linux-x86_64.txt from L3's app-linux.sums (the Arch package's
@@ -500,7 +506,7 @@ k2cr_stage() {
     for arch in $arches; do
         lab=L1; [ "$arch" = aarch64 ] && lab=L2
         bins="$K2CR_FILES/$lab/dist"
-        for b in k2-daemon k2-node k2-root-helper k2-app-engine; do
+        for b in $K2CR_LINUX_BINS; do
             f="$b-linux-$arch"
             [ -s "$bins/$f" ] && [ -s "$bins/$f.sha256" ] || { echo "  ✗ stage: $f missing from $lab" >&2; return 1; }
             cp "$bins/$f" "$bins/$f.sha256" "$dist/" || return 1
@@ -520,7 +526,7 @@ k2cr_stage() {
     (cd "$dist" && sha256sum -c --quiet SHA256SUMS-linux-x86_64.txt 2>/dev/null || shasum -a 256 -c --quiet SHA256SUMS-linux-x86_64.txt) \
         || { echo "  ✗ stage: staged packages don't match L3's sums" >&2; return 1; }
     for arch in $arches; do
-        for b in k2-daemon k2-node k2-root-helper k2-app-engine; do
+        for b in $K2CR_LINUX_BINS; do
             f="$b-linux-$arch"
             (cd "$dist" && { sha256sum -c --quiet "$f.sha256" 2>/dev/null || shasum -a 256 -c --quiet "$f.sha256"; }) \
                 || { echo "  ✗ stage: $f doesn't match its .sha256" >&2; return 1; }

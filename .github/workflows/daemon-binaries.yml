@@ -52,6 +52,16 @@
 # `file:k2-app-engine-linux-<arch> version:<v> protocol:<p>`). Until the .sig
 # is up, daemons and the helper refuse the asset (fail closed).
 #
+# k5-cli, the k5 command's program (crates/k5-cli). Built here UNSIGNED,
+# Linux only, installed beside the daemon (install-daemon.sh, the daemon
+# .deb, the Arch package):
+#   k5-cli-linux-x86_64{,.sha256}
+#   k5-cli-linux-aarch64{,.sha256}
+# Off by default: only the owner's "New k5 command (Beta)" switch points
+# the k2 and k5 links at it, and only when its K5_CLI_VERSION mark is this
+# release's (k2-client's cli_install); otherwise the commands run the
+# script, as before.
+#
 # Do NOT attach an air-gap daemon to the GitHub release. `--features airgap`
 # is a custom/enterprise compile (bakes air-gap ON, omits the GitHub
 # daemon-latest.json ping URL). Distribution is off-band / portal, not
@@ -126,8 +136,8 @@ jobs:
         include: >-
           ${{ fromJSON(
           (github.event_name == 'push' && vars.LINUX_BUILDS == 'compute')
-          && '[{"target":"aarch64-unknown-linux-gnu","asset":"k2-daemon-linux-aarch64","root_asset":"k2-root-helper-linux-aarch64","node_asset":"k2-node-linux-aarch64","engine_asset":"k2-app-engine-linux-aarch64","cross":true}]'
-          || '[{"target":"x86_64-unknown-linux-gnu","asset":"k2-daemon-linux-x86_64","root_asset":"k2-root-helper-linux-x86_64","node_asset":"k2-node-linux-x86_64","engine_asset":"k2-app-engine-linux-x86_64","cross":false},{"target":"aarch64-unknown-linux-gnu","asset":"k2-daemon-linux-aarch64","root_asset":"k2-root-helper-linux-aarch64","node_asset":"k2-node-linux-aarch64","engine_asset":"k2-app-engine-linux-aarch64","cross":true}]'
+          && '[{"target":"aarch64-unknown-linux-gnu","asset":"k2-daemon-linux-aarch64","root_asset":"k2-root-helper-linux-aarch64","node_asset":"k2-node-linux-aarch64","engine_asset":"k2-app-engine-linux-aarch64","cli_asset":"k5-cli-linux-aarch64","cross":true}]'
+          || '[{"target":"x86_64-unknown-linux-gnu","asset":"k2-daemon-linux-x86_64","root_asset":"k2-root-helper-linux-x86_64","node_asset":"k2-node-linux-x86_64","engine_asset":"k2-app-engine-linux-x86_64","cli_asset":"k5-cli-linux-x86_64","cross":false},{"target":"aarch64-unknown-linux-gnu","asset":"k2-daemon-linux-aarch64","root_asset":"k2-root-helper-linux-aarch64","node_asset":"k2-node-linux-aarch64","engine_asset":"k2-app-engine-linux-aarch64","cli_asset":"k5-cli-linux-aarch64","cross":true}]'
           ) }}
 
     steps:
@@ -195,7 +205,7 @@ jobs:
             echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar"
           } >> "$GITHUB_ENV"
 
-      - name: Build k2-daemon + k2-node + k2-root-helper + k2-app-engine (release, standalone bins)
+      - name: Build k2-daemon + k2-node + k2-root-helper + k2-app-engine + k5-cli (release, standalone bins)
         env:
           # Priority: Gmail (customer-facing invalid_client on a customer box). MS optional.
           K2_GMAIL_CLIENT_ID: ${{ secrets.K2_GMAIL_CLIENT_ID }}
@@ -267,7 +277,14 @@ jobs:
             echo "k2-app-engine was built with test-keys — refusing" >&2; exit 1
           fi
           test "$(grep -a -o 'K2_APP_ENGINE_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;' "${{ matrix.engine_asset }}" | wc -l)" = 1
-          file "${{ matrix.asset }}" "${{ matrix.node_asset }}" "${{ matrix.root_asset }}" "${{ matrix.engine_asset }}"
+          # The k5 command's program: it carries cli/k2's version (its
+          # build.rs), checked before it leaves the runner.
+          cargo build --release --target ${{ matrix.target }} -p k5-cli --bin k5-cli
+          cp "$TARGET_DIR/${{ matrix.target }}/release/k5-cli" \
+             "${{ matrix.cli_asset }}"
+          K5_ARCH="${{ matrix.target }}"
+          python3 -I scripts/lib/check-k5-cli.py "${{ matrix.cli_asset }}" cli/k2 "linux-${K5_ARCH%%-*}"
+          file "${{ matrix.asset }}" "${{ matrix.node_asset }}" "${{ matrix.root_asset }}" "${{ matrix.engine_asset }}" "${{ matrix.cli_asset }}"
           assert_daemon_oauth_not_placeholder "${{ matrix.asset }}"
 
       # Published for every asset: sign-daemon.sh, sign-root-helper.sh,
@@ -279,6 +296,7 @@ jobs:
           sha256sum "${{ matrix.root_asset }}" | tee "${{ matrix.root_asset }}.sha256"
           sha256sum "${{ matrix.node_asset }}" | tee "${{ matrix.node_asset }}.sha256"
           sha256sum "${{ matrix.engine_asset }}" | tee "${{ matrix.engine_asset }}.sha256"
+          sha256sum "${{ matrix.cli_asset }}" | tee "${{ matrix.cli_asset }}.sha256"
 
       # Attach the UNSIGNED binaries + .sha256 to the release for this tag.
       # The daemon manifest (daemon-latest.json) is produced by release.sh
@@ -320,6 +338,8 @@ jobs:
             "${{ matrix.root_asset }}.sha256" \
             "${{ matrix.engine_asset }}" \
             "${{ matrix.engine_asset }}.sha256" \
+            "${{ matrix.cli_asset }}" \
+            "${{ matrix.cli_asset }}.sha256" \
             --clobber
 
   # The root installer the daemon's "mail helper not installed" hint points

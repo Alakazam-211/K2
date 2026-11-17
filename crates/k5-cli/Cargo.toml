@@ -9,9 +9,10 @@ description = "The k5 command line in Rust, built piece by piece: it answers --v
 [lib]
 path = "src/lib.rs"
 
-# Never named `k5`: the binary is k5-cli until the CLI install and the
-# release ship it, and no release, bundle or install script names it yet
-# (tests/packaging/k5_cli_not_shipped.sh).
+# Never named `k5`: the binary is k5-cli everywhere it ships (K2.app's
+# Contents/MacOS, beside the Linux daemon); only the owner's "New k5
+# command (Beta)" switch points the k2 and k5 links at it
+# (tests/packaging/k5_cli_shipped_off_by_default.sh).
 [[bin]]
 name = "k5-cli"
 path = "src/main.rs"

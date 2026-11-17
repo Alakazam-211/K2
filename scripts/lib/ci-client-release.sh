@@ -307,7 +307,7 @@ k2ccr_stage() {
     : > "$K2CR_STATE/staged.txt"
     for arch in $arches; do
         lab=L1; [ "$arch" = aarch64 ] && lab=L2
-        for b in k2-daemon k2-node k2-root-helper k2-app-engine; do
+        for b in $K2CR_LINUX_BINS; do
             f="$b-linux-$arch"
             [ -s "$(k2ccr_files $lab)/$f" ] && [ -s "$(k2ccr_files $lab)/$f.sha256" ] || { echo "  ✗ stage: $f missing from $lab" >&2; return 1; }
             cp "$(k2ccr_files $lab)/$f" "$(k2ccr_files $lab)/$f.sha256" "$dist/" || return 1

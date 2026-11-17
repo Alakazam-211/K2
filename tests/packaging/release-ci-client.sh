@@ -111,7 +111,7 @@ if a[:2] == ["ci", "evidence"]:
         if build == "linux-app":
             names = ["K2_9.9.9_amd64.deb", "K2-9.9.9-1.x86_64.rpm", "K2_9.9.9_amd64.AppImage"]
         else:
-            names = ["%s-linux-%s" % (b, arch) for b in ("k2-daemon", "k2-node", "k2-root-helper", "k2-app-engine")] + ["build-info.json"]
+            names = ["%s-linux-%s" % (b, arch) for b in ("k2-daemon", "k2-node", "k2-root-helper", "k2-app-engine", "k5-cli")] + ["build-info.json"]
         arts = []
         sums = []
         for n in names:

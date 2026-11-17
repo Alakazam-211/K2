@@ -321,6 +321,25 @@ fi
 
 BIN_PATH="$K2_BIN_DIR/k2-daemon"
 
+# The k5 command's program (Linux): installed beside the daemon, where
+# k2-client's cli_install looks for it. Off by default: only the owner's
+# "New k5 command (Beta)" switch points the k2 and k5 links at it, and only
+# when its version mark is this release's; otherwise they run the script.
+# Unsigned for now: checked against the .sha256 published beside it in the
+# same release. Never fatal (without it the commands run the script).
+K5_ON=0
+if [ "${PLATFORM%%-*}" = "linux" ] && [ -n "$MVER" ]; then
+    K5_ON=1
+fi
+K5_ASSET="k5-cli-$PLATFORM"
+# A file:// manifest (a mirror, an air-gapped box): from its folder, no
+# network, as the root helper.
+case "$MANIFEST_URL" in
+    file://*) K5_URL="file://$(dirname "${MANIFEST_URL#file://}")/$K5_ASSET" ;;
+    *) K5_URL="$RELEASE_BASE/v$MVER/$K5_ASSET" ;;
+esac
+K5_PATH="$K2_BIN_DIR/k5-cli"
+
 if [ "$(uname -s)" = "Darwin" ]; then
     SVC_KIND="launchd"
     SVC_PATH="$HOME/Library/LaunchAgents/${K2_DAEMON_LABEL}.plist"
@@ -419,6 +438,9 @@ if [ "$K2_DRY_RUN" = "1" ]; then
         echo "  app engine:     (not in this manifest; the daemon's boot heal downloads it)"
     else
         echo "  app engine:     (none installed; nothing to stage)"
+    fi
+    if [ "$K5_ON" = "1" ]; then
+        echo "  k5 program:     $K5_URL (+ .sha256) -> $K5_PATH (off until the owner turns it on)"
     fi
     if [ "$RH_ON" = "1" ]; then
         echo "  root helper:    $RH_CANON v$MVER for $DAEMON_USER ($RH_UNIT, $RH_SCOPE scope), before the daemon"
@@ -617,6 +639,24 @@ as_user mkdir -p "$K2_BIN_DIR"
 as_user cp "$DL_BIN" "$BIN_PATH.new"
 as_user chmod +x "$BIN_PATH.new"
 as_user mv -f "$BIN_PATH.new" "$BIN_PATH"
+
+# The k5 command's program beside the daemon: sha256-checked against the
+# .sha256 of the same release (it must name this asset); never fatal.
+if [ "$K5_ON" = "1" ]; then
+    echo "Installing the k5 program for v$MVER..."
+    DL_K5="$TMP/$K5_ASSET"
+    if ( fetch "$K5_URL" "$DL_K5" ) 2>/dev/null && ( fetch "$K5_URL.sha256" "$DL_K5.sha256" ) 2>/dev/null \
+        && [ "$(awk 'NR == 1 { print $2 }' "$DL_K5.sha256")" = "$K5_ASSET" ] \
+        && [ "$(sha256_of "$DL_K5")" = "$(awk 'NR == 1 { print $1 }' "$DL_K5.sha256")" ]; then
+        [ -z "$AS_USER" ] || chmod 0644 "$DL_K5"
+        as_user cp "$DL_K5" "$K5_PATH.new"
+        as_user chmod 0755 "$K5_PATH.new"
+        as_user mv -f "$K5_PATH.new" "$K5_PATH"
+        echo "Installed $K5_PATH (the k2 command runs it only when the owner turns on the new k5 command)."
+    else
+        echo "WARNING: the k5 program could not be installed (download or sha256); the k2 command runs the script." >&2
+    fi
+fi
 
 # Stage the matching App engine (R3): sha256-checked; never fatal (the
 # daemon's boot heal downloads it when this didn't work).

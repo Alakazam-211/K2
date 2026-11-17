@@ -3,7 +3,6 @@
 //! it is never a command, the label is K2's, and a knock repeated with the
 //! same Postal message id lands once. Test DB; no agent is woken (wake off).
 
-use super::*;
 use crate::routes::http::V1Principal;
 use k2_core::api_keys::{ApiCapabilities, ApiPrincipal};
 use serde_json::{json, Value};

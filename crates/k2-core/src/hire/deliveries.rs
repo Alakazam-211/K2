@@ -275,7 +275,7 @@ mod tests {
             }
         );
         let old2 = get(&conn, "m_OLD0000002").expect("kept");
-        assert_eq!((old2.on_behalf_of.as_deref(), old2.delivered, old2.body_sha256), (Some("app"), false, None));
+        assert_eq!((old2.on_behalf_of.as_deref(), old2.delivered, old2.body_sha256.as_deref()), (Some("app"), false, None));
         assert_eq!(content_of(&old2, &[body_sha256("x")]), Content::Unknown);
 
         let mut fed = Delivery {

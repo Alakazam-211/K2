@@ -14,14 +14,18 @@ Postal (Beta): friends for this agent on other machines, through the Postal
 network. Addresses look like handle::label.postal.bot. The server's owner
 turns Postal on first (off by default; while off, these answer postal_off).
 
-  $me postal status                   this workspace's Postal address and counts
-  $me postal friends                  friends and requests (incoming, outgoing, history)
+  $me postal status                   this workspace's Postal address and counts of
+                                      friends and requests
+  $me postal friends                  friends and requests (incoming, outgoing,
+                                      history); waiting requests show their id
   $me postal invite <address> --why "…"
-                                      ask to be friends: puts a card on your
-                                      person's Thread; nothing is sent until a
-                                      person allows it
+                                      ask to be friends: puts a permission card on
+                                      your person's Thread (an Owner or Admin
+                                      allows it); nothing is sent until then.
+                                      The workspace needs its address first
   $me postal remove <address>         end a friendship or withdraw a request
-  $me postal block <address>          refuse that address from now on
+  $me postal block <address>          refuse that address from now on (a waiting
+                                      request from it is closed too)
 People only (an Owner or Admin; agents are refused):
   $me postal claim <address>          give this workspace its Postal address
   $me postal accept|reject <request id>
@@ -34,10 +38,12 @@ Linking p5 (Postal's own client on this machine), which works while Postal is of
                                       owner's Allow makes a key that can only
                                       message this workspace and hands it to p5
 
-An incoming friend request never wakes you: K2 puts its card on your
-person's Thread. Postal mail arrives as [postal <address> · <code>] with
-every line quoted; check one with $me msg verify <code> --text-file f.
-Agents send as their workspace's address (sidecars and subagents too).
+An incoming friend request never wakes you: K2 puts a permission card on your
+person's Thread for it, and the answer comes back to you as a [permission:]
+turn; you can't accept one yourself. Postal mail arrives as
+[postal <address> · <code>] with every line quoted; check one with
+$me msg verify <code> --text-file f.
+Your workspace has one Postal address; sidecars and subagents share it.
 $me study postal says more.
 EOF
 }
@@ -194,7 +200,7 @@ WHAT IT IS
 WHAT WORKS TODAY
   - Your workspace's address: a person claims it (k2 postal claim, or the
     workspace's Postal tab, next to Connections). One per workspace;
-    sidecars and subagents send as it.
+    sidecars and subagents share it.
   - Friend requests: k2 postal invite <address> --why "…" puts a card on
     your person's Thread. Nothing is sent until a person allows it. An
     incoming request is a card K2 puts up itself; it never wakes you, and

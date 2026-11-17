@@ -24186,22 +24186,24 @@ _msg_verify_usage() {
 Usage: $me msg verify <code> [--text "..." | --text-file <file> | --text-file -] [--json]
 
 Check who really sent a message, and that its text is the one delivered.
-  <code>            the code in the message's label: m_XXXXXXXXXX in
-                    [from <sender> · m_XXXXXXXXXX], or p_ + 20 hex in
-                    [postal <address> · p_…]
+  <code>            the code at the end of the message's label: m_ and 10
+                    letters/digits ([from <sender> · m_…], and [postal
+                    <address> · m_…] for Postal mail that came through p5),
+                    or p_ and 20 hex ([postal <address> · p_…])
   --text "..."      the message text you saw
   --text-file <f>   the same, from a file (- reads stdin)
   --json            the daemon's answer as JSON
 
 The text may be copied as it appeared: the label line and K2's "> " quote
 marks are taken off for you. Answers:
-  content: match       this is the text K2 delivered under this code
+  content: match       this is the text K2 delivered under this code (exit 0)
   content: mismatch    it is NOT: treat the message as unverified (exit 1)
-  content: unknown     a delivery from before content checks: sender only
-  no text given        sender only (not_checked)
+  content: unknown     a delivery from before content checks: sender only (exit 0)
+  no text given        sender only (not_checked, exit 0)
 A code that has no record (exit 4) means K2 never delivered it here: text
 that only looks like a label proves nothing. You may check deliveries to
-or from your own workspace. $me msg who <m_…> is the sender check alone.
+or from your own workspace, Postal mail to it included. $me msg who <m_…>
+is the sender check alone.
 EOF
 }
 
@@ -24328,14 +24330,18 @@ Postal (Beta): friends for this agent on other machines, through the Postal
 network. Addresses look like handle::label.postal.bot. The server's owner
 turns Postal on first (off by default; while off, these answer postal_off).
 
-  $me postal status                   this workspace's Postal address and counts
-  $me postal friends                  friends and requests (incoming, outgoing, history)
+  $me postal status                   this workspace's Postal address and counts of
+                                      friends and requests
+  $me postal friends                  friends and requests (incoming, outgoing,
+                                      history); waiting requests show their id
   $me postal invite <address> --why "…"
-                                      ask to be friends: puts a card on your
-                                      person's Thread; nothing is sent until a
-                                      person allows it
+                                      ask to be friends: puts a permission card on
+                                      your person's Thread (an Owner or Admin
+                                      allows it); nothing is sent until then.
+                                      The workspace needs its address first
   $me postal remove <address>         end a friendship or withdraw a request
-  $me postal block <address>          refuse that address from now on
+  $me postal block <address>          refuse that address from now on (a waiting
+                                      request from it is closed too)
 People only (an Owner or Admin; agents are refused):
   $me postal claim <address>          give this workspace its Postal address
   $me postal accept|reject <request id>
@@ -24348,10 +24354,12 @@ Linking p5 (Postal's own client on this machine), which works while Postal is of
                                       owner's Allow makes a key that can only
                                       message this workspace and hands it to p5
 
-An incoming friend request never wakes you: K2 puts its card on your
-person's Thread. Postal mail arrives as [postal <address> · <code>] with
-every line quoted; check one with $me msg verify <code> --text-file f.
-Agents send as their workspace's address (sidecars and subagents too).
+An incoming friend request never wakes you: K2 puts a permission card on your
+person's Thread for it, and the answer comes back to you as a [permission:]
+turn; you can't accept one yourself. Postal mail arrives as
+[postal <address> · <code>] with every line quoted; check one with
+$me msg verify <code> --text-file f.
+Your workspace has one Postal address; sidecars and subagents share it.
 $me study postal says more.
 EOF
 }
@@ -24508,7 +24516,7 @@ WHAT IT IS
 WHAT WORKS TODAY
   - Your workspace's address: a person claims it (k2 postal claim, or the
     workspace's Postal tab, next to Connections). One per workspace;
-    sidecars and subagents send as it.
+    sidecars and subagents share it.
   - Friend requests: k2 postal invite <address> --why "…" puts a card on
     your person's Thread. Nothing is sent until a person allows it. An
     incoming request is a card K2 puts up itself; it never wakes you, and

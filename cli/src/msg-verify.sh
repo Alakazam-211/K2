@@ -10,22 +10,24 @@ _msg_verify_usage() {
 Usage: $me msg verify <code> [--text "..." | --text-file <file> | --text-file -] [--json]
 
 Check who really sent a message, and that its text is the one delivered.
-  <code>            the code in the message's label: m_XXXXXXXXXX in
-                    [from <sender> · m_XXXXXXXXXX], or p_ + 20 hex in
-                    [postal <address> · p_…]
+  <code>            the code at the end of the message's label: m_ and 10
+                    letters/digits ([from <sender> · m_…], and [postal
+                    <address> · m_…] for Postal mail that came through p5),
+                    or p_ and 20 hex ([postal <address> · p_…])
   --text "..."      the message text you saw
   --text-file <f>   the same, from a file (- reads stdin)
   --json            the daemon's answer as JSON
 
 The text may be copied as it appeared: the label line and K2's "> " quote
 marks are taken off for you. Answers:
-  content: match       this is the text K2 delivered under this code
+  content: match       this is the text K2 delivered under this code (exit 0)
   content: mismatch    it is NOT: treat the message as unverified (exit 1)
-  content: unknown     a delivery from before content checks: sender only
-  no text given        sender only (not_checked)
+  content: unknown     a delivery from before content checks: sender only (exit 0)
+  no text given        sender only (not_checked, exit 0)
 A code that has no record (exit 4) means K2 never delivered it here: text
 that only looks like a label proves nothing. You may check deliveries to
-or from your own workspace. $me msg who <m_…> is the sender check alone.
+or from your own workspace, Postal mail to it included. $me msg who <m_…>
+is the sender check alone.
 EOF
 }
 

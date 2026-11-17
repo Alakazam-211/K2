@@ -24,6 +24,7 @@ import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
 import { Button, Segmented, Toggle, cx } from '@/components/ui'
 import { SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { HALVES_MIN_WIDTH, ScrollEdge, halves, useCssWidth } from '../controls/halves'
+import { HeartbeatNoMatch, HeartbeatSearchBar, Highlight, InstructionsSnippet, useHeartbeatSearch } from './heartbeat-search'
 import { PRODUCT_NAME } from '@/lib/brand'
 
 export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
@@ -40,6 +41,13 @@ export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
     label: 'Also on Battery',
     description: 'Wake for heartbeats on battery too, never below 20%',
     keywords: ['battery', 'wake', 'lid', 'power'],
+  },
+  {
+    id: 'wake-scheduler.search',
+    section: 'wake-scheduler',
+    label: 'Search Heartbeats',
+    description: 'Find a heartbeat by its name, workspace, schedule, state or instructions',
+    keywords: ['search', 'find', 'filter', 'heartbeat', 'wakeup', 'instructions', 'paused'],
   },
 ]
 
@@ -467,6 +475,10 @@ export function WakeSchedulerSection(): React.JSX.Element {
 
   useEffect(() => () => Object.values(noteTimers.current).forEach(clearTimeout), [])
 
+  // Search over the list (heartbeat-search): kept while the page is open.
+  const scheduleText = useCallback((r: SystemHeartbeatRow) => `${describeHeartbeatSpec(r.specJson, r.frequency)} ${scheduleZoneLabel(r)}`, [])
+  const search = useHeartbeatSearch(heartbeats, scheduleText, primaryScope)
+
   const noteRow = useCallback((id: string, note: RowNote | null) => {
     clearTimeout(noteTimers.current[id])
     setRowNotes((n) => {
@@ -673,6 +685,8 @@ export function WakeSchedulerSection(): React.JSX.Element {
           heartbeat={toRow(editingHeartbeat)}
           otherHeartbeats={otherHeartbeats}
           onClose={() => {
+            // Its instructions may have changed: read them again if searched.
+            search.forget(editingHeartbeat.id)
             setEditingHeartbeat(null)
             void refreshHeartbeats()
           }}
@@ -848,7 +862,9 @@ export function WakeSchedulerSection(): React.JSX.Element {
       state={listState}
       testId="heartbeats-list"
     >
-      {(heartbeats ?? []).map((row) => {
+      <HeartbeatSearchBar search={search} />
+      {search.visible.length === 0 && <HeartbeatNoMatch search={search} />}
+      {search.visible.map(({ row, match }) => {
         const target = deriveDeliveryTarget(row)
         const rowNote = rowNotes[row.id]
         const status = rowStatus(row)
@@ -864,8 +880,13 @@ export function WakeSchedulerSection(): React.JSX.Element {
             <div className="flex items-start justify-between gap-6">
               <div className="min-w-0 flex-1">
                 <p className="type-row text-[var(--color-text-primary)] truncate">
-                  <span className="type-name">{row.name}</span>
-                  <span className="text-[var(--color-text-secondary)]"> in {row.projectName}</span>
+                  <span className="type-name">
+                    <Highlight text={row.name} words={search.words} />
+                  </span>
+                  <span className="text-[var(--color-text-secondary)]">
+                    {' in '}
+                    <Highlight text={row.projectName} words={search.words} />
+                  </span>
                 </p>
                 <p className={SETTING_ROW_HINT}>
                   {describeHeartbeatSpec(row.specJson, row.frequency)} {scheduleZoneLabel(row)}
@@ -883,6 +904,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
                 ) : (
                   <HeartbeatStatusLine row={row} nextFire={nextFire} nextPrefix="Next run: " className="type-hint mt-0.5" />
                 )}
+                {match.snippet && <InstructionsSnippet id={row.id} text={match.snippet.text} words={search.words} />}
                 {rowNote?.kind === 'error' && (
                   <p role="alert" data-row-note="error" className="type-hint mt-1 max-w-[75ch] text-[var(--color-status-error-soft)]">
                     {rowNote.text}

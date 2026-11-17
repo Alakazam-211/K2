@@ -256,14 +256,22 @@ describe('Heartbeats: two sides', () => {
     expect(list).toContain("activeSection === 'wake-scheduler'")
   })
 
-  it('keeps every control the page had, wide and narrow', async () => {
+  it('keeps every control the page had, wide and narrow; the only new ones are the list’s search', async () => {
+    const SEARCH = [
+      'testid:heartbeats-search',
+      'setting:wake-scheduler.search',
+      'radio:All (14)',
+      'radio:On (14)',
+      'radio:Paused (0)',
+      'radio:Needs attention (0)',
+    ]
     const wide = render(<WakeSchedulerSection />)
     await loaded()
-    expect(controls(wide.container)).toEqual([...TODAY].sort())
+    expect(controls(wide.container)).toEqual([...TODAY, ...SEARCH].sort())
     cleanup()
     bodyWidth = HALVES_MIN_WIDTH - 1
     const narrow = render(<WakeSchedulerSection />)
     await loaded()
-    expect(controls(narrow.container)).toEqual([...TODAY].sort())
+    expect(controls(narrow.container)).toEqual([...TODAY, ...SEARCH].sort())
   })
 })

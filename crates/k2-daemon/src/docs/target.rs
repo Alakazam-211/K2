@@ -553,8 +553,9 @@ pub fn share_rel(root: &str, raw: &str, must_exist: bool) -> Result<(String, boo
             Refusal::bad("path_escapes", e)
         }
     })?;
-    let root_canon = Path::new(root)
-        .canonicalize()
+    // dunce, as jail_rel_path canonicalized `abs`: on Windows std's form is
+    // `\\?\D:\…` and would never be a prefix of jail's `D:\…`.
+    let root_canon = dunce::canonicalize(Path::new(root))
         .map_err(|e| Refusal::not_found("workspace_not_found", format!("workspace root unavailable: {e}")))?;
     if abs == root_canon {
         return Ok((String::new(), true));

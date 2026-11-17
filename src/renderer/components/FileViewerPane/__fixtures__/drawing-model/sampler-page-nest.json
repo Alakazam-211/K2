@@ -1,0 +1,53 @@
+{
+  "schema": "cad.drawing.page/1",
+  "format": "dxf",
+  "version": 7,
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "space": "@h:2E",
+  "first": true,
+  "z_first": 0,
+  "z_last": 0,
+  "of": 1,
+  "not_drawn": 0,
+  "oversize": false,
+  "budget": {
+    "entities": 5000,
+    "bytes": 4194304
+  },
+  "entities": [
+    {
+      "h": "@h:3B",
+      "kind": "INSERT",
+      "layer": "0",
+      "owner": "@h:2E",
+      "z": 0,
+      "style": {
+        "rgb": "insert",
+        "fg": false,
+        "aci": null,
+        "alpha": "insert",
+        "ltype": "insert",
+        "lt_scale": 2,
+        "lw_mm": "insert"
+      },
+      "visible": "insert",
+      "drawn": true,
+      "bbox": [1, 1, 1.9, 2.25],
+      "bbox_q": "approx",
+      "geom": {
+        "block": "@h:2D",
+        "name": "DOOR",
+        "m": [1, 0, 0, 1, 1, 1],
+        "array": null,
+        "xref": false,
+        "attribs": []
+      }
+    }
+  ],
+  "next": null
+}

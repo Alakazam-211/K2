@@ -11,9 +11,9 @@
   "space": "model",
   "first": true,
   "z_first": 0,
-  "z_last": 42,
-  "of": 43,
-  "not_drawn": 3,
+  "z_last": 54,
+  "of": 55,
+  "not_drawn": 4,
   "oversize": false,
   "budget": {
     "entities": 5000,
@@ -988,7 +988,7 @@
       },
       "visible": true,
       "drawn": true,
-      "bbox": [1, 1, 13, 3.5],
+      "bbox": [1, 0.5, 13, 3.5],
       "bbox_q": "approx",
       "geom": {
         "anchor": [1, 1],
@@ -1029,7 +1029,7 @@
       },
       "visible": true,
       "drawn": true,
-      "bbox": [0, 0, 20, 10],
+      "bbox": [15.8, 9, 24.2, 11],
       "bbox_q": "approx",
       "geom": {
         "anchor": [20, 10],
@@ -1070,7 +1070,7 @@
       },
       "visible": true,
       "drawn": true,
-      "bbox": [0, 20, 10, 30],
+      "bbox": [-1.414213562373095, 19.71715728752538, 10.28284271247462, 31.414213562373096],
       "bbox_q": "approx",
       "geom": {
         "anchor": [10, 30],
@@ -1113,7 +1113,7 @@
       },
       "visible": true,
       "drawn": true,
-      "bbox": [0, 40, 27.599999999999998, 42],
+      "bbox": [0, 39.6, 15.6, 42],
       "bbox_q": "approx",
       "geom": {
         "anchor": [0, 40],
@@ -1161,7 +1161,7 @@
       },
       "visible": true,
       "drawn": true,
-      "bbox": [0, 52.5, 40, 62.5],
+      "bbox": [-20, 56.666666666666664, 20, 63.333333333333336],
       "bbox_q": "approx",
       "geom": {
         "anchor": [0, 60],
@@ -1776,7 +1776,11 @@
           [10, 85]
         ],
         "spline": false,
-        "arrow": true,
+        "arrow": {
+          "shown": true,
+          "kind": "closed_filled",
+          "size": 0.18
+        },
         "style": "Standard",
         "annotation": null
       }
@@ -1805,17 +1809,526 @@
           [60, 70],
           [70, 70],
           [70, 60],
-          [60, 60],
-          [60, 70]
-        ]
+          [60, 60]
+        ],
+        "closed": true
       }
     },
     {
       "h": "@h:6E",
+      "kind": "LEADER",
+      "layer": "ANNO",
+      "owner": "model",
+      "z": 39,
+      "style": {
+        "rgb": [255, 255, 255],
+        "fg": true,
+        "aci": 7,
+        "alpha": 1,
+        "ltype": "CONTINUOUS",
+        "lt_scale": 2,
+        "lw_mm": 0.25
+      },
+      "visible": true,
+      "drawn": true,
+      "bbox": [20, 80, 25, 85],
+      "bbox_q": "approx",
+      "geom": {
+        "path": [
+          [20, 80],
+          [25, 85]
+        ],
+        "spline": false,
+        "arrow": {
+          "shown": true,
+          "kind": "closed_filled",
+          "size": 5
+        },
+        "style": "Standard",
+        "annotation": null
+      }
+    },
+    {
+      "h": "@h:6F",
+      "kind": "IMAGE",
+      "layer": "ANNO",
+      "owner": "model",
+      "z": 40,
+      "style": {
+        "rgb": [255, 255, 255],
+        "fg": true,
+        "aci": 7,
+        "alpha": 1,
+        "ltype": "CONTINUOUS",
+        "lt_scale": 2,
+        "lw_mm": 0.25
+      },
+      "visible": true,
+      "drawn": true,
+      "bbox": [100, 100, 110, 105],
+      "bbox_q": "approx",
+      "geom": {
+        "corners": [
+          [100, 100],
+          [110, 100],
+          [110, 105],
+          [100, 105]
+        ],
+        "clip": [
+          [101, 104.5],
+          [109, 104.5],
+          [109, 100.5],
+          [101, 100.5]
+        ],
+        "closed": true,
+        "image": {
+          "def": "@h:C00",
+          "path": "images/site-plan.png",
+          "resolved": null
+        }
+      }
+    },
+    {
+      "h": "@h:70",
+      "kind": "MTEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "z": 41,
+      "style": {
+        "rgb": [255, 255, 255],
+        "fg": true,
+        "aci": 7,
+        "alpha": 1,
+        "ltype": "CONTINUOUS",
+        "lt_scale": 2,
+        "lw_mm": 0.25
+      },
+      "visible": true,
+      "drawn": true,
+      "bbox": [360, 98, 400, 100],
+      "bbox_q": "approx",
+      "geom": {
+        "anchor": [360, 100],
+        "attach": {
+          "h": "left",
+          "v": "top"
+        },
+        "ref_width": 40,
+        "height": 2,
+        "rotation": 0,
+        "style": "Standard",
+        "line_spacing": 1,
+        "line_spacing_exact": false,
+        "background": null,
+        "columns": null,
+        "paragraphs": [
+          {
+            "align": null,
+            "runs": [
+              {
+                "text": "Room"
+              }
+            ]
+          }
+        ],
+        "unknown_codes": 0
+      }
+    },
+    {
+      "h": "@h:71",
+      "kind": "MTEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "z": 42,
+      "style": {
+        "rgb": [255, 255, 255],
+        "fg": true,
+        "aci": 7,
+        "alpha": 1,
+        "ltype": "CONTINUOUS",
+        "lt_scale": 2,
+        "lw_mm": 0.25
+      },
+      "visible": true,
+      "drawn": true,
+      "bbox": [400, 98, 440, 100],
+      "bbox_q": "approx",
+      "geom": {
+        "anchor": [420, 100],
+        "attach": {
+          "h": "center",
+          "v": "top"
+        },
+        "ref_width": 40,
+        "height": 2,
+        "rotation": 0,
+        "style": "Standard",
+        "line_spacing": 1,
+        "line_spacing_exact": false,
+        "background": null,
+        "columns": null,
+        "paragraphs": [
+          {
+            "align": null,
+            "runs": [
+              {
+                "text": "Room"
+              }
+            ]
+          }
+        ],
+        "unknown_codes": 0
+      }
+    },
+    {
+      "h": "@h:72",
+      "kind": "MTEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "z": 43,
+      "style": {
+        "rgb": [255, 255, 255],
+        "fg": true,
+        "aci": 7,
+        "alpha": 1,
+        "ltype": "CONTINUOUS",
+        "lt_scale": 2,
+        "lw_mm": 0.25
+      },
+      "visible": true,
+      "drawn": true,
+      "bbox": [440, 98, 480, 100],
+      "bbox_q": "approx",
+      "geom": {
+        "anchor": [480, 100],
+        "attach": {
+          "h": "right",
+          "v": "top"
+        },
+        "ref_width": 40,
+        "height": 2,
+        "rotation": 0,
+        "style": "Standard",
+        "line_spacing": 1,
+        "line_spacing_exact": false,
+        "background": null,
+        "columns": null,
+        "paragraphs": [
+          {
+            "align": null,
+            "runs": [
+              {
+                "text": "Room"
+              }
+            ]
+          }
+        ],
+        "unknown_codes": 0
+      }
+    },
+    {
+      "h": "@h:73",
+      "kind": "MTEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "z": 44,
+      "style": {
+        "rgb": [255, 255, 255],
+        "fg": true,
+        "aci": 7,
+        "alpha": 1,
+        "ltype": "CONTINUOUS",
+        "lt_scale": 2,
+        "lw_mm": 0.25
+      },
+      "visible": true,
+      "drawn": true,
+      "bbox": [540, 99, 580, 101],
+      "bbox_q": "approx",
+      "geom": {
+        "anchor": [540, 100],
+        "attach": {
+          "h": "left",
+          "v": "middle"
+        },
+        "ref_width": 40,
+        "height": 2,
+        "rotation": 0,
+        "style": "Standard",
+        "line_spacing": 1,
+        "line_spacing_exact": false,
+        "background": null,
+        "columns": null,
+        "paragraphs": [
+          {
+            "align": null,
+            "runs": [
+              {
+                "text": "Room"
+              }
+            ]
+          }
+        ],
+        "unknown_codes": 0
+      }
+    },
+    {
+      "h": "@h:74",
+      "kind": "MTEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "z": 45,
+      "style": {
+        "rgb": [255, 255, 255],
+        "fg": true,
+        "aci": 7,
+        "alpha": 1,
+        "ltype": "CONTINUOUS",
+        "lt_scale": 2,
+        "lw_mm": 0.25
+      },
+      "visible": true,
+      "drawn": true,
+      "bbox": [580, 99, 620, 101],
+      "bbox_q": "approx",
+      "geom": {
+        "anchor": [600, 100],
+        "attach": {
+          "h": "center",
+          "v": "middle"
+        },
+        "ref_width": 40,
+        "height": 2,
+        "rotation": 0,
+        "style": "Standard",
+        "line_spacing": 1,
+        "line_spacing_exact": false,
+        "background": null,
+        "columns": null,
+        "paragraphs": [
+          {
+            "align": null,
+            "runs": [
+              {
+                "text": "Room"
+              }
+            ]
+          }
+        ],
+        "unknown_codes": 0
+      }
+    },
+    {
+      "h": "@h:75",
+      "kind": "MTEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "z": 46,
+      "style": {
+        "rgb": [255, 255, 255],
+        "fg": true,
+        "aci": 7,
+        "alpha": 1,
+        "ltype": "CONTINUOUS",
+        "lt_scale": 2,
+        "lw_mm": 0.25
+      },
+      "visible": true,
+      "drawn": true,
+      "bbox": [620, 99, 660, 101],
+      "bbox_q": "approx",
+      "geom": {
+        "anchor": [660, 100],
+        "attach": {
+          "h": "right",
+          "v": "middle"
+        },
+        "ref_width": 40,
+        "height": 2,
+        "rotation": 0,
+        "style": "Standard",
+        "line_spacing": 1,
+        "line_spacing_exact": false,
+        "background": null,
+        "columns": null,
+        "paragraphs": [
+          {
+            "align": null,
+            "runs": [
+              {
+                "text": "Room"
+              }
+            ]
+          }
+        ],
+        "unknown_codes": 0
+      }
+    },
+    {
+      "h": "@h:76",
+      "kind": "MTEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "z": 47,
+      "style": {
+        "rgb": [255, 255, 255],
+        "fg": true,
+        "aci": 7,
+        "alpha": 1,
+        "ltype": "CONTINUOUS",
+        "lt_scale": 2,
+        "lw_mm": 0.25
+      },
+      "visible": true,
+      "drawn": true,
+      "bbox": [720, 100, 760, 102],
+      "bbox_q": "approx",
+      "geom": {
+        "anchor": [720, 100],
+        "attach": {
+          "h": "left",
+          "v": "bottom"
+        },
+        "ref_width": 40,
+        "height": 2,
+        "rotation": 0,
+        "style": "Standard",
+        "line_spacing": 1,
+        "line_spacing_exact": false,
+        "background": null,
+        "columns": null,
+        "paragraphs": [
+          {
+            "align": null,
+            "runs": [
+              {
+                "text": "Room"
+              }
+            ]
+          }
+        ],
+        "unknown_codes": 0
+      }
+    },
+    {
+      "h": "@h:77",
+      "kind": "MTEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "z": 48,
+      "style": {
+        "rgb": [255, 255, 255],
+        "fg": true,
+        "aci": 7,
+        "alpha": 1,
+        "ltype": "CONTINUOUS",
+        "lt_scale": 2,
+        "lw_mm": 0.25
+      },
+      "visible": true,
+      "drawn": true,
+      "bbox": [760, 100, 800, 102],
+      "bbox_q": "approx",
+      "geom": {
+        "anchor": [780, 100],
+        "attach": {
+          "h": "center",
+          "v": "bottom"
+        },
+        "ref_width": 40,
+        "height": 2,
+        "rotation": 0,
+        "style": "Standard",
+        "line_spacing": 1,
+        "line_spacing_exact": false,
+        "background": null,
+        "columns": null,
+        "paragraphs": [
+          {
+            "align": null,
+            "runs": [
+              {
+                "text": "Room"
+              }
+            ]
+          }
+        ],
+        "unknown_codes": 0
+      }
+    },
+    {
+      "h": "@h:78",
+      "kind": "MTEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "z": 49,
+      "style": {
+        "rgb": [255, 255, 255],
+        "fg": true,
+        "aci": 7,
+        "alpha": 1,
+        "ltype": "CONTINUOUS",
+        "lt_scale": 2,
+        "lw_mm": 0.25
+      },
+      "visible": true,
+      "drawn": true,
+      "bbox": [800, 100, 840, 102],
+      "bbox_q": "approx",
+      "geom": {
+        "anchor": [840, 100],
+        "attach": {
+          "h": "right",
+          "v": "bottom"
+        },
+        "ref_width": 40,
+        "height": 2,
+        "rotation": 0,
+        "style": "Standard",
+        "line_spacing": 1,
+        "line_spacing_exact": false,
+        "background": null,
+        "columns": null,
+        "paragraphs": [
+          {
+            "align": null,
+            "runs": [
+              {
+                "text": "Room"
+              }
+            ]
+          }
+        ],
+        "unknown_codes": 0
+      }
+    },
+    {
+      "h": "@h:79",
+      "kind": "MULTILEADER",
+      "layer": "ANNO",
+      "owner": "model",
+      "z": 50,
+      "style": {
+        "rgb": [255, 255, 255],
+        "fg": true,
+        "aci": 7,
+        "alpha": 1,
+        "ltype": "CONTINUOUS",
+        "lt_scale": 2,
+        "lw_mm": 0.25
+      },
+      "visible": true,
+      "drawn": false,
+      "why": "not_modelled",
+      "bbox": null,
+      "bbox_q": "none"
+    },
+    {
+      "h": "@h:7A",
       "kind": "3DSOLID",
       "layer": "E-LITE",
       "owner": "model",
-      "z": 39,
+      "z": 51,
       "style": {
         "rgb": [0, 255, 0],
         "fg": false,
@@ -1832,11 +2345,11 @@
       "bbox_q": "none"
     },
     {
-      "h": "@h:6F",
+      "h": "@h:7B",
       "kind": "ACME_GADGET",
       "layer": "E-LITE",
       "owner": "model",
-      "z": 40,
+      "z": 52,
       "style": {
         "rgb": [0, 255, 0],
         "fg": false,
@@ -1857,7 +2370,7 @@
       "kind": "LINE",
       "layer": "A-WALL",
       "owner": "model",
-      "z": 41,
+      "z": 53,
       "style": {
         "rgb": [0, 0, 255],
         "fg": false,
@@ -1881,7 +2394,7 @@
       "kind": "LINE",
       "layer": "A-WALL",
       "owner": "model",
-      "z": 42,
+      "z": 54,
       "style": {
         "rgb": [51, 102, 153],
         "fg": false,

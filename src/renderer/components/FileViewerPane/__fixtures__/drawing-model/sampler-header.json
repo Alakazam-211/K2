@@ -11,7 +11,7 @@
   },
   "extents": {
     "stated": null,
-    "computed": [-35, -10, 200, 62.5]
+    "computed": [-35, -10, 880, 102]
   },
   "settings": {
     "ltscale": 2,
@@ -234,10 +234,10 @@
   "layouts": [
     {
       "handle": "@h:2B",
-      "name": "",
+      "name": "Model",
       "kind": "model",
       "space": "model",
-      "entities": 43,
+      "entities": 55,
       "tab": 0,
       "draw_order": "sortents",
       "paper": null,
@@ -245,7 +245,7 @@
     },
     {
       "handle": "@h:2C",
-      "name": "",
+      "name": "Layout1",
       "kind": "paper",
       "space": "@h:2C",
       "entities": 2,
@@ -259,7 +259,7 @@
       },
       "viewports": [
         {
-          "handle": "@h:70",
+          "handle": "@h:7C",
           "centre": [210, 148.5],
           "size": [300, 200],
           "view_centre": [50, 0],

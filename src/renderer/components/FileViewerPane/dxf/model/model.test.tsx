@@ -22,8 +22,10 @@ const json = <T,>(n: string): T => JSON.parse(readFileSync(`${FIX}/${n}.json`, '
 const HEADER = json<ModelHeader>('sampler-header')
 const MODEL = json<ModelPage>('sampler-page-model')
 const DOOR = json<ModelPage>('sampler-page-door')
+const NEST = json<ModelPage>('sampler-page-nest')
+const DIM = json<ModelPage>('sampler-page-dimension')
 const row = (h: string): ModelRow => MODEL.entities.find((e) => e.h === h)!
-const source = () => fixtureDrawingSource({ header: HEADER, pages: { model: [MODEL], '@h:2D': [DOOR] } })
+const source = () => fixtureDrawingSource({ header: HEADER, pages: { model: [MODEL], '@h:2D': [DOOR], '@h:2E': [NEST], '@h:2F': [DIM] } })
 
 async function drawn(): Promise<{ d: ModelDrawing; svg: SVGSVGElement }> {
   const d = (await loadModel(source(), ESTIMATED_METRICS))!
@@ -66,8 +68,9 @@ describe('loadModel', () => {
     const src = source()
     await loadModel(src, ESTIMATED_METRICS)
     await loadModel(src, ESTIMATED_METRICS)
-    // DOOR is placed twice (one an array); NEST and the dimension's block aren't in the fixtures.
+    // DOOR is placed twice in model space (one an array) and once inside NEST: still fetched once.
     expect(src.calls.block.filter((h) => h === '@h:2D')).toHaveLength(1)
+    expect(src.calls.block.filter((h) => h === '@h:2E')).toHaveLength(1)
     // A new digest is a new definition.
     const changed = { ...HEADER, blocks: HEADER.blocks.map((b) => (b.handle === '@h:2D' ? { ...b, digest: 'changed' } : b)) }
     src.setHeader(changed)
@@ -81,8 +84,8 @@ describe('loadModel', () => {
 
   it('counts what isn’t drawn, with plain words for why (attribute templates aren’t counted)', async () => {
     const d = (await loadModel(source(), ESTIMATED_METRICS))!
-    expect(d.notDrawn.count).toBe(3)
-    expect(d.notDrawn.lines).toEqual(['2 kinds this viewer doesn’t draw yet: 3DSOLID, ACME_GADGET', '1 spline whose weights can’t be drawn'])
+    expect(d.notDrawn.count).toBe(4)
+    expect(d.notDrawn.lines).toEqual(['3 kinds this viewer doesn’t draw yet: MULTILEADER, 3DSOLID, ACME_GADGET', '1 spline whose weights can’t be drawn'])
   })
 
   it('boxes and handles come from the model, for the change highlight and view addresses', async () => {
@@ -97,10 +100,10 @@ describe('loadModel', () => {
 describe('ModelShapes', () => {
   it('instances a block from its definition: one definition, a placement per INSERT and array cell', async () => {
     const { svg } = await drawn()
-    const defs = svg.querySelectorAll('defs [data-block="@h:2D"]')
+    const defs = svg.querySelectorAll('defs g[data-block="@h:2D"]')
     expect(defs).toHaveLength(1)
-    // One INSERT plus a 2 × 3 array.
-    expect(svg.querySelectorAll('use[data-block="@h:2D"]')).toHaveLength(7)
+    // One INSERT plus a 2 × 3 array in model space; one more inside NEST's definition.
+    expect(Array.from(svg.querySelectorAll('use[data-block="@h:2D"]')).filter((u) => !u.closest('defs'))).toHaveLength(7)
     // The block's layer-0 line draws in the INSERT's colour; its A-WALL line in its own.
     const [line0, , wall] = Array.from(defs[0].children)
     // A variable goes through style (presentation attributes don't read variables everywhere).
@@ -150,7 +153,10 @@ describe('ModelShapes', () => {
     expect(m.querySelector('tspan[font-weight="700"]')!.textContent).toBe('Bold')
     // A run's own tspan (a line's tspan holds its runs).
     const red = Array.from(m.querySelectorAll('tspan tspan')).find((t) => t.textContent === 'red')!
-    expect(red.getAttribute('fill')).toBe('rgb(255 0 0)')
+    // The run's own colour, as the model gives it.
+    const paras = (row('@h:60').geom as { paragraphs: { runs: { text: string; rgb?: number[] }[] }[] }).paragraphs
+    const runRgb = paras.flatMap((p) => p.runs).find((r) => r.text === 'red')!.rgb!
+    expect(red.getAttribute('fill')).toBe(`rgb(${runRgb.join(' ')})`)
     // Each line steps down by its tallest run, so a line of 5-unit runs never overlaps the next.
     const ys = Array.from(m.children).map((t) => Number(t.getAttribute('y')))
     for (let i = 1; i < ys.length; i++) expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual((5 * 5) / 3 - 1e-9)
@@ -158,7 +164,52 @@ describe('ModelShapes', () => {
 
   it('leaves hidden and not-drawn rows out', async () => {
     const { svg } = await drawn()
-    for (const h of ['@h:44', '@h:45', '@h:46', '@h:5B', '@h:6E', '@h:6F']) expect(svg.querySelector(`[data-h="${h}"]`)).toBeNull()
+    for (const h of ['@h:44', '@h:45', '@h:46', '@h:5B', '@h:79', '@h:7A', '@h:7B']) expect(svg.querySelector(`[data-h="${h}"]`)).toBeNull()
+  })
+
+  it('a nested insert draws: NEST places DOOR, and DOOR’s "insert" values flow through both placements', async () => {
+    const { svg } = await drawn()
+    const nest = svg.querySelector('use[data-h="@h:64"]') as SVGUseElement
+    expect(nest.getAttribute('data-block')).toBe('@h:2E')
+    const inner = svg.querySelector('defs [data-block="@h:2E"] use[data-block="@h:2D"]') as SVGUseElement
+    expect(inner).not.toBeNull()
+    // The inner INSERT's own colour is "insert": it sets none, so NEST's placement colour reaches DOOR.
+    expect(inner.style.getPropertyValue('--k2i-c')).toBe('')
+    expect(nest.style.getPropertyValue('--k2i-c')).toBe(`rgb(${(row('@h:64').style!.rgb as number[]).join(' ')})`)
+  })
+
+  it('a dimension draws through its block: its line and its measured text', async () => {
+    const { svg } = await drawn()
+    expect(svg.querySelector('use[data-h="@h:6B"]')!.getAttribute('data-block')).toBe('@h:2F')
+    const def = svg.querySelector('defs [data-block="@h:2F"]')!
+    expect(def.querySelector('[data-h="@h:3E"]')!.tagName).toBe('line')
+    expect(def.querySelector('[data-h="@h:3F"]')!.textContent).toBe('100')
+  })
+
+  it('closed outlines close their own path (the model doesn’t repeat the first point)', async () => {
+    const { svg } = await drawn()
+    for (const h of ['@h:51', '@h:52', '@h:68', '@h:6D']) expect(el(svg, h).getAttribute('d')).toMatch(/Z$/)
+    // The wipeout's four corners, closed: four points, then Z.
+    expect(el(svg, '@h:6D').getAttribute('d')!.match(/[ML]/g)).toHaveLength(4)
+    expect(el(svg, '@h:57').getAttribute('d')).not.toMatch(/Z$/)
+  })
+
+  it('a leader’s arrowhead is the model’s size and kind', async () => {
+    const { svg } = await drawn()
+    const tip = (h: string) => {
+      const d = el(svg, h).querySelector('[data-part="arrow"]')!.getAttribute('d')!
+      const n = d.match(/-?[\d.]+/g)!.map(Number)
+      // From the tip to the middle of the arrowhead's back.
+      return Math.hypot((n[2] + n[4]) / 2 - n[0], (n[3] + n[5]) / 2 - n[1])
+    }
+    expect(tip('@h:6C')).toBeCloseTo(0.18, 3)
+    expect(tip('@h:6E')).toBeCloseTo(5, 3)
+    expect(el(svg, '@h:6E').querySelector('[data-part="arrow"]')!.getAttribute('data-kind')).toBe('closed_filled')
+  })
+
+  it('an image draws as its frame, marked across, until images resolve', async () => {
+    const { svg } = await drawn()
+    expect(el(svg, '@h:6F').getAttribute('d')).toMatch(/^M100 100 L110 100 L110 105 L100 105 Z/)
   })
 })
 

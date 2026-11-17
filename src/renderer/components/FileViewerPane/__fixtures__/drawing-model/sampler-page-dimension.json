@@ -1,0 +1,95 @@
+{
+  "schema": "cad.drawing.page/1",
+  "format": "dxf",
+  "version": 7,
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "space": "@h:2F",
+  "first": true,
+  "z_first": 0,
+  "z_last": 1,
+  "of": 2,
+  "not_drawn": 0,
+  "oversize": false,
+  "budget": {
+    "entities": 5000,
+    "bytes": 4194304
+  },
+  "entities": [
+    {
+      "h": "@h:3E",
+      "kind": "LINE",
+      "layer": "0",
+      "owner": "@h:2F",
+      "z": 0,
+      "style": {
+        "rgb": "insert",
+        "fg": false,
+        "aci": null,
+        "alpha": "insert",
+        "ltype": "insert",
+        "lt_scale": 2,
+        "lw_mm": "insert"
+      },
+      "visible": "insert",
+      "drawn": true,
+      "bbox": [0, -5, 100, -5],
+      "bbox_q": "exact",
+      "geom": {
+        "p1": [0, -5],
+        "p2": [100, -5]
+      }
+    },
+    {
+      "h": "@h:3F",
+      "kind": "MTEXT",
+      "layer": "0",
+      "owner": "@h:2F",
+      "z": 1,
+      "style": {
+        "rgb": "insert",
+        "fg": false,
+        "aci": null,
+        "alpha": "insert",
+        "ltype": "insert",
+        "lt_scale": 2,
+        "lw_mm": "insert"
+      },
+      "visible": "insert",
+      "drawn": true,
+      "bbox": [50, -6.5, 54.5, -4],
+      "bbox_q": "approx",
+      "geom": {
+        "anchor": [50, -4],
+        "attach": {
+          "h": "left",
+          "v": "top"
+        },
+        "ref_width": 0,
+        "height": 2.5,
+        "rotation": 0,
+        "style": "Standard",
+        "line_spacing": 1,
+        "line_spacing_exact": false,
+        "background": null,
+        "columns": null,
+        "paragraphs": [
+          {
+            "align": null,
+            "runs": [
+              {
+                "text": "100"
+              }
+            ]
+          }
+        ],
+        "unknown_codes": 0
+      }
+    }
+  ],
+  "next": null
+}

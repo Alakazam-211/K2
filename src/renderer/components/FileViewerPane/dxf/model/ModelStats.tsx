@@ -46,8 +46,8 @@ export function NotDrawnNote({ nd }: { nd: NotDrawn }): React.JSX.Element {
 export function LayoutsNote({ paper }: { paper: readonly ModelLayout[] }): React.JSX.Element {
   const names = paper.map((l, i) => l.name || `Layout ${l.tab ?? i + 1}`)
   return (
-    <span data-testid="dxf-layouts" title={`Model space is shown. ${names.join(', ')}: coming next.`}>
-      {` · ${paper.length} paper ${paper.length === 1 ? 'layout' : 'layouts'}, coming next`}
+    <span data-testid="dxf-layouts" title={`Model space is shown. Paper layouts (${names.join(', ')}) are coming next.`}>
+      {` · ${names.join(', ')} coming next`}
     </span>
   )
 }

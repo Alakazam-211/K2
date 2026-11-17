@@ -33,9 +33,11 @@ const json = <T,>(n: string): T => JSON.parse(readFileSync(`${FIX}/${n}`, 'utf8'
 const HEADER = json<ModelHeader>('drawing-model/sampler-header.json')
 const MODEL = json<ModelPage>('drawing-model/sampler-page-model.json')
 const DOOR = json<ModelPage>('drawing-model/sampler-page-door.json')
+const NEST = json<ModelPage>('drawing-model/sampler-page-nest.json')
+const DIM = json<ModelPage>('drawing-model/sampler-page-dimension.json')
 const BRACKET = readFileSync(`${FIX}/k2-bracket.dxf`, 'utf8')
 const PATH = '/ws/sampler.dxf'
-const model = () => fixtureDrawingSource({ header: HEADER, pages: { model: [MODEL], '@h:2D': [DOOR] } })
+const model = () => fixtureDrawingSource({ header: HEADER, pages: { model: [MODEL], '@h:2D': [DOOR], '@h:2E': [NEST], '@h:2F': [DIM] } })
 
 beforeEach(() => bus.handlers.clear())
 afterEach(() => {
@@ -54,17 +56,17 @@ describe('DxfViewer on the drawing model', () => {
   it('says how many items aren’t drawn, and why in plain words on hover or focus', async () => {
     renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={model()} changes={null} />)
     const note = await screen.findByTestId('dxf-not-drawn')
-    expect(note.textContent).toContain('3 items not drawn')
+    expect(note.textContent).toContain('4 items not drawn')
     const tip = screen.getByTestId('dxf-not-drawn-why')
     expect(tip.getAttribute('role')).toBe('tooltip')
-    expect(tip.textContent).toContain('3DSOLID, ACME_GADGET')
+    expect(tip.textContent).toContain('MULTILEADER, 3DSOLID, ACME_GADGET')
     expect(tip.textContent).toContain('spline whose weights can’t be drawn')
     expect(note.getAttribute('aria-describedby')).toBe(tip.id)
   })
 
   it('lists paper layouts as coming next', async () => {
     renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={model()} changes={null} />)
-    expect((await screen.findByTestId('dxf-layouts')).textContent).toContain('1 paper layout, coming next')
+    expect((await screen.findByTestId('dxf-layouts')).textContent).toContain('Layout1 coming next')
   })
 
   it('no model route: the viewer reads the DXF text itself, as before', async () => {
@@ -77,11 +79,12 @@ describe('DxfViewer on the drawing model', () => {
   })
 
   it('view addresses frame the model’s boxes', async () => {
-    // The polyline's box, as the model gives it (a box under 2% of the drawing would grow to that).
-    renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={model()} changes={null} view="@h:51" />)
+    // The dense hatch's box, as the model gives it (a box under 2% of the drawing would grow to that).
+    renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={model()} changes={null} view="@h:6A" />)
     const svg = await screen.findByTestId('dxf-svg')
     await screen.findByTestId('dxf-shapes')
-    const want = fitBox({ minX: 0, minY: 0, maxX: 15, maxY: 10 })
+    const [x0, y0, x1, y1] = MODEL.entities.find((e) => e.h === '@h:6A')!.bbox!
+    const want = fitBox({ minX: x0, minY: y0, maxX: x1, maxY: y1 })
     svg.getAttribute('viewBox')!.split(' ').map(Number).forEach((v, i) => expect(v).toBeCloseTo([want.x, want.y, want.w, want.h][i], 6))
   })
 

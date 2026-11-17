@@ -1,0 +1,8 @@
+The CAD pack's drawing-model goldens for its generated sampler (read-only copies):
+  k2-mpc-cad, main at 47d87a3e2779431597b72d6ad1d7a858aae6fc63, copied 2026-11-16
+  crates/dxf/tests/golden/draw-sampler-2018-header.json          -> sampler-header.json
+  crates/dxf/tests/golden/draw-sampler-2018-page-model.json      -> sampler-page-model.json
+  crates/dxf/tests/golden/draw-sampler-2018-page-door.json       -> sampler-page-door.json
+  crates/dxf/tests/golden/draw-sampler-2018-page-nest.json       -> sampler-page-nest.json
+  crates/dxf/tests/golden/draw-sampler-2018-page-dimension.json  -> sampler-page-dimension.json
+Colours: the pack's palette may change, so tests read rgb from these files, never a literal.

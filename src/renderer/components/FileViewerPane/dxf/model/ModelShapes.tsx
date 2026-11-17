@@ -9,7 +9,7 @@ import { useId } from 'react'
 import type { TextMetrics } from '../text-metrics'
 import { arcD, bulgeD, ellipsePoints, fmt, num, pointsOf, polyD, vertsOf, xy } from './geom'
 import { HatchShape } from './hatch'
-import { insertVars, paintOf, paintProps } from './paint'
+import { insertVars, paintOf, paintProps, type Paint } from './paint'
 import { MtextShape, TextShape } from './text'
 import type { ModelHeader, ModelPage, ModelRow, XY } from './types'
 
@@ -41,6 +41,32 @@ function pointD(p: XY, mode: number, size: number): string {
   if (mode & 32) parts.push(arcD(p, s, 0, 2 * Math.PI))
   if (mode & 64) parts.push(`M${fmt(x - s)} ${fmt(y - s)} H${fmt(x + s)} V${fmt(y + s)} H${fmt(x - s)} Z`)
   return parts.join(' ')
+}
+
+/** A leader's arrowhead: the model's size and kind (a size of its own when the model gives only `true`). */
+function arrowOf(v: unknown, insunits: number | undefined): { kind: string; size: number } | null {
+  if (v === true) return { kind: 'closed_filled', size: insunits === 1 ? 0.18 : 2.5 }
+  if (!v || typeof v !== 'object') return null
+  const a = v as { shown?: unknown; kind?: unknown; size?: unknown }
+  if (a.shown === false || a.kind === 'none') return null
+  return { kind: typeof a.kind === 'string' ? a.kind : 'closed_filled', size: num(a.size, insunits === 1 ? 0.18 : 2.5) }
+}
+
+function Arrowhead({ at, toward, kind, size, paint }: { at: XY; toward: XY; kind: string; size: number; paint: Paint }): React.JSX.Element {
+  const len = Math.hypot(toward[0] - at[0], toward[1] - at[1]) || 1
+  const ux = (toward[0] - at[0]) / len
+  const uy = (toward[1] - at[1]) / len
+  const w = size / 6
+  const l: XY = [at[0] + ux * size - uy * w, at[1] + uy * size + ux * w]
+  const rr: XY = [at[0] + ux * size + uy * w, at[1] + uy * size - ux * w]
+  const p = (q: XY) => `${fmt(q[0])} ${fmt(q[1])}`
+  const common = { 'data-part': 'arrow', 'data-kind': kind, vectorEffect: HAIR }
+  if (kind === 'dot') return <circle {...common} cx={at[0]} cy={at[1]} r={size / 2} {...paintProps(paint)} {...paintProps(paint, 'fill')} />
+  if (kind === 'open' || kind === 'open30' || kind === 'open90') return <path {...common} d={`M${p(l)} L${p(at)} L${p(rr)}`} {...paintProps(paint)} />
+  if (kind === 'tick' || kind === 'oblique' || kind === 'architectural_tick')
+    return <path {...common} d={`M${fmt(at[0] - (ux - uy) * size * 0.5)} ${fmt(at[1] - (uy + ux) * size * 0.5)} L${fmt(at[0] + (ux - uy) * size * 0.5)} ${fmt(at[1] + (uy + ux) * size * 0.5)}`} {...paintProps(paint)} />
+  const filled = kind !== 'closed' && kind !== 'closed_blank'
+  return <path {...common} d={`M${p(at)} L${p(l)} L${p(rr)} Z`} {...paintProps(paint)} {...(filled ? paintProps(paint, 'fill') : {})} />
 }
 
 function Insert({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
@@ -161,21 +187,11 @@ function Row({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
     case 'LEADER': {
       const pts = pointsOf(g.path)
       if (pts.length < 2) return null
-      let arrow = ''
-      if (g.arrow) {
-        // The arrowhead at the first point, along the first segment.
-        const [a, b] = pts
-        const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
-        const size = Math.min(len / 2, c.scene.header.units?.insunits === 1 ? 0.18 : 2.5)
-        const ux = (b[0] - a[0]) / len
-        const uy = (b[1] - a[1]) / len
-        const w = size / 6
-        arrow = ` M${fmt(a[0])} ${fmt(a[1])} L${fmt(a[0] + ux * size - uy * w)} ${fmt(a[1] + uy * size + ux * w)} L${fmt(a[0] + ux * size + uy * w)} ${fmt(a[1] + uy * size - ux * w)} Z`
-      }
+      const head = arrowOf(g.arrow, c.scene.header.units?.insunits)
       return (
         <g data-h={r.h}>
           <path vectorEffect={HAIR} {...paintProps(paint)} d={polyD(pts, false)} />
-          {arrow ? <path vectorEffect={HAIR} {...paintProps(paint)} {...paintProps(paint, 'fill')} d={arrow.trim()} /> : null}
+          {head ? <Arrowhead at={pts[0]} toward={pts[1]} kind={head.kind} size={head.size} paint={paint} /> : null}
         </g>
       )
     }
@@ -187,12 +203,14 @@ function Row({ r, c }: { r: ModelRow; c: Ctx }): React.JSX.Element | null {
     case 'WIPEOUT': {
       const mask = pointsOf(g.mask)
       // Covers what is under it in the viewer's own background.
-      return mask.length >= 3 ? <path data-h={r.h} d={polyD(mask, true)} stroke="none" style={{ fill: 'var(--color-bg)' }} /> : null
+      return mask.length >= 3 ? <path data-h={r.h} d={polyD(mask, g.closed !== false)} stroke="none" style={{ fill: 'var(--color-bg)' }} /> : null
     }
     case 'IMAGE': {
+      // Images aren't loaded yet: the frame, marked across, and its clip boundary when it has one.
       const q = pointsOf(g.corners)
       if (q.length < 4) return null
-      return path(`${polyD(q, true)} M${fmt(q[0][0])} ${fmt(q[0][1])} L${fmt(q[2][0])} ${fmt(q[2][1])} M${fmt(q[1][0])} ${fmt(q[1][1])} L${fmt(q[3][0])} ${fmt(q[3][1])}`)
+      const clip = pointsOf(g.clip)
+      return path(`${polyD(q, true)} M${fmt(q[0][0])} ${fmt(q[0][1])} L${fmt(q[2][0])} ${fmt(q[2][1])} M${fmt(q[1][0])} ${fmt(q[1][1])} L${fmt(q[3][0])} ${fmt(q[3][1])}${clip.length >= 3 ? ` ${polyD(clip, true)}` : ''}`)
     }
     default:
       return null

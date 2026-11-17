@@ -27,7 +27,7 @@ export interface TileBarSizes {
   picker: number
   /** The picker folded to one menu button; 0 when it can't fold. */
   pickerCompact?: number
-  /** The ⌘N badge, with its gap to what follows it; 0 for none. */
+  /** The ⌘N hint, with its margins; 0 for none. */
   keys: number
   /** The bell and search (TileBarTools) and the rule after them, with
    *  their gaps; 0 for none. */
@@ -137,8 +137,8 @@ export function measureTileBar(bar: HTMLElement): TileBarSizes | null {
     hint: q('[data-tile-hint]')?.scrollWidth ?? 0,
     picker: full ? full.scrollWidth : (picker?.offsetWidth ?? 0),
     pickerCompact: compact?.scrollWidth ?? 0,
-    // The badge's slot keeps a gap to the close button (CSS margin).
-    keys: keys ? keys.scrollWidth + (close ? gap : 0) : 0,
+    // The hint and its margins (it sits centred between the rule and the ×).
+    keys: keys ? keys.scrollWidth + px(keys, 'marginLeft') + px(keys, 'marginRight') : 0,
     tools: tools && bell + search > 0 ? bell + search + rule : 0,
     bell,
     close: close?.offsetWidth ?? 0,

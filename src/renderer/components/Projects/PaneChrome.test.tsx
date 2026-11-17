@@ -234,17 +234,21 @@ describe('PaneChrome', () => {
     expect(b.innerHTML).not.toMatch(/text-\[\d+px\]|font-mono/)
   })
 
-  it('⌘N keeps its name and tooltip, and always shows: a quiet keycap at rest, unchanged on hover', () => {
+  it('⌘N keeps its name and tooltip, and always shows: plain muted text at rest, unchanged on hover', () => {
     render(agentTile())
     const keys = bar().querySelector('[data-tile-shortcut]') as HTMLElement
     expect(keys.getAttribute('title')).toBe('⌘2 focuses this pane')
     expect(keys.textContent).toBe('⌘2')
-    // A keycap like the app's other shortcut hints: a hairline edge, the
-    // selector radius, muted text, no fill of its own.
-    expect(keys.tagName).toBe('KBD')
-    for (const c of ['border', 'border-[var(--color-border)]', 'rounded-[var(--radius-selector)]', 'text-[var(--color-text-muted)]']) {
-      expect(keys.className.split(/\s+/)).toContain(c)
-    }
+    // Plain text in the bar's muted small type: no box, edge, radius or fill.
+    const cls = keys.className.split(/\s+/)
+    expect(cls).toEqual(expect.arrayContaining(['type-hint', 'text-[var(--color-text-muted)]']))
+    expect(cls.filter((c) => /^(border|rounded|bg-|ring|shadow|outline)/.test(c))).toEqual([])
+    expect(keys.querySelector('[class*="border"], [class*="rounded"]')).toBeNull()
+    // Centred between the divider and the ×: the divider leaves 4px and the
+    // × button 9px before its ink, so 6px on the left and 1px on the right
+    // give 10px either side.
+    expect(cls).toEqual(expect.arrayContaining(['ml-1.5', 'mr-px']))
+    expect(CSS).not.toMatch(/\[data-tile-shortcut\][^{}]*\{[^}]*border/)
     // Nothing hides it at rest, here or in globals.css, and nothing on hover
     // or focus changes it.
     expect(keys.className).not.toMatch(/(^|\s)(hidden|invisible|opacity-0|sr-only)(\s|$)|group-hover|hover:/)

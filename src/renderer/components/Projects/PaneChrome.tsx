@@ -138,19 +138,21 @@ export function PaneChrome({
           <span aria-hidden="true" className="w-px h-3.5 mx-1 flex-none bg-[var(--color-border)]" data-tile-sep="" />
         </span>
       ) : null}
-      {/* ⌘N pane-switch hint, left of the close button: a quiet keycap like
-          the app's other shortcut hints (the ⌘K field's, Settings search's).
-          It always shows, the same at rest and on hover, and keeps its room:
-          the name truncates first (tile-bar-fit.ts). */}
+      {/* ⌘N pane-switch hint, left of the close button: plain muted text,
+          no box. It always shows, the same at rest and on hover, and keeps
+          its room: the name truncates first (tile-bar-fit.ts). Centred
+          between the divider and the ×'s ink: the divider leaves 4px and
+          the 24px × button 9px before its 12px icon's strokes, so 6px on
+          the left and 1px on the right make 10px either side. */}
       {shortcutNum !== undefined && (
-        <kbd
-          className="flex-none whitespace-nowrap mr-2 px-1.5 py-0.5 border border-[var(--color-border)] rounded-[var(--radius-selector)] type-hint leading-none text-[var(--color-text-muted)] tabular-nums"
+        <span
+          className="flex-none whitespace-nowrap ml-1.5 mr-px type-hint leading-none text-[var(--color-text-muted)] tabular-nums"
           data-tile-shortcut=""
           title={`⌘${shortcutNum} focuses this pane`}
         >
           <span className="key-symbol">⌘</span>
           {shortcutNum}
-        </kbd>
+        </span>
       )}
       {!readOnly && (
         // The shared quiet ×: closing a tile only takes it off the

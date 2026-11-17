@@ -558,6 +558,15 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
     if let Some(k) = ["postalEnabled", "postalAdminsMayAccept"].iter().find(|k| partial.get(**k).is_some()) {
         return forbidden(format!("\"{k}\" changes only through POST /cli/postal/settings (the Owner)"));
     }
+    // New k5 command (Beta): a flip re-points the `k2` and `k5` commands,
+    // so it goes through its own route (Owner only), never a plain write.
+    if partial.get(crate::cli_beta_routes::SETTING_KEY).is_some() {
+        return forbidden(format!(
+            "\"{}\" changes only through POST {} (Owner only)",
+            crate::cli_beta_routes::SETTING_KEY,
+            crate::cli_beta_routes::PATH
+        ));
+    }
     if actor != SettingsActor::Owner {
         if let Some(gated) = OWNER_ONLY_KEYS.iter().find(|k| partial.get(**k).is_some()) {
             return forbidden(format!("updating \"{gated}\" requires the Owner role"));
@@ -705,8 +714,11 @@ pub fn handle_settings_reset_as(actor: SettingsActor, by: &str) -> CliResponse {
     if actor != SettingsActor::Owner {
         return forbidden("resetting settings requires the Owner role".to_string());
     }
+    let k5_cli_was = k2_core::app_settings::k5_cli_beta();
     match k2_core::app_settings::reset() {
         Ok(defaults) => {
+            // The new k5 command is off again: the script goes back on the links.
+            crate::cli_beta_routes::after_reset(k5_cli_was);
             // Saved LLM logins back to the default store (files in 0.46.6);
             // a server leaving the vault gets any missing file written back.
             crate::llm_accounts_runtime::storage_setting_changed(&defaults.llm_accounts_storage, actor.audit_user());

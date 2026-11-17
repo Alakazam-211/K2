@@ -1,7 +1,9 @@
-//! Read-only view of the three `~/.k2/settings.json` fields the thin client
-//! acts on locally: `keepDaemonOnQuit` (red close button), `airgap`
-//! (updater refusals) and `wakeScheduler` (forwarded to the daemon's
-//! heartbeat install routes).
+//! Read-only view of the `~/.k2/settings.json` fields the thin client and
+//! k2-client act on locally: `keepDaemonOnQuit` (red close button), `airgap`
+//! (updater refusals), `boardFilePreview` (the Quit menu), `wakeScheduler`
+//! (forwarded to the daemon's heartbeat install routes) and `k5CliBeta`
+//! (what the `k2` and `k5` links run, `crate::cli_install`; the daemon and
+//! the app read it here, so they never disagree).
 //!
 //! The daemon owns `settings.json` (`k2_core::app_settings`); this view
 //! never writes it. Field names, serde defaults and the "any parse problem
@@ -32,6 +34,10 @@ pub struct AppSettingsView {
     pub board_file_preview: bool,
     #[serde(default)]
     pub wake_scheduler: WakeSchedulerView,
+    /// New k5 command (Beta): the `k2` and `k5` links run the k5 binary when
+    /// it is there and is this release's. Off by default.
+    #[serde(default)]
+    pub k5_cli_beta: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -63,7 +69,13 @@ impl Default for WakeSchedulerView {
 
 impl Default for AppSettingsView {
     fn default() -> Self {
-        Self { keep_daemon_on_quit: true, airgap: false, board_file_preview: false, wake_scheduler: WakeSchedulerView::default() }
+        Self {
+            keep_daemon_on_quit: true,
+            airgap: false,
+            board_file_preview: false,
+            wake_scheduler: WakeSchedulerView::default(),
+            k5_cli_beta: false,
+        }
     }
 }
 
@@ -95,6 +107,14 @@ mod tests {
         assert_eq!(d.wake_scheduler.mode, "on_demand");
         assert_eq!(d.wake_scheduler.interval_minutes, 1);
         assert!(!d.wake_scheduler.wake_system);
+        assert!(!d.k5_cli_beta, "the new k5 command is off by default");
+    }
+
+    #[test]
+    fn reads_the_k5_cli_beta_switch() {
+        assert!(parse(r#"{"k5CliBeta": true}"#).k5_cli_beta);
+        assert!(!parse(r#"{"k5CliBeta": false}"#).k5_cli_beta);
+        assert_eq!(parse(r#"{"k5CliBeta": "yes"}"#), AppSettingsView::default(), "a wrong type gives the defaults");
     }
 
     #[test]

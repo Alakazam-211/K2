@@ -566,6 +566,14 @@ pub struct AppSettings {
     /// only: it doesn't turn on for customers until held edits survive a restart.
     #[serde(default)]
     pub board_file_preview: bool,
+    /// New k5 command (Beta): the `k2` and `k5` commands run the k5 binary
+    /// instead of the shell script, when this release has the binary and
+    /// it is this release's (`k2_client::cli_install`, `crate::cli_stage`).
+    /// Owner only, off by default. It changes only through `/cli/k5-cli`,
+    /// which re-points the commands at once; a settings write refuses it.
+    /// Wire name `k5CliBeta`.
+    #[serde(default)]
+    pub k5_cli_beta: bool,
     /// The setup checklist (prd-setup-checklist-v1): whether the app shows
     /// it. Owner only. Off by default, so an updating server keeps it off;
     /// a brand-new server's first boot writes it on
@@ -1377,6 +1385,7 @@ impl Default for AppSettings {
             home_chat_push: false,
             home_chat_push_previews: true,
             board_file_preview: false,
+            k5_cli_beta: false,
             setup_checklist: false,
             kessel_first_run: false,
             video_rooms_preview: true,
@@ -1920,6 +1929,15 @@ pub fn scrub_legacy_companion_block() -> Result<bool, String> {
 /// Atomic load + deep-merge `partial` + save. Returns the post-merge
 /// `AppSettings` so callers can echo it back to the renderer in one
 /// round-trip.
+/// The new k5 command switch (`k5CliBeta`) as the commands' heal reads it:
+/// through `k2_client::app_settings_view`, the read the desktop app makes
+/// too, so the daemon and the app never link the commands at different
+/// targets (the view and [`load`] differ only for a file with a wrong type
+/// on some other field).
+pub fn k5_cli_beta() -> bool {
+    k2_client::app_settings_view::load().k5_cli_beta
+}
+
 pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
     let _guard = settings_lock().lock();
     normalize_legacy_apps_partial(&mut partial);
@@ -2151,7 +2169,7 @@ mod tests {
         let _home = HomeGuard::new();
         let file = settings_file();
         std::fs::create_dir_all(file.parent().expect("settings dir")).expect("mkdir ~/.k2");
-        let cases: [Option<&str>; 7] = [
+        let cases: [Option<&str>; 9] = [
             None,
             Some("{}"),
             Some("not json"),
@@ -2159,6 +2177,8 @@ mod tests {
             Some(r#"{"wakeScheduler": {"intervalMinutes": 7}}"#),
             Some(r#"{"keepDaemonOnQuit": "no", "airgap": true}"#),
             Some(r#"{"keepDaemonOnQuit": null}"#),
+            Some(r#"{"k5CliBeta": true}"#),
+            Some(r#"{"k5CliBeta": "yes"}"#),
         ];
         for raw in cases {
             match raw {
@@ -2180,6 +2200,7 @@ mod tests {
                 "wake interval for {raw:?}"
             );
             assert_eq!(view.wake_scheduler.wake_system, full.wake_scheduler.wake_system, "wakeSystem for {raw:?}");
+            assert_eq!(view.k5_cli_beta, full.k5_cli_beta, "k5CliBeta for {raw:?}");
         }
     }
 
@@ -2196,6 +2217,21 @@ mod tests {
         v.as_object_mut().expect("object").remove("kesselFirstRun");
         let old: AppSettings = serde_json::from_value(v).expect("parse");
         assert!(!old.kessel_first_run, "missing reads as off");
+    }
+
+    /// New k5 command (Beta): off by default, wire name `k5CliBeta`, and an
+    /// old file without it reads as off.
+    #[test]
+    fn k5_cli_beta_is_off_by_default_under_its_wire_name() {
+        assert!(!AppSettings::default().k5_cli_beta);
+        let mut v = serde_json::to_value(AppSettings::default()).expect("json");
+        assert_eq!(v["k5CliBeta"], serde_json::json!(false), "wire name");
+        v["k5CliBeta"] = serde_json::json!(true);
+        let on: AppSettings = serde_json::from_value(v.clone()).expect("parse");
+        assert!(on.k5_cli_beta);
+        v.as_object_mut().expect("object").remove("k5CliBeta");
+        let old: AppSettings = serde_json::from_value(v).expect("parse");
+        assert!(!old.k5_cli_beta, "missing reads as off");
     }
 
     #[test]

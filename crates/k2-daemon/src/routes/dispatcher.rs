@@ -11929,6 +11929,13 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // New k5 command (Beta): the owner's switch (`cli_beta_routes`); the body is read for the owner only.
+        crate::cli_beta_routes::PATH => {
+            let by = super::http::owner_role_identity(&query, state.token.as_str());
+            let body = if is_post && by.is_some() { super::http::read_post_body(&mut *stream, &mut buf).await } else { let _ = stream.read(&mut buf).await; Vec::new() };
+            let r = tokio::task::spawn_blocking(move || crate::cli_beta_routes::handle(by.as_deref(), is_post, &body)).await.unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // Chunk 2.2 — owner-only writer for `projects.agents_can_manage_skin`.
         // Dedicated arm: `owner_role_identity` else `skin_dual_auth_failure`.
         // GET 405. Not an agent verb. Not `workspace/set`.

@@ -74,6 +74,7 @@ import { AppFontRows } from '../shared/AppFontRows'
 import { ChatLinkCopyRow } from './ChatLinkCopyRow'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
 import { PostalServerSwitch } from './PostalServerSwitch'
+import { K5CliBetaRow } from './K5CliBetaRow'
 import { YourAccountRow } from './YourAccountRow'
 import { OwnerTimezoneRow } from './OwnerTimezoneRow'
 import { GitToolsRow } from '@/components/GitTools/GitToolsNotice'
@@ -111,6 +112,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'On: the red close button hides the window and agents keep running. Off: it quits everything. Cmd+Q always quits.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
   { id: 'general.agents-survive-restarts', section: 'general', group: 'Server', label: 'Agents keep running through updates and restarts', description: `Agent sessions keep running when ${PRODUCT_NAME} updates, restarts or crashes. On by default. Works on macOS and Linux.`, keywords: ['agents', 'survive', 'restart', 'update', 'crash', 'keep', 'running', 'ptyd', 'session', 'terminal'] },
   { id: 'general.clone-personal-computers', section: 'general', group: 'Server', label: "Allow cloning agents to people's personal computers", description: "When off, Admins and Members can't clone agents from this server to their own computers. Owner only.", keywords: ['clone', 'copy', 'agent', 'workspace', 'personal', 'computer', 'pull', 'permission', 'migrate'] },
+  { id: 'general.k5-cli-beta', section: 'general', group: 'Server', label: 'New k5 command', description: `The ${CLI_NAME} and k5 commands run the new k5 program instead of the shell script. Off by default. Owner only.`, keywords: ['k5', 'k2', 'cli', 'command', 'terminal', 'rust', 'binary', 'script', 'beta', 'new'], beta: true },
   { id: 'general.restart-host', section: 'general', group: 'Server', label: 'Restart connected server', description: "Restart the server you're connected to, not this computer", keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
   { id: 'general.update-host', section: 'general', group: 'Server', label: 'Update connected server', description: "Update the server you're connected to, not this computer", keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
 ]
@@ -324,6 +326,9 @@ function ServerTab(): React.JSX.Element {
       {/* Postal (Beta, prd-postal-in-k2-v1 §5.5): the server-wide switch,
           off by default, owner only. Hides itself on a server without it. */}
       <PostalServerSwitch scope={primaryScope()} />
+      {/* New k5 command (Beta): the owner's switch in an Advanced card,
+          shown to the owner only (nothing for anyone else). */}
+      <K5CliBetaRow scope={primaryScope()} />
     </>
   )
 }

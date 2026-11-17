@@ -364,6 +364,8 @@ pub mod sessions_bytes_ws;
 pub mod sessions_grid_ws;
 pub mod sessions_ws;
 pub mod settings_routes;
+// New k5 command (Beta): the owner's switch, `/cli/k5-cli`.
+pub mod cli_beta_routes;
 pub mod sidecar_routes;
 /// Workbench W1 (0.46.7): worktree sidecars (review, interrupt, land, retire).
 pub mod sidecar_worktree;

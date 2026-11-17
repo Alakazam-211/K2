@@ -707,6 +707,10 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/jobs/resume", Admin),
     post("/cli/jobs/run", Admin),
     get("/cli/jobs/show", Admin),
+    // New k5 command (Beta): read and flip the owner's switch; a flip
+    // re-points the k2 and k5 commands (`cli_beta_routes`). Owner only, and
+    // the handler refuses passports and App passes too.
+    both("/cli/k5-cli", Owner),
     // LLM login wallet (Settings → LLMs, `k2 llm accounts`): the
     // `/cli/agents/*` floor. Passports are read-only in the handler.
     // Changing the server default (switch / next) is Admin and above

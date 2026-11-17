@@ -1,15 +1,16 @@
 // Drag-to-reorder for the agent rows in a left nav — one implementation for
 // the Agents sidebar and the Home roster so the two look and feel the same:
 // press on a row, move past a small threshold, and the row goes 40% (the
-// ghost), the cursor turns to `grabbing`, and a 2px accent line marks the
-// gap it will land in. A press that never passes the threshold stays a
-// click; a press that did drag never fires the row's click.
+// ghost) and the cursor turns to `grabbing`. A press that never passes the
+// threshold stays a click; a press that did drag never fires the row's
+// click.
 //
-// Opt-in (Home's nav, K2 Design round mp-4): instead of the line, the list
-// opens an empty gap the dragged row's height where it will land
-// (`showsDropGapAt`, `dragSize`, <RowDropGap>), so no row sits under the
-// line. The gap goes between the rows, never inside a row the gap reading
-// (`rowSelector`) measures. The Agents sidebar keeps the line.
+// While dragging, no row moves: a drop line (<RowDropLine>, the accent
+// colour, 2px with a 6px cap at its left end) floats over the list where
+// the row will land, centred on the seam between two rows or at the list's
+// top or bottom. A list can say where a drop really lands (`landingGap`)
+// and which area the pointer must stay in (`bounds`); where the row can't
+// land, there's no line and a release does nothing.
 //
 // Only the gesture lives here. What a drop writes is the caller's: Home
 // moves a row in this device's Home (localStorage), the Agents nav writes
@@ -81,6 +82,43 @@ export function reorderedZoneIds(
   return out
 }
 
+/** The drop line's cap: a 6px square (Terminal) or dot (Glass) at its left
+ *  end. The line itself is 2px. */
+export const DROP_LINE_CAP_PX = 6
+const DROP_LINE_PX = 2
+/** Two rows closer than this (px) touch: the line goes on their seam. */
+const ROWS_TOUCH_PX = 4
+
+/** Where the drop line for gap `gap` sits: its centre, in px from the top
+ *  of `container`. Between two rows that touch, on their seam. Where
+ *  something sits between the two rows (a caption), against the row on
+ *  the dragged row's side (`from`): after the row above when moving down,
+ *  before the row below when moving up. Kept half a cap inside the
+ *  container, so a list that clips its edges still shows the whole line.
+ *  Null when the list has no rows. */
+export function dropLineY(container: Element, rowSelector: string, gap: number, from: number): number | null {
+  const rows = container.querySelectorAll(rowSelector)
+  if (rows.length === 0) return null
+  const box = container.getBoundingClientRect()
+  let y: number
+  if (gap <= 0) y = rows[0].getBoundingClientRect().top
+  else if (gap >= rows.length) y = rows[rows.length - 1].getBoundingClientRect().bottom
+  else {
+    const above = rows[gap - 1].getBoundingClientRect().bottom
+    const below = rows[gap].getBoundingClientRect().top
+    y = below - above <= ROWS_TOUCH_PX ? (above + below) / 2 : from < gap ? above : below
+  }
+  const half = DROP_LINE_CAP_PX / 2
+  return Math.min(Math.max(y - box.top, half), Math.max(half, box.height - half))
+}
+
+/** Whether the pointer is inside `el`'s box (no element: anywhere is in). */
+export function pointerInside(el: Element | null, clientX: number, clientY: number): boolean {
+  if (!el) return true
+  const r = el.getBoundingClientRect()
+  return clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom
+}
+
 export interface RowDragStart<Z extends string> {
   /** Which list the row is in; a drag never leaves its list. */
   zone: Z
@@ -92,7 +130,14 @@ export interface RowDragStart<Z extends string> {
   /** The gap under the pointer (default: by `clientY` only, a vertical list;
    *  a grid passes its own reading-order rule). */
   gapAt?: (container: Element, clientX: number, clientY: number) => number
-  /** Called once on release after a real drag, with the gap it ended over. */
+  /** The gap a release over gap `gap` really lands in (a list whose rows
+   *  keep to sections clamps it), or null where this row can't land: no
+   *  line, and a release there does nothing. Default: the pointer's gap. */
+  landingGap?: (from: number, gap: number) => number | null
+  /** The area the pointer must be in (the list's own panel). Outside it
+   *  there's no line and a release does nothing. Default: anywhere. */
+  bounds?: () => Element | null
+  /** Called once on release after a real drag, with the gap it lands in. */
   onDrop: (from: number, gap: number) => void
 }
 
@@ -102,21 +147,24 @@ export interface RowDragReorder<Z extends string> {
   onRowClickCapture: (e: React.MouseEvent) => void
   /** The dragged row (paint it as the ghost). */
   isDragging: (zone: Z, index: number) => boolean
-  /** Paint the drop line in this gap of this list. */
+  /** The drag would land in this gap of this list. */
   showsDropLineAt: (zone: Z, gap: number) => boolean
   /** Any drag in progress in this list. */
   draggingIn: (zone: Z) => boolean
-  /** Open a gap in this gap of this list: the drop would move the row
-   *  (not its own slot, either side of it). For lists that opt in to the
-   *  gap instead of the line. */
-  showsDropGapAt: (zone: Z, gap: number) => boolean
-  /** The dragged row's height (px) in this list, for its gap; 0 when none. */
-  dragSize: (zone: Z) => number
+  /** The drop line's centre (px from the list's top) while a release would
+   *  move the row; null otherwise (no line). Feed it to <RowDropLine>. */
+  dropLineTop: (zone: Z) => number | null
+}
+
+interface DropAt {
+  gap: number
+  /** The line's centre, or null when the drop leaves the row where it is. */
+  top: number | null
 }
 
 export function useRowDragReorder<Z extends string>(): RowDragReorder<Z> {
-  const [drag, setDrag] = useState<{ zone: Z; index: number; size: number } | null>(null)
-  const [dropGap, setDropGap] = useState<number | null>(null)
+  const [drag, setDrag] = useState<{ zone: Z; index: number } | null>(null)
+  const [drop, setDrop] = useState<DropAt | null>(null)
   const suppressClickRef = useRef(false)
   const endRef = useRef<(() => void) | null>(null)
 
@@ -128,7 +176,6 @@ export function useRowDragReorder<Z extends string>(): RowDragReorder<Z> {
     endRef.current?.()
     const startX = e.clientX
     const startY = e.clientY
-    const size = e.currentTarget instanceof HTMLElement ? e.currentTarget.getBoundingClientRect().height : 0
     let started = false
     let gap: number | null = null
 
@@ -139,20 +186,32 @@ export function useRowDragReorder<Z extends string>(): RowDragReorder<Z> {
       document.body.style.userSelect = ''
       endRef.current = null
       setDrag(null)
-      setDropGap(null)
+      setDrop(null)
     }
     const onMove = (ev: MouseEvent): void => {
       if (!started && passedRowDragThreshold(ev.clientX - startX, ev.clientY - startY)) {
         started = true
-        setDrag({ zone: start.zone, index: start.index, size })
+        setDrag({ zone: start.zone, index: start.index })
         document.body.style.cursor = 'grabbing'
         document.body.style.userSelect = 'none'
       }
       if (!started) return
       const container = start.container()
       if (!container) return
-      gap = start.gapAt ? start.gapAt(container, ev.clientX, ev.clientY) : dropGapAt(container, start.rowSelector, ev.clientY)
-      setDropGap(gap)
+      if (!pointerInside(start.bounds?.() ?? null, ev.clientX, ev.clientY)) {
+        gap = null
+        setDrop(null)
+        return
+      }
+      const over = start.gapAt ? start.gapAt(container, ev.clientX, ev.clientY) : dropGapAt(container, start.rowSelector, ev.clientY)
+      gap = start.landingGap ? start.landingGap(start.index, over) : over
+      if (gap === null) {
+        setDrop(null)
+        return
+      }
+      const top = dropTargetIndex(start.index, gap) === null ? null : dropLineY(container, start.rowSelector, gap, start.index)
+      const next: DropAt = { gap, top }
+      setDrop((prev) => (prev && prev.gap === next.gap && prev.top === next.top ? prev : next))
     }
     const onUp = (): void => {
       end()
@@ -180,20 +239,40 @@ export function useRowDragReorder<Z extends string>(): RowDragReorder<Z> {
     onRowMouseDown,
     onRowClickCapture,
     isDragging: (zone, index) => drag !== null && drag.zone === zone && drag.index === index,
-    showsDropLineAt: (zone, gap) => drag !== null && drag.zone === zone && dropGap === gap,
+    showsDropLineAt: (zone, gap) => drag !== null && drag.zone === zone && drop !== null && drop.gap === gap,
     draggingIn: (zone) => drag !== null && drag.zone === zone,
-    showsDropGapAt: (zone, gap) => drag !== null && drag.zone === zone && dropGap === gap && dropTargetIndex(drag.index, gap) !== null,
-    dragSize: (zone) => (drag !== null && drag.zone === zone ? drag.size : 0),
+    dropLineTop: (zone) => (drag !== null && drag.zone === zone && drop !== null ? drop.top : null),
   }
 }
 
-/** The 2px accent line in the gap a dragged row will land in. */
-export function RowDropLine(): React.JSX.Element {
-  return <div className="h-[2px] bg-[var(--color-accent)] mx-3" data-row-drop-line="" />
-}
+/** The agent nav row's text inset: the 2px selection bar plus 12px padding
+ *  on the left, 12px on the right (AgentRowButton). */
+export const NAV_ROW_TEXT_INSET = { left: 14, right: 12 } as const
 
-/** The empty gap a dragged row will land in, its own height (the opt-in
- *  alternative to the line). */
-export function RowDropGap({ size }: { size: number }): React.JSX.Element {
-  return <div aria-hidden="true" data-row-drop-gap="" style={{ height: size }} />
+/** The drop line: where a dragged row will land, floating over the list so
+ *  no row moves. Put it first inside the list's `relative` element (first,
+ *  so the last row stays the last child for the rules that read it: the
+ *  nav's dividers, `divide-y`); `top` is the line's centre (`dropLineTop`,
+ *  or `dropLineY`; null draws nothing).
+ *  `inset` is the rows' text inset (px from each side), so the line spans
+ *  what the rows show, not the panel's bleed. Square in Terminal and
+ *  round-ended in Glass (the pill radius token). It glides between gaps on
+ *  the fast motion token, and jumps under reduced motion. */
+export function RowDropLine({ top, inset }: { top: number | null; inset: { left: number; right: number } }): React.JSX.Element | null {
+  if (top === null) return null
+  return (
+    <div
+      aria-hidden="true"
+      data-row-drop-line=""
+      className="pointer-events-none absolute z-[1] rounded-[var(--radius-pill)] bg-[var(--color-accent)] transition-[top] duration-[var(--motion-duration-fast)] ease-[var(--motion-ease-standard)] motion-reduce:transition-none"
+      // border 0: a list that rules its children (divide-y) leaves the line unruled.
+      style={{ top: top - DROP_LINE_PX / 2, left: inset.left, right: inset.right, height: DROP_LINE_PX, border: 0 }}
+    >
+      <span
+        data-row-drop-line-cap=""
+        className="absolute left-0 rounded-[var(--radius-pill)] bg-[var(--color-accent)]"
+        style={{ top: (DROP_LINE_PX - DROP_LINE_CAP_PX) / 2, width: DROP_LINE_CAP_PX, height: DROP_LINE_CAP_PX }}
+      />
+    </div>
+  )
 }

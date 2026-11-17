@@ -145,7 +145,8 @@ function group(id: string, name: string): StoreFocusGroup {
   return { id, name, color: '#888888' } as unknown as StoreFocusGroup
 }
 
-/** Each nav row is ROW_H tall, stacked in its own list from y=0. */
+/** Each nav row is ROW_H tall, stacked in its own list from y=0; a list is
+ *  as tall as its rows; the panels a drag must stay in are 240 × 1000. */
 function stubRowRects(): void {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     const id = this.getAttribute('data-project-id')
@@ -154,7 +155,10 @@ function stubRowRects(): void {
       : []
     const i = siblings.indexOf(this)
     const top = i < 0 ? 0 : i * ROW_H
-    return { top, height: ROW_H, bottom: top + ROW_H, left: 0, right: 240, width: 240, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+    const height = this.hasAttribute('data-nav-rows')
+      ? this.querySelectorAll(':scope > [data-project-id]').length * ROW_H
+      : this.matches('[data-nav-section], [data-agents-nav-list]') ? 1000 : ROW_H
+    return { top, height, bottom: top + height, left: 0, right: 240, width: 240, x: 0, y: top, toJSON: () => ({}) } as DOMRect
   })
 }
 
@@ -211,6 +215,57 @@ describe('Agents nav drag-to-reorder', () => {
     fireEvent.click(row)
     expect(h.reorder.calls).toEqual([])
     expect(h.picks).toEqual(['b'])
+  })
+
+  it('while dragging no row moves: an accent line floats where it will land, at the top, mid-list and the bottom', () => {
+    useProjectsStore.setState({ projects: [proj('a'), proj('b'), proj('c'), proj('d')] })
+    const { container } = render(<Sidebar />)
+    const list = container.querySelector('[data-agents-nav-list] [data-nav-rows]') as HTMLElement
+    const rowsBefore = Array.from(list.querySelectorAll('[data-project-id]'))
+    const dividersBefore = list.querySelectorAll('[data-row-divider]').length
+    const line = (): HTMLElement | null => list.querySelector<HTMLElement>(':scope > [data-row-drop-line]')
+    const b = within(rowsBefore[1] as HTMLElement).getByText('Agent b')
+    fireEvent.mouseDown(b, { button: 0, clientX: 20, clientY: 72 })
+    const topAt = (y: number): string | null => {
+      fireEvent.mouseMove(document, { clientX: 20, clientY: y })
+      expect(Array.from(list.querySelectorAll('[data-project-id]'))).toEqual(rowsBefore)
+      expect(list.querySelectorAll('[data-row-divider]').length).toBe(dividersBefore)
+      for (const r of rowsBefore) expect((r as HTMLElement).style.transform).toBe('')
+      return line()?.style.top ?? null
+    }
+    // Top (gap 0): half the 6px cap inside the list, the 2px centred there.
+    expect(topAt(5)).toBe(`${3 - 1}px`)
+    // Mid-list (gap 3): the seam between c and d.
+    expect(topAt(130)).toBe(`${3 * ROW_H - 1}px`)
+    // Bottom (gap 4): half the cap inside the list's end.
+    expect(topAt(180)).toBe(`${4 * ROW_H - 3 - 1}px`)
+    // Its own place: no line.
+    expect(topAt(60)).toBeNull()
+    expect(line()).toBeNull()
+    // The line spans the rows' text, not the panel's bleed.
+    topAt(130)
+    expect(line()!.style.left).toBe('14px')
+    expect(line()!.style.right).toBe('12px')
+    expect(line()!.className).toContain('bg-[var(--color-accent)]')
+    fireEvent.mouseUp(document)
+    expect(h.reorder.calls).toEqual([['a', 'c', 'b', 'd']])
+    expect(line()).toBeNull()
+  })
+
+  it('Pinned draws its line in Pinned; off the list\'s panel there is no line and a release does nothing', () => {
+    useProjectsStore.setState({ projects: [proj('p1', { pinned: true }), proj('p2', { pinned: true }), proj('u1')] })
+    const { container } = render(<Sidebar />)
+    const pinned = container.querySelector('[data-nav-section="pinned"] [data-nav-rows]') as HTMLElement
+    const p2 = within(container.querySelector('[data-project-id="p2"]') as HTMLElement).getByText('Agent p2')
+    fireEvent.mouseDown(p2, { button: 0, clientX: 20, clientY: 72 })
+    fireEvent.mouseMove(document, { clientX: 20, clientY: 5 })
+    expect(pinned.querySelector(':scope > [data-row-drop-line]')).not.toBeNull()
+    expect(container.querySelectorAll('[data-row-drop-line]')).toHaveLength(1)
+    // Over the main pane: nothing.
+    fireEvent.mouseMove(document, { clientX: 400, clientY: 5 })
+    expect(container.querySelector('[data-row-drop-line]')).toBeNull()
+    fireEvent.mouseUp(document)
+    expect(h.reorder.calls).toEqual([])
   })
 
   it('a drop in the row\'s own gap writes nothing', () => {

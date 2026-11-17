@@ -56,7 +56,7 @@ import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
 import { ScrollEdgeFrame } from '@/components/ui/ScrollEdgeFade'
 import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAvatars'
-import { RowDropGap, dropTargetIndex, useRowDragReorder, type RowDragReorder } from '@/components/Sidebar/row-drag-reorder'
+import { NAV_ROW_TEXT_INSET, RowDropLine, dropTargetIndex, useRowDragReorder, type RowDragReorder } from '@/components/Sidebar/row-drag-reorder'
 import HomeGroupBar from './groups/HomeGroupBar'
 import GroupNameHeader from './groups/GroupNameHeader'
 import { useHomeGroups } from './groups/useHomeGroups'
@@ -64,7 +64,7 @@ import { GroupSwipeStrip } from './groups/GroupSwipeSlide'
 import { useRowFlip } from './groups/useRowFlip'
 import { HomeRowCaption, HomeRowPinMark } from './groups/HomeRowCaption'
 import { GROUP_EMPTY_TEXT, removeFromGroupLabel } from './groups/group-copy'
-import { MAX_PINS, displayRows, isPinned, pinnedRows, planRowDrop, shortcutIndexFor } from '@/lib/home-row-order'
+import { MAX_PINS, displayRows, isPinned, pinnedRows, planRowDrop, rowDropLanding, shortcutIndexFor } from '@/lib/home-row-order'
 import { HomeAddButton, HomeNavFooterRow } from './HomeNavFooter'
 import { AddToHomeHost } from './AddToHomeModal'
 import { roomFailureActions } from './room/RoomFailure'
@@ -464,21 +464,15 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
   // "Pinned" over the pins; "Agents" over the rest once there are pins or
   // "Most recent at the top" is on (K2 Design's mock).
   const agentsCaption = pinCount > 0 || !!home.recentFirst
-  // A drag opens a gap the row's height where it will land (the shared
-  // drag's opt-in gap, not the Agents nav's line), between the rows.
-  const gapAt = (gap: number): boolean => !!drag?.reorder.showsDropGapAt('home', gap)
-  const dropGap = (key: string): React.JSX.Element => <RowDropGap key={key} size={drag?.reorder.dragSize('home') ?? 0} />
-  const draggingPin = rows.some((r, i) => isPinned(r) && !!drag?.reorder.isDragging('home', i))
+  // A drag moves no row: the list's RowDropLine floats where it will land,
+  // kept to the dragged row's own section (rowDropLanding).
   // The row Add to Home just added: a brief wash, so it's easy to find.
   const justAdded = useHomeAddPickerStore((s) => s.justAdded)
   return (
     <>
       {pinCount > 0 && <HomeRowCaption kind="pinned" />}
       {rows.map((row, idx) => [
-        // At the pins' end, a pin's gap sits above "Agents", any other row's below it.
-        gapAt(idx) && draggingPin && idx === pinCount ? dropGap(`gap-${row.address}`) : null,
         agentsCaption && idx === pinCount ? <HomeRowCaption key="agents-caption" kind="agents" recentFirst={!!home.recentFirst} /> : null,
-        gapAt(idx) && !(draggingPin && idx === pinCount) ? dropGap(`gap-${row.address}`) : null,
         <div
           key={row.address}
           {...(drag ? { 'data-home-row': row.address } : { 'data-home-row-preview': row.address })}
@@ -495,6 +489,8 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
                     index: idx,
                     container: () => drag.listRef.current,
                     rowSelector: '[data-home-row]',
+                    landingGap: (from, gap) => rowDropLanding(selectedHome(useHomesStore.getState()), from, gap),
+                    bounds: () => drag.listRef.current?.closest('[data-home-list-stage]') ?? null,
                     onDrop: drag.onDrop,
                   })
               : undefined
@@ -505,10 +501,9 @@ function HomeRowItems({ home, drag }: { home: Home; drag?: HomeRowDrag }): React
           onMouseLeave={drag ? () => homeRowHoverPrefetch.leave() : undefined}
         >
           <HomeRowView home={home} row={row} index={shortcutIndexFor(home, idx)} />
-          {idx < rows.length - 1 && idx !== pinCount - 1 && !gapAt(idx + 1) && <NavRowDivider />}
+          {idx < rows.length - 1 && idx !== pinCount - 1 && <NavRowDivider />}
         </div>,
       ])}
-      {gapAt(rows.length) && dropGap('gap-end')}
     </>
   )
 }
@@ -603,7 +598,8 @@ export default function HomeSidebar(): React.JSX.Element {
         tint={HOME_NAV_EDGE_TINT}
         testId="home-nav-list"
       >
-        <div ref={listRef}>
+        <div ref={listRef} className="relative" data-home-list="">
+          <RowDropLine top={rowDrag.dropLineTop('home')} inset={NAV_ROW_TEXT_INSET} />
           <HomeRowItems home={home} drag={{ reorder: rowDrag, listRef, onDrop: dropHomeRow }} />
         </div>
         {rows.length === 0 && <EmptyGroupNote name={home.name} />}

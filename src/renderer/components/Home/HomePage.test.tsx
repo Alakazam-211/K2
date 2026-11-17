@@ -900,10 +900,18 @@ describe('Home — the Agents page shell', () => {
     }
   })
 
-  it('a row drag opens a gap the row’s height where it will land (no line over a row), and drops there', () => {
+  it('a row drag moves no row: an accent line floats where it will land (top, middle, bottom), and it drops there', () => {
     const ROW = 40
     const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
       const rows = Array.from(document.querySelectorAll('[data-home-row]'))
+      // The list is as tall as its rows; the list's panel is 240 × 600.
+      if (this.hasAttribute('data-home-list-stage')) {
+        return { top: 0, height: 600, bottom: 600, left: 0, right: 240, width: 240, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      }
+      if (this.hasAttribute('data-home-list')) {
+        const h = rows.length * ROW
+        return { top: 0, height: h, bottom: h, left: 0, right: 240, width: 240, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      }
       const own = this.closest('[data-home-row]')
       const i = own ? rows.indexOf(own) : -1
       const top = i < 0 ? 0 : i * ROW
@@ -911,22 +919,70 @@ describe('Home — the Agents page shell', () => {
     })
     try {
       render(<Shell />)
-      const cee = rowOf('Cee')
-      fireEvent.mouseDown(cee, { button: 0, clientX: 10, clientY: 100 })
-      fireEvent.mouseMove(document, { clientX: 10, clientY: 10 })
-      const gap = homeSidebar().querySelector('[data-row-drop-gap]') as HTMLElement
-      expect(gap.style.height).toBe(`${ROW}px`)
-      expect(gap.nextElementSibling?.getAttribute('data-home-row')).toBe('cortana::local')
-      // A sibling between the rows, never inside one (the gap reading measures rows).
-      expect(gap.closest('[data-home-row]')).toBeNull()
-      expect(homeSidebar().querySelector('[data-row-drop-line]')).toBeNull()
-      // Back over its own place: no gap.
-      fireEvent.mouseMove(document, { clientX: 10, clientY: 95 })
+      const list = homeSidebar().querySelector('[data-home-list]') as HTMLElement
+      const rowsBefore = Array.from(list.querySelectorAll('[data-home-row]'))
+      const dividersBefore = list.querySelectorAll('[data-row-divider]').length
+      const line = (): HTMLElement | null => list.querySelector<HTMLElement>(':scope > [data-row-drop-line]')
+      const cortana = rowOf('Cortana')
+      fireEvent.mouseDown(cortana, { button: 0, clientX: 10, clientY: 20 })
+      // Middle: between Bee and Cee (the seam at 80), the 2px centred on it.
+      fireEvent.mouseMove(document, { clientX: 10, clientY: 70 })
+      expect(line()!.style.top).toBe(`${2 * ROW - 1}px`)
+      // Bottom: after Cee, half the 6px cap inside the list's end.
+      fireEvent.mouseMove(document, { clientX: 10, clientY: 110 })
+      expect(line()!.style.top).toBe(`${3 * ROW - 3 - 1}px`)
+      // No row moved: no gap, the same rows in the same places, every
+      // divider still there, no transform.
       expect(homeSidebar().querySelector('[data-row-drop-gap]')).toBeNull()
-      fireEvent.mouseMove(document, { clientX: 10, clientY: 10 })
+      expect(Array.from(list.querySelectorAll('[data-home-row]'))).toEqual(rowsBefore)
+      expect(list.querySelectorAll('[data-row-divider]').length).toBe(dividersBefore)
+      for (const r of rowsBefore) expect((r as HTMLElement).style.transform).toBe('')
+      // The line spans the rows' text, in the accent colour.
+      expect(line()!.className).toContain('absolute')
+      expect(line()!.className).toContain('bg-[var(--color-accent)]')
+      expect(line()!.style.left).toBe('14px')
+      expect(line()!.style.right).toBe('12px')
+      // Back over its own place: no line.
+      fireEvent.mouseMove(document, { clientX: 10, clientY: 30 })
+      expect(line()).toBeNull()
+      // Off the list's panel (over the room): no line, and a release there does nothing.
+      fireEvent.mouseMove(document, { clientX: 400, clientY: 110 })
+      expect(line()).toBeNull()
       fireEvent.mouseUp(document)
-      expect(homeSidebar().querySelector('[data-row-drop-gap]')).toBeNull()
+      expect(useHomesStore.getState().homes[0].rows.map((r) => r.label)).toEqual(['Cortana', 'Bee', 'Cee'])
+
+      // Top: Cee to the top, then released there.
+      fireEvent.mouseDown(rowOf('Cee'), { button: 0, clientX: 10, clientY: 100 })
+      fireEvent.mouseMove(document, { clientX: 10, clientY: 10 })
+      expect(line()!.style.top).toBe(`${3 - 1}px`)
+      fireEvent.mouseUp(document)
+      expect(line()).toBeNull()
       expect(useHomesStore.getState().homes[0].rows.map((r) => r.label)).toEqual(['Cee', 'Cortana', 'Bee'])
+    } finally {
+      rect.mockRestore()
+    }
+  })
+
+  it('with "Most recent at the top" on, an unpinned row has nowhere to land: no line, no move', () => {
+    const ROW = 40
+    const home = useHomesStore.getState().homes[0]
+    useHomesStore.setState({ homes: useHomesStore.getState().homes.map((h) => (h.id === home.id ? { ...h, recentFirst: true } : h)) })
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const rows = Array.from(document.querySelectorAll('[data-home-row]'))
+      const own = this.closest('[data-home-row]')
+      const i = own ? rows.indexOf(own) : -1
+      const top = i < 0 ? 0 : i * ROW
+      const height = i < 0 ? 600 : ROW
+      return { top, height, bottom: top + height, left: 0, right: 240, width: 240, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+    })
+    try {
+      render(<Shell />)
+      const order = useHomesStore.getState().homes[0].rows.map((r) => r.label)
+      fireEvent.mouseDown(rowOf('Cee'), { button: 0, clientX: 10, clientY: 100 })
+      fireEvent.mouseMove(document, { clientX: 10, clientY: 10 })
+      expect(homeSidebar().querySelector('[data-row-drop-line]')).toBeNull()
+      fireEvent.mouseUp(document)
+      expect(useHomesStore.getState().homes[0].rows.map((r) => r.label)).toEqual(order)
     } finally {
       rect.mockRestore()
     }

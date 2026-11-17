@@ -77,7 +77,7 @@ import { BetaTag, Button, Callout, Input, OverflowMenu, SearchField, Spinner, Su
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 import { computeErrorMessage, setWorkspaceComputeManage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
 import { metaChordLabel } from '@/lib/shortcut-label'
-import { reorderedZoneIds } from '@/components/Sidebar/row-drag-reorder'
+import { RowDropLine, dropLineY, dropTargetIndex, pointerInside, reorderedZoneIds } from '@/components/Sidebar/row-drag-reorder'
 import { AgentHandoffAcceptFrom } from './HandoffAcceptFrom'
 import { AgentHandoffSendAllow } from './HandoffSendAllow'
 import { AgentAppsAccess } from './AgentAppsAccess'
@@ -422,7 +422,8 @@ export function ProjectsSection(): React.JSX.Element {
 
   // ── Reorder state ──────────────────────────────────────────────────
   const [reorderDragId, setReorderDragId] = useState<string | null>(null)
-  const [reorderDropIndex, setReorderDropIndex] = useState<number | null>(null)
+  // The drop line's centre in the dragged row's card (no row moves), or null.
+  const [reorderLine, setReorderLine] = useState<number | null>(null)
   const [reorderZone, setReorderZone] = useState<string | null>(null)
   const reorderDropRef = useRef<number | null>(null)
   const dragOverGroupRef = useRef<string | null>(null)
@@ -477,7 +478,7 @@ export function ProjectsSection(): React.JSX.Element {
         const gid = groupHeader.dataset.focusGroupId!
         dragOverGroupRef.current = gid
         setDragOverGroupId(gid)
-        setReorderDropIndex(null)
+        setReorderLine(null)
         reorderDropRef.current = null
         return
       } else {
@@ -485,17 +486,19 @@ export function ProjectsSection(): React.JSX.Element {
         setDragOverGroupId(null)
       }
 
-      // Check within-zone reorder
+      // Within-zone reorder, only over the row's own card: no line elsewhere.
       const container = document.querySelector(containerSelector)
       if (!container) return
-      const items = container.querySelectorAll('[data-settings-project-id]')
+      const items = Array.from(container.querySelectorAll<HTMLElement>('[data-settings-project-id]'))
       let idx = 0
       for (let i = 0; i < items.length; i++) {
         const rect = items[i].getBoundingClientRect()
         if (ev.clientY > rect.top + rect.height / 2) idx = i + 1
       }
-      reorderDropRef.current = idx
-      setReorderDropIndex(idx)
+      const inside = pointerInside(container, ev.clientX, ev.clientY)
+      const from = items.findIndex((el) => el.dataset.settingsProjectId === projectId)
+      reorderDropRef.current = inside ? idx : null
+      setReorderLine(inside && dropTargetIndex(from, idx) !== null ? dropLineY(container, '[data-settings-project-id]', idx, from) : null)
     }
 
     const handleMouseUp = async (): Promise<void> => {
@@ -530,7 +533,7 @@ export function ProjectsSection(): React.JSX.Element {
 
       setReorderDragId(null)
       setReorderZone(null)
-      setReorderDropIndex(null)
+      setReorderLine(null)
       setDragOverGroupId(null)
       reorderDropRef.current = null
     }
@@ -791,18 +794,14 @@ export function ProjectsSection(): React.JSX.Element {
     }
   }
 
-  /** One zone of rows in a card, with the drop line between rows. */
+  /** One zone of rows in a card; a drag floats the drop line over it (the
+   *  rows' text inset each side), so no row moves. */
   const renderZone = (rows: typeof projects, zone: string, selector: string): React.JSX.Element => (
     // overflow-hidden: a selected or hovered row keeps to the card's corners.
     <Surface chamfer material="tile" className="overflow-hidden">
-      <div data-reorder-zone={zone} className="divide-y divide-[var(--color-border)]">
-        {rows.map((p, idx) => (
-          <div key={p.id}>
-            {reorderZone === zone && reorderDropIndex === idx && <div className="h-[2px] bg-[var(--color-accent)]" />}
-            {renderProjectRow(p, zone, selector)}
-          </div>
-        ))}
-        {reorderZone === zone && reorderDropIndex === rows.length && <div className="h-[2px] bg-[var(--color-accent)]" />}
+      <div data-reorder-zone={zone} className="relative divide-y divide-[var(--color-border)]">
+        <RowDropLine top={reorderZone === zone ? reorderLine : null} inset={twoColumn ? { left: 12, right: 12 } : { left: 16, right: 16 }} />
+        {rows.map((p) => <div key={p.id}>{renderProjectRow(p, zone, selector)}</div>)}
       </div>
     </Surface>
   )

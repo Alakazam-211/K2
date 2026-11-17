@@ -106,6 +106,24 @@ export function planRowDrop<R extends RowLike>(
   return { rows: home.rows.map((r) => (isPinned(r) ? r.address : reordered[k++])) }
 }
 
+/**
+ * Where the nav's drop line goes for the row at `from` with the pointer
+ * over gap `gap` (0..rows, shown positions): the gap the drop really lands
+ * in, kept to the row's own section (a pin among the pins, an unpinned row
+ * among the unpinned), as `planRowDrop` clamps it. Null where the drop
+ * would move nothing: its own place, or an unpinned row while "Most recent
+ * at the top" is on.
+ */
+export function rowDropLanding<R extends RowLike>(home: HomeLike<R>, from: number, gap: number): number | null {
+  const pins = pinnedRows(home).length
+  const n = home.rows.length
+  if (from < 0 || from >= n) return null
+  if (from >= pins && home.recentFirst) return null
+  const [lo, hi] = from < pins ? [0, pins] : [pins, n]
+  const at = Math.min(Math.max(gap, lo), hi)
+  return at === from || at === from + 1 ? null : at
+}
+
 /** Pin keys for `addresses` in this order, keeping every key that is
  *  still in order (`fractional-index`'s assignOrders). */
 export function pinKeys(addresses: readonly string[], current: (address: string) => string | null): Map<string, string> {

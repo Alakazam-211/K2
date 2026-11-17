@@ -18,9 +18,11 @@ import {
   displayRows,
   pinnedRows,
   planRowDrop,
+  rowDropLanding,
   shortcutIndexFor,
   shortcutRows,
 } from './home-row-order'
+import { dropTargetIndex } from '@/components/Sidebar/row-drag-reorder'
 import { selectedHome, useHomesStore, type Home, type HomeRow } from '@/stores/homes'
 
 function row(address: string, extra: Partial<HomeRow> = {}): HomeRow {
@@ -75,6 +77,41 @@ describe('the order a group shows', () => {
     expect(planRowDrop(home, 5, 0)).toEqual({ rows: ['f::s', 'b::s', 'a::s', 'c::s', 'e::s', 'd::s'] })
     expect(planRowDrop({ ...home, recentFirst: true }, 4, 2)).toBeNull()
     expect(planRowDrop(home, 3, 3)).toBeNull()
+  })
+
+  it('the drop line\'s gap: kept to the row\'s own section, none where nothing would move', () => {
+    // Shown: e b | a c d f (gaps 0..6; the pins end at gap 2).
+    // A pin pointed past the pins lands at their end.
+    expect(rowDropLanding(home, 0, 5)).toBe(2)
+    expect(rowDropLanding(home, 1, 0)).toBe(0)
+    // The last pin pointed past the pins: its own place, no line.
+    expect(rowDropLanding(home, 1, 5)).toBeNull()
+    // An unpinned row pointed into the pins lands first among the unpinned.
+    expect(rowDropLanding(home, 5, 0)).toBe(2)
+    expect(rowDropLanding(home, 2, 0)).toBeNull()
+    expect(rowDropLanding(home, 2, 6)).toBe(6)
+    // Most recent at the top: an unpinned row has nowhere to land; pins still do.
+    expect(rowDropLanding({ ...home, recentFirst: true }, 4, 2)).toBeNull()
+    expect(rowDropLanding({ ...home, recentFirst: true }, 1, 0)).toBe(0)
+    // Out of range.
+    expect(rowDropLanding(home, -1, 0)).toBeNull()
+    expect(rowDropLanding(home, 6, 0)).toBeNull()
+  })
+
+  it('a drop at the line\'s gap writes what a drop at the pointer\'s gap always wrote', () => {
+    for (const recentFirst of [false, true]) {
+      const h = { ...home, recentFirst }
+      const n = displayRows(h).length
+      for (let from = 0; from < n; from++) {
+        for (let gap = 0; gap <= n; gap++) {
+          const to = dropTargetIndex(from, gap)
+          const before = to === null ? null : planRowDrop(h, from, to)
+          const landing = rowDropLanding(h, from, gap)
+          const after = landing === null ? null : planRowDrop(h, from, dropTargetIndex(from, landing)!)
+          expect(after, `from ${from} gap ${gap} recentFirst ${recentFirst}`).toEqual(before)
+        }
+      }
+    }
   })
 })
 

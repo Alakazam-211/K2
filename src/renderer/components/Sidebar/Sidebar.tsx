@@ -39,7 +39,7 @@ import WorktreeDialog from './WorktreeDialog'
 import ProjectAvatar from './ProjectAvatar'
 import PresenceWorkspaceAvatars from '@/components/Presence/PresenceWorkspaceAvatars'
 import FocusGroupDropdown from './FocusGroupDropdown'
-import { RowDropLine, reorderedZoneIds, useRowDragReorder } from './row-drag-reorder'
+import { NAV_ROW_TEXT_INSET, RowDropLine, reorderedZoneIds, useRowDragReorder } from './row-drag-reorder'
 import ActiveBar from './ActiveBar'
 import { ShortcutRangeHint } from './ShortcutRangeHint'
 import { NavProjectTags } from './NavProjectTags'
@@ -513,6 +513,9 @@ export default function Sidebar(): React.JSX.Element {
       index,
       container: () => (zone === 'pinned' ? pinnedRef : unpinnedRef).current,
       rowSelector: '[data-project-id]',
+      // The pointer stays in the list's own panel: Pinned's section, or
+      // the scrolling list under the focus group picker.
+      bounds: () => (zone === 'pinned' ? pinnedRef : unpinnedRef).current?.closest('[data-nav-section], [data-agents-nav-list]') ?? null,
       onDrop: (_from, gap) => {
         const allIds = useProjectsStore.getState().projects.map((p) => p.id)
         const ids = reorderedZoneIds(allIds, zoneIdsRef.current[zone], projectId, gap)
@@ -720,7 +723,8 @@ export default function Sidebar(): React.JSX.Element {
           {/* Pinned zone — reorderable. 0.39.0: includes ALL pinned
               workspaces regardless of agentMode (the separate Agents
               zone above this was retired). */}
-          <div ref={pinnedRef}>
+          <div ref={pinnedRef} className="relative" data-nav-rows="">
+            <RowDropLine top={rowDrag.dropLineTop('pinned')} inset={NAV_ROW_TEXT_INSET} />
             {(() => {
               let flatIdx = 0
               return pinnedProjects.map((project, idx) => {
@@ -735,7 +739,6 @@ export default function Sidebar(): React.JSX.Element {
                 onMouseDown={(e) => handleProjectMouseDown(e, project.id, 'pinned', idx)}
                 onClickCapture={rowDrag.onRowClickCapture}
               >
-                {rowDrag.showsDropLineAt('pinned', idx) && <RowDropLine />}
                 <div>
                   <SingleProjectItem
                     project={project}
@@ -748,7 +751,6 @@ export default function Sidebar(): React.JSX.Element {
                 )
               })
             })()}
-            {rowDrag.showsDropLineAt('pinned', pinnedProjects.length) && <RowDropLine />}
           </div>
             </div>{/* scroll wrapper */}
           </div>{/* collapse wrapper */}
@@ -763,8 +765,9 @@ export default function Sidebar(): React.JSX.Element {
       <FocusGroupSelector />
 
       {/* Workspace list */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
-        <div ref={unpinnedRef}>
+      <div className="flex-1 overflow-y-auto overflow-x-hidden py-1" data-agents-nav-list="">
+        <div ref={unpinnedRef} className="relative" data-nav-rows="">
+          <RowDropLine top={rowDrag.dropLineTop('unpinned')} inset={NAV_ROW_TEXT_INSET} />
           {filteredProjects.map((project, idx) => (
             <div
               key={project.id}
@@ -774,16 +777,14 @@ export default function Sidebar(): React.JSX.Element {
               onMouseDown={(e) => handleProjectMouseDown(e, project.id, 'unpinned', idx)}
               onClickCapture={rowDrag.onRowClickCapture}
             >
-              {rowDrag.showsDropLineAt('unpinned', idx) && <RowDropLine />}
               <SingleProjectItem
                 project={project}
                 isActive={project.id === activeProjectId}
                 onContextMenu={handleContextMenu}
               />
-              {idx < filteredProjects.length - 1 && !rowDrag.showsDropLineAt('unpinned', idx + 1) && <NavRowDivider />}
+              {idx < filteredProjects.length - 1 && <NavRowDivider />}
             </div>
           ))}
-          {rowDrag.showsDropLineAt('unpinned', filteredProjects.length) && <RowDropLine />}
         </div>
 
         {filteredProjects.length === 0 && (

@@ -868,7 +868,9 @@ pub fn upsert_target(
         .or_else(|| old.as_ref().map(|t| t.token_file.clone()))
         .unwrap_or_else(|| super::DEFAULT_MGMT_TOKEN_FILE.to_string());
     for (name, p) in [("socket", &socket), ("tokenFile", &token_file)] {
-        if !p.starts_with('/') {
+        // Absolute: `/…` (the defaults, `/run/sew/…`, on every OS), or as this
+        // OS spells it (`D:\…` on Windows).
+        if !p.starts_with('/') && !std::path::Path::new(p.as_str()).is_absolute() {
             return Err(format!("{name} must be an absolute path"));
         }
     }

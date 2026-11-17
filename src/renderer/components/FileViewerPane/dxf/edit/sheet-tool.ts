@@ -135,9 +135,9 @@ export function editTool(get: () => ToolState): SheetTool {
         drag = { kind: 'place' }
         return true
       }
-      // A handle on the selection's box: the element under the pointer, else the nearest within reach.
+      // A handle on the selection's box: the handle under the pointer, else (unless a shape is) the nearest within reach.
       const frame = s.frame()
-      const grip: Grip | null = frame ? (targetGrip(e.target) ?? handleAt(frame, p, c.unitsPerPx())) : null
+      const grip: Grip | null = frame ? (targetGrip(e.target) ?? (targetHandle(e.target, s.rows) ? null : handleAt(frame, p, c.unitsPerPx()))) : null
       if (frame && grip?.kind === 'turn') {
         drag = { kind: 'turn', about: centreOf(frame), at: p, deg: 0, moving: false }
         return true

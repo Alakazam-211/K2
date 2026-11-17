@@ -219,6 +219,18 @@ describe('scaling', () => {
     expect(world.edits.calls[1].slice(0, 9)).toEqual(['entity', 'scale', '@h:41', '--factor', '1.5', '--about', '5,2', '--unit', 'mm'])
   })
 
+  it('a press on the shape itself, even right by a corner handle, moves it', async () => {
+    await open()
+    click('@h:41')
+    // The line's end is about 7 pixels from its box's corner handle.
+    fireEvent.pointerDown(shape('@h:41'), { pointerId: 1, button: 0, ...client(10, 2) })
+    fireEvent.pointerMove(sheet(), { pointerId: 1, ...client(14, 2) })
+    const ghost = screen.getByTestId('dxf-ghost')
+    expect(ghost.getAttribute('data-scale')).toBeNull()
+    expect(Number(ghost.getAttribute('data-d')!.split(' ')[0])).toBeCloseTo(4, 0)
+    fireEvent.keyDown(sheet(), { key: 'Escape' })
+  })
+
   it('kinds the verbs can’t change have no Scale by (and no Move by or Rotate by)', async () => {
     await open()
     click('@h:6B')

@@ -83,6 +83,11 @@ describe('local agent (the window’s server)', () => {
     render(<TopBarTitle />)
     expect(screen.getByTestId('top-bar-title').textContent).toBe('No workspace selected')
   })
+
+  it('a DM or channel open on Home: nothing, not "No workspace selected"', () => {
+    render(<TopBarTitle homeChatOpen />)
+    expect(screen.getByTestId('top-bar-title').textContent).toBe('')
+  })
 })
 
 describe('agent on another server', () => {

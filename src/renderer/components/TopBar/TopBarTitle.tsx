@@ -8,6 +8,9 @@
 // name and status in the tooltip). Then `/ agent`, and `/ branch` once the
 // room's workspace is known. The switcher itself keeps naming the window's
 // server, and the right cluster no longer draws the room's server name.
+//
+// No agent: "No workspace selected", except on Home with a DM or channel
+// open, where nothing is missing and the slot stays empty.
 
 import { useSyncExternalStore } from 'react'
 import { K2_ICON_PX, ServerIcon } from '@/components/icons/K2Icons'
@@ -96,6 +99,7 @@ export default function TopBarTitle({
   agent,
   branch,
   remoteServer,
+  homeChatOpen = false,
 }: {
   /** The agent (project) name. */
   agent?: string
@@ -103,6 +107,8 @@ export default function TopBarTitle({
   branch?: string
   /** Set when the agent is on another server than the window's. */
   remoteServer?: TopBarRemoteServer
+  /** Home shows a DM or channel: no agent is expected, so no title. */
+  homeChatOpen?: boolean
 }): React.JSX.Element {
   return (
     <div className="flex min-w-0 items-center gap-1.5 px-2 text-xs" data-testid="top-bar-title">
@@ -129,7 +135,7 @@ export default function TopBarTitle({
             </>
           )}
         </>
-      ) : (
+      ) : homeChatOpen ? null : (
         <span className="truncate text-[var(--color-text-muted)]">No workspace selected</span>
       )}
     </div>

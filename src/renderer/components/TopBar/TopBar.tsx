@@ -3,6 +3,7 @@ import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { usePageViewStore } from '@/stores/page-view'
+import { useHomeChatStore } from '@/stores/home-chat'
 import ServerSwitcher from './ServerSwitcher'
 import PageTabs from './PageTabs'
 import DesktopChromeLeft from './DesktopChromeLeft'
@@ -67,6 +68,7 @@ export default function TopBar({
   }
   const leftMinWidth = topBarLeftClusterMinWidth()
   const onHome = usePageViewStore((s) => s.page === 'home')
+  const chatOpen = useHomeChatStore((s) => s.open !== null)
 
   return (
     <Surface
@@ -96,7 +98,7 @@ export default function TopBar({
       </div>
 
       {/* Center: [other server /] agent / branch */}
-      <TopBarTitle agent={projectName} branch={workspaceName} remoteServer={remoteServer} />
+      <TopBarTitle agent={projectName} branch={workspaceName} remoteServer={remoteServer} homeChatOpen={onHome && chatOpen} />
 
       {/* Right: run button + utilities + window controls. The drawer
           toggles live in the room and drawer tab bars

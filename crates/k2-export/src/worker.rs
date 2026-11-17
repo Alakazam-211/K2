@@ -42,14 +42,25 @@ fn registry() -> ExportRegistry {
     r
 }
 
-/// The structure indexers this worker runs (the `index` op), by pack name.
-pub const INDEXERS: &[&str] = &[k2_mpc_psd::pack::PACK];
+/// The structure indexers this worker runs (the `index` op), by pack name:
+/// each pack's index spec name. PSD/PSB; OTIO, FCPXML and PRPROJ
+/// timelines; photoplot files and drill files (the common-export reading,
+/// strict first); BLEND scenes.
+pub const INDEXERS: &[&str] = &[k2_mpc_psd::pack::PACK, "otio", "fcpxml", "prproj", "photoplot", "drill-common", k2_mpc_blend::pack::PACK];
 
-fn indexer(pack: &str) -> Option<Box<dyn k2_mpc_base::session::BlobPack>> {
-    match pack {
-        p if p == k2_mpc_psd::pack::PACK => Some(Box::new(k2_mpc_psd::PsdPack)),
-        _ => None,
-    }
+/// The pack named `pack` in the `index` op, if this worker runs it.
+pub fn indexer(pack: &str) -> Option<Box<dyn k2_mpc_base::session::BlobPack>> {
+    let p: Box<dyn k2_mpc_base::session::BlobPack> = match pack {
+        "otio" => Box::new(k2_mpc_timeline::OtioPack),
+        "fcpxml" => Box::new(k2_mpc_timeline::FcpxmlPack),
+        "prproj" => Box::new(k2_mpc_timeline::PrprojPack),
+        "photoplot" => Box::new(k2_mpc_fab::PhotoplotPack),
+        "drill-common" => Box::new(k2_mpc_fab::CommonDrillPack),
+        p if p == k2_mpc_psd::pack::PACK => Box::new(k2_mpc_psd::PsdPack),
+        p if p == k2_mpc_blend::pack::PACK => Box::new(k2_mpc_blend::BlendPack::default()),
+        _ => return None,
+    };
+    Some(p)
 }
 
 /// The hello payload.
@@ -350,6 +361,58 @@ mod tests {
         let Some(Frame::Error(e)) = f.last() else { panic!("no error frame: {f:?}") };
         let e: serde_json::Value = serde_json::from_slice(e).expect("json");
         assert_eq!(e["id"], serde_json::json!("MPC-E007"), "{e}");
+    }
+
+    /// The `index` op on `body` with `pack`: the kit's outcome, read back
+    /// from the wire the worker sent.
+    fn index_with(pack: &str, body: &[u8]) -> k2_mpc_base::index::IndexOutcome {
+        let il = k2_mpc_base::index::IndexLimits::new(100_000, 32, 8 << 20, 4096);
+        let h = Header::Index { job: "j".into(), pack: pack.into(), limits: limits(), index: il, size: body.len() as u64 };
+        let mut input = h.json().to_string().into_bytes();
+        input.push(b'\n');
+        input.extend_from_slice(body);
+        let mut out = Vec::new();
+        assert_eq!(run(&mut &input[..], &mut out, &|_, _| {}), proto::EXIT_OK, "{pack}");
+        let f = frames(&out);
+        let wire: Vec<u8> = f.iter().filter_map(|x| if let Frame::Data(d) = x { Some(d.clone()) } else { None }).flatten().collect();
+        k2_mpc_base::index::IndexOutcome::from_wire(&wire, &il).unwrap_or_else(|e| panic!("{pack}: the kit reads its own wire back: {e:?}"))
+    }
+
+    /// Every name in `INDEXERS` is a pack this worker runs, and the pack's
+    /// own index name; the hello lists them.
+    #[test]
+    fn every_listed_indexer_is_a_pack_with_that_index_name() {
+        for name in INDEXERS {
+            let p = indexer(name).unwrap_or_else(|| panic!("{name} is listed but not run"));
+            assert_eq!(p.index_spec().map(|s| s.pack), Some(*name), "{name}");
+        }
+        assert_eq!(*INDEXERS, ["psd", "otio", "fcpxml", "prproj", "photoplot", "drill-common", "blend"]);
+        assert_eq!(hello()["indexers"], serde_json::json!(INDEXERS));
+        assert!(indexer("drill").is_none(), "drill files go through the common-export reading (strict first)");
+    }
+
+    /// The timeline and fab packs index their own samples; junk is each
+    /// pack's recorded refusal, still a result (never a crash). BLEND junk
+    /// too (the daemon's tests index real scenes).
+    #[test]
+    fn index_runs_the_timeline_fab_and_blend_indexers() {
+        use k2_mpc_base::index::IndexOutcome;
+        for (pack, body) in [
+            ("otio", &include_bytes!("../../../vendor/k2-mpc-timeline/crates/timeline/tests/data/seed.otio")[..]),
+            ("fcpxml", &include_bytes!("../../../vendor/k2-mpc-timeline/crates/timeline/tests/data/seed.fcpxml")[..]),
+            ("photoplot", &include_bytes!("../../../vendor/k2-mpc-fab/crates/fab/tests/data/board.gbr")[..]),
+            ("drill-common", &include_bytes!("../../../vendor/k2-mpc-fab/crates/fab/tests/data/board.xnc")[..]),
+            ("drill-common", &include_bytes!("../../../vendor/k2-mpc-fab/crates/fab/tests/data/common.drl")[..]),
+        ] {
+            let got = index_with(pack, body);
+            if let IndexOutcome::Refused(r) = &got {
+                panic!("{pack}: its own sample was refused: {r:?}");
+            }
+            assert!(matches!(got, IndexOutcome::Draft(_)), "{pack}: a draft");
+        }
+        for pack in ["otio", "fcpxml", "prproj", "photoplot", "drill-common", "blend"] {
+            assert!(matches!(index_with(pack, b"not this kind of file at all"), IndexOutcome::Refused(_)), "{pack}: junk is refused");
+        }
     }
 
     #[test]

@@ -23,7 +23,7 @@ pass=0
 fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
-run() { set +e; OUT="$(bash "$K2" "$@" 2>&1)"; RC=$?; set -e; }
+run() { set +e; OUT="$("$K2" "$@" 2>&1)"; RC=$?; set -e; }
 expect() {
     local label="$1" rc="$2" needle="$3"; shift 3
     run "$@"

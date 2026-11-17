@@ -121,7 +121,7 @@ run_install() {
     set +e
     OUT="$(env -i PATH="$STUBS:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin" HOME="$H" \
         STUB_LOG="$LOG" STUB_UNITS="$UNITS" STUB_RESTART_FAIL="${STUB_RESTART_FAIL:-0}" \
-        bash "$K2" daemon install --manifest-url "file://$FIX/daemon-latest.json" "$@" 2>&1)"
+        "$K2" daemon install --manifest-url "file://$FIX/daemon-latest.json" "$@" 2>&1)"
     RC=$?
     set -e
 }

@@ -65,14 +65,14 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 body_of() { sed -n "${1}p" "$log"; }
 
 # The blind agent's commands, word for word.
-out="$(bash "$K2" board boards)"
+out="$("$K2" board boards)"
 [[ "$out" == *"b1a2b3c  Launch"* ]] || fail "boards: $out"
-bash "$K2" board read h-7f3a2b1c9d --board Launch >/dev/null
-out="$(bash "$K2" board add sticky --text "Ship the beta" --x 400 --y 300 --color yellow --board Launch)"
+"$K2" board read h-7f3a2b1c9d --board Launch >/dev/null
+out="$("$K2" board add sticky --text "Ship the beta" --x 400 --y 300 --color yellow --board Launch)"
 [[ "$out" == *'"id": "s-0123456789"'* ]] || fail "add prints the new id: $out"
-out="$(bash "$K2" board connect h-7f3a2b1c9d s-0123456789 --label next --board Launch)"
+out="$("$K2" board connect h-7f3a2b1c9d s-0123456789 --label next --board Launch)"
 [[ "$out" == *'"id": "c-0123456789"'* ]] || fail "connect prints the new id: $out"
-out="$(bash "$K2" board delete h-7f3a2b1c9d --board Launch)"
+out="$("$K2" board delete h-7f3a2b1c9d --board Launch)"
 [ "$out" = "Deleted h-7f3a2b1c9d, c-0123456789" ] || fail "delete lists the cascade: $out"
 
 python3 - "$log" <<'PY' || fail "request bodies"
@@ -92,17 +92,17 @@ PY
 
 # Refusals keep their documented exit codes.
 set +e
-bash "$K2" board read h-locked0000 2>/dev/null; [ $? -eq 5 ] || fail "locked is exit 5"
-bash "$K2" board read h-stale00000 2>/dev/null; [ $? -eq 1 ] || fail "a conflict is exit 1, as k2 doc"
-bash "$K2" board read h-newer00000 2>/dev/null; [ $? -eq 4 ] || fail "newer_format is exit 4"
-bash "$K2" board list --board Off 2>/dev/null; [ $? -eq 3 ] || fail "core_off is exit 3"
-err="$(bash "$K2" board update s-0123456789 --text x 2>&1 >/dev/null)"; code=$?
+"$K2" board read h-locked0000 2>/dev/null; [ $? -eq 5 ] || fail "locked is exit 5"
+"$K2" board read h-stale00000 2>/dev/null; [ $? -eq 1 ] || fail "a conflict is exit 1, as k2 doc"
+"$K2" board read h-newer00000 2>/dev/null; [ $? -eq 4 ] || fail "newer_format is exit 4"
+"$K2" board list --board Off 2>/dev/null; [ $? -eq 3 ] || fail "core_off is exit 3"
+err="$("$K2" board update s-0123456789 --text x 2>&1 >/dev/null)"; code=$?
 [ $code -eq 2 ] || fail "too_long is exit 2 (got $code)"
 [[ "$err" == *"Error [too_long]: text: at most 5000 characters"* ]] || fail "the refusal is printed: $err"
-bash "$K2" board add 2>/dev/null >/dev/null; [ $? -eq 0 ] || fail "add with no type is a sticky"
-bash "$K2" board update 2>/dev/null; [ $? -eq 2 ] || fail "update without an id is usage (exit 2)"
-bash "$K2" board zap 2>/dev/null; [ $? -eq 2 ] || fail "an unknown command is usage (exit 2)"
+"$K2" board add 2>/dev/null >/dev/null; [ $? -eq 0 ] || fail "add with no type is a sticky"
+"$K2" board update 2>/dev/null; [ $? -eq 2 ] || fail "update without an id is usage (exit 2)"
+"$K2" board zap 2>/dev/null; [ $? -eq 2 ] || fail "an unknown command is usage (exit 2)"
 set -e
-bash "$K2" board --help | grep -q "an arrow from → to (endCap arrow by default" || fail "help says connect draws an arrow"
-bash "$K2" study board | grep -q "Never write board keys with raw k2 store" || fail "study board"
+"$K2" board --help | grep -q "an arrow from → to (endCap arrow by default" || fail "help says connect draws an arrow"
+"$K2" study board | grep -q "Never write board keys with raw k2 store" || fail "study board"
 echo "board_cli: ok"

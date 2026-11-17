@@ -37,7 +37,7 @@ fail() { echo "FAIL: $*" >&2; echo "--- daemon log tail ---" >&2; tail -40 "$SAN
 ok() { pass=$((pass + 1)); echo "  ok  $*"; }
 jget() { python3 -c 'import json,sys; j=json.loads(sys.argv[1]); print(eval(sys.argv[2], {"j": j}))' "$1" "$2"; }
 # k2 … as the owner of the sandbox daemon (its token from the temp HOME).
-k2() { env -u K2_HOOK_TOKEN HOME="$SANDBOX_HOME" K2_PORT="$K2SO_PORT" PATH="/usr/bin:/bin:/usr/sbin:/sbin" bash "$K2CLI" "$@"; }
+k2() { env -u K2_HOOK_TOKEN HOME="$SANDBOX_HOME" K2_PORT="$K2SO_PORT" PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$K2CLI" "$@"; }
 BASE="http://127.0.0.1:${K2SO_PORT}"
 TOK="$K2SO_TOKEN"
 
@@ -136,12 +136,12 @@ echo "== the run's passport: use routes only, dead after the run =="
 cat > "$WS/scripts/passport.sh" <<EOF
 #!/bin/sh
 printf '%s' "\$K2_HOOK_TOKEN" > "$WS/passport.txt"
-bash "$K2CLI" vault env-file --secret JOB_SECRET > "$WS/envfile.txt" 2>&1; echo "envfile_rc=\$?"
+"$K2CLI" vault env-file --secret JOB_SECRET > "$WS/envfile.txt" 2>&1; echo "envfile_rc=\$?"
 f="\$(head -1 "$WS/envfile.txt")"
 [ -f "\$f" ] && echo "envfile_len=\$(wc -c < "\$f" | tr -d ' ')"
-bash "$K2CLI" vault status >/dev/null 2>&1; echo "status_rc=\$?"
-bash "$K2CLI" vault list > "$WS/list.txt" 2>&1; echo "list_rc=\$?"
-bash "$K2CLI" job list > "$WS/joblist.txt" 2>&1; echo "joblist_rc=\$?"
+"$K2CLI" vault status >/dev/null 2>&1; echo "status_rc=\$?"
+"$K2CLI" vault list > "$WS/list.txt" 2>&1; echo "list_rc=\$?"
+"$K2CLI" job list > "$WS/joblist.txt" 2>&1; echo "joblist_rc=\$?"
 EOF
 chmod +x "$WS/scripts/passport.sh"
 k2 job add passport --workspace "$WS" --every 1h --timeout 60s -- ./scripts/passport.sh >/dev/null

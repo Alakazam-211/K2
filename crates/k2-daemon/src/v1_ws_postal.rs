@@ -17,7 +17,10 @@
 //!   Never a command.
 //! - **Once (P18):** p5 sends its Postal message id as `idempotency_key`;
 //!   a knock repeated with that id answers the first answer instead of
-//!   typing the message twice.
+//!   typing the message twice: from memory for 10 minutes (send-once), and
+//!   after that (or a restart) from the delivery record, which holds each
+//!   Postal message id once (0310). A record whose try never reached the
+//!   agent lets the id go, so the next knock delivers it.
 //! - The consent and busy gates are the same as any `/v1` message.
 
 use crate::cli_response::CliResponse;
@@ -88,7 +91,10 @@ pub(crate) fn handle(principal: &V1Principal, project_path: &str, v: &serde_json
         on_behalf_of,
     };
     crate::send_once::once_keyed(ONCE_ROUTE, &format!("k:{key_id}"), key, || {
-        let (result, delivery) = crate::hire_routes::deliver_recorded_postal(project_path, text, &address, wake, &sender);
+        if let Some(done) = key.and_then(|k| already_delivered(k, &address)) {
+            return done;
+        }
+        let (result, delivery) = crate::hire_routes::deliver_recorded_postal(project_path, text, &address, wake, &sender, key);
         CliResponse::ok_json(
             serde_json::json!({
                 "delivered": result.success,
@@ -101,6 +107,30 @@ pub(crate) fn handle(principal: &V1Principal, project_path: &str, v: &serde_json
             .to_string(),
         )
     })
+}
+
+/// The answer for a Postal message id K2 already typed in (`duplicate`), or
+/// `None` to deliver: no record, or one whose try never reached the agent
+/// (its id is released for this try).
+fn already_delivered(postal_msg_id: &str, address: &str) -> Option<CliResponse> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let d = k2_core::hire::deliveries::by_postal_msg_id(&conn, postal_msg_id)?;
+    if !d.delivered {
+        k2_core::hire::deliveries::release_postal_msg_id(&conn, &d.id);
+        return None;
+    }
+    Some(CliResponse::ok_json(
+        serde_json::json!({
+            "delivered": true,
+            "mode": "live",
+            "kind": "postal",
+            "from": address,
+            "duplicate": true,
+            "deliveryId": d.id,
+        })
+        .to_string(),
+    ))
 }
 
 #[cfg(test)]

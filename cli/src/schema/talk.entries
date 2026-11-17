@@ -85,6 +85,17 @@
       ]
     },
     {
+      "name": "msg verify",
+      "usage": "k2 msg verify <m_…|p_…> [--text \"...\" | --text-file <file|->] [--json]",
+      "description": "Check a message's label: who really sent it (the record K2 wrote from the sender's credential) and, given the text you saw, whether it is the text K2 delivered under that code (content: match | mismatch | unknown | not_checked). A code with no record (exit 4) proves nothing. Mismatch exits 1. Only deliveries to or from your own workspace. The text is hashed locally; the label line and K2's '> ' quote marks are taken off for you.",
+      "args": [{"name": "code", "required": true, "description": "m_ + 10 letters/digits from [from … · m_…], or p_ + 20 hex from [postal … · p_…]"}],
+      "flags": [
+        {"name": "--text", "arg": "text", "description": "The message text you saw."},
+        {"name": "--text-file", "arg": "file|-", "description": "The same from a file, or stdin with -."},
+        {"name": "--json", "arg": null, "description": "The daemon's answer as JSON."}
+      ]
+    },
+    {
       "name": "talk",
       "usage": "k2 talk <workspace> [\"text\"] [--read-only] [--answer <N>|--respond <y|n>] [--scout] [--answers <a,b,c>] [--from <name>] [--lines N] [--agent <name>] [--command \"<text>\"]",
       "description": "BETA. Fused read+send. Reads the peer's live screen FIRST (so you can't inject into a HITL blind), then delivers via msg. --answer/--respond DRIVE a single HITL; --scout surfaces a whole multi-Q form, --answers drives it (N digits + submit) in one call.",

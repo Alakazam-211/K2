@@ -19,6 +19,7 @@
 //!   POST /cli/agent-teams/link|unlink (Admin)
 //!   GET  /cli/agent-teams/links     (Member; a passport sees its own workspace)
 //!   GET  /cli/msg/who               sender check for a delivery id (Member; passports for their own)
+//!   GET  /cli/msg/verify            the same plus the content check (`crate::msg_verify`, 0.46.16)
 //! ```
 //!
 //! A key without the hire scope gets the uniform `/v1` 404 on every hire
@@ -77,6 +78,7 @@ const CLI_PATHS: &[&str] = &[
     CLI_UNLINK,
     CLI_LINKS,
     CLI_MSG_WHO,
+    crate::msg_verify::PATH,
     CLI_TEMPLATES,
     CLI_TEMPLATES_SHOW,
 ];
@@ -338,22 +340,62 @@ pub fn deliver_recorded_with_summary(
     sender: &Sender,
     summary: Option<&str>,
 ) -> (crate::workspace_msg::MsgResponse, Option<String>) {
-    deliver_recorded_inner(target, text, from, command, wake, wake_timeout, via, sender, summary, None)
+    deliver_recorded_inner(target, text, from, command, wake, wake_timeout, via, sender, summary, &Outside::default())
+}
+
+/// What a delivery's record keeps about a sender outside this server
+/// (0310): its address, its key's fingerprint, and a Postal message id.
+#[derive(Debug, Clone, Default)]
+pub struct Outside {
+    /// A Postal address or a federated `agent::host`.
+    pub address: Option<String>,
+    pub fingerprint: Option<String>,
+    /// The Postal message id: one row each (P5, P18).
+    pub postal_msg_id: Option<String>,
+    /// The label is a Postal one ([`crate::workspace_msg::Sender::Postal`]).
+    pub postal: bool,
 }
 
 /// A Postal message through the `/v1` door (prd-postal-in-k2-v1 S0):
 /// recorded like any delivery, typed in under K2's own `[postal <address> ·
 /// m_…]` label with every body line quoted ([`crate::workspace_msg::Sender::Postal`]).
 /// `address` is a parsed Postal address; it is never a command.
+/// `postal_msg_id` (S2) holds the row to that one Postal message.
 pub fn deliver_recorded_postal(
     target: &str,
     text: &str,
     address: &str,
     wake: bool,
     sender: &Sender,
+    postal_msg_id: Option<&str>,
 ) -> (crate::workspace_msg::MsgResponse, Option<String>) {
     let timeout = crate::workspace_msg::DEFAULT_WAKE_TIMEOUT;
-    deliver_recorded_inner(target, text, address, "", wake, timeout, "postal", sender, None, Some(address))
+    let outside = Outside {
+        address: Some(address.to_string()),
+        fingerprint: None,
+        postal_msg_id: postal_msg_id.map(str::to_string),
+        postal: true,
+    };
+    deliver_recorded_inner(target, text, address, "", wake, timeout, "postal", sender, None, &outside)
+}
+
+/// A message from an agent on a paired server (federation), recorded with
+/// `via = federation` and the peer's pinned key (0310, P28): its
+/// `[from agent::host · m_…]` stamp can be checked like any other.
+pub fn deliver_recorded_federated(
+    target: &str,
+    text: &str,
+    from_label: &str,
+    peer_fingerprint: &str,
+) -> (crate::workspace_msg::MsgResponse, Option<String>) {
+    let sender = Sender { workspace_id: None, via: "federation", actor: format!("federation:{from_label}"), on_behalf_of: None };
+    let outside = Outside {
+        address: Some(from_label.to_string()),
+        fingerprint: Some(peer_fingerprint.to_string()),
+        ..Outside::default()
+    };
+    let timeout = crate::workspace_msg::DEFAULT_WAKE_TIMEOUT;
+    deliver_recorded_inner(target, text, from_label, "", true, timeout, "msg", &sender, None, &outside)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -367,8 +409,9 @@ fn deliver_recorded_inner(
     via: &str,
     sender: &Sender,
     summary: Option<&str>,
-    postal: Option<&str>,
+    outside: &Outside,
 ) -> (crate::workspace_msg::MsgResponse, Option<String>) {
+    let postal = if outside.postal { outside.address.as_deref() } else { None };
     let target_ws = crate::workspace_msg::resolve_workspace(target).and_then(|path| {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -395,6 +438,11 @@ fn deliver_recorded_inner(
                 target: target.to_string(),
                 delivered: false,
                 at: 0,
+                body_sha256: Some(k2_core::hire::deliveries::body_sha256(text)),
+                postal_msg_id: outside.postal_msg_id.clone(),
+                sender_address: outside.address.clone(),
+                sender_fingerprint: outside.fingerprint.clone(),
+                ..Default::default()
             },
         )
         .is_ok()
@@ -811,6 +859,7 @@ pub fn handle_cli(
         CLI_HIRE => cli_converge(&who, body),
         CLI_HIRE_ROOT => hire_root(&who, is_post, body),
         CLI_MSG_WHO => msg_who(&who, params),
+        crate::msg_verify::PATH => crate::msg_verify::handle(&who, is_post, params),
         // prd-agent-templates-v1 T6/T5: save, add, remove, upgrade, diff.
         p if crate::template_routes::PATHS.contains(&p) => crate::template_routes::handle(p, &who, is_post, body),
         CLI_TEMPLATES | CLI_TEMPLATES_SHOW => {

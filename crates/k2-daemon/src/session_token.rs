@@ -730,6 +730,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/agents/hire",
         "/cli/agent-teams/links",
         "/cli/msg/who",
+        // 0.46.16 `k2 msg verify` (Postal S2): the same rule as msg who.
+        "/cli/msg/verify",
         // 0.46.1 `k2 agent identity`: an agent reads and sets its OWN
         // color and picture. The handler pins the workspace to the passport
         // and refuses a name. `/cli/agent/handle` is NOT here (people and

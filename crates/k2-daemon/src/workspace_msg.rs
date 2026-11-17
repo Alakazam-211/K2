@@ -504,6 +504,7 @@ fn session_exists_live_or_durable(session_id: &str) -> bool {
 ///   `k2 talk` never inject `[from <uuid>]` into a chat.
 pub fn format_message(from: &str, text: &str, command: &str) -> String {
     let sender = stamp_name(from, "external");
+    let text = &quote_stamp_lines(text);
     // thread-context-v1: K2's own line rides on its own line BEFORE the
     // stamp, never inside it (see [`command_with_lead_line`]).
     if let Some((cmd, lead)) = command.split_once(LEAD_LINE_SEP) {
@@ -591,10 +592,56 @@ pub fn format_message_user_with_command(
     command: &str,
 ) -> Result<String, String> {
     let sender = stamp_name(from, "owner");
+    let text = &quote_stamp_lines(text);
     match normalize_composer_slash_command(command)? {
         None => Ok(format!("[from {sender}] {text}")),
         Some(cmd) => Ok(format!("{cmd} [from {sender}] {text}")),
     }
+}
+
+/// The words K2's own stamps start with (prd-postal-in-k2-v1 §5.4, Rosson's
+/// 11-08 answer 7). A line of a message's body that starts like one could
+/// pass for K2's label or another sender's.
+pub const STAMP_STARTS: [&str; 6] = ["[from ", "[postal ", "[guest ", "[thread:", "[project:", "[inbox:"];
+
+/// Does `line` start like one of K2's stamps? Leading whitespace and the
+/// invisible and bidi characters a terminal doesn't show are skipped first,
+/// and case is ignored.
+pub fn looks_like_stamp(line: &str) -> bool {
+    let seen = crate::overlay_routes::strip_untrusted_controls(line);
+    let head: String = seen.trim_start().chars().take(10).collect::<String>().to_ascii_lowercase();
+    STAMP_STARTS.iter().any(|s| head.starts_with(s))
+}
+
+/// A message body with every line after the first that starts like a stamp
+/// ([`looks_like_stamp`]) quoted (`> `), on every delivery path (S2): no
+/// body can start a line that reads as K2's label or another sender's. A
+/// line starts after `\n`, `\r`, or a vertical tab, form feed, NEL, line or
+/// paragraph separator; the breaks themselves are kept as sent.
+pub fn quote_stamp_lines(text: &str) -> String {
+    let is_break = |c: char| matches!(c, '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{85}' | '\u{2028}' | '\u{2029}');
+    if !text.contains(is_break) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut rest = text;
+    let mut first = true;
+    loop {
+        let end = rest.find(is_break).unwrap_or(rest.len());
+        let line = &rest[..end];
+        if !first && looks_like_stamp(line) {
+            out.push_str("> ");
+        }
+        out.push_str(line);
+        first = false;
+        if end == rest.len() {
+            break;
+        }
+        let brk = rest[end..].chars().next().unwrap_or('\n');
+        out.push(brk);
+        rest = &rest[end + brk.len_utf8()..];
+    }
+    out
 }
 
 /// The name in `[from <name>]`: no line break or control character, so a

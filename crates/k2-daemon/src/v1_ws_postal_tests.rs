@@ -159,3 +159,61 @@ fn the_terminal_line_is_k2s_label_then_every_body_line_quoted_and_stripped() {
     // Brackets and controls can't leave the label.
     assert_eq!(postal_label("a]\n[from x", "m_1"), "postal a[from x · m_1".replace('[', ""));
 }
+
+/// P18 past send-once's memory (a restart, or a retry after 10 minutes):
+/// the delivery record holds the Postal message id, so a message K2 already
+/// typed in is answered `duplicate` and nothing is typed again; a record
+/// whose try never reached the agent lets the id go for the next try.
+#[test]
+fn the_record_dedupes_a_knock_send_once_forgot() {
+    let (slug, path) = workspace(true);
+    let k = key(&k2_core::postal::link_label(&slug));
+    let V1Principal::Api(p) = &k else { unreachable!() };
+    let actor = format!("api-key:{}", p.id);
+    let msg_id = format!("01K{}", &uuid::Uuid::new_v4().simple().to_string()[..23].to_uppercase());
+    // What an earlier daemon recorded: the message reached the agent.
+    let earlier = k2_core::hire::deliveries::Delivery {
+        id: k2_core::hire::deliveries::new_id(),
+        via: "api-key".into(),
+        actor: Some(actor.clone()),
+        target: path.clone(),
+        delivered: true,
+        postal_msg_id: Some(msg_id.clone()),
+        body_sha256: Some(k2_core::hire::deliveries::body_sha256("hello")),
+        ..Default::default()
+    };
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::hire::deliveries::record(&conn, &earlier).expect("earlier row");
+    }
+    let (s, v) = knock(&k, &slug, postal("hello", Some(&msg_id)));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!((v["duplicate"].as_bool(), v["deliveryId"].as_str()), (Some(true), Some(earlier.id.as_str())), "{v}");
+    assert_eq!(rows_by(&actor), 1, "nothing typed again");
+
+    // A try that never reached the agent: the next knock delivers again.
+    let msg2 = format!("{msg_id}b");
+    let failed = k2_core::hire::deliveries::Delivery {
+        id: k2_core::hire::deliveries::new_id(),
+        delivered: false,
+        postal_msg_id: Some(msg2.clone()),
+        ..earlier.clone()
+    };
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::hire::deliveries::record(&conn, &failed).expect("failed row");
+    }
+    let (_, v) = knock(&k, &slug, postal("hello", Some(&msg2)));
+    assert!(v.get("duplicate").is_none(), "{v}");
+    let new_id = v["deliveryId"].as_str().expect("a new try").to_string();
+    assert_ne!(new_id, failed.id);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    assert_eq!(k2_core::hire::deliveries::get(&conn, &failed.id).expect("kept").postal_msg_id, None, "released");
+    let fresh = k2_core::hire::deliveries::get(&conn, &new_id).expect("row");
+    assert_eq!(fresh.postal_msg_id.as_deref(), Some(msg2.as_str()));
+    assert_eq!(fresh.body_sha256.as_deref(), Some(k2_core::hire::deliveries::body_sha256("hello").as_str()));
+    assert_eq!(fresh.sender_address.as_deref(), Some("scout::acme.postal.bot"));
+}

@@ -29,7 +29,6 @@
 use std::path::Path;
 
 use crate::cli_response::CliResponse;
-use crate::workspace_msg;
 
 use k2_core::awareness::{AgentAddress, AgentSignal, Delivery, SignalKind, WorkspaceId};
 use k2_core::federation::{self, ingress, outbox, pairing, roster, PeerStore};
@@ -421,7 +420,7 @@ pub fn handle_pubkey() -> CliResponse {
 ///   2. **Delivery** — make a cross-server message behave EXACTLY like a
 ///      local `k2 msg`, gated by the recipient workspace's per-project
 ///      "allow remote instruction" opt-in:
-///        - opt-in ON  → [`workspace_msg::deliver_live`] (inject if live,
+///        - opt-in ON  → [`crate::hire_routes::deliver_recorded_federated`] (inject if live,
 ///          wake+resume+inject if dormant) — the canonical chat.
 ///        - opt-in OFF → DECLINE (200, `delivered:false`,
 ///          `mode:"declined"`). The message is NOT written anywhere trusted
@@ -581,14 +580,10 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
             Some(handle) => format!("{ws_id}/{handle}"),
             None => project_path.clone(),
         };
-        let result = workspace_msg::deliver_live(
-            &deliver_to,
-            &text,
-            &from_label,
-            "",
-            true,
-            workspace_msg::DEFAULT_WAKE_TIMEOUT,
-        );
+        // 0310 (P28): recorded with `via = federation` and the peer's
+        // pinned key, so the `[from agent::host · m_…]` stamp is checkable.
+        let (result, _) =
+            crate::hire_routes::deliver_recorded_federated(&deliver_to, &text, &from_label, &ingested.peer_fingerprint);
         // Terminal SUCCESS → remember the msg_uuid so a drain redelivery
         // (lost-response race) dedupes instead of injecting twice. A FAILED
         // live delivery is deliberately NOT recorded — it is still owed, and
@@ -760,14 +755,8 @@ fn deliver_inbound_tray(
                 &package.title,
                 Some(file_count),
             );
-            let result = workspace_msg::deliver_live(
-                project_path,
-                &pointer,
-                from_label,
-                "",
-                true,
-                workspace_msg::DEFAULT_WAKE_TIMEOUT,
-            );
+            let (result, _) =
+                crate::hire_routes::deliver_recorded_federated(project_path, &pointer, from_label, peer_fingerprint);
             serde_json::json!({
                 "success": result.success,
                 "reason": result.reason,

@@ -759,6 +759,9 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/migrate/secrets/undo", Owner),
     post("/cli/migrate/secrets/unfreeze", Owner),
     both("/cli/mode", Member),
+    // `k2 msg verify <code>` (prd-postal-in-k2-v1 S2): the same floor and
+    // rule as `msg who`, plus whether a text is the one delivered.
+    get("/cli/msg/verify", Member),
     // `k2 msg who <id>` (0.45.6 S7): any login; a passport sees only
     // deliveries to or from its own workspace.
     get("/cli/msg/who", Member),

@@ -32,6 +32,7 @@ app-guests.sh
 app-wallet.sh
 remote-session.sh
 msg-whoami-done.sh
+msg-verify.sh
 thread.sh
 browser.sh
 whats-new.sh

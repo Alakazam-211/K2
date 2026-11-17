@@ -574,6 +574,9 @@ case "${1:-help}" in
         # missing one is exit 2.
         if [ "${2:-}" = "who" ]; then
             shift 2; cmd_msg_who "$@"
+        elif [ "${2:-}" = "verify" ]; then
+            # 0.46.16 (Postal S2): who sent it, and is this its text.
+            shift 2; cmd_msg_verify "$@"
         else
             # Phase 2.1: msg now has --inbox and --signal flag forms.
             shift; cmd_msg_v2 "$@"

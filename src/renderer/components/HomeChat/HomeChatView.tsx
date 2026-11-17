@@ -98,6 +98,7 @@ import { HomeChatDmCallBars, useDmCall } from './HomeChatCallControls'
 import { callRecordLine } from '@/lib/home-chat/calls'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { serverLabelFor } from './serverLabel'
+import { HomeChatErrorState } from './HomeChatStates'
 
 const PAGE = 50
 const DELTA = 100
@@ -125,6 +126,8 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
   const storedDm = useHomeChatStore((s) => (target.kind === 'person' ? s.byHost[hostKey]?.dms[target.ext] : undefined))
   const conv = target.kind === 'channel' ? target.conv : (storedDm ?? null)
   const [convError, setConvError] = useState<string | null>(null)
+  // Try again: bumped to read the chat (and open the DM) again.
+  const [attempt, setAttempt] = useState(0)
 
   // A person row opens (or makes) the DM on first open (§6.2).
   useEffect(() => {
@@ -138,7 +141,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
     return () => {
       alive = false
     }
-  }, [target, storedDm, scope, hostKey, noteDm])
+  }, [target, storedDm, scope, hostKey, noteDm, attempt])
 
   // Names: this server's people (who wrote each message).
   useEffect(() => {
@@ -210,7 +213,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
       alive = false
       viewHomeChat(scope, conv, false).catch(() => undefined)
     }
-  }, [conv, hostKey, scope])
+  }, [conv, hostKey, scope, attempt])
 
   useEffect(() => {
     if (conv && messages) rememberHomeChat(hostKey, conv, messages)
@@ -531,10 +534,14 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
                 <p>No chat on this server.</p>
               </ThreadChatEmpty>
             ) : chatState === 'error' ? (
-              <ThreadChatEmpty testId="home-chat-error">
-                <p>Couldn't open this chat.</p>
-                <p className="mt-1 opacity-70">{convError ?? loadError}</p>
-              </ThreadChatEmpty>
+              <HomeChatErrorState
+                reason={convError ?? loadError}
+                onRetry={() => {
+                  setConvError(null)
+                  setLoadError(null)
+                  setAttempt((n) => n + 1)
+                }}
+              />
             ) : chatState === 'loading' ? (
               <ThreadChatEmpty testId="home-chat-loading">
                 <p>Loading…</p>

@@ -290,3 +290,27 @@ describe('Home chat view', () => {
     await waitFor(() => expect(screen.getByTestId('home-chat-call-record-text').textContent).toBe('Call · 0:05'))
   })
 })
+
+describe('a chat that fails to open', () => {
+  it('says why at full contrast, in sentence case, and Try again reads it again', async () => {
+    const ok = h.get.getMockImplementation()!
+    let fail = true
+    h.get.mockImplementation(async (s, route, p) => {
+      if (route === 'home-chat/messages' && fail) throw new Error('sew is not answering')
+      return ok(s, route, p)
+    })
+    render(<HomeChatView target={CHANNEL} />)
+    const state = await screen.findByTestId('home-chat-error')
+    const reason = screen.getByTestId('home-chat-error-reason')
+    expect(reason.textContent).toBe('Sew is not answering.')
+    // No fade on the reason or anything round it inside the state.
+    for (let el: HTMLElement | null = reason; el && el !== state.parentElement; el = el.parentElement) {
+      expect(el.className).not.toMatch(/opacity-/)
+      expect(el.style.opacity === '' || el.style.opacity === '1').toBe(true)
+    }
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await screen.findByText('mine')
+    expect(screen.queryByTestId('home-chat-error')).toBeNull()
+  })
+})

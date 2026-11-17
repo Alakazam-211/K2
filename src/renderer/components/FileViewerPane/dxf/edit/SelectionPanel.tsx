@@ -4,8 +4,8 @@
 //   - agents working on them, by name and what for;
 //   - what can't be changed here and why, in plain words (and then no Move,
 //     Rotate or Scale);
-//   - "Move by" in drawing units, for exact moves; "Rotate by" in degrees,
-//     about the selection's centre;
+//   - "Move by" in drawing units, for exact moves; "Rotate by" in degrees
+//     and "Scale by" a factor, both about the selection's centre;
 //   - a block reference's attributes as rows you can change (Enter saves),
 //     checked as you type; a text's value shown, not editable here yet;
 //   - the last refusal, in plain words.
@@ -22,7 +22,7 @@ import { whyWords } from './edit-words'
 import { holdLine, holdsOn } from './holds'
 import { capital, kindName, kindsLine } from './kinds'
 import { editReason } from './selection'
-import { RotateBy } from './TurnBy'
+import { RotateBy, ScaleBy } from './TurnBy'
 import type { CadEdit } from './useCadEdit'
 
 type Attrib = { tag: string; value: string; constant?: boolean }
@@ -231,6 +231,7 @@ export function SelectionPanel({ edit, header, slots }: { edit: CadEdit; header:
         <>
           <MoveBy edit={edit} />
           <RotateBy edit={edit} />
+          <ScaleBy edit={edit} />
         </>
       ) : null}
       {attribs.length && one ? (

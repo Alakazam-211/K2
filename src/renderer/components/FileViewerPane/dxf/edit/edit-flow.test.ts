@@ -23,7 +23,7 @@ vi.mock('@/stores/session-events', () => ({
 }))
 
 import type { ServerScope } from '@/kessel/server-scope'
-import { attribArgv, fmtCoord, moveArgv, NO_DIGEST, rotateArgv, runEdit, withKit } from './edit-flow'
+import { attribArgv, fmtCoord, moveArgv, NO_DIGEST, rotateArgv, runEdit, scaleArgv, withKit } from './edit-flow'
 import {
   __resetWriterOffForTests,
   CORES_ROUTE,
@@ -58,6 +58,11 @@ describe('argv', () => {
     expect(rotateArgv(['@h:41', '@h:A00'], 90, [5, 2.5], 'mm')).toEqual(['entity', 'rotate', '@h:41', '@h:A00', '--by', '90', '--about', '5,2.5', '--unit', 'mm'])
     expect(rotateArgv(['@h:41'], -90, [-1.25, 0], 'drawing')).toEqual(['entity', 'rotate', '@h:41', '--by', '270', '--about', '-1.25,0', '--unit', 'drawing'])
     expect(rotateArgv(['@h:41'], 37.3, [0, 0], 'mm')[4]).toBe('37.3')
+  })
+
+  it('entity scale: every address, --factor, --about the centre, the unit', () => {
+    expect(scaleArgv(['@h:41', '@h:A00'], 1.25, [5, 1], 'mm')).toEqual(['entity', 'scale', '@h:41', '@h:A00', '--factor', '1.25', '--about', '5,1', '--unit', 'mm'])
+    expect(scaleArgv(['@h:41'], 0.5, [0.1 + 0.2, -3], 'drawing')).toEqual(['entity', 'scale', '@h:41', '--factor', '0.5', '--about', '0.3,-3', '--unit', 'drawing'])
   })
 
   it('numbers are plain decimals: no exponent, no minus zero', () => {

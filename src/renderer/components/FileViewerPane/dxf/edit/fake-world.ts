@@ -2,7 +2,8 @@
 // header and pages, held in memory, with the edit verbs' rules played out
 // on them the way the CAD pack answers (`mpc.result/1` and `cad.change/1`).
 // A move shifts every point an entity has, a turn turns them (and its
-// angles) about the given point; an attribute set changes its value; a locked layer, a kind the verbs don't change, the wrong unit, a
+// angles) about the given point, a scale scales them (and its sizes); an
+// attribute set changes its value; a locked layer, a kind the verbs don't change, the wrong unit, a
 // stale `--expect` or an overlap since `--base` is refused with the pack's
 // id. A person is never refused by a hold. Each landed call makes a version.
 
@@ -169,6 +170,11 @@ export function fakeCadWorld(
       const deg = Number(flag(argv, '--by'))
       if (!about || !Number.isFinite(deg)) return refuse(verb, base, 'MPC-E122', 'usage')
       next = geomChange(turnAbout(about, deg))
+    } else if (verb === 'entity scale') {
+      const about = xyOf(flag(argv, '--about'))
+      const f = Number(flag(argv, '--factor'))
+      if (!about || !(f > 0)) return refuse(verb, base, 'MPC-E122', 'usage')
+      next = geomChange(sizeAbout(about, f))
     } else if (verb === 'attrib set') {
       const r = found[0]
       const tag = (flag(argv, '--tag') ?? '').toUpperCase()

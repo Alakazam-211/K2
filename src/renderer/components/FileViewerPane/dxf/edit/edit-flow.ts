@@ -42,6 +42,19 @@ export const rotateArgv = (addresses: readonly string[], deg: number, about: XY,
   unit,
 ]
 
+/** Scale entities by `factor` (above 0) about `about`, in the drawing's unit. */
+export const scaleArgv = (addresses: readonly string[], factor: number, about: XY, unit: string): string[] => [
+  'entity',
+  'scale',
+  ...addresses,
+  '--factor',
+  fmtCoord(factor),
+  '--about',
+  `${fmtCoord(about[0])},${fmtCoord(about[1])}`,
+  '--unit',
+  unit,
+]
+
 /** Set one attribute value of a block reference; `nth` (1-based) when its tag repeats. */
 export const attribArgv = (insert: string, tag: string, value: string, nth?: number | null): string[] => [
   'attrib',

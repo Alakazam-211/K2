@@ -2,7 +2,7 @@
 // edits (the viewer's own reading of the text has no handles). It gives the
 // viewer:
 //   - `tool`: the sheet's left-button gestures (select, box, drag to move,
-//     the handles to turn);
+//     the handles to turn and scale);
 //   - `marks` (in the SVG): the selection with its handles, agents' holds
 //     and the ghost's layer;
 //   - `over` (over the sheet): the selection box, the hold question, a hint;
@@ -83,6 +83,7 @@ export function useDxfEdit(p: {
         move: e.move,
         frame: () => (e.editable && e.canMove(e.selection) ? e.frame : null),
         rotate: e.rotate,
+        scale: e.scale,
         ghost: ghostApi,
         box,
       }

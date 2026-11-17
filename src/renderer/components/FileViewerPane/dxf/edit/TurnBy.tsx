@@ -1,5 +1,6 @@
-// The panel's exact turns, about the selection's centre: "Rotate by" a
-// number of degrees (anticlockwise), and a quarter turn either way.
+// The panel's exact turns and scales, about the selection's centre:
+// "Rotate by" a number of degrees (anticlockwise), a quarter turn either
+// way, and "Scale by" a factor above 0.
 
 import { useState } from 'react'
 import { Button, Input } from '@/components/ui'
@@ -49,7 +50,48 @@ export function RotateBy({ edit }: { edit: CadEdit }): React.JSX.Element {
           90° right
         </Button>
       </div>
-      <p className={`${LABEL} m-0 pt-1`}>About the selection’s centre.</p>
+    </form>
+  )
+}
+
+export function ScaleBy({ edit }: { edit: CadEdit }): React.JSX.Element {
+  const [v, setV] = useState('')
+  const f = typedNumber(v)
+  const ok = f !== null && f > 0 && f !== 1
+  const off = !edit.editable || edit.busy
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (!ok || off) return
+        void edit.scale(f).then((landed) => landed && setV(''))
+      }}
+      className="pt-2"
+      data-testid="dxf-scale-by"
+    >
+      <p className={`${LABEL} m-0 pb-1`}>Scale by, as a factor</p>
+      <div className="flex items-center gap-2">
+        <Input
+          inputMode="decimal"
+          value={v}
+          placeholder="1"
+          onChange={(e) => setV(e.target.value)}
+          className="w-full min-w-0 flex-1"
+          aria-label="Scale by, as a factor"
+          aria-invalid={f !== null && f <= 0 ? true : undefined}
+          data-testid="dxf-scale-factor"
+        />
+        <Button type="submit" size="sm" variant="default" disabled={!ok || off} data-testid="dxf-scale-go">
+          Scale
+        </Button>
+      </div>
+      {f !== null && f <= 0 ? (
+        <p className="type-hint m-0 pt-0.5 text-[var(--color-status-error-text)]" data-testid="dxf-scale-problem">
+          Use a factor above 0.
+        </p>
+      ) : (
+        <p className={`${LABEL} m-0 pt-1`}>Rotate and Scale go about the selection’s centre. A factor of 2 doubles it.</p>
+      )}
     </form>
   )
 }

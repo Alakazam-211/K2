@@ -5,6 +5,8 @@
 //   - Rotate: "Rotate by" and the quarter turns in the panel, and the turn
 //     handle above the selection (a ghost turns with it; Shift: 15° steps),
 //     all about the selection's centre;
+//   - Scale: "Scale by" a factor above 0 in the panel, and the corner
+//     handles (a ghost scales the same both ways; Shift: 0.25 steps);
 //   - each runs a dry run, then the commit with --expect, and shows as yours
 //     with Undo; a refusal says why and the ghost goes back;
 //   - a kind the verbs can't change has none of these.
@@ -154,5 +156,57 @@ describe('rotating', () => {
     expect(screen.getByTestId('dxf-edit-cant').textContent).toContain('Hatches can’t be changed here yet.')
     expect(screen.queryByTestId('dxf-rotate-by')).toBeNull()
     expect(screen.queryByTestId('dxf-handles')).toBeNull()
+  })
+})
+
+describe('scaling', () => {
+  it('Scale by a factor about the selection’s centre; 0 or less says why and can’t be sent', async () => {
+    await open()
+    click('@h:41')
+    click('@h:A00', true)
+    fireEvent.change(screen.getByTestId('dxf-scale-factor'), { target: { value: '0' } })
+    expect(screen.getByTestId('dxf-scale-problem').textContent).toBe('Use a factor above 0.')
+    expect((screen.getByTestId('dxf-scale-go') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByTestId('dxf-scale-factor'), { target: { value: '2' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dxf-scale-go'))
+    })
+    await waitFor(() => expect(world.edits.calls).toHaveLength(2))
+    expect(world.edits.calls[0]).toEqual(['entity', 'scale', '@h:41', '@h:A00', '--factor', '2', '--about', '5,1', '--unit', 'mm', '--base', '7', '--json', '--dry-run'])
+    expect((await screen.findByTestId('dxf-change-note')).textContent).toContain('You scaled 2 lines on A-WALL')
+    // Read again: the lower line, twice as long about 5,1.
+    await waitFor(() => expect(Number(shape('@h:A00').getAttribute('x1'))).toBeCloseTo(-5, 6))
+    expect(Number(shape('@h:A00').getAttribute('x2'))).toBeCloseTo(15, 6)
+  })
+
+  it('a corner handle: a ghost scales the same both ways as you drag, Shift snaps to 0.25 steps', async () => {
+    await open()
+    click('@h:41')
+    const corners = screen.getAllByTestId('dxf-handle-size')
+    expect(corners).toHaveLength(4)
+    const top = corners[2]
+    const at: [number, number] = [Number(top.getAttribute('x')) + Number(top.getAttribute('width')) / 2, Number(top.getAttribute('y')) + Number(top.getAttribute('height')) / 2]
+    // From the corner straight out from the centre (5,2), to 1.6 times as far.
+    const to: [number, number] = [5 + (at[0] - 5) * 1.6, 2 + (at[1] - 2) * 1.6]
+    fireEvent.pointerDown(top, { pointerId: 1, button: 0, ...client(...at) })
+    fireEvent.pointerMove(sheet(), { pointerId: 1, ...client(...to) })
+    const ghost = screen.getByTestId('dxf-ghost')
+    expect(Number(ghost.getAttribute('data-scale'))).toBeCloseTo(1.6, 1)
+    expect(ghost.getAttribute('transform')).toMatch(/^translate\(5 2\) scale\(1\.[56]\d*\) translate\(-5 -2\)$/)
+    fireEvent.pointerMove(sheet(), { pointerId: 1, ...client(...to), shiftKey: true })
+    expect(ghost.getAttribute('data-scale')).toBe('1.5')
+    await act(async () => {
+      fireEvent.pointerUp(sheet(), { pointerId: 1, ...client(...to), shiftKey: true })
+    })
+    await waitFor(() => expect(world.edits.calls).toHaveLength(2))
+    expect(world.edits.calls[1].slice(0, 9)).toEqual(['entity', 'scale', '@h:41', '--factor', '1.5', '--about', '5,2', '--unit', 'mm'])
+  })
+
+  it('kinds the verbs can’t change have no Scale by', async () => {
+    await open()
+    click('@h:6B')
+    expect(screen.getByTestId('dxf-edit-cant').textContent).toContain('Dimensions can’t be changed here yet.')
+    expect(screen.queryByTestId('dxf-scale-by')).toBeNull()
+    expect(screen.queryByTestId('dxf-handle-size')).toBeNull()
   })
 })

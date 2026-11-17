@@ -4,7 +4,8 @@
 // crossing), and a press on what's selected drags it: a ghost follows the
 // pointer, Shift locks it to one axis, and on release the move is tried.
 // A press on the turn handle above the selection turns it about its centre
-// (Shift: 15° steps), with the ghost turning as you drag. A refused edit
+// (Shift: 15° steps), and one on a corner handle scales it about its centre,
+// the same both ways (Shift: 0.25 steps); the ghost follows as you drag. A refused edit
 // snaps the ghost back. Panning stays on the other buttons,
 // or Space with the left. The ghost and the box are drawn straight to the
 // DOM, never through React, so a drag costs no renders.
@@ -12,7 +13,7 @@
 import type { Box4, ModelRow, XY } from '../model/types'
 import { SOLID } from './hit'
 import { attribOwners, boxMode, boxSelect, pickAt, shiftLock, snapDelta, toggle } from './selection'
-import { centreOf, handleAt, turnDeg, type HandleHit } from './transform'
+import { centreOf, handleAt, sizeFactor, turnDeg, type HandleHit } from './transform'
 
 export type SheetCtx = {
   /** Screen point → drawing point (y up). */
@@ -35,6 +36,8 @@ export interface Ghost {
   at(dx: number, dy: number): void
   /** Turned by `deg` degrees (anticlockwise) about `about`. */
   turn(deg: number, about: XY): void
+  /** Scaled by `factor` about `about`. */
+  size(factor: number, about: XY): void
   /** Back to where it started, then gone. */
   snapBack(): void
   clear(): void
@@ -54,6 +57,7 @@ export type ToolState = {
   /** The box around the selection when it can be turned and scaled now (its handles show), else null. */
   frame: () => Box4 | null
   rotate: (deg: number, about: XY) => Promise<boolean>
+  scale: (factor: number, about: XY) => Promise<boolean>
   ghost: Ghost
   box: SelectBox
 }
@@ -88,6 +92,7 @@ function targetGrip(target: EventTarget | null): Grip | null {
 
 type Drag =
   | { kind: 'turn'; about: XY; at: XY; deg: number; moving: boolean }
+  | { kind: 'size'; about: XY; at: XY; factor: number; moving: boolean }
   | { kind: 'press'; hit: string; sel: readonly string[]; at: XY; client: XY; moving: boolean; d: XY }
   | { kind: 'box'; at: XY; client: XY; shift: boolean; showing: boolean }
   | { kind: 'none' }
@@ -104,6 +109,10 @@ export function editTool(get: () => ToolState): SheetTool {
       const grip: Grip | null = frame ? (targetGrip(e.target) ?? handleAt(frame, p, c.unitsPerPx())) : null
       if (frame && grip?.kind === 'turn') {
         drag = { kind: 'turn', about: centreOf(frame), at: p, deg: 0, moving: false }
+        return true
+      }
+      if (frame && grip?.kind === 'size') {
+        drag = { kind: 'size', about: centreOf(frame), at: p, factor: 1, moving: false }
         return true
       }
       // The element under the pointer, unless it's a text, block or fill and a line or curve is right there too.
@@ -137,6 +146,15 @@ export function editTool(get: () => ToolState): SheetTool {
         s.ghost.turn(drag.deg, drag.about)
         return
       }
+      if (drag.kind === 'size') {
+        if (!drag.moving) {
+          drag.moving = true
+          s.ghost.show(s.selection)
+        }
+        drag.factor = sizeFactor(drag.about, drag.at, c.toDrawing(e.clientX, e.clientY), e.shiftKey)
+        s.ghost.size(drag.factor, drag.about)
+        return
+      }
       if (drag.kind === 'box') {
         if (!drag.showing && !far(e, drag.client)) return
         drag.showing = true
@@ -168,6 +186,13 @@ export function editTool(get: () => ToolState): SheetTool {
         })
         return
       }
+      if (d.kind === 'size') {
+        if (d.factor === 1) return s.ghost.clear()
+        void s.scale(d.factor, d.about).then((ok) => {
+          if (!ok) s.ghost.snapBack()
+        })
+        return
+      }
       if (d.kind === 'box') {
         if (!d.showing) {
           if (!d.shift) s.select([])
@@ -194,7 +219,7 @@ export function editTool(get: () => ToolState): SheetTool {
       const s = get()
       const had = !!drag && drag.kind !== 'none' && (drag.kind === 'box' ? drag.showing : drag.moving)
       if (drag?.kind === 'box') s.box.clear()
-      if ((drag?.kind === 'press' || drag?.kind === 'turn') && drag.moving) s.ghost.snapBack()
+      if ((drag?.kind === 'press' || drag?.kind === 'turn' || drag?.kind === 'size') && drag.moving) s.ghost.snapBack()
       drag = null
       return had
     },

@@ -3,8 +3,8 @@
 //     selection, each entity's box in your own accent; agents' holds, dashed
 //     in the holder's presence colour;
 //   - the handles on the selection's box when it can be changed: one above
-//     it to turn it;
-//   - the ghost a drag moves or turns (copies of the selected shapes, faint,
+//     it to turn it, one on each corner to scale it;
+//   - the ghost a drag moves, turns or scales (copies of the selected shapes, faint,
 //     with their boxes) and the selection box (solid for a window, dashed
 //     for a crossing), both driven straight in the DOM;
 //   - HoldAsk, the one question before an edit over an agent's hold.
@@ -54,7 +54,7 @@ export function EditMarks(p: {
   )
 }
 
-/** The handles on the selection's box: a round one above it turns the selection. */
+/** The handles on the selection's box: a round one above it turns the selection, a square on each corner scales it. */
 function Handles({ frame, k }: { frame: Box4; k: number }): React.JSX.Element {
   const h = handlePoints(frame, k)
   const top = h.corners[2][1]
@@ -76,6 +76,27 @@ function Handles({ frame, k }: { frame: Box4; k: number }): React.JSX.Element {
       >
         <title>Drag to rotate. Hold Shift for 15° steps.</title>
       </circle>
+      {h.corners.map(([x, y], i) => (
+        <rect
+          key={i}
+          data-testid="dxf-handle-size"
+          data-edit-handle="size"
+          data-corner={i}
+          x={x - 4 * k}
+          y={y - 4 * k}
+          width={8 * k}
+          height={8 * k}
+          fill="var(--color-bg)"
+          stroke={ACCENT}
+          strokeWidth={1.5}
+          vectorEffect={HAIR}
+          pointerEvents="all"
+          // Corners 0 and 2 run bottom-left to top-right on screen.
+          style={{ cursor: i % 2 === 0 ? 'nesw-resize' : 'nwse-resize' }}
+        >
+          <title>Drag to scale. Hold Shift for steps of 0.25.</title>
+        </rect>
+      ))}
     </g>
   )
 }
@@ -138,13 +159,20 @@ export function domGhost(rootOf: () => SVGGElement | null, byHandle: () => Reado
       inner.setAttribute('transform', `rotate(${deg} ${about[0]} ${about[1]})`)
       inner.setAttribute('data-turn', String(deg))
     },
+    size(factor, about) {
+      if (!inner) return
+      const [x, y] = about
+      inner.setAttribute('transform', `translate(${x} ${y}) scale(${factor}) translate(${-x} ${-y})`)
+      inner.setAttribute('data-scale', String(factor))
+    },
     snapBack() {
       if (!inner) return
       if (reduced()) return clear()
       // A turn or a scale goes straight back.
       if (inner.hasAttribute('transform')) {
         inner.removeAttribute('transform')
-        inner.setAttribute('data-turn', '0')
+        if (inner.hasAttribute('data-turn')) inner.setAttribute('data-turn', '0')
+        if (inner.hasAttribute('data-scale')) inner.setAttribute('data-scale', '1')
         timer = setTimeout(clear, 220)
         return
       }

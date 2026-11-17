@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CadChange } from '../cad-change'
 import type { Box4, ModelHeader, ModelRow, XY } from '../model/types'
-import { attribArgv, moveArgv, rotateArgv, runEdit } from './edit-flow'
+import { attribArgv, moveArgv, rotateArgv, runEdit, scaleArgv } from './edit-flow'
 import type { EditSource, Hold } from './edit-source'
 import { refusalWords, viewOnlyWhy, type EditVerb } from './edit-words'
 import { holdPrompt, holdsOn } from './holds'
@@ -53,6 +53,8 @@ export type CadEdit = {
   move: (dx: number, dy: number) => Promise<boolean>
   /** Turn the selection by `deg` degrees anticlockwise, about its centre unless told. */
   rotate: (deg: number, about?: XY) => Promise<boolean>
+  /** Scale the selection by `factor` (above 0), about its centre unless told. */
+  scale: (factor: number, about?: XY) => Promise<boolean>
   relabel: (insert: string, tag: string, value: string, nth: number | null) => Promise<boolean>
 }
 
@@ -208,6 +210,13 @@ export function useCadEdit(p: {
     },
     [run, selection, unit, centre],
   )
+  const scale = useCallback(
+    (factor: number, about?: XY) => {
+      const c = about ?? centre
+      return factor > 0 && factor !== 1 && Number.isFinite(factor) && c ? run(scaleArgv(selection, factor, c, unit), selection, 'scale') : Promise.resolve(false)
+    },
+    [run, selection, unit, centre],
+  )
   const relabel = useCallback(
     (insert: string, tag: string, value: string, nth: number | null) => run(attribArgv(insert, tag, value, nth), [insert], 'relabel'),
     [run],
@@ -215,5 +224,5 @@ export function useCadEdit(p: {
 
   const goViewOnly = useCallback((words: string) => setOff(words), [])
 
-  return { rows, byHandle, selection, select, canEdit, editable, viewOnly, unit, holds, canMove, busy, message, prompt, goViewOnly, frame, centre, move, rotate, relabel }
+  return { rows, byHandle, selection, select, canEdit, editable, viewOnly, unit, holds, canMove, busy, message, prompt, goViewOnly, frame, centre, move, rotate, scale, relabel }
 }

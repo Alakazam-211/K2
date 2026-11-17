@@ -2757,7 +2757,7 @@ exit: 0
     },
     {
       "name": "users",
-      "usage": "k2 users [list|add|set-role|share|set-password|audit|unlock] ...",
+      "usage": "k2 users [list|add|set-role|share|set-password|audit|set-can-clone|unlock|pair-phone|phones|unpair-phone] ...",
       "description": "Local daemon connect-user accounts (GET/POST /cli/users*). list is default; add creates with interactive password or --password-stdin (temporary unless --keep-password) at member or voice_chat (Voice & Chat only), or owner/admin by a set-role after; set-role changes a role; share sets what a voice_chat login may use; set-password resets someone's password (owner only, temporary unless --keep-password); audit prints the last N auth-audit records (GET /cli/users/audit?tail=N, owner only); unlock clears a box login lock without changing the password.",
       "args": [],
       "flags": [

@@ -159,7 +159,7 @@ assert_contains "help: set-password" "$help" "k2 users set-password <username> [
 schema="$("$K2_CLI" --schema)"
 assert_eq "schema users add carries --keep-password" \
     "$(printf '%s' "$schema" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[c for c in d["commands"] if c["name"]=="users add"][0]; print([f["name"] for f in c["flags"]])')" \
-    "['--role', '--password-stdin', '--keep-password']"
+    "['--role', '--share-agent', '--share-garden', '--share-source', '--fixed-password', '--no-fixed-password', '--force', '--password-stdin', '--keep-password']"
 assert_eq "schema has users set-password" \
     "$(printf '%s' "$schema" | python3 -c 'import json,sys; d=json.load(sys.stdin); print([c["usage"] for c in d["commands"] if c["name"]=="users set-password"])')" \
     "['k2 users set-password <username> [--password-stdin] [--keep-password]']"

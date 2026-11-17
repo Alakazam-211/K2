@@ -1182,7 +1182,7 @@ for line in d.get("doctor") or []:
                 esac
             done
             if [ -z "$username" ]; then
-                echo "Usage: k2 users add <username> [--role owner|admin|member|voice_chat] [--share-agent <agent>]... [--share-garden <garden>]... [--password-stdin] [--keep-password]" >&2
+                echo "Usage: k2 users add <username> [--role owner|admin|member|voice_chat] [--share-agent <agent>]... [--share-garden <garden>]... [--share-source <name>]... [--fixed-password|--no-fixed-password] [--force] [--password-stdin] [--keep-password]" >&2
                 return 2
             fi
             if [ -n "$role" ]; then

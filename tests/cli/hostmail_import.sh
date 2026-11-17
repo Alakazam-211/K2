@@ -24,9 +24,16 @@ fi
 if grep -A30 'verb == "import"' "$K2" | grep -q 'cli_post_json'; then
     fail "import must not go through global cli_post_json (30s)"
 fi
-if ! grep -A16 '^cli_post_json()' "$K2" | grep -q -- '--max-time 30'; then
-    fail "cli_post_json must stay --max-time 30"
-fi
+# cli_post_json's curl says `--max-time 30`, or `--max-time
+# "${_K2_POST_MAX_TIME:-30}"` (one send may ask for more); the default must
+# be 30 either way.
+mt_arg="$(grep -A16 '^cli_post_json()' "$K2" | grep -oE -- '--max-time ([0-9]+|"\$\{_K2_POST_MAX_TIME:-[0-9]+\}")' | head -1 || true)"
+case "$mt_arg" in
+    '--max-time "${_K2_POST_MAX_TIME:-'*) mt_default="${mt_arg#*:-}"; mt_default="${mt_default%%[!0-9]*}" ;;
+    '--max-time '[0-9]*) mt_default="${mt_arg#--max-time }" ;;
+    *) mt_default="" ;;
+esac
+[ "$mt_default" = 30 ] || fail "cli_post_json must stay --max-time 30 by default (found: ${mt_arg:-no --max-time})"
 if ! grep -q 'skipInbox' "$K2"; then
     fail "CLI import must send skipInbox JSON"
 fi

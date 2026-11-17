@@ -16,7 +16,8 @@
 # cli_post, cli_post_json, cli_post_form, the UDS arms, _sidecar_send
 # (GET + POST, TCP + UDS), respond/done, fed outbox, daemon restart
 # --host, _connect_curl, the stale-passport probe, and the k2-open shim.
-# Also round-trips tricky bodies through the curl config quoting.
+# Also round-trips tricky bodies through the curl config quoting, and
+# covers workspace swap-canonical (owner and cell).
 #
 # No daemon build, no real ~/.k2 (HOME is a temp dir), no network.
 
@@ -241,6 +242,9 @@ chmod 600 "$HOME/.k2/tunnel.json"
 clean_env K2_PORT="$PORT" K2_CONNECT_BASE="http://127.0.0.1:${PORT}" "$K2_CLI" publish status --json >/dev/null 2>&1 || true
 expect_seen "_connect_curl asks the daemon first (?token=)" /cli/connect/proxy tcp token_query "$OWNER"
 expect_seen "_connect_curl carries the Connect bearer" /subdomains tcp authorization "Bearer $CONNECT"
+owner workspace swap-canonical "$WORK/proj" --agent claude >/dev/null 2>&1 || true
+expect_seen "swap-canonical carries ?token=" /cli/workspace/swap-canonical tcp token_query "$OWNER"
+expect_seen "swap-canonical body carries the provider" /cli/workspace/swap-canonical tcp body '"provider": "claude"'
 
 # ── 3. scoped session without a socket (TCP, passport) ────────────────
 echo "== scoped session over TCP =="
@@ -266,6 +270,8 @@ cell llm tokens list >/dev/null 2>&1 || true
 expect_seen "_sidecar_send UDS GET carries the passport" /cli/llm/accounts/list uds authorization "Bearer $SCOPED"
 cell publish status >/dev/null 2>&1 || true
 expect_seen "_connect_curl UDS carries the passport" /cli/connect/proxy uds authorization "Bearer $SCOPED"
+cell workspace swap-canonical "$WORK/proj" --agent claude >/dev/null 2>&1 || true
+expect_seen "swap-canonical in a cell carries the passport as ?token=" /cli/workspace/swap-canonical tcp token_query "$SCOPED"
 
 # ── 5. stale-passport probe (sourced; the e2e path needs a Codex tree) ─
 echo "== stale-passport probe =="

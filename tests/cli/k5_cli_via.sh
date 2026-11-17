@@ -247,9 +247,12 @@ site() {
     else
         bad "$label: the request changed ($(diff "$WORK/off.req" "$WORK/on.req" | tr '\n' ' '))"
     fi
-    local want_on
-    want_on="$(while IFS= read -r l; do printf '%s%s\n' "$HDR_ARGV" "$l"; done <"$WORK/off.argv")"
-    if [ "$want_on" = "$(cat "$WORK/on.argv")" ]; then
+    # Each VIA=rust argv holds the header once; without it, it is the
+    # unset run's argv.
+    local on_less n_hdr
+    n_hdr="$(grep -cF -- "$HDR_ARGV" "$WORK/on.argv" || true)"
+    on_less="$(while IFS= read -r l; do printf '%s\n' "${l/"$HDR_ARGV"/}"; done <"$WORK/on.argv")"
+    if [ "$n_hdr" = "$(wc -l <"$WORK/on.argv" | tr -d ' ')" ] && [ "$on_less" = "$(cat "$WORK/off.argv")" ]; then
         ok "$label: curl argv is the same but for the header"
     else
         bad "$label: curl argv changed (off: $(cat "$WORK/off.argv") on: $(cat "$WORK/on.argv"))"
@@ -262,7 +265,7 @@ site() {
 }
 site "cli_post_json_stdin (agent instances hire)" '{"team":"acme"}' tcp /cli/agent-instances/hire "-K /dev/fd/3" 30 \
     "$K2_CLI" agent instances hire -
-site "workspace swap-canonical" "" tcp /cli/workspace/swap-canonical "swap-canonical" 120 \
+site "workspace swap-canonical" "" tcp /cli/workspace/swap-canonical "--max-time 120" 120 \
     "$K2_CLI" workspace swap-canonical "$WORK/proj" --agent claude
 site "migrate GET on vault.sock (migrate status)" "" vault /cli/migrate/secrets/status "/cli/migrate/secrets/status" 600 \
     "$K2_CLI" migrate status

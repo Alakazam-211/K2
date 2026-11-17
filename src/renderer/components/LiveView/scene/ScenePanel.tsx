@@ -159,7 +159,8 @@ export function ScenePanel({ snap, followingId, onFollow, offline, narrow }: She
   return (
     <div ref={root} className="lv-scene-panel" data-testid="lv-scene-panel" data-target={target(S, pick) ?? undefined} style={{ minHeight: room.minHeight }}>
       <style>{SCENE_PANEL_CSS}</style>
-      {PANEL.map((s) => (
+      {/* Refused at open: no outliner or numbers to show (nothing was read); Activity and People stay. */}
+      {PANEL.filter((s) => !(scene?.declined && (s.id === 'outliner' || s.id === 'props'))).map((s) => (
         <SceneSection key={s.id} id={s.id} title={s.id === 'people' && snapHolds === false ? 'People' : s.title} count={bodies[s.id].count} flush={bodies[s.id].flush} grow={s.grow} open={isOpen(s.id)} onToggle={() => toggle(s.id)}>
           {bodies[s.id].node}
         </SceneSection>

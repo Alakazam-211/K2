@@ -142,3 +142,23 @@ describe('the BLEND writer on', () => {
     expect(screen.getByTestId('lv-scene-head-people').textContent).toContain('People and holds')
   })
 })
+
+describe('a file refused at open', () => {
+  it('the stage holds only the card; the panel keeps Activity and People, with no Outliner or Properties to mislead', async () => {
+    const t = scripted()
+    render(<SceneLive scope={{} as ServerScope} filePath="/ws/scenes/set.blend" width={1440} createTransport={() => t} />)
+    await waitFor(() => expect(t.connects).toBe(1))
+    await act(async () => {
+      t.push({ type: 'watch_refused', error: { id: 'MPC-E407', message: 'live editing is off: … (format 5.02) … (live_version)', details: { code: 'live_version' } } })
+    })
+    expect(screen.getByTestId('lv-scene-card').textContent).toContain('This file is from a newer Blender.')
+    expect(screen.queryByRole('button', { name: /Change view/ })).toBeNull()
+    expect(document.querySelector('.lv-keys')).toBeNull()
+    expect(document.querySelector('.lv-infob')).toBeNull()
+    expect(screen.queryByTestId('lv-scene-section-outliner')).toBeNull()
+    expect(screen.queryByTestId('lv-scene-section-props')).toBeNull()
+    expect(screen.getByTestId('lv-scene-section-activity')).toBeTruthy()
+    expect(screen.getByTestId('lv-scene-section-people')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('No objects yet')
+  })
+})

@@ -192,7 +192,8 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
   // eslint-disable-next-line react-hooks/exhaustive-deps -- a new listing (the epoch) brings the real bounds
   const bounds = useCallback((D: Doc, a: string) => source?.bounds?.(D, a) ?? null, [source, feed.epoch])
 
-  const ready = !!S.D && !S.loading
+  // Refused at open: nothing to view, so no picker, chips, keys or switches; the stage holds only the card.
+  const ready = !!S.D && !S.loading && !declined
   const keys = !narrow && !isTurntable(view) && ready
   const others = ready ? othersOnViews(S, view) : []
   const tt = parseView(view)
@@ -222,7 +223,7 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
         className={cx('lv-sstage')}
         onKeyDown={onKeyDown}
       >
-        {pane && split ? (
+        {pane && split && !declined ? (
           <ScenePane
             {...shared}
             index={0}
@@ -288,6 +289,7 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
         ) : null}
         {declined ? <PictureCard card={{ kind: 'declined', ...declined }} onAction={onCard} /> : words.card ? <PictureCard card={words.card} onAction={onCard} /> : null}
         {words.older ? <OlderMark text={words.older} /> : null}
+        {declined ? null : (
         <div className="lv-vfoot">
           <PictureChips chips={words.chips} onRetry={() => retryPicture()} />
           <span className="lv-sp" />
@@ -295,6 +297,7 @@ export function SceneStage({ S, control, source, narrow, size, offscreen, onJump
           {ready ? <TwoViewsButton two={layout === 2} stacked={split?.split === 'stacked' || (!!pane && paneRects(pane.width, pane.height, 2).split === 'stacked')} onToggle={() => set({ layout: layout === 2 ? 1 : 2 })} /> : null}
           {ready ? <InfoButton open={L.info} onToggle={() => set({ info: !L.info })} /> : null}
         </div>
+        )}
         {details ? <DetailsPopover details={details} narrow={narrow} /> : null}
         {fl.ended ? (
           <FinishedLine

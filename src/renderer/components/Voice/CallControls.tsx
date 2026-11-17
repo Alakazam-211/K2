@@ -195,7 +195,9 @@ function CallButton({
       data-state={state}
       data-on={on ? 'true' : 'false'}
       data-k2-chamfer={variant !== 'topbar' ? 'control' : undefined}
-      className={`relative flex shrink-0 items-center justify-center transition-colors ${variant !== 'topbar' ? SHAPE : ''} ${look} ${dead ? 'opacity-50' : ''}`}
+      // The top bar's small icon buttons take the same ring with no cut:
+      // square in Terminal (its radius tokens are 0), a circle in Glass.
+      className={`relative flex shrink-0 items-center justify-center transition-colors ${SHAPE} ${look} ${dead ? 'opacity-50' : ''}`}
       style={variant !== 'topbar' ? { width: buttonSize(variant), height: buttonSize(variant), ...noDrag } : noDrag}
       onClick={() => {
         if (!dead) onPress()

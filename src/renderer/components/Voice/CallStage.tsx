@@ -40,6 +40,9 @@ function ShareView({ layout, ctl, callId, className }: { layout: ShareLayout; ct
                 data-track={t.key}
                 aria-label={`Show ${t.name} in the middle`}
                 title={`Show ${t.name} in the middle`}
+                // Keyboard focus rings it inside its own box (the column
+                // scrolls, so a ring outside it would be clipped).
+                data-k2-focus=""
                 className="block w-full shrink-0 text-left"
                 onClick={() => pickShare(callId, t.key)}
               >

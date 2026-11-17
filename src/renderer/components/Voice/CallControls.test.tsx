@@ -148,6 +148,16 @@ describe("the controls' look", () => {
     expect(screen.getByTestId('call-topbar-mute').getAttribute('data-k2-chamfer')).toBeNull()
   })
 
+  it("the slim bar's icon buttons show keyboard focus in the look: a circle in Glass, square in Terminal", () => {
+    render(<CallControls variant="topbar" call={call} actions={actions()} video={null} noiseRemoval />)
+    const buttons = Array.from(screen.getByTestId('call-topbar-controls').querySelectorAll('button'))
+    expect(buttons.length).toBe(4)
+    for (const b of buttons) {
+      expect(b.className).toMatch(/(^|\s)k2-focus(\s|$)/)
+      expect(b.className).toContain('rounded-[var(--radius-pill)]')
+    }
+  })
+
   it('the bar under the call is Frost in Glass (a pill) and a raised cut bar in Terminal', () => {
     render(
       <CallControlBar>

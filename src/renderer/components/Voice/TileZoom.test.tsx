@@ -112,6 +112,17 @@ describe('the overlay on a share', () => {
     expect(s.el.getAttribute('aria-label')).toContain("Ada's screen")
   })
 
+  it("the zoom's buttons show keyboard focus in the look: round in Glass, the chip's cut in Terminal", () => {
+    setup()
+    for (const b of Array.from(screen.getByTestId('video-zoom-controls').querySelectorAll('button'))) {
+      expect(b.className).toMatch(/(^|\s)k2-focus(\s|$)/)
+      expect(b.className).toContain('rounded-[var(--radius-pill)]')
+      expect(b.getAttribute('data-k2-chamfer')).toBe('chip')
+      // The cut draws no edge of its own (the chip has none).
+      expect(b.style.getPropertyValue('--k2-ch-w')).toBe('0px')
+    }
+  })
+
   it('+ zooms about the middle and shows how far; Fit goes back; the sink asks for a sharper picture meanwhile', () => {
     const s = setup()
     fireEvent.click(screen.getByTestId('video-zoom-in'))

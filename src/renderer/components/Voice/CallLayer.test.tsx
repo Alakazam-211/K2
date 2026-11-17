@@ -252,6 +252,15 @@ async function cameraOn(): Promise<HTMLElement> {
   return screen.findByTestId('video-stage')
 }
 
+/** A button draws the shared keyboard focus ring in the look: the k2-focus
+ *  class (a solid ring, round in Glass, square in Terminal), and for a
+ *  labelled button its Terminal cut (the cut ring). */
+function expectFocusRing(el: HTMLElement, cut: 'control' | null = 'control'): void {
+  expect(el.tagName).toBe('BUTTON')
+  expect(el.className).toMatch(/(^|\s)k2-focus(\s|$)/)
+  expect(el.getAttribute('data-k2-chamfer')).toBe(cut)
+}
+
 /** A control inside the stage. */
 function inStage(testId: string): HTMLElement {
   return within(screen.getByTestId('video-stage')).getByTestId(testId)
@@ -379,6 +388,12 @@ describe('video on: the stage, and the top bar gives way', () => {
     await waitFor(() => expect(video.sinks()).toEqual([]), { timeout: 3500 })
     const expand = screen.getByTestId('call-bar-expand')
     expect(expand.textContent).toBe('Expand')
+    // Every button on the slim bar shows keyboard focus in the look.
+    expectFocusRing(expand)
+    for (const b of Array.from(screen.getByTestId('call-topbar-controls').querySelectorAll('button'))) {
+      expectFocusRing(b as HTMLElement, null)
+      expect(b.className).toContain('rounded-[var(--radius-pill)]')
+    }
     fireEvent.click(expand)
     expect(await screen.findByTestId('video-stage')).toBeTruthy()
     expect(screen.queryByTestId('call-bar-expand')).toBeNull()
@@ -536,6 +551,7 @@ describe('elsewhere in the app: the slim bar in the top bar', () => {
     expect(within(bar).queryByTestId('call-bar-expand')).toBeNull()
     const back = within(bar).getByTestId('call-bar-back')
     expect(back.textContent).toBe('Back to call')
+    expectFocusRing(back)
     fireEvent.click(back)
     expect(opened.rows).toEqual([{ kind: 'person', address: 'k2:connect:ada::sewlab.k2.dev', workspaceId: null, label: 'Ada' }])
     expect(useCallPlace.getState().compact).toBe(false)
@@ -577,6 +593,7 @@ describe('one call, one home window (this window is main; the app lists main and
     await waitFor(() => expect(video.store.getState().local.camera).not.toBe('off'))
     const here = await screen.findByTestId('call-bar-here')
     expect(here.textContent).toBe('Show call here')
+    expectFocusRing(here)
     expect(screen.queryByTestId('video-stage')).toBeNull()
     expect(video.sinks()).toEqual([])
     // Full screen's chord does nothing here either.
@@ -608,6 +625,7 @@ describe('one call, one home window (this window is main; the app lists main and
     fireEvent.click(await screen.findByTestId('call-topbar-camera'))
     const back = await screen.findByTestId('call-bar-back-to-chat')
     expect(back.textContent).toBe('Back to chat')
+    expectFocusRing(back)
     expect(screen.queryByTestId('call-bar-here')).toBeNull()
     fireEvent.click(back)
     expect(readCallHome()?.owner).toBe('main')
@@ -988,6 +1006,9 @@ describe('a screen share in the middle, the people on the left', () => {
     const pick = screen.getByTestId('call-share-pick')
     expect(pick.dataset.track).toBe('TR_S9')
     expect(pick.getAttribute('aria-label')).toBe("Show Linus's screen in the middle")
+    // Keyboard focus rings it inside its own box (the column scrolls, so a
+    // ring outside would be clipped): cut in Terminal, rounded in Glass.
+    expect(pick.hasAttribute('data-k2-focus')).toBe(true)
     fireEvent.click(pick)
     expect(screen.getByTestId('call-share-layout').dataset.main).toBe('TR_S9')
     expect(screen.getByTestId('call-share-pick').dataset.track).toBe('TR_S7')

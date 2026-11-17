@@ -24,9 +24,13 @@ import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
 
-/** An icon button drawn on the picture (the labels' chip). */
+/** An icon button drawn on the picture (the labels' chip): a circle in
+ *  Glass and the chip's cut in Terminal, with the shared focus ring. */
 const ON_PICTURE =
-  'flex h-6 w-6 items-center justify-center bg-[var(--color-media-label-bg)] text-[var(--color-media-label-text)] opacity-80 transition-opacity hover:opacity-100 focus-visible:opacity-100'
+  'k2-focus flex h-6 w-6 items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-media-label-bg)] text-[var(--color-media-label-text)] opacity-80 transition-opacity hover:opacity-100 focus-visible:opacity-100'
+
+/** The chip's Terminal cut with no edge drawn on it (the chip has none). */
+const ON_PICTURE_CUT = { WebkitAppRegion: 'no-drag', '--k2-ch-w': '0px' } as React.CSSProperties
 
 export function PictureButton({
   label,
@@ -52,8 +56,9 @@ export function PictureButton({
       title={label}
       data-testid={testId}
       disabled={disabled}
+      data-k2-chamfer="chip"
       className={`${cls} disabled:opacity-40`}
-      style={noDrag}
+      style={ON_PICTURE_CUT}
       onClick={onPress}
     >
       {children}

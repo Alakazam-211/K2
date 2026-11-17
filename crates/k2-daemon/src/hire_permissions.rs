@@ -290,10 +290,6 @@ fn switch_row(inp: &StepIn<'_>, h: &Hirer, t: Option<&Target>, handle: &str, act
             Check::Unavailable { code, why } => return refuse(out, code, why),
         }
     }
-    if inp.asked_before.iter().any(|a| a == action) {
-        out.rows.push(Decision::new(action, "card", Some("asked on a card already".into()), None));
-        return;
-    }
     let why_not = match may_give(h, action, spec.floor) {
         Ok(()) if inp.dry_run => {
             out.rows.push(Decision::new(action, "grant", None, None));
@@ -318,6 +314,10 @@ fn switch_row(inp: &StepIn<'_>, h: &Hirer, t: Option<&Target>, handle: &str, act
             out.rows.push(Decision::new(action, "done", None, None));
             out.granted.push(action.into());
             record(inp, &t.cloned(), action, "granted", None);
+        }
+        // Asked by an earlier apply: never twice.
+        Err(_) if inp.asked_before.iter().any(|a| a == action) => {
+            out.rows.push(Decision::new(action, "card", Some("asked on a card already".into()), None));
         }
         Err(c) if cards_on => card(inp, t, action, c, out),
         Err(c) => refuse(out, &c.code, format!("{}; permission cards are off on this server", c.why)),
@@ -428,11 +428,17 @@ fn record(inp: &StepIn<'_>, t: &Option<Target>, action: &str, result: &str, card
 // ── cards waiting for the first start ───────────────────────────────
 
 /// File the cards a hire left for this workspace's first start, once its
-/// Thread exists. `false`: nothing to file yet (no pending cards, or no
-/// Thread: they stay in the lock for the next start).
+/// Thread exists. `false`: nothing to file yet (no pending cards, no Thread,
+/// or the server's permission cards are off: they stay in the lock for a
+/// later start).
 pub(crate) fn file_pending_cards(workspace_id: &str) -> bool {
+    file_pending_cards_with(workspace_id, k2_core::permission::gate::server_on())
+}
+
+/// [`file_pending_cards`] with the server's switch given (lib tests).
+pub(crate) fn file_pending_cards_with(workspace_id: &str, cards_on: bool) -> bool {
     let Some(t) = crate::sidecar_routes::workspace_by_id(workspace_id) else { return false };
-    if !k2_core::hire::template::lock::has_pending_cards(&t.path) || crate::overlay_routes::pinned_chat_of(&t.id).is_none() {
+    if !cards_on || !k2_core::hire::template::lock::has_pending_cards(&t.path) || crate::overlay_routes::pinned_chat_of(&t.id).is_none() {
         return false;
     }
     let taken = match k2_core::hire::template::lock::take_pending_cards(&t.path) {
@@ -467,7 +473,7 @@ pub(crate) fn file_pending_cards_when_ready(workspace_id: &str) {
         Some(w) => w.path,
         None => return,
     };
-    if !k2_core::hire::template::lock::has_pending_cards(&path) {
+    if !k2_core::permission::gate::server_on() || !k2_core::hire::template::lock::has_pending_cards(&path) {
         return;
     }
     for _ in 0..150 {

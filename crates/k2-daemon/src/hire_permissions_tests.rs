@@ -251,7 +251,8 @@ fn with_cards_on_the_rest_goes_to_a_card_now_or_at_the_first_start() {
     let mut l = k2_core::hire::template::lock::read(&path).unwrap().expect("lock");
     l.cards_pending = out.cards_pending.clone();
     k2_core::hire::template::lock::write(&path, &l).unwrap();
-    assert!(!file_pending_cards(&id), "no Thread yet: they wait");
+    assert!(!file_pending_cards_with(&id, true), "no Thread yet: they wait");
+    assert!(!file_pending_cards_with(&id, false), "cards off: they wait");
     assert!(k2_core::hire::template::lock::has_pending_cards(&path));
     {
         let db = k2_core::db::shared();
@@ -259,10 +260,12 @@ fn with_cards_on_the_rest_goes_to_a_card_now_or_at_the_first_start() {
         let conv = uuid::Uuid::new_v4().to_string();
         WorkspaceSession::upsert(&conn, &format!("ws-{conv}"), &id, None, Some(&conv), "claude", "system", "running").expect("pin");
     }
-    assert!(file_pending_cards(&id));
+    assert!(!file_pending_cards_with(&id, false), "cards off on the server: they still wait");
+    assert!(k2_core::hire::template::lock::has_pending_cards(&path));
+    assert!(file_pending_cards_with(&id, true));
     assert!(!k2_core::hire::template::lock::has_pending_cards(&path), "taken once");
     assert!(crate::permission::store::for_workspace(&id, 10).unwrap().iter().any(|r| r.action == "compute.use"));
-    assert!(!file_pending_cards(&id), "nothing left");
+    assert!(!file_pending_cards_with(&id, true), "nothing left");
     assert!(sink().iter().any(|(e, _, o)| e == AUDIT_EVENT && o.starts_with("card-filed compute.use")), "{:?}", sink());
 }
 

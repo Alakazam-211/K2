@@ -47,19 +47,44 @@ export function useStageTiles(ctl: VideoController, people: readonly CallPerson[
   return useMemo(() => withSpeakerEmphasis(videoTiles(tracks, local, people), lastSpeaker), [tracks, local, people, lastSpeaker])
 }
 
-/** The grid of tiles. Each live one zooms (this viewer's only: TileZoom). */
+/** Rows for n tiles (a large one counts 4) over `columns`. */
+export function gridRows(n: number, columns: number): number {
+  return Math.max(1, Math.ceil(n / Math.max(1, columns)))
+}
+
+/** The gap between tiles (Tailwind's gap-2). */
+const TILE_GAP = 'calc(var(--spacing) * 2)'
+
+/** A column's width: the widest 16:9 tile for which `columns` across and
+ *  `rows` down both fit the tiles' box. The box is a size container, so
+ *  `cqw` and `cqh` are its content box: the tiles shrink with the window and
+ *  never run under the controls below it. */
+export function stageTileWidth(columns: number, rows: number): string {
+  const across = `calc((100cqw - ${columns - 1} * ${TILE_GAP}) / ${columns})`
+  const down = `calc((100cqh - ${rows - 1} * ${TILE_GAP}) / ${rows} * 16 / 9)`
+  return `min(${across}, ${down})`
+}
+
+/** The grid of tiles, in a box of its own that takes the room its place
+ *  leaves (the controls sit after it, never over it), the tiles centred in
+ *  it. Each live one zooms (this viewer's only: TileZoom). */
 export function StageGrid({ tiles, ctl, className = '' }: { tiles: ReturnType<typeof videoTiles>; ctl: VideoController; className?: string }): React.JSX.Element {
-  const columns = gridColumns(tiles.reduce((n, t) => n + (t.large ? 4 : 1), 0))
+  const units = tiles.reduce((n, t) => n + (t.large ? 4 : 1), 0)
+  const columns = gridColumns(units)
+  const rows = gridRows(units, columns)
   return (
-    <div
-      data-testid="video-grid"
-      data-columns={columns}
-      className={`grid min-h-0 gap-2 overflow-y-auto p-2 ${className}`}
-      style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
-    >
-      {tiles.map((t) => (
-        <VideoTile key={t.key} tile={t} ctl={ctl} zoomable />
-      ))}
+    <div data-testid="video-grid-box" className={`@container-[size] min-h-0 min-w-0 flex-1 p-2 ${className}`}>
+      <div
+        data-testid="video-grid"
+        data-columns={columns}
+        data-rows={rows}
+        className="grid h-full w-full place-content-center gap-2"
+        style={{ gridTemplateColumns: `repeat(${columns}, ${stageTileWidth(columns, rows)})` }}
+      >
+        {tiles.map((t) => (
+          <VideoTile key={t.key} tile={t} ctl={ctl} zoomable />
+        ))}
+      </div>
     </div>
   )
 }

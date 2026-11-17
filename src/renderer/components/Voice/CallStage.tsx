@@ -68,6 +68,6 @@ export default function CallStage({ ctl, people, callId, className = '' }: CallS
   const tiles = useStageTiles(ctl, people)
   const picked = useCallShare((s) => s.picked)
   const layout = useMemo(() => shareLayout(tiles, people, picked), [tiles, people, picked])
-  if (!layout) return <StageGrid tiles={tiles} ctl={ctl} className={`content-center ${className}`} />
+  if (!layout) return <StageGrid tiles={tiles} ctl={ctl} className={className} />
   return <ShareView layout={layout} ctl={ctl} callId={callId} className={className} />
 }

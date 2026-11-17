@@ -18,9 +18,10 @@ import { CallStageView, useCallStageShown, useCallVideoHere } from './CallLayer'
 import { CompactButton } from './CallViewButtons'
 import CallHereButton, { useCallHereAction } from './CallHereButton'
 
-/** The stage at the top of a conversation: as tall as its tiles need, up to
- *  under half the window, so the messages stay in view. */
-const STAGE_IN_PAGE = 'flex-shrink-0 max-h-[calc(var(--k2-vh)*0.45)]'
+/** The stage at the top of a conversation: under half the window, so the
+ *  messages stay in view. Its height is set, so its tiles fit the room left
+ *  above its controls (StageGrid) instead of running under them. */
+const STAGE_IN_PAGE = 'flex-shrink-0 h-[calc(var(--k2-vh)*0.45)]'
 
 function PlaceStageOrBar({ call }: { call: VoiceCall }): React.JSX.Element {
   const stageShown = useCallStageShown()

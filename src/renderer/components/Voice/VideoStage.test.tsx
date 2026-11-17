@@ -10,7 +10,7 @@ import { FakeVideoEngine, fakeTrack } from '@/lib/voice/fake-video-engine'
 import { FakeVideoDecoder, fakeWebCodecs, RecordingSurface } from '@/lib/voice/fake-webcodecs'
 import type { CallPerson } from '@/lib/voice/video-labels'
 import { createVideoController } from '@/stores/video-core'
-import VideoStage, { gridColumns } from './VideoStage'
+import VideoStage, { gridColumns, gridRows, stageTileWidth } from './VideoStage'
 import { CameraPicker, ScreenPicker, VideoCallButtons, VideoNoticeLine } from './VideoControls'
 
 const people: CallPerson[] = [
@@ -196,6 +196,47 @@ describe('the tiles', () => {
 
   it('picks columns for the tile count', () => {
     expect([1, 2, 4, 5, 9, 10].map(gridColumns)).toEqual([1, 2, 2, 3, 3, 4])
+  })
+
+  it('counts the rows the tiles take', () => {
+    expect([
+      [1, 1],
+      [2, 2],
+      [3, 2],
+      [6, 3],
+      [7, 3],
+      [10, 4],
+    ].map(([n, c]) => gridRows(n, c))).toEqual([1, 1, 2, 2, 3, 3])
+  })
+
+  it('sizes a tile to fit the box both ways: never wider than its column, never taller than its row', () => {
+    const w = stageTileWidth(2, 3)
+    // Across: the box's width over two columns, less the gap between them.
+    expect(w).toContain('(100cqw - 1 * ')
+    expect(w).toContain(') / 2)')
+    // Down: the box's height over three rows, less two gaps, as a 16:9 width.
+    expect(w).toContain('(100cqh - 2 * ')
+    expect(w).toContain(') / 3 * 16 / 9)')
+    expect(w.startsWith('min(')).toBe(true)
+  })
+
+  it('the tiles sit in a box of their own that the controls never share: it takes the room left and the tiles fit inside it', async () => {
+    const s = setup([fakeTrack('7'), fakeTrack('8')])
+    render(<VideoStage ctl={s.ctl} people={people} title="Standup" controls={<div data-testid="the-controls" />} />)
+    await ready(s)
+    const box = await screen.findByTestId('video-grid-box')
+    const grid = screen.getByTestId('video-grid')
+    expect(box.contains(grid)).toBe(true)
+    // A size container: the tiles measure it (cqw, cqh), so they shrink to fit.
+    expect(box.className).toContain('@container-[size]')
+    expect(box.className).toMatch(/\bflex-1\b/)
+    expect(box.className).toMatch(/\bmin-h-0\b/)
+    expect(grid.dataset.rows).toBe('1')
+    // The controls are after the box, never over it.
+    const controls = screen.getByTestId('video-stage-controls')
+    expect(box.contains(controls)).toBe(false)
+    expect(controls.className).toMatch(/\bflex-shrink-0\b/)
+    expect(box.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
 

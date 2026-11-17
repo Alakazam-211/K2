@@ -448,6 +448,12 @@ describe('the call lives in its place: a DM call in its conversation, a voice ro
     expect(view.firstElementChild?.contains(stage)).toBe(true)
     expect(view.lastElementChild).toBe(screen.getByTestId('dm-messages'))
     expect(within(stage).getByTestId('video-tile').dataset.track).toBe('local:camera')
+    // A set height (under half the window), so the tiles fit in the room
+    // above the controls rather than running under them.
+    expect(stage.className).toContain('h-[calc(var(--k2-vh)*0.45)]')
+    const box = within(stage).getByTestId('video-grid-box')
+    expect(box.className).toContain('@container-[size]')
+    expect(box.contains(within(stage).getByTestId('video-stage-controls'))).toBe(false)
     // Once: not in the band, not in the top bar.
     expect(screen.getAllByTestId('video-stage')).toHaveLength(1)
     expect(screen.queryByTestId('call-topbar-controls')).toBeNull()
@@ -1115,6 +1121,25 @@ describe('pop out: the call in its own window', () => {
     fireEvent.click(within(win).getByTestId('call-overlay-leave'))
     await waitFor(() => expect(voice.store.getState().call).toBeNull())
     expect(closeWindow).toHaveBeenCalledTimes(1)
+  })
+
+  it("the call's window keeps the video above its controls: the tiles fit the room left at any window size", async () => {
+    await inCall()
+    await cameraOn()
+    act(() => useCallPopout.setState({ open: true }))
+    render(<CallWindow closeWindow={() => {}} />)
+    const win = screen.getByTestId('call-window')
+    const box = within(win).getByTestId('video-grid-box')
+    const controls = within(win).getByTestId('call-window-controls')
+    // The tiles measure their own box (a size container) and fit inside it.
+    expect(box.className).toContain('@container-[size]')
+    expect(box.className).toMatch(/\bflex-1\b/)
+    expect(box.className).toMatch(/\bmin-h-0\b/)
+    // The bar is the box's sibling, after it: they share no space.
+    expect(box.parentElement).toBe(controls.parentElement)
+    expect(box.contains(controls)).toBe(false)
+    expect(controls.className).toMatch(/\bflex-shrink-0\b/)
+    expect(box.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it("the call's window puts a share in the middle and the people on the left", async () => {

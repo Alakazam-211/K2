@@ -100,11 +100,12 @@ function DemoPanel({
   const ref = useRef<HTMLDivElement>(null)
   useBrowserOverlay({ active: true, ref, kind: 'popover' })
   return (
-    <div ref={ref} className="fixed bottom-3 right-3 z-40 flex max-h-[calc(var(--k2-vh)*0.8)] w-[min(380px,calc(var(--k2-vw)-24px))] flex-col [box-shadow:var(--shadow-3)]">
+    <div ref={ref} className="fixed bottom-3 right-3 z-40 flex h-[min(360px,calc(var(--k2-vh)*0.8))] w-[min(380px,calc(var(--k2-vw)-24px))] flex-col [box-shadow:var(--shadow-3)]">
       <VideoStage
         ctl={ctl}
         people={people}
         title="Video demo (fake engine)"
+        className="flex-1"
         onClose={onClose}
         footer={
           <button

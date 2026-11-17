@@ -70,26 +70,32 @@ pub fn door_head(bytes: &[u8]) -> Option<(String, usize)> {
 /// reads its first request head while this is true.
 pub fn watching() -> bool {
     let now = Instant::now();
+    let store = ft::downloads_dir();
     let mut g = watch().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((at, v)) = *g {
-        if now.duration_since(at) < WATCH_TTL {
+    if let Some((at, v, ref of)) = *g {
+        if *of == store && now.duration_since(at) < WATCH_TTL {
             return v;
         }
     }
     let any = |d: PathBuf| std::fs::read_dir(d).map(|mut rd| rd.next().is_some()).unwrap_or(false);
-    let v = any(ft::uploads_dir()) || any(ft::downloads_dir());
-    *g = Some((now, v));
+    let v = any(ft::uploads_dir()) || any(store.clone());
+    *g = Some((now, v, store));
     v
 }
 
-fn watch() -> &'static Mutex<Option<(Instant, bool)>> {
-    static W: OnceLock<Mutex<Option<(Instant, bool)>>> = OnceLock::new();
+/// The last answer, when, and for which transfer store: the store follows
+/// the K2 home, so an answer for one home never stands for another (one
+/// process, many temp homes in the integration tests; one home in a daemon).
+type Watch = Option<(Instant, bool, PathBuf)>;
+
+fn watch() -> &'static Mutex<Watch> {
+    static W: OnceLock<Mutex<Watch>> = OnceLock::new();
     W.get_or_init(Default::default)
 }
 
 /// A transfer was just made: App addresses start watching now.
 pub fn note_live() {
-    *watch().lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), true));
+    *watch().lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), true, ft::downloads_dir()));
 }
 
 // ── limits ───────────────────────────────────────────────────────────

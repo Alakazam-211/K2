@@ -11,7 +11,7 @@ import { changeAuthors, changeMarks, marksBox, SELF_PID } from './cad-change-mar
 import { daemonCadChangeSource, type CadChangeSource } from './cad-change-source'
 import { changeNote } from './cad-change-words'
 import { ChangeNote, ChangeOutlines } from './CadChangeLayer'
-import { useCadChanges } from './useCadChanges'
+import { useCadChanges, type WhoIs } from './useCadChanges'
 
 export function useDxfLiveChanges(p: {
   drawing: DxfDrawing | null
@@ -25,6 +25,8 @@ export function useDxfLiveChanges(p: {
   onVersion?: (version: number | null) => void
   /** Undo found the drawing can't be changed here: view only, with these words. */
   onOff?: (words: string) => void
+  /** A version's author as a name, from who's on the file. */
+  whoIs?: WhoIs
 }): {
   outlines: React.ReactNode
   note: React.ReactNode
@@ -35,7 +37,7 @@ export function useDxfLiveChanges(p: {
   const scope = useOptionalRoom()?.scope ?? null
   const daemon = useMemo(() => (scope ? daemonCadChangeSource(scope) : null), [scope])
   const source = p.changes === undefined ? daemon : p.changes
-  const live = useCadChanges(p.filePath ? source : null, scope, p.filePath ?? null, { onVersion: p.onVersion, onOff: p.onOff })
+  const live = useCadChanges(p.filePath ? source : null, scope, p.filePath ?? null, { onVersion: p.onVersion, onOff: p.onOff, whoIs: p.whoIs })
   const { drawing } = p
   const marks = useMemo(() => (live.change && drawing ? changeMarks(live.change, live.slots, drawing) : null), [live.change, live.slots, drawing])
   const note = useMemo(() => (live.change && drawing ? changeNote(live.change, drawing) : null), [live.change, drawing])

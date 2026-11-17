@@ -66,7 +66,7 @@ afterEach(() => {
 })
 
 /** Opens framed on the walls by the door (at the whole drawing's fit, a few pixels span them all). */
-async function open(opts: { holds?: Hold[]; locked?: string[]; header?: ModelHeader; writerOff?: string; readOnly?: string } = {}): Promise<void> {
+async function open(opts: { holds?: Hold[]; locked?: string[]; header?: ModelHeader; writerOff?: string; readOnly?: string; names?: Record<string, string>; you?: string } = {}): Promise<void> {
   world = fakeCadWorld({ header: opts.header ?? HEADER, pages: PAGES }, opts)
   renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={world.model} edits={world.edits} changes={world.changes} view="@h:51" />)
   await screen.findByTestId('dxf-shapes')
@@ -166,10 +166,10 @@ describe('selecting', () => {
   })
 })
 
-/** A version from any writer, as the server announces it. */
-async function arrive(version: number): Promise<void> {
+/** A version from any writer, as the server announces it (`by`: its author's pid, when known). */
+async function arrive(version: number, by?: string): Promise<void> {
   await act(async () => {
-    for (const fn of bus.handlers) fn({ kind: 'doc_version_changed', projectId: 'p', workspace: '/ws', rel: 'sampler.dxf', version })
+    for (const fn of bus.handlers) fn({ kind: 'doc_version_changed', projectId: 'p', workspace: '/ws', rel: 'sampler.dxf', version, ...(by ? { by } : {}) })
     await new Promise((r) => setTimeout(r, 0))
   })
 }
@@ -226,12 +226,37 @@ describe('undo', () => {
     expect(screen.queryByTestId('dxf-change-undo')).toBeNull()
   })
 
+  it('no change feed: a version’s author pid is named from who’s on the file', async () => {
+    await open({ names: { 'agent:w_atlas': 'Atlas' } })
+    world.agentMove(['@h:41'], 0, 3)
+    await arrive(8, 'agent:w_atlas')
+    await waitFor(() => expect(screen.getByTestId('dxf-change-words').textContent).toBe('Atlas changed the drawing'))
+    expect(screen.getByTestId('dxf-change-words').getAttribute('data-muted')).toBe('')
+  })
+
+  it('your own pid: no line (your own highlight covers it)', async () => {
+    await open({ names: { 'person:me': 'Rosa' }, you: 'person:me' })
+    world.agentMove(['@h:41'], 0, 3)
+    await arrive(8, 'person:me')
+    await waitFor(() => expect(Number(shape('@h:41').getAttribute('y1'))).toBeCloseTo(5, 6))
+    expect(screen.queryByTestId('dxf-change-note')).toBeNull()
+  })
+
+  it('a pid not on the file: "The drawing was changed"', async () => {
+    await open({ names: { 'agent:w_atlas': 'Atlas' } })
+    world.agentMove(['@h:41'], 0, 3)
+    await arrive(8, 'agent:w_gone')
+    await waitFor(() => expect(screen.getByTestId('dxf-change-words').textContent).toBe('The drawing was changed'))
+  })
+
   it('no change feed: someone else’s version reads the drawing again, with no outlines', async () => {
     await open()
     world.agentMove(['@h:41'], 0, 3)
+    // No author on the version: read again, silently.
     await arrive(8)
     await waitFor(() => expect(Number(shape('@h:41').getAttribute('y1'))).toBeCloseTo(5, 6))
     expect(screen.queryAllByTestId('dxf-change-mark')).toHaveLength(0)
+    expect(screen.queryByTestId('dxf-change-note')).toBeNull()
   })
 })
 

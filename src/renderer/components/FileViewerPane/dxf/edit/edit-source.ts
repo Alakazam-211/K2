@@ -26,6 +26,8 @@ export interface EditSource {
   run(path: string, argv: readonly string[]): Promise<ToolResult>
   /** Agents' holds on the file now; empty when the server can't say. */
   holds(path: string): Promise<Hold[]>
+  /** A pid on the file as a name (who's on it: `name`, else `label`), and whether it's you; from the last read of who, read again when the pid isn't in it. */
+  whoIs(path: string, pid: string): Promise<{ name: string | null; self: boolean }>
   /** Call `fn` whenever a claim on the file is taken or ends. */
   onHoldsChanged(path: string, fn: () => void): () => void
   /** Why the file opens read only, in the server's words, or null when it doesn't say so up front. */
@@ -94,6 +96,17 @@ export function parseHolds(body: unknown): Hold[] {
   return out
 }
 
+/** Each pid in `docs/who`'s roster: its name (else its label), and whether the roster marks it as you. */
+export function parseNames(body: unknown): Map<string, { name: string | null; self: boolean }> {
+  const out = new Map<string, { name: string | null; self: boolean }>()
+  const roster = isObj(body) && Array.isArray(body.roster) ? body.roster : []
+  for (const e of roster) {
+    if (!isObj(e) || typeof e.pid !== 'string') continue
+    out.set(e.pid, { name: text(e.name) ?? text(e.label), self: e.self === true || e.you === true || e.me === true })
+  }
+  return out
+}
+
 /** `docs/cores?path=`'s `file.read_only_reason`: why a drawing opens read only, in the server's words, or null. */
 export function readOnlyOf(body: unknown): string | null {
   const file = isObj(body) && isObj(body.file) ? body.file : null
@@ -120,6 +133,13 @@ export function noteWriterOff(hostKey: string, words: string): void {
 }
 
 export function daemonEditSource(scope: ServerScope): EditSource {
+  // The last read of who, per file: holds and names come from the same answer.
+  const who = new Map<string, unknown>()
+  const readWho = async (path: string): Promise<unknown> => {
+    const body = await daemonCliGet<unknown>(scope, WHO_ROUTE, { path })
+    who.set(path, body)
+    return body
+  }
   return {
     canWrite: scopeMayWrite(scope, TOOL_ROUTE),
     async run(path, argv) {
@@ -133,9 +153,18 @@ export function daemonEditSource(scope: ServerScope): EditSource {
     },
     async holds(path) {
       try {
-        return parseHolds(await daemonCliGet<unknown>(scope, WHO_ROUTE, { path }))
+        return parseHolds(await readWho(path))
       } catch {
         return []
+      }
+    },
+    async whoIs(path, pid) {
+      const known = parseNames(who.get(path)).get(pid)
+      if (known) return known
+      try {
+        return parseNames(await readWho(path)).get(pid) ?? { name: null, self: false }
+      } catch {
+        return { name: null, self: false }
       }
     },
     onHoldsChanged(path, fn) {
@@ -185,6 +214,9 @@ export function fixtureEditSource(
     },
     async holds() {
       return now
+    },
+    async whoIs(_path, pid) {
+      return { name: now.find((h) => h.pid === pid)?.name ?? null, self: false }
     },
     onHoldsChanged(_path, fn) {
       listeners.add(fn)

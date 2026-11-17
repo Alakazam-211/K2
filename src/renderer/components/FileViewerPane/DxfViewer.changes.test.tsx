@@ -107,15 +107,16 @@ describe('DxfViewer: a new version is highlighted', () => {
     expect(screen.queryByTestId('dxf-change-undo')).toBeNull()
   })
 
-  it('no change feed: the drawing is read again, with a quiet line naming who when the version says, and no outlines', async () => {
+  it('no change feed: the drawing is read again, with a quiet line when the version names its author, and no outlines', async () => {
     const source = fixtureCadChangeSource({})
     await open(source)
     await act(async () => {
-      for (const fn of bus.handlers) fn({ kind: 'doc_version_changed', projectId: 'p', workspace: '/ws', rel: 'drawings/plan.dxf', version: 42, by: { name: 'Atlas' } } as DocVersionChangedEvent)
+      // An author this viewer can't name: the plain line.
+      for (const fn of bus.handlers) fn({ kind: 'doc_version_changed', projectId: 'p', workspace: '/ws', rel: 'drawings/plan.dxf', version: 42, by: 'agent:w_unknown' })
       await vi.advanceTimersByTimeAsync(0)
     })
     const words = screen.getByTestId('dxf-change-words')
-    expect(words.textContent).toBe('Atlas changed the drawing')
+    expect(words.textContent).toBe('The drawing was changed')
     expect(words.getAttribute('data-muted')).toBe('')
     expect(marks()).toHaveLength(0)
     expect(screen.queryByTestId('dxf-change-undo')).toBeNull()

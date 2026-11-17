@@ -68,6 +68,10 @@ describe('daemonCadChangeSource', () => {
     const hint = 'K2 can’t save drawing edits yet; this file opens read-only.'
     expect(await refuse(409, 'cad_writer_disabled', hint)).toEqual({ ok: false, words: hint, off: hint })
     expect(await refuse(403, 'edit_forbidden')).toEqual({ ok: false, words: 'You can’t change this drawing.' })
+    expect(await refuse(400, 'bad_request')).toEqual({ ok: false, words: 'K2 couldn’t undo this. Please report it with the file.' })
+    // Only the full codes: a short form is just the server's message.
+    expect(await refuse(409, 'not_latest', 'raw words')).toEqual({ ok: false, words: 'raw words' })
+    expect(await refuse(409, 'stale', 'raw words')).toEqual({ ok: false, words: 'raw words' })
     expect(await refuse(403, 'core_off', 'Drawings are off on this server.')).toEqual({ ok: false, words: 'Drawings are off on this server.', off: 'Drawings are off on this server.' })
     cli.post.mockRejectedValueOnce(new DaemonHttpError('route not found', 404, null))
     expect(await source.revert('/w/p.dxf', 42, DIGEST)).toEqual({ ok: false, words: 'Undo isn’t on this server yet.' })

@@ -183,6 +183,7 @@ export function DxfViewer({ text, filePath, view, changes, model, edits }: {
   }
   // An undo that finds the drawing can't be changed here opens it view only (editing is set up below).
   const viewOnlyRef = useRef<(words: string) => void>(() => {})
+  const whoIsRef = useRef<(pid: string) => Promise<{ name: string | null; self: boolean }>>(async () => ({ name: null, self: false }))
   const live = useDxfLiveChanges({
     drawing,
     filePath,
@@ -191,6 +192,7 @@ export function DxfViewer({ text, filePath, view, changes, model, edits }: {
     padUnits,
     onVersion: () => setReads((n) => n + 1),
     onOff: (words) => viewOnlyRef.current(words),
+    whoIs: (pid) => whoIsRef.current(pid),
   })
   const modelPart = drawing?.header && drawing.rows && drawing.version !== undefined ? drawing : null
   const editDrawing = useMemo(
@@ -200,6 +202,7 @@ export function DxfViewer({ text, filePath, view, changes, model, edits }: {
   const editing = useDxfEdit({ drawing: editDrawing, filePath, edits, live, reload: () => setReads((n) => n + 1), padUnits })
   toolRef.current = editing.tool
   viewOnlyRef.current = editing.goViewOnly
+  whoIsRef.current = editing.whoIs
 
   // Gestures write the viewBox straight to the DOM: no React render per frame.
   // A layout effect: the listeners are bound in the same commit that shows

@@ -38,6 +38,8 @@ export function useDxfEdit(p: {
   viewOnly: React.ReactNode
   onKey: (e: React.KeyboardEvent) => void
   goViewOnly: (words: string) => void
+  /** A version's author as a name, from who's on the file. */
+  whoIs: (pid: string) => Promise<{ name: string | null; self: boolean }>
 } {
   const scope = useOptionalRoom()?.scope ?? null
   const daemon = useMemo(() => (scope ? daemonEditSource(scope) : null), [scope])
@@ -77,7 +79,8 @@ export function useDxfEdit(p: {
 
   const held = useMemo(() => (p.drawing ? heldHandles(edit.holds, edit.rows, p.drawing.header) : new Map<string, string>()), [edit.holds, edit.rows, p.drawing])
 
-  if (!p.drawing) return { tool: null, marks: null, over: null, panel: null, viewOnly: null, onKey: () => {}, goViewOnly: edit.goViewOnly }
+  const whoIs = async (pid: string) => (source && p.filePath ? source.whoIs(p.filePath, pid) : { name: null, self: false })
+  if (!p.drawing) return { tool: null, marks: null, over: null, panel: null, viewOnly: null, onKey: () => {}, goViewOnly: edit.goViewOnly, whoIs }
 
   const onKey = (e: React.KeyboardEvent): void => {
     if (e.key !== 'Escape' || e.defaultPrevented) return
@@ -90,6 +93,7 @@ export function useDxfEdit(p: {
     tool,
     onKey,
     goViewOnly: edit.goViewOnly,
+    whoIs,
     marks: (
       <>
         <EditMarks selection={edit.selection} byHandle={edit.byHandle} held={held} slots={p.live.slots} pad={p.padUnits()} />

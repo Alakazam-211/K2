@@ -48,13 +48,11 @@ export type CadChanges = {
   meet: (pids: readonly string[]) => void
 }
 
-/** The name a version event gives its writer, when it gives one. */
-function writerOf(e: object): string | null {
-  const by = (e as { by?: unknown }).by
-  if (typeof by === 'string' && by.trim()) return by.trim()
-  if (by && typeof by === 'object' && typeof (by as { name?: unknown }).name === 'string') return ((by as { name: string }).name || '').trim() || null
-  return null
-}
+/** Who a pid is on this file: their name, and whether it's you. */
+export type WhoIs = (pid: string) => Promise<{ name: string | null; self: boolean }>
+
+/** The quiet line for someone else's version, when the server can't say what changed. */
+export const SOMEONE_CHANGED = 'The drawing was changed'
 
 export function useCadChanges(
   source: CadChangeSource | null,
@@ -65,6 +63,8 @@ export function useCadChanges(
     onVersion?: (version: number | null) => void
     /** Undo found the drawing can't be changed here: open it view only, with these words. */
     onOff?: (words: string) => void
+    /** A version's author (its pid) as a name, from who's on the file. */
+    whoIs?: WhoIs
   } = {},
 ): CadChanges {
   const reduced = useReducedMotion()
@@ -82,6 +82,9 @@ export function useCadChanges(
   const seen = useRef<number | null>(null)
   const seq = useRef(0)
   const authors = useRef<string[]>([])
+  /** Versions you made here, and your pid once a version's event names it. */
+  const mine = useRef(new Set<number>())
+  const selfPid = useRef<string | null>(null)
 
   useEffect(() => {
     run.current = null
@@ -94,23 +97,25 @@ export function useCadChanges(
     return onDocVersionChanged(scope, (e) => {
       if (docEventFilePath(e) !== path) return
       setHead((h) => (h === null || e.version > h ? e.version : h))
+      const by = typeof e.by === 'string' && e.by ? e.by : null
+      if (by && mine.current.has(e.version)) selfPid.current = by
       if (e.version === seen.current) return
       seen.current = e.version
       cbs.current.onVersion?.(e.version)
-      const who = writerOf(e)
       const now = Date.now()
       const r = run.current
       const from = r && e.version === r.to + 1 && now - r.at < RUN_MS ? r.from : e.version - 1
-      const mine = ++seq.current
-      void source.change(path, from, e.version).then((c) => {
-        if (mine !== seq.current) return
-        // No change feed on this server: the drawing is read again, and the note says who, with no outlines.
+      const ask = ++seq.current
+      void source.change(path, from, e.version).then(async (c) => {
+        if (ask !== seq.current) return
+        // No change feed on this server: the drawing is read again and, when the version says who (not you), a quiet line names them.
         if (!c) {
-          if (who) {
-            setChange(null)
-            setPhase(null)
-            setQuiet(`${who} changed the drawing`)
-          }
+          if (!by || by === selfPid.current) return
+          const who = (await cbs.current.whoIs?.(by)) ?? { name: null, self: false }
+          if (ask !== seq.current || who.self) return
+          setChange(null)
+          setPhase(null)
+          setQuiet(who.name ? `${who.name} changed the drawing` : SOMEONE_CHANGED)
           return
         }
         setQuiet(null)
@@ -165,6 +170,7 @@ export function useCadChanges(
   )
 
   const showOwn = useCallback((c: CadChange, after: string | null = null) => {
+    mine.current.add(c.to)
     setDigest(after)
     seq.current++
     seen.current = c.to

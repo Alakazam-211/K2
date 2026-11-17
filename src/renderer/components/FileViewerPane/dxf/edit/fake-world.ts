@@ -55,11 +55,12 @@ export type FakeWorld = {
 export function fakeCadWorld(
   fx: { header: ModelHeader; pages: Record<string, ModelPage[]> },
   /**
+   * `names`: who's on the file (pid → name; `you` marks your own pid);
    * `locked`: layers locked in the file since the viewer read it (the header shown doesn't say);
    * `writerOff`: the server can't save drawing edits, and says so only when an edit is tried (its words);
    * `readOnly`: the server says up front the file opens read only (its words).
    */
-  opts: { holds?: Hold[]; locked?: string[]; writerOff?: string; readOnly?: string } = {},
+  opts: { holds?: Hold[]; locked?: string[]; writerOff?: string; readOnly?: string; names?: Record<string, string>; you?: string } = {},
 ): FakeWorld {
   let header = structuredClone(fx.header)
   const pages = structuredClone(fx.pages)
@@ -172,6 +173,7 @@ export function fakeCadWorld(
         return r
       },
       holds: async () => holds,
+      whoIs: async (_p, pid) => ({ name: opts.names?.[pid] ?? holds.find((h) => h.pid === pid)?.name ?? null, self: pid === opts.you }),
       onHoldsChanged: (_p, fn) => {
         holdListeners.add(fn)
         return () => void holdListeners.delete(fn)

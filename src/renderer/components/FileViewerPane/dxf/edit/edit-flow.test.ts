@@ -193,6 +193,19 @@ describe('daemonEditSource', () => {
     expect(readOnlyOf({ read_only_reason: 'not where it lives' })).toBeNull()
   })
 
+  it('a pid as a name: from the last read of who (name, else label), read again when it isn’t there', async () => {
+    const src2 = daemonEditSource({ hostKey: 'host-n' } as ServerScope)
+    cli.get.mockReset()
+    cli.get.mockResolvedValueOnce({ roster: [{ pid: 'agent:w_atlas', name: 'Atlas', kind: 'agent', claims: [] }] })
+    await src2.holds('/w/a.dxf')
+    expect(await src2.whoIs('/w/a.dxf', 'agent:w_atlas')).toEqual({ name: 'Atlas', self: false })
+    expect(cli.get).toHaveBeenCalledTimes(1)
+    cli.get.mockResolvedValueOnce({ roster: [{ pid: 'agent:w_kai', label: 'Kai', kind: 'agent' }] })
+    expect(await src2.whoIs('/w/a.dxf', 'agent:w_kai')).toEqual({ name: 'Kai', self: false })
+    cli.get.mockResolvedValueOnce({ roster: [] })
+    expect(await src2.whoIs('/w/a.dxf', 'agent:w_gone')).toEqual({ name: null, self: false })
+  })
+
   it('holds are read again when a claim on this file is taken or ends', () => {
     const fn = vi.fn()
     const off = src.onHoldsChanged('/ws/drawings/a.dxf', fn)

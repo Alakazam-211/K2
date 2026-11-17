@@ -27,6 +27,7 @@ export const UNDO_WORDS = {
   forbidden: 'You can’t change this drawing.',
   coreOff: 'Drawing edits are off on this server; this file opens read-only.',
   missing: 'Undo isn’t on this server yet.',
+  badRequest: 'K2 couldn’t undo this. Please report it with the file.',
 } as const
 
 export interface CadChangeSource {
@@ -83,6 +84,8 @@ export function revertRefused(e: unknown, onWriterOff?: (words: string) => void)
     }
     case 'edit_forbidden':
       return { ok: false, words: UNDO_WORDS.forbidden }
+    case 'bad_request':
+      return { ok: false, words: UNDO_WORDS.badRequest }
     case 'core_off': {
       const words = hint ?? UNDO_WORDS.coreOff
       return { ok: false, words, off: words }

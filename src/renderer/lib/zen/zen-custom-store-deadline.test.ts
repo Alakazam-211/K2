@@ -153,7 +153,7 @@ describe('k2:canvas@1 Compute load on the store', () => {
     const at = Math.floor(Date.now() / 1000)
     const d = daemon([
       never,
-      () => Promise.resolve({ at: at + 50, controller: 'this.k2.dev', nodes: [node('z13flow', { running: 1, cpu: { freeMillis: 20000, totalMillis: 24000, idleMillis: 24000 } })] }),
+      () => Promise.resolve({ at: at + 50, controller: 'this.k2.dev', nodes: [node('test-node', { running: 1, cpu: { freeMillis: 20000, totalMillis: 24000, idleMillis: 24000 } })] }),
     ])
     const store = createZenCustomStore(d.deps)
     const dom = new JSDOM(HTML.replace(/<script[^>]*><\/script>/g, '').replace(/<link[^>]*>/g, ''), { runScripts: 'outside-only', pretendToBeVisual: true })
@@ -192,7 +192,7 @@ describe('k2:canvas@1 Compute load on the store', () => {
     await vi.advanceTimersByTimeAsync(30_000)
     expect(d.calls).toHaveLength(2)
     const card = doc.querySelector('.cl-node')
-    expect(card.querySelector('.cl-name').textContent).toBe('z13flow')
+    expect(card.querySelector('.cl-name').textContent).toBe('test-node')
     expect(card.querySelector('.cl-count').textContent).toBe('1/2')
     expect(doc.querySelector('.cv-tile-note').hidden).toBe(true)
   })

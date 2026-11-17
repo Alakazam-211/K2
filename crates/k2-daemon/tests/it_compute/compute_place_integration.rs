@@ -2422,7 +2422,7 @@ async fn an_auto_job_moves_when_another_node_frees_and_says_why_until_then() {
 
 // ── the line already waiting on a node (0.46.15) ─────────────────────
 
-/// A shared node like z13flow on 11-16: 24 CPUs, 64 GB, 2 slots, this
+/// A shared test node as on 11-16: 24 CPUs, 64 GB, 2 slots, this
 /// server's share runs 2. Its quote says a 2 GB job starts now: k2-node
 /// quotes for a workspace with nothing there.
 fn line_node_offer(rev: u64, running: u32, queued: u32) -> Offer {
@@ -2463,7 +2463,7 @@ fn node_queued(node: &str, job: &str, pos: u32) {
     compute_ws::test_frame(node, Frame::State(st));
 }
 
-/// K2 Engine 11-16 (z13flow): a big shared node with free CPU, where this
+/// K2 Engine 11-16 (a test node): a big shared node with free CPU, where this
 /// workspace (1 job at a time there) runs 1 and has 3 waiting, quoted
 /// "starts now". A new auto job goes to the smaller node that starts it
 /// now, not there for its cache (that wait is an hour, not the quote's

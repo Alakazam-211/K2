@@ -1,5 +1,5 @@
 //! Clock skew is re-measured from the server's clock ping (0.46.15), not
-//! only at attach. z13flow, 2026-11-16: a flat battery reset its RTC, the
+//! only at attach. A test node, 2026-11-16: a flat battery reset its RTC, the
 //! node attached on the wrong clock, NTP then stepped the clock 17 h, and
 //! `k2-node status` / `k2 compute nodes` kept showing -61935 s until the
 //! session reconnected.

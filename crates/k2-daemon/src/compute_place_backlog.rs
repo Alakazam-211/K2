@@ -1,13 +1,13 @@
 //! The line already waiting on a node (0.46.15, a child of `compute_place`).
 //!
-//! The field case (K2 Engine, 11-16): z13flow, a shared node with 2 slots,
+//! The field case (K2 Engine, 11-16): a test node, shared, with 2 slots,
 //! ran 1 job and had 20 of 24 CPUs unreserved, while 9 auto jobs waited in
 //! its queue for up to 10 minutes and other Linux nodes had room. The
 //! queued jobs were one workspace's, held by its grant there (1 at a
 //! time). The node's quote is for a job of a workspace with nothing there
 //! (k2-node's `queue::quote`), so it said "starts now", and placement took
 //! that as the job's wait: 0. Every job of that workspace that no node
-//! could start now went to z13flow (the shortest wait), and a `--cache`
+//! could start now went to that test node (the shortest wait), and a `--cache`
 //! job whose cache lived there waited there (a wait under 15 min), then
 //! wasn't moved for 15 min.
 //!

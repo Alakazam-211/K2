@@ -7,7 +7,8 @@
 //   - "Move by" in drawing units, for exact moves; "Rotate by" in degrees
 //     and "Scale by" a factor, both about the selection's centre;
 //   - a block reference's attributes as rows you can change (Enter saves),
-//     checked as you type; a text's value shown, not editable here yet;
+//     checked as you type; a single-line text's value the same way; a
+//     multi-line text's shown, not editable here yet;
 //   - the last refusal, in plain words.
 // With the drawing view only, it lists what's selected, with one quiet
 // "View only" line (the header line says why); red is for refusals only.
@@ -62,24 +63,50 @@ function Row({ k, v, testId }: { k: string; v: React.ReactNode; testId?: string 
 }
 
 function AttribRow({ a, nth, insert, edit, utf8 }: { a: Attrib; nth: number | null; insert: string; edit: CadEdit; utf8: boolean }): React.JSX.Element {
-  const [draft, setDraft] = useState(a.value)
+  return (
+    <ValueField
+      label={nth ? `${a.tag} (${ordinal(nth)})` : a.tag}
+      value={a.value}
+      constant={a.constant}
+      edit={edit}
+      utf8={utf8}
+      save={(v) => void edit.relabel(insert, a.tag, v, nth)}
+      testId="dxf-attrib"
+      tag={a.tag}
+    />
+  )
+}
+
+/** One value you can change in the panel, checked as you type: Enter saves, Esc undoes the typing. */
+function ValueField(p: {
+  label: string
+  value: string
+  constant?: boolean
+  text?: boolean
+  edit: CadEdit
+  utf8: boolean
+  save: (value: string) => void
+  testId: string
+  tag?: string
+}): React.JSX.Element {
+  const { value, edit } = p
+  const [draft, setDraft] = useState(value)
   const id = useId()
-  useEffect(() => setDraft(a.value), [a.value])
-  const problem = attribProblem(draft, { utf8 })
-  const changed = draft !== a.value
-  const label = nth ? `${a.tag} (${ordinal(nth)})` : a.tag
+  useEffect(() => setDraft(value), [value])
+  const problem = attribProblem(draft, { utf8: p.utf8, text: p.text })
+  const changed = draft !== value
   const save = () => {
     if (!changed || problem || edit.busy) return
-    void edit.relabel(insert, a.tag, draft, nth)
+    p.save(draft)
   }
   return (
-    <div className="py-1" data-testid="dxf-attrib-row" data-tag={a.tag}>
+    <div className="py-1" data-testid={`${p.testId}-row`} data-tag={p.tag}>
       <label htmlFor={id} className={`${LABEL} block pb-0.5`}>
-        {label}
+        {p.label}
       </label>
-      {a.constant ? (
+      {p.constant ? (
         <p className="type-hint m-0 text-[var(--color-text-primary)]">
-          {a.value} <span className="text-[var(--color-text-secondary)]">· set by the block</span>
+          {value} <span className="text-[var(--color-text-secondary)]">· set by the block</span>
         </p>
       ) : (
         <>
@@ -96,15 +123,15 @@ function AttribRow({ a, nth, insert, edit, utf8 }: { a: Attrib; nth: number | nu
               // Esc in the field never clears the selection: it undoes the typing, or leaves the field.
               if (e.key === 'Escape') {
                 e.stopPropagation()
-                if (changed) setDraft(a.value)
+                if (changed) setDraft(value)
                 else e.currentTarget.blur()
               }
             }}
             className="w-full"
-            data-testid="dxf-attrib-input"
+            data-testid={`${p.testId}-input`}
           />
           {problem ? (
-            <p id={`${id}-why`} className="type-hint m-0 pt-0.5 text-[var(--color-status-error-text)]" data-testid="dxf-attrib-problem">
+            <p id={`${id}-why`} className="type-hint m-0 pt-0.5 text-[var(--color-status-error-text)]" data-testid={`${p.testId}-problem`}>
               {problem}
             </p>
           ) : changed ? (
@@ -162,6 +189,7 @@ export function SelectionPanel({ edit, header, slots }: { edit: CadEdit; header:
   const holds = holdsOn(edit.selection, edit.holds, rows, header)
   const controls = edit.canEdit
   const isText = one && (one.kind === 'TEXT' || one.kind === 'MTEXT')
+  const textEditable = one?.kind === 'TEXT' && controls && !reasons.length
   const attribs = one?.kind === 'INSERT' ? attribsOf(one) : []
   const utf8 = writesUtf8(header.acadver)
   return (
@@ -246,11 +274,15 @@ export function SelectionPanel({ edit, header, slots }: { edit: CadEdit; header:
           )}
         </div>
       ) : null}
-      {isText ? (
+      {isText && textEditable ? (
+        <div className="pt-2" data-testid="dxf-edit-text">
+          <ValueField label="Text" value={textOf(one)} text edit={edit} utf8={utf8} save={(v) => void edit.setText(one.h, v)} testId="dxf-text" />
+        </div>
+      ) : isText ? (
         <div className="pt-2" data-testid="dxf-edit-text">
           <p className={`${LABEL} m-0`}>Text</p>
           <p className="type-hint m-0 whitespace-pre-wrap break-words text-[var(--color-text-primary)]">{textOf(one)}</p>
-          {controls ? <p className={`${LABEL} m-0 pt-0.5`}>Can’t edit this text here yet.</p> : null}
+          {controls && one.kind === 'MTEXT' ? <p className={`${LABEL} m-0 pt-0.5`}>Multi-line text: later.</p> : null}
         </div>
       ) : null}
       {edit.busy ? (

@@ -7,6 +7,8 @@
 //     all about the selection's centre;
 //   - Scale: "Scale by" a factor above 0 in the panel, and the corner
 //     handles (a ghost scales the same both ways; Shift: 0.25 steps);
+//   - Text: a single-line text's value set in the panel with a label's
+//     checks; multi-line text read only;
 //   - each runs a dry run, then the commit with --expect, and shows as yours
 //     with Undo; a refusal says why and the ghost goes back;
 //   - a kind the verbs can't change has none of these.
@@ -202,11 +204,51 @@ describe('scaling', () => {
     expect(world.edits.calls[1].slice(0, 9)).toEqual(['entity', 'scale', '@h:41', '--factor', '1.5', '--about', '5,2', '--unit', 'mm'])
   })
 
-  it('kinds the verbs can’t change have no Scale by', async () => {
+  it('kinds the verbs can’t change have no Scale by (and no Move by or Rotate by)', async () => {
     await open()
     click('@h:6B')
     expect(screen.getByTestId('dxf-edit-cant').textContent).toContain('Dimensions can’t be changed here yet.')
     expect(screen.queryByTestId('dxf-scale-by')).toBeNull()
+    expect(screen.queryByTestId('dxf-move-by')).toBeNull()
+    expect(screen.queryByTestId('dxf-rotate-by')).toBeNull()
     expect(screen.queryByTestId('dxf-handle-size')).toBeNull()
+  })
+})
+
+describe('text', () => {
+  it('a single-line text’s value is editable in the panel: Enter runs text set, shown as yours', async () => {
+    await open()
+    click('@h:5C')
+    const input = screen.getByTestId('dxf-text-input') as HTMLInputElement
+    expect(input.value).toBe('ROOM 101')
+    fireEvent.change(input, { target: { value: 'ROOM 102' } })
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' })
+    })
+    await waitFor(() => expect(world.edits.calls).toHaveLength(2))
+    expect(world.edits.calls[0]).toEqual(['text', 'set', '@h:5C', '--value', 'ROOM 102', '--base', '7', '--json', '--dry-run'])
+    expect((await screen.findByTestId('dxf-change-note')).textContent).toContain('You edited text on ANNO')
+    await waitFor(() => expect((screen.getByTestId('dxf-text-input') as HTMLInputElement).value).toBe('ROOM 102'))
+  })
+
+  it('the same checks as a label’s, in a text’s words; nothing is sent while one fails', async () => {
+    await open()
+    click('@h:5C')
+    const input = screen.getByTestId('dxf-text-input')
+    fireEvent.change(input, { target: { value: 'a'.repeat(256) } })
+    expect(screen.getByTestId('dxf-text-problem').textContent).toBe('Too long: 256 bytes, and a line of text holds 255.')
+    fireEvent.change(input, { target: { value: 'tab\there' } })
+    expect(screen.getByTestId('dxf-text-problem').textContent).toBe('Remove the hidden character, such as a tab.')
+    fireEvent.change(input, { target: { value: '--json' } })
+    expect(screen.getByTestId('dxf-text-problem').textContent).toBe('Text can’t start with “--” yet.')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(world.edits.calls).toHaveLength(0)
+  })
+
+  it('multi-line text stays read only', async () => {
+    await open()
+    click('@h:60')
+    expect(screen.getByTestId('dxf-edit-text').textContent).toContain('Multi-line text: later.')
+    expect(screen.queryByTestId('dxf-text-input')).toBeNull()
   })
 })

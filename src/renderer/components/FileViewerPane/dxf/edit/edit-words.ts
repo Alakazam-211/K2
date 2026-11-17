@@ -116,11 +116,12 @@ const name = (d: Record<string, unknown>): string | null => {
   return null
 }
 
-function valueWords(message: string): string {
-  if (/line break|control/i.test(message)) return 'A label must be one line, with no hidden characters.'
-  if (/\\U\+/i.test(message)) return 'A label can’t contain “\\U+”. The file would read it as a character code.'
+function valueWords(message: string, text: boolean): string {
+  const noun = text ? 'Text' : 'A label'
+  if (/line break|control/i.test(message)) return `${noun} must be one line, with no hidden characters.`
+  if (/\\U\+/i.test(message)) return `${noun} can’t contain “\\U+”. The file would read it as a character code.`
   if (/code page|character/i.test(message)) return 'One of its characters can’t be saved in this drawing.'
-  if (/255|long/i.test(message)) return 'It’s longer than the 255 bytes a label can hold.'
+  if (/255|long/i.test(message)) return `It’s longer than the 255 bytes ${text ? 'a line of text' : 'a label'} can hold.`
   return 'It can’t be saved in this drawing.'
 }
 
@@ -146,6 +147,8 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
     case 'DXF-E020':
       return plain('That layer isn’t in the drawing anymore. The drawing has been refreshed.', true)
     case 'DXF-E021':
+      // Text set takes single-line text only.
+      if (ctx.verb === 'text') return plain('Only single-line text can be changed here. Change multi-line text in your CAD app.')
       return plain(whyWords(whyOf(e.message)))
     case 'DXF-E022':
       return plain('The drawing’s units changed. The drawing has been refreshed; try again.', true)
@@ -178,7 +181,7 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
     case 'DXF-E053':
       return plain('It uses a linetype or text style the drawing doesn’t have.')
     case 'DXF-E054':
-      return plain(valueWords(e.message))
+      return plain(valueWords(e.message, ctx.verb === 'text'))
     case 'DXF-E090':
       return plain(CHECK_FAILED)
     case 'CAD-E004':

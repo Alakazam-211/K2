@@ -67,6 +67,9 @@ export const attribArgv = (insert: string, tag: string, value: string, nth?: num
   ...(nth ? ['--nth', String(nth)] : []),
 ]
 
+/** Set a single-line text's value. */
+export const textSetArgv = (text: string, value: string): string[] => ['text', 'set', text, '--value', value]
+
 /** The kit's flags on an edit: the version shown, as data, and a dry run or the digest to store. */
 export function withKit(argv: readonly string[], k: { base: number; dryRun?: boolean; expect?: string }): string[] {
   return [...argv, '--base', String(k.base), '--json', ...(k.dryRun ? ['--dry-run'] : []), ...(k.expect ? ['--expect', k.expect] : [])]

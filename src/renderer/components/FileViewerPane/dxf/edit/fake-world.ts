@@ -3,7 +3,7 @@
 // on them the way the CAD pack answers (`mpc.result/1` and `cad.change/1`).
 // A move shifts every point an entity has, a turn turns them (and its
 // angles) about the given point, a scale scales them (and its sizes); an
-// attribute set changes its value; a locked layer, a kind the verbs don't change, the wrong unit, a
+// attribute set or a text set changes its value; a locked layer, a kind the verbs don't change, the wrong unit, a
 // stale `--expect` or an overlap since `--base` is refused with the pack's
 // id. A person is never refused by a hold. Each landed call makes a version.
 
@@ -143,7 +143,7 @@ export function fakeCadWorld(
     const missing = addrs.find((_a, i) => !rows[i])
     if (missing) return refuse(verb, base, 'CAD-E010', `${missing} names no entity`, 4)
     const found = rows as ModelRow[]
-    const fields = verb === 'attrib set' ? ['text'] : ['geom']
+    const fields = verb === 'attrib set' || verb === 'text set' ? ['text'] : ['geom']
     for (const r of found) {
       const why = editReason(r, header)
       if (why === 'locked-layer' || opts.locked?.includes(r.layer)) return refuse(verb, base, 'DXF-E045', `${r.h} is on a locked layer`)
@@ -188,6 +188,15 @@ export function fakeCadWorld(
       const nextAttribs = attribs.map((x) => (x === a ? { ...x, value, text: x.text ? { ...x.text, plain: value, runs: [{ text: value }] } : x.text } : x))
       next = {
         rows: [{ ...r, geom: { ...r.geom, attribs: nextAttribs } }],
+        ents: [{ address: r.h, op: 'changed', kind: r.kind, layer: r.layer, owner: 'model', fields, bbox_before: r.bbox, bbox_after: r.bbox, bbox_q: r.bbox_q ?? 'exact', version: null, by: null, identity: null }],
+      }
+    } else if (verb === 'text set') {
+      const r = found[0]
+      const value = flag(argv, '--value') ?? ''
+      if (r.kind !== 'TEXT') return refuse(verb, base, 'DXF-E021', `${r.h} isn't changed by text set (not single-line text)`)
+      if (r.geom?.plain === value) return result(verb, base, { dry_run: dry, stdout: 'no change: the text is already that' })
+      next = {
+        rows: [{ ...r, geom: { ...r.geom, plain: value, runs: [{ text: value }] } }],
         ents: [{ address: r.h, op: 'changed', kind: r.kind, layer: r.layer, owner: 'model', fields, bbox_before: r.bbox, bbox_after: r.bbox, bbox_q: r.bbox_q ?? 'exact', version: null, by: null, identity: null }],
       }
     } else {

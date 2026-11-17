@@ -80,6 +80,13 @@ describe('refusalWords', () => {
     expect(v('a \\U+ sequence, which the format reads as an escape')).toMatch(/\\U\+/)
     expect(v("a character this file's code page can't name")).toMatch(/character/)
   })
+
+  it('text set: in a text’s words, and anything but single-line text says so', () => {
+    const t = (id: string, m: string) => say(id, m, {}, 'text').words
+    expect(t('DXF-E054', 'a line break or control character')).toBe('Not changed. Text must be one line, with no hidden characters.')
+    expect(t('DXF-E054', 'longer than 255 bytes')).toBe('Not changed. It’s longer than the 255 bytes a line of text can hold.')
+    expect(t('DXF-E021', '@h:60 isn’t changed by text set (mtext)')).toBe('Not changed. Only single-line text can be changed here. Change multi-line text in your CAD app.')
+  })
 })
 
 describe('whyWords', () => {

@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CadChange } from '../cad-change'
 import type { Box4, ModelHeader, ModelRow, XY } from '../model/types'
-import { attribArgv, moveArgv, rotateArgv, runEdit, scaleArgv } from './edit-flow'
+import { attribArgv, moveArgv, rotateArgv, runEdit, scaleArgv, textSetArgv } from './edit-flow'
 import type { EditSource, Hold } from './edit-source'
 import { refusalWords, viewOnlyWhy, type EditVerb } from './edit-words'
 import { holdPrompt, holdsOn } from './holds'
@@ -56,6 +56,8 @@ export type CadEdit = {
   /** Scale the selection by `factor` (above 0), about its centre unless told. */
   scale: (factor: number, about?: XY) => Promise<boolean>
   relabel: (insert: string, tag: string, value: string, nth: number | null) => Promise<boolean>
+  /** Set a single-line text's value. */
+  setText: (text: string, value: string) => Promise<boolean>
 }
 
 export function useCadEdit(p: {
@@ -222,7 +224,9 @@ export function useCadEdit(p: {
     [run],
   )
 
+  const setText = useCallback((text: string, value: string) => run(textSetArgv(text, value), [text], 'text'), [run])
+
   const goViewOnly = useCallback((words: string) => setOff(words), [])
 
-  return { rows, byHandle, selection, select, canEdit, editable, viewOnly, unit, holds, canMove, busy, message, prompt, goViewOnly, frame, centre, move, rotate, scale, relabel }
+  return { rows, byHandle, selection, select, canEdit, editable, viewOnly, unit, holds, canMove, busy, message, prompt, goViewOnly, frame, centre, move, rotate, scale, relabel, setText }
 }

@@ -1,5 +1,5 @@
-// An attribute value's checks as you type, by the CAD pack's rule for a
-// single-line value: one line, no control characters, no `\U+` (the file
+// An attribute value's (or a single-line text's) checks as you type, by
+// the CAD pack's rule for a single-line value: one line, no control characters, no `\U+` (the file
 // reads it as a code), and at most 255 bytes as the file writes it. From
 // DXF 2007 on that is UTF-8; before, the Windows-1252 code page, where a
 // character it lacks is written `\U+XXXX` (7 bytes) and one past U+FFFF
@@ -27,17 +27,19 @@ export function writtenBytes(value: string, utf8: boolean): number | null {
   return n
 }
 
-/** What's wrong with a value, in plain words, or null when it can be written. */
-export function attribProblem(value: string, opts: { utf8: boolean }): string | null {
+/** What's wrong with a value, in plain words, or null when it can be written; `text` when it's a text's value, not a label's. */
+export function attribProblem(value: string, opts: { utf8: boolean; text?: boolean }): string | null {
+  const noun = opts.text ? 'Text' : 'A label'
+  const holds = opts.text ? 'a line of text holds' : 'a label holds'
   if (/[\r\n\u2028\u2029]/.test(value)) return 'Keep it to one line.'
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) return 'Remove the hidden character, such as a tab.'
   if (/\\u\+/i.test(value)) return 'Remove “\\U+”. The file would read it as a character code.'
-  if (value.startsWith('--')) return 'A label can’t start with “--” yet.'
+  if (value.startsWith('--')) return `${noun} can’t start with “--” yet.`
   const n = writtenBytes(value, opts.utf8)
   if (n === null) return 'One of these characters can’t be saved in this drawing. Remove it.'
   // eslint-disable-next-line no-control-regex
-  if (n > LIMIT) return `Too long: ${n} bytes, and a label holds ${LIMIT}.${/[^\u0000-\u007f]/.test(value) ? ' Some characters take more than one byte.' : ''}`
+  if (n > LIMIT) return `Too long: ${n} bytes, and ${holds} ${LIMIT}.${/[^\u0000-\u007f]/.test(value) ? ' Some characters take more than one byte.' : ''}`
   return null
 }
 

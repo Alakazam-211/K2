@@ -23,7 +23,7 @@ vi.mock('@/stores/session-events', () => ({
 }))
 
 import type { ServerScope } from '@/kessel/server-scope'
-import { attribArgv, fmtCoord, moveArgv, NO_DIGEST, rotateArgv, runEdit, scaleArgv, withKit } from './edit-flow'
+import { attribArgv, fmtCoord, moveArgv, NO_DIGEST, rotateArgv, runEdit, scaleArgv, textSetArgv, withKit } from './edit-flow'
 import {
   __resetWriterOffForTests,
   CORES_ROUTE,
@@ -75,6 +75,10 @@ describe('argv', () => {
   it('attrib set: the reference, the tag and the value, with --nth only when given', () => {
     expect(attribArgv('@h:61', 'NO', 'D-02')).toEqual(['attrib', 'set', '@h:61', '--tag', 'NO', '--value', 'D-02'])
     expect(attribArgv('@h:61', 'NO', 'D 02', 2)).toEqual(['attrib', 'set', '@h:61', '--tag', 'NO', '--value', 'D 02', '--nth', '2'])
+  })
+
+  it('text set: the text and its new value', () => {
+    expect(textSetArgv('@h:5C', 'ROOM 102')).toEqual(['text', 'set', '@h:5C', '--value', 'ROOM 102'])
   })
 
   it('the kit’s flags: --base and --json on every call, then --dry-run or --expect', () => {

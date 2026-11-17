@@ -366,10 +366,11 @@ describe('relabelling', () => {
     expect(world.edits.calls).toHaveLength(0)
   })
 
-  it('a text’s value is shown, not editable here yet', async () => {
+  it('a multi-line text’s value is shown, not editable here yet', async () => {
     await open()
-    click('@h:5C')
-    expect(screen.getByTestId('dxf-edit-text').textContent).toContain('Can’t edit this text here yet.')
+    click('@h:60')
+    expect(screen.getByTestId('dxf-edit-text').textContent).toContain('Multi-line text: later.')
+    expect(screen.queryByTestId('dxf-text-input')).toBeNull()
     expect(screen.queryByTestId('dxf-attrib-input')).toBeNull()
   })
 })

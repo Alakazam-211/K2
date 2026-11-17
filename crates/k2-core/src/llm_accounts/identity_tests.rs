@@ -1156,6 +1156,10 @@ fn a_lock_file_left_by_a_dead_holder_locks_nothing() {
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join(".lock"), "999999\n").unwrap();
     let l = store::lock_tool(Tool::Claude, std::time::Duration::from_millis(200)).expect("a stale lock file locks nothing");
+    // Windows locks the file's bytes (LockFileEx), so another handle can read
+    // them only once the holder lets go; unix's flock leaves them readable.
+    #[cfg(unix)]
     assert_eq!(store::lock_file_pid(&dir.join(".lock")), Some(std::process::id()), "the file names the holder now");
     drop(l);
+    assert_eq!(store::lock_file_pid(&dir.join(".lock")), Some(std::process::id()), "the file names the last holder, not the dead one");
 }

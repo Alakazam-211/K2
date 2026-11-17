@@ -38,10 +38,10 @@ describe('the avatar stack', () => {
 })
 
 describe('when', () => {
-  it('reads just now, minutes, then the clock', () => {
+  it('steps up: seconds, minutes, hours (the live views’ one scale, relative-time.ts)', () => {
     const now = Date.UTC(2026, 10, 15, 14, 30)
-    expect(agoText(now - 20_000, now)).toBe('just now')
+    expect(agoText(now - 20_000, now)).toBe('20 s ago')
     expect(agoText(now - 2 * 60_000, now)).toBe('2 min ago')
-    expect(agoText(Date.UTC(2026, 10, 15, 9, 5), now, 'UTC')).toBe('09:05')
+    expect(agoText(Date.UTC(2026, 10, 15, 9, 5), now, 'UTC')).toBe('5 h ago')
   })
 })

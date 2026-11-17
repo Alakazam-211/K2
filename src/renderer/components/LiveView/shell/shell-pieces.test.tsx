@@ -201,7 +201,7 @@ describe('ChangesList', () => {
       'Atlas trimmed the start of Interview B by 1s',
       'Atlas moved B-roll 03 to 00:12',
     ])
-    expect(within(rows[1]).getByText('just now')).toBeTruthy()
+    expect(within(rows[1]).getByText('10 s ago')).toBeTruthy()
     expect(within(rows[2]).getByText('2 min ago')).toBeTruthy()
     expect(within(rows[0]).queryByRole('button', { name: /Go there/ })).toBeNull()
     fireEvent.click(within(rows[1]).getByRole('button', { name: 'Go there: Atlas trimmed the start of Interview B by 1s' }))

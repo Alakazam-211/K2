@@ -1,6 +1,7 @@
 // Who's on a live file, as the shell draws them: the avatar stack, Watching,
 // and the names on changes. Pure, so the counts are tested without a browser.
 
+import { liveAgo } from './relative-time'
 import type { TimePositionJson } from '@k2/mpc-client'
 
 export interface LivePerson {
@@ -58,12 +59,9 @@ export function personById(people: readonly LivePerson[], id: string | null | un
   return id ? people.find((p) => p.id === id) : undefined
 }
 
-/** "just now", "2 min ago", else the clock (HH:MM, in `timeZone`). */
+/** How long ago, as the live views say it (relative-time.ts: now, N s, N min, N h, yesterday, N days, then the date). */
 export function agoText(at: number, now: number, timeZone?: string): string {
-  const d = Math.max(0, now - at) / 1000
-  if (d < 60) return 'just now'
-  if (d < 3600) return `${Math.floor(d / 60)} min ago`
-  return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone }).format(new Date(at))
+  return liveAgo(at, now, timeZone)
 }
 
 export const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`

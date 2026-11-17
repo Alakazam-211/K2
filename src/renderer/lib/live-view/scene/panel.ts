@@ -5,6 +5,7 @@
 // (who's here stays in the header), Activity and the outliner stay open.
 // The words are the mock's (live-scene-v2-notes.md, v2.5).
 
+import { liveAgo } from '../shared/relative-time'
 import { GOLD } from './samples'
 import { ID16, same, xformParts } from './math'
 import { UNITS, metres, nameOf, numsOf, objOf, worldOf, type Nums, type SceneObj } from './fold'
@@ -70,11 +71,10 @@ export function agentDone(S: SimState, h: string): boolean {
   return false
 }
 
-/** "now", "40 s ago", "2 min ago"; nothing while not connected. */
+/** How long ago, as the live views say it ("now", "40 s ago", "2 min ago", "3 h ago", "yesterday"…); nothing while not connected. */
 export function ago(S: SimState, at: number | null): string {
   if (at == null || S.at == null || (S.conn && S.conn !== 'ok')) return ''
-  const s = Math.max(0, Math.round((S.at - at) / 1000))
-  return s < 2 ? 'now' : s < 60 ? s + ' s ago' : Math.round(s / 60) + ' min ago'
+  return liveAgo(at, S.at)
 }
 
 /** "arranging the dining set" → "dining set" (the full note is on hover and in the panel). */

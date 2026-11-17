@@ -105,6 +105,23 @@ fn verbs_on(rel: &str) -> bool {
     edit_verbs_on() && kind_by_name(rel) == BlobKind::Dxf && writes_off(rel)
 }
 
+/// Whether K2 writes this drawing now, the viewer's `writer`: a `.dxf`
+/// through the pack's edit verbs while they are on; never a `.dwg`.
+pub fn writer(rel: &str) -> bool {
+    verbs_on(rel)
+}
+
+/// Why a drawing opens read-only now, for the viewer up front (as a
+/// scene's welcome says it, `blend_read_only::WELCOME_FIELD`): [`WHY`]
+/// while the CAD core is on and K2 doesn't write it ([`writer`]); `None`
+/// once it does, or while the core is off (an any-file doc).
+pub fn read_only_reason(rel: &str) -> Option<&'static str> {
+    (writes_off(rel) && !writer(rel)).then_some(WHY)
+}
+
+/// The field that carries [`read_only_reason`] (the BLEND welcome's name).
+pub const READ_ONLY_FIELD: &str = super::blend_read_only::WELCOME_FIELD;
+
 /// `r` with no edit on a drawing K2 must not write ([`writes_off`]):
 /// reading, history and comments (which never write the file) stay. With
 /// the edit verbs on, a `.dxf` keeps the caller's own edit right (the
@@ -240,6 +257,7 @@ mod tests {
         let mv = argv(&["entity", "move", "@h:2B1", "--by", "10,0", "--unit", "mm"]);
         for rel in ["plan.dxf", "a/Site.DWG"] {
             assert_eq!(cap(rel, full()), full(), "{rel}: the core off: an any-file doc as before");
+            assert_eq!(read_only_reason(rel), None, "{rel}: the core off: no CAD reason");
             assert!(refused("/cli/docs/write", rel, true, None).is_none(), "{rel}");
             assert!(refused(tool, rel, false, Some(&mv)).is_none(), "{rel}");
             assert!(socket_decline(rel).is_none(), "{rel}");
@@ -260,7 +278,12 @@ mod tests {
             assert_eq!(socket_decline(rel), Some((CODE, WHY)));
         }
         assert_eq!(WHY, "K2 can't save drawing edits yet; this file opens read-only.");
+        for rel in ["plan.dxf", "a/Site.DWG"] {
+            assert_eq!((writer(rel), read_only_reason(rel)), (false, Some(WHY)), "{rel}: read only, said up front");
+        }
+        assert_eq!(READ_ONLY_FIELD, "read_only_reason");
         for other in ["notes.md", "room.blend", "plan.dxf.txt", "dxf", ".dwg", "part.dgn"] {
+            assert_eq!(read_only_reason(other), None, "{other}");
             assert_eq!(cap(other, full()), full(), "{other}");
             assert!(refused("/cli/docs/write", other, true, None).is_none(), "{other}");
         }
@@ -287,6 +310,8 @@ mod tests {
             assert!(refused(route, "plan.dxf", true, None).is_some(), "{route}: whole-file writes stay refused");
         }
         assert!(DxfIndexOnly::default().can_merge(), "an app's save after a verb merges by field");
+        assert_eq!((writer("plan.dxf"), read_only_reason("plan.dxf")), (true, None), "a .dxf K2 writes: no read-only reason");
+        assert_eq!((writer("site.dwg"), read_only_reason("site.dwg")), (false, Some(WHY)), "a .dwg never");
         set_edit_verbs_for_test(None);
         assert!(!cap("plan.dxf", full()).edit, "the switch off again");
         assert!(refused(tool, "plan.dxf", false, Some(&mv)).is_some());

@@ -548,7 +548,8 @@ fn open_now(caller: &DocCaller) -> BTreeMap<&'static str, (usize, usize, Vec<Str
 /// so a client keeps no file-name rules (the Live view opens only on a file
 /// whose core is on). By the name alone: nothing is resolved, read or
 /// opened, so it says nothing about which files exist (any caller, as the
-/// rows). `file`: `{core, on, liveView}` (`liveView`: the core has a live
+/// rows). `file`: `{core, on, liveView}`, plus `read_only_reason` for a
+/// drawing K2 doesn't write while the CAD core is on (`liveView`: the core has a live
 /// editor for people: Markdown and the text pack, not any-file).
 pub fn cores_route_for(caller: &DocCaller, path: Option<&str>) -> CliResponse {
     let r = cores_route(caller);
@@ -562,6 +563,11 @@ pub fn cores_route_for(caller: &DocCaller, path: Option<&str>) -> CliResponse {
     let core = if super::target::is_board_file(p) { docs_cores::BOARD } else { core_now(p) };
     let live_view = matches!(tier, Tier::Markdown | Tier::Text(_));
     v["file"] = json!({ "core": core, "on": is_on(core), "liveView": live_view });
+    // A drawing K2 doesn't write (the CAD core on): why, up front, so a
+    // viewer shows no edit controls (`read_only_reason`, as a scene's welcome).
+    if let Some(why) = super::cad_read_only::read_only_reason(p) {
+        v["file"][super::cad_read_only::READ_ONLY_FIELD] = Value::from(why);
+    }
     CliResponse { body: v.to_string(), ..r }
 }
 
@@ -1020,7 +1026,12 @@ pub(crate) mod tests {
             for (p, core) in [("cut.otio", "timeline"), ("edit/Info.fcpxml", "timeline"), ("show.prproj", "timeline"), ("board.gbr", "fab"), ("board.drl", "fab"), ("room.blend", "blend"), ("plan.dxf", "cad"), ("cad/part.dwg", "cad")] {
                 assert_eq!(file(p), json!({"core": "any-file", "on": false, "liveView": false}), "{p}");
                 set(core, true);
-                assert_eq!(file(p), json!({"core": core, "on": true, "liveView": false}), "{p}");
+                let mut want = json!({"core": core, "on": true, "liveView": false});
+                if core == "cad" {
+                    // A drawing K2 doesn't write says so up front.
+                    want["read_only_reason"] = json!("K2 can't save drawing edits yet; this file opens read-only.");
+                }
+                assert_eq!(file(p), want, "{p}");
                 set(core, false);
             }
             let none: Value = serde_json::from_str(&cores_route_for(&crate::docs::caller::owner(), Some("  ")).body).expect("json");

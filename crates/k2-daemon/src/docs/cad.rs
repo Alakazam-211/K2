@@ -5,7 +5,7 @@
 //!
 //! | Route | Method | Answer |
 //! |---|---|---|
-//! | `/cli/docs/cad/draw` | GET | the drawing-model read **as the whole body**, the pack's JSON as it gives it (no `{ok}` around it): `what=header` is `draw header` (`cad.drawing.header/1`), `what=page&space=S[&cursor=C]` is `draw page` (`cad.drawing.page/1`, `next` the pack's next call). The viewer's route |
+//! | `/cli/docs/cad/draw` | GET | the drawing-model read **as the whole body**, the pack's JSON as it gives it (no `{ok}` around it): `what=header` is `draw header` (`cad.drawing.header/1`) with one host line first, `"writer": false` (K2 doesn't write this drawing now: no edit controls), `what=page&space=S[&cursor=C]` is `draw page` (`cad.drawing.page/1`, `next` the pack's next call). The viewer's route |
 //! | `/cli/docs/cad/read` | GET | one of the pack's read verbs, `argv` a JSON array (`["layer","list"]`): `{ok, path, version, verb, shape, stdout, data, next}` |
 //! | `/cli/docs/av/read` | GET | the AV reading of a set: `config` (a workspace file of `key = value` lines) and `paths` (a JSON array of drawings); `what=read` (`av.set/1`, every row) or `what=summary` (counts and finding codes only, never a value) |
 //!
@@ -272,6 +272,22 @@ fn split_verb(argv: &[String], kind: BlobKind) -> Result<(String, Vec<String>), 
     Ok((verb, rest))
 }
 
+/// The host field the viewer's header carries beside the pack's object:
+/// whether K2 writes this drawing now (`cad_read_only::writer`; a `.dwg`
+/// never). The viewer shows no edit controls while it is false.
+pub const WRITER_FIELD: &str = "writer";
+
+/// The pack's pretty header `pretty` (an object, `{` then a newline) with
+/// `"writer": <writer>,` as its first line, and the trailing newline: the
+/// pack's bytes otherwise as they are.
+fn with_writer(pretty: &str, writer: bool) -> String {
+    match pretty.strip_prefix("{\n") {
+        Some(rest) => format!("{{\n  \"{WRITER_FIELD}\": {writer},\n{rest}\n"),
+        // Not an object the pack prints (never seen): the pack's bytes.
+        None => format!("{pretty}\n"),
+    }
+}
+
 /// The pack's typed data as JSON.
 fn data_json(out: &ReadOut) -> Value {
     serde_json::from_str(&out.data.to_json()).unwrap_or(Value::Null)
@@ -302,7 +318,9 @@ pub(crate) fn handle(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliRespo
             Err(r) => return r,
         };
         return match run(&opened, version, verb, &args) {
-            // The pack's object is the whole body, as it prints it.
+            // The pack's object is the whole body, as it prints it; the
+            // header adds the host's `writer` as its first line.
+            Ok(out) if verb == "draw header" => CliResponse::ok_json(with_writer(&out.data.to_json_pretty(), super::cad_read_only::writer(&t.rel))),
             Ok(out) => CliResponse::ok_json(format!("{}\n", out.data.to_json_pretty())),
             Err(e) => cad_refusal(&e),
         };
@@ -508,6 +526,12 @@ mod tests {
         };
         let h = run(&o, 7, "draw header", &[]).expect("header");
         assert!(format!("{}\n", h.data.to_json_pretty()) == golden("header"), "the header differs from the pack's golden");
+        // The route's header: the golden with the host's writer line first.
+        let routed = with_writer(&h.data.to_json_pretty(), false);
+        assert!(routed == golden("header").replacen("{\n", "{\n  \"writer\": false,\n", 1), "the writer line, then the pack's bytes");
+        let v: Value = serde_json::from_str(&routed).expect("still one JSON object");
+        assert_eq!((&v["writer"], &v["schema"]), (&json!(false), &json!("cad.drawing.header/1")));
+        assert!(with_writer(&h.data.to_json_pretty(), true).starts_with("{\n  \"writer\": true,\n"));
         let p = run(&o, 7, "draw page", &s(&["--space", "model"])).expect("page");
         assert!(format!("{}\n", p.data.to_json_pretty()) == golden("page-model"), "the model page differs from the pack's golden");
         if let Some(next) = p.next {

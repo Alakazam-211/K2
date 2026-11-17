@@ -8,11 +8,12 @@
 //!   1. Off (the default), a drawing is the any-file core's
 //!      (`docs/cores?path`), and the CAD routes answer `403 core_off` for the
 //!      CAD core; a file that isn't a drawing is `400 not_a_drawing`.
-//!   2. On, the drawing is the CAD core's (`liveView: false`). Its versions
-//!      follow outside saves; at version 7 the viewer's route
-//!      (`/cli/docs/cad/draw`) answers the sampler's header and pages BYTE FOR
-//!      BYTE as the pack's own goldens (the files K2 Design's viewer fixtures
-//!      are copied from): the pack's JSON as the whole body.
+//!   2. On, the drawing is the CAD core's (`liveView: false`) and says why it
+//!      is read only up front (`read_only_reason`). Its versions follow
+//!      outside saves; at version 7 the viewer's route (`/cli/docs/cad/draw`)
+//!      answers the sampler's pages BYTE FOR BYTE as the pack's own goldens
+//!      (the files K2 Design's viewer fixtures are copied from), and its
+//!      header as the golden with one host line first, `"writer": false`.
 //!   3. A cursor from another version is `409 stale_cursor` (`CAD-E013`).
 //!   4. The read verbs (`/cli/docs/cad/read`) and the DXF index's `entity
 //!      list` answer; the AV reading answers in full and as a summary, and a
@@ -169,6 +170,15 @@ fn golden(name: &str) -> String {
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p}: {e}"))
 }
 
+/// What the viewer's route answers for the header: the pack's golden byte
+/// for byte, with the host's one line first (`"writer": false`: K2 doesn't
+/// write this drawing now).
+fn header_golden() -> String {
+    let g = golden("header");
+    assert!(g.starts_with("{\n"), "the pack's header is a pretty object");
+    g.replacen("{\n", "{\n  \"writer\": false,\n", 1)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_cad_core_headless() {
     let tmp = std::env::temp_dir().join(format!("k2-docs-cad-core-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
@@ -242,7 +252,7 @@ async fn the_cad_core_headless() {
     let on = flip(&[("any-file", true), ("cad", true)]).await;
     assert!(on.changed.contains(&("cad".to_string(), true)), "{on:?}");
     for p in [&plan, &site] {
-        assert_eq!(file_core(port, p), json!({"core": "cad", "on": true, "liveView": false}), "{p}");
+        assert_eq!(file_core(port, p), json!({"core": "cad", "on": true, "liveView": false, "read_only_reason": WHY}), "{p}");
     }
     let header_version = |what: &str| -> u64 {
         let (st, body) = draw(port, &plan, "&what=header");
@@ -265,8 +275,13 @@ async fn the_cad_core_headless() {
     assert_eq!(header_version("the sampler itself"), 7, "the sampler at version 7");
     let (st, header) = draw(port, &plan, "&what=header");
     assert_eq!(st, 200, "{header}");
-    assert!(header == golden("header"), "the header differs from the pack's golden:\n{header}");
+    assert!(header == header_golden(), "the header is the pack's golden with the host's writer line first:\n{header}");
     let h = json_of("header", &header);
+    assert_eq!((&h["writer"], &h["schema"]), (&json!(false), &json!("cad.drawing.header/1")), "the viewer knows up front: {header}");
+    // The pack's own object: the header without the host's line.
+    let mut pack_header = h.clone();
+    pack_header.as_object_mut().expect("an object").remove("writer").expect("the writer field");
+    assert_eq!(pack_header, json_of("golden", &golden("header")), "the rest is the pack's");
     let block = |name: &str| -> String {
         h["blocks"]
             .as_array()
@@ -300,7 +315,7 @@ async fn the_cad_core_headless() {
     assert_eq!((st, &layers["shape"]), (200, &json!("cad.layer-list/1")), "{layers}");
     assert!(layers["stdout"].as_str().is_some_and(|s| !s.is_empty()), "{layers}");
     let (st, dh) = read(port, &plan, &["draw", "header"]);
-    assert_eq!((st, &dh["data"]), (200, &h), "draw header through the read verbs is the viewer's: {dh}");
+    assert_eq!((st, &dh["data"]), (200, &pack_header), "draw header through the read verbs is the pack's, as the viewer's: {dh}");
     let (st, v) = read(port, &plan, &["draw", "header", "--version", "3"]);
     refused("a caller's --version", st, &v.to_string(), 400, "bad_request");
     let (st, v) = read(port, &plan, &["nothing", "here"]);
@@ -369,7 +384,7 @@ async fn the_cad_core_headless() {
     for when in ["after the refusals", "after the disk ticks"] {
         let (st, again) = draw(port, &plan, "&what=header");
         assert_eq!(st, 200, "{when}: {again}");
-        assert!(again == golden("header"), "{when}: the header differs");
+        assert!(again == header_golden(), "{when}: the header differs");
         let (st, page) = draw(port, &plan, "&what=page&space=model");
         assert!(st == 200 && page == golden("page-model"), "{when}: the model page differs ({st})");
         let s = doc_status(port, &plan);

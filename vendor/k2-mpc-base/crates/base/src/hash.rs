@@ -200,12 +200,36 @@ pub(crate) fn legacy_matches(stored: &[u8], data: &[u8]) -> bool {
     stored.len() == 32 && stored == sha256(data)
 }
 
-/// 32 random bytes from the OS (`/dev/urandom`): blob space keys and per-doc hash keys.
+/// 32 random bytes from the OS: blob space keys and per-doc hash keys.
 pub(crate) fn random32() -> std::io::Result<[u8; 32]> {
-    use std::io::Read;
     let mut k = [0u8; 32];
-    std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut k))?;
+    os_random(&mut k)?;
     Ok(k)
+}
+
+/// Fill `buf` from the OS's random source: `/dev/urandom` on unix, the system
+/// generator (`RtlGenRandom`, advapi32) on Windows, which has no `/dev/urandom`.
+#[cfg(not(windows))]
+pub(crate) fn os_random(buf: &mut [u8]) -> std::io::Result<()> {
+    use std::io::Read;
+    std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(buf))
+}
+
+/// Fill `buf` from the OS's random source (Windows: `RtlGenRandom`).
+#[cfg(windows)]
+pub(crate) fn os_random(buf: &mut [u8]) -> std::io::Result<()> {
+    #[link(name = "advapi32")]
+    extern "system" {
+        #[link_name = "SystemFunction036"]
+        fn rtl_gen_random(buffer: *mut u8, length: u32) -> u8;
+    }
+    for chunk in buf.chunks_mut(u32::MAX as usize) {
+        // SAFETY: `chunk` is a valid, writable buffer of exactly `chunk.len()` bytes.
+        if unsafe { rtl_gen_random(chunk.as_mut_ptr(), chunk.len() as u32) } == 0 {
+            return Err(std::io::Error::other("RtlGenRandom failed"));
+        }
+    }
+    Ok(())
 }
 
 /// Lowercase hex.

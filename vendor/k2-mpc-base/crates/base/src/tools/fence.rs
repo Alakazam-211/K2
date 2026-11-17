@@ -20,7 +20,6 @@
 //! name) and how a pid reads (`Sam (person)`).
 
 use std::hash::{BuildHasher, Hasher};
-use std::io::Read;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::store::Seq;
@@ -108,12 +107,10 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
 }
 
-/// 64 random bits as 16 hex digits: `/dev/urandom`, or a hasher-key/clock/counter mix.
+/// 64 random bits as 16 hex digits: the OS's random source, or a hasher-key/clock/counter mix.
 pub fn random_nonce() -> String {
     let mut b = [0u8; 8];
-    let ok = std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut b))
-        .is_ok();
+    let ok = crate::hash::os_random(&mut b).is_ok();
     let n = if ok {
         u64::from_le_bytes(b)
     } else {

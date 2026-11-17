@@ -387,18 +387,20 @@ mod tests {
             let p = indexer(name).unwrap_or_else(|| panic!("{name} is listed but not run"));
             assert_eq!(p.index_spec().map(|s| s.pack), Some(*name), "{name}");
         }
-        assert_eq!(*INDEXERS, ["psd", "otio", "fcpxml", "prproj", "photoplot", "drill-common", "blend"]);
+        assert_eq!(*INDEXERS, ["psd", "otio", "fcpxml", "prproj", "photoplot", "drill-common", "blend", "dxf"]);
         assert_eq!(hello()["indexers"], serde_json::json!(INDEXERS));
         assert!(indexer("drill").is_none(), "drill files go through the common-export reading (strict first)");
     }
 
-    /// The timeline and fab packs index their own samples; junk is each
+    /// The timeline, fab and DXF packs index their own samples; junk is each
     /// pack's recorded refusal, still a result (never a crash). BLEND junk
     /// too (the daemon's tests index real scenes).
     #[test]
     fn index_runs_the_timeline_fab_and_blend_indexers() {
         use k2_mpc_base::index::IndexOutcome;
+        let sampler = k2_mpc_dxf::testgen::draw_sampler(k2_mpc_dxf::testgen::Ver::R2018).build().bytes;
         for (pack, body) in [
+            ("dxf", &sampler[..]),
             ("otio", &include_bytes!("../../../vendor/k2-mpc-timeline/crates/timeline/tests/data/seed.otio")[..]),
             ("fcpxml", &include_bytes!("../../../vendor/k2-mpc-timeline/crates/timeline/tests/data/seed.fcpxml")[..]),
             ("photoplot", &include_bytes!("../../../vendor/k2-mpc-fab/crates/fab/tests/data/board.gbr")[..]),
@@ -411,7 +413,7 @@ mod tests {
             }
             assert!(matches!(got, IndexOutcome::Draft(_)), "{pack}: a draft");
         }
-        for pack in ["otio", "fcpxml", "prproj", "photoplot", "drill-common", "blend"] {
+        for pack in ["otio", "fcpxml", "prproj", "photoplot", "drill-common", "blend", "dxf"] {
             assert!(matches!(index_with(pack, b"not this kind of file at all"), IndexOutcome::Refused(_)), "{pack}: junk is refused");
         }
     }

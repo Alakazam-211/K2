@@ -18,6 +18,7 @@ import {
   HomeChatReactionPicker,
   PICKER_COLUMNS,
   pickerMove,
+  reactionTipTop,
   reactionTipText,
   reactorsLine,
 } from './HomeChatReactions'
@@ -78,6 +79,26 @@ describe('reaction chips', () => {
       fireEvent.mouseLeave(chip)
     })
     expect(screen.queryByTestId('home-chat-reaction-tip')).toBeNull()
+  })
+
+  it('the tip goes below the chip, off the message text; above only when there is no room below', () => {
+    const chip = { top: 300, bottom: 322 }
+    expect(reactionTipTop(chip, 24, 900)).toBe(328)
+    // No room under it: above.
+    expect(reactionTipTop({ top: 860, bottom: 882 }, 24, 900)).toBe(830)
+    // No room either way: kept 8px inside the window.
+    expect(reactionTipTop({ top: 10, bottom: 32 }, 30, 60)).toBe(22)
+  })
+
+  it('the tip is floating chrome: Frost in Glass, cut in Terminal', async () => {
+    render(<HomeChatReactionChips reactions={reactions} mine={false} onToggle={vi.fn()} whoFor={async () => ['Ana Ruiz']} />)
+    await act(async () => {
+      fireEvent.mouseEnter(screen.getAllByTestId('home-chat-reaction')[0])
+    })
+    const tip = screen.getByTestId('home-chat-reaction-tip')
+    expect(tip.getAttribute('data-material')).toBe('frost')
+    expect(tip.getAttribute('data-float')).toBe('popover')
+    expect(tip.getAttribute('data-k2-chamfer')).toBe('chip')
   })
 
   it('a tap toggles yours; read-only chips do nothing', () => {

@@ -76,8 +76,20 @@ function chipStyle(me: boolean, readOnly: boolean): CSSProperties {
   }
 }
 
-/** The tip over a chip: portalled, above it (below when there is no room),
- *  kept 8px inside the window. Only for the eye: the chip's label says it. */
+/** The tip's top (px) for a chip at `chip`: below it, so it never covers
+ *  the message the chip belongs to; above it only when the window has no
+ *  room below; kept 8px inside the window (exported for tests). */
+export function reactionTipTop(chip: { top: number; bottom: number }, h: number, vh: number): number {
+  const below = chip.bottom + 6
+  if (below + h <= vh - 8) return Math.round(below)
+  const above = chip.top - h - 6
+  if (above >= 8) return Math.round(above)
+  return Math.round(Math.max(8, Math.min(below, vh - h - 8)))
+}
+
+/** The tip on a chip: portalled, under it (reactionTipTop), kept 8px inside
+ *  the window. Floating chrome: Frost in Glass, a cut chip in Terminal.
+ *  Only for the eye: the chip's label says it. */
 function ReactionTip({ anchor, text }: { anchor: HTMLElement; text: string }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
@@ -89,10 +101,8 @@ function ReactionTip({ anchor, text }: { anchor: HTMLElement; text: string }): J
     const { width: vw, height: vh } = cssViewport()
     const w = tip.offsetWidth
     const h = tip.offsetHeight
-    let top = a.top - h - 6
-    if (top < 8) top = a.bottom + 6
     const left = Math.max(8, Math.min(a.left + (a.right - a.left) / 2 - w / 2, vw - w - 8))
-    setPos({ left: Math.round(left), top: Math.round(Math.min(top, vh - h - 8)) })
+    setPos({ left: Math.round(left), top: reactionTipTop(a, h, vh) })
   }, [anchor, text])
   return createPortal(
     <div
@@ -100,6 +110,7 @@ function ReactionTip({ anchor, text }: { anchor: HTMLElement; text: string }): J
       aria-hidden="true"
       data-testid="home-chat-reaction-tip"
       data-k2-chamfer="chip"
+      {...floatMaterial('popover', 'frost')}
       className="pointer-events-none fixed z-[1000] max-w-[280px] rounded-[calc(var(--radius-box)/2)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1 text-[11px] leading-[1.35] text-[var(--color-text-primary)] [box-shadow:var(--shadow-2)]"
       style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999 }}
     >

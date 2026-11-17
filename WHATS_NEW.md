@@ -493,6 +493,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A new PDF viewer.** Comments, markups and stamps show on the page with their author and date, layers can be turned on and off, you can select and find text (⌘F), and the page fits to the window or its width.
 - **The markdown and code editors gain find and replace, a formatting toolbar, a / menu, an outline and go to line.**
 
+### Making agents
+- **A new agent from a template gets the permissions it suggests, as far as you can give them.** On the Review of Create an agent, each permission the type suggests is a checkbox: ticked ones are turned on when you create it, and you can untick any. One you can't turn on yourself is asked of someone who can, on a card in the new agent's Thread. With permission cards off, it stays off, and the Review says who can turn it on and how. In a terminal, `k2 agent hire --template <id>` prints the same for each one, and `--decline <permission>` leaves one off.
+- **An agent that hires passes on only what it has.** An agent with "Let this agent hire agents" on hires only inside the hire root, and gives a new agent only switches it has on itself, never database access; a person is asked for the rest on a card. Every permission a hire turns on, asks for or can't give is in the access audit.
+
 ### Agent messages
 - **A message sent twice lands once.** `k2 msg` (live and `--inbox-wake`/`--inbox-silent`, local or `agent::host`), `k2 thread` and `k2 thread ask` give each send a key; when K2 is slow to answer, the command asks again with the same key and K2 delivers it once, answering with the first delivery. If K2 still doesn't answer, the error says the message may have been delivered and prints the key: run the same command with `--idempotency-key <key>` to try again without a duplicate.
 - **No more "It can't be requested." under a send that wasn't refused.** That line now closes only a refusal of the send itself, not a delivery that waits on folder trust, an unknown address or a timeout.

@@ -148,17 +148,36 @@ fn the_live_walk_finds_a_process_named_like_the_pty_daemon() {
     for (name, is_ptyd) in [("k2-ptyd", true), ("k2-ptyx", false)] {
         let fake = dir.join(name);
         std::fs::copy(bash, &fake).unwrap();
+        // macOS kills a copy of a system binary that still carries the
+        // system's signature; signed again ad hoc, it runs.
+        #[cfg(target_os = "macos")]
+        {
+            let signed = Command::new("/usr/bin/codesign").arg("-f").arg("-s").arg("-").arg(&fake).output().expect("run codesign");
+            assert!(signed.status.success(), "codesign {}: {}", fake.display(), String::from_utf8_lossy(&signed.stderr));
+        }
         let mut child = Command::new(&fake)
             .arg("-c")
             .arg("sleep 30 & echo $!; wait")
             .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap_or_else(|e| panic!("run {}: {e}", fake.display()));
         let mut line = String::new();
         BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
-        let sleep: i32 = line.trim().parse().unwrap_or_else(|e| panic!("sleep pid {line:?}: {e}"));
-        let got = passport::session_ancestor(&table, |p| table.command_name(p), sleep);
+        let sleep: i32 = match line.trim().parse() {
+            Ok(pid) => pid,
+            Err(e) => {
+                let out = child.wait_with_output().expect("wait");
+                panic!("{name} printed no pid ({line:?}: {e}); {}: {}", out.status, String::from_utf8_lossy(&out.stderr));
+            }
+        };
+        // The background job is a fork of the fake until it starts sleep.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while table.command_name(sleep).as_deref() != Some("sleep") && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         let sleep_name = table.command_name(sleep);
+        let got = passport::session_ancestor(&table, |p| table.command_name(p), sleep);
         let fake_name = table.command_name(child.id() as i32);
         let _ = Command::new("kill").arg(sleep.to_string()).status();
         let _ = child.kill();

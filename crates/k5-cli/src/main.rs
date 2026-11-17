@@ -1,6 +1,7 @@
 //! `k5-cli`: the k5 command line's front. It answers `--version` itself
 //! and hands every other verb to the shell CLI it carries
-//! ([`k5_cli::fallthrough`]).
+//! ([`k5_cli::fallthrough`]). Before a verb falls through, the passport
+//! rule ([`k5_cli::passport`]) runs; for now it only counts.
 //!
 //! The result goes to stdout and the front's own errors to stderr
 //! ([`k5_cli::out`]); the exit codes are [`k5_cli::exit::Exit`]'s. The

@@ -2431,11 +2431,13 @@ html[data-style="glass"][data-frost="tile"] [data-k2-thread-zen] .thread-footer-
 }
 
 /* The Thread composer's field and Send are tile (the phone's GlassComposer).
-   !important because the Thread kit's see-through wash is. */
+   !important because the Thread kit's see-through wash is. The field's
+   edge is the box's own token (the control edge, 3:1 on the page): the
+   tile edge was too faint to find the box by, 1.15:1 on Veil. */
 html[data-style="glass"] [data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]:not([data-zen-root] *) {
   background: var(--tile-fill) !important;
   --ch-fill: var(--tile-fill) !important;
-  border: 1px solid var(--tile-edge);
+  border: 1px solid var(--zen-compose-edge);
   box-shadow: var(--tile-sheen), var(--tile-shadow);
 }
 html[data-style="glass"] [data-k2-thread-zen] [data-zen-send]:not([data-zen-root] *) {

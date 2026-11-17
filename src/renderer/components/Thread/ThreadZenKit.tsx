@@ -95,6 +95,9 @@ export const THREAD_ZEN_DESKTOP_TOKENS = {
   '--zen-accent-fill': 'var(--color-accent-fill, var(--color-accent))',
   '--zen-control-edge': 'var(--color-control-edge, var(--color-border))',
   '--zen-focus-ring': 'var(--color-accent-text, var(--color-accent))',
+  // The message box's edge: a control on the page, so the control edge
+  // (3:1 on the page in every look). A Garden falls back to --zen-border.
+  '--zen-compose-edge': 'var(--color-control-edge, var(--color-border))',
   '--zen-type-sm': 'var(--type-sm, 0.8em)',
   // Your bubble takes the accent Button's fill, deep enough for its white
   // words to read at 4.5:1 (the bright accent is 3.7:1 in Charcoal and
@@ -1099,6 +1102,9 @@ export function ThreadComposeStackSpacer({ stacked }: { stacked: boolean }): JSX
 export const THREAD_COMPOSE_BOX_PAD = 6
 export const THREAD_COMPOSE_BOX_BORDER = 1
 export const THREAD_COMPOSE_BOX_EDGE = THREAD_COMPOSE_BOX_PAD + THREAD_COMPOSE_BOX_BORDER
+/** The field's edge colour: 3:1 on the page (--zen-compose-edge), or a
+ *  Garden's own border. */
+const COMPOSE_EDGE = 'var(--zen-compose-edge, var(--zen-border))'
 
 /** The rounded field: leading buttons, the textarea, Send. A drawer (the
  *  activity drawer) is drawn on its top edge, chips above that. */
@@ -1134,12 +1140,12 @@ export function ThreadComposeBox({
           padding: THREAD_COMPOSE_BOX_PAD,
           borderRadius: 'calc(var(--zen-radius) + 4px)',
           background: 'var(--zen-surface-raised)',
-          border: `${THREAD_COMPOSE_BOX_BORDER}px solid var(--zen-border)`,
+          border: `${THREAD_COMPOSE_BOX_BORDER}px solid ${COMPOSE_EDGE}`,
           minWidth: 0,
           ...chamferVars({
             cut: CHAMFER_CUT.surface,
             fill: 'var(--zen-surface-raised)',
-            edge: 'var(--zen-border)',
+            edge: COMPOSE_EDGE,
             border: THREAD_COMPOSE_BOX_BORDER,
           }),
         }}

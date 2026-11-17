@@ -32,7 +32,9 @@ const nameOf = (p: string): string => (p.split(/[\\/]/).pop() || p).replace(/\.b
 export default function SceneLive({ scope, filePath, width, createTransport }: SceneLiveProps): React.JSX.Element | null {
   const [source, setSource] = useState<KeyedWatchSceneSource | null>(null)
   useEffect(() => {
-    const t = (createTransport ?? createDaemonLiveTransport)(scope, { path: filePath })
+    // Dev builds only: the real-app shots hand in a scripted socket (the pack's golden), as the tests do.
+    const scripted = import.meta.env.DEV ? (globalThis as { __k2SceneLiveTransport?: SceneLiveProps['createTransport'] }).__k2SceneLiveTransport : undefined
+    const t = (createTransport ?? scripted ?? createDaemonLiveTransport)(scope, { path: filePath })
     const src = new KeyedWatchSceneSource(t as unknown as Transport, { post: (body) => daemonCliPost(scope, 'docs/say', { path: filePath, ...body }), fileName: nameOf(filePath) })
     const c = keepConnected(t, src)
     setSource(src)

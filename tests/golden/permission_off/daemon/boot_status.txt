@@ -94,6 +94,7 @@ features:
   product-feedback-v1
   product-feedback-screenshot-v1
   post-idempotency-v1
+  send-once
   remote-desktop-v1
   app-voice-record-v1
   boot-status-views-v1

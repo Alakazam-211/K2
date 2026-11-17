@@ -4,7 +4,8 @@
 // (so "Atlas made 3 changes"). The outlines show for about 2 s and then fade
 // (removed at once under reduced motion); the note stays until the next run
 // or until dismissed. Undo reverts the note's versions, newest first, and
-// stops at the first refusal, keeping its words.
+// stops at the first refusal, keeping its words. Your own edit is shown the
+// moment it lands, from its result, and its version isn't asked about again.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useReducedMotion } from '@/hooks/useReducedMotion'
@@ -33,6 +34,10 @@ export type CadChanges = {
   undoState: UndoState
   undo: (versions: readonly number[]) => void
   dismiss: () => void
+  /** Show your own landed edit at once (its version's event is then not asked about again). */
+  showOwn: (c: CadChange) => void
+  /** Give these people presence colours now (an agent holding something before it changes anything). */
+  meet: (pids: readonly string[]) => void
 }
 
 export function useCadChanges(source: CadChangeSource | null, scope: ServerScope | null, path: string | null): CadChanges {
@@ -105,11 +110,29 @@ export function useCadChanges(source: CadChangeSource | null, scope: ServerScope
     [source, path],
   )
 
+  const showOwn = useCallback((c: CadChange) => {
+    seq.current++
+    seen.current = c.to
+    // Your own version starts no run: the next version by anyone is told on its own.
+    run.current = null
+    setChange(c)
+    setUndoState({ kind: 'idle' })
+    setPhase('on')
+    setLit((n) => n + 1)
+  }, [])
+
+  const meet = useCallback((pids: readonly string[]) => {
+    const fresh = pids.filter((a) => !authors.current.includes(a))
+    if (!fresh.length) return
+    authors.current.push(...fresh)
+    setSlots((prev) => changeSlots(prev, authors.current))
+  }, [])
+
   const dismiss = useCallback(() => {
     run.current = null
     setChange(null)
     setPhase(null)
   }, [])
 
-  return { change, phase, slots, undoState, undo, dismiss }
+  return { change, phase, slots, undoState, undo, dismiss, showOwn, meet }
 }

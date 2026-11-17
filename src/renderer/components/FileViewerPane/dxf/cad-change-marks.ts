@@ -8,23 +8,30 @@
 //     entities inside the block definition are never drawn (their boxes are
 //     in the block's own coordinates);
 //   - rows paired across an outside save are quiet; a refused pairing draws
-//     nothing at all; layer changes draw nothing.
+//     nothing at all; layer changes draw nothing;
+//   - your own change (SELF_PID) is drawn in your own accent, and takes no
+//     presence slot.
 
 import { NO_BLUE, presenceSlots, type PresenceSlot } from '@/lib/live-view/shared/presence-slots'
 import type { DxfDrawing } from '../dxfModel'
 import type { CadChange, CadEntityRow, ChangeBox } from './cad-change'
 
+/** The author of your own edits in this viewer. */
+export const SELF_PID = 'k2:you'
+
 export type ChangeMark = {
   address: string
   box: ChangeBox
   slot: PresenceSlot
+  /** Yours: drawn in your own accent. */
+  self?: true
   dashed: boolean
   quiet: boolean
   /** Where a moved entity was. */
   was: boolean
 }
 
-export type ChangeLink = { from: [number, number]; to: [number, number]; slot: PresenceSlot }
+export type ChangeLink = { from: [number, number]; to: [number, number]; slot: PresenceSlot; self?: true }
 
 export type ChangeMarks = {
   marks: ChangeMark[]
@@ -46,7 +53,11 @@ export function changeAuthors(c: CadChange): string[] {
 
 /** Each author's presence slot: kept while the drawing is open, never the viewer's own blue. */
 export const changeSlots = (prev: ReadonlyMap<string, PresenceSlot>, authors: readonly string[]): Map<string, PresenceSlot> =>
-  presenceSlots(prev, authors, NO_BLUE)
+  presenceSlots(
+    prev,
+    authors.filter((a) => a !== SELF_PID),
+    NO_BLUE,
+  )
 
 const centre = (b: ChangeBox): [number, number] => [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]
 const same = (a: ChangeBox, b: ChangeBox): boolean => a.every((v, i) => v === b[i])
@@ -72,6 +83,7 @@ export function changeMarks(c: CadChange, slots: ReadonlyMap<string, PresenceSlo
     dashed: r.quality === 'approx',
     quiet: r.doubt,
     was,
+    ...(r.by === SELF_PID ? { self: true as const } : {}),
   })
   for (const r of model) {
     if (r.quality === 'none') continue
@@ -81,7 +93,7 @@ export function changeMarks(c: CadChange, slots: ReadonlyMap<string, PresenceSlo
     }
     if (r.op === 'changed' && r.before && r.after && r.fields.includes('geom') && !same(r.before, r.after)) {
       marks.push(mark(r, r.before, true), mark(r, r.after, false))
-      links.push({ from: centre(r.before), to: centre(r.after), slot: slotOf(r.by) })
+      links.push({ from: centre(r.before), to: centre(r.after), slot: slotOf(r.by), ...(r.by === SELF_PID ? { self: true as const } : {}) })
       continue
     }
     const box = r.after ?? r.before

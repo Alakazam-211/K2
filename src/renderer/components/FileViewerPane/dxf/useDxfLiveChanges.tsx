@@ -5,7 +5,9 @@
 import { useMemo } from 'react'
 import { useOptionalRoom } from '@/components/Room/RoomContext'
 import type { Bounds, DxfDrawing } from '../dxfModel'
-import { changeAuthors, changeMarks, marksBox } from './cad-change-marks'
+import type { PresenceSlot } from '@/lib/live-view/shared/presence-slots'
+import type { CadChange } from './cad-change'
+import { changeAuthors, changeMarks, marksBox, SELF_PID } from './cad-change-marks'
 import { daemonCadChangeSource, type CadChangeSource } from './cad-change-source'
 import { changeNote } from './cad-change-words'
 import { ChangeNote, ChangeOutlines } from './CadChangeLayer'
@@ -19,7 +21,13 @@ export function useDxfLiveChanges(p: {
   frame: (b: Bounds) => void
   /** A few screen pixels in drawing units, to pad the outlines. */
   padUnits: () => number
-}): { outlines: React.ReactNode; note: React.ReactNode } {
+}): {
+  outlines: React.ReactNode
+  note: React.ReactNode
+  showOwn: (c: CadChange) => void
+  slots: ReadonlyMap<string, PresenceSlot>
+  meet: (pids: readonly string[]) => void
+} {
   const scope = useOptionalRoom()?.scope ?? null
   const daemon = useMemo(() => (scope ? daemonCadChangeSource(scope) : null), [scope])
   const source = p.changes === undefined ? daemon : p.changes
@@ -27,11 +35,15 @@ export function useDxfLiveChanges(p: {
   const { drawing } = p
   const marks = useMemo(() => (live.change && drawing ? changeMarks(live.change, live.slots, drawing) : null), [live.change, live.slots, drawing])
   const note = useMemo(() => (live.change && drawing ? changeNote(live.change, drawing) : null), [live.change, drawing])
-  if (!live.change || !marks || !note) return { outlines: null, note: null }
+  const { showOwn, slots, meet } = live
+  if (!live.change || !marks || !note) return { outlines: null, note: null, showOwn, slots, meet }
 
   const box = marksBox(marks)
-  const dots = [...new Set(changeAuthors(live.change).map((a) => live.slots.get(a)).filter((s) => s !== undefined))]
+  const dots = [...new Set(changeAuthors(live.change).map((a) => (a === SELF_PID ? 'self' : live.slots.get(a))).filter((s) => s !== undefined))]
   return {
+    showOwn,
+    slots,
+    meet,
     outlines: live.phase && (marks.marks.length || marks.links.length) ? <ChangeOutlines m={marks} phase={live.phase} pad={p.padUnits()} /> : null,
     note: (
       <ChangeNote

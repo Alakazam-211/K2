@@ -19,6 +19,9 @@ import type { UndoState } from './useCadChanges'
 
 const HAIR = 'non-scaling-stroke'
 
+/** Your own change: your accent, never a presence colour. */
+export const SELF_TOKEN = 'var(--color-accent)'
+
 export function ChangeOutlines({ m, phase, pad }: { m: ChangeMarks; phase: 'on' | 'fading'; pad: number }): React.JSX.Element {
   return (
     <g
@@ -36,7 +39,7 @@ export function ChangeOutlines({ m, phase, pad }: { m: ChangeMarks; phase: 'on' 
           y1={l.from[1]}
           x2={l.to[0]}
           y2={l.to[1]}
-          stroke={PRESENCE_TOKEN[l.slot]}
+          stroke={l.self ? SELF_TOKEN : PRESENCE_TOKEN[l.slot]}
           strokeOpacity={0.6}
           strokeWidth={1}
           strokeDasharray="2 3"
@@ -44,7 +47,7 @@ export function ChangeOutlines({ m, phase, pad }: { m: ChangeMarks; phase: 'on' 
         />
       ))}
       {m.marks.map((k, i) => {
-        const token = PRESENCE_TOKEN[k.slot]
+        const token = k.self ? SELF_TOKEN : PRESENCE_TOKEN[k.slot]
         const soft = k.was || k.quiet
         return (
           <rect
@@ -54,6 +57,7 @@ export function ChangeOutlines({ m, phase, pad }: { m: ChangeMarks; phase: 'on' 
             data-box={k.box.join(' ')}
             data-was={String(k.was)}
             data-quiet={String(k.quiet)}
+            data-self={k.self ? '' : undefined}
             x={k.box[0] - pad}
             y={k.box[1] - pad}
             width={k.box[2] - k.box[0] + 2 * pad}
@@ -74,7 +78,8 @@ export function ChangeOutlines({ m, phase, pad }: { m: ChangeMarks; phase: 'on' 
 
 export function ChangeNote(p: {
   text: string
-  slots: readonly PresenceSlot[]
+  /** Each author's dot: a presence slot, or `self` for you. */
+  slots: readonly (PresenceSlot | 'self')[]
   undoState: UndoState
   canUndo: boolean
   canShow: boolean
@@ -93,7 +98,7 @@ export function ChangeNote(p: {
       <span aria-hidden="true" className="flex flex-none items-center gap-0.5">
         {p.slots.map((s) => (
           <svg key={s} width="8" height="8" viewBox="0 0 8 8" data-testid="dxf-change-dot">
-            <circle cx="4" cy="4" r="4" fill={PRESENCE_TOKEN[s]} />
+            <circle cx="4" cy="4" r="4" fill={s === 'self' ? SELF_TOKEN : PRESENCE_TOKEN[s]} />
           </svg>
         ))}
       </span>

@@ -1,5 +1,5 @@
 // The one-line note a change shows: who changed what, in plain words.
-//   - one version: "Atlas moved a line on A-WALL";
+//   - one version: "Atlas moved a line on A-WALL", "You moved 3 lines";
 //   - a layer change, by name: "Sam froze A-FURN";
 //   - several versions by one author: "Atlas made 3 changes";
 //   - several authors: "Atlas and Sam made 4 changes" (no Undo);
@@ -23,6 +23,7 @@ export const PAST_VERB: Record<string, string> = {
   'entity offset': 'offset',
   'entity set': 'changed',
   'text set': 'edited',
+  'attrib set': 'relabelled',
   'layer set': 'changed',
   'layer add': 'added',
   'block set': 'changed',
@@ -50,6 +51,25 @@ const KIND_WORDS: Record<string, string> = {
   '3DFACE': 'a face',
   LEADER: 'a leader',
   MLEADER: 'a leader',
+}
+
+/** The same, several of one kind: "3 lines". */
+const KIND_PLURAL: Record<string, string> = {
+  LINE: 'lines',
+  CIRCLE: 'circles',
+  ARC: 'arcs',
+  ELLIPSE: 'ellipses',
+  LWPOLYLINE: 'polylines',
+  POLYLINE: 'polylines',
+  SPLINE: 'splines',
+  INSERT: 'blocks',
+  DIMENSION: 'dimensions',
+  HATCH: 'hatches',
+  SOLID: 'solids',
+  POINT: 'points',
+  '3DFACE': 'faces',
+  LEADER: 'leaders',
+  MLEADER: 'leaders',
 }
 
 export type ChangeNote = {
@@ -82,7 +102,8 @@ function oneVersion(c: CadChange, v: CadVersion | undefined, drawing: Pick<DxfDr
     const layers = [...new Set(rows.map((r) => r.layer))]
     const on = c.entitiesMore === 0 && layers.length === 1 && layers[0] ? ` on ${layers[0]}` : ''
     if (n === 1 && rows.length === 1) return `${name} ${verb} ${KIND_WORDS[rows[0].kind] ?? 'an entity'}${on}`
-    return `${name} ${verb} ${n} entities${on}`
+    const kinds = new Set(rows.map((r) => KIND_PLURAL[r.kind] ?? 'entities'))
+    return `${name} ${verb} ${n} ${c.entitiesMore === 0 && kinds.size === 1 ? [...kinds][0] : 'entities'}${on}`
   }
   if (c.blocks.length === 1) return `${name} changed block ${c.blocks[0].name}`
   if (c.blocks.length > 1) return `${name} changed ${c.blocks.length} blocks`

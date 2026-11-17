@@ -4964,7 +4964,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-blend"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "flate2",
  "k2-mpc-base",
@@ -4974,7 +4974,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-board"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "miniz_oxide",
  "sha2 0.10.9",
@@ -4982,7 +4982,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-board-bridge"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-board",
@@ -4990,14 +4990,14 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-cad-model"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "k2-mpc-base",
 ]
 
 [[package]]
 name = "k2-mpc-dwg"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-cad-model",
@@ -5005,7 +5005,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-dxf"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-cad-model",
@@ -5013,14 +5013,14 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-fab"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "k2-mpc-base",
 ]
 
 [[package]]
 name = "k2-mpc-markdown"
-version = "0.7.25"
+version = "0.7.26"
 dependencies = [
  "k2-mpc-base",
 ]
@@ -5036,7 +5036,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-pptx"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-opc",
@@ -5045,7 +5045,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-psd"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "k2-mpc-base",
  "photocraft-psd",
@@ -5053,7 +5053,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-text"
-version = "0.2.27"
+version = "0.2.28"
 dependencies = [
  "k2-mpc-base",
  "serde_json",
@@ -5061,7 +5061,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-timeline"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "k2-mpc-base",

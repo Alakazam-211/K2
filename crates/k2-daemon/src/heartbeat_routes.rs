@@ -611,6 +611,78 @@ mod schedule_tz_route_tests {
             .expect("tz empty");
         assert_eq!(listed_tz(&path, "close"), serde_json::Value::Null);
     }
+
+    /// 0.46.15 (Rosson 2026-11-17): an add without `tz` takes the owner's
+    /// timezone; `tz=server` picks the server's clock; list, show and the
+    /// edit reply carry `zoneLabel` for both kinds.
+    #[test]
+    fn add_without_tz_takes_the_owner_zone_and_list_labels_each_zone() {
+        let _home = k2_core::test_env::TempHome::new();
+        k2_core::app_settings::update(serde_json::json!({ "ownerTimezone": "America/Denver" })).expect("owner zone");
+        let path = seed_project("owner");
+        let server = format!("server clock ({})", k2_core::heartbeats::when::server_zone_name());
+        let spec = r#"{"time":"13:00"}"#;
+
+        let added = dispatch_get(
+            "/cli/heartbeat/add",
+            &path,
+            &params(&[("name", "standup"), ("frequency", "daily"), ("spec", spec)]),
+        )
+        .expect("add without tz");
+        let added: serde_json::Value = serde_json::from_str(&added).expect("add reply is JSON");
+        assert_eq!(added["tz"], "America/Denver", "{added}");
+        assert_eq!(added["tzFrom"], "owner", "{added}");
+        assert_eq!(added["zoneLabel"], "America/Denver", "{added}");
+
+        let added = dispatch_get(
+            "/cli/heartbeat/add",
+            &path,
+            &params(&[("name", "box"), ("frequency", "daily"), ("spec", spec), ("tz", "server")]),
+        )
+        .expect("add tz=server");
+        let added: serde_json::Value = serde_json::from_str(&added).expect("add reply is JSON");
+        assert_eq!(added["tz"], serde_json::Value::Null, "{added}");
+        assert_eq!(added["tzFrom"], "server", "{added}");
+        assert_eq!(added["zoneLabel"], server.as_str(), "{added}");
+
+        let body = dispatch_get("/cli/heartbeat/list", &path, &params(&[])).expect("list");
+        let rows: serde_json::Value = serde_json::from_str(&body).expect("list is JSON");
+        let rows = rows.as_array().expect("list is an array");
+        assert_eq!(rows.len(), 2, "{body}");
+        for r in rows {
+            // The schedule's own time, as stored, beside its zone.
+            assert_eq!(r["specJson"], spec, "{r}");
+            match r["name"].as_str().expect("name") {
+                "standup" => {
+                    assert_eq!(r["tz"], "America/Denver", "{r}");
+                    assert_eq!(r["zoneLabel"], "America/Denver", "{r}");
+                }
+                "box" => {
+                    assert_eq!(r["tz"], serde_json::Value::Null, "{r}");
+                    assert_eq!(r["zoneLabel"], server.as_str(), "{r}");
+                }
+                other => panic!("unexpected row {other}: {body}"),
+            }
+        }
+
+        let shown = dispatch_get("/cli/heartbeat/show", &path, &params(&[("name", "box")])).expect("show");
+        let shown: serde_json::Value = serde_json::from_str(&shown).expect("show is JSON");
+        assert_eq!(shown["zoneLabel"], server.as_str(), "{shown}");
+
+        let reply = dispatch_get("/cli/heartbeat/edit", &path, &params(&[("name", "standup"), ("tz", "server")]))
+            .expect("edit tz=server");
+        let reply: serde_json::Value = serde_json::from_str(&reply).expect("edit reply is JSON");
+        assert_eq!(reply["tz"], serde_json::Value::Null, "{reply}");
+        assert_eq!(reply["zoneLabel"], server.as_str(), "{reply}");
+        // A schedule edit without tz doesn't bring the owner's zone back.
+        dispatch_get(
+            "/cli/heartbeat/edit",
+            &path,
+            &params(&[("name", "standup"), ("frequency", "daily"), ("spec", r#"{"time":"14:00"}"#)]),
+        )
+        .expect("schedule edit");
+        assert_eq!(listed_tz(&path, "standup"), serde_json::Value::Null);
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -729,8 +801,8 @@ pub fn apply_edit(
 }
 
 /// 0.46.15 — [`apply_edit`] plus `--tz`: `Some(zone)` sets the zone the
-/// schedule's times are read in, `Some("local")` / `Some("")` clears it
-/// (this machine's clock), `None` leaves it as it is. `--tz` alone is a
+/// schedule's times are read in, `Some("server")` / `Some("local")` /
+/// `Some("")` clears it (the server's clock), `None` leaves it as it is. `--tz` alone is a
 /// whole edit. A bad zone is refused before anything changes.
 pub fn apply_edit_with_tz(
     project_path: &str,
@@ -752,7 +824,7 @@ pub fn apply_edit_with_tz(
     };
     let zone = match hb::k2_heartbeat_set_tz(project_path.to_string(), name.to_string(), &raw)? {
         Some(z) => format!("time zone set to {z}"),
-        None => "time zone cleared (this computer's clock)".to_string(),
+        None => format!("time zone cleared: {}", k2_core::heartbeats::when::zone_label(None)),
     };
     Ok(match first {
         Some(r) => format!("{r}; {zone}"),
@@ -777,7 +849,7 @@ fn owner_show(project_path: &str, name: &str) -> Result<String, String> {
         rows.remove(0)
     };
     let (body, rel) = hb::k2_heartbeat_instructions(project_path, name)?;
-    let mut v = serde_json::to_value(&row).map_err(|e| e.to_string())?;
+    let mut v = hb::rows_with_zone_label(std::slice::from_ref(&row))?.remove(0);
     v["instructions"] = serde_json::Value::String(body);
     v["wakeupPath"] = serde_json::Value::String(rel);
     Ok(v.to_string())
@@ -945,7 +1017,9 @@ pub fn dispatch_get(
             // `waitReason: wakeup_empty` until instructions are written.
             let instructions = params.get("instructions").cloned();
             // 0.46.15: `--tz <IANA zone>` reads the schedule's times in
-            // that zone; absent, `local` or empty follows this machine.
+            // that zone; `server`, `local` or empty follows the server's
+            // clock; absent takes the owner's timezone when one is set
+            // (Rosson 2026-11-17), else the server's clock.
             with_change(
                 project_path,
                 &name,
@@ -961,7 +1035,10 @@ pub fn dispatch_get(
                 .map(|v| v.to_string()),
             )
         }
+        // 0.46.15: each row carries `zoneLabel` (its zone, or `server
+        // clock (UTC)`), beside its own wall-clock times.
         "/cli/heartbeat/list" => hb::k2_heartbeat_list(project_path.to_string())
+            .and_then(|rows| hb::rows_with_zone_label(&rows))
             .map(|rows| serde_json::to_string(&rows).unwrap_or_default()),
         "/cli/heartbeat/show" => {
             let name = params.get("name").cloned().unwrap_or_default();
@@ -972,6 +1049,7 @@ pub fn dispatch_get(
         }
         "/cli/heartbeat/list-archived" => {
             hb::k2_heartbeat_list_archived(project_path.to_string())
+                .and_then(|rows| hb::rows_with_zone_label(&rows))
                 .map(|rows| serde_json::to_string(&rows).unwrap_or_default())
         }
         "/cli/heartbeat/archive" => {
@@ -1179,7 +1257,14 @@ pub fn dispatch_get(
                         })
                         .ok_or_else(|| hb::no_such_heartbeat(&name))?
                 };
-                serde_json::json!({"success": true, "tz": row.tz, "nextFireAt": row.next_fire_at}).to_string()
+                serde_json::json!({
+                    "success": true,
+                    "tz": row.tz,
+                    "tzFrom": if row.tz.is_some() { "flag" } else { "server" },
+                    "zoneLabel": hb::when::zone_label(row.tz.as_deref()),
+                    "nextFireAt": row.next_fire_at,
+                })
+                .to_string()
             } else {
                 r#"{"success":true}"#.to_string()
             };

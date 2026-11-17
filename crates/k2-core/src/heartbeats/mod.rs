@@ -177,9 +177,15 @@ pub fn k2_heartbeat_add_with_instructions(
 }
 
 /// 0.46.15 — [`k2_heartbeat_add_with_instructions`] with `--tz`: the IANA
-/// zone the schedule's times are read in (`tz` on the row). `None`, `""` or
-/// `"local"` = this machine's clock. A bad zone is refused before anything
-/// is written.
+/// zone the schedule's times are read in (`tz` on the row). `""`,
+/// `"server"` or `"local"` = the server's clock. A bad zone is refused
+/// before anything is written.
+///
+/// `None` (the creator named no zone: the CLI without `--tz`, Settings,
+/// an App, a hire or a template) takes the owner's timezone when one is
+/// set (Rosson 2026-11-17), else the server's clock. This is the one
+/// writer every new schedule goes through; rows that already exist are
+/// never given a zone by it.
 pub fn k2_heartbeat_add_with_tz(
     project_path: String,
     name: String,
@@ -194,10 +200,15 @@ pub fn k2_heartbeat_add_with_tz(
     // gate. Rejects garbage weekdays/months/days-of-month HERE instead
     // of storing a row that later evaluates `schedule_invalid`.
     validate_spec_json(&frequency, &spec_json)?;
+    let tz_from = match tz {
+        Some(_) => "flag",
+        None => "owner",
+    };
     let tz = match tz {
         Some(raw) => when::schedule_zone(raw)?,
-        None => None,
+        None => when::default_schedule_zone(),
     };
+    let tz_from = if tz.is_none() { "server" } else { tz_from };
     let db = crate::db::shared();
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, &project_path)
@@ -326,8 +337,12 @@ pub fn k2_heartbeat_add_with_tz(
         "waitReason": stored.wait_reason,
         "waitDetail": stored.wait_detail,
         "nextFireAt": stored.next_fire_at,
-        // 0.46.15: the zone its times are read in; null = this machine's.
+        // 0.46.15: the zone its times are read in; null = the server's
+        // clock. `tzFrom`: `flag` (named by the creator), `owner` (the
+        // owner's timezone, the default) or `server` (no zone).
         "tz": stored.tz,
+        "tzFrom": tz_from,
+        "zoneLabel": when::zone_label(stored.tz.as_deref()),
     }))
 }
 
@@ -385,6 +400,21 @@ pub fn k2_heartbeat_list(project_path: String) -> Result<Vec<AgentHeartbeat>, St
     // source). `no_ticks` is computed at read time, never stored (HB21).
     wait::overlay_no_ticks_now(&conn, &mut rows);
     Ok(rows)
+}
+
+/// 0.46.15 — rows as the owner's list and show routes send them: every
+/// stored field plus `zoneLabel`, the row's zone for people (`America/Denver`,
+/// or `server clock (UTC)` for a row without one). The row's `specJson`
+/// times are never converted: they are wall-clock times in that zone.
+pub fn rows_with_zone_label(rows: &[AgentHeartbeat]) -> Result<Vec<serde_json::Value>, String> {
+    let server = when::server_zone_name();
+    rows.iter()
+        .map(|r| {
+            let mut v = serde_json::to_value(r).map_err(|e| e.to_string())?;
+            v["zoneLabel"] = serde_json::Value::String(when::zone_label_on(r.tz.as_deref(), &server));
+            Ok(v)
+        })
+        .collect()
 }
 
 /// List archived heartbeat rows for a workspace, newest archive first.
@@ -919,8 +949,8 @@ pub fn k2_heartbeat_edit(
 }
 
 /// 0.46.15 — `k2 heartbeat schedule edit <n> --tz <zone>`: read the
-/// schedule's times in `raw` (an IANA zone), or follow this machine's clock
-/// again (`local` or empty). The schedule counts from now, like any
+/// schedule's times in `raw` (an IANA zone), or follow the server's clock
+/// again (`server`, `local` or empty). The schedule counts from now, like any
 /// schedule edit (D4). Reminders and the mail digest keep their own zone
 /// rules. Returns the zone stored (`None` = this machine's clock).
 pub fn k2_heartbeat_set_tz(project_path: String, name: String, raw: &str) -> Result<Option<String>, String> {
@@ -1575,6 +1605,7 @@ pub fn k2_heartbeat_fires_list_all(
 /// `k2_heartbeat_list` payload the renderer already understands —
 /// plus two extra fields (`projectName`, `projectPath`) for the join.
 pub fn k2_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
+    let server_zone = when::server_zone_name();
     let db = crate::db::shared();
     let conn = db.lock();
     let mut rows = AgentHeartbeat::list_all_active_with_project(&conn)
@@ -1612,6 +1643,10 @@ pub fn k2_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
                 // S3 (HB24)
                 "nextFireAt": hb.next_fire_at,
                 "waitSince": hb.wait_since,
+                // 0.46.15: the zone the times are read in (null = the
+                // server's clock) and its label for people.
+                "zoneLabel": when::zone_label_on(hb.tz.as_deref(), &server_zone),
+                "tz": hb.tz,
                 "projectName": project_name,
                 "projectPath": project_path,
             })

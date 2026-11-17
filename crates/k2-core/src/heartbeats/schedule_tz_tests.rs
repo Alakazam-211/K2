@@ -79,7 +79,7 @@ fn schedule_zone_takes_iana_names_and_local_or_empty_clears() {
     for bad in ["Mars/Olympus", "EST5", "New York", "america/new york"] {
         let e = when::schedule_zone(bad).expect_err(bad);
         assert!(e.starts_with(&format!("--tz '{}' is not an IANA time zone", bad.trim())), "{e}");
-        assert!(e.contains("--tz local"), "the error says how to follow this computer: {e}");
+        assert!(e.contains("--tz server"), "the error says how to follow the server's clock: {e}");
     }
 }
 
@@ -108,6 +108,11 @@ fn next_fire_reads_new_york_whatever_the_process_zone() {
         let want: i32 = want.parse().expect("offset seconds");
         let got = Local.offset_from_utc_datetime(&utc("2026-11-16T12:00:00Z").naive_utc()).local_minus_utc();
         assert_eq!(got, want, "the child's Local zone is the one asked for (TZ={:?})", std::env::var("TZ"));
+        // 0.46.15: a row without a zone is listed as `server clock (<this
+        // zone>)`: the name is the clock it really follows.
+        let tz = std::env::var("TZ").expect("the child runs with TZ");
+        assert_eq!(when::server_zone_name(), tz, "the server's zone name follows TZ");
+        assert_eq!(when::zone_label(None), format!("server clock ({tz})"));
     }
     let now = local("2026-11-16T15:00:00Z"); // 10:00 in New York
     let last = Some(utc("2026-11-15T19:15:30Z"));
@@ -327,4 +332,253 @@ fn add_and_edit_set_and_clear_the_zone() {
     // A name that isn't there.
     let err = k2_heartbeat_set_tz(path, "ghost".into(), "Asia/Tokyo").expect_err("missing");
     assert!(is_no_such_heartbeat(&err), "{err}");
+}
+
+// ── 0.46.15: a NEW schedule takes the owner's timezone ────────────────
+// (Rosson 2026-11-17.) Schedules that exist keep the zone they have.
+
+/// A temp home whose settings hold `owner_tz` (`None`: no owner zone set).
+/// Holds the env lock, so nothing else in this process reads the
+/// settings meanwhile.
+fn home_with_owner_zone(owner_tz: Option<&str>) -> crate::test_env::TempHome {
+    let home = crate::test_env::TempHome::new();
+    match owner_tz {
+        Some(z) => {
+            crate::app_settings::update(serde_json::json!({ "ownerTimezone": z })).expect("set the owner zone");
+            assert_eq!(crate::app_settings::load().owner_timezone.as_deref(), Some(z), "owner zone stored");
+        }
+        None => assert_eq!(crate::app_settings::load().owner_timezone, None, "a fresh home has no owner zone"),
+    }
+    home
+}
+
+/// The label for a row without a zone, e.g. `server clock (UTC)`.
+fn server_label() -> String {
+    format!("server clock ({})", when::server_zone_name())
+}
+
+#[test]
+fn the_owner_zone_setting_is_read_strictly() {
+    assert_eq!(when::owner_schedule_zone(Some("America/Denver")).as_deref(), Some("America/Denver"));
+    assert_eq!(when::owner_schedule_zone(Some("  Asia/Tokyo ")).as_deref(), Some("Asia/Tokyo"));
+    assert_eq!(when::owner_schedule_zone(None), None);
+    assert_eq!(when::owner_schedule_zone(Some("")), None);
+    assert_eq!(when::owner_schedule_zone(Some("   ")), None);
+    // A stored zone that doesn't parse is the server's clock, never a guess.
+    assert_eq!(when::owner_schedule_zone(Some("Mars/Olympus")), None);
+}
+
+#[test]
+fn server_is_an_explicit_choice_of_the_server_clock() {
+    for raw in ["server", "SERVER", " server ", "local", ""] {
+        assert_eq!(when::schedule_zone(raw).expect(raw), None, "{raw:?}");
+    }
+    let e = when::schedule_zone("Nowhere").expect_err("bad zone");
+    assert!(e.contains("--tz server"), "the error says how to pick the server's clock: {e}");
+}
+
+#[test]
+fn zone_labels_name_the_zone_or_the_server_clock() {
+    assert_eq!(when::zone_label_on(Some("America/Denver"), "UTC"), "America/Denver");
+    assert_eq!(when::zone_label_on(None, "UTC"), "server clock (UTC)");
+    assert_eq!(when::zone_label_on(Some(""), "Europe/Berlin"), "server clock (Europe/Berlin)");
+    // The server's zone is a name whose offset now is this process's
+    // (`Local`, the clock a row without a zone follows), or that offset.
+    let name = when::server_zone_name();
+    let now = Utc::now();
+    let local = Local.offset_from_utc_datetime(&now.naive_utc()).local_minus_utc();
+    match name.parse::<chrono_tz::Tz>() {
+        Ok(z) => {
+            use chrono::Offset;
+            assert_eq!(now.with_timezone(&z).offset().fix().local_minus_utc(), local, "{name} is Local's zone");
+        }
+        Err(_) => {
+            let sign = if local < 0 { '-' } else { '+' };
+            let want = format!("UTC{sign}{:02}:{:02}", local.abs() / 3600, (local.abs() % 3600) / 60);
+            assert_eq!(name, want, "not an IANA name: the offset");
+        }
+    }
+    assert_eq!(when::zone_label(None), format!("server clock ({name})"));
+}
+
+#[test]
+fn a_new_schedule_without_tz_takes_the_owner_zone_and_fires_at_its_wall_clock() {
+    let _home = home_with_owner_zone(Some("America/New_York"));
+    let (path, pid) = seed_project("owner");
+    let out = k2_heartbeat_add_with_tz(
+        path.clone(),
+        "close".into(),
+        "daily".into(),
+        r#"{"time":"14:15"}"#.into(),
+        Some("Check the close.".into()),
+        None,
+    )
+    .expect("add without --tz");
+    assert_eq!(out["tz"], "America/New_York", "{out}");
+    assert_eq!(out["tzFrom"], "owner", "{out}");
+    assert_eq!(out["zoneLabel"], "America/New_York", "{out}");
+    let hb = stored(&pid, "close");
+    assert_eq!(hb.tz.as_deref(), Some("America/New_York"), "the owner's zone is stored on the row");
+    assert_eq!(next_wall(&hb, New_York), (14, 15), "the stored next fire is 14:15 New York");
+
+    // The stored row fires at 14:15 New York, whatever this process's zone.
+    let r = row("daily", &hb.spec_json, hb.tz.as_deref(), Some(utc("2026-11-15T19:15:30Z")));
+    assert_eq!(next_of(evaluate_with_now(&r, local("2026-11-16T15:00:00Z"))), utc("2026-11-16T19:15:00Z"));
+    assert!(matches!(evaluate_with_now(&r, local("2026-11-16T19:14:00Z")), DueStatus::NotYet { .. }));
+    assert_eq!(
+        evaluate_with_now(&r, local("2026-11-16T19:15:30Z")),
+        DueStatus::Due { scheduled_for: local("2026-11-16T19:15:00Z") }
+    );
+
+    // The writers Settings, Apps, hires and templates use take it too.
+    k2_heartbeat_add_with_instructions(
+        path.clone(),
+        "hired".into(),
+        "weekly".into(),
+        r#"{"time":"09:00","days":["mon"]}"#.into(),
+        Some("x".into()),
+    )
+    .expect("add with instructions");
+    assert_eq!(stored(&pid, "hired").tz.as_deref(), Some("America/New_York"));
+    k2_heartbeat_add(path.clone(), "plain".into(), "daily".into(), r#"{"time":"07:00"}"#.into()).expect("plain add");
+    assert_eq!(stored(&pid, "plain").tz.as_deref(), Some("America/New_York"));
+
+    // An explicit zone wins over the owner's.
+    let out = k2_heartbeat_add_with_tz(
+        path.clone(),
+        "tokyo".into(),
+        "daily".into(),
+        r#"{"time":"14:15"}"#.into(),
+        None,
+        Some("Asia/Tokyo"),
+    )
+    .expect("add --tz Asia/Tokyo");
+    assert_eq!(out["tzFrom"], "flag", "{out}");
+    let hb = stored(&pid, "tokyo");
+    assert_eq!(hb.tz.as_deref(), Some("Asia/Tokyo"));
+    assert_eq!(next_wall(&hb, chrono_tz::Asia::Tokyo), (14, 15));
+
+    // `--tz server` (or local, or '') still picks the server's clock.
+    for (name, raw) in [("srv", "server"), ("loc", "local"), ("empty", "")] {
+        let out = k2_heartbeat_add_with_tz(
+            path.clone(),
+            name.into(),
+            "daily".into(),
+            r#"{"time":"14:15"}"#.into(),
+            None,
+            Some(raw),
+        )
+        .expect("add with the server's clock");
+        assert_eq!(out["tz"], serde_json::Value::Null, "{raw:?}: {out}");
+        assert_eq!(out["tzFrom"], "server", "{raw:?}: {out}");
+        assert_eq!(out["zoneLabel"], server_label().as_str(), "{raw:?}: {out}");
+        let hb = stored(&pid, name);
+        assert_eq!(hb.tz, None, "{raw:?}");
+        let at = DateTime::parse_from_rfc3339(hb.next_fire_at.as_deref().expect("next")).expect("rfc3339");
+        let at = at.with_timezone(&Local);
+        assert_eq!((at.hour(), at.minute()), (14, 15), "{raw:?}: the server's clock");
+    }
+}
+
+#[test]
+fn a_new_schedule_without_an_owner_zone_follows_the_server_clock() {
+    let _home = home_with_owner_zone(None);
+    let (path, pid) = seed_project("no-owner");
+    let out = k2_heartbeat_add_with_tz(path, "close".into(), "daily".into(), r#"{"time":"14:15"}"#.into(), None, None)
+        .expect("add");
+    assert_eq!(out["tz"], serde_json::Value::Null, "{out}");
+    assert_eq!(out["tzFrom"], "server", "{out}");
+    assert_eq!(out["zoneLabel"], server_label().as_str(), "{out}");
+    let hb = stored(&pid, "close");
+    assert_eq!(hb.tz, None, "NULL: the server's clock, as before");
+    let at = DateTime::parse_from_rfc3339(hb.next_fire_at.as_deref().expect("next")).expect("rfc3339");
+    let at = at.with_timezone(&Local);
+    assert_eq!((at.hour(), at.minute()), (14, 15), "14:15 on the server's clock");
+}
+
+/// The upgrade: rows written before 0.46.15 (no zone, or a zone of their
+/// own) keep it once the owner's zone is set, through a migration run, a
+/// wait refresh and the edits that don't name a zone.
+#[test]
+fn existing_schedules_keep_their_zone_when_the_owner_zone_is_set() {
+    let (path, pid) = seed_project("existing");
+    {
+        let _before = home_with_owner_zone(None);
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            AgentHeartbeat::insert(
+                &conn,
+                &uuid::Uuid::new_v4().to_string(),
+                &pid,
+                "old",
+                "daily",
+                r#"{"time":"07:00"}"#,
+                ".k2/heartbeats/old/WAKEUP.md",
+                true,
+            )
+            .expect("a row as an older K2 wrote it");
+        }
+        k2_heartbeat_add_with_tz(
+            path.clone(),
+            "london".into(),
+            "daily".into(),
+            r#"{"time":"08:00"}"#.into(),
+            None,
+            Some("Europe/London"),
+        )
+        .expect("a row with its own zone");
+    }
+    assert_eq!(stored(&pid, "old").tz, None);
+
+    let _home = home_with_owner_zone(Some("America/Denver"));
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        crate::db::run_migrations(&conn).expect("migrations run again on the upgraded DB");
+    }
+    wait::refresh_project(&path).expect("wait refresh");
+    k2_heartbeat_edit(path.clone(), "old".into(), "daily".into(), r#"{"time":"07:30"}"#.into()).expect("schedule edit");
+    k2_heartbeat_set_instructions(path.clone(), "old".into(), "do it".into()).expect("instructions edit");
+    k2_heartbeat_set_enabled(path.clone(), "old".into(), false).expect("disable");
+    k2_heartbeat_set_enabled(path.clone(), "old".into(), true).expect("enable");
+    k2_heartbeat_edit(path.clone(), "london".into(), "daily".into(), r#"{"time":"09:00"}"#.into()).expect("schedule edit");
+
+    let old = stored(&pid, "old");
+    assert_eq!(old.tz, None, "a row without a zone stays on the server's clock");
+    let at = DateTime::parse_from_rfc3339(old.next_fire_at.as_deref().expect("next")).expect("rfc3339");
+    let at = at.with_timezone(&Local);
+    assert_eq!((at.hour(), at.minute()), (7, 30), "07:30 on the server's clock, not Denver's");
+    assert_eq!(stored(&pid, "london").tz.as_deref(), Some("Europe/London"), "its own zone stays");
+
+    // A row added now takes Denver, beside them.
+    k2_heartbeat_add(path.clone(), "new".into(), "daily".into(), r#"{"time":"13:00"}"#.into()).expect("add");
+    assert_eq!(stored(&pid, "new").tz.as_deref(), Some("America/Denver"));
+
+    // The list shows each one's zone: its own, the owner's, or the server's clock.
+    let rows = rows_with_zone_label(&k2_heartbeat_list(path).expect("list")).expect("labels");
+    fn find<'a>(rows: &'a [serde_json::Value], name: &str) -> &'a serde_json::Value {
+        rows.iter().find(|r| r["name"] == name).unwrap_or_else(|| panic!("{name} listed: {rows:?}"))
+    }
+    assert_eq!(find(&rows, "old")["zoneLabel"], server_label().as_str());
+    assert_eq!(find(&rows, "old")["tz"], serde_json::Value::Null);
+    assert_eq!(find(&rows, "london")["zoneLabel"], "Europe/London");
+    assert_eq!(find(&rows, "new")["zoneLabel"], "America/Denver");
+    assert_eq!(find(&rows, "new")["tz"], "America/Denver");
+    // The schedule's own time is listed as stored, never converted.
+    assert_eq!(find(&rows, "new")["specJson"], r#"{"time":"13:00"}"#);
+
+    // The all-workspaces list (Settings → Wake Scheduler) says the same.
+    let all = k2_heartbeat_list_all().expect("list all");
+    let mine: Vec<_> = all.iter().filter(|r| r["projectId"] == pid.as_str()).collect();
+    assert_eq!(mine.len(), 3, "{mine:?}");
+    for r in mine {
+        let want = match r["name"].as_str().expect("name") {
+            "old" => server_label(),
+            "london" => "Europe/London".to_string(),
+            "new" => "America/Denver".to_string(),
+            other => panic!("unexpected row {other}"),
+        };
+        assert_eq!(r["zoneLabel"], want.as_str(), "{r}");
+    }
 }

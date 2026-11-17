@@ -1,6 +1,7 @@
 // Settings → General: the zone a person's "13:00" means on this server, for
-// reminders and mail check windows. The daemon owns it, so a headless box on
-// UTC still gets the owner's 9 AM. Existing heartbeats don't move.
+// reminders, mail check windows and new heartbeat schedules (0.46.15: a new
+// schedule stores this zone as its own). The daemon owns it, so a headless
+// box on UTC still gets the owner's 9 AM. Existing heartbeats don't move.
 
 import React, { useEffect, useState } from 'react'
 import { Button, Callout, Input } from '@/components/ui'
@@ -38,7 +39,8 @@ export function OwnerTimezoneRow(): React.JSX.Element {
       testId="owner-timezone"
       hint={
         <>
-          What a reminder&apos;s &ldquo;13:00&rdquo; and a mail check window mean. Empty: this server&apos;s own clock.
+          What &ldquo;13:00&rdquo; means for reminders, mail check windows and new heartbeat schedules. Empty: this
+          server&apos;s own clock. Heartbeats you already have keep their zone.
           {deviceZone && value !== deviceZone && (
             <span className="block mt-1.5">
               {/* A long zone name wraps rather than running off the card. */}

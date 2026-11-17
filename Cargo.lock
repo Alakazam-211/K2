@@ -4711,6 +4711,7 @@ dependencies = [
  "hpke 0.12.0",
  "html5ever 0.40.1",
  "http",
+ "iana-time-zone",
  "idna",
  "ignore",
  "image",

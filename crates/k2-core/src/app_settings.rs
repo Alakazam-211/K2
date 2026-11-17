@@ -427,9 +427,12 @@ pub struct AppSettings {
     /// 0.46.11 — the owner's IANA time zone, for times a person says in
     /// words: reminders (`--at 13:00`) and a mail check window. Empty or
     /// `None` = this box's own clock. Daemon-owned so a headless Linux box on
-    /// UTC still gets the owner's 9 AM. Existing heartbeats ignore it: they
-    /// stay on the box clock, so nothing moves. Admin floor, like every
-    /// other server-wide setting that changes what agents do.
+    /// UTC still gets the owner's 9 AM. 0.46.15: a NEW heartbeat schedule
+    /// created without `--tz` stores this zone as its own `tz`
+    /// (`heartbeats::when::default_schedule_zone`); schedules that exist
+    /// keep the zone they have (often none: the box clock), and changing
+    /// this setting never moves one. Admin floor, like every other
+    /// server-wide setting that changes what agents do.
     #[serde(default)]
     pub owner_timezone: Option<String>,
     /// 0.46.11 — the Org Chart (prd-org-chart-v1): the tab, orgs, the

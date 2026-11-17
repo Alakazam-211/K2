@@ -12,6 +12,7 @@ import { launchHeartbeat } from '@/lib/heartbeat-launch'
 import { primaryRoom } from '@/stores/room'
 import { serverSupports } from '@/lib/server-capabilities'
 import { heartbeatHistoryActorLine } from '@/lib/heartbeat-actor'
+import { scheduleZoneLabel } from '@/lib/heartbeat-zone'
 import { subscribeToWorkspaceTabEvents } from '@/stores/session-events'
 import { useToastStore } from '@/stores/toast'
 import type { SettingEntry } from '../searchManifest'
@@ -76,6 +77,11 @@ export interface HeartbeatRow {
   // through the shared formatter (HB31); never computed here.
   nextFireAt?: string | null
   waitSince?: string | null
+  // 0.46.15: the IANA zone the schedule's times are read in (null = the
+  // server's clock), and the daemon's label for it: the zone, or
+  // `server clock (UTC)`. Older daemons omit one or both.
+  tz?: string | null
+  zoneLabel?: string | null
 }
 
 /** Frequencies the daemon accepts (HB34). Anything else is refused. */
@@ -566,7 +572,7 @@ export function WakeupEditor({ projectPath, agentName, heartbeat, otherHeartbeat
   const otherSummaries = useMemo(() => {
     return otherHeartbeats
       .map((h) => {
-        const sched = describeSpec(h)
+        const sched = `${describeSpec(h)} ${scheduleZoneLabel(h)}`
         return `- \`${h.name}\` (${sched}) — wakeup at \`${h.wakeupPath}\``
       })
       .join('\n')
@@ -1273,6 +1279,10 @@ export function HeartbeatsPanel({
                 >
                   <span className="type-section uppercase tracking-wider text-[var(--color-text-muted)] mr-2">{r.frequency}</span>
                   {describeSpec(r)}
+                  {/* 0.46.15: the zone those times are read in, as stored. */}
+                  <span className="ml-1.5 text-[var(--color-text-muted)]" data-testid="heartbeat-zone">
+                    {scheduleZoneLabel(r)}
+                  </span>
                 </button>
 
                 {/* Col 3 — Configure Wakeup button. Hands the row to the

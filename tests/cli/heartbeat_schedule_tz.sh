@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # 0.46.15: `k2 heartbeat schedule add|edit --tz <IANA zone>`.
 #   - add and edit send `tz` to the daemon (edit with --tz alone too);
-#   - `--tz local` and `--tz ''` are sent as given (the daemon clears);
-#   - no --tz sends no tz (a schedule edit keeps the zone);
+#   - `--tz server`, `--tz local` and `--tz ''` are sent as given (the
+#     daemon clears: the server's clock);
+#   - no --tz sends no tz (a schedule edit keeps the zone; an add takes
+#     the owner's timezone, and says so);
 #   - the reply's zone and next fire are shown there and here;
 #   - the daemon's refusal of a bad zone fails the command, naming --tz;
 #   - a daemon older than --tz fails loudly instead of claiming a zone;
-#   - list shows a zoned heartbeat's next fire in its zone and here;
+#   - list shows each schedule's zone (its own, or server clock (<zone>))
+#     and a zoned heartbeat's next fire in its zone and here;
 #   - `--tz` with no value is a usage error before any request.
 #
 # No real daemon: a stub HTTP server records each request. HOME is
@@ -69,13 +72,15 @@ LOG = os.environ["LOG"]
 MODE_FILE = os.environ["MODE_FILE"]
 NEXT = "2026-11-17T19:15:00Z"  # 14:15 EST, 12:15 MST
 ZONES = {"America/New_York", "Europe/London"}
+OWNER = "America/Denver"  # the owner's timezone on this stub daemon
+SERVER = "server clock (UTC)"
 
 def zone_reply(q):
     raw = q["tz"].strip()
-    if raw in ("", "local"):
+    if raw in ("", "local", "server"):
         return None, None
     if raw not in ZONES:
-        return None, "--tz '%s' is not an IANA time zone (for example America/New_York); --tz local follows this computer's clock" % raw
+        return None, "--tz '%s' is not an IANA time zone (for example America/New_York); --tz server follows the server's clock" % raw
     return raw, None
 
 class H(BaseHTTPRequestHandler):
@@ -96,9 +101,11 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/cli/heartbeat/list":
             self._send(200, [
                 {"name": "close", "frequency": "daily", "specJson": "{\"time\":\"14:15\"}", "enabled": True,
-                 "lastFired": None, "nextFireAt": NEXT, "waitReason": "scheduled", "tz": "America/New_York"},
+                 "lastFired": None, "nextFireAt": NEXT, "waitReason": "scheduled", "tz": "America/New_York",
+                 "zoneLabel": "America/New_York"},
                 {"name": "local-one", "frequency": "daily", "specJson": "{\"time\":\"09:00\"}", "enabled": True,
-                 "lastFired": None, "nextFireAt": "2026-11-17T16:00:00Z", "waitReason": "scheduled", "tz": None},
+                 "lastFired": None, "nextFireAt": "2026-11-17T16:00:00Z", "waitReason": "scheduled", "tz": None,
+                 "zoneLabel": SERVER},
             ])
             return
         if u.path not in ("/cli/heartbeat/add", "/cli/heartbeat/edit"):
@@ -108,8 +115,12 @@ class H(BaseHTTPRequestHandler):
             f.write(json.dumps({"path": u.path, "q": q}) + "\n")
         mode = open(MODE_FILE).read().strip()
         zone, err = (None, None)
+        tz_from = "owner"
         if "tz" in q:
             zone, err = zone_reply(q)
+            tz_from = "flag" if zone else "server"
+        elif u.path == "/cli/heartbeat/add":
+            zone = OWNER
         if err:
             self._send(400, {"error": err})
             return
@@ -117,7 +128,7 @@ class H(BaseHTTPRequestHandler):
             body = {"id": "x", "name": q.get("name"), "wakeupPath": ".k2/heartbeats/x/WAKEUP.md",
                     "wakeupAbs": "/daemon/disk/WAKEUP.md", "instructionsWritten": False,
                     "waitReason": "wakeup_empty", "wakeupBodyBytes": 0, "instructionsKeptExisting": False,
-                    "nextFireAt": NEXT, "tz": zone}
+                    "nextFireAt": NEXT, "tz": zone, "tzFrom": tz_from, "zoneLabel": zone or SERVER}
             self._send(200, body)
             return
         if mode == "old":
@@ -126,7 +137,7 @@ class H(BaseHTTPRequestHandler):
             return
         body = {"success": True}
         if "tz" in q:
-            body.update({"tz": zone, "nextFireAt": NEXT})
+            body.update({"tz": zone, "tzFrom": tz_from, "zoneLabel": zone or SERVER, "nextFireAt": NEXT})
         self._send(200, body)
 
     def do_POST(self):
@@ -177,13 +188,24 @@ assert_eq "spec still sent" "$(last_param spec)" '{"frequency": "daily", "time":
 assert_contains "names the zone" "$out" "Time zone: America/New_York"
 assert_contains "next fire there and here" "$out" "Next fire: 2026-11-17 14:15 EST (2026-11-17 12:15 MST here)"
 
-echo "== add without --tz sends no tz =="
+echo "== add without --tz sends no tz; the daemon's owner zone is shown =="
 set +e
 out="$(run_k2 add --name plain --daily --time 09:00 2>&1)"
 rc=$?
 set -e
 assert_eq "plain add exit" "$rc" "0"
 assert_eq "no tz param" "$(last_param tz)" "<absent>"
+assert_contains "names the owner zone" "$out" "Time zone: America/Denver (the owner's timezone, the default for new schedules; --tz server for the server clock)"
+assert_contains "owner zone next fire" "$out" "Next fire: 2026-11-17 12:15 MST"
+
+echo "== add --tz server picks the server clock =="
+set +e
+out="$(run_k2 add --name boxed --daily --time 09:00 --tz server 2>&1)"
+rc=$?
+set -e
+assert_eq "add --tz server exit" "$rc" "0"
+assert_eq "tz server sent" "$(last_param tz)" "server"
+assert_contains "server: the server clock" "$out" "Time zone: server clock (UTC)"
 
 echo "== a bad zone on add is refused, naming --tz =="
 set +e
@@ -211,14 +233,21 @@ assert_contains "edit says updated" "$out" "Updated heartbeat: close"
 assert_contains "edit names the zone" "$out" "Time zone: Europe/London"
 assert_contains "edit next fire in London and here" "$out" "Next fire: 2026-11-17 19:15 GMT (2026-11-17 12:15 MST here)"
 
-echo "== edit --tz local and --tz '' clear =="
+echo "== edit --tz server, --tz local and --tz '' clear =="
+set +e
+out="$(run_k2 edit close --tz server 2>&1)"
+rc=$?
+set -e
+assert_eq "tz server exit" "$rc" "0"
+assert_eq "tz server sent" "$(last_param tz)" "server"
+assert_contains "server: the server clock" "$out" "Time zone: server clock (UTC)"
 set +e
 out="$(run_k2 edit close --tz local 2>&1)"
 rc=$?
 set -e
 assert_eq "tz local exit" "$rc" "0"
 assert_eq "tz local sent" "$(last_param tz)" "local"
-assert_contains "local: the computer's clock" "$out" "Time zone: this computer's clock"
+assert_contains "local: the server clock" "$out" "Time zone: server clock (UTC)"
 assert_contains "local: next fire here" "$out" "Next fire: 2026-11-17 12:15 MST"
 set +e
 out="$(run_k2 edit close --tz '' 2>&1)"
@@ -226,7 +255,7 @@ rc=$?
 set -e
 assert_eq "tz empty exit" "$rc" "0"
 assert_eq "tz empty sent as empty" "$(last_param tz)" ""
-assert_contains "empty: the computer's clock" "$out" "Time zone: this computer's clock"
+assert_contains "empty: the server clock" "$out" "Time zone: server clock (UTC)"
 
 echo "== a schedule edit without --tz sends no tz =="
 set +e
@@ -265,12 +294,17 @@ assert_eq "--tz no value exit" "$rc" "2"
 assert_contains "--tz no value message" "$out" "--tz needs a zone"
 assert_eq "no request for --tz with no value" "$(requests)" "$before"
 
-echo "== list shows a zoned heartbeat's next fire there and here =="
+echo "== list shows each zone, and a zoned heartbeat's next fire there and here =="
 set +e
 out="$(run_k2 list 2>&1)"
 rc=$?
 set -e
 assert_eq "list exit" "$rc" "0"
+assert_contains "Zone column" "$out" "Zone"
+assert_eq "zoned row names its zone beside its own time" \
+    "$(<<<"$out" grep -Ec '^close +daily +at 14:15 +America/New_York ')" "1"
+assert_eq "row without a zone names the server clock" \
+    "$(<<<"$out" grep -Ec '^local-one +daily +at 09:00 +server clock \(UTC\) ')" "1"
 assert_contains "list zone line" "$out" "time zone America/New_York: next 2026-11-17 14:15 EST (2026-11-17 12:15 MST here)"
 assert_eq "one zone line (the machine-clock row has none)" "$(<<<"$out" grep -c 'time zone ')" "1"
 

@@ -17,7 +17,7 @@
 //! minute after it; an ambiguous one (fall back) takes the earlier instant.
 //! A time in the past is refused rather than firing at once.
 
-use chrono::{DateTime, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
 
 /// `--in` floor: the due scan can't honour anything shorter.
 pub const MIN_IN_SECS: i64 = 60;
@@ -70,21 +70,81 @@ fn pick_zone(tz: Option<&str>, owner_tz: Option<&str>) -> Result<Zone, String> {
 
 /// `--tz` for a repeating heartbeat (`k2 heartbeat schedule add|edit`): the
 /// IANA zone its wall-clock times are read in, as stored on the row.
-/// `Ok(None)` for `local` or an empty value: follow this machine's clock,
-/// which is what every row without a zone does. A name that isn't an IANA
-/// zone is refused, never guessed. The same names `k2 heartbeat remind
-/// --tz` takes.
+/// `Ok(None)` for `server` (or `local`, or an empty value): follow the
+/// server's own clock, which is what every row without a zone does. A name
+/// that isn't an IANA zone is refused, never guessed. The same names
+/// `k2 heartbeat remind --tz` takes.
 pub fn schedule_zone(raw: &str) -> Result<Option<String>, String> {
     let t = raw.trim();
-    if t.is_empty() || t.eq_ignore_ascii_case("local") {
+    if t.is_empty() || t.eq_ignore_ascii_case("server") || t.eq_ignore_ascii_case("local") {
         return Ok(None);
     }
     t.parse::<chrono_tz::Tz>().map(|z| Some(z.name().to_string())).map_err(|_| {
         format!(
             "--tz '{t}' is not an IANA time zone (for example America/New_York); \
-             --tz local follows this computer's clock"
+             --tz server follows the server's clock"
         )
     })
+}
+
+/// 0.46.15 (Rosson 2026-11-17) — the zone a NEW repeating heartbeat gets
+/// when its creator names none: the owner's timezone (Settings → General,
+/// `ownerTimezone`), or `None` (the server's clock) when none is set or
+/// the stored one doesn't parse. Only creation reads this; a row that
+/// exists is never moved by it.
+pub fn default_schedule_zone() -> Option<String> {
+    owner_schedule_zone(crate::app_settings::load().owner_timezone.as_deref())
+}
+
+/// [`default_schedule_zone`] for a given owner setting (pure, for tests).
+pub fn owner_schedule_zone(owner_tz: Option<&str>) -> Option<String> {
+    owner_tz
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .and_then(|t| t.parse::<chrono_tz::Tz>().ok())
+        .map(|z| z.name().to_string())
+}
+
+/// The server's own zone, for people: the IANA name of the clock a row
+/// without a zone follows (`chrono::Local`), e.g. `UTC` or
+/// `America/Denver`. `TZ` first (that is what `Local` reads on Unix), then
+/// the system's zone. A name whose offset now doesn't match `Local`'s is
+/// not used; the offset is shown instead (`UTC-07:00`), so the label never
+/// names a clock the scheduler isn't on.
+pub fn server_zone_name() -> String {
+    let now = Utc::now();
+    let local_offset = Local.offset_from_utc_datetime(&now.naive_utc()).local_minus_utc();
+    let agrees = |name: &str| -> Option<String> {
+        let z = name.trim().trim_start_matches(':').parse::<chrono_tz::Tz>().ok()?;
+        let off = now.with_timezone(&z).offset().fix().local_minus_utc();
+        (off == local_offset).then(|| z.name().to_string())
+    };
+    if let Some(name) = std::env::var("TZ").ok().as_deref().and_then(|n| agrees(n)) {
+        return name;
+    }
+    if let Some(name) = iana_time_zone::get_timezone().ok().as_deref().and_then(|n| agrees(n)) {
+        return name;
+    }
+    let sign = if local_offset < 0 { '-' } else { '+' };
+    let abs = local_offset.abs();
+    format!("UTC{sign}{:02}:{:02}", abs / 3600, (abs % 3600) / 60)
+}
+
+/// How a schedule's zone reads to a person (list, show, Settings): the
+/// row's IANA zone, or `server clock (<the server's zone>)` for a row
+/// without one. The schedule's own wall-clock times go beside it as
+/// stored, never converted.
+pub fn zone_label(tz: Option<&str>) -> String {
+    zone_label_on(tz, &server_zone_name())
+}
+
+/// [`zone_label`] with the server's zone name already looked up (a list
+/// looks it up once).
+pub fn zone_label_on(tz: Option<&str>, server_zone: &str) -> String {
+    match tz.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(z) => z.to_string(),
+        None => format!("server clock ({server_zone})"),
+    }
 }
 
 /// `Some(instant)` for a local time, applying the DST rules above.

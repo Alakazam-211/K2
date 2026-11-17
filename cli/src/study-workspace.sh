@@ -485,8 +485,10 @@ HEARTBEATS REPEAT
   Each one is a WAKEUP.md under .k2/heartbeats/<name>/. It fires into your
   pinned chat by default. A missed slot catches up once within 12 hours;
   older than that it is skipped and the schedule carries on.
-  Times follow this computer's clock, or a zone you give it:
-    k2 heartbeat schedule edit n --tz America/New_York   (--tz local undoes)
+  A new one's times are in the owner's timezone (Settings → General) when
+  one is set, else the server's clock. --tz names a zone, --tz server the
+  server's clock:  k2 heartbeat schedule add ... --tz America/New_York
+  Ones made earlier keep theirs; k2 heartbeat schedule list shows each zone.
   k2 heartbeat --help has every verb.
 
 REMINDERS FIRE ONCE
@@ -497,7 +499,7 @@ REMINDERS FIRE ONCE
   It fires up to 24 hours late with a late stamp; later than that it
   finishes as missed and tells the owner on the Thread.
   Times are in --tz, then the owner's timezone (Settings → General), then
-  this computer's clock.
+  the server's clock.
 
 LIMITS
   100 pending reminders per workspace; 20 reminder fires an hour; and every

@@ -56,22 +56,29 @@ def hb_when(s, tz):
     return there.strftime("%Y-%m-%d %H:%M %Z") + " (" + here.strftime("%Y-%m-%d %H:%M %Z").strip() + " here)"
 '
 
-# After `schedule add|edit --tz`: the zone the daemon stored and the next
-# fire in it and here. stdin: the daemon's reply (a row or an add/edit
-# reply with tz + nextFireAt). Exit 1 when the reply has no tz at all: a
-# daemon older than --tz kept the computer clock.
+# After `schedule add|edit`: the zone the daemon stored and the next fire
+# in it and here. stdin: the daemon's reply (a row or an add/edit reply
+# with tz + nextFireAt; zoneLabel/tzFrom from 0.46.15). $1 = strict when
+# --tz was given: exit 1 when the reply has no tz at all (a daemon older
+# than --tz kept the server clock). Without --tz such a reply prints
+# nothing.
 _hb_tz_report() {
-    python3 -c "$_HB_WHEN_PY"'
-import json, sys
+    HB_TZ_STRICT="${1:-strict}" python3 -c "$_HB_WHEN_PY"'
+import json, os, sys
 d = json.loads(sys.stdin.read())
 if not isinstance(d, dict) or "tz" not in d:
-    print("Error: this daemon is older than --tz: the schedule still follows the computer clock. Update the host.", file=sys.stderr)
+    if os.environ.get("HB_TZ_STRICT") != "strict":
+        sys.exit(0)
+    print("Error: this daemon is older than --tz: the schedule still follows the server clock. Update the host.", file=sys.stderr)
     sys.exit(1)
 tz = d.get("tz")
-if tz:
-    print("Time zone: " + tz + " (its times are read there, wherever this computer is)")
+label = d.get("zoneLabel") or tz or "server clock"
+if tz and d.get("tzFrom") == "owner":
+    print("Time zone: " + label + " (the owner'"'"'s timezone, the default for new schedules; --tz server for the server clock)")
+elif tz:
+    print("Time zone: " + label + " (its times are read there, wherever the server is)")
 else:
-    print("Time zone: this computer'"'"'s clock")
+    print("Time zone: " + label)
 print("Next fire: " + hb_when(d.get("nextFireAt"), tz))
 '
 }

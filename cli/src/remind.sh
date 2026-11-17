@@ -341,9 +341,11 @@ cmd_heartbeat_add() {
             --instructions) instructions="$2"; shift 2 ;;
             --instructions-file) instructions_file="$2"; shift 2 ;;
             # 0.46.15: the IANA zone the times are read in (the daemon
-            # validates it); local or '' = this computer's clock.
+            # validates it); server (or local, or '') = the server's clock.
+            # Without --tz the daemon uses the owner's timezone when one is
+            # set, else the server's clock.
             --tz)
-                [ $# -ge 2 ] || { echo "Error: --tz needs a zone (for example America/New_York), or local" >&2; exit 2; }
+                [ $# -ge 2 ] || { echo "Error: --tz needs a zone (for example America/New_York), or server" >&2; exit 2; }
                 tz="$2"; have_tz=1; shift 2 ;;
             *) spec_args+=("$1"); shift ;;
         esac
@@ -408,7 +410,9 @@ print('true' if json.loads(sys.stdin.read()).get('instructionsKeptExisting') els
 ")
     echo "Created heartbeat: $name"
     if [ "$have_tz" = 1 ]; then
-        printf '%s' "$resp" | _hb_tz_report || return 1
+        printf '%s' "$resp" | _hb_tz_report strict || return 1
+    else
+        printf '%s' "$resp" | _hb_tz_report soft || return 1
     fi
     [ -n "$wakeup_abs" ] && echo "Wakeup file (on the daemon's machine): $wakeup_abs"
     echo
@@ -538,8 +542,13 @@ try:
         if detail and reason not in ('wakeup_empty', 'schedule_error', 'wakeup_waiting'):
             return f'{reason}: {detail}'
         return reason
-    print(f'{\"Name\":<20} {\"Frequency\":<10} {\"Schedule\":<30} {\"Last Fired\":<22} {\"Enabled\":<8} {\"Next\":<17} Waiting')
-    print('-' * 140)
+    # 0.46.15: Zone = the zone the Schedule's times are read in, as stored
+    # (never converted): an IANA name, or server clock (<its zone>).
+    def hb_zone(r):
+        return r.get('zoneLabel') or r.get('tz') or 'server clock'
+    zw = max([len('Zone')] + [len(hb_zone(r)) for r in rows])
+    print(f'{\"Name\":<20} {\"Frequency\":<10} {\"Schedule\":<30} {\"Zone\":<{zw}} {\"Last Fired\":<22} {\"Enabled\":<8} {\"Next\":<17} Waiting')
+    print('-' * (141 + zw))
     for r in rows:
         spec = json.loads(r.get('specJson', '{}'))
         sched_parts = []
@@ -564,7 +573,7 @@ try:
         last = (r.get('lastFired') or 'never')[:19].replace('T', ' ')
         # A schedule K2 turned off reads auto-off, not a person's no.
         en = 'yes' if r.get('enabled') else ('auto-off' if r.get('disabledReason') else 'no')
-        print(f'{r.get(\"name\",\"?\"):<20} {r.get(\"frequency\",\"?\"):<10} {sched:<30} {last:<22} {en:<8} {hb_next(r):<17} {hb_waiting(r)}')
+        print(f'{r.get(\"name\",\"?\"):<20} {r.get(\"frequency\",\"?\"):<10} {sched:<30} {hb_zone(r):<{zw}} {last:<22} {en:<8} {hb_next(r):<17} {hb_waiting(r)}')
         # 0.46.15: a schedule read in its own zone says so, with the next
         # fire there and here (Next above is this computer's clock).
         if r.get('tz'):
@@ -1023,9 +1032,9 @@ cmd_heartbeat_edit() {
             --name) name="$2"; shift 2 ;;
             --instructions) instructions="$2"; have_instructions=1; shift 2 ;;
             --instructions-file) instructions_file="$2"; have_instructions=1; shift 2 ;;
-            # 0.46.15: alone or with a spec; local or '' clears it.
+            # 0.46.15: alone or with a spec; server (or local, or '') clears it.
             --tz)
-                [ $# -ge 2 ] || { echo "Error: --tz needs a zone (for example America/New_York), or local" >&2; exit 2; }
+                [ $# -ge 2 ] || { echo "Error: --tz needs a zone (for example America/New_York), or server" >&2; exit 2; }
                 tz="$2"; have_tz=1; shift 2 ;;
             *) spec_args+=("$1"); have_spec=1; shift ;;
         esac
@@ -1088,7 +1097,7 @@ if os.environ['HAVE_INSTR'] == '1':
     print(f'Wake instructions written by the daemon: {name}')
 " || return $?
     if [ "$have_tz" = 1 ]; then
-        printf '%s' "$resp" | _hb_tz_report || return 1
+        printf '%s' "$resp" | _hb_tz_report strict || return 1
     fi
 }
 
@@ -1164,7 +1173,7 @@ print(f'Last fired:     {last}')
 print(f'Next fire:      {row.get(\"nextFireAt\") or \"-\"}')
 # 0.46.15: the zone the schedule's times are read in.
 tz = row.get('tz')
-print(f'Time zone:      {tz or \"this computer clock\"}')
+print(f'Time zone:      {row.get(\"zoneLabel\") or tz or \"server clock\"}')
 if tz:
     print(f'Next in zone:   {hb_when(row.get(\"nextFireAt\"), tz)}')
 waiting = row.get('waitReason') or '-'

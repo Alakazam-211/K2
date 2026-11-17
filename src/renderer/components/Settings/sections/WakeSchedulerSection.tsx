@@ -8,6 +8,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { heartbeatHistoryActorLine } from '@/lib/heartbeat-actor'
 import type { SettingEntry } from '../searchManifest'
 import { WakeupEditor, type HeartbeatRow } from './HeartbeatsSection'
+import { scheduleZoneLabel } from '@/lib/heartbeat-zone'
 import { HeartbeatSessionPicker, openHeartbeatTarget } from '@/components/common/HeartbeatSessionPicker'
 import {
   applyDeliveryTarget,
@@ -126,6 +127,10 @@ interface SystemHeartbeatRow {
   // last changed. Rendered through the shared formatter (HB31).
   nextFireAt?: string | null
   waitSince?: string | null
+  // 0.46.15: the zone the times are read in (null = the server's clock)
+  // and the daemon's label for it (older daemons omit both).
+  tz?: string | null
+  zoneLabel?: string | null
 }
 
 /** Payload of `/cli/heartbeat/scheduler-status`. Heartbeat S2: the
@@ -652,6 +657,8 @@ export function WakeSchedulerSection(): React.JSX.Element {
       nextRetryAt: null,
       disabledReason: r.disabledReason,
       scheduleError: r.scheduleError,
+      tz: r.tz,
+      zoneLabel: r.zoneLabel,
     })
     const slug = editingHeartbeat.projectName.toLowerCase().replace(/\s+/g, '-')
     const otherHeartbeats = (heartbeats ?? [])
@@ -859,7 +866,9 @@ export function WakeSchedulerSection(): React.JSX.Element {
                   <span className="type-name">{row.name}</span>
                   <span className="text-[var(--color-text-secondary)]"> in {row.projectName}</span>
                 </p>
-                <p className={SETTING_ROW_HINT}>{describeHeartbeatSpec(row.specJson, row.frequency)}</p>
+                <p className={SETTING_ROW_HINT}>
+                  {describeHeartbeatSpec(row.specJson, row.frequency)} {scheduleZoneLabel(row)}
+                </p>
                 {/* Paused by a person, or the next run, read in this page's
                     words and time format; anything else (a wait, a problem)
                     keeps the shared formatter's line. */}

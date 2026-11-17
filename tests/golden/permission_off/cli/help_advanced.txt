@@ -6,8 +6,8 @@ K2 CLI — Power-user surface
 Includes all daily verbs above, plus:
 
 HEARTBEATS (workspace-scoped scheduled wakes)
-  heartbeat schedule add --name <n> <spec>      Create heartbeat schedule
-  heartbeat schedule list [--archived]          Active or archived
+  heartbeat schedule add --name <n> <spec>      Create (in the owner's timezone; --tz to pick)
+  heartbeat schedule list [--archived]          Active or archived, with each zone
   heartbeat schedule remove <n> [--purge]       Soft-archive (default) or hard-delete
   heartbeat schedule unarchive <n>              Restore from archive
   heartbeat schedule edit <n> <spec>            Change schedule (--tz Area/City: its zone)

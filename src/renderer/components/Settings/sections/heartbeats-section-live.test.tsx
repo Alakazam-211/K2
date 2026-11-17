@@ -112,6 +112,7 @@ vi.mock('@/hooks/useResolvedAgentCommand', () => ({
 }))
 
 import { HeartbeatsPanel, HistoryPanel, scheduleFormError, type HeartbeatRow } from './HeartbeatsSection'
+import { scheduleZoneLabel } from '@/lib/heartbeat-zone'
 import { heartbeatStatusText } from '@/lib/heartbeat-wait'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../../../../')
@@ -300,6 +301,52 @@ describe('S4: Settings rows use the drawer formatter (HB31)', () => {
       expect(src, f).toContain('<HeartbeatStatusLine')
       expect(src, f).toContain("serverSupports('heartbeat-next-fire')")
       expect(src, f).not.toContain('describeHeartbeatWait')
+    }
+  })
+})
+
+// ── 0.46.15: each schedule shows the zone its times are read in ───────
+
+describe('Settings → Heartbeats shows each schedule zone beside its own time', () => {
+  const row = (over: Partial<HeartbeatRow>): HeartbeatRow => ({
+    id: over.name ?? 'id',
+    projectId: 'p',
+    name: 'hb',
+    frequency: 'daily',
+    specJson: JSON.stringify({ frequency: 'daily', time: '13:00' }),
+    wakeupPath: '.k2/heartbeats/hb/WAKEUP.md',
+    enabled: true,
+    lastFired: null,
+    createdAt: 0,
+    useWorkspaceSession: true,
+    lastSessionId: null,
+    consecutiveFailures: 0,
+    nextRetryAt: null,
+    disabledReason: null,
+    scheduleError: null,
+    ...over,
+  })
+
+  it('labels a zoned row with its zone and a row without one as the server clock', () => {
+    expect(scheduleZoneLabel({ tz: 'America/Denver', zoneLabel: 'America/Denver' })).toBe('America/Denver')
+    expect(scheduleZoneLabel({ tz: null, zoneLabel: 'server clock (UTC)' })).toBe('server clock (UTC)')
+    // An older daemon: no label; the zone, else the server clock.
+    expect(scheduleZoneLabel({ tz: 'Asia/Tokyo' })).toBe('Asia/Tokyo')
+    expect(scheduleZoneLabel({})).toBe('server clock')
+  })
+
+  it('renders 1 PM with the row zone, never a time converted to this device', async () => {
+    gets.bodies['heartbeat/list'] = [
+      row({ name: 'standup', tz: 'America/Denver', zoneLabel: 'America/Denver' }),
+      row({ name: 'box', tz: null, zoneLabel: 'server clock (UTC)' }),
+    ]
+    const view = render(<HeartbeatsPanel projectPath="/ws/proj" agentName="claude" />)
+    await waitFor(() => expect(view.getAllByTestId('heartbeat-zone').length).toBe(2))
+    const zones = view.getAllByTestId('heartbeat-zone').map((z) => z.textContent)
+    expect(zones.sort()).toEqual(['America/Denver', 'server clock (UTC)'])
+    for (const z of view.getAllByTestId('heartbeat-zone')) {
+      // The schedule button holds the stored wall-clock time and the zone.
+      expect(z.parentElement?.textContent).toBe(`dailyEvery day at 1 PM${z.textContent}`)
     }
   })
 })

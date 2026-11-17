@@ -121,6 +121,10 @@ toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 chrono = { version = "0.4", features = ["serde"] }
 # Usage v2 (P5): day buckets in the caller's IANA zone. MIT/Apache-2.0.
 chrono-tz = "0.10"
+# 0.46.15: the server's own zone name for "server clock (UTC)" beside a
+# heartbeat with no zone. Already in the lockfile (chrono's clock
+# feature pulls it). MIT OR Apache-2.0.
+iana-time-zone = "0.1"
 
 # 0.38.2 — cron expression parsing + next-occurrence computation for the
 # heartbeat scheduler. Replaces our hand-rolled `is_past_deadline` +

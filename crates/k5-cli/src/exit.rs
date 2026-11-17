@@ -33,6 +33,9 @@ pub enum Exit {
     /// wait` uses it when the person wrote a message instead of picking an
     /// option (`feedback.sh`).
     Conflict,
+    /// 6: the docs store failed. The daemon sends it and the shell CLI
+    /// passes it on; `k2 doc --help` lists it (`doc.sh`).
+    DocsStoreFailed,
     /// 7: curl's code when nothing accepted the connection: the daemon is
     /// not there. `_k2_curl` (`cli-tools-policy.sh`) retries it a few
     /// times, then returns it, and a call whose last step is curl ends
@@ -63,13 +66,14 @@ pub enum Exit {
 
 impl Exit {
     /// Every code, in order.
-    pub const ALL: [Exit; 12] = [
+    pub const ALL: [Exit; 13] = [
         Exit::Ok,
         Exit::Error,
         Exit::Usage,
         Exit::Refused,
         Exit::NotFound,
         Exit::Conflict,
+        Exit::DocsStoreFailed,
         Exit::DaemonUnreachable,
         Exit::TooOld,
         Exit::CurlReadError,
@@ -87,6 +91,7 @@ impl Exit {
             Exit::Refused => 3,
             Exit::NotFound => 4,
             Exit::Conflict => 5,
+            Exit::DocsStoreFailed => 6,
             Exit::DaemonUnreachable => 7,
             Exit::TooOld => 8,
             Exit::CurlReadError => 26,
@@ -113,6 +118,7 @@ mod tests {
                 (Exit::Refused, 3),
                 (Exit::NotFound, 4),
                 (Exit::Conflict, 5),
+                (Exit::DocsStoreFailed, 6),
                 (Exit::DaemonUnreachable, 7),
                 (Exit::TooOld, 8),
                 (Exit::CurlReadError, 26),

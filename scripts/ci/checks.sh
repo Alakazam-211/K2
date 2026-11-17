@@ -83,6 +83,8 @@ part_web() {
     # here, so contract-gen's outputs are checked in rust-test ("verb
     # catalog": k2-core's contract:: freshness test).
     step "generated files are fresh (regen.sh)";   bash scripts/regen.sh --check --no-cargo
+    step "CLI tests take their k2 from _cli_under_test.sh"; bash tests/cli/cli_under_test_gate.sh
+    step "the CLI test helper picks the program";  bash tests/cli/cli_under_test_helper.sh
     step "k2 knows the name it was called by";     bash tests/cli/called_as.sh
     step "k2 picks a workspace's dot-dir as the daemon does"; bash tests/cli/ws_dot_dir.sh
     step "urlencode never sends a value raw"; bash tests/cli/urlencode_bytes.sh

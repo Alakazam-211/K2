@@ -907,6 +907,12 @@
           "role": "editor"
         },
         {
+          "kind": "view_address",
+          "who": "atlas",
+          "view_address": "@trk:1",
+          "client": 2
+        },
+        {
           "kind": "time_position",
           "who": "atlas",
           "time_position": {
@@ -1234,6 +1240,12 @@
             "root": "markers",
             "keys": ["@mk:4"]
           },
+          "client": 2
+        },
+        {
+          "kind": "view_address",
+          "who": "atlas",
+          "view_address": "@mk:4",
           "client": 2
         },
         {

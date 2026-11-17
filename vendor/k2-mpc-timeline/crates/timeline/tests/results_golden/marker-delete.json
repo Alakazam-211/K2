@@ -97,7 +97,8 @@
       }
     ],
     "units_more": 0,
-    "lines": null
+    "lines": null,
+    "bytes": null
   },
   "data": {
     "marker": "@mk:2",
@@ -109,5 +110,25 @@
   "error": null,
   "conflicts": [],
   "notes": [],
-  "warnings": []
+  "warnings": [],
+  "view": {
+    "address": "@mk:2",
+    "containers": [],
+    "units": [
+      {
+        "address": "@mk:2",
+        "live": false
+      }
+    ],
+    "units_more": 0,
+    "cells": null,
+    "lines": [],
+    "time": {
+      "at": "1270080000000",
+      "state": "paused",
+      "in": "@trk:1",
+      "rate": null
+    }
+  },
+  "dry_run": false
 }

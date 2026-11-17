@@ -62,5 +62,7 @@
   "error": null,
   "conflicts": [],
   "notes": [],
-  "warnings": []
+  "warnings": [],
+  "view": null,
+  "dry_run": false
 }

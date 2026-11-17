@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.1.1: pairs with kit v0.22.0
+
+**Requires `k2-mpc-base` v0.22.0**. A timeline behaves as in v0.1.0.
+
+- Pairs with kit v0.22.0. Its pack API additions have defaults this pack keeps (`Pack::checks_edits`
+  and `Pack::check_edit`, `Pack::text_units`, and for blob packs `BlobPack::verbs`,
+  `BlobPack::errors`, `BlobPack::hold_reach`, `BlobPack::save_pairing`,
+  `BlobPack::judge_across_save`); its other changes are the host's (a read that survives a failed
+  render, where each change is, verbs on a blob doc, a typed refusal for a store another process
+  holds).
+- **Tests:** the result goldens (`tests/results_golden/`, 25 files) and the watched turn's
+  (`tests/watch_turn_golden/`) re-saved beside kit v0.22.0: a result gains `view` and `dry_run`, an
+  edit's `changed` gains `bytes`, and the roster gains the agent's `view_address` at each placement.
+  With those taken out, each equals its v0.1.0 copy.
+- `Cargo.lock` and `fuzz/Cargo.lock`: k2-mpc-base 0.22.0, with the kit's new `libc` dependency
+  (glibc targets), and the crate version 0.1.1. `crates/timeline/Cargo.toml`'s kit comment and
+  `README.md`'s kit line name v0.22.0.
+
 ## v0.1.0: pairs with kit v0.21.0
 
 The first release of the timeline pack. It builds with **`k2-mpc-base` v0.21.0** checked out

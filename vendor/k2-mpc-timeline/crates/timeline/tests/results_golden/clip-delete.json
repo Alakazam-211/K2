@@ -214,7 +214,8 @@
       }
     ],
     "units_more": 0,
-    "lines": null
+    "lines": null,
+    "bytes": null
   },
   "data": {
     "item": "@item:6",
@@ -228,5 +229,25 @@
   "error": null,
   "conflicts": [],
   "notes": [],
-  "warnings": []
+  "warnings": [],
+  "view": {
+    "address": "@med:4",
+    "containers": [],
+    "units": [
+      {
+        "address": "@med:4",
+        "live": false
+      }
+    ],
+    "units_more": 0,
+    "cells": null,
+    "lines": [],
+    "time": {
+      "at": "0",
+      "state": "paused",
+      "in": "@trk:2",
+      "rate": null
+    }
+  },
+  "dry_run": false
 }

@@ -32,8 +32,8 @@ The pack takes the kit by path: `crates/timeline/Cargo.toml` names
 release `CHANGELOG.md` names. A host vendors both side by side: the kit at `vendor/k2-mpc-base`,
 this pack at `vendor/k2-mpc-timeline`. `Cargo.lock` is committed. A public reader gets the kit
 from K2's repository, https://github.com/Alakazam-211/K2, where it is vendored at
-`vendor/k2-mpc-base`: check that folder out beside this repo as `k2-mpc-base`. Kit v0.21.0, the
-release this pack pairs with, is vendored there from the K2 release after 0.46.13 on.
+`vendor/k2-mpc-base`: check that folder out beside this repo as `k2-mpc-base`. Kit v0.22.0, the
+release this pack pairs with, is vendored there from the K2 release that vendors kit v0.22.0.
 
 Build and test: `scripts/check.sh`. One of its steps, `scripts/check-private.sh`, **fails without
 private patterns** (exit 2, fail closed): it looks for the names of a host's own build machines,

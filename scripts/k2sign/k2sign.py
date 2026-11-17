@@ -1229,7 +1229,7 @@ PLAN_KEYS = {"job_id", "node_id", "workspace_id", "workspace_label", "requested_
              "src", "exclusive", "created_at", "needs", "artifacts", "stall_secs", "class", "session_id", "est_secs",
              "est_p90_secs", "ws_max_running", "secret_env", "tier", "cache", "src_path", "with", "submitter",
              "submitter_max_running", "packages", "git_access", "receipt_v", "gpu", "gpu_mem", "cache_commit",
-             "cache_ref", "setup", "cpus_burst", "provenance"}
+             "cache_ref", "setup", "cpus_burst", "provenance", "network"}
 # Plan fields the S3b path never accepts set (each refused by name in check_plan; a GPU has its own refusal).
 PLAN_KEYS_REFUSED = ("cache_commit", "cache_ref", "setup", "cpus_burst")
 TOOLCHAIN_CHANNEL_RE = re.compile(r'^\s*channel\s*=\s*"([0-9A-Za-z][0-9A-Za-z.-]{0,63})"\s*$', re.M)

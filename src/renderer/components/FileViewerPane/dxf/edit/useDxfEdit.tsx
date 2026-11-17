@@ -1,8 +1,10 @@
 // Editing, wired for the DXF viewer. Only the drawing-model path selects and
 // edits (the viewer's own reading of the text has no handles). It gives the
 // viewer:
-//   - `tool`: the sheet's left-button gestures (select, box, drag to move);
-//   - `marks` (in the SVG): the selection, agents' holds and the ghost's layer;
+//   - `tool`: the sheet's left-button gestures (select, box, drag to move,
+//     the handles to turn);
+//   - `marks` (in the SVG): the selection with its handles, agents' holds
+//     and the ghost's layer;
 //   - `over` (over the sheet): the selection box, the hold question, a hint;
 //   - `panel` (beside the sheet) and `viewOnly` (under the header: why not);
 //   - `onKey`: Esc stops a drag, else clears the selection.
@@ -73,7 +75,17 @@ export function useDxfEdit(p: {
     if (!p.drawing) return null
     return editTool(() => {
       const e = state.current.edit
-      return { rows: e.rows, selection: e.selection, select: e.select, canMove: (h) => e.editable && e.canMove(h), move: e.move, ghost: ghostApi, box }
+      return {
+        rows: e.rows,
+        selection: e.selection,
+        select: e.select,
+        canMove: (h) => e.editable && e.canMove(h),
+        move: e.move,
+        frame: () => (e.editable && e.canMove(e.selection) ? e.frame : null),
+        rotate: e.rotate,
+        ghost: ghostApi,
+        box,
+      }
     })
   }, [p.drawing, ghostApi, box])
 
@@ -96,7 +108,14 @@ export function useDxfEdit(p: {
     whoIs,
     marks: (
       <>
-        <EditMarks selection={edit.selection} byHandle={edit.byHandle} held={held} slots={p.live.slots} pad={p.padUnits()} />
+        <EditMarks
+          selection={edit.selection}
+          byHandle={edit.byHandle}
+          held={held}
+          slots={p.live.slots}
+          pad={p.padUnits()}
+          frame={edit.editable && !edit.busy && edit.canMove(edit.selection) ? edit.frame : null}
+        />
         <g ref={ghostRoot} transform="scale(1 -1)" pointerEvents="none" data-testid="dxf-ghost-layer" />
       </>
     ),

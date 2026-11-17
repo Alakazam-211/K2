@@ -2,22 +2,25 @@
 //   - EditMarks, inside the drawing's SVG in drawing coordinates: the
 //     selection, each entity's box in your own accent; agents' holds, dashed
 //     in the holder's presence colour;
-//   - the ghost a drag moves (copies of the selected shapes, faint, with
-//     their boxes) and the selection box (solid for a window, dashed for a
-//     crossing), both driven straight in the DOM;
+//   - the handles on the selection's box when it can be changed: one above
+//     it to turn it;
+//   - the ghost a drag moves or turns (copies of the selected shapes, faint,
+//     with their boxes) and the selection box (solid for a window, dashed
+//     for a crossing), both driven straight in the DOM;
 //   - HoldAsk, the one question before an edit over an agent's hold.
 
 import { Button, floatMaterial } from '@/components/ui'
 import { PRESENCE_TOKEN, type PresenceSlot } from '@/lib/live-view/shared/presence-slots'
-import type { ModelRow } from '../model/types'
+import type { Box4, ModelRow } from '../model/types'
+import { ANYWAY } from './holds'
 import type { EditPrompt } from './useCadEdit'
 import type { Ghost, SelectBox } from './sheet-tool'
+import { handlePoints, PAD_PX } from './transform'
 
 const HAIR = 'non-scaling-stroke'
 const SVG_NS = 'http://www.w3.org/2000/svg'
 export const ACCENT = 'var(--color-accent)'
 
-type Box4 = [number, number, number, number]
 const padded = (b: Box4, pad: number) => ({ x: b[0] - pad, y: b[1] - pad, width: b[2] - b[0] + 2 * pad, height: b[3] - b[1] + 2 * pad })
 
 export function EditMarks(p: {
@@ -27,6 +30,8 @@ export function EditMarks(p: {
   held: ReadonlyMap<string, string>
   slots: ReadonlyMap<string, PresenceSlot>
   pad: number
+  /** The selection's box when it can be turned now: its handles show. */
+  frame?: Box4 | null
 }): React.JSX.Element {
   return (
     <g transform="scale(1 -1)" pointerEvents="none" data-testid="dxf-edit-marks">
@@ -44,6 +49,33 @@ export function EditMarks(p: {
         if (!b) return null
         return <rect key={`s${h}`} data-testid="dxf-selected" data-h={h} {...padded(b, p.pad)} fill={ACCENT} fillOpacity={0.08} stroke={ACCENT} strokeWidth={1.5} vectorEffect={HAIR} />
       })}
+      {p.frame && p.pad > 0 ? <Handles frame={p.frame} k={p.pad / PAD_PX} /> : null}
+    </g>
+  )
+}
+
+/** The handles on the selection's box: a round one above it turns the selection. */
+function Handles({ frame, k }: { frame: Box4; k: number }): React.JSX.Element {
+  const h = handlePoints(frame, k)
+  const top = h.corners[2][1]
+  return (
+    <g data-testid="dxf-handles">
+      <line x1={h.turn[0]} y1={top} x2={h.turn[0]} y2={h.turn[1]} stroke={ACCENT} strokeWidth={1} vectorEffect={HAIR} />
+      <circle
+        data-testid="dxf-handle-turn"
+        data-edit-handle="turn"
+        cx={h.turn[0]}
+        cy={h.turn[1]}
+        r={5 * k}
+        fill="var(--color-bg)"
+        stroke={ACCENT}
+        strokeWidth={1.5}
+        vectorEffect={HAIR}
+        pointerEvents="all"
+        style={{ cursor: 'grab' }}
+      >
+        <title>Drag to rotate. Hold Shift for 15° steps.</title>
+      </circle>
     </g>
   )
 }
@@ -100,9 +132,22 @@ export function domGhost(rootOf: () => SVGGElement | null, byHandle: () => Reado
       inner.style.transform = `translate(${dx}px, ${dy}px)`
       inner.setAttribute('data-d', `${dx} ${dy}`)
     },
+    turn(deg, about) {
+      if (!inner) return
+      // In drawing coordinates (y up), so a positive angle turns anticlockwise on screen.
+      inner.setAttribute('transform', `rotate(${deg} ${about[0]} ${about[1]})`)
+      inner.setAttribute('data-turn', String(deg))
+    },
     snapBack() {
       if (!inner) return
       if (reduced()) return clear()
+      // A turn or a scale goes straight back.
+      if (inner.hasAttribute('transform')) {
+        inner.removeAttribute('transform')
+        inner.setAttribute('data-turn', '0')
+        timer = setTimeout(clear, 220)
+        return
+      }
       inner.style.transition = 'transform var(--motion-duration-fast) var(--motion-ease-standard)'
       inner.style.transform = 'translate(0px, 0px)'
       inner.setAttribute('data-d', '0 0')
@@ -165,7 +210,7 @@ export function HoldAsk({ prompt }: { prompt: EditPrompt }): React.JSX.Element {
           Cancel
         </Button>
         <Button size="sm" variant="accent" onClick={prompt.yes} data-testid="dxf-hold-ask-yes" autoFocus>
-          {prompt.verb === 'move' ? 'Move anyway' : 'Change anyway'}
+          {ANYWAY[prompt.verb].replace(' it ', ' ')}
         </Button>
       </div>
     </div>

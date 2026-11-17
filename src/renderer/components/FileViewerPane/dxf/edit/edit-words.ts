@@ -84,8 +84,20 @@ export type RefusalWords = {
   off: string | null
 }
 
+/** What an edit does: each refusal leads with what didn't happen. */
+export type EditVerb = 'move' | 'rotate' | 'scale' | 'relabel' | 'text' | 'insert'
+
+const NOT_DONE: Record<EditVerb, string> = {
+  move: 'Not moved.',
+  rotate: 'Not rotated.',
+  scale: 'Not scaled.',
+  relabel: 'Not changed.',
+  text: 'Not changed.',
+  insert: 'Not inserted.',
+}
+
 export type RefusalContext = {
-  verb: 'move' | 'relabel'
+  verb: EditVerb
   /** The layer of an address in the drawing, for a locked layer's name. */
   layerOf?: (address: string) => string | null
 }
@@ -213,5 +225,5 @@ export function refusalWords(r: ToolResult, ctx: RefusalContext): RefusalWords {
   const { why, refresh, off } = reason(e.id, e, ctx)
   // The server's own words for a writer that's off, as given.
   if (e.id === WRITER_OFF) return { words: why, refresh, off }
-  return { words: `${ctx.verb === 'move' ? 'Not moved.' : 'Not changed.'} ${why}`, refresh, off }
+  return { words: `${NOT_DONE[ctx.verb]} ${why}`, refresh, off }
 }

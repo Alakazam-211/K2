@@ -23,7 +23,7 @@ vi.mock('@/stores/session-events', () => ({
 }))
 
 import type { ServerScope } from '@/kessel/server-scope'
-import { attribArgv, fmtCoord, moveArgv, NO_DIGEST, runEdit, withKit } from './edit-flow'
+import { attribArgv, fmtCoord, moveArgv, NO_DIGEST, rotateArgv, runEdit, withKit } from './edit-flow'
 import {
   __resetWriterOffForTests,
   CORES_ROUTE,
@@ -52,6 +52,12 @@ describe('argv', () => {
   it('entity move: every address, then --by dx,dy and the drawing’s unit word', () => {
     expect(moveArgv(['@h:41', '@h:A00'], 5, -2.5, 'mm')).toEqual(['entity', 'move', '@h:41', '@h:A00', '--by', '5,-2.5', '--unit', 'mm'])
     expect(moveArgv(['@h:41'], 0.1 + 0.2, 1e-7, 'drawing')).toEqual(['entity', 'move', '@h:41', '--by', '0.3,0.0000001', '--unit', 'drawing'])
+  })
+
+  it('entity rotate: every address, --by degrees anticlockwise (0 up to 360), --about the centre, the unit', () => {
+    expect(rotateArgv(['@h:41', '@h:A00'], 90, [5, 2.5], 'mm')).toEqual(['entity', 'rotate', '@h:41', '@h:A00', '--by', '90', '--about', '5,2.5', '--unit', 'mm'])
+    expect(rotateArgv(['@h:41'], -90, [-1.25, 0], 'drawing')).toEqual(['entity', 'rotate', '@h:41', '--by', '270', '--about', '-1.25,0', '--unit', 'drawing'])
+    expect(rotateArgv(['@h:41'], 37.3, [0, 0], 'mm')[4]).toBe('37.3')
   })
 
   it('numbers are plain decimals: no exponent, no minus zero', () => {

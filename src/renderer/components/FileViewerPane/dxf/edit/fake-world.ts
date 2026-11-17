@@ -1,20 +1,20 @@
 // A drawing that edits answer to, for tests and shots only: the model's
 // header and pages, held in memory, with the edit verbs' rules played out
 // on them the way the CAD pack answers (`mpc.result/1` and `cad.change/1`).
-// A move shifts every point an entity has; an attribute set changes its
-// value; a locked layer, a kind the verbs don't change, the wrong unit, a
+// A move shifts every point an entity has, a turn turns them (and its
+// angles) about the given point; an attribute set changes its value; a locked layer, a kind the verbs don't change, the wrong unit, a
 // stale `--expect` or an overlap since `--base` is refused with the pack's
 // id. A person is never refused by a hold. Each landed call makes a version.
 
 import { revertDone, revertRefused, type CadChangeSource } from '../cad-change-source'
 import { fixtureDrawingSource, type DrawingModelSource } from '../model/source'
-import type { ModelHeader, ModelPage, ModelRow } from '../model/types'
+import type { Box4, ModelHeader, ModelPage, ModelRow, XY } from '../model/types'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { refusalOfError, WRITER_OFF, type EditSource, type Hold } from './edit-source'
 import { editReason } from './selection'
 import { parseToolResult } from './tool-result'
+import { sizePoint, turnPoint } from './transform'
 
-type Box4 = [number, number, number, number]
 const flag = (argv: readonly string[], name: string): string | null => {
   const i = argv.indexOf(name)
   return i >= 0 ? (argv[i + 1] ?? null) : null
@@ -24,24 +24,59 @@ const POINT_KEYS = new Set(['p1', 'p2', 'p', 'centre', 'anchor', 'from', 'to', '
 const LIST_KEYS = new Set(['corners', 'quad', 'path', 'ctrl', 'fit', 'mask', 'clip'])
 
 const isXY = (v: unknown): v is number[] => Array.isArray(v) && v.length >= 2 && typeof v[0] === 'number' && typeof v[1] === 'number'
-const shiftXY = (v: number[], dx: number, dy: number): number[] => [v[0] + dx, v[1] + dy, ...v.slice(2)]
 
-/** Every point an entity's geometry has, moved by dx, dy. */
-export function shiftGeom(g: unknown, dx: number, dy: number): unknown {
-  if (Array.isArray(g)) return g.map((x) => shiftGeom(x, dx, dy))
+/** A change of place: points, directions, angles (radians, added) and sizes (multiplied). */
+type Affine = { point: (p: XY) => XY; dir: (v: XY) => XY; turn: number; size: number }
+
+const shift = (dx: number, dy: number): Affine => ({ point: (p) => [p[0] + dx, p[1] + dy], dir: (v) => v, turn: 0, size: 1 })
+const turnAbout = (c: XY, deg: number): Affine => ({ point: (p) => turnPoint(p, c, deg), dir: (v) => turnPoint(v, [0, 0], deg), turn: (deg * Math.PI) / 180, size: 1 })
+const sizeAbout = (c: XY, f: number): Affine => ({ point: (p) => sizePoint(p, c, f), dir: (v) => [v[0] * f, v[1] * f], turn: 0, size: f })
+
+const ANGLE_KEYS = new Set(['a0', 'a1', 'rotation'])
+const SIZE_KEYS = new Set(['r', 'height'])
+
+/** Every point, direction, angle and size an entity's geometry has, changed by `t`. */
+export function mapGeom(g: unknown, t: Affine): unknown {
+  if (Array.isArray(g)) return g.map((x) => mapGeom(x, t))
   if (!g || typeof g !== 'object') return g
   const out: Record<string, unknown> = {}
+  const xy = (v: number[]): number[] => [...t.point([v[0], v[1]]), ...v.slice(2)]
   for (const [k, v] of Object.entries(g as Record<string, unknown>)) {
-    if (POINT_KEYS.has(k) && isXY(v)) out[k] = shiftXY(v, dx, dy)
-    else if (LIST_KEYS.has(k) && Array.isArray(v)) out[k] = v.map((p) => (isXY(p) ? shiftXY(p, dx, dy) : p))
-    else if (k === 'm' && Array.isArray(v) && v.length === 6) out[k] = [v[0], v[1], v[2], v[3], v[4] + dx, v[5] + dy]
-    else if (k === 'verts' || k === 'attribs' || k === 'text' || k === 'loops' || k === 'edges') out[k] = shiftGeom(v, dx, dy)
+    if (POINT_KEYS.has(k) && isXY(v)) out[k] = xy(v)
+    else if (LIST_KEYS.has(k) && Array.isArray(v)) out[k] = v.map((p) => (isXY(p) ? xy(p) : p))
+    else if (k === 'major' && isXY(v)) out[k] = t.dir([v[0], v[1]])
+    else if (ANGLE_KEYS.has(k) && typeof v === 'number') out[k] = v + t.turn
+    else if (SIZE_KEYS.has(k) && typeof v === 'number') out[k] = v * t.size
+    else if (k === 'm' && Array.isArray(v) && v.length === 6) {
+      const [a, b] = t.dir([v[0], v[1]])
+      const [c, d] = t.dir([v[2], v[3]])
+      const [e, f] = t.point([v[4], v[5]])
+      out[k] = [a, b, c, d, e, f]
+    } else if (k === 'verts' || k === 'attribs' || k === 'text' || k === 'loops' || k === 'edges') out[k] = mapGeom(v, t)
     else out[k] = v
   }
   return out
 }
 
-const shiftBox = (b: Box4 | null, dx: number, dy: number): Box4 | null => (b ? [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy] : null)
+/** A box changed by `t`: the box around its turned corners. */
+function mapBox(b: Box4 | null, t: Affine): Box4 | null {
+  if (!b) return null
+  const ps = ([[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]] as XY[]).map(t.point)
+  const xs = ps.map((p) => p[0])
+  const ys = ps.map((p) => p[1])
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]
+}
+
+const placed = (r: ModelRow, t: Affine): ModelRow => ({ ...r, bbox: mapBox(r.bbox, t), geom: mapGeom(r.geom, t) as ModelRow['geom'] })
+
+const xyOf = (v: string | null): XY | null => {
+  const n = (v ?? '').split(',').map(Number)
+  return n.length === 2 && n.every(Number.isFinite) ? [n[0], n[1]] : null
+}
+
+/** The verbs that change an entity's place, and each verb's word in its change. */
+const TRANSFORMS = new Set(['entity move', 'entity rotate', 'entity scale'])
+const WORD: Record<string, string> = { 'entity move': 'moved', 'entity rotate': 'rotated', 'entity scale': 'scaled', 'attrib set': 'set', 'text set': 'edited', 'block insert': 'inserted' }
 
 export type FakeWorld = {
   model: DrawingModelSource
@@ -117,13 +152,23 @@ export function fakeCadWorld(
         return refuse(verb, base, 'MPC-E723', 'changed since', 1, { conflicts: [{ address: r.h, field: fields[0], by: 'Someone', change: t.version }] })
     }
     let next: { rows: ModelRow[]; ents: unknown[] }
-    if (verb === 'entity move') {
-      if (flag(argv, '--unit') !== (header.units?.word || 'drawing')) return refuse(verb, base, 'DXF-E022', 'not the drawing’s unit')
-      const [dx, dy] = (flag(argv, '--by') ?? '0,0').split(',').map(Number)
-      next = {
-        rows: found.map((r) => ({ ...r, bbox: shiftBox(r.bbox, dx, dy), geom: shiftGeom(r.geom, dx, dy) as ModelRow['geom'] })),
-        ents: found.map((r) => ({ address: r.h, op: 'changed', kind: r.kind, layer: r.layer, owner: 'model', fields, bbox_before: r.bbox, bbox_after: shiftBox(r.bbox, dx, dy), bbox_q: r.bbox_q ?? 'exact', version: null, by: null, identity: null })),
+    const geomChange = (t: Affine) => {
+      const rows = found.map((r) => placed(r, t))
+      return {
+        rows,
+        ents: found.map((r, i) => ({ address: r.h, op: 'changed', kind: r.kind, layer: r.layer, owner: 'model', fields, bbox_before: r.bbox, bbox_after: rows[i].bbox, bbox_q: r.bbox_q ?? 'exact', version: null, by: null, identity: null })),
       }
+    }
+    const unitOk = flag(argv, '--unit') === (header.units?.word || 'drawing')
+    if (TRANSFORMS.has(verb) && !unitOk) return refuse(verb, base, 'DXF-E022', 'not the drawing’s unit')
+    if (verb === 'entity move') {
+      const [dx, dy] = xyOf(flag(argv, '--by')) ?? [0, 0]
+      next = geomChange(shift(dx, dy))
+    } else if (verb === 'entity rotate') {
+      const about = xyOf(flag(argv, '--about'))
+      const deg = Number(flag(argv, '--by'))
+      if (!about || !Number.isFinite(deg)) return refuse(verb, base, 'MPC-E122', 'usage')
+      next = geomChange(turnAbout(about, deg))
     } else if (verb === 'attrib set') {
       const r = found[0]
       const tag = (flag(argv, '--tag') ?? '').toUpperCase()
@@ -143,7 +188,7 @@ export function fakeCadWorld(
       return refuse(verb, base, 'CAD-E004', 'not a verb this drawing knows')
     }
     const want = `sha256:fake-${header.version}-${calls.length}`
-    const data = { schema: 'cad.change/1', format: 'dxf', from: null, to: null, units: header.units ?? null, pairing: 'kept', versions: [], entities: next.ents, entities_more: 0, tables: [], blocks: [], verb, word: verb === 'entity move' ? 'moved' : 'set' }
+    const data = { schema: 'cad.change/1', format: 'dxf', from: null, to: null, units: header.units ?? null, pairing: 'kept', versions: [], entities: next.ents, entities_more: 0, tables: [], blocks: [], verb, word: WORD[verb] ?? 'changed' }
     const bytes = (d: string) => ({ word: data.word, counts: [], units: [], lines: null, bytes: { size_before: 0, size_after: 0, spans: 0, removed: 0, inserted: 0, after_digest: d } })
     if (dry) {
       lastDry = want
@@ -208,7 +253,7 @@ export function fakeCadWorld(
     },
     agentMove(handles, dx, dy) {
       const page = pages.model[0]
-      const moved = page.entities.filter((r) => handles.includes(r.h)).map((r) => ({ ...r, bbox: shiftBox(r.bbox, dx, dy), geom: shiftGeom(r.geom, dx, dy) as ModelRow['geom'] }))
+      const moved = page.entities.filter((r) => handles.includes(r.h)).map((r) => placed(r, shift(dx, dy)))
       page.entities = page.entities.map((r) => moved.find((m) => m.h === r.h) ?? r)
       bump(moved, ['geom'])
     },

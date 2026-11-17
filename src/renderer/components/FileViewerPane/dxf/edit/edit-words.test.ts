@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { NO_DIGEST } from './edit-flow'
 import { NO_ROUTE, NOT_SENT, WRITER_OFF, WRITER_OFF_WORDS } from './edit-source'
-import { refusalWords, viewOnlyWhy, whyWords, WHY_WORDS } from './edit-words'
+import { refusalWords, viewOnlyWhy, whyWords, WHY_WORDS, type EditVerb } from './edit-words'
 import { localRefusal } from './tool-result'
 
 const PACK = [
@@ -20,7 +20,7 @@ const KIT = [
 ]
 const OURS = [NO_ROUTE, NOT_SENT, NO_DIGEST]
 // (A writer that's off shows the server's own words: tested on its own below.)
-const say = (id: string, message = '', details: Record<string, unknown> = {}, verb: 'move' | 'relabel' = 'move') =>
+const say = (id: string, message = '', details: Record<string, unknown> = {}, verb: EditVerb = 'move') =>
   refusalWords(localRefusal(id, message, details), { verb, layerOf: () => 'A-WALL' })
 
 describe('refusalWords', () => {
@@ -39,6 +39,7 @@ describe('refusalWords', () => {
 
   it('leads with what didn’t happen', () => {
     expect(say('DXF-E045').words).toMatch(/^Not moved\. /)
+    expect(say('DXF-E045', '', {}, 'rotate').words).toMatch(/^Not rotated\. /)
     expect(say('DXF-E048', '', {}, 'relabel').words).toMatch(/^Not changed\. /)
   })
 

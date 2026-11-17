@@ -5,8 +5,10 @@
 // either step changes nothing. While the server is still reading the file
 // it says how long to wait; the call is tried once more after that.
 
+import type { XY } from '../model/types'
 import type { EditSource } from './edit-source'
 import { localRefusal, type ToolResult } from './tool-result'
+import { normDeg } from './transform'
 
 /** A coordinate or offset as the verbs read it: plain decimal, never an exponent. */
 export function fmtCoord(v: number): string {
@@ -23,6 +25,19 @@ export const moveArgv = (addresses: readonly string[], dx: number, dy: number, u
   ...addresses,
   '--by',
   `${fmtCoord(dx)},${fmtCoord(dy)}`,
+  '--unit',
+  unit,
+]
+
+/** Turn entities by `deg` degrees (anticlockwise; sent as 0 up to 360) about `about`, in the drawing's unit. */
+export const rotateArgv = (addresses: readonly string[], deg: number, about: XY, unit: string): string[] => [
+  'entity',
+  'rotate',
+  ...addresses,
+  '--by',
+  fmtCoord(normDeg(deg)),
+  '--about',
+  `${fmtCoord(about[0])},${fmtCoord(about[1])}`,
   '--unit',
   unit,
 ]

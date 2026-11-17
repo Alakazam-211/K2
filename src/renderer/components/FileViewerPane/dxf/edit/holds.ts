@@ -9,6 +9,7 @@
 
 import { namesOf } from '../cad-change-words'
 import type { ModelHeader, ModelRow } from '../model/types'
+import type { EditVerb } from './edit-words'
 import type { Hold } from './edit-source'
 
 const norm = (k: string): string => (/^@h:/i.test(k) ? `@h:${k.slice(3).replace(/^0+(?=.)/, '').toUpperCase()}` : k)
@@ -62,8 +63,18 @@ export function heldHandles(holds: readonly Hold[], rows: readonly ModelRow[], h
 }
 
 /** The one question before an edit over holds: who, what for, then go ahead or not. */
-export function holdPrompt(holds: readonly Hold[], count: number, verb: 'move' | 'relabel'): string {
-  return `${holdLine(holds, count)} ${verb === 'move' ? 'Move anyway?' : 'Change it anyway?'}`
+export function holdPrompt(holds: readonly Hold[], count: number, verb: EditVerb): string {
+  return `${holdLine(holds, count)} ${ANYWAY[verb]}?`
+}
+
+/** The go-ahead, by what the edit does: "Move anyway". */
+export const ANYWAY: Record<EditVerb, string> = {
+  move: 'Move anyway',
+  rotate: 'Rotate anyway',
+  scale: 'Scale anyway',
+  relabel: 'Change it anyway',
+  text: 'Change it anyway',
+  insert: 'Insert anyway',
 }
 
 /** "Atlas is working on these: moving the doors." for each holder. */

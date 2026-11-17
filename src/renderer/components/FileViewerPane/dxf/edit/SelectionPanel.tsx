@@ -2,8 +2,10 @@
 //   - how many are selected, of what kinds, on which layers; one entity's
 //     kind, layer and handle;
 //   - agents working on them, by name and what for;
-//   - what can't be changed here and why, in plain words (and then no Move);
-//   - "Move by" in drawing units, for exact moves;
+//   - what can't be changed here and why, in plain words (and then no Move,
+//     Rotate or Scale);
+//   - "Move by" in drawing units, for exact moves; "Rotate by" in degrees,
+//     about the selection's centre;
 //   - a block reference's attributes as rows you can change (Enter saves),
 //     checked as you type; a text's value shown, not editable here yet;
 //   - the last refusal, in plain words.
@@ -20,6 +22,7 @@ import { whyWords } from './edit-words'
 import { holdLine, holdsOn } from './holds'
 import { capital, kindName, kindsLine } from './kinds'
 import { editReason } from './selection'
+import { RotateBy } from './TurnBy'
 import type { CadEdit } from './useCadEdit'
 
 type Attrib = { tag: string; value: string; constant?: boolean }
@@ -224,7 +227,12 @@ export function SelectionPanel({ edit, header, slots }: { edit: CadEdit; header:
           ))}
         </div>
       ) : null}
-      {controls && !reasons.length ? <MoveBy edit={edit} /> : null}
+      {controls && !reasons.length ? (
+        <>
+          <MoveBy edit={edit} />
+          <RotateBy edit={edit} />
+        </>
+      ) : null}
       {attribs.length && one ? (
         <div className="pt-2" data-testid="dxf-attribs">
           <p className={`${LABEL} m-0`}>Attributes</p>

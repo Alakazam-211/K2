@@ -10,17 +10,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CadChange } from '../cad-change'
-import type { ModelHeader, ModelRow } from '../model/types'
-import { attribArgv, moveArgv, runEdit } from './edit-flow'
+import type { Box4, ModelHeader, ModelRow, XY } from '../model/types'
+import { attribArgv, moveArgv, rotateArgv, runEdit } from './edit-flow'
 import type { EditSource, Hold } from './edit-source'
-import { refusalWords, viewOnlyWhy } from './edit-words'
+import { refusalWords, viewOnlyWhy, type EditVerb } from './edit-words'
 import { holdPrompt, holdsOn } from './holds'
 import { ownChange } from './own-change'
 import { editReason, pickable } from './selection'
+import { centreOf, normDeg, selectionBox } from './transform'
 
 export type EditDrawing = { header: ModelHeader; rows: ModelRow[]; version: number }
 
-export type EditPrompt = { text: string; verb: 'move' | 'relabel'; yes: () => void; no: () => void }
+export type EditPrompt = { text: string; verb: EditVerb; yes: () => void; no: () => void }
 
 /** The longest edits wait for your own version to come on screen. */
 export const PENDING_MS = 5000
@@ -46,7 +47,12 @@ export type CadEdit = {
   prompt: EditPrompt | null
   /** The drawing can't be changed here after all (an undo found out): view only, with these words. */
   goViewOnly: (words: string) => void
+  /** The box around the selection, and its centre (what turning and scaling go about); null with nothing selected. */
+  frame: Box4 | null
+  centre: XY | null
   move: (dx: number, dy: number) => Promise<boolean>
+  /** Turn the selection by `deg` degrees anticlockwise, about its centre unless told. */
+  rotate: (deg: number, about?: XY) => Promise<boolean>
   relabel: (insert: string, tag: string, value: string, nth: number | null) => Promise<boolean>
 }
 
@@ -145,7 +151,7 @@ export function useCadEdit(p: {
 
   /** Ask once when an edit touches agents' holds; true to go ahead. */
   const overHolds = useCallback(
-    async (handles: readonly string[], verb: 'move' | 'relabel'): Promise<boolean> => {
+    async (handles: readonly string[], verb: EditVerb): Promise<boolean> => {
       if (!drawing) return false
       const on = holdsOn(handles, await refreshHolds(), drawing.rows, drawing.header)
       if (!on.length) return true
@@ -161,7 +167,7 @@ export function useCadEdit(p: {
   )
 
   const run = useCallback(
-    async (argv: string[], handles: readonly string[], verb: 'move' | 'relabel'): Promise<boolean> => {
+    async (argv: string[], handles: readonly string[], verb: EditVerb): Promise<boolean> => {
       if (!editable || !source || !filePath || !drawing || busy) return false
       setMessage(null)
       if (!(await overHolds(handles, verb))) return false
@@ -193,6 +199,15 @@ export function useCadEdit(p: {
     (dx: number, dy: number) => (dx || dy ? run(moveArgv(selection, dx, dy, unit), selection, 'move') : Promise.resolve(false)),
     [run, selection, unit],
   )
+  const frame = useMemo(() => selectionBox(selection.flatMap((h) => byHandle.get(h) ?? [])), [selection, byHandle])
+  const centre = useMemo(() => (frame ? centreOf(frame) : null), [frame])
+  const rotate = useCallback(
+    (deg: number, about?: XY) => {
+      const c = about ?? centre
+      return normDeg(deg) && c ? run(rotateArgv(selection, deg, c, unit), selection, 'rotate') : Promise.resolve(false)
+    },
+    [run, selection, unit, centre],
+  )
   const relabel = useCallback(
     (insert: string, tag: string, value: string, nth: number | null) => run(attribArgv(insert, tag, value, nth), [insert], 'relabel'),
     [run],
@@ -200,5 +215,5 @@ export function useCadEdit(p: {
 
   const goViewOnly = useCallback((words: string) => setOff(words), [])
 
-  return { rows, byHandle, selection, select, canEdit, editable, viewOnly, unit, holds, canMove, busy, message, prompt, goViewOnly, move, relabel }
+  return { rows, byHandle, selection, select, canEdit, editable, viewOnly, unit, holds, canMove, busy, message, prompt, goViewOnly, frame, centre, move, rotate, relabel }
 }

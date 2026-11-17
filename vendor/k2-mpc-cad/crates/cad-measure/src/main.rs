@@ -38,6 +38,8 @@
 //!   a time), and a page read by opening the drawing per call; it prints the peak memory of the
 //!   held path (Linux) beside the read path's. It prints; it asserts nothing.
 
+mod edits;
+
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -2404,6 +2406,8 @@ fn main() -> ExitCode {
         ["drawings", out] => drawings(Path::new(out), false),
         ["drawings", out, "--referee"] => drawings(Path::new(out), true),
         ["referee", dir] => referee(Path::new(dir)),
+        ["edits", out] => edits::write(Path::new(out)),
+        ["edit-referee", dir] => edits::referee(Path::new(dir)),
         ["referee-draw", dir] => referee_draw(Path::new(dir)),
         ["header-check", dir] => header_check(Path::new(dir)),
         ["h1", dir] => h1(Path::new(dir)),
@@ -2421,7 +2425,7 @@ fn main() -> ExitCode {
         ["draw-speed", sizes @ ..] if !sizes.is_empty() => draw_speed(sizes),
         ["draw-speed-one", file] => draw_speed_one(Path::new(file)),
         _ => {
-            Err("usage: cad-measure drawings OUT | header-check DIR | h1 PAIRS | probe DIR | dwg-check DIR | dwg-entities FILE | dwg-draw FILE [--container] | dwg-draw-compare DWG DXF | referee DIR | speed N...".into())
+            Err("usage: cad-measure drawings OUT | edits OUT | edit-referee DIR | header-check DIR | h1 PAIRS | probe DIR | dwg-check DIR | dwg-entities FILE | dwg-draw FILE [--container] | dwg-draw-compare DWG DXF | referee DIR | speed N...".into())
         }
     };
     match r {

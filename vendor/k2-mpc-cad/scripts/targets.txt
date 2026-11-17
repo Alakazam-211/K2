@@ -32,6 +32,9 @@ k2-mpc-dxf|test|read_goldens||check
 k2-mpc-dxf|test|pack_session||check
 k2-mpc-dxf|test|probe||check
 k2-mpc-dxf|test|draw||check
+k2-mpc-dxf|test|pack_verbs||check
+k2-mpc-dxf|test|edit||check
+k2-mpc-dxf|test|edit_session||check
 k2-mpc-dxf|test|mutants|mutants|check
 
 k2-mpc-dwg|lib|k2_mpc_dwg||check

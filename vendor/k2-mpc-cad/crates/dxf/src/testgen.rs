@@ -2183,6 +2183,236 @@ fn raw(kind: &str, pairs: &[(i32, &str)]) -> Ent {
     Ent::raw(kind, pairs)
 }
 
+/// The edit verbs' sampler (2000 and later): every kind the edit verbs change, on layers of each
+/// kind (locked, frozen, an external reference's), block references with attributes (one of
+/// them twice, one of a dynamic block's drawn form), an entity in a block definition and in a
+/// dynamic block's definition and drawn form, a proxy, a draw-order table naming the lamp, and a
+/// paper-space text. Each row finds its entity by label.
+pub fn edit_sampler(version: Ver) -> Spec {
+    let locked = |name: &str, locked: bool, frozen: bool| Layer {
+        name: name.into(),
+        color: 2,
+        frozen,
+        locked,
+        ltype: "CONTINUOUS".into(),
+    };
+    let mut s = Spec::new(version)
+        .layer("A-WALL", 1)
+        .layer("E-DEV", 3)
+        .layer("ANNO", 7)
+        .layer_full(locked("LOCKED", true, false))
+        .layer_full(locked("FROZEN", false, true))
+        .layer("BACK|WALLS", 5)
+        .block(
+            "DEV",
+            [0.0, 0.0],
+            vec![Ent::circle([0.0, 0.0], 0.5).on("0").label("in-block")],
+        )
+        .block(
+            "DYN",
+            [0.0, 0.0],
+            vec![Ent::circle([0.0, 0.0], 0.5).on("0").label("in-dyn-def")],
+        )
+        .dynamic(
+            "*U7",
+            [0.0, 0.0],
+            vec![Ent::line([0.0, 0.0], [1.0, 0.0]).on("0").label("in-dyn")],
+            "DYN",
+        )
+        .model(
+            Ent::line([1.1, 0.0], [10.0, 0.0])
+                .on("A-WALL")
+                .label("wall"),
+        )
+        .model(
+            Ent::line([0.0, 5.0], [10.0, 5.0])
+                .on("A-WALL")
+                .color(1)
+                .prop(420, "16711680")
+                .label("red"),
+        )
+        .model(
+            Ent::circle([20.0, 20.0], 2.0)
+                .on("E-DEV")
+                .handle(0xA00)
+                .label("lamp"),
+        )
+        .model(
+            Ent::arc([30.0, 0.0], 5.0, 0.0, 180.0)
+                .on("A-WALL")
+                .label("arc"),
+        )
+        .model(
+            Ent::lwpoly(
+                &[([0.0, 0.0], 0.0), ([10.0, 0.0], 1.0), ([10.0, 10.0], 0.0)],
+                false,
+            )
+            .on("A-WALL")
+            .label("lw"),
+        )
+        .model(
+            Ent::poly(
+                &[([0.0, 0.0], 0.0), ([4.0, 0.0], 0.0), ([4.0, 3.0], 0.0)],
+                true,
+            )
+            .on("A-WALL")
+            .label("poly"),
+        )
+        .model(
+            Ent::text([1.0, 1.0], 2.5, "ROOM 101")
+                .on("ANNO")
+                .label("room"),
+        )
+        .model(
+            Ent::mtext([1.0, 5.0], 2.5, "North wall")
+                .on("ANNO")
+                .label("note"),
+        )
+        .model(
+            Ent::raw(
+                "ELLIPSE",
+                &[
+                    (100, "AcDbEllipse"),
+                    (10, "5.0"),
+                    (20, "5.0"),
+                    (30, "0.0"),
+                    (11, "2.0"),
+                    (21, "1.0"),
+                    (31, "0.0"),
+                    (40, "0.5"),
+                    (41, "0.0"),
+                    (42, "6.283185307179586"),
+                ],
+            )
+            .on("A-WALL")
+            .label("ellipse"),
+        )
+        .model(
+            Ent::insert("DEV", [30.0, 0.0])
+                .on("E-DEV")
+                .attrib("DEVICE", "CAM-01")
+                .attrib("LABEL", "C1")
+                .label("dev"),
+        )
+        .model(
+            Ent::insert("*U7", [40.0, 0.0])
+                .on("E-DEV")
+                .attrib("DEVICE", "CAM-02")
+                .label("dyn"),
+        )
+        .model(
+            Ent::insert("DEV", [50.0, 0.0])
+                .on("E-DEV")
+                .attrib("DEVICE", "A")
+                .attrib("DEVICE", "B")
+                .label("twice"),
+        )
+        .model(
+            Ent::line([0.0, -5.0], [1.0, -5.0])
+                .on("LOCKED")
+                .label("locked"),
+        )
+        .model(
+            Ent::line([0.0, -6.0], [1.0, -6.0])
+                .on("FROZEN")
+                .label("frozen"),
+        )
+        .model(
+            Ent::line([0.0, -7.0], [1.0, -7.0])
+                .on("BACK|WALLS")
+                .label("xrefline"),
+        )
+        .model(
+            Ent::raw(
+                "ACAD_PROXY_ENTITY",
+                &[(100, "AcDbProxyEntity"), (90, "498"), (91, "0"), (92, "0")],
+            )
+            .on("0")
+            .label("proxy"),
+        )
+        .paper(
+            Ent::text([10.0, 10.0], 3.5, "TITLE")
+                .on("ANNO")
+                .label("title"),
+        );
+    s.draw.sortents = vec![(0xA00, 0xB00)];
+    s
+}
+
+/// Our own splice of `bytes`: `pairs` put right after the handle of the attribute tagged `tag`
+/// (the first such) of the block reference with handle `h`, written as that pair is.
+///
+/// # Panics
+/// When the reference or the attribute isn't there.
+pub fn splice_attrib(bytes: &[u8], h: u64, tag: &str, pairs: &[(i32, &str)]) -> Vec<u8> {
+    let s = read_for_splice(bytes);
+    let (first, end) = entity_span(&s, h);
+    let mut at = None;
+    let mut i = first;
+    while i < end {
+        if s.tok.is0(i, "ATTRIB") {
+            let unit_end = (i + 1..end)
+                .find(|&j| s.tok.pairs[j].code == 0)
+                .unwrap_or(end);
+            let tagged = (i + 1..unit_end)
+                .any(|j| s.tok.pairs[j].code == 2 && s.tok.text(j).eq_ignore_ascii_case(tag));
+            if tagged {
+                at = (i + 1..unit_end).find(|&j| s.tok.pairs[j].code == 5);
+                break;
+            }
+            i = unit_end;
+            continue;
+        }
+        i += 1;
+    }
+    let p = s.tok.pairs[at.expect("the attribute")];
+    [
+        &bytes[..p.end()],
+        &pairs_like(bytes, &p, pairs)[..],
+        &bytes[p.end()..],
+    ]
+    .concat()
+}
+
+/// Our own splice of `bytes`: an object of `pairs` (its `0` pair included) put before the end of
+/// the OBJECTS section, written as the section's end marker is.
+///
+/// # Panics
+/// When the drawing has no closed OBJECTS section.
+pub fn splice_object(bytes: &[u8], pairs: &[(i32, &str)]) -> Vec<u8> {
+    let s = read_for_splice(bytes);
+    let end = s
+        .sections
+        .iter()
+        .find(|x| x.name == "OBJECTS" && x.closed)
+        .map(|x| x.end - 1)
+        .expect("an objects section");
+    let p = s.tok.pairs[end];
+    let at = p.start();
+    [
+        &bytes[..at],
+        &pairs_like(bytes, &p, pairs)[..],
+        &bytes[at..],
+    ]
+    .concat()
+}
+
+/// `pairs` written as pair `p` of `bytes` is (code padding, line ending).
+fn pairs_like(bytes: &[u8], p: &crate::token::Pair, pairs: &[(i32, &str)]) -> Vec<u8> {
+    let eol = p.value_eol.bytes();
+    let padded = bytes.get(p.start()) == Some(&b' ');
+    let mut out = Vec::new();
+    for (code, value) in pairs {
+        let code_text = if padded {
+            format!("{code:>3}")
+        } else {
+            code.to_string()
+        };
+        out.extend_from_slice(&[code_text.as_bytes(), eol, value.as_bytes(), eol].concat());
+    }
+    out
+}
+
 /// The drawing-model read's sampler (2000 on): every kind it models and one it doesn't, the
 /// inheritance cases (by layer, by block, layer `0` in a block, own values), a linetype and text
 /// styles of its own, layer true colour, lineweight and transparency, a draw-order table, a

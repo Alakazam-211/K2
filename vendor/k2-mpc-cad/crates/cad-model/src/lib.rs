@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub mod args;
+pub mod change;
 pub mod draw;
 pub mod error;
 pub mod geom;

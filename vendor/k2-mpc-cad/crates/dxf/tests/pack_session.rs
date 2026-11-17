@@ -1,10 +1,9 @@
 //! The pack inside the kit: a blob session indexes a drawing through the kit's job (in process
 //! and through the worker's wire form), the kit keeps every handle as the file's own key and
-//! mints keys only where the file gives none (or gives one twice), a person's new version
-//! keeps the keys of what it didn't change, and an agent's whole-file write is refused.
+//! mints keys only where the file gives none (or gives one twice), and a person's new version
+//! keeps the keys of what it didn't change.
 
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use k2_mpc_base::blob::{BlobConfig, BlobStore};
 use k2_mpc_base::index::{index_to_wire, IndexStatus, IndexView, KeyClass};
 use k2_mpc_base::session::{
-    AuditEvent, BlobPack, BlobSession, BlobWriteOptions, Config, ConnId, Host, Participant,
-    ParticipantKind, Rights, SessionError, SessionManager, Stay,
+    AuditEvent, BlobPack, BlobSession, Config, ConnId, Host, Participant, ParticipantKind, Rights,
+    SessionManager, Stay,
 };
 use k2_mpc_base::store::{DocKey, DocStore};
 use k2_mpc_dxf::testgen::{self, Ent, Spec, Ver};
@@ -228,69 +227,4 @@ fn a_worker_result_commits_like_an_in_process_run() {
     assert_eq!(v.source, "dxf-AC1024");
     let blocks = v.nodes.iter().filter(|n| n.kind == "block").count();
     assert_eq!(blocks, 4, "A, B, C and D");
-}
-
-/// The current version's bytes, as `conn` reads them.
-fn current(s: &BlobSession, conn: ConnId) -> Vec<u8> {
-    let mut r = s.read(conn).expect("the read");
-    let mut out = Vec::new();
-    r.reader.read_to_end(&mut out).expect("the bytes");
-    out
-}
-
-#[test]
-pub fn an_agents_whole_file_write_is_refused() {
-    let f = fx("agent");
-    let a = Spec::new(Ver::R2013)
-        .layer("A-WALL", 1)
-        .model(
-            Ent::line([0.0, 0.0], [10.0, 0.0])
-                .on("A-WALL")
-                .label("wall"),
-        )
-        .build();
-    let s = f.open("plan.dxf", &a.bytes);
-    let bot = f.join(&s, "bot", ParticipantKind::Agent, Rights::editor());
-    let alice = f.join(
-        &s,
-        "alice",
-        ParticipantKind::Person,
-        Rights::read_only().with_history(true),
-    );
-    let v = s.status().unwrap().version;
-    let moved = k2_mpc_dxf::testgen::splice_move(&a.bytes, a.handle("wall"), 1.0);
-    // a whole-file write and a write against a base, both refused, typed
-    let e = s.write_bytes(bot, &moved, v).unwrap_err();
-    assert_eq!(
-        e,
-        SessionError::AgentWriteRefused,
-        "an agent's whole-file write"
-    );
-    assert_eq!(e.report().id(), "MPC-E715");
-    let e = s
-        .write_bytes_with(bot, &moved, v, &BlobWriteOptions::new())
-        .unwrap_err();
-    assert_eq!(
-        e,
-        SessionError::AgentWriteRefused,
-        "an agent's write on a base"
-    );
-    // the file is unchanged: the same version, the same bytes, for the agent and for a person
-    assert_eq!(s.status().unwrap().version, v, "no version recorded");
-    assert_eq!(
-        current(&s, bot),
-        a.bytes,
-        "the agent reads the file unchanged"
-    );
-    // a person's read is unaffected
-    assert_eq!(
-        current(&s, alice),
-        a.bytes,
-        "the person reads the file unchanged"
-    );
-    let view = indexed(&s);
-    assert!(
-        view.nodes.iter().any(|n| n.key.as_str() == a.addr("wall")),
-        "the person's index read still has the wall"
-    );
 }

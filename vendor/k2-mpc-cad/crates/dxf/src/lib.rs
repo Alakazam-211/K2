@@ -11,6 +11,8 @@
 //!   the doc has moved on.
 //! - [`pack`]: the kit's tier-0 blob pack, with the model's structure index.
 //! - [`verbs`]: the read verbs, each a pure function of one version's bytes with typed data.
+//! - [`edit`]: the edit verbs, each a pure function of one version's bytes to a plan of byte
+//!   ranges the kit applies, checked by the pack's own read of its output before it returns.
 //!
 //! Nothing is guessed: a file that isn't code/value pairs, or is binary DXF, is refused with a
 //! typed [`CadError`] naming the byte offset; a well-formed but unusual file is read as it is.
@@ -19,6 +21,7 @@
 pub mod codes;
 pub mod convert;
 pub mod draw;
+pub mod edit;
 pub mod error;
 #[cfg(feature = "fuzzing")]
 pub mod fuzzing;

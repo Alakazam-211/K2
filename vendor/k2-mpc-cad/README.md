@@ -68,6 +68,73 @@ is shared by every drawing format (`cad.drawing/1`, `cad.layer-list/1`, `cad.blo
 
 Every read that returns coordinates gives the drawing's units with them.
 
+**Inside the kit**, each read verb is a blob verb (`BlobPack::verbs`) run through
+`BlobSession::run_tool` on the version the kit hands it; its data names its shape (`schema`) and,
+for a paged read, the next call (`next`). `draw header` and `draw page` take that version as
+their `--version` (another is refused). The pack's refusals are listed by id
+(`BlobPack::errors`): the reader's `DXF-E001` to `DXF-E003`, and the shared model's `CAD-E0nn`
+under the pack's name as `DXF-E0nn`.
+
+**Holds** (claims on nodes) reach, under `ClaimPolicy::Respect`: on a layer, every entity on it;
+on a block definition, model space or a layout, everything in it; on anything else, the node.
+
+## Edit verbs (DXF)
+
+Each is a pure function of one version's bytes and its arguments to a **plan**, the byte ranges
+to replace, which the kit applies (its tier-0 verb path): every byte outside the ranges is the
+input's. Each is `merge: pack` (the unit merge covers it) and reads the version whole.
+
+| Verb | Changes | Word |
+|---|---|---|
+| `attrib set @h:INSERT --tag T --value V [--nth N]` | one attribute's value (a dynamic block's reference too) | `set` |
+| `entity set @h:E… [--layer L] [--color N\|bylayer\|byblock] [--rgb #rrggbb] [--ltype NAME\|bylayer\|byblock]` | display properties; a colour number drops the true colour | `changed` |
+| `entity move @h:E… --by dx,dy --unit U` | each point of each entity and its followers | `moved` |
+| `entity add line\|polyline\|text … --unit U [--layer L] [--color N] [--ltype NAME] [--in model\|paper\|@h:LAYOUT]` | one new entity | `added` |
+| `entity delete @h:E…` | the entities, their followers, what they own and their draw-order rows | `deleted` |
+
+**What a plan writes.** Value lines (never a code line or a line ending), whole pairs inserted
+before a pair, whole pairs removed; new pairs in the file's own style (code padding, line
+endings). A move adds in decimal on the file's own tokens (`1.1 + 0.1` is `1.2`); vectors (an
+ellipse's major axis, a multiline text's direction), radii and angles are not points. Text is
+written as the file writes it: UTF-8 from 2007 on; before, code page 1252 with `\U+XXXX` for a
+character it lacks. A new handle is above every handle the file owns or points at, and
+`$HANDSEED` is raised past it; nothing else in the header is written, so the same call on the
+same bytes plans the same bytes (the dry run's digest is the real run's).
+
+**The self-check.** Before a plan returns, the pack reads its own output and checks (a) the pair
+count, (b) every unit the plan didn't name byte for byte, (c) every value it meant, (d) new
+handles above the highest and `$HANDSEED` above them, (e) no pointer to what it removed, (f) the
+edit rules on what it changed. A failure is `DXF-E090`, and nothing is planned.
+
+**The rules** are the same for a person and an agent (a hold refuses an agent only):
+
+| Id | Name | When |
+|---|---|---|
+| `DXF-E020` | `layer_missing` | `--layer` names no layer |
+| `DXF-E021` | `entity_not_editable` | a kind or state the verbs don't change (hatch, dimension, leader, viewport, solid, image, embedded object, its own frame, reactors, unknown) |
+| `DXF-E022` | `unit_mismatch` | `--unit` isn't the drawing's |
+| `DXF-E027` | `referenced` | a delete of what another object points at, which the pack can't mend |
+| `DXF-E040` | `version_unsupported` | a drawing before DXF 2000 (AC1015) |
+| `DXF-E041` | `handles_off` | no handles, an entity or object without one, or a handle twice |
+| `DXF-E042` | `external_reference` | an external reference's entity or layer |
+| `DXF-E043` | `proxy` | another application's object |
+| `DXF-E044` | `dynamic_geometry` | inside a dynamic block's definition or drawn form |
+| `DXF-E045` | `layer_locked` | on a locked layer, or put on one |
+| `DXF-E046` | `in_block_definition` | inside a block definition |
+| `DXF-E047` | `attrib_missing` | no attribute with that tag |
+| `DXF-E048` | `attrib_driven` | the attribute's value is a field |
+| `DXF-E049` | `attrib_multiline` | a multi-line attribute (2018) |
+| `DXF-E050` | `edit_too_many` | over 10,000 entities in one call |
+| `DXF-E053` | `table_entry_missing` | a linetype or text style the drawing lacks |
+| `DXF-E054` | `value_not_writable` | a line break, a control character, over 255 bytes |
+| `DXF-E090` | `self_check` | the output didn't read back as planned |
+
+**Beside other changes.** Two calls from one version (`--base`) land unless they change the same
+field of one entity: geometry, layer, colour, linetype and text are fields apart, and every
+attribute value of a block reference is its text (so two attribute values of one reference
+overlap for now). An app's save over a verb's write merges by unit and field when the host has
+noted the version the app opened; without that, both are kept. DWG files are read only.
+
 ## The drawing-model read
 
 `draw header` and `draw page` give a viewer what it needs to draw the drawing, with the format's

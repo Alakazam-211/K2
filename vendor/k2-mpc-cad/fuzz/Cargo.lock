@@ -182,6 +182,7 @@ dependencies = [
 name = "k2-mpc-base"
 version = "0.21.0"
 dependencies = [
+ "libc",
  "redb",
  "regex-automata",
  "thiserror",

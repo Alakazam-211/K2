@@ -287,6 +287,7 @@ impl<'a> Side<'a> {
                     5 => "handle",
                     330 => "owner",
                     8 => "layer",
+                    62 if mutant::active("MergeFieldSplitDiffers") => "geom",
                     62 => "color",
                     420 => "rgb",
                     6 => "ltype",
@@ -781,6 +782,53 @@ impl<'a, 'b> Merger<'a, 'b> {
             }
         }
     }
+}
+
+/// A file's units as this merge keys them, for the edit verbs' self-check
+/// ([`crate::edit::check`]): each unit's key (as [`unit_key`] spells it) with its bytes, the
+/// frame's pairs in order, and the pair count.
+pub(crate) struct UnitMap {
+    pub by_key: BTreeMap<String, Vec<u8>>,
+    pub frame: Vec<(i32, Vec<u8>)>,
+    pub pairs: usize,
+}
+
+/// The key of a unit, as [`UnitMap::by_key`] spells it.
+pub(crate) enum UnitKey<'k> {
+    Header(&'k str),
+    Entity(u64),
+    Object(u64),
+}
+
+/// `k` spelled as [`UnitMap::by_key`] has it.
+pub(crate) fn unit_key(k: UnitKey<'_>) -> String {
+    let key = match k {
+        UnitKey::Header(n) => Key::Header(n.to_ascii_uppercase()),
+        UnitKey::Entity(h) => Key::Entity(h),
+        UnitKey::Object(h) => Key::Object(h),
+    };
+    format!("{key:?}")
+}
+
+/// The units of `bytes` (an entity or object without a handle, or a key twice, refuses: the
+/// merge can't key such a file either).
+pub(crate) fn unit_map(bytes: &[u8]) -> Result<UnitMap, String> {
+    let sd = side(bytes)?;
+    let tp = &sd.s.tok.pairs;
+    let by_key = sd
+        .units
+        .iter()
+        .map(|(k, u)| {
+            let lo = tp[u.first].start();
+            let hi = tp[u.end - 1].end();
+            (format!("{k:?}"), sd.s.tok.bytes[lo..hi].to_vec())
+        })
+        .collect();
+    Ok(UnitMap {
+        by_key,
+        frame: sd.frame,
+        pairs: tp.len(),
+    })
 }
 
 /// The three-way merge of `base`, `ours` and `theirs` (module docs).

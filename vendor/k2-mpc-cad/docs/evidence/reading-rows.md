@@ -4,9 +4,9 @@ Each row below is shown able to fail by its plant: a bug planted in the code it 
 (`--features mutants`, one plant active at a time), which turns that row red at its own
 assertion. `crates/dxf/tests/mutants.rs` runs every plant and fails if any row stays green.
 
-Every gate runs every row and every plant at its commit, beside the kit it pairs with, and fails
-if any part fails (formatting, lints with warnings denied, the docs with warnings denied, the
-suite, the plants, licences, licence files, the private-name and label guards).
+Green run of record: commit `036a0e30`, with the kit at `58b72f9a`; every gate part passed (formatting, lints with
+warnings denied, the docs with warnings denied, the suite, the plants, licences, licence
+files, the private-name and label guards); "plants: 20 of 20 caught".
 
 | Row (file) | Plant | Caught at |
 |---|---|---|

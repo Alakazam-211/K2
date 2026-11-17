@@ -1,5 +1,5 @@
 //! The planted bugs (`--features mutants`): each plants one bug in the tokenizer, the model, the
-//! index or a read, and the row written for it must pass without it and fail under it. A plant
+//! index, a read or an edit verb, and the row written for it must pass without it and fail under it. A plant
 //! no row catches fails the run, so every row is shown to be able to fail. One plant at a time,
 //! each named in the output with what stopped it.
 #![cfg(feature = "mutants")]
@@ -8,14 +8,16 @@
 
 #[path = "draw.rs"]
 mod draw;
+#[path = "edit.rs"]
+mod edit;
+#[path = "edit_session.rs"]
+mod edit_session;
 #[path = "generic.rs"]
 mod generic;
 #[path = "index.rs"]
 mod index;
 #[path = "merge.rs"]
 mod merge;
-#[path = "pack_session.rs"]
-mod pack_session;
 #[path = "probe.rs"]
 mod probe;
 #[path = "references.rs"]
@@ -80,11 +82,6 @@ const PLANTS: &[(&str, Row)] = &[
     ),
     // what we write
     ("SubclassDropped", writer::subclass_markers_in_order),
-    // the pack in the kit: an agent's whole-file write refused
-    (
-        "AgentWritesAllowed",
-        pack_session::an_agents_whole_file_write_is_refused,
-    ),
     // the merge
     ("MergeTakesTheirs", merge::merge_disjoint_entities),
     ("FieldsAsWhole", merge::merge_same_entity_different_fields),
@@ -135,6 +132,24 @@ const PLANTS: &[(&str, Row)] = &[
     ("EmbeddedCodesAsMain", index::index_mtext_embedded_object),
     ("TextBoxExact", draw::draw_text_boxes_are_approx),
     ("TextBoxExact", index::index_text_boxes_are_approx),
+    // the edit verbs: what they write, and what they refuse that they shouldn't
+    ("SpanCoversCodeLine", edit::untouched_units_exact),
+    ("EditStyleLeaks", edit::style_kept),
+    ("FloatDriftOnMove", edit::move_decimal_exact),
+    ("VectorMovedAsPoint", edit::point_table),
+    ("AttribsLeftBehind", edit::point_table),
+    ("CodepageIgnored", edit::attrib_value_written),
+    ("TrueColourLeft", edit::set_props),
+    ("PairOrderIgnored", edit::set_props),
+    ("HmaxOwnedOnly", edit::adds_mint_above_hmax),
+    ("HandseedLeft", edit::adds_mint_above_hmax),
+    ("FollowersLeft", edit::delete_cleans_known_refs),
+    ("SortentsLeft", edit::delete_cleans_known_refs),
+    ("SelfCheckSkipped", edit::self_check_catches),
+    ("DynblockAttribRefused", edit::honest_edits_land),
+    ("LockedReadAsFrozen", edit::honest_edits_land),
+    ("ProxyWritten", edit::refusals_named),
+    ("MergeFieldSplitDiffers", edit_session::merge_and_base_agree),
 ];
 
 /// A plant's row under the plant: `Err` with what stopped it.

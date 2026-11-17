@@ -28,18 +28,7 @@ of data: the colour-number palette (its row below).
 | tests, plants, fuzz properties | our own |
 
 **Not used as sources:** no other DXF or DWG reader's or writer's source code is read or ported
-for this repo, but for the palette's one data file named above. In particular:
+for this repo. Test referees, where used, run as separate processes on test machines, are pinned
+by version and checksum, and are never shipped or vendored; only their outputs are compared.
 
-- **The Open Design Specification for .dwg files** (5.4.1) is a source of facts only: our own
-  tables and code, citing its sections; it is never committed, shipped or quoted.
-- **ACadSharp** (MIT) may be studied only, and any port would be cleared first: nothing in this
-  repo is ported from it. Its repository's public sample drawings are test inputs on test
-  machines, by reference only (pinned commit, sha256, licence), never committed.
-- **cadkit-dwg**: the DWG reader was written without reading or running it.
-- **LibreDWG** is not a source: nobody working on this repo reads its source code. Its
-  command-line tools run only as a test referee (below).
-
-**Test referees** (ezdxf; LibreDWG's command-line tools; a DXF program's re-saves, where used)
-run as separate processes on test machines, are pinned by version and checksum, and are never
-shipped, vendored or linked; only their outputs are compared, and those outputs stay off the
-repo.
+A DWG reader, when it comes, gets its own lines here, with what it was written from.

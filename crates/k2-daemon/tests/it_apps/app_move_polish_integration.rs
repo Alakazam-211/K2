@@ -935,7 +935,10 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
 /// The guest roster, for an agent with the skin-manage switch: it acts
 /// only on guests wholly inside its own workspace, and hands them only
 /// its own rooms and roles (security review, the older hole). Anything
-/// else is owner_only and touches nothing; the owner is unchanged.
+/// else is owner_only and touches nothing, except a box-wide role reaching
+/// another room on a login of its own App: that is held for the owner on a
+/// card (0.46.14) and still touches nothing until approved. The owner is
+/// unchanged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_manages_only_its_own_workspaces_guests() {
     let env = setup(&[]);
@@ -1033,10 +1036,21 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
     assert!(k2_core::skin::must_change::is_flagged(&user("scope-fresh").id).unwrap());
     let r = post(d.port, "/cli/skin/users/rooms", &agent, json!({"username": "scope-fresh", "rooms": [b.handle]})).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "another workspace's room: {}", r.body);
-    // A box-wide role reaching another room isn't the App's to hand out.
+    // A box-wide role reaching another room isn't the App's to hand out: on
+    // a login of its own App it is held for the owner on a card (0.46.14),
+    // never applied by the agent. Nothing changes before the owner decides,
+    // and a Deny changes nothing.
     let r = post(d.port, "/cli/skin/roles/assign", &agent, json!({"username": "scope-fresh", "role": "scope-rb"})).await;
-    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "another workspace's role: {}", r.body);
-    assert_eq!((user("scope-fresh").default_rooms, user("scope-fresh").role_id), (Vec::<String>::new(), None));
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "another workspace's role is held, not applied: {}", r.body);
+    let summary = r.json()["request"]["summary"].as_str().expect("summary").to_string();
+    for want in ["scope-fresh", "scope-rb", b.handle.as_str()] {
+        assert!(summary.contains(want), "the card names {want}: {summary}");
+    }
+    let held = r.json()["request"]["id"].as_str().expect("request id").to_string();
+    assert_eq!((user("scope-fresh").default_rooms, user("scope-fresh").role_id), (Vec::<String>::new(), None), "nothing before the owner decides");
+    let r = post(d.port, "/cli/app/deny", OWNER, json!({"request": held})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((user("scope-fresh").default_rooms, user("scope-fresh").role_id), (Vec::<String>::new(), None), "denied: nothing changed");
     let r = post(d.port, "/cli/skin/users/rooms", &agent, json!({"username": "scope-fresh", "rooms": [a.handle]})).await;
     assert_eq!(r.status, 200, "its own room: {}", r.body);
     let r = post(d.port, "/cli/skin/roles/assign", &agent, json!({"username": "scope-fresh", "role": "scope-ra"})).await;
@@ -1215,7 +1229,9 @@ async fn an_agent_mints_and_edits_only_its_own_workspaces_platform_passes() {
 
 /// A decoy role named like another role's id never stands in for it: the
 /// checks resolve a role as the handlers do (id first, then name), and a
-/// new role's name may not look like an id (security review A).
+/// new role's name may not look like an id (security review A). An assign
+/// on a login of its own App is held for the owner (0.46.14): the card and
+/// the request carry the real role, never the decoy.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_role_named_like_another_roles_id_is_never_the_one_checked() {
     let env = setup(&[]);
@@ -1250,8 +1266,23 @@ async fn a_role_named_like_another_roles_id_is_never_the_one_checked() {
     let decoy_app = app_row(&a, "decoyappa");
     let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "decoy-guest", "app": decoy_app})).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    let guest_role = || k2_core::skin::list_principals().unwrap().into_iter().find(|p| p.username == "decoy-guest").expect("guest").role_id;
+    // Assigning by the victim's id on a login of its own App: the check sees
+    // the real role (B's room, not the decoy's A room), so it is held for the
+    // owner on a card (0.46.14) carrying the victim's id; had the decoy been
+    // checked it would have gone through. Nothing changes before the owner
+    // decides, and a Deny changes nothing.
+    let r = post(d.port, "/cli/skin/roles/assign", &agent, json!({"username": "decoy-guest", "role": victim.id})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "held, not applied: {}", r.body);
+    let req = r.json()["request"].clone();
+    assert!(req["summary"].as_str().expect("summary").contains("decoy-victim"), "the card names the real role: {}", r.body);
+    assert!(req["summary"].as_str().expect("summary").contains(b.handle.as_str()), "and its room: {}", r.body);
+    assert_eq!(req["body"]["body"]["role"], json!(victim.id), "the request carries the real role's id: {}", r.body);
+    assert_eq!(guest_role(), None, "nothing before the owner decides");
+    let r = post(d.port, "/cli/app/deny", OWNER, json!({"request": req["id"].as_str().expect("request id")})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(guest_role(), None, "denied: no role handed out");
     for (path, want, body) in [
-        ("/cli/skin/roles/assign", "owner_only", json!({"username": "decoy-guest", "role": victim.id})),
         ("/cli/skin/roles/update", "owner_only", json!({"name": victim.id, "roomAccess": [{"handle": a.handle, "caps": ["thread:read"]}]})),
         ("/cli/skin/roles/room", "owner_only", json!({"name": victim.id, "handle": a.handle, "caps": ["thread:read"]})),
         ("/cli/skin/roles/paths", "owner_only", json!({"name": victim.id, "handle": b.handle, "read": ["docs"]})),

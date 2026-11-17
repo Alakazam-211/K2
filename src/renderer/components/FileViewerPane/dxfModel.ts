@@ -24,6 +24,7 @@ import type {
   ITextEntity,
 } from 'dxf-parser'
 import { entityColor, FG, hex } from './dxf/color'
+import { IndexBuilder, type DrawingIndex } from './dxf/drawing-index'
 import { layerFlags, layerHidden } from './dxf/layers'
 import { sampleSpline } from './dxf/nurbs'
 import { readExtras } from './dxf/parse-extras'
@@ -73,6 +74,8 @@ export type DxfDrawing = {
   skippedTotal: number
   /** Layer names that drew something (for the stats line). */
   layers: number
+  /** Top-level entities and layers by handle and name, with their boxes. */
+  index: DrawingIndex
 }
 
 export { FG } from './dxf/color'
@@ -231,8 +234,10 @@ export function drawingFromDxf(
   metrics: TextMetrics = ESTIMATED_METRICS,
 ): DxfDrawing {
   const layers = new Map<string, LayerInfo>()
+  const idx = new IndexBuilder()
   for (const [name, l] of Object.entries(dxf.tables?.layer?.layers ?? {})) {
     layers.set(name, { c: hex(l.color), hidden: layerHidden(l, flags.get(name)) })
+    idx.layer(name, layerHidden({ frozen: l.frozen }, flags.get(name)), l.visible === false)
   }
   const blocks = dxf.blocks ?? {}
   const bounds: Bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
@@ -249,6 +254,7 @@ export function drawingFromDxf(
     if (X > bounds.maxX) bounds.maxX = X
     if (Y < bounds.minY) bounds.minY = Y
     if (Y > bounds.maxY) bounds.maxY = Y
+    idx.add(X, Y)
   }
 
   const layerOf = (e: IEntity, ctx: Ctx) =>
@@ -543,7 +549,9 @@ export function drawingFromDxf(
   const parsedByType: Record<string, number> = {}
   for (const e of dxf.entities ?? []) {
     parsedByType[e.type] = (parsedByType[e.type] ?? 0) + 1
+    idx.begin()
     const nd = entity(e, root, true)
+    idx.end(e.handle, e.layer ?? '0', nd !== null)
     if (nd) nodes.push(nd)
   }
   // Types dxf-parser has no handler for (HATCH, LEADER, …) never reach
@@ -554,5 +562,5 @@ export function drawingFromDxf(
   }
   const skippedTotal = Object.values(skipped).reduce((a, b) => a + b, 0)
   const has = Number.isFinite(bounds.minX) && Number.isFinite(bounds.minY)
-  return { nodes, bounds: has ? bounds : null, drawn, skipped, skippedTotal, layers: usedLayers.size }
+  return { nodes, bounds: has ? bounds : null, drawn, skipped, skippedTotal, layers: usedLayers.size, index: idx.index }
 }

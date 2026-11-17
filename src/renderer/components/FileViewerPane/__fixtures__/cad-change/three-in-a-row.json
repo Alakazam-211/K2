@@ -1,0 +1,117 @@
+{
+  "schema": "cad.change/1",
+  "format": "dxf",
+  "from": 50,
+  "to": 53,
+  "units": {
+    "word": "mm",
+    "insunits": 4
+  },
+  "pairing": "kept",
+  "versions": [
+    {
+      "version": 51,
+      "by": {
+        "pid": "p_atlas",
+        "name": "Atlas",
+        "kind": "agent"
+      },
+      "verb": "entity move",
+      "at_ms": 1763300051000
+    },
+    {
+      "version": 52,
+      "by": {
+        "pid": "p_atlas",
+        "name": "Atlas",
+        "kind": "agent"
+      },
+      "verb": "entity move",
+      "at_ms": 1763300052000
+    },
+    {
+      "version": 53,
+      "by": {
+        "pid": "p_atlas",
+        "name": "Atlas",
+        "kind": "agent"
+      },
+      "verb": "entity set",
+      "at_ms": 1763300053000
+    }
+  ],
+  "entities": [
+    {
+      "address": "@h:2B1",
+      "op": "changed",
+      "kind": "LINE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "fields": [
+        "geom"
+      ],
+      "bbox_before": [
+        0,
+        0,
+        100,
+        0
+      ],
+      "bbox_after": [
+        10,
+        0,
+        110,
+        0
+      ],
+      "bbox_q": "exact",
+      "version": 51,
+      "by": "p_atlas",
+      "identity": null
+    },
+    {
+      "address": "@h:2B4",
+      "op": "changed",
+      "kind": "LINE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "fields": [
+        "geom"
+      ],
+      "bbox_before": [
+        0,
+        80,
+        0,
+        0
+      ],
+      "bbox_after": [
+        10,
+        80,
+        10,
+        0
+      ],
+      "bbox_q": "exact",
+      "version": 52,
+      "by": "p_atlas",
+      "identity": null
+    },
+    {
+      "address": "@h:2D0",
+      "op": "changed",
+      "kind": "LINE",
+      "layer": "A-FURN",
+      "owner": "model",
+      "fields": [
+        "other"
+      ],
+      "bbox_before": null,
+      "bbox_after": null,
+      "bbox_q": "none",
+      "version": 53,
+      "by": "p_atlas",
+      "identity": null
+    }
+  ],
+  "entities_more": 0,
+  "tables": [],
+  "blocks": [],
+  "page": null
+}

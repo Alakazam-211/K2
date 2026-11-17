@@ -1,0 +1,55 @@
+{
+  "schema": "cad.change/1",
+  "format": "dxf",
+  "from": 41,
+  "to": 42,
+  "units": {
+    "word": "mm",
+    "insunits": 4
+  },
+  "pairing": "kept",
+  "versions": [
+    {
+      "version": 42,
+      "by": {
+        "pid": "p_atlas",
+        "name": "Atlas",
+        "kind": "agent"
+      },
+      "verb": "entity move",
+      "at_ms": 1763300042000
+    }
+  ],
+  "entities": [
+    {
+      "address": "@h:2B1",
+      "op": "changed",
+      "kind": "LINE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "fields": [
+        "geom"
+      ],
+      "bbox_before": [
+        0,
+        0,
+        100,
+        0
+      ],
+      "bbox_after": [
+        10,
+        0,
+        110,
+        0
+      ],
+      "bbox_q": "exact",
+      "version": 42,
+      "by": "p_atlas",
+      "identity": null
+    }
+  ],
+  "entities_more": 0,
+  "tables": [],
+  "blocks": [],
+  "page": null
+}

@@ -1,0 +1,40 @@
+{
+  "schema": "cad.change/1",
+  "format": "dxf",
+  "from": 45,
+  "to": 46,
+  "units": {
+    "word": "mm",
+    "insunits": 4
+  },
+  "pairing": "kept",
+  "versions": [
+    {
+      "version": 46,
+      "by": {
+        "pid": "p_sam",
+        "name": "Sam",
+        "kind": "person"
+      },
+      "verb": "layer set",
+      "at_ms": 1763300046000
+    }
+  ],
+  "entities": [],
+  "entities_more": 0,
+  "tables": [
+    {
+      "address": "@h:15",
+      "what": "layer",
+      "name": "A-FURN",
+      "op": "changed",
+      "fields": [
+        "frozen"
+      ],
+      "version": 46,
+      "by": "p_sam"
+    }
+  ],
+  "blocks": [],
+  "page": null
+}

@@ -1,0 +1,12 @@
+{
+  "schema": "cad.change/1",
+  "format": "dxf",
+  "from": 54,
+  "to": 55,
+  "units": {
+    "word": "mm",
+    "insunits": 4
+  },
+  "pairing": "refused",
+  "refused_why": "an app that renumbers handles saved this drawing"
+}

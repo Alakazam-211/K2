@@ -1,0 +1,48 @@
+{
+  "schema": "cad.change/1",
+  "format": "dxf",
+  "from": 42,
+  "to": 43,
+  "units": {
+    "word": "mm",
+    "insunits": 4
+  },
+  "pairing": "kept",
+  "versions": [
+    {
+      "version": 43,
+      "by": {
+        "pid": "p_atlas",
+        "name": "Atlas",
+        "kind": "agent"
+      },
+      "verb": "entity add",
+      "at_ms": 1763300043000
+    }
+  ],
+  "entities": [
+    {
+      "address": "@h:2C0",
+      "op": "added",
+      "kind": "CIRCLE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "fields": [],
+      "bbox_before": null,
+      "bbox_after": [
+        40,
+        40,
+        60,
+        60
+      ],
+      "bbox_q": "exact",
+      "version": 43,
+      "by": "p_atlas",
+      "identity": null
+    }
+  ],
+  "entities_more": 0,
+  "tables": [],
+  "blocks": [],
+  "page": null
+}

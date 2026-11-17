@@ -1,0 +1,81 @@
+{
+  "schema": "cad.change/1",
+  "format": "dxf",
+  "from": 53,
+  "to": 54,
+  "units": {
+    "word": "mm",
+    "insunits": 4
+  },
+  "pairing": "doubt",
+  "versions": [
+    {
+      "version": 54,
+      "by": {
+        "pid": "p_sam",
+        "name": "Sam",
+        "kind": "person"
+      },
+      "verb": "entity move",
+      "at_ms": 1763300054000
+    }
+  ],
+  "entities": [
+    {
+      "address": "@h:2B4",
+      "op": "changed",
+      "kind": "LINE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "fields": [
+        "geom"
+      ],
+      "bbox_before": [
+        0,
+        80,
+        0,
+        0
+      ],
+      "bbox_after": [
+        10,
+        80,
+        10,
+        0
+      ],
+      "bbox_q": "exact",
+      "version": 54,
+      "by": "p_sam",
+      "identity": "doubt"
+    },
+    {
+      "address": "@h:2C0",
+      "op": "changed",
+      "kind": "CIRCLE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "fields": [
+        "geom"
+      ],
+      "bbox_before": [
+        35,
+        40,
+        55,
+        60
+      ],
+      "bbox_after": [
+        40,
+        40,
+        60,
+        60
+      ],
+      "bbox_q": "exact",
+      "version": 54,
+      "by": "p_sam",
+      "identity": null
+    }
+  ],
+  "entities_more": 0,
+  "tables": [],
+  "blocks": [],
+  "page": null
+}

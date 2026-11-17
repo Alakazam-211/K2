@@ -1,0 +1,66 @@
+{
+  "schema": "cad.change/1",
+  "format": "dxf",
+  "from": 44,
+  "to": 45,
+  "units": {
+    "word": "mm",
+    "insunits": 4
+  },
+  "pairing": "kept",
+  "versions": [
+    {
+      "version": 45,
+      "by": {
+        "pid": "p_atlas",
+        "name": "Atlas",
+        "kind": "agent"
+      },
+      "verb": "block set",
+      "at_ms": 1763300045000
+    }
+  ],
+  "entities": [
+    {
+      "address": "@h:2A1",
+      "op": "changed",
+      "kind": "LINE",
+      "layer": "0",
+      "owner": "@h:2A",
+      "fields": [
+        "geom"
+      ],
+      "bbox_before": [
+        0,
+        0,
+        8,
+        0
+      ],
+      "bbox_after": [
+        0,
+        0,
+        9,
+        0
+      ],
+      "bbox_q": "exact",
+      "version": 45,
+      "by": "p_atlas",
+      "identity": null
+    }
+  ],
+  "entities_more": 0,
+  "tables": [],
+  "blocks": [
+    {
+      "address": "@h:2A",
+      "name": "DOOR-900",
+      "op": "changed",
+      "affected_inserts": [
+        "@h:3F1",
+        "@h:3F2"
+      ],
+      "affected_more": 0
+    }
+  ],
+  "page": null
+}

@@ -1,0 +1,156 @@
+{
+  "schema": "cad.change/1",
+  "format": "dxf",
+  "from": 46,
+  "to": 50,
+  "units": {
+    "word": "mm",
+    "insunits": 4
+  },
+  "pairing": "kept",
+  "versions": [
+    {
+      "version": 47,
+      "by": {
+        "pid": "p_atlas",
+        "name": "Atlas",
+        "kind": "agent"
+      },
+      "verb": "entity move",
+      "at_ms": 1763300047000
+    },
+    {
+      "version": 48,
+      "by": {
+        "pid": "p_atlas",
+        "name": "Atlas",
+        "kind": "agent"
+      },
+      "verb": "entity add",
+      "at_ms": 1763300048000
+    },
+    {
+      "version": 49,
+      "by": {
+        "pid": "p_sam",
+        "name": "Sam",
+        "kind": "person"
+      },
+      "verb": "entity move",
+      "at_ms": 1763300049000
+    },
+    {
+      "version": 50,
+      "by": {
+        "pid": "p_atlas",
+        "name": "Atlas",
+        "kind": "agent"
+      },
+      "verb": "entity set",
+      "at_ms": 1763300050000
+    }
+  ],
+  "entities": [
+    {
+      "address": "@h:2B2",
+      "op": "changed",
+      "kind": "LINE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "fields": [
+        "geom"
+      ],
+      "bbox_before": [
+        100,
+        0,
+        100,
+        80
+      ],
+      "bbox_after": [
+        110,
+        0,
+        110,
+        80
+      ],
+      "bbox_q": "exact",
+      "version": 47,
+      "by": "p_atlas",
+      "identity": null
+    },
+    {
+      "address": "@h:2C0",
+      "op": "added",
+      "kind": "CIRCLE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "fields": [],
+      "bbox_before": null,
+      "bbox_after": [
+        40,
+        40,
+        60,
+        60
+      ],
+      "bbox_q": "exact",
+      "version": 48,
+      "by": "p_atlas",
+      "identity": null
+    },
+    {
+      "address": "@h:2A8",
+      "op": "changed",
+      "kind": "TEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "fields": [
+        "geom"
+      ],
+      "bbox_before": [
+        40,
+        85,
+        58,
+        89
+      ],
+      "bbox_after": [
+        15,
+        85,
+        33,
+        89
+      ],
+      "bbox_q": "approx",
+      "version": 49,
+      "by": "p_sam",
+      "identity": null
+    },
+    {
+      "address": "@h:2B3",
+      "op": "changed",
+      "kind": "LINE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "fields": [
+        "color"
+      ],
+      "bbox_before": [
+        10,
+        80,
+        110,
+        80
+      ],
+      "bbox_after": [
+        10,
+        80,
+        110,
+        80
+      ],
+      "bbox_q": "exact",
+      "version": 50,
+      "by": "p_atlas",
+      "identity": null
+    }
+  ],
+  "entities_more": 0,
+  "tables": [],
+  "blocks": [],
+  "page": null
+}

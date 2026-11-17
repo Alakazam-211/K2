@@ -1,0 +1,48 @@
+{
+  "schema": "cad.change/1",
+  "format": "dxf",
+  "from": 43,
+  "to": 44,
+  "units": {
+    "word": "mm",
+    "insunits": 4
+  },
+  "pairing": "kept",
+  "versions": [
+    {
+      "version": 44,
+      "by": {
+        "pid": "p_sam",
+        "name": "Sam",
+        "kind": "person"
+      },
+      "verb": "entity delete",
+      "at_ms": 1763300044000
+    }
+  ],
+  "entities": [
+    {
+      "address": "@h:2A7",
+      "op": "removed",
+      "kind": "TEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "fields": [],
+      "bbox_before": [
+        60,
+        85,
+        85,
+        89
+      ],
+      "bbox_after": null,
+      "bbox_q": "approx",
+      "version": 44,
+      "by": "p_sam",
+      "identity": null
+    }
+  ],
+  "entities_more": 0,
+  "tables": [],
+  "blocks": [],
+  "page": null
+}

@@ -191,6 +191,31 @@ describe('LiveTransport', () => {
     expect(calls).toBe(0)
   })
 
+  it("a keyed doc's welcome keeps its features; a declined open keeps the pack's code", async () => {
+    const h = harness()
+    const p = h.t.connect({ signal: new AbortController().signal })
+    await tick()
+    h.sockets[0].accept()
+    h.sockets[0].frame(welcome({ root: 'tracks', text: undefined, family: 'timeline', core: 'timeline', features: ['keyed_watch', 'view_address', 'time_position'] }))
+    const w = await p
+    expect(w.features).toEqual(['keyed_watch', 'view_address', 'time_position'])
+    expect(w).toMatchObject({ root: 'tracks', family: 'timeline', core: 'timeline' })
+
+    const h2 = harness()
+    const p2 = h2.t.connect({ signal: new AbortController().signal })
+    await tick()
+    h2.sockets[0].accept()
+    h2.sockets[0].frame({ type: 'closed', reason: 'declined', retry: false, code: 'live_version', error: { id: 'MPC-E407', message: 'declined', details: { code: 'live_version' } } })
+    const err = await p2.then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(LiveConnectError)
+    const close = (err as LiveConnectError).close
+    expect(close.reason).toBe('declined')
+    expect(close.error?.details?.code).toBe('live_version')
+  })
+
   it('a closed frame first rejects connect with its reason and retry (core off: no retry)', async () => {
     const h = harness()
     const p = h.t.connect({ signal: new AbortController().signal })

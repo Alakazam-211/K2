@@ -112,6 +112,13 @@ export interface LiveWelcome {
   core?: string
   family?: string
   path?: string
+  /** What this socket takes besides the wire's frames: `keyed_watch` (a
+   *  keyed doc: a deck, a timeline, a scene), `view_address`, and
+   *  `time_position` (keyed docs only). A host that predates it sends none. */
+  features?: string[]
+  /** Why this doc opens read-only for everyone (its `rights` is `read`):
+   *  a `.blend` K2 can't save yet. Absent otherwise. */
+  read_only_reason?: string
 }
 
 export type LiveCloseReason =

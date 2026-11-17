@@ -720,6 +720,20 @@ pub fn presence_refused_frame(req: u64, e: &ErrorReport) -> Value {
     Value::obj([("type", Value::from("presence_refused")), ("req", Value::from(req)), ("error", e.to_value())])
 }
 
+/// `claimed {req, claim}` (WIRE.md "Claim frames"): the claim's id.
+pub fn claimed_frame(req: u64, claim: &str) -> Value {
+    Value::obj([("type", Value::from("claimed")), ("req", Value::from(req)), ("claim", Value::from(claim))])
+}
+
+/// `released {req, claims}`: the ids of the claims released.
+pub fn released_frame(req: u64, claims: &[String]) -> Value {
+    Value::obj([
+        ("type", Value::from("released")),
+        ("req", Value::from(req)),
+        ("claims", Value::List(claims.iter().map(|c| Value::from(c.as_str())).collect())),
+    ])
+}
+
 pub fn roster_frame(event: Value) -> Value {
     Value::obj([("type", Value::from("roster_event")), ("event", event)])
 }
@@ -794,7 +808,7 @@ pub fn welcome_frame(
 // ── Client frames ────────────────────────────────────────────────────
 
 /// A frame from the client (WIRE.md "Client → host").
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ClientFrame {
     Edit { op: u64, root: String, base: u64, hunks: Vec<Hunk>, group: Option<String> },
     Since { op: u64, version: u64 },
@@ -825,6 +839,21 @@ pub enum ClientFrame {
     /// this connection's playhead, or `None` to clear it. Read as sent;
     /// the kit checks the values ([`TimeSet::position`]).
     TimePosition { req: u64, time: Option<TimeSet> },
+    /// `claim {req, root?, keys, ttl_ms?, note?, hold?}` (feature `claims`,
+    /// WIRE.md "Claim frames"): claim elements of a list root by their keys,
+    /// or, with no `root`, by their addresses (`@obj:5`).
+    Claim { req: u64, root: Option<String>, keys: Vec<String>, ttl_ms: Option<u64>, note: Option<String>, hold: bool },
+    /// `release {req, claim?}` (feature `claims`): one claim, or (none)
+    /// every claim of this participant's here.
+    Release { req: u64, claim: Option<String> },
+    /// `select {req, selection: {root?, keys} | null}` (feature `presence`,
+    /// WIRE.md "Presence frames"): elements by key under `root`, or by
+    /// address with no `root`.
+    Select { req: u64, selection: Option<(Option<String>, Vec<String>)> },
+    /// `pointer {req, point: {x, y} | null}` (feature `presence`).
+    Pointer { req: u64, point: Option<(f64, f64)> },
+    /// `viewport {req, rect: {x, y, w, h} | null}` (feature `presence`).
+    Viewport { req: u64, rect: Option<(f64, f64, f64, f64)> },
 }
 
 /// A `time_position` frame's value as the client sent it: `{at, state,
@@ -974,6 +1003,86 @@ pub fn parse(text: &str) -> Result<ClientFrame, BadFrame> {
                 _ => return Err(bad("`time_position` must be an object {at, state, in?, rate?} or null".into())),
             },
         },
+        "claim" => ClientFrame::Claim {
+            req: u64_field(o, "req").map_err(bad)?,
+            root: match o.get("root") {
+                None | Some(Json::Null) => None,
+                Some(Json::String(s)) => Some(s.clone()),
+                Some(_) => return Err(bad("`root` must be a string".into())),
+            },
+            keys: match o.get("keys") {
+                Some(Json::Array(a)) => a
+                    .iter()
+                    .map(|k| k.as_str().map(str::to_string).ok_or_else(|| bad("`keys` must be an array of strings".into())))
+                    .collect::<Result<Vec<_>, _>>()?,
+                _ => return Err(bad("`keys` must be an array of strings".into())),
+            },
+            ttl_ms: match o.get("ttl_ms") {
+                None | Some(Json::Null) => None,
+                Some(n) => Some(n.as_u64().ok_or_else(|| bad("`ttl_ms` must be a whole number".into()))?),
+            },
+            note: match o.get("note") {
+                None | Some(Json::Null) => None,
+                Some(Json::String(s)) => Some(s.clone()),
+                Some(_) => return Err(bad("`note` must be a string".into())),
+            },
+            hold: match o.get("hold") {
+                None | Some(Json::Null) => false,
+                Some(Json::Bool(b)) => *b,
+                Some(_) => return Err(bad("`hold` must be a boolean".into())),
+            },
+        },
+        "select" => ClientFrame::Select {
+            req: u64_field(o, "req").map_err(bad)?,
+            selection: match o.get("selection") {
+                Some(Json::Null) => None,
+                Some(Json::Object(s)) => Some((
+                    match s.get("root") {
+                        None | Some(Json::Null) => None,
+                        Some(Json::String(r)) => Some(r.clone()),
+                        Some(_) => return Err(bad("`selection.root` must be a string".into())),
+                    },
+                    match s.get("keys") {
+                        Some(Json::Array(a)) => a
+                            .iter()
+                            .map(|k| k.as_str().map(str::to_string).ok_or_else(|| bad("`selection.keys` must be an array of strings".into())))
+                            .collect::<Result<Vec<_>, _>>()?,
+                        _ => return Err(bad("`selection.keys` must be an array of strings".into())),
+                    },
+                )),
+                _ => return Err(bad("`selection` must be an object {root?, keys} or null".into())),
+            },
+        },
+        "pointer" => ClientFrame::Pointer {
+            req: u64_field(o, "req").map_err(bad)?,
+            point: match o.get("point") {
+                Some(Json::Null) => None,
+                Some(Json::Object(p)) => {
+                    let n = |k: &str| p.get(k).and_then(Json::as_f64).ok_or_else(|| bad(format!("`point.{k}` must be a number")));
+                    Some((n("x")?, n("y")?))
+                }
+                _ => return Err(bad("`point` must be an object {x, y} or null".into())),
+            },
+        },
+        "viewport" => ClientFrame::Viewport {
+            req: u64_field(o, "req").map_err(bad)?,
+            rect: match o.get("rect") {
+                Some(Json::Null) => None,
+                Some(Json::Object(p)) => {
+                    let n = |k: &str| p.get(k).and_then(Json::as_f64).ok_or_else(|| bad(format!("`rect.{k}` must be a number")));
+                    Some((n("x")?, n("y")?, n("w")?, n("h")?))
+                }
+                _ => return Err(bad("`rect` must be an object {x, y, w, h} or null".into())),
+            },
+        },
+        "release" => ClientFrame::Release {
+            req: u64_field(o, "req").map_err(bad)?,
+            claim: match o.get("claim") {
+                None | Some(Json::Null) => None,
+                Some(Json::String(s)) => Some(s.clone()),
+                Some(_) => return Err(bad("`claim` must be a string".into())),
+            },
+        },
         other => return Err(bad(format!("unknown frame type `{other}`"))),
     })
 }
@@ -985,6 +1094,37 @@ mod golden_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The claim frames (feature `claims`): read as sent; a bad field is
+    /// the frame's refusal. Their replies by `req`.
+    #[test]
+    fn claim_and_release_frames_parse_and_reply_by_req() {
+        assert_eq!(
+            parse(r#"{"type":"claim","req":4,"root":"objs","keys":["o3","o5"],"ttl_ms":60000,"note":"moving the lamp","hold":true}"#),
+            Ok(ClientFrame::Claim { req: 4, root: Some("objs".into()), keys: vec!["o3".into(), "o5".into()], ttl_ms: Some(60_000), note: Some("moving the lamp".into()), hold: true })
+        );
+        assert_eq!(
+            parse(r#"{"type":"claim","req":5,"keys":["@obj:3"]}"#),
+            Ok(ClientFrame::Claim { req: 5, root: None, keys: vec!["@obj:3".into()], ttl_ms: None, note: None, hold: false })
+        );
+        assert_eq!(parse(r#"{"type":"release","req":6}"#), Ok(ClientFrame::Release { req: 6, claim: None }));
+        assert_eq!(parse(r#"{"type":"release","req":7,"claim":"claim-2"}"#), Ok(ClientFrame::Release { req: 7, claim: Some("claim-2".into()) }));
+        for bad in [r#"{"type":"claim","req":1}"#, r#"{"type":"claim","req":1,"keys":[3]}"#, r#"{"type":"claim","keys":[]}"#, r#"{"type":"claim","req":1,"keys":[],"hold":"yes"}"#, r#"{"type":"release","req":1,"claim":2}"#] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            parse(r#"{"type":"select","req":8,"selection":{"keys":["@obj:3"]}}"#),
+            Ok(ClientFrame::Select { req: 8, selection: Some((None, vec!["@obj:3".into()])) })
+        );
+        assert_eq!(parse(r#"{"type":"select","req":9,"selection":null}"#), Ok(ClientFrame::Select { req: 9, selection: None }));
+        assert_eq!(parse(r#"{"type":"pointer","req":10,"point":{"x":0.5,"y":2}}"#), Ok(ClientFrame::Pointer { req: 10, point: Some((0.5, 2.0)) }));
+        assert_eq!(parse(r#"{"type":"viewport","req":11,"rect":{"x":0,"y":0,"w":10,"h":5}}"#), Ok(ClientFrame::Viewport { req: 11, rect: Some((0.0, 0.0, 10.0, 5.0)) }));
+        for bad in [r#"{"type":"select","req":1}"#, r#"{"type":"pointer","req":1,"point":{"x":1}}"#, r#"{"type":"viewport","req":1,"rect":{"x":0,"y":0,"w":"a","h":1}}"#] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+        assert_eq!(claimed_frame(4, "claim-9").to_json(), r#"{"type":"claimed","req":4,"claim":"claim-9"}"#);
+        assert_eq!(released_frame(6, &["claim-9".into()]).to_json(), r#"{"type":"released","req":6,"claims":["claim-9"]}"#);
+    }
 
     /// Kit v0.16.0: element presence goes on the wire by address (a deck's
     /// `@sld:256/sp:7`), never by the store's key; a pack that maps no

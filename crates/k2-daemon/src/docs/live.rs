@@ -1,6 +1,8 @@
 //! `WS /cli/docs/live`: the Live view's socket (plan L2). One socket is one
-//! person's tab on one text doc, or (V3) one person watching a live deck
-//! ([`super::live_deck`]), joined to the kit's session; the editor
+//! person's tab on one text doc, or (V3) one person watching a live keyed
+//! doc: a deck, a timeline (`.otio`, the timeline core) or a scene
+//! (`.blend`, the blend core) ([`super::live_deck`]), joined to the kit's
+//! session; the editor
 //! component (K2 Cores, `k2-mpc-client`) drives it through the renderer's
 //! `LiveTransport` (`src/renderer/lib/docs-live-transport.ts`).
 //!
@@ -13,7 +15,12 @@
 //!
 //! **The URL.** `?doc=<path>` (absolute, or workspace-relative with
 //! `&workspace=`; `path=` is the same), `&root=source` (the only text root
-//! of the Markdown and text packs), `&resume=<version>` on a reconnect.
+//! of the Markdown and text packs; a keyed doc takes it too, or its own
+//! container root: `slides`, `tracks`, `colls`), `&resume=<version>` on a
+//! reconnect. A keyed doc whose pack declines it at open (a timeline with
+//! more than one timeline, a scene saved by a release the pack hasn't
+//! checked) is `closed {reason: "declined", error}`, the kit's report with
+//! the pack's code in `error.details.code`.
 //!
 //! **The contract is the kit's `client/WIRE.md` wire 3** (`welcome.wire`,
 //! kit v0.15.x; frames in [`super::live_wire`], pinned against the kit's
@@ -381,8 +388,9 @@ struct Opened {
     /// What the welcome listed in `features` (`keyed_watch` for a deck the
     /// kit can watch by key; none for a text doc).
     features: Vec<&'static str>,
-    /// A live deck (watched; the preview service follows its changes).
-    deck: bool,
+    /// A live keyed doc: a deck, a timeline or a scene (watched; the preview
+    /// service follows a deck's and a scene's changes).
+    keyed: bool,
     rel: String,
     /// The doc's host events (and every turn end).
     events: super::host_events::Subscription,
@@ -477,16 +485,21 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
     let t: Target = target::resolve(params.get("workspace").map(String::as_str), &path, caller.default_workspace())
         .map_err(|r| Closed::k2(target_reason(&r), r.code, r.message))?;
     let core = super::cores::core_of(t.tier);
-    // The Live view edits text; a live deck (the Slides core on) is watched
-    // ([`super::live_deck`]); any other file is refused.
-    let deck = t.tier == Tier::Deck;
-    if deck && !super::live_deck::root_ok(root_param) {
-        return Err(Closed::k2(CloseReason::Declined, "bad_request", format!("a deck's root is `{}`", super::live_deck::ROOT)));
+    // The Live view edits text; a live keyed doc (a deck, a timeline or a
+    // scene, its core on) is watched ([`super::live_deck`]); any other file
+    // is refused.
+    let keyed = t.tier.is_keyed();
+    if keyed && !super::live_deck::root_ok_for(t.tier, root_param) {
+        return Err(Closed::k2(
+            CloseReason::Declined,
+            "bad_request",
+            format!("a {}'s root is `{}` (or `{ROOT}`)", t.tier.family(), super::live_deck::root_of(t.tier)),
+        ));
     }
-    if !deck && root_param.is_some_and(|r| r != ROOT) {
+    if !keyed && root_param.is_some_and(|r| r != ROOT) {
         return Err(Closed::k2(CloseReason::Declined, "bad_request", format!("root must be `{ROOT}`")));
     }
-    if !deck && !matches!(t.tier, Tier::Markdown | Tier::Text(_)) {
+    if !keyed && !matches!(t.tier, Tier::Markdown | Tier::Text(_)) {
         return Err(Closed::k2(
             CloseReason::Declined,
             "not_a_text_doc",
@@ -540,10 +553,10 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
     let events = super::host_events::subscribe_replaying(&key, resume, host::now_ms());
     let changes = session.subscribe(conn).map_err(|e| fail(&session, e))?;
     let roster = session.subscribe_roster(conn).map_err(|e| fail(&session, e))?;
-    if deck {
+    if keyed {
         let version = session.status().map_err(|e| fail(&session, e))?.version;
         let mut welcome = wire::welcome_frame(
-            super::live_deck::ROOT,
+            super::live_deck::root_of(t.tier),
             version,
             None,
             joined.client,
@@ -556,12 +569,23 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         // The keyed watch (kit v0.16): listed only for a doc the kit can
         // watch by key, never a text doc or a table. Then the view address
         // and the time position (kit v0.18.0), for every person here.
-        let features = super::live_watch::keyed_socket_features(&session);
+        // A scene: the view address and presence (and claims on its objects
+        // once people may change it; read-only for now), no time.
+        let features = match t.tier {
+            Tier::Scene => super::live_watch::scene_socket_features(&session, !super::blend_read_only::writes_off(&t.rel)),
+            _ => super::live_watch::keyed_socket_features(&session),
+        };
         if let Value::Obj(o) = &mut welcome {
             o.extend(super::live_deck::welcome_extras(&t, &session, conn));
             o.push(("access_owner".into(), super::live_deck::actor_record(&host::access_owner_pid())));
             if !features.is_empty() {
                 o.push(("features".into(), super::live_watch::features_value(&features)));
+            }
+            // A `.blend` K2 can't write yet: its `rights` is `read` for
+            // everyone, and the welcome says why, so the view shows it from
+            // the start (`blend_read_only`).
+            if super::blend_read_only::writes_off(&t.rel) {
+                o.push((super::blend_read_only::WELCOME_FIELD.into(), Value::from(super::blend_read_only::WHY)));
             }
         }
         return Ok(Opened {
@@ -576,7 +600,7 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
             roster,
             welcome,
             features,
-            deck: true,
+            keyed: true,
             rel: t.rel.clone(),
             events,
         });
@@ -626,7 +650,7 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         roster,
         welcome,
         features,
-        deck: false,
+        keyed: false,
         rel: t.rel.clone(),
         events,
     })
@@ -973,8 +997,9 @@ struct Worker {
     seen: Seq,
     /// The person's credential: when it ends, so does this socket.
     login: crate::socket_access::LoginCheck,
-    /// A live deck: watched, never edited here ([`super::live_deck`]).
-    deck: bool,
+    /// A live keyed doc (a deck, a timeline, a scene): watched, never edited
+    /// here ([`super::live_deck`]).
+    keyed: bool,
     rel: String,
     /// Host events for this doc, and every turn end.
     events: super::host_events::Subscription,
@@ -1022,7 +1047,7 @@ impl Worker {
             own: HashSet::new(),
             seen: o.version,
             login,
-            deck: o.deck,
+            keyed: o.keyed,
             rel: o.rel,
             events: o.events,
             turns: super::live_deck::Turns::default(),
@@ -1158,7 +1183,7 @@ impl Worker {
         if let Some(t) = &e.turn {
             self.turns.saw(t.as_str());
         }
-        if self.deck {
+        if self.keyed {
             super::live_deck::changed(&self.key, &self.rel, &self.session, self.conn);
         }
         if self.own.contains(&e.version) {
@@ -1358,7 +1383,7 @@ impl Worker {
             Ok(f) => f,
             Err(b) => return self.send(b.reply()),
         };
-        if self.deck {
+        if self.keyed {
             if let Some(reply) = super::live_deck::refuse(&f) {
                 return self.send(reply);
             }
@@ -1440,11 +1465,88 @@ impl Worker {
                     s.set_view_address(c, address.as_deref()).map(drop)
                 })
             }
+            // Presence by element (WIRE.md "Presence frames", feature
+            // `presence`): a selection by key under a root, or by address;
+            // a pointer; a viewport. Read right only.
+            ClientFrame::Select { req, selection } => self.presence(req, super::live_watch::PRESENCE_FEATURE, |s, c| {
+                let sel = match selection {
+                    None => None,
+                    Some((Some(root), keys)) => {
+                        let keys = keys
+                            .iter()
+                            .map(|k| k2_mpc_base::elem::Key::new(k.as_str()).map_err(|e| SessionError::BadPosition(format!("{k:?} isn't a key: {e}"))))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Some(k2_mpc_base::session::ElemSelection::new(root, keys))
+                    }
+                    Some((None, addresses)) => {
+                        let mut root: Option<String> = None;
+                        let mut keys = Vec::new();
+                        for a in &addresses {
+                            let (r, k) = s.resolve_address(c, a)?;
+                            if root.as_deref().is_some_and(|x| x != r) {
+                                return Err(SessionError::BadPosition("a selection is in one root: these addresses are in two".into()));
+                            }
+                            root = Some(r);
+                            keys.push(k);
+                        }
+                        let root = root.ok_or_else(|| SessionError::BadPosition("a selection names at least one element (null clears it)".into()))?;
+                        Some(k2_mpc_base::session::ElemSelection::new(root, keys))
+                    }
+                };
+                s.set_selection(c, sel).map(drop)
+            }),
+            ClientFrame::Pointer { req, point } => self.presence(req, super::live_watch::PRESENCE_FEATURE, |s, c| {
+                let p = point.map(|(x, y)| k2_mpc_base::session::Point::new(x, y)).transpose()?;
+                s.set_pointer(c, p)
+            }),
+            ClientFrame::Viewport { req, rect } => self.presence(req, super::live_watch::PRESENCE_FEATURE, |s, c| {
+                let r = rect.map(|(x, y, w, h)| k2_mpc_base::session::Rect::new(x, y, w, h)).transpose()?;
+                s.set_viewport(c, r)
+            }),
             ClientFrame::TimePosition { req, time } => {
                 self.presence(req, super::live_watch::TIME_POSITION_FEATURE, |s, c| {
                     let time = time.as_ref().map(wire::TimeSet::position).transpose()?;
                     s.set_time_position(c, time).map(drop)
                 })
+            }
+            // Claims on elements (WIRE.md "Claim frames"; a scene's welcome
+            // lists `claims`): by `root` and keys, or by address with no
+            // root. `claimed {req, claim}` / `released {req, claims}`; the
+            // kit's refusal is `presence_refused {req, error}`. Everyone sees
+            // them on the roster (`claim_started_elems`, `claim_ended`).
+            ClientFrame::Claim { req, root, keys, ttl_ms, note, hold } => {
+                if !self.features.contains(&super::live_watch::CLAIMS_FEATURE) {
+                    return self.send(wire::error_frame(&wire::report("MPC-E113", "`claim` isn't taken here: this doc's socket doesn't list `claims` in welcome.features".to_string())));
+                }
+                let got = match root {
+                    Some(root) => keys
+                        .iter()
+                        .map(|k| k2_mpc_base::elem::Key::new(k.as_str()).map_err(|e| SessionError::BadClaim(format!("{k:?} isn't a key: {e}"))))
+                        .collect::<Result<Vec<_>, _>>()
+                        .and_then(|keys| self.session.claim_elems(self.conn, &root, &keys, ttl_ms, note, hold)),
+                    None => self.session.claim_elems_at(self.conn, &keys, ttl_ms, note, hold),
+                };
+                match got {
+                    Ok(c) => self.send(wire::claimed_frame(req, &c.id.to_string())),
+                    Err(e) => self.send(wire::presence_refused_frame(req, &e.report())),
+                }
+            }
+            ClientFrame::Release { req, claim } => {
+                if !self.features.contains(&super::live_watch::CLAIMS_FEATURE) {
+                    return self.send(wire::error_frame(&wire::report("MPC-E113", "`release` isn't taken here: this doc's socket doesn't list `claims` in welcome.features".to_string())));
+                }
+                let id = match claim.as_deref().map(|c| k2_mpc_base::session::ClaimId::parse(c).ok_or(c)) {
+                    None => None,
+                    Some(Ok(id)) => Some(id),
+                    Some(Err(c)) => {
+                        let e = SessionError::BadClaim(format!("{c:?} isn't a claim id (claim-N)"));
+                        return self.send(wire::presence_refused_frame(req, &e.report()));
+                    }
+                };
+                match self.session.release_claim(self.conn, id) {
+                    Ok(ids) => self.send(wire::released_frame(req, &ids.iter().map(|i| i.to_string()).collect::<Vec<_>>())),
+                    Err(e) => self.send(wire::presence_refused_frame(req, &e.report())),
+                }
             }
             // The app showed the removed-text notes: delivered, so no later
             // snapshot repeats them. No reply; a refusal (no read right) is

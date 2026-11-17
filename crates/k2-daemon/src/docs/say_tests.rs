@@ -78,6 +78,7 @@ fn the_socket_frame_names_both_ends_and_the_place() {
         text: "Lamp a bit left?".into(),
         at: Some("@cam:c1".into()),
         time: None,
+        time_in: None,
         reply_to: None,
         at_ms: 1_700_000_000_000,
     };
@@ -87,18 +88,62 @@ fn the_socket_frame_names_both_ends_and_the_place() {
         r#"{"type":"say","id":"say_0123456789abcdef","from":{"id":"person:owner","name":"person:owner"},"to":{"id":"agent:atlas","name":"atlas"},"text":"Lamp a bit left?","at":"@cam:c1","time":null,"reply_to":null,"at_ms":1700000000000}"#
     );
     let reply = HostEvent::Say {
-        key,
+        key: key.clone(),
         id: "say_fedcba9876543210".into(),
         from: "agent:atlas".into(),
         to: None,
         text: "Done.".into(),
         at: None,
         time: Some("48000".into()),
+        time_in: None,
         reply_to: Some("say_0123456789abcdef".into()),
         at_ms: 1_700_000_000_500,
     };
     let f = reply.frame(actor).to_json();
     assert!(f.contains(r#""to":null,"text":"Done.","at":null,"time":"48000","reply_to":"say_0123456789abcdef""#), "{f}");
+    // A timeline's playhead with the track it is in: `time_in` after `time`.
+    let on_track = HostEvent::Say {
+        key,
+        id: "say_00000000000000aa".into(),
+        from: "person:owner".into(),
+        to: None,
+        text: "This cut?".into(),
+        at: Some("@item:5".into()),
+        time: Some("254016000000".into()),
+        time_in: Some("@trk:1".into()),
+        reply_to: None,
+        at_ms: 1_700_000_001_000,
+    };
+    let f = on_track.frame(actor).to_json();
+    assert!(f.contains(r#""at":"@item:5","time":"254016000000","time_in":"@trk:1","reply_to":null"#), "{f}");
+}
+
+/// `time` as a timeline sends it, `{at, in}`, or as before (a decimal
+/// string or number, the query's when the body has none); each checked by
+/// the kit's own time position.
+#[test]
+fn time_takes_a_decimal_or_at_and_in() {
+    use serde_json::json;
+    assert_eq!(read_time(Some(&json!({"at": "254016000000", "in": "@trk:1"})), None), Ok((Some("254016000000".into()), Some("@trk:1".into()))));
+    assert_eq!(read_time(Some(&json!({"at": 48000})), None), Ok((Some("48000".into()), None)));
+    assert_eq!(read_time(Some(&json!({"at": "-10", "in": null})), None), Ok((Some("-10".into()), None)));
+    assert_eq!(read_time(Some(&json!("48000")), None), Ok((Some("48000".into()), None)));
+    assert_eq!(read_time(Some(&json!(48000)), None), Ok((Some("48000".into()), None)));
+    assert_eq!(read_time(None, Some(" 7 ".into())), Ok((Some("7".into()), None)), "the query's");
+    assert_eq!(read_time(None, None), Ok((None, None)));
+    assert_eq!(read_time(Some(&json!("  ")), None), Ok((None, None)), "empty counts as absent");
+    for (bad, why) in [
+        (json!({"in": "@trk:1"}), "at is the playhead"),
+        (json!({"at": "1.5"}), "decimal integer"),
+        (json!({"at": "007", "in": "@trk:1"}), "decimal integer"),
+        (json!({"at": "10", "in": 3}), "time.in is an address"),
+        (json!({"at": "10", "in": format!("@trk:{}", "1".repeat(AT_MAX))}), "isn't an address"),
+        (json!([1, 2]), "or {at, in}"),
+        (json!(true), "or {at, in}"),
+    ] {
+        let e = read_time(Some(&bad), None).expect_err(why);
+        assert!(e.contains(why), "{bad}: {e:?} should say {why:?}");
+    }
 }
 
 #[test]

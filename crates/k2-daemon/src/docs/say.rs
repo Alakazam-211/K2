@@ -15,7 +15,7 @@
 //! | `text` | the message: 1 to [`TEXT_MAX`] bytes of UTF-8 after trimming, no control characters but line breaks and tabs |
 //! | `to` | optional: who it is for (a pid, `person:<login>`, `agent:<id>`, a login or a workspace name), someone who may read the doc. None: the room |
 //! | `at` | optional: what the sender looks at, by address (the chip: `@cam:c1`, `@trk:1/clip:7`), at most [`AT_MAX`] bytes, no spaces or control characters. Not resolved |
-//! | `time` | optional: a playhead, a decimal integer in the doc's time unit (a timeline's ticks), as a `time_position`'s `at` |
+//! | `time` | optional: a playhead, a decimal integer in the doc's time unit (a timeline's ticks), as a `time_position`'s `at`; or an object `{at, in}` as a `time_position` has them (`in`: the track or sequence it is in, by address, as `@trk:1`) |
 //! | `reply_to` | optional: the `id` of the message this answers |
 //!
 //! **What happens.** The message goes to every socket on the doc whose
@@ -25,6 +25,8 @@
 //! {"type":"say","id":"say_…","from":{id,name,kind,colour},"to":{…}|null,
 //!  "text":"…","at":"@cam:c1"|null,"time":"48000"|null,"reply_to":"say_…"|null,"at_ms":…}
 //! ```
+//!
+//! with `"time_in":"@trk:1"` after `time` when the time named what it is in.
 //!
 //! and, when it is **for an agent**, an inbox note in that agent's workspace
 //! (agents don't hold the socket): the message quoted, with the line that
@@ -80,6 +82,8 @@ pub struct Message {
     pub to: Option<String>,
     pub at: Option<String>,
     pub time: Option<String>,
+    /// What the playhead is in (`time`'s `{at, in}` form): an address.
+    pub time_in: Option<String>,
     pub reply_to: Option<String>,
 }
 
@@ -114,7 +118,42 @@ pub fn read(text: Option<String>, to: Option<String>, at: Option<String>, time: 
             return Err(format!("reply_to {r:?} isn't a message id (say_…)"));
         }
     }
-    Ok(Message { text, to, at, time, reply_to })
+    Ok(Message { text, to, at, time, time_in: None, reply_to })
+}
+
+/// The body's `time`: a decimal string or number (the query's `time` when
+/// the body has none), or an object `{at, in?}` as a `time_position` has
+/// them, `in` an address the kit's presence grammar takes. `(at, in)`, both
+/// checked by the kit's own `TimePosition`; the refusal's words otherwise.
+pub fn read_time(body: Option<&serde_json::Value>, query: Option<String>) -> Result<(Option<String>, Option<String>), String> {
+    use serde_json::Value as J;
+    let (at, within) = match body {
+        None | Some(J::Null) => (query.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()), None),
+        Some(J::String(s)) => (Some(s.trim().to_string()).filter(|t| !t.is_empty()), None),
+        Some(J::Number(n)) => (Some(n.to_string()), None),
+        Some(J::Object(o)) => {
+            let at = match o.get("at") {
+                Some(J::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
+                Some(J::Number(n)) => n.to_string(),
+                _ => return Err("time is {at, in}: at is the playhead, a decimal integer in the doc's time unit".into()),
+            };
+            let within = match o.get("in") {
+                None | Some(J::Null) => None,
+                Some(J::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+                Some(_) => return Err("time.in is an address (like @trk:1): what the playhead is in".into()),
+            };
+            (Some(at), within)
+        }
+        Some(_) => return Err("time is a decimal integer in the doc's time unit, or {at, in}".into()),
+    };
+    if let Some(a) = &at {
+        let t = k2_mpc_base::session::TimePosition::new(a, k2_mpc_base::session::PlayState::Paused)
+            .map_err(|_| format!("time {a:?} is a decimal integer in the doc's time unit (an optional -, digits, no leading zero)"))?;
+        if let Some(w) = &within {
+            t.within(w).map_err(|e| format!("time.in {w:?} isn't an address: {e}"))?;
+        }
+    }
+    Ok((at, within))
 }
 
 /// A message id: `say_` and 16 hex digits.
@@ -190,10 +229,15 @@ pub(crate) fn handle(rt: &super::Runtime, c: &Call<'_>) -> CliResponse {
             k2_mpc_base::tools::exit::REFUSED,
         );
     }
-    let m = match read(c.input.str("text"), opt(c, "to"), opt(c, "at"), opt(c, "time"), opt(c, "reply_to")) {
+    let (time, time_in) = match read_time(c.input.body.get("time"), c.input.params.get("time").cloned()) {
+        Ok(t) => t,
+        Err(why) => return routes::bad(why),
+    };
+    let mut m = match read(c.input.str("text"), opt(c, "to"), opt(c, "at"), time, opt(c, "reply_to")) {
         Ok(m) => m,
         Err(why) => return routes::bad(why),
     };
+    m.time_in = time_in;
     let key = t.key();
     let to = match &m.to {
         None => None,
@@ -226,6 +270,7 @@ pub(crate) fn handle(rt: &super::Runtime, c: &Call<'_>) -> CliResponse {
         text: m.text.clone(),
         at: m.at.clone(),
         time: m.time.clone(),
+        time_in: m.time_in.clone(),
         reply_to: m.reply_to.clone(),
         at_ms,
     });
@@ -264,7 +309,11 @@ fn agent_note(project: &str, from: &str, t: &super::target::Target, id: &str, m:
 pub fn note(by: &str, from: &str, t: &super::target::Target, agent_project: &str, id: &str, m: &Message) -> (String, String) {
     let title = format!("Said to you on {}", t.rel);
     let mut text = format!("{by} said this to you while watching {}", t.rel);
-    match (&m.at, &m.time) {
+    let tm = m.time.as_ref().map(|tm| match &m.time_in {
+        Some(w) => format!("{tm} in {w}"),
+        None => tm.clone(),
+    });
+    match (&m.at, &tm) {
         (Some(a), Some(tm)) => text.push_str(&format!(", looking at {a} at {tm}")),
         (Some(a), None) => text.push_str(&format!(", looking at {a}")),
         (None, Some(tm)) => text.push_str(&format!(", at {tm}")),

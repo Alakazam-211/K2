@@ -2,6 +2,24 @@
 //! Slides core on): a person **watches** a deck that agents change with
 //! `k2 doc` (contract r1.4 §3: people don't write decks live in v1).
 //!
+//! **Timelines and scenes** take the same socket: an `.otio` with the
+//! timeline core on (`root: "tracks"`, `family: "timeline"`, `mode:
+//! "timeline"`) and a `.blend` with the blend core on (`root: "colls"`,
+//! `family: "scene"`, `mode: "scene"`). A timeline's welcome `features`
+//! lists `keyed_watch`, `view_address` and `time_position` (a playhead to
+//! follow); a scene's `keyed_watch`, `view_address` and `presence` (the
+//! `select`, `pointer` and `viewport` frames; a scene has no time). A scene
+//! is read-only for now (`blend_read_only`): its `rights` is `read` and the
+//! welcome's `read_only_reason` says why; once people may change one it
+//! also lists `claims` (the `claim` and `release` frames,
+//! WIRE.md "Claim frames": claim objects or collections by key or address
+//! while moving them; the socket takes them already, a claim needs the edit
+//! right). `previews` is a scene's cameras and objects (`null` for a
+//! timeline: no lane tiles on any host yet). Everything below holds for all
+//! three.
+//! The URL's `root` may be the doc's own container root or `source` (what
+//! the text views send), or left out.
+//!
 //! **What it sends** (wire 3, `welcome.wire`):
 //! - `welcome {root: "slides", version, client, self, rights, wire, core,
 //!   family: "deck", path, turn_idle_ms}`, then K2's deck extras: `mode:
@@ -54,6 +72,36 @@ use super::target::Target;
 /// The live deck's container root (the pptx pack's `slides`).
 pub const ROOT: &str = "slides";
 
+/// A live timeline's container root (the timeline pack's view: `tracks`).
+pub const TIMELINE_ROOT: &str = k2_mpc_timeline::live::TRACKS;
+
+/// A live scene's container root (the BLEND pack's view: `colls`).
+pub const SCENE_ROOT: &str = k2_mpc_blend::live::COLLS;
+
+/// The welcome's `root` for a keyed tier: its view's container root.
+pub fn root_of(tier: super::target::Tier) -> &'static str {
+    match tier {
+        super::target::Tier::Timeline => TIMELINE_ROOT,
+        super::target::Tier::Scene => SCENE_ROOT,
+        _ => ROOT,
+    }
+}
+
+/// The welcome's `mode` for a keyed tier: `deck`, `timeline` or `scene`.
+pub fn mode_of(tier: super::target::Tier) -> &'static str {
+    match tier {
+        super::target::Tier::Timeline => "timeline",
+        super::target::Tier::Scene => "scene",
+        _ => "deck",
+    }
+}
+
+/// The `root` a keyed doc's socket takes: none, its own container root
+/// ([`root_of`]), or `source`, the root the text views send.
+pub fn root_ok_for(tier: super::target::Tier, root: Option<&str>) -> bool {
+    root.is_none_or(|r| r == root_of(tier) || r == super::live::ROOT)
+}
+
 /// The colour K2 reserves for the file itself (an outside save,
 /// `kit:external`), contract Item 2.
 pub const EXTERNAL_COLOUR: &str = "#64748b";
@@ -61,10 +109,6 @@ pub const EXTERNAL_COLOUR: &str = "#64748b";
 /// Most turn ids a socket remembers (for `turn_end`).
 pub const TURNS_KEPT: usize = 256;
 
-/// The `root` a deck socket takes: none, or `slides`.
-pub fn root_ok(root: Option<&str>) -> bool {
-    root.is_none_or(|r| r == ROOT)
-}
 
 /// The deck's extras for the welcome, after the wire's fields.
 pub fn welcome_extras(t: &Target, session: &Session, conn: ConnId) -> Vec<(String, Value)> {
@@ -79,7 +123,7 @@ pub fn welcome_extras(t: &Target, session: &Session, conn: ConnId) -> Vec<(Strin
         _ => Value::Null,
     };
     vec![
-        ("mode".into(), Value::from("deck")),
+        ("mode".into(), Value::from(mode_of(t.tier))),
         ("previews".into(), previews),
         ("comments".into(), Value::obj([("threads", Value::List(Vec::new())), ("next", Value::Null)])),
     ]
@@ -131,9 +175,16 @@ pub fn refuse(f: &ClientFrame) -> Option<Value> {
         | ClientFrame::Watch
         | ClientFrame::Report { .. }
         | ClientFrame::ViewAddress { .. }
-        | ClientFrame::TimePosition { .. } => return None,
+        | ClientFrame::TimePosition { .. }
+        | ClientFrame::Claim { .. }
+        | ClientFrame::Release { .. }
+        | ClientFrame::Select { .. }
+        | ClientFrame::Pointer { .. }
+        | ClientFrame::Viewport { .. } => return None,
     };
-    let e = wire::unreadable(&format!("`{what}` isn't taken on a deck: people watch a live deck, agents change it with k2 doc"));
+    let e = wire::unreadable(&format!(
+        "`{what}` isn't taken on a deck, timeline or scene: people watch a live keyed doc, agents change it with k2 doc"
+    ));
     Some(match op {
         Some(op) => wire::refused_frame(op, &e),
         None => wire::error_frame(&e),
@@ -208,14 +259,17 @@ pub fn host_event_frame(ev: &HostEvent, pid: &str, key: &DocKey, turns: &Turns) 
     Some(ev.frame(actor_record))
 }
 
-/// A deck's change was forwarded: the preview service lists it again after
-/// the burst, through this socket's connection, and re-draws its dirty slides.
+/// A deck's or a scene's change was forwarded: the preview service lists it
+/// again after the burst, through this socket's connection, and re-draws
+/// its dirty slides, cameras and objects. A timeline has no previews here.
 pub fn changed(t_key: &DocKey, rel: &str, session: &Arc<Session>, conn: ConnId) {
     let Some(blobs) = super::runtime().ok().and_then(|rt| rt.blobs()) else { return };
-    if super::target::tier_now(rel) != super::target::Tier::Deck {
-        return;
-    }
-    service::doc_changed(blobs, &preview::deck::DECK, t_key, session.clone(), conn);
+    let renderer: &'static dyn preview::PreviewRenderer = match super::target::tier_now(rel) {
+        super::target::Tier::Deck => &preview::deck::DECK,
+        super::target::Tier::Scene => &preview::scene::SCENE,
+        _ => return,
+    };
+    service::doc_changed(blobs, renderer, t_key, session.clone(), conn);
 }
 
 #[cfg(test)]
@@ -241,7 +295,25 @@ mod tests {
         ] {
             assert!(refuse(&ok).is_none(), "{ok:?}");
         }
-        assert!(root_ok(None) && root_ok(Some("slides")) && !root_ok(Some("source")));
+        let deck = |r| root_ok_for(super::super::target::Tier::Deck, r);
+        assert!(deck(None) && deck(Some("slides")) && deck(Some("source")) && !deck(Some("tracks")));
+    }
+
+    /// Each keyed tier's root, mode and the roots its socket takes: its own
+    /// container root, `source`, or none; never another tier's.
+    #[test]
+    fn each_keyed_tier_has_its_root_and_mode() {
+        use super::super::target::Tier;
+        assert_eq!((root_of(Tier::Deck), mode_of(Tier::Deck)), ("slides", "deck"));
+        assert_eq!((root_of(Tier::Timeline), mode_of(Tier::Timeline)), ("tracks", "timeline"));
+        assert_eq!((root_of(Tier::Scene), mode_of(Tier::Scene)), ("colls", "scene"));
+        for t in [Tier::Deck, Tier::Timeline, Tier::Scene] {
+            assert!(root_ok_for(t, None) && root_ok_for(t, Some("source")) && root_ok_for(t, Some(root_of(t))), "{t:?}");
+            assert!(!root_ok_for(t, Some("nope")), "{t:?}");
+        }
+        assert!(!root_ok_for(Tier::Timeline, Some("slides")) && !root_ok_for(Tier::Scene, Some("tracks")));
+        let r = refuse(&ClientFrame::Snapshot { op: 2 }).expect("refused").to_json();
+        assert!(r.contains("timeline or scene") && r.contains("k2 doc"), "{r}");
     }
 
     #[test]

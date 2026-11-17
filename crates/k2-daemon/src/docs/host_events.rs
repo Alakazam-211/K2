@@ -104,6 +104,8 @@ pub enum HostEvent {
         text: String,
         at: Option<String>,
         time: Option<String>,
+        /// What the playhead is in (an address), when `time` named it.
+        time_in: Option<String>,
         reply_to: Option<String>,
         at_ms: u64,
     },
@@ -213,17 +215,24 @@ impl HostEvent {
                 ("holder", holder.as_deref().map_or(Value::Null, &author)),
                 ("claim", claim.as_deref().map_or(Value::Null, Value::from)),
             ]),
-            HostEvent::Say { id, from, to, text, at, time, reply_to, at_ms, .. } => Value::obj([
-                ("type", Value::from("say")),
-                ("id", Value::from(id.as_str())),
-                ("from", author(from)),
-                ("to", to.as_deref().map_or(Value::Null, &author)),
-                ("text", Value::from(text.as_str())),
-                ("at", at.as_deref().map_or(Value::Null, Value::from)),
-                ("time", time.as_deref().map_or(Value::Null, Value::from)),
-                ("reply_to", reply_to.as_deref().map_or(Value::Null, Value::from)),
-                ("at_ms", Value::from(*at_ms)),
-            ]),
+            HostEvent::Say { id, from, to, text, at, time, time_in, reply_to, at_ms, .. } => {
+                let mut f: Vec<(String, Value)> = vec![
+                    ("type".into(), Value::from("say")),
+                    ("id".into(), Value::from(id.as_str())),
+                    ("from".into(), author(from)),
+                    ("to".into(), to.as_deref().map_or(Value::Null, &author)),
+                    ("text".into(), Value::from(text.as_str())),
+                    ("at".into(), at.as_deref().map_or(Value::Null, Value::from)),
+                    ("time".into(), time.as_deref().map_or(Value::Null, Value::from)),
+                ];
+                // Only when the time named what it is in (`{at, in}`).
+                if let Some(w) = time_in {
+                    f.push(("time_in".into(), Value::from(w.as_str())));
+                }
+                f.push(("reply_to".into(), reply_to.as_deref().map_or(Value::Null, Value::from)));
+                f.push(("at_ms".into(), Value::from(*at_ms)));
+                Value::Obj(f)
+            }
         }
     }
 }

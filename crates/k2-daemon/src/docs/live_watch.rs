@@ -62,11 +62,36 @@ pub const PRESENCE_FEATURES: [&str; 2] = [VIEW_ADDRESS_FEATURE, TIME_POSITION_FE
 /// watch, no playhead.
 pub const TEXT_SOCKET_FEATURES: [&str; 1] = [VIEW_ADDRESS_FEATURE];
 
+/// Claims on elements (WIRE.md "Claim frames"): the client frames `claim`
+/// and `release`, answered `claimed` / `released` (or `presence_refused`).
+pub const CLAIMS_FEATURE: &str = "claims";
+
+/// Selection by element, pointer and viewport (WIRE.md "Presence frames"):
+/// the client frames `select`, `pointer` and `viewport`. Read right only.
+pub const PRESENCE_FEATURE: &str = "presence";
+
+/// What a scene's socket lists besides the keyed watch: the view address
+/// (Follow by `@cam:N` or `@obj:N`), presence (a person's selected objects,
+/// pointer and viewport) and, when people may change the scene, claims on
+/// objects and collections ("I'm moving the lamp"). A scene has no time,
+/// so no `time_position`.
+pub const SCENE_FEATURES: [&str; 3] = [VIEW_ADDRESS_FEATURE, PRESENCE_FEATURE, CLAIMS_FEATURE];
+
 /// Everything a keyed doc's socket lists in `welcome.features`: the keyed
 /// watch when the doc has it ([`features`]), then [`PRESENCE_FEATURES`].
 pub fn keyed_socket_features(session: &Session) -> Vec<&'static str> {
     let mut f = features(session);
     f.extend(PRESENCE_FEATURES);
+    f
+}
+
+/// A live scene's `welcome.features`: the keyed watch when the doc has it,
+/// then [`SCENE_FEATURES`], without `claims` while the scene is read-only
+/// (`claims` false: a claim needs the edit right, which no one has on a
+/// `.blend` for now, `blend_read_only`).
+pub fn scene_socket_features(session: &Session, claims: bool) -> Vec<&'static str> {
+    let mut f = features(session);
+    f.extend(SCENE_FEATURES.into_iter().filter(|x| claims || *x != CLAIMS_FEATURE));
     f
 }
 

@@ -5,6 +5,7 @@
 use super::encode::quote;
 use super::permission::{self, Note};
 use super::wire::{self, Answer, Body, Failure, Method, Request, Target};
+use k2_client::brand::PRODUCT_NAME;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -231,9 +232,9 @@ pub struct NoAnswer {
 impl fmt::Display for NoAnswer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.empty {
-            write!(f, "Error: K2's server gave an empty answer to {} after {} s; run k2 daemon status", self.endpoint, self.waited)
+            write!(f, "Error: {PRODUCT_NAME}'s server gave an empty answer to {} after {} s; run k2 daemon status", self.endpoint, self.waited)
         } else {
-            write!(f, "Error: K2's server didn't answer {} within {} s; run k2 daemon status", self.endpoint, self.waited)
+            write!(f, "Error: {PRODUCT_NAME}'s server didn't answer {} within {} s; run k2 daemon status", self.endpoint, self.waited)
         }
     }
 }
@@ -268,15 +269,15 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::NoAnswer(n) => n.fmt(f),
-            Error::Unreachable { endpoint, err } => write!(f, "can't reach K2's server for {endpoint}: {err}"),
-            Error::TimedOut { endpoint } => write!(f, "K2's server didn't answer {endpoint} in time"),
-            Error::Empty { endpoint } => write!(f, "K2's server gave an empty answer to {endpoint}"),
+            Error::Unreachable { endpoint, err } => write!(f, "can't reach {PRODUCT_NAME}'s server for {endpoint}: {err}"),
+            Error::TimedOut { endpoint } => write!(f, "{PRODUCT_NAME}'s server didn't answer {endpoint} in time"),
+            Error::Empty { endpoint } => write!(f, "{PRODUCT_NAME}'s server gave an empty answer to {endpoint}"),
             Error::Broken { endpoint, why } => write!(f, "the request to {endpoint} failed: {why}"),
             Error::BadTarget { target, byte } => write!(f, "won't send {target:?}: byte 0x{byte:02x} can't be in a URL"),
             Error::NoCellSocket { endpoint } => write!(f, "no session passport and cell socket for {endpoint}"),
             Error::MaybeApplied { endpoint, waited } => write!(
                 f,
-                "Error: K2's server didn't answer {endpoint} ({waited} s); the request may have been applied. Check before running it again."
+                "Error: {PRODUCT_NAME}'s server didn't answer {endpoint} ({waited} s); the request may have been applied. Check before running it again."
             ),
         }
     }

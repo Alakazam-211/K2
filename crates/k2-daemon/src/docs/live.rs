@@ -1738,7 +1738,7 @@ mod tests {
         };
 
         let c = open(&inside).expect_err("a page in .k2/agent/work is not a live doc");
-        println!("[docs/live] refusal for {}: {}", inside.display(), c.value());
+        println!("[docs/live] refusal for {}: {}", inside.display(), c.value().to_json());
         assert_eq!(c.reason, CloseReason::Declined);
         assert_eq!(c.code.as_deref(), Some("protected"), "{:?}", c);
         assert_eq!(
@@ -1746,7 +1746,7 @@ mod tests {
             Some(".k2/agent/work/k5-cli-progress.html is in the workspace's private .k2 folder, where only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs"),
         );
         assert!(c.error.is_none(), "K2's own rule, not a kit report: {:?}", c.error);
-        let frame = c.value().to_string();
+        let frame = c.value().to_json();
         assert!(!frame.contains("too_large") && !frame.contains("not_utf8") && !frame.contains("binary"), "{frame}");
 
         let t = open(&beside).expect("the same page outside .k2 opens live, in its own workspace");

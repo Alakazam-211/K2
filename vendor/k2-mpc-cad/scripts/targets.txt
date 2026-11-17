@@ -1,0 +1,55 @@
+# Every test target, test-only feature and pending #[ignore] of the pack and its fuzz crate
+# (fuzz/, its own workspace); scripts/check-targets.sh reads this file and checks it. One row per
+# line: PACKAGE|KIND|NAME|FEATURES|PARTS, the format and the rules in scripts/check-targets.sh's
+# header. The part is `check`: scripts/check.sh. A row whose PARTS holds "pending ruling" waits
+# on a decision; none may be left when a change lands (CHECK_TARGETS_LANDING=1).
+
+# ---- k2-mpc-cad-model ---------------------------------------------------------------------------
+k2-mpc-cad-model|lib|k2_mpc_cad_model||check
+k2-mpc-cad-model|doctest|k2_mpc_cad_model||excluded: the crate's docs hold no runnable example
+k2-mpc-cad-model|feature|mutants||check
+k2-mpc-cad-model|test|model||check
+
+# ---- k2-mpc-cad-measure (test tooling, never shipped) --------------------------------------------
+k2-mpc-cad-measure|bin|cad-measure||check
+
+# ---- k2-mpc-dxf ---------------------------------------------------------------------------------
+k2-mpc-dxf|lib|k2_mpc_dxf||check
+k2-mpc-dxf|doctest|k2_mpc_dxf||excluded: the crate's docs hold no runnable example
+k2-mpc-dxf|feature|fuzzing||check
+k2-mpc-dxf|feature|mutants||check
+k2-mpc-dxf|feature|testgen||check
+k2-mpc-dxf|test|tokenize||check
+k2-mpc-dxf|test|index||check
+k2-mpc-dxf|test|verbs||check
+k2-mpc-dxf|test|writer||check
+k2-mpc-dxf|test|fuzz_seeds||check
+k2-mpc-dxf|test|generic||check
+k2-mpc-dxf|test|references||check
+k2-mpc-dxf|test|h1||check
+k2-mpc-dxf|test|merge||check
+k2-mpc-dxf|test|read_goldens||check
+k2-mpc-dxf|test|pack_session||check
+k2-mpc-dxf|test|probe||check
+k2-mpc-dxf|test|draw||check
+k2-mpc-dxf|test|mutants|mutants|check
+
+k2-mpc-dwg|lib|k2_mpc_dwg||check
+k2-mpc-dwg|doctest|k2_mpc_dwg||excluded: the crate's docs hold no runnable example
+k2-mpc-dwg|feature|mutants||check
+k2-mpc-dwg|test|bits||check
+k2-mpc-dwg|test|crc||check
+k2-mpc-dwg|test|lz77||check
+k2-mpc-dwg|test|heap||check
+k2-mpc-dwg|test|container||check
+k2-mpc-dwg|test|objects||check
+k2-mpc-dwg|test|polylines||check
+k2-mpc-dwg|test|entities||check
+k2-mpc-dwg|test|tables||check
+k2-mpc-dwg|test|drawing||check
+k2-mpc-dwg|test|header||check
+k2-mpc-dwg|test|leaders||check
+k2-mpc-dwg|test|mutants|mutants|check
+
+# ---- k2-mpc-dxf-fuzz (fuzz/, its own workspace; cargo fuzz runs the targets) --------------------
+k2-mpc-dxf-fuzz|fuzz-bin|dxf_read||built-only:check: linted (clippy, all targets); cargo fuzz builds and runs it

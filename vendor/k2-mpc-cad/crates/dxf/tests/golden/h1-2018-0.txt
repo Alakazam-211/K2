@@ -1,0 +1,73 @@
+spec cad.drawing/1
+next None
+--- stdout
+dxf AC1032 (R2018), 23 entities, 5 layers, units mm, handles on
+--- data
+{
+  "format": "dxf",
+  "acadver": "AC1032",
+  "release": "R2018",
+  "encoding": "utf-8",
+  "eol": "crlf",
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "extents": {
+    "header": null,
+    "computed": {
+      "min": [-302.1644, -6.553066666666667],
+      "max": [459.2466, 10.0142],
+      "over": 18,
+      "of": 18
+    },
+    "header_stale": false,
+    "header_sentinel": false
+  },
+  "counts": {
+    "entities": 23,
+    "by_kind": {
+      "ARC": 2,
+      "CIRCLE": 2,
+      "ELLIPSE": 1,
+      "INSERT": 4,
+      "LINE": 6,
+      "LWPOLYLINE": 1,
+      "MTEXT": 1,
+      "POINT": 1,
+      "POLYLINE": 1,
+      "SPLINE": 1,
+      "TEXT": 3
+    },
+    "by_space": {
+      "model": 18,
+      "paper": 0,
+      "blocks": 5
+    },
+    "layers": 5,
+    "blocks": 3,
+    "anon_blocks": 0
+  },
+  "handles": {
+    "mode": "on",
+    "hmax": "58",
+    "handseed": "59",
+    "duplicates": 0,
+    "missing": 0
+  },
+  "editable": {
+    "yes": 22,
+    "no": {
+      "ocs": 1
+    }
+  },
+  "writer": {
+    "mark": "generated test drawing",
+    "policy": "unproven"
+  },
+  "bom": false,
+  "tail_bytes": 0,
+  "comments": 2
+}

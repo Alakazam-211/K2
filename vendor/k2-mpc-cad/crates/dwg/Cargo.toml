@@ -1,0 +1,21 @@
+[package]
+name = "k2-mpc-dwg"
+version = "0.1.0"
+description = "Reads DWG files (the 2004 to 2018 family), read-only, with typed refusals, for the drawing-model read: a type pack for the multiplayer kit."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+# What a package of this crate holds: the library and its notes. The tests (and their
+# hand-made object bytes, tests/support/object.rs) stay out.
+include = ["src/**/*.rs", "Cargo.toml", "README.md"]
+license.workspace = true
+
+[features]
+# Test-only: planted bugs (`k2_mpc_cad_model::mutant`), for `tests/mutants.rs`. No host enables it.
+mutants = ["k2-mpc-cad-model/mutants"]
+
+[dependencies]
+# The kit (k2-mpc-base), by path, beside this repo's checkout: its index digests.
+k2-mpc-base = { path = "../../../k2-mpc-base/crates/base" }
+# The format-neutral drawing model: its refusals and the planted-bug switch.
+k2-mpc-cad-model = { path = "../cad-model" }

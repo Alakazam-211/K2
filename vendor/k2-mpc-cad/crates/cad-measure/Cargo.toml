@@ -1,0 +1,20 @@
+[package]
+name = "k2-mpc-cad-measure"
+version = "0.0.0"
+description = "Test tooling for the drawing packs, run in test jobs and never shipped: writes the test drawings for handle-stability measurements and reports what their headers carry."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+k2-mpc-base = { path = "../../../k2-mpc-base/crates/base" }
+k2-mpc-cad-model = { path = "../cad-model" }
+# the test drawing generator: this crate is test tooling, so it may turn it on
+k2-mpc-dxf = { path = "../dxf", features = ["testgen"] }
+# the DWG container reader, for `dwg-check`
+k2-mpc-dwg = { path = "../dwg" }
+
+[[bin]]
+name = "cad-measure"
+path = "src/main.rs"

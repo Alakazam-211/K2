@@ -1,0 +1,6 @@
+# The ezdxf test checker's exact versions (test machines only; never shipped).
+ezdxf==1.4.2
+fonttools==4.68.0
+numpy==2.5.5
+pyparsing==3.3.3
+typing_extensions==4.16.0

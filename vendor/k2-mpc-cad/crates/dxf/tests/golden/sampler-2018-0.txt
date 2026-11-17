@@ -1,0 +1,69 @@
+spec cad.drawing/1
+next None
+--- stdout
+dxf AC1032 (R2018), 12 entities, 4 layers, units mm, handles on
+--- data
+{
+  "format": "dxf",
+  "acadver": "AC1032",
+  "release": "R2018",
+  "encoding": "utf-8",
+  "eol": "lf",
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "extents": {
+    "header": null,
+    "computed": {
+      "min": [0, -1.666666666666667],
+      "max": [35, 22],
+      "over": 9,
+      "of": 9
+    },
+    "header_stale": false,
+    "header_sentinel": false
+  },
+  "counts": {
+    "entities": 12,
+    "by_kind": {
+      "ARC": 2,
+      "CIRCLE": 1,
+      "INSERT": 1,
+      "LINE": 2,
+      "LWPOLYLINE": 1,
+      "MTEXT": 1,
+      "POINT": 1,
+      "POLYLINE": 1,
+      "TEXT": 2
+    },
+    "by_space": {
+      "model": 9,
+      "paper": 1,
+      "blocks": 2
+    },
+    "layers": 4,
+    "blocks": 1,
+    "anon_blocks": 0
+  },
+  "handles": {
+    "mode": "on",
+    "hmax": "45",
+    "handseed": "46",
+    "duplicates": 0,
+    "missing": 0
+  },
+  "editable": {
+    "yes": 12,
+    "no": {}
+  },
+  "writer": {
+    "mark": null,
+    "policy": "unproven"
+  },
+  "bom": false,
+  "tail_bytes": 0,
+  "comments": 0
+}

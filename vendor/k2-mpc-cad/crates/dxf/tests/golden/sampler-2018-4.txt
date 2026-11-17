@@ -1,0 +1,96 @@
+spec cad.entity-find/1
+next None
+--- stdout
+@h:2F	LINE	A-WALL	0,0,10,0
+@h:30	POINT	E-LITE	5,5,5,5
+@h:31	CIRCLE	E-LITE	18,18,22,22
+@h:32	ARC	A-WALL	25,0,35,5
+@h:33	LWPOLYLINE	A-WALL	0,0,15,10
+@h:34	POLYLINE	A-WALL	0,0,4,3
+@h:39	TEXT	ANNO	1,0.5,13,3.5
+@h:3A	MTEXT	ANNO	1,-1.666666666666667,16,5
+@h:3B	INSERT	A-WALL	10,0,10,0
+--- data
+{
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "rows": [
+    {
+      "address": "@h:2F",
+      "kind": "LINE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "bbox": [0, 0, 10, 0],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:30",
+      "kind": "POINT",
+      "layer": "E-LITE",
+      "owner": "model",
+      "bbox": [5, 5, 5, 5],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:31",
+      "kind": "CIRCLE",
+      "layer": "E-LITE",
+      "owner": "model",
+      "bbox": [18, 18, 22, 22],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:32",
+      "kind": "ARC",
+      "layer": "A-WALL",
+      "owner": "model",
+      "bbox": [25, 0, 35, 5],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:33",
+      "kind": "LWPOLYLINE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "bbox": [0, 0, 15, 10],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:34",
+      "kind": "POLYLINE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "bbox": [0, 0, 4, 3],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:39",
+      "kind": "TEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "bbox": [1, 0.5, 13, 3.5],
+      "bbox_q": "approx"
+    },
+    {
+      "address": "@h:3A",
+      "kind": "MTEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "bbox": [1, -1.666666666666667, 16, 5],
+      "bbox_q": "approx"
+    },
+    {
+      "address": "@h:3B",
+      "kind": "INSERT",
+      "layer": "A-WALL",
+      "owner": "model",
+      "bbox": [10, 0, 10, 0],
+      "bbox_q": "insert_only"
+    }
+  ],
+  "total": 9
+}

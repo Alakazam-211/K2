@@ -1,0 +1,283 @@
+{
+  "schema": "cad.drawing.header/1",
+  "format": "dxf",
+  "version": 7,
+  "acadver": "AC1032",
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "extents": {
+    "stated": null,
+    "computed": [-35, -10, 840, 102]
+  },
+  "settings": {
+    "ltscale": 2,
+    "psltscale": true,
+    "lwdefault_mm": 0.25,
+    "lwdisplay": false,
+    "fillmode": true,
+    "pdmode": 3,
+    "pdsize": 0.5,
+    "mirrtext": false
+  },
+  "layers": [
+    {
+      "handle": "@h:19",
+      "name": "0",
+      "rgb": [255, 255, 255],
+      "aci": 7,
+      "fg": true,
+      "alpha": 1,
+      "ltype": "CONTINUOUS",
+      "lw_mm": 0.25,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true
+    },
+    {
+      "handle": "@h:1A",
+      "name": "A-WALL",
+      "rgb": [51, 102, 153],
+      "aci": 1,
+      "fg": false,
+      "alpha": 0.4980392156862745,
+      "ltype": "DASHED",
+      "lw_mm": 0.35,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true
+    },
+    {
+      "handle": "@h:1B",
+      "name": "E-LITE",
+      "rgb": [0, 255, 0],
+      "aci": 3,
+      "fg": false,
+      "alpha": 1,
+      "ltype": "CONTINUOUS",
+      "lw_mm": 0.25,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true
+    },
+    {
+      "handle": "@h:1C",
+      "name": "ANNO",
+      "rgb": [255, 255, 255],
+      "aci": 7,
+      "fg": true,
+      "alpha": 1,
+      "ltype": "CONTINUOUS",
+      "lw_mm": 0.25,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true
+    },
+    {
+      "handle": "@h:1D",
+      "name": "OFF",
+      "rgb": [255, 255, 0],
+      "aci": 2,
+      "fg": false,
+      "alpha": 1,
+      "ltype": "CONTINUOUS",
+      "lw_mm": 0.25,
+      "on": false,
+      "frozen": false,
+      "locked": false,
+      "plot": true
+    },
+    {
+      "handle": "@h:1E",
+      "name": "FROZEN",
+      "rgb": [0, 255, 255],
+      "aci": 4,
+      "fg": false,
+      "alpha": 1,
+      "ltype": "CONTINUOUS",
+      "lw_mm": 0.25,
+      "on": true,
+      "frozen": true,
+      "locked": false,
+      "plot": true
+    }
+  ],
+  "linetypes": [
+    {
+      "handle": "@h:13",
+      "name": "BYBLOCK",
+      "length": 0,
+      "dashes": [],
+      "complex": []
+    },
+    {
+      "handle": "@h:14",
+      "name": "BYLAYER",
+      "length": 0,
+      "dashes": [],
+      "complex": []
+    },
+    {
+      "handle": "@h:15",
+      "name": "CONTINUOUS",
+      "length": 0,
+      "dashes": [],
+      "complex": []
+    },
+    {
+      "handle": "@h:16",
+      "name": "DASHED",
+      "length": 0.75,
+      "dashes": [0.5, -0.25],
+      "complex": []
+    },
+    {
+      "handle": "@h:17",
+      "name": "DOT",
+      "length": 0.2,
+      "dashes": [0, -0.2],
+      "complex": []
+    }
+  ],
+  "text_styles": [
+    {
+      "handle": "@h:20",
+      "name": "Standard",
+      "family": "txt",
+      "file": "txt",
+      "bigfont": null,
+      "shx": true,
+      "fixed_height": 0,
+      "width": 1,
+      "oblique": 0,
+      "bold": false,
+      "italic": false,
+      "backwards": false,
+      "upside_down": false,
+      "vertical": false
+    },
+    {
+      "handle": "@h:21",
+      "name": "SANS",
+      "family": "Arial",
+      "file": "arial.ttf",
+      "bigfont": null,
+      "shx": false,
+      "fixed_height": 0,
+      "width": 1,
+      "oblique": 0,
+      "bold": false,
+      "italic": false,
+      "backwards": false,
+      "upside_down": false,
+      "vertical": false
+    },
+    {
+      "handle": "@h:22",
+      "name": "ROMANS",
+      "family": "romans",
+      "file": "romans.shx",
+      "bigfont": null,
+      "shx": true,
+      "fixed_height": 0,
+      "width": 1,
+      "oblique": 0,
+      "bold": false,
+      "italic": false,
+      "backwards": false,
+      "upside_down": false,
+      "vertical": false
+    }
+  ],
+  "blocks": [
+    {
+      "handle": "@h:2D",
+      "name": "DOOR",
+      "base": [0, 0],
+      "entities": 4,
+      "bbox": [0, 0, 0.9, 1.25],
+      "bbox_q": "approx",
+      "digest": "2b5789000249db69",
+      "anon": false,
+      "xref": false
+    },
+    {
+      "handle": "@h:2E",
+      "name": "NEST",
+      "base": [1, 1],
+      "entities": 1,
+      "bbox": [1, 1, 1.9, 2.25],
+      "bbox_q": "approx",
+      "digest": "a7696912d43eb2d5",
+      "anon": false,
+      "xref": false
+    },
+    {
+      "handle": "@h:2F",
+      "name": "*D1",
+      "base": [0, 0],
+      "entities": 2,
+      "bbox": [0, -5, 100, -1.875],
+      "bbox_q": "approx",
+      "digest": "b5f80aef01c8234a",
+      "anon": true,
+      "xref": false
+    }
+  ],
+  "layouts": [
+    {
+      "handle": "@h:2B",
+      "name": "Model",
+      "kind": "model",
+      "space": "model",
+      "entities": 55,
+      "tab": 0,
+      "draw_order": "sortents",
+      "paper": null,
+      "viewports": []
+    },
+    {
+      "handle": "@h:2C",
+      "name": "Layout1",
+      "kind": "paper",
+      "space": "@h:2C",
+      "entities": 2,
+      "tab": 1,
+      "draw_order": "file",
+      "paper": {
+        "w_mm": 420,
+        "h_mm": 297,
+        "rotation": 0,
+        "margins_mm": [0, 0, 0, 0]
+      },
+      "viewports": [
+        {
+          "handle": "@h:7C",
+          "centre": [210, 148.5],
+          "size": [300, 200],
+          "view_centre": [50, 0],
+          "view_height": 100,
+          "scale": 2,
+          "rotation": 0,
+          "on": true,
+          "frozen_layers": [],
+          "clip": null,
+          "plan": true
+        }
+      ]
+    }
+  ],
+  "xrefs": [],
+  "whys": ["not_modelled", "attdef", "spline_weights", "over_cap", "unreadable", "viewport"],
+  "budget": {
+    "entities": 5000,
+    "bytes": 4194304
+  }
+}

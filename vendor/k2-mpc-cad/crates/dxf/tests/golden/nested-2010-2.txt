@@ -1,0 +1,95 @@
+spec cad.block-list/1
+next None
+--- stdout
+@h:26	C	1	5
+@h:27	B	0	4
+@h:28	A	2	2
+@h:29	D	0	0
+--- data
+{
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "blocks": [
+    {
+      "address": "@h:26",
+      "name": "C",
+      "base": [0, 0, 0],
+      "anon": false,
+      "xref": false,
+      "path": null,
+      "dynamic_of": null,
+      "inserts": {
+        "direct": {
+          "model": 1,
+          "paper": 0
+        },
+        "in_blocks": 1,
+        "nested_model": 5,
+        "dynamic": 0
+      },
+      "ents": 1
+    },
+    {
+      "address": "@h:27",
+      "name": "B",
+      "base": [0, 0, 0],
+      "anon": false,
+      "xref": false,
+      "path": null,
+      "dynamic_of": null,
+      "inserts": {
+        "direct": {
+          "model": 0,
+          "paper": 1
+        },
+        "in_blocks": 2,
+        "nested_model": 4,
+        "dynamic": 0
+      },
+      "ents": 1
+    },
+    {
+      "address": "@h:28",
+      "name": "A",
+      "base": [0, 0, 0],
+      "anon": false,
+      "xref": false,
+      "path": null,
+      "dynamic_of": null,
+      "inserts": {
+        "direct": {
+          "model": 2,
+          "paper": 0
+        },
+        "in_blocks": 0,
+        "nested_model": 2,
+        "dynamic": 0
+      },
+      "ents": 2
+    },
+    {
+      "address": "@h:29",
+      "name": "D",
+      "base": [0, 0, 0],
+      "anon": false,
+      "xref": false,
+      "path": null,
+      "dynamic_of": null,
+      "inserts": {
+        "direct": {
+          "model": 0,
+          "paper": 0
+        },
+        "in_blocks": 0,
+        "nested_model": 0,
+        "dynamic": 0
+      },
+      "ents": 1
+    }
+  ],
+  "nested_capped": false
+}

@@ -1,0 +1,89 @@
+spec cad.layer-list/1
+next None
+--- stdout
+@h:17	0	0
+@h:18	WALLS	6
+@h:19	DOORS	3
+@h:1A	NOTES	4
+@h:1B	EXTRA	10
+--- data
+{
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "layers": [
+    {
+      "address": "@h:17",
+      "name": "0",
+      "color": 7,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 0,
+      "ents_model": 0
+    },
+    {
+      "address": "@h:18",
+      "name": "WALLS",
+      "color": 1,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 6,
+      "ents_model": 6
+    },
+    {
+      "address": "@h:19",
+      "name": "DOORS",
+      "color": 2,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 3,
+      "ents_model": 1
+    },
+    {
+      "address": "@h:1A",
+      "name": "NOTES",
+      "color": 7,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 4,
+      "ents_model": 4
+    },
+    {
+      "address": "@h:1B",
+      "name": "EXTRA",
+      "color": 3,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 10,
+      "ents_model": 7
+    }
+  ]
+}

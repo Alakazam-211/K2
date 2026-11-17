@@ -1,0 +1,105 @@
+spec cad.entity-find/1
+next None
+--- stdout
+@h:2F	LINE	L2	0,0,1,0
+@h:32	INSERT	L1	0,0,0,0
+@h:35	INSERT	L1	0,0,0,0
+@h:36	INSERT	L1	5,0,5,0
+@h:39	CIRCLE	L2	-1,-1,1,1
+@h:3B	INSERT	L1	0,0,0,0
+@h:3C	INSERT	L1	100,0,100,0
+@h:3D	INSERT	L2	200,0,200,0
+@h:3E	LINE	L2	0,0,1,1
+@h:3F	INSERT	L1	0,0,0,0
+--- data
+{
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "rows": [
+    {
+      "address": "@h:2F",
+      "kind": "LINE",
+      "layer": "L2",
+      "owner": "@h:26",
+      "bbox": [0, 0, 1, 0],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:32",
+      "kind": "INSERT",
+      "layer": "L1",
+      "owner": "@h:27",
+      "bbox": [0, 0, 0, 0],
+      "bbox_q": "insert_only"
+    },
+    {
+      "address": "@h:35",
+      "kind": "INSERT",
+      "layer": "L1",
+      "owner": "@h:28",
+      "bbox": [0, 0, 0, 0],
+      "bbox_q": "insert_only"
+    },
+    {
+      "address": "@h:36",
+      "kind": "INSERT",
+      "layer": "L1",
+      "owner": "@h:28",
+      "bbox": [5, 0, 5, 0],
+      "bbox_q": "insert_only"
+    },
+    {
+      "address": "@h:39",
+      "kind": "CIRCLE",
+      "layer": "L2",
+      "owner": "@h:29",
+      "bbox": [-1, -1, 1, 1],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:3B",
+      "kind": "INSERT",
+      "layer": "L1",
+      "owner": "model",
+      "bbox": [0, 0, 0, 0],
+      "bbox_q": "insert_only"
+    },
+    {
+      "address": "@h:3C",
+      "kind": "INSERT",
+      "layer": "L1",
+      "owner": "model",
+      "bbox": [100, 0, 100, 0],
+      "bbox_q": "insert_only"
+    },
+    {
+      "address": "@h:3D",
+      "kind": "INSERT",
+      "layer": "L2",
+      "owner": "model",
+      "bbox": [200, 0, 200, 0],
+      "bbox_q": "insert_only"
+    },
+    {
+      "address": "@h:3E",
+      "kind": "LINE",
+      "layer": "L2",
+      "owner": "model",
+      "bbox": [0, 0, 1, 1],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:3F",
+      "kind": "INSERT",
+      "layer": "L1",
+      "owner": "@h:25",
+      "bbox": [0, 0, 0, 0],
+      "bbox_q": "insert_only"
+    }
+  ],
+  "total": 10
+}

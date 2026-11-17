@@ -1,0 +1,74 @@
+spec cad.layer-list/1
+next None
+--- stdout
+@h:17	0	0
+@h:18	L1	6
+@h:19	L2	4
+@h:1A	UNUSED	0
+--- data
+{
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "layers": [
+    {
+      "address": "@h:17",
+      "name": "0",
+      "color": 7,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 0,
+      "ents_model": 0
+    },
+    {
+      "address": "@h:18",
+      "name": "L1",
+      "color": 1,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 6,
+      "ents_model": 2
+    },
+    {
+      "address": "@h:19",
+      "name": "L2",
+      "color": 2,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 4,
+      "ents_model": 2
+    },
+    {
+      "address": "@h:1A",
+      "name": "UNUSED",
+      "color": 3,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 0,
+      "ents_model": 0
+    }
+  ]
+}

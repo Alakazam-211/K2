@@ -1,0 +1,14 @@
+spec cad.text-find/1
+next None
+--- stdout
+--- data
+{
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "rows": [],
+  "total": 0
+}

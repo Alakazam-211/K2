@@ -1,0 +1,121 @@
+{
+  "schema": "cad.drawing.page/1",
+  "format": "dxf",
+  "version": 7,
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "space": "@h:2D",
+  "first": true,
+  "z_first": 0,
+  "z_last": 3,
+  "of": 4,
+  "not_drawn": 1,
+  "oversize": false,
+  "budget": {
+    "entities": 5000,
+    "bytes": 4194304
+  },
+  "entities": [
+    {
+      "h": "@h:35",
+      "kind": "LINE",
+      "layer": "0",
+      "owner": "@h:2D",
+      "z": 0,
+      "style": {
+        "rgb": "insert",
+        "fg": false,
+        "aci": null,
+        "alpha": "insert",
+        "ltype": "insert",
+        "lt_scale": 2,
+        "lw_mm": "insert"
+      },
+      "visible": "insert",
+      "drawn": true,
+      "bbox": [0, 0, 0.9, 0],
+      "bbox_q": "exact",
+      "geom": {
+        "p1": [0, 0],
+        "p2": [0.9, 0]
+      }
+    },
+    {
+      "h": "@h:36",
+      "kind": "ARC",
+      "layer": "0",
+      "owner": "@h:2D",
+      "z": 1,
+      "style": {
+        "rgb": "insert",
+        "fg": false,
+        "aci": null,
+        "alpha": "insert",
+        "ltype": "insert",
+        "lt_scale": 2,
+        "lw_mm": "insert"
+      },
+      "visible": "insert",
+      "drawn": true,
+      "bbox": [0, 0, 0.9, 0.9],
+      "bbox_q": "exact",
+      "geom": {
+        "centre": [0, 0],
+        "r": 0.9,
+        "a0": 0,
+        "a1": 1.5707963267948966,
+        "ccw": true
+      }
+    },
+    {
+      "h": "@h:37",
+      "kind": "LINE",
+      "layer": "A-WALL",
+      "owner": "@h:2D",
+      "z": 2,
+      "style": {
+        "rgb": [51, 102, 153],
+        "fg": false,
+        "aci": null,
+        "alpha": 0.4980392156862745,
+        "ltype": "DASHED",
+        "lt_scale": 2,
+        "lw_mm": 0.35
+      },
+      "visible": true,
+      "drawn": true,
+      "bbox": [0, 0, 0, 0.9],
+      "bbox_q": "exact",
+      "geom": {
+        "p1": [0, 0],
+        "p2": [0, 0.9]
+      }
+    },
+    {
+      "h": "@h:38",
+      "kind": "ATTDEF",
+      "layer": "0",
+      "owner": "@h:2D",
+      "z": 3,
+      "style": {
+        "rgb": "insert",
+        "fg": false,
+        "aci": null,
+        "alpha": "insert",
+        "ltype": "insert",
+        "lt_scale": 2,
+        "lw_mm": "insert"
+      },
+      "visible": "insert",
+      "drawn": false,
+      "why": "attdef",
+      "bbox": [0, 0.95, 0.6, 1.25],
+      "bbox_q": "approx"
+    }
+  ],
+  "next": null
+}

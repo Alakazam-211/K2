@@ -1,0 +1,51 @@
+spec cad.text-find/1
+next None
+--- stdout
+@h:41	TEXT	MOVE-ME
+@h:48	TEXT	ROOM 1
+@h:4A	INSERT	NO=D-01
+@h:4F	MTEXT	Line one\PLine two
+--- data
+{
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "rows": [
+    {
+      "address": "@h:41",
+      "kind": "TEXT",
+      "layer": "NOTES",
+      "owner": "model",
+      "at": [175.0959, 2.0497],
+      "text": "MOVE-ME"
+    },
+    {
+      "address": "@h:48",
+      "kind": "TEXT",
+      "layer": "NOTES",
+      "owner": "model",
+      "at": [275.1507, 0.0781],
+      "text": "ROOM 1"
+    },
+    {
+      "address": "@h:4A",
+      "kind": "INSERT",
+      "layer": "DOORS",
+      "owner": "model",
+      "at": [325.1781, 0.09230000000000001],
+      "text": "NO=D-01"
+    },
+    {
+      "address": "@h:4F",
+      "kind": "MTEXT",
+      "layer": "NOTES",
+      "owner": "model",
+      "at": [400.2192, 0.1136],
+      "text": "Line one\\PLine two"
+    }
+  ],
+  "total": 4
+}

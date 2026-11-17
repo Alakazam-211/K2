@@ -1,0 +1,51 @@
+spec cad.entity-find/1
+next None
+--- stdout
+@h:3B	INSERT	L1	0,0,0,0
+@h:3C	INSERT	L1	100,0,100,0
+@h:3D	INSERT	L2	200,0,200,0
+@h:3E	LINE	L2	0,0,1,1
+--- data
+{
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "rows": [
+    {
+      "address": "@h:3B",
+      "kind": "INSERT",
+      "layer": "L1",
+      "owner": "model",
+      "bbox": [0, 0, 0, 0],
+      "bbox_q": "insert_only"
+    },
+    {
+      "address": "@h:3C",
+      "kind": "INSERT",
+      "layer": "L1",
+      "owner": "model",
+      "bbox": [100, 0, 100, 0],
+      "bbox_q": "insert_only"
+    },
+    {
+      "address": "@h:3D",
+      "kind": "INSERT",
+      "layer": "L2",
+      "owner": "model",
+      "bbox": [200, 0, 200, 0],
+      "bbox_q": "insert_only"
+    },
+    {
+      "address": "@h:3E",
+      "kind": "LINE",
+      "layer": "L2",
+      "owner": "model",
+      "bbox": [0, 0, 1, 1],
+      "bbox_q": "exact"
+    }
+  ],
+  "total": 4
+}

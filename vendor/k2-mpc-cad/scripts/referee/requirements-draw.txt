@@ -1,0 +1,4 @@
+# The drawn-values checker's exact versions (test machines only; never shipped): the structure
+# checker's, and the image library ezdxf's drawing add-on loads with it.
+-r requirements.txt
+pillow==12.0.0

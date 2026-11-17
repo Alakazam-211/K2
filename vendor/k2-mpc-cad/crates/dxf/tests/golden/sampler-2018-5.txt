@@ -1,0 +1,42 @@
+spec cad.text-find/1
+next None
+--- stdout
+@h:39	TEXT	ROOM 101
+@h:3A	MTEXT	North wall\Ptwo lines
+@h:3B	INSERT	NO=D-01
+--- data
+{
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "rows": [
+    {
+      "address": "@h:39",
+      "kind": "TEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "at": [1, 1],
+      "text": "ROOM 101"
+    },
+    {
+      "address": "@h:3A",
+      "kind": "MTEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "at": [1, 5],
+      "text": "North wall\\Ptwo lines"
+    },
+    {
+      "address": "@h:3B",
+      "kind": "INSERT",
+      "layer": "A-WALL",
+      "owner": "model",
+      "at": [10, 0],
+      "text": "NO=D-01"
+    }
+  ],
+  "total": 3
+}

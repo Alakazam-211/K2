@@ -1,0 +1,30 @@
+[package]
+name = "k2-mpc-dxf"
+version = "0.1.0"
+description = "Reads 2D drawings in ASCII DXF, byte-exact: a type pack for the multiplayer kit."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# Test-only: the properties the tokenizer and the index keep on any input
+# (`k2_mpc_dxf::fuzzing`), for the fuzz targets in `fuzz/` and the seed tests. No host enables it.
+fuzzing = []
+# Test-only: planted bugs (`k2_mpc_cad_model::mutant`), for `tests/mutants.rs`. No host enables it.
+mutants = ["k2-mpc-cad-model/mutants"]
+# Test-only: the drawing generator (`k2_mpc_dxf::testgen`), our own test drawings. No host
+# enables it.
+testgen = []
+
+[dependencies]
+# The kit (k2-mpc-base), by path: its checkout sits beside this repo's (a host vendors both side
+# by side: vendor/k2-mpc-base beside vendor/k2-mpc-cad), at the kit commit CHANGELOG.md names.
+# Run `cargo update -p k2-mpc-base` and commit the lock when it moves.
+k2-mpc-base = { path = "../../../k2-mpc-base/crates/base" }
+# The format-neutral drawing model, index and shared reads.
+k2-mpc-cad-model = { path = "../cad-model" }
+
+[dev-dependencies]
+# The tests use the generator and the fuzz properties: this crate's own test-only features.
+k2-mpc-dxf = { path = ".", features = ["fuzzing", "testgen"] }

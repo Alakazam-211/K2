@@ -1,0 +1,22 @@
+spec dxf.check/1
+next None
+--- stdout
+0 errors, 0 warnings, 0 notes
+--- data
+{
+  "findings": [],
+  "counts": {
+    "error": 0,
+    "warning": 0,
+    "info": 0
+  },
+  "by_code": {},
+  "writeback": {
+    "identical": true,
+    "bytes": 1908,
+    "editable": {
+      "yes": 12,
+      "no": {}
+    }
+  }
+}

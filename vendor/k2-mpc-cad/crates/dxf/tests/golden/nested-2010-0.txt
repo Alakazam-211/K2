@@ -1,0 +1,63 @@
+spec cad.drawing/1
+next None
+--- stdout
+dxf AC1024 (R2010), 10 entities, 4 layers, units mm, handles on
+--- data
+{
+  "format": "dxf",
+  "acadver": "AC1024",
+  "release": "R2010",
+  "encoding": "utf-8",
+  "eol": "lf",
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "extents": {
+    "header": null,
+    "computed": {
+      "min": [0, 0],
+      "max": [200, 1],
+      "over": 4,
+      "of": 4
+    },
+    "header_stale": false,
+    "header_sentinel": false
+  },
+  "counts": {
+    "entities": 10,
+    "by_kind": {
+      "CIRCLE": 1,
+      "INSERT": 7,
+      "LINE": 2
+    },
+    "by_space": {
+      "model": 4,
+      "paper": 1,
+      "blocks": 5
+    },
+    "layers": 4,
+    "blocks": 4,
+    "anon_blocks": 0
+  },
+  "handles": {
+    "mode": "on",
+    "hmax": "46",
+    "handseed": "47",
+    "duplicates": 0,
+    "missing": 0
+  },
+  "editable": {
+    "yes": 10,
+    "no": {}
+  },
+  "writer": {
+    "mark": null,
+    "policy": "unproven"
+  },
+  "bom": false,
+  "tail_bytes": 0,
+  "comments": 0
+}

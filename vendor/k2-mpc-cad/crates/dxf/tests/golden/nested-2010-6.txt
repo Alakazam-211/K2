@@ -1,0 +1,39 @@
+spec dxf.header/1
+next None
+--- stdout
+$ACADVER	1	AC1024
+$INSUNITS	70	4
+$HANDSEED	5	47
+--- data
+{
+  "vars": [
+    {
+      "name": "$ACADVER",
+      "pairs": [
+        {
+          "code": 1,
+          "value": "AC1024"
+        }
+      ]
+    },
+    {
+      "name": "$INSUNITS",
+      "pairs": [
+        {
+          "code": 70,
+          "value": "4"
+        }
+      ]
+    },
+    {
+      "name": "$HANDSEED",
+      "pairs": [
+        {
+          "code": 5,
+          "value": "47"
+        }
+      ]
+    }
+  ],
+  "missing": []
+}

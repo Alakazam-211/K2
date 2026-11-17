@@ -1,0 +1,74 @@
+spec cad.layer-list/1
+next None
+--- stdout
+@h:17	0	0
+@h:18	A-WALL	7
+@h:19	E-LITE	2
+@h:1A	ANNO	3
+--- data
+{
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "layers": [
+    {
+      "address": "@h:17",
+      "name": "0",
+      "color": 7,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 0,
+      "ents_model": 0
+    },
+    {
+      "address": "@h:18",
+      "name": "A-WALL",
+      "color": 1,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 7,
+      "ents_model": 5
+    },
+    {
+      "address": "@h:19",
+      "name": "E-LITE",
+      "color": 3,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 2,
+      "ents_model": 2
+    },
+    {
+      "address": "@h:1A",
+      "name": "ANNO",
+      "color": 7,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": "-3",
+      "xref": false,
+      "ents": 3,
+      "ents_model": 2
+    }
+  ]
+}

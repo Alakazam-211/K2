@@ -1,0 +1,123 @@
+spec cad.entity-find/1
+next None
+--- stdout
+@h:11	LINE	A-WALL	0,0,0.9,0
+@h:12	ARC	A-WALL	0,0,0.9,0.9
+@h:14	LINE	A-WALL	0,0,10,0
+@h:15	POINT	E-LITE	5,5,5,5
+@h:16	CIRCLE	E-LITE	18,18,22,22
+@h:17	ARC	A-WALL	25,0,35,5
+@h:18	POLYLINE	A-WALL	0,0,15,10
+@h:1D	POLYLINE	A-WALL	0,0,4,3
+@h:22	TEXT	ANNO	1,0.5,13,3.5
+@h:23	TEXT	ANNO	1,4.5,32.5,7.5
+@h:24	INSERT	A-WALL	10,0,10,0
+@h:27	TEXT	ANNO	10,9.3,20.5,13.5
+--- data
+{
+  "units": {
+    "word": "unitless",
+    "insunits": null,
+    "measurement": 1,
+    "source": "none"
+  },
+  "rows": [
+    {
+      "address": "@h:11",
+      "kind": "LINE",
+      "layer": "A-WALL",
+      "owner": "@h:10",
+      "bbox": [0, 0, 0.9, 0],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:12",
+      "kind": "ARC",
+      "layer": "A-WALL",
+      "owner": "@h:10",
+      "bbox": [0, 0, 0.9, 0.9],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:14",
+      "kind": "LINE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "bbox": [0, 0, 10, 0],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:15",
+      "kind": "POINT",
+      "layer": "E-LITE",
+      "owner": "model",
+      "bbox": [5, 5, 5, 5],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:16",
+      "kind": "CIRCLE",
+      "layer": "E-LITE",
+      "owner": "model",
+      "bbox": [18, 18, 22, 22],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:17",
+      "kind": "ARC",
+      "layer": "A-WALL",
+      "owner": "model",
+      "bbox": [25, 0, 35, 5],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:18",
+      "kind": "POLYLINE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "bbox": [0, 0, 15, 10],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:1D",
+      "kind": "POLYLINE",
+      "layer": "A-WALL",
+      "owner": "model",
+      "bbox": [0, 0, 4, 3],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:22",
+      "kind": "TEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "bbox": [1, 0.5, 13, 3.5],
+      "bbox_q": "approx"
+    },
+    {
+      "address": "@h:23",
+      "kind": "TEXT",
+      "layer": "ANNO",
+      "owner": "model",
+      "bbox": [1, 4.5, 32.5, 7.5],
+      "bbox_q": "approx"
+    },
+    {
+      "address": "@h:24",
+      "kind": "INSERT",
+      "layer": "A-WALL",
+      "owner": "model",
+      "bbox": [10, 0, 10, 0],
+      "bbox_q": "insert_only"
+    },
+    {
+      "address": "@h:27",
+      "kind": "TEXT",
+      "layer": "ANNO",
+      "owner": "@space:paper",
+      "bbox": [10, 9.3, 20.5, 13.5],
+      "bbox_q": "approx"
+    }
+  ],
+  "total": 12
+}

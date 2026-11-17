@@ -1,0 +1,177 @@
+spec cad.entity-find/1
+next None
+--- stdout
+@h:3A	LINE	WALLS	25.0137,0.0071,35.0137,0.0071
+@h:3B	LINE	WALLS	50.0274,0.0142,50.0274,10.0142
+@h:3C	LINE	WALLS	75.0411,0.0213,85.0411,5.0213
+@h:3D	TEXT	NOTES	75.0411,5.6213,85.8411,8.0213
+@h:3E	POINT	EXTRA	125.0685,0.035500000000000004,125.0685,0.035500000000000004
+@h:3F	CIRCLE	EXTRA	147.0822,-2.9574,153.0822,3.0426
+@h:40	LINE	WALLS	175.0959,0.0497,185.0959,0.0497
+@h:41	TEXT	NOTES	175.0959,1.6497000000000002,183.4959,4.0497
+@h:42	ARC	EXTRA	221.1233,-3.9361,228.58740161513776,4.0639
+@h:43	POLYLINE	WALLS	250.137,0.07099999999999929,259.637,6.071
+@h:48	TEXT	NOTES	275.1507,-0.4219,284.1507,2.5781
+@h:49	CIRCLE	EXTRA	-302.1644,-1.9148,-298.1644,2.0852
+@h:4A	INSERT	DOORS	325.1781,0.09230000000000001,325.1781,0.09230000000000001
+@h:4D	INSERT	EXTRA	350.1918,0.0994,350.1918,0.0994
+@h:4E	LWPOLYLINE	WALLS	375.2055,0.1064999999999996,389.2055,8.1065
+@h:4F	MTEXT	NOTES	400.2192,-6.553066666666667,412.2192,0.1136
+@h:50	ELLIPSE	EXTRA	419.2329,-2.8793,431.2329,3.1207
+@h:51	SPLINE	EXTRA	450.2466,-1.723829364655465,459.2466,2.1111296209049373
+--- data
+{
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "rows": [
+    {
+      "address": "@h:3A",
+      "kind": "LINE",
+      "layer": "WALLS",
+      "owner": "model",
+      "bbox": [25.0137, 0.0071, 35.0137, 0.0071],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:3B",
+      "kind": "LINE",
+      "layer": "WALLS",
+      "owner": "model",
+      "bbox": [50.0274, 0.0142, 50.0274, 10.0142],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:3C",
+      "kind": "LINE",
+      "layer": "WALLS",
+      "owner": "model",
+      "bbox": [75.0411, 0.0213, 85.0411, 5.0213],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:3D",
+      "kind": "TEXT",
+      "layer": "NOTES",
+      "owner": "model",
+      "bbox": [75.0411, 5.6213, 85.8411, 8.0213],
+      "bbox_q": "approx"
+    },
+    {
+      "address": "@h:3E",
+      "kind": "POINT",
+      "layer": "EXTRA",
+      "owner": "model",
+      "bbox": [125.0685, 0.035500000000000004, 125.0685, 0.035500000000000004],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:3F",
+      "kind": "CIRCLE",
+      "layer": "EXTRA",
+      "owner": "model",
+      "bbox": [147.0822, -2.9574, 153.0822, 3.0426],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:40",
+      "kind": "LINE",
+      "layer": "WALLS",
+      "owner": "model",
+      "bbox": [175.0959, 0.0497, 185.0959, 0.0497],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:41",
+      "kind": "TEXT",
+      "layer": "NOTES",
+      "owner": "model",
+      "bbox": [175.0959, 1.6497000000000002, 183.4959, 4.0497],
+      "bbox_q": "approx"
+    },
+    {
+      "address": "@h:42",
+      "kind": "ARC",
+      "layer": "EXTRA",
+      "owner": "model",
+      "bbox": [221.1233, -3.9361, 228.58740161513776, 4.0639],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:43",
+      "kind": "POLYLINE",
+      "layer": "WALLS",
+      "owner": "model",
+      "bbox": [250.137, 0.07099999999999929, 259.637, 6.071],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:48",
+      "kind": "TEXT",
+      "layer": "NOTES",
+      "owner": "model",
+      "bbox": [275.1507, -0.4219, 284.1507, 2.5781],
+      "bbox_q": "approx"
+    },
+    {
+      "address": "@h:49",
+      "kind": "CIRCLE",
+      "layer": "EXTRA",
+      "owner": "model",
+      "bbox": [-302.1644, -1.9148, -298.1644, 2.0852],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:4A",
+      "kind": "INSERT",
+      "layer": "DOORS",
+      "owner": "model",
+      "bbox": [325.1781, 0.09230000000000001, 325.1781, 0.09230000000000001],
+      "bbox_q": "insert_only"
+    },
+    {
+      "address": "@h:4D",
+      "kind": "INSERT",
+      "layer": "EXTRA",
+      "owner": "model",
+      "bbox": [350.1918, 0.0994, 350.1918, 0.0994],
+      "bbox_q": "insert_only"
+    },
+    {
+      "address": "@h:4E",
+      "kind": "LWPOLYLINE",
+      "layer": "WALLS",
+      "owner": "model",
+      "bbox": [375.2055, 0.1064999999999996, 389.2055, 8.1065],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:4F",
+      "kind": "MTEXT",
+      "layer": "NOTES",
+      "owner": "model",
+      "bbox": [400.2192, -6.553066666666667, 412.2192, 0.1136],
+      "bbox_q": "approx"
+    },
+    {
+      "address": "@h:50",
+      "kind": "ELLIPSE",
+      "layer": "EXTRA",
+      "owner": "model",
+      "bbox": [419.2329, -2.8793, 431.2329, 3.1207],
+      "bbox_q": "exact"
+    },
+    {
+      "address": "@h:51",
+      "kind": "SPLINE",
+      "layer": "EXTRA",
+      "owner": "model",
+      "bbox": [450.2466, -1.723829364655465, 459.2466, 2.1111296209049373],
+      "bbox_q": "approx"
+    }
+  ],
+  "total": 18
+}

@@ -1,0 +1,74 @@
+spec cad.layer-list/1
+next None
+--- stdout
+-	0	0
+-	A-WALL	7
+-	E-LITE	2
+-	ANNO	3
+--- data
+{
+  "units": {
+    "word": "unitless",
+    "insunits": null,
+    "measurement": 1,
+    "source": "none"
+  },
+  "layers": [
+    {
+      "address": null,
+      "name": "0",
+      "color": 7,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": null,
+      "xref": false,
+      "ents": 0,
+      "ents_model": 0
+    },
+    {
+      "address": null,
+      "name": "A-WALL",
+      "color": 1,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": null,
+      "xref": false,
+      "ents": 7,
+      "ents_model": 5
+    },
+    {
+      "address": null,
+      "name": "E-LITE",
+      "color": 3,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": null,
+      "xref": false,
+      "ents": 2,
+      "ents_model": 2
+    },
+    {
+      "address": null,
+      "name": "ANNO",
+      "color": 7,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": null,
+      "xref": false,
+      "ents": 3,
+      "ents_model": 2
+    }
+  ]
+}

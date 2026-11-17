@@ -1,0 +1,35 @@
+spec cad.block-list/1
+next None
+--- stdout
+@h:26	DOOR	1	1
+--- data
+{
+  "units": {
+    "word": "mm",
+    "insunits": 4,
+    "measurement": 1,
+    "source": "insunits"
+  },
+  "blocks": [
+    {
+      "address": "@h:26",
+      "name": "DOOR",
+      "base": [0, 0, 0],
+      "anon": false,
+      "xref": false,
+      "path": null,
+      "dynamic_of": null,
+      "inserts": {
+        "direct": {
+          "model": 1,
+          "paper": 0
+        },
+        "in_blocks": 0,
+        "nested_model": 1,
+        "dynamic": 0
+      },
+      "ents": 2
+    }
+  ],
+  "nested_capped": false
+}

@@ -1,0 +1,29 @@
+spec cad.layer-list/1
+next None
+--- stdout
+-	0	0
+--- data
+{
+  "units": {
+    "word": "unitless",
+    "insunits": null,
+    "measurement": 1,
+    "source": "none"
+  },
+  "layers": [
+    {
+      "address": null,
+      "name": "0",
+      "color": 7,
+      "on": true,
+      "frozen": false,
+      "locked": false,
+      "plot": true,
+      "ltype": "CONTINUOUS",
+      "lw": null,
+      "xref": false,
+      "ents": 0,
+      "ents_model": 0
+    }
+  ]
+}

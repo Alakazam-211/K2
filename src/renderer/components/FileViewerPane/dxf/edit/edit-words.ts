@@ -19,26 +19,26 @@ export const WHY_WORDS = {
   viewport: 'Viewports can’t be changed here yet.',
   acis: '3D solids can’t be changed here.',
   image: 'Images and underlays can’t be changed here yet.',
-  proxy: 'Made by another app. Change it in that app.',
+  proxy: 'It was made by another app. Change it in that app.',
   unknown: 'K2 can’t change this kind of item yet.',
-  xref: 'Part of a linked drawing. Change it in that drawing.',
-  block: 'Inside a block. Edit the block in your CAD app.',
-  assoc: 'Grouped, or has a dimension attached. It can’t be moved here yet.',
-  ocs: 'Drawn on a tilted plane. It can’t be changed here yet.',
-  minted: 'Has no handle. Save the drawing again in your CAD app.',
-  dynamic: 'Part of a dynamic block’s shape. Change the block in your CAD app.',
+  xref: 'It’s part of a linked drawing. Change it in that drawing.',
+  block: 'It’s inside a block. Edit the block in your CAD app.',
+  assoc: 'It’s grouped or has a dimension attached, so it can’t be moved here yet.',
+  ocs: 'It’s drawn on a tilted plane, so it can’t be changed here yet.',
+  minted: 'It has no handle. Save the drawing again in your CAD app.',
+  dynamic: 'It’s part of a dynamic block’s shape. Change the block in your CAD app.',
 } as const
 
 export type WhyKey = keyof typeof WHY_WORDS | 'locked'
 
 export function whyWords(why: string, layer?: string | null): string {
-  if (why === 'locked') return `On ${layer || 'a layer'}, which is locked. Unlock it in your CAD app first.`
+  if (why === 'locked') return `It’s on ${layer || 'a layer'}, which is locked. Unlock it in your CAD app first.`
   return (WHY_WORDS as Record<string, string>)[why] ?? WHY_WORDS.unknown
 }
 
 /** Whole-drawing reasons: the header line says these. */
 export const OFF_WORDS = {
-  dwg: 'View only: K2 can’t change DWG drawings yet.',
+  dwg: 'View only: K2 can’t change DWG drawings yet. Save it as DXF in your CAD app to change it here.',
   binary: 'View only: this is a binary DXF. Save it as ASCII DXF in your CAD app to change it here.',
   old: 'View only: saved before DXF 2000. Save it as DXF 2000 or later in your CAD app to change it here.',
   handles: 'View only: this drawing is missing handles. Save it again in your CAD app to change it here.',
@@ -58,6 +58,9 @@ export function viewOnlyWhy(header: HeaderLike, rows: readonly { h?: unknown }[]
   if (rows.some((r) => typeof r.h !== 'string' || !/^@h:[0-9A-F]+$/i.test(r.h))) return OFF_WORDS.handles
   return null
 }
+
+/** Every check of a change that fails on K2's side reads the same. */
+const CHECK_FAILED = 'K2 couldn’t check this change. Please report it with the file.'
 
 export type RefusalWords = {
   words: string
@@ -88,11 +91,11 @@ const name = (d: Record<string, unknown>): string | null => {
 }
 
 function valueWords(message: string): string {
-  if (/line break|control/i.test(message)) return 'The value has to be one line, with no control characters.'
-  if (/\\U\+/i.test(message)) return 'The value can’t contain \\U+, which the file reads as a code.'
-  if (/code page|character/i.test(message)) return 'This drawing’s text can’t hold one of the value’s characters.'
-  if (/255|long/i.test(message)) return 'The value is longer than the 255 bytes a label can hold.'
-  return 'The value can’t be written in this drawing.'
+  if (/line break|control/i.test(message)) return 'A label must be one line, with no hidden characters.'
+  if (/\\U\+/i.test(message)) return 'A label can’t contain “\\U+”. The file would read it as a character code.'
+  if (/code page|character/i.test(message)) return 'One of its characters can’t be saved in this drawing.'
+  if (/255|long/i.test(message)) return 'It’s longer than the 255 bytes a label can hold.'
+  return 'It can’t be saved in this drawing.'
 }
 
 /** The reason word in a "not changed by the edit verbs (why)" message. */
@@ -105,23 +108,23 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
     case 'DXF-E001':
       return plain('This is a binary DXF. Save it as ASCII DXF in your CAD app to change it here.', false, OFF_WORDS.binary)
     case 'DXF-E002':
-      return plain('This file doesn’t read as a DXF drawing.')
+      return plain('K2 can’t read this file as a DXF drawing.')
     case 'DXF-E003':
       return plain('This drawing is too large to change here.')
     case 'DXF-E010':
     case 'CAD-E010':
-      return plain('It isn’t in the drawing anymore. The drawing has been refreshed.', true)
+      return plain('That item isn’t in the drawing anymore. The drawing has been refreshed.', true)
     case 'DXF-E011':
     case 'CAD-E011':
       return plain('That label appears more than once on this block. Pick which one to change.')
     case 'DXF-E020':
-      return plain('That layer isn’t in the drawing.')
+      return plain('That layer isn’t in the drawing anymore. The drawing has been refreshed.', true)
     case 'DXF-E021':
       return plain(whyWords(whyOf(e.message)))
     case 'DXF-E022':
       return plain('The drawing’s units changed. The drawing has been refreshed; try again.', true)
     case 'DXF-E027':
-      return plain('Something else in the drawing points at it. Remove that link in your CAD app first.')
+      return plain('Another item, such as a dimension, is linked to it. Remove that link in your CAD app first.')
     case 'DXF-E040':
       return plain('This drawing was saved before DXF 2000. Save it as DXF 2000 or later in your CAD app to change it here.', false, OFF_WORDS.old)
     case 'DXF-E041':
@@ -147,18 +150,18 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
     case 'DXF-E050':
       return plain('That’s more than 10,000 items at once. Select fewer and try again.')
     case 'DXF-E053':
-      return plain('The drawing doesn’t have that linetype or text style.')
+      return plain('It uses a linetype or text style the drawing doesn’t have.')
     case 'DXF-E054':
       return plain(valueWords(e.message))
     case 'DXF-E090':
-      return plain('K2’s check of this change failed, so nothing was written. Please report it with the file.')
+      return plain(CHECK_FAILED)
     case 'CAD-E004':
     case 'MPC-E122':
-      return plain('K2 sent a change the drawing couldn’t read. Nothing was changed.')
+      return plain('Something went wrong sending this change. Please report it with the file.')
     case 'MPC-E110':
       return plain('The drawing changed while you were working. It has been refreshed; try again.', true)
     case 'MPC-E301':
-      return plain(`${name(e.details) ?? 'Someone'} is working on these.`)
+      return plain(`${name(e.details) ?? 'Someone'} is working on these. Try again when they’re done.`)
     case 'MPC-E701':
       return plain(`${name(e.details) ?? 'Someone'} has this file locked for editing. Try again when they’re done.`)
     case 'MPC-E713':
@@ -168,24 +171,24 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
     case 'MPC-E723':
       return plain('Someone changed this since you looked. The drawing has been refreshed.', true)
     case 'MPC-E724':
-      return plain('K2 can’t be sure which items these are. Nothing was changed.')
+      return plain('K2 couldn’t be sure which items these are. Select them again.')
     case 'MPC-E725':
     case 'MPC-E726':
     case 'MPC-E727':
     case 'MPC-E728':
-      return plain('K2’s own check of this change failed. Nothing was changed.')
+      return plain(CHECK_FAILED)
     case 'MPC-E729':
-      return plain('The drawing changed between the check and the change. Nothing was changed; try again.', true)
+      return plain('The drawing changed while saving. Try again.', true)
     case 'MPC-E823':
-      return plain('The drawing tools turned this change down. Nothing was changed.')
+      return plain('This change couldn’t be saved. Please report it with the file.')
     case NO_ROUTE:
-      return plain('Changing drawings isn’t on this server yet.')
+      return plain('This server can’t change drawings yet. Ask its owner to update K2.')
     case NOT_SENT:
-      return plain('K2 couldn’t reach the server. Nothing was changed.')
+      return plain('K2 couldn’t reach the server. Try again.')
     case NO_DIGEST:
-      return plain('K2 couldn’t check this change first, so it wasn’t made.')
+      return plain(CHECK_FAILED)
     default:
-      return plain('K2 couldn’t make this change. Nothing was changed.')
+      return plain('K2 couldn’t make this change. Try again, or report it with the file.')
   }
 }
 

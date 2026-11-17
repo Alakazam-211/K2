@@ -8,7 +8,7 @@
 // made them all.
 
 import type { DxfDrawing } from '../dxfModel'
-import type { CadChange, CadVersion } from './cad-change'
+import type { CadChange, CadEntityRow, CadVersion } from './cad-change'
 
 // TODO: take the past tense from the CAD pack's verb list once its edit verbs
 // land; until then, the verbs it reports today and a fallback by operation.
@@ -23,7 +23,7 @@ export const PAST_VERB: Record<string, string> = {
   'entity offset': 'offset',
   'entity set': 'changed',
   'text set': 'edited',
-  'attrib set': 'relabelled',
+  'attrib set': 'changed a label in',
   'layer set': 'changed',
   'layer add': 'added',
   'block set': 'changed',
@@ -72,6 +72,18 @@ const KIND_PLURAL: Record<string, string> = {
   MLEADER: 'leaders',
 }
 
+/** "3 lines", "2 lines and 1 block"; past three kinds, "6 entities". */
+function countsOf(rows: readonly CadEntityRow[]): string {
+  const by = new Map<string, number>()
+  for (const r of rows) {
+    const k = KIND_PLURAL[r.kind] && KIND_WORDS[r.kind] ? r.kind : '?'
+    by.set(k, (by.get(k) ?? 0) + 1)
+  }
+  if (by.has('?') || by.size > 3) return `${rows.length} entities`
+  const parts = [...by].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${n === 1 ? KIND_WORDS[k].replace(/^an? /, '') : KIND_PLURAL[k]}`)
+  return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+}
+
 export type ChangeNote = {
   text: string
   /** The versions Undo reverts, newest first; null when there is no Undo. */
@@ -102,8 +114,7 @@ function oneVersion(c: CadChange, v: CadVersion | undefined, drawing: Pick<DxfDr
     const layers = [...new Set(rows.map((r) => r.layer))]
     const on = c.entitiesMore === 0 && layers.length === 1 && layers[0] ? ` on ${layers[0]}` : ''
     if (n === 1 && rows.length === 1) return `${name} ${verb} ${KIND_WORDS[rows[0].kind] ?? 'an entity'}${on}`
-    const kinds = new Set(rows.map((r) => KIND_PLURAL[r.kind] ?? 'entities'))
-    return `${name} ${verb} ${n} ${c.entitiesMore === 0 && kinds.size === 1 ? [...kinds][0] : 'entities'}${on}`
+    return `${name} ${verb} ${c.entitiesMore === 0 ? countsOf(rows) : `${n} entities`}${on}`
   }
   if (c.blocks.length === 1) return `${name} changed block ${c.blocks[0].name}`
   if (c.blocks.length > 1) return `${name} changed ${c.blocks.length} blocks`

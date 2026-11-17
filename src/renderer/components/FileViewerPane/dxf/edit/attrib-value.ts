@@ -31,12 +31,13 @@ export function writtenBytes(value: string, utf8: boolean): number | null {
 export function attribProblem(value: string, opts: { utf8: boolean }): string | null {
   if (/[\r\n\u2028\u2029]/.test(value)) return 'Keep it to one line.'
   // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) return 'Remove the control character.'
-  if (/\\u\+/i.test(value)) return 'Remove “\\U+”: the file reads it as a code.'
-  if (value.startsWith('--')) return 'It can’t start with “--” here yet.'
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) return 'Remove the hidden character, such as a tab.'
+  if (/\\u\+/i.test(value)) return 'Remove “\\U+”. The file would read it as a character code.'
+  if (value.startsWith('--')) return 'A label can’t start with “--” yet.'
   const n = writtenBytes(value, opts.utf8)
-  if (n === null) return 'This drawing’s text can’t hold one of these characters.'
-  if (n > LIMIT) return `Too long: ${n} bytes, and a label holds ${LIMIT}.`
+  if (n === null) return 'One of these characters can’t be saved in this drawing. Remove it.'
+  // eslint-disable-next-line no-control-regex
+  if (n > LIMIT) return `Too long: ${n} bytes, and a label holds ${LIMIT}.${/[^\u0000-\u007f]/.test(value) ? ' Some characters take more than one byte.' : ''}`
   return null
 }
 

@@ -128,8 +128,8 @@ describe('attribProblem: the pack’s rule, as you type', () => {
   })
   it('one line, no control characters, no \\U+, nothing the kit would read as its own flag', () => {
     expect(attribProblem('a\nb', utf8)).toMatch(/one line/)
-    expect(attribProblem('a\u0007b', utf8)).toMatch(/control character/)
-    expect(attribProblem('a\u0085b', utf8)).toMatch(/control character/)
+    expect(attribProblem('a\u0007b', utf8)).toMatch(/hidden character/)
+    expect(attribProblem('a\u0085b', utf8)).toMatch(/hidden character/)
     expect(attribProblem('x\\u+00e9', utf8)).toMatch(/\\U\+/)
     expect(attribProblem('--base', utf8)).toMatch(/--/)
   })
@@ -137,11 +137,11 @@ describe('attribProblem: the pack’s rule, as you type', () => {
     expect(attribProblem('a'.repeat(255), utf8)).toBeNull()
     expect(attribProblem('a'.repeat(256), utf8)).toBe('Too long: 256 bytes, and a label holds 255.')
     // UTF-8 from 2007 on: Ø is two bytes.
-    expect(attribProblem('Ø'.repeat(128), utf8)).toMatch(/256 bytes/)
+    expect(attribProblem('Ø'.repeat(128), utf8)).toBe('Too long: 256 bytes, and a label holds 255. Some characters take more than one byte.')
     // Before 2007, Ø is one byte; a character the code page lacks is written \U+XXXX (7).
     expect(attribProblem('Ø'.repeat(200), { utf8: false })).toBeNull()
     expect(attribProblem('α'.repeat(37), { utf8: false })).toMatch(/259 bytes/)
-    expect(attribProblem('😀', { utf8: false })).toMatch(/can’t hold/)
+    expect(attribProblem('😀', { utf8: false })).toMatch(/can’t be saved/)
   })
 })
 

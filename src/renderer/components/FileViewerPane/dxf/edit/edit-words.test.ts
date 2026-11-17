@@ -32,8 +32,8 @@ describe('refusalWords', () => {
       expect(w, id).toMatch(/[.?]$/)
       seen.add(w)
     }
-    // Different refusals read differently (a few share their words on purpose).
-    expect(seen.size).toBeGreaterThan(30)
+    // Different refusals read differently (a few share their words on purpose: every failed check reads the same).
+    expect(seen.size).toBeGreaterThan(28)
   })
 
   it('leads with what didn’t happen', () => {
@@ -60,7 +60,7 @@ describe('refusalWords', () => {
   })
 
   it('names who holds it, or whose lease it is', () => {
-    expect(say('MPC-E301', '', { by: 'Atlas' }).words).toBe('Not moved. Atlas is working on these.')
+    expect(say('MPC-E301', '', { by: 'Atlas' }).words).toBe('Not moved. Atlas is working on these. Try again when they’re done.')
     expect(say('MPC-E701', '', { holder: 'Sam' }).words).toMatch(/^Not moved\. Sam has this file locked/)
     expect(say('MPC-E701').words).toMatch(/^Not moved\. Someone has this file locked/)
   })
@@ -85,7 +85,7 @@ describe('whyWords', () => {
     for (const k of ['hatch', 'dimension', 'leader', 'viewport', 'acis', 'image', 'proxy', 'unknown', 'xref', 'block', 'assoc', 'ocs', 'minted', 'dynamic'])
       expect(whyWords(k), k).toBe(WHY_WORDS[k as keyof typeof WHY_WORDS])
     expect(whyWords('something new')).toBe(WHY_WORDS.unknown)
-    expect(whyWords('locked', 'A-WALL')).toBe('On A-WALL, which is locked. Unlock it in your CAD app first.')
+    expect(whyWords('locked', 'A-WALL')).toBe('It’s on A-WALL, which is locked. Unlock it in your CAD app first.')
   })
 })
 

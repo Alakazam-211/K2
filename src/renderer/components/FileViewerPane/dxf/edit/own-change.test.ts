@@ -35,7 +35,14 @@ describe('ownChange', () => {
 
   it('reads "You moved 3 lines on A-WALL", with Undo of that version', () => {
     expect(changeNote(ownChange(result('move-done'))!, drawing)).toEqual({ text: 'You moved 3 lines on A-WALL', undo: [8] })
-    expect(changeNote(ownChange(result('attrib-done'))!, drawing).text).toBe('You relabelled a block on A-WALL')
+    expect(changeNote(ownChange(result('attrib-done'))!, drawing).text).toBe('You changed a label in a block on A-WALL')
+  })
+
+  it('several kinds are counted as the panel counts them', () => {
+    const r = result('move-done')
+    const data = r.data as { entities: { kind: string }[] }
+    const mixed = { ...r, data: { ...data, entities: data.entities.map((e, i) => (i === 2 ? { ...e, kind: 'INSERT' } : e)) } }
+    expect(changeNote(ownChange(mixed)!, drawing).text).toBe('You moved 2 lines and 1 block on A-WALL')
   })
 
   it('outlines in your own accent, and takes no one’s presence colour', () => {

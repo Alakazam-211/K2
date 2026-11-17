@@ -44,6 +44,8 @@ const textOf = (r: ModelRow): string => {
 
 const LABEL = 'type-hint text-[var(--color-text-secondary)]'
 
+const ordinal = (n: number): string => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`
+
 function Row({ k, v, testId }: { k: string; v: React.ReactNode; testId?: string }): React.JSX.Element {
   return (
     <div className="flex gap-2 py-0.5">
@@ -61,7 +63,7 @@ function AttribRow({ a, nth, insert, edit, utf8 }: { a: Attrib; nth: number | nu
   useEffect(() => setDraft(a.value), [a.value])
   const problem = attribProblem(draft, { utf8 })
   const changed = draft !== a.value
-  const label = nth ? `${a.tag} (${nth})` : a.tag
+  const label = nth ? `${a.tag} (${ordinal(nth)})` : a.tag
   const save = () => {
     if (!changed || problem || edit.busy) return
     void edit.relabel(insert, a.tag, draft, nth)
@@ -73,7 +75,7 @@ function AttribRow({ a, nth, insert, edit, utf8 }: { a: Attrib; nth: number | nu
       </label>
       {a.constant ? (
         <p className="type-hint m-0 text-[var(--color-text-primary)]">
-          {a.value} <span className="text-[var(--color-text-secondary)]">· fixed in the block</span>
+          {a.value} <span className="text-[var(--color-text-secondary)]">· set by the block</span>
         </p>
       ) : (
         <>
@@ -87,9 +89,11 @@ function AttribRow({ a, nth, insert, edit, utf8 }: { a: Attrib; nth: number | nu
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') save()
-              if (e.key === 'Escape' && changed) {
+              // Esc in the field never clears the selection: it undoes the typing, or leaves the field.
+              if (e.key === 'Escape') {
                 e.stopPropagation()
-                setDraft(a.value)
+                if (changed) setDraft(a.value)
+                else e.currentTarget.blur()
               }
             }}
             className="w-full"
@@ -100,7 +104,7 @@ function AttribRow({ a, nth, insert, edit, utf8 }: { a: Attrib; nth: number | nu
               {problem}
             </p>
           ) : changed ? (
-            <p className={`${LABEL} m-0 pt-0.5`}>Press Enter to save, Esc to undo.</p>
+            <p className={`${LABEL} m-0 pt-0.5`}>Press Enter to save, Esc to cancel.</p>
           ) : null}
         </>
       )}
@@ -180,7 +184,8 @@ export function SelectionPanel({ edit, header, slots }: { edit: CadEdit; header:
       </div>
       {one ? (
         <dl className="m-0 pt-1" data-testid="dxf-edit-one">
-          <Row k="Kind" v={one.kind === 'INSERT' && typeof one.geom?.name === 'string' ? `Block ${one.geom.name}` : capital(kindName(one.kind))} testId="dxf-edit-kind" />
+          <Row k="Kind" v={capital(kindName(one.kind))} testId="dxf-edit-kind" />
+          {one.kind === 'INSERT' && typeof one.geom?.name === 'string' ? <Row k="Name" v={one.geom.name} testId="dxf-edit-name" /> : null}
           <Row k="Layer" v={one.layer} />
           <Row k="Handle" v={one.h.replace(/^@h:/, '')} />
         </dl>
@@ -205,7 +210,7 @@ export function SelectionPanel({ edit, header, slots }: { edit: CadEdit; header:
       ) : null}
       {cantWords.length ? (
         <div className="pt-2" data-testid="dxf-edit-cant">
-          <p className={`${LABEL} m-0`}>{rows.length === 1 ? 'Can’t change it here' : 'Can’t move these here'}</p>
+          <p className={`${LABEL} m-0`}>{rows.length === 1 ? 'Can’t change this here' : 'Can’t change these here'}</p>
           {cantWords.map((w) => (
             <p key={w} className="type-hint m-0 pt-0.5 text-[var(--color-text-primary)]">
               {w}

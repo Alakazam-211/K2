@@ -217,7 +217,8 @@ describe('relabelling', () => {
   it('a block reference’s attributes are rows; Enter saves through attrib set', async () => {
     await open()
     click('@h:61')
-    expect(screen.getByTestId('dxf-edit-kind').textContent).toBe('Block DOOR')
+    expect(screen.getByTestId('dxf-edit-kind').textContent).toBe('Block')
+    expect(screen.getByTestId('dxf-edit-name').textContent).toBe('DOOR')
     const input = screen.getByTestId('dxf-attrib-input') as HTMLInputElement
     expect(input.value).toBe('D-01')
     fireEvent.change(input, { target: { value: 'D-02' } })
@@ -226,7 +227,7 @@ describe('relabelling', () => {
     })
     await waitFor(() => expect(world.edits.calls).toHaveLength(2))
     expect(world.edits.calls[1].slice(0, 7)).toEqual(['attrib', 'set', '@h:61', '--tag', 'NO', '--value', 'D-02'])
-    expect((await screen.findByTestId('dxf-change-note')).textContent).toContain('You relabelled a block on A-WALL')
+    expect((await screen.findByTestId('dxf-change-note')).textContent).toContain('You changed a label in a block on A-WALL')
   })
 
   it('the value is checked as you type, and a bad one isn’t sent', async () => {
@@ -293,7 +294,7 @@ describe('holds', () => {
 describe('when editing isn’t on', () => {
   it('a DWG drawing: view only, the header says why, no edit controls', async () => {
     await open({ header: { ...HEADER, format: 'dwg' } })
-    expect(screen.getByTestId('dxf-view-only').textContent).toBe('View only: K2 can’t change DWG drawings yet.')
+    expect(screen.getByTestId('dxf-view-only').textContent).toMatch(/^View only: K2 can’t change DWG drawings yet\./)
     click('@h:41')
     expect(screen.getByTestId('dxf-edit-count').textContent).toBe('1 selected')
     expect(screen.queryByTestId('dxf-move-by')).toBeNull()

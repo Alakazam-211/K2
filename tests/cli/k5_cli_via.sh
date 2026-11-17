@@ -13,6 +13,11 @@
 #                       curl argv but for the header.
 #   K5_CLI_NOTICE_DONE  set non-empty: _K5_NOTICE_DONE=1, where the k2-to-k5
 #                       notice will look. Empty or unset: it stays empty.
+#   K5_CLI_WOULD_REFUSE=1, with K5_CLI_VIA=rust: every daemon request also
+#                       carries `X-K5-Would-Refuse: 1` (the front's passport
+#                       rule, count-only). Any other value, or without
+#                       VIA=rust: no request does. Never to the control
+#                       plane.
 #
 # A python stub daemon (TCP, a cell socket and vault.sock) logs, per
 # request, the transport, method, path, the X-K5-Cli-Via values and a
@@ -63,6 +68,7 @@ class H(BaseHTTPRequestHandler):
             "method": self.command,
             "path": u.path,
             "via": self.headers.get_all("X-K5-Cli-Via") or [],
+            "refuse": self.headers.get_all("X-K5-Would-Refuse") or [],
             "content_type": self.headers.get("Content-Type") or "",
             "tty": self.headers.get("X-K2-Tty") or "",
             "has_token": "token" in urllib.parse.parse_qs(u.query),
@@ -120,6 +126,7 @@ clean_env() {
     env -u K2SO_HOOK_SOCK -u K2SO_HOOK_TOKEN -u K2SO_PORT -u K2_HOOK_SOCK -u K2_HOOK_TOKEN \
         -u K5_HOOK_SOCK -u K5_HOOK_TOKEN -u K5_PORT -u K5_PROJECT_PATH \
         -u K5_CLI_VIA -u K5_CLI_NOTICE_DONE -u K5_CLI_CALLED_AS \
+        -u K5_CLI_WOULD_REFUSE \
         -u K2_API_CELL -u K2SO_API_CELL -u K2_CELL -u K2_HOST -u K2_REMOTE_TOKEN \
         -u K2_SECRETS_DIR -u CODEX_THREAD_ID -u CODEX_HOME -u CODEX_SANDBOX -u K2_AIRGAP \
         HOME="$WORK/home" K2_PORT="$PORT" K2_PROJECT_PATH="$WORK/proj" "$@"
@@ -131,15 +138,15 @@ uds() { clean_env K2_HOOK_TOKEN="sessA.passport" K2_HOOK_SOCK="$SOCK" "$@"; }
 # vias <transport> <path>: the X-K5-Cli-Via values of every matching
 # request, one request per line (`-` for none). Fails when there is none.
 vias() {
-    python3 - "$WORK/requests.log" "$1" "$2" <<'PY'
+    python3 - "$WORK/requests.log" "$1" "$2" "${FIELD:-via}" <<'PY'
 import json, sys
-log, transport, path = sys.argv[1:4]
+log, transport, path, field = sys.argv[1:5]
 rows = [json.loads(l) for l in open(log)]
 hits = [r for r in rows if r["transport"] == transport and r["path"] == path]
 if not hits:
     sys.exit("no %s request to %s (log: %s)" % (transport, path, rows[-3:]))
 for r in hits:
-    print(",".join(r["via"]) or "-")
+    print(",".join(r[field]) or "-")
 PY
 }
 # expect <label> <transport> <path> <want>: every matching request's via.
@@ -178,6 +185,36 @@ for t in tcp uds; do
     one "$t" "=bash" -
 done
 
+echo "== X-K5-Would-Refuse =="
+# refuse <transport> <want refuse> <want via> <env…>: a GET and a form POST.
+refuse() {
+    local transport="$1" want="$2" via="$3"; shift 3
+    local label="$transport, $*"
+    : >"$WORK/requests.log"
+    "$transport" "$@" "$K2_CLI" heartbeat list --json >/dev/null 2>&1 || true
+    FIELD=refuse expect "GET $label: X-K5-Would-Refuse $want" "$transport" /cli/heartbeat/list "$want"
+    expect "GET $label: X-K5-Cli-Via $via" "$transport" /cli/heartbeat/list "$via"
+    : >"$WORK/requests.log"
+    "$transport" "$@" "$K2_CLI" msg some-ws "hello" >/dev/null 2>&1 || true
+    FIELD=refuse expect "POST $label: X-K5-Would-Refuse $want" "$transport" /cli/workspace/msg "$want"
+}
+for t in tcp uds; do
+    refuse "$t" 1 fallthrough K5_CLI_VIA=rust K5_CLI_WOULD_REFUSE=1
+    refuse "$t" - fallthrough K5_CLI_VIA=rust
+    refuse "$t" - fallthrough K5_CLI_VIA=rust K5_CLI_WOULD_REFUSE=
+    refuse "$t" - fallthrough K5_CLI_VIA=rust K5_CLI_WOULD_REFUSE=2
+    refuse "$t" - fallthrough K5_CLI_VIA=rust K5_CLI_WOULD_REFUSE=yes
+    refuse "$t" - fallthrough K5_CLI_VIA=rust "K5_CLI_WOULD_REFUSE= 1"
+    refuse "$t" - fallthrough K5_CLI_VIA=rust K5_CLI_WOULD_REFUSE=11
+    refuse "$t" - - K5_CLI_WOULD_REFUSE=1
+    refuse "$t" - - K5_CLI_VIA=bash K5_CLI_WOULD_REFUSE=1
+    refuse "$t" - - K5_CLI_VIA=RUST K5_CLI_WOULD_REFUSE=1
+done
+# The owner path (no passport): the front's case 3 rides the owner token.
+: >"$WORK/requests.log"
+clean_env K5_CLI_VIA=rust K5_CLI_WOULD_REFUSE=1 "$K2_CLI" heartbeat list --json >/dev/null 2>&1 || true
+FIELD=refuse expect "owner token, VIA=rust and WOULD_REFUSE=1: X-K5-Would-Refuse 1" tcp /cli/heartbeat/list 1
+
 echo "== the Connect control plane is not the daemon =="
 printf '{"token":"k2c_test-connect","subdomain":"me"}' >"$WORK/home/.k2/tunnel.json"
 chmod 600 "$WORK/home/.k2/tunnel.json"
@@ -185,6 +222,10 @@ chmod 600 "$WORK/home/.k2/tunnel.json"
 clean_env K5_CLI_VIA=rust K2_CONNECT_BASE="http://127.0.0.1:${PORT}" "$K2_CLI" publish status --json >/dev/null 2>&1 || true
 expect "the daemon's proxy route gets the header" tcp /cli/connect/proxy fallthrough
 expect "the control plane does not" tcp /subdomains -
+: >"$WORK/requests.log"
+clean_env K5_CLI_VIA=rust K5_CLI_WOULD_REFUSE=1 K2_CONNECT_BASE="http://127.0.0.1:${PORT}" "$K2_CLI" publish status --json >/dev/null 2>&1 || true
+FIELD=refuse expect "with WOULD_REFUSE=1 the daemon's proxy route gets X-K5-Would-Refuse" tcp /cli/connect/proxy 1
+FIELD=refuse expect "the control plane never does" tcp /subdomains -
 rm -f "$WORK/home/.k2/tunnel.json"
 
 echo "== the calls that once ran curl themselves =="
@@ -216,6 +257,7 @@ hits = [r for r in rows if r["transport"] == transport and r["path"] == path]
 with open(out + ".via", "w") as f:
     for r in hits:
         f.write((",".join(r.pop("via")) or "-") + "\n")
+        r.pop("refuse")
 with open(out + ".req", "w") as f:
     for r in hits:
         f.write(json.dumps(r, sort_keys=True) + "\n")
@@ -294,6 +336,9 @@ want_traced "NOTICE_DONE=yes: 1" _K5_NOTICE_DONE 1 K5_CLI_NOTICE_DONE=yes
 want_traced "VIA unset: empty" _K5_CLI_VIA "" K2_HOOK_TOKEN=x
 want_traced "VIA=rust: rust" _K5_CLI_VIA rust K5_CLI_VIA=rust
 want_traced "VIA=other: empty" _K5_CLI_VIA "" K5_CLI_VIA=other
+want_traced "WOULD_REFUSE unset: empty" _K5_WOULD_REFUSE "" K2_HOOK_TOKEN=x
+want_traced "WOULD_REFUSE=1: 1" _K5_WOULD_REFUSE 1 K5_CLI_WOULD_REFUSE=1
+want_traced "WOULD_REFUSE=yes: empty" _K5_WOULD_REFUSE "" K5_CLI_WOULD_REFUSE=yes
 
 echo
 echo "k5_cli_via: $pass passed, $fail failed"

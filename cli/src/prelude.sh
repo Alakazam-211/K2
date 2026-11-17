@@ -30,6 +30,15 @@ _K5_NOTICE_DONE=""
 if [ -n "${K5_CLI_NOTICE_DONE:-}" ]; then _K5_NOTICE_DONE=1; fi
 _K5_CLI_VIA=""
 if [ "${K5_CLI_VIA:-}" = "rust" ]; then _K5_CLI_VIA="rust"; fi
+# K5_CLI_WOULD_REFUSE=1: the front's passport rule would refuse this call
+# (no passport inside an agent session). It only counts for now: with
+# _K5_CLI_VIA=rust, every daemon request says so (X-K5-Would-Refuse: 1,
+# added in _k2_curl). Any other value is ignored.
+_K5_WOULD_REFUSE=""
+if [ "${K5_CLI_WOULD_REFUSE:-}" = "1" ]; then _K5_WOULD_REFUSE=1; fi
+# Read once, here: none of them reaches a process this script starts, so a
+# nested k2 or an agent's tool never claims the front's word as its own.
+unset K5_CLI_CALLED_AS K5_CLI_NOTICE_DONE K5_CLI_VIA K5_CLI_WOULD_REFUSE
 
 # The front runs this script from the file it opened and checked, as
 # /dev/fd/N, so $0 names that open file and its folder says nothing. It

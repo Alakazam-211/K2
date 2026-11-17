@@ -389,6 +389,9 @@ _k2_cfg_auth() {
 # secret, so it rides argv. The daemon reads headers by name and ignores
 # the ones it doesn't know. A caller that talks to something other than
 # the daemon sets _K2_CURL_NOT_DAEMON=1 for that call.
+# When the front's passport rule would refuse the call (K5_CLI_WOULD_REFUSE=1,
+# read into _K5_WOULD_REFUSE), those requests also carry
+# `X-K5-Would-Refuse: 1`, and only then. It changes nothing else.
 #
 # Loopback (127.0.0.1, ::1, localhost) and plain http never use a proxy;
 # HTTPS to a remote K2 may use the person's proxy (a CONNECT tunnel hides
@@ -512,6 +515,9 @@ _k2_curl() {
         if _k2_direct_url "$url"; then
             set -- --noproxy '*' "$@"
         fi
+    fi
+    if [ "${_K5_CLI_VIA:-}" = "rust" ] && [ "${_K5_WOULD_REFUSE:-}" = "1" ] && [ -z "${_K2_CURL_NOT_DAEMON:-}" ]; then
+        set -- -H "X-K5-Would-Refuse: 1" "$@"
     fi
     while :; do
         rc=0

@@ -73,7 +73,7 @@ describe('a still’s answer', () => {
     expect(a.bytes!.length).toBe(readFileSync(join(DIR, 'scene.webp')).length)
     expect(a.camera!.view).toHaveLength(16)
     expect(a.camera!.proj).toHaveLength(16)
-    expect(a.ids!.objects[10]).toEqual({ index: 10, id: 'Sofa' })
+    expect(a.ids!.objects[10]).toEqual({ index: 10, id: 'Sofa', key: '@obj:15' })
     expect(a.ids!.count).toBe(18)
     expect(a.meta).toEqual({ base_values: false, hidden_left_out: false, objects_hidden: 0, objects_not_evaluated: 0 })
   })

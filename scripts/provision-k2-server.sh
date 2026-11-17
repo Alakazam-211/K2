@@ -606,7 +606,8 @@ APPS_LINE="skipped"
 k2_as_daemon_user() {
 	local _bound=()
 	[ -z "${K2_CLI_TIMEOUT:-}" ] || _bound=(timeout --kill-after=30s "$K2_CLI_TIMEOUT")
-	"${_bound[@]}" runuser -u "$K2_RUN_USER" -- env -i HOME="$K2_HOME" USER="$K2_RUN_USER" LANG=C.UTF-8 \
+	# ${a[@]+…}: an empty array under set -u is fine on any bash (<4.4 too).
+	${_bound[@]+"${_bound[@]}"} runuser -u "$K2_RUN_USER" -- env -i HOME="$K2_HOME" USER="$K2_RUN_USER" LANG=C.UTF-8 \
 		PATH="$K2_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" /usr/local/bin/k2 "$@"
 }
 if [ "${K2_SKIP_APPS:-}" = "1" ]; then

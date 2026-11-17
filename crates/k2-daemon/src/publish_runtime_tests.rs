@@ -871,7 +871,11 @@ fn a_dev_server_runs_in_the_live_folder_on_loopback_and_says_how_it_runs() {
     let project_id = make_project(&dir.to_string_lossy());
     let name = unique("devenv");
     let port = free_port();
+    // A service command is the OS's shell line: sh on unix, cmd.exe on Windows.
+    #[cfg(not(windows))]
     let cmd = format!("env > seen-env.txt; pwd > seen-cwd.txt; {}", listener_cmd(port));
+    #[cfg(windows)]
+    let cmd = format!("set > seen-env.txt & cd > seen-cwd.txt & {}", listener_cmd(port));
     dev_row(&dir, &project_id, &name, &cmd, port);
     let json = start_inner(&project_id, &name, false, false).expect("start");
     assert_eq!(json.status, STATUS_RUNNING, "{json:?}");

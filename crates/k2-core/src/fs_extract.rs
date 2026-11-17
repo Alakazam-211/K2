@@ -100,8 +100,13 @@ pub fn list_zip_entries(src: &str) -> Result<ZipListResult, String> {
             .map_err(|e| format!("Failed to read zip entry {i}: {e}"))?;
         // Raw central-directory name — do NOT filter zip-slip paths here.
         // Listing is observational; extract still enforces member safety.
+        // A name that doesn't decode is listed lossily (extract refuses it).
+        let name = match entry.name() {
+            Ok(n) => n.into_owned(),
+            Err(_) => String::from_utf8_lossy(entry.name_raw()).into_owned(),
+        };
         entries.push(ZipListEntry {
-            name: entry.name().to_string(),
+            name,
             size: entry.size(),
             compressed_size: entry.compressed_size(),
             is_dir: entry.is_dir(),
@@ -280,7 +285,10 @@ pub fn extract_from_zip(
         let entry = archive
             .by_index(i)
             .map_err(|e| format!("Failed to read zip entry {i}: {e}"))?;
-        let raw_name = entry.name().to_string();
+        let raw_name = entry
+            .name()
+            .map_err(|e| format!("Zip entry {i} has a name that doesn't decode: {e}"))?
+            .into_owned();
         if entry.encrypted() {
             return Err(format!(
                 "Password-protected zip entry not supported: {raw_name}"
@@ -331,7 +339,10 @@ fn extract_entries(
         let mut entry = archive
             .by_index(i)
             .map_err(|e| format!("Failed to open zip entry {i}: {e}"))?;
-        let raw_name = entry.name().to_string();
+        let raw_name = entry
+            .name()
+            .map_err(|e| format!("Zip entry {i} has a name that doesn't decode: {e}"))?
+            .into_owned();
         let rel = entry
             .enclosed_name()
             .ok_or_else(|| format!("Zip-slip rejected: unsafe member path {raw_name}"))?;
@@ -804,11 +815,13 @@ mod tests {
         write_zip_with_raw_mode(&zip_path, "tool", b"#!/bin/sh\n", 0o100000 | 0o4755);
 
         // The archive really carries setuid (else this test proves nothing).
+        // Read the raw attributes: zip 9's unix_mode() already clears the
+        // setuid/setgid/sticky bits, and K2 must not depend on that alone.
         {
             let mut archive =
                 zip::ZipArchive::new(fs::File::open(&zip_path).unwrap()).unwrap();
             let entry = archive.by_index(0).unwrap();
-            assert_eq!(entry.unix_mode().expect("unix mode") & 0o7777, 0o4755);
+            assert_eq!((entry.external_attributes() >> 16) & 0o7777, 0o4755);
         }
 
         let dest = extract_from_zip(

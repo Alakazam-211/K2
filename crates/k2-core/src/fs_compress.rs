@@ -288,7 +288,7 @@ mod tests {
         let f = fs::File::open(path).expect("zip opens");
         let mut z = zip::ZipArchive::new(f).expect("zip parses");
         (0..z.len())
-            .map(|i| z.by_index(i).expect("entry").name().to_string())
+            .map(|i| z.by_index(i).expect("entry").name().expect("entry name").into_owned())
             .collect()
     }
 

@@ -131,7 +131,13 @@ fn load_zip(path: &Path, t: &mut Tree) -> Result<(), String> {
                 continue;
             }
         };
-        let raw = entry.name().to_string();
+        let raw = match entry.name() {
+            Ok(n) => n.into_owned(),
+            Err(e) => {
+                t.refused.push((format!("entry #{i}"), format!("a name that doesn't decode: {e}")));
+                continue;
+            }
+        };
         if entry.is_dir() {
             continue;
         }

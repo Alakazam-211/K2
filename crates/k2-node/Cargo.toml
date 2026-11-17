@@ -53,7 +53,7 @@ toml = "0.8"
 libc = "0.2"
 
 [dev-dependencies]
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }
 # Hostile `.app` uploads in simhost's tests (k2-node-proto already uses it).

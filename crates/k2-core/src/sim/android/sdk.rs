@@ -401,7 +401,7 @@ pub fn extract(zip_path: &Path, dest: &Path) -> Result<(), LaneError> {
     for i in 0..z.len() {
         let mut e = z.by_index(i).map_err(|e| LaneError::tool(format!("zip entry {i}: {e}")))?;
         let Some(name) = e.enclosed_name() else {
-            return Err(LaneError::tool(format!("zip entry '{}' escapes its folder", e.name())));
+            return Err(LaneError::tool(format!("zip entry '{}' escapes its folder", String::from_utf8_lossy(e.name_raw()))));
         };
         let mut comps = name.components();
         comps.next(); // the top folder

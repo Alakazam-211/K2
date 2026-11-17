@@ -171,10 +171,11 @@ ignore = "0.4"
 tar = "0.4"
 flate2 = "1"
 
-# Server-side folder -> .zip compression (fs_compress, 0.40.22). Streaming
-# ZipWriter only; deflate via the flate2 backend already in the tree, no
-# time/aes/etc. extras.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# Server-side folder -> .zip compression (fs_compress, 0.40.22) and the zip
+# readers (fs_extract, k2 zen inspect, the Android lanes). Deflate via the
+# flate2 backend already in the tree, no time/aes/etc. extras. zip 9, the
+# same zip k2-deckrender uses (9.0.5 has the RustSec 2026-0545/0548 fixes).
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 # k2-ptyd S4 terminal snapshots (prd-k2-ptyd-v1 §7.7, P41): the Term grid
 # via serde, bincode then gzip (flate2). S0 measured a 5,000 × 200 grid at

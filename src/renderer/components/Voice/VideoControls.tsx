@@ -8,13 +8,11 @@
 import { useEffect } from 'react'
 import { useStore } from 'zustand'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
+import { Button } from '@/components/ui/Button'
 import { policyBlockText } from '@/lib/voice/video-labels'
 import type { VideoController } from '@/stores/video-core'
 import { ChevronDownIcon, ScreenShareIcon, VideoIcon } from '@/components/icons/K2Icons'
 import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
-
-const SMALL_BTN =
-  'border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-50'
 
 /** Camera and Share screen, beside Mute and Deafen (icon buttons, as the top
  *  bar's and the tile's). Share screen opens the OS's own picker; where the OS
@@ -76,20 +74,23 @@ export function VideoCallButtons({ ctl, disabled = false }: { ctl: VideoControll
   )
 }
 
-/** What a share can show: screens first, then windows (where the OS lists them). */
+/** What a share can show: screens first, then windows (where the OS lists
+ *  them). The field is wide enough for its prompt in full, and the row wraps
+ *  in a narrow window rather than cutting it; Cancel is the look's own
+ *  button (cut in Terminal, a pill in Glass) at a full 32px. */
 export function ScreenPicker({ ctl }: { ctl: VideoController }): React.JSX.Element | null {
   const sources = useStore(ctl.store, (s) => s.screenSources)
   if (sources === null) return null
   return (
-    <div data-testid="video-screen-picker" className="mt-2 flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+    <div data-testid="video-screen-picker" className="type-hint mt-2 flex max-w-full flex-wrap items-center justify-center gap-2 text-[var(--color-text-secondary)]">
       {sources.length === 0 ? (
         <span>Nothing to share was found.</span>
       ) : (
         <>
           Share
           <SettingDropdown
-            compact
-            className="min-w-0 max-w-[170px]"
+            fullWidth
+            className="w-[15rem] min-w-0 max-w-full"
             ariaLabel="Screen or window to share"
             triggerData={{ 'data-testid': 'video-screen-source' }}
             placeholder="Pick a screen or window"
@@ -104,9 +105,9 @@ export function ScreenPicker({ ctl }: { ctl: VideoController }): React.JSX.Eleme
           />
         </>
       )}
-      <button type="button" data-testid="video-screen-cancel" className={SMALL_BTN} onClick={() => ctl.closeScreenPicker()}>
+      <Button variant="quiet" size="md" className="min-h-8" data-testid="video-screen-cancel" onClick={() => ctl.closeScreenPicker()}>
         Cancel
-      </button>
+      </Button>
     </div>
   )
 }

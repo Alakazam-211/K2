@@ -299,6 +299,31 @@ describe('the controls', () => {
     expect(s.engine.calls).toContain('screen {"on":true,"source":"window:42"}')
   })
 
+  it("the share list has room for its words and a Cancel the size of the look's buttons", async () => {
+    const s = setup([])
+    render(<Controls s={s} />)
+    await ready(s)
+    fireEvent.click(await screen.findByTestId('video-screen-pick'))
+    const picker = await screen.findByTestId('video-screen-picker')
+    // Wraps onto a second line in a narrow window rather than cutting the prompt.
+    expect(picker.className).toMatch(/\bflex-wrap\b/)
+    const field = screen.getByTestId('video-screen-source')
+    expect(field.textContent).toContain('Pick a screen or window')
+    const holder = field.parentElement!
+    // Wide enough for "Pick a screen or window", and never wider than the window.
+    expect(holder.className).not.toMatch(/max-w-\[170px\]/)
+    expect(holder.className).toContain('w-[15rem]')
+    expect(holder.className).toMatch(/\bmax-w-full\b/)
+    // Cancel is the look's own button: 32px or more, cut in Terminal, round in Glass, the shared focus ring.
+    const cancel = screen.getByTestId('video-screen-cancel')
+    expect(cancel.className).toMatch(/\bmin-h-8\b/)
+    expect(cancel.getAttribute('data-k2-chamfer')).toBe('control')
+    expect(cancel.className).toContain('rounded-[var(--radius-field)]')
+    expect(cancel.className).toContain('k2-focus')
+    fireEvent.click(cancel)
+    expect(screen.queryByTestId('video-screen-picker')).toBeNull()
+  })
+
   it('offers no Pick where the OS has no list', async () => {
     const s = setup([])
     s.engine.caps = async () => ({

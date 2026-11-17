@@ -472,7 +472,8 @@ mod tests {
     /// The stuck read's shape, shown with layer 1 skipped (a host that gave
     /// a person edit on a read-only `.blend`): the change goes into the doc,
     /// the read-only pack refuses to render it, and from then on every read
-    /// (the whole doc, a verb read) fails with that refusal. This is why
+    /// that renders the file (a whole read, for anyone) fails with that
+    /// refusal, the change waiting for a write-back. This is why
     /// layer 1 must hold on every path; the test below pins that it does.
     /// When the kit stops rendering on reads (K2 Cores' `Pack::check_edit`),
     /// the reads here answer and this control can go.
@@ -488,10 +489,14 @@ mod tests {
         let argv: Vec<&str> = edit.iter().map(String::as_str).collect();
         let out = sc.tool(sc.person, &argv).unwrap_or_else(|e| panic!("with edit, the change applies: {e}"));
         assert!(out.changed.is_some(), "the change is in the doc");
-        let read = sc.s.read(sc.person);
-        assert!(matches!(&read, Err(e) if e.to_string().contains(CODE)), "a whole read fails with the render's refusal: {:?}", read.map(|r| r.version));
-        let shown = sc.tool(sc.person, &["object", "show", &obj]);
-        assert!(matches!(&shown, Err(e) if e.to_string().contains(CODE)), "a verb read fails the same way: {:?}", shown.map(|o| o.exit));
+        for (who, conn) in [("the person", sc.person), ("the agent", sc.agent), ("the person again", sc.person)] {
+            let read = sc.s.read(conn);
+            assert!(matches!(&read, Err(e) if e.to_string().contains(CODE)), "{who}: a whole read fails with the render's refusal: {:?}", read.map(|r| r.version));
+        }
+        assert!(matches!(sc.s.status().expect("status").disk, Some(DiskState::Dirty { .. })), "the change waits for a write-back that can't happen");
+        // A structured verb read (a View, no render) still answers: only
+        // reads that render the file (whole reads, previews, exports) stick.
+        sc.shown(sc.person, &["object", "show", &obj]);
     }
 
     /// Layer 1 on every principal: with the blend core on, a person (the

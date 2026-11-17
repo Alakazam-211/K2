@@ -208,8 +208,10 @@ fn undo_change(before: &[u8], after: &[u8], by: &str, from: u64, to: u64) -> Val
     let (Ok(b), Ok(a)) = (k2_mpc_dxf::read_doc(before, &limits), k2_mpc_dxf::read_doc(after, &limits)) else {
         return Value::Null;
     };
-    let facts = |d: &k2_mpc_cad_model::Doc| -> std::collections::BTreeMap<u64, String> {
-        d.entities.iter().filter_map(|e| e.handle.map(|h| (h, format!("{:?}", e.record)))).collect()
+    // The record digest itself: its Debug never prints the bytes
+    // ("Digest(<raw>)"), so a string of it tells no change apart.
+    let facts = |d: &k2_mpc_cad_model::Doc| -> std::collections::BTreeMap<u64, [u8; 32]> {
+        d.entities.iter().filter_map(|e| e.handle.map(|h| (h, *e.record.as_bytes()))).collect()
     };
     let (fb, fa) = (facts(&b), facts(&a));
     let changed: Vec<u64> = fb.iter().filter(|(h, r)| fa.get(h).is_some_and(|ra| ra != *r)).map(|(h, _)| *h).collect();
@@ -621,6 +623,26 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// An undo's change names the entity it changed back, and only it: the
+    /// records compare by their digests, never by how they print (a digest
+    /// prints the same for every record).
+    #[test]
+    fn an_undo_change_names_the_entity_it_changed_back() {
+        let sampler = k2_mpc_dxf::testgen::draw_sampler(k2_mpc_dxf::testgen::Ver::R2018).build().bytes;
+        let page = k2_mpc_dxf::verbs::run(&sampler, "draw page", &["--version", "1", "--space", "model"]).expect("a page");
+        let v: Value = serde_json::from_str(&page.data.to_json()).expect("json");
+        let h = v["entities"].as_array().and_then(|es| es.iter().find(|e| e["kind"] == "LINE")).and_then(|e| e["h"].as_str()).expect("a LINE").to_string();
+        let h = if h.starts_with("@h:") { h } else { format!("@h:{h}") };
+        let moved = k2_mpc_dxf::edit::plan(&sampler, "entity move", &[&h, "--by", "10,0", "--unit", "mm"]).expect("moved").output;
+        let c = undo_change(&moved, &sampler, "person:owner", 8, 9);
+        let es = c["entities"].as_array().unwrap_or_else(|| panic!("entities: {c}"));
+        assert_eq!(es.len(), 1, "the one line: {c}");
+        assert_eq!((&es[0]["address"], &es[0]["op"]), (&json!(h), &json!("changed")), "{c}");
+        assert_eq!((&c["from"], &c["to"], &c["by"], &c["verb"]), (&json!(8), &json!(9), &json!("person:owner"), &json!("undo")));
+        let same = undo_change(&sampler, &sampler, "person:owner", 8, 9);
+        assert_eq!(same["entities"], json!([]), "nothing changed, nothing named: {same}");
     }
 
     /// The verb is the pack's own name, one word or two; the version is

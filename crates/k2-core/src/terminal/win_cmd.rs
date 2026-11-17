@@ -21,23 +21,47 @@ pub enum Launcher {
     Std,
 }
 
+/// A spawn refused: the program is a batch file or a cmd.exe built-in and
+/// an argument can't be passed to it safely. Nothing is started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    pub program: String,
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} is a batch file or a cmd.exe command and an argument has a line break (or NUL): a batch file can't take that safely, so nothing was started",
+            self.program
+        )
+    }
+}
+
+impl std::error::Error for Refused {}
+
 /// Rewrite `(program, args)` so a ConPTY spawn can start npm `.cmd`
-/// shims and cmd.exe built-ins. No-op on Unix, and when `program` is
-/// already an `.exe`.
-pub fn resolve_spawn(program: &str, args: &[String], path: &str) -> (String, Vec<String>) {
+/// shims and cmd.exe built-ins, or refuse it ([`Refused`]). No-op on Unix,
+/// and when `program` is already an `.exe`.
+pub fn resolve_spawn(program: &str, args: &[String], path: &str) -> Result<(String, Vec<String>), Refused> {
     resolve_native(Launcher::Pty, program, args, path)
 }
 
-/// [`resolve_spawn`] for a `std::process::Command` spawn.
+/// [`resolve_spawn`] for a `std::process::Command` spawn. Never refused
+/// here: std refuses a batch file's unsafe argument itself.
 pub fn resolve_command(program: &str, args: &[String], path: &str) -> (String, Vec<String>) {
-    resolve_native(Launcher::Std, program, args, path)
+    match resolve_native(Launcher::Std, program, args, path) {
+        Ok(resolved) => resolved,
+        // Not reached ([`Launcher::Std`] never refuses); std checks again.
+        Err(_) => (program.to_string(), args.to_vec()),
+    }
 }
 
-fn resolve_native(launcher: Launcher, program: &str, args: &[String], path: &str) -> (String, Vec<String>) {
+fn resolve_native(launcher: Launcher, program: &str, args: &[String], path: &str) -> Result<(String, Vec<String>), Refused> {
     #[cfg(not(windows))]
     {
         let _ = (launcher, path);
-        (program.to_string(), args.to_vec())
+        Ok((program.to_string(), args.to_vec()))
     }
     #[cfg(windows)]
     {
@@ -97,7 +121,7 @@ pub fn resolve_for_pty(
     pathext: &str,
     comspec: &str,
     exists: impl Fn(&Path) -> bool,
-) -> (String, Vec<String>) {
+) -> Result<(String, Vec<String>), Refused> {
     resolve_for(Launcher::Pty, program, args, path, pathext, comspec, exists, |_| None)
 }
 
@@ -106,10 +130,11 @@ pub fn resolve_for_pty(
 ///
 /// - An npm shim (`claude.cmd`, `codex.cmd`…) runs what it would run,
 ///   without cmd.exe: `node <script>` or the `.exe` it names ([`npm_shim`]).
-/// - Another `.bat`/`.cmd`, or a cmd.exe built-in, runs through cmd.exe
-///   ([`Launcher::Pty`]: every argument escaped by [`bat_arg`]; one that
-///   can't pass through cmd.exe (a line break) leaves `(program, args)` as
-///   given, so the spawn fails instead) or is left to std ([`Launcher::Std`]).
+/// - Another `.bat`/`.cmd` (found, or named with that extension), or a
+///   cmd.exe built-in, runs through cmd.exe ([`Launcher::Pty`]: every
+///   argument escaped by [`bat_arg`]; one that can't pass through cmd.exe,
+///   a line break, refuses the spawn: [`Refused`]) or is left to std
+///   ([`Launcher::Std`]).
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_for(
     launcher: Launcher,
@@ -120,31 +145,38 @@ pub fn resolve_for(
     comspec: &str,
     exists: impl Fn(&Path) -> bool,
     read: impl Fn(&Path) -> Option<String>,
-) -> (String, Vec<String>) {
-    let unchanged = || (program.to_string(), args.to_vec());
+) -> Result<(String, Vec<String>), Refused> {
+    let refused = || Refused { program: program.to_string() };
+    // Through cmd.exe, every argument escaped; refused when one can't be.
+    let through_cmd = |head: String| match cmd_payload(head, args) {
+        Some(payload) => Ok((comspec.to_string(), cmd_wrapper(payload))),
+        None => Err(refused()),
+    };
     let dirs = split_search_dirs(path);
     let Some(found) = find_on_path(program, &dirs, pathext, &exists) else {
-        // A cmd.exe built-in (`echo`, `dir`…) is no file on PATH: cmd.exe runs it.
-        if launcher == Launcher::Pty && is_cmd_builtin(program) {
-            if let Some(payload) = cmd_payload(program.to_string(), args) {
-                return (comspec.to_string(), cmd_wrapper(payload));
+        if launcher == Launcher::Pty {
+            // A cmd.exe built-in (`echo`, `dir`…) is no file on PATH: cmd.exe runs it.
+            if is_cmd_builtin(program) {
+                return through_cmd(program.to_string());
+            }
+            // A batch file not on this PATH may still be found by the spawn,
+            // which would start cmd.exe with the arguments as they are.
+            if is_batch(Path::new(program)) {
+                return through_cmd(format!("\"{program}\""));
             }
         }
-        return unchanged();
+        return Ok((program.to_string(), args.to_vec()));
     };
     if !is_batch(&found) {
-        return (found.to_string_lossy().into_owned(), args.to_vec());
+        return Ok((found.to_string_lossy().into_owned(), args.to_vec()));
     }
     if let Some((prog, mut lead)) = npm_shim(&found, &dirs, pathext, &exists, &read) {
         lead.extend(args.iter().cloned());
-        return (prog, lead);
+        return Ok((prog, lead));
     }
     match launcher {
-        Launcher::Std => (found.to_string_lossy().into_owned(), args.to_vec()),
-        Launcher::Pty => match cmd_payload(format!("\"{}\"", found.display()), args) {
-            Some(payload) => (comspec.to_string(), cmd_wrapper(payload)),
-            None => unchanged(),
-        },
+        Launcher::Std => Ok((found.to_string_lossy().into_owned(), args.to_vec())),
+        Launcher::Pty => through_cmd(format!("\"{}\"", found.display())),
     }
 }
 
@@ -389,13 +421,33 @@ mod tests {
         move |p| files.contains(p)
     }
 
+    /// [`resolve_for_pty`], expected to resolve.
+    fn pty_ok(program: &str, args: &[String], path: &str, pathext: &str, comspec: &str, exists: impl Fn(&Path) -> bool) -> (String, Vec<String>) {
+        resolve_for_pty(program, args, path, pathext, comspec, exists).expect("resolved")
+    }
+
+    /// [`resolve_for`], expected to resolve.
+    #[allow(clippy::too_many_arguments)]
+    fn for_ok(
+        launcher: Launcher,
+        program: &str,
+        args: &[String],
+        path: &str,
+        pathext: &str,
+        comspec: &str,
+        exists: impl Fn(&Path) -> bool,
+        read: impl Fn(&Path) -> Option<String>,
+    ) -> (String, Vec<String>) {
+        resolve_for(launcher, program, args, path, pathext, comspec, exists, read).expect("resolved")
+    }
+
     #[test]
     fn grok_exe_stays_direct() {
         let dir = PathBuf::from(r"C:\tools");
         let grok = dir.join("grok.exe");
         let files: HashSet<_> = [grok.clone()].into_iter().collect();
         let path = dir.to_string_lossy().into_owned();
-        let (prog, args) = resolve_for_pty(
+        let (prog, args) = pty_ok(
             "grok",
             &["--always-approve".into()],
             &path,
@@ -413,7 +465,7 @@ mod tests {
         let cmd = dir.join("claude.cmd");
         let files: HashSet<_> = [cmd.clone()].into_iter().collect();
         let path = dir.to_string_lossy().into_owned();
-        let (prog, args) = resolve_for_pty(
+        let (prog, args) = pty_ok(
             "claude",
             &["--dangerously-skip-permissions".into()],
             &path,
@@ -432,7 +484,7 @@ mod tests {
         let files: HashSet<_> = [dir.join("foo.exe"), dir.join("foo.cmd")]
             .into_iter()
             .collect();
-        let (prog, args) = resolve_for_pty(
+        let (prog, args) = pty_ok(
             "foo",
             &[],
             &dir.to_string_lossy(),
@@ -470,7 +522,7 @@ mod tests {
     fn an_extensionless_npm_script_is_never_the_program() {
         let dir = PathBuf::from(r"C:\Users\x\AppData\Roaming\npm");
         let files: HashSet<_> = [dir.join("codex"), dir.join("codex.cmd"), dir.join("codex.ps1")].into_iter().collect();
-        let (prog, args) = resolve_for_pty(
+        let (prog, args) = pty_ok(
             "codex",
             &[],
             &dir.to_string_lossy(),
@@ -482,29 +534,29 @@ mod tests {
         assert!(args[5].contains("codex.cmd"), "{args:?}");
         // The same through an absolute path without an extension.
         let full = dir.join("codex").to_string_lossy().into_owned();
-        let (prog, args) = resolve_for_pty(&full, &[], "", ".EXE;.CMD", "cmd.exe", exists_in(&files));
+        let (prog, args) = pty_ok(&full, &[], "", ".EXE;.CMD", "cmd.exe", exists_in(&files));
         assert_eq!(prog, "cmd.exe");
         assert!(args[5].contains("codex.cmd"), "{args:?}");
         // An extensionless file alone resolves to nothing (left as given).
         let only: HashSet<_> = [dir.join("lonely")].into_iter().collect();
-        let (prog, _) = resolve_for_pty("lonely", &[], &dir.to_string_lossy(), ".EXE;.CMD", "cmd.exe", exists_in(&only));
+        let (prog, _) = pty_ok("lonely", &[], &dir.to_string_lossy(), ".EXE;.CMD", "cmd.exe", exists_in(&only));
         assert_eq!(prog, "lonely");
     }
 
     #[test]
     fn a_cmd_builtin_runs_through_cmd_exe() {
         let files: HashSet<PathBuf> = HashSet::new();
-        let (prog, args) = resolve_for_pty("echo", &["hello".into(), "two words".into()], r"C:\empty", ".EXE;.CMD", "cmd.exe", exists_in(&files));
+        let (prog, args) = pty_ok("echo", &["hello".into(), "two words".into()], r"C:\empty", ".EXE;.CMD", "cmd.exe", exists_in(&files));
         assert_eq!(prog, "cmd.exe");
         assert_eq!(args, vec!["/e:ON", "/v:OFF", "/d", "/s", "/c", "\"echo hello \"two words\"\""]);
         // A real program of that name on PATH wins, as in cmd.exe itself.
         let echo = PathBuf::from(r"C:\tools").join("echo.exe");
         let files: HashSet<PathBuf> = [echo.clone()].into_iter().collect();
-        let (prog, _) = resolve_for_pty("echo", &[], r"C:\tools", ".EXE;.CMD", "cmd.exe", exists_in(&files));
+        let (prog, _) = pty_ok("echo", &[], r"C:\tools", ".EXE;.CMD", "cmd.exe", exists_in(&files));
         assert_eq!(prog, echo.to_string_lossy());
         // A path is never a built-in.
         let none: HashSet<PathBuf> = HashSet::new();
-        let (prog, _) = resolve_for_pty(r".\echo", &[], r"C:\empty", ".EXE", "cmd.exe", exists_in(&none));
+        let (prog, _) = pty_ok(r".\echo", &[], r"C:\empty", ".EXE", "cmd.exe", exists_in(&none));
         assert_eq!(prog, r".\echo");
     }
 
@@ -538,16 +590,23 @@ mod tests {
         let dir = PathBuf::from(r"C:\tools");
         let files: HashSet<_> = [dir.join("run.bat")].into_iter().collect();
         let args: Vec<String> = vec!["ok".into(), "a&more".into(), "x\"&more&\"".into()];
-        let (prog, a) = resolve_for_pty("run", &args, &dir.to_string_lossy(), ".EXE;.BAT", "cmd.exe", exists_in(&files));
+        let (prog, a) = pty_ok("run", &args, &dir.to_string_lossy(), ".EXE;.BAT", "cmd.exe", exists_in(&files));
         assert_eq!(prog, "cmd.exe");
         assert_eq!(a[5], format!(r#"""{}" ok "a&more" "x""&more&"""""#, dir.join("run.bat").display()));
-        let (prog, a) = resolve_for_pty("echo", &args, r"C:\empty", ".EXE", "cmd.exe", exists_in(&files));
+        let (prog, a) = pty_ok("echo", &args, r"C:\empty", ".EXE", "cmd.exe", exists_in(&files));
         assert_eq!(prog, "cmd.exe");
         assert_eq!(a[5], r#""echo ok "a&more" "x""&more&"""""#);
-        // A line break can't pass through cmd.exe: left as given, the spawn fails.
+        // A line break can't pass through cmd.exe: the spawn is refused.
         let broken: Vec<String> = vec!["line one\nline two".into()];
-        assert_eq!(resolve_for_pty("run", &broken, &dir.to_string_lossy(), ".EXE;.BAT", "cmd.exe", exists_in(&files)), ("run".to_string(), broken.clone()));
-        assert_eq!(resolve_for_pty("echo", &broken, r"C:\empty", ".EXE", "cmd.exe", exists_in(&files)), ("echo".to_string(), broken));
+        let full = dir.join("run.bat").to_string_lossy().into_owned();
+        for program in ["run", full.as_str(), "echo", r"C:\elsewhere\other.cmd"] {
+            let r = resolve_for_pty(program, &broken, &dir.to_string_lossy(), ".EXE;.BAT", "cmd.exe", exists_in(&files));
+            assert_eq!(r, Err(Refused { program: program.to_string() }), "{program}");
+        }
+        // A batch file named but not on this PATH still goes through cmd.exe escaped.
+        let (prog, a) = resolve_for_pty(r"C:\elsewhere\other.cmd", &args, &dir.to_string_lossy(), ".EXE;.BAT", "cmd.exe", exists_in(&files)).expect("resolved");
+        assert_eq!(prog, "cmd.exe");
+        assert_eq!(a[5], r#"""C:\elsewhere\other.cmd" ok "a&more" "x""&more&"""""#);
     }
 
     #[test]
@@ -555,9 +614,9 @@ mod tests {
         let dir = PathBuf::from(r"C:\tools");
         let files: HashSet<_> = [dir.join("run.bat")].into_iter().collect();
         let args: Vec<String> = vec!["a&b".into()];
-        let r = resolve_for(Launcher::Std, "run", &args, &dir.to_string_lossy(), ".EXE;.BAT", "cmd.exe", exists_in(&files), |_| None);
+        let r = for_ok(Launcher::Std, "run", &args, &dir.to_string_lossy(), ".EXE;.BAT", "cmd.exe", exists_in(&files), |_| None);
         assert_eq!(r, (dir.join("run.bat").to_string_lossy().into_owned(), args.clone()), "std escapes a batch file's arguments itself");
-        let r = resolve_for(Launcher::Std, "echo", &args, r"C:\empty", ".EXE", "cmd.exe", exists_in(&files), |_| None);
+        let r = for_ok(Launcher::Std, "echo", &args, r"C:\empty", ".EXE", "cmd.exe", exists_in(&files), |_| None);
         assert_eq!(r, ("echo".to_string(), args));
     }
 
@@ -586,24 +645,24 @@ mod tests {
         let prompt = "line one & \"two\"\n%PATH% | three".to_string();
         let args = vec!["--append-system-prompt".to_string(), prompt.clone()];
         for launcher in [Launcher::Pty, Launcher::Std] {
-            let r = resolve_for(launcher, "claude", &args, &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
+            let r = for_ok(launcher, "claude", &args, &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
             assert_eq!(r, (node.to_string_lossy().into_owned(), vec![cli.clone(), "--append-system-prompt".into(), prompt.clone()]), "{launcher:?}");
-            let r = resolve_for(launcher, "npm", &["ls".into()], &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
+            let r = for_ok(launcher, "npm", &["ls".into()], &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
             assert_eq!(r, (node.to_string_lossy().into_owned(), vec![npm_cli.clone(), "ls".into()]), "{launcher:?}");
-            let r = resolve_for(launcher, "codex", &args, &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
+            let r = for_ok(launcher, "codex", &args, &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), read);
             assert_eq!(r, (codex.clone(), args.clone()), "{launcher:?}");
         }
         // A node.exe beside the shim wins over the one on PATH.
         let mut with_local = files.clone();
         with_local.insert(npm.join("node.exe"));
-        let r = resolve_for(Launcher::Pty, "claude", &[], &path, ".EXE;.CMD", "cmd.exe", exists_in(&with_local), read);
+        let r = for_ok(Launcher::Pty, "claude", &[], &path, ".EXE;.CMD", "cmd.exe", exists_in(&with_local), read);
         assert_eq!(r.0, npm.join("node.exe").to_string_lossy());
         // The target missing, or a shim with fixed arguments: a batch file as before.
         let no_cli: HashSet<PathBuf> = files.iter().filter(|p| p.to_string_lossy() != cli.as_str()).cloned().collect();
-        let r = resolve_for(Launcher::Pty, "claude", &[], &path, ".EXE;.CMD", "cmd.exe", exists_in(&no_cli), read);
+        let r = for_ok(Launcher::Pty, "claude", &[], &path, ".EXE;.CMD", "cmd.exe", exists_in(&no_cli), read);
         assert_eq!(r.0, "cmd.exe");
         let fixed = |_: &Path| Some("\"%dp0%\\node_modules\\x\\x.exe\" --fixed %*\r\n".to_string());
-        let r = resolve_for(Launcher::Pty, "claude", &[], &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), fixed);
+        let r = for_ok(Launcher::Pty, "claude", &[], &path, ".EXE;.CMD", "cmd.exe", exists_in(&files), fixed);
         assert_eq!(r.0, "cmd.exe");
     }
 
@@ -622,7 +681,7 @@ mod tests {
         let args: Vec<String> = vec!["a&echo SECOND".into(), "q\"&echo SECOND&\"".into(), "%USERNAME%".into(), "x|echo SECOND".into()];
         let path = dir.to_string_lossy().into_owned();
         for program in ["show", "echo"] {
-            let (prog, a) = resolve_for(Launcher::Pty, program, &args, &path, ".EXE;.CMD", &comspec, |p| p.is_file(), |_| None);
+            let (prog, a) = for_ok(Launcher::Pty, program, &args, &path, ".EXE;.CMD", &comspec, |p| p.is_file(), |_| None);
             assert_eq!(&a[..5], &CMD_WRAPPER, "{program}");
             // As ConPTY gets it: the switches, then the payload as written.
             let out = std::process::Command::new(&prog).args(&a[..5]).raw_arg(&a[5]).output().expect("cmd.exe");
@@ -635,10 +694,33 @@ mod tests {
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
+    /// Windows only (real files): a batch file that is no npm shim, given an
+    /// argument with a line break, is refused, by bare name and by full path.
+    #[cfg(windows)]
+    #[test]
+    fn a_batch_file_with_a_line_break_argument_is_refused() {
+        let dir = std::env::temp_dir().join(format!("k2-win-cmd-refuse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("tool.cmd"), "@echo off\r\necho(%*\r\n").expect("batch");
+        let path = dir.to_string_lossy().into_owned();
+        let full = dir.join("tool.cmd").to_string_lossy().into_owned();
+        let prompt: Vec<String> = vec!["--prompt".into(), "line one\nline two".into()];
+        for program in ["tool", full.as_str()] {
+            let e = resolve_spawn(program, &prompt, &path).expect_err("refused");
+            assert_eq!(e.program, program);
+            assert!(e.to_string().contains("nothing was started"), "{e}");
+        }
+        // The same arguments without the line break go through cmd.exe, escaped.
+        let (prog, a) = resolve_spawn("tool", &["--prompt".into(), "one two".into()], &path).expect("resolved");
+        assert_eq!(&a[..5], &CMD_WRAPPER, "{prog}");
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
     #[test]
     fn missing_name_left_unchanged() {
         let files: HashSet<PathBuf> = HashSet::new();
-        let (prog, args) = resolve_for_pty(
+        let (prog, args) = pty_ok(
             "nope",
             &["-x".into()],
             r"C:\empty",

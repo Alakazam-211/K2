@@ -973,11 +973,16 @@ impl DaemonPtySession {
             }
             other => other,
         };
-        let shell = guarded_program.as_deref().map(|prog| {
-            let (program, args) =
-                crate::terminal::win_cmd::resolve_spawn(prog, &spawn_args, path_for_resolve);
-            ShellSpec { program, args }
-        });
+        // Windows: a batch file or cmd.exe built-in that can't take an
+        // argument safely is refused here, before anything starts.
+        let shell = match guarded_program.as_deref() {
+            Some(prog) => {
+                let (program, args) = crate::terminal::win_cmd::resolve_spawn(prog, &spawn_args, path_for_resolve)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+                Some(ShellSpec { program, args })
+            }
+            None => None,
+        };
 
         child_env
             .entry("TERM".to_string())

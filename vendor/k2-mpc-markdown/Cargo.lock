@@ -272,8 +272,9 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-base"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
+ "libc",
  "redb",
  "regex-automata",
  "thiserror",
@@ -282,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-markdown"
-version = "0.7.25"
+version = "0.7.26"
 dependencies = [
  "k2-mpc-base",
  "proptest",

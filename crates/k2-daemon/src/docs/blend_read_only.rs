@@ -471,12 +471,11 @@ mod tests {
 
     /// The stuck read's shape, shown with layer 1 skipped (a host that gave
     /// a person edit on a read-only `.blend`): the change goes into the doc,
-    /// the read-only pack refuses to render it, and from then on every read
-    /// that renders the file (a whole read, for anyone) fails with that
-    /// refusal, the change waiting for a write-back. This is why
-    /// layer 1 must hold on every path; the test below pins that it does.
-    /// When the kit stops rendering on reads (K2 Cores' `Pack::check_edit`),
-    /// the reads here answer and this control can go.
+    /// the read-only pack refuses to render it, and from then on every whole
+    /// read (for anyone) carries that refusal and the file as last synced,
+    /// never the change, which waits for a write-back that can't happen
+    /// (kit v0.22.0's `render_failed`; before, those reads failed). This is
+    /// why layer 1 must hold on every path; the test below pins that it does.
     #[test]
     fn without_layer_one_a_refused_render_sticks_every_read() {
         let _m = super::super::cores::tests::mirror_lock();
@@ -485,13 +484,20 @@ mod tests {
         let sc = Scene::open(false);
         let obj = edit[2].clone();
         sc.shown(sc.person, &["object", "show", &obj]);
-        sc.s.read(sc.person).expect("a whole read before the change");
+        let before = sc.s.read(sc.person).expect("a whole read before the change");
+        assert!(before.render_failed.is_none(), "the file renders before the change");
         let argv: Vec<&str> = edit.iter().map(String::as_str).collect();
         let out = sc.tool(sc.person, &argv).unwrap_or_else(|e| panic!("with edit, the change applies: {e}"));
         assert!(out.changed.is_some(), "the change is in the doc");
+        // Kit v0.22.0: a whole read of a doc its pack can't render answers,
+        // with the pack's refusal in `render_failed` and the file as last
+        // synced for its bytes (never the change); before, it failed.
         for (who, conn) in [("the person", sc.person), ("the agent", sc.agent), ("the person again", sc.person)] {
-            let read = sc.s.read(conn);
-            assert!(matches!(&read, Err(e) if e.to_string().contains(CODE)), "{who}: a whole read fails with the render's refusal: {:?}", read.map(|r| r.version));
+            let read = sc.s.read(conn).unwrap_or_else(|e| panic!("{who}: a whole read answers: {e}"));
+            let why = read.render_failed.as_ref().map(|e| e.to_string());
+            assert!(why.as_deref().is_some_and(|w| w.contains(CODE)), "{who}: the read carries the render's refusal: {why:?}");
+            assert!(read.version > before.version, "{who}: at the change's version");
+            assert!(read.bytes == before.bytes, "{who}: the bytes are the file as last synced, not the change");
         }
         assert!(matches!(sc.s.status().expect("status").disk, Some(DiskState::Dirty { .. })), "the change waits for a write-back that can't happen");
         // A structured verb read (a View, no render) still answers: only

@@ -10,6 +10,7 @@ import { useSettingsStore, getEffectiveKeybinding } from '@/stores/settings'
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { isRemoteScope, mayRunLocalActions, roomMayRun } from '@/lib/local-only-actions'
 import { useToastStore } from '@/stores/toast'
+import { copyPathWithToast } from '@/lib/copy-path'
 import { isBackgroundOpenEvent } from '@/lib/file-open-modifier'
 import { BACKGROUND_OPEN_TOAST_MS, backgroundOpenMessage } from '@/lib/thread-file-link-open'
 import { useFileSelectionStore } from '@/stores/file-selection'
@@ -1663,7 +1664,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     // only Download and Copy Path.
     const viewOnlyItems = [
       ...(!isDir && isSingle && isRemote ? [{ id: 'download', label: 'Download' }] : []),
-      { id: 'copy-path', label: 'Copy Path' },
+      { id: 'copy-path', label: 'Copy path' },
     ]
     const items = room.readOnly ? viewOnlyItems : [
       ...(!isDir && isSingle
@@ -1706,7 +1707,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       // MS57: `fs/open-finder` opens Finder on the daemon's machine — off
       // in a room on another server.
       ...(room.localCommands ? [{ id: 'open-finder', label: revealInFileManagerLabel() }] : []),
-      { id: 'copy-path', label: 'Copy Path' }
+      { id: 'copy-path', label: 'Copy path' }
     ]
 
     const clickedId = await showContextMenu(items)
@@ -1734,7 +1735,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     } else if (clickedId === 'open-finder') {
       await daemonCliPost(room.scope, 'fs/open-finder', { target: entry.path })
     } else if (clickedId === 'copy-path') {
-      await navigator.clipboard.writeText(entry.path).catch((err) => console.warn('[file-tree] clipboard write', err))
+      await copyPathWithToast(entry.path)
     } else if (clickedId === 'rename') {
       setRenamingPath(entry.path)
     } else if (clickedId === 'delete') {
@@ -1989,7 +1990,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                     const items = [
                       { id: 'open', label: 'Open' },
                       ...(room.localCommands ? [{ id: 'open-finder', label: revealInFileManagerLabel() }] : []),
-                      { id: 'copy-path', label: 'Copy Path' },
+                      { id: 'copy-path', label: 'Copy path' },
                     ]
                     const id = await showContextMenu(items)
                     if (id === 'open') {
@@ -1997,7 +1998,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                     } else if (id === 'open-finder') {
                       await daemonCliPost(room.scope, 'fs/open-finder', { target: entry.path })
                     } else if (id === 'copy-path') {
-                      await navigator.clipboard.writeText(entry.path).catch((err) => console.warn('[file-tree] clipboard write', err))
+                      await copyPathWithToast(entry.path)
                     }
                   }}
                   title={entry.path}
@@ -2136,7 +2137,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                         ? { id: 'open', label: 'Reveal in Tree' }
                         : { id: 'open', label: 'Open' },
                       { id: 'open-finder', label: revealInFileManagerLabel() },
-                      { id: 'copy-path', label: 'Copy Path' },
+                      { id: 'copy-path', label: 'Copy path' },
                     ]
                     const id = await showContextMenu(items)
                     if (id === 'open') {
@@ -2150,7 +2151,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                     } else if (id === 'open-finder') {
                       await daemonCliPost(room.scope, 'fs/open-finder', { target: entry.path })
                     } else if (id === 'copy-path') {
-                      await navigator.clipboard.writeText(entry.path).catch((err) => console.warn('[file-tree] clipboard write', err))
+                      await copyPathWithToast(entry.path)
                     }
                   }}
                   title={entry.name}

@@ -52,6 +52,7 @@ import { WorkspaceThreadUnreadBadge } from '@/components/common/UnreadBadge'
 import { threadSumForProject, useUnreadStore } from '@/stores/unread'
 import { MARK_ALL_READ_MENU_ID, markAllReadMenuItems, runMarkAllRead } from '@/lib/mark-all-read-menu'
 import { revealInFileManagerLabel } from '@/lib/reveal-label'
+import { copyPathWithToast } from '@/lib/copy-path'
 import { installedEditorsDefaultFirst } from '@/lib/installed-editors'
 
 // ── Nav-visible worktrees (DB-backed via workspace.navVisible field) ─────────
@@ -571,7 +572,7 @@ export default function Sidebar(): React.JSX.Element {
         // this window's server would refuse the write.
         renameAgentMenuItem(primaryScope()),
         { id: 'open-finder', label: revealInFileManagerLabel() },
-        { id: 'copy-path', label: 'Copy Path' },
+        { id: 'copy-path', label: 'Copy path' },
         { id: 'focus-window', label: 'Open in Focus Window' },
         // Pin/Unpin, "Add to Home" right under it, then the Active Bar rows.
         ...workspacePlacementMenuItems(project),
@@ -638,9 +639,7 @@ export default function Sidebar(): React.JSX.Element {
       } else if (clickedId === 'open-finder') {
         await invoke('projects_open_in_finder', { path: project.path })
       } else if (clickedId === 'copy-path') {
-        await navigator.clipboard.writeText(project.path).catch((err) =>
-          console.warn('[sidebar] copy-path', err),
-        )
+        await copyPathWithToast(project.path)
       } else if (clickedId === 'focus-window') {
         await invoke('projects_open_focus_window', { projectId: project.id })
       } else if (clickedId?.startsWith('editor:')) {

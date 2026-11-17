@@ -242,7 +242,7 @@ describe('FileTree call sites', () => {
 
   it('does not feed the ellipsis display string to rename, copy, or open', () => {
     expect(src).toContain('initialValue={entry.name}')
-    expect(src).toContain('navigator.clipboard.writeText(entry.path)')
+    expect(src).toContain('copyPathWithToast(entry.path)')
     expect(src).toContain('openFileAsTab(entry.path)')
     expect(src).toContain('openFileAsTab(row.filePath)')
     expect(src).toContain('useFileSelectionStore.getState().select(entry.path)')

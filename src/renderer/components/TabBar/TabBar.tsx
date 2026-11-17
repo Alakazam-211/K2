@@ -24,6 +24,7 @@ import { pinOf, sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import { applyPinSize, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
 import PinDimensionsModal from '@/components/PaneLayout/PinDimensionsModal'
 import { resolveCopyableTerminalId } from '@/lib/copy-terminal-id'
+import { copyPathWithToast, copyWithToast, tabFilePath } from '@/lib/copy-path'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { startTabDrag } from '@/components/Terminal/TerminalArea'
@@ -420,12 +421,10 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       } else if (clickedId === 'unpin-dimensions') {
         handleUnpin(sessionId)
       } else if (clickedId === 'copy-address' && copyAddress) {
-        navigator.clipboard.writeText(copyAddress.clipboard).catch((err) =>
-          console.warn('[tab-bar] copy-address', err),
-        )
+        void copyWithToast(copyAddress.clipboard, 'Address copied', "Couldn't copy the address")
       }
     },
-    [handleUnpin, cwd, projectId]
+    [room, handleUnpin, cwd, projectId]
   )
 
   // Heartbeat-tab detection key: a Set of every heartbeat's
@@ -872,15 +871,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       const sessions = sessionsOf(usePinnedSizeStore.getState().sessions, room.scope)
       const items = Array.from(tab.paneGroups.values()).flatMap((pg) => pg.items)
       tabTerminalId = resolveCopyableTerminalId(items, sessions)
-      for (const item of items) {
-        if (item.type === 'file-viewer') {
-          const d = item.data as { filePath?: string }
-          if (d.filePath) {
-            fileViewerPath = d.filePath
-            break
-          }
-        }
-      }
+      // The file THIS tab shows (its pane's selected item), whichever tab
+      // is selected.
+      fileViewerPath = tabFilePath(tab)
       copyAddress = await resolveSessionTabCopyableAddress(room.scope, tab, cwd)
     }
 
@@ -919,7 +912,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       ] : []),
       ...(fileViewerPath ? [
         ...(room.localCommands ? [{ id: 'show-in-finder', label: 'Show in Finder' }] : []),
-        { id: 'copy-file-path', label: 'Copy Path' },
+        { id: 'copy-file-path', label: 'Copy path' },
       ] : []),
       { id: 'separator', label: '', type: 'separator' as const },
       { id: 'close', label: 'Close Tab' },
@@ -989,17 +982,13 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     } else if (clickedId === 'show-in-finder' && fileViewerPath) {
       daemonCliPost(room.scope, 'fs/open-finder', { target: fileViewerPath }).catch((err) => console.warn('[tab-bar] show-in-finder', err))
     } else if (clickedId === 'copy-file-path' && fileViewerPath) {
-      navigator.clipboard.writeText(fileViewerPath).catch((err) => console.warn('[tab-bar] copy-file-path', err))
+      void copyPathWithToast(fileViewerPath)
     } else if (clickedId === 'copy-terminal-id' && tabTerminalId) {
       // Prefer daemon session UUID (from pin-store map); else
       // attachAgentName / renderer terminalId. See resolveCopyableTerminalId.
-      navigator.clipboard.writeText(tabTerminalId).catch((err) =>
-        console.warn('[tab-bar] copy-terminal-id', err),
-      )
+      void copyWithToast(tabTerminalId, 'Terminal ID copied', "Couldn't copy the terminal ID")
     } else if (clickedId === 'copy-address' && copyAddress) {
-      navigator.clipboard.writeText(copyAddress.clipboard).catch((err) =>
-        console.warn('[tab-bar] copy-address', err),
-      )
+      void copyWithToast(copyAddress.clipboard, 'Address copied', "Couldn't copy the address")
     } else if (clickedId === 'open-terminal') {
       // Find the cwd from the tab's first terminal pane
       const tabsState = room.tabs.getState()
@@ -1028,7 +1017,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         }
       }
     }
-  }, [groupIndex, removeTabFromGroup, handleUnpin, cwd])
+  }, [room, groupIndex, removeTabFromGroup, handleUnpin, cwd])
 
   // True while the tabs overflow their scroller, i.e. the + sits against
   // the bar's edge: then the + square gets a line on each side, like the

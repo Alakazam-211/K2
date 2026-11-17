@@ -57,7 +57,8 @@ impl Drop for Env {
 fn setup() -> Env {
     let guard = k2_core::test_env::serial(&TEST_LOCK);
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let home = PathBuf::from(format!("/tmp/k2cpl-{:x}", nanos % 0xffff_ffff));
+    // short_tmp: /tmp on unix; Windows' temp folder ("/tmp" has no drive there).
+    let home = k2_core::test_env::short_tmp(format!("k2cpl-{:x}", nanos % 0xffff_ffff));
     std::fs::create_dir_all(&home).unwrap();
     let home = dunce::canonicalize(&home).unwrap();
     let env = Env { prev_home: std::env::var_os("HOME"), home: home.clone(), _guard: guard };

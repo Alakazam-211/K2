@@ -14,6 +14,7 @@
 // closes it.
 
 import { create, useStore } from 'zustand'
+import { rememberPeopleNames } from '@/lib/home-chat/known-names'
 import { useEffect } from 'react'
 import { hostPool } from '@/lib/host-pool-instance'
 import { primaryScope, reportedSupports, scopeForHost, type ServerScope } from '@/kessel/server-scope'
@@ -219,6 +220,8 @@ export function refreshHomeChatPeople(hostKey: string, force = false): Promise<v
   return once(`people|${hostKey}`, async () => {
     try {
       const people = await fetchHomeChatPeople(scopeForChatHost(hostKey))
+      // A DM whose person later leaves is still headed by their name.
+      rememberPeopleNames(hostKey, people)
       useHomeChatStore.getState().patchHost(hostKey, { people, peopleAt: Date.now() })
     } catch (e) {
       console.warn(`[home-chat] ${hostKey}: people:`, e)

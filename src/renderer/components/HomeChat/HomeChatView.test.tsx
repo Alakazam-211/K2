@@ -43,6 +43,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { threadComposeCapWidth } from '@/components/SessionView/threadTextWidth'
 import { resetHomeChatViewCacheForTests } from '@/lib/home-chat/chat'
 import type { HomeChatTarget } from '@/lib/home-chat/address'
+import { rememberPeopleNames, resetKnownNamesForTests } from '@/lib/home-chat/known-names'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -314,3 +315,40 @@ describe('a chat that fails to open', () => {
     expect(screen.queryByTestId('home-chat-error')).toBeNull()
   })
 })
+
+describe('a DM whose person has left', () => {
+  const GONE: HomeChatTarget = { kind: 'person', hostKey: 'local', ext: 'k2:connect:gone', address: 'k2:connect:gone::local' }
+  function serve(): void {
+    h.post.mockImplementation(async (_s, route) => (route === 'home-chat/dm' ? { ok: true, conv: '600' } : { ok: true }))
+    h.get.mockImplementation(async (_s, route) => {
+      if (route === 'home-chat/messages') return { ok: true, conv: '600', page: { items: [m('50', '300', 'bye for now')], has_more: false } }
+      if (route === 'home-chat/status') return { ok: true, on: true, reason: null, flags: {} }
+      if (route === 'home-chat/summary') return { ok: true, chat: 'live', convs: [] }
+      if (route === 'home-chat/people') return { ok: true, me: { ext: 'k2:connect:me', memberId: ME }, people: [] }
+      throw new Error(`unexpected GET ${route}`)
+    })
+  }
+
+  it('is headed by their last known name', async () => {
+    resetKnownNamesForTests()
+    rememberPeopleNames('local', {
+      me: { ext: 'k2:connect:me', memberId: ME },
+      people: [{ ext: 'k2:connect:gone', username: 'ana', displayName: 'Ana Ruiz', picture: null, role: null, ready: true, memberId: '300' }],
+    })
+    serve()
+    render(<HomeChatView target={GONE} />)
+    await screen.findByText('bye for now')
+    await screen.findByTestId('home-chat-readonly')
+    expect(screen.getByTestId('home-chat-title').textContent).toBe('Ana Ruiz')
+  })
+
+  it('is headed "Former member" when K2 never saw their name', async () => {
+    resetKnownNamesForTests()
+    serve()
+    render(<HomeChatView target={GONE} />)
+    await screen.findByTestId('home-chat-readonly')
+    expect(screen.getByTestId('home-chat-title').textContent).toBe('Former member')
+    expect(document.body.textContent).not.toMatch(/this person|Someone/)
+  })
+})
+

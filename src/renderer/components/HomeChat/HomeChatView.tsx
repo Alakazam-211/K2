@@ -99,6 +99,7 @@ import { callRecordLine } from '@/lib/home-chat/calls'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { serverLabelFor } from './serverLabel'
 import { HomeChatErrorState } from './HomeChatStates'
+import { formerPersonName } from '@/lib/home-chat/known-names'
 
 const PAGE = 50
 const DELTA = 100
@@ -149,7 +150,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
   }, [hostKey])
   const people = host?.people ?? null
   const me = people?.me.memberId ?? null
-  const names = useMemo(() => memberNames(people), [people])
+  const peopleNames = useMemo(() => memberNames(people), [people])
   const person = target.kind === 'person' ? (people?.people.find((p) => p.ext === target.ext) ?? null) : null
 
   // A channel's own facts: its name, kind, and who may do what.
@@ -218,6 +219,21 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
   useEffect(() => {
     if (conv && messages) rememberHomeChat(hostKey, conv, messages)
   }, [conv, hostKey, messages])
+
+  // A DM whose person has left this server's list: their last known name
+  // (never "this person" or "Someone"), else "Former member". It heads the
+  // DM and names their messages, replies and reactions.
+  const goneName = useMemo(() => {
+    if (target.kind !== 'person' || person || people === null || target.ext === people.me.ext) return null
+    const authors = (messages ?? []).map((x) => x.authorId)
+    return formerPersonName(hostKey, target.ext, authors, me) ?? rowLabel(target) ?? 'Former member'
+  }, [target, person, people, messages, hostKey, me])
+  const names = useMemo(() => {
+    if (!goneName) return peopleNames
+    const n = new Map(peopleNames)
+    for (const x of messages ?? []) if (x.authorId !== me && !n.has(x.authorId)) n.set(x.authorId, goneName)
+    return n
+  }, [goneName, peopleNames, messages, me])
 
   // Live frames for this conversation.
   useEffect(() => {
@@ -449,8 +465,12 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
   // read-only (HP-13); the daemon refuses its sends too.
   const personGone = target.kind === 'person' && people !== null && person === null && target.ext !== people.me.ext
   const readOnly = archived || personGone
+  // A DM: their name; once they have left, goneName. Before the people
+  // list answers, the row's name or the last one seen.
   const title =
-    target.kind === 'person' ? (person?.displayName ?? labelOf(target)) : (channel?.name ?? labelOf(target))
+    target.kind === 'person'
+      ? (person?.displayName ?? goneName ?? rowLabel(target) ?? formerPersonName(hostKey, target.ext, [], me) ?? 'Direct message')
+      : (channel?.name ?? rowLabel(target) ?? 'this channel')
   const nowSec = Math.floor(Date.now() / 1000)
   const dm = target.kind === 'person'
   // DM calls (§11a): the Call button says why when it can't call.
@@ -667,10 +687,10 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
 }
 
 /** The name the row was added with (a hint, until the server answers). */
-function labelOf(target: HomeChatTarget): string {
+function rowLabel(target: HomeChatTarget): string | null {
   for (const h of useHomesStore.getState().homes) {
     const row = h.rows.find((r) => r.address === target.address)
     if (row?.label) return row.label
   }
-  return target.kind === 'person' ? 'this person' : 'this channel'
+  return null
 }

@@ -22,7 +22,7 @@ vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => undefined), li
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { HOVER_ROW_HIDE_MS } from './useHoverReveal'
-import { BAR_OVER_X, BAR_OVER_Y, HomeChatMessageRow, actionBarPlace, type HomeChatRowActions } from './HomeChatMessageRow'
+import { BAR_OVER_X, BAR_OVER_Y, HomeChatMessageRow, JUMP_WASH_PCT, actionBarPlace, type HomeChatRowActions } from './HomeChatMessageRow'
 import type { HomeChatMessage } from '@/lib/home-chat/api'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -423,6 +423,17 @@ describe('the hover row on a message', () => {
     expect(container.querySelector('[data-home-chat-wash]')).toBeNull()
     rerender(row({ flash: true }))
     const wash = container.querySelector<HTMLElement>('[data-home-chat-wash]')!
-    expect(wash.style.background).toContain('var(--zen-accent) 18%')
+    expect(wash.style.background).toBe(`color-mix(in srgb, var(--zen-accent) ${JUMP_WASH_PCT}%, transparent)`)
+    // Behind the words, never over them: the row is its own layer while
+    // washed, the wash under its content.
+    const message = wash.closest<HTMLElement>('[data-home-chat-message]')!
+    expect(wash.style.zIndex).toBe('-1')
+    expect(message.style.isolation).toBe('isolate')
+    // Its name and time line reads the secondary text while washed (4.5:1
+    // on the wash in every look; the muted text isn't on a light one).
+    expect(message.style.getPropertyValue('--zen-text-muted')).toBe('var(--color-text-secondary)')
+    rerender(row({ flash: false }))
+    expect(message.style.isolation).toBe('')
+    expect(message.style.getPropertyValue('--zen-text-muted')).toBe('')
   })
 })

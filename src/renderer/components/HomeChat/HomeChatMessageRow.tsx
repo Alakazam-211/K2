@@ -24,6 +24,10 @@
 //
 // A message just jumped to gets a soft accent wash that fades over
 // JUMP_WASH_MS (none of it moves under reduced motion: the wash just goes).
+// The wash sits behind the row's words (the row is its own layer while
+// washed), and every word on it reads at 4.5:1: the name and time line takes
+// the secondary text for the while (the muted text isn't 4.5:1 on a light
+// wash).
 //
 // The row's own element carries `data-zen-message` so the render window
 // (`useRenderWindow`) counts and measures it like a Thread row.
@@ -53,6 +57,11 @@ export interface HomeChatRowActions {
 
 /** How long a jumped-to message's wash takes to fade (ms). */
 export const JUMP_WASH_MS = 1200
+/** How much of the accent the wash is, over the page (%). */
+export const JUMP_WASH_PCT = 12
+
+/** The row while washed: its own layer, its muted words the secondary text. */
+const WASHED_ROW = { isolation: 'isolate', '--zen-text-muted': 'var(--color-text-secondary)' } as CSSProperties
 
 /** The action bar's buttons (px, square) and its inset around them. */
 const ACTION_PX = 26
@@ -317,7 +326,7 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
       aria-label={m.deleted ? undefined : mine ? 'Your message' : `Message from ${author}`}
       tabIndex={m.deleted ? undefined : 0}
       className="k2-focus relative flex flex-col rounded-[calc(var(--radius-box)/2)]"
-      style={{ alignItems: mine ? 'flex-end' : 'flex-start', minWidth: 0 }}
+      style={{ alignItems: mine ? 'flex-end' : 'flex-start', minWidth: 0, ...(flash ? WASHED_ROW : null) }}
       {...reveal}
       {...(m.deleted ? {} : gestures)}
     >
@@ -328,7 +337,8 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
           data-home-chat-wash=""
           className="pointer-events-none absolute inset-0 rounded-[calc(var(--radius-box)/2)]"
           style={{
-            background: 'color-mix(in srgb, var(--zen-accent) 18%, transparent)',
+            zIndex: -1,
+            background: `color-mix(in srgb, var(--zen-accent) ${JUMP_WASH_PCT}%, transparent)`,
           }}
         />
       )}

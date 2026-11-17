@@ -45,9 +45,9 @@ use k2_mpc_dxf::DxfPack;
 use super::blob_packs::{kind_by_name, BlobKind};
 use crate::cli_response::CliResponse;
 
-/// People and agents edit a `.dxf` through the CAD pack's edit verbs: off
-/// until those verbs ship (kit v0.22.0). Module docs for what it changes.
-pub const EDIT_VERBS_ON: bool = false;
+/// People and agents edit a `.dxf` through the CAD pack's edit verbs (kit
+/// v0.22.0, CAD pack 485cd80): on. Module docs for what it changes.
+pub const EDIT_VERBS_ON: bool = true;
 
 /// Whether the pack's edit verbs run on a `.dxf`: [`EDIT_VERBS_ON`] (unit
 /// tests may turn it on for their own process).
@@ -77,6 +77,10 @@ pub const CODE: &str = "cad_writer_disabled";
 
 /// The refusal's words, on every write path and at the docs socket.
 pub const WHY: &str = concat!(product_name!(), " can't save drawing edits yet; this file opens read-only.");
+
+/// The refusal's words for a whole-file write of a drawing that takes the
+/// edit verbs (a `.dxf` while they are on), for people and agents alike.
+pub const WHY_WHOLE: &str = "Drawings change through edits; whole-file saves aren't supported yet.";
 
 /// The CAD pack's edit verbs on a `.dxf` (kit v0.22.0), by their first two
 /// words. Its index reads (`entity list|show|diff|blame`) aren't edits.
@@ -136,7 +140,10 @@ pub fn cap(rel: &str, r: super::host::DocRights) -> super::host::DocRights {
 /// The refusal: `409 cad_writer_disabled`, exit 3, its hint [`WHY`] word for
 /// word, and the file as `path`.
 pub fn refusal(rel: &str) -> CliResponse {
-    let mut r = super::routes::with_exit(super::caller::refusal("409 Conflict", CODE, WHY), k2_mpc_base::tools::exit::REFUSED);
+    // A drawing that takes the edit verbs changes through them; a whole-file
+    // save of it isn't supported (people included: the Steward's rule).
+    let why = if verbs_on(rel) { WHY_WHOLE } else { WHY };
+    let mut r = super::routes::with_exit(super::caller::refusal("409 Conflict", CODE, why), k2_mpc_base::tools::exit::REFUSED);
     if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&r.body) {
         if let Some(e) = v.get_mut("error").and_then(serde_json::Value::as_object_mut) {
             e.insert("path".into(), serde_json::Value::from(rel));
@@ -163,7 +170,7 @@ pub fn refused(path: &str, rel: &str, writes: bool, argv: Option<&[String]>) -> 
 /// message)`. A drawing has no live view (the socket edits text); it is
 /// declined with the write routes' reason, so a client reads one answer.
 pub fn socket_decline(rel: &str) -> Option<(&'static str, &'static str)> {
-    writes_off(rel).then_some((CODE, WHY))
+    writes_off(rel).then_some((CODE, if verbs_on(rel) { WHY_WHOLE } else { WHY }))
 }
 
 /// The tier-0 DXF pack: its index (and so its verbs) is `DxfPack`'s; it
@@ -203,8 +210,33 @@ impl BlobPack for DxfIndexOnly {
         self.0.index(src, size, limits)
     }
 
+    /// Never an agent's whole-file write (`MPC-E715`); with the edit verbs
+    /// on, the kit's verbs-only setting lets their verbs through.
     fn agent_writes(&self) -> AgentWrites {
-        AgentWrites::Refused
+        if edit_verbs_on() {
+            AgentWrites::VerbsOnly
+        } else {
+            AgentWrites::Refused
+        }
+    }
+
+    /// The pack's verbs, reads and edits (the kit's registry for the kind
+    /// is built once from them); with the switch off, layers 1 and 2 refuse
+    /// the edits.
+    fn verbs(&self) -> &'static [k2_mpc_base::session::BlobVerb] {
+        self.0.verbs()
+    }
+
+    fn errors(&self) -> &'static [k2_mpc_base::errors::ErrorEntry] {
+        self.0.errors()
+    }
+
+    fn hold_reach(&self, kind: &str) -> k2_mpc_base::session::HoldReach {
+        self.0.hold_reach(kind)
+    }
+
+    fn save_pairing(&self, facts: &k2_mpc_base::session::SaveFacts<'_>) -> k2_mpc_base::session::SavePairing {
+        self.0.save_pairing(facts)
     }
 }
 
@@ -251,8 +283,7 @@ mod tests {
     fn a_drawing_is_read_only_only_while_its_core_is_on() {
         let _m = super::super::cores::tests::mirror_lock();
         super::super::cores::tests::all_off();
-        set_edit_verbs_for_test(None);
-        assert!(!EDIT_VERBS_ON, "0.46.15's read path ships with no drawing edits");
+        set_edit_verbs_for_test(Some(false)); // the read path: no drawing edits
         let tool = super::super::routes::TOOL;
         let mv = argv(&["entity", "move", "@h:2B1", "--by", "10,0", "--unit", "mm"]);
         for rel in ["plan.dxf", "a/Site.DWG"] {
@@ -287,6 +318,7 @@ mod tests {
             assert_eq!(cap(other, full()), full(), "{other}");
             assert!(refused("/cli/docs/write", other, true, None).is_none(), "{other}");
         }
+        set_edit_verbs_for_test(None);
         super::super::cores::tests::all_off();
     }
 
@@ -312,10 +344,84 @@ mod tests {
         assert!(DxfIndexOnly::default().can_merge(), "an app's save after a verb merges by field");
         assert_eq!((writer("plan.dxf"), read_only_reason("plan.dxf")), (true, None), "a .dxf K2 writes: no read-only reason");
         assert_eq!((writer("site.dwg"), read_only_reason("site.dwg")), (false, Some(WHY)), "a .dwg never");
-        set_edit_verbs_for_test(None);
+        let whole: serde_json::Value = serde_json::from_str(&refused("/cli/docs/write", "plan.dxf", true, None).expect("refused").body).expect("json");
+        assert_eq!((&whole["error"]["code"], &whole["error"]["hint"]), (&serde_json::json!(CODE), &serde_json::json!(WHY_WHOLE)), "{whole}");
+        assert!(matches!(DxfIndexOnly::default().agent_writes(), AgentWrites::VerbsOnly), "agents' verbs pass, their whole-file writes don't (MPC-E715)");
+        assert!(EDIT_VERBS_ON, "0.46.15 ships the edit verbs on");
+        set_edit_verbs_for_test(Some(false));
         assert!(!cap("plan.dxf", full()).edit, "the switch off again");
         assert!(refused(tool, "plan.dxf", false, Some(&mv)).is_some());
+        set_edit_verbs_for_test(None);
         super::super::cores::tests::all_off();
+    }
+
+    /// Through the kit with the pack K2 opens a `.dxf` with: a person's and
+    /// an agent's verb edit both land after a dry run (the real call holds
+    /// the dry run's digest), each one version; an agent's whole-file write
+    /// is the kit's `MPC-E715` (verbs only) and changes nothing.
+    #[test]
+    fn people_and_agents_edit_a_dxf_through_its_verbs_only() {
+        use k2_mpc_base::blob::{BlobConfig, BlobStore};
+        use k2_mpc_base::session::{AuditEvent, Config, Host, Participant, ParticipantKind, Rights, SessionError, SessionManager, Stay};
+        use k2_mpc_base::store::{DocKey, DocStore};
+        use k2_mpc_base::tools::ToolOptions;
+        use std::sync::Arc;
+
+        struct Editors;
+        impl Host for Editors {
+            fn rights(&self, _: &Participant, _: &DocKey) -> Rights {
+                Rights::editor()
+            }
+            fn now_ms(&self) -> u64 {
+                super::super::host::now_ms()
+            }
+            fn on_event(&self, _: &AuditEvent) {}
+        }
+        let _m = super::super::cores::tests::mirror_lock();
+        set_edit_verbs_for_test(Some(true));
+        let dir = std::env::temp_dir().join(format!("k2-cad-verbs-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let store = Arc::new(DocStore::open(dir.join("docs.redb")).expect("store"));
+        let blobs = Arc::new(BlobStore::open(store.clone(), dir.join("blobs"), BlobConfig::default(), Arc::new(|| 1_000_000)).expect("blobs"));
+        let mut c = Config::default();
+        c.edit_rate_per_s = 1_000_000;
+        c.edit_burst = 1_000_000;
+        let mgr = SessionManager::new(store, Arc::new(Editors), c).with_blob_store(blobs);
+        let sampler = k2_mpc_dxf::testgen::draw_sampler(k2_mpc_dxf::testgen::Ver::R2018).build().bytes;
+        let key = DocKey { space: "ws-cad".into(), path: "plan.dxf".into() };
+        let s = mgr.open_blob(Arc::new(DxfIndexOnly::default()), &key, Some(&mut &sampler[..])).expect("the drawing opens");
+        let line = {
+            let d = k2_mpc_dxf::verbs::run(&sampler, "draw page", &["--version", "1", "--space", "model"]).expect("a page");
+            let v: serde_json::Value = serde_json::from_str(&d.data.to_json()).expect("json");
+            let h = v["entities"].as_array().and_then(|es| es.iter().find(|e| e["kind"] == "LINE")).and_then(|e| e["h"].as_str()).expect("a LINE").to_string();
+            if h.starts_with("@h:") { h } else { format!("@h:{h}") }
+        };
+        let opts = ToolOptions::new().json(true).result_json(true);
+        for (who, kind) in [("person:owner", ParticipantKind::Person), ("agent:ws-cad", ParticipantKind::Agent)] {
+            let conn = s.join(Participant::new(who, who, "#123456", kind, "cli"), Stay::Held).expect("join").conn;
+            let base = s.status().expect("status").version.to_string();
+            let mv = |extra: &[&str]| -> Vec<String> {
+                ["entity", "move", line.as_str(), "--by", "10,0", "--unit", "mm", "--base", base.as_str()].iter().chain(extra).map(|a| a.to_string()).collect()
+            };
+            let dry = s.run_tool(conn, &mv(&["--dry-run"]), &opts).unwrap_or_else(|e| panic!("{who}'s dry run: {e:?}"));
+            assert_eq!((dry.exit, dry.version_made()), (0, None), "{who}: a dry run records nothing");
+            let r: serde_json::Value = serde_json::from_str(&dry.result().expect("the result as data").to_json()).expect("json");
+            let digest = r["changed"]["bytes"]["after_digest"].as_str().unwrap_or_else(|| panic!("{who}: the digest: {r}")).to_string();
+            let real = s.run_tool(conn, &mv(&["--expect", digest.as_str()]), &opts).unwrap_or_else(|e| panic!("{who}'s edit: {e:?}"));
+            assert_eq!(real.exit, 0, "{who}: {}", String::from_utf8_lossy(&real.stdout));
+            let made = real.version_made().unwrap_or_else(|| panic!("{who}: the edit made a version"));
+            assert_eq!(made, s.status().expect("status").version, "{who}");
+            if kind == ParticipantKind::Agent {
+                let head = s.status().expect("status").version;
+                match s.write_bytes(conn, &sampler, head) {
+                    Err(SessionError::AgentWriteRefused) => {}
+                    other => panic!("an agent's whole-file write must be MPC-E715: {:?}", other.map(|w| w.version)),
+                }
+                assert_eq!(s.status().expect("status").version, head, "nothing written");
+            }
+        }
+        set_edit_verbs_for_test(None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The pack's edit verbs by their two words; its index reads aren't.
@@ -334,7 +440,7 @@ mod tests {
     #[test]
     fn the_packs_never_merge_or_let_an_agent_write() {
         let _m = super::super::cores::tests::mirror_lock();
-        set_edit_verbs_for_test(None);
+        set_edit_verbs_for_test(Some(false));
         let dxf = DxfIndexOnly::default();
         assert!(!dxf.can_merge());
         assert!(matches!(dxf.merge3_bytes(b"0\nEOF\n", b"0\nEOF\n", b"theirs"), BlobMerge::Conflict));
@@ -345,5 +451,6 @@ mod tests {
         assert!(!dwg.can_merge() && dwg.index_spec().is_none());
         assert!(matches!(dwg.merge3_bytes(b"a", b"a", b"b"), BlobMerge::Conflict));
         assert!(matches!(dwg.agent_writes(), AgentWrites::Refused));
+        set_edit_verbs_for_test(None);
     }
 }

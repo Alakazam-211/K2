@@ -601,7 +601,11 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
 fn blob_tool(s: &Arc<BlobSession>, c: &Call) -> Result<CliResponse, VerbError> {
     let argv = tool_argv(c)?;
     let argv = mention_pids(argv, c)?;
-    let mut opts = ToolOptions::new().json(c.input.flag("json"));
+    // A drawing's verbs (the CAD core's edit side) answer the kit's
+    // `mpc.result/1` as data under `result` when the caller asks for JSON.
+    let mut opts = ToolOptions::new()
+        .json(c.input.flag("json"))
+        .result_json(c.input.flag("json") && super::cad_read_only::writer(&c.target.rel));
     if let Some(t) = c.turn {
         opts = opts.turn(t);
     }
@@ -663,7 +667,14 @@ pub(super) fn run_blob_tool(
     let mut waited = false;
     loop {
         match s.run_tool(conn, argv, opts) {
-            Ok(out) => return Ok(tool_json(out)),
+            Ok(out) => {
+                // A verb that made a version (a drawing's edit): every
+                // client is told, as for a write (the kit has no event).
+                if let Some(v) = out.version_made() {
+                    super::versions::announce(key, v);
+                }
+                return Ok(tool_json(out));
+            }
             Err(ToolRunError::Tool(e)) => return Ok(tool_refusal_json(argv, &e.report())),
             Err(ToolRunError::Session(SessionError::IndexPending { version, .. })) if !waited => {
                 waited = true;
@@ -700,6 +711,10 @@ pub(super) fn tool_json(out: ToolOutput) -> Value {
         "notes": notes,
         "refusal": refusal,
     });
+    // The call's result as data (`mpc.result/1`), when it was asked for.
+    if let Some(r) = out.result() {
+        v["result"] = serde_json::from_str(&r.to_json()).unwrap_or(Value::Null);
+    }
     match String::from_utf8(out.stdout) {
         Ok(text) => v["stdout"] = Value::String(text),
         Err(e) => {

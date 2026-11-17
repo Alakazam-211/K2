@@ -242,6 +242,7 @@ pub(super) fn bounced(s: &Session, c: &Call, e: &SessionError) -> CliResponse {
         "ok": false,
         "error": {
             "code": "claimed",
+            "id": "MPC-E301",
             "hint": hint,
             "claim": id.to_string(),
             "by": by,

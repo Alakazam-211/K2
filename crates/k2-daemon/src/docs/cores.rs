@@ -1027,8 +1027,8 @@ pub(crate) mod tests {
                 assert_eq!(file(p), json!({"core": "any-file", "on": false, "liveView": false}), "{p}");
                 set(core, true);
                 let mut want = json!({"core": core, "on": true, "liveView": false});
-                if core == "cad" {
-                    // A drawing K2 doesn't write says so up front.
+                if p.ends_with(".dwg") {
+                    // A drawing K2 doesn't write (a .dwg; a .dxf takes the edit verbs) says so up front.
                     want["read_only_reason"] = json!("K2 can't save drawing edits yet; this file opens read-only.");
                 }
                 assert_eq!(file(p), want, "{p}");

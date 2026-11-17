@@ -907,6 +907,8 @@ fn session_error_body(e: &SessionError) -> CliResponse {
                     "ok": false,
                     "error": {
                         "code": "leased",
+                        // The kit's id (its registry is private to it): a client matches on it.
+                        "id": "MPC-E701",
                         "hint": format!(
                             "leased by {} for another {}: nothing was written. Try again after it expires, or ask them to let go (k2 doc lease --release)",
                             pid_label(holder),
@@ -930,6 +932,7 @@ fn session_error_body(e: &SessionError) -> CliResponse {
                 "ok": false,
                 "error": {
                     "code": "claimed",
+                    "id": "MPC-E301",
                     "hint": format!(
                         "lines {}–{} are claimed by {}{} for another {}; nothing applied",
                         lines.0,

@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(kind_of("a.dwg"), BlobKind::Dwg);
         assert!(!indexes("a.dwg") && pack_for("a.dwg").index_spec().is_none());
         assert!(matches!(pack_for("a.dwg").agent_writes(), k2_mpc_base::session::AgentWrites::Refused));
-        assert!(matches!(pack_for("a.dxf").agent_writes(), k2_mpc_base::session::AgentWrites::Refused));
+        assert!(matches!(pack_for("a.dxf").agent_writes(), k2_mpc_base::session::AgentWrites::VerbsOnly), "agents edit a .dxf through its verbs only");
         crate::docs::cores::tests::all_off();
     }
 

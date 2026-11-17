@@ -13,7 +13,7 @@
 //!      outside saves; at version 7 the viewer's route (`/cli/docs/cad/draw`)
 //!      answers the sampler's pages BYTE FOR BYTE as the pack's own goldens
 //!      (the files K2 Design's viewer fixtures are copied from), and its
-//!      header as the golden with one host line first, `"writer": false`.
+//!      header as the golden with one host line first, `"writer": true` (the .dxf takes the edit verbs).
 //!   3. A cursor from another version is `409 stale_cursor` (`CAD-E013`).
 //!   4. The read verbs (`/cli/docs/cad/read`) and the DXF index's `entity
 //!      list` answer; the AV reading answers in full and as a summary, and a
@@ -48,6 +48,7 @@ mod dwg_support;
 
 const OWNER: &str = "owner-token-docs-cad-core";
 const WHY: &str = "K2 can't save drawing edits yet; this file opens read-only.";
+const WHY_WHOLE: &str = "Drawings change through edits; whole-file saves aren't supported yet.";
 
 fn http(port: u16, method: &str, path: &str, body: Option<&str>) -> (u16, String) {
     let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
@@ -134,6 +135,13 @@ fn tool(port: u16, path: &str, argv: &[&str]) -> (u16, J) {
     (st, json_of("tool", &body))
 }
 
+/// `POST /cli/docs/tool` with `json: true` (the viewer's call: the kit's
+/// `mpc.result/1` under `result`).
+fn tool_json(port: u16, path: &str, argv: &[String]) -> (u16, J) {
+    let (st, body) = http(port, "POST", &format!("/cli/docs/tool?token={OWNER}&path={}", enc(path)), Some(&json!({ "argv": argv, "json": true }).to_string()));
+    (st, json_of("tool", &body))
+}
+
 /// An index verb on a tier-0 doc: retried while its index is being built
 /// (`index_pending`), at most 60 s. The answer, exit 0.
 fn index_verb(port: u16, path: &str, argv: &[&str]) -> J {
@@ -171,12 +179,12 @@ fn golden(name: &str) -> String {
 }
 
 /// What the viewer's route answers for the header: the pack's golden byte
-/// for byte, with the host's one line first (`"writer": false`: K2 doesn't
-/// write this drawing now).
+/// for byte, with the host's one line first (`"writer": true`: K2 writes
+/// this drawing through the pack's edit verbs).
 fn header_golden() -> String {
     let g = golden("header");
     assert!(g.starts_with("{\n"), "the pack's header is a pretty object");
-    g.replacen("{\n", "{\n  \"writer\": false,\n", 1)
+    g.replacen("{\n", "{\n  \"writer\": true,\n", 1)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -252,7 +260,11 @@ async fn the_cad_core_headless() {
     let on = flip(&[("any-file", true), ("cad", true)]).await;
     assert!(on.changed.contains(&("cad".to_string(), true)), "{on:?}");
     for p in [&plan, &site] {
-        assert_eq!(file_core(port, p), json!({"core": "cad", "on": true, "liveView": false, "read_only_reason": WHY}), "{p}");
+        let mut want = json!({"core": "cad", "on": true, "liveView": false});
+        if p.ends_with(".dwg") {
+            want["read_only_reason"] = json!(WHY); // a .dxf takes the edit verbs; a .dwg is read only
+        }
+        assert_eq!(file_core(port, p), want, "{p}");
     }
     let header_version = |what: &str| -> u64 {
         let (st, body) = draw(port, &plan, "&what=header");
@@ -277,7 +289,7 @@ async fn the_cad_core_headless() {
     assert_eq!(st, 200, "{header}");
     assert!(header == header_golden(), "the header is the pack's golden with the host's writer line first:\n{header}");
     let h = json_of("header", &header);
-    assert_eq!((&h["writer"], &h["schema"]), (&json!(false), &json!("cad.drawing.header/1")), "the viewer knows up front: {header}");
+    assert_eq!((&h["writer"], &h["schema"]), (&json!(true), &json!("cad.drawing.header/1")), "the viewer knows up front: {header}");
     // The pack's own object: the header without the host's line.
     let mut pack_header = h.clone();
     pack_header.as_object_mut().expect("an object").remove("writer").expect("the writer field");
@@ -354,7 +366,10 @@ async fn the_cad_core_headless() {
     let before = std::fs::read(&plan_p).expect("the drawing");
     let status_before = doc_status(port, &plan);
     assert_eq!((&status_before["version"], &status_before["disk"]["state"]), (&json!(7), &json!("clean")), "{status_before}");
-    for p in [&plan, &site] {
+    // A person (the owner token) included: no whole-file write of any
+    // drawing. A .dxf changes through its edit verbs (the Steward's words);
+    // a .dwg is read only.
+    for (p, why) in [(&plan, WHY_WHOLE), (&site, WHY)] {
         for (route, body) in [
             ("/cli/docs/write", json!({"path": p, "base": "7", "bytesB64": "AAAA"})),
             ("/cli/docs/restore", json!({"path": p, "version": 1})),
@@ -362,10 +377,8 @@ async fn the_cad_core_headless() {
         ] {
             let (st, out) = http(port, "POST", &format!("{route}?token={OWNER}"), Some(&body.to_string()));
             let v = refused(route, st, &out, 409, "cad_writer_disabled");
-            assert_eq!((&v["error"]["hint"], &v["error"]["exit"]), (&json!(WHY), &json!(3)), "{route}: {out}");
+            assert_eq!((&v["error"]["hint"], &v["error"]["exit"]), (&json!(why), &json!(3)), "{route}: {out}");
         }
-        let (st, v) = tool(port, p, &["entity", "move", "@h:2B1", "--by", "10,0", "--unit", "mm"]);
-        refused("an edit verb", st, &v.to_string(), 409, "cad_writer_disabled");
         let url = format!("ws://127.0.0.1:{port}/cli/docs/live?token={OWNER}&doc={}", enc(p));
         let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.expect("a socket");
         let f = loop {
@@ -377,6 +390,10 @@ async fn the_cad_core_headless() {
         };
         assert_eq!((&f["type"], &f["reason"], &f["code"]), (&json!("closed"), &json!("declined"), &json!("cad_writer_disabled")), "{f}");
     }
+    // An edit verb on a .dwg: refused, the reader has no writer.
+    let (st, v) = tool(port, &site, &["entity", "move", "@h:2B1", "--by", "10,0", "--unit", "mm"]);
+    let e = refused("an edit verb on a .dwg", st, &v.to_string(), 409, "cad_writer_disabled");
+    assert_eq!(e["error"]["hint"], json!(WHY), "{e}");
     assert_eq!(std::fs::read(&plan_p).expect("the drawing"), before, "the DXF is untouched");
     assert_eq!(std::fs::read(&site_p).expect("the DWG"), dwg_bytes, "the DWG is untouched");
 
@@ -391,6 +408,40 @@ async fn the_cad_core_headless() {
         assert_eq!((&s["version"], &s["disk"]["state"]), (&json!(7), &json!("clean")), "{when}: {s}");
         std::thread::sleep(Duration::from_millis(1500));
     }
+
+    // ── 7b. A person's edit through the pack's verbs: a dry run first (the
+    //        file and version unchanged), then the real call with --expect;
+    //        then a call at the old version is refused ──
+    let model = json_of("model page", &golden("page-model"));
+    let line = model["entities"]
+        .as_array()
+        .and_then(|es| es.iter().find(|e| e["kind"] == "LINE"))
+        .and_then(|e| e["h"].as_str())
+        .unwrap_or_else(|| panic!("a LINE on the sampler's model page"))
+        .to_string();
+    let addr = if line.starts_with("@h:") { line } else { format!("@h:{line}") };
+    let unit = h["units"]["word"].as_str().unwrap_or_else(|| panic!("the drawing's unit word: {h}")).to_string();
+    let mv = |extra: &[&str]| -> Vec<String> {
+        ["entity", "move", addr.as_str(), "--by", "10,0", "--unit", unit.as_str()].iter().chain(extra).map(|s| s.to_string()).collect()
+    };
+    let (st, dry) = tool_json(port, &plan, &mv(&["--base", "7", "--dry-run", "--json"]));
+    assert_eq!((st, &dry["exit"]), (200, &json!(0)), "the dry run: {dry}");
+    let r = &dry["result"];
+    assert_eq!((&r["schema"], &r["ok"], &r["dry_run"], &r["version"]["after"]), (&json!("mpc.result/1"), &json!(true), &json!(true), &J::Null), "{dry}");
+    let digest = r["changed"]["bytes"]["after_digest"].as_str().unwrap_or_else(|| panic!("the dry run's digest: {dry}")).to_string();
+    assert_eq!(std::fs::read(&plan_p).expect("the drawing"), before, "a dry run writes nothing");
+    assert_eq!(doc_status(port, &plan)["version"], json!(7), "a dry run records nothing");
+    let (st, real) = tool_json(port, &plan, &mv(&["--base", "7", "--expect", &digest, "--json"]));
+    assert_eq!((st, &real["exit"]), (200, &json!(0)), "the edit: {real}");
+    let r = &real["result"];
+    assert_eq!((&r["ok"], &r["dry_run"], &r["version"]["after"]), (&json!(true), &json!(false), &json!(8)), "{real}");
+    assert_eq!((&r["data"]["schema"], &r["data"]["entities"][0]["address"], &r["data"]["entities"][0]["op"]), (&json!("cad.change/1"), &json!(addr), &json!("changed")), "{real}");
+    assert_ne!(std::fs::read(&plan_p).expect("the drawing"), before, "the edit reached the file");
+    assert_eq!(header_version("after the edit"), 8, "the viewer reads the new version");
+    let (st, stale) = tool_json(port, &plan, &mv(&["--if-version", "7", "--json"]));
+    assert!(stale.to_string().contains("MPC-E110"), "a call at the old version is refused with the kit's id: {st} {stale}");
+    assert!(st != 200 || stale["exit"] != json!(0), "{stale}");
+    assert_eq!(doc_status(port, &plan)["version"], json!(8), "nothing applied");
 
     // ── 8. Off again: core_off ──
     let off = flip(&[("any-file", true), ("cad", false)]).await;

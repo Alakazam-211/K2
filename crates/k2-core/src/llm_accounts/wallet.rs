@@ -232,8 +232,8 @@ fn expires_of(tool: Tool, b: &[u8]) -> i64 {
 // ── The live login's newer tokens (field report 2026-11-17) ─────────
 //
 // Every CLI on the server shares the tool's live store and refreshes it;
-// each refresh rotates the refresh token. K2's slot copy of that login
-// goes stale at the first one. K2 never refreshes such a copy
+// each refresh rotates the refresh token. The wallet's slot copy of that login
+// goes stale at the first one. The wallet never refreshes such a copy
 // ([`identity::is_live_login`]); it reads the newer set back instead.
 
 /// The live store holds something that isn't a whole sign-in (Claude:
@@ -248,14 +248,14 @@ fn note_live_lost(tool: Tool, live: &[u8], why: &str) {
     }
     seen[tool_index(tool)] = Some(fp);
     crate::log_debug!(
-        "[llm-accounts] {}: live sign-in lost ({why}): the CLIs' own credentials file has no usable login; K2 copies nothing from it into a saved token",
+        "[llm-accounts] {}: live sign-in lost ({why}): the CLIs' own credentials file has no usable login; nothing is copied from it into a saved token",
         tool.as_str()
     );
 }
 
 /// Read the live sign-in back into token `e`'s slot when it is the same
 /// login ([`identity::live_relation_of`]) and newer (a later expiry):
-/// the newest token set always wins, and K2 never writes an older copy
+/// the newest token set always wins, and the wallet never writes an older copy
 /// over a newer one. The caller holds `e`'s slot lock. `Ok(true)` when the
 /// slot now holds the live bytes.
 pub(crate) fn adopt_newer_live(tool: Tool, e: &Entry) -> Result<bool, WalletError> {
@@ -1750,7 +1750,7 @@ fn switch_inner(
     if live_lost {
         if let Some(o) = owner.as_deref().filter(|o| *o != target.id) {
             update_meta(conn, o, &MetaUpdate {
-                detail: Some(Some("Its CLIs lost this sign-in before the switch, so K2 kept its older saved copy. If it fails, sign it in again.".into())),
+                detail: Some(Some("Its CLIs lost this sign-in before the switch, so its older saved copy was kept. If it fails, sign it in again.".into())),
                 ..Default::default()
             })?;
         }
@@ -2342,7 +2342,7 @@ pub fn keep_warm_with(
             let owner = live_owner(conn, tool)?;
             for e in list_for(conn, tool)? {
                 // A token marked "sign in again" holds a refresh token the
-                // vendor refused twice: K2 stops sending it until a new
+                // vendor refused twice: the wallet stops sending it until a new
                 // sign-in (or a read-back) puts it back to signed in.
                 if owner.as_deref() == Some(e.id.as_str())
                     || e.state == state::SIGNING_IN
@@ -2389,7 +2389,7 @@ fn warm_one(
 ) -> Result<Option<WarmResult>, WalletError> {
     // Phase 2: this login's slot lock only. It also blocks a pinned
     // session from starting on this login mid-refresh, and a switch to it.
-    // Every K2 refresher of a slot (keep-warm, the usage probe, a switch)
+    // Every refresher of a slot (keep-warm, the usage probe, a switch)
     // takes this lock: one refresh per login at a time.
     let Ok(_slot) = store::lock_slot(tool, &e.id, Duration::from_secs(5)) else { return Ok(None) };
     // Re-check under it: a switch may have made it live, or a pinned
@@ -2491,7 +2491,7 @@ fn warm_one(
                                 u.detail = Some(Some(format!("The provider refused this token's saved sign-in twice ({detail}). Sign it in again.")));
                             } else {
                                 crate::log_debug!("[llm-accounts] keep-warm {}/{}: refresh token refused once ({detail}); checked again next pass", tool.as_str(), e.id);
-                                u.detail = Some(Some(format!("The provider refused this token's saved sign-in once ({detail}); K2 checks again on its next pass.")));
+                                u.detail = Some(Some(format!("The provider refused this token's saved sign-in once ({detail}); it's checked again on the next pass.")));
                             }
                         }
                         // The slot changed under the refresh (a CLI wrote

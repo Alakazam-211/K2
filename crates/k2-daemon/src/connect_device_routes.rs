@@ -266,7 +266,7 @@ pub fn browser_refused() -> CliResponse {
     refusal(
         "403 Forbidden",
         "device_pairing_not_from_browser",
-        "pairing codes can't be made from a browser or through <label>.app.k2.dev. From the Companion, call https://<label>.k2.dev directly; or ask the server's owner for a code (Settings → Network → K2 Companion → Pair a phone, or k2 users pair-phone).",
+        "pairing codes can't be made from a browser or through <label>.app.k2.dev. From the Companion, call https://<label>.k2.dev directly; or ask the server's owner for a code (Settings → Network → Companion → Pair a phone, or k2 users pair-phone).",
     )
 }
 
@@ -598,7 +598,7 @@ pub fn notify_paired(username: &str, device_name: &str, minted_by: &str) {
     let name = notice_safe(device_name);
     let body = format!(
         "A phone named \"{name}\" was paired to the login **{username}** (code made by {minted_by}).\n\n\
-         Not you? Revoke it: Settings → Network → K2 Companion → Paired phones, or `k2 users phones` then `k2 users unpair-phone <id>`. \
+         Not you? Revoke it: Settings → Network → Companion → Paired phones, or `k2 users phones` then `k2 users unpair-phone <id>`. \
          Changing the login's password also ends every phone paired to it."
     );
     if let Err(e) = crate::feedback_routes::file_people_notice(

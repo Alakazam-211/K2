@@ -51,6 +51,18 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Commands refuse options they don't use** (vault, compute, done, reserve) instead of ignoring them, and their help now matches what they do.
 - **Multiplayer kit 0.21.0** and its file packs.
 
+### Windows
+- **Windows ships with every release again,** starting with this one (Alpha).
+- **Slide previews, file export and 3D scenes work on Windows:** the installer now includes their helper programs.
+- **Live documents open on Windows.**
+- **Static Apps and static files load on Windows** instead of answering "not found", and a doc share can name a single file.
+- **`k2` commands that send a file work on Windows** (for example `k2 doc export`), instead of failing with "no answer from the K2 daemon".
+- **Stopping a published service on purpose is no longer recorded as a crash.**
+- **Smaller fixes:**
+  - tool hooks accept Windows drive paths;
+  - a new file next to a folder of the same name works;
+  - saved templates use / in their paths.
+
 ### Web app
 - **The web app no longer keeps sign-in tokens or passwords in the browser's saved storage.** A sign-in lasts for the browser tab (a reload keeps it); a new tab asks you to sign in again, and the web app has no "Remember password". Anything an older version saved there is removed when the page loads. The desktop app still uses your system keychain.
 

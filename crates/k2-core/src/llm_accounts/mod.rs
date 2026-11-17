@@ -24,6 +24,7 @@
 //! Nothing in this module returns a token to a caller outside it: the
 //! public shapes ([`Entry`], [`store::CredMeta`]) carry metadata only.
 
+pub mod auto_next;
 pub mod identity;
 pub mod pins;
 pub mod slots;
@@ -723,17 +724,33 @@ pub(crate) fn mark_removed(conn: &Connection, id: &str) -> Result<(), WalletErro
 }
 
 /// The entry after the active one (label order, wrapping) that has a
-/// saved sign-in: the one-click "switch to next login". Never automatic.
+/// saved sign-in: the one-click "switch to next login". Automatic only
+/// when a person turned auto-rotate on ([`auto_next`]), which takes the
+/// same pick with the tokens at their limit left out.
 pub fn next_signed_in(conn: &Connection, tool: Tool) -> Result<Option<Entry>, WalletError> {
+    next_signed_in_excluding(conn, tool, &[])
+}
+
+/// [`next_signed_in`], skipping the ids in `exclude` (auto-rotate leaves
+/// out tokens at their limit or whose usage check is backing off).
+pub fn next_signed_in_excluding(conn: &Connection, tool: Tool, exclude: &[String]) -> Result<Option<Entry>, WalletError> {
+    Ok(next_candidates(conn, tool)?.into_iter().find(|e| !exclude.iter().any(|x| x == &e.id)))
+}
+
+/// Every token Next could move to, in the order it tries them: after the
+/// active one (label order, wrapping), subscriptions with a saved sign-in
+/// only.
+pub fn next_candidates(conn: &Connection, tool: Tool) -> Result<Vec<Entry>, WalletError> {
     let entries = list_for(conn, tool)?;
     if entries.len() < 2 {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let active = active_id(conn, tool)?;
     let start = active
         .as_deref()
         .and_then(|a| entries.iter().position(|e| e.id == a))
         .unwrap_or(entries.len() - 1);
+    let mut out = Vec::new();
     for step in 1..entries.len() {
         let e = &entries[(start + step) % entries.len()];
         // The pool cycle skips API keys (billed per token: only an
@@ -747,10 +764,10 @@ pub fn next_signed_in(conn: &Connection, tool: Tool) -> Result<Option<Entry>, Wa
             && slots::slot_meta(tool, &e.id).ended.is_none()
             && !pins::is_pinned(conn, &e.id)?
         {
-            return Ok(Some(e.clone()));
+            out.push(e.clone());
         }
     }
-    Ok(None)
+    Ok(out)
 }
 
 #[cfg(test)]

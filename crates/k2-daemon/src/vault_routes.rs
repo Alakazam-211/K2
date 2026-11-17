@@ -2485,6 +2485,10 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // N10 (0.46.6): a workspace's agent email notices (`secretId` =
     // projectId|senderAddress).
     crate::email_notify::CONFIRM_AGENT_ON,
+    // LLM subscription auto-rotate (Rosson 2026-11-17): turning it on is a
+    // person's own decision (it may conflict with the provider's terms), so
+    // never the owner token alone (`secretId` = the tool).
+    k2_core::llm_accounts::auto_next::CONFIRM_ACTION,
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

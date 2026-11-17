@@ -709,6 +709,10 @@ pub(super) const ROWS: &[Route] = &[
     // (Rosson 2026-10-20); the list stays readable for Members.
     post("/cli/llm/accounts/add", Member),
     post("/cli/llm/accounts/add-key", Member),
+    // Auto-rotate presses Next by itself: Admin and above, like Next;
+    // turning it on also needs the person's vault confirm (handler).
+    get("/cli/llm/accounts/auto-next", Member),
+    post("/cli/llm/accounts/auto-next/set", Admin),
     post("/cli/llm/accounts/clear-default", Admin),
     get("/cli/llm/accounts/for", Member),
     post("/cli/llm/accounts/for/refresh", Member),

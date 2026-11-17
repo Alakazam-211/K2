@@ -870,6 +870,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/llm/accounts/add-key",
         "/cli/llm/accounts/clear-default",
         "/cli/llm/accounts/for/refresh",
+        // Auto-rotate: the handler refuses both for a passport (owner_only):
+        // a person turns it on, in person, never an agent.
+        "/cli/llm/accounts/auto-next",
+        "/cli/llm/accounts/auto-next/set",
         // App users' wallets (0.46.3): an agent of an App's own workspace
         // with switch 2 reads and sets that App's fallback only (the
         // handler checks; every other /cli/app/wallet/* answers owner_only).

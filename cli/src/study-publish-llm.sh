@@ -221,7 +221,26 @@ SERVER DEFAULT
   to the tool itself stays the default (switch to another token first).
   When a session hits its limit, "Use next token" is one click on
   Settings → Language Models → Subs / Tokens (k2 llm tokens next <tool>).
-  K2 never rotates tokens on its own.
+  K2 never rotates tokens on its own unless a person turns on auto-rotate.
+
+AUTO-ROTATE (OPT-IN)
+  Off by default. When on for a tool, K2 presses "Use next token" by
+  itself once the server default subscription reaches 99% of its binding
+  usage window (the top-bar chip's number: e.g. Claude's 5-hour Session
+  or Weekly). It skips subscriptions that are at their limit themselves,
+  whose usage check is failing, or that are set for a workspace or chat,
+  and waits 10 minutes before another automatic switch. When none is
+  left, it doesn't switch and says once: "All your Claude subscriptions
+  are at their limit". Each switch is the same as Next (audit line,
+  "Switched to <label> automatically: <label> reached 99%").
+  Switching accounts automatically at the limit may go against the
+  provider's terms, so it is each person's own decision: an Admin or the
+  Owner turns it on, per tool, with their own confirm (Touch ID or a
+  password) on Settings → Language Models → Subs / Tokens or
+  k2 llm tokens auto-next <tool> on (off: ... off). Agents and K2
+  terminals can't turn it on or off; k2 llm tokens list shows whether
+  it's on. It stops acting if that person can no longer change the
+  server default.
 
 ADDING A SUBSCRIPTION
   Settings → Language Models → Subs / Tokens → Add a token. K2 runs the tool's own

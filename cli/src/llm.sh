@@ -2,9 +2,9 @@
 # (`k2 llm accounts` is a working alias.) One token per tool is the
 # SERVER DEFAULT, kept where the tool always keeps it; the other
 # subscriptions and API tokens wait in ~/.k2/llm-accounts. GET
-# /cli/llm/accounts/list|status|usage|login/status|pins|storage; POST
+# /cli/llm/accounts/list|status|usage|login/status|pins|storage|auto-next; POST
 # add|add-key|login|login/input|login/cancel|switch|next|rename|remove|
-# refresh|pin|unpin|storage/set (JSON bodies; route names are internal and
+# refresh|pin|unpin|storage/set|auto-next/set (JSON bodies; route names are internal and
 # unchanged).
 # `llm` is an `id` tool: inside a K2 terminal the request carries this
 # session's passport, and the daemon keeps passports read-only
@@ -23,6 +23,10 @@ k2 llm tokens — LLM tokens: subscriptions and API tokens
   k2 llm tokens login <tool> <label> [--device]      sign a subscription in again
   k2 llm tokens switch <tool> <label>                use this token as the server default (Admin or Owner)
   k2 llm tokens next <tool>                          use the next signed-in subscription (Admin or Owner)
+  k2 llm tokens auto-next [<tool> on|off] [--json]   auto-rotate: Next by itself when the subscription in
+                                                     use reaches 99% of its limit. Off by default; may go
+                                                     against the provider's terms, so a person turns it
+                                                     on with their own confirm (Admin or Owner)
   k2 llm tokens rename <tool> <label> <new-label>
   k2 llm tokens remove <tool> <label> [--clear-default]
                                                      kept in Trash; the server default API token,
@@ -222,6 +226,9 @@ for t in v.get("tools", []):
             time.strftime("%Y-%m-%d %H:%M", time.localtime(int(t["switchedAt"]))),
             (" by %s" % t["switchedBy"]) if t.get("switchedBy") else "")
     print("%s:%s" % (disp, since))
+    auto = t.get("autoNext") or {}
+    if auto.get("on"):
+        print("  auto-rotate: on (Next by itself at 99%%)%s" % (("; last: %s" % auto["lastLine"]) if auto.get("lastLine") else ""))
     for a in accts:
         mark = "*" if a.get("active") else " "
         if a.get("kind") == "api_key":
@@ -567,6 +574,53 @@ for i in items:
     print("%-7s %-22s %-5s %-9s %s%s" % (i.get("tool"), (i.get("label") or "-")[:22], "yes" if i.get("file") else "no", i.get("vault"), step, "  (removed)" if i.get("removed") else ""))
 '
             ;;
+        auto-next|auto-rotate)
+            # Auto-rotate: Next pressed by itself at 99% of the limit. Off by
+            # default; a person turns it on with their own confirm (Touch
+            # ID or a password), never an agent.
+            case "${#pos[@]}" in
+                0)
+                    _llma_get auto-next
+                    ;;
+                2)
+                    _llma_tool_ok "${pos[0]}"
+                    case "${pos[1]}" in
+                        on)
+                            local atok
+                            atok="$(_vault_confirm_token llm-auto-next "${pos[0]}" "auto-rotate ${pos[0]}")" || exit 3
+                            _llma_post auto-next/set "$(_llma_json tool "${pos[0]}" on __true__ confirmToken "$atok")"
+                            atok=""
+                            ;;
+                        off)
+                            _llma_post auto-next/set "$(_llma_json tool "${pos[0]}" on __false__)"
+                            ;;
+                        *) echo "usage: k2 llm tokens auto-next [<tool> on|off]" >&2; exit 2 ;;
+                    esac
+                    ;;
+                *) echo "usage: k2 llm tokens auto-next [<tool> on|off]" >&2; exit 2 ;;
+            esac
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+def who(p):
+    if not p:
+        return "-"
+    if p == "owner-token":
+        return "the owner"
+    return p[len("login:"):] if p.startswith("login:") else p
+for t in v.get("tools") or []:
+    if t.get("on"):
+        state = "on (turned on by %s%s)" % (who(t.get("by")), "" if t.get("byCanAct") else "; paused: they can no longer change the server default")
+    else:
+        state = "off"
+    print("%-7s %s" % (t.get("tool"), state))
+    if t.get("lastLine"):
+        print("        last: %s" % t["lastLine"])
+print()
+print(v.get("note") or "")
+'
+            ;;
         pins)
             [ "${#pos[@]}" -eq 0 ] || { echo "usage: k2 llm tokens pins [--json]" >&2; exit 2; }
             _llma_get pins
@@ -711,7 +765,7 @@ print(json.dumps({"tool": sys.argv[1], "label": sys.argv[2], "key": sys.stdin.re
             _setup_kessel_hint
             ;;
         *)
-            echo "usage: unknown llm tokens verb '$sub' (list|status|usage|add|add-key|login|switch|next|rename|remove|refresh|pin|unpin|pins|for — k2 llm tokens --help)" >&2
+            echo "usage: unknown llm tokens verb '$sub' (list|status|usage|add|add-key|login|switch|next|rename|remove|refresh|pin|unpin|pins|for|auto-next — k2 llm tokens --help)" >&2
             exit 2
             ;;
     esac

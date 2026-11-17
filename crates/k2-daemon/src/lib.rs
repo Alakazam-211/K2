@@ -482,6 +482,8 @@ pub mod zen_sign_cards;
 pub mod zen_history;
 pub mod llm_account_for;
 pub mod llm_accounts_routes;
+/// Auto-rotate for LLM subscriptions (opt-in, per person): the loop.
+pub mod llm_auto_next;
 /// Mobile dev (prd-mobile-dev-v1, 0.46.6): `/cli/sim/*`.
 pub mod sim_routes;
 /// Mobile dev S3: `/cli/sim/stream` (JPEG frames + people's input).

@@ -1988,6 +1988,9 @@ async fn async_main() {
     // storage switch go in before the wallet's boot import.
     llm_accounts_runtime::install_storage();
     llm_accounts_runtime::spawn();
+    // Auto-rotate (opt-in, per person): presses Next by itself when the
+    // live subscription reaches 99% of its limit. Headless.
+    crate::llm_auto_next::spawn();
     // App users' personal wallets (0.46.3): re-seal idle slots, keep them
     // warm, and the lifecycle (dormant after App access is lost, deleted
     // 30 days later). Headless: runs with no client attached.

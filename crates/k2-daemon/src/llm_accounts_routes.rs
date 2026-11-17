@@ -52,6 +52,12 @@ pub const CLEAR_DEFAULT: &str = "/cli/llm/accounts/clear-default";
 pub const STORAGE: &str = "/cli/llm/accounts/storage";
 /// Flip it (`{"storage":"files"|"vault"}`): Owner or Admin, audited.
 pub const STORAGE_SET: &str = "/cli/llm/accounts/storage/set";
+/// Auto-rotate ([`k2_core::llm_accounts::auto_next`]): which tools have it
+/// on, who turned it on, the loop's last line. People only.
+pub const AUTO_NEXT: &str = "/cli/llm/accounts/auto-next";
+/// Turn it on (`{"tool","on":true,"confirmToken"}`: Admin and above, with
+/// a vault confirm, never an agent) or off (`{"tool","on":false}`).
+pub const AUTO_NEXT_SET: &str = "/cli/llm/accounts/auto-next/set";
 
 /// The Claude sign-in warnings due for this caller (owner logins only;
 /// everyone else gets none): `{owner, warnings:[…]}`.
@@ -66,11 +72,11 @@ pub const FOR: &str = crate::llm_account_for::FOR;
 pub const FOR_REFRESH: &str = crate::llm_account_for::FOR_REFRESH;
 
 /// Read routes (passports allowed).
-pub const READ_ROUTES: &[&str] = &[LIST, STATUS, USAGE, LOGIN_STATUS, PINS, FOR, STORAGE, WARNINGS];
+pub const READ_ROUTES: &[&str] = &[LIST, STATUS, USAGE, LOGIN_STATUS, PINS, FOR, STORAGE, WARNINGS, AUTO_NEXT];
 /// POST-only routes (humans only).
 pub const POST_ROUTES: &[&str] = &[
     ADD, LOGIN, LOGIN_INPUT, LOGIN_CANCEL, SWITCH, NEXT, RENAME, REMOVE, REFRESH, PIN, UNPIN, ADD_KEY, CLEAR_DEFAULT,
-    FOR_REFRESH, STORAGE_SET, WARNINGS_DISMISS,
+    FOR_REFRESH, STORAGE_SET, WARNINGS_DISMISS, AUTO_NEXT_SET,
 ];
 
 /// Request bodies here are small JSON objects.
@@ -249,7 +255,7 @@ fn usage_for(e: &Entry) -> Value {
     usage_for_at(e, chrono::Utc::now())
 }
 
-fn usage_for_at(e: &Entry, now: chrono::DateTime<chrono::Utc>) -> Value {
+pub(crate) fn usage_for_at(e: &Entry, now: chrono::DateTime<chrono::Utc>) -> Value {
     use crate::subscription_usage as su;
     if crate::usage_store::single_record_on() {
         return crate::usage_store::served(e, now).unwrap_or(Value::Null);
@@ -348,12 +354,13 @@ fn switch_two_phase(
     b: &Body,
     key: &str,
     vendor: &dyn wallet::Refresher,
+    exclude: &[String],
 ) -> Result<(wallet::SwitchOutcome, Tool, Vec<String>), WalletError> {
     let (tool, target) = with_conn(|conn| -> Result<(Tool, Entry), WalletError> {
         let target = if next {
             let tool = Tool::parse(b.tool.as_deref().unwrap_or(""))
                 .ok_or_else(|| WalletError::UnknownTool(b.tool.clone().unwrap_or_default()))?;
-            wallet_core::next_signed_in(conn, tool)?.ok_or_else(|| WalletError::NotFound("no_next".into()))?
+            wallet_core::next_signed_in_excluding(conn, tool, exclude)?.ok_or_else(|| WalletError::NotFound("no_next".into()))?
         } else {
             let id = b.id.clone().unwrap_or_default();
             let tool_hint = match b.tool.as_deref() {
@@ -404,6 +411,203 @@ fn switch_two_phase(
     rt::notice_adopted(&out.adopted);
     out.adopted.splice(0..0, phase0);
     Ok((out, tool, warnings))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many switches went through [`run_switch`] on this thread (tests:
+    /// auto-rotate takes the same path as the Next button).
+    pub(crate) static RUN_SWITCH_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A switch as the Switch and Next buttons make it, with everything that
+/// follows one: the audit and daemon log line, the top-bar chip's event,
+/// the usage re-check and the wallet's changed event. Auto-rotate
+/// ([`crate::llm_auto_next`]) presses Next through this same function,
+/// with `exclude` naming the tokens at their limit.
+fn run_switch(
+    next: bool,
+    b: &Body,
+    key: &str,
+    ingress: &str,
+    vendor: &dyn wallet::Refresher,
+    exclude: &[String],
+) -> Result<(wallet::SwitchOutcome, Tool, Vec<String>), WalletError> {
+    #[cfg(test)]
+    RUN_SWITCH_CALLS.with(|c| c.set(c.get() + 1));
+    match switch_two_phase(next, b, key, vendor, exclude) {
+        Ok((out, tool, warnings)) => {
+            if !out.already_active {
+                // One line per switch, in the audit log and the
+                // daemon log: "llm: claude default A → B by <who>".
+                let from = out.from_label.as_deref().unwrap_or("(none)");
+                let line = format!("{} default {} → {}", tool.as_str(), from, out.to_label);
+                k2_core::log_debug!(
+                    "llm: {line} by {key} (saved outgoing: {}, profile: {}, verified: {})",
+                    out.saved_outgoing,
+                    out.profile_swapped,
+                    out.verified_by.map(|s| s.describe()).unwrap_or("no")
+                );
+                audit("llm_accounts.switch", key, &line, ingress);
+                // The top-bar chip shows the new default's numbers
+                // now, not the old token's until the re-check
+                // lands (the single-record path reads the live
+                // token on every GET already).
+                if crate::usage_store::single_record_on() || crate::usage_switch::follow_live_owner(tool.as_str()) {
+                    crate::session_events::emit_subscription_usage_changed(Some(tool.as_str()), None, "switch");
+                }
+                // An outgoing token the CLIs lost holds an older
+                // copy: not probed (or refreshed) right now.
+                recheck_after_switch(tool, out.from.clone().filter(|_| !out.outgoing_unsaved));
+            }
+            crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));
+            Ok((out, tool, warnings))
+        }
+        Err(e) => {
+            if let WalletError::Moved(_, adopted) = &e {
+                rt::notice_adopted(adopted);
+            }
+            if matches!(e.code(), "account_mismatch" | "account_moved" | "signing_in" | "changed") {
+                audit("llm_accounts.switch_refused", key, e.code(), ingress);
+                k2_core::log_debug!("llm: switch refused for {key}: {}", e.code());
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Press Next for `tool` (auto-rotate), leaving out `exclude`.
+pub(crate) fn run_next(
+    tool: Tool,
+    key: &str,
+    ingress: &str,
+    vendor: &dyn wallet::Refresher,
+    exclude: &[String],
+) -> Result<(wallet::SwitchOutcome, Tool, Vec<String>), WalletError> {
+    let b = Body { tool: Some(tool.as_str().to_string()), ..Default::default() };
+    run_switch(true, &b, key, ingress, vendor, exclude)
+}
+
+// ── Auto-rotate (opt-in, per person) ────────────────────────────────
+
+use k2_core::llm_accounts::auto_next;
+
+/// The vault confirm's actor for a wallet key: `owner` for the owner
+/// token, `connect:<name>` for a login (the stamps the vault mints for).
+fn confirm_stamp(key: &str) -> Option<String> {
+    if key == "owner-token" {
+        return Some("owner".into());
+    }
+    key.strip_prefix("login:").filter(|u| !u.is_empty()).map(|u| format!("connect:{u}"))
+}
+
+/// `403 vault_confirm_required`, naming the action and id the confirm
+/// binds to (the CLI and Settings ask for it, then send it back).
+fn auto_next_confirm_required(tool: Tool) -> CliResponse {
+    CliResponse {
+        status: status_line(403),
+        content_type: "application/json",
+        body: json!({"error": {
+            "code": "vault_confirm_required",
+            "hint": format!(
+                "turning on auto-rotate for {} is a person's own decision: confirm it's you (Touch ID, your login or the vault password; a confirm works once, for this step, within 60 seconds). Settings → Language Models → Subs / Tokens, or k2 llm tokens auto-next {} on from a terminal outside K2",
+                tool.display(),
+                tool.as_str()
+            ),
+            "action": auto_next::CONFIRM_ACTION,
+            "secretId": tool.as_str(),
+        }})
+        .to_string(),
+    }
+}
+
+/// The short form on each tool of the list: on, who turned it on (people
+/// only) and the loop's last line.
+fn auto_next_brief(s: Option<&auto_next::Setting>, human: bool) -> Value {
+    json!({
+        "on": s.is_some(),
+        "by": if human { json!(s.map(|s| s.person.clone())) } else { Value::Null },
+        "lastLine": s.and_then(|s| s.last_line.clone()),
+        "lastLineAt": s.and_then(|s| s.last_line_at),
+    })
+}
+
+/// GET auto-next: every subscription tool's setting.
+fn auto_next_doc(key: &str, blocked: Option<&str>) -> Result<Value, WalletError> {
+    let rows = with_conn(auto_next::list)?;
+    let tools: Vec<Value> = Tool::SUBSCRIPTION
+        .iter()
+        .map(|t| {
+            let s = rows.iter().find(|r| r.tool == t.as_str());
+            json!({
+                "tool": t.as_str(),
+                "display": t.display(),
+                "on": s.is_some(),
+                "by": s.map(|s| s.person.clone()),
+                "byYou": s.is_some_and(|s| s.person == key),
+                // The loop acts only while that person may still change
+                // the server default.
+                "byCanAct": s.map(|s| crate::llm_auto_next::person_may_act(&s.person)),
+                "enabledAt": s.map(|s| s.enabled_at),
+                "lastSwitchAt": s.and_then(|s| s.last_switch_at),
+                "lastLine": s.and_then(|s| s.last_line.clone()),
+                "lastLineAt": s.and_then(|s| s.last_line_at),
+                "allAtLimitSince": s.and_then(|s| s.exhausted_at),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "tools": tools,
+        "thresholdPercent": auto_next::THRESHOLD_PERCENT,
+        "cooldownSecs": auto_next::COOLDOWN_SECS,
+        "note": auto_next::TERMS_NOTE,
+        "confirmAction": auto_next::CONFIRM_ACTION,
+        // May THIS caller turn it on or off? Admin and above (it presses Next).
+        "canChange": blocked.is_none(),
+        "changeReason": blocked,
+    }))
+}
+
+/// POST auto-next/set. The caller is a person who may press Next
+/// (checked in [`handle`]); turning it ON also needs their vault confirm,
+/// so the owner token alone (which an agent can fall back to) can't.
+fn set_auto_next(tool: Tool, on: bool, confirm: Option<&str>, key: &str, ingress: &str) -> Result<Value, CliResponse> {
+    if !tool.subscription_supported() {
+        return Err(refuse(
+            409,
+            "no_subscriptions",
+            format!("{} has API tokens only; auto-rotate moves between subscriptions", tool.display()),
+        ));
+    }
+    if on {
+        let Some(stamp) = confirm_stamp(key) else {
+            return Err(refuse(403, "person_only", "auto-rotate is turned on by a person"));
+        };
+        let Some(token) = confirm.map(str::trim).filter(|t| !t.is_empty()) else {
+            audit("llm_accounts.auto_next_refused", key, "vault_confirm_required", ingress);
+            return Err(auto_next_confirm_required(tool));
+        };
+        let vault = crate::vault::get().map_err(|_| refuse(503, "vault_closed", "the vault isn't open yet; try again in a moment"))?;
+        if vault.confirm.take(token, auto_next::CONFIRM_ACTION, Some(tool.as_str()), &stamp).is_err() {
+            audit("llm_accounts.auto_next_refused", key, "vault_confirm_required", ingress);
+            return Err(auto_next_confirm_required(tool));
+        }
+        with_conn(|conn| auto_next::turn_on(conn, tool, key, chrono::Utc::now().timestamp())).map_err(wallet_err)?;
+        audit("llm_accounts.auto_next_on", key, tool.as_str(), ingress);
+        k2_core::log_debug!("llm: auto-rotate ON for {} by {key}", tool.as_str());
+    } else {
+        let was = with_conn(|conn| auto_next::turn_off(conn, tool)).map_err(wallet_err)?;
+        if was {
+            audit("llm_accounts.auto_next_off", key, tool.as_str(), ingress);
+            k2_core::log_debug!("llm: auto-rotate off for {} by {key}", tool.as_str());
+        }
+    }
+    crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));
+    if on {
+        // Already at the limit? Act now, not at the next tick.
+        crate::llm_auto_next::kick();
+    }
+    auto_next_doc(key, None).map_err(wallet_err)
 }
 
 /// `refresh {usage:true}` for every token (Settings → LLMs opening) runs
@@ -580,6 +784,7 @@ fn list_doc(human: bool, who_key: Option<&str>, default_blocked: Option<&str>) -
         }
         Ok(v)
     })?;
+    let auto = with_conn(wallet_core::auto_next::list)?;
     for (tool, active, live, entries, info) in accounts_by_tool {
         let accounts: Vec<Value> = entries
             .iter()
@@ -601,13 +806,16 @@ fn list_doc(human: bool, who_key: Option<&str>, default_blocked: Option<&str>) -
             "loginMethod": if tool.subscription_supported() { json!(wallet::login_method(tool)) } else { Value::Null },
             "accounts": accounts,
             "pins": pins,
+            // Auto-rotate (opt-in, per person): on, and (people only) who
+            // turned it on. The full view is GET auto-next.
+            "autoNext": auto_next_brief(auto.iter().find(|a| a.tool == tool.as_str()), human),
         }));
     }
     for (id, display) in wallet_core::NOT_YET {
         tools.push(json!({
             "tool": id, "display": display, "supported": false, "subscription": false, "apiKeys": false,
             "activeId": Value::Null, "liveAccountId": Value::Null, "switchedAt": Value::Null, "switchedBy": Value::Null,
-            "loginMethod": Value::Null, "accounts": [], "pins": [],
+            "loginMethod": Value::Null, "accounts": [], "pins": [], "autoNext": auto_next_brief(None, human),
         }));
     }
     let logins: Vec<Value> = match who_key {
@@ -672,6 +880,11 @@ struct Body {
     /// sign-in it was about.
     step: Option<String>,
     epoch: Option<i64>,
+    /// `auto-next/set`: on or off.
+    on: Option<bool>,
+    /// `auto-next/set` with `on: true`: the person's vault confirm
+    /// (action `llm-auto-next`, bound to the tool).
+    confirm_token: Option<String>,
 }
 
 /// The conversation a chat pin follows: the body's `conversationId`, else
@@ -783,7 +996,8 @@ pub fn handle(
     // chat on Server default uses: Admin and above, like a switch. Other
     // tokens' sign-ins are not covered by this rule.
     let signs_in_default = path == LOGIN && parse_body(body).is_ok_and(|b| b.id.as_deref().is_some_and(is_server_default));
-    if path == SWITCH || path == NEXT || path == CLEAR_DEFAULT || clears_default || signs_in_default {
+    // Auto-rotate presses Next by itself: the same gate (on and off).
+    if path == SWITCH || path == NEXT || path == CLEAR_DEFAULT || path == AUTO_NEXT_SET || clears_default || signs_in_default {
         if let Some(r) = default_change_refusal(&caller) {
             audit("llm_accounts.switch_refused", key.as_deref().unwrap_or("-"), "admin_required", ingress);
             return r;
@@ -879,6 +1093,15 @@ pub fn handle(
             }
             let items = params.get("items").map(String::as_str) != Some("0");
             ok(rt::storage_status(items))
+        }
+        AUTO_NEXT => {
+            if !human {
+                return refuse(403, "owner_only", "auto-rotate is shown to people only (Settings → Language Models → Subs / Tokens)");
+            }
+            match auto_next_doc(key.as_deref().unwrap_or(""), default_change_blocked(&caller)) {
+                Ok(v) => ok(v),
+                Err(e) => wallet_err(e),
+            }
         }
         PINS => {
             let res = with_conn(|conn| -> Result<Vec<Value>, WalletError> {
@@ -1014,52 +1237,29 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                 Err((code, c, hint)) => refuse(code, c, hint),
             }
         }
-        SWITCH | NEXT => {
-            let res = switch_two_phase(path == NEXT, &b, &key, &rt::DaemonRefresher);
-            match res {
-                Ok((out, tool, warnings)) => {
-                    if !out.already_active {
-                        // One line per switch, in the audit log and the
-                        // daemon log: "llm: claude default A → B by <who>".
-                        let from = out.from_label.as_deref().unwrap_or("(none)");
-                        let line = format!("{} default {} → {}", tool.as_str(), from, out.to_label);
-                        k2_core::log_debug!(
-                            "llm: {line} by {key} (saved outgoing: {}, profile: {}, verified: {})",
-                            out.saved_outgoing,
-                            out.profile_swapped,
-                            out.verified_by.map(|s| s.describe()).unwrap_or("no")
-                        );
-                        audit("llm_accounts.switch", &key, &line, ingress);
-                        // The top-bar chip shows the new default's numbers
-                        // now, not the old token's until the re-check
-                        // lands (the single-record path reads the live
-                        // token on every GET already).
-                        if crate::usage_store::single_record_on() || crate::usage_switch::follow_live_owner(tool.as_str()) {
-                            crate::session_events::emit_subscription_usage_changed(Some(tool.as_str()), None, "switch");
-                        }
-                        // An outgoing token the CLIs lost holds an older
-                        // copy: not probed (or refreshed) right now.
-                        recheck_after_switch(tool, out.from.clone().filter(|_| !out.outgoing_unsaved));
-                    }
-                    crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));
-                    let account = entry_json(&out.to, true).unwrap_or(Value::Null);
-                    ok(json!({"switch": out, "account": account, "warnings": warnings, "note": rt::SWITCH_NOTE}))
-                }
-                Err(WalletError::NotFound(k)) if k == "no_next" => refuse(
-                    404,
-                    "no_next",
-                    "there is no other signed-in subscription for that tool; add one on Settings → Language Models → Subs / Tokens",
-                ),
-                Err(e) => {
-                    if let WalletError::Moved(_, adopted) = &e {
-                        rt::notice_adopted(adopted);
-                    }
-                    if matches!(e.code(), "account_mismatch" | "account_moved" | "signing_in" | "changed") {
-                        audit("llm_accounts.switch_refused", &key, e.code(), ingress);
-                        k2_core::log_debug!("llm: switch refused for {key}: {}", e.code());
-                    }
-                    wallet_err(e)
-                }
+        SWITCH | NEXT => match run_switch(path == NEXT, &b, &key, ingress, &rt::DaemonRefresher, &[]) {
+            Ok((out, _tool, warnings)) => {
+                let account = entry_json(&out.to, true).unwrap_or(Value::Null);
+                ok(json!({"switch": out, "account": account, "warnings": warnings, "note": rt::SWITCH_NOTE}))
+            }
+            Err(WalletError::NotFound(k)) if k == "no_next" => refuse(
+                404,
+                "no_next",
+                "there is no other signed-in subscription for that tool; add one on Settings → Language Models → Subs / Tokens",
+            ),
+            Err(e) => wallet_err(e),
+        },
+        AUTO_NEXT_SET => {
+            let tool = match tool_of(&b.tool) {
+                Ok(t) => t,
+                Err(r) => return r,
+            };
+            let Some(on) = b.on else {
+                return refuse(400, "bad_request", "on (true or false) is required");
+            };
+            match set_auto_next(tool, on, b.confirm_token.as_deref(), &key, ingress) {
+                Ok(v) => ok(v),
+                Err(r) => r,
             }
         }
         ADD_KEY => {
@@ -1349,7 +1549,7 @@ mod tests {
         let body = Body { id: Some(b_id.to_string()), ..Default::default() };
         let handle = std::thread::spawn(move || {
             let vendor = SlowVendor { entered: Mutex::new(tx) };
-            switch_two_phase(false, &body, "owner-token", &vendor)
+            switch_two_phase(false, &body, "owner-token", &vendor, &[])
         });
         (rx, handle)
     }

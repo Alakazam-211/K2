@@ -478,7 +478,7 @@ core (off by default), and reads drawings only: K2 saves no drawing edits yet.
 | **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-cad`, `v0.1.0` (its release commit `e551975`; the tag is not cut yet) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE`. It holds no code copied from another project, and one table of data taken from one (below); `PROVENANCE.md` says what each part was written from. Its tables are written in its own words from the DXF reference and the Open Design Specification for .dwg files, read as sources of facts; no text or tables are copied from them |
 | **Dependencies** | the kit only (above) |
-| **Formats** | DXF and DWG are trademarks of their owner. These readers read files in those formats and are not affiliated with, endorsed by or sponsored by that owner. The names are used here only to name the file formats |
+| **Formats** | DXF and DWG are trademarks of their owner. These readers read files in those formats; they are not affiliated with, endorsed by or sponsored by that owner, and make no compatibility claim. The names are used here only to name the file formats |
 
 **The colour-number palette.** The 256 RGB values of
 `vendor/k2-mpc-cad/crates/cad-model/src/draw/aci.rs` (`TABLE`) are taken, as data, from ezdxf's

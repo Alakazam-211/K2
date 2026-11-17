@@ -1063,7 +1063,7 @@ WORKTREES
   prints "source: worktree .claude/worktrees/x @ 1a2b3c4d +dirty (…)".
   From a folder outside the workspace, pass --workspace <handle>.
 
-NETWORK (--network none, --netns-dummy; k2-node 0.46.14 on the node)
+NETWORK (--network none, --netns-dummy; k2-node 0.46.15 on the node)
   A job's network is its node's setting (the node policy, narrowed by
   this server's share there: k2 compute nodes). A job can narrow it for
   itself, never widen it:
@@ -1308,7 +1308,7 @@ COMMON ERRORS
   job_network_invalid    --network other than none, or a --netns-dummy name or
                          address outside the rules (NETWORK); exit 2
   job_network_needs_update  --network none / --netns-dummy, but no node for you
-                         runs a job at that network yet (k2-node 0.46.14, its
+                         runs a job at that network yet (k2-node 0.46.15, its
                          job wall; Linux for --netns-dummy); exit 3
   job_network_unavailable  the node can't run the job at its --network now
                          (its wall or root executor changed since): the job

@@ -144,6 +144,11 @@ ACCESS (who may do what: switches, owners, workspaces)
       guests-chat, the owner's).
   member_read_only (exit 3)
       fix: Ask an Admin or the owner to make the change.
+  no_email (exit 3)
+      fix: Ask for one password set instead (k2 app user password <username>
+      --password-stdin), or ask your human to put an email on the login (k2
+      app user email <username> --email <address>), then ask for the reset
+      again.
   not_a_test_guest (exit 3)
       fix: List them: k2 app test-guests <app-id>
   owner_only (exit 3)
@@ -188,6 +193,10 @@ APPROVALS (held requests the owner answers)
   too_many_pending (exit 3)
       fix: Withdraw one (k2 app deny <id>) or wait for the owner. Yours: k2
       app approvals
+  user_change_failed (exit 3)
+      fix: Read the reason (k2 explain <code> for the inner code), fix what
+      it names, then run the same k2 app user command again; the owner
+      approves the new request.
   vault_confirm_required (exit 3)
       fix: The owner runs the command in person; it asks for the confirm
       (for example k2 app approve <id>).

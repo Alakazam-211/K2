@@ -123,6 +123,11 @@ fn load_dir(root: &Path, dir: &Path, depth: usize, t: &mut Tree) -> Result<(), S
 fn load_zip(path: &Path, t: &mut Tree) -> Result<(), String> {
     let f = fs::File::open(path).map_err(|e| format!("can't open {}: {e}", path.display()))?;
     let mut z = zip::ZipArchive::new(f).map_err(|e| format!("{} is not a folder or a zip bundle: {e}", path.display()))?;
+    // The report lists the central directory; a tool that unpacks by the
+    // local headers could write other names. A bundle whose two disagree
+    // is refused whole.
+    z.validate_header_consistency()
+        .map_err(|e| format!("{} is refused: its local headers disagree with its central directory ({e})", path.display()))?;
     for i in 0..z.len() {
         let mut entry = match z.by_index(i) {
             Ok(e) => e,

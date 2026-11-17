@@ -107,6 +107,33 @@ fn a_zip_bundle_refuses_escaping_paths_and_oversized_entries() {
 }
 
 #[test]
+fn a_zip_whose_local_header_names_another_file_is_refused() {
+    let s = Scratch::new("hdr");
+    let zpath = s.0.join("twofaced.k2garden");
+    let mut bytes = Vec::new();
+    {
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+        let o = zip::write::SimpleFileOptions::default();
+        z.start_file("manifest.json", o).unwrap_or_else(|e| panic!("{e}"));
+        z.write_all(MANIFEST.as_bytes()).unwrap_or_else(|e| panic!("{e}"));
+        z.start_file("ok.js", o).unwrap_or_else(|e| panic!("{e}"));
+        z.write_all(b"1").unwrap_or_else(|e| panic!("{e}"));
+        z.finish().unwrap_or_else(|e| panic!("{e}"));
+    }
+    fs::write(&zpath, &bytes).unwrap_or_else(|e| panic!("write: {e}"));
+    let honest = inspect(&zpath).unwrap_or_else(|e| panic!("a consistent zip inspects: {e}"));
+    assert_eq!(honest["summary"]["files"], 2, "{honest}");
+    // Rename the entry in its local header only (same length): the central
+    // directory still says ok.js.
+    let at = bytes.windows(5).position(|w| w == b"ok.js").unwrap_or_else(|| panic!("local header name"));
+    bytes[at..at + 5].copy_from_slice(b"ev.js");
+    assert!(bytes.windows(5).any(|w| w == b"ok.js"), "the central directory keeps the name");
+    fs::write(&zpath, &bytes).unwrap_or_else(|e| panic!("write: {e}"));
+    let e = inspect(&zpath).err().unwrap_or_else(|| panic!("a two-faced zip must be refused"));
+    assert!(e.contains("local headers disagree"), "{e}");
+}
+
+#[test]
 fn not_a_folder_or_zip_is_an_error() {
     let s = Scratch::new("bad");
     write(&s.0, "x.txt", b"hello");

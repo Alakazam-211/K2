@@ -284,6 +284,8 @@ pub mod cell_server;
 pub mod slow_request;
 // gzip for JSON that leaves this machine; ETag/304 on the projects list.
 pub mod response_wire;
+// The k5 CLI's usage counters (X-K5-* headers, migration 0308).
+pub mod cli_usage;
 pub mod spawn_steps;
 // The daemon's own stdout/stderr log files rotate at 50 MB (3 kept).
 pub mod stderr_log;

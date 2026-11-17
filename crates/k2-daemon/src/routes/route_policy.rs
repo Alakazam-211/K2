@@ -506,6 +506,8 @@ pub const GET_READS_WITH_HOUSEKEEPING: &[(&str, &str)] = &[
     ("/cli/auth/device/pair-code/status", "moves pairing codes whose ten minutes ran out to expired (and reports them on the events bus)"),
     ("/cli/auth/devices", "validating the caller's session may reap it or slide a paired phone's expiry"),
     ("/cli/auth/whoami", "validating a session may reap an expired one"),
+    // R1 slice 10: the owner's read of the k5 CLI's usage counts.
+    ("/cli/cli-usage", "writes the usage counts still in memory to their table first (the 60 s flush, early)"),
     // 0.46.10 C1/C3a: lists held trust requests (approve, deny and withdraw
     // are POST routes); listing marks requests past their time expired.
     ("/cli/compute/trust/requests", "moves held trust requests whose time ran out to expired"),

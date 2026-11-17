@@ -1934,6 +1934,9 @@ async fn handle_one_request(
         super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         return DispatchOutcome::Done;
     }
+    // k5 CLI usage (R1 slice 10): count this request's X-K5-* claims when
+    // its credential checks out. A count only: it never gates anything.
+    crate::cli_usage::note_tcp(&headers_blob, &query, state.token.as_str()).await;
 
     // A′ (app-mobile-access-v1, 0.46.3): the catalog is the wall for App
     // passes on the main port too. A live `k2skn_` pass on a route that is
@@ -2142,6 +2145,15 @@ async fn handle_one_request(
         crate::pair_page::AASA => {
             let _ = stream.read(&mut buf).await;
             crate::pair_page::send_aasa(&mut *stream).await;
+        }
+        // R1 slice 10: the k5 CLI's usage counts, owner only (`cli_usage::handle`).
+        crate::cli_usage::ROUTE => {
+            let _ = stream.read(&mut buf).await;
+            let (q, owner) = (query.clone(), state.token.to_string());
+            let r = tokio::task::spawn_blocking(move || crate::cli_usage::handle(&q, &owner))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         "/ping" => {
             let _ = stream.read(&mut buf).await;

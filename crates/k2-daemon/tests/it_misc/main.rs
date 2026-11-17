@@ -16,6 +16,7 @@ fn runner_guard() {
 }
 
 mod airgap_lan_integration;
+mod cli_usage_integration;
 mod clone_routes_integration;
 mod connect_gap_routes_integration;
 mod connect_proxy_integration;

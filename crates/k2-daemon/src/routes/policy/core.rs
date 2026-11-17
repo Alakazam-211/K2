@@ -219,6 +219,10 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/claude-auth/refresh-now", Member),
     get("/cli/claude-auth/status", Member),
     post("/cli/claude-auth/uninstall-scheduler", Member),
+    // R1 slice 10: the k5 CLI's usage counts, every row. The owner only
+    // (the handler takes the owner token or an Owner login; a passport is
+    // refused). K2 signed off this row.
+    get("/cli/cli-usage", Owner),
     // Agent clone proposals (prd-clone-carries-threads-and-vault-v1 CL21).
     // A passport proposes/lists/withdraws its own; approve/deny/finish are
     // Owner/Admin people (the handler refuses passports).

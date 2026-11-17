@@ -597,6 +597,10 @@ mod unix_impl {
             }
         };
 
+        // k5 CLI usage (R1 slice 10): count this request's X-K5-* claims,
+        // now that its passport is authorized here. A count only.
+        crate::cli_usage::note_cell(&head, &principal.workspace_uuid).await;
+
         // Sender identity is stamped server-side; body never trusted for it.
         // C2: inbox routes use `project=` as the TARGET resource (compose
         // into another workspace, list that inbox, …) — preserve across

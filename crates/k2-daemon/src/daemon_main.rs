@@ -1737,6 +1737,9 @@ async fn async_main() {
     crate::postal_net::start();
     boot_status::set_ready();
     boot_clock.ready();
+    // R1 slice 10: the k5 CLI's usage counts reach their table every 60 s
+    // (and at shutdown, below). The first pass loads the stored totals.
+    crate::cli_usage::spawn_flush_loop();
     if let Err(e) = crate::rt::spawn("boot-after-ready", after_ready_workspace_pass) {
         log_debug!("[daemon] the after-ready workspace pass did not start: {e}");
     }
@@ -2237,6 +2240,10 @@ async fn async_main() {
     // stuck on the database or a child that never answers is logged and
     // left behind, and the daemon still quits.
     use crate::daemon_stop::{bounded_step, SHUTDOWN_STEP_LIMIT};
+    // R1 slice 10: the k5 CLI's usage counts still in memory.
+    if let Some(Err(e)) = bounded_step("cli usage flush", SHUTDOWN_STEP_LIMIT, crate::cli_usage::flush).await {
+        log_debug!("[daemon] shutdown: the CLI usage counts were not written: {e}");
+    }
     let _ = bounded_step("live docs release", SHUTDOWN_STEP_LIMIT, || crate::docs::release("daemon stop")).await;
 
     // 0.40.48: release the tunnel BEFORE exiting. frpc is our child; if we

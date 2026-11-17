@@ -11,7 +11,7 @@
   },
   "extents": {
     "stated": null,
-    "computed": [-35, -10, 880, 102]
+    "computed": [-35, -10, 840, 102]
   },
   "settings": {
     "ltscale": 2,
@@ -224,7 +224,7 @@
       "name": "*D1",
       "base": [0, 0],
       "entities": 2,
-      "bbox": [0, -7.75, 100, -1.5],
+      "bbox": [0, -6.5, 100, -4],
       "bbox_q": "approx",
       "digest": "376fb0f659028781",
       "anon": true,

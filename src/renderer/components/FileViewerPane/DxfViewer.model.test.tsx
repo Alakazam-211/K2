@@ -88,6 +88,32 @@ describe('DxfViewer on the drawing model', () => {
     svg.getAttribute('viewBox')!.split(' ').map(Number).forEach((v, i) => expect(v).toBeCloseTo([want.x, want.y, want.w, want.h][i], 6))
   })
 
+  it('a moved text is highlighted, and framed, on the model’s own text box (the change and the drawing share one box)', async () => {
+    const text = MODEL.entities.find((e) => e.h === '@h:5C')!
+    const box = text.bbox!
+    const moved = {
+      schema: 'cad.change/1', format: 'dxf', from: 6, to: 7, pairing: 'kept',
+      versions: [{ version: 7, by: { pid: 'p_atlas', name: 'Atlas', kind: 'agent' }, verb: 'entity move' }],
+      entities: [{ address: '@h:5C', op: 'changed', kind: 'TEXT', layer: text.layer, owner: 'model', fields: ['geom'], bbox_before: [box[0] - 5, box[1], box[2] - 5, box[3]], bbox_after: box, bbox_q: 'approx', version: 7, by: 'p_atlas', identity: null }],
+      tables: [], blocks: [],
+    }
+    renderInPrimaryRoom(<DxfViewer text={BRACKET} filePath={PATH} model={model()} changes={fixtureCadChangeSource({ '7': moved })} view="@h:5C" />)
+    const svg = await screen.findByTestId('dxf-svg')
+    await screen.findByTestId('dxf-shapes')
+    // The view address frames the model's text box, about its centre (a small box grows to 2% of the drawing)…
+    const [x, y, w, h] = svg.getAttribute('viewBox')!.split(' ').map(Number)
+    expect(x + w / 2).toBeCloseTo((box[0] + box[2]) / 2, 6)
+    expect(-(y + h / 2)).toBeCloseTo((box[1] + box[3]) / 2, 6)
+    expect(w).toBeGreaterThanOrEqual(box[2] - box[0])
+    await act(async () => {
+      for (const fn of bus.handlers) fn({ kind: 'doc_version_changed', projectId: 'p', workspace: '/ws', rel: 'sampler.dxf', version: 7 })
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    // …and the highlight sits on the same box.
+    const after = (await screen.findAllByTestId('dxf-change-mark')).find((m) => m.getAttribute('data-was') === 'false')!
+    expect(after.getAttribute('data-box')).toBe(box.join(' '))
+  })
+
   it('the change highlight outlines a block’s placements on the model’s boxes', async () => {
     const block = {
       schema: 'cad.change/1', format: 'dxf', from: 6, to: 7, pairing: 'kept',

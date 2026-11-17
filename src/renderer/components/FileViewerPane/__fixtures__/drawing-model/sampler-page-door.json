@@ -113,7 +113,7 @@
       "visible": "insert",
       "drawn": false,
       "why": "attdef",
-      "bbox": [0, 1, 0.6, 1.25],
+      "bbox": [0, 0.95, 0.6, 1.25],
       "bbox_q": "approx"
     }
   ],

@@ -1727,7 +1727,7 @@
       },
       "visible": true,
       "drawn": true,
-      "bbox": [0, -7.75, 100, -1.5],
+      "bbox": [0, -6.5, 100, -4],
       "bbox_q": "approx",
       "geom": {
         "block": "@h:2F",

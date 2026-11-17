@@ -133,7 +133,7 @@ pub fn home_override_from(
     Err(crate::env_names::Malformed {
         name,
         value: value.to_string_lossy().into_owned(),
-        why: "the K2 home override must be an absolute path".to_string(),
+        why: format!("the {} home override must be an absolute path", crate::brand::PRODUCT_NAME),
     })
 }
 

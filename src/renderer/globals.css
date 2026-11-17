@@ -1,12 +1,14 @@
-/* Layer order: k2-chamfer-base, k2-focus-base (lowest) < tw < cm-overrides */
-/* < unlayered (highest).                                                    */
-/* The two base layers hold defaults that any Tailwind class must beat: the  */
-/* `position: relative` a chamfered box or a focus-ring box needs, which an  */
-/* element's own absolute / fixed / sticky class overrides.                  */
+/* Layer order: k2-chamfer-base, k2-focus-base, k2-material-base (lowest)    */
+/* < tw < cm-overrides < unlayered (highest).                                */
+/* The three base layers hold defaults that any Tailwind class must beat:    */
+/* the `position: relative` a chamfered box, a focus-ring box or a Veil      */
+/* Frost box (its ring, styles/glass/overrides.css) needs, which an          */
+/* element's own absolute / fixed / sticky class overrides. A Style's        */
+/* overrides.css may use these layers; they are ordered here, before it.    */
 /* Tailwind preflight in @layer tw can't override anything above it.         */
 /* Our CM layout overrides in @layer cm-overrides beat Tailwind but lose to  */
 /* CodeMirror's unlayered runtime style-mod styles (syntax highlighting etc) */
-@layer k2-chamfer-base, k2-focus-base, tw, cm-overrides;
+@layer k2-chamfer-base, k2-focus-base, k2-material-base, tw, cm-overrides;
 @import "tailwindcss" layer(tw);
 /* OA4: the mail reader views live outside the renderer (sdk/mail-reader). */
 @source "../../sdk/mail-reader/src";

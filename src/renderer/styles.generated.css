@@ -1020,10 +1020,14 @@
 [data-style="glass"][data-palette="veil"]:not([data-frost="tile"]) [data-k2-thread-zen] [data-zen-send]:disabled:not([data-zen-root] *) {
   --zen-surface: rgba(0, 0, 0, 0.05);
 }
-/* Veil's glass objects stay positioned boxes (they were for the ring this
-   recipe used to draw), so nothing placed inside them moves. A menu placed
-   absolute or fixed already is one. */
-[data-style="glass"][data-palette="veil"] :is([data-material="frost"]:not([class~="absolute"], [class~="fixed"]), [data-k2-thread-zen] [data-zen-send]):not([data-zen-root] *) { position: relative; }
+/* Veil's glass objects stay positioned boxes, so nothing placed inside them
+   moves. The default sits in a layer under Tailwind's (k2-material-base,
+   ordered in globals.css), so an element's own absolute, fixed or sticky
+   class, or an unlayered rule that places it, still wins: unlayered CSS
+   beats every layer whatever its specificity. */
+@layer k2-material-base {
+  [data-style="glass"][data-palette="veil"] :is([data-material="frost"], [data-k2-thread-zen] [data-zen-send]):not([data-zen-root] *) { position: relative; }
+}
 /* Thread view's merged objects (globals.css, "Merged and joined objects"):
    the same even edge along the merged outline (its width matches the
    phone's merged line: a 1px band at the edge colour), the same lift under

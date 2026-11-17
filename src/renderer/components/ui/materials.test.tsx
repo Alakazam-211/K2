@@ -14,7 +14,9 @@ vi.mock('@/lib/browser-overlay', () => ({ useBrowserOverlay: () => undefined }))
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
 const overrides = readFileSync(join(repo, 'styles', 'glass', 'overrides.css'), 'utf8')
-const rules = Array.from(overrides.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^}]*)\}/g), (m) => ({
+// A cascade layer's wrapper is not a rule: its rules are read as any other
+// (its stray closing brace matches nothing).
+const rules = Array.from(overrides.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@layer[^{;]*\{/g, '').matchAll(/([^{}]+)\{([^}]*)\}/g), (m) => ({
   selector: m[1].trim(),
   body: m[2],
 }))

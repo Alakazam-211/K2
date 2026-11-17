@@ -79,6 +79,16 @@ fn leaks(v: &Value) -> Vec<Value> {
     v["findings"].as_array().expect("findings").iter().filter(|f| f["code"] == "transcript_leak").cloned().collect()
 }
 
+/// Every file the leak findings name, as paths (native spelling on Windows).
+fn leak_files(v: &Value) -> Vec<PathBuf> {
+    leaks(v).iter().flat_map(|f| f["files"].as_array().expect("files").iter().map(|p| PathBuf::from(p.as_str().expect("file"))).collect::<Vec<_>>()).collect()
+}
+
+/// `s` as a JSON string literal (a Windows path's backslashes escaped).
+fn json_str(s: &str) -> String {
+    serde_json::to_string(s).expect("json string")
+}
+
 fn leak_names(v: &Value) -> Vec<String> {
     let mut n: Vec<String> = leaks(v).iter().map(|f| f["secret"].as_str().expect("secret").to_string()).collect();
     n.sort();
@@ -136,7 +146,7 @@ fn names_the_secret_and_file_and_never_the_value() {
     assert_eq!(f["fileCount"], 1, "{body}");
     assert_eq!(f["cli"], "claude", "{body}");
     assert_eq!(f["workspace"], "ops", "{body}");
-    assert_eq!(f["files"][0], file.to_string_lossy().as_ref(), "{body}");
+    assert_eq!(leak_files(&v), vec![file.clone()], "{body}");
     let msg = f["message"].as_str().expect("message");
     assert!(msg.contains("STRIPE_KEY appears in 1 file of ops's Claude transcripts (newest "), "{msg}");
     assert!(msg.contains("k2 vault rotate STRIPE_KEY") && msg.contains("Trash") && msg.contains("provider may already hold"), "{msg}");
@@ -224,13 +234,13 @@ fn an_agent_scans_only_its_own_workspace() {
     write(&e.home.path().join(".claude/history.jsonl"), &line_with(PLANTED));
     write(&e.home.path().join(".hermes/state.db"), &line_with(PLANTED));
     let codex = e.home.path().join(".codex/sessions/2026/11/08");
-    write(&codex.join("rollout-other.jsonl"), &format!("{{\"payload\":{{\"cwd\":\"{other}\"}}}}\n{}", line_with(PLANTED)));
+    write(&codex.join("rollout-other.jsonl"), &format!("{{\"payload\":{{\"cwd\":{}}}}}\n{}", json_str(&other), line_with(PLANTED)));
     write(&codex.join("rollout-unknown.jsonl"), &line_with(PLANTED));
     let (body, v) = scan(&e, &agent(&id));
     assert_eq!(leak_names(&v), Vec::<String>::new(), "{body}");
     assert_eq!(v["scan"]["files"], 0, "{body}");
 
-    write(&codex.join("rollout-mine.jsonl"), &format!("{{\"payload\":{{\"cwd\":\"{path}\"}}}}\n{}", line_with(PLANTED)));
+    write(&codex.join("rollout-mine.jsonl"), &format!("{{\"payload\":{{\"cwd\":{}}}}}\n{}", json_str(&path), line_with(PLANTED)));
     // The hash resolves links only for a folder that exists.
     std::fs::create_dir_all(format!("{path}/.worktrees/x")).expect("worktree dir");
     write(&claude_file(&e, &format!("{path}/.worktrees/x"), "c.jsonl"), &line_with(PLANTED));
@@ -314,7 +324,8 @@ fn per_agent_config_folders_are_scanned() {
     write(&in_custom, &line_with(PLANTED));
     let (body, v) = scan(&e, &owner());
     assert_eq!(v["scan"]["files"], 2, "{body}");
-    assert!(body.contains(in_slot.to_string_lossy().as_ref()) && body.contains(in_custom.to_string_lossy().as_ref()), "{body}");
+    let files = leak_files(&v);
+    assert!(files.contains(&in_slot) && files.contains(&in_custom), "{body}");
 }
 
 /// A link planted in a transcript folder reads nothing, a FIFO doesn't hang.

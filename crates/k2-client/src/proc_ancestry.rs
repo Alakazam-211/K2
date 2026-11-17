@@ -6,7 +6,7 @@
 //! - macOS: `proc_pidinfo(PROC_PIDTBSDINFO)` (`pbi_ppid`, `pbi_start_*`).
 //! - Linux: `/proc/<pid>/stat` fields 4 (`ppid`) and 22 (`starttime`).
 //! - Elsewhere (Windows): always `None`. Windows runs the conversation-only
-//!   owner check instead ([`crate::agent_hooks::owner::OwnerCheckMode`]).
+//!   owner check instead (`OwnerCheckMode` in k2-core's agent_hooks::owner).
 //!
 //! The start time is only compared with itself (pid-reuse detection), so
 //! its unit differs per OS and that is fine.

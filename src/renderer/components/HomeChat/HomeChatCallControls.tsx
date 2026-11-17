@@ -49,6 +49,7 @@ import { HomeChatCallingBar, HomeChatCallStrip, HomeChatRingCard, ringLayerTop, 
 import { serverLabelFor } from './serverLabel'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { ConversationCallPlace } from '@/components/Voice/CallPlace'
+import { UNKNOWN_CALLER } from '@/stores/voice-core'
 import { clientRectToCss } from '@/lib/app-zoom'
 
 function toastError(e: unknown): void {
@@ -225,7 +226,7 @@ export function HomeChatCallLayer(): JSX.Element | null {
       {rings.map((r) => {
         const people = byHost[r.hostKey]?.people?.people ?? []
         const who = people.find((p) => p.memberId !== null && p.memberId === r.startedBy) ?? null
-        const name = who?.displayName ?? 'Someone'
+        const name = who?.displayName ?? UNKNOWN_CALLER
         const k = `${r.hostKey}|${r.callId}`
         return (
           <div key={k} className="pointer-events-auto">

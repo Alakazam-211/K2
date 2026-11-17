@@ -20,11 +20,18 @@
 # listed as "fails on both" and does not fail the gate; nor does one that
 # fails on bash only (listed too: it points at a flaky test).
 #
+# Named expected differences: where the binary answers otherwise than the
+# bash on purpose, by a PRD ruling. They are not skips: before any test
+# runs, each is checked to hold exactly as written (both sides), and the
+# gate fails, saying which one no longer holds, when either side changes.
+# No tests/cli test meets one through the binary today; one that does is
+# mapped to its difference here by name, never skipped broadly.
+#
 # --shard I/N runs every Nth test starting at the Ith (1-based), so the
 # list can be split across jobs. Names after `--` run only those tests.
 #
-# Exit 0 when nothing fails on the binary only, 1 when something does,
-# 2 on a usage or setup error.
+# Exit 0 when nothing fails on the binary only, 1 when something does or
+# a named difference no longer holds, 2 on a usage or setup error.
 
 set -euo pipefail
 
@@ -116,6 +123,49 @@ for name in k2 k5; do
     got="$("${hermetic[@]}" "$WORK/bin/$name" --version)" \
         || { echo "cli-parity: $name --version failed" >&2; exit 2; }
     [ "$got" = "$want_version" ] || { echo "cli-parity: $name --version printed '$got', bash cli/k2 '$want_version'" >&2; exit 2; }
+done
+
+# The named expected differences: "name|PRD reference|what differs".
+EXPECTED_DIFFS=(
+    "version-offline|13.9 #3|--version with no port or token: bash refuses (exit 1, \"Error: Cannot connect to K2.\"); the binary prints \"k2 <version>\" (exit 0), as help, --schema and --version never need the daemon"
+)
+
+# check_version_offline: both CLIs run `--version` with a temp HOME and no
+# K2_*/K5_* variable at all (no port, no token). Prints what doesn't hold
+# and returns 1 when the difference is not exactly as named.
+check_version_offline() {
+    local cli_version clean out err rc name problems=()
+    cli_version="$(grep -m1 '^K2_CLI_VERSION=' "$ROOT/cli/k2" | cut -d'"' -f2)"
+    [ -n "$cli_version" ] || { echo "no K2_CLI_VERSION line in cli/k2"; return 1; }
+    mkdir -p "$WORK/offline-home"
+    clean=(env -i PATH="$PATH" HOME="$WORK/offline-home")
+    out="$WORK/offline.out" err="$WORK/offline.err"
+    rc=0; "${clean[@]}" bash "$ROOT/cli/k2" --version >"$out" 2>"$err" </dev/null || rc=$?
+    [ "$rc" = 1 ] || problems+=("bash exited $rc, want 1")
+    [ ! -s "$out" ] || problems+=("bash printed on stdout: $(head -c 200 "$out")")
+    grep -qxF 'Error: Cannot connect to K2.' "$err" \
+        || problems+=("bash's stderr has no line 'Error: Cannot connect to K2.': $(head -c 200 "$err")")
+    for name in k2 k5; do
+        rc=0; "${clean[@]}" "$WORK/bin/$name" --version >"$out" 2>"$err" </dev/null || rc=$?
+        [ "$rc" = 0 ] || problems+=("the binary as $name exited $rc, want 0")
+        [ "$(cat "$out")" = "k2 $cli_version" ] && [ "$(wc -l <"$out" | tr -d ' ')" = 1 ] \
+            || problems+=("the binary as $name printed '$(head -c 200 "$out")', want exactly 'k2 $cli_version'")
+        [ ! -s "$err" ] || problems+=("the binary as $name wrote on stderr: $(head -c 200 "$err")")
+    done
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+for entry in "${EXPECTED_DIFFS[@]}"; do
+    IFS='|' read -r d_name d_prd d_what <<<"$entry"
+    if why="$("check_${d_name//-/_}")"; then
+        echo "cli-parity: named difference $d_name (PRD $d_prd) holds: $d_what"
+    else
+        echo "cli-parity: FAIL: the named difference $d_name (PRD $d_prd) no longer holds: $d_what" >&2
+        printf '%s\n' "$why" | sed 's/^/    /' >&2
+        exit 1
+    fi
 done
 
 echo "cli-parity: ${#TESTS[@]} tests (shard $SHARD/$SHARDS), binary $BIN ($want_version)"

@@ -911,3 +911,40 @@ fn the_recording_commands_are_the_plugins() {
     let f = fixture();
     assert_eq!(f["recordingCommands"], json!(tauri_plugin_sew_voice::RECORDING_COMMANDS));
 }
+
+// ── noise removal: one log line per change (Sew 0.10.4) ──
+
+/// Each `noise_removal` payload becomes one line that says which model ran and,
+/// when it isn't DeepFilterNet3, why; the payloads are the plugin's own JSON.
+#[test]
+fn a_noise_removal_event_is_one_log_line() {
+    let line = |v: Value| super::noise_removal_line(&v.to_string()).unwrap_or_else(|| panic!("{v} is a noise_removal payload"));
+    assert_eq!(
+        line(json!({"mode": "standard", "active": "standard", "model": "dfn3", "in_grace": true})),
+        "noise removal: mode standard, active standard, model dfn3, reason none, step_downs 0, in_grace true"
+    );
+    // A step-down: RNNoise runs, and the stage's rule says why (counters ride along, unlogged).
+    assert_eq!(
+        line(json!({"mode": "standard", "active": "standard", "model": "rnnoise", "step_downs": 2, "step_down_reason": "slow_window",
+                    "last_step_down_ms_ago": 1200, "slowest_block_us": 9100, "blocks_over_budget": 7})),
+        "noise removal: mode standard, active standard, model rnnoise, reason slow_window, step_downs 2, in_grace false"
+    );
+    // Still loading: model_reason wins over an older step-down.
+    assert_eq!(
+        line(json!({"mode": "standard", "active": "standard", "model": "rnnoise", "model_reason": "loading", "step_down_reason": "heavy", "step_downs": 1})),
+        "noise removal: mode standard, active standard, model rnnoise, reason loading, step_downs 1, in_grace false"
+    );
+    // Back on DeepFilterNet3 after a step-down: the old rule is not the reason now.
+    assert_eq!(
+        line(json!({"mode": "standard", "active": "standard", "model": "dfn3", "step_down_reason": "heavy", "step_downs": 1})),
+        "noise removal: mode standard, active standard, model dfn3, reason none, step_downs 1, in_grace false"
+    );
+    // Off, and a stage the audio pipeline stopped: no model, the state's own reason.
+    assert_eq!(line(json!({"mode": "off", "active": "off"})), "noise removal: mode off, active off, model none, reason none, step_downs 0, in_grace false");
+    assert_eq!(
+        line(json!({"mode": "standard", "active": "off", "reason": "budget"})),
+        "noise removal: mode standard, active off, model none, reason budget, step_downs 0, in_grace false"
+    );
+    assert_eq!(super::noise_removal_line("{}"), None);
+    assert_eq!(super::noise_removal_line(r#"{"mode":"standard","active":"standard","model":"vroom"}"#), None);
+}

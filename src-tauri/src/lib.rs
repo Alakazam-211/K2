@@ -1006,6 +1006,11 @@ pub fn run() {
             // Browser Tab (S1): registry for child browser webviews.
             crate::commands::browser_webviews::init(&app.handle().clone());
 
+            // Native voice (Sew 0.10.4): one log line per noise removal change,
+            // so a call's log says whether it ran DeepFilterNet3.
+            #[cfg(feature = "native-voice")]
+            native_voice::log_noise_removal(app.handle());
+
             // 0.46.11 — macOS: `~/.local/bin/k2` + one marked PATH line, no
             // admin (k2_client::cli_install). The daemon runs the same heal
             // at its boot; this is the backstop. Off the main thread: it

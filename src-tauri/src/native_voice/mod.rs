@@ -11,7 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::plugin::TauriPlugin;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Listener, Manager, Runtime};
+use tauri_plugin_sew_voice::wire::{NoiseModel, NoiseRemovalState, EVENT_PREFIX, NOISE_EVENTS};
 use tauri_plugin_sew_voice::{Builder, VoiceService};
 
 pub mod device_keys;
@@ -68,6 +69,42 @@ pub fn leave_on_quit<R: Runtime>(app: &AppHandle<R>) {
     if done.is_err() {
         log_debug!("[native-voice] leave on quit passed {}s; Sew's timeout frees the seat", QUIT_LEAVE_BOUND.as_secs());
     }
+}
+
+/// Log each noise removal change (the plugin's `sew-voice://noise_removal`
+/// event, sent when the mode, what runs, the reason or the grace window changes,
+/// never per block) as one line in the app's log (stderr), so a call's log says
+/// whether it ran DeepFilterNet3 and, if not, why. Settings and counts only: no
+/// names, rooms or tokens.
+pub fn log_noise_removal<R: Runtime>(app: &AppHandle<R>) {
+    app.listen_any(format!("{EVENT_PREFIX}{}", NOISE_EVENTS[0]), |event| match noise_removal_line(event.payload()) {
+        Some(line) => log_debug!("[native-voice] {line}"),
+        None => log_debug!("[native-voice] noise removal: unreadable event ({} bytes)", event.payload().len()),
+    });
+}
+
+/// The log line for one `noise_removal` payload, or `None` if it isn't one:
+/// `noise removal: mode standard, active standard, model dfn3, reason none,
+/// step_downs 0, in_grace false`. `model` is `none` where no model runs (Off, or
+/// DeepFilterNet3 not in play). `reason` says why the model isn't DeepFilterNet3
+/// (`model_reason`, else the latest `step_down_reason`), else why less runs than
+/// was asked (`reason`), else `none`.
+pub fn noise_removal_line(payload: &str) -> Option<String> {
+    let s: NoiseRemovalState = serde_json::from_str(payload).ok()?;
+    let model = s.model.map_or("none", NoiseModel::as_str);
+    let model_why = if s.model == Some(NoiseModel::Dfn3) {
+        None
+    } else {
+        s.model_reason.map(|r| r.as_str()).or(s.step_down_reason.map(|r| r.as_str()))
+    };
+    let reason = model_why.or(s.reason.map(|r| r.as_str())).unwrap_or("none");
+    Some(format!(
+        "noise removal: mode {}, active {}, model {model}, reason {reason}, step_downs {}, in_grace {}",
+        s.mode.as_str(),
+        s.active.as_str(),
+        s.step_downs,
+        s.in_grace
+    ))
 }
 
 #[cfg(test)]

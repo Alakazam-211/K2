@@ -30,6 +30,19 @@ case "$_k2_name" in
 esac
 unset _k2_name
 
+# Two more the Rust front sets when it hands a command to this script.
+# Empty counts as unset.
+#   K5_CLI_NOTICE_DONE  it already showed the notice that tells callers of
+#                       k2 to use k5. Nothing here prints that notice yet;
+#                       when something does, it skips it on _K5_NOTICE_DONE.
+#   K5_CLI_VIA=rust     the call came through the front: every daemon
+#                       request then says so (X-K5-Cli-Via: fallthrough,
+#                       added in _k2_curl). Any other value is ignored.
+_K5_NOTICE_DONE=""
+if [ -n "${K5_CLI_NOTICE_DONE:-}" ]; then _K5_NOTICE_DONE=1; fi
+_K5_CLI_VIA=""
+if [ "${K5_CLI_VIA:-}" = "rust" ]; then _K5_CLI_VIA="rust"; fi
+
 # One env-name reader. A setting K2 hands this CLI is read under its newest
 # name first: K5_<NAME>, then K2_<NAME>, then K2SO_<NAME>. Empty counts as
 # unset, as `${K2_X:-${K2SO_X:-}}` always did. (The daemon's twin is

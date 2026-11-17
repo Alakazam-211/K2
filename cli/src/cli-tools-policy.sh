@@ -302,6 +302,13 @@ _k2_cfg_add() {
 # loopback request on $PORT also tries the port the daemon published in
 # ~/.k2/daemon.port, when that one differs (the daemon came back on
 # another port).
+#
+# A call the Rust front handed to this script (K5_CLI_VIA=rust, read into
+# _K5_CLI_VIA by the prelude) tells the daemon so on every request, over
+# the cell socket and TCP alike: `X-K5-Cli-Via: fallthrough`. It is not a
+# secret, so it rides argv. The daemon reads headers by name and ignores
+# the ones it doesn't know. A caller that talks to something other than
+# the daemon sets _K2_CURL_NOT_DAEMON=1 for that call.
 _K2_CURL_TRIES=4
 _k2_curl() {
     local cfg="$1"; shift
@@ -309,6 +316,9 @@ _k2_curl() {
     for a in "$@"; do
         case "$a" in *@-*|-T) once=1 ;; esac
     done
+    if [ "${_K5_CLI_VIA:-}" = "rust" ] && [ -z "${_K2_CURL_NOT_DAEMON:-}" ]; then
+        set -- -H "X-K5-Cli-Via: fallthrough" "$@"
+    fi
     while :; do
         rc=0
         if [ -z "$cfg" ]; then

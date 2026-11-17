@@ -422,7 +422,7 @@ export function ThreadChatComposer({
                   aria-hidden="true"
                   data-compose-hint=""
                   className="pointer-events-none absolute inset-x-0 top-0 block truncate"
-                  style={{ padding: '4px 6px', fontSize, lineHeight: 1.4, color: 'var(--zen-text-muted)' }}
+                  style={{ padding: '4px 6px', fontSize, lineHeight: 1.4, color: 'var(--zen-compose-hint, var(--zen-text-muted))' }}
                 >
                   {placeholder}
                 </span>

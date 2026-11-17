@@ -98,6 +98,10 @@ export const THREAD_ZEN_DESKTOP_TOKENS = {
   // The message box's edge: a control on the page, so the control edge
   // (3:1 on the page in every look). A Garden falls back to --zen-border.
   '--zen-compose-edge': 'var(--color-control-edge, var(--color-border))',
+  // The box's hint ("Message Ana Ruiz"): words to read, so 4.5:1 on the
+  // box's fill in every look, which the muted text isn't on every raised
+  // fill. A Garden falls back to --zen-text-muted.
+  '--zen-compose-hint': 'var(--color-text-secondary)',
   '--zen-type-sm': 'var(--type-sm, 0.8em)',
   // Your bubble takes the accent Button's fill, deep enough for its white
   // words to read at 4.5:1 (the bright accent is 3.7:1 in Charcoal and
@@ -186,7 +190,7 @@ ${SCOPE} [data-zen-typing] span:nth-child(3) { animation-delay: 320ms; }
 ${SCOPE} [data-zen-soft-button] { transition: background-color ${anim('rowMove', 140)}, opacity ${anim('rowMove', 140)}; }
 ${SCOPE} [data-zen-soft-button]:hover:not(:disabled) { background: var(--zen-surface-raised); }
 ${SCOPE} [data-zen-soft-button]:disabled { opacity: 0.45; }
-${SCOPE} [data-zen-compose-input]::placeholder { color: var(--zen-text-muted); opacity: 1; }
+${SCOPE} [data-zen-compose-input]::placeholder { color: var(--zen-compose-hint, var(--zen-text-muted)); opacity: 1; }
 ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
 [${THREAD_ZEN_SCOPE_ATTR}] [data-zen-compose-input]::placeholder { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
 [${THREAD_ZEN_SCOPE_ATTR}] [data-zen-compose-input][data-own-hint]::placeholder { color: transparent; }

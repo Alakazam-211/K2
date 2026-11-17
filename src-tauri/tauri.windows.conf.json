@@ -11,7 +11,10 @@
   "bundle": {
     "externalBin": [
       "binaries/frpc",
-      "binaries/k2-daemon"
+      "binaries/k2-daemon",
+      "binaries/k2-export",
+      "binaries/k2-deckrender",
+      "binaries/k2-scenerender"
     ],
     "windows": {
       "nsis": {

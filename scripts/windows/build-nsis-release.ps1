@@ -77,10 +77,21 @@ if (Test-Path $nsisDir) { Get-ChildItem $nsisDir -Filter 'K2_*_x64-setup.exe' | 
 
 Run 'bun install' { bun install --frozen-lockfile }
 Run 'vite:build' { bun run vite:build }
-Run 'cargo build k2-daemon' { cargo build --release -p k2-daemon }
-$daemon = Join-Path $Target 'release\k2-daemon.exe'
-if (-not (Test-Path $daemon)) { Fail "k2-daemon.exe missing at $daemon" }
-Copy-Item -Force $daemon (Join-Path $bin "k2-daemon-$Triple.exe")
+# The daemon and the document workers it starts from beside its own exe
+# (k2-export: exports; k2-deckrender: slide previews; k2-scenerender: 3D
+# previews), in one cargo call as on macOS (one feature resolution).
+Run 'cargo build k2-daemon + workers' {
+    cargo build --release -p k2-daemon --bin k2-daemon `
+        -p k2-export --bin k2-export `
+        -p k2-deckrender --bin k2-deckrender `
+        -p k2-scenerender --bin k2-scenerender
+}
+foreach ($side in 'k2-daemon', 'k2-export', 'k2-deckrender', 'k2-scenerender') {
+    $exe = Join-Path $Target "release\$side.exe"
+    if (-not (Test-Path $exe)) { Fail "$side.exe missing at $exe" }
+    # Tauri externalBin: binaries/<name>-<triple>.exe, installed as <name>.exe.
+    Copy-Item -Force $exe (Join-Path $bin "$side-$Triple.exe")
+}
 
 # beforeBuildCommand emptied: vite already ran above. A config file, not an
 # inline JSON argument (PowerShell 5.1 mangles quotes in native arguments).
@@ -88,7 +99,7 @@ $override = Join-Path $Temp 'k2-nsis-build-override.json'
 [IO.File]::WriteAllText($override, '{"build":{"beforeBuildCommand":""}}')
 Run 'tauri build nsis' { bunx tauri build --bundles nsis --config $override }
 
-foreach ($peer in 'k2.exe', 'k2-daemon.exe', 'frpc.exe') {
+foreach ($peer in 'k2.exe', 'k2-daemon.exe', 'frpc.exe', 'k2-export.exe', 'k2-deckrender.exe', 'k2-scenerender.exe') {
     if (-not (Test-Path (Join-Path $Target "release\$peer"))) { Fail "$peer missing from $Target\release after tauri build" }
 }
 if (-not (Test-Path $setup)) {

@@ -16,10 +16,18 @@
   ExecShellWait "open" "taskkill.exe" "/F /IM k2.exe /T" SW_HIDE
   ExecShellWait "open" "taskkill.exe" "/F /IM k2-daemon.exe /T" SW_HIDE
   ExecShellWait "open" "taskkill.exe" "/F /IM frpc.exe /T" SW_HIDE
+  ; The document workers (export, slide and 3D previews) run beside the
+  ; daemon; one still busy would hold its exe.
+  ExecShellWait "open" "taskkill.exe" "/F /IM k2-export.exe /T" SW_HIDE
+  ExecShellWait "open" "taskkill.exe" "/F /IM k2-deckrender.exe /T" SW_HIDE
+  ExecShellWait "open" "taskkill.exe" "/F /IM k2-scenerender.exe /T" SW_HIDE
   Sleep 800
   Delete /REBOOTOK "$INSTDIR\k2.exe"
   Delete /REBOOTOK "$INSTDIR\k2-daemon.exe"
   Delete /REBOOTOK "$INSTDIR\frpc.exe"
+  Delete /REBOOTOK "$INSTDIR\k2-export.exe"
+  Delete /REBOOTOK "$INSTDIR\k2-deckrender.exe"
+  Delete /REBOOTOK "$INSTDIR\k2-scenerender.exe"
 !macroend
 
 ; K2's command-line tools (the `k2` CLI agents call) are a bash script:
@@ -45,6 +53,9 @@
   ExecShellWait "open" "taskkill.exe" "/F /IM k2.exe /T" SW_HIDE
   ExecShellWait "open" "taskkill.exe" "/F /IM k2-daemon.exe /T" SW_HIDE
   ExecShellWait "open" "taskkill.exe" "/F /IM frpc.exe /T" SW_HIDE
+  ExecShellWait "open" "taskkill.exe" "/F /IM k2-export.exe /T" SW_HIDE
+  ExecShellWait "open" "taskkill.exe" "/F /IM k2-deckrender.exe /T" SW_HIDE
+  ExecShellWait "open" "taskkill.exe" "/F /IM k2-scenerender.exe /T" SW_HIDE
   Sleep 800
   ; The daemon's logon autostart (k2_client::win_autostart).
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "K2 Daemon"

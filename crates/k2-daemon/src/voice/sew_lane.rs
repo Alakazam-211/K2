@@ -15,8 +15,9 @@
 //!
 //! K2's rules, on top of Sew's own check of the credential's scope on every
 //! request:
-//! - off (404) on the box's label unless the voice rooms preview is on, and on
-//!   an App's address unless that App's door is open (`voice_door_off`);
+//! - off (404) on the box's label unless the voice rooms preview or Home
+//!   chat is on ([`box_door_open`]: DM calls need it), and on an App's
+//!   address unless that App's door is open (`voice_door_off`);
 //! - anything not on Sew's allowlist answers 404 here and is never forwarded,
 //!   `/api/v1/gateway/ticket` included;
 //! - only a `sewcc_` bearer is accepted, and it is the only credential that
@@ -243,7 +244,17 @@ pub(super) async fn answer<S: AsyncWrite + Unpin>(client: &mut S, status: &str, 
 /// `owner_token`: the box's, so the kit lane refuses it as join does.
 pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str, head_len: usize, owner_token: &str) {
     let kit = KitCtx::live(Door::Box { owner_token: owner_token.to_string() });
-    serve_box(client, head, head_len, k2_core::voice_preview::enabled(), &crate::sew::ops::client_addr(), Some(&kit)).await;
+    serve_box(client, head, head_len, box_door_open(), &crate::sew::ops::client_addr(), Some(&kit)).await;
+}
+
+/// Is the box label's door open? With the voice rooms preview on, or with
+/// Home chat on: a Home DM call's engine (both the caller's and the
+/// callee's) runs its key traffic, mute state and renewal through this
+/// door, and DM calls don't wait for the voice rooms preview
+/// (`voice::routes` lets a DM call's routes through with Home chat on).
+/// Sew still checks each call credential's scope.
+pub fn box_door_open() -> bool {
+    k2_core::voice_preview::enabled() || k2_core::home_chat::enabled()
 }
 
 /// The box label's door without the kit lane (tests of the engine lane).
@@ -252,7 +263,7 @@ async fn serve_to<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str,
     serve_box(client, head, head_len, preview_on, sew_addr, None).await;
 }
 
-/// The box label's door: off while the voice rooms preview is.
+/// The box label's door: off unless [`box_door_open`].
 pub(super) async fn serve_box<S: AsyncRead + AsyncWrite + Unpin>(
     client: &mut S,
     head: &str,

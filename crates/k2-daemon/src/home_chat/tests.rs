@@ -86,6 +86,8 @@ struct FakeGateway {
     addr: String,
     frames: Arc<Mutex<Vec<Value>>>,
     connections: Arc<std::sync::atomic::AtomicU32>,
+    /// A dispatch sent here goes out on every open socket (after READY).
+    push: tokio::sync::broadcast::Sender<Value>,
 }
 
 async fn fake_gateway(ready: Value) -> FakeGateway {
@@ -93,28 +95,43 @@ async fn fake_gateway(ready: Value) -> FakeGateway {
     let addr = l.local_addr().unwrap().to_string();
     let frames = Arc::new(Mutex::new(Vec::new()));
     let connections = Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let (f2, c2) = (frames.clone(), connections.clone());
+    let push = tokio::sync::broadcast::channel::<Value>(16).0;
+    let (f2, c2, p2) = (frames.clone(), connections.clone(), push.clone());
     tokio::spawn(async move {
         loop {
             let Ok((tcp, _)) = l.accept().await else { return };
             c2.fetch_add(1, Ordering::SeqCst);
-            let (frames, ready) = (f2.clone(), ready.clone());
+            let (frames, ready, mut pushed) = (f2.clone(), ready.clone(), p2.subscribe());
             tokio::spawn(async move {
                 let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
                 ws.send(Message::Text(json!({"op": 8, "d": {"heartbeat_interval_ms": 60_000}}).to_string())).await.unwrap();
-                while let Some(Ok(m)) = ws.next().await {
-                    let Message::Text(t) = m else { continue };
-                    let v: Value = serde_json::from_str(&t).unwrap();
-                    let op = v["op"].as_u64();
-                    frames.lock().unwrap().push(v);
-                    if op == Some(2) {
-                        ws.send(Message::Text(json!({"op": 0, "t": "ready", "s": 1, "d": ready}).to_string())).await.unwrap();
+                let mut ready_sent = false;
+                loop {
+                    tokio::select! {
+                        m = ws.next() => {
+                            let Some(Ok(m)) = m else { return };
+                            let Message::Text(t) = m else { continue };
+                            let v: Value = serde_json::from_str(&t).unwrap();
+                            let op = v["op"].as_u64();
+                            frames.lock().unwrap().push(v);
+                            if op == Some(2) {
+                                ws.send(Message::Text(json!({"op": 0, "t": "ready", "s": 1, "d": ready}).to_string())).await.unwrap();
+                                ready_sent = true;
+                            }
+                        }
+                        d = pushed.recv() => {
+                            let Ok(d) = d else { return };
+                            assert!(ready_sent, "a test pushed a dispatch before READY");
+                            if ws.send(Message::Text(d.to_string())).await.is_err() {
+                                return;
+                            }
+                        }
                     }
                 }
             });
         }
     });
-    FakeGateway { addr, frames, connections }
+    FakeGateway { addr, frames, connections, push }
 }
 
 pub(crate) fn deps_with(api: Arc<FakeApi>, gateway: String, flags: HomeChatFeatures) -> Arc<Deps> {
@@ -868,4 +885,121 @@ fn a_channel_someone_puts_you_in_lands_in_people() {
     let order = |a: &Value| landed.iter().find(|r| r["address"] == *a).expect("row")["order"].as_str().expect("order").to_string();
     assert!(order(&want) > order(&json!(format!("906::{}", sid()))), "appended after the first");
     done();
+}
+
+type ClientWs = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// The next frame of `kind` on a client's events socket (others skipped).
+async fn next_of(ws: &mut ClientWs, kind: &str) -> Value {
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), ws.next()).await {
+            Ok(Some(Ok(Message::Text(t)))) => {
+                let v: Value = serde_json::from_str(&t).unwrap();
+                if v["type"] == kind {
+                    return v;
+                }
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(other) => panic!("the socket ended before a {kind} frame: {other:?}"),
+            Err(_) => panic!("no {kind} frame in 10 s"),
+        }
+    }
+}
+
+/// Open the real events socket handler for `ext` on a loopback port and
+/// connect a client to it (the dispatcher's checks are the test's own).
+async fn open_events(ext: &str, token: &str, owner: &str) -> (ClientWs, tokio::task::JoinHandle<()>) {
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    let (ext, token, owner) = (ext.to_string(), token.to_string(), owner.to_string());
+    let server = tokio::spawn(async move {
+        let (mut s, _) = l.accept().await.unwrap();
+        super::events_ws::serve(&mut s, ext, token, owner).await;
+    });
+    let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{}", routes::EVENTS)).await.expect("the socket opens");
+    (ws, server)
+}
+
+/// The bug (a Home DM call's callee never saw the ring): the callee is a
+/// Voice & Chat only login. Its Home chat events socket is admitted; a
+/// `call_ring` Sew sends the callee reaches that socket as `{type:
+/// "call_ring", conv, d}`, and so does the ring's stop; a window that opens
+/// mid-ring gets it in `hello`; Answer (`/cli/voice/join` and the call
+/// engine's key routes) and Decline pass the role gate. None of this waits
+/// for the voice rooms preview, which stays off.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_voice_chat_only_callee_gets_the_ring_on_its_socket_and_may_answer() {
+    use crate::routes::route_policy::role_gate;
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _home = k2_core::test_env::TempHome::new();
+    assert!(!k2_core::voice_preview::enabled(), "the voice rooms preview is off");
+    const OWNER: &str = "owner-token-for-the-ring-test";
+    k2_core::connect_users::add_user("callee", "a-long-password-3").expect("add_user");
+    k2_core::connect_users::set_role("callee", Role::VoiceChat).expect("set_role");
+    let tok = k2_core::connect_users::create_session("callee");
+    let q = format!("token={tok}");
+
+    // The socket and the answer and decline routes are on the role's allowlist.
+    if let Some(r) = role_gate("GET", routes::EVENTS, &q, OWNER) {
+        panic!("the events socket refuses the callee: {} {}", r.status, r.body);
+    }
+    for p in [
+        crate::voice::routes::JOIN,
+        crate::voice::routes::CALL_DECLINE,
+        crate::voice::routes::CALL_LEAVE,
+        crate::voice::routes::SESSION_KEYS_JOIN,
+        crate::voice::routes::SESSION_KEY_PACKAGES,
+        crate::voice::routes::SESSION_STATE,
+    ] {
+        if let Some(r) = role_gate("POST", p, &q, OWNER) {
+            panic!("POST {p} refuses the callee: {} {}", r.status, r.body);
+        }
+    }
+    // Home chat's own caller rule takes the login as a person.
+    let c = people::caller(&q, None, OWNER).unwrap_or_else(|r| panic!("caller refused: {} {}", r.code, r.hint));
+    assert_eq!(c.role, Role::VoiceChat);
+    assert!(c.ext.starts_with("k2:connect:"), "{}", c.ext);
+
+    let api = Arc::new(FakeApi::default());
+    let gw = fake_gateway(ready_body()).await;
+    set_deps(Some(deps_with(api.clone(), gw.addr.clone(), HomeChatFeatures::default())));
+
+    let (mut ws, server) = open_events(&c.ext, &tok, OWNER).await;
+    let hello = next_of(&mut ws, "hello").await;
+    assert_eq!(hello["calls"], json!([]), "{hello}");
+    let h = follower::get(&c.ext).expect("the socket holds the callee");
+    until("the callee's follower is live", || h.status() == "live").await;
+
+    // Sew rings the callee.
+    let expires = (chrono::Utc::now() + chrono::Duration::seconds(45)).to_rfc3339();
+    let ring = json!({"call_id": "77", "channel_id": "900", "started_by": "42", "ringing": true, "silent": false, "expires_at": expires});
+    gw.push.send(json!({"op": 0, "t": "call_ring", "s": 2, "d": ring})).expect("the gateway socket is open");
+    let f = next_of(&mut ws, "call_ring").await;
+    assert_eq!(f["conv"], "900", "{f}");
+    assert_eq!(f["d"]["call_id"], "77", "{f}");
+    assert_eq!(f["d"]["ringing"], true, "{f}");
+    assert_eq!(f["d"]["started_by"], "42", "{f}");
+
+    // A second window opened mid-ring gets the ring in its hello.
+    let (mut ws2, server2) = open_events(&c.ext, &tok, OWNER).await;
+    let hello2 = next_of(&mut ws2, "hello").await;
+    let calls = hello2["calls"].as_array().expect("hello calls");
+    assert_eq!(calls.len(), 1, "{hello2}");
+    assert_eq!((calls[0]["callId"].clone(), calls[0]["conv"].clone(), calls[0]["ringing"].clone()), (json!("77"), json!("900"), json!(true)));
+
+    // Answered on another device: the stop reaches both sockets.
+    let stop = json!({"call_id": "77", "channel_id": "900", "ringing": false, "reason": "accepted"});
+    gw.push.send(json!({"op": 0, "t": "call_ring", "s": 3, "d": stop})).expect("the gateway socket is open");
+    for w in [&mut ws, &mut ws2] {
+        let f = next_of(w, "call_ring").await;
+        assert_eq!((f["d"]["ringing"].clone(), f["d"]["reason"].clone()), (json!(false), json!("accepted")), "{f}");
+    }
+    assert!(h.state.lock().unwrap().incoming_ring("900").is_none(), "no ring left");
+
+    drop((ws, ws2));
+    tokio::time::timeout(Duration::from_secs(5), server).await.expect("the first socket's handler ends").expect("join");
+    tokio::time::timeout(Duration::from_secs(5), server2).await.expect("the second socket's handler ends").expect("join");
+    follower::release_all();
+    super::call_push::reset_for_tests();
+    set_deps(None);
 }

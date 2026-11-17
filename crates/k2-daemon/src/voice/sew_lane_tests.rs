@@ -399,3 +399,24 @@ async fn a_cookie_is_stripped_never_refused_and_never_enough() {
     assert!(out.starts_with("HTTP/1.1 401") && out.contains("call_credential_required"), "{out}");
     assert!(tokio::time::timeout(Duration::from_millis(100), seen.recv()).await.is_err(), "a cookie alone reached Sew");
 }
+
+/// The box label's door opens for Home DM calls too: with the voice rooms
+/// preview off and Home chat on, a call's engine (the caller's and the
+/// callee's) reaches Sew; with both off it stays dark.
+#[test]
+fn the_box_door_opens_for_dm_calls_without_the_voice_preview() {
+    // The switch locks the other switch-flipping tests take, in their order.
+    let _g = crate::home_chat::tests::SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _l = super::super::lane::test_lock();
+    let _v = k2_core::test_env::EnvVar::remove(k2_core::voice_preview::ENV);
+    let _h = k2_core::test_env::EnvVar::remove(k2_core::home_chat::ENV);
+    k2_core::voice_preview::set_enabled(false);
+    k2_core::home_chat::set_enabled(false);
+    assert!(!box_door_open(), "both switches off: dark");
+    k2_core::home_chat::set_enabled(true);
+    assert!(box_door_open(), "Home chat on: DM calls need the door");
+    k2_core::home_chat::set_enabled(false);
+    k2_core::voice_preview::set_enabled(true);
+    assert!(box_door_open(), "the voice rooms preview on");
+    k2_core::voice_preview::set_enabled(false);
+}

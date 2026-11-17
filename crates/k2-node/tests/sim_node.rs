@@ -4,6 +4,9 @@
 //! path is real but the Simulator: the attach frames, admission, the
 //! offer, the stream dial and its encrypted handshake, the relay, the
 //! node's policy, the lease's grace, reconcile and close.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 mod common;
 

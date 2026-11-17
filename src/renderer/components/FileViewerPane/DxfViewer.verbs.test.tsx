@@ -167,6 +167,29 @@ describe('rotating', () => {
     expect(screen.queryByTestId('dxf-rotate-by')).toBeNull()
   })
 
+  it('a row marked read-only has no edit controls; its reason shows unless the header already says view only (DWG)', async () => {
+    const model = structuredClone(PAGES.model[0])
+    model.entities = model.entities.map((r) => ({ ...r, edit: 'read-only' }))
+    const pages = { ...PAGES, model: [model] }
+    // A DWG: the header line says it once; the panel adds no reason.
+    await open({ header: { ...HEADER, format: 'dwg' }, pages })
+    expect(screen.getByTestId('dxf-view-only').textContent).toMatch(/DWG/)
+    click('@h:41')
+    expect(screen.getByTestId('dxf-edit-view-only').textContent).toBe('View only')
+    expect(screen.queryByTestId('dxf-edit-cant')).toBeNull()
+    expect(screen.queryByTestId('dxf-move-by')).toBeNull()
+    expect(screen.queryByTestId('dxf-rotate-by')).toBeNull()
+    expect(screen.queryByTestId('dxf-handles')).toBeNull()
+    cleanup()
+    // Marked read-only without the header saying so: the row's own reason, and still no controls.
+    await open({ pages })
+    click('@h:41')
+    expect(screen.getByTestId('dxf-edit-cant').textContent).toContain('This drawing is read-only in K2.')
+    expect(screen.queryByTestId('dxf-move-by')).toBeNull()
+    expect(screen.queryByTestId('dxf-scale-by')).toBeNull()
+    expect(screen.queryByTestId('dxf-handles')).toBeNull()
+  })
+
   it('kinds the verbs can’t change have no Rotate by and no handles', async () => {
     await open()
     click('@h:68')

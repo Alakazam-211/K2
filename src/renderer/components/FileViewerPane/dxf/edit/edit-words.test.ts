@@ -134,8 +134,11 @@ describe('the drawing model’s edit words', () => {
     }
     for (const [w, words] of Object.entries(want)) expect(whyWords(w), w).toBe(words)
   })
+  it('a row of a drawing K2 only reads (DWG) says so', () => {
+    expect(whyWords('read-only')).toBe('This drawing is read-only in K2.')
+  })
   it('the pack’s other words have their own reasons, never the unknown one', () => {
-    for (const w of ['version', 'no-handle', 'xref', 'dynamic', 'proxy', 'multiline-attribute', 'embedded', 'reactors', 'viewport'])
+    for (const w of ['version', 'no-handle', 'xref', 'dynamic', 'proxy', 'multiline-attribute', 'embedded', 'reactors', 'viewport', 'read-only'])
       expect(whyWords(w), w).not.toBe(WHY_WORDS.unknown)
     expect(whyWords('locked-layer', 'A-WALL')).toMatch(/A-WALL, which is locked/)
   })

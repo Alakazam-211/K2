@@ -35,6 +35,8 @@ export const WHY_WORDS = {
   'multiline-attribute': 'It has a label with more than one line. Change it in your CAD app.',
   'no-handle': 'It has no handle. Save the drawing again in your CAD app.',
   version: 'The drawing was saved before DXF 2000. Save it as DXF 2000 or later in your CAD app.',
+  // Every row of a drawing K2 only reads (DWG).
+  'read-only': 'This drawing is read-only in K2.',
 } as const
 
 /** A reason word as given (any case or spacing). */

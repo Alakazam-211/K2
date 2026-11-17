@@ -233,6 +233,9 @@ pub enum Failure {
     /// The connect took longer than allowed (curl exit 28 with no
     /// "Connected to" in its trace).
     ConnectTimedOut,
+    /// Connected, and not one byte of the request went out (the first
+    /// write failed).
+    NotSent(String),
     /// Connected, and no full answer within the time allowed (curl exit
     /// 28 after connecting).
     TimedOut,
@@ -242,6 +245,15 @@ pub enum Failure {
     /// Anything else: a write or read that failed, an answer cut short, a
     /// head that is not HTTP.
     Broken(String),
+}
+
+impl Failure {
+    /// True when some of the request may have reached the server: every
+    /// failure but a connect that failed or timed out and a request that
+    /// went out with no byte at all. Such a request may have been run.
+    pub fn sent(&self) -> bool {
+        !matches!(self, Failure::Connect(_) | Failure::ConnectTimedOut | Failure::NotSent(_))
+    }
 }
 
 /// The answer: the last status and the body.
@@ -307,11 +319,27 @@ pub fn connect(target: &Target, connect: Duration, deadline: Instant) -> Result<
 }
 
 /// Writes `request` on `conn` and reads the answer, before `deadline`.
+/// A first write that puts no byte out is [`Failure::NotSent`]; any
+/// failure after a byte went out may follow a request the server ran.
+/// The answer is read up to its end (its length, its last chunk, or the
+/// end of the stream when it has neither) and no further, so a reset
+/// that follows a whole answer is never seen.
 pub fn exchange(conn: &mut Conn, request: &Request, deadline: Instant) -> Result<Answer, Failure> {
     let bytes = request.encode();
-    let budget = remaining(deadline).ok_or(Failure::TimedOut)?;
-    conn.set_timeouts(budget).map_err(|e| Failure::Broken(format!("set a timeout: {e}")))?;
-    conn.write_all(&bytes).map_err(|e| if is_timeout(&e) { Failure::TimedOut } else { Failure::Broken(format!("send: {e}")) })?;
+    let budget = remaining(deadline).ok_or_else(|| Failure::NotSent("no time left to send".into()))?;
+    conn.set_timeouts(budget).map_err(|e| Failure::NotSent(format!("set a timeout: {e}")))?;
+    let mut sent = 0;
+    while sent < bytes.len() {
+        match conn.write(&bytes[sent..]) {
+            Ok(0) if sent == 0 => return Err(Failure::NotSent("send: the connection took no bytes".into())),
+            Ok(0) => return Err(Failure::Broken(format!("send: the connection stopped after {sent} bytes"))),
+            Ok(n) => sent += n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) if sent == 0 => return Err(Failure::NotSent(format!("send: {e}"))),
+            Err(e) if is_timeout(&e) => return Err(Failure::TimedOut),
+            Err(e) => return Err(Failure::Broken(format!("send: {e}"))),
+        }
+    }
     conn.flush().map_err(|e| Failure::Broken(format!("send: {e}")))?;
     read_answer(conn, deadline)
 }
@@ -333,7 +361,16 @@ impl Reader<'_> {
             return Ok(false);
         }
         let budget = remaining(self.deadline).ok_or(Failure::TimedOut)?;
-        self.conn.set_timeouts(budget).map_err(|e| Failure::Broken(format!("set a timeout: {e}")))?;
+        match self.conn.set_timeouts(budget) {
+            Ok(()) => {}
+            // macOS refuses a new timeout (EINVAL) on a socket whose peer
+            // has closed, often right after a whole answer came in. A read
+            // there never waits, so it goes ahead under the timeout set
+            // before the request was written. Treating it as a failure lost
+            // answers that had arrived.
+            Err(e) if e.kind() == io::ErrorKind::InvalidInput => {}
+            Err(e) => return Err(Failure::Broken(format!("set a timeout: {e}"))),
+        }
         let mut chunk = [0u8; 16 * 1024];
         loop {
             match self.conn.read(&mut chunk) {
@@ -592,6 +629,68 @@ mod tests {
         drop(l);
         let deadline = Instant::now() + Duration::from_secs(5);
         assert!(matches!(connect(&Target::Tcp { host: "127.0.0.1".into(), port }, Duration::from_secs(5), deadline), Err(Failure::Connect(_))));
+    }
+
+    /// The whole answer, then the peer closed (the cell socket) or reset
+    /// (TCP, `SO_LINGER` 0) before a byte was read: the answer stands.
+    /// macOS refuses a read timeout on such a socket (EINVAL); that used to
+    /// lose the answer.
+    #[cfg(unix)]
+    #[test]
+    fn a_whole_answer_then_a_close_or_reset_is_the_answer() {
+        use std::os::unix::net::UnixStream;
+        let reply: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (ours, mut peer) = UnixStream::pair().unwrap();
+        peer.write_all(reply).unwrap();
+        peer.shutdown(std::net::Shutdown::Both).unwrap();
+        drop(peer);
+        let mut c = Conn::Unix(ours);
+        assert_eq!(read_answer(&mut c, deadline).unwrap(), Answer { status: 200, body: b"hello".to_vec() });
+
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let mut c = connect(&Target::Tcp { host: "127.0.0.1".into(), port }, Duration::from_secs(5), deadline).unwrap_or_else(|f| panic!("connect: {f:?}"));
+        let (mut s, _) = l.accept().unwrap();
+        s.write_all(reply).unwrap();
+        reset(s);
+        // The reset lands before the first read.
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(read_answer(&mut c, deadline).unwrap(), Answer { status: 200, body: b"hello".to_vec() });
+    }
+
+    /// Closes `s` with a reset (`SO_LINGER` 0) instead of a FIN.
+    #[cfg(unix)]
+    fn reset(s: std::net::TcpStream) {
+        use std::os::unix::io::AsRawFd;
+        let linger = libc::linger { l_onoff: 1, l_linger: 0 };
+        // SAFETY: a valid socket and a `linger` of the size passed.
+        let rc = unsafe {
+            libc::setsockopt(
+                s.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_LINGER,
+                (&linger as *const libc::linger).cast(),
+                std::mem::size_of::<libc::linger>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(rc, 0, "SO_LINGER: {}", io::Error::last_os_error());
+        drop(s);
+    }
+
+    /// A peer that closed before the request went out: nothing was sent.
+    #[cfg(unix)]
+    #[test]
+    fn a_request_to_a_closed_peer_is_not_sent() {
+        use std::os::unix::net::UnixStream;
+        let (ours, peer) = UnixStream::pair().unwrap();
+        drop(peer);
+        let mut c = Conn::Unix(ours);
+        let f = exchange(&mut c, &req(Method::Post, Some(Body { bytes: b"x".to_vec(), curl_form_type: true }), &[]), Instant::now() + Duration::from_secs(5)).unwrap_err();
+        assert!(matches!(f, Failure::NotSent(_)), "{f:?}");
+        assert!(!f.sent());
+        assert!(Failure::Empty.sent() && Failure::TimedOut.sent() && Failure::Broken("x".into()).sent());
+        assert!(!Failure::ConnectTimedOut.sent());
     }
 
     #[cfg(unix)]

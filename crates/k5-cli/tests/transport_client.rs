@@ -1,7 +1,9 @@
 //! The client's tries and rules that the parity table can't show with
 //! one stub: a daemon that isn't there yet, one that moved ports, a
 //! migrating daemon that never gets ready, a second refusal after a heal,
-//! and that a passport never sends the owner token (PRD 13.9 #4).
+//! that a passport never sends the owner token (PRD 13.9 #4), and that a
+//! request that went out on the cell socket is never sent again as a
+//! POST over TCP.
 
 #![cfg(unix)]
 
@@ -12,6 +14,7 @@ use k5_cli::transport::{Auth, Call, Channel, Client, Error, Passport, SecretsDir
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const PAUSE: Duration = Duration::from_millis(100);
@@ -212,4 +215,224 @@ fn a_cell_socket_that_is_gone_goes_to_tcp() {
     s.reset(&[]);
     c.send_json(false, "/cli/x", "").unwrap();
     assert_eq!(s.log().iter().map(|l| l.channel).collect::<Vec<_>>(), vec!["tcp"]);
+}
+
+/// What a [`door`] does with each request it reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Act {
+    /// `200` with `{}`, then a close.
+    Answer,
+    /// The same whole answer, then a reset (TCP: `SO_LINGER` 0; the cell
+    /// socket: shut down both ways).
+    AnswerThenReset,
+    /// A close with no answer at all.
+    CloseNoAnswer,
+}
+
+const ANSWER: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
+
+/// Reads one request (its head and its `Content-Length` body).
+fn read_request<S: std::io::Read>(s: &mut S) {
+    let mut got = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let head_end = loop {
+        if let Some(at) = got.windows(4).position(|w| w == b"\r\n\r\n") {
+            break at + 4;
+        }
+        let n = s.read(&mut chunk).unwrap();
+        assert!(n > 0, "the request ended inside its head: {:?}", text(&got));
+        got.extend_from_slice(&chunk[..n]);
+    };
+    let head = text(&got[..head_end]);
+    let length: usize = head
+        .lines()
+        .find_map(|l| l.strip_prefix("Content-Length: "))
+        .map(|v| v.trim().parse().unwrap())
+        .unwrap_or(0);
+    while got.len() < head_end + length {
+        let n = s.read(&mut chunk).unwrap();
+        assert!(n > 0, "the request ended inside its body");
+        got.extend_from_slice(&chunk[..n]);
+    }
+}
+
+/// Closes a TCP connection with a reset.
+fn reset_tcp(s: std::net::TcpStream) {
+    use std::os::unix::io::AsRawFd;
+    let linger = libc::linger { l_onoff: 1, l_linger: 0 };
+    // SAFETY: a valid socket and a `linger` of the size passed.
+    let rc = unsafe {
+        libc::setsockopt(
+            s.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_LINGER,
+            (&linger as *const libc::linger).cast(),
+            std::mem::size_of::<libc::linger>() as libc::socklen_t,
+        )
+    };
+    assert_eq!(rc, 0, "SO_LINGER: {}", std::io::Error::last_os_error());
+    drop(s);
+}
+
+/// A daemon on loopback TCP and a cell socket, each doing `tcp` and
+/// `uds` with every request, and counting the requests it read.
+struct Door {
+    port: u16,
+    sock: PathBuf,
+    tcp: Arc<AtomicUsize>,
+    uds: Arc<AtomicUsize>,
+}
+
+impl Door {
+    fn counts(&self) -> (usize, usize) {
+        (self.uds.load(Ordering::SeqCst), self.tcp.load(Ordering::SeqCst))
+    }
+}
+
+impl Drop for Door {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.sock);
+    }
+}
+
+fn door(tag: &str, uds_act: Act, tcp_act: Act) -> Door {
+    use std::io::Write;
+    use std::os::unix::net::UnixListener;
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let sock = PathBuf::from(format!("/tmp/k5tcd-{tag}-{}-{}.sock", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+    let _ = std::fs::remove_file(&sock);
+    let ul = UnixListener::bind(&sock).unwrap();
+    let tl = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = tl.local_addr().unwrap().port();
+    let (tcp, uds) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let n = Arc::clone(&uds);
+    std::thread::spawn(move || {
+        for conn in ul.incoming() {
+            let mut s = conn.unwrap();
+            read_request(&mut s);
+            n.fetch_add(1, Ordering::SeqCst);
+            match uds_act {
+                Act::Answer => s.write_all(ANSWER).unwrap(),
+                Act::AnswerThenReset => {
+                    s.write_all(ANSWER).unwrap();
+                    s.shutdown(std::net::Shutdown::Both).unwrap();
+                }
+                Act::CloseNoAnswer => {}
+            }
+        }
+    });
+    let n = Arc::clone(&tcp);
+    std::thread::spawn(move || {
+        for conn in tl.incoming() {
+            let mut s = conn.unwrap();
+            read_request(&mut s);
+            n.fetch_add(1, Ordering::SeqCst);
+            match tcp_act {
+                Act::Answer => s.write_all(ANSWER).unwrap(),
+                Act::AnswerThenReset => {
+                    s.write_all(ANSWER).unwrap();
+                    reset_tcp(s);
+                }
+                Act::CloseNoAnswer => {}
+            }
+        }
+    });
+    Door { port, sock, tcp, uds }
+}
+
+fn with_passport(port: u16, sock: &std::path::Path) -> Client {
+    let mut c = Client::new("127.0.0.1", port, "/p", Auth::Passport { passport: Passport::new("sessA.pp").unwrap(), sock: Some(sock.to_path_buf()) });
+    c.pause = PAUSE;
+    c
+}
+
+/// One call on a client.
+type CallFn = fn(&mut Client) -> Result<k5_cli::transport::Response, Error>;
+
+/// The cell socket read a POST and closed with no answer: the POST may
+/// have run, so it is never sent again over TCP. A GET is, as the shell's
+/// cli_send and cli_send_json do.
+#[test]
+fn a_post_the_cell_socket_read_is_never_sent_again_over_tcp() {
+    let d = door("post", Act::CloseNoAnswer, Act::Answer);
+    let mut c = with_passport(d.port, &d.sock);
+    let posts: [(&str, CallFn); 4] = [
+        ("cli_request_post", |c| c.send("/cli/inbox/claim", Call::RequestPost(&["id=7"]))),
+        ("cli_post_form", |c| c.send("/cli/workspace/msg", Call::PostForm(&["text=x"]))),
+        ("cli_post_json", |c| c.send("/cli/awareness/publish", Call::PostJson(b"{}"))),
+        ("cli_send_json POST", |c| c.send_json(true, "/cli/compute/run", "{}")),
+    ];
+    for (i, (name, call)) in posts.iter().enumerate() {
+        let err = call(&mut c).unwrap_err();
+        assert!(matches!(err, Error::MaybeApplied { .. }), "{name}: {err:?}");
+        assert_eq!(d.counts(), (i + 1, 0), "{name}: (cell socket, TCP) requests");
+    }
+    let err = Error::MaybeApplied { endpoint: "/cli/workspace/msg".into(), waited: 0 };
+    assert_eq!(
+        err.to_string(),
+        "Error: K2's server didn't answer /cli/workspace/msg (0 s); the request may have been applied. Check before running it again."
+    );
+    let r = c.send("/cli/inbox/list", Call::Request(&[])).unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    assert_eq!(d.counts(), (5, 1), "a GET: (cell socket, TCP) requests");
+    let r = c.send_json(false, "/cli/compute/nodes", "").unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    assert_eq!(d.counts(), (6, 2), "a cli_send_json GET: (cell socket, TCP) requests");
+}
+
+/// A whole answer followed by a reset is the answer, on both channels,
+/// and nothing is sent again.
+#[test]
+fn a_whole_answer_then_a_reset_is_the_answer() {
+    let d = door("reset", Act::AnswerThenReset, Act::AnswerThenReset);
+    let mut c = with_passport(d.port, &d.sock);
+    let r = c.send("/cli/workspace/msg", Call::PostForm(&["text=x"])).unwrap();
+    assert_eq!((r.status, r.channel, text(&r.body)), (200, Channel::Uds, "{}".to_string()));
+    let r = c.send("/cli/inbox/list", Call::Request(&[])).unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Uds));
+    let r = c.send_json(true, "/cli/compute/run", "{}").unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Uds));
+    assert_eq!(d.counts(), (3, 0), "(cell socket, TCP) requests");
+    let r = c.call(Channel::Tcp, "/cli/inbox/claim", Call::RequestPost(&["id=7"])).unwrap();
+    assert_eq!((r.status, r.channel, text(&r.body)), (200, Channel::Tcp, "{}".to_string()));
+    let r = c.call(Channel::Tcp, "/cli/users/add", Call::PostJson(b"{}")).unwrap();
+    assert_eq!(r.status, 200);
+    assert_eq!(d.counts(), (3, 2), "(cell socket, TCP) requests");
+}
+
+/// Over TCP a request read and closed with no answer is sent once: the
+/// no-answer line, never a second try.
+#[test]
+fn a_close_with_no_answer_over_tcp_is_sent_once() {
+    let d = door("tcpclose", Act::Answer, Act::CloseNoAnswer);
+    let mut c = with_passport(d.port, &d.sock);
+    let err = c.call(Channel::Tcp, "/cli/inbox/claim", Call::RequestPost(&["id=7"])).unwrap_err();
+    assert!(matches!(err, Error::NoAnswer(ref n) if n.empty), "{err:?}");
+    assert_eq!(d.counts(), (0, 1));
+    let err = c.call(Channel::Tcp, "/cli/users/add", Call::PostJson(b"{}")).unwrap_err();
+    assert!(matches!(err, Error::NoAnswer(ref n) if n.empty), "{err:?}");
+    assert_eq!(d.counts(), (0, 2));
+    let err = c.call(Channel::Tcp, "/cli/inbox/list", Call::Request(&[])).unwrap_err();
+    assert!(matches!(err, Error::NoAnswer(ref n) if n.empty), "{err:?}");
+    assert_eq!(d.counts(), (0, 3));
+}
+
+/// A cell socket nothing listens on took no byte of the request: the
+/// call goes to TCP, POST or GET.
+#[test]
+fn a_refused_cell_socket_sends_nothing_and_tcp_answers() {
+    use std::os::unix::net::UnixListener;
+    let d = door("refused", Act::Answer, Act::Answer);
+    let dead = PathBuf::from(format!("/tmp/k5tcd-dead-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&dead);
+    drop(UnixListener::bind(&dead).unwrap());
+    let mut c = with_passport(d.port, &dead);
+    let r = c.send("/cli/workspace/msg", Call::PostForm(&["text=x"])).unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    let r = c.send_json(true, "/cli/compute/run", "{}").unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    let r = c.send("/cli/inbox/list", Call::Request(&[])).unwrap();
+    assert_eq!((r.status, r.channel), (200, Channel::Tcp));
+    assert_eq!(d.counts(), (0, 3));
+    std::fs::remove_file(&dead).unwrap();
 }

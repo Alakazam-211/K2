@@ -149,6 +149,14 @@ pub enum Call<'a> {
     PostJson(&'a [u8]),
 }
 
+impl Call<'_> {
+    /// A POST: it may change something, so once any of it went out on the
+    /// cell socket it is never sent again over TCP.
+    fn is_post(self) -> bool {
+        !matches!(self, Call::Request(_))
+    }
+}
+
 /// The internal kinds: the [`Call`]s, `cli_post_json_stdin` and
 /// `cli_send_json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,6 +257,11 @@ pub enum Error {
     BadTarget { target: String, byte: u8 },
     /// A cell-socket call without a passport and its socket.
     NoCellSocket { endpoint: String },
+    /// A POST went out on the cell socket and no usable answer came back
+    /// (no answer in time, a connection closed or reset before the answer
+    /// ended, or a 5xx with an empty body). The daemon may have run it,
+    /// so it is not sent again over TCP.
+    MaybeApplied { endpoint: String, waited: u64 },
 }
 
 impl fmt::Display for Error {
@@ -261,11 +274,29 @@ impl fmt::Display for Error {
             Error::Broken { endpoint, why } => write!(f, "the request to {endpoint} failed: {why}"),
             Error::BadTarget { target, byte } => write!(f, "won't send {target:?}: byte 0x{byte:02x} can't be in a URL"),
             Error::NoCellSocket { endpoint } => write!(f, "no session passport and cell socket for {endpoint}"),
+            Error::MaybeApplied { endpoint, waited } => write!(
+                f,
+                "Error: K2's server didn't answer {endpoint} ({waited} s); the request may have been applied. Check before running it again."
+            ),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+/// A call that failed, and whether any of its request may have reached
+/// the daemon ([`wire::Failure::sent`]).
+#[derive(Debug)]
+struct Failed {
+    error: Error,
+    sent: bool,
+}
+
+impl Failed {
+    fn unsent(error: Error) -> Failed {
+        Failed { error, sent: false }
+    }
+}
 
 /// The routes the cell socket serves (`_uds_eligible`,
 /// `cli/src/cell-socket.sh`). Anything else goes over TCP.
@@ -367,29 +398,34 @@ impl Client {
     /// One call on one channel: `cli_request`, `cli_request_uds`, and the
     /// others of [`Call`].
     pub fn call(&mut self, channel: Channel, endpoint: &str, call: Call<'_>) -> Result<Response, Error> {
-        self.call_from(channel, endpoint, call, Instant::now())
+        self.call_from(channel, endpoint, call, Instant::now()).map_err(|f| f.error)
     }
 
     /// `cli_send`: the cell socket when there is a passport with a live
     /// socket and the route is one it serves, then TCP when that gave no
-    /// usable answer (an error, an empty body, or "not served on cell
-    /// socket").
+    /// usable answer: nothing of the request went out, or the daemon said
+    /// "not served on cell socket" (no handler ran). A GET also goes to
+    /// TCP after a failure or an empty body, as the shell's does. A POST
+    /// that went out never does: a failure is [`Error::MaybeApplied`], and
+    /// an answer, even an empty one, is the answer.
     pub fn send(&mut self, endpoint: &str, call: Call<'_>) -> Result<Response, Error> {
         let t0 = Instant::now();
         if self.cell_socket().is_some() && uds_eligible(endpoint) {
-            if let Ok(r) = self.call_from(Channel::Uds, endpoint, call, t0) {
-                if !r.body.is_empty() && !contains(&r.body, NOT_SERVED) {
-                    return Ok(r);
-                }
+            match self.call_from(Channel::Uds, endpoint, call, t0) {
+                Ok(r) if contains(&r.body, NOT_SERVED) => {}
+                Ok(r) if call.is_post() || !r.body.is_empty() => return Ok(r),
+                Ok(_) => {}
+                Err(f) if f.sent && call.is_post() => return Err(maybe_applied(endpoint, t0)),
+                Err(_) => {}
             }
         }
-        self.call_from(Channel::Tcp, endpoint, call, t0)
+        self.call_from(Channel::Tcp, endpoint, call, t0).map_err(|f| f.error)
     }
 
     /// `cli_post_json_stdin`: a JSON body that was read from stdin, over
     /// TCP. Sent once: no tries, no heal, no line, no note.
     pub fn post_json_stdin(&mut self, endpoint: &str, body: &[u8]) -> Result<Response, Error> {
-        self.run(Kind::PostJsonStdin, Channel::Tcp, endpoint, &[], body, Instant::now())
+        self.run(Kind::PostJsonStdin, Channel::Tcp, endpoint, &[], body, Instant::now()).map_err(|f| f.error)
     }
 
     /// `cli_send_json METHOD PATH [payload]`: GET with `payload` as a
@@ -397,18 +433,21 @@ impl Client {
     /// when there is a passport with a live socket (any route), then TCP
     /// when that failed, said "not served on cell socket" or gave status
     /// 0. The shell prints `<body>\n<status>`; here [`Response`] holds both
-    /// and an error stands for its `000`.
+    /// and an error stands for its `000`. A POST that went out on the cell
+    /// socket and failed is [`Error::MaybeApplied`], never sent again over
+    /// TCP; a GET goes to TCP, as the shell's does.
     pub fn send_json(&mut self, post: bool, path: &str, payload: &str) -> Result<Response, Error> {
         let kind = if post { Kind::SendJsonPost } else { Kind::SendJsonGet };
         let t0 = Instant::now();
         if self.cell_socket().is_some() {
-            if let Ok(r) = self.run(kind, Channel::Uds, path, &[], payload.as_bytes(), t0) {
-                if !contains(&r.body, NOT_SERVED) && r.status != 0 {
-                    return Ok(r);
-                }
+            match self.run(kind, Channel::Uds, path, &[], payload.as_bytes(), t0) {
+                Ok(r) if !contains(&r.body, NOT_SERVED) && r.status != 0 => return Ok(r),
+                Ok(_) => {}
+                Err(f) if f.sent && post => return Err(maybe_applied(path, t0)),
+                Err(_) => {}
             }
         }
-        self.run(kind, Channel::Tcp, path, &[], payload.as_bytes(), t0)
+        self.run(kind, Channel::Tcp, path, &[], payload.as_bytes(), t0).map_err(|f| f.error)
     }
 
     /// The cell socket, when there is a passport, the socket is a socket
@@ -423,7 +462,7 @@ impl Client {
         }
     }
 
-    fn call_from(&mut self, channel: Channel, endpoint: &str, call: Call<'_>, t0: Instant) -> Result<Response, Error> {
+    fn call_from(&mut self, channel: Channel, endpoint: &str, call: Call<'_>, t0: Instant) -> Result<Response, Failed> {
         match call {
             Call::Request(args) => self.run(Kind::Request, channel, endpoint, args, &[], t0),
             Call::RequestPost(args) => self.run(Kind::RequestPost, channel, endpoint, args, &[], t0),
@@ -433,8 +472,8 @@ impl Client {
     }
 
     /// One shell request function, all its tries included.
-    fn run(&mut self, kind: Kind, channel: Channel, endpoint: &str, args: &[&str], body: &[u8], t0: Instant) -> Result<Response, Error> {
-        let (target, request) = self.build(kind, channel, endpoint, args, body)?;
+    fn run(&mut self, kind: Kind, channel: Channel, endpoint: &str, args: &[&str], body: &[u8], t0: Instant) -> Result<Response, Failed> {
+        let (target, request) = self.build(kind, channel, endpoint, args, body).map_err(Failed::unsent)?;
         let max = self.max_time(kind);
         let mut tries = 1;
         let result = loop {
@@ -451,11 +490,14 @@ impl Client {
         let answer = match result {
             Ok(a) => {
                 if kind.says_no_answer() && kind.reads_status() && a.body.is_empty() && (500..600).contains(&a.status) {
-                    return Err(Error::NoAnswer(no_answer(endpoint, t0, true)));
+                    return Err(Failed { error: Error::NoAnswer(no_answer(endpoint, t0, true)), sent: true });
                 }
                 a
             }
-            Err(f) => return Err(failure(kind, endpoint, f, t0)),
+            Err(f) => {
+                let sent = f.sent();
+                return Err(Failed { error: failure(kind, endpoint, f, t0), sent });
+            }
         };
         if kind == Kind::RequestPost && channel == Channel::Tcp && contains(&answer.body, METHOD_NOT_ALLOWED) {
             return self.run(Kind::Request, Channel::Tcp, endpoint, args, &[], t0);
@@ -702,8 +744,12 @@ fn failure(kind: Kind, endpoint: &str, f: Failure, t0: Instant) -> Error {
         Failure::TimedOut | Failure::ConnectTimedOut => Error::TimedOut { endpoint },
         Failure::Empty => Error::Empty { endpoint },
         Failure::Connect(err) => Error::Unreachable { endpoint, err },
-        Failure::Broken(why) => Error::Broken { endpoint, why },
+        Failure::Broken(why) | Failure::NotSent(why) => Error::Broken { endpoint, why },
     }
+}
+
+fn maybe_applied(endpoint: &str, t0: Instant) -> Error {
+    Error::MaybeApplied { endpoint: endpoint.to_string(), waited: t0.elapsed().as_secs() }
 }
 
 fn no_answer(endpoint: &str, t0: Instant, empty: bool) -> NoAnswer {

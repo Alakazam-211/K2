@@ -78,6 +78,16 @@
 //! - An answer holding `Invalid or missing auth token`: once per client,
 //!   the same call again with a healed passport ([`client::Healer`]).
 //!   Every call on either channel but `cli_post_json_stdin`.
+//! - `cli_send` and `cli_send_json`, from the cell socket to TCP: when
+//!   nothing of the request went out on the socket (the connect failed or
+//!   timed out, or the first write took no byte), or the daemon answered
+//!   `not served on cell socket` (no handler ran). A GET also goes to TCP
+//!   after any other failure, and `cli_send`'s after an empty body, as the
+//!   shell's do. A POST that went out never does: see below.
+//!
+//! An answer is read to its end (its `Content-Length`, its last chunk, or
+//! the end of the stream when it has neither) and no further, so a close
+//! or a reset after a whole answer leaves the answer standing.
 //!
 //! # Time limits
 //!
@@ -112,6 +122,16 @@
 //!   curl exit 3; a `#`: curl cuts it off) is an error here, never sent.
 //! - A failed `cli_send_json` is an error here; the shell prints status
 //!   `000`.
+//! - A POST that went out on the cell socket is never sent again over
+//!   TCP. When no usable answer came back (none in time, a close or a
+//!   reset before the answer ended, a 5xx with an empty body) it is
+//!   [`client::Error::MaybeApplied`]: `Error: K2's server didn't answer
+//!   <ep> (<n> s); the request may have been applied. Check before running
+//!   it again.` (after the shell's line for a send it couldn't confirm,
+//!   `_k2_idem_send`). An answer with an empty body is the answer. The
+//!   shell's `cli_send` and `cli_send_json` send such a POST again over
+//!   TCP (curl exit 28, 52 or 56 after the request went out, or an empty
+//!   answer).
 
 pub mod client;
 pub mod encode;

@@ -28,6 +28,12 @@
 //!   6b. Nothing writes a `.blend` for now: the pack's edit verbs and the
 //!      write routes are refused `409 blend_writer_disabled` (exit 3, the
 //!      fixed words), the file untouched; no claims.
+//!   6c. A person's `edit`, `undo` and `redo` on the scene's socket are
+//!      `refused` with `blend_writer_disabled` in `error.details.code`.
+//!   6d. After every refusal the scene reads as before (the watch snapshot,
+//!      `object show`, `scene list`, the previews, an `as-is` export of the
+//!      original bytes), at the same version, its disk state `clean`, also
+//!      after disk ticks: no refused change sits in the doc.
 //!   7. Turning the fab core off closes its files and they are any-file
 //!      docs again (no index verbs).
 //!
@@ -126,6 +132,13 @@ fn file_core(port: u16, path: &str) -> J {
     assert_eq!(st, 200, "cores {path}: {body}");
     let v: J = serde_json::from_str(&body).expect("cores JSON");
     v["file"].clone()
+}
+
+/// `/cli/docs/status` on `path` (200).
+fn doc_status(port: u16, path: &str) -> J {
+    let (st, body) = http(port, "GET", &format!("/cli/docs/status?token={OWNER}&path={}", enc(path)), None);
+    assert_eq!(st, 200, "status {path}: {body}");
+    serde_json::from_str(&body).unwrap_or_else(|e| panic!("status JSON ({e}): {body}"))
 }
 
 /// `/cli/docs/tool` on `path`: (status, the answer).
@@ -395,6 +408,10 @@ async fn timeline_fab_and_blend_cores_headless() {
     // ── 6b. Nothing writes a .blend: the pack's edit verbs and the write
     //        routes are refused with the typed reason; the file is untouched ──
     let before = std::fs::read(&room).expect("the scene's bytes");
+    let (st, shown_before) = tool(port, &room, &["object", "show", &obj]);
+    assert_eq!((st, &shown_before["exit"]), (200, &json!(0)), "object show before the refusals: {shown_before}");
+    let status_before = doc_status(port, &room);
+    assert_eq!(status_before["disk"]["state"], "clean", "{status_before}");
     let (st, placed) = tool(port, &room, &["object", "place", &obj, "--loc", "0,0,1"]);
     assert_eq!(st, 409, "object place: {placed}");
     assert_eq!((&placed["error"]["code"], &placed["error"]["exit"]), (&json!("blend_writer_disabled"), &json!(3)), "{placed}");
@@ -409,6 +426,74 @@ async fn timeline_fab_and_blend_cores_headless() {
         assert_eq!((st, &v["error"]["code"]), (409, &json!("blend_writer_disabled")), "{route}: {out}");
     }
     assert_eq!(std::fs::read(&room).expect("the scene's bytes"), before, "the file is untouched");
+
+    // ── 6c. A person's edit, undo and redo on the scene's socket (as a
+    //        person's client would send them) are refused the same way,
+    //        before the kit; nothing is stored ──
+    let (mut p, _) = tokio_tungstenite::connect_async(&url(&room, None)).await.expect("a person's socket on the scene");
+    let wp = next_frame(&mut p, "the person's welcome").await;
+    assert_eq!((&wp["type"], &wp["rights"]), (&json!("welcome"), &json!("read")), "{wp}");
+    let base = wp["version"].as_u64().unwrap_or_else(|| panic!("the welcome's version: {wp}"));
+    for (op, frame) in [
+        (7, json!({"type": "edit", "op": 7, "root": "colls", "base": base, "hunks": [{"start": 0, "end": 0, "insert": "x"}]})),
+        (8, json!({"type": "undo", "op": 8})),
+        (9, json!({"type": "redo", "op": 9})),
+    ] {
+        p.send(Message::Text(frame.to_string())).await.expect("send the person's frame");
+        let r = next_of(&mut p, "refused").await;
+        assert_eq!(r["op"], op, "{r}");
+        assert_eq!(
+            (&r["error"]["details"]["code"], &r["error"]["details"]["hint"]),
+            (&json!("blend_writer_disabled"), &json!("K2 can't save .blend edits yet; this file opens read-only.")),
+            "{r}"
+        );
+    }
+
+    // ── 6d. After every refusal the scene reads as before: the person's
+    //        watch snapshot, object show and scene list, the previews (the
+    //        head read), an export of the whole file; the version is the
+    //        same and nothing waits to be written, also after disk ticks ──
+    p.send(Message::Text(json!({"type": "watch"}).to_string())).await.expect("send watch");
+    let head = next_of(&mut p, "keyed_snapshot").await;
+    assert!(head["pages"].as_u64().is_some_and(|n| n >= 1), "the watch snapshot after the refusals: {head}");
+    drop(p);
+    let (st, shown_after) = tool(port, &room, &["object", "show", &obj]);
+    assert_eq!((st, &shown_after["exit"]), (200, &json!(0)), "object show after the refusals: {shown_after}");
+    assert_eq!(shown_after["stdout"], shown_before["stdout"], "object show is as before");
+    let (st, listed) = tool(port, &room, &["scene", "list"]);
+    assert_eq!((st, &listed["stdout"]), (200, &scene["stdout"]), "scene list is as before: {listed}");
+    let (st, body) = http(port, "GET", &format!("/cli/docs/preview?token={OWNER}&path={}", enc(&room)), None);
+    assert_eq!(st, 200, "the previews after the refusals: {body}");
+    let pv: J = serde_json::from_str(&body).expect("preview JSON");
+    assert!(pv["containers"].as_array().is_some_and(|c| c.iter().any(|c| c["key"] == json!(obj))), "{pv}");
+    let (st, body) = http(port, "POST", &format!("/cli/docs/export?token={OWNER}"), Some(&json!({"path": room, "target": "as-is", "fetch": true}).to_string()));
+    assert_eq!(st, 200, "an export after the refusals: {body}");
+    let mut job: J = serde_json::from_str(&body).expect("export JSON");
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while job["state"] != "done" {
+        assert!(matches!(job["state"].as_str(), Some("queued" | "running")), "the export: {job}");
+        assert!(std::time::Instant::now() < deadline, "the export never finished: {job}");
+        std::thread::sleep(Duration::from_millis(250));
+        let id = job["job"].as_str().unwrap_or_else(|| panic!("a job id: {job}")).to_string();
+        let (st, body) = http(port, "GET", &format!("/cli/docs/export/status?token={OWNER}&job={id}"), None);
+        assert_eq!(st, 200, "export status: {body}");
+        job = serde_json::from_str(&body).expect("export status JSON");
+    }
+    assert_eq!(job["size"], json!(before.len()), "{job}");
+    let id = job["job"].as_str().unwrap_or_else(|| panic!("a job id: {job}")).to_string();
+    let (st, body) = http(port, "GET", &format!("/cli/docs/export/fetch?token={OWNER}&job={id}"), None);
+    assert_eq!(st, 200, "export fetch: {body}");
+    let fetched: J = serde_json::from_str(&body).expect("fetch JSON");
+    assert_eq!(fetched["eof"], true, "one chunk: {fetched}");
+    let b64 = fetched["bytesB64"].as_str().unwrap_or_else(|| panic!("bytesB64: {fetched}"));
+    let got = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).expect("base64");
+    assert_eq!(got, before, "the export is the original scene");
+    for when in ["after the refusals", "after the disk ticks"] {
+        let st = doc_status(port, &room);
+        assert_eq!((&st["version"], &st["disk"]["state"]), (&status_before["version"], &json!("clean")), "{when}: {st}");
+        std::thread::sleep(Duration::from_millis(1500));
+    }
+    assert_eq!(std::fs::read(&room).expect("the scene's bytes"), before, "the file is still untouched");
 
     // ── 7. Fab off: its files are any-file docs again ──
     let off = flip(&[("any-file", true), ("timeline", true), ("fab", false), ("blend", true)]).await;

@@ -165,6 +165,24 @@ pub fn refused(path: &str, rel: &str, writes: bool, argv: Option<&[String]>) -> 
     (writes || tool_edits).then(|| refusal(rel))
 }
 
+/// A scene socket's reply to a person's `edit`, `undo` or `redo` on a `.blend`
+/// K2 must not write ([`writes_off`]): `refused {op}` with the kit's
+/// `MPC-E113`, [`WHY`] as its words and [`CODE`] in `details.code` (with the
+/// hint), so the person reads the same reason as on every write route.
+/// `None` for any other frame or file: the keyed socket's own refusal
+/// (`live_deck::refuse`) answers those. Either way nothing reaches the kit.
+pub fn socket_refusal(f: &super::live_wire::ClientFrame, rel: &str) -> Option<k2_mpc_base::errors::Value> {
+    use super::live_wire::{self as wire, ClientFrame};
+    let op = match f {
+        ClientFrame::Edit { op, .. } | ClientFrame::Undo { op } | ClientFrame::Redo { op } => *op,
+        _ => return None,
+    };
+    if !writes_off(rel) {
+        return None;
+    }
+    Some(wire::refused_frame(op, &wire::report("MPC-E113", WHY).with("code", CODE).with("hint", WHY)))
+}
+
 /// The live BLEND pack, read-only: every read is `BlendLive`'s; a render
 /// that would change the file is an error, and a file is never built from
 /// content alone.
@@ -324,6 +342,226 @@ mod tests {
             }
         }
         panic!("the BLEND pack's splice wrote no object's visibility flip: {errs:?}");
+    }
+
+    use k2_mpc_base::session::{
+        AuditEvent, Config, ConnId, DiskState, Host, Need, Participant, ParticipantKind, Rights, Session, SessionError, SessionManager, Stay,
+    };
+    use k2_mpc_base::store::{DocKey, DocStore};
+    use k2_mpc_base::tools::{ToolOptions, ToolOutput, ToolRunError};
+    use std::sync::Arc;
+
+    /// The kit's host for a live scene: K2's own rule (`K2Host::rights` is
+    /// `host::rights_for`, layer 1), or (`false`) one that lets everyone
+    /// edit: what any path that skipped layer 1 would see.
+    struct LayerOne(bool);
+
+    impl Host for LayerOne {
+        fn rights(&self, who: &Participant, key: &DocKey) -> Rights {
+            if self.0 {
+                super::super::host::rights_for(&who.pid, key, None).kit()
+            } else {
+                Rights::editor()
+            }
+        }
+        fn now_ms(&self) -> u64 {
+            super::super::host::now_ms()
+        }
+        fn on_event(&self, _: &AuditEvent) {}
+    }
+
+    /// The workspace the scene is in; `agent:<it>` is the agent of that
+    /// workspace (full rights there before the cap).
+    const SPACE: &str = "ws-blend";
+
+    /// A `.blend` on disk, opened live with the pack K2 opens a scene with
+    /// ([`live_pack`]) through the kit's manager, and a person (the owner)
+    /// and the workspace's own agent joined.
+    struct Scene {
+        dir: std::path::PathBuf,
+        mgr: SessionManager,
+        s: Arc<Session>,
+        file: std::path::PathBuf,
+        bytes: Vec<u8>,
+        person: ConnId,
+        agent: ConnId,
+    }
+
+    impl Drop for Scene {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    impl Scene {
+        fn open(layer_one: bool) -> Scene {
+            let dir = std::env::temp_dir().join(format!("k2-blend-ro-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).expect("dir");
+            let dir = dir.canonicalize().expect("canonical dir");
+            let bytes = k2_mpc_blend::testgen::scenes::living_room();
+            let file = dir.join("room.blend");
+            std::fs::write(&file, &bytes).expect("the scene on disk");
+            let mut config = Config::default();
+            config.edit_rate_per_s = 1_000_000;
+            config.edit_burst = 1_000_000;
+            let store = Arc::new(DocStore::open(dir.join("docs.redb")).expect("store"));
+            let mgr = SessionManager::new(store, Arc::new(LayerOne(layer_one)), config);
+            let s = mgr.open_file(live_pack(), &DocKey { space: SPACE.into(), path: "room.blend".into() }, &file, &dir).expect("the scene opens live");
+            let person = s.join(Participant::new("person:owner", "Owner", "#7c3aed", ParticipantKind::Person, "tab"), Stay::Held).expect("the owner joins").conn;
+            let agent = s.join(Participant::new(format!("agent:{SPACE}"), "Agent", "#16a34a", ParticipantKind::Agent, "cli"), Stay::Held).expect("the agent joins").conn;
+            Scene { dir, mgr, s, file, bytes, person, agent }
+        }
+
+        fn tool(&self, conn: ConnId, argv: &[&str]) -> Result<ToolOutput, ToolRunError> {
+            let argv: Vec<String> = argv.iter().map(|a| a.to_string()).collect();
+            self.s.run_tool_with(conn, k2_mpc_markdown::ROOT, &argv, b"", &ToolOptions::new())
+        }
+
+        /// A read verb's stdout; panics when it fails.
+        fn shown(&self, conn: ConnId, argv: &[&str]) -> String {
+            let out = self.tool(conn, argv).unwrap_or_else(|e| panic!("{argv:?} must read: {e}"));
+            assert_eq!(out.exit, 0, "{argv:?}: {}", String::from_utf8_lossy(&out.stdout));
+            String::from_utf8(out.stdout).expect("UTF-8")
+        }
+
+        /// The objects' addresses, as `scene list` gives them.
+        fn objects(&self) -> Vec<String> {
+            let list = self.shown(self.person, &["scene", "list"]);
+            let mut out: Vec<String> = Vec::new();
+            for w in list.split(|c: char| !(c.is_ascii_alphanumeric() || c == '@' || c == ':')) {
+                if w.starts_with("@obj:") && !out.iter().any(|o| o == w) {
+                    out.push(w.to_string());
+                }
+            }
+            assert!(!out.is_empty(), "scene list names no object: {list}");
+            out
+        }
+    }
+
+    /// The first `object visibility` call the BLEND pack applies as a change
+    /// to a fresh copy of the scene (layer 1 skipped): the edit a person's
+    /// client would send. Panics when none applies.
+    fn a_changing_edit() -> Vec<String> {
+        let sc = Scene::open(false);
+        for obj in sc.objects() {
+            for v in ["off", "on"] {
+                let argv = ["object", "visibility", obj.as_str(), "--viewport", v];
+                if let Ok(out) = sc.tool(sc.person, &argv) {
+                    if out.exit == 0 && out.changed.is_some() {
+                        return argv.iter().map(|a| a.to_string()).collect();
+                    }
+                }
+            }
+        }
+        panic!("no object's visibility flip applied on the living room scene");
+    }
+
+    /// The stuck read's shape, shown with layer 1 skipped (a host that gave
+    /// a person edit on a read-only `.blend`): the change goes into the doc,
+    /// the read-only pack refuses to render it, and from then on every read
+    /// (the whole doc, a verb read) fails with that refusal. This is why
+    /// layer 1 must hold on every path; the test below pins that it does.
+    /// When the kit stops rendering on reads (K2 Cores' `Pack::check_edit`),
+    /// the reads here answer and this control can go.
+    #[test]
+    fn without_layer_one_a_refused_render_sticks_every_read() {
+        let _m = super::super::cores::tests::mirror_lock();
+        set_writer_for_test(None);
+        let edit = a_changing_edit();
+        let sc = Scene::open(false);
+        let obj = edit[2].clone();
+        sc.shown(sc.person, &["object", "show", &obj]);
+        sc.s.read(sc.person).expect("a whole read before the change");
+        let argv: Vec<&str> = edit.iter().map(String::as_str).collect();
+        let out = sc.tool(sc.person, &argv).unwrap_or_else(|e| panic!("with edit, the change applies: {e}"));
+        assert!(out.changed.is_some(), "the change is in the doc");
+        let read = sc.s.read(sc.person);
+        assert!(matches!(&read, Err(e) if e.to_string().contains(CODE)), "a whole read fails with the render's refusal: {:?}", read.map(|r| r.version));
+        let shown = sc.tool(sc.person, &["object", "show", &obj]);
+        assert!(matches!(&shown, Err(e) if e.to_string().contains(CODE)), "a verb read fails the same way: {:?}", shown.map(|o| o.exit));
+    }
+
+    /// Layer 1 on every principal: with the blend core on, a person (the
+    /// owner, the most rights there are) and the workspace's own agent both
+    /// have read and no edit on a `.blend`, so the kit refuses their edit
+    /// verbs and undo (`Forbidden {need: Edit}`) before applying anything:
+    /// the version, the reads (whole, `object show`, `scene list`), the
+    /// disk state and the file all stay as they were, and the kit's disk
+    /// tick reports no error for it. The edit is one the pack itself would
+    /// apply (shown by the control above).
+    #[test]
+    fn a_person_or_agent_edit_never_reaches_a_live_blend_and_reads_keep_working() {
+        let _m = super::super::cores::tests::mirror_lock();
+        super::super::cores::tests::all_off();
+        set_writer_for_test(None);
+        let edit = a_changing_edit();
+        super::super::cores::set_for_test("blend", true);
+        let key = DocKey { space: SPACE.into(), path: "room.blend".into() };
+        for pid in ["person:owner".to_string(), format!("agent:{SPACE}")] {
+            let r = super::super::host::rights_for(&pid, &key, None);
+            assert!(r.read && !r.edit, "{pid}: {r:?}");
+        }
+        let sc = Scene::open(true);
+        let obj = edit[2].clone();
+        let v0 = sc.s.status().expect("status").version;
+        let read0 = sc.s.read(sc.person).expect("a whole read");
+        assert_eq!(read0.bytes, sc.bytes, "the read is the file");
+        let shown0 = sc.shown(sc.person, &["object", "show", &obj]);
+        let list0 = sc.shown(sc.person, &["scene", "list"]);
+        let argv: Vec<&str> = edit.iter().map(String::as_str).collect();
+        let place = ["object", "place", obj.as_str(), "--loc", "0,0,1"];
+        let rename = ["object", "rename", obj.as_str(), "--name", "Moved", "--break-links"];
+        for (who, conn) in [("the owner", sc.person), ("the agent", sc.agent)] {
+            for a in [&argv[..], &place[..], &rename[..]] {
+                match sc.tool(conn, a) {
+                    Err(ToolRunError::Session(SessionError::Forbidden { need: Need::Edit })) => {}
+                    other => panic!("{who}'s {a:?} must be refused for the edit right: {:?}", other.map(|o| (o.exit, o.changed.is_some()))),
+                }
+            }
+            match sc.s.undo(conn, 1) {
+                Err(SessionError::Forbidden { need: Need::Edit }) => {}
+                other => panic!("{who}'s undo must be refused for the edit right: {:?}", other.map(|_| ())),
+            }
+        }
+        let st = sc.s.status().expect("status");
+        assert_eq!(st.version, v0, "nothing was applied");
+        assert!(matches!(st.disk, Some(DiskState::Clean)), "nothing waits to be written: {:?}", st.disk);
+        let tick = sc.mgr.tick().expect("the kit's tick");
+        assert!(tick.errors.iter().all(|(k, _)| *k != key), "no write-back error on the tick: {:?}", tick.errors);
+        for conn in [sc.person, sc.agent] {
+            let read = sc.s.read(conn).unwrap_or_else(|e| panic!("a whole read after the refusals: {e}"));
+            assert_eq!((read.version, &read.bytes), (v0, &sc.bytes), "the original scene");
+            assert_eq!(sc.shown(conn, &["object", "show", &obj]), shown0, "object show is as before");
+            assert_eq!(sc.shown(conn, &["scene", "list"]), list0, "scene list is as before");
+        }
+        assert_eq!(std::fs::read(&sc.file).expect("the file"), sc.bytes, "the file is untouched");
+        super::super::cores::tests::all_off();
+    }
+
+    /// A person's edit, undo or redo on a live `.blend`'s socket is refused
+    /// with the write routes' reason; other frames, or another file, are
+    /// left to the keyed socket's own answer.
+    #[test]
+    fn a_scene_socket_refuses_a_persons_edit_with_the_typed_reason() {
+        use super::super::live_wire::ClientFrame;
+        let _m = super::super::cores::tests::mirror_lock();
+        super::super::cores::tests::all_off();
+        set_writer_for_test(None);
+        let edit = ClientFrame::Edit { op: 7, root: "colls".into(), base: 1, hunks: vec![], group: None };
+        assert!(socket_refusal(&edit, "room.blend").is_none(), "the core off: not a scene");
+        super::super::cores::set_for_test("blend", true);
+        for (f, op) in [(edit, 7), (ClientFrame::Undo { op: 8 }, 8), (ClientFrame::Redo { op: 9 }, 9)] {
+            let v: serde_json::Value = serde_json::from_str(&socket_refusal(&f, "a/Room.blend").expect("refused").to_json()).expect("JSON");
+            assert_eq!((&v["type"], &v["op"], &v["error"]["id"]), (&serde_json::json!("refused"), &serde_json::json!(op), &serde_json::json!("MPC-E113")), "{v}");
+            assert_eq!((&v["error"]["details"]["code"], &v["error"]["details"]["hint"]), (&serde_json::json!(CODE), &serde_json::json!(WHY)), "{v}");
+            assert!(v["error"]["message"].as_str().is_some_and(|m| m.contains(WHY)), "{v}");
+        }
+        assert!(socket_refusal(&ClientFrame::Watch, "room.blend").is_none());
+        assert!(socket_refusal(&ClientFrame::Undo { op: 1 }, "deck.pptx").is_none());
+        set_writer_for_test(Some(true));
+        assert!(socket_refusal(&ClientFrame::Undo { op: 1 }, "room.blend").is_none(), "the writer on");
+        set_writer_for_test(None);
+        super::super::cores::tests::all_off();
     }
 
     /// The live pack's edit verbs are refused by name; its reads aren't.

@@ -1384,6 +1384,12 @@ impl Worker {
             Err(b) => return self.send(b.reply()),
         };
         if self.keyed {
+            // A `.blend` K2 can't write: a person's edit, undo or redo is
+            // refused with the write routes' reason (`blend_writer_disabled`),
+            // before anything reaches the kit (`blend_read_only`).
+            if let Some(reply) = super::blend_read_only::socket_refusal(&f, &self.rel) {
+                return self.send(reply);
+            }
             if let Some(reply) = super::live_deck::refuse(&f) {
                 return self.send(reply);
             }

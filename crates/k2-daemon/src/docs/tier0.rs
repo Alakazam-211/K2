@@ -1032,7 +1032,8 @@ mod tests {
     /// K-PAR-5 for every blob pack: each verb of `Registry::for_blob_pack`
     /// (any file, and PSD/PSB files: comments, the layer verbs, `outline`,
     /// `node`, claims by node) is a `k2 doc` verb the CLI routes, and its
-    /// help names it.
+    /// help names it; a drawing's own read verbs are `k2 doc cad <verb>`,
+    /// in `k2 doc cad --help`.
     #[test]
     fn every_registry_verb_is_a_k2_doc_verb() {
         let cli = include_str!("../../../../cli/k2");
@@ -1047,15 +1048,22 @@ mod tests {
             .collect();
         let usage_start = cli.find("\n_doc_usage() {").expect("_doc_usage");
         let usage = &cli[usage_start..cli[usage_start..].find("\nEOF\n").expect("usage end") + usage_start];
+        // A drawing's reads (the CAD pack's own read verbs, in the registry
+        // since kit v0.22.0) are `k2 doc cad <verb>`, each a line of its help.
+        let cad_start = cli.find("\n_doc_cad_usage() {").expect("_doc_cad_usage");
+        let cad_usage = &cli[cad_start..cli[cad_start..].find("\nEOF\n").expect("cad usage end") + cad_start];
         let mut missing = Vec::new();
         for kind in super::super::blob_packs::BlobKind::ALL {
+            let drawing = matches!(kind, super::super::blob_packs::BlobKind::Dxf | super::super::blob_packs::BlobKind::Dwg);
             for spec in super::super::blob_packs::registry_of(kind).verbs() {
                 let word = spec.name.split_whitespace().next().unwrap_or(spec.name);
-                let routed = labels.contains(&word);
+                let a_cad_read = drawing && labels.contains(&"cad") && cad_usage.contains(&format!("\n  {} ", spec.name));
+                let routed = labels.contains(&word) || a_cad_read;
                 let documented = usage.contains(&format!("k2 doc {}", spec.name))
                     || usage.contains(&format!("k2 doc {word}"))
                     || usage.contains(&format!("|{word}"))
-                    || usage.contains(&format!("{word}|"));
+                    || usage.contains(&format!("{word}|"))
+                    || a_cad_read;
                 if !routed || !documented {
                     missing.push(format!("{} ({kind:?}: routed {routed}, in help {documented})", spec.name));
                 }

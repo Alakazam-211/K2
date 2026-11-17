@@ -217,6 +217,18 @@ describe('the BLEND writer off (this release: edits refused, no claims)', () => 
     expect(words(o)).not.toContain('blend_writer_disabled')
   })
 
+  it('no holder (the writer off): no Ask; asking the refused one changes nothing', () => {
+    const o = open()
+    o.t.push(WRITER_OFF)
+    expect(o.snap().refusal?.ask).toBeNull()
+  })
+
+  it('Ask only names a holder who isn’t the refused actor', () => {
+    const o = open({ upto: 'place Chair' })
+    o.play('refused')
+    expect(o.snap().refusal?.ask).toMatchObject({ id: 'atlas', name: 'Atlas' })
+  })
+
   it('the refusal’s own hint, when it has one, is the words', () => {
     const o = open()
     o.t.push({ ...WRITER_OFF, hint: 'Saving .blend files comes in a later release.' })

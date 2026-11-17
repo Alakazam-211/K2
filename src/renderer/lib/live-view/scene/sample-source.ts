@@ -115,9 +115,10 @@ function sizeOf(S: SimState, step: number): SceneSnapshot['size'] {
   return { size: 'large', noun: 'scene', count, unit: 'objects', groups: { count: colls, unit: 'collections' }, find: 'Find an object' }
 }
 
-/** A refusal as the shell says it: why in words when no one holds it; Ask the holder, else the one refused, while they're here. */
+/** A refusal as the shell says it: why in words when no one holds it; Ask the holder (not the one refused) while they're here. */
 function refusalOf(S: SimState, r: NonNullable<SimState['callout']>['r'], live: boolean): NonNullable<SceneSnapshot['refusal']> {
-  const to = actorOf(r.holder || r.actor)
+  // Ask only someone who can change it: a holder who isn't the one refused. No holder (driven, linked, the writer off): nobody to ask.
+  const to = r.holder && actorOf(r.holder).id !== actorOf(r.actor).id ? actorOf(r.holder) : null
   return {
     actor: actorOf(r.actor).name,
     verb: VERB_WORD[r.verb] || 'change',
@@ -125,7 +126,7 @@ function refusalOf(S: SimState, r: NonNullable<SimState['callout']>['r'], live: 
     holder: r.holder ? actorOf(r.holder).name : null,
     at_ms: r.at_ms ?? S.at ?? 0,
     why: r.holder ? null : refusalWhy(r.code, (r as { hint?: string | null }).hint),
-    ask: live && S.peers[to.id] ? { id: to.id, name: to.name } : null,
+    ask: to && live && S.peers[to.id] ? { id: to.id, name: to.name } : null,
     address: { label: nameOf(S.D, r.unit), address: r.unit },
   }
 }

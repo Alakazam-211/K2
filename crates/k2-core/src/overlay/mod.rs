@@ -21,6 +21,8 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
+use crate::product_name;
+
 pub use doc::{CardAction, ChoiceBody, ChoiceOption, CLOSED_DISMISSED, CLOSED_WITHDRAWN, CLOSE_REASON_MAX_CHARS, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretInject, SecretProposal, ThreadChangedFile, ThreadChanges, NoticeAction, SystemNotice, ThreadContext, THREAD_CHANGES_MAX_FILES, WidgetOrigin, WidgetPlacementClaim};
 pub use approval::{mark_approval, post_approval, ApprovalCardBody};
 pub use attachments::ThreadAttachment;
@@ -363,7 +365,7 @@ pub fn post_thread_keyed(
 
 /// The refusal when a post door hands the core K2's own stamp
 /// (thread-system-notice-v1): only [`post_system_notice`] writes it.
-pub const SYSTEM_AUTHOR_REFUSED: &str = "only K2 itself posts as K2 (system)";
+pub const SYSTEM_AUTHOR_REFUSED: &str = concat!("only ", product_name!(), " itself posts as ", product_name!(), " (system)");
 
 /// Belt for every post funnel a person, agent or App guest reaches: the
 /// `system` stamp never comes from a caller. The doors stamp the

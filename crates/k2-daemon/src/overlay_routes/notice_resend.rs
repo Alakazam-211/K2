@@ -26,6 +26,8 @@
 //!   carries the changed notice. A second press is 409 `already_resent`
 //!   with the first press's `doneAt`, and sends nothing.
 
+use k2_core::product_name;
+
 use super::*;
 
 pub(crate) const ROUTE: &str = k2_core::overlay::doc::NOTICE_RESEND_ROUTE;
@@ -43,7 +45,7 @@ pub(crate) fn handle(params: &HashMap<String, String>, session_author: &str) -> 
         return error_json("403 Forbidden", "person_only", "Send again is for the person who sent the message; an agent can't press it");
     }
     if request_skin().is_some() {
-        return error_json("403 Forbidden", "person_only", "Send again is for people signed in to K2, not App passes");
+        return error_json("403 Forbidden", "person_only", concat!("Send again is for people signed in to ", product_name!(), ", not App passes"));
     }
     let resolved = match resolve_thread_addr(&thread) {
         Ok(r) => r,
@@ -53,14 +55,14 @@ pub(crate) fn handle(params: &HashMap<String, String>, session_author: &str) -> 
         return r;
     }
     let Some(by) = card_actor_author(params, session_author) else {
-        return error_json("403 Forbidden", "person_only", "Send again is for people signed in to K2");
+        return error_json("403 Forbidden", "person_only", concat!("Send again is for people signed in to ", product_name!()));
     };
     // A post deleted since is never sent again (and the button stays, so
     // nothing claims a send that didn't happen).
     match overlay::notice_resend_job(&doc_id) {
         Ok(Some(json)) => match serde_json::from_str::<ThreadDeliveryJob>(&json) {
             Ok(job) if job.source_deleted() => {
-                return error_json("409 Conflict", "source_deleted", "the message was deleted, so K2 won't send it again")
+                return error_json("409 Conflict", "source_deleted", concat!("the message was deleted, so ", product_name!(), " won't send it again"))
             }
             Ok(_) => {}
             Err(e) => return error_json("500 Internal Server Error", "store", format!("unreadable delivery: {e}")),
@@ -72,7 +74,7 @@ pub(crate) fn handle(params: &HashMap<String, String>, session_author: &str) -> 
         Ok(c) => c,
         Err(e) if e == overlay::NOTICE_NOT_FOUND => return not_found(format!("no notice {doc_id} on this Thread")),
         Err(e) if e == overlay::NOTICE_NOT_RESENDABLE => {
-            return error_json("409 Conflict", "not_resendable", "this isn't a K2 notice with a message to send again")
+            return error_json("409 Conflict", "not_resendable", concat!("this isn't a ", product_name!(), " notice with a message to send again"))
         }
         Err(e) => return error_json("500 Internal Server Error", "store", e),
     };
@@ -83,7 +85,7 @@ pub(crate) fn handle(params: &HashMap<String, String>, session_author: &str) -> 
                 content_type: "application/json",
                 body: serde_json::json!({
                     "ok": false,
-                    "error": {"code": "already_resent", "hint": "K2 already sent this message again"},
+                    "error": {"code": "already_resent", "hint": concat!(product_name!(), " already sent this message again")},
                     "doneAt": done_at,
                 })
                 .to_string(),

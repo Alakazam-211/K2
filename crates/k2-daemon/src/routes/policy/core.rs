@@ -731,6 +731,11 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/llm/accounts/switch", Admin),
     post("/cli/llm/accounts/unpin", Member),
     get("/cli/llm/accounts/usage", Member),
+    // Claude sign-in warnings (0.46.15): any login may ask (non-owners
+    // get an empty list); only an owner puts a step away (the handler
+    // checks the owner token or an Owner login too).
+    get("/cli/llm/accounts/warnings", Member),
+    post("/cli/llm/accounts/warnings/dismiss", Owner),
     post("/cli/mail-manage", Admin),
     // homes-sync-v1 (0.46.1): a person's own Homes and devices. Any login
     // (and the owner token); the handler binds the person from the

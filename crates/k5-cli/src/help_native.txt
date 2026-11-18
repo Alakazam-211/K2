@@ -44,6 +44,7 @@
 --help sources|sources|out|0
 --help source|sources|out|0
 --help store|store|out|0
+--help study|study:_usage|out|0
 --help talk|talk|out|0
 --help thread|thread|out|0
 --help tickets|feedback|out|0
@@ -96,6 +97,7 @@
 -h sources|sources|out|0
 -h source|sources|out|0
 -h store|store|out|0
+-h study|study:_usage|out|0
 -h talk|talk|out|0
 -h thread|thread|out|0
 -h tickets|feedback|out|0
@@ -320,6 +322,7 @@ help skills|skills|out|0
 help sources|sources|out|0
 help source|sources|out|0
 help store|store|out|0
+help study|study:_usage|out|0
 help talk|talk|out|0
 help thread|thread|out|0
 help tickets|feedback|out|0

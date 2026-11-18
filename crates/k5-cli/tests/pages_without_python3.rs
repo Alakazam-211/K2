@@ -1,8 +1,10 @@
 //! The study and help pages the binary prints, with no `python3` on
 //! `PATH` (K2's ruling: a native command runs where python3 is missing):
 //! every study topic as text and as `--json`, the study list and usage,
-//! every help form in `src/help_native.txt` and the daily tier (`k2`,
-//! `k2 help`, `k2 --help`) print the same bytes, on
+//! every help form in `src/help_native.txt`, the daily tier (`k2`,
+//! `k2 help`, `k2 --help`) and the other pages bash puts together
+//! (`-h`, `help <word>`, the deprecated tier, chat's usage) print the
+//! same bytes, on
 //! the same stream, with the same exit as with `python3`. With none, the
 //! `--json` pages are the binary's whatever the `PYTHON*` settings and the
 //! locale say, as no Python reads them.
@@ -151,7 +153,7 @@ fn every_page_prints_the_same_without_python3() {
     // The help forms' own streams and codes, as the list says.
     for f in k5_cli::text::HELP_FORMS {
         let out = rig.run(f.argv, false, &[]);
-        let page = k5_cli::text::help(f.page).expect("the form's page");
+        let page = k5_cli::text::page(f.page).expect("the form's page");
         let (stdout, stderr) = if f.stderr { ("", page) } else { (page, "") };
         assert_eq!(
             (out.code, out.stdout.as_str(), out.stderr.as_str()),
@@ -176,6 +178,59 @@ fn every_page_prints_the_same_without_python3() {
         help.len(),
         daily.len()
     );
+}
+
+/// The help pages bash puts together ([`k5_cli::pages::Composed`]): the
+/// same bytes with no python3 as with it, and the pieces the binary puts
+/// together for an owner's terminal (no passport: cards off).
+#[test]
+fn the_composed_pages_print_the_same_without_python3() {
+    use k5_cli::pages::{self, Composed};
+    let rig = Rig::new("composed");
+    let tier = pages::daily_text(false).expect("the daily tier");
+    let deprecated = pages::deprecated_text().expect("the deprecated tier");
+    let chat = pages::chat_text(&k5_cli::offline::Env::of(&[])).expect("chat's usage");
+    let lines: &[&[&str]] = &[
+        &["-h"],
+        &[""],
+        &["help", "nope"],
+        &["--help", ""],
+        &["-h", "app"],
+        &["help", "deprecated"],
+        &["--help", "--deprecated"],
+        &["help-deprecated"],
+        &["chat"],
+        &["chat", "--help"],
+        &["chat", "-h"],
+        &["chat", "help"],
+        &["help", "chat"],
+    ];
+    for args in lines {
+        let want = match pages::composed(args).expect("a composed form") {
+            Composed::Daily => &tier,
+            Composed::Deprecated => &deprecated,
+            Composed::Chat => &chat,
+        };
+        let with = rig.run(args, true, &[]);
+        let without = rig.run(args, false, &[]);
+        assert_eq!(
+            (
+                without.code,
+                without.stdout.as_str(),
+                without.stderr.as_str()
+            ),
+            (Some(0), want.as_str(), ""),
+            "{args:?} with no python3"
+        );
+        assert_eq!(without, with, "{args:?}: with no python3, and with it");
+    }
+    // `_CHAT_HELP_MANAGE` other than empty or 1: no manage piece.
+    let off = rig.run(&["chat", "--help"], false, &[(pages::CHAT_MANAGE, "0")]);
+    assert_eq!(
+        off.stdout,
+        pages::chat_text(&k5_cli::offline::Env::of(&[(pages::CHAT_MANAGE, "0")])).unwrap()
+    );
+    assert_ne!(off.stdout, chat);
 }
 
 #[test]

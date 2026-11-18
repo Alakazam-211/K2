@@ -13,7 +13,8 @@
 //! `cli/text/study/<id>.txt` under `<id>` and every
 //! `cli/text/help/<words>.txt` under `<words>` (`mail/send`), and the help
 //! forms the binary answers itself (`src/help_native.txt`, written by
-//! `tests/cli/help_native.sh`). Writes `$OUT_DIR/text.rs` (read by
+//! `tests/cli/help_native.sh`; a page there is a help file's key, or
+//! `study:<key>` for a study file). Writes `$OUT_DIR/text.rs` (read by
 //! `src/text.rs`). Fails the build when a row of the list names a page
 //! that is not there.
 
@@ -112,11 +113,19 @@ fn text(manifest: &Path, out: &Path) {
         let [argv, page, stream, code] = parts[..] else {
             panic!("{}: not <argv>|<page>|<out or err>|<code>: {line:?}", at())
         };
-        assert!(
-            help.iter().any(|(k, _)| k == page),
-            "{}: no cli/text/help/{page}.txt",
-            at()
-        );
+        // `study:<key>` names a study page (`help study` prints one).
+        match page.strip_prefix("study:") {
+            Some(key) => assert!(
+                study.iter().any(|(k, _)| k == key),
+                "{}: no cli/text/study/{key}.txt",
+                at()
+            ),
+            None => assert!(
+                help.iter().any(|(k, _)| k == page),
+                "{}: no cli/text/help/{page}.txt",
+                at()
+            ),
+        }
         let stderr = match stream {
             "out" => false,
             "err" => true,

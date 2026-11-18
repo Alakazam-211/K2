@@ -38,13 +38,14 @@
 #    prints, with the binary's hand-over to bash broken: K5_HOME_OVERRIDE
 #    set to a relative path, which bash never reads and the binary refuses
 #    before it runs bash. So a pass is the binary's own answer. The daily
-#    tier's three forms (`k2`, `k2 help`, `k2 --help`) are the binary's
-#    too, with no passport (cards off, nothing asked). Forms bash keeps
-#    (the other tiers made of pieces, -h and `help <word>` for the daily
-#    tier, the card pages, pieces, a form that is not exactly a row) must
-#    fail that way. So must any help with no port or no token (the
-#    connection gate), and a family's help with K2_HOOK_SOCK set and a
-#    CODEX_ setting (bash looks for a shared Codex server). An agent's
+#    tier's forms (`k2`, `k2 help`, `k2 --help`, `-h`, an empty word,
+#    `help <a word cmd_help has no arm for>`), the deprecated tier and
+#    chat's usage are the binary's too, with no passport (cards off,
+#    nothing asked). Forms bash keeps (the card pages, other pieces, a
+#    form that is not exactly a row) must fail that way. So must any help
+#    with no port or no token (the connection gate), and a family's help
+#    with K2_HOOK_SOCK set and a CODEX_ setting (bash looks for a shared
+#    Codex server). An agent's
 #    terminal (a passport, K2_PORT and K2_HOOK_SOCK a live socket) gets
 #    every row from the binary too; with K2_HOOK_SOCK set and no passport,
 #    an id tool's help is refused the same way (exit 3) by both. (The
@@ -353,8 +354,8 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
         native -- $argv
     done < "$LIST"
     [ "$rows" -gt 300 ] || bad "only $rows rows in $LIST"
-    for cmd in "-h" "help deprecated" "help nope" "--help nope" "app --help" "chat --help" \
-        "mail send x --help" "help mail send" "zen --help" "wiki nope" "mail --help x"; do
+    for cmd in "app --help" "chat --help x" "mail send x --help" "help mail send" "zen --help" \
+        "wiki nope" "mail --help x" "help nope x"; do
         # shellcheck disable=SC2086
         handed -- $cmd
     done
@@ -362,6 +363,21 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     native --
     native -- help
     native -- --help
+    native -- -h
+    native -- ""
+    native -- help nope
+    native -- --help nope
+    native -- -h ""
+    native -- help app
+    # The deprecated tier and chat's usage, put together from pieces.
+    native -- help deprecated
+    native -- --help --deprecated
+    native -- help-deprecated
+    native -- chat
+    native -- chat --help
+    native -- chat help
+    native -- help chat
+    native "_CHAT_HELP_MANAGE=0" -- chat --help
     SOCK="K2_HOOK_SOCK=$SANDBOX/no.sock"
     # No passport: an id tool's help is refused, an open one prints.
     native "$SOCK" -- mail send --help
@@ -373,6 +389,11 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     native "$SOCK" --
     native "$SOCK" -- help
     native "$SOCK" -- --help
+    native "$SOCK" -- -h
+    native "$SOCK" -- help nope
+    native "$SOCK" -- help-deprecated
+    native "$SOCK" -- help chat
+    native "$SOCK" -- chat --help
     handed "$SOCK" "CODEX_THREAD_ID=t1" -- mail send --help
     native "$SOCK" "CODEX_THREAD_ID=t1" -- agent --help
     # An agent's terminal: a passport and its live socket (a bound socket
@@ -388,6 +409,9 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
         native "${AGENT[@]}" -- $argv
     done < "$LIST"
     [ "$agent_rows" = "$rows" ] || bad "$agent_rows rows in an agent's terminal, $rows in all"
+    native "${AGENT[@]}" -- help deprecated
+    native "${AGENT[@]}" -- chat --help
+    native "${AGENT[@]}" -- help chat
     EMPTY="HOME=$SANDBOX/empty-home"
     mkdir -p "$SANDBOX/empty-home"
     handed "$EMPTY" -- help mail
@@ -402,6 +426,11 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     native "$EMPTY" "K2_PORT=1" "K2_HOOK_TOKEN=sessT.notreal1" -- mail send --help
     handed "SHELLOPTS=xtrace" -- mail send --help
     handed "SHELLOPTS=xtrace" -- --help
+    handed "SHELLOPTS=xtrace" -- help deprecated
+    # chat's own forms skip the gate in bash: with no port and no token the
+    # binary hands them over.
+    handed "$EMPTY" -- chat --help
+    handed "$EMPTY" -- help-deprecated
     echo "  $((pass - before)) binary checks passed ($rows forms, each also in an agent's terminal)"
 fi
 

@@ -15,6 +15,9 @@
 #                                   help_text.sh's ENTRY table (those 19
 #                                   pages print from other commands)
 #   help <w>, --help <w>, -h <w>    for each top level page and tier word
+#                                   (study and chat among them; a study
+#                                   file is a page too, its row's page
+#                                   study:<name>)
 #   help-advanced, help-internal
 # A form is on the list only when, run as bash under each of the
 # environments below, all of this holds:
@@ -143,6 +146,12 @@ if len(files) < 200:
 by_bytes = {}
 for rel in sorted(files):
     by_bytes.setdefault(files[rel], []).append(rel)
+# A study file is a page too (`help study` prints the study usage), keyed
+# study:<name>, after any help file with the same bytes.
+study_dir = os.path.join(root, "cli/text/study")
+for n in sorted(os.listdir(study_dir)):
+    if n.endswith(".txt"):
+        by_bytes.setdefault(open(os.path.join(study_dir, n), "rb").read(), []).append("study:" + n[:-4])
 
 # help_text.sh's ENTRY table: pages another command prints. They stay bash.
 ht = open(os.path.join(root, "tests/cli/help_text.sh")).read()
@@ -168,7 +177,7 @@ for rel in sorted(files):
     cands.append(words + ["--help"])
     cands.append(words + ["-h"])
 tier_words = ["--advanced", "advanced", "-a", "--internal", "internal", "deprecated", "--deprecated",
-              "source", "jobs", "tickets", "cal"]
+              "source", "jobs", "tickets", "cal", "study", "chat"]
 for w in sorted({r for r in files if "/" not in r and not r.startswith("_")} | set(tier_words)):
     for first in HELP_FIRST:
         cands.append([first, w])

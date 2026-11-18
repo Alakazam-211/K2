@@ -11,8 +11,9 @@
 //! shell's own trace and writes the list.
 
 /// One help command line the binary answers: `argv` exactly (the
-/// arguments after the program's name) prints the help page `page` on
-/// stdout, or on stderr when `stderr`, and exits with `code`.
+/// arguments after the program's name) prints the page `page` ([`page`]:
+/// a help file, or `study:<key>` for a study file) on stdout, or on
+/// stderr when `stderr`, and exits with `code`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct HelpForm {
     pub argv: &'static [&'static str],
@@ -37,6 +38,15 @@ pub fn study(key: &str) -> Option<&'static str> {
 /// `cli/text/help/<key>.txt`.
 pub fn help(key: &str) -> Option<&'static str> {
     find(HELP, key)
+}
+
+/// A help form's page: `study:<key>` is [`study`]`(key)` (`help study`
+/// prints the study usage), any other key [`help`]`(key)`.
+pub fn page(key: &str) -> Option<&'static str> {
+    match key.strip_prefix("study:") {
+        Some(k) => study(k),
+        None => help(key),
+    }
 }
 
 /// The help form that is exactly `argv`, if the binary answers it.
@@ -166,12 +176,15 @@ mod tests {
                     form.code
                 )
             );
-            assert!(help(form.page).is_some(), "{row}");
+            assert!(page(form.page).is_some(), "{row}");
             let first = help_form(form.argv).unwrap();
             assert!(std::ptr::eq(first, form), "{row} is there twice");
         }
         assert!(HELP_FORMS.len() > 300, "only {} forms", HELP_FORMS.len());
         assert_eq!(help_form(&["mail", "send", "--help", "x"]), None);
+        assert_eq!(page("study:_usage"), study("_usage"));
+        assert_eq!(page("mail"), help("mail"));
+        assert_eq!(page("study:nope"), None);
         assert_eq!(help_form(&[]), None);
     }
 }

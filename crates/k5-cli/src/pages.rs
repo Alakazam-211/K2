@@ -446,7 +446,7 @@ pub fn help_page(
         .into_iter()
         .find(|e| e.code() == i32::from(form.code))?;
     Some(Page {
-        text: text::help(form.page)?.into(),
+        text: text::page(form.page)?.into(),
         stderr: form.stderr,
         exit,
         lead: None,
@@ -601,7 +601,7 @@ pub enum Composed {
 
 /// The pages of [`Composed`]. True: the binary prints them as bash puts
 /// them together. False: the shell answers them.
-pub const COMPOSED_NATIVE: bool = false;
+pub const COMPOSED_NATIVE: bool = true;
 
 /// The setting `_chat_usage` reads: `${_CHAT_HELP_MANAGE:-1}` is `1` for
 /// the manage piece.

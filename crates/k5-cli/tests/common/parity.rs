@@ -34,6 +34,11 @@
 //! line's stamp lives there). A case that differs there on
 //! purpose says so ([`NoPython3::Own`]) and is checked by its own test.
 //!
+//! A rig whose command runs other programs ([`Rig::path_first`]) puts a
+//! folder of stub programs first on `PATH`, on every side; they write
+//! what they were run with to [`Rig::tool_log`], and each side's log must
+//! be the other's (a hand-off with no `python3` runs none of them).
+//!
 //! Hermetic: HOME, TMPDIR and the K2 home are scratch folders, the tokens
 //! are made up, and each side gets nothing from the environment but PATH
 //! and what the case sets.
@@ -84,6 +89,10 @@ pub struct Rig {
     pub stub: Stub,
     /// `PATH` with no `python3` on it, made when first asked for.
     no_python3: OnceCell<String>,
+    /// A folder put first on `PATH`, on every side.
+    pub path_first: Option<PathBuf>,
+    /// The file the stub programs in [`Rig::path_first`] log to.
+    pub tool_log: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +211,8 @@ impl Rig {
             dead_sock,
             stub,
             no_python3: OnceCell::new(),
+            path_first: None,
+            tool_log: None,
         }
     }
 
@@ -275,15 +286,21 @@ impl Rig {
             Command::new(BIN)
         };
         cmd.env_clear();
-        match path {
-            Some(path) => {
-                cmd.env("PATH", path);
+        let search = path
+            .map(OsString::from)
+            .or_else(|| std::env::var_os("PATH"));
+        let search = match (&self.path_first, search) {
+            (Some(first), Some(rest)) => {
+                let mut joined = first.clone().into_os_string();
+                joined.push(":");
+                joined.push(rest);
+                Some(joined)
             }
-            None => {
-                if let Some(path) = std::env::var_os("PATH") {
-                    cmd.env("PATH", path);
-                }
-            }
+            (Some(first), None) => Some(first.clone().into_os_string()),
+            (None, search) => search,
+        };
+        if let Some(search) = search {
+            cmd.env("PATH", search);
         }
         let tmp = if case.no_tmpdir {
             self.dir.join("no-tmp")
@@ -343,8 +360,23 @@ impl Rig {
         }
         // The shell CLI the binary writes out to hand a command over.
         let _ = std::fs::remove_dir_all(self.k2home.join("run"));
+        self.take_tool_log();
         (c.setup)(self);
         self.stub.reset(&c.replies);
+    }
+
+    /// What the stub programs logged since the last call, emptied.
+    pub fn take_tool_log(&self) -> String {
+        let Some(log) = &self.tool_log else {
+            return String::new();
+        };
+        if !log.exists() {
+            return String::new();
+        }
+        let text =
+            std::fs::read_to_string(log).unwrap_or_else(|e| panic!("read {}: {e}", log.display()));
+        std::fs::remove_file(log).unwrap_or_else(|e| panic!("remove {}: {e}", log.display()));
+        text
     }
 
     /// Whether the binary handed its command to the shell: it wrote the
@@ -382,19 +414,28 @@ impl Rig {
     /// `python3` ([`NoPython3`]).
     pub fn check(&self, c: &Case) {
         self.mirror_tmp();
-        let (with, log, handed) = self.check_parity(c);
+        let (with, log, handed, tools) = self.check_parity(c);
         if c.no_python3 == NoPython3::AsWith {
-            self.check_without_python3(c, &with, &log, handed);
+            self.check_without_python3(c, &with, &log, handed, &tools);
         }
     }
 
     /// The binary with no `python3` on `PATH` against its run `with` one
-    /// (whose requests were `with_log`; `handed`: it went to the shell).
-    fn check_without_python3(&self, c: &Case, with: &Out, with_log: &[String], handed: bool) {
+    /// (whose requests were `with_log` and stub programs' log
+    /// `with_tools`; `handed`: it went to the shell).
+    fn check_without_python3(
+        &self,
+        c: &Case,
+        with: &Out,
+        with_log: &[String],
+        handed: bool,
+        with_tools: &str,
+    ) {
         let name = c.name;
         self.prepare(c);
         let out = self.run_on(false, c, Some(self.path_without_python3()));
         let sent = self.stub.log();
+        let tools = self.take_tool_log();
         println!("-- rust, no python3: {out:?}");
         if handed {
             let words: Vec<OsString> = self.argv(c).into_iter().map(OsString::from).collect();
@@ -406,6 +447,10 @@ impl Rig {
                 sent.len(),
                 0,
                 "{name}: sent a request with no python3 for the shell"
+            );
+            assert_eq!(
+                tools, "",
+                "{name}: ran a program with no python3 for the shell"
             );
             assert_eq!(
                 (out.code, out.stdout.as_str(), out.stderr.as_str()),
@@ -436,6 +481,10 @@ impl Rig {
             "{name}: the exit with no python3\nwithout: {out:?}\nwith: {with:?}"
         );
         assert_eq!(out.stdout, with.stdout, "{name}: stdout with no python3");
+        assert_eq!(
+            tools, with_tools,
+            "{name}: the programs run with no python3"
+        );
         if matches!(c.compare, Compare::Waited | Compare::InPipe { .. }) {
             let (ws, wn) = mask_waited(&with.stderr);
             let (os, on) = mask_waited(&out.stderr);
@@ -450,15 +499,18 @@ impl Rig {
     }
 
     /// Runs both sides of `c` and compares them. The binary's run, its
-    /// requests, and whether it handed the command to the shell.
-    fn check_parity(&self, c: &Case) -> (Out, Vec<String>, bool) {
+    /// requests, whether it handed the command to the shell, and what the
+    /// stub programs logged.
+    fn check_parity(&self, c: &Case) -> (Out, Vec<String>, bool, String) {
         let name = c.name;
         let mut outs = Vec::new();
         let mut logs = Vec::new();
+        let mut tools = Vec::new();
         let mut handed = false;
         for bash in [true, false] {
             self.prepare(c);
             let out = self.run(bash, c);
+            tools.push(self.take_tool_log());
             if !bash {
                 handed = self.handed_off();
             }
@@ -480,6 +532,11 @@ impl Rig {
         }
         let (b, r) = (&outs[0], &outs[1]);
         let (mut bl, rl) = (logs[0].clone(), logs[1].clone());
+        assert_eq!(
+            tools[1], tools[0],
+            "{name}: the programs run (rust, then bash)"
+        );
+        let rt = tools[1].clone();
         println!(
             "== {name}\n{}\n-- bash: {b:?}\n-- rust: {r:?}",
             bl.join("\n----\n").replace('\r', "")
@@ -553,7 +610,7 @@ impl Rig {
                 bn.len() == rn.len() && bn.iter().zip(&rn).all(|(x, y)| x.abs_diff(*y) <= 1),
                 "{name}: the waited lines"
             );
-            return (r.clone(), rl, handed);
+            return (r.clone(), rl, handed, rt);
         }
         assert_eq!(
             r.code, b.code,
@@ -595,7 +652,7 @@ impl Rig {
         } else {
             assert_eq!(r.stderr, b.stderr, "{name}: stderr");
         }
-        (r.clone(), rl, handed)
+        (r.clone(), rl, handed, rt)
     }
 }
 

@@ -8,10 +8,10 @@
 //! through, as does everything else, byte for byte ([`crate::fallthrough`]).
 //!
 //! A family's help never reaches the family: a `whoami`, `done`,
-//! `respond`, `inbox`, `read`, `activity`, `sessions`, `connections` or
-//! `feedback` (`tickets`) command line with `-h` or `--help` anywhere in
-//! it is a help page when it is exactly a form the shell only prints a
-//! file for ([`Route::Help`], [`help_route`]), and falls through
+//! `respond`, `inbox`, `read`, `activity`, `sessions`, `connections`,
+//! `feedback` (`tickets`) or `update` command line with `-h` or `--help`
+//! anywhere in it is a help page when it is exactly a form the shell only
+//! prints a file for ([`Route::Help`], [`help_route`]), and falls through
 //! otherwise, so the shell prints its help text (or its error for a flag
 //! before it, or whatever it does with such a word where it reads a
 //! value), with its connection gate in front of it, exactly as it always
@@ -76,6 +76,9 @@ pub enum Route {
     /// no `-h` or `--help` in it ([`crate::families::feedback`], which may
     /// still hand it to the shell).
     Feedback,
+    /// `update` with no `-h` or `--help` in it ([`crate::families::update`],
+    /// which hands a form whose switch is off to the shell).
+    Update,
     /// A `k2 study` page ([`pages::study`]).
     Study(Study),
     /// A help form whose page is a file ([`text::HELP_FORMS`]).
@@ -176,6 +179,7 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
         ("sessions", Route::Sessions),
         ("connections", Route::Connections),
         ("feedback", Route::Feedback),
+        ("update", Route::Update),
     ] {
         if noun.names(word) {
             return route;
@@ -502,6 +506,34 @@ mod tests {
             for line in [&[w, "list", "-h"][..], &[w, "x", "--help"]] {
                 assert_eq!(native(row(w), &args(line)), Route::Fallthrough, "{line:?}");
             }
+        }
+    }
+
+    /// `update`, likewise: the shell reads `-h` and `--help` as words it
+    /// skips, so they go to the shell (which asks GitHub for them).
+    #[test]
+    fn the_update_forms() {
+        let row = route::TABLE
+            .iter()
+            .find(|n| n.names("update"))
+            .expect("an update row");
+        for line in [
+            &["update"][..],
+            &["update", "--cli"],
+            &["update", "--cli", "--check"],
+            &["update", "--list"],
+            &["update", "--app", "x"],
+            &["update", "help"],
+        ] {
+            assert_eq!(native(row, &args(line)), Route::Update, "{line:?}");
+        }
+        for line in [
+            &["update", "--help"][..],
+            &["update", "-h"],
+            &["update", "--cli", "--help"],
+            &["update", "--list", "-h"],
+        ] {
+            assert_eq!(native(row, &args(line)), Route::Fallthrough, "{line:?}");
         }
     }
 

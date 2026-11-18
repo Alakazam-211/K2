@@ -230,7 +230,9 @@ pub static TABLE: &[Noun] = &[
     bash(&["connect"]),
     bash(&["skills"]),
     bash(&["app-update"]),
-    bash(&["update"]),
+    // Each form behind its own switch (`families::update`): a form whose
+    // switch is off is the shell's.
+    native(&["update"]),
     native(&["version", "--version", "-v"]),
     native(&["cli"]),
     bash(&["--schema", "schema"]),

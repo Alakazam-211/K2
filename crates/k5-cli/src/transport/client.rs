@@ -33,6 +33,11 @@ pub const PASSPORT_PROJECT_MAX_TIME: Duration = Duration::from_secs(15);
 pub const CARDS_ENDPOINT: &str = "/cli/permission/enabled";
 /// `_permission_probe`'s `--connect-timeout 1 --max-time 1`.
 pub const CARDS_TIME: Duration = Duration::from_secs(1);
+/// `k2 update --cli`'s `--connect-timeout 2` (`_update_daemon_version`,
+/// `cli/src/update.sh`).
+pub const UPDATE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+/// `k2 update --cli`'s `--max-time 4`.
+pub const UPDATE_MAX_TIME: Duration = Duration::from_secs(4);
 /// `_K2_CURL_TRIES`: each retry loop's tries, the first included.
 pub const TRIES: u32 = 4;
 /// The `sleep 1` between tries.
@@ -234,6 +239,13 @@ enum Kind {
     /// most 1 s; only `_k2_curl`'s tries (a refused connect, and a moved
     /// port over TCP); no heal, no line, no note.
     Cards,
+    /// `_update_daemon_version` (`cli/src/update.sh`): `_K2_CURL_TRIES=1
+    /// _k2_curl "" -s --connect-timeout 2 --max-time 4` of
+    /// `http://127.0.0.1:$PORT/boot-status`. A GET with no credential and
+    /// no query, over TCP, one try (a refused connect is not tried again),
+    /// with the hand-over headers `_k2_curl` adds (the owner's source
+    /// too); no heal, no line, no note.
+    UpdateVersion,
 }
 
 impl Kind {
@@ -267,6 +279,7 @@ impl Kind {
                 | Kind::PassportProject
                 | Kind::Urlopen
                 | Kind::Cards
+                | Kind::UpdateVersion
         )
     }
     /// A refused passport is tried again with a healed one, on either
@@ -283,6 +296,7 @@ impl Kind {
                 | Kind::PassportProject
                 | Kind::Urlopen
                 | Kind::Cards
+                | Kind::UpdateVersion
         )
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
@@ -298,6 +312,7 @@ impl Kind {
                 | Kind::PassportProject
                 | Kind::Urlopen
                 | Kind::Cards
+                | Kind::UpdateVersion
         )
     }
     /// `--connect-timeout` (urllib's `timeout`, for [`Kind::Urlopen`]).
@@ -306,14 +321,18 @@ impl Kind {
             Kind::Probe => PROBE_CONNECT_TIMEOUT,
             Kind::Urlopen => MAX_TIME,
             Kind::Cards => CARDS_TIME,
+            Kind::UpdateVersion => UPDATE_CONNECT_TIMEOUT,
             _ => CONNECT_TIMEOUT,
         }
     }
     /// Nothing is ever tried twice: the body is read from stdin (the
     /// shell's `@-` rule is an argument that is exactly `@-`, never one in
-    /// a URL), or it is urllib's one try.
+    /// a URL), it is urllib's one try, or `_K2_CURL_TRIES=1`.
     fn once(self) -> bool {
-        matches!(self, Kind::PostJsonStdin | Kind::Urlopen)
+        matches!(
+            self,
+            Kind::PostJsonStdin | Kind::Urlopen | Kind::UpdateVersion
+        )
     }
 }
 
@@ -706,6 +725,21 @@ impl Client {
             .map_err(|f| f.error)
     }
 
+    /// `k2 update --cli`'s GET of `path` ([`Kind::UpdateVersion`]): over
+    /// TCP to this client's host and port, no credential, no query, one
+    /// try, connect 2 s, at most 4 s; no heal, no line, no note.
+    pub fn get_update_version(&mut self, path: &str) -> Result<Response, Error> {
+        self.run(
+            Kind::UpdateVersion,
+            Channel::Tcp,
+            path,
+            &[],
+            &[],
+            Instant::now(),
+        )
+        .map_err(|f| f.error)
+    }
+
     /// `cli_post_json_stdin`: a JSON body that was read from stdin, over
     /// TCP. Sent once: no tries, no heal, no line, no note.
     pub fn post_json_stdin(&mut self, endpoint: &str, body: &[u8]) -> Result<Response, Error> {
@@ -998,6 +1032,7 @@ impl Client {
             Kind::SidecarGet => SIDECAR_MAX_TIME,
             Kind::PassportProject => PASSPORT_PROJECT_MAX_TIME,
             Kind::Cards => CARDS_TIME,
+            Kind::UpdateVersion => UPDATE_MAX_TIME,
         }
     }
 
@@ -1160,7 +1195,7 @@ impl Client {
 
         let tcp = channel == Channel::Tcp;
         let token = match (kind, self.tcp_token()) {
-            (Kind::Public | Kind::Probe | Kind::BearerForm, _) => "",
+            (Kind::Public | Kind::Probe | Kind::BearerForm | Kind::UpdateVersion, _) => "",
             (_, Some(t)) => t,
             (_, None) => {
                 return Err(Error::NoCredential {
@@ -1265,7 +1300,9 @@ impl Client {
                 };
                 (Method::Post, path, json(&mut headers))
             }
-            Kind::Public | Kind::Probe => (Method::Get, endpoint.to_string(), None),
+            Kind::Public | Kind::Probe | Kind::UpdateVersion => {
+                (Method::Get, endpoint.to_string(), None)
+            }
             Kind::Urlopen => {
                 let token = urlencode_plus(&[("token", token)]);
                 let path = if joined.is_empty() {
@@ -1614,6 +1651,16 @@ mod tests {
             ),
             (Urlopen, false, false, false, false, false, false, true),
             (Cards, false, false, false, false, false, false, false),
+            (
+                UpdateVersion,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+            ),
         ];
         for (k, m, c, s, n, h, p, o) in rows {
             assert_eq!(
@@ -1638,6 +1685,10 @@ mod tests {
         assert_eq!(c.max_time(Kind::Request), Duration::from_secs(30));
         assert_eq!(c.max_time(Kind::Urlopen), Duration::from_secs(30));
         assert_eq!(Kind::Urlopen.connect_timeout(), Duration::from_secs(30));
+        assert_eq!(
+            Kind::UpdateVersion.connect_timeout(),
+            Duration::from_secs(2)
+        );
         assert_eq!(c.max_time(Kind::PostJson), Duration::from_secs(30));
         assert_eq!(c.max_time(Kind::SendJsonGet), Duration::from_secs(60));
         c.post_max_time = Some(Duration::from_secs(150));
@@ -1655,6 +1706,7 @@ mod tests {
             (Kind::BearerForm, 30),
             (Kind::SidecarGet, 120),
             (Kind::PassportProject, 15),
+            (Kind::UpdateVersion, 4),
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }
@@ -1717,6 +1769,44 @@ mod tests {
         assert!(r.body.is_none());
         let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, [VERSION_HEADER, VIA_HEADER]);
+    }
+
+    /// `k2 update --cli`'s GET: the path as it is, no token, the
+    /// binary's headers and the owner's source as `_k5_headers` adds it
+    /// (the owner token from disk, no passport), never with a passport.
+    #[test]
+    fn the_update_version_get() {
+        let mut c = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o t+".into()));
+        c.owner_from_disk = true;
+        let (target, r) = c
+            .build(Kind::UpdateVersion, Channel::Tcp, "/boot-status", &[], &[])
+            .unwrap();
+        assert_eq!(
+            target,
+            Target::Tcp {
+                host: "127.0.0.1".into(),
+                port: 9
+            }
+        );
+        assert_eq!((r.method, r.target.as_str()), (Method::Get, "/boot-status"));
+        assert!(r.body.is_none());
+        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, [VERSION_HEADER, VIA_HEADER, OWNER_SOURCE_HEADER]);
+        let p = Client::new(
+            "127.0.0.1",
+            9,
+            "/p",
+            Auth::Passport {
+                passport: Passport::new("s.t").unwrap(),
+                sock: None,
+            },
+        );
+        let (_, r) = p
+            .build(Kind::UpdateVersion, Channel::Tcp, "/boot-status", &[], &[])
+            .unwrap();
+        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, [VERSION_HEADER, VIA_HEADER]);
+        assert!(!r.target.contains("token"));
     }
 
     /// `k2 tickets show`'s urlopen: the caller's query, then `token=` as

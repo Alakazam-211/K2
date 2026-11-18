@@ -14,6 +14,8 @@
 //! - [`connections`]: `k5 connections list`.
 //! - [`feedback`]: `k5 feedback list` and `k5 feedback show <id>` (also
 //!   `tickets`).
+//! - [`update`]: `k5 update`, `k5 update --cli [--check]` and
+//!   `k5 update --list`, each form behind its own switch.
 //!
 //! A family may hand a command line back to the shell CLI ([`done::run`]
 //! and the others return `None`) when it is a form only the shell
@@ -63,6 +65,7 @@ pub mod inbox;
 pub mod read;
 pub mod respond;
 pub mod sessions;
+pub mod update;
 pub mod whoami;
 
 /// The port as curl takes it from the shell's URL: digits only, and a

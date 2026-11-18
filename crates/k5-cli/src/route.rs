@@ -160,7 +160,7 @@ pub static TABLE: &[Noun] = &[
     bash(&["talk"]),
     native(&["respond"]),
     bash(&["whats-new"]),
-    bash(&["activity"]),
+    native(&["activity"]),
     native(&["inbox"]),
     bash(&["glossary"]),
     bash(&["help-deprecated"]),

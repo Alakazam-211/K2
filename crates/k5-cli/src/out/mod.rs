@@ -10,6 +10,7 @@
 //! by SIGPIPE ([`after_stdout_error`]).
 
 pub mod json;
+pub mod py;
 
 use crate::exit::Exit;
 use std::io::{self, Write};

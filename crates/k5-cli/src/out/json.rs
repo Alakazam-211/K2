@@ -62,7 +62,8 @@ impl Text {
         }
     }
 
-    fn code_points(&self) -> Vec<u32> {
+    /// The code points, lone surrogates included.
+    pub fn code_points(&self) -> Vec<u32> {
         match &self.0 {
             Repr::Utf8(s) => s.chars().map(u32::from).collect(),
             Repr::Loose(points) => points.clone(),

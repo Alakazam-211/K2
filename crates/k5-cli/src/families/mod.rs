@@ -16,6 +16,9 @@
 //!   `tickets`).
 //! - [`update`]: `k5 update`, `k5 update --cli [--check]` and
 //!   `k5 update --list`, each form behind its own switch.
+//! - [`setup`]: `k5 setup [--json]`, the setup checklist, and its writes
+//!   (`hide`, `show`, `skip`, `kessel`, `chief-of-staff`,
+//!   `dismiss-offer`), the reads and the writes each behind a switch.
 //!
 //! A family may hand a command line back to the shell CLI ([`done::run`]
 //! and the others return `None`) when it is a form only the shell
@@ -65,6 +68,7 @@ pub mod inbox;
 pub mod read;
 pub mod respond;
 pub mod sessions;
+pub mod setup;
 pub mod update;
 pub mod whoami;
 

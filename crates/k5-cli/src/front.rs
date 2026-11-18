@@ -9,9 +9,10 @@
 //!
 //! A family's help never reaches the family: a `whoami`, `done`,
 //! `respond`, `inbox`, `read`, `activity`, `sessions`, `connections`,
-//! `feedback` (`tickets`) or `update` command line with `-h` or `--help`
-//! anywhere in it is a help page when it is exactly a form the shell only
-//! prints a file for ([`Route::Help`], [`help_route`]), and falls through
+//! `feedback` (`tickets`), `update` or `setup` command line with `-h` or
+//! `--help` anywhere in it (`setup`: or the word `help`) is a help page
+//! when it is exactly a form the shell only prints a file for
+//! ([`Route::Help`], [`help_route`]), and falls through
 //! otherwise, so the shell prints its help text (or its error for a flag
 //! before it, or whatever it does with such a word where it reads a
 //! value), with its connection gate in front of it, exactly as it always
@@ -79,6 +80,10 @@ pub enum Route {
     /// `update` with no `-h` or `--help` in it ([`crate::families::update`],
     /// which hands a form whose switch is off to the shell).
     Update,
+    /// `setup` with no `-h`, `--help` or `help` in it
+    /// ([`crate::families::setup`], which hands a form whose switch is off
+    /// to the shell).
+    Setup,
     /// A `k2 study` page ([`pages::study`]).
     Study(Study),
     /// A help form whose page is a file ([`text::HELP_FORMS`]).
@@ -158,6 +163,13 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
     // A family's help is a page or the shell's, never the family's.
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return help_route(args).map_or(Route::Fallthrough, Route::Help);
+    }
+    // `cmd_setup`'s loop reads `help` as `--help`.
+    if noun.names("setup") {
+        if words.iter().skip(1).any(|w| *w == "help") {
+            return help_route(args).map_or(Route::Fallthrough, Route::Help);
+        }
+        return Route::Setup;
     }
     if noun.names("whoami") {
         return Route::Whoami;
@@ -532,6 +544,39 @@ mod tests {
             &["update", "-h"],
             &["update", "--cli", "--help"],
             &["update", "--list", "-h"],
+        ] {
+            assert_eq!(native(row, &args(line)), Route::Fallthrough, "{line:?}");
+        }
+    }
+
+    /// `setup`: `-h`, `--help` and the word `help` anywhere are a help
+    /// page or the shell's; every other line is the family's.
+    #[test]
+    fn the_setup_forms() {
+        let row = route::TABLE
+            .iter()
+            .find(|n| n.names("setup"))
+            .expect("a setup row");
+        for line in [
+            &["setup"][..],
+            &["setup", "--json"],
+            &["setup", "skip", "dev_tools"],
+            &["setup", "kessel", "--name", "x"],
+            &["setup", "--bogus"],
+        ] {
+            assert_eq!(native(row, &args(line)), Route::Setup, "{line:?}");
+        }
+        for page in [&["setup", "--help"][..], &["setup", "-h"]] {
+            assert!(
+                matches!(native(row, &args(page)), Route::Help(f) if f.page == "setup"),
+                "{page:?}"
+            );
+        }
+        for line in [
+            &["setup", "help"][..],
+            &["setup", "--json", "help"],
+            &["setup", "kessel", "--name", "help"],
+            &["setup", "kessel", "--name", "-h"],
         ] {
             assert_eq!(native(row, &args(line)), Route::Fallthrough, "{line:?}");
         }

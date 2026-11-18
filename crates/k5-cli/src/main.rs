@@ -150,6 +150,7 @@ fn main() {
         }
         Route::Feedback => families::feedback::run(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Update => families::update::run(&args).unwrap_or_else(|| shell(who, &args)),
+        Route::Setup => families::setup::run(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Study(s) => page(who, &args, |p, env| {
             pages::study_page(s, p, env, || passport::current(&args).would_refuse())
         }),

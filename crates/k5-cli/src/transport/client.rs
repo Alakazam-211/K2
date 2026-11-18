@@ -246,6 +246,17 @@ enum Kind {
     /// with the hand-over headers `_k2_curl` adds (the owner's source
     /// too); no heal, no line, no note.
     UpdateVersion,
+    /// `_setup_send GET` (`cli/src/setup.sh`): `_k2_curl` with a config
+    /// `url` of `<ep>?token=<_git_tools_q T>[&format=text]`, `-s
+    /// --connect-timeout 5 --max-time 30`, over TCP. One exchange with
+    /// `_k2_curl`'s tries (a refused connect, a moved port); the 503
+    /// "migrating" tries and the one heal are `_setup_send`'s own loop
+    /// ([`Client::setup_send`]); no line, no note (the caller notes the
+    /// answer as the shell's `_setup_render` holds it).
+    SetupGet,
+    /// `_setup_send POST`: the same, `-X POST`, the config's `data-raw`
+    /// body and `Content-Type: application/json`.
+    SetupPost,
 }
 
 impl Kind {
@@ -280,6 +291,8 @@ impl Kind {
                 | Kind::Urlopen
                 | Kind::Cards
                 | Kind::UpdateVersion
+                | Kind::SetupGet
+                | Kind::SetupPost
         )
     }
     /// A refused passport is tried again with a healed one, on either
@@ -297,6 +310,8 @@ impl Kind {
                 | Kind::Urlopen
                 | Kind::Cards
                 | Kind::UpdateVersion
+                | Kind::SetupGet
+                | Kind::SetupPost
         )
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
@@ -313,6 +328,8 @@ impl Kind {
                 | Kind::Urlopen
                 | Kind::Cards
                 | Kind::UpdateVersion
+                | Kind::SetupGet
+                | Kind::SetupPost
         )
     }
     /// `--connect-timeout` (urllib's `timeout`, for [`Kind::Urlopen`]).
@@ -740,6 +757,43 @@ impl Client {
         .map_err(|f| f.error)
     }
 
+    /// `_setup_send <GET|POST> <ep> <as_json> [<body>]` (`cli/src/setup.sh`):
+    /// `ep?token=<T>`, then `&format=text` when `text`, over TCP; a POST
+    /// carries `body` as JSON. Each exchange is `_k2_curl`'s (a refused
+    /// connect is tried again, [`Client::refused_before_answer`] counts
+    /// those of the last one). Then `_setup_send`'s loop: a GET whose
+    /// answer is a 503 holding `"state":"migrating"` is asked again, a
+    /// second apart, at most [`TRIES`] tries in all; an answer holding the
+    /// passport refusal is asked again once per client with a healed
+    /// passport (the migrating count goes on, as the shell's does). Any
+    /// status is an answer; nothing is noted and no line is printed.
+    pub fn setup_send(
+        &mut self,
+        post: bool,
+        endpoint: &str,
+        text: bool,
+        body: &[u8],
+    ) -> Result<Response, Error> {
+        let kind = if post { Kind::SetupPost } else { Kind::SetupGet };
+        let args: &[&str] = if text { &["format=text"] } else { &[] };
+        let t0 = Instant::now();
+        let mut tries = 1;
+        loop {
+            let r = self
+                .run(kind, Channel::Tcp, endpoint, args, body, t0)
+                .map_err(|f| f.error)?;
+            if !post && r.status == 503 && contains(&r.body, MIGRATING) && tries < TRIES {
+                tries += 1;
+                std::thread::sleep(self.pause);
+                continue;
+            }
+            if contains(&r.body, PASSPORT_REFUSAL) && self.heal() {
+                continue;
+            }
+            return Ok(r);
+        }
+    }
+
     /// `cli_post_json_stdin`: a JSON body that was read from stdin, over
     /// TCP. Sent once: no tries, no heal, no line, no note.
     pub fn post_json_stdin(&mut self, endpoint: &str, body: &[u8]) -> Result<Response, Error> {
@@ -1027,7 +1081,9 @@ impl Client {
             | Kind::PostJsonStdin
             | Kind::Public
             | Kind::BearerForm
-            | Kind::Urlopen => MAX_TIME,
+            | Kind::Urlopen
+            | Kind::SetupGet
+            | Kind::SetupPost => MAX_TIME,
             Kind::Probe => PROBE_MAX_TIME,
             Kind::SidecarGet => SIDECAR_MAX_TIME,
             Kind::PassportProject => PASSPORT_PROJECT_MAX_TIME,
@@ -1302,6 +1358,19 @@ impl Client {
             }
             Kind::Public | Kind::Probe | Kind::UpdateVersion => {
                 (Method::Get, endpoint.to_string(), None)
+            }
+            Kind::SetupGet | Kind::SetupPost => {
+                // `_git_tools_q` keeps the same bytes `quote` keeps.
+                let mut path = format!("{endpoint}?token={}", quote(token));
+                for a in args {
+                    path.push('&');
+                    path.push_str(a);
+                }
+                if kind == Kind::SetupPost {
+                    (Method::Post, path, json(&mut headers))
+                } else {
+                    (Method::Get, path, None)
+                }
             }
             Kind::Urlopen => {
                 let token = urlencode_plus(&[("token", token)]);
@@ -1661,6 +1730,8 @@ mod tests {
                 false,
                 true,
             ),
+            (SetupGet, false, false, false, false, false, false, false),
+            (SetupPost, false, false, false, false, false, false, false),
         ];
         for (k, m, c, s, n, h, p, o) in rows {
             assert_eq!(
@@ -1707,6 +1778,8 @@ mod tests {
             (Kind::SidecarGet, 120),
             (Kind::PassportProject, 15),
             (Kind::UpdateVersion, 4),
+            (Kind::SetupGet, 30),
+            (Kind::SetupPost, 30),
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }
@@ -1807,6 +1880,75 @@ mod tests {
         let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, [VERSION_HEADER, VIA_HEADER]);
         assert!(!r.target.contains("token"));
+    }
+
+    /// `_setup_send`'s two: `token=` escaped as `_git_tools_q` does, then
+    /// `format=text` when asked; the POST's body as JSON; the binary's
+    /// headers and the owner's source; over TCP to the host and port.
+    #[test]
+    fn the_setup_requests() {
+        let mut c = Client::new("127.0.0.1", 9, "/p", Auth::Owner("t.k/+= z".into()));
+        c.owner_from_disk = true;
+        let (target, r) = c
+            .build(
+                Kind::SetupGet,
+                Channel::Tcp,
+                "/cli/first-run/status",
+                &["format=text"],
+                &[],
+            )
+            .unwrap();
+        assert!(matches!(target, Target::Tcp { port: 9, .. }));
+        assert_eq!(
+            (r.method, r.target.as_str(), r.host.as_str()),
+            (
+                Method::Get,
+                "/cli/first-run/status?token=t.k%2F%2B%3D%20z&format=text",
+                "127.0.0.1:9"
+            )
+        );
+        assert!(r.body.is_none());
+        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, [VERSION_HEADER, VIA_HEADER, OWNER_SOURCE_HEADER]);
+        let (_, r) = c
+            .build(
+                Kind::SetupPost,
+                Channel::Tcp,
+                "/cli/first-run/skip",
+                &[],
+                br#"{"row": "x"}"#,
+            )
+            .unwrap();
+        assert_eq!(
+            (r.method, r.target.as_str()),
+            (Method::Post, "/cli/first-run/skip?token=t.k%2F%2B%3D%20z")
+        );
+        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                VERSION_HEADER,
+                VIA_HEADER,
+                OWNER_SOURCE_HEADER,
+                "Content-Type"
+            ]
+        );
+        assert_eq!(r.body.as_ref().unwrap().bytes, br#"{"row": "x"}"#);
+        let p = Client::new(
+            "127.0.0.1",
+            9,
+            "/p",
+            Auth::Passport {
+                passport: Passport::new("s.t").unwrap(),
+                sock: None,
+            },
+        );
+        let (_, r) = p
+            .build(Kind::SetupGet, Channel::Tcp, "/cli/first-run/status", &[], &[])
+            .unwrap();
+        assert_eq!(r.target, "/cli/first-run/status?token=s.t");
+        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, [VERSION_HEADER, VIA_HEADER]);
     }
 
     /// `k2 tickets show`'s urlopen: the caller's query, then `token=` as

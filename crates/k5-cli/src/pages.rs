@@ -32,8 +32,9 @@
 //! binary prints that error itself: the shell would ask again.
 
 use crate::exit::Exit;
-use crate::offline::{self, Env, Prelude};
+use crate::offline::{Env, Prelude};
 use crate::out::json::{self, Value};
+use crate::python::{self, Python3};
 use crate::text::{self, HelpForm};
 use crate::{cards, prelude, tools};
 use std::borrow::Cow;
@@ -231,13 +232,20 @@ pub fn study_json(topic: &str, page: &str) -> String {
     out
 }
 
-/// Whether the shell's `python3` reads `page` as the binary does: a
-/// `python3` on `PATH`, no `PYTHON*` setting (an encoding, a path, a
-/// startup file), and a page that is ASCII or a locale Python reads as
-/// UTF-8 (one that names UTF-8, or C/POSIX/none, which Python 3.7 and
-/// later read as UTF-8).
-pub fn python_reads_as_we_do(env: &Env, page: &str) -> bool {
-    if env.any_named("PYTHON") || !offline::on_path(env, "python3") {
+/// Whether the binary prints `page`'s `--json` itself. Where the shell
+/// has a `python3`, only when it reads `page` as the binary does: no
+/// `PYTHON*` setting (an encoding, a path, a startup file), and a page
+/// that is ASCII or a locale Python reads as UTF-8 (one that names UTF-8,
+/// or C/POSIX/none, which Python 3.7 and later read as UTF-8). Where it
+/// has none, by [`python::NATIVE_WITHOUT_PYTHON3`] (no Python reads it,
+/// so neither its settings nor the locale count).
+pub fn native_json(env: &Env, page: &str) -> bool {
+    match python::in_env(env) {
+        Python3::Present => {}
+        Python3::Missing => return python::NATIVE_WITHOUT_PYTHON3,
+        Python3::Unknown => return false,
+    }
+    if env.any_named("PYTHON") {
         return false;
     }
     if page.is_ascii() {
@@ -278,7 +286,7 @@ pub fn study_page(
             // anything is sent: both ways the answer may go.
             if let Study::Page { topic, json: true } = s {
                 for on in [false, true] {
-                    if !python_reads_as_we_do(env, &study_text(topic, on)?) {
+                    if !native_json(env, &study_text(topic, on)?) {
                         return None;
                     }
                 }
@@ -305,7 +313,7 @@ pub fn study_page(
         Study::Page { topic, json: false } => study_text(topic, on)?,
         Study::Page { topic, json: true } => {
             let page = study_text(topic, on)?;
-            if !python_reads_as_we_do(env, &page) {
+            if !native_json(env, &page) {
                 return None;
             }
             study_json(topic, &page).into()
@@ -595,7 +603,7 @@ mod tests {
         let reads = |pairs: &[(&str, &str)], page: &str| {
             let mut all = vec![("PATH", path)];
             all.extend_from_slice(pairs);
-            python_reads_as_we_do(&Env::of(&all), page)
+            native_json(&Env::of(&all), page)
         };
         assert!(reads(&[], "\u{2014}"));
         assert!(reads(&[("LC_ALL", "C")], "\u{2014}"));
@@ -608,8 +616,25 @@ mod tests {
         assert!(reads(&[("LANG", "en_US.ISO8859-1")], "ascii"));
         assert!(!reads(&[("PYTHONIOENCODING", "latin-1")], "ascii"));
         assert!(!reads(&[("PYTHONPATH", "/x")], "ascii"));
-        assert!(!python_reads_as_we_do(
-            &Env::of(&[("PATH", "/nonexistent")]),
+        // No python3: the switch, whatever the settings and the locale.
+        let none = |pairs: &[(&str, &str)], page: &str| {
+            let mut all = vec![("PATH", "/nonexistent")];
+            all.extend_from_slice(pairs);
+            native_json(&Env::of(&all), page)
+        };
+        for (pairs, page) in [
+            (&[][..], "ascii"),
+            (&[("PYTHONIOENCODING", "latin-1")][..], "\u{2014}"),
+            (&[("LANG", "en_US.ISO8859-1")][..], "\u{2014}"),
+        ] {
+            assert_eq!(
+                none(pairs, page),
+                python::NATIVE_WITHOUT_PYTHON3,
+                "{pairs:?}"
+            );
+        }
+        assert!(!native_json(
+            &Env::of(&[("PATH", path), ("BASH_FUNC_python3%%", "() { :\n}")]),
             "ascii"
         ));
         std::fs::remove_dir_all(&d).unwrap();

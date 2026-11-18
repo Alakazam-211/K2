@@ -48,6 +48,7 @@ use crate::out::json::{self, Options, Text, Value};
 use crate::out::{self, py};
 use crate::passport;
 use crate::prelude::{self, Closing};
+use crate::python;
 use crate::transport::{Call, Error};
 use std::ffi::OsString;
 use std::path::Path;
@@ -126,7 +127,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
     let ask = parse(&words)?;
-    if !super::has_python3() {
+    if !python::family_native(python::here()) {
         return None;
     }
     let settings = match daemon::current() {

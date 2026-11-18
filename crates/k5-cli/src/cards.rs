@@ -45,6 +45,7 @@
 use crate::daemon::{self, Settings};
 use crate::offline::{self, Env, Prelude};
 use crate::out::json::{self, Value};
+use crate::python::{self, Python3};
 use crate::transport::{Auth, Client};
 use std::borrow::Cow;
 use std::net::Ipv4Addr;
@@ -62,19 +63,28 @@ pub enum Decode {
     Lossy,
 }
 
+/// Who reads the probe's answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reader {
+    /// The shell's `python3`, reading its stdin as `Decode` says.
+    Python(Decode),
+    /// No `python3`, and the shell's probe it stands for: the answer is
+    /// off whatever it says.
+    ShellWithout,
+    /// No `python3`, and the binary's own probe
+    /// ([`crate::python::NATIVE_WITHOUT_PYTHON3`]): the daemon's answer
+    /// as it is, a 200 whose JSON says `"enabled": true` on.
+    Own,
+}
+
 /// What the probe will do, decided before anything is sent.
 pub enum Ask {
     /// Off, and nothing is asked: no passport, or neither a socket nor a
     /// port.
     Off,
     /// One request on this client (its channel already chosen by
-    /// [`Client::has_cell_socket`]), read as `decode` says; `python`:
-    /// the shell's `python3` is on `PATH` (without it, the answer is off).
-    Request {
-        client: Box<Client>,
-        decode: Decode,
-        python: bool,
-    },
+    /// [`Client::has_cell_socket`]), its answer read by `reader`.
+    Request { client: Box<Client>, reader: Reader },
 }
 
 /// How `python3` reads stdin in `env`, or `None` when the binary can't
@@ -155,7 +165,15 @@ pub fn ask(env: &Env, p: &Prelude, would_refuse: impl FnOnce() -> bool) -> Optio
         }
         port
     };
-    let decode = decode(env)?;
+    let reader = match python::in_env(env) {
+        Python3::Present => Reader::Python(decode(env)?),
+        Python3::Missing if python::NATIVE_WITHOUT_PYTHON3 => Reader::Own,
+        Python3::Missing => {
+            decode(env)?;
+            Reader::ShellWithout
+        }
+        Python3::Unknown => return None,
+    };
     let client = settings.client_on(port, would_refuse());
     // The re-minted passport the client took must be as plain.
     if !client.passport().is_some_and(|t| plain(t.as_str())) {
@@ -167,8 +185,7 @@ pub fn ask(env: &Env, p: &Prelude, would_refuse: impl FnOnce() -> bool) -> Optio
     }
     Some(Ask::Request {
         client: Box::new(client),
-        decode,
-        python: offline::on_path(env, "python3"),
+        reader,
     })
 }
 
@@ -176,19 +193,20 @@ pub fn ask(env: &Env, p: &Prelude, would_refuse: impl FnOnce() -> bool) -> Optio
 pub fn on(ask: Ask) -> bool {
     match ask {
         Ask::Off => false,
-        Ask::Request {
-            mut client,
-            decode,
-            python,
-        } => match client.permission_enabled() {
-            // A refused try then an answer: `-w` printed `\n000` for the
-            // failed try into `$(…)` first, so the shell's Python reads
-            // `\n000<body>`, which is not JSON: off.
+        Ask::Request { mut client, reader } => match client.permission_enabled() {
             Ok(r) => {
                 r.status == 200
-                    && client.refused_before_answer() == 0
-                    && python
-                    && enabled(&r.body, decode)
+                    && match reader {
+                        // A refused try then an answer: `-w` printed
+                        // `\n000` for the failed try into `$(…)` first, so
+                        // the shell's Python reads `\n000<body>`, which is
+                        // not JSON: off.
+                        Reader::Python(decode) => {
+                            client.refused_before_answer() == 0 && enabled(&r.body, decode)
+                        }
+                        Reader::ShellWithout => false,
+                        Reader::Own => enabled(&r.body, Decode::Lossy),
+                    }
             }
             Err(_) => false,
         },

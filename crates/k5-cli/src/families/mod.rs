@@ -209,14 +209,6 @@ pub fn pipefail(call: Exit, reader: Exit) -> Exit {
     }
 }
 
-/// `command -v python3` finds one: the shell's readers need it. Without
-/// one the shell prints the answer as it came (or Python's "command not
-/// found"), so a family hands such a line to the shell.
-pub fn has_python3() -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|path| crate::daemon::find_on_path("python3", path).is_some())
-}
-
 /// The `HOOK_SOCK` setting (its K5_, K2_ and K2SO_ names, empty counts as
 /// unset).
 pub fn hook_sock() -> Option<std::path::PathBuf> {

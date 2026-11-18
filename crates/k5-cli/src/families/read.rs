@@ -60,6 +60,7 @@ use crate::out::json::{self, Options, Text, Value};
 use crate::out::{self, py};
 use crate::passport;
 use crate::prelude::{self, Closing};
+use crate::python;
 use crate::transport::encode::quote;
 use crate::transport::Auth;
 use std::ffi::OsString;
@@ -169,7 +170,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .collect::<Option<_>>()?;
     let ask = parse(&words)?;
     let (bare, host) = split_remote(&ask.workspace);
-    if !host.is_empty() || !sendable_lines(&ask.lines) || !super::has_python3() {
+    if !host.is_empty() || !sendable_lines(&ask.lines) || !python::family_native(python::here()) {
         return None;
     }
     let settings = match daemon::current() {

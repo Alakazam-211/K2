@@ -55,6 +55,7 @@ use crate::out::json::{self, Options, Text, Value};
 use crate::out::{self, py};
 use crate::passport;
 use crate::prelude::{self, Closing};
+use crate::python;
 use crate::transport::encode::{quote, urlencode_plus};
 use crate::transport::{Call, Channel, Client, Error};
 use std::ffi::OsString;
@@ -242,7 +243,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
     let ask = parse(&words)?;
-    if !super::has_python3() {
+    if !python::family_native(python::here()) {
         return None;
     }
     let show = matches!(ask, Ok(Ask::Show { .. }));

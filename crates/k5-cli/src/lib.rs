@@ -56,6 +56,8 @@
 //!   as the shell asks before a page that depends on them.
 //! - [`tools`]: the shell's tool table, which catalog tool a command line
 //!   is and whether it needs the session's own passport.
+//! - [`python`]: whether the shell has a Python 3 to run, and whether a
+//!   native command runs without one.
 
 pub mod called_as;
 pub mod cards;
@@ -74,6 +76,7 @@ pub mod out;
 pub mod pages;
 pub mod passport;
 pub mod prelude;
+pub mod python;
 pub mod route;
 pub mod text;
 pub mod tools;

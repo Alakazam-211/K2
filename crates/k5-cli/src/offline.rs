@@ -277,12 +277,6 @@ impl<'a> SearchPath<'a> {
     }
 }
 
-/// Whether the shell would find `name` on `env`'s `PATH`.
-pub fn on_path(env: &Env, name: &str) -> bool {
-    env.get("PATH")
-        .is_some_and(|p| SearchPath::new(p).find(name).is_some())
-}
-
 /// The shell's `pwd` at start: `PWD` when it is an absolute path to this
 /// folder, else the folder's real path. A `PWD` bash would tidy first
 /// (`.`, `..`, `//`, a trailing `/`) goes to the shell.

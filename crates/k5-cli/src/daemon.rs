@@ -235,20 +235,33 @@ pub fn usable_git() -> Option<&'static Path> {
     GIT.get_or_init(|| {
         let git = find_on_path("git", std::env::var_os("PATH")?)?;
         if cfg!(target_os = "macos") && git == Path::new("/usr/bin/git") {
-            let out = Command::new("/usr/bin/xcode-select")
-                .arg("-p")
-                .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .output()
-                .ok()?;
-            let dev = String::from_utf8_lossy(&out.stdout)
-                .trim_end_matches('\n')
-                .to_string();
-            if dev.is_empty() || !is_executable(&Path::new(&dev).join("usr/bin/git")) {
+            let dev = developer_dir()?;
+            if !is_executable(&dev.join("usr/bin/git")) {
                 return None;
             }
         }
         Some(git)
+    })
+    .as_deref()
+}
+
+/// macOS: the developer tools folder `xcode-select -p` names (Xcode's or
+/// the command line tools'), or `None` when it names none (they are not
+/// installed). Asked once per run; nothing in `/usr/bin` that stands in
+/// for a developer tool is ever run to find out.
+pub fn developer_dir() -> Option<&'static Path> {
+    static DEV: OnceLock<Option<PathBuf>> = OnceLock::new();
+    DEV.get_or_init(|| {
+        let out = Command::new("/usr/bin/xcode-select")
+            .arg("-p")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        let dev = String::from_utf8_lossy(&out.stdout)
+            .trim_end_matches('\n')
+            .to_string();
+        (!dev.is_empty()).then(|| PathBuf::from(dev))
     })
     .as_deref()
 }
@@ -267,14 +280,16 @@ pub fn find_on_path(name: &str, path: OsString) -> Option<PathBuf> {
         .find(|p| is_executable(p))
 }
 
+/// A file this user may run, as `command -v` takes it.
 #[cfg(unix)]
-fn is_executable(p: &Path) -> bool {
+pub fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
+/// A file (Windows has no mode bits to read).
 #[cfg(not(unix))]
-fn is_executable(p: &Path) -> bool {
+pub fn is_executable(p: &Path) -> bool {
     p.is_file()
 }
 

@@ -90,8 +90,9 @@
 //!   nothing of the request went out on the socket (the connect failed or
 //!   timed out, or the first write took no byte), or the daemon answered
 //!   `not served on cell socket` (no handler ran). A GET also goes to TCP
-//!   after any other failure, and `cli_send`'s after an empty body, as the
-//!   shell's do. A POST that went out never does: see below.
+//!   after any other failure, and `cli_send`'s after an empty body (or one
+//!   of only newlines and NULs, which `$(…)` leaves empty), as the shell's
+//!   do. A POST that went out never does: see below.
 //!
 //! An answer is read to its end (its `Content-Length`, its last chunk, or
 //! the end of the stream when it has neither) and no further, so a close

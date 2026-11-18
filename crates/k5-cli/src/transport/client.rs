@@ -532,15 +532,17 @@ impl Client {
     /// socket and the route is one it serves, then TCP when that gave no
     /// usable answer: nothing of the request went out, or the daemon said
     /// "not served on cell socket" (no handler ran). A GET also goes to
-    /// TCP after a failure or an empty body, as the shell's does. A POST
-    /// that went out never does: a failure is [`Error::MaybeApplied`], and
-    /// an answer, even an empty one, is the answer.
+    /// TCP after a failure or an empty body, as the shell's does (a body
+    /// of only newlines and NULs is empty to it: it holds the answer in
+    /// `$(…)`). A POST that went out never does: a failure is
+    /// [`Error::MaybeApplied`], and an answer, even an empty one, is the
+    /// answer.
     pub fn send(&mut self, endpoint: &str, call: Call<'_>) -> Result<Response, Error> {
         let t0 = Instant::now();
         if self.cell_socket().is_some() && uds_eligible(endpoint) {
             match self.call_from(Channel::Uds, endpoint, call, t0) {
                 Ok(r) if contains(&r.body, NOT_SERVED) => {}
-                Ok(r) if call.is_post() || !r.body.is_empty() => return Ok(r),
+                Ok(r) if call.is_post() || r.body.iter().any(|b| !matches!(b, b'\n' | 0)) => return Ok(r),
                 Ok(_) => {}
                 Err(f) if f.sent && call.is_post() => return Err(maybe_applied(endpoint, t0)),
                 Err(_) => {}

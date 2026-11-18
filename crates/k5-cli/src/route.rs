@@ -121,15 +121,21 @@ pub static TABLE: &[Noun] = &[
     bash(&["agent"]),
     bash(&["context"]),
     bash(&["preset"]),
-    // Only `list`; every other verb, and `feedback` alone, is the
-    // shell's. One verb row each, so each can turn back alone.
+    // Only `list` and `show`; every other verb, and `feedback` alone, is
+    // the shell's. One verb row each, so either can turn back alone.
     Noun {
         words: &["feedback", "tickets"],
         owner: Owner::Bash,
-        verbs: &[Verb {
-            words: &["list"],
-            owner: Owner::Native,
-        }],
+        verbs: &[
+            Verb {
+                words: &["list"],
+                owner: Owner::Native,
+            },
+            Verb {
+                words: &["show"],
+                owner: Owner::Native,
+            },
+        ],
     },
     bash(&["organization"]),
     bash(&["project"]),

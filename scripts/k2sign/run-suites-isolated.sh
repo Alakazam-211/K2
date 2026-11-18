@@ -5,7 +5,7 @@
 # or any release state.
 #
 #   bash scripts/k2sign/run-suites-isolated.sh <commit> [--keep]
-#   bash scripts/k2sign/run-suites-isolated.sh --probe-only
+#   bash scripts/k2sign/run-suites-isolated.sh --probe-only [<commit>]
 #
 # Run it as the release user, from any checkout that holds <commit> (it
 # never changes that checkout). What it does:
@@ -23,7 +23,9 @@
 #      sudo, security, launchctl, dscl, defaults, osascript, open and the
 #      installed signers (/usr/local/libexec/k2sign, k2-signer) cannot run,
 #      and the keychain services cannot be reached. A probe proves the
-#      sandbox bites before any suite runs (--probe-only runs just that).
+#      sandbox bites before any suite runs, and runs one real signer
+#      command (generate-u2) in a throwaway test install under W
+#      (--probe-only runs just the probe, at <commit> or HEAD).
 #      Only one case runs without its own sandbox: when this script is
 #      already inside one (macOS refuses a nested sandbox, as on a compute
 #      node) AND no signer is installed on this Mac (no _k2sign user, no
@@ -32,11 +34,14 @@
 #      always required.
 #   5. Takes a listing of the real state before and after, and fails if
 #      any of it changed: names, modes, sizes and mtimes of what a suite
-#      could plausibly touch (the keychains, LaunchAgents, ~/Applications,
+#      could plausibly touch (the keychain files, LaunchAgents, ~/Applications,
 #      ~/.k2sign, ~/.k2-updater, ~/.k2-release-approve, ~/k2-release-audit,
 #      the gh and git config, the installed signer's folders, sudoers.d,
 #      LaunchDaemons and this checkout's .git), and only the top-level
-#      NAMES of the home folder, ~/.k2 and ~/.k5. A running K2 daemon writes
+#      NAMES of the home folder, ~/.k2, ~/.k5 and the keychain folders
+#      macOS writes all the time (~/Library/Keychains/<UUID>/, the
+#      data-protection keychain-2.db and its -wal and -shm). A running K2
+#      daemon writes
 #      ~/.k2 all the time (its database and WAL, logs, sockets, ports), so
 #      mtimes there say nothing about the suites; the suites never see the
 #      real home (HOME is inside W) and the sandbox refuses any write to it,
@@ -55,6 +60,13 @@
 # - The xcrun shims (/usr/bin/python3, git, cc) write one cache file,
 #   xcrun_db, in the per-user temp folder. The sandbox allows that one name
 #   there and nothing else.
+# - The signer's wrappers (scripts/k2sign/k2sign, k2sign-admin) run its
+#   python under env -i from /, so TMPDIR never reaches it, and the admin
+#   verbs' scratch is tempfile.mkdtemp(). In the sandbox python finds no
+#   temp folder it may write. This script does not open /tmp for it and
+#   does not change the signer; the signer probe below stops the run with
+#   that reason until the signer is given a temp folder inside its test
+#   root.
 # The probe checks each of these.
 #
 # The sandbox mode runs only on a Mac that is not itself in a sandbox: a
@@ -69,7 +81,7 @@ SUITES="k2sign-s2.sh k2sign-s3.sh k2sign-s3b.sh"
 SIGNER_USER=_k2sign
 
 usage() {
-    sed -n '2,65p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,77p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 die() { printf 'run-suites-isolated: REFUSED: %s\n' "$*" >&2; exit 1; }
@@ -85,7 +97,7 @@ while [ $# -gt 0 ]; do
         *) [ -z "$COMMIT" ] || usage; COMMIT="$1"; shift ;;
     esac
 done
-if [ "$PROBE_ONLY" = 1 ]; then [ -z "$COMMIT" ] || usage; else [ -n "$COMMIT" ] || usage; fi
+if [ "$PROBE_ONLY" = 1 ]; then COMMIT="${COMMIT:-HEAD}"; else [ -n "$COMMIT" ] || usage; fi
 
 # ── 1. who and where ───────────────────────────────────────────────────
 [ "$(uname -s)" = Darwin ] || die "the k2sign suites run on macOS only"
@@ -122,12 +134,10 @@ sb_err="$(/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true 2
 
 SRC="$(cd "$(dirname "$0")/../.." && pwd -P)"
 /usr/bin/git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1 || die "$SRC is not a git checkout"
-if [ "$PROBE_ONLY" = 0 ]; then
-    SHA="$(/usr/bin/git -C "$SRC" rev-parse --verify --quiet "${COMMIT}^{commit}")" || die "no commit $COMMIT in $SRC"
-    for s in $SUITES k2sign_fixture.sh; do
-        /usr/bin/git -C "$SRC" cat-file -e "$SHA:tests/release/$s" 2>/dev/null || die "$SHA has no tests/release/$s"
-    done
-fi
+SHA="$(/usr/bin/git -C "$SRC" rev-parse --verify --quiet "${COMMIT}^{commit}")" || die "no commit $COMMIT in $SRC"
+for s in $SUITES k2sign_fixture.sh; do
+    /usr/bin/git -C "$SRC" cat-file -e "$SHA:tests/release/$s" 2>/dev/null || die "$SHA has no tests/release/$s"
+done
 GIT_DIR_REAL="$(cd "$SRC" && cd "$(/usr/bin/git rev-parse --git-common-dir)" && pwd -P)"
 
 # ── 2. the temp folder and the export ──────────────────────────────────
@@ -145,28 +155,26 @@ esac
 case "$SRC" in "$W"/*) die "the checkout is inside the temp folder" ;; esac
 mkdir -p "$W/tree" "$W/home" "$W/tmp" "$W/bin" "$W/logs" "$W/xdg/config" "$W/xdg/cache" "$W/xdg/data" "$W/xdg/state" \
     "$W/k2home" "$W/k5home" "$W/gh"
-if [ "$PROBE_ONLY" = 0 ]; then
-    /usr/bin/git -C "$SRC" archive --format=tar "$SHA" | /usr/bin/tar -x -C "$W/tree" \
-        || die "git archive of $SHA failed"
-    say "commit $SHA exported to $W/tree"
+/usr/bin/git -C "$SRC" archive --format=tar "$SHA" | /usr/bin/tar -x -C "$W/tree" \
+    || die "git archive of $SHA failed"
+say "commit $SHA exported to $W/tree"
 
-    # ── minisign, before the sandbox (the download needs the network) ─────
-    if m="$(command -v minisign 2>/dev/null)" && [ -x "$m" ]; then
-        /bin/cp "$m" "$W/bin/minisign"
-        say "minisign: copied from $m"
-    else
-        url="$(sed -n 's/^MINISIGN_ZIP_URL="\(.*\)"$/\1/p' "$W/tree/scripts/k2sign/install.sh")"
-        sum="$(sed -n 's/^MINISIGN_ZIP_SHA256="\(.*\)"$/\1/p' "$W/tree/scripts/k2sign/install.sh")"
-        [ -n "$url" ] && [ -n "$sum" ] || die "no minisign pin in scripts/k2sign/install.sh"
-        /usr/bin/curl -fsSL --proto '=https' --tlsv1.2 -o "$W/tmp/m.zip" "$url" || die "download of $url failed"
-        [ "$(/usr/bin/shasum -a 256 "$W/tmp/m.zip" | cut -d' ' -f1)" = "$sum" ] || die "the minisign zip is not the pinned $sum"
-        /usr/bin/ditto -x -k "$W/tmp/m.zip" "$W/tmp/mx"
-        /bin/cp "$W/tmp/mx/minisign" "$W/bin/minisign"
-        /bin/rm -rf "$W/tmp/m.zip" "$W/tmp/mx"
-        say "minisign: the pinned release ($sum)"
-    fi
-    /bin/chmod 0755 "$W/bin/minisign"
+# ── minisign, before the sandbox (the download needs the network) ─────
+if m="$(command -v minisign 2>/dev/null)" && [ -x "$m" ]; then
+    /bin/cp "$m" "$W/bin/minisign"
+    say "minisign: copied from $m"
+else
+    url="$(sed -n 's/^MINISIGN_ZIP_URL="\(.*\)"$/\1/p' "$W/tree/scripts/k2sign/install.sh")"
+    sum="$(sed -n 's/^MINISIGN_ZIP_SHA256="\(.*\)"$/\1/p' "$W/tree/scripts/k2sign/install.sh")"
+    [ -n "$url" ] && [ -n "$sum" ] || die "no minisign pin in scripts/k2sign/install.sh"
+    /usr/bin/curl -fsSL --proto '=https' --tlsv1.2 -o "$W/tmp/m.zip" "$url" || die "download of $url failed"
+    [ "$(/usr/bin/shasum -a 256 "$W/tmp/m.zip" | cut -d' ' -f1)" = "$sum" ] || die "the minisign zip is not the pinned $sum"
+    /usr/bin/ditto -x -k "$W/tmp/m.zip" "$W/tmp/mx"
+    /bin/cp "$W/tmp/mx/minisign" "$W/bin/minisign"
+    /bin/rm -rf "$W/tmp/m.zip" "$W/tmp/mx"
+    say "minisign: the pinned release ($sum)"
 fi
+/bin/chmod 0755 "$W/bin/minisign"
 
 # Stand-ins first on PATH: each records the call and fails.
 for t in sudo security launchctl dscl defaults osascript open gh k2 k5 k5-cli; do
@@ -182,8 +190,7 @@ done
 # ── 5a. the real state, before ─────────────────────────────────────────
 # Full listings (names, modes, sizes, mtimes): what a suite could plausibly
 # touch.
-WATCH="$REAL_HOME/Library/Keychains
-$REAL_HOME/Library/LaunchAgents
+WATCH="$REAL_HOME/Library/LaunchAgents
 $REAL_HOME/Applications
 $REAL_HOME/.k2sign
 $REAL_HOME/.k2-updater
@@ -218,6 +225,19 @@ snapshot() {
                 echo "$h (absent)"
             fi
         done
+        # The keychains: every file in the folder in full (login and the
+        # other *.keychain-db), the names in each subfolder (macOS writes
+        # the <UUID>/ data-protection keychain all the time).
+        kc="$REAL_HOME/Library/Keychains"
+        if [ -d "$kc" ]; then
+            /bin/ls -A "$kc" | sed "s|^|$kc/ |"
+            /usr/bin/find "$kc" -maxdepth 1 -type f -exec /usr/bin/stat -f '%N %p %z %m' {} + 2>/dev/null || echo "$kc (unreadable)"
+            /usr/bin/find "$kc" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r d; do
+                /bin/ls -A "$d" 2>/dev/null | sed "s|^|$d/ |" || echo "$d (unreadable)"
+            done
+        else
+            echo "$kc (absent)"
+        fi
         printf '%s\n' "$WATCH" | while IFS= read -r p; do
             if [ -e "$p" ] || [ -L "$p" ]; then
                 /usr/bin/find "$p" -maxdepth 3 -exec /usr/bin/stat -f '%N %p %z %m' {} + 2>/dev/null || echo "$p (unreadable)"
@@ -334,7 +354,30 @@ EOF
 for p in "$probe" "$probe2" "$probe3" "$probe4" "$probe5" "$probe6"; do
     [ ! -e "$p" ] || { /bin/rm -f "$probe" "$probe2" "$probe3" "$probe4" "$probe5" "$probe6"; die "a probe file was written outside $W: $p"; }
 done
+# One real signer command in a throwaway test install under W, the way the
+# suites' fixture makes one: install.sh --test, then k2sign-admin
+# generate-u2 (an admin verb: its scratch is python's temp folder).
+in_sandbox /bin/bash -c '
+    W="$1" r="$1/probe-root"
+    mkdir -p "$r" || exit 1
+    K2SIGN_TEST_ROOT="$r" /bin/bash scripts/k2sign/install.sh --test --minisign "$W/bin/minisign" \
+        --gh tests/release/fixtures/gh-stub.sh > "$W/logs/probe-install.out" 2>&1 \
+        || { echo "install.sh --test into $r failed:"; tail -5 "$W/logs/probe-install.out"; exit 1; }
+    if ! K2SIGN_TEST_ROOT="$r" "$r/usr/local/libexec/k2sign/k2sign-admin" generate-u2 > "$W/logs/probe-admin.out" 2>&1; then
+        echo "k2sign-admin generate-u2 failed:"; tail -5 "$W/logs/probe-admin.out"
+        if grep -q "No usable temporary directory" "$W/logs/probe-admin.out"; then
+            echo "(the signer runs python under env -i from /, so it has no temp folder inside the sandbox)"
+        fi
+        exit 1
+    fi
+    grep -q "U2 generated inside $r/" "$W/logs/probe-admin.out" \
+        || { echo "k2sign-admin generate-u2 did not say where:"; tail -5 "$W/logs/probe-admin.out"; exit 1; }
+' _ "$W" > "$W/logs/probe-signer.out" 2>&1 || {
+    cat "$W/logs/probe-signer.out" >&2
+    die "the signer does not run in the sandbox (lines above); no suite was run"
+}
 : > "$W/logs/refused.calls"
+say "signer probe: install.sh --test and k2sign-admin generate-u2 ran in a throwaway store under $W"
 if [ "$SANDBOX" = 1 ]; then
     say "sandbox probe: writes outside $W, sudo, security and launchctl are all refused"
     say "  here documents, here strings, mktemp, mktemp -d and python's tempfile work, inside $W"

@@ -322,6 +322,11 @@ export const SEW_ALARMS: Record<string, SewAlarmInfo> = {
   keys_provider_down: { severity: 'error', title: 'Chat can’t read its encryption key', fix: 'Chat can’t open any message until it can.', ...HEALTH },
   keys_current_month_missing: { severity: 'error', title: 'This month’s encryption key is missing', fix: 'New messages can’t be saved.', ...HEALTH },
   keys_mirror_stale: { severity: 'warn', title: 'Keys aren’t kept on another machine', fix: 'Choose where copies of the keys go, under Backups and keys.', action: 'offbox' },
+  // Sew 0.10.5: a folder copy of the keys is checked; while one of these
+  // stands, chat holds key changes until the copy is good again.
+  keys_mirror_unmounted: { severity: 'error', title: 'The folder for copies of the keys isn’t there', fix: 'Chat holds key changes until the other disk is mounted again, or you choose another place under Backups and keys.', action: 'offbox' },
+  keys_mirror_same_device: { severity: 'error', title: 'Copies of the keys are on the same disk', fix: 'A copy on the same disk doesn’t survive losing it, so chat holds key changes. Choose a folder on another disk under Backups and keys.', action: 'offbox' },
+  keys_mirror_unsynced: { severity: 'warn', title: 'Copies of the keys are behind', fix: 'Some key changes haven’t reached the copy yet. Check that the other disk is mounted and has space, under Backups and keys.', action: 'offbox' },
   keys_shred_pending: { severity: 'warn', title: 'A key is still being deleted', fix: 'Chat finishes this on its own. Nothing to do unless it stays.' },
   keys_resurrected: { severity: 'error', title: 'A deleted key came back', fix: 'A restored copy of the keys holds a key that was deleted.', ...HEALTH },
   keys_rewrap_stalled: { severity: 'warn', title: 'Changing the encryption key stalled', fix: 'The key change stopped partway.', ask: 'Ask an admin to start the key change again on the server, then run a health check.', command: cli('rotate-master') },

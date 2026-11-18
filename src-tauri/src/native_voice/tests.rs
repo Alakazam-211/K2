@@ -98,7 +98,8 @@ fn the_renderers_contract_file_matches_the_plugin() {
 /// pinned crates.io release, and every payload parses to the plugin's real types and back.
 #[test]
 fn sews_contract_matches_the_plugin_and_the_renderers_copy() {
-    let pinned = sew_crate_file("tauri-plugin-sew-voice", "tests/native-voice-contract.json");
+    // Since 0.8.3 (Sew 0.10.5) the crate keeps its contract files in contracts/, not tests/.
+    let pinned = sew_crate_file("tauri-plugin-sew-voice", "contracts/native-voice-contract.json");
     let copy = std::fs::read(repo_root().join("src/renderer/lib/voice/sew-native-voice-contract.json")).expect("the renderer's copy");
     assert_eq!(copy, pinned, "the renderer's copy of Sew's contract is stale");
     let f: Value = serde_json::from_slice(&pinned).expect("JSON");
@@ -130,6 +131,9 @@ fn sews_contract_matches_the_plugin_and_the_renderers_copy() {
     assert_eq!(notice.my_consent, consent::PENDING);
     assert!(notice.consent_prompt.is_some());
     for name in ["granted", "withdrawn"] {
+        // Sew 0.10.5 (plugin 0.8.3): started_at, the recording's own start by
+        // Sew's clock, survives the plugin's type both ways.
+        assert_eq!(f["recording"][name]["started_at"], "2026-11-02T09:58:00.000Z", "{name}");
         let _: RecordingInfo = exact(&f["recording"][name]);
     }
     assert_eq!(exact::<Option<RecordingInfo>>(&f["recording"]["stopped"]), None);

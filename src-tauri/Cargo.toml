@@ -108,7 +108,9 @@ parking_lot = "0.12"
 # default idle time (sew_call_client::DFN3_IDLE_UNLOAD, 5 minutes); K2 keeps both
 # defaults (no preload at launch). Sew 0.10.4's noise_removal state says why a call
 # stepped down from DeepFilterNet3 (step_down_reason, in_grace, …); no Builder change.
-tauri-plugin-sew-voice = { version = "=0.8.2", optional = true, features = ["video", "dfn3"] }
+# Sew 0.10.5 (0.8.3): the recording's started_at (RFC 3339) on `recording` and
+# state.recording; the contract files moved from the crate's tests/ to contracts/.
+tauri-plugin-sew-voice = { version = "=0.8.3", optional = true, features = ["video", "dfn3"] }
 zeroize = { version = "1", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over

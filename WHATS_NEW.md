@@ -65,6 +65,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Plain http connections to another K2 server no longer use a proxy;** use https for peers that need one.
 - **A compute, App or other request that may have reached K2 (a command run by `k2 app exec` included) is never sent a second time.** When K2 doesn't answer it, the command says the request may have been applied, so you can check before running it again.
 - **Multiplayer kit 0.22.0** and its file packs.
+- **Sew 0.10.5.** A recording shows its real start time to people who join the call after it started, and a recording whose transcript couldn't be made says why. Sew updates how it stores chat when it starts, so going back to an older Sew afterwards is `k2 hostchat rollback --accept-data-loss`, run by the owner.
 
 ### Windows
 - **Windows ships with this release (Alpha).**

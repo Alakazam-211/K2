@@ -92,6 +92,14 @@ describe('tables match the daemon', () => {
     }
   })
 
+  it('Sew 0.10.5’s keyring-mirror alarms have their own words and point at Backups and keys', () => {
+    for (const a of ['keys_mirror_unmounted', 'keys_mirror_same_device', 'keys_mirror_unsynced']) {
+      const info = alarmInfo(a)
+      expect(info.title, a).not.toBe(a)
+      expect(info.action, a).toBe('offbox')
+    }
+  })
+
   it('an unknown alarm keeps its name as the title, with the status command quietly', () => {
     expect(alarmInfo('brand_new')).toEqual({
       severity: 'warn',

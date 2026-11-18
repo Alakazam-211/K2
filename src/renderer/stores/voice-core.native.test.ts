@@ -784,9 +784,16 @@ describe("recording in K2's own rooms (Sew 0.9.0): told, not asked", () => {
     await j.ctl.join(SEW, room1)
     j.fire('recording', held.recording)
     expect(j.ctl.store.getState().call?.recording?.startedAt).toBeNull()
+    // Sew's own contract (0.10.5) carries started_at; an older Sew's event has none.
+    const { started_at: contractStart, ...olderSew } = sewContract.recording.granted
+    expect(contractStart).toBe('2026-11-02T09:58:00.000Z')
     const s = await inCall()
-    s.fire('recording', sewContract.recording.granted)
+    s.fire('recording', olderSew)
     expect(s.ctl.store.getState().call?.recording?.startedAt).toBe(5_000)
+    // Sew 0.10.5's granted event, as its contract has it: Sew's start.
+    const c = await inCall()
+    c.fire('recording', sewContract.recording.granted)
+    expect(c.ctl.store.getState().call?.recording?.startedAt).toBe(Date.parse('2026-11-02T09:58:00.000Z'))
     // Not a date: as if Sew never said.
     const t = await inCall()
     t.fire('recording', { ...sewContract.recording.granted, started_at: 'not a time' })

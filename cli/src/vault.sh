@@ -1060,7 +1060,7 @@ n = sys.argv[1]
 print(next((s["id"] for s in json.load(sys.stdin).get("secrets") or [] if s.get("name") == n), ""))' "$sname")"
                         [ -n "$ssid" ] || { echo "not_found: $workspace has no secret a person gave named $sname (k2 vault list --scope ws:$workspace)" >&2; exit 4; }
                         stok="$(_vault_confirm_token handoff-send "$ssid" "let $workspace send $sname to $to")" || exit 3
-                        sbody="$(python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["confirmToken"]=sys.argv[2]; o["secretId"]=sys.argv[3]; print(json.dumps(o))' "$sbody" "$stok" "$ssid")"
+                        sbody="$(_with_confirm_token "$(python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["secretId"]=sys.argv[2]; print(json.dumps(o))' "$sbody" "$ssid")" "$stok")"
                         stok=""
                     fi
                     _vault_sock_call POST "send-allow" "$sbody"

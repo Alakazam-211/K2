@@ -1223,11 +1223,12 @@ cmd_sources_approve() {
     joined="$(IFS=,; printf '%s' "${names[*]}")"
     _sources_b2_pending "$joined"
     local plan
-    plan="$(printf '%s' "$_SRC_BODY" | python3 -c '
+    plan="$(printf '%s\0%s' "$secret" "$_SRC_BODY" | python3 -c '
 import json, sys, hashlib
-v = json.load(sys.stdin)
+picked, _, raw = sys.stdin.buffer.read().partition(b"\0")
+picked = picked.decode()
+v = json.loads(raw)
 want = sys.argv[1].split(",")
-picked = sys.argv[2]
 rows = {s["name"]: s for s in v.get("sources") or []}
 missing = [n for n in want if n not in rows]
 if missing:
@@ -1245,7 +1246,7 @@ pairs.sort()
 h = hashlib.sha256("\n".join(pairs).encode()).hexdigest() if pairs else ""
 first = rows[want[0]]
 print("ok\t%s\t%s\t%s\t%s" % (json.dumps(items), h, first["id"], "1" if pairs else ""))
-' "$joined" "$secret")"
+' "$joined")"
     local kind items hash first_id needs
     IFS=$'\t' read -r kind items hash first_id needs <<<"$plan"
     if [ "$kind" = "missing" ]; then
@@ -1257,15 +1258,17 @@ print("ok\t%s\t%s\t%s\t%s" % (json.dumps(items), h, first["id"], "1" if pairs el
         if [ -n "$needs" ]; then
             tok="$(_sources_b2_confirm source-secret "$first_id" "${names[0]}")" || exit 3
         fi
-        body="$(printf '%s' "$items" | python3 -c '
+        # The token rides stdin (NUL-separated), never argv.
+        body="$(printf '%s\0%s\0%s\0%s\0%s\0%s' "$items" "$tok" "$viewers" "$access" "$keep" "$use_anyway" | python3 -c '
 import json, sys
-it = json.load(sys.stdin)[0]
-a = sys.argv[1:]
+p = sys.stdin.buffer.read().split(b"\0")
+it = json.loads(p[0])[0]
+a = [x.decode() for x in p[1:]]
 for k, v in (("confirmToken", a[0]), ("viewers", a[1]), ("agentAccess", a[2]), ("keep", a[3])):
     if v: it[k] = v
 if a[4]: it["useAnyway"] = True
 print(json.dumps(it))
-' "$tok" "$viewers" "$access" "$keep" "$use_anyway")"
+')"
         _sources_call POST /cli/sources/approve "$body"
     else
         # One --secret for every name: one batch confirm covers them all
@@ -1277,13 +1280,14 @@ print(json.dumps(it))
         if [ -n "$needs" ]; then
             tok="$(_sources_b2_confirm source-batch "$hash" "${#names[@]} sources")" || exit 3
         fi
-        body="$(printf '%s' "$items" | python3 -c '
+        body="$(printf '%s\0%s\0%s' "$items" "$tok" "$use_anyway" | python3 -c '
 import json, sys
-b = {"items": json.load(sys.stdin), "triggers": []}
-if sys.argv[1]: b["confirmToken"] = sys.argv[1]
-if sys.argv[2]: b["useAnyway"] = True
+p = sys.stdin.buffer.read().split(b"\0")
+b = {"items": json.loads(p[0]), "triggers": []}
+if p[1]: b["confirmToken"] = p[1].decode()
+if p[2]: b["useAnyway"] = True
 print(json.dumps(b))
-' "$tok" "$use_anyway")"
+')"
         _sources_call POST /cli/sources/batch-approve "$body"
     fi
     tok=""
@@ -1327,11 +1331,12 @@ cmd_sources_secret() {
         if [ -n "$none" ] || _sources_in_k2; then
             # Unbinding needs no confirm; an agent with "Manage Gardens and
             # data sources" binds with none (others get person_only, exit 3).
-            body="$(K2_SRC_NAMES="$namelist" python3 -c '
+            body="$(printf '%s\0%s' "$secret" "$use_anyway" | K2_SRC_NAMES="$namelist" python3 -c '
 import json, os, sys
-b = {"names": os.environ["K2_SRC_NAMES"].splitlines(), "secret": sys.argv[1] or None}
-if sys.argv[2]: b["useAnyway"] = True
-print(json.dumps(b))' "$secret" "$use_anyway")"
+p = [x.decode() for x in sys.stdin.buffer.read().split(b"\0")]
+b = {"names": os.environ["K2_SRC_NAMES"].splitlines(), "secret": p[0] or None}
+if p[1]: b["useAnyway"] = True
+print(json.dumps(b))')"
         else
             # One confirm bound to the whole list: sha256 of the sorted
             # "<sourceId>:<secret>" lines (as approve --secret uses).
@@ -1343,17 +1348,20 @@ print(json.dumps(b))' "$secret" "$use_anyway")"
                 ids="$ids$sid"$'\n'
             done
             local hash
-            hash="$(K2_SRC_IDS="$ids" python3 -c '
+            # The secret's name rides stdin, never argv.
+            hash="$(printf '%s' "$secret" | K2_SRC_IDS="$ids" python3 -c '
 import hashlib, os, sys
-lines = sorted("%s:%s" % (i, sys.argv[1]) for i in os.environ["K2_SRC_IDS"].splitlines() if i)
-print(hashlib.sha256("\n".join(lines).encode()).hexdigest())' "$secret")"
+s = sys.stdin.read()
+lines = sorted("%s:%s" % (i, s) for i in os.environ["K2_SRC_IDS"].splitlines() if i)
+print(hashlib.sha256("\n".join(lines).encode()).hexdigest())')"
             local tok
             tok="$(_sources_b2_confirm source-batch "$hash" "${#names[@]} sources")" || exit 3
-            body="$(K2_SRC_NAMES="$namelist" python3 -c '
+            body="$(printf '%s\0%s\0%s' "$secret" "$tok" "$use_anyway" | K2_SRC_NAMES="$namelist" python3 -c '
 import json, os, sys
-b = {"names": os.environ["K2_SRC_NAMES"].splitlines(), "secret": sys.argv[1], "confirmToken": sys.argv[2]}
-if sys.argv[3]: b["useAnyway"] = True
-print(json.dumps(b))' "$secret" "$tok" "$use_anyway")"
+p = [x.decode() for x in sys.stdin.buffer.read().split(b"\0")]
+b = {"names": os.environ["K2_SRC_NAMES"].splitlines(), "secret": p[0], "confirmToken": p[1]}
+if p[2]: b["useAnyway"] = True
+print(json.dumps(b))')"
             tok=""
         fi
         _sources_call POST /cli/sources/secret "$body"
@@ -1370,11 +1378,12 @@ print("%s: %s" % (", ".join(v["names"]), ("use " + v["secret"]) if v.get("secret
     elif _sources_in_k2; then
         # An agent with "Manage Gardens and data sources" binds with no
         # confirm; any other passport gets person_only (exit 3).
-        body="$(python3 -c '
+        body="$(printf '%s\0%s' "$secret" "$use_anyway" | python3 -c '
 import json, sys
-b = {"name": sys.argv[1], "secret": sys.argv[2]}
-if sys.argv[3]: b["useAnyway"] = True
-print(json.dumps(b))' "$name" "$secret" "$use_anyway")"
+p = [x.decode() for x in sys.stdin.buffer.read().split(b"\0")]
+b = {"name": sys.argv[1], "secret": p[0]}
+if p[1]: b["useAnyway"] = True
+print(json.dumps(b))' "$name")"
     else
         # The confirm is bound to the source id (persons see it in show).
         _sources_call GET /cli/sources/show "$(_sources_b2_query "name=$name")"
@@ -1383,11 +1392,12 @@ print(json.dumps(b))' "$name" "$secret" "$use_anyway")"
         [ -n "$sid" ] || { echo "Error: the daemon didn't name the source id (run this outside K2)" >&2; exit 3; }
         local tok
         tok="$(_sources_b2_confirm source-secret "$sid" "$name")" || exit 3
-        body="$(python3 -c '
+        body="$(printf '%s\0%s\0%s' "$secret" "$tok" "$use_anyway" | python3 -c '
 import json, sys
-b = {"name": sys.argv[1], "secret": sys.argv[2], "confirmToken": sys.argv[3]}
-if sys.argv[4]: b["useAnyway"] = True
-print(json.dumps(b))' "$name" "$secret" "$tok" "$use_anyway")"
+p = [x.decode() for x in sys.stdin.buffer.read().split(b"\0")]
+b = {"name": sys.argv[1], "secret": p[0], "confirmToken": p[1]}
+if p[2]: b["useAnyway"] = True
+print(json.dumps(b))' "$name")"
         tok=""
     fi
     _sources_call POST /cli/sources/secret "$body"

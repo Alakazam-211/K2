@@ -1,6 +1,6 @@
 #!/bin/sh
 # k2-open — K2 browser-open shim (staged by the K2 daemon; do not edit).
-# K2_OPEN_SHIM_VERSION: 3
+# K2_OPEN_SHIM_VERSION: 4
 #
 # 0.40.34 (Rosson): when a process inside a K2 terminal session runs
 # `xdg-open <url>` / honors $BROWSER, the URL must surface in the
@@ -24,6 +24,14 @@
 #      the owner token as a Bearer header.
 # Neither arm goes through a proxy (`--noproxy '*'`), and no credential
 # rides the query string.
+#
+# Sent once (0.46.15): an arm hands on to the next one (the owner arm,
+# then the system opener) only when K2 took none of the request: the
+# connect failed (curl 7) or K2 answered with an error status (curl 22;
+# its "not served on cell socket" 404 is one). Any other failure (a
+# timeout, an empty or broken reply) may have reached K2, which may have
+# opened the URL, so it is not sent again: one line on stderr, exit 1.
+#
 # The token is NEVER echoed or logged by this script, and never put on
 # curl's argv (any OS user can read argv with `ps`): the header / URL that
 # carries it goes to curl as a config on stdin (`curl -K -`), written by
@@ -50,17 +58,28 @@ case "$url" in
     http://*|https://*|HTTP://*|HTTPS://*) is_http=1 ;;
 esac
 
+# _sent_once RC: after an arm's curl. 0 ends the script; 7 or 22 (K2 took
+# none of it) returns to try the next arm; any other code ends it with 1.
+_sent_once() {
+    case "$1" in
+        0) exit 0 ;;
+        7|22) return 0 ;;
+    esac
+    echo "k2-open: K2's server didn't answer /cli/browser/open-url; the URL may have been opened. Check before opening it again." >&2
+    exit 1
+}
+
 if [ "$is_http" = 1 ] && command -v curl >/dev/null 2>&1; then
     # 1. Scoped-session channel: per-cell UDS + scoped hook token.
     _sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
     _hook_tok="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
     if [ -n "$_sock" ] && [ -n "$_hook_tok" ] && [ -S "$_sock" ]; then
-        if printf 'header = "Authorization: Bearer %s"\n' "$_hook_tok" \
+        _rc=0
+        printf 'header = "Authorization: Bearer %s"\n' "$_hook_tok" \
             | curl -fsS --noproxy '*' -K - --max-time 5 --unix-socket "$_sock" \
                 --data-urlencode "url=$url" \
-                "http://k2/cli/browser/open-url" >/dev/null 2>&1; then
-            exit 0
-        fi
+                "http://k2/cli/browser/open-url" >/dev/null 2>&1 || _rc=$?
+        _sent_once "$_rc"
     fi
     # 2. Owner fallback: daemon loopback with the disk owner credentials.
     _k2_home="${HOME}/.k2"
@@ -68,11 +87,11 @@ if [ "$is_http" = 1 ] && command -v curl >/dev/null 2>&1; then
         _port=$(cat "${_k2_home}/heartbeat.port" 2>/dev/null)
         _tok=$(cat "${_k2_home}/heartbeat.token" 2>/dev/null)
         if [ -n "$_port" ] && [ -n "$_tok" ]; then
-            if printf 'url = "http://127.0.0.1:%s/cli/browser/open-url"\nheader = "Authorization: Bearer %s"\n' "$_port" "$_tok" \
+            _rc=0
+            printf 'url = "http://127.0.0.1:%s/cli/browser/open-url"\nheader = "Authorization: Bearer %s"\n' "$_port" "$_tok" \
                 | curl -fsS --noproxy '*' -K - --max-time 5 \
-                    --data-urlencode "url=$url" >/dev/null 2>&1; then
-                exit 0
-            fi
+                    --data-urlencode "url=$url" >/dev/null 2>&1 || _rc=$?
+            _sent_once "$_rc"
         fi
     fi
 fi

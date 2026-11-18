@@ -140,8 +140,8 @@ SKILLS (documentation profiles — NOT spawnable; harness handles spawn)
   skills regenerate [<name>]                    Refresh SKILL.md files
 
 UPDATE
-  update                                        Update K2 app (default: --app)
-  update --app                                  Same: check/install app updates
+  update                                        Check for desktop app updates (default: --app)
+  update --app                                  Same; downloads and installs nothing
   update --cli [--check]                        CLI vs daemon version; the CLI updates with K2
   update --list                                 Show available versions
 

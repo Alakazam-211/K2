@@ -29,10 +29,12 @@ import { RecordingDot } from './RecordingBadge'
 /** How long Sew waits for an answer before it drops the person (ms). */
 export const RECORDING_NOTICE_WAIT_MS = 60_000
 
-/** The countdown's line: "You'll leave the call in 0:45 if you don't answer". */
-export function noticeCountdownLine(ask: 'join' | 'in_call', leftMs: number): string {
+/** The countdown's line: "You’ll leave the call in 0:45 if you don’t
+ *  answer". Joining a room names it ("You won’t join Standup…"); `room`
+ *  null (a DM call): "the call". */
+export function noticeCountdownLine(ask: 'join' | 'in_call', leftMs: number, room: string | null = null): string {
   const left = formatCallDuration(Math.max(0, leftMs))
-  return ask === 'join' ? `You won't join the call if you don't answer in ${left}` : `You'll leave the call in ${left} if you don't answer`
+  return ask === 'join' ? `You won’t join ${room ?? 'the call'} if you don’t answer in ${left}` : `You’ll leave the call in ${left} if you don’t answer`
 }
 
 export interface RecordingNoticeProps {
@@ -126,7 +128,7 @@ export default function RecordingNotice({ call, agentReaders, onAnswer }: Record
             ))}
           </div>
           <p data-testid="recording-notice-countdown" role="timer" aria-live="off" className="type-hint tabular-nums text-[var(--color-text-muted)]">
-            {noticeCountdownLine(n.ask, left)}
+            {noticeCountdownLine(n.ask, left, dm ? null : call.roomName)}
           </p>
           <div className="grid grid-cols-2 gap-2">
             <Button variant="danger-quiet" size="md" className="min-h-8" data-testid="recording-notice-leave" onClick={() => onAnswer('leave')}>

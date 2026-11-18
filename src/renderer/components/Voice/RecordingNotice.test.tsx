@@ -80,11 +80,11 @@ describe('RecordingNotice', () => {
     vi.useFakeTimers()
     try {
       render(<RecordingNotice call={call()} agentReaders={false} onAnswer={vi.fn()} />)
-      expect(screen.getByTestId('recording-notice-countdown').textContent).toBe("You'll leave the call in 1:00 if you don't answer")
+      expect(screen.getByTestId('recording-notice-countdown').textContent).toBe('You’ll leave the call in 1:00 if you don’t answer')
       act(() => {
         vi.advanceTimersByTime(15_000)
       })
-      expect(screen.getByTestId('recording-notice-countdown').textContent).toBe("You'll leave the call in 0:45 if you don't answer")
+      expect(screen.getByTestId('recording-notice-countdown').textContent).toBe('You’ll leave the call in 0:45 if you don’t answer')
     } finally {
       vi.useRealTimers()
     }
@@ -94,8 +94,19 @@ describe('RecordingNotice', () => {
     const c = call({ phase: 'joining' })
     c.recordingNotice = { ...c.recordingNotice!, ask: 'join' }
     render(<RecordingNotice call={c} agentReaders={false} onAnswer={vi.fn()} />)
-    expect(screen.getByTestId('recording-notice-leave').textContent).toBe("Don't join")
+    expect(screen.getByTestId('recording-notice-leave').textContent).toBe('Don’t join')
     expect(screen.getByRole('alertdialog').textContent).toContain('Standup is being recorded')
+    // A room: the room's name, never "the call", then the countdown.
+    expect(screen.getByRole('alertdialog').textContent).toContain('Alice started recording in Standup.')
+    expect(screen.getByTestId('recording-notice-countdown').textContent).toMatch(/^You won’t join Standup if you don’t answer in [01]:\d\d$/)
+  })
+
+  it('joining a DM call keeps "this call" and "the call"', () => {
+    const c = call({ phase: 'joining', roomId: 'dm:conv-1', roomName: 'Alice' })
+    c.recordingNotice = { ...c.recordingNotice!, ask: 'join' }
+    render(<RecordingNotice call={c} agentReaders={false} onAnswer={vi.fn()} />)
+    expect(screen.getByRole('alertdialog').textContent).toContain('Alice started recording this call.')
+    expect(screen.getByTestId('recording-notice-countdown').textContent).toMatch(/^You won’t join the call if you don’t answer in [01]:\d\d$/)
   })
 
   it('the badge shows the whole time a recording is on: the dot, then the words in the normal ink with the clock', () => {

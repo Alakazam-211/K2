@@ -64,7 +64,27 @@ describe("K2's own recording notice", () => {
     expect(j.title).toBe('Standup is being recorded')
     expect(j.lines[0]).toBe('This room records every call with more than one person.')
     expect(j.lines).toContain('The audio is deleted once the transcript is final.')
-    expect([j.ok, j.leave]).toEqual(['OK', "Don't join"])
+    expect([j.ok, j.leave]).toEqual(['OK', 'Don’t join'])
+  })
+
+  it('joining a room names the room, as the title does; in the call it is this call', () => {
+    const j = recordingNoticeText({ roomName: 'Design review', prompt: prompt({ startedByName: 'Ana Ruiz' }), agentReaders: false, ask: 'join' })
+    expect(j.title).toBe('Design review is being recorded')
+    expect(j.lines[0]).toBe('Ana Ruiz started recording in Design review.')
+    expect(j.lines.join(' ')).not.toMatch(/this call/)
+    const t = recordingNoticeText({ roomName: 'Design review', prompt: prompt({ startedByName: 'Ana Ruiz' }), agentReaders: false, ask: 'in_call' })
+    expect(t.lines[0]).toBe('Ana Ruiz started recording this call.')
+  })
+
+  it('every word people read uses curly apostrophes', () => {
+    for (const dm of [false, true])
+      for (const ask of ['join', 'in_call'] as const)
+        for (const p of [prompt(), prompt({ startedByName: null, required: true }), prompt({ startedByName: null })]) {
+          const t = recordingNoticeText({ roomName: 'Standup', prompt: p, agentReaders: true, ask, dm })
+          expect([t.title, ...t.lines, t.ok, t.leave].join(' ')).not.toContain("'")
+        }
+    const room = recordingNoticeText({ roomName: 'Standup', prompt: prompt(), agentReaders: false, ask: 'join' })
+    expect(room.lines).toContain('Everyone’s voice is recorded and transcribed. The transcript is kept in this room’s chat.')
   })
 
   it('says agents may read the transcript when an agent holds the switch (or Sew says so)', () => {
@@ -95,7 +115,7 @@ describe("a DM call's recording notice (prd-home-call-recording-v1 §2, HR-8)", 
     expect(t.title).toBe('This call is being recorded')
     expect(t.lines).toEqual([
       'Alex started recording this call.',
-      "Everyone's voice is recorded and transcribed. The transcript is kept in this DM.",
+      'Everyone’s voice is recorded and transcribed. The transcript is kept in this DM.',
       'The audio is kept for 30 days.',
       'Staying in the call means being recorded.',
     ])
@@ -107,7 +127,7 @@ describe("a DM call's recording notice (prd-home-call-recording-v1 §2, HR-8)", 
     const j = recordingNoticeText({ roomName: 'Alex', prompt: prompt(), agentReaders: false, ask: 'join', dm: true })
     expect(j.title).toBe('This call is being recorded')
     expect(j.lines.at(-1)).toBe('Joining means being recorded.')
-    expect([j.ok, j.leave]).toEqual(['OK', "Don't join"])
+    expect([j.ok, j.leave]).toEqual(['OK', 'Don’t join'])
   })
 
   it("never K2's agent line in a DM, even when an agent holds Read call transcripts; Sew's own word still shows", () => {

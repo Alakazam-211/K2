@@ -87,14 +87,16 @@ export function recordingNoticeText(opts: {
   const { prompt, roomName } = opts
   const dm = opts.dm === true
   const lines: string[] = []
-  if (prompt.startedByName) lines.push(`${prompt.startedByName} started recording this call.`)
+  // Joining a room names the room, as the title does; in the call, or in a
+  // DM, it's "this call".
+  if (prompt.startedByName) lines.push(opts.ask === 'join' && !dm ? `${prompt.startedByName} started recording in ${roomName}.` : `${prompt.startedByName} started recording this call.`)
   else if (dm) lines.push(prompt.required ? "This server records every call with more than one person." : 'This call is being recorded.')
   else if (prompt.required) lines.push('This room records every call with more than one person.')
   else lines.push('This room records its calls.')
   lines.push(
     dm
-      ? "Everyone's voice is recorded and transcribed. The transcript is kept in this DM."
-      : "Everyone's voice is recorded and transcribed. The transcript is kept in this room's chat.",
+      ? 'Everyone’s voice is recorded and transcribed. The transcript is kept in this DM.'
+      : 'Everyone’s voice is recorded and transcribed. The transcript is kept in this room’s chat.',
   )
   // The keep days come from this recording's prompt. When the prompt
   // doesn't say, the notice says nothing about the audio rather than guess.
@@ -107,7 +109,7 @@ export function recordingNoticeText(opts: {
     title: opts.ask === 'join' && !dm ? `${roomName} is being recorded` : 'This call is being recorded',
     lines,
     ok: 'OK',
-    leave: opts.ask === 'join' ? "Don't join" : 'Leave call',
+    leave: opts.ask === 'join' ? 'Don’t join' : 'Leave call',
   }
 }
 

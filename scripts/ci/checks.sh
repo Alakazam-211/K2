@@ -92,6 +92,7 @@ part_web() {
     step "k2 answers the same under every name";   bash tests/cli/called_as.sh
     step "k2 finds the files shipped beside it";   bash tests/cli/cli_script_dir.sh
     step "k5-cli ships, off by default";           bash tests/packaging/k5_cli_shipped_off_by_default.sh
+    step "k5-cli is signed and checked as itself";  bash tests/packaging/k5_cli_signing_pins.sh
     step "k2 picks a workspace's dot-dir as the daemon does"; bash tests/cli/ws_dot_dir.sh
     step "urlencode never sends a value raw"; bash tests/cli/urlencode_bytes.sh
     step "no daemon call through a proxy or with a query token (lint)"; bash tests/cli/no_proxy_lint.sh

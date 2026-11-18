@@ -157,6 +157,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.11 Mail tab: whether the window's own server has mail decides
   // whether its own top bar shows the tab (like the other page tabs).
   'components/Mail/mail-tab.ts',
+  // 0.46.15 Claude sign-in warning: the owner pop-up is about the window's
+  // own server's LLM tokens (shown from App.tsx), like the Settings rows.
+  'components/LlmSignInWarning/LlmSignInWarning.tsx',
   'components/Settings/sections/AdminAccessDialogs.tsx',
   'components/Settings/sections/AdminAccessPanel.tsx',
   'components/Settings/sections/ApiTokensSection.tsx',

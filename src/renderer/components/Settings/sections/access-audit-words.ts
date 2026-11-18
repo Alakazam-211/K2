@@ -10,11 +10,16 @@
 //                    ok import <n> from <vault> into <ws> · ok clone export <n> …
 //   permission-*     <request id> <action> <state> via=<via> [note=… | twin=… undo=…]
 //   permission-switch  server on|off · agent <handle> on|off
+//   product-feedback-settings  ok <enabled|agents|agentDiagnostics> <old>-><new>
+//   tickets-settings   ok briefPolicy=<rule> assigneePolicy=<rule> defaultAssignee=<who> (any of
+//                      them; rule off|warn|require; who owner|<user>|empty) · refused:<code>
+//   org_chart.switch   on | off
 // The list shows a sentence and one plain line built from those fields; the
 // raw line stays in the opened record.
 
 import type { AuthAuditEvent } from './access-audit-api'
 import { isFailedRecord } from './access-audit-api'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** Workspace id, handle or name → the name people see. */
 export type WorkspaceNamer = (key: string) => string
@@ -90,6 +95,112 @@ function words(outcome: string): { ok: boolean; deny: boolean; rest: string; par
   return { ok, deny, rest, parts: rest.split(/\s+/).filter(Boolean) }
 }
 
+// ── Server settings: Send feedback, ticket rules, the Org Chart ───────
+
+/** The row for a record whose outcome these words don't know. */
+const SOMETHING = 'did something'
+
+/** `product-feedback-settings`: one row per server key a write changed,
+ *  `ok <key> <old>-><new>` (`product_feedback_routes.rs` `audit_changes`). */
+function feedbackSettingWhat(outcome: string): string | null {
+  const m = /^ok (enabled|agents|agentDiagnostics) (on|off)->(on|off)$/.exec(outcome.trim())
+  if (!m || m[2] === m[3]) return null
+  const to = m[3]!
+  if (m[1] === 'enabled') return `turned feedback to ${PRODUCT_NAME} ${to}`
+  if (m[1] === 'agents') return `turned agents’ feedback to ${PRODUCT_NAME} ${to}`
+  return to === 'on'
+    ? `let agents include ${PRODUCT_NAME} details in their feedback`
+    : `stopped agents including ${PRODUCT_NAME} details in their feedback`
+}
+
+type TicketRuleWord = 'off' | 'warn' | 'require'
+type TicketChange =
+  | { key: 'briefPolicy'; rule: TicketRuleWord }
+  | { key: 'assigneePolicy'; rule: TicketRuleWord }
+  | { key: 'defaultAssignee'; who: string }
+
+const isTicketRule = (v: string): v is TicketRuleWord => v === 'off' || v === 'warn' || v === 'require'
+
+/** `tickets-settings` `ok key=value …` (`ticket_settings_routes.rs`
+ *  `handle_post`): the keys the write set. Null for anything else. */
+function parseTicketChanges(outcome: string): TicketChange[] | null {
+  const o = outcome.trim()
+  if (!o.startsWith('ok ')) return null
+  const out: TicketChange[] = []
+  for (const part of o.slice(3).split(/\s+/).filter(Boolean)) {
+    const m = /^(briefPolicy|assigneePolicy|defaultAssignee)=(.*)$/.exec(part)
+    if (!m) return null
+    const value = m[2]!
+    if (m[1] === 'defaultAssignee') out.push({ key: 'defaultAssignee', who: value })
+    else if (!isTicketRule(value)) return null
+    else out.push(m[1] === 'briefPolicy' ? { key: 'briefPolicy', rule: value } : { key: 'assigneePolicy', rule: value })
+  }
+  return out.length > 0 ? out : null
+}
+
+const BRIEF_RULE_WHAT: Record<TicketRuleWord, string> = {
+  off: 'stopped asking agents for an HTML brief on tickets',
+  warn: 'set tickets to warn an agent that leaves out the HTML brief',
+  require: 'made agents attach an HTML brief to every ticket',
+}
+
+const ASSIGNEE_RULE_WHAT: Record<TicketRuleWord, string> = {
+  off: 'stopped asking agents to name an assignee on tickets',
+  warn: 'set tickets to warn an agent that names no assignee',
+  require: 'made agents name an assignee on every ticket',
+}
+
+const RULE_VALUE: Record<TicketRuleWord, string> = { off: 'Off', warn: 'Warn', require: 'Require' }
+
+/** The default assignee as people read it. */
+const assigneeName = (who: string): string => (who === '' ? 'nobody' : who === 'owner' ? 'the owner' : who)
+
+function ticketChangeWhat(c: TicketChange): string {
+  if (c.key === 'briefPolicy') return BRIEF_RULE_WHAT[c.rule]
+  if (c.key === 'assigneePolicy') return ASSIGNEE_RULE_WHAT[c.rule]
+  return c.who === '' ? 'cleared the default ticket assignee' : `set the default ticket assignee to ${assigneeName(c.who)}`
+}
+
+/** A refused write: `refused:<code>` → why, in plain words. */
+const TICKET_REFUSALS: Record<string, string> = {
+  agent: 'An agent can’t change the ticket rules',
+  member: 'Only the owner or an admin may change the ticket rules',
+  invalid: 'No valid sign-in',
+  bad_request: 'The change wasn’t understood',
+  unknown_user: 'The default assignee isn’t a person on this server',
+  update: 'The change couldn’t be saved',
+}
+
+function ticketsWhat(outcome: string): string | null {
+  if (outcome.trim().startsWith('refused:')) return 'was refused a change to the ticket rules'
+  const changes = parseTicketChanges(outcome)
+  if (!changes) return null
+  return changes.length === 1 ? ticketChangeWhat(changes[0]!) : 'changed the ticket rules'
+}
+
+/** The second line: each rule a multi-key write set, or why a write was refused. */
+function ticketsDetail(outcome: string): string {
+  const o = outcome.trim()
+  if (o.startsWith('refused:')) return TICKET_REFUSALS[o.slice('refused:'.length)] ?? ''
+  const changes = parseTicketChanges(o)
+  if (!changes || changes.length < 2) return ''
+  return changes
+    .map((c) =>
+      c.key === 'briefPolicy'
+        ? `Require an HTML brief: ${RULE_VALUE[c.rule]}`
+        : c.key === 'assigneePolicy'
+          ? `Require an assignee: ${RULE_VALUE[c.rule]}`
+          : `Default assignee: ${assigneeName(c.who)}`,
+    )
+    .join(' · ')
+}
+
+/** `org_chart.switch`: the server's Org Chart switch, `on` or `off`. */
+function orgChartWhat(outcome: string): string | null {
+  const o = outcome.trim()
+  return o === 'on' || o === 'off' ? `turned the Org Chart ${o}` : null
+}
+
 /** What happened, as the rest of a sentence after the person's name. */
 export function auditWhat(ev: AuthAuditEvent): string {
   const failed = isFailedRecord(ev)
@@ -125,8 +236,14 @@ export function auditWhat(ev: AuthAuditEvent): string {
       if (verb === 'import') return 'imported secrets into this server’s vault'
       if (verb === 'clone') return 'copied the vault for a new server'
       return 'moved secrets in the vault'
+    case 'product-feedback-settings':
+      return feedbackSettingWhat(ev.outcome) ?? SOMETHING
+    case 'tickets-settings':
+      return ticketsWhat(ev.outcome) ?? SOMETHING
+    case 'org_chart.switch':
+      return orgChartWhat(ev.outcome) ?? SOMETHING
     default:
-      return PERMISSION_WHAT[ev.event] ?? 'did something'
+      return PERMISSION_WHAT[ev.event] ?? SOMETHING
   }
 }
 
@@ -343,6 +460,7 @@ export function auditDetail(ev: AuthAuditEvent, ctx: DetailContext): string {
     return auditWhere(ev)
   if (ev.event === 'vault-handoff' || ev.event === 'vault-carry') return vaultDetail(ev, ctx)
   if (ev.event.startsWith('permission-')) return permissionDetail(ev, ctx)
+  if (ev.event === 'tickets-settings') return ticketsDetail(ev.outcome)
   return ''
 }
 
@@ -361,6 +479,9 @@ const EVENT_WORDS: Record<string, string> = {
   'permission-note': 'Note on a permission request',
   'permission-undo': 'Permission turned off again',
   'permission-switch': 'Permission cards switch',
+  'product-feedback-settings': 'Send feedback settings',
+  'tickets-settings': 'Ticket rules',
+  'org_chart.switch': 'Org Chart switch',
 }
 
 const CLIENT_WORDS: Record<string, string> = {

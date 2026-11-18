@@ -1850,7 +1850,7 @@ fn notify_bind_exposed(row: &ps::PublishedService, exposed: &[String]) {
         return;
     }
     let text = crate::publish_dev::bind_warning(&row.name, exposed);
-    if let Err(e) = crate::overlay_routes::post_workspace_note(&workspace_path(&row.project_id), &text, "k2-publish") {
+    if let Err(e) = crate::overlay_routes::post_workspace_note(&workspace_path(&row.project_id), &text, "k2-publish", k2_core::overlay::SystemNotice::action("publish.bind_exposed")) {
         log_debug!("[publish] {}: bind notice: {e}", row.name);
     }
 }

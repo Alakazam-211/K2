@@ -21,7 +21,7 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{CardAction, ChoiceBody, ChoiceOption, CLOSED_DISMISSED, CLOSED_WITHDRAWN, CLOSE_REASON_MAX_CHARS, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretInject, SecretProposal, ThreadChangedFile, ThreadChanges, ThreadContext, THREAD_CHANGES_MAX_FILES, WidgetOrigin, WidgetPlacementClaim};
+pub use doc::{CardAction, ChoiceBody, ChoiceOption, CLOSED_DISMISSED, CLOSED_WITHDRAWN, CLOSE_REASON_MAX_CHARS, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretInject, SecretProposal, ThreadChangedFile, ThreadChanges, NoticeAction, SystemNotice, ThreadContext, THREAD_CHANGES_MAX_FILES, WidgetOrigin, WidgetPlacementClaim};
 pub use approval::{mark_approval, post_approval, ApprovalCardBody};
 pub use attachments::ThreadAttachment;
 pub use options::{check_ask_caps, parse_options_value, split_options_csv};
@@ -319,6 +319,7 @@ pub fn post_thread_keyed(
     context: Option<ThreadContext>,
     client: Option<&ClientMsgKey>,
 ) -> Result<ThreadPost, String> {
+    refuse_system_author(author.as_ref())?;
     let _guard = WRITE.lock();
     if let Some(c) = client {
         if let Some(hit) = store::client_id_get(&c.key)? {
@@ -360,6 +361,112 @@ pub fn post_thread_keyed(
     Ok(ThreadPost::Posted(item, links))
 }
 
+/// The refusal when a post door hands the core K2's own stamp
+/// (thread-system-notice-v1): only [`post_system_notice`] writes it.
+pub const SYSTEM_AUTHOR_REFUSED: &str = "only K2 itself posts as K2 (system)";
+
+/// Belt for every post funnel a person, agent or App guest reaches: the
+/// `system` stamp never comes from a caller. The doors stamp the
+/// credential, so this only fires on a bug.
+fn refuse_system_author(author: Option<&PostAuthor>) -> Result<(), String> {
+    match author {
+        Some(a) if a.is_system() => Err(SYSTEM_AUTHOR_REFUSED.to_string()),
+        _ => Ok(()),
+    }
+}
+
+/// K2's own line on a Thread (thread-system-notice-v1): from `k2`, the
+/// `system` stamp, `notice` on the doc, `body` as K2 wrote it. No inject,
+/// no wake, no push (the caller posts nothing else).
+///
+/// `resend`: the delivery to send again when a person presses "Send
+/// again" (the daemon's own JSON, never served to a client). It is kept
+/// beside the doc under the same write lock, and the notice gets the
+/// `resend` button first, with `{thread: to, doc: <this id>}`.
+#[allow(clippy::too_many_arguments)]
+pub fn post_system_notice(
+    conn: &Connection,
+    conversation_id: &str,
+    project_id: &str,
+    to: &str,
+    body: &str,
+    via: &str,
+    mut notice: SystemNotice,
+    resend: Option<&str>,
+) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
+    let _guard = WRITE.lock();
+    let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let to = to.trim().to_string();
+    notice.actions.retain(|a| a.id != doc::NOTICE_ACTION_RESEND);
+    if resend.is_some() {
+        notice.actions.insert(0, NoticeAction::resend(&to, &id));
+    }
+    let doc = OverlayDoc::system_text(id.clone(), to, body.to_string(), via, notice);
+    store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
+    if let Some(job) = resend {
+        store::notice_resend_put(&id, job)?;
+    }
+    Ok(item_and_thread_link(conversation_id, seq, id, doc))
+}
+
+/// Refusals [`claim_notice_resend`] returns (the daemon maps them).
+pub const NOTICE_NOT_FOUND: &str = "notice not found";
+/// The doc has no "Send again" (not a K2 notice, or a notice of another
+/// kind), or what it would send is gone.
+pub const NOTICE_NOT_RESENDABLE: &str = "this notice has nothing to send again";
+
+/// What [`claim_notice_resend`] found.
+#[derive(Debug, Clone)]
+pub enum ResendClaim {
+    /// First press: the notice now shows it done (`doneAt`, `doneBy`), and
+    /// `job` is the delivery to queue again (the daemon's JSON).
+    Claimed { item: OverlayItem, job: String },
+    /// Pressed before: nothing changed. `done_at` is when.
+    Already { item: OverlayItem, done_at: i64 },
+}
+
+/// The delivery a notice's "Send again" would send, without claiming it
+/// (the daemon checks it before [`claim_notice_resend`]).
+pub fn notice_resend_job(notice_id: &str) -> Result<Option<String>, String> {
+    store::notice_resend_get(notice_id)
+}
+
+/// "Send again" on K2's notice `notice_id` in `conversation_id`, once:
+/// under the overlay write lock, the first press marks the button done and
+/// takes the kept delivery (one store write that also notes the change for
+/// delta readers); every later press is [`ResendClaim::Already`].
+pub fn claim_notice_resend(conversation_id: &str, notice_id: &str, by: PostAuthor) -> Result<ResendClaim, String> {
+    let _guard = WRITE.lock();
+    let seq = store::thread_seq_of(conversation_id, notice_id)?.ok_or_else(|| NOTICE_NOT_FOUND.to_string())?;
+    let mut doc = store::get_doc(notice_id)?.ok_or_else(|| NOTICE_NOT_FOUND.to_string())?;
+    if !doc.by_system() {
+        return Err(NOTICE_NOT_RESENDABLE.to_string());
+    }
+    let item = |doc: OverlayDoc| OverlayItem {
+        collection: "thread".to_string(),
+        seq,
+        id: notice_id.to_string(),
+        doc,
+        conversation_id: Some(conversation_id.to_string()),
+    };
+    let Some(action) = doc
+        .system_notice
+        .as_mut()
+        .and_then(|n| n.actions.iter_mut().find(|a| a.id == doc::NOTICE_ACTION_RESEND))
+    else {
+        return Err(NOTICE_NOT_RESENDABLE.to_string());
+    };
+    if let Some(at) = action.done_at {
+        return Ok(ResendClaim::Already { item: item(doc), done_at: at });
+    }
+    let job = store::notice_resend_get(notice_id)?.ok_or_else(|| NOTICE_NOT_RESENDABLE.to_string())?;
+    action.done_at = Some(doc::now_secs());
+    action.done_by = Some(by);
+    store::put_notice_doc_resent(conversation_id, seq, &doc)?;
+    Ok(ResendClaim::Claimed { item: item(doc), job })
+}
+
 /// A person's Design-notes post (prd-browser-design-mode-v1 D-A10): one
 /// Thread text item carrying `design`, otherwise exactly
 /// [`post_thread_with_origin`].
@@ -375,6 +482,7 @@ pub fn post_thread_design(
     design: DesignOrigin,
     author: Option<PostAuthor>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
+    refuse_system_author(author.as_ref())?;
     let _guard = WRITE.lock();
     let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -567,6 +675,7 @@ fn post_choice_inner(
     if options.is_empty() {
         return Err("ask requires at least one option".to_string());
     }
+    refuse_system_author(author.as_ref())?;
     let _guard = WRITE.lock();
     let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -632,6 +741,7 @@ pub fn post_secret_by(
     author: Option<PostAuthor>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
     vault::validate_name(name)?;
+    refuse_system_author(author.as_ref())?;
     let _guard = WRITE.lock();
     let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -2678,3 +2788,7 @@ mod delete_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "system_notice_tests.rs"]
+mod system_notice_tests;

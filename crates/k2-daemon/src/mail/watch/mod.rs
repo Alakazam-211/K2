@@ -113,7 +113,7 @@ impl Sink for RealSink {
     }
 
     fn note(&self, workspace_path: &str, text: &str) {
-        if let Err(e) = crate::overlay_routes::post_workspace_note(workspace_path, text, "k2-mail-watch") {
+        if let Err(e) = crate::overlay_routes::post_workspace_note(workspace_path, text, "k2-mail-watch", k2_core::overlay::SystemNotice::action("mail.watch_stopped")) {
             log_debug!("[mail-watch] Thread note for {workspace_path}: {e}");
         }
     }

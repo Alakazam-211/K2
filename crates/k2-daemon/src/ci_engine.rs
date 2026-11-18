@@ -1038,7 +1038,7 @@ impl Ops for Real {
                 }
             }
             To::Thread(addr) => {
-                if let Err(e) = crate::overlay_routes::post_workspace_note(addr, &text, "ci") {
+                if let Err(e) = crate::overlay_routes::post_workspace_note(addr, &text, "ci", k2_core::overlay::SystemNotice::info("ci.monitor")) {
                     log_debug!("[ci] Thread message to {addr}: {e}");
                 }
             }

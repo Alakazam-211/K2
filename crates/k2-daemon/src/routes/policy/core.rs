@@ -1258,6 +1258,10 @@ pub(super) const ROWS: &[Route] = &[
     // thread-read-all-v1 (0.46.5): Mark all as read for one agent, the
     // caller's own cursors only (a person; an App pass its own room's).
     post("/cli/thread/read-all", Member),
+    // thread-system-notice-v1 (0.46.15): "Send again" on K2's delivery
+    // notice; the handler refuses every passport and App pass, and sends
+    // once per notice.
+    post("/cli/thread/resend", Member),
     post("/cli/thread/secret", Member),
     // app-room-stream (0.46.3): one Thread socket across the caller's
     // rooms (a login reads every Thread, as on GET /cli/thread).

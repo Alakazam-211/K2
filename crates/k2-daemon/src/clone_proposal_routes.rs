@@ -338,7 +338,7 @@ fn propose(who: &Who, body: &[u8]) -> R<J> {
         p.id,
         p.why.as_deref().map(|w| format!(" (why: {w})")).unwrap_or_default()
     );
-    let notice = crate::overlay_routes::post_workspace_notice(&ws.handle, &ws.handle, &line);
+    let notice = crate::overlay_routes::post_workspace_notice(&ws.handle, &line, k2_core::overlay::SystemNotice::action("clone.proposed"));
     if let Err(e) = &notice {
         k2_core::log_debug!("[clone-proposal] Thread notice for {} not posted: {e}", ws.handle);
     }

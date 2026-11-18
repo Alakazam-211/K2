@@ -298,7 +298,9 @@ fn unreadable_wakeup_skips_keeps_on_and_tells_once_after_the_grace() {
 
 static THREAD_NOTES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
-fn record_thread_note(project_path: &str, text: &str) -> Result<(), String> {
+fn record_thread_note(project_path: &str, code: &str, text: &str) -> Result<(), String> {
+    let want = if text.contains("is back to normal") { wakeup_wait::NOTE_BACK } else { wakeup_wait::NOTE_WAITING };
+    assert_eq!(code, want, "the Thread note's notice code: {text}");
     THREAD_NOTES.lock().expect("notes lock").push((project_path.to_string(), text.to_string()));
     Ok(())
 }

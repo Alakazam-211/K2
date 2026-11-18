@@ -811,6 +811,15 @@ impl Rewrite<'_> {
                 doc.author = Some(PostAuthor::agent(&l));
             }
         }
+        // thread-system-notice-v1: only THIS server's K2 writes its own
+        // notices. A line that says it is K2's (an export is a file a
+        // person can edit) keeps its text as history, without the stamp,
+        // the notice or its buttons; the original stamp rides `meta`.
+        if src.by_system() {
+            meta.author = src.author.clone();
+            doc.author = None;
+        }
+        doc.system_notice = None;
         if let Some(t) = src.to.as_deref().and_then(|t| self.address(t)) {
             meta.to = src.to.clone();
             doc.to = Some(t);
@@ -897,7 +906,8 @@ impl Rewrite<'_> {
             widget: None,
             design: None,
             context: None,
-            author: None,
+            // This server's K2 wrote the divider (thread-system-notice-v1).
+            author: Some(PostAuthor::system()),
             external: None,
             imported: Some(meta),
             delivery_id: None,
@@ -912,6 +922,7 @@ impl Rewrite<'_> {
             changes: None,
             notice: None,
             approval: None,
+            system_notice: Some(super::doc::SystemNotice::info(super::doc::NOTICE_CODE_THREAD_IMPORTED)),
         };
         let key = import_key(
             project_id,

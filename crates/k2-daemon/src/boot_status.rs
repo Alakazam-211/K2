@@ -1231,6 +1231,9 @@ pub fn features() -> Vec<&'static str> {
     // thread-message-delete-v1 (0.46.11): `POST /cli/thread/message/delete`
     // and the `deleted` tombstone on Thread docs.
     out.push(crate::overlay_routes::message_delete::FEATURE);
+    // thread-system-notice-v1 (0.46.15): K2's own Thread lines carry the
+    // `system` author and `systemNotice`; `POST /cli/thread/resend`.
+    out.push(crate::overlay_routes::FEATURE_THREAD_SYSTEM_NOTICE);
     // thread-author-agent-v1 (0.46.13): every Thread post and card says who
     // sent it; an agent's carries `author {kind: "agent", login: <address>}`
     // (rows from before carry none), a person's is theirs whatever the `via`.

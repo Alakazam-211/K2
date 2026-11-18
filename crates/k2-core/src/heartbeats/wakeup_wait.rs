@@ -289,7 +289,13 @@ fn insert_row(
 
 // ── Notes to the Thread (daemon) ──────────────────────────────────────
 
-type ThreadSink = fn(project_path: &str, text: &str) -> Result<(), String>;
+/// `code`: the note's thread-system-notice-v1 code ([`NOTE_WAITING`] /
+/// [`NOTE_BACK`]).
+type ThreadSink = fn(project_path: &str, code: &str, text: &str) -> Result<(), String>;
+/// Thread note code: a heartbeat is waiting for its WAKEUP.md.
+pub const NOTE_WAITING: &str = "heartbeat.wakeup_waiting";
+/// Thread note code: its WAKEUP.md can be read again.
+pub const NOTE_BACK: &str = "heartbeat.wakeup_back";
 static THREAD_SINK: OnceLock<ThreadSink> = OnceLock::new();
 
 /// The daemon registers how a note reaches the workspace's Thread (the
@@ -302,7 +308,7 @@ pub fn set_thread_sink(sink: ThreadSink) {
 /// Deliver one note: the workspace's inbox while its folder is there,
 /// else its Thread. `thread_first` sends a "back" line where the outage's
 /// notice went. Returns the channel it went to.
-fn deliver(project_path: &str, title: &str, body: &str, thread_first: bool) -> Result<&'static str, String> {
+fn deliver(project_path: &str, code: &str, title: &str, body: &str, thread_first: bool) -> Result<&'static str, String> {
     let dir = Path::new(project_path);
     // Never `inbox::compose` into a folder that went away: it would
     // create the folder again where the real one is about to be restored.
@@ -313,7 +319,7 @@ fn deliver(project_path: &str, title: &str, body: &str, thread_first: bool) -> R
         }
     }
     let sink = THREAD_SINK.get().ok_or_else(|| "no Thread sink registered".to_string())?;
-    sink(project_path, &format!("{title}\n\n{body}"))?;
+    sink(project_path, code, &format!("{title}\n\n{body}"))?;
     Ok(CHANNEL_THREAD)
 }
 
@@ -394,7 +400,7 @@ pub fn skip_due_fire(
             || (now - ep.since).num_seconds() >= UNREADABLE_NOTICE_AFTER_SECS;
         if tell {
             let (title, body) = notice_text(hb, &ep);
-            match deliver(project_path, &title, &body, false) {
+            match deliver(project_path, NOTE_WAITING, &title, &body, false) {
                 Ok(channel) => insert_row(
                     conn,
                     project_id,
@@ -440,7 +446,7 @@ fn recovered(
     if ep.noticed.is_some() {
         let (title, body) = back_text(hb, ep);
         let thread_first = ep.noticed.as_deref() == Some(CHANNEL_THREAD);
-        if let Err(e) = deliver(project_path, &title, &body, thread_first) {
+        if let Err(e) = deliver(project_path, NOTE_BACK, &title, &body, thread_first) {
             crate::log_debug!("[heartbeat-tick] {} back note: {e}", hb.name);
         }
     }

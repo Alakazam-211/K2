@@ -413,6 +413,14 @@ pub const AUTHOR_IMPORTED: &str = "imported";
 /// Agent rows from before 0.46.13 carry no author at all, so a reader
 /// treats "no author" as the agent too (K2's own notes are author-less).
 pub const AUTHOR_AGENT: &str = "agent";
+/// [`PostAuthor::kind`] for K2 itself (thread-system-notice-v1, 0.46.15):
+/// a line K2 wrote on a Thread ([`OverlayDoc::system_notice`] is set with
+/// it). `login` is always `k2`. Only K2's own code stamps it
+/// (`super::post_system_notice` and the card posters beside it): every post
+/// door stamps the caller's credential instead, and the core post funnel
+/// refuses this kind. An older viewer treats it as an unknown kind (someone
+/// else's post) and shows the body, which keeps K2's words.
+pub const AUTHOR_SYSTEM: &str = "system";
 
 impl PostAuthor {
     pub fn owner() -> Self {
@@ -444,6 +452,16 @@ impl PostAuthor {
     /// True for an agent's stamp ([`AUTHOR_AGENT`]).
     pub fn is_agent(&self) -> bool {
         self.kind == AUTHOR_AGENT
+    }
+
+    /// K2 itself (see [`AUTHOR_SYSTEM`]).
+    pub fn system() -> Self {
+        Self { kind: AUTHOR_SYSTEM.to_string(), login: "k2".to_string(), name: None }
+    }
+
+    /// True for K2's own stamp ([`AUTHOR_SYSTEM`]).
+    pub fn is_system(&self) -> bool {
+        self.kind == AUTHOR_SYSTEM
     }
 
     /// A historical person from an imported Thread (see [`AUTHOR_IMPORTED`]).
@@ -551,6 +569,18 @@ pub struct OverlayDoc {
     /// agent asked a person for. Ids and state only, never the payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<super::approval::ApprovalCardBody>,
+    /// thread-system-notice-v1 (0.46.15): set on every line K2 itself
+    /// writes on a Thread (a delivery that didn't reach the agent, a job or
+    /// test guest added, a reminder, a CI monitor, a changes card, a mail
+    /// notice, ...), together with `author: {kind: "system", login: "k2"}`
+    /// and `from: "k2"`. What it is ([`SystemNotice::kind`]), a stable
+    /// [`SystemNotice::code`] and the buttons it offers. `body` keeps K2's
+    /// whole text (with its `K2: ` lead where it has one), so an older
+    /// client still shows it. Only K2's own code sets it: no post door
+    /// reads it from a request (they refuse a `systemNotice` field), and an
+    /// import drops it. None on every other doc and on docs from before it.
+    #[serde(default, rename = "systemNotice", skip_serializing_if = "Option::is_none")]
+    pub system_notice: Option<SystemNotice>,
     /// post-idempotency-v1 (0.46.8): the id the sender's client gave this
     /// post (1–64 of `[A-Za-z0-9_-]`), echoed so its outbox can settle.
     /// Opaque, and only meaningful under the sender's own namespace, so it
@@ -569,6 +599,125 @@ pub struct OverlayDoc {
     /// Who deleted it, from the credential. Set with `deleted`.
     #[serde(default, rename = "deletedBy", skip_serializing_if = "Option::is_none")]
     pub deleted_by: Option<PostAuthor>,
+}
+
+/// [`SystemNotice::kind`]: something K2 says (a job was added, a reminder fired).
+pub const NOTICE_INFO: &str = "info";
+/// [`SystemNotice::kind`]: a message may not have reached the agent.
+pub const NOTICE_DELIVERY: &str = "delivery";
+/// [`SystemNotice::kind`]: something waits on a person (review a proposal).
+pub const NOTICE_ACTION: &str = "action";
+/// [`NoticeAction::id`]: send the original message again
+/// (`POST` [`NOTICE_RESEND_ROUTE`] with the action's `body`).
+pub const NOTICE_ACTION_RESEND: &str = "resend";
+/// [`NoticeAction::id`]: open the agent's terminal. The client does it
+/// itself (no route); `workspace` names the agent's address.
+pub const NOTICE_ACTION_OPEN_TERMINAL: &str = "open_terminal";
+/// The route a `resend` action posts to.
+pub const NOTICE_RESEND_ROUTE: &str = "/cli/thread/resend";
+/// [`SystemNotice::code`] of K2's changed-files card (kind `changes`).
+pub const NOTICE_CODE_TURN_CHANGES: &str = "turn.changes";
+/// [`SystemNotice::code`] of a VIP mail notice (the `notice` card).
+pub const NOTICE_CODE_MAIL_VIP: &str = "mail.vip";
+/// [`SystemNotice::code`] of the "Imported from ..." line above a Thread
+/// that came with a clone (or `k2 thread import`).
+pub const NOTICE_CODE_THREAD_IMPORTED: &str = "thread.imported";
+
+/// K2's own notice on a Thread (thread-system-notice-v1). Wire:
+/// `systemNotice: {kind, code, actions?}` on the doc.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SystemNotice {
+    /// [`NOTICE_INFO`] | [`NOTICE_DELIVERY`] | [`NOTICE_ACTION`]. A string,
+    /// so a later kind still parses (draw it as info).
+    pub kind: String,
+    /// A stable id for what happened (`delivery.not_taken.never_read_in`,
+    /// `job.added`, ...): clients key copy and icons on it, never on `body`.
+    pub code: String,
+    /// The buttons it offers, in order. Empty on most notices.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<NoticeAction>,
+}
+
+/// One button on a [`SystemNotice`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NoticeAction {
+    /// [`NOTICE_ACTION_RESEND`] | [`NOTICE_ACTION_OPEN_TERMINAL`] | a later id
+    /// (a client hides one it doesn't know).
+    pub id: String,
+    /// What the button says (`Send again`).
+    pub label: String,
+    /// A daemon route the client POSTs `body` to. None: the client handles
+    /// it itself (`open_terminal`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
+    /// The JSON body for `route` (`{thread, doc}` for `resend`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<serde_json::Value>,
+    /// `open_terminal`: the agent's address whose terminal to open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// Unix seconds the action ran (a `resend` runs once; then the client
+    /// shows it done instead of the button). None until then.
+    #[serde(default, rename = "doneAt", skip_serializing_if = "Option::is_none")]
+    pub done_at: Option<i64>,
+    /// Who pressed it, from the credential.
+    #[serde(default, rename = "doneBy", skip_serializing_if = "Option::is_none")]
+    pub done_by: Option<PostAuthor>,
+}
+
+impl SystemNotice {
+    pub fn new(kind: &str, code: &str) -> Self {
+        Self { kind: kind.to_string(), code: code.to_string(), actions: Vec::new() }
+    }
+
+    /// A [`NOTICE_INFO`] notice.
+    pub fn info(code: &str) -> Self {
+        Self::new(NOTICE_INFO, code)
+    }
+
+    /// A [`NOTICE_DELIVERY`] notice.
+    pub fn delivery(code: &str) -> Self {
+        Self::new(NOTICE_DELIVERY, code)
+    }
+
+    /// A [`NOTICE_ACTION`] notice.
+    pub fn action(code: &str) -> Self {
+        Self::new(NOTICE_ACTION, code)
+    }
+
+    /// Add an "Open its terminal" button for the agent at `workspace`.
+    pub fn with_open_terminal(mut self, workspace: &str) -> Self {
+        self.actions.push(NoticeAction {
+            id: NOTICE_ACTION_OPEN_TERMINAL.to_string(),
+            label: "Open its terminal".to_string(),
+            route: None,
+            body: None,
+            workspace: Some(workspace.trim().to_string()),
+            done_at: None,
+            done_by: None,
+        });
+        self
+    }
+
+    /// The `resend` button, when it has one.
+    pub fn resend(&self) -> Option<&NoticeAction> {
+        self.actions.iter().find(|a| a.id == NOTICE_ACTION_RESEND)
+    }
+}
+
+impl NoticeAction {
+    /// "Send again" for the notice `doc` on the Thread `thread`.
+    pub fn resend(thread: &str, doc: &str) -> Self {
+        Self {
+            id: NOTICE_ACTION_RESEND.to_string(),
+            label: "Send again".to_string(),
+            route: Some(NOTICE_RESEND_ROUTE.to_string()),
+            body: Some(serde_json::json!({"thread": thread, "doc": doc})),
+            workspace: None,
+            done_at: None,
+            done_by: None,
+        }
+    }
 }
 
 /// A mail notice (0.46.11): plain fields a renderer draws as text, never as
@@ -783,7 +932,12 @@ impl OverlayDoc {
     /// `agent` author, or no author on a row from before 0.46.13) and K2's
     /// own notes are not.
     pub fn by_person(&self) -> bool {
-        self.author.as_ref().is_some_and(|a| !a.is_agent())
+        self.author.as_ref().is_some_and(|a| !a.is_agent() && !a.is_system())
+    }
+
+    /// K2's own line (thread-system-notice-v1): the `system` stamp.
+    pub fn by_system(&self) -> bool {
+        self.author.as_ref().is_some_and(PostAuthor::is_system)
     }
 
     /// A settings (action) card: a choice card carrying `choice.action`
@@ -824,6 +978,7 @@ impl OverlayDoc {
             changes: None,
             notice: None,
             approval: None,
+            system_notice: None,
         }
     }
 
@@ -879,6 +1034,7 @@ impl OverlayDoc {
             changes: None,
             notice: None,
             approval: None,
+            system_notice: None,
         }
     }
 
@@ -937,6 +1093,7 @@ impl OverlayDoc {
             changes: None,
             notice: None,
             approval: None,
+            system_notice: None,
         }
     }
 
@@ -977,22 +1134,35 @@ impl OverlayDoc {
             changes: None,
             notice: None,
             approval: None,
+            system_notice: None,
         }
     }
 
     /// A `handoff` card (H18). `body` is the plain line older renderers show.
     /// K2's changed-files card for one turn (workbench-v1 B7).
+    /// It is K2's own line (thread-system-notice-v1): from `k2`, the
+    /// `system` stamp and `notice`.
+    pub fn system_text(id: String, to: String, body: String, via: &str, notice: SystemNotice) -> Self {
+        let mut doc = Self::text(id, "k2".to_string(), to, body, via);
+        doc.author = Some(PostAuthor::system());
+        doc.system_notice = Some(notice);
+        doc
+    }
+
     pub fn changes_card(id: String, from: String, to: String, body: String, changes: ThreadChanges) -> Self {
         let mut doc = Self::text(id, from, to, body, "k2");
         doc.kind = "changes".to_string();
         doc.changes = Some(changes);
+        // K2's card, read from git (thread-system-notice-v1).
+        doc.author = Some(PostAuthor::system());
+        doc.system_notice = Some(SystemNotice::info(NOTICE_CODE_TURN_CHANGES));
         doc
     }
 
     /// A mail notice. `body` is the plain fallback an older renderer shows;
     /// it carries the sender's address and nothing else from the mail.
     pub fn mail_notice_card(id: String, to: String, body: String, notice: ThreadNotice) -> Self {
-        let mut doc = Self::text(id, "k2".to_string(), to, body, "k2");
+        let mut doc = Self::system_text(id, to, body, "k2", SystemNotice::info(NOTICE_CODE_MAIL_VIP));
         doc.notice = Some(notice);
         doc
     }
@@ -1027,6 +1197,7 @@ impl OverlayDoc {
             changes: None,
             notice: None,
             approval: None,
+            system_notice: None,
         }
     }
 
@@ -1093,6 +1264,7 @@ impl OverlayDoc {
             changes: None,
             notice: None,
             approval: None,
+            system_notice: None,
             client_msg_id: self.client_msg_id.clone(),
             deleted: true,
             deleted_at: Some(at),

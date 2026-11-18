@@ -303,7 +303,7 @@ fn post_note(thread: Option<&str>, project: Option<&(String, String)>, text: &st
         .filter(|t| !t.is_empty())
         .filter(|t| crate::overlay_routes::thread_project_of(t).as_deref() == Some(project_id.as_str()))
         .unwrap_or(path.as_str());
-    match crate::overlay_routes::post_k2_note(addr, text, "k2-model") {
+    match crate::overlay_routes::post_k2_note(addr, text, "k2-model", k2_core::overlay::SystemNotice::info("session.model_switched")) {
         Ok(_) => true,
         Err(e) => {
             k2_core::log_debug!("[sessions-model] note not posted on {addr}: {e}");

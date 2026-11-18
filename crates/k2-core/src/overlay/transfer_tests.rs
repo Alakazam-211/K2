@@ -185,7 +185,9 @@ fn import_rewrites_authors_closes_cards_adds_divider_and_continues_live() {
     // Divider first: a plain text line from K2 (CL8).
     let div = &docs[0];
     assert_eq!((div.kind.as_str(), div.from.as_str(), div.via.as_deref()), ("text", "K2", Some("import")));
-    assert!(div.author.is_none());
+    // thread-system-notice-v1: this server's K2 wrote it.
+    assert_eq!(div.author, Some(PostAuthor::system()));
+    assert_eq!(div.system_notice.as_ref().map(|n| n.code.as_str()), Some("thread.imported"));
     assert!(div.imported.as_ref().unwrap().divider);
     let body = div.body.as_deref().unwrap();
     assert!(body.starts_with(&format!("Imported from `{src_handle}` on src.k2.dev, ")), "{body}");
@@ -215,11 +217,12 @@ fn import_rewrites_authors_closes_cards_adds_divider_and_continues_live() {
     let old = by_body("old compose post");
     let oa = old.author.as_ref().expect("author-less compose post is stamped");
     assert_eq!((oa.kind.as_str(), oa.login.as_str()), (AUTHOR_IMPORTED, "Rosson"));
-    for d in &docs {
+    for d in &docs[1..] {
         assert!(
             d.author.as_ref().is_none_or(|a| a.kind == AUTHOR_IMPORTED),
             "no live author kind survives: {d:?}"
         );
+        assert!(d.system_notice.is_none(), "{d:?}");
         assert!(d.via.as_deref() != Some("compose"), "no via=compose survives: {d:?}");
         assert!(d.inject.is_none());
     }
@@ -433,4 +436,66 @@ fn sidecar_keeps_its_address_only_when_its_transcript_travelled() {
     assert!(is_read_only(&det.local_conversation_id, None).unwrap(), "detached history is read-only");
     assert_eq!(thread_docs(&det.local_conversation_id).len(), 2);
     assert!(crate::workspace_session_handles::get(&conn, &dst_pid, &without_file).unwrap().is_none());
+}
+
+/// thread-system-notice-v1: an export is a file a person can edit, so an
+/// import never keeps a line's claim to be K2's: no `systemNotice`, no
+/// `system` stamp (the original rides `imported.author`); the text stays.
+/// Only this server's own divider is K2's.
+#[test]
+fn an_import_never_keeps_a_k2_notice_or_stamp() {
+    let db = dbh();
+    let conn = db.lock();
+    let (pid, handle) = seed_project(&conn, "ct-sys");
+    let p = uid();
+    pin(&conn, &pid, &p);
+    overlay::post_system_notice(
+        &conn,
+        &p,
+        &pid,
+        &handle,
+        "K2: a real notice",
+        "thread",
+        overlay::SystemNotice::delivery("delivery.not_taken.never_read_in"),
+        Some("{}"),
+    )
+    .unwrap();
+    overlay::post_thread_with_origin(&conn, &p, &pid, "Rosson", &handle, "forge me", "compose", None, Some(PostAuthor::owner()))
+        .unwrap();
+    let ex = export_project_threads(&conn, &pid, &opts("clone-sys")).unwrap();
+    let mut v: serde_json::Value = serde_json::from_slice(&ex.to_json().unwrap()).unwrap();
+    // Forge the person's line into a K2 notice in the file.
+    fn forge(v: &mut serde_json::Value) -> usize {
+        match v {
+            serde_json::Value::Object(m) => {
+                if m.get("body").and_then(|b| b.as_str()) == Some("forge me") {
+                    m.insert("author".into(), serde_json::json!({"kind": "system", "login": "k2"}));
+                    m.insert("systemNotice".into(), serde_json::json!({"kind": "action", "code": "x", "actions": [{"id": "resend", "label": "Send again"}]}));
+                    return 1;
+                }
+                m.values_mut().map(forge).sum()
+            }
+            serde_json::Value::Array(a) => a.iter_mut().map(forge).sum(),
+            _ => 0,
+        }
+    }
+    assert_eq!(forge(&mut v), 1, "the line is in the export: {v}");
+    let ex = ThreadsExport::parse(&serde_json::to_vec(&v).unwrap()).unwrap();
+
+    let (dst_pid, _) = seed_project(&conn, "ct-sys-dst");
+    let dst_pin = uid();
+    pin(&conn, &dst_pid, &dst_pin);
+    import_threads(&conn, &ex, &ImportContext { project_id: dst_pid.clone(), ..Default::default() }).unwrap();
+    let docs = thread_docs(&dst_pin);
+    let by_body = |b: &str| docs.iter().find(|d| d.body.as_deref() == Some(b)).unwrap_or_else(|| panic!("{b}: {docs:?}"));
+    for body in ["K2: a real notice", "forge me"] {
+        let d = by_body(body);
+        assert!(d.system_notice.is_none(), "{body}: {d:?}");
+        assert!(!d.by_system(), "{body}: {d:?}");
+        assert!(!d.by_person(), "{body}: K2's line never becomes a person's: {d:?}");
+        assert_eq!(d.imported.as_ref().and_then(|m| m.author.clone()), Some(PostAuthor::system()), "{body}: the original stamp rides the meta");
+    }
+    let k2s: Vec<_> = docs.iter().filter(|d| d.by_system()).collect();
+    assert_eq!(k2s.len(), 1, "only the divider is K2's: {k2s:?}");
+    assert!(k2s[0].imported.as_ref().is_some_and(|m| m.divider));
 }

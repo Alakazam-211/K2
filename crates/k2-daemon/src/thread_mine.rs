@@ -71,9 +71,12 @@ pub(crate) fn is_mine(people: &People, me: &str, author: &Value) -> bool {
 
 /// A person's stamp: an `author` object that is not an agent's (an agent's
 /// post, thread-author-agent-v1, carries no `mine`, like its older rows).
+/// K2's own notices (`system`, thread-system-notice-v1) carry none either.
 fn has_author(doc: &Value) -> bool {
-    doc.get("author")
-        .is_some_and(|a| a.is_object() && a.get("kind").and_then(Value::as_str) != Some(k2_core::overlay::doc::AUTHOR_AGENT))
+    doc.get("author").is_some_and(|a| {
+        let kind = a.get("kind").and_then(Value::as_str);
+        a.is_object() && kind != Some(k2_core::overlay::doc::AUTHOR_AGENT) && kind != Some(k2_core::overlay::doc::AUTHOR_SYSTEM)
+    })
 }
 
 /// Write `mine` on one doc object that has an `author`.

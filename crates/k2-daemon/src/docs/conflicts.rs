@@ -388,7 +388,7 @@ impl Sink for K2Sink {
     }
 
     fn thread(&self, workspace: &str, line: &str) {
-        if let Err(e) = crate::overlay_routes::post_workspace_note(workspace, line, THREAD_VIA) {
+        if let Err(e) = crate::overlay_routes::post_workspace_note(workspace, line, THREAD_VIA, k2_core::overlay::SystemNotice::info("doc.conflict")) {
             k2_core::log_debug!("[docs] WARN: conflict line on the Thread of {workspace}: {e}");
         }
     }

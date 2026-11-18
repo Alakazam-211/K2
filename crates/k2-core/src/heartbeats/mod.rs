@@ -1352,6 +1352,7 @@ fn retire_missed_reminder(
     }
     reminders::post_note(
         project_path,
+        reminders::NOTE_MISSED,
         &reminders::missed_note(hb, "it was more than 24 hours late (this computer was asleep or K2 wasn't running)"),
     );
     log_debug!("[heartbeat-tick] {} {reason}", hb.name);

@@ -306,8 +306,9 @@ fn busy(activity: Option<&str>) -> bool {
 
 /// A K2 line on the sidecar's own Thread (no wake, no push), and the same
 /// line into its session when it is live, so the agent hears it.
-fn tell(ws: &Workspace, s: &Sidecar, text: &str) {
-    if let Err(e) = crate::overlay_routes::post_workspace_notice(&s.address, &ws.handle, text) {
+/// `code`: the line's thread-system-notice-v1 code (`sidecar.landed`, ...).
+fn tell(s: &Sidecar, code: &str, text: &str) {
+    if let Err(e) = crate::overlay_routes::post_workspace_notice(&s.address, text, k2_core::overlay::SystemNotice::info(code)) {
         log_debug!("[sidecar-worktree] Thread note for {} failed: {e}", s.address);
     }
     if let Some(live) = crate::session_lookup::lookup_any(&s.row.agent_name) {
@@ -571,8 +572,8 @@ fn handle_land(caller: &Caller, body: &[u8]) -> Result<Value, Refused> {
         Err(e) => {
             if e.code == wt::codes::CONFLICT {
                 tell(
-                    &ws,
                     &s,
+                    "sidecar.land_conflict",
                     &format!(
                         "[K2] Couldn't land {} on {onto}: conflicts in {}. Nothing changed on {onto}. Rebase {} onto {onto} in this worktree, commit, and ask again.",
                         meta.branch,
@@ -595,8 +596,8 @@ fn handle_land(caller: &Caller, body: &[u8]) -> Result<Value, Refused> {
     let _ = crate::git_live::changed_now(&wt_path.to_string_lossy());
     let n = landed.commits.len();
     tell(
-        &ws,
         &s,
+        "sidecar.landed",
         &format!(
             "[K2] Landed {n} commit{} from {} on {onto} ({}..{}) for {}.",
             if n == 1 { "" } else { "s" },
@@ -764,7 +765,7 @@ fn retire_locked(ws: &Workspace, s: &Sidecar, discard: bool, keep_branch: bool) 
             ));
         }
     }
-    tell(ws, s, &line);
+    tell(s, "sidecar.retired", &line);
     Ok(json!({
         "ok": true,
         "address": s.address,

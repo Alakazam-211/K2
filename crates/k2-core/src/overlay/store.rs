@@ -92,6 +92,13 @@ const CHANGE_REMOVED_PREFIX: &str = "removed:";
 const CLIENT_IDS: TableDefinition<&str, &str> = TableDefinition::new("client_ids");
 /// The sweep's index for [`CLIENT_IDS`]: `{ms:020}/{key}` → `""`.
 const CLIENT_IDS_BY_TIME: TableDefinition<&str, &str> = TableDefinition::new("client_ids_by_time");
+/// thread-system-notice-v1: the delivery K2's "Send again" sends, by
+/// notice doc id → the daemon's delivery JSON (never served). Written
+/// with the notice ([`notice_resend_put`]); removed in the same write that
+/// marks the button done ([`put_notice_doc_resent`]), so a second press
+/// finds nothing to send.
+const NOTICE_RESEND: TableDefinition<&str, &str> = TableDefinition::new("notice_resend");
+
 /// [`commit_write_keyed`]'s error when the client key is already taken
 /// (the caller checks under the overlay write lock first, so this is the
 /// backstop; nothing is written).
@@ -128,6 +135,47 @@ fn parse_client_id(v: &str) -> Option<ClientIdHit> {
     let at_ms = it.next()?.parse().ok()?;
     let body_hash = it.next()?.to_string();
     Some(ClientIdHit { doc_id, conversation_id, at_ms, body_hash })
+}
+
+/// Keep the delivery a notice's "Send again" sends ([`NOTICE_RESEND`]).
+pub fn notice_resend_put(notice_id: &str, job: &str) -> Result<(), String> {
+    let db = db()?;
+    let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+    {
+        let mut t = txn.open_table(NOTICE_RESEND).map_err(|e| format!("overlay open notice_resend: {e}"))?;
+        t.insert(notice_id, job).map_err(|e| format!("overlay insert notice_resend: {e}"))?;
+    }
+    txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
+}
+
+/// The delivery kept for a notice, if it is still there.
+pub fn notice_resend_get(notice_id: &str) -> Result<Option<String>, String> {
+    let db = db()?;
+    let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+    let t = match txn.open_table(NOTICE_RESEND) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+        Err(e) => return Err(format!("overlay open notice_resend: {e}")),
+    };
+    Ok(t.get(notice_id).map_err(|e| format!("overlay get notice_resend: {e}"))?.map(|g| g.value().to_string()))
+}
+
+/// A notice whose "Send again" was pressed: the doc (button done), its
+/// `thread_changes` row (thread-delta-v1) and the kept delivery's removal,
+/// in ONE write.
+pub fn put_notice_doc_resent(conversation_id: &str, seq: i64, doc: &OverlayDoc) -> Result<(), String> {
+    let json = serde_json::to_vec(doc).map_err(|e| format!("overlay doc json: {e}"))?;
+    let db = db()?;
+    let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+    {
+        let mut docs = txn.open_table(DOCS).map_err(|e| format!("overlay open docs: {e}"))?;
+        docs.insert(doc.id.as_str(), json.as_slice()).map_err(|e| format!("overlay insert docs: {e}"))?;
+        let mut t = txn.open_table(NOTICE_RESEND).map_err(|e| format!("overlay open notice_resend: {e}"))?;
+        t.remove(doc.id.as_str()).map_err(|e| format!("overlay notice_resend remove: {e}"))?;
+    }
+    write_meta(&txn, doc)?;
+    note_change(&txn, conversation_id, &doc.id, Some(seq))?;
+    txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
 }
 
 /// The post a client key names, if it is still kept.

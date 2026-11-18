@@ -11,7 +11,14 @@ use crate::db::schema::{AgentHeartbeat, HeartbeatFire};
 
 static NOTES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
-fn capture(path: &str, text: &str) {
+fn capture(path: &str, code: &str, text: &str) {
+    assert!(
+        [reminders::NOTE_FIRED, reminders::NOTE_MISSED, reminders::NOTE_UNDELIVERABLE].contains(&code),
+        "a reminder note carries a known notice code, got {code:?} for {text:?}"
+    );
+    if text.contains("didn't fire") {
+        assert_ne!(code, reminders::NOTE_FIRED, "a missed reminder's note is not 'fired': {text}");
+    }
     NOTES.lock().expect("notes").push((path.to_string(), text.to_string()));
 }
 

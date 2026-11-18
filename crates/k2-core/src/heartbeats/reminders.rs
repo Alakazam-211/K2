@@ -402,7 +402,8 @@ pub fn newly_due(conn: &Connection, after: Option<&str>, now: DateTime<Utc>) -> 
 
 // ── Notes from core to the daemon ─────────────────────────────────────
 
-type NoteSink = fn(project_path: &str, text: &str);
+/// `code`: the note's thread-system-notice-v1 code ([`NOTE_FIRED`], ...).
+type NoteSink = fn(project_path: &str, code: &str, text: &str);
 static NOTE_SINK: OnceLock<NoteSink> = OnceLock::new();
 
 /// The daemon registers how a reminder note reaches the owner's Thread
@@ -414,12 +415,19 @@ pub fn set_note_sink(sink: NoteSink) {
 
 /// Tell the owner's Thread something happened to a reminder. Logged if the
 /// note can't be sent; a reminder's retirement does not wait on it.
-pub fn post_note(project_path: &str, text: &str) {
+pub fn post_note(project_path: &str, code: &str, text: &str) {
     match NOTE_SINK.get() {
-        Some(sink) => sink(project_path, text),
+        Some(sink) => sink(project_path, code, text),
         None => crate::log_debug!("[reminders] no note sink for {project_path}: {text}"),
     }
 }
+
+/// [`post_note`] code: a reminder a person set went off.
+pub const NOTE_FIRED: &str = "reminder.fired";
+/// [`post_note`] code: a reminder was more than a day late, so it won't fire.
+pub const NOTE_MISSED: &str = "reminder.missed";
+/// [`post_note`] code: a reminder couldn't be delivered and was retired.
+pub const NOTE_UNDELIVERABLE: &str = "reminder.undeliverable";
 
 /// The owner's note for a reminder that will not fire.
 pub fn missed_note(hb: &AgentHeartbeat, why: &str) -> String {

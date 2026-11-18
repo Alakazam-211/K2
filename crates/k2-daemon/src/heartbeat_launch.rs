@@ -178,7 +178,7 @@ fn smart_launch_checked(
         // A person set it, so a person hears it went off. An agent's own
         // reminder stays in its session (Chatter records the line).
         let short: String = hb.body.as_deref().unwrap_or_default().chars().take(200).collect();
-        k2_core::heartbeats::reminders::post_note(project_path, &format!("Reminder fired: {short}"));
+        k2_core::heartbeats::reminders::post_note(project_path, k2_core::heartbeats::reminders::NOTE_FIRED, &format!("Reminder fired: {short}"));
     }
     out
 }
@@ -1555,6 +1555,7 @@ fn record_fire_failure(
                 if let Some(path) = path {
                     k2_core::heartbeats::reminders::post_note(
                         &path,
+                        k2_core::heartbeats::reminders::NOTE_UNDELIVERABLE,
                         &k2_core::heartbeats::reminders::missed_note(hb, &format!("it couldn't be delivered ({reason})")),
                     );
                 }

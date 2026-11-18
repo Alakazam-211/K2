@@ -7,7 +7,9 @@
 //! on the desktop, over budget). Every OTHER Thread write changes a phone's
 //! cached chat with no alert at all:
 //! - a person's own post (from the desktop, another phone, the web);
-//! - a card closing (answered, voided, expired, a handoff closed).
+//! - a card closing (answered, voided, expired, a handoff closed);
+//! - K2's own notice (thread-system-notice-v1: the `system` stamp), posted
+//!   or changed (a "Send again" pressed).
 //!
 //! For those, every Thread push recipient of the chat's project (the people
 //! `notify_prefs::recipients` would alert, muted or not) gets the chat noted
@@ -30,6 +32,8 @@ struct Job {
     conversation_id: String,
     from: String,
     closed_card: bool,
+    /// K2's own line (the `system` stamp).
+    system: bool,
 }
 
 /// A card that is no longer waiting for an answer (its frame is the close).
@@ -50,13 +54,14 @@ fn job_of(frame: &OverlayFrame) -> Option<Job> {
     }
     let doc = frame.doc.as_ref()?;
     let conversation_id = frame.conversation_id.clone().filter(|c| !c.trim().is_empty())?;
-    Some(Job { conversation_id, from: doc.from.clone(), closed_card: is_closed_card(doc) })
+    Some(Job { conversation_id, from: doc.from.clone(), closed_card: is_closed_card(doc), system: doc.by_system() })
 }
 
-/// Does this write need a hint? A closed card always; otherwise only a
-/// person's post (an agent's new post or open card is the coalescer's).
+/// Does this write need a hint? A closed card and K2's own notice always;
+/// otherwise only a person's post (an agent's new post or open card is the
+/// coalescer's).
 fn needs_hint(job: &Job, from_is_human: bool) -> bool {
-    job.closed_card || from_is_human
+    job.closed_card || job.system || from_is_human
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -153,7 +158,7 @@ mod tests {
         assert!(job_of(&frame("thread", None, Some(text("owner")))).is_none());
         assert!(job_of(&frame("thread", Some("c-1"), None)).is_none(), "moved / address frames carry no doc");
         let j = job_of(&frame("thread", Some("c-1"), Some(text("owner")))).expect("job");
-        assert_eq!(j, Job { conversation_id: "c-1".into(), from: "owner".into(), closed_card: false });
+        assert_eq!(j, Job { conversation_id: "c-1".into(), from: "owner".into(), closed_card: false, system: false });
         assert!(!format!("{j:?}").contains("canary"), "a job never holds the text");
     }
 
@@ -170,5 +175,22 @@ mod tests {
         let pending = job_of(&frame("thread", Some("c-1"), Some(card("pending")))).expect("job");
         assert!(!pending.closed_card, "an open card is the agent's ask");
         assert!(!needs_hint(&pending, false));
+    }
+
+    /// thread-system-notice-v1: K2's notice changes a phone's chat with no
+    /// alert of its own, so it hints like a person's post.
+    #[test]
+    fn a_k2_notice_hints() {
+        let notice = OverlayDoc::system_text(
+            "it-3".into(),
+            "cortana".into(),
+            "K2: cortana didn't take a message".into(),
+            "thread",
+            k2_core::overlay::SystemNotice::delivery("delivery.not_taken.never_read_in"),
+        );
+        let j = job_of(&frame("thread", Some("c-1"), Some(notice))).expect("job");
+        assert!(j.system && !j.closed_card, "{j:?}");
+        assert_eq!(j.from, "k2");
+        assert!(needs_hint(&j, false), "K2's notice hints even though k2 is no person");
     }
 }

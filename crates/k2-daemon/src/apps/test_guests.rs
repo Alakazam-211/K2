@@ -345,7 +345,7 @@ pub(crate) fn add_checked(app: &GuestApp, by: &str, agent: Option<&str>, n: &New
                 human_ttl(ttl),
                 p.username
             );
-            match crate::overlay_routes::post_workspace_note(&w.path, &text, "k2-apps") {
+            match crate::overlay_routes::post_workspace_note(&w.path, &text, "k2-apps", k2_core::overlay::SystemNotice::info("app.test_guest_added")) {
                 Ok(()) => true,
                 Err(e) => {
                     k2_core::log_debug!("[apps] test guest note for {}: {e}", app.app_id);

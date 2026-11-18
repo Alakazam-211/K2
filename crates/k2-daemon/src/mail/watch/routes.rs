@@ -77,7 +77,7 @@ fn is_person_mailbox(source: Source, inbox_id: &str) -> bool {
 /// trust, and a person sees it.
 fn tell_owner(project_path: &str, what: &str) {
     if is_agent() {
-        if let Err(e) = crate::overlay_routes::post_workspace_note(project_path, what, "k2-mail-watch") {
+        if let Err(e) = crate::overlay_routes::post_workspace_note(project_path, what, "k2-mail-watch", k2_core::overlay::SystemNotice::info("mail.watch_changed_by_agent")) {
             k2_core::log_debug!("[mail-watch] change notice: {e}");
         }
     }

@@ -307,7 +307,7 @@ fn note(job: &Job, w: &Who, verb: &str) -> bool {
             job.name
         ),
     };
-    match crate::overlay_routes::post_workspace_note(&path, &body, "k2-job") {
+    match crate::overlay_routes::post_workspace_note(&path, &body, "k2-job", k2_core::overlay::SystemNotice::info(&format!("job.{verb}"))) {
         Ok(()) => true,
         Err(e) => {
             k2_core::log_debug!("[jobs] Thread note for {}: {e}", job.name);

@@ -73,7 +73,7 @@ fn tell(service_id: &str, roles: &[String]) {
          press Record before still can now that this server's chat checks the cap. {who}. Each person in a call still \
          consents for themselves. To narrow it, take voice:record off a role: k2 app role room <role> <workspace> --caps …"
     );
-    if let Err(e) = crate::overlay_routes::post_workspace_notice(&handle, &handle, &text) {
+    if let Err(e) = crate::overlay_routes::post_workspace_notice(&handle, &text, k2_core::overlay::SystemNotice::info("app.voice_record_granted")) {
         k2_core::log_debug!("[recording] notice {app_id}: {e}");
     }
 }

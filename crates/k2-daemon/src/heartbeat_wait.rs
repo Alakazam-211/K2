@@ -38,15 +38,15 @@ pub fn install_listener() {
 /// A heartbeat's "waiting for WAKEUP.md" / "back" note on the workspace's
 /// Thread. Used only while the workspace folder is gone, so its inbox
 /// can't be written; the caller logs a failure and retries next tick.
-fn post_wakeup_note(project_path: &str, text: &str) -> Result<(), String> {
-    crate::overlay_routes::post_workspace_note(project_path, text, "k2-heartbeat")
+fn post_wakeup_note(project_path: &str, code: &str, text: &str) -> Result<(), String> {
+    crate::overlay_routes::post_workspace_note(project_path, text, "k2-heartbeat", k2_core::overlay::SystemNotice::info(code))
 }
 
 /// A reminder's note to the people on this workspace's Thread (fired,
 /// missed, failed). A failed note is logged: the reminder's own state does
 /// not depend on it.
-fn post_reminder_note(project_path: &str, text: &str) {
-    if let Err(e) = crate::overlay_routes::post_workspace_note(project_path, text, "k2-reminder") {
+fn post_reminder_note(project_path: &str, code: &str, text: &str) {
+    if let Err(e) = crate::overlay_routes::post_workspace_note(project_path, text, "k2-reminder", k2_core::overlay::SystemNotice::info(code)) {
         log_debug!("[reminders] Thread note for {project_path}: {e}");
     }
 }

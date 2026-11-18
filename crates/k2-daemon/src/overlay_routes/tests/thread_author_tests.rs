@@ -206,18 +206,26 @@ fn agent_rows_old_and_new_are_never_deletable_and_a_persons_shell_post_is() {
     assert_eq!(r.status, "200 OK", "{}", r.body);
 }
 
-/// K2's own notes and notices (written inside the daemon) stay author-less,
-/// from the room.
+/// K2's own notes and notices (written inside the daemon) are K2's
+/// (thread-system-notice-v1): from `k2`, the `system` stamp and a
+/// `systemNotice`, never the room's agent; the body keeps K2's text.
 #[test]
-fn k2s_own_notes_stay_author_less() {
+fn k2s_own_notes_are_system_notices() {
     let _home_lock = crate::test_support::lock_home();
     let (handle, _) = room("authk");
-    let id = post_workspace_notice(&handle, &handle, "a notice from K2").expect("notice");
+    let notice = k2_core::overlay::SystemNotice::action("clone.proposed");
+    let id = post_workspace_notice(&handle, "a notice from K2", notice).expect("notice");
     let doc = stored(&handle, &id);
-    assert!(doc.get("author").is_none(), "{doc}");
-    assert_eq!(doc["from"], serde_json::json!(handle), "{doc}");
-    post_workspace_note(&handle, "a CI note", "ci").expect("note");
+    assert_eq!(doc["author"], serde_json::json!({"kind": "system", "login": "k2"}), "{doc}");
+    assert_eq!(doc["from"], "k2", "{doc}");
+    assert_eq!(doc["body"], "a notice from K2", "{doc}");
+    assert_eq!(doc["systemNotice"], serde_json::json!({"kind": "action", "code": "clone.proposed"}), "{doc}");
+    assert!(doc.get("mine").is_none(), "K2's line is nobody's: {doc}");
+    post_workspace_note(&handle, "a CI note", "ci", k2_core::overlay::SystemNotice::info("ci.monitor")).expect("note");
     let snap = json_body(&dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET thread"));
     let note = snap["items"].as_array().expect("items").iter().find(|i| i["doc"]["body"] == "a CI note").expect("note")["doc"].clone();
-    assert!(note.get("author").is_none(), "{note}");
+    assert_eq!(note["author"]["kind"], "system", "{note}");
+    assert_eq!(note["systemNotice"]["code"], "ci.monitor", "{note}");
+    assert_eq!(note["via"], "ci", "the via stays the poster's: {note}");
+    assert!(note.get("mine").is_none(), "{note}");
 }

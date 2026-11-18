@@ -4270,3 +4270,7 @@ mod thread_author;
 // 0.46.15: one card per `k2 thread ask` idempotency key (send_once).
 #[path = "ask_once_tests.rs"]
 mod ask_once;
+
+// 0.46.15: K2's own Thread notices (thread-system-notice-v1) and Send again.
+#[path = "system_notice_tests.rs"]
+mod system_notice;

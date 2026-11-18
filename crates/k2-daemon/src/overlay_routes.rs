@@ -21,6 +21,7 @@ use crate::workspace_msg::{self, MsgTarget};
 /// `POST /cli/thread/catchup` (inbox-catchup-v1, 0.46.3).
 pub(crate) mod catchup;
 pub(crate) mod message_delete;
+pub(crate) mod notice_resend;
 mod ask_once;
 mod closed_cards;
 mod secret_delivery;
@@ -1704,26 +1705,48 @@ fn thread_context_line(ctx: &overlay::ThreadContext, from: &str) -> String {
 }
 
 /// One daemon-written line on a workspace's main Thread, for its human
-/// (clone proposals, prd-clone-carries-threads-and-vault-v1 §4.4). Plain
-/// text doc; no inject, no wake, no push. Returns the doc id.
-pub(crate) fn post_workspace_notice(addr: &str, from: &str, text: &str) -> Result<String, String> {
+/// (clone proposals, prd-clone-carries-threads-and-vault-v1 §4.4). K2's
+/// own notice (thread-system-notice-v1): from `k2`, the `system` stamp and
+/// `notice`. No inject, no wake, no push. Returns the doc id.
+pub(crate) fn post_workspace_notice(addr: &str, text: &str, notice: overlay::SystemNotice) -> Result<String, String> {
+    post_system_line(addr, text, "thread", notice, None).map(|(_, id)| id)
+}
+
+/// `/boot-status` feature key (thread-system-notice-v1): K2's own Thread
+/// lines carry `author: {kind: "system", login: "k2"}` and `systemNotice:
+/// {kind, code, actions?}`, and `POST /cli/thread/resend` sends a
+/// delivery notice's message again.
+pub(crate) const FEATURE_THREAD_SYSTEM_NOTICE: &str = "thread-system-notice-v1";
+
+/// Every K2 notice poster's one write (thread-system-notice-v1): resolve
+/// `addr`, post K2's line with `notice` (and the delivery its "Send again"
+/// sends, when `resend` is given), publish under the write's lock.
+/// Returns the resolved Thread and the doc id.
+fn post_system_line(
+    addr: &str,
+    text: &str,
+    via: &str,
+    notice: overlay::SystemNotice,
+    resend: Option<&str>,
+) -> Result<(ResolvedOverlay, String), String> {
     let resolved = resolve_addr(addr).map_err(|e| e.body)?;
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let (item, links) = overlay::post_thread(
+    let (item, links) = overlay::post_system_notice(
         &conn,
         &resolved.conversation_id,
         &resolved.project_id,
-        from,
         &resolved.addr,
         text,
-        "thread",
+        via,
+        notice,
+        resend,
     )?;
     // inbox-catchup-v1 (0.46.3): publish while the write's lock is held,
     // so bus (and `rev`) order is commit order.
     crate::overlay_ws::emit_links(&links, &item.doc);
     drop(conn);
-    Ok(item.id)
+    Ok((resolved, item.id))
 }
 
 fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
@@ -2577,11 +2600,13 @@ pub(crate) fn post_oauth_reconnect_card(workspace: &str, scope_word: &str, m: &k
     create_secret_card(&vault, &resolved, &from, None, &m.name, Some(PROMPT), proposal, None, None, false).map(|_| ()).map_err(|r| r.body)
 }
 
-/// One plain Thread line on a clone's Thread (the leave-blank overflow).
+/// One plain Thread line on a clone's Thread (the leave-blank overflow):
+/// K2's own notice (thread-system-notice-v1), kept as history (`import`).
 pub(crate) fn post_clone_text_line(conversation_id: &str, project_id: &str, addr: &str, body: &str) {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    match overlay::post_thread(&conn, conversation_id, project_id, addr, addr, body, "import") {
+    let notice = overlay::SystemNotice::action("clone.secrets_left_blank");
+    match overlay::post_system_notice(&conn, conversation_id, project_id, addr, body, "import", notice, None) {
         Ok((item, links)) => {
             // Publish under the write's lock (bus order = commit order, 0.46.3).
             crate::overlay_ws::emit_links(&links, &item.doc);
@@ -2600,32 +2625,18 @@ pub(crate) fn thread_project_of(addr: &str) -> Option<String> {
 
 /// One plain K2 line on a workspace's own Thread (its pinned Chat), e.g.
 /// "job collect added" (`k2 job`, item 5 Q14). No wake, no inject, no
-/// push: it is a record for the person who reads that Thread.
-pub(crate) fn post_workspace_note(workspace: &str, body: &str, via: &str) -> Result<(), String> {
-    let resolved = resolve_addr(workspace).map_err(|r| r.body)?;
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let (item, links) =
-        overlay::post_thread(&conn, &resolved.conversation_id, &resolved.project_id, &resolved.addr, &resolved.addr, body, via)?;
-    // Publish under the write's lock (bus order = commit order, 0.46.3).
-    crate::overlay_ws::emit_links(&links, &item.doc);
-    drop(conn);
-    Ok(())
+/// push: it is a record for the person who reads that Thread. K2's own
+/// notice (thread-system-notice-v1): from `k2`, the `system` stamp.
+pub(crate) fn post_workspace_note(workspace: &str, body: &str, via: &str, notice: overlay::SystemNotice) -> Result<(), String> {
+    post_system_line(workspace, body, via, notice, None).map(|_| ())
 }
 
-/// [`post_workspace_note`] from K2 itself (`from` = `k2`, like the
-/// changed-files card), on the Thread `addr` names (a workspace path or an
-/// agent's address). No wake, no inject, no push. The workspace's project
-/// id comes back so a caller can check the Thread is the one it meant.
-pub(crate) fn post_k2_note(addr: &str, body: &str, via: &str) -> Result<String, String> {
-    let resolved = resolve_addr(addr).map_err(|r| r.body)?;
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let (item, links) =
-        overlay::post_thread(&conn, &resolved.conversation_id, &resolved.project_id, "k2", &resolved.addr, body, via)?;
-    crate::overlay_ws::emit_links(&links, &item.doc);
-    drop(conn);
-    Ok(resolved.project_id)
+/// [`post_workspace_note`] on the Thread `addr` names (a workspace path or
+/// an agent's address). No wake, no inject, no push. The workspace's
+/// project id comes back so a caller can check the Thread is the one it
+/// meant.
+pub(crate) fn post_k2_note(addr: &str, body: &str, via: &str, notice: overlay::SystemNotice) -> Result<String, String> {
+    post_system_line(addr, body, via, notice, None).map(|(r, _)| r.project_id)
 }
 
 /// A mail notice card on a workspace's Thread. Posted by K2, no inject and
@@ -4693,6 +4704,17 @@ impl ThreadDeliveryJob {
         self
     }
 
+    /// thread-system-notice-v1 "Send again": the same line as a fresh first
+    /// delivery (its own take check and one retry), with no Thread turn of
+    /// its own (the first one ran its course). The post it carries stays
+    /// named, so a post deleted since is never sent.
+    fn for_resend(&self) -> Self {
+        let mut job = self.clone();
+        job.retry = false;
+        job.turn = None;
+        job
+    }
+
     /// An app guest's delivery: `from` is its [`workspace_msg::guest_label`].
     fn from_guest(mut self) -> Self {
         self.guest = true;
@@ -4864,6 +4886,18 @@ fn notice_quote(payload: &str) -> String {
     }
 }
 
+impl NotTaken {
+    /// The notice's [`overlay::SystemNotice::code`] (thread-system-notice-v1).
+    fn code(self) -> &'static str {
+        match self {
+            NotTaken::NeverReadIn => "delivery.not_taken.never_read_in",
+            NotTaken::RetryFailed => "delivery.not_taken.retry_failed",
+            NotTaken::RestartMidDelivery => "delivery.not_taken.restart_mid_delivery",
+            NotTaken::RestartTooOld => "delivery.not_taken.restart_too_old",
+        }
+    }
+}
+
 /// K2's words for a [`NotTaken`] notice.
 fn not_taken_text(agent: &str, quote: &str, why: NotTaken) -> String {
     let what = if quote.is_empty() { "a message".to_string() } else { format!("the message \"{quote}\"") };
@@ -4883,15 +4917,26 @@ fn not_taken_text(agent: &str, quote: &str, why: NotTaken) -> String {
     }
 }
 
-/// A notice in the job's Thread (no inject, no wake, no push).
+/// A notice in the job's Thread (no inject, no wake, no push): K2's
+/// delivery notice (thread-system-notice-v1) with "Send again" (the same
+/// line, sent fresh: [`ThreadDeliveryJob::for_resend`]) and "Open its
+/// terminal".
 fn post_not_taken_notice(job: &ThreadDeliveryJob, why: NotTaken) {
     // A deleted post is never quoted back into the Thread.
     if job.source_deleted() {
         return;
     }
     let text = not_taken_text(&job.addr, &notice_quote(&job.payload), why);
-    match post_workspace_notice(&job.addr, &job.addr, &text) {
-        Ok(id) => k2_core::log_debug!("[thread-delivery] told the Thread ({why:?}) addr={} doc={id}", job.addr),
+    let notice = overlay::SystemNotice::delivery(why.code()).with_open_terminal(&job.addr);
+    let resend = match serde_json::to_string(&job.for_resend()) {
+        Ok(j) => Some(j),
+        Err(e) => {
+            k2_core::log_debug!("[thread-delivery] the notice for addr={} gets no Send again: {e}", job.addr);
+            None
+        }
+    };
+    match post_system_line(&job.addr, &text, "thread", notice, resend.as_deref()) {
+        Ok((_, id)) => k2_core::log_debug!("[thread-delivery] told the Thread ({why:?}) addr={} doc={id}", job.addr),
         Err(e) => k2_core::log_debug!("[thread-delivery] couldn't tell the Thread ({why:?}) addr={}: {e}", job.addr),
     }
 }
@@ -5481,7 +5526,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/chatter" => handle_get_chatter(params),
         "/cli/chatterlog" => handle_get_chatterlog(params),
         "/cli/thread/post" | "/cli/thread/ask" | "/cli/thread/secret" | "/cli/thread/answer"
-        | "/cli/thread/void" | catchup::ROUTE | message_delete::ROUTE => CliResponse::method_not_allowed(),
+        | "/cli/thread/void" | catchup::ROUTE | message_delete::ROUTE | notice_resend::ROUTE => CliResponse::method_not_allowed(),
         _ => return None,
     };
     Some(resp)
@@ -5538,6 +5583,13 @@ pub fn dispatch_post_as(
             return r;
         }
     }
+    // thread-system-notice-v1: K2's own notice field is never a caller's.
+    // Every Thread write door refuses it, in the query or the body, of any
+    // JSON type (no route stores it from a request anyway; this says so
+    // instead of dropping it quietly).
+    if let Some(r) = refuse_system_notice_param(&params, body) {
+        return r;
+    }
     merge_body(&mut params, body);
     restore_param(&mut params, crate::caller_workspace::CELL_SESSION_KEY, captured_session);
     if stamped {
@@ -5564,12 +5616,31 @@ pub fn dispatch_post_as(
         "/cli/thread/answer" => handle_answer(&params, session_author),
         "/cli/thread/void" => handle_void(&params, session_author),
         message_delete::ROUTE => message_delete::handle(&params, session_author),
+        notice_resend::ROUTE => notice_resend::handle(&params, session_author),
         crate::transfer_routes::ROUTE_ATTACHMENT_TOKEN => handle_attachment_token(&params),
         k2_core::permission::NOTE_ROUTE | k2_core::permission::UNDO_ROUTE => {
             handle_permission_card_route(path, &params, session_author)
         }
         _ => CliResponse::not_found(),
     }
+}
+
+/// The request keys that would name K2's own notice (thread-system-notice-v1).
+pub(crate) const SYSTEM_NOTICE_PARAMS: &[&str] = &["systemNotice", "system_notice"];
+
+/// 400 `system_notice_forbidden` when a Thread write carries K2's notice
+/// field (a query key, a JSON body key of any type, a form body key): only
+/// K2 itself writes a notice.
+pub(crate) fn refuse_system_notice_param(params: &HashMap<String, String>, body: &[u8]) -> Option<CliResponse> {
+    let named = |k: &str| SYSTEM_NOTICE_PARAMS.contains(&k);
+    let in_body = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(serde_json::Value::Object(obj)) => obj.keys().any(|k| named(k)),
+        Ok(_) => false,
+        Err(_) => crate::routes::http::parse_form_body(body).iter().any(|(k, _)| named(k)),
+    };
+    (in_body || params.keys().any(|k| named(k))).then(|| {
+        error_json("400 Bad Request", "system_notice_forbidden", "only K2 itself posts K2 notices; send the message without systemNotice")
+    })
 }
 
 fn json_type_name(v: &serde_json::Value) -> &'static str {

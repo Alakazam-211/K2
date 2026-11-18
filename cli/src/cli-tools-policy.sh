@@ -589,6 +589,28 @@ _cli_check_session_passport() {
 # cmd_daemon_install (which is defined before the router runs).
 _skip_conn_gate=0
 [ "${1:-}" = "daemon" ] && [ "${2:-}" = "install" ] && _skip_conn_gate=1
+# Which `k2 update` form the words ask for (cmd_update_v2 dispatches on the
+# same answer): help when -h/--help is anywhere; else list for a --list
+# anywhere; else the last of --app and --cli (app when neither). Other
+# words are ignored, as they always were.
+_k2_update_form() {
+    local a form=app
+    for a in "$@"; do
+        case "$a" in -h|--help) echo help; return 0 ;; esac
+    done
+    for a in "$@"; do
+        case "$a" in
+            --list) echo list; return 0 ;;
+            --app) form=app ;;
+            --cli) form=cli ;;
+        esac
+    done
+    echo "$form"
+}
+# `k2 update --help` only prints the usage: no daemon.
+if [ "${1:-}" = "update" ] && [ "$(_k2_update_form "${@:2}")" = "help" ]; then
+    _skip_conn_gate=1
+fi
 # `k2 publish` P15 — split the connection gate.
 # Skip only plan/CP verbs that talk to connect.k2.dev + tunnel.json
 # (or print help) and do not need the workspace daemon:

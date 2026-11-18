@@ -1,5 +1,23 @@
 # ── Updates ──────────────────────────────────────────────────────────
 
+# `k2 update --help` / `-h`: the usage, on stdout. Sends nothing.
+_update_usage() {
+    cat <<'EOF'
+Usage: k2 update [--app|--cli [--check]|--list]
+
+  k2 update, k2 update --app
+                 Show this k2's version and the newest K2 release on GitHub,
+                 with the page to download it from.
+  k2 update --list
+                 List the ten newest K2 releases on GitHub.
+  k2 update --cli [--check]
+                 Show the CLI's and the local daemon's versions. The CLI
+                 updates with K2; --check leaves out "Nothing was changed."
+
+  None of these downloads or installs anything.
+EOF
+}
+
 cmd_app_update() {
     local version="${1:-}"
     if [ "$version" = "--list" ] || [ "$version" = "-l" ]; then

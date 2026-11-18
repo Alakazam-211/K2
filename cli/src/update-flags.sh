@@ -1,20 +1,16 @@
 # ── Phase 2.1: update --cli / --app flag handler ─────────────────────
 
+# `k2 update` = `k2 update --app`. _k2_update_form (cli-tools-policy.sh)
+# reads the words; --check and -c go to the --cli form.
 cmd_update_v2() {
-    local target="app"  # default per mock: `update` = `update --app`
-    local cli_args=()
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --app)  target="app";  shift ;;
-            --cli)  target="cli";  shift ;;
-            --list) cmd_app_update --list; return ;;
-            --check|-c) cli_args+=("$1"); shift ;;
-            *) shift ;;
-        esac
+    local a cli_args=()
+    for a in "$@"; do
+        case "$a" in --check|-c) cli_args+=("$a") ;; esac
     done
-    if [[ "$target" == "cli" ]]; then
-        cmd_update ${cli_args[@]+"${cli_args[@]}"}
-    else
-        cmd_app_update
-    fi
+    case "$(_k2_update_form "$@")" in
+        help) _update_usage ;;
+        list) cmd_app_update --list ;;
+        cli)  cmd_update ${cli_args[@]+"${cli_args[@]}"} ;;
+        *)    cmd_app_update ;;
+    esac
 }

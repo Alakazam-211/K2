@@ -1077,6 +1077,28 @@ _cli_check_session_passport() {
 # cmd_daemon_install (which is defined before the router runs).
 _skip_conn_gate=0
 [ "${1:-}" = "daemon" ] && [ "${2:-}" = "install" ] && _skip_conn_gate=1
+# Which `k2 update` form the words ask for (cmd_update_v2 dispatches on the
+# same answer): help when -h/--help is anywhere; else list for a --list
+# anywhere; else the last of --app and --cli (app when neither). Other
+# words are ignored, as they always were.
+_k2_update_form() {
+    local a form=app
+    for a in "$@"; do
+        case "$a" in -h|--help) echo help; return 0 ;; esac
+    done
+    for a in "$@"; do
+        case "$a" in
+            --list) echo list; return 0 ;;
+            --app) form=app ;;
+            --cli) form=cli ;;
+        esac
+    done
+    echo "$form"
+}
+# `k2 update --help` only prints the usage: no daemon.
+if [ "${1:-}" = "update" ] && [ "$(_k2_update_form "${@:2}")" = "help" ]; then
+    _skip_conn_gate=1
+fi
 # `k2 publish` P15 — split the connection gate.
 # Skip only plan/CP verbs that talk to connect.k2.dev + tunnel.json
 # (or print help) and do not need the workspace daemon:
@@ -69496,6 +69518,24 @@ print(json.dumps({"id": sys.argv[1], "body": body}, separators=(",", ":")))
 
 # ── Updates ──────────────────────────────────────────────────────────
 
+# `k2 update --help` / `-h`: the usage, on stdout. Sends nothing.
+_update_usage() {
+    cat <<'EOF'
+Usage: k2 update [--app|--cli [--check]|--list]
+
+  k2 update, k2 update --app
+                 Show this k2's version and the newest K2 release on GitHub,
+                 with the page to download it from.
+  k2 update --list
+                 List the ten newest K2 releases on GitHub.
+  k2 update --cli [--check]
+                 Show the CLI's and the local daemon's versions. The CLI
+                 updates with K2; --check leaves out "Nothing was changed."
+
+  None of these downloads or installs anything.
+EOF
+}
+
 cmd_app_update() {
     local version="${1:-}"
     if [ "$version" = "--list" ] || [ "$version" = "-l" ]; then
@@ -76360,23 +76400,19 @@ cmd_commit_v2() {
 
 # ── Phase 2.1: update --cli / --app flag handler ─────────────────────
 
+# `k2 update` = `k2 update --app`. _k2_update_form (cli-tools-policy.sh)
+# reads the words; --check and -c go to the --cli form.
 cmd_update_v2() {
-    local target="app"  # default per mock: `update` = `update --app`
-    local cli_args=()
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --app)  target="app";  shift ;;
-            --cli)  target="cli";  shift ;;
-            --list) cmd_app_update --list; return ;;
-            --check|-c) cli_args+=("$1"); shift ;;
-            *) shift ;;
-        esac
+    local a cli_args=()
+    for a in "$@"; do
+        case "$a" in --check|-c) cli_args+=("$a") ;; esac
     done
-    if [[ "$target" == "cli" ]]; then
-        cmd_update ${cli_args[@]+"${cli_args[@]}"}
-    else
-        cmd_app_update
-    fi
+    case "$(_k2_update_form "$@")" in
+        help) _update_usage ;;
+        list) cmd_app_update --list ;;
+        cli)  cmd_update ${cli_args[@]+"${cli_args[@]}"} ;;
+        *)    cmd_app_update ;;
+    esac
 }
 # ── Federation (cross-server agent comms) ────────────────────────────
 # DARK by default: the daemon 404s every /cli/federation/* route unless it

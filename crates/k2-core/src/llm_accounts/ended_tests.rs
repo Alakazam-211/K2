@@ -151,8 +151,12 @@ fn the_default_whose_live_sign_in_ended_reads_signed_out_and_the_file_is_untouch
     assert!(e.detail.as_deref().unwrap().contains("time limit"));
     assert_eq!(read_live(&h), ended_file());
     assert_ne!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), ended_file(), "never mirrored into the slot");
-    // Signed in again outside K2: signed in, and the old reason goes.
+    // Signed in again in a terminal: the background pass and a recheck
+    // both say signed in, and the old reason goes.
     write_live(&h, &good("a"));
+    wallet::reconcile_live(&conn, Tool::Claude, None, false).unwrap();
+    let e = get(&conn, &a.id).unwrap().unwrap();
+    assert_eq!((e.state.as_str(), e.detail.as_deref()), (state::SIGNED_IN, None));
     let e = wallet::recheck(&conn, &a.id).unwrap();
     assert_eq!(e.state, state::SIGNED_IN);
     assert_eq!(e.detail, None);
@@ -384,4 +388,47 @@ fn a_working_subscription_default_still_cant_be_removed() {
     assert_eq!(err.code(), "active_login");
     assert_eq!(active_id(&conn, Tool::Claude).unwrap(), Some(a.id));
     assert_eq!(read_live(&h), good("a"));
+}
+
+// ── Part 4: signing the default in again ahead of the time limit ────
+
+fn good_ending(tag: &str, ends_secs: i64) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "claudeAiOauth": {
+            "accessToken": format!("{MARKER}-access-{tag}"),
+            "refreshToken": format!("{MARKER}-refresh-{tag}"),
+            "expiresAt": FAR_MS,
+            "refreshTokenExpiresAt": ends_secs * 1000,
+        },
+        "mcpOAuth": {"one": {"accessToken": format!("{MARKER}-mcp")}}
+    }))
+    .unwrap()
+}
+
+#[test]
+fn the_default_can_be_signed_in_again_within_the_warning_window_and_the_new_one_goes_live() {
+    let h = Home::new();
+    let conn = db();
+    let now = chrono::Utc::now().timestamp();
+    write_live(&h, &good_ending("a", now + 30 * 86_400));
+    fs::write(h.p(".claude.json"), json!({"oauthAccount": profile("uuid-a", "a@example.test")}).to_string()).unwrap();
+    let a = wallet::import_live(&conn, Tool::Claude, None).unwrap().unwrap();
+    assert_eq!(a.sign_in_ends_at, Some(now + 30 * 86_400), "the end time is on the token");
+    // A month out: the CLIs own it; no sign-in in K2.
+    assert_eq!(wallet::begin_relogin(&conn, &a.id).unwrap_err().code(), "active_login");
+    // Three days out (the CLI's own refresh kept the same end).
+    write_live(&h, &good_ending("a-cli", now + 3 * 86_400));
+    wallet::reconcile_live(&conn, Tool::Claude, None, false).unwrap();
+    assert_eq!(get(&conn, &a.id).unwrap().unwrap().sign_in_ends_at, Some(now + 3 * 86_400), "followed from the live file");
+    assert_eq!(wallet::begin_relogin(&conn, &a.id).unwrap().state, state::SIGNING_IN);
+    sign_into_slot(&a.id, &good("a-new"), "uuid-a", "a@example.test");
+    // Its new sign-in says no end: not later than a known one, the live one stays.
+    wallet::finalize_login(&conn, &a.id, None).unwrap();
+    assert_eq!(live_oauth(&h), oauth_of(&good_ending("a-cli", now + 3 * 86_400)));
+    wallet::begin_relogin(&conn, &a.id).unwrap();
+    store::write_slot(Tool::Claude, &a.id, &good_ending("a-fresh", now + 30 * 86_400)).unwrap();
+    wallet::finalize_login(&conn, &a.id, None).unwrap();
+    assert_eq!(live_oauth(&h), oauth_of(&good_ending("a-fresh", now + 30 * 86_400)), "the later sign-in is live");
+    assert!(read_live(&h).ends_with(br#""mcpOAuth":{"one":{"accessToken":"K2TEST_SECRET_MARKER-mcp"}}}"#));
+    assert_eq!(get(&conn, &a.id).unwrap().unwrap().sign_in_ends_at, Some(now + 30 * 86_400));
 }

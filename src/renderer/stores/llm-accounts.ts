@@ -54,6 +54,10 @@ export interface LlmAccount {
    *  is good: "Apply saved sign-in" (a switch to it) puts that back.
    *  Additive (0.46.15). */
   canApply?: boolean
+  /** Claude: when its sign-in reaches its time limit (unix seconds), and
+   *  whether that is within the warning window. Additive (0.46.15). */
+  signInEndsAt?: number | null
+  signInEndsSoon?: boolean
   email?: string | null
   org?: string | null
   plan: string | null

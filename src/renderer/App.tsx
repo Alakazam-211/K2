@@ -19,6 +19,7 @@ import CommandPalette from './components/CommandPalette/CommandPalette'
 import ContextMenu from './components/ContextMenu/ContextMenu'
 import ConfirmDialog from './components/ConfirmDialog/ConfirmDialog'
 import KesselSheet from './components/KesselSheet/KesselSheet'
+import LlmSignInWarning from './components/LlmSignInWarning/LlmSignInWarning'
 import CreateAgentSheet from './components/AgentTemplates/CreateAgentSheet'
 import WhatsNewModal from './components/WhatsNewModal/WhatsNewModal'
 import OwnerAccountPrompt from './components/OwnerAccountPrompt/OwnerAccountPrompt'
@@ -1182,6 +1183,8 @@ function AppRoot(): React.JSX.Element {
       <OwnerAccountPrompt />
       {/* Kessel at first run: opened by the sign-in offer or the setup checklist. */}
       <KesselSheet />
+      {/* Before a Claude sign-in ends: the owners' pop-up (the daemon says which). */}
+      <LlmSignInWarning />
       {/* Create an agent from a template: opened from the sidebar's add menu. */}
       <CreateAgentSheet />
       <MemoryWatcher />

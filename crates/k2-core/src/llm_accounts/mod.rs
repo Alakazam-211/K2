@@ -29,6 +29,7 @@ pub mod pins;
 pub mod slots;
 pub mod store;
 pub mod wallet;
+pub mod warnings;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -179,6 +180,9 @@ pub struct Entry {
     pub usage_json: Option<String>,
     pub usage_checked_at: Option<i64>,
     pub removed_at: Option<i64>,
+    /// Claude: when the token's sign-in reaches its time limit
+    /// (`refreshTokenExpiresAt`, unix seconds), when the file says.
+    pub sign_in_ends_at: Option<i64>,
 }
 
 impl Entry {
@@ -322,7 +326,7 @@ pub(crate) fn now() -> i64 {
 
 const COLS: &str = "id, tool, label, created_by, created_at, last_used_at, state, detail, \
                     email, org, plan, expires_at, refreshed_at, usage_json, usage_checked_at, removed_at, \
-                    kind, position";
+                    kind, position, sign_in_ends_at";
 
 fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
     Ok(Entry {
@@ -344,6 +348,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
         removed_at: r.get(15)?,
         kind: r.get(16)?,
         position: r.get(17)?,
+        sign_in_ends_at: r.get(18)?,
     })
 }
 
@@ -540,6 +545,7 @@ pub struct MetaUpdate {
     pub last_used_at: Option<i64>,
     pub usage_json: Option<String>,
     pub usage_checked_at: Option<i64>,
+    pub sign_in_ends_at: Option<Option<i64>>,
 }
 
 pub fn update_meta(conn: &Connection, id: &str, m: &MetaUpdate) -> Result<(), WalletError> {
@@ -600,6 +606,9 @@ pub fn update_meta(conn: &Connection, id: &str, m: &MetaUpdate) -> Result<(), Wa
         }
         if let Some(x) = m.usage_checked_at {
             v.push(("usage_checked_at", Value::Integer(x)));
+        }
+        if let Some(x) = &m.sign_in_ends_at {
+            v.push(("sign_in_ends_at", x.map(Value::Integer).unwrap_or(Value::Null)));
         }
         v
     };
@@ -754,3 +763,5 @@ mod identity_tests;
 mod rotation_tests;
 #[cfg(test)]
 mod ended_tests;
+#[cfg(test)]
+mod warnings_tests;

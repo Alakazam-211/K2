@@ -220,6 +220,7 @@ fn entry(tool: &str, kind: &str, state: &str) -> crate::llm_accounts::Entry {
         usage_json: None,
         usage_checked_at: None,
         removed_at: None,
+        sign_in_ends_at: None,
     }
 }
 

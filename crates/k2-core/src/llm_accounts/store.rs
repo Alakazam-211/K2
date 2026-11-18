@@ -905,7 +905,7 @@ pub(crate) fn write_live_file(path: &Path, bytes: &[u8]) -> Result<(), WalletErr
     let owner = match fs::symlink_metadata(path) {
         Ok(md) if md.file_type().is_symlink() => {
             return Err(WalletError::LiveStoreUnavailable(format!(
-                "{} is a symbolic link; K2 doesn't write through it, so nothing changed",
+                "{} is a symbolic link, which is never written through; nothing changed",
                 path.display()
             )));
         }
@@ -1550,6 +1550,14 @@ impl ClaudeEnded {
     /// Claude itself ended it (not just a missing refresh token).
     pub fn by_claude(&self) -> bool {
         !matches!(self, ClaudeEnded::NoRefresh)
+    }
+
+    /// Does a token's detail say its Claude sign-in has ended (one of
+    /// [`ClaudeEnded::words`], maybe with more after it)?
+    pub fn said_in(detail: &str) -> bool {
+        ["Claude's sign-in reached its time limit", "Claude ended this sign-in", "Claude's saved sign-in has no refresh token"]
+            .iter()
+            .any(|p| detail.starts_with(p))
     }
 
     /// The token's state in plain words.

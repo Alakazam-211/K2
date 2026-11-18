@@ -34935,6 +34935,8 @@ for t in v.get("tools", []):
                                          " (in use)" if a.get("inUse") else ""))
         if a.get("detail"):
             print("      %s" % a["detail"])
+        if a.get("signInEndsSoon") and a.get("signInEndsAt"):
+            print("      sign in again by %s" % time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(int(a["signInEndsAt"]))))
 if v.get("airgap"):
     print("Air-gap is on: no sign-in, refresh or usage calls.")
 for r in v.get("keychainRepairs") or []:
@@ -35108,6 +35110,13 @@ print("%s %s%s" % (a.get("tool"), a.get("label"), " (server default)" if a.get("
 for k in ("state", "detail", "plan", "email", "org"):
     if a.get(k):
         print("  %-8s %s" % (k, a[k]))
+if a.get("signInEndsAt"):
+    import time
+    when = time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(int(a["signInEndsAt"])))
+    if a.get("signInEndsSoon"):
+        print("  %-8s sign in again by %s (k2 llm tokens login %s %s)" % ("sign-in", when, a.get("tool"), json.dumps(a.get("label"))))
+    else:
+        print("  %-8s ends %s" % ("sign-in", when))
 u = a.get("usage") or {}
 for w in u.get("windows") or []:
     print("  %-8s %d%% used, resets %s" % (w.get("label"), round(float(w.get("used", 0)) * 100), w.get("resetsAt") or "-"))

@@ -24,7 +24,7 @@ vi.mock('@/lib/daemon-cli', async () => {
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: async () => {} }))
 
 import { AgentAccountsColumn } from './AgentAccountsColumn'
-import { resetLlmAccountsForTests } from '@/stores/llm-accounts'
+import { formatWhen, resetLlmAccountsForTests } from '@/stores/llm-accounts'
 import { resetUsageLimitsForTests } from '@/stores/usage-limits'
 
 const ENDED_DETAIL = 'Claude’s sign-in reached its time limit; sign in again.'
@@ -128,4 +128,19 @@ describe('an ended Claude sign-in', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More actions for jeff' }))
     expect(screen.getByRole('menuitem', { name: /^Remove/ }).getAttribute('aria-disabled')).toBe('true')
   })
+
+  it('a sign-in that ends within the warning window shows “Sign in again by …”, and the default may be signed in again', async () => {
+    listDoc = docWith([account({ id: 'acc_def', label: 'jeff', active: true, signInEndsAt: 1_900_000_000, signInEndsSoon: true })])
+    const row = await renderRow('acc_def')
+    expect(within(row).getByTestId('llm-ends-acc_def').textContent).toBe(`Sign in again by ${formatWhen(1_900_000_000)}`)
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for jeff' }))
+    const relogin = screen.getByRole('menuitem', { name: /^Sign in again/ })
+    expect(relogin.getAttribute('aria-disabled')).toBeNull()
+    cleanup()
+    resetLlmAccountsForTests()
+    listDoc = docWith([account({ id: 'acc_def', label: 'jeff', active: true, signInEndsAt: 1_900_000_000, signInEndsSoon: false })])
+    const quiet = await renderRow('acc_def')
+    expect(within(quiet).queryByTestId('llm-ends-acc_def')).toBeNull()
+  })
 })
+

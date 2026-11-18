@@ -55,6 +55,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Settings → Workspaces / Agents shows the agent's name.** The list and the page header show the name you gave the agent (the folder stays on the line under it), change the moment you rename it, and search finds an agent by that name.
 - **Settings → Tunnel is laid out in two columns,** so Policies and Advanced are visible without scrolling.
 - **K2 shows a Claude login whose sign-in time has ended as signed out, and offers to sign in again.**
+- **A warning before a Claude login's sign-in ends.** 7 days, 1 day and 2 hours before Claude ends a login's sign-in, and once it has, the server's owners get a pop-up with Sign in now; the token's row says "Sign in again by …", and `k2 llm tokens status` says when.
 
 ### Under the hood
 - **Updates the mail library to fix several upstream security issues** (lettre 0.11.24).

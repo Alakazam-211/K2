@@ -1956,6 +1956,7 @@ pub fn boot_import() {
             emit(Some(tool));
         }
     }
+    note_due_warnings(chrono::Utc::now().timestamp());
     // Claude items an earlier K2 (0.45.1/0.45.2) left unreadable by
     // `/usr/bin/security`: say so once at boot, with the fix. Settings →
     // LLMs and `k2 llm tokens list` show the same.
@@ -2001,6 +2002,7 @@ pub fn keep_warm_tick() -> Vec<wallet::WarmResult> {
     };
     let moved: Vec<wallet::Adopted> = res.iter().filter_map(|r| r.adopted.clone()).collect();
     notice_adopted(&moved);
+    note_due_warnings(chrono::Utc::now().timestamp());
     let entries = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2018,6 +2020,30 @@ pub fn keep_warm_tick() -> Vec<wallet::WarmResult> {
         emit(None);
     }
     res
+}
+
+/// A Claude sign-in warning became due (a step reached, or a sign-in
+/// ended) since the last pass: tell the clients, which ask
+/// `warnings` and show it to the server's owners. Which warnings each
+/// owner put away lives in the database ([`k2_core::llm_accounts::warnings`]),
+/// so a restart that tells again shows nothing already put away.
+pub(crate) fn note_due_warnings(now: i64) -> bool {
+    static SEEN: Mutex<Option<std::collections::HashSet<(String, String, i64)>>> = Mutex::new(None);
+    let due = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::llm_accounts::warnings::due(&conn, now).unwrap_or_default()
+    };
+    let keys: std::collections::HashSet<(String, String, i64)> = due.into_iter().map(|w| (w.account_id, w.step, w.epoch)).collect();
+    let mut seen = SEEN.lock().unwrap_or_else(|p| p.into_inner());
+    let fresh = keys.iter().any(|k| !seen.as_ref().is_some_and(|s| s.contains(k)));
+    *seen = Some(keys);
+    drop(seen);
+    if fresh {
+        k2_core::log_debug!("[llm-accounts] a Claude sign-in warning is due; telling the clients");
+        crate::session_events::emit_llm_accounts_changed(Some("claude"));
+    }
+    fresh
 }
 
 /// The idle tokens keep-warm also probes for usage. None with the switch on

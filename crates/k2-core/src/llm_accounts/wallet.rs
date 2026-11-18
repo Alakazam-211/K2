@@ -705,6 +705,16 @@ fn reconcile_live_locked(
     note_live_verdict(tool, matches!(v, identity::Verdict::Mismatch(..)));
     match v {
         identity::Verdict::Match => {
+            // When the live sign-in reaches its time limit (the warnings).
+            let ends = store::parse_meta(tool, &live).sign_in_ends_at;
+            if ends != owner.sign_in_ends_at {
+                update_meta(conn, &owner.id, &MetaUpdate { sign_in_ends_at: Some(ends), ..Default::default() })?;
+            }
+            // Signed in again in a terminal (`/login`) after it had ended: the
+            // token is signed in again.
+            if owner.state == state::NEEDS_LOGIN && owner.detail.as_deref().is_some_and(store::ClaudeEnded::said_in) {
+                update_meta(conn, &owner.id, &MetaUpdate { state: Some(state::SIGNED_IN.into()), detail: Some(None), ..Default::default() })?;
+            }
             let same = matches!(slots::read_slot(tool, &owner.id), Ok(Some(s)) if s == live);
             if mirror && !same && held != Some(owner.id.as_str()) && !slot_busy(conn, &owner.id)? {
                 let _slot = store::lock_slot(tool, &owner.id, LOCK_WAIT)?;
@@ -975,6 +985,7 @@ fn meta_update_from(m: &CredMeta, st: &str) -> MetaUpdate {
         org: m.org.clone(),
         plan: m.plan.clone(),
         expires_at: Some(m.expires_at),
+        sign_in_ends_at: Some(m.sign_in_ends_at),
         ..Default::default()
     }
 }
@@ -1178,11 +1189,12 @@ pub fn begin_relogin_settled(conn: &Connection, id: &str, by: Option<&str>) -> R
 fn begin_relogin_inner(conn: &Connection, id: &str) -> Result<Entry, WalletError> {
     let e = lookup(conn, None, id)?;
     let tool = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
-    if live_owner(conn, tool)?.as_deref() == Some(e.id.as_str()) && live_good(tool) {
+    if live_owner(conn, tool)?.as_deref() == Some(e.id.as_str()) && !live_may_sign_in_again(tool) {
         // Logging the active login in again belongs to the CLI itself
-        // (`/login`); K2 signs in into a wallet slot only. Once the live
-        // sign-in has ended (Claude's time limit), K2 signs it in again
-        // and the new one goes live ([`land_live`]).
+        // (`/login`); the wallet signs in into a slot only. Once the live
+        // sign-in has ended (Claude's time limit), or within the warning
+        // window before it does, the wallet signs it in again and the new
+        // one goes live ([`land_live`]).
         return Err(WalletError::ActiveLogin);
     }
     if e.is_api_key() {
@@ -1337,7 +1349,7 @@ pub fn finalize_login_with(conn: &Connection, id: &str, by: Option<&str>, read: 
             let is_live = live_owner(conn, tool)?.as_deref() == Some(m.id.as_str());
             // The live token whose live sign-in has ended (Claude's time
             // limit) takes the new one like an idle token, and it goes live.
-            let live_works = is_live && live_good(tool);
+            let live_works = is_live && !live_wants(tool, &fresh);
             if !slot_busy(conn, &m.id)? && (!is_live || !live_works || live_names(tool, &w.0)) {
                 if live_works {
                     store::set_aside_slot_cred(tool, &e.id, &fresh, "duplicate")?;
@@ -2350,7 +2362,7 @@ pub fn recheck(conn: &Connection, id: &str) -> Result<Entry, WalletError> {
 pub(crate) fn ended_detail(tool: Tool, e: &Entry, why: &store::ClaudeEnded, live: bool) -> String {
     if live && slot_good(tool, &e.id) {
         return format!(
-            "{} K2 still holds a good saved sign-in for this token: Apply saved sign-in puts it back (`k2 llm tokens switch {} \"{}\"`).",
+            "{} This token's own saved sign-in is still good: Apply saved sign-in puts it back (`k2 llm tokens switch {} \"{}\"`).",
             why.words(),
             tool.as_str(),
             e.label
@@ -2369,6 +2381,31 @@ pub fn live_good(tool: Tool) -> bool {
         Ok(Some(b)) => store::validate_cred(tool, &b).is_ok() && store::parse_meta(tool, &b).ended.is_none(),
         _ => false,
     }
+}
+
+/// When the live store's Claude sign-in reaches its time limit, if it says.
+fn live_ends_at(tool: Tool) -> Option<i64> {
+    store::read_live(tool).ok().flatten().and_then(|b| store::parse_meta(tool, &b).sign_in_ends_at)
+}
+
+/// Should `fresh`, a new sign-in of the token on record as live, replace
+/// the live store's? Yes when the live one is no use (ended, gone), or
+/// when it ends before `fresh` does (signed in again ahead of the time
+/// limit, after the warning).
+fn live_wants(tool: Tool, fresh: &[u8]) -> bool {
+    if !live_good(tool) {
+        return true;
+    }
+    match (live_ends_at(tool), store::parse_meta(tool, fresh).sign_in_ends_at) {
+        (Some(live), Some(new)) => new > live,
+        _ => false,
+    }
+}
+
+/// May the token on record as live be signed in again here? Once its
+/// live sign-in has ended, or within the warning window before it does.
+fn live_may_sign_in_again(tool: Tool) -> bool {
+    !live_good(tool) || live_ends_at(tool).is_some_and(|x| x - now() <= super::warnings::WARN_WITHIN_SECS)
 }
 
 /// Is token `id`'s own saved sign-in whole and not ended?
@@ -2391,19 +2428,23 @@ pub fn can_apply_saved(conn: &Connection, tool: Tool, id: &str) -> Result<bool, 
 
 /// A new sign-in just landed in token `id`'s slot. When `id` is the token
 /// on record as live and the live store holds no usable sign-in (Claude's
-/// time limit ended it, or it is gone), write it live: the CLIs read the
-/// live store, not the wallet. Claude's other keys stay as they are
-/// ([`store::write_live`]). A live sign-in that still works is never
-/// replaced here (the CLIs own its refresh). The caller holds the tool
-/// lock. `true` when it wrote.
+/// time limit ended it, or it is gone), or one that ends before this one
+/// ([`live_wants`]), write it live: the CLIs read the live store, not the
+/// wallet. Claude's other keys stay as they are ([`store::write_live`]).
+/// Otherwise a live sign-in that still works is never replaced here (the
+/// CLIs own its refresh). The caller holds the tool lock. `true` when it
+/// wrote.
 fn land_live(conn: &Connection, tool: Tool, id: &str) -> Result<bool, WalletError> {
-    if !tool.subscription_supported() || live_owner(conn, tool)?.as_deref() != Some(id) || live_good(tool) {
+    if !tool.subscription_supported() || live_owner(conn, tool)?.as_deref() != Some(id) {
         return Ok(false);
     }
     let Some(bytes) = slots::read_slot(tool, id)?.filter(|b| store::validate_cred(tool, b).is_ok() && store::parse_meta(tool, b).ended.is_none())
     else {
         return Ok(false);
     };
+    if !live_wants(tool, &bytes) {
+        return Ok(false);
+    }
     store::write_live(tool, &bytes)?;
     swap_in_profile(tool, id, None);
     clear_refusal(id);
@@ -2417,7 +2458,7 @@ fn land_live(conn: &Connection, tool: Tool, id: &str) -> Result<bool, WalletErro
 fn land_live_after_sign_in(conn: &Connection, tool: Tool, id: &str) -> Result<(), WalletError> {
     if let Err(err) = land_live(conn, tool, id) {
         crate::log_debug!("[llm-accounts] {}: new sign-in for {id} saved, not made live ({err})", tool.as_str());
-        let detail = format!("Saved, but K2 couldn't put it in {}'s own store ({err}). Use Apply saved sign-in to try again.", tool.display());
+        let detail = format!("Saved, but it couldn't be put in {}'s own store ({err}). Use Apply saved sign-in to try again.", tool.display());
         update_meta(conn, id, &MetaUpdate { detail: Some(Some(detail)), ..Default::default() })?;
     }
     Ok(())

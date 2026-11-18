@@ -53,6 +53,12 @@ pub const STORAGE: &str = "/cli/llm/accounts/storage";
 /// Flip it (`{"storage":"files"|"vault"}`): Owner or Admin, audited.
 pub const STORAGE_SET: &str = "/cli/llm/accounts/storage/set";
 
+/// The Claude sign-in warnings due for this caller (owner logins only;
+/// everyone else gets none): `{owner, warnings:[…]}`.
+pub const WARNINGS: &str = "/cli/llm/accounts/warnings";
+/// Put one away (`{id, step, epoch}`): "Later", or "Sign in now".
+pub const WARNINGS_DISMISS: &str = "/cli/llm/accounts/warnings/dismiss";
+
 /// The token one chat runs on, with its chip number
 /// ([`crate::llm_account_for`]).
 pub const FOR: &str = crate::llm_account_for::FOR;
@@ -60,11 +66,11 @@ pub const FOR: &str = crate::llm_account_for::FOR;
 pub const FOR_REFRESH: &str = crate::llm_account_for::FOR_REFRESH;
 
 /// Read routes (passports allowed).
-pub const READ_ROUTES: &[&str] = &[LIST, STATUS, USAGE, LOGIN_STATUS, PINS, FOR, STORAGE];
+pub const READ_ROUTES: &[&str] = &[LIST, STATUS, USAGE, LOGIN_STATUS, PINS, FOR, STORAGE, WARNINGS];
 /// POST-only routes (humans only).
 pub const POST_ROUTES: &[&str] = &[
     ADD, LOGIN, LOGIN_INPUT, LOGIN_CANCEL, SWITCH, NEXT, RENAME, REMOVE, REFRESH, PIN, UNPIN, ADD_KEY, CLEAR_DEFAULT,
-    FOR_REFRESH, STORAGE_SET,
+    FOR_REFRESH, STORAGE_SET, WARNINGS_DISMISS,
 ];
 
 /// Request bodies here are small JSON objects.
@@ -92,6 +98,18 @@ fn who(caller: &Caller) -> Option<Who> {
         Caller::Login { username } => Some(Who::Human { key: format!("login:{username}") }),
         Caller::Shell { .. } | Caller::Agent(_) => Some(Who::Passport),
         Caller::WrongCredential | Caller::Invalid => None,
+    }
+}
+
+/// The caller's key when it is one of the server's owners (the owner
+/// token, or an Owner login): the sign-in warnings are theirs. Admins,
+/// Members and agents get none.
+pub fn owner_key(caller: &Caller) -> Option<String> {
+    use k2_core::connect_users::Role;
+    match caller {
+        Caller::Owner => Some("owner-token".into()),
+        Caller::Login { username } if k2_core::connect_users::role_for_user(username) == Some(Role::Owner) => Some(format!("login:{username}")),
+        _ => None,
     }
 }
 
@@ -492,6 +510,10 @@ fn account_json(e: &Entry, active: bool, human: bool) -> Value {
         // Its live sign-in ended but its own saved one is good: one click
         // ("Apply saved sign-in", a switch to it) puts that back.
         "canApply": !api && e.state == state::NEEDS_LOGIN && can_apply(e),
+        // Claude: when its sign-in reaches its time limit, and whether that
+        // is within the warning window ("sign in again by …").
+        "signInEndsAt": e.sign_in_ends_at,
+        "signInEndsSoon": k2_core::llm_accounts::warnings::ends_soon(e, chrono::Utc::now().timestamp()),
         "email": if human { json!(e.email) } else { Value::Null },
         "org": if human { json!(e.org) } else { Value::Null },
         "plan": plan_for(e),
@@ -634,6 +656,10 @@ struct Body {
     clear_default: Option<bool>,
     /// `storage/set`: `files` or `vault`.
     storage: Option<String>,
+    /// `warnings/dismiss`: the step (`7d`, `1d`, `2h`, `ended`) and the
+    /// sign-in it was about.
+    step: Option<String>,
+    epoch: Option<i64>,
 }
 
 /// The conversation a chat pin follows: the body's `conversationId`, else
@@ -753,7 +779,39 @@ pub fn handle(
         audit("llm_accounts.storage_refused", key.as_deref().unwrap_or("-"), "admin_required", ingress);
         return refuse(403, "admin_required", STORAGE_ADMIN_REASON);
     }
+    if path == WARNINGS_DISMISS {
+        let Some(owner) = owner_key(&caller) else {
+            return refuse(403, "owner_only", "sign-in warnings are for the server's owners");
+        };
+        let b = match parse_body(body) {
+            Ok(b) => b,
+            Err(r) => return r,
+        };
+        let (Some(id), Some(step), Some(epoch)) = (b.id.as_deref().map(str::trim).filter(|s| !s.is_empty()), b.step.as_deref(), b.epoch) else {
+            return refuse(400, "bad_request", "id, step and epoch are required");
+        };
+        let now = chrono::Utc::now().timestamp();
+        return match with_conn(|conn| k2_core::llm_accounts::warnings::dismiss(conn, &owner, id, step, epoch, now)) {
+            Ok(()) => {
+                crate::session_events::emit_llm_accounts_changed(Some("claude"));
+                ok(json!({"dismissed": {"id": id, "step": step, "epoch": epoch}}))
+            }
+            Err(e) => wallet_err(e),
+        };
+    }
     match path {
+        WARNINGS => {
+            let owner = owner_key(&caller);
+            let now = chrono::Utc::now().timestamp();
+            let res = match owner.as_deref() {
+                Some(k) => with_conn(|conn| k2_core::llm_accounts::warnings::pending_for(conn, k, now)),
+                None => Ok(Vec::new()),
+            };
+            match res {
+                Ok(w) => ok(json!({"owner": owner.is_some(), "warnings": w})),
+                Err(e) => wallet_err(e),
+            }
+        }
         LIST => match list_doc(human, key.as_deref(), default_change_blocked(&caller)) {
             Ok(v) => ok(v),
             Err(e) => wallet_err(e),
@@ -1376,6 +1434,57 @@ mod tests {
             assert_eq!(v["canChangeDefault"], true, "{c:?}: {v}");
             assert!(v["changeDefaultReason"].is_null(), "{c:?}: {v}");
         }
+    }
+
+    /// The sign-in warning pop-up is for the server's owners only: the
+    /// owner token and Owner logins get it, and put it away each for
+    /// themselves; an Admin, a Member and agents get none and can't.
+    #[test]
+    fn sign_in_warnings_are_served_to_owners_only_and_put_away_per_owner() {
+        use k2_core::connect_users::Role;
+        let _home = crate::test_support::TempHome::new();
+        clear_claude_rows();
+        let member = login("llmwarn_member", Role::Member);
+        let admin = login("llmwarn_admin", Role::Admin);
+        let owner_login = login("llmwarn_owner", Role::Owner);
+        let now = chrono::Utc::now().timestamp();
+        let ends = now + 3600;
+        let id = with_conn(|conn| {
+            let e = wallet_core::create(conn, Tool::Claude, "JeffsToken", None).expect("create");
+            wallet_core::update_meta(conn, &e.id, &wallet_core::MetaUpdate {
+                state: Some(state::SIGNED_IN.into()),
+                sign_in_ends_at: Some(Some(ends)),
+                ..Default::default()
+            })
+            .expect("meta");
+            e.id
+        });
+        let steps = |c: Caller| -> Vec<(String, String)> {
+            let (st, v) = call(WARNINGS, c, "");
+            assert_eq!(st, "200 OK", "{v}");
+            v["warnings"].as_array().expect("warnings").iter().map(|w| (w["label"].as_str().unwrap().to_string(), w["step"].as_str().unwrap().to_string())).collect()
+        };
+        for c in [Caller::Owner, owner_login.clone()] {
+            assert_eq!(steps(c), vec![("JeffsToken".to_string(), "2h".to_string())]);
+        }
+        for c in [admin.clone(), member.clone(), agent()] {
+            let (_, v) = call(WARNINGS, c.clone(), "");
+            assert_eq!(v["owner"], false, "{c:?}: {v}");
+            assert_eq!(v["warnings"], json!([]), "{c:?}: {v}");
+        }
+        let body = format!(r#"{{"id":"{id}","step":"2h","epoch":{ends}}}"#);
+        for c in [admin, member] {
+            let (st, v) = call(WARNINGS_DISMISS, c, &body);
+            assert_eq!(st, "403 Forbidden", "{v}");
+            assert_eq!(v["error"]["code"], "owner_only");
+        }
+        let (st, v) = call(WARNINGS_DISMISS, Caller::Owner, &body);
+        assert_eq!(st, "200 OK", "{v}");
+        assert!(steps(Caller::Owner).is_empty(), "put away for the owner token");
+        assert_eq!(steps(owner_login).len(), 1, "still there for the other owner");
+        let (st, _) = call(WARNINGS_DISMISS, Caller::Owner, r#"{"id":"x"}"#);
+        assert_eq!(st, "400 Bad Request");
+        clear_claude_rows();
     }
 
     #[test]

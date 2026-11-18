@@ -320,7 +320,8 @@ function AccountRow({
   // Any subscription that isn't the server default can be signed in
   // again (same flow as `k2 llm tokens login`); the default too once its
   // sign-in has ended (the new one goes live).
-  const canLoginAgain = !apiKey && (account.active ? needsLogin : signedIn || needsLogin)
+  const endsSoon = signedIn && account.signInEndsSoon === true
+  const canLoginAgain = !apiKey && (account.active ? needsLogin || endsSoon : signedIn || needsLogin)
   const canApply = account.active && needsLogin && account.canApply === true
 
   const refresh = (): void => {
@@ -367,7 +368,7 @@ function AccountRow({
       id: 'relogin',
       label: 'Sign in again…',
       disabled: !canLoginAgain || pinnedBlock,
-      hint: account.active && !needsLogin ? ACTIVE_RELOGIN_HINT : pinnedBlock ? PINNED_SWITCH_REASON : undefined,
+      hint: account.active && !needsLogin && !endsSoon ? ACTIVE_RELOGIN_HINT : pinnedBlock ? PINNED_SWITCH_REASON : undefined,
       onSelect: () => actions.onLoginAgain(account),
     })
   }
@@ -419,6 +420,15 @@ function AccountRow({
           {signedIn ? null : (
             <Tag tone={needsLogin ? 'warn' : 'muted'} data-testid={`llm-state-${account.id}`}>
               {STATE_LABELS[account.state] ?? account.state}
+            </Tag>
+          )}
+          {signedIn && account.signInEndsSoon === true && typeof account.signInEndsAt === 'number' && (
+            <Tag
+              tone="warn"
+              title="Claude ends each sign-in after a while. Sign this token in again before then, or agents using it stop."
+              data-testid={`llm-ends-${account.id}`}
+            >
+              Sign in again by {formatWhen(account.signInEndsAt)}
             </Tag>
           )}
           {account.addedOutsideK2 && (
@@ -969,7 +979,7 @@ function removeText(tool: LlmTool, a: LlmAccount): string {
     return `It’s the ${tool.display} server default. ${noDefaultText(tool)} To use it again, paste the token again.`
   }
   if (a.active) {
-    return `It’s the ${tool.display} server default and its sign-in has ended. ${tool.display} then has no server default; K2 leaves ${tool.display}’s own sign-in file as it is. Sign in again with Add a token.`
+    return `It’s the ${tool.display} server default and its sign-in has ended. ${tool.display} then has no server default, and ${tool.display}’s own sign-in file is left as it is. Sign in again with Add a token.`
   }
   return a.kind === 'api_key'
     ? `K2 stops using this ${tool.display} API token on this server. To use it again, paste the token again.`

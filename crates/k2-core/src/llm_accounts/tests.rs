@@ -373,6 +373,7 @@ fn warm_due_rules() {
         usage_json: None,
         usage_checked_at: None,
         removed_at: None,
+        sign_in_ends_at: None,
     };
     let fresh = CredMeta { present: true, has_refresh: true, expires_at: Some(1_000 + 7200), ..Default::default() };
     assert!(!wallet::warm_due(Tool::Claude, &fresh, &e, 1_100));

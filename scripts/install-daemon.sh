@@ -11,7 +11,7 @@
 # checks sha256, drops it into a bin dir, and writes a supervisor unit
 # (systemd on Linux, launchd on macOS) so a crash respawns the daemon.
 #
-# Linux, 0.46.15 and newer: the k5 command's program (k5-cli-linux-<arch>)
+# Linux, 0.46.16 and newer: the k5 command's program (k5-cli-linux-<arch>)
 # goes in beside the daemon, verified the same way (its .sig2, one of the
 # K2 update keys, the signed comment naming that asset and version). A
 # missing or bad k5 program or signature stops the install before anything
@@ -49,7 +49,7 @@ K2_FIRST_U2_VERSION="0.46.6"
 # The first release whose k5 program (k5-cli-linux-<arch>) carries a .sig2:
 # from it on, Linux installs need both and refuse without them. Older ones
 # ship no signed k5 program; the k2 command runs the script there.
-K2_FIRST_K5_VERSION="0.46.15"
+K2_FIRST_K5_VERSION="0.46.16"
 
 # K2_* is canonical; K2SO_* still honored through the 0.x transition.
 K2_VERSION="${K2_VERSION:-${K2SO_VERSION:-}}"

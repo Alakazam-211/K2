@@ -12,11 +12,14 @@
 //   - Its kind sets one tone (`--notice-tone`): info is muted; delivery (a
 //     message that didn't arrive) is the status warning colour, with a
 //     warning icon, never the error red; action is the accent.
-//   - Its buttons are the notice's own actions: a route posts its body to
-//     the Thread's server (busy while it goes, then a quiet "Sent again"
-//     with a tick, or the reason in muted words); open_terminal puts the
-//     agent's terminal on screen. A button this view can't carry out (no
-//     server here, no terminal here) isn't drawn.
+//   - Its buttons are the notice's own actions: Send again posts its body
+//     to the Thread's server (busy while it goes, then a quiet "Sent again"
+//     with a tick, "by <name>" when someone else pressed it, from the
+//     notice's `doneAt` and `doneBy` so a reload says so too; a refusal
+//     says why in muted words); open_terminal puts the terminal of the
+//     agent it names on screen. A button this view can't carry out (no
+//     server here, no terminal here) isn't drawn, and an App guest sees
+//     none (they are for people).
 //   - The row takes focus (a note named by its label and words), and its
 //     buttons follow it in the tab order.
 
@@ -25,12 +28,14 @@ import { CheckIcon, TriangleAlertIcon } from 'lucide-react'
 import k2Logo from '@/assets/k2-logo.png'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
+import { scopeMayWrite } from '@/kessel/server-scope'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorText } from '@/lib/daemon-error'
-import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
+import { httpCodeOf, httpStatusOf } from '@/lib/daemon-http-error'
+import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { CHAMFER_CUT, CHAMFER_SCOPE, chamferCutFor, chamferPolygon, chamferVars } from './chamfer'
 import { useThreadAttachmentSource } from './ThreadImageObjects'
-import type { SystemNotice, SystemNoticeAction, SystemNoticeKind } from './systemNotice'
+import type { SystemNotice, SystemNoticeAction, SystemNoticeCall, SystemNoticeDone, SystemNoticeKind } from './systemNotice'
 
 /** Which look the row wears: hairline rules beside the label, or a quiet
  *  tinted band behind the row. */
@@ -45,21 +50,6 @@ export const SYSTEM_NOTICE_TONE: Record<SystemNoticeKind, string> = {
   info: 'var(--zen-text-muted)',
   delivery: 'var(--color-status-warn-text, var(--color-status-warn))',
   action: 'var(--zen-focus-ring, var(--zen-accent))',
-}
-
-/** What a posting button says while it goes and once it went, by route. */
-const POST_WORDS: Record<string, { busy: string; done: string }> = {
-  'threads/resend': { busy: 'Sending…', done: 'Sent again' },
-}
-const DEFAULT_POST_WORDS = { busy: 'Working…', done: 'Done' }
-export const postWords = (route: string): { busy: string; done: string } => POST_WORDS[route] ?? DEFAULT_POST_WORDS
-
-/** Buttons that went through, by notice and action, so a row drawn again
- *  (scrolled away and back) still says so. */
-const doneActions = new Set<string>()
-
-export function resetSystemNoticeDoneForTests(): void {
-  doneActions.clear()
 }
 
 const ROW = '[data-thread-system-notice]'
@@ -84,7 +74,7 @@ ${ROW} [data-notice-actions] { display: flex; flex-wrap: wrap; align-items: cent
 ${ROW} [data-notice-action] { border-radius: calc(var(--zen-radius) / 2); }
 ${ROW} [data-notice-action]:focus-visible { outline: 2px solid var(--zen-focus-ring, var(--zen-accent)); outline-offset: 2px; }
 ${ROW} [data-notice-action][aria-busy="true"] { cursor: progress; }
-${ROW} [data-notice-done] { display: inline-flex; align-items: center; gap: 4px; font-size: var(--zen-type-sm, 11px); color: var(--zen-text-muted); }
+${ROW} [data-notice-done], ${ROW} [data-notice-refused] { display: inline-flex; align-items: center; gap: 4px; font-size: var(--zen-type-sm, 11px); color: var(--zen-text-muted); }
 ${ROW} [data-notice-tick] { width: 12px; height: 12px; color: var(--zen-ok, currentColor); }
 ${ROW} [data-notice-error] { flex-basis: 100%; font-size: var(--zen-type-sm, 11px); }
 ${ROW}[data-notice-look="band"] { padding: 8px 14px 10px; background: ${tint(8)}; border-radius: var(--zen-radius); }
@@ -104,73 +94,164 @@ ${TERMINAL}[data-notice-look="band"][data-notice-kind="info"]::before { backgrou
 `
 
 const ACTION_BUTTON: CSSProperties = { minHeight: 24 }
+const MUTED: CSSProperties = { color: 'var(--zen-text-muted)' }
 
-/** One button: posts, or opens the terminal. Null when this view can't. */
-function NoticeActionButton({
-  docId,
+const fold = (s: string): string => s.trim().toLowerCase()
+
+/** Send again's own words: busy while it goes, a quiet done line after. */
+export const RESEND_WORDS = { busy: 'Sending…', done: 'Sent again' } as const
+
+/** What a refused Send again says (the daemon's 409 codes), in plain muted
+ *  words in place of the button: pressing again would change nothing. */
+export const RESEND_REFUSAL_WORDS: Readonly<Record<string, string>> = {
+  already_resent: 'Already sent again.',
+  source_deleted: 'The original message was deleted.',
+  not_resendable: 'This one can’t be sent again.',
+}
+
+/** "Sent again", with who pressed it when that wasn't you. */
+export function resendDoneText(done: SystemNoticeDone | 'you', viewer: ThreadViewer | null): string {
+  const who = done === 'you' || !done.by ? null : cardAnswererLabel(done.by, viewer)
+  return who && who !== 'You' ? `${RESEND_WORDS.done} by ${who}` : RESEND_WORDS.done
+}
+
+/** Send again: posts its body to its route on the Thread's server, once.
+ *  Done (the notice's `doneAt`, on reload too) draws the quiet line. Null
+ *  where this view can't post there. */
+function NoticePostButton({
   action,
+  call,
   primary,
+  viewer,
 }: {
-  docId: string
   action: SystemNoticeAction
+  call: Extract<SystemNoticeCall, { kind: 'post' }>
   primary: boolean
+  viewer: ThreadViewer | null
 }): JSX.Element | null {
   const source = useThreadAttachmentSource()
-  const chrome = useSessionViewChrome()
-  const key = `${docId}\u0000${action.id}`
-  const [busy, setBusy] = useState(false)
-  const [done, setDone] = useState(() => doneActions.has(key))
-  const [error, setError] = useState<string | null>(null)
-  const call = action.call
   const scope = source?.scope ?? null
-  const openTerminal = chrome?.openTerminal
+  const [busy, setBusy] = useState(false)
+  // This press went through: drawn done until the Thread's copy of the
+  // notice says so (its frame carries `doneAt`).
+  const [pressed, setPressed] = useState(false)
+  const [refused, setRefused] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const run = useCallback(async () => {
-    if (call.kind !== 'post' || !scope || busy) return
+    if (!scope || busy) return
     setBusy(true)
     setError(null)
     try {
       await daemonCliPost(scope, call.route, call.body)
-      doneActions.add(key)
-      setDone(true)
+      setPressed(true)
     } catch (err) {
-      console.warn('[thread] notice action failed:', err)
-      setError(daemonErrorText(err) || 'K2 couldn’t do that.')
+      const words = httpStatusOf(err) === 409 ? RESEND_REFUSAL_WORDS[httpCodeOf(err) ?? ''] : undefined
+      if (words) setRefused(words)
+      else {
+        console.warn('[thread] notice action failed:', err)
+        setError(daemonErrorText(err) || 'K2 couldn’t do that.')
+      }
     } finally {
       setBusy(false)
     }
-  }, [call, scope, busy, key])
-  if (call.kind === 'open_terminal') {
-    if (!openTerminal) return null
-    return (
-      <NoticeButton label={action.label} testId={`notice-action-${action.id}`} primary={primary} onClick={openTerminal} />
-    )
-  }
-  if (!scope) return null
-  const words = postWords(call.route)
-  if (done) {
+  }, [call, scope, busy])
+  if (!scope || !scopeMayWrite(scope, call.route)) return null
+  if (action.done || pressed) {
     return (
       <span data-notice-done="" role="status">
+        {resendDoneText(action.done ?? 'you', viewer)}
         <CheckIcon data-notice-tick="" aria-hidden="true" strokeWidth={2.5} />
-        {words.done}
+      </span>
+    )
+  }
+  if (refused) {
+    return (
+      <span data-notice-refused="" role="status" style={MUTED}>
+        {refused}
       </span>
     )
   }
   return (
     <>
       <NoticeButton
-        label={busy ? words.busy : action.label}
+        label={busy ? RESEND_WORDS.busy : action.label}
         testId={`notice-action-${action.id}`}
         primary={primary}
         busy={busy}
         onClick={() => void run()}
       />
       {error && (
-        <span data-notice-error="" role="alert" style={{ color: 'var(--zen-text-muted)' }}>
+        <span data-notice-error="" role="alert" style={MUTED}>
           {error}
         </span>
       )}
     </>
   )
+}
+
+/** What Open its terminal says when the window's server has no agent at
+ *  that address. */
+export const TERMINAL_NOT_FOUND_WORDS = 'K2 couldn’t find that agent on this server.'
+
+/** Open its terminal: the agent at the action's `workspace`. This Thread's
+ *  own agent opens in this view (the session chrome); an agent on the
+ *  window's server (another workspace, or a view with no terminal of its
+ *  own) opens on the Agents page in its Terminal view. Null where neither
+ *  can. */
+function NoticeTerminalButton({
+  action,
+  workspace,
+  primary,
+}: {
+  action: SystemNoticeAction
+  workspace: string | null
+  primary: boolean
+}): JSX.Element | null {
+  const source = useThreadAttachmentSource()
+  const chrome = useSessionViewChrome()
+  const [missing, setMissing] = useState(false)
+  const here = !workspace || (!!source?.addr && fold(source.addr) === fold(workspace))
+  const openHere = here ? chrome?.openTerminal : undefined
+  const addr = workspace ?? source?.addr ?? ''
+  const onWindowServer = !!addr && !!source && source.scope.isWindowHost()
+  const openThere = useCallback(() => {
+    setMissing(false)
+    // Loaded on press: the Agents page and its stores stay out of the Thread.
+    void import('@/lib/open-workspace-thread')
+      .then((m) => m.openAgentTerminal(addr))
+      .then((ok) => setMissing(!ok))
+      .catch((err: unknown) => {
+        console.warn('[thread] open terminal failed:', err)
+        setMissing(true)
+      })
+  }, [addr])
+  const open = openHere ?? (onWindowServer ? openThere : null)
+  if (!open) return null
+  return (
+    <>
+      <NoticeButton label={action.label} testId={`notice-action-${action.id}`} primary={primary} onClick={open} />
+      {missing && (
+        <span data-notice-error="" role="alert" style={MUTED}>
+          {TERMINAL_NOT_FOUND_WORDS}
+        </span>
+      )}
+    </>
+  )
+}
+
+/** One button: posts, or opens a terminal. Null when this view can't. */
+function NoticeActionButton({
+  action,
+  primary,
+  viewer,
+}: {
+  action: SystemNoticeAction
+  primary: boolean
+  viewer: ThreadViewer | null
+}): JSX.Element | null {
+  const call = action.call
+  if (call.kind === 'open_terminal') return <NoticeTerminalButton action={action} workspace={call.workspace} primary={primary} />
+  return <NoticePostButton action={action} call={call} primary={primary} viewer={viewer} />
 }
 
 /** The Thread cards' button (chamfered in Terminal, rounded in Glass). */
@@ -212,20 +293,23 @@ function NoticeButton({
   )
 }
 
-/** The notice row (inside the Thread's row for `item`). */
+/** The notice row (inside the Thread's row for its post). */
 export function ThreadSystemNoticeRow({
-  item,
   notice,
+  viewer = null,
   look = SYSTEM_NOTICE_LOOK,
 }: {
-  item: OverlayThreadItem
   notice: SystemNotice
+  /** Who is looking: an App guest sees the row without its buttons (they
+   *  are for people; the server refuses a guest's press too). */
+  viewer?: ThreadViewer | null
   look?: SystemNoticeLook
 }): JSX.Element {
   const id = useId()
   const labelId = `${id}-label`
   const textId = `${id}-text`
-  const firstPost = notice.actions.findIndex((a) => a.call.kind === 'post')
+  const actions = viewer?.guest ? [] : notice.actions
+  const firstPost = actions.findIndex((a) => a.call.kind === 'post' && !a.done)
   return (
     <div
       data-testid="thread-system-notice"
@@ -252,10 +336,10 @@ export function ThreadSystemNoticeRow({
           <ChatMessageBody text={notice.text} style={{ color: 'inherit', fontSize: 'inherit' }} />
         </div>
       </div>
-      {notice.actions.length > 0 && (
+      {actions.length > 0 && (
         <div data-notice-actions="">
-          {notice.actions.map((a, i) => (
-            <NoticeActionButton key={a.id} docId={item.id} action={a} primary={i === firstPost} />
+          {actions.map((a, i) => (
+            <NoticeActionButton key={a.id} action={a} primary={i === firstPost} viewer={viewer} />
           ))}
         </div>
       )}

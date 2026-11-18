@@ -49,6 +49,12 @@ export interface ThreadViewer {
   principal: string
   /** When `principal` is `owner`: the Connect logins that are the owner too. */
   aliases: readonly string[]
+  /** An App guest (signed in with an App's pass, not a login on this
+   *  server). Steps that are for people only, like Send again on K2's
+   *  notices, aren't offered. This client signs in as the owner or a
+   *  Connect login, so its own viewer never sets it; a view that draws a
+   *  Thread for an App guest does. */
+  guest?: boolean
 }
 
 export const OWNER_VIEWER: ThreadViewer = Object.freeze({ principal: 'owner', aliases: Object.freeze([]) as readonly string[] })
@@ -74,13 +80,16 @@ export function isAgentThreadAuthor(author: ThreadAuthor | null): boolean {
   return author?.kind === AGENT_AUTHOR_KIND
 }
 
-/** K2's own notice (`{kind: "system"}`, no login). Only the daemon sets it:
- *  it strips the field from every person's, agent's and guest's post. */
+/** K2's own line (thread-system-notice-v1: `{kind: "system", login:
+ *  "k2"}`). Only the daemon sets it: every post door refuses or strips it
+ *  on a person's, agent's or guest's post. */
 export const SYSTEM_AUTHOR_KIND = 'system'
 
-/** `doc.author` on one of K2's own notices. */
+/** `doc.author` on one of K2's own lines. */
 export interface SystemThreadAuthor {
   kind: typeof SYSTEM_AUTHOR_KIND
+  /** `k2`. */
+  login?: string
 }
 
 /** Is `raw` (a doc's `author`, as sent) K2's own stamp? The exact kind,
@@ -88,6 +97,12 @@ export interface SystemThreadAuthor {
 export function isSystemThreadAuthor(raw: unknown): raw is SystemThreadAuthor {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false
   return (raw as Record<string, unknown>).kind === SYSTEM_AUTHOR_KIND
+}
+
+/** K2's stamp as a doc carries it: the kind, and its login when sent. */
+export function systemAuthorOf(raw: SystemThreadAuthor): SystemThreadAuthor {
+  const login = typeof raw.login === 'string' ? raw.login.trim() : ''
+  return login ? { kind: SYSTEM_AUTHOR_KIND, login } : { kind: SYSTEM_AUTHOR_KIND }
 }
 
 /** A person's post (a person, an app guest, an imported person): a

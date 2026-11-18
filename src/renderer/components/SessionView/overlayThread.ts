@@ -9,7 +9,7 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 import { httpCodeOf, httpStatusOf } from '@/lib/daemon-http-error'
 import { threadAttachmentRefusalText } from '@/lib/thread-compose-attachments'
-import { isSystemThreadAuthor, parseThreadAuthor, SYSTEM_AUTHOR_KIND, type SystemThreadAuthor, type ThreadAuthor } from '@/lib/thread-viewer'
+import { isSystemThreadAuthor, parseThreadAuthor, systemAuthorOf, type SystemThreadAuthor, type ThreadAuthor } from '@/lib/thread-viewer'
 import {
   kickOutbox,
   newClientMsgId,
@@ -69,7 +69,7 @@ export const OVERLAY_SEARCH_PAGE_SIZE = 500
  *  bubble). */
 type DocExtras = Pick<
   OverlayDoc,
-  'widget' | 'author' | 'mine' | 'design' | 'attachments' | 'context' | 'stash' | 'clientMsgId' | 'deleted' | 'deletedAt' | 'deletedBy'
+  'widget' | 'author' | 'mine' | 'design' | 'attachments' | 'context' | 'stash' | 'clientMsgId' | 'deleted' | 'deletedAt' | 'deletedBy' | 'systemNotice'
 >
 function docExtras(src: Record<string, unknown>): DocExtras {
   const out: DocExtras = {}
@@ -92,10 +92,12 @@ function docExtras(src: Record<string, unknown>): DocExtras {
       out.widget = { widget: o.widget, garden: o.garden }
     }
   }
-  // K2's own notice: `{kind: "system"}` has no login, so it is carried as
-  // sent (the socket's copy is the same) and drawn as a notice row.
-  const author: OverlayDoc['author'] = isSystemThreadAuthor(src.author) ? { kind: SYSTEM_AUTHOR_KIND } : parseThreadAuthor(src.author)
+  // K2's own line (thread-system-notice-v1): the `system` stamp, carried
+  // as sent (`login` is `k2`), and its `systemNotice` (read by
+  // components/Thread/systemNotice).
+  const author: OverlayDoc['author'] = isSystemThreadAuthor(src.author) ? systemAuthorOf(src.author) : parseThreadAuthor(src.author)
   if (author) out.author = author
+  if (src.systemNotice && typeof src.systemNotice === 'object' && !Array.isArray(src.systemNotice)) out.systemNotice = src.systemNotice
   const design = coerceDesign(src.design)
   if (design) out.design = design
   const attachments = coerceThreadFileObjects(src.attachments)
@@ -423,6 +425,10 @@ export interface OverlayDoc {
   changes?: ThreadChangesDoc | null
   /** 0.46.11: a mail notice, drawn by NoticeCard as plain text. */
   notice?: unknown
+  /** thread-system-notice-v1 (0.46.15): on K2's own lines (with the
+   *  `system` author): `{kind, code, actions?}`, read only by
+   *  `parseSystemNotice` (components/Thread/systemNotice). */
+  systemNotice?: unknown
   /** Kind `approval` only (signed approvals S1): ids and state, never the
    *  payload. Drawn read-only by ApprovalCard (coerceApproval). */
   approval?: unknown

@@ -1,12 +1,16 @@
 // Open a workspace's Chat tab in the Thread view, on the window's server:
 // Kessel right after it's made, and Kessel again when the person starts hiring
 // their Chief of Staff (prd-setup-checklist-v1 §10, `kessel-first-run-contract.md`).
+// `openWorkspaceView` opens it in another view the same way, and
+// `openAgentTerminal` opens an agent's terminal by its address (a K2
+// notice's "Open its terminal" on another workspace's agent).
 //
 // The Thread is asked for explicitly (`stores/session-view-request.ts`), so
 // this client's "New agents open in" choice (`k2.newAgentView`) doesn't
 // apply here. Settings closes, the Agents page selects the workspace, and
 // once its tabs show, the pinned Chat tab is made the active tab.
 
+import type { SessionViewTab } from '@/components/SessionView/sessionViewTab'
 import { usePageViewStore } from '@/stores/page-view'
 import { openOnAgentsPage } from '@/lib/page-selection'
 import { useProjectsStore } from '@/stores/projects'
@@ -56,9 +60,15 @@ function focusChatTabWhenShown(projectId: string, timeoutMs: number): Promise<bo
 /** Open `projectId` (a `projects.id`) on the Agents page with its Chat tab
  *  in the Thread view. Resolves false when this window's server doesn't
  *  list that workspace even after a fresh read. */
-export async function openWorkspaceThread(projectId: string): Promise<boolean> {
+export function openWorkspaceThread(projectId: string): Promise<boolean> {
+  return openWorkspaceView(projectId, 'thread')
+}
+
+/** Open `projectId`'s Chat tab in `view` (a K2 notice's "Open its
+ *  terminal" asks for `terminal`), as {@link openWorkspaceThread} does. */
+export async function openWorkspaceView(projectId: string, view: SessionViewTab): Promise<boolean> {
   if (!projectId) return false
-  requestSessionView(projectId, 'thread')
+  requestSessionView(projectId, view)
   useSettingsStore.getState().closeSettings()
   const find = () => useProjectsStore.getState().projects.find((p) => p.id === projectId)
   let project = find()
@@ -72,4 +82,19 @@ export async function openWorkspaceThread(projectId: string): Promise<boolean> {
   }
   await focusChatTabWhenShown(project.id, CHAT_TAB_WAIT_MS)
   return true
+}
+
+/** Open the terminal of the agent at `addr` (its workspace's address) on
+ *  the window's server: a K2 notice's "Open its terminal". Resolves false
+ *  when no workspace there has that address, even after a fresh read. */
+export async function openAgentTerminal(addr: string): Promise<boolean> {
+  const want = addr.trim().toLowerCase()
+  if (!want) return false
+  const find = () => useProjectsStore.getState().projects.find((p) => (p.handle ?? '').trim().toLowerCase() === want)
+  let project = find()
+  if (!project) {
+    await useProjectsStore.getState().fetchProjects()
+    project = find()
+  }
+  return project ? openWorkspaceView(project.id, 'terminal') : false
 }

@@ -137,6 +137,13 @@ export const REPORTED_FEATURES = {
    *  agent). The renderer reads both through `isAgentThreadPost` /
    *  `isPersonThreadPost` (lib/thread-viewer), so it needs no gate. */
   'thread-author-agent-v1': 'thread-author-agent-v1',
+  /** thread-system-notice-v1 (0.46.15): K2's own Thread lines carry
+   *  `author: {kind: 'system', login: 'k2'}`, `from: 'k2'` and
+   *  `systemNotice: {kind, code, actions?}`, and `POST /cli/thread/resend
+   *  {thread, doc}` is Send again on a delivery notice. With it, those
+   *  lines draw as K2's system rows (`components/Thread/systemNotice`);
+   *  without it, every post stays a bubble. */
+  'thread-system-notice-v1': 'thread-system-notice-v1',
   /** thread-delta-v1 (0.46.1): `GET /cli/thread?after_seq=N` answers the
    *  rows after N plus `changed` (rows at or below N rewritten in place:
    *  cards, deletes) and `removed`. With it, a Thread view re-syncs on

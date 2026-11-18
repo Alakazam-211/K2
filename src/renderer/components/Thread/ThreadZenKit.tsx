@@ -60,7 +60,7 @@ import {
 
 import { THREAD_JUMP_PILL_CSS } from './ThreadJumpPill'
 import { THREAD_SYSTEM_NOTICE_CSS, ThreadSystemNoticeRow } from './ThreadSystemNotice'
-import { parseSystemNotice } from './systemNotice'
+import { parseSystemNotice, SYSTEM_NOTICE_FEATURE } from './systemNotice'
 import { FOOTER_BLUR_LAYERS, FOOTER_TINT_STOPS, FOOTER_TINT_STOPS_OPAQUE } from '@/components/ui/scrollEdgeLayers'
 import {
   CHAMFER_CUT,
@@ -738,9 +738,10 @@ export const ThreadBubble = memo(function ThreadBubble({
       </div>
     )
   }
-  // K2's own notice (the daemon's system stamp, never the words): a row
-  // across the column, not the agent's bubble. No picture, name or menu.
-  const system = parseSystemNotice(item)
+  // K2's own notice (the daemon's system stamp and `systemNotice`, never
+  // the words), from a server that says it posts them: a row across the
+  // column, not the agent's bubble. No picture, name or menu.
+  const system = source?.scope.serverSupports(SYSTEM_NOTICE_FEATURE) ? parseSystemNotice(item) : null
   if (system) {
     return (
       <div
@@ -752,7 +753,7 @@ export const ThreadBubble = memo(function ThreadBubble({
         data-zen-message-still={still ? '' : undefined}
         style={SYSTEM_ROW_STYLE}
       >
-        <ThreadSystemNoticeRow item={item} notice={system} />
+        <ThreadSystemNoticeRow notice={system} viewer={viewer} />
       </div>
     )
   }

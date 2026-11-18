@@ -3,7 +3,9 @@
 // Opening a workspace's Chat tab in the Thread view (Kessel): the Thread is asked
 // for explicitly, Settings closes, the Agents page selects the workspace
 // (after a fresh read when it isn't listed yet), and the pinned Chat tab
-// becomes the active tab once the workspace's tabs show.
+// becomes the active tab once the workspace's tabs show. A K2 notice's
+// "Open its terminal" opens an agent by its address the same way, in the
+// Terminal view.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StoreApi } from 'zustand'
@@ -15,7 +17,7 @@ const h = vi.hoisted(() => ({
   closeSettings: vi.fn(),
   openOnAgentsPage: vi.fn(),
   fetchProjects: vi.fn(async () => {}),
-  projects: [] as Array<{ id: string; workspaces: Array<{ id: string }> }>,
+  projects: [] as Array<{ id: string; handle?: string; workspaces: Array<{ id: string }> }>,
   activeProjectId: null as string | null,
   page: 'home',
 }))
@@ -51,7 +53,7 @@ vi.mock('@/stores/tabs', async () => {
   }
 })
 
-import { CHAT_TAB_WAIT_MS, openWorkspaceThread } from './open-workspace-thread'
+import { CHAT_TAB_WAIT_MS, openAgentTerminal, openWorkspaceThread } from './open-workspace-thread'
 import { useSessionViewRequestStore } from '@/stores/session-view-request'
 
 const tabs = (): StoreApi<TabsState> => tabsStore.ref as StoreApi<TabsState>
@@ -121,5 +123,29 @@ describe('openWorkspaceThread', () => {
     await openWorkspaceThread('ws-kessel')
     expect(h.openOnAgentsPage).not.toHaveBeenCalled()
     expect(tabs().getState().activeTabId).toBe('chat-1')
+  })
+})
+
+describe('openAgentTerminal', () => {
+  it("opens the workspace with that address in the Terminal view", async () => {
+    h.projects = [
+      { id: 'ws-kessel', handle: 'kessel', workspaces: [{ id: 'w1' }] },
+      { id: 'ws-ledger', handle: 'ledger', workspaces: [{ id: 'w2' }] },
+    ]
+    const p = openAgentTerminal(' Ledger ')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useSessionViewRequestStore.getState().pending).toMatchObject({ projectId: 'ws-ledger', view: 'terminal' })
+    expect(h.openOnAgentsPage).toHaveBeenCalledWith('ws-ledger', 'w2')
+    await vi.advanceTimersByTimeAsync(CHAT_TAB_WAIT_MS + 1)
+    await expect(p).resolves.toBe(true)
+  })
+
+  it('reads the list again, then opens nothing for an address no workspace has', async () => {
+    h.projects = [{ id: 'ws-kessel', handle: 'kessel', workspaces: [{ id: 'w1' }] }]
+    await expect(openAgentTerminal('gone')).resolves.toBe(false)
+    expect(h.fetchProjects).toHaveBeenCalledTimes(1)
+    expect(h.openOnAgentsPage).not.toHaveBeenCalled()
+    expect(useSessionViewRequestStore.getState().pending).toBeNull()
+    await expect(openAgentTerminal('  ')).resolves.toBe(false)
   })
 })

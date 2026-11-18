@@ -2,39 +2,72 @@
 // K2's own notices in an agent's Thread draw as system rows, so it is plain
 // they come from K2 and not the agent:
 //
-//   1. A post stamped `author: {kind: "system"}` is a centred, full-width
-//      row: no bubble, no picture, no speaker name; a small K2 mark and
-//      "K2 · system"; the words without their leading "K2: ".
+//   1. A post stamped `author: {kind: "system"}` with a `systemNotice`, from
+//      a server that reports `thread-system-notice-v1`, is a centred,
+//      full-width row: no bubble, no picture, no speaker name; a small K2
+//      mark and "K2 · system"; the words without their leading "K2: ".
+//      Without the key, the same post stays a bubble.
 //   2. Its kind sets its tone: info is neutral, delivery wears the warning
 //      tone with a warning icon (never the error red), action has buttons.
-//   3. Its buttons come from `notice.actions`: a route posts its body to
-//      the Thread's server; open_terminal opens the agent's terminal. A
-//      post shows a busy state, then "Sent again" with a tick, or the
-//      reason in muted words (and the button again).
-//   4. A post without the stamp stays the agent's bubble, "K2: " and all.
-//   5. The row takes focus, and its buttons follow it in the tab order.
+//   3. Send again posts `{thread, doc}` to `/cli/thread/resend` on the
+//      Thread's server: busy, then a quiet "Sent again" with a tick. A
+//      notice whose action carries `doneAt` draws that line from the start
+//      (a reload too), "by <name>" when someone else pressed it. Each 409
+//      says why in plain muted words; another failure shows the reason and
+//      the button again.
+//   4. Open its terminal opens the terminal of the agent its `workspace`
+//      names: this Thread's agent in this view, another one on the window's
+//      server through the Agents page.
+//   5. An App guest sees the row without its buttons.
+//   6. A post without the stamp stays the agent's bubble, "K2: " and all.
+//   7. The row takes focus, and its buttons follow it in the tab order.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
   daemonCliGet: vi.fn(async () => []),
   daemonCliPost: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ ok: true })),
+  openAgentTerminal: vi.fn(async (_addr: string) => true),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn(async () => {}) }))
 vi.mock('@/lib/daemon-cli', () => ({ daemonCliGet: h.daemonCliGet, daemonCliPost: h.daemonCliPost }))
+vi.mock('@/lib/open-workspace-thread', () => ({ openAgentTerminal: (addr: string) => h.openAgentTerminal(addr) }))
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 import { SessionViewChromeContext, type SessionViewChromeValue } from '@/components/SessionView/sessionViewChrome'
+import type { ServerScope } from '@/kessel/server-scope'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
+import { OWNER_VIEWER, type ThreadViewer } from '@/lib/thread-viewer'
 import { fakeScope } from '@/test-utils/fake-scope'
 import { ThreadAttachmentSourceProvider } from './ThreadImageObjects'
 import { ThreadBubble } from './ThreadZenKit'
-import { THREAD_SYSTEM_NOTICE_CSS, resetSystemNoticeDoneForTests } from './ThreadSystemNotice'
-import { ACTION_NOTICE, DELIVERY_NOTICES, INFO_NOTICES, LOOKALIKE_AGENT_POST, OLD_DAEMON_NOTICE } from './systemNotice.fixtures'
+import { RESEND_REFUSAL_WORDS, TERMINAL_NOT_FOUND_WORDS, THREAD_SYSTEM_NOTICE_CSS } from './ThreadSystemNotice'
+import {
+  ACTION_NOTICE,
+  DELIVERY_NOTICES,
+  INFO_NOTICES,
+  LOOKALIKE_AGENT_POST,
+  OLD_DAEMON_NOTICE,
+  OPEN_TERMINAL_ACTION,
+  resendAction,
+} from './systemNotice.fixtures'
 
-const scope = fakeScope('box.example.k2.dev')
+const FEATURE = 'thread-system-notice-v1'
+
+/** A server that reports `features` (the notice key by default). */
+function scopeWith(features: string[] = [FEATURE], opts: { windowHost?: boolean; remoteRoom?: boolean } = {}): ServerScope {
+  return {
+    ...fakeScope('box.example.k2.dev'),
+    serverSupports: (f: string) => features.includes(f),
+    isWindowHost: () => opts.windowHost ?? false,
+    ...(opts.remoteRoom ? { remoteRoom: true } : {}),
+  } as ServerScope
+}
+
+const scope = scopeWith()
 
 function chrome(openTerminal?: () => void): SessionViewChromeValue {
   return {
@@ -48,19 +81,33 @@ function chrome(openTerminal?: () => void): SessionViewChromeValue {
   }
 }
 
-function draw(item: OverlayThreadItem, opts: { openTerminal?: () => void; noSource?: boolean } = {}) {
-  const bubble = <ThreadBubble item={item} mine={false} author="k2-design" timeLabel="2m" viewer={null} runStart tail />
-  const inner: ReactNode = opts.noSource ? bubble : <ThreadAttachmentSourceProvider value={{ scope, addr: 'k2-design' }}>{bubble}</ThreadAttachmentSourceProvider>
+function draw(
+  item: OverlayThreadItem,
+  opts: { openTerminal?: () => void; noSource?: boolean; scope?: ServerScope; viewer?: ThreadViewer | null; addr?: string } = {},
+) {
+  const bubble = <ThreadBubble item={item} mine={false} author="k2-design" timeLabel="2m" viewer={opts.viewer ?? OWNER_VIEWER} runStart tail />
+  const inner: ReactNode = opts.noSource ? (
+    bubble
+  ) : (
+    <ThreadAttachmentSourceProvider value={{ scope: opts.scope ?? scope, addr: opts.addr ?? 'k2-design' }}>{bubble}</ThreadAttachmentSourceProvider>
+  )
   return render(<SessionViewChromeContext.Provider value={chrome(opts.openTerminal)}>{inner}</SessionViewChromeContext.Provider>)
+}
+
+/** The never-read-in notice with its own `actions`. */
+function delivery(actions: unknown[]): OverlayThreadItem {
+  const n = DELIVERY_NOTICES.neverReadIn
+  return { ...n, doc: { ...n.doc, systemNotice: { kind: 'delivery', code: 'delivery.not_taken.never_read_in', actions } } }
 }
 
 const row = (): HTMLElement => screen.getByTestId('thread-system-notice')
 
 afterEach(() => {
   cleanup()
-  resetSystemNoticeDoneForTests()
   h.daemonCliPost.mockReset()
   h.daemonCliPost.mockImplementation(async () => ({ ok: true }))
+  h.openAgentTerminal.mockReset()
+  h.openAgentTerminal.mockImplementation(async () => true)
 })
 
 describe('a K2 system notice in the Thread', () => {
@@ -71,7 +118,6 @@ describe('a K2 system notice in the Thread', () => {
     expect(container.querySelector('[data-thread-sender]')).toBeNull()
     expect(container.querySelector('[data-thread-meta]')).toBeNull()
     const r = row()
-    expect(r.getAttribute('data-testid')).toBe('thread-system-notice')
     expect(r.closest('[data-zen-message]')).not.toBeNull()
     const label = r.querySelector('[data-notice-label]')!
     expect(label.textContent).toBe('K2 · system')
@@ -81,6 +127,13 @@ describe('a K2 system notice in the Thread', () => {
     expect(words.textContent).not.toContain('K2:')
     // Its Markdown is K2's own (a job's name in bold).
     expect(words.querySelector('strong')?.textContent).toBe('nightly-backup')
+  })
+
+  it('hides the "[K2] " lead too', () => {
+    draw(INFO_NOTICES.landed)
+    const words = row().querySelector('[data-notice-text]')!.textContent ?? ''
+    expect(words.startsWith('Landed 2 commits')).toBe(true)
+    expect(words).not.toContain('[K2]')
   })
 
   it('spans the column, centred', () => {
@@ -94,6 +147,7 @@ describe('a K2 system notice in the Thread', () => {
     draw(INFO_NOTICES.testGuest)
     const r = row()
     expect(r.getAttribute('data-notice-kind')).toBe('info')
+    expect(r.getAttribute('data-notice-code')).toBe('app.test_guest_added')
     expect(r.style.getPropertyValue('--notice-tone')).toBe('var(--zen-text-muted)')
     expect(r.querySelector('[data-notice-icon]')).toBeNull()
   })
@@ -116,21 +170,38 @@ describe('a K2 system notice in the Thread', () => {
     expect(r.style.getPropertyValue('--notice-tone')).toContain('--zen-accent')
     expect(screen.getByRole('button', { name: 'Send again' })).toBeTruthy()
   })
+})
 
-  it('Send again posts the notice body to its route on the Thread\'s server, busy then "Sent again"', async () => {
+describe('the feature key', () => {
+  it('a server without thread-system-notice-v1 gets nothing special: the post stays a bubble', () => {
+    const { container } = draw(DELIVERY_NOTICES.neverReadIn, { scope: scopeWith([]), openTerminal: vi.fn() })
+    expect(screen.queryByTestId('thread-system-notice')).toBeNull()
+    expect(container.querySelector('[data-zen-bubble]')).not.toBeNull()
+    expect(screen.queryByRole('button', { name: 'Send again' })).toBeNull()
+  })
+
+  it('a view that knows no server gets nothing special either', () => {
+    const { container } = draw(DELIVERY_NOTICES.neverReadIn, { noSource: true, openTerminal: vi.fn() })
+    expect(screen.queryByTestId('thread-system-notice')).toBeNull()
+    expect(container.querySelector('[data-zen-bubble]')).not.toBeNull()
+  })
+})
+
+describe('Send again', () => {
+  it('posts {thread, doc} to /cli/thread/resend on the Thread\'s server: busy, then "Sent again" with a tick', async () => {
     let finish!: (v: unknown) => void
     h.daemonCliPost.mockImplementation(() => new Promise((r) => (finish = r)))
     draw(DELIVERY_NOTICES.neverReadIn, { openTerminal: vi.fn() })
     fireEvent.click(screen.getByRole('button', { name: 'Send again' }))
     expect(h.daemonCliPost).toHaveBeenCalledTimes(1)
-    expect(h.daemonCliPost).toHaveBeenCalledWith(scope, 'threads/resend', { thread: 'k2-design', doc: 'd-tokens' })
+    expect(h.daemonCliPost).toHaveBeenCalledWith(scope, 'thread/resend', { thread: 'k2-design', doc: 'n-never' })
     const busy = screen.getByRole('button', { name: 'Sending…' }) as HTMLButtonElement
     expect(busy.disabled).toBe(true)
     expect(busy.getAttribute('aria-busy')).toBe('true')
     // A second click while busy sends nothing more.
     fireEvent.click(busy)
     expect(h.daemonCliPost).toHaveBeenCalledTimes(1)
-    await act(async () => finish({ ok: true }))
+    await act(async () => finish({ ok: true, resent: true, doneAt: 1_793_000_100 }))
     expect(screen.queryByRole('button', { name: /Send again|Sending/ })).toBeNull()
     const done = row().querySelector('[data-notice-done]')!
     expect(done.textContent).toBe('Sent again')
@@ -138,48 +209,134 @@ describe('a K2 system notice in the Thread', () => {
     expect(done.getAttribute('role')).toBe('status')
     // The other button stays.
     expect(screen.getByRole('button', { name: 'Open its terminal' })).toBeTruthy()
-    // Drawn again (scrolled away and back): still sent.
-    cleanup()
-    draw(DELIVERY_NOTICES.neverReadIn, { openTerminal: vi.fn() })
-    expect(screen.queryByRole('button', { name: 'Send again' })).toBeNull()
-    expect(row().querySelector('[data-notice-done]')?.textContent).toBe('Sent again')
   })
 
-  it('a refused Send again shows the reason in muted words, and the button again', async () => {
+  it('draws done from the notice: doneAt alone is done, no button, on every draw', () => {
+    const pressedByMe = delivery([resendAction('n-never', { doneAt: 1_793_000_100, doneBy: { kind: 'owner', login: 'owner' } }), OPEN_TERMINAL_ACTION])
+    draw(pressedByMe, { openTerminal: vi.fn() })
+    expect(screen.queryByRole('button', { name: 'Send again' })).toBeNull()
+    expect(row().querySelector('[data-notice-done]')?.textContent).toBe('Sent again')
+    // The open button is the first button now.
+    expect(screen.getByRole('button', { name: 'Open its terminal' })).toBeTruthy()
+    cleanup()
+    // Without the field (the press before the reload left no trace here):
+    // the button, as the daemon says.
+    draw(DELIVERY_NOTICES.neverReadIn, { openTerminal: vi.fn() })
+    expect(screen.getByRole('button', { name: 'Send again' })).toBeTruthy()
+  })
+
+  it('says who pressed it when that was someone else', () => {
+    draw(delivery([resendAction('n-never', { doneAt: 1_793_000_100, doneBy: { kind: 'user', login: 'ada' } })]), { viewer: OWNER_VIEWER })
+    expect(row().querySelector('[data-notice-done]')?.textContent).toBe('Sent again by ada')
+    cleanup()
+    // ada looking: her own press.
+    draw(delivery([resendAction('n-never', { doneAt: 1_793_000_100, doneBy: { kind: 'user', login: 'ada' } })]), {
+      viewer: { principal: 'ada', aliases: [] },
+    })
+    expect(row().querySelector('[data-notice-done]')?.textContent).toBe('Sent again')
+    cleanup()
+    // The owner pressed it, ada looking: the owner's stamped name.
+    draw(delivery([resendAction('n-never', { doneAt: 1_793_000_100, doneBy: { kind: 'owner', login: 'owner', name: 'rosson' } })]), {
+      viewer: { principal: 'ada', aliases: [] },
+    })
+    expect(row().querySelector('[data-notice-done]')?.textContent).toBe('Sent again by rosson')
+  })
+
+  it.each([
+    ['already_resent', 'Already sent again.'],
+    ['source_deleted', 'The original message was deleted.'],
+    ['not_resendable', 'This one can’t be sent again.'],
+  ])('a 409 %s says "%s" in plain muted words, in place of the button', async (code, words) => {
+    expect(RESEND_REFUSAL_WORDS[code]).toBe(words)
     h.daemonCliPost.mockImplementation(async () => {
-      throw new Error('the message is gone')
+      throw new DaemonHttpError('refused', 409, code)
+    })
+    draw(DELIVERY_NOTICES.neverReadIn, { openTerminal: vi.fn() })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send again' }))
+    })
+    const said = row().querySelector('[data-notice-refused]') as HTMLElement
+    expect(said.textContent).toBe(words)
+    expect(said.style.color).toBe('var(--zen-text-muted)')
+    expect(screen.queryByRole('button', { name: 'Send again' })).toBeNull()
+    expect(row().querySelector('[data-notice-done]')).toBeNull()
+    expect(row().querySelector('[data-notice-error]')).toBeNull()
+  })
+
+  it('another failure shows the reason in muted words, and the button again', async () => {
+    h.daemonCliPost.mockImplementation(async () => {
+      throw new Error('the server is away')
     })
     draw(DELIVERY_NOTICES.neverReadIn)
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Send again' }))
     })
     const why = row().querySelector('[data-notice-error]') as HTMLElement
-    expect(why.textContent).toContain('the message is gone')
+    expect(why.textContent).toContain('the server is away')
     expect(why.getAttribute('role')).toBe('alert')
     expect(why.style.color).toBe('var(--zen-text-muted)')
     expect((screen.getByRole('button', { name: 'Send again' }) as HTMLButtonElement).disabled).toBe(false)
     expect(row().querySelector('[data-notice-done]')).toBeNull()
   })
 
-  it('Open its terminal opens the agent\'s terminal view, and posts nothing', () => {
+  it('a room on another server may send it (the room write list has it)', () => {
+    draw(DELIVERY_NOTICES.neverReadIn, { scope: scopeWith([FEATURE], { remoteRoom: true }) })
+    expect(screen.getByRole('button', { name: 'Send again' })).toBeTruthy()
+  })
+})
+
+describe('Open its terminal', () => {
+  it("opens this Thread's agent in this view, and posts nothing", () => {
     const openTerminal = vi.fn()
     draw(DELIVERY_NOTICES.neverReadIn, { openTerminal })
     fireEvent.click(screen.getByRole('button', { name: 'Open its terminal' }))
     expect(openTerminal).toHaveBeenCalledTimes(1)
+    expect(h.openAgentTerminal).not.toHaveBeenCalled()
     expect(h.daemonCliPost).not.toHaveBeenCalled()
   })
 
-  it('leaves out a button this view cannot carry out', () => {
-    // No terminal here (a Garden, a view without one): no Open its terminal.
-    draw(DELIVERY_NOTICES.neverReadIn)
-    expect(screen.queryByRole('button', { name: 'Open its terminal' })).toBeNull()
-    cleanup()
-    // No server to post to: no Send again.
-    draw(DELIVERY_NOTICES.neverReadIn, { noSource: true, openTerminal: vi.fn() })
-    expect(screen.queryByRole('button', { name: 'Send again' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Open its terminal' })).toBeTruthy()
+  it('opens the agent its workspace names, not this one, when that is another agent', async () => {
+    const openTerminal = vi.fn()
+    draw(delivery([{ ...OPEN_TERMINAL_ACTION, workspace: 'ledger' }]), { openTerminal, scope: scopeWith([FEATURE], { windowHost: true }) })
+    fireEvent.click(screen.getByRole('button', { name: 'Open its terminal' }))
+    await waitFor(() => expect(h.openAgentTerminal).toHaveBeenCalledWith('ledger'))
+    expect(openTerminal).not.toHaveBeenCalled()
+    expect(h.daemonCliPost).not.toHaveBeenCalled()
   })
 
+  it('opens its own agent through the Agents page from a view with no terminal (a Home conversation)', async () => {
+    draw(DELIVERY_NOTICES.neverReadIn, { scope: scopeWith([FEATURE], { windowHost: true }) })
+    fireEvent.click(screen.getByRole('button', { name: 'Open its terminal' }))
+    await waitFor(() => expect(h.openAgentTerminal).toHaveBeenCalledWith('k2-design'))
+  })
+
+  it('says so when the window\'s server has no such agent', async () => {
+    h.openAgentTerminal.mockImplementation(async () => false)
+    draw(delivery([{ ...OPEN_TERMINAL_ACTION, workspace: 'gone' }]), { scope: scopeWith([FEATURE], { windowHost: true }) })
+    fireEvent.click(screen.getByRole('button', { name: 'Open its terminal' }))
+    await waitFor(() => expect(row().querySelector('[data-notice-error]')?.textContent).toBe(TERMINAL_NOT_FOUND_WORDS))
+  })
+
+  it("isn't drawn where it can't open: another agent on another server, or no terminal and not the window's server", () => {
+    draw(delivery([{ ...OPEN_TERMINAL_ACTION, workspace: 'ledger' }]), { openTerminal: vi.fn() })
+    expect(screen.queryByRole('button', { name: 'Open its terminal' })).toBeNull()
+    cleanup()
+    draw(DELIVERY_NOTICES.neverReadIn)
+    expect(screen.queryByRole('button', { name: 'Open its terminal' })).toBeNull()
+  })
+})
+
+describe('an App guest', () => {
+  it('sees the row and its words, but no buttons', () => {
+    const guest: ThreadViewer = { principal: 'qa-1', aliases: [], guest: true }
+    draw(DELIVERY_NOTICES.neverReadIn, { viewer: guest, openTerminal: vi.fn() })
+    expect(row().querySelector('[data-notice-text]')?.textContent).toContain("didn't take")
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(row().querySelector('[data-notice-actions]')).toBeNull()
+  })
+})
+
+describe('focus', () => {
   it('takes focus, with its buttons next in the tab order', () => {
     const { container } = draw(DELIVERY_NOTICES.neverReadIn, { openTerminal: vi.fn() })
     const r = row()
@@ -199,7 +356,7 @@ describe('a K2 system notice in the Thread', () => {
 })
 
 describe('not a system notice', () => {
-  it('an agent post starting "K2: " with a notice field but no system stamp stays the agent\'s bubble', () => {
+  it('an agent post starting "K2: " with a look-alike systemNotice but no system stamp stays the agent\'s bubble', () => {
     const { container } = draw(LOOKALIKE_AGENT_POST, { openTerminal: vi.fn() })
     expect(screen.queryByTestId('thread-system-notice')).toBeNull()
     const bubble = container.querySelector('[data-zen-bubble="agent"]')!

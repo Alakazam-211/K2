@@ -143,6 +143,9 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   // thread-message-delete-v1 (0.46.11): B checks that this login sent it
   // (B's owner may delete anyone's) and tells B's agent.
   'thread/message/delete': 'delete a Thread message you sent to the agent on B',
+  // thread-system-notice-v1 (0.46.15): Send again on K2's delivery notice;
+  // B checks a person (never a passport or an App pass) and sends once.
+  'thread/resend': 'Send again on K2’s notice that the agent on B didn’t take a message',
   // Permission cards (Beta, prd-agent-settings-cards-v1 §4.3, §4.4): absent
   // on B while its switch is off. A note is for a login below the card's
   // floor; "Turn off again" is Admin and up (the card's own floor on B).

@@ -67,8 +67,18 @@ describe('a K2 notice among the messages', () => {
   it('keeps its system stamp and notice through a loaded page', () => {
     const raw = DELIVERY_NOTICES.neverReadIn
     const loaded = threadItemsFromSnapshot({ conversation_id: 'c', items: [{ collection: 'thread', seq: 1, id: raw.id, doc: raw.doc }], has_more: false }).items
-    expect(loaded[0].doc.author).toEqual({ kind: 'system' })
+    expect(loaded[0].doc.author).toEqual({ kind: 'system', login: 'k2' })
+    expect(loaded[0].doc.from).toBe('k2')
+    expect(loaded[0].doc.systemNotice).toEqual(raw.doc.systemNotice)
     expect(parseSystemNotice(loaded[0])).toEqual(parseSystemNotice(raw))
+  })
+
+  it('keeps a done Send again through a loaded page', () => {
+    const raw = DELIVERY_NOTICES.neverReadIn
+    const sn = raw.doc.systemNotice as { actions: Record<string, unknown>[] }
+    const done = { ...raw.doc, systemNotice: { ...sn, actions: [{ ...sn.actions[0], doneAt: T0 + 50, doneBy: { kind: 'user', login: 'ada' } }] } }
+    const loaded = threadItemsFromSnapshot({ conversation_id: 'c', items: [{ collection: 'thread', seq: 1, id: raw.id, doc: done }], has_more: false }).items
+    expect(parseSystemNotice(loaded[0])?.actions[0].done).toEqual({ at: T0 + 50, by: { kind: 'user', login: 'ada' } })
   })
 })
 

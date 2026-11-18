@@ -702,6 +702,13 @@ mod real {
                     );
                 })
                 .on_page_load(move |webview, payload| {
+                    // Loopback never uses a proxy; the person's proxy stays
+                    // for the rest. A pane shares the K2 windows' session,
+                    // so this is a no-op after the main window set it.
+                    #[cfg(target_os = "linux")]
+                    {
+                        let _ = webview.with_webview(|platform| crate::linux_webview_proxy::apply_once(&platform.inner()));
+                    }
                     // Design views: a new load voids picks from the old page
                     // (Started), and the picker is re-injected so the S key
                     // works on the new page (Finished).

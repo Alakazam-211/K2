@@ -279,9 +279,9 @@ describe('Send again', () => {
     expect(row().querySelector('[data-notice-done]')).toBeNull()
   })
 
-  it('a room on another server may send it (the room write list has it)', () => {
+  it('a room on another server shows no Send again (it is off the room write list)', () => {
     draw(DELIVERY_NOTICES.neverReadIn, { scope: scopeWith([FEATURE], { remoteRoom: true }) })
-    expect(screen.getByRole('button', { name: 'Send again' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Send again' })).toBeNull()
   })
 })
 

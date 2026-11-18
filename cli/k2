@@ -110166,7 +110166,10 @@ Ask a person to allow what K2 refused you. Every refusal ends with the
 exact command to run ("Ask with: …"), or "It can't be requested."
 
 Agents (in a K2 terminal):
-  k2 permission request <action> [key=value …] --why "<one line>" [--dry-run]
+  k2 permission request <action> [key=value …] --why "<one line>" [--to <login>[,<login>…]] [--dry-run]
+                                                   --to: only these people are asked (owners or
+                                                   admins who may answer, or owner); else the
+                                                   owner's default, else everyone who may answer
   k2 permission update <id> --why "<new facts>"   once, on a denied request
   k2 permission status [<id>]                      check once; never loop
   k2 permission cancel <id>
@@ -110177,6 +110180,9 @@ People (a terminal outside K2):
   k2 permission approve <id>
   k2 permission deny <id> [--reason "…"]
   k2 permission beta on|off|status                 the server switch (owner; on by default)
+  k2 permission approvers [<login>[,<login>…]|everyone]
+                                                   who agents' cards ask when an agent names no
+                                                   one (owner to change; everyone by default)
   k2 permission agent <workspace> on|off           one agent's "Let this agent ask for
                                                    permission" (owner or admin; off until
                                                    someone turns it on)
@@ -110292,11 +110298,14 @@ _permission_people_only() {
 }
 
 _permission_request() {
-    local action="" why="" dry=0 json=0 kv=()
+    local action="" why="" dry=0 json=0 to="" kv=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --why) [ $# -ge 2 ] || { echo "Error: --why needs a value" >&2; exit 2; }; why="$2"; shift 2 ;;
             --why=*) why="${1#--why=}"; shift ;;
+            # 0.46.16: only these people are asked (each must be able to answer).
+            --to) [ $# -ge 2 ] && [ -n "$2" ] || { echo "Error: --to needs one or more logins, comma-separated (--to ada,owner)" >&2; exit 2; }; to="$2"; shift 2 ;;
+            --to=*) to="${1#--to=}"; [ -n "$to" ] || { echo "Error: --to needs one or more logins, comma-separated (--to ada,owner)" >&2; exit 2; }; shift ;;
             --dry-run) dry=1; shift ;;
             --json) json=1; shift ;;
             -h|--help) _permission_usage; exit 0 ;;
@@ -110310,13 +110319,15 @@ _permission_request() {
     [ -n "$action" ] || { echo "Usage: k2 permission request <action> [key=value …] --why \"<one line>\"" >&2; exit 2; }
     [ -n "$why" ] || { echo "Error [bad_why]: --why is required: one line, at most 200 characters, saying what you need it for" >&2; exit 2; }
     local body
-    body="$(K2_PA="$action" K2_PW="$why" K2_PD="$dry" python3 -c '
+    body="$(K2_PA="$action" K2_PW="$why" K2_PD="$dry" K2_PT="$to" python3 -c '
 import json, os, sys
 params = {}
 for a in sys.argv[1:]:
     k, _, v = a.partition("=")
     params[k] = v
 out = {"action": os.environ["K2_PA"], "params": params, "why": os.environ["K2_PW"]}
+if os.environ["K2_PT"]:
+    out["to"] = os.environ["K2_PT"]
 if os.environ["K2_PD"] == "1":
     out["dryRun"] = True
 print(json.dumps(out))
@@ -110431,6 +110442,35 @@ print("Let agents ask with permission cards: %s" % ("on" if s.get("permissionCar
                     ;;
                 *) echo "Usage: k2 permission beta on|off|status" >&2; exit 2 ;;
             esac
+            ;;
+        approvers)
+            # 0.46.16: who agents' cards ask when an agent names no one
+            # (`permissionApprovers`; Settings → Access → Permission Cards).
+            _permission_people_only approvers
+            if [ $# -eq 0 ]; then
+                local raw
+                raw="$(cli_send_json GET /cli/settings/get)"
+                printf '%s' "${raw%$'\n'*}" | python3 -c '
+import json, sys
+try:
+    v = json.load(sys.stdin)
+except Exception:
+    print("Error: no answer from the K2 daemon", file=sys.stderr); sys.exit(1)
+s = v.get("settings", v) if isinstance(v, dict) else {}
+names = s.get("permissionApprovers") or []
+print("Cards from agents ask: %s" % (", ".join(names) if names else "everyone who may answer (an owner or admin)"))
+'
+            else
+                [ $# -eq 1 ] || { echo "Usage: k2 permission approvers [<login>[,<login>…]|everyone]" >&2; exit 2; }
+                local body
+                body="$(K2_PL="$1" python3 -c '
+import json, os
+raw = os.environ["K2_PL"].strip()
+names = [] if raw.lower() == "everyone" else [n.strip() for n in raw.split(",") if n.strip()]
+print(json.dumps({"permissionApprovers": names}))
+')"
+                _permission_print beta "$(cli_send_json POST /cli/settings/update "$body")"
+            fi
             ;;
         agent)
             _permission_people_only agent

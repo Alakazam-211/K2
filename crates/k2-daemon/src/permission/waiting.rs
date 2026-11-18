@@ -44,6 +44,8 @@ pub(crate) fn rows_for(reqs: &[PermissionRequest], who: &Answerer) -> Vec<Value>
     reqs.iter()
         .filter(|r| r.is_answerable() && r.expires_at > now)
         .filter(|r| present::meets_floor(present::floor_of(&r.floor), who))
+        // 0.46.16: only the requests that ask this person (`--to`).
+        .filter(|r| super::approvers::asked(r.id.as_str(), who))
         .filter_map(row)
         .collect()
 }

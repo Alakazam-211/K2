@@ -14,7 +14,6 @@
 //! `zen.sign`), whether or not the owner turned on the Beta.
 
 use k2_core::overlay;
-use k2_core::permission::catalog::Floor;
 use k2_core::permission::request::{params_hash, PermissionRequest, RequestId, RequestState};
 use k2_core::site_visibility as sv;
 use serde_json::{json, Map, Value as J};
@@ -130,6 +129,8 @@ fn present(ws: &str, action: &str, params: Map<String, J>, why: &str, text: &str
         k2_core::log_debug!("[publish-cards] request for {label}: {e}");
         return json!({ "card": null, "asked": false });
     }
+    // Who it asks: the owner's default (0.46.16), else every owner or admin.
+    let audience = crate::permission::approvers::audience_for_new(&req);
     let reqs = std::slice::from_ref(&req);
     let card_action = present::card_action(reqs, false, present::single_dedupe(&req));
     let options = [k2_core::permission::label::ALLOW, k2_core::permission::label::DENY];
@@ -141,7 +142,7 @@ fn present(ws: &str, action: &str, params: Map<String, J>, why: &str, text: &str
         card_action,
         false,
         req.expires_at,
-        crate::overlay_routes::CardAudience::Logins(present::eligible_logins(Floor::Admin)),
+        crate::overlay_routes::CardAudience::Logins(audience),
     );
     let (card_id, addr) = match posted {
         Ok(crate::overlay_routes::Presented::Card { id, addr }) => (id, addr),

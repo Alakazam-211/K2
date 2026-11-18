@@ -626,6 +626,16 @@ pub struct AppSettings {
     /// Owner-only to send.
     #[serde(default)]
     pub permission_cards_default_applied: bool,
+    /// Who agents' permission cards go to when the agent names no one
+    /// (`k2 permission request … --to`), 0.46.16 (wire
+    /// `permissionApprovers`). Empty (the default): every owner or admin who
+    /// may answer, as before. Else only these: Connect logins that are an
+    /// Owner or Admin, or `owner` (the owner token's person). A card whose
+    /// floor none of them meets goes to `owner`. It narrows who is asked
+    /// (the card's Allow, the push, the Tickets item, "Waiting on you"),
+    /// never who may answer. Owner-only to change; [`check_permission_approvers`].
+    #[serde(default)]
+    pub permission_approvers: Vec<String>,
     /// Garden access lists, Settings → Gardens (prd-garden-access-v1 G0):
     /// one list per Garden of the agents who may edit it, and each Garden's
     /// History. Wire `gardenAccess`. **Always true from 0.46.3** (Rosson
@@ -1365,6 +1375,7 @@ impl Default for AppSettings {
             compute_placement: default_compute_placement(),
             permission_cards: true,
             permission_cards_default_applied: false,
+            permission_approvers: Vec::new(),
             garden_access: true,
             apps: true,
             apps_process_engine: false,
@@ -1606,6 +1617,47 @@ pub fn migrate_legacy_apps_switch() -> Result<bool, String> {
 
 /// The settings key that records the 0.46.11 permission-cards pass.
 pub const PERMISSION_CARDS_DEFAULT_KEY: &str = "permissionCardsDefaultApplied";
+
+/// The wire key of [`AppSettings::permission_approvers`].
+pub const PERMISSION_APPROVERS_KEY: &str = "permissionApprovers";
+
+/// At most this many names in [`AppSettings::permission_approvers`].
+pub const PERMISSION_APPROVERS_MAX: usize = 20;
+
+/// A `permissionApprovers` value as it is kept: an array of names, each
+/// `owner` (the owner token's person) or an enabled Connect login whose role
+/// is Owner or Admin; trimmed, lowercased, without repeats. `[]` is
+/// everyone who may answer (today's behaviour).
+pub fn check_permission_approvers(v: &serde_json::Value) -> Result<Vec<String>, String> {
+    let Some(items) = v.as_array() else {
+        return Err(format!("{PERMISSION_APPROVERS_KEY} is a list of logins (owners or admins) or \"owner\"; [] is everyone who may answer"));
+    };
+    if items.len() > PERMISSION_APPROVERS_MAX {
+        return Err(format!("{PERMISSION_APPROVERS_KEY} takes at most {PERMISSION_APPROVERS_MAX} names"));
+    }
+    let users = crate::connect_users::list_users()?;
+    let mut out: Vec<String> = Vec::new();
+    for item in items {
+        let Some(name) = item.as_str().map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()) else {
+            return Err(format!("{PERMISSION_APPROVERS_KEY}: each name is a login's username (got {item})"));
+        };
+        if name != "owner" {
+            let Some(u) = users.iter().find(|u| u.username == name) else {
+                return Err(format!("{PERMISSION_APPROVERS_KEY}: there's no login named {name} on this server"));
+            };
+            if u.disabled {
+                return Err(format!("{PERMISSION_APPROVERS_KEY}: {name}'s login is disabled"));
+            }
+            if !matches!(u.role, crate::connect_users::Role::Owner | crate::connect_users::Role::Admin) {
+                return Err(format!("{PERMISSION_APPROVERS_KEY}: {name} is not an owner or admin, so can't answer agents' cards"));
+            }
+        }
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    Ok(out)
+}
 
 /// What [`apply_permission_cards_default`] found and did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1875,6 +1927,10 @@ pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
                 crate::push::e2e::PUSH_E2E_MODES.join("|")
             ));
         }
+    }
+    // 0.46.16: who agents' cards go to; stored checked and normalized.
+    if let Some(v) = partial.get_mut(PERMISSION_APPROVERS_KEY) {
+        *v = serde_json::json!(check_permission_approvers(v)?);
     }
     // 0.46.3 (Rosson 2026-10-23): Garden access has no off switch.
     if let Some(v) = partial.get("gardenAccess") {

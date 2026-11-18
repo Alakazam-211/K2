@@ -112,6 +112,8 @@ beforeEach(() => {
       return { agents, recent: daemon.recent }
     }
     if (route === 'permission/pending') return { requests: daemon.pending }
+    // Who agents ask (0.46.16): the owner and admin logins.
+    if (route === 'users') return { users: [] }
     throw new Error(`unexpected GET ${route}`)
   })
   h.post.mockImplementation(async (_scope: unknown, route: string, body: Record<string, unknown>) => {

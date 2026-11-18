@@ -209,11 +209,25 @@ fn meets(floor: &str, f: &Facts) -> bool {
 /// sit above the catalog's (an Admin-floor action shown at owner floor
 /// stays owner-only).
 fn meets_item(item: &ItemView, f: &Facts) -> bool {
-    match present::find_action(&item.action) {
+    let meets_floor = match present::find_action(&item.action) {
         Some(a) if a.spec.floor == k2_core::permission::catalog::Floor::GardenOwner => {
             f.person && present::meets_floor(a.spec.floor, &answerer_of(f))
         }
         _ => meets(&item.approvers.floor, f),
+    };
+    meets_floor && asked_item(item, f)
+}
+
+/// 0.46.16: the request asks this viewer (`--to`, the owner's default). A
+/// login it doesn't ask sees the card as waiting, without Allow and Deny;
+/// the owner token is always asked. An unknown request: as stored.
+fn asked_item(item: &ItemView, f: &Facts) -> bool {
+    if f.via == "owner-token" {
+        return true;
+    }
+    match store::get_by_display_id(&item.request_id) {
+        Ok(Some(r)) => super::approvers::asked(r.id.as_str(), &answerer_of(f)),
+        _ => true,
     }
 }
 
@@ -576,7 +590,7 @@ fn project_batch(doc: &OverlayDoc, view: BatchView, viewer: &Viewer, cards: u8) 
         .collect();
     let open = |s: &RequestState| s.is_open() || *s == RequestState::Applying;
     let batch_state = if choice.status == "pending" && states.iter().any(open) { BatchState::Pending } else { BatchState::Done };
-    let can = meets(&view.approvers.floor, &f) || view.items.iter().any(|i| meets_item(i, &f));
+    let can = (meets(&view.approvers.floor, &f) && view.items.iter().all(|i| asked_item(i, &f))) || view.items.iter().any(|i| meets_item(i, &f));
     let pending_items: Vec<(&ItemView, RequestState)> =
         view.items.iter().zip(states.iter().copied()).filter(|(_, s)| *s == RequestState::Pending).collect();
     let can_all = f.person

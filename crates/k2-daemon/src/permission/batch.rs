@@ -54,7 +54,9 @@ fn joinable(req: &PermissionRequest, conversation_id: &str, now: i64) -> Option<
             continue;
         }
         seen.push(card.to_string());
-        if r.floor != req.floor || r.session_id != req.session_id {
+        // One card per set of approvers: the same floor, and the same people
+        // asked (0.46.16: `--to`, the owner's default).
+        if r.floor != req.floor || r.session_id != req.session_id || super::approvers::of(r.id.as_str()) != super::approvers::of(req.id.as_str()) {
             continue;
         }
         let items = store::for_card(conv, card).ok()?;
@@ -78,7 +80,12 @@ fn joinable(req: &PermissionRequest, conversation_id: &str, now: i64) -> Option<
 
 /// A batch card's dedupe key: `batch:<session or conversation>:<floor>`.
 fn batch_dedupe(req: &PermissionRequest, conversation_id: &str) -> String {
-    format!("batch:{}:{}", req.session_id.as_deref().unwrap_or(conversation_id), present::floor_of(&req.floor).as_str())
+    let base = format!("batch:{}:{}", req.session_id.as_deref().unwrap_or(conversation_id), present::floor_of(&req.floor).as_str());
+    // A narrowed set of approvers is its own batch (0.46.16).
+    match super::approvers::of(req.id.as_str()) {
+        Some(names) => format!("{base}:to:{}", names.join(",")),
+        None => base,
+    }
 }
 
 /// Put a stored request's card on `conversation_id`: join a batch, or
@@ -108,7 +115,6 @@ pub(crate) fn place(req: &PermissionRequest, conversation_id: &str) -> Result<Pl
     let (prompt, options) = present::prompt_and_options(reqs, false);
     let action = present::card_action(reqs, false, present::single_dedupe(req));
     let options: Vec<&str> = options.iter().map(String::as_str).collect();
-    let floor = present::floor_of(&req.floor);
     match crate::overlay_routes::present_action_card(
         Some(conversation_id),
         &req.workspace_id,
@@ -117,7 +123,9 @@ pub(crate) fn place(req: &PermissionRequest, conversation_id: &str) -> Result<Pl
         action,
         false,
         req.expires_at,
-        CardAudience::Logins(present::eligible_logins(floor)),
+        // Who it asks (0.46.16): `--to`, the owner's default, or everyone
+        // at the floor.
+        CardAudience::Logins(super::approvers::audience(req)),
     )? {
         Presented::Card { id, .. } => {
             store::set_card(req.id.as_str(), conversation_id, &id, None, req.expires_at)?;

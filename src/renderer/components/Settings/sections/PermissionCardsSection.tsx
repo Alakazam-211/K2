@@ -47,14 +47,19 @@ import {
   answerPermissionRequest,
   asksForRow,
   canAllowInPlace,
+  OWNER_APPROVER,
+  fetchApproverChoices,
   fetchPermissionAgents,
+  fetchPermissionApprovers,
   fetchPermissionCardsSetting,
   fetchPermissionPending,
   onPermissionCardsSync,
   openPermissionCard,
   permissionErrorMessage,
   setAgentPermissionCards,
+  setPermissionApprovers,
   setPermissionCardsSetting,
+  type ApproverChoice,
   type PermissionAgent,
   type PermissionPending,
   type PermissionRecent,
@@ -70,6 +75,13 @@ export const PERMISSION_CARDS_MANIFEST: SettingEntry[] = [
     description:
       'Let agents ask, with a card in their Thread, for a setting you would otherwise change in Settings. Owner only; on by default',
     keywords: ['permission cards', 'permission', 'cards', 'ask', 'request', 'approve', 'allow', 'deny', 'beta', 'k2 permission'],
+  },
+  {
+    id: 'permission-cards.approvers',
+    section: 'permission-cards',
+    label: 'Who agents ask',
+    description: 'Who gets agents’ cards when an agent names no one: everyone who can answer, or only the people you pick. Owner only',
+    keywords: ['permission cards', 'approvers', 'who agents ask', 'who is asked', 'push', 'k2 permission approvers', '--to'],
   },
   {
     id: 'permission-cards.agents',
@@ -694,6 +706,7 @@ export function PermissionCardsSection(): React.JSX.Element {
               <SaveError state={globalSave.state} />
             </div>
           </SettingSwitchRow>
+          {server.on && manages(role) ? <WhoAgentsAskRows canEdit={canFlipGlobal} nonce={nonce} /> : null}
         </SettingsGroup>
 
         {server.on && role === 'member' ? (
@@ -884,6 +897,115 @@ export function PermissionCardsSection(): React.JSX.Element {
 }
 
 /** One agent's switch: its name and handle, "Saved" or why it failed. */
+/** Settings → Access → Permission Cards → Who agents ask (0.46.16): the
+ *  owner's `permissionApprovers`. Nobody picked: every owner or admin who
+ *  can answer is asked (the default). Picked: only them, on every card an
+ *  agent puts up without naming anyone (`--to`). The daemon checks each name;
+ *  an admin sees the list read-only. */
+export function WhoAgentsAskRows({ canEdit, nonce }: { canEdit: boolean; nonce: number }): React.JSX.Element {
+  const [names, setNames] = useState<string[] | null>(null)
+  const [choices, setChoices] = useState<ApproverChoice[] | null>(null)
+  const [failed, setFailed] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
+
+  useEffect(() => {
+    let cancelled = false
+    setFailed(null)
+    Promise.all([fetchPermissionApprovers(), fetchApproverChoices()])
+      .then(([n, c]) => {
+        if (cancelled) return
+        setNames(n ?? [])
+        setChoices(c)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        console.error('[permission-cards] who agents ask: read failed', err)
+        setFailed(serverReason(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [nonce])
+
+  const flip = async (login: string, on: boolean): Promise<void> => {
+    if (!canEdit || busy || names === null) return
+    const before = names
+    const next = on ? [...names.filter((n) => n !== login), login] : names.filter((n) => n !== login)
+    setBusy(true)
+    save.reset()
+    setNames(next)
+    try {
+      setNames(await setPermissionApprovers(next))
+      save.saved()
+    } catch (err) {
+      setNames(before)
+      save.failed(new Error(serverReason(err)))
+      console.error('[permission-cards] who agents ask: write failed', err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (failed !== null) {
+    return (
+      <div className="px-4 py-3" data-testid="permission-approvers-error">
+        <div className={SETTING_ROW_LABEL}>Who agents ask</div>
+        <div className={SETTING_ROW_HINT}>Couldn’t read who agents ask: {failed}</div>
+      </div>
+    )
+  }
+  if (names === null || choices === null) {
+    return (
+      <div className="px-4 py-3" data-testid="permission-approvers-loading">
+        <div className={SETTING_ROW_LABEL}>Who agents ask</div>
+        <div className={SETTING_ROW_HINT}>Reading…</div>
+      </div>
+    )
+  }
+  const people: { login: string; label: string }[] = [
+    { login: OWNER_APPROVER, label: 'This server’s own login (the owner)' },
+    ...choices.map((c) => ({ login: c.login, label: `${c.login} (${c.role})` })),
+  ]
+  return (
+    <div data-testid="permission-approvers" data-settings-id="permission-cards.approvers">
+      <div className="px-4 pt-3">
+        <div className={`${SETTING_ROW_LABEL} flex items-center gap-2`}>
+          Who agents ask <SaveNote state={save.state} />
+        </div>
+        <div className={SETTING_ROW_HINT} data-testid="permission-approvers-summary">
+          {names.length === 0
+            ? 'Everyone who can answer a card gets it and a push. Pick people to ask only them when an agent names no one.'
+            : 'Only the people picked get agents’ cards, the push and the reminder, unless an agent names someone else. A card none of them can answer goes to the owner.'}
+        </div>
+        {!canEdit ? (
+          <div className={SETTING_ROW_HINT} data-testid="permission-approvers-owner-only">
+            Only this server&rsquo;s owner can change who agents ask.
+          </div>
+        ) : null}
+        <SaveError state={save.state} />
+      </div>
+      {people.map((p) => (
+        <SettingSwitchRow
+          key={p.login}
+          compact
+          testId={`permission-approver-${p.login}`}
+          control={
+            <Toggle
+              checked={names.includes(p.login)}
+              onChange={(v) => void flip(p.login, v)}
+              disabled={!canEdit || busy}
+              aria-label={`Ask ${p.label}`}
+            />
+          }
+        >
+          <div className={SETTING_ROW_LABEL}>{p.label}</div>
+        </SettingSwitchRow>
+      ))}
+    </div>
+  )
+}
+
 function AgentRow({
   agent: a,
   busy,

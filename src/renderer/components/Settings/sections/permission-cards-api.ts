@@ -183,7 +183,63 @@ export function permissionCardsSetting(body: unknown): boolean | null {
   return o.permissionCards
 }
 
+/** The owner's name for this server's own login (the owner token) in
+ *  `permissionApprovers`. */
+export const OWNER_APPROVER = 'owner'
+
+/** `permissionApprovers` from a `settings/get` (or `settings/update`) body
+ *  (0.46.16): who agents' cards ask when an agent names no one. `[]` is
+ *  everyone who can answer; null on a server that has no such setting. */
+export function permissionApproversSetting(body: unknown): string[] | null {
+  const o = obj(body)
+  if (!o || !('permissionApprovers' in o)) return null
+  const v = o.permissionApprovers
+  if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) {
+    throw new Error('settings: "permissionApprovers" is not a list of names')
+  }
+  return v as string[]
+}
+
+/** A person who can be asked: an owner or admin login that is on. */
+export interface ApproverChoice {
+  login: string
+  role: 'owner' | 'admin'
+}
+
+/** The owner and admin logins from `GET /cli/users` (disabled ones left out). */
+export function parseApproverChoices(body: unknown): ApproverChoice[] {
+  const out: ApproverChoice[] = []
+  for (const raw of list(body, 'users', 'users')) {
+    const r = obj(raw)
+    if (!r) continue
+    const login = str(r, 'username')
+    const role = str(r, 'role')
+    if (!login || r.disabled === true || (role !== 'owner' && role !== 'admin')) continue
+    out.push({ login, role })
+  }
+  return out
+}
+
 // ── Daemon calls (the focused server) ───────────────────────────────
+
+/** Who agents' cards ask when an agent names no one (null: an older server). */
+export async function fetchPermissionApprovers(): Promise<string[] | null> {
+  return permissionApproversSetting(await daemonCliGet<unknown>(primaryScope(), 'settings/get'))
+}
+
+/** The owner's list (owner only; the daemon checks every name). Returns what
+ *  the daemon stored. */
+export async function setPermissionApprovers(names: string[]): Promise<string[]> {
+  const body = await daemonCliPost<unknown>(primaryScope(), 'settings/update', { permissionApprovers: names })
+  const stored = permissionApproversSetting(body)
+  if (stored === null) throw new Error('settings/update: the daemon did not answer with "permissionApprovers"')
+  return stored
+}
+
+/** The people the owner can pick: owner and admin logins. */
+export async function fetchApproverChoices(): Promise<ApproverChoice[]> {
+  return parseApproverChoices(await daemonCliGet<unknown>(primaryScope(), 'users'))
+}
 
 export async function fetchPermissionCardsSetting(): Promise<boolean | null> {
   return permissionCardsSetting(await daemonCliGet<unknown>(primaryScope(), 'settings/get'))

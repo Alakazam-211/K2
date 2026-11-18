@@ -187,6 +187,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // 0.46.11: the mark of the one-time "on by default" pass (an Admin
     // clearing it would let the next boot turn an owner's off back on).
     "permissionCardsDefaultApplied",
+    // 0.46.16: who agents' permission cards go to (Settings → Access →
+    // Permission Cards → Who agents ask). Owners only.
+    "permissionApprovers",
     // Garden access lists (prd-garden-access-v1 G0): always on from 0.46.3
     // (`app_settings::update` refuses false); still Owner-only to send.
     "gardenAccess",

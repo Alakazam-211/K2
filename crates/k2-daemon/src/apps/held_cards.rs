@@ -111,6 +111,8 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
         k2_core::log_debug!("[app-cards] request for {}: {e}", r.id);
         return json!({ "card": null });
     }
+    // Who it asks: the owner's default (0.46.16), else everyone at the floor.
+    let audience = crate::permission::approvers::audience_for_new(&req);
     let (prompt, options) = present::prompt_and_options(std::slice::from_ref(&req), false);
     let opts: Vec<&str> = options.iter().map(String::as_str).collect();
     let card_action = present::card_action(std::slice::from_ref(&req), false, present::single_dedupe(&req));
@@ -136,7 +138,7 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
         false,
         req.expires_at,
         // The catalog's floor: an Owner or Admin login (0.46.13).
-        crate::overlay_routes::CardAudience::Logins(present::eligible_logins(reg.spec.floor)),
+        crate::overlay_routes::CardAudience::Logins(audience),
     );
     let (card_id, addr) = match posted {
         Ok(crate::overlay_routes::Presented::Card { id, addr }) => (id, addr),

@@ -341,6 +341,21 @@ grep -q '^POST /cli/permission/request {"action": "compute.use", "params": {}, "
     || bad "permission request: wrong request: $(cat "$LOG")"
 run agent permission request compute.use
 [ "$RC" = 2 ] && ok || bad "permission request without --why: exit $RC, want 2"
+# 0.46.16: --to names who is asked; it rides the request as `to`.
+run agent permission request compute.use --why "Run the test suite" --to ada,owner
+[ "$RC" = 0 ] && ok || bad "permission request --to: exit $RC ($ERR)"
+grep -q '^POST /cli/permission/request {"action": "compute.use", "params": {}, "why": "Run the test suite", "to": "ada,owner"}$' "$LOG" && ok \
+    || bad "permission request --to: wrong request: $(cat "$LOG")"
+run agent permission request compute.use --why "x" --to
+[ "$RC" = 2 ] && ok || bad "permission request --to with no value: exit $RC, want 2"
+# The owner's default, from a terminal outside K2: a settings write.
+run person permission approvers ada,owner
+grep -q '^POST /cli/settings/update {"permissionApprovers": \["ada", "owner"\]}$' "$LOG" && ok || bad "permission approvers: wrong request: $(cat "$LOG")"
+run person permission approvers everyone
+grep -q '^POST /cli/settings/update {"permissionApprovers": \[\]}$' "$LOG" && ok || bad "permission approvers everyone: wrong request: $(cat "$LOG")"
+run agent permission approvers ada
+[ "$RC" = 3 ] && ok || bad "permission approvers in a K2 terminal: exit $RC, want 3"
+
 # People verbs are refused in a K2 terminal.
 run agent permission pending
 [ "$RC" = 3 ] && ok || bad "permission pending in a K2 terminal: exit $RC, want 3"

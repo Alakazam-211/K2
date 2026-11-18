@@ -449,6 +449,8 @@ pub(crate) fn present_for(rec: &HandoffRecord) -> Value {
     if let Err(e) = store::insert(&req) {
         return json!({ "card": null, "why": e });
     }
+    // Who it asks: the owner's default (0.46.16), else everyone at the floor.
+    let audience = crate::permission::approvers::audience_for_new(&req);
     let reqs = std::slice::from_ref(&req);
     let (prompt, options) = present::prompt_and_options(reqs, false);
     let opts: Vec<&str> = options.iter().map(String::as_str).collect();
@@ -461,7 +463,7 @@ pub(crate) fn present_for(rec: &HandoffRecord) -> Value {
         card_action,
         false,
         req.expires_at,
-        crate::overlay_routes::CardAudience::Logins(present::eligible_logins(reg.spec.floor)),
+        crate::overlay_routes::CardAudience::Logins(audience),
     );
     let (card_id, addr) = match posted {
         Ok(crate::overlay_routes::Presented::Card { id, addr }) => (id, addr),

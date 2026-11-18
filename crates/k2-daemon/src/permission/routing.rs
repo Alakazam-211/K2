@@ -57,7 +57,13 @@ pub(crate) fn push_card(conversation_id: &str, project_id: &str, addr: &str, car
             People::default()
         }
     };
-    let eligible = eligible_people(&people, logins);
+    // 0.46.16: a request that names who it asks reaches only them (the
+    // owner token's person only when asked); else everyone at the floor.
+    let narrowed = super::approvers::of(req.id.as_str());
+    let eligible = match &narrowed {
+        Some(names) => super::approvers::people_of(&people, names),
+        None => eligible_people(&people, logins),
+    };
     let setting = setting_of(&req);
     let agent = agent_display_name(project_id, addr);
     let now = Instant::now();
@@ -92,7 +98,10 @@ pub(crate) fn push_card(conversation_id: &str, project_id: &str, addr: &str, car
 
     // 2. The Tickets item, when nobody who may answer was looking.
     let seen = eligible.iter().any(|p| viewers.visible_within(p, conversation_id, VISIBLE_WINDOW, now));
-    if !seen {
+    // Narrowed to no login (only `owner`): no item, which would be
+    // unassigned and so seen by every owner.
+    let item_ok = narrowed.is_none() || !logins.is_empty();
+    if !seen && item_ok {
         let (title, body) = notice_text(&req, &agent, addr);
         let assignees: Vec<String> = logins.to_vec();
         if let Err(e) = crate::feedback_routes::file_permission_notice(project_id, &agent, &title, &body, &assignees) {

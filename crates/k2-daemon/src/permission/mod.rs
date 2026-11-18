@@ -32,6 +32,8 @@ pub(crate) mod actions;
 
 // A1 · core
 pub(crate) mod answer;
+/// 0.46.16: who a card asks (`--to`, the owner's `permissionApprovers`).
+pub(crate) mod approvers;
 pub(crate) mod batch;
 pub(crate) mod expiry;
 pub(crate) mod inject;
@@ -48,6 +50,8 @@ pub(crate) mod store;
 pub(crate) mod testkit;
 #[cfg(test)]
 mod core_tests;
+#[cfg(test)]
+mod approvers_tests;
 
 // F · golden samples and the drift test (`cargo test -p k2-daemon
 // permission_samples`; PRD rev 3.1 §13.4, §17.10).

@@ -171,6 +171,7 @@ fn words_raw(spec: &ActionSpec, ctx: &Ctx) -> Words {
         .or_else(|| super::actions::vault_incoming::with_computed(spec.id, ctx))
         .or_else(|| super::actions::vault_send::with_computed(spec.id, ctx))
         .or_else(|| super::actions::vault_grant_server::with_computed(spec.id, ctx))
+        .or_else(|| super::actions::permission_approvers::with_computed(spec.id, ctx))
         .or_else(|| super::actions::postal::with_computed(spec.id, ctx));
     let ctx = computed.as_ref().unwrap_or(ctx);
     let what = fill(spec.words.what_changes, ctx);
@@ -267,6 +268,16 @@ pub(crate) fn eligible_logins(floor: Floor) -> Vec<String> {
 
 pub(crate) fn approvers(floor: Floor) -> Approvers {
     Approvers { floor: floor.as_str().to_string(), label: floor.label().to_string(), names: eligible_logins(floor) }
+}
+
+/// [`approvers`] for one request: `names` is who it asks (0.46.16:
+/// `--to` or the owner's default; `owner` for the owner token's person),
+/// else every login at the floor.
+pub(crate) fn approvers_of(req: &PermissionRequest, floor: Floor) -> Approvers {
+    match super::approvers::of(req.id.as_str()) {
+        Some(names) => Approvers { floor: floor.as_str().to_string(), label: floor.label().to_string(), names },
+        None => approvers(floor),
+    }
 }
 
 // ── the view ────────────────────────────────────────────────────────
@@ -377,7 +388,7 @@ pub(crate) fn item_view(req: &PermissionRequest, spec: &ActionSpec) -> ItemView 
         notes: store::notes(req.id.as_str()).unwrap_or_default(),
         asked_for: req.asked_for.clone(),
         askers: None,
-        approvers: approvers(floor),
+        approvers: approvers_of(req, floor),
         proof,
         expires_at: req.expires_at,
         settings_page: w.settings_page,
@@ -439,7 +450,7 @@ pub(crate) fn view_for(reqs: &[PermissionRequest], batch: bool, viewer: Option<&
         state: if any_open { BatchState::Pending } else { BatchState::Done },
         viewer: vv,
         items,
-        approvers: approvers(floor),
+        approvers: approvers_of(first, floor),
         expires_at,
     };
     serde_json::to_value(view).ok()

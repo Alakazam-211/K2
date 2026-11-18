@@ -379,6 +379,19 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
         params: values.clone(),
     };
     let w = present::words(spec, &ctx);
+    // A password reset for a box login is the owner's alone (0.46.6).
+    let floor = super::actions::password_reset::floor_for(spec.id, &ctx).unwrap_or(spec.floor);
+    // 0.46.16: who it asks. `--to` names them (each must be able to answer);
+    // else the owner's default; else everyone who may answer.
+    let named = match super::approvers::parse(body.get("to")) {
+        Ok(Some(n)) => match super::approvers::check_named(&n, floor) {
+            Ok(n) => Some(n),
+            Err(r) => return err(400, r.code, r.message),
+        },
+        Ok(None) => None,
+        Err(r) => return err(400, r.code, r.message),
+    };
+    let asks = super::approvers::for_new(named, floor);
     // Before the state check: that one tells the MAIN session it may run the
     // command itself, which a sidecar can't.
     if let Err(r) = super::actions::chat_refresh::gate_ask(spec.id, workspace_id, session_id, &params_hash(&values)) {
@@ -431,9 +444,7 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
         }
         return CliResponse { status: answer_status(l.status), content_type: "application/json", body: v.to_string() };
     }
-    // A password reset for a box login is the owner's alone (0.46.6).
-    let floor = super::actions::password_reset::floor_for(spec.id, &ctx).unwrap_or(spec.floor);
-    let routed = routed_to(floor);
+    let routed = super::approvers::routed_json(floor, asks.as_deref());
     let expires_at = now + spec.expiry.default_secs;
     if bool_field(body, "dryRun") || bool_field(body, "dry_run") {
         return ok(json!({
@@ -489,6 +500,12 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
     if let Err(e) = store::insert(&req) {
         return err(500, "db", e);
     }
+    if let Some(names) = &asks {
+        if let Err(e) = super::approvers::set(req.id.as_str(), names) {
+            let _ = store::cas_open_to(req.id.as_str(), RequestState::Failed);
+            return err(500, "db", e);
+        }
+    }
     let placed = match batch::place(&req, &conversation_id) {
         Ok(p) => p,
         Err(e) => {
@@ -536,19 +553,6 @@ pub(crate) fn raise_held_card(workspace_id: &str, session_id: &str, request_id: 
     let r = request(workspace_id, session_id, &body);
     let status = r.status.split_whitespace().next().and_then(|c| c.parse().ok()).unwrap_or(500);
     (status, serde_json::from_str(&r.body).unwrap_or(Value::Null))
-}
-
-/// The people a card is routed to: `[{login, role}]` (the eligible logins).
-fn routed_to(floor: k2_core::permission::catalog::Floor) -> Value {
-    let roles: std::collections::HashMap<String, String> = k2_core::connect_users::list_users()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|u| (u.username, format!("{:?}", u.role).to_ascii_lowercase()))
-        .collect();
-    json!(present::eligible_logins(floor)
-        .into_iter()
-        .map(|l| json!({ "role": roles.get(&l).cloned().unwrap_or_default(), "login": l }))
-        .collect::<Vec<_>>())
 }
 
 fn answer_status(code: u16) -> &'static str {

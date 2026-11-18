@@ -105,6 +105,11 @@ pub enum Compare {
         stdout: &'static str,
         stderr: &'static str,
     },
+    /// The shell's Python raises: everything as [`Compare::Exact`] but
+    /// the traceback on stderr, where only what comes before it and its
+    /// last line's exception name must match (its frames and wording
+    /// depend on the Python version; the binary prints 3.12's).
+    Traceback,
 }
 
 pub struct Case {
@@ -357,7 +362,24 @@ impl Rig {
             "{name}: the signal that ended it\nrust: {r:?}\nbash: {b:?}"
         );
         assert_eq!(r.stdout, b.stdout, "{name}: stdout");
-        if matches!(c.compare, Compare::Waited | Compare::InPipe { .. }) {
+        if c.compare == Compare::Traceback {
+            const HEAD: &str = "Traceback (most recent call last):\n";
+            let split = |text: &str, side: &str| -> (String, String) {
+                let (before, tb) = text
+                    .split_once(HEAD)
+                    .unwrap_or_else(|| panic!("{name}: no traceback from {side}: {text:?}"));
+                let last = tb.lines().last().unwrap_or_default();
+                let class = last.split(':').next().unwrap_or_default().to_string();
+                (before.to_string(), class)
+            };
+            assert_eq!(
+                split(&r.stderr, "the binary"),
+                split(&b.stderr, "bash"),
+                "{name}: stderr before the traceback, and its exception\nrust: {}\nbash: {}",
+                r.stderr,
+                b.stderr
+            );
+        } else if matches!(c.compare, Compare::Waited | Compare::InPipe { .. }) {
             let (bs, bn) = mask_waited(&b.stderr);
             let (rs, rn) = mask_waited(&r.stderr);
             assert_eq!(rs, bs, "{name}: stderr (seconds masked)");

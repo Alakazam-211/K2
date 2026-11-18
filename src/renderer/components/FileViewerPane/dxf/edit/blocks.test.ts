@@ -12,18 +12,19 @@ const FIX = resolve(__dirname, '../../__fixtures__/drawing-model')
 const HEADER = JSON.parse(readFileSync(`${FIX}/sampler-header.json`, 'utf8')) as ModelHeader
 const ROWS = (JSON.parse(readFileSync(`${FIX}/sampler-page-model.json`, 'utf8')) as ModelPage).entities
 const block = (name: string): ModelBlock => HEADER.blocks.find((b) => b.name === name)!
-/** The header as a later pack writes it: each block's dynamic and annotative flags, DOOR's label definition, and the current layer. */
-const LATER: ModelHeader = {
-  ...HEADER,
-  current_layer: '@h:19',
-  blocks: HEADER.blocks.map((b) => ({
-    ...b,
-    dynamic: false,
-    annotative: false,
-    attdefs: b.name === 'DOOR' ? [{ tag: 'NO', default: 'D-00', constant: false, prompt: 'Door number' }] : [],
-  })),
-}
-const later = (name: string): ModelBlock => LATER.blocks.find((b) => b.name === name)!
+/** The header as a pack before v0.4.0 wrote it: no block flags, no label definitions, no current layer. */
+const { current_layer: _cl, ...WITHOUT_LAYER } = HEADER
+const OLDER: ModelHeader = { ...WITHOUT_LAYER, blocks: HEADER.blocks.map(({ dynamic: _d, annotative: _a, attdefs: _t, ...b }) => b) }
+const older = (name: string): ModelBlock => OLDER.blocks.find((b) => b.name === name)!
+
+describe('the vendored pack’s header (v0.4.0)', () => {
+  it('states each block’s dynamic and annotative flags, DOOR’s label definition, and the current layer', () => {
+    expect(HEADER.current_layer).toBe('@h:19')
+    expect(HEADER.blocks.map((b) => [b.name, b.dynamic, b.annotative, b.attdefs])).toEqual(
+      HEADER.blocks.map((b) => [b.name, false, false, b.name === 'DOOR' ? [{ tag: 'NO', default: 'D-00', constant: false, prompt: 'Door number' }] : []]),
+    )
+  })
+})
 
 describe('insertableBlocks', () => {
   it('the sampler’s named blocks, by name; its anonymous dimension block is left out', () => {
@@ -42,26 +43,26 @@ describe('insertableBlocks', () => {
         extra({ handle: '@h:92', name: 'VALVE', dynamic: true }),
         extra({ handle: '@h:93', name: 'CHAIR' }),
         extra({ handle: '@h:94', name: 'NORTH', annotative: true }),
-        // Annotative unknown (as on DWG): kept.
+        // Annotative unknown (a reader that can’t say): kept.
         extra({ handle: '@h:95', name: 'TREE', annotative: null }),
       ],
     }
     expect(insertableBlocks(header).map((b) => b.name)).toEqual(['CHAIR', 'DOOR', 'NEST', 'TREE'])
   })
-  it('without the flags (the vendored pack’s header), nothing is left out for them', () => {
-    for (const b of HEADER.blocks) expect([b.name, b.dynamic, b.annotative]).toEqual([b.name, undefined, undefined])
-    expect(insertableBlocks(LATER).map((b) => b.name)).toEqual(insertableBlocks(HEADER).map((b) => b.name))
+  it('without the flags (a pack before v0.4.0), nothing is left out for them', () => {
+    for (const b of OLDER.blocks) expect([b.name, b.dynamic, b.annotative]).toEqual([b.name, undefined, undefined])
+    expect(insertableBlocks(OLDER).map((b) => b.name)).toEqual(insertableBlocks(HEADER).map((b) => b.name))
   })
 })
 
 describe('insertLabels', () => {
   it('DOOR’s one label, by prompt, with its default; NEST has none', () => {
-    expect(insertLabels(later('DOOR'), ROWS)).toEqual([{ tag: 'NO', value: 'D-00', prompt: 'Door number', known: true }])
-    expect(insertLabels(later('NEST'), ROWS)).toEqual([])
+    expect(insertLabels(block('DOOR'), ROWS)).toEqual([{ tag: 'NO', value: 'D-00', prompt: 'Door number', known: true }])
+    expect(insertLabels(block('NEST'), ROWS)).toEqual([])
   })
-  it('without definitions (the vendored pack’s header): the tags DOOR’s existing reference carries, defaults unknown', () => {
-    expect(block('DOOR').attdefs).toBeUndefined()
-    expect(insertLabels(block('DOOR'), ROWS)).toEqual([{ tag: 'NO', value: '', prompt: null, known: false }])
+  it('without definitions (a pack before v0.4.0): the tags DOOR’s existing reference carries, defaults unknown', () => {
+    expect(older('DOOR').attdefs).toBeUndefined()
+    expect(insertLabels(older('DOOR'), ROWS)).toEqual([{ tag: 'NO', value: '', prompt: null, known: false }])
   })
   it('constant definitions are left out; the rest keep file order', () => {
     const b = {
@@ -81,12 +82,12 @@ describe('insertLabels', () => {
 
 describe('currentLayerName', () => {
   it('the header’s current layer, by name through the layers’ handles', () => {
-    expect(currentLayerName(LATER)).toBe('0')
+    expect(currentLayerName(HEADER)).toBe('0')
     expect(currentLayerName({ ...HEADER, current_layer: '@h:01a' })).toBe('A-WALL')
   })
-  it('nothing when it isn’t set (the vendored pack’s header has none) or isn’t in the drawing', () => {
-    expect(HEADER.current_layer).toBeUndefined()
-    expect(currentLayerName(HEADER)).toBeNull()
+  it('nothing when it isn’t set (a pack before v0.4.0 states none) or isn’t in the drawing', () => {
+    expect(OLDER.current_layer).toBeUndefined()
+    expect(currentLayerName(OLDER)).toBeNull()
     expect(currentLayerName({ ...HEADER, current_layer: null })).toBeNull()
     expect(currentLayerName({ ...HEADER, current_layer: '@h:FFF' })).toBeNull()
   })

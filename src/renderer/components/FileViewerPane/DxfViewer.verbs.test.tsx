@@ -304,20 +304,21 @@ describe('text', () => {
 })
 
 describe('inserting a block', () => {
-  /** The sampler's header as a later pack writes it (the current layer, each block's flags and label definitions), with DOOR's definitions as given. */
+  /** The vendored pack's sampler header (the current layer, each block's flags and label definitions), with DOOR's definitions as given. */
   const doorDefs = (attdefs: ModelHeader['blocks'][number]['attdefs']): ModelHeader => ({
     ...HEADER,
-    current_layer: '@h:19',
-    blocks: HEADER.blocks.map((b) => ({ ...b, dynamic: false, annotative: false, attdefs: b.name === 'DOOR' ? attdefs : [] })),
+    blocks: HEADER.blocks.map((b) => (b.name === 'DOOR' ? { ...b, attdefs } : b)),
   })
-  const LATER = doorDefs([{ tag: 'NO', default: 'D-00', constant: false, prompt: 'Door number' }])
+  /** The header as a pack before v0.4.0 wrote it: no block flags, no label definitions, no current layer. */
+  const { current_layer: _cl, ...WITHOUT_LAYER } = HEADER
+  const OLDER: ModelHeader = { ...WITHOUT_LAYER, blocks: HEADER.blocks.map(({ dynamic: _d, annotative: _a, attdefs: _t, ...b }) => b) }
   const press = (x: number, y: number) => {
     fireEvent.pointerDown(sheet(), { pointerId: 1, button: 0, ...client(x, y) })
     fireEvent.pointerUp(sheet(), { pointerId: 1, ...client(x, y) })
   }
 
   it('picker, then a ghost that follows the pointer, a click, the labels form, Insert; the new block is selected', async () => {
-    await open({ header: LATER })
+    await open()
     // With nothing selected the panel offers it; the toolbar too.
     expect(screen.getByTestId('dxf-edit-empty').textContent).toContain('Insert block…')
     expect(screen.getByTestId('dxf-insert-block').textContent).toBe('Insert block')
@@ -385,7 +386,7 @@ describe('inserting a block', () => {
   })
 
   it('no layer line when the drawing has no current layer', async () => {
-    await open({ header: { ...LATER, current_layer: null } })
+    await open({ header: { ...HEADER, current_layer: null } })
     fireEvent.click(screen.getByTestId('dxf-insert-block'))
     fireEvent.click(screen.getAllByTestId('dxf-insert-choice')[0])
     press(30, 5)
@@ -393,8 +394,8 @@ describe('inserting a block', () => {
     expect(screen.queryByTestId('dxf-insert-layer')).toBeNull()
   })
 
-  it('labels are checked as you type; without definitions (the vendored pack’s header), a label is sent only when filled in and no layer line shows', async () => {
-    await open()
+  it('labels are checked as you type; without definitions (a pack before v0.4.0), a label is sent only when filled in and no layer line shows', async () => {
+    await open({ header: OLDER })
     fireEvent.click(screen.getByTestId('dxf-insert-block'))
     fireEvent.click(screen.getAllByTestId('dxf-insert-choice')[0])
     press(30, 5)

@@ -1,11 +1,11 @@
 The CAD pack's drawing-model goldens for its generated sampler (read-only copies):
   the CAD pack's drawing-model goldens, index format 4
-  copied from the vendored pack, vendor/k2-mpc-cad at v0.3.0 (release commit 304644b)
+  copied from the vendored pack, vendor/k2-mpc-cad at v0.4.0 (release commit 13f4955)
   vendor/k2-mpc-cad/crates/dxf/tests/golden/draw-sampler-2018-header.json          -> sampler-header.json
   vendor/k2-mpc-cad/crates/dxf/tests/golden/draw-sampler-2018-page-model.json      -> sampler-page-model.json
   vendor/k2-mpc-cad/crates/dxf/tests/golden/draw-sampler-2018-page-door.json       -> sampler-page-door.json
   vendor/k2-mpc-cad/crates/dxf/tests/golden/draw-sampler-2018-page-nest.json       -> sampler-page-nest.json
   vendor/k2-mpc-cad/crates/dxf/tests/golden/draw-sampler-2018-page-dimension.json  -> sampler-page-dimension.json
-The header's blocks[].attdefs, .dynamic, .annotative and current_layer come with a later pack
-release; tests for them add those fields to a copy of the header, never to these files.
+The header's blocks[].attdefs, .dynamic, .annotative and current_layer are the pack's from v0.4.0;
+tests for a host on an older pack take those fields off a copy of the header, never off these files.
 Colours: the pack's palette may change, so tests read rgb from these files, never a literal.

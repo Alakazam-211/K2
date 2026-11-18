@@ -88,9 +88,9 @@ export type ModelBlock = {
   xref: boolean
   /** A dynamic block (its parameters work only in a CAD app): block insert refuses it. */
   dynamic?: boolean
-  /** An annotative block: block insert refuses it. Null when the model can't say (DWG). */
+  /** An annotative block: block insert refuses it. Null when the reader can't say. */
   annotative?: boolean | null
-  /** Its attribute definitions in file order, constant ones included and flagged. Null when the model can't read them (DWG). */
+  /** Its attribute definitions in file order, constant ones included and flagged. Null when the reader can't read them. */
   attdefs?: ModelAttdef[] | null
 }
 

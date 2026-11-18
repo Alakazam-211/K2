@@ -22,10 +22,13 @@ describe('needs the person = needs-you, never the working token', () => {
   })
 
   it('tickets: waiting and the approval kind; needs discussion keeps its own orange', () => {
+    // The status colours live in badges.tsx (the card and the header read
+    // them from there).
+    const badges = src('Feedback/badges.tsx')
+    expect(/status === 'waiting'\s*\?\s*'[^']*--color-status-needs-you/.test(badges)).toBe(true)
+    expect(src('Feedback/TicketCard.tsx')).toContain("from './badges'")
     for (const rel of ['Feedback/TicketCard.tsx', 'Feedback/badges.tsx']) {
-      const s = src(rel)
-      expect([rel, /status === 'waiting'\s*\?\s*'[^']*--color-status-needs-you/.test(s)]).toEqual([rel, true])
-      expect([rel, s.includes('var(--color-status-working)')]).toEqual([rel, false])
+      expect([rel, src(rel).includes('var(--color-status-working)')]).toEqual([rel, false])
     }
     expect(src('Feedback/badges.tsx')).toMatch(/kind === 'approval'\s*\?\s*'[^']*--color-status-needs-you/)
   })

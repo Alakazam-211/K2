@@ -68,10 +68,11 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Pdf/AnnotPopover.tsx': 'the PDF annotation popover (a dialog role) sits on its page inside its own tab’s scrolling desk (absolute, clipped by the tab), never over another pane',
   'components/LiveView/timeline/MonitorDetails.tsx': 'the monitor’s details (a dialog role) sit inside the monitor or its own tab’s upper row, never over another pane',
   'components/Feedback/FeedbackPage.tsx': 'Feedback page: the room is hidden',
-  'components/Feedback/TicketBoard.tsx': 'Feedback page: the room is hidden',
   'components/Feedback/TicketWindow.tsx': 'Feedback page: the room is hidden',
   'components/Feedback/BriefFrame.tsx': 'Feedback page: the room is hidden',
-  'components/Feedback/FeedbackItemView.tsx': 'Feedback page: the room is hidden',
+  'components/Feedback/TicketListBody.tsx': 'the ticket list (a listbox, not a layer), inline in the Feedback page’s list',
+  // A drag-capture layer: it exists only while the pointer holds the edge.
+  'components/Layout/ResizeEdge.tsx': 'the transparent layer that holds a column drag; gone when the pointer lets go',
   'components/Wiki/WikiPage.tsx': 'Wiki page: the room is hidden',
   'components/OrgChart/OrgChartPage.tsx': 'Org Chart page: the room is hidden',
   'components/Mail/MailPage.tsx': 'Mail page: the room is hidden',

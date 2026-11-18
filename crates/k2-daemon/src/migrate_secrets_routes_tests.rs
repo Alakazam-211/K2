@@ -124,6 +124,35 @@ fn code(v: &Value) -> &str {
     v.pointer("/error/code").and_then(Value::as_str).unwrap_or("")
 }
 
+use crate::vault_routes::presence;
+
+/// This computer's own user check, faked for this test's thread.
+struct Presence;
+
+impl Presence {
+    fn offers(method: Option<&'static str>, approve: bool) -> Self {
+        presence::fake::set(Some(presence::fake::Fake { method, approve }));
+        Presence
+    }
+}
+
+impl Drop for Presence {
+    fn drop(&mut self) {
+        presence::fake::set(None);
+    }
+}
+
+impl TestBox {
+    /// A token from this computer's own user check for an export to `fp`.
+    fn presence_token(&self, c: &VaultCaller, fp: &str) -> String {
+        let body = json!({ "action": presence::BOX_MOVE_EXPORT, "secretId": format!("export:{fp}"), "method": presence::LOCAL_AUTH });
+        let r = crate::vault_routes::handle_on(&self.v(), crate::vault_routes::CONFIRM_FINISH, Ok(c.clone()), body.to_string().as_bytes(), &HashMap::new(), "test", None);
+        let v: Value = serde_json::from_str(&r.body).expect("json");
+        assert!(r.status.starts_with("200"), "{v}");
+        v["token"].as_str().expect("token").to_string()
+    }
+}
+
 #[test]
 fn a_box_move_end_to_end_through_the_routes_with_held_steps_and_confirms() {
     let old = TestBox::new("mv-old");
@@ -155,15 +184,17 @@ fn a_box_move_end_to_end_through_the_routes_with_held_steps_and_confirms() {
     // Nor can the K2 Web shell without a terminal.
     let (_, a) = old.call(APPROVE, app(), NO_TTY, json!({ "request": mv }));
     assert_eq!(code(&a), "person_required");
-    // The owner at a terminal: the confirm is asked, bound to the held id.
+    // The owner at a terminal: no recovery key is confirmed on the old box,
+    // so this computer's own check is asked, bound to the destination key.
+    let _p = Presence::offers(Some(presence::LOCAL_AUTH), true);
     let (s, a) = old.call(APPROVE, person(), None, json!({ "request": mv }));
-    assert_eq!((s.as_str(), code(&a)), ("403 Forbidden", "vault_confirm_required"), "{a}");
-    assert_eq!(a["confirm"]["secretId"], json!(mv));
-    // A confirm for another step doesn't do.
-    let wrong = old.token(&person(), &format!("export:{fp}"));
+    assert_eq!((s.as_str(), code(&a)), ("403 Forbidden", presence::CODE), "{a}");
+    assert_eq!((a["confirm"]["action"].clone(), a["confirm"]["secretId"].clone()), (json!(presence::BOX_MOVE_EXPORT), json!(format!("export:{fp}"))));
+    // The vault-move confirm (the vault password's) doesn't do.
+    let wrong = old.token(&person(), &mv);
     let (_, a) = old.call(APPROVE, person(), None, json!({ "request": mv, "confirmToken": wrong }));
-    assert_ne!(code(&a), "", "a token bound to another step is refused: {a}");
-    let t = old.token(&person(), &mv);
+    assert_eq!(code(&a), presence::CODE, "the vault password's confirm is refused: {a}");
+    let t = old.presence_token(&person(), &fp);
     let (s, done) = old.call(APPROVE, person(), None, json!({ "request": mv, "confirmToken": t }));
     assert_eq!(s, "200 OK", "{done}");
     assert_eq!((done["frozen"].clone(), done["moveKey"].clone()), (json!(true), json!(fp)));
@@ -235,7 +266,9 @@ fn the_app_imports_with_a_confirm_and_a_full_vault_needs_one() {
     let recipient = b["moveKey"]["recipient"].as_str().expect("r").to_string();
     let fp = b["moveKey"]["fingerprint"].as_str().expect("fp").to_string();
     let out = old.home.join("m.k2mv");
-    let t = old.token(&person(), &format!("export:{fp}"));
+    // No recovery key on the old box yet: this computer's own check.
+    let _p = Presence::offers(Some(presence::LOCAL_AUTH), true);
+    let t = old.presence_token(&person(), &fp);
     let (s, e) = old.call(EXPORT, person(), None, json!({ "to": recipient, "out": out, "confirmToken": t }));
     assert_eq!(s, "200 OK", "{e}");
     // An existing output file is never overwritten.
@@ -264,7 +297,8 @@ fn import_works_while_this_box_vault_is_closed_and_refuses_bad_input() {
     let recipient = b["moveKey"]["recipient"].as_str().expect("r").to_string();
     let fp = b["moveKey"]["fingerprint"].as_str().expect("fp").to_string();
     let out = old.home.join("c.k2mv");
-    let t = old.token(&person(), &format!("export:{fp}"));
+    let _p = Presence::offers(Some(presence::LOCAL_AUTH), true);
+    let t = old.presence_token(&person(), &fp);
     let (s, _) = old.call(EXPORT, person(), None, json!({ "to": recipient, "out": out, "confirmToken": t }));
     assert_eq!(s, "200 OK");
     // Relative paths and a missing file are refused by name.
@@ -300,4 +334,59 @@ fn the_routes_are_post_only_classified_and_never_take_keys_in_a_url() {
     params.insert("identity".to_string(), "AGE-SECRET-KEY-1X".to_string());
     let r = handle_in(&b, &b.home, BEGIN, Ok(person()), b"{}", &params, "t", None);
     assert!(r.body.contains("value_on_argv"), "{}", r.body);
+}
+
+/// No recovery key confirmed yet: an export takes this computer's own user
+/// check, bound to the destination key, from the owner only; the vault
+/// password's confirm, a check for another key and an Admin login don't do.
+#[test]
+fn an_export_before_a_confirmed_recovery_key_needs_presence() {
+    let old = TestBox::new("mvp-old");
+    let new = TestBox::new("mvp-new");
+    put_user(&old.v(), "GH_TOKEN");
+    let (_, b1) = new.call(BEGIN, app(), NO_TTY, json!({}));
+    let recipient = b1["moveKey"]["recipient"].as_str().expect("recipient").to_string();
+    let fp = b1["moveKey"]["fingerprint"].as_str().expect("fp").to_string();
+    let (_, b2) = old.call(BEGIN, app(), NO_TTY, json!({}));
+    let other_fp = b2["moveKey"]["fingerprint"].as_str().expect("fp").to_string();
+    let out = old.home.join("move.k2mv");
+    let body = json!({ "to": recipient, "out": out });
+    let _p = Presence::offers(Some(presence::LOCAL_AUTH), true);
+    // A person at a terminal: the check is asked. The app without one is
+    // held for the owner, as before.
+    let (s, v) = old.call(EXPORT, person(), None, body.clone());
+    assert_eq!((s.as_str(), code(&v)), ("403 Forbidden", presence::CODE), "{v}");
+    assert_eq!(v["confirm"]["secretId"], json!(format!("export:{fp}")));
+    let (s, v) = old.call(EXPORT, app(), None, json!({ "to": recipient, "out": old.home.join("held.k2mv") }));
+    assert_eq!((s.as_str(), v["status"].as_str()), ("202 Accepted", Some("held")), "{v}");
+    // The vault password's vault-move confirm for this very key: refused.
+    let wrong = old.token(&person(), &format!("export:{fp}"));
+    let (_, v) = old.call(EXPORT, person(), None, json!({ "to": recipient, "out": out, "confirmToken": wrong }));
+    assert_eq!(code(&v), presence::CODE, "{v}");
+    // A check for another key: refused.
+    let t = old.presence_token(&person(), &other_fp);
+    let (_, v) = old.call(EXPORT, person(), None, json!({ "to": recipient, "out": out, "confirmToken": t }));
+    assert_eq!(code(&v), presence::CODE, "{v}");
+    // An Admin login (a person, not the owner): refused at the check and
+    // at the step.
+    let admin = VaultCaller { actor: Actor::Login { username: "lee".into(), role: k2_vault::Role::Admin }, channel: Channel::Login, session_id: None };
+    let r = crate::vault_routes::handle_on(
+        &old.v(),
+        crate::vault_routes::CONFIRM_FINISH,
+        Ok(admin.clone()),
+        json!({ "action": presence::BOX_MOVE_EXPORT, "secretId": format!("export:{fp}"), "method": presence::CONNECT_PASSWORD, "password": "x" }).to_string().as_bytes(),
+        &HashMap::new(),
+        "test",
+        None,
+    );
+    assert!(r.status.starts_with("403") && r.body.contains("owner_only"), "{}", r.body);
+    let minted = old.v().confirm.mint(presence::BOX_MOVE_EXPORT, Some(&format!("export:{fp}")), &admin.actor.stamp(), presence::CONNECT_PASSWORD);
+    let (s, v) = old.call(EXPORT, admin, None, json!({ "to": recipient, "out": out, "confirmToken": minted }));
+    assert_eq!((s.as_str(), code(&v)), ("403 Forbidden", "owner_only"), "{v}");
+    assert!(!out.exists() && !old.v().is_frozen(), "nothing exported");
+    // With the check for this key, from the owner (the app here): exported.
+    let t = old.presence_token(&app(), &fp);
+    let (s, v) = old.call(EXPORT, app(), None, json!({ "to": recipient, "out": out, "confirmToken": t }));
+    assert_eq!(s, "200 OK", "{v}");
+    assert!(out.exists() && old.v().is_frozen());
 }

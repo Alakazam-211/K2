@@ -24,6 +24,8 @@ pub mod oauth_refresh;
 pub mod proxy;
 pub mod publish_env;
 pub mod refstore;
+/// Who is asking in one vault request (presence bindings, the prompt's words).
+pub mod request_peer;
 pub mod run;
 pub mod sealer;
 pub mod server_refs;

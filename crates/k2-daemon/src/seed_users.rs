@@ -25,6 +25,10 @@
 //!   modified, so a re-flashed seed file can't rotate a live customer's
 //!   password or role out from under them.
 //! - A malformed file / malformed row logs LOUDLY and is still deleted.
+//! - An `owner` row is made only on the server's first start (no K2
+//!   database yet): owner logins made later take this computer's own user
+//!   check (`connect_users_routes::owner_login_gate`), and a file in
+//!   `~/.k2` is no such check. Other rows apply as before.
 //!
 //! Called from `main.rs` once the config dir exists, before/independent
 //! of the listeners. Idempotent + instant no-op when the file is absent
@@ -104,9 +108,10 @@ pub fn consume_seed_file() -> Vec<(String, SeedOutcome)> {
         }
     };
 
+    let first_start = is_first_start(&k2_core::paths::k2_home());
     let mut results = Vec::with_capacity(rows.len());
     for row in rows {
-        let outcome = apply_row(&row);
+        let outcome = apply_row(&row, first_start);
         match &outcome {
             SeedOutcome::Created => log_debug!(
                 "[daemon/seed-users] created '{}' role={} mustChangePassword={}",
@@ -128,11 +133,24 @@ pub fn consume_seed_file() -> Vec<(String, SeedOutcome)> {
     results
 }
 
-fn apply_row(row: &SeedUser) -> SeedOutcome {
+/// The text of an owner row on a server that has started before.
+pub const OWNER_ROW_AFTER_FIRST_START: &str =
+    "an owner login from the seed file is made only on the server's first start; the owner adds one in person (k2 users set-role asks for this computer's own user check)";
+
+/// This server's first start: the K2 database isn't there yet (it is
+/// opened right after the seed file is read).
+pub fn is_first_start(k2_home: &std::path::Path) -> bool {
+    !k2_home.join("k2.db").exists() && !k2_home.join("k2so.db").exists()
+}
+
+fn apply_row(row: &SeedUser, first_start: bool) -> SeedOutcome {
     let role = match Role::parse_wire(&row.role) {
         Ok(r) => r,
         Err(e) => return SeedOutcome::Failed(e),
     };
+    if role == Role::Owner && !first_start {
+        return SeedOutcome::Failed(OWNER_ROW_AFTER_FIRST_START.to_string());
+    }
     // Existing user → skip, never modify. role_for_user resolves any
     // stored account (every row has a role, defaulted on load).
     if connect_users::role_for_user(&row.username).is_some() {

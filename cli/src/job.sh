@@ -356,7 +356,7 @@ print(json.dumps(o))' "$body" "$accept")"
     fi
     local tok
     tok="$(_vault_confirm_token_plan systemd-cred "$body" systemdCred)" || exit 3
-    _vault_sock_call POST "$route" "$(_vault_merge "$body" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")")"
+    _vault_sock_call POST "$route" "$(_with_confirm_token "$body" "$tok")"
     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
     if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
     printf '%s' "$_SC_BODY" | python3 -c '

@@ -820,8 +820,8 @@ case "${1:-help}" in
         shift; cmd_clone "$@"
         ;;
     users)
-        # Local daemon connect-user accounts (list / add). Owner-token
-        # bootstrap for the first owner; gated thereafter server-side.
+        # Local daemon connect-user accounts (list / add), gated
+        # server-side (owner-login changes take this computer's own check).
         if _wants_help "${@:2}"; then
             _users_usage
             exit 0

@@ -147,3 +147,21 @@ pub fn from_tcp(path: &str, query: &str, bearer: Option<&str>, owner_token: &str
     let c = crate::sidecar_routes::caller_from_tcp(path, query, bearer, owner_token);
     from_caller(c, session_id)
 }
+
+/// The request peer for a TCP vault call: a Connect login's session (a
+/// hash of its token), so a check made in one session is spent there only.
+/// The owner token over TCP carries nothing more (any process of this user
+/// can present it, and TCP doesn't say which one calls).
+pub fn tcp_peer(query: &str, bearer: Option<&str>, owner_token: &str) -> super::request_peer::Peer {
+    let presented = crate::routes::http::extract_token(query)
+        .filter(|s| !s.is_empty())
+        .or_else(|| bearer.map(str::trim).filter(|s| !s.is_empty()))
+        .unwrap_or("");
+    let bind = if !presented.is_empty() && !crate::routes::http::ct_eq_token(presented, owner_token) && k2_core::connect_users::validate_session(presented).is_some() {
+        let h = k2_vault::crypto::hex(&k2_vault::crypto::sha256(presented.as_bytes()));
+        format!("@login:{}", &h[..16])
+    } else {
+        String::new()
+    };
+    super::request_peer::Peer { bind, asker: None }
+}

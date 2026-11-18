@@ -387,22 +387,41 @@ if v.get("recoveryHint"):
 '
 }
 
+# Add a confirm token to a JSON body ($1) as field $3 (confirmToken). The
+# token reaches python on stdin, never argv or the environment (ps shows
+# both to every process of this user). An empty token sets null.
+_with_confirm_token() {
+    local body="${1:-}" tok="${2:-}" field="${3:-confirmToken}"
+    [ -n "$body" ] || body='{}'
+    printf '%s\n%s\n%s' "$field" "$tok" "$body" | python3 -c '
+import json, sys
+field = sys.stdin.readline().rstrip("\n")
+tok = sys.stdin.readline().rstrip("\n")
+b = json.loads(sys.stdin.read())
+b[field] = tok or None
+print(json.dumps(b))'
+}
+
 # Ask the daemon for a confirm token over vault.sock (Touch ID sheet on a
-# Mac, else the vault password typed here). Prints the token. The vault's
-# first-setup steps (vault-password-set, recovery-setup,
-# backup-export-initial) take this computer's own user check instead: the
-# Mac's sheet, Windows Hello, or on a Linux server an owner login's
-# sign-in password.
+# Mac, else the vault password typed here). Prints the token. Some steps
+# take this computer's own user check instead (the daemon's presence
+# actions: vault-password-set, recovery-setup, backup-export-initial,
+# box-move-export, backup-key-add, owner-login): the Mac's sheet, Windows
+# Hello, on a Linux server an owner login's sign-in password, or for a
+# server's first owner login, this terminal (outside K2).
 _vault_confirm_token() {
     local action="$1" secret_id="${2:-}" label="${3:-}"
-    _vault_sock_call POST "confirm/start" "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1]}))' "$action")"
+    _vault_sock_call POST "confirm/start" "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None}))' "$action" "$secret_id")"
     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
     local methods login
     methods="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin).get("methods") or []))')"
     login="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("login") or "")')"
     local body
     local first_setup=0
-    case "$action" in vault-password-set|recovery-setup|backup-export-initial) first_setup=1 ;; esac
+    case "$action" in vault-password-set|recovery-setup|backup-export-initial|box-move-export|backup-key-add|owner-login) first_setup=1 ;; esac
+    local text
+    text="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("confirmText") or "")')"
+    [ "$first_setup" = 1 ] && [ -n "$text" ] && echo "You are approving: $text" >&2
     # K2_VAULT_CONFIRM_METHOD=vault-password: use the vault password even on
     # a Mac with Touch ID (a headless run, e.g. the two-server harness). The
     # same check as always: the daemon verifies the vault password. Not for
@@ -422,10 +441,16 @@ _vault_confirm_token() {
             echo "Approve on this PC (Windows Hello or your Windows password)…" >&2
             body="$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "windows-hello"}))' "$action" "$secret_id")"
             ;;
+        *" terminal "*)
+            # A server's first owner login: this terminal, outside K2, is
+            # the check (the daemon verifies it on the vault socket).
+            echo "Confirming from this terminal (this server has no owner login yet)…" >&2
+            body="$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "terminal"}))' "$action" "$secret_id")"
+            ;;
         *" owner-login-password "*)
             local pw=""
             if [ -z "$login" ]; then
-                printf 'Owner login on this server: ' >&2
+                printf 'Which owner login on this server (k2 users lists them): ' >&2
                 IFS= read -r login || login=""
             fi
             printf 'Sign-in password for owner login %s: ' "$login" >&2
@@ -843,7 +868,7 @@ print(json.dumps(o))' "$name" "$to" "$as_n" "$note" "$ttl" "$reply" "$scope" "$v
                 local sid tok
                 sid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("secretId") or "")')"
                 tok="$(_vault_confirm_token handoff-send "$sid" "send $name to $to")" || exit 3
-                body="$(python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["confirmToken"]=sys.argv[2]; print(json.dumps(o))' "$body" "$tok")"
+                body="$(_with_confirm_token "$body" "$tok")"
                 _vault_sock_call POST send "$body"
                 tok=""
             fi
@@ -1586,8 +1611,11 @@ k2 vault recovery status
 k2 vault recovery show-once     people only: make and show the recovery key once, type back 3 words
 k2 vault recovery rotate        people only: replace it (asks for a confirm)
 
-The recovery key opens the vault if this box's key is lost. Agents: don't
-run show-once or rotate; tell your owner.
+The recovery key opens the vault if this box's key is lost. Until one is
+confirmed, show-once asks for this computer's own user check (Touch ID or
+the Mac's password, Windows Hello, or on a Linux server an owner login's
+password); the words show only here, in the K2 app or over a Connect
+login. Agents: don't run show-once or rotate; tell your owner.
 
 Example: k2 vault recovery status
 EOF
@@ -1597,6 +1625,9 @@ k2 vault confirm-password set
 
 People only: set the vault password used for confirms where Touch ID
 isn't available (10+ characters; asks for the old one's confirm first).
+The first one asks for this computer's own user check instead (Touch ID
+or the Mac's password, Windows Hello, or on a Linux server an owner
+login's password).
 
 Example: k2 vault confirm-password set
 EOF
@@ -1631,7 +1662,11 @@ Owner only, from your own terminal. A ciphertext snapshot of the vault
 into <dir>; it opens with the recovery words or a backup key. `backup key`
 adds (or replaces) an age key that can open backups on a new box;
 `backup key remove` takes it off. Both ask you to confirm, and
-k2 vault status lists every key holder by fingerprint.
+k2 vault status lists every key holder by fingerprint. Until a recovery
+key is confirmed, a backup and adding a backup key ask for this
+computer's own user check instead (Touch ID or the Mac's password, Windows
+Hello, or on a Linux server an owner login's password), bound to that
+folder or key; a scheduled backup is refused until then.
 
 Example: k2 vault backup /Volumes/backup/k2
 EOF

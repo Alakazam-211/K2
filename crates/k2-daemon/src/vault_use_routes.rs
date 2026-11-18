@@ -1691,7 +1691,7 @@ pub(crate) fn confirm_binding(vault: &LocalVault, action: &str, secret_id: Optio
         } else {
             Err(bad("secretId is add:<age1…> or remove:<fingerprint>"))
         }),
-        BACKUP_EXPORT_CONFIRM | crate::vault_routes::presence::BACKUP_EXPORT_INITIAL => Some(match std::fs::canonicalize(sid) {
+        BACKUP_EXPORT_CONFIRM => Some(match std::fs::canonicalize(sid) {
             Ok(d) if !sid.is_empty() && d.is_dir() => {
                 let d = d.display().to_string();
                 let shown: String = d.chars().filter(|ch| !ch.is_control()).take(120).collect();
@@ -1754,15 +1754,23 @@ fn backup_recipient(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], ingre
         let r = k2_vault::agefmt::Recipient::parse(b.recipient.as_deref().unwrap_or("").trim())?;
         (format!("add:{}", r.encode()), Some(r))
     };
-    let tok = b.confirm_token.as_deref().ok_or_else(|| {
-        deny(VaultError::forbidden(
-            "vault_confirm_required",
-            format!(
-                "adding or removing a backup key needs a person's confirm: run k2 vault backup key from your own SSH login or a terminal outside K2 (it asks you to confirm). Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"
-            ),
-        ))
-    })?;
-    let proof = crate::vault_routes::take_proof(vault, c, BACKUP_KEY_CONFIRM, Some(&binding), Some(tok)).map_err(deny)?;
+    let (state, _, _) = vault.recovery_state();
+    let proof = if add.is_some() && state != "confirmed" {
+        // No recovery key yet: a new key holder takes this computer's own
+        // user check, for every caller, bound to this key.
+        use crate::vault_routes::presence;
+        presence::take(vault, c, presence::BACKUP_KEY_ADD, Some(&binding), b.confirm_token.as_deref()).map_err(deny)?
+    } else {
+        let tok = b.confirm_token.as_deref().ok_or_else(|| {
+            deny(VaultError::forbidden(
+                "vault_confirm_required",
+                format!(
+                    "adding or removing a backup key needs a person's confirm: run k2 vault backup key from your own SSH login or a terminal outside K2 (it asks you to confirm). Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"
+                ),
+            ))
+        })?;
+        crate::vault_routes::take_proof(vault, c, BACKUP_KEY_CONFIRM, Some(&binding), Some(tok)).map_err(deny)?
+    };
     let method = match &proof {
         k2_vault::HumanProof::Confirmed { method } => method.clone(),
         k2_vault::HumanProof::None => "-".into(),

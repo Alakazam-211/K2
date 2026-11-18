@@ -98,6 +98,11 @@ COMMANDS
   k2 migrate import-secrets --undo [--json]
   k2 migrate approve <mv_…> [--json]
 
+Until a recovery key is confirmed on the old box, the export (and its
+approval) asks for this computer's own user check, bound to the new box's
+move key: Touch ID or the Mac's password, Windows Hello, or on a Linux
+server an owner login's password.
+
 Exit: 0 done, 2 held for the owner (or a usage error; --json tells them
 apart), 3 refused, 4 not found.
 More: k2 study box-move
@@ -132,13 +137,16 @@ _migrate_send() {
 _migrate_step() {
     local route="$1" payload="$2" as_json="$3" render="$4"
     _migrate_send POST "$route" "$payload"
-    if [ "$_SC_STATUS" = "403" ] && printf '%s' "$_SC_BODY" | grep -q '"vault_confirm_required"'; then
-        local binding label tok
+    if [ "$_SC_STATUS" = "403" ] && printf '%s' "$_SC_BODY" | grep -qE '"vault_(confirm|presence)_required"'; then
+        local binding label tok action
         binding="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("confirm") or {}).get("secretId") or "")')"
         label="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("confirm") or {}).get("label") or "")')"
+        # The daemon names the confirm: vault-move, or (no recovery key
+        # confirmed yet) this computer's own user check, box-move-export.
+        action="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; a=(json.load(sys.stdin).get("confirm") or {}).get("action") or "vault-move"; print(a if a in ("vault-move", "box-move-export") else "vault-move")')"
         if [ -n "$binding" ]; then
-            tok="$(_vault_confirm_token vault-move "$binding" "$label")" || exit 3
-            payload="$(python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["confirmToken"]=sys.argv[2]; print(json.dumps(o))' "$payload" "$tok")"
+            tok="$(_vault_confirm_token "$action" "$binding" "$label")" || exit 3
+            payload="$(_with_confirm_token "$payload" "$tok")"
             _migrate_send POST "$route" "$payload"
         fi
     fi
@@ -764,7 +772,7 @@ o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.par
                 gsid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["secret"]["id"])')"
                 echo "Sharing ${name} this way lets ${to} read the value: confirm to go ahead (nothing is shared if you cancel)." >&2
                 gtok="$(_vault_confirm_token grant-read "$gsid" "share $name with $to")" || exit 3
-                _vault_sock_call POST grant "$(_vault_merge "$sj" "$nj" "$gj" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$gtok")")"
+                _vault_sock_call POST grant "$(_with_confirm_token "$(_vault_merge "$sj" "$nj" "$gj")" "$gtok")"
             fi
             [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
             # --ttl asked for an end: a server older than 0.46.11 drops it
@@ -1004,7 +1012,7 @@ o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.par
             sid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["secret"]["id"])')"
             local tok
             tok="$(_vault_confirm_token reveal "$sid" "$name")" || exit 3
-            _vault_sock_call POST reveal "$(_vault_merge "$sj" "$nj" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")")"
+            _vault_sock_call POST reveal "$(_with_confirm_token "$(_vault_merge "$sj" "$nj")" "$tok")"
             [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
             printf '%s' "$_SC_BODY" | python3 -c 'import base64,json,sys; sys.stdout.buffer.write(base64.b64decode(json.load(sys.stdin)["valueB64"])); print()'
             ;;
@@ -1027,7 +1035,7 @@ o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.par
                         tok="$(_vault_confirm_token recovery-rotate "" "recovery key")" || exit 3
                     fi
                     if [ -n "$tok" ]; then
-                        rb="$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")"
+                        rb="$(_with_confirm_token '{}' "$tok")"
                     fi
                     _vault_sock_call POST "recovery/${act}" "$rb"
                     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
@@ -1070,7 +1078,7 @@ print()' >&2
                 # The first one: this computer's own user check.
                 tok="$(_vault_confirm_token vault-password-set "" "vault password")" || exit 3
             fi
-            tokj="$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")"
+            tokj="$(_with_confirm_token '{}' "$tok")"
             local p1="" p2=""
             printf 'New vault password (10+ characters): ' >&2; IFS= read -rs p1 || p1=""; echo >&2
             printf 'Again: ' >&2; IFS= read -rs p2 || p2=""; echo >&2
@@ -1094,7 +1102,7 @@ print()' >&2
             _vault_person_guard
             local tok
             tok="$(_vault_confirm_token "$action" "" "")" || exit 3
-            _vault_sock_call POST "$route" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")"
+            _vault_sock_call POST "$route" "$(_with_confirm_token '{}' "$tok")"
             [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
             echo "done"
             ;;
@@ -1114,7 +1122,7 @@ o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.par
             else
                 tok="$(_vault_confirm_token rollback "$sid" "$name")" || exit 3
             fi
-            _vault_sock_call POST rollback "$(_vault_merge "$sj" "$nj" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1], "version": int(sys.argv[2]), "acceptAgentValue": sys.argv[3] == "1"}))' "$tok" "$to_version" "$accept_agent")")"
+            _vault_sock_call POST rollback "$(_with_confirm_token "$(_vault_merge "$sj" "$nj" "$(python3 -c 'import json,sys; print(json.dumps({"version": int(sys.argv[1]), "acceptAgentValue": sys.argv[2] == "1"}))' "$to_version" "$accept_agent")")" "$tok")"
             [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
             echo "${name}: back to the value of v${to_version} (as a new version)"
             ;;
@@ -1208,12 +1216,20 @@ else:
                     bfp="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(next((h.get("fingerprint") or "" for h in json.load(sys.stdin).get("holders") or [] if h.get("kind") == "backup"), ""))')"
                     [ -n "$bfp" ] || { echo "not_found: this vault has no backup key" >&2; exit 1; }
                     tok="$(_vault_confirm_token backup-key "remove:$bfp" "")" || exit 3
-                    _vault_sock_call POST backup/recipient "$(python3 -c 'import json,sys; print(json.dumps({"remove": True, "confirmToken": sys.argv[1]}))' "$tok")"
+                    _vault_sock_call POST backup/recipient "$(_with_confirm_token '{"remove": true}' "$tok")"
                     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
                     printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("backup key %s removed; %s" % (v["removed"], v["note"]))'
                 else
-                    tok="$(_vault_confirm_token backup-key "add:${pos[1]}" "")" || exit 3
-                    _vault_sock_call POST backup/recipient "$(python3 -c 'import json,sys; print(json.dumps({"recipient": sys.argv[1], "confirmToken": sys.argv[2]}))' "${pos[1]}" "$tok")"
+                    # No recovery key confirmed yet: a new key holder takes this
+                    # computer's own user check, bound to this key.
+                    local kact=backup-key
+                    _vault_sock_call GET status
+                    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+                    if ! printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("recovery") == "confirmed" else 1)'; then
+                        kact=backup-key-add
+                    fi
+                    tok="$(_vault_confirm_token "$kact" "add:${pos[1]}" "")" || exit 3
+                    _vault_sock_call POST backup/recipient "$(_with_confirm_token "$(python3 -c 'import json,sys; print(json.dumps({"recipient": sys.argv[1]}))' "${pos[1]}")" "$tok")"
                     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
                     printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("backup key %s added%s; a backup can now be opened with it on a new box" % (v["fingerprint"], (" (replaced %s)" % v["replaced"]) if v.get("replaced") else ""))'
                 fi
@@ -1229,7 +1245,7 @@ else:
                     # bound to this folder.
                     btok="$(_vault_confirm_token backup-export-initial "$d" "")" || exit 3
                 fi
-                _vault_sock_call POST backup "$(python3 -c 'import json,sys; print(json.dumps({"destDir": sys.argv[1], "confirmToken": sys.argv[2] or None}))' "$d" "$btok")"
+                _vault_sock_call POST backup "$(_with_confirm_token "$(python3 -c 'import json,sys; print(json.dumps({"destDir": sys.argv[1]}))' "$d")" "$btok")"
                 [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
                 printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("wrote %s (%s)" % (v["path"], v["note"]))'
             fi
@@ -1259,7 +1275,7 @@ print(json.dumps(o))' "$rd" "$h" "$dry_run" "$replace")"
             if [ "$replace" = "1" ] && [ "$dry_run" = "0" ]; then
                 local tok
                 tok="$(_vault_confirm_token restore "" "vault")" || exit 3
-                rb="$(_vault_merge "$rb" "$(python3 -c 'import json,sys; print(json.dumps({"confirmToken": sys.argv[1]}))' "$tok")")"
+                rb="$(_with_confirm_token "$rb" "$tok")"
             fi
             _vault_sock_call POST restore "$rb"
             rb=""

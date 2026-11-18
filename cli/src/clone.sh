@@ -1,9 +1,9 @@
 # ── Headless Connect users (local daemon accounts) ────────────────────
 # PRD: prd-headless-connect-onboarding-v1.md R2.
-# These manage /cli/users/* on the LOCAL daemon (owner-token root of
-# trust for the first owner; afterwards Owner/Admin session as gated
-# server-side). Never put a password on argv — interactive getpass or
-# --password-stdin only.
+# These manage /cli/users/* on the LOCAL daemon (the owner token, or an
+# Owner/Admin session, as gated server-side; owner-login changes with the
+# owner token also take this computer's own user check). Never put a
+# password on argv — interactive getpass or --password-stdin only.
 
 # ── k2 clone (prd-clone-carries-threads-and-vault-v1 §4.3, §4.4, CL20) ──
 #
@@ -836,6 +836,34 @@ print("  " + v.get("hint", ""))'
     esac
 }
 
+# POST a users change. With the owner token, making a login an owner and
+# setting an owner login's password take this computer's own user check:
+# on a Mac or Windows PC the daemon asks right away; otherwise it answers
+# vault_presence_required with the check to get, which is asked here (from
+# a terminal outside K2) and the change sent again with its token. Prints
+# the answer.
+_users_post_checked() {
+    local endpoint="$1" body="$2" resp sid tok
+    resp=$(cli_send cli_post_json "$endpoint" "$body") || resp=""
+    sid="$(printf '%s' "$resp" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    d = {}
+e = d.get("error") if isinstance(d, dict) else None
+c = d.get("confirm") if isinstance(d, dict) else None
+ok = isinstance(e, dict) and e.get("code") == "vault_presence_required" and isinstance(c, dict) and c.get("action") == "owner-login"
+print((c.get("secretId") or "") if ok else "")')"
+    if [ -n "$sid" ] && ! _envn_any HOOK_SOCK HOOK_TOKEN && [ -S "$(_vault_sock)" ]; then
+        tok="$(_vault_confirm_token owner-login "$sid" "")" || return 3
+        body="$(_with_confirm_token "$body" "$tok")"
+        tok=""
+        resp=$(cli_send cli_post_json "$endpoint" "$body") || resp=""
+    fi
+    printf '%s' "$resp"
+}
+
 _users_usage() {
     cat <<'EOF' >&2
 k2 users — local daemon connect-user accounts
@@ -959,8 +987,12 @@ FLAGS
 
 SECURITY
   Password is NEVER accepted on the command line (no --password flag).
-  First owner is bootstrapped via the on-box daemon/owner token:
-  k2 users add <you> --role owner --keep-password
+  Making a login an owner, and setting an owner login's password, take
+  this computer's own user check (Touch ID or the Mac's password, Windows
+  Hello, or on a Linux server an owner login's password; a server's first
+  owner login is made from a terminal outside K2). The owner runs it in
+  person: k2 users add <you> --role owner --keep-password
+  Agents: don't run it; tell your owner.
 
 EXIT CODES
   0 ok · 1 error · 2 bad usage
@@ -1083,7 +1115,7 @@ if os.environ.get("AS_JSON") == "1":
     sys.exit(0)
 if not users:
     print("No connect users yet.")
-    print("Create the first owner: k2 users add <username> --role owner --keep-password")
+    print("The owner makes the first owner login in person: k2 users add <username> --role owner --keep-password (it asks for a user check on this computer)")
     sys.exit(0)
 # Table: USERNAME  NAME  ROLE  DISABLED  PASSWORD  CREATED
 rows = []
@@ -1299,7 +1331,8 @@ else:
 import json, os
 print(json.dumps({"username": os.environ["USERNAME"], "role": os.environ["ROLE"]}))
 ')
-                role_resp=$(cli_send cli_post_json "/cli/users/set-role" "$role_body") || role_resp=""
+                [ "$role" = "owner" ] && echo "Making an owner login asks for this computer's own user check." >&2
+                role_resp=$(_users_post_checked "/cli/users/set-role" "$role_body") || role_resp=""
                 printf '%s' "$role_resp" | USERNAME="$username" ROLE="$role" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
@@ -1354,7 +1387,8 @@ b = {"username": os.environ["SR_USER"], "role": os.environ["SR_ROLE"]}
 if os.environ["SR_FIXED"]:
     b["fixedPassword"] = os.environ["SR_FIXED"] == "true"
 print(json.dumps(b))')
-            sr_resp=$(cli_send cli_post_json "/cli/users/set-role" "$sr_body") || sr_resp=""
+            [ "$sr_role" = "owner" ] && echo "Making an owner login asks for this computer's own user check." >&2
+            sr_resp=$(_users_post_checked "/cli/users/set-role" "$sr_body") || sr_resp=""
             printf '%s' "$sr_resp" | SR_USER="$sr_user" SR_ROLE="$sr_role" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
@@ -1507,7 +1541,7 @@ if os.environ["KEEP"] == "1":
 print(json.dumps(b))
 ')
             unset password
-            resp=$(cli_send cli_post_json "/cli/users/set-password" "$body") || resp=""
+            resp=$(_users_post_checked "/cli/users/set-password" "$body") || resp=""
             unset body
             printf '%s' "$resp" | USERNAME="$username" python3 -c '
 import json, os, sys

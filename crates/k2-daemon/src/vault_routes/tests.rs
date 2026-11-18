@@ -279,8 +279,7 @@ fn the_app_sets_up_the_recovery_key_after_a_confirm() {
     assert_eq!(s, 200, "{v}");
     let wrong = v["token"].as_str().expect("token").to_string();
     let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner(), json!({ "confirmToken": wrong }));
-    assert_eq!(s, 403, "{v}");
-    assert_eq!(code(&v), "vault_confirm_required");
+    assert_presence_required(s, &v, "a confirm for another action");
     // The app's confirm for recovery setup: this computer's own check.
     let tok = presence_token(&t, &owner(), presence::RECOVERY_SETUP, None);
     // Agents never get here, token or not.
@@ -1172,6 +1171,10 @@ fn it_agents_cant_grant_server_secrets_to_any_own_workspace_session() {
 fn backup_key_needs_a_person_and_a_confirm() {
     use crate::vault_use_routes::{BACKUP_KEY_CONFIRM, BACKUP_RECIPIENT};
     let t = vault();
+    // Once a recovery key is confirmed (before that:
+    // `backup_key_before_recovery_needs_presence`).
+    set_up_recovery(&t);
+    let base = t.v.status().holders.len();
     let key = k2_vault::agefmt::Identity::generate().recipient();
     let (age, fp) = (key.encode(), key.fingerprint());
     let add = json!({ "recipient": age });
@@ -1201,7 +1204,7 @@ fn backup_key_needs_a_person_and_a_confirm() {
     // A person without a confirm: refused too.
     let (s, v) = call(&t, BACKUP_RECIPIENT, &owner_tty(), add.clone());
     assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
-    assert_eq!(t.v.status().holders.len(), 1, "nothing added");
+    assert_eq!(t.v.status().holders.len(), base, "nothing added");
     // A confirm for another key doesn't count; a bad binding is refused.
     set_vault_password(&t, "correct horse battery");
     let other = k2_vault::agefmt::Identity::generate().recipient().encode();
@@ -1242,9 +1245,10 @@ fn backup_key_needs_a_person_and_a_confirm() {
     let (s, v) = call(&t, STATUS, &agent("ws1", false), Value::Null);
     assert_eq!(s, 200, "{v}");
     let hs = v["holders"].as_array().expect("holders");
-    assert_eq!(hs.len(), 2, "{v}");
+    assert_eq!(hs.len(), base + 1, "{v}");
     assert_eq!(hs[0]["kind"], "box");
-    assert_eq!((hs[1]["kind"].as_str(), hs[1]["fingerprint"].as_str()), (Some("backup"), Some(fp.as_str())));
+    let b = hs.iter().find(|h| h["kind"] == "backup").unwrap_or_else(|| panic!("a backup holder: {v}"));
+    assert_eq!(b["fingerprint"].as_str(), Some(fp.as_str()));
     // The K2 app (owner token) with a person's confirm: removes it.
     let (s, v) = call(&t, BACKUP_RECIPIENT, &owner(), json!({ "remove": true }));
     assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
@@ -1258,7 +1262,7 @@ fn backup_key_needs_a_person_and_a_confirm() {
     let (s, v) = call(&t, BACKUP_RECIPIENT, &owner(), json!({ "remove": true, "confirmToken": v["token"] }));
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["removed"], fp);
-    assert_eq!(t.v.status().holders.len(), 1);
+    assert_eq!(t.v.status().holders.len(), base);
     let rows = t.v.audit(&Default::default(), &Actor::Owner).expect("audit");
     assert!(rows.iter().any(|r| r.action == "unwrap" && r.consumer.as_deref() == Some(format!("confirmed:{fp}").as_str())), "{rows:?}");
     assert!(t.v.unconfirmed_holders().expect("check").is_empty());
@@ -1724,7 +1728,7 @@ fn first_password_set_needs_presence() {
     let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery", "confirmToken": tok.clone() }));
     assert_eq!(s, 200, "{v}");
     assert!(t.v.has_confirm_password());
-    // Single use.
+    // Single use (and once set, changing it is the old password's confirm).
     let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "another horse battery", "confirmToken": tok }));
     assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
 }
@@ -1784,13 +1788,13 @@ fn backup_before_recovery_needs_presence() {
     );
     assert_eq!(s, 200, "{v}");
     let (s, v) = call(&t, BACKUP, &owner(), json!({ "destDir": dir, "confirmToken": v["token"] }));
-    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "the app's backup confirm is for another step: {v}");
+    assert_presence_required(s, &v, "the app's backup confirm is for another step");
     assert!(!out.path().join("vault.db").exists(), "nothing written");
     // With the check, bound to this folder.
     let other = TestDir::new("backup-other");
     let tok = presence_token(&t, &owner_tty(), presence::BACKUP_EXPORT_INITIAL, Some(&other.path().display().to_string()));
     let (s, v) = call(&t, BACKUP, &owner_tty(), json!({ "destDir": dir, "confirmToken": tok }));
-    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "a token for another folder: {v}");
+    assert_presence_required(s, &v, "a token for another folder");
     let tok = presence_token(&t, &owner_tty(), presence::BACKUP_EXPORT_INITIAL, Some(&dir));
     let (s, v) = call(&t, BACKUP, &owner_tty(), json!({ "destDir": dir, "confirmToken": tok }));
     assert_eq!(s, 200, "{v}");
@@ -1814,15 +1818,15 @@ fn a_presence_proof_works_for_its_own_step_only() {
     // password-set → recovery
     let tok = presence_token(&t, &tty, presence::PASSWORD_SET, None);
     let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &tty, json!({ "confirmToken": tok }));
-    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    assert_presence_required(s, &v, "password-set → recovery");
     // recovery → backup
     let tok = presence_token(&t, &tty, presence::RECOVERY_SETUP, None);
     let (s, v) = call(&t, BACKUP, &tty, json!({ "destDir": dir, "confirmToken": tok }));
-    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    assert_presence_required(s, &v, "recovery → backup");
     // backup → password-set
     let tok = presence_token(&t, &tty, presence::BACKUP_EXPORT_INITIAL, Some(&dir));
     let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &tty, json!({ "password": "correct horse battery", "confirmToken": tok }));
-    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    assert_presence_required(s, &v, "backup → password-set");
     // A step's proof doesn't reveal, and a reveal confirm doesn't set up.
     t.v.set_confirm_password("correct horse battery", &Actor::Owner).expect("vault password");
     set_server(&t, "A", SENTINEL);
@@ -1833,7 +1837,7 @@ fn a_presence_proof_works_for_its_own_step_only() {
     let (s, v) = call(&t, CONFIRM_FINISH, &tty, json!({ "action": "reveal", "secretId": a_id, "method": "vault-password", "password": "correct horse battery" }));
     assert_eq!(s, 200, "{v}");
     let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &tty, json!({ "confirmToken": v["token"] }));
-    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    assert_presence_required(s, &v, "a reveal confirm");
     // Nothing was set up along the way.
     assert_eq!(t.v.status().recovery, "unconfirmed");
     assert!(!out.path().join("vault.db").exists());
@@ -1846,10 +1850,11 @@ fn presence_steps_refuse_when_this_computer_has_no_check() {
     let _p = Presence::offers(None, true);
     let out = TestDir::new("backup-none");
     let dir = std::fs::canonicalize(out.path()).expect("canon").display().to_string();
-    for action in presence::ACTIONS {
+    for action in presence::VAULT_STEPS {
         let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": action }));
         assert_eq!((s, code(&v)), (409, presence::CODE), "{action}: {v}");
-        assert!(v["error"]["hint"].as_str().expect("hint").contains("k2 users add"), "names the next step: {v}");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("tell your owner") && !hint.contains("users add") && !hint.contains("--role owner"), "never tells an agent to make a login: {v}");
         let (s, v) = call(&t, CONFIRM_FINISH, &owner_tty(), json!({ "action": action, "secretId": dir, "method": presence::LOCAL_AUTH }));
         assert_eq!((s, code(&v)), (409, presence::CODE), "{action}: {v}");
     }
@@ -1953,4 +1958,256 @@ fn changing_a_set_password_and_rotating_a_confirmed_key_keep_their_confirms() {
     assert_eq!(s, 200, "{v}");
     let (s, v) = call(&t, REVEAL, &owner(), json!({ "id": a_id, "confirmToken": v["token"] }));
     assert_eq!(s, 200, "reveal is unchanged: {v}");
+}
+
+// ── who can reach the checks, and what a token is bound to ──────────
+
+/// Only the owner reaches these steps: an Admin login has a password of
+/// its own, and is refused at the check and at each step, a token or not.
+#[test]
+fn an_admin_login_is_refused_at_every_presence_step() {
+    use crate::vault_use_routes::{BACKUP, BACKUP_RECIPIENT};
+    use k2_core::connect_users::{add_user, set_role, Role as R};
+    let _home = crate::test_support::TempHome::new();
+    let t = vault();
+    let _p = Presence::approving();
+    add_user("lee", "lees sign-in pw").expect("lee");
+    set_role("lee", R::Admin).expect("admin");
+    let admin = login(Role::Admin);
+    let out = TestDir::new("admin-steps");
+    let dir = std::fs::canonicalize(out.path()).expect("canon").display().to_string();
+    let key = k2_vault::agefmt::Identity::generate().recipient().encode();
+    let steps: [(&str, Option<String>); 5] = [
+        (presence::PASSWORD_SET, None),
+        (presence::RECOVERY_SETUP, None),
+        (presence::BACKUP_EXPORT_INITIAL, Some(dir.clone())),
+        (presence::BOX_MOVE_EXPORT, Some("export:ab12cd".into())),
+        (presence::BACKUP_KEY_ADD, Some(format!("add:{key}"))),
+    ];
+    for (action, sid) in &steps {
+        let (s, v) = call(&t, CONFIRM_START, &admin, json!({ "action": action, "secretId": sid }));
+        assert_eq!((s, code(&v)), (403, "owner_only"), "{action} start: {v}");
+        let (s, v) = call(&t, CONFIRM_FINISH, &admin, json!({ "action": action, "secretId": sid, "method": presence::CONNECT_PASSWORD, "password": "lees sign-in pw" }));
+        assert_eq!((s, code(&v)), (403, "owner_only"), "{action} finish with the right password: {v}");
+    }
+    // The steps themselves refuse an Admin login, even with a token minted
+    // for it (the route's own owner check, not only the mint's).
+    let mint = |action: &str, sid: Option<&str>| t.v.confirm.mint(action, sid, &admin.actor.stamp(), presence::CONNECT_PASSWORD);
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &admin, json!({ "password": "correct horse battery", "confirmToken": mint(presence::PASSWORD_SET, None) }));
+    assert_eq!((s, code(&v)), (403, "owner_only"), "password set: {v}");
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &admin, json!({ "confirmToken": mint(presence::RECOVERY_SETUP, None) }));
+    assert_eq!((s, code(&v)), (403, "owner_only"), "recovery words: {v}");
+    assert!(v.get("phrase").is_none(), "{v}");
+    let (s, v) = call(&t, BACKUP, &admin, json!({ "destDir": dir, "confirmToken": mint(presence::BACKUP_EXPORT_INITIAL, Some(&dir)) }));
+    assert_eq!((s, code(&v)), (403, "owner_only"), "backup: {v}");
+    let (s, v) = call(&t, BACKUP_RECIPIENT, &admin, json!({ "recipient": key, "confirmToken": mint(presence::BACKUP_KEY_ADD, Some(&format!("add:{key}"))) }));
+    assert_eq!((s, code(&v)), (403, "owner_only"), "backup key: {v}");
+    assert!(!t.v.has_confirm_password());
+    assert_eq!(t.v.status().recovery, "unconfirmed");
+    assert!(!out.path().join("vault.db").exists());
+    assert!(!t.v.status().holders.iter().any(|h| h.kind == "backup"));
+}
+
+/// A check made from one terminal is spent from that terminal only (its
+/// Unix session), never from another one or over TCP.
+#[test]
+fn a_presence_token_is_bound_to_the_terminal_that_asked() {
+    use crate::vault::request_peer::{scoped, Peer};
+    let t = vault();
+    let _p = Presence::approving();
+    let at = |bind: &str| Peer { bind: bind.into(), asker: Some("a terminal on this computer".into()) };
+    let set = |tok: &str| call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery", "confirmToken": tok }));
+    let tok = scoped(at("@sid:11"), || presence_token(&t, &owner_tty(), presence::PASSWORD_SET, None));
+    let (s, v) = scoped(at("@sid:12"), || set(&tok));
+    assert_presence_required(s, &v, "another terminal");
+    let tok = scoped(at("@sid:11"), || presence_token(&t, &owner_tty(), presence::PASSWORD_SET, None));
+    let (s, v) = set(&tok);
+    assert_presence_required(s, &v, "over TCP");
+    assert!(!t.v.has_confirm_password());
+    let tok = scoped(at("@sid:11"), || presence_token(&t, &owner_tty(), presence::PASSWORD_SET, None));
+    let (s, v) = scoped(at("@sid:11"), || set(&tok));
+    assert_eq!(s, 200, "the same terminal: {v}");
+    assert!(t.v.has_confirm_password());
+}
+
+/// The prompt names the step plainly, and who asks where K2 knows it.
+#[test]
+fn the_prompt_says_what_it_unlocks_and_who_asks() {
+    use crate::vault::request_peer::{scoped, Peer};
+    let t = vault();
+    let _p = Presence::approving();
+    let peer = Peer { bind: "@sid:21".into(), asker: Some("agent scout in a K2 terminal".into()) };
+    scoped(peer, || {
+        let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": presence::BOX_MOVE_EXPORT, "secretId": "export:ab12cd", "method": presence::LOCAL_AUTH }));
+        assert_eq!(s, 200, "{v}");
+    });
+    assert_eq!(
+        presence::fake::last_prompt().as_deref(),
+        Some(format!("{} vault: export your vault to another server (move key ab12cd) (asked from agent scout in a K2 terminal)", k2_core::brand::PRODUCT_NAME).as_str())
+    );
+    let _ = presence_token(&t, &owner(), presence::RECOVERY_SETUP, None);
+    assert_eq!(presence::fake::last_prompt().as_deref(), Some(format!("{} vault: show your vault recovery words", k2_core::brand::PRODUCT_NAME).as_str()));
+}
+
+/// The recovery words go only to a person's channel: never to a peer on
+/// the vault socket that has no terminal, check or not.
+#[test]
+fn recovery_words_never_go_to_a_vault_socket_peer_without_a_terminal() {
+    let t = vault();
+    let _p = Presence::approving();
+    let tok = presence_token(&t, &owner(), presence::RECOVERY_SETUP, None);
+    let body = json!({ "confirmToken": tok }).to_string();
+    let r = handle_on(&t.v, RECOVERY_SHOW_ONCE, Ok(owner()), body.as_bytes(), &HashMap::new(), crate::vault::human::SOCKET_NAME, None);
+    assert!(r.status.starts_with("403") && r.body.contains("person_required"), "{}", r.body);
+    assert!(!r.body.contains("phrase"), "{}", r.body);
+    assert_eq!(t.v.status().recovery, "unconfirmed");
+}
+
+#[test]
+fn backup_key_before_recovery_needs_presence() {
+    use crate::vault_use_routes::{BACKUP_KEY_CONFIRM, BACKUP_RECIPIENT};
+    let t = vault();
+    set_vault_password(&t, "correct horse battery");
+    let _p = Presence::approving();
+    let key = k2_vault::agefmt::Identity::generate().recipient();
+    let (age, fp) = (key.encode(), key.fingerprint());
+    let has_backup = |t: &T| t.v.status().holders.iter().any(|h| h.kind == "backup");
+    for c in [owner_tty(), owner()] {
+        let (s, v) = call(&t, BACKUP_RECIPIENT, &c, json!({ "recipient": age }));
+        assert_presence_required(s, &v, "no token");
+    }
+    // The vault password's confirm for a backup key isn't this computer's check.
+    let (s, v) = call(
+        &t,
+        CONFIRM_FINISH,
+        &owner_tty(),
+        json!({ "action": BACKUP_KEY_CONFIRM, "secretId": format!("add:{age}"), "method": "vault-password", "password": "correct horse battery" }),
+    );
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, BACKUP_RECIPIENT, &owner_tty(), json!({ "recipient": age, "confirmToken": v["token"] }));
+    assert_presence_required(s, &v, "the vault password's confirm");
+    // And a check for another key doesn't add this one.
+    let other = k2_vault::agefmt::Identity::generate().recipient().encode();
+    let tok = presence_token(&t, &owner_tty(), presence::BACKUP_KEY_ADD, Some(&format!("add:{other}")));
+    let (s, v) = call(&t, BACKUP_RECIPIENT, &owner_tty(), json!({ "recipient": age, "confirmToken": tok }));
+    assert_presence_required(s, &v, "another key");
+    assert!(!has_backup(&t));
+    // With the check, bound to this key.
+    let tok = presence_token(&t, &owner_tty(), presence::BACKUP_KEY_ADD, Some(&format!("add:{age}")));
+    let (s, v) = call(&t, BACKUP_RECIPIENT, &owner_tty(), json!({ "recipient": age, "confirmToken": tok }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["fingerprint"], fp);
+    assert!(has_backup(&t));
+}
+
+/// An owner-token caller cannot create a login that passes the presence
+/// check: making an owner and setting an owner login's password take this
+/// computer's own check, and an Admin login is no check, so on a server
+/// with no check of its own (Linux) every step still refuses.
+#[test]
+fn an_owner_token_caller_cannot_create_a_login_that_passes_the_presence_check() {
+    use crate::connect_users_routes::{handle_add, handle_set_password_as, handle_set_role, SetPasswordActor};
+    use crate::vault_use_routes::{BACKUP, BACKUP_RECIPIENT};
+    use k2_core::connect_users::{self as cu, Role as R};
+    let _home = crate::test_support::TempHome::new();
+    let t = vault();
+    let status = |r: &crate::cli_response::CliResponse| r.status[..3].parse::<u16>().expect("status");
+    let body = |r: &crate::cli_response::CliResponse| serde_json::from_str::<Value>(&r.body).expect("json");
+    {
+        // A Linux server with no owner login yet: no check of its own.
+        let _p = Presence::offers(None, false);
+        let r = handle_add(br#"{"username":"eve","password":"eves pw 12345","mustChangePassword":false}"#);
+        assert_eq!(status(&r), 200, "{}", r.body);
+        let r = handle_set_role(R::Owner, true, br#"{"username":"eve","role":"owner"}"#);
+        let v = body(&r);
+        assert_eq!((status(&r), code(&v)), (403, presence::CODE), "{v}");
+        assert_eq!((v["confirm"]["action"].as_str(), v["confirm"]["secretId"].as_str()), (Some(presence::OWNER_LOGIN), Some("role:eve")), "{v}");
+        assert_eq!(cu::role_for_user("eve"), Some(R::Member), "not promoted");
+        // An Admin is allowed, and is no check.
+        let r = handle_set_role(R::Owner, true, br#"{"username":"eve","role":"admin"}"#);
+        assert_eq!(status(&r), 200, "{}", r.body);
+        // A terminal check minted over TCP (not a terminal) is refused.
+        let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": presence::OWNER_LOGIN, "secretId": "role:eve", "method": presence::TERMINAL }));
+        assert_eq!((s, code(&v)), (403, presence::CODE), "{v}");
+        // Every step refuses: the owner token has no check here, and eve
+        // (an Admin login) is no check.
+        let eve = VaultCaller { actor: Actor::Login { username: "eve".into(), role: Role::Admin }, channel: Channel::Login, session_id: None };
+        for action in presence::VAULT_STEPS {
+            let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": action }));
+            assert_eq!((s, code(&v)), (409, presence::CODE), "{action}: {v}");
+            let (s, v) = call(&t, CONFIRM_FINISH, &eve, json!({ "action": action, "method": presence::CONNECT_PASSWORD, "password": "eves pw 12345" }));
+            assert_eq!((s, code(&v)), (403, "owner_only"), "{action}: {v}");
+        }
+        let out = TestDir::new("eve-backup");
+        let key = k2_vault::agefmt::Identity::generate().recipient().encode();
+        for c in [owner_tty(), eve.clone()] {
+            let (s, _) = call(&t, CONFIRM_PASSWORD_SET, &c, json!({ "password": "correct horse battery" }));
+            assert!(s == 403 || s == 409, "password set: {s}");
+            let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &c, json!({}));
+            assert!((s == 403 || s == 409) && v.get("phrase").is_none(), "recovery words: {v}");
+            let (s, _) = call(&t, BACKUP, &c, json!({ "destDir": out.path() }));
+            assert!(s == 403 || s == 409, "backup: {s}");
+            let (s, _) = call(&t, BACKUP_RECIPIENT, &c, json!({ "recipient": key }));
+            assert!(s == 403 || s == 409, "backup key: {s}");
+        }
+        assert!(!t.v.has_confirm_password());
+        assert_eq!(t.v.status().recovery, "unconfirmed");
+        assert!(!out.path().join("vault.db").exists());
+        // The first owner login, from a terminal outside K2: allowed.
+        let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": presence::OWNER_LOGIN, "secretId": "role:rosa" }));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["methods"], json!([presence::TERMINAL]), "{v}");
+        cu::add_user("rosa", "rosas own pw 12").expect("rosa");
+        let (s, v) = call(&t, CONFIRM_FINISH, &owner_tty(), json!({ "action": presence::OWNER_LOGIN, "secretId": "role:rosa", "method": presence::TERMINAL }));
+        assert_eq!(s, 200, "{v}");
+        presence::owner_login_change_on(Some(&t.v), "role:rosa", v["token"].as_str(), "test").expect("first owner from a terminal");
+        cu::set_role("rosa", R::Owner).expect("rosa owner");
+    }
+    {
+        // Now an owner login's password is the check.
+        let _p = Presence::offers(Some(presence::OWNER_LOGIN_PASSWORD), false);
+        // The owner token resetting that owner login's password: refused.
+        let r = handle_set_password_as(&SetPasswordActor::OwnerToken, br#"{"username":"rosa","password":"a new pw 12345","mustChangePassword":false}"#);
+        let v = body(&r);
+        assert_eq!((status(&r), code(&v)), (403, presence::CODE), "{v}");
+        assert_eq!(v["confirm"]["secretId"], "password:rosa");
+        assert!(matches!(cu::check_and_record("rosa", "rosas own pw 12"), cu::LoginOutcome::Ok), "rosa's own password still works");
+        assert!(!matches!(cu::check_and_record("rosa", "a new pw 12345"), cu::LoginOutcome::Ok), "the new one doesn't");
+        // Promoting eve with the owner token: refused without rosa's password.
+        let r = handle_set_role(R::Owner, true, br#"{"username":"eve","role":"owner"}"#);
+        assert_eq!(status(&r), 403, "{}", r.body);
+        assert_eq!(cu::role_for_user("eve"), Some(R::Admin));
+        // The steps take rosa's password only; eve's is refused.
+        let (s, v) = call(&t, CONFIRM_FINISH, &owner_tty(), json!({ "action": presence::PASSWORD_SET, "method": presence::OWNER_LOGIN_PASSWORD, "username": "eve", "password": "eves pw 12345" }));
+        assert_eq!((s, code(&v)), (403, "confirm_failed"), "{v}");
+        // With rosa's password, the owner token may promote (a person did).
+        let (s, v) = call(&t, CONFIRM_FINISH, &owner_tty(), json!({ "action": presence::OWNER_LOGIN, "secretId": "role:eve", "method": presence::OWNER_LOGIN_PASSWORD, "password": "rosas own pw 12" }));
+        assert_eq!(s, 200, "{v}");
+        let tok = v["token"].as_str().expect("token").to_string();
+        let wrong = presence::owner_login_change_on(Some(&t.v), "password:eve", Some(&tok), "test").expect_err("bound to role:eve");
+        assert_eq!(wrong.code, presence::CODE);
+    }
+    {
+        // A Mac or a Windows PC: the owner token's change asks this
+        // computer's prompt right there; declined, nothing changes.
+        let _p = Presence::offers(Some(presence::LOCAL_AUTH), false);
+        let r = handle_set_role(R::Owner, true, br#"{"username":"eve","role":"owner"}"#);
+        assert_eq!((status(&r), code(&body(&r))), (403, "confirm_failed"), "{}", r.body);
+        assert_eq!(cu::role_for_user("eve"), Some(R::Admin));
+        assert_eq!(presence::fake::last_prompt().as_deref(), Some(format!("{}: make login eve an owner of this server", k2_core::brand::PRODUCT_NAME).as_str()));
+    }
+    {
+        let _p = Presence::approving();
+        let r = handle_set_role(R::Owner, true, br#"{"username":"eve","role":"owner"}"#);
+        assert_eq!(status(&r), 200, "approved at the computer: {}", r.body);
+        assert_eq!(cu::role_for_user("eve"), Some(R::Owner));
+    }
+    {
+        // An owner login's own session (a person who signed in) needs no
+        // owner-token check.
+        let _p = Presence::offers(None, false);
+        cu::add_user("dana", "danas own pw 12").expect("dana");
+        let r = handle_set_role(R::Owner, false, br#"{"username":"dana","role":"owner"}"#);
+        assert_eq!(status(&r), 200, "{}", r.body);
+    }
 }

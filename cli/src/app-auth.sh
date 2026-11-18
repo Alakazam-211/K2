@@ -316,7 +316,7 @@ print(json.dumps(b))')" || exit 2
         svc="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or {}).get("serviceId") or "")')"
         [ -n "$svc" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
         tok="$(_vault_confirm_token app-pairing-apps "$svc" "")" || exit 3
-        body="$(printf '%s' "$body" | K2_AP_TOK="$tok" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b["confirmToken"]=os.environ["K2_AP_TOK"]; print(json.dumps(b))')"
+        body="$(_with_confirm_token "$body" "$tok")"
         tok=""
         _app_rt_post /cli/app/pairing/set "$body"
     fi
@@ -534,7 +534,7 @@ _app_push_keys_post() {
         svc="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or {}).get("serviceId") or "")')"
         [ -n "$svc" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
         tok="$(_vault_confirm_token app-push-keys "$svc" "$label")" || exit 3
-        body="$(printf '%s' "$body" | K2_AP_TOK="$tok" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b["confirmToken"]=os.environ["K2_AP_TOK"]; print(json.dumps(b))')"
+        body="$(_with_confirm_token "$body" "$tok")"
         tok=""
         _app_rt_post "$path" "$body"
     fi
@@ -552,7 +552,7 @@ _app_push_on_post() {
         svc="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or {}).get("serviceId") or "")')"
         [ -n "$svc" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
         tok="$(_vault_confirm_token app-push-on "$svc" "")" || exit 3
-        body="$(printf '%s' "$body" | K2_AP_TOK="$tok" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b["confirmToken"]=os.environ["K2_AP_TOK"]; print(json.dumps(b))')"
+        body="$(_with_confirm_token "$body" "$tok")"
         tok=""
         _app_rt_post /cli/app/push/set "$body"
     fi
@@ -902,7 +902,7 @@ _email_post() {
             tok="$(_vault_confirm_token "$action" "$sid" "")" || exit 3
             field=confirmToken
             [ "$action" = "app-email-any" ] && field=confirmAnyToken
-            body="$(printf '%s' "$body" | K2_EM_TOK="$tok" K2_EM_FIELD="$field" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b[os.environ["K2_EM_FIELD"]]=os.environ["K2_EM_TOK"]; print(json.dumps(b))')"
+            body="$(_with_confirm_token "$body" "$tok" "$field")"
             tok=""
             tries=$((tries + 1))
             continue

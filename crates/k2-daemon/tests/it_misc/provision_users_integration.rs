@@ -377,6 +377,38 @@ async fn owner_token_is_never_restricted() {
 // (c) seed-users file: consumed once, roles+flags applied, skips existing
 // ─────────────────────────────────────────────────────────────────────
 
+/// An owner row needs the server's first start: once K2's database is
+/// there, a seed file can't make an owner login (other rows still apply).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn seed_file_owner_row_only_on_first_start() {
+    let _g = lock();
+    with_temp_home(|| {
+        let dir = k2_core::paths::home_dir().expect("home").join(".k2");
+        std::fs::create_dir_all(&dir).expect("mkdir .k2");
+        std::fs::write(dir.join("k2.db"), b"").expect("a server that has started");
+        assert!(!seed_users::is_first_start(&dir));
+        std::fs::write(
+            dir.join("seed-users.json"),
+            r#"[
+                {"username":"late_owner","password":"seed-pass-1","role":"owner"},
+                {"username":"late_ops","password":"seed-pass-2","role":"admin"}
+            ]"#,
+        )
+        .expect("write seed file");
+        let results = seed_users::consume_seed_file();
+        assert_eq!(
+            results,
+            vec![
+                ("late_owner".to_string(), SeedOutcome::Failed(seed_users::OWNER_ROW_AFTER_FIRST_START.to_string())),
+                ("late_ops".to_string(), SeedOutcome::Created),
+            ]
+        );
+        assert_eq!(connect_users::role_for_user("late_owner"), None, "no owner login made");
+        assert_eq!(connect_users::role_for_user("late_ops"), Some(Role::Admin));
+        assert!(!dir.join("seed-users.json").exists(), "still consumed");
+    });
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seed_users_file_provisions_and_is_deleted() {
     let _g = lock();

@@ -201,10 +201,9 @@ APPROVALS (held requests the owner answers)
       fix: The owner runs the command in person; it asks for the confirm
       (for example k2 app approve <id>).
   vault_presence_required (exit 3)
-      fix: The owner runs the step in person (k2 vault confirm-password set,
-      k2 vault recovery show-once or k2 vault backup <folder>); it asks for
-      the check. A Linux server with no owner login adds one first: k2 users
-      add <you> --role owner.
+      fix: The owner runs the step in person (for example k2 vault recovery
+      show-once or k2 users set-role <login> owner); it asks for the check.
+      Agents: don't run it, and don't change logins for it; tell your owner.
   widening_held (exit 3)
       fix: Ask for it: k2 app config <app-id> --isolation <level>. The owner
       approves it.

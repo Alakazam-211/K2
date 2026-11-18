@@ -6,8 +6,9 @@
 //!   its vault is closed (`vault_key_missing`) and `tunnel status` says the
 //!   token is locked in the vault, not "not paired";
 //! - the export from a script (no terminal) is held for the owner; the
-//!   owner approves it as a person with the vault confirm; the old vault
-//!   freezes (writes 423, reads work);
+//!   owner approves it as a person with this computer's own user check (no
+//!   recovery key is confirmed yet: the owner login's own password); the old
+//!   vault freezes (writes 423, reads work);
 //! - the import's dry run lists the tunnel token; the apply works on the
 //!   closed vault and the moved vault opens there with the old vault's id,
 //!   no rollback, and the tunnel token.
@@ -138,6 +139,17 @@ impl Box {
         (c, json_of(&b))
     }
 
+    /// This computer's own user check for an export to `fp` (no recovery
+    /// key confirmed yet): an owner login's own password.
+    fn presence(&self, fp: &str) -> Value {
+        let (c, t) = self.person(
+            "/cli/vault/confirm/finish",
+            json!({ "action": "box-move-export", "secretId": format!("export:{fp}"), "method": "connect-password", "password": PASSWORD }),
+        );
+        assert_eq!(c, 200, "presence export:{fp}: {t}");
+        t["token"].clone()
+    }
+
     /// A `vault-move` confirm for `binding`, with the login's password.
     fn confirm(&self, binding: &str) -> Value {
         let (c, t) = self.person(
@@ -227,10 +239,16 @@ async fn a_box_move_carries_the_vault_and_the_tunnel_token_to_a_box_stuck_on_vau
     assert_eq!(held["status"], "held");
     let mv = held["request"]["id"].as_str().expect("mv").to_string();
     assert!(!out.exists());
-    // The owner, as a person: the confirm is asked, then given.
+    // The owner, as a person: no recovery key is confirmed on the old box,
+    // so this computer's own check is asked (bound to the new box's key),
+    // then given; the vault-move confirm doesn't stand in.
     let (c, a) = old.person("/cli/migrate/secrets/approve", json!({ "request": mv }));
-    assert_eq!((c, a["error"]["code"].clone()), (403, json!("vault_confirm_required")), "{a}");
-    let t = old.confirm(&mv);
+    assert_eq!((c, a["error"]["code"].clone()), (403, json!("vault_presence_required")), "{a}");
+    assert_eq!(a["confirm"]["secretId"], json!(format!("export:{fp}")), "{a}");
+    let wrong = old.confirm(&mv);
+    let (c, a) = old.person("/cli/migrate/secrets/approve", json!({ "request": mv, "confirmToken": wrong }));
+    assert_eq!((c, a["error"]["code"].clone()), (403, json!("vault_presence_required")), "{a}");
+    let t = old.presence(&fp);
     let (c, done) = old.person("/cli/migrate/secrets/approve", json!({ "request": mv, "confirmToken": t }));
     assert_eq!(c, 200, "approve: {done}");
     assert_eq!(done["moveKey"], json!(fp));

@@ -150,7 +150,7 @@ pub fn is_post_route(path: &str) -> bool {
 
 // ── responses ───────────────────────────────────────────────────────
 
-fn status_line(code: u16) -> &'static str {
+pub(crate) fn status_line(code: u16) -> &'static str {
     match code {
         200 => "200 OK",
         202 => "202 Accepted",
@@ -2356,11 +2356,14 @@ const CONFIRM_ACTIONS: &[&str] = &[
     "rekey",
     "rollback",
     "restore",
-    // The vault's first-setup steps: minted only by this computer's own
-    // user check (`presence`), never by the vault password.
+    // Minted only by this computer's own user check (`presence`), never by
+    // the vault password.
     presence::RECOVERY_SETUP,
     presence::PASSWORD_SET,
     presence::BACKUP_EXPORT_INITIAL,
+    presence::BOX_MOVE_EXPORT,
+    presence::BACKUP_KEY_ADD,
+    presence::OWNER_LOGIN,
     "recovery-rotate",
     "confirm-password-change",
     "legacy-export",
@@ -2492,7 +2495,7 @@ fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Val
         return Err(err("bad_action", 400, "unknown confirm action"));
     }
     if presence::is_action(action) {
-        return presence::start(c, action);
+        return presence::start(c, action, b.secret_id.as_deref());
     }
     let m = methods(vault, c);
     if m.is_empty() {
@@ -2544,13 +2547,9 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
         return Err(err("bad_action", 400, "unknown confirm action"));
     }
     if presence::is_action(action) {
-        // A backup's token is bound to the folder the daemon resolves.
-        let secret_id = match crate::vault_use_routes::confirm_binding(vault, action, b.secret_id.as_deref()) {
-            Some(bound) => Some(bound?.0),
-            None => None,
-        };
+        // Bound to the daemon's own form of the folder, key or login.
         let method = b.method.as_deref().unwrap_or("");
-        let t = presence::finish(vault, c, action, secret_id.as_deref(), method, b.username.as_deref(), b.password.as_deref(), ingress)?;
+        let t = presence::finish(vault, c, action, b.secret_id.as_deref(), method, b.username.as_deref(), b.password.as_deref(), ingress)?;
         return Ok(json!({ "token": t, "expiresIn": 60 }));
     }
     if action == crate::clone_vault::CONFIRM_ACTION {
@@ -2833,8 +2832,10 @@ fn recovery_show(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8], i
         Ok(()) => human_admin(c)?,
         // Settings → Vault (0.45.4): the owner token alone isn't a person;
         // the single-use token for this exact action stands in for the
-        // person channel. Agents (passports) never get here.
-        Err(e) if is_app_owner(c, not_person) => {
+        // person channel. Agents (passports) never get here, and neither
+        // does a peer on the vault socket that isn't a person at a terminal:
+        // the words go only to the K2 app, a terminal or a Connect login.
+        Err(e) if is_app_owner(c, not_person) && ingress != crate::vault::human::SOCKET_NAME => {
             if b.confirm_token.is_none() {
                 let _ = deny(e);
                 return Err(err(

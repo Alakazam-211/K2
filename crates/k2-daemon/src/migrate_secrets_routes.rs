@@ -232,6 +232,10 @@ enum Stop {
     /// A person at a terminal: get the `vault-move` confirm bound to
     /// `binding`, then send the step again with it.
     Confirm { binding: String, label: String },
+    /// An export while no recovery key is confirmed: this computer's own
+    /// user check (`presence::BOX_MOVE_EXPORT`) bound to the destination
+    /// key, then the step again with its token.
+    Presence { binding: String, label: String },
 }
 
 impl From<VaultError> for Stop {
@@ -309,6 +313,20 @@ fn confirm_needed(binding: &str, label: &str) -> CliResponse {
         body: json!({
             "error": { "code": "vault_confirm_required", "hint": "this needs your vault confirm first (k2 migrate asks for it)" },
             "confirm": { "action": CONFIRM_ACTION, "secretId": binding, "label": label },
+        })
+        .to_string(),
+    }
+}
+
+fn presence_needed(binding: &str, label: &str) -> CliResponse {
+    use crate::vault_routes::presence;
+    let e = presence::required(presence::BOX_MOVE_EXPORT);
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: json!({
+            "error": { "code": e.code, "hint": e.hint },
+            "confirm": { "action": presence::BOX_MOVE_EXPORT, "secretId": binding, "label": label },
         })
         .to_string(),
     }
@@ -398,6 +416,7 @@ pub fn handle_in(
         Ok(Reply::Held(v)) => held_response(v),
         Err(Stop::Refuse(e)) => crate::vault_routes::refuse(&e),
         Err(Stop::Confirm { binding, label }) => confirm_needed(&binding, &label),
+        Err(Stop::Presence { binding, label }) => presence_needed(&binding, &label),
     }
 }
 
@@ -599,10 +618,39 @@ fn step(
             (json!({}), "undo".into(), "undo the last vault import".into(), vault.is_some())
         }
     };
+    // No recovery key confirmed yet: an export (a new holder of the whole
+    // vault) takes this computer's own user check from the owner, bound to
+    // the destination key, whoever approves it and however it was asked.
+    // Someone who isn't a person here (an agent, a script with no
+    // terminal) is still held for the owner, or refused as before.
+    let presence_binding = (step == "export" && vault.as_ref().is_some_and(|v| v.recovery_state().0 != "confirmed")).then(|| binding.clone());
     let (binding, label) = match approved {
         Some(h) => (h.id.clone(), format!("{} ({})", label, h.id)),
         None => (binding, label),
     };
+    // As the gate: the K2 app (the owner token on TCP, never the vault
+    // socket's refused peer) counts once it brings a token; without one it
+    // is held for the owner like any other non-person.
+    let app = not_person.is_none() && matches!(c.actor, Actor::Owner) && c.channel == Channel::Plain;
+    let has_token = b.confirm_token.as_deref().is_some_and(|t| !t.trim().is_empty());
+    if let (Some(pb), Some(v)) = (presence_binding, vault.as_deref()) {
+        if (c.channel.is_person() || (app && has_token)) && !c.is_passport() && !c.is_job() {
+            if !is_owner(&c.actor) {
+                return Err(err("owner_only", 403, "box moves are for the box owner").into());
+            }
+            let Some(t) = b.confirm_token.as_deref().map(str::trim).filter(|t| !t.is_empty()) else {
+                return Err(Stop::Presence { binding: pb, label });
+            };
+            let p = crate::vault_routes::presence::take(v, c, crate::vault_routes::presence::BOX_MOVE_EXPORT, Some(&pb), Some(t)).map_err(Stop::Refuse)?;
+            let r = run_step(env, home, step, c, b, vault.clone(), Some(&p));
+            match &r {
+                Ok(_) => crate::vault::auth_audit("vault-move", &stamp, &format!("ok {step}"), ingress),
+                Err(Stop::Refuse(e)) => crate::vault::auth_audit("vault-move", &stamp, &format!("deny {step}: {}", e.code), ingress),
+                Err(_) => {}
+            }
+            return r;
+        }
+    }
     let proof = match gate(vault.as_deref(), c, not_person, &binding, &label, b.confirm_token.as_deref(), needs_confirm, approved.is_none())? {
         Gate::Hold => return Ok(Reply::Held(hold(home, step, params, c)?)),
         Gate::Allow(p) => p,
@@ -611,7 +659,7 @@ fn step(
     match &r {
         Ok(_) => crate::vault::auth_audit("vault-move", &stamp, &format!("ok {step}"), ingress),
         Err(Stop::Refuse(e)) => crate::vault::auth_audit("vault-move", &stamp, &format!("deny {step}: {}", e.code), ingress),
-        Err(Stop::Confirm { .. }) => {}
+        Err(Stop::Confirm { .. } | Stop::Presence { .. }) => {}
     }
     r
 }
@@ -731,7 +779,7 @@ fn approve(env: &dyn MoveEnv, home: &Path, c: &VaultCaller, b: &Body, ingress: &
             done.status = "done".into();
             done.result = Some(v.clone());
         }
-        Err(Stop::Refuse(e)) if !matches!(e.code, "vault_confirm_required" | "confirm_failed" | "person_required" | "owner_only") => {
+        Err(Stop::Refuse(e)) if !matches!(e.code, "vault_confirm_required" | "vault_presence_required" | "confirm_failed" | "person_required" | "owner_only") => {
             done.status = "failed".into();
             done.result = Some(json!({ "error": { "code": e.code, "hint": e.hint } }));
         }

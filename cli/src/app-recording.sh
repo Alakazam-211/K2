@@ -17,7 +17,7 @@ _rec_needs_confirm() {
 _rec_send_confirmed() {
     local path="$1" body="$2" tok raw
     tok="$(_vault_confirm_token "$3" "$4" "$5")" || exit 3
-    body="$(printf '%s' "$body" | K2_RC_TOK="$tok" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b["confirmToken"]=os.environ["K2_RC_TOK"]; print(json.dumps(b))')"
+    body="$(_with_confirm_token "$body" "$tok")"
     tok=""
     raw="$(_compute_send POST "$path" "$body" tcp)"
     _compute_split "$raw"

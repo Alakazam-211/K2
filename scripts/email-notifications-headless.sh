@@ -153,12 +153,21 @@ fi
 [ "$(field error.code)" = vault_presence_required ] || fail "the first vault password needs this computer's own user check: $BODY"
 pass "the first vault password needs this computer's own user check"
 # This computer's own user check: the Mac's sheet (a person approves it), or
-# on Linux an owner login's sign-in password (one made here for the run).
+# on Linux an owner login's sign-in password. The run's owner login is made
+# the way a person makes a server's first one: from this terminal (outside
+# K2), which is that change's check.
 OWNER_PW="headless-owner-$(date +%s)-pw"
 if [ "$(uname -s)" != Darwin ]; then
     call POST /cli/users/add "{\"username\":\"headlessowner\",\"password\":\"$OWNER_PW\",\"mustChangePassword\":false}"
-    expect 200 "an owner login for the user check"
+    expect 200 "a login for the user check"
     call POST /cli/users/set-role '{"username":"headlessowner","role":"owner"}'
+    [ "$STATUS" = 403 ] && [ "$(field error.code)" = vault_presence_required ] || fail "making an owner with the owner token needs this computer's own user check: $BODY"
+    pass "making an owner with the owner token needs this computer's own user check"
+    vault confirm/start '{"action":"owner-login","secretId":"role:headlessowner"}'
+    [ "$STATUS" = 200 ] && [ "$(field methods.0)" = terminal ] || fail "a server's first owner login is made from a terminal: $BODY"
+    vault confirm/finish '{"action":"owner-login","secretId":"role:headlessowner","method":"terminal"}'
+    [ "$STATUS" = 200 ] || fail "the terminal check for the first owner login: $BODY"
+    call POST /cli/users/set-role "{\"username\":\"headlessowner\",\"role\":\"owner\",\"confirmToken\":\"$(field token)\"}"
     expect 200 "the login is an owner"
 fi
 vault confirm/start '{"action":"vault-password-set"}'

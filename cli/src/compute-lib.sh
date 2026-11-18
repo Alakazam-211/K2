@@ -154,9 +154,22 @@ _compute_call() {
 # JSON from KEY=VALUE env pairs: _compute_json K2_CJ_a=… (values are strings
 # unless the key ends in _n (number), _b (bool) or _j (raw JSON)).
 _compute_json() {
-    env "$@" python3 -c '
-import json, os
+    # A token (K2_CJ_<name>Token=…) never rides argv or the environment (ps
+    # shows both to every process of this user): it reaches python on stdin.
+    local _a _toks="" _rest=()
+    for _a in "$@"; do
+        case "$_a" in
+            K2_CJ_*Token=*) _toks="${_toks}${_a#K2_CJ_}"$'\n' ;;
+            *) _rest+=("$_a") ;;
+        esac
+    done
+    printf '%s' "$_toks" | env ${_rest[@]+"${_rest[@]}"} python3 -c '
+import json, os, sys
 out = {}
+for line in sys.stdin.read().split("\n"):
+    k, _, v = line.partition("=")
+    if k and v:
+        out[k] = v
 for k, v in os.environ.items():
     if not k.startswith("K2_CJ_"):
         continue

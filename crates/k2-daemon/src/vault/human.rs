@@ -230,6 +230,35 @@ pub fn check_peer(stream: &UnixStream) -> PeerVerdict {
     judge_with(&k2_pids, ptyd_ancestor, &ancestry, &env, pc.as_deref(), dc.as_deref())
 }
 
+/// The request peer for a vault-socket call: bound to the caller's Unix
+/// session (a check made from one terminal is spent from that terminal),
+/// and named for this computer's prompt.
+#[cfg(unix)]
+pub fn request_peer(stream: &UnixStream, v: &PeerVerdict, tty: bool) -> super::request_peer::Peer {
+    let pid = os::peer(stream.as_raw_fd()).map(|(p, _)| p);
+    let bind = match pid.and_then(|p| libc::pid_t::try_from(p).ok()) {
+        // SAFETY: getsid only reads the process table.
+        Some(p) => match unsafe { libc::getsid(p) } {
+            sid if sid > 0 => format!("@sid:{sid}"),
+            _ => "@sid:unknown".to_string(),
+        },
+        None => "@sid:unknown".to_string(),
+    };
+    super::request_peer::Peer { bind, asker: Some(asker_words(v.person, tty, pid.map(os::env).unwrap_or_default())) }
+}
+
+/// Who asks, in words, from the peer check and its environment.
+pub fn asker_words(person: bool, tty: bool, env: Vec<String>) -> String {
+    if !person {
+        let name = env.iter().find_map(|e| e.strip_prefix("K2_AGENT_NAME=")).and_then(super::request_peer::shown_name);
+        return match name {
+            Some(n) => format!("agent {n} in a {} terminal", k2_core::brand::PRODUCT_NAME),
+            None => format!("a {} terminal or agent", k2_core::brand::PRODUCT_NAME),
+        };
+    }
+    if tty { "a terminal on this computer".to_string() } else { "a program on this computer with no terminal".to_string() }
+}
+
 /// Is `pid` running a `k2-ptyd` binary (any copy: versioned, bundled)?
 #[cfg(unix)]
 fn is_ptyd_exe(pid: u32) -> bool {
@@ -375,7 +404,10 @@ async fn handle_conn(mut s: UnixStream) {
     let caller = Ok(VaultCaller { actor: k2_vault::Actor::Owner, channel, session_id: None });
     let params: HashMap<String, String> = crate::routes::http::parse_params(&target, &query);
     let not_person = (!v.person).then_some(v.reason);
-    let r = tokio::task::spawn_blocking(move || crate::vault_routes::handle_with_peer(&path, caller, &body, &params, "vault.sock", not_person))
+    let peer = request_peer(&s, &v, says_tty);
+    let r = tokio::task::spawn_blocking(move || {
+        super::request_peer::scoped(peer, || crate::vault_routes::handle_with_peer(&path, caller, &body, &params, SOCKET_NAME, not_person))
+    })
         .await
         .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
     write(&mut s, r.status, r.content_type, &r.body).await;
@@ -399,6 +431,14 @@ mod tests {
         assert!(judge_with(&[daemon, ptyd], false, &[500, 300], &[], None, None).person, "an outside terminal still passes");
         // Before the fix the daemon-only check let it through:
         assert!(judge(daemon, &[500, 200], &[], None, None).person);
+    }
+
+    #[test]
+    fn the_asker_is_named_from_the_peer_check() {
+        assert_eq!(asker_words(false, true, vec!["K2_AGENT_NAME=scout".into()]), "agent scout in a K2 terminal");
+        assert_eq!(asker_words(false, false, vec![]), "a K2 terminal or agent");
+        assert_eq!(asker_words(true, true, vec!["K2_AGENT_NAME=scout".into()]), "a terminal on this computer");
+        assert_eq!(asker_words(true, false, vec![]), "a program on this computer with no terminal");
     }
 
     #[test]

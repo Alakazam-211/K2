@@ -320,7 +320,7 @@ else:
         svc="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or {}).get("serviceId") or "")')"
         [ -n "$svc" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
         tok="$(_vault_confirm_token chat-key "$svc" "")" || exit 3
-        body="$(printf '%s' "$body" | K2_CK_TOK="$tok" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b["confirmToken"]=os.environ["K2_CK_TOK"]; print(json.dumps(b))')"
+        body="$(_with_confirm_token "$body" "$tok")"
         tok=""
         _app_rt_post /cli/app/chat-key "$body"
     fi

@@ -24,7 +24,7 @@ except Exception: print("")' 2>/dev/null)"
     [ -n "$action" ] || _chat_fail "$_CP_STATUS" "$_CP_BODY"
     local tok
     tok="$(_vault_confirm_token "$action" "$secret" "$label")" || exit 3
-    payload="$(printf '%s' "$payload" | python3 -c 'import json,sys; v=json.load(sys.stdin); v["confirmToken"]=sys.argv[1]; print(json.dumps(v))' "$tok")"
+    payload="$(_with_confirm_token "$payload" "$tok")"
     _chat_call POST "$path" "$payload" tcp
 }
 

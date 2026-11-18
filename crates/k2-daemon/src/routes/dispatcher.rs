@@ -4923,7 +4923,14 @@ async fn handle_one_request(
                     .unwrap_or_else(|| "-".to_string())
             };
             let target_for_audit = crate::connect_users_routes::login_body_username(&body_bytes);
-            let (r, changed) = crate::connect_users_routes::handle_set_role_audited(actor_role, &body_bytes);
+            // Making an owner with the owner token runs this computer's own
+            // user check (up to two minutes on a prompt): off the accept loop.
+            let by_owner_token = super::http::token_is_owner(&query, state.token.as_str());
+            let (r, changed) = tokio::task::spawn_blocking(move || {
+                crate::connect_users_routes::handle_set_role_audited(actor_role, by_owner_token, &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| (crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")), None));
             // V7: every role change writes one line, {from, to}.
             let outcome = match &changed {
                 Some((_, from, to)) => format!("{}->{}", from.as_wire(), to.as_wire()),
@@ -8331,11 +8338,12 @@ async fn handle_one_request(
                 Vec::new()
             };
             let caller = crate::vault::actor::from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str());
+            let peer = crate::vault::actor::tcp_peer(&query, bearer_token.as_deref(), state.token.as_str());
             let params = super::http::parse_params(&path, &query);
             let p_owned = p.to_string();
             let ingress_label = ingress.as_str().to_string();
             let r = tokio::task::spawn_blocking(move || {
-                crate::vault_routes::handle(&p_owned, caller, &body_bytes, &params, &ingress_label)
+                crate::vault::request_peer::scoped(peer, || crate::vault_routes::handle(&p_owned, caller, &body_bytes, &params, &ingress_label))
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));

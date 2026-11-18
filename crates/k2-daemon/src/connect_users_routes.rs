@@ -6,6 +6,9 @@
 //! - **`/cli/users/*`** (management — owner OR an Admin|Owner session at
 //!   the gate; K2SO #629): provision + manage username+password accounts.
 //!   `set-role` is Owner-only; `set-password`/`policy` stay owner-only.
+//!   With the owner token, making a login an owner and setting an owner
+//!   login's password also take this computer's own user check
+//!   ([`owner_login_gate`]).
 //!   Bodies carry credentials so they stay out of URL logs.
 //! - **`/cli/auth/login`** (PUBLIC — no token at the gate): how a remote
 //!   connect-user trades username+password for a session token. On failure
@@ -277,6 +280,31 @@ struct SetPasswordReq {
     /// token defaulted to `false`).
     #[serde(default)]
     must_change_password: Option<bool>,
+    /// The owner token on an owner login: a token from this computer's own
+    /// user check for `password:<username>` (else the check runs here).
+    #[serde(default)]
+    confirm_token: Option<String>,
+}
+
+/// With the owner token, a change that makes or re-keys an owner login
+/// takes this computer's own user check (`presence::OWNER_LOGIN`, bound to
+/// `<kind>:<username>`): its token, or this computer's prompt right now.
+/// Owner logins' passwords are then always ones a person chose, which is
+/// what the vault's own checks rely on. An owner login's own session (a
+/// person who signed in with its password) doesn't need it.
+pub fn owner_login_gate(kind: &str, username: &str, token: Option<&str>) -> Result<(), CliResponse> {
+    use crate::vault_routes::presence;
+    let user = connect_users::normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase());
+    let binding = format!("{kind}:{user}");
+    presence::owner_login_change(&binding, token, "users").map_err(|e| CliResponse {
+        status: crate::vault_routes::status_line(e.status),
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": { "code": e.code, "hint": e.hint },
+            "confirm": { "action": presence::OWNER_LOGIN, "secretId": binding },
+        })
+        .to_string(),
+    })
 }
 
 /// Who is calling `POST /cli/users/set-password` (R1). Resolved by the
@@ -340,6 +368,11 @@ pub fn handle_set_password_as(actor: &SetPasswordActor, body: &[u8]) -> CliRespo
             })
             .to_string(),
         };
+    }
+    if matches!(actor, SetPasswordActor::OwnerToken) && target_role == connect_users::Role::Owner {
+        if let Err(r) = owner_login_gate("password", &target, req.confirm_token.as_deref()) {
+            return r;
+        }
     }
     if let Err(e) = connect_users::set_password(&target, &req.password) {
         return CliResponse::bad_request(e);
@@ -455,6 +488,11 @@ struct SetRoleReq {
     /// (M3, `k2 users set-role … --fixed-password`).
     #[serde(default, rename = "fixedPassword")]
     fixed_password: Option<bool>,
+    /// The owner token making a login an owner: a token from this
+    /// computer's own user check for `role:<username>` (else the check runs
+    /// here).
+    #[serde(default, rename = "confirmToken")]
+    confirm_token: Option<String>,
 }
 
 /// `POST /cli/users/set-role` `{username, role}` → `{"success":true}`.
@@ -472,14 +510,17 @@ struct SetRoleReq {
 /// only allowed because the daemon-token owner remains. We therefore allow
 /// the demote (the token owner is the floor) — the guard exists to reject a
 /// nonsensical role string and surface a clear error.
-pub fn handle_set_role(actor_role: connect_users::Role, body: &[u8]) -> CliResponse {
-    handle_set_role_audited(actor_role, body).0
+pub fn handle_set_role(actor_role: connect_users::Role, by_owner_token: bool, body: &[u8]) -> CliResponse {
+    handle_set_role_audited(actor_role, by_owner_token, body).0
 }
 
 /// [`handle_set_role`] plus `(target, from, to)` for the `set-role` audit
-/// line (V7) when the role changed.
+/// line (V7) when the role changed. `by_owner_token`: the caller is the
+/// owner token (not a login's session), so making an owner takes this
+/// computer's own user check ([`owner_login_gate`]).
 pub fn handle_set_role_audited(
     actor_role: connect_users::Role,
+    by_owner_token: bool,
     body: &[u8],
 ) -> (CliResponse, Option<(String, connect_users::Role, connect_users::Role)>) {
     let req: SetRoleReq = match serde_json::from_slice(body) {
@@ -514,6 +555,11 @@ pub fn handle_set_role_audited(
             CliResponse::bad_request(format!("'{}' is one of the owner's own logins; it can't be Voice & Chat only", req.username.trim())),
             None,
         );
+    }
+    if by_owner_token && role == connect_users::Role::Owner && from != connect_users::Role::Owner {
+        if let Err(r) = owner_login_gate("role", &req.username, req.confirm_token.as_deref()) {
+            return (r, None);
+        }
     }
     // L9: the rule is checked again inside the store write, against the
     // role as it is there (a concurrent change can't slip past it).
@@ -1328,14 +1374,14 @@ mod tests {
 
     #[test]
     fn set_role_rejects_invalid_role_string() {
-        let r = handle_set_role(connect_users::Role::Owner, br#"{"username":"bob","role":"superuser"}"#);
+        let r = handle_set_role(connect_users::Role::Owner, false, br#"{"username":"bob","role":"superuser"}"#);
         assert_eq!(r.status, "400 Bad Request");
         assert!(r.body.contains("invalid role"), "got: {}", r.body);
     }
 
     #[test]
     fn set_role_malformed_body_is_400() {
-        let r = handle_set_role(connect_users::Role::Owner, b"not json");
+        let r = handle_set_role(connect_users::Role::Owner, false, b"not json");
         assert_eq!(r.status, "400 Bad Request");
     }
 
@@ -1345,7 +1391,7 @@ mod tests {
         // removal text, and the stored role is untouched.
         with_temp_home(|| {
             connect_users::add_user("viewer_wire", "password1").expect("add");
-            let r = handle_set_role(connect_users::Role::Owner, br#"{"username":"viewer_wire","role":"viewer"}"#);
+            let r = handle_set_role(connect_users::Role::Owner, false, br#"{"username":"viewer_wire","role":"viewer"}"#);
             assert_eq!(r.status, "400 Bad Request", "body: {}", r.body);
             let v: serde_json::Value = serde_json::from_str(&r.body).expect("json body");
             assert_eq!(v["error"], connect_users::VIEWER_ROLE_REMOVED);

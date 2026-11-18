@@ -2447,8 +2447,7 @@ except Exception:
     print("")')"
             if [ "$c_code" = "vault_confirm_required" ]; then
                 c_tok="$(_vault_confirm_token hire-key-mint "" "Widen an API key's App access")" || exit 3
-                c_body="$(printf '%s' "$c_body" | K2_AK_TOK="$c_tok" python3 -c 'import json,os,sys
-b=json.load(sys.stdin); b["confirmToken"]=os.environ["K2_AK_TOK"]; print(json.dumps(b))')"
+                c_body="$(_with_confirm_token "$c_body" "$c_tok")"
                 c_tok=""
                 c_resp="$(printf '%s' "$c_body" | cli_post_json_stdin "/cli/api-keys/hire-ceiling")"
             fi

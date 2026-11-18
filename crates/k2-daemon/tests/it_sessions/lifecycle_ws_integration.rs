@@ -322,6 +322,57 @@ async fn events_ws_rejects_missing_and_garbage_token_before_upgrade() {
     // for the handler-level upgrade test).
 }
 
+/// A real WebSocket upgrade request (Upgrade, Key, Version) with `extra`
+/// header lines; returns the status of the daemon's answer.
+fn ws_upgrade_status(port: u16, path_and_query: &str, extra: &[&str]) -> u16 {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to test daemon");
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).expect("set read timeout");
+    let mut headers = String::new();
+    for h in extra {
+        headers.push_str(h);
+        headers.push_str("\r\n");
+    }
+    let req = format!(
+        "GET {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{headers}\r\n"
+    );
+    stream.write_all(req.as_bytes()).expect("write upgrade");
+    stream.flush().expect("flush");
+    let mut raw: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while !raw.windows(4).any(|w| w == b"\r\n\r\n") {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            Err(e) => panic!("upgrade read {path_and_query}: {e:?} after {:?}", String::from_utf8_lossy(&raw)),
+        }
+    }
+    let text = String::from_utf8_lossy(&raw);
+    text.lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or_else(|| panic!("no status in the upgrade answer: {text:?}"))
+}
+
+/// The desktop app sends the owner token in an Authorization: Bearer
+/// header on the /events upgrade; older clients still send ?token=. Both
+/// upgrade, and a wrong Bearer is refused before the upgrade (it wins over
+/// a query token, so the header is what is checked).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn events_ws_upgrades_with_a_bearer_or_a_query_token_and_refuses_a_wrong_bearer() {
+    let _g = lock();
+    let d = futures_block(test_harness::start(OWNER_TOKEN));
+    let bearer = format!("Authorization: Bearer {OWNER_TOKEN}");
+    assert_eq!(ws_upgrade_status(d.port, "/events?client=desktop-app", &[&bearer]), 101, "owner Bearer");
+    assert_eq!(ws_upgrade_status(d.port, &format!("/events?token={OWNER_TOKEN}"), &[]), 101, "owner ?token=");
+    assert_eq!(ws_upgrade_status(d.port, "/events?client=desktop-app", &["Authorization: Bearer not-a-real-token"]), 403, "wrong Bearer");
+    assert_eq!(
+        ws_upgrade_status(d.port, &format!("/events?token={OWNER_TOKEN}"), &["Authorization: Bearer not-a-real-token"]),
+        403,
+        "a wrong Bearer beside a good ?token="
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sessions_subscribe_ws_rejects_missing_and_garbage_token_before_upgrade() {
     let _g = lock();

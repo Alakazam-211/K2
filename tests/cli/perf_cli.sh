@@ -29,6 +29,8 @@
 #                                                        p95 handler time
 #   feedback show  k5 feedback show <id> (a brief,    <= 30 ms + the stub's
 #                  a thread with a file)                 p95 handler time
+#   update --cli   k5 update --cli (the daemon's      <= 30 ms + the stub's
+#                  version from /boot-status)            p95 handler time
 #   fallthrough    k5 heartbeat list (a verb the      <= cli/k2's p95 for
 #                  shell answers)                        the same + 5 ms
 #   agent help     k5 mail send --help in a K2        <= 30 ms
@@ -138,7 +140,8 @@ TICKET = json.dumps({"id": "fb_000001aa", "status": "waiting", "title": "Ship it
                   "attachments": [{"path": "out/log.txt", "size": 4096}]}]}).encode()
 BODIES = {"/cli/permission/enabled": b'{"enabled":true}', "/cli/whoami": WHOAMI, "/cli/heartbeat/list": b"[]", "/cli/inbox/list": INBOX, "/cli/terminal/read": LINES,
           "/cli/feed": FEED, "/cli/sessions/roster": ROSTER, "/cli/connections": CONNECTIONS,
-          "/cli/feedback/list": TICKETS, "/cli/feedback/show": TICKET}
+          "/cli/feedback/list": TICKETS, "/cli/feedback/show": TICKET,
+          "/boot-status": b'{"phase":"ready","version":"0.0.0"}'}
 handler_ns = []
 lock = threading.Lock()
 
@@ -234,6 +237,7 @@ check_same("sessions", [k5, "sessions"], bash_argv("sessions"))
 check_same("connections list", [k5, "connections", "list"], bash_argv("connections", "list"))
 check_same("feedback list", [k5, "feedback", "list"], bash_argv("feedback", "list"))
 check_same("feedback show", [k5, "feedback", "show", "fb_1"], bash_argv("feedback", "show", "fb_1"))
+check_same("update --cli", [k5, "update", "--cli"], bash_argv("update", "--cli"))
 check_same("fallthrough (heartbeat list)", [k5, "heartbeat", "list"], bash_argv("heartbeat", "list"))
 
 results = []
@@ -271,14 +275,15 @@ measure_native("sessions", ["sessions"])
 measure_native("connections list", ["connections", "list"])
 measure_native("feedback list", ["feedback", "list"])
 measure_native("feedback show", ["feedback", "show", "fb_1"])
+measure_native("update --cli", ["update", "--cli"])
 bash_ft = p95(timed(bash_argv("heartbeat", "list")))
 print(f"perf_cli: info: cli/k2 heartbeat list: p95 {bash_ft:.2f} ms (the fallthrough's base)")
 measure("k5 heartbeat list (fallthrough)", [k5, "heartbeat", "list"], bash_ft + 5.0, "cli/k2's p95 + 5 ms")
 for words in (["whoami"], ["done"], ["respond", "perf line"], ["inbox"], ["read", "acme"],
               ["activity"], ["sessions"], ["connections", "list"], ["feedback", "list"],
-              ["feedback", "show", "fb_1"]):
+              ["feedback", "show", "fb_1"], ["update", "--cli"]):
     bash_p95 = p95(timed(bash_argv(*words)))
-    name = ' '.join(words[:2]) if words[0] in ('connections', 'feedback') else words[0]
+    name = ' '.join(words[:2]) if words[0] in ('connections', 'feedback', 'update') else words[0]
     print(f"perf_cli: info: cli/k2 {name}: p95 {bash_p95:.2f} ms (for comparison)")
 print("perf_cli: pending: k5 thread read <= 40 ms (R3.5: thread read is not native yet)")
 

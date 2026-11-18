@@ -26500,9 +26500,16 @@ EOF
 # _sidecar_send <GET|POST> <path> <json-body|query> — prints the body, then
 # a last line with the HTTP status. Per-cell socket first (scoped Bearer),
 # else TCP ($TOKEN, already the scoped token inside a cell for id tools).
+#
+# 0.46.15: the send-once rule of _compute_send. A POST goes again over TCP
+# after the cell socket only when the socket took none of it: the connect
+# failed (curl 7) or the daemon answered "not served on cell socket". Any
+# other failure may have run it, so it is not sent again:
+# _cli_send_unanswered says so and ends the command with 1. GETs keep the
+# fallback.
 _sidecar_send() {
     local method="$1" path="$2" payload="${3:-}"
-    local sock out="" _K2_CFG=""
+    local sock out="" _K2_CFG="" rc=0 t0="$SECONDS"
     # The payload (an API key for `k2 llm tokens add-key`) and the token
     # both ride the curl config on stdin — never curl's argv.
     sock="$(_hook_sock)"
@@ -26515,17 +26522,22 @@ _sidecar_send() {
             fi
             out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost${path}" \
                 --connect-timeout 5 --max-time 120 \
-                -w $'\n%{http_code}' 2>/dev/null)" || out=""
+                -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
         else
             _k2_cfg_add data-raw "$payload"
             out="$(_k2_curl "$_K2_CFG" -s -X POST --unix-socket "$sock" "http://localhost${path}" \
                 --connect-timeout 5 --max-time 120 \
                 -H "Content-Type: application/json" \
-                -w $'\n%{http_code}' 2>/dev/null)" || out=""
+                -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
         fi
-        if [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
+        if [ "$rc" -eq 0 ] && [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
             printf '%s' "$out"
             return 0
+        fi
+        # Soft callers (_K2_NOANSWER_SOFT=1) get status 000 back instead.
+        if [ "$method" != "GET" ] && [ "$rc" -ne 7 ] && [[ "$out" != *"not served on cell socket"* ]]; then
+            _cli_send_unanswered "$path" "$t0" 0 $'\n000'
+            return
         fi
     fi
     _K2_CFG=""

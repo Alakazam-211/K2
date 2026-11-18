@@ -1791,6 +1791,83 @@ mod tests {
         }
     }
 
+    /// Rosson's tab, again (11-18): an agent's ~10 KB HTML progress page in
+    /// its OWN workspace's `.k2/agent/work/`, opened from that workspace.
+    /// The page is what such pages hold: tables, code, long hex ids, a word
+    /// like "secret" in prose. The socket's close is `protected` (the
+    /// private .k2 folder, checked before the secret scan), with words;
+    /// never a size or text reason, and never `secret`: the same page beside
+    /// `.k2` opens live (the content scan finds no credential in it).
+    #[test]
+    fn an_agents_progress_page_in_its_own_k2_work_folder_closes_protected_with_words() {
+        let dir = crate::test_support::Scratch::new();
+        let ws = dir.path().join("agent-ws");
+        std::fs::create_dir_all(ws.join(".k2/agent/work")).expect(".k2/agent/work");
+        let mut page = String::from(
+            "<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>Progress</title>\n<style>table { border-collapse: collapse; } td, th { padding: 4px 8px; } code { font: 12px monospace; }</style></head><body>\n<h1>CLI port: progress</h1>\n<p>Each slice lands with its tests. Vault secret names stay in the vault; the thread secret card asks for a value.</p>\n<table><tr><th>Slice</th><th>Commit</th><th>Status</th></tr>\n",
+        );
+        let mut n = 0u64;
+        while page.len() < 9_600 {
+            n += 1;
+            let sha = format!("{:016x}{:016x}{:08x}", n.wrapping_mul(0x9e37_79b9_7f4a_7c15), n.wrapping_mul(0xc2b2_ae3d_27d4_eb4f), n * 2_654_435_761);
+            page.push_str(&format!("<tr><td>slice {n}</td><td><code>{sha}</code></td><td>landed</td></tr>\n"));
+        }
+        page.push_str("</table>\n<pre><code>k5 msg send --to builder \"done\"\nk5 vault get NAME --json | jq .ok\n</code></pre>\n</body></html>\n");
+        let inside = ws.join(".k2/agent/work/progress.html");
+        std::fs::write(&inside, &page).expect("page in .k2/agent/work");
+        let beside = ws.join("progress.html");
+        std::fs::write(&beside, &page).expect("page beside .k2");
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)", rusqlite::params![&id, "live-agent-ws", ws.canonicalize().expect("root").to_string_lossy()])
+                .expect("register the workspace");
+        }
+        let open = |p: &std::path::Path, workspace: Option<&str>| {
+            let mut params: HashMap<String, String> = [("doc".to_string(), p.to_string_lossy().to_string())].into();
+            if let Some(w) = workspace {
+                params.insert("workspace".into(), w.into());
+            }
+            live_target(&super::super::caller::owner(), &params)
+        };
+        assert!(!k2_core::secret_paths::content_has_credential_str(&page), "the page holds no credential");
+
+        // Opened by absolute path, and as from that workspace (its id).
+        for workspace in [None, Some(id.as_str())] {
+            let c = open(&inside, workspace).expect_err("a page in .k2/agent/work is not a live doc");
+            println!("[docs/live] the Closed frame for {} (workspace {workspace:?}): {}", inside.display(), c.value().to_json());
+            assert_eq!((c.reason, c.code.as_deref()), (CloseReason::Declined, Some("protected")), "{:?}", c);
+            assert!(c.message.as_deref().is_some_and(|m| m.starts_with(".k2/agent/work/progress.html is in the workspace's private .k2 folder")), "{:?}", c.message);
+            assert!(c.error.is_none(), "{:?}", c.error);
+            let t = open(&beside, workspace).expect("the same page beside .k2 opens live: not a secret by its content");
+            assert_eq!((t.project_id.as_str(), t.rel.as_str(), t.tier), (id.as_str(), "progress.html", Tier::Text(k2_mpc_text::Family::Markup)));
+        }
+
+        // Named from a sibling workspace (the opening tab's `workspace=`), a
+        // file under another workspace's root is K2's non-404 refusal,
+        // `workspace_mismatch` (declined), which the tab says as "in another
+        // workspace's folder, so it opens read-only here".
+        let sibling = dir.path().join("sibling-ws");
+        std::fs::create_dir_all(&sibling).expect("sibling");
+        let sibling_id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)", rusqlite::params![&sibling_id, "live-sibling-ws", sibling.canonicalize().expect("root").to_string_lossy()])
+                .expect("register the sibling");
+        }
+        let c = open(&beside, Some(sibling_id.as_str())).expect_err("another workspace's file, named from the sibling");
+        assert_eq!((c.reason, c.code.as_deref()), (CloseReason::Declined, Some("workspace_mismatch")), "{:?}", c);
+        assert!(c.message.is_some(), "{:?}", c);
+
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for id in [&id, &sibling_id] {
+            conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id]).expect("unregister");
+        }
+    }
+
     #[test]
     fn people_only_and_never_an_app_pass_or_an_agent() {
         use crate::sidecar_routes::Caller;

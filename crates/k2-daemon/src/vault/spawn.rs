@@ -162,6 +162,63 @@ static JOB_FILES: Mutex<Vec<(PathBuf, String, String)>> = Mutex::new(Vec::new())
 /// its files are topped up never gets its dir made again.
 static TOPUP: Mutex<()> = Mutex::new(());
 
+/// Tests: workspaces whose live sessions only the fencing thread's sweeps
+/// reach. The served vault and the live list are one per test process, so
+/// another test's set, grant or handoff (each tops up every live session)
+/// wrote a fenced test's files between its own steps: on the soak's
+/// shuffled run a handoff test delivered SYNC_FILE before
+/// `vault_sync_route_and_copy_for_a_mid_session_grant`'s own sync could.
+#[cfg(test)]
+static FENCED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+thread_local! {
+    /// The fenced workspaces this thread holds a [`Fence`] for.
+    static FENCED_HERE: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// [`fence`]'s guard: the workspaces are open to every sweep again. Not
+/// `Send`: it ends on the thread that fenced.
+#[cfg(test)]
+pub(crate) struct Fence(Vec<String>, std::marker::PhantomData<*const ()>);
+
+#[cfg(test)]
+impl Drop for Fence {
+    fn drop(&mut self) {
+        let mut all = FENCED.lock();
+        for w in &self.0 {
+            if let Some(i) = all.iter().position(|x| x == w) {
+                all.remove(i);
+            }
+        }
+        FENCED_HERE.with(|h| {
+            let mut h = h.borrow_mut();
+            for w in &self.0 {
+                if let Some(i) = h.iter().position(|x| x == w) {
+                    h.remove(i);
+                }
+            }
+        });
+    }
+}
+
+/// Tests: until the guard drops, only this thread's sweeps reach live
+/// sessions of `workspaces` (its own routes and `top_up_all` calls still do).
+#[cfg(test)]
+pub(crate) fn fence(workspaces: &[&str]) -> Fence {
+    let ws: Vec<String> = workspaces.iter().map(|w| w.to_string()).collect();
+    FENCED.lock().extend(ws.iter().cloned());
+    FENCED_HERE.with(|h| h.borrow_mut().extend(ws.iter().cloned()));
+    Fence(ws, std::marker::PhantomData)
+}
+
+/// A sweep on this thread must skip `workspace_id`'s sessions: another
+/// thread fenced it.
+#[cfg(test)]
+fn fenced_from_here(workspace_id: &str) -> bool {
+    FENCED.lock().iter().any(|w| w == workspace_id) && !FENCED_HERE.with(|h| h.borrow().iter().any(|w| w == workspace_id))
+}
+
 /// A failed live delivery is tried again after this long.
 const RETRY_AFTER: Duration = Duration::from_secs(600);
 
@@ -1015,6 +1072,10 @@ pub fn sweep_live(vault: &k2_vault::LocalVault) -> LiveSweep {
             continue;
         };
         let ws = r.workspace_id.clone();
+        #[cfg(test)]
+        if fenced_from_here(&ws) {
+            continue;
+        }
         let t = top_up_one(vault, &sid, &ws, Some(&dir), r.env_names.as_deref(), &mut r.failed, &mut r.delivered, false);
         if !r.delivered.complete {
             let names = unrecorded_files(&dir, &r.delivered);
@@ -2109,11 +2170,14 @@ mod tests {
     /// Papercut 8 (0.46.5) test setup: a temp secrets root (Linux: the
     /// `K2_RUNTIME_DIR` override; macOS uses `$TMPDIR`), the test vault, and
     /// a secret of ANOTHER workspace (`other`) that `ws` doesn't get until
-    /// it is granted. Hold the returned guards for the whole test.
+    /// it is granted. Hold the returned guards for the whole test: the
+    /// fence keeps other tests' sweeps (their sets, grants and handoffs top
+    /// up every live session) off `ws`'s and `other`'s sessions, so each
+    /// step here sees only what this test did.
     fn late_grant_setup(
         tag: &str,
         names: &[(&str, Delivery, &str)],
-    ) -> (k2_core::test_env::EnvLock, k2_vault::fsutil::TestDir, k2_core::test_env::EnvVar, std::sync::Arc<k2_vault::LocalVault>, String, String) {
+    ) -> (k2_core::test_env::EnvLock, k2_vault::fsutil::TestDir, k2_core::test_env::EnvVar, std::sync::Arc<k2_vault::LocalVault>, String, String, Fence) {
         use k2_vault::{Actor, Kind, Namespace, PutRequest, Scope, SecretBytes};
         let env = k2_core::test_env::lock();
         let t = k2_vault::fsutil::TestDir::new(tag);
@@ -2127,7 +2191,8 @@ mod tests {
             r.delivery_ceiling = Some(Delivery::Env);
             v.put(r, SecretBytes::from_slice(val.as_bytes()), &Actor::Owner).expect("put");
         }
-        (env, t, over, v, ws, other)
+        let fenced = fence(&[ws.as_str(), other.as_str()]);
+        (env, t, over, v, ws, other, fenced)
     }
 
     fn grant_to_ws(v: &k2_vault::LocalVault, other: &str, ws: &str, name: &str, d: Delivery) {
@@ -2158,7 +2223,7 @@ mod tests {
     /// to restart.
     #[test]
     fn a_file_granted_mid_session_reaches_the_live_session() {
-        let (_env, t, _over, v, ws, other) =
+        let (_env, t, _over, v, ws, other, _fence) =
             late_grant_setup("spawn-late", &[("LATE_FILE", Delivery::File, "late-file-value-1"), ("LATE_ENV", Delivery::Env, "late-env-value-2")]);
         let sid = uuid::Uuid::new_v4().to_string();
         let mut env = HashMap::new();
@@ -2233,6 +2298,30 @@ mod tests {
         assert!(out4.dir.is_none() && !env4.contains_key(SECRETS_DIR_ENV), "{out4:?}");
     }
 
+    /// The fence the setup above holds: a sweep on another thread (another
+    /// test's set, grant or handoff topping up every live session) skips a
+    /// fenced workspace's session, and this thread's own sweep still
+    /// reaches it. Without it a handoff test's sweep wrote SYNC_FILE before
+    /// the sync test's own sync (soak, shuffled daemon run, seed 2).
+    #[test]
+    fn another_threads_sweep_skips_a_fenced_workspaces_session() {
+        use k2_vault::{Actor, Kind, Namespace, PutRequest, Scope, SecretBytes};
+        let (_env, _t, _over, v, ws, _other, _fence) = late_grant_setup("spawn-fence", &[]);
+        let sid = uuid::Uuid::new_v4().to_string();
+        let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
+        let mut r = PutRequest::new(Namespace::User, Scope::workspace(ws.clone()), "FENCED_FILE", Kind::Generic);
+        r.default_delivery = Some(Delivery::File);
+        v.put(r, SecretBytes::from_slice(b"fenced-value-1"), &Actor::Owner).expect("put");
+
+        let v2 = v.clone();
+        std::thread::spawn(move || top_up_all(&v2)).join().expect("the other thread's sweep");
+        assert!(!dir.join("FENCED_FILE").exists(), "another thread's sweep never reaches a fenced session");
+
+        top_up_all(&v);
+        assert_eq!(std::fs::read(dir.join("FENCED_FILE")).expect("this thread's sweep delivers"), b"fenced-value-1");
+        session_ended(&sid);
+    }
+
     /// Papercut 8, the routes: `POST /cli/vault/sync` (k2 vault sync)
     /// writes the caller's own session's granted files now; env-file on a
     /// file-delivered secret says where the file is instead of a bare
@@ -2243,7 +2332,7 @@ mod tests {
         use crate::vault::actor::{Channel, VaultCaller};
         use crate::vault_use_routes::{ENV_FILE, SYNC};
         use k2_vault::{Actor, AgentActor, Consumer};
-        let (_env, _t, _over, v, ws, _other) = late_grant_setup("spawn-sync", &[]);
+        let (_env, _t, _over, v, ws, _other, _fence) = late_grant_setup("spawn-sync", &[]);
         let sid = uuid::Uuid::new_v4().to_string();
         let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
         let me = VaultCaller {
@@ -2318,7 +2407,7 @@ mod tests {
         use crate::vault::actor::{Channel, VaultCaller};
         use crate::vault_routes::{DESTROY, DISABLE, ENABLE, REVOKE};
         use k2_vault::{Actor, Scope, Selector};
-        let (_env, _t, _over, v, ws, other) = late_grant_setup(
+        let (_env, _t, _over, v, ws, other, _fence) = late_grant_setup(
             "spawn-recall",
             &[
                 ("GONE_FILE", Delivery::File, "gone-value-1"),
@@ -2421,7 +2510,7 @@ mod tests {
     /// the session's own file survives the destroy, across a restart too.
     #[test]
     fn destroy_leaves_a_file_k2_did_not_deliver() {
-        let (_env, _t, _over, v, ws, other) = late_grant_setup("spawn-mine", &[("MINE_FILE", Delivery::File, "vault-value-1")]);
+        let (_env, _t, _over, v, ws, other, _fence) = late_grant_setup("spawn-mine", &[("MINE_FILE", Delivery::File, "vault-value-1")]);
         let sid = uuid::Uuid::new_v4().to_string();
         let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
         std::fs::write(dir.join("MINE_FILE"), b"the agent's own").expect("write");
@@ -2440,7 +2529,7 @@ mod tests {
     /// check, never that no session had it, and the next pass removes it.
     #[test]
     fn an_unchecked_session_is_reported_and_retried() {
-        let (_env, _t, _over, v, ws, other) = late_grant_setup("spawn-unchecked", &[("LOCKED_FILE", Delivery::File, "locked-value-1")]);
+        let (_env, _t, _over, v, ws, other, _fence) = late_grant_setup("spawn-unchecked", &[("LOCKED_FILE", Delivery::File, "locked-value-1")]);
         grant_to_ws(&v, &other, &ws, "LOCKED_FILE", Delivery::File);
         let sid = uuid::Uuid::new_v4().to_string();
         let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
@@ -2464,7 +2553,7 @@ mod tests {
     /// files are, so it touches none and says so.
     #[test]
     fn a_session_with_no_record_is_left_alone_and_reported() {
-        let (_env, _t, _over, v, ws, other) = late_grant_setup("spawn-norecord", &[("OLD_FILE", Delivery::File, "old-value-1")]);
+        let (_env, _t, _over, v, ws, other, _fence) = late_grant_setup("spawn-norecord", &[("OLD_FILE", Delivery::File, "old-value-1")]);
         grant_to_ws(&v, &other, &ws, "OLD_FILE", Delivery::File);
         let sid = uuid::Uuid::new_v4().to_string();
         let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
@@ -2484,7 +2573,7 @@ mod tests {
     /// the boot sweep clears one whose session is gone.
     #[test]
     fn the_delivered_record_is_checked_and_cleaned_up() {
-        let (_env, t, _over, v, ws, _other) = late_grant_setup("spawn-record", &[]);
+        let (_env, t, _over, v, ws, _other, _fence) = late_grant_setup("spawn-record", &[]);
         let sid = uuid::Uuid::new_v4().to_string();
         let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
         let record = delivered_path(&dir).expect("path");
@@ -2514,7 +2603,7 @@ mod tests {
     #[test]
     fn the_tick_removes_a_file_whose_secret_this_session_no_longer_gets() {
         use k2_vault::{Actor, Consumer, GrantRequest, Scope, Selector};
-        let (_env, _t, _over, v, ws, other) = late_grant_setup("spawn-expire", &[("BRIEF_FILE", Delivery::File, "brief-value-1")]);
+        let (_env, _t, _over, v, ws, other, _fence) = late_grant_setup("spawn-expire", &[("BRIEF_FILE", Delivery::File, "brief-value-1")]);
         let sid = uuid::Uuid::new_v4().to_string();
         let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
         let sel = Selector::user(Scope::workspace(other.clone()), "BRIEF_FILE");
@@ -2545,7 +2634,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_swapped_secrets_dir_never_turns_removal_on_another_folder() {
-        let (_env, t, _over, v, ws, other) = late_grant_setup("spawn-swap", &[("SWAP_TARGET", Delivery::File, "value-1")]);
+        let (_env, t, _over, v, ws, other, _fence) = late_grant_setup("spawn-swap", &[("SWAP_TARGET", Delivery::File, "value-1")]);
         grant_to_ws(&v, &other, &ws, "SWAP_TARGET", Delivery::File);
         let sid = uuid::Uuid::new_v4().to_string();
         let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
@@ -2572,7 +2661,7 @@ mod tests {
     /// never says nothing has it, and it names the copies that stay a while.
     #[test]
     fn destroy_says_when_a_running_job_still_holds_the_file() {
-        let (_env, _t, _over, v, ws, other) = late_grant_setup("spawn-job", &[("JOB_FILE", Delivery::File, "value-1")]);
+        let (_env, _t, _over, v, ws, other, _fence) = late_grant_setup("spawn-job", &[("JOB_FILE", Delivery::File, "value-1")]);
         let job_id = uuid::Uuid::new_v4().to_string();
         v.grant(
             k2_vault::GrantRequest {
@@ -2604,7 +2693,7 @@ mod tests {
     /// server, with files K2 can't place, aren't this secret's business.
     #[test]
     fn recall_counts_are_about_this_secret() {
-        let (_env, _t, _over, v, ws, other) = late_grant_setup("spawn-scope", &[("SCOPED_A", Delivery::File, "value-a"), ("SCOPED_B", Delivery::File, "value-b")]);
+        let (_env, _t, _over, v, ws, other, _fence) = late_grant_setup("spawn-scope", &[("SCOPED_A", Delivery::File, "value-a"), ("SCOPED_B", Delivery::File, "value-b")]);
         grant_to_ws(&v, &other, &ws, "SCOPED_A", Delivery::File);
         let sid = uuid::Uuid::new_v4().to_string();
         let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
@@ -2635,7 +2724,7 @@ mod tests {
         use crate::vault_use_routes::ENV_FILE;
         use k2_vault::vault::{CardAnswer, SecretRequest};
         use k2_vault::{Actor, AgentActor, Consumer, ConsumerKind, GrantRequest, Kind, ScopeKind, SecretBytes};
-        let (_env, _t, _over, v, ws, _other) = late_grant_setup("spawn-server-env", &[]);
+        let (_env, _t, _over, v, ws, _other, _fence) = late_grant_setup("spawn-server-env", &[]);
         // The test vault is shared by the process: a name of its own.
         let name = format!("EXAMPLE_TOKEN_{}", uuid::Uuid::new_v4().simple().to_string()[..8].to_ascii_uppercase());
         let value = "example-token-value-1";
@@ -2738,7 +2827,7 @@ mod tests {
         use crate::vault::actor::{Channel, VaultCaller};
         use crate::vault_use_routes::ENV_FILE;
         use k2_vault::{Actor, AgentActor, Consumer, GrantRequest, Kind, Namespace, PutRequest, Scope, SecretBytes};
-        let (_env, _t, _over, v, ws, _other) = late_grant_setup("spawn-server-later", &[]);
+        let (_env, _t, _over, v, ws, _other, _fence) = late_grant_setup("spawn-server-later", &[]);
         let name = format!("EXAMPLE_TOKEN_{}", uuid::Uuid::new_v4().simple().to_string()[..8].to_ascii_uppercase());
         let mut r = PutRequest::new(Namespace::User, Scope::server(), &name, Kind::Generic);
         r.default_delivery = Some(Delivery::Env);
@@ -2791,7 +2880,7 @@ mod tests {
         use crate::vault::actor::{Channel, VaultCaller};
         use crate::vault_use_routes::ENV_FILE;
         use k2_vault::{Actor, AgentActor, Consumer, GrantRequest, Kind, Namespace, PutRequest, Scope, SecretBytes};
-        let (_env, _t, _over, v, ws, _other) = late_grant_setup("spawn-server-unshared", &[]);
+        let (_env, _t, _over, v, ws, _other, _fence) = late_grant_setup("spawn-server-unshared", &[]);
         let name = format!("EXAMPLE_TOKEN_{}", uuid::Uuid::new_v4().simple().to_string()[..8].to_ascii_uppercase());
         let mut r = PutRequest::new(Namespace::User, Scope::server(), &name, Kind::Generic);
         r.default_delivery = Some(Delivery::Env);

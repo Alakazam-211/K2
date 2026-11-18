@@ -32,9 +32,10 @@ pub(super) const ROWS: &[Route] = &[
     // S19 (0.46.1 door): the per-call audit of an App (a passport: its own
     // workspace's Apps).
     get("/cli/app/audit", Member),
-    // 0.46.9 sign-in door: the box switch is the owner's (the handler
-    // checks); one App's door and origins the owner's, Admins' and the
-    // App's agent's.
+    // 0.46.9 sign-in door: the box switch is the owner's alone (the handler
+    // refuses an Admin and an agent with owner_only); one App's door and
+    // origins the owner's, Admins' and the App's agent's ("Build and run
+    // Apps"). The Admin floor is the most a Connect login can reach here.
     get("/cli/app/auth", Admin),
     post("/cli/app/auth/set", Admin),
     get("/cli/app/box", Admin),

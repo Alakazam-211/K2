@@ -10,14 +10,17 @@ one-time code; your server swaps the code for the person's pass
   k2 app auth [<app>] [--json]          Is the door on for this server? With
                                         <app>: that App's door, its extra page
                                         origins and its hosts.
-  k2 app auth door on|off [<app>] [--json]
-                                        No <app>: turn the door on or off for
-                                        every App on this server (the owner;
-                                        it starts off). With <app>: that App
-                                        only. off hands /.k2/auth/* back to the
-                                        App (one that serves the path itself);
-                                        on undoes that. An App has a door only
-                                        while the server's switch is on too.
+  k2 app auth door on|off [--json]      The server's switch, for every App on
+                                        this server (it starts off). The owner
+                                        only: an Admin or an agent gets
+                                        owner_only (exit 3).
+  k2 app auth door on|off <app> [--json]
+                                        That App only: the owner, an Admin, or
+                                        the App's own agent. off hands
+                                        /.k2/auth/* back to the App (one that
+                                        serves the path itself); on undoes
+                                        that. An App has a door only while the
+                                        server's switch is on too.
   k2 app auth origins <app> [--origin O]… [--clear] [--json]
                                         The page origins, beyond the App's own
                                         host, whose posts the door takes and
@@ -32,10 +35,11 @@ Your App's own server reads the same answer for itself on its link, with
 no agent: k2.auth.doorStatus() (GET /cli/skin/auth/door with the App pass):
 {on, box, appOff, hosts: [{host, door}]}, its own App only.
 
-Who: door on|off for the server is the owner's. One App's door and origins:
-the owner, an Admin, or the App's own agent with "Build and run Apps"
-(Settings → Workspaces / Agents → <agent> → Permissions → Apps). Every change is recorded. Exit codes: 0 ok, 2 bad usage,
-3 refused (JSON with a code on stderr).
+Who: door on|off with no <app> (the server's switch) is the owner's alone.
+One App's door (door on|off <app>) and its origins: the owner, an Admin, or
+the App's own agent with "Build and run Apps" (Settings → Workspaces /
+Agents → <agent> → Permissions → Apps). Every change is recorded. Exit
+codes: 0 ok, 2 bad usage, 3 refused (JSON with a code on stderr).
 EOF
 }
 

@@ -184,7 +184,7 @@
     {
       "name": "app auth",
       "usage": "k2 app auth [<app>] | k2 app auth door on|off [<app>] | k2 app auth origins <app> [--origin O]… [--clear] [--json]",
-      "description": "The sign-in door: an App's own page posts passwords to K2 at /.k2/auth/* on the App's host and gets a one-time code its server swaps (k2.auth.exchange). door on|off with no app is the server's switch (the owner; it starts off); with an app, that App only. origins lists extra page origins (a bundled Tauri page). k2 study auth-pages.",
+      "description": "The sign-in door: an App's own page posts passwords to K2 at /.k2/auth/* on the App's host and gets a one-time code its server swaps (k2.auth.exchange). door on|off with no app is the server's switch (the owner only; it starts off); with an app, that App only (the owner, an Admin, or the App's own agent with Build and run Apps). origins lists extra page origins (a bundled Tauri page). k2 study auth-pages.",
       "args": [{"name": "app", "required": false}],
       "flags": [
         {"name": "--origin", "arg": "origin", "description": "origins: one page origin, such as tauri://localhost (repeat; replaces the list)."},

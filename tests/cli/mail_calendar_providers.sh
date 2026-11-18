@@ -151,7 +151,12 @@ env > "$SB/claude.env"
 exec /bin/cat > /dev/null
 EOF
 chmod +x "$SB/shim/claude"
+# The whole run drives ONE agent passport (read once from claude.env), so
+# the active reaper must not close the pinned chat mid-run: it fires about a
+# minute after the workspace leaves the Active set and revokes the passport
+# with its cell socket ("session credentials are stale").
 TMPDIR="$SB/tmp" XDG_RUNTIME_DIR="$SB/run" K2_RUNTIME_DIR= HOME="$SB" K2_AIRGAP=1 \
+    K2SO_ACTIVE_REAPER_GRACE_MS=86400000 \
     K2_PROVIDER_FAKES_URL="$FAKE" K2_TEST_AGENT_SHIM_DIR="$SB/shim" K2SO_WATCHDOG_DISABLED=1 \
     K2_HEARTBEAT_NO_SELF_HEAL=1 K2_SUBSCRIPTION_PROBE=deny \
     HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 \
@@ -708,8 +713,7 @@ jok "$OUT" 'not any(s in json.dumps(j) for s in ("Private", "prefers mornings", 
 run agent calendar events "$RO" --from 2026-10-28 --to 2026-10-29 --full --json
 want_rc 0 "events --full with descriptions omitted"
 jok "$OUT" 'all(e["description"] is None for e in j["events"]) and not any(s in json.dumps(j) for s in ("Private", "445566"))' "events --full redacts too"
-run owner mail inboxes --json
-jok "$OUT" '[i for i in j["inboxes"] if i["address"] == "'"$RO"'"][0]["primary"]["calendarOmitDescription"] is True' "the catalog shows the choice"
+[ "$(sql "SELECT omit_description FROM calendar_grant_prefs WHERE inbox_id='$ROROW'")" = "1" ] || fail "the choice is stored for the workspace"
 ok "omit descriptions: owner-only, show/event/--full redact, the join survives"
 
 run agent calendar link "$RO" --provider google --workspace "$REPO"

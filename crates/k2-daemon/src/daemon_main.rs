@@ -548,6 +548,9 @@ async fn async_main() {
     // installed, K2 prepares the box for walled Apps by itself (after every
     // update = every boot; ~3 min in, then daily). Linux only.
     crate::apps::auto_prepare::spawn();
+    // 0.46.16: "Get this server ready for Apps": the upgrade trigger, the
+    // paid-plan listener and the owner's scheduled restart (Linux).
+    crate::apps::ready_offer::spawn();
     // 0.40.43 (1c): same deal for the public /v1 API switch — a daemon that
     // boots with the Settings toggle already ON must serve /v1 immediately.
     // misc_routes::api_enabled() reads this mirror per request; the K2_API
@@ -1146,6 +1149,9 @@ async fn async_main() {
     // (supervisor-agnostic restart) the SIGINT handler uses.
     let (shutdown_tx, _shutdown_rx) = broadcast::channel::<()>(1);
     let mut main_shutdown_rx = shutdown_tx.subscribe();
+    // 0.46.16: the Apps setup card's "Restart now" / "Tonight at 3 am" use
+    // the same graceful restart as `POST /cli/daemon/restart`.
+    crate::apps::ready_offer::install_restarter(shutdown_tx.clone());
 
     let state = DaemonState {
         token: Arc::new(token.clone()),

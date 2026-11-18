@@ -5377,3 +5377,39 @@ fn s24_upgrade_fixture_no_lockouts() {
         );
     });
 }
+
+/// The owner's live-sessions read: distinct guests per App, a revoked or
+/// expired session not counted, two sessions of one guest counted once.
+#[test]
+fn signed_in_guests_are_counted_per_app_without_names() {
+    use crate::skin_live_counts::signed_in_guests_by_app;
+    with_temp_home(|| {
+        add_principal("ada").unwrap();
+        add_principal("bob").unwrap();
+        add_principal("cara").unwrap();
+        let now = now_secs();
+        assert!(signed_in_guests_by_app(now).unwrap().is_empty(), "nobody yet");
+        create_session_token("ada").unwrap();
+        create_session_token("ada").unwrap();
+        create_session_token("bob").unwrap();
+        let (cara, _) = create_session_token("cara").unwrap();
+        assert_eq!(signed_in_guests_by_app(now).unwrap(), vec![(HOST_APP_ID.to_string(), 3)]);
+        with_conn(|c| {
+            c.execute("UPDATE tokens SET revoked_at = ?1 WHERE id = ?2", params![now, cara.id]).map_err(|e| e.to_string())
+        })
+        .unwrap();
+        assert_eq!(signed_in_guests_by_app(now).unwrap(), vec![(HOST_APP_ID.to_string(), 2)], "a revoked session");
+        with_conn(|c| {
+            c.execute("UPDATE tokens SET app_service_id = 'svc-shop' WHERE principal_id = (SELECT id FROM principals WHERE username = 'bob')", [])
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
+        assert_eq!(
+            signed_in_guests_by_app(now).unwrap(),
+            vec![(HOST_APP_ID.to_string(), 1), ("svc-shop".to_string(), 1)],
+            "by the App each login is bound to"
+        );
+        with_conn(|c| c.execute("UPDATE tokens SET expires_at = ?1 WHERE session = 1", params![now - 1]).map_err(|e| e.to_string())).unwrap();
+        assert!(signed_in_guests_by_app(now).unwrap().is_empty(), "expired sessions don't count");
+    });
+}

@@ -23,6 +23,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { K2_CAPS } from '@/lib/k2-caps.generated'
 import { AppsServerSection } from './AppsServerSection'
+import { APPS_PAGE_EVENT } from '@/components/AppsReadyOffer/apps-ready-api'
 import { AppAboutCard, AppsBoxSection } from './AppsBoxSection'
 import { AppsResourcesSection } from './AppsResourcesSection'
 import { AppsCatalogSection } from './AppsCatalogSection'
@@ -700,6 +701,12 @@ export function prefixLabel(prefix: string): string {
 }
 
 export function SkinAccessSection(): React.JSX.Element {
+  // 0.46.16: the owner opening the Apps page is one of the "Get this server
+  // ready for Apps" triggers; the app-wide card tells the daemon (which
+  // records it once, and only for an owner).
+  useEffect(() => {
+    window.dispatchEvent(new Event(APPS_PAGE_EVENT))
+  }, [])
   const appHeartbeats = useServerSupports('app-heartbeats')
   const agentIdentity = useServerSupports('agent-identity')
   const agentConfigOptIn = useServerSupports('agent-config-write')

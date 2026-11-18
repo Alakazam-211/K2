@@ -1119,9 +1119,50 @@ pub fn open_passes() -> usize {
     with_entries(|m| m.len())
 }
 
+/// Guests with a socket open right now, per App (0.46.16, the owner's "who
+/// would a restart sign out" read): distinct people whose live login pass a
+/// socket holds, by the App a link names, else the App the login is bound
+/// to. Platform and link-only passes are not guests. Counts only.
+pub fn connected_guests_by_app() -> Vec<(String, u64)> {
+    let held: Vec<(String, String)> = with_entries(|m| {
+        m.values()
+            .filter_map(|e| match &*e.tx.borrow() {
+                Answer::Live { pass, .. } if pass.session => {
+                    let principal = pass.principal_id.clone()?;
+                    let app = e.link.as_ref().map(|l| l.app_id.clone()).unwrap_or_else(|| pass.app.clone());
+                    Some((app, principal))
+                }
+                _ => None,
+            })
+            .collect()
+    });
+    count_distinct_by_app(held)
+}
+
+/// `(app, person)` pairs → distinct people per App, sorted by App (an empty
+/// App is the box login, `host`).
+pub(crate) fn count_distinct_by_app(pairs: impl IntoIterator<Item = (String, String)>) -> Vec<(String, u64)> {
+    let mut by: std::collections::BTreeMap<String, HashSet<String>> = std::collections::BTreeMap::new();
+    for (app, who) in pairs {
+        let app = if app.trim().is_empty() { k2_core::skin::HOST_APP_ID.to_string() } else { app };
+        by.entry(app).or_default().insert(who);
+    }
+    by.into_iter().map(|(a, s)| (a, s.len() as u64)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connected_guests_count_each_person_once_per_app() {
+        let p = |a: &str, w: &str| (a.to_string(), w.to_string());
+        assert_eq!(
+            count_distinct_by_app([p("shop", "ada"), p("shop", "ada"), p("shop", "bob"), p("", "cara"), p("host", "ada")]),
+            vec![("host".to_string(), 2), ("shop".to_string(), 2)]
+        );
+        assert!(count_distinct_by_app(Vec::new()).is_empty());
+    }
 
     fn pass(rooms: &[(&str, &[&str])]) -> SkinPass {
         let room_policy: k2_core::skin::RoomPolicy = rooms.iter().map(|(r, c)| (r.to_string(), c.iter().map(|c| c.to_string()).collect())).collect();

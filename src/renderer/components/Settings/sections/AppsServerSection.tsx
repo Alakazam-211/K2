@@ -64,6 +64,7 @@ import {
   type PrepareDryRun,
   type UnprepPlan,
 } from './apps-server-api'
+import { OPEN_EVENT as APPS_READY_OPEN_EVENT } from '@/components/AppsReadyOffer/apps-ready-api'
 
 export const APPS_SERVER_MANIFEST: SettingEntry[] = [
   {
@@ -414,6 +415,21 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
               <div className="px-4 py-3">
                 <p className={SETTING_ROW_HINT}>Only the server&rsquo;s owner can set up the server or install the App runtime.</p>
               </div>
+            ) : null}
+            {isOwner && !doctor.ready ? (
+              <SettingRow
+                label="Get this server ready for Apps"
+                hint="One click: installs Podman and system packages, sets up the App user and firewall, then checks again. No restart now; if one is needed, you pick when."
+              >
+                <Button
+                  variant="accent"
+                  onClick={() => window.dispatchEvent(new Event(APPS_READY_OPEN_EVENT))}
+                  disabled={busy !== null}
+                  data-testid="apps-get-ready"
+                >
+                  Get ready
+                </Button>
+              </SettingRow>
             ) : null}
             {doctor.autoPrepare ? (
               <SettingSwitchRow

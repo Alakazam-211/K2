@@ -2336,7 +2336,7 @@ fn db() -> &'static Mutex<Option<SkinDb>> {
     DB.get_or_init(|| Mutex::new(None))
 }
 
-fn with_conn<T, F: FnOnce(&Connection) -> Result<T, String>>(f: F) -> Result<T, String> {
+pub(crate) fn with_conn<T, F: FnOnce(&Connection) -> Result<T, String>>(f: F) -> Result<T, String> {
     with_conn_inner(|c| f(c))
 }
 

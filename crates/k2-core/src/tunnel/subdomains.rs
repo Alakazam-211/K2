@@ -832,6 +832,18 @@ pub fn set_tier_hook(hook: TierHook) {
     *tier_hook().write().unwrap_or_else(|p| p.into_inner()) = Some(hook);
 }
 
+fn tier_listeners() -> &'static std::sync::RwLock<Vec<TierHook>> {
+    static L: std::sync::RwLock<Vec<TierHook>> = std::sync::RwLock::new(Vec::new());
+    &L
+}
+
+/// Another listener for the same tier changes (0.46.16: the "Get this
+/// server ready for Apps" card hears a paid plan start). Called after the
+/// tier hook. Add each once (at boot).
+pub fn add_tier_listener(hook: TierHook) {
+    tier_listeners().write().unwrap_or_else(|p| p.into_inner()).push(hook);
+}
+
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -870,8 +882,13 @@ pub fn note_tier_at(primary: &str, tier: Option<String>, now: i64) {
     };
     if changed {
         let hook = *tier_hook().read().unwrap_or_else(|p| p.into_inner());
+        let prev = previous.flatten();
         if let Some(h) = hook {
-            h(&reading, previous.flatten().as_deref());
+            h(&reading, prev.as_deref());
+        }
+        let listeners = tier_listeners().read().unwrap_or_else(|p| p.into_inner()).clone();
+        for h in listeners {
+            h(&reading, prev.as_deref());
         }
     }
 }
@@ -913,6 +930,7 @@ pub fn refresh_tier(primary: &str, token: &str) -> Result<TierReading, String> {
 pub fn clear_tier_for_test() {
     *tier_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
     *tier_hook().write().unwrap_or_else(|p| p.into_inner()) = None;
+    tier_listeners().write().unwrap_or_else(|p| p.into_inner()).clear();
 }
 
 /// Test-only: forget the expected primary so later tests in this binary
@@ -1484,6 +1502,38 @@ mod tests {
 
     fn record_hook(r: &TierReading, prev: Option<&str>) {
         HOOK_SEEN.lock().unwrap().push((r.primary.clone(), r.tier.clone(), prev.map(str::to_string)));
+    }
+
+    static LISTENER_SEEN: std::sync::Mutex<Vec<(Option<String>, Option<String>)>> = std::sync::Mutex::new(Vec::new());
+
+    fn record_listener(r: &TierReading, prev: Option<&str>) {
+        LISTENER_SEEN.lock().unwrap().push((r.tier.clone(), prev.map(str::to_string)));
+    }
+
+    /// A listener hears the same changes as the hook, after it, with the old
+    /// tier; a reading with the same tier reaches neither.
+    #[test]
+    fn a_tier_listener_hears_each_change_beside_the_hook() {
+        let _g = crate::themes::HOME_LOCK.lock();
+        let _home = crate::test_env::TempHome::new();
+        clear_expected_primary_for_test();
+        clear_tier_for_test();
+        HOOK_SEEN.lock().unwrap().clear();
+        LISTENER_SEEN.lock().unwrap().clear();
+        set_tier_hook(record_hook);
+        add_tier_listener(record_listener);
+        let t0 = 1_800_000_000;
+        note_tier_at("rosson", Some("free".into()), t0);
+        note_tier_at("rosson", Some("free".into()), t0 + 60);
+        note_tier_at("rosson", Some("single".into()), t0 + 120);
+        assert_eq!(
+            *LISTENER_SEEN.lock().unwrap(),
+            vec![(Some("free".to_string()), None), (Some("single".to_string()), Some("free".to_string()))]
+        );
+        assert_eq!(HOOK_SEEN.lock().unwrap().len(), 2, "the hook still fires");
+        clear_tier_for_test();
+        note_tier_at("rosson", Some("pro".into()), t0 + 180);
+        assert_eq!(LISTENER_SEEN.lock().unwrap().len(), 2, "cleared: no listener");
     }
 
     /// The refresh rule: fresh under 5 min, stale (still used) up to 1 h,

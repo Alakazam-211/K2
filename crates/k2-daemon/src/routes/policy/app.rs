@@ -45,11 +45,24 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/app/box-service", Member),
     post("/cli/app/box-service/request", Admin),
     post("/cli/app/box-service/revoke", Admin),
+    // 0.46.16: the owner turns automatic prep on or off (`k2 app box
+    // auto-prepare on|off`; the handler takes the owner token or an Owner
+    // login only).
+    post("/cli/app/box/auto-prepare", Owner),
     // 0.46.3 F6: the owner's Retry of a blocked (or undone) automatic prep.
     post("/cli/app/box/auto-prepare/retry", Owner),
     // Lane P: remove K2's Podman bundle (prepare --install-podman put it in).
     post("/cli/app/box/podman/uninstall", Owner),
     post("/cli/app/box/prepare", Owner),
+    // 0.46.16: "Get this server ready for Apps". The card's read answers
+    // {owner: false} to anyone but an owner; the Apps page trigger records
+    // nothing for an Admin; answering, the run and the restart are the
+    // owner's (handler: owner token or Owner login).
+    get("/cli/app/box/ready-offer", Member),
+    post("/cli/app/box/ready-offer/dismiss", Owner),
+    post("/cli/app/box/ready-offer/restart", Owner),
+    post("/cli/app/box/ready-offer/run", Owner),
+    post("/cli/app/box/ready-offer/trigger", Admin),
     // 0.46.3 F8: undo box prep.
     post("/cli/app/box/unprep", Owner),
     post("/cli/app/build", Admin),
@@ -298,6 +311,9 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/app/seal/rotate", Owner),
     // Room-scope R16: an App's self (id, live Seed, health, deploy time).
     get("/cli/app/self", Member),
+    // 0.46.16: guests connected and signed in right now, per App (counts
+    // only; the owner's, before a restart).
+    get("/cli/app/sessions/live", Owner),
     // 0.46.9: `k2 app set` (account deletion, client log retention): any login
     // reads; the owner, an Admin or the App's agent (users switch) writes.
     split("/cli/app/settings", Member, Admin),

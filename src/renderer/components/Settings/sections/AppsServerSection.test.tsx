@@ -201,6 +201,33 @@ describe('the box doctor', () => {
   })
 })
 
+describe('Get this server ready for Apps (0.46.16)', () => {
+  it('an owner on a box that isn’t ready gets the one-click card from here; it posts nothing itself', async () => {
+    gets({ 'app/box': () => doctor() })
+    const opened = vi.fn()
+    window.addEventListener('k2:apps-ready-open', opened)
+    render(<AppsServerSection />)
+    fireEvent.click(await screen.findByTestId('apps-get-ready'))
+    expect(opened).toHaveBeenCalledTimes(1)
+    expect(h.daemonCliPost).not.toHaveBeenCalled()
+    window.removeEventListener('k2:apps-ready-open', opened)
+  })
+
+  it('isn’t offered on a ready box or to anyone but the owner', async () => {
+    gets({ 'app/box': () => doctor({ ready: true }) })
+    render(<AppsServerSection />)
+    await screen.findByTestId('apps-setup')
+    expect(screen.queryByTestId('apps-get-ready')).toBeNull()
+    cleanup()
+    role.mockResolvedValue('admin')
+    gets({ 'app/box': () => doctor() })
+    render(<AppsServerSection />)
+    await screen.findByTestId('apps-setup')
+    await waitFor(() => expect(role).toHaveBeenCalled())
+    expect(screen.queryByTestId('apps-get-ready')).toBeNull()
+  })
+})
+
 describe('Prepare this box', () => {
   it('runs a dry run first, lists every change, and applies only on Apply (with K2’s Podman)', async () => {
     gets({ 'app/box': () => doctor() })

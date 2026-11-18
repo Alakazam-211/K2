@@ -61,6 +61,9 @@ pub const ACTOR: &str = "k2:auto-prepare";
 pub const LATCH_NAME: &str = "automatic App box prep";
 /// The owner's Retry.
 pub const RETRY_ROUTE: &str = "/cli/app/box/auto-prepare/retry";
+/// The owner turns it on or off (0.46.16: `k2 app box auto-prepare on|off`;
+/// `k2 settings set` keeps refusing the owner-only setting).
+pub const SET_ROUTE: &str = "/cli/app/box/auto-prepare";
 
 /// What one run did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -491,6 +494,7 @@ pub fn status_json_from(store: &Store) -> J {
         "undoneAt": s.undone_at,
         "retryRequested": s.retry_requested,
         "retryRoute": RETRY_ROUTE,
+        "setRoute": SET_ROUTE,
     });
     if let (Some(last), Some(o)) = (s.last_run, outcome) {
         out["lastRun"] = json!(last);
@@ -555,6 +559,40 @@ pub(crate) fn retry_route(who: &Who) -> R<J> {
     super::grace::audit("app-auto-prepare-retry", &super::routes::actor(who), "retry requested");
     wake();
     Ok(json!({ "ok": true, "autoPrepare": status_json_from(&store) }))
+}
+
+/// `POST /cli/app/box/auto-prepare {on}` (the owner token or an Owner
+/// login; audited): the owner-only `appsAutoPrepare` setting from a
+/// terminal or a provisioner. Turned on, the automatic prep runs now. An
+/// environment override (`K2_APPS_AUTO_PREPARE`) still wins, and the answer
+/// says so (`autoPrepare.enabled` is what the box does).
+pub(crate) fn set_route(who: &Who, body: &J) -> R<J> {
+    need_credential(who)?;
+    if !matches!(who, Who::Owner | Who::Login { role: Role::Owner, .. }) {
+        return Err(no(
+            "owner_only",
+            403,
+            "turning automatic box prep on or off is the owner's (Settings → Cores → Apps → This server → Keep this server set up)",
+        ));
+    }
+    let on = body.get("on").and_then(J::as_bool).ok_or_else(|| no("bad_request", 400, "on is true or false"))?;
+    let was = k2_core::deploy::auto_prepare_enabled();
+    k2_core::app_settings::update(json!({ "appsAutoPrepare": on })).map_err(|e| no("settings_write_failed", 500, e))?;
+    k2_core::deploy::set_auto_prepare(on);
+    super::grace::audit("app-auto-prepare-set", &super::routes::actor(who), if on { "on" } else { "off" });
+    let now = k2_core::deploy::auto_prepare_enabled();
+    if !was && now {
+        wake();
+    }
+    let mut out = json!({ "ok": true, "setting": on, "autoPrepare": status_json() });
+    if now != on {
+        out["note"] = json!(format!(
+            "{} overrides the setting on this server: automatic prep is {}",
+            k2_core::deploy::AUTO_PREPARE_ENV,
+            if now { "on" } else { "off" }
+        ));
+    }
+    Ok(out)
 }
 
 // ── the live box ─────────────────────────────────────────────────────

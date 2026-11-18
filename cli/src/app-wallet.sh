@@ -176,6 +176,8 @@ cmd_app() {
         exception) shift; cmd_app_exception "$@" ;;
         doctor) shift; cmd_app_doctor "$@" ;;
         box) shift; cmd_app_box "$@" ;;
+        # 0.46.16: guests connected and signed in right now (owner, counts).
+        sessions) shift; cmd_app_sessions "$@" ;;
         engine) shift; cmd_app_engine "$@" ;;
         rehost) shift; cmd_app_rehost "$@" ;;
         data) shift; cmd_app_data "$@" ;;

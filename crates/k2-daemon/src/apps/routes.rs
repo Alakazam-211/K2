@@ -40,6 +40,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/label/return",
     "/cli/app/label/take",
     "/cli/app/box",
+    "/cli/app/box/auto-prepare",
     "/cli/app/box/auto-prepare/retry",
     "/cli/app/box/podman/uninstall",
     "/cli/app/box/prepare",
@@ -74,6 +75,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/app/data/put",
     "/cli/app/label/return",
     "/cli/app/label/take",
+    "/cli/app/box/auto-prepare",
     "/cli/app/box/auto-prepare/retry",
     "/cli/app/box/podman/uninstall",
     "/cli/app/box/prepare",
@@ -121,6 +123,8 @@ pub fn is_route(p: &str) -> bool {
         || super::db_connect::ROUTES.contains(&p)
         // 0.46.9: the suite App catalog and the one-click install.
         || super::catalog_routes::ROUTES.contains(&p)
+        // 0.46.16: "Get this server ready for Apps" and the live sessions read.
+        || super::ready_offer::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -157,6 +161,7 @@ pub fn is_post_route(p: &str) -> bool {
         || super::db_connect::POST_ROUTES.contains(&p)
         // 0.46.9: k2 app install --catalog, k2 app catalog retry.
         || super::catalog_routes::POST_ROUTES.contains(&p)
+        || super::ready_offer::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -490,6 +495,15 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         // blocked (or undone) automatic prep.
         "/cli/app/box/unprep" => json_body(body).and_then(|v| super::box_unprep::route(&who, &v)),
         "/cli/app/box/auto-prepare/retry" => json_body(body).and_then(|_| super::auto_prepare::retry_route(&who)),
+        // 0.46.16: the owner turns automatic prep on or off from a terminal.
+        "/cli/app/box/auto-prepare" => json_body(body).and_then(|v| super::auto_prepare::set_route(&who, &v)),
+        // 0.46.16: the owner's "Get this server ready for Apps" card.
+        "/cli/app/box/ready-offer" => super::ready_offer::status_route(&who),
+        "/cli/app/box/ready-offer/trigger" => json_body(body).and_then(|v| super::ready_offer::trigger_route(&who, &v)),
+        "/cli/app/box/ready-offer/dismiss" => json_body(body).and_then(|v| super::ready_offer::dismiss_route(&who, &v)),
+        "/cli/app/box/ready-offer/run" => json_body(body).and_then(|_| super::ready_offer::run_route(&who)),
+        "/cli/app/box/ready-offer/restart" => json_body(body).and_then(|v| super::ready_offer::restart_route(&who, &v)),
+        "/cli/app/sessions/live" => super::ready_offer::sessions_live_route(&who),
         // The guarded engine (S11): the owner installs or updates it.
         "/cli/app/engine/install" => json_body(body).and_then(|v| super::engine_install::install_route(&who, &v)),
         // 0.46.4 (update continuity R9): installed vs running vs this K2,

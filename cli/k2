@@ -10489,7 +10489,7 @@ The box (Linux):
                                        wry versions (any OS; k2 app doctor
                                        --store --help).
   k2 app box prepare [--runtime crun|youki] [--install-podman|--yes]
-                     [--dry-run] [--podman-from DIR] [--json]
+                     [--cores-mem-min MiB] [--dry-run] [--podman-from DIR] [--json]
                                        Owner: run the root helper's box prep
                                        (distro Podman + crun; youki is opt-in;
                                        AppArmor's parser where the kernel has
@@ -10505,6 +10505,11 @@ The box (Linux):
                                        changes nothing (agents may
                                        run it). --podman-from: air-gapped, a
                                        folder holding the pinned tarball.
+                                       --cores-mem-min: a protected floor for
+                                       K2's cores and the agents' own memory
+                                       budget (about 1/16 of RAM: 2048 at 32
+                                       GB, 4096 at 64 GB, 8192 at 128 GB); it
+                                       takes effect at K2's next restart.
   k2 app box podman uninstall [--json] Owner: remove K2's Podman (refused while
                                        Apps run).
   k2 app box unprep [--dry-run] [--yes] [--json]
@@ -10521,6 +10526,15 @@ The box (Linux):
                                        after it stopped for good (old kernel,
                                        cgroup v1, unsupported distro, overlapping
                                        sub-ids) or after an unprep.
+  k2 app box auto-prepare on|off|status [--json]
+                                       Owner: keep this server set up for Apps
+                                       after every update (appsAutoPrepare),
+                                       or stop; status shows it and the last
+                                       run. Audited.
+  k2 app sessions --live [--count] [--json]
+                                       Owner: guests on this server's Apps
+                                       now, per App: connected and signed in
+                                       (counts only). Read it before a restart.
   k2 app engine install [--from DIR] [--json]
                                        Owner: install/update k2-app-engine (the
                                        guarded engine, signed with the root-helper
@@ -11035,9 +11049,13 @@ if v.get("note"):
             ;;
         auto-prepare)
             # F6: k2 app box auto-prepare retry [--json] (owner).
+            # 0.46.16: k2 app box auto-prepare on|off|status [--json] (owner).
             shift
-            [ "${1:-}" = "retry" ] || { echo "usage: k2 app box auto-prepare retry [--json]" >&2; exit 2; }
-            shift
+            local ap_verb="${1:-}"
+            case "$ap_verb" in
+                retry|on|off|status) shift ;;
+                *) echo "usage: k2 app box auto-prepare on|off|status|retry [--json]" >&2; exit 2 ;;
+            esac
             local json_out=0 raw
             while [ $# -gt 0 ]; do
                 case "$1" in
@@ -11046,6 +11064,38 @@ if v.get("note"):
                     *) echo "Unknown argument: $1" >&2; exit 2 ;;
                 esac
             done
+            if [ "$ap_verb" = status ]; then
+                _compute_call GET /cli/app/box ""
+                if [ "$json_out" = 1 ]; then printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("autoPrepare")))'; return 0; fi
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+ap = json.load(sys.stdin).get("autoPrepare") or {}
+print("Automatic prep: %s" % ("on" if ap.get("enabled") else "off"))
+o = ap.get("outcome") or {}
+if o:
+    print("  last run: %s%s" % (o.get("state"), (": " + (o.get("why") or o.get("error") or "")) if (o.get("why") or o.get("error")) else ""))
+'
+                return 0
+            fi
+            if [ "$ap_verb" = on ] || [ "$ap_verb" = off ]; then
+                local ap_on=false
+                [ "$ap_verb" = on ] && ap_on=true
+                raw="$(_compute_send POST /cli/app/box/auto-prepare "{\"on\":$ap_on}")"
+                _compute_split "$raw"
+                [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+                if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+ap = v.get("autoPrepare") or {}
+print("Automatic prep: %s (appsAutoPrepare %s)" % ("on" if ap.get("enabled") else "off", "on" if v.get("setting") else "off"))
+if v.get("note"):
+    print("  " + v["note"])
+if ap.get("enabled"):
+    print("  K2 keeps this server set up for Apps through its root helper, after every update. k2 app box auto-prepare off turns it off.")
+'
+                return 0
+            fi
             raw="$(_compute_send POST /cli/app/box/auto-prepare/retry '{}')"
             _compute_split "$raw"
             [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
@@ -11180,10 +11230,18 @@ for n in v.get("notes") or []:
     print("Note: %s" % n)
 '
                 printf '%s' "$_CP_BODY" | _app_box_print
+                # 0.46.16: the agents leaf waits for the daemon's next start.
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+b = (json.load(sys.stdin).get("box") or {})
+rows = {c.get("id"): c.get("status") for c in b.get("checks") or []}
+if rows.get("coresSlice") == "ok" and rows.get("agentsLeaf") not in (None, "ok"):
+    print("Restart K2 once so agent sessions get their own memory budget: k2 daemon restart (it signs guests out of older App sites; k2 app sessions --live shows who is on now), or pick Tonight at 3 am on the Apps setup card.")
+'
             fi
             ;;
         -h|--help) _app_rt_usage ;;
-        *) echo "Unknown: k2 app box $1 (doctor|prepare|unprep|auto-prepare retry|podman uninstall)" >&2; exit 2 ;;
+        *) echo "Unknown: k2 app box $1 (doctor|prepare|unprep|auto-prepare on|off|status|retry|podman uninstall)" >&2; exit 2 ;;
     esac
 }
 
@@ -14404,6 +14462,46 @@ EXIT CODES
 EOF
 }
 
+
+# k2 app sessions --live [--count] [--json] (0.46.16, owner): guests with a
+# socket open right now and guests signed in, per App. Counts only.
+cmd_app_sessions() {
+    local live=0 count=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --live) live=1; shift ;;
+            --count) count=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help)
+                cat <<'EOF'
+k2 app sessions --live [--count] [--json]   (the server's owner)
+  Guests on this server's Apps right now, per App: connected (a page with
+  a live socket open) and signed in (a login that hasn't ended). Counts
+  only, never names. A K2 restart signs connected guests out of older App
+  sites, so read this before one.
+  --count   one line: the totals.
+  --json    {connected, signedIn, apps:[{app, connected, signedIn}]}
+EOF
+                return 0 ;;
+            *) echo "Unknown argument: $1 (k2 app sessions --live [--count] [--json])" >&2; exit 2 ;;
+        esac
+    done
+    [ "$live" = 1 ] || { echo "usage: k2 app sessions --live [--count] [--json]  (one person's sessions: k2 app user sessions <username> --app <app>)" >&2; exit 2; }
+    _compute_call GET /cli/app/sessions/live ""
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | K2_SESS_COUNT="$count" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+c, s = v.get("connected", 0), v.get("signedIn", 0)
+print("%d guest%s connected now, %d signed in" % (c, "" if c == 1 else "s", s))
+if os.environ.get("K2_SESS_COUNT") == "1":
+    sys.exit(0)
+for a in v.get("apps") or []:
+    print("  %-24s %4d connected  %4d signed in" % (a.get("app"), a.get("connected", 0), a.get("signedIn", 0)))
+if c == 0:
+    print("Nobody is connected now: a restart signs nobody out.")
+'
+}
 # ── one-click suite Apps (prd-one-click-suite-apps-v1) ──────────
 
 _app_catalog_usage() {
@@ -21857,6 +21955,8 @@ cmd_app() {
         exception) shift; cmd_app_exception "$@" ;;
         doctor) shift; cmd_app_doctor "$@" ;;
         box) shift; cmd_app_box "$@" ;;
+        # 0.46.16: guests connected and signed in right now (owner, counts).
+        sessions) shift; cmd_app_sessions "$@" ;;
         engine) shift; cmd_app_engine "$@" ;;
         rehost) shift; cmd_app_rehost "$@" ;;
         data) shift; cmd_app_data "$@" ;;

@@ -23,6 +23,7 @@ import LlmSignInWarning from './components/LlmSignInWarning/LlmSignInWarning'
 import CreateAgentSheet from './components/AgentTemplates/CreateAgentSheet'
 import WhatsNewModal from './components/WhatsNewModal/WhatsNewModal'
 import OwnerAccountPrompt from './components/OwnerAccountPrompt/OwnerAccountPrompt'
+import AppsReadyOffer from './components/AppsReadyOffer/AppsReadyOffer'
 import { UnsavedChangesModalHost } from './components/UnsavedChangesModal/UnsavedChangesModal'
 import { askBeforeBoardFileLoss } from './lib/board-file/board-file-tabs'
 import MemoryWatcher from './components/MemoryWatcher/MemoryWatcher'
@@ -1181,6 +1182,8 @@ function AppRoot(): React.JSX.Element {
       <WhatsNewModal mode={settingsOpen ? 'button-only' : undefined} />
       {/* 0.46.0: ask the local owner once which login is theirs. */}
       <OwnerAccountPrompt />
+      {/* "Get this server ready for Apps": the owners' card (the daemon says when). */}
+      <AppsReadyOffer />
       {/* Kessel at first run: opened by the sign-in offer or the setup checklist. */}
       <KesselSheet />
       {/* Before a Claude sign-in ends: the owners' pop-up (the daemon says which). */}

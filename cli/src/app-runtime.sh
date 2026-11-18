@@ -304,7 +304,7 @@ The box (Linux):
                                        wry versions (any OS; k2 app doctor
                                        --store --help).
   k2 app box prepare [--runtime crun|youki] [--install-podman|--yes]
-                     [--dry-run] [--podman-from DIR] [--json]
+                     [--cores-mem-min MiB] [--dry-run] [--podman-from DIR] [--json]
                                        Owner: run the root helper's box prep
                                        (distro Podman + crun; youki is opt-in;
                                        AppArmor's parser where the kernel has
@@ -320,6 +320,11 @@ The box (Linux):
                                        changes nothing (agents may
                                        run it). --podman-from: air-gapped, a
                                        folder holding the pinned tarball.
+                                       --cores-mem-min: a protected floor for
+                                       K2's cores and the agents' own memory
+                                       budget (about 1/16 of RAM: 2048 at 32
+                                       GB, 4096 at 64 GB, 8192 at 128 GB); it
+                                       takes effect at K2's next restart.
   k2 app box podman uninstall [--json] Owner: remove K2's Podman (refused while
                                        Apps run).
   k2 app box unprep [--dry-run] [--yes] [--json]
@@ -336,6 +341,15 @@ The box (Linux):
                                        after it stopped for good (old kernel,
                                        cgroup v1, unsupported distro, overlapping
                                        sub-ids) or after an unprep.
+  k2 app box auto-prepare on|off|status [--json]
+                                       Owner: keep this server set up for Apps
+                                       after every update (appsAutoPrepare),
+                                       or stop; status shows it and the last
+                                       run. Audited.
+  k2 app sessions --live [--count] [--json]
+                                       Owner: guests on this server's Apps
+                                       now, per App: connected and signed in
+                                       (counts only). Read it before a restart.
   k2 app engine install [--from DIR] [--json]
                                        Owner: install/update k2-app-engine (the
                                        guarded engine, signed with the root-helper

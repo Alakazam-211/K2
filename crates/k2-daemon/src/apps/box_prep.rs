@@ -739,16 +739,21 @@ fn finish(out: Vec<Check>, f: &Facts, active: String, configured: Option<String>
         "processUnit",
         "mac",
     ];
-    let ready = out
+    // 0.46.16: the gate rows that make it NOT READY, named (the stock
+    // provisioner's stop and the owner's card say which).
+    let blocking: Vec<&str> = out
         .iter()
-        .filter(|ch| GATE.contains(&ch.id))
-        .all(|ch| ch.status == "ok" || ch.status == "warn");
+        .filter(|ch| GATE.contains(&ch.id) && ch.status != "ok" && ch.status != "warn")
+        .map(|ch| ch.id)
+        .collect();
+    let ready = blocking.is_empty();
     let checks: Vec<J> = out
         .into_iter()
         .map(|ch| json!({"id": ch.id, "status": ch.status, "detail": ch.detail, "fix": ch.fix}))
         .collect();
     json!({
         "ready": ready,
+        "blocking": blocking,
         "apps": f.apps_on,
         "processEngine": f.process_engine,
         "linux": f.linux,
@@ -1473,6 +1478,7 @@ mod tests {
     fn a_prepared_box_is_ready_and_warnings_dont_block() {
         let d = doctor(&good());
         assert_eq!(d["ready"], true, "{d:#}");
+        assert_eq!(d["blocking"], json!([]), "nothing blocks a ready box");
         assert_eq!(d["runtime"], "crun");
         assert_eq!(status_of(&d, "podman"), "ok");
         assert_eq!(status_of(&d, "nft"), "ok");
@@ -1568,6 +1574,9 @@ mod tests {
             assert_eq!(d["ready"], false, "{id}: {d:#}");
             let st = status_of(&d, id);
             assert!(st == "fail" || st == "unknown", "{id}: {st}");
+            // 0.46.16: the failing gate row is named in `blocking`.
+            let blocking: Vec<&str> = d["blocking"].as_array().expect("blocking").iter().map(|b| b.as_str().unwrap()).collect();
+            assert!(blocking.contains(id), "{id} in blocking: {blocking:?}");
         }
     }
 

@@ -100,6 +100,23 @@ pub fn budget(raw: Option<&str>, total_bytes: Option<u64>) -> Result<String, Str
     Ok(b.to_string())
 }
 
+/// The protected floor for K2's cores (`k2 app box prepare --cores-mem-min`,
+/// MiB) on a box with `total_bytes` of memory: about 1/16 of it rounded to
+/// whole GiB, at least 2 GiB, at most 8 GiB (2 GiB at 32 GB or less, 4 GiB
+/// at 64 GB, 8 GiB at 128 GB and up). The root helper refuses a floor above
+/// half the box, so a box under ~4 GiB gets a quarter. The stock
+/// provisioner's `k2_cores_mem_min_mib` is the same rule (its test pins the
+/// same table). `None` for an unknown or empty box.
+pub fn cores_floor_mib(total_bytes: u64) -> Option<u64> {
+    let ram_mib = total_bytes >> 20;
+    if ram_mib == 0 {
+        return None;
+    }
+    let gib = ((ram_mib + 8192) / 16384).clamp(2, 8);
+    let n = gib * 1024;
+    Some(if n > ram_mib / 2 { ram_mib / 4 } else { n })
+}
+
 /// `MemTotal` from `/proc/meminfo` text, in bytes.
 pub fn mem_total(meminfo: &str) -> Option<u64> {
     let l = meminfo.lines().find(|l| l.starts_with("MemTotal:"))?;
@@ -634,6 +651,28 @@ mod tests {
         }
         assert!(budget(None, None).is_err(), "75% of an unknown box");
         assert_eq!(mem_total("MemTotal:        8040532 kB\nMemFree: 1 kB\n"), Some(8040532 * 1024));
+    }
+
+    /// The same table as tests/cli/provision_apps.sh (MemTotal in KiB → MiB).
+    #[test]
+    fn the_cores_floor_follows_the_boxs_ram() {
+        for (kib, want) in [
+            (3_884_000u64, 948u64),
+            (8_000_000, 2048),
+            (16_300_000, 2048),
+            (32_786_000, 2048),
+            (33_554_432, 2048),
+            (49_300_000, 3072),
+            (65_842_476, 4096),
+            (67_108_864, 4096),
+            (98_600_000, 6144),
+            (131_900_000, 8192),
+            (134_217_728, 8192),
+            (263_000_000, 8192),
+        ] {
+            assert_eq!(cores_floor_mib(kib * 1024), Some(want), "MemTotal {kib} kB");
+        }
+        assert_eq!(cores_floor_mib(0), None);
     }
 
     // ── a temp cgroup tree that keeps the kernel's rules ──────────────

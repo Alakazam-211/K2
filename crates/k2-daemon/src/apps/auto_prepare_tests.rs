@@ -457,3 +457,40 @@ fn retry_is_the_owners() {
         assert_eq!(retry_route(&w).unwrap_err().status, 403, "{w:?}");
     }
 }
+
+/// 0.46.16: the owner turns automatic prep on and off from a terminal (the
+/// setting is saved, the process follows); nobody else can, and a body
+/// without `on` changes nothing.
+#[test]
+fn the_owner_turns_automatic_prep_on_and_off() {
+    let _home = crate::test_support::TempHome::new();
+    let _env = k2_core::test_env::EnvVar::remove(k2_core::deploy::AUTO_PREPARE_ENV);
+    for w in [
+        Who::Login { username: "a".into(), role: Role::Admin },
+        Who::Login { username: "m".into(), role: Role::Member },
+        Who::Agent { project_id: "p".into(), session_id: "s".into() },
+        Who::Shell { project_id: "p".into(), session_id: "s".into() },
+    ] {
+        let e = set_route(&w, &json!({"on": true})).unwrap_err();
+        assert_eq!((e.status, e.code), (403, "owner_only"), "{w:?}");
+    }
+    assert!(!k2_core::app_settings::load().apps_auto_prepare, "a refusal changes nothing");
+    assert_eq!(set_route(&Who::Owner, &json!({})).unwrap_err().status, 400);
+    assert_eq!(set_route(&Who::Owner, &json!({"on": "yes"})).unwrap_err().status, 400);
+    let v = set_route(&Who::Owner, &json!({"on": true})).unwrap();
+    assert_eq!(v["setting"], true, "{v}");
+    assert_eq!(v["autoPrepare"]["enabled"], true, "{v}");
+    assert_eq!(v["autoPrepare"]["setRoute"], SET_ROUTE);
+    assert!(k2_core::app_settings::load().apps_auto_prepare, "saved");
+    assert!(k2_core::deploy::auto_prepare_enabled());
+    let owner_login = Who::Login { username: "o".into(), role: Role::Owner };
+    let v = set_route(&owner_login, &json!({"on": false})).unwrap();
+    assert_eq!(v["autoPrepare"]["enabled"], false, "{v}");
+    assert!(!k2_core::app_settings::load().apps_auto_prepare);
+    assert!(!k2_core::deploy::auto_prepare_enabled());
+    assert!(v.get("note").is_none());
+    let _forced = k2_core::test_env::EnvVar::set(k2_core::deploy::AUTO_PREPARE_ENV, "off");
+    let v = set_route(&Who::Owner, &json!({"on": true})).unwrap();
+    assert!(v["note"].as_str().unwrap().contains("K2_APPS_AUTO_PREPARE"), "{v}");
+    k2_core::deploy::set_auto_prepare(k2_core::deploy::AUTO_PREPARE_DEFAULT);
+}

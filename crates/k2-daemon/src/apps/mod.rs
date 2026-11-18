@@ -77,6 +77,9 @@ pub mod attribution;
 /// Where an App listens: `HOST`/`PORT` per lane ("bind HOST:PORT as given").
 pub mod bind_host;
 pub mod box_prep;
+/// "Get this server ready for Apps": the owner's one-click card, its run
+/// and the restart it may need (0.46.16).
+pub mod ready_offer;
 /// Undo box setup: the owner's `k2 app box unprep` (0.46.3 F8).
 pub mod box_unprep;
 /// `host.checks`, an App's own probes (prd-tauri-core-0467-v1 TC-16).

@@ -12,9 +12,15 @@
 //     when older pages load or the render window moves; a different
 //     Thread starts over.
 //   - Every message from another sender gets the column, so they line up;
-//     the picture draws on the first message of a run from one sender (the
-//     rest of the run leaves the space empty), beside its bubble, under the
-//     name line (threadRuns). Your messages never move.
+//     the picture draws once per run from one sender, on its LAST message,
+//     at the bottom left of the bubble, level with its tail (Rosson
+//     2026-11-18: the phone-chat place). The rest of the run leaves the
+//     space empty; the name line stays over the first bubble (threadRuns).
+//     A run ends where threadRuns ends it: another sender, you, a gap, a
+//     deleted message or one of K2's notices. A new message from the same
+//     sender takes the picture down to it (no animation: it just moves).
+//     Files, a context line or chips under the bubble never push it down:
+//     it sits against the bubble. Your messages never move.
 //   - The picture is the one K2 already paints for that principal: an
 //     agent's own image and colour (`ProjectAvatar`, the Agents page and
 //     the Connections picker; another server's agent from the Home avatar
@@ -71,8 +77,8 @@ export interface ThreadSenderRow {
 export interface ThreadSenderSlot {
   /** The column is shown (more than two people in the drawn rows). */
   on: boolean
-  /** This row draws the picture (the first of its sender's run). */
-  first: boolean
+  /** This row draws the picture (the last of its sender's run). */
+  last: boolean
   /** Animate (false with reduced motion). */
   motion: boolean
   kind: ThreadSender['kind']
@@ -128,25 +134,25 @@ export function useStickyOn(on: boolean, key: string): boolean {
 }
 
 /** The column for each drawn row (`slots`, by row id). Rows of the viewer
- *  get none; every other row gets one, `first` on the first of a run: the
- *  Thread's runs (`starts`, threadRunStarts: the same rows the name line
- *  goes on), else a run ends at any row from someone else, the viewer
- *  included. `on` is the same for all: the column is there for the whole
- *  list or for none. */
+ *  get none; every other row gets one, `last` on the last of a run: the
+ *  Thread's runs (`ends`, threadRunEnds: the same rows the tail goes on),
+ *  else a run ends at any row from someone else, the viewer included. `on`
+ *  is the same for all: the column is there for the whole list or for
+ *  none. */
 export function threadSenderSlots(
   rows: readonly ThreadSenderRow[],
-  opts: { motion: boolean; host: string | null; starts?: readonly boolean[]; on?: boolean },
+  opts: { motion: boolean; host: string | null; ends?: readonly boolean[]; on?: boolean },
 ): { on: boolean; slots: Map<string, ThreadSenderSlot> } {
   // `on`: the caller's answer (the loaded messages, kept on); else these rows.
   const on = opts.on ?? threadSendersShown(rows)
   const out = new Map<string, ThreadSenderSlot>()
-  let prev: string | null = null
+  const keyOf = (r: ThreadSenderRow | undefined): string | null => (!r || r.mine ? null : r.sender.key)
   rows.forEach((r, i) => {
-    const key = r.mine ? null : r.sender.key
+    const key = keyOf(r)
     if (key != null) {
       out.set(r.id, {
         on,
-        first: opts.starts ? opts.starts[i] !== false : key !== prev,
+        last: opts.ends ? opts.ends[i] !== false : key !== keyOf(rows[i + 1]),
         motion: opts.motion,
         kind: r.sender.kind,
         label: r.sender.label,
@@ -154,7 +160,6 @@ export function threadSenderSlots(
         host: opts.host,
       })
     }
-    prev = key
   })
   return { on, slots: out }
 }
@@ -165,7 +170,7 @@ export function sameSenderSlot(a: ThreadSenderSlot | null | undefined, b: Thread
   if (!a || !b) return false
   return (
     a.on === b.on &&
-    a.first === b.first &&
+    a.last === b.last &&
     a.motion === b.motion &&
     a.kind === b.kind &&
     a.label === b.label &&
@@ -194,7 +199,7 @@ export const ThreadSenderAvatarContext = createContext<ComponentType<{ slot: Thr
 const FRAME_STYLE: CSSProperties = {
   position: 'absolute',
   left: -SENDER_GUTTER_PX,
-  top: 0,
+  bottom: 0,
   width: SENDER_AVATAR_PX,
   height: SENDER_AVATAR_PX,
   overflow: 'hidden',
@@ -202,12 +207,13 @@ const FRAME_STYLE: CSSProperties = {
   transformOrigin: 'center',
 }
 
-/** The picture's frame in a row's column (absolute, in the root's left
- *  margin), on the first row of a run. It stays mounted while the column
- *  is off, faded out, so going and coming back both animate. */
+/** The picture's frame in a row's column (absolute, in the left margin of
+ *  the box that holds the bubble, at its bottom: level with the tail), on
+ *  the last row of a run. It stays mounted while the column is off, faded
+ *  out, so going and coming back both animate. */
 export const ThreadSenderFrame = memo(function ThreadSenderFrame({ slot }: { slot: ThreadSenderSlot }): JSX.Element | null {
   const Picture = useContext(ThreadSenderAvatarContext)
-  if (!slot.first) return null
+  if (!slot.last) return null
   return (
     <span
       data-sender-avatar={slot.kind}

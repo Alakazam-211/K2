@@ -723,6 +723,9 @@ export const ThreadBubble = memo(function ThreadBubble({
   const shownReceipt = statusBelow && !pending && receipt ? receipt : null
   // (A post that is only files has no words to act on: no menu, no bubble.)
   const more = menuOn ? <ThreadMessageMoreButton onOpen={(x, y) => openMenu(x, y, null)} /> : null
+  // The sender's picture (the last of a run): against the bubble itself.
+  const senderFrame = !mine && sender ? <ThreadSenderFrame slot={sender} /> : null
+  const senderInRow = !!bubble && runs && !mine
   // A deleted post: the one line, on its sender's side. No bubble, name,
   // status line, receipt, files or menu (the runs and the receipt skip it).
   if (deleted) {
@@ -892,8 +895,9 @@ export const ThreadBubble = memo(function ThreadBubble({
       }}
       data-run={runs ? (runStart ? (tail ? 'solo' : 'first') : tail ? 'last' : 'middle') : undefined}
     >
-      {/* Top-left, level with the name line (the phone's place). */}
-      {!mine && sender ? <ThreadSenderFrame slot={sender} /> : null}
+      {/* Bottom-left, level with the bubble's tail, in the bubble's own box
+          (below); with no bubble box, at the row's bottom. */}
+      {!senderInRow ? senderFrame : null}
       {nameAbove && (
         <span data-zen-message-meta="" data-thread-meta="name" style={META_NAME_STYLE}>
           <span data-thread-author="" style={META_NAME_TEXT}>
@@ -908,6 +912,7 @@ export const ThreadBubble = memo(function ThreadBubble({
       {bubble && (runs && !mine ? (
         <div data-zen-bubble-row="" style={BUBBLE_ROW_STYLE}>
           {bubbleNode}
+          {senderFrame}
           {more && <span data-zen-message-more-slot="" style={MORE_SLOT_THEIRS}>{more}</span>}
         </div>
       ) : (

@@ -109,8 +109,8 @@ function paneRow(
 }
 
 /** The drawn rows' runs and sender column (rows `lo`..`hi` of `visible`):
- *  the bubbles that start a run (the name line, the picture) and end one
- *  (the tail, your status line). The rows just outside the window count,
+ *  the bubbles that start a run (the name line) and end one (the tail,
+ *  their picture, your status line). The rows just outside the window count,
  *  so a run going on past either edge isn't cut there. */
 export function threadPaneRuns(
   visible: readonly OverlayThreadItem[],
@@ -135,7 +135,9 @@ export function threadPaneRuns(
   const ends = threadRunEnds(rows.map(run), after ? run(after) : null)
   const starts = threadRunStarts(rows.map(run), before ? run(before) : null)
   return {
-    senders: threadSenderSlots(rows, { motion: o.motion, host: o.host, starts, on: o.pictures }),
+    // The picture goes on a run's last bubble; a deleted message or a
+    // notice ends a run but draws no bubble, so no picture either.
+    senders: threadSenderSlots(rows, { motion: o.motion, host: o.host, ends: ends.map((e, i) => e && !rows[i].deleted), on: o.pictures }),
     tails: new Set(rows.filter((_, i) => ends[i]).map((r) => r.id)),
     starts: new Set(rows.filter((_, i) => starts[i]).map((r) => r.id)),
   }

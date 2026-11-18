@@ -5,10 +5,11 @@
 // apart: all of the viewer's own, or one other sender's (by the sender key
 // the Thread's sender column uses, threadSenders). A row with no time stays
 // in the run (as the phone). As on the phone:
-//   - the last bubble of a run draws the tail; under your last, the status
-//     line (the time, Sending…, Not sent, or the receipt);
+//   - the last bubble of a run draws the tail (and, another sender's, their
+//     picture beside it, when the sender column shows); under your last,
+//     the status line (the time, Sending…, Not sent, or the receipt);
 //   - the first bubble of another sender's run has their name and time
-//     over it (and their picture beside it, when the sender column shows);
+//     over it;
 //   - the bubbles of one run sit closer together than two runs do.
 
 /** Messages this far apart (seconds) start a new run. */

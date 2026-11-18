@@ -4,7 +4,8 @@
 // the last of yours one status line (the time, Sending…, Not sent, or the
 // Thread's "Delivered" / "Read"); nothing under the bubbles between. The
 // sender pictures only with two or more other senders among the drawn
-// rows. Thread view and Split draw the same pane, so one test covers both.
+// rows, one per run, beside its last bubble's tail. Thread view and Split
+// draw the same pane, so one test covers both.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import { ThreadOverlayPane, threadPanePictures, threadPaneReceipt, threadPaneRuns } from '@/components/SessionView/ThreadOverlayPane'
@@ -243,29 +244,61 @@ describe('sender pictures: two or more other senders among the loaded messages',
     expect(threadPanePictures(threadHook.items, { viewer: OWNER_VIEWER })).toBe(false)
   })
 
-  it('a second agent or another person: a picture top-left of each run, level with its name line; every bubble keeps the gutter', () => {
+  it('a second agent or another person: a picture at the bottom left of each run’s last bubble, level with its tail; every bubble keeps the gutter', () => {
     pane([agent('a1', T0), agent('a2', T0 + 10), agent('b1', T0 + 20, 'ops'), me('m1', T0 + 30), person('p1', T0 + 40, 'ada')])
     expect(row('a1').getAttribute('data-sender-column')).toBe('on')
-    const pic = row('a1').querySelector<HTMLElement>('[data-sender-avatar]')!
-    // On the row itself, at its top: beside the name line, the phone's place.
-    expect(pic.parentElement).toBe(row('a1'))
-    expect(pic.style.top).toBe('0px')
-    expect(before(pic, nameLine('a1')!)).toBe(true)
+    // Not on the first of the run, where the name line is.
+    expect(row('a1').querySelector('[data-sender-avatar]')).toBeNull()
+    expect(nameLine('a1')).not.toBeNull()
+    const pic = row('a2').querySelector<HTMLElement>('[data-sender-avatar]')!
+    // On the last: beside the bubble (its row), at its bottom, so it sits
+    // level with the tail and never below files or chips under the bubble.
+    expect(pic.parentElement).toBe(bubbleOf('a2').closest('[data-zen-bubble-row]'))
+    expect(pic.style.bottom).toBe('0px')
+    expect(pic.style.top).toBe('')
     // The rest of the run: no picture, the same gutter, so the run lines up.
-    expect(row('a2').querySelector('[data-sender-avatar]')).toBeNull()
     expect(row('a2').style.marginLeft).toBe(row('a1').style.marginLeft)
-    expect(row('a2').style.marginLeft).not.toBe('0px')
+    expect(row('a1').style.marginLeft).not.toBe('0px')
+    // A run of one draws it on its only bubble.
     expect(row('b1').querySelector('[data-sender-avatar]')).not.toBeNull()
     expect(row('p1').querySelector('[data-sender-avatar]')).not.toBeNull()
     expect(row('m1').querySelector('[data-sender-avatar]')).toBeNull()
   })
 
-  it('a gap that starts a new run (a new name line) draws the picture again', () => {
-    const items = [agent('a1', T0), agent('a2', T0 + 600), agent('b1', T0 + 610, 'ops')]
-    const runs = threadPaneRuns(items, { lo: 0, hi: 3, viewer: OWNER_VIEWER, motion: false, host: null })
+  it('a gap, another sender, a deleted message or one of K2’s notices ends a run, so the bubble before it draws the picture', () => {
+    const notice: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 0,
+      id: 'n1',
+      doc: { id: 'n1', kind: 'text', from: 'k2', author: { kind: 'system', login: 'k2' }, created_at: T0 + 640, body: 'K2: a notice', systemNotice: { kind: 'info', code: 'x' } },
+    }
+    const gone: OverlayThreadItem = { ...agent('a5', T0 + 660), doc: { ...agent('a5', T0 + 660).doc, deleted: true } }
+    const items = [
+      agent('a1', T0),
+      agent('a2', T0 + 600),
+      agent('a3', T0 + 610),
+      agent('b1', T0 + 620, 'ops'),
+      agent('a4', T0 + 630),
+      notice,
+      agent('a6', T0 + 650),
+      gone,
+      agent('a7', T0 + 670),
+    ]
+    const runs = threadPaneRuns(items, { lo: 0, hi: items.length, viewer: OWNER_VIEWER, motion: false, host: null })
     expect(runs.senders.on).toBe(true)
-    expect([...runs.starts]).toEqual(['a1', 'a2', 'b1'])
-    expect(runs.senders.slots.get('a2')?.first).toBe(true)
+    const drawn = [...runs.senders.slots.entries()].filter(([, s]) => s.last).map(([id]) => id)
+    expect(drawn).toEqual(['a1', 'a3', 'b1', 'a4', 'a6', 'a7'])
+  })
+
+  it('a new message from the same sender takes the picture down to it', () => {
+    pane([agent('a1', T0), agent('b1', T0 + 5, 'ops'), agent('a2', T0 + 10), agent('a3', T0 + 20)])
+    expect(row('a3').querySelector('[data-sender-avatar]')).not.toBeNull()
+    expect(row('a2').querySelector('[data-sender-avatar]')).toBeNull()
+    cleanup()
+    pane([agent('a1', T0), agent('b1', T0 + 5, 'ops'), agent('a2', T0 + 10), agent('a3', T0 + 20), agent('a4', T0 + 30)])
+    expect(row('a3').querySelector('[data-sender-avatar]')).toBeNull()
+    expect(row('a4').querySelector('[data-sender-avatar]')).not.toBeNull()
+    expect(document.querySelectorAll('[data-sender-avatar]').length).toBe(3)
   })
 
   it('the receipt reads every message in memory, not just the drawn ones', () => {

@@ -2,7 +2,8 @@
 // Sender pictures in a Thread (Rosson 2026-11-04, 2026-11-09): only once
 // two or more other senders are among the loaded messages, then on while
 // that Thread is open; one picture per run; never on your own messages; no
-// motion class under reduced motion.
+// motion class under reduced motion. The picture sits beside the last
+// bubble of a run (level with its tail), as phone chats do.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, screen, waitFor } from '@testing-library/react'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
@@ -167,14 +168,19 @@ describe('threadSenderSlots', () => {
     expect(a.key).toBe(b.key)
   })
 
-  it('a run of one sender draws one picture, on its first row', () => {
+  it('a run of one sender draws one picture, on its last row', () => {
     const out = threadSenderSlots(
       [r(agent(0)), r(agent(1)), r(agent(2, 'ops')), r(agent(3, 'ops')), r(me(4), true), r(agent(5, 'ops'))],
       opts,
     )
-    const first = [...out.slots.entries()].filter(([, s]) => s.first).map(([id]) => id)
+    const last = [...out.slots.entries()].filter(([, s]) => s.last).map(([id]) => id)
     // `me` ends the ops run: the next ops row starts a new one.
-    expect(first).toEqual(['sales0', 'ops2', 'ops5'])
+    expect(last).toEqual(['sales1', 'ops3', 'ops5'])
+  })
+
+  it('the run ends the caller gives (threadRunEnds) win over sender changes', () => {
+    const out = threadSenderSlots([r(agent(0)), r(agent(1)), r(agent(2))], { ...opts, ends: [true, false, true] })
+    expect([...out.slots.entries()].filter(([, s]) => s.last).map(([id]) => id)).toEqual(['sales0', 'sales2'])
   })
 
   it('your own rows never get a slot', () => {
@@ -200,15 +206,17 @@ describe('Thread pane sender pictures', () => {
     renderInRoom(room, <ThreadOverlayPane addr="sales" conversationId="c" />)
     expect(columnsOn()).toEqual(['sales1', 'sales2', 'ops3', 'anna5'])
     for (const id of columnsOn()) expect(row(id).style.marginLeft).toBe(`${SENDER_GUTTER_PX}px`)
-    // One picture per run: sales1 draws it, sales2 leaves the space empty.
-    expect(row('sales1').querySelector('[data-sender-avatar="agent"]')).not.toBeNull()
-    expect(row('sales2').querySelector('[data-sender-avatar]')).toBeNull()
+    // One picture per run, on its last row: sales2 draws it, sales1 leaves
+    // the space empty (same gutter, so the bubbles line up).
+    expect(row('sales2').querySelector('[data-sender-avatar="agent"]')).not.toBeNull()
+    expect(row('sales1').querySelector('[data-sender-avatar]')).toBeNull()
+    expect(row('sales1').style.marginLeft).toBe(row('sales2').style.marginLeft)
     expect(row('ops3').querySelector('[data-sender-avatar="agent"]')).not.toBeNull()
     expect(row('anna5').querySelector('[data-sender-avatar="person"]')).not.toBeNull()
     // The pictures K2 paints elsewhere (loaded on first use): a person's
     // chip, an agent's letter tile (no image for it in these stores).
     await waitFor(() => expect(row('anna5').querySelector('[data-sender-avatar] [data-presence-chip]')).not.toBeNull())
-    expect(row('sales1').querySelector('[data-sender-avatar]')?.textContent).toBe('S')
+    expect(row('sales2').querySelector('[data-sender-avatar]')?.textContent).toBe('S')
     expect(row('ops3').querySelector('[data-sender-avatar]')?.textContent).toBe('O')
     // Yours: no column, no picture, no nudge.
     for (const id of ['m0', 'm4']) {

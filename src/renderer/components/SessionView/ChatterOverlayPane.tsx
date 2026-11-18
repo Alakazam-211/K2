@@ -43,8 +43,8 @@ import type { OverlayThreadItem } from './overlayThread'
 //
 //   - Sides, as on the phone: this agent's own sends are "mine" (right, the
 //     accent bubble); every other agent is on the left, by run, its address
-//     over the first bubble and its picture beside it once two or more other
-//     agents are in the loaded mailbox.
+//     over the first bubble and its picture beside the last bubble's tail
+//     once two or more other agents are in the loaded mailbox.
 //   - A mailbox doc is always from or to this agent (the daemon files one
 //     copy in the recipient's mailbox and one in the sender's; no CC). Your
 //     runs split by recipient, and each one's status line names it ("to ops
@@ -103,7 +103,7 @@ export function chatterPaneRuns(
   const ends = threadRunEnds(drawn.map(run), after ? run(after) : null)
   const starts = threadRunStarts(drawn.map(run), before ? run(before) : null)
   return {
-    senders: threadSenderSlots(drawn, { motion: o.motion, host: o.host, starts, on: o.pictures }),
+    senders: threadSenderSlots(drawn, { motion: o.motion, host: o.host, ends, on: o.pictures }),
     tails: new Set(drawn.filter((_, i) => ends[i]).map((r) => r.id)),
     starts: new Set(drawn.filter((_, i) => starts[i]).map((r) => r.id)),
   }

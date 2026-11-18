@@ -228,8 +228,8 @@ impl fmt::Display for FrontError {
             ),
             FrontError::NoGitBash { noun } => write!(
                 f,
-                "k5 {noun} is not built into k5 on Windows yet and still needs Git Bash (Git for Windows): {}",
-                k2_client::win_cli::GIT_FOR_WINDOWS_URL
+                "k5 {noun}: this command is not built into k5 yet and needs {}",
+                git_bash_how()
             ),
             FrontError::Run { bash, err } => write!(f, "can't run {}: {err}", bash.display()),
         }
@@ -237,6 +237,15 @@ impl fmt::Display for FrontError {
 }
 
 impl std::error::Error for FrontError {}
+
+/// What Git Bash is and how to get it, in `k2.cmd`'s words
+/// ([`k2_client::win_cli::GIT_BASH_NEEDED`] after its "need").
+pub fn git_bash_how() -> &'static str {
+    k2_client::win_cli::GIT_BASH_NEEDED
+        .split_once(" need ")
+        .map(|(_, how)| how)
+        .expect("GIT_BASH_NEEDED names what the tools need")
+}
 
 /// How to get Python 3, on macOS (`macos`) or Linux.
 pub fn python_how(macos: bool) -> &'static str {
@@ -920,7 +929,11 @@ mod tests {
         let err = FrontError::NoGitBash {
             noun: noun(&[OsString::from("msg"), OsString::from("x")]),
         };
-        let line = "k5 msg is not built into k5 on Windows yet and still needs Git Bash (Git for Windows): https://git-scm.com/download/win";
+        let line = "k5 msg: this command is not built into k5 yet and needs Git for Windows (Git Bash). Download it from https://git-scm.com/download/win , then open a new terminal.";
+        assert_eq!(
+            k2_client::win_cli::GIT_BASH_NEEDED,
+            format!("K2's command-line tools need {}", git_bash_how())
+        );
         assert_eq!(err.line(CalledAs::K2Name), line);
         assert_eq!(err.line(CalledAs::K5Name), line);
         assert_eq!(err.exit_code(), 9009);

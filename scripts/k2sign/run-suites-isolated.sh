@@ -18,7 +18,8 @@
 #      into W, no K2_*, K5_*, K2SIGN_* or K2SA_* from the caller, and
 #      stand-ins first on PATH that refuse sudo, security, launchctl, dscl,
 #      defaults, osascript, open, gh, k2 and k5.
-#   4. Runs it all inside sandbox-exec: no file may be written outside W,
+#   4. Runs it all inside sandbox-exec, from W/tree: no file may be
+#      written outside W (except xcrun's cache file, below),
 #      sudo, security, launchctl, dscl, defaults, osascript, open and the
 #      installed signers (/usr/local/libexec/k2sign, k2-signer) cannot run,
 #      and the keychain services cannot be reached. A probe proves the
@@ -29,14 +30,35 @@
 #      /usr/local/libexec/k2sign or k2-signer, no /usr/local/etc/k2sign,
 #      /var/k2sign or sudoers.d/k2sign*). On the signing Mac the sandbox is
 #      always required.
-#   5. Takes a listing (names, modes, sizes, mtimes) of the real state the
-#      suites could touch before and after (the names in HOME, the keychains,
-#      LaunchAgents, ~/.k2*, ~/k2-release-audit, the gh and git config, the
-#      installed signer's folders, sudoers.d and this checkout's .git), and
-#      fails if any of it changed.
+#   5. Takes a listing of the real state before and after, and fails if
+#      any of it changed: names, modes, sizes and mtimes of what a suite
+#      could plausibly touch (the keychains, LaunchAgents, ~/Applications,
+#      ~/.k2sign, ~/.k2-updater, ~/.k2-release-approve, ~/k2-release-audit,
+#      the gh and git config, the installed signer's folders, sudoers.d,
+#      LaunchDaemons and this checkout's .git), and only the top-level
+#      NAMES of the home folder, ~/.k2 and ~/.k5. A running K2 daemon writes
+#      ~/.k2 all the time (its database and WAL, logs, sockets, ports), so
+#      mtimes there say nothing about the suites; the suites never see the
+#      real home (HOME is inside W) and the sandbox refuses any write to it,
+#      and a file appearing or going away there is still caught.
 #   6. Prints each suite's result line and removes W (--keep leaves it, for
 #      reading the logs).
 # Exit 0 only when all three suites pass and nothing watched changed.
+#
+# Temp files on macOS, and why the suites run from W/tree:
+# - /bin/bash (3.2) never puts a here document's temp file in TMPDIR: it
+#   takes /var/tmp, else /tmp, else the current folder. In the sandbox the
+#   first two are not writable, so it uses the current folder, which is
+#   W/tree (inside W) for every suite.
+# - mktemp with no template, or with -t, uses the per-user temp folder and
+#   ignores TMPDIR. The suites always pass "${TMPDIR:-/tmp}/name.XXXXXX".
+# - The xcrun shims (/usr/bin/python3, git, cc) write one cache file,
+#   xcrun_db, in the per-user temp folder. The sandbox allows that one name
+#   there and nothing else.
+# The probe checks each of these.
+#
+# The sandbox mode runs only on a Mac that is not itself in a sandbox: a
+# compute job is, so there this script runs in the fallback mode.
 #
 # minisign: the suites need minisign >= 0.11. If one is on the caller's
 # PATH it is copied into W; otherwise the zip scripts/k2sign/install.sh pins
@@ -47,7 +69,7 @@ SUITES="k2sign-s2.sh k2sign-s3.sh k2sign-s3b.sh"
 SIGNER_USER=_k2sign
 
 usage() {
-    sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,65p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 die() { printf 'run-suites-isolated: REFUSED: %s\n' "$*" >&2; exit 1; }
@@ -158,14 +180,14 @@ SH
 done
 
 # ── 5a. the real state, before ─────────────────────────────────────────
+# Full listings (names, modes, sizes, mtimes): what a suite could plausibly
+# touch.
 WATCH="$REAL_HOME/Library/Keychains
 $REAL_HOME/Library/LaunchAgents
 $REAL_HOME/Applications
-$REAL_HOME/.k2
 $REAL_HOME/.k2sign
 $REAL_HOME/.k2-updater
 $REAL_HOME/.k2-release-approve
-$REAL_HOME/.k5
 $REAL_HOME/k2-release-audit
 $REAL_HOME/.config/gh
 $REAL_HOME/.gitconfig
@@ -181,12 +203,20 @@ $GIT_DIR_REAL/HEAD
 $GIT_DIR_REAL/index
 $GIT_DIR_REAL/refs
 $GIT_DIR_REAL/worktrees"
+# Names only (a file appearing or going away): the home folders, and the
+# K2 and K5 homes a running daemon and CLI write all the time.
+WATCH_NAMES="$REAL_HOME
+$CALLER_HOME
+$REAL_HOME/.k2
+$REAL_HOME/.k5"
 snapshot() {
     {
-        # The homes' top level: the names only (a file appearing or going
-        # away), since other programs change mtimes there all the time.
-        for h in "$REAL_HOME" "$CALLER_HOME"; do
-            /bin/ls -A "$h" 2>/dev/null | sed "s|^|$h/ |" || true
+        printf '%s\n' "$WATCH_NAMES" | while IFS= read -r h; do
+            if [ -d "$h" ]; then
+                /bin/ls -A "$h" 2>/dev/null | sed "s|^|$h/ |" || echo "$h (unreadable)"
+            else
+                echo "$h (absent)"
+            fi
         done
         printf '%s\n' "$WATCH" | while IFS= read -r p; do
             if [ -e "$p" ] || [ -L "$p" ]; then
@@ -200,12 +230,15 @@ snapshot() {
 snapshot > "$W/logs/state.before"
 
 # ── 4. the sandbox ─────────────────────────────────────────────────────
+USER_TMP="$(cd "$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)" && pwd -P)" || die "cannot read the per-user temp folder"
+case "$USER_TMP" in /private/var/folders/*) ;; *) die "unexpected per-user temp folder $USER_TMP" ;; esac
 cat > "$W/sandbox.sb" <<SB
 (version 1)
 (allow default)
 (deny file-write*
     (require-not (require-any
         (subpath "$W")
+        (regex #"^$USER_TMP/xcrun_db(-[A-Za-z0-9]+)?\$")
         (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/dtracehelper")
         (regex #"^/dev/fd/") (regex #"^/dev/ttys"))))
 (deny process-exec
@@ -244,40 +277,72 @@ in_sandbox() {
     local IFS='
 '
     # shellcheck disable=SC2046
+    # From W/tree: bash puts here-document temp files in the current folder.
     if [ "$SANDBOX" = 1 ]; then
-        /usr/bin/env -i $ENVV /usr/bin/sandbox-exec -f "$W/sandbox.sb" "$@"
+        (cd "$W/tree" && /usr/bin/env -i $ENVV /usr/bin/sandbox-exec -f "$W/sandbox.sb" "$@")
     else
-        /usr/bin/env -i $ENVV "$@"
+        (cd "$W/tree" && /usr/bin/env -i $ENVV "$@")
     fi
 }
 
-# The sandbox bites before any suite runs: each of these must fail.
+# The probe, before any suite runs. In both modes: the stand-ins refuse;
+# a here document and a here string work; mktemp and mktemp -d with a
+# "$TMPDIR/name.XXXXXX" template and python's tempfile make their files
+# inside W; the xcrun shim python3 runs with nothing on stderr. In sandbox
+# mode also: writes to both home folders, to /tmp (spelled both ways), to
+# /private/var/tmp and to the per-user temp folder are refused, and sudo,
+# security and launchctl cannot run.
 probe="$REAL_HOME/.k2sign-isolated-probe.$$"
 probe2="/private/tmp/.k2sign-isolated-probe.$$"
+probe3="/tmp/.k2sign-isolated-probe3.$$"
+probe4="/private/var/tmp/.k2sign-isolated-probe.$$"
+probe5="$CALLER_HOME/.k2sign-isolated-probe5.$$"
+probe6="$USER_TMP/.k2sign-isolated-probe.$$"
 in_sandbox /bin/bash -c '
-    p="$1" p2="$2" full="$3" bad=0
+    W="$1" full="$2" bad=0
+    shift 2
     if security -h >/dev/null 2>&1; then echo "security on PATH ran"; bad=1; fi
     if sudo -n -V >/dev/null 2>&1; then echo "sudo on PATH ran"; bad=1; fi
     ( : > "$HOME/ok" ) || { echo "a write to the temp home failed"; bad=1; }
+    hd="$(cat <<EOF
+heredoc-ok
+EOF
+)" || true
+    [ "$hd" = heredoc-ok ] || { echo "a here document failed: [$hd]"; bad=1; }
+    hs="$(cat <<< "herestring-ok")" || true
+    [ "$hs" = herestring-ok ] || { echo "a here string failed: [$hs]"; bad=1; }
+    f="$(mktemp "${TMPDIR:-/tmp}/probe.XXXXXX")" || { echo "mktemp with a template failed"; bad=1; }
+    case "$f" in "$W"/*) ;; *) echo "mktemp made [$f], outside $W"; bad=1 ;; esac
+    d="$(mktemp -d "${TMPDIR:-/tmp}/probe.XXXXXX")" || { echo "mktemp -d with a template failed"; bad=1; }
+    case "$d" in "$W"/*) ;; *) echo "mktemp -d made [$d], outside $W"; bad=1 ;; esac
+    t="$(python3 -I -c "import tempfile; print(tempfile.mkdtemp())" 2>"$W/logs/probe-py.err")" || { echo "python tempfile failed"; bad=1; }
+    case "$t" in "$W"/*) ;; *) echo "python tempfile made [$t], outside $W"; bad=1 ;; esac
+    [ ! -s "$W/logs/probe-py.err" ] || { echo "python3 wrote to stderr: $(head -c 300 "$W/logs/probe-py.err")"; bad=1; }
     [ "$full" = 1 ] || exit "$bad"
-    if ( : > "$p" ) 2>/dev/null; then echo "a write to the home folder went through"; bad=1; fi
-    if ( : > "$p2" ) 2>/dev/null; then echo "a write outside the temp folder went through"; bad=1; fi
+    for p in "$@"; do
+        if ( : > "$p" ) 2>/dev/null; then echo "a write to $p went through"; bad=1; fi
+    done
     if /usr/bin/security -h >/dev/null 2>&1; then echo "/usr/bin/security ran"; bad=1; fi
     if /usr/bin/sudo -n -V >/dev/null 2>&1; then echo "/usr/bin/sudo ran"; bad=1; fi
     if /bin/launchctl version >/dev/null 2>&1; then echo "/bin/launchctl ran"; bad=1; fi
     exit "$bad"
-' _ "$probe" "$probe2" "$SANDBOX" > "$W/logs/probe.out" 2>&1 || {
-    /bin/rm -f "$probe" "$probe2" 2>/dev/null || true
+' _ "$W" "$SANDBOX" "$probe" "$probe2" "$probe3" "$probe4" "$probe5" "$probe6" > "$W/logs/probe.out" 2>&1 || {
+    /bin/rm -f "$probe" "$probe2" "$probe3" "$probe4" "$probe5" "$probe6" 2>/dev/null || true
     cat "$W/logs/probe.out" >&2
     die "the sandbox does not hold (lines above); no suite was run"
 }
-[ ! -e "$probe" ] && [ ! -e "$probe2" ] || { /bin/rm -f "$probe" "$probe2"; die "a probe file was written outside $W"; }
+for p in "$probe" "$probe2" "$probe3" "$probe4" "$probe5" "$probe6"; do
+    [ ! -e "$p" ] || { /bin/rm -f "$probe" "$probe2" "$probe3" "$probe4" "$probe5" "$probe6"; die "a probe file was written outside $W: $p"; }
+done
 : > "$W/logs/refused.calls"
 if [ "$SANDBOX" = 1 ]; then
     say "sandbox probe: writes outside $W, sudo, security and launchctl are all refused"
+    say "  here documents, here strings, mktemp, mktemp -d and python's tempfile work, inside $W"
+    say "  (writes to both homes, /tmp, /private/var/tmp and the per-user temp folder are refused)"
 else
     say "already inside a sandbox (macOS refuses a nested one) and no signer is installed on this Mac:"
     say "  running under that sandbox, with the stand-ins on PATH (probed) and the state check"
+    say "  here documents, here strings, mktemp, mktemp -d and python's tempfile work, inside $W"
 fi
 if [ "$PROBE_ONLY" = 1 ]; then
     [ "$SANDBOX" = 1 ] || die "--probe-only: this script could not apply its own sandbox here"
@@ -295,6 +360,13 @@ for s in $SUITES; do
         echo "FAIL $s:"
         grep -E "FAIL|Traceback|Error|error|refused|deny" "$log" | head -40 || true
         tail -3 "$log"
+        if [ "$SANDBOX" = 1 ]; then
+            # What the sandbox refused lately (the system log; read only).
+            echo "  sandbox denials in the last 10 minutes (if any):"
+            /usr/bin/log show --last 10m --style compact \
+                --predicate 'sender == "Sandbox" AND eventMessage CONTAINS "deny"' 2>/dev/null \
+                | grep -F 'deny' | tail -20 | sed 's/^/    /' || true
+        fi
     fi
 done
 if [ -s "$W/logs/refused.calls" ]; then

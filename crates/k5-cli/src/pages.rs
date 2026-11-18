@@ -19,9 +19,17 @@
 //! the shell reports first), and every topic with a page under
 //! `cli/text/study`, as text or `--json`. The shell keeps: the list as
 //! JSON (it needs the titles, which live in the shell), the topics still
-//! written in bash (`app-api`, `app-errors`, `live`, no file), the
-//! permission cards page (a topic only while cards are on), an unknown
+//! written in bash (`app-api`, `app-errors`, `live`, no file), an unknown
 //! topic, and every error.
+//!
+//! With a passport, the list, the usage, the apps page (and `skins`) and
+//! the cards-only `permissions` topic depend on whether permission cards
+//! are on, which the shell asks the daemon once ([`crate::cards`]). Each
+//! of those has a switch ([`LIST_WITH_PASSPORT`], [`APPS_WITH_PASSPORT`],
+//! [`PERMISSIONS_WITH_PASSPORT`]): on, the binary asks the same way and
+//! prints the shell's page for the answer; off, the shell answers. Where
+//! the shell's answer for `permissions` is its error (cards off), the
+//! binary prints that error itself: the shell would ask again.
 
 use crate::exit::Exit;
 use crate::offline::{self, Env, Prelude};
@@ -67,6 +75,36 @@ pub const CARDS_PAGE: &str = "apps";
 /// The topic only shown while permission cards are on.
 pub const CARDS_ONLY: &str = "permissions";
 
+/// The list's line for [`CARDS_ONLY`] while cards are on, after each line
+/// that starts `  design   ` (`_study_catalog_all`'s awk).
+pub const CARDS_CATALOG_LINE: &str = concat!(
+    "  permissions         Permission cards (Beta): ask a person to allow what ",
+    k2_client::product_name!(),
+    " refused you"
+);
+
+/// The usage's last line while cards are on (`_study_usage_all`).
+pub const CARDS_USAGE_LINE: &str = "  permissions";
+
+/// With a passport, `k2 study`, `k2 study list` and `k2 study --help` ask
+/// the daemon whether cards are on. True: the binary asks the same way
+/// and prints the list or the usage for the answer. False: the shell
+/// answers them.
+pub const LIST_WITH_PASSPORT: bool = false;
+
+/// With a passport, `k2 study apps` and `k2 study skins` (text or
+/// `--json`) ask the daemon whether cards are on, for the apps page's
+/// `#if-cards` lines. True: the binary asks the same way and prints the
+/// page for the answer. False: the shell answers them.
+pub const APPS_WITH_PASSPORT: bool = false;
+
+/// With a passport, `k2 study permissions` asks the daemon whether cards
+/// are on: on, its page (text or `--json`); off, an unknown topic. True:
+/// the binary asks the same way and prints the page or the shell's error
+/// for the answer. False: the shell answers it. Without a passport it is
+/// always the shell's error.
+pub const PERMISSIONS_WITH_PASSPORT: bool = false;
+
 /// The study command line in `rest` (the arguments after `study`), when
 /// the binary may answer it.
 pub fn study(rest: &[&str]) -> Option<Study> {
@@ -93,7 +131,7 @@ pub fn study(rest: &[&str]) -> Option<Study> {
     let topic = match topic {
         "skins" => "skins",
         "llm-accounts" => "llm-accounts",
-        t if t == CARDS_ONLY || t.starts_with('_') => return None,
+        t if t.starts_with('_') => return None,
         t => text::STUDY.iter().find(|(k, _)| *k == t)?.0,
     };
     Some(Study::Page { topic, json })
@@ -102,30 +140,72 @@ pub fn study(rest: &[&str]) -> Option<Study> {
 /// `_perm_lines` with cards off: a line ending ` #if-cards` is dropped, a
 /// line ending ` #if-no-cards` loses the tag, every line ends in a newline.
 pub fn cards_off(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
+    cards::perm_lines(text, false)
+}
+
+/// The page text of a study topic, cards `on` or off: the file, the apps
+/// page through the card filter, and the two aliases with their line
+/// first.
+fn study_text(topic: &str, on: bool) -> Option<Cow<'static, str>> {
+    Some(match topic {
+        "skins" => format!(
+            "{SKINS_LINE}\n\n{}",
+            cards::perm_lines(text::study(CARDS_PAGE)?, on)
+        )
+        .into(),
+        "llm-accounts" => format!("{LLM_ACCOUNTS_LINE}\n\n{}", text::study("llm-tokens")?).into(),
+        t if t == CARDS_PAGE => cards::perm_lines(text::study(t)?, on).into(),
+        t => text::study(t)?.into(),
+    })
+}
+
+/// `_study_usage_all`: the usage, and the cards-only topic while cards
+/// are on.
+fn usage(on: bool) -> Option<Cow<'static, str>> {
+    let text = text::study("_usage")?;
+    Some(if on {
+        format!("{text}{CARDS_USAGE_LINE}\n").into()
+    } else {
+        text.into()
+    })
+}
+
+/// `_study_catalog_all`: the list as it is, or, while cards are on,
+/// through `awk '{ print } /^  design   / { print "<line>" }'`: each line
+/// with a newline after it, and [`CARDS_CATALOG_LINE`] after each line
+/// that starts `  design   `.
+fn catalog(on: bool) -> Option<Cow<'static, str>> {
+    let text = text::study("_catalog")?;
+    if !on {
+        return Some(text.into());
+    }
+    let mut out = String::with_capacity(text.len() + CARDS_CATALOG_LINE.len() + 1);
     let mut lines: Vec<&str> = text.split('\n').collect();
     if lines.last() == Some(&"") {
         lines.pop();
     }
     for line in lines {
-        if line.ends_with(" #if-cards") {
-            continue;
-        }
-        out.push_str(line.strip_suffix(" #if-no-cards").unwrap_or(line));
+        out.push_str(line);
         out.push('\n');
+        if line.starts_with("  design   ") {
+            out.push_str(CARDS_CATALOG_LINE);
+            out.push('\n');
+        }
     }
-    out
+    Some(out.into())
 }
 
-/// The page text of a study topic: the file, the apps page through the
-/// card filter, and the two aliases with their line first.
-fn study_text(topic: &str) -> Option<Cow<'static, str>> {
-    Some(match topic {
-        "skins" => format!("{SKINS_LINE}\n\n{}", cards_off(text::study(CARDS_PAGE)?)).into(),
-        "llm-accounts" => format!("{LLM_ACCOUNTS_LINE}\n\n{}", text::study("llm-tokens")?).into(),
-        t if t == CARDS_PAGE => cards_off(text::study(t)?).into(),
-        t => text::study(t)?.into(),
-    })
+/// Whether a study command line depends on the cards with a passport,
+/// and if so its switch.
+fn cards_switch(s: Study) -> Option<bool> {
+    match s {
+        Study::Usage | Study::Catalog => Some(LIST_WITH_PASSPORT),
+        Study::Page { topic, .. } if topic == CARDS_PAGE || topic == "skins" => {
+            Some(APPS_WITH_PASSPORT)
+        }
+        Study::Page { topic, .. } if topic == CARDS_ONLY => Some(PERMISSIONS_WITH_PASSPORT),
+        Study::Page { .. } => None,
+    }
 }
 
 /// `--json` for a page: the shell pipes the page through
@@ -173,23 +253,58 @@ pub fn python_reads_as_we_do(env: &Env, page: &str) -> bool {
     }
 }
 
-/// The study page, or `None` when the shell answers.
-pub fn study_page(s: Study, p: &Prelude, env: &Env) -> Option<Page> {
-    // With a passport the list, the usage and the apps page ask the daemon
-    // whether permission cards are on.
-    let asks = match s {
-        Study::Usage | Study::Catalog => true,
-        Study::Page { topic, .. } => topic == CARDS_PAGE || topic == "skins",
+/// The study page, or `None` when the shell answers. `would_refuse`:
+/// the passport rule's count, for the cards probe's request.
+pub fn study_page(
+    s: Study,
+    p: &Prelude,
+    env: &Env,
+    would_refuse: impl FnOnce() -> bool,
+) -> Option<Page> {
+    let cards_only = matches!(s, Study::Page { topic, .. } if topic == CARDS_ONLY);
+    let on = match cards_switch(s) {
+        None => false,
+        // No passport: cards are off and nothing is asked; the cards-only
+        // topic is then unknown (the shell's error).
+        Some(_) if !p.passport => {
+            if cards_only {
+                return None;
+            }
+            false
+        }
+        Some(false) => return None,
+        Some(true) => {
+            // What python3 will read must be known to read as here before
+            // anything is sent: both ways the answer may go.
+            if let Study::Page { topic, json: true } = s {
+                for on in [false, true] {
+                    if !python_reads_as_we_do(env, &study_text(topic, on)?) {
+                        return None;
+                    }
+                }
+            }
+            cards::on(cards::ask(env, p, would_refuse)?)
+        }
     };
-    if asks && p.passport {
-        return None;
+    if cards_only && !on {
+        // `cmd_study`'s refusal; its usage asks nothing more (the answer
+        // is kept).
+        return Some(Page {
+            text: format!(
+                "Error: unknown study topic '{CARDS_ONLY}'\n{}",
+                usage(false)?
+            )
+            .into(),
+            stderr: true,
+            exit: Exit::Usage,
+        });
     }
     let text: Cow<'static, str> = match s {
-        Study::Usage => text::study("_usage")?.into(),
-        Study::Catalog => text::study("_catalog")?.into(),
-        Study::Page { topic, json: false } => study_text(topic)?,
+        Study::Usage => usage(on)?,
+        Study::Catalog => catalog(on)?,
+        Study::Page { topic, json: false } => study_text(topic, on)?,
         Study::Page { topic, json: true } => {
-            let page = study_text(topic)?;
+            let page = study_text(topic, on)?;
             if !python_reads_as_we_do(env, &page) {
                 return None;
             }
@@ -342,6 +457,7 @@ mod tests {
         assert_eq!(study(&["cron"]), page("heartbeats", false));
         assert_eq!(study(&["skins", "--json"]), page("skins", true));
         assert_eq!(study(&["llm-accounts"]), page("llm-accounts", false));
+        assert_eq!(study(&["permissions"]), page("permissions", false));
         for usage in [
             &["--help"][..],
             &["-h"],
@@ -352,8 +468,7 @@ mod tests {
             assert_eq!(study(usage), Some(Study::Usage), "{usage:?}");
         }
         // The shell's: the list as JSON, errors (an unknown flag, a second
-        // topic, before any --help), unknown topics, the bash pages, and
-        // the cards page.
+        // topic, before any --help), unknown topics and the bash pages.
         for shell in [
             &["--json"][..],
             &["list", "--json"],
@@ -366,7 +481,6 @@ mod tests {
             &["app-api"],
             &["app-errors"],
             &["live"],
-            &["permissions"],
             &["_catalog"],
             &["_usage"],
             &["Errors"],
@@ -511,52 +625,89 @@ mod tests {
     }
 
     #[test]
-    fn a_passport_leaves_the_card_pages_to_the_shell() {
+    fn a_passport_and_the_card_pages() {
         let env = Env::of(&[]);
         let with = prelude(false, true, true, true);
         let without = prelude(false, false, false, false);
-        for s in [
-            Study::Usage,
-            Study::Catalog,
-            Study::Page {
-                topic: "apps",
-                json: false,
-            },
-            Study::Page {
-                topic: "skins",
-                json: false,
-            },
+        let never = || -> bool { panic!("nothing is asked") };
+        let apps = |topic| Study::Page { topic, json: false };
+        for (s, switch) in [
+            (Study::Usage, LIST_WITH_PASSPORT),
+            (Study::Catalog, LIST_WITH_PASSPORT),
+            (apps("apps"), APPS_WITH_PASSPORT),
+            (apps("skins"), APPS_WITH_PASSPORT),
+            (apps("permissions"), PERMISSIONS_WITH_PASSPORT),
         ] {
-            assert_eq!(study_page(s, &with, &env), None, "{s:?}");
-            assert!(study_page(s, &without, &env).is_some(), "{s:?}");
+            // A switch that is off hands the page to the shell; one that
+            // is on asks (here: no HOME, so the shell's again).
+            assert_eq!(study_page(s, &with, &env, || false), None, "{s:?}");
+            if !switch {
+                assert_eq!(study_page(s, &with, &env, never), None, "{s:?}");
+            }
+            // No passport: cards off, nothing asked; the cards-only topic
+            // is the shell's error.
+            let page = study_page(s, &without, &env, never);
+            assert_eq!(page.is_none(), s == apps("permissions"), "{s:?}");
         }
         let errors = Study::Page {
             topic: "errors",
             json: false,
         };
         assert_eq!(
-            study_page(errors, &with, &env).unwrap().text,
+            study_page(errors, &with, &env, never).unwrap().text,
             text::study("errors").unwrap()
         );
-        let usage = study_page(Study::Usage, &without, &env).unwrap();
+        let usage = study_page(Study::Usage, &without, &env, never).unwrap();
         assert_eq!(
             (usage.text.as_ref(), usage.stderr, usage.exit),
             (text::study("_usage").unwrap(), false, Exit::Ok)
         );
-        let skins = study_page(
-            Study::Page {
-                topic: "skins",
-                json: false,
-            },
-            &without,
-            &env,
-        )
-        .unwrap();
+        let skins = study_page(apps("skins"), &without, &env, never).unwrap();
         assert!(skins.text.starts_with(&format!("{SKINS_LINE}\n\n")));
         assert_eq!(
             &skins.text[SKINS_LINE.len() + 2..],
             cards_off(text::study("apps").unwrap())
         );
+    }
+
+    #[test]
+    fn the_pages_with_cards_on_are_the_shell_s() {
+        let index = src("study-index.sh");
+        assert!(index.contains(&format!("        echo \"{CARDS_USAGE_LINE}\"\n")));
+        let awk = format!(
+            "            awk '{{ print }} /^  design   / {{ print \"{CARDS_CATALOG_LINE}\" }}'\n"
+        );
+        assert!(index.contains(&awk), "no {awk:?} in study-index.sh");
+        assert!(src("garden-data.sh").contains(
+            "_study_page_permissions() {\n    cat <<'EOF'\n%include cli/text/study/permissions.txt\nEOF\n}"
+        ));
+        let command = src("study-command.sh");
+        assert!(command.contains(
+            "        echo \"Error: unknown study topic '$topic'\" >&2\n        _study_usage_all >&2\n        exit 2\n"
+        ));
+        let usage_on = usage(true).unwrap();
+        assert_eq!(
+            usage_on.as_ref(),
+            format!("{}  permissions\n", text::study("_usage").unwrap())
+        );
+        let list = catalog(true).unwrap();
+        let off = catalog(false).unwrap();
+        assert_eq!(off.as_ref(), text::study("_catalog").unwrap());
+        let design = off
+            .lines()
+            .find(|l| l.starts_with("  design   "))
+            .expect("the list has the design line");
+        assert_eq!(
+            list.as_ref(),
+            off.replacen(
+                &format!("{design}\n"),
+                &format!("{design}\n{CARDS_CATALOG_LINE}\n"),
+                1
+            )
+        );
+        let on = study_text("apps", true).unwrap();
+        assert!(!on.contains("#if-"));
+        assert_ne!(on.as_ref(), cards_off(text::study("apps").unwrap()));
     }
 
     #[cfg(unix)]

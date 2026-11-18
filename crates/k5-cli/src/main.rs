@@ -136,7 +136,9 @@ fn main() {
             families::connections::run(&args).unwrap_or_else(|| shell(who, &args))
         }
         Route::Feedback => families::feedback::run(&args).unwrap_or_else(|| shell(who, &args)),
-        Route::Study(s) => page(who, &args, |p, env| pages::study_page(s, p, env)),
+        Route::Study(s) => page(who, &args, |p, env| {
+            pages::study_page(s, p, env, || passport::current(&args).would_refuse())
+        }),
         Route::Help(form) => page(who, &args, |p, env| {
             pages::help_page(form, p, env, || passport::current(&args).would_refuse())
         }),

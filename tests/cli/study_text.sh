@@ -27,10 +27,19 @@
 #    relative path, which bash never reads and the binary refuses before
 #    it runs bash. So a pass is the binary's own answer. The forms bash
 #    keeps (the list as JSON, an unknown topic, the bash pages, the cards
-#    page, errors) must fail that way, never print a page.
+#    page without a passport, errors) must fail that way, never print a
+#    page.
+# 4. Also with the binary: with a passport, the pages that ask the daemon
+#    whether permission cards are on (the list, the usage, apps, skins,
+#    permissions), against a stub daemon of this script's own that says
+#    on, or off, on a cell socket, and on over TCP. Each one pages.rs
+#    answers itself (its switches, mirrored in CARDS_* below) prints what
+#    bash prints in the same environment, and both ask exactly once; each
+#    one it leaves to bash must go there.
 #
-# No daemon: study pages are offline. Each run gets an empty HOME and no
-# K2_/K5_ settings (env -i), in a scratch folder. Never touches ~/.k2.
+# No daemon but that stub: study pages are offline. Each run gets an empty
+# HOME and no K2_/K5_ settings (env -i), in a scratch folder. Never
+# touches ~/.k2.
 set -euo pipefail
 export LC_ALL=C
 
@@ -227,23 +236,151 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     handed --bogus
     handed errors db
     handed -- errors
-    # A passport: the list, the usage and the apps pages ask the daemon
-    # whether cards are on, so they go to bash; other pages don't ask.
+    # A passport, and a page that asks nothing: the binary's own page.
     RUN_ENV=("K2_HOOK_TOKEN=sessT.notreal1" "$BROKEN")
-    for f in "" --help apps skins; do
-        run "$NEW" "$SANDBOX/out/bin" study $f
-        if [ "$(cat "$SANDBOX/out/bin.code")" != 0 ] && grep -q K5_HOME_OVERRIDE "$SANDBOX/out/bin.err"; then
-            ok "with a passport k2 study $f goes to bash"
-        else
-            bad "with a passport k2 study $f did not go to bash"
-        fi
-    done
     run "$NEW" "$SANDBOX/out/bin" study errors
     RUN_ENV=()
     if [ "$(cat "$SANDBOX/out/bin.code")" = 0 ] && cmp -s "$SANDBOX/out/bin" "$TEXT/errors.txt"; then
         ok "with a passport the binary answers k2 study errors"
     else
         bad "with a passport k2 study errors was not the binary's page"
+    fi
+
+    echo "== with a passport, the pages that ask whether permission cards are on =="
+    # Which of them the binary answers itself: pages.rs's switches.
+    CARDS_LIST=bash
+    #   k2 study, study list, study --help, study -h (LIST_WITH_PASSPORT)
+    #
+    #
+    #
+    CARDS_APPS=bash
+    #   study apps and study skins, text and --json (APPS_WITH_PASSPORT)
+    #
+    #
+    #
+    CARDS_PERMISSIONS=bash
+    #   study permissions, text and --json (PERMISSIONS_WITH_PASSPORT)
+    #
+    # The stub: cards off on one cell socket, on on another and over TCP.
+    # One line in its log per request.
+    STUB_LOG="$SANDBOX/cards.log"
+    : > "$STUB_LOG"
+    python3 -I - "$SANDBOX" "$STUB_LOG" <<'PY' &
+import http.server, json, os, socketserver, sys, threading
+box, log = sys.argv[1], sys.argv[2]
+lock = threading.Lock()
+def handler(name, on):
+    class H(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        def do_GET(self):
+            with lock, open(log, "a") as f:
+                f.write("%s %s\n" % (name, self.path.split("?", 1)[0]))
+            if self.path.split("?", 1)[0] == "/cli/permission/enabled":
+                status, body = 200, json.dumps({"enabled": on}).encode()
+            else:
+                status, body = 404, b'{"error":"not found"}'
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+        do_POST = do_GET
+        def address_string(self):
+            return name
+        def log_message(self, *a):
+            pass
+    return H
+class Unix(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+servers = [Unix(os.path.join(box, "cards-off.sock"), handler("off", False)),
+           Unix(os.path.join(box, "cards-on.sock"), handler("on", True)),
+           http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler("tcp", True))]
+for srv in servers:
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+with open(os.path.join(box, "stub.port.tmp"), "w") as f:
+    f.write(str(servers[2].server_address[1]))
+os.rename(os.path.join(box, "stub.port.tmp"), os.path.join(box, "stub.port"))
+threading.Event().wait()
+PY
+    STUB_PID=$!
+    trap 'kill "$STUB_PID" 2>/dev/null || true; rm -rf "$SANDBOX"' EXIT
+    for _ in $(seq 100); do [ -s "$SANDBOX/stub.port" ] && break; sleep 0.1; done
+    [ -s "$SANDBOX/stub.port" ] || { echo "FAIL: the cards stub did not start" >&2; exit 1; }
+    STUB_PORT="$(cat "$SANDBOX/stub.port")"
+    requests() { wc -l < "$STUB_LOG" | tr -d ' '; }
+    # cards_form <switch> <label> <settings...> -- <study args...>
+    cards_form() {
+        local switch="$1" label="$2" a b n0 n1 n2; shift 2
+        local -a set=()
+        while [ "$1" != "--" ]; do set+=("$1"); shift; done
+        shift
+        n0="$(requests)"
+        RUN_ENV=("K2_HOOK_TOKEN=sessT.notreal1" ${set[@]+"${set[@]}"})
+        run "$CLI_BASH_SOURCE" "$SANDBOX/out/bash" study "$@"
+        n1="$(requests)"
+        RUN_ENV+=("$BROKEN")
+        run "$NEW" "$SANDBOX/out/bin" study "$@"
+        n2="$(requests)"
+        RUN_ENV=()
+        a=$((n1 - n0)); b=$((n2 - n1))
+        if [ "$switch" = native ]; then
+            if cmp -s "$SANDBOX/out/bash" "$SANDBOX/out/bin" && cmp -s "$SANDBOX/out/bash.err" "$SANDBOX/out/bin.err" \
+                && cmp -s "$SANDBOX/out/bash.code" "$SANDBOX/out/bin.code" && [ "$a" = 1 ] && [ "$b" = 1 ]; then
+                ok "with a passport ($label) the binary answers k2 study $*, one request each"
+            else
+                bad "with a passport ($label) k2 study $*: the binary differs from bash (requests: bash $a, binary $b)"
+                diff "$SANDBOX/out/bash" "$SANDBOX/out/bin" | head -6 >&2 || true
+                diff "$SANDBOX/out/bash.err" "$SANDBOX/out/bin.err" | head -6 >&2 || true
+            fi
+        else
+            if [ "$(cat "$SANDBOX/out/bin.code")" != 0 ] && [ ! -s "$SANDBOX/out/bin" ] \
+                && grep -q K5_HOME_OVERRIDE "$SANDBOX/out/bin.err" && [ "$b" = 0 ] && [ "$a" = 1 ]; then
+                ok "with a passport ($label) k2 study $* goes to bash"
+            else
+                bad "with a passport ($label) k2 study $* did not go to bash (exit $(cat "$SANDBOX/out/bin.code"), requests: bash $a, binary $b)"
+            fi
+        fi
+    }
+    for where in off on tcp; do
+        case "$where" in
+            tcp) at=("K2_PORT=$STUB_PORT") ;;
+            *) at=("K2_HOOK_SOCK=$SANDBOX/cards-$where.sock" "K2_PORT=1") ;;
+        esac
+        for f in "" list --help -h "errors --help"; do
+            # shellcheck disable=SC2086  # f is words
+            cards_form "$CARDS_LIST" "$where" "${at[@]}" -- $f
+        done
+        for f in apps "apps --json" skins "--json skins"; do
+            # shellcheck disable=SC2086
+            cards_form "$CARDS_APPS" "$where" "${at[@]}" -- $f
+        done
+        for f in permissions "permissions --json"; do
+            # shellcheck disable=SC2086
+            cards_form "$CARDS_PERMISSIONS" "$where" "${at[@]}" -- $f
+        done
+    done
+    # The pages differ with cards on: the stub is heard.
+    RUN_ENV=("K2_HOOK_TOKEN=sessT.notreal1" "K2_HOOK_SOCK=$SANDBOX/cards-on.sock")
+    run "$CLI_BASH_SOURCE" "$SANDBOX/out/on" study list
+    RUN_ENV=("K2_HOOK_TOKEN=sessT.notreal1" "K2_HOOK_SOCK=$SANDBOX/cards-off.sock")
+    run "$CLI_BASH_SOURCE" "$SANDBOX/out/off" study list
+    RUN_ENV=()
+    if grep -q '^  permissions ' "$SANDBOX/out/on" && ! grep -q '^  permissions ' "$SANDBOX/out/off"; then
+        ok "the stub says on on one socket and off on the other"
+    else
+        bad "the stub's on and off read the same to bash"
+    fi
+    # No passport: nothing is asked, and the pages are the binary's.
+    n0="$(requests)"
+    RUN_ENV=("K2_HOOK_SOCK=$SANDBOX/cards-on.sock" "$BROKEN")
+    run "$NEW" "$SANDBOX/out/bin" study list
+    RUN_ENV=()
+    if [ "$(requests)" = "$n0" ] && cmp -s "$SANDBOX/out/bin" "$TEXT/_catalog.txt"; then
+        ok "no passport: the binary's own list, nothing asked"
+    else
+        bad "no passport: k2 study list asked the stub or was not the plain list"
     fi
 fi
 

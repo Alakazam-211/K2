@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { NativeConsentPrompt, NativeRecording } from './native-voice-engine'
-import { AGENT_READERS_LINE, recordingBadgeTitle, recordingButtons, recordingNoticeText } from './recording-controls'
+import { AGENT_READERS_LINE, formatRecordingClock, recordingBadgeTitle, recordingButtons, recordingNoticeText } from './recording-controls'
 
 const rec = (over: Partial<NativeRecording> = {}): NativeRecording => ({
   recordingId: '42',
@@ -75,7 +75,17 @@ describe("K2's own recording notice", () => {
 
   it('the badge names what started it', () => {
     expect(recordingBadgeTitle(rec({ trigger: 'required' }), null)).toMatch(/every call with more than one person/)
-    expect(recordingBadgeTitle(rec(), 'Alice')).toBe('Recording: started by Alice')
+    expect(recordingBadgeTitle(rec(), 'Alice')).toBe('Alice started recording')
+    // With its start time: "Alice started recording at 2:41 PM".
+    expect(recordingBadgeTitle(rec(), 'Alice', false, new Date(2026, 10, 17, 14, 41).getTime())).toMatch(/^Alice started recording at 2:41\sPM$/)
+    expect(recordingBadgeTitle(rec({ trigger: 'auto' }), null, false, new Date(2026, 10, 17, 14, 41).getTime())).toMatch(/^This room started recording at 2:41\sPM: it records its calls$/)
+    expect(recordingBadgeTitle(rec(), null)).toBe('Recording')
+  })
+
+  it('the badge clock: mm:ss, then h:mm:ss', () => {
+    expect(formatRecordingClock(192_000)).toBe('03:12')
+    expect(formatRecordingClock(0)).toBe('00:00')
+    expect(formatRecordingClock(3_792_000)).toBe('1:03:12')
   })
 })
 
@@ -106,7 +116,7 @@ describe("a DM call's recording notice (prd-home-call-recording-v1 §2, HR-8)", 
   })
 
   it("a DM's badge names the server's rule, never a room", () => {
-    expect(recordingBadgeTitle(rec({ trigger: 'required' }), null, true)).toBe('Recording: this server records every call with more than one person')
-    expect(recordingBadgeTitle(rec(), 'Alex', true)).toBe('Recording: started by Alex')
+    expect(recordingBadgeTitle(rec({ trigger: 'required' }), null, true)).toBe('This server records every call with more than one person')
+    expect(recordingBadgeTitle(rec(), 'Alex', true)).toBe('Alex started recording')
   })
 })

@@ -201,3 +201,77 @@ fn a_live_link_to_the_script_is_kept() {
     assert!(matches!(copy_script(&script, &k2).expect("copy"), CopyOutcome::Left { .. }));
     assert_eq!(target_of(&k2), script);
 }
+
+// ── Uninstall (Settings) ────────────────────────────────────────────────
+
+/// K2's ruling (slice 10c(iv)): the Linux uninstall takes K2's `k5` link
+/// (to the script or the k5 binary, even when that target is gone), and
+/// never someone else's `k5`; the same rule as the macOS uninstall.
+#[test]
+fn the_linux_uninstall_removes_k2_s_links_and_copies_and_never_someone_else_s() {
+    let dir = Dir::new("uninstall");
+    let home = dir.0.join("home");
+    let bin = home.join(".local").join("bin");
+    fs::create_dir_all(&bin).expect("create bin");
+    let script = put_script(&dir.0);
+    let (binary, body) = put_binary(&dir.0);
+    let shim = dir.0.join("bundle").join("cli").join("k2so");
+    fs::write(&shim, "#!/bin/bash\n# k2so \u{2192} k2 transition shim (0.40.0). K2SO is now K2.\nexec k2 \"$@\"\n").expect("shim");
+
+    // Settings' copy of the script as k2, the shim's copy as k2so, and the
+    // switch's k5 link at the binary: all K2's.
+    assert!(copy_script(&script, &bin.join("k2")).expect("copy").is_written());
+    fs::copy(&shim, bin.join("k2so")).expect("copy shim");
+    symlink(&binary, bin.join("k5")).expect("k5 link");
+    assert_eq!(uninstall_user(&home).expect("uninstall"), vec![bin.join("k2"), bin.join("k5"), bin.join("k2so")]);
+    for n in ["k2", "k5", "k2so"] {
+        assert!(fs::symlink_metadata(bin.join(n)).is_err(), "{n} is still there");
+    }
+    assert_eq!(fs::read(&binary).expect("binary"), body, "the binary itself stays");
+    assert_eq!(fs::read_to_string(&script).expect("script"), SCRIPT, "the script itself stays");
+
+    // The switch on: k2 and k5 both link the binary. Then a k5 at the
+    // script (the switch went off), and links whose K2 target is gone.
+    symlink(&binary, bin.join("k2")).expect("k2 link");
+    symlink(&binary, bin.join("k5")).expect("k5 link");
+    assert_eq!(uninstall_user(&home).expect("uninstall"), vec![bin.join("k2"), bin.join("k5")]);
+    symlink(&script, bin.join("k5")).expect("k5 at the script");
+    assert_eq!(uninstall_user(&home).expect("uninstall"), vec![bin.join("k5")]);
+    let gone_binary = dir.0.join("old-daemon").join("k5-cli");
+    let gone_script = dir.0.join("Old").join("cli").join("k2");
+    symlink(&gone_binary, bin.join("k5")).expect("dangling k5");
+    symlink(&gone_script, bin.join("k2")).expect("dangling k2");
+    symlink(dir.0.join("Old").join("cli").join("k2so"), bin.join("k2so")).expect("dangling k2so");
+    assert_eq!(uninstall_user(&home).expect("uninstall"), vec![bin.join("k2"), bin.join("k5"), bin.join("k2so")]);
+
+    // Someone else's: a k5 file, a k5 link to another tool (live or gone),
+    // a k5 folder, another program named k2, a k2so that isn't the shim, an
+    // empty k2. All stay, byte for byte.
+    let other = dir.0.join("opt").join("other").join("bin").join("k5");
+    fs::create_dir_all(other.parent().expect("parent")).expect("create other");
+    fs::write(&other, "#!/bin/sh\necho another k5 tool\n").expect("other tool");
+    fs::write(bin.join("k5"), "#!/bin/sh\necho my own k5\n").expect("own k5");
+    fs::write(bin.join("k2"), "#!/bin/sh\necho some other k2\n").expect("other k2");
+    fs::write(bin.join("k2so"), "#!/bin/sh\necho some other k2so\n").expect("other k2so");
+    assert_eq!(uninstall_user(&home).expect("uninstall"), Vec::<PathBuf>::new());
+    assert_eq!(fs::read_to_string(bin.join("k5")).expect("k5"), "#!/bin/sh\necho my own k5\n");
+    assert_eq!(fs::read_to_string(bin.join("k2")).expect("k2"), "#!/bin/sh\necho some other k2\n");
+    assert_eq!(fs::read_to_string(bin.join("k2so")).expect("k2so"), "#!/bin/sh\necho some other k2so\n");
+    fs::remove_file(bin.join("k5")).expect("rm k5");
+    symlink(&other, bin.join("k5")).expect("k5 to another tool");
+    assert_eq!(uninstall_user(&home).expect("uninstall"), Vec::<PathBuf>::new());
+    assert_eq!(target_of(&bin.join("k5")), other);
+    fs::remove_file(bin.join("k5")).expect("rm k5");
+    symlink(dir.0.join("gone").join("bin").join("k5"), bin.join("k5")).expect("k5 to a gone tool");
+    assert_eq!(uninstall_user(&home).expect("uninstall"), Vec::<PathBuf>::new());
+    fs::remove_file(bin.join("k5")).expect("rm k5");
+    fs::create_dir_all(bin.join("k5")).expect("k5 folder");
+    fs::write(bin.join("k2"), b"").expect("empty k2");
+    assert_eq!(uninstall_user(&home).expect("uninstall"), Vec::<PathBuf>::new());
+    assert!(bin.join("k5").is_dir() && bin.join("k2").is_file());
+
+    // No ~/.local/bin at all: nothing to do.
+    let bare = dir.0.join("bare-home");
+    fs::create_dir_all(&bare).expect("bare home");
+    assert_eq!(uninstall_user(&bare).expect("uninstall"), Vec::<PathBuf>::new());
+}

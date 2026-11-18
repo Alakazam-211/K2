@@ -770,20 +770,13 @@ pub fn cli_uninstall() -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        // Never remove the distro package. Drop only the user-local copy
-        // Settings wrote when nothing else was on PATH.
-        let Ok(dest) = linux_user_cli_dest() else {
+        // Never the distro package: only what K2 put in ~/.local/bin, its
+        // `k2` copy or link, its `k5` link and its `k2so` shim; someone
+        // else's `k5` stays (`k2_client::cli_copy::uninstall_user`).
+        let Some(home) = linux_home() else {
             return Ok(());
         };
-        if dest.exists() || dest.is_symlink() {
-            fs::remove_file(&dest).map_err(|e| format!("remove {}: {e}", dest.display()))?;
-        }
-        if let Some(parent) = dest.parent() {
-            let shim = parent.join("k2so");
-            if shim.exists() || shim.is_symlink() {
-                let _ = fs::remove_file(shim);
-            }
-        }
+        k2_client::cli_copy::uninstall_user(&home)?;
         return Ok(());
     }
     #[cfg(all(not(windows), not(target_os = "linux")))]

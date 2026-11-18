@@ -197,6 +197,50 @@ fn set_exec(f: &fs::File, path: &Path) -> Result<(), String> {
     f.set_permissions(fs::Permissions::from_mode(0o755)).map_err(|e| format!("chmod {}: {e}", path.display()))
 }
 
+// ── Uninstall (Settings) ────────────────────────────────────────────────
+
+/// The retired `k2so` shim's mark (the second line of `cli/k2so`).
+const SHIM_MARK: &str = "k2so \u{2192} k2 transition shim";
+
+/// `path` (named `name` in `~/.local/bin`) is K2's to remove: a link K2
+/// made ([`ci::is_our_link`]: to the script or the k5 binary, even when the
+/// target is gone), or, for `k2`, the copy Settings wrote (a file that is
+/// the K2 CLI) and, for `k2so`, the shim's copy. A `k5` is K2's only as a
+/// link; a folder never is.
+fn is_ours_to_remove(path: &Path, name: &str) -> bool {
+    if ci::is_our_link(path) {
+        return true;
+    }
+    let Ok(meta) = fs::symlink_metadata(path) else { return false };
+    if !meta.file_type().is_file() {
+        return false;
+    }
+    match name {
+        CLI_NAME => ci::is_k2_cli_script(path),
+        ci::LEGACY_NAME => fs::read(path).is_ok_and(|b| String::from_utf8_lossy(&b[..b.len().min(4096)]).contains(SHIM_MARK)),
+        _ => false,
+    }
+}
+
+/// Settings' uninstall on Linux: `k2`, `k5` and `k2so` in `~/.local/bin`,
+/// each only when it is K2's ([`is_ours_to_remove`]), the same rule as the
+/// macOS uninstall's. Someone else's `k5` (a file, a folder, a link to
+/// another tool) stays, and so does what a link points at (the script, the
+/// k5 binary). Never the distro package's `/usr/bin/k2`. Returns what went;
+/// stops at the first that can't be removed.
+pub fn uninstall_user(home: &Path) -> Result<Vec<PathBuf>, String> {
+    let dir = ci::user_bin_dir(home);
+    let mut gone = Vec::new();
+    for name in ci::UNINSTALL_NAMES {
+        let path = dir.join(name);
+        if is_ours_to_remove(&path, name) {
+            fs::remove_file(&path).map_err(|e| format!("remove {}: {e}", path.display()))?;
+            gone.push(path);
+        }
+    }
+    Ok(gone)
+}
+
 /// The tests name the k5 binary's file, which this file doesn't
 /// (`tests/packaging/k5_cli_shipped_off_by_default.sh`).
 #[cfg(test)]

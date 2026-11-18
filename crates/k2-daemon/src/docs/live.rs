@@ -909,10 +909,24 @@ where
 }
 
 /// The last frame (none for `network`: "never in a frame") and the close.
+/// One log line for a `declined` close, so a support look can see why a
+/// tab couldn't edit live: K2's code and the kit's report id, never the
+/// file's text or the message. None for any other close.
+fn declined_log_line(c: &Closed) -> Option<String> {
+    if c.reason != CloseReason::Declined {
+        return None;
+    }
+    let kit = c.error.as_ref().map(|e| format!("{} {}", e.entry().id, e.entry().name));
+    Some(format!("[docs/live] closed declined: code={} kit={}", c.code.as_deref().unwrap_or("-"), kit.as_deref().unwrap_or("-")))
+}
+
 async fn finish<S>(write: &mut S, c: &Closed)
 where
     S: futures_util::Sink<Message> + Unpin,
 {
+    if let Some(line) = declined_log_line(c) {
+        log_debug!("{line}");
+    }
     if c.reason != CloseReason::Network {
         let _ = write.send(Message::Text(c.value().to_json())).await;
     }
@@ -1704,6 +1718,19 @@ mod tests {
     /// outside its doc folders is K2's private folder: the socket closes
     /// `declined` with `protected` and the daemon's words naming the folder,
     /// never a size or text reason. Outside every workspace is its own code.
+    #[test]
+    fn a_declined_close_logs_one_line_with_its_codes_and_no_words() {
+        let k2 = Closed::k2(CloseReason::Declined, "protected", "notes/secret-plan.html is in the private .k2 folder");
+        assert_eq!(declined_log_line(&k2).as_deref(), Some("[docs/live] closed declined: code=protected kit=-"));
+        let kit = open_error(&SessionError::BadEdit("this doc has no `source` text".into()));
+        assert_eq!(kit.reason, CloseReason::Declined);
+        let line = declined_log_line(&kit).expect("a kit decline logs");
+        let e = kit.error.as_ref().expect("the kit's report").entry();
+        assert_eq!(line, format!("[docs/live] closed declined: code=- kit={} {}", e.id, e.name));
+        assert!(!line.contains("source` text") && !line.contains("secret-plan"), "{line}");
+        assert_eq!(declined_log_line(&Closed::new(CloseReason::Idle)), None);
+    }
+
     #[test]
     fn a_page_in_another_workspaces_k2_folder_is_refused_as_protected_not_too_large() {
         let dir = crate::test_support::Scratch::new();

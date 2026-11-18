@@ -2,7 +2,8 @@
 // side of what Sew posts after a recording. Sew posts a **recording card**
 // (the record message, `Message.recording`) into the DM, and the transcript
 // as replies under it, one per speaker turn (`thread_root_id`, and
-// `Message.transcript` on each line). The DM draws the card as a line, like a
+// `Message.transcript` on each line: the `transcript` object is what marks
+// a line; a plain thread reply is an ordinary message). The DM draws the card as a line, like a
 // call's own line; the lines never show as bubbles and never add to the DM's
 // unread (the daemon keeps them out of its counts too). "Show transcript"
 // reads them with `GET /cli/home-chat/replies` as the person: only the two
@@ -56,15 +57,15 @@ export function parseRecordingSummary(v: unknown): HomeChatRecordingSummary | nu
   }
 }
 
-/** A recording's transcript line: a reply under the card, or a message that
- *  carries `transcript`. Off the DM's timeline (Show transcript reads them). */
+/** A recording's transcript line: a message that carries a `transcript`
+ *  object (Sew puts one on every turn). Off the DM's timeline (Show
+ *  transcript reads them). Returns the card it sits under (`thread_root_id`),
+ *  else its recording id. A person's ordinary thread reply has
+ *  `thread_root_id` but no `transcript`: it's a message, so null. */
 export function transcriptRootOf(v: unknown): string | null {
   const o = v as Record<string, unknown> | null
-  if (!o) return null
-  const root = idOf(o.thread_root_id)
-  if (root) return root
-  if (o.transcript && typeof o.transcript === 'object') return idOf((o.transcript as Record<string, unknown>).recording_id) ?? 'transcript'
-  return null
+  if (!o || !o.transcript || typeof o.transcript !== 'object') return null
+  return idOf(o.thread_root_id) ?? idOf((o.transcript as Record<string, unknown>).recording_id) ?? 'transcript'
 }
 
 /** The recording card's state: `live` while it records, then `transcribing`

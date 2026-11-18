@@ -45,9 +45,12 @@ describe('the recording card', () => {
 })
 
 describe('transcript lines (HR-10)', () => {
-  it('a reply under the card or a message with transcript is a line; a plain message is not', () => {
-    expect(transcriptRootOf({ id: '51', thread_root_id: '50' })).toBe('50')
+  it('a message with a transcript object is a line; a plain message or thread reply is not', () => {
+    expect(transcriptRootOf({ id: '51', thread_root_id: '50', transcript: { recording_id: '42' } })).toBe('50')
     expect(transcriptRootOf({ id: '51', transcript: { recording_id: '42' } })).toBe('42')
+    // A person's ordinary thread reply (no `transcript`) is a message, not a line.
+    expect(transcriptRootOf({ id: '54', thread_root_id: '50' })).toBeNull()
+    expect(transcriptRootOf({ id: '54', thread_root_id: '50', transcript: null })).toBeNull()
     expect(transcriptRootOf({ id: '52', reference: { kind: 'reply', message_id: '50' } })).toBeNull()
     expect(transcriptRootOf({ id: '53' })).toBeNull()
   })
@@ -63,6 +66,19 @@ describe('transcript lines (HR-10)', () => {
       },
     })
     expect(p.messages.map((m) => m.id)).toEqual(['49', '50'])
+  })
+
+  it('a plain thread reply (thread_root_id, no transcript) stays on the timeline', () => {
+    const p = parseHomeChatPage({
+      page: {
+        items: [
+          { id: '49', channel_id: '900', body: 'hi' },
+          { id: '55', channel_id: '900', body: 'a reply from the phone', thread_root_id: '49' },
+        ],
+      },
+    })
+    expect(p.messages.map((m) => m.id)).toEqual(['49', '55'])
+    expect(p.messages[1].transcriptOf).toBeNull()
   })
 
   it('a line names its speaker from transcript, else its author', () => {

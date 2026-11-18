@@ -308,6 +308,27 @@ describe('Home chat view', () => {
     expect(screen.getByTestId('home-chat-typing').hasAttribute('data-on')).toBe(false)
     expect(screen.getByTestId('home-chat-typing').textContent).toBe('')
   })
+  it("a person's plain thread reply (thread_root_id, no transcript) shows, loaded or live; only transcript lines hide", async () => {
+    const ok = h.get.getMockImplementation()!
+    h.get.mockImplementation(async (s, route, p) =>
+      route === 'home-chat/messages' && !p?.before
+        ? { ok: true, conv: '600', page: { items: [...NEWEST, m('25', ALEX, 'a reply from the phone', { thread_root_id: '20' })], has_more: true } }
+        : ok(s, route, p),
+    )
+    await open()
+    expect(screen.getByText('a reply from the phone')).toBeTruthy()
+    await waitFor(() => expect(h.frames).not.toBeNull())
+    await act(async () => {
+      h.frames?.({ type: 'message', conv: '600', message: m('26', ALEX, 'a live reply from Sew', { thread_root_id: '20' }) })
+    })
+    await screen.findByText('a live reply from Sew')
+    // A turn with a transcript object still stays off the timeline.
+    await act(async () => {
+      h.frames?.({ type: 'message', conv: '600', message: m('27', ALEX, 'a transcript turn', { thread_root_id: '20', transcript: { recording_id: '42' } }) })
+    })
+    expect(screen.queryByText('a transcript turn')).toBeNull()
+    expect(document.querySelector('[data-zen-message="27"]')).toBeNull()
+  })
   it('a DM draws each call as a record line with Call back, updated in place, and has a Call button', async () => {
     const DM: HomeChatTarget = { kind: 'person', hostKey: 'local', ext: 'k2:connect:a', address: 'k2:connect:a::local' }
     const record = (summary: Record<string, unknown>) => m('40', ALEX, '', { call: { call_id: '88', started_by: ALEX, rung_ids: [ME], joined_ids: [ALEX], declined_ids: [], missed_ids: [], ...summary } })

@@ -39,7 +39,7 @@ describe('the recording card', () => {
     const v = recordingCardView(summary(), 'Alex')
     expect(v).toEqual({ title: 'Recording · 12:04', detail: 'Started by Alex · audio kept 30 days', state: 'ready', partial: false })
     expect(recordingCardView(summary({ keepDays: 0 }), 'you').detail).toBe('Started by you · audio deleted once the transcript is final')
-    expect(recordingCardView(summary({ stopped: false, durationMs: null, transcriptState: 'pending' }), 'Alex')).toMatchObject({ title: 'Recording now', state: 'live' })
+    expect(recordingCardView(summary({ stopped: false, durationMs: null, transcriptState: 'pending' }), 'Alex')).toMatchObject({ title: 'Recording', state: 'live' })
     expect(recordingCardView(summary({ transcriptState: 'running' }), 'Alex').state).toBe('transcribing')
     expect(recordingCardView(summary({ transcriptState: 'pending' }), 'Alex').state).toBe('transcribing')
     expect(recordingCardView(summary({ transcriptState: 'failed' }), 'Alex').state).toBe('failed')

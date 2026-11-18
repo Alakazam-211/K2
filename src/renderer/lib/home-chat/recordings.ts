@@ -93,7 +93,7 @@ export function recordingCardView(r: HomeChatRecordingSummary, starter: string |
   const t = r.transcriptState
   const state: RecordingCardState = !r.stopped ? 'live' : t === 'done' || t === 'partial' ? 'ready' : t === 'failed' ? 'failed' : 'transcribing'
   return {
-    title: r.stopped ? `Recording · ${formatCallDuration(r.durationMs ?? 0)}` : 'Recording now',
+    title: r.stopped ? `Recording · ${formatCallDuration(r.durationMs ?? 0)}` : 'Recording',
     detail: detail.join(' · '),
     state,
     partial: t === 'partial',

@@ -43,7 +43,7 @@ import {
 import { useElementWidth } from '@/hooks/useElementWidth'
 import { NavTile } from '@/components/Layout/NavTile'
 import { ResizeEdge } from '@/components/Layout/ResizeEdge'
-import { ScrollEdgeFrame, SearchField, Segmented, Surface, TILE_FOOT_CLIP } from '@/components/ui'
+import { Button, ScrollEdgeFrame, SearchField, Segmented, Surface, TILE_FOOT_CLIP } from '@/components/ui'
 import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
 import {
   filterByScope,
@@ -178,6 +178,20 @@ export function TicketBoard({
 
   const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
 
+  // The tickets waiting on this person, in the list's order (waiting, then
+  // needs discussion): the next one to offer once a ticket is settled, and
+  // the oldest one to start with.
+  const waitingQueue = useMemo(() => {
+    if (!rows) return []
+    const g = groupByStatus(filterByScope(rows, 'waiting', me ?? []))
+    return [...g.waiting, ...g.needs_discussion]
+  }, [rows, me])
+  const nextWaitingRow = waitingQueue.find((r) => r.id !== selectedId) ?? null
+  const oldestWaiting = waitingQueue.reduce<FeedbackListRow | null>(
+    (old, r) => (old === null || r.createdAt < old.createdAt ? r : old),
+    null,
+  )
+
   const sections: TicketSection[] = grouped
     ? [
         { label: 'Waiting on you', rows: grouped.waiting },
@@ -285,7 +299,7 @@ export function TicketBoard({
             value: s.value,
             label: (
               <span className="inline-flex items-center gap-1.5">
-                <span>{s.label}</span>
+                <span>{s.label}</span>{' '}
                 {!failedEmpty && (
                   <span data-scope-count="" className="type-badge tabular-nums px-1.5 rounded-[var(--radius-pill)] bg-[var(--color-wash-2)]">
                     {scopeCounts[s.value]}
@@ -304,14 +318,14 @@ export function TicketBoard({
           onToggle={() => (overlay ? setListOverlay(false) : setCollapsed(true))}
         />
       </div>
-      <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 flex-shrink-0">
+      <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2 pb-1 flex-shrink-0">
         {/* The app's one search field: a magnifier, × and Esc clear it. */}
         <SearchField
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search tickets…"
           aria-label="Search tickets"
-          className="flex-1 min-w-0"
+          className="flex-1 basis-40 min-w-0"
         />
         {extraFilter}
       </div>
@@ -445,6 +459,7 @@ export function TicketBoard({
             onMutated={onMutated}
             chatOpen={chrome.chatOpen}
             onChatOpenChange={setChatOpen}
+            nextWaiting={nextWaitingRow ? { title: nextWaitingRow.title, open: () => select(nextWaitingRow.id) } : null}
             discussion={{
               mode: layout.discussion,
               width: layout.discussionWidth,
@@ -453,13 +468,20 @@ export function TicketBoard({
             }}
           />
         ) : (
+          // Nothing open yet: what the middle is for, and where to start.
           <Surface
             role2="solid"
             material="tile"
             bordered={false}
-            className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)] text-center px-6"
+            data-ticket-none-open=""
+            className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6"
           >
-            Select a ticket to open its brief.
+            <p className="type-row text-[var(--color-text-secondary)]">Pick a ticket to read its report and answer the agent.</p>
+            {oldestWaiting && (
+              <Button variant="accent" size="md" data-testid="ticket-start-oldest" onClick={() => select(oldestWaiting.id)}>
+                Start with the oldest waiting ticket
+              </Button>
+            )}
           </Surface>
         )}
       </div>

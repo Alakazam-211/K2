@@ -188,7 +188,7 @@ describe('a failed load', () => {
     expect(screen.queryByText('No tickets yet')).toBeNull()
     expect(screen.queryByTestId('ticket-list-empty')).toBeNull()
     // The tabs don't claim 0 either.
-    expect(screen.getByTestId('ticket-scope-all').textContent).toBe('All')
+    expect(screen.getByTestId('ticket-scope-all').textContent?.trim()).toBe('All')
     fireEvent.click(within(err).getByRole('button', { name: /Try again/ }))
     expect(onRetry).toHaveBeenCalledTimes(1)
   })
@@ -401,5 +401,70 @@ describe('shared controls', () => {
     expect(screen.getByTestId('ticket-detail-header').contains(show)).toBe(true)
     fireEvent.click(show)
     expect(await screen.findByTestId('ticket-agent-rail')).toBeTruthy()
+  })
+})
+
+describe('words and the flow’s loop', () => {
+  it('nothing open: says what the middle is for, and starts with the oldest waiting ticket', async () => {
+    const older = makeRow({ id: 'ffffffff-0000-4000-8000-00000000000f', title: 'Older ticket', createdAt: NOW - 9000 })
+    board([first, older, second])
+    expect(screen.getByText('Pick a ticket to read its report and answer the agent.')).toBeTruthy()
+    // Once the board knows who "me" is.
+    fireEvent.click(await screen.findByTestId('ticket-start-oldest'))
+    await waitFor(() => expect(screen.getByTestId('ticket-detail-title').textContent).toBe('Older ticket'))
+  })
+
+  it('a settled ticket offers the next waiting one', async () => {
+    board([first, second, third])
+    fireEvent.click(card(third.id))
+    const next = await screen.findByTestId('ticket-next-waiting')
+    expect(next.textContent).toContain('First ticket')
+    fireEvent.click(screen.getByTestId('ticket-next-waiting-open'))
+    await waitFor(() => expect(screen.getByTestId('ticket-detail-title').textContent).toBe('First ticket'))
+    // An open ticket offers none.
+    expect(screen.queryByTestId('ticket-next-waiting')).toBeNull()
+  })
+
+  it('the discussion shows the status and ends it with Resolve', async () => {
+    board()
+    fireEvent.click(card(first.id))
+    const status = await screen.findByTestId('ticket-discussion-status')
+    expect(status.textContent).toContain('Waiting')
+    fireEvent.click(within(status).getByTestId('ticket-discussion-resolve'))
+    await waitFor(() => expect(api.resolveFeedback).toHaveBeenCalledWith(first.id, 'resolved'))
+  })
+
+  it('plain words: Report, Urgent, who asked whom, and no P3', async () => {
+    const urgent = makeRow({ id: 'abababab-0000-4000-8000-0000000000ab', title: 'Urgent one', priority: 1, hasBrief: true })
+    api.fetchFeedbackBrief.mockResolvedValue(null)
+    board([urgent, first])
+    expect(within(card(urgent.id)).getByTestId('html-badge').textContent).toBe('Report')
+    fireEvent.click(card(first.id))
+    await screen.findByTestId('ticket-rail-thread')
+    // Priority 3 is the everyday level: nothing shown.
+    expect(screen.queryByTestId('ticket-priority')).toBeNull()
+    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^ada asked Owner/)
+    fireEvent.click(card(urgent.id))
+    await waitFor(() => expect(screen.getByTestId('ticket-priority').textContent).toBe('Urgent'))
+  })
+
+  it('a report that fails to load says so, with Try again', async () => {
+    const withBrief = makeRow({ id: 'cdcdcdcd-0000-4000-8000-0000000000cd', title: 'Has a report', hasBrief: true })
+    api.fetchFeedbackBrief.mockRejectedValueOnce(new Error('timed out'))
+    board([withBrief])
+    fireEvent.click(card(withBrief.id))
+    const err = await screen.findByTestId('brief-error')
+    expect(err.textContent).toContain('This ticket’s report couldn’t be loaded.')
+    api.fetchFeedbackBrief.mockResolvedValueOnce(null)
+    fireEvent.click(within(err).getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(api.fetchFeedbackBrief).toHaveBeenCalledTimes(2))
+  })
+
+  it('the ticket files use the app’s type roles, not raw pixel sizes', async () => {
+    const { readFileSync } = await import('node:fs')
+    for (const f of ['TicketBoard.tsx', 'TicketCard.tsx', 'TicketListBody.tsx', 'FeedbackItemView.tsx', 'TicketAgentRail.tsx', 'badges.tsx', 'TicketWindow.tsx', 'BriefFrame.tsx']) {
+      const src = readFileSync(`${process.cwd()}/src/renderer/components/Feedback/${f}`, 'utf8')
+      expect(src.match(/text-\[\d+px\]|\btext-(xs|sm|base)\b/g), f).toBeNull()
+    }
   })
 })

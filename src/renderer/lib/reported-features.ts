@@ -22,7 +22,7 @@ export const REPORTED_FEATURES = {
   'spawn-attach-only': 'spawn-attach-only',
   /** `GET /cli/feedback/list-all` exists and `waiting-count` counts only
    *  tickets on a registered workspace. The Tickets page reads the host-wide
-   *  list in one GET (with an Unlinked workspace group); a server without
+   *  list in one GET (with a "Workspace removed" group); a server without
    *  the key shows the badge as a dimmed `?` (prd-tickets-badge-orphans). */
   'tickets-list-all': 'tickets-list-all',
   /** `GET /cli/feedback/waiting-count` counts waiting + needs_discussion

@@ -191,7 +191,7 @@ describe('TicketBoard filters', () => {
       expect.stringContaining('Mine ticket'),
       expect.stringContaining('Discuss mine'),
     ])
-    expect(screen.getByTestId('ticket-scope-waiting').textContent).toBe('Waiting on me2')
+    expect(screen.getByTestId('ticket-scope-waiting').textContent).toBe('Waiting on me 2')
     // Waiting on me comes first, as on the phone.
     expect(screen.getAllByRole('radio').map((r) => r.getAttribute('data-testid'))).toEqual([
       'ticket-scope-waiting',
@@ -361,7 +361,8 @@ describe('ticket detail', () => {
     await screen.findByTestId('brief-frame')
     const header = screen.getByTestId('ticket-detail-header')
     expect(screen.getByTestId('ticket-detail-title').textContent).toBe('Which DB?')
-    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^from ada → assigned to Owner/)
+    // "ada asked Owner": who asked whom, in words.
+    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^ada asked Owner · /)
     for (const t of ['ticket-expand', 'ticket-open-window', 'ticket-status', 'ticket-reassign']) {
       expect(header.contains(screen.getByTestId(t)), t).toBe(true)
     }
@@ -385,14 +386,14 @@ describe('ticket detail', () => {
     detail(makeRow({ agentName: 'ada', projectName: 'Ada', assignees: [] }))
     await screen.findByTestId('ticket-rail-thread')
     const byline = screen.getByTestId('ticket-detail-byline')
-    expect(byline.textContent).toMatch(/^from ada → unassigned · asked /)
+    expect(byline.textContent).toMatch(/^ada asked no one assigned · \d/)
     expect(byline.textContent!.match(/ada/gi)).toHaveLength(1)
   })
 
   it('byline keeps the workspace only when it differs from the agent name', async () => {
     detail(makeRow({ agentName: 'ada', projectName: 'Alpha', assignees: [] }))
     await screen.findByTestId('ticket-rail-thread')
-    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^from ada → unassigned · Alpha · asked /)
+    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^ada asked no one assigned · Alpha · \d/)
   })
 
   it('a ticket with no brief has no comments/history section either; its comments are only in the rail Thread', async () => {

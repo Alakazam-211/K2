@@ -71,7 +71,7 @@ export function KindBadge({ kind }: { kind: FeedbackKind }): React.JSX.Element {
         ? 'bg-[var(--color-wash-2)] text-[var(--color-text-muted)]'
         : 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${cls}`}>
+    <span className={`inline-flex items-center px-2 py-0.5 type-badge uppercase tracking-wide ${cls}`}>
       {kind}
     </span>
   )
@@ -86,15 +86,16 @@ export function StatusBadge({ status }: { status: FeedbackStatus }): React.JSX.E
   )
 }
 
-/** The ticket carries an HTML brief (prd-ticket-html-brief-v1 H19). */
+/** The ticket carries a report (the agent's HTML brief, prd-ticket-html-
+ *  brief-v1 H19): called Report, the word for the board's middle part. */
 export function HtmlBriefBadge(): React.JSX.Element {
   return (
     <span
       data-testid="html-badge"
-      title="This ticket has an HTML brief"
-      className="inline-flex items-center px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide align-middle bg-[var(--color-accent)]/10 text-[var(--color-accent)]"
+      title="This ticket has a report to read"
+      className="inline-flex items-center px-1.5 rounded-[var(--radius-pill)] type-badge align-middle bg-[var(--color-wash-2)] text-[var(--color-accent-text)]"
     >
-      HTML
+      Report
     </span>
   )
 }
@@ -118,16 +119,18 @@ export function FileCountBadge({ count }: { count: number | null | undefined }):
   )
 }
 
-export function PriorityBadge({ priority }: { priority: number }): React.JSX.Element {
-  const cls =
-    priority <= 1
-      ? 'text-[var(--color-status-error-soft)]'
-      : priority === 2
-        ? 'text-[var(--color-status-warn-text)]'
-        : 'text-[var(--color-text-muted)]'
+/** A ticket's priority, only when it matters: Urgent (1) and High (2).
+ *  3 to 5 are the everyday levels and show nothing. */
+export function PriorityBadge({ priority }: { priority: number }): React.JSX.Element | null {
+  if (priority > 2) return null
+  const urgent = priority <= 1
   return (
-    <span className={`text-[10px] font-mono tabular-nums ${cls}`} title={`Priority ${priority} (1 urgent … 5 whenever)`}>
-      P{priority}
+    <span
+      data-testid="ticket-priority"
+      className={`type-hint font-medium ${urgent ? 'text-[var(--color-status-error-text)]' : 'text-[var(--color-status-warn-text)]'}`}
+      title={urgent ? 'Urgent: the agent asked for this first' : 'High priority'}
+    >
+      {urgent ? 'Urgent' : 'High'}
     </span>
   )
 }

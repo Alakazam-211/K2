@@ -48,7 +48,7 @@ describe('groupByStatus', () => {
     expect(g.closed.map((r) => r.id)).toEqual(['r', 'd'])
   })
 
-  it('open unlinked rows go in Unlinked workspace, never Waiting on you; closed ones go in Closed', () => {
+  it('open unlinked rows go in Workspace removed, never Waiting on you; closed ones go in Closed', () => {
     const rows = [
       { status: 'waiting' as FeedbackStatus, id: 'w-linked', linked: true },
       { status: 'waiting' as FeedbackStatus, id: 'w-gone', linked: false },

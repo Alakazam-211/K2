@@ -107,7 +107,7 @@ describe('FeedbackCard — HTML badge (T11)', () => {
 
   it('shows the badge only when hasBrief', () => {
     card({ ...row, hasBrief: true, briefBytes: 64 })
-    expect(screen.getByTestId('html-badge').textContent).toBe('HTML')
+    expect(screen.getByTestId('html-badge').textContent).toBe('Report')
     cleanup()
     card({ ...row, hasBrief: false, briefBytes: null })
     expect(screen.queryByTestId('html-badge')).toBeNull()

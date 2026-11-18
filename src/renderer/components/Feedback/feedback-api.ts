@@ -613,7 +613,7 @@ export function filterBySearch<
 }
 
 /** The label an unlinked ticket's workspace shows. */
-export const UNLINKED_WORKSPACE_LABEL = 'Unlinked workspace'
+export const UNLINKED_WORKSPACE_LABEL = 'Workspace removed'
 
 /** The statuses a card's menu offers. An unlinked ticket gets only
  *  Resolve and Dismiss (TB18): no agent is left to discuss or plan with,

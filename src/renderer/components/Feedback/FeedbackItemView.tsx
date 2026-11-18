@@ -69,6 +69,7 @@ import {
 import { useElementWidth } from '@/hooks/useElementWidth'
 import { Button, Input, ScrollEdgeFrame, Surface, TILE_FOOT_CLIP } from '@/components/ui'
 import { ResizeEdge } from '@/components/Layout/ResizeEdge'
+import { ProjectStateCard, StateCanvas, StateRetry } from '@/components/Projects/StateCard'
 import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
 
 interface FeedbackItemViewProps {
@@ -92,6 +93,9 @@ interface FeedbackItemViewProps {
    *  as a drawer over its right edge, or off. Without it (the ticket's own
    *  window) this view measures itself by the same rules. */
   discussion?: TicketDiscussionPlace
+  /** The next ticket waiting on this person, offered once this one is
+   *  answered or resolved, so the flow loops instead of dead-ending. */
+  nextWaiting?: { title: string; open: () => void } | null
 }
 
 /** Where the discussion sits and how wide, and the report's width beside
@@ -142,6 +146,7 @@ export function FeedbackItemView({
   chatOpen,
   onChatOpenChange,
   discussion,
+  nextWaiting = null,
 }: FeedbackItemViewProps): React.JSX.Element {
   const [item, setItem] = useState<FeedbackShow | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -212,6 +217,13 @@ export function FeedbackItemView({
   const [brief, setBrief] = useState<FeedbackBrief | null>(() => briefCache.get(id) ?? null)
   const [briefError, setBriefError] = useState<string | null>(null)
   const briefRequested = useRef<string | null>(null)
+  // Try again on a failed report: a fresh request.
+  const [briefTry, setBriefTry] = useState(0)
+  const retryBrief = useCallback(() => {
+    briefRequested.current = null
+    setBriefError(null)
+    setBriefTry((n) => n + 1)
+  }, [])
   useEffect(() => {
     if (!hasBrief) return
     const cached = briefCache.get(id)
@@ -228,7 +240,8 @@ export function FeedbackItemView({
           setBrief(b)
           setBriefError(null)
         } else {
-          setBriefError('the server returned no brief for this ticket')
+          briefRequested.current = null
+          setBriefError('The server sent no report for this ticket.')
         }
       },
       (e: unknown) => {
@@ -236,7 +249,7 @@ export function FeedbackItemView({
         setBriefError(e instanceof Error ? e.message : String(e))
       },
     )
-  }, [hasBrief, id])
+  }, [hasBrief, id, briefTry])
 
   const unlinked = isUnlinked(listRow)
   const projectPath = unlinked ? null : item?.projectPath ?? listRow.projectPath
@@ -320,14 +333,8 @@ export function FeedbackItemView({
   // shown above the rail's text area.
   const quick = unlinked || !item ? [] : quickAnswerOptions(item, brief?.html)
 
-  const assignedLabel =
-    assigneeNames.length > 0 ? (
-      <>
-        assigned to <span className="text-[var(--color-text-secondary)]">{assigneeNames.join(', ')}</span>
-      </>
-    ) : (
-      <span className="italic">unassigned</span>
-    )
+  // Who answers it: the people's names, or "no one assigned".
+  const assignedLabel = assigneeNames.length > 0 ? assigneeNames.join(', ') : 'no one assigned'
 
   return (
     <div
@@ -355,7 +362,7 @@ export function FeedbackItemView({
           >
             <span
               data-testid="ticket-detail-title"
-              className="text-sm font-medium text-[var(--color-text-primary)] truncate flex-1 selectable-copy"
+              className="type-heading text-[var(--color-text-primary)] truncate flex-1 selectable-copy"
               title={view.title}
             >
               {view.title}
@@ -401,7 +408,7 @@ export function FeedbackItemView({
             )}
           </div>
           {/* The report's first line: its status, and who asked whom. */}
-          <div className="px-4 pt-2 flex items-center gap-1.5 min-w-0 text-[10px] text-[var(--color-text-muted)]">
+          <div className="px-4 pt-2 flex items-center gap-2 min-w-0 type-hint text-[var(--color-text-muted)]">
             {unlinked ? (
               <StatusBadge status={view.status} />
             ) : (
@@ -414,23 +421,39 @@ export function FeedbackItemView({
             )}
             <PriorityBadge priority={view.priority} />
             {hasBrief && <HtmlBriefBadge />}
-            <span data-testid="ticket-detail-byline" className="flex items-center min-w-0 selectable-copy">
+            {/* "atlas asked Owner · 25m ago": who asked whom, the person a
+                chip that reassigns. */}
+            <span data-testid="ticket-detail-byline" className="flex items-center gap-1 min-w-0 selectable-copy">
               <span className="flex-shrink-0">
-                from <span className="text-[var(--color-text-secondary)]">{view.agentName}</span>
-                {' → '}
-              </span>
+                <span className="text-[var(--color-text-secondary)]">{view.agentName}</span> asked
+              </span>{' '}
               {unlinked ? (
-                <span className="flex-shrink-0 ml-1">{assignedLabel}</span>
+                <span className="flex-shrink-0">{assignedLabel}</span>
               ) : (
                 <ReassignControl item={item} label={assignedLabel} onSaved={onChanged} />
-              )}
+              )}{' '}
               <span className="truncate min-w-0">
-                {' '}· {showWorkspace ? `${workspaceName} · ` : ''}asked{' '}
+                · {showWorkspace ? `${workspaceName} · ` : ''}
                 {unlinked ? formatFiledDate(view.createdAt) : formatRelativeTime(view.createdAt, nowSec)}
               </span>
             </span>
           </div>
         </div>
+
+        {nextWaiting && (view.status === 'answered' || view.status === 'resolved') && (
+          <div
+            data-testid="ticket-next-waiting"
+            role="status"
+            className="mx-4 mt-2 flex items-center gap-2 type-hint text-[var(--color-text-secondary)]"
+          >
+            <span className="min-w-0 truncate">
+              Done here. Next waiting: <span className="text-[var(--color-text-primary)]">{nextWaiting.title}</span>
+            </span>
+            <Button variant="accent" className="flex-shrink-0" data-testid="ticket-next-waiting-open" onClick={nextWaiting.open}>
+              Open it
+            </Button>
+          </div>
+        )}
 
         <TicketBody
           key={`body-${id}`}
@@ -441,6 +464,8 @@ export function FeedbackItemView({
           hasBrief={hasBrief}
           brief={brief}
           briefError={briefError}
+          onRetryBrief={retryBrief}
+          onRetry={() => void load()}
           title={view.title}
           expanded={expanded}
           onExpandedChange={setExpanded}
@@ -510,6 +535,8 @@ function TicketBody({
   hasBrief,
   brief,
   briefError,
+  onRetryBrief,
+  onRetry,
   title,
   expanded,
   onExpandedChange,
@@ -522,6 +549,8 @@ function TicketBody({
   hasBrief: boolean
   brief: FeedbackBrief | null
   briefError: string | null
+  onRetryBrief: () => void
+  onRetry: () => void
   title: string
   expanded: boolean
   onExpandedChange: (v: boolean) => void
@@ -554,17 +583,21 @@ function TicketBody({
 
   if (error) {
     return (
-      <div className="flex-1 px-4 py-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">
-        Failed to load ticket: {error}
-      </div>
+      <StateCanvas>
+        <ProjectStateCard
+          kind="error"
+          title="Couldn’t load this ticket"
+          detail={error}
+          testId="ticket-load-error"
+          action={<StateRetry onClick={onRetry} />}
+        >
+          The server didn’t send it. Your agents are fine.
+        </ProjectStateCard>
+      </StateCanvas>
     )
   }
   if (!item) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-        Loading ticket…
-      </div>
-    )
+    return <div className="flex-1 flex items-center justify-center type-row text-[var(--color-text-muted)]">Loading the ticket…</div>
   }
 
   const open =
@@ -603,12 +636,16 @@ function TicketBody({
                 onTile
               />
             ) : briefError ? (
-              <div data-testid="brief-error" className="mb-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">
-                Failed to load the brief: {briefError}
+              <div data-testid="brief-error" role="alert" className="mb-3 flex flex-col items-start gap-1.5">
+                <p className="type-row text-[var(--color-status-error-text)]">This ticket’s report couldn’t be loaded.</p>
+                <p className="type-hint text-[var(--color-text-muted)] selectable-copy">{briefError}</p>
+                <Button variant="quiet" onClick={onRetryBrief}>
+                  Try again
+                </Button>
               </div>
             ) : (
-              <div data-testid="brief-loading" className="mb-3 text-[11px] text-[var(--color-text-muted)]">
-                Loading brief…
+              <div data-testid="brief-loading" className="mb-3 type-hint text-[var(--color-text-muted)]">
+                Loading the report…
               </div>
             ))}
         </div>
@@ -617,10 +654,10 @@ function TicketBody({
 
       {unlinked && (
         <div data-testid="unlinked-thread-footer" className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0">
-          {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>}
-          <p className="mb-2 text-[10px] text-[var(--color-text-muted)]">
-            This ticket&apos;s workspace was removed from this server, so no agent can receive a
-            reply. Resolve or Dismiss it here.
+          {actionError && <div className="mb-2 type-hint text-[var(--color-status-error-text)] selectable-copy">{actionError}</div>}
+          <p className="mb-2 type-hint text-[var(--color-text-muted)]">
+            This ticket’s workspace was removed from this server, so no agent can receive a reply. Resolve or
+            Dismiss it here.
           </p>
           {open && (
             <div className="flex items-center gap-2">
@@ -845,7 +882,8 @@ function ReassignControl({
   const close = useCallback(() => setOpen(false), [])
   const menu = useAnchoredMenu<HTMLSpanElement>({ open, onClose: close, width: 'min', minWidth: 200, estimatedHeight: 260 })
   return (
-    <span ref={menu.anchorRef} className="relative flex-shrink-0 ml-1">
+    <span ref={menu.anchorRef} className="relative flex-shrink-0">
+      {/* A chip with a chevron, so it reads as the control it is. */}
       <button
         type="button"
         data-testid="ticket-reassign"
@@ -853,10 +891,12 @@ function ReassignControl({
         aria-expanded={open}
         disabled={!item}
         onClick={() => setOpen((o) => !o)}
-        title="Reassign"
-        className="k2-focus hover:underline cursor-pointer disabled:cursor-default"
+        title="Choose who answers this ticket"
+        data-k2-chamfer="chip"
+        className="k2-focus inline-flex items-center gap-1 px-2 rounded-[var(--radius-pill)] bg-[var(--color-wash-2)] text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)] cursor-pointer disabled:cursor-default transition-colors"
       >
         {label}
+        <ChevronDownIcon className="w-3 h-3 flex-shrink-0" />
       </button>
       {open && item && (
         <ReassignMenu

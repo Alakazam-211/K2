@@ -90,7 +90,7 @@ async function openDropdown(props: {
     />,
   )
   fireEvent.click(screen.getByTitle('Filter by workspace or project'))
-  const input = screen.getByPlaceholderText('Search workspaces...')
+  const input = screen.getByPlaceholderText('Search workspaces…')
   if (!(input instanceof HTMLInputElement)) throw new Error('search is not an input')
   const popover = input.closest('[data-testid="workspace-filter-menu"]')
   if (!(popover instanceof HTMLElement)) throw new Error('no popover around the search')
@@ -134,7 +134,7 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
     fireEvent.change(input, { target: { value: 'launch' } })
     expect(rowValues()).toEqual(['project:pg1'])
 
-    fireEvent.change(input, { target: { value: 'unlinked' } })
+    fireEvent.change(input, { target: { value: 'removed' } })
     expect(rowValues()).toEqual([UNLINKED_FILTER_VALUE])
 
     fireEvent.change(input, { target: { value: 'zzz' } })
@@ -152,7 +152,7 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(onChange).toHaveBeenCalledTimes(1)
     expect(onChange).toHaveBeenCalledWith(UNLINKED_FILTER_VALUE)
-    expect(screen.queryByPlaceholderText('Search workspaces...')).toBeNull()
+    expect(screen.queryByPlaceholderText('Search workspaces…')).toBeNull()
   })
 
   it('arrows clamp at the ends and walk into a filtered list', async () => {
@@ -178,15 +178,15 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
     try {
       const { input } = await openDropdown({})
       fireEvent.keyDown(input, { key: 'Escape' })
-      expect(screen.queryByPlaceholderText('Search workspaces...')).toBeNull()
+      expect(screen.queryByPlaceholderText('Search workspaces…')).toBeNull()
       expect(pageSpy).not.toHaveBeenCalled()
       expect(winSpy).not.toHaveBeenCalled()
 
       // Esc with focus outside the search (the capture-phase listener).
       fireEvent.click(screen.getByTitle('Filter by workspace or project'))
-      expect(screen.getByPlaceholderText('Search workspaces...')).toBeTruthy()
+      expect(screen.getByPlaceholderText('Search workspaces…')).toBeTruthy()
       fireEvent.keyDown(document.body, { key: 'Escape' })
-      expect(screen.queryByPlaceholderText('Search workspaces...')).toBeNull()
+      expect(screen.queryByPlaceholderText('Search workspaces…')).toBeNull()
       expect(pageSpy).not.toHaveBeenCalled()
     } finally {
       document.removeEventListener('keydown', pageSpy)
@@ -197,7 +197,7 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
   it('an outside mousedown closes it', async () => {
     await openDropdown({})
     fireEvent.mouseDown(document.body)
-    expect(screen.queryByPlaceholderText('Search workspaces...')).toBeNull()
+    expect(screen.queryByPlaceholderText('Search workspaces…')).toBeNull()
   })
 
   it('Unlinked, Projects, All and workspace rows pick their values', async () => {
@@ -206,7 +206,7 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
       const { onChange } = await openDropdown({ value: 'w-alpha', onChange: (x) => picks.push(x) })
       fireEvent.click(rowFor(v))
       expect(onChange).toHaveBeenCalledTimes(1)
-      expect(screen.queryByPlaceholderText('Search workspaces...')).toBeNull()
+      expect(screen.queryByPlaceholderText('Search workspaces…')).toBeNull()
       cleanup()
     }
     expect(picks).toEqual([UNLINKED_FILTER_VALUE, 'project:pg1', 'all', 'w-beta'])
@@ -250,7 +250,7 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
     expect(screen.getByTitle('Filter by workspace or project').textContent).toBe('Launch')
     cleanup()
     render(<WorkspaceFilterDropdown projects={projects} value={UNLINKED_FILTER_VALUE} onChange={() => {}} />)
-    expect(screen.getByTitle('Filter by workspace or project').textContent).toBe('Unlinked workspace')
+    expect(screen.getByTitle('Filter by workspace or project').textContent).toBe('Workspace removed')
   })
 
   it('looks the same: popover, search, and one row of each kind (groups off)', async () => {

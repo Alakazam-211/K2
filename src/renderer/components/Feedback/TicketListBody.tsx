@@ -156,14 +156,14 @@ export function TicketListBody({
         </div>
       )}
       {rows === null && error === null && (
-        <div className="px-1 py-8 text-center text-[var(--color-text-muted)] text-xs">Loading tickets…</div>
+        <div className="px-1 py-8 text-center type-row text-[var(--color-text-muted)]">Loading tickets…</div>
       )}
       {emptyList && error === null && (
         <div data-testid="ticket-list-empty" className="flex flex-1 flex-col items-center justify-center text-center px-4">
           {rows !== null && rows.length > 0 && scope === 'waiting' && !search ? (
             <div data-testid="ticket-waiting-empty" className="flex flex-col items-center">
-              <p className="text-xs text-[var(--color-text-secondary)]">Nothing is waiting on you</p>
-              <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+              <p className="type-name text-[var(--color-text-secondary)]">Nothing is waiting on you</p>
+              <p className="type-hint text-[var(--color-text-muted)] mt-1">
                 {otherWaiting > 0
                   ? `${otherWaiting} other waiting ${otherWaiting === 1 ? 'ticket is' : 'tickets are'} assigned to someone else or no one.`
                   : 'Tickets assigned to you that need an answer or a discussion show up here.'}
@@ -179,7 +179,7 @@ export function TicketListBody({
             </div>
           ) : rows !== null && rows.length > 0 ? (
             <>
-              <p className="text-xs text-[var(--color-text-secondary)]">
+              <p className="type-name text-[var(--color-text-secondary)]">
                 {scope === 'all' || search ? 'No tickets match your search' : 'Nothing assigned to you here'}
               </p>
               {scope !== 'all' && (
@@ -194,7 +194,7 @@ export function TicketListBody({
             </>
           ) : (
             <>
-              <p className="text-xs text-[var(--color-text-secondary)]">No tickets yet</p>
+              <p className="type-name text-[var(--color-text-secondary)]">No tickets yet</p>
               <p data-testid="ticket-list-empty-hint" className="type-hint text-[var(--color-text-muted)] mt-1">
                 {emptyHint}
               </p>

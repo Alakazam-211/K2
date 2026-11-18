@@ -40,9 +40,9 @@ export function ticketComposeAttach(
   projectPath: string | null | undefined,
 ): { on: boolean; why: string | null } {
   if (!scope.serverSupports(TICKET_ATTACHMENTS_FEATURE)) {
-    return { on: false, why: "This server's K2 doesn't take files on tickets yet (it needs 0.46.6)." }
+    return { on: false, why: 'This server’s K2 doesn’t take files on tickets yet (it needs 0.46.6).' }
   }
-  if (!projectPath) return { on: false, why: "This ticket's workspace was removed, so files can't be attached." }
+  if (!projectPath) return { on: false, why: 'This ticket’s workspace was removed, so files can’t be attached.' }
   return { on: true, why: null }
 }
 
@@ -137,7 +137,7 @@ export function useTicketComposeFiles({
           // workspace; the daemon refuses any other (outside_workspace).
           got = (input.paths ?? []).filter((p) => isInsideWorkspace(p, ws)).map(threadComposeFile)
           if ((input.paths ?? []).length > 0 && got.length === 0) {
-            errRef.current("That file isn't inside this ticket's workspace.")
+            errRef.current('That file isn’t inside this ticket’s workspace.')
             return
           }
         } else {

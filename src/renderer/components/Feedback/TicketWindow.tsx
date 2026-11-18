@@ -11,6 +11,7 @@ import { Surface } from '@/components/ui'
 import { fetchFeedbackShow, type FeedbackListRow } from './feedback-api'
 import { briefOverlayStoplightInset } from './BriefFrame'
 import { FeedbackItemView } from './FeedbackItemView'
+import { ProjectStateCard, StateCanvas, StateRetry } from '@/components/Projects/StateCard'
 import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 
 const TOPBAR_HEIGHT = TOPBAR_HEIGHT_CSS
@@ -71,9 +72,17 @@ export function TicketWindow({ ticketId }: { ticketId: string }): React.JSX.Elem
         </span>
       </Surface>
       {error ? (
-        <div className="flex-1 px-4 py-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">
-          Failed to load ticket: {error}
-        </div>
+        <StateCanvas>
+          <ProjectStateCard
+            kind="error"
+            title="Couldn’t load this ticket"
+            detail={error}
+            testId="ticket-window-error"
+            action={<StateRetry onClick={() => void load()} />}
+          >
+            The server didn’t send it. Your agents are fine.
+          </ProjectStateCard>
+        </StateCanvas>
       ) : row ? (
         <FeedbackItemView
           id={row.id}
@@ -84,8 +93,8 @@ export function TicketWindow({ ticketId }: { ticketId: string }): React.JSX.Elem
           inOwnWindow
         />
       ) : (
-        <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-          Loading ticket…
+        <div className="flex-1 flex items-center justify-center type-row text-[var(--color-text-muted)]">
+          Loading the ticket…
         </div>
       )}
     </div>

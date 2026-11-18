@@ -107,7 +107,7 @@ export function filterProjectGroupsForFilter(
 /** Filter value for tickets whose workspace was removed. Workspace ids are
  *  UUIDs and project filters carry `project:`, so it cannot collide. */
 export const UNLINKED_FILTER_VALUE = 'unlinked'
-export const UNLINKED_FILTER_LABEL = 'Unlinked workspace'
+export const UNLINKED_FILTER_LABEL = 'Workspace removed'
 
 /** The board's client-side workspace filter (unit-tested): 'all' passes
  *  everything; `unlinked` keeps rows whose workspace is gone; a `project:`
@@ -165,7 +165,7 @@ interface WorkspaceFilterDropdownProps {
   /** 'all', a workspace id, `project:<groupId>` (§6.6), or `unlinked`. */
   value: string
   onChange: (value: string) => void
-  /** Offer the "Unlinked workspace" row (only while such tickets exist). */
+  /** Offer the "Workspace removed" row (only while such tickets exist). */
   showUnlinked?: boolean
 }
 
@@ -311,7 +311,7 @@ export function WorkspaceFilterDropdown({
             onQuery={setQuery}
             onPick={pick}
             onEscape={() => setOpen(false)}
-            placeholder="Search workspaces..."
+            placeholder="Search workspaces…"
             emptyText="No workspaces match"
             ariaLabel="Workspaces"
             autoFocus

@@ -83,9 +83,9 @@ export const BRIEF_LINKS_MAX_HEIGHT_CLASS = 'max-h-14'
 function BriefLinks({ links }: { links: BriefLink[] }): React.JSX.Element | null {
   if (links.length === 0) return null
   return (
-    <div data-testid="brief-links" className="mt-1 text-[11px] flex-none">
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] leading-tight">
-        Links in this brief
+    <div data-testid="brief-links" className="mt-1 type-hint flex-none">
+      <div className="type-section uppercase tracking-wider text-[var(--color-text-secondary)] leading-tight">
+        Links in this report
       </div>
       <ol data-testid="brief-links-list" className={`flex flex-col gap-0.5 ${BRIEF_LINKS_MAX_HEIGHT_CLASS} overflow-y-auto`}>
         {links.map((l) => (
@@ -199,17 +199,17 @@ export function BriefFrame({
     <div data-testid="brief" className={fill ? 'mb-3 flex flex-1 flex-col min-h-0' : 'mb-3'}>
       {!hideToolbar && (
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+          <span className="type-section uppercase tracking-wider text-[var(--color-text-secondary)]">
             Brief
           </span>
-          <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums opacity-70">
+          <span className="type-hint text-[var(--color-text-muted)] tabular-nums">
             HTML · {formatBytes(brief.bytes)}
           </span>
           <button
             type="button"
             data-testid="brief-expand"
             onClick={() => setExpanded(true)}
-            className="ml-auto px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer"
+            className="k2-focus ml-auto px-2 py-0.5 type-hint text-[var(--color-text-secondary)] border border-[var(--color-control-edge)] rounded-[var(--radius-field)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer"
           >
             Expand
           </button>
@@ -319,7 +319,7 @@ function BriefOverlay({
         )}
         <span
           data-testid="brief-overlay-title"
-          className="no-drag min-w-0 text-sm font-medium text-[var(--color-text-primary)] truncate selectable-copy"
+          className="no-drag min-w-0 type-heading text-[var(--color-text-primary)] truncate selectable-copy"
         >
           {title}
         </span>

@@ -86,11 +86,14 @@ import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 import { TICKET_DISCUSSION_DEFAULT_WIDTH } from '@/lib/ticket-board-chrome'
 import { Button, Segmented, Surface, TILE_FOOT_CLIP } from '@/components/ui'
+import { StatusMark } from './badges'
+import { useToastStore } from '@/stores/toast'
 import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
 import {
   TICKET_ATTACHMENTS_FEATURE,
   askingSessionWakeAction,
   commentFeedback,
+  resolveFeedback,
   type FeedbackSessionKind,
   type FeedbackShow,
   type QuickAnswerOption,
@@ -331,6 +334,8 @@ export function TicketAgentRail({
           )}
         </div>
       )}
+      {/* Where the conversation ends: the ticket's status, and Resolve. */}
+      {item && <DiscussionStatus item={item} onChanged={onChanged} />}
 
       {tab === 'thread' ? (
         // 0.46.3: paths in the ticket's messages that are files in its
@@ -366,6 +371,42 @@ export function TicketAgentRail({
 function keysInTicketList(): boolean {
   const el = document.activeElement
   return el instanceof HTMLElement && el.closest('[data-ticket-listbox]') !== null
+}
+
+/** The discussion's status line: where the ticket stands, and Resolve
+ *  while it's open, so the conversation can end where it happens. */
+function DiscussionStatus({ item, onChanged }: { item: FeedbackShow; onChanged: () => void }): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const closed = item.status === 'resolved' || item.status === 'dismissed'
+  const resolve = async (): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await resolveFeedback(item.id, 'resolved')
+      onChanged()
+    } catch (e) {
+      useToastStore.getState().addToast(`Couldn’t resolve the ticket: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div data-testid="ticket-discussion-status" className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0">
+      <StatusMark status={item.status} />
+      {!closed && (
+        <Button
+          variant="quiet"
+          className="ml-auto flex-shrink-0"
+          data-testid="ticket-discussion-resolve"
+          disabled={busy}
+          title="Mark this ticket resolved: nothing more is needed"
+          onClick={() => void resolve()}
+        >
+          Resolve
+        </Button>
+      )}
+    </div>
+  )
 }
 
 // ── Thread tab (the restored ThreadTab) ──────────────────────────────────
@@ -575,17 +616,14 @@ export function ThreadTab({
 
   if (error) {
     return (
-      <div className="flex-1 px-4 py-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">
-        Failed to load ticket: {error}
+      <div role="alert" className="flex-1 px-4 py-3 flex flex-col gap-1">
+        <p className="type-row text-[var(--color-status-error-text)]">Couldn’t load the discussion.</p>
+        <p className="type-hint text-[var(--color-text-muted)] selectable-copy">{error}</p>
       </div>
     )
   }
   if (!item) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-        Loading thread…
-      </div>
-    )
+    return <div className="flex-1 flex items-center justify-center type-row text-[var(--color-text-muted)]">Loading the discussion…</div>
   }
 
   // Every message lands in the asking session (the daemon injects it and
@@ -645,7 +683,7 @@ export function ThreadTab({
         }
         await usePromptStashStore.getState().markUsed(rec.id)
       } catch (err) {
-        setActionError(`Couldn't restore the stash's files: ${err instanceof Error ? err.message : String(err)}`)
+        setActionError(`Couldn’t restore the stash’s files: ${err instanceof Error ? err.message : String(err)}`)
       }
     })()
   }
@@ -848,12 +886,12 @@ function AgentTab({
       />
     )
   }
-  if (phase.kind === 'checking') return <EmptyTermState title="Checking session…" />
-  if (phase.kind === 'waking') return <EmptyTermState title="Waking session…" />
+  if (phase.kind === 'checking') return <EmptyTermState title="Looking for the agent…" />
+  if (phase.kind === 'waking') return <EmptyTermState title="Waking the agent…" />
   if (phase.kind === 'error') {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
-        <p className="text-xs text-[var(--color-status-error-soft)] max-w-[48ch]">{phase.message}</p>
+        <p className="type-row text-[var(--color-status-error-text)] max-w-[48ch]">{phase.message}</p>
         <Button variant="quiet" onClick={retry}>
           Retry
         </Button>
@@ -866,14 +904,13 @@ function AgentTab({
         data-testid="ticket-agent-dormant"
         className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"
       >
-        <p className="text-xs font-semibold text-[var(--color-text-primary)]">Session is dormant</p>
-        <p className="text-[11px] text-[var(--color-text-muted)] max-w-[44ch]">
-          The asking session isn&apos;t running right now.
-          {phase.wakeable ? ' Wake it to attach its terminal here.' : ''}
+        <p className="type-name text-[var(--color-text-primary)]">The agent is asleep</p>
+        <p className="type-hint text-[var(--color-text-muted)] max-w-[44ch]">
+          {phase.wakeable ? 'Wake it to see its terminal here.' : 'Its session isn’t running right now.'}
         </p>
         {phase.wakeable && (
           <Button variant="accent" onClick={() => void wake()}>
-            Wake session
+            Wake the agent
           </Button>
         )}
       </div>
@@ -905,8 +942,8 @@ function EmptyTermState({ title, detail }: { title: string; detail?: string }): 
       data-testid="ticket-agent-empty"
       className="flex-1 flex flex-col items-center justify-center gap-2 px-6 text-center"
     >
-      <p className="text-xs text-[var(--color-text-secondary)]">{title}</p>
-      {detail && <p className="text-[11px] text-[var(--color-text-muted)] max-w-[44ch]">{detail}</p>}
+      <p className="type-row text-[var(--color-text-secondary)]">{title}</p>
+      {detail && <p className="type-hint text-[var(--color-text-muted)] max-w-[44ch]">{detail}</p>}
     </div>
   )
 }

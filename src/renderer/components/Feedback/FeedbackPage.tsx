@@ -130,7 +130,7 @@ export function useTicketsPageData(active: boolean): TicketsPageData {
     [rows, workspaceFilter, projectMemberIds],
   )
 
-  // "Unlinked workspace" is offered only while such rows exist; once the
+  // "Workspace removed" is offered only while such rows exist; once the
   // last one is gone, an active unlinked filter falls back to All.
   const hasUnlinked = useMemo(() => (rows ?? []).some(isUnlinked), [rows])
   useEffect(() => {

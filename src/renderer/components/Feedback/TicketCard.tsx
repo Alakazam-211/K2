@@ -1,9 +1,9 @@
 // Tickets board — the compact list card (0.43.2 quick redesign).
 //
 // Three lines at most: the title (one line, ellipsis), a one-line summary
-// (the `--body`), and a bottom row with the status chip (also the status
-// menu), the assignees' initials, the age, and a small HTML mark when the
-// ticket carries a brief. No agent name and no full body on the card: the
+// (the `--body`), and a bottom row with the status (also the status menu),
+// the assignees' initials, the age, and a small Report mark when the ticket
+// carries a report (its HTML brief). No agent name and no full body on the card: the
 // detail header names the agent. An UNLINKED ticket (workspace removed)
 // keeps its identifying line (Appa A1) — agent, filing date, short id —
 // because it has nothing else to tell it apart.
@@ -226,7 +226,7 @@ function CardAssigneeInitials({ assignees }: { assignees: readonly string[] | nu
         data-testid="card-assignee"
         data-unassigned="true"
         className="flex-shrink-0 type-hint text-[var(--color-text-muted)]"
-        title="No one is assigned. Assign with k2 tickets assign <id> <user>."
+        title="No one is assigned. Open the ticket to assign someone."
       >
         Unassigned
       </span>
@@ -262,7 +262,7 @@ function AssigneeChips({ names, shown }: { names: string[]; shown: string[] }): 
         </span>
       ))}
       {names.length > shown.length && (
-        <span className="pl-1.5 text-[9px] tabular-nums">+{names.length - shown.length}</span>
+        <span className="pl-1.5 type-badge tabular-nums">+{names.length - shown.length}</span>
       )}
     </span>
   )
@@ -330,7 +330,7 @@ export function FeedbackCard({
       )}
       <p
         data-testid="card-title"
-        className="text-[12px] font-medium leading-snug text-[var(--color-text-primary)] truncate"
+        className="type-name leading-snug text-[var(--color-text-primary)] truncate"
         title={row.title}
       >
         {row.title}
@@ -338,7 +338,7 @@ export function FeedbackCard({
       {summary && (
         <p
           data-testid="card-summary"
-          className="mt-0.5 text-[11px] leading-snug text-[var(--color-text-muted)] truncate"
+          className="mt-0.5 type-hint leading-snug text-[var(--color-text-muted)] truncate"
         >
           {summary}
         </p>
@@ -346,19 +346,19 @@ export function FeedbackCard({
       {details && (
         <div
           data-testid="unlinked-details"
-          className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10px] text-[var(--color-text-muted)] selectable-copy"
+          className="mt-0.5 flex flex-wrap items-center gap-x-1.5 type-hint text-[var(--color-text-muted)] selectable-copy"
           title="This ticket’s workspace was removed from this server"
         >
           <span>Filed by {details.agent}</span>
-          <span className="opacity-60">·</span>
+          <span aria-hidden>·</span>
           <span className="tabular-nums">{details.filed}</span>
-          <span className="opacity-60">·</span>
+          <span aria-hidden>·</span>
           <span className="font-mono">{details.shortId}</span>
         </div>
       )}
       <div
         data-testid="card-bottom-row"
-        className="mt-1.5 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)] min-w-0"
+        className="mt-1.5 flex items-center gap-1.5 type-hint text-[var(--color-text-muted)] min-w-0"
       >
         <CardStatusDropdown row={row} onMutated={onMutated} />
         <CardAssigneeInitials assignees={row.assignees} />
@@ -372,6 +372,9 @@ export function FeedbackCard({
     </Surface>
   )
 }
+
+/** A rail avatar: the nav rails' 24 px picture (w-6), in a 36 px row. */
+const RAIL_AVATAR_PX = 24
 
 /** Collapsed list: one avatar per ticket (the asking agent's workspace
  *  icon) with a status dot. */
@@ -412,21 +415,18 @@ export function TicketRailItem({
           projectColor={workspace.color}
           projectId={workspace.id}
           iconUrl={workspace.iconUrl}
-          size={24}
+          size={RAIL_AVATAR_PX}
         />
       ) : (
-        <span
-          className="flex items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[10px] font-bold text-[var(--color-text-secondary)]"
-          style={{ width: 24, height: 24 }}
-        >
+        <span className="flex items-center justify-center w-6 h-6 rounded-[var(--radius-pill)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] type-badge text-[var(--color-text-secondary)]">
           {assigneeInitials(row.agentName || '?')}
         </span>
       )}
       <span
         data-testid="ticket-rail-dot"
         data-status={row.status}
-        className="absolute rounded-[var(--radius-badge)] border border-[var(--color-bg)]"
-        style={{ right: 4, bottom: 4, width: 8, height: 8, background: statusDotColor(row.status) }}
+        className="absolute right-1 bottom-1 w-2 h-2 rounded-[var(--radius-badge)] border border-[var(--color-bg)]"
+        style={{ background: statusDotColor(row.status) }}
       />
     </button>
   )
@@ -435,10 +435,10 @@ export function TicketRailItem({
 export function SectionHeader({ label, count, id }: { label: string; count: number; id?: string }): React.JSX.Element {
   return (
     <div className="flex items-center gap-2 px-1 pt-3 pb-1">
-      <span id={id} className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+      <span id={id} className="type-section uppercase tracking-wider text-[var(--color-text-secondary)]">
         {label}
       </span>
-      <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums">{count}</span>
+      <span className="type-badge text-[var(--color-text-muted)] tabular-nums">{count}</span>
     </div>
   )
 }

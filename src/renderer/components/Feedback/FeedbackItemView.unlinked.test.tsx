@@ -91,7 +91,7 @@ describe('FeedbackItemView — unlinked ticket', () => {
     const footer = await screen.findByTestId('unlinked-thread-footer')
 
     // Identifying header: workspace label + exact filing date.
-    expect(screen.getByText(/Unlinked workspace · asked 2025-09-30 14:05 UTC/)).toBeTruthy()
+    expect(screen.getByText(/Workspace removed · 2025-09-30 14:05 UTC/)).toBeTruthy()
     // No chat rail, no quick answers, no reassign, no chat toggle (no
     // session preview / wake for a removed workspace), no status menu.
     expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()

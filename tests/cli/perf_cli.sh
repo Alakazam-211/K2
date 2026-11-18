@@ -19,6 +19,12 @@
 #                  as the shell's Python does)           p95 handler time
 #   read           k5 read <workspace> (a terminal's  <= 30 ms + the stub's
 #                  last lines)                           p95 handler time
+#   activity       k5 activity (three events, local   <= 30 ms + the stub's
+#                  times)                                p95 handler time
+#   sessions       k5 sessions (the roster, three     <= 30 ms + the stub's
+#                  rows)                                 p95 handler time
+#   connections    k5 connections list (this          <= 30 ms + the stub's
+#                  workspace's rows, three peers)        p95 handler time
 #   fallthrough    k5 heartbeat list (a verb the      <= cli/k2's p95 for
 #                  shell answers)                        the same + 5 ms
 #   thread read    k5 thread read                     <= 40 ms: pending
@@ -72,7 +78,20 @@ WHOAMI = json.dumps({"workspace": "acme", "role": "canonical", "address": "acme"
 INBOX = json.dumps([{"id": "i1", "folder": "projects", "priority": "high", "title": "Perf item", "summary": "s"},
                     {"id": "i2", "filename": "notes.md", "priority": "low"}]).encode()
 LINES = json.dumps({"lines": ["$ cargo test", "test result: ok. 3 passed"]}).encode()
-BODIES = {"/cli/whoami": WHOAMI, "/cli/heartbeat/list": b"[]", "/cli/inbox/list": INBOX, "/cli/terminal/read": LINES}
+FEED = json.dumps({"feed": [
+    {"at": 1763400000, "agent": "acme", "type": "msg", "from": "acme", "to": "beta", "summary": "hello"},
+    {"at": 1763400061, "agent": "beta", "type": "done", "summary": "shipped"},
+    {"at": 1763400122, "agent": "perf", "type": "inbox"}]}).encode()
+ROSTER = json.dumps({"workspace": {"handle": "acme"}, "sidecars": {"cap": 4, "live": 1}, "sessions": [
+    {"address": "acme", "role": "main", "cli": "claude", "state": "working", "title": "Perf", "you": True},
+    {"address": "acme/h", "role": "sidecar", "cli": "codex", "state": "idle", "title": "Helper"},
+    {"address": "acme/z", "state": "asleep"}]}).encode()
+CONNECTIONS = json.dumps({"workspace": {"name": "acme", "path": work + "/ws"},
+    "thisWorkspace": {"handle": "acme", "sessions": [{"address": "acme", "role": "main", "cli": "claude", "state": "working", "you": True}]},
+    "connections": [{"projectName": "beta"}, {"projectName": "gamma", "reachable": False},
+                    {"remote": True, "agent": "delta", "host": "box.example"}]}).encode()
+BODIES = {"/cli/whoami": WHOAMI, "/cli/heartbeat/list": b"[]", "/cli/inbox/list": INBOX, "/cli/terminal/read": LINES,
+          "/cli/feed": FEED, "/cli/sessions/roster": ROSTER, "/cli/connections": CONNECTIONS}
 handler_ns = []
 lock = threading.Lock()
 
@@ -163,6 +182,9 @@ check_same("done", [k5, "done"], bash_argv("done"))
 check_same("respond", [k5, "respond", "perf line"], bash_argv("respond", "perf line"))
 check_same("inbox", [k5, "inbox"], bash_argv("inbox"))
 check_same("read", [k5, "read", "acme"], bash_argv("read", "acme"))
+check_same("activity", [k5, "activity"], bash_argv("activity"))
+check_same("sessions", [k5, "sessions"], bash_argv("sessions"))
+check_same("connections list", [k5, "connections", "list"], bash_argv("connections", "list"))
 check_same("fallthrough (heartbeat list)", [k5, "heartbeat", "list"], bash_argv("heartbeat", "list"))
 
 results = []
@@ -195,12 +217,16 @@ measure_native("done", ["done"])
 measure_native("respond", ["respond", "perf line"])
 measure_native("inbox", ["inbox"])
 measure_native("read", ["read", "acme"])
+measure_native("activity", ["activity"])
+measure_native("sessions", ["sessions"])
+measure_native("connections list", ["connections", "list"])
 bash_ft = p95(timed(bash_argv("heartbeat", "list")))
 print(f"perf_cli: info: cli/k2 heartbeat list: p95 {bash_ft:.2f} ms (the fallthrough's base)")
 measure("k5 heartbeat list (fallthrough)", [k5, "heartbeat", "list"], bash_ft + 5.0, "cli/k2's p95 + 5 ms")
-for words in (["whoami"], ["done"], ["respond", "perf line"], ["inbox"], ["read", "acme"]):
+for words in (["whoami"], ["done"], ["respond", "perf line"], ["inbox"], ["read", "acme"],
+              ["activity"], ["sessions"], ["connections", "list"]):
     bash_p95 = p95(timed(bash_argv(*words)))
-    print(f"perf_cli: info: cli/k2 {words[0]}: p95 {bash_p95:.2f} ms (for comparison)")
+    print(f"perf_cli: info: cli/k2 {' '.join(words[:2]) if words[0] == 'connections' else words[0]}: p95 {bash_p95:.2f} ms (for comparison)")
 print("perf_cli: pending: k5 thread read <= 40 ms (R3.5: thread read is not native yet)")
 
 # Where the fallthrough's time goes. Info only, no target: the front's

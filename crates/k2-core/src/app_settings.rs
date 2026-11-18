@@ -2234,6 +2234,64 @@ mod tests {
         assert!(!old.k5_cli_beta, "missing reads as off");
     }
 
+    /// New k5 command (Beta) stays off on a first install and on an update.
+    /// A fresh server reads off, and the settings file its first boot writes
+    /// says off. A file from an older release (no `k5CliBeta`) reads off
+    /// after every boot pass the daemon runs on it, in the daemon's order,
+    /// and after an ordinary settings write. An owner's on is kept the same
+    /// way: only the owner's `/cli/k5-cli` route changes it.
+    #[test]
+    fn k5_cli_beta_stays_off_on_first_install_and_on_update() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let _env = crate::test_env::EnvVar::remove("K2_APPS");
+        let off_now = |when: &str| {
+            assert!(!load().k5_cli_beta, "load reads off {when}");
+            assert!(!k5_cli_beta(), "the commands' heal reads off {when}");
+        };
+        // The daemon's boot passes over an existing file, in its order.
+        let boot = |when: &str| {
+            apply_permission_cards_default(&no_off_on_record).expect("permission cards pass");
+            migrate_legacy_apps_switch().expect("apps pass");
+            assert_eq!(apply_new_server_defaults(&not_in_use).expect("new server pass"), NewServerDefaults::HasFile, "{when}");
+            scrub_legacy_companion_block().expect("companion scrub");
+        };
+
+        // First install: no file, then the first boot writes one.
+        assert!(!settings_file().exists());
+        off_now("with no settings file");
+        assert_eq!(apply_new_server_defaults(&not_in_use).expect("first boot"), NewServerDefaults::TurnedOn);
+        assert_eq!(stored_json()["k5CliBeta"], serde_json::json!(false), "the first boot writes it off");
+        off_now("after the first boot");
+        boot("the second boot");
+        off_now("after the second boot");
+
+        // Update: files from older releases, none with the key.
+        let old_files = [
+            "{}",
+            r#"{"defaultAgent": "codex"}"#,
+            r#"{"appsPreview": true, "permissionCards": false}"#,
+            r#"{"apps": true, "permissionCards": true, "permissionCardsDefaultApplied": true}"#,
+            r#"{"companion": {"enabled": true}, "setupChecklist": true}"#,
+        ];
+        for raw in old_files {
+            fs::write(settings_file(), raw).expect("write settings.json");
+            off_now(&format!("before the boot, for {raw}"));
+            boot(raw);
+            off_now(&format!("after the boot, for {raw}"));
+            assert_ne!(stored_json().get("k5CliBeta"), Some(&serde_json::json!(true)), "never stored on, for {raw}");
+            update(serde_json::json!({"defaultAgent": "claude"})).expect("an ordinary write");
+            assert_eq!(stored_json()["k5CliBeta"], serde_json::json!(false), "a write stores it off, for {raw}");
+            off_now(&format!("after a write, for {raw}"));
+        }
+
+        // An owner who turned it on keeps it on through the same passes.
+        fs::write(settings_file(), r#"{"appsPreview": true, "companion": {}, "k5CliBeta": true}"#).expect("write settings.json");
+        boot("an owner's on");
+        update(serde_json::json!({"defaultAgent": "claude"})).expect("an ordinary write");
+        assert!(load().k5_cli_beta && k5_cli_beta(), "the owner's on is kept");
+    }
+
     #[test]
     fn load_returns_defaults_when_file_missing() {
         let _g = TEST_LOCK.lock();

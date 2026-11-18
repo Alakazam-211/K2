@@ -54,6 +54,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Settings
 - **Settings → Workspaces / Agents shows the agent's name.** The list and the page header show the name you gave the agent (the folder stays on the line under it), change the moment you rename it, and search finds an agent by that name.
 - **Settings → Tunnel is laid out in two columns,** so Policies and Advanced are visible without scrolling.
+- **K2 shows a Claude login whose sign-in time has ended as signed out, and offers to sign in again.**
 
 ### Under the hood
 - **Updates the mail library to fix several upstream security issues** (lettre 0.11.24).

@@ -249,6 +249,10 @@ fn set_meta(conn: &Connection, id: &str, m: &store::CredMeta) -> Result<(), Wall
         "UPDATE person_wallet_items SET plan = COALESCE(?2, plan), expires_at = ?3 WHERE id = ?1",
         params![id, plan, m.expires_at],
     )?;
+    // A Claude sign-in that has ended (time limit) is signed out.
+    if let Some(why) = m.ended.as_ref().filter(|_| m.present) {
+        set_state(conn, id, state::NEEDS_LOGIN, Some(why.words().as_str()))?;
+    }
     Ok(())
 }
 

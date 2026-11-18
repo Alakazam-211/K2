@@ -521,10 +521,14 @@ pub fn validate_cred(tool: Tool, bytes: &[u8]) -> Result<(), String> {
             Ok(v @ serde_json::Value::Object(_)) if tool == Tool::Claude => {
                 let o = &v["claudeAiOauth"];
                 let has = |k: &str| o[k].as_str().map(|s| !s.is_empty()).unwrap_or(false);
-                if has("accessToken") || has("refreshToken") {
-                    Ok(())
-                } else {
-                    Err("it has no claudeAiOauth token".into())
+                if !(has("accessToken") || has("refreshToken")) {
+                    return Err("it has no claudeAiOauth token".into());
+                }
+                // A sign-in Claude itself ended (time limit) is never
+                // copied into a live store or a wallet slot.
+                match claude_login_ended(o, chrono::Utc::now().timestamp()) {
+                    Some(e) if e.by_claude() => Err("it is a sign-in Claude has ended".into()),
+                    _ => Ok(()),
                 }
             }
             Ok(serde_json::Value::Object(_)) => Ok(()),
@@ -1313,6 +1317,110 @@ pub struct CredMeta {
     pub org: Option<String>,
     /// Codex `last_refresh` (unix seconds).
     pub last_refresh: Option<i64>,
+    /// Claude: the sign-in has ended although its `claudeAiOauth` block
+    /// is still there ([`claude_login_ended`]). Signed out.
+    pub ended: Option<ClaudeEnded>,
+    /// Claude's `refreshTokenExpiresAt` (unix seconds): when the sign-in
+    /// reaches its time limit. Newer Claude Code files only.
+    pub sign_in_ends_at: Option<i64>,
+}
+
+// ── Claude sign-ins that have ended ────────────────────────────────
+
+/// Why a Claude sign-in has ended although its `claudeAiOauth` block is
+/// still in the file. Claude Code 2.1.319 keeps the block when a sign-in
+/// reaches its time limit: both tokens empty, `expiresAt: 0`, and
+/// `loginEnded: "time_limit"`. Newer files also carry
+/// `refreshTokenExpiresAt`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaudeEnded {
+    /// `loginEnded: "time_limit"`, or `refreshTokenExpiresAt` has passed
+    /// (when, in unix seconds, if the file says).
+    TimeLimit(Option<i64>),
+    /// `loginEnded` with any other value.
+    Ended,
+    /// No refresh token: the sign-in can't renew.
+    NoRefresh,
+}
+
+impl ClaudeEnded {
+    /// Claude itself ended it (not just a missing refresh token).
+    pub fn by_claude(&self) -> bool {
+        !matches!(self, ClaudeEnded::NoRefresh)
+    }
+
+    /// The token's state in plain words.
+    pub fn words(&self) -> String {
+        match self {
+            ClaudeEnded::TimeLimit(Some(at)) => {
+                format!("Claude's sign-in reached its time limit on {}; sign in again.", utc_words(*at))
+            }
+            ClaudeEnded::TimeLimit(None) => "Claude's sign-in reached its time limit; sign in again.".into(),
+            ClaudeEnded::Ended => "Claude ended this sign-in; sign in again.".into(),
+            ClaudeEnded::NoRefresh => "Claude's saved sign-in has no refresh token, so it can't renew; sign in again.".into(),
+        }
+    }
+}
+
+/// `2026-11-17 14:03 UTC`.
+pub fn utc_words(secs: i64) -> String {
+    chrono::DateTime::from_timestamp(secs, 0)
+        .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "an unknown time".into())
+}
+
+/// A time in a credential: unix seconds or milliseconds (a number or a
+/// numeric string), or RFC 3339. Zero or below = not set.
+fn cred_time_secs(v: &serde_json::Value) -> Option<i64> {
+    let n = match v {
+        serde_json::Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64))?,
+        serde_json::Value::String(s) => match s.trim().parse::<i64>() {
+            Ok(n) => n,
+            Err(_) => return chrono::DateTime::parse_from_rfc3339(s.trim()).ok().map(|d| d.timestamp()),
+        },
+        _ => return None,
+    };
+    (n > 0).then_some(if n > 1_000_000_000_000 { n / 1000 } else { n })
+}
+
+/// When a Claude `claudeAiOauth` block's sign-in reaches its time limit
+/// (`refreshTokenExpiresAt`), unix seconds.
+pub fn claude_sign_in_ends_at(oauth: &serde_json::Value) -> Option<i64> {
+    cred_time_secs(&oauth["refreshTokenExpiresAt"])
+}
+
+/// Has the sign-in in this `claudeAiOauth` block ended? Any of:
+/// `loginEnded` is set (any non-empty value), `refreshTokenExpiresAt`
+/// has passed, or the refresh token is missing or empty. Unknown fields
+/// are ignored; `None` for a block that isn't an object (no sign-in at
+/// all is the caller's own case).
+pub fn claude_login_ended(oauth: &serde_json::Value, now_secs: i64) -> Option<ClaudeEnded> {
+    if !oauth.is_object() {
+        return None;
+    }
+    let ends_at = claude_sign_in_ends_at(oauth);
+    match &oauth["loginEnded"] {
+        serde_json::Value::Null | serde_json::Value::Bool(false) => {}
+        serde_json::Value::String(s) if s.trim().is_empty() => {}
+        serde_json::Value::String(s) if s.trim() == "time_limit" => {
+            return Some(ClaudeEnded::TimeLimit(ends_at.filter(|x| *x <= now_secs)));
+        }
+        _ => return Some(ClaudeEnded::Ended),
+    }
+    if let Some(x) = ends_at.filter(|x| *x <= now_secs) {
+        return Some(ClaudeEnded::TimeLimit(Some(x)));
+    }
+    if oauth["refreshToken"].as_str().map_or(true, |s| s.trim().is_empty()) {
+        return Some(ClaudeEnded::NoRefresh);
+    }
+    None
+}
+
+/// [`claude_login_ended`] of a whole Claude credential file. `None` when
+/// it doesn't parse or has no `claudeAiOauth` block.
+pub fn claude_cred_ended(bytes: &[u8], now_secs: i64) -> Option<ClaudeEnded> {
+    let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    claude_login_ended(&v["claudeAiOauth"], now_secs)
 }
 
 fn jwt_claims(token: &str) -> Option<serde_json::Value> {
@@ -1346,6 +1454,8 @@ pub fn parse_meta(tool: Tool, bytes: &[u8]) -> CredMeta {
             m.expires_at = o["expiresAt"].as_i64().map(|x| if x > 1_000_000_000_000 { x / 1000 } else { x });
             m.plan = safe_label(o["subscriptionType"].as_str());
             m.rate_limit_tier = safe_label(o["rateLimitTier"].as_str());
+            m.ended = claude_login_ended(o, chrono::Utc::now().timestamp());
+            m.sign_in_ends_at = claude_sign_in_ends_at(o);
         }
         Tool::Codex => {
             let t = &v["tokens"];

@@ -733,7 +733,9 @@ pub fn next_signed_in(conn: &Connection, tool: Tool) -> Result<Option<Entry>, Wa
         if Some(e.id.as_str()) != active.as_deref()
             && !e.is_api_key()
             && e.state != state::SIGNING_IN
+            && e.state != state::NEEDS_LOGIN
             && slots::has_cred(tool, &e.id)
+            && slots::slot_meta(tool, &e.id).ended.is_none()
             && !pins::is_pinned(conn, &e.id)?
         {
             return Ok(Some(e.clone()));
@@ -750,3 +752,5 @@ mod pins_tests;
 mod identity_tests;
 #[cfg(test)]
 mod rotation_tests;
+#[cfg(test)]
+mod ended_tests;

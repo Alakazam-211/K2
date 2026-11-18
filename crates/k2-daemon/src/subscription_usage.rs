@@ -1225,6 +1225,11 @@ fn parse_claude_login(raw: &str) -> ClaudeLogin {
     if access.is_empty() {
         return ClaudeLogin::Missing;
     }
+    // A sign-in that has ended (Claude's time limit, `loginEnded`, no
+    // refresh token) is signed out, though the block is still there.
+    if k2_core::llm_accounts::store::claude_login_ended(oauth, chrono::Utc::now().timestamp()).is_some() {
+        return ClaudeLogin::Missing;
+    }
     let expires_at = oauth.get("expiresAt").and_then(|v| v.as_i64());
     let tier = oauth
         .get("rateLimitTier")
@@ -1242,8 +1247,9 @@ fn parse_claude_login(raw: &str) -> ClaudeLogin {
 }
 
 /// Keychain first on macOS, then `CLAUDE_CONFIG_DIR` when set, then
-/// `~/.claude/.credentials.json`. An empty access token is not a login.
-/// A missing refresh token does not reject a present access token.
+/// `~/.claude/.credentials.json`. An empty access token is not a login,
+/// nor is one whose sign-in has ended (no refresh token, `loginEnded`,
+/// or a past `refreshTokenExpiresAt`).
 fn login_from_sources(keychain: Option<&str>, files: &[Option<&str>]) -> ClaudeLogin {
     if let Some(raw) = keychain {
         let login = parse_claude_login(raw);
@@ -2939,12 +2945,32 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn access_token_without_refresh_token_is_signed_in() {
+    fn access_token_without_refresh_token_is_not_signed_in() {
+        // It can't renew: Claude Code asks for /login when it expires.
         let raw = r#"{"claudeAiOauth":{"accessToken":"present","expiresAt":1999999999,"rateLimitTier":"max_20x"}}"#;
-        match parse_claude_login(raw) {
-            ClaudeLogin::Token { plan, .. } => assert_eq!(plan, "Ultra"),
-            ClaudeLogin::Missing => panic!("access token without refresh must still count"),
-        }
+        assert!(matches!(parse_claude_login(raw), ClaudeLogin::Missing));
+        let empty = r#"{"claudeAiOauth":{"accessToken":"present","refreshToken":"","expiresAt":1999999999}}"#;
+        assert!(matches!(parse_claude_login(empty), ClaudeLogin::Missing));
+    }
+
+    #[test]
+    fn ended_claude_login_is_not_signed_in_and_does_not_get() {
+        // Claude Code 2.1.319 after the time limit: block kept, tokens empty.
+        let ended = r#"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0,"loginEnded":"time_limit","subscriptionType":"max"},"mcpOAuth":{}}"#;
+        assert!(matches!(parse_claude_login(ended), ClaudeLogin::Missing));
+        // loginEnded with tokens still in it, and a past refreshTokenExpiresAt.
+        let flagged = r#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":4102444800000,"loginEnded":"revoked"}}"#;
+        assert!(matches!(parse_claude_login(flagged), ClaudeLogin::Missing));
+        let past = r#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":4102444800000,"refreshTokenExpiresAt":1700000000000}}"#;
+        assert!(matches!(parse_claude_login(past), ClaudeLogin::Missing));
+        // A good file, with a future refreshTokenExpiresAt and unknown fields, stays signed in.
+        let good = r#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":4102444800000,"refreshTokenExpiresAt":4102444800000,"someNewField":1,"rateLimitTier":"max_20x"}}"#;
+        assert!(matches!(parse_claude_login(good), ClaudeLogin::Token { .. }));
+        let (wall, now) = wall(1_700_000_000);
+        let mut gets = 0;
+        let got = probe_claude(parse_claude_login(ended), |_| { gets += 1; Err("must not GET".into()) }, None, wall, now);
+        assert_eq!(gets, 0);
+        assert_eq!(got.status, STATUS_NOT_SIGNED_IN);
     }
 
     #[test]
@@ -2964,8 +2990,8 @@ pub(crate) mod tests {
 
     #[test]
     fn keychain_wins_over_file() {
-        let keychain = r#"{"claudeAiOauth":{"accessToken":"from-keychain","expiresAt":1700003600,"rateLimitTier":"max_20x"}}"#;
-        let file = r#"{"claudeAiOauth":{"accessToken":"from-file","expiresAt":1700003600,"subscriptionType":"pro"}}"#;
+        let keychain = r#"{"claudeAiOauth":{"accessToken":"from-keychain","refreshToken":"r","expiresAt":1700003600,"rateLimitTier":"max_20x"}}"#;
+        let file = r#"{"claudeAiOauth":{"accessToken":"from-file","refreshToken":"r","expiresAt":1700003600,"subscriptionType":"pro"}}"#;
         let login = login_from_sources(Some(keychain), &[Some(file)]);
         match login {
             ClaudeLogin::Token {

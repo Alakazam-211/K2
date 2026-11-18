@@ -126,6 +126,10 @@ fn parse_credential_json(raw: &str) -> Option<RawCredentials> {
     if access_token.is_empty() || refresh_token.is_empty() {
         return None;
     }
+    // Claude ended that sign-in (time limit): signed out.
+    if k2_core::llm_accounts::store::claude_login_ended(oauth, chrono::Utc::now().timestamp()).is_some() {
+        return None;
+    }
     Some(RawCredentials {
         json,
         refresh_token,
@@ -762,6 +766,12 @@ mod tests {
     #[test]
     fn parse_credential_json_rejects_empty_tokens() {
         let raw = r#"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}"#;
+        assert!(parse_credential_json(raw).is_none());
+    }
+
+    #[test]
+    fn parse_credential_json_rejects_an_ended_login() {
+        let raw = r#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":1234,"loginEnded":"time_limit"}}"#;
         assert!(parse_credential_json(raw).is_none());
     }
 

@@ -687,7 +687,16 @@ fn reconcile_live_locked(
     }
     let Some(o) = live_owner(conn, tool)? else { return Ok(out) };
     let Some(owner) = get(conn, &o)? else { return Ok(out) };
-    let Some(live) = store::read_live(tool)?.filter(|b| store::validate_cred(tool, b).is_ok()) else {
+    let live = store::read_live(tool)?;
+    // The CLI's own sign-in has ended (Claude's time limit): its token
+    // is signed out, whatever the wallet last saw. Nothing is mirrored.
+    if let Some(why) = live.as_deref().and_then(|b| store::parse_meta(tool, b).ended) {
+        if owner.state != state::SIGNING_IN {
+            mark_ended(conn, tool, &owner, &why, true)?;
+        }
+        return Ok(out);
+    }
+    let Some(live) = live.filter(|b| store::validate_cred(tool, b).is_ok()) else {
         return Ok(out);
     };
     let ask = |_: Tool, b: &[u8]| answer.filter(|a| a.fp == fingerprint(b)).and_then(|a| a.who.clone());
@@ -2237,8 +2246,13 @@ pub fn recheck(conn: &Connection, id: &str) -> Result<Entry, WalletError> {
         m.email = record.as_ref().and_then(|(r, _)| r.email.clone()).filter(|x| e.email.as_deref() != Some(x.as_str()));
         m.org = None;
     }
+    // A Claude sign-in that has ended (time limit) is signed out, though
+    // its file still holds a `claudeAiOauth` block: say why.
+    let ended = m.ended.clone().filter(|_| m.present && e.state != state::SIGNING_IN);
     let st = if e.state == state::SIGNING_IN {
         state::SIGNING_IN
+    } else if ended.is_some() {
+        state::NEEDS_LOGIN
     } else if !m.present {
         if is_active {
             state::NEEDS_LOGIN
@@ -2253,8 +2267,31 @@ pub fn recheck(conn: &Connection, id: &str) -> Result<Entry, WalletError> {
     } else {
         state::SIGNED_IN
     };
-    update_meta(conn, &e.id, &meta_update_from(&m, st))?;
+    let mut u = meta_update_from(&m, st);
+    if let Some(why) = &ended {
+        u.detail = Some(Some(ended_detail(tool, &e, why, is_active)));
+    } else if st == state::SIGNED_IN && e.state == state::NEEDS_LOGIN {
+        // Back from "sign in again": the old reason no longer holds.
+        u.detail = Some(None);
+    }
+    update_meta(conn, &e.id, &u)?;
     get(conn, &e.id)?.ok_or(WalletError::NotFound(e.id))
+}
+
+/// The detail an ended Claude sign-in shows on its token.
+pub(crate) fn ended_detail(_tool: Tool, _e: &Entry, why: &store::ClaudeEnded, _live: bool) -> String {
+    why.words()
+}
+
+/// Mark `e` "sign in again" because its Claude sign-in has ended (once:
+/// a row already saying so is left alone).
+fn mark_ended(conn: &Connection, tool: Tool, e: &Entry, why: &store::ClaudeEnded, live: bool) -> Result<(), WalletError> {
+    let detail = ended_detail(tool, e, why, live);
+    if e.state == state::NEEDS_LOGIN && e.detail.as_deref() == Some(detail.as_str()) {
+        return Ok(());
+    }
+    crate::log_debug!("[llm-accounts] {}/{}: sign-in ended ({why:?}); marked sign in again", tool.as_str(), e.id);
+    update_meta(conn, &e.id, &MetaUpdate { state: Some(state::NEEDS_LOGIN.into()), detail: Some(Some(detail)), ..Default::default() })
 }
 
 /// How often an idle slot is refreshed even when its access token is not
@@ -2265,7 +2302,7 @@ pub const WARM_BEFORE_EXPIRY_SECS: i64 = 3600;
 
 /// Is an idle slot due for a keep-warm refresh?
 pub fn warm_due(tool: Tool, meta: &CredMeta, entry: &Entry, now: i64) -> bool {
-    if !meta.present {
+    if !meta.present || meta.ended.is_some() {
         return false;
     }
     if tool != Tool::Grok && !meta.has_refresh {
@@ -2353,6 +2390,12 @@ pub fn keep_warm_with(
                     continue;
                 }
                 let meta = slots::slot_meta(tool, &e.id);
+                if let Some(why) = meta.ended.as_ref().filter(|_| meta.present) {
+                    // Claude ended this sign-in: nothing to refresh, and
+                    // the token says "sign in again".
+                    mark_ended(conn, tool, &e, why, false)?;
+                    continue;
+                }
                 if warm_due(tool, &meta, &e, now_secs) {
                     v.push((tool, e));
                 }

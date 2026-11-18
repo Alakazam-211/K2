@@ -432,7 +432,7 @@ describe('the Live view’s words', () => {
     const d = (code: string, message?: string) => closedText({ reason: 'declined', code, ...(message ? { message } : {}) })
     expect(d('protected', why)).toBe(`This file can’t be edited live: ${why}.`)
     expect(d('secret', '.env looks like it holds a secret (dotenv); it is never a live doc')).toBe('This file can’t be edited live: it looks like it holds a secret.')
-    expect(d('generated')).toBe('This file can’t be edited live: K2 writes it itself. Edit its source instead.')
+    expect(d('generated')).toBe('This file can’t be edited live: it’s made from other files. Edit its source instead.')
     expect(d('not_a_text_doc')).toBe('This file can’t be edited live: it isn’t text.')
     expect(d('workspace_not_found', 'that file is not inside a workspace on this server')).toBe('This file can’t be edited live: it isn’t inside a workspace on this server.')
     expect(d('workspace_mismatch')).toBe('This file can’t be edited live: it’s outside this workspace.')

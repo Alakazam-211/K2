@@ -44,12 +44,12 @@ export const WHO_ROUTE = 'docs/who'
 export const CORES_ROUTE = 'docs/cores'
 
 /** Refusals made here, never the kit's. */
-export const NO_ROUTE = 'K2-NO-EDIT-ROUTE'
-export const NOT_SENT = 'K2-NOT-SENT'
+export const NO_ROUTE = 'no-edit-route'
+export const NOT_SENT = 'not-sent'
 /** The server can't save drawing edits: the message is its own words. */
-export const WRITER_OFF = 'K2-CAD-WRITER-OFF'
-/** What a writer-off refusal says when the server gives no words. */
-export const WRITER_OFF_WORDS = 'K2 can’t save drawing edits yet; this file opens read-only.'
+export const WRITER_OFF = 'cad-writer-off'
+/** What a writer-off refusal says when the server gives no words (never a copy of the server's own). */
+export const WRITER_OFF_WORDS = 'This server can’t save drawing edits yet; this file opens read-only.'
 
 const MISSING = new Set([404, 405, 501])
 const KIT_ID = /^(MPC|DXF|CAD)-E\d+$/

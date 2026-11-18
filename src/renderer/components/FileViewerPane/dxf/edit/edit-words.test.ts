@@ -28,7 +28,8 @@ describe('refusalWords', () => {
     const seen = new Set<string>()
     for (const id of [...PACK, ...KIT, ...OURS]) {
       const w = say(id, `@h:41 kit message for ${id}`).words
-      expect(w, id).not.toMatch(/[A-Z]{3}-E\d|K2-[A-Z]|@h:|kit message/)
+      expect(w, id).not.toMatch(/[A-Z]{3}-E\d|@h:|kit message/)
+      expect(w, id).not.toContain(id)
       expect(w, id).toMatch(/^[A-Z“]/)
       expect(w, id).toMatch(/[.?]$/)
       seen.add(w)
@@ -88,7 +89,7 @@ describe('refusalWords', () => {
     expect(i('DXF-E051', 'block SITE is an external reference').words).toBe('Not inserted. That block is a linked drawing. Insert it in your CAD app.')
     expect(i('DXF-E051', 'block *Paper_Space is a layout').words).toBe('Not inserted. That’s a layout’s own block, not one you can place.')
     expect(i('DXF-E051', 'block *U4 is anonymous').words).toBe('Not inserted. That block is one your CAD app made for itself, so it can’t be placed.')
-    expect(i('DXF-E051', 'block TAG is annotative').words).toBe('Not inserted. That block is annotative, which K2 can’t place yet. Insert it in your CAD app.')
+    expect(i('DXF-E051', 'block TAG is annotative').words).toBe('Not inserted. That block is annotative, which can’t be placed here yet. Insert it in your CAD app.')
     expect(i('DXF-E051', 'something else').words).toBe('Not inserted. That block can’t be placed here.')
     expect(i('DXF-E043').words).toBe('Not inserted. That block holds an object made by another app. Insert it in that app.')
     expect(i('DXF-E044').words).toBe('Not inserted. That’s a dynamic block. Insert it in your CAD app, where its settings work.')
@@ -118,6 +119,22 @@ describe('a writer that’s off', () => {
     const hint = 'K2 can’t save drawing edits yet; this file opens read-only.'
     expect(say(WRITER_OFF, hint)).toEqual({ words: hint, refresh: false, off: hint })
   })
+  it('with no words from the server, says the server can’t save them, without naming the product', () => {
+    expect(WRITER_OFF_WORDS).toBe('This server can’t save drawing edits yet; this file opens read-only.')
+    expect(say(WRITER_OFF).off).toBe(WRITER_OFF_WORDS)
+  })
+})
+
+describe('the refusals made on this side', () => {
+  it('say what failed, and name no product', () => {
+    expect(say(NO_ROUTE).words).toBe('Not moved. This server can’t change drawings yet. Ask its owner to update it.')
+    expect(say(NOT_SENT).words).toBe('Not moved. Couldn’t reach the server. Try again.')
+    expect(say(NO_DIGEST).words).toBe('Not moved. Couldn’t check this change. Please report it with the file.')
+    expect(say('DXF-E002').words).toBe('Not moved. This file can’t be read as a DXF drawing.')
+    expect(say('MPC-E724').words).toBe('Not moved. It isn’t clear which items these are. Select them again.')
+    expect(say('SOMETHING-NEW').words).toBe('Not moved. Couldn’t make this change. Try again, or report it with the file.')
+    for (const id of [NO_ROUTE, NOT_SENT, NO_DIGEST, WRITER_OFF]) expect(id, id).toMatch(/^[a-z-]+$/)
+  })
 })
 
 describe('the drawing model’s edit words', () => {
@@ -127,15 +144,15 @@ describe('the drawing model’s edit words', () => {
       hatch: 'Hatches can’t be changed here yet.',
       leader: 'Leaders can’t be changed here yet.',
       'own-frame': 'This is drawn in its own frame. Change it in your CAD app.',
-      unknown: 'K2 doesn’t know this kind yet.',
+      unknown: 'This kind of item can’t be changed here yet.',
       image: 'Images can’t be changed here yet.',
       dimension: 'Dimensions can’t be changed here yet.',
       solid3d: '3D solids can’t be changed here.',
     }
     for (const [w, words] of Object.entries(want)) expect(whyWords(w), w).toBe(words)
   })
-  it('a row of a drawing K2 only reads (DWG) says so', () => {
-    expect(whyWords('read-only')).toBe('This drawing is read-only in K2.')
+  it('a row of a drawing that only opens to read (DWG) says so', () => {
+    expect(whyWords('read-only')).toBe('This drawing is read only here.')
   })
   it('the pack’s other words have their own reasons, never the unknown one', () => {
     for (const w of ['version', 'no-handle', 'xref', 'dynamic', 'proxy', 'multiline-attribute', 'embedded', 'reactors', 'viewport', 'read-only'])

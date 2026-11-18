@@ -184,7 +184,7 @@ describe('rotating', () => {
     // Marked read-only without the header saying so: the row's own reason, and still no controls.
     await open({ pages })
     click('@h:41')
-    expect(screen.getByTestId('dxf-edit-cant').textContent).toContain('This drawing is read-only in K2.')
+    expect(screen.getByTestId('dxf-edit-cant').textContent).toContain('This drawing is read only here.')
     expect(screen.queryByTestId('dxf-move-by')).toBeNull()
     expect(screen.queryByTestId('dxf-scale-by')).toBeNull()
     expect(screen.queryByTestId('dxf-handles')).toBeNull()

@@ -84,7 +84,7 @@ const PENDING = 'MPC-E713'
 const MAX_WAIT_MS = 5000
 
 /** A refusal made here: the dry run came back without the digest to store. */
-export const NO_DIGEST = 'K2-NO-DIGEST'
+export const NO_DIGEST = 'no-digest'
 
 const unchanged = (r: ToolResult): boolean => r.ok && r.after === null && /^no change\b/i.test(r.stdout.trim())
 

@@ -68,7 +68,7 @@ describe('daemonCadChangeSource', () => {
     const hint = 'K2 can’t save drawing edits yet; this file opens read-only.'
     expect(await refuse(409, 'cad_writer_disabled', hint)).toEqual({ ok: false, words: hint, off: hint })
     expect(await refuse(403, 'edit_forbidden')).toEqual({ ok: false, words: 'You can’t change this drawing.' })
-    expect(await refuse(400, 'bad_request')).toEqual({ ok: false, words: 'K2 couldn’t undo this. Please report it with the file.' })
+    expect(await refuse(400, 'bad_request')).toEqual({ ok: false, words: 'Couldn’t undo this. Please report it with the file.' })
     // Only the full codes: a short form is just the server's message.
     expect(await refuse(409, 'not_latest', 'raw words')).toEqual({ ok: false, words: 'raw words' })
     expect(await refuse(409, 'stale', 'raw words')).toEqual({ ok: false, words: 'raw words' })

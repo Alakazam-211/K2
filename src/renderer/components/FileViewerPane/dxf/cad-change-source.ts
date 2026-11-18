@@ -27,7 +27,7 @@ export const UNDO_WORDS = {
   forbidden: 'You can’t change this drawing.',
   coreOff: 'Drawing edits are off on this server; this file opens read-only.',
   missing: 'Undo isn’t on this server yet.',
-  badRequest: 'K2 couldn’t undo this. Please report it with the file.',
+  badRequest: 'Couldn’t undo this. Please report it with the file.',
 } as const
 
 export interface CadChangeSource {

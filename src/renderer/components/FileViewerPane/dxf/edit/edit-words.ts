@@ -21,7 +21,7 @@ export const WHY_WORDS = {
   hatch: 'Hatches can’t be changed here yet.',
   leader: 'Leaders can’t be changed here yet.',
   'own-frame': 'This is drawn in its own frame. Change it in your CAD app.',
-  unknown: 'K2 doesn’t know this kind yet.',
+  unknown: 'This kind of item can’t be changed here yet.',
   image: 'Images can’t be changed here yet.',
   dimension: 'Dimensions can’t be changed here yet.',
   solid3d: '3D solids can’t be changed here.',
@@ -35,8 +35,8 @@ export const WHY_WORDS = {
   'multiline-attribute': 'It has a label with more than one line. Change it in your CAD app.',
   'no-handle': 'It has no handle. Save the drawing again in your CAD app.',
   version: 'The drawing was saved before DXF 2000. Save it as DXF 2000 or later in your CAD app.',
-  // Every row of a drawing K2 only reads (DWG).
-  'read-only': 'This drawing is read-only in K2.',
+  // Every row of a drawing that only opens to read (DWG).
+  'read-only': 'This drawing is read only here.',
 } as const
 
 /** A reason word as given (any case or spacing). */
@@ -52,7 +52,7 @@ export function whyWords(why: string, layer?: string | null): string {
 
 /** Whole-drawing reasons: the header line says these. */
 export const OFF_WORDS = {
-  dwg: 'View only: K2 can’t change DWG drawings yet. Save it as DXF in your CAD app to change it here.',
+  dwg: 'View only: DWG drawings can’t be changed yet. Save it as DXF in your CAD app to change it here.',
   binary: 'View only: this is a binary DXF. Save it as ASCII DXF in your CAD app to change it here.',
   old: 'View only: saved before DXF 2000. Save it as DXF 2000 or later in your CAD app to change it here.',
   handles: 'View only: this drawing is missing handles. Save it again in your CAD app to change it here.',
@@ -75,8 +75,8 @@ export function viewOnlyWhy(header: HeaderLike, rows: readonly { h?: unknown }[]
   return null
 }
 
-/** Every check of a change that fails on K2's side reads the same. */
-const CHECK_FAILED = 'K2 couldn’t check this change. Please report it with the file.'
+/** Every check of a change that fails on this side reads the same. */
+const CHECK_FAILED = 'Couldn’t check this change. Please report it with the file.'
 
 export type RefusalWords = {
   words: string
@@ -130,7 +130,7 @@ function valueWords(message: string, text: boolean): string {
 /** Why a block can't be placed, from the words in the pack's message: missing, linked, a layout, anonymous or annotative. */
 function notInsertable(message: string): { why: string; refresh: boolean; off: null } {
   const plain = (why: string, refresh = false) => ({ why, refresh, off: null })
-  if (/annotative/i.test(message)) return plain('That block is annotative, which K2 can’t place yet. Insert it in your CAD app.')
+  if (/annotative/i.test(message)) return plain('That block is annotative, which can’t be placed here yet. Insert it in your CAD app.')
   if (/external|xref/i.test(message)) return plain('That block is a linked drawing. Insert it in your CAD app.')
   if (/layout/i.test(message)) return plain('That’s a layout’s own block, not one you can place.')
   if (/anonymous/i.test(message)) return plain('That block is one your CAD app made for itself, so it can’t be placed.')
@@ -148,7 +148,7 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
     case 'DXF-E001':
       return plain('This is a binary DXF. Save it as ASCII DXF in your CAD app to change it here.', false, OFF_WORDS.binary)
     case 'DXF-E002':
-      return plain('K2 can’t read this file as a DXF drawing.')
+      return plain('This file can’t be read as a DXF drawing.')
     case 'DXF-E003':
       return plain('This drawing is too large to change here.')
     case 'DXF-E010':
@@ -218,7 +218,7 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
     case 'MPC-E723':
       return plain('Someone changed this since you looked. The drawing has been refreshed.', true)
     case 'MPC-E724':
-      return plain('K2 couldn’t be sure which items these are. Select them again.')
+      return plain('It isn’t clear which items these are. Select them again.')
     case 'MPC-E725':
     case 'MPC-E726':
     case 'MPC-E727':
@@ -231,13 +231,13 @@ function reason(id: string, e: { message: string; details: Record<string, unknow
     case WRITER_OFF:
       return plain(e.message || WRITER_OFF_WORDS, false, e.message || WRITER_OFF_WORDS)
     case NO_ROUTE:
-      return plain('This server can’t change drawings yet. Ask its owner to update K2.')
+      return plain('This server can’t change drawings yet. Ask its owner to update it.')
     case NOT_SENT:
-      return plain('K2 couldn’t reach the server. Try again.')
+      return plain('Couldn’t reach the server. Try again.')
     case NO_DIGEST:
       return plain(CHECK_FAILED)
     default:
-      return plain('K2 couldn’t make this change. Try again, or report it with the file.')
+      return plain('Couldn’t make this change. Try again, or report it with the file.')
   }
 }
 

@@ -467,7 +467,7 @@ describe('when the server can’t save drawing edits', () => {
     expect(Object.keys((await world.model.header())!)[0]).toBe('writer')
     expect(screen.getByTestId('dxf-shapes').getAttribute('data-source')).toBe('model')
     expect(screen.getByTestId('dxf-stats').textContent).toMatch(/^49 entities/)
-    expect(screen.getByTestId('dxf-view-only').textContent).toBe('K2 can’t save drawing edits yet; this file opens read-only.')
+    expect(screen.getByTestId('dxf-view-only').textContent).toBe('This server can’t save drawing edits yet; this file opens read-only.')
     click('@h:41')
     expect(screen.queryByTestId('dxf-move-by')).toBeNull()
   })
@@ -506,7 +506,7 @@ describe('when the server can’t save drawing edits', () => {
 describe('when editing isn’t on', () => {
   it('a DWG drawing: view only, the header says why, no edit controls', async () => {
     await open({ header: { ...HEADER, format: 'dwg' } })
-    expect(screen.getByTestId('dxf-view-only').textContent).toMatch(/^View only: K2 can’t change DWG drawings yet\./)
+    expect(screen.getByTestId('dxf-view-only').textContent).toMatch(/^View only: DWG drawings can’t be changed yet\./)
     click('@h:41')
     expect(screen.getByTestId('dxf-edit-count').textContent).toBe('1 selected')
     expect(screen.queryByTestId('dxf-move-by')).toBeNull()

@@ -4738,6 +4738,7 @@ dependencies = [
  "oxc_syntax",
  "p256 0.13.2",
  "parking_lot",
+ "postal-sdk",
  "prost 0.13.5",
  "quick-xml 0.38.4",
  "rcgen 0.13.2",
@@ -7417,6 +7418,28 @@ name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
+
+[[package]]
+name = "postal-sdk"
+version = "0.0.1"
+source = "git+https://github.com/Alakazam-211/postal-bot?rev=d33b0fde532607bdf4213cceeaba2859fbfc6f73#d33b0fde532607bdf4213cceeaba2859fbfc6f73"
+dependencies = [
+ "base64 0.22.1",
+ "chacha20poly1305 0.10.1",
+ "ed25519-dalek",
+ "getrandom 0.2.17",
+ "hkdf 0.12.4",
+ "pkcs8 0.10.2",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "spki 0.7.3",
+ "subtle",
+ "ulid",
+ "x25519-dalek 2.0.1",
+ "zeroize",
+]
 
 [[package]]
 name = "potential_utf"
@@ -11074,6 +11097,16 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "ulid"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "470dbf6591da1b39d43c14523b2b469c86879a53e8b758c8e090a470fe7b1fbe"
+dependencies = [
+ "rand 0.9.4",
+ "web-time",
 ]
 
 [[package]]

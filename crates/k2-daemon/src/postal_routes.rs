@@ -731,9 +731,9 @@ pub(crate) fn receive_rekey(ws_id: &str, peer: &k2_core::postal::Address) -> Res
     Ok(json!({ "friend": f, "card": card }))
 }
 
-/// The SDK's `HumanGate`, K2's side: each gate records and presents a card,
-/// and never decides. The network half (postal-sdk wire v2 + the plane's
-/// pair API) calls it; nothing does in this release. When S3–S5 wire it,
+/// postal-sdk's `HumanGate`, K2's side: each gate records and presents a
+/// card, and never decides. The SDK's pairing (over the plane's pair API,
+/// P-1..P-3 and P-7) calls it; nothing does in this release. When S3–S5 wire it,
 /// follow the four rules in [`k2_core::postal::gate`] (SeenStore = the
 /// `msg_deliveries` unique insert in the storing transaction; verify the
 /// `p5-msg-v1` hop proof on live delivery; stop the pull loop when
@@ -751,14 +751,18 @@ impl k2_core::postal::gate::HumanGate for K2Gate {
             k2_core::log_debug!("[postal] friend request for an address nobody here holds: {}", req.local_handle);
             return;
         };
+        // Both boxes get one (the side that asked too): the request row
+        // waits on a person either way. The fingerprint is the SDK's own,
+        // from the peer's key; the code is this box's, for people only.
+        let fingerprint = req.peer_fingerprint.to_hex();
         if let Err(e) = receive_request(
             &ws_id,
             &peer,
             req.peer_owner_name.as_deref(),
-            req.fingerprint.as_deref(),
+            Some(fingerprint.as_str()),
             Some(req.pair_id.as_str()),
-            req.note.as_deref(),
-            req.code.as_deref(),
+            None,
+            Some(req.show_code.as_str()),
         ) {
             k2_core::log_debug!("[postal] friend request from {} refused: {}", req.peer, e.code());
         }

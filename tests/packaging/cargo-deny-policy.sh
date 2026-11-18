@@ -54,8 +54,8 @@ s = d.get("sources", {})
 want(s.get("unknown-registry") == "deny", "sources.unknown-registry = deny")
 want(s.get("unknown-git") == "deny", "sources.unknown-git = deny")
 want(s.get("allow-registry") == ["https://github.com/rust-lang/crates.io-index"], "sources.allow-registry = crates.io only")
-want(s.get("allow-git") == [],
-     f"sources.allow-git = none (every Sew crate is on crates.io since Sew 0.10.4; the sew-crates mirror retired), got {s.get('allow-git')}")
+want(s.get("allow-git") == ["https://github.com/Alakazam-211/postal-bot"],
+     f"sources.allow-git = postal-bot only (postal-sdk's S1 git pin, Kessel Steward 2026-11-17; every Sew crate is on crates.io since Sew 0.10.4), got {s.get('allow-git')}")
 want(s.get("required-git-spec") == "rev", "sources.required-git-spec = rev")
 want(d.get("advisories", {}).get("unused-ignored-advisory") == "warn", "advisories.unused-ignored-advisory = warn (the per-tree note stays on)")
 want(l.get("unused-license-exception", "warn") == "warn", "the per-tree unused-exception note stays on")

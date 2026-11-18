@@ -181,6 +181,35 @@ pub fn address_holder(conn: &Connection, address: &str) -> Option<String> {
     conn.query_row("SELECT workspace_id FROM postal_handles WHERE address = ?1", params![address], |r| r.get(0)).optional().ok().flatten()
 }
 
+/// The live handle with this address, if any.
+pub fn handle_by_address(conn: &Connection, address: &str) -> Option<Handle> {
+    conn.query_row(
+        &format!("SELECT {HANDLE_COLS} FROM postal_handles WHERE address = ?1 AND status != 'released'"),
+        params![address],
+        handle_row,
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
+/// A friend's pinned public key (PEM), if one was pinned.
+pub fn peer_key_pem(conn: &Connection, id: &str) -> Option<String> {
+    conn.query_row("SELECT peer_key_pem FROM postal_friends WHERE id = ?1", params![id], |r| r.get(0)).optional().ok().flatten().flatten()
+}
+
+/// Pin a friend's key (the SDK, after a person accepted): fingerprint, PEM
+/// and when. The status is never changed here: a person's card does that.
+pub fn pin_key(conn: &Connection, id: &str, fingerprint: &str, pem: &str) -> Result<(), StoreError> {
+    let t = now();
+    conn.execute(
+        "UPDATE postal_friends SET peer_fingerprint = ?2, peer_key_pem = ?3, pinned_at = ?4, updated_at = ?4 WHERE id = ?1",
+        params![id, fingerprint, pem, t],
+    )
+    .map_err(db)?;
+    Ok(())
+}
+
 /// Every live handle on this server, oldest first.
 pub fn handles(conn: &Connection) -> Vec<Handle> {
     let Ok(mut st) = conn.prepare(&format!("SELECT {HANDLE_COLS} FROM postal_handles WHERE status != 'released' ORDER BY created_at, id")) else {

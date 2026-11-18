@@ -4,14 +4,14 @@
 //! returns**: a person answers later, and the host calls back into the SDK
 //! with the answer and the pairing code. K2's person is a permission card.
 //!
-//! **What is real today and what waits.** K2 doesn't link postal-sdk yet:
-//! the pin waits on **SDK wire v2 (S1, Postal Bot)**, and the requests
-//! themselves come from the **plane's pair API (P-1, P-2, P-3, P-7, K2
-//! Web)**. Until both exist:
-//! - [`HumanGate`], [`FriendRequest`] and [`RekeyPending`] mirror the SDK's
-//!   types (postal-sdk `host.rs` at postal-bot `540d688`), so the daemon's
-//!   implementation (`postal_routes::K2Gate`) is the one the SDK will call;
-//!   nothing calls it outside tests;
+//! **What is real today and what waits.** K2 links postal-sdk (pinned at
+//! postal-bot `d33b0fde532607bdf4213cceeaba2859fbfc6f73`, wire v2) and
+//! implements its host traits: [`HumanGate`] in the daemon
+//! (`postal_routes::K2Gate`, which presents the cards) and `FriendStore` on
+//! the friend rows ([`super::friend_store`]). The requests themselves come
+//! from the **plane's pair API (P-1, P-2, P-3, P-7, K2 Web)** and the
+//! receive and send paths are S4–S6, so in this release nothing outside
+//! tests calls them:
 //! - the pairing code ([`set_code`]) is **this box's** six digits from the
 //!   SDK's SAS v2 pairing (`FriendRequest::show_code`), for the owner to
 //!   read **out** to the other side. It is never shown to an agent (not on
@@ -60,39 +60,10 @@ pub const NOT_YET: &str = "not_available_yet";
 /// Accepting a request that carries a pairing code: not in this release.
 pub const CODE_NOT_YET: &str = "postal_code_check_not_available";
 
-/// An incoming friend request, waiting for a person (the SDK's
-/// `FriendRequest`, plus what K2 shows on the card).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FriendRequest {
-    pub pair_id: String,
-    /// The local handle's address (`scout::acme.postal.bot`).
-    pub local_handle: String,
-    pub peer: String,
-    pub peer_owner_name: Option<String>,
-    /// The peer key's fingerprint, pinned when a person accepts.
-    pub fingerprint: Option<String>,
-    /// This box's SAS v2 pairing code (six digits, to read out), when the
-    /// pairing has one. People only.
-    pub code: Option<String>,
-    /// The peer's note.
-    pub note: Option<String>,
-}
-
-/// A friend's key changed on the plane, waiting for a person.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RekeyPending {
-    pub local_handle: String,
-    pub peer: String,
-    pub old_fingerprint: String,
-    pub new_fingerprint: String,
-}
-
-/// Human gates record and return; they never decide (postal-sdk
-/// `HumanGate`).
-pub trait HumanGate {
-    fn friend_request(&self, req: &FriendRequest);
-    fn rekey(&self, pending: &RekeyPending);
-}
+/// The SDK's human-gate types, used as they are (postal-sdk `host`):
+/// `FriendRequest` carries `show_code` (this box's six digits, people only)
+/// and the peer's `Fingerprint`, derived by the SDK.
+pub use postal_sdk::host::{FriendRequest, HumanGate, RekeyPending};
 
 /// A person's answer, for the SDK.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

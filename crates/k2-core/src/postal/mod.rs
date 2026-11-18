@@ -17,9 +17,10 @@
 //!   off by default). Every friend request, incoming or outgoing, waits for
 //!   a person's permission card.
 //!
-//! - **The human gates (S3, [`gate`]).** The SDK's `HumanGate` seam: K2
-//!   presents a card for each request, keeps the pairing code the card
-//!   shows, and queues every person's answer for the SDK.
+//! - **The SDK's host traits (S3, [`gate`], [`friend_store`]).** postal-sdk
+//!   is linked (a git pin): K2 implements its `HumanGate` (a card for each
+//!   request; this box's pairing code kept for people only; every answer
+//!   queued for the SDK) and its `FriendStore` on the friend rows.
 //!
 //! **Waits on others (never pretended):** native pairing, receive, send
 //! and held mail need postal-sdk wire v2 (S1, Postal Bot) and the plane's
@@ -32,8 +33,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 
+pub mod friend_store;
 pub mod gate;
 pub mod store;
+
+/// postal-sdk (MIT), pinned by full sha in k2-core's Cargo.toml.
+pub use postal_sdk as sdk;
 
 /// The `/boot-status` feature key while the server's Postal switch is on:
 /// clients show the Postal tab only then.

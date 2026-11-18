@@ -239,6 +239,7 @@ fn an_agent_turns_a_request_down_itself_and_a_coded_request_waits() {
 #[test]
 fn the_sdk_gate_records_and_never_decides() {
     use k2_core::postal::gate::{FriendRequest, HumanGate, RekeyPending};
+    use k2_core::postal::sdk::pairing::{Fingerprint, Side};
     let _home = crate::test_support::TempHome::new();
     let _on = switch_for_test(true);
     let ws = seed_ws("pgate");
@@ -249,9 +250,9 @@ fn the_sdk_gate_records_and_never_decides() {
         local_handle: me.clone(),
         peer: "lab::gamma.postal.bot".into(),
         peer_owner_name: Some("Dana".into()),
-        fingerprint: Some("SHA256:g1".into()),
-        code: None,
-        note: Some("hello".into()),
+        side: Side::To,
+        show_code: "111222".into(),
+        peer_fingerprint: Fingerprint::from_bytes([7; 32]),
     };
     K2Gate.friend_request(&req);
     let f = k2_core::db::read(|c| {
@@ -259,12 +260,23 @@ fn the_sdk_gate_records_and_never_decides() {
         store::friend_by_peer(c, &h.id, "lab::gamma.postal.bot").unwrap()
     });
     assert_eq!((f.status.as_str(), f.pair_id.as_deref(), f.owner_name.as_deref()), ("pending_in", Some("pr_g"), Some("Dana")));
-
+    assert_eq!(f.peer_fingerprint.as_deref(), Some("07".repeat(32).as_str()), "the SDK's fingerprint, as hex");
+    assert_eq!(k2_core::postal::gate::code(&f.id).as_deref(), Some("111222"), "this box's code, kept for people");
+    // Accepting it needs the SDK's handshake: not in this release.
+    let (s, v) = call(DECIDE, Who::Owner, true, json!({ "workspace": ws.path, "id": f.id, "decision": "accept" }), &[]);
+    assert_eq!((s, v["error"]["code"].as_str()), (409, Some("postal_code_check_not_available")), "{v}");
     // A request for an address nobody here holds is dropped, not recorded.
-    K2Gate.friend_request(&FriendRequest { local_handle: "nobody::acme.postal.bot".into(), ..req.clone() });
-    // The person accepts; then the friend's key changes: it waits again.
-    let (s, _) = call(DECIDE, Who::Owner, true, json!({ "workspace": ws.path, "id": f.id, "decision": "accept" }), &[]);
+    K2Gate.friend_request(&FriendRequest { local_handle: "nobody::acme.postal.bot".into(), peer: "x9::gamma.postal.bot".into(), ..req.clone() });
+    assert!(k2_core::db::read(|c| {
+        let h = store::handle_for_workspace(c, &ws.id).unwrap();
+        store::friend_by_peer(c, &h.id, "x9::gamma.postal.bot")
+    })
+    .is_none());
+    // A friend a person accepted; then its key changes: it waits again.
+    let p2 = k2_core::postal::parse_address("lab2::gamma.postal.bot").unwrap();
+    let id2 = receive_request(&ws.id, &p2, None, None, None, None, None).unwrap()["friend"]["id"].as_str().unwrap().to_string();
+    let (s, _) = call(DECIDE, Who::Owner, true, json!({ "workspace": ws.path, "id": id2, "decision": "accept" }), &[]);
     assert_eq!(s, 200);
-    K2Gate.rekey(&RekeyPending { local_handle: me, peer: "lab::gamma.postal.bot".into(), old_fingerprint: "SHA256:g1".into(), new_fingerprint: "SHA256:g2".into() });
-    assert_eq!(k2_core::db::read(|c| store::friend(c, &f.id)).unwrap().status, "rekey_pending");
+    K2Gate.rekey(&RekeyPending { local_handle: me, peer: "lab2::gamma.postal.bot".into(), old_fingerprint: "a".into(), new_fingerprint: "b".into() });
+    assert_eq!(k2_core::db::read(|c| store::friend(c, &id2)).unwrap().status, "rekey_pending");
 }

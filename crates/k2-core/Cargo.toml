@@ -87,6 +87,14 @@ k2-simvideo = { path = "../k2-simvideo" }
 # Shared primitive deps.
 parking_lot = "0.12"
 
+# Postal (prd-postal-in-k2-v1 S1): postal-sdk, MIT, from the public
+# postal-bot repo, pinned by its full sha (Kessel Steward 2026-11-17: a
+# git pin during S1, on deny.toml's allow-git, its notice in NOTICE.md).
+# Default features only (no hold-v1). k2-core is publish = false, and no
+# crate published to crates.io may depend on it while it is a git pin.
+# Each bump goes through the Steward's push-range check.
+postal-sdk = { git = "https://github.com/Alakazam-211/postal-bot", rev = "d33b0fde532607bdf4213cceeaba2859fbfc6f73" }
+
 # DB layer (migrations live in crates/k2-core/drizzle_sql/, loaded via
 # include_str!). Bundled SQLite so every platform ships the same version.
 rusqlite = { version = "0.41", features = ["bundled", "hooks"] }

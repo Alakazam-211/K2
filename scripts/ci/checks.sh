@@ -88,6 +88,7 @@ part_web() {
     step "CLI tests take their k2 from _cli_under_test.sh"; bash tests/cli/cli_under_test_gate.sh
     step "every urlopen in cli/src carries the hand-over headers"; bash tests/cli/k5_urlopen_gate.sh
     step "k2 study prints cli/text/study byte for byte"; bash tests/cli/study_text.sh
+    step "k2 help prints cli/text/help byte for byte"; bash tests/cli/help_text.sh
     step "the CLI test helper picks the program";  bash tests/cli/cli_under_test_helper.sh
     step "CLI help names no machine of ours";      bash tests/cli/help_node_names.sh
     step "k2 answers the same under every name";   bash tests/cli/called_as.sh

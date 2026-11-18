@@ -34,6 +34,21 @@
 #   thread read    k5 thread read                     <= 40 ms: pending
 #                                                        (R3.5, not timed)
 #
+# and the pages the binary prints itself, in an owner's terminal instead:
+# a port and an owner token in a second K2 home, no K2_* set, run from the
+# same workspace folder (.k2/), so the binary does every check of the
+# shell's prelude it makes for a page (the rename heads-up's git call
+# included). No daemon: pages never ask one.
+#
+#   page --version k5 --version                       <= 5 ms
+#   study errors   k5 study errors                    <= 30 ms
+#   help page      k5 mail send --help                <= 30 ms
+#
+# with cli/k2's p95 for the two pages as info. Before timing, each page
+# runs once on both CLIs and the two must print the same and exit the
+# same; and once on the binary with its hand-over to bash broken
+# (K5_HOME_OVERRIDE relative), so the time is the binary's own answer.
+#
 # Then, for the fallthrough, info lines with no target: cli/k2, the shell
 # run as the front hands it over but started straight, and the front, and
 # the front's own phase times (K5_CLI_TRACE_TIMING), with a passport and
@@ -65,8 +80,12 @@ command -v python3 >/dev/null || { echo "perf_cli: python3 is needed" >&2; exit 
 
 WORK="$(mktemp -d -t k5-perf-XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/bin" "$WORK/home/.k2" "$WORK/ws/.k2" "$WORK/tmp"
+mkdir -p "$WORK/bin" "$WORK/home/.k2" "$WORK/page-home/.k2" "$WORK/ws/.k2" "$WORK/tmp"
 ln -s "$BIN" "$WORK/bin/k5"
+# The pages' owner terminal: a port and an owner token on disk, in a home
+# of its own, so the agent measures above see no owner token.
+printf '1\n' > "$WORK/page-home/.k2/heartbeat.port"
+printf 'perf-owner-token\n' > "$WORK/page-home/.k2/heartbeat.token"
 
 echo "perf_cli: binary $BIN ($("$WORK/bin/k5" --version)), bash $BASH_CLI"
 echo "perf_cli: host $(uname -sm), $(getconf _NPROCESSORS_ONLN 2>/dev/null || echo '?') cpus, load $(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || uptime | sed 's/.*load averages*: //')"
@@ -320,6 +339,49 @@ phases("a passport (this script's call)", env)
 owner = {k: v for k, v in env.items() if k not in ("K2_HOOK_TOKEN", "K2_CELL", "K2_SESSION_ID")}
 phases("no passport and no session marker: the ancestry walk runs", owner)
 srv.shutdown()
+
+# The pages the binary prints itself, in an owner's terminal: its own
+# home with a port and an owner token, no K2_*, no daemon.
+page_env = {
+    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+    "HOME": work + "/page-home",
+    "TMPDIR": work + "/tmp",
+}
+
+def page_once(argv, extra=None):
+    p = subprocess.run(argv, env=dict(page_env, **(extra or {})), cwd=work + "/ws",
+                       stdin=subprocess.DEVNULL, capture_output=True)
+    return p.returncode, p.stdout, p.stderr
+
+def page_timed(argv, want):
+    walls, _ = spawn_runs(argv, page_env, want=want)
+    return walls
+
+def measure_page(name, words, target_ms):
+    ours = [k5, *words]
+    theirs = bash_argv(*words)
+    if words != ["--version"]:
+        a, b = page_once(ours), page_once(theirs)
+        if a != b:
+            sys.exit(f"perf_cli: FAIL: {name}: the two CLIs differ before timing\n  k5:   {a!r}\n  bash: {b!r}")
+        own = page_once(ours, {"K5_HOME_OVERRIDE": "not/absolute"})
+        if own != a:
+            sys.exit(f"perf_cli: FAIL: {name}: not the binary's own answer (it went to bash): {own!r}")
+        print(f"perf_cli: {name}: both exit {a[0]}, same output ({len(a[1])} bytes), the binary's own answer")
+    code = page_once(ours)[0]
+    xs = page_timed(ours, code)
+    got = p95(xs)
+    ok = got <= target_ms
+    results.append(ok)
+    print(f"perf_cli: {'pass' if ok else 'FAIL'}: k5 {name}: p95 {got:.2f} ms, target <= {target_ms:.2f} ms "
+          f"(an owner's terminal, no daemon); "
+          f"median {statistics.median(xs):.2f} ms, min {min(xs):.2f}, max {max(xs):.2f}")
+    if words != ["--version"]:
+        print(f"perf_cli: info: cli/k2 {name}: p95 {p95(page_timed(theirs, code)):.2f} ms (for comparison)")
+
+measure_page("page --version", ["--version"], 5.0)
+measure_page("study errors", ["study", "errors"], 30.0)
+measure_page("help page (mail send --help)", ["mail", "send", "--help"], 30.0)
 if not all(results):
     sys.exit(f"perf_cli: {results.count(False)} of {len(results)} measures missed their target")
 print(f"perf_cli: {len(results)} measures met their targets")

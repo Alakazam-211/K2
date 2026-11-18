@@ -7,8 +7,8 @@
 //! [`crate::families`]. A form the front's code does not take falls
 //! through, as does everything else, byte for byte ([`crate::fallthrough`]).
 //!
-//! A family's help is the shell's: a `whoami`, `done`, `respond` or
-//! `inbox` command line with `-h` or `--help` anywhere in it falls
+//! A family's help is the shell's: a `whoami`, `done`, `respond`, `inbox`
+//! or `read` command line with `-h` or `--help` anywhere in it falls
 //! through, so the shell prints its help text (or its error for a flag
 //! before it, or whatever it does with such a word where it reads a
 //! value), with its connection gate in front of it, exactly as it always
@@ -42,6 +42,9 @@ pub enum Route {
     /// `inbox` with no `-h` or `--help` in it ([`crate::families::inbox`],
     /// which may still hand it to the shell).
     Inbox,
+    /// `read` with no `-h` or `--help` in it ([`crate::families::read`],
+    /// which may still hand it to the shell).
+    Read,
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
@@ -90,6 +93,9 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
     }
     if noun.names("inbox") {
         return if help { Route::Fallthrough } else { Route::Inbox };
+    }
+    if noun.names("read") {
+        return if help { Route::Fallthrough } else { Route::Read };
     }
     Route::Fallthrough
 }
@@ -215,6 +221,19 @@ mod tests {
         }
         for line in [&["inbox", "--help"][..], &["inbox", "-h"], &["inbox", "read", "--help"], &["inbox", "list", "--folder", "-h"]] {
             assert_eq!(native(inbox, &args(line)), Route::Fallthrough, "{line:?}");
+        }
+    }
+
+    /// `read`'s front code, likewise (the shell reads `read --help` as the
+    /// workspace `--help`).
+    #[test]
+    fn the_read_forms() {
+        let read = route::TABLE.iter().find(|n| n.names("read")).expect("a read row");
+        for line in [&["read"][..], &["read", "ws"], &["read", "ws", "--lines", "5"], &["read", "help"]] {
+            assert_eq!(native(read, &args(line)), Route::Read, "{line:?}");
+        }
+        for line in [&["read", "--help"][..], &["read", "-h"], &["read", "ws", "--agent", "--help"]] {
+            assert_eq!(native(read, &args(line)), Route::Fallthrough, "{line:?}");
         }
     }
 

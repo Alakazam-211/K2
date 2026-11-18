@@ -7,6 +7,7 @@
 //! - [`respond`]: `k5 respond [--final] <message>`.
 //! - [`inbox`]: `k5 inbox` and its read forms (`list`, `read`, `search`,
 //!   `folders`).
+//! - [`read`]: `k5 read <workspace>`, a workspace's live terminal.
 //!
 //! A family may hand a command line back to the shell CLI ([`done::run`]
 //! and the others return `None`) when it is a form only the shell
@@ -14,7 +15,7 @@
 //!
 //! # A request on the left of a pipe
 //!
-//! `inbox` sends `cli_send cli_request … | python3 -c …`, under
+//! `inbox` and `read` send `cli_send cli_request … | python3 -c …`, under
 //! `set -euo pipefail` ([`request_piped`]). The reader on the right reads
 //! what the call printed: the answer's bytes with the NULs dropped, and
 //! with its trailing newlines dropped too when the cell socket answered
@@ -35,6 +36,7 @@ use std::path::Path;
 
 pub mod done;
 pub mod inbox;
+pub mod read;
 pub mod respond;
 pub mod whoami;
 

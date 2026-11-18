@@ -186,6 +186,23 @@ describe("Sew's 0.7.2 additions", () => {
     expect(parseRecording(sew.recording.stopped)).toBeNull()
   })
 
+  it("reads Sew 0.10.5's started_at from Sew's own contract, on the parser and through the recording event", async () => {
+    // The plugin writes started_at as RFC 3339 in UTC with milliseconds; the held
+    // join's recording has none yet, so it gets no startedAt (the toEqual above).
+    const at = Date.parse('2026-11-02T09:58:00.000Z')
+    expect(sew.recording.granted.started_at).toBe('2026-11-02T09:58:00.000Z')
+    expect(parseRecording(sew.recording.granted)?.startedAt).toBe(at)
+    expect(parseRecording(sew.recording.withdrawn)?.startedAt).toBe(at)
+    expect(parseRecording(sew.recording.controls.rights.granted)?.startedAt).toBe(at)
+    const f = fakeBridge()
+    const ev = events()
+    const e = new NativeVoiceEngine(f.bridge)
+    await e.start(ev)
+    f.fire(`${EVENT_PREFIX}recording`, sew.recording.granted)
+    expect(ev.log).toEqual([['recording', expect.objectContaining({ recordingId: '48831765147549720', startedAt: at })]])
+    e.stop()
+  })
+
   it('reads target and room on a state, and a move', () => {
     expect(parseCallState(sew.moved.payload)).toEqual({ state: 'connected', target: 'k2:acme', room: '48831765147549710' })
     expect(parseCallState(sew.ended.sew_reasons[0].payload)).toEqual({ state: 'ended', reason: 'perms_lost', target: 'k2:acme', room: '48831765147549698' })

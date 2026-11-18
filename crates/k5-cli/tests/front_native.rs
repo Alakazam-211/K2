@@ -306,10 +306,13 @@ fn table_verbs(stdout: &str) -> Vec<(String, String, String)> {
         .collect()
 }
 
-/// The route table's verb rows, as the table prints them.
+/// The route table's verb rows, as the table prints them: under their
+/// families, which it sorts by name.
 fn route_verbs() -> Vec<(String, String, String)> {
-    TABLE
-        .iter()
+    let mut nouns: Vec<_> = TABLE.iter().filter(|n| !n.verbs.is_empty()).collect();
+    nouns.sort_by_key(|n| n.words.join("|"));
+    nouns
+        .into_iter()
         .flat_map(|n| {
             n.verbs.iter().map(|v| {
                 (

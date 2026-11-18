@@ -330,8 +330,40 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
         }
         match noun.words {
             ["connections"] => connections_verbs_are_its_list(noun),
+            ["feedback", "tickets"] => feedback_verbs_are_its_arms(noun),
             other => panic!("{other:?} has verb rows: check them against the family's case first"),
         }
+    }
+}
+
+/// `feedback`'s verb rows: each is one arm of the `feedback|tickets)`
+/// case in `cli/src/router.sh`, which hands it to its own function.
+fn feedback_verbs_are_its_arms(noun: &k5_cli::route::Noun) {
+    let sources = common::shell_sources();
+    let text = &sources
+        .iter()
+        .find(|(name, _)| name == "router.sh")
+        .expect("cli/src/router.sh")
+        .1;
+    let body = &text[text
+        .find("\n    feedback|tickets)\n")
+        .expect("the feedback|tickets arm")..];
+    let body = &body[..body.find("\n        ;;\n").expect("its end")];
+    for verb in noun.verbs {
+        assert_eq!(
+            verb.words.len(),
+            1,
+            "{:?}: one word per verb row",
+            verb.words
+        );
+        let word = verb.words[0];
+        let arm = format!("            {word})");
+        let call = format!(" shift 2; cmd_feedback_{word} \"$@\" ;;");
+        assert!(
+            body.lines()
+                .any(|l| l.starts_with(&arm) && l.ends_with(&call)),
+            "the feedback|tickets case has no {word} arm calling cmd_feedback_{word}"
+        );
     }
 }
 

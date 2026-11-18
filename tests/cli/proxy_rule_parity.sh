@@ -10,7 +10,10 @@
 #
 # Then the Python helper's opener, in a child with every proxy variable
 # set to a listening stub: a request to a remote https host asks the stub
-# for a CONNECT tunnel; requests to 127.0.0.1 and 127.0.0.2 never reach it.
+# for a CONNECT tunnel; requests to 127.0.0.1 and to localhost never reach
+# it. The stubs listen on 127.0.0.1 only, the one loopback address every
+# system has (macOS has no 127.0.0.2, and a Linux host may have IPv6 off);
+# the table above already holds the rule's answer for 127.0.0.2 and [::1].
 #
 # bash-only: reads the bash CLI's helpers out of cli/k2.
 # Run with: bash tests/cli/proxy_rule_parity.sh
@@ -84,8 +87,7 @@ class T(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 p = T(("127.0.0.1", 0), P)
 d1 = T(("127.0.0.1", 0), D)
-d2 = T(("127.0.0.2", d1.server_address[1]), D)
-for s in (p, d1, d2):
+for s in (p, d1):
     threading.Thread(target=s.serve_forever, daemon=True).start()
 with open(os.path.join(work, "ports.tmp"), "w") as f:
     f.write("%d %d\n" % (p.server_address[1], d1.server_address[1]))
@@ -115,7 +117,7 @@ if grep -qx "CONNECT k2-remote.example.test:443 HTTP/1.1" "$WORK/proxy.log"; the
 else
     bad "remote https did not go through the proxy ($out; proxy log: $(tr '\n' ';' <"$WORK/proxy.log"))"
 fi
-for url in "http://127.0.0.1:$DPORT/x" "http://127.0.0.2:$DPORT/x"; do
+for url in "http://127.0.0.1:$DPORT/x" "http://localhost:$DPORT/x"; do
     : >"$WORK/proxy.log"
     out="$(fetch "$url")"
     if [ -s "$WORK/proxy.log" ]; then

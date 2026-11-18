@@ -8,6 +8,7 @@
 //! - [`inbox`]: `k5 inbox` and its read forms (`list`, `read`, `search`,
 //!   `folders`).
 //! - [`read`]: `k5 read <workspace>`, a workspace's live terminal.
+//! - [`activity`]: `k5 activity`, the activity feed.
 //!
 //! A family may hand a command line back to the shell CLI ([`done::run`]
 //! and the others return `None`) when it is a form only the shell
@@ -15,7 +16,8 @@
 //!
 //! # A request on the left of a pipe
 //!
-//! `inbox` and `read` send `cli_send cli_request … | python3 -c …`, under
+//! `inbox`, `read` and `activity` send `cli_send cli_request … | python3 -c …`
+//! (`activity`: `cli_request`, over TCP only, [`request_piped_tcp`]), under
 //! `set -euo pipefail` ([`request_piped`]). The reader on the right reads
 //! what the call printed: the answer's bytes with the NULs dropped, and
 //! with its trailing newlines dropped too when the cell socket answered
@@ -28,12 +30,13 @@
 //! with no EXIT trap lines ([`end_in_pipe`]).
 
 use crate::exit::Exit;
-use crate::out;
-use crate::out::json::{Text, Value};
+use crate::out::json::{self, Text, Value};
+use crate::out::{self, py};
 use crate::prelude::Closing;
 use crate::transport::{Call, Channel, Client, Error, Response};
 use std::path::Path;
 
+pub mod activity;
 pub mod done;
 pub mod inbox;
 pub mod read;
@@ -144,8 +147,25 @@ pub fn request_piped(
     endpoint: &str,
     args: &[&str],
 ) -> Piped {
+    let r = client.send(endpoint, Call::Request(args));
+    piped(client, closing, r)
+}
+
+/// `cli_request <endpoint> <args>` on the left of a pipe: as
+/// [`request_piped`], over TCP only.
+pub fn request_piped_tcp(
+    client: &mut Client,
+    closing: &mut Closing,
+    endpoint: &str,
+    args: &[&str],
+) -> Piped {
+    let r = client.call(Channel::Tcp, endpoint, Call::Request(args));
+    piped(client, closing, r)
+}
+
+fn piped(client: &Client, closing: &mut Closing, result: Result<Response, Error>) -> Piped {
     let passport = client.passport().is_some();
-    match client.send(endpoint, Call::Request(args)) {
+    match result {
         Ok(r) => {
             closing.answer(&r, passport);
             Piped {
@@ -196,6 +216,177 @@ pub fn hook_sock() -> Option<std::path::PathBuf> {
         std::env::var_os(n)
     })
     .map(|(_, v)| v.into())
+}
+
+/// `_cli_use_passport_project` (`cli/src/cell-socket.sh`): with a passport,
+/// no `PROJECT_PATH` setting and no remote host, ask the daemon which
+/// workspace the passport belongs to (`/cli/whoami`'s `path`) and send that
+/// as `project=` from here on. Nothing changes when the answer has no such
+/// path (or is not JSON, or the call failed).
+pub fn use_passport_project(client: &mut Client) {
+    let set = k2_client::env_names::first_nonempty_os_in(k2_client::env_names::PROJECT_PATH, |n| {
+        std::env::var_os(n)
+    });
+    if set.is_some() || client.passport().is_none() || client.force_tcp {
+        return;
+    }
+    let out = client.passport_project();
+    if out.is_empty() {
+        return;
+    }
+    if let Some(path) = passport_path(&out) {
+        client.project = path;
+    }
+}
+
+/// `_cli_use_passport_project`'s Python on `out`: `path` when the answer
+/// is an object whose `path` is a string with more than spaces in it,
+/// spaces trimmed; else nothing. NULs go, as `$(…)` drops them.
+pub fn passport_path(out: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(out).ok()?;
+    let Value::Object(pairs) = json::parse(text).ok()? else {
+        return None;
+    };
+    let Some(Value::Str(p)) = get(&pairs, "path") else {
+        return None;
+    };
+    let p = p.as_str()?.trim_matches(py_space);
+    (!p.is_empty()).then(|| p.replace('\0', ""))
+}
+
+/// Where a Python run stops with an exception: the traceback's frames
+/// (line, name) and its last line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Raise {
+    pub frames: Vec<(u32, &'static str)>,
+    pub exception: String,
+}
+
+impl Raise {
+    /// An exception raised at `line` of the module.
+    pub fn at(line: u32, exception: impl Into<String>) -> Raise {
+        Raise {
+            frames: vec![(line, "<module>")],
+            exception: exception.into(),
+        }
+    }
+
+    /// An exception raised at `line` of the function `name`, called from
+    /// line `from` of the module.
+    pub fn inside(from: u32, line: u32, name: &'static str, exception: impl Into<String>) -> Raise {
+        Raise {
+            frames: vec![(from, "<module>"), (line, name)],
+            exception: exception.into(),
+        }
+    }
+
+    /// `AttributeError: '<type>' object has no attribute '<name>'`.
+    pub fn no_attribute(line: u32, v: &Value, name: &str) -> Raise {
+        Raise::at(
+            line,
+            format!(
+                "AttributeError: '{}' object has no attribute '{name}'",
+                py::type_name(v)
+            ),
+        )
+    }
+
+    /// The traceback's text, as `python3 -c` prints it (no source lines).
+    pub fn text(&self) -> String {
+        traceback(&self.frames, &self.exception)
+    }
+}
+
+/// What a Python reader printed before it raised, and the traceback: its
+/// exit is 1.
+pub fn raised(stdout: String, stderr: String, r: &Raise) -> Shown {
+    Shown {
+        stdout,
+        stderr: stderr + &r.text(),
+        exit: Exit::Error,
+    }
+}
+
+/// `v.get(key)` on a value Python must find a dict: `None` for a missing
+/// key, the `AttributeError` at `line` for anything but a dict.
+pub fn py_get<'a>(v: &'a Value, key: &str, line: u32) -> Result<Option<&'a Value>, Raise> {
+    match v {
+        Value::Object(pairs) => Ok(get(pairs, key)),
+        other => Err(Raise::no_attribute(line, other, "get")),
+    }
+}
+
+/// `for x in v`: the items Python walks (a string's code points, a
+/// dict's keys), or the `TypeError` at `line`.
+pub fn py_iter(v: &Value, line: u32) -> Result<Vec<Value>, Raise> {
+    match v {
+        Value::Array(items) => Ok(items.clone()),
+        Value::Str(t) => Ok(t
+            .code_points()
+            .into_iter()
+            .map(|cp| Value::Str(code_point(cp)))
+            .collect()),
+        Value::Object(pairs) => Ok(pairs.iter().map(|(k, _)| Value::Str(k.clone())).collect()),
+        other => Err(Raise::at(
+            line,
+            format!(
+                "TypeError: '{}' object is not iterable",
+                py::type_name(other)
+            ),
+        )),
+    }
+}
+
+/// `len(v)`, or the `TypeError` at `line`.
+pub fn py_len(v: &Value, line: u32) -> Result<usize, Raise> {
+    match v {
+        Value::Array(items) => Ok(items.len()),
+        Value::Str(t) => Ok(t.code_points().len()),
+        Value::Object(pairs) => Ok(pairs.len()),
+        other => Err(Raise::at(
+            line,
+            format!(
+                "TypeError: object of type '{}' has no len()",
+                py::type_name(other)
+            ),
+        )),
+    }
+}
+
+/// `'%d' % v`, or the exception at `line`.
+pub fn py_d(v: &Value, line: u32) -> Result<String, Raise> {
+    py::percent_d(v).map_err(|e| Raise::at(line, e))
+}
+
+/// `'%-<width>s' % v`: `str(v)` padded with spaces to `width` code points.
+pub fn py_left(v: &Value, width: usize) -> String {
+    ljust(&py::str_of(v), width)
+}
+
+/// `s.ljust(width)`: padded with spaces to `width` code points.
+pub fn ljust(s: &str, width: usize) -> String {
+    let n = s.chars().count();
+    if n < width {
+        format!("{s}{}", " ".repeat(width - n))
+    } else {
+        s.to_string()
+    }
+}
+
+/// A one-code-point string, half of a surrogate pair too.
+pub fn code_point(cp: u32) -> Text {
+    match char::from_u32(cp) {
+        Some(c) => Text::from(c.to_string()),
+        None => match json::parse(&format!("\"\\u{cp:04x}\"")) {
+            Ok(Value::Str(t)) => t,
+            _ => Text::from("\u{fffd}"),
+        },
+    }
+}
+
+/// A string value.
+pub fn s(text: &str) -> Value {
+    Value::Str(Text::from(text))
 }
 
 /// `[ -S "$sock" ]`.

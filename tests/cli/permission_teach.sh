@@ -126,6 +126,18 @@ class H(BaseHTTPRequestHandler):
                 else:
                     err["permission"] = {"requestable": False, "where": "a person does this, in Settings or from a terminal outside K2"}
             return self.reply(403, err)
+        if path in ("/cli/workspace/msg", "/cli/inbox/compose") and on:
+            # 0.46.16: `k2 msg` to an agent that isn't a connection teaches
+            # connections.add; one the agent can't reach by any card
+            # (`gated`) says it can't be requested. Both are form POSTs.
+            # The sender's-name lookup before the send (`/cli/workspace/handle`)
+            # falls to the last branch: a refusal it can't request.
+            b = body + "&" + urlparse(self.path).query
+            if "workspace=gamma" in b or "to=gamma" in b:
+                return self.reply(403, {"ok": False, "error": {"code": "gated", "hint": "gamma takes no messages from agents"},
+                                        "permission": {"requestable": False, "where": "a person does this, in Settings"}})
+            return self.reply(403, {"ok": False, "error": {"code": "not_connected", "hint": "'beta' is not a local connection"},
+                                    "permission": ask("connections.add", " to=beta")})
         if path in ("/cli/settings/update", "/cli/workspace/open"):
             err = {"error": {"code": "owner_only", "hint": "owner only"}}
             if on and path == "/cli/settings/update" and self.headers.get("Authorization") == "Bearer passport-teach":
@@ -226,6 +238,25 @@ run agent connections add billing
 [ "$(printf '%s\n' "$ERR" | grep -c '^Ask with:')" = 1 ] && ok || bad "connections add: the closing line must print once"
 [ "$RC" = 3 ] && ok || bad "connections add: exit $RC, want 3"
 
+# 0.46.16 field report: `k2 msg` to an agent that isn't a connection got
+# JSON naming connections.add, then "It can't be requested." The form
+# transports never noted the send's own `permission` object, so the line
+# came from (or went missing behind) another request. The send's line wins.
+for form in "msg beta ping" "msg beta --inbox-silent --title Note --body body"; do
+    # shellcheck disable=SC2086
+    run agent $form
+    [ "$RC" = 3 ] && ok || bad "$form: exit $RC, want 3 ($ERR)"
+    [ "$(last_err_line)" = 'Ask with: k2 permission request connections.add to=beta --why "<what you need it for>"' ] && ok \
+        || bad "$form: last stderr line is '$(last_err_line)'"
+    [ "$(printf '%s\n' "$ERR" | grep -c '^Ask with:')" = 1 ] && ok || bad "$form: the closing line must print once"
+    <<<"$ERR" grep -q "It can.t be requested" && bad "$form: 'It can't be requested.' beside the Ask-with line: $ERR" || ok
+done
+# A refusal no card opens still ends with "It can't be requested."
+run agent msg gamma ping
+[ "$RC" = 3 ] && ok || bad "msg gamma: exit $RC, want 3 ($ERR)"
+[ "$(last_err_line)" = "It can't be requested." ] && ok || bad "msg gamma: last stderr line is '$(last_err_line)'"
+<<<"$ERR" grep -q '^Ask with:' && bad "msg gamma: an Ask-with line on a refusal no card opens: $ERR" || ok
+
 # A command that succeeds never ends with a closing line, even when a body
 # on the way carried a `permission` object (0.46.4 field report: a
 # successful `k2 thread` post printed "It can't be requested." at exit 0).
@@ -310,7 +341,6 @@ grep -q '^POST /cli/permission/request {"action": "compute.use", "params": {}, "
     || bad "permission request: wrong request: $(cat "$LOG")"
 run agent permission request compute.use
 [ "$RC" = 2 ] && ok || bad "permission request without --why: exit $RC, want 2"
-
 # People verbs are refused in a K2 terminal.
 run agent permission pending
 [ "$RC" = 3 ] && ok || bad "permission pending in a K2 terminal: exit $RC, want 3"

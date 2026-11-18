@@ -65,10 +65,13 @@ cmd_fed() {
             _k2_cfg_add url "${BASE_URL}/cli/federation/send"
             _k2_cfg_auth "$send_token"
             _k2_cfg_add data-raw "$body"
-            _k2_curl "$_K2_CFG" -s -X POST \
+            # 0.46.16: a refused send ends with its own closing line.
+            local _fed_out
+            _fed_out="$(_k2_curl "$_K2_CFG" -s -X POST \
                 --connect-timeout 5 --max-time 60 \
-                -H "Content-Type: application/json" 2>/dev/null
-            echo
+                -H "Content-Type: application/json" 2>/dev/null)" || true
+            _permission_note "$_fed_out"
+            printf '%s\n' "$_fed_out"
             ;;
         pair-start|pair-join|pair-finish|pair-verify)
             # Pairing v2 (0.45.2): commit-then-reveal code, run by the two

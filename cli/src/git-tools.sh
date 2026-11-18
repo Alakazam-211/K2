@@ -29,14 +29,19 @@ _git_tools_send() {
     _k2_cfg_add url "${BASE_URL}${path}${q}"
     _k2_cfg_auth "$TOKEN"
     # Through _k2_curl: a refused connect (a daemon restart) is retried (S5).
+    local out
     if [ "$method" = "GET" ]; then
-        _k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 120 \
-            -w $'\n%{http_code}' 2>/dev/null || true
+        out="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 120 \
+            -w $'\n%{http_code}' 2>/dev/null; printf x)" || true
     else
-        _k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 120 \
+        out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 120 \
             -H "Content-Type: application/json" --data-raw '{}' \
-            -w $'\n%{http_code}' 2>/dev/null || true
+            -w $'\n%{http_code}' 2>/dev/null; printf x)" || true
     fi
+    out="${out%x}"
+    # 0.46.16: a refusal's `permission` object closes the command.
+    _permission_note "$out"
+    printf '%s' "$out"
 }
 
 _git_tools_render() {

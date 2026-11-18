@@ -1321,10 +1321,16 @@ cli_post_json_stdin() {
     _k2_cfg_auth "$TOKEN"
     # _k2_curl with no config: its stdin is the body, so the URL and the
     # header stay on fd 3. A body read from stdin is never retried.
-    _k2_curl "" -s -K /dev/fd/3 -X POST \
+    local out rc=0
+    out="$(r=0; _k2_curl "" -s -K /dev/fd/3 -X POST \
         --connect-timeout 5 --max-time 30 \
         -H "Content-Type: application/json" \
-        --data-binary @- 2>/dev/null 3<<<"$_K2_CFG"
+        --data-binary @- 2>/dev/null 3<<<"$_K2_CFG" || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    # 0.46.16: the refusal's `permission` object, as cli_post_json.
+    _permission_note "$out"
+    printf '%s' "$out"
+    return "$rc"
 }
 
 # Read one secret from stdin into _K2_SECRET: a hidden prompt when stdin
@@ -1421,6 +1427,10 @@ cli_post_form() {
     # No status is read here: a 5xx from an earlier request must not count.
     _K2_HTTP=""
     _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
+    # 0.46.16: note the refusal's `permission` object, as cli_post_json
+    # (`k2 msg`, `k2 inbox`: the form sends never noted it, so a refused
+    # send ended with another request's line, or none).
+    _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
 }

@@ -641,9 +641,15 @@ cli_post() {
     local _K2_CFG=""
     _k2_cfg_add url "${BASE_URL}${endpoint}?${params}"
     _k2_cfg_auth "$TOKEN"
-    _k2_curl "$_K2_CFG" -s -X POST \
+    local out rc=0
+    out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time 30 \
-        --data-raw "" 2>/dev/null
+        --data-raw "" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    # 0.46.16: the refusal's `permission` object closes the command.
+    _permission_note "$out"
+    printf '%s' "$out"
+    return "$rc"
 }
 
 # UDS twin of cli_post: query-string POST over the cell socket. Omit
@@ -656,9 +662,14 @@ cli_post_uds() {
     done
     local _K2_CFG=""
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
-    _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
+    local out rc=0
+    out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
         --connect-timeout 5 --max-time 30 \
-        --data-raw "" 2>/dev/null
+        --data-raw "" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    _permission_note "$out"
+    printf '%s' "$out"
+    return "$rc"
 }
 
 # K2 Connect tunnel — expose this workspace's daemon at

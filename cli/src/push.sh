@@ -86,24 +86,28 @@ EOF
 # "body\ncode". TCP with the owner token (the cell socket's passport is
 # never the owner).
 _push_send() {
-    local method="$1" path="$2" payload="${3:-}" _K2_CFG="" kv
+    local method="$1" path="$2" payload="${3:-}" _K2_CFG="" kv out
     if [ "$method" = "GET" ]; then
         _k2_cfg_auth "$TOKEN"
         for kv in "${@:4}"; do
             _k2_cfg_add data-urlencode "$kv"
         done
-        _k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
+        out="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time 30 \
-            -w $'\n%{http_code}' 2>/dev/null || true
+            -w $'\n%{http_code}' 2>/dev/null; printf x)" || true
     else
         _k2_cfg_add url "${BASE_URL}${path}"
         _k2_cfg_auth "$TOKEN"
         _k2_cfg_add data-raw "$payload"
-        _k2_curl "$_K2_CFG" -s -X POST \
+        out="$(_k2_curl "$_K2_CFG" -s -X POST \
             --connect-timeout 5 --max-time 30 \
             -H "Content-Type: application/json" \
-            -w $'\n%{http_code}' 2>/dev/null || true
+            -w $'\n%{http_code}' 2>/dev/null; printf x)" || true
     fi
+    out="${out%x}"
+    # 0.46.16: a refusal's `permission` object closes the command.
+    _permission_note "$out"
+    printf '%s' "$out"
 }
 
 # _push_render <as_json> <view> <raw "body\ncode">

@@ -52,6 +52,9 @@ cli_post_form_uds() {
     # No status is read here: a 5xx from an earlier request must not count.
     _K2_HTTP=""
     _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
+    # 0.46.16: the send's own refusal closes the command (`k2 msg` to an
+    # agent that isn't a connection: Ask with: … connections.add).
+    _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
 }

@@ -1809,10 +1809,16 @@ cli_post_json_stdin() {
     _k2_cfg_auth "$TOKEN"
     # _k2_curl with no config: its stdin is the body, so the URL and the
     # header stay on fd 3. A body read from stdin is never retried.
-    _k2_curl "" -s -K /dev/fd/3 -X POST \
+    local out rc=0
+    out="$(r=0; _k2_curl "" -s -K /dev/fd/3 -X POST \
         --connect-timeout 5 --max-time 30 \
         -H "Content-Type: application/json" \
-        --data-binary @- 2>/dev/null 3<<<"$_K2_CFG"
+        --data-binary @- 2>/dev/null 3<<<"$_K2_CFG" || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    # 0.46.16: the refusal's `permission` object, as cli_post_json.
+    _permission_note "$out"
+    printf '%s' "$out"
+    return "$rc"
 }
 
 # Read one secret from stdin into _K2_SECRET: a hidden prompt when stdin
@@ -1909,6 +1915,10 @@ cli_post_form() {
     # No status is read here: a 5xx from an earlier request must not count.
     _K2_HTTP=""
     _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
+    # 0.46.16: note the refusal's `permission` object, as cli_post_json
+    # (`k2 msg`, `k2 inbox`: the form sends never noted it, so a refused
+    # send ended with another request's line, or none).
+    _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
 }
@@ -1967,6 +1977,9 @@ cli_post_form_uds() {
     # No status is read here: a 5xx from an earlier request must not count.
     _K2_HTTP=""
     _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
+    # 0.46.16: the send's own refusal closes the command (`k2 msg` to an
+    # agent that isn't a connection: Ask with: … connections.add).
+    _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
 }
@@ -28735,24 +28748,28 @@ EOF
 # "body\ncode". TCP with the owner token (the cell socket's passport is
 # never the owner).
 _push_send() {
-    local method="$1" path="$2" payload="${3:-}" _K2_CFG="" kv
+    local method="$1" path="$2" payload="${3:-}" _K2_CFG="" kv out
     if [ "$method" = "GET" ]; then
         _k2_cfg_auth "$TOKEN"
         for kv in "${@:4}"; do
             _k2_cfg_add data-urlencode "$kv"
         done
-        _k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
+        out="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time 30 \
-            -w $'\n%{http_code}' 2>/dev/null || true
+            -w $'\n%{http_code}' 2>/dev/null; printf x)" || true
     else
         _k2_cfg_add url "${BASE_URL}${path}"
         _k2_cfg_auth "$TOKEN"
         _k2_cfg_add data-raw "$payload"
-        _k2_curl "$_K2_CFG" -s -X POST \
+        out="$(_k2_curl "$_K2_CFG" -s -X POST \
             --connect-timeout 5 --max-time 30 \
             -H "Content-Type: application/json" \
-            -w $'\n%{http_code}' 2>/dev/null || true
+            -w $'\n%{http_code}' 2>/dev/null; printf x)" || true
     fi
+    out="${out%x}"
+    # 0.46.16: a refusal's `permission` object closes the command.
+    _permission_note "$out"
+    printf '%s' "$out"
 }
 
 # _push_render <as_json> <view> <raw "body\ncode">
@@ -29925,14 +29942,19 @@ _git_tools_send() {
     _k2_cfg_add url "${BASE_URL}${path}${q}"
     _k2_cfg_auth "$TOKEN"
     # Through _k2_curl: a refused connect (a daemon restart) is retried (S5).
+    local out
     if [ "$method" = "GET" ]; then
-        _k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 120 \
-            -w $'\n%{http_code}' 2>/dev/null || true
+        out="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 120 \
+            -w $'\n%{http_code}' 2>/dev/null; printf x)" || true
     else
-        _k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 120 \
+        out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 120 \
             -H "Content-Type: application/json" --data-raw '{}' \
-            -w $'\n%{http_code}' 2>/dev/null || true
+            -w $'\n%{http_code}' 2>/dev/null; printf x)" || true
     fi
+    out="${out%x}"
+    # 0.46.16: a refusal's `permission` object closes the command.
+    _permission_note "$out"
+    printf '%s' "$out"
 }
 
 _git_tools_render() {
@@ -43437,9 +43459,15 @@ cli_post() {
     local _K2_CFG=""
     _k2_cfg_add url "${BASE_URL}${endpoint}?${params}"
     _k2_cfg_auth "$TOKEN"
-    _k2_curl "$_K2_CFG" -s -X POST \
+    local out rc=0
+    out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time 30 \
-        --data-raw "" 2>/dev/null
+        --data-raw "" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    # 0.46.16: the refusal's `permission` object closes the command.
+    _permission_note "$out"
+    printf '%s' "$out"
+    return "$rc"
 }
 
 # UDS twin of cli_post: query-string POST over the cell socket. Omit
@@ -43452,9 +43480,14 @@ cli_post_uds() {
     done
     local _K2_CFG=""
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
-    _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
+    local out rc=0
+    out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
         --connect-timeout 5 --max-time 30 \
-        --data-raw "" 2>/dev/null
+        --data-raw "" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    _permission_note "$out"
+    printf '%s' "$out"
+    return "$rc"
 }
 
 # K2 Connect tunnel — expose this workspace's daemon at
@@ -76775,10 +76808,13 @@ cmd_fed() {
             _k2_cfg_add url "${BASE_URL}/cli/federation/send"
             _k2_cfg_auth "$send_token"
             _k2_cfg_add data-raw "$body"
-            _k2_curl "$_K2_CFG" -s -X POST \
+            # 0.46.16: a refused send ends with its own closing line.
+            local _fed_out
+            _fed_out="$(_k2_curl "$_K2_CFG" -s -X POST \
                 --connect-timeout 5 --max-time 60 \
-                -H "Content-Type: application/json" 2>/dev/null
-            echo
+                -H "Content-Type: application/json" 2>/dev/null)" || true
+            _permission_note "$_fed_out"
+            printf '%s\n' "$_fed_out"
             ;;
         pair-start|pair-join|pair-finish|pair-verify)
             # Pairing v2 (0.45.2): commit-then-reveal code, run by the two

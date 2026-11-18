@@ -3721,7 +3721,7 @@ cmd_heartbeat_add() {
             --instructions) instructions="$2"; shift 2 ;;
             --instructions-file) instructions_file="$2"; shift 2 ;;
             # 0.46.15: the IANA zone the times are read in (the daemon
-            # validates it); server (or local, or '') = the server's clock.
+            # validates it); server (or box, local, or '') = the server's clock.
             # Without --tz the daemon uses the owner's timezone when one is
             # set, else the server's clock.
             --tz)
@@ -4433,14 +4433,14 @@ cmd_heartbeat_edit() {
             --name) name="$2"; shift 2 ;;
             --instructions) instructions="$2"; have_instructions=1; shift 2 ;;
             --instructions-file) instructions_file="$2"; have_instructions=1; shift 2 ;;
-            # 0.46.15: alone or with a spec; server (or local, or '') clears it.
+            # 0.46.15: alone or with a spec; server (or box, local, or '') clears it.
             --tz)
                 [ $# -ge 2 ] || { echo "Error: --tz needs a zone (for example America/New_York), or server" >&2; exit 2; }
                 tz="$2"; have_tz=1; shift 2 ;;
             *) spec_args+=("$1"); have_spec=1; shift ;;
         esac
     done
-    local edit_usage="Usage: k2 heartbeat edit <name> [--daily|--weekly|... <spec>] [--tz Area/City|local] [--instructions \"...\"|--instructions-file <path>]"
+    local edit_usage="Usage: k2 heartbeat edit <name> [--daily|--weekly|... <spec>] [--tz Area/City|server] [--instructions \"...\"|--instructions-file <path>]"
     [ -z "$name" ] && { echo "$edit_usage" >&2; exit 1; }
     if [ "$have_spec" != "1" ] && [ "$have_instructions" != "1" ] && [ "$have_tz" != "1" ]; then
         echo "$edit_usage" >&2
@@ -52639,7 +52639,7 @@ cmd_schema() {
       "args": [{"name": "subcommand", "required": true}],
       "flags": [
         {"name": "--name", "arg": "n", "description": "Heartbeat name (add/edit)."},
-        {"name": "--tz", "arg": "zone", "description": "With add/edit: the IANA zone the times are read in (America/New_York fires at New York time wherever the server is). server (or local, or '') = the server's clock. add without --tz: the owner's timezone when one is set, else the server's clock; existing schedules keep theirs. A spring-forward time fires at the first minute after the jump; a fall-back time fires once. A bad zone is refused."},
+        {"name": "--tz", "arg": "zone", "description": "With add/edit: the IANA zone the times are read in (America/New_York fires at New York time wherever the server is). server (or box, local, or '') = the server's clock. add without --tz: the owner's timezone when one is set, else the server's clock; existing schedules keep theirs. A spring-forward time fires at the first minute after the jump; a fall-back time fires once. A bad zone is refused."},
         {"name": "--instructions", "arg": "text", "description": "With add/edit: write the WAKEUP.md (the job that runs on fire)."},
         {"name": "--instructions-file", "arg": "path", "description": "With add/edit: read the WAKEUP.md content from a file."},
         {"name": "--archived", "arg": null, "description": "With list: show archived heartbeats instead of active."},

@@ -712,7 +712,10 @@ fn window_opens_after(window: FiringWindow, now: DateTime<Local>) -> DateTime<Lo
     let at_day = |d: chrono::NaiveDate| -> Option<DateTime<Local>> {
         let ndt = d.and_hms_opt(h, m, 0)?;
         match window.tz {
-            Some(tz) => tz.from_local_datetime(&ndt).earliest().map(|t| t.with_timezone(&Local)),
+            // A start inside a spring-forward gap opens at the first instant
+            // after the gap (03:00 EDT for a 02:30 New York start), the rule
+            // the schedule's own slots follow; never a day later.
+            Some(tz) => zoned_wall_instant(tz, ndt).map(|t| t.with_timezone(&Local)),
             None => Local.from_local_datetime(&ndt).earliest(),
         }
     };
@@ -735,6 +738,24 @@ fn window_opens_after(window: FiringWindow, now: DateTime<Local>) -> DateTime<Lo
         }
     }
     now + Duration::days(1)
+}
+
+/// `ndt` on `tz`'s wall clock as an instant: the earlier one in a fall-back
+/// overlap; in a spring-forward gap, the first instant after the gap.
+fn zoned_wall_instant(tz: chrono_tz::Tz, ndt: chrono::NaiveDateTime) -> Option<DateTime<chrono_tz::Tz>> {
+    if let Some(t) = tz.from_local_datetime(&ndt).earliest() {
+        return Some(t);
+    }
+    let mut probe = ndt;
+    for _ in 0..(26 * 60) {
+        probe += Duration::minutes(1);
+        // Gaps start and end on whole minutes, so the first wall minute
+        // that exists is the gap's end.
+        if let Some(t) = tz.from_local_datetime(&probe).earliest() {
+            return Some(t);
+        }
+    }
+    None
 }
 
 /// Compute when this heartbeat is *next* due after a reference time
@@ -988,6 +1009,29 @@ mod tests {
 
     fn is_fire_now(s: &DueStatus) -> bool {
         matches!(s, DueStatus::Due { .. } | DueStatus::DueCatchUp { .. })
+    }
+
+    /// A window whose start falls in a spring-forward gap in its zone opens
+    /// at the first instant after the gap that day (02:30 New York on
+    /// 2027-03-14 → 03:00 EDT, 07:00Z), never the next day's 02:30.
+    #[test]
+    fn window_start_in_a_spring_forward_gap_opens_after_the_gap_that_day() {
+        let w = FiringWindow {
+            start_mins: 2 * 60 + 30,
+            end_mins: 6 * 60,
+            days: None,
+            tz: Some(chrono_tz::America::New_York),
+        };
+        let at = |s: &str| DateTime::parse_from_rfc3339(s).expect("instant").with_timezone(&Local);
+        let opens = window_opens_after(w, at("2027-03-14T05:00:00Z"));
+        assert_eq!(opens, at("2027-03-14T07:00:00Z"));
+        // A normal day: 02:30 EDT.
+        let opens = window_opens_after(w, at("2027-03-15T05:00:00Z"));
+        assert_eq!(opens, at("2027-03-15T06:30:00Z"));
+        // Fall back: a 01:30 start opens at the first 01:30 (EDT, 05:30Z).
+        let w = FiringWindow { start_mins: 90, ..w };
+        let opens = window_opens_after(w, at("2026-11-01T04:00:00Z"));
+        assert_eq!(opens, at("2026-11-01T05:30:00Z"));
     }
 
     // ── The misfire-study trace matrix (§1.4), now with catch-up ──────

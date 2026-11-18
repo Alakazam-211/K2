@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 0.46.15: `k2 heartbeat schedule add|edit --tz <IANA zone>`.
 #   - add and edit send `tz` to the daemon (edit with --tz alone too);
-#   - `--tz server`, `--tz local` and `--tz ''` are sent as given (the
+#   - `--tz server`, `--tz box`, `--tz local` and `--tz ''` are sent as given (the
 #     daemon clears: the server's clock);
 #   - no --tz sends no tz (a schedule edit keeps the zone; an add takes
 #     the owner's timezone, and says so);
@@ -77,7 +77,7 @@ SERVER = "server clock (UTC)"
 
 def zone_reply(q):
     raw = q["tz"].strip()
-    if raw in ("", "local", "server"):
+    if raw.lower() in ("", "local", "server", "box"):
         return None, None
     if raw not in ZONES:
         return None, "--tz '%s' is not an IANA time zone (for example America/New_York); --tz server follows the server's clock" % raw
@@ -188,6 +188,17 @@ assert_eq "spec still sent" "$(last_param spec)" '{"frequency": "daily", "time":
 assert_contains "names the zone" "$out" "Time zone: America/New_York"
 assert_contains "next fire there and here" "$out" "Next fire: 2026-11-17 14:15 EST (2026-11-17 12:15 MST here)"
 
+echo "== add --hourly --start/--end --tz sends the window and the zone =="
+set +e
+out="$(run_k2 add --name desk --hourly --every 1 --unit hours --start 05:00 --end 22:00 --tz America/New_York 2>&1)"
+rc=$?
+set -e
+assert_eq "hourly add exit" "$rc" "0"
+assert_eq "hourly tz sent" "$(last_param tz)" "America/New_York"
+assert_eq "hourly frequency sent" "$(last_param frequency)" "hourly"
+assert_eq "hourly window spec sent" "$(last_param spec)" '{"frequency": "hourly", "every_seconds": 3600, "start": "05:00", "end": "22:00"}'
+assert_contains "hourly names the zone" "$out" "Time zone: America/New_York"
+
 echo "== add without --tz sends no tz; the daemon's owner zone is shown =="
 set +e
 out="$(run_k2 add --name plain --daily --time 09:00 2>&1)"
@@ -256,6 +267,15 @@ set -e
 assert_eq "tz empty exit" "$rc" "0"
 assert_eq "tz empty sent as empty" "$(last_param tz)" ""
 assert_contains "empty: the server clock" "$out" "Time zone: server clock (UTC)"
+
+echo "== edit --tz box clears too (k2 chat prefs' word for the server clock) =="
+set +e
+out="$(run_k2 edit close --tz box 2>&1)"
+rc=$?
+set -e
+assert_eq "tz box exit" "$rc" "0"
+assert_eq "tz box sent" "$(last_param tz)" "box"
+assert_contains "box: the server clock" "$out" "Time zone: server clock (UTC)"
 
 echo "== a schedule edit without --tz sends no tz =="
 set +e

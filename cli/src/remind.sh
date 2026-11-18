@@ -341,7 +341,7 @@ cmd_heartbeat_add() {
             --instructions) instructions="$2"; shift 2 ;;
             --instructions-file) instructions_file="$2"; shift 2 ;;
             # 0.46.15: the IANA zone the times are read in (the daemon
-            # validates it); server (or local, or '') = the server's clock.
+            # validates it); server (or box, local, or '') = the server's clock.
             # Without --tz the daemon uses the owner's timezone when one is
             # set, else the server's clock.
             --tz)
@@ -1053,14 +1053,14 @@ cmd_heartbeat_edit() {
             --name) name="$2"; shift 2 ;;
             --instructions) instructions="$2"; have_instructions=1; shift 2 ;;
             --instructions-file) instructions_file="$2"; have_instructions=1; shift 2 ;;
-            # 0.46.15: alone or with a spec; server (or local, or '') clears it.
+            # 0.46.15: alone or with a spec; server (or box, local, or '') clears it.
             --tz)
                 [ $# -ge 2 ] || { echo "Error: --tz needs a zone (for example America/New_York), or server" >&2; exit 2; }
                 tz="$2"; have_tz=1; shift 2 ;;
             *) spec_args+=("$1"); have_spec=1; shift ;;
         esac
     done
-    local edit_usage="Usage: k2 heartbeat edit <name> [--daily|--weekly|... <spec>] [--tz Area/City|local] [--instructions \"...\"|--instructions-file <path>]"
+    local edit_usage="Usage: k2 heartbeat edit <name> [--daily|--weekly|... <spec>] [--tz Area/City|server] [--instructions \"...\"|--instructions-file <path>]"
     [ -z "$name" ] && { echo "$edit_usage" >&2; exit 1; }
     if [ "$have_spec" != "1" ] && [ "$have_instructions" != "1" ] && [ "$have_tz" != "1" ]; then
         echo "$edit_usage" >&2

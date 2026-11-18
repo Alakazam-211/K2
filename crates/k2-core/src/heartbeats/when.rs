@@ -70,13 +70,13 @@ fn pick_zone(tz: Option<&str>, owner_tz: Option<&str>) -> Result<Zone, String> {
 
 /// `--tz` for a repeating heartbeat (`k2 heartbeat schedule add|edit`): the
 /// IANA zone its wall-clock times are read in, as stored on the row.
-/// `Ok(None)` for `server` (or `local`, or an empty value): follow the
-/// server's own clock, which is what every row without a zone does. A name
-/// that isn't an IANA zone is refused, never guessed. The same names
-/// `k2 heartbeat remind --tz` takes.
+/// `Ok(None)` for `server` (or `box`, `local`, or an empty value): follow
+/// the server's own clock, which is what every row without a zone does. A
+/// name that isn't an IANA zone is refused, never guessed. The same names
+/// `k2 heartbeat remind --tz` takes (`box` is `k2 chat prefs --tz box`'s word).
 pub fn schedule_zone(raw: &str) -> Result<Option<String>, String> {
     let t = raw.trim();
-    if t.is_empty() || t.eq_ignore_ascii_case("server") || t.eq_ignore_ascii_case("local") {
+    if t.is_empty() || ["server", "box", "local"].iter().any(|w| t.eq_ignore_ascii_case(w)) {
         return Ok(None);
     }
     t.parse::<chrono_tz::Tz>().map(|z| Some(z.name().to_string())).map_err(|_| {

@@ -76,7 +76,11 @@ fn schedule_zone_takes_iana_names_and_local_or_empty_clears() {
     assert_eq!(when::schedule_zone("local").unwrap(), None);
     assert_eq!(when::schedule_zone("LOCAL").unwrap(), None);
     assert_eq!(when::schedule_zone("").unwrap(), None);
-    for bad in ["Mars/Olympus", "EST5", "New York", "america/new york"] {
+    // `box` is `k2 chat prefs --tz box`'s word for the server's clock.
+    assert_eq!(when::schedule_zone("box").unwrap(), None);
+    assert_eq!(when::schedule_zone(" BOX ").unwrap(), None);
+    assert_eq!(when::schedule_zone("server").unwrap(), None);
+    for bad in ["Mars/Olympus", "EST5", "New York", "america/new york", "boxes"] {
         let e = when::schedule_zone(bad).expect_err(bad);
         assert!(e.starts_with(&format!("--tz '{}' is not an IANA time zone", bad.trim())), "{e}");
         assert!(e.contains("--tz server"), "the error says how to follow the server's clock: {e}");
@@ -228,6 +232,124 @@ fn fall_back_overlap_fires_once_at_the_earlier_instant() {
     }
 }
 
+// ── hourly windows read in the schedule zone ──────────────────────────
+
+/// Every fire of `template` from `from` (its last fire) up to `until`: the
+/// next fire the evaluator plans, checked to be `Due` there (so it is a real
+/// fire, not only an estimate), then fired on time.
+fn fires_between(template: &AgentHeartbeat, from: DateTime<Utc>, until: DateTime<Utc>) -> Vec<DateTime<Utc>> {
+    let mut hb = template.clone();
+    hb.last_fired = Some(from.to_rfc3339());
+    let mut fired = Vec::new();
+    let mut now = from;
+    for _ in 0..200 {
+        let next = next_fire_estimate(&hb, now.with_timezone(&Local))
+            .unwrap_or_else(|| panic!("a next fire after {now}: {hb:?}"))
+            .with_timezone(&Utc);
+        assert!(next > now, "the next fire {next} is after {now}");
+        if next >= until {
+            return fired;
+        }
+        assert!(
+            matches!(evaluate_with_now(&hb, (next + chrono::Duration::seconds(30)).with_timezone(&Local)),
+                DueStatus::Due { scheduled_for } if scheduled_for.with_timezone(&Utc) == next),
+            "due at {next}: {:?}",
+            evaluate_with_now(&hb, (next + chrono::Duration::seconds(30)).with_timezone(&Local))
+        );
+        fired.push(next);
+        hb.last_fired = Some(next.to_rfc3339());
+        now = next;
+    }
+    panic!("more than 200 fires between {from} and {until}");
+}
+
+fn utc_hours(fires: &[DateTime<Utc>]) -> Vec<u32> {
+    fires.iter().map(|t| t.hour()).collect()
+}
+
+fn wall_hours(fires: &[DateTime<Utc>], zone: chrono_tz::Tz) -> Vec<u32> {
+    fires.iter().map(|t| t.with_timezone(&zone).hour()).collect()
+}
+
+fn hourly(start: &str, end: &str, tz: Option<&str>) -> AgentHeartbeat {
+    row("hourly", &format!(r#"{{"every_seconds":3600,"start":"{start}","end":"{end}"}}"#), tz, None)
+}
+
+/// `--hourly --start 05:00 --end 22:00 --tz America/New_York`: 05:00 to
+/// 21:00 New York every day, so 10:00Z–02:00Z in January (EST) and
+/// 09:00Z–01:00Z in July (EDT). Never the box's hours.
+#[test]
+fn hourly_window_fires_at_new_york_hours_in_january_and_july() {
+    let ny = hourly("05:00", "22:00", Some("America/New_York"));
+    let new_york_day: Vec<u32> = (5..=21).collect();
+
+    let jan = fires_between(&ny, utc("2027-01-15T05:00:00Z"), utc("2027-01-16T05:00:00Z"));
+    assert_eq!(wall_hours(&jan, New_York), new_york_day, "January: {jan:?}");
+    assert_eq!(utc_hours(&jan), vec![10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2]);
+
+    let jul = fires_between(&ny, utc("2026-07-15T04:00:00Z"), utc("2026-07-16T04:00:00Z"));
+    assert_eq!(wall_hours(&jul, New_York), new_york_day, "July: {jul:?}");
+    assert_eq!(utc_hours(&jul), vec![9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1]);
+}
+
+/// The DST days themselves. 05:00–22:00 New York is the same 17 wall hours
+/// on 2027-03-14 (EDT from 03:00) and 2026-11-01 (EST from 01:00 the second
+/// time). A window over the jump shows the rules: spring forward has no
+/// 02:00 (00:00, 01:00 EST, then 03:00 EDT); fall back keeps one fire per
+/// real hour, and the repeated 01:00 hour is a real hour of its own.
+#[test]
+fn hourly_window_on_the_spring_forward_and_fall_back_days() {
+    let day = hourly("05:00", "22:00", Some("America/New_York"));
+    let spring = fires_between(&day, utc("2027-03-14T05:00:00Z"), utc("2027-03-15T04:00:00Z"));
+    assert_eq!(wall_hours(&spring, New_York), (5..=21).collect::<Vec<_>>(), "{spring:?}");
+    assert_eq!(spring.first().copied(), Some(utc("2027-03-14T09:00:00Z")), "05:00 EDT");
+    assert_eq!(spring.last().copied(), Some(utc("2027-03-15T01:00:00Z")), "21:00 EDT");
+    let fall = fires_between(&day, utc("2026-11-01T04:00:00Z"), utc("2026-11-02T05:00:00Z"));
+    assert_eq!(wall_hours(&fall, New_York), (5..=21).collect::<Vec<_>>(), "{fall:?}");
+    assert_eq!(fall.first().copied(), Some(utc("2026-11-01T10:00:00Z")), "05:00 EST");
+    assert_eq!(fall.last().copied(), Some(utc("2026-11-02T02:00:00Z")), "21:00 EST");
+
+    let night = hourly("00:00", "04:00", Some("America/New_York"));
+    // Last fire 03:00 EST on the 13th.
+    let spring = fires_between(&night, utc("2027-03-13T08:00:00Z"), utc("2027-03-14T12:00:00Z"));
+    assert_eq!(
+        spring,
+        vec![utc("2027-03-14T05:00:00Z"), utc("2027-03-14T06:00:00Z"), utc("2027-03-14T07:00:00Z")],
+        "00:00 EST, 01:00 EST, 03:00 EDT"
+    );
+    assert_eq!(wall_hours(&spring, New_York), vec![0, 1, 3]);
+    // Last fire 03:00 EDT on 10-31.
+    let fall = fires_between(&night, utc("2026-10-31T07:00:00Z"), utc("2026-11-01T12:00:00Z"));
+    assert_eq!(utc_hours(&fall), vec![4, 5, 6, 7, 8], "00:00 EDT, 01:00 EDT, 01:00 EST, 02:00, 03:00 EST");
+    assert_eq!(wall_hours(&fall, New_York), vec![0, 1, 1, 2, 3]);
+}
+
+/// A window that wraps midnight in the schedule zone: 22:00–06:00 New York
+/// is 03:00Z–10:00Z in January and 02:00Z–09:00Z in July.
+#[test]
+fn hourly_window_wrapping_midnight_reads_the_schedule_zone() {
+    let ny = hourly("22:00", "06:00", Some("America/New_York"));
+    let night = vec![22, 23, 0, 1, 2, 3, 4, 5];
+    let jan = fires_between(&ny, utc("2027-01-15T12:00:00Z"), utc("2027-01-16T12:00:00Z"));
+    assert_eq!(wall_hours(&jan, New_York), night, "{jan:?}");
+    assert_eq!(utc_hours(&jan), vec![3, 4, 5, 6, 7, 8, 9, 10]);
+    assert_eq!(jan.first().copied(), Some(utc("2027-01-16T03:00:00Z")));
+    let jul = fires_between(&ny, utc("2026-07-15T12:00:00Z"), utc("2026-07-16T12:00:00Z"));
+    assert_eq!(wall_hours(&jul, New_York), night, "{jul:?}");
+    assert_eq!(utc_hours(&jul), vec![2, 3, 4, 5, 6, 7, 8, 9]);
+}
+
+/// No zone: the window is read on this machine's clock, as it always was
+/// (05:00–21:00 of `Local`, whatever zone this test runs in).
+#[test]
+fn hourly_window_without_a_zone_follows_the_machine_clock() {
+    let machine = hourly("05:00", "22:00", None);
+    let start = Local.with_ymd_and_hms(2027, 1, 15, 0, 0, 0).single().expect("local midnight").with_timezone(&Utc);
+    let fires = fires_between(&machine, start, start + chrono::Duration::hours(24));
+    let local_hours: Vec<u32> = fires.iter().map(|t| t.with_timezone(&Local).hour()).collect();
+    assert_eq!(local_hours, (5..=21).collect::<Vec<_>>(), "{fires:?}");
+}
+
 // ── add / edit through the core writers ───────────────────────────────
 
 fn seed_project(label: &str) -> (String, String) {
@@ -328,6 +450,28 @@ fn add_and_edit_set_and_clear_the_zone() {
     k2_heartbeat_set_tz(path.clone(), "close".into(), "Europe/London").expect("set");
     assert_eq!(k2_heartbeat_set_tz(path.clone(), "close".into(), "").expect("clear"), None);
     assert_eq!(stored(&pid, "close").tz, None);
+
+    // `box` clears it too.
+    k2_heartbeat_set_tz(path.clone(), "close".into(), "Europe/London").expect("set");
+    assert_eq!(k2_heartbeat_set_tz(path.clone(), "close".into(), "box").expect("clear"), None);
+    assert_eq!(stored(&pid, "close").tz, None);
+
+    // An hourly window added with a zone stores its next fire inside the
+    // window's New York hours.
+    let out = k2_heartbeat_add_with_tz(
+        path.clone(),
+        "desk".into(),
+        "hourly".into(),
+        r#"{"every_seconds":3600,"start":"05:00","end":"22:00"}"#.into(),
+        None,
+        Some("America/New_York"),
+    )
+    .expect("add hourly with tz");
+    assert_eq!(out["tz"], "America/New_York", "{out}");
+    let hb = stored(&pid, "desk");
+    assert_eq!(hb.tz.as_deref(), Some("America/New_York"));
+    let (h, _) = next_wall(&hb, New_York);
+    assert!((5..22).contains(&h), "the stored next fire is inside 05:00-22:00 New York: {hb:?}");
 
     // A name that isn't there.
     let err = k2_heartbeat_set_tz(path, "ghost".into(), "Asia/Tokyo").expect_err("missing");

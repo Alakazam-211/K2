@@ -3,6 +3,10 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.16
+
+- **Heartbeat hours keep their zone too.** `k2 heartbeat schedule add --hourly --start 05:00 --end 22:00 --tz America/New_York` fires 05:00 to 21:00 New York time all year, through both daylight-saving changes, and a window that crosses midnight (22:00 to 06:00) works the same way. A window that starts in the hour a spring-forward day skips opens when that day's clock resumes. `--tz box` now also means the server's clock.
+
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 
 ### Threads and Home

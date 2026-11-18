@@ -1,6 +1,8 @@
 //! `k2 app move-plan <service>` (0.46.4, field report #2): every step that moves a
 //! legacy `--cmd` service onto the App runtime, what's already done, and
-//! ONE owner approval for the owner's steps.
+//! ONE owner approval for the owner's steps. 0.46.16: a `--skin` site too
+//! (its steps after deploy are `copy_guests`, done inside `label_take`,
+//! then `label_take` and `stop_old`; `skin_move.rs`).
 //!
 //! ```text
 //! GET  /cli/app/move-plan          ?service=&app=            the plan (read only)
@@ -169,12 +171,8 @@ fn db<T>(f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>) -> R<T> {
 fn legacy_service(who: &Who, raw: Option<&str>) -> R<ps::PublishedService> {
     let t = super::grace::target(who, raw)?;
     let row = db(|c| ps::get_by_id(c, &t.service_id))?.ok_or_else(|| no(codes::APP_NOT_FOUND, 404, "the service vanished"))?;
-    if !super::legacy::is_legacy(&row) {
-        return Err(no(
-            NOT_LEGACY,
-            409,
-            format!("'{}' isn't a --cmd service (it is an App or a --skin App): there is nothing to move", row.name),
-        ));
+    if !super::legacy::label_movable(&row) {
+        return Err(no(NOT_LEGACY, 409, format!("'{}' is an App's own service: there is nothing to move", row.name)));
     }
     Ok(row)
 }
@@ -343,6 +341,13 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
         Some(format!("k2 app deploy {app_id} <folder>")),
     ));
 
+    // 0.46.16: a --skin site. Its guests are copied in label take (no
+    // box-login copy, no data step: its folder is the App's Seed).
+    if super::legacy::is_skin_site(&svc) {
+        site_steps(who, &svc, &app_id, app_row.as_ref(), live, &mut steps);
+        return Ok(Plan { service: svc, app_id, app: app_row, steps });
+    }
+
     // Copy-host: the users who'd be copied (a dry run). Their names go to
     // callers who may list App users (a human, an agent with switch 1);
     // everyone gets the count and a hash the approval binds to.
@@ -488,6 +493,79 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
     ));
 
     Ok(Plan { service: svc, app_id, app: app_row, steps })
+}
+
+/// A `--skin` site's steps after deploy (0.46.16): its guests onto the App
+/// (inside label take), the label, then stop the site.
+fn site_steps(who: &Who, svc: &ps::PublishedService, app_id: &str, app: Option<&store::AppRow>, live: bool, steps: &mut Vec<J>) {
+    let name = svc.name.as_str();
+    let folder = if svc.skin_root.trim().is_empty() { "the site's folder".to_string() } else { format!("the site's folder ({})", svc.skin_root) };
+    if let Some(d) = steps.iter_mut().find(|s| s["id"] == "deploy") {
+        if d["state"] != DONE {
+            d["detail"] = json!(format!(
+                "{}; a --skin site is static files: deploy {folder} as a static App (manifest.json host.mode \"static\", host.root; k2 study app-move)",
+                d["detail"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+    let public = svc.expose == ps::EXPOSE_TUNNEL;
+    let took = super::labels::moved_to(&svc.id).is_some_and(|a| a == app_id);
+    let mut copy = step(
+        "copy_guests",
+        AGENT,
+        if took { DONE } else if live { TODO } else { BLOCKED },
+        "Give the site's guests the same access on the App",
+        "",
+        (!took).then(|| format!("k2 app label take {app_id} {name}")),
+    );
+    match app {
+        Some(a) => match k2_core::skin::handover::app_move::copy_site_grants_to_app(&svc.id, &a.service_id, &a.app_id, Some(&a.owner_workspace), &actor(who), true) {
+            Ok(rep) => {
+                copy["detail"] = json!(if took {
+                    format!("done in label take; {} more guest(s) of the site would be copied now", rep.added.len())
+                } else {
+                    format!(
+                        "label take copies {} guest(s) (same usernames and passwords; each signs in once more) and {} role(s), right before the label moves; \
+                         an agent without \"Let this agent manage its Apps' users\" gets one card for the owner",
+                        rep.added.len(),
+                        rep.roles_copied.len()
+                    )
+                });
+                copy["userCount"] = json!(rep.added.len());
+                if may_see_users(who) {
+                    copy["users"] = json!(rep.added);
+                }
+            }
+            Err(e) => copy["detail"] = json!(format!("can't list the site's guests: {e}")),
+        },
+        None => copy["detail"] = json!("after install"),
+    }
+    steps.push(copy);
+    steps.push(step(
+        "label_take",
+        AGENT,
+        if took { DONE } else if !public { NA } else if live { TODO } else { BLOCKED },
+        "Move the site's hostname to the App",
+        if took {
+            format!("{name} serves {app_id}")
+        } else if !public {
+            format!("{name} has no public hostname (--no-tunnel): nothing to move")
+        } else if live {
+            format!("{name} still serves the --skin site")
+        } else {
+            "after the App is live".to_string()
+        },
+        (public && !took).then(|| format!("k2 app label take {app_id} {name}")),
+    ));
+    let stopped = svc.desired != "running";
+    steps.push(step(
+        "stop_old",
+        AGENT,
+        if stopped { DONE } else if took || !public { TODO } else { BLOCKED },
+        "Stop the --skin site (the move is done after this; k2 app label return undoes the move until then)",
+        if stopped { format!("{name} is stopped") } else { format!("{name} still runs (unrouted once its label moved)") },
+        (!stopped).then(|| format!("k2 publish stop {name}")),
+    ));
 }
 
 // ── one request for the owner's steps ────────────────────────────────

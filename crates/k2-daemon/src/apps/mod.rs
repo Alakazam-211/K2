@@ -55,6 +55,8 @@ pub mod relay_claims;
 pub mod guard;
 /// `k2 app move-plan`: every step of a move, one owner approval (0.46.4).
 pub mod move_plan;
+/// A `--skin` site onto an App: its guests copied in `label take` (0.46.16).
+pub mod skin_move;
 /// Test guests of one App, made by a person (0.46.4).
 pub mod test_guests;
 /// `k2 app user …` by an App's agent on a login of its own App that reaches

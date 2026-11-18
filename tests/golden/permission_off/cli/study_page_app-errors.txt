@@ -408,7 +408,14 @@ HANDOVER (moving Apps between workspaces and boxes)
       fix: Fix what the step names, then run the plan again: k2 app
       move-plan <service> --app <app-id>
   not_a_cmd_service (exit 3)
-      fix: Check the name. Moving a --cmd service in: k2 study app-move
+      fix: Check the name: move-plan takes a --cmd service or a --skin site.
+      Moving one in: k2 study app-move
+  site_guests_changed (exit 3)
+      fix: Run the take again so the owner sees the current list: k2 app
+      label take <app-id> <label>
+  site_copy_failed (exit 3)
+      fix: Run the take again; if it fails again, the refusal says why (k2
+      app label take <app-id> <label>).
   plan_changed (exit 3)
       fix: Request again so the owner sees the current list: k2 app
       move-plan <service> --app <app-id> --request

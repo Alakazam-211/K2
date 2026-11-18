@@ -29,6 +29,12 @@ use serde::Serialize;
 
 use super::{parse_rooms_json, parse_room_policy_json, room_policy_json, rooms_json, with_conn, RoomPolicy, HOST_APP_ID};
 
+/// A `--skin` site's guests copied onto an App of the same workspace that
+/// takes its label (0.46.16, `k2 app label take`): the same-box,
+/// same-workspace cousin of a handover.
+#[path = "skin_app_move.rs"]
+pub mod app_move;
+
 /// The owner's guest (no tie, no agent stamp, or the owner took it over).
 pub const CLASS_OWNER: &str = "owner";
 /// Tied to (or added by) the giving workspace, with grants only on this

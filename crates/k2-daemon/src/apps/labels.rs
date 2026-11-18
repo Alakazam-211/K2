@@ -33,6 +33,9 @@
 //!   start.
 //! - **Return:** refused unless the legacy service answers on its port;
 //!   the label points back at it and its row is `tunnel` again.
+//! - **A `--skin` site** (0.46.16, `super::skin_move`): take also copies
+//!   the site's guests onto the App (grants, roles copied for the App),
+//!   right before the hostname moves; return leaves the site as it was.
 //! - **Uninstall** of an App gives its taken labels back the same way
 //!   ([`give_back_all`]), or drops the hostname when the legacy service is
 //!   gone.
@@ -156,7 +159,8 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8]) -> R<J> {
         }
     }
     if is_take {
-        take(who, &app, &label, claim)
+        let expect = super::skin_move::expect_users(&v)?;
+        take(who, &app, &label, claim, expect.as_deref())
     } else {
         give_back(who, &app, &label, claim)
     }
@@ -236,7 +240,7 @@ pub(crate) fn ours(app: &AppRow, label: &str, is_take: bool) -> R<bool> {
     if is_take {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        return Ok(ps::get_by_project_name(&conn, &app.owner_workspace, label).map_err(db_err)?.is_some_and(|r| super::legacy::is_legacy(&r)));
+        return Ok(ps::get_by_project_name(&conn, &app.owner_workspace, label).map_err(db_err)?.is_some_and(|r| super::legacy::label_movable(&r)));
     }
     Ok(load_cfg(&app.app_id)?.labels.iter().any(|l| l.label == label))
 }
@@ -300,7 +304,7 @@ pub(crate) fn apply_transfer(b: &J, ws: &str, by: &str) -> R<J> {
     let lock = cfg_lock(&app.app_id);
     let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
     let caller = crate::label_owner::Caller::Manager { actor: by.to_string() };
-    crate::label_owner::with_caller(caller, || if is_take { take(&who, &app, &label, claim) } else { give_back(&who, &app, &label, claim) })
+    crate::label_owner::with_caller(caller, || if is_take { take(&who, &app, &label, claim, None) } else { give_back(&who, &app, &label, claim) })
 }
 
 pub(super) fn accepts(port: u16) -> bool {
@@ -384,7 +388,7 @@ pub(super) fn foreign_refusal(label: &str, holder: &str) -> Refusal {
     r
 }
 
-fn take(who: &Who, app: &AppRow, label: &str, claim: Claim) -> R<J> {
+fn take(who: &Who, app: &AppRow, label: &str, claim: Claim, expect: Option<&[String]>) -> R<J> {
     let ws = app.owner_workspace.clone();
     let row = {
         let db = k2_core::db::shared();
@@ -407,9 +411,10 @@ fn take(who: &Who, app: &AppRow, label: &str, claim: Claim) -> R<J> {
         }
         return Err(no(codes::APP_NOT_FOUND, 404, format!("your workspace has no published service named '{label}' (k2 publish list)")));
     };
-    if !super::legacy::is_legacy(&row) {
-        return Err(no(codes::BAD_REQUEST, 409, format!("'{label}' isn't a --cmd service (it is an App or a --skin App): nothing to take over")));
+    if !super::legacy::label_movable(&row) {
+        return Err(no(codes::BAD_REQUEST, 409, format!("'{label}' is an App's own service: nothing to take over")));
     }
+    let site = super::legacy::is_skin_site(&row);
     let mut cfg = load_cfg(&app.app_id)?;
     if cfg.labels.iter().any(|l| l.label == label) {
         return Ok(json!({ "ok": true, "already": true, "app": app.app_id, "label": label }));
@@ -420,6 +425,14 @@ fn take(who: &Who, app: &AppRow, label: &str, claim: Claim) -> R<J> {
             409,
             format!("'{label}' runs without a public hostname (--no-tunnel): nothing to move. Point what calls 127.0.0.1:{} at the App's front port instead", row.port),
         ));
+    }
+    // A --skin site's guests (0.46.16): an agent without "manage its Apps'
+    // users" asks the owner once, with the guests it would copy
+    // (before the health check: the approved replay checks it again).
+    if site {
+        if let Some(held) = super::skin_move::hold_without_users_switch(who, app, label, &row, expect)? {
+            return Ok(held);
+        }
     }
     let front = healthy(app).map_err(|why| {
         no(
@@ -437,7 +450,10 @@ fn take(who: &Who, app: &AppRow, label: &str, claim: Claim) -> R<J> {
         }
         out
     })?;
-    point(&ws, label, front).map_err(|e| no(MOVE_FAILED, 409, format!("'{label}' still serves the legacy service: {e}")))?;
+    // The site's guests land on the App before the hostname moves, so they
+    // have access the moment it serves the App (no gap).
+    let copied = if site { Some(super::skin_move::copy_guests(who, app, &row, expect)?) } else { None };
+    point(&ws, label, front).map_err(|e| no(MOVE_FAILED, 409, format!("'{label}' still serves the {}: {e}", if site { "--skin site" } else { "legacy service" })))?;
     // Unrouted: the legacy service runs on, and a restart of it never
     // points the label back.
     {
@@ -454,9 +470,17 @@ fn take(who: &Who, app: &AppRow, label: &str, claim: Claim) -> R<J> {
         taken_by: by.clone(),
     });
     save_cfg(&app.app_id, &cfg)?;
-    audit(&app.app_id, "label_take", &by, json!({ "label": label, "service": row.id, "legacyPort": row.port, "frontPort": front }));
+    audit(
+        &app.app_id,
+        "label_take",
+        &by,
+        json!({ "label": label, "service": row.id, "legacyPort": row.port, "frontPort": front, "site": site, "copied": copied.as_ref().map(|c| c.added.len()) }),
+    );
     super::routes::mirror(&app.app_id);
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: ws.clone() });
+    if let Some(c) = copied {
+        return Ok(super::skin_move::take_answer(app, label, front, &row, &c));
+    }
     Ok(json!({
         "ok": true,
         "app": app.app_id,
@@ -501,7 +525,16 @@ fn give_back(who: &Who, app: &AppRow, label: &str, claim: Claim) -> R<J> {
     audit(&app.app_id, "label_return", &by, json!({ "label": label, "service": row.id, "port": port }));
     super::routes::mirror(&app.app_id);
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: app.owner_workspace.clone() });
-    Ok(json!({ "ok": true, "app": app.app_id, "label": label, "returnedTo": { "service": row.id, "port": port } }))
+    let mut out = json!({ "ok": true, "app": app.app_id, "label": label, "returnedTo": { "service": row.id, "port": port } });
+    if super::legacy::is_skin_site(&row) {
+        out["site"] = json!(true);
+        out["note"] = json!(format!(
+            "{label} serves the --skin site again; its guests sign in there as before (nothing on the site changed). \
+             The guests copied onto {} keep their access there (k2 app grant list shows them; k2 app grant rm --id <grant-id> removes one).",
+            app.app_id
+        ));
+    }
+    Ok(out)
 }
 
 /// Uninstall: every taken label goes back to its legacy service when that

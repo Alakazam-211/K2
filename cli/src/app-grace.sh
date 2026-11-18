@@ -16,15 +16,17 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
   k2 app data ls|get|rm|mv <app-id> …  Read back what its pages write to /data
                                        (k2 app data get <app-id> var/answers.json),
                                        list, remove, rename (k2 app data --help).
-  k2 app label take <app-id> <label>   Your legacy service's public hostname
-                                       now serves the App (the App must be
-                                       healthy). The old service keeps running,
-                                       unrouted.
+  k2 app label take <app-id> <label>   Your legacy service's or --skin site's
+                                       public hostname now serves the App (the
+                                       App must be healthy). The old service
+                                       keeps running, unrouted. A --skin site's
+                                       guests are copied onto the App first
+                                       (same usernames and passwords).
   k2 app label return <app-id> <label> Move it back (the old service must answer).
   k2 app domain add|rm <app-id> <sub>  Any other subdomain of your workspace
                                        (one you pointed at the service's port)
                                        serves the App too (k2 app domain --help).
-  k2 app move-plan <service> [--app <app-id>] [--request] [--json]
+  k2 app move-plan <service|site> [--app <app-id>] [--request] [--json]
                                        Every step of the move, what's done, and
                                        (--request) one owner approval for all
                                        the owner's steps.

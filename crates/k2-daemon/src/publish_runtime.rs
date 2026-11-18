@@ -864,6 +864,10 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
         json.legacy_hint = Some(k2_core::app_grace::LEGACY_HINT.to_string());
         json.label_moved_to = crate::apps::labels::moved_to(&row.id);
     }
+    // 0.46.16: a --skin site whose label an App took.
+    if row.kind == KIND_SKIN {
+        json.label_moved_to = crate::apps::labels::moved_to(&row.id);
+    }
     if row.kind != KIND_SKIN {
         json.env_refused = crate::vault::publish_env::refused_refs(&row.id);
         json.clean_mode = crate::vault::publish_env::is_clean_mode(&row.id);

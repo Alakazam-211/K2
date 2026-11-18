@@ -765,9 +765,24 @@ v = json.load(sys.stdin)
 if v.get("already"):
     print("%s already serves %s" % (v.get("app"), v.get("label")))
 elif v.get("returnedTo"):
-    print("%s serves the legacy service again (port %s); App %s no longer has it" % (v.get("label"), v["returnedTo"].get("port"), v.get("app")))
+    what = "--skin site" if v.get("site") else "legacy service"
+    print("%s serves the %s again (port %s); App %s no longer has it" % (v.get("label"), what, v["returnedTo"].get("port"), v.get("app")))
+    if v.get("note"):
+        print(v["note"])
 else:
     print("%s now serves App %s (front port %s)" % (v.get("label"), v.get("app"), v.get("frontPort")))
+    c = v.get("copied")
+    if c is not None:
+        print("guests copied onto the App: %d (%s)" % (len(c.get("added") or []), ", ".join(c.get("added") or []) or "none"))
+        if c.get("keptExisting"):
+            print("already on the App (kept as they were): %s" % ", ".join(k.get("user", "") for k in c["keptExisting"]))
+        for k, why in (("skippedOtherAppRole", "their role is another App's"), ("skippedOtherWorkspaceAgent", "another workspace's agent added them")):
+            if c.get(k):
+                print("not copied (%s): %s" % (why, ", ".join(c[k])))
+        for r in c.get("rolesCopied") or []:
+            print("role %s copied for the App as %s" % (r.get("from"), r.get("to")))
+    for n in v.get("notCopied") or []:
+        print("not copied: %s" % n)
     if v.get("note"):
         print(v["note"])'
 }

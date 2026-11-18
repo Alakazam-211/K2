@@ -90,6 +90,21 @@ SIGN-INS. Your users sign in once after the move: sessions from the old
 service's box login don't carry over to the App, so each web and phone
 session asks for the password again (once).
 
+A --SKIN SITE (0.46.16). The same move, with its guests:
+  1. Deploy the site's folder (its --root) as a static App: manifest.json
+     with host.mode "static" and host.root (k2 study app-deploys).
+  2. k2 app label take <app-id> <site-label>
+     copies every guest of the site onto the App (their rooms, roles and
+     on/off; a role made for the site is copied as <role>-<app-id>), then
+     moves the hostname: no gap. Guests keep their username and password
+     and sign in once more (a site's sign-ins don't carry over). Without
+     "Let this agent manage its Apps' users" the take is one card for
+     your owner naming the guests (exit 2); it moves once approved.
+  3. k2 publish stop <site-label> once you're sure. Until then
+     k2 app label return <app-id> <site-label> serves the site again
+     (nothing on it changed; the guests copied onto the App stay).
+  k2 app move-plan <site-label> --app <app-id> lists these steps.
+
 TESTING. Make a test guest of your App: k2 app user add <app-id> <name>
 --test [--room <your room>] [--password-stdin]. With "Let this agent manage
 its Apps' users" on it is made at once and tied to you; without it, it is one

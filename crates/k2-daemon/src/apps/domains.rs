@@ -677,8 +677,9 @@ fn add_with(who: &Who, body: &[u8], front_override: Option<u16>) -> R<J> {
     if let Some(other) = served_by_other_app(&app.app_id, &label)? {
         return Err(no(OTHER_APP, 409, format!("'{label}' already serves the App {other}: remove it there first (k2 app domain rm {other} {label})")));
     }
-    // A published service's own label: this workspace's --cmd service is
-    // `label take` (it unroutes that service); anything else is refused.
+    // A published service's own label: this workspace's --cmd service or
+    // --skin site is `label take` (it unroutes that service); anything
+    // else is refused.
     let row = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -697,10 +698,14 @@ fn add_with(who: &Who, body: &[u8], front_override: Option<u16>) -> R<J> {
         let legacy = {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            ps::get_by_id(&conn, &id).map_err(db_err)?.is_some_and(|r| super::legacy::is_legacy(&r))
+            ps::get_by_id(&conn, &id).map_err(db_err)?.is_some_and(|r| super::legacy::label_movable(&r))
         };
         let hint = if legacy {
-            format!("'{label}' is your --cmd service's own label: move it with k2 app label take {} {label} (that also unroutes the old service)", app.app_id)
+            format!(
+                "'{label}' is your --cmd service's or --skin site's own label: move it with k2 app label take {} {label} \
+                 (that also unroutes the old service; a site's guests are copied onto the App)",
+                app.app_id
+            )
         } else {
             format!("'{label}' is a published service's label in your workspace (k2 publish list): stop it there first")
         };

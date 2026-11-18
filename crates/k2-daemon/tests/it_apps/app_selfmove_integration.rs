@@ -364,6 +364,93 @@ async fn an_agent_moves_its_label_to_its_healthy_app_and_back() {
     k2_daemon::apps::alerts::set_sink(None);
 }
 
+/// A `--skin` site moves onto its workspace's App (0.46.16): without
+/// "manage its Apps' users" the agent's take is one held card naming the
+/// guests and nothing moves; with it, the guests land on the App (same
+/// usernames, the site's rows untouched) and the hostname moves in one
+/// call; return points it back at the site and leaves the copies.
+/// (The site here is a plain process whose row is a --skin row: the take
+/// needs its port and row, not K2's helper.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_moves_a_skin_site_with_its_guests_and_back() {
+    require_python3();
+    let env = setup(&[]);
+    quiet_alerts();
+    let cp = fake_cp("box");
+    let _cp = EnvVar::set("K2_CONNECT_BASE", format!("http://127.0.0.1:{}", cp.port));
+    let mut cfg = k2_core::tunnel::config::TunnelConfig::default();
+    cfg.subdomain = "box".into();
+    cfg.token = "tok-test".into();
+    k2_core::tunnel::config::save(&cfg).expect("save tunnel.json");
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "sitews");
+    allow_build_only(&ws, true);
+    let agent = passport(&ws);
+    let old = legacy(d.port, &ws, "portal", "p1").await;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE published_services SET kind = 'skin', cmd = '(skin)' WHERE id = ?1", rusqlite::params![old.id]).unwrap();
+    }
+    publish_label(&cp, &ws, &old, "portal");
+    let guest = |name: &str| {
+        let p = k2_core::skin::add_principal(name).unwrap();
+        k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+            subject_kind: "principal".into(),
+            subject_id: p.id.clone(),
+            kind: "app".into(),
+            target_id: old.id.clone(),
+            role: None,
+            scope: Some("[]".into()),
+            created_by: Some("owner-token".into()),
+        })
+        .unwrap();
+        p.id
+    };
+    let (ada, bob) = (guest("ada"), guest("bob"));
+    let front = live_app(d.port, &ws, &agent, "portalapp", "a1").await;
+    let app_svc = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::deploy::store::get_app(&conn, "portalapp").unwrap().unwrap().service_id
+    };
+    let on = |pid: &str, target: &str| k2_core::skin::list_grants().unwrap().iter().any(|g| g.subject_id == pid && g.kind == "app" && g.target_id == target);
+
+    // Without the users switch: one card naming the guests, nothing moves.
+    let r = post(d.port, "/cli/app/label/take", &agent, json!({"app": "portalapp", "label": "portal"})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "{}", r.body);
+    assert_eq!(r.json()["diff"]["users"], json!(["ada", "bob"]), "{}", r.body);
+    assert!(cp.writes.lock().unwrap().is_empty(), "nothing moved");
+    assert!(!on(&ada, &app_svc), "nothing copied");
+
+    // With it: the guests land on the App and the hostname moves.
+    allow_manage(&ws, true);
+    let r = post(d.port, "/cli/app/label/take", &agent, json!({"app": "portalapp", "label": "portal"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["site"], true, "{}", r.body);
+    assert_eq!(r.json()["copied"]["added"], json!(["ada", "bob"]), "{}", r.body);
+    assert_eq!(cp.map.lock().unwrap().get("portal").cloned(), Some(format!("127.0.0.1:{front}")));
+    assert_eq!(*cp.writes.lock().unwrap(), vec![format!("point portal 127.0.0.1:{front}")], "one control-plane write");
+    assert!(on(&ada, &app_svc) && on(&bob, &app_svc), "the guests are the App's too");
+    assert!(on(&ada, &old.id) && on(&bob, &old.id), "the site's own grants stay");
+    assert_eq!(row(&old.id).expose, "local", "the site runs on, unrouted");
+    assert_eq!(listed(d.port, &ws, "portal").await["labelMovedTo"], "portalapp");
+    let session = k2_core::skin::create_app_session_token("ada", &app_svc).expect("ada signs in to the App");
+    assert!(session.meta.rooms.is_empty(), "the site's rooms (none): {:?}", session.meta.rooms);
+
+    // Return: the hostname serves the site again; the copies stay.
+    let r = post(d.port, "/cli/app/label/return", &agent, json!({"app": "portalapp", "label": "portal"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["site"], true, "{}", r.body);
+    assert_eq!(cp.map.lock().unwrap().get("portal").cloned(), Some(format!("127.0.0.1:{}", old.port)));
+    assert_eq!(row(&old.id).expose, "tunnel");
+    assert!(on(&ada, &old.id) && on(&ada, &app_svc), "nothing deleted on return");
+
+    let _ = post(d.port, "/cli/app/uninstall", &agent, json!({"app": "portalapp"})).await;
+    let _ = post(d.port, "/cli/publish/rm", OWNER, json!({"name": "portal", "project": ws.id, "keepHostname": true})).await;
+    k2_daemon::apps::alerts::set_sink(None);
+}
+
 // ── C: data in ───────────────────────────────────────────────────────
 
 /// The agent copies its legacy data from its workspace into its App's data

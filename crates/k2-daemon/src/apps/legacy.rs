@@ -15,6 +15,19 @@ pub fn is_legacy(r: &ps::PublishedService) -> bool {
     r.kind != ps::KIND_SKIN && r.cmd != ps::CMD_APP_SENTINEL && r.cmd != ps::CMD_SKIN_SENTINEL
 }
 
+/// Can an App take this row's label (`k2 app label take`): a legacy
+/// `--cmd` service, or a `--skin` site (0.46.16: its guests are copied
+/// onto the App in the same move)?
+pub fn label_movable(r: &ps::PublishedService) -> bool {
+    is_legacy(r) || is_skin_site(r)
+}
+
+/// A `--skin` site (the older published-site kind: K2's helper serves its
+/// folder and signs its guests in).
+pub fn is_skin_site(r: &ps::PublishedService) -> bool {
+    r.kind == ps::KIND_SKIN
+}
+
 /// The legacy services a caller can see (a passport or shell tab: its own
 /// workspace's), labelled, for `k2 app list` and the doctor.
 pub(crate) fn services(who: &Who) -> Vec<J> {

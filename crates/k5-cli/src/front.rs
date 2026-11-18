@@ -7,12 +7,12 @@
 //! [`crate::families`]. A form the front's code does not take falls
 //! through, as does everything else, byte for byte ([`crate::fallthrough`]).
 //!
-//! A family's help is the shell's: a `whoami`, `done`, `respond`, `inbox`
-//! or `read` command line with `-h` or `--help` anywhere in it falls
-//! through, so the shell prints its help text (or its error for a flag
-//! before it, or whatever it does with such a word where it reads a
-//! value), with its connection gate in front of it, exactly as it always
-//! has. No copy of the text lives here.
+//! A family's help is the shell's: a `whoami`, `done`, `respond`, `inbox`,
+//! `read`, `activity`, `sessions` or `connections` command line with `-h`
+//! or `--help` anywhere in it falls through, so the shell prints its help
+//! text (or its error for a flag before it, or whatever it does with such
+//! a word where it reads a value), with its connection gate in front of
+//! it, exactly as it always has. No copy of the text lives here.
 
 use crate::route::{self, Noun, Owner};
 use std::ffi::OsString;
@@ -45,6 +45,18 @@ pub enum Route {
     /// `read` with no `-h` or `--help` in it ([`crate::families::read`],
     /// which may still hand it to the shell).
     Read,
+    /// `activity` with no `-h` or `--help` in it
+    /// ([`crate::families::activity`], which may still hand it to the
+    /// shell).
+    Activity,
+    /// `sessions` with no `-h` or `--help` in it
+    /// ([`crate::families::sessions`], which may still hand it to the
+    /// shell).
+    Sessions,
+    /// `connections` with a verb the route table sends here and no `-h`
+    /// or `--help` in it ([`crate::families::connections`], which may
+    /// still hand it to the shell).
+    Connections,
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
@@ -116,6 +128,15 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
         } else {
             Route::Read
         };
+    }
+    for (word, route) in [
+        ("activity", Route::Activity),
+        ("sessions", Route::Sessions),
+        ("connections", Route::Connections),
+    ] {
+        if noun.names(word) {
+            return if help { Route::Fallthrough } else { route };
+        }
     }
     Route::Fallthrough
 }
@@ -333,6 +354,46 @@ mod tests {
             &["read", "ws", "--agent", "--help"],
         ] {
             assert_eq!(native(read, &args(line)), Route::Fallthrough, "{line:?}");
+        }
+    }
+
+    /// `activity`, `sessions` and `connections`, likewise: any `-h` or
+    /// `--help` word goes to the shell.
+    #[test]
+    fn the_r3_7_forms() {
+        let row = |w: &str| {
+            route::TABLE
+                .iter()
+                .find(|n| n.names(w))
+                .unwrap_or_else(|| panic!("a {w} row"))
+        };
+        for (w, want, lines) in [
+            (
+                "activity",
+                Route::Activity,
+                &[&["activity"][..], &["activity", "5", "--json"]][..],
+            ),
+            (
+                "sessions",
+                Route::Sessions,
+                &[
+                    &["sessions"][..],
+                    &["sessions", "--past"],
+                    &["sessions", "show", "x"],
+                ],
+            ),
+            (
+                "connections",
+                Route::Connections,
+                &[&["connections", "list"][..], &["connections", "--json"]],
+            ),
+        ] {
+            for line in lines {
+                assert_eq!(native(row(w), &args(line)), want, "{line:?}");
+            }
+            for line in [&[w, "--help"][..], &[w, "list", "-h"], &[w, "x", "--help"]] {
+                assert_eq!(native(row(w), &args(line)), Route::Fallthrough, "{line:?}");
+            }
         }
     }
 

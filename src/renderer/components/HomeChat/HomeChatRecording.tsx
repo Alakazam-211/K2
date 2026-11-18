@@ -81,7 +81,7 @@ export function HomeChatRecordingCard({
               {view.detail}
             </span>
           ) : null}
-          <div className="mt-1.5 flex min-h-6 items-center gap-1.5" data-testid="home-chat-recording-card-state">
+          <div className={`mt-1.5 flex min-h-6 items-center gap-1.5 ${view.note ? 'flex-wrap' : ''}`} data-testid="home-chat-recording-card-state">
             {view.state === 'live' ? (
               <span className="type-hint flex items-center gap-1.5 text-[var(--color-text-secondary)]">
                 <RecordingDot />
@@ -102,7 +102,7 @@ export function HomeChatRecordingCard({
                   Show transcript
                 </Button>
                 {view.note || view.partial ? (
-                  <span className="type-hint text-[var(--color-text-muted)]" data-testid="home-chat-recording-card-note">
+                  <span className={`type-hint text-[var(--color-text-muted)] ${view.note ? 'basis-full' : ''}`} data-testid="home-chat-recording-card-note">
                     {view.note ?? TRANSCRIPT_PARTIAL_LINE}
                   </span>
                 ) : null}

@@ -245,17 +245,66 @@ pub enum Failure {
     /// 52, "Empty reply from server").
     Empty,
     /// Anything else: a write or read that failed, an answer cut short, a
-    /// head that is not HTTP.
-    Broken(String),
+    /// head that is not HTTP. `curl` is curl's exit code for it.
+    Broken { curl: i32, why: String },
+}
+
+/// curl's exit codes for the failures here (`man curl`, EXIT CODES).
+pub mod curl {
+    /// 1: the answer is not HTTP (curl: "Received HTTP/0.9 when not
+    /// allowed").
+    pub const UNSUPPORTED_PROTOCOL: i32 = 1;
+    /// 3: a URL curl won't send as it is.
+    pub const URL_MALFORMAT: i32 = 3;
+    /// 6: the host name doesn't resolve.
+    pub const COULDNT_RESOLVE_HOST: i32 = 6;
+    /// 7: nothing accepted the connection.
+    pub const COULDNT_CONNECT: i32 = 7;
+    /// 8: an HTTP head curl can't read (a header with no colon, a
+    /// `Content-Length` that is no number).
+    pub const WEIRD_SERVER_REPLY: i32 = 8;
+    /// 18: the answer ended before its `Content-Length`.
+    pub const PARTIAL_FILE: i32 = 18;
+    /// 28: no answer in time, or no connect in time.
+    pub const OPERATION_TIMEDOUT: i32 = 28;
+    /// 52: the connection closed with nothing sent back.
+    pub const GOT_NOTHING: i32 = 52;
+    /// 55: a write of the request failed.
+    pub const SEND_ERROR: i32 = 55;
+    /// 56: a read of the answer failed (a reset), or a chunked body is
+    /// broken.
+    pub const RECV_ERROR: i32 = 56;
 }
 
 impl Failure {
     /// True when some of the request may have reached the server: every
-    /// failure but a connect that failed or timed out and a request that
-    /// went out with no byte at all. Such a request may have been run.
+    /// failure but a connect that failed or timed out, a name that didn't
+    /// resolve and a request that went out with no byte at all. Such a
+    /// request may have been run.
     pub fn sent(&self) -> bool {
-        !matches!(self, Failure::Connect(_) | Failure::ConnectTimedOut | Failure::NotSent(_))
+        !matches!(
+            self,
+            Failure::Connect(_)
+                | Failure::ConnectTimedOut
+                | Failure::NotSent(_)
+                | Failure::Broken { curl: curl::COULDNT_RESOLVE_HOST, .. }
+        )
     }
+
+    /// curl's exit code for the same failure.
+    pub fn curl_code(&self) -> i32 {
+        match self {
+            Failure::Connect(_) => curl::COULDNT_CONNECT,
+            Failure::ConnectTimedOut | Failure::TimedOut => curl::OPERATION_TIMEDOUT,
+            Failure::NotSent(_) => curl::SEND_ERROR,
+            Failure::Empty => curl::GOT_NOTHING,
+            Failure::Broken { curl, .. } => *curl,
+        }
+    }
+}
+
+fn broken(curl: i32, why: impl Into<String>) -> Failure {
+    Failure::Broken { curl, why: why.into() }
 }
 
 /// The answer: the last status, the body, and the daemon's version when
@@ -293,7 +342,7 @@ pub fn connect(target: &Target, connect: Duration, deadline: Instant) -> Result<
             use std::net::ToSocketAddrs;
             // A name that doesn't resolve is curl's exit 6, never retried.
             let addrs: Vec<_> =
-                (host.as_str(), *port).to_socket_addrs().map_err(|e| Failure::Broken(format!("resolve {host}: {e}")))?.collect();
+                (host.as_str(), *port).to_socket_addrs().map_err(|e| broken(curl::COULDNT_RESOLVE_HOST, format!("resolve {host}: {e}")))?.collect();
             let mut last = io::Error::new(io::ErrorKind::NotFound, format!("{host} has no address"));
             for addr in addrs {
                 let Some(budget) = remaining(limit) else {
@@ -344,15 +393,15 @@ pub fn exchange(conn: &mut Conn, request: &Request, deadline: Instant) -> Result
     while sent < bytes.len() {
         match conn.write(&bytes[sent..]) {
             Ok(0) if sent == 0 => return Err(Failure::NotSent("send: the connection took no bytes".into())),
-            Ok(0) => return Err(Failure::Broken(format!("send: the connection stopped after {sent} bytes"))),
+            Ok(0) => return Err(broken(curl::SEND_ERROR, format!("send: the connection stopped after {sent} bytes"))),
             Ok(n) => sent += n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) if sent == 0 => return Err(Failure::NotSent(format!("send: {e}"))),
             Err(e) if is_timeout(&e) => return Err(Failure::TimedOut),
-            Err(e) => return Err(Failure::Broken(format!("send: {e}"))),
+            Err(e) => return Err(broken(curl::SEND_ERROR, format!("send: {e}"))),
         }
     }
-    conn.flush().map_err(|e| Failure::Broken(format!("send: {e}")))?;
+    conn.flush().map_err(|e| broken(curl::SEND_ERROR, format!("send: {e}")))?;
     read_answer(conn, deadline)
 }
 
@@ -381,7 +430,7 @@ impl Reader<'_> {
             // before the request was written. Treating it as a failure lost
             // answers that had arrived.
             Err(e) if e.kind() == io::ErrorKind::InvalidInput => {}
-            Err(e) => return Err(Failure::Broken(format!("set a timeout: {e}"))),
+            Err(e) => return Err(broken(curl::RECV_ERROR, format!("set a timeout: {e}"))),
         }
         let mut chunk = [0u8; 16 * 1024];
         loop {
@@ -397,7 +446,7 @@ impl Reader<'_> {
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) if is_timeout(&e) => return Err(Failure::TimedOut),
-                Err(e) => return Err(Failure::Broken(format!("read: {e}"))),
+                Err(e) => return Err(broken(curl::RECV_ERROR, format!("read: {e}"))),
             }
         }
     }
@@ -414,7 +463,7 @@ impl Reader<'_> {
                 return Ok(line);
             }
             if !self.fill()? {
-                return Err(if self.total == 0 { Failure::Empty } else { Failure::Broken("the answer ended inside its head".into()) });
+                return Err(if self.total == 0 { Failure::Empty } else { broken(curl::RECV_ERROR, "the answer ended inside its head") });
             }
         }
     }
@@ -423,7 +472,7 @@ impl Reader<'_> {
     fn exact(&mut self, n: usize) -> Result<Vec<u8>, Failure> {
         while self.buf.len() < n {
             if !self.fill()? {
-                return Err(Failure::Broken(format!("the answer ended {} bytes short", n - self.buf.len())));
+                return Err(broken(curl::PARTIAL_FILE, format!("the answer ended {} bytes short", n - self.buf.len())));
             }
         }
         Ok(self.buf.drain(..n).collect())
@@ -452,11 +501,11 @@ pub fn read_answer(conn: &mut Conn, deadline: Instant) -> Result<Answer, Failure
             }
             let text = String::from_utf8_lossy(&line);
             let Some((name, value)) = text.split_once(':') else {
-                return Err(Failure::Broken(format!("a header line with no colon: {text}")));
+                return Err(broken(curl::WEIRD_SERVER_REPLY, format!("a header line with no colon: {text}")));
             };
             let value = value.trim();
             if name.eq_ignore_ascii_case("content-length") {
-                length = Some(value.parse().map_err(|_| Failure::Broken(format!("Content-Length {value:?}")))?);
+                length = Some(value.parse().map_err(|_| broken(curl::WEIRD_SERVER_REPLY, format!("Content-Length {value:?}")))?);
             } else if name.eq_ignore_ascii_case("transfer-encoding") && value.to_ascii_lowercase().contains("chunked") {
                 chunked = true;
             } else if name.eq_ignore_ascii_case(SERVER_VERSION_HEADER) && server_version.is_none() {
@@ -474,7 +523,7 @@ pub fn read_answer(conn: &mut Conn, deadline: Instant) -> Result<Answer, Failure
                 let size_line = r.line()?;
                 let text = String::from_utf8_lossy(&size_line);
                 let hex = text.split(';').next().unwrap_or("").trim();
-                let size = usize::from_str_radix(hex, 16).map_err(|_| Failure::Broken(format!("a chunk size {text:?}")))?;
+                let size = usize::from_str_radix(hex, 16).map_err(|_| broken(curl::RECV_ERROR, format!("a chunk size {text:?}")))?;
                 if size == 0 {
                     // Trailers, up to the empty line.
                     while !r.line()?.is_empty() {}
@@ -482,7 +531,7 @@ pub fn read_answer(conn: &mut Conn, deadline: Instant) -> Result<Answer, Failure
                 }
                 body.extend(r.exact(size)?);
                 if !r.line()?.is_empty() {
-                    return Err(Failure::Broken("a chunk that doesn't end in CRLF".into()));
+                    return Err(broken(curl::RECV_ERROR, "a chunk that doesn't end in CRLF"));
                 }
             }
             body
@@ -500,10 +549,13 @@ fn parse_status(line: &[u8]) -> Result<u16, Failure> {
     let mut parts = text.splitn(3, ' ');
     let version = parts.next().unwrap_or("");
     let code = parts.next().unwrap_or("");
+    // curl reads an answer that doesn't start with `HTTP/` as HTTP/0.9
+    // and refuses it (exit 1); a status line it can't read is exit 1 too.
+    let bad = || broken(curl::UNSUPPORTED_PROTOCOL, format!("not an HTTP status line: {text}"));
     if !version.starts_with("HTTP/1.") || code.len() != 3 || !code.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(Failure::Broken(format!("not an HTTP status line: {text}")));
+        return Err(bad());
     }
-    code.parse().map_err(|_| Failure::Broken(format!("not an HTTP status line: {text}")))
+    code.parse().map_err(|_| bad())
 }
 
 #[cfg(test)]
@@ -630,8 +682,9 @@ mod tests {
     #[test]
     fn nothing_back_is_empty_and_a_short_answer_is_broken() {
         assert!(matches!(one(b"", Duration::from_secs(5)), Err(Failure::Empty)));
-        assert!(matches!(one(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nabc", Duration::from_secs(5)), Err(Failure::Broken(_))));
-        assert!(matches!(one(b"SSH-2.0-x\r\n\r\n", Duration::from_secs(5)), Err(Failure::Broken(_))));
+        assert!(matches!(one(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nabc", Duration::from_secs(5)), Err(Failure::Broken { curl: 18, .. })));
+        assert!(matches!(one(b"SSH-2.0-x\r\n\r\n", Duration::from_secs(5)), Err(Failure::Broken { curl: 1, .. })));
+        assert!(matches!(one(b"HTTP/1.1 200 OK\r\nbad header\r\n\r\n", Duration::from_secs(5)), Err(Failure::Broken { curl: 8, .. })));
     }
 
     #[test]
@@ -686,6 +739,28 @@ mod tests {
         assert_eq!(read_answer(&mut c, deadline).unwrap(), Answer { status: 200, body: b"hello".to_vec(), server_version: None });
     }
 
+    /// A reset before any answer is a read that failed: curl's 56, and the
+    /// request may have run.
+    #[cfg(unix)]
+    #[test]
+    fn a_reset_before_the_answer_is_a_receive_failure() {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let mut c = connect(&Target::Tcp { host: "127.0.0.1".into(), port }, Duration::from_secs(5), deadline).unwrap_or_else(|f| panic!("connect: {f:?}"));
+        let (s, _) = l.accept().unwrap();
+        reset(s);
+        std::thread::sleep(Duration::from_millis(200));
+        let f = read_answer(&mut c, deadline).unwrap_err();
+        assert!(matches!(f, Failure::Broken { curl: 56, .. }), "{f:?}");
+        assert_eq!(f.curl_code(), 56);
+        assert!(f.sent());
+        assert_eq!(
+            [Failure::Empty.curl_code(), Failure::TimedOut.curl_code(), Failure::ConnectTimedOut.curl_code(), Failure::NotSent("x".into()).curl_code()],
+            [52, 28, 28, 55]
+        );
+    }
+
     /// Closes `s` with a reset (`SO_LINGER` 0) instead of a FIN.
     #[cfg(unix)]
     fn reset(s: std::net::TcpStream) {
@@ -716,7 +791,8 @@ mod tests {
         let f = exchange(&mut c, &req(Method::Post, Some(Body { bytes: b"x".to_vec(), curl_form_type: true }), &[]), Instant::now() + Duration::from_secs(5)).unwrap_err();
         assert!(matches!(f, Failure::NotSent(_)), "{f:?}");
         assert!(!f.sent());
-        assert!(Failure::Empty.sent() && Failure::TimedOut.sent() && Failure::Broken("x".into()).sent());
+        assert!(Failure::Empty.sent() && Failure::TimedOut.sent() && broken(curl::RECV_ERROR, "x").sent());
+        assert!(!broken(curl::COULDNT_RESOLVE_HOST, "x").sent());
         assert!(!Failure::ConnectTimedOut.sent());
     }
 

@@ -62,6 +62,15 @@ pub enum Exit {
     /// exits 9009 there, the code `cmd.exe` gives for a program it can't
     /// find ([`crate::fallthrough::FrontError::NoGitBash`]).
     NoGitBash,
+    /// Any other code curl ends with, passed on as it is: a call whose
+    /// last step is curl ends with it, as the shell runs under `set -e`
+    /// (28 no answer in time, 52 an empty reply, 55 and 56 a write or a
+    /// read that failed, 18 an answer cut short), and 75, the code
+    /// `_cli_curl` gives a failure that is this machine's
+    /// ([`crate::transport::client::LOCAL_TRANSPORT_DENIED`]). Not in
+    /// [`Exit::ALL`]: the number is the outcome's, not a code of the
+    /// shell's own. [`Exit::from_curl`] makes one.
+    Curl(i32),
 }
 
 impl Exit {
@@ -98,13 +107,31 @@ impl Exit {
             Exit::K2Retired => 127,
             Exit::Interrupted => 130,
             Exit::NoGitBash => 9009,
+            Exit::Curl(code) => code,
         }
+    }
+
+    /// The exit for curl's code `code` (or `_cli_curl`'s 75) passed on:
+    /// the named code when it has a name, else [`Exit::Curl`].
+    pub fn from_curl(code: i32) -> Exit {
+        Exit::ALL.iter().copied().find(|e| e.code() == code).unwrap_or(Exit::Curl(code))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_curl_code_is_passed_on() {
+        assert_eq!(Exit::from_curl(7), Exit::DaemonUnreachable);
+        assert_eq!(Exit::from_curl(3), Exit::Refused);
+        assert_eq!(Exit::from_curl(1), Exit::Error);
+        for code in [18, 28, 52, 55, 56, 75] {
+            assert_eq!(Exit::from_curl(code), Exit::Curl(code));
+            assert_eq!(Exit::from_curl(code).code(), code);
+        }
+    }
 
     #[test]
     fn every_code_is_pinned() {

@@ -203,6 +203,11 @@ impl Kind {
     fn retries_connect_timeout(self) -> bool {
         matches!(self, Kind::Request | Kind::RequestPost | Kind::Public)
     }
+    /// A failure goes through `_cli_curl`'s local check
+    /// ([`locally_denied`]): the two functions that run curl through it.
+    fn checks_local_denial(self) -> bool {
+        matches!(self, Kind::Request | Kind::RequestPost)
+    }
     /// The status is read, so a 5xx with an empty body is "no answer".
     fn reads_status(self) -> bool {
         matches!(self, Kind::Request | Kind::RequestPost)
@@ -288,8 +293,9 @@ pub enum Error {
     TimedOut { endpoint: String },
     /// The connection closed with nothing, likewise (curl exit 52).
     Empty { endpoint: String },
-    /// The exchange broke some other way.
-    Broken { endpoint: String, why: String },
+    /// The exchange broke some other way; `curl` is curl's exit code for
+    /// it ([`wire::curl`]).
+    Broken { endpoint: String, why: String, curl: i32 },
     /// A target curl would not send as it is (a space, a control byte or
     /// a `#`).
     BadTarget { target: String, byte: u8 },
@@ -303,7 +309,18 @@ pub enum Error {
     /// ended, or a 5xx with an empty body). The daemon may have run it,
     /// so it is not sent again over TCP.
     MaybeApplied { endpoint: String, waited: u64 },
+    /// `_cli_curl`'s local refusal: the call failed and this machine, not
+    /// the daemon, is the likely cause (the OS refused the connect, or
+    /// `TMPDIR` can't be used), so the shell returns
+    /// `_CLI_LOCAL_TRANSPORT_DENIED` ([`LOCAL_TRANSPORT_DENIED`]) and no
+    /// no-answer line. See [`locally_denied`].
+    Denied { endpoint: String },
 }
+
+/// `_CLI_LOCAL_TRANSPORT_DENIED` (`cli/src/cli-tools-policy.sh`): the code
+/// `_cli_curl` returns in place of curl's when the failure is this
+/// machine's.
+pub const LOCAL_TRANSPORT_DENIED: i32 = 75;
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -312,7 +329,7 @@ impl fmt::Display for Error {
             Error::Unreachable { endpoint, err } => write!(f, "can't reach {PRODUCT_NAME}'s server for {endpoint}: {err}"),
             Error::TimedOut { endpoint } => write!(f, "{PRODUCT_NAME}'s server didn't answer {endpoint} in time"),
             Error::Empty { endpoint } => write!(f, "{PRODUCT_NAME}'s server gave an empty answer to {endpoint}"),
-            Error::Broken { endpoint, why } => write!(f, "the request to {endpoint} failed: {why}"),
+            Error::Broken { endpoint, why, .. } => write!(f, "the request to {endpoint} failed: {why}"),
             Error::BadTarget { target, byte } => write!(f, "won't send {target:?}: byte 0x{byte:02x} can't be in a URL"),
             Error::NoCellSocket { endpoint } => write!(f, "no session passport and cell socket for {endpoint}"),
             Error::NoCredential { endpoint } => write!(f, "no owner token or session passport for {endpoint}"),
@@ -320,11 +337,33 @@ impl fmt::Display for Error {
                 f,
                 "Error: {PRODUCT_NAME}'s server didn't answer {endpoint} ({waited} s); the request may have been applied. Check before running it again."
             ),
+            Error::Denied { endpoint } => write!(f, "this machine refused the request to {endpoint} (the OS, or TMPDIR)"),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+impl Error {
+    /// The code the shell's call returns for the same failure: curl's own
+    /// (a call whose last step is curl ends with it, under `set -e`), or
+    /// [`LOCAL_TRANSPORT_DENIED`]. A failure with a no-answer line ends
+    /// the command with exit 1 after it; its code here is curl's (28 for
+    /// no answer in time, 52 for an empty one). The ones that never reach
+    /// curl are 1.
+    pub fn curl_code(&self) -> i32 {
+        match self {
+            Error::NoAnswer(n) if n.empty => wire::curl::GOT_NOTHING,
+            Error::NoAnswer(_) | Error::TimedOut { .. } => wire::curl::OPERATION_TIMEDOUT,
+            Error::Unreachable { .. } => wire::curl::COULDNT_CONNECT,
+            Error::Empty { .. } => wire::curl::GOT_NOTHING,
+            Error::Broken { curl, .. } => *curl,
+            Error::BadTarget { .. } => wire::curl::URL_MALFORMAT,
+            Error::Denied { .. } => LOCAL_TRANSPORT_DENIED,
+            Error::NoCellSocket { .. } | Error::NoCredential { .. } | Error::MaybeApplied { .. } => 1,
+        }
+    }
+}
 
 /// A call that failed, and whether any of its request may have reached
 /// the daemon ([`wire::Failure::sent`]).
@@ -565,7 +604,15 @@ impl Client {
 
     /// One shell request function, all its tries included.
     fn run(&mut self, kind: Kind, channel: Channel, endpoint: &str, args: &[&str], body: &[u8], t0: Instant) -> Result<Response, Failed> {
-        let (target, request) = self.build(kind, channel, endpoint, args, body).map_err(Failed::unsent)?;
+        let (target, request) = match self.build(kind, channel, endpoint, args, body) {
+            Ok(built) => built,
+            // The shell hands curl such a URL, and curl refuses it (3)
+            // before it connects: `_cli_curl`'s check still runs.
+            Err(Error::BadTarget { .. }) if kind.checks_local_denial() && tmpdir_unusable() => {
+                return Err(Failed::unsent(Error::Denied { endpoint: endpoint.to_string() }));
+            }
+            Err(e) => return Err(Failed::unsent(e)),
+        };
         let max = self.max_time(kind);
         let mut tries = 1;
         let result = loop {
@@ -588,6 +635,9 @@ impl Client {
             }
             Err(f) => {
                 let sent = f.sent();
+                if kind.checks_local_denial() && locally_denied(&f, &self.host) {
+                    return Err(Failed { error: Error::Denied { endpoint: endpoint.to_string() }, sent });
+                }
                 return Err(Failed { error: failure(kind, endpoint, f, t0), sent });
             }
         };
@@ -865,8 +915,62 @@ fn failure(kind: Kind, endpoint: &str, f: Failure, t0: Instant) -> Error {
         Failure::TimedOut | Failure::ConnectTimedOut => Error::TimedOut { endpoint },
         Failure::Empty => Error::Empty { endpoint },
         Failure::Connect(err) => Error::Unreachable { endpoint, err },
-        Failure::Broken(why) | Failure::NotSent(why) => Error::Broken { endpoint, why },
+        Failure::NotSent(why) => Error::Broken { endpoint, why, curl: wire::curl::SEND_ERROR },
+        Failure::Broken { curl, why } => Error::Broken { endpoint, why, curl },
     }
+}
+
+/// `_cli_transport_is_denied`: whether a failed call is this machine's
+/// doing, as the shell reads curl's `-v` trace. A refused connect never
+/// is. The OS refusing the connect (EPERM, EACCES), an address family it
+/// doesn't have, or no route to `::1` is. Any other failure is when
+/// `TMPDIR` (else `/tmp`) is not a folder this user may write in
+/// ([`tmpdir_unusable`]).
+pub fn locally_denied(f: &Failure, host: &str) -> bool {
+    if let Failure::Connect(e) = f {
+        if e.kind() == io::ErrorKind::ConnectionRefused {
+            return false;
+        }
+        if os_denied(e, host) {
+            return true;
+        }
+    }
+    tmpdir_unusable()
+}
+
+#[cfg(unix)]
+fn os_denied(e: &io::Error, host: &str) -> bool {
+    match e.raw_os_error() {
+        Some(libc::EPERM | libc::EACCES | libc::EAFNOSUPPORT | libc::EPFNOSUPPORT) => true,
+        Some(libc::ENETUNREACH | libc::EHOSTUNREACH) => host.contains("::1"),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn os_denied(e: &io::Error, _host: &str) -> bool {
+    e.kind() == io::ErrorKind::PermissionDenied
+}
+
+/// `[ ! -d "$td" ] || [ ! -w "$td" ]` with `td=${TMPDIR:-/tmp}`.
+pub fn tmpdir_unusable() -> bool {
+    let td = std::env::var_os("TMPDIR").filter(|t| !t.is_empty()).map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    !td.is_dir() || !writable(&td)
+}
+
+#[cfg(unix)]
+fn writable(dir: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: a NUL-terminated path; access() only reads it.
+    unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
+}
+
+#[cfg(not(unix))]
+fn writable(dir: &Path) -> bool {
+    std::fs::metadata(dir).is_ok_and(|m| !m.permissions().readonly())
 }
 
 fn maybe_applied(endpoint: &str, t0: Instant) -> Error {
@@ -902,6 +1006,49 @@ mod tests {
         assert_eq!(n.to_string(), "Error: K2's server didn't answer /cli/inbox/list within 30 s; run k2 daemon status");
         let n = NoAnswer { endpoint: "/cli/inbox/list".into(), waited: 0, empty: true };
         assert_eq!(n.to_string(), "Error: K2's server gave an empty answer to /cli/inbox/list after 0 s; run k2 daemon status");
+    }
+
+    #[test]
+    fn each_failure_has_the_shell_s_code() {
+        let ep = || "/cli/x".to_string();
+        let rows: [(Error, i32); 10] = [
+            (Error::NoAnswer(NoAnswer { endpoint: ep(), waited: 30, empty: false }), 28),
+            (Error::NoAnswer(NoAnswer { endpoint: ep(), waited: 0, empty: true }), 52),
+            (Error::Unreachable { endpoint: ep(), err: io::Error::from(io::ErrorKind::ConnectionRefused) }, 7),
+            (Error::TimedOut { endpoint: ep() }, 28),
+            (Error::Empty { endpoint: ep() }, 52),
+            (Error::Broken { endpoint: ep(), why: "read".into(), curl: 56 }, 56),
+            (Error::BadTarget { target: "/a b".into(), byte: b' ' }, 3),
+            (Error::Denied { endpoint: ep() }, 75),
+            (Error::MaybeApplied { endpoint: ep(), waited: 1 }, 1),
+            (Error::NoCredential { endpoint: ep() }, 1),
+        ];
+        for (e, want) in rows {
+            assert_eq!(e.curl_code(), want, "{e:?}");
+        }
+        assert!(matches!(
+            failure(Kind::PostForm, "/x", Failure::NotSent("send".into()), Instant::now()),
+            Error::Broken { curl: 55, .. }
+        ));
+    }
+
+    /// `_cli_transport_is_denied`'s reading of a failed connect: a refused
+    /// one never is the machine's; the OS refusing it is.
+    #[cfg(unix)]
+    #[test]
+    fn the_os_refusing_a_connect_is_local() {
+        let e = |n: i32| io::Error::from_raw_os_error(n);
+        assert!(!locally_denied(&Failure::Connect(io::Error::from(io::ErrorKind::ConnectionRefused)), "127.0.0.1"));
+        for n in [libc::EPERM, libc::EACCES, libc::EAFNOSUPPORT] {
+            assert!(locally_denied(&Failure::Connect(e(n)), "127.0.0.1"), "{n}");
+        }
+        assert!(os_denied(&e(libc::ENETUNREACH), "::1"));
+        assert!(!os_denied(&e(libc::ENETUNREACH), "127.0.0.1"));
+        assert!(!os_denied(&e(libc::ENOENT), "127.0.0.1"));
+        assert!(Kind::Request.checks_local_denial() && Kind::RequestPost.checks_local_denial());
+        for k in [Kind::PostForm, Kind::PostJson, Kind::PostJsonStdin, Kind::SendJsonGet, Kind::SendJsonPost, Kind::Public, Kind::Probe] {
+            assert!(!k.checks_local_denial(), "{k:?}");
+        }
     }
 
     #[test]

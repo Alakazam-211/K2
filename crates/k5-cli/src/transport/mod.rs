@@ -110,6 +110,19 @@
 //! `gave an empty answer to <ep> after <n> s`), instead of a JSON parse
 //! error. `cli_post_json_stdin` and `cli_send_json` have no such line.
 //!
+//! # Exit codes
+//!
+//! A call whose last step is curl ends the command with curl's code (the
+//! shell runs under `set -e`), so each failure carries it
+//! ([`client::Error::curl_code`]): 7 nothing accepted the connection, 28
+//! no answer in time, 52 an empty reply, 55 and 56 a write or a read that
+//! failed, 18 an answer cut short, 1 an answer that is not HTTP, 3 a URL
+//! curl won't send. `cli_request` and `cli_request_post` (and their
+//! twins) run curl through `_cli_curl`, whose local check turns a failure
+//! that is this machine's into 75 with no no-answer line
+//! ([`client::locally_denied`]: the OS refused the connect, or `TMPDIR`
+//! can't be used, but never a refused connect).
+//!
 //! # The daemon's version
 //!
 //! Every answer's `X-K5-Server-Version` ([`wire::SERVER_VERSION_HEADER`])

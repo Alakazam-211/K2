@@ -438,9 +438,16 @@ _doc_tmp() {
 # goes from a file and the answer to one, never through argv or a shell
 # variable. Same transports as cli_send_json (the cell socket with the
 # passport, else loopback with the token).
+#
+# 0.46.15: the send-once rule of cli_send_json. A POST goes again over TCP
+# after the cell socket only when the socket took none of it: the connect
+# failed (curl 7) or the daemon answered "not served on cell socket". Any
+# other failure may have applied it, so it is not sent again:
+# _cli_send_unanswered says so and ends the command with 1. GETs keep the
+# fallback.
 _doc_xfer() {
     local method="$1" path="$2" query="$3" bodyf="$4" outf="$5"
-    local sock code="" _K2_CFG=""
+    local sock code="" _K2_CFG="" rc=0 t0="$SECONDS"
     : >"$outf"
     sock="$(_hook_sock)"
     if ! _cli_skip_uds && [ -n "$sock" ] && [ -S "$sock" ] && [ -n "${SCOPED_TOKEN:-}" ]; then
@@ -448,16 +455,23 @@ _doc_xfer() {
         if [ "$method" = "GET" ]; then
             [ -n "$query" ] && _k2_cfg_add data "$query"
             code="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost${path}" \
-                --connect-timeout 5 --max-time 300 -o "$outf" -w '%{http_code}' 2>/dev/null)" || code=""
+                --connect-timeout 5 --max-time 300 -o "$outf" -w '%{http_code}' 2>/dev/null)" || rc=$?
         else
             _k2_cfg_add data-binary "@$bodyf"
             code="$(_k2_curl "$_K2_CFG" -s -X POST --unix-socket "$sock" "http://localhost${path}" \
                 --connect-timeout 5 --max-time 300 -H "Content-Type: application/json" \
-                -o "$outf" -w '%{http_code}' 2>/dev/null)" || code=""
+                -o "$outf" -w '%{http_code}' 2>/dev/null)" || rc=$?
         fi
-        if [ -n "$code" ] && [ "$code" != "000" ] && ! grep -q "not served on cell socket" "$outf" 2>/dev/null; then
+        if [ "$rc" -eq 0 ] && [ -n "$code" ] && [ "$code" != "000" ] && ! grep -q "not served on cell socket" "$outf" 2>/dev/null; then
             _DOC_STATUS="$code"
             [ "$code" = "200" ] || _permission_note "$(cat "$outf")"$'\n'"$code"
+            return 0
+        fi
+        if [ "$method" != "GET" ] && [ "$rc" -ne 7 ] && ! grep -q "not served on cell socket" "$outf" 2>/dev/null; then
+            _cli_send_unanswered "$path" "$t0" 0 ""
+            # Soft callers (_K2_NOANSWER_SOFT=1) get status 000 instead.
+            _DOC_STATUS="000"
+            : >"$outf"
             return 0
         fi
     fi

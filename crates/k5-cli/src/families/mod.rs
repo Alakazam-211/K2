@@ -11,6 +11,7 @@
 //! - [`activity`]: `k5 activity`, the activity feed.
 //! - [`sessions`]: `k5 sessions` and its read forms (`--past`, `show`,
 //!   `main`).
+//! - [`connections`]: `k5 connections list`.
 //!
 //! A family may hand a command line back to the shell CLI ([`done::run`]
 //! and the others return `None`) when it is a form only the shell
@@ -39,6 +40,7 @@ use crate::transport::{Call, Channel, Client, Error, Response};
 use std::path::Path;
 
 pub mod activity;
+pub mod connections;
 pub mod done;
 pub mod inbox;
 pub mod read;

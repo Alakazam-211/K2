@@ -253,7 +253,7 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     #
     #
     #
-    CARDS_APPS=bash
+    CARDS_APPS=native
     #   study apps and study skins, text and --json (APPS_WITH_PASSPORT)
     #
     #

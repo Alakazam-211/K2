@@ -96,7 +96,7 @@ pub const LIST_WITH_PASSPORT: bool = true;
 /// `--json`) ask the daemon whether cards are on, for the apps page's
 /// `#if-cards` lines. True: the binary asks the same way and prints the
 /// page for the answer. False: the shell answers them.
-pub const APPS_WITH_PASSPORT: bool = false;
+pub const APPS_WITH_PASSPORT: bool = true;
 
 /// With a passport, `k2 study permissions` asks the daemon whether cards
 /// are on: on, its page (text or `--json`); off, an unknown topic. True:

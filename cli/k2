@@ -5024,15 +5024,28 @@ print(json.dumps(obj, separators=(",", ":")))
                -H "X-K2-Hook-Report: 1"
                -H "X-K2-Hook-Event: $event"
                -H "X-K2-Agent-Pid: $PPID")
-    local out="" status=""
+    local out="" status="" rc=0 t0="$SECONDS" tcp=1
     # Per-cell socket first (the session's own door), then loopback TCP
     # with the SAME passport (the socket can be stale after a restart).
+    # 0.46.15: TCP only when the socket took none of it: the connect
+    # failed (curl 7) or the daemon answered "not served on cell socket".
+    # Any other failure may have counted the event, so it is not sent
+    # again: _cli_send_unanswered says so and ends with 1.
     if [ -n "$sock" ] && [ -S "$sock" ]; then
-        out="$(_k2_curl "$_K2_CFG" -s -X POST --unix-socket "$sock" --connect-timeout 2 --max-time 5 \
-            "${hdr[@]}" -w $'\n%{http_code}' "http://localhost/hook/event" 2>/dev/null)" || out=""
+        out="$(_k2_curl "$_K2_CFG" -s -X POST --unix-socket "$sock" --connect-timeout 2 --max-time "${_K2_POST_MAX_TIME:-5}" \
+            "${hdr[@]}" -w $'\n%{http_code}' "http://localhost/hook/event" 2>/dev/null)" || rc=$?
+        [ "$rc" -eq 0 ] || out=""
         status="${out##*$'\n'}"
+        if [ "$rc" -eq 0 ] && [[ "$out" == *"not served on cell socket"* ]]; then
+            status=""
+        elif { [ -z "$status" ] || [ "$status" = "000" ]; } && [ "$rc" -ne 7 ]; then
+            _cli_send_unanswered /hook/event "$t0" 0 ""
+            # Soft callers (_K2_NOANSWER_SOFT=1): status 000, no TCP try.
+            status="000"
+            tcp=0
+        fi
     fi
-    if [ -z "$status" ] || [ "$status" = "000" ]; then
+    if [ "$tcp" = 1 ] && { [ -z "$status" ] || [ "$status" = "000" ]; }; then
         local port="${PORT:-}"
         if [ -z "$port" ] && [ -r "${K2_HOME}/heartbeat.port" ]; then
             port="$(cat "${K2_HOME}/heartbeat.port" 2>/dev/null)"

@@ -336,6 +336,7 @@ export function TicketBoard({
         className={`flex-1 min-h-0 ${TILE_FOOT_CLIP}`}
         scrollClassName="overflow-y-auto overflow-x-hidden px-2 pb-2 [&>div]:min-h-full [&>div]:flex [&>div]:flex-col"
         tint={TICKET_LIST_EDGE_TINT}
+        heavy
         testId="ticket-list-scroll"
       >
         <TicketListBody

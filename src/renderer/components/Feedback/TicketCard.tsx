@@ -330,7 +330,7 @@ export function FeedbackCard({
       )}
       <p
         data-testid="card-title"
-        className="type-name leading-snug text-[var(--color-text-primary)] truncate"
+        className="type-name leading-snug text-[var(--color-text-primary)] truncate select-none"
         title={row.title}
       >
         {row.title}
@@ -338,7 +338,7 @@ export function FeedbackCard({
       {summary && (
         <p
           data-testid="card-summary"
-          className="mt-0.5 type-hint leading-snug text-[var(--color-text-muted)] truncate"
+          className="mt-0.5 type-hint leading-snug text-[var(--color-text-muted)] truncate select-none"
         >
           {summary}
         </p>

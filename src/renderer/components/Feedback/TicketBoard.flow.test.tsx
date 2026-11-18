@@ -468,3 +468,29 @@ describe('words and the flow’s loop', () => {
     }
   })
 })
+
+describe('after-shot fixes', () => {
+  it('a card’s title keeps its ellipsis when clicked (the caret never lands in it)', async () => {
+    board()
+    fireEvent.click(card(second.id))
+    await screen.findByTestId('ticket-detail')
+    for (const t of screen.getAllByTestId('card-title')) expect(t.className).toContain('select-none')
+  })
+
+  it('the list and the report fade with the heavier tint, into their tile’s fill', async () => {
+    board()
+    fireEvent.click(card(first.id))
+    await screen.findByTestId('ticket-detail')
+    expect(screen.getByTestId('ticket-list-scroll').hasAttribute('data-edge-heavy')).toBe(true)
+    expect(screen.getByTestId('ticket-report-scroll').hasAttribute('data-edge-heavy')).toBe(true)
+  })
+
+  it('the byline wraps in a narrow report', async () => {
+    board()
+    fireEvent.click(card(first.id))
+    await screen.findByTestId('ticket-detail')
+    const byline = screen.getByTestId('ticket-detail-byline')
+    expect(byline.className).toContain('flex-wrap')
+    expect(byline.parentElement!.className).toContain('flex-wrap')
+  })
+})

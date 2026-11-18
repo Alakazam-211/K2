@@ -408,7 +408,7 @@ export function FeedbackItemView({
             )}
           </div>
           {/* The report's first line: its status, and who asked whom. */}
-          <div className="px-4 pt-2 flex items-center gap-2 min-w-0 type-hint text-[var(--color-text-muted)]">
+          <div className="px-4 pt-2 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 type-hint text-[var(--color-text-muted)]">
             {unlinked ? (
               <StatusBadge status={view.status} />
             ) : (
@@ -423,7 +423,7 @@ export function FeedbackItemView({
             {hasBrief && <HtmlBriefBadge />}
             {/* "atlas asked Owner · 25m ago": who asked whom, the person a
                 chip that reassigns. */}
-            <span data-testid="ticket-detail-byline" className="flex items-center gap-1 min-w-0 selectable-copy">
+            <span data-testid="ticket-detail-byline" className="flex flex-wrap items-center gap-x-1 gap-y-1 min-w-0 selectable-copy">
               <span className="flex-shrink-0">
                 <span className="text-[var(--color-text-secondary)]">{view.agentName}</span> asked
               </span>{' '}
@@ -613,6 +613,7 @@ function TicketBody({
           className="flex-1 min-h-0"
           scrollClassName="overflow-y-auto overflow-x-hidden px-4 py-3 [&>div]:min-h-full [&>div]:flex [&>div]:flex-col"
           tint={REPORT_EDGE_TINT}
+          heavy
           testId="ticket-report-scroll"
         >
         <div className="flex-1 flex flex-col" data-ticket-thread={ticketId}>

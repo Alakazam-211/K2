@@ -322,13 +322,43 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
     }
     assert_eq!(rows, arms, "the rows are not in the router's order");
     // A verb row is a family's second word, which this test can't check
-    // against the router's top-level case. The first one brings its own
-    // check against its family's case.
+    // against the router's top-level case: each family's verb rows are
+    // checked against its own case, and a family with none here has none.
     for noun in TABLE {
+        if noun.verbs.is_empty() {
+            continue;
+        }
+        match noun.words {
+            ["connections"] => connections_verbs_are_its_list(noun),
+            other => panic!("{other:?} has verb rows: check them against the family's case first"),
+        }
+    }
+}
+
+/// `connections`' one verb row: `list`, and `--json` and `--users`, which
+/// `cmd_connections` (`cli/src/usage.sh`) reads as `list` and them.
+fn connections_verbs_are_its_list(noun: &k5_cli::route::Noun) {
+    let words: Vec<&[&str]> = noun.verbs.iter().map(|v| v.words).collect();
+    assert_eq!(words, [&["list", "--json", "--users"][..]]);
+    let sources = common::shell_sources();
+    let text = &sources
+        .iter()
+        .find(|(name, _)| name == "usage.sh")
+        .expect("cli/src/usage.sh")
+        .1;
+    let body = &text[text
+        .find("\ncmd_connections() {\n")
+        .expect("cmd_connections")..];
+    let body = &body[..body.find("\n}\n").expect("its end")];
+    for line in [
+        r#"    if [[ "${1:-}" == "--json" || "${1:-}" == "--users" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then"#,
+        r#"        set -- list "$@""#,
+        r#"    local action="${1:-list}""#,
+        "        list)",
+    ] {
         assert!(
-            noun.verbs.is_empty(),
-            "{:?} has verb rows: check them against the family's case first",
-            noun.words
+            body.lines().any(|l| l == line),
+            "cmd_connections no longer has {line:?}"
         );
     }
 }

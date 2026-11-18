@@ -275,15 +275,49 @@ fn only_the_exact_pair_checks() {
 
 /// The table's first column, family per line, after the summary and
 /// header lines.
+/// The table's family rows: (family, who answers, count). A verb row
+/// (`<noun> <verbs> <who>`, under its family) is not one of them
+/// ([`table_verbs`]).
 fn table_families(stdout: &str) -> Vec<(String, String, Option<String>)> {
     stdout
         .lines()
         .skip(2)
-        .map(|l| {
+        .filter_map(|l| {
             let mut parts = l.split_whitespace();
             let fam = parts.next().expect("a family").to_string();
             let by = parts.next().expect("who answers").to_string();
-            (fam, by, parts.next().map(str::to_string))
+            ["bash", "native", "spec", "-"]
+                .contains(&by.as_str())
+                .then(|| (fam, by, parts.next().map(str::to_string)))
+        })
+        .collect()
+}
+
+/// The table's verb rows: (noun, the verbs joined by `|`, who answers).
+fn table_verbs(stdout: &str) -> Vec<(String, String, String)> {
+    stdout
+        .lines()
+        .skip(2)
+        .filter_map(|l| {
+            let parts: Vec<&str> = l.split_whitespace().collect();
+            (parts.len() >= 3 && !["bash", "native", "spec", "-"].contains(&parts[1]))
+                .then(|| (parts[0].into(), parts[1].into(), parts[2].into()))
+        })
+        .collect()
+}
+
+/// The route table's verb rows, as the table prints them.
+fn route_verbs() -> Vec<(String, String, String)> {
+    TABLE
+        .iter()
+        .flat_map(|n| {
+            n.verbs.iter().map(|v| {
+                (
+                    n.words[0].to_string(),
+                    v.words.join("|"),
+                    k5_cli::cli_status::owner_name(v.owner).to_string(),
+                )
+            })
         })
         .collect()
 }
@@ -343,6 +377,7 @@ fn cli_status_as_the_owner_shows_the_counts() {
     );
     let fams = table_families(&out.stdout);
     assert_eq!(fams.len(), TABLE.len() + 1, "every row, and `other`");
+    assert_eq!(table_verbs(&out.stdout), route_verbs(), "every verb row");
     let get = |name: &str| {
         fams.iter()
             .find(|f| f.0 == name)
@@ -417,6 +452,33 @@ fn cli_status_json_parses_and_matches_the_table() {
         })
         .collect();
     assert_eq!(from_json, table_families(&table.stdout));
+    let verbs_json: Vec<(String, String, String)> = fams
+        .iter()
+        .flat_map(|f| {
+            let fam = string(field(f, "family")).expect("a family name");
+            let noun = fam.split('|').next().unwrap().to_string();
+            let Value::Array(verbs) = field(f, "verbs") else {
+                panic!("verbs is not a list")
+            };
+            verbs
+                .into_iter()
+                .map(|v| {
+                    let Value::Array(words) = field(&v, "words") else {
+                        panic!("words is not a list")
+                    };
+                    let words: Vec<String> =
+                        words.into_iter().map(|w| string(w).unwrap()).collect();
+                    (
+                        noun.clone(),
+                        words.join("|"),
+                        string(field(&v, "owner")).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(verbs_json, table_verbs(&table.stdout));
+    assert_eq!(verbs_json, route_verbs());
     let first = table.stdout.lines().next().unwrap().to_string();
     let n = |k: &str| string(field(&doc, k)).unwrap();
     assert_eq!(

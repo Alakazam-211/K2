@@ -191,7 +191,16 @@ pub static TABLE: &[Noun] = &[
     bash(&["ci"]),
     bash(&["reserve"]),
     bash(&["release"]),
-    bash(&["connections"]),
+    // Only `list` (and `--json` and `--users`, which the shell reads as
+    // `list`); every other action, and `connections` alone, is the shell's.
+    Noun {
+        words: &["connections"],
+        owner: Owner::Bash,
+        verbs: &[Verb {
+            words: &["list", "--json", "--users"],
+            owner: Owner::Native,
+        }],
+    },
     bash(&["api"]),
     bash(&["api-key"]),
     bash(&["app"]),

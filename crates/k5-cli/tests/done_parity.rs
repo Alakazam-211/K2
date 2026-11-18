@@ -4,8 +4,7 @@
 //! `tests/cli/done_flags.sh` among them.
 //!
 //! - The flags: --agent, --blocked, words skipped, each usage line, the
-//!   agent from AGENT_NAME under each prefix, unescaped as the shell sends
-//!   it, the reason escaped.
+//!   agent from AGENT_NAME under each prefix, the reason escaped.
 //! - The prelude: the gates (before the flags), a port that is no port,
 //!   PROJECT_PATH, PWD through a link.
 //! - The credential: the owner from disk, a passport over TCP, a live cell
@@ -20,8 +19,13 @@
 //!   daemon (7). `done` posts once over TCP and never resends: it has no
 //!   cell-socket arm.
 //! - What the binary hands to the shell: -h and --help (as a flag and as
-//!   --blocked's value), a session the API started, an agent with a `#`
-//!   or a space.
+//!   --blocked's value), a session the API started.
+//! - The agent escaped as the 0.46.16 shell escapes it (`#`, `&`, `=`, a
+//!   space, `+`, `%`, control bytes, UTF-8). The shell under this line is
+//!   older and sends the agent raw, so these rows check the binary against
+//!   the fixed shell's request bytes, stated in each row (the same bytes
+//!   `tests/cli/done_agent_escape.sh` checks the fixed shell sends). The
+//!   parity run against bash itself comes at the 0.46.16 rebase.
 
 #![cfg(unix)]
 
@@ -32,6 +36,7 @@ use common::stub::Reply;
 use std::time::Duration;
 
 const VERB: &str = "done";
+const ENDPOINT: &str = "/cli/done";
 const OK: &str = r#"{"success":true}"#;
 const AGENT: (&str, &str) = ("K2_AGENT_NAME", "tester");
 
@@ -69,7 +74,6 @@ fn done_answers_as_the_shell_does() {
         named("an empty reason sends none", &["--blocked", ""], &[], vec![ok(OK)], owner_and_port, 0, 1),
         named("a reason may start with a dash", &["--blocked", "-x"], &[], vec![ok(OK)], owner_and_port, 0, 1),
         named("the last of each flag", &["--agent", "a", "--blocked", "b", "--agent", "c", "--blocked", "d"], &[], vec![ok(OK)], owner_and_port, 0, 1),
-        named("the agent goes unescaped", &["--agent", "a&b=c%2F?é"], &[], vec![ok(OK)], owner_and_port, 0, 1),
         case("the agent under each prefix", &[], &[("K5_AGENT_NAME", ""), ("K2_AGENT_NAME", "k2name"), ("K2SO_AGENT_NAME", "old")], vec![ok(OK)], owner_and_port, 0, 1),
         case("the K5 name first", &[], &[("K5_AGENT_NAME", "k5name"), ("K2_AGENT_NAME", "k2name")], vec![ok(OK)], owner_and_port, 0, 1),
         case("the K2SO name last", &[], &[("K2SO_AGENT_NAME", "old")], vec![ok(OK)], owner_and_port, 0, 1),
@@ -178,9 +182,6 @@ fn done_hands_these_to_the_shell() {
         shell(named("-h after a word", &["word", "-h"], &[], vec![], owner_and_port, 0, 0)),
         shell(named("--help as the reason", &["--blocked", "--help"], &[], vec![ok(OK)], owner_and_port, 0, 1)),
         shell(named("-h after --agent", &["--agent", "-h"], &[], vec![], owner_and_port, 2, 0)),
-        shell(named("an agent with a #", &["--agent", "a#b", "--blocked", "x"], &[], vec![ok(OK)], owner_and_port, 0, 1)),
-        shell(named("an agent with a space", &["--agent", "a b"], &[], vec![], owner_and_port, 3, 0)),
-        shell(case("an agent setting with a #", &[], &[("K2_AGENT_NAME", "a#b")], vec![ok(OK)], owner_and_port, 0, 1)),
     ];
     let api: [(&'static str, &'static [&'static str], i32, usize); 3] = [
         ("a session the API started", &[], 0, 1),
@@ -195,5 +196,53 @@ fn done_hands_these_to_the_shell() {
     }
     for c in v {
         rig.check(&c);
+    }
+}
+
+/// The binary alone on `c`: one request, whose query after the token and
+/// the project is `want`, an empty body, the answer on stdout, exit 0.
+fn binary_sends(rig: &Rig, c: &Case, want: &str) {
+    let name = c.name;
+    for f in [rig.secrets.join(".k2-passport"), rig.k2home.join("heartbeat.port"), rig.k2home.join("heartbeat.token"), rig.k2home.join("daemon.token")] {
+        let _ = std::fs::remove_file(f);
+    }
+    (c.setup)(rig);
+    rig.stub.reset(&c.replies);
+    let out = rig.run(false, c);
+    assert_eq!(rig.stub.left(), 0, "{name}: answers left unused: {out:?}");
+    let log = rig.stub.log();
+    assert_eq!(log.len(), 1, "{name}: {} requests: {out:?}", log.len());
+    let text = String::from_utf8(log[0].bytes.clone()).unwrap_or_else(|_| panic!("{name}: a request that is not UTF-8"));
+    let (head, body) = text.split_once("\r\n\r\n").unwrap_or_else(|| panic!("{name}: no head: {text:?}"));
+    let line = head.split("\r\n").next().unwrap_or_else(|| panic!("{name}: no request line"));
+    let start = format!("POST {ENDPOINT}?token={OWNER}&project=");
+    let rest = line.strip_prefix(start.as_str()).unwrap_or_else(|| panic!("{name}: the request line: {line:?}"));
+    let (_project, query) = rest.split_once('&').unwrap_or_else(|| panic!("{name}: nothing after the project: {line:?}"));
+    assert_eq!(query, format!("{want} HTTP/1.1"), "{name}: the query after the project, in {line:?}");
+    assert_eq!(body, "", "{name}: the body");
+    assert_eq!(out, Out { code: Some(0), stdout: OK.to_string(), stderr: String::new() }, "{name}");
+}
+
+
+/// The agent escaped as 0.46.16's `cmd_done` escapes it
+/// (`agent=$(urlencode "$agent")`), byte for byte, from --agent and from
+/// AGENT_NAME, with --blocked kept.
+#[test]
+fn done_escapes_the_agent() {
+    let rig = Rig::new(VERB, "escape");
+    let rows: Vec<(Case, &str)> = vec![
+        (named("a # with --blocked", &["--agent", "a#b", "--blocked", "x"], &[], vec![ok(OK)], owner_and_port, 0, 1), "agent=a%23b&blocked=x"),
+        (named("a #", &["--agent", "a#b"], &[], vec![ok(OK)], owner_and_port, 0, 1), "agent=a%23b"),
+        (named("a & and an =", &["--agent", "x&blocked=y"], &[], vec![ok(OK)], owner_and_port, 0, 1), "agent=x%26blocked%3Dy"),
+        (named("a & and an = with --blocked", &["--agent", "x&blocked=y", "--blocked", "real"], &[], vec![ok(OK)], owner_and_port, 0, 1), "agent=x%26blocked%3Dy&blocked=real"),
+        (named("a space and a +", &["--agent", "a b+c"], &[], vec![ok(OK)], owner_and_port, 0, 1), "agent=a%20b%2Bc"),
+        (named("a tab and a DEL", &["--agent", "a\tb\u{7f}"], &[], vec![ok(OK)], owner_and_port, 0, 1), "agent=a%09b%7F"),
+        (named("a %, a ?, a / and UTF-8", &["--agent", "a&b=c%2F?é"], &[], vec![ok(OK)], owner_and_port, 0, 1), "agent=a%26b%3Dc%252F%3F%C3%A9"),
+        (case("an agent setting with a #", &["--blocked", "x"], &[("K2_AGENT_NAME", "a#b")], vec![ok(OK)], owner_and_port, 0, 1), "agent=a%23b&blocked=x"),
+        (case("an agent setting with a & and an =", &[], &[("K5_AGENT_NAME", "x&blocked=y")], vec![ok(OK)], owner_and_port, 0, 1), "agent=x%26blocked%3Dy"),
+        (named("a plain name is as it was", &["--agent", "other"], &[], vec![ok(OK)], owner_and_port, 0, 1), "agent=other"),
+    ];
+    for (c, want) in &rows {
+        binary_sends(&rig, c, want);
     }
 }

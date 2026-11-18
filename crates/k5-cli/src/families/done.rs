@@ -17,8 +17,9 @@
 //!    Nothing is sent after any of these.
 //! 3. One `cli_request_post /cli/done "agent=<agent>[&blocked=<reason>]"`
 //!    over TCP (the shell calls it directly: never the cell socket). The
-//!    agent goes in as it is, unescaped, as the shell writes it; the
-//!    reason escaped as `urlencode` does.
+//!    agent and the reason are escaped as `urlencode` does. This is the
+//!    0.46.16 shell's query: before it the shell sent the agent raw, so a
+//!    `#` cut the URL (and lost --blocked) and a `&` added a parameter.
 //! 4. The answer's bytes on stdout as they came, NULs dropped, and exit 0,
 //!    whatever the status: the shell prints `out` and returns curl's code.
 //! 5. The EXIT trap's lines ([`crate::prelude::Closing`]).
@@ -33,10 +34,9 @@
 //! there is one copy of each: a session the API started (`API_CELL` 1,
 //! true, yes, YES or True: the router sends `done` to
 //! `cmd_session_complete` there); a command line with `-h` or `--help`
-//! (the front sends those on, [`crate::front`]); and an agent the
-//! transport won't send as curl does (a space, a control byte or a `#`,
-//! [`crate::transport::wire::check_target`]): curl refuses the first two
-//! and cuts the URL at a `#`.
+//! (the front sends those on, [`crate::front`]); and a word or an agent
+//! setting that is not UTF-8. Once escaped, no byte of the agent is
+//! special to the transport, so no agent is handed on for its bytes.
 
 use super::{curl_port, without_nuls};
 use crate::daemon::{self, Settings};
@@ -46,7 +46,7 @@ use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::transport::client::{tmpdir_unusable, LOCAL_TRANSPORT_DENIED};
 use crate::transport::encode::quote;
-use crate::transport::wire::{self, curl};
+use crate::transport::wire::curl;
 use crate::transport::{Call, Channel, Error};
 use k2_client::env_names;
 use std::ffi::OsString;
@@ -118,7 +118,7 @@ pub fn flags(words: &[&str], agent: &str) -> Result<Mark, Stop> {
 
 /// The query the shell hands `cli_request_post`, one argument.
 pub fn params(mark: &Mark) -> String {
-    let mut p = format!("agent={}", mark.agent);
+    let mut p = format!("agent={}", quote(&mark.agent));
     if !mark.blocked.is_empty() {
         p.push_str("&blocked=");
         p.push_str(&quote(&mark.blocked));
@@ -146,7 +146,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let words: Vec<&str> = args.iter().skip(1).map(|a| a.to_str()).collect::<Option<_>>()?;
     let read = match flags(&words, &agent) {
         Err(Stop::Help) => return None,
-        Ok(mark) if wire::check_target(&mark.agent).is_err() => return None,
         other => other,
     };
     Some(match daemon::current() {
@@ -234,12 +233,21 @@ mod tests {
             r#"[[ $# -ge 2 && "$2" != -* ]] || { echo "k2 done: '--agent' needs a name." >&2; exit 2; }"#,
             r#"[[ $# -ge 2 ]] || { echo "k2 done: '--blocked' needs a reason." >&2; exit 2; }"#,
             r#"[[ -z "$agent" ]] && { echo "Error: --agent required (or set K2_AGENT_NAME)" >&2; exit 1; }"#,
-            r#"local params="agent=$agent""#,
             r#"[[ -n "$blocked" ]] && params="$params&blocked=$(urlencode "$blocked")""#,
             r#"cli_request_post "/cli/done" "$params""#,
         ] {
             assert!(text.contains(shell), "cmd_done no longer has {shell:?}");
         }
+        // The binary escapes the agent as the 0.46.16 shell does; the shell
+        // under this line is older and sends it raw. When the fix is here,
+        // pin its line instead and make tests/done_parity.rs's
+        // `done_escapes_the_agent` rows parity rows against bash.
+        let raw = r#"local params="agent=$agent""#;
+        let fixed = r#"local params="agent=$(urlencode "$agent")""#;
+        assert!(
+            text.contains(raw) && !text.contains(fixed),
+            "cmd_done's agent line changed: if it is 0.46.16's {fixed:?}, pin it here and compare the escaped-agent rows with bash"
+        );
         let session = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/session-complete.sh")).unwrap();
         assert!(session.contains("        1|true|yes|YES|True) return 0 ;;"), "_is_api_lifecycle_context's values moved");
     }
@@ -276,7 +284,10 @@ mod tests {
     #[test]
     fn the_query() {
         assert_eq!(params(&Mark { agent: "tester".into(), blocked: String::new() }), "agent=tester");
-        assert_eq!(params(&Mark { agent: "a&b=c".into(), blocked: "é & /x".into() }), "agent=a&b=c&blocked=%C3%A9%20%26%20%2Fx");
+        assert_eq!(params(&Mark { agent: "a&b=c".into(), blocked: "é & /x".into() }), "agent=a%26b%3Dc&blocked=%C3%A9%20%26%20%2Fx");
+        assert_eq!(params(&Mark { agent: "a#b".into(), blocked: "x".into() }), "agent=a%23b&blocked=x");
+        assert_eq!(params(&Mark { agent: "x&blocked=y".into(), blocked: String::new() }), "agent=x%26blocked%3Dy");
+        assert_eq!(params(&Mark { agent: "a b+c\t\u{7f}".into(), blocked: String::new() }), "agent=a%20b%2Bc%09%7F");
     }
 
     #[test]

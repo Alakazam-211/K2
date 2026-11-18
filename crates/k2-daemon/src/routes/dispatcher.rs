@@ -13253,7 +13253,7 @@ async fn handle_one_request(
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
-                "/cli/skin/roles/unassign" => {
+                "/cli/skin/roles/unassign" | crate::skin_routes::grants_role::GRANTS_ROLE => { // 0.46.16: also `k2 app grant role`
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
@@ -13276,10 +13276,10 @@ async fn handle_one_request(
                             return DispatchOutcome::Done;
                         }
                     };
-                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let (body, path) = (super::http::read_post_body(&mut *stream, &mut buf).await, p.to_string());
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
-                            crate::skin_routes::agent_scoped(agent_ws.as_deref(), "/cli/skin/roles/unassign", &body, &actor, crate::skin_routes::handle_roles_unassign),
+                            crate::skin_routes::grants_role::unassign_or_role(agent_ws.as_deref(), &path, &body, &actor),
                             &actor,
                         )
                     })
@@ -13467,7 +13467,6 @@ async fn handle_one_request(
                 | "/cli/skin/grants/host"
                 | "/cli/skin/grants/copy-host"
                 | "/cli/skin/grants/update"
-                | "/cli/skin/grants/role"
                 | "/cli/skin/grant-hooks/target"
                 | "/cli/skin/grant-hooks/retry"
                 | "/cli/skin/grant-hooks/skip"

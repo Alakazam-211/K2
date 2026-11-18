@@ -205,3 +205,66 @@ fn an_agent_lists_the_logins_on_its_own_apps_only() {
     assert!(rows.iter().all(|g| g["targetId"] == mine.as_str()), "only its own Apps: {v}");
     assert!(!r.body.contains(&erin) && !r.body.contains(&theirs), "nothing of another workspace's: {}", r.body);
 }
+
+/// 0.46.16: `op=role` moves a login its App already has onto another role IN
+/// PLACE (the `k2 app grant role` path): the same grant, its live session
+/// kept and on the new role. The card names the old role and the new one and
+/// how to put it back; the owner allows it once. No login: ask with op=add.
+#[test]
+fn op_role_moves_its_apps_login_in_place_and_keeps_the_session() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let ws = seed("alr");
+    let app_name = format!("jobs{}", uniq());
+    let app = app_of(&ws, &app_name);
+    let viewer = role(&ws, Some(&app));
+    let editor = role(&ws, Some(&app));
+    let dana = format!("dana{}", uniq());
+    skin::add_principal_for_app(&dana, None, &app, Some(&viewer), "owner-token").expect("dana");
+    let before = login_of(&dana, &app).expect("the login");
+    let session = skin::create_app_session_token(&dana, &app).expect("signed in").raw;
+    let to = |r: &str| json!({ "op": "role", "user": dana, "app": app_name, "role": r });
+
+    let asked = ask_ok(&ws, ACTION, to(&editor));
+    let (id, card) = (id_of(&asked), card_of(&asked));
+    let vw = view(&ws, &card);
+    assert_eq!(
+        vw["whatChanges"],
+        format!("Let {} move {dana}'s login on its App {app_name} from the role {viewer} to the role {editor}.", ws.handle),
+        "{vw}"
+    );
+    let effects = vw["consequences"].as_str().unwrap_or("");
+    assert!(effects.contains("so do their open sessions"), "{effects}");
+    assert!(effects.contains(&format!("Put it back with k2 app grant role {} --role {viewer}.", before.id)), "{effects}");
+
+    // Below the floor: an Admin; nothing moves.
+    let admin = login("alra", Role::Admin);
+    below_floor(answer_as(&admin, &ws, &card, json!({ "answer": "Allow" })), "owner");
+    assert_eq!(login_of(&dana, &app).unwrap().role_id, before.role_id);
+
+    let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(a["action"]["result"]["outcome"], "approved", "{a}");
+    let after = login_of(&dana, &app).expect("still a login");
+    let editor_id = skin::list_roles().unwrap().into_iter().find(|r| r.name == editor).unwrap().id;
+    assert_eq!(after.id, before.id, "in place, not remove + add");
+    assert_eq!(after.role_id.as_deref(), Some(editor_id.as_str()));
+    assert!(skin::resolve_skin_token(&session).is_some(), "the live session is kept");
+    assert!(last_turn(&ws).contains("their sessions stayed"), "{}", last_turn(&ws));
+    assert_eq!(row(&id).state, k2_core::permission::request::RequestState::Approved);
+
+    // The same role again: already done. No login to move: ask with op=add.
+    let (s, again) = ask(&ws, ACTION, to(&editor));
+    assert_eq!((s.as_str(), &again["status"]), ("200 OK", &json!("already_done")), "{again}");
+    let erin = format!("erin{}", uniq());
+    skin::add_principal_for_app(&erin, None, &app_of(&seed("als"), &format!("other{}", uniq())), None, "owner-token").expect("erin");
+    let (s, e) = ask(&ws, ACTION, json!({ "op": "role", "user": erin, "app": app_name, "role": editor }));
+    assert!(s.starts_with("400") && e.to_string().contains("ask with op=add"), "{s}: {e}");
+    // op=add on a login that exists points at op=role.
+    let (s, e) = ask(&ws, ACTION, add(&dana, &app_name, &viewer));
+    assert!(s.starts_with("400") && e.to_string().contains("op=role"), "{s}: {e}");
+    // op=role needs a role.
+    let (s, e) = ask(&ws, ACTION, json!({ "op": "role", "user": dana, "app": app_name }));
+    assert!(s.starts_with("400") && e.to_string().contains("name the role"), "{s}: {e}");
+}

@@ -1445,7 +1445,7 @@ print("Grant %s scope %s" % (d.get("id") or "", d.get("scope") or ""))'
                             --role) role="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
                             --role=*) role="${1#--role=}"; shift ;;
                             --help|-h)
-                                echo "Usage: k2 app grant role <grant-id> --role <role>   (an App login, kind=app; owner only)" >&2
+                                echo "Usage: k2 app grant role <grant-id> --role <role>   (an App login, kind=app; the owner, or your own App's agent with its Apps' users switch)" >&2
                                 echo "  Re-roles the login in place: live logins stay signed in and get the new role's rooms now." >&2
                                 exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
@@ -1453,7 +1453,7 @@ print("Grant %s scope %s" % (d.get("id") or "", d.get("scope") or ""))'
                         esac
                     done
                     if [[ -z "$gid" || -z "$role" ]]; then
-                        echo "Usage: k2 app grant role <grant-id> --role <role>   (an App login, kind=app; owner only)" >&2
+                        echo "Usage: k2 app grant role <grant-id> --role <role>   (an App login, kind=app; the owner, or your own App's agent with its Apps' users switch)" >&2
                         exit 1
                     fi
                     local body raw

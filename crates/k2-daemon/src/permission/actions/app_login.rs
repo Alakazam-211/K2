@@ -1,6 +1,16 @@
-//! `app.login-grant op=add|remove user= app= role=` (Rosson 2026-10-30): an
-//! App's own agent asks to give one of the box's App users a login on its
-//! App, with a role, or to take one away.
+//! `app.login-grant op=add|remove|role user= app= role=` (Rosson 2026-10-30):
+//! an App's own agent asks to give one of the box's App users a login on its
+//! App, with a role, or to take one away; or (0.46.16) to move a login it
+//! already has onto another role in place (`op=role`), which keeps their
+//! sessions (remove then add would end them).
+//!
+//! `op=role` has no wall of its own: `k2 app grant role` is the agent's own
+//! with "Let this agent manage its Apps' users", and without it that refusal
+//! (`app_users_off`) asks for the switch. This is the one-time ask for an
+//! agent whose owner keeps the switch off. It is an op of this action, not an
+//! action of its own: the same values (person, App, role), the same scope,
+//! the same floor and answer, and one `user=`/`app=` pair names the login
+//! (a person has at most one login per App).
 //!
 //! The wall: `k2 app grant add|rm --subject-kind principal --subject <user>
 //! --kind app --target <app> [--role <role>]` (`POST /cli/skin/grants`,
@@ -46,7 +56,8 @@ use super::{Answerer, Applied, Check, Ctx, Registered};
 pub(crate) const ACTION: &str = "app.login-grant";
 pub(crate) const ROUTE_ADD: &str = "/cli/skin/grants";
 pub(crate) const ROUTE_REMOVE: &str = "/cli/skin/grants/delete";
-pub(crate) const OPS: [&str; 2] = ["add", "remove"];
+pub(crate) const ROUTE_ROLE: &str = "/cli/skin/grants/role";
+pub(crate) const OPS: [&str; 3] = ["add", "remove", "role"];
 /// The route's own floor (`owner_role_identity`): the owner.
 pub(crate) const FLOOR: Floor = Floor::Owner;
 
@@ -168,20 +179,31 @@ pub(crate) fn login_on(p: &SkinPrincipal, svc: &OwnService) -> Option<SkinGrant>
     skin::list_grants().ok()?.into_iter().find(|g| g.subject_kind == "principal" && g.subject_id == p.id && g.kind == "app" && g.target_id == svc.id)
 }
 
+/// What one request does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Op {
+    Add,
+    Remove,
+    /// Move the login they have onto another role, in place.
+    Role,
+}
+
 /// The checked values of one request.
 struct Login {
-    add: bool,
+    op: Op,
     person: SkinPrincipal,
     svc: OwnService,
     role: Option<SkinRole>,
 }
 
 fn login_of(ctx: &Ctx) -> Result<Login, String> {
-    let op = text_param(ctx, "op").ok_or("say what: op=add or op=remove")?;
-    if !OPS.contains(&op) {
-        return Err(format!("op={op}: add or remove"));
-    }
-    let add = op == "add";
+    let op = text_param(ctx, "op").ok_or("say what: op=add, op=remove or op=role")?;
+    let op = match op {
+        "add" => Op::Add,
+        "remove" => Op::Remove,
+        "role" => Op::Role,
+        other => return Err(format!("op={other}: add, remove or role")),
+    };
     let user = text_param(ctx, "user").ok_or("name the person: user=<their username>")?;
     let app = text_param(ctx, "app").ok_or("name your App: app=<its name>")?;
     let svc = own_service(&ctx.workspace_id, app).ok_or_else(|| format!("{} has no App named {app}", ctx.workspace_handle))?;
@@ -196,11 +218,11 @@ fn login_of(ctx: &Ctx) -> Result<Login, String> {
             u = person.username,
         ));
     }
-    let role = match (add, text_param(ctx, "role")) {
-        (true, None) => return Err("name the role they get: role=<role> (k2 app role list)".into()),
-        (false, Some(_)) => return Err("role= goes with op=add".into()),
-        (false, None) => None,
-        (true, Some(r)) => {
+    let role = match (op, text_param(ctx, "role")) {
+        (Op::Add | Op::Role, None) => return Err("name the role they get: role=<role> (k2 app role list)".into()),
+        (Op::Remove, Some(_)) => return Err("role= goes with op=add or op=role".into()),
+        (Op::Remove, None) => None,
+        (Op::Add | Op::Role, Some(r)) => {
             let role = role_named(r).ok_or_else(|| format!("there's no role named {r} on this server (k2 app role list)"))?;
             if role.app_id.as_deref().is_some_and(|a| a != svc.id) {
                 return Err(format!("the role {} belongs to another App", role.name));
@@ -208,7 +230,7 @@ fn login_of(ctx: &Ctx) -> Result<Login, String> {
             Some(role)
         }
     };
-    Ok(Login { add, person, svc, role })
+    Ok(Login { op, person, svc, role })
 }
 
 /// The card's words from the stored values: `{user}`, `{app}` by name,
@@ -224,8 +246,31 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
             out.params.insert("user".into(), json!(l.person.username));
             out.params.insert("app".into(), json!(l.svc.name));
             let (u, a) = (&l.person.username, &l.svc.name);
-            match &l.role {
-                Some(r) => (
+            match (&l.role, l.op) {
+                (Some(r), Op::Role) => {
+                    let now = login_on(&l.person, &l.svc);
+                    let from = now
+                        .as_ref()
+                        .and_then(|g| g.role_id.as_deref())
+                        .and_then(|rid| skin::list_roles().ok()?.into_iter().find(|x| x.id == rid))
+                        .map(|x| x.name);
+                    let back = match (&now, &from) {
+                        (Some(g), Some(old)) => format!(" Put it back with k2 app grant role {} --role {old}.", g.id),
+                        _ => String::new(),
+                    };
+                    (
+                        match &from {
+                            Some(old) => format!("Let {ws} move {u}'s login on its App {a} from the role {old} to the role {}", r.name),
+                            None => format!("Let {ws} give {u}'s login on its App {a} the role {}", r.name),
+                        },
+                        format!(
+                            "With the role {}, {u} can {}. Their login stays, and so do their open sessions: they get the new role at their next request.{back}",
+                            r.name,
+                            role_allows(r)
+                        ),
+                    )
+                }
+                (Some(r), _) => (
                     format!("Let {ws} give {u} a login on its App {a}, with the role {}", r.name),
                     format!(
                         "With the role {}, {u} can {}. They sign in to {a} with their own password, and {a}'s server can see it when they do. Remove it again with k2 app grant rm --subject-kind principal --subject {u} --kind app --target {a}.",
@@ -233,7 +278,7 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
                         role_allows(r)
                     ),
                 ),
-                None => (
+                (None, _) => (
                     format!("Let {ws} remove {u}'s login on its App {a}"),
                     format!("{u} can't sign in to {a} any more, and their open sessions there end. Their other Apps and their account stay."),
                 ),
@@ -251,15 +296,26 @@ fn check(ctx: &Ctx) -> Check {
         Ok(l) => l,
         Err(e) => return Check::Moved(e),
     };
-    match (l.add, login_on(&l.person, &l.svc)) {
-        (true, Some(g)) if g.role_id.is_some() && g.role_id == l.role.as_ref().map(|r| r.id.clone()) && g.enabled => Check::AlreadyDone,
-        (true, Some(_)) => Check::Moved(format!(
-            "{} already has a login on {}: changing its role is the owner's (k2 app grant role), and keeps their sessions",
-            l.person.username, l.svc.name
+    let same_role = |g: &SkinGrant| g.role_id.is_some() && g.role_id == l.role.as_ref().map(|r| r.id.clone()) && g.scope.is_none();
+    match (l.op, login_on(&l.person, &l.svc)) {
+        (Op::Add, Some(g)) if same_role(&g) && g.enabled => Check::AlreadyDone,
+        (Op::Add, Some(_)) => Check::Moved(format!(
+            "{u} already has a login on {a}: to change its role and keep their sessions, ask with op=role: k2 permission request app.login-grant op=role user={u} app={a} role={r} --why \"<what you need it for>\"",
+            u = l.person.username,
+            a = l.svc.name,
+            r = l.role.as_ref().map(|r| r.name.as_str()).unwrap_or("<role>"),
         )),
-        (true, None) => Check::Needed,
-        (false, Some(_)) => Check::Needed,
-        (false, None) => Check::AlreadyDone,
+        (Op::Add, None) => Check::Needed,
+        (Op::Remove, Some(_)) => Check::Needed,
+        (Op::Remove, None) => Check::AlreadyDone,
+        (Op::Role, Some(g)) if same_role(&g) => Check::AlreadyDone,
+        (Op::Role, Some(_)) => Check::Needed,
+        (Op::Role, None) => Check::Moved(format!(
+            "{u} has no login on {a} to move: ask with op=add instead: k2 permission request app.login-grant op=add user={u} app={a} role={r} --why \"<what you need it for>\"",
+            u = l.person.username,
+            a = l.svc.name,
+            r = l.role.as_ref().map(|r| r.name.as_str()).unwrap_or("<role>"),
+        )),
     }
 }
 
@@ -277,7 +333,12 @@ fn apply(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
         Ok(l) => l,
         Err(e) => return Applied::Refused { code: "bad_params".into(), message: e },
     };
-    let route = if l.add { ROUTE_ADD } else { ROUTE_REMOVE };
+    let existing = login_on(&l.person, &l.svc);
+    let route = match l.op {
+        Op::Add => ROUTE_ADD,
+        Op::Remove => ROUTE_REMOVE,
+        Op::Role => ROUTE_ROLE,
+    };
     if let Err(refused) = route_floor(route, who) {
         return refused;
     }
@@ -285,17 +346,25 @@ fn apply(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     if let Answerer::Login { user, .. } = who {
         let owner = k2_core::connect_users::role_for_user(user).is_some_and(k2_core::connect_users::can_change_roles);
         if !owner {
-            return Applied::Refused { code: "owner_only".into(), message: "only the server's owner adds or removes App logins".into() };
+            return Applied::Refused { code: "owner_only".into(), message: "only the server's owner adds, removes or re-roles App logins".into() };
         }
     }
     let actor = actor_of(who);
     let mut body = json!({ "subjectKind": "principal", "subjectId": l.person.id, "kind": "app", "targetId": l.svc.id });
-    let r = match &l.role {
-        Some(role) => {
+    let r = match (l.op, &l.role) {
+        // The in-place path (`k2 app grant role`): the login keeps its id,
+        // its on/off and its sessions.
+        (Op::Role, Some(role)) => {
+            let Some(g) = existing else {
+                return Applied::Refused { code: "stale".into(), message: format!("{} has no login on {} any more", l.person.username, l.svc.name) };
+            };
+            crate::skin_routes::handle_grants_role(json!({ "id": g.id, "role": role.id }).to_string().as_bytes(), &actor)
+        }
+        (_, Some(role)) => {
             body["roleId"] = json!(role.id);
             crate::skin_routes::handle_grants_post(body.to_string().as_bytes(), &actor)
         }
-        None => crate::skin_routes::handle_grants_delete(body.to_string().as_bytes(), &actor),
+        (_, None) => crate::skin_routes::handle_grants_delete(body.to_string().as_bytes(), &actor),
     };
     let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
     if !r.status.starts_with("200") {
@@ -304,9 +373,10 @@ fn apply(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     }
     let (u, a) = (&l.person.username, &l.svc.name);
     Applied::Done {
-        message: match &l.role {
-            Some(role) => format!("{u} has a login on {a} with the role {} now.", role.name),
-            None => format!("{u}'s login on {a} is removed."),
+        message: match (l.op, &l.role) {
+            (Op::Role, Some(role)) => format!("{u}'s login on {a} has the role {} now; their sessions stayed.", role.name),
+            (_, Some(role)) => format!("{u} has a login on {a} with the role {} now.", role.name),
+            (_, None) => format!("{u}'s login on {a} is removed."),
         },
     }
 }

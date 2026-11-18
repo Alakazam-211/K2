@@ -37,6 +37,7 @@ mod app_grace_integration;
 mod app_handover_integration;
 mod app_heartbeats_integration;
 mod app_mobile_access_integration;
+mod app_grant_role_agent_integration;
 mod app_move_polish_integration;
 mod app_pairing_integration;
 mod app_project_chat_integration;

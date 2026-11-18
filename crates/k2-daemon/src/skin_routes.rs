@@ -503,6 +503,8 @@ pub fn app_users_off_response() -> CliResponse {
     }
 }
 
+pub mod grants_role;
+
 /// The routes [`agent_scoped`] guards: a guest's password, email, rooms,
 /// lockout, removal and role.
 pub const AGENT_SCOPED_ROUTES: &[&str] = &[
@@ -647,7 +649,7 @@ fn write_event(path: &str) -> Option<&'static str> {
         "/cli/skin/users/password" => "app_user_password_set",
         "/cli/skin/users/email" => "app_user_email_set",
         "/cli/skin/users/rooms" => "app_user_rooms_changed",
-        "/cli/skin/roles/assign" => "app_user_role_assigned",
+        "/cli/skin/roles/assign" | grants_role::GRANTS_ROLE => "app_user_role_assigned",
         "/cli/skin/roles/unassign" => "app_user_role_unassigned",
         "/cli/skin/roles" => "app_user_role_written",
         "/cli/skin/roles/update" => "app_user_role_updated",
@@ -2162,9 +2164,8 @@ pub fn handle_grants_delete(body: &[u8], actor: &str) -> CliResponse {
 }
 
 /// `POST /cli/skin/grants/role {id, role}` → the grant, re-roled in place
-/// (`k2 app grant role <id> --role <r>`, 0.46.5). Owner tier, like `grant
-/// add` (`/cli/skin/grants`): the dispatcher's `owner_role_identity` gate
-/// and POST-only guard; never an agent verb. Live App logins are kept and
+/// (`k2 app grant role <id> --role <r>`, 0.46.5), POST-only. The owner; or
+/// (0.46.16) an App's own agent on a login of its own App ([`grants_role`]). Live App logins are kept and
 /// rewritten to the new role ([`skin::set_app_grant_role`]); `changed`
 /// says whether anything moved. Audited in the auth log like a role assign.
 pub fn handle_grants_role(body: &[u8], actor: &str) -> CliResponse {
@@ -3218,7 +3219,7 @@ pub fn agent_may_manage_app_users(ws_path: &str) -> bool {
 /// gates? The guest routes, and giving a guest a role (0.46.4).
 pub fn is_app_user_route(path: &str) -> bool {
     let p = path.split('?').next().unwrap_or(path);
-    p == "/cli/skin/users" || p.starts_with("/cli/skin/users/") || p == "/cli/skin/roles/assign" || p == "/cli/skin/roles/unassign"
+    p == "/cli/skin/users" || p.starts_with("/cli/skin/users/") || p == "/cli/skin/roles/assign" || p == "/cli/skin/roles/unassign" || p == grants_role::GRANTS_ROLE
 }
 
 pub fn skin_manage_actor_label(principal: &crate::session_token::HookPrincipal) -> String {

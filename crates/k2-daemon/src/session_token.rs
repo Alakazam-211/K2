@@ -1427,6 +1427,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/skin/roles/remove",
         "/cli/skin/roles/assign",
         "/cli/skin/roles/unassign",
+        // 0.46.16: `k2 app grant role` on a login of its own App (the
+        // App-users switch and `skin_routes::agent_may_rerole`).
+        "/cli/skin/grants/role",
         "/cli/skin/roles/room",
         "/cli/skin/roles/paths",
         // app-mobile-access-v1 (0.46.3): the suggested role templates (read,

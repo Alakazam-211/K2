@@ -16,6 +16,11 @@
 #   thread read    k5 thread read                     <= 40 ms: pending
 #                                                        (R3.5, not timed)
 #
+# Then, for the fallthrough, info lines with no target: cli/k2, the shell
+# run as the front hands it over but started straight, and the front, and
+# the front's own phase times (K5_CLI_TRACE_TIMING), with a passport and
+# without one (where the passport rule walks the process ancestry).
+#
 # Before timing, each measure's command runs once on both CLIs where both
 # answer it, and the two must print the same and exit the same: a fast
 # wrong answer is no pass. A measure that misses its target fails the
@@ -170,6 +175,76 @@ measure("k5 heartbeat list (fallthrough)", [k5, "heartbeat", "list"], bash_ft + 
 bash_who = p95(timed(bash_argv("whoami")))
 print(f"perf_cli: info: cli/k2 whoami: p95 {bash_who:.2f} ms (for comparison)")
 print("perf_cli: pending: k5 thread read <= 40 ms (R3.5: thread read is not native yet)")
+
+# Where the fallthrough's time goes. Info only, no target: the front's
+# phases from its own timing (K5_CLI_TRACE_TIMING, crates/k5-cli/src/
+# trace.rs), and the shell run exactly as the front hands it over
+# (/dev/fd/3 on the cache file, the front's four variables) but started
+# straight, so the front's cost and the shell's own are told apart.
+import re, tempfile
+ft = ["heartbeat", "list"]
+caches = [os.path.join(d, n) for d, _, names in os.walk(work + "/home") for n in names
+          if d.endswith("/run/cli") and n.startswith("k2-") and n.endswith(".sh")]
+if len(caches) != 1:
+    sys.exit(f"perf_cli: FAIL: want one cache file under {work}/home, found {caches}")
+script_dir = os.path.dirname(os.path.realpath(binary))
+handed = dict(env, K5_CLI_CALLED_AS="k5", K5_CLI_NOTICE_DONE="1", K5_CLI_VIA="rust", K5_CLI_SCRIPT_DIR=script_dir)
+
+def spawn_runs(argv, run_env, extra=(), runs=RUNS, want=None, trace=False):
+    """Wall ms of each run, and (with trace) each run's stderr text."""
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    walls, errs = [], []
+    try:
+        for i in range(WARM + runs):
+            err = tempfile.TemporaryFile(dir=work + "/tmp")
+            fa = [(os.POSIX_SPAWN_DUP2, devnull, 1), (os.POSIX_SPAWN_DUP2, err.fileno() if trace else devnull, 2), *extra]
+            t0 = time.perf_counter_ns()
+            e = dict(run_env, K5_CLI_TRACE_TIMING=str(t0)) if trace else run_env
+            pid = os.posix_spawn(argv[0], argv, e, file_actions=fa)
+            _, status = os.waitpid(pid, 0)
+            ms = (time.perf_counter_ns() - t0) / 1e6
+            code = os.waitstatus_to_exitcode(status)
+            if want is not None and code != want:
+                sys.exit(f"perf_cli: FAIL: {argv} exited {code}, want {want}")
+            err.seek(0)
+            text = err.read().decode("utf-8", "replace")
+            err.close()
+            if i >= WARM:
+                walls.append(ms)
+                errs.append(text)
+    finally:
+        os.close(devnull)
+    return walls, errs
+
+ft_code = expected[tuple([k5, *ft])]
+open3 = [(os.POSIX_SPAWN_OPEN, 3, caches[0], os.O_RDONLY, 0)]
+a, _ = spawn_runs(["/bin/bash", bash_cli, *ft], env, want=ft_code)
+b, _ = spawn_runs(["/bin/bash", "/dev/fd/3", *ft], handed, extra=open3, want=ft_code)
+c, _ = spawn_runs([k5, *ft], env, want=ft_code)
+for name, xs in [("cli/k2 as is", a), ("the shell as the front hands it over, started straight", b), ("k5 (the front, then the shell)", c)]:
+    print(f"perf_cli: info: fallthrough: {name}: p95 {p95(xs):.2f} ms, median {statistics.median(xs):.2f} ms")
+
+TIMING = re.compile(r"^k5 timing: (.+) ([0-9.]+) ms$")
+def phases(label, run_env):
+    walls, errs = spawn_runs([k5, *ft], run_env, runs=20, trace=True)
+    rows = {}
+    for text in errs:
+        for line in text.splitlines():
+            m = TIMING.match(line)
+            if m:
+                rows.setdefault(m.group(1), []).append(float(m.group(2)))
+    if "total" not in rows:
+        sys.exit(f"perf_cli: FAIL: no k5 timing lines with K5_CLI_TRACE_TIMING set:\n{errs[0]}")
+    print(f"perf_cli: info: timing, {label} (median of {len(walls)} runs):")
+    for name, xs in rows.items():
+        print(f"perf_cli: info:   {name:<28} {statistics.median(xs):8.3f} ms")
+    front = statistics.median(rows.get("spawn to main", [0.0])) + statistics.median(rows["total"])
+    print(f"perf_cli: info:   {'wall':<28} {statistics.median(walls):8.3f} ms "
+          f"(the front's part {front:.3f} ms, the shell's the rest)")
+
+phases("a passport (this script's call)", env)
+owner = {k: v for k, v in env.items() if k not in ("K2_HOOK_TOKEN", "K2_CELL", "K2_SESSION_ID")}
+phases("no passport and no session marker: the ancestry walk runs", owner)
 srv.shutdown()
 if not all(results):
     sys.exit(f"perf_cli: {results.count(False)} of {len(results)} measures missed their target")

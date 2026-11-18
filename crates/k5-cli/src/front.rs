@@ -7,13 +7,15 @@
 //! [`crate::families`]. A form the front's code does not take falls
 //! through, as does everything else, byte for byte ([`crate::fallthrough`]).
 //!
-//! A family's help is the shell's: a `whoami`, `done`, `respond`, `inbox`,
-//! `read`, `activity`, `sessions`, `connections` or `feedback` (`tickets`)
-//! command line with `-h` or `--help` anywhere in it falls through, so the
-//! shell prints its help
-//! text (or its error for a flag before it, or whatever it does with such
-//! a word where it reads a value), with its connection gate in front of
-//! it, exactly as it always has. No copy of the text lives here.
+//! A family's help never reaches the family: a `whoami`, `done`,
+//! `respond`, `inbox`, `read`, `activity`, `sessions`, `connections` or
+//! `feedback` (`tickets`) command line with `-h` or `--help` anywhere in
+//! it is a help page when it is exactly a form the shell only prints a
+//! file for ([`Route::Help`], [`help_route`]), and falls through
+//! otherwise, so the shell prints its help text (or its error for a flag
+//! before it, or whatever it does with such a word where it reads a
+//! value), with its connection gate in front of it, exactly as it always
+//! has. No copy of the text lives here: a page is the shell's own file.
 //!
 //! A study page ([`Route::Study`], when the `study` row is `Native`) and
 //! a help form the shell only prints a file for ([`Route::Help`],
@@ -82,8 +84,9 @@ pub fn route(args: &[OsString]) -> Route {
     let found = route::find(route::TABLE, args);
     match (found.owner, found.noun) {
         (Owner::Native, Some(noun)) => native(noun, args),
-        // Nothing is `Spec` yet: there is no runner for it.
-        _ => Route::Fallthrough,
+        // Nothing is `Spec` yet: there is no runner for it. A help form
+        // the shell only prints a file for is a page.
+        _ => help_route(args).map_or(Route::Fallthrough, Route::Help),
     }
 }
 
@@ -112,41 +115,24 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
             _ => Route::Fallthrough,
         };
     }
-    let help = words.iter().any(|w| matches!(*w, "-h" | "--help"));
+    // A family's help is a page or the shell's, never the family's.
+    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+        return help_route(args).map_or(Route::Fallthrough, Route::Help);
+    }
     if noun.names("whoami") {
-        return if help {
-            Route::Fallthrough
-        } else {
-            Route::Whoami
-        };
+        return Route::Whoami;
     }
     if noun.names("done") {
-        return if help {
-            Route::Fallthrough
-        } else {
-            Route::Done
-        };
+        return Route::Done;
     }
     if noun.names("respond") {
-        return if help {
-            Route::Fallthrough
-        } else {
-            Route::Respond
-        };
+        return Route::Respond;
     }
     if noun.names("inbox") {
-        return if help {
-            Route::Fallthrough
-        } else {
-            Route::Inbox
-        };
+        return Route::Inbox;
     }
     if noun.names("read") {
-        return if help {
-            Route::Fallthrough
-        } else {
-            Route::Read
-        };
+        return Route::Read;
     }
     for (word, route) in [
         ("activity", Route::Activity),
@@ -155,7 +141,7 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
         ("feedback", Route::Feedback),
     ] {
         if noun.names(word) {
-            return if help { Route::Fallthrough } else { route };
+            return route;
         }
     }
     Route::Fallthrough
@@ -252,8 +238,9 @@ mod tests {
         }
     }
 
-    /// `whoami` is the binary's, but for its help: any `-h` or `--help`
-    /// word sends the whole line to the shell.
+    /// `whoami` is the binary's, but for its help: a line with an `-h` or
+    /// `--help` word is a help page when it is exactly a help form, and
+    /// the shell's otherwise.
     #[test]
     fn the_whoami_forms() {
         for line in [
@@ -266,10 +253,15 @@ mod tests {
         ] {
             assert_eq!(route(&args(line)), Route::Whoami, "{line:?}");
         }
+        // Exactly a help form: the shell's own file, as a page.
+        for line in [&["whoami", "--help"][..], &["whoami", "-h"]] {
+            assert!(
+                matches!(route(&args(line)), Route::Help(f) if f.page == "whoami"),
+                "{line:?}"
+            );
+        }
         for line in [
-            &["whoami", "--help"][..],
-            &["whoami", "-h"],
-            &["whoami", "--json", "-h"],
+            &["whoami", "--json", "-h"][..],
             &["whoami", "--bogus", "--help"],
             &["whoami", "x", "--help"],
         ] {
@@ -332,8 +324,9 @@ mod tests {
         }
     }
 
-    /// `inbox`'s front code, likewise: any `-h` or `--help` word goes to
-    /// the shell (`inbox read --help` reads the item `--help` there).
+    /// `inbox`'s front code, likewise: an `-h` or `--help` word never
+    /// reaches the family (`inbox read --help` reads the item `--help` in
+    /// the shell).
     #[test]
     fn the_inbox_forms() {
         let inbox = route::TABLE
@@ -349,10 +342,14 @@ mod tests {
         ] {
             assert_eq!(native(inbox, &args(line)), Route::Inbox, "{line:?}");
         }
+        for line in [&["inbox", "--help"][..], &["inbox", "-h"]] {
+            assert!(
+                matches!(native(inbox, &args(line)), Route::Help(f) if f.page == "inbox"),
+                "{line:?}"
+            );
+        }
         for line in [
-            &["inbox", "--help"][..],
-            &["inbox", "-h"],
-            &["inbox", "read", "--help"],
+            &["inbox", "read", "--help"][..],
             &["inbox", "list", "--folder", "-h"],
         ] {
             assert_eq!(native(inbox, &args(line)), Route::Fallthrough, "{line:?}");
@@ -384,8 +381,8 @@ mod tests {
         }
     }
 
-    /// `activity`, `sessions` and `connections`, likewise: any `-h` or
-    /// `--help` word goes to the shell.
+    /// `activity`, `sessions` and `connections`, likewise: an `-h` or
+    /// `--help` word never reaches the family.
     #[test]
     fn the_r3_7_forms() {
         let row = |w: &str| {
@@ -418,7 +415,9 @@ mod tests {
             for line in lines {
                 assert_eq!(native(row(w), &args(line)), want, "{line:?}");
             }
-            for line in [&[w, "--help"][..], &[w, "list", "-h"], &[w, "x", "--help"]] {
+            let page = native(row(w), &args(&[w, "--help"]));
+            assert!(matches!(page, Route::Help(f) if f.page == w), "{w} --help: {page:?}");
+            for line in [&[w, "list", "-h"][..], &[w, "x", "--help"]] {
                 assert_eq!(native(row(w), &args(line)), Route::Fallthrough, "{line:?}");
             }
         }
@@ -440,10 +439,20 @@ mod tests {
         ] {
             assert_eq!(native(row, &args(line)), Route::Feedback, "{line:?}");
         }
+        for (line, page) in [
+            (&["feedback", "list", "--help"][..], "feedback/list"),
+            (&["feedback", "show", "-h"], "feedback/show"),
+            (&["feedback", "--help"], "feedback"),
+        ] {
+            assert!(
+                matches!(native(row, &args(line)), Route::Help(f) if f.page == page),
+                "{line:?}"
+            );
+        }
         for line in [
-            &["feedback", "list", "--help"][..],
-            &["tickets", "show", "x", "-h"],
-            &["feedback", "--help"],
+            &["tickets", "show", "x", "-h"][..],
+            &["tickets", "list", "--help"],
+            &["feedback", "show", "x", "--help"],
         ] {
             assert_eq!(native(row, &args(line)), Route::Fallthrough, "{line:?}");
         }
@@ -514,6 +523,23 @@ mod tests {
         // The shell's: the list as JSON, unknown and bash topics, errors.
         for shell in [&["study", "--json"][..], &["study", "nope"], &["study", "app-api"], &["study", "errors", "db"], &["study", "--x"]] {
             assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
+        }
+    }
+
+    #[test]
+    fn the_help_forms() {
+        let Route::Help(form) = route(&args(&["mail", "send", "--help"])) else { panic!("mail send --help is not a page") };
+        assert_eq!(form.page, "mail/send");
+        assert!(matches!(route(&args(&["help", "mail"])), Route::Help(f) if f.page == "mail"));
+        // A native row keeps its own help; anything not exactly a form is
+        // the shell's.
+        assert_eq!(route(&args(&["cli", "--help"])), Route::CliHelp);
+        for shell in [&["--help"][..], &["help"], &[], &["mail", "send", "x", "--help"], &["help", "nope"], &["chat", "--help"]] {
+            assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
+        }
+        for form in text::HELP_FORMS {
+            let argv: Vec<OsString> = form.argv.iter().map(OsString::from).collect();
+            assert!(matches!(route(&argv), Route::Help(f) if std::ptr::eq(f, form)), "{:?}", form.argv);
         }
     }
 

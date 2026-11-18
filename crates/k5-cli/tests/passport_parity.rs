@@ -3,7 +3,7 @@
 //! reads `K5_CLI_WOULD_REFUSE` as the front sets it and takes every
 //! hand-over variable out of the environment, the markers are the ones the
 //! shell names, and a session process found by the live walk is named by
-//! the kernel (a copy of bash named `k2-ptyd` as the ancestor).
+//! the kernel (a copy of this test binary named `k2-ptyd` as the ancestor).
 
 mod common;
 
@@ -129,9 +129,39 @@ fn the_markers_are_the_ones_the_shell_names() {
     }
 }
 
-/// A real walk: a copy of bash named `k2-ptyd` starts `sleep`, and the
-/// walk up from the sleep finds it. A copy under another name is not found
-/// as the pty daemon.
+/// Set on a copy of this test binary run as the stand-in parent; any
+/// other run of [`stand_in_parent`] does nothing.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const STAND_IN_VAR: &str = "PASSPORT_PARITY_STAND_IN";
+
+/// What the stand-in parent prints before the pid of the sleep it started,
+/// so the pid stands apart from the test harness's own output.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const SLEEP_PID: &str = "stand-in sleep pid ";
+
+/// Not a check: the body of the stand-in parent for the live walk. A copy
+/// of this test binary, run as this one test with [`STAND_IN_VAR`] set,
+/// starts `sleep`, prints its pid and waits on it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn stand_in_parent() {
+    use std::io::Write;
+    if std::env::var_os(STAND_IN_VAR).is_none() {
+        return;
+    }
+    let mut sleep = std::process::Command::new("sleep").arg("30").spawn().expect("run sleep");
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "{SLEEP_PID}{}", sleep.id()).expect("print the pid");
+    out.flush().expect("flush the pid");
+    drop(out);
+    let _ = sleep.wait();
+}
+
+/// A real walk: a copy of this test binary named `k2-ptyd` starts `sleep`,
+/// and the walk up from the sleep finds it. A copy under another name is
+/// not found as the pty daemon. The copy is our own build (signed ad hoc
+/// by the linker on macOS), never a system binary: macOS kills a copied
+/// platform binary at launch.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn the_live_walk_finds_a_process_named_like_the_pty_daemon() {
@@ -142,36 +172,40 @@ fn the_live_walk_finds_a_process_named_like_the_pty_daemon() {
 
     let dir = std::env::temp_dir().join(format!("k5-passport-walk-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let bash = ["/bin/bash", "/usr/bin/bash"].into_iter().find(|p| std::path::Path::new(p).is_file()).expect("a bash");
+    let exe = std::env::current_exe().expect("this test binary");
     let table = LiveProcessTable;
     let mut seen = Vec::new();
     for (name, is_ptyd) in [("k2-ptyd", true), ("k2-ptyx", false)] {
         let fake = dir.join(name);
-        std::fs::copy(bash, &fake).unwrap();
-        // macOS kills a copy of a system binary that still carries the
-        // system's signature; signed again ad hoc, it runs.
-        #[cfg(target_os = "macos")]
-        {
-            let signed = Command::new("/usr/bin/codesign").arg("-f").arg("-s").arg("-").arg(&fake).output().expect("run codesign");
-            assert!(signed.status.success(), "codesign {}: {}", fake.display(), String::from_utf8_lossy(&signed.stderr));
-        }
+        std::fs::copy(&exe, &fake).unwrap_or_else(|e| panic!("copy {} to {}: {e}", exe.display(), fake.display()));
         let mut child = Command::new(&fake)
-            .arg("-c")
-            .arg("sleep 30 & echo $!; wait")
+            .args(["stand_in_parent", "--exact", "--nocapture", "--test-threads=1"])
+            .env(STAND_IN_VAR, "1")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap_or_else(|e| panic!("run {}: {e}", fake.display()));
-        let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
-        let sleep: i32 = match line.trim().parse() {
-            Ok(pid) => pid,
-            Err(e) => {
-                let out = child.wait_with_output().expect("wait");
-                panic!("{name} printed no pid ({line:?}: {e}); {}: {}", out.status, String::from_utf8_lossy(&out.stderr));
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut printed = Vec::new();
+        let sleep: i32 = loop {
+            match lines.next() {
+                // The harness prints `test stand_in_parent ... ` with no
+                // line end before the test runs, so the mark is mid-line.
+                Some(Ok(l)) => match l.split_once(SLEEP_PID) {
+                    Some((_, pid)) => break pid.trim().parse().unwrap_or_else(|e| panic!("{name} printed {l:?}: {e}")),
+                    None => printed.push(l),
+                },
+                end => {
+                    let out = child.wait_with_output().expect("wait");
+                    panic!(
+                        "{name} printed no pid ({end:?} after {printed:?}); {}: {}",
+                        out.status,
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                }
             }
         };
-        // The background job is a fork of the fake until it starts sleep.
+        // Wait until the kernel names the new process sleep.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while table.command_name(sleep).as_deref() != Some("sleep") && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -195,7 +229,6 @@ fn the_live_walk_finds_a_process_named_like_the_pty_daemon() {
     // This test's own process is named by its file name, cut as the
     // kernel cuts it.
     let me = table.command_name(std::process::id() as i32).expect("my own name");
-    let exe = std::env::current_exe().unwrap();
     let file = exe.file_name().unwrap().to_string_lossy().into_owned();
     assert!(!me.is_empty() && file.starts_with(&me), "{me:?} is not the start of {file:?}");
     assert_eq!(seen.len(), 2);

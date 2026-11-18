@@ -23,12 +23,16 @@ export type TicketBoardChrome = {
   collapsed: boolean
   /** The "Chat with agent" rail. Open by default (Rosson). */
   chatOpen: boolean
+  /** The width the person dragged the discussion to; null = the width
+   *  rules' own (about a third of what the list leaves). */
+  discussionWidth: number | null
 }
 
 export const DEFAULT_TICKET_BOARD_CHROME: TicketBoardChrome = {
   listWidth: TICKET_LIST_DEFAULT_WIDTH,
   collapsed: false,
   chatOpen: true,
+  discussionWidth: null,
 }
 
 export function ticketBoardKey(label: string): string {
@@ -74,6 +78,8 @@ export function readTicketBoardChrome(label = getWindowLabel()): TicketBoardChro
         typeof rec.collapsed === 'boolean' ? rec.collapsed : DEFAULT_TICKET_BOARD_CHROME.collapsed,
       chatOpen:
         typeof rec.chatOpen === 'boolean' ? rec.chatOpen : DEFAULT_TICKET_BOARD_CHROME.chatOpen,
+      discussionWidth:
+        typeof rec.discussionWidth === 'number' ? clampTicketDiscussionWidth(rec.discussionWidth) : null,
     }
   } catch {
     return { ...DEFAULT_TICKET_BOARD_CHROME }
@@ -90,6 +96,12 @@ export function writeTicketBoardChrome(
       typeof patch.listWidth === 'number' ? clampTicketListWidth(patch.listWidth) : current.listWidth,
     collapsed: typeof patch.collapsed === 'boolean' ? patch.collapsed : current.collapsed,
     chatOpen: typeof patch.chatOpen === 'boolean' ? patch.chatOpen : current.chatOpen,
+    discussionWidth:
+      patch.discussionWidth === null
+        ? null
+        : typeof patch.discussionWidth === 'number'
+          ? clampTicketDiscussionWidth(patch.discussionWidth)
+          : current.discussionWidth,
   }
   const s = storage()
   if (s) {

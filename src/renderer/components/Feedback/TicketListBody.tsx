@@ -124,7 +124,7 @@ export function TicketListBody({
   return (
     <>
       {failedEmpty && (
-        <div className="flex h-full items-center justify-center py-6">
+        <div className="flex flex-1 items-center justify-center py-6">
           <ProjectStateCard
             kind="error"
             title="Couldn’t load tickets"
@@ -159,7 +159,7 @@ export function TicketListBody({
         <div className="px-1 py-8 text-center text-[var(--color-text-muted)] text-xs">Loading tickets…</div>
       )}
       {emptyList && error === null && (
-        <div data-testid="ticket-list-empty" className="flex flex-col items-center justify-center h-full text-center px-4">
+        <div data-testid="ticket-list-empty" className="flex flex-1 flex-col items-center justify-center text-center px-4">
           {rows !== null && rows.length > 0 && scope === 'waiting' && !search ? (
             <div data-testid="ticket-waiting-empty" className="flex flex-col items-center">
               <p className="text-xs text-[var(--color-text-secondary)]">Nothing is waiting on you</p>

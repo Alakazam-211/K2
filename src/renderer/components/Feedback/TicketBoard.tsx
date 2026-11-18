@@ -32,14 +32,19 @@ import { useProjectsStore } from '@/stores/projects'
 import {
   readTicketBoardChrome,
   writeTicketBoardChrome,
-  clampTicketListWidth,
   ticketBoardLayout,
+  TICKET_LIST_MAX_WIDTH,
+  TICKET_EMPTY_PANE_MIN_WIDTH,
   TICKET_LIST_MIN_WIDTH,
   TICKET_REPORT_LEAD_PX,
   type TicketBoardChrome,
   type TicketBoardLayoutInput,
 } from '@/lib/ticket-board-chrome'
 import { useElementWidth } from '@/hooks/useElementWidth'
+import { NavTile } from '@/components/Layout/NavTile'
+import { ResizeEdge } from '@/components/Layout/ResizeEdge'
+import { ScrollEdgeFrame, Surface, TILE_FOOT_CLIP } from '@/components/ui'
+import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
 import {
   filterByScope,
   filterBySearch,
@@ -77,6 +82,10 @@ export interface TicketBoardProps {
   initialSelectedId?: string | null
 }
 
+/** The list's fades take its tile's fill (the nav panel's surface in
+ *  Terminal). */
+const TICKET_LIST_EDGE_TINT = 'var(--tile-fill, var(--color-bg-surface))'
+
 /** The board's pane gap, as the page draws it (0 in Terminal). */
 function paneGap(el: HTMLElement | null): number {
   if (!el || typeof getComputedStyle === 'undefined') return 0
@@ -109,7 +118,6 @@ export function TicketBoard({
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
   const [chrome, setChrome] = useState<TicketBoardChrome>(() => readTicketBoardChrome())
   const [liveWidth, setLiveWidth] = useState<number | null>(null)
-  const [resizing, setResizing] = useState(false)
   const [retrying, setRetrying] = useState(false)
   // The list shown over the report while the width keeps it folded.
   const [listOverlay, setListOverlay] = useState(false)
@@ -182,6 +190,9 @@ export function TicketBoard({
   const setChatOpen = useCallback((chatOpen: boolean): void => {
     setChrome(writeTicketBoardChrome({ chatOpen }))
   }, [])
+  const setDiscussionWidth = useCallback((discussionWidth: number): void => {
+    setChrome(writeTicketBoardChrome({ discussionWidth }))
+  }, [])
 
   // The width rules: the report gets the most room (lib/ticket-board-chrome).
   const layoutInput: TicketBoardLayoutInput = {
@@ -192,6 +203,7 @@ export function TicketBoard({
     ticketOpen: selectedRow !== null,
     // An unlinked ticket has no discussion.
     chatOpen: chrome.chatOpen && !(selectedRow && isUnlinked(selectedRow)),
+    discussionWidth: chrome.discussionWidth,
   }
   const layout = ticketBoardLayout(layoutInput)
   const listWidth = liveWidth ?? layout.listWidth
@@ -213,32 +225,17 @@ export function TicketBoard({
     if (ticketBoardLayout({ ...layoutInput, collapsed: false }).list === 'rail') setListOverlay(true)
   }
 
-  const startResize = useCallback(
-    (e: React.MouseEvent): void => {
-      if (e.button !== 0) return
-      e.preventDefault()
-      const startX = e.clientX
-      const base = layout.listWidth
-      let last = base
-      document.body.style.cursor = 'col-resize'
-      setResizing(true)
-      const onMove = (ev: MouseEvent): void => {
-        last = clampTicketListWidth(base + (ev.clientX - startX))
-        setLiveWidth(last)
-      }
-      const onUp = (): void => {
-        document.removeEventListener('mousemove', onMove)
-        document.removeEventListener('mouseup', onUp)
-        document.body.style.cursor = ''
-        setResizing(false)
-        setLiveWidth(null)
-        setChrome(writeTicketBoardChrome({ listWidth: last }))
-      }
-      document.addEventListener('mousemove', onMove)
-      document.addEventListener('mouseup', onUp)
-    },
-    [layout.listWidth],
-  )
+  // How far the list's edge may go: while a ticket is open, only as far as
+  // the report still leads both side parts; with none, up to the empty
+  // middle's floor.
+  const listMax = ((): number => {
+    const fit = (n: number): number => Math.round(Math.min(TICKET_LIST_MAX_WIDTH, Math.max(TICKET_LIST_MIN_WIDTH, n)))
+    if (!(boardWidth > 0)) return TICKET_LIST_MAX_WIDTH
+    if (!selectedRow) return fit(boardWidth - gap - TICKET_EMPTY_PANE_MIN_WIDTH)
+    const { reportWidth: r, listWidth: l, discussionWidth: d } = layout
+    const grow = Math.min((r - l - TICKET_REPORT_LEAD_PX) / 2, d > 0 ? r - d - TICKET_REPORT_LEAD_PX : Infinity)
+    return fit(l + Math.max(0, Math.floor(grow)))
+  })()
 
   const retry = useCallback((): void => {
     setRetrying(true)
@@ -258,81 +255,86 @@ export function TicketBoard({
     [searched, scopeCounts],
   )
 
-  const listPanel = (width: number, overlay: boolean): React.JSX.Element => (
-    <div
-      data-testid="ticket-list"
-      data-overlay={overlay ? '' : undefined}
-      className={`relative flex flex-col min-h-0 border-r border-[var(--color-border)] flex-shrink-0 ${
-        overlay ? 'h-full bg-[var(--color-bg)] [box-shadow:var(--shadow-3)]' : ''
-      }`}
-      style={{ width }}
-    >
-      <div className="flex flex-col gap-1.5 px-2 py-2 border-b border-[var(--color-border)] flex-shrink-0">
-        <div className="flex items-center gap-1">
-          <div role="tablist" aria-label="Which tickets" className="flex flex-1 min-w-0 border border-[var(--color-border)]">
-            {TICKET_SCOPES.map((s) => {
-              const active = scope === s.value
-              return (
-                <button
-                  key={s.value}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  data-testid={`ticket-scope-${s.value}`}
-                  onClick={() => setScope(s.value)}
-                  className={`flex-1 min-w-0 flex items-center justify-center gap-1 px-1.5 py-1 text-[10px] font-medium truncate cursor-pointer transition-colors ${
-                    active
-                      ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                      : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-1)]'
-                  }`}
-                >
-                  <span className="truncate">{s.label}</span>
-                  {!failedEmpty && (
-                    <span className={`tabular-nums ${active ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'}`}>
-                      {scopeCounts[s.value]}
-                    </span>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-          <DrawerToggleButton
-            side="left"
-            placement="drawer"
-            name="ticket list"
-            testId="ticket-list-collapse"
-            onToggle={() => (overlay ? setListOverlay(false) : setCollapsed(true))}
-          />
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="relative flex-1 min-w-0">
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search tickets…"
-              aria-label="Search tickets"
-              className="w-full px-2 py-1.5 pr-6 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-text-muted)]"
-            />
-            {search && (
+  // The list's parts: its top row (level with the report's header and the
+  // discussion's: one height for the three), search under it, and the
+  // cards, whose ends fade under the rows beside them.
+  const listParts = (overlay: boolean): React.JSX.Element => (
+    <>
+      <div
+        data-ticket-list-header=""
+        className="flex items-center gap-1 pl-2 flex-shrink-0 border-b border-[var(--color-border)]"
+        style={{ height: PROJECT_BAR_ROW_HEIGHT }}
+      >
+        <div role="tablist" aria-label="Which tickets" className="flex flex-1 min-w-0 border border-[var(--color-border)]">
+          {TICKET_SCOPES.map((s) => {
+            const active = scope === s.value
+            return (
               <button
+                key={s.value}
                 type="button"
-                onClick={() => setSearch('')}
-                aria-label="Clear search"
-                className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center w-4 h-4 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
+                role="tab"
+                aria-selected={active}
+                data-testid={`ticket-scope-${s.value}`}
+                onClick={() => setScope(s.value)}
+                className={`flex-1 min-w-0 flex items-center justify-center gap-1 px-1.5 py-1 text-[10px] font-medium truncate cursor-pointer transition-colors ${
+                  active
+                    ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-1)]'
+                }`}
               >
-                <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <line x1="2" y1="2" x2="10" y2="10" />
-                  <line x1="10" y1="2" x2="2" y2="10" />
-                </svg>
+                <span className="truncate">{s.label}</span>
+                {!failedEmpty && (
+                  <span className={`tabular-nums ${active ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'}`}>
+                    {scopeCounts[s.value]}
+                  </span>
+                )}
               </button>
-            )}
-          </div>
-          {extraFilter}
+            )
+          })}
         </div>
+        <DrawerToggleButton
+          side="left"
+          placement="drawer"
+          name="ticket list"
+          testId="ticket-list-collapse"
+          onToggle={() => (overlay ? setListOverlay(false) : setCollapsed(true))}
+        />
+      </div>
+      <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 flex-shrink-0">
+        <div className="relative flex-1 min-w-0">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search tickets…"
+            aria-label="Search tickets"
+            className="w-full px-2 py-1.5 pr-6 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-text-muted)]"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              aria-label="Clear search"
+              className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center w-4 h-4 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
+            >
+              <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <line x1="2" y1="2" x2="10" y2="10" />
+                <line x1="10" y1="2" x2="2" y2="10" />
+              </svg>
+            </button>
+          )}
+        </div>
+        {extraFilter}
       </div>
 
-      <div className="flex-1 overflow-y-auto min-h-0 px-2 pb-2">
+      {/* The cards scroll in a frame whose ends fade, tinted with the tile's
+          own fill; at the tile's foot it keeps inside the rim's curve. */}
+      <ScrollEdgeFrame
+        className={`flex-1 min-h-0 ${TILE_FOOT_CLIP}`}
+        scrollClassName="overflow-y-auto overflow-x-hidden px-2 pb-2 [&>div]:min-h-full [&>div]:flex [&>div]:flex-col"
+        tint={TICKET_LIST_EDGE_TINT}
+        testId="ticket-list-scroll"
+      >
         <TicketListBody
           rows={rows}
           error={error}
@@ -351,68 +353,95 @@ export function TicketBoard({
           otherWaiting={otherWaiting}
           emptyHint={emptyHint}
         />
-      </div>
-
-      {!overlay && (
-        <div
-          data-testid="ticket-list-resize"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize the ticket list"
-          data-resize-edge=""
-          className="absolute top-0 bottom-0 z-10 cursor-col-resize hover:bg-[var(--color-accent)]/40 transition-colors"
-          style={{ right: -4, width: 7 }}
-          onMouseDown={startResize}
-        />
-      )}
-      {resizing && <div className="fixed inset-0 z-50" style={{ cursor: 'col-resize' }} />}
-    </div>
+      </ScrollEdgeFrame>
+    </>
   )
 
   return (
     <div
       ref={setBoardEl}
-      className="relative flex-1 min-h-0 min-w-0 flex"
+      className="relative flex-1 min-h-0 min-w-0 flex gap-[var(--gap-pane)]"
       data-testid="ticket-board"
       data-list-mode={layout.list}
       data-discussion-mode={layout.discussion}
     >
       {layout.list === 'rail' ? (
-        <div
+        // The folded list: its own tile at the icon-rail width, as the
+        // Projects nav's rail.
+        <NavTile
           data-testid="ticket-list-rail"
           data-auto-folded={layout.listAutoFolded ? '' : undefined}
-          className="flex flex-col items-center gap-1 py-2 border-r border-[var(--color-border)] flex-shrink-0 overflow-y-auto"
+          aria-label="Tickets"
+          className="flex flex-col items-center"
           style={{ width: layout.listWidth }}
         >
-          <div className="flex h-8 mb-1 flex-shrink-0">
+          <div
+            data-rail-top-row=""
+            className="flex w-full flex-shrink-0 items-center justify-center border-b border-[var(--color-border)]"
+            style={{ height: PROJECT_BAR_ROW_HEIGHT }}
+          >
             <DrawerToggleButton
               side="left"
               placement="room"
               name="ticket list"
               testId="ticket-list-expand"
-              // The rail's own border-r is the line; a divider here would
-              // sit mid-rail.
+              // The row's own line is the edge; no divider mid-rail.
               divider={false}
               onToggle={expandList}
             />
           </div>
-          {ordered.map((row) => (
-            <TicketRailItem
-              key={row.id}
-              row={row}
-              workspace={projectById.get(row.projectId)}
-              selected={selectedId === row.id}
-              onSelect={() => select(row.id)}
-            />
-          ))}
-        </div>
+          <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden py-2">
+            {ordered.map((row) => (
+              <TicketRailItem
+                key={row.id}
+                row={row}
+                workspace={projectById.get(row.projectId)}
+                selected={selectedId === row.id}
+                onSelect={() => select(row.id)}
+              />
+            ))}
+          </div>
+        </NavTile>
       ) : (
-        listPanel(listWidth, false)
+        <NavTile data-testid="ticket-list" className="flex flex-col min-h-0" style={{ width: listWidth }}>
+          {listParts(false)}
+        </NavTile>
+      )}
+      {layout.list === 'open' && (
+        // The shared resize edge, centred in the gap after the list.
+        <ResizeEdge
+          value={layout.listWidth}
+          min={TICKET_LIST_MIN_WIDTH}
+          max={listMax}
+          grows="right"
+          onLive={setLiveWidth}
+          onCommit={(w) => {
+            setLiveWidth(null)
+            setChrome(writeTicketBoardChrome({ listWidth: w }))
+          }}
+          label="Resize the ticket list"
+          testId="ticket-list-resize"
+          style={{ left: `calc(${listWidth}px + var(--gap-pane) / 2)`, transform: 'translateX(-50%)' }}
+        />
       )}
 
       {showOverlay && (
+        // The list over the report while the width keeps it folded: a
+        // floating tile. A pick, « or Esc closes it.
         <div data-testid="ticket-list-overlay" className="absolute inset-y-0 left-0 z-30 flex">
-          {listPanel(overlayWidth, true)}
+          <Surface
+            role2="surface"
+            material="tile"
+            bordered={false}
+            elevation={3}
+            data-nav-tile=""
+            data-testid="ticket-list"
+            data-overlay=""
+            className="relative flex flex-col min-h-0 h-full border-r border-[var(--color-border)]"
+            style={{ width: overlayWidth }}
+          >
+            {listParts(true)}
+          </Surface>
         </div>
       )}
 
@@ -427,12 +456,22 @@ export function TicketBoard({
             onMutated={onMutated}
             chatOpen={chrome.chatOpen}
             onChatOpenChange={setChatOpen}
-            discussion={{ mode: layout.discussion, width: layout.discussionWidth }}
+            discussion={{
+              mode: layout.discussion,
+              width: layout.discussionWidth,
+              reportWidth: layout.reportWidth,
+              onWidthChange: setDiscussionWidth,
+            }}
           />
         ) : (
-          <div className="flex-1 flex items-center justify-center m-4 border border-dashed border-[var(--color-border)] text-xs text-[var(--color-text-muted)] text-center px-6">
+          <Surface
+            role2="solid"
+            material="tile"
+            bordered={false}
+            className="flex-1 flex items-center justify-center text-xs text-[var(--color-text-muted)] text-center px-6"
+          >
             Select a ticket to open its brief.
-          </div>
+          </Surface>
         )}
       </div>
     </div>

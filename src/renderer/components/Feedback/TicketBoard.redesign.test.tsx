@@ -283,7 +283,7 @@ describe('TicketBoard per-window layout', () => {
     fireEvent.mouseMove(document, { clientX: 480 })
     fireEvent.mouseUp(document)
     await waitFor(() => expect(screen.getByTestId('ticket-list').style.width).toBe('480px'))
-    expect(readTicketBoardChrome('window-test')).toEqual({ listWidth: 480, collapsed: false, chatOpen: true })
+    expect(readTicketBoardChrome('window-test')).toEqual({ listWidth: 480, collapsed: false, chatOpen: true, discussionWidth: null })
 
     // The collapse is the nav's shared » / « drawer toggle: « while open.
     const collapse = screen.getByTestId('ticket-list-collapse')
@@ -296,9 +296,9 @@ describe('TicketBoard per-window layout', () => {
     fireEvent.click(collapse)
     expect(screen.queryByTestId('ticket-list')).toBeNull()
     expect(screen.getByTestId('ticket-list-rail')).toBeTruthy()
-    expect(readTicketBoardChrome('window-test')).toEqual({ listWidth: 480, collapsed: true, chatOpen: true })
+    expect(readTicketBoardChrome('window-test')).toEqual({ listWidth: 480, collapsed: true, chatOpen: true, discussionWidth: null })
     // Other windows keep their own layout.
-    expect(readTicketBoardChrome('main')).toEqual({ listWidth: 400, collapsed: false, chatOpen: true })
+    expect(readTicketBoardChrome('main')).toEqual({ listWidth: 400, collapsed: false, chatOpen: true, discussionWidth: null })
 
     // A fresh board in this window comes back collapsed.
     cleanup()

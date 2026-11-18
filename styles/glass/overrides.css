@@ -526,6 +526,9 @@
 }
 /* Focus windows: the same open canvas between a drawer and the room. */
 [data-style="glass"] [data-focus-content]:not([data-zen-root] *) { gap: var(--gap-pane); }
+/* The Tickets report is a tile here (the page in Terminal): its scroll
+   fades take the tile's fill. */
+[data-style="glass"] [data-ticket-report]:not([data-zen-root] *) { --ticket-report-fill: var(--tile-fill); }
 
 /* The tab strip has no rule under it: its tabs are small pills. */
 [data-style="glass"] [data-drawer-tab-strip]:not([data-zen-root] *) {

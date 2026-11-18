@@ -85,6 +85,8 @@ import { primaryScope } from '@/kessel/server-scope'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 import { TICKET_DISCUSSION_DEFAULT_WIDTH } from '@/lib/ticket-board-chrome'
+import { Surface, TILE_FOOT_CLIP } from '@/components/ui'
+import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
 import {
   TICKET_ATTACHMENTS_FEATURE,
   askingSessionWakeAction,
@@ -283,17 +285,29 @@ export function TicketAgentRail({
   const tab: RailTab = terminal ? chosen : 'thread'
 
   return (
-    <aside
+    // The discussion: its own tile, as the Projects page's chat (a floating
+    // tile when it's a drawer over the report).
+    <Surface
+      role="complementary"
+      aria-label="Discussion"
+      role2="surface"
+      material="tile"
+      bordered={false}
+      elevation={drawer ? 3 : 0}
       data-testid="ticket-agent-rail"
       data-ticket-discussion-drawer={drawer ? '' : undefined}
-      aria-label="Discussion"
-      className={`flex flex-col min-h-0 border-l border-[var(--color-border)] flex-shrink-0 bg-[var(--color-bg)] ${
-        drawer ? 'absolute inset-y-0 right-0 z-30 [box-shadow:var(--shadow-3)]' : ''
+      className={`relative flex flex-col min-h-0 border-l border-[var(--color-border)] flex-shrink-0 ${
+        drawer ? 'absolute inset-y-0 right-0 z-30' : ''
       }`}
       style={{ width }}
     >
       {(terminal || onHide) && (
-        <div role={terminal ? 'tablist' : undefined} className="flex items-center gap-1 px-3 border-b border-[var(--color-border)] flex-shrink-0">
+        // Its top row, level with the report's header and the list's.
+        <div
+          role={terminal ? 'tablist' : undefined}
+          className="flex items-center gap-1 px-3 border-b border-[var(--color-border)] flex-shrink-0"
+          style={{ height: PROJECT_BAR_ROW_HEIGHT }}
+        >
           {terminal && (['thread', 'agent'] as const).map((t) => (
             <button
               key={t}
@@ -312,7 +326,7 @@ export function TicketAgentRail({
             </button>
           ))}
           {onHide && (
-            <span className="ml-auto flex self-stretch">
+            <span className="ml-auto -mr-3 flex self-stretch">
               <DrawerToggleButton side="right" placement="drawer" name="discussion" testId="ticket-discussion-hide" onToggle={onHide} />
             </span>
           )}
@@ -345,7 +359,7 @@ export function TicketAgentRail({
           canonicalSessionId={canonicalSessionId}
         />
       )}
-    </aside>
+    </Surface>
   )
 }
 
@@ -384,6 +398,8 @@ export function ThreadTab({
    *  drawer rides on the message box. Null: no drawer. */
   sessionTarget?: ChatSessionTarget | null
 }): React.JSX.Element {
+  // In the app, not Zen's Tickets view (which offers no terminal).
+  const inApp = useContext(TicketRailTerminalContext)
   // The working strip of the agent session the reply lands in, from the
   // daemon's activity rows (never decided here).
   const turn = useChatSessionTurn(primaryScope(), sessionTarget)
@@ -646,8 +662,13 @@ export function ThreadTab({
   }
 
   return (
+    // At the tile's foot it clips to the rim's inner curve, or its square
+    // canvas would cover the rounded corners.
     <ThreadChatScope
-      className="flex-1 flex flex-col min-h-0"
+      className={`flex-1 flex flex-col min-h-0 ${TILE_FOOT_CLIP}`}
+      // The Thread box's canvas, as the Projects chat (Zen's Tickets view
+      // keeps its own glass).
+      style={inApp ? { background: 'var(--zen-canvas)' } : undefined}
       testId="ticket-rail-thread"
       // A file dropped anywhere on the rail's Thread attaches, as on the box.
       onDropFiles={attach.on ? composeFiles.onDropFiles : undefined}
@@ -873,7 +894,7 @@ function AgentTab({
   // duplicate PTY.
   return (
     <PageLiveContext.Provider value={true}>
-      <div className="flex-1 min-h-0" data-testid="ticket-agent-terminal">
+      <div className={`flex-1 min-h-0 ${TILE_FOOT_CLIP}`} data-testid="ticket-agent-terminal">
         <PrimaryRoom>
           <TerminalPane
             terminalId={`feedback-term:${feedbackId}`}

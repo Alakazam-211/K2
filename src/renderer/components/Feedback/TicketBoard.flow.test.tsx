@@ -267,3 +267,67 @@ describe('the width rules', () => {
     await waitFor(() => expect(screen.queryByTestId('ticket-agent-rail')).toBeNull())
   })
 })
+
+describe('three panes', () => {
+  async function openIt(): Promise<void> {
+    measured.width = 1264
+    board()
+    fireEvent.click(card(first.id))
+    await screen.findByTestId('ticket-rail-thread')
+  }
+
+  it('the list, the report and the discussion are three tiles with the pane gap', async () => {
+    await openIt()
+    expect(screen.getByTestId('ticket-board').className).toContain('gap-[var(--gap-pane)]')
+    expect(screen.getByTestId('ticket-detail-wrap').className).toContain('gap-[var(--gap-pane)]')
+    const list = screen.getByTestId('ticket-list')
+    expect(list.hasAttribute('data-nav-tile')).toBe(true)
+    expect(list.getAttribute('data-material')).toBe('tile')
+    expect(screen.getByTestId('ticket-detail').getAttribute('data-material')).toBe('tile')
+    expect(screen.getByTestId('ticket-agent-rail').getAttribute('data-material')).toBe('tile')
+  })
+
+  it('the three top rows share one height', async () => {
+    await openIt()
+    const heights = [
+      screen.getByTestId('ticket-list').querySelector<HTMLElement>('[data-ticket-list-header]')!.style.height,
+      screen.getByTestId('ticket-detail-title').parentElement!.style.height,
+      screen.getByTestId('ticket-rail-tab-thread').parentElement!.style.height,
+    ]
+    expect(heights[0]).toMatch(/48px/)
+    expect(new Set(heights).size).toBe(1)
+  })
+
+  it('the folded list is a tile of its own, its top row the same height', async () => {
+    localStorage.setItem('k2.windowChrome.tickets.window-test', JSON.stringify({ collapsed: true }))
+    measured.width = 1264
+    board()
+    fireEvent.click(screen.getAllByTestId('ticket-rail-item')[0])
+    await screen.findByTestId('ticket-rail-thread')
+    const rail = screen.getByTestId('ticket-list-rail')
+    expect(rail.getAttribute('data-material')).toBe('tile')
+    expect(rail.querySelector<HTMLElement>('[data-rail-top-row]')!.style.height).toMatch(/48px/)
+  })
+
+  it('both edges are the shared resize edge, moved by the keyboard', async () => {
+    await openIt()
+    const listEdge = screen.getByTestId('ticket-list-resize')
+    expect(listEdge.getAttribute('role')).toBe('separator')
+    expect(listEdge.tabIndex).toBe(0)
+    expect(listEdge.getAttribute('aria-valuenow')).toBe('400')
+    fireEvent.keyDown(listEdge, { key: 'ArrowLeft' })
+    await waitFor(() => expect(screen.getByTestId('ticket-list').style.width).toBe('384px'))
+
+    const talkEdge = screen.getByTestId('ticket-discussion-resize')
+    const before = parseInt(screen.getByTestId('ticket-agent-rail').style.width, 10)
+    expect(talkEdge.getAttribute('aria-valuenow')).toBe(String(before))
+    // The discussion is on the edge's right: ← widens it.
+    fireEvent.keyDown(talkEdge, { key: 'ArrowLeft' })
+    await waitFor(() =>
+      expect(parseInt(screen.getByTestId('ticket-agent-rail').style.width, 10)).toBe(before + 16),
+    )
+    expect(JSON.parse(localStorage.getItem('k2.windowChrome.tickets.window-test') ?? '{}').discussionWidth).toBe(
+      before + 16,
+    )
+  })
+})

@@ -58,9 +58,15 @@ import {
   readTicketBoardChrome,
   ticketBoardLayout,
   writeTicketBoardChrome,
+  TICKET_DISCUSSION_DRAG_MAX_WIDTH,
+  TICKET_DISCUSSION_MIN_WIDTH,
+  TICKET_REPORT_LEAD_PX,
   type TicketDiscussionMode,
 } from '@/lib/ticket-board-chrome'
 import { useElementWidth } from '@/hooks/useElementWidth'
+import { ScrollEdgeFrame, Surface, TILE_FOOT_CLIP } from '@/components/ui'
+import { ResizeEdge } from '@/components/Layout/ResizeEdge'
+import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
 
 interface FeedbackItemViewProps {
   id: string
@@ -82,8 +88,22 @@ interface FeedbackItemViewProps {
   /** Where the board's width rules put the discussion: beside the report,
    *  as a drawer over its right edge, or off. Without it (the ticket's own
    *  window) this view measures itself by the same rules. */
-  discussion?: { mode: TicketDiscussionMode; width: number }
+  discussion?: TicketDiscussionPlace
 }
+
+/** Where the discussion sits and how wide, and the report's width beside
+ *  it (for how far the discussion's edge may go). */
+export interface TicketDiscussionPlace {
+  mode: TicketDiscussionMode
+  width: number
+  reportWidth: number
+  /** The person dragged the discussion's edge (else this view keeps it). */
+  onWidthChange?: (width: number) => void
+}
+
+/** The report's fades take its tile's fill: the page in Terminal, the tile
+ *  in Glass (styles/glass/overrides.css sets --ticket-report-fill). */
+const REPORT_EDGE_TINT = 'var(--ticket-report-fill, var(--color-bg))'
 
 /** Ticket id → its HTML brief. Briefs never change after filing (H8), so
  *  one fetch per ticket per window is enough (H39). Exported for tests. */
@@ -144,6 +164,12 @@ export function FeedbackItemView({
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [wrapEl, setWrapEl] = useState<HTMLDivElement | null>(null)
   const ownWidth = useElementWidth(discussion ? null : wrapEl)
+  // The discussion's width while its edge is dragged, and (in the ticket's
+  // own window) the width it was dragged to.
+  const [liveDiscussion, setLiveDiscussion] = useState<number | null>(null)
+  const [ownDiscussionWidth, setOwnDiscussionWidth] = useState<number | null>(
+    () => readTicketBoardChrome().discussionWidth,
+  )
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -226,12 +252,41 @@ export function FeedbackItemView({
   const showRail = railOpen && !unlinked
   // Where the discussion goes: the board's width rules, or this view's own
   // (the ticket window: no list, the same rules).
-  const placed =
+  const placed: TicketDiscussionPlace =
     discussion ??
     (() => {
-      const l = ticketBoardLayout({ width: ownWidth, hasList: false, listWidth: 0, collapsed: false, ticketOpen: true, chatOpen: showRail })
-      return { mode: l.discussion, width: l.discussionWidth }
+      const gap = wrapEl && ownWidth > 0 ? parseFloat(getComputedStyle(wrapEl).columnGap) || 0 : 0
+      const l = ticketBoardLayout({
+        width: ownWidth,
+        gap,
+        hasList: false,
+        listWidth: 0,
+        collapsed: false,
+        ticketOpen: true,
+        chatOpen: showRail,
+        discussionWidth: ownDiscussionWidth,
+      })
+      return { mode: l.discussion, width: l.discussionWidth, reportWidth: l.reportWidth }
     })()
+  const discussionWidth = liveDiscussion ?? placed.width
+  // The edge stops where the report would no longer lead the discussion.
+  const discussionMax = Math.max(
+    TICKET_DISCUSSION_MIN_WIDTH,
+    Math.min(
+      TICKET_DISCUSSION_DRAG_MAX_WIDTH,
+      placed.reportWidth > 0
+        ? Math.floor((placed.width + placed.reportWidth - TICKET_REPORT_LEAD_PX) / 2)
+        : TICKET_DISCUSSION_DRAG_MAX_WIDTH,
+    ),
+  )
+  const commitDiscussionWidth = (w: number): void => {
+    setLiveDiscussion(null)
+    if (placed.onWidthChange) placed.onWidthChange(w)
+    else {
+      setOwnDiscussionWidth(w)
+      writeTicketBoardChrome({ discussionWidth: w })
+    }
+  }
   const discussionMode: TicketDiscussionMode = showRail ? placed.mode : 'off'
   const asDrawer = discussionMode === 'drawer'
   const discussionShown = discussionMode === 'side' || (asDrawer && drawerOpen)
@@ -273,15 +328,29 @@ export function FeedbackItemView({
     )
 
   return (
-    <div ref={setWrapEl} className="relative flex-1 flex min-h-0 min-w-0" data-testid="ticket-detail-wrap" data-discussion={discussionMode}>
-      <div className="flex-1 flex flex-col min-h-0 min-w-0" data-testid="ticket-detail">
-        {/* Slim header — outside the scroller, so it stays put. Its menus
+    <div
+      ref={setWrapEl}
+      className="relative flex-1 flex min-h-0 min-w-0 gap-[var(--gap-pane)]"
+      data-testid="ticket-detail-wrap"
+      data-discussion={discussionMode}
+    >
+      {/* The report: the middle of the flow, its own tile. */}
+      <Surface
+        role2="solid"
+        material="tile"
+        bordered={false}
+        data-ticket-report=""
+        className="flex-1 flex flex-col min-h-0 min-w-0"
+        data-testid="ticket-detail"
+      >
+        {/* The header stays put: the title and its controls on one row,
+            level with the list's top row and the discussion's. Its menus
             open downward over the body, hence the stacking context. */}
-        <div
-          data-testid="ticket-detail-header"
-          className="relative z-20 px-4 py-2 border-b border-[var(--color-border)] flex-shrink-0 bg-[var(--color-bg)]"
-        >
-          <div className="flex items-center gap-2 min-w-0">
+        <div data-testid="ticket-detail-header" className="relative z-20 flex-shrink-0">
+          <div
+            className="flex items-center gap-2 min-w-0 px-4 border-b border-[var(--color-border)]"
+            style={{ height: PROJECT_BAR_ROW_HEIGHT }}
+          >
             <span
               data-testid="ticket-detail-title"
               className="text-sm font-medium text-[var(--color-text-primary)] truncate flex-1 selectable-copy"
@@ -331,7 +400,8 @@ export function FeedbackItemView({
               </button>
             )}
           </div>
-          <div className="mt-1 flex items-center gap-1.5 min-w-0 text-[10px] text-[var(--color-text-muted)]">
+          {/* The report's first line: its status, and who asked whom. */}
+          <div className="px-4 pt-2 flex items-center gap-1.5 min-w-0 text-[10px] text-[var(--color-text-muted)]">
             {unlinked ? (
               <StatusBadge status={view.status} />
             ) : (
@@ -399,8 +469,22 @@ export function FeedbackItemView({
           onExpandedChange={setExpanded}
           onChanged={onChanged}
         />
-      </div>
+      </Surface>
 
+      {discussionMode === 'side' && (
+        // The shared resize edge, in the gap before the discussion.
+        <ResizeEdge
+          value={discussionWidth}
+          min={TICKET_DISCUSSION_MIN_WIDTH}
+          max={discussionMax}
+          grows="left"
+          onLive={setLiveDiscussion}
+          onCommit={commitDiscussionWidth}
+          label="Resize the discussion"
+          testId="ticket-discussion-resize"
+          style={{ right: `calc(${discussionWidth}px + var(--gap-pane) / 2)`, transform: 'translateX(50%)' }}
+        />
+      )}
       {asDrawer && !drawerOpen && (
         // The closed drawer's tab, on the report's right edge, so the
         // discussion is always one click away.
@@ -417,9 +501,9 @@ export function FeedbackItemView({
       )}
       {discussionShown && (
         <TicketAgentRail
-          width={placed.width}
+          width={discussionWidth}
           drawer={asDrawer}
-          onHide={asDrawer ? () => setDrawerOpen(false) : undefined}
+          onHide={asDrawer ? () => setDrawerOpen(false) : () => setRailOpen(false)}
           feedbackId={id}
           item={item}
           error={error}
@@ -512,9 +596,15 @@ function TicketBody({
     item.status === 'needs_discussion'
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <SelectableRegion className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 px-4 py-3">
-        <div className="min-h-full flex flex-col" data-ticket-thread={ticketId}>
+    <div className={`flex-1 flex flex-col min-h-0 ${TILE_FOOT_CLIP}`}>
+      <SelectableRegion className="flex-1 flex flex-col min-h-0">
+        <ScrollEdgeFrame
+          className="flex-1 min-h-0"
+          scrollClassName="overflow-y-auto overflow-x-hidden px-4 py-3 [&>div]:min-h-full [&>div]:flex [&>div]:flex-col"
+          tint={REPORT_EDGE_TINT}
+          testId="ticket-report-scroll"
+        >
+        <div className="flex-1 flex flex-col" data-ticket-thread={ticketId}>
           {item.body && (
             <div className="mb-3 px-3 py-2 bg-[var(--color-wash-2)] border border-[var(--color-border)]">
               <ChatMessageBody text={item.body} style={{ fontSize: editorFontSize }} />
@@ -542,6 +632,7 @@ function TicketBody({
               </div>
             ))}
         </div>
+        </ScrollEdgeFrame>
       </SelectableRegion>
 
       {unlinked && (

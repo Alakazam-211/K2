@@ -18,6 +18,7 @@ import { presenceDisplayName } from '@/components/Presence/PresenceAvatar'
 import { PresenceChip } from '@/components/Presence/PresenceChip'
 import { usePresenceStore } from '@/stores/presence'
 import { realName } from '@/lib/person-name'
+import { SETTING_LIST_ROW_HOVER } from '@/components/Settings/controls/SettingControls'
 import {
   assigneeInitials,
   cardSummary,
@@ -367,10 +368,16 @@ export function TicketRailItem({
       title={`${row.title} — ${row.agentName} · ${statusLabel(row.status)}`}
       aria-label={`${row.title}, ${statusLabel(row.status)}`}
       aria-current={selected ? 'true' : undefined}
-      className={`relative flex items-center justify-center w-9 h-9 flex-shrink-0 cursor-pointer transition-colors ${
-        selected ? 'bg-[var(--color-accent)]/20 ring-1 ring-[var(--color-accent)]' : 'hover:bg-[var(--color-wash-1)]'
+      // The Projects rail's item: the nav row's hover band, and selected as
+      // its selected row (the accent fill and the bar at the left edge).
+      data-k2-focus=""
+      className={`no-drag relative flex items-center justify-center w-9 h-9 flex-shrink-0 cursor-pointer outline-none rounded-[var(--radius-field)] ${
+        selected ? 'bg-[var(--color-accent)]/15' : SETTING_LIST_ROW_HOVER
       }`}
     >
+      {selected && (
+        <span aria-hidden="true" className="absolute -left-1.5 top-1.5 bottom-1.5 w-[3px] bg-[var(--color-accent)]" />
+      )}
       {workspace && !isUnlinked(row) ? (
         <ProjectAvatar
           projectPath={workspace.path}

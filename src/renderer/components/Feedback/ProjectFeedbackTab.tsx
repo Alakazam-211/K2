@@ -126,13 +126,17 @@ export function ProjectFeedbackTab({
     )
   }
 
+  // The board's three tiles sit the pane gap below the project bar (none
+  // in Terminal, whose panes meet the bar's line).
   return (
-    <TicketBoard
-      rows={rows}
-      error={error}
-      revision={revision}
-      onMutated={onMutated}
-      onRetry={loadList}
-    />
+    <div className="flex-1 min-h-0 min-w-0 flex pt-[var(--gap-pane)]" data-project-feedback-board="">
+      <TicketBoard
+        rows={rows}
+        error={error}
+        revision={revision}
+        onMutated={onMutated}
+        onRetry={loadList}
+      />
+    </div>
   )
 }

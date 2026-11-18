@@ -7,6 +7,7 @@ import {
   TICKET_LIST_DEFAULT_WIDTH,
   TICKET_LIST_MAX_WIDTH,
   TICKET_LIST_MIN_WIDTH,
+  TICKET_DISCUSSION_MIN_WIDTH,
   readTicketBoardChrome,
   ticketBoardKey,
   writeTicketBoardChrome,
@@ -24,12 +25,12 @@ describe('ticket board chrome', () => {
   it('defaults to a 400 px list, expanded, with the chat rail open', () => {
     expect(TICKET_LIST_DEFAULT_WIDTH).toBe(400)
     expect(readTicketBoardChrome('main')).toEqual(DEFAULT_TICKET_BOARD_CHROME)
-    expect(DEFAULT_TICKET_BOARD_CHROME).toEqual({ listWidth: 400, collapsed: false, chatOpen: true })
+    expect(DEFAULT_TICKET_BOARD_CHROME).toEqual({ listWidth: 400, collapsed: false, chatOpen: true, discussionWidth: null })
   })
 
   it('a stored width wins over the default', () => {
     localStorage.setItem(ticketBoardKey('main'), JSON.stringify({ listWidth: 300, collapsed: false }))
-    expect(readTicketBoardChrome('main')).toEqual({ listWidth: 300, collapsed: false, chatOpen: true })
+    expect(readTicketBoardChrome('main')).toEqual({ listWidth: 300, collapsed: false, chatOpen: true, discussionWidth: null })
   })
 
   it('remembers the chat rail per window', () => {
@@ -37,28 +38,38 @@ describe('ticket board chrome', () => {
     expect(readTicketBoardChrome('main').chatOpen).toBe(false)
     expect(readTicketBoardChrome('window-2').chatOpen).toBe(true)
     writeTicketBoardChrome({ listWidth: 450 }, 'main')
-    expect(readTicketBoardChrome('main')).toEqual({ listWidth: 450, collapsed: false, chatOpen: false })
+    expect(readTicketBoardChrome('main')).toEqual({ listWidth: 450, collapsed: false, chatOpen: false, discussionWidth: null })
   })
 
   it('remembers width and collapsed per window label', () => {
     writeTicketBoardChrome({ listWidth: 410 }, 'main')
     writeTicketBoardChrome({ collapsed: true }, 'window-2')
-    expect(readTicketBoardChrome('main')).toEqual({ listWidth: 410, collapsed: false, chatOpen: true })
-    expect(readTicketBoardChrome('window-2')).toEqual({ listWidth: 400, collapsed: true, chatOpen: true })
+    expect(readTicketBoardChrome('main')).toEqual({ listWidth: 410, collapsed: false, chatOpen: true, discussionWidth: null })
+    expect(readTicketBoardChrome('window-2')).toEqual({ listWidth: 400, collapsed: true, chatOpen: true, discussionWidth: null })
     expect(JSON.parse(localStorage.getItem(ticketBoardKey('main')) ?? 'null')).toEqual({
       listWidth: 410,
       collapsed: false,
       chatOpen: true,
+      discussionWidth: null,
     })
     // A patch keeps the other fields.
     writeTicketBoardChrome({ collapsed: true }, 'main')
-    expect(readTicketBoardChrome('main')).toEqual({ listWidth: 410, collapsed: true, chatOpen: true })
+    expect(readTicketBoardChrome('main')).toEqual({ listWidth: 410, collapsed: true, chatOpen: true, discussionWidth: null })
+  })
+
+  it('remembers a dragged discussion width, clamped, and forgets it on null', () => {
+    writeTicketBoardChrome({ discussionWidth: 420 }, 'main')
+    expect(readTicketBoardChrome('main').discussionWidth).toBe(420)
+    writeTicketBoardChrome({ discussionWidth: 10 }, 'main')
+    expect(readTicketBoardChrome('main').discussionWidth).toBe(TICKET_DISCUSSION_MIN_WIDTH)
+    writeTicketBoardChrome({ discussionWidth: null }, 'main')
+    expect(readTicketBoardChrome('main').discussionWidth).toBeNull()
   })
 
   it('uses the current window label by default', () => {
     writeTicketBoardChrome({ listWidth: 333 })
     expect(localStorage.getItem('k2.windowChrome.tickets.window-abc')).not.toBeNull()
-    expect(readTicketBoardChrome()).toEqual({ listWidth: 333, collapsed: false, chatOpen: true })
+    expect(readTicketBoardChrome()).toEqual({ listWidth: 333, collapsed: false, chatOpen: true, discussionWidth: null })
   })
 
   it('clamps the width and survives junk in storage', () => {

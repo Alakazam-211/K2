@@ -75,7 +75,7 @@ use std::process::{Command, Stdio};
 /// `k5 update --cli [--check]` is the binary's. Off, the shell answers
 /// it. Each form has its own switch, so one form can go back to the
 /// shell alone.
-pub const CLI_NATIVE: bool = false;
+pub const CLI_NATIVE: bool = true;
 
 /// `k5 update` and `k5 update --app` are the binary's. Off, the shell
 /// answers them (and runs curl itself).

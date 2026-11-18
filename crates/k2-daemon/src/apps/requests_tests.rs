@@ -250,6 +250,47 @@ async fn the_writer_prunes_by_age_and_by_count() {
     assert_eq!(list("prune-b").len(), 1);
 }
 
+/// 0.46.16: an uninstall ends the App's request log: rows queued before it
+/// are written and then go with the rest, so a reinstall under the same id
+/// starts empty; another App's rows stay.
+#[tokio::test]
+async fn forgetting_an_app_clears_its_log_and_only_its_log() {
+    let _home = crate::test_support::TempHome::new();
+    let gone = "req-log-uninstalled";
+    let kept = "req-log-kept";
+    let _ = crate::apps::router::switch(gone, crate::client_ip::tests::echo_app().await);
+    let _ = crate::apps::router::switch(kept, crate::client_ip::tests::echo_app().await);
+    ask(gone, Some(ip(VISITOR)), "GET /a HTTP/1.1\r\nHost: a\r\n\r\nGET /b HTTP/1.1\r\nHost: a\r\n\r\n").await;
+    ask(kept, Some(ip(VISITOR)), "GET /c HTTP/1.1\r\nHost: a\r\n\r\n").await;
+    rows_n(gone, 2).await;
+    rows_n(kept, 1).await;
+    // A row still on the queue when the uninstall comes goes too.
+    record(Pending {
+        app_id: std::sync::Arc::from(gone),
+        port: None,
+        rec: crate::client_ip::RequestRecord {
+            at_ms: now_ms(),
+            method: "GET".into(),
+            path: "/late".into(),
+            status: 200,
+            k2_code: None,
+            bytes_in: 0,
+            bytes_out: 0,
+            head_ms: None,
+            total_ms: 0,
+            closed_early: None,
+            ws: None,
+            visitor: None,
+        },
+    });
+    let n = forget_app(gone, Duration::from_secs(10)).expect("the writer answers");
+    assert_eq!(n, 3, "both requests and the queued one");
+    flush(Duration::from_secs(2));
+    assert!(list(gone).is_empty(), "a reinstall under the same id starts with no rows");
+    assert_eq!(list(kept).len(), 1, "another App's rows stay");
+    assert_eq!(forget_app(gone, Duration::from_secs(10)), Some(0), "again: nothing left");
+}
+
 #[test]
 fn the_first_line_gives_method_and_a_safe_path_only() {
     assert_eq!(first_line(b"POST /up?t=1 HTTP/1.1\r\nCookie: a=b\r\n\r\n"), ("POST".into(), "/up".into()));

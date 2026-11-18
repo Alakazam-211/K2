@@ -2687,6 +2687,12 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     crate::app_pairing::forget_app(&app.service_id, Some(&app.app_id));
     // 0.46.7: its update feed (key, releases, counts, token, staging).
     super::updates_routes::forget_app(&app.app_id, &app.service_id);
+    // 0.46.16: its request log (`k2 app requests`): a reinstall under the
+    // same id starts with none. It stopped above, so nothing new arrives.
+    let requests_cleared = super::requests::forget_app(&app.app_id, std::time::Duration::from_secs(10));
+    if requests_cleared.is_none() {
+        k2_core::log_debug!("[apps] uninstall {}: its request log could not be cleared", app.app_id);
+    }
     crate::email_notify::forget_app(&app.service_id);
     // Sew for Apps A6 (Q12): people whose only App this was lose chat
     // (deactivated, never deleted); its guests-chat grant goes.
@@ -2700,5 +2706,9 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
         let _ = std::fs::remove_file(deploy::app_dir(&app.app_id).join("app.json"));
     }
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: app.owner_workspace.clone() });
-    Ok(json!({ "ok": true, "app": app.app_id, "purged": purge }))
+    let mut out = json!({ "ok": true, "app": app.app_id, "purged": purge });
+    if requests_cleared.is_none() {
+        out["warnings"] = json!(["its request log (k2 app requests) could not be cleared: a reinstall under this id would show the old rows"]);
+    }
+    Ok(out)
 }

@@ -362,6 +362,12 @@ pub fn totals(conn: &Connection, q: &Query<'_>) -> rusqlite::Result<Totals> {
     )
 }
 
+/// Delete every row of App `app_id` (0.46.16: an uninstall ends its log, so
+/// a reinstall under the same id starts empty). Returns how many went.
+pub fn forget_app(conn: &Connection, app_id: &str) -> rusqlite::Result<usize> {
+    conn.execute("DELETE FROM requests WHERE app_id = ?1", params![app_id])
+}
+
 /// Delete rows older than `keep_days` and, per App, all but the newest
 /// `max_per_app`. Returns how many rows went.
 pub fn prune(conn: &Connection, now_ms: i64, keep_days: i64, max_per_app: i64) -> rusqlite::Result<usize> {

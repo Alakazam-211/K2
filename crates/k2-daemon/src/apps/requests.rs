@@ -71,6 +71,9 @@ pub struct Pending {
 enum Msg {
     Row(Pending),
     Flush(SyncSender<()>),
+    /// Uninstall (0.46.16): write what is queued, then delete the App's
+    /// rows; answers how many went (`None`: the file couldn't be written).
+    Forget(String, SyncSender<Option<usize>>),
     /// Tests: prune now (with these limits) and say how many rows went.
     #[cfg(test)]
     Prune { now_ms: i64, keep_days: i64, max_per_app: i64, done: SyncSender<usize> },
@@ -112,6 +115,27 @@ pub fn flush(wait: Duration) {
         }
     }
     let _ = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+}
+
+/// Uninstall (0.46.16): end App `app_id`'s request log, so a reinstall
+/// under the same id starts with none. Runs on the writer, after every row
+/// queued before it. `None` when the writer didn't answer in time or the
+/// file couldn't be written.
+pub fn forget_app(app_id: &str, wait: Duration) -> Option<usize> {
+    let (tx, rx) = mpsc::sync_channel(1);
+    let deadline = Instant::now() + wait;
+    let mut msg = Msg::Forget(app_id.to_string(), tx);
+    loop {
+        match sender().try_send(msg) {
+            Ok(()) => break,
+            Err(TrySendError::Full(m)) if Instant::now() < deadline => {
+                msg = m;
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(_) => return None,
+        }
+    }
+    rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok().flatten()
 }
 
 /// Tests: run the writer's prune now with these limits; how many rows went.
@@ -257,6 +281,7 @@ fn writer(rx: Receiver<Msg>) {
         };
         let mut rows: Vec<Request> = Vec::new();
         let mut flushes = Vec::new();
+        let mut forgets: Vec<(String, SyncSender<Option<usize>>)> = Vec::new();
         #[cfg(test)]
         let mut prunes = Vec::new();
         let mut next = first;
@@ -264,6 +289,7 @@ fn writer(rx: Receiver<Msg>) {
             match m {
                 Msg::Row(p) => rows.push(to_row(p, &mut keys, &mut deps)),
                 Msg::Flush(t) => flushes.push(t),
+                Msg::Forget(app, done) => forgets.push((app, done)),
                 #[cfg(test)]
                 Msg::Prune { now_ms, keep_days, max_per_app, done } => prunes.push((now_ms, keep_days, max_per_app, done)),
             }
@@ -277,6 +303,9 @@ fn writer(rx: Receiver<Msg>) {
             DROPPED.fetch_add(rows.len() as u64, Ordering::Relaxed);
             for f in flushes {
                 let _ = f.send(());
+            }
+            for (_, done) in forgets {
+                let _ = done.send(None);
             }
             continue;
         }
@@ -295,6 +324,12 @@ fn writer(rx: Receiver<Msg>) {
                     DROPPED.fetch_add(rows.len() as u64, Ordering::Relaxed);
                     k2_core::log_debug!("[apps/requests] append {} rows: {e}", rows.len());
                 }
+                // After this batch's rows, so a row queued before the
+                // uninstall never outlives it.
+                for (app, done) in forgets.drain(..) {
+                    let gone = store::forget_app(c, &app).map_err(|e| k2_core::log_debug!("[apps/requests] forget {app}: {e}")).ok();
+                    let _ = done.send(gone);
+                }
                 #[cfg(test)]
                 for (now, keep, max, done) in prunes.drain(..) {
                     let _ = done.send(store::prune(c, now, keep, max).unwrap_or_else(|e| panic!("prune: {e}")));
@@ -310,6 +345,9 @@ fn writer(rx: Receiver<Msg>) {
             }
             None => {
                 DROPPED.fetch_add(rows.len() as u64, Ordering::Relaxed);
+                for (_, done) in forgets.drain(..) {
+                    let _ = done.send(None);
+                }
             }
         }
         for f in flushes {

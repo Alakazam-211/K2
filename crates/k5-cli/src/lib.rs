@@ -52,6 +52,8 @@
 //!   help forms the binary may answer; [`pages`]: which command line is
 //!   which page, and whether the shell's environment ([`offline`]) lets
 //!   the binary print it.
+//! - [`tools`]: the shell's tool table, which catalog tool a command line
+//!   is and whether it needs the session's own passport.
 
 pub mod called_as;
 pub mod check;
@@ -71,5 +73,6 @@ pub mod passport;
 pub mod prelude;
 pub mod route;
 pub mod text;
+pub mod tools;
 pub mod trace;
 pub mod transport;

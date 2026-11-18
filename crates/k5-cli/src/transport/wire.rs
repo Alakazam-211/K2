@@ -22,6 +22,12 @@
 //! `Expect: 100-continue` below 1 MiB of body (8.x); this module never
 //! sends either.
 //!
+//! One call is not curl's: the embedded Python's `urllib.request.urlopen`
+//! in `k2 tickets show` ([`Head::Urllib`]). Its head, as Python 3 writes
+//! it, has `Accept-Encoding: identity` first, then `Host` and
+//! `User-Agent`, no `Accept`, the custom headers, and `Connection: close`
+//! last.
+//!
 //! The target: curl sends a URL's path and query as they are written,
 //! but for the data `-G` appends to the URL (after `?`, or `&` when the
 //! URL has a query): curl 8.5 and 8.7 write each `%XX` escape's hex there
@@ -71,9 +77,22 @@ pub struct Body {
     pub curl_form_type: bool,
 }
 
-/// One request, as curl would write it.
+/// Whose head a request has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Head {
+    /// curl's (see the module's notes).
+    #[default]
+    Curl,
+    /// Python's `urllib.request.urlopen`: `Accept-Encoding: identity`,
+    /// `Host`, `User-Agent`, the custom headers, `Connection: close`.
+    Urllib,
+}
+
+/// One request, as curl (or, with [`Head::Urllib`], Python's urllib) would
+/// write it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
+    pub head: Head,
     pub method: Method,
     /// The path and query.
     pub target: String,
@@ -89,15 +108,27 @@ pub struct Request {
 impl Request {
     /// The bytes on the wire.
     pub fn encode(&self) -> Vec<u8> {
-        let mut head = format!(
-            "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {}\r\nAccept: {ACCEPT}\r\n",
-            self.method.as_str(),
-            self.target,
-            self.host,
-            self.user_agent
-        );
+        let mut head = match self.head {
+            Head::Curl => format!(
+                "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {}\r\nAccept: {ACCEPT}\r\n",
+                self.method.as_str(),
+                self.target,
+                self.host,
+                self.user_agent
+            ),
+            Head::Urllib => format!(
+                "{} {} HTTP/1.1\r\nAccept-Encoding: identity\r\nHost: {}\r\nUser-Agent: {}\r\n",
+                self.method.as_str(),
+                self.target,
+                self.host,
+                self.user_agent
+            ),
+        };
         for (name, value) in &self.headers {
             head.push_str(&format!("{name}: {value}\r\n"));
+        }
+        if self.head == Head::Urllib {
+            head.push_str("Connection: close\r\n");
         }
         if let Some(body) = &self.body {
             head.push_str(&format!("Content-Length: {}\r\n", body.bytes.len()));
@@ -637,6 +668,7 @@ mod tests {
 
     fn req(method: Method, body: Option<Body>, headers: &[(&str, &str)]) -> Request {
         Request {
+            head: Head::Curl,
             method,
             target: "/cli/x?token=t".into(),
             host: "127.0.0.1:9".into(),
@@ -655,6 +687,18 @@ mod tests {
         assert_eq!(
             String::from_utf8(r.encode()).unwrap(),
             "GET /cli/x?token=t HTTP/1.1\r\nHost: 127.0.0.1:9\r\nUser-Agent: k5/1.2.3\r\nAccept: */*\r\nX-A: 1\r\nX-B: two\r\n\r\n"
+        );
+    }
+
+    /// Python 3's `urlopen` of a GET with headers added: urllib's own
+    /// lines around them.
+    #[test]
+    fn a_urllib_get_is_python_s_lines() {
+        let mut r = req(Method::Get, None, &[("X-A", "1"), ("X-B", "two")]);
+        r.head = Head::Urllib;
+        assert_eq!(
+            String::from_utf8(r.encode()).unwrap(),
+            "GET /cli/x?token=t HTTP/1.1\r\nAccept-Encoding: identity\r\nHost: 127.0.0.1:9\r\nUser-Agent: k5/1.2.3\r\nX-A: 1\r\nX-B: two\r\nConnection: close\r\n\r\n"
         );
     }
 

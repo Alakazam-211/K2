@@ -2,10 +2,10 @@
 //! sends, its tries and its time limits (the shapes are in
 //! [`crate::transport`]).
 
-use super::encode::quote;
+use super::encode::{quote, urlencode_plus};
 use super::permission::{self, Note};
 use super::skew;
-use super::wire::{self, Answer, Body, Failure, Method, Request, Target};
+use super::wire::{self, Answer, Body, Failure, Head, Method, Request, Target};
 use k2_client::brand::PRODUCT_NAME;
 use std::fmt;
 use std::io;
@@ -216,6 +216,12 @@ enum Kind {
     /// `cli_send_json GET`'s request with no query of the caller's, at
     /// most 15 s; no heal, no line, no note.
     PassportProject,
+    /// The embedded Python's `urllib.request.urlopen(req, timeout=30)` of
+    /// a GET over TCP (`k2 tickets show`, `cli/src/feedback.sh`): urllib's
+    /// head ([`Head::Urllib`]), the caller's query and then `token=`, one
+    /// try (urllib never tries again), at most 30 s to connect and 30 s in
+    /// all; no heal, no line, no note.
+    Urlopen,
 }
 
 impl Kind {
@@ -247,6 +253,7 @@ impl Kind {
                 | Kind::BearerForm
                 | Kind::SidecarGet
                 | Kind::PassportProject
+                | Kind::Urlopen
         )
     }
     /// A refused passport is tried again with a healed one, on either
@@ -261,6 +268,7 @@ impl Kind {
                 | Kind::BearerForm
                 | Kind::SidecarGet
                 | Kind::PassportProject
+                | Kind::Urlopen
         )
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
@@ -274,21 +282,22 @@ impl Kind {
                 | Kind::BearerForm
                 | Kind::SidecarGet
                 | Kind::PassportProject
+                | Kind::Urlopen
         )
     }
-    /// `--connect-timeout`.
+    /// `--connect-timeout` (urllib's `timeout`, for [`Kind::Urlopen`]).
     fn connect_timeout(self) -> Duration {
-        if self == Kind::Probe {
-            PROBE_CONNECT_TIMEOUT
-        } else {
-            CONNECT_TIMEOUT
+        match self {
+            Kind::Probe => PROBE_CONNECT_TIMEOUT,
+            Kind::Urlopen => MAX_TIME,
+            _ => CONNECT_TIMEOUT,
         }
     }
-    /// The body is read from stdin: nothing is ever tried twice. Only
-    /// then: the shell's `@-` rule is an argument that is exactly `@-`,
-    /// never one in a URL.
+    /// Nothing is ever tried twice: the body is read from stdin (the
+    /// shell's `@-` rule is an argument that is exactly `@-`, never one in
+    /// a URL), or it is urllib's one try.
     fn once(self) -> bool {
-        self == Kind::PostJsonStdin
+        matches!(self, Kind::PostJsonStdin | Kind::Urlopen)
     }
 }
 
@@ -732,6 +741,24 @@ impl Client {
         }
     }
 
+    /// The embedded Python's `urlopen` of `endpoint?<query>&token=<T>`
+    /// over TCP ([`Kind::Urlopen`]): `query` is what
+    /// [`urlencode_plus`] made of the caller's pairs, and the TCP token
+    /// goes after it as `urlencode` writes it. The binary's hand-over
+    /// headers as for any call. Any status is an answer (urllib's
+    /// `HTTPError` body is read the same way).
+    pub fn urlopen_get(&mut self, endpoint: &str, query: &str) -> Result<Response, Error> {
+        self.run(
+            Kind::Urlopen,
+            Channel::Tcp,
+            endpoint,
+            &[query],
+            &[],
+            Instant::now(),
+        )
+        .map_err(|f| f.error)
+    }
+
     fn send_json_as(&mut self, kind: Kind, path: &str, payload: &str) -> Result<Response, Error> {
         let post = kind == Kind::SendJsonPost;
         let t0 = Instant::now();
@@ -911,7 +938,8 @@ impl Client {
             | Kind::RequestPost
             | Kind::PostJsonStdin
             | Kind::Public
-            | Kind::BearerForm => MAX_TIME,
+            | Kind::BearerForm
+            | Kind::Urlopen => MAX_TIME,
             Kind::Probe => PROBE_MAX_TIME,
             Kind::SidecarGet => SIDECAR_MAX_TIME,
             Kind::PassportProject => PASSPORT_PROJECT_MAX_TIME,
@@ -1181,6 +1209,15 @@ impl Client {
                 (Method::Post, path, json(&mut headers))
             }
             Kind::Public | Kind::Probe => (Method::Get, endpoint.to_string(), None),
+            Kind::Urlopen => {
+                let token = urlencode_plus(&[("token", token)]);
+                let path = if joined.is_empty() {
+                    format!("{endpoint}?{token}")
+                } else {
+                    format!("{endpoint}?{joined}&{token}")
+                };
+                (Method::Get, path, None)
+            }
             Kind::BearerForm => {
                 headers.push(("Content-Type".into(), wire::FORM_TYPE.into()));
                 (
@@ -1198,6 +1235,11 @@ impl Client {
             byte,
         })?;
         let request = Request {
+            head: if kind == Kind::Urlopen {
+                Head::Urllib
+            } else {
+                Head::Curl
+            },
             method,
             target: path,
             host,
@@ -1470,6 +1512,7 @@ mod tests {
             Kind::Probe,
             Kind::SidecarGet,
             Kind::PassportProject,
+            Kind::Urlopen,
         ] {
             assert!(!k.checks_local_denial(), "{k:?}");
         }
@@ -1511,6 +1554,7 @@ mod tests {
                 false,
                 false,
             ),
+            (Urlopen, false, false, false, false, false, false, true),
         ];
         for (k, m, c, s, n, h, p, o) in rows {
             assert_eq!(
@@ -1533,6 +1577,8 @@ mod tests {
     fn the_time_limits() {
         let mut c = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
         assert_eq!(c.max_time(Kind::Request), Duration::from_secs(30));
+        assert_eq!(c.max_time(Kind::Urlopen), Duration::from_secs(30));
+        assert_eq!(Kind::Urlopen.connect_timeout(), Duration::from_secs(30));
         assert_eq!(c.max_time(Kind::PostJson), Duration::from_secs(30));
         assert_eq!(c.max_time(Kind::SendJsonGet), Duration::from_secs(60));
         c.post_max_time = Some(Duration::from_secs(150));
@@ -1612,6 +1658,40 @@ mod tests {
         assert!(r.body.is_none());
         let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, [VERSION_HEADER, VIA_HEADER]);
+    }
+
+    /// `k2 tickets show`'s urlopen: the caller's query, then `token=` as
+    /// `urlencode` writes it; urllib's head; the binary's headers.
+    #[test]
+    fn the_urlopen_get() {
+        let mut c = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o t+".into()));
+        c.owner_from_disk = true;
+        let (target, r) = c
+            .build(
+                Kind::Urlopen,
+                Channel::Tcp,
+                "/cli/feedback/show",
+                &["id=a+b&brief=1"],
+                &[],
+            )
+            .unwrap();
+        assert!(matches!(target, Target::Tcp { port: 9, .. }));
+        assert_eq!(r.target, "/cli/feedback/show?id=a+b&brief=1&token=o+t%2B");
+        assert_eq!(
+            (r.head, r.method, r.body.is_none()),
+            (Head::Urllib, Method::Get, true)
+        );
+        let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, [VERSION_HEADER, VIA_HEADER, OWNER_SOURCE_HEADER]);
+        let (_, r) = c
+            .build(Kind::Urlopen, Channel::Tcp, "/cli/x", &[""], &[])
+            .unwrap();
+        assert_eq!(r.target, "/cli/x?token=o+t%2B");
+        let c = Client::new("127.0.0.1", 9, "/p", Auth::Owner("o".into()));
+        let (_, r) = c
+            .build(Kind::Request, Channel::Tcp, "/cli/x", &[], &[])
+            .unwrap();
+        assert_eq!(r.head, Head::Curl);
     }
 
     /// `X-K5-Owner-Source: disk` after the Via, only on an owner's call

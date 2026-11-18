@@ -52,6 +52,7 @@
 //! | `cli_send_json POST` | `POST <ep>?token=<quoted T>`, JSON | `POST <ep>`, JSON |
 //! | (none: [`client::Client::get_public`]) | `GET <ep>`: no token, no `project=`, no Owner-Source | none |
 //! | `k2 respond`'s own curl ([`client::Client::post_form_bearer`]) | `POST <ep>`, the passport as Bearer (first), body `args`, the form type; no query | none |
+//! | the embedded Python's `urlopen` in `k2 tickets show` ([`client::Client::urlopen_get`]) | `GET <ep>?<query>&token=<T>`, both as `urllib.parse.urlencode` writes them, with urllib's head ([`wire::Head::Urllib`]); one try, no heal, no line, no note | none |
 //!
 //! An endpoint that already has a `?` gets the `-G` query, and
 //! `cli_request_post`'s, after `&`; the other POST forms always add `?`,

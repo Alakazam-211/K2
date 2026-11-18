@@ -12,8 +12,15 @@
 //! 2. [`gate`]: the virtual desktop's guard (`NO_OWNER_FALLBACK=1` and no
 //!    passport: exit 3), then the connection gate (no port or no token:
 //!    exit 1). Each prints the shell's three lines.
-//! 3. The verb. Each answer it gets goes through [`Closing::answer`].
-//! 4. [`Closing::flush`], the EXIT trap: when an answer refused the
+//! 3. For a verb the shell's tool policy calls an `id` tool, in a session
+//!    with `HOOK_SOCK` set (`_cli_check_session_passport`,
+//!    `_cli_apply_auth_for_verb`): a passport the daemon no longer knows
+//!    with its socket gone ([`stale_passport_lines`], exit 3), and no
+//!    passport at all ([`require_passport_lines`], exit 3). The shared
+//!    Codex server check that comes first is the shell's own
+//!    ([`codex_env`]: a family hands such a line to the shell).
+//! 4. The verb. Each answer it gets goes through [`Closing::answer`].
+//! 5. [`Closing::flush`], the EXIT trap: when an answer refused the
 //!    passport, a probe asks whether it is dead and says to restart the
 //!    tab; a refusal's closing line when the command failed; the Org
 //!    Chart's bulletin line when it worked.
@@ -55,6 +62,35 @@ pub const CANNOT_CONNECT: [&str; 3] = [
 
 /// The line after a refused passport the daemon doesn't know.
 pub const DEAD_PASSPORT: &str = "This session's passport isn't valid on this daemon. Restart this tab to get a new one.";
+
+/// `_cli_require_session_passport <tool>`: an `id` tool in a session
+/// with `HOOK_SOCK` set and no passport. Exit 3.
+pub fn require_passport_lines(tool: &str) -> [String; 4] {
+    [
+        format!("Error: tool '{tool}' requires session ID (passport)."),
+        concat!("Run from a ", k2_client::product_name!(), " agent session that carries session identity, or ask the owner").to_string(),
+        "to set this tool to Open in Settings \u{2192} CLI Tools (if the platform allows).".to_string(),
+        "Locked production tools cannot be set Open.".to_string(),
+    ]
+}
+
+/// `_cli_passport_stale_die stale <sock>`: the session's socket is gone
+/// and the daemon refuses its passport. Exit 3.
+pub fn stale_passport_lines(sock: &str) -> [String; 4] {
+    [
+        concat!("Error: this shell's ", k2_client::product_name!(), " session credentials are stale: the session socket is gone").to_string(),
+        format!("({sock}) and the daemon rejects the session token."),
+        "If this is a Codex tab, the tool runs under a shared Codex app-server started by".to_string(),
+        "another session; restart Codex in this tab. Otherwise restart this tab.".to_string(),
+    ]
+}
+
+/// `compgen -e CODEX_` lists a name: some exported variable's name
+/// starts with `CODEX_`, so the shell looks for a shared Codex server in
+/// the process's ancestry (`_cli_under_shared_codex_server`).
+pub fn codex_env(names: impl IntoIterator<Item = std::ffi::OsString>) -> bool {
+    names.into_iter().any(|n| n.to_str().is_some_and(|n| n.starts_with("CODEX_")))
+}
 
 /// The bulletin line is shown at most this often per agent, in seconds.
 pub const BULLETIN_EVERY: u64 = 1800;
@@ -246,6 +282,21 @@ mod tests {
     fn echoed(file: &str, line: &str) {
         let want = format!("echo \"{}\" >&2", line.replace('"', "\\\""));
         assert!(source(file).lines().any(|l| l.trim() == want), "no `{want}` in cli/src/{file}");
+    }
+
+    #[test]
+    fn the_passport_lines_are_the_shell_s() {
+        for line in require_passport_lines("${tool_id}").iter().chain(stale_passport_lines("${sock}").iter()) {
+            echoed("cli-tools-policy.sh", line);
+        }
+        let policy = source("cli-tools-policy.sh");
+        assert!(policy.contains("    exit 3\n}\n\n# COMPAT-58"), "_cli_require_session_passport's exit moved");
+        assert!(policy.contains(r#"_cli_require_session_passport "${tool_id:-$verb}""#), "the tool's name moved");
+        assert!(policy.contains(r#"[ -n "$(compgen -e CODEX_ 2>/dev/null)" ] || return 1"#), "the Codex check moved");
+        assert!(policy.contains(r#"if [ ! -S "$hook_sock" ] && _cli_scoped_token_rejected; then"#), "the stale check moved");
+        let names = |l: &[&str]| l.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+        assert!(codex_env(names(&["PATH", "CODEX_THREAD_ID"])));
+        assert!(!codex_env(names(&["PATH", "MY_CODEX_X", "codex_x"])));
     }
 
     #[test]

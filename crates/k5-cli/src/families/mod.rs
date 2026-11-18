@@ -4,12 +4,14 @@
 //!
 //! - [`whoami`]: `k5 whoami [--json]`.
 //! - [`done`]: `k5 done [--blocked "reason"] [--agent <name>]`.
+//! - [`respond`]: `k5 respond [--final] <message>`.
 //!
 //! A family may hand a command line back to the shell CLI ([`done::run`]
-//! returns `None`) when it is a form only the shell
+//! and [`respond::run`] return `None`) when it is a form only the shell
 //! answers. It decides before it prints or sends anything.
 
 pub mod done;
+pub mod respond;
 pub mod whoami;
 
 /// The port as curl takes it from the shell's URL: digits only, and a

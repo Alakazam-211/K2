@@ -98,6 +98,7 @@ fn main() {
         // A form the family hands back goes to the shell before anything
         // is printed or sent.
         Route::Done => families::done::run(&args).unwrap_or_else(|| shell(who, &args)),
+        Route::Respond => families::respond::run(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Fallthrough => shell(who, &args),
     };
     trace::finish("command");

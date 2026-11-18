@@ -36,9 +36,10 @@
 //!   ([`check`]), `cli status` ([`cli_status`]) and the families in
 //!   [`families`] here, everything else to the shell CLI.
 //! - [`families`]: the command families the binary answers itself, as the
-//!   shell CLI does: `whoami` and `done` so far.
+//!   shell CLI does: `whoami`, `done` and `respond` so far.
 //! - [`prelude`]: what the shell CLI does around such a verb: its first
-//!   line, its two gates and its EXIT trap's lines.
+//!   line, its two gates, an `id` tool's passport checks and its EXIT
+//!   trap's lines.
 //! - [`fallthrough`]: handing a verb to the shell CLI, byte for byte, from
 //!   the copy of `cli/k2` packed into the binary ([`embedded`]).
 //! - [`passport`]: the passport rule the front applies before a verb

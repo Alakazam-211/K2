@@ -7,11 +7,12 @@
 //! [`crate::families`]. A form the front's code does not take falls
 //! through, as does everything else, byte for byte ([`crate::fallthrough`]).
 //!
-//! A family's help is the shell's: a `whoami` or `done` command line with
-//! `-h` or `--help` anywhere in it falls through, so the shell prints its
-//! help text (or its error for a flag before it, or whatever it does with
-//! such a word where it reads a value), with its connection gate in front
-//! of it, exactly as it always has. No copy of the text lives here.
+//! A family's help is the shell's: a `whoami`, `done` or `respond`
+//! command line with `-h` or `--help` anywhere in it falls through, so
+//! the shell prints its help text (or its error for a flag before it, or
+//! whatever it does with such a word where it reads a value), with its
+//! connection gate in front of it, exactly as it always has. No copy of
+//! the text lives here.
 
 use crate::route::{self, Noun, Owner};
 use std::ffi::OsString;
@@ -34,6 +35,10 @@ pub enum Route {
     /// `done` with no `-h` or `--help` in it ([`crate::families::done`],
     /// which may still hand it to the shell).
     Done,
+    /// `respond` with no `-h` or `--help` in it
+    /// ([`crate::families::respond`], which may still hand it to the
+    /// shell).
+    Respond,
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
@@ -76,6 +81,9 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
     }
     if noun.names("done") {
         return if help { Route::Fallthrough } else { Route::Done };
+    }
+    if noun.names("respond") {
+        return if help { Route::Fallthrough } else { Route::Respond };
     }
     Route::Fallthrough
 }
@@ -175,6 +183,19 @@ mod tests {
         }
         for line in [&["done", "--help"][..], &["done", "-h"], &["done", "--blocked", "--help"], &["done", "--agent", "-h"]] {
             assert_eq!(native(done, &args(line)), Route::Fallthrough, "{line:?}");
+        }
+    }
+
+    /// `respond`'s front code, likewise: `respond -- --help` sends the
+    /// word `--help` in the shell, and goes there.
+    #[test]
+    fn the_respond_forms() {
+        let respond = route::TABLE.iter().find(|n| n.names("respond")).expect("a respond row");
+        for line in [&["respond"][..], &["respond", "hi"], &["respond", "--final", "x"], &["respond", "help"]] {
+            assert_eq!(native(respond, &args(line)), Route::Respond, "{line:?}");
+        }
+        for line in [&["respond", "--help"][..], &["respond", "-h"], &["respond", "hi", "--help"], &["respond", "--", "-h"]] {
+            assert_eq!(native(respond, &args(line)), Route::Fallthrough, "{line:?}");
         }
     }
 

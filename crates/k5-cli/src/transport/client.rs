@@ -913,14 +913,16 @@ fn uds_target(_sock: &Path, endpoint: &str) -> Result<Target, Error> {
     Err(Error::NoCellSocket { endpoint: endpoint.to_string() })
 }
 
+/// `[ -S path ]`: a socket, through any links.
 #[cfg(unix)]
-fn is_socket(path: &Path) -> bool {
+pub fn is_socket(path: &Path) -> bool {
     use std::os::unix::fs::FileTypeExt;
     std::fs::metadata(path).is_ok_and(|m| m.file_type().is_socket())
 }
 
+/// `[ -S path ]`: never, where there are no Unix sockets.
 #[cfg(not(unix))]
-fn is_socket(_path: &Path) -> bool {
+pub fn is_socket(_path: &Path) -> bool {
     false
 }
 

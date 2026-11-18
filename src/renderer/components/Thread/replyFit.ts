@@ -6,13 +6,15 @@ import { useLayoutEffect, useRef, useState, type RefObject } from 'react'
 
 /** `line` cut to whole words that fit `room` px (measured by `width`), then
  *  "…"; just "…" when not even the first word fits. `room` 0: not measured
- *  yet, the whole line. */
+ *  yet, the whole line. `room` is whole px (clientWidth rounds), so text up
+ *  to a px over still fits: a slot exactly as wide as its line keeps it. */
 export function fitReplyWords(line: string, room: number, width: (s: string) => number): string {
-  if (room <= 0 || width(line) <= room) return line
+  const fits = (s: string): boolean => width(s) <= room + 1
+  if (room <= 0 || fits(line)) return line
   const words = line.split(/\s+/).filter(Boolean)
   for (let n = words.length - 1; n > 0; n--) {
     const s = `${words.slice(0, n).join(' ').replace(/[\s,;:.–—-]+$/, '')}…`
-    if (width(s) <= room) return s
+    if (fits(s)) return s
   }
   return '…'
 }
@@ -27,7 +29,11 @@ function textWidth(el: HTMLElement): ((s: string) => number) | null {
 }
 
 /** The line, fitted to its slot (the span `ref` goes on) in whole words,
- *  and refitted when the slot changes size. */
+ *  and refitted when the slot changes size. The slot is read on mount and
+ *  on resize only; an unchanged width sets the same state (no render).
+ *  Where the slot's box sizes to its content (a bubble), the slot's natural
+ *  width must not be the cut text, or each cut narrows the box and the next
+ *  fit cuts again: `ThreadReplyQuote` keeps room for the whole line. */
 export function useFittedLine(line: string): { ref: RefObject<HTMLSpanElement | null>; text: string } {
   const ref = useRef<HTMLSpanElement | null>(null)
   const [room, setRoom] = useState(0)

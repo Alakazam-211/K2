@@ -340,7 +340,7 @@ export function ThreadReplyChip({
  *  The words are the bubble's own text colour at full strength (on your own
  *  bubble a fade fell under 4.5:1 on the accent fill); the strip is set
  *  apart by its line, its glyph and its smaller size. The line is cut in
- *  whole words, then "…". */
+ *  whole words, then "…", once the bubble is as wide as it goes. */
 export function ThreadReplyQuote({ reply, onJump }: { reply: ParsedThreadReply; onJump?: () => void }): JSX.Element {
   const line = threadReplyFirstLine(reply.quote)
   const fitted = useFittedLine(line)
@@ -382,7 +382,17 @@ export function ThreadReplyQuote({ reply, onJump }: { reply: ParsedThreadReply; 
       <span data-reply-quote-who="" className="max-w-[55%] flex-shrink-0 truncate">
         {reply.part ? `${reply.from} (part): ` : `${reply.from}: `}
       </span>
-      <span data-reply-quote-text="" ref={fitted.ref} className="min-w-0 flex-1 overflow-hidden">
+      {/* The slot's natural width is the whole line (a hidden, zero-height
+          ::before holds it), never the cut text. The bubble sizes to its
+          content, so a short reply grows the bubble, up to its max width,
+          before the line is cut, instead of each cut narrowing the bubble
+          down to "Name: …". */}
+      <span
+        data-reply-quote-text=""
+        data-reply-quote-line={line}
+        ref={fitted.ref}
+        className="min-w-0 flex-1 overflow-hidden before:invisible before:block before:h-0 before:overflow-hidden before:content-[attr(data-reply-quote-line)]"
+      >
         {fitted.text}
       </span>
     </div>

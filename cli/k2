@@ -35411,7 +35411,9 @@ v = json.load(sys.stdin)
 s = v.get("switch") or {}
 a = v.get("account") or {}
 tool = s.get("tool") or a.get("tool")
-if s.get("alreadyActive"):
+if s.get("appliedSaved"):
+    print("%s: put the saved sign-in of %s back; agents on Server default use it again" % (tool, a.get("label") or s.get("toLabel") or s.get("to")))
+elif s.get("alreadyActive"):
     print("%s: %s is already the server default" % (tool, a.get("label") or s.get("to")))
 else:
     was = (" (was %s)" % s["fromLabel"]) if s.get("fromLabel") else ""

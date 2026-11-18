@@ -203,3 +203,142 @@ fn next_skips_an_ended_token() {
     assert_eq!(next_signed_in(&conn, Tool::Claude).unwrap().map(|e| e.id), Some(c.id.clone()));
     assert_eq!(active_id(&conn, Tool::Claude).unwrap(), Some(a.id));
 }
+
+// ── Part 2: a new sign-in for the default goes live (merged) ────────
+
+fn profile(uuid: &str, email: &str) -> serde_json::Value {
+    json!({"accountUuid": uuid, "emailAddress": email, "organizationUuid": format!("org-{uuid}")})
+}
+
+fn sign_into_slot(id: &str, bytes: &[u8], uuid: &str, email: &str) {
+    store::write_slot(Tool::Claude, id, bytes).unwrap();
+    fs::write(store::slot_dir(Tool::Claude, id).join(".claude.json"), json!({"oauthAccount": profile(uuid, email)}).to_string()).unwrap();
+}
+
+/// The default "a" (uuid-a), imported with its profile; then Claude's
+/// time limit ends the live sign-in (the MCP sign-ins stay in the file).
+fn ended_default(h: &Home, conn: &Connection) -> Entry {
+    write_live(h, &good("a"));
+    fs::write(h.p(".claude.json"), json!({"oauthAccount": profile("uuid-a", "a@example.test")}).to_string()).unwrap();
+    let a = wallet::import_live(conn, Tool::Claude, None).unwrap().unwrap();
+    write_live(h, &ended_file());
+    a
+}
+
+const MCP_TAIL: &[u8] = br#","mcpOAuth":{"one":{"accessToken":"K2TEST_SECRET_MARKER-mcp"}}}"#;
+
+fn live_oauth(h: &Home) -> serde_json::Value {
+    let v: serde_json::Value = serde_json::from_slice(&read_live(h)).unwrap();
+    v["claudeAiOauth"].clone()
+}
+
+fn oauth_of(bytes: &[u8]) -> serde_json::Value {
+    let v: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    v["claudeAiOauth"].clone()
+}
+
+#[test]
+fn the_merge_replaces_only_claude_ai_oauth_byte_for_byte() {
+    let live = b"{\n  \"mcpOAuth\": {\"x\": {\"accessToken\": \"m\\u00e9\", \"n\": 1.50}},\n  \"claudeAiOauth\": {\"accessToken\": \"\", \"loginEnded\": \"time_limit\"},\n  \"other\": [1, {\"a\": \"}\"}]\n}\n";
+    let incoming = br#"{"claudeAiOauth":{"accessToken":"new","refreshToken":"r"}}"#;
+    let out = store::merge_claude_oauth(live, incoming).expect("merged");
+    let want = b"{\n  \"mcpOAuth\": {\"x\": {\"accessToken\": \"m\\u00e9\", \"n\": 1.50}},\n  \"claudeAiOauth\": {\"accessToken\":\"new\",\"refreshToken\":\"r\"},\n  \"other\": [1, {\"a\": \"}\"}]\n}\n";
+    assert_eq!(String::from_utf8_lossy(&out), String::from_utf8_lossy(want));
+    // No block yet: it goes in front, the rest untouched.
+    let out = store::merge_claude_oauth(br#"{"mcpOAuth":{"x":1}}"#, incoming).expect("merged");
+    assert_eq!(out, br#"{"claudeAiOauth":{"accessToken":"new","refreshToken":"r"},"mcpOAuth":{"x":1}}"#.to_vec());
+    // Nothing else to keep, or not an object: written as it is.
+    assert_eq!(store::merge_claude_oauth(br#"{"claudeAiOauth":{"accessToken":"old"}}"#, incoming), None);
+    assert_eq!(store::merge_claude_oauth(b"[1]", incoming), None);
+    assert_eq!(store::merge_claude_oauth(b"{\"a\":", incoming), None);
+}
+
+#[test]
+fn a_re_sign_in_for_the_default_updates_the_live_file_and_keeps_mcp_oauth() {
+    let h = Home::new();
+    let conn = db();
+    let a = ended_default(&h, &conn);
+    // Field: "Add a token", signed in as the default's own account.
+    let r = wallet::begin_new(&conn, Tool::Claude, "again", None).unwrap();
+    sign_into_slot(&r.id, &good("a2"), "uuid-a", "a@example.test");
+    let kept = wallet::finalize_login(&conn, &r.id, None).unwrap();
+    assert_eq!(kept.id, a.id, "one row per account");
+    assert_eq!(live_oauth(&h), oauth_of(&good("a2")), "the CLIs read the new sign-in");
+    assert!(read_live(&h).ends_with(MCP_TAIL), "{}", String::from_utf8_lossy(&read_live(&h)));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs::metadata(h.p(".claude/.credentials.json")).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    let e = wallet::recheck(&conn, &a.id).unwrap();
+    assert_eq!((e.state.as_str(), e.detail.as_deref()), (state::SIGNED_IN, None));
+    // Again on the default itself ("Sign in again" on its row), once the
+    // live sign-in ended once more.
+    let mut again = ended_file();
+    again.splice(1..1, b"\"note\":1,".iter().copied());
+    write_live(&h, &again);
+    assert_eq!(wallet::begin_relogin(&conn, &a.id).unwrap().state, state::SIGNING_IN);
+    sign_into_slot(&a.id, &good("a3"), "uuid-a", "a@example.test");
+    wallet::finalize_login(&conn, &a.id, None).unwrap();
+    assert_eq!(live_oauth(&h), oauth_of(&good("a3")));
+    assert!(read_live(&h).starts_with(b"{\"note\":1,") && read_live(&h).ends_with(MCP_TAIL));
+}
+
+#[test]
+fn a_non_default_tokens_sign_in_leaves_the_live_file_alone() {
+    let h = Home::new();
+    let conn = db();
+    let _a = ended_default(&h, &conn);
+    let b = wallet::begin_new(&conn, Tool::Claude, "b", None).unwrap();
+    sign_into_slot(&b.id, &good("b"), "uuid-b", "b@example.test");
+    wallet::finalize_login(&conn, &b.id, None).unwrap();
+    assert_eq!(read_live(&h), ended_file());
+    // A live sign-in that still works is never replaced by one for the
+    // default either: the CLIs own it.
+    let mut working = good("a-cli").to_vec();
+    working.truncate(working.len() - 1);
+    working.extend_from_slice(MCP_TAIL);
+    write_live(&h, &working);
+    let r = wallet::begin_new(&conn, Tool::Claude, "again", None).unwrap();
+    sign_into_slot(&r.id, &good("a4"), "uuid-a", "a@example.test");
+    wallet::finalize_login(&conn, &r.id, None).unwrap();
+    assert_eq!(read_live(&h), working);
+}
+
+#[test]
+fn an_ended_live_file_with_a_good_store_reads_signed_out_and_apply_fixes_it() {
+    let h = Home::new();
+    let conn = db();
+    let a = ended_default(&h, &conn);
+    assert_ne!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), ended_file(), "the store still looks good");
+    let e = wallet::recheck(&conn, &a.id).unwrap();
+    assert_eq!(e.state, state::NEEDS_LOGIN);
+    let detail = e.detail.clone().unwrap();
+    assert!(detail.starts_with("Claude's sign-in reached its time limit") && detail.contains("Apply saved sign-in"), "{detail}");
+    assert!(wallet::can_apply_saved(&conn, Tool::Claude, &a.id).unwrap());
+    let out = wallet::switch(&conn, Tool::Claude, &a.id, Some("owner-token"), None).unwrap();
+    assert!(out.applied_saved && !out.already_active, "{out:?}");
+    assert_eq!(live_oauth(&h), oauth_of(&good("a")));
+    assert!(read_live(&h).ends_with(MCP_TAIL));
+    assert!(!wallet::can_apply_saved(&conn, Tool::Claude, &a.id).unwrap());
+    assert_eq!(wallet::recheck(&conn, &a.id).unwrap().state, state::SIGNED_IN);
+    // Once applied, the same click is a no-op.
+    assert!(wallet::switch(&conn, Tool::Claude, &a.id, None, None).unwrap().already_active);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_live_file_is_never_written_through_a_symlink() {
+    let h = Home::new();
+    let conn = db();
+    let a = ended_default(&h, &conn);
+    let real = h.p("elsewhere.json");
+    fs::write(&real, ended_file()).unwrap();
+    let link = h.p(".claude/.credentials.json");
+    fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let err = wallet::switch(&conn, Tool::Claude, &a.id, None, None).unwrap_err();
+    assert!(err.to_string().contains("symbolic link"), "{err}");
+    assert_eq!(fs::read(&real).unwrap(), ended_file(), "nothing written through it");
+    assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+}

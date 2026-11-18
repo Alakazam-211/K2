@@ -247,6 +247,8 @@ function pinLabel(a: LlmAccount): string {
 /** What one row may do, and why not. */
 interface RowActions {
   onMakeDefault: (a: LlmAccount) => void
+  /** Put an ended default's own saved sign-in back (`canApply`). */
+  onApply: (a: LlmAccount) => void
   onLoginAgain: (a: LlmAccount) => void
   onRename: (a: LlmAccount) => void
   onRemove: (a: LlmAccount) => void
@@ -314,8 +316,10 @@ function AccountRow({
       ? PINNED_SWITCH_REASON
       : undefined
   // Any subscription that isn't the server default can be signed in
-  // again (same flow as `k2 llm tokens login`).
-  const canLoginAgain = !account.active && !apiKey && (signedIn || needsLogin)
+  // again (same flow as `k2 llm tokens login`); the default too once its
+  // sign-in has ended (the new one goes live).
+  const canLoginAgain = !apiKey && (account.active ? needsLogin : signedIn || needsLogin)
+  const canApply = account.active && needsLogin && account.canApply === true
 
   const refresh = (): void => {
     if (!onRefreshLimits) return
@@ -335,7 +339,15 @@ function AccountRow({
     >
       Make default
     </Button>
-  ) : needsLogin && !account.active ? (
+  ) : canApply ? (
+    <Button
+      disabled={!doc.canChangeDefault}
+      title={doc.canChangeDefault ? `Put “${account.label}”’s saved sign-in back in ${tool.display} on this server` : (doc.changeDefaultReason ?? ADMIN_SWITCH_REASON)}
+      onClick={() => actions.onApply(account)}
+    >
+      Apply saved sign-in
+    </Button>
+  ) : needsLogin ? (
     <Button
       disabled={pinnedBlock}
       title={pinnedBlock ? PINNED_SWITCH_REASON : `Sign “${account.label}” in again`}
@@ -348,12 +360,12 @@ function AccountRow({
   const items: OverflowMenuItem[] = [
     { id: 'rename', label: 'Rename…', onSelect: () => actions.onRename(account) },
   ]
-  if (!apiKey && !(needsLogin && !account.active)) {
+  if (!apiKey && (!needsLogin || canApply)) {
     items.push({
       id: 'relogin',
       label: 'Sign in again…',
       disabled: !canLoginAgain || pinnedBlock,
-      hint: account.active ? ACTIVE_RELOGIN_HINT : pinnedBlock ? PINNED_SWITCH_REASON : undefined,
+      hint: account.active && !needsLogin ? ACTIVE_RELOGIN_HINT : pinnedBlock ? PINNED_SWITCH_REASON : undefined,
       onSelect: () => actions.onLoginAgain(account),
     })
   }
@@ -647,6 +659,9 @@ export function AgentAccountsColumn(): React.JSX.Element {
 
   const actionsFor = (tool: LlmTool): RowActions => ({
     onMakeDefault: (a) => setAsk({ kind: 'switch', tool, to: a, fromRow: true }),
+    onApply: (a) => {
+      void change(tool.tool, switchLogin(scope, a.id), `“${a.label}”’s saved sign-in is back in ${tool.display}; agents on Server default use it again.`, `Couldn’t put “${a.label}”’s saved sign-in back.`)
+    },
     onLoginAgain: (a) => setSheet({ kind: 'relogin', tool: tool.tool, toolLabel: tool.display, accountId: a.id, label: a.label }),
     onRename: (a) => setAsk({ kind: 'rename', tool, account: a }),
     onRemove: (a) => setAsk({ kind: 'remove', tool, account: a }),

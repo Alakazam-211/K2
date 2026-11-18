@@ -463,6 +463,11 @@ fn pinned_to(e: &Entry) -> Value {
     })
 }
 
+fn can_apply(e: &Entry) -> bool {
+    let Some(tool) = e.tool() else { return false };
+    with_conn(|conn| wallet::can_apply_saved(conn, tool, &e.id)).unwrap_or(false)
+}
+
 /// The token's plan as served: the one plan name with the switch on (U27).
 fn plan_for(e: &Entry) -> Option<String> {
     if !crate::usage_store::single_record_on() {
@@ -484,6 +489,9 @@ fn account_json(e: &Entry, active: bool, human: bool) -> Value {
         "active": active,
         "state": e.state,
         "detail": e.detail,
+        // Its live sign-in ended but its own saved one is good: one click
+        // ("Apply saved sign-in", a switch to it) puts that back.
+        "canApply": !api && e.state == state::NEEDS_LOGIN && can_apply(e),
         "email": if human { json!(e.email) } else { Value::Null },
         "org": if human { json!(e.org) } else { Value::Null },
         "plan": plan_for(e),

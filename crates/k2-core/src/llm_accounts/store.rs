@@ -776,6 +776,10 @@ pub(crate) fn write_live_expecting(tool: Tool, bytes: &[u8], expect: Option<Opti
             ));
         }
     }
+    // Claude keeps other sign-ins (MCP servers' `mcpOAuth`, …) in the same
+    // file: only `claudeAiOauth` is replaced, the rest stays byte for byte.
+    let merged = if tool == Tool::Claude { prev.as_deref().and_then(|p| merge_claude_oauth(p, bytes)) } else { None };
+    let bytes = merged.as_deref().unwrap_or(bytes);
     commit_verified(
         tool,
         bytes,
@@ -872,11 +876,11 @@ fn write_live_raw(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
                     WalletError::LiveStoreUnavailable(format!("could not write Claude's keychain item: {e}"))
                 })?;
                 if file.exists() {
-                    write_private(&file, bytes).map_err(|e| WalletError::Io(e.to_string()))?;
+                    write_live_file(&file, bytes)?;
                 }
                 Ok(())
             } else {
-                write_private(&file, bytes).map_err(|e| WalletError::Io(e.to_string()))
+                write_live_file(&file, bytes)
             }
         }
         Tool::Codex => {
@@ -892,6 +896,205 @@ fn write_live_raw(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
             write_private(&live_cred_path(tool), bytes).map_err(|e| WalletError::Io(e.to_string()))
         }
     }
+}
+
+/// Write Claude's live credential file: never through a symbolic link
+/// (refused, nothing changed), atomically (a 0600 temp file beside it,
+/// fsync, rename, then the folder synced), keeping the file's owner.
+pub(crate) fn write_live_file(path: &Path, bytes: &[u8]) -> Result<(), WalletError> {
+    let owner = match fs::symlink_metadata(path) {
+        Ok(md) if md.file_type().is_symlink() => {
+            return Err(WalletError::LiveStoreUnavailable(format!(
+                "{} is a symbolic link; K2 doesn't write through it, so nothing changed",
+                path.display()
+            )));
+        }
+        #[cfg(unix)]
+        Ok(md) => {
+            use std::os::unix::fs::MetadataExt;
+            Some((md.uid(), md.gid()))
+        }
+        #[cfg(not(unix))]
+        Ok(_) => None,
+        Err(_) => None,
+    };
+    write_private_owned(path, bytes, owner).map_err(|e| WalletError::Io(format!("{}: {e}", path.display())))
+}
+
+/// [`write_private`], with the temp file given `owner` (uid, gid) before
+/// the rename when it differs from the writer's, and the folder synced
+/// after it.
+fn write_private_owned(path: &Path, bytes: &[u8], owner: Option<(u32, u32)>) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let tmp = parent.join(format!(
+        ".{}.k2tmp-{}",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("cred"),
+        std::process::id()
+    ));
+    let res = (|| -> std::io::Result<()> {
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        #[cfg(unix)]
+        if let Some((uid, gid)) = owner {
+            use std::os::unix::fs::MetadataExt;
+            let md = f.metadata()?;
+            if (md.uid(), md.gid()) != (uid, gid) {
+                std::os::unix::fs::fchown(&f, Some(uid), Some(gid))?;
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = owner;
+        Ok(())
+    })();
+    if let Err(e) = res {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    set_mode(&tmp, 0o600)?;
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        e
+    })?;
+    #[cfg(unix)]
+    if let Ok(d) = fs::File::open(parent) {
+        let _ = d.sync_all();
+    }
+    Ok(())
+}
+
+// ── Claude's live file: replace only `claudeAiOauth` ────────────────
+
+/// The top-level keys of a JSON object and the byte range of each value,
+/// in file order. `None` when `b` isn't one JSON object.
+fn top_level_spans(b: &[u8]) -> Option<Vec<(String, std::ops::Range<usize>)>> {
+    fn ws(b: &[u8], mut i: usize) -> usize {
+        while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n' | b'\r') {
+            i += 1;
+        }
+        i
+    }
+    // `i` at an opening quote: the index after the closing one.
+    fn string_end(b: &[u8], mut i: usize) -> Option<usize> {
+        i += 1;
+        while i < b.len() {
+            match b[i] {
+                b'\\' => i += 2,
+                b'"' => return Some(i + 1),
+                _ => i += 1,
+            }
+        }
+        None
+    }
+    fn value_end(b: &[u8], i: usize) -> Option<usize> {
+        match *b.get(i)? {
+            b'"' => string_end(b, i),
+            b'{' | b'[' => {
+                let mut depth = 0usize;
+                let mut j = i;
+                while j < b.len() {
+                    match b[j] {
+                        b'"' => {
+                            j = string_end(b, j)?;
+                            continue;
+                        }
+                        b'{' | b'[' => depth += 1,
+                        b'}' | b']' => {
+                            depth = depth.checked_sub(1)?;
+                            if depth == 0 {
+                                return Some(j + 1);
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                None
+            }
+            _ => {
+                let mut j = i;
+                while j < b.len() && !matches!(b[j], b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r') {
+                    j += 1;
+                }
+                (j > i).then_some(j)
+            }
+        }
+    }
+    let mut i = ws(b, 0);
+    if b.get(i) != Some(&b'{') {
+        return None;
+    }
+    i = ws(b, i + 1);
+    let mut out = Vec::new();
+    if b.get(i) == Some(&b'}') {
+        return (ws(b, i + 1) == b.len()).then_some(out);
+    }
+    loop {
+        if b.get(i) != Some(&b'"') {
+            return None;
+        }
+        let ke = string_end(b, i)?;
+        let key: String = serde_json::from_slice(&b[i..ke]).ok()?;
+        i = ws(b, ke);
+        if b.get(i) != Some(&b':') {
+            return None;
+        }
+        let vs = ws(b, i + 1);
+        let ve = value_end(b, vs)?;
+        out.push((key, vs..ve));
+        i = ws(b, ve);
+        match b.get(i) {
+            Some(b',') => i = ws(b, i + 1),
+            Some(b'}') => break,
+            _ => return None,
+        }
+    }
+    (ws(b, i + 1) == b.len()).then_some(out)
+}
+
+/// The live Claude file `live` with only its `claudeAiOauth` replaced by
+/// `incoming`'s, every other top-level key (`mcpOAuth`, …) kept byte for
+/// byte. `None` = write `incoming` as it is: the live file holds nothing
+/// else to keep (or isn't a JSON object), or `incoming` has no block.
+pub(crate) fn merge_claude_oauth(live: &[u8], incoming: &[u8]) -> Option<Vec<u8>> {
+    const KEY: &str = "claudeAiOauth";
+    let spans = top_level_spans(live)?;
+    if spans.iter().all(|(k, _)| k == KEY) {
+        return None;
+    }
+    let new_spans = top_level_spans(incoming)?;
+    let new_raw = &incoming[new_spans.iter().rev().find(|(k, _)| k == KEY)?.1.clone()];
+    let mut out = live.to_vec();
+    let mine: Vec<_> = spans.iter().filter(|(k, _)| k == KEY).map(|(_, r)| r.clone()).collect();
+    if mine.is_empty() {
+        let open = live.iter().position(|c| *c == b'{')?;
+        let mut ins = format!("\"{KEY}\":").into_bytes();
+        ins.extend_from_slice(new_raw);
+        ins.push(b',');
+        drop(out.splice(open + 1..open + 1, ins));
+    } else {
+        for r in mine.into_iter().rev() {
+            drop(out.splice(r, new_raw.iter().copied()));
+        }
+    }
+    // Belt and braces: the result must read back as the live object with
+    // the new block, or the merge is done by value instead.
+    let (lv, nv, ov): (serde_json::Value, serde_json::Value, Option<serde_json::Value>) =
+        (serde_json::from_slice(live).ok()?, serde_json::from_slice(incoming).ok()?, serde_json::from_slice(&out).ok());
+    let mut want = lv.as_object()?.clone();
+    want.insert(KEY.into(), nv.get(KEY)?.clone());
+    if ov.as_ref().and_then(|v| v.as_object()) == Some(&want) {
+        return Some(out);
+    }
+    serde_json::to_vec(&serde_json::Value::Object(want)).ok()
 }
 
 // ── Locks ───────────────────────────────────────────────────────────

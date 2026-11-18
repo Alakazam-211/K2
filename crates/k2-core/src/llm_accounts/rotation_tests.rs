@@ -320,7 +320,11 @@ fn a_switch_over_a_lost_live_login_keeps_the_outgoing_copy_and_says_so() {
     assert!(out.outgoing_unsaved, "{out:?}");
     assert!(!out.saved_outgoing, "{out:?}");
     assert_eq!(slot(&a.id), cred("a", FAR), "A keeps its own copy");
-    assert_eq!(live(&h), cred("b", FAR), "B is live");
+    // B is live, and the file's other sign-ins (the MCP servers') stay.
+    let now: Value = serde_json::from_slice(&live(&h)).unwrap();
+    let b_cred: Value = serde_json::from_slice(&cred("b", FAR)).unwrap();
+    assert_eq!(now["claudeAiOauth"], b_cred["claudeAiOauth"], "B is live");
+    assert!(live(&h).ends_with(br#","mcpOAuth":{}}"#), "{}", String::from_utf8_lossy(&live(&h)));
     let a_now = get(&conn, &a.id).unwrap().unwrap();
     assert!(a_now.detail.as_deref().unwrap_or("").contains("lost"), "{:?}", a_now.detail);
 }

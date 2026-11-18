@@ -50,6 +50,10 @@ export interface LlmAccount {
   active: boolean
   state: AccountState | string
   detail: string | null
+  /** Its live sign-in ended (Claude's time limit) but its own saved one
+   *  is good: "Apply saved sign-in" (a switch to it) puts that back.
+   *  Additive (0.46.15). */
+  canApply?: boolean
   email?: string | null
   org?: string | null
   plan: string | null

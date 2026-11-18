@@ -92,6 +92,36 @@ pub fn codex_env(names: impl IntoIterator<Item = std::ffi::OsString>) -> bool {
     names.into_iter().any(|n| n.to_str().is_some_and(|n| n.starts_with("CODEX_")))
 }
 
+/// Step 3 for an `id` tool, in a session with `HOOK_SOCK` set (`hook_sock`):
+/// `_cli_check_session_passport`'s stale check (a socket that is gone,
+/// with a passport the probe finds refused: [`stale_passport_lines`]),
+/// then `_cli_apply_auth_for_verb`'s refusal when there is no passport at
+/// all ([`require_passport_lines`] for `tool`). Each prints its lines and
+/// is exit 3. `None`: go on. The probe asks only when the port is one curl
+/// takes ([`crate::families::curl_port`]).
+pub fn id_tool(settings: &Settings, hook_sock: Option<&Path>, would_refuse: bool, tool: &str) -> Option<Exit> {
+    let sock = hook_sock?;
+    let passport = matches!(settings.auth, Auth::Passport { .. });
+    if !crate::transport::client::is_socket(sock) && passport {
+        if let Some(port) = settings.port_text.as_deref().and_then(crate::families::curl_port) {
+            let probe = Settings { port: Some(port), ..settings.clone() };
+            if probe.client(would_refuse).is_ok_and(|mut c| c.passport_rejected()) {
+                for l in stale_passport_lines(&sock.to_string_lossy()) {
+                    out::stderr_line(&l);
+                }
+                return Some(Exit::Refused);
+            }
+        }
+    }
+    if !passport {
+        for l in require_passport_lines(tool) {
+            out::stderr_line(&l);
+        }
+        return Some(Exit::Refused);
+    }
+    None
+}
+
 /// The bulletin line is shown at most this often per agent, in seconds.
 pub const BULLETIN_EVERY: u64 = 1800;
 

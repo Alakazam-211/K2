@@ -7,12 +7,12 @@
 //! [`crate::families`]. A form the front's code does not take falls
 //! through, as does everything else, byte for byte ([`crate::fallthrough`]).
 //!
-//! A family's help is the shell's: a `whoami`, `done` or `respond`
-//! command line with `-h` or `--help` anywhere in it falls through, so
-//! the shell prints its help text (or its error for a flag before it, or
-//! whatever it does with such a word where it reads a value), with its
-//! connection gate in front of it, exactly as it always has. No copy of
-//! the text lives here.
+//! A family's help is the shell's: a `whoami`, `done`, `respond` or
+//! `inbox` command line with `-h` or `--help` anywhere in it falls
+//! through, so the shell prints its help text (or its error for a flag
+//! before it, or whatever it does with such a word where it reads a
+//! value), with its connection gate in front of it, exactly as it always
+//! has. No copy of the text lives here.
 
 use crate::route::{self, Noun, Owner};
 use std::ffi::OsString;
@@ -39,6 +39,9 @@ pub enum Route {
     /// ([`crate::families::respond`], which may still hand it to the
     /// shell).
     Respond,
+    /// `inbox` with no `-h` or `--help` in it ([`crate::families::inbox`],
+    /// which may still hand it to the shell).
+    Inbox,
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
@@ -84,6 +87,9 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
     }
     if noun.names("respond") {
         return if help { Route::Fallthrough } else { Route::Respond };
+    }
+    if noun.names("inbox") {
+        return if help { Route::Fallthrough } else { Route::Inbox };
     }
     Route::Fallthrough
 }
@@ -196,6 +202,19 @@ mod tests {
         }
         for line in [&["respond", "--help"][..], &["respond", "-h"], &["respond", "hi", "--help"], &["respond", "--", "-h"]] {
             assert_eq!(native(respond, &args(line)), Route::Fallthrough, "{line:?}");
+        }
+    }
+
+    /// `inbox`'s front code, likewise: any `-h` or `--help` word goes to
+    /// the shell (`inbox read --help` reads the item `--help` there).
+    #[test]
+    fn the_inbox_forms() {
+        let inbox = route::TABLE.iter().find(|n| n.names("inbox")).expect("an inbox row");
+        for line in [&["inbox"][..], &["inbox", "list"], &["inbox", "read", "a1"], &["inbox", "compose", "--title", "t"], &["inbox", "help"]] {
+            assert_eq!(native(inbox, &args(line)), Route::Inbox, "{line:?}");
+        }
+        for line in [&["inbox", "--help"][..], &["inbox", "-h"], &["inbox", "read", "--help"], &["inbox", "list", "--folder", "-h"]] {
+            assert_eq!(native(inbox, &args(line)), Route::Fallthrough, "{line:?}");
         }
     }
 

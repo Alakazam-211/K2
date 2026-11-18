@@ -56,8 +56,11 @@ pub fn after_stdout_error(err: &io::Error) -> Exit {
     Exit::Error
 }
 
+/// Ends the process by SIGPIPE, as a shell killed by it ends: the default
+/// action put back, then the signal raised. Returns only where it can't
+/// (the signal is blocked, or there are no signals).
 #[cfg(unix)]
-fn die_of_sigpipe() {
+pub fn die_of_sigpipe() {
     // SAFETY: both take plain constants; no handler of ours is installed
     // or runs.
     unsafe {
@@ -68,7 +71,7 @@ fn die_of_sigpipe() {
 
 /// Windows has no SIGPIPE: the write's failure is the exit.
 #[cfg(not(unix))]
-fn die_of_sigpipe() {}
+pub fn die_of_sigpipe() {}
 
 #[cfg(test)]
 mod tests {

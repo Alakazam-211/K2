@@ -44,7 +44,7 @@
 //! Python 3.12 one, without source lines. The exit code and stdout are the
 //! shell's.
 
-use super::curl_port;
+use super::{curl_port, get, traceback, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::out::json::{self, Text, Value};
@@ -213,49 +213,12 @@ pub fn json_has_role(resp: &[u8]) -> bool {
     matches!(json::parse(text), Ok(Value::Object(pairs)) if pairs.iter().any(|(k, _)| *k == Text::from("role")))
 }
 
-/// What the shell's Python prints: stdout, stderr and its exit.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Shown {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit: Exit,
-}
-
-impl Shown {
-    fn print(&self) -> Exit {
-        if !self.stdout.is_empty() {
-            if let Err(e) = out::stdout(&self.stdout) {
-                return out::after_stdout_error(&e);
-            }
-        }
-        if !self.stderr.is_empty() {
-            let _ = out::write_flushed(&mut std::io::stderr().lock(), self.stderr.as_bytes());
-        }
-        self.exit
-    }
-}
-
 /// The line numbers of the shell's Python, for its tracebacks: the line
 /// that prints the first field, the `field` helper's return, and the
 /// `others:` line (`tests` pins them to the script).
 pub const PY_FIRST_PRINT: u32 = 21;
 pub const PY_FIELD_RETURN: u32 = 20;
 pub const PY_OTHERS: u32 = 28;
-
-fn traceback(frames: &[(u32, &str)], exception: &str) -> String {
-    let mut s = String::from("Traceback (most recent call last):\n");
-    for (line, name) in frames {
-        s.push_str(&format!("  File \"<string>\", line {line}, in {name}\n"));
-    }
-    s.push_str(exception);
-    s.push('\n');
-    s
-}
-
-fn get<'a>(pairs: &'a [(Text, Value)], key: &str) -> Option<&'a Value> {
-    let key = Text::from(key);
-    pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
-}
 
 /// The shell's Python for the plain form, on `resp`.
 pub fn human(resp: &[u8]) -> Shown {

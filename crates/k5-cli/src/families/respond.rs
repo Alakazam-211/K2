@@ -129,28 +129,9 @@ fn run_with(args: &[OsString], line: &Line, hook_sock: Option<&Path>, mut settin
         Auth::Passport { passport, .. } => Some(passport.as_str().to_string()),
         Auth::Owner(_) | Auth::None => None,
     };
-    if let Some(sock) = hook_sock {
-        // `_cli_check_session_passport`: the probe asks only when the
-        // socket is gone; curl can't ask on a port that is no port.
-        if !is_socket(sock) && passport.is_some() {
-            if let Some(port) = port {
-                let probe = Settings { port: Some(port), ..settings.clone() };
-                if probe.client(would_refuse).is_ok_and(|mut c| c.passport_rejected()) {
-                    for l in prelude::stale_passport_lines(&sock.to_string_lossy()) {
-                        out::stderr_line(&l);
-                    }
-                    return Exit::Refused;
-                }
-            }
-        }
-        // `_cli_apply_auth_for_verb`: an `id` tool never runs as the owner
-        // in a session.
-        if passport.is_none() {
-            for l in prelude::require_passport_lines(TOOL) {
-                out::stderr_line(&l);
-            }
-            return Exit::Refused;
-        }
+    // An `id` tool never runs as the owner in a session.
+    if let Some(stop) = prelude::id_tool(&settings, hook_sock, would_refuse, TOOL) {
+        return stop;
     }
     if line.message.is_empty() {
         out::stderr_line(USAGE);

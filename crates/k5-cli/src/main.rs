@@ -99,6 +99,7 @@ fn main() {
         // is printed or sent.
         Route::Done => families::done::run(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Respond => families::respond::run(&args).unwrap_or_else(|| shell(who, &args)),
+        Route::Inbox => families::inbox::run(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Fallthrough => shell(who, &args),
     };
     trace::finish("command");

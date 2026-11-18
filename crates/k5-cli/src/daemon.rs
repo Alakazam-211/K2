@@ -227,7 +227,7 @@ pub fn usable_git() -> Option<&'static Path> {
 
 /// The first executable file `name` in the folders of `path` (an empty
 /// folder name is the current folder), as `command -v` finds it.
-fn find_on_path(name: &str, path: OsString) -> Option<PathBuf> {
+pub fn find_on_path(name: &str, path: OsString) -> Option<PathBuf> {
     std::env::split_paths(&path).map(|dir| if dir.as_os_str().is_empty() { PathBuf::from(".").join(name) } else { dir.join(name) }).find(|p| is_executable(p))
 }
 

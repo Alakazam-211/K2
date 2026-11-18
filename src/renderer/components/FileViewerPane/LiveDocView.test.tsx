@@ -26,6 +26,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 import { LiveDocView, closedText, liveStatusText, noteText, undoChord } from './LiveDocView'
+import { closeInfo } from '@/lib/editor/live/live-notices'
 import { LiveConnectError, parseClose, type LiveClientFrame, type LiveClose, type LiveServerFrame, type LiveTransport, type LiveWelcome } from '@/lib/docs-live-transport'
 import type { ServerScope } from '@/kessel/server-scope'
 
@@ -205,6 +206,17 @@ describe('LiveDocView', () => {
     render(<LiveDocView scope={scope} filePath="/w/notes.md" markdown createTransport={() => t} />)
     await waitFor(() => expect(screen.getByTestId('live-doc-view').dataset.state).toBe('closed'))
     expect(screen.getByTestId('live-doc-status').textContent).toBe('Live documents are off on this box.')
+  })
+
+  it('a declined close, before or after the welcome, is handed to the host (the file opens the plain way)', async () => {
+    const onDeclined = vi.fn()
+    const t = new ScriptedTransport('hello')
+    render(<LiveDocView scope={scope} filePath="/w/notes.md" markdown onDeclined={onDeclined} createTransport={() => t} />)
+    await waitFor(() => expect(screen.getByTestId('live-doc-view').dataset.state).toBe('live'))
+    act(() => t.end({ reason: 'declined', retry: false, code: 'path_escapes' }))
+    await waitFor(() => expect(onDeclined).toHaveBeenCalledTimes(1))
+    expect(onDeclined.mock.calls[0][0]).toEqual({ reason: 'declined', code: 'path_escapes' })
+    expect(screen.getByTestId('live-doc-status').textContent).toBe('This file is in another workspace, so it opens read-only here.')
   })
 })
 
@@ -425,7 +437,7 @@ describe('the Live view’s words', () => {
   it('says why live documents are off in the daemon’s words, else plainly', () => {
     expect(closedText({ reason: 'declined', code: 'docs_unavailable', message: 'update K2' })).toBe('update K2')
     expect(closedText({ reason: 'declined', code: 'docs_unavailable' })).toBe('Live documents are off on this box.')
-    expect(closedText({ reason: 'declined' })).toBe('This file can’t be edited live (too large, or not text K2 can edit live).')
+    expect(closedText({ reason: 'declined' })).toBe('Live editing isn’t available for this file here.')
   })
   it('a refused open says its own reason by code, never "too large, or not text" for a rule', () => {
     const why = ".k2/agent/work/p.html is in the workspace's private .k2 folder, where only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs"
@@ -435,11 +447,29 @@ describe('the Live view’s words', () => {
     expect(d('generated')).toBe('This file can’t be edited live: it’s made from other files. Edit its source instead.')
     expect(d('not_a_text_doc')).toBe('This file can’t be edited live: it isn’t text.')
     expect(d('workspace_not_found', 'that file is not inside a workspace on this server')).toBe('This file can’t be edited live: it isn’t inside a workspace on this server.')
-    expect(d('workspace_mismatch')).toBe('This file can’t be edited live: it’s outside this workspace.')
-    expect(d('path_escapes')).toBe('This file can’t be edited live: it’s outside this workspace.')
+    for (const c of ['workspace_mismatch', 'path_escapes', 'other_workspace']) expect(d(c)).toBe('This file is in another workspace, so it opens read-only here.')
     expect(d('too_large', 'live editing is off: the text doesn’t fit one frame (too_large)')).toBe('This file can’t be edited live: it’s too large.')
     expect(d('not_utf8')).toBe('This file can’t be edited live: it isn’t UTF-8 text.')
     expect(d('doc_quarantined', 'This doc’s stored copy is damaged.')).toBe('This file can’t be edited live: This doc’s stored copy is damaged.')
     for (const c of ['protected', 'secret', 'generated', 'workspace_not_found', 'workspace_mismatch']) expect(d(c, why)).not.toContain('too large, or not text')
+  })
+  it('an older server’s close with a code and no words maps the code; with neither, the plain line', () => {
+    const d = (code?: string, message?: string) => closedText({ reason: 'declined', ...(code ? { code } : {}), ...(message ? { message } : {}) })
+    expect(d('stored_as_any_file')).toBe('This file can’t be edited live: it was opened as an any-file doc earlier, and stays one.')
+    expect(d('doc_quarantined')).toBe('This file can’t be edited live: its stored live copy is damaged, so K2 set it aside.')
+    expect(d('engine_mismatch')).toBe('This file can’t be edited live: another version of K2 stored its live copy.')
+    expect(d('native_engine_missing')).toBe('This file can’t be edited live: a newer K2 stored its live copy.')
+    expect(d('protected')).toBe('This file can’t be edited live: it’s in a protected folder.')
+    // A code this build doesn't know, with the frame's words: the words.
+    expect(d('a_new_rule', 'the doc is on hold')).toBe('This file can’t be edited live: the doc is on hold.')
+    // Neither: the plain line, never "too large, or not text".
+    expect(d()).toBe('Live editing isn’t available for this file here.')
+    expect(d('a_new_rule')).toBe('Live editing isn’t available for this file here.')
+  })
+  it('a close that carries only the kit’s report says the kit’s words', () => {
+    expect(closeInfo({ reason: 'declined', retry: false, error: { id: 'MPC-E000', message: 'this doc has no `source` text' } })).toEqual({ reason: 'declined', message: 'this doc has no `source` text' })
+    expect(closeInfo({ reason: 'declined', error: { id: 'MPC-E530', message: 'two timelines', details: { code: 'multiple_timelines' } } })).toEqual({ reason: 'declined', code: 'multiple_timelines', message: 'two timelines' })
+    // K2's own words and code win over the report's.
+    expect(closeInfo({ reason: 'declined', code: 'too_large', message: 'big', error: { id: 'MPC-E401', message: 'frame', details: { code: 'x' } } })).toEqual({ reason: 'declined', code: 'too_large', message: 'big' })
   })
 })

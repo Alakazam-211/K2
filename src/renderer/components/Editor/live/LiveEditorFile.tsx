@@ -91,13 +91,14 @@ export interface LiveEditorFileProps {
   /** The core was turned off mid-session: the plain editor carries on. */
   onCoreOff: () => void
   /** A file with its own preview (CSV, HTML…): drawn from the live text, or
-   *  from `null` while there is none (before the welcome, or the open was
-   *  refused): the host then draws the file as it read it. A refused live
-   *  session never blanks the preview. */
+   *  from `null` while there is none (before the welcome) or the session
+   *  ended (any close, any reason): the host then draws the file as it read
+   *  it. An ended or refused live session never blanks the preview. */
   renderPreview?: (text: string | null) => React.ReactNode
-  /** The daemon refused this file before it opened live (`closed {declined}`
-   *  with no welcome: a protected folder, a secret, not text…): the host
-   *  opens it the usual way and says why. Without it the closed notice stays. */
+  /** The daemon declined this file (`closed {declined}`), before the welcome
+   *  (a protected folder, a secret, not text…) or after it, from any server
+   *  version: the host opens it the usual way and says why. Without it the
+   *  closed notice stays. */
   onRefused?: (closed: LiveDocClose) => void
   width?: number
   createTransport?: (scope: ServerScope, doc: { path: string }) => LiveTransport
@@ -128,14 +129,15 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
     setText(t)
     setCursor(c)
   }, [])
-  // The live text exists only once the daemon welcomed this tab.
-  const everLive = snap.tier === 'live'
+  // The live text exists only once the daemon welcomed this tab, and only
+  // until the session closes: after that the file as read is the truth.
   const closed = snap.closed
+  const liveText = snap.tier === 'live' && !closed ? text : null
   const refusedRef = useRef(onRefused)
   refusedRef.current = onRefused
   useEffect(() => {
-    if (closed && closed.reason === 'declined' && !everLive) refusedRef.current?.(closed)
-  }, [closed, everLive])
+    if (closed && closed.reason === 'declined') refusedRef.current?.(closed)
+  }, [closed])
 
   // What you did about the notices (the data stays in the source).
   const [ui, setUi] = useState<LiveUi>(LIVE_UI)
@@ -376,7 +378,7 @@ export function LiveEditorFile({ scope, filePath, kind, roomReadOnly, onCoreOff,
                 ring={presence.ring}
               />
             )}
-            renderPreview={renderPreview ? () => renderPreview(everLive ? text : null) : undefined}
+            renderPreview={renderPreview ? () => renderPreview(liveText) : undefined}
           />
         </FrameLiveContext.Provider>
       </FrameSaveContext.Provider>

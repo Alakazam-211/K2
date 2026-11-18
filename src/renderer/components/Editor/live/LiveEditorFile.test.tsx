@@ -288,14 +288,65 @@ describe('a refused open (closed before any welcome)', () => {
     expect(onRefused.mock.calls[0][0]).toEqual({ reason: 'declined', code: 'protected', message: WHY })
   })
 
-  it('a live file that closes later is not a refusal (the host keeps the live view)', async () => {
+  it('a live file that closes declined later is handed back too, and its preview is the file as read', async () => {
     const onRefused = vi.fn()
+    const asked: (string | null)[] = []
     const t = new ScriptedTransport()
-    render(<LiveEditorFile scope={scope} filePath="/w/README.md" kind="markdown" roomReadOnly={null} onCoreOff={() => undefined} onRefused={onRefused} width={1440} createTransport={() => t} />)
+    render(
+      <LiveEditorFile
+        scope={scope}
+        filePath="/w/page.html"
+        kind="code"
+        roomReadOnly={null}
+        onCoreOff={() => undefined}
+        onRefused={onRefused}
+        renderPreview={(text) => {
+          asked.push(text)
+          return <div data-testid="pv">{text ?? 'the page as read'}</div>
+        }}
+        width={1440}
+        createTransport={() => t}
+      />,
+    )
     await waitFor(() => expect(screen.getByTestId('ed-live-file').dataset.liveState).toBe('live'))
     act(() => t.end({ reason: 'declined', retry: false, code: 'too_large' }))
     await waitFor(() => expect(screen.getByTestId('ed-live-file').dataset.liveState).toBe('closed'))
     expect(screen.getByTestId('ed-save-notice').textContent).toContain('This file can’t be edited live: it’s too large.')
+    await waitFor(() => expect(onRefused).toHaveBeenCalledTimes(1))
+    expect(onRefused.mock.calls[0][0]).toEqual({ reason: 'declined', code: 'too_large' })
+    asked.length = 0
+    fireEvent.click(screen.getByRole('radio', { name: /Preview/ }))
+    expect((await screen.findByTestId('pv')).textContent).toBe('the page as read')
+    expect(asked.every((a) => a === null)).toBe(true)
+  })
+
+  it('any other close draws the preview from the file as read, never the live text', async () => {
+    const onRefused = vi.fn()
+    const asked: (string | null)[] = []
+    const t = new ScriptedTransport()
+    render(
+      <LiveEditorFile
+        scope={scope}
+        filePath="/w/page.html"
+        kind="code"
+        roomReadOnly={null}
+        onCoreOff={() => undefined}
+        onRefused={onRefused}
+        renderPreview={(text) => {
+          asked.push(text)
+          return <div data-testid="pv">{text ?? 'the page as read'}</div>
+        }}
+        width={1440}
+        createTransport={() => t}
+      />,
+    )
+    await waitFor(() => expect(screen.getByTestId('ed-live-file').dataset.liveState).toBe('live'))
+    act(() => t.end({ reason: 'kicked', retry: false }))
+    await waitFor(() => expect(screen.getByTestId('ed-live-file').dataset.liveState).toBe('closed'))
+    asked.length = 0
+    fireEvent.click(screen.getByRole('radio', { name: /Preview/ }))
+    expect((await screen.findByTestId('pv')).textContent).toBe('the page as read')
+    expect(asked.every((a) => a === null)).toBe(true)
     expect(onRefused).not.toHaveBeenCalled()
   })
 })

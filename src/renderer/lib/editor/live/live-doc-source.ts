@@ -39,7 +39,7 @@ import { addressLabel, sayFailure } from './say-words'
 import { caretLine, editWords, lineAtByte, placeAt, sectionAt } from './sections'
 import type { TappedWelcome, TransportTap } from './transport-tap'
 import { readSayTime } from '@/lib/live-view/shared/say-time'
-import { closeMessage } from './live-notices'
+import { closeInfo } from './live-notices'
 
 /** The kit's participant for a save made outside K2 (`EXTERNAL_PID`, session/participant.rs). */
 export const EXTERNAL_PID = 'kit:external'
@@ -232,10 +232,7 @@ export class LiveDocSource implements LiveSource {
         this.pending = n
         this.emit({})
       }),
-      ed.on('closed', (c) => {
-        const m = closeMessage(c)
-        this.emit({ closed: { reason: c.reason, ...(c.code ? { code: c.code } : {}), ...(c.path ? { path: c.path } : {}), ...(m ? { message: m } : {}) } })
-      }),
+      ed.on('closed', (c) => this.emit({ closed: closeInfo(c) })),
     ]
     this.emit({ closed: null })
   }

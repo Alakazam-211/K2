@@ -8,16 +8,27 @@
 //   - draws the page from its plain read, never from the live text it never got;
 //   - says the real reason, in the daemon's words, never "too large, or not text";
 //   - opens the usual way (the plain editor), since that file is never live.
+// Rosson hit it again (2026-11-18, a 0.46.13 server): the same holds for a
+// session that closes `declined` after its welcome, and for an older server's
+// close with only a code (mapped to plain words) or only the kit's report;
+// with no words at all, "Live editing isn’t available for this file here."
 // And the "undefined" tile: a read whose body isn't `{content}` is an error,
 // never the word "undefined" drawn as the page.
 
 import '../../../../vendor/k2-mpc-base/client/test/jsdom-shims'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, renderHook, screen, waitFor } from '@testing-library/react'
 
 const PAGE = '<!doctype html>\n<html><head><style>body { font: 14px sans-serif; }</style></head><body><h1>k5 CLI progress</h1><p>Slice 10 landed.</p></body></html>\n'
 const WHY = ".k2/agent/work/k5-cli-progress.html is in the workspace's private .k2 folder, where only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs"
-const h = vi.hoisted(() => ({ read: null as unknown, refuse: null as Record<string, unknown> | null, connects: 0 }))
+const h = vi.hoisted(() => ({
+  read: null as unknown,
+  refuse: null as Record<string, unknown> | null,
+  // A session that opens (its welcome) and then closes with this frame.
+  closeAfterWelcome: null as Record<string, unknown> | null,
+  end: null as ((e: unknown) => void) | null,
+  connects: 0,
+}))
 
 vi.mock('@/lib/daemon-cli', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/daemon-cli')>()
@@ -40,19 +51,33 @@ vi.mock('@/stores/session-events', async (orig) => ({
 vi.mock('@/lib/docs-live-daemon', async () => {
   const { LiveConnectError, parseClose } = await import('@/lib/docs-live-transport')
   return {
-    createDaemonLiveTransport: () => ({
-      open: false,
-      async connect() {
-        h.connects += 1
-        // The daemon's `closed` frame before any welcome: the refusal.
-        if (h.refuse) throw new LiveConnectError(parseClose(h.refuse))
-        throw new Error('this test only refuses')
-      },
-      send() {},
-      onFrame: () => () => undefined,
-      onClose: () => () => undefined,
-      close() {},
-    }),
+    createDaemonLiveTransport: () => {
+      const closeCbs = new Set<(e: unknown) => void>()
+      return {
+        open: false,
+        async connect() {
+          h.connects += 1
+          // The daemon's `closed` frame before any welcome: the refusal.
+          if (h.refuse) throw new LiveConnectError(parseClose(h.refuse))
+          if (h.closeAfterWelcome) {
+            const frame = h.closeAfterWelcome
+            h.end = () => {
+              for (const cb of [...closeCbs]) cb(parseClose(frame))
+            }
+            // An older server's welcome whose live text came through empty.
+            return { root: 'source', version: 1, text: '', client: 7, self: 'person:owner', rights: 'edit' }
+          }
+          throw new Error('this test only refuses')
+        },
+        send() {},
+        onFrame: () => () => undefined,
+        onClose: (cb: (e: unknown) => void) => {
+          closeCbs.add(cb)
+          return () => void closeCbs.delete(cb)
+        },
+        close() {},
+      }
+    },
   }
 })
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -62,6 +87,7 @@ import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { setEditorPreview } from '@/lib/editor/preview-switch'
 import { NOT_FILE_TEXT, fileTextOf } from '@/lib/read-file-text'
 import { FileViewerPane } from './FileViewerPane'
+import { useLiveRefused } from './live-refused'
 
 const FILE = '/home/me/project/.k2/agent/work/progress.html'
 
@@ -73,6 +99,8 @@ beforeAll(async () => {
 beforeEach(() => {
   h.read = { content: PAGE, path: FILE, name: 'k5-cli-progress.html' }
   h.refuse = { type: 'closed', reason: 'declined', retry: false, code: 'protected', message: WHY }
+  h.closeAfterWelcome = null
+  h.end = null
   h.connects = 0
 })
 afterEach(() => {
@@ -102,8 +130,47 @@ describe('a refused live open of an HTML page', () => {
     h.refuse = { type: 'closed', reason: 'declined', retry: false }
     setEditorPreview('code', true)
     renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
-    expect((await screen.findByTestId('file-viewer-live-refused', {}, { timeout: 5000 })).textContent).toBe('This file can’t be edited live: too large, or not text. It opens the usual way.')
+    expect((await screen.findByTestId('file-viewer-live-refused', {}, { timeout: 5000 })).textContent).toBe('Live editing isn’t available for this file here. It opens the usual way.')
     await waitFor(() => expect(pageFrame()?.getAttribute('srcdoc') ?? '').toContain('<h1>k5 CLI progress</h1>'))
+    expect(document.body.textContent).not.toContain('too large, or not text')
+  })
+
+  it('an older server’s refusal with only a code says it in plain words: another workspace opens read only', async () => {
+    h.refuse = { type: 'closed', reason: 'declined', retry: false, code: 'path_escapes' }
+    setEditorPreview('code', true)
+    renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
+    expect((await screen.findByTestId('file-viewer-live-refused', {}, { timeout: 5000 })).textContent).toBe('This file is in another workspace, so it opens read-only here.')
+    await waitFor(() => expect(pageFrame()?.getAttribute('srcdoc') ?? '').toContain('<h1>k5 CLI progress</h1>'))
+    // The words say read only, and it is: the plain editor gets the reason.
+    const { result } = renderHook(() => useLiveRefused(FILE))
+    act(() => result.current.onLiveRefused({ reason: 'declined', code: 'path_escapes' }))
+    expect(result.current.refusedReadOnly).toBe('This file is in another workspace, so it opens read-only here.')
+    act(() => result.current.onLiveRefused({ reason: 'declined', code: 'protected', message: WHY }))
+    expect(result.current.refusedReadOnly).toBeNull()
+  })
+
+  it('the kit’s own report, when the daemon added no words, is what the bar says', async () => {
+    h.refuse = { type: 'closed', reason: 'declined', retry: false, error: { id: 'MPC-E000', message: 'this doc has no `source` text' } }
+    setEditorPreview('code', true)
+    renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
+    expect((await screen.findByTestId('file-viewer-live-refused', {}, { timeout: 5000 })).textContent).toBe('This file can’t be edited live: this doc has no `source` text. It opens the usual way.')
+  })
+})
+
+describe('a live session that closes declined after it opened', () => {
+  it('keeps the page (the plain read, never the empty live text) and says the frame’s own words', async () => {
+    h.refuse = null
+    h.closeAfterWelcome = { type: 'closed', reason: 'declined', retry: false, code: 'some_new_rule', message: 'the doc moved to another engine' }
+    setEditorPreview('code', true)
+    renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
+    await waitFor(() => expect(screen.getByTestId('ed-live-file').dataset.liveState).toBe('live'), { timeout: 5000 })
+    act(() => h.end?.(null))
+    const bar = await screen.findByTestId('file-viewer-live-refused', {}, { timeout: 5000 })
+    expect(bar.textContent).toBe('This file can’t be edited live: the doc moved to another engine. It opens the usual way.')
+    await waitFor(() => expect(screen.queryByTestId('ed-live-file')).toBeNull())
+    await waitFor(() => expect(pageFrame()?.getAttribute('srcdoc') ?? '').toContain('<h1>k5 CLI progress</h1>'))
+    expect(document.body.textContent).not.toContain('too large, or not text')
+    expect(h.connects).toBe(1)
   })
 })
 

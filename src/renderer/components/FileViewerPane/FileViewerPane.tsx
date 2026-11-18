@@ -277,7 +277,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const [liveEpoch, setLiveEpoch] = useState(0)
   const [liveEnded, setLiveEnded] = useState(false)
   const liveCore = useLiveDocCore(room.scope, filePath, liveEpoch)
-  const { refusedWords, onLiveRefused, refusedBar } = useLiveRefused(filePath) // a refused live open: the usual view, and why
+  const { refusedWords, refusedReadOnly, onLiveRefused, refusedBar } = useLiveRefused(filePath) // a declined live open or session: the usual view, and why
   const liveOn = liveCore.status === 'live' && textLock === null && !isDirty && refusedWords === null
   // The "Any other file" core: the usual view, with the panel beside it.
   const anyFile = liveCore.status === 'any-file'
@@ -808,7 +808,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const frameRoute = editorFrameRoute(editorKind, { locked: textLock !== null, liveOn, anyFile, deck: liveCore.status === 'deck' }) // the new editors: no toolbar, no path bar
   const filePreview = (text: string, saved: string) => hasFilePreview(category) && <FilePreview category={category} filePath={filePath} text={text} saved={saved} readError={readError} contentRef={contentRef} />
   const preview = filePreview(editedContent ?? content, content)
-  const roReason = room.readOnly ? 'You can view this file but not edit it' : null
+  const roReason = room.readOnly ? 'You can view this file but not edit it' : refusedReadOnly
   const pdfTab = category === 'pdf' && !anyFile // the PDF tab has its own header (components/Pdf)
   if (pdfTab || (frameRoute !== 'today' && editorKind)) {
     return (
@@ -1104,6 +1104,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
               filePath={filePath}
               core={liveCore.core}
               onCoreOff={onLiveCoreOff}
+              onDeclined={onLiveRefused}
             />
           </Suspense>
         </div>
@@ -1143,7 +1144,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </div>
       ) : (
         <>
-          <div className="flex-1 overflow-hidden" ref={editorContainerRef}>{codeEditor()}</div>
+          <div className="flex-1 overflow-hidden" ref={editorContainerRef}>{codeEditor(undefined, refusedReadOnly !== null)}</div>
           {/* Status bar */}
           <div className="flex items-center gap-3 border-t border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-0.5 flex-shrink-0 text-[10px] text-[var(--color-text-muted)] font-mono">
             <span>Ln {cursorInfo.line}, Col {cursorInfo.col}</span>

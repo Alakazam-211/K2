@@ -6,6 +6,7 @@
 // Kept-pair marks and their "kept both" counts are E4c (K2 Cores' line
 // ranges), so the merged bar says the merge rule without counting pairs.
 
+import { PRODUCT_NAME } from '@/lib/brand'
 import type { SaveNoticeView } from '@/lib/editor/save-model/notices'
 import type { ConnectionState } from '@/lib/live-view/shared/notices'
 import type { LiveDocClose } from './live-doc-source'
@@ -59,23 +60,57 @@ export const readOnlyReason = (owner: string | null): string => `You can view th
 /** The daemon's `message` on a close: on the close itself (a close after
  *  the welcome), or on the refusal's `close` (a `LiveConnectError`: a
  *  refused open, whose own Error message doesn't survive the editor copying
- *  its fields). Without it a refused open loses the daemon's reason. */
+ *  its fields). Without it, the kit's own report's words (`error.message`: a
+ *  refusal the daemon passed on from the kit without words of its own, or
+ *  the editor's own close), so a refused open never loses its reason. */
 export function closeMessage(c: unknown): string | undefined {
-  const o = c as { message?: unknown; close?: { message?: unknown } } | null
-  const m = typeof o?.message === 'string' ? o.message : typeof o?.close?.message === 'string' ? o.close.message : undefined
-  return m && m.trim() ? m : undefined
+  const o = c as { message?: unknown; error?: { message?: unknown }; close?: { message?: unknown; error?: { message?: unknown } } } | null
+  for (const m of [o?.message, o?.close?.message, o?.error?.message, o?.close?.error?.message]) if (typeof m === 'string' && m.trim()) return m
+  return undefined
+}
+
+/** A close's own code (the daemon's), else the kit report's (`error.details.code`: a keyed
+ *  doc's pack declining it at open). */
+function closeCode(c: { code?: unknown; error?: { details?: { code?: unknown } }; close?: { code?: unknown; error?: { details?: { code?: unknown } } } }): string | undefined {
+  for (const v of [c.code, c.close?.code, c.error?.details?.code, c.close?.error?.details?.code]) if (typeof v === 'string' && v) return v
+  return undefined
+}
+
+/** The editor's `closed` event as the views keep it: the reason, the daemon's code
+ *  (else the kit's), the new path, and the words (the daemon's, else the
+ *  kit's). Any server version: a field it didn't send is left out. */
+export function closeInfo(c: unknown): LiveDocClose {
+  const o = (c ?? {}) as { reason?: unknown; path?: unknown }
+  const code = closeCode(c as Parameters<typeof closeCode>[0])
+  const message = closeMessage(c)
+  return {
+    reason: typeof o.reason === 'string' ? o.reason : 'closed',
+    ...(code ? { code } : {}),
+    ...(typeof o.path === 'string' && o.path ? { path: o.path } : {}),
+    ...(message ? { message } : {}),
+  }
 }
 
 const LEAD = 'This file can’t be edited live: '
 const sentence = (s: string): string => (/[.!?]$/.test(s) ? s : `${s}.`)
 
-/** A live open the daemon refused (`closed {declined}`), by its code: each
- *  refusal in its own words, never "too large, or not text" for a rule. The
- *  daemon's own words where the code is broad (`protected`: the vault, git's
- *  folder or the workspace's private `.k2` folder) or one this build doesn't
- *  know; null when the close says nothing (no code, no message). */
+/** A file in another workspace than the one opening it: it opens read only (live-refused.tsx). */
+export const OTHER_WORKSPACE_WORDS = 'This file is in another workspace, so it opens read-only here.'
+const OTHER_WORKSPACE = new Set(['workspace_mismatch', 'path_escapes', 'other_workspace'])
+export const isOtherWorkspace = (code: string | undefined): boolean => code !== undefined && OTHER_WORKSPACE.has(code)
+
+/** A declined close with neither a code this build knows nor any words. */
+export const DECLINED_PLAIN = 'Live editing isn’t available for this file here.'
+
+/** A live open or session the daemon declined (`closed {declined}`), by its
+ *  code: each refusal in its own words, never "too large, or not text" for a
+ *  rule. The codes with words of their own first; then the close's own words
+ *  (the daemon's, else the kit's); then, for an older server that sent a code
+ *  and no words, the code in plain words; null when the close says nothing
+ *  this build can read. */
 export function declinedWords(c: { code?: string; message?: string }): string | null {
   const why = c.message?.trim() || null
+  if (isOtherWorkspace(c.code)) return OTHER_WORKSPACE_WORDS
   switch (c.code) {
     case 'secret':
       return `${LEAD}it looks like it holds a secret.`
@@ -93,14 +128,24 @@ export function declinedWords(c: { code?: string; message?: string }): string | 
       return `${LEAD}its lines end in more than one way (mixed line endings).`
     case 'workspace_not_found':
       return `${LEAD}it isn’t inside a workspace on this server.`
-    case 'workspace_mismatch':
-    case 'path_escapes':
-    case 'other_workspace':
-      return `${LEAD}it’s outside this workspace.`
     case 'board_file':
       return `${LEAD}it’s a Board file.`
+  }
+  if (why) return `${LEAD}${sentence(why)}`
+  switch (c.code) {
+    case 'protected':
+      return `${LEAD}it’s in a protected folder.`
+    case 'stored_as_any_file':
+      return `${LEAD}it was opened as an any-file doc earlier, and stays one.`
+    case 'doc_quarantined':
+    case 'quarantined':
+      return `${LEAD}its stored live copy is damaged, so ${PRODUCT_NAME} set it aside.`
+    case 'engine_mismatch':
+      return `${LEAD}another version of ${PRODUCT_NAME} stored its live copy.`
+    case 'native_engine_missing':
+      return `${LEAD}a newer ${PRODUCT_NAME} stored its live copy.`
     default:
-      return why ? `${LEAD}${sentence(why)}` : null
+      return null
   }
 }
 
@@ -120,7 +165,7 @@ export function closedWords(c: LiveDocClose): string {
     case 'moved':
       return c.path ? `This file was renamed to ${c.path}. Open it there.` : 'This file was renamed. Open it at its new name.'
     case 'declined':
-      return declinedWords(c) ?? 'This file can’t be edited live: too large, or not text.'
+      return declinedWords(c) ?? DECLINED_PLAIN
     case 'not_found':
       return 'This file is gone.'
     case 'auth':

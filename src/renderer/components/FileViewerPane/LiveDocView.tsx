@@ -14,8 +14,10 @@
 //     have removed this person's text): shown with Copy and Dismiss, then
 //     delivered to the daemon (`take_notes`) so no later snapshot repeats them;
 //   - a closed state: the core turned off hands the tab back to today's view
-//     (`onEnded`); any other close (idle, removed, rights lost, renamed...)
-//     says why and offers Reopen.
+//     (`onEnded`); a declined close (before or after the welcome, from any
+//     server version) hands the tab to the plain view too (`onDeclined`), so
+//     it is never blank; any other close (idle, removed, rights lost,
+//     renamed...) says why and offers Reopen.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Extension } from '@codemirror/state'
@@ -30,7 +32,7 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { createDaemonLiveTransport } from '@/lib/docs-live-daemon'
 import type { LiveTransport } from '@/lib/docs-live-transport'
 import { wireLiveHost } from '@/components/LiveEditor/host-wiring'
-import { closeMessage, declinedWords } from '@/lib/editor/live/live-notices'
+import { DECLINED_PLAIN, closeInfo, declinedWords } from '@/lib/editor/live/live-notices'
 
 /** How a Live view ended for good (the editor closed and won't reconnect). */
 export interface LiveDocClosed {
@@ -51,6 +53,9 @@ export interface LiveDocViewProps {
   extensions?: Extension
   /** The file's core was turned off: the tab goes back to today's view. */
   onCoreOff?: (closed: LiveDocClosed) => void
+  /** The daemon (or the editor) declined this file, before or after the
+   *  welcome: the host opens it the plain way and says why. Never a blank tab. */
+  onDeclined?: (closed: LiveDocClosed) => void
   /** Tests: the transport (default: the daemon's, through the dial queue). */
   createTransport?: (scope: ServerScope, doc: { path: string }) => LiveTransport
 }
@@ -90,7 +95,7 @@ export function closedText(c: LiveDocClosed): string {
     case 'moved':
       return c.path ? `This file was renamed to ${c.path}. Open it there.` : 'This file was renamed. Open it at its new name.'
     case 'declined':
-      return declinedWords(c) ?? 'This file can’t be edited live (too large, or not text K2 can edit live).'
+      return declinedWords(c) ?? DECLINED_PLAIN
     case 'not_found':
       return 'This file is gone.'
     case 'auth':
@@ -107,7 +112,7 @@ export function noteText(n: RemovedTextNote): string {
   return n.cells.map((c) => c.yours).join('')
 }
 
-export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, createTransport }: LiveDocViewProps): React.JSX.Element {
+export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, onDeclined, createTransport }: LiveDocViewProps): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null)
   const transport = useRef<LiveTransport | null>(null)
   // The editor on screen now. The undo keys always go to this one, never to
@@ -123,6 +128,8 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
   const [copied, setCopied] = useState<string | null>(null)
   const onCoreOffRef = useRef(onCoreOff)
   onCoreOffRef.current = onCoreOff
+  const onDeclinedRef = useRef(onDeclined)
+  onDeclinedRef.current = onDeclined
 
   useEffect(() => {
     const el = host.current
@@ -143,7 +150,9 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
         ...(extensions ? { extensions } : {}),
       })
     } catch (e) {
-      setClosed({ reason: 'declined', code: e instanceof Error ? e.message : String(e) })
+      const info: LiveDocClosed = { reason: 'declined', message: e instanceof Error ? e.message : String(e) }
+      setClosed(info)
+      onDeclinedRef.current?.(info)
       return
     }
     editor.current = ed
@@ -159,15 +168,10 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
       ed.on('roster', (entries) => setOthers(Math.max(0, entries.length - 1))),
       ed.on('note', (n) => setNotes((prev) => [...prev, n])),
       ed.on('closed', (c) => {
-        const message = closeMessage(c)
-        const info: LiveDocClosed = {
-          reason: c.reason,
-          ...(c.code ? { code: c.code } : {}),
-          ...(c.path ? { path: c.path } : {}),
-          ...(message ? { message } : {}),
-        }
+        const info: LiveDocClosed = closeInfo(c)
         setClosed(info)
         if (info.code === 'core_off') onCoreOffRef.current?.(info)
+        else if (info.reason === 'declined') onDeclinedRef.current?.(info)
       }),
     ]
     return () => {

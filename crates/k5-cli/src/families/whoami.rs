@@ -31,10 +31,12 @@
 //!      object with `live` (`'%d'`).
 //! 5. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
-//! A request with no answer is the transport's line and exit 1; nothing
-//! accepted the connection is exit 7 with nothing printed (curl's code,
-//! which `set -e` passes on); a port that is no port is exit 3 with
-//! nothing printed (curl's code for a URL it rejects).
+//! A request with no answer is the transport's line and exit 1; any other
+//! failure ends with the code the shell's call returns, with nothing
+//! printed, as `set -e` passes curl's code on
+//! ([`crate::transport::Error::curl_code`]: 7 nothing listening, 56 a
+//! reset, 75 a failure that is this machine's, and so on). A port that is
+//! no port is curl's 3 (or 75 when `TMPDIR` can't be used).
 //!
 //! Where the shell's Python itself fails (an answer that is JSON but not
 //! an object, or a `siblings.live` that is no number), it prints a
@@ -49,7 +51,9 @@ use crate::out::json::{self, Text, Value};
 use crate::out::{self, py};
 use crate::passport;
 use crate::prelude::{self, Closing};
+use crate::transport::client::{tmpdir_unusable, LOCAL_TRANSPORT_DENIED};
 use crate::transport::encode::quote_bytes;
+use crate::transport::wire::curl;
 use crate::transport::{Call, Error};
 use k2_client::env_names;
 use std::ffi::OsString;
@@ -141,9 +145,10 @@ fn run_with(args: &[OsString], mut settings: Settings) -> Exit {
             return Exit::Error;
         }
     };
-    // The gate passed, so there is a port text and a token.
+    // The gate passed, so there is a port text and a token. curl refuses a
+    // port that is no port (3), and `_cli_curl` reads that as any failure.
     let Some(port) = settings.port_text.as_deref().and_then(curl_port) else {
-        return Exit::Refused;
+        return Exit::from_curl(if tmpdir_unusable() { LOCAL_TRANSPORT_DENIED } else { curl::URL_MALFORMAT });
     };
     settings.port = Some(port);
     let mut client = match settings.client(passport::current(args).would_refuse()) {
@@ -171,8 +176,7 @@ fn run_with(args: &[OsString], mut settings: Settings) -> Exit {
             out::stderr_line(&n.to_string());
             Exit::Error
         }
-        Err(Error::Unreachable { .. }) => Exit::DaemonUnreachable,
-        Err(_) => Exit::Error,
+        Err(e) => Exit::from_curl(e.curl_code()),
     };
     closing.flush(&mut client, exit);
     exit

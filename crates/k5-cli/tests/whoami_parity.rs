@@ -113,7 +113,7 @@ impl Rig {
         if let Some(path) = std::env::var_os("PATH") {
             cmd.env("PATH", path);
         }
-        let tmp = self.dir.join(if bash { "tmp-bash" } else { "tmp-rust" });
+        let tmp = if case.no_tmpdir { self.dir.join("no-tmp") } else { self.dir.join(if bash { "tmp-bash" } else { "tmp-rust" }) };
         cmd.env("HOME", &self.home).env("TMPDIR", &tmp).current_dir(case.cwd.as_deref().unwrap_or(&self.proj));
         let env: Vec<(String, String)> = case.env.iter().map(|(k, v)| (k.to_string(), v.replace("{sock}", &self.stub.sock.to_string_lossy()).replace("{secrets}", &self.secrets.to_string_lossy()))).collect();
         cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
@@ -227,6 +227,8 @@ struct Case {
     /// Run before each side (files the case needs).
     setup: fn(&Rig),
     cwd: Option<PathBuf>,
+    /// TMPDIR names a folder that isn't there.
+    no_tmpdir: bool,
     /// Bash's exit code and request count: the case proves what it says.
     code: i32,
     requests: usize,
@@ -254,6 +256,7 @@ fn case(name: &'static str, args: &'static [&'static str], env: &[(&'static str,
         replies,
         setup,
         cwd: None,
+        no_tmpdir: false,
         code,
         requests,
         compare: Compare::Exact,
@@ -397,12 +400,34 @@ fn whoami_answers_as_the_shell_does() {
 }
 
 /// Nothing accepted the connection: exit 7, nothing printed, after the
-/// tries a second apart.
+/// tries a second apart, TMPDIR or not (a refused connect is never the
+/// machine's).
 #[test]
 fn whoami_with_no_daemon() {
     let rig = Rig::new("dead");
-    let c = Case { env: vec![("K2_PORT", dead_port())], ..case("nothing listens", &[], &[], vec![], |r| r.owner_on_disk(), 7, 0) };
-    check(&rig, &c);
+    for no_tmpdir in [false, true] {
+        let c = Case { env: vec![("K2_PORT", dead_port())], no_tmpdir, ..case("nothing listens", &[], &[], vec![], |r| r.owner_on_disk(), 7, 0) };
+        check(&rig, &c);
+    }
+}
+
+/// The other transport failures end with curl's code, as `set -e` passes
+/// it on, and print nothing: a reset is 56; with TMPDIR unusable a failure
+/// is this machine's, `_cli_curl`'s 75, a port that is no port too.
+#[test]
+fn whoami_with_a_broken_exchange() {
+    let rig = Rig::new("broken");
+    let no_tmp = |c: Case| Case { no_tmpdir: true, ..c };
+    let v = vec![
+        case("a reset (56)", &[], &[], vec![Reply::Reset], owner_and_port, 56, 1),
+        case("a reset, --json (56)", &["--json"], &[], vec![Reply::Reset], owner_and_port, 56, 1),
+        no_tmp(case("TMPDIR unusable: a reset is 75", &[], &[], vec![Reply::Reset], owner_and_port, 75, 1)),
+        no_tmp(case("TMPDIR unusable: a port that is no port is 75", &[], &[("K2_PORT", "41o0")], vec![], |r| r.owner_on_disk(), 75, 0)),
+        no_tmp(case("TMPDIR unusable: an answer is an answer", &[], &[], vec![ok(FULL)], owner_and_port, 0, 1)),
+    ];
+    for c in v {
+        check(&rig, &c);
+    }
 }
 
 /// git: the 0.40.4 rename line while `.k2so/` files are still in git's

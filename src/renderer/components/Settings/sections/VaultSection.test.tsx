@@ -272,6 +272,28 @@ describe('VaultSection', () => {
     expect(screen.getByTestId('vault-recovery-banner')).toBeTruthy()
   })
 
+  it('asks which owner login when the server has more than one, and sends it with the password', async () => {
+    postHandler = (route) => {
+      if (route === 'vault/confirm/start') return { methods: ['owner-login-password'], expiresIn: 60, server: 'box.k2.dev', login: null, ownerLogins: 2 }
+      if (route === 'vault/confirm/finish') return { token: 'tok-p', expiresIn: 60 }
+      if (route === 'vault/recovery/show-once') return { id: 'rc-3', phrase: 'a b c d e f g h i j k l m n o p q r s t u v w x', checkWords: [3, 11, 20], recipient: 'age1y' }
+      throw new Error(`unexpected POST ${route}`)
+    }
+    await renderPage()
+    fireEvent.click(screen.getByTestId('vault-recovery-open'))
+    fireEvent.click(screen.getByTestId('vault-recovery-start'))
+    const user = (await screen.findByTestId('vault-recovery-password-owner-login')) as HTMLInputElement
+    const pw = screen.getByTestId('vault-recovery-password') as HTMLInputElement
+    const confirm = within(screen.getByTestId('dialog-foot')).getByRole('button', { name: 'Confirm' }) as HTMLButtonElement
+    fireEvent.change(pw, { target: { value: 'correct horse battery' } })
+    expect(confirm.disabled).toBe(true)
+    fireEvent.change(user, { target: { value: ' lee ' } })
+    expect(confirm.disabled).toBe(false)
+    fireEvent.click(confirm)
+    await screen.findByTestId('vault-recovery-phrase')
+    expect(posts[1].body).toEqual({ action: 'recovery-setup', method: 'owner-login-password', label: 'recovery key', username: 'lee', password: 'correct horse battery' })
+  })
+
   it('groups Server / each workspace / chats; says when agents can read it; warns on mixed scripts', async () => {
     await renderPage()
     const groups = screen.getAllByTestId('vault-group').map((g) => g.getAttribute('data-group'))

@@ -186,11 +186,16 @@ type Ask =
  *  the typed one. The vault's first-setup steps (recovery-setup) are offered
  *  only this computer's own user check: the Mac's sheet, Windows Hello, an
  *  owner login's sign-in password on a Linux server, or a Connect login's own
- *  password. */
+ *  password. A Linux server with more than one owner login doesn't say which
+ *  (`login` is empty): the person types the owner login's name too
+ *  (`needsUser`), and `hasPw` waits for both. */
 function useVaultConfirm(action: string, secretId: string | undefined, label: string) {
   const [ask, setAsk] = useState<Ask>({ step: 'idle' })
   const pwRef = useRef<HTMLInputElement>(null)
+  const userRef = useRef<HTMLInputElement>(null)
   const [hasPw, setHasPw] = useState(false)
+  const [hasUser, setHasUser] = useState(false)
+  const needsUser = ask.step === 'password' && ask.method === 'owner-login-password' && !ask.who.login
   const finish = async (method: string, password?: string, username?: string): Promise<string> => {
     const { token } = await vaultApi.confirmFinish({
       action,
@@ -228,13 +233,14 @@ function useVaultConfirm(action: string, secretId: string | undefined, label: st
     const pw = el.value
     el.value = ''
     setHasPw(false)
-    const login = ask.method === 'owner-login-password' ? (ask.who.login ?? undefined) : undefined
+    const typed = userRef.current?.value.trim() || undefined
+    const login = ask.method === 'owner-login-password' ? (ask.who.login ?? typed) : undefined
     const token = await finish(ask.method, pw, login)
     setAsk({ step: 'idle' })
     return token
   }
   const reset = (): void => setAsk({ step: 'idle' })
-  return { ask, begin, withPassword, reset, pwRef, hasPw, setHasPw }
+  return { ask, begin, withPassword, reset, pwRef, userRef, needsUser, setHasUser, hasPw: hasPw && (!needsUser || hasUser), setHasPw }
 }
 
 type Confirm = ReturnType<typeof useVaultConfirm>
@@ -247,7 +253,7 @@ function ConfirmStep({ c, testId, other }: { c: Confirm; testId: string; other?:
   if (c.ask.step === 'mac') return <Waiting text="Confirm on your Mac: use Touch ID or your Mac’s password in the window that opened." />
   if (c.ask.step === 'pc') return <Waiting text="Confirm on this PC: use Windows Hello or your Windows password in the window that opened." />
   if (c.ask.step === 'password') {
-    return (
+    const field = (
       <Field
         label={confirmPasswordLabel(c.ask.method, c.ask.who)}
         hint="K2 checks it once and doesn’t keep it."
@@ -265,6 +271,25 @@ function ConfirmStep({ c, testId, other }: { c: Confirm; testId: string; other?:
           onChange={(e) => c.setHasPw(e.currentTarget.value !== '')}
         />
       </Field>
+    )
+    if (!c.needsUser) return field
+    return (
+      <>
+        <Field label="Which owner login" hint="This server has more than one owner login: type the one whose password you’ll enter." htmlFor={`${id}-user`}>
+          <Input
+            id={`${id}-user`}
+            ref={c.userRef}
+            type="text"
+            name="username"
+            autoComplete="username"
+            autoFocus
+            data-testid={`${testId}-owner-login`}
+            className={FIELD}
+            onChange={(e) => c.setHasUser(e.currentTarget.value.trim() !== '')}
+          />
+        </Field>
+        {field}
+      </>
     )
   }
   if (c.ask.step === 'none') {

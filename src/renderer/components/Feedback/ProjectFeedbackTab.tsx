@@ -132,6 +132,7 @@ export function ProjectFeedbackTab({
       error={error}
       revision={revision}
       onMutated={onMutated}
+      onRetry={loadList}
     />
   )
 }

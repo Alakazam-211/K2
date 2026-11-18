@@ -83,6 +83,8 @@ import { readComposeFiles } from '@/lib/prompt-stash/compose'
 import { ThreadRoundButton } from '@/components/Thread/ThreadZenKit'
 import { primaryScope } from '@/kessel/server-scope'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
+import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
+import { TICKET_DISCUSSION_DEFAULT_WIDTH } from '@/lib/ticket-board-chrome'
 import {
   TICKET_ATTACHMENTS_FEATURE,
   askingSessionWakeAction,
@@ -236,6 +238,9 @@ function useAskingSession(args: {
 }
 
 export function TicketAgentRail({
+  width = TICKET_DISCUSSION_DEFAULT_WIDTH,
+  drawer = false,
+  onHide,
   feedbackId,
   item,
   error,
@@ -249,6 +254,13 @@ export function TicketAgentRail({
   sessionKind,
   canonicalSessionId,
 }: {
+  /** Its width, from the board's width rules (lib/ticket-board-chrome). */
+  width?: number
+  /** Drawn as a drawer over the report's right edge (too narrow to sit
+   *  beside it). */
+  drawer?: boolean
+  /** Shows » in its top row, closing it (the drawer). */
+  onHide?: () => void
   feedbackId: string
   /** The loaded ticket (null while loading). */
   item: FeedbackShow | null
@@ -273,12 +285,16 @@ export function TicketAgentRail({
   return (
     <aside
       data-testid="ticket-agent-rail"
-      className="flex flex-col min-h-0 border-l border-[var(--color-border)] flex-shrink-0 bg-[var(--color-bg)]"
-      style={{ width: 'min(640px, calc(var(--k2-vw)*0.48))' }}
+      data-ticket-discussion-drawer={drawer ? '' : undefined}
+      aria-label="Discussion"
+      className={`flex flex-col min-h-0 border-l border-[var(--color-border)] flex-shrink-0 bg-[var(--color-bg)] ${
+        drawer ? 'absolute inset-y-0 right-0 z-30 [box-shadow:var(--shadow-3)]' : ''
+      }`}
+      style={{ width }}
     >
-      {terminal && (
-        <div role="tablist" className="flex items-center gap-1 px-3 border-b border-[var(--color-border)] flex-shrink-0">
-          {(['thread', 'agent'] as const).map((t) => (
+      {(terminal || onHide) && (
+        <div role={terminal ? 'tablist' : undefined} className="flex items-center gap-1 px-3 border-b border-[var(--color-border)] flex-shrink-0">
+          {terminal && (['thread', 'agent'] as const).map((t) => (
             <button
               key={t}
               type="button"
@@ -295,6 +311,11 @@ export function TicketAgentRail({
               {t === 'thread' ? 'Thread' : 'Agent'}
             </button>
           ))}
+          {onHide && (
+            <span className="ml-auto flex self-stretch">
+              <DrawerToggleButton side="right" placement="drawer" name="discussion" testId="ticket-discussion-hide" onToggle={onHide} />
+            </span>
+          )}
         </div>
       )}
 
@@ -326,6 +347,12 @@ export function TicketAgentRail({
       )}
     </aside>
   )
+}
+
+/** Keyboard focus is in the board's ticket list. */
+function keysInTicketList(): boolean {
+  const el = document.activeElement
+  return el instanceof HTMLElement && el.closest('[data-ticket-listbox]') !== null
 }
 
 // ── Thread tab (the restored ThreadTab) ──────────────────────────────────
@@ -380,6 +407,9 @@ export function ThreadTab({
     if (!item || error) return
     if (focusedForTicketRef.current === ticketId) return
     focusedForTicketRef.current = ticketId
+    // Opened from the keyboard in the list (↑ / ↓ open as they move): the
+    // keys stay in the list, so the next ↓ opens the next ticket.
+    if (keysInTicketList()) return
     let cancelled = false
     let innerRaf = 0
     const outerRaf = window.requestAnimationFrame(() => {
@@ -807,7 +837,7 @@ function AgentTab({
         <button
           type="button"
           onClick={retry}
-          className="px-3 py-1.5 text-[11px] font-medium bg-white/[0.06] text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)] transition-colors cursor-pointer"
+          className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-wash-1)] text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)] transition-colors cursor-pointer"
         >
           Retry
         </button>

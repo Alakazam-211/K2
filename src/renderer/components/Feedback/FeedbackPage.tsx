@@ -53,6 +53,8 @@ export interface TicketsPageData {
   error: string | null
   revision: number
   onMutated(): void
+  /** Load the list again after it failed. */
+  retry(): Promise<void>
   projects: ReturnType<typeof useProjectsStore.getState>['projects']
   workspaceFilter: string
   setWorkspaceFilter(value: string): void
@@ -142,7 +144,7 @@ export function useTicketsPageData(active: boolean): TicketsPageData {
     void useFeedbackStore.getState().refreshWaitingCount()
   }, [loadList])
 
-  return { rows, scoped, error, revision, onMutated, projects, workspaceFilter, setWorkspaceFilter, hasUnlinked }
+  return { rows, scoped, error, revision, onMutated, retry: loadList, projects, workspaceFilter, setWorkspaceFilter, hasUnlinked }
 }
 
 /** The board (list + filter + detail) over `useTicketsPageData`. */
@@ -154,6 +156,7 @@ export function TicketsPageBoardView({ data }: { data: TicketsPageData }): React
       error={data.error}
       revision={data.revision}
       onMutated={data.onMutated}
+      onRetry={data.retry}
       extraFilter={
         <WorkspaceFilterDropdown
           projects={data.projects}

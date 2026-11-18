@@ -1,15 +1,73 @@
 // Feedback F2 — the kind / status / priority badges shared by the list
-// rows and the item view (AgentOps StatusBadge idiom).
+// rows and the item view.
+//
+// A status reads as the phone shows it: a dot in the status colour and the
+// status word in that colour beside it, no tinted box (the old 9 px
+// uppercase chips on a 10 % tint were too small to read and fell under
+// 4.5:1 on the light looks).
 
 import React from 'react'
-import type { FeedbackKind, FeedbackStatus } from './feedback-api'
+import { statusLabel, type FeedbackKind, type FeedbackStatus } from './feedback-api'
+
+/** A status's word colour (waiting = needs you, needs discussion orange,
+ *  answered green, planned accent, closed muted). Each reads at 4.5:1 or
+ *  more on the cards in every look: the text-grade status tokens, and needs
+ *  discussion's orange taken toward the text colour, which alone falls to
+ *  about 3.3:1 on Paper. */
+export function statusTextClass(status: FeedbackStatus): string {
+  return status === 'waiting'
+    ? 'text-[var(--color-status-warn-text)]'
+    : status === 'needs_discussion'
+      ? 'text-[color-mix(in_srgb,var(--color-status-working-soft)_70%,var(--color-text-primary))]'
+      : status === 'answered'
+        ? 'text-[var(--color-status-ok-soft)]'
+        : status === 'planned'
+          ? 'text-[var(--color-accent-text)]'
+          : 'text-[var(--color-text-muted)]'
+}
+
+/** A status's dot colour (the mark beside the word, the rail's dot). */
+export function statusDotColor(status: FeedbackStatus): string {
+  return status === 'waiting'
+    ? 'var(--color-status-needs-you)'
+    : status === 'needs_discussion'
+      ? 'var(--color-status-working-soft)'
+      : status === 'answered'
+        ? 'var(--color-status-ok-soft)'
+        : status === 'planned'
+          ? 'var(--color-accent)'
+          : 'var(--color-text-muted)'
+}
+
+/** The status's dot: a small round mark in the status colour. */
+export function StatusDot({ status, className = '' }: { status: FeedbackStatus; className?: string }): React.JSX.Element {
+  return (
+    <span
+      aria-hidden
+      data-status-dot={status}
+      className={`inline-block flex-shrink-0 w-2 h-2 rounded-[var(--radius-pill)] ${className}`}
+      style={{ background: statusDotColor(status) }}
+    />
+  )
+}
+
+/** Dot + word, in the status colour: the card's and the header's status. */
+export function StatusMark({ status, children }: { status: FeedbackStatus; children?: React.ReactNode }): React.JSX.Element {
+  return (
+    <span className={`inline-flex items-center gap-1.5 type-hint font-medium ${statusTextClass(status)}`}>
+      <StatusDot status={status} />
+      <span className="truncate">{statusLabel(status)}</span>
+      {children}
+    </span>
+  )
+}
 
 export function KindBadge({ kind }: { kind: FeedbackKind }): React.JSX.Element {
   const cls =
     kind === 'approval'
       ? 'bg-[color-mix(in_srgb,var(--color-status-needs-you)_10%,transparent)] text-[var(--color-status-warn-text)]'
       : kind === 'fyi'
-        ? 'bg-white/[0.06] text-[var(--color-text-muted)]'
+        ? 'bg-[var(--color-wash-2)] text-[var(--color-text-muted)]'
         : 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
   return (
     <span className={`inline-flex items-center px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${cls}`}>
@@ -18,23 +76,11 @@ export function KindBadge({ kind }: { kind: FeedbackKind }): React.JSX.Element {
   )
 }
 
+/** A status that can't be changed here (an unlinked ticket's header). */
 export function StatusBadge({ status }: { status: FeedbackStatus }): React.JSX.Element {
-  // waiting (on you) = needs you; needs_discussion = orange (working-soft,
-  // the previous waiting color); planned = accent; answered = green.
-  const cls =
-    status === 'waiting'
-      ? 'bg-[color-mix(in_srgb,var(--color-status-needs-you)_12%,transparent)] text-[var(--color-status-warn-text)]'
-      : status === 'needs_discussion'
-        ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
-        : status === 'answered'
-          ? 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)] text-[var(--color-status-ok-soft)]'
-          : status === 'planned'
-            ? 'bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-accent)]'
-            : 'bg-white/[0.06] text-[var(--color-text-muted)]'
-  const label = status === 'needs_discussion' ? 'needs discussion' : status
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${cls}`}>
-      {label}
+    <span data-testid="ticket-status-badge" className="inline-flex items-center">
+      <StatusMark status={status} />
     </span>
   )
 }

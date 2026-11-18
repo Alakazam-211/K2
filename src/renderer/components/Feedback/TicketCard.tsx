@@ -30,36 +30,11 @@ import {
   type FeedbackStatus,
   type SelectableStatus,
 } from './feedback-api'
-import { FileCountBadge, HtmlBriefBadge } from './badges'
+import { FileCountBadge, HtmlBriefBadge, StatusMark, statusDotColor } from './badges'
 import type { FilterableWorkspace } from './WorkspaceFilterDropdown'
 
-/** StatusBadge's palette (waiting = needs you, needs discussion orange,
- *  answered green, planned accent, closed muted), shared by the chip and the
- *  rail dot. */
-export function statusChipClass(status: FeedbackStatus): string {
-  return status === 'waiting'
-    ? 'bg-[color-mix(in_srgb,var(--color-status-needs-you)_12%,transparent)] text-[var(--color-status-warn-text)]'
-    : status === 'needs_discussion'
-      ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
-      : status === 'answered'
-        ? 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)] text-[var(--color-status-ok-soft)]'
-        : status === 'planned'
-          ? 'bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-accent)]'
-          : 'bg-white/[0.06] text-[var(--color-text-muted)]'
-}
-
-/** Solid dot color per status (collapsed rail). */
-export function statusDotColor(status: FeedbackStatus): string {
-  return status === 'waiting'
-    ? 'var(--color-status-needs-you)'
-    : status === 'needs_discussion'
-      ? 'var(--color-status-working-soft)'
-      : status === 'answered'
-        ? 'var(--color-status-ok-soft)'
-        : status === 'planned'
-          ? 'var(--color-accent)'
-          : 'var(--color-text-muted)'
-}
+// The status colours live with the badges; re-exported for callers.
+export { statusDotColor, statusTextClass } from './badges'
 
 function CheckGlyph(): React.JSX.Element {
   return (
@@ -128,26 +103,42 @@ export function CardStatusDropdown({
   }
 
   return (
-    // stopPropagation everywhere — the status control must not select the card.
-    <div ref={menu.anchorRef} className="relative flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+    // stopPropagation everywhere — the status control must not select the
+    // card. The card is the list's option, so the chip is a pointer
+    // shortcut out of the tab order (no control nested in a control); the
+    // keyboard changes status from the open ticket's header.
+    <div
+      ref={menu.anchorRef}
+      className="relative flex-shrink-0 min-w-0"
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
       <button
         type="button"
         disabled={busy}
+        tabIndex={-1}
         data-testid="card-status"
+        data-status={row.status}
         onClick={() => setOpen((o) => !o)}
-        className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide cursor-pointer disabled:opacity-50 ${statusChipClass(row.status)}`}
+        className="inline-flex items-center max-w-full cursor-pointer disabled:opacity-50"
         title="Change status"
       >
-        {statusLabel(row.status)}
-        <svg
-          className={`w-2 h-2 transition-transform ${open ? 'rotate-180' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2.5}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
+        <StatusMark status={row.status}>
+          {/* The chevron shows on hover or focus, and while the menu is open. */}
+          <svg
+            aria-hidden
+            data-card-status-chevron=""
+            className={`w-2 h-2 flex-shrink-0 transition-[opacity,transform] ${
+              open ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
+            }`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2.5}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </StatusMark>
       </button>
 
       {open && menu.portal(
@@ -215,7 +206,7 @@ function CardAssigneeInitials({ assignees }: { assignees: readonly string[] | nu
       <span
         data-testid="card-assignee"
         data-unassigned="true"
-        className="flex-shrink-0 italic opacity-60"
+        className="flex-shrink-0 type-hint text-[var(--color-text-muted)]"
         title="No one is assigned. Assign with k2 tickets assign <id> <user>."
       >
         Unassigned
@@ -265,12 +256,18 @@ function clickWasTextSelection(): boolean {
   return !!sel && !sel.isCollapsed && sel.toString().length > 0
 }
 
+/** A card in the list: one option of the list's listbox. The list moves
+ *  the keyboard between cards (one card is in the tab order at a time; the
+ *  arrow keys move and open, Enter or Space opens). Closed and planned cards
+ *  are not dimmed: their section and status colour say it, and dimmed text
+ *  fell under 4.5:1. */
 export function FeedbackCard({
   row,
   nowSec,
   selected,
   onSelect,
   onMutated,
+  tabStop = false,
 }: {
   row: FeedbackListRow
   /** Kept for callers; the compact card no longer shows the workspace. */
@@ -279,24 +276,29 @@ export function FeedbackCard({
   selected: boolean
   onSelect: () => void
   onMutated: () => void
+  /** This card is the list's one stop in the tab order. */
+  tabStop?: boolean
 }): React.JSX.Element {
-  const dimmed = row.status === 'resolved' || row.status === 'dismissed' || row.status === 'planned'
   const unlinked = isUnlinked(row)
   const details = unlinked ? unlinkedDetails(row) : null
   const summary = cardSummary(row.body)
   return (
     <div
+      role="option"
+      aria-selected={selected}
+      tabIndex={tabStop ? 0 : -1}
+      data-k2-focus=""
       data-testid="ticket-card"
       data-ticket-id={row.id}
       onClick={() => {
         if (clickWasTextSelection()) return
         onSelect()
       }}
-      className={`border bg-[var(--color-bg-surface)] px-2.5 py-2 cursor-pointer transition-colors ${
+      className={`group border bg-[var(--color-bg-surface)] px-2.5 py-2 cursor-pointer outline-none transition-colors ${
         selected
           ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
           : 'border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
-      } ${dimmed && !selected ? 'opacity-60' : ''}`}
+      }`}
     >
       <p
         data-testid="card-title"
@@ -363,9 +365,10 @@ export function TicketRailItem({
       data-ticket-id={row.id}
       onClick={onSelect}
       title={`${row.title} — ${row.agentName} · ${statusLabel(row.status)}`}
-      aria-label={row.title}
+      aria-label={`${row.title}, ${statusLabel(row.status)}`}
+      aria-current={selected ? 'true' : undefined}
       className={`relative flex items-center justify-center w-9 h-9 flex-shrink-0 cursor-pointer transition-colors ${
-        selected ? 'bg-[var(--color-accent)]/20 ring-1 ring-[var(--color-accent)]' : 'hover:bg-white/[0.06]'
+        selected ? 'bg-[var(--color-accent)]/20 ring-1 ring-[var(--color-accent)]' : 'hover:bg-[var(--color-wash-1)]'
       }`}
     >
       {workspace && !isUnlinked(row) ? (
@@ -395,13 +398,13 @@ export function TicketRailItem({
   )
 }
 
-export function SectionHeader({ label, count }: { label: string; count: number }): React.JSX.Element {
+export function SectionHeader({ label, count, id }: { label: string; count: number; id?: string }): React.JSX.Element {
   return (
     <div className="flex items-center gap-2 px-1 pt-3 pb-1">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+      <span id={id} className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
         {label}
       </span>
-      <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums opacity-70">{count}</span>
+      <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums">{count}</span>
     </div>
   )
 }

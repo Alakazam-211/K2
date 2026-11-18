@@ -183,7 +183,9 @@ describe('FeedbackCard — assignee on the bottom row', () => {
     const a = screen.getByTestId('card-assignee')
     expect(a.textContent).toBe('Unassigned')
     expect(a.getAttribute('data-unassigned')).toBe('true')
-    expect(a.className).toContain('opacity-60')
+    // Muted, never faded (opacity fell under 4.5:1).
+    expect(a.className).toContain('text-[var(--color-text-muted)]')
+    expect(a.className).not.toContain('opacity')
     expect(screen.queryByTestId('card-assignee-initial')).toBeNull()
   })
 
@@ -203,7 +205,10 @@ describe('FeedbackItemView — brief', () => {
     const body = await screen.findByText('Short summary.')
     const box = body.closest('div.mb-3')
     expect(box).not.toBeNull()
-    expect(box!.className).toBe('mb-3 px-3 py-2 bg-white/[0.03] border border-[var(--color-border)]')
+    // The summary's resting fill is the wash token (white washes vanish on
+    // the light looks).
+    expect(box!.className).toContain('bg-[var(--color-wash-2)]')
+    expect(box!.className).not.toContain('bg-white')
     expect(screen.queryByTestId('brief')).toBeNull()
     expect(screen.queryByTestId('brief-loading')).toBeNull()
     expect(screen.queryByTestId('html-badge')).toBeNull()

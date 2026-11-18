@@ -46,15 +46,21 @@ import {
   type FeedbackShow,
   type FeedbackStatus,
 } from './feedback-api'
-import { HtmlBriefBadge, PriorityBadge, StatusBadge } from './badges'
+import { HtmlBriefBadge, PriorityBadge, StatusBadge, StatusMark } from './badges'
 import { BriefFrame } from './BriefFrame'
-import { cardAssigneeNames, statusChipClass } from './TicketCard'
+import { cardAssigneeNames } from './TicketCard'
 import { TicketAgentRail } from './TicketAgentRail'
 import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import { primaryScope } from '@/kessel/server-scope'
-import { readTicketBoardChrome, writeTicketBoardChrome } from '@/lib/ticket-board-chrome'
+import {
+  readTicketBoardChrome,
+  ticketBoardLayout,
+  writeTicketBoardChrome,
+  type TicketDiscussionMode,
+} from '@/lib/ticket-board-chrome'
+import { useElementWidth } from '@/hooks/useElementWidth'
 
 interface FeedbackItemViewProps {
   id: string
@@ -69,6 +75,14 @@ interface FeedbackItemViewProps {
   onMutated: () => void
   /** Rendered inside its own window: no "Open in window" button. */
   inOwnWindow?: boolean
+  /** Whether the person wants the discussion shown, when the board keeps
+   *  it (else this view keeps it, remembered per window). */
+  chatOpen?: boolean
+  onChatOpenChange?: (open: boolean) => void
+  /** Where the board's width rules put the discussion: beside the report,
+   *  as a drawer over its right edge, or off. Without it (the ticket's own
+   *  window) this view measures itself by the same rules. */
+  discussion?: { mode: TicketDiscussionMode; width: number }
 }
 
 /** Ticket id → its HTML brief. Briefs never change after filing (H8), so
@@ -102,17 +116,34 @@ export function FeedbackItemView({
   revision,
   onMutated,
   inOwnWindow = false,
+  chatOpen,
+  onChatOpenChange,
+  discussion,
 }: FeedbackItemViewProps): React.JSX.Element {
   const [item, setItem] = useState<FeedbackShow | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [reassignOpen, setReassignOpen] = useState(false)
-  // Open by default; remembered per window (ticket-board-chrome).
-  const [railOpen, setRailOpenState] = useState(() => readTicketBoardChrome().chatOpen)
-  const setRailOpen = useCallback((open: boolean) => {
-    setRailOpenState(open)
-    writeTicketBoardChrome({ chatOpen: open })
-  }, [])
+  // Open by default; remembered per window (ticket-board-chrome). The board
+  // keeps it when it draws this view.
+  const [ownRailOpen, setOwnRailOpen] = useState(() => readTicketBoardChrome().chatOpen)
+  const railOpen = chatOpen ?? ownRailOpen
+  const setRailOpen = useCallback(
+    (open: boolean) => {
+      if (onChatOpenChange) {
+        onChatOpenChange(open)
+        return
+      }
+      setOwnRailOpen(open)
+      writeTicketBoardChrome({ chatOpen: open })
+    },
+    [onChatOpenChange],
+  )
+  // The discussion as a drawer (too narrow to sit beside the report): it
+  // opens from its tab and closes from its » or Esc.
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [wrapEl, setWrapEl] = useState<HTMLDivElement | null>(null)
+  const ownWidth = useElementWidth(discussion ? null : wrapEl)
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -193,6 +224,35 @@ export function FeedbackItemView({
     unlinked || workspaceName.trim().toLowerCase() !== (view.agentName ?? '').trim().toLowerCase()
   const canOpenWindow = !inOwnWindow && !isWebClient()
   const showRail = railOpen && !unlinked
+  // Where the discussion goes: the board's width rules, or this view's own
+  // (the ticket window: no list, the same rules).
+  const placed =
+    discussion ??
+    (() => {
+      const l = ticketBoardLayout({ width: ownWidth, hasList: false, listWidth: 0, collapsed: false, ticketOpen: true, chatOpen: showRail })
+      return { mode: l.discussion, width: l.discussionWidth }
+    })()
+  const discussionMode: TicketDiscussionMode = showRail ? placed.mode : 'off'
+  const asDrawer = discussionMode === 'drawer'
+  const discussionShown = discussionMode === 'side' || (asDrawer && drawerOpen)
+  const toggleDiscussion = (): void => {
+    if (asDrawer) setDrawerOpen(!drawerOpen)
+    else setRailOpen(!railOpen)
+  }
+
+  // Esc closes the drawer first (the board's Esc then closes the ticket).
+  useEffect(() => {
+    if (!(asDrawer && drawerOpen)) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      if ((e.target as HTMLElement | null)?.tagName === 'TEXTAREA') return
+      e.preventDefault()
+      e.stopPropagation()
+      setDrawerOpen(false)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [asDrawer, drawerOpen])
 
   const onChanged = useCallback(() => {
     void load()
@@ -213,7 +273,7 @@ export function FeedbackItemView({
     )
 
   return (
-    <div className="flex-1 flex min-h-0 min-w-0" data-testid="ticket-detail-wrap">
+    <div ref={setWrapEl} className="relative flex-1 flex min-h-0 min-w-0" data-testid="ticket-detail-wrap" data-discussion={discussionMode}>
       <div className="flex-1 flex flex-col min-h-0 min-w-0" data-testid="ticket-detail">
         {/* Slim header — outside the scroller, so it stays put. Its menus
             open downward over the body, hence the stacking context. */}
@@ -258,8 +318,8 @@ export function FeedbackItemView({
               <button
                 type="button"
                 data-testid="ticket-chat-toggle"
-                aria-pressed={railOpen}
-                onClick={() => setRailOpen(!railOpen)}
+                aria-pressed={asDrawer ? drawerOpen : railOpen}
+                onClick={toggleDiscussion}
                 title={railOpen ? 'Hide the chat with the agent' : 'Show the chat with the agent'}
                 className={`${HEADER_BUTTON_CLASS} inline-flex items-center gap-1`}
               >
@@ -267,7 +327,7 @@ export function FeedbackItemView({
                   <rect x="1" y="1.5" width="10" height="9" />
                   <line x1="7.5" y1="1.5" x2="7.5" y2="10.5" />
                 </svg>
-                {railOpen ? 'Hide chat' : 'Show chat'}
+                {(asDrawer ? drawerOpen : railOpen) ? 'Hide chat' : 'Show chat'}
               </button>
             )}
           </div>
@@ -317,7 +377,7 @@ export function FeedbackItemView({
                   )}
                 </span>
               )}
-              <span className="truncate opacity-70 min-w-0">
+              <span className="truncate min-w-0">
                 {' '}· {showWorkspace ? `${workspaceName} · ` : ''}asked{' '}
                 {unlinked ? formatFiledDate(view.createdAt) : formatRelativeTime(view.createdAt, nowSec)}
               </span>
@@ -341,8 +401,25 @@ export function FeedbackItemView({
         />
       </div>
 
-      {showRail && (
+      {asDrawer && !drawerOpen && (
+        // The closed drawer's tab, on the report's right edge, so the
+        // discussion is always one click away.
+        <button
+          type="button"
+          data-testid="ticket-discussion-tab"
+          aria-expanded={false}
+          onClick={() => setDrawerOpen(true)}
+          title="Show the discussion"
+          className="k2-focus absolute right-0 top-1/2 -translate-y-1/2 z-20 flex items-center gap-1.5 px-1.5 py-3 [writing-mode:vertical-rl] type-hint font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-surface)] border border-r-0 border-[var(--color-border)] hover:bg-[var(--color-wash-1)] cursor-pointer"
+        >
+          Discussion{item ? ` · ${item.comments.length}` : ''}
+        </button>
+      )}
+      {discussionShown && (
         <TicketAgentRail
+          width={placed.width}
+          drawer={asDrawer}
+          onHide={asDrawer ? () => setDrawerOpen(false) : undefined}
           feedbackId={id}
           item={item}
           error={error}
@@ -439,7 +516,7 @@ function TicketBody({
       <SelectableRegion className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 px-4 py-3">
         <div className="min-h-full flex flex-col" data-ticket-thread={ticketId}>
           {item.body && (
-            <div className="mb-3 px-3 py-2 bg-white/[0.03] border border-[var(--color-border)]">
+            <div className="mb-3 px-3 py-2 bg-[var(--color-wash-2)] border border-[var(--color-border)]">
               <ChatMessageBody text={item.body} style={{ fontSize: editorFontSize }} />
             </div>
           )}
@@ -480,7 +557,7 @@ function TicketBody({
                 type="button"
                 disabled={busy}
                 onClick={() => void submit(() => resolveFeedback(item.id, 'resolved'))}
-                className="px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
+                className="px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-1)] disabled:opacity-50 transition-colors cursor-pointer"
               >
                 Resolve
               </button>
@@ -488,7 +565,7 @@ function TicketBody({
                 type="button"
                 disabled={busy}
                 onClick={() => void submit(() => resolveFeedback(item.id, 'dismissed'))}
-                className="px-3 py-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
+                className="px-3 py-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-1)] disabled:opacity-50 transition-colors cursor-pointer"
               >
                 Dismiss
               </button>
@@ -565,20 +642,22 @@ export function HeaderStatusMenu({
         aria-expanded={open}
         disabled={busy}
         onClick={() => (open ? close() : setOpen(true))}
-        className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide cursor-pointer disabled:opacity-50 ${statusChipClass(status)}`}
+        data-status={status}
+        className="k2-focus inline-flex items-center cursor-pointer disabled:opacity-50"
         title="Change status"
       >
-        {statusLabel(status)}
-        <svg
-          className={`w-2 h-2 transition-transform ${open ? 'rotate-180' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2.5}
-          aria-hidden
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
+        <StatusMark status={status}>
+          <svg
+            className={`w-2 h-2 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2.5}
+            aria-hidden
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </StatusMark>
       </button>
       {open && (
         <div

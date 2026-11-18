@@ -91,6 +91,7 @@ part_web() {
     step "k2 picks a workspace's dot-dir as the daemon does"; bash tests/cli/ws_dot_dir.sh
     step "urlencode never sends a value raw"; bash tests/cli/urlencode_bytes.sh
     step "no daemon call through a proxy or with a query token (lint)"; bash tests/cli/no_proxy_lint.sh
+    step "a POST that tried the cell socket is sent once (lint)"; bash tests/cli/post_no_resend_lint.sh
     step "k2 never sends a daemon request through a proxy (stub daemon)"; bash tests/cli/no_proxy_to_daemon.sh
     step "k2 names a body file the Windows way in Git Bash"; bash tests/cli/windows_curl_body_path.sh
     step "k2 heartbeat wake sends the session passport"; bash tests/cli/heartbeat_wake_passport.sh

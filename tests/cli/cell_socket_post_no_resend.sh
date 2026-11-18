@@ -2,7 +2,8 @@
 # A POST over the cell socket is sent again over TCP only when the socket
 # took none of it (0.46.15).
 #
-# cli_send and cli_send_json try the session's cell socket first. They go
+# cli_send, cli_send_json and _compute_send (compute, App, chat, CI and the
+# other daemon-route verbs) try the session's cell socket first. They go
 # on to loopback TCP for a POST only when the connect failed (curl 7) or
 # the daemon answered "not served on cell socket". Any other failure after
 # the request may have gone out (curl 28, 52, 56, rc 0 with an empty body,
@@ -16,6 +17,11 @@
 #   k2 inbox read <id>              cli_send cli_request (GET)
 #   k2 agent identity --color c     cli_send_json POST
 #   k2 agent identity               cli_send_json GET
+#   k2 compute run --detach         _compute_send POST
+#   k2 app install <app>            _compute_send POST
+#   k2 app exception <app> on       _compute_send POST that carries a vault
+#                                   confirmToken (a stub vault socket gives it)
+#   k2 compute get <job>            _compute_send GET
 #
 # A stub daemon serves loopback TCP and a Unix socket and counts each route
 # per channel. The socket's behaviour per run comes from a mode file:
@@ -57,17 +63,27 @@ cleanup() {
 trap cleanup EXIT
 
 cat > "$SANDBOX/stub.py" <<'PY'
-import json, os, socket, sys, threading, time
+import json, os, socket, socketserver, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-LOG, PORTF, MODEF, SOCK, DEAD = sys.argv[1:6]
-TARGETS = ("/cli/inbox/archive", "/cli/inbox/read", "/cli/heartbeat/unarchive", "/cli/agent/identity")
+LOG, PORTF, MODEF, SOCK, DEAD, VAULT, TOKLOG = sys.argv[1:8]
+TARGETS = ("/cli/inbox/archive", "/cli/inbox/read", "/cli/heartbeat/unarchive", "/cli/agent/identity",
+           "/cli/compute/run", "/cli/compute/jobs/get", "/cli/app/install", "/cli/app/exception")
+JOB = {"id": "abcd1234" * 4, "short": "abcd1234", "node": "n1", "state": "queued"}
 log_lock = threading.Lock()
 
 def log(via, method, path):
     with log_lock, open(LOG, "a") as f:
         f.write("%s %s %s\n" % (via, method, path))
+
+# The confirmToken each /cli/app/exception arrival carried, per channel.
+def log_token(via, path, body):
+    if path != "/cli/app/exception":
+        return
+    tok = json.loads(body or b"{}").get("confirmToken")
+    with log_lock, open(TOKLOG, "a") as f:
+        f.write("%s %s\n" % (via, tok))
 
 def answer(path, method):
     if path == "/cli/inbox/read":
@@ -79,6 +95,14 @@ def answer(path, method):
         if method == "POST":
             d["changed"] = ["color"]
         return d
+    if path == "/cli/compute/run":
+        return {"job": JOB}
+    if path == "/cli/compute/jobs/get":
+        return dict(JOB, result={"job": JOB["short"], "state": "queued"})
+    if path == "/cli/app/install":
+        return {"app": {"appId": "shop"}, "frontPort": 4100}
+    if path == "/cli/app/exception":
+        return {"app": "shop", "label": "process exception", "changed": True}
     return {"ok": True}
 
 def http(status, reason, obj):
@@ -104,7 +128,7 @@ def read_request(conn):
         if not chunk:
             break
         rest += chunk
-    return head.split(b"\r\n")[0].decode()
+    return head.split(b"\r\n")[0].decode(), rest
 
 def request_line_of(raw):
     return raw.split(b"\r\n")[0].decode()
@@ -112,18 +136,22 @@ def request_line_of(raw):
 def serve_uds(conn):
     mode = open(MODEF).read().strip()
     try:
+        body = None
         if mode == "reset":
             # Leave the request unread and close: the peer's read gets
             # ECONNRESET (curl 56).
             time.sleep(0.3)
             line = request_line_of(conn.recv(65536, socket.MSG_PEEK))
         else:
-            line = read_request(conn)
-            if line is None:
+            got = read_request(conn)
+            if got is None:
                 return
+            line, body = got
         method, target = line.split(" ")[0], line.split(" ")[1]
         path = urlsplit(target).path
         log("uds", method, path)
+        if body is not None:
+            log_token("uds", path, body)
         if path not in TARGETS:
             conn.sendall(http(404, "Not Found", {"error": "route not served on cell socket"}))
         elif mode == "reset":
@@ -163,10 +191,10 @@ class H(BaseHTTPRequestHandler):
         pass
     def handle_any(self):
         n = int(self.headers.get("Content-Length") or 0)
-        if n:
-            self.rfile.read(n)
+        body = self.rfile.read(n) if n else b""
         path = urlsplit(self.path).path
         log("tcp", self.command, path)
+        log_token("tcp", path, body)
         body = json.dumps(answer(path, self.command)).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -177,6 +205,38 @@ class H(BaseHTTPRequestHandler):
     do_GET = handle_any
     do_POST = handle_any
 
+# The vault's own socket: a person's confirm (vault password) gives a token.
+class V(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def log_message(self, *a):
+        pass
+    def address_string(self):
+        return "vault"
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        if n:
+            self.rfile.read(n)
+        path = urlsplit(self.path).path
+        log("vault", "POST", path)
+        if path == "/cli/vault/confirm/start":
+            out = {"methods": ["vault-password"]}
+        elif path == "/cli/vault/confirm/finish":
+            out = {"token": "vc-tok-1"}
+        else:
+            raise SystemExit("unexpected vault route " + path)
+        body = json.dumps(out).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+class VS(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+vs = VS(VAULT, V)
+threading.Thread(target=vs.serve_forever, daemon=True).start()
 threading.Thread(target=uds_loop, daemon=True).start()
 srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
 srv.daemon_threads = True
@@ -186,15 +246,20 @@ srv.serve_forever()
 PY
 
 LOG="$SANDBOX/requests.log"
+TOKLOG="$SANDBOX/tokens.log"
 MODE="$SANDBOX/mode"
 SOCK="$SANDBOX/c.sock"
 DEAD="$SANDBOX/d.sock"
+# The CLI's vault socket is $HOME/.k2/vault.sock (HOME is set below).
+VAULT="$SANDBOX/home/.k2/vault.sock"
+mkdir -p "$SANDBOX/home/.k2"
 : > "$LOG"
+: > "$TOKLOG"
 echo close > "$MODE"
-python3 -I "$SANDBOX/stub.py" "$LOG" "$SANDBOX/port" "$MODE" "$SOCK" "$DEAD" &
+python3 -I "$SANDBOX/stub.py" "$LOG" "$SANDBOX/port" "$MODE" "$SOCK" "$DEAD" "$VAULT" "$TOKLOG" &
 PIDS+=($!)
-for _ in $(seq 1 100); do [ -s "$SANDBOX/port" ] && [ -S "$SOCK" ] && [ -S "$DEAD" ] && break; sleep 0.05; done
-[ -s "$SANDBOX/port" ] && [ -S "$SOCK" ] && [ -S "$DEAD" ] || { echo "FAIL: the stub daemon did not start" >&2; exit 1; }
+for _ in $(seq 1 100); do [ -s "$SANDBOX/port" ] && [ -S "$SOCK" ] && [ -S "$DEAD" ] && [ -S "$VAULT" ] && break; sleep 0.05; done
+[ -s "$SANDBOX/port" ] && [ -S "$SOCK" ] && [ -S "$DEAD" ] && [ -S "$VAULT" ] || { echo "FAIL: the stub daemon did not start" >&2; exit 1; }
 PORT="$(cat "$SANDBOX/port")"
 
 export HOME="$SANDBOX/home"
@@ -242,11 +307,12 @@ run() {
     local sock="$1" mode="$2"; shift 2
     echo "$mode" > "$MODE"
     : > "$LOG"
+    : > "$TOKLOG"
     set +e
     env TMPDIR="${RUN_TMPDIR:-${TMPDIR:-/tmp}}" \
         K2_HOST=127.0.0.1 K2_PORT="$PORT" K2_HOOK_TOKEN=test-session.passport \
         K2_HOOK_SOCK="$sock" K2_PROJECT_PATH="$SANDBOX/ws" \
-        _K2_POST_MAX_TIME=1 _K2_SEND_MAX_TIME=1 \
+        _K2_POST_MAX_TIME=1 _K2_SEND_MAX_TIME=1 K2_CP_MAX_TIME=1 \
         "$K2" "$@" </dev/null >"$SANDBOX/out" 2>"$SANDBOX/err"
     RC=$?
     set -e
@@ -265,11 +331,20 @@ want_counts() {
         bad "$label: socket $got_u, TCP $got_t, want socket $uds, TCP $tcp ($(tr '\n' ';' < "$LOG"))"
     fi
 }
-# The one stderr line, nothing else.
+# The one stderr line, nothing else. PRE_ERR, when set, is what the
+# command prints on stderr before it sends (a confirm prompt); the line
+# must follow it and end stderr.
 want_unanswered() {
-    local label="$1" ep="$2" re
+    local label="$1" ep="$2" re err="$ERR"
+    if [ -n "${PRE_ERR:-}" ]; then
+        if [ "${err#"$PRE_ERR"$'\n'}" = "$err" ]; then
+            bad "$label: stderr doesn't start with the lines before the send: $(printf %q "$ERR")"
+            return
+        fi
+        err="${err#"$PRE_ERR"$'\n'}"
+    fi
     re="^Error: K2's server didn't answer ${ep} \([0-9]+ s\); the request may have been applied\. Check before running it again\.\$"
-    if [ "$(printf '%s\n' "$ERR" | wc -l | tr -d ' ')" = 1 ] && printf '%s\n' "$ERR" | grep -Eq "$re"; then
+    if [ "$(printf '%s\n' "$err" | wc -l | tr -d ' ')" = 1 ] && printf '%s\n' "$err" | grep -Eq "$re"; then
         ok "$label: the one 'may have been applied' line"
     else
         bad "$label: stderr is not the one line: $(printf %q "$ERR")"
@@ -375,6 +450,86 @@ want_counts "GET close" GET /cli/agent/identity 1 1
 [ "$RC" = 0 ] && ok "GET close: exit 0" || bad "GET close: exit $RC ($ERR)"
 case "$OUT" in "Agent scout"*) ok "GET close: the TCP answer prints" ;; *) bad "GET close: stdout $(printf %q "$OUT")" ;; esac
 no_unanswered "GET close"
+
+# post_rows <path> <TCP answer on stdout> <k2 args…>: a POST sent with
+# _compute_send, once per cell-socket case. Each run is one request, so the
+# counts are its arrivals on each channel. The cli_send_json rule: TCP only
+# after curl 7 (75, the OS refusing the connect, is curl 7 here: _k2_curl
+# names no local codes) or "not served"; every other failure ends with the
+# one line and exit 1, nothing on stdout.
+post_rows() {
+    local path="$1" want_out="$2" mode; shift 2
+    run "$DEAD" close "$@"
+    want_counts "curl 7" POST "$path" 0 1
+    [ "$RC" = 0 ] && ok "curl 7: exit 0" || bad "curl 7: exit $RC ($ERR)"
+    case "$OUT" in *"$want_out"*) ok "curl 7: the TCP answer prints" ;; *) bad "curl 7: stdout $(printf %q "$OUT")" ;; esac
+    no_unanswered "curl 7"
+    for mode in hang close reset garbage; do
+        run "$SOCK" "$mode" "$@"
+        want_counts "$mode" POST "$path" 1 0
+        [ "$RC" = 1 ] && ok "$mode: exit 1" || bad "$mode: exit $RC, want 1"
+        [ -z "$OUT" ] && ok "$mode: stdout empty" || bad "$mode: stdout $(printf %q "$OUT")"
+        want_unanswered "$mode" "$path"
+    done
+    # A status line came back (200, empty body): the daemon answered. It is
+    # the caller's answer to read, and it is not sent again.
+    run "$SOCK" empty "$@"
+    want_counts "empty 200" POST "$path" 1 0
+    no_unanswered "empty 200"
+    run "$SOCK" notserved "$@"
+    want_counts "notserved" POST "$path" 1 1
+    [ "$RC" = 0 ] && ok "notserved: exit 0" || bad "notserved: exit $RC ($ERR)"
+    case "$OUT" in *"$want_out"*) ok "notserved: the TCP answer prints" ;; *) bad "notserved: stdout $(printf %q "$OUT")" ;; esac
+    no_unanswered "notserved"
+    # 75: the socket file closed to this user. The connect fails, so the
+    # socket sees nothing and the one arrival is on TCP.
+    chmod 000 "$SOCK"
+    run "$SOCK" close "$@"
+    chmod 755 "$SOCK"
+    want_counts "75" POST "$path" 0 1
+    [ "$RC" = 0 ] && ok "75: exit 0" || bad "75: exit $RC ($ERR)"
+    no_unanswered "75"
+    # 76: no reply (curl 52) while TMPDIR can't be written. It went out.
+    chmod 555 "$RO_TMP"
+    RUN_TMPDIR="$RO_TMP" run "$SOCK" close "$@"
+    chmod 755 "$RO_TMP"
+    want_counts "76" POST "$path" 1 0
+    [ "$RC" = 1 ] && ok "76: exit 1" || bad "76: exit $RC, want 1"
+    want_unanswered "76" "$path"
+}
+
+echo "== 6. _compute_send POST (k2 compute run --detach) =="
+post_rows /cli/compute/run abcd1234 compute run --detach --no-source -- true
+
+echo "== 7. _compute_send POST (k2 app install) =="
+post_rows /cli/app/install '"frontPort": 4100' app install shop --json
+
+echo "== 8. _compute_send POST with a vault confirmToken (k2 app exception on) =="
+# Before it sends, the command says what it does and asks for the vault
+# password (stdin is empty here; the stub vault takes any).
+PRE_ERR="This moves App shop out of its guarded container into the process exception (a sandboxed system process).
+Vault password: "
+post_rows /cli/app/exception '"changed": true' app exception shop on --json
+PRE_ERR=""
+# The confirm came first, and the request on each channel carried its token.
+run "$SOCK" close app exception shop on --json
+[ "$(grep -E '^(vault |uds POST /cli/app/exception$)' "$LOG" | tr '\n' ';')" = "vault POST /cli/vault/confirm/start;vault POST /cli/vault/confirm/finish;uds POST /cli/app/exception;" ] \
+    && ok "close: one vault confirm (start, finish) before the send" \
+    || bad "close: vault calls $(tr '\n' ';' < "$LOG")"
+[ "$(cat "$TOKLOG")" = "uds vc-tok-1" ] && ok "close: the socket arrival carried the confirmToken" \
+    || bad "close: tokens $(tr '\n' ';' < "$TOKLOG")"
+run "$DEAD" close app exception shop on --json
+[ "$(cat "$TOKLOG")" = "tcp vc-tok-1" ] && ok "curl 7: the TCP arrival carried the confirmToken" \
+    || bad "curl 7: tokens $(tr '\n' ';' < "$TOKLOG")"
+
+echo "== 9. _compute_send GET (k2 compute get) still falls back =="
+for mode in close garbage; do
+    run "$SOCK" "$mode" compute get abcd1234 --json
+    want_counts "GET $mode" GET /cli/compute/jobs/get 1 1
+    [ "$RC" = 0 ] && ok "GET $mode: exit 0" || bad "GET $mode: exit $RC ($ERR)"
+    case "$OUT" in *abcd1234*) ok "GET $mode: the TCP answer prints" ;; *) bad "GET $mode: stdout $(printf %q "$OUT")" ;; esac
+    no_unanswered "GET $mode"
+done
 
 echo
 echo "cell_socket_post_no_resend: $pass passed, $fail failed"

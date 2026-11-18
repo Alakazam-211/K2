@@ -63,7 +63,7 @@ import { setEditorPreview } from '@/lib/editor/preview-switch'
 import { NOT_FILE_TEXT, fileTextOf } from '@/lib/read-file-text'
 import { FileViewerPane } from './FileViewerPane'
 
-const FILE = '/Users/z3thon/DevProjects/Alakazam Labs/K2-gardener/.k2/agent/work/k5-cli-progress.html'
+const FILE = '/home/me/project/.k2/agent/work/progress.html'
 
 beforeAll(async () => {
   await import('@/components/Editor/EditorTab')

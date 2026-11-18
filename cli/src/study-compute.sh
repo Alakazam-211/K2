@@ -1083,7 +1083,7 @@ NETWORK (--network none, --netns-dummy; k2-node 0.46.15 on the node)
     the node adds a dummy interface with that address to the job's own
     namespace, up before the job starts. For browsers that need an ICE
     host candidate that isn't loopback:
-      k2 compute run --netns-dummy sewlane0=10.254.254.1/32 -- pnpm e2e
+      k2 compute run --netns-dummy dummy0=10.254.254.1/32 -- pnpm e2e
     NAME: 1-15 of A-Z a-z 0-9 . _ - (not lo). ADDR/PREFIX: inside 10/8,
     172.16/12, 192.168/16, 169.254/16, 192.0.2/24, 198.51.100/24,
     203.0.113/24, fc00::/7, fe80::/10 or 2001:db8::/32, the whole prefix

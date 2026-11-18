@@ -131,7 +131,7 @@ sys.exit(0 if ok else 1)'; then
             # Linux nodes): a dummy interface in the job's own network
             # namespace, up before the job starts. Implies --network none.
             --netns-dummy) netns_dummies+=("${2:-}"); shift 2
-                [[ "${netns_dummies[${#netns_dummies[@]}-1]}" == ?*=?*/?* ]] || { echo "usage: --netns-dummy NAME=ADDRESS/PREFIX (e.g. sewlane0=10.254.254.1/32; private, link-local or test ranges only)" >&2; exit 2; } ;;
+                [[ "${netns_dummies[${#netns_dummies[@]}-1]}" == ?*=?*/?* ]] || { echo "usage: --netns-dummy NAME=ADDRESS/PREFIX (e.g. dummy0=10.254.254.1/32; private, link-local or test ranges only)" >&2; exit 2; } ;;
             --receipt-v2) receipt_v=2; shift ;;
             --retry-interrupted) retry=1; shift ;;
             --no-retry) retry=0; retries=0; shift ;;

@@ -195,7 +195,7 @@ Agents:
                                 exit 3). k2 study compute: NETWORK
                  [--netns-dummy NAME=ADDR/PREFIX]  (repeatable, at most 4;
                                 Linux nodes) a dummy interface in the job's own
-                                namespace, up before it starts (sewlane0=
+                                namespace, up before it starts (dummy0=
                                 10.254.254.1/32: a browser gets an ICE host
                                 candidate that isn't loopback). Private,
                                 link-local or test ranges only (exit 2 else);

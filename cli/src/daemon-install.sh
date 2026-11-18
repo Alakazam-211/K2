@@ -296,7 +296,7 @@ cmd_daemon_install() {
     # Linux with the daemon already installed under systemd (a SYSTEM unit
     # from provisioning, or a user unit from an earlier install): update the
     # binary THAT unit runs, in place, and restart that unit. Never write a
-    # second unit or a second binary beside it (akzm 2026-10-23: a stray
+    # second unit or a second binary beside it (seen in the field: a stray
     # user unit + binary next to the system k2-daemon.service).
     local existing_scope="" existing_unit="" existing_bin="" existing_ctl=""
     if [ "$svc_kind" = "systemd" ] && [ "$no_service" != "1" ]; then

@@ -12,10 +12,16 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// `--connect-timeout 5`, every call.
+/// `--connect-timeout 5`, every call but the passport probe.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// `--max-time 30`, and the default of `_K2_POST_MAX_TIME`.
 pub const MAX_TIME: Duration = Duration::from_secs(30);
+/// The passport probe's `--connect-timeout 3` (`_cli_scoped_token_rejected`).
+pub const PROBE_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+/// The passport probe's `--max-time 5`.
+pub const PROBE_MAX_TIME: Duration = Duration::from_secs(5);
+/// Where the passport probe asks.
+pub const PROBE_ENDPOINT: &str = "/cli/whoami";
 /// `cli_send_json`'s default, `_K2_SEND_MAX_TIME`.
 pub const SEND_JSON_MAX_TIME: Duration = Duration::from_secs(60);
 /// `_K2_CURL_TRIES`: each retry loop's tries, the first included.
@@ -182,6 +188,10 @@ enum Kind {
     /// A GET with no credential and no query of ours, over TCP: what
     /// anyone may read (`/boot-status`).
     Public,
+    /// `_cli_scoped_token_rejected`: a GET of the endpoint as it is, over
+    /// TCP, the passport as Bearer and no query of ours. Only `_k2_curl`'s
+    /// tries (a refused connect); nothing else.
+    Probe,
 }
 
 impl Kind {
@@ -199,17 +209,26 @@ impl Kind {
     }
     /// `_cli_no_answer` runs.
     fn says_no_answer(self) -> bool {
-        !matches!(self, Kind::PostJsonStdin | Kind::SendJsonGet | Kind::SendJsonPost)
+        !matches!(self, Kind::PostJsonStdin | Kind::SendJsonGet | Kind::SendJsonPost | Kind::Probe)
     }
     /// A refused passport is tried again with a healed one, on either
-    /// channel. Not a body from stdin, nor a call with no credential.
+    /// channel. Not a body from stdin, a call with no credential, nor the
+    /// probe.
     fn heals(self) -> bool {
-        !matches!(self, Kind::PostJsonStdin | Kind::Public)
+        !matches!(self, Kind::PostJsonStdin | Kind::Public | Kind::Probe)
     }
-    /// `_permission_note` runs on the answer. Not a body from stdin, nor a
-    /// call with no credential.
+    /// `_permission_note` runs on the answer. Not a body from stdin, a
+    /// call with no credential, nor the probe.
     fn notes_permission(self) -> bool {
-        !matches!(self, Kind::PostJsonStdin | Kind::Public)
+        !matches!(self, Kind::PostJsonStdin | Kind::Public | Kind::Probe)
+    }
+    /// `--connect-timeout`.
+    fn connect_timeout(self) -> Duration {
+        if self == Kind::Probe {
+            PROBE_CONNECT_TIMEOUT
+        } else {
+            CONNECT_TIMEOUT
+        }
     }
     /// The body is read from stdin: nothing is ever tried twice. Only
     /// then: the shell's `@-` rule is an argument that is exactly `@-`,
@@ -416,6 +435,42 @@ impl Client {
         }
     }
 
+    /// `_cli_use_healed_passport`: switch to the passport the daemon minted
+    /// again for this session, when [`Client::healer`] has one. The shell
+    /// does it as it starts (before any request) and again before the
+    /// probe; neither counts as the one heal on a refusal. False when
+    /// there is none to switch to.
+    pub fn use_healed_passport(&mut self) -> bool {
+        let Some(healer) = &self.healer else {
+            return false;
+        };
+        let Auth::Passport { passport, .. } = &mut self.auth else {
+            return false;
+        };
+        match healer.healed(passport) {
+            Some(new) => {
+                *passport = new;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// `_cli_scoped_token_rejected`: one GET of [`PROBE_ENDPOINT`] over
+    /// TCP with the passport as Bearer (no query, connect 3 s, at most
+    /// 5 s; a refused connect is tried again as `_k2_curl` does). True
+    /// only when the answer holds the daemon's passport refusal; false
+    /// with no passport, or when the probe failed.
+    pub fn passport_rejected(&mut self) -> bool {
+        if self.passport().is_none() {
+            return false;
+        }
+        match self.run(Kind::Probe, Channel::Tcp, PROBE_ENDPOINT, &[], &[], Instant::now()) {
+            Ok(r) => contains(&r.body, PASSPORT_REFUSAL),
+            Err(_) => false,
+        }
+    }
+
     /// The passport the calls use now (a healed one after a heal).
     pub fn passport(&self) -> Option<&Passport> {
         match &self.auth {
@@ -583,6 +638,7 @@ impl Client {
             Kind::PostForm | Kind::PostJson => self.post_max_time.unwrap_or(MAX_TIME),
             Kind::SendJsonGet | Kind::SendJsonPost => self.send_max_time.unwrap_or(SEND_JSON_MAX_TIME),
             Kind::Request | Kind::RequestPost | Kind::PostJsonStdin | Kind::Public => MAX_TIME,
+            Kind::Probe => PROBE_MAX_TIME,
         }
     }
 
@@ -608,7 +664,7 @@ impl Client {
         let mut tries = 1;
         loop {
             let deadline = Instant::now() + max;
-            match wire::connect(&target, CONNECT_TIMEOUT, deadline) {
+            match wire::connect(&target, kind.connect_timeout(), deadline) {
                 Ok(mut conn) => {
                     let r = wire::exchange(&mut conn, &request, deadline);
                     // Every answer, a retried one too: the compare is on
@@ -668,6 +724,15 @@ impl Client {
     fn build(&self, kind: Kind, channel: Channel, endpoint: &str, args: &[&str], body: &[u8]) -> Result<(Target, Request), Error> {
         let mut headers: Vec<(String, String)> = Vec::new();
         let (target, host) = match channel {
+            Channel::Tcp if kind == Kind::Probe => {
+                // A config line read before the command line's `-H`s, as
+                // on the cell socket.
+                let Some(passport) = self.passport() else {
+                    return Err(Error::NoCredential { endpoint: endpoint.to_string() });
+                };
+                headers.push(("Authorization".into(), format!("Bearer {}", passport.as_str())));
+                (Target::Tcp { host: self.host.clone(), port: self.port }, format!("{}:{}", self.host, self.port))
+            }
             Channel::Tcp => (Target::Tcp { host: self.host.clone(), port: self.port }, format!("{}:{}", self.host, self.port)),
             Channel::Uds => {
                 let no = || Error::NoCellSocket { endpoint: endpoint.to_string() };
@@ -690,7 +755,7 @@ impl Client {
 
         let tcp = channel == Channel::Tcp;
         let token = match (kind, self.tcp_token()) {
-            (Kind::Public, _) => "",
+            (Kind::Public | Kind::Probe, _) => "",
             (_, Some(t)) => t,
             (_, None) => return Err(Error::NoCredential { endpoint: endpoint.to_string() }),
         };
@@ -762,7 +827,7 @@ impl Client {
                 let path = if tcp { format!("{endpoint}?token={}", quote(token)) } else { endpoint.to_string() };
                 (Method::Post, path, json(&mut headers))
             }
-            Kind::Public => (Method::Get, endpoint.to_string(), None),
+            Kind::Public | Kind::Probe => (Method::Get, endpoint.to_string(), None),
         };
         wire::check_target(&path).map_err(|byte| Error::BadTarget { target: path.clone(), byte })?;
         let request = Request { method, target: path, host, user_agent: format!("k5/{}", self.version), headers, body };
@@ -853,6 +918,7 @@ mod tests {
             (SendJsonGet, false, false, false, false, true, true, false),
             (SendJsonPost, false, false, false, false, true, true, false),
             (Public, false, true, false, true, false, false, false),
+            (Probe, false, false, false, false, false, false, false),
         ];
         for (k, m, c, s, n, h, p, o) in rows {
             assert_eq!(
@@ -888,6 +954,7 @@ mod tests {
             (Kind::SendJsonGet, 330),
             (Kind::SendJsonPost, 330),
             (Kind::Public, 30),
+            (Kind::Probe, 5),
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }
@@ -936,6 +1003,29 @@ mod tests {
         let mut p = Client::new("127.0.0.1", 1, "/p", Auth::Passport { passport: Passport::new("s.x").unwrap(), sock: None });
         p.owner_from_disk = true;
         assert!(names(&p, Kind::Request).iter().all(|(n, _)| n != OWNER_SOURCE_HEADER), "never with a passport");
+    }
+
+    /// The probe: the endpoint as it is, the passport as Bearer before
+    /// the custom headers, no token in the query and no Owner-Source.
+    #[test]
+    fn the_probe_request() {
+        let mut p = Client::new("127.0.0.1", 4000, "/p", Auth::Passport { passport: Passport::new("s.x").unwrap(), sock: None });
+        p.would_refuse = true;
+        p.owner_from_disk = true;
+        let (target, r) = p.build(Kind::Probe, Channel::Tcp, PROBE_ENDPOINT, &[], &[]).unwrap();
+        assert!(matches!(target, Target::Tcp { ref host, port: 4000 } if host == "127.0.0.1"));
+        assert_eq!((r.method, r.target.as_str(), r.host.as_str()), (Method::Get, "/cli/whoami", "127.0.0.1:4000"));
+        assert!(r.body.is_none());
+        let names: Vec<(&str, &str)> = r.headers.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+        assert_eq!(names[0], ("Authorization", "Bearer s.x"));
+        let order: Vec<&str> = names.iter().map(|(n, _)| *n).collect();
+        assert_eq!(order, ["Authorization", WOULD_REFUSE_HEADER, VERSION_HEADER, VIA_HEADER]);
+        assert_eq!(Kind::Probe.connect_timeout(), Duration::from_secs(3));
+        assert_eq!(Kind::Request.connect_timeout(), Duration::from_secs(5));
+        // No passport, no probe: nothing is sent (port 1: nothing listens).
+        let mut o = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
+        assert!(matches!(o.build(Kind::Probe, Channel::Tcp, PROBE_ENDPOINT, &[], &[]), Err(Error::NoCredential { .. })));
+        assert!(!o.passport_rejected());
     }
 
     #[test]

@@ -14,16 +14,19 @@
 //!   desktop's guard). Such a call says `X-K5-Owner-Source: disk`.
 //! - Else no credential: only a public read goes out.
 //! - The project: `PROJECT_PATH`, else the nearest folder up from here
-//!   with a workspace folder in it (not the user home), else here. The
-//!   shell looks for its two names; this takes k2-client's list
-//!   ([`k2_client::paths::WORKSPACE_DOT_DIR_NAMES`]), the K5 name too.
+//!   with a workspace folder in it (not the user home), else the main
+//!   folder of the git checkout here when it has one, else here. "Here"
+//!   is the folder as the shell's `pwd` names it ([`logical_cwd`]: `PWD`
+//!   when it names this folder, so a path through a link stays as it was
+//!   typed). The shell looks for its two names; this takes k2-client's
+//!   list ([`k2_client::paths::WORKSPACE_DOT_DIR_NAMES`]), the K5 name too.
+//! - A passport the daemon minted again for this session is used from the
+//!   start ([`Settings::client`]), as the shell's prelude does.
 //!
 //! Where this differs from the shell: the K2 home is k2-client's
-//! ([`crate::home`]: the home override counts), the shell's COMPAT-58
+//! ([`crate::home`]: the home override counts), and the shell's COMPAT-58
 //! owner token in a K2 terminal is never used with a passport (PRD 13.9
-//! #4, as in [`crate::transport`]), and the project search does not ask
-//! git for a worktree's main folder. The verbs that use this today read
-//! nothing a project changes.
+//! #4, as in [`crate::transport`]).
 
 use crate::transport::{Auth, Client, Passport, SecretsDir};
 use k2_client::brand::PRODUCT_NAME;
@@ -31,6 +34,8 @@ use k2_client::env_names;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 /// The host when `HOST` is not set.
 pub const DEFAULT_HOST: &str = "127.0.0.1";
@@ -40,6 +45,13 @@ pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub struct Settings {
     pub host: String,
     pub port: Option<u16>,
+    /// The port as the shell reads it: the setting, else the text of
+    /// `heartbeat.port` with its trailing newlines dropped. `None` when
+    /// neither is there.
+    pub port_text: Option<String>,
+    /// `NO_OWNER_FALLBACK=1`: the virtual desktop's guard is on, and the
+    /// owner token was not read.
+    pub no_owner_fallback: bool,
     pub project: String,
     pub auth: Auth,
     /// The owner token was read from the K2 home's files.
@@ -97,15 +109,25 @@ fn project_root(cwd: &Path, user_home: Option<&Path>) -> Option<PathBuf> {
 }
 
 /// The settings from an environment lookup, the K2 home and the folder
-/// the command runs in.
+/// the command runs in. No git checkout is asked about.
 pub fn settings(lookup: impl Fn(&str) -> Option<OsString>, home: &Path, cwd: &Path) -> Settings {
+    settings_with(lookup, home, cwd, |_| None)
+}
+
+/// [`settings`], with `main_root` giving the main folder of the git
+/// checkout a folder is in ([`git_main_root`]), asked only when no folder
+/// up from `cwd` is a workspace.
+pub fn settings_with(
+    lookup: impl Fn(&str) -> Option<OsString>,
+    home: &Path,
+    cwd: &Path,
+    main_root: impl FnOnce(&Path) -> Option<PathBuf>,
+) -> Settings {
     let text = |names: &[&'static str]| -> Option<String> {
         env_names::first_nonempty_os_in(names, &lookup).map(|(_, v)| v.to_string_lossy().into_owned())
     };
-    let port = match text(env_names::PORT) {
-        Some(p) => port_of(&p),
-        None => cat(&home.join("heartbeat.port")).as_deref().and_then(port_of),
-    };
+    let port_text = text(env_names::PORT).or_else(|| cat(&home.join("heartbeat.port")));
+    let port = port_text.as_deref().and_then(port_of);
     let host = text(env_names::HOST).unwrap_or_else(|| DEFAULT_HOST.to_string());
     let secrets_dir = env_names::first_nonempty_os_in(env_names::SECRETS_DIR, &lookup).map(|(_, v)| PathBuf::from(v));
     let no_owner_fallback = text(env_names::NO_OWNER_FALLBACK).is_some_and(|v| v == "1");
@@ -130,14 +152,133 @@ pub fn settings(lookup: impl Fn(&str) -> Option<OsString>, home: &Path, cwd: &Pa
     let user_home = lookup("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
     let project = match text(env_names::PROJECT_PATH) {
         Some(p) => p,
-        None => project_root(cwd, user_home.as_deref()).unwrap_or_else(|| cwd.to_path_buf()).to_string_lossy().into_owned(),
+        None => project_root(cwd, user_home.as_deref())
+            .or_else(|| main_root(cwd).filter(|root| marked(root)))
+            .unwrap_or_else(|| cwd.to_path_buf())
+            .to_string_lossy()
+            .into_owned(),
     };
-    Settings { host, port, project, auth, owner_from_disk, secrets_dir, home: home.to_path_buf() }
+    Settings { host, port, port_text, no_owner_fallback, project, auth, owner_from_disk, secrets_dir, home: home.to_path_buf() }
+}
+
+/// A folder with a workspace folder in it.
+fn marked(dir: &Path) -> bool {
+    k2_client::paths::WORKSPACE_DOT_DIR_NAMES.iter().any(|n| dir.join(n).is_dir())
+}
+
+/// The folder as the shell's `pwd` names it: `PWD` when it is an absolute
+/// path that, with `.`, `..` and doubled `/` taken out, names this very
+/// folder (bash's start-up rule); else the folder as the system names it.
+pub fn logical_cwd(pwd: Option<OsString>) -> std::io::Result<PathBuf> {
+    let physical = std::env::current_dir()?;
+    Ok(pwd.and_then(|p| logical(Path::new(&p))).unwrap_or(physical))
+}
+
+/// `pwd` with `.`, `..` and doubled `/` taken out by its words alone, when
+/// it is absolute and names the current folder.
+#[cfg(unix)]
+fn logical(pwd: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    use std::path::Component;
+    if !pwd.is_absolute() {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for c in pwd.components() {
+        match c {
+            Component::RootDir | Component::Prefix(_) => out.push(c.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(w) => out.push(w),
+        }
+    }
+    let (a, b) = (std::fs::metadata(&out).ok()?, std::fs::metadata(".").ok()?);
+    (a.dev() == b.dev() && a.ino() == b.ino()).then_some(out)
+}
+
+/// Windows: the folder as the system names it.
+#[cfg(not(unix))]
+fn logical(_pwd: &Path) -> Option<PathBuf> {
+    None
+}
+
+/// The git the shell may run (`_k2_git_usable`, `cli/src/prelude.sh`):
+/// the first `git` on `PATH`, unless it is macOS's `/usr/bin/git` with no
+/// developer tools behind it (that one opens Apple's install dialog);
+/// then `xcode-select -p` must name a folder with a real git in it. Found
+/// once per run.
+pub fn usable_git() -> Option<&'static Path> {
+    static GIT: OnceLock<Option<PathBuf>> = OnceLock::new();
+    GIT.get_or_init(|| {
+        let git = find_on_path("git", std::env::var_os("PATH")?)?;
+        if cfg!(target_os = "macos") && git == Path::new("/usr/bin/git") {
+            let out = Command::new("/usr/bin/xcode-select").arg("-p").stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+            let dev = String::from_utf8_lossy(&out.stdout).trim_end_matches('\n').to_string();
+            if dev.is_empty() || !is_executable(&Path::new(&dev).join("usr/bin/git")) {
+                return None;
+            }
+        }
+        Some(git)
+    })
+    .as_deref()
+}
+
+/// The first executable file `name` in the folders of `path` (an empty
+/// folder name is the current folder), as `command -v` finds it.
+fn find_on_path(name: &str, path: OsString) -> Option<PathBuf> {
+    std::env::split_paths(&path).map(|dir| if dir.as_os_str().is_empty() { PathBuf::from(".").join(name) } else { dir.join(name) }).find(|p| is_executable(p))
+}
+
+#[cfg(unix)]
+fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(p: &Path) -> bool {
+    p.is_file()
+}
+
+/// The main folder of the git checkout `dir` is in, as the shell finds it:
+/// `git -C <dir> rev-parse --path-format=absolute --git-common-dir`, with
+/// a last `/` + one character + `git` taken off each line (its `sed
+/// 's|/.git$||'`), when [`usable_git`] says git may run.
+pub fn git_main_root(dir: &Path) -> Option<PathBuf> {
+    let git = usable_git()?;
+    let out = Command::new(git)
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = text.split('\n').map(strip_dot_git).collect();
+    let root = lines.join("\n");
+    let root = root.trim_end_matches('\n');
+    (!root.is_empty()).then(|| PathBuf::from(root))
+}
+
+/// `sed 's|/.git$||'` on one line: `.` is any one character.
+fn strip_dot_git(line: &str) -> &str {
+    let chars: Vec<(usize, char)> = line.char_indices().collect();
+    let n = chars.len();
+    if n >= 5 && chars[n - 5].1 == '/' && line[chars[n - 3].0..] == *"git" {
+        &line[..chars[n - 5].0]
+    } else {
+        line
+    }
 }
 
 impl Settings {
     /// A client for these settings. `would_refuse`: the passport rule's
-    /// count ([`crate::passport`]).
+    /// count ([`crate::passport`]). A passport minted again for this
+    /// session is taken at once ([`Client::use_healed_passport`]), as the
+    /// shell's prelude does.
     pub fn client(&self, would_refuse: bool) -> Result<Client, NoPort> {
         let port = self.port.ok_or_else(|| NoPort { home: self.home.clone() })?;
         let mut c = Client::new(self.host.clone(), port, self.project.clone(), self.auth.clone());
@@ -145,6 +286,7 @@ impl Settings {
         c.owner_from_disk = self.owner_from_disk;
         c.port_file = Some(self.home.join("daemon.port"));
         c.healer = self.secrets_dir.clone().map(|d| Box::new(SecretsDir(d)) as Box<dyn crate::transport::Healer>);
+        c.use_healed_passport();
         Ok(c)
     }
 }
@@ -170,8 +312,8 @@ impl std::error::Error for SettingsError {}
 /// The settings of this process.
 pub fn current() -> Result<Settings, SettingsError> {
     let home = crate::home::k2_home().map_err(SettingsError::Home)?;
-    let cwd = std::env::current_dir().map_err(SettingsError::Cwd)?;
-    Ok(settings(|name| std::env::var_os(name), &home, &cwd))
+    let cwd = logical_cwd(std::env::var_os("PWD")).map_err(SettingsError::Cwd)?;
+    Ok(settings_with(|name| std::env::var_os(name), &home, &cwd, git_main_root))
 }
 
 #[cfg(test)]
@@ -258,6 +400,74 @@ mod tests {
         assert!(c.would_refuse && c.owner_from_disk);
         assert_eq!(c.port_file, Some(dir.join("daemon.port")));
         assert!(c.healer.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_port_as_the_shell_reads_it() {
+        let dir = scratch("porttext");
+        assert_eq!(settings(env(&[]), &dir, &dir).port_text, None);
+        std::fs::write(dir.join("heartbeat.port"), "4100\n\n").unwrap();
+        let s = settings(env(&[]), &dir, &dir);
+        assert_eq!((s.port_text.as_deref(), s.port), (Some("4100"), Some(4100)));
+        let s = settings(env(&[("K2_PORT", "42a")]), &dir, &dir);
+        assert_eq!((s.port_text.as_deref(), s.port), (Some("42a"), None));
+        assert!(settings(env(&[("K2_NO_OWNER_FALLBACK", "1")]), &dir, &dir).no_owner_fallback);
+        assert!(!settings(env(&[("K5_NO_OWNER_FALLBACK", "0"), ("K2_NO_OWNER_FALLBACK", "1")]), &dir, &dir).no_owner_fallback);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_sed_that_drops_dot_git() {
+        for (line, want) in [
+            ("/repo/.git", "/repo"),
+            ("/repo/xgit", "/repo"),
+            ("/repo/.gitx", "/repo/.gitx"),
+            ("/.git", ""),
+            ("/repo/é.git", "/repo/é.git"),
+            ("/repo/égit", "/repo"),
+            ("git", "git"),
+            ("", ""),
+        ] {
+            assert_eq!(strip_dot_git(line), want, "{line:?}");
+        }
+    }
+
+    /// No workspace folder up from here: the git checkout's main folder,
+    /// when it has one; else here.
+    #[test]
+    fn a_worktree_finds_its_main_folder() {
+        let dir = std::fs::canonicalize(scratch("wt")).unwrap();
+        let main = dir.join("main");
+        let wt = dir.join("wt/sub");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::create_dir_all(&main).unwrap();
+        let ask = |root: Option<PathBuf>| settings_with(env(&[]), &dir, &wt, move |_| root).project;
+        assert_eq!(ask(Some(main.clone())), wt.to_string_lossy(), "the main folder is no workspace");
+        std::fs::create_dir_all(main.join(".k2")).unwrap();
+        assert_eq!(ask(Some(main.clone())), main.to_string_lossy());
+        assert_eq!(ask(None), wt.to_string_lossy());
+        // A workspace up from here wins; git is not asked.
+        std::fs::create_dir_all(dir.join("wt/.k2so")).unwrap();
+        let s = settings_with(env(&[]), &dir, &wt, |_| panic!("asked git"));
+        assert_eq!(s.project, dir.join("wt").to_string_lossy());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pwd_counts_when_it_names_this_folder() {
+        let here = std::env::current_dir().unwrap();
+        assert_eq!(logical_cwd(None).unwrap(), here);
+        assert_eq!(logical_cwd(Some("relative".into())).unwrap(), here);
+        assert_eq!(logical_cwd(Some("/nonexistent-k5-dir".into())).unwrap(), here);
+        let dotted = format!("{}/./x/..//", here.display());
+        assert_eq!(logical_cwd(Some(dotted.into())).unwrap(), here);
+        // A link to this folder is kept as written.
+        let dir = scratch("pwdlink");
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&here, &link).unwrap();
+        assert_eq!(logical_cwd(Some(link.clone().into())).unwrap(), link);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

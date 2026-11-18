@@ -37,7 +37,8 @@
 //!   [`families`] here, everything else to the shell CLI.
 //! - [`families`]: the command families the binary answers itself, as the
 //!   shell CLI does: `whoami`, `done`, `respond`, `read`, `activity` and
-//!   the read forms of `inbox`, `sessions` and `connections` so far.
+//!   the read forms of `inbox`, `sessions`, `connections` and `feedback`
+//!   so far.
 //! - [`prelude`]: what the shell CLI does around such a verb: its first
 //!   line, its two gates, an `id` tool's passport checks and its EXIT
 //!   trap's lines.

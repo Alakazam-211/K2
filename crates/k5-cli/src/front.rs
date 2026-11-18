@@ -8,8 +8,9 @@
 //! through, as does everything else, byte for byte ([`crate::fallthrough`]).
 //!
 //! A family's help is the shell's: a `whoami`, `done`, `respond`, `inbox`,
-//! `read`, `activity`, `sessions` or `connections` command line with `-h`
-//! or `--help` anywhere in it falls through, so the shell prints its help
+//! `read`, `activity`, `sessions`, `connections` or `feedback` (`tickets`)
+//! command line with `-h` or `--help` anywhere in it falls through, so the
+//! shell prints its help
 //! text (or its error for a flag before it, or whatever it does with such
 //! a word where it reads a value), with its connection gate in front of
 //! it, exactly as it always has. No copy of the text lives here.
@@ -57,6 +58,10 @@ pub enum Route {
     /// or `--help` in it ([`crate::families::connections`], which may
     /// still hand it to the shell).
     Connections,
+    /// `feedback` or `tickets` with a verb the route table sends here and
+    /// no `-h` or `--help` in it ([`crate::families::feedback`], which may
+    /// still hand it to the shell).
+    Feedback,
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
@@ -133,6 +138,7 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
         ("activity", Route::Activity),
         ("sessions", Route::Sessions),
         ("connections", Route::Connections),
+        ("feedback", Route::Feedback),
     ] {
         if noun.names(word) {
             return if help { Route::Fallthrough } else { route };
@@ -394,6 +400,31 @@ mod tests {
             for line in [&[w, "--help"][..], &[w, "list", "-h"], &[w, "x", "--help"]] {
                 assert_eq!(native(row(w), &args(line)), Route::Fallthrough, "{line:?}");
             }
+        }
+    }
+
+    /// `feedback` and `tickets` (one row), likewise.
+    #[test]
+    fn the_r3_8_forms() {
+        let row = route::TABLE
+            .iter()
+            .find(|n| n.names("feedback"))
+            .expect("a feedback row");
+        assert!(row.names("tickets"));
+        for line in [
+            &["feedback", "list"][..],
+            &["tickets", "list", "--json"],
+            &["feedback", "show", "x"],
+            &["tickets", "show", "x", "--html"],
+        ] {
+            assert_eq!(native(row, &args(line)), Route::Feedback, "{line:?}");
+        }
+        for line in [
+            &["feedback", "list", "--help"][..],
+            &["tickets", "show", "x", "-h"],
+            &["feedback", "--help"],
+        ] {
+            assert_eq!(native(row, &args(line)), Route::Fallthrough, "{line:?}");
         }
     }
 

@@ -109,6 +109,7 @@ fn main() {
         Route::Connections => {
             families::connections::run(&args).unwrap_or_else(|| shell(who, &args))
         }
+        Route::Feedback => families::feedback::run(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Fallthrough => shell(who, &args),
     };
     trace::finish("command");

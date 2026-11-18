@@ -20,18 +20,40 @@ Usage: k2 update [--app|--cli [--check]|--list]
 EOF
 }
 
+# `_app_update_get <url>`: GET a GitHub API URL, the body on stdout. When
+# GitHub can't be reached (no network, refused, timed out, an HTTP error)
+# it prints one line on stderr, with curl's exit code and message, and
+# returns 1. Before, under set -e the failed curl stopped the command with
+# curl's code and no word.
+_app_update_get() {
+    local errf body rc=0 msg
+    errf=$(mktemp "${TMPDIR:-/tmp}/k2-update.XXXXXX") || {
+        echo "Error: couldn't make a temp file to ask GitHub" >&2
+        return 1
+    }
+    body=$(curl -fsS --connect-timeout 10 --max-time 30 \
+        -H "Accept: application/vnd.github.v3+json" "$1" 2>"$errf") || rc=$?
+    msg=$(head -n 1 "$errf" | sed 's/^curl: ([0-9]*) //')
+    rm -f "$errf"
+    if [ "$rc" -ne 0 ]; then
+        echo "Error: couldn't reach GitHub (curl exit $rc${msg:+: $msg})" >&2
+        return 1
+    fi
+    printf '%s' "$body"
+}
+
 # `k2 update` / `--app`: this k2's version and the latest release's tag,
 # with its download page. `k2 update --list`: the ten newest releases.
 # cmd_update_v2 is the only caller, with --list or with nothing.
+# GitHub out of reach: one line on stderr and exit 1 (_app_update_get).
 cmd_app_update() {
     # Both forms ask GitHub: refused under air-gap, like k2 daemon install.
     _k2_refuse_if_airgap
     if [ "${1:-}" = "--list" ]; then
-        # List available versions from GitHub
+        local releases
+        releases=$(_app_update_get "https://api.github.com/repos/Alakazam-211/K2/releases?per_page=10") || exit 1
         echo "Available K2 releases:"
-        curl -sH "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/Alakazam-211/K2/releases?per_page=10" 2>/dev/null | \
-            python3 -c "
+        printf '%s' "$releases" | python3 -c "
 import json, sys
 data = json.loads(sys.stdin.read())
 for r in data:
@@ -46,8 +68,7 @@ for r in data:
     # Check for latest and show info
     echo "Checking for app updates..."
     local latest
-    latest=$(curl -sH "Accept: application/vnd.github.v3+json" \
-        "https://api.github.com/repos/Alakazam-211/K2/releases/latest" 2>/dev/null)
+    latest=$(_app_update_get "https://api.github.com/repos/Alakazam-211/K2/releases/latest") || exit 1
     local tag
     tag=$(echo "$latest" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('tag_name','unknown'))" 2>/dev/null)
     echo "  Current: v$K2_CLI_VERSION"

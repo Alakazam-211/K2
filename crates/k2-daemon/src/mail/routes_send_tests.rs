@@ -2536,8 +2536,8 @@ fn linked_send_refuses_reply_to() {
 }
 
 /// `k2 mail reply` stays locked to the original sender: a Reply-To is
-/// refused, not dropped, before anything else happens; a recipient in the
-/// body is ignored, and the reply carries no Reply-To.
+/// refused, not dropped, before anything else happens; a `to` in the body
+/// is ignored (a `cc` adds a copy), and the reply carries no Reply-To.
 #[test]
 fn reply_stays_locked_and_refuses_reply_to() {
     let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
@@ -2567,7 +2567,10 @@ fn reply_stays_locked_and_refuses_reply_to() {
     assert_eq!(resp.status, "200 OK", "{}", resp.body);
     let id = body_json(&resp)["id"].as_str().expect("id").to_string();
     let stored = DbOutboundStore::default().load_message(&id).unwrap();
-    assert_eq!(stored.all_recipients(), vec!["cust@dest.example".to_string()], "locked to the original sender");
+    // `to` can't move the reply; `cc` (`k2 mail reply --cc`, 0.46.15) adds a
+    // copy, under the same gate (here: held for approval).
+    assert_eq!(stored.to, vec!["cust@dest.example".to_string()], "locked to the original sender");
+    assert_eq!(stored.cc, vec!["elsewhere@evil.example".to_string()], "--cc adds a copy");
     assert!(stored.reply_to.is_empty());
     assert!(send::submission_email_json(&stored).get("replyTo").is_none());
     send::deny(&DbOutboundStore::default(), &id, "owner", "cleanup", now_secs()).expect("deny");

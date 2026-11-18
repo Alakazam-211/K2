@@ -319,6 +319,13 @@ impl Settings {
         let port = self.port.ok_or_else(|| NoPort {
             home: self.home.clone(),
         })?;
+        Ok(self.client_on(port, would_refuse))
+    }
+
+    /// [`Settings::client`] on `port`, whatever the settings say: for a
+    /// call that goes on the cell socket with no port set, or a port its
+    /// caller read by its own rule.
+    pub fn client_on(&self, port: u16, would_refuse: bool) -> Client {
         let mut c = Client::new(
             self.host.clone(),
             port,
@@ -333,7 +340,7 @@ impl Settings {
             .clone()
             .map(|d| Box::new(SecretsDir(d)) as Box<dyn crate::transport::Healer>);
         c.use_healed_passport();
-        Ok(c)
+        c
     }
 }
 

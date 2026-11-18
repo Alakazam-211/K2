@@ -28,6 +28,11 @@ pub const SEND_JSON_MAX_TIME: Duration = Duration::from_secs(60);
 pub const SIDECAR_MAX_TIME: Duration = Duration::from_secs(120);
 /// `_cli_use_passport_project`'s `--max-time 15` (`cli/src/cell-socket.sh`).
 pub const PASSPORT_PROJECT_MAX_TIME: Duration = Duration::from_secs(15);
+/// Where `_permission_probe` asks whether permission cards are on
+/// (`cli/src/permission.sh`).
+pub const CARDS_ENDPOINT: &str = "/cli/permission/enabled";
+/// `_permission_probe`'s `--connect-timeout 1 --max-time 1`.
+pub const CARDS_TIME: Duration = Duration::from_secs(1);
 /// `_K2_CURL_TRIES`: each retry loop's tries, the first included.
 pub const TRIES: u32 = 4;
 /// The `sleep 1` between tries.
@@ -222,6 +227,13 @@ enum Kind {
     /// try (urllib never tries again), at most 30 s to connect and 30 s in
     /// all; no heal, no line, no note.
     Urlopen,
+    /// `_permission_probe` (`cli/src/permission.sh`): a GET of
+    /// [`CARDS_ENDPOINT`] with `-G` and no data of the caller's, on the
+    /// cell socket (the passport as Bearer) or over TCP (`token=` as
+    /// curl's `data-urlencode` writes it), never both. Connect 1 s, at
+    /// most 1 s; only `_k2_curl`'s tries (a refused connect, and a moved
+    /// port over TCP); no heal, no line, no note.
+    Cards,
 }
 
 impl Kind {
@@ -254,6 +266,7 @@ impl Kind {
                 | Kind::SidecarGet
                 | Kind::PassportProject
                 | Kind::Urlopen
+                | Kind::Cards
         )
     }
     /// A refused passport is tried again with a healed one, on either
@@ -269,6 +282,7 @@ impl Kind {
                 | Kind::SidecarGet
                 | Kind::PassportProject
                 | Kind::Urlopen
+                | Kind::Cards
         )
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
@@ -283,6 +297,7 @@ impl Kind {
                 | Kind::SidecarGet
                 | Kind::PassportProject
                 | Kind::Urlopen
+                | Kind::Cards
         )
     }
     /// `--connect-timeout` (urllib's `timeout`, for [`Kind::Urlopen`]).
@@ -290,6 +305,7 @@ impl Kind {
         match self {
             Kind::Probe => PROBE_CONNECT_TIMEOUT,
             Kind::Urlopen => MAX_TIME,
+            Kind::Cards => CARDS_TIME,
             _ => CONNECT_TIMEOUT,
         }
     }
@@ -526,6 +542,8 @@ pub struct Client {
     /// Where a refused passport may have been minted again.
     pub healer: Option<Box<dyn Healer>>,
     healed: bool,
+    /// Refused connects `_k2_curl` tried again before the last answer.
+    refused: std::cell::Cell<u32>,
 }
 
 impl Client {
@@ -551,6 +569,7 @@ impl Client {
             port_file: None,
             healer: None,
             healed: false,
+            refused: std::cell::Cell::new(0),
         }
     }
 
@@ -595,6 +614,41 @@ impl Client {
             Ok(r) => contains(&r.body, PASSPORT_REFUSAL),
             Err(_) => false,
         }
+    }
+
+    /// `_permission_probe "$SCOPED_TOKEN"`'s request ([`Kind::Cards`]):
+    /// on the cell socket when [`Client::has_cell_socket`], else over TCP.
+    /// The caller reads the answer (the shell's Python: a 200 whose body
+    /// is a JSON object with `"enabled": true`). Needs a passport.
+    pub fn permission_enabled(&mut self) -> Result<Response, Error> {
+        let channel = if self.has_cell_socket() {
+            Channel::Uds
+        } else {
+            Channel::Tcp
+        };
+        self.run(
+            Kind::Cards,
+            channel,
+            CARDS_ENDPOINT,
+            &[],
+            &[],
+            Instant::now(),
+        )
+        .map_err(|f| f.error)
+    }
+
+    /// How many refused connects the last exchange tried again before it
+    /// got through (`_k2_curl`'s loop). A call whose shell reads curl's
+    /// `-w` output from `$(…)` sees one `-w` line per try, the failed ones
+    /// first.
+    pub fn refused_before_answer(&self) -> u32 {
+        self.refused.get()
+    }
+
+    /// There is a passport, its cell socket is a socket (`[ -S ]`) and no
+    /// remote host forces TCP.
+    pub fn has_cell_socket(&self) -> bool {
+        self.cell_socket().is_some()
     }
 
     /// The passport the calls use now (a healed one after a heal).
@@ -943,6 +997,7 @@ impl Client {
             Kind::Probe => PROBE_MAX_TIME,
             Kind::SidecarGet => SIDECAR_MAX_TIME,
             Kind::PassportProject => PASSPORT_PROJECT_MAX_TIME,
+            Kind::Cards => CARDS_TIME,
         }
     }
 
@@ -981,6 +1036,7 @@ impl Client {
         let mut target = target.clone();
         let mut request = request.clone();
         let mut tries = 1;
+        self.refused.set(0);
         loop {
             let deadline = Instant::now() + max;
             match wire::connect(&target, kind.connect_timeout(), deadline) {
@@ -998,6 +1054,7 @@ impl Client {
                         return Err(Failure::Connect(e));
                     }
                     tries += 1;
+                    self.refused.set(self.refused.get() + 1);
                     std::thread::sleep(self.pause);
                     if let Target::Tcp { host, port } = &mut target {
                         if let Some(moved) = self.moved_port(host, *port) {
@@ -1184,7 +1241,7 @@ impl Client {
                 };
                 (Method::Post, path, json(&mut headers))
             }
-            Kind::SendJsonGet | Kind::SidecarGet | Kind::PassportProject => {
+            Kind::SendJsonGet | Kind::SidecarGet | Kind::PassportProject | Kind::Cards => {
                 let payload = String::from_utf8_lossy(body);
                 let path = if tcp {
                     let mut data = wire::curl_data_urlencode("token", token);
@@ -1513,6 +1570,7 @@ mod tests {
             Kind::SidecarGet,
             Kind::PassportProject,
             Kind::Urlopen,
+            Kind::Cards,
         ] {
             assert!(!k.checks_local_denial(), "{k:?}");
         }
@@ -1555,6 +1613,7 @@ mod tests {
                 false,
             ),
             (Urlopen, false, false, false, false, false, false, true),
+            (Cards, false, false, false, false, false, false, false),
         ];
         for (k, m, c, s, n, h, p, o) in rows {
             assert_eq!(

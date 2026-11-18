@@ -156,11 +156,7 @@ pub fn prelude(env: &Env, cwd: &Path) -> Result<Prelude, Handoff> {
     let path = SearchPath::new(path);
     path.need("cat")?;
 
-    // K2_HOME="${HOME}/.k2"; [ -d "$K2_HOME" ] || K2_HOME="${HOME}/.k2so"
-    let mut k2_home = cat_path(home, NEW_NAME);
-    if !k2_home.is_dir() {
-        k2_home = cat_path(home, OLD_NAME);
-    }
+    let k2_home = home_in(home);
 
     let passport = env.first(env_names::HOOK_TOKEN).is_some();
     let hook_sock = env.first(env_names::HOOK_SOCK).is_some();
@@ -191,6 +187,23 @@ pub fn prelude(env: &Env, cwd: &Path) -> Result<Prelude, Handoff> {
         passport,
         hook_sock,
     })
+}
+
+/// The shell's K2 home: `K2_HOME="${HOME}/.k2"; [ -d "$K2_HOME" ] ||
+/// K2_HOME="${HOME}/.k2so"`. The binary's home override doesn't count:
+/// the shell never reads it.
+fn home_in(home: &OsStr) -> PathBuf {
+    let k2_home = cat_path(home, NEW_NAME);
+    if k2_home.is_dir() {
+        k2_home
+    } else {
+        cat_path(home, OLD_NAME)
+    }
+}
+
+/// The shell's K2 home in `env` ([`home_in`]), when `HOME` is set.
+pub fn shell_k2_home(env: &Env) -> Option<PathBuf> {
+    env.get("HOME").map(home_in)
 }
 
 /// `"$a/b"`: the shell's join.

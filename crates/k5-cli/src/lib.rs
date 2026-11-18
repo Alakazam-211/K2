@@ -52,10 +52,13 @@
 //!   help forms the binary may answer; [`pages`]: which command line is
 //!   which page, and whether the shell's environment ([`offline`]) lets
 //!   the binary print it.
+//! - [`cards`]: whether permission cards are on for this caller, asked
+//!   as the shell asks before a page that depends on them.
 //! - [`tools`]: the shell's tool table, which catalog tool a command line
 //!   is and whether it needs the session's own passport.
 
 pub mod called_as;
+pub mod cards;
 pub mod check;
 pub mod cli_status;
 pub mod daemon;

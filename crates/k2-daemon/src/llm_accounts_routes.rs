@@ -154,6 +154,18 @@ fn storage_change_blocked(caller: &Caller) -> bool {
     }
 }
 
+/// Is the token `key` (an id or label) its tool's server default, or the
+/// subscription in the tool's own store behind an API-token default?
+fn is_server_default(key: &str) -> bool {
+    with_conn(|conn| -> Result<bool, WalletError> {
+        let e = wallet_core::lookup(conn, None, key.trim())?;
+        let Some(tool) = e.tool() else { return Ok(false) };
+        Ok(wallet_core::active_id(conn, tool)?.as_deref() == Some(e.id.as_str())
+            || wallet_core::live_owner(conn, tool)?.as_deref() == Some(e.id.as_str()))
+    })
+    .unwrap_or(false)
+}
+
 fn default_change_refusal(caller: &Caller) -> Option<CliResponse> {
     default_change_blocked(caller).map(|why| refuse(403, "admin_required", why))
 }
@@ -767,7 +779,11 @@ pub fn handle(
     // Changing the server default: switch, next, clear-default, and a
     // remove that clears it (smoke r6) are Admin and above.
     let clears_default = path == REMOVE && parse_body(body).is_ok_and(|b| b.clear_default == Some(true));
-    if path == SWITCH || path == NEXT || path == CLEAR_DEFAULT || clears_default {
+    // Signing the server default in again changes which account every
+    // chat on Server default uses: Admin and above, like a switch. Other
+    // tokens' sign-ins are not covered by this rule.
+    let signs_in_default = path == LOGIN && parse_body(body).is_ok_and(|b| b.id.as_deref().is_some_and(is_server_default));
+    if path == SWITCH || path == NEXT || path == CLEAR_DEFAULT || clears_default || signs_in_default {
         if let Some(r) = default_change_refusal(&caller) {
             audit("llm_accounts.switch_refused", key.as_deref().unwrap_or("-"), "admin_required", ingress);
             return r;
@@ -1484,6 +1500,42 @@ mod tests {
         assert_eq!(steps(owner_login).len(), 1, "still there for the other owner");
         let (st, _) = call(WARNINGS_DISMISS, Caller::Owner, r#"{"id":"x"}"#);
         assert_eq!(st, "400 Bad Request");
+        clear_claude_rows();
+    }
+
+    /// Signing the server default in again is Admin and above (it changes
+    /// the account every chat on Server default uses), also in the warning
+    /// window before its sign-in ends; another token's sign-in is not.
+    /// Air-gap stops each allowed call right after the rule, before any
+    /// sign-in starts.
+    #[test]
+    fn signing_in_the_server_default_again_is_admin_and_above() {
+        use k2_core::connect_users::Role;
+        let home = crate::test_support::TempHome::new();
+        let (a, b) = setup(home.path());
+        // The default's live sign-in ends in two days (inside the window).
+        let ends_ms = (chrono::Utc::now().timestamp() + 2 * 86_400) * 1000;
+        std::fs::write(
+            home.path().join(".claude/.credentials.json"),
+            format!(r#"{{"claudeAiOauth":{{"accessToken":"{MARKER}-at-a","refreshToken":"{MARKER}-rt-a","expiresAt":4102444800000,"refreshTokenExpiresAt":{ends_ms}}}}}"#),
+        )
+        .unwrap();
+        let member = login("llmrelogin_member", Role::Member);
+        let admin = login("llmrelogin_admin", Role::Admin);
+        k2_core::airgap::set_setting_enabled(true);
+        let on_default = format!(r#"{{"id":"{a}"}}"#);
+        let (st, v) = call(LOGIN, member.clone(), &on_default);
+        assert_eq!(st, "403 Forbidden", "{v}");
+        assert_eq!(v["error"]["code"], "admin_required", "{v}");
+        for c in [admin, Caller::Owner] {
+            let (st, v) = call(LOGIN, c.clone(), &on_default);
+            assert_ne!(v["error"]["code"], "admin_required", "{c:?}: {st} {v}");
+            assert_eq!(v["error"]["code"], "airgap", "{c:?}: past the rule: {st} {v}");
+        }
+        // Another token: a Member's sign-in is as before.
+        let (st, v) = call(LOGIN, member, &format!(r#"{{"id":"{b}"}}"#));
+        assert_eq!(v["error"]["code"], "airgap", "past the rule: {st} {v}");
+        k2_core::airgap::set_setting_enabled(false);
         clear_claude_rows();
     }
 

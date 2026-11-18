@@ -142,5 +142,20 @@ describe('an ended Claude sign-in', () => {
     const quiet = await renderRow('acc_def')
     expect(within(quiet).queryByTestId('llm-ends-acc_def')).toBeNull()
   })
+
+  it('Sign in again on the server default is off for someone who may not change the default, with the reason', async () => {
+    const reason = 'Only an Admin or the Owner can change the server default token.'
+    listDoc = docWith([account({ id: 'acc_def', label: 'jeff', active: true, state: 'needs_login', detail: ENDED_DETAIL }), account({ id: 'acc_b', label: 'other', state: 'needs_login' })], {
+      canChangeDefault: false,
+      changeDefaultReason: reason,
+    })
+    const row = await renderRow('acc_def')
+    const b = within(row).getByRole('button', { name: 'Sign in again' }) as HTMLButtonElement
+    expect(b.disabled).toBe(true)
+    expect(b.getAttribute('title')).toBe(reason)
+    // Another token's sign-in is unchanged.
+    const other = within(screen.getByTestId('llm-account-acc_b')).getByRole('button', { name: 'Sign in again' }) as HTMLButtonElement
+    expect(other.disabled).toBe(false)
+  })
 })
 

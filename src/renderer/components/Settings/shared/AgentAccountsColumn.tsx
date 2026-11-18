@@ -322,6 +322,8 @@ function AccountRow({
   // sign-in has ended (the new one goes live).
   const endsSoon = signedIn && account.signInEndsSoon === true
   const canLoginAgain = !apiKey && (account.active ? needsLogin || endsSoon : signedIn || needsLogin)
+  // Signing the server default in again is Admin and above, like a switch.
+  const reloginBlocked = account.active && !doc.canChangeDefault ? (doc.changeDefaultReason ?? ADMIN_SWITCH_REASON) : undefined
   const canApply = account.active && needsLogin && account.canApply === true
 
   const refresh = (): void => {
@@ -352,8 +354,8 @@ function AccountRow({
     </Button>
   ) : needsLogin ? (
     <Button
-      disabled={pinnedBlock}
-      title={pinnedBlock ? PINNED_SWITCH_REASON : `Sign “${account.label}” in again`}
+      disabled={pinnedBlock || reloginBlocked !== undefined}
+      title={pinnedBlock ? PINNED_SWITCH_REASON : reloginBlocked ?? `Sign “${account.label}” in again`}
       onClick={() => actions.onLoginAgain(account)}
     >
       Sign in again
@@ -367,8 +369,8 @@ function AccountRow({
     items.push({
       id: 'relogin',
       label: 'Sign in again…',
-      disabled: !canLoginAgain || pinnedBlock,
-      hint: account.active && !needsLogin && !endsSoon ? ACTIVE_RELOGIN_HINT : pinnedBlock ? PINNED_SWITCH_REASON : undefined,
+      disabled: !canLoginAgain || pinnedBlock || reloginBlocked !== undefined,
+      hint: account.active && !needsLogin && !endsSoon ? ACTIVE_RELOGIN_HINT : pinnedBlock ? PINNED_SWITCH_REASON : reloginBlocked,
       onSelect: () => actions.onLoginAgain(account),
     })
   }

@@ -184,7 +184,7 @@ fn a_verb_falls_through_and_answers_as_the_shell_does() {
     odd.push(b'\n');
     let cases: Vec<Vec<OsString>> = vec![
         args(&["nosuchverb"]),
-        args(&["study", "what"]),
+        args(&["study", "app-api"]),
         args(&["version", "extra"]),
         args(&[]),
         vec![OsString::from_vec(odd)],

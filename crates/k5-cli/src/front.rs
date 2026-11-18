@@ -505,6 +505,19 @@ mod tests {
     }
 
     #[test]
+    fn the_study_forms() {
+        assert_eq!(route(&args(&["study"])), Route::Study(Study::Catalog));
+        assert_eq!(route(&args(&["study", "list"])), Route::Study(Study::Catalog));
+        assert_eq!(route(&args(&["study", "-h"])), Route::Study(Study::Usage));
+        assert_eq!(route(&args(&["study", "errors", "--json"])), Route::Study(Study::Page { topic: "errors", json: true }));
+        assert_eq!(route(&args(&["study", "cron"])), Route::Study(Study::Page { topic: "heartbeats", json: false }));
+        // The shell's: the list as JSON, unknown and bash topics, errors.
+        for shell in [&["study", "--json"][..], &["study", "nope"], &["study", "app-api"], &["study", "errors", "db"], &["study", "--x"]] {
+            assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
+        }
+    }
+
+    #[test]
     fn the_line_says_k2() {
         assert_eq!(version_line("0.46.14"), "k2 0.46.14\n");
     }

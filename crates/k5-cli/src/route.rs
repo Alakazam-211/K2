@@ -234,7 +234,7 @@ pub static TABLE: &[Noun] = &[
     native(&["version", "--version", "-v"]),
     native(&["cli"]),
     bash(&["--schema", "schema"]),
-    bash(&["study"]),
+    native(&["study"]),
     bash(&["explain"]),
     bash(&["capabilities"]),
     bash(&["send-feedback"]),

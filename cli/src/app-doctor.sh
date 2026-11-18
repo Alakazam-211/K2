@@ -1838,17 +1838,29 @@ for x in r:
 
 # POST a JSON body from FILE (too big for argv or a curl config line: an
 # exec's stdin). Same transports as _compute_send; sets _CP_STATUS/_CP_BODY.
+#
+# 0.46.15: the send-once rule of _compute_send. The POST goes again over
+# TCP after the cell socket only when the socket took none of it: the
+# connect failed (curl 7) or the daemon answered "not served on cell
+# socket". Any other failure may have run the command, so it is not sent
+# again: _cli_send_unanswered says so and ends the command with 1.
 _app_rt_post_file() {
-    local path="$1" file="$2" sock out="" _K2_CFG=""
+    local path="$1" file="$2" sock out="" _K2_CFG="" rc=0 t0="$SECONDS"
     sock="$(_hook_sock)"
     if [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds && [ -n "${SCOPED_TOKEN:-}" ]; then
         _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
         _k2_cfg_add data-binary "@$file"
         out="$(_k2_curl "$_K2_CFG" -s -X POST --unix-socket "$sock" "http://localhost${path}" \
             --connect-timeout 5 --max-time "${K2_CP_MAX_TIME:-120}" -H "Content-Type: application/json" \
-            -w $'\n%{http_code}' 2>/dev/null)" || out=""
-        if [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
+            -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
+        if [ "$rc" -eq 0 ] && [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
             _compute_split "$out"
+            return 0
+        fi
+        if [ "$rc" -ne 7 ] && [[ "$out" != *"not served on cell socket"* ]]; then
+            _cli_send_unanswered "$path" "$t0" 0 ""
+            # Soft callers (_K2_NOANSWER_SOFT=1) get status 000 instead.
+            _compute_split $'\n000'
             return 0
         fi
     fi
@@ -1887,6 +1899,10 @@ cmd_app_exec() {
         # The body carries the stdin as base64: from a temp file, never argv.
         local tmpd rc=0
         tmpd="$(mktemp -d "${TMPDIR:-/tmp}/k2-exec-XXXXXX")"
+        # The copy of stdin goes when the command ends, also when K2 didn't
+        # answer and the send ended it.
+        _K2_EXEC_TMPD="$tmpd"
+        trap '_k2_exit_rc=$?; rm -rf "$_K2_EXEC_TMPD"; _permission_note_flush "$_k2_exit_rc"' EXIT
         python3 -c '
 import base64, json, sys
 out, app, argv, timeout = sys.argv[1:5]
@@ -1904,6 +1920,7 @@ with open(out, "w") as f:
         if [ "$rc" -ne 0 ]; then rm -rf "$tmpd"; exit "$rc"; fi
         K2_CP_MAX_TIME=$(( ${timeout:-60} + 120 )) _app_rt_post_file /cli/app/exec "$tmpd/body.json"
         rm -rf "$tmpd"
+        trap _permission_note_flush EXIT
     else
         local body
         body="$(_compute_json K2_CJ_app="$app" K2_CJ_argv_j="$argv_json" K2_CJ_timeout_n="$timeout")"

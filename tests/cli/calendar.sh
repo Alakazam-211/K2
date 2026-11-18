@@ -32,7 +32,10 @@ for want in 'k2 calendar list' 'events' 'freebusy' 'wait' 'create' 'update' 'del
             'LINKED INBOXES' 'Microsoft 365' 'Google Calendar API' 'sendUpdates=none' \
             'k2 mail link calendars on' 'scope_not_granted' \
             '/cli/mail/calendar/' 'BEGIN/END CALENDAR NOTES' 'SHARED CALENDARS' \
-            '<owner>/<id>' 'share_rights' 'editor share'; do
+            '<owner>/<id>' 'share_rights' 'editor share' \
+            'READ-ONLY CALENDAR LINKS' 'k2 cal link --request' 'read_only_link' 'self_response' \
+            'needsAction' 'meeting_id' 'never opens it' '--omit-description' 'k2 cal calendars' \
+            '1 day back and 45 days ahead' 'k2 cal event <id>'; do
   <<<"$help" grep -qF -- "$want" || fail "calendar --help must mention '$want'"
 done
 <<<"$help" grep -qF -- 'not_built' && fail "calendar --help must not say Google calendars are not built (MCS4)"
@@ -47,7 +50,7 @@ done
 
 # Schema.
 schema="$("$K2" --schema)" || fail "k2 --schema exited non-zero"
-for n in list events show freebusy wait create update delete; do
+for n in list events show freebusy wait create update delete calendars link; do
   grep -qF "\"name\": \"calendar $n\"" <<<"$schema" || fail "schema missing calendar $n"
 done
 
@@ -73,6 +76,20 @@ expect_rc 2 calendar events --limit x
 expect_rc 2 calendar wait --timeout 901
 expect_rc 2 calendar events --from
 expect_rc 2 cal list --inbox a@example.com
+# Calendar S1 usage errors (before any request).
+expect_rc 2 calendar link
+expect_rc 2 calendar link a@example.com
+expect_rc 2 calendar link a@example.com --provider yahoo --workspace w
+expect_rc 2 calendar link a@example.com --provider google
+expect_rc 2 calendar link a@example.com --provider microsoft --workspace w --paste
+expect_rc 2 calendar link a@example.com --provider microsoft --workspace w --paste-file /tmp/x
+expect_rc 2 calendar link --request a@example.com --provider google --workspace w
+expect_rc 2 calendar link --request a@example.com --provider google --omit-description
+expect_rc 2 calendar calendars
+expect_rc 2 calendar calendars a@example.com --calendar x
+expect_rc 2 calendar show --full
+expect_rc 2 mail access grant a@example.com w --calendar-omit-description maybe
+expect_rc 2 mail access revoke a@example.com w --calendar-omit-description on
 
 # Live: a local echo server records method, path, query and body, and
 # answers from a reply map (path → [status, body]) re-read per request.
@@ -200,6 +217,43 @@ for r, (m, p, q, b) in zip(rows, want):
         sys.exit("FAIL: the CLI never sends an accountId")
 PY
 python3 "$WORK/check.py" "$WORK/requests"
+
+# Calendar S1: event alias, --full / --include-cancelled, calendars, link --request.
+: >"$WORK/requests"
+set_reply0() {
+  python3 - "$WORK/replies.json" "$1" "$2" <<'PY'
+import json, sys
+p, path, body = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+d = json.load(open(p)); d[path] = [200, body]; json.dump(d, open(p, "w"))
+PY
+}
+set_reply0 /cli/mail/calendar/show '{"ok":true,"address":"ops@example.com","event":{"id":"ev_abc","title":"Consult","start":"2026-10-08T16:00:00Z","end":"2026-10-08T16:30:00Z","description":null,"redacted":["description"],"join":{"provider":"zoom","meeting_id":"81234567890","url":"https://us02web.zoom.us/j/81234567890"},"organizer":"person@example.com","organizer_is_self":true,"self_response":"accepted","attendees":[{"email":"client@example.net","response":"declined"}]}}'
+set_reply0 /cli/mail/calendar/calendars '{"ok":true,"address":"ops@example.com","access":"read-only","calendars":[{"id":"ops@example.com","name":"ops","isDefault":true,"optedIn":true,"primary":true},{"id":"team@example.com","name":"Team","optedIn":true}],"added":["team@example.com"],"removed":[]}'
+set_reply0 /cli/mail/calendar/link-request '{"ok":true,"address":"ops@example.com","posted":true,"hint":"a card is on your Thread"}'
+out="$(k2 cal event ev_abc)"
+<<<"$out" grep -q 'join     : Zoom 81234567890' || fail "event shows the join: $out"
+<<<"$out" grep -q 'attendee : client@example.net (declined)' || fail "event lists normalised attendees: $out"
+<<<"$out" grep -q 'left out' || fail "event says descriptions were left out: $out"
+<<<"$out" grep -q 'BEGIN CALENDAR NOTES' && fail "no notes block when the description is left out: $out"
+k2 cal events ops@example.com --full --include-cancelled --json >/dev/null
+out="$(k2 cal calendars ops@example.com --add Team --add "Big Room" --remove old)"
+<<<"$out" grep -q '^on  team@example.com · Team' || fail "calendars output: $out"
+k2 cal calendars ops@example.com >/dev/null
+k2 cal link --request ops@example.com --provider microsoft | grep -q 'card' || fail "link --request output"
+python3 - "$WORK/requests" <<'PY'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]).read().splitlines()]
+got = [(r["m"], r["p"]) for r in rows]
+want = [("GET", "/cli/mail/calendar/show"), ("GET", "/cli/mail/calendar/events"),
+        ("POST", "/cli/mail/calendar/calendars"), ("GET", "/cli/mail/calendar/calendars"),
+        ("POST", "/cli/mail/calendar/link-request")]
+assert got == want, got
+assert rows[0]["q"]["id"] == "ev_abc", rows[0]
+assert rows[1]["q"].get("full") == "1" and rows[1]["q"].get("includeCancelled") == "1", rows[1]
+assert rows[2]["b"] == {"address": "ops@example.com", "add": ["Team", "Big Room"], "remove": ["old"]}, rows[2]
+assert rows[3]["q"].get("address") == "ops@example.com", rows[3]
+assert rows[4]["b"] == {"project": "/tmp/ws-calendar-test", "address": "ops@example.com", "provider": "microsoft"}, rows[4]
+PY
 
 # Exit contract: wait timeout → exit 2, nothing on stdout, state in the hint.
 set_reply() {

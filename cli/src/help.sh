@@ -86,8 +86,12 @@ EMAIL (K2 Mail — real addresses for agents; server runs on Linux daemons)
   mail send | reply | outbox            Send under your human's governance (may queue
                                         for approval — that's success, exit 0)
                                         (domains/status/doctor/config/approvals — `k2 mail --help`)
-  calendar list | events | freebusy     Calendars of a hosted inbox (read grant; alias: cal)
-  calendar create | update | delete     Write events (draft grant; never sends email)
+  calendar list | events | show | freebusy
+                                        Calendars of an inbox you hold a grant on: hosted,
+                                        or a linked Google / Microsoft 365 account (alias: cal)
+  calendar create | update | delete     Write events (draft grant; never sends email;
+                                        refused on a read-only link)
+  calendar link --request <address>     Ask your human to link their calendar read-only
 
 DNS (K2 Connect zones — toggle-gated)
   dns access                            Capability probe (allowed? types? zones)

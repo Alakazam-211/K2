@@ -34,9 +34,15 @@
 #         emailed), the stored-event guard, freeBusy with the events
 #         fallback, wait over syncToken (gs_ states), the owner token; a
 #         calendar-only link (calendar works, mail verbs exit 3
-#         capability_missing, an unticked consent stores nothing, Microsoft
-#         refused); a mail-only link upgraded in place with
-#         include_granted_scopes.
+#         capability_missing, an unticked consent stores nothing); a
+#         mail-only link upgraded in place with include_granted_scopes.
+#   Calendar S1 (prd-google-calendar-link-v1): read-only links for Google
+#         and Microsoft (calendar-only too): the read scopes asked, writes
+#         refused before any request (read_only_link), the event JSON (join
+#         labels, self_response, hidden invites, IANA zones), per-link
+#         calendar opt-in by the owner, omitted descriptions, agents refused
+#         a link but able to --request one (a card), the access log rows,
+#         and unlink cleaning the 0316 rows.
 #
 # Build first (the daemon MUST carry the test-only provider override; the
 # script refuses a daemon without it, and points the daemon's outbound
@@ -309,7 +315,7 @@ ok "list: own + shared calendars with rights"
 run agent calendar events "$MS" --from 2026-10-19 --to 2026-10-26 --json
 want_rc 0 "agent reads the week"
 jok "$OUT" '[e["title"] for e in j["events"]] == ["Focus time", "Pipeline review", "Board prep"]' "the seeded week in start order"
-jok "$OUT" 'j["events"][0]["start"] == "2026-10-20T16:00:00Z" and j["events"][0]["timeZone"] == "Pacific Standard Time" and j["events"][1]["timeZone"] == "Europe/Berlin" and j["events"][1]["participants"] == 1' "UTC instants, each event keeps its zone"
+jok "$OUT" 'j["events"][0]["start"] == "2026-10-20T16:00:00Z" and j["events"][0]["timeZone"] == "America/Los_Angeles" and j["events"][1]["timeZone"] == "Europe/Berlin" and j["events"][1]["participants"] == 1' "UTC instants, each event keeps its zone (a Windows zone id as its IANA name)"
 EV_SOLO="$(printf %s "$OUT" | python3 -c 'import json,sys; print([e["id"] for e in json.load(sys.stdin)["events"] if e["title"]=="Focus time"][0])')"
 EV_MEETING="$(printf %s "$OUT" | python3 -c 'import json,sys; print([e["id"] for e in json.load(sys.stdin)["events"] if e["title"]=="Pipeline review"][0])')"
 EV_INVITED="$(printf %s "$OUT" | python3 -c 'import json,sys; print([e["id"] for e in json.load(sys.stdin)["events"] if e["title"]=="Board prep"][0])')"
@@ -420,7 +426,7 @@ want_rc 0 "a mail-only Microsoft link"
 fake_cfg '{"msAccount": "rosson@contoso.example"}'
 run agent calendar events mailonly@contoso.example
 want_rc 3 "mail-only link exits 3"
-jok "$ERR" 'j["error"]["code"] == "capability_missing" and j["error"]["reason"] == "scope_not_granted" and j["error"]["cap"] == "calendar.read" and j["error"]["fix"] == "k2 mail link upgrade mailonly@contoso.example --features calendar (owner)"' "scope_not_granted with the upgrade fix"
+jok "$ERR" 'j["error"]["code"] == "capability_missing" and j["error"]["reason"] == "scope_not_granted" and j["error"]["cap"] == "calendar.read" and j["error"]["fix"] == "k2 mail link upgrade mailonly@contoso.example --features calendar-read (owner)"' "scope_not_granted with the upgrade fix"
 run owner mail link remove mailonly@contoso.example
 want_rc 0 "drop the mail-only link"
 ok "capability_missing: owner_disabled, scope_not_granted; masked + level gates first"
@@ -613,10 +619,7 @@ jok "$ERR" 'j["error"]["code"] == "capability_missing" and j["error"]["cap"] == 
 glink "unticked@gmail.example" '"calendar"' "openid https://www.googleapis.com/auth/userinfo.email"
 jok "$LDONE" 'j["state"] == "error" and j["code"] == "scope_not_granted"' "a calendar-only consent without the calendar scope fails"
 [ "$(sql "SELECT COUNT(*) FROM mail_external_inboxes WHERE email_address='unticked@gmail.example'")" = "0" ] || fail "nothing stored for the unticked consent"
-ms_cal="$(curl -s -X POST "$BASE/cli/mail/link/oauth/start?token=$DTOKEN" -H 'Content-Type: application/json' \
-    --data-raw "{\"address\":\"x@contoso.example\",\"provider\":\"microsoft\",\"workspace\":\"$REPO\",\"features\":\"calendar\"}")"
-jok "$ms_cal" 'j["error"]["code"] == "usage" and "calendar-only links are for Google" in j["error"]["hint"]' "a calendar-only Microsoft link is refused"
-ok "calendar-only: calendar works, mail exits 3 with the fix, unticked stores nothing, Microsoft refused"
+ok "calendar-only: calendar works, mail exits 3 with the fix, unticked stores nothing"
 
 echo "== MCS4: a mail-only Google link, then upgrade in place =="
 MO="mailonly@gmail.example"
@@ -625,7 +628,7 @@ jok "$LDONE" 'j["state"] == "connected"' "mail-only Google link"
 MOROW="$(sql "SELECT id FROM mail_external_inboxes WHERE email_address='$MO'")"
 run agent calendar events "$MO"
 want_rc 3 "mail-only Google link exits 3 on calendars"
-jok "$ERR" 'j["error"]["code"] == "capability_missing" and j["error"]["reason"] == "scope_not_granted" and j["error"]["fix"] == "k2 mail link upgrade mailonly@gmail.example --features calendar (owner)"' "scope_not_granted with the upgrade fix"
+jok "$ERR" 'j["error"]["code"] == "capability_missing" and j["error"]["reason"] == "scope_not_granted" and j["error"]["fix"] == "k2 mail link upgrade mailonly@gmail.example --features calendar-read (owner)"' "scope_not_granted with the upgrade fix"
 up="$(curl -s -X POST "$BASE/cli/mail/link/oauth/start?token=$DTOKEN" -H 'Content-Type: application/json' \
     --data-raw "{\"inbox\":\"$MO\",\"features\":\"calendar\",\"clientCapture\":true,\"redirectUri\":\"http://127.0.0.1:9/cb\"}")"
 jok "$up" '"include_granted_scopes=true" in j["authorizationUrl"] and "calendar.events" in j["authorizationUrl"] and "mail.google.com" in j["authorizationUrl"]' "incremental consent asks the union with include_granted_scopes"
@@ -640,6 +643,124 @@ jok "$(curl -s "$BASE/cli/mail/link/oauth/status?token=$DTOKEN&linkId=$ulid")" '
 run agent calendar events "$MO" --from 2026-10-19 --to 2026-10-26 --json
 want_rc 0 "the upgraded link's calendar works"
 ok "mail-only → upgrade --features calendar in place → k2 calendar works"
+
+echo "== Calendar S1: a read-only Google link (prd-google-calendar-link-v1) =="
+RO="person@gmail.example"
+glink "$RO" '"calendar-read"'
+jok "$LSTART" 'j["features"] == "calendar-read" and set(__import__("urllib.parse").parse.parse_qs(__import__("urllib.parse").parse.urlparse(j["authorizationUrl"]).query)["scope"][0].split()) == {"openid", "email", "https://www.googleapis.com/auth/calendar.events.readonly", "https://www.googleapis.com/auth/calendar.calendarlist.readonly"}' "the consent asks only the two read-only calendar scopes"
+jok "$LDONE" 'j["state"] == "connected" and "read-only" in j["hint"]' "the read-only link connects"
+ROROW="$(sql "SELECT id FROM mail_external_inboxes WHERE email_address='$RO'")"
+[ "$(sql "SELECT features FROM mail_external_inboxes WHERE id='$ROROW'")" = "calendar-read" ] || fail "stored calendar-read"
+run agent mail capabilities "$RO" --json
+want_rc 0 "agent capabilities (read-only link)"
+jok "$OUT" 'j["capabilities"]["calendar"]["read"] and not j["capabilities"]["calendar"]["write"] and any(m["cap"] == "calendar.write" and m["reason"] == "read_only_link" for m in j["capabilities"]["missing"])' "calendar.write off: read_only_link"
+ok "read-only Google link: two read scopes asked, stored calendar-read"
+
+run agent calendar events "$RO" --from 2026-10-19 --to 2026-10-30 --json
+want_rc 0 "agent reads the read-only calendar"
+jok "$OUT" 'j["access"] == "read-only" and "Consult: referral" not in [e["title"] for e in j["events"]]' "primary only until the owner adds more"
+jok "$OUT" '[e for e in j["events"] if e["title"] == "Intro call"][0]["self_response"] == "needsAction" and [e for e in j["events"] if e["title"] == "Intro call"][0]["organizer_is_self"] is False' "the hidden, unanswered invite is listed as needsAction"
+jok "$OUT" '[e for e in j["events"] if e["title"] == "Intro call"][0]["join"]["provider"] == "zoom" and [e for e in j["events"] if e["title"] == "Intro call"][0]["join"]["meeting_id"] == "89876543210" and [e for e in j["events"] if e["title"] == "Intro call"][0]["join"]["from"] == "description"' "a Zoom link in the description is labelled, never fetched"
+jok "$OUT" '[e for e in j["events"] if e["title"] == "Design review"][0]["join"]["provider"] == "meet" and [e for e in j["events"] if e["title"] == "Design review"][0]["join"]["meeting_id"] == "abc-defg-hij" and [e for e in j["events"] if e["title"] == "Design review"][0]["organizer_is_self"] is True' "Meet from the conference data"
+jok "$OUT" '[e for e in j["events"] if e["title"] == "Investor call"][0]["self_response"] == "tentative" and [e for e in j["events"] if e["title"] == "Investor call"][0]["myRole"] == "attendee"' "an invite from someone else: attendee, tentative"
+jok "$OUT" 'all("description" not in e for e in j["events"]) and "Private" not in json.dumps(j) and "445566" not in json.dumps(j)' "a summary never carries description text"
+jok "$(fake_log)" 'any(r["query"].get("showHiddenInvitations") == "true" for r in j["requests"] if r["path"].endswith("/calendars/primary/events") and "timeMin" in r["query"])' "the list asked for hidden invitations"
+ok "events: join labels, self_response, hidden invites, no description in summaries"
+
+run agent calendar events "$RO" --calendar team@group.calendar.google.com --from 2026-10-19 --to 2026-10-30
+want_rc 1 "a calendar the owner hasn't added is not found"
+jok "$ERR" 'j["error"]["code"] == "not_found"' "masked not_found"
+run agent calendar create "$RO" --title "x" --start 2026-10-29T16:00:00Z --end 2026-10-29T17:00:00Z
+want_rc 3 "writes on a read-only link exit 3"
+jok "$ERR" 'j["error"]["code"] == "capability_missing" and j["error"]["reason"] == "read_only_link" and j["error"]["cap"] == "calendar.write"' "read_only_link"
+jok "$(fake_log)" 'not any(r["method"] == "POST" and "/calendars/" in r["path"] and r["path"].endswith("/events") and "person" in json.dumps(r) for r in j["requests"]) and j["sent"] == []' "nothing was written or sent"
+run agent calendar calendars "$RO" --add Team
+want_rc 3 "an agent can't add a calendar"
+jok "$ERR" 'j["error"]["code"] in ("owner_only", "forbidden")' "owner_only"
+ok "masked calendars, writes refused before any request, agents can't opt in"
+
+run owner calendar calendars "$RO" --json
+want_rc 0 "the owner sees every calendar"
+jok "$OUT" 'j["access"] == "read-only" and {c["name"]: c["optedIn"] for c in j["calendars"]} == {"'"$RO"'": True, "Team": False, "Boss": False}' "primary on, Team and Boss off"
+run owner calendar calendars "$RO" --add Team --json
+want_rc 0 "the owner adds Team"
+jok "$OUT" 'j["added"] == ["team@group.calendar.google.com"]' "Team added"
+run agent calendar events "$RO" --calendar team@group.calendar.google.com --from 2026-10-19 --to 2026-10-30 --json
+want_rc 0 "the agent reads Team now"
+jok "$OUT" '[e["title"] for e in j["events"]] == ["Consult: referral"]' "the Team booking"
+run agent calendar calendars "$RO" --json
+want_rc 0 "the agent lists what the link shows"
+jok "$OUT" 'sorted(c["name"] for c in j["calendars"]) == sorted(["'"$RO"'", "Team"])' "primary + Team, not Boss"
+ok "per-link calendars: the owner opts Team in, the agent sees it"
+
+HID="$(run agent calendar events "$RO" --from 2026-10-28 --to 2026-10-29 --json; printf %s "$OUT" | python3 -c 'import json,sys; print([e["id"] for e in json.load(sys.stdin)["events"] if e["title"] == "Intro call"][0])')"
+run agent calendar event "$HID" --json
+want_rc 0 "event (alias of show) with descriptions on"
+jok "$OUT" '"Private" in j["event"]["description"] and j["event"]["attendees"][0]["response"] == "needsAction"' "the description shows by default"
+run agent mail access level "$RO" "$REPO" --level read --calendar-omit-description on
+want_rc 3 "an agent can't change calendar privacy"
+run owner mail access level "$RO" "$REPO" --level read --calendar-omit-description on
+want_rc 0 "the owner omits descriptions for the workspace"
+run agent calendar event "$HID" --json
+want_rc 0 "event with descriptions omitted"
+jok "$OUT" 'j["event"]["description"] is None and j["event"]["redacted"] == ["description"] and j["event"]["join"]["meeting_id"] == "89876543210" and "zoom.us/j/89876543210" in j["event"]["join"]["url"]' "description null + redacted, join still read out"
+jok "$OUT" 'not any(s in json.dumps(j) for s in ("Private", "prefers mornings", "Passcode", "445566"))' "no other description text leaves"
+run agent calendar events "$RO" --from 2026-10-28 --to 2026-10-29 --full --json
+want_rc 0 "events --full with descriptions omitted"
+jok "$OUT" 'all(e["description"] is None for e in j["events"]) and not any(s in json.dumps(j) for s in ("Private", "445566"))' "events --full redacts too"
+run owner mail inboxes --json
+jok "$OUT" '[i for i in j["inboxes"] if i["address"] == "'"$RO"'"][0]["primary"]["calendarOmitDescription"] is True' "the catalog shows the choice"
+ok "omit descriptions: owner-only, show/event/--full redact, the join survives"
+
+run agent calendar link "$RO" --provider google --workspace "$REPO"
+want_rc 3 "an agent can't link"
+has "$ERR" "--request" "the refusal teaches --request"
+run agent calendar link --request someone@gmail.example --provider google --json
+want_rc 0 "an agent asks for a link"
+jok "$OUT" 'j["posted"] is True' "a card was posted"
+[ "$(sql "SELECT COUNT(*) FROM mail_external_inboxes WHERE email_address='someone@gmail.example'")" = "0" ] || fail "a request links nothing"
+ok "agents: link refused (use --request), --request posts a card and links nothing"
+
+[ "$(sql "SELECT COUNT(*) FROM mail_reader_audit WHERE actor LIKE 'agent:%' AND actor_role = 'agent' AND address = '$RO' AND action = 'calendar/events'")" -ge 1 ] || fail "agent events reads are logged"
+[ "$(sql "SELECT COUNT(*) FROM mail_reader_audit WHERE actor LIKE 'agent:%' AND address = '$RO' AND action = 'calendar/show' AND message_ref IS NOT NULL")" -ge 1 ] || fail "agent show reads are logged with the event"
+for act in link calendar_add set_level omit_description_on; do
+    [ "$(sql "SELECT COUNT(*) FROM mail_reader_audit WHERE address = '$RO' AND action = '$act'")" -ge 1 ] || fail "governance row $act"
+done
+[ "$(sql "SELECT COUNT(*) FROM mail_reader_audit WHERE action = 'link_request' AND address = 'someone@gmail.example'")" = "1" ] || fail "link_request row"
+ok "access log: agent reads + governance rows (link, calendar_add, set_level, omit_description_on, link_request)"
+
+run owner mail link remove "$RO"
+want_rc 0 "unlink the read-only link"
+[ "$(sql "SELECT (SELECT COUNT(*) FROM calendar_link_calendars WHERE inbox_id='$ROROW') + (SELECT COUNT(*) FROM calendar_grant_prefs WHERE inbox_id='$ROROW')")" = "0" ] || fail "unlink leaves no calendar rows"
+[ "$(sql "SELECT COUNT(*) FROM mail_reader_audit WHERE address = '$RO' AND action = 'link_remove'")" = "1" ] || fail "link_remove row"
+ok "unlink: opt-ins and privacy gone, logged"
+
+echo "== Calendar S1: a read-only, calendar-only Microsoft link =="
+MRO="cal@contoso.example"
+fake_cfg '{"msAccount": "cal@contoso.example"}'
+run owner calendar link "$MRO" --provider microsoft --workspace "$REPO"
+want_rc 0 "k2 cal link (Microsoft device code)"
+has "$ERR" "FAKE-" "the device code was shown"
+[ "$(sql "SELECT features FROM mail_external_inboxes WHERE email_address='$MRO'")" = "calendar-read" ] || fail "stored calendar-read"
+[ "$(sql "SELECT granted_scopes LIKE '%Calendars.Read%' AND granted_scopes NOT LIKE '%Calendars.ReadWrite%' AND granted_scopes NOT LIKE '%Mail.%' FROM mail_external_inboxes WHERE email_address='$MRO'")" = "1" ] \
+    || fail "granted: $(sql "SELECT granted_scopes FROM mail_external_inboxes WHERE email_address='$MRO'")"
+run agent calendar events "$MRO" --from 2026-10-19 --to 2026-10-26 --json
+want_rc 0 "agent reads the Microsoft calendar"
+jok "$OUT" '[e for e in j["events"] if e["title"] == "Board prep"][0]["self_response"] == "needsAction" and [e for e in j["events"] if e["title"] == "Board prep"][0]["join"]["provider"] == "teams" and [e for e in j["events"] if e["title"] == "Board prep"][0]["join"]["meeting_id"] == "123456789"' "notResponded → needsAction; Teams from onlineMeeting"
+jok "$OUT" '[e for e in j["events"] if e["title"] == "Focus time"][0]["timeZone"] == "America/Los_Angeles"' "a Windows zone reads as IANA"
+BP="$(printf %s "$OUT" | python3 -c 'import json,sys; print([e["id"] for e in json.load(sys.stdin)["events"] if e["title"] == "Board prep"][0])')"
+run agent calendar show "$BP" --json
+want_rc 0 "show on the read-only Microsoft link (calendar checked)"
+run agent mail messages "$MRO"
+want_rc 3 "a calendar-only Microsoft link has no mail"
+jok "$ERR" 'j["error"]["code"] == "capability_missing" and j["error"]["cap"] == "mail.read"' "mail.read capability_missing"
+run agent calendar delete "$BP"
+want_rc 3 "no deletes on a read-only link"
+jok "$ERR" 'j["error"]["reason"] == "read_only_link"' "read_only_link"
+run owner mail link remove "$MRO"
+want_rc 0 "unlink the Microsoft read-only link"
+fake_cfg '{"msAccount": "rosson@contoso.example"}'
+ok "Microsoft: calendar-only read-only link, needsAction, Teams join, IANA zones, writes refused"
 
 echo "== MCS4: Google unlinks =="
 for a in "$GC" "$CO" "$MO"; do

@@ -173,7 +173,7 @@ cmd_mail_external() {
                 [ $# -ge 2 ] || { _mail_err "usage" "--provider requires gmail or microsoft"; exit 2; }
                 provider="$2"; shift 2 ;;
             --features)
-                [ $# -ge 2 ] || { _mail_err "usage" "--features requires mail, calendar or mail,calendar"; exit 2; }
+                [ $# -ge 2 ] || { _mail_err "usage" "--features requires mail, calendar-read, mail,calendar-read or calendar"; exit 2; }
                 features="$2"; shift 2 ;;
             --level)
                 [ $# -ge 2 ] || { _mail_err "usage" "--level requires read, draft, or send"; exit 2; }
@@ -290,7 +290,7 @@ cmd_mail_external() {
         upgrade)
             # MCS1: incremental re-consent IN PLACE (same row, grants, ids).
             if [ -z "$address" ] || [ -z "$features" ]; then
-                _mail_err "usage" "link upgrade requires <address> --features mail|calendar|mail,calendar"
+                _mail_err "usage" "link upgrade requires <address> --features calendar-read|mail|calendar"
                 exit 2
             fi
             if [ -n "$host" ] || $pass_stdin || [ -n "$pass_ref" ] || [ -n "$workspace" ]; then

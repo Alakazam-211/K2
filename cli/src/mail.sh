@@ -69,7 +69,7 @@ _mail_py() {
     M_ALIAS="${M_ALIAS:-}" M_MAILBOX="${M_MAILBOX:-}" M_KEEP="${M_KEEP:-false}" \
     M_KEEP_ARG="${M_KEEP_ARG:-}" M_RESTART="${M_RESTART:-}" M_PER_DAY="${M_PER_DAY:-}" M_STATE="${M_STATE:-}" M_KIND="${M_KIND:-}" \
     M_TEXT="${M_TEXT:-}" M_DAYS="${M_DAYS:-}" M_UNTIL="${M_UNTIL:-}" \
-    M_LEVEL="${M_LEVEL:-}" \
+    M_LEVEL="${M_LEVEL:-}" M_CAL_OMIT="${M_CAL_OMIT:-}" \
     M_READ="${M_READ:-}" M_FLAGGED="${M_FLAGGED:-}" \
     M_MANAGE="${M_MANAGE:-}" M_DELETE="${M_DELETE:-}" \
     M_FOLDER_FROM="${M_FOLDER_FROM:-}" M_FOLDER_TO="${M_FOLDER_TO:-}" \
@@ -2018,9 +2018,10 @@ elif verb == "link_list":
                     g.get("workspace") or g.get("projectId", "?"), g.get("level", "?"), note))
 
 elif verb == "access_grant":
-    d = call("POST", "/cli/mail/access/grant",
-             body={"address": env("M_ADDRESS"), "project": env("M_WORKSPACE"),
-                   "level": env("M_LEVEL")})
+    body = {"address": env("M_ADDRESS"), "project": env("M_WORKSPACE"), "level": env("M_LEVEL")}
+    if env("M_CAL_OMIT"):
+        body["calendarOmitDescription"] = env("M_CAL_OMIT") == "true"
+    d = call("POST", "/cli/mail/access/grant", body=body)
     if as_json:
         print(dumps(d))
     else:
@@ -2045,9 +2046,10 @@ elif verb == "access_primary":
               % (env("M_WORKSPACE"), d.get("address", "?")))
 
 elif verb == "access_level":
-    d = call("POST", "/cli/mail/access/set-level",
-             body={"address": env("M_ADDRESS"), "project": env("M_WORKSPACE"),
-                   "level": env("M_LEVEL")})
+    body = {"address": env("M_ADDRESS"), "project": env("M_WORKSPACE"), "level": env("M_LEVEL")}
+    if env("M_CAL_OMIT"):
+        body["calendarOmitDescription"] = env("M_CAL_OMIT") == "true"
+    d = call("POST", "/cli/mail/access/set-level", body=body)
     if as_json:
         print(dumps(d))
     else:

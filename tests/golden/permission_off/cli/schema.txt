@@ -1404,23 +1404,53 @@ exit: 0
     },
     {
       "name": "calendar events",
-      "usage": "k2 calendar events [<address>] [--from <t>] [--to <t>] [--calendar <id|name>] [--limit N] [--json]",
-      "description": "Events in a window (default next 7 days, max 366), repeating events expanded server-side (Microsoft: calendarView; Google: events singleEvents). Times RFC 3339 in and out, plus each event's own timeZone (Microsoft may name a Windows zone). A linked inbox that can't do this (an IMAP app-password link, a Google or Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. Read level. Wire params are start/end (from is the identity stamp). GET /cli/mail/calendar/events.",
+      "usage": "k2 calendar events [<address>] [--from <t>] [--to <t>] [--calendar <id|name>] [--limit N] [--full] [--include-cancelled] [--json]",
+      "description": "Events in a window (linked calendars: 1 day back and 45 days ahead, up to 500; hosted: next 7 days; max 366), repeating events expanded server-side (Microsoft: calendarView; Google: events singleEvents, hidden invitations included). Times RFC 3339 in and out, plus each event's own IANA timeZone (Windows zone ids mapped). Linked events carry join {provider, meeting_id, url} (a link already in the event, never fetched), organizer, organizer_is_self, myRole, self_response (needsAction|accepted|tentative|declined), created, updated, series. A read-only link shows its primary calendar plus the ones the owner added. A linked inbox that can't do this (an IMAP app-password link, a Google or Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. Read level. Wire params are start/end (from is the identity stamp). GET /cli/mail/calendar/events.",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--from", "arg": "t", "description": "Window start: RFC 3339 or YYYY-MM-DD (UTC midnight). Sent as start."},
         {"name": "--to", "arg": "t", "description": "Window end. Sent as end."},
         {"name": "--calendar", "arg": "id|name", "description": "Only this calendar of the inbox."},
-        {"name": "--limit", "arg": "N", "description": "1-500, default 100."},
+        {"name": "--limit", "arg": "N", "description": "1-500, default 100 (500 for a linked calendar's default window)."},
+        {"name": "--full", "arg": null, "description": "The show shape for every event: attendees with responses and the description (null with redacted when your human left descriptions out)."},
+        {"name": "--include-cancelled", "arg": null, "description": "Keep cancelled occurrences (left out by default)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
     {
       "name": "calendar show",
       "usage": "k2 calendar show <id> [--json]",
-      "description": "One event (id from calendar events; the id carries its inbox). Notes print inside BEGIN/END CALENDAR NOTES untrusted-content markers. A linked inbox that can't do this (an IMAP app-password link, a Google or Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. Read level. GET /cli/mail/calendar/show.",
+      "description": "One event (id from calendar events; the id carries its inbox; alias k2 cal event <id>). Linked: attendees [{email, name, response, optional, self, organizer}] and the description, or description null with redacted [description] when the workspace's grant omits descriptions (the join link and id still come out of it). Notes print inside BEGIN/END CALENDAR NOTES untrusted-content markers. A linked inbox that can't do this (an IMAP app-password link, a Google or Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. Read level. GET /cli/mail/calendar/show.",
       "args": [{"name": "id", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "calendar calendars",
+      "usage": "k2 calendar calendars <address> [--add <id|name>]... [--remove <id|name>]... [--json]",
+      "description": "Which calendars a read-only calendar link shows: its primary (always) plus the ones the owner added. The owner or an Admin sees every calendar on the account with optedIn and adds or removes them (POST, logged in the mailbox access log); anyone else with a read grant sees the calendars the link shows. A read-write link (made before 0.46.16) shows every calendar. GET/POST /cli/mail/calendar/calendars.",
+      "args": [{"name": "address", "required": true}],
+      "flags": [
+        {"name": "--add", "arg": "id|name", "description": "Owner/Admin: show this calendar too (repeatable)."},
+        {"name": "--remove", "arg": "id|name", "description": "Owner/Admin: stop showing it (repeatable; the primary can't be removed)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "calendar link",
+      "usage": "k2 calendar link <address> --provider google|microsoft --workspace <ws> [--calendars <id|name>,...] [--omit-description] [--write] [--paste | --paste-file <f>] [--json] | --request <address> --provider google|microsoft",
+      "description": "Link a person's Google or Microsoft 365 calendar READ-ONLY (features calendar-read: Google calendar.events.readonly + calendar.calendarlist.readonly; Microsoft Calendars.Read). Owner or Admin only; an agent gets exit 3 and uses --request, which posts a 'Link your calendar, read-only' card for its person and links nothing. Google opens a browser; on a box without one, --paste prints the consent address and reads back (prompt, never argv, never shown; or --paste-file, e.g. a secret card's file) the 127.0.0.1 address the browser lands on (waits 900 s). Microsoft prints a device code. Every link and grant change is in the mailbox access log. POST /cli/mail/link/oauth/start|complete, /cli/mail/calendar/link-request.",
+      "args": [{"name": "address", "required": true}],
+      "flags": [
+        {"name": "--provider", "arg": "google|microsoft", "description": "Which account."},
+        {"name": "--workspace", "arg": "ws", "description": "Whose agents see the calendar (the link's primary workspace)."},
+        {"name": "--calendars", "arg": "id|name,...", "description": "Show these calendars too (the primary is always on)."},
+        {"name": "--omit-description", "arg": null, "description": "That workspace's agents never see event descriptions."},
+        {"name": "--write", "arg": null, "description": "Read and write (draft events, no attendees) instead of read-only."},
+        {"name": "--paste", "arg": null, "description": "Google on a box with no browser: paste back the redirect address."},
+        {"name": "--paste-file", "arg": "f", "description": "Read the pasted redirect address from this file."},
+        {"name": "--request", "arg": null, "description": "Ask your human with a Thread card instead (agents)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
     },
     {
       "name": "calendar freebusy",
@@ -1600,12 +1630,12 @@ exit: 0
     },
     {
       "name": "mail link",
-      "usage": "k2 mail link add <address> (--host <imap-host> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | --provider gmail|microsoft [--features mail|calendar|mail,calendar]) --workspace <ws> | upgrade <address> --features calendar|mail,calendar | calendars [on|off] | list | remove <address>",
+      "usage": "k2 mail link add <address> (--host <imap-host> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | --provider gmail|microsoft [--features mail|calendar-read|mail,calendar-read|calendar]) --workspace <ws> | upgrade <address> --features calendar-read|mail|calendar | calendars [on|off] | list | remove <address>",
       "description": "Connect the user's OWN external email accounts as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Two add paths: (1) generic IMAP with an app-password (Gmail app-password, Fastmail, company IMAP), or (2) OAuth with --provider gmail|microsoft (NO password): Gmail links over IMAP-XOAUTH2 via the system browser + a 127.0.0.1 loopback (do it ON the daemon's machine; a remote daemon returns a 'link on the daemon's box' teaching error), Microsoft over the Microsoft Graph API via a device code you enter in any browser. The OAuth flow runs SERVER-SIDE (the daemon polls/exchanges); codes and tokens NEVER reach the CLI and are vaulted daemon-side. Each inbox binds to ONE PRIMARY workspace whose agents read it (via messages/read/wait) and save reply drafts via 'k2 mail draft'. Drafting is always on; sending is OFF by default — raise a workspace to level 'send' to let its agents send (app-password and Gmail-OAuth inboxes over SMTP, Microsoft 365 over Microsoft Graph), governed by the workspace's Email sending mode (off / approval / on). Share with more workspaces via 'k2 mail access grant'. The password/tokens are vaulted daemon-side, never in the DB, never in output, never on argv. 'calendars [on|off]' shows or sets the per-server switch for calendars on LINKED inboxes (default on; off = every linked calendar verb exits 3 capability_missing/owner_disabled; hosted calendars keep k2 hostmail calendar enable|disable). GET|POST /cli/mail/link/calendars {enabled}.",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--provider", "arg": "p", "description": "OAuth link: gmail (IMAP-XOAUTH2, system-browser loopback) | microsoft (Graph, device code). No --host/password; the daemon runs the flow and the CLI long-polls to connected (add). The signed-in account must be <address> (else account_mismatch, nothing stored)."},
-        {"name": "--features", "arg": "f", "description": "OAuth: what to consent for — mail (default), mail,calendar, or calendar (Google only: a calendar-only link with no Gmail access, so no restricted scope) (add); what to ADD to an existing OAuth link, re-consented in place keeping its grants and ids (upgrade)."},
+        {"name": "--features", "arg": "f", "description": "OAuth: what to consent for — mail (default), calendar-read (a read-only calendar), mail,calendar-read, or calendar (read and write); a calendar-only link (Google or Microsoft) has no mail access (add); what to ADD to an existing OAuth link, re-consented in place keeping its grants and ids (upgrade; an upgrade never lowers calendar write to read-only)."},
         {"name": "--host", "arg": "h", "description": "IMAP server (generic-IMAP add)."},
         {"name": "--workspace", "arg": "ws", "description": "The PRIMARY workspace to bind (add)."},
         {"name": "--pass-stdin", "arg": null, "description": "Read the app-password from stdin (add)."},
@@ -1646,6 +1676,7 @@ exit: 0
         {"name": "--off", "arg": null, "description": "manage: clear canManage (also clears canDelete)."},
         {"name": "--delete", "arg": null, "description": "manage: enable canDelete (needs manage on; delete = move to Trash)."},
         {"name": "--no-delete", "arg": null, "description": "manage: clear canDelete (default for the manage subcommand)."},
+        {"name": "--calendar-omit-description", "arg": "on|off", "description": "grant/level on a linked calendar: that workspace's agents never see event descriptions (the meeting link and id are still read out). Owner or Admin only."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },

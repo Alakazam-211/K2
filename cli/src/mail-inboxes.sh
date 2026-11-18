@@ -38,9 +38,18 @@ cmd_mail_access() {
             _mail_err "usage" "unknown access command '$sub' — usage: k2 mail access <grant|revoke|primary|level|manage>"
             exit 2 ;;
     esac
-    local address="" workspace="" level="" as_json=false manage_v="" delete_v=""
+    local address="" workspace="" level="" as_json=false manage_v="" delete_v="" cal_omit=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --calendar-omit-description)
+                # Calendar S1: this workspace's agents never see event
+                # descriptions on a linked calendar (a person's choice).
+                case "${2:-}" in
+                    on) cal_omit="true" ;;
+                    off) cal_omit="false" ;;
+                    *) _mail_err "usage" "--calendar-omit-description takes on or off"; exit 2 ;;
+                esac
+                shift 2 ;;
             --level)
                 [ $# -ge 2 ] || { _mail_err "usage" "--level requires read, draft, or send"; exit 2; }
                 level="$2"; shift 2 ;;
@@ -61,6 +70,10 @@ cmd_mail_access() {
     done
     if [ -z "$address" ] || [ -z "$workspace" ]; then
         _mail_err "usage" "access $sub requires <address> <workspace>"
+        exit 2
+    fi
+    if [ -n "$cal_omit" ] && [ "$verb" != "access_grant" ] && [ "$verb" != "access_level" ]; then
+        _mail_err "usage" "--calendar-omit-description goes with 'k2 mail access grant' or 'level'"
         exit 2
     fi
     # The on/off/delete flags belong to `manage` only.
@@ -95,7 +108,7 @@ cmd_mail_access() {
         return
     fi
     local M_VERB="$verb" M_JSON="$as_json" M_ADDRESS="$address" \
-          M_WORKSPACE="$workspace" M_LEVEL="$level"
+          M_WORKSPACE="$workspace" M_LEVEL="$level" M_CAL_OMIT="$cal_omit"
     _mail_py
 }
 

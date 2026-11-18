@@ -482,7 +482,7 @@ ORGANIZE (needs canManage; delete needs canDelete — the owner grants these via
 CONNECT & SHARE
   link add|upgrade|list|remove
                               Connect your OWN external accounts (IMAP, Gmail or
-                              Microsoft 365 OAuth); upgrade adds calendar consent
+                              Microsoft 365 OAuth); upgrade adds a read-only calendar
   oauth-config show|set|clear Your own Google / Microsoft OAuth app + the Microsoft
                               tenant (owner)
   access grant|revoke|primary|level|manage
@@ -1375,15 +1375,18 @@ message). The command then waits for you to approve, and connects.
 
 The account that signs in must BE the address you typed — otherwise the
 link fails with account_mismatch and nothing is stored. --features picks
-what to consent for (mail, or mail,calendar); add calendar to an existing
-link later with `k2 mail link upgrade` (same inbox, grants and ids).
-A Google link may be calendar-only (--features calendar): no Gmail access,
-so none of Google's restricted mail scope — agents get its calendar and
-mail verbs answer capability_missing until `k2 mail link upgrade <address>
---features mail`.
-A Google or Microsoft link with calendar consent gives its agents
-`k2 calendar` (Google Calendar API / Microsoft Graph); drafts only, nobody
-is emailed. `k2 mail link calendars on|off` is the per-server switch
+what to consent for: mail, calendar-read (read-only calendar), or both
+(mail,calendar-read); add a read-only calendar to an existing link later
+with `k2 mail link upgrade <address> --features calendar-read` (same
+inbox, grants and ids). A link may be calendar-only (Google or Microsoft):
+no mail access — agents get its calendar and mail verbs answer
+capability_missing until `k2 mail link upgrade <address> --features mail`.
+To link just a calendar, `k2 cal link` is shorter (k2 cal --help).
+A link with calendar-read gives its agents `k2 calendar` reads only: no
+event is ever created, changed, accepted or declined. `calendar` (read and
+write; drafts only, nobody is emailed) is still accepted for owners who
+want it; links made before 0.46.16 keep what they have. An upgrade only
+adds: making a read-write calendar read-only means unlink and link again. `k2 mail link calendars on|off` is the per-server switch
 for calendars on linked inboxes (default on; hosted calendars keep
 `k2 hostmail calendar enable|disable`).
 Removing a Google link revokes K2's access at Google; Microsoft has no
@@ -1403,8 +1406,8 @@ USAGE
                    [--smtp-host <h>] [--smtp-port <n>]
                    [--smtp-tls implicit-tls|starttls] [--json]
   k2 mail link add <address> --provider gmail|microsoft --workspace <ws>
-                   [--features mail|calendar|mail,calendar] [--json]
-  k2 mail link upgrade <address> --features calendar|mail,calendar [--json]
+                   [--features mail|calendar-read|mail,calendar-read|calendar] [--json]
+  k2 mail link upgrade <address> --features calendar-read|mail|calendar [--json]
   k2 mail link calendars [on|off] [--json]
   k2 mail link list [--json]
   k2 mail link remove <address> [--json]
@@ -1414,8 +1417,9 @@ FLAGS (OAuth add / upgrade)
                          microsoft (Microsoft Graph, device code). No --host
                          or password — the daemon runs the OAuth flow.
   --workspace <ws>       The PRIMARY workspace this inbox binds to (add)
-  --features <f>         mail (default), mail,calendar, or calendar (Google
-                         only: calendar-only, no Gmail access). upgrade: what
+  --features <f>         mail (default), calendar-read (read-only calendar),
+                         mail,calendar-read, or calendar (read and write).
+                         Calendar-only links skip mail access. upgrade: what
                          to ADD to an existing OAuth link, re-consented in place
 
 FLAGS (add)
@@ -1442,10 +1446,10 @@ EXAMPLES
   k2 mail link add alice@example.com --provider gmail --workspace ~/DevProjects/K2
   k2 mail link add me@company.com --provider microsoft --workspace acme-ops
   k2 mail link add me@company.com --provider microsoft --workspace acme-ops \
-      --features mail,calendar
-  k2 mail link upgrade me@company.com --features calendar
+      --features mail,calendar-read
+  k2 mail link upgrade me@company.com --features calendar-read
   k2 mail link add organiser@gmail.com --provider gmail --workspace meet \
-      --features calendar
+      --features calendar-read
   k2 mail link calendars off
 EOF
 }
@@ -1507,15 +1511,20 @@ MICROSOFT APP REGISTRATION (Entra → App registrations → New)
   Authentication      'Allow public client flows' = Yes (device code)
   API permissions     delegated Microsoft Graph: openid, profile, email,
                       offline_access, User.Read, Mail.ReadWrite, Mail.Send,
-                      Calendars.ReadWrite
+                      Calendars.Read (read-only calendar links) and
+                      Calendars.ReadWrite (read-write ones; no admin consent
+                      for either)
 
 GOOGLE APP (Google Cloud console → APIs & Services)
   Enable              Gmail API (mail links) and Google Calendar API
   Client              OAuth client ID, type Desktop app (loopback redirect)
   Consent screen      scopes openid, email, https://mail.google.com/
                       (restricted: CASA to publish externally), and
-                      .../auth/calendar.events, .../auth/calendar.calendarlist
-                      .readonly, .../auth/calendar.freebusy (sensitive).
+                      .../auth/calendar.events.readonly and .../auth/calendar
+                      .calendarlist.readonly (read-only calendar links), and
+                      .../auth/calendar.events, .../auth/calendar.freebusy
+                      (read-write ones). All four are sensitive, not
+                      restricted.
                       In Testing mode only listed test users can link and
                       refresh tokens expire after 7 days; an Internal app
                       (Workspace) needs no verification.
@@ -1545,6 +1554,9 @@ USAGE
   k2 mail access primary <address> <workspace>   (transfer who manages it)
   k2 mail access level   <address> <workspace> --level read|draft|send
   k2 mail access manage  <address> <workspace> [--on|--off] [--delete|--no-delete]
+  grant and level also take --calendar-omit-description on|off (a linked
+  calendar: that workspace's agents never see event descriptions; the
+  meeting link and id are still read out of them). Owner or Admin only.
 
 NOTES
   grant   upsert a workspace's access (default --level read).

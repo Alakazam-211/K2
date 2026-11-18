@@ -45,6 +45,11 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **K2 places these jobs only on machines that can run them,** and `k2 compute get` shows the network a job asked for. Machines need k2-node 0.46.15; an older one never runs such a job with more network.
 - **Compute jobs stop piling up on one machine.** K2 now counts the jobs already waiting on a machine (for example behind your workspace's one-at-a-time limit there) before it places a new one, so the job goes to a machine that can start it now, or to the one with the shorter real wait, even when the busy machine has more free CPU. A `--cache` job no longer waits behind such a line for its cache.
 
+### Vault
+- **Confirm your vault recovery key to keep scheduled backups running.** Until it's confirmed, a backup needs this computer's own check: Touch ID or the Mac's password, Windows Hello, or on a Linux server an owner login's password.
+- **This computer's own check for a vault's first steps.** Until a recovery key is confirmed, setting the first vault password, showing the recovery words, a vault backup, a box-move export and adding a backup key each ask for it, and the prompt names the step (and the agent or terminal asking, where K2 knows it). The recovery words show only in the K2 app, a terminal or a Connect login. On a Mac with no one at its screen, sign in with an owner login over K2 Connect instead.
+- **Making an owner asks for it too.** Making a login an owner, or setting an owner login's password, from this computer's K2 asks for this computer's own check; an owner signed in with their own login doesn't need it. On a Linux server, the first owner login is made from your own terminal (SSH), and later ones with an owner login's password. Settings asks which owner login when the server has more than one.
+
 ### Settings
 - **Settings → Workspaces / Agents shows the agent's name.** The list and the page header show the name you gave the agent (the folder stays on the line under it), change the moment you rename it, and search finds an agent by that name.
 - **Settings → Tunnel is laid out in two columns,** so Policies and Advanced are visible without scrolling.

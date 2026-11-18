@@ -69,6 +69,7 @@ features:
   push-read-hints-v1
   thread-read-v1
   homes-sync-v1
+  homes-people-group-v1
   stash-sync-v1
   inbox-catchup-v1
   catchup-unchanged-v1

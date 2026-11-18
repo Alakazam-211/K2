@@ -8,6 +8,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Threads and Home
 - **Drop a file anywhere on a Thread to attach it.** The messages, the empty Thread and the message box all take it, the same as a drop on the box (a ticket's Thread too); "Drop to attach" shows while the file is over it.
 - **Step through your agents on Home from the keyboard.** ⌥⌘↓ opens the agent below the selected one in the Home list and ⌥⌘↑ the one above (Ctrl+Alt+Down / Up on Linux and Windows), in the order the list shows them, scrolling it into view; with none selected, ⌥⌘↓ starts at the top and ⌥⌘↑ at the bottom. Change the keys in Settings → Key Bindings → Navigation.
+- **The People group on Home has a chat icon and sits at the bottom of your groups.** New groups you add go above it. If you already picked an icon for People or moved it, it stays as you set it.
 
 ### Live files
 - **A save from another app keeps what others typed.** When K2 opens a live file in an editor, the editor's save merges from the version it opened, so lines people and agents added in the meantime stay in the file instead of being overwritten.

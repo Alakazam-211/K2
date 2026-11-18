@@ -69,6 +69,17 @@ export function nextGroupName(homes: readonly { name: string }[]): string {
 /** The first-run Home's name. */
 export const DEFAULT_HOME_NAME = nextGroupName([])
 
+/** The built-in People group's fixed id (homes-people-group-v1; the daemon
+ *  seeds it last, with the chat icon). */
+export const PEOPLE_HOME_ID = 'people'
+
+/** Where a new group goes: at the end, or just above People while People
+ *  is the last group (People stays at the bottom by default; a person who
+ *  moved it elsewhere gets new groups at the end). */
+export function newHomeIndex(homes: readonly { id: string }[]): number {
+  return homes.length > 0 && homes[homes.length - 1].id === PEOPLE_HOME_ID ? homes.length - 1 : homes.length
+}
+
 export interface HomeRow {
   /** People and channels on Home (prd-home-people-channels-v1 §5): a
    *  `person` row (`<external id>::host`, the DM with them there) or a
@@ -436,7 +447,9 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
         const clean = cleanHomeName(name)
         if (!clean) return null
         const id = env.newId()
-        commit([...get().homes, { id, name: clean, rows: [] }], id)
+        const homes = [...get().homes]
+        homes.splice(newHomeIndex(homes), 0, { id, name: clean, rows: [] })
+        commit(homes, id)
         rememberSelection(id)
         return id
       },

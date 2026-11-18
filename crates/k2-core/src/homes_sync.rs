@@ -71,10 +71,18 @@
 //! built-in group with the fixed id [`PEOPLE_ID`]; the wire marks it
 //! `builtin: "people"` (derived from the id, so a rename keeps it).
 //! - **Seed** ([`ensure_people_group`]): on a pull, a person with at least one
-//!   live group and no `people` group gets one, named "People", right after
-//!   their first group, stamped [`PEOPLE_SEED_UPDATED_AT`] so any rename a
+//!   live group and no `people` group gets one, named "People", with the chat
+//!   icon [`PEOPLE_ICON`], after all their other groups (the bottom of the
+//!   list), stamped [`PEOPLE_SEED_UPDATED_AT`] so any rename, icon or move a
 //!   device makes wins. A client that made `people` itself (no Home sync yet)
-//!   pushes the same id: last writer wins, never a second group.
+//!   pushes the same id: last writer wins, never a second group. These are
+//!   defaults only: the order is the one canonical `order` key every device
+//!   syncs, and a group the person adds later goes above People when People
+//!   is last (the desktop's `createHome`).
+//! - **Defaults pass** ([`people_defaults_once`], 0.46.15, once per server,
+//!   on the first pull): groups seeded before it (no icon, right after the
+//!   first group) take the chat icon when they still have none, and move to
+//!   the bottom when no device ever wrote them (never renamed or moved).
 //! - **Delete** is refused one item at a time: `rejected[].reason =
 //!   builtin_group` (merging it away too). Rename and reorder are edits.
 //! - **Arrivals** ([`land_arrival`]): a DM or a channel that arrives on its
@@ -927,6 +935,11 @@ pub const BUILTIN_PEOPLE: &str = "people";
 pub const PEOPLE_NAME: &str = "People";
 /// Its seed stamp: lower than any device's, so a rename always wins.
 pub const PEOPLE_SEED_UPDATED_AT: i64 = 1;
+/// Its default icon: the Home group icon picker's chat bubble
+/// (`src/renderer/lib/group-icons.ts`, `message-circle`).
+pub const PEOPLE_ICON: &str = "message-circle";
+/// The `code_migrations` id of [`people_defaults_once`].
+pub const PEOPLE_DEFAULTS_PASS_ID: &str = "homes_people_defaults_v1";
 /// The `deviceId` the server writes its own items under (the seed, arrivals).
 pub const SERVER_DEVICE_ID: &str = "k2-server";
 /// The hint beside a refused delete (`builtin_group`).
@@ -965,20 +978,25 @@ fn get_home(conn: &Connection, person: &str, id: &str) -> rusqlite::Result<Optio
     .optional()
 }
 
-/// Write the People group (inside the caller's transaction) at cursor `seq`.
-/// False when the person has no live group to place it after.
-fn seed_people(conn: &Connection, person: &str, seq: i64) -> rusqlite::Result<bool> {
-    let mut st = conn.prepare(
-        "SELECT ord FROM homes_items WHERE person = ?1 AND kind = 'home' AND deleted = 0 AND home_id != ?2 \
-         ORDER BY ord, home_id",
+/// The key that puts a group after every other live group of `person`
+/// (None when People is the only one, or is last already).
+fn people_bottom_order(conn: &Connection, person: &str, current: Option<&str>) -> rusqlite::Result<Option<String>> {
+    let last: Option<String> = conn.query_row(
+        "SELECT MAX(ord) FROM homes_items WHERE person = ?1 AND kind = 'home' AND deleted = 0 AND home_id != ?2",
+        params![person, PEOPLE_ID],
+        |r| r.get(0),
     )?;
-    let orders: Vec<String> = st.query_map(params![person, PEOPLE_ID], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-    let Some(first) = orders.first() else { return Ok(false) };
-    // Right after the first group: before the next key above it.
-    let next = orders.iter().find(|o| o.as_str() > first.as_str());
-    let order = order_between(Some(first.as_str()), next.map(String::as_str))
-        .or_else(|_| order_between(orders.last().map(String::as_str), None))
-        .unwrap_or_else(|_| "V".to_string());
+    let Some(last) = last else { return Ok(None) };
+    if current.is_some_and(|c| c > last.as_str()) {
+        return Ok(None);
+    }
+    Ok(Some(order_between(Some(last.as_str()), None).unwrap_or_else(|_| format!("{last}V"))))
+}
+
+/// Write the People group (inside the caller's transaction) at cursor `seq`:
+/// last, with the chat icon. False when the person has no live group yet.
+fn seed_people(conn: &Connection, person: &str, seq: i64) -> rusqlite::Result<bool> {
+    let Some(order) = people_bottom_order(conn, person, None)? else { return Ok(false) };
     // A tombstone (none is ever stored by a push; one from an older build
     // could be) is beaten, so a device that held it takes the group back.
     let updated_at = match get_home(conn, person, PEOPLE_ID)? {
@@ -997,7 +1015,7 @@ fn seed_people(conn: &Connection, person: &str, seq: i64) -> rusqlite::Result<bo
         device_id: SERVER_DEVICE_ID.to_string(),
         deleted: false,
         merged_into: None,
-        icon: None,
+        icon: Some(PEOPLE_ICON.to_string()),
         recent_first: false,
         pin_order: None,
         last_messaged_at: None,
@@ -1005,6 +1023,68 @@ fn seed_people(conn: &Connection, person: &str, seq: i64) -> rusqlite::Result<bo
     };
     store_item(conn, person, &item, seq)?;
     Ok(true)
+}
+
+/// One time per server (0.46.15): the People groups seeded before took no
+/// icon and sat right after the first group. Each live one with no icon
+/// takes [`PEOPLE_ICON`]; one no device has ever written (`deviceId` still
+/// [`SERVER_DEVICE_ID`]: the person never renamed or moved it) moves after
+/// every other group. A group the person moved stays where they put it.
+/// Each changed group is written as a server edit one stamp above its own
+/// (any later device edit still wins) at its person's next cursor. Recorded
+/// in `code_migrations` in the same transaction, so a person who clears the
+/// icon afterwards keeps it cleared. Returns `(person, cursor)` for each
+/// person whose Homes changed (their devices pull it); empty after the
+/// first run. Without `code_migrations` (a test DB) it does nothing.
+pub fn people_defaults_once(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
+    let done: Option<i64> = match conn
+        .query_row("SELECT 1 FROM code_migrations WHERE id = ?1", params![PEOPLE_DEFAULTS_PASS_ID], |r| r.get(0))
+        .optional()
+    {
+        Ok(d) => d,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if done.is_some() {
+        return Ok(Vec::new());
+    }
+    let tx = conn.unchecked_transaction()?;
+    let groups: Vec<(String, Item)> = {
+        let mut st = tx.prepare(&format!(
+            "SELECT {ITEM_COLS}, person FROM {HOMES_TABLE} WHERE kind = 'home' AND home_id = ?1 AND address = '' AND deleted = 0 \
+             ORDER BY person"
+        ))?;
+        let rows = st.query_map(params![PEOPLE_ID], |r| Ok((r.get::<_, String>(15)?, item_from_row(r)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let mut changed = Vec::new();
+    for (person, mut item) in groups {
+        let mut edit = false;
+        if item.icon.is_none() {
+            item.icon = Some(PEOPLE_ICON.to_string());
+            edit = true;
+        }
+        if item.device_id == SERVER_DEVICE_ID {
+            if let Some(order) = people_bottom_order(&tx, &person, Some(item.order.as_str()))? {
+                item.order = order;
+                edit = true;
+            }
+        }
+        if !edit {
+            continue;
+        }
+        item.updated_at = item.updated_at.saturating_add(1);
+        item.device_id = SERVER_DEVICE_ID.to_string();
+        let (seq, floor) = person_seq(&tx, &person)?;
+        store_item(&tx, &person, &item, seq + 1)?;
+        set_person_seq(&tx, &person, seq + 1, floor)?;
+        changed.push((person, seq + 1));
+    }
+    tx.execute(
+        "INSERT OR IGNORE INTO code_migrations (id, notes) VALUES (?1, ?2)",
+        params![PEOPLE_DEFAULTS_PASS_ID, format!("{} people groups", changed.len())],
+    )?;
+    tx.commit()?;
+    Ok(changed)
 }
 
 /// Make sure `person` has exactly one live People group (once they have a
@@ -1278,6 +1358,7 @@ mod tests {
         conn.execute_batch(include_str!("../drizzle_sql/0306_home_chat_rows.sql").replace("--> statement-breakpoint", "").as_str())
             .expect("0306 applies");
         conn.execute_batch(sql_0307().as_str()).expect("0307 applies");
+        conn.execute_batch(include_str!("../drizzle_sql/0030_code_migrations.sql")).expect("0030 applies");
         assert!(tables_exist(&conn));
         conn
     }
@@ -2168,7 +2249,7 @@ mod tests {
     }
 
     #[test]
-    fn the_seed_makes_one_people_group_right_after_the_first_and_never_another() {
+    fn the_seed_makes_one_people_group_last_with_the_chat_icon_and_never_another() {
         let c = db();
         // No group yet: nothing to place it after, nothing written.
         assert_eq!(ensure_people_group(&c, "owner").expect("ensure"), Seed::NoGroups);
@@ -2181,8 +2262,12 @@ mod tests {
         let g = &p[0];
         assert_eq!((g["name"].clone(), g["builtin"].clone()), (json!("People"), json!("people")));
         assert_eq!((g["updatedAt"].clone(), g["deviceId"].clone()), (json!(PEOPLE_SEED_UPDATED_AT), json!(SERVER_DEVICE_ID)));
+        assert_eq!(g["icon"], json!(PEOPLE_ICON), "the chat icon");
+        assert_eq!(PEOPLE_ICON, "message-circle");
+        assert!(valid_icon(PEOPLE_ICON));
         let order = g["order"].as_str().expect("order").to_string();
-        assert!(order.as_str() > "V" && order.as_str() < "l", "right after the first group: {order}");
+        assert!(order.as_str() > "x", "after every other group: {order}");
+        assert_eq!(sorted_home_ids(&homes_of(&c, "owner")), vec!["h1", "h2", "h3", PEOPLE_ID], "People is last");
         // A delta from before the seed carries it (other devices pull it).
         let d = pull(&c, "owner", Some(r.cursor), None, NOW).expect("delta");
         assert_eq!(d.changes.iter().map(|i| i.home_id.as_str()).collect::<Vec<_>>(), vec![PEOPLE_ID]);
@@ -2335,5 +2420,172 @@ mod tests {
         assert!(land_arrival(&c, "owner", Kind::Row, "atlas::aaaa", "Atlas", NOW).is_err());
         assert!(land_arrival(&c, "owner", Kind::Home, "x::y", "x", NOW).is_err());
         assert!(land_arrival(&c, "owner", Kind::Person, &dm("k2:workspace:5d1c"), "agent", NOW).is_err());
+    }
+
+    /// Home ids as a device lays them out: by `order`, then id.
+    fn sorted_home_ids(homes: &[Value]) -> Vec<String> {
+        let mut v: Vec<(String, String)> = homes
+            .iter()
+            .filter(|h| h["kind"] == "home" && h.get("deleted").is_none())
+            .map(|h| (h["order"].as_str().expect("order").to_string(), h["id"].as_str().expect("id").to_string()))
+            .collect();
+        v.sort();
+        v.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// A People group as the seed before 0.46.15 wrote it: no icon, right
+    /// after the first group, the seed stamp, the server's device id.
+    fn legacy_people_seed(conn: &Connection, person: &str, order: &str) -> i64 {
+        let (seq, floor) = person_seq(conn, person).expect("seq");
+        let item = Item {
+            kind: Kind::Home,
+            home_id: PEOPLE_ID.to_string(),
+            address: String::new(),
+            name: Some(PEOPLE_NAME.to_string()),
+            label: None,
+            workspace_id: None,
+            order: order.to_string(),
+            updated_at: PEOPLE_SEED_UPDATED_AT,
+            device_id: SERVER_DEVICE_ID.to_string(),
+            deleted: false,
+            merged_into: None,
+            icon: None,
+            recent_first: false,
+            pin_order: None,
+            last_messaged_at: None,
+            omitted: Omitted::default(),
+        };
+        store_item(conn, person, &item, seq + 1).expect("legacy seed");
+        set_person_seq(conn, person, seq + 1, floor).expect("legacy seq");
+        seq + 1
+    }
+
+    #[test]
+    fn the_defaults_pass_gives_an_old_seed_the_chat_icon_and_the_bottom_once() {
+        let c = db();
+        push(&c, "owner", "laptop", &[home("h1", "Home", "V", NOW), home("h2", "Work", "l", NOW), home("h3", "Family", "x", NOW)], NOW)
+            .expect("groups");
+        let before = legacy_people_seed(&c, "owner", "a");
+        assert_eq!(sorted_home_ids(&homes_of(&c, "owner")), vec!["h1", PEOPLE_ID, "h2", "h3"], "where the old seed put it");
+        assert_eq!(people_groups(&c, "owner")[0]["icon"], Value::Null);
+        // The pass: the icon, the bottom, one stamp up, the next cursor.
+        assert_eq!(people_defaults_once(&c).expect("pass"), vec![("owner".to_string(), before + 1)]);
+        let g = people_groups(&c, "owner")[0].clone();
+        assert_eq!((g["icon"].clone(), g["name"].clone()), (json!(PEOPLE_ICON), json!("People")));
+        assert_eq!((g["updatedAt"].clone(), g["deviceId"].clone()), (json!(PEOPLE_SEED_UPDATED_AT + 1), json!(SERVER_DEVICE_ID)));
+        assert_eq!(sorted_home_ids(&homes_of(&c, "owner")), vec!["h1", "h2", "h3", PEOPLE_ID]);
+        // Devices pull just that change from their cursor.
+        let d = pull(&c, "owner", Some(before), None, NOW).expect("delta");
+        assert_eq!(d.changes.iter().map(|i| i.home_id.as_str()).collect::<Vec<_>>(), vec![PEOPLE_ID]);
+        // Idempotent: again and again, nothing moves and the cursor stays.
+        for _ in 0..3 {
+            assert_eq!(people_defaults_once(&c).expect("again"), Vec::<(String, i64)>::new());
+        }
+        assert_eq!(person_seq(&c, "owner").expect("seq").0, before + 1);
+        // Once means once: the person clears the icon and moves People up; the
+        // pass never puts either back.
+        let mut mine = home(PEOPLE_ID, "People", "a", NOW + 10);
+        mine["icon"] = Value::Null;
+        assert_eq!(push(&c, "owner", "laptop", &[mine], NOW).expect("clear").applied, 1);
+        assert_eq!(people_defaults_once(&c).expect("after"), Vec::<(String, i64)>::new());
+        assert_eq!(people_groups(&c, "owner")[0]["icon"], Value::Null, "cleared stays cleared");
+        assert_eq!(sorted_home_ids(&homes_of(&c, "owner")), vec!["h1", PEOPLE_ID, "h2", "h3"], "moved stays moved");
+        assert_eq!(ensure_people_group(&c, "owner").expect("ensure"), Seed::Exists);
+    }
+
+    #[test]
+    fn the_defaults_pass_keeps_an_icon_and_a_place_the_person_chose() {
+        let c = db();
+        // owner: renamed and moved People (an older client: no icon key).
+        push(&c, "owner", "laptop", &[home("h1", "Home", "V", NOW), home("h2", "Work", "l", NOW)], NOW).expect("owner groups");
+        legacy_people_seed(&c, "owner", "a");
+        push(&c, "owner", "phone", &[home(PEOPLE_ID, "Humans", "b", NOW + 5)], NOW).expect("moved");
+        // gina: picked her own icon for it, left it where the seed put it.
+        push(&c, "gina", "desk", &[home("g1", "Home", "V", NOW), home("g2", "Work", "l", NOW)], NOW).expect("gina groups");
+        legacy_people_seed(&c, "gina", "a");
+        let mut picked = home(PEOPLE_ID, "People", "a", NOW + 5);
+        picked["icon"] = json!("users");
+        push(&c, "gina", "desk", &[picked], NOW).expect("icon");
+        let gina_seq = person_seq(&c, "gina").expect("gina seq").0;
+        // pat: never touched it.
+        push(&c, "pat", "web", &[home("p1", "Home", "V", NOW), home("p2", "Work", "l", NOW)], NOW).expect("pat groups");
+        legacy_people_seed(&c, "pat", "a");
+        let changed: Vec<String> = people_defaults_once(&c).expect("pass").into_iter().map(|(p, _)| p).collect();
+        assert_eq!(changed, vec!["owner".to_string(), "pat".to_string()], "gina had nothing to fill");
+        // owner: the icon filled in (they never had one), their place and name kept.
+        let o = people_groups(&c, "owner")[0].clone();
+        assert_eq!((o["icon"].clone(), o["name"].clone(), o["order"].clone()), (json!(PEOPLE_ICON), json!("Humans"), json!("b")));
+        assert_eq!(o["updatedAt"], json!(NOW + 6), "one above the person's edit");
+        assert_eq!(sorted_home_ids(&homes_of(&c, "owner")), vec!["h1", PEOPLE_ID, "h2"], "never moved off the person's place");
+        // gina: her icon and the place, untouched, no cursor bump.
+        let g = people_groups(&c, "gina")[0].clone();
+        assert_eq!((g["icon"].clone(), g["order"].clone(), g["deviceId"].clone()), (json!("users"), json!("a"), json!("desk")));
+        assert_eq!(person_seq(&c, "gina").expect("gina seq").0, gina_seq);
+        // pat: both defaults.
+        let p = people_groups(&c, "pat")[0].clone();
+        assert_eq!(p["icon"], json!(PEOPLE_ICON));
+        assert_eq!(sorted_home_ids(&homes_of(&c, "pat")), vec!["p1", "p2", PEOPLE_ID]);
+        // Any later device edit still beats the pass's write.
+        let r = push(&c, "owner", "phone", &[home(PEOPLE_ID, "Humans", "b", NOW + 7)], NOW).expect("later");
+        assert_eq!(r.applied, 1, "{r:?}");
+        assert_eq!(people_groups(&c, "owner")[0]["icon"], json!(PEOPLE_ICON), "an older client's edit keeps the icon");
+    }
+
+    /// A device's working copy of the Home groups, built from pulls.
+    fn apply_pull(view: &mut std::collections::BTreeMap<String, Value>, changes: &[Item]) {
+        for i in changes.iter().filter(|i| i.kind == Kind::Home) {
+            if i.deleted {
+                view.remove(&i.home_id);
+            } else {
+                view.insert(i.home_id.clone(), i.to_json());
+            }
+        }
+    }
+
+    #[test]
+    fn a_second_device_syncs_the_same_order_with_people_last() {
+        type View = std::collections::BTreeMap<String, Value>;
+        let ids = |v: &View| sorted_home_ids(&v.values().cloned().collect::<Vec<_>>());
+        // Pull from a cursor (None = full) into a device's view; its new cursor.
+        let sync = |c: &Connection, view: &mut View, at: Option<i64>| -> i64 {
+            let p = pull(c, "owner", at, None, NOW).expect("pull");
+            apply_pull(view, &p.changes);
+            p.cursor
+        };
+        let c = db();
+        let (mut laptop, mut phone) = (View::new(), View::new());
+        push(&c, "owner", "laptop", &[home("h1", "Home", "V", NOW), home("h2", "Work", "l", NOW)], NOW).expect("groups");
+        let laptop_at = sync(&c, &mut laptop, None);
+        assert!(matches!(ensure_people_group(&c, "owner").expect("seed"), Seed::Seeded { .. }));
+        // The laptop pulls the seed from its cursor; the phone's first pull is full.
+        let laptop_at = sync(&c, &mut laptop, Some(laptop_at));
+        let phone_at = sync(&c, &mut phone, None);
+        assert_eq!(ids(&laptop), vec!["h1", "h2", PEOPLE_ID]);
+        assert_eq!(ids(&phone), ids(&laptop));
+        // The phone adds a group above People (between the last group and
+        // People, as the desktop's createHome places it): same order on both.
+        let people_order = phone[PEOPLE_ID]["order"].as_str().expect("order").to_string();
+        let k = order_between(Some("l"), Some(people_order.as_str())).expect("between");
+        push(&c, "owner", "phone", &[home("h3", "Kids", &k, NOW + 1)], NOW).expect("add");
+        sync(&c, &mut phone, Some(phone_at));
+        sync(&c, &mut laptop, Some(laptop_at));
+        assert_eq!(ids(&laptop), vec!["h1", "h2", "h3", PEOPLE_ID]);
+        assert_eq!(ids(&phone), ids(&laptop));
+        assert_eq!(laptop, phone, "the same items, field for field");
+
+        // An old seed the defaults pass moves: both devices agree too.
+        let c = db();
+        let (mut laptop, mut phone) = (View::new(), View::new());
+        push(&c, "owner", "laptop", &[home("h1", "Home", "V", NOW), home("h2", "Work", "l", NOW)], NOW).expect("groups");
+        legacy_people_seed(&c, "owner", "a");
+        let laptop_at = sync(&c, &mut laptop, None);
+        let phone_at = sync(&c, &mut phone, None);
+        assert_eq!(ids(&laptop), vec!["h1", PEOPLE_ID, "h2"]);
+        assert_eq!(people_defaults_once(&c).expect("pass").len(), 1);
+        sync(&c, &mut laptop, Some(laptop_at));
+        sync(&c, &mut phone, Some(phone_at));
+        assert_eq!(ids(&laptop), vec!["h1", "h2", PEOPLE_ID]);
+        assert_eq!(laptop, phone, "the same items, field for field");
+        assert_eq!(laptop[PEOPLE_ID]["icon"], json!(PEOPLE_ICON));
     }
 }

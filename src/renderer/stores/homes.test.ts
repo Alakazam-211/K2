@@ -17,6 +17,8 @@ import {
   followHomeRedirects,
   parseHomeRedirects,
   nextGroupName,
+  newHomeIndex,
+  PEOPLE_HOME_ID,
   type KeyValueStorage,
   type HomeRow,
 } from './homes'
@@ -93,6 +95,25 @@ describe('homes store — first run, CRUD, last Home', () => {
     expect(s.getState().renameHome('h2', '')).toBe('refused')
     expect(s.getState().renameHome('nope', 'X')).toBe('refused')
     expect(stored(local).homes.map((h) => h.name)).toEqual(['Group 1', 'Ops'])
+  })
+
+  it('a new group goes above People while People is last, else at the end', () => {
+    const local = new MemStorage()
+    const s = createHomesStore({ local, session: new MemStorage(), newId: ids() })
+    // The People group as a pull brings it: last.
+    s.getState().applySynced([...s.getState().homes, { id: PEOPLE_HOME_ID, name: 'People', icon: 'message-circle', rows: [] }], {})
+    expect(s.getState().homes.map((h) => h.id)).toEqual(['h1', 'people'])
+    expect(s.getState().createHome('Two')).toBe('h2')
+    expect(s.getState().createHome('Three')).toBe('h3')
+    expect(s.getState().homes.map((h) => h.id)).toEqual(['h1', 'h2', 'h3', 'people'])
+    expect(stored(local).homes.map((h) => h.id)).toEqual(['h1', 'h2', 'h3', 'people'])
+    // The person moved People up: new groups go at the end.
+    expect(s.getState().reorderHomes(['people', 'h1', 'h2', 'h3'])).toBe(true)
+    expect(s.getState().createHome('Four')).toBe('h4')
+    expect(s.getState().homes.map((h) => h.id)).toEqual(['people', 'h1', 'h2', 'h3', 'h4'])
+    expect(newHomeIndex([])).toBe(0)
+    expect(newHomeIndex([{ id: PEOPLE_HOME_ID }])).toBe(0)
+    expect(newHomeIndex([{ id: 'a' }, { id: 'b' }])).toBe(2)
   })
 
   it('the last Home cannot be deleted; deleting the selected one selects a neighbour', () => {

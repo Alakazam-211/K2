@@ -25,11 +25,14 @@
 //!
 //! **Frames.** A push that changed something emits `homes_changed
 //! {cursor}` to that person's `/cli/sessions/events` sockets only; so do a
-//! pull that seeded the People group and an arrival the daemon added.
+//! pull that seeded the People group (or ran the one-time defaults pass, to
+//! each person it changed) and an arrival the daemon added.
 //!
 //! **The People group** (homes-people-group-v1, while
 //! `K2_HOMES_PEOPLE_GROUP` isn't off): a pull seeds it
-//! (`homes_sync::ensure_people_group`); a push that deletes it gets that item
+//! (`homes_sync::ensure_people_group`), after the one-time pass that gives
+//! the groups seeded before 0.46.15 their defaults
+//! (`homes_sync::people_defaults_once`: chat icon, last); a push that deletes it gets that item
 //! back in `rejected[]` with `reason: "builtin_group"` and `hint: "The People
 //! group can't be deleted."` (the rest of the push lands; an older client
 //! drops the item and pulls the group back). Arrivals:
@@ -216,8 +219,15 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor, params: &Ha
                 return device_removed(&device);
             }
             // homes-people-group-v1: the person's People group, made on the
-            // first pull that finds them with a group and without it.
+            // first pull that finds them with a group and without it. Before
+            // that, once per server: the groups seeded before 0.46.15 take
+            // the chat icon and (never moved by the person) go last.
+            let mut moved: Vec<(String, i64)> = Vec::new();
             let seeded = if homes_sync::people_group_on() {
+                moved = match homes_sync::people_defaults_once(&conn) {
+                    Ok(m) => m,
+                    Err(e) => return store(e),
+                };
                 match homes_sync::ensure_people_group(&conn, &person) {
                     Ok(Seed::Seeded { cursor }) => Some(cursor),
                     Ok(Seed::Exists | Seed::NoGroups) => None,
@@ -234,6 +244,9 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor, params: &Ha
             if let Some(cursor) = seeded {
                 // The person's other devices pull it too.
                 let _ = crate::session_events::emit(SessionEvent::HomesChanged { person: person.clone(), cursor });
+            }
+            for (who, cursor) in moved {
+                let _ = crate::session_events::emit(SessionEvent::HomesChanged { person: who, cursor });
             }
             let redirects: serde_json::Map<String, Value> =
                 p.redirects.into_iter().map(|(from, to)| (from, Value::String(to))).collect();

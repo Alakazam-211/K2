@@ -544,14 +544,15 @@ async fn the_people_group_is_seeded_once_and_never_deleted() {
         let r = push(port, OWNER_TOKEN, "desk-1", json!([home_item("h1", "Home", "V", t), home_item("h2", "Work", "l", t), row_item("h2", &agent, "Atlas", "V", t)]));
         assert_eq!(r.status, 200, "{}", r.body);
         let pushed = r.json()["cursor"].as_i64().expect("cursor");
-        // The next pull seeds it: right after the first group, low stamp, the marker.
+        // The next pull seeds it: last, the chat icon, low stamp, the marker.
         let v = pull(port, OWNER_TOKEN, "desk-1", Some(pushed)).json();
         assert_eq!(v["cursor"].as_i64(), Some(pushed + 1), "{v}");
         let p = people_groups(&v);
         assert_eq!(p.len(), 1, "{v}");
         assert_eq!((p[0]["name"].clone(), p[0]["builtin"].clone(), p[0]["updatedAt"].clone()), (json!("People"), json!("people"), json!(1)));
+        assert_eq!(p[0]["icon"], json!("message-circle"), "{v}");
         let order = p[0]["order"].as_str().expect("order").to_string();
-        assert!(order.as_str() > "V" && order.as_str() < "l", "{order}");
+        assert!(order.as_str() > "l", "after every other group: {order}");
         // Every pull after, on every device of the person: exactly one.
         for (tok, dev) in [(OWNER_TOKEN, "desk-1"), (phone.as_str(), "phone-1"), (OWNER_TOKEN, "desk-1")] {
             let v = pull(port, tok, dev, None).json();
@@ -603,5 +604,66 @@ async fn the_people_group_is_seeded_once_and_never_deleted() {
         del["deleted"] = json!(true);
         let r = push(port, &phone, "phone-1", json!([del])).json();
         assert_eq!(r["rejected"][0]["reason"], "builtin_group", "{r}");
+    });
+}
+
+/// Home ids as a device lays them out: by `order`, then id.
+fn home_order(v: &J) -> Vec<String> {
+    let mut h: Vec<(String, String)> = v["changes"]
+        .as_array()
+        .expect("changes")
+        .iter()
+        .filter(|c| c["kind"] == "home" && c.get("deleted").is_none())
+        .map(|c| (c["order"].as_str().expect("order").to_string(), c["id"].as_str().expect("id").to_string()))
+        .collect();
+    h.sort();
+    h.into_iter().map(|(_, id)| id).collect()
+}
+
+/// 0.46.15 defaults through the real routes: a People group seeded before
+/// (no icon, right after the first group, never touched) takes the chat
+/// icon and goes last on the first pull after the upgrade, once; both of
+/// the person's devices see the same order and the next pulls change nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_old_people_seed_takes_the_chat_icon_and_the_bottom_once() {
+    with_temp_home(|_home| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = d.port;
+        isolate_homes();
+        let _people_on = k2_core::test_env::EnvVar::remove(k2_core::homes_sync::PEOPLE_SWITCH_ENV);
+        register(port, OWNER_TOKEN, "desk-1", "Desk", "macos");
+        register(port, OWNER_TOKEN, "lap-1", "Laptop", "macos");
+        let t = now_ms();
+        let r = push(port, OWNER_TOKEN, "desk-1", json!([home_item("h1", "Home", "V", t), home_item("h2", "Work", "l", t)]));
+        assert_eq!(r.status, 200, "{}", r.body);
+        let pushed = r.json()["cursor"].as_i64().expect("cursor");
+        // The old seed, as 0.46.14 wrote it; the pass not run yet on this DB.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO homes_items (person, kind, home_id, address, name, ord, updated_at, device_id, deleted, seq) \
+                 VALUES ('owner', 'home', 'people', '', 'People', 'a', 1, 'k2-server', 0, ?1)",
+                params![pushed + 1],
+            )
+            .expect("old seed");
+            conn.execute("UPDATE homes_people SET seq = ?1 WHERE person = 'owner'", params![pushed + 1]).expect("old seq");
+            conn.execute("DELETE FROM code_migrations WHERE id = ?1", params![k2_core::homes_sync::PEOPLE_DEFAULTS_PASS_ID])
+                .expect("forget the pass");
+        }
+        // The first pull after the upgrade: icon + bottom, one cursor step.
+        let v = pull(port, OWNER_TOKEN, "desk-1", Some(pushed + 1)).json();
+        assert_eq!(v["cursor"].as_i64(), Some(pushed + 2), "{v}");
+        let p = people_groups(&v);
+        assert_eq!(p.len(), 1, "{v}");
+        assert_eq!((p[0]["icon"].clone(), p[0]["updatedAt"].clone(), p[0]["deviceId"].clone()), (json!("message-circle"), json!(2), json!("k2-server")));
+        let desk = home_order(&pull(port, OWNER_TOKEN, "desk-1", None).json());
+        assert_eq!(desk, vec!["h1", "h2", "people"]);
+        assert_eq!(home_order(&pull(port, OWNER_TOKEN, "lap-1", None).json()), desk, "the same order on the second device");
+        // Pull after pull: nothing more.
+        for dev in ["desk-1", "lap-1"] {
+            let v = pull(port, OWNER_TOKEN, dev, Some(pushed + 2)).json();
+            assert_eq!((v["cursor"].as_i64(), v["changes"].as_array().map(Vec::len)), (Some(pushed + 2), Some(0)), "{dev}: {v}");
+        }
     });
 }

@@ -1918,7 +1918,7 @@ ok=0
 i=0
 while [ "$i" -lt 60 ]; do
   i=$((i+1)); sleep 1
-  body=$(curl -fsS "http://127.0.0.1:$PORT/boot-status" 2>/dev/null) || continue
+  body=$(curl -fsS --noproxy '*' "http://127.0.0.1:$PORT/boot-status" 2>/dev/null) || continue
   echo "$body" | grep -q "\"version\":\"$TARGET\"" || continue
   echo "$body" | grep -q "\"phase\":\"ready\"" || continue
   ok=1; break
@@ -3599,6 +3599,12 @@ mod tests {
         assert!(s.starts_with("#!/bin/sh"), "shebang");
         assert!(s.contains("mv -f"), "atomic rename");
         assert!(s.contains("/boot-status"), "health-check endpoint");
+        // K2 never sends a request to its own server through a proxy.
+        assert!(
+            s.contains("curl -fsS --noproxy '*' \"http://127.0.0.1:$PORT/boot-status\""),
+            "the health check skips proxies"
+        );
+        assert_eq!(s.matches("curl ").count(), s.matches("--noproxy '*'").count(), "every curl skips proxies");
         // The target version is bound to $TARGET and the health-check greps
         // for `"version":"$TARGET"` + `"phase":"ready"`.
         assert!(s.contains("TARGET=\"0.40.0\""), "target version bound");

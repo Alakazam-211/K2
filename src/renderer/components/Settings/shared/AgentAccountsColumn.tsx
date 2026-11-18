@@ -306,10 +306,12 @@ function AccountRow({
   // The server default API token may be removed (or just stop being the
   // default) after a confirm: that leaves the tool with no default.
   // Admin and above, like any default change. A subscription default
-  // can't: it sits in the tool's own store.
+  // can't while it sits in the tool's own store, unless its sign-in there
+  // has ended.
   const clearsDefault = account.active && apiKey
+  const removesDefault = account.active && (apiKey || needsLogin)
   const removeBlocked = account.active
-    ? clearsDefault
+    ? removesDefault
       ? (doc.canChangeDefault ? undefined : (doc.changeDefaultReason ?? ADMIN_SWITCH_REASON))
       : ACTIVE_REMOVE_REASON
     : pinnedBlock
@@ -922,7 +924,8 @@ export function AgentAccountsColumn(): React.JSX.Element {
           onConfirm={() => {
             const { tool, account } = ask
             setAsk(null)
-            const clears = account.active && account.kind === 'api_key'
+            // The default API token, or a default whose sign-in ended.
+            const clears = account.active && (account.kind === 'api_key' || account.state === 'needs_login' || account.state === 'not_set_up')
             void change(tool.tool, removeLogin(scope, account.id, clears), `“${account.label}” was removed from this server.`, `Couldn’t remove “${account.label}”.`)
           }}
         />
@@ -964,6 +967,9 @@ export function AgentAccountsColumn(): React.JSX.Element {
 function removeText(tool: LlmTool, a: LlmAccount): string {
   if (a.active && a.kind === 'api_key') {
     return `It’s the ${tool.display} server default. ${noDefaultText(tool)} To use it again, paste the token again.`
+  }
+  if (a.active) {
+    return `It’s the ${tool.display} server default and its sign-in has ended. ${tool.display} then has no server default; K2 leaves ${tool.display}’s own sign-in file as it is. Sign in again with Add a token.`
   }
   return a.kind === 'api_key'
     ? `K2 stops using this ${tool.display} API token on this server. To use it again, paste the token again.`

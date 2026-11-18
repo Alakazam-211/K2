@@ -105,4 +105,27 @@ describe('an ended Claude sign-in', () => {
     fireEvent.click(within(row).getByRole('button', { name: 'Sign in again' }))
     expect(await screen.findByRole('dialog')).toBeTruthy()
   })
+
+  it('the ended server default can be removed after a confirm, with clearDefault; a working one cannot', async () => {
+    listDoc = docWith([
+      account({ id: 'acc_def', label: 'jeff', active: true, state: 'needs_login', detail: ENDED_DETAIL }),
+      account({ id: 'acc_b', label: 'other' }),
+    ])
+    await renderRow('acc_def')
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for jeff' }))
+    const remove = screen.getByRole('menuitem', { name: /^Remove/ })
+    expect(remove.getAttribute('aria-disabled')).toBeNull()
+    fireEvent.click(remove)
+    const dialog = screen.getByTestId('llm-remove-confirm')
+    expect(dialog.textContent).toContain('its sign-in has ended')
+    expect(dialog.textContent).toContain('Claude then has no server default')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/remove', { id: 'acc_def', clearDefault: true }))
+    cleanup()
+    resetLlmAccountsForTests()
+    listDoc = docWith([account({ id: 'acc_def', label: 'jeff', active: true })])
+    await renderRow('acc_def')
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for jeff' }))
+    expect(screen.getByRole('menuitem', { name: /^Remove/ }).getAttribute('aria-disabled')).toBe('true')
+  })
 })

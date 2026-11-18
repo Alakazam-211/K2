@@ -34725,8 +34725,9 @@ k2 llm tokens — LLM tokens: subscriptions and API tokens
   k2 llm tokens next <tool>                          use the next signed-in subscription (Admin or Owner)
   k2 llm tokens rename <tool> <label> <new-label>
   k2 llm tokens remove <tool> <label> [--clear-default]
-                                                     kept in Trash; the server default API token
-                                                     only with --clear-default (Admin or Owner)
+                                                     kept in Trash; the server default API token,
+                                                     or a default whose sign-in has ended, only
+                                                     with --clear-default (Admin or Owner)
   k2 llm tokens clear-default <tool>                 no server default for that tool (an API token
                                                      default only; Admin or Owner)
   k2 llm tokens refresh [<tool> <label>] [--usage]   re-read state (and usage)

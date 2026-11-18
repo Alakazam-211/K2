@@ -342,3 +342,46 @@ fn the_live_file_is_never_written_through_a_symlink() {
     assert_eq!(fs::read(&real).unwrap(), ended_file(), "nothing written through it");
     assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
 }
+
+// ── Part 3: an ended token can always be removed ───────────────────
+
+#[test]
+fn an_ended_default_can_be_removed_leaving_no_default_and_the_file_as_it_is() {
+    let h = Home::new();
+    let conn = db();
+    let a = ended_default(&h, &conn);
+    // Without the confirm: refused, and the refusal says how.
+    let err = wallet::remove(&conn, &a.id).unwrap_err();
+    assert_eq!(err.code(), "active_login");
+    assert!(err.to_string().contains("--clear-default") && err.to_string().contains("ended"), "{err}");
+    let out = wallet::remove_clearing_default(&conn, &a.id, Some("owner-token")).unwrap();
+    assert!(PathBuf::from(out.moved_to.unwrap()).starts_with(store::removed_root()), "kept in Trash");
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap(), None, "no default");
+    assert!(list(&conn).unwrap().is_empty());
+    assert_eq!(read_live(&h), ended_file(), "Claude's own file is left as it is");
+    // It doesn't come straight back as the live sign-in.
+    assert!(wallet::import_live(&conn, Tool::Claude, Some("boot")).unwrap().is_none());
+    wallet::reconcile_live(&conn, Tool::Claude, None, true).unwrap();
+    assert!(list(&conn).unwrap().is_empty());
+    // Sign in again: a new token, made the default (the live store holds
+    // no sign-in K2 counts), written live with the MCP sign-ins kept.
+    let n = wallet::begin_new(&conn, Tool::Claude, "fresh", None).unwrap();
+    sign_into_slot(&n.id, &good("n"), "uuid-a", "a@example.test");
+    let n = wallet::finalize_login(&conn, &n.id, None).unwrap();
+    assert_eq!(n.state, state::SIGNED_IN);
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(n.id.as_str()));
+    assert_eq!(live_oauth(&h), oauth_of(&good("n")));
+    assert!(read_live(&h).ends_with(MCP_TAIL));
+}
+
+#[test]
+fn a_working_subscription_default_still_cant_be_removed() {
+    let h = Home::new();
+    let conn = db();
+    write_live(&h, &good("a"));
+    let a = wallet::import_live(&conn, Tool::Claude, None).unwrap().unwrap();
+    let err = wallet::remove_clearing_default(&conn, &a.id, None).unwrap_err();
+    assert_eq!(err.code(), "active_login");
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap(), Some(a.id));
+    assert_eq!(read_live(&h), good("a"));
+}

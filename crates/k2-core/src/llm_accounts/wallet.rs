@@ -1035,6 +1035,12 @@ fn import_bytes_locked(conn: &Connection, tool: Tool, by: Option<&str>, label: &
         crate::log_debug!("[llm-accounts] {}: live login not imported ({why})", tool.as_str());
         return Ok(None);
     }
+    if let Some(why) = store::parse_meta(tool, &bytes).ended {
+        // Nor one whose sign-in has ended: removing such a default must
+        // not bring it straight back.
+        crate::log_debug!("[llm-accounts] {}: live login not imported (its sign-in ended: {why:?})", tool.as_str());
+        return Ok(None);
+    }
     // The account it names now (Claude: its own ~/.claude.json, written by
     // Claude, since K2 has written none yet) is its record from here on.
     let who = identity::actual_identity(tool, &bytes, None, true);
@@ -1215,8 +1221,10 @@ pub fn finalize_read(tool: Tool, id: &str) -> Result<SignInRead, WalletError> {
             out.keychain_item = Some((svc, acct, bytes));
         }
     }
+    // A live sign-in that has ended (Claude's time limit) counts as
+    // signed out: the new one may become the default and go live.
     out.live_signed_out = match store::read_live(tool) {
-        Ok(v) => Some(v.is_none()),
+        Ok(v) => Some(v.is_none_or(|b| store::parse_meta(tool, &b).ended.is_some())),
         Err(_) => None,
     };
     Ok(out)
@@ -2188,9 +2196,24 @@ fn active_refusal(tool: Tool, e: &Entry) -> WalletError {
                 e.label
             ),
         )
+    } else if !live_good(tool) {
+        WalletError::Conflict("active_login", ended_default_hint(tool, e))
     } else {
         WalletError::Conflict("active_login", subscription_default_hint(tool, e))
     }
+}
+
+/// The server default (or the subscription left in the live store) whose
+/// sign-in has ended: it may be removed, leaving no default.
+fn ended_default_hint(tool: Tool, e: &Entry) -> String {
+    format!(
+        "{} is the server default {} token and its sign-in has ended. Remove it and leave no default: \
+         `k2 llm tokens remove {} \"{}\" --clear-default` (Admin or Owner; Settings asks you to confirm), or sign it in again.",
+        e.label,
+        tool.display(),
+        tool.as_str(),
+        e.label
+    )
 }
 
 /// Soft remove an idle login: move its slot to
@@ -2203,7 +2226,8 @@ pub fn remove(conn: &Connection, id: &str) -> Result<RemoveOutcome, WalletError>
 
 /// [`remove`], and when the token is the server default API token, clear
 /// the default first ([`clear_default`]; the person confirmed it, the
-/// caller checked Admin and above).
+/// caller checked Admin and above). A subscription default whose sign-in
+/// has ended goes the same way: no default after it.
 pub fn remove_clearing_default(conn: &Connection, id: &str, by: Option<&str>) -> Result<RemoveOutcome, WalletError> {
     remove_inner(conn, id, true, by)
 }
@@ -2212,16 +2236,30 @@ fn remove_inner(conn: &Connection, id: &str, clear: bool, by: Option<&str>) -> R
     let e = lookup(conn, None, id)?;
     let tool = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
     let _lock = store::lock_tool(tool, LOCK_WAIT)?;
+    // A subscription whose sign-in in the tool's own store has ended (or
+    // is gone) can always be removed with the confirm, the default too:
+    // that leaves no default, and the tool's own file is left as it is.
+    let ended = !e.is_api_key() && tool.subscription_supported() && !live_good(tool);
     if active_id(conn, tool)?.as_deref() == Some(e.id.as_str()) {
-        if !(clear && e.is_api_key()) {
+        if !(clear && (e.is_api_key() || ended)) {
             return Err(active_refusal(tool, &e));
         }
-        clear_default_locked(conn, tool, by)?;
+        if e.is_api_key() {
+            clear_default_locked(conn, tool, by)?;
+        } else {
+            conn.execute("DELETE FROM llm_active WHERE tool = ?1", rusqlite::params![tool.as_str()])?;
+            crate::log_debug!("[llm-accounts] {}: removed the default {} (its sign-in had ended); no default now", tool.as_str(), e.id);
+        }
     }
     if live_owner(conn, tool)?.as_deref() == Some(e.id.as_str()) {
         // A subscription left in the tool's own store while an API token
-        // is the default: chats still fall back to it.
-        return Err(WalletError::Conflict("active_login", subscription_default_hint(tool, &e)));
+        // is the default: chats still fall back to it, unless its sign-in
+        // there has ended.
+        if !(clear && ended) {
+            let hint = if ended { ended_default_hint(tool, &e) } else { subscription_default_hint(tool, &e) };
+            return Err(WalletError::Conflict("active_login", hint));
+        }
+        conn.execute("UPDATE llm_active SET live_account_id = NULL WHERE tool = ?1", rusqlite::params![tool.as_str()])?;
     }
     if pins::is_pinned(conn, &e.id)? {
         return Err(pinned_conflict(&e));

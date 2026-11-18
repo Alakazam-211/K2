@@ -20,7 +20,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use k2_daemon::test_harness;
 use rusqlite::params;
 use serde_json::Value as J;

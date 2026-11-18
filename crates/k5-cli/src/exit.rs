@@ -54,7 +54,7 @@ pub enum Exit {
     /// keeps running (`compute-lib.sh`, `compute-run.sh`), an LLM login is
     /// cancelled (`llm.sh`). 128 plus SIGINT, as shells report it.
     Interrupted,
-    /// 127: reserved for the `k2` name once it stops working (0.48), when
+    /// 127: reserved for the `k2` name once it stops working, when
     /// calling the command `k2` only says to use `k5`. Nothing exits with
     /// it yet. It is what a shell gives for a command it can't find.
     K2Retired,

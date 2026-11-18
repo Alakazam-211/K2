@@ -1,7 +1,7 @@
 //! The notice that tells a caller of `k2` to type `k5` from now on.
 //!
 //! It is off: nothing calls it yet, and `src/main.rs` never prints it. It
-//! goes on with the switch (R1 slice 10) and 0.47. Then, called as `k2`,
+//! goes on only once the decision to retire the `k2` name is made. Then, called as `k2`,
 //! the front prints [`TEXT`] once on stderr before it answers. When it
 //! hands the call to the shell CLI it sets `K5_CLI_NOTICE_DONE=1`
 //! ([`crate::called_as::NOTICE_DONE_VAR`]); the shell reads that into
@@ -23,7 +23,7 @@
 use crate::called_as::CalledAs;
 
 /// The notice, one line, on stderr. It never repeats the arguments.
-pub const TEXT: &str = "note: k2 is now k5 (the same command). Type k5 from now on; k2 stops working in 0.48.";
+pub const TEXT: &str = "note: k2 is now k5 (the same command). Type k5 from now on.";
 
 /// What the merged check says about stdout and stderr.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn the_text_is_the_ruled_line() {
-        assert_eq!(TEXT, "note: k2 is now k5 (the same command). Type k5 from now on; k2 stops working in 0.48.");
+        assert_eq!(TEXT, "note: k2 is now k5 (the same command). Type k5 from now on.");
         assert!(!TEXT.contains('\n'));
     }
 

@@ -42,7 +42,8 @@
 #                                        runs; the per-job names below win).
 #                                        Never V1's node: k2n9-vin here
 #                                        needs another K2_COMPUTE_VERIFY_NODE
-#   K2_COMPUTE_X86_NODE      k2n7-vin    L1: daemon, node, root helper, engine, k5-cli
+#   K2_COMPUTE_X86_NODE      k2n7-vin    L1: daemon, node, root helper, engine
+#                                        (L1 and V1 also build k5-cli)
 #   K2_COMPUTE_APP_NODE      k2n8-vin    L3: deb, rpm, AppImage
 #   K2_COMPUTE_VERIFY_NODE   k2n9-vin    V1: a second x86 build of the same
 #                                        set on another node; the daemon, root

@@ -529,7 +529,7 @@ collect_pair() {
 rc="$(collect_pair v-daemon k2n7-vin k2n9-vin trojan)"
 [ "$rc" != 0 ] && grep -q 'k2-daemon-linux-x86_64: the two builds differ' "$tmp/v-daemon.collect" \
     && pass "review H1: V1's daemon differing from L1's fails collect (not only reported)" || fail "V1 daemon diff" "rc=$rc $(cat "$tmp/v-daemon.collect")"
-rc="$(collect_pair v-k5 k2n7-vin k2n9-vin "" other)"
+rc="$(collect_pair v-k5 build-node verify-node "" other)"
 [ "$rc" != 0 ] && grep -q 'k5-cli-linux-x86_64: the two builds differ' "$tmp/v-k5.collect" \
     && pass "V1's k5-cli differing from L1's fails collect (the update key signs it from compute)" || fail "V1 k5 diff" "rc=$rc $(cat "$tmp/v-k5.collect")"
 rc="$(collect_pair v-samename k2n7-vin k2n7-vin)"

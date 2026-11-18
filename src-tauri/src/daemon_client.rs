@@ -567,11 +567,13 @@ mod tests {
     const PROXY_CHILD: &str = "DAEMON_CLIENT_TEST_PROXY_CHILD";
     const PROXY_CHILD_DAEMON: &str = "DAEMON_CLIENT_TEST_DAEMON_BASE";
 
-    /// A listening stand-in proxy: counts every connection it accepts and
-    /// answers each with 502, so a client that went through it fails.
+    /// A listening stand-in proxy: counts every connection it accepts,
+    /// keeps each one's request line, and answers each with 502, so a
+    /// client that went through it fails.
     struct ProxyStub {
         url: String,
         hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        lines: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     }
 
     impl ProxyStub {
@@ -582,6 +584,8 @@ mod tests {
             let url = format!("http://{}", listener.local_addr().expect("proxy stub addr"));
             let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let counter = hits.clone();
+            let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let kept = lines.clone();
             std::thread::spawn(move || {
                 for stream in listener.incoming() {
                     let stream = stream.expect("proxy stub accept");
@@ -589,6 +593,10 @@ mod tests {
                     stream.set_read_timeout(Some(Duration::from_secs(5))).expect("read timeout");
                     let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
                     let mut line = String::new();
+                    if reader.read_line(&mut line).is_ok() {
+                        kept.lock().expect("proxy stub lines").push(line.trim_end().to_string());
+                    }
+                    line.clear();
                     while reader.read_line(&mut line).map(|n| n > 0).unwrap_or(false) && line != "\r\n" {
                         line.clear();
                     }
@@ -596,7 +604,11 @@ mod tests {
                     let _ = out.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                 }
             });
-            Self { url, hits }
+            Self { url, hits, lines }
+        }
+
+        fn request_lines(&self) -> Vec<String> {
+            self.lines.lock().expect("proxy stub lines").clone()
         }
 
         fn hits(&self) -> usize {
@@ -682,6 +694,15 @@ mod tests {
                     let port: u16 = base.parse().expect("the events stub's port");
                     let _ws = crate::daemon_events::connect_events(port, "tok").expect("the events stub upgraded");
                 }
+                "probe" => {
+                    // The connection gate's probe, to whatever `base` is.
+                    let url = format!("{base}/boot-status");
+                    let client = crate::commands::connection::probe_client(&url).expect("probe client");
+                    match client.get(&url).send() {
+                        Ok(res) => println!("PROBE_STATUS {}", res.status().as_u16()),
+                        Err(e) => println!("PROBE_ERROR {e}"),
+                    }
+                }
                 other => panic!("unknown child mode {other}"),
             }
             return;
@@ -714,5 +735,42 @@ mod tests {
         let (target, auth) = upgrade.recv_timeout(Duration::from_secs(10)).expect("the events stub saw the upgrade");
         assert_eq!(target, "/events?client=desktop-app");
         assert_eq!(auth.as_deref(), Some("Bearer tok"));
+    }
+
+    /// Loopback (127.0.0.1, ::1, localhost) and plain http never use a
+    /// proxy; HTTPS to a remote K2 may use the person's proxy. The
+    /// connection gate's probe in a child process with every proxy
+    /// variable set to a listening stub: to a remote https host it asks the
+    /// stub for a CONNECT tunnel; to loopback it reaches the daemon stub;
+    /// to a remote plain-http host it never reaches the stub.
+    #[test]
+    fn a_remote_https_k2_host_keeps_the_proxy_loopback_and_http_skip_it() {
+        // The child runs proxy_settings_never_reach_the_daemon_client in
+        // its "probe" mode.
+        let printed = |out: &std::process::Output| String::from_utf8_lossy(&out.stdout).to_string();
+
+        let proxy = ProxyStub::start();
+        let out = run_proxy_child("probe", &proxy, "https://k2-remote.example.test");
+        assert_child_passed("probe (remote https)", &out);
+        assert_eq!(
+            proxy.request_lines(),
+            vec!["CONNECT k2-remote.example.test:443 HTTP/1.1".to_string()],
+            "a remote https host goes through the person's proxy: {}",
+            printed(&out)
+        );
+
+        let proxy = ProxyStub::start();
+        let fake = test_support::FakeDaemon::serve(vec![(200, "{}")]);
+        let out = run_proxy_child("probe", &proxy, &fake.base);
+        assert_eq!(proxy.hits(), 0, "a loopback probe reached the proxy stub: {:?}", proxy.request_lines());
+        assert_child_passed("probe (loopback)", &out);
+        assert!(printed(&out).contains("PROBE_STATUS 200"), "{}", printed(&out));
+        assert_eq!(fake.next().path, "/boot-status");
+
+        let proxy = ProxyStub::start();
+        let out = run_proxy_child("probe", &proxy, "http://k2-remote.invalid");
+        assert_child_passed("probe (remote http)", &out);
+        assert_eq!(proxy.hits(), 0, "a plain-http probe reached the proxy stub: {:?}", proxy.request_lines());
+        assert!(printed(&out).contains("PROBE_ERROR"), "nothing answers k2-remote.invalid: {}", printed(&out));
     }
 }

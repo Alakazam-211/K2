@@ -62,6 +62,7 @@ pub mod path_env;
 pub mod paths;
 pub mod perf;
 pub mod process;
+pub mod proxy_rule;
 pub mod release_sums;
 pub mod wake;
 #[cfg(windows)]

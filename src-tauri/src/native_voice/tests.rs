@@ -963,3 +963,14 @@ fn a_noise_removal_event_is_one_log_line() {
     assert_eq!(super::noise_removal_line("{}"), None);
     assert_eq!(super::noise_removal_line(r#"{"mode":"standard","active":"standard","model":"vroom"}"#), None);
 }
+
+#[test]
+fn the_provider_skips_the_proxy_for_loopback_and_http_only() {
+    let p = provider_for("http://127.0.0.1:1");
+    for base in ["http://127.0.0.1:39000", "http://[::1]:39000", "https://localhost", "http://10.0.0.2:39000"] {
+        assert!(std::ptr::eq(p.http_for(base), &p.direct), "{base}: the no-proxy client");
+    }
+    for base in ["https://lab.k2.dev", "https://10.0.0.2"] {
+        assert!(std::ptr::eq(p.http_for(base), &p.proxied), "{base}: the client with the person's proxy settings");
+    }
+}

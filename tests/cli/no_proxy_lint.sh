@@ -2,6 +2,12 @@
 # Lint: the CLI never sends a request to the daemon through a proxy, and
 # never puts a credential in a request's query string.
 #
+# The rule: loopback (127.0.0.1, ::1, localhost) and plain http never use
+# a proxy; HTTPS to a remote K2 may use the person's proxy (a CONNECT
+# tunnel hides the request; a company proxy that intercepts TLS is the
+# organisation's own policy). This lint checks the loopback half by text;
+# tests/cli/no_proxy_to_daemon.sh and the app's proxy test check both.
+#
 # Reads cli/src (the parts cli/k2 is built from) and fails, naming file and
 # line, when:
 #   1. _k2_curl no longer adds --noproxy '*' for daemon calls;
@@ -155,7 +161,9 @@ PYEOF
 # The Rust side: every HTTP client built in src-tauri/src or crates/*/src
 # (reqwest Client::builder / ClientBuilder::new / Client::new /
 # reqwest::get, ureq, hyper clients) must call .no_proxy() in the same
-# statement, unless its file is listed here with how many such clients it
+# statement, or in the `if ...proxy_rule::direct(url) { ... .no_proxy() }`
+# right after it (k2_client::proxy_rule: the one place the rule lives),
+# unless its file is listed here with how many such clients it
 # builds and what they fetch. A new client, or one more in a listed file,
 # fails until it skips proxies or is reviewed into this list; a listed file
 # with fewer fails too, so the list stays exact. HTTP written by hand over a
@@ -213,6 +221,7 @@ RUST_OUTSIDE=(
     "crates/k2-daemon/src/federation_drain.rs|1|a federated K2 peer"
     "crates/k2-daemon/src/federation_routes.rs|2|a federated K2 peer"
     "crates/k2-daemon/src/federation_vault.rs|1|a federated K2 peer"
+    "src-tauri/src/native_voice/provider.rs|1|HTTPS to a remote K2 host (its other client, for loopback and http, skips proxies)"
     "crates/k2-transfer-client/src/lib.rs|1|an App's transfer door, for the App's own code"
     # Services on this box that are not the daemon.
     "crates/k2-daemon/src/apps/checks.rs|1|an App's health checks (its loopback port or its public host)"
@@ -281,7 +290,13 @@ for f in files:
                 stmt.append(w)
                 if w.rstrip().endswith(";"):
                     break
-            if ".no_proxy()" not in "\n".join(stmt):
+            after = []
+            for _, w in lines[k + len(stmt):k + len(stmt) + 5]:
+                after.append(w)
+                if w.strip() == "}":
+                    break
+            ruled = "proxy_rule::direct(" in "\n".join(after) and ".no_proxy()" in "\n".join(after)
+            if ".no_proxy()" not in "\n".join(stmt) and not ruled:
                 seen_client.setdefault(rel, []).append(n)
         if TOKQ.search(l):
             seen_token.setdefault(rel, []).append(n)
@@ -427,12 +442,30 @@ EOF
 mkr rust_good crates/x/src/d_tests.rs <<'EOF'
 fn t() { let u = "/cli/x?token=abc"; let c = reqwest::Client::new(); }
 EOF
+mkr rust_good crates/x/src/f.rs <<'EOF'
+fn probe(url: &str) -> reqwest::blocking::Client {
+    let mut b = reqwest::blocking::Client::builder().timeout(T);
+    if k2_client::proxy_rule::direct(url) {
+        b = b.no_proxy();
+    }
+    b.build().expect("client")
+}
+EOF
 mkr rust_good crates/x/src/e.rs <<'EOF'
 // no HTTP crate here: this Client::new() is someone else's type
 fn f() { let c = Client::new(); }
 EOF
 mkr rust_bad_client src-tauri/src/a.rs <<'EOF'
 fn http() { let c = reqwest::blocking::Client::builder().timeout(T).build(); }
+EOF
+mkr rust_bad_cond src-tauri/src/a.rs <<'EOF'
+fn probe(url: &str) -> reqwest::blocking::Client {
+    let mut b = reqwest::blocking::Client::builder().timeout(T);
+    if url.starts_with("http://127.") {
+        b = b.no_proxy();
+    }
+    b.build().expect("client")
+}
 EOF
 mkr rust_bad_token src-tauri/src/a.rs <<'EOF'
 fn url(p: u16, t: &str) -> String { format!("http://127.0.0.1:{p}/cli/x?token={t}") }
@@ -454,6 +487,7 @@ rust_caught() { # rust_caught <fixture> <text the problem must name> <outside ro
     fi
 }
 rust_caught rust_bad_client "src-tauri/src/a.rs:1: an HTTP client without .no_proxy()" ""
+rust_caught rust_bad_cond "src-tauri/src/a.rs:2: an HTTP client without .no_proxy()" ""
 rust_caught rust_bad_token "src-tauri/src/a.rs:1: a token query parameter" ""
 rust_caught rust_bad_count "2 HTTP clients without .no_proxy(), the list says 1" "crates/x/src/b.rs|1|fixture"
 rust_caught rust_stale "none found (update the list)" "crates/x/src/z.rs|1|fixture"

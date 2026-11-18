@@ -209,6 +209,8 @@ pub mod wiki_public_chat;
 // remote-daemon bootstrap path so both agree on the canonical
 // label + plist shape.
 pub use k2_client::daemon_lifecycle;
+/// When a request to a K2 server may use the person's proxy settings.
+pub use k2_client::proxy_rule;
 pub mod db;
 /// Email Notifications' k2.db rows (migration 0227,
 /// prd-email-notifications-core-v1, 0.46.5); the rules live in k2-daemon.

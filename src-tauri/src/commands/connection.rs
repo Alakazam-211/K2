@@ -31,6 +31,20 @@ pub struct BootProbeResult {
     pub body: String,
 }
 
+/// The probe's client: a fresh one per call is the whole point (its
+/// connection can never be the webview's poisoned one), and http1_only()
+/// guarantees it can't coalesce onto a shared h2 connection at the tunnel
+/// edge, the exact mechanism that wedged the webview. Loopback (127.0.0.1,
+/// ::1, localhost) and plain http never use a proxy; HTTPS to a remote K2
+/// may use the person's proxy ([`k2_client::proxy_rule`]).
+pub(crate) fn probe_client(url: &str) -> Result<reqwest::blocking::Client, String> {
+    let mut builder = reqwest::blocking::Client::builder().http1_only().timeout(Duration::from_secs(4));
+    if k2_client::proxy_rule::direct(url) {
+        builder = builder.no_proxy();
+    }
+    builder.build().map_err(|e| format!("build probe client: {e}"))
+}
+
 /// GET `<scheme>://<authority>/boot-status` on a FRESH, never-pooled HTTP/1
 /// connection. `Err` = the probe failed at the network level (refused, DNS,
 /// timeout) — a genuine-outage signal, NOT proof of a webview wedge.
@@ -47,17 +61,6 @@ pub async fn remote_boot_probe(
     // Blocking reqwest matches the crate's existing HTTP story
     // (daemon_client.rs); spawn_blocking keeps it off the UI thread.
     tauri::async_runtime::spawn_blocking(move || {
-        let client = reqwest::blocking::Client::builder()
-            // A fresh client per call is the whole point: its connection
-            // can never be the webview's poisoned one. http1_only() also
-            // guarantees it can't coalesce onto a shared h2 connection at
-            // the tunnel edge — the exact mechanism that wedged the webview.
-            .http1_only()
-            // K2 never sends a request to its own server through a proxy.
-            .no_proxy()
-            .timeout(Duration::from_secs(4))
-            .build()
-            .map_err(|e| format!("build probe client: {e}"))?;
         let scheme = if secure { "https" } else { "http" };
         let authority = if secure && port == 443 {
             hostname.clone()
@@ -65,6 +68,7 @@ pub async fn remote_boot_probe(
             format!("{hostname}:{port}")
         };
         let url = format!("{scheme}://{authority}/boot-status");
+        let client = probe_client(&url)?;
         let response = client
             .get(&url)
             .send()

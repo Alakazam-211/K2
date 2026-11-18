@@ -91,7 +91,10 @@ pub const SESSION_LEAVE_ROUTE: &str = "session/leave";
 
 pub struct K2Provider<L: LoginSource> {
     logins: std::sync::Arc<L>,
-    http: reqwest::Client,
+    /// For loopback and plain http: no proxy setting applies.
+    pub(super) direct: reqwest::Client,
+    /// For HTTPS to a remote K2 host: the person's proxy settings apply.
+    pub(super) proxied: reqwest::Client,
     calls: std::sync::Arc<K2Calls>,
 }
 
@@ -100,15 +103,26 @@ pub struct K2Provider<L: LoginSource> {
 /// call ids.
 impl<L: LoginSource> Clone for K2Provider<L> {
     fn clone(&self) -> Self {
-        Self { logins: std::sync::Arc::clone(&self.logins), http: self.http.clone(), calls: std::sync::Arc::clone(&self.calls) }
+        Self { logins: std::sync::Arc::clone(&self.logins), direct: self.direct.clone(), proxied: self.proxied.clone(), calls: std::sync::Arc::clone(&self.calls) }
     }
 }
 
 impl<L: LoginSource> K2Provider<L> {
     pub fn new(logins: L) -> Result<Self, reqwest::Error> {
-        // K2 never sends a request to its own server through a proxy.
-        let http = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT).timeout(JOIN_TIMEOUT).no_proxy().build()?;
-        Ok(Self { logins: std::sync::Arc::new(logins), http, calls: Default::default() })
+        let direct = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT).timeout(JOIN_TIMEOUT).no_proxy().build()?;
+        let proxied = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT).timeout(JOIN_TIMEOUT).build()?;
+        Ok(Self { logins: std::sync::Arc::new(logins), direct, proxied, calls: Default::default() })
+    }
+
+    /// The client for a login's `base_url`. Loopback (127.0.0.1, ::1,
+    /// localhost) and plain http never use a proxy; HTTPS to a remote K2
+    /// may use the person's proxy ([`k2_client::proxy_rule`]).
+    pub(crate) fn http_for(&self, base_url: &str) -> &reqwest::Client {
+        if k2_client::proxy_rule::direct(base_url) {
+            &self.direct
+        } else {
+            &self.proxied
+        }
     }
 
     /// After the engine left Sew (with the call credential): end K2's own
@@ -137,7 +151,7 @@ impl<L: LoginSource> K2Provider<L> {
             .map_err(|_| ProviderError::Other("reading the saved login failed".into()))??;
         let body = join_body(&req);
         let url = format!("{}/cli/voice/join", login.base_url);
-        let answer = self.http.post(&url).bearer_auth(&login.token).json(&body).send().await;
+        let answer = self.http_for(&login.base_url).post(&url).bearer_auth(&login.token).json(&body).send().await;
         let res = match answer {
             Ok(r) => r,
             Err(e) if e.is_timeout() => return Err(refused("join_timeout", "the server didn't answer in time")),
@@ -168,7 +182,7 @@ impl<L: LoginSource> K2Provider<L> {
             .await
             .map_err(|_| ProviderError::Other("reading the saved login failed".into()))??;
         let url = format!("{}/cli/voice/{route}", login.base_url);
-        let res = match self.http.post(&url).bearer_auth(&login.token).json(&body).send().await {
+        let res = match self.http_for(&login.base_url).post(&url).bearer_auth(&login.token).json(&body).send().await {
             Ok(r) => r,
             Err(e) if e.is_timeout() => return Err(refused("join_timeout", "the server didn't answer in time")),
             Err(_) => return Err(ProviderError::Unavailable { retry_after_ms: None }),

@@ -15,6 +15,12 @@
 # stub must have got nothing, and no request the daemon stub saw may carry
 # token= in its query (the credential rides Authorization: Bearer).
 #
+# Loopback (127.0.0.1, ::1, localhost) and plain http never use a proxy;
+# HTTPS to a remote K2 may use the person's proxy. The last rows send
+# `daemon restart --host` to a remote https host (the proxy stub must get
+# its CONNECT), a remote plain-http host and https on localhost (the proxy
+# stub must get nothing).
+#
 # No daemon build, no real ~/.k2 (HOME is a temp dir), no network.
 
 set -euo pipefail
@@ -296,6 +302,24 @@ if missing:
     sys.exit(1)
 PY
 then ok "every request carried its credential as Authorization: Bearer"; else bad "a request carried no Bearer credential (above)"; fi
+
+echo "== a remote https host keeps the person's proxy; loopback and http skip it =="
+: >"$WORK/proxy.log"
+"${LIMIT[@]}" owner daemon restart --host "https://k2-remote.example.test" >"$WORK/out.txt" 2>"$WORK/err.txt" || true
+if grep -qx "CONNECT k2-remote.example.test:443 HTTP/1.1" "$WORK/proxy.log"; then
+    ok "remote https --host asked the proxy for a tunnel"
+else
+    bad "remote https --host did not go through the proxy (proxy log: $(tr '\n' ';' <"$WORK/proxy.log"))"
+fi
+for host in "http://k2-remote.invalid" "https://localhost:${PORT}" "https://127.0.0.1:${PORT}"; do
+    : >"$WORK/proxy.log"
+    "${LIMIT[@]}" owner daemon restart --host "$host" >"$WORK/out.txt" 2>"$WORK/err.txt" || true
+    if [ -s "$WORK/proxy.log" ]; then
+        bad "--host $host reached the proxy stub: $(tr '\n' ';' <"$WORK/proxy.log")"
+    else
+        ok "--host $host skipped the proxy"
+    fi
+done
 
 echo
 echo "no_proxy_to_daemon: $pass passed, $fail failed"

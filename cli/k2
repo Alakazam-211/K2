@@ -73171,7 +73171,8 @@ SCHEDULE (CRUD on heartbeat definitions)
        --tz America/New_York
          read the times in that IANA zone: 14:15 fires at 14:15 New York
          time wherever the server is (a laptop that travels keeps the
-         market's clock). Without --tz a new schedule takes the owner's
+         market's clock), and an --hourly --start/--end window is New
+         York's hours all year. Without --tz a new schedule takes the owner's
          timezone (Settings → General) when one is set, else the
          server's clock; --tz server picks the server's clock. Schedules
          made before this keep the zone they had. On a DST day a time

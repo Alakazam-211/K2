@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest'
 import type { AuthAuditEvent } from './access-audit-api'
-import { auditDetail, auditFields, auditWhat, type DetailContext } from './access-audit-words'
+import { auditDetail, auditFields, auditWhat, auditWho, auditWhoText, type DetailContext } from './access-audit-words'
 import { PRODUCT_NAME } from '@/lib/brand'
 
 function ev(event: string, outcome: string, user = 'owner'): AuthAuditEvent {
@@ -131,5 +131,15 @@ describe('other events read as before', () => {
 
   it('an event it does not know is still "Other" in the opened record', () => {
     expect(field(ev('some-new-event', 'on'), 'What')).toBe('Other')
+  })
+})
+
+describe('a refused agent passport', () => {
+  it('reads "An agent", not the raw name, and never "An agent agent"', () => {
+    expect(auditWho('agent-passport')).toEqual({ name: 'An agent', agent: false })
+    expect(auditWhoText('agent-passport')).toBe('An agent')
+  })
+  it('leaves a named agent as it was', () => {
+    expect(auditWho('agent:sales/s1', (w) => w)).toEqual({ name: 'sales', agent: true, session: 's1' })
   })
 })

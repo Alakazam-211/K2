@@ -41,6 +41,9 @@ export function auditWho(user: string, ws: WorkspaceNamer = plainWorkspace): Aud
   if (!u || u === '-') return { name: 'Someone', agent: false }
   if (u === 'owner') return { name: 'You', agent: false }
   if (u === 'k2' || u.startsWith('system:')) return { name: 'K2', agent: false }
+  // An agent's passport the daemon refused before it knew which agent:
+  // the row names no one more exact than "An agent".
+  if (u === 'agent-passport') return { name: 'An agent', agent: false }
   if (u.startsWith('agent:')) {
     const [w, session] = u.slice('agent:'.length).split('/')
     return { name: ws(w ?? ''), agent: true, ...(session ? { session } : {}) }

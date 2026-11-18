@@ -42,6 +42,7 @@ import { remoteAgentStatus, remoteRowBadges, rowActionWord, rowReach, summaryHit
 import { remoteRoomScope, scopeForHost, primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { threadSumForProject, useUnreadStore } from '@/stores/unread'
 import { MARK_ALL_READ_MENU_ID, markAllReadMenuItems, runMarkAllRead } from '@/lib/mark-all-read-menu'
+import { agentMenuWithSettingsFirst } from '@/lib/agent-menu-order'
 import { TicketCountBadge, UnreadBadge } from '@/components/common/UnreadBadge'
 import { MachineChip } from './MachineChip'
 import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
@@ -186,6 +187,8 @@ export function pinMenuItem(home: Home, row: HomeRow): ContextMenuItemDef {
     : { id: 'home-pin', label: 'Pin', shortcut: `⌘${pinnedRows(home).length + 1}` }
 }
 
+export const HOME_SETTINGS_MENU_ID = 'home-settings'
+
 /** Right-click menu on a Home row (the Agents rows' menu idiom). */
 export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: HomeRow): Promise<void> {
   e.preventDefault()
@@ -193,22 +196,24 @@ export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: H
   const connectedKey = activeHomeHostKey(useConnectHostStore.getState().activeHost)
   const ws =
     parsed && parsed.host === connectedKey ? findWorkspaceForRow(useProjectsStore.getState().projects, row) : null
-  const items: ContextMenuItemDef[] = []
+  const rest: ContextMenuItemDef[] = []
   // thread-read-all-v1: while the row's badge has unread.
   const readTarget = homeRowReadTarget(row, ws)
-  if (readTarget) items.push(...markAllReadMenuItems(readTarget.scope, readTarget.unread, { separator: false }))
+  if (readTarget) rest.push(...markAllReadMenuItems(readTarget.scope, readTarget.unread, { separator: false }))
   if (ws) {
-    items.push({ id: 'home-settings', label: 'Workspace Settings' })
-    items.push({ id: 'home-wiki', label: 'View Wiki' })
+    rest.push({ id: 'home-wiki', label: 'View Wiki' })
   } else if (parsed && parsed.host !== connectedKey && !isWebClient()) {
-    items.push({ id: 'home-open', label: 'Switch to its server and open' })
+    rest.push({ id: 'home-open', label: 'Switch to its server and open' })
   }
   const roomOpen = homeRooms.store.getState().entries[row.address]
-  if (roomOpen) items.push({ id: 'home-close-room', label: 'Close room' })
-  if (items.length > 0) items.push({ id: 'home-sep', label: '', type: 'separator' })
-  items.push(pinMenuItem(home, row))
-  items.push(moveToGroupItem(useHomesStore.getState().homes, home, row))
-  items.push({ id: 'home-remove', label: removeFromGroupLabel(home.name) })
+  if (roomOpen) rest.push({ id: 'home-close-room', label: 'Close room' })
+  if (rest.length > 0) rest.push({ id: 'home-sep', label: '', type: 'separator' })
+  rest.push(pinMenuItem(home, row))
+  rest.push(moveToGroupItem(useHomesStore.getState().homes, home, row))
+  rest.push({ id: 'home-remove', label: removeFromGroupLabel(home.name) })
+  // Workspace Settings first, always, whenever it shows (an agent on this
+  // window's server: its settings open here).
+  const items = agentMenuWithSettingsFirst(ws ? HOME_SETTINGS_MENU_ID : null, rest)
 
   // On Glass a clear frost: the list shows through, blurred (K2 Design).
   const clicked = await showContextMenu(items, { look: 'clear' })
@@ -219,7 +224,7 @@ export async function homeRowContextMenu(e: React.MouseEvent, home: Home, row: H
     useHomesStore.getState().unpinRow(home.id, row.address)
   } else if (clicked === MARK_ALL_READ_MENU_ID && readTarget) {
     void markHomeRowAllRead(readTarget, row.label)
-  } else if (clicked === 'home-settings' && ws) {
+  } else if (clicked === HOME_SETTINGS_MENU_ID && ws) {
     useSettingsStore.getState().openSettings('projects', ws.id)
   } else if (clicked === 'home-wiki' && ws) {
     usePageViewStore.getState().openWiki(ws.path)

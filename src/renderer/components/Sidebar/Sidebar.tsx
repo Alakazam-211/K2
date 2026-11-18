@@ -52,6 +52,7 @@ import { closeHomeChat } from '@/stores/home-chat'
 import { WorkspaceThreadUnreadBadge } from '@/components/common/UnreadBadge'
 import { threadSumForProject, useUnreadStore } from '@/stores/unread'
 import { MARK_ALL_READ_MENU_ID, markAllReadMenuItems, runMarkAllRead } from '@/lib/mark-all-read-menu'
+import { agentMenuWithSettingsFirst } from '@/lib/agent-menu-order'
 import { revealInFileManagerLabel } from '@/lib/reveal-label'
 import { copyPathWithToast } from '@/lib/copy-path'
 import { installedEditorsDefaultFirst } from '@/lib/installed-editors'
@@ -581,9 +582,9 @@ export default function Sidebar(): React.JSX.Element {
       // thread-read-all-v1: "Mark all as read" while the row's badge has
       // unread (every Thread of the agent, for this login).
       const rowUnread = threadSumForProject(useUnreadStore.getState(), project.id)?.unread ?? 0
-      const menuItems: ContextMenuItemDef[] = [
-        ...markAllReadMenuItems(primaryScope(), rowUnread),
-        { id: 'settings', label: 'Workspace Settings' },
+      // Workspace Settings first, always (agent-menu-order.ts), then its line.
+      const menuItems: ContextMenuItemDef[] = agentMenuWithSettingsFirst('settings', [
+        ...markAllReadMenuItems(primaryScope(), rowUnread, { separator: false }),
         { id: 'view-wiki', label: 'View Wiki' },
         { id: 'separator-settings', label: '', type: 'separator' },
         // Rename agent… — the agent's DISPLAY name only. The handle (the
@@ -595,7 +596,7 @@ export default function Sidebar(): React.JSX.Element {
         { id: 'focus-window', label: 'Open in Focus Window' },
         // Pin/Unpin, "Add to Home" right under it, then the Active Bar rows.
         ...workspacePlacementMenuItems(project),
-      ]
+      ])
 
       // Open in [IDE] — after pin/Active so a long editor list doesn't bury them.
       if (editors.length > 0) {

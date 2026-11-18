@@ -1204,7 +1204,7 @@ describe('Home — the Agents page shell', () => {
     await act(async () => {
       fireEvent.contextMenu(rowOf('Cortana'))
     })
-    expect(menu.items[1].map((i) => i.id)).toEqual(['home-settings', 'home-wiki', 'home-sep', 'home-pin', 'home-move', 'home-remove'])
+    expect(menu.items[1].map((i) => i.id)).toEqual(['home-settings', 'home-settings-separator', 'home-wiki', 'home-sep', 'home-pin', 'home-move', 'home-remove'])
   })
 
   it('right-click Move to group… moves the row into the picked group', async () => {

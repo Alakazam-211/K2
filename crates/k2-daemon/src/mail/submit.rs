@@ -278,6 +278,7 @@ impl MailSubmit for SmtpSubmit {
             to: src.to,
             cc: src.cc,
             subject: crate::mail::send::reply_subject(&src.subject),
+            on_original: src.on_original,
         }))
     }
 }

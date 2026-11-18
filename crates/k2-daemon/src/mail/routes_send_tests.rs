@@ -2536,8 +2536,11 @@ fn linked_send_refuses_reply_to() {
 }
 
 /// `k2 mail reply` stays locked to the original sender: a Reply-To is
-/// refused, not dropped, before anything else happens; a `to` in the body
-/// is ignored (a `cc` adds a copy), and the reply carries no Reply-To.
+/// refused, not dropped, before anything else happens; a recipient in the
+/// body is ignored, and the reply carries no Reply-To. A `cc` to someone not
+/// on the original doesn't ride the reply's permission: it is a new send,
+/// checked as one ([`new_recipients_need_send`]); with send rights under
+/// approval it is held like a send, every recipient on it.
 #[test]
 fn reply_stays_locked_and_refuses_reply_to() {
     let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
@@ -2546,6 +2549,7 @@ fn reply_stays_locked_and_refuses_reply_to() {
     let fake = crate::mail::fake_jmap::FakeJmap::start();
     seed_fake_engine(&fake);
     fake.state.lock().unwrap().emails.insert("e1".to_string(), reply_source("e1"));
+    fake.state.lock().unwrap().emails.insert("e2".to_string(), reply_source("e2"));
     let (path, project_id, domain) = seed_files_sender("rtolock", "approval");
     let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
     let resp = handle_reply(
@@ -2560,21 +2564,77 @@ fn reply_stays_locked_and_refuses_reply_to() {
     let resp = handle_reply(
         &serde_json::to_vec(&serde_json::json!({
             "project": path, "id": token, "body": "thanks", "to": "elsewhere@evil.example",
-            "cc": "elsewhere@evil.example",
         }))
         .unwrap(),
     );
     assert_eq!(resp.status, "200 OK", "{}", resp.body);
     let id = body_json(&resp)["id"].as_str().expect("id").to_string();
     let stored = DbOutboundStore::default().load_message(&id).unwrap();
-    // `to` can't move the reply; `cc` (`k2 mail reply --cc`, 0.46.15) adds a
-    // copy, under the same gate (here: held for approval).
-    assert_eq!(stored.to, vec!["cust@dest.example".to_string()], "locked to the original sender");
-    assert_eq!(stored.cc, vec!["elsewhere@evil.example".to_string()], "--cc adds a copy");
+    assert_eq!(stored.all_recipients(), vec!["cust@dest.example".to_string()], "locked to the original sender");
     assert!(stored.reply_to.is_empty());
     assert!(send::submission_email_json(&stored).get("replyTo").is_none());
     send::deny(&DbOutboundStore::default(), &id, "owner", "cleanup", now_secs()).expect("deny");
+
+    // An outside --cc with this workspace's send rights (approval): held for
+    // the person exactly as `k2 mail send` to it would be.
+    let token2 = messages::encode_message_id(&format!("bot@{domain}"), "e2");
+    let resp = handle_reply(
+        &serde_json::to_vec(&serde_json::json!({
+            "project": path, "id": token2, "body": "thanks", "cc": "elsewhere@evil.example",
+        }))
+        .unwrap(),
+    );
+    assert_eq!(resp.status, "200 OK", "{}", resp.body);
+    assert_eq!(body_json(&resp)["status"], "pending_approval", "{}", resp.body);
+    let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+    let stored = DbOutboundStore::default().load_message(&id).unwrap();
+    assert_eq!(stored.to, vec!["cust@dest.example".to_string()], "still locked to the original sender");
+    assert_eq!(stored.cc, vec!["elsewhere@evil.example".to_string()], "the person approving sees the new recipient");
+    send::deny(&DbOutboundStore::default(), &id, "owner", "cleanup", now_secs()).expect("deny");
     done(&path, &project_id, &domain);
+}
+
+/// The new-recipient rule on its own: nobody new → the reply rules decide;
+/// an outside address needs send's gate, the inbox's 'send' level and its
+/// domain's send mode, and a refusal is send's own, naming the address.
+#[test]
+fn an_outside_cc_on_a_reply_needs_what_send_needs() {
+    let (name, path) = unique("newrcpt");
+    let project_id = insert_project(&name, &path);
+    let domain = format!("{name}.example");
+    let bot = format!("bot@{domain}");
+    seed_domain(&domain, "direct");
+    seed_address(&project_id, &bot, Some("acc-1"));
+    let outsider = vec!["mal@example.net".to_string()];
+
+    set_gating(&path, "off");
+    assert!(new_recipients_need_send(&project_id, &path, &bot, Source::Hosted, &[]).is_ok(), "nobody new: the reply rules decide");
+    let resp = new_recipients_need_send(&project_id, &path, &bot, Source::Hosted, &outsider).expect_err("sending off");
+    let direct = handle_send(&send_body(&path, serde_json::json!({ "from": bot, "to": ["mal@example.net"] })));
+    assert_eq!(resp.status, direct.status, "send's own refusal: {} / {}", resp.body, direct.body);
+    assert_eq!(body_json(&resp)["error"]["code"], body_json(&direct)["error"]["code"], "{}", resp.body);
+    let hint = body_json(&resp)["error"]["hint"].as_str().expect("hint").to_string();
+    assert!(hint.starts_with("mal@example.net is not on the message you're answering"), "{hint}");
+    assert!(hint.contains("k2 mail send") && hint.contains("k2 mail draft"), "names the fixes: {hint}");
+    assert!(hint.contains(body_json(&direct)["error"]["hint"].as_str().expect("send hint")), "carries send's fix: {hint}");
+
+    // No 'send' level on the inbox (another workspace's): refused even with
+    // sending on, the same answer a send from it gets.
+    set_gating(&path, "on");
+    let (name2, path2) = unique("newrcpt-other");
+    let other = insert_project(&name2, &path2);
+    set_gating(&path2, "on");
+    let resp = new_recipients_need_send(&other, &path2, &bot, Source::Hosted, &outsider).expect_err("not this workspace's inbox");
+    assert!(resp.status == "404 Not Found" || resp.status == "403 Forbidden", "{}", resp.body);
+    assert!(body_json(&resp)["error"]["hint"].as_str().expect("hint").starts_with("mal@example.net is not on"), "{}", resp.body);
+
+    // With send rights: let through (approval or on then decides, as for send).
+    assert!(new_recipients_need_send(&project_id, &path, &bot, Source::Hosted, &outsider).is_ok());
+    set_gating(&path, "approval");
+    assert!(new_recipients_need_send(&project_id, &path, &bot, Source::Hosted, &outsider).is_ok());
+
+    cleanup(&project_id, Some(&domain));
+    cleanup(&other, None);
 }
 
 // ── k2 mail forward-message: the route's gates. The composed message and

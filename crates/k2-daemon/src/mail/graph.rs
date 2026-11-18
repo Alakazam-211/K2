@@ -1112,11 +1112,14 @@ impl GraphBackend {
         let Some(sender) = full.summary.from.first().cloned() else {
             return Err("the source message has no sender address to reply to".to_string());
         };
+        let on_original =
+            crate::mail::reply_all::addresses_of(&[&full.summary.from, &full.summary.to, &full.cc]);
         Ok(Some(crate::mail::reply_all::SourceParties {
             primary: sender,
             subject: crate::mail::send::reply_subject(&full.summary.subject),
             to: full.summary.to,
             cc: full.cc,
+            on_original,
         }))
     }
 

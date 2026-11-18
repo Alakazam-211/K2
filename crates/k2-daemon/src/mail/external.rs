@@ -819,6 +819,8 @@ pub struct DraftSource {
     /// The source's To and Cc (`--reply-all` copies them, minus this inbox).
     pub to: Vec<MailAddr>,
     pub cc: Vec<MailAddr>,
+    /// Every address on the source: From, Reply-To, To, Cc.
+    pub on_original: Vec<String>,
 }
 
 fn bracketed(id: &str) -> String {
@@ -842,17 +844,18 @@ pub fn draft_source_from_raw(raw: &[u8]) -> Result<DraftSource, String> {
         .as_text_list()
         .map(|ids| ids.iter().map(|i| bracketed(i)).collect::<Vec<_>>().join(" "))
         .filter(|s| !s.is_empty());
-    let reply_to = addr_list(msg.reply_to())
-        .into_iter()
-        .next()
-        .or_else(|| addr_list(msg.from()).into_iter().next());
+    let (from, reply_to_all) = (addr_list(msg.from()), addr_list(msg.reply_to()));
+    let (to, cc) = (addr_list(msg.to()), addr_list(msg.cc()));
+    let on_original = crate::mail::reply_all::addresses_of(&[&from, &reply_to_all, &to, &cc]);
+    let reply_to = reply_to_all.into_iter().next().or_else(|| from.into_iter().next());
     Ok(DraftSource {
         message_id: msg.message_id().map(bracketed),
         references,
         subject: msg.subject().unwrap_or_default().to_string(),
         reply_to,
-        to: addr_list(msg.to()),
-        cc: addr_list(msg.cc()),
+        to,
+        cc,
+        on_original,
     })
 }
 
@@ -2959,8 +2962,7 @@ a,b\r\n1,2\r\n\
             references: None,
             subject: "Überweisung".to_string(),
             reply_to: Some(MailAddr { name: None, email: "a@b.example".to_string() }),
-            to: Vec::new(),
-            cc: Vec::new(),
+            ..Default::default()
         };
         let rfc822 = compose_draft_rfc822(&inbox, &src, "ok", "d", &[], "b").expect("composes");
         let text = String::from_utf8(rfc822).expect("ASCII wire form");

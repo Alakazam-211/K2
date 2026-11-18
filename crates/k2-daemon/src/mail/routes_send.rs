@@ -1327,6 +1327,11 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                     Ok(None) => return masked(),
                     Err(e) => return submit_error_response(e),
                 };
+                // A copy that isn't on the original is a new send.
+                let outside = crate::mail::reply_all::outside_addresses(&src.on_original, &ask);
+                if let Err(resp) = new_recipients_need_send(&project_id, &path, &inbox.email_address, Source::Linked, &outside) {
+                    return resp;
+                }
                 let own = crate::mail::reply_all::linked_own_addresses(&inbox.email_address, &inbox.username);
                 match crate::mail::reply_all::plan(&src.primary, &src.to, &src.cc, &own, &ask) {
                     Ok(p) => ((p.to_emails(), p.cc_emails(), p.bcc_emails()), src.subject),
@@ -1409,6 +1414,14 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 Ok(None) => return masked(),
                 Err(hint) => return error_response("502 Bad Gateway", "engine", &hint),
             };
+            // A copy that isn't on the original is a new send: it needs
+            // what `k2 mail send` to it needs (checked before the thread's
+            // reply budget below is used).
+            let on_original = crate::mail::reply_all::addresses_of(&[&ctx.from, &ctx.reply_to, &ctx.to, &ctx.cc]);
+            let outside = crate::mail::reply_all::outside_addresses(&on_original, &ask);
+            if let Err(resp) = new_recipients_need_send(&project_id, &path, &from_address, Source::Hosted, &outside) {
+                return resp;
+            }
 
             // §8.4 guardrails: locked recipient, loop caps, DMARC gate.
             let authority = messages::AuthAuthority::ThisBox(hostname);
@@ -1497,6 +1510,66 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             )
         }
     }
+}
+
+/// A sent reply's `--cc` / `--bcc` to people NOT on the original (`outside`)
+/// are new recipients: they get through only with what `k2 mail send` from
+/// `from` to them needs — the inbox's 'send' level, the workspace's Sending
+/// rule (off refuses; approval holds the whole reply, as for a send), and
+/// for a hosted inbox its domain's send mode. A refusal is send's own,
+/// naming the addresses and the fix. The reply rules cover the rest.
+fn new_recipients_need_send(
+    project_id: &str,
+    path: &str,
+    from: &str,
+    source: Source,
+    outside: &[String],
+) -> Result<(), CliResponse> {
+    if outside.is_empty() {
+        return Ok(());
+    }
+    let named = |resp: CliResponse| name_new_recipients(resp, outside);
+    match access::can_send(project_id, from) {
+        Ok(_) => {}
+        Err(ReadError::Usage(hint)) => return Err(named(error_response("400 Bad Request", "usage", &hint))),
+        Err(_) => {
+            return Err(named(match access::can_read(project_id, from) {
+                Ok(_) => not_sendable_response(project_id, from),
+                Err(_) => error_response("404 Not Found", "not_found", &format!("no address '{from}' in this workspace")),
+            }))
+        }
+    }
+    match source {
+        Source::Hosted => {
+            let gate = send::gate_for_path(path).map_err(|e| named(send_error_response(e)))?;
+            if gate == Gate::Off {
+                return Err(named(send_error_response(SendError::Gated(send::agent_send_off_hint()))));
+            }
+            send::check_domain_send_mode(&FileSecretStore::default(), from).map_err(|e| named(send_error_response(e)))?;
+        }
+        Source::Linked => {
+            linked_send_gate(path).map_err(named)?;
+        }
+    }
+    Ok(())
+}
+
+/// Send's refusal, its hint led by which addresses made it a new send.
+fn name_new_recipients(resp: CliResponse, outside: &[String]) -> CliResponse {
+    let mut v: serde_json::Value = match serde_json::from_str(&resp.body) {
+        Ok(v) => v,
+        Err(_) => return resp,
+    };
+    let was = v["error"]["hint"].as_str().unwrap_or_default().to_string();
+    v["error"]["hint"] = serde_json::json!(format!(
+        "{} {} not on the message you're answering, so the reply would be a new send to {} and \
+         needs what 'k2 mail send' needs. Nothing was sent. Drop those --cc/--bcc, save a draft \
+         for a person to send ('k2 mail draft <id> --cc …'), or get the send right: {was}",
+        outside.join(", "),
+        if outside.len() == 1 { "is" } else { "are" },
+        if outside.len() == 1 { "it" } else { "them" },
+    ));
+    CliResponse { status: resp.status, content_type: resp.content_type, body: v.to_string() }
 }
 
 /// A reply's `replyAll` / `cc` / `bcc` (each address checked like a send's).

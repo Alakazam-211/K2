@@ -2283,7 +2283,7 @@ impl StalwartClient {
             serde_json::json!({
                 "ids": [email_id],
                 "properties": [
-                    "id", "threadId", "from", "to", "cc", "subject",
+                    "id", "threadId", "from", "to", "cc", "replyTo", "subject",
                     MSGID_PROP, REFS_PROP, AUTH_RESULTS_PROP,
                 ],
             }),

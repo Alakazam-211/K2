@@ -835,6 +835,12 @@ FLAGS
   --cc <addr>            Add a Cc (repeatable or comma-separated)
   --bcc <addr>           Add a blind copy (repeatable or comma-separated).
                          Max 10 recipients in all, plus any owner always-BCC.
+                         An address that isn't on the original is a NEW
+                         recipient: it needs what 'k2 mail send' to it needs
+                         (your 'send' level and the workspace's Sending rule;
+                         under approval the whole reply waits for your human),
+                         else the reply is refused and nothing is sent. A
+                         draft ('k2 mail draft <id> --cc') takes any address.
   --from-name <name>     The display name on the From line, as on `send`,
                          e.g. --from-name "Laura" → Laura <laura@acme.com>.
                          Default: the workspace's agent name. Cosmetic only:

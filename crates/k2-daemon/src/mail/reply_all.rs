@@ -8,6 +8,12 @@
 //! repeats. `--cc` / `--bcc` add on top. One pure planner serves every
 //! backend (hosted, linked IMAP/Gmail, Microsoft 365), so the rule can't
 //! drift between them.
+//!
+//! A SENT reply (`k2 mail reply`) may reach only people already on the
+//! original under the reply's own rules: an explicit `--cc` / `--bcc` that
+//! isn't on it ([`outside_addresses`]) is a new recipient, and the route
+//! lets it through only with what `k2 mail send` to it would need. A draft
+//! takes any copies (a person sends it).
 
 use std::collections::HashSet;
 
@@ -40,6 +46,8 @@ pub struct SourceParties {
     pub to: Vec<MailAddr>,
     pub cc: Vec<MailAddr>,
     pub subject: String,
+    /// Every address on the original: From, Reply-To, To, Cc.
+    pub on_original: Vec<String>,
 }
 
 /// The reply's recipients. `to[0]` is always the locked recipient.
@@ -125,6 +133,26 @@ pub fn plan(
         ));
     }
     Ok(parties)
+}
+
+/// The explicit `--cc` / `--bcc` addresses that aren't on the original
+/// (`on_original`: its From, Reply-To, To and Cc), compared normalized, in
+/// the order asked, once each. For a sent reply these are new recipients.
+pub fn outside_addresses(on_original: &[String], ask: &ReplyAsk) -> Vec<String> {
+    let on: HashSet<String> = on_original.iter().filter_map(|a| key(a)).collect();
+    let mut out: Vec<String> = Vec::new();
+    for e in ask.cc.iter().chain(ask.bcc.iter()) {
+        let k = key(e).unwrap_or_else(|| e.trim().to_ascii_lowercase());
+        if !on.contains(&k) && !out.contains(&k) {
+            out.push(k);
+        }
+    }
+    out
+}
+
+/// The addresses of these lists, as [`SourceParties::on_original`] holds them.
+pub fn addresses_of(lists: &[&[MailAddr]]) -> Vec<String> {
+    lists.iter().flat_map(|l| l.iter().map(|a| a.email.clone())).collect()
 }
 
 /// Every address of a linked inbox: its address, and its login name when
@@ -260,6 +288,23 @@ mod tests {
         let err = plan(&a("sender@example.com"), &many, &[], &[], &ReplyAsk { all: true, ..Default::default() })
             .expect_err("one over the cap");
         assert!(err.contains("too many recipients"), "{err}");
+    }
+
+    #[test]
+    fn outside_addresses_are_the_copies_not_on_the_original() {
+        let on = addresses_of(&[
+            &[named("Sender", "sender@example.com")],
+            &[a("replies@example.com")],
+            &[a("Ada@Example.com")],
+            &[a("bo@example.com")],
+        ]);
+        let ask = ReplyAsk {
+            all: true,
+            cc: vec!["ada@example.com".into(), "eve@example.com".into(), "REPLIES@example.com".into()],
+            bcc: vec!["bo@example.com".into(), "mal@example.net".into(), "eve@example.com".into()],
+        };
+        assert_eq!(outside_addresses(&on, &ask), ["eve@example.com", "mal@example.net"]);
+        assert!(outside_addresses(&on, &ReplyAsk { all: true, ..Default::default() }).is_empty(), "reply-all alone adds nobody new");
     }
 
     #[test]

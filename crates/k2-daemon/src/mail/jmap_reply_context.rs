@@ -15,6 +15,8 @@ pub struct ReplyContext {
     /// replying mailbox).
     pub to: Vec<MailAddr>,
     pub cc: Vec<MailAddr>,
+    /// The original's Reply-To (it is on the original too).
+    pub reply_to: Vec<MailAddr>,
     pub subject: String,
     pub thread_id: Option<String>,
     /// The original's `Message-ID` header (trimmed), for In-Reply-To.
@@ -66,6 +68,7 @@ pub(super) fn parse_reply_context(
         from: parse_addr_list(entry.get("from")),
         to: parse_addr_list(entry.get("to")),
         cc: parse_addr_list(entry.get("cc")),
+        reply_to: parse_addr_list(entry.get("replyTo")),
         subject: entry
             .get("subject")
             .and_then(|v| v.as_str())

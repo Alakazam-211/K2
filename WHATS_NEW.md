@@ -26,7 +26,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **No more "It can't be requested." under a send that wasn't refused.** That line now closes only a refusal of the send itself, not a delivery that waits on folder trust, an unknown address or a timeout.
 
 ### Mail
-- **Agents can reply to everyone on an email.** `k2 mail draft <id>` and `k2 mail reply <id>` take `--reply-all` (the original's To and Cc, without the agent's own address) and `--cc` / `--bcc`, and the reply stays in the same thread.
+- **Agents can reply to everyone on an email.** `k2 mail draft <id>` and `k2 mail reply <id>` take `--reply-all` (the original's To and Cc, without the agent's own address) and `--cc` / `--bcc`, the reply stays in the same thread, and a sent reply's copy to someone who wasn't on the email needs the same send rights as `k2 mail send`.
 
 ### Apps
 - **An App's agent can ask to change its App's logins in other rooms.** When people who sign in to an agent's App also talk in another workspace's room, the agent used to be refused when it added, removed, reset or changed the role of one of those logins, and you had to do it yourself in Settings. Now the agent's request comes to you, or an admin, as a card on its Thread. The card says exactly what changes, for which login, and in which room. Allow it and K2 makes that change. Deny it and nothing changes. Logins of other workspaces' Apps are still refused.

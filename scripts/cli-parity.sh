@@ -27,8 +27,8 @@
 # No tests/cli test meets one through the binary today; one that does is
 # mapped to its difference here by name, never skipped broadly. (The
 # binary's own parity tests meet owner-token-with-passport:
-# crates/k5-cli/tests/whoami_parity.rs, done_parity.rs and
-# read_parity.rs.)
+# crates/k5-cli/tests/whoami_parity.rs, done_parity.rs, read_parity.rs
+# and activity_parity.rs.)
 #
 # --shard I/N runs every Nth test starting at the Ith (1-based), so the
 # list can be split across jobs. Names after `--` run only those tests.
@@ -131,7 +131,7 @@ done
 # The named expected differences: "name|PRD reference|what differs".
 EXPECTED_DIFFS=(
     "version-offline|13.9 #3|--version with no port or token: bash refuses (exit 1, \"Error: Cannot connect to K2.\"); the binary prints \"k2 <version>\" (exit 0), as help, --schema and --version never need the daemon"
-    "owner-token-with-passport|13.9 #4|an open verb (whoami, done, read) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
+    "owner-token-with-passport|13.9 #4|an open verb (whoami, done, read, activity) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
 )
 
 # check_version_offline: both CLIs run `--version` with a temp HOME and no
@@ -161,9 +161,10 @@ check_version_offline() {
     return 1
 }
 
-# check_owner_token_with_passport: both CLIs run `whoami --json`, `done`
-# and `read acme` with a passport, K2_HOOK_SOCK set (no socket there, so
-# both go over TCP) and the owner token on disk, against a stub that logs
+# check_owner_token_with_passport: both CLIs run `whoami --json`, `done`,
+# `read acme` and `activity` with a passport, K2_HOOK_SOCK set (no socket
+# there, so both go over TCP), K2_PROJECT_PATH set (so `activity` asks no
+# /cli/whoami first) and the owner token on disk, against a stub that logs
 # each request's token.
 check_owner_token_with_passport() {
     local d="$WORK/owner-token" port="" pid rc side tok problems=()
@@ -201,14 +202,14 @@ s.serve_forever()
         echo "the stub daemon didn't start"
         return 1
     fi
-    for verb in "whoami --json" done "read acme"; do
+    for verb in "whoami --json" done "read acme" activity; do
         for side in bash binary; do
             : >"$d/log"
             rc=0
             if [ "$side" = bash ]; then set -- bash "$ROOT/cli/k2"; else set -- "$WORK/bin/k5"; fi
             # shellcheck disable=SC2086
             (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" K2_PORT="$port" K2_HOOK_TOKEN="$passport" \
-                K2_HOOK_SOCK="$d/no-socket" K2_AGENT_NAME=parity "$@" $verb) >"$d/out" 2>&1 </dev/null || rc=$?
+                K2_HOOK_SOCK="$d/no-socket" K2_PROJECT_PATH="$d/ws" K2_AGENT_NAME=parity "$@" $verb) >"$d/out" 2>&1 </dev/null || rc=$?
             tok="$(cat "$d/log")"
             [ "$rc" = 0 ] || problems+=("$side $verb exited $rc: $(head -c 200 "$d/out")")
             if [ "$side" = bash ]; then

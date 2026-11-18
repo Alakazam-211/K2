@@ -172,6 +172,7 @@ import { useHomeChatStore } from '@/stores/home-chat'
 import { __resetCallHomeForTests, setCallHomeBridge } from '@/stores/call-home'
 import { CALL_HOME_KEY, readCallHome, writeCallHome } from '@/lib/voice/call-home'
 import { usePanelsStore } from '@/stores/panels'
+import { useCallTilePlace } from '@/stores/call-tile-place'
 import { applyAppZoomForTest, resetAppZoomForTest } from '@/test-utils/app-zoom'
 
 const list: VoiceRoomsList = {
@@ -1881,6 +1882,21 @@ describe('the tile never covers the message box', () => {
     } finally {
       box.el.remove()
     }
+  })
+
+  it('says where it rests, so a message list under it can make room: a bottom corner counts, a top one does not, and none once it goes', async () => {
+    await inCall()
+    const tile = await cameraOn()
+    expect(useCallTilePlace.getState().rest).toEqual({ left: Number.parseFloat(tile.style.left), top: 768 - 12 - TILE_HEIGHT, width: CALL_TILE_WIDTH, height: TILE_HEIGHT, bottom: true })
+    const picture = screen.getByTestId('call-tile-picture')
+    fireEvent.pointerDown(picture, { clientX: 900, clientY: 600, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(picture, { clientX: 900, clientY: 100, pointerId: 1 })
+    fireEvent.pointerUp(picture, { clientX: 900, clientY: 100, pointerId: 1 })
+    expect(tile.dataset.corner).toBe('top-right')
+    expect(useCallTilePlace.getState().rest?.bottom).toBe(false)
+    await act(async () => video.setCamera(false))
+    await waitFor(() => expect(screen.queryByTestId('call-tile')).toBeNull())
+    expect(useCallTilePlace.getState().rest).toBeNull()
   })
 
   it('a message box that comes on screen later moves the tile up out of its way', async () => {

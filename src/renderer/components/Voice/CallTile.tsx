@@ -39,6 +39,7 @@ import type { CallPerson } from '@/lib/voice/video-labels'
 import { DOUBLE_CLICK_MS } from '@/lib/voice/call-view'
 import { expandCall } from '@/stores/call-expand'
 import { popOutCall, useCallPopout } from '@/stores/call-popout'
+import { CALL_TILE_GAP, clearCallTileRest, setCallTileRest } from '@/stores/call-tile-place'
 import type { VideoController } from '@/stores/video-core'
 import type { VoiceCall } from '@/stores/voice-core'
 import CallControls, { CallControlBar, type CallControlsProps } from './CallControls'
@@ -61,7 +62,7 @@ export const CALL_TILE_WIDTH = 320
 /** Between the picture and the call's bar (px). */
 export const CALL_TILE_STRIP_GAP = 6
 /** Clear of the window's edges, the top bar and what the tile avoids (px). */
-export const CALL_TILE_INSETS = { top: TOPBAR_HEIGHT + 12, bottom: 12, side: 12, gap: 8 }
+export const CALL_TILE_INSETS = { top: TOPBAR_HEIGHT + 12, bottom: 12, side: 12, gap: CALL_TILE_GAP }
 /** The message boxes: the terminal's compose bar, the Thread's slot, and
  *  the Thread look's box (Home chat, a project's chat, a ticket's agent).
  *  While one is on screen, the tile's bottom corners sit above it across the
@@ -208,8 +209,15 @@ function Card({ call, video, actions, noiseRemoval }: CallTileProps): React.JSX.
     },
     [],
   )
+  // Where it rests, for a message list under it to make room (never its
+  // newest message under the tile).
+  useEffect(() => () => clearCallTileRest(), [])
   const { corner, held, moving, relayout, handlers } = useCornerDrag(ref, {
     spots: () => measureCallTileSpots(ref.current),
+    onPlace: (at, c) => {
+      const el = ref.current
+      setCallTileRest({ left: at.x, top: at.y, width: el?.offsetWidth || CALL_TILE_WIDTH, height: el?.offsetHeight || 0, bottom: c.startsWith('bottom') })
+    },
     // A button's click is the button's; anywhere else on the picture expands it.
     onTap: (target) => {
       const el = target instanceof Element ? target : null

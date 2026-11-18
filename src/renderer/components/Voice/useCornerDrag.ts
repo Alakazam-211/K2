@@ -104,6 +104,8 @@ export interface CornerDragOptions {
   spots(): Record<Corner, Vec>
   /** A press that never became a drag, let go on `target`. */
   onTap(target: EventTarget | null): void
+  /** It anchored to corner `c`'s spot `at` (where it comes to rest). */
+  onPlace?(at: Vec, c: Corner): void
 }
 
 export interface CornerDrag {
@@ -171,10 +173,11 @@ export function useCornerDrag(ref: RefObject<HTMLElement | null>, opts: CornerDr
     [],
   )
 
-  const anchor = (el: HTMLElement, at: Vec): void => {
+  const anchor = (el: HTMLElement, at: Vec, c: Corner): void => {
     spot.current = at
     el.style.left = `${round(at.x)}px`
     el.style.top = `${round(at.y)}px`
+    o.current.onPlace?.(at, c)
   }
 
   const draw = (p: Pose): void => {
@@ -186,7 +189,7 @@ export function useCornerDrag(ref: RefObject<HTMLElement | null>, opts: CornerDr
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
-    anchor(el, o.current.spots()[cornerRef.current])
+    anchor(el, o.current.spots()[cornerRef.current], cornerRef.current)
     el.dataset.corner = cornerRef.current
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -214,7 +217,7 @@ export function useCornerDrag(ref: RefObject<HTMLElement | null>, opts: CornerDr
     const there = spots[next]
     // Same place on screen, now measured from the new spot.
     const from = { x: at.x - there.x, y: at.y - there.y, s: pose.current.s }
-    anchor(el, there)
+    anchor(el, there, next)
     el.dataset.corner = next
     draw(from)
     if (next !== cornerRef.current) {

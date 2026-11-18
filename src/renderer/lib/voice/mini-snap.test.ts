@@ -7,6 +7,7 @@ import {
   CORNERS,
   composerBands,
   cornerSpots,
+  listInsetUnderTile,
   EASE_DURATION,
   freeArea,
   pickCorner,
@@ -224,6 +225,31 @@ describe('freeArea + cornerSpots: the corners of the free content area (under th
     const composer = { left: 200, top: 700, width: 500, height: 90 }
     const area = freeArea(view, { content, drawers: [{ side: 'right', rect: { left: 700, top: 38, width: 300, height: 762 } }], tabs: [tabs] })
     expect(cornerSpots(view, size, insets, [composer], area)['bottom-right']).toEqual({ x: 448, y: 700 - 8 - 200 })
+  })
+})
+
+describe('listInsetUnderTile: a message list the tile sits over makes room for it', () => {
+  // An 800 x 800 window: the list runs from under the header to the box.
+  const list = { left: 0, top: 100, width: 800, height: 560 }
+  const column = { left: 40, top: 100, width: 720, height: 560 }
+  const tile = (top: number, left = 468) => ({ left, top, width: 320, height: 260, bottom: true })
+
+  it('a tile in a bottom corner over the column: the overlap height plus the gap', () => {
+    // The list ends at 660; the tile starts at 392: 268 px of it is over the list.
+    expect(listInsetUnderTile(tile(392), list, column, 8)).toBe(660 - 392 + 8)
+  })
+
+  it('a top corner, no tile, or a tile beside the column (not over it) takes nothing', () => {
+    expect(listInsetUnderTile({ ...tile(120), bottom: false }, list, column, 8)).toBe(0)
+    expect(listInsetUnderTile(null, list, column, 8)).toBe(0)
+    // A wide window: the column is centred and the tile sits clear of it.
+    expect(listInsetUnderTile(tile(392, 1100), { ...list, width: 1440 }, { left: 360, top: 100, width: 720, height: 560 }, 8)).toBe(0)
+    // Above the list or below it.
+    expect(listInsetUnderTile(tile(680), list, column, 8)).toBe(0)
+  })
+
+  it('never more than the list is high', () => {
+    expect(listInsetUnderTile({ left: 468, top: 0, width: 320, height: 900, bottom: true }, list, column, 8)).toBe(560)
   })
 })
 

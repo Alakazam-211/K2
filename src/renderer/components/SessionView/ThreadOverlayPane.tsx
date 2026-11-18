@@ -45,6 +45,7 @@ import { threadTextColumnStyle } from './threadTextWidth'
 import { THREAD_JUMP_BOTTOM_PX, ThreadJumpPill } from '@/components/Thread/ThreadJumpPill'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
 import { usePrependHold } from '@/components/Thread/usePrependHold'
+import { useCallTileListInset } from '@/components/Voice/useCallTileListInset'
 import {
   ThreadSenderAvatarContext,
   sameSenderSlot,
@@ -329,6 +330,13 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   const contentRef = useRef<HTMLDivElement>(null)
   const didInitialScroll = useRef(false)
   const pinBottomRef = useRef(true)
+  // The floating call tile in a bottom corner over the column: room under
+  // the newest message, so the tile never covers it (on top of the box's).
+  const tileInset = useCallTileListInset(
+    () => listRef.current,
+    () => pinBottomRef.current,
+  )
+  const listBottom = Math.max(bottomInset, tileInset - 8)
   const savedScrollTopRef = useRef<number | null>(null)
   const lastClientHeightRef = useRef(0)
   const itemsLenRef = useRef(items.length)
@@ -413,7 +421,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     const el = listRef.current
     if (!el) return
     syncListScrollRef.current(el)
-  }, [items, outbox, turn, isTabVisible, bottomInset])
+  }, [items, outbox, turn, isTabVisible, listBottom])
 
   useEffect(() => {
     if (!isTabVisible) return
@@ -589,7 +597,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
         // The browser's own scroll anchoring would fight the pin.
         // In Thread view the floating objects sit over this; their height is on the pane.
-        style={{ padding: THREAD_LIST_PADDING, paddingTop: 'calc(14px + var(--thread-float-inset, 0px))', paddingBottom: 8 + bottomInset, overflowAnchor: 'none', scrollPaddingTop: 'var(--thread-float-inset, 0px)' }}
+        style={{ padding: THREAD_LIST_PADDING, paddingTop: 'calc(14px + var(--thread-float-inset, 0px))', paddingBottom: 8 + listBottom, overflowAnchor: 'none', scrollPaddingTop: 'var(--thread-float-inset, 0px)' }}
         onScroll={(e) => {
           const el = e.currentTarget
           if (!listScrollLive(el)) return

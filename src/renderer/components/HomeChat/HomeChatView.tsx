@@ -102,6 +102,7 @@ import { MachineChip } from '@/components/Home/MachineChip'
 import { serverLabelFor } from './serverLabel'
 import { HomeChatErrorState } from './HomeChatStates'
 import { useKeepNewestInView } from './useKeepNewestInView'
+import { useCallTileListInset } from '@/components/Voice/useCallTileListInset'
 import { formerPersonName } from '@/lib/home-chat/known-names'
 
 const PAGE = 50
@@ -291,6 +292,12 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
   // The box grows (reply bar, typing line, a longer draft): the newest
   // message stays in view when the list was at it.
   useKeepNewestInView(
+    () => scrollRef.current,
+    () => followingRef.current,
+  )
+  // The floating call tile in a bottom corner over the column: room under
+  // the newest message, so the tile never covers it.
+  const tileInset = useCallTileListInset(
     () => scrollRef.current,
     () => followingRef.current,
   )
@@ -554,7 +561,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
             ref={scrollRef}
             className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
             data-zen-conversation-body=""
-            style={{ padding: THREAD_LIST_PADDING, overflowAnchor: 'none' }}
+            style={{ padding: THREAD_LIST_PADDING, paddingBottom: Math.max(8, tileInset), overflowAnchor: 'none' }}
             onScroll={(e) => {
               const el = e.currentTarget
               if (el.clientHeight > 0) followingRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 32

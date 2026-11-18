@@ -15,6 +15,7 @@ import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
 import { resetThreadViewersForTests, setThreadViewerForTests, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
 import { SUPERSEDE_HOLD_MS } from '@/components/Zen/widgets/ZenActivityDrawer'
+import { clearCallTileRest, setCallTileRest } from '@/stores/call-tile-place'
 
 // Home M4: room components read their scope from their room.
 const overlayRoom = testRoom({ tabs: {}, scope: overlayPrimaryScope() })
@@ -817,6 +818,28 @@ describe('Thread overlay list scroll restore', () => {
     threadHook.loadingOlder = false
     threadHook.loadOlder = async () => {}
     vi.unstubAllGlobals()
+  })
+
+  it('a floating call tile in a bottom corner over the column: the list makes room under its newest message and stays at it', () => {
+    renderOverlay()
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 560, scrollTop: 0 }
+    stubListBox(list, box)
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(800)
+    list.getBoundingClientRect = () => ({ left: 0, top: 100, width: 800, height: 560, right: 800, bottom: 660, x: 0, y: 100, toJSON: () => ({}) }) as DOMRect
+    box.scrollHeight = 1068
+    try {
+      act(() => setCallTileRest({ left: 468, top: 392, width: 320, height: 260, bottom: true }))
+      // The tile's height over the list (660 - 392) plus the gap.
+      expect(list.style.paddingBottom).toBe(`${660 - 392 + 8}px`)
+      expect(box.scrollTop).toBe(1068)
+      // A top corner: the room goes.
+      act(() => setCallTileRest({ left: 468, top: 120, width: 320, height: 260, bottom: false }))
+      expect(list.style.paddingBottom).toBe('8px')
+    } finally {
+      act(() => clearCallTileRest())
+    }
   })
 
   it('(a) items + real height pin to bottom', () => {

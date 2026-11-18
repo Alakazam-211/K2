@@ -269,6 +269,27 @@ export function composerBands(composers: readonly Rect[], area: Bounds): Rect[] 
     .map((r) => ({ left: area.left, top: r.top, width: area.right - area.left, height: r.height }))
 }
 
+/** Where the tile rests (CSS px), and whether in a bottom corner. */
+export interface TileRest extends Rect {
+  bottom: boolean
+}
+
+/** The room a message list makes under its newest message for a tile that
+ *  rests in a bottom corner over it (px): the height of the tile over the
+ *  list, plus the gap, never more than the list is high. Over the list
+ *  means over its message column (`column`; the list itself when it has
+ *  none), so a tile beside a centred column in a wide window takes nothing.
+ *  A top corner, or no tile, takes nothing. */
+export function listInsetUnderTile(tile: TileRest | null, list: Rect, column: Rect | null, gap: number): number {
+  if (!tile || !tile.bottom || !sized(list)) return 0
+  const over = column && sized(column) ? column : list
+  const across = tile.left < over.left + over.width && over.left < tile.left + tile.width
+  const listBottom = list.top + list.height
+  const down = tile.top < listBottom && list.top < tile.top + tile.height
+  if (!across || !down) return 0
+  return Math.min(list.height, Math.ceil(listBottom - tile.top + gap))
+}
+
 /** Each corner's spot (the card's top left) in a `view` window for a card
  *  `size`, clear of the insets and of every `avoid` box (composers, key
  *  controls): a bottom corner moves up above what it would cover, a top

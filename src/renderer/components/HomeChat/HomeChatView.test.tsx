@@ -40,6 +40,7 @@ vi.mock('@/lib/home-chat/events-socket', async (orig) => ({
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import HomeChatView from './HomeChatView'
 import { resetHomeChatForTests } from '@/stores/home-chat'
+import { clearCallTileRest, setCallTileRest } from '@/stores/call-tile-place'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { threadComposeCapWidth } from '@/components/SessionView/threadTextWidth'
@@ -455,6 +456,70 @@ describe('the newest message stays in view when the box grows', () => {
     box.scrollHeight = 704
     act(() => observed.get(list)!.forEach((cb) => cb()))
     expect(list.scrollTop).toBe(704)
+  })
+
+  // The floating call tile in a bottom corner of a narrow window, over the
+  // message column: the list makes room under its newest message, so the
+  // tile never covers it.
+  describe('the floating call tile never covers the newest message', () => {
+    afterEach(() => act(() => clearCallTileRest()))
+
+    /** An 800 x 800 window: the list from under the header (100) to the box
+     *  (660), the column across most of it. */
+    function laidOut(): { list: HTMLElement; box: { clientHeight: number; scrollHeight: number } } {
+      const list = document.querySelector<HTMLElement>('[data-zen-conversation-body]')!
+      const column = list.querySelector<HTMLElement>('[data-thread-column]')!
+      const rect = (r: { left: number; top: number; width: number; height: number }) => () =>
+        ({ ...r, right: r.left + r.width, bottom: r.top + r.height, x: r.left, y: r.top, toJSON: () => ({}) }) as DOMRect
+      list.getBoundingClientRect = rect({ left: 0, top: 100, width: 800, height: 560 })
+      column.getBoundingClientRect = rect({ left: 40, top: 100, width: 720, height: 560 })
+      const box = { clientHeight: 560, scrollHeight: 2000 }
+      sized(list, box)
+      return { list, box }
+    }
+    const TILE = { left: 468, top: 392, width: 320, height: 260, bottom: true }
+    const intersects = (a: { top: number; bottom: number; left: number; right: number }, b: typeof a): boolean =>
+      a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+
+    it('a list at its newest message gets the room under it and stays at it: the newest message clears the tile', async () => {
+      await open()
+      const { list, box } = laidOut()
+      list.scrollTop = 1440
+      fireEvent.scroll(list)
+      const inset = 660 - TILE.top + 8
+      // The list is taller by the room it makes (as the browser measures it
+      // once the room is there), and it stays at its end.
+      box.scrollHeight = 2000 + inset - 8
+      act(() => setCallTileRest(TILE))
+      expect(list.style.paddingBottom).toBe(`${inset}px`)
+      expect(list.scrollTop).toBe(box.scrollHeight)
+      // Scrolled to its end, the newest message's bottom is the list's bottom
+      // less its bottom room: just above the tile, with the gap.
+      const newest = { left: 40, right: 760, bottom: 660 - inset, top: 660 - inset - 48 }
+      expect(intersects(newest, { left: TILE.left, right: TILE.left + TILE.width, top: TILE.top, bottom: TILE.top + TILE.height })).toBe(false)
+      expect(TILE.top - newest.bottom).toBe(8)
+    })
+
+    it('a tile in a top corner adds nothing, and the room goes when the tile does', async () => {
+      await open()
+      const { list } = laidOut()
+      act(() => setCallTileRest({ ...TILE, top: 120, bottom: false }))
+      expect(list.style.paddingBottom).toBe('8px')
+      act(() => setCallTileRest(TILE))
+      expect(list.style.paddingBottom).toBe(`${660 - TILE.top + 8}px`)
+      act(() => clearCallTileRest())
+      expect(list.style.paddingBottom).toBe('8px')
+    })
+
+    it('a reader who scrolled up stays where they are', async () => {
+      await open()
+      const { list } = laidOut()
+      list.scrollTop = 300
+      fireEvent.scroll(list)
+      act(() => setCallTileRest(TILE))
+      expect(list.style.paddingBottom).toBe(`${660 - TILE.top + 8}px`)
+      expect(list.scrollTop).toBe(300)
+    })
   })
 
   it('leaves a reader who scrolled up where they are', async () => {

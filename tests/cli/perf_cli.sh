@@ -33,8 +33,9 @@
 #                  version from /boot-status)            p95 handler time
 #   setup          k5 setup (the setup list the       <= 30 ms + the stub's
 #                  daemon draws, five lines)             p95 handler time
-#   fallthrough    k5 heartbeat list (a verb the      <= cli/k2's p95 for
-#                  shell answers)                        the same + 5 ms
+#   fallthrough    k5 heartbeat list (a verb the      median <= cli/k2's
+#                  shell answers)                        median for the same
+#                                                        + 5 ms (see below)
 #   agent help     k5 mail send --help in a K2        <= 30 ms
 #                  terminal (the passport, a live
 #                  cell socket: the session checks
@@ -70,6 +71,19 @@
 # run as the front hands it over but started straight, and the front, and
 # the front's own phase times (K5_CLI_TRACE_TIMING), with a passport and
 # without one (where the passport rule walks the process ancestry).
+#
+# The fallthrough row compares MEDIANS, not p95s. Both sides are mostly
+# the shell's own run (about 185 ms on a quiet Linux node), and the p95 of
+# 50 runs of that is one of its three slowest runs: it moves by several
+# ms from one batch to the next with nothing changed, so a p95 against a
+# p95 + 5 ms failed now and then on noise alone. The median of 50 moves
+# well under a millisecond. The front's own share of a hand-over is about
+# 2.6 ms (its phase times below: spawn to main plus total, with a
+# passport), so k5's median sits about 3 ms over cli/k2's; the fixed
+# allowance of 5 ms on top of cli/k2's median keeps the PRD's "today + 5
+# ms" and still catches a front that grows by about 2 ms or more. Both
+# p95s are printed as info. The native rows keep their absolute p95
+# targets: they sit far under them.
 #
 # Before timing, each measure's command runs once on both CLIs where both
 # answer it, and the two must print the same and exit the same: a fast
@@ -283,9 +297,22 @@ measure_native("feedback list", ["feedback", "list"])
 measure_native("feedback show", ["feedback", "show", "fb_1"])
 measure_native("update --cli", ["update", "--cli"])
 measure_native("setup", ["setup"])
-bash_ft = p95(timed(bash_argv("heartbeat", "list")))
-print(f"perf_cli: info: cli/k2 heartbeat list: p95 {bash_ft:.2f} ms (the fallthrough's base)")
-measure("k5 heartbeat list (fallthrough)", [k5, "heartbeat", "list"], bash_ft + 5.0, "cli/k2's p95 + 5 ms")
+FALLTHROUGH_ALLOWANCE_MS = 5.0
+def measure_fallthrough(words):
+    """k5's median against cli/k2's median + a fixed allowance (see the top)."""
+    theirs = timed(bash_argv(*words))
+    ours = timed([k5, *words])
+    base, got = statistics.median(theirs), statistics.median(ours)
+    target = base + FALLTHROUGH_ALLOWANCE_MS
+    ok = got <= target
+    results.append(ok)
+    name = " ".join(words)
+    print(f"perf_cli: info: cli/k2 {name}: median {base:.2f} ms, p95 {p95(theirs):.2f} ms (the fallthrough's base)")
+    print(f"perf_cli: {'pass' if ok else 'FAIL'}: k5 {name} (fallthrough): median {got:.2f} ms, target <= {target:.2f} ms "
+          f"(cli/k2's median + {FALLTHROUGH_ALLOWANCE_MS:.0f} ms); p95 {p95(ours):.2f} ms (info), "
+          f"min {min(ours):.2f}, max {max(ours):.2f}")
+
+measure_fallthrough(["heartbeat", "list"])
 for words in (["whoami"], ["done"], ["respond", "perf line"], ["inbox"], ["read", "acme"],
               ["activity"], ["sessions"], ["connections", "list"], ["feedback", "list"],
               ["feedback", "show", "fb_1"], ["update", "--cli"], ["setup"]):

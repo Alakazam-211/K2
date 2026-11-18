@@ -13,11 +13,16 @@
 #    has --force, --options runtime, --timestamp and
 #    --identifier "$K2_K5_CLI_IDENTIFIER", and no --entitlements (so no
 #    keychain access group), no --deep and no other --identifier.
-# 3. A check stops looking for that identifier: k2_k5_cli_verify_signed and
-#    k2_k5_cli_verify_shipped each match ^Identifier=${K2_K5_CLI_IDENTIFIER}$
-#    and spell no identifier of their own; verify_signed also checks the
-#    hardened runtime flag and that there are no entitlements, and
-#    verify_shipped asks Gatekeeper.
+# 3. A check stops looking for that identifier, or a step stops running
+#    the one signature check: k2_k5_cli_check_signature matches
+#    ^Identifier=${K2_K5_CLI_IDENTIFIER}$ once, runs codesign --verify
+#    --strict, checks the hardened runtime flag, the daemon's Team ID and
+#    that there are no entitlements, and spells no identifier of its own.
+#    k2_k5_cli_verify_signed (after signing), k2_k5_cli_verify_shipped
+#    (after notarization) and k2_k5_cli_verify_tarball (the update bundle)
+#    each call it exactly once and run no codesign of their own (reuse,
+#    not a copy); verify_signed also runs its --version, verify_shipped
+#    asks Gatekeeper, and verify_tarball calls it on the app it unpacked.
 # 4. A caller signs or checks it out of order: each caller signs it once,
 #    before the outer app's codesign, and checks it once after; release.sh
 #    then zips that app, notarizes the zip, staples the app, and only then
@@ -142,23 +147,47 @@ if h is not None:
 
 # 3. The checks.
 ID_MATCH = 'grep -q "^Identifier=${K2_K5_CLI_IDENTIFIER}\\$"'
-checks = {
-    "k2_k5_cli_verify_signed": ('grep -q "flags=.*runtime"', 'codesign -d --entitlements -', 'grep -q "<key>"'),
+CHECK = "k2_k5_cli_check_signature"
+check_needs = (
+    'codesign --verify --strict "$bin"',
+    'grep -q "flags=.*runtime"',
+    '[ -n "$team" ] && [ "$team" = "$dteam" ]',
+    'codesign -d --entitlements -',
+    'grep -q "<key>"',
+)
+steps = {
+    "k2_k5_cli_verify_signed": ('"$bin" --version',),
     "k2_k5_cli_verify_shipped": ("spctl --assess",),
+    "k2_k5_cli_verify_tarball": ('tar -xzf "$tgz" -C "$dir" K2.app', CHECK + ' "$dir/K2.app"'),
 }
+def no_identifier(name, lines):
+    for n, t in lines:
+        if re.search(r"(?<!Team)Identifier=(?!\$\{K2_K5_CLI_IDENTIFIER\}|\$\{K2_DAEMON_HELPER_BUNDLE_ID\})", t):
+            bad(f"CHECK: {helper}:{n}: {name} looks for an identifier of its own: {t}")
+        if "dev.k2.app" in t:
+            bad(f"CHECK: {helper}:{n}: {name} spells an identifier: {t}")
 if h is not None:
-    for name, extra in checks.items():
+    lines = fn_logical(h, CHECK)
+    if lines is not None:
+        joined = "\n".join(t for _, t in lines)
+        if joined.count(ID_MATCH) != 1:
+            bad(f"CHECK: {helper}: {CHECK} matches ^Identifier=${{K2_K5_CLI_IDENTIFIER}}$ {joined.count(ID_MATCH)} times, want once")
+        no_identifier(CHECK, lines)
+        for need in check_needs:
+            if need not in joined:
+                bad(f"CHECK: {helper}: {CHECK} no longer runs {need}")
+    for name, extra in steps.items():
         lines = fn_logical(h, name)
         if lines is None:
             continue
         joined = "\n".join(t for _, t in lines)
-        if joined.count(ID_MATCH) != 1:
-            bad(f"CHECK: {helper}: {name} matches ^Identifier=${{K2_K5_CLI_IDENTIFIER}}$ {joined.count(ID_MATCH)} times, want once")
+        calls = len(re.findall(r"(^|[\s;(]|&&|\|\|)" + CHECK + r"\s", joined, re.M))
+        if calls != 1:
+            bad(f"CHECK: {helper}: {name} calls {CHECK} {calls} times, want once")
         for n, t in lines:
-            if re.search(r"(?<!Team)Identifier=(?!\$\{K2_K5_CLI_IDENTIFIER\}|\$\{K2_DAEMON_HELPER_BUNDLE_ID\})", t):
-                bad(f"CHECK: {helper}:{n}: {name} looks for an identifier of its own: {t}")
-            if "dev.k2.app" in t:
-                bad(f"CHECK: {helper}:{n}: {name} spells an identifier: {t}")
+            if re.search(r"(^|[\s;(]|\$\()codesign\s", t):
+                bad(f"CHECK: {helper}:{n}: {name} runs codesign itself (use {CHECK}): {t}")
+        no_identifier(name, lines)
         for need in extra:
             if need not in joined:
                 bad(f"CHECK: {helper}: {name} no longer runs {need}")
@@ -278,14 +307,32 @@ expect_fail "k5-cli signed under the daemon's identifier" "has no --identifier \
 fresh "$H"
 
 # Rule 3: the checks.
-edit "$H" 's.replace("grep -q \"^Identifier=${K2_K5_CLI_IDENTIFIER}\\$\" <<<\"$info\" \\\n        || { echo \"FATAL: k5-cli in the notarized app", "grep -q \"^Identifier=dev.k2.app.k5-cli\\$\" <<<\"$info\" \\\n        || { echo \"FATAL: k5-cli in the notarized app", 1)'
-expect_fail "the notarized check spelling its own identifier" "k2_k5_cli_verify_shipped matches"
+edit "$H" 's.replace("grep -q \"^Identifier=${K2_K5_CLI_IDENTIFIER}\\$\" <<<\"$info\" \\\n        || { echo \"FATAL: k5-cli${where} code identifier", "grep -q \"^Identifier=dev.k2.app.k5-cli\\$\" <<<\"$info\" \\\n        || { echo \"FATAL: k5-cli${where} code identifier", 1)'
+expect_fail "the signature check spelling its own identifier" "k2_k5_cli_check_signature matches"
 fresh "$H"
-edit "$H" 's.replace("    grep -q \"flags=.*runtime\" <<<\"$info\" \\\n        || { echo \"FATAL: k5-cli is not signed", "    true \\\n        || { echo \"FATAL: k5-cli is not signed", 1)'
-expect_fail "a signed check that drops the runtime flag" "k2_k5_cli_verify_signed no longer runs grep -q \"flags=.*runtime\""
+edit "$H" 's.replace("    grep -q \"flags=.*runtime\" <<<\"$info\" \\\n        || { echo \"FATAL: k5-cli${where} is not signed", "    true \\\n        || { echo \"FATAL: k5-cli${where} is not signed", 1)'
+expect_fail "a signature check that drops the runtime flag" "k2_k5_cli_check_signature no longer runs grep -q \"flags=.*runtime\""
+fresh "$H"
+edit "$H" 's.replace("    codesign --verify --strict \"$bin\" \\\n        || { echo \"FATAL: k5-cli${where} does not verify", "    codesign --verify \"$bin\" \\\n        || { echo \"FATAL: k5-cli${where} does not verify", 1)'
+expect_fail "a signature check that drops --strict" "k2_k5_cli_check_signature no longer runs codesign --verify --strict"
+fresh "$H"
+edit "$H" 's.replace("    [ -n \"$team\" ] && [ \"$team\" = \"$dteam\" ] \\\n        || { echo \"FATAL: k5-cli${where} Team ID", "    [ -n \"$team\" ] \\\n        || { echo \"FATAL: k5-cli${where} Team ID", 1)'
+expect_fail "a signature check that drops the Team ID" "k2_k5_cli_check_signature no longer runs [ -n \"\$team\" ] && [ \"\$team\" = \"\$dteam\" ]"
+fresh "$H"
+edit "$H" 's.replace("    if grep -q \"<key>\" <<<\"$ents\"; then\n        echo \"FATAL: k5-cli${where} carries entitlements", "    if false; then\n        echo \"FATAL: k5-cli${where} carries entitlements", 1)'
+expect_fail "a signature check that drops the entitlements test" "k2_k5_cli_check_signature no longer runs grep -q \"<key>\""
 fresh "$H"
 edit "$H" 's.replace("    spctl --assess --type execute \"$app\" \\\n        || { echo \"FATAL: Gatekeeper rejects the notarized app (with its k5-cli)", "    true \\\n        || { echo \"FATAL: Gatekeeper rejects the notarized app (with its k5-cli)", 1)'
 expect_fail "a notarized check that drops Gatekeeper" "k2_k5_cli_verify_shipped no longer runs spctl --assess"
+fresh "$H"
+edit "$H" 're.sub(r"(k2_k5_cli_verify_tarball\(\) \{.*?)        k2_k5_cli_check_signature \"\$dir/K2\.app\" \" in the update bundle\" \|\| rc=1\n", r"\1        true\n", s, count=1, flags=re.S)'
+expect_fail "a tarball check that no longer checks the signature" "k2_k5_cli_verify_tarball calls k2_k5_cli_check_signature 0 times"
+fresh "$H"
+edit "$H" 're.sub(r"(k2_k5_cli_verify_tarball\(\) \{.*?)k2_k5_cli_check_signature \"\$dir/K2\.app\"", r"\1k2_k5_cli_check_signature \"$(dirname \"$tgz\")/K2.app\"", s, count=1, flags=re.S)'
+expect_fail "a tarball check of the packed app, not the bundle" "k2_k5_cli_verify_tarball no longer runs k2_k5_cli_check_signature \"\$dir/K2.app\""
+fresh "$H"
+edit "$H" 's.replace("    k2_k5_cli_check_signature \"$app\" \" in the notarized app\" || return 1\n", "    codesign --verify --strict \"$(k2_k5_cli_path \"$app\")\" || return 1\n", 1)'
+expect_fail "a notarized check with its own copy of the signature check" "k2_k5_cli_verify_shipped runs codesign itself"
 fresh "$H"
 
 # Rule 4: the callers.

@@ -858,36 +858,48 @@ k2_k5_cli_sign() {
         "$bin" || { echo "FATAL: codesign of $bin failed" >&2; return 1; }
 }
 
-# k2_k5_cli_verify_signed APP: after the outer app is signed. Its own
-# identifier (never the daemon's), the hardened runtime, the daemon's Team
-# ID, no entitlements, and it execs past AMFI and answers `k2 <version>`
-# with cli/k2's version (its own --version; it reaches no daemon).
-k2_k5_cli_verify_signed() {
-    local app="$1" bin info team dteam ents out rc=0 want
+# k2_k5_cli_check_signature APP WHERE: the one signature check every step
+# runs on APP's k5-cli (WHERE names the step in its errors, e.g. " in the
+# notarized app"). It is present and executable, verifies strictly, has
+# its own identifier (never the daemon's), the hardened runtime, the
+# daemon's Team ID and no entitlements. On success it sets
+# K2_K5_CLI_TEAM to that Team ID and prints nothing.
+k2_k5_cli_check_signature() {
+    local app="$1" where="$2" bin info team dteam ents
     bin="$(k2_k5_cli_path "$app")"
-    [ -x "$bin" ] || { echo "FATAL: no k5-cli at $bin" >&2; return 1; }
+    [ -x "$bin" ] || { echo "FATAL: no k5-cli${where} at $bin" >&2; return 1; }
     codesign --verify --strict "$bin" \
-        || { echo "FATAL: k5-cli does not verify" >&2; return 1; }
+        || { echo "FATAL: k5-cli${where} does not verify" >&2; return 1; }
     info="$(codesign -dv "$bin" 2>&1)" \
         || { echo "FATAL: codesign -dv $bin failed: $info" >&2; return 1; }
     grep -q "^Identifier=${K2_K5_CLI_IDENTIFIER}\$" <<<"$info" \
-        || { echo "FATAL: k5-cli code identifier is not $K2_K5_CLI_IDENTIFIER" >&2; return 1; }
+        || { echo "FATAL: k5-cli${where} code identifier is not $K2_K5_CLI_IDENTIFIER" >&2; return 1; }
     if grep -q "^Identifier=${K2_DAEMON_HELPER_BUNDLE_ID}\$" <<<"$info"; then
-        echo "FATAL: k5-cli is signed as the daemon" >&2
+        echo "FATAL: k5-cli${where} is signed as the daemon" >&2
         return 1
     fi
     grep -q "flags=.*runtime" <<<"$info" \
-        || { echo "FATAL: k5-cli is not signed with the hardened runtime" >&2; return 1; }
+        || { echo "FATAL: k5-cli${where} is not signed with the hardened runtime" >&2; return 1; }
     team="$(sed -n 's/^TeamIdentifier=//p' <<<"$info")"
     dteam="$(codesign -dv "$(k2_daemon_helper_exe "$app")" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
     [ -n "$team" ] && [ "$team" = "$dteam" ] \
-        || { echo "FATAL: k5-cli Team ID '$team' differs from the daemon's '$dteam'" >&2; return 1; }
+        || { echo "FATAL: k5-cli${where} Team ID '$team' differs from the daemon's '$dteam'" >&2; return 1; }
     ents="$(codesign -d --entitlements - "$bin" 2>/dev/null)" \
-        || { echo "FATAL: cannot read k5-cli entitlements" >&2; return 1; }
+        || { echo "FATAL: cannot read k5-cli${where} entitlements" >&2; return 1; }
     if grep -q "<key>" <<<"$ents"; then
-        echo "FATAL: k5-cli carries entitlements (a keychain access group among them?); it must have none" >&2
+        echo "FATAL: k5-cli${where} carries entitlements (a keychain access group among them?); it must have none" >&2
         return 1
     fi
+    K2_K5_CLI_TEAM="$team"
+}
+
+# k2_k5_cli_verify_signed APP: after the outer app is signed. The
+# signature check, then it execs past AMFI and answers `k2 <version>`
+# with cli/k2's version (its own --version; it reaches no daemon).
+k2_k5_cli_verify_signed() {
+    local app="$1" bin out rc=0 want
+    bin="$(k2_k5_cli_path "$app")"
+    k2_k5_cli_check_signature "$app" "" || return 1
     want="$(sed -n 's/^K2_CLI_VERSION="\(.*\)"$/\1/p' cli/k2 | head -n1)"
     out="$("$bin" --version 2>&1)" || rc=$?
     if [ "$rc" -eq 137 ]; then
@@ -896,35 +908,39 @@ k2_k5_cli_verify_signed() {
     fi
     [ "$rc" -eq 0 ] && [ "$out" = "k2 $want" ] \
         || { echo "FATAL: signed k5-cli --version said '${out:0:200}' (rc=$rc), want 'k2 $want'" >&2; return 1; }
-    echo "  ✓ k5-cli signed as $K2_K5_CLI_IDENTIFIER (runtime, no entitlements, team $team); execs past AMFI: $out"
+    echo "  ✓ k5-cli signed as $K2_K5_CLI_IDENTIFIER (runtime, no entitlements, team $K2_K5_CLI_TEAM); execs past AMFI: $out"
 }
 
 # k2_k5_cli_verify_shipped APP: after notarization + staple, the app users
-# install still carries a k5-cli that verifies strictly, as its own
-# identifier, and Gatekeeper accepts the bundle.
+# install still carries a k5-cli that passes the signature check, and
+# Gatekeeper accepts the bundle.
 k2_k5_cli_verify_shipped() {
-    local app="$1" bin info
-    bin="$(k2_k5_cli_path "$app")"
-    [ -x "$bin" ] || { echo "FATAL: the notarized app has no k5-cli at $bin" >&2; return 1; }
-    codesign --verify --strict "$bin" \
-        || { echo "FATAL: k5-cli in the notarized app does not verify" >&2; return 1; }
-    info="$(codesign -dv "$bin" 2>&1)" \
-        || { echo "FATAL: codesign -dv $bin failed: $info" >&2; return 1; }
-    grep -q "^Identifier=${K2_K5_CLI_IDENTIFIER}\$" <<<"$info" \
-        || { echo "FATAL: k5-cli in the notarized app is not $K2_K5_CLI_IDENTIFIER" >&2; return 1; }
+    local app="$1"
+    k2_k5_cli_check_signature "$app" " in the notarized app" || return 1
     spctl --assess --type execute "$app" \
         || { echo "FATAL: Gatekeeper rejects the notarized app (with its k5-cli)" >&2; return 1; }
     echo "  ✓ Notarized app ships a signed k5-cli (Gatekeeper accepts it)."
 }
 
 # k2_k5_cli_verify_tarball TARBALL: the update bundle holds k5-cli,
-# executable, where cli_install looks for it.
+# executable, where cli_install looks for it, and the app unpacked from
+# it (in a temporary folder, removed after) passes the signature check.
 k2_k5_cli_verify_tarball() {
-    local tgz="$1" want listing
+    local tgz="$1" want listing dir rc=0
     want="K2.app/Contents/MacOS/${K2_K5_CLI_EXE}"
     listing="$(tar -tvzf "$tgz")" \
         || { echo "FATAL: cannot list $tgz" >&2; return 1; }
     grep -F -- "$want" <<<"$listing" | grep -q '^-rwx' \
         || { echo "FATAL: $tgz has no executable $want" >&2; return 1; }
-    echo "  ✓ Update bundle carries ${want}."
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/k2-k5-tarball.XXXXXX")" \
+        || { echo "FATAL: cannot make a folder to unpack $tgz" >&2; return 1; }
+    if tar -xzf "$tgz" -C "$dir" K2.app; then
+        k2_k5_cli_check_signature "$dir/K2.app" " in the update bundle" || rc=1
+    else
+        echo "FATAL: cannot unpack $tgz" >&2
+        rc=1
+    fi
+    rm -rf "$dir"
+    [ "$rc" -eq 0 ] || return 1
+    echo "  ✓ Update bundle carries ${want}, signed as $K2_K5_CLI_IDENTIFIER (runtime, no entitlements, team $K2_K5_CLI_TEAM)."
 }

@@ -767,6 +767,32 @@ describe("recording in K2's own rooms (Sew 0.9.0): told, not asked", () => {
     expect(s.toasts.join(' ')).not.toMatch(/can't answer recording notices/)
   })
 
+  it("the badge's clock counts from Sew's started_at (Sew 0.10.5), so a late joiner gets the real one", async () => {
+    const at = '2026-11-18T14:41:00Z'
+    // Joined mid-recording: the recording is found while joining.
+    const s = setup({ plugin: { joinResult: { call_id: '' }, state: sewContract.state_snapshot.consent_required } })
+    await s.ctl.join(SEW, room1)
+    s.fire('recording', { ...held.recording, started_at: at })
+    expect(s.ctl.store.getState().call?.recording?.startedAt).toBe(Date.parse(at))
+    // A later event without it keeps Sew's start.
+    s.fire('recording', { ...held.recording })
+    expect(s.ctl.store.getState().call?.recording?.startedAt).toBe(Date.parse(at))
+  })
+
+  it("without started_at (an older Sew, or the held placeholder): as before, no clock for one found while joining, this device's moment in the call", async () => {
+    const j = setup({ plugin: { joinResult: { call_id: '' }, state: sewContract.state_snapshot.consent_required } })
+    await j.ctl.join(SEW, room1)
+    j.fire('recording', held.recording)
+    expect(j.ctl.store.getState().call?.recording?.startedAt).toBeNull()
+    const s = await inCall()
+    s.fire('recording', sewContract.recording.granted)
+    expect(s.ctl.store.getState().call?.recording?.startedAt).toBe(5_000)
+    // Not a date: as if Sew never said.
+    const t = await inCall()
+    t.fire('recording', { ...sewContract.recording.granted, started_at: 'not a time' })
+    expect(t.ctl.store.getState().call?.recording?.startedAt).toBe(5_000)
+  })
+
   it('a call that becomes held (the notice changed) stays and waits for the new answer', async () => {
     const s = await inCall()
     s.fire('state', held.state)

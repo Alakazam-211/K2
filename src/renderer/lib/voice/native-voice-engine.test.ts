@@ -96,6 +96,11 @@ describe("Sew's contract (native-voice-contract.json, held to the plugin's types
     // Sew's start time, when the event carries it (the badge's clock); none today.
     expect(parseRecording(contract.recording.granted)).not.toHaveProperty('startedAt')
     expect(parseRecording({ ...contract.recording.granted, started_at: '2026-11-17T14:41:00Z' })?.startedAt).toBe(Date.parse('2026-11-17T14:41:00Z'))
+    expect(parseRecording({ ...contract.recording.granted, started_at: '2026-11-17T14:41:00.250+01:00' })?.startedAt).toBe(Date.parse('2026-11-17T13:41:00.250Z'))
+    // Sew 0.10.5 sends RFC 3339; anything else is as if it never said.
+    for (const bad of ['', 'soon', '2026-11-17', 'Nov 17 2026 14:41', '2026-13-45T99:99:99Z', null, -5, NaN, {}]) {
+      expect(parseRecording({ ...contract.recording.granted, started_at: bad })).not.toHaveProperty('startedAt')
+    }
   })
 
   it('reads participants (no names), speaking, devices and errors', () => {

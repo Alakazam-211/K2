@@ -235,14 +235,16 @@ export function parseRecording(v: unknown): NativeRecording | null {
   }
 }
 
-/** Sew's `started_at` (RFC 3339 or epoch ms), or null. */
-function startedAtOf(v: unknown): number | null {
-  if (typeof v === 'number' && Number.isFinite(v)) return v
-  if (typeof v === 'string') {
-    const t = Date.parse(v)
-    return Number.isFinite(t) ? t : null
-  }
-  return null
+const RFC3339 = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/
+
+/** Sew's `started_at` (Sew 0.10.5: RFC 3339; left out only for the held
+ *  "auto" placeholder) as epoch ms, or null. Anything that isn't a real
+ *  RFC 3339 time counts as missing, so the badge keeps its old rule. */
+export function startedAtOf(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) && v > 0 ? v : null
+  if (typeof v !== 'string' || !RFC3339.test(v)) return null
+  const t = Date.parse(v)
+  return Number.isFinite(t) ? t : null
 }
 
 export function parseParticipants(v: unknown): NativeParticipant[] {

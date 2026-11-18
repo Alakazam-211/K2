@@ -105,6 +105,9 @@ describe("K2's own recording notice", () => {
   it('the badge clock: mm:ss, then h:mm:ss', () => {
     expect(formatRecordingClock(192_000)).toBe('03:12')
     expect(formatRecordingClock(0)).toBe('00:00')
+    // A start a little in the future (clock skew) reads 00:00, never negative.
+    expect(formatRecordingClock(-4_000)).toBe('00:00')
+    expect(formatRecordingClock(-0.5)).toBe('00:00')
     expect(formatRecordingClock(3_792_000)).toBe('1:03:12')
   })
 })

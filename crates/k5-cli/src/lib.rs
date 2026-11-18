@@ -48,6 +48,10 @@
 //!   falls through. It only counts for now.
 //! - [`trace`]: opt-in timing of the front's phases on stderr
 //!   (`K5_CLI_TRACE_TIMING`).
+//! - [`text`]: the study and help pages, embedded from `cli/text`, and the
+//!   help forms the binary may answer; [`pages`]: which command line is
+//!   which page, and whether the shell's environment ([`offline`]) lets
+//!   the binary print it.
 
 pub mod called_as;
 pub mod check;
@@ -60,9 +64,12 @@ pub mod families;
 pub mod front;
 pub mod home;
 pub mod notice;
+pub mod offline;
 pub mod out;
+pub mod pages;
 pub mod passport;
 pub mod prelude;
 pub mod route;
+pub mod text;
 pub mod trace;
 pub mod transport;

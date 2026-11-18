@@ -1,0 +1,770 @@
+# The help forms the k5 binary answers itself, each a plain print of one
+# cli/text/help file in bash. Written by tests/cli/help_native.sh --write,
+# which proves each row from bash's own trace; do not edit by hand.
+# <argv>|<file under cli/text/help, no .txt>|<out or err>|<exit code>
+--help --advanced|_advanced|out|0
+--help --internal|_internal|out|0
+--help -a|_advanced|out|0
+--help advanced|_advanced|out|0
+--help agent|agent|out|0
+--help board|board|out|0
+--help browser|browser|out|0
+--help calendar|calendar|out|0
+--help cal|calendar|out|0
+--help capabilities|capabilities|out|0
+--help cert|cert|out|0
+--help changes|changes|out|0
+--help ci|ci|out|0
+--help compute|compute|out|0
+--help connect|connect|err|0
+--help db|db|out|0
+--help dns|dns|out|0
+--help domain|domain|out|0
+--help explain|explain|out|0
+--help feedback|feedback|out|0
+--help heartbeat|heartbeat|out|0
+--help hostchat|hostchat|out|0
+--help inbox|inbox|out|0
+--help internal|_internal|out|0
+--help jobs|job|out|0
+--help job|job|out|0
+--help llm|llm|out|0
+--help mail|mail|out|0
+--help msg|msg|out|0
+--help preset|preset|out|0
+--help project|project|out|0
+--help publish|publish|err|0
+--help read|read|out|0
+--help remote-session|remote-session|out|0
+--help settings|settings|out|0
+--help setup|setup|out|0
+--help sidecar|sidecar|out|0
+--help sim|sim|out|0
+--help skills|skills|out|0
+--help sources|sources|out|0
+--help source|sources|out|0
+--help store|store|out|0
+--help talk|talk|out|0
+--help thread|thread|out|0
+--help tickets|feedback|out|0
+--help usage|usage|out|0
+--help users|users|err|0
+--help vault|vault|out|0
+--help whoami|whoami|out|0
+--help wiki|wiki|out|0
+--help workspace|workspace|out|0
+--help zen|zen|out|0
+-h --advanced|_advanced|out|0
+-h --internal|_internal|out|0
+-h -a|_advanced|out|0
+-h advanced|_advanced|out|0
+-h agent|agent|out|0
+-h board|board|out|0
+-h browser|browser|out|0
+-h calendar|calendar|out|0
+-h cal|calendar|out|0
+-h capabilities|capabilities|out|0
+-h cert|cert|out|0
+-h changes|changes|out|0
+-h ci|ci|out|0
+-h compute|compute|out|0
+-h connect|connect|err|0
+-h db|db|out|0
+-h dns|dns|out|0
+-h domain|domain|out|0
+-h explain|explain|out|0
+-h feedback|feedback|out|0
+-h heartbeat|heartbeat|out|0
+-h hostchat|hostchat|out|0
+-h inbox|inbox|out|0
+-h internal|_internal|out|0
+-h jobs|job|out|0
+-h job|job|out|0
+-h llm|llm|out|0
+-h mail|mail|out|0
+-h msg|msg|out|0
+-h preset|preset|out|0
+-h project|project|out|0
+-h publish|publish|err|0
+-h read|read|out|0
+-h remote-session|remote-session|out|0
+-h settings|settings|out|0
+-h setup|setup|out|0
+-h sidecar|sidecar|out|0
+-h sim|sim|out|0
+-h skills|skills|out|0
+-h sources|sources|out|0
+-h source|sources|out|0
+-h store|store|out|0
+-h talk|talk|out|0
+-h thread|thread|out|0
+-h tickets|feedback|out|0
+-h usage|usage|out|0
+-h users|users|err|0
+-h vault|vault|out|0
+-h whoami|whoami|out|0
+-h wiki|wiki|out|0
+-h workspace|workspace|out|0
+-h zen|zen|out|0
+activity --help|activity|out|0
+activity -h|activity|out|0
+agent --help|agent|out|0
+agent -h|agent|out|0
+agent conf --help|agent/conf|out|0
+agent conf -h|agent/conf|out|0
+agent context --help|agent/context|out|0
+agent context -h|agent/context|out|0
+agent get --help|agent/get|out|0
+agent get -h|agent/get|out|0
+agent harness --help|agent/harness|out|0
+agent harness -h|agent/harness|out|0
+agent hire --help|agent/hire|out|0
+agent hire -h|agent/hire|out|0
+agent identity --help|agent/identity|out|0
+agent identity -h|agent/identity|out|0
+agent instances --help|agent/instances|out|0
+agent instances -h|agent/instances|out|0
+agent list --help|agent/list|out|0
+agent list -h|agent/list|out|0
+agent refresh --help|agent/refresh|out|0
+agent refresh -h|agent/refresh|out|0
+agent restart --help|agent/restart|out|0
+agent restart -h|agent/restart|out|0
+agent retire --help|agent/retire|out|0
+agent retire -h|agent/retire|out|0
+agent set --help|agent/set|out|0
+agent set -h|agent/set|out|0
+agent template --help|agent/template|out|0
+agent template -h|agent/template|out|0
+app account-deletion --help|app/account-deletion|out|0
+app account-deletion -h|app/account-deletion|out|0
+app auth --help|app/auth|out|0
+app auth -h|app/auth|out|0
+app catalog --help|app/catalog|out|0
+app catalog -h|app/catalog|out|0
+app chat --help|app/chat|out|0
+app chat -h|app/chat|out|0
+app data --help|app/data|out|0
+app data -h|app/data|out|0
+app db --help|app/db|out|0
+app db -h|app/db|out|0
+app egress --help|app/egress|out|0
+app egress -h|app/egress|out|0
+app expose --help|app/expose|out|0
+app expose -h|app/expose|out|0
+app guest rooms --help|app/guest/rooms|out|0
+app guest rooms -h|app/guest/rooms|out|0
+app init --help|app/init|out|0
+app init -h|app/init|out|0
+app links --help|app/links|out|0
+app links -h|app/links|out|0
+app pairing --help|app/pairing|out|0
+app pairing -h|app/pairing|out|0
+app push --help|app/push|out|0
+app push -h|app/push|out|0
+app recording --help|app/recording|out|0
+app recording -h|app/recording|out|0
+app sdk --help|app/sdk|out|0
+app sdk -h|app/sdk|out|0
+app set --help|app/set|out|0
+app set -h|app/set|out|0
+app status --help|app/status|out|0
+app status -h|app/status|out|0
+app uninstall --help|app/uninstall|out|0
+app uninstall -h|app/uninstall|out|0
+app updates --help|app/updates|out|0
+app updates -h|app/updates|out|0
+app validate --help|app/validate|out|0
+app validate -h|app/validate|out|0
+approve --help|approve|out|0
+approve -h|approve|out|0
+board --help|board|out|0
+board -h|board|out|0
+browser --help|browser|out|0
+browser -h|browser|out|0
+calendar --help|calendar|out|0
+calendar -h|calendar|out|0
+capabilities --help|capabilities|out|0
+capabilities -h|capabilities|out|0
+cert --help|cert|out|0
+cert -h|cert|out|0
+cert issue --help|cert/issue|out|0
+cert issue -h|cert/issue|out|0
+cert list --help|cert/list|out|0
+cert list -h|cert/list|out|0
+cert renew --help|cert/renew|out|0
+cert renew -h|cert/renew|out|0
+changes --help|changes|out|0
+changes -h|changes|out|0
+changes notes --help|changes/notes|out|0
+changes notes -h|changes/notes|out|0
+ci --help|ci|out|0
+ci -h|ci|out|0
+clone --help|clone|out|0
+clone -h|clone|out|0
+compute --help|compute|out|0
+compute -h|compute|out|0
+compute git-access --help|compute/git-access|out|0
+compute git-access -h|compute/git-access|out|0
+compute node packages --help|compute/node/packages|out|0
+compute node packages -h|compute/node/packages|out|0
+connect --help|connect|err|0
+connect -h|connect|err|0
+connections --help|connections|out|0
+connections -h|connections|out|0
+db --help|db|out|0
+db -h|db|out|0
+desktop --help|desktop|out|0
+desktop -h|desktop|out|0
+dns --help|dns|out|0
+dns -h|dns|out|0
+dns access --help|dns/access|out|0
+dns access -h|dns/access|out|0
+dns list --help|dns/list|out|0
+dns list -h|dns/list|out|0
+dns record --help|dns/record|out|0
+dns record -h|dns/record|out|0
+dns record add --help|dns/record/add|out|0
+dns record add -h|dns/record/add|out|0
+dns record remove --help|dns/record/remove|out|0
+dns record remove -h|dns/record/remove|out|0
+dns records --help|dns/records|out|0
+dns records -h|dns/records|out|0
+dns verify --help|dns/verify|out|0
+dns verify -h|dns/verify|out|0
+doc cores --help|doc/cores|out|0
+doc cores -h|doc/cores|out|0
+domain --help|domain|out|0
+domain -h|domain|out|0
+domain add --help|domain/add|out|0
+domain add -h|domain/add|out|0
+domain list --help|domain/list|out|0
+domain list -h|domain/list|out|0
+domain name --help|domain/name|out|0
+domain name -h|domain/name|out|0
+domain name add --help|domain/name/add|out|0
+domain name add -h|domain/name/add|out|0
+domain name remove --help|domain/name/remove|out|0
+domain name remove -h|domain/name/remove|out|0
+domain refresh --help|domain/refresh|out|0
+domain refresh -h|domain/refresh|out|0
+domain remove --help|domain/remove|out|0
+domain remove -h|domain/remove|out|0
+explain --help|explain|out|0
+explain -h|explain|out|0
+feedback --help|feedback|out|0
+feedback -h|feedback|out|0
+feedback ask --help|feedback/ask|out|0
+feedback ask -h|feedback/ask|out|0
+feedback assign --help|feedback/assign|out|0
+feedback assign -h|feedback/assign|out|0
+feedback comment --help|feedback/comment|out|0
+feedback comment -h|feedback/comment|out|0
+feedback list --help|feedback/list|out|0
+feedback list -h|feedback/list|out|0
+feedback resolve --help|feedback/resolve|out|0
+feedback resolve -h|feedback/resolve|out|0
+feedback settings --help|feedback/settings|out|0
+feedback settings -h|feedback/settings|out|0
+feedback show --help|feedback/show|out|0
+feedback show -h|feedback/show|out|0
+feedback template --help|feedback/template|out|0
+feedback template -h|feedback/template|out|0
+firewall --help|firewall|out|0
+firewall -h|firewall|out|0
+front --help|front|out|0
+front -h|front|out|0
+git-tools --help|git-tools|out|0
+git-tools -h|git-tools|out|0
+heartbeat --help|heartbeat|out|0
+heartbeat -h|heartbeat|out|0
+help --advanced|_advanced|out|0
+help --internal|_internal|out|0
+help -a|_advanced|out|0
+help advanced|_advanced|out|0
+help agent|agent|out|0
+help board|board|out|0
+help browser|browser|out|0
+help calendar|calendar|out|0
+help cal|calendar|out|0
+help capabilities|capabilities|out|0
+help cert|cert|out|0
+help changes|changes|out|0
+help ci|ci|out|0
+help compute|compute|out|0
+help connect|connect|err|0
+help db|db|out|0
+help dns|dns|out|0
+help domain|domain|out|0
+help explain|explain|out|0
+help feedback|feedback|out|0
+help heartbeat|heartbeat|out|0
+help hostchat|hostchat|out|0
+help inbox|inbox|out|0
+help internal|_internal|out|0
+help jobs|job|out|0
+help job|job|out|0
+help llm|llm|out|0
+help mail|mail|out|0
+help msg|msg|out|0
+help preset|preset|out|0
+help project|project|out|0
+help publish|publish|err|0
+help read|read|out|0
+help remote-session|remote-session|out|0
+help settings|settings|out|0
+help setup|setup|out|0
+help sidecar|sidecar|out|0
+help sim|sim|out|0
+help skills|skills|out|0
+help sources|sources|out|0
+help source|sources|out|0
+help store|store|out|0
+help talk|talk|out|0
+help thread|thread|out|0
+help tickets|feedback|out|0
+help usage|usage|out|0
+help users|users|err|0
+help vault|vault|out|0
+help whoami|whoami|out|0
+help wiki|wiki|out|0
+help workspace|workspace|out|0
+help zen|zen|out|0
+help-advanced|_advanced|out|0
+help-internal|_internal|out|0
+hooks emit --help|hooks/emit|out|0
+hooks emit -h|hooks/emit|out|0
+hostchat --help|hostchat|out|0
+hostchat -h|hostchat|out|0
+hostchat recording --help|hostchat/recording|out|0
+hostchat recording -h|hostchat/recording|out|0
+hostmail --help|hostmail|out|0
+hostmail -h|hostmail|out|0
+hostmail acl --help|hostmail/acl|out|0
+hostmail acl -h|hostmail/acl|out|0
+hostmail alias --help|hostmail/alias|out|0
+hostmail alias -h|hostmail/alias|out|0
+hostmail alias add --help|hostmail/alias/add|out|0
+hostmail alias add -h|hostmail/alias/add|out|0
+hostmail alias list --help|hostmail/alias/list|out|0
+hostmail alias list -h|hostmail/alias/list|out|0
+hostmail alias remove --help|hostmail/alias/remove|out|0
+hostmail alias remove -h|hostmail/alias/remove|out|0
+hostmail allowlist --help|hostmail/allowlist|out|0
+hostmail allowlist -h|hostmail/allowlist|out|0
+hostmail allowlist add --help|hostmail/allowlist/add|out|0
+hostmail allowlist add -h|hostmail/allowlist/add|out|0
+hostmail allowlist list --help|hostmail/allowlist/list|out|0
+hostmail allowlist list -h|hostmail/allowlist/list|out|0
+hostmail allowlist remove --help|hostmail/allowlist/remove|out|0
+hostmail allowlist remove -h|hostmail/allowlist/remove|out|0
+hostmail app-password --help|hostmail/app-password|out|0
+hostmail app-password -h|hostmail/app-password|out|0
+hostmail app-password add --help|hostmail/app-password/add|out|0
+hostmail app-password add -h|hostmail/app-password/add|out|0
+hostmail app-password keep --help|hostmail/app-password/keep|out|0
+hostmail app-password keep -h|hostmail/app-password/keep|out|0
+hostmail app-password list --help|hostmail/app-password/list|out|0
+hostmail app-password list -h|hostmail/app-password/list|out|0
+hostmail app-password revoke --help|hostmail/app-password/revoke|out|0
+hostmail app-password revoke -h|hostmail/app-password/revoke|out|0
+hostmail approvals --help|hostmail/approvals|out|0
+hostmail approvals -h|hostmail/approvals|out|0
+hostmail audit-sieve --help|hostmail/audit-sieve|out|0
+hostmail audit-sieve -h|hostmail/audit-sieve|out|0
+hostmail autoconfig --help|hostmail/autoconfig|out|0
+hostmail autoconfig -h|hostmail/autoconfig|out|0
+hostmail backup --help|hostmail/backup|out|0
+hostmail backup -h|hostmail/backup|out|0
+hostmail backup plan --help|hostmail/backup/plan|out|0
+hostmail backup plan -h|hostmail/backup/plan|out|0
+hostmail backup set --help|hostmail/backup/set|out|0
+hostmail backup set -h|hostmail/backup/set|out|0
+hostmail backup status --help|hostmail/backup/status|out|0
+hostmail backup status -h|hostmail/backup/status|out|0
+hostmail bans --help|hostmail/bans|out|0
+hostmail bans -h|hostmail/bans|out|0
+hostmail bans clear --help|hostmail/bans/clear|out|0
+hostmail bans clear -h|hostmail/bans/clear|out|0
+hostmail bans list --help|hostmail/bans/list|out|0
+hostmail bans list -h|hostmail/bans/list|out|0
+hostmail bans migrate --help|hostmail/bans/migrate|out|0
+hostmail bans migrate -h|hostmail/bans/migrate|out|0
+hostmail bans migrate restore --help|hostmail/bans/migrate/restore|out|0
+hostmail bans migrate restore -h|hostmail/bans/migrate/restore|out|0
+hostmail bans migrate status --help|hostmail/bans/migrate/status|out|0
+hostmail bans migrate status -h|hostmail/bans/migrate/status|out|0
+hostmail calendar --help|hostmail/calendar|out|0
+hostmail calendar -h|hostmail/calendar|out|0
+hostmail calendar disable --help|hostmail/calendar/disable|out|0
+hostmail calendar disable -h|hostmail/calendar/disable|out|0
+hostmail calendar enable --help|hostmail/calendar/enable|out|0
+hostmail calendar enable -h|hostmail/calendar/enable|out|0
+hostmail calendar share --help|hostmail/calendar/share|out|0
+hostmail calendar share -h|hostmail/calendar/share|out|0
+hostmail calendar status --help|hostmail/calendar/status|out|0
+hostmail calendar status -h|hostmail/calendar/status|out|0
+hostmail catchall --help|hostmail/catchall|out|0
+hostmail catchall -h|hostmail/catchall|out|0
+hostmail catchall set --help|hostmail/catchall/set|out|0
+hostmail catchall set -h|hostmail/catchall/set|out|0
+hostmail catchall show --help|hostmail/catchall/show|out|0
+hostmail catchall show -h|hostmail/catchall/show|out|0
+hostmail catchall unset --help|hostmail/catchall/unset|out|0
+hostmail catchall unset -h|hostmail/catchall/unset|out|0
+hostmail cert --help|hostmail/cert|out|0
+hostmail cert -h|hostmail/cert|out|0
+hostmail cert names --help|hostmail/cert/names|out|0
+hostmail cert names -h|hostmail/cert/names|out|0
+hostmail cert owner --help|hostmail/cert/owner|out|0
+hostmail cert owner -h|hostmail/cert/owner|out|0
+hostmail cert renew --help|hostmail/cert/renew|out|0
+hostmail cert renew -h|hostmail/cert/renew|out|0
+hostmail config --help|hostmail/config|out|0
+hostmail config -h|hostmail/config|out|0
+hostmail create --help|hostmail/create|out|0
+hostmail create -h|hostmail/create|out|0
+hostmail delete --help|hostmail/delete|out|0
+hostmail delete -h|hostmail/delete|out|0
+hostmail disable --help|hostmail/disable|out|0
+hostmail disable -h|hostmail/disable|out|0
+hostmail dkim --help|hostmail/dkim|out|0
+hostmail dkim -h|hostmail/dkim|out|0
+hostmail dkim retire --help|hostmail/dkim/retire|out|0
+hostmail dkim retire -h|hostmail/dkim/retire|out|0
+hostmail dkim rotate --help|hostmail/dkim/rotate|out|0
+hostmail dkim rotate -h|hostmail/dkim/rotate|out|0
+hostmail dkim show --help|hostmail/dkim/show|out|0
+hostmail dkim show -h|hostmail/dkim/show|out|0
+hostmail dmarc --help|hostmail/dmarc|out|0
+hostmail dmarc -h|hostmail/dmarc|out|0
+hostmail dmarc report-to --help|hostmail/dmarc/report-to|out|0
+hostmail dmarc report-to -h|hostmail/dmarc/report-to|out|0
+hostmail dmarc show --help|hostmail/dmarc/show|out|0
+hostmail dmarc show -h|hostmail/dmarc/show|out|0
+hostmail doctor --help|hostmail/doctor|out|0
+hostmail doctor -h|hostmail/doctor|out|0
+hostmail domain --help|hostmail/domain|out|0
+hostmail domain -h|hostmail/domain|out|0
+hostmail enable --help|hostmail/enable|out|0
+hostmail enable -h|hostmail/enable|out|0
+hostmail footer --help|hostmail/footer|out|0
+hostmail footer -h|hostmail/footer|out|0
+hostmail footer set --help|hostmail/footer/set|out|0
+hostmail footer set -h|hostmail/footer/set|out|0
+hostmail footer show --help|hostmail/footer/show|out|0
+hostmail footer show -h|hostmail/footer/show|out|0
+hostmail footer unset --help|hostmail/footer/unset|out|0
+hostmail footer unset -h|hostmail/footer/unset|out|0
+hostmail forward --help|hostmail/forward|out|0
+hostmail forward -h|hostmail/forward|out|0
+hostmail forward add --help|hostmail/forward/add|out|0
+hostmail forward add -h|hostmail/forward/add|out|0
+hostmail forward list --help|hostmail/forward/list|out|0
+hostmail forward list -h|hostmail/forward/list|out|0
+hostmail forward pause --help|hostmail/forward/pause|out|0
+hostmail forward pause -h|hostmail/forward/pause|out|0
+hostmail forward resume --help|hostmail/forward/resume|out|0
+hostmail forward resume -h|hostmail/forward/resume|out|0
+hostmail forward rm --help|hostmail/forward/rm|out|0
+hostmail forward rm -h|hostmail/forward/rm|out|0
+hostmail forward set --help|hostmail/forward/set|out|0
+hostmail forward set -h|hostmail/forward/set|out|0
+hostmail forward show --help|hostmail/forward/show|out|0
+hostmail forward show -h|hostmail/forward/show|out|0
+hostmail forward unset --help|hostmail/forward/unset|out|0
+hostmail forward unset -h|hostmail/forward/unset|out|0
+hostmail group --help|hostmail/group|out|0
+hostmail group -h|hostmail/group|out|0
+hostmail import --help|hostmail/import|out|0
+hostmail import -h|hostmail/import|out|0
+hostmail list --help|hostmail/list|out|0
+hostmail list -h|hostmail/list|out|0
+hostmail ooo --help|hostmail/ooo|out|0
+hostmail ooo -h|hostmail/ooo|out|0
+hostmail ooo set --help|hostmail/ooo/set|out|0
+hostmail ooo set -h|hostmail/ooo/set|out|0
+hostmail ooo show --help|hostmail/ooo/show|out|0
+hostmail ooo show -h|hostmail/ooo/show|out|0
+hostmail ooo unset --help|hostmail/ooo/unset|out|0
+hostmail ooo unset -h|hostmail/ooo/unset|out|0
+hostmail outbound --help|hostmail/outbound|out|0
+hostmail outbound -h|hostmail/outbound|out|0
+hostmail password --help|hostmail/password|out|0
+hostmail password -h|hostmail/password|out|0
+hostmail password keep --help|hostmail/password/keep|out|0
+hostmail password keep -h|hostmail/password/keep|out|0
+hostmail password rotate --help|hostmail/password/rotate|out|0
+hostmail password rotate -h|hostmail/password/rotate|out|0
+hostmail person --help|hostmail/person|out|0
+hostmail person -h|hostmail/person|out|0
+hostmail person link --help|hostmail/person/link|out|0
+hostmail person link -h|hostmail/person/link|out|0
+hostmail profile --help|hostmail/profile|out|0
+hostmail profile -h|hostmail/profile|out|0
+hostmail ptr --help|hostmail/ptr|out|0
+hostmail ptr -h|hostmail/ptr|out|0
+hostmail ptr set --help|hostmail/ptr/set|out|0
+hostmail ptr set -h|hostmail/ptr/set|out|0
+hostmail ptr show --help|hostmail/ptr/show|out|0
+hostmail ptr show -h|hostmail/ptr/show|out|0
+hostmail queue --help|hostmail/queue|out|0
+hostmail queue -h|hostmail/queue|out|0
+hostmail quota --help|hostmail/quota|out|0
+hostmail quota -h|hostmail/quota|out|0
+hostmail quota get --help|hostmail/quota/get|out|0
+hostmail quota get -h|hostmail/quota/get|out|0
+hostmail quota set --help|hostmail/quota/set|out|0
+hostmail quota set -h|hostmail/quota/set|out|0
+hostmail rotate-admin --help|hostmail/rotate-admin|out|0
+hostmail rotate-admin -h|hostmail/rotate-admin|out|0
+hostmail spam --help|hostmail/spam|out|0
+hostmail spam -h|hostmail/spam|out|0
+hostmail status --help|hostmail/status|out|0
+hostmail status -h|hostmail/status|out|0
+hostmail uninstall --help|hostmail/uninstall|out|0
+hostmail uninstall -h|hostmail/uninstall|out|0
+hostmail upgrade --help|hostmail/upgrade|out|0
+hostmail upgrade -h|hostmail/upgrade|out|0
+inbox --help|inbox|out|0
+inbox -h|inbox|out|0
+job --help|job|out|0
+job -h|job|out|0
+llm --help|llm|out|0
+llm -h|llm|out|0
+mail --help|mail|out|0
+mail -h|mail|out|0
+mail access --help|mail/access|out|0
+mail access -h|mail/access|out|0
+mail attachments --help|mail/attachments|out|0
+mail attachments -h|mail/attachments|out|0
+mail capabilities --help|mail/capabilities|out|0
+mail capabilities -h|mail/capabilities|out|0
+mail delete --help|mail/delete|out|0
+mail delete -h|mail/delete|out|0
+mail domains --help|mail/domains|out|0
+mail domains -h|mail/domains|out|0
+mail draft --help|mail/draft|out|0
+mail draft -h|mail/draft|out|0
+mail drafts --help|mail/drafts|out|0
+mail drafts -h|mail/drafts|out|0
+mail forward --help|mail/forward|out|0
+mail forward -h|mail/forward|out|0
+mail forward-message --help|mail/forward-message|out|0
+mail forward-message -h|mail/forward-message|out|0
+mail inboxes --help|mail/inboxes|out|0
+mail inboxes -h|mail/inboxes|out|0
+mail link --help|mail/link|out|0
+mail link -h|mail/link|out|0
+mail messages --help|mail/messages|out|0
+mail messages -h|mail/messages|out|0
+mail oauth-config --help|mail/oauth-config|out|0
+mail oauth-config -h|mail/oauth-config|out|0
+mail outbox --help|mail/outbox|out|0
+mail outbox -h|mail/outbox|out|0
+mail read --help|mail/read|out|0
+mail read -h|mail/read|out|0
+mail reader --help|mail/reader|out|0
+mail reader -h|mail/reader|out|0
+mail reply --help|mail/reply|out|0
+mail reply -h|mail/reply|out|0
+mail send --help|mail/send|out|0
+mail send -h|mail/send|out|0
+mail sending --help|mail/sending|out|0
+mail sending -h|mail/sending|out|0
+mail wait --help|mail/wait|out|0
+mail wait -h|mail/wait|out|0
+mail watch --help|mail/watch|out|0
+mail watch -h|mail/watch|out|0
+migrate --help|migrate|out|0
+migrate -h|migrate|out|0
+msg --help|msg|out|0
+msg -h|msg|out|0
+notifications --help|notifications|out|0
+notifications -h|notifications|out|0
+notify --help|notify|out|0
+notify -h|notify|out|0
+organization --help|organization|out|0
+organization -h|organization|out|0
+preset --help|preset|out|0
+preset -h|preset|out|0
+preset add --help|preset/add|out|0
+preset add -h|preset/add|out|0
+preset set --help|preset/set|out|0
+preset set -h|preset/set|out|0
+project --help|project|out|0
+project -h|project|out|0
+project access --help|project/access|out|0
+project access -h|project/access|out|0
+project add --help|project/add|out|0
+project add -h|project/add|out|0
+project create --help|project/create|out|0
+project create -h|project/create|out|0
+project delete --help|project/delete|out|0
+project delete -h|project/delete|out|0
+project list --help|project/list|out|0
+project list -h|project/list|out|0
+project msg --help|project/msg|out|0
+project msg -h|project/msg|out|0
+project pin --help|project/pin|out|0
+project pin -h|project/pin|out|0
+project poc --help|project/poc|out|0
+project poc -h|project/poc|out|0
+project read --help|project/read|out|0
+project read -h|project/read|out|0
+project remove --help|project/remove|out|0
+project remove -h|project/remove|out|0
+project rename --help|project/rename|out|0
+project rename -h|project/rename|out|0
+project show --help|project/show|out|0
+project show -h|project/show|out|0
+project view --help|project/view|out|0
+project view -h|project/view|out|0
+publish --help|publish|err|0
+publish -h|publish|err|0
+publish status --help|publish/status|out|0
+publish status -h|publish/status|out|0
+publish subdomain list --help|publish/subdomain/list|out|0
+publish subdomain list -h|publish/subdomain/list|out|0
+push --help|push|out|0
+push -h|push|out|0
+remind --help|remind|out|0
+remind -h|remind|out|0
+remote-session --help|remote-session|out|0
+remote-session -h|remote-session|out|0
+root-helper --help|root-helper|out|0
+root-helper -h|root-helper|out|0
+send-feedback --help|send-feedback|out|0
+send-feedback -h|send-feedback|out|0
+sessions --help|sessions|out|0
+sessions -h|sessions|out|0
+settings --help|settings|out|0
+settings -h|settings|out|0
+setup --help|setup|out|0
+setup -h|setup|out|0
+sidecar --help|sidecar|out|0
+sidecar -h|sidecar|out|0
+sim --help|sim|out|0
+sim -h|sim|out|0
+sources --help|sources|out|0
+sources -h|sources|out|0
+sources export --help|sources/export|out|0
+sources export -h|sources/export|out|0
+sources history --help|sources/history|out|0
+sources history -h|sources/history|out|0
+sources pending --help|sources/pending|out|0
+sources pending -h|sources/pending|out|0
+sources read --help|sources/read|out|0
+sources read -h|sources/read|out|0
+store --help|store|out|0
+store -h|store|out|0
+talk --help|talk|out|0
+talk -h|talk|out|0
+thread --help|thread|out|0
+thread -h|thread|out|0
+thread secret --help|thread/secret|out|0
+thread secret -h|thread/secret|out|0
+tunnel --help|tunnel|out|0
+tunnel -h|tunnel|out|0
+usage --help|usage|out|0
+usage -h|usage|out|0
+users --help|users|err|0
+users -h|users|err|0
+vault --help|vault|out|0
+vault -h|vault|out|0
+vault agent-limit --help|vault/agent-limit|out|0
+vault agent-limit -h|vault/agent-limit|out|0
+vault audit --help|vault/audit|out|0
+vault audit -h|vault/audit|out|0
+vault backup --help|vault/backup|out|0
+vault backup -h|vault/backup|out|0
+vault carry --help|vault/carry|out|0
+vault carry -h|vault/carry|out|0
+vault confirm-password --help|vault/confirm-password|out|0
+vault confirm-password -h|vault/confirm-password|out|0
+vault delivery --help|vault/delivery|out|0
+vault delivery -h|vault/delivery|out|0
+vault destroy --help|vault/destroy|out|0
+vault destroy -h|vault/destroy|out|0
+vault disable --help|vault/disable|out|0
+vault disable -h|vault/disable|out|0
+vault doctor --help|vault/doctor|out|0
+vault doctor -h|vault/doctor|out|0
+vault env-file --help|vault/env-file|out|0
+vault env-file -h|vault/env-file|out|0
+vault fetch --help|vault/fetch|out|0
+vault fetch -h|vault/fetch|out|0
+vault file --help|vault/file|out|0
+vault file -h|vault/file|out|0
+vault get --help|vault/get|out|0
+vault get -h|vault/get|out|0
+vault grant --help|vault/grant|out|0
+vault grant -h|vault/grant|out|0
+vault hosts --help|vault/hosts|out|0
+vault hosts -h|vault/hosts|out|0
+vault import --help|vault/import|out|0
+vault import -h|vault/import|out|0
+vault kek --help|vault/kek|out|0
+vault kek -h|vault/kek|out|0
+vault list --help|vault/list|out|0
+vault list -h|vault/list|out|0
+vault open --help|vault/open|out|0
+vault open -h|vault/open|out|0
+vault placement --help|vault/placement|out|0
+vault placement -h|vault/placement|out|0
+vault presets --help|vault/presets|out|0
+vault presets -h|vault/presets|out|0
+vault proxy-url --help|vault/proxy-url|out|0
+vault proxy-url -h|vault/proxy-url|out|0
+vault public-key --help|vault/public-key|out|0
+vault public-key -h|vault/public-key|out|0
+vault recipient --help|vault/recipient|out|0
+vault recipient -h|vault/recipient|out|0
+vault recovery --help|vault/recovery|out|0
+vault recovery -h|vault/recovery|out|0
+vault requests --help|vault/requests|out|0
+vault requests -h|vault/requests|out|0
+vault restore --help|vault/restore|out|0
+vault restore -h|vault/restore|out|0
+vault reveal --help|vault/reveal|out|0
+vault reveal -h|vault/reveal|out|0
+vault revoke --help|vault/revoke|out|0
+vault revoke -h|vault/revoke|out|0
+vault rollback --help|vault/rollback|out|0
+vault rollback -h|vault/rollback|out|0
+vault rotate --help|vault/rotate|out|0
+vault rotate -h|vault/rotate|out|0
+vault run --help|vault/run|out|0
+vault run -h|vault/run|out|0
+vault send --help|vault/send|out|0
+vault send -h|vault/send|out|0
+vault service --help|vault/service|out|0
+vault service -h|vault/service|out|0
+vault set --help|vault/set|out|0
+vault set -h|vault/set|out|0
+vault show --help|vault/show|out|0
+vault show -h|vault/show|out|0
+vault sign --help|vault/sign|out|0
+vault sign -h|vault/sign|out|0
+vault status --help|vault/status|out|0
+vault status -h|vault/status|out|0
+vault sync --help|vault/sync|out|0
+vault sync -h|vault/sync|out|0
+vault systemd-cred --help|vault/systemd-cred|out|0
+vault systemd-cred -h|vault/systemd-cred|out|0
+voice --help|voice|out|0
+voice -h|voice|out|0
+whats-new --help|whats-new|out|0
+whats-new -h|whats-new|out|0
+whoami --help|whoami|out|0
+whoami -h|whoami|out|0
+wiki --help|wiki|out|0
+wiki -h|wiki|out|0
+workspace --help|workspace|out|0
+workspace -h|workspace|out|0
+workspace design-tab --help|workspace/design-tab|out|0
+workspace design-tab -h|workspace/design-tab|out|0
+workspace mobile-tab --help|workspace/mobile-tab|out|0
+workspace mobile-tab -h|workspace/mobile-tab|out|0
+workspace trust --help|workspace/trust|out|0
+workspace trust -h|workspace/trust|out|0

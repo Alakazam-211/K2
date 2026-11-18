@@ -1,7 +1,8 @@
 //! `k5-cli`: the k5 command line's front. It answers `--version`,
-//! `--version --check`, `cli status` and the families in
-//! [`k5_cli::families`] itself and hands every other verb to the shell CLI
-//! it carries ([`k5_cli::fallthrough`]). Before a verb
+//! `--version --check`, `cli status`, the families in
+//! [`k5_cli::families`], and the study and help pages it can print as the
+//! shell does ([`k5_cli::pages`]) itself, and hands every other verb to
+//! the shell CLI it carries ([`k5_cli::fallthrough`]). Before a verb
 //! falls through, the passport rule ([`k5_cli::passport`]) runs; for now
 //! it only counts. The binary's own requests carry its verdict too.
 //!
@@ -14,6 +15,8 @@
 use k5_cli::called_as::CalledAs;
 use k5_cli::exit::Exit;
 use k5_cli::front::{self, Route};
+use k5_cli::offline::{self, Env, Prelude};
+use k5_cli::pages::{self, Page};
 use k5_cli::{check, cli_status, daemon, embedded, fallthrough, families, out, passport, trace};
 use std::ffi::OsString;
 
@@ -83,6 +86,29 @@ fn shell(who: CalledAs, args: &[OsString]) -> Exit {
     err.exit()
 }
 
+/// A page: printed here when the shell's environment lets the binary
+/// answer it ([`pages`]), else handed to the shell.
+fn page(
+    who: CalledAs,
+    args: &[OsString],
+    answer: impl FnOnce(&Prelude, &Env) -> Option<Page>,
+) -> Exit {
+    let env = Env::current();
+    let found = offline::shell_pwd(&env)
+        .and_then(|cwd| offline::prelude(&env, &cwd))
+        .ok()
+        .and_then(|p| answer(&p, &env));
+    let Some(page) = found else {
+        return shell(who, args);
+    };
+    if page.stderr {
+        // As `cat >&2`: a stderr that can't be written is not an error.
+        let _ = out::write_flushed(&mut std::io::stderr().lock(), page.text.as_bytes());
+        return page.exit;
+    }
+    print(&page.text, page.exit)
+}
+
 fn main() {
     trace::start();
     let mut argv = std::env::args_os();
@@ -110,6 +136,8 @@ fn main() {
             families::connections::run(&args).unwrap_or_else(|| shell(who, &args))
         }
         Route::Feedback => families::feedback::run(&args).unwrap_or_else(|| shell(who, &args)),
+        Route::Study(s) => page(who, &args, |p, env| pages::study_page(s, p, env)),
+        Route::Help(form) => page(who, &args, |p, _| pages::help_page(form, p)),
         Route::Fallthrough => shell(who, &args),
     };
     trace::finish("command");

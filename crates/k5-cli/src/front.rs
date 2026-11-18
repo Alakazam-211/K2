@@ -14,8 +14,15 @@
 //! text (or its error for a flag before it, or whatever it does with such
 //! a word where it reads a value), with its connection gate in front of
 //! it, exactly as it always has. No copy of the text lives here.
+//!
+//! A study page ([`Route::Study`], when the `study` row is `Native`) and
+//! a help form the shell only prints a file for ([`Route::Help`],
+//! [`help_route`]) are pages: the binary prints them when the shell's
+//! environment lets it ([`crate::pages`]), and hands them over otherwise.
 
+use crate::pages::{self, Study};
 use crate::route::{self, Noun, Owner};
+use crate::text::{self, HelpForm};
 use std::ffi::OsString;
 
 /// Where a command line goes.
@@ -62,6 +69,10 @@ pub enum Route {
     /// no `-h` or `--help` in it ([`crate::families::feedback`], which may
     /// still hand it to the shell).
     Feedback,
+    /// A `k2 study` page ([`pages::study`]).
+    Study(Study),
+    /// A help form whose page is a file ([`text::HELP_FORMS`]).
+    Help(&'static HelpForm),
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
@@ -89,6 +100,9 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
             ["--version", "--check"] => Route::VersionCheck,
             _ => Route::Fallthrough,
         };
+    }
+    if noun.names("study") {
+        return pages::study(words.get(1..).unwrap_or_default()).map_or(Route::Fallthrough, Route::Study);
     }
     if noun.names("cli") {
         return match words.get(1..).unwrap_or_default() {
@@ -145,6 +159,13 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
         }
     }
     Route::Fallthrough
+}
+
+/// The help form `args` is, when the shell only prints a file for it
+/// ([`text::help_form`]).
+pub fn help_route(args: &[OsString]) -> Option<&'static HelpForm> {
+    let words: Option<Vec<&str>> = args.iter().map(|a| a.to_str()).collect();
+    text::help_form(&words?)
 }
 
 /// What the version prints: the shell CLI's line, `k2 <version>`

@@ -7,11 +7,21 @@
 //! Writes `$OUT_DIR/k2.gz` and `$OUT_DIR/embedded.rs` (read by
 //! `src/embedded.rs`). Fails the build when the script or its version line
 //! is missing.
+//!
+//! Also embeds the CLI's static text, the same files `scripts/build-cli.sh`
+//! inlines into `cli/k2`, keyed as bash looks them up: every
+//! `cli/text/study/<id>.txt` under `<id>` and every
+//! `cli/text/help/<words>.txt` under `<words>` (`mail/send`), and the help
+//! forms the binary answers itself (`src/help_native.txt`, written by
+//! `tests/cli/help_native.sh`). Writes `$OUT_DIR/text.rs` (read by
+//! `src/text.rs`). Fails the build when a row of the list names a page
+//! that is not there.
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use std::fmt::Write as _;
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// How far into the script the version line may be (prelude.sh puts it
 /// on line 12; k2-client's script check reads 40 lines too).
@@ -65,6 +75,76 @@ fn main() {
     );
     let rs_path = out.join("embedded.rs");
     std::fs::write(&rs_path, rs).unwrap_or_else(|e| panic!("write {}: {e}", rs_path.display()));
+
+    text(&manifest, &out);
+}
+
+/// `$OUT_DIR/text.rs`: the study and help pages, and the help forms.
+fn text(manifest: &Path, out: &Path) {
+    let text_dir = manifest.join("../../cli/text");
+    let native = manifest.join("src/help_native.txt");
+    println!("cargo:rerun-if-changed={}", text_dir.display());
+    println!("cargo:rerun-if-changed={}", native.display());
+
+    let study = pages(&text_dir.join("study"));
+    let help = pages(&text_dir.join("help"));
+    let mut rs = String::new();
+    for (name, list) in [("STUDY", &study), ("HELP", &help)] {
+        writeln!(rs, "pub static {name}: &[(&str, &str)] = &[").expect("write to a String");
+        for (key, path) in list.iter() {
+            let path = path.to_str().unwrap_or_else(|| panic!("not UTF-8: {}", path.display()));
+            writeln!(rs, "    ({key:?}, include_str!({path:?})),").expect("write to a String");
+        }
+        rs.push_str("];\n");
+    }
+
+    let list = std::fs::read_to_string(&native).unwrap_or_else(|e| panic!("read {}: {e}", native.display()));
+    rs.push_str("pub static HELP_FORMS: &[HelpForm] = &[\n");
+    for (n, line) in list.lines().enumerate() {
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        let at = || format!("{}:{}", native.display(), n + 1);
+        let parts: Vec<&str> = line.split('|').collect();
+        let [argv, page, stream, code] = parts[..] else { panic!("{}: not <argv>|<page>|<out or err>|<code>: {line:?}", at()) };
+        assert!(help.iter().any(|(k, _)| k == page), "{}: no cli/text/help/{page}.txt", at());
+        let stderr = match stream {
+            "out" => false,
+            "err" => true,
+            _ => panic!("{}: the stream is out or err, not {stream:?}", at()),
+        };
+        let code: u8 = code.parse().unwrap_or_else(|_| panic!("{}: the exit code is not a number: {code:?}", at()));
+        let words: Vec<&str> = argv.split(' ').collect();
+        assert!(words.iter().all(|w| !w.is_empty()), "{}: an empty word in {argv:?}", at());
+        writeln!(rs, "    HelpForm {{ argv: &{words:?}, page: {page:?}, stderr: {stderr}, code: {code} }},").expect("write to a String");
+    }
+    rs.push_str("];\n");
+    let rs_path = out.join("text.rs");
+    std::fs::write(&rs_path, rs).unwrap_or_else(|e| panic!("write {}: {e}", rs_path.display()));
+}
+
+/// Every `.txt` file under `dir`, keyed by its path below `dir` with `/`
+/// between the words and no `.txt`, in key order.
+fn pages(dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut found = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        let entries = std::fs::read_dir(&d).unwrap_or_else(|e| panic!("read {}: {e}", d.display()));
+        for entry in entries {
+            let path = entry.unwrap_or_else(|e| panic!("read {}: {e}", d.display())).path();
+            if path.is_dir() {
+                todo.push(path);
+            } else if path.extension().is_some_and(|x| x == "txt") {
+                let rel = path.strip_prefix(dir).expect("under the folder").with_extension("");
+                let words: Vec<&str> =
+                    rel.components().map(|c| c.as_os_str().to_str().unwrap_or_else(|| panic!("not UTF-8: {}", path.display()))).collect();
+                found.push((words.join("/"), path.canonicalize().unwrap_or_else(|e| panic!("{}: {e}", path.display()))));
+            }
+        }
+    }
+    assert!(!found.is_empty(), "no pages under {}", dir.display());
+    found.sort();
+    found
 }
 
 /// The value of the script's `K2_CLI_VERSION="x.y.z"` line: digits, letters,

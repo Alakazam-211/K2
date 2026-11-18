@@ -424,7 +424,9 @@ pub fn node_api_files(app_id: &str, base: &str) -> Vec<(String, String)> {
         "id": app_id,
         "name": format!("{base} api").chars().take(40).collect::<String>(),
         "version": "0.1.0",
-        "caps": ["files:write"],
+        // No caps (0.46.16): the server acts only as the signed-in person
+        // (asGuest), whose own rights K2 checks; the App's own pass needs
+        // none. Add one here when the server calls asApp().
         "host": {
             "mode": "cmd",
             "start": ["node", "server.mjs"],
@@ -456,12 +458,16 @@ fn node_readme(app_id: &str) -> String {
         r#"# {app_id}: the App's own server
 
 `k2 app init --template node-api` wrote this folder. K2 runs `node server.mjs`
-with `$PORT` set and checks `GET /healthz`.
+with `$HOST` and `$PORT` set and checks `GET /healthz`. The server listens on
+exactly `$HOST:$PORT` (inside the App's wall that is `0.0.0.0`; a server bound
+to `127.0.0.1` there never answers the health check).
 
 - `cd k2/api && npm install`, then `k2 app sdk add k2/api` (once, and again
   after a K2 update): it puts `@k2/server` in `vendor/`.
-- Create the App once, with its public URL: `k2 app install {app_id} --tunnel`
+- Create the App once: `k2 app install {app_id}`
 - Deploy: `k2 app deploy {app_id} k2/api`
+- A public URL, when phones or browsers call it: `k2 app expose {app_id} --tunnel`
+  (needs K2 Connect with a Pro plan on this box)
 
 ## Uploads in parts
 
@@ -477,7 +483,9 @@ A phone app sends parts in order and starts again at `offset` after an error.
 
 /// `k2/api/server.mjs`.
 const NODE_SERVER: &str = r#"// The App's own server (k2 app init --template node-api). K2 runs it with
-// $PORT set; GET /healthz is its health check.
+// $HOST and $PORT set; GET /healthz is its health check. Listen on exactly
+// $HOST:$PORT: inside the App's wall $HOST is 0.0.0.0, and a server bound to
+// 127.0.0.1 there never answers K2.
 import http from 'node:http'
 import { fromEnv } from '@k2/server'
 
@@ -549,5 +557,6 @@ const server = http.createServer((req, res) => {
   send(res, 404, { error: 'not_found' })
 })
 
-server.listen(Number(process.env.PORT), '127.0.0.1')
+// Outside K2 (no $HOST), only this machine reaches it.
+server.listen(Number(process.env.PORT), process.env.HOST || '127.0.0.1')
 "#;

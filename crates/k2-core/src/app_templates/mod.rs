@@ -246,13 +246,21 @@ pub fn plan_with(folder: &Path, template: &str, o: &Options) -> Result<Plan, Tem
             for (rel, content) in text::node_api_files(&app_id, &base) {
                 new_file(folder, &rel, &content, &mut p);
             }
+            // 0.46.16: install first, a public URL as its own step (it needs
+            // a Connect Pro plan; `install --tunnel` failed the whole
+            // install without it), and only where the box has a name.
             p.next = vec![
                 "cd k2/api && npm install".into(),
                 "k2 app sdk add k2/api".into(),
-                format!("k2 app install {app_id} --tunnel   (once: the App and its public URL)"),
+                format!("k2 app install {app_id}   (once: the App and its port)"),
                 format!("k2 app deploy {app_id} k2/api"),
-                format!("k2 app list   (its URL: https://{host_s}/)"),
             ];
+            if let Some(h) = host.as_deref() {
+                p.next.push(format!(
+                    "k2 app expose {app_id} --tunnel   (when phones or browsers call it: https://{h}/; needs a Connect Pro plan)"
+                ));
+            }
+            p.next.push(format!("k2 app status {app_id}"));
         }
     }
     Ok(p)

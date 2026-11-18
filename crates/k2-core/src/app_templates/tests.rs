@@ -467,8 +467,23 @@ fn static_and_node_api_files_validate_as_apps() {
     assert!(server.contains("16 * 1024 * 1024") && server.contains("files.uploadChunk"), "the parted-upload route (TC-27)");
     let (r, m) = crate::deploy::validate::validate_tree(&n.0.join("k2/api"), &Default::default());
     assert!(r.ok, "{r:?}");
-    assert_eq!(m.unwrap().id, "jobs-api");
+    let m = m.unwrap();
+    assert_eq!(m.id, "jobs-api");
     assert_eq!(UPLOAD_PART_MAX, 16 << 20);
+    // 0.46.16: it listens on $HOST (0.0.0.0 inside the wall), asks for no
+    // caps it doesn't use, and installs without --tunnel (a public URL is
+    // its own step, offered where the box has a name).
+    assert!(server.contains("server.listen(Number(process.env.PORT), process.env.HOST || '127.0.0.1')"), "{server}");
+    assert!(m.caps.is_empty(), "asGuest only: no App caps: {:?}", m.caps);
+    assert!(!n.read("k2/api/manifest.json").contains("files:write"));
+    assert!(p.next.iter().all(|s| !s.contains("install") || !s.contains("--tunnel")), "{:?}", p.next);
+    assert!(p.next.iter().any(|s| s == "k2 app install jobs-api   (once: the App and its port)"), "{:?}", p.next);
+    assert!(p.next.iter().any(|s| s.starts_with("k2 app expose jobs-api --tunnel") && s.contains("https://jobs-api.box.k2.dev/")), "{:?}", p.next);
+    assert!(!n.read("k2/api/README.md").contains("install jobs-api --tunnel"));
+    // A box with no K2 Connect name: no expose step at all.
+    let bare = Dir::new("tpl-node-bare");
+    let p = plan(&bare.0, "node-api", Some("jobs"), None).unwrap();
+    assert!(p.next.iter().all(|s| !s.contains("--tunnel")), "{:?}", p.next);
 }
 
 #[test]

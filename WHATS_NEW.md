@@ -51,6 +51,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Hide paths from an App role.** Beside the folders a role may reach, an App's agent (or you) can now list paths its people never see: `k2 app role paths <role> <room> --hide .k2,.env,secrets/`. A hidden path is left out of every file listing, even with hidden files shown, never shows in live file changes, and every read answers as if it weren't there, inside a permitted folder too. Nothing is hidden until you set it; `--unhide` and `--no-hide` take entries off. An agent's `.k2` folder holds its inbox and archived sessions, so hide it from roles that shouldn't read them.
 - **A rollback leaves one live deploy.** After `k2 app rollback`, history shows exactly one deploy as live, the rollback's own, with its port (the answer said "live on port None"); the deploy you went back from is marked rolled back but is not an error, so `k2 app errors` no longer lists it.
 - **Uninstalling an App clears its request log.** `k2 app requests` for an App you install again under the same id starts empty instead of showing the old install's requests.
+- **`k2 app init --template node-api` makes a server that passes the health check.** It listens on the `$HOST` K2 gives (inside the App's wall that is every address, where a server bound to 127.0.0.1 never answers), asks for no App rights it doesn't use, and its next steps install the App first, with a public URL (`k2 app expose --tunnel`) as a separate step.
 
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 

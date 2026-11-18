@@ -65,3 +65,72 @@ fn the_probe_reaches_an_app_bound_to_the_host_it_was_given() {
     let p = k2_core::deploy::health::probe_once(port, "/health", &[], Duration::from_secs(2));
     assert!(p.healthy(), "{p:?}");
 }
+
+/// 0.46.16: the server `k2 app init --template node-api` writes passes K2's
+/// health gate and its manifest checks in BOTH lanes, because it listens on
+/// exactly the `$HOST` K2 gives: `0.0.0.0` inside a wall (where a
+/// `127.0.0.1` bind never answers K2: the bug), `127.0.0.1` on the host's
+/// network. A preload records where `listen` was called; a stand-in
+/// `@k2/server` takes the place of `k2 app sdk add` (the health route never
+/// calls it). Needs `node` (22+), like the template does.
+#[test]
+fn the_node_api_template_listens_on_host_and_passes_the_health_gate() {
+    let node = std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .unwrap_or_else(|e| panic!("this test needs node (22+) on PATH: {e}"));
+    assert!(node.status.success(), "node --version failed");
+    let dir = std::env::temp_dir().join(format!("k2-node-api-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plan = k2_core::app_templates::plan(&dir, "node-api", Some("jobs"), None).expect("plan");
+    k2_core::app_templates::apply(&dir, &plan).expect("apply");
+    let api = dir.join("k2/api");
+    let sdk = api.join("node_modules/@k2/server");
+    std::fs::create_dir_all(&sdk).unwrap();
+    std::fs::write(sdk.join("package.json"), r#"{"name":"@k2/server","type":"module","exports":"./index.mjs"}"#).unwrap();
+    std::fs::write(sdk.join("index.mjs"), "export function fromEnv() { return { asGuest() { throw new Error('stand-in') } } }\n").unwrap();
+    let spy = dir.join("spy.mjs");
+    std::fs::write(
+        &spy,
+        "import net from 'node:net'\nconst listen = net.Server.prototype.listen\nnet.Server.prototype.listen = function (...a) {\n  process.stderr.write('K2_LISTEN ' + JSON.stringify(a.filter((x) => typeof x !== 'function')) + '\\n')\n  return listen.apply(this, a)\n}\n",
+    )
+    .unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(api.join("manifest.json")).unwrap()).unwrap();
+    let checks = crate::apps::checks::parse(&manifest).expect("the template's checks parse");
+    assert!(!checks.is_empty(), "the template ships its health check");
+
+    for host in [IN_CONTAINER, ON_HOST_NETWORK] {
+        let port = k2_core::test_env::loopback_test_port();
+        let mut child = std::process::Command::new("node")
+            .arg("--import")
+            .arg(format!("file://{}", spy.display()))
+            .arg("server.mjs")
+            .current_dir(&api)
+            .env("PORT", port.to_string())
+            .env(HOST_ENV, host)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("node server.mjs");
+        let gate = k2_core::deploy::health::wait_healthy(
+            port,
+            "/healthz",
+            &[],
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+            Duration::from_secs(20),
+            || true,
+        );
+        let outcomes = crate::apps::checks::run("jobs-api", &format!("http://127.0.0.1:{port}"), &checks);
+        let _ = child.kill();
+        let out = child.wait_with_output().expect("node output");
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(gate.is_ok(), "HOST={host}: the health gate: {:?}; node said: {stderr}", gate.err().map(|g| g.message));
+        assert!(outcomes.iter().all(|o| o.ok), "HOST={host}: the manifest checks: {outcomes:?}");
+        assert!(
+            stderr.contains(&format!("K2_LISTEN [{port},\"{host}\"]")),
+            "HOST={host}: the server must listen on exactly $HOST:$PORT; node said: {stderr}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

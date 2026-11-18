@@ -1536,13 +1536,15 @@ mod tests {
 
     #[test]
     fn a_missing_event_is_the_masked_not_found_with_the_callers_token() {
-        let m = Mock::new(vec![(404, json!({"error":{"code":"ErrorItemNotFound","message":"not found"}}))]);
+        // GC-9: a miss is asked twice (immutable ids, then the old form).
+        let nf = json!({"error":{"code":"ErrorItemNotFound","message":"not found"}});
+        let m = Mock::new(vec![(404, nf.clone()), (404, nf)]);
         let r = show_with(&cal(&m), &inbox(Level::Read), "E404", "ev_the_token");
         assert!(r.status.starts_with("404"));
         assert_eq!(code(&r), "not_found");
         assert!(r.body.contains("ev_the_token"), "{}", r.body);
         assert!(!r.body.contains("ErrorItemNotFound"), "Graph's text isn't echoed: {}", r.body);
-        let m = Mock::new(vec![(404, json!({}))]);
+        let m = Mock::new(vec![(404, json!({})), (404, json!({}))]);
         let r = delete_with(&cal(&m), &inbox(Level::Draft), "E404", "ev_the_token");
         assert_eq!(code(&r), "not_found");
     }

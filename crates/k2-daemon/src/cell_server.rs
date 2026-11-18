@@ -450,7 +450,7 @@ mod unix_impl {
         if peer_hung_up(&stream) {
             log_debug!(
                 "[hook-scoped] cell sock {this_session_id}: {method} {path} not run: the caller hung up \
-                 before K2 read the request (it waited in the socket's queue)"
+                 before the daemon read the request (it waited in the socket's queue)"
             );
             return;
         }

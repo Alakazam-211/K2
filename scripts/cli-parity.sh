@@ -25,7 +25,9 @@
 # runs, each is checked to hold exactly as written (both sides), and the
 # gate fails, saying which one no longer holds, when either side changes.
 # No tests/cli test meets one through the binary today; one that does is
-# mapped to its difference here by name, never skipped broadly.
+# mapped to its difference here by name, never skipped broadly. (The
+# binary's own parity tests meet owner-token-with-passport:
+# crates/k5-cli/tests/whoami_parity.rs.)
 #
 # --shard I/N runs every Nth test starting at the Ith (1-based), so the
 # list can be split across jobs. Names after `--` run only those tests.
@@ -128,6 +130,7 @@ done
 # The named expected differences: "name|PRD reference|what differs".
 EXPECTED_DIFFS=(
     "version-offline|13.9 #3|--version with no port or token: bash refuses (exit 1, \"Error: Cannot connect to K2.\"); the binary prints \"k2 <version>\" (exit 0), as help, --schema and --version never need the daemon"
+    "owner-token-with-passport|13.9 #4|an open verb (whoami) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
 )
 
 # check_version_offline: both CLIs run `--version` with a temp HOME and no
@@ -152,6 +155,65 @@ check_version_offline() {
             || problems+=("the binary as $name printed '$(head -c 200 "$out")', want exactly 'k2 $cli_version'")
         [ ! -s "$err" ] || problems+=("the binary as $name wrote on stderr: $(head -c 200 "$err")")
     done
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_owner_token_with_passport: both CLIs run `whoami --json` with a
+# passport, K2_HOOK_SOCK set (no socket there, so both go over TCP) and
+# the owner token on disk, against a stub that logs each request's token.
+check_owner_token_with_passport() {
+    local d="$WORK/owner-token" port="" pid rc side tok problems=()
+    local owner="owner-tok-parity" passport="sessP.parity1"
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf '%s\n' "$owner" >"$d/home/.k2/heartbeat.token"
+    python3 -I -c '
+import json, os, sys, urllib.parse
+from http.server import BaseHTTPRequestHandler, HTTPServer
+d = sys.argv[1]
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        with open(os.path.join(d, "log"), "a") as f:
+            f.write((q.get("token") or [""])[0] + "\n")
+        body = json.dumps({"role": "canonical"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+s = HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(d, "port.tmp"), "w").write(str(s.server_port))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+s.serve_forever()
+' "$d" &
+    pid=$!
+    for _ in $(seq 1 100); do [ -s "$d/port" ] && break; sleep 0.05; done
+    port="$(cat "$d/port" 2>/dev/null || true)"
+    if [ -z "$port" ]; then
+        kill "$pid" 2>/dev/null || true
+        echo "the stub daemon didn't start"
+        return 1
+    fi
+    for side in bash binary; do
+        : >"$d/log"
+        rc=0
+        if [ "$side" = bash ]; then set -- bash "$ROOT/cli/k2"; else set -- "$WORK/bin/k5"; fi
+        (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" K2_PORT="$port" K2_HOOK_TOKEN="$passport" \
+            K2_HOOK_SOCK="$d/no-socket" "$@" whoami --json) >"$d/out" 2>&1 </dev/null || rc=$?
+        tok="$(cat "$d/log")"
+        [ "$rc" = 0 ] || problems+=("$side exited $rc: $(head -c 200 "$d/out")")
+        if [ "$side" = bash ]; then
+            [ "$tok" = "$owner" ] || problems+=("bash sent token '$tok', want the owner token")
+        else
+            [ "$tok" = "$passport" ] || problems+=("the binary sent token '$tok', want the passport")
+        fi
+    done
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1

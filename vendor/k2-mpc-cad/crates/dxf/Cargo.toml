@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-dxf"
-version = "0.3.0"
+version = "0.4.0"
 description = "Reads 2D drawings in ASCII DXF, byte-exact: a type pack for the multiplayer kit."
 edition.workspace = true
 rust-version.workspace = true

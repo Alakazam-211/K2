@@ -1,5 +1,106 @@
 # Changelog
 
+## v0.4.0: pairs with kit v0.22.0
+
+**Requires `k2-mpc-base` v0.22.0**, checked out beside this repo, as v0.3.0 does; no kit change.
+The crates are 0.4.0; `Cargo.lock` and `fuzz/Cargo.lock` name that kit. A minor bump: two
+changes are breaking under 0.x (below). **Unchanged:** the structure index's format (4, nothing
+to re-index), the schema tags (`cad.drawing.header/1`, `cad.drawing.page/1`, `cad.change/1`)
+and the verbs' argument parsing.
+
+### Breaking
+- **A DWG `draw page` row's `edit` is `read-only`.** v0.3.0 gave a DWG row the edit word the
+  model's facts gave it, as a DXF row has; DWG is read-only (no edit verb changes a DWG file),
+  so every DWG row now says `read-only`, a new word of the closed set: `EDIT_WORDS` has 19 words
+  (18 in v0.3.0). `cad-measure dwg-draw-compare` names a DWG row's `read-only` edit as a known,
+  format-specific item (counted). Row `dwg_rows_read_only`, plant `DwgEditNull`.
+- **`k2-mpc-dwg`'s Rust API: public fields added to structs a caller can build.** A struct
+  literal of these outside the crate no longer compiles: `entities::Entity::extra_handle_bits`,
+  `entities::MTextData::redundant`, `tables::Entry::state`, `header::HeaderVars::clayer` and
+  `header::HeaderVars::extra_string_bits`. `cargo-semver-checks` against v0.3.0 reports them
+  (`constructible_struct_adds_field`).
+
+### Fixed: the DWG reader
+- **An external reference's block record was left out of the drawing.** An external
+  reference's block record (attached or overlaid) owns no entities and writes no count of them.
+  v0.3.0 read a count for every block record, so from such a record's base point on every field
+  was off, the record missed its data's exact end, and the drawing left it out: the external
+  reference was missing from the blocks (its name, kind, base point and path) and from the
+  drawing's external references, and an insert of it named no block. The file still opened.
+  Now the count is read only for a record that is not an external reference. Row
+  `xref_block_records` (a 2018 attached and a 2004 overlaid reference), plant
+  `XrefOwnedCountRead`.
+
+### Changed: the DWG reader reads every field and handle the format names
+- **A 2007 and later table entry's short** after its name is read as a short (`Entry::state`),
+  where v0.3.0 read two bits (the same bits for the short's two-bit forms, 0 and 256; any other
+  value would have missed the entry's exact end). From 2007, a layer's xref dependence is read
+  from its entry state (bit 256) as well as from a `|` in its name. Rows `entry_states`,
+  `entry_state_dependent`; plants `EntryStateAsTwoBits`, `EntryDependentBitIgnored`.
+- **Whole handle streams**: a 2013 and later layer's visual style, a dimension style's
+  arrowheads (and from 2007 its linetypes), a viewport's coordinate systems (and from 2007 its
+  background, visual style, shade plot and sun), a 2018 multiline text's application and an
+  image's or wipeout's reactor are read. Data past them is never refused;
+  `DwgDrawing::tolerated()` counts the objects that carry it. Rows
+  `layer_without_visual_style_refused`,
+  `dimension_styles`, `hatches_dimensions_viewports`; plants `LayerVisualStyleSkipped`,
+  `TrailingHandlesSkipped`, `EntityTrailingHandlesSkipped`.
+- **The header's texts from 2007** include `MENUNAME`, read in its place, so every later text
+  is the one named; texts past the format's are tolerated and counted
+  (`HeaderVars::extra_string_bits`). Row `header_variables_2018`, plant
+  `HeaderMenuNameSkipped`.
+- **What the stricter reads refuse.** A table entry whose handle stream stops before the
+  handles the format names is refused cut short (`DWG-E002`): a layer, linetype, text style,
+  registered application or block record so refused is left out of the drawing, and a
+  dimension style keeps its name alone (without its arrowhead settings); an entity so refused
+  keeps its common data alone (without geometry). **A 2007 and later header whose string
+  stream stops before the texts the format names refuses the whole file** (`DWG-E002`).
+- The rows' hand-packed objects are packed to these layouts; the rows whose inputs or
+  assertions changed are listed in the commit that changed them.
+
+### Added
+- **The read report counts what the drawing leaves out or keeps in part**, so a host can say
+  so: `DwgDrawing::tolerated()` gives `entries_left_out` (registered applications, linetypes,
+  text styles, layers and block records whose read refused, and dimension styles whose name
+  doesn't read either), `dimstyles_name_only`, `entities_common_only` and `entities_left_out`
+  (an entity whose common data refused too), beside the data past the format it already
+  counted. Rows `left_out_entries_counted`, `fixture_read_report`; plant `LeftOutUncounted`.
+- **The draw header, for block insert and adds.** Each of `draw header`'s `blocks` states
+  `dynamic` and `annotative` (`true`/`false`, judged exactly as `block insert` refuses them: one
+  function, `DXF-E044` and `DXF-E051`), and `attdefs`: its attribute definitions in the file's
+  order, `{tag, default, constant, prompt}` (an insert form asks for the settable ones). Row
+  `header_blocks_match_block_insert`, plant `HeaderDynamicMissed`.
+- The header states `current_layer`: `$CLAYER` by the layers list's address (`@h:<HEX>`), the
+  layer `entity add` and `block insert` put an entity on when no `--layer` is named; null when
+  the file names none. Row `entity_add_lands_on_current_layer`, plant `CurrentLayerAsZero`.
+- **The draw header from a DWG file states what a DXF file's does:** `current_layer` (the
+  header's `CLAYER`), each block's `dynamic` (from the model), `attdefs` (its attribute
+  definitions in its own order) and `annotative` (its record's, its `BLOCK`'s or a settable
+  attribute definition's `AcadAnnotative` extension data, its second short not 0), as the DXF
+  read judges them. Rows `header_variables_2018`, `attdef_infos`, `block_annotative_mark`;
+  plants `CurrentLayerUnread`, `AttdefsUnread`, `AnnotativeEedIgnored`.
+- A negative value is a value: `entity rotate --by -90` (and `--by=-90`) through the kit is a
+  turn of -90 degrees, the same bytes as `--by 270`; neither the kit nor the verb takes `-90` for
+  a flag (the kit's parsing, unchanged; a row now holds it). Row
+  `rotate_negative_through_the_kit`.
+- `block insert` now judges a block's annotative mark before its attribute definitions'
+  multi-line and field refusals.
+
+### Tests and notices
+- One DWG fixture: `crates/dwg/tests/data/draw_sampler.dwg` (the sampler's own drawing as a
+  2018 DWG, 11852 bytes), made once by our own test tooling, not by any vendor's software, and
+  cleared by its sha256; `MANIFEST.md` beside it and `PROVENANCE.md` say what it is and where it
+  came from, and `NOTICE.md` names it. Row `dwg_fixture_draws_as_its_dxf`
+  (`crates/cad-measure/tests/dwg_fixture.rs`) reads it and compares its drawing with the
+  sampler's DXF: every row matched, no difference, the known items a viewport's on flag and
+  every row's `read-only` edit. Nothing in this repo writes DWG.
+- Test tooling: `cad-measure dwg-strict [--detail] FILE...` reads every object to its data's
+  end and through its handle stream and prints counts only, each file named by its place in
+  the arguments (`F1`, `F2`, ...), never by its name: what each file's reads tolerated and left
+  out; for each 2007 entry short, the entries with each value and how many of them have a `|`
+  in their name; the block records read as external references; and a failing block record's
+  flag bits. Row `dwg_strict_names_files_by_index`.
+
 ## v0.3.0: pairs with kit v0.22.0
 
 **Requires `k2-mpc-base` v0.22.0**, checked out beside this repo, as v0.2.0 does; no kit change.

@@ -25,6 +25,8 @@ pub struct DxfDrawing<'a> {
     s: Structure<'a>,
     doc: Doc,
     tables: DrawTables,
+    /// Objects by handle, for a block's marks.
+    objects: std::collections::HashMap<u64, usize>,
 }
 
 impl<'a> DxfDrawing<'a> {
@@ -34,7 +36,13 @@ impl<'a> DxfDrawing<'a> {
         let s = structure::walk(t, limits)?;
         let doc = convert::doc(&s);
         let tables = tables(&s, &doc);
-        Ok(DxfDrawing { s, doc, tables })
+        let objects = crate::edit::object_index(&s);
+        Ok(DxfDrawing {
+            s,
+            doc,
+            tables,
+            objects,
+        })
     }
 }
 
@@ -53,6 +61,52 @@ impl DrawSource for DxfDrawing<'_> {
 
     /// The edit verbs' own rules ([`crate::edit::rules`]), so a row's `edit` is exactly what
     /// a verb refuses: the drawing's facts first, then the entity's.
+    /// The block's `ATTDEF`s in its definition, in the file's order.
+    fn attdefs(&self, b: usize) -> Option<Vec<k2_mpc_cad_model::draw::AttDefInfo>> {
+        let s = &self.s;
+        let def = crate::edit::insert::definition(s, &self.doc.blocks[b].name)?;
+        let mut out = Vec::new();
+        for &k in &def.ents {
+            let u = &s.entities[k].head;
+            if u.kind != "ATTDEF" {
+                continue;
+            }
+            let v = pairs(s, u);
+            let get = |c: i32| {
+                v.iter()
+                    .rev()
+                    .find(|(x, _)| *x == c)
+                    .map(|(_, t)| t.to_string())
+                    .unwrap_or_default()
+            };
+            let flags: i64 = get(70).trim().parse().unwrap_or(0);
+            out.push(k2_mpc_cad_model::draw::AttDefInfo {
+                tag: get(2).trim().to_owned(),
+                default: unescape(&get(1)).into_owned(),
+                constant: flags & 2 != 0,
+                prompt: get(3),
+            });
+        }
+        Some(out)
+    }
+
+    /// The edit verbs' own judgement of a block's marks (`edit::insert::marks`): what
+    /// `block insert` refuses by.
+    fn block_marks(&self, b: usize) -> (Option<bool>, Option<bool>) {
+        let m = crate::edit::insert::marks(&self.s, &self.doc, &self.objects, b);
+        let dynamic = m.dynamic && !crate::mutant::active("HeaderDynamicMissed");
+        (Some(dynamic), Some(m.annotative))
+    }
+
+    /// `$CLAYER`, the layer the adds and inserts default to.
+    fn current_layer(&self) -> Option<usize> {
+        if crate::mutant::active("CurrentLayerAsZero") {
+            return self.doc.layer_named("0");
+        }
+        let name = self.s.var_value("$CLAYER", 8)?;
+        self.doc.layer_named(name.trim())
+    }
+
     fn edit(&self, i: usize) -> Option<&'static str> {
         use crate::error;
         let doc = &self.doc;

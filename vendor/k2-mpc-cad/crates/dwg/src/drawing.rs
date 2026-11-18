@@ -11,9 +11,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use k2_mpc_base::index::{Digest, DigestStream};
 use k2_mpc_cad_model::draw::{
-    AttribRaw, DimOverrides, DimStyle, DrawSource, DrawTables, Edge, Ent, Geom, Gradient, HatchRaw,
-    LayerDraw, LayoutInfo, Linetype, LoopRaw, LtElement, MTextRaw, Paper, PatLine, SplineRaw,
-    TextRaw, TextStyle, Vert, Viewport, XrefPath,
+    AttDefInfo, AttribRaw, DimOverrides, DimStyle, DrawSource, DrawTables, Edge, Ent, Geom,
+    Gradient, HatchRaw, LayerDraw, LayoutInfo, Linetype, LoopRaw, LtElement, MTextRaw, Paper,
+    PatLine, SplineRaw, TextRaw, TextStyle, Vert, Viewport, XrefPath,
 };
 use k2_mpc_cad_model::geom::{self, Acc};
 use k2_mpc_cad_model::{
@@ -35,6 +35,8 @@ const NEXT: &str = "the file is damaged: open a copy the app that made it saves 
 /// where each entity's object sits. A host keeps one per version while a viewer pages through
 /// it, or opens one per call.
 pub struct DwgDrawing {
+    /// What the read tolerated: data past what the format names, never refused.
+    tolerated: Tolerated,
     objects: Vec<u8>,
     ver: Ver,
     classes: Vec<Class>,
@@ -45,8 +47,62 @@ pub struct DwgDrawing {
     /// Colour-book colours, by handle.
     books: HashMap<u64, tables::DbColor>,
     names: Names,
+    /// The current layer's handle (`CLAYER`), when the header names one.
+    clayer: Option<u64>,
+    /// Per block record: its attribute definitions, in its own order.
+    attdefs: Vec<Vec<AttDefInfo>>,
+    /// Per block record: whether its record, its BLOCK or a settable attribute definition of it
+    /// carries the annotative mark.
+    annotative: Vec<bool>,
     doc: Doc,
     tables: DrawTables,
+}
+
+/// What a read tolerated and counted without refusing the file: data a newer or another writer
+/// may add past what the format names, and the table entries and entities whose own read
+/// refused, which the drawing leaves out or keeps in part (a host can say so).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Tolerated {
+    /// The header's string stream: bits past the texts the format names.
+    pub header_extra_string_bits: usize,
+    /// Objects (layers, dimension styles, entities) whose handle stream holds data past every
+    /// handle the format names for their kind.
+    pub objects_extra_handles: usize,
+    /// Table entries left out of the drawing, their read refused: registered applications,
+    /// linetypes, text styles, layers and block records, and dimension styles whose name doesn't
+    /// read either.
+    pub entries_left_out: usize,
+    /// Dimension styles whose settings' read refused, kept by their name alone (no arrowhead
+    /// settings).
+    pub dimstyles_name_only: usize,
+    /// Entities whose kind's read refused, kept with their common data alone (no geometry).
+    pub entities_common_only: usize,
+    /// Entities left out of the drawing: their kind's read refused, and their common data's too.
+    pub entities_left_out: usize,
+}
+
+/// A table entry's read, as the drawing keeps it: the entry when it reads; `None` when its
+/// object doesn't open (it isn't counted: the table's order already leaves out an entry whose
+/// object doesn't open as its kind) or when its read refused, which `left_out` counts.
+pub fn count_left_out<T>(read: Option<Result<T, CadError>>, left_out: &mut usize) -> Option<T> {
+    match read {
+        Some(Ok(v)) => Some(v),
+        Some(Err(_)) => {
+            if !mutant::active("LeftOutUncounted") {
+                *left_out += 1;
+            }
+            None
+        }
+        None => None,
+    }
+}
+
+/// What an entity's read cut: its kind's read refused (`common_only`), and its common data's
+/// too (`left_out`).
+#[derive(Default)]
+struct Cut {
+    common_only: bool,
+    left_out: bool,
 }
 
 /// Names by handle: layers, linetypes, text styles, block records, dimension styles,
@@ -187,6 +243,10 @@ impl DwgDrawing {
         }
         let hmax = entries.iter().map(|e| e.handle).max();
         let mut d = DwgDrawing {
+            tolerated: Tolerated {
+                header_extra_string_bits: hv.extra_string_bits,
+                ..Tolerated::default()
+            },
             objects,
             ver,
             classes: cls,
@@ -195,6 +255,9 @@ impl DwgDrawing {
             max_objects: limits.max_objects,
             books: HashMap::new(),
             names: Names::default(),
+            clayer: Some(hv.clayer).filter(|h| *h != 0),
+            attdefs: Vec::new(),
+            annotative: Vec::new(),
             doc: Doc {
                 format: "dwg",
                 version: c.version.clone(),
@@ -240,6 +303,12 @@ impl DwgDrawing {
         };
         d.read_tables(&by_type)?;
         Ok(d)
+    }
+
+    /// What the read tolerated and counted: data past what the format names, and the entries
+    /// and entities left out or kept in part.
+    pub fn tolerated(&self) -> Tolerated {
+        self.tolerated
     }
 
     fn obj(&self, h: u64) -> Option<frame::Obj<'_>> {
@@ -301,12 +370,20 @@ impl DwgDrawing {
         }
         // registered applications, and dimension styles (a leader's arrowhead settings)
         for &h in by_type.get(&0x43).map(Vec::as_slice).unwrap_or(&[]) {
-            if let Some(Ok(e)) = self.obj(h).map(|mut o| tables::appid(&mut o)) {
+            let r = self.obj(h).map(|mut o| tables::appid(&mut o));
+            if let Some(e) = count_left_out(r, &mut self.tolerated.entries_left_out) {
                 self.names.app.insert(h, e.name);
             }
         }
         for h in self.ordered(0x44, 0x45, 0, by_type) {
-            match self.obj(h).map(|mut o| tables::dimstyle(&mut o)) {
+            let read = self.obj(h).map(|mut o| {
+                let r = tables::dimstyle(&mut o);
+                (tables::extra_handle_bits(&o), r)
+            });
+            if read.as_ref().is_some_and(|(x, r)| *x > 0 && r.is_ok()) {
+                self.tolerated.objects_extra_handles += 1;
+            }
+            match read.map(|(_, r)| r) {
                 Some(Ok(d)) => {
                     self.names.dimstyle.insert(h, d.entry.name.clone());
                     self.tables.dimstyles.push(DimStyle {
@@ -316,9 +393,13 @@ impl DwgDrawing {
                         leader_arrow: d.leader_arrow,
                     });
                 }
+                // the object doesn't open: left out, uncounted (as `count_left_out`)
+                None => {}
                 // its settings refused: its name alone
-                _ => {
-                    if let Some(Ok(n)) = self.obj(h).map(|mut o| tables::dimstyle_name(&mut o)) {
+                Some(Err(_)) => {
+                    let r = self.obj(h).map(|mut o| tables::dimstyle_name(&mut o));
+                    if let Some(n) = count_left_out(r, &mut self.tolerated.entries_left_out) {
+                        self.tolerated.dimstyles_name_only += 1;
                         self.names.dimstyle.insert(h, n.clone());
                         self.tables.dimstyles.push(DimStyle {
                             name: n,
@@ -345,7 +426,8 @@ impl DwgDrawing {
             }
         }
         for h in lt_order {
-            if let Some(Ok(l)) = self.obj(h).map(|mut o| tables::ltype(&mut o)) {
+            let r = self.obj(h).map(|mut o| tables::ltype(&mut o));
+            if let Some(l) = count_left_out(r, &mut self.tolerated.entries_left_out) {
                 self.names.ltype.insert(h, l.entry.name.clone());
                 lts.push((h, l));
             }
@@ -355,8 +437,8 @@ impl DwgDrawing {
         for h in self.ordered(0x34, 0x35, 0, by_type) {
             let r = self
                 .obj(h)
-                .map(|mut o| (o.eed.clone(), tables::style(&mut o)));
-            if let Some((eed, Ok(s))) = r {
+                .map(|mut o| tables::style(&mut o).map(|s| (o.eed.clone(), s)));
+            if let Some((eed, s)) = count_left_out(r, &mut self.tolerated.entries_left_out) {
                 self.names.style.insert(h, s.entry.name.clone());
                 sts.push((h, s, eed));
             }
@@ -364,10 +446,15 @@ impl DwgDrawing {
         // layers
         let mut lys: Vec<(u64, LayerRec, Vec<Eed>)> = Vec::new();
         for h in self.ordered(0x32, 0x33, 0, by_type) {
-            let r = self
-                .obj(h)
-                .map(|mut o| (o.eed.clone(), tables::layer(&mut o)));
-            if let Some((eed, Ok(l))) = r {
+            let r = self.obj(h).map(|mut o| {
+                let l = tables::layer(&mut o);
+                (o.eed.clone(), tables::extra_handle_bits(&o), l)
+            });
+            if r.as_ref().is_some_and(|(_, x, l)| *x > 0 && l.is_ok()) {
+                self.tolerated.objects_extra_handles += 1;
+            }
+            let r = r.map(|(eed, _, l)| l.map(|l| (eed, l)));
+            if let Some((eed, l)) = count_left_out(r, &mut self.tolerated.entries_left_out) {
                 self.names.layer.insert(h, l.entry.name.clone());
                 lys.push((h, l, eed));
             }
@@ -375,14 +462,16 @@ impl DwgDrawing {
         // block records: model space and paper space after the others in the control object
         let mut bhs: Vec<(u64, BlockHeader)> = Vec::new();
         let mut rep: HashMap<u64, u64> = HashMap::new();
+        let mut record_eed: HashMap<u64, Vec<Eed>> = HashMap::new();
         for h in self.ordered(0x30, 0x31, 2, by_type) {
             let r = self
                 .obj(h)
-                .map(|mut o| (o.eed.clone(), tables::block_header(&mut o)));
-            if let Some((eed, Ok(b))) = r {
+                .map(|mut o| tables::block_header(&mut o).map(|b| (o.eed.clone(), b)));
+            if let Some((eed, b)) = count_left_out(r, &mut self.tolerated.entries_left_out) {
                 if let Some(t) = dynamic_target(&eed, &self.names.app) {
                     rep.insert(h, t);
                 }
+                record_eed.insert(h, eed);
                 self.names.block.insert(h, b.entry.name.clone());
                 bhs.push((h, b));
             }
@@ -587,6 +676,35 @@ impl DwgDrawing {
             });
         }
         let nblocks = self.doc.blocks.len();
+        // each block record's attribute definitions and annotative mark (its record's, its
+        // BLOCK's or a settable attribute definition's extension data), as the DXF read judges
+        // them
+        let mut attdefs = vec![Vec::new(); nblocks];
+        let mut annotative = vec![false; nblocks];
+        for (bi, (h, b)) in bhs.iter().enumerate() {
+            let mut annot = record_eed
+                .get(h)
+                .is_some_and(|e| annotative_eed(e, &self.names.app));
+            let decode = |x: u64| {
+                let at = *self.loc.get(&x)?;
+                entities::entity(&self.objects, at, self.ver, &self.classes).ok()
+            };
+            if let Some(be) = b.block_entity.and_then(decode) {
+                annot |= annotative_eed(&be.eed, &self.names.app);
+            }
+            for &x in &b.entities {
+                let Some(e) = decode(x) else { continue };
+                if let Some(info) = attdef_info(&e) {
+                    if !info.constant {
+                        annot |= annotative_eed(&e.eed, &self.names.app);
+                    }
+                    attdefs[bi].push(info);
+                }
+            }
+            annotative[bi] = annot;
+        }
+        self.attdefs = attdefs;
+        self.annotative = annotative;
         self.tables.layouts = vec![LayoutInfo::default(); nblocks];
         self.tables.sortents = vec![None; nblocks];
 
@@ -597,8 +715,18 @@ impl DwgDrawing {
                 let Some(&at) = self.loc.get(&h) else {
                     continue;
                 };
-                let e = self.entity_model(h, at, bi, &mut names);
-                if let Some(e) = e {
+                let mut cut = Cut::default();
+                let e = self.entity_model(h, at, bi, &mut names, &mut cut);
+                if cut.left_out && !mutant::active("LeftOutUncounted") {
+                    self.tolerated.entities_left_out += 1;
+                }
+                if let Some((e, extra)) = e {
+                    if cut.common_only {
+                        self.tolerated.entities_common_only += 1;
+                    }
+                    if extra > 0 {
+                        self.tolerated.objects_extra_handles += 1;
+                    }
                     if self.doc.entities.len() >= self.max_objects {
                         return Err(CadError::new(
                             OVER_BOUND,
@@ -717,7 +845,14 @@ impl DwgDrawing {
 
     /// The model's entity for the object `h` at `at`, in block `owner`; `None` for an object
     /// that isn't an entity (or BLOCK and ENDBLK, which the block record stands for).
-    fn entity_model(&self, h: u64, at: u64, owner: usize, names: &mut Interner) -> Option<Entity> {
+    fn entity_model(
+        &self,
+        h: u64,
+        at: u64,
+        owner: usize,
+        names: &mut Interner,
+        cut: &mut Cut,
+    ) -> Option<(Entity, usize)> {
         let o = frame::open(&self.objects, at, self.ver).ok()?;
         let (kind, is_entity) = entities::kind_of(o.kind, &self.classes)?;
         if !is_entity || kind == "BLOCK" || kind == "ENDBLK" {
@@ -725,12 +860,20 @@ impl DwgDrawing {
         }
         let decoded = entities::entity(&self.objects, at, self.ver, &self.classes);
         // a decode refused: its common data alone, when that reads
+        let mut extra_bits = 0;
         let (common, eed, body) = match decoded {
-            Ok(e) => (e.common, e.eed, Some(e.body)),
+            Ok(e) => {
+                extra_bits = e.extra_handle_bits;
+                (e.common, e.eed, Some(e.body))
+            }
             Err(_) => {
                 let mut o = o;
                 let eed = o.eed.clone();
-                let c = frame::entity_common(&mut o).ok()?;
+                let Ok(c) = frame::entity_common(&mut o) else {
+                    cut.left_out = true;
+                    return None;
+                };
+                cut.common_only = true;
                 (c, eed, None)
             }
         };
@@ -800,6 +943,7 @@ impl DwgDrawing {
                 eed: Vec::new(),
                 common: common.clone(),
                 body: b.clone(),
+                extra_handle_bits: 0,
             };
             let tb = match geom_of(&probe, &self.names, Vec::new()) {
                 Geom::Text(t) | Geom::AttDef { text: t, .. } => Some(
@@ -950,28 +1094,31 @@ impl DwgDrawing {
             .filter_map(|x| self.names.app.get(&x.app))
             .map(|n| names.get(n))
             .collect();
-        Some(Entity {
-            handle: Some(h),
-            duplicate: false,
-            kind: names.get(&dk),
-            owner: Some(owner),
-            layer: names.get(&layer),
-            props,
-            geom: geom8,
-            content,
-            record: r.finish(),
-            bbox,
-            bbox_q,
-            ocs: !up,
-            xd,
-            edit,
-            followers,
-            text: text.map(String::into_boxed_str),
-            block,
-            at: at2,
-            line_rises,
-            extra,
-        })
+        Some((
+            Entity {
+                handle: Some(h),
+                duplicate: false,
+                kind: names.get(&dk),
+                owner: Some(owner),
+                layer: names.get(&layer),
+                props,
+                geom: geom8,
+                content,
+                record: r.finish(),
+                bbox,
+                bbox_q,
+                ocs: !up,
+                xd,
+                edit,
+                followers,
+                text: text.map(String::into_boxed_str),
+                block,
+                at: at2,
+                line_rises,
+                extra,
+            },
+            extra_bits,
+        ))
     }
 
     /// An old polyline's vertices, in order: `None` when one isn't there or doesn't read as a
@@ -1748,6 +1895,63 @@ impl DrawSource for DwgDrawing {
     fn entity(&self, i: usize) -> Result<Ent, CadError> {
         self.geometry(i)
     }
+
+    fn attdefs(&self, b: usize) -> Option<Vec<AttDefInfo>> {
+        self.attdefs.get(b).cloned()
+    }
+
+    fn block_marks(&self, b: usize) -> (Option<bool>, Option<bool>) {
+        let doc = &self.doc;
+        let dynamic = doc.blocks[b].dynamic_of.is_some()
+            || doc.blocks.iter().any(|x| x.dynamic_of == Some(b));
+        (Some(dynamic), self.annotative.get(b).copied())
+    }
+
+    fn current_layer(&self) -> Option<usize> {
+        let h = self.clayer?;
+        self.doc.layers.iter().position(|l| l.handle == Some(h))
+    }
+}
+
+/// Whether extension data `eed` carries the annotative mark: its `AcadAnnotative`
+/// application's second short not 0 (a mark without it counts), as the DXF read judges it.
+pub fn annotative_eed(eed: &[Eed], apps: &HashMap<u64, String>) -> bool {
+    if mutant::active("AnnotativeEedIgnored") {
+        return false;
+    }
+    eed.iter()
+        .find(|x| {
+            apps.get(&x.app)
+                .is_some_and(|n| n.eq_ignore_ascii_case("AcadAnnotative"))
+        })
+        .is_some_and(|x| {
+            let shorts: Vec<i16> = x
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    XItem::Short(v) => Some(*v),
+                    _ => None,
+                })
+                .collect();
+            shorts.get(1).is_none_or(|v| *v != 0)
+        })
+}
+
+/// An attribute definition's tag, default value, constant flag and prompt, as a header states
+/// it; `None` for any other entity.
+pub fn attdef_info(e: &entities::Entity) -> Option<AttDefInfo> {
+    let Body::AttDef(a) = &e.body else {
+        return None;
+    };
+    if mutant::active("AttdefsUnread") {
+        return None;
+    }
+    Some(AttDefInfo {
+        tag: a.tag.trim().to_owned(),
+        default: a.text.text.clone(),
+        constant: a.flags & 2 != 0,
+        prompt: a.prompt.clone().unwrap_or_default(),
+    })
 }
 
 /// Runs `draw header` or `draw page` (the words after the verb in `args`) on a DWG file's

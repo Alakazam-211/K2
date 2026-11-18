@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-cad-measure"
-version = "0.3.0"
+version = "0.4.0"
 description = "Test tooling for the drawing packs, run in test jobs and never shipped: writes the test drawings for handle-stability measurements and reports what their headers carry."
 edition.workspace = true
 rust-version.workspace = true

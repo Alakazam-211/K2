@@ -12,6 +12,7 @@ k2-mpc-cad-model|test|model||check
 
 # ---- k2-mpc-cad-measure (test tooling, never shipped) --------------------------------------------
 k2-mpc-cad-measure|bin|cad-measure||check
+k2-mpc-cad-measure|test|dwg_fixture||check
 
 # ---- k2-mpc-dxf ---------------------------------------------------------------------------------
 k2-mpc-dxf|lib|k2_mpc_dxf||check

@@ -100,6 +100,10 @@ Test inputs are held to these conditions:
     marker must be caught;
   - its fixtures are generated when the tests run, or committed only as small synthetic files
     we made.
+- **One DWG fixture**, `tests/data/draw_sampler.dwg` (the test generator's sampler drawing as
+  a 2018 DWG), was made once by our own test tooling, which is not published, and cleared by its
+  sha256 before it was committed (`tests/data/MANIFEST.md`). Nothing in this repo writes DWG; a
+  new file is a new fixture, cleared again.
 - **Another DWG reader's command line** may be used only as a referee on our build machines,
   comparing counts.
 - **No client or user drawing** is ever a test input in this repo.

@@ -26,7 +26,7 @@
 //! `DXF-E090` when it doesn't read back as planned, and nothing is planned.
 
 pub mod check;
-mod insert;
+pub(crate) mod insert;
 mod num;
 mod ops;
 pub mod rules;
@@ -150,17 +150,7 @@ impl<'s, 'a> Cx<'s, 'a> {
             .enumerate()
             .filter_map(|(i, e)| e.handle.map(|h| (h, i)))
             .collect();
-        let objects = s
-            .objects
-            .iter()
-            .enumerate()
-            .filter_map(|(i, u)| {
-                (u.first + 1..u.end)
-                    .find(|&p| s.tok.pairs[p].code == 5)
-                    .and_then(|p| handle::parse(s.tok.value(p)))
-                    .map(|h| (h, i))
-            })
-            .collect();
+        let objects = object_index(s);
         let mut hmax = doc.hmax.unwrap_or(0);
         if mutant::active("HmaxOwnedOnly") {
             hmax = (0..s.tok.pairs.len())
@@ -257,6 +247,20 @@ fn unit_flag(word: &str) -> &str {
     } else {
         word
     }
+}
+
+/// Each object of `s` (in [`Structure::objects`]) by its handle.
+pub(crate) fn object_index(s: &Structure<'_>) -> HashMap<u64, usize> {
+    s.objects
+        .iter()
+        .enumerate()
+        .filter_map(|(i, u)| {
+            (u.first + 1..u.end)
+                .find(|&p| s.tok.pairs[p].code == 5)
+                .and_then(|p| handle::parse(s.tok.value(p)))
+                .map(|h| (h, i))
+        })
+        .collect()
 }
 
 /// Code page 1252's bytes 0x80 to 0x9F, as characters.

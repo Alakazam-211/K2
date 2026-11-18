@@ -323,7 +323,9 @@ pub fn texts() {
     );
     f.extend([bd(30.0), bd(0.0), bd(0.0), bd(0.0)].concat());
     f.extend(bs(0));
-    let e = read(v, ent(v, 0x2C, 0x35, &c, f, tu("Line\\Pnext"), h(5, 0x11)));
+    // its style, then its redundant fields' application
+    let own = [h(5, 0x11), h(5, 0)].concat();
+    let e = read(v, ent(v, 0x2C, 0x35, &c, f, tu("Line\\Pnext"), own));
     let Body::MText(m) = e.body else {
         panic!("not a multiline text: {:?}", e.body)
     };
@@ -372,7 +374,8 @@ pub fn mtext_column_heights() {
     f.extend([bd(30.0), bd(0.0), bd(20.0), bd(4.5)].concat());
     f.extend([bs(2), bl(2), bd(12.0), bd(2.0), b(false), b(false)].concat());
     f.extend([bd(-4.5), bd(6.0)].concat());
-    let e = read(v, ent(v, 0x2C, 0x37, &c, f, tu("A"), h(5, 0x11)));
+    let own = [h(5, 0x11), h(5, 0)].concat();
+    let e = read(v, ent(v, 0x2C, 0x37, &c, f, tu("A"), own));
     let Body::MText(m) = e.body else {
         panic!("not a multiline text: {:?}", e.body)
     };
@@ -718,7 +721,16 @@ pub fn hatches_dimensions_viewports() {
         ]
         .concat(),
     );
+    // its frozen layers, its clip boundary, then (2004) its named and base coordinate systems
     let own = [h(4, 0x80), h(4, 0x81), h(4, 0x82), h(5, 0), h(5, 0)].concat();
+    // without its base coordinate system, cut short
+    let short = [h(4, 0x80), h(4, 0x81), h(4, 0x82), h(5, 0)].concat();
+    let cut = ent(v, 0x22, 0x75, &c, f.clone(), vec![], short);
+    refused(
+        entity(&cut.0, cut.1, v, &[]),
+        "DWG-E002",
+        "a viewport whose handles stop before its base coordinate system",
+    );
     let e = read(v, ent(v, 0x22, 0x75, &c, f, vec![], own));
     let Body::Viewport(p) = e.body else {
         panic!("not a viewport: {:?}", e.body)

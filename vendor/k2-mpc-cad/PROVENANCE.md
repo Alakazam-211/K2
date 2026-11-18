@@ -27,6 +27,7 @@ of data: the colour-number palette (its row below).
 | `crates/dxf/src/draw.rs` (each kind's raw drawing values, the tables the drawing-model read uses) | the DXF reference, read as a specification; our own code |
 | `crates/dxf/src/edit/` (the edit verbs: the planner, the writer, the rules, the self-check, exact decimal numbers) | our own code, written from the DXF reference read as a specification. The writer makes byte patches keyed by handle: value lines replaced, whole pairs inserted or removed, every other byte the input's; new handles above every handle the file owns or points at. No header field is written except `$HANDSEED`, and no identity is written: no `$LASTSAVEDBY`, no GUID, no clock and no application identity |
 | `scripts/referee/ezdxf-edits.py` (the edit verbs' referee) | our own test code: test-only, run on test machines, its output compared (`cad-measure edit-referee`), never shipped. It runs ezdxf as a separate program, pinned in `scripts/referee/requirements.txt` |
+| `crates/dwg/tests/data/draw_sampler.dwg` (the one DWG fixture; its manifest beside it) | draw_sampler.dwg: made by dwg-fixture-gen (our own test tooling, not published, commit 5358cb1b529daa3087c4fa3b1301c89a5d19f703) from our own drawing (k2_mpc_dxf::testgen::draw_sampler, R2018, from the CAD pack v0.3.0), not by any vendor's software. Nothing in this repo writes DWG |
 | tests, plants, fuzz properties | our own |
 
 **Not used as sources:** no other DXF or DWG reader's or writer's source code is read or ported

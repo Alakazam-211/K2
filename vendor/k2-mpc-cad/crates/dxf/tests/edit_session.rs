@@ -1276,3 +1276,42 @@ pub fn index_format_n1() {
     }
     println!("index_format_n1: {seen:?}: not ready, MPC-E713, indexed again");
 }
+
+/// rotate_negative_through_the_kit: `entity rotate --by -90` through the kit is a turn of -90
+/// degrees (the kit takes no `-90` for a flag of its own, nor does the verb), the same bytes as
+/// `--by 270`, and `--by=-90` is the same again.
+#[test]
+pub fn rotate_negative_through_the_kit() {
+    let b = testgen::edit_sampler(Ver::R2018).build();
+    let lamp = b.addr("lamp");
+    let want = k2_mpc_dxf::edit::plan(
+        &b.bytes,
+        "entity rotate",
+        &[&lamp, "--by", "270", "--about", "0,0", "--unit", "mm"],
+    )
+    .unwrap()
+    .output;
+    let mut seen = Vec::new();
+    for by in [vec!["--by", "-90"], vec!["--by=-90"]] {
+        let f = fx("negrot");
+        let s = f.open("plan.dxf", &b.bytes);
+        let ann = f.join(&s, "ann", ParticipantKind::Person);
+        let mut v = vec!["entity", "rotate", lamp.as_str()];
+        v.extend(by.iter().copied());
+        v.extend(["--about", "0,0", "--unit", "mm"]);
+        let o = call(&s, ann, &v);
+        assert_eq!(
+            o.exit,
+            0,
+            "rotate_negative_through_the_kit: {by:?}: {}",
+            res(&o).to_json()
+        );
+        let after = o.version_made().expect("a version");
+        assert!(
+            bytes_at(&s, ann, after) == want,
+            "rotate_negative_through_the_kit: {by:?} isn't the same turn as --by 270"
+        );
+        seen.push(by.join(" "));
+    }
+    println!("rotate_negative_through_the_kit: {seen:?} land as --by 270");
+}

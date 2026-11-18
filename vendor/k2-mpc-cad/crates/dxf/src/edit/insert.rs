@@ -10,10 +10,10 @@
 //! block doesn't define as settable (`DXF-E047`), a definition whose value is a field
 //! (`DXF-E048`) or that is multi-line (`DXF-E049`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use k2_mpc_cad_model::args::{self, Spec};
-use k2_mpc_cad_model::BlockKind;
+use k2_mpc_cad_model::{BlockKind, Doc};
 
 use super::check::{Intent, Want};
 use super::ops::{data_pairs, field_driven, first, int_of, own, place, props, raise_seed, xdicts};
@@ -23,7 +23,7 @@ use super::{encode_text, num, rules, Cx, Out};
 use crate::error::{
     CadError, ATTRIB_MISSING, ATTRIB_MULTILINE, BLOCK_NOT_INSERTABLE, DYNAMIC_GEOMETRY,
 };
-use crate::structure::Unit;
+use crate::structure::{Structure, Unit};
 use crate::{codes, handle, mutant};
 
 const BLOCK_INSERT: Spec = Spec {
@@ -46,11 +46,10 @@ fn not_insertable(why: &str, what: &str) -> CadError {
 /// Whether unit `u` carries the annotative mark set (`1001 AcadAnnotative`, then
 /// `AnnotativeData` with its version and its flag `1`). A mark of another shape is read as set:
 /// it is refused rather than placed wrong.
-fn annotative(cx: &Cx<'_, '_>, u: &Unit) -> bool {
+fn annotative(s: &Structure<'_>, u: &Unit) -> bool {
     if mutant::active("AnnotativeIgnored") {
         return false;
     }
-    let s = cx.s;
     let mut i = u.first + 1;
     while i < u.end {
         if s.tok.pairs[i].code == 1001 && s.text(i).trim().eq_ignore_ascii_case("AcadAnnotative") {
@@ -70,10 +69,9 @@ fn annotative(cx: &Cx<'_, '_>, u: &Unit) -> bool {
 }
 
 /// Whether a block record's extension dictionary marks a dynamic block (`ACAD_ENHANCEDBLOCK`).
-fn enhanced(cx: &Cx<'_, '_>, u: &Unit) -> bool {
-    let s = cx.s;
+fn enhanced(s: &Structure<'_>, objects: &HashMap<u64, usize>, u: &Unit) -> bool {
     xdicts(s, u).into_iter().any(|h| {
-        cx.objects.get(&h).is_some_and(|&o| {
+        objects.get(&h).is_some_and(|&o| {
             let ou = &s.objects[o];
             (ou.first + 1..ou.end).any(|p| {
                 s.tok.pairs[p].code == 3
@@ -81,6 +79,62 @@ fn enhanced(cx: &Cx<'_, '_>, u: &Unit) -> bool {
             })
         })
     })
+}
+
+/// What a block's own marks say: whether it is dynamic (a dynamic block's definition or one of
+/// its drawn forms, or its record's extension dictionary marks it), and whether it is
+/// annotative (its record, its `BLOCK` or one of its settable attribute definitions carries
+/// the mark). `block insert` refuses by these, and the draw header states them, so the two
+/// can't disagree.
+pub(crate) struct Marks {
+    pub dynamic: bool,
+    pub annotative: bool,
+}
+
+/// The block record `b` of `doc` (read from `s`, `objects` its object index): its [`Marks`].
+pub(crate) fn marks(
+    s: &Structure<'_>,
+    doc: &Doc,
+    objects: &HashMap<u64, usize>,
+    b: usize,
+) -> Marks {
+    let rec = &doc.blocks[b];
+    let entry = record_entry(s, rec.handle);
+    let dynamic = rec.dynamic_of.is_some()
+        || doc.blocks.iter().any(|x| x.dynamic_of == Some(b))
+        || entry.is_some_and(|e| enhanced(s, objects, e));
+    let def = definition(s, &rec.name);
+    let annotative = entry.is_some_and(|e| annotative(s, e))
+        || def.is_some_and(|d| {
+            annotative(s, &d.head)
+                || d.ents.iter().any(|&k| {
+                    let u = &s.entities[k].head;
+                    u.kind == "ATTDEF" && int_of(s, u, 70) & 2 == 0 && annotative(s, u)
+                })
+        });
+    Marks {
+        dynamic,
+        annotative,
+    }
+}
+
+/// The block record table entry with handle `h`.
+fn record_entry<'s>(s: &'s Structure<'_>, h: Option<u64>) -> Option<&'s Unit> {
+    s.table("BLOCK_RECORD").and_then(|t| {
+        t.entries
+            .iter()
+            .find(|e| own(s, e).is_some() && own(s, e) == h)
+    })
+}
+
+/// The block definition named `name`.
+pub(crate) fn definition<'s>(
+    s: &'s Structure<'_>,
+    name: &str,
+) -> Option<&'s crate::structure::BlockDef> {
+    s.blocks
+        .iter()
+        .find(|d| first(s, &d.head, 2).is_some_and(|p| s.text(p).trim().eq_ignore_ascii_case(name)))
 }
 
 /// A point of the block (`x, y` as written) placed: from the block's base, scaled by `scale`,
@@ -163,27 +217,17 @@ pub(crate) fn block_insert(
     if rec.anon {
         return Err(not_insertable("anonymous", &what));
     }
-    let dynamic = rec.dynamic_of.is_some() || doc.blocks.iter().any(|x| x.dynamic_of == Some(b));
-    let entry = s.table("BLOCK_RECORD").and_then(|t| {
-        t.entries
-            .iter()
-            .find(|e| own(s, e).is_some() && own(s, e) == rec.handle)
-    });
-    if dynamic || entry.is_some_and(|e| enhanced(cx, e)) {
+    let m = marks(s, doc, &cx.objects, b);
+    let entry = record_entry(s, rec.handle);
+    if m.dynamic {
         return Err(CadError::new(
             DYNAMIC_GEOMETRY,
             format!("{what} is a dynamic block: its references are drawn from its parameters"),
             "insert it in the app, which sets its parameters",
         ));
     }
-    let def = s
-        .blocks
-        .iter()
-        .find(|d| {
-            first(s, &d.head, 2).is_some_and(|p| s.text(p).trim().eq_ignore_ascii_case(&rec.name))
-        })
-        .ok_or_else(|| not_insertable("missing", &what))?;
-    if entry.is_some_and(|e| annotative(cx, e)) || annotative(cx, &def.head) {
+    let def = definition(s, &rec.name).ok_or_else(|| not_insertable("missing", &what))?;
+    if m.annotative {
         return Err(not_insertable("annotative", &what));
     }
     // the block's base point, as written
@@ -230,9 +274,6 @@ pub(crate) fn block_insert(
                 format!("an attribute of {what} holds a field the app computes"),
                 "insert it in the app",
             ));
-        }
-        if annotative(cx, u) {
-            return Err(not_insertable("annotative", &what));
         }
         defs.push(u);
     }

@@ -170,6 +170,9 @@ pub struct MTextData {
     /// The 2018 column data: type, count, width, gutter, automatic height, flow reversed, and
     /// each column's height (stored for dynamic columns of manual height only).
     pub columns: Option<MTextColumns>,
+    /// 2018: the redundant fields of a text that is not annotative are present, and with them
+    /// a handle (its application) after its style.
+    pub redundant: bool,
     pub style: Option<u64>,
 }
 
@@ -481,6 +484,10 @@ pub struct Entity {
     pub eed: Vec<Eed>,
     pub common: EntCommon,
     pub body: Body,
+    /// The bits its handle stream holds past every handle the format names for its kind,
+    /// beyond the last byte's padding: data another writer added, tolerated (0 for a kind read
+    /// for its common data only).
+    pub extra_handle_bits: usize,
 }
 
 pub(crate) fn bad(why: impl Into<String>, at: usize) -> CadError {
@@ -630,8 +637,10 @@ fn mtext(o: &mut Obj<'_>) -> Result<MTextData, CadError> {
         None
     };
     let mut columns = None;
+    let mut redundant = false;
     // 2018: a flag set when the text is not annotative, then its redundant fields and columns
     if o.ver >= Ver::R2018 && (o.d.b()? != mutant::active("MTextAnnotativeInverted")) {
+        redundant = true;
         o.d.bs()?;
         o.d.b()?;
         o.d.bl()?;
@@ -691,6 +700,7 @@ fn mtext(o: &mut Obj<'_>) -> Result<MTextData, CadError> {
         spacing,
         background,
         columns,
+        redundant,
         style: None,
     })
 }
@@ -1329,7 +1339,13 @@ fn body_handles(o: &mut Obj<'_>, b: &mut Body) -> Result<(), CadError> {
     match b {
         Body::Text(t) => t.style = o.h()?,
         Body::Attrib(a) | Body::AttDef(a) => a.text.style = o.h()?,
-        Body::MText(m) => m.style = o.h()?,
+        Body::MText(m) => {
+            m.style = o.h()?;
+            // its application, when its redundant fields are there (unused here)
+            if m.redundant && !mutant::active("EntityTrailingHandlesSkipped") {
+                o.h()?;
+            }
+        }
         Body::Viewport(v) => {
             let n = if mutant::active("ViewportFrozenUncounted") {
                 0
@@ -1348,6 +1364,13 @@ fn body_handles(o: &mut Obj<'_>, b: &mut Body) -> Result<(), CadError> {
                 }
             }
             v.clip = o.h()?;
+            // its named and base coordinate systems, and from 2007 its background, visual
+            // style, shade plot and sun (unused here): a viewport without them is cut short
+            if !mutant::active("EntityTrailingHandlesSkipped") {
+                for _ in 0..if o.ver.strings() { 6 } else { 2 } {
+                    o.h()?;
+                }
+            }
         }
         Body::Hatch(h) => {
             let n: usize = h.paths.iter().map(|p| p.sources as usize).sum();
@@ -1373,6 +1396,9 @@ fn body_handles(o: &mut Obj<'_>, b: &mut Body) -> Result<(), CadError> {
         // its image definition, then its definition's reactor
         Body::Image { data, .. } => {
             data.def = o.h()?;
+            if !mutant::active("EntityTrailingHandlesSkipped") {
+                o.h()?;
+            }
         }
         Body::Insert(i) => {
             i.block = o.h()?;
@@ -1426,6 +1452,11 @@ pub fn entity(
         o.finish()?;
     }
     body_handles(&mut o, &mut b)?;
+    let extra_handle_bits = if b == Body::Other {
+        0
+    } else {
+        crate::tables::extra_handle_bits(&o)
+    };
     Ok(Entity {
         handle: o.handle,
         kind,
@@ -1433,6 +1464,7 @@ pub fn entity(
         eed: o.eed,
         common,
         body: b,
+        extra_handle_bits,
     })
 }
 
@@ -1451,4 +1483,37 @@ pub fn entity_gap(
     entity_common(&mut o)?;
     let b = body(&mut o, &kind)?;
     Ok((kind, (b != Body::Other).then(|| o.gap())))
+}
+
+/// For the strict check (test tooling): entity `location`'s kind, the bits its kind's read left
+/// before its data's end (`None` for a kind read for its common data only), and its handle
+/// stream after its handles were read: the bits left and, when they fit a `u64`, their value
+/// (what follows the last handle is the byte's padding: fewer than 8 bits, all zero). The read
+/// refuses on none of these; the check reports them.
+pub fn entity_ends(
+    objects: &[u8],
+    location: u64,
+    ver: Ver,
+    classes: &[Class],
+) -> Result<(String, Option<i64>, usize, Option<u64>), CadError> {
+    let mut o = open(objects, location, ver)?;
+    let (kind, is_entity) = kind_of(o.kind, classes)
+        .ok_or_else(|| bad(format!("an object of type {} no table names", o.kind), 0))?;
+    if !is_entity {
+        return Err(bad(
+            format!("an object of type {} is not an entity", o.kind),
+            0,
+        ));
+    }
+    entity_common(&mut o)?;
+    let mut b = body(&mut o, &kind)?;
+    let gap = (b != Body::Other).then(|| o.gap());
+    body_handles(&mut o, &mut b)?;
+    let left = o.hs.left();
+    let rest = if left <= 64 {
+        Some(o.hs.bits(left as u32)?)
+    } else {
+        None
+    };
+    Ok((kind, gap, left, rest))
 }

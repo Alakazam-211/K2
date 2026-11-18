@@ -39,6 +39,7 @@
 //!   held path (Linux) beside the read path's. It prints; it asserts nothing.
 
 mod edits;
+mod strict;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -1165,8 +1166,14 @@ fn row_detail(
     out
 }
 
+/// Whether row `r` (a DWG read's) has the `read-only` edit every DWG row has: a known,
+/// format-specific difference from the DXF read's.
+fn read_only_edit(r: &k2_mpc_base::errors::Value) -> bool {
+    r.get("edit").and_then(k2_mpc_base::errors::Value::as_str) == Some("read-only")
+}
+
 /// Whether block addresses `x` (in `a`) and `y` (in `b`) are both anonymous blocks whose rows
-/// are equal but for their handles and owner.
+/// are equal but for their handles and owner (and a DWG row's `read-only` edit).
 fn same_anonymous(
     a: &dyn k2_mpc_cad_model::draw::DrawSource,
     b: &dyn k2_mpc_cad_model::draw::DrawSource,
@@ -1182,10 +1189,11 @@ fn same_anonymous(
     if !anon(a, x) || !anon(b, y) {
         return Ok(false);
     }
-    let strip = |v: &Value| match v {
+    // the handle and owner differ by design; so does a DWG row's `read-only` edit
+    let strip = |v: &Value, edit: bool| match v {
         Value::Obj(o) => Value::Obj(
             o.iter()
-                .filter(|(k, _)| !matches!(k.as_str(), "h" | "owner"))
+                .filter(|(k, _)| !matches!(k.as_str(), "h" | "owner") && (edit || k != "edit"))
                 .cloned()
                 .collect(),
         ),
@@ -1196,8 +1204,9 @@ fn same_anonymous(
         return Ok(false);
     }
     Ok(ra.iter().zip(&rb).all(|(p, q)| {
+        let edit = !read_only_edit(p);
         let mut d = Vec::new();
-        value_diffs(&strip(p), &strip(q), "", &mut d);
+        value_diffs(&strip(p, edit), &strip(q, edit), "", &mut d);
         d.is_empty()
     }))
 }
@@ -1355,6 +1364,14 @@ fn dwg_draw_compare(dwg: &Path, dxf: &Path) -> Result<(), String> {
             }
             let mut d = Vec::new();
             value_diffs(r, other, "", &mut d);
+            // known difference, by format, set aside first: a DWG row's edit is `read-only`
+            // (DWG has no edit verbs), whatever the DXF verbs would say of the same entity
+            if read_only_edit(r) && d.iter().any(|p| p.starts_with(".edit ")) {
+                d.retain(|p| !p.starts_with(".edit "));
+                *known_rows
+                    .entry("a DWG row's edit (read-only: no DWG edit verbs)")
+                    .or_default() += 1;
+            }
             if why.as_deref() == Some("not_modelled")
                 && their_why.as_deref() != Some("not_modelled")
             {
@@ -1576,6 +1593,9 @@ fn dwg_draw_compare(dwg: &Path, dxf: &Path) -> Result<(), String> {
         .entry("HATCH pattern line at its boundary (raw values equal within 1e-9)".into())
         .or_default();
     known_rows.entry("a fit-point spline").or_default();
+    known_rows
+        .entry("a DWG row's edit (read-only: no DWG edit verbs)")
+        .or_default();
     known_rows
         .entry("a leader's hook line vertex (the program's, not stored)")
         .or_default();
@@ -2417,6 +2437,7 @@ fn main() -> ExitCode {
         ["dwg-draw", file] => dwg_draw(Path::new(file), false),
         ["dwg-draw", file, "--container"] => dwg_draw(Path::new(file), true),
         ["dwg-draw-compare", dwg, dxf] => dwg_draw_compare(Path::new(dwg), Path::new(dxf)),
+        ["dwg-strict", rest @ ..] => strict::run(rest),
         ["speed", sizes @ ..] if !sizes.is_empty() => speed(sizes),
         ["speed-text", sizes @ ..] if !sizes.is_empty() => {
             speed_of(sizes, k2_mpc_dxf::testgen::sized_text)
@@ -2425,7 +2446,7 @@ fn main() -> ExitCode {
         ["draw-speed", sizes @ ..] if !sizes.is_empty() => draw_speed(sizes),
         ["draw-speed-one", file] => draw_speed_one(Path::new(file)),
         _ => {
-            Err("usage: cad-measure drawings OUT | edits OUT | edit-referee DIR | header-check DIR | h1 PAIRS | probe DIR | dwg-check DIR | dwg-entities FILE | dwg-draw FILE [--container] | dwg-draw-compare DWG DXF | referee DIR | speed N...".into())
+            Err("usage: cad-measure drawings OUT | edits OUT | edit-referee DIR | header-check DIR | h1 PAIRS | probe DIR | dwg-check DIR | dwg-entities FILE | dwg-draw FILE [--container] | dwg-draw-compare DWG DXF | dwg-strict [--detail] FILE... | referee DIR | speed N...".into())
         }
     };
     match r {

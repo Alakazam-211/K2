@@ -206,7 +206,17 @@
       "bbox_q": "approx",
       "digest": "2b5789000249db69",
       "anon": false,
-      "xref": false
+      "xref": false,
+      "dynamic": false,
+      "annotative": false,
+      "attdefs": [
+        {
+          "tag": "NO",
+          "default": "D-00",
+          "constant": false,
+          "prompt": "Door number"
+        }
+      ]
     },
     {
       "handle": "@h:2E",
@@ -217,7 +227,10 @@
       "bbox_q": "approx",
       "digest": "a7696912d43eb2d5",
       "anon": false,
-      "xref": false
+      "xref": false,
+      "dynamic": false,
+      "annotative": false,
+      "attdefs": []
     },
     {
       "handle": "@h:2F",
@@ -228,9 +241,13 @@
       "bbox_q": "approx",
       "digest": "b5f80aef01c8234a",
       "anon": true,
-      "xref": false
+      "xref": false,
+      "dynamic": false,
+      "annotative": false,
+      "attdefs": []
     }
   ],
+  "current_layer": "@h:19",
   "model_space_block": "@h:2B",
   "layouts": [
     {

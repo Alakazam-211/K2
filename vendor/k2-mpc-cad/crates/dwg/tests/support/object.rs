@@ -102,6 +102,7 @@ fn width(f: &F) -> usize {
 
 /// One object's parts: its type and handle, its extension data (`BS` 0 when none), its data,
 /// its strings (2007 and later) and its handles.
+#[derive(Clone)]
 pub struct Parts {
     pub ty: u16,
     pub handle: u64,

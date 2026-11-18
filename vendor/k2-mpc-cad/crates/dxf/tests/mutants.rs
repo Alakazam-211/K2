@@ -135,6 +135,7 @@ const PLANTS: &[(&str, Row)] = &[
     ("DrawFloatsUnrounded", draw::draw_floats_platform_identical),
     ("DrawNoiseKept", draw::draw_noise_snapped_to_zero),
     ("InBlockDrawnEditable", draw::draw_edit_matches_the_verbs),
+    ("DwgEditNull", draw::dwg_rows_read_only),
     // the edit verbs: what they write, and what they refuse that they shouldn't
     ("SpanCoversCodeLine", edit::untouched_units_exact),
     ("EditStyleLeaks", edit::style_kept),
@@ -180,6 +181,14 @@ const PLANTS: &[(&str, Row)] = &[
     ("AnnotativeReadLoose", edit::honest_edits_land),
     ("AnnotativeIgnored", edit::refusals_named),
     ("RotateNoiseKept", edit::rotate_noise_snapped),
+    (
+        "HeaderDynamicMissed",
+        edit::header_blocks_match_block_insert,
+    ),
+    (
+        "CurrentLayerAsZero",
+        edit::entity_add_lands_on_current_layer,
+    ),
     ("ProxyBlockInserted", edit::refusals_named),
     ("MergeAttribsAsOneText", edit_session::merge_and_base_agree),
 ];

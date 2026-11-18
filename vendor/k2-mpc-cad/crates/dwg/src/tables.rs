@@ -67,25 +67,41 @@ pub fn control(o: &mut Obj<'_>, extra: usize) -> Result<Vec<u64>, CadError> {
 pub struct Entry {
     pub common: ObjCommon,
     pub name: String,
-    /// Dependent on an external reference.
+    /// Dependent on an external reference: before 2007, its own flag; from 2007, the short's
+    /// bit 256 (the drawing read also takes it from a `|` in the name).
     pub xdep: bool,
+    /// From 2007, the short after the name (`BS`; 0 in every entry of the public samples, 256
+    /// in an entry an external reference brings); 0 before 2007.
+    pub state: u16,
     pub xref_block: Option<u64>,
 }
 
 fn entry(o: &mut Obj<'_>) -> Result<Entry, CadError> {
     let common = object_common(o)?;
     let name = o.tv()?;
-    o.d.b()?;
-    // the external reference index: the specification lists it for every version; from 2007
-    // the samples write none
-    if !o.ver.strings() || mutant::active("EntryXrefIndexAlways") {
+    // before 2007: the 64-flag, the external reference index plus one, the dependent flag; from
+    // 2007 one short in their place (as two bits it matches only the 2-bit forms of the short)
+    let (state, xdep) = if !o.ver.strings() {
+        o.d.b()?;
         o.d.bs()?;
-    }
-    let xdep = o.d.b()?;
+        (0, o.d.b()?)
+    } else if mutant::active("EntryStateAsTwoBits") {
+        o.d.b()?;
+        (0, o.d.b()?)
+    } else if mutant::active("EntryXrefIndexAlways") {
+        o.d.b()?;
+        o.d.bs()?;
+        (0, o.d.b()?)
+    } else {
+        let state = o.d.bs()?;
+        let dependent = state & 0x100 != 0 && !mutant::active("EntryDependentBitIgnored");
+        (state, dependent)
+    };
     Ok(Entry {
         common,
         name,
         xdep,
+        state,
         xref_block: None,
     })
 }
@@ -131,6 +147,10 @@ pub fn layer(o: &mut Obj<'_>) -> Result<LayerRec, CadError> {
         o.h()?;
     }
     let ltype = o.h()?;
+    // from 2013, its visual style (unused here): a layer without it is cut short
+    if o.ver >= Ver::R2013 && !mutant::active("LayerVisualStyleSkipped") {
+        o.h()?;
+    }
     Ok(LayerRec {
         entry,
         flags,
@@ -405,6 +425,13 @@ pub fn dimstyle(o: &mut Obj<'_>) -> Result<DimStyleRec, CadError> {
     // DIMTXSTY, then DIMLDRBLK
     o.h()?;
     let leader_arrow = o.h()?;
+    // DIMBLK, DIMBLK1, DIMBLK2, and from 2007 DIMLTYPE, DIMLTEX1, DIMLTEX2 (unused here): a
+    // style without them is cut short
+    if !mutant::active("TrailingHandlesSkipped") {
+        for _ in 0..if since2007 { 6 } else { 3 } {
+            o.h()?;
+        }
+    }
     Ok(DimStyleRec {
         entry,
         scale,
@@ -427,7 +454,7 @@ pub struct BlockHeader {
     /// Its BLOCK and ENDBLK entities.
     pub block_entity: Option<u64>,
     pub endblk: Option<u64>,
-    /// Its entities, in order.
+    /// Its entities, in order (none for an external reference's record).
     pub entities: Vec<u64>,
     pub layout: Option<u64>,
 }
@@ -439,7 +466,13 @@ pub fn block_header(o: &mut Obj<'_>) -> Result<BlockHeader, CadError> {
     let xref = o.d.b()?;
     let overlay = o.d.b()?;
     o.d.b()?;
-    let owned = o.d.bl()? as usize;
+    // the count of its entities: an external reference's record (attached or overlaid) owns
+    // none and writes no count (read as one, every later field is off and the record is lost)
+    let owned = if (xref || overlay) && !mutant::active("XrefOwnedCountRead") {
+        0
+    } else {
+        o.d.bl()? as usize
+    };
     let base = o.d.bd3()?;
     let xref_path = o.tv()?;
     let mut inserts = 0usize;
@@ -653,4 +686,16 @@ pub fn dbcolor(o: &mut Obj<'_>) -> Result<DbColor, CadError> {
         name,
         book,
     })
+}
+
+/// The bits an object's handle stream holds past the handles its kind's read takes, beyond the
+/// last byte's padding: 0 when the read took them all; more is data a newer or another writer
+/// added, which the reads tolerate and the drawing counts ([`crate::drawing::Tolerated`]).
+pub fn extra_handle_bits(o: &Obj<'_>) -> usize {
+    let left = o.hs.left();
+    if left >= 8 {
+        left
+    } else {
+        0
+    }
 }

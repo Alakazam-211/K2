@@ -1252,3 +1252,32 @@ pub fn draw_edit_matches_the_verbs() {
     );
     println!("draw_edit_matches_the_verbs: {takes} rows the verbs take, {refuses} they refuse, each named");
 }
+
+/// dwg_rows_read_only: every row of a DWG drawing has `edit` `read-only` (DWG has no edit
+/// verbs): the model's rule, over the sampler's model read as a DWG drawing's. Plant:
+/// `DwgEditNull`.
+#[test]
+pub fn dwg_rows_read_only() {
+    use k2_mpc_cad_model::draw::{edit_word, EDIT_WORDS};
+    let b = sampler();
+    let mut doc = k2_mpc_dxf::read_doc(&b.bytes, &k2_mpc_dxf::Limits::default())
+        .expect("dwg_rows_read_only: the sampler reads");
+    doc.format = "dwg";
+    assert!(
+        !doc.entities.is_empty(),
+        "dwg_rows_read_only: the sampler has rows"
+    );
+    for i in 0..doc.entities.len() {
+        assert_eq!(
+            edit_word(&doc, i),
+            Some("read-only"),
+            "dwg_rows_read_only: entity {i} ({})",
+            doc.entities[i].kind
+        );
+    }
+    assert!(
+        EDIT_WORDS.contains(&"read-only"),
+        "dwg_rows_read_only: a word of the closed set"
+    );
+    println!("dwg_rows_read_only: {} rows read-only", doc.entities.len());
+}

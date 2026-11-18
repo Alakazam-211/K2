@@ -17,11 +17,12 @@ fn common(v: Ver) -> F {
     f
 }
 
-/// A table entry's flags after its name: the 64-flag, before 2007 the external reference index
-/// plus one, the dependent flag.
+/// A table entry's fields after its name: from 2007 one short (0, as every entry of the public
+/// samples has it); before, the 64-flag, the external reference index plus one, the dependent
+/// flag.
 fn entry_flags(v: Ver) -> F {
     if v >= Ver::R2010 {
-        [b(true), b(false)].concat()
+        bs(0)
     } else {
         [b(false), bs(0), b(false)].concat()
     }
@@ -57,7 +58,16 @@ pub fn layers() {
     ]
     .concat();
     p.strings = tu("Walls");
-    p.handles = [h(4, 0x02), h(5, 0), h(5, 0x0F), h(5, 0), h(5, 0x16)].concat();
+    // its owner, external reference block, plot style, material, linetype, visual style
+    p.handles = [
+        h(4, 0x02),
+        h(5, 0),
+        h(5, 0x0F),
+        h(5, 0),
+        h(5, 0x16),
+        h(5, 0),
+    ]
+    .concat();
     let (buf, at) = object(v, &p);
     let mut o = open(&buf, at, v).expect("opens");
     let l = tables::layer(&mut o).expect("reads");
@@ -106,6 +116,87 @@ pub fn block_records() {
     assert_eq!(r.block_entity, Some(0x51), "its BLOCK");
     assert_eq!(r.entities, vec![0x52, 0x53], "its entities, in order");
     assert_eq!(r.endblk, Some(0x54), "its ENDBLK");
+}
+
+/// xref_block_records: an external reference's block record writes no count of entities (it
+/// owns none): a 2018 attached reference and a 2004 overlaid one read to their data's end with
+/// their flags, base point, path, BLOCK, ENDBLK, insert and layout.
+#[test]
+pub fn xref_block_records() {
+    let v = Ver::R2018;
+    let mut p = Parts::new(0x31, 0x70);
+    let mut d = [common(v), entry_flags(v)].concat();
+    // not anonymous, no attribute definitions, an external reference, not overlaid, loaded; no
+    // count of entities
+    d.extend([b(false), b(false), b(true), b(false), b(false)].concat());
+    d.extend(bd3([10.0, 20.0, 0.0]));
+    d.extend([rc(1), rc(0)].concat());
+    d.extend(bl(0));
+    d.extend([bs(0), b(true), rc(0)].concat());
+    p.data = d;
+    p.strings = [tu("SITE"), tu(".\\site.dwg"), tu("")].concat();
+    // its owner, external reference block, BLOCK, ENDBLK, one insert, its layout
+    p.handles = [
+        h(4, 0x01),
+        h(5, 0),
+        h(3, 0x71),
+        h(3, 0x72),
+        h(4, 0x80),
+        h(5, 0),
+    ]
+    .concat();
+    let (buf, at) = object(v, &p);
+    let mut o = open(&buf, at, v).expect("opens");
+    let r = tables::block_header(&mut o)
+        .unwrap_or_else(|e| panic!("xref_block_records: 2018 refused: {}", e.summary()));
+    assert_eq!(
+        (r.entry.name.as_str(), r.xref_path.as_str(), r.base),
+        ("SITE", ".\\site.dwg", [10.0, 20.0, 0.0]),
+        "xref_block_records: 2018 its name, path and base point"
+    );
+    assert!(
+        r.xref && !r.overlay && !r.anonymous,
+        "xref_block_records: 2018 its flags"
+    );
+    assert_eq!(
+        (r.block_entity, r.endblk, r.entities.len()),
+        (Some(0x71), Some(0x72), 0),
+        "xref_block_records: 2018 its BLOCK and ENDBLK, no entities"
+    );
+    assert_eq!(
+        tables::extra_handle_bits(&o),
+        0,
+        "xref_block_records: 2018 its handle stream read to its end"
+    );
+
+    let v = Ver::R2004;
+    let mut p = Parts::new(0x31, 0x74);
+    let mut d = [common(v), tv(b"GRID"), entry_flags(v)].concat();
+    // an overlaid external reference (both bits), loaded
+    d.extend([b(false), b(false), b(true), b(true), b(false)].concat());
+    d.extend(bd3([0.0, -5.0, 2.5]));
+    d.extend(tv(b"grid.dwg"));
+    d.extend(rc(0));
+    d.extend(tv(b""));
+    d.extend(bl(0));
+    p.data = d;
+    // its owner, external reference block, BLOCK, ENDBLK, no inserts, its layout
+    p.handles = [h(4, 0x01), h(5, 0), h(3, 0x75), h(3, 0x76), h(5, 0)].concat();
+    let (buf, at) = object(v, &p);
+    let mut o = open(&buf, at, v).expect("opens");
+    let r = tables::block_header(&mut o)
+        .unwrap_or_else(|e| panic!("xref_block_records: 2004 refused: {}", e.summary()));
+    assert_eq!(
+        (r.entry.name.as_str(), r.xref_path.as_str(), r.base),
+        ("GRID", "grid.dwg", [0.0, -5.0, 2.5]),
+        "xref_block_records: 2004 its name, path and base point"
+    );
+    assert!(r.xref && r.overlay, "xref_block_records: 2004 overlaid");
+    assert_eq!(
+        (r.block_entity, r.endblk, r.entities.len()),
+        (Some(0x75), Some(0x76), 0),
+        "xref_block_records: 2004 its BLOCK and ENDBLK, no entities"
+    );
 }
 
 #[test]
@@ -296,7 +387,21 @@ pub fn dimension_styles() {
         let mut p = Parts::new(0x45, 0x27);
         p.data = d;
         p.strings = s;
-        p.handles = [h(4, 0x0A), h(5, 0), h(5, 0x11), h(5, 0x60), h(5, 0)].concat();
+        // its owner, external reference block, text style, leader arrowhead, then its three
+        // arrowheads and from 2007 its three linetypes
+        let rest = if new { 6 } else { 3 };
+        let short = [h(4, 0x0A), h(5, 0), h(5, 0x11), h(5, 0x60)].concat();
+        p.handles = [short.clone(), vec![(0x50, 8); rest]].concat();
+        // one handle short: cut short
+        let mut cut = p.clone();
+        cut.handles = [short, vec![(0x50, 8); rest - 1]].concat();
+        let (buf, at) = object(v, &cut);
+        let mut o = open(&buf, at, v).expect("opens");
+        support::refused(
+            tables::dimstyle(&mut o),
+            "DWG-E002",
+            &format!("{v:?}: a dimension style one handle short"),
+        );
         let (buf, at) = object(v, &p);
         let mut o = open(&buf, at, v).expect("opens");
         let ds =
@@ -336,4 +441,62 @@ pub fn image_definitions() {
             "{v:?}: its image file's path"
         );
     }
+}
+
+/// entry_states: from 2007 the short after an entry's name is read as a short, whatever its
+/// value (32 here takes ten bits, not two).
+#[test]
+pub fn entry_states() {
+    let v = Ver::R2018;
+    let mut p = Parts::new(0x43, 0x12);
+    p.data = [common(v), bs(32), rc(0)].concat();
+    p.strings = tu("ACAD");
+    p.handles = [h(4, 0x09), h(5, 0)].concat();
+    let (buf, at) = object(v, &p);
+    let mut o = open(&buf, at, v).expect("opens");
+    let e =
+        tables::appid(&mut o).unwrap_or_else(|e| panic!("entry_states: refused: {}", e.summary()));
+    assert_eq!(
+        (e.name.as_str(), e.state, e.xdep),
+        ("ACAD", 32, false),
+        "entry_states: its name, its short, not dependent"
+    );
+}
+
+/// entry_state_dependent: from 2007 an entry whose short has bit 256 is dependent on an
+/// external reference, whatever its name.
+#[test]
+pub fn entry_state_dependent() {
+    let v = Ver::R2018;
+    let mut p = Parts::new(0x43, 0x13);
+    p.data = [common(v), bs(256), rc(0)].concat();
+    p.strings = tu("ACAD");
+    p.handles = [h(4, 0x09), h(5, 0)].concat();
+    let (buf, at) = object(v, &p);
+    let mut o = open(&buf, at, v).expect("opens");
+    let e = tables::appid(&mut o)
+        .unwrap_or_else(|e| panic!("entry_state_dependent: refused: {}", e.summary()));
+    assert_eq!(
+        (e.state, e.xdep),
+        (256, true),
+        "entry_state_dependent: its short, dependent"
+    );
+}
+
+/// layer_without_visual_style_refused: a 2018 layer whose handles stop after its linetype is
+/// cut short (its visual style is missing).
+#[test]
+pub fn layer_without_visual_style_refused() {
+    let v = Ver::R2018;
+    let mut p = Parts::new(0x33, 0x10);
+    p.data = [common(v), entry_flags(v), bs(7 << 5), bs(3), bl(0), rc(0)].concat();
+    p.strings = tu("Walls");
+    p.handles = [h(4, 0x02), h(5, 0), h(5, 0x0F), h(5, 0), h(5, 0x16)].concat();
+    let (buf, at) = object(v, &p);
+    let mut o = open(&buf, at, v).expect("opens");
+    support::refused(
+        tables::layer(&mut o),
+        "DWG-E002",
+        "layer_without_visual_style_refused",
+    );
 }

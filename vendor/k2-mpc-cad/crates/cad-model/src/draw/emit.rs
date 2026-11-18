@@ -386,6 +386,31 @@ pub fn header(
             ("digest", Value::from(hex(&d.finish()))),
             ("anon", Value::from(rec.anon)),
             ("xref", Value::from(rec.xref || xref.is_some())),
+            (
+                "dynamic",
+                src.block_marks(b).0.map_or(Value::Null, Value::from),
+            ),
+            (
+                "annotative",
+                src.block_marks(b).1.map_or(Value::Null, Value::from),
+            ),
+            (
+                "attdefs",
+                src.attdefs(b).map_or(Value::Null, |a| {
+                    Value::List(
+                        a.iter()
+                            .map(|d| {
+                                Value::obj([
+                                    ("tag", Value::from(d.tag.as_str())),
+                                    ("default", Value::from(d.default.as_str())),
+                                    ("constant", Value::from(d.constant)),
+                                    ("prompt", Value::from(d.prompt.as_str())),
+                                ])
+                            })
+                            .collect(),
+                    )
+                }),
+            ),
         ]));
     }
     let mut layouts = Vec::new();
@@ -501,6 +526,13 @@ pub fn header(
         ("linetypes", Value::List(linetypes)),
         ("text_styles", Value::List(styles)),
         ("blocks", Value::List(blocks)),
+        // the layer adds and inserts go on when none is named, as the layers list names it
+        (
+            "current_layer",
+            src.current_layer()
+                .and_then(|l| doc.layers[l].handle)
+                .map_or(Value::Null, |h| Value::from(crate::handle::key(h))),
+        ),
         // model space's own block record, by the address a hold on it has; null when the
         // file gives it no handle
         (

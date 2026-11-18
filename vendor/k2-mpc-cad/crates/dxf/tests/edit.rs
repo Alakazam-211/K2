@@ -1277,3 +1277,147 @@ pub fn rotate_noise_snapped() {
     );
     println!("rotate_noise_snapped: x 0.0, y {y}");
 }
+
+/// `bytes` with `$CLAYER` set to `layer` (our own splice of its value line).
+fn with_clayer(bytes: &[u8], layer: &str) -> Vec<u8> {
+    let t = token::tokenize(bytes, &Limits::default()).unwrap();
+    let i = (0..t.pairs.len())
+        .find(|&i| t.pairs[i].code == 9 && t.text(i).trim() == "$CLAYER")
+        .expect("the drawing has $CLAYER");
+    let r = t.pairs[i + 1].value_range();
+    [&bytes[..r.start], layer.as_bytes(), &bytes[r.end..]].concat()
+}
+
+fn draw_header(bytes: &[u8]) -> k2_mpc_base::errors::Value {
+    k2_mpc_dxf::verbs::run(bytes, "draw header", &["--version", "1"])
+        .expect("draw header reads")
+        .data
+}
+
+/// header_blocks_match_block_insert: the draw header's blocks say what `block insert` does with
+/// each: for every named block of the drawing's own, `dynamic: true` exactly when block insert
+/// refuses it as dynamic (`DXF-E044`) and `annotative: true` exactly when it refuses it as
+/// annotative (`DXF-E051`, annotative); and a block's `attdefs` are its attribute definitions in
+/// the file's order (tag, default, constant, prompt). Plant: `HeaderDynamicMissed`.
+#[test]
+pub fn header_blocks_match_block_insert() {
+    let b = testgen::edit_sampler(Ver::R2018).build();
+    let h = draw_header(&b.bytes);
+    let blocks = match h.get("blocks") {
+        Some(k2_mpc_base::errors::Value::List(l)) => l.clone(),
+        _ => panic!("header_blocks_match_block_insert: no blocks"),
+    };
+    let mut checked = 0;
+    for blk in &blocks {
+        let name = blk.get("name").and_then(|v| v.as_str()).unwrap().to_owned();
+        let flag = |k: &str| match blk.get(k) {
+            Some(k2_mpc_base::errors::Value::Bool(x)) => *x,
+            other => panic!("header_blocks_match_block_insert: {name}: {k} is {other:?}"),
+        };
+        let (dynamic, annotative) = (flag("dynamic"), flag("annotative"));
+        if flag("anon") || flag("xref") {
+            continue;
+        }
+        let r = plan(
+            &b.bytes,
+            "block insert",
+            &["--block", &name, "--at", "0,0", "--unit", "mm"],
+        );
+        let (code, why) = match &r {
+            Ok(_) => (String::new(), String::new()),
+            Err(e) => (k2_mpc_dxf::pack::pack_id(e.code.id), e.why.clone()),
+        };
+        assert_eq!(
+            (dynamic, annotative),
+            (
+                code == "DXF-E044",
+                code == "DXF-E051" && why.contains("annotative")
+            ),
+            "header_blocks_match_block_insert: {name}: block insert gives {code} {why}"
+        );
+        checked += 1;
+    }
+    let tagged = blocks
+        .iter()
+        .find(|x| x.get("name").and_then(|v| v.as_str()) == Some("TAGGED"))
+        .unwrap();
+    let defs: Vec<(String, String, bool, String)> = match tagged.get("attdefs") {
+        Some(k2_mpc_base::errors::Value::List(l)) => l
+            .iter()
+            .map(|d| {
+                let s = |k: &str| d.get(k).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                let c = matches!(
+                    d.get("constant"),
+                    Some(k2_mpc_base::errors::Value::Bool(true))
+                );
+                (s("tag"), s("default"), c, s("prompt"))
+            })
+            .collect(),
+        other => panic!("header_blocks_match_block_insert: TAGGED's attdefs: {other:?}"),
+    };
+    let want = |t: &str, d: &str, c: bool| (t.to_owned(), d.to_owned(), c, t.to_owned());
+    assert_eq!(
+        defs,
+        vec![
+            want("DEVICE", "CAM-00", false),
+            want("LABEL", "L", false),
+            want("MAKER", "ACME", true)
+        ],
+        "header_blocks_match_block_insert: TAGGED's attribute definitions"
+    );
+    assert!(
+        checked >= 5,
+        "header_blocks_match_block_insert: {checked} blocks"
+    );
+    println!(
+        "header_blocks_match_block_insert: {checked} blocks, the flags as block insert judges"
+    );
+}
+
+/// entity_add_lands_on_current_layer: the draw header's `current_layer` is the drawing's
+/// `$CLAYER` by the layers list's address, and an add or an insert that names no layer lands on
+/// it. Plant: `CurrentLayerAsZero`.
+#[test]
+pub fn entity_add_lands_on_current_layer() {
+    let b = testgen::edit_sampler(Ver::R2018).build();
+    let bytes = with_clayer(&b.bytes, "E-DEV");
+    let h = draw_header(&bytes);
+    let layers = match h.get("layers") {
+        Some(k2_mpc_base::errors::Value::List(l)) => l.clone(),
+        _ => panic!("no layers"),
+    };
+    let edev = layers
+        .iter()
+        .find(|l| l.get("name").and_then(|v| v.as_str()) == Some("E-DEV"))
+        .and_then(|l| l.get("handle"))
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        h.get("current_layer").and_then(|v| v.as_str()),
+        Some(edev.as_str()),
+        "entity_add_lands_on_current_layer: the header's current layer"
+    );
+    let add = landed(
+        "entity_add_lands_on_current_layer",
+        &bytes,
+        "entity add",
+        &["line", "--from", "0,0", "--to", "1,1", "--unit", "mm"],
+    );
+    let ins = landed(
+        "entity_add_lands_on_current_layer",
+        &bytes,
+        "block insert",
+        &["--block", "TAGGED", "--at", "0,0", "--unit", "mm"],
+    );
+    for (what, p) in [("entity add", &add), ("block insert", &ins)] {
+        let h = k2_mpc_dxf::handle::from_addr(&p.created[0]).unwrap();
+        let d = doc_of(&p.output);
+        let e = d.entities.iter().find(|e| e.handle == Some(h)).unwrap();
+        assert_eq!(
+            &*e.layer, "E-DEV",
+            "entity_add_lands_on_current_layer: {what} with no --layer"
+        );
+    }
+    println!("entity_add_lands_on_current_layer: {edev}, both land on it");
+}

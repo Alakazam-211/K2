@@ -121,6 +121,8 @@ const PLANTS: &[(&str, Row)] = &[
     ("LeaderHandlesSwapped", leaders::leaders_read),
     ("DstyleCodesSwapped", drawing::leader_style_overrides),
     ("BlockOwnedUncounted", tables::block_records),
+    ("XrefOwnedCountRead", tables::xref_block_records),
+    ("LeftOutUncounted", drawing::left_out_entries_counted),
     ("EntryXrefIndexAlways", tables::layers),
     ("LayoutCountRaw", tables::layouts),
     ("LtypeTextBitSwapped", tables::linetypes_and_styles),
@@ -135,6 +137,22 @@ const PLANTS: &[(&str, Row)] = &[
     ("RepeatedNamesKept", drawing::repeated_block_names_numbered),
     ("BlockRepTagIgnored", drawing::dynamic_block_named),
     ("HeaderTailUnread", header::header_variables_2004),
+    ("HeaderMenuNameSkipped", header::header_variables_2018),
+    ("CurrentLayerUnread", header::header_variables_2018),
+    ("AnnotativeEedIgnored", drawing::block_annotative_mark),
+    ("AttdefsUnread", drawing::attdef_infos),
+    // the whole handle stream, the 2007 entry short
+    ("EntryStateAsTwoBits", tables::entry_states),
+    ("EntryDependentBitIgnored", tables::entry_state_dependent),
+    (
+        "LayerVisualStyleSkipped",
+        tables::layer_without_visual_style_refused,
+    ),
+    ("TrailingHandlesSkipped", tables::dimension_styles),
+    (
+        "EntityTrailingHandlesSkipped",
+        entities::hatches_dimensions_viewports,
+    ),
 ];
 
 /// A plant's row under the plant: `Err` with what stopped it.

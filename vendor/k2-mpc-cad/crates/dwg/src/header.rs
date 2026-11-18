@@ -40,9 +40,14 @@ pub struct HeaderVars {
     pub extmin: [f64; 3],
     pub extmax: [f64; 3],
     pub handseed: u64,
+    /// The current layer (`CLAYER`): its handle, 0 for none.
+    pub clayer: u64,
     /// The data's bits left after the last variable: none from 2007 (the data states its end);
     /// for 2004, the padding to the section's last byte (fewer than 8).
     pub trailing_bits: usize,
+    /// From 2007, the bits its string stream holds past the texts the format names: texts
+    /// another writer added, tolerated (a stream short of them refuses the header).
+    pub extra_string_bits: usize,
     /// Every variable read, but those each save changes (dates, the next handle, the version
     /// identifier, the extents), as a digest's input.
     pub stable: String,
@@ -220,7 +225,8 @@ pub fn header(section: &[u8], ver: Ver, maintenance: u8) -> Result<HeaderVars, C
     }
     keep("reals", &reals);
     let (ltscale, pdsize, celtscale) = (reals[0], reals[7], reals[20]);
-    if !r2007 {
+    // MENUNAME: inline before 2007, in the string stream from 2007
+    if !(r2007 && crate::mutant::active("HeaderMenuNameSkipped")) {
         r.tv()?;
     }
     // the dates, and three longs between them
@@ -230,8 +236,14 @@ pub fn header(section: &[u8], ver: Ver, maintenance: u8) -> Result<HeaderVars, C
     r.cmc()?;
     // the next handle: in the data stream, whatever the version
     let handseed = r.d.h()?.value;
-    // CLAYER, TEXTSTYLE, CELTYPE, (CMATERIAL), DIMSTYLE, CMLSTYLE
-    r.n(if r2007 { 6 } else { 5 }, |r| r.h())?;
+    // CLAYER (the current layer), TEXTSTYLE, CELTYPE, (CMATERIAL), DIMSTYLE, CMLSTYLE
+    let clayer = r.h()?;
+    let clayer = if crate::mutant::active("CurrentLayerUnread") {
+        0
+    } else {
+        clayer
+    };
+    r.n(if r2007 { 5 } else { 4 }, |r| r.h())?;
     r.d.bd()?;
     // paper space: INSBASE, EXTMIN, EXTMAX, LIMMIN, LIMMAX, ELEVATION, UCSORG, UCSXDIR, UCSYDIR,
     // UCSNAME, PUCSORTHOREF, PUCSORTHOVIEW, PUCSBASE, the six origins
@@ -387,7 +399,9 @@ pub fn header(section: &[u8], ver: Ver, maintenance: u8) -> Result<HeaderVars, C
         extmin,
         extmax,
         handseed,
+        clayer,
         trailing_bits: r.d.left(),
+        extra_string_bits: r.strings.as_ref().map_or(0, Bits::left),
         stable,
     })
 }

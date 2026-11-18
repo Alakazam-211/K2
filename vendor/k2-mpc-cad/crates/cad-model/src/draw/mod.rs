@@ -649,15 +649,50 @@ pub trait DrawSource {
     fn edit(&self, i: usize) -> Option<&'static str> {
         edit_word(self.doc(), i)
     }
+    /// Block record `b`'s attribute definitions, in the file's order; `None` when the reader
+    /// doesn't read them.
+    fn attdefs(&self, _b: usize) -> Option<Vec<AttDefInfo>> {
+        None
+    }
+    /// Whether block record `b` is dynamic and whether it is annotative, as the edit verbs judge
+    /// it; `None` for what the reader doesn't read. By the model's facts: dynamic when it is a
+    /// dynamic block's definition or one of its drawn forms; annotative not known.
+    fn block_marks(&self, b: usize) -> (Option<bool>, Option<bool>) {
+        let doc = self.doc();
+        let dynamic = doc.blocks[b].dynamic_of.is_some()
+            || doc.blocks.iter().any(|x| x.dynamic_of == Some(b));
+        (Some(dynamic), None)
+    }
+    /// The drawing's current layer (`$CLAYER`, where adds and inserts go when no layer is
+    /// named): its index in [`Doc::layers`]; `None` when not known.
+    fn current_layer(&self) -> Option<usize> {
+        None
+    }
 }
 
-/// Why the edit verbs refuse entity `i` of `doc`, by the model's facts: the drawing before DXF
+/// One attribute definition of a block, as a header states it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttDefInfo {
+    pub tag: String,
+    /// Its default value, escapes read.
+    pub default: String,
+    /// Constant: a reference has no attribute for it.
+    pub constant: bool,
+    pub prompt: String,
+}
+
+/// Why the edit verbs refuse entity `i` of `doc`, by the model's facts: a DWG drawing (read-only:
+/// no edit verb changes one, `read-only` for every row); the drawing before DXF
 /// 2000 or without handles; the entity's owner (an external reference, a dynamic block's
 /// definition or drawn form, any other block definition); what it is (its `edit` word: a
 /// dynamic block's reference is taken); its layer (an external reference's, or locked).
 /// `None` when they take it.
 pub fn edit_word(doc: &Doc, i: usize) -> Option<&'static str> {
     use crate::model::BlockKind;
+    // DWG is read-only: no edit verb changes a DWG file, so every row of one says so
+    if doc.format == "dwg" {
+        return (!crate::mutant::active("DwgEditNull")).then_some("read-only");
+    }
     if doc.version.as_str() < "AC1015" {
         return Some("version");
     }
@@ -708,8 +743,9 @@ pub fn edit_word(doc: &Doc, i: usize) -> Option<&'static str> {
     }
 }
 
-/// The words a page row's `edit` holds: why the edit verbs refuse the entity.
-pub const EDIT_WORDS: [&str; 18] = [
+/// The words a page row's `edit` holds: why the edit verbs refuse the entity (`read-only`: the
+/// file's format has no edit verbs; every row of a DWG drawing).
+pub const EDIT_WORDS: [&str; 19] = [
     "version",
     "no-handle",
     "xref",
@@ -728,6 +764,7 @@ pub const EDIT_WORDS: [&str; 18] = [
     "viewport",
     "image",
     "unknown",
+    "read-only",
 ];
 
 /// The host's answer for an external reference: whether its path resolves, and to what.

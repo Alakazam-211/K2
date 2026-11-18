@@ -6,10 +6,13 @@
 // independently — a visible delay contributor on top of the
 // spawn + WS handshake.
 //
-// The port + token never change during an app session: the daemon
-// writes them once at boot and the files are stable until the daemon
-// is restarted (which kills this app anyway, via heartbeat). So one
-// invoke per app process is enough.
+// The port + token are written once per daemon boot. The daemon mints a
+// NEW token on every boot (daemon_main.rs) and usually keeps its port, and
+// it restarts under a running app (every update does), so the cache is
+// re-read when the daemon refuses the cached token
+// (`refreshLocalDaemonWs`, from daemon-cli) or a local socket drops
+// (`markLocalDaemonCredsStale`, from grid-dial-queue). Otherwise one
+// invoke per daemon boot is enough.
 //
 // Usage:
 //   await prewarmDaemonWs()               // call at app startup
@@ -64,12 +67,71 @@ interface RawResponse {
 }
 
 let cached: Promise<DaemonWsAvailable> | null = null
+/** What `cached` resolved to; null while unread, reading or invalidated. */
+let cachedValue: DaemonWsAvailable | null = null
+/** A local socket dropped: the next read goes back to the files once. */
+let localStale = false
+/** The single re-read `refreshLocalDaemonWs` callers share. */
+let localRefresh: Promise<DaemonWsAvailable> | null = null
 
 /** Invalidate the cache so the next call re-invokes the Tauri command.
  *  Call this if a WS connection repeatedly fails or the token is
  *  rejected — daemon may have been restarted and reissued credentials. */
 export function invalidateDaemonWs(): void {
   cached = null
+  cachedValue = null
+}
+
+/** A local daemon socket closed abnormally or its upgrade was refused
+ *  (grid-dial-queue): the daemon may have restarted with a new token. The
+ *  next `getLocalDaemonWs` re-reads the files once; every caller after it
+ *  shares that read. */
+export function markLocalDaemonCredsStale(): void {
+  localStale = true
+}
+
+function sameLocalCreds(a: Pick<DaemonWsAvailable, 'port' | 'token'>, b: Pick<DaemonWsAvailable, 'port' | 'token'>): boolean {
+  return a.port === b.port && a.token === b.token
+}
+
+/**
+ * The local daemon refused `stale` (its token gate: the daemon restarted
+ * and minted a new token). Re-read the port + token from the Tauri side
+ * and return them when they differ from `stale`, or null when they are the
+ * same (the refusal is real: nothing to retry with).
+ *
+ * Single-flight: callers refused at the same time share one re-read, and a
+ * caller whose refusal lands after another caller already re-read gets the
+ * new creds without reading again. Rejects when the re-read fails (the
+ * daemon is not reachable); callers then keep the refusal they had.
+ */
+export async function refreshLocalDaemonWs(
+  stale: Pick<DaemonWsAvailable, 'port' | 'token'>,
+): Promise<DaemonWsAvailable | null> {
+  let fresh: DaemonWsAvailable
+  if (localRefresh) {
+    fresh = await localRefresh
+  } else if (cachedValue && !sameLocalCreds(cachedValue, stale)) {
+    fresh = cachedValue
+  } else {
+    invalidateDaemonWs()
+    localStale = false
+    const p = getLocalDaemonWs()
+    localRefresh = p
+    const clear = (): void => {
+      if (localRefresh === p) localRefresh = null
+    }
+    p.then(clear, clear)
+    fresh = await p
+  }
+  return sameLocalCreds(fresh, stale) ? null : fresh
+}
+
+/** Tests: forget the stale mark and any shared re-read (the cache itself
+ *  is `invalidateDaemonWs`). */
+export function __resetLocalDaemonWsForTests(): void {
+  localStale = false
+  localRefresh = null
 }
 
 /** Resolve `scope`'s creds to {port, token, host}. The scope is required
@@ -78,7 +140,8 @@ export function invalidateDaemonWs(): void {
  *
  *   - `activeHost === 'local'` → resolves via the Tauri `daemon_ws_url`
  *     command EXACTLY as before, with `host: '127.0.0.1'`. The result is
- *     cached per app session (the local daemon's creds are stable).
+ *     cached until the daemon refuses it or a local socket drops (a daemon
+ *     restart mints a new token; see `refreshLocalDaemonWs`).
  *   - `activeHost` is a ConnectHost → resolves directly from the saved
  *     `{hostname, port, token}`. NOT cached against the local-creds
  *     `cached` promise, because the active host can change at runtime;
@@ -136,23 +199,39 @@ export function resolveWindowHostCreds(): Promise<DaemonWsAvailable> {
  *  active (e.g. the "Clone to this computer" pull's local unpack) use
  *  this directly instead of switching hosts mid-flow. */
 export function getLocalDaemonWs(): Promise<DaemonWsAvailable> {
+  if (localStale) {
+    // A local socket dropped since the last read: read the files again
+    // (once; callers after this one share the new promise).
+    localStale = false
+    invalidateDaemonWs()
+  }
   if (cached) return cached
-  cached = (async () => {
-    let res: RawResponse
-    try {
-      res = await invoke<RawResponse>('daemon_ws_url')
-    } catch (e) {
-      cached = null
-      throw new Error(`daemon_ws_url invoke failed: ${String(e)}`)
-    }
-    if (res.state !== 'available' || !res.port || !res.token) {
-      cached = null
-      throw new Error(`daemon not reachable: ${res.reason ?? 'unknown'}`)
-    }
-    // Local daemon is always plain HTTP on loopback — never TLS.
-    return { port: res.port, token: res.token, host: LOCAL_HOST, secure: false }
-  })()
-  return cached
+  const read = readLocalDaemonCreds()
+  cached = read
+  read.then(
+    (creds) => {
+      if (cached === read) cachedValue = creds
+    },
+    () => {
+      // A failed read is never cached: the next caller retries.
+      if (cached === read) cached = null
+    },
+  )
+  return read
+}
+
+async function readLocalDaemonCreds(): Promise<DaemonWsAvailable> {
+  let res: RawResponse
+  try {
+    res = await invoke<RawResponse>('daemon_ws_url')
+  } catch (e) {
+    throw new Error(`daemon_ws_url invoke failed: ${String(e)}`)
+  }
+  if (res.state !== 'available' || !res.port || !res.token) {
+    throw new Error(`daemon not reachable: ${res.reason ?? 'unknown'}`)
+  }
+  // Local daemon is always plain HTTP on loopback — never TLS.
+  return { port: res.port, token: res.token, host: LOCAL_HOST, secure: false }
 }
 
 /** Append `:<port>` UNLESS the scheme's default port is implied — i.e.

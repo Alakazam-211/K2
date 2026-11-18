@@ -24,6 +24,27 @@
  */
 
 import type { ServerScope } from '@/kessel/server-scope'
+import { markLocalDaemonCredsStale } from '@/kessel/daemon-ws'
+
+/** Close codes that say nothing about the daemon: ours (`close(1000)`, or
+ *  `close()` with no code, which reads 1005). */
+const CLEAN_CLOSE_CODES: ReadonlySet<number> = new Set([1000, 1005])
+
+/**
+ * 0.46.15: a LOCAL socket that drops (abnormal close) or whose upgrade is
+ * refused may mean the daemon restarted and minted a new token (every
+ * update does). Mark the cached local creds stale so the reconnect that
+ * follows reads the port + token again (one shared read,
+ * `getLocalDaemonWs`). A remote scope's creds come from its login, not
+ * from the files: untouched.
+ */
+function watchLocalSocket(scope: ServerScope, ws: WebSocket): void {
+  if (scope.isRemote || typeof ws.addEventListener !== 'function') return
+  ws.addEventListener('close', (ev) => {
+    const code = (ev as CloseEvent).code
+    if (typeof code !== 'number' || !CLEAN_CLOSE_CODES.has(code)) markLocalDaemonCredsStale()
+  })
+}
 
 export const MAX_CONCURRENT_DIALS = 2
 export const MAX_CONCURRENT_DIALS_LOCAL = 4
@@ -256,6 +277,7 @@ export async function openQueuedGridWebSocket(
       throw new Error('grid-dial-failed')
     }
     ws.binaryType = 'arraybuffer'
+    watchLocalSocket(scope, ws)
     const opened = await new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => {
         cleanup()
@@ -302,6 +324,9 @@ export async function openQueuedGridWebSocket(
     }
     if (!opened) {
       noteGridDialFailure(scope)
+      // Refused, errored or timed out before it opened: a stale token
+      // looks exactly like this to the browser.
+      if (!scope.isRemote) markLocalDaemonCredsStale()
       if (ws.readyState !== WebSocket.CLOSED) {
         try {
           ws.close()
@@ -349,6 +374,7 @@ export async function openQueuedWebSocket(
     slot.release()
     return ws
   }
+  watchLocalSocket(scope, ws)
   let settled = false
   const settle = (failed: boolean): void => {
     if (settled) return
@@ -358,6 +384,9 @@ export async function openQueuedWebSocket(
     ws.removeEventListener('error', onFail)
     ws.removeEventListener('close', onFail)
     if (failed) noteGridDialFailure(scope)
+    // An error before open with no close after it (WKWebView) still means
+    // the upgrade failed.
+    if (failed && !scope.isRemote) markLocalDaemonCredsStale()
     slot.release()
   }
   const onOpen = (): void => settle(false)

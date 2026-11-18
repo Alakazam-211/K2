@@ -14,7 +14,15 @@
 // existing `try/catch` blocks around the old `invoke(...)` calls keep
 // working unchanged.
 
-import { getLocalDaemonWs, invalidateDaemonWs, daemonHttpBase, type DaemonWsAvailable } from '@/kessel/daemon-ws'
+import {
+  getLocalDaemonWs,
+  invalidateDaemonWs,
+  refreshLocalDaemonWs,
+  daemonHttpBase,
+  LOCAL_DAEMON_HOST,
+  type DaemonWsAvailable,
+} from '@/kessel/daemon-ws'
+import { isWebClient } from '@/lib/is-web'
 import { assertScopeMayPost, type ServerScope } from '@/kessel/server-scope'
 import { assertServerScope } from '@/kessel/assert-scope'
 import type { ConnectHost } from '@/stores/connect-host'
@@ -287,6 +295,76 @@ function hasClientMsgId(body: unknown): boolean {
   return !!body && typeof body === 'object' && typeof (body as { clientMsgId?: unknown }).clientMsgId === 'string'
 }
 
+/** Codes that mean "this token is valid but may not do that": a permission
+ *  card, an owner-only wall, a Voice & Chat only role, a password rotation.
+ *  Never a reason to re-read the local token. */
+const NOT_A_DEAD_TOKEN_CODES: ReadonlySet<string> = new Set([
+  'owner_only',
+  'role_required',
+  'password_change_required',
+  'permission_required',
+])
+
+/**
+ * The LOCAL daemon refused the token itself (0.46.15): 401 or 403 with the
+ * daemon's token-gate text — `Invalid or missing auth token` (the `/cli/*`
+ * gate, `CliResponse::forbidden`) or `invalid or missing token` (the
+ * `/events` gate, `require_owner`, per-route `Who::Invalid` arms). The
+ * daemon mints a new owner token on every boot, so after a restart under a
+ * running app every cached-token request gets this answer.
+ *
+ * NOT a token refusal: a body with a permission card (`permission`), or one
+ * whose code says the token is fine but not allowed (`owner_only`,
+ * `role_required`, `password_change_required`). The desktop app always
+ * presents the owner token locally, so the owner-gate text alone means the
+ * daemon no longer knows that token.
+ */
+export function isLocalTokenRefusal(status: number, text: string): boolean {
+  if (status !== 401 && status !== 403) return false
+  if (!/invalid or missing (?:auth )?token/i.test(text)) return false
+  let parsed: unknown = null
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return true
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return true
+  const obj = parsed as Record<string, unknown>
+  if ('permission' in obj) return false
+  const codes: unknown[] = [obj.code, obj.error]
+  if (obj.error && typeof obj.error === 'object') codes.push((obj.error as Record<string, unknown>).code)
+  return !codes.some((c) => typeof c === 'string' && NOT_A_DEAD_TOKEN_CODES.has(c))
+}
+
+/** True when `creds` are the local daemon's (desktop loopback), the only
+ *  creds `refreshLocalDaemonWs` can re-read. */
+function isLocalDesktopCreds(scope: ServerScope, creds: DaemonWsAvailable): boolean {
+  return !scope.isRemote && !isWebClient() && creds.host === LOCAL_DAEMON_HOST
+}
+
+/**
+ * One request to the LOCAL daemon refused at its token gate: re-read the
+ * creds (single-flight, `refreshLocalDaemonWs`) and, only when they changed,
+ * send it ONCE more through `again`. The token check is the first thing the
+ * daemon does with a `/cli/*` request (dispatcher.rs, the `/cli/*` arms):
+ * a refused request ran no handler, so sending it again (a POST too) cannot
+ * apply it twice. A second refusal is returned as is: no loop.
+ */
+async function retryAfterLocalTokenRefusal(
+  used: DaemonWsAvailable,
+  result: CliHttpResult,
+  again: () => Promise<CliHttpResult>,
+): Promise<CliHttpResult> {
+  let fresh: DaemonWsAvailable | null
+  try {
+    fresh = await refreshLocalDaemonWs(used)
+  } catch {
+    // The daemon isn't reachable to re-read: keep the refusal.
+    return result
+  }
+  return fresh ? again() : result
+}
+
 async function cliFetch(
   scope: ServerScope,
   meta: CliCallMeta,
@@ -315,6 +393,7 @@ async function cliFetch(
   const tSlot = performance.now()
   let status: number | null = null
   let lastUrl = ''
+  let lastCreds: DaemonWsAvailable | null = null
   try {
     throwIfHostSwitched(scope, startedKey)
     const out = await withConnRetry(async () => {
@@ -323,6 +402,7 @@ async function cliFetch(
         throwIfHostSwitched(scope, startedKey)
         const creds = await scope.creds()
         throwIfHostSwitched(scope, startedKey)
+        lastCreds = creds
         const { url, init } = build(creds)
         lastUrl = url
         // Hosted web: credentials:include (send/store k2_session) + X-K2-Client.
@@ -348,6 +428,14 @@ async function cliFetch(
       }
       let result = await attempt()
       throwIfHostSwitched(scope, startedKey)
+      const usedCreds = lastCreds as DaemonWsAvailable | null
+      if (usedCreds && isLocalDesktopCreds(scope, usedCreds) && isLocalTokenRefusal(result.res.status, result.text)) {
+        // 0.46.15: the local daemon restarted under the app and minted a
+        // new token. Re-read it and send this request once more.
+        result = await retryAfterLocalTokenRefusal(usedCreds, result, attempt)
+        throwIfHostSwitched(scope, startedKey)
+        return result
+      }
       // Re-login and the rotation prompt of the window's own server run
       // here as before (Home M1 / MS77). A pinned scope for another server
       // goes to the connection pool instead (Home M2): one revive through
@@ -614,8 +702,8 @@ async function postQueryWithOldServerFallback(
  * active, so it can't go through the active-host `daemonCliPost`.
  * Same connection-retry + response parsing as `daemonCliPost`; the
  * remote-session revival step is intentionally absent (revival is a
- * remote-host recovery — the local daemon's token never goes stale
- * within an app session, and a restart invalidates via `withConnRetry`).
+ * remote-host recovery). A local daemon restart mints a new token: a token
+ * refusal re-reads it and resends once (`localCliFetch`).
  */
 export async function localDaemonCliPost<T = unknown>(
   route: string,
@@ -624,15 +712,13 @@ export async function localDaemonCliPost<T = unknown>(
   // Always the LOCAL loopback daemon (desktop clone-to pull). Keep the
   // classic `?token=` path — this is never the hosted-web same-origin
   // surface (web never activates the local Tauri daemon).
-  const { res, text } = await withConnRetry(async () => {
-    const creds = await getLocalDaemonWs()
-    const res = await fetch(`${daemonHttpBase(creds)}/cli/${route}?token=${creds.token}`, {
+  const { res, text } = await localCliFetch((creds) =>
+    fetch(`${daemonHttpBase(creds)}/cli/${route}?token=${creds.token}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
-    return { res, text: await res.text() }
-  })
+    }),
+  )
   return parseDaemonResponse<T>(res, text)
 }
 
@@ -646,17 +732,36 @@ export async function localDaemonCliGet<T = unknown>(
   route: string,
   params?: Record<string, string | number | boolean | undefined | null>,
 ): Promise<T> {
-  const { res, text } = await withConnRetry(async () => {
-    const creds = await getLocalDaemonWs()
+  const { res, text } = await localCliFetch((creds) => {
     const search = new URLSearchParams()
     for (const [k, v] of Object.entries(params ?? {})) {
       if (v !== undefined && v !== null) search.set(k, String(v))
     }
     search.set('token', creds.token)
-    const res = await fetch(`${daemonHttpBase(creds)}/cli/${route}?${search.toString()}`, { method: 'GET' })
-    return { res, text: await res.text() }
+    return fetch(`${daemonHttpBase(creds)}/cli/${route}?${search.toString()}`, { method: 'GET' })
   })
   return parseDaemonResponse<T>(res, text)
+}
+
+/** One request to the LOCAL daemon (`localDaemonCli*`): the connection
+ *  retry, plus one re-read + resend after a token refusal (a daemon
+ *  restart), as `cliFetch` does for a local scope. */
+function localCliFetch(send: (creds: DaemonWsAvailable) => Promise<Response>): Promise<CliHttpResult> {
+  return withConnRetry(async () => {
+    let used: DaemonWsAvailable | null = null
+    const once = async (): Promise<CliHttpResult> => {
+      const creds = await getLocalDaemonWs()
+      used = creds
+      const res = await send(creds)
+      return { res, text: await res.text() }
+    }
+    const result = await once()
+    const usedCreds = used as DaemonWsAvailable | null
+    if (usedCreds && !isWebClient() && isLocalTokenRefusal(result.res.status, result.text)) {
+      return retryAfterLocalTokenRefusal(usedCreds, result, once)
+    }
+    return result
+  })
 }
 
 /**

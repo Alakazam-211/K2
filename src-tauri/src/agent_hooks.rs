@@ -253,7 +253,8 @@ mod tests {
         let seen = fake.next();
         assert_eq!(seen.method, "POST");
         assert_eq!(seen.path, "/cli/heartbeat/launch");
-        assert_eq!(seen.query, pairs(&[("token", "tok"), ("project", "/w/my proj"), ("name", "daily & more")]));
+        assert_eq!(seen.query, pairs(&[("project", "/w/my proj"), ("name", "daily & more")]));
+        assert_eq!(seen.authorization.as_deref(), Some("Bearer tok"));
         assert_eq!(seen.body, "");
     }
 
@@ -274,7 +275,8 @@ mod tests {
         let seen = fake.next();
         assert_eq!(seen.method, "GET");
         assert_eq!(seen.path, "/cli/heartbeat/active-session");
-        assert_eq!(seen.query, pairs(&[("token", "tok"), ("project", "/w"), ("name", "hb")]));
+        assert_eq!(seen.query, pairs(&[("project", "/w"), ("name", "hb")]));
+        assert_eq!(seen.authorization.as_deref(), Some("Bearer tok"));
     }
 
     #[test]
@@ -292,10 +294,12 @@ mod tests {
         assert_eq!(b, Ok("[]".to_string()));
         let first = fake.next();
         assert_eq!((first.method.as_str(), first.path.as_str()), ("GET", "/cli/sessions/lookup-by-agent"));
-        assert_eq!(first.query, pairs(&[("token", "tok"), ("agent", "sales/reviewer")]));
+        assert_eq!(first.query, pairs(&[("agent", "sales/reviewer")]));
+        assert_eq!(first.authorization.as_deref(), Some("Bearer tok"));
         let second = fake.next();
         assert_eq!((second.method.as_str(), second.path.as_str()), ("GET", "/cli/sessions/list-for-workspace"));
-        assert_eq!(second.query, pairs(&[("token", "tok"), ("path", "/w/tree")]));
+        assert_eq!(second.query, pairs(&[("path", "/w/tree")]));
+        assert_eq!(second.authorization.as_deref(), Some("Bearer tok"));
     }
 
     #[test]

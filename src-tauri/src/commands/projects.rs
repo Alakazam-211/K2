@@ -262,7 +262,7 @@ fn project_name_with(client: &DaemonClient, project_id: &str) -> Result<String, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon_client::test_support::{pairs, FakeDaemon};
+    use crate::daemon_client::test_support::FakeDaemon;
 
     fn run<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
         tauri::async_runtime::block_on(off_main(f))
@@ -280,7 +280,8 @@ mod tests {
         .expect("all three succeed");
         let finder = fake.next();
         assert_eq!((finder.method.as_str(), finder.path.as_str()), ("POST", "/cli/projects/open-in-finder"));
-        assert_eq!(finder.query, pairs(&[("token", "tok")]));
+        assert!(finder.query.is_empty(), "no token in the address: {:?}", finder.query);
+        assert_eq!(finder.authorization.as_deref(), Some("Bearer tok"));
         assert_eq!(serde_json::from_str::<serde_json::Value>(&finder.body).expect("json"), json!({ "path": "/w/a b" }));
         let editor = fake.next();
         assert_eq!(editor.path, "/cli/projects/open-in-editor");

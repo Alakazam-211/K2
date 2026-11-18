@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn daemon_status_reports_running_from_the_status_route() {
-        use crate::daemon_client::test_support::{pairs, FakeDaemon};
+        use crate::daemon_client::test_support::FakeDaemon;
         let fake = FakeDaemon::serve(vec![(
             200,
             r#"{"version":"0.46.4","uptime_secs":7,"pid":42,"port":5}"#,
@@ -463,7 +463,8 @@ mod tests {
         }
         let seen = fake.next();
         assert_eq!((seen.method.as_str(), seen.path.as_str()), ("GET", "/status"));
-        assert_eq!(seen.query, pairs(&[("token", "tok")]));
+        assert!(seen.query.is_empty(), "no token in the address: {:?}", seen.query);
+        assert_eq!(seen.authorization.as_deref(), Some("Bearer tok"));
     }
 
     #[test]

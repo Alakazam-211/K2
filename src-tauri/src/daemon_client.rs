@@ -72,6 +72,9 @@ impl DaemonClient {
     fn at(base: String, token: String) -> Result<Self, String> {
         let http = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(10))
+            // K2 never sends a request to its own server through a proxy:
+            // http_proxy, HTTPS_PROXY, ALL_PROXY and the rest are ignored.
+            .no_proxy()
             .build()
             .map_err(|e| format!("build http client: {e}"))?;
         Ok(Self { base, token, http })
@@ -84,10 +87,29 @@ impl DaemonClient {
     }
 
 
+    /// `{base}{path}` with `params` percent-encoded into the query string.
+    /// The token never goes in the address: see [`Self::request`].
+    fn url(&self, path: &str, params: &[(&str, &str)]) -> String {
+        let mut url = format!("{}{}", self.base, path);
+        for (i, (k, v)) in params.iter().enumerate() {
+            url.push(if i == 0 { '?' } else { '&' });
+            url.push_str(&pct_encode(k));
+            url.push('=');
+            url.push_str(&pct_encode(v));
+        }
+        url
+    }
+
+    /// Every request to the daemon starts here: the owner token goes in an
+    /// `Authorization: Bearer` header, never the address.
+    fn request(&self, method: reqwest::Method, url: &str) -> reqwest::blocking::RequestBuilder {
+        self.http.request(method, url).bearer_auth(&self.token)
+    }
+
     /// Hit a `/cli/*` route on the daemon, returning the raw response
     /// body (the CLI text/JSON the daemon emits). `params` are
-    /// percent-encoded into the query string alongside the auth
-    /// token. Any non-2xx status is surfaced as Err with the body.
+    /// percent-encoded into the query string; the token rides a header.
+    /// Any non-2xx status is surfaced as Err with the body.
     pub fn cli_get(&self, path: &str, params: &[(&str, &str)]) -> Result<String, String> {
         self.cli_query(false, path, params)
     }
@@ -100,17 +122,11 @@ impl DaemonClient {
     }
 
     fn cli_query(&self, post: bool, path: &str, params: &[(&str, &str)]) -> Result<String, String> {
-        let mut url = format!("{}{}?token={}", self.base, path, self.token);
-        for (k, v) in params {
-            url.push('&');
-            url.push_str(&pct_encode(k));
-            url.push('=');
-            url.push_str(&pct_encode(v));
-        }
+        let url = self.url(path, params);
         let request = if post {
-            self.http.post(&url).body("")
+            self.request(reqwest::Method::POST, &url).body("")
         } else {
-            self.http.get(&url)
+            self.request(reqwest::Method::GET, &url)
         };
         let response = request
             .send()
@@ -124,19 +140,17 @@ impl DaemonClient {
     }
 
     /// POST a JSON body to a `/cli/*` route. `body` is serialized as
-    /// `application/json`; the auth token rides in the query string
-    /// (same wire shape `cli_get` uses, so a single daemon-token
-    /// rotation invalidates GET and POST identically). Returns the
-    /// raw response body on 2xx; any non-2xx is surfaced as `Err`.
+    /// `application/json`; the token rides the same header `cli_get`
+    /// sends. Returns the raw response body on 2xx; any non-2xx is
+    /// surfaced as `Err`.
     pub fn cli_post_json(
         &self,
         path: &str,
         body: &serde_json::Value,
     ) -> Result<String, String> {
-        let url = format!("{}{}?token={}", self.base, path, self.token);
+        let url = self.url(path, &[]);
         let response = self
-            .http
-            .post(&url)
+            .request(reqwest::Method::POST, &url)
             .header("Content-Type", "application/json")
             .body(body.to_string())
             .send()
@@ -177,14 +191,8 @@ impl DaemonClient {
     /// are the `/cli/*` routes that run the k2-core fn a Tauri command used
     /// to run in this process (0.46.4); see [`mirror_result`] for errors.
     pub fn mirror_get(&self, path: &str, params: &[(&str, &str)]) -> Result<serde_json::Value, String> {
-        let mut url = format!("{}{}?token={}", self.base, path, self.token);
-        for (k, v) in params {
-            url.push('&');
-            url.push_str(&pct_encode(k));
-            url.push('=');
-            url.push_str(&pct_encode(v));
-        }
-        let response = self.http.get(&url).send().map_err(|e| format!("daemon {path}: {e}"))?;
+        let url = self.url(path, params);
+        let response = self.request(reqwest::Method::GET, &url).send().map_err(|e| format!("daemon {path}: {e}"))?;
         let status = response.status().as_u16();
         let body = response.text().unwrap_or_default();
         mirror_result(path, status, &body)
@@ -193,10 +201,9 @@ impl DaemonClient {
     /// POST a JSON body to a thin-client mirror route and return its JSON
     /// reply (see [`mirror_get`]).
     pub fn mirror_post(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
-        let url = format!("{}{}?token={}", self.base, path, self.token);
+        let url = self.url(path, &[]);
         let response = self
-            .http
-            .post(&url)
+            .request(reqwest::Method::POST, &url)
             .header("Content-Type", "application/json")
             .body(body.to_string())
             .send()
@@ -211,12 +218,11 @@ impl DaemonClient {
         &self.base
     }
 
-    /// Hit `GET /status?token=<t>` and decode the JSON body.
+    /// Hit `GET /status` and decode the JSON body.
     pub fn status(&self) -> Result<DaemonStatus, String> {
-        let url = format!("{}/status?token={}", self.base, self.token);
+        let url = self.url("/status", &[]);
         let response = self
-            .http
-            .get(url)
+            .request(reqwest::Method::GET, &url)
             .send()
             .map_err(|e| format!("daemon /status: {e}"))?;
         let status = response.status();
@@ -317,8 +323,10 @@ pub(crate) mod test_support {
         pub method: String,
         /// Path without the query string.
         pub path: String,
-        /// Decoded query pairs, in order (the token included).
+        /// Decoded query pairs, in order.
         pub query: Vec<(String, String)>,
+        /// The `Authorization` header's value, if one came.
+        pub authorization: Option<String>,
         pub body: String,
     }
 
@@ -341,6 +349,7 @@ pub(crate) mod test_support {
                     let mut request_line = String::new();
                     reader.read_line(&mut request_line).expect("request line");
                     let mut content_length = 0usize;
+                    let mut authorization = None;
                     loop {
                         let mut header = String::new();
                         reader.read_line(&mut header).expect("header");
@@ -350,6 +359,9 @@ pub(crate) mod test_support {
                         let lower = header.to_ascii_lowercase();
                         if let Some(v) = lower.strip_prefix("content-length:") {
                             content_length = v.trim().parse().expect("content-length");
+                        }
+                        if lower.starts_with("authorization:") {
+                            authorization = Some(header["authorization:".len()..].trim().to_string());
                         }
                     }
                     let mut req_body = vec![0u8; content_length];
@@ -373,6 +385,7 @@ pub(crate) mod test_support {
                         method,
                         path,
                         query,
+                        authorization,
                         body: String::from_utf8(req_body).expect("utf-8 body"),
                     })
                     .expect("record request");
@@ -504,5 +517,166 @@ mod tests {
         std::fs::write(&tmp, "   \n").expect("write");
         assert!(read_token(&tmp).is_err());
         std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn a_request_carries_the_token_as_a_bearer_header_never_in_the_address() {
+        let client = DaemonClient::for_test("http://127.0.0.1:9", "tok");
+        let req = client
+            .request(reqwest::Method::GET, &client.url("/cli/x", &[("a", "b c")]))
+            .build()
+            .expect("build request");
+        assert_eq!(req.url().as_str(), "http://127.0.0.1:9/cli/x?a=b%20c");
+        assert!(!req.url().as_str().contains("token"), "token in the address: {}", req.url());
+        let auth = req.headers().get(reqwest::header::AUTHORIZATION).expect("an Authorization header");
+        assert_eq!(auth.to_str().expect("ascii"), "Bearer tok");
+        assert_eq!(client.url("/status", &[]), "http://127.0.0.1:9/status");
+    }
+
+    #[test]
+    fn every_route_helper_sends_the_bearer_and_no_token_param() {
+        use test_support::{pairs, FakeDaemon};
+        let fake = FakeDaemon::serve(vec![(200, "{}"), (200, "{}"), (200, "{}"), (200, "{}"), (200, "{}")]);
+        let client = DaemonClient::for_test(&fake.base, "tok");
+        let base = fake.base.clone();
+        tauri::async_runtime::block_on(off_main(move || {
+            client.cli_get("/cli/a", &[("k", "v")])?;
+            client.cli_post_query("/cli/b", &[("k", "v")])?;
+            client.cli_post_json("/cli/c", &serde_json::json!({}))?;
+            client.mirror_get("/cli/d", &[])?;
+            client.mirror_post("/cli/e", &serde_json::json!({}))?;
+            Ok(())
+        }))
+        .unwrap_or_else(|e| panic!("calls to {base}: {e}"));
+        for (method, path, query) in [
+            ("GET", "/cli/a", pairs(&[("k", "v")])),
+            ("POST", "/cli/b", pairs(&[("k", "v")])),
+            ("POST", "/cli/c", pairs(&[])),
+            ("GET", "/cli/d", pairs(&[])),
+            ("POST", "/cli/e", pairs(&[])),
+        ] {
+            let seen = fake.next();
+            assert_eq!((seen.method.as_str(), seen.path.as_str()), (method, path));
+            assert_eq!(seen.query, query, "{path}: the token must not be a query param");
+            assert_eq!(seen.authorization.as_deref(), Some("Bearer tok"), "{path}");
+        }
+    }
+
+    /// Every proxy variable reqwest reads.
+    const PROXY_VARS: [&str; 6] = ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"];
+    const PROXY_CHILD: &str = "DAEMON_CLIENT_TEST_PROXY_CHILD";
+    const PROXY_CHILD_DAEMON: &str = "DAEMON_CLIENT_TEST_DAEMON_BASE";
+
+    /// A listening stand-in proxy: counts every connection it accepts and
+    /// answers each with 502, so a client that went through it fails.
+    struct ProxyStub {
+        url: String,
+        hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl ProxyStub {
+        fn start() -> Self {
+            use std::io::{BufRead, BufReader, Write};
+            use std::sync::atomic::Ordering;
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind proxy stub");
+            let url = format!("http://{}", listener.local_addr().expect("proxy stub addr"));
+            let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = hits.clone();
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let stream = stream.expect("proxy stub accept");
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    stream.set_read_timeout(Some(Duration::from_secs(5))).expect("read timeout");
+                    let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                    let mut line = String::new();
+                    while reader.read_line(&mut line).map(|n| n > 0).unwrap_or(false) && line != "\r\n" {
+                        line.clear();
+                    }
+                    let mut out = stream;
+                    let _ = out.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                }
+            });
+            Self { url, hits }
+        }
+
+        fn hits(&self) -> usize {
+            self.hits.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    /// Run this test's child: this test binary again, with every proxy
+    /// variable pointing at `proxy`. The variables are set on the child
+    /// only, never in this process, so no other test sees them.
+    fn run_proxy_child(mode: &str, proxy: &ProxyStub, daemon_base: &str) -> std::process::Output {
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        child
+            .args(["--exact", "daemon_client::tests::proxy_settings_never_reach_the_daemon_client"])
+            .args(["--nocapture", "--test-threads=1"])
+            .env(PROXY_CHILD, mode)
+            .env(PROXY_CHILD_DAEMON, daemon_base)
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy")
+            .env_remove("REQUEST_METHOD")
+            .stdin(std::process::Stdio::null());
+        for var in PROXY_VARS {
+            child.env(var, &proxy.url);
+        }
+        child.output().expect("the child ran")
+    }
+
+    fn assert_child_passed(mode: &str, out: &std::process::Output) {
+        assert!(
+            out.status.success(),
+            "the {mode} child failed ({}):\n{}\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// K2 never sends a request to its own server through a proxy. The
+    /// child process has every proxy variable set to a listening stub;
+    /// a plain reqwest client there goes through the stub (the control,
+    /// so the zero below means something), and the daemon client goes
+    /// straight to the daemon with the stub seeing nothing.
+    #[test]
+    fn proxy_settings_never_reach_the_daemon_client() {
+        if let Ok(mode) = std::env::var(PROXY_CHILD) {
+            let base = std::env::var(PROXY_CHILD_DAEMON).expect("the daemon stub's base");
+            match mode.as_str() {
+                "control" => {
+                    let plain = reqwest::blocking::Client::builder()
+                        .timeout(Duration::from_secs(10))
+                        .build()
+                        .expect("plain client");
+                    let res = plain.get(format!("{base}/cli/control")).send().expect("the proxy stub answered");
+                    assert_eq!(res.status().as_u16(), 502, "a plain client must go through the proxy stub");
+                }
+                "daemon" => {
+                    let client = DaemonClient::for_test(&base, "tok");
+                    let body = client.cli_get("/cli/through", &[]).expect("the daemon stub answered");
+                    assert_eq!(body, "{}");
+                }
+                other => panic!("unknown child mode {other}"),
+            }
+            return;
+        }
+
+        // Control: the proxy variables do reach a plain client in the child.
+        // Nothing listens at its daemon address: only the proxy stub answers.
+        let proxy = ProxyStub::start();
+        let out = run_proxy_child("control", &proxy, "http://127.0.0.1:9");
+        assert_child_passed("control", &out);
+        assert_eq!(proxy.hits(), 1, "the control request must reach the proxy stub");
+
+        // The daemon client ignores them: the stub sees nothing.
+        let proxy = ProxyStub::start();
+        let fake = test_support::FakeDaemon::serve(vec![(200, "{}")]);
+        let out = run_proxy_child("daemon", &proxy, &fake.base);
+        assert_eq!(proxy.hits(), 0, "a proxy variable reached the daemon client: the proxy stub got its request");
+        assert_child_passed("daemon", &out);
+        let seen = fake.next();
+        assert_eq!((seen.method.as_str(), seen.path.as_str()), ("GET", "/cli/through"));
+        assert_eq!(seen.authorization.as_deref(), Some("Bearer tok"));
     }
 }

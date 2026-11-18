@@ -67,7 +67,10 @@ pub struct Packed<'a> {
 
 /// The copy this binary carries.
 pub fn embedded() -> Packed<'static> {
-    Packed { gz: embedded::SCRIPT_GZ, blake3: embedded::SCRIPT_BLAKE3 }
+    Packed {
+        gz: embedded::SCRIPT_GZ,
+        blake3: embedded::SCRIPT_BLAKE3,
+    }
 }
 
 impl Packed<'_> {
@@ -79,10 +82,15 @@ impl Packed<'_> {
     /// The script, unpacked, when it matches its BLAKE3.
     pub fn unpack(&self) -> Result<Vec<u8>, FrontError> {
         let mut out = Vec::new();
-        GzDecoder::new(self.gz).read_to_end(&mut out).map_err(|e| FrontError::Packed(e.to_string()))?;
+        GzDecoder::new(self.gz)
+            .read_to_end(&mut out)
+            .map_err(|e| FrontError::Packed(e.to_string()))?;
         let got = blake3_hex(&out);
         if got != self.blake3 {
-            return Err(FrontError::Packed(format!("it unpacks to BLAKE3 {got}, not {}", self.blake3)));
+            return Err(FrontError::Packed(format!(
+                "it unpacks to BLAKE3 {got}, not {}",
+                self.blake3
+            )));
         }
         Ok(out)
     }
@@ -108,7 +116,11 @@ pub struct Script {
 /// is the same bytes whatever is put at `path` afterwards.
 fn open_matching(path: &Path, want: &str, follow_links: bool) -> Option<fs::File> {
     // Looked at before opening, so a folder or a pipe is never opened.
-    let meta = if follow_links { fs::metadata(path) } else { fs::symlink_metadata(path) };
+    let meta = if follow_links {
+        fs::metadata(path)
+    } else {
+        fs::symlink_metadata(path)
+    };
     if !meta.ok()?.is_file() {
         return None;
     }
@@ -229,7 +241,10 @@ pub fn script(
 ) -> Result<Script, FrontError> {
     if let Some(copy) = bundled {
         if let Some(file) = open_matching(copy, packed.blake3, true) {
-            return Ok(Script { path: copy.to_path_buf(), file });
+            return Ok(Script {
+                path: copy.to_path_buf(),
+                file,
+            });
         }
     }
     let home = k2_home().map_err(FrontError::Home)?;
@@ -249,7 +264,10 @@ pub fn cached(packed: &Packed<'_>, dir: &Path) -> Result<Script, FrontError> {
         return Ok(Script { path, file });
     }
     let bytes = packed.unpack()?;
-    write_replacing(dir, &path, &bytes).map_err(|err| FrontError::Cache { path: path.clone(), err })?;
+    write_replacing(dir, &path, &bytes).map_err(|err| FrontError::Cache {
+        path: path.clone(),
+        err,
+    })?;
     trace::mark("unpack and write the cache");
     match open_matching(&path, packed.blake3, false) {
         Some(file) => Ok(Script { path, file }),
@@ -260,11 +278,18 @@ pub fn cached(packed: &Packed<'_>, dir: &Path) -> Result<Script, FrontError> {
 /// Makes `dir` (and what is missing above it) and leaves it a folder only
 /// its owner can open (0700 on Unix).
 fn private_dir(dir: &Path) -> Result<(), FrontError> {
-    let fail = |err: io::Error| FrontError::Cache { path: dir.to_path_buf(), err };
+    let fail = |err: io::Error| FrontError::Cache {
+        path: dir.to_path_buf(),
+        err,
+    };
     #[cfg(unix)]
     {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).map_err(fail)?;
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(fail)?;
         let meta = fs::symlink_metadata(dir).map_err(fail)?;
         if !meta.is_dir() {
             return Err(fail(io::Error::other("not a folder")));
@@ -281,8 +306,14 @@ fn private_dir(dir: &Path) -> Result<(), FrontError> {
 /// Writes `bytes` to a new temporary file in `dir` (0755 on Unix) and
 /// renames it over `path`, so no one ever runs a half-written script.
 fn write_replacing(dir: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     let tmp = dir.join(format!(".{name}.{}.{nanos}.tmp", std::process::id()));
     let result = write_new(&tmp, bytes).and_then(|()| fs::rename(&tmp, path));
     if result.is_err() {
@@ -395,7 +426,13 @@ pub fn interpreter(args: &[OsString]) -> Result<PathBuf, FrontError> {
 /// `script_dir`, or taken away when there is none (so a value left by
 /// another call is never read as this one's). The rest of the environment
 /// is this process's own.
-pub fn command(bash: &Path, script: &OsStr, args: &[OsString], who: CalledAs, script_dir: Option<&Path>) -> Command {
+pub fn command(
+    bash: &Path,
+    script: &OsStr,
+    args: &[OsString],
+    who: CalledAs,
+    script_dir: Option<&Path>,
+) -> Command {
     let mut cmd = Command::new(bash);
     cmd.arg(script).args(args).envs(who.fallthrough_env());
     match script_dir {
@@ -513,10 +550,16 @@ mod tests {
 
     impl Fixture {
         fn new(bytes: &[u8]) -> Fixture {
-            Fixture { gz: gzip(bytes), blake: blake3_hex(bytes) }
+            Fixture {
+                gz: gzip(bytes),
+                blake: blake3_hex(bytes),
+            }
         }
         fn packed(&self) -> Packed<'_> {
-            Packed { gz: &self.gz, blake3: &self.blake }
+            Packed {
+                gz: &self.gz,
+                blake3: &self.blake,
+            }
         }
     }
 
@@ -545,15 +588,25 @@ mod tests {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
         let want = fs::read(&repo).unwrap_or_else(|e| panic!("read {}: {e}", repo.display()));
         let got = embedded().unpack().expect("the embedded copy unpacks");
-        assert!(got == want, "the embedded copy differs from {}", repo.display());
+        assert!(
+            got == want,
+            "the embedded copy differs from {}",
+            repo.display()
+        );
         assert_eq!(embedded().blake3, blake3_hex(&want));
     }
 
     /// The hex is BLAKE3's own: the reference vectors for "" and "abc".
     #[test]
     fn the_digest_is_blake3() {
-        assert_eq!(blake3_hex(b""), "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262");
-        assert_eq!(blake3_hex(b"abc"), "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85");
+        assert_eq!(
+            blake3_hex(b""),
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+        );
+        assert_eq!(
+            blake3_hex(b"abc"),
+            "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+        );
     }
 
     /// The digest built into the binary is the BLAKE3 of this checkout's
@@ -564,7 +617,10 @@ mod tests {
     fn the_built_in_blake3_is_cli_k2_s_and_a_one_byte_change_is_refused() {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
         let real = fs::read(&repo).unwrap_or_else(|e| panic!("read {}: {e}", repo.display()));
-        assert_eq!(embedded::SCRIPT_BLAKE3, blake3::hash(&real).to_hex().as_str());
+        assert_eq!(
+            embedded::SCRIPT_BLAKE3,
+            blake3::hash(&real).to_hex().as_str()
+        );
         let packed = embedded();
         for at in [0, real.len() / 2, real.len() - 1] {
             let mut off = real.clone();
@@ -575,15 +631,28 @@ mod tests {
             fs::write(&path, &off).unwrap();
             let got = cached(&packed, &dir).unwrap();
             assert_eq!(got.path, path);
-            assert!(read_all(got.file) == real, "byte {at}: the changed cache file was run");
-            assert!(fs::read(&path).unwrap() == real, "byte {at}: the changed cache file was not replaced");
+            assert!(
+                read_all(got.file) == real,
+                "byte {at}: the changed cache file was run"
+            );
+            assert!(
+                fs::read(&path).unwrap() == real,
+                "byte {at}: the changed cache file was not replaced"
+            );
             let bundled = dir.join("bundled-k2");
             fs::write(&bundled, &off).unwrap();
             let home = dir.join("home");
             let got = script(&packed, Some(&bundled), || Ok(home.clone())).unwrap();
-            assert_eq!(got.path, cache_dir(&home).join(packed.cache_name()), "byte {at}: the changed bundled copy was used");
+            assert_eq!(
+                got.path,
+                cache_dir(&home).join(packed.cache_name()),
+                "byte {at}: the changed bundled copy was used"
+            );
             assert!(read_all(got.file) == real);
-            assert!(fs::read(&bundled).unwrap() == off, "byte {at}: the bundled copy was touched");
+            assert!(
+                fs::read(&bundled).unwrap() == off,
+                "byte {at}: the bundled copy was touched"
+            );
             fs::remove_dir_all(&dir).unwrap();
         }
     }
@@ -596,14 +665,21 @@ mod tests {
         let path = got.path.clone();
         assert_eq!(path, home.join("run/cli").join(f.packed().cache_name()));
         assert_eq!(fs::read(&path).unwrap(), SCRIPT);
-        assert_eq!(read_all(got.file), SCRIPT, "the open file reads from the start");
+        assert_eq!(
+            read_all(got.file),
+            SCRIPT,
+            "the open file reads from the start"
+        );
         #[cfg(unix)]
         {
             assert_eq!(mode(&path), 0o755);
             assert_eq!(mode(&home.join("run/cli")), 0o700);
         }
         // Nothing else is left in the folder (no temporary file).
-        let names: Vec<_> = fs::read_dir(home.join("run/cli")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> = fs::read_dir(home.join("run/cli"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names, vec![OsString::from(f.packed().cache_name())]);
         fs::remove_dir_all(&home).unwrap();
     }
@@ -618,8 +694,16 @@ mod tests {
         let before = fs::metadata(&path).unwrap().ino();
         let again = cached(&f.packed(), &dir).unwrap();
         assert_eq!(again.path, path);
-        assert_eq!(read_all(again.file), SCRIPT, "a kept cache file is read from the start");
-        assert_eq!(fs::metadata(&path).unwrap().ino(), before, "a matching cache file is not rewritten");
+        assert_eq!(
+            read_all(again.file),
+            SCRIPT,
+            "a kept cache file is read from the start"
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().ino(),
+            before,
+            "a matching cache file is not rewritten"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -683,11 +767,17 @@ mod tests {
         let dir = scratch("badpack");
         let f = Fixture::new(SCRIPT);
         let wrong = blake3_hex(b"something else");
-        let bad = Packed { gz: &f.gz, blake3: &wrong };
+        let bad = Packed {
+            gz: &f.gz,
+            blake3: &wrong,
+        };
         let err = cached(&bad, &dir).expect_err("a mismatch is an error");
         assert!(matches!(err, FrontError::Packed(_)), "{err:?}");
         assert!(!dir.join(bad.cache_name()).exists());
-        let not_gzip = Packed { gz: b"not gzip", blake3: &f.blake };
+        let not_gzip = Packed {
+            gz: b"not gzip",
+            blake3: &f.blake,
+        };
         assert!(matches!(not_gzip.unpack(), Err(FrontError::Packed(_))));
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -700,18 +790,28 @@ mod tests {
         fs::write(&bundled, SCRIPT).unwrap();
         let home = dir.join("home");
         // Matching: used as it is, and the home is never looked up.
-        let got = script(&f.packed(), Some(&bundled), || panic!("the home is not needed")).unwrap();
+        let got = script(&f.packed(), Some(&bundled), || {
+            panic!("the home is not needed")
+        })
+        .unwrap();
         assert_eq!(got.path, bundled);
         assert_eq!(read_all(got.file), SCRIPT);
         assert!(!home.exists());
         // Changed: the cache instead, and the bundled file is left alone.
         fs::write(&bundled, b"#!/bin/bash\necho old\n").unwrap();
-        let got = script(&f.packed(), Some(&bundled), || Ok(home.clone())).unwrap().path;
+        let got = script(&f.packed(), Some(&bundled), || Ok(home.clone()))
+            .unwrap()
+            .path;
         assert_eq!(got, cache_dir(&home).join(f.packed().cache_name()));
         assert_eq!(fs::read(&bundled).unwrap(), b"#!/bin/bash\necho old\n");
         // Missing: the cache.
         fs::remove_file(&bundled).unwrap();
-        assert_eq!(script(&f.packed(), Some(&bundled), || Ok(home.clone())).unwrap().path, got);
+        assert_eq!(
+            script(&f.packed(), Some(&bundled), || Ok(home.clone()))
+                .unwrap()
+                .path,
+            got
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -719,7 +819,10 @@ mod tests {
     fn no_home_is_an_error_and_writes_nothing() {
         let f = Fixture::new(SCRIPT);
         let err = script(&f.packed(), None, || Err(HomeError::NoUserHome)).expect_err("no home");
-        assert!(matches!(err, FrontError::Home(HomeError::NoUserHome)), "{err:?}");
+        assert!(
+            matches!(err, FrontError::Home(HomeError::NoUserHome)),
+            "{err:?}"
+        );
         assert_eq!(
             err.line(CalledAs::K5Name),
             "k5: can't find where to keep the shell CLI: no home folder: set HOME"
@@ -751,20 +854,38 @@ mod tests {
 
     #[test]
     fn bash_is_looked_for_in_the_system_s_places() {
-        let only = |have: &'static [&'static str]| move |p: &Path| have.iter().any(|h| Path::new(h) == p);
-        assert_eq!(find_unix_bash(true, only(&["/bin/bash"])).unwrap(), Path::new("/bin/bash"));
-        assert!(matches!(find_unix_bash(true, only(&["/usr/bin/bash"])), Err(FrontError::NoBash { .. })));
-        assert_eq!(find_unix_bash(false, only(&["/bin/bash", "/usr/bin/bash"])).unwrap(), Path::new("/bin/bash"));
-        assert_eq!(find_unix_bash(false, only(&["/usr/bin/bash"])).unwrap(), Path::new("/usr/bin/bash"));
+        let only =
+            |have: &'static [&'static str]| move |p: &Path| have.iter().any(|h| Path::new(h) == p);
+        assert_eq!(
+            find_unix_bash(true, only(&["/bin/bash"])).unwrap(),
+            Path::new("/bin/bash")
+        );
+        assert!(matches!(
+            find_unix_bash(true, only(&["/usr/bin/bash"])),
+            Err(FrontError::NoBash { .. })
+        ));
+        assert_eq!(
+            find_unix_bash(false, only(&["/bin/bash", "/usr/bin/bash"])).unwrap(),
+            Path::new("/bin/bash")
+        );
+        assert_eq!(
+            find_unix_bash(false, only(&["/usr/bin/bash"])).unwrap(),
+            Path::new("/usr/bin/bash")
+        );
         // Never one from PATH.
         let err = find_unix_bash(false, only(&["/usr/local/bin/bash"])).expect_err("no bash");
-        assert_eq!(err.line(CalledAs::K2Name), "k2: no bash to run the shell CLI (looked for /bin/bash, /usr/bin/bash)");
+        assert_eq!(
+            err.line(CalledAs::K2Name),
+            "k2: no bash to run the shell CLI (looked for /bin/bash, /usr/bin/bash)"
+        );
         assert_eq!(err.exit_code(), 1);
     }
 
     #[test]
     fn without_git_bash_windows_says_so_and_exits_9009() {
-        let err = FrontError::NoGitBash { noun: noun(&[OsString::from("msg"), OsString::from("x")]) };
+        let err = FrontError::NoGitBash {
+            noun: noun(&[OsString::from("msg"), OsString::from("x")]),
+        };
         let line = "k5 msg is not built into k5 on Windows yet and still needs Git Bash (Git for Windows): https://git-scm.com/download/win";
         assert_eq!(err.line(CalledAs::K2Name), line);
         assert_eq!(err.line(CalledAs::K5Name), line);
@@ -775,13 +896,24 @@ mod tests {
 
     #[test]
     fn the_command_passes_the_arguments_as_they_came() {
-        let mut args = vec![OsString::from("msg"), OsString::from("a b"), OsString::from(""), OsString::from("--json")];
+        let mut args = vec![
+            OsString::from("msg"),
+            OsString::from("a b"),
+            OsString::from(""),
+            OsString::from("--json"),
+        ];
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStringExt;
             args.push(OsString::from_vec(b"caf\xe9 \xff\n".to_vec()));
         }
-        let cmd = command(Path::new("/bin/bash"), OsStr::new("/dev/fd/4"), &args, CalledAs::K5Name, Some(Path::new("/opt/k 2")));
+        let cmd = command(
+            Path::new("/bin/bash"),
+            OsStr::new("/dev/fd/4"),
+            &args,
+            CalledAs::K5Name,
+            Some(Path::new("/opt/k 2")),
+        );
         assert_eq!(cmd.get_program(), "/bin/bash");
         let got: Vec<&std::ffi::OsStr> = cmd.get_args().collect();
         let mut want: Vec<&std::ffi::OsStr> = vec![std::ffi::OsStr::new("/dev/fd/4")];
@@ -789,7 +921,12 @@ mod tests {
         assert_eq!(got, want);
         let envs: Vec<(String, Option<String>)> = cmd
             .get_envs()
-            .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned())))
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
             .collect();
         let mut want: Vec<(String, Option<String>)> = CalledAs::K5Name
             .fallthrough_env()
@@ -800,11 +937,23 @@ mod tests {
         want.sort();
         let mut envs = envs;
         envs.sort();
-        assert_eq!(envs, want, "only the four variables are added, nothing removed");
+        assert_eq!(
+            envs, want,
+            "only the four variables are added, nothing removed"
+        );
         // No folder: the variable is taken away, so an inherited one is
         // never read as this call's.
-        let cmd = command(Path::new("/bin/bash"), OsStr::new("/dev/fd/4"), &[], CalledAs::K2Name, None);
-        let dir: Vec<_> = cmd.get_envs().filter(|(k, _)| *k == SCRIPT_DIR_VAR).collect();
+        let cmd = command(
+            Path::new("/bin/bash"),
+            OsStr::new("/dev/fd/4"),
+            &[],
+            CalledAs::K2Name,
+            None,
+        );
+        let dir: Vec<_> = cmd
+            .get_envs()
+            .filter(|(k, _)| *k == SCRIPT_DIR_VAR)
+            .collect();
         assert_eq!(dir, vec![(OsStr::new(SCRIPT_DIR_VAR), None)]);
     }
 
@@ -826,7 +975,10 @@ mod tests {
         fs::write(cli.join("k2"), SCRIPT).unwrap();
         assert_eq!(script_dir_for(&exe), Some(cli));
         // A build or an install elsewhere: its own folder.
-        assert_eq!(script_dir_for(&dir.join("opt/k5/k5-cli")), Some(dir.join("opt/k5")));
+        assert_eq!(
+            script_dir_for(&dir.join("opt/k5/k5-cli")),
+            Some(dir.join("opt/k5"))
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -854,7 +1006,10 @@ mod tests {
             flags & libc::FD_CLOEXEC != 0
         };
         assert!(!cloexec(fd.as_raw_fd()), "the copy bash gets survives exec");
-        assert!(cloexec(got.file.as_raw_fd()), "the front's own descriptor closes at exec");
+        assert!(
+            cloexec(got.file.as_raw_fd()),
+            "the front's own descriptor closes at exec"
+        );
         let path = dev_fd(&fd);
         assert_eq!(path, OsString::from(format!("/dev/fd/{}", fd.as_raw_fd())));
         assert_eq!(fs::read(&path).unwrap(), SCRIPT, "through {path:?}");
@@ -882,7 +1037,11 @@ mod tests {
             .env_clear()
             .output()
             .unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout), format!("/dev/fd/{}|x y\n", fd.as_raw_fd()), "{out:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            format!("/dev/fd/{}|x y\n", fd.as_raw_fd()),
+            "{out:?}"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 }

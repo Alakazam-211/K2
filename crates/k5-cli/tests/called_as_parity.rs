@@ -11,7 +11,11 @@ use std::ffi::OsStr;
 
 /// The prelude's lines that set `_K2_CALLED_AS`.
 fn called_as_block() -> String {
-    common::block(&common::prelude(), r#"_k2_name="${0##*/}""#, "unset _k2_name")
+    common::block(
+        &common::prelude(),
+        r#"_k2_name="${0##*/}""#,
+        "unset _k2_name",
+    )
 }
 
 /// The prelude's lines that read the other two variables the front sets.
@@ -31,7 +35,19 @@ fn the_prelude_still_holds_both_blocks() {
 fn every_argv0_and_value_reads_as_the_shell_reads_it() {
     let script = format!("{}\nprintf '%s\\n' \"$_K2_CALLED_AS\"", called_as_block());
     let argv0s = [
-        "k2", "k5", "/usr/local/bin/k5", "./k5", "/tmp/x/k2", "k2so", "some-copy", "", "/", "/opt/k5/", "K5", "k5.exe", "k5 ",
+        "k2",
+        "k5",
+        "/usr/local/bin/k5",
+        "./k5",
+        "/tmp/x/k2",
+        "k2so",
+        "some-copy",
+        "",
+        "/",
+        "/opt/k5/",
+        "K5",
+        "k5.exe",
+        "k5 ",
         "C:\\bin\\k5",
     ];
     let values = [
@@ -48,16 +64,29 @@ fn every_argv0_and_value_reads_as_the_shell_reads_it() {
     let mut wrong = Vec::new();
     for argv0 in argv0s {
         for value in values {
-            let env: Vec<(&str, &str)> = value.map(|v| ("K5_CLI_CALLED_AS", v)).into_iter().collect();
+            let env: Vec<(&str, &str)> =
+                value.map(|v| ("K5_CLI_CALLED_AS", v)).into_iter().collect();
             let shell = common::bash(&script, argv0, &env);
-            let lookup = |name: &str| value.filter(|_| name == "K5_CLI_CALLED_AS").map(str::to_string);
+            let lookup = |name: &str| {
+                value
+                    .filter(|_| name == "K5_CLI_CALLED_AS")
+                    .map(str::to_string)
+            };
             let rust = called_as(OsStr::new(argv0), lookup, Os::Unix);
             if shell.trim_end_matches('\n') != rust.name() {
-                wrong.push(format!("argv0 {argv0:?}, K5_CLI_CALLED_AS={value:?}: shell {shell:?}, rust {:?}", rust.name()));
+                wrong.push(format!(
+                    "argv0 {argv0:?}, K5_CLI_CALLED_AS={value:?}: shell {shell:?}, rust {:?}",
+                    rust.name()
+                ));
             }
         }
     }
-    assert!(wrong.is_empty(), "{} rows differ:\n{}", wrong.len(), wrong.join("\n"));
+    assert!(
+        wrong.is_empty(),
+        "{} rows differ:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
 }
 
 /// What the front hands on is what the shell acts on: the name, the
@@ -74,7 +103,11 @@ fn the_fallthrough_env_is_what_the_shell_reads() {
         for argv0 in ["k2", "k5", "/opt/k5-front/libexec/k2-cli"] {
             let env = who.fallthrough_env();
             let shell = common::bash(&script, argv0, &env);
-            assert_eq!(shell, format!("{}|1|rust\n", who.name()), "{who:?} called from {argv0:?}");
+            assert_eq!(
+                shell,
+                format!("{}|1|rust\n", who.name()),
+                "{who:?} called from {argv0:?}"
+            );
         }
     }
     // Without the front, none of the three is set.
@@ -84,7 +117,11 @@ fn the_fallthrough_env_is_what_the_shell_reads() {
 /// The prelude's lines that read the folder the front passes and close the
 /// script's descriptor the front handed over.
 fn script_dir_block() -> String {
-    common::block(&common::prelude(), r#"_K5_SCRIPT_DIR="${K5_CLI_SCRIPT_DIR:-}""#, "fi")
+    common::block(
+        &common::prelude(),
+        r#"_K5_SCRIPT_DIR="${K5_CLI_SCRIPT_DIR:-}""#,
+        "fi",
+    )
 }
 
 /// The folder arrives as it was set; empty or unset is none.
@@ -92,14 +129,29 @@ fn script_dir_block() -> String {
 #[test]
 fn the_script_dir_is_what_the_shell_reads() {
     use k5_cli::called_as::SCRIPT_DIR_VAR;
-    let script = format!("{}\n{}\nprintf '[%s]\\n' \"$_K5_SCRIPT_DIR\"", handoff_block(), script_dir_block());
+    let script = format!(
+        "{}\n{}\nprintf '[%s]\\n' \"$_K5_SCRIPT_DIR\"",
+        handoff_block(),
+        script_dir_block()
+    );
     assert!(script_dir_block().contains(SCRIPT_DIR_VAR));
-    assert_eq!(common::bash(&script, "k2", &[(SCRIPT_DIR_VAR, "/opt/k5 x/bin")]), "[/opt/k5 x/bin]\n");
+    assert_eq!(
+        common::bash(&script, "k2", &[(SCRIPT_DIR_VAR, "/opt/k5 x/bin")]),
+        "[/opt/k5 x/bin]\n"
+    );
     assert_eq!(common::bash(&script, "k2", &[(SCRIPT_DIR_VAR, "")]), "[]\n");
     assert_eq!(common::bash(&script, "k2", &[]), "[]\n");
     // Taken out of the environment: a child never sees it.
-    let child = format!("{}\n{}\nsh -c 'echo \"[${{{var}-unset}}]\"'", handoff_block(), script_dir_block(), var = SCRIPT_DIR_VAR);
-    assert_eq!(common::bash(&child, "k2", &[(SCRIPT_DIR_VAR, "/opt/k5")]), "[unset]\n");
+    let child = format!(
+        "{}\n{}\nsh -c 'echo \"[${{{var}-unset}}]\"'",
+        handoff_block(),
+        script_dir_block(),
+        var = SCRIPT_DIR_VAR
+    );
+    assert_eq!(
+        common::bash(&child, "k2", &[(SCRIPT_DIR_VAR, "/opt/k5")]),
+        "[unset]\n"
+    );
 }
 
 /// Run from the front as `/dev/fd/N`, the shell closes N, so what it
@@ -125,11 +177,19 @@ fn the_front_s_descriptor_is_closed_and_nothing_else() {
         ("9", via, "open\n"),
     ];
     for (argv0, env, want) in rows {
-        assert_eq!(common::bash(&script, argv0, env), *want, "$0 {argv0:?}, env {env:?}");
+        assert_eq!(
+            common::bash(&script, argv0, env),
+            *want,
+            "$0 {argv0:?}, env {env:?}"
+        );
     }
     // The three standard ones are never closed.
     for n in ["0", "1", "2"] {
         let script = format!("{}\n{}\necho still", handoff_block(), script_dir_block());
-        assert_eq!(common::bash(&script, &format!("/dev/fd/{n}"), via), "still\n", "/dev/fd/{n}");
+        assert_eq!(
+            common::bash(&script, &format!("/dev/fd/{n}"), via),
+            "still\n",
+            "/dev/fd/{n}"
+        );
     }
 }

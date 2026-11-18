@@ -87,7 +87,10 @@ pub enum Stop {
 /// The words after `done`, read as the shell's loop reads them. `agent`
 /// is `AGENT_NAME`'s value, or empty.
 pub fn flags(words: &[&str], agent: &str) -> Result<Mark, Stop> {
-    let mut mark = Mark { agent: agent.to_string(), blocked: String::new() };
+    let mut mark = Mark {
+        agent: agent.to_string(),
+        blocked: String::new(),
+    };
     let mut i = 0;
     while i < words.len() {
         match words[i] {
@@ -143,7 +146,11 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Some((_, v)) => v.into_string().ok()?,
         None => String::new(),
     };
-    let words: Vec<&str> = args.iter().skip(1).map(|a| a.to_str()).collect::<Option<_>>()?;
+    let words: Vec<&str> = args
+        .iter()
+        .skip(1)
+        .map(|a| a.to_str())
+        .collect::<Option<_>>()?;
     let read = match flags(&words, &agent) {
         Err(Stop::Help) => return None,
         other => other,
@@ -176,7 +183,11 @@ fn run_with(args: &[OsString], read: Result<Mark, Stop>, mut settings: Settings)
     // The gate passed, so there is a port text and a token. curl refuses a
     // port that is no port (3), and `_cli_curl` reads that as any failure.
     let Some(port) = settings.port_text.as_deref().and_then(curl_port) else {
-        return Exit::from_curl(if tmpdir_unusable() { LOCAL_TRANSPORT_DENIED } else { curl::URL_MALFORMAT });
+        return Exit::from_curl(if tmpdir_unusable() {
+            LOCAL_TRANSPORT_DENIED
+        } else {
+            curl::URL_MALFORMAT
+        });
     };
     settings.port = Some(port);
     let mut client = match settings.client(passport::current(args).would_refuse()) {
@@ -213,7 +224,8 @@ mod tests {
     use std::collections::HashMap;
 
     fn source() -> String {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/msg-whoami-done.sh");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/src/msg-whoami-done.sh");
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
     }
 
@@ -222,7 +234,10 @@ mod tests {
     fn the_shell_s_lines() {
         let text = source();
         for line in [AGENT_NEEDS_A_NAME, BLOCKED_NEEDS_A_REASON, AGENT_REQUIRED] {
-            assert!(text.contains(&format!("echo \"{line}\" >&2")), "{line:?} moved");
+            assert!(
+                text.contains(&format!("echo \"{line}\" >&2")),
+                "{line:?} moved"
+            );
         }
         assert!(
             text.contains(r#"-*) echo "k2 done: unknown flag '$1'. k2 done takes --blocked \"reason\" and --agent <name> (k2 done --help)." >&2; exit 2 ;;"#),
@@ -248,12 +263,22 @@ mod tests {
             text.contains(raw) && !text.contains(fixed),
             "cmd_done's agent line changed: if it is 0.46.16's {fixed:?}, pin it here and compare the escaped-agent rows with bash"
         );
-        let session = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/session-complete.sh")).unwrap();
-        assert!(session.contains("        1|true|yes|YES|True) return 0 ;;"), "_is_api_lifecycle_context's values moved");
+        let session = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../cli/src/session-complete.sh"),
+        )
+        .unwrap();
+        assert!(
+            session.contains("        1|true|yes|YES|True) return 0 ;;"),
+            "_is_api_lifecycle_context's values moved"
+        );
     }
 
     fn mark(agent: &str, blocked: &str) -> Result<Mark, Stop> {
-        Ok(Mark { agent: agent.into(), blocked: blocked.into() })
+        Ok(Mark {
+            agent: agent.into(),
+            blocked: blocked.into(),
+        })
     }
 
     fn usage(line: &str) -> Result<Mark, Stop> {
@@ -264,15 +289,33 @@ mod tests {
     fn the_flags() {
         assert_eq!(flags(&[], "t"), mark("t", ""));
         assert_eq!(flags(&["shipped the fix"], "t"), mark("t", ""));
-        assert_eq!(flags(&["--blocked", "waiting on review"], "t"), mark("t", "waiting on review"));
-        assert_eq!(flags(&["--agent", "other", "--blocked", "-x"], "t"), mark("other", "-x"));
-        assert_eq!(flags(&["--blocked", "a", "--blocked", ""], "t"), mark("t", ""));
-        assert_eq!(flags(&["--agent", ""], "t"), Err(Stop::Usage(AGENT_REQUIRED.into(), Exit::Error)));
-        assert_eq!(flags(&[], ""), Err(Stop::Usage(AGENT_REQUIRED.into(), Exit::Error)));
+        assert_eq!(
+            flags(&["--blocked", "waiting on review"], "t"),
+            mark("t", "waiting on review")
+        );
+        assert_eq!(
+            flags(&["--agent", "other", "--blocked", "-x"], "t"),
+            mark("other", "-x")
+        );
+        assert_eq!(
+            flags(&["--blocked", "a", "--blocked", ""], "t"),
+            mark("t", "")
+        );
+        assert_eq!(
+            flags(&["--agent", ""], "t"),
+            Err(Stop::Usage(AGENT_REQUIRED.into(), Exit::Error))
+        );
+        assert_eq!(
+            flags(&[], ""),
+            Err(Stop::Usage(AGENT_REQUIRED.into(), Exit::Error))
+        );
         assert_eq!(flags(&["--agent"], "t"), usage(AGENT_NEEDS_A_NAME));
         assert_eq!(flags(&["--agent", "-x"], "t"), usage(AGENT_NEEDS_A_NAME));
         assert_eq!(flags(&["--blocked"], "t"), usage(BLOCKED_NEEDS_A_REASON));
-        assert_eq!(flags(&["--bogus", "--agent"], "t"), usage(&unknown_flag("--bogus")));
+        assert_eq!(
+            flags(&["--bogus", "--agent"], "t"),
+            usage(&unknown_flag("--bogus"))
+        );
         assert_eq!(flags(&["x", "-"], ""), usage(&unknown_flag("-")));
         assert_eq!(flags(&["--json"], "t"), usage(&unknown_flag("--json")));
         // The first stop wins, before the agent check.
@@ -283,17 +326,50 @@ mod tests {
 
     #[test]
     fn the_query() {
-        assert_eq!(params(&Mark { agent: "tester".into(), blocked: String::new() }), "agent=tester");
-        assert_eq!(params(&Mark { agent: "a&b=c".into(), blocked: "é & /x".into() }), "agent=a%26b%3Dc&blocked=%C3%A9%20%26%20%2Fx");
-        assert_eq!(params(&Mark { agent: "a#b".into(), blocked: "x".into() }), "agent=a%23b&blocked=x");
-        assert_eq!(params(&Mark { agent: "x&blocked=y".into(), blocked: String::new() }), "agent=x%26blocked%3Dy");
-        assert_eq!(params(&Mark { agent: "a b+c\t\u{7f}".into(), blocked: String::new() }), "agent=a%20b%2Bc%09%7F");
+        assert_eq!(
+            params(&Mark {
+                agent: "tester".into(),
+                blocked: String::new()
+            }),
+            "agent=tester"
+        );
+        assert_eq!(
+            params(&Mark {
+                agent: "a&b=c".into(),
+                blocked: "é & /x".into()
+            }),
+            "agent=a%26b%3Dc&blocked=%C3%A9%20%26%20%2Fx"
+        );
+        assert_eq!(
+            params(&Mark {
+                agent: "a#b".into(),
+                blocked: "x".into()
+            }),
+            "agent=a%23b&blocked=x"
+        );
+        assert_eq!(
+            params(&Mark {
+                agent: "x&blocked=y".into(),
+                blocked: String::new()
+            }),
+            "agent=x%26blocked%3Dy"
+        );
+        assert_eq!(
+            params(&Mark {
+                agent: "a b+c\t\u{7f}".into(),
+                blocked: String::new()
+            }),
+            "agent=a%20b%2Bc%09%7F"
+        );
     }
 
     #[test]
     fn a_session_the_api_started() {
         let env = |pairs: &[(&str, &str)]| {
-            let map: HashMap<String, OsString> = pairs.iter().map(|(k, v)| (k.to_string(), OsString::from(v))).collect();
+            let map: HashMap<String, OsString> = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), OsString::from(v)))
+                .collect();
             move |name: &str| map.get(name).cloned()
         };
         for v in ["1", "true", "yes", "YES", "True"] {
@@ -303,7 +379,13 @@ mod tests {
             assert!(!api_lifecycle(env(&[("K2_API_CELL", v)])), "{v}");
         }
         assert!(!api_lifecycle(env(&[])));
-        assert!(api_lifecycle(env(&[("K5_API_CELL", ""), ("K2SO_API_CELL", "1")])));
-        assert!(!api_lifecycle(env(&[("K5_API_CELL", "0"), ("K2_API_CELL", "1")])), "the first that is set decides");
+        assert!(api_lifecycle(env(&[
+            ("K5_API_CELL", ""),
+            ("K2SO_API_CELL", "1")
+        ])));
+        assert!(
+            !api_lifecycle(env(&[("K5_API_CELL", "0"), ("K2_API_CELL", "1")])),
+            "the first that is set decides"
+        );
     }
 }

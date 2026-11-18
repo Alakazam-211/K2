@@ -34,10 +34,16 @@ fn the_offline_list_is_the_shell_s_word_for_word() {
         .strip_prefix(r#"case "${1:-}" in "#)
         .and_then(|l| l.strip_suffix(") _k2_offline_verb=1 ;; esac"))
         .unwrap_or_else(|| panic!("the guard's case line changed shape: {line}"));
-    let shell: Vec<&str> = list.split('|').map(|v| if v == r#""""# { "" } else { v }).collect();
+    let shell: Vec<&str> = list
+        .split('|')
+        .map(|v| if v == r#""""# { "" } else { v })
+        .collect();
     assert_eq!(shell, OFFLINE_FIRST);
     let anywhere = block.lines().nth(2).expect("the loop line");
-    assert!(anywhere.contains(&format!("case \"$_a\" in {})", OFFLINE_ANYWHERE.join("|"))), "{anywhere}");
+    assert!(
+        anywhere.contains(&format!("case \"$_a\" in {})", OFFLINE_ANYWHERE.join("|"))),
+        "{anywhere}"
+    );
 }
 
 #[cfg(unix)]
@@ -88,13 +94,23 @@ fn would_refuse_block() -> String {
 #[cfg(unix)]
 #[test]
 fn the_shell_reads_the_hand_off_as_the_front_sets_it() {
-    let script = format!("{}\nprintf '%s' \"$_K5_WOULD_REFUSE\"", would_refuse_block());
+    let script = format!(
+        "{}\nprintf '%s' \"$_K5_WOULD_REFUSE\"",
+        would_refuse_block()
+    );
     let (name, value) = passport::hand_off_env(Verdict::WouldRefuse);
     assert_eq!(name, WOULD_REFUSE_VAR);
-    assert_eq!(common::bash(&script, "k2", &[(name, value.expect("a value"))]), "1");
+    assert_eq!(
+        common::bash(&script, "k2", &[(name, value.expect("a value"))]),
+        "1"
+    );
     assert_eq!(common::bash(&script, "k2", &[]), "");
     for other in ["", "0", "yes", " 1", "11", "true"] {
-        assert_eq!(common::bash(&script, "k2", &[(name, other)]), "", "{other:?}");
+        assert_eq!(
+            common::bash(&script, "k2", &[(name, other)]),
+            "",
+            "{other:?}"
+        );
     }
 }
 
@@ -108,7 +124,11 @@ fn the_prelude_unsets_every_hand_over_variable() {
         .filter_map(|l| l.strip_prefix("unset "))
         .flat_map(str::split_whitespace)
         .collect();
-    let mut names: Vec<&str> = CalledAs::K2Name.fallthrough_env().iter().map(|(n, _)| *n).collect();
+    let mut names: Vec<&str> = CalledAs::K2Name
+        .fallthrough_env()
+        .iter()
+        .map(|(n, _)| *n)
+        .collect();
     names.push(WOULD_REFUSE_VAR);
     for name in names {
         assert!(unset.contains(&name), "the prelude never unsets {name}");
@@ -120,11 +140,27 @@ fn the_prelude_unsets_every_hand_over_variable() {
 #[test]
 fn the_markers_are_the_ones_the_shell_names() {
     let sources = common::shell_sources();
-    let text = |name: &str| sources.iter().find(|(n, _)| n == name).map(|(_, t)| t.clone()).expect(name);
+    let text = |name: &str| {
+        sources
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t.clone())
+            .expect(name)
+    };
     assert!(text("remind.sh").contains("_envn_into pane PANE_ID"));
     assert!(policy().contains("Codex sets CODEX_THREAD_ID on tool runs"));
-    let all: Vec<&str> = passport::SESSION_MARKERS.iter().flat_map(|n| n.iter().copied()).collect();
-    for want in ["K5_PANE_ID", "K2_PANE_ID", "K5_CELL", "K2_CELL", "CLAUDECODE", "CODEX_THREAD_ID"] {
+    let all: Vec<&str> = passport::SESSION_MARKERS
+        .iter()
+        .flat_map(|n| n.iter().copied())
+        .collect();
+    for want in [
+        "K5_PANE_ID",
+        "K2_PANE_ID",
+        "K5_CELL",
+        "K2_CELL",
+        "CLAUDECODE",
+        "CODEX_THREAD_ID",
+    ] {
         assert!(all.contains(&want), "{want} is not a marker");
     }
 }
@@ -149,7 +185,10 @@ fn stand_in_parent() {
     if std::env::var_os(STAND_IN_VAR).is_none() {
         return;
     }
-    let mut sleep = std::process::Command::new("sleep").arg("30").spawn().expect("run sleep");
+    let mut sleep = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("run sleep");
     let mut out = std::io::stdout().lock();
     writeln!(out, "{SLEEP_PID}{}", sleep.id()).expect("print the pid");
     out.flush().expect("flush the pid");
@@ -177,9 +216,15 @@ fn the_live_walk_finds_a_process_named_like_the_pty_daemon() {
     let mut seen = Vec::new();
     for (name, is_ptyd) in [("k2-ptyd", true), ("k2-ptyx", false)] {
         let fake = dir.join(name);
-        std::fs::copy(&exe, &fake).unwrap_or_else(|e| panic!("copy {} to {}: {e}", exe.display(), fake.display()));
+        std::fs::copy(&exe, &fake)
+            .unwrap_or_else(|e| panic!("copy {} to {}: {e}", exe.display(), fake.display()));
         let mut child = Command::new(&fake)
-            .args(["stand_in_parent", "--exact", "--nocapture", "--test-threads=1"])
+            .args([
+                "stand_in_parent",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
             .env(STAND_IN_VAR, "1")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -192,7 +237,12 @@ fn the_live_walk_finds_a_process_named_like_the_pty_daemon() {
                 // The harness prints `test stand_in_parent ... ` with no
                 // line end before the test runs, so the mark is mid-line.
                 Some(Ok(l)) => match l.split_once(SLEEP_PID) {
-                    Some((_, pid)) => break pid.trim().parse().unwrap_or_else(|e| panic!("{name} printed {l:?}: {e}")),
+                    Some((_, pid)) => {
+                        break pid
+                            .trim()
+                            .parse()
+                            .unwrap_or_else(|e| panic!("{name} printed {l:?}: {e}"))
+                    }
                     None => printed.push(l),
                 },
                 end => {
@@ -207,7 +257,9 @@ fn the_live_walk_finds_a_process_named_like_the_pty_daemon() {
         };
         // Wait until the kernel names the new process sleep.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while table.command_name(sleep).as_deref() != Some("sleep") && std::time::Instant::now() < deadline {
+        while table.command_name(sleep).as_deref() != Some("sleep")
+            && std::time::Instant::now() < deadline
+        {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let sleep_name = table.command_name(sleep);
@@ -228,8 +280,13 @@ fn the_live_walk_finds_a_process_named_like_the_pty_daemon() {
     let _ = std::fs::remove_dir_all(&dir);
     // This test's own process is named by its file name, cut as the
     // kernel cuts it.
-    let me = table.command_name(std::process::id() as i32).expect("my own name");
+    let me = table
+        .command_name(std::process::id() as i32)
+        .expect("my own name");
     let file = exe.file_name().unwrap().to_string_lossy().into_owned();
-    assert!(!me.is_empty() && file.starts_with(&me), "{me:?} is not the start of {file:?}");
+    assert!(
+        !me.is_empty() && file.starts_with(&me),
+        "{me:?} is not the start of {file:?}"
+    );
     assert_eq!(seen.len(), 2);
 }

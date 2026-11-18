@@ -89,7 +89,9 @@ fn cat(path: &Path) -> Option<String> {
 
 fn port_of(text: &str) -> Option<u16> {
     let t = text.trim();
-    (!t.is_empty() && t.bytes().all(|b| b.is_ascii_digit())).then(|| t.parse().ok()).flatten()
+    (!t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| t.parse().ok())
+        .flatten()
 }
 
 /// The nearest folder from `cwd` up (itself included, `/` not) with a
@@ -99,7 +101,9 @@ fn project_root(cwd: &Path, user_home: Option<&Path>) -> Option<PathBuf> {
     while let Some(d) = dir {
         // `/` itself is never the project.
         d.parent()?;
-        let marked = k2_client::paths::WORKSPACE_DOT_DIR_NAMES.iter().any(|n| d.join(n).is_dir());
+        let marked = k2_client::paths::WORKSPACE_DOT_DIR_NAMES
+            .iter()
+            .any(|n| d.join(n).is_dir());
         if marked && Some(d) != user_home {
             return Some(d.to_path_buf());
         }
@@ -124,22 +128,27 @@ pub fn settings_with(
     main_root: impl FnOnce(&Path) -> Option<PathBuf>,
 ) -> Settings {
     let text = |names: &[&'static str]| -> Option<String> {
-        env_names::first_nonempty_os_in(names, &lookup).map(|(_, v)| v.to_string_lossy().into_owned())
+        env_names::first_nonempty_os_in(names, &lookup)
+            .map(|(_, v)| v.to_string_lossy().into_owned())
     };
     let port_text = text(env_names::PORT).or_else(|| cat(&home.join("heartbeat.port")));
     let port = port_text.as_deref().and_then(port_of);
     let host = text(env_names::HOST).unwrap_or_else(|| DEFAULT_HOST.to_string());
-    let secrets_dir = env_names::first_nonempty_os_in(env_names::SECRETS_DIR, &lookup).map(|(_, v)| PathBuf::from(v));
+    let secrets_dir = env_names::first_nonempty_os_in(env_names::SECRETS_DIR, &lookup)
+        .map(|(_, v)| PathBuf::from(v));
     let no_owner_fallback = text(env_names::NO_OWNER_FALLBACK).is_some_and(|v| v == "1");
     let mut owner_from_disk = false;
     let auth = match text(env_names::HOOK_TOKEN).and_then(Passport::new) {
         Some(passport) => {
-            let sock = env_names::first_nonempty_os_in(env_names::HOOK_SOCK, &lookup).map(|(_, v)| PathBuf::from(v));
+            let sock = env_names::first_nonempty_os_in(env_names::HOOK_SOCK, &lookup)
+                .map(|(_, v)| PathBuf::from(v));
             Auth::Passport { passport, sock }
         }
         None if no_owner_fallback => Auth::None,
         None => {
-            let token = ["heartbeat.token", "daemon.token"].iter().find_map(|f| cat(&home.join(f)).filter(|t| !t.is_empty()));
+            let token = ["heartbeat.token", "daemon.token"]
+                .iter()
+                .find_map(|f| cat(&home.join(f)).filter(|t| !t.is_empty()));
             match token {
                 Some(t) => {
                     owner_from_disk = true;
@@ -158,12 +167,24 @@ pub fn settings_with(
             .to_string_lossy()
             .into_owned(),
     };
-    Settings { host, port, port_text, no_owner_fallback, project, auth, owner_from_disk, secrets_dir, home: home.to_path_buf() }
+    Settings {
+        host,
+        port,
+        port_text,
+        no_owner_fallback,
+        project,
+        auth,
+        owner_from_disk,
+        secrets_dir,
+        home: home.to_path_buf(),
+    }
 }
 
 /// A folder with a workspace folder in it.
 fn marked(dir: &Path) -> bool {
-    k2_client::paths::WORKSPACE_DOT_DIR_NAMES.iter().any(|n| dir.join(n).is_dir())
+    k2_client::paths::WORKSPACE_DOT_DIR_NAMES
+        .iter()
+        .any(|n| dir.join(n).is_dir())
 }
 
 /// The folder as the shell's `pwd` names it: `PWD` when it is an absolute
@@ -214,8 +235,15 @@ pub fn usable_git() -> Option<&'static Path> {
     GIT.get_or_init(|| {
         let git = find_on_path("git", std::env::var_os("PATH")?)?;
         if cfg!(target_os = "macos") && git == Path::new("/usr/bin/git") {
-            let out = Command::new("/usr/bin/xcode-select").arg("-p").stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-            let dev = String::from_utf8_lossy(&out.stdout).trim_end_matches('\n').to_string();
+            let out = Command::new("/usr/bin/xcode-select")
+                .arg("-p")
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .ok()?;
+            let dev = String::from_utf8_lossy(&out.stdout)
+                .trim_end_matches('\n')
+                .to_string();
             if dev.is_empty() || !is_executable(&Path::new(&dev).join("usr/bin/git")) {
                 return None;
             }
@@ -228,7 +256,15 @@ pub fn usable_git() -> Option<&'static Path> {
 /// The first executable file `name` in the folders of `path` (an empty
 /// folder name is the current folder), as `command -v` finds it.
 pub fn find_on_path(name: &str, path: OsString) -> Option<PathBuf> {
-    std::env::split_paths(&path).map(|dir| if dir.as_os_str().is_empty() { PathBuf::from(".").join(name) } else { dir.join(name) }).find(|p| is_executable(p))
+    std::env::split_paths(&path)
+        .map(|dir| {
+            if dir.as_os_str().is_empty() {
+                PathBuf::from(".").join(name)
+            } else {
+                dir.join(name)
+            }
+        })
+        .find(|p| is_executable(p))
 }
 
 #[cfg(unix)]
@@ -280,12 +316,22 @@ impl Settings {
     /// session is taken at once ([`Client::use_healed_passport`]), as the
     /// shell's prelude does.
     pub fn client(&self, would_refuse: bool) -> Result<Client, NoPort> {
-        let port = self.port.ok_or_else(|| NoPort { home: self.home.clone() })?;
-        let mut c = Client::new(self.host.clone(), port, self.project.clone(), self.auth.clone());
+        let port = self.port.ok_or_else(|| NoPort {
+            home: self.home.clone(),
+        })?;
+        let mut c = Client::new(
+            self.host.clone(),
+            port,
+            self.project.clone(),
+            self.auth.clone(),
+        );
         c.would_refuse = would_refuse;
         c.owner_from_disk = self.owner_from_disk;
         c.port_file = Some(self.home.join("daemon.port"));
-        c.healer = self.secrets_dir.clone().map(|d| Box::new(SecretsDir(d)) as Box<dyn crate::transport::Healer>);
+        c.healer = self
+            .secrets_dir
+            .clone()
+            .map(|d| Box::new(SecretsDir(d)) as Box<dyn crate::transport::Healer>);
         c.use_healed_passport();
         Ok(c)
     }
@@ -313,7 +359,12 @@ impl std::error::Error for SettingsError {}
 pub fn current() -> Result<Settings, SettingsError> {
     let home = crate::home::k2_home().map_err(SettingsError::Home)?;
     let cwd = logical_cwd(std::env::var_os("PWD")).map_err(SettingsError::Cwd)?;
-    Ok(settings_with(|name| std::env::var_os(name), &home, &cwd, git_main_root))
+    Ok(settings_with(
+        |name| std::env::var_os(name),
+        &home,
+        &cwd,
+        git_main_root,
+    ))
 }
 
 #[cfg(test)]
@@ -324,7 +375,11 @@ mod tests {
     fn scratch(tag: &str) -> PathBuf {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static N: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!("k5-daemon-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        let dir = std::env::temp_dir().join(format!(
+            "k5-daemon-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
         if dir.exists() {
             std::fs::remove_dir_all(&dir).unwrap();
         }
@@ -333,7 +388,10 @@ mod tests {
     }
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
-        let map: HashMap<String, OsString> = pairs.iter().map(|(k, v)| (k.to_string(), OsString::from(v))).collect();
+        let map: HashMap<String, OsString> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), OsString::from(v)))
+            .collect();
         move |name: &str| map.get(name).cloned()
     }
 
@@ -346,15 +404,27 @@ mod tests {
         std::fs::write(dir.join("heartbeat.port"), "4100\n").unwrap();
         assert_eq!(settings(env(&[]), &dir, &dir).port, Some(4100));
         // The setting wins, under its newest name first; empty is unset.
-        assert_eq!(settings(env(&[("K2_PORT", "4200")]), &dir, &dir).port, Some(4200));
-        assert_eq!(settings(env(&[("K5_PORT", "4300"), ("K2_PORT", "4200")]), &dir, &dir).port, Some(4300));
-        assert_eq!(settings(env(&[("K5_PORT", ""), ("K2_PORT", "4200")]), &dir, &dir).port, Some(4200));
+        assert_eq!(
+            settings(env(&[("K2_PORT", "4200")]), &dir, &dir).port,
+            Some(4200)
+        );
+        assert_eq!(
+            settings(env(&[("K5_PORT", "4300"), ("K2_PORT", "4200")]), &dir, &dir).port,
+            Some(4300)
+        );
+        assert_eq!(
+            settings(env(&[("K5_PORT", ""), ("K2_PORT", "4200")]), &dir, &dir).port,
+            Some(4200)
+        );
         // A setting that is not a port is no port: the file is not read.
         assert_eq!(settings(env(&[("K2_PORT", "42a")]), &dir, &dir).port, None);
         std::fs::write(dir.join("heartbeat.port"), "99999").unwrap();
         assert_eq!(settings(env(&[]), &dir, &dir).port, None);
         assert_eq!(settings(env(&[]), &dir, &dir).host, DEFAULT_HOST);
-        assert_eq!(settings(env(&[("K2_HOST", "10.0.0.2")]), &dir, &dir).host, "10.0.0.2");
+        assert_eq!(
+            settings(env(&[("K2_HOST", "10.0.0.2")]), &dir, &dir).host,
+            "10.0.0.2"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -362,8 +432,22 @@ mod tests {
     fn a_passport_never_reads_the_owner_token() {
         let dir = scratch("pass");
         std::fs::write(dir.join("heartbeat.token"), "owner-tok\n").unwrap();
-        let s = settings(env(&[("K2_HOOK_TOKEN", "s.x"), ("K2_HOOK_SOCK", "/tmp/s.sock"), ("K2_SECRETS_DIR", "/sec")]), &dir, &dir);
-        assert_eq!(s.auth, Auth::Passport { passport: Passport::new("s.x").unwrap(), sock: Some(PathBuf::from("/tmp/s.sock")) });
+        let s = settings(
+            env(&[
+                ("K2_HOOK_TOKEN", "s.x"),
+                ("K2_HOOK_SOCK", "/tmp/s.sock"),
+                ("K2_SECRETS_DIR", "/sec"),
+            ]),
+            &dir,
+            &dir,
+        );
+        assert_eq!(
+            s.auth,
+            Auth::Passport {
+                passport: Passport::new("s.x").unwrap(),
+                sock: Some(PathBuf::from("/tmp/s.sock"))
+            }
+        );
         assert!(!s.owner_from_disk);
         assert_eq!(s.secrets_dir, Some(PathBuf::from("/sec")));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -379,14 +463,23 @@ mod tests {
         assert!(s.owner_from_disk);
         // heartbeat.token first; an empty one counts as missing.
         std::fs::write(dir.join("heartbeat.token"), "\n").unwrap();
-        assert_eq!(settings(env(&[]), &dir, &dir).auth, Auth::Owner("daemon-tok".into()));
+        assert_eq!(
+            settings(env(&[]), &dir, &dir).auth,
+            Auth::Owner("daemon-tok".into())
+        );
         std::fs::write(dir.join("heartbeat.token"), "hb-tok").unwrap();
-        assert_eq!(settings(env(&[]), &dir, &dir).auth, Auth::Owner("hb-tok".into()));
+        assert_eq!(
+            settings(env(&[]), &dir, &dir).auth,
+            Auth::Owner("hb-tok".into())
+        );
         // The virtual desktop's guard: no owner token, no credential.
         let s = settings(env(&[("K5_NO_OWNER_FALLBACK", "1")]), &dir, &dir);
         assert_eq!(s.auth, Auth::None);
         assert!(!s.owner_from_disk);
-        assert_eq!(settings(env(&[("K2_NO_OWNER_FALLBACK", "0")]), &dir, &dir).auth, Auth::Owner("hb-tok".into()));
+        assert_eq!(
+            settings(env(&[("K2_NO_OWNER_FALLBACK", "0")]), &dir, &dir).auth,
+            Auth::Owner("hb-tok".into())
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -394,9 +487,16 @@ mod tests {
     fn the_client_carries_the_settings() {
         let dir = scratch("client");
         std::fs::write(dir.join("heartbeat.token"), "hb-tok").unwrap();
-        let s = settings(env(&[("K2_PORT", "4100"), ("K2_PROJECT_PATH", "/w")]), &dir, &dir);
+        let s = settings(
+            env(&[("K2_PORT", "4100"), ("K2_PROJECT_PATH", "/w")]),
+            &dir,
+            &dir,
+        );
         let c = s.client(true).unwrap();
-        assert_eq!((c.host.as_str(), c.port, c.project.as_str()), (DEFAULT_HOST, 4100, "/w"));
+        assert_eq!(
+            (c.host.as_str(), c.port, c.project.as_str()),
+            (DEFAULT_HOST, 4100, "/w")
+        );
         assert!(c.would_refuse && c.owner_from_disk);
         assert_eq!(c.port_file, Some(dir.join("daemon.port")));
         assert!(c.healer.is_none());
@@ -413,7 +513,14 @@ mod tests {
         let s = settings(env(&[("K2_PORT", "42a")]), &dir, &dir);
         assert_eq!((s.port_text.as_deref(), s.port), (Some("42a"), None));
         assert!(settings(env(&[("K2_NO_OWNER_FALLBACK", "1")]), &dir, &dir).no_owner_fallback);
-        assert!(!settings(env(&[("K5_NO_OWNER_FALLBACK", "0"), ("K2_NO_OWNER_FALLBACK", "1")]), &dir, &dir).no_owner_fallback);
+        assert!(
+            !settings(
+                env(&[("K5_NO_OWNER_FALLBACK", "0"), ("K2_NO_OWNER_FALLBACK", "1")]),
+                &dir,
+                &dir
+            )
+            .no_owner_fallback
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -443,7 +550,11 @@ mod tests {
         std::fs::create_dir_all(&wt).unwrap();
         std::fs::create_dir_all(&main).unwrap();
         let ask = |root: Option<PathBuf>| settings_with(env(&[]), &dir, &wt, move |_| root).project;
-        assert_eq!(ask(Some(main.clone())), wt.to_string_lossy(), "the main folder is no workspace");
+        assert_eq!(
+            ask(Some(main.clone())),
+            wt.to_string_lossy(),
+            "the main folder is no workspace"
+        );
         std::fs::create_dir_all(main.join(".k2")).unwrap();
         assert_eq!(ask(Some(main.clone())), main.to_string_lossy());
         assert_eq!(ask(None), wt.to_string_lossy());
@@ -460,7 +571,10 @@ mod tests {
         let here = std::env::current_dir().unwrap();
         assert_eq!(logical_cwd(None).unwrap(), here);
         assert_eq!(logical_cwd(Some("relative".into())).unwrap(), here);
-        assert_eq!(logical_cwd(Some("/nonexistent-k5-dir".into())).unwrap(), here);
+        assert_eq!(
+            logical_cwd(Some("/nonexistent-k5-dir".into())).unwrap(),
+            here
+        );
         let dotted = format!("{}/./x/..//", here.display());
         assert_eq!(logical_cwd(Some(dotted.into())).unwrap(), here);
         // A link to this folder is kept as written.
@@ -476,16 +590,31 @@ mod tests {
         let dir = std::fs::canonicalize(scratch("proj")).unwrap();
         let deep = dir.join("ws/a/b");
         std::fs::create_dir_all(&deep).unwrap();
-        assert_eq!(settings(env(&[]), &dir, &deep).project, deep.to_string_lossy());
+        assert_eq!(
+            settings(env(&[]), &dir, &deep).project,
+            deep.to_string_lossy()
+        );
         std::fs::create_dir_all(dir.join("ws/.k2")).unwrap();
-        assert_eq!(settings(env(&[]), &dir, &deep).project, dir.join("ws").to_string_lossy());
+        assert_eq!(
+            settings(env(&[]), &dir, &deep).project,
+            dir.join("ws").to_string_lossy()
+        );
         std::fs::create_dir_all(dir.join("ws/a/.k2so")).unwrap();
-        assert_eq!(settings(env(&[]), &dir, &deep).project, dir.join("ws/a").to_string_lossy());
+        assert_eq!(
+            settings(env(&[]), &dir, &deep).project,
+            dir.join("ws/a").to_string_lossy()
+        );
         // The user home is never the project; the search goes on above it.
         let home = dir.join("ws/a");
         let home_s = home.to_string_lossy().into_owned();
-        assert_eq!(settings(env(&[("HOME", &home_s)]), &dir, &deep).project, dir.join("ws").to_string_lossy());
-        assert_eq!(settings(env(&[("K2_PROJECT_PATH", "/set")]), &dir, &deep).project, "/set");
+        assert_eq!(
+            settings(env(&[("HOME", &home_s)]), &dir, &deep).project,
+            dir.join("ws").to_string_lossy()
+        );
+        assert_eq!(
+            settings(env(&[("K2_PROJECT_PATH", "/set")]), &dir, &deep).project,
+            "/set"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

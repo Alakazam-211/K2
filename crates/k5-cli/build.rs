@@ -18,16 +18,25 @@ use std::path::PathBuf;
 const VERSION_LINES: usize = 40;
 
 fn main() {
-    let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
+    let manifest = PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"),
+    );
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     let script = manifest.join("../../cli/k2");
     println!("cargo:rerun-if-changed={}", script.display());
     println!("cargo:rerun-if-changed=build.rs");
 
-    let bytes = std::fs::read(&script)
-        .unwrap_or_else(|e| panic!("the shell CLI is not at {}: {e} (build it with scripts/build-cli.sh)", script.display()));
+    let bytes = std::fs::read(&script).unwrap_or_else(|e| {
+        panic!(
+            "the shell CLI is not at {}: {e} (build it with scripts/build-cli.sh)",
+            script.display()
+        )
+    });
     let version = cli_version(&bytes).unwrap_or_else(|| {
-        panic!("{}: no K2_CLI_VERSION=\"x.y.z\" line in its first {VERSION_LINES} lines", script.display())
+        panic!(
+            "{}: no K2_CLI_VERSION=\"x.y.z\" line in its first {VERSION_LINES} lines",
+            script.display()
+        )
     });
 
     let blake = blake3::hash(&bytes).to_hex().to_string();
@@ -38,7 +47,9 @@ fn main() {
     let gz_path = out.join("k2.gz");
     std::fs::write(&gz_path, &gz).unwrap_or_else(|e| panic!("write {}: {e}", gz_path.display()));
 
-    let gz_lit = gz_path.to_str().unwrap_or_else(|| panic!("OUT_DIR is not UTF-8: {}", gz_path.display()));
+    let gz_lit = gz_path
+        .to_str()
+        .unwrap_or_else(|| panic!("OUT_DIR is not UTF-8: {}", gz_path.display()));
     let rs = format!(
         "/// `cli/k2`, gzipped.\n\
          pub static SCRIPT_GZ: &[u8] = include_bytes!({gz_lit:?});\n\
@@ -60,8 +71,14 @@ fn main() {
 /// dots, `-` and `+` only, never empty.
 fn cli_version(bytes: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(&bytes[..bytes.len().min(16 * 1024)]);
-    let line = text.lines().take(VERSION_LINES).find_map(|l| l.strip_prefix("K2_CLI_VERSION=\""))?;
+    let line = text
+        .lines()
+        .take(VERSION_LINES)
+        .find_map(|l| l.strip_prefix("K2_CLI_VERSION=\""))?;
     let value = line.strip_suffix('"')?;
-    let ok = !value.is_empty() && value.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b));
+    let ok = !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b));
     ok.then(|| value.to_string())
 }

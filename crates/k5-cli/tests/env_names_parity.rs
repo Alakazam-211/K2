@@ -46,14 +46,22 @@ fn is_ident(b: u8) -> bool {
 
 /// The upper-case name at the start of `s` (`[A-Z][A-Z0-9_]*`), if any.
 fn name_at(s: &str) -> Option<&str> {
-    let end = s.bytes().position(|b| !(b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')).unwrap_or(s.len());
+    let end = s
+        .bytes()
+        .position(|b| !(b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'))
+        .unwrap_or(s.len());
     let name = &s[..end];
-    name.bytes().next().is_some_and(|b| b.is_ascii_uppercase()).then_some(name)
+    name.bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_uppercase())
+        .then_some(name)
 }
 
 /// The prefix of a registry name: `K5_`, `K2_` or `K2SO_`.
 fn prefixed(name: &str) -> bool {
-    env_names::PREFIXES.iter().any(|p| name.strip_prefix(p).is_some_and(|rest| !rest.is_empty()))
+    env_names::PREFIXES
+        .iter()
+        .any(|p| name.strip_prefix(p).is_some_and(|rest| !rest.is_empty()))
 }
 
 /// The names the prelude's reader tries for `NAME`, read from the reader
@@ -69,14 +77,21 @@ fn reader_prefixes(function: &str, var: &str) -> Vec<String> {
     line.split('"')
         .skip(1)
         .step_by(2)
-        .map(|word| word.strip_suffix(var).unwrap_or_else(|| panic!("{function}: {word:?} does not end in {var}")).to_string())
+        .map(|word| {
+            word.strip_suffix(var)
+                .unwrap_or_else(|| panic!("{function}: {word:?} does not end in {var}"))
+                .to_string()
+        })
         .collect()
 }
 
 #[test]
 fn the_shell_reader_tries_the_registry_prefixes_in_order() {
     assert_eq!(reader_prefixes("_envn_into", "$2"), env_names::PREFIXES);
-    assert_eq!(reader_prefixes("_envn_any", "$_envn_a"), env_names::PREFIXES);
+    assert_eq!(
+        reader_prefixes("_envn_any", "$_envn_a"),
+        env_names::PREFIXES
+    );
 }
 
 /// The `_envn*` calls on one line.
@@ -89,7 +104,11 @@ fn envn_calls(line: &str, at: &str, reads: &mut Vec<Read>, errors: &mut Vec<Stri
         if start > 0 && is_ident(bytes[start - 1]) {
             continue;
         }
-        let end = start + line[start..].bytes().position(|b| !is_ident(b)).unwrap_or(line.len() - start);
+        let end = start
+            + line[start..]
+                .bytes()
+                .position(|b| !is_ident(b))
+                .unwrap_or(line.len() - start);
         let word = &line[start..end];
         if !matches!(word, "_envn" | "_envn_into" | "_envn_any") || bytes.get(end) != Some(&b' ') {
             continue;
@@ -112,12 +131,21 @@ fn envn_calls(line: &str, at: &str, reads: &mut Vec<Read>, errors: &mut Vec<Stri
         }
         if names.is_empty() {
             if line.trim() != r#"_envn_into _envn_out "$@""# {
-                errors.push(format!("{at}: {word} with no literal setting name: {}", line.trim()));
+                errors.push(format!(
+                    "{at}: {word} with no literal setting name: {}",
+                    line.trim()
+                ));
             }
             continue;
         }
         for name in names {
-            reads.push(Read { at: at.to_string(), names: env_names::PREFIXES.iter().map(|p| format!("{p}{name}")).collect() });
+            reads.push(Read {
+                at: at.to_string(),
+                names: env_names::PREFIXES
+                    .iter()
+                    .map(|p| format!("{p}{name}"))
+                    .collect(),
+            });
         }
     }
 }
@@ -129,7 +157,9 @@ fn shell_chain(line: &str, mut at: usize) -> (Vec<String>, usize) {
     while let Some(rest) = line[at..].strip_prefix("${") {
         let Some(name) = name_at(rest) else { break };
         let after = &rest[name.len()..];
-        let Some(after) = after.strip_prefix(":-") else { break };
+        let Some(after) = after.strip_prefix(":-") else {
+            break;
+        };
         names.push(name.to_string());
         at = line.len() - after.len();
         if after.starts_with("}${") {
@@ -144,17 +174,31 @@ fn shell_chain(line: &str, mut at: usize) -> (Vec<String>, usize) {
 fn python_chain(line: &str, at: usize) -> (Vec<String>, usize) {
     let mut names = Vec::new();
     let mut rest = &line[at..];
-    let opening_quote = |r: &str| r.strip_prefix('(').and_then(|r| r.chars().next()).filter(|q| *q == '"' || *q == '\'');
+    let opening_quote = |r: &str| {
+        r.strip_prefix('(')
+            .and_then(|r| r.chars().next())
+            .filter(|q| *q == '"' || *q == '\'')
+    };
     while let Some(quote) = opening_quote(rest) {
         let inner = &rest[2..];
         let Some(name) = name_at(inner) else { break };
-        let Some(after) = inner[name.len()..].strip_prefix(quote).and_then(|r| r.strip_prefix(')')) else { break };
+        let Some(after) = inner[name.len()..]
+            .strip_prefix(quote)
+            .and_then(|r| r.strip_prefix(')'))
+        else {
+            break;
+        };
         names.push(name.to_string());
         rest = after;
         // ` or <callee>(` continues the chain.
-        let Some(next) = after.trim_start().strip_prefix("or ") else { break };
+        let Some(next) = after.trim_start().strip_prefix("or ") else {
+            break;
+        };
         let next = next.trim_start();
-        let callee = next.bytes().position(|b| !(is_ident(b) || b == b'.')).unwrap_or(next.len());
+        let callee = next
+            .bytes()
+            .position(|b| !(is_ident(b) || b == b'.'))
+            .unwrap_or(next.len());
         if callee == 0 || !next[callee..].starts_with('(') {
             break;
         }
@@ -170,14 +214,28 @@ fn prefixed_run(names: Vec<String>) -> Vec<String> {
 
 /// The inline reads on one line, shell and Python, and the `K5_` names
 /// they account for.
-fn inline_reads(line: &str, at: &str, reads: &mut Vec<Read>, errors: &mut Vec<String>) -> BTreeSet<String> {
+fn inline_reads(
+    line: &str,
+    at: &str,
+    reads: &mut Vec<Read>,
+    errors: &mut Vec<String>,
+) -> BTreeSet<String> {
     let mut seen = BTreeSet::new();
     let mut from = 0;
     while from < line.len() {
         let shell = line[from..].find("${K").map(|i| (from + i, true));
-        let python = ["(\"K", "('K"].iter().filter_map(|pat| line[from..].find(pat).map(|i| (from + i, false))).min();
-        let Some((start, is_shell)) = [shell, python].into_iter().flatten().min() else { break };
-        let (names, end) = if is_shell { shell_chain(line, start) } else { python_chain(line, start) };
+        let python = ["(\"K", "('K"]
+            .iter()
+            .filter_map(|pat| line[from..].find(pat).map(|i| (from + i, false)))
+            .min();
+        let Some((start, is_shell)) = [shell, python].into_iter().flatten().min() else {
+            break;
+        };
+        let (names, end) = if is_shell {
+            shell_chain(line, start)
+        } else {
+            python_chain(line, start)
+        };
         from = end.max(start + 1);
         let names = prefixed_run(names);
         match names.as_slice() {
@@ -189,9 +247,15 @@ fn inline_reads(line: &str, at: &str, reads: &mut Vec<Read>, errors: &mut Vec<St
             _ => {
                 seen.extend(names.iter().filter(|n| n.starts_with("K5_")).cloned());
                 if names.len() == 1 {
-                    errors.push(format!("{at}: {} is read under one name; the registry's entries have two or more", names[0]));
+                    errors.push(format!(
+                        "{at}: {} is read under one name; the registry's entries have two or more",
+                        names[0]
+                    ));
                 }
-                reads.push(Read { at: at.to_string(), names });
+                reads.push(Read {
+                    at: at.to_string(),
+                    names,
+                });
             }
         }
     }
@@ -218,11 +282,20 @@ fn shell_reads() -> (Vec<Read>, Vec<String>) {
                 if i > 0 && is_ident(bytes[i - 1]) {
                     continue;
                 }
-                let Some(name) = name_at(&line[i..]) else { continue };
-                if name == "K5_" || seen.contains(name) || FRONT.contains(&name) || bytes.get(i + name.len()) == Some(&b'=') {
+                let Some(name) = name_at(&line[i..]) else {
+                    continue;
+                };
+                if name == "K5_"
+                    || seen.contains(name)
+                    || FRONT.contains(&name)
+                    || bytes.get(i + name.len()) == Some(&b'=')
+                {
                     continue;
                 }
-                errors.push(format!("{at}: {name} is read in a way this test does not know: {}", line.trim()));
+                errors.push(format!(
+                    "{at}: {name} is read in a way this test does not know: {}",
+                    line.trim()
+                ));
             }
         }
     }
@@ -232,37 +305,67 @@ fn shell_reads() -> (Vec<Read>, Vec<String>) {
 #[test]
 fn every_setting_the_shell_reads_is_in_the_registry_with_the_same_names() {
     let (reads, mut errors) = shell_reads();
-    assert!(reads.len() > 50, "only {} reads found in cli/src: the scan is broken", reads.len());
+    assert!(
+        reads.len() > 50,
+        "only {} reads found in cli/src: the scan is broken",
+        reads.len()
+    );
     let mut by_names: BTreeMap<&[String], Vec<&str>> = BTreeMap::new();
     let mut drift_seen = vec![false; KNOWN_DRIFT.len()];
     for read in &reads {
         let file = read.at.split(':').next().expect("a file");
-        let known = KNOWN_DRIFT.iter().position(|(f, names, _)| *f == file && names.iter().eq(read.names.iter()));
+        let known = KNOWN_DRIFT
+            .iter()
+            .position(|(f, names, _)| *f == file && names.iter().eq(read.names.iter()));
         match known {
             Some(i) => drift_seen[i] = true,
-            None => by_names.entry(read.names.as_slice()).or_default().push(&read.at),
+            None => by_names
+                .entry(read.names.as_slice())
+                .or_default()
+                .push(&read.at),
         }
     }
     for ((file, names, _), seen) in KNOWN_DRIFT.iter().zip(drift_seen) {
         if !seen {
-            errors.push(format!("{file}: the known drift {names:?} is gone; drop its row from KNOWN_DRIFT"));
+            errors.push(format!(
+                "{file}: the known drift {names:?} is gone; drop its row from KNOWN_DRIFT"
+            ));
         }
     }
     for (names, ats) in &by_names {
-        if env_names::ALL.iter().any(|entry| entry.iter().eq(names.iter())) {
+        if env_names::ALL
+            .iter()
+            .any(|entry| entry.iter().eq(names.iter()))
+        {
             continue;
         }
-        let near: Vec<&[&str]> =
-            env_names::ALL.iter().copied().filter(|entry| entry.iter().any(|n| names.iter().any(|m| m == n))).collect();
-        let registry = if near.is_empty() { "no entry".to_string() } else { format!("{near:?}") };
-        errors.push(format!("{}: the shell reads {names:?} (at {}); the registry has {registry}", names[0], ats.join(", ")));
+        let near: Vec<&[&str]> = env_names::ALL
+            .iter()
+            .copied()
+            .filter(|entry| entry.iter().any(|n| names.iter().any(|m| m == n)))
+            .collect();
+        let registry = if near.is_empty() {
+            "no entry".to_string()
+        } else {
+            format!("{near:?}")
+        };
+        errors.push(format!(
+            "{}: the shell reads {names:?} (at {}); the registry has {registry}",
+            names[0],
+            ats.join(", ")
+        ));
     }
     for entry in env_names::CLI {
         if !by_names.keys().any(|names| entry.iter().eq(names.iter())) {
             errors.push(format!("{}: {entry:?} is in the registry's command line section but cli/src never reads it", entry[0]));
         }
     }
-    assert!(errors.is_empty(), "{} problems:\n{}", errors.len(), errors.join("\n"));
+    assert!(
+        errors.is_empty(),
+        "{} problems:\n{}",
+        errors.len(),
+        errors.join("\n")
+    );
 }
 
 /// `K2_AIRGAP` is the one setting read under one name that counts as set
@@ -271,8 +374,16 @@ fn every_setting_the_shell_reads_is_in_the_registry_with_the_same_names() {
 #[test]
 fn the_air_gap_switch_stays_one_name_and_set_when_empty() {
     assert_eq!(k2_client::airgap::ENV_VAR, "K2_AIRGAP");
-    assert!(common::prelude().contains(r#"if [ "${K2_AIRGAP+x}" = "x" ]; then"#), "prelude.sh reads K2_AIRGAP another way");
-    assert!(!env_names::ALL.iter().any(|e| e.iter().any(|n| n.ends_with("_AIRGAP"))), "the air-gap switch is in the registry");
+    assert!(
+        common::prelude().contains(r#"if [ "${K2_AIRGAP+x}" = "x" ]; then"#),
+        "prelude.sh reads K2_AIRGAP another way"
+    );
+    assert!(
+        !env_names::ALL
+            .iter()
+            .any(|e| e.iter().any(|n| n.ends_with("_AIRGAP"))),
+        "the air-gap switch is in the registry"
+    );
 }
 
 /// The prelude's reader and `first_nonempty_in` give the same answer for
@@ -293,10 +404,17 @@ fn the_shell_reader_and_first_nonempty_agree() {
     for a in states("from-k5") {
         for b in states("from-k2") {
             for c in states("from-k2so") {
-                let env: Vec<(&str, &str)> =
-                    NAMES.iter().zip([a, b, c]).filter_map(|(n, v)| v.map(|v| (*n, v))).collect();
+                let env: Vec<(&str, &str)> = NAMES
+                    .iter()
+                    .zip([a, b, c])
+                    .filter_map(|(n, v)| v.map(|v| (*n, v)))
+                    .collect();
                 let shell = common::bash(&script, "k2", &env);
-                let lookup = |name: &str| env.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string());
+                let lookup = |name: &str| {
+                    env.iter()
+                        .find(|(k, _)| *k == name)
+                        .map(|(_, v)| v.to_string())
+                };
                 let rust = env_names::first_nonempty_in(NAMES, lookup);
                 let want = match &rust {
                     Some((_, v)) => format!("{v}|any\n"),
@@ -308,5 +426,10 @@ fn the_shell_reader_and_first_nonempty_agree() {
             }
         }
     }
-    assert!(wrong.is_empty(), "{} mixes differ:\n{}", wrong.len(), wrong.join("\n"));
+    assert!(
+        wrong.is_empty(),
+        "{} mixes differ:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
 }

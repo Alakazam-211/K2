@@ -59,15 +59,26 @@ fn bash_lib() -> String {
     let k2 = common::cli_script();
     let next = "# Read one secret from stdin into _K2_SECRET: a hidden prompt when stdin";
     let requests = common::block(&k2, "_CLI_LOCAL_TRANSPORT_DENIED=75", next);
-    let requests = requests.strip_suffix(next).expect("the block ends with its last line").to_string();
+    let requests = requests
+        .strip_suffix(next)
+        .expect("the block ends with its last line")
+        .to_string();
     [
         common::block(&k2, "_envn_into() {", "}"),
-        common::block(&k2, "# BEGIN_CLI_HEALED_PASSPORT", "# END_CLI_HEALED_PASSPORT"),
+        common::block(
+            &k2,
+            "# BEGIN_CLI_HEALED_PASSPORT",
+            "# END_CLI_HEALED_PASSPORT",
+        ),
         common::block(&k2, "# BEGIN_CLI_CURL_CFG", "# END_CLI_CURL_CFG"),
         requests,
         common::block(&k2, "urlencode() {", "}"),
         common::block(&k2, "cli_post_form() {", "}"),
-        common::block(&k2, "# ── #58 Phase-1 close: scoped per-cell UDS arms ──────────────────────────", "# END_CLI_PASSPORT_PROJECT"),
+        common::block(
+            &k2,
+            "# ── #58 Phase-1 close: scoped per-cell UDS arms ──────────────────────────",
+            "# END_CLI_PASSPORT_PROJECT",
+        ),
     ]
     .join("\n")
 }
@@ -94,7 +105,10 @@ impl Work {
         }
         let lib = dir.join("lib.sh");
         std::fs::write(&lib, bash_lib()).unwrap();
-        let stub = Stub::start(&PathBuf::from(format!("/tmp/k5tp-{}-{n}.sock", std::process::id())));
+        let stub = Stub::start(&PathBuf::from(format!(
+            "/tmp/k5tp-{}-{n}.sock",
+            std::process::id()
+        )));
         Work { dir, lib, stub }
     }
 
@@ -219,8 +233,14 @@ fn client(w: &Work, row: &Row, port: u16) -> Client {
     let passport = || Passport::new(PASSPORT).expect("a passport");
     let auth = match row.who {
         Who::Owner => Auth::Owner(OWNER.to_string()),
-        Who::PassportTcp => Auth::Passport { passport: passport(), sock: None },
-        Who::PassportUds => Auth::Passport { passport: passport(), sock: Some(w.stub.sock.clone()) },
+        Who::PassportTcp => Auth::Passport {
+            passport: passport(),
+            sock: None,
+        },
+        Who::PassportUds => Auth::Passport {
+            passport: passport(),
+            sock: Some(w.stub.sock.clone()),
+        },
     };
     let mut c = Client::new("127.0.0.1", port, PROJECT, auth);
     c.would_refuse = row.would_refuse;
@@ -236,12 +256,17 @@ fn client(w: &Work, row: &Row, port: u16) -> Client {
 /// noun.
 fn normalise(r: &Logged, rust: bool, row: &str) -> String {
     let version = k5_cli::embedded::version();
-    let text = String::from_utf8(r.bytes.clone()).unwrap_or_else(|_| panic!("{row}: a request that is not UTF-8"));
-    let (head, body) = text.split_once("\r\n\r\n").unwrap_or_else(|| panic!("{row}: a request with no head: {text:?}"));
+    let text = String::from_utf8(r.bytes.clone())
+        .unwrap_or_else(|_| panic!("{row}: a request that is not UTF-8"));
+    let (head, body) = text
+        .split_once("\r\n\r\n")
+        .unwrap_or_else(|| panic!("{row}: a request with no head: {text:?}"));
     let (mut ua, mut via, mut ver, mut noun) = (0, 0, 0, 0);
     let mut lines: Vec<String> = Vec::new();
     let mut head_lines = head.split("\r\n");
-    let request_line = head_lines.next().unwrap_or_else(|| panic!("{row}: no request line"));
+    let request_line = head_lines
+        .next()
+        .unwrap_or_else(|| panic!("{row}: no request line"));
     lines.push(fold_query_escapes(request_line));
     for line in head_lines {
         let masked = if rust {
@@ -269,10 +294,18 @@ fn normalise(r: &Logged, rust: bool, row: &str) -> String {
         } else {
             None
         };
-        lines.push(masked.map(str::to_string).unwrap_or_else(|| line.to_string()));
+        lines.push(
+            masked
+                .map(str::to_string)
+                .unwrap_or_else(|| line.to_string()),
+        );
     }
     let side = if rust { "rust" } else { "bash" };
-    assert_eq!((ua, via, ver, noun), (1, 1, usize::from(rust), usize::from(!rust)), "{row} ({side}): the masked lines in {text:?}");
+    assert_eq!(
+        (ua, via, ver, noun),
+        (1, 1, usize::from(rust), usize::from(!rust)),
+        "{row} ({side}): the masked lines in {text:?}"
+    );
     format!("[{}]\n{}\n\n{body}", r.channel, lines.join("\n"))
 }
 
@@ -284,34 +317,61 @@ fn fold_query_escapes(request_line: &str) -> String {
     let Some((before, query)) = request_line.split_once('?') else {
         return request_line.to_string();
     };
-    let (query, after) = query.rsplit_once(' ').unwrap_or_else(|| panic!("no HTTP version after the query: {request_line:?}"));
+    let (query, after) = query
+        .rsplit_once(' ')
+        .unwrap_or_else(|| panic!("no HTTP version after the query: {request_line:?}"));
     let b = query.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit() {
-            out.extend_from_slice(&[b'%', b[i + 1].to_ascii_uppercase(), b[i + 2].to_ascii_uppercase()]);
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && b[i + 1].is_ascii_hexdigit()
+            && b[i + 2].is_ascii_hexdigit()
+        {
+            out.extend_from_slice(&[
+                b'%',
+                b[i + 1].to_ascii_uppercase(),
+                b[i + 2].to_ascii_uppercase(),
+            ]);
             i += 3;
         } else {
             out.push(b[i]);
             i += 1;
         }
     }
-    format!("{before}?{} {after}", String::from_utf8(out).expect("upper-casing ASCII hex keeps UTF-8"))
+    format!(
+        "{before}?{} {after}",
+        String::from_utf8(out).expect("upper-casing ASCII hex keeps UTF-8")
+    )
 }
 
 #[test]
 fn the_fold_touches_the_query_only() {
-    assert_eq!(fold_query_escapes("GET /cli/a%2fb?x=%2f%c3%a9&y=%zz HTTP/1.1"), "GET /cli/a%2fb?x=%2F%C3%A9&y=%zz HTTP/1.1");
-    assert_eq!(fold_query_escapes("POST /cli/a%2fb HTTP/1.1"), "POST /cli/a%2fb HTTP/1.1");
+    assert_eq!(
+        fold_query_escapes("GET /cli/a%2fb?x=%2f%c3%a9&y=%zz HTTP/1.1"),
+        "GET /cli/a%2fb?x=%2F%C3%A9&y=%zz HTTP/1.1"
+    );
+    assert_eq!(
+        fold_query_escapes("POST /cli/a%2fb HTTP/1.1"),
+        "POST /cli/a%2fb HTTP/1.1"
+    );
 }
 
 /// `(the line with its seconds as <n>, the seconds)`.
 fn no_answer_secs(line: &str) -> (String, u64) {
     let tail = " s; run k2 daemon status";
-    let head = line.strip_suffix(tail).unwrap_or_else(|| panic!("not a no-answer line: {line:?}"));
-    let (pre, n) = head.rsplit_once(' ').unwrap_or_else(|| panic!("not a no-answer line: {line:?}"));
-    (format!("{pre} <n>{tail}"), n.parse().unwrap_or_else(|_| panic!("no seconds in {line:?}")))
+    let head = line
+        .strip_suffix(tail)
+        .unwrap_or_else(|| panic!("not a no-answer line: {line:?}"));
+    let (pre, n) = head
+        .rsplit_once(' ')
+        .unwrap_or_else(|| panic!("not a no-answer line: {line:?}"));
+    (
+        format!("{pre} <n>{tail}"),
+        n.parse()
+            .unwrap_or_else(|_| panic!("no seconds in {line:?}")),
+    )
 }
 
 fn check(w: &Work, row: &Row) {
@@ -327,7 +387,12 @@ fn check_on(w: &Work, row: &Row, port: u16) {
     w.stub.reset(&row.replies);
     let bash = run_bash(w, row, port);
     let bash_log = w.stub.log();
-    assert_eq!(w.stub.left(), 0, "{name}: bash left answers unused; stderr: {}", bash.stderr);
+    assert_eq!(
+        w.stub.left(),
+        0,
+        "{name}: bash left answers unused; stderr: {}",
+        bash.stderr
+    );
 
     let _ = std::fs::remove_file(w.secrets().join(".k2-passport"));
     w.stub.reset(&row.replies);
@@ -338,28 +403,64 @@ fn check_on(w: &Work, row: &Row, port: u16) {
 
     let b: Vec<String> = bash_log.iter().map(|r| normalise(r, false, name)).collect();
     let r: Vec<String> = rust_log.iter().map(|r| normalise(r, true, name)).collect();
-    assert_eq!(b.len(), row.requests, "{name}: bash sent {} requests:\n{}", b.len(), b.join("\n----\n"));
-    assert_eq!(r, b, "{name}: the requests differ\n== rust ==\n{}\n== bash ==\n{}", r.join("\n----\n"), b.join("\n----\n"));
+    assert_eq!(
+        b.len(),
+        row.requests,
+        "{name}: bash sent {} requests:\n{}",
+        b.len(),
+        b.join("\n----\n")
+    );
+    assert_eq!(
+        r,
+        b,
+        "{name}: the requests differ\n== rust ==\n{}\n== bash ==\n{}",
+        r.join("\n----\n"),
+        b.join("\n----\n")
+    );
     // The shapes, for the log.
     println!("== {name}\n{}", b.join("\n----\n").replace('\r', ""));
 
     match row.outcome {
         Outcome::Body | Outcome::BodyAndStatus => {
             assert_eq!(bash.status, Some(0), "{name}: bash failed: {}", bash.stderr);
-            assert_eq!(bash.rc.as_deref(), Some("0"), "{name}: bash's call failed: {}", bash.stderr);
+            assert_eq!(
+                bash.rc.as_deref(),
+                Some("0"),
+                "{name}: bash's call failed: {}",
+                bash.stderr
+            );
             assert_eq!(bash.stderr, "", "{name}: bash printed on stderr");
             let resp = got.unwrap_or_else(|e| panic!("{name}: rust failed: {e}"));
             let mut want = resp.body.clone();
             if row.outcome == Outcome::BodyAndStatus {
                 want.extend_from_slice(format!("\n{}", resp.status).as_bytes());
             }
-            assert_eq!(String::from_utf8_lossy(&bash.stdout), String::from_utf8_lossy(&want), "{name}: the answer the caller gets");
-            assert_eq!(bash.note, resp.permission.as_ref().map(|n| n.text()), "{name}: the permission note");
+            assert_eq!(
+                String::from_utf8_lossy(&bash.stdout),
+                String::from_utf8_lossy(&want),
+                "{name}: the answer the caller gets"
+            );
+            assert_eq!(
+                bash.note,
+                resp.permission.as_ref().map(|n| n.text()),
+                "{name}: the permission note"
+            );
         }
         Outcome::NoAnswer { empty, secs } => {
-            assert_eq!(bash.status, Some(1), "{name}: bash's exit; stderr: {}", bash.stderr);
-            assert_eq!(bash.rc, None, "{name}: bash's command went on after no answer");
-            let line = bash.stderr.strip_suffix('\n').unwrap_or_else(|| panic!("{name}: bash's stderr: {:?}", bash.stderr));
+            assert_eq!(
+                bash.status,
+                Some(1),
+                "{name}: bash's exit; stderr: {}",
+                bash.stderr
+            );
+            assert_eq!(
+                bash.rc, None,
+                "{name}: bash's command went on after no answer"
+            );
+            let line = bash
+                .stderr
+                .strip_suffix('\n')
+                .unwrap_or_else(|| panic!("{name}: bash's stderr: {:?}", bash.stderr));
             let (bash_line, bash_secs) = no_answer_secs(line);
             let n = match got {
                 Err(Error::NoAnswer(n)) => n,
@@ -369,15 +470,26 @@ fn check_on(w: &Work, row: &Row, port: u16) {
             let (rust_line, rust_secs) = no_answer_secs(&n.to_string());
             assert_eq!(rust_line, bash_line, "{name}: the no-answer line");
             for (side, s) in [("bash", bash_secs), ("rust", rust_secs)] {
-                assert!((secs.0..=secs.1).contains(&s), "{name}: {side} waited {s} s, wanted {secs:?}");
+                assert!(
+                    (secs.0..=secs.1).contains(&s),
+                    "{name}: {side} waited {s} s, wanted {secs:?}"
+                );
             }
         }
         Outcome::Unreachable => {
             assert_eq!(bash.status, Some(0), "{name}: bash failed: {}", bash.stderr);
-            assert_eq!(bash.rc.as_deref(), Some("7"), "{name}: bash's call; stderr: {}", bash.stderr);
+            assert_eq!(
+                bash.rc.as_deref(),
+                Some("7"),
+                "{name}: bash's call; stderr: {}",
+                bash.stderr
+            );
             assert_eq!(bash.stdout, b"", "{name}: bash's output");
             assert_eq!(bash.stderr, "", "{name}: bash printed on stderr");
-            assert!(matches!(got, Err(Error::Unreachable { .. })), "{name}: rust: {got:?}");
+            assert!(
+                matches!(got, Err(Error::Unreachable { .. })),
+                "{name}: rust: {got:?}"
+            );
         }
     }
 }
@@ -402,7 +514,13 @@ fn rows(w: &Work) -> Vec<Row> {
             would_refuse: false,
             replies: vec![ok(r#"{"heartbeats":[]}"#)],
             bash: r#"cli_request /cli/heartbeat/list "name=a%2Fb" "json=1""#,
-            rust: |c| c.call(Channel::Tcp, "/cli/heartbeat/list", Call::Request(&["name=a%2Fb", "json=1"])),
+            rust: |c| {
+                c.call(
+                    Channel::Tcp,
+                    "/cli/heartbeat/list",
+                    Call::Request(&["name=a%2Fb", "json=1"]),
+                )
+            },
             requests: 1,
             outcome: Outcome::Body,
         },
@@ -422,7 +540,13 @@ fn rows(w: &Work) -> Vec<Row> {
             would_refuse: false,
             replies: vec![ok("{}")],
             bash: r#"cli_request_post /cli/review/approve "agent=a%20b" "branch=x""#,
-            rust: |c| c.call(Channel::Tcp, "/cli/review/approve", Call::RequestPost(&["agent=a%20b", "branch=x"])),
+            rust: |c| {
+                c.call(
+                    Channel::Tcp,
+                    "/cli/review/approve",
+                    Call::RequestPost(&["agent=a%20b", "branch=x"]),
+                )
+            },
             requests: 1,
             outcome: Outcome::Body,
         },
@@ -432,7 +556,13 @@ fn rows(w: &Work) -> Vec<Row> {
             would_refuse: false,
             replies: vec![ok("{}")],
             bash: r#"cli_request_post "/cli/x?y=%2F1" "a=%2Fb""#,
-            rust: |c| c.call(Channel::Tcp, "/cli/x?y=%2F1", Call::RequestPost(&["a=%2Fb"])),
+            rust: |c| {
+                c.call(
+                    Channel::Tcp,
+                    "/cli/x?y=%2F1",
+                    Call::RequestPost(&["a=%2Fb"]),
+                )
+            },
             requests: 1,
             outcome: Outcome::Body,
         },
@@ -452,7 +582,13 @@ fn rows(w: &Work) -> Vec<Row> {
             would_refuse: false,
             replies: vec![ok("{}")],
             bash: r#"cli_post_form /cli/workspace/msg "text=hi%20there" "to=ws""#,
-            rust: |c| c.call(Channel::Tcp, "/cli/workspace/msg", Call::PostForm(&["text=hi%20there", "to=ws"])),
+            rust: |c| {
+                c.call(
+                    Channel::Tcp,
+                    "/cli/workspace/msg",
+                    Call::PostForm(&["text=hi%20there", "to=ws"]),
+                )
+            },
             requests: 1,
             outcome: Outcome::Body,
         },
@@ -462,7 +598,13 @@ fn rows(w: &Work) -> Vec<Row> {
             would_refuse: false,
             replies: vec![ok(r#"{"ok":true}"#)],
             bash: r#"cli_post_json /cli/users/add "$BODY""#,
-            rust: |c| c.call(Channel::Tcp, "/cli/users/add", Call::PostJson(BODY.as_bytes())),
+            rust: |c| {
+                c.call(
+                    Channel::Tcp,
+                    "/cli/users/add",
+                    Call::PostJson(BODY.as_bytes()),
+                )
+            },
             requests: 1,
             outcome: Outcome::Body,
         },
@@ -580,7 +722,13 @@ fn rows(w: &Work) -> Vec<Row> {
             name: "the cell socket says not served: then TCP with the passport",
             who: Who::PassportUds,
             would_refuse: false,
-            replies: vec![Reply::Answer(404, r#"{"error":"route not served on cell socket"}"#.to_string()), ok(r#"{"items":[]}"#)],
+            replies: vec![
+                Reply::Answer(
+                    404,
+                    r#"{"error":"route not served on cell socket"}"#.to_string(),
+                ),
+                ok(r#"{"items":[]}"#),
+            ],
             bash: r#"cli_send cli_request /cli/inbox/list "a=1""#,
             rust: |c| c.send("/cli/inbox/list", Call::Request(&["a=1"])),
             requests: 2,
@@ -600,7 +748,10 @@ fn rows(w: &Work) -> Vec<Row> {
             name: "cli_send_json POST on the cell socket, not served, then TCP",
             who: Who::PassportUds,
             would_refuse: false,
-            replies: vec![Reply::Answer(404, r#"{"error":"not served on cell socket"}"#.to_string()), Reply::Answer(403, r#"{"error":"owner_only"}"#.to_string())],
+            replies: vec![
+                Reply::Answer(404, r#"{"error":"not served on cell socket"}"#.to_string()),
+                Reply::Answer(403, r#"{"error":"owner_only"}"#.to_string()),
+            ],
             bash: r#"cli_send_json POST /cli/compute/run "$BODY""#,
             rust: |c| c.send_json(true, "/cli/compute/run", BODY),
             requests: 2,
@@ -640,7 +791,10 @@ fn rows(w: &Work) -> Vec<Row> {
             name: "503 migrating, then 200",
             who: Who::Owner,
             would_refuse: false,
-            replies: vec![Reply::Answer(503, r#"{"state":"migrating"}"#.to_string()), ok(r#"{"items":[]}"#)],
+            replies: vec![
+                Reply::Answer(503, r#"{"state":"migrating"}"#.to_string()),
+                ok(r#"{"items":[]}"#),
+            ],
             bash: r#"cli_request /cli/inbox/list "a=1""#,
             rust: |c| c.call(Channel::Tcp, "/cli/inbox/list", Call::Request(&["a=1"])),
             requests: 2,
@@ -650,7 +804,10 @@ fn rows(w: &Work) -> Vec<Row> {
             name: "503 migrating on the cell socket POST, then 200",
             who: Who::PassportUds,
             would_refuse: false,
-            replies: vec![Reply::Answer(503, r#"{"state":"migrating"}"#.to_string()), ok("{}")],
+            replies: vec![
+                Reply::Answer(503, r#"{"state":"migrating"}"#.to_string()),
+                ok("{}"),
+            ],
             bash: r#"cli_send cli_request_post /cli/inbox/claim "id=7""#,
             rust: |c| c.send("/cli/inbox/claim", Call::RequestPost(&["id=7"])),
             requests: 2,
@@ -660,9 +817,21 @@ fn rows(w: &Work) -> Vec<Row> {
             name: "405 method not allowed, then the same call as a GET",
             who: Who::Owner,
             would_refuse: false,
-            replies: vec![Reply::Answer(405, r#"{"error":"method not allowed for this route"}"#.to_string()), ok(r#"{"ok":true}"#)],
+            replies: vec![
+                Reply::Answer(
+                    405,
+                    r#"{"error":"method not allowed for this route"}"#.to_string(),
+                ),
+                ok(r#"{"ok":true}"#),
+            ],
             bash: r#"cli_request_post /cli/review/approve "agent=x""#,
-            rust: |c| c.call(Channel::Tcp, "/cli/review/approve", Call::RequestPost(&["agent=x"])),
+            rust: |c| {
+                c.call(
+                    Channel::Tcp,
+                    "/cli/review/approve",
+                    Call::RequestPost(&["agent=x"]),
+                )
+            },
             requests: 2,
             outcome: Outcome::Body,
         },
@@ -702,7 +871,13 @@ fn rows(w: &Work) -> Vec<Row> {
             would_refuse: false,
             replies: vec![Reply::Answer(403, permission_ask.to_string())],
             bash: r#"cli_post_form /cli/workspace/msg "text=x""#,
-            rust: |c| c.call(Channel::Tcp, "/cli/workspace/msg", Call::PostForm(&["text=x"])),
+            rust: |c| {
+                c.call(
+                    Channel::Tcp,
+                    "/cli/workspace/msg",
+                    Call::PostForm(&["text=x"]),
+                )
+            },
             requests: 1,
             outcome: Outcome::Body,
         },
@@ -752,7 +927,13 @@ fn rows(w: &Work) -> Vec<Row> {
             would_refuse: false,
             replies: vec![heal(401), ok("{}")],
             bash: r#"cli_post_form /cli/workspace/msg "text=x""#,
-            rust: |c| c.call(Channel::Tcp, "/cli/workspace/msg", Call::PostForm(&["text=x"])),
+            rust: |c| {
+                c.call(
+                    Channel::Tcp,
+                    "/cli/workspace/msg",
+                    Call::PostForm(&["text=x"]),
+                )
+            },
             requests: 2,
             outcome: Outcome::Body,
         },
@@ -787,7 +968,10 @@ fn rows(w: &Work) -> Vec<Row> {
                 c.call(Channel::Tcp, "/cli/slow", Call::PostJson(b"{}"))
             },
             requests: 1,
-            outcome: Outcome::NoAnswer { empty: false, secs: (2, 3) },
+            outcome: Outcome::NoAnswer {
+                empty: false,
+                secs: (2, 3),
+            },
         },
         Row {
             name: "a connection closed with nothing",
@@ -797,7 +981,10 @@ fn rows(w: &Work) -> Vec<Row> {
             bash: r#"cli_request /cli/inbox/list"#,
             rust: |c| c.call(Channel::Tcp, "/cli/inbox/list", Call::Request(&[])),
             requests: 1,
-            outcome: Outcome::NoAnswer { empty: true, secs: (0, 1) },
+            outcome: Outcome::NoAnswer {
+                empty: true,
+                secs: (0, 1),
+            },
         },
         Row {
             name: "a 503 with an empty body",
@@ -805,9 +992,18 @@ fn rows(w: &Work) -> Vec<Row> {
             would_refuse: false,
             replies: vec![Reply::Answer(503, String::new())],
             bash: r#"cli_request_post /cli/inbox/claim "id=1""#,
-            rust: |c| c.call(Channel::Tcp, "/cli/inbox/claim", Call::RequestPost(&["id=1"])),
+            rust: |c| {
+                c.call(
+                    Channel::Tcp,
+                    "/cli/inbox/claim",
+                    Call::RequestPost(&["id=1"]),
+                )
+            },
             requests: 1,
-            outcome: Outcome::NoAnswer { empty: true, secs: (0, 1) },
+            outcome: Outcome::NoAnswer {
+                empty: true,
+                secs: (0, 1),
+            },
         },
     ]
 }
@@ -829,7 +1025,11 @@ fn every_call_sends_what_bash_sends() {
 #[test]
 fn a_refused_connect_is_tried_again_unless_stdin_was_read() {
     let w = Work::new("refused");
-    std::fs::write(w.dir.join("k2home").join("daemon.port"), format!("{}\n", w.stub.port)).unwrap();
+    std::fs::write(
+        w.dir.join("k2home").join("daemon.port"),
+        format!("{}\n", w.stub.port),
+    )
+    .unwrap();
     let dead = {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         l.local_addr().unwrap().port()
@@ -923,6 +1123,10 @@ fn the_cell_socket_serves_the_shell_s_routes() {
     let shell = common::bash_args(&script, &paths);
     assert_eq!(shell.len(), paths.len());
     for (p, s) in paths.iter().zip(shell.chars()) {
-        assert_eq!(k5_cli::transport::client::uds_eligible(p), s == '1', "{p:?}");
+        assert_eq!(
+            k5_cli::transport::client::uds_eligible(p),
+            s == '1',
+            "{p:?}"
+        );
     }
 }

@@ -50,7 +50,13 @@ pub const WOULD_REFUSE_VAR: &str = "K5_CLI_WOULD_REFUSE";
 pub const SCRIPT_DIR_VAR: &str = "K5_CLI_SCRIPT_DIR";
 /// Every variable the front hands the shell. Each is one name, not a
 /// setting read under three.
-pub const FRONT_VARS: [&str; 5] = [CALLED_AS_VAR, NOTICE_DONE_VAR, VIA_VAR, WOULD_REFUSE_VAR, SCRIPT_DIR_VAR];
+pub const FRONT_VARS: [&str; 5] = [
+    CALLED_AS_VAR,
+    NOTICE_DONE_VAR,
+    VIA_VAR,
+    WOULD_REFUSE_VAR,
+    SCRIPT_DIR_VAR,
+];
 
 /// Which of the command's two names it was called by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,7 +100,11 @@ impl CalledAs {
     /// the name it was called by, that the notice is dealt with, and that
     /// the call came through the front.
     pub fn fallthrough_env(self) -> [(&'static str, &'static str); 3] {
-        [(CALLED_AS_VAR, self.name()), (NOTICE_DONE_VAR, "1"), (VIA_VAR, VIA_RUST)]
+        [
+            (CALLED_AS_VAR, self.name()),
+            (NOTICE_DONE_VAR, "1"),
+            (VIA_VAR, VIA_RUST),
+        ]
     }
 }
 
@@ -191,8 +201,16 @@ mod tests {
             ("k2", Some("k5.exe"), K2Name),
         ];
         for (argv0, value, want) in rows {
-            assert_eq!(unix(argv0, *value), *want, "argv0 {argv0:?}, {CALLED_AS_VAR}={value:?}");
-            assert_eq!(windows(argv0, *value), *want, "Windows: argv0 {argv0:?}, {CALLED_AS_VAR}={value:?}");
+            assert_eq!(
+                unix(argv0, *value),
+                *want,
+                "argv0 {argv0:?}, {CALLED_AS_VAR}={value:?}"
+            );
+            assert_eq!(
+                windows(argv0, *value),
+                *want,
+                "Windows: argv0 {argv0:?}, {CALLED_AS_VAR}={value:?}"
+            );
         }
     }
 
@@ -224,24 +242,42 @@ mod tests {
     #[test]
     fn an_argv0_that_is_not_utf8_is_read_by_its_bytes() {
         use std::os::unix::ffi::OsStrExt;
-        assert_eq!(called_as(OsStr::from_bytes(b"/opt/\xff/k5"), with(None), Os::Unix), K5Name);
-        assert_eq!(called_as(OsStr::from_bytes(b"/opt/k5\xff"), with(None), Os::Unix), K2Name);
+        assert_eq!(
+            called_as(OsStr::from_bytes(b"/opt/\xff/k5"), with(None), Os::Unix),
+            K5Name
+        );
+        assert_eq!(
+            called_as(OsStr::from_bytes(b"/opt/k5\xff"), with(None), Os::Unix),
+            K2Name
+        );
     }
 
     #[test]
     fn the_fallthrough_env_names_the_caller() {
         assert_eq!(
             K2Name.fallthrough_env(),
-            [("K5_CLI_CALLED_AS", "k2"), ("K5_CLI_NOTICE_DONE", "1"), ("K5_CLI_VIA", "rust")]
+            [
+                ("K5_CLI_CALLED_AS", "k2"),
+                ("K5_CLI_NOTICE_DONE", "1"),
+                ("K5_CLI_VIA", "rust")
+            ]
         );
         assert_eq!(
             K5Name.fallthrough_env(),
-            [("K5_CLI_CALLED_AS", "k5"), ("K5_CLI_NOTICE_DONE", "1"), ("K5_CLI_VIA", "rust")]
+            [
+                ("K5_CLI_CALLED_AS", "k5"),
+                ("K5_CLI_NOTICE_DONE", "1"),
+                ("K5_CLI_VIA", "rust")
+            ]
         );
         // What the front hands on, the shell reads back as the same name.
         for who in [K2Name, K5Name] {
             let env = who.fallthrough_env();
-            let lookup = |name: &str| env.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string());
+            let lookup = |name: &str| {
+                env.iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| v.to_string())
+            };
             assert_eq!(called_as(OsStr::new("some-copy"), lookup, Os::Unix), who);
         }
     }

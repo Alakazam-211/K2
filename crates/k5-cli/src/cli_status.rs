@@ -91,14 +91,21 @@ pub fn fallthroughs(body: &[u8]) -> Option<BTreeMap<String, i64>> {
     let doc = json::parse(std::str::from_utf8(body).ok()?).ok()?;
     let field = |v: &Value, key: &str| -> Option<Value> {
         let Value::Object(pairs) = v else { return None };
-        pairs.iter().find(|(k, _)| k.as_str() == Some(key)).map(|(_, v)| v.clone())
+        pairs
+            .iter()
+            .find(|(k, _)| k.as_str() == Some(key))
+            .map(|(_, v)| v.clone())
     };
     let Value::Array(rows) = field(&doc, "rows")? else {
         return None;
     };
     let mut out = BTreeMap::new();
     for row in &rows {
-        let (Value::Str(kind), Value::Str(key), Value::Int(count)) = (field(row, "kind")?, field(row, "key")?, field(row, "count")?) else {
+        let (Value::Str(kind), Value::Str(key), Value::Int(count)) = (
+            field(row, "kind")?,
+            field(row, "key")?,
+            field(row, "count")?,
+        ) else {
             return None;
         };
         if kind.as_str() != Some(FALLTHROUGH_KIND) {
@@ -123,10 +130,14 @@ pub fn counts(result: Result<Response, Error>) -> Counts {
     match r.status {
         200 => match fallthroughs(&r.body) {
             Some(map) => Counts::Shown(map),
-            None => Counts::Unavailable(format!("{PRODUCT_NAME}'s server's answer to {PATH} is not its rows")),
+            None => Counts::Unavailable(format!(
+                "{PRODUCT_NAME}'s server's answer to {PATH} is not its rows"
+            )),
         },
         403 => Counts::OwnerOnly,
-        other => Counts::Unavailable(format!("{PRODUCT_NAME}'s server answered {PATH} with {other}")),
+        other => Counts::Unavailable(format!(
+            "{PRODUCT_NAME}'s server answered {PATH} with {other}"
+        )),
     }
 }
 
@@ -161,16 +172,28 @@ pub fn status(table: &[Noun], version: &str, counts: Counts) -> Status {
     if let Some(map) = shown {
         for (key, n) in map {
             if !table.iter().any(|row| row.names(key)) {
-                families.push(Family { words: vec![key.clone()], owner: None, fallthroughs: Some(*n), verbs: Vec::new() });
+                families.push(Family {
+                    words: vec![key.clone()],
+                    owner: None,
+                    fallthroughs: Some(*n),
+                    verbs: Vec::new(),
+                });
             }
         }
     }
-    Status { version: version.to_string(), families, counts }
+    Status {
+        version: version.to_string(),
+        families,
+        counts,
+    }
 }
 
 impl Status {
     fn tally(&self, owner: Owner) -> usize {
-        self.families.iter().filter(|f| f.owner == Some(owner)).count()
+        self.families
+            .iter()
+            .filter(|f| f.owner == Some(owner))
+            .count()
     }
 
     /// The summary line.
@@ -188,19 +211,28 @@ impl Status {
     /// per verb row under it). The count column only with counts.
     pub fn table(&self) -> String {
         let with_counts = matches!(self.counts, Counts::Shown(_));
-        let mut rows: Vec<[String; 3]> = vec![["family".into(), "by".into(), "fallthroughs".into()]];
+        let mut rows: Vec<[String; 3]> =
+            vec![["family".into(), "by".into(), "fallthroughs".into()]];
         for f in &self.families {
             let count = f.fallthroughs.map_or_else(String::new, |n| n.to_string());
             rows.push([f.name(), f.owner.map_or("-", owner_name).into(), count]);
             for (verb, owner) in &f.verbs {
-                rows.push([format!("{} {}", f.words[0], verb.join("|")), owner_name(*owner).into(), String::new()]);
+                rows.push([
+                    format!("{} {}", f.words[0], verb.join("|")),
+                    owner_name(*owner).into(),
+                    String::new(),
+                ]);
             }
         }
         let w0 = rows.iter().map(|r| r[0].chars().count()).max().unwrap_or(0);
         let w1 = rows.iter().map(|r| r[1].chars().count()).max().unwrap_or(0);
         let mut out = format!("{}\n", self.summary());
         for r in &rows {
-            let line = if with_counts { format!("{:w0$}  {:w1$}  {}", r[0], r[1], r[2]) } else { format!("{:w0$}  {}", r[0], r[1]) };
+            let line = if with_counts {
+                format!("{:w0$}  {:w1$}  {}", r[0], r[1], r[2])
+            } else {
+                format!("{:w0$}  {}", r[0], r[1])
+            };
             out.push_str(line.trim_end());
             out.push('\n');
         }
@@ -220,10 +252,21 @@ impl Status {
                     ("family", s(&f.name())),
                     ("words", list(&f.words)),
                     ("owner", f.owner.map_or(Value::Null, |o| s(owner_name(o)))),
-                    ("fallthroughs", f.fallthroughs.map_or(Value::Null, |n| Value::Int(n.to_string()))),
+                    (
+                        "fallthroughs",
+                        f.fallthroughs
+                            .map_or(Value::Null, |n| Value::Int(n.to_string())),
+                    ),
                     (
                         "verbs",
-                        Value::Array(f.verbs.iter().map(|(w, o)| obj(vec![("words", list(w)), ("owner", s(owner_name(*o)))])).collect()),
+                        Value::Array(
+                            f.verbs
+                                .iter()
+                                .map(|(w, o)| {
+                                    obj(vec![("words", list(w)), ("owner", s(owner_name(*o)))])
+                                })
+                                .collect(),
+                        ),
                     ),
                 ])
             })
@@ -241,8 +284,12 @@ impl Status {
             ("counts", s(counts)),
             ("families", Value::Array(families)),
         ]);
-        let options = Options { indent: Some(2), ..Options::default() };
-        let mut text = json::to_string(&doc, &options).expect("plain ASCII and UTF-8 strings always print");
+        let options = Options {
+            indent: Some(2),
+            ..Options::default()
+        };
+        let mut text =
+            json::to_string(&doc, &options).expect("plain ASCII and UTF-8 strings always print");
         text.push('\n');
         text
     }
@@ -283,9 +330,24 @@ mod tests {
     use crate::transport::Channel;
 
     static T: &[Noun] = &[
-        Noun { words: &["doc", "docs"], owner: Owner::Bash, verbs: &[] },
-        Noun { words: &["mail"], owner: Owner::Bash, verbs: &[Verb { words: &["read"], owner: Owner::Native }] },
-        Noun { words: &["cli"], owner: Owner::Native, verbs: &[] },
+        Noun {
+            words: &["doc", "docs"],
+            owner: Owner::Bash,
+            verbs: &[],
+        },
+        Noun {
+            words: &["mail"],
+            owner: Owner::Bash,
+            verbs: &[Verb {
+                words: &["read"],
+                owner: Owner::Native,
+            }],
+        },
+        Noun {
+            words: &["cli"],
+            owner: Owner::Native,
+            verbs: &[],
+        },
     ];
 
     fn shown(pairs: &[(&str, i64)]) -> Counts {
@@ -293,7 +355,13 @@ mod tests {
     }
 
     fn ok(status: u16, body: &str) -> Result<Response, Error> {
-        Ok(Response { status, body: body.as_bytes().to_vec(), channel: Channel::Tcp, permission: None, server_version: None })
+        Ok(Response {
+            status,
+            body: body.as_bytes().to_vec(),
+            channel: Channel::Tcp,
+            permission: None,
+            server_version: None,
+        })
     }
 
     #[test]
@@ -303,25 +371,57 @@ mod tests {
             {"kind":"fallthrough","key":"doc","count":3,"first_at":1,"last_at":2},
             {"kind":"would_refuse","key":"ws-1","count":7,"first_at":1,"last_at":2},
             {"kind":"fallthrough","key":"other","count":1,"first_at":1,"last_at":2}]}"#;
-        assert_eq!(counts(ok(200, body)), shown(&[("doc", 3), ("docs", 2), ("other", 1)]));
+        assert_eq!(
+            counts(ok(200, body)),
+            shown(&[("doc", 3), ("docs", 2), ("other", 1)])
+        );
         assert_eq!(counts(ok(200, r#"{"rows":[]}"#)), shown(&[]));
-        for bad in ["[]", r#"{"rows":{}}"#, r#"{"rows":[{"kind":"fallthrough","key":"x","count":"1"}]}"#, "nope"] {
-            assert_eq!(counts(ok(200, bad)), Counts::Unavailable("K2's server's answer to /cli/cli-usage is not its rows".into()), "{bad}");
+        for bad in [
+            "[]",
+            r#"{"rows":{}}"#,
+            r#"{"rows":[{"kind":"fallthrough","key":"x","count":"1"}]}"#,
+            "nope",
+        ] {
+            assert_eq!(
+                counts(ok(200, bad)),
+                Counts::Unavailable(
+                    "K2's server's answer to /cli/cli-usage is not its rows".into()
+                ),
+                "{bad}"
+            );
         }
     }
 
     #[test]
     fn a_403_or_no_credential_is_owner_only() {
-        assert_eq!(counts(ok(403, r#"{"error":"only the owner can read the CLI usage counts"}"#)), Counts::OwnerOnly);
-        assert_eq!(counts(Err(Error::NoCredential { endpoint: PATH.into() })), Counts::OwnerOnly);
-        assert_eq!(counts(ok(500, "")), Counts::Unavailable("K2's server answered /cli/cli-usage with 500".into()));
+        assert_eq!(
+            counts(ok(
+                403,
+                r#"{"error":"only the owner can read the CLI usage counts"}"#
+            )),
+            Counts::OwnerOnly
+        );
+        assert_eq!(
+            counts(Err(Error::NoCredential {
+                endpoint: PATH.into()
+            })),
+            Counts::OwnerOnly
+        );
+        assert_eq!(
+            counts(ok(500, "")),
+            Counts::Unavailable("K2's server answered /cli/cli-usage with 500".into())
+        );
         let mut c = Client::new("127.0.0.1", 1, "/p", Auth::None);
         assert_eq!(fetch(&mut c), Counts::OwnerOnly);
     }
 
     #[test]
     fn the_table_with_counts() {
-        let s = status(T, "0.46.16", shown(&[("docs", 2), ("doc", 3), ("nosuch", 4)]));
+        let s = status(
+            T,
+            "0.46.16",
+            shown(&[("docs", 2), ("doc", 3), ("nosuch", 4)]),
+        );
         assert_eq!(
             s.table(),
             "k5 0.46.16: 1 native, 0 spec, 2 bash\n\
@@ -343,7 +443,12 @@ mod tests {
             "k5 0.46.16: 1 native, 0 spec, 2 bash\nfamily     by\ncli        native\ndoc|docs   bash\nmail       bash\nmail read  native\n"
         );
         assert_eq!(s.note().as_deref(), Some(OWNER_ONLY_LINE));
-        assert_eq!(status(T, "1", Counts::Unavailable("down".into())).note().as_deref(), Some("down"));
+        assert_eq!(
+            status(T, "1", Counts::Unavailable("down".into()))
+                .note()
+                .as_deref(),
+            Some("down")
+        );
     }
 
     #[test]
@@ -353,12 +458,34 @@ mod tests {
         assert!(text.ends_with("}\n"));
         let v = json::parse(&text).unwrap();
         // Python's indent=2 layout.
-        assert!(text.starts_with("{\n  \"version\": \"0.46.16\",\n  \"native\": 1,\n"), "{text}");
-        assert_eq!(json::reprint(&text, &Options { indent: Some(2), ..Options::default() }).unwrap() + "\n", text);
+        assert!(
+            text.starts_with("{\n  \"version\": \"0.46.16\",\n  \"native\": 1,\n"),
+            "{text}"
+        );
+        assert_eq!(
+            json::reprint(
+                &text,
+                &Options {
+                    indent: Some(2),
+                    ..Options::default()
+                }
+            )
+            .unwrap()
+                + "\n",
+            text
+        );
         let Value::Object(top) = v else { panic!() };
-        let get = |k: &str| top.iter().find(|(n, _)| n.as_str() == Some(k)).unwrap().1.clone();
+        let get = |k: &str| {
+            top.iter()
+                .find(|(n, _)| n.as_str() == Some(k))
+                .unwrap()
+                .1
+                .clone()
+        };
         assert_eq!(get("counts"), Value::Str("shown".into()));
-        let Value::Array(fams) = get("families") else { panic!() };
+        let Value::Array(fams) = get("families") else {
+            panic!()
+        };
         assert_eq!(fams.len(), s.families.len());
         let names: Vec<String> = fams
             .iter()
@@ -378,6 +505,9 @@ mod tests {
     fn the_real_table_has_every_row_once() {
         let s = status(TABLE, "x", Counts::OwnerOnly);
         assert_eq!(s.families.len(), TABLE.len());
-        assert!(s.families.iter().any(|f| f.words == ["cli"] && f.owner == Some(Owner::Native)));
+        assert!(s
+            .families
+            .iter()
+            .any(|f| f.words == ["cli"] && f.owner == Some(Owner::Native)));
     }
 }

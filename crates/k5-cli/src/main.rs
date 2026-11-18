@@ -31,9 +31,12 @@ fn version_check(args: &[OsString]) -> Exit {
     if let Err(err) = out::stdout(&front::version_line(ours)) {
         return out::after_stdout_error(&err);
     }
-    let client = daemon::current().map_err(|e| (e.to_string(), Exit::Error)).and_then(|s| {
-        s.client(passport::current(args).would_refuse()).map_err(|e| (e.to_string(), Exit::DaemonUnreachable))
-    });
+    let client = daemon::current()
+        .map_err(|e| (e.to_string(), Exit::Error))
+        .and_then(|s| {
+            s.client(passport::current(args).would_refuse())
+                .map_err(|e| (e.to_string(), Exit::DaemonUnreachable))
+        });
     let outcome = match client {
         Ok(mut c) => check::run(ours, &mut c),
         Err((line, exit)) => check::Outcome::Failed(line, exit),

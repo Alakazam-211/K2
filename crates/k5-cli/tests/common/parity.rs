@@ -44,7 +44,8 @@ pub const REFUSED: &str = r#"{"error":"Invalid or missing auth token"}"#;
 /// A refusal with the permission cards' `permission` object.
 pub const PERMISSION_ASK: &str = r#"{"error":{"code":"owner_only","hint":"Only the owner can do that."},"permission":{"command":"k2 permission request --scope x.write --why \"...\"","requestable":true}}"#;
 /// The Org Chart's mark of an unread bulletin.
-pub const BULLETIN: &str = r#"{"ok":true,"bulletin":{"day":"2026-11-17","unread":true,"key":"ab12"}}"#;
+pub const BULLETIN: &str =
+    r#"{"ok":true,"bulletin":{"day":"2026-11-17","unread":true,"key":"ab12"}}"#;
 /// Not HTTP: curl reads it as HTTP/0.9 and refuses it (status 000, exit 1).
 pub const GARBAGE: &[u8] = b"garbage\r\n\r\n";
 
@@ -100,7 +101,10 @@ pub enum Compare {
     /// ended with no signal, that is what bash must print (after the
     /// binary's line) while the binary still dies of SIGPIPE with nothing
     /// on stdout.
-    InPipe { stdout: &'static str, stderr: &'static str },
+    InPipe {
+        stdout: &'static str,
+        stderr: &'static str,
+    },
 }
 
 pub struct Case {
@@ -134,15 +138,36 @@ impl Rig {
         let k2home = k2_client::paths::k2_home_in(&home);
         let proj = dir.join("proj");
         let secrets = dir.join("secrets");
-        for d in [&k2home, &proj.join(".k2"), &secrets, &dir.join("tmp-bash"), &dir.join("tmp-rust")] {
+        for d in [
+            &k2home,
+            &proj.join(".k2"),
+            &secrets,
+            &dir.join("tmp-bash"),
+            &dir.join("tmp-rust"),
+        ] {
             std::fs::create_dir_all(d).unwrap();
         }
         let short = verb.chars().next().expect("a verb");
-        let stub = Stub::start(&PathBuf::from(format!("/tmp/k5{short}-{}-{n}.sock", std::process::id())));
+        let stub = Stub::start(&PathBuf::from(format!(
+            "/tmp/k5{short}-{}-{n}.sock",
+            std::process::id()
+        )));
         let dead_sock = PathBuf::from(format!("/tmp/k5{short}d-{}-{n}.sock", std::process::id()));
         let _ = std::fs::remove_file(&dead_sock);
-        drop(std::os::unix::net::UnixListener::bind(&dead_sock).unwrap_or_else(|e| panic!("bind {}: {e}", dead_sock.display())));
-        Rig { verb, dir, home, k2home, proj, secrets, dead_sock, stub }
+        drop(
+            std::os::unix::net::UnixListener::bind(&dead_sock)
+                .unwrap_or_else(|e| panic!("bind {}: {e}", dead_sock.display())),
+        );
+        Rig {
+            verb,
+            dir,
+            home,
+            k2home,
+            proj,
+            secrets,
+            dead_sock,
+            stub,
+        }
     }
 
     pub fn owner_on_disk(&self) {
@@ -150,7 +175,11 @@ impl Rig {
     }
 
     pub fn port_on_disk(&self) {
-        std::fs::write(self.k2home.join("heartbeat.port"), format!("{}\n", self.stub.port)).unwrap();
+        std::fs::write(
+            self.k2home.join("heartbeat.port"),
+            format!("{}\n", self.stub.port),
+        )
+        .unwrap();
     }
 
     fn fill(&self, v: &str) -> String {
@@ -174,15 +203,35 @@ impl Rig {
         if let Some(path) = std::env::var_os("PATH") {
             cmd.env("PATH", path);
         }
-        let tmp = if case.no_tmpdir { self.dir.join("no-tmp") } else { self.dir.join(if bash { "tmp-bash" } else { "tmp-rust" }) };
-        cmd.env("HOME", &self.home).env("TMPDIR", &tmp).current_dir(case.cwd.as_deref().unwrap_or(&self.proj));
-        let env: Vec<(String, String)> = case.env.iter().map(|(k, v)| (k.to_string(), self.fill(v))).collect();
+        let tmp = if case.no_tmpdir {
+            self.dir.join("no-tmp")
+        } else {
+            self.dir.join(if bash { "tmp-bash" } else { "tmp-rust" })
+        };
+        cmd.env("HOME", &self.home)
+            .env("TMPDIR", &tmp)
+            .current_dir(case.cwd.as_deref().unwrap_or(&self.proj));
+        let env: Vec<(String, String)> = case
+            .env
+            .iter()
+            .map(|(k, v)| (k.to_string(), self.fill(v)))
+            .collect();
         cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         if bash {
             cmd.env("K5_CLI_VIA", "rust");
-            let lookup = |name: &str| env.iter().find(|(k, _)| k == name).map(|(_, v)| OsString::from(v));
-            let args: Vec<OsString> = std::iter::once(self.verb).chain(case.args.iter().copied()).map(OsString::from).collect();
-            let verdict = k5_cli::passport::decide(k5_cli::passport::facts(&args, lookup), k5_cli::passport::live_session_ancestor);
+            let lookup = |name: &str| {
+                env.iter()
+                    .find(|(k, _)| k == name)
+                    .map(|(_, v)| OsString::from(v))
+            };
+            let args: Vec<OsString> = std::iter::once(self.verb)
+                .chain(case.args.iter().copied())
+                .map(OsString::from)
+                .collect();
+            let verdict = k5_cli::passport::decide(
+                k5_cli::passport::facts(&args, lookup),
+                k5_cli::passport::live_session_ancestor,
+            );
             if verdict.would_refuse() {
                 cmd.env("K5_CLI_WOULD_REFUSE", "1");
             }
@@ -205,45 +254,108 @@ impl Rig {
         let mut logs = Vec::new();
         for bash in [true, false] {
             // Each case starts from an empty K2 home and no re-minted passport.
-            for f in [self.secrets.join(".k2-passport"), self.k2home.join("heartbeat.port"), self.k2home.join("heartbeat.token"), self.k2home.join("daemon.token")] {
+            for f in [
+                self.secrets.join(".k2-passport"),
+                self.k2home.join("heartbeat.port"),
+                self.k2home.join("heartbeat.token"),
+                self.k2home.join("daemon.token"),
+            ] {
                 let _ = std::fs::remove_file(f);
             }
             (c.setup)(self);
             self.stub.reset(&c.replies);
             let out = self.run(bash, c);
             let side = if bash { "bash" } else { "rust" };
-            assert_eq!(self.stub.left(), 0, "{name}: {side} left answers unused: {out:?}");
+            assert_eq!(
+                self.stub.left(),
+                0,
+                "{name}: {side} left answers unused: {out:?}"
+            );
             let native = !bash && c.compare != Compare::Shell;
-            logs.push(self.stub.log().iter().map(|r| normalise(r, native, self.verb, name)).collect::<Vec<_>>());
+            logs.push(
+                self.stub
+                    .log()
+                    .iter()
+                    .map(|r| normalise(r, native, self.verb, name))
+                    .collect::<Vec<_>>(),
+            );
             outs.push(out);
         }
         let (b, r) = (&outs[0], &outs[1]);
         let (mut bl, rl) = (logs[0].clone(), logs[1].clone());
-        println!("== {name}\n{}\n-- bash: {b:?}\n-- rust: {r:?}", bl.join("\n----\n").replace('\r', ""));
+        println!(
+            "== {name}\n{}\n-- bash: {b:?}\n-- rust: {r:?}",
+            bl.join("\n----\n").replace('\r', "")
+        );
         let bash_3_2_pipe = match c.compare {
-            Compare::InPipe { stdout, stderr } if cfg!(target_os = "macos") && b.signal.is_none() => Some((stdout, stderr)),
+            Compare::InPipe { stdout, stderr }
+                if cfg!(target_os = "macos") && b.signal.is_none() =>
+            {
+                Some((stdout, stderr))
+            }
             _ => None,
         };
         let want = if bash_3_2_pipe.is_some() { 1 } else { c.code };
         assert_eq!(b.code, Some(want), "{name}: bash's exit: {b:?}");
-        assert_eq!(bl.len(), c.requests, "{name}: bash sent {} requests:\n{}", bl.len(), bl.join("\n----\n"));
+        assert_eq!(
+            bl.len(),
+            c.requests,
+            "{name}: bash sent {} requests:\n{}",
+            bl.len(),
+            bl.join("\n----\n")
+        );
         if c.compare == Compare::OwnerTokenWithPassport {
-            assert!(bl.iter().all(|l| l.contains(&format!("token={OWNER}&"))), "{name}: bash no longer sends the owner token: {bl:?}");
-            assert!(rl.iter().all(|l| l.contains(&format!("token={PASSPORT}&")) && !l.contains(OWNER)), "{name}: the binary: {rl:?}");
-            bl = bl.iter().map(|l| l.replace(&format!("token={OWNER}&"), &format!("token={PASSPORT}&"))).collect();
+            assert!(
+                bl.iter().all(|l| l.contains(&format!("token={OWNER}&"))),
+                "{name}: bash no longer sends the owner token: {bl:?}"
+            );
+            assert!(
+                rl.iter()
+                    .all(|l| l.contains(&format!("token={PASSPORT}&")) && !l.contains(OWNER)),
+                "{name}: the binary: {rl:?}"
+            );
+            bl = bl
+                .iter()
+                .map(|l| l.replace(&format!("token={OWNER}&"), &format!("token={PASSPORT}&")))
+                .collect();
         }
-        assert_eq!(rl, bl, "{name}: the requests differ\n== rust ==\n{}\n== bash ==\n{}", rl.join("\n----\n"), bl.join("\n----\n"));
+        assert_eq!(
+            rl,
+            bl,
+            "{name}: the requests differ\n== rust ==\n{}\n== bash ==\n{}",
+            rl.join("\n----\n"),
+            bl.join("\n----\n")
+        );
         if let Some((stdout, stderr)) = bash_3_2_pipe {
-            assert_eq!((r.code, r.signal, r.stdout.as_str()), (Some(c.code), Some(13), ""), "{name}: the binary: {r:?}");
-            assert_eq!(b.stdout, stdout, "{name}: bash 3.2's reader on an empty input");
+            assert_eq!(
+                (r.code, r.signal, r.stdout.as_str()),
+                (Some(c.code), Some(13), ""),
+                "{name}: the binary: {r:?}"
+            );
+            assert_eq!(
+                b.stdout, stdout,
+                "{name}: bash 3.2's reader on an empty input"
+            );
             let (bs, bn) = mask_waited(&b.stderr);
             let (rs, rn) = mask_waited(&format!("{}{stderr}", r.stderr));
-            assert_eq!(bs, rs, "{name}: stderr (seconds masked): bash 3.2 adds the reader's");
-            assert!(bn.len() == rn.len() && bn.iter().zip(&rn).all(|(x, y)| x.abs_diff(*y) <= 1), "{name}: the waited lines");
+            assert_eq!(
+                bs, rs,
+                "{name}: stderr (seconds masked): bash 3.2 adds the reader's"
+            );
+            assert!(
+                bn.len() == rn.len() && bn.iter().zip(&rn).all(|(x, y)| x.abs_diff(*y) <= 1),
+                "{name}: the waited lines"
+            );
             return;
         }
-        assert_eq!(r.code, b.code, "{name}: the exit code\nrust: {r:?}\nbash: {b:?}");
-        assert_eq!(r.signal, b.signal, "{name}: the signal that ended it\nrust: {r:?}\nbash: {b:?}");
+        assert_eq!(
+            r.code, b.code,
+            "{name}: the exit code\nrust: {r:?}\nbash: {b:?}"
+        );
+        assert_eq!(
+            r.signal, b.signal,
+            "{name}: the signal that ended it\nrust: {r:?}\nbash: {b:?}"
+        );
         assert_eq!(r.stdout, b.stdout, "{name}: stdout");
         if matches!(c.compare, Compare::Waited | Compare::InPipe { .. }) {
             let (bs, bn) = mask_waited(&b.stderr);
@@ -251,7 +363,10 @@ impl Rig {
             assert_eq!(rs, bs, "{name}: stderr (seconds masked)");
             assert_eq!(rn.len(), bn.len(), "{name}: the waited lines");
             for (x, y) in rn.iter().zip(&bn) {
-                assert!(x.abs_diff(*y) <= 1, "{name}: waited {x} s here, {y} s in bash");
+                assert!(
+                    x.abs_diff(*y) <= 1,
+                    "{name}: waited {x} s here, {y} s in bash"
+                );
             }
         } else {
             assert_eq!(r.stderr, b.stderr, "{name}: stderr");
@@ -273,14 +388,20 @@ pub fn mask_waited(text: &str) -> (String, Vec<u64>) {
     let mut nums = Vec::new();
     let mut rest = text;
     loop {
-        let next = ["within ", "after "].iter().filter_map(|w| rest.find(w).map(|at| (at, w.len()))).min();
+        let next = ["within ", "after "]
+            .iter()
+            .filter_map(|w| rest.find(w).map(|at| (at, w.len())))
+            .min();
         let Some((at, len)) = next else {
             out.push_str(rest);
             return (out, nums);
         };
         let start = at + len;
         out.push_str(&rest[..start]);
-        let digits: String = rest[start..].chars().take_while(char::is_ascii_digit).collect();
+        let digits: String = rest[start..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
         if !digits.is_empty() && rest[start + digits.len()..].starts_with(" s") {
             nums.push(digits.parse().expect("a whole number of seconds"));
             out.push_str("<n>");
@@ -295,12 +416,19 @@ pub fn mask_waited(text: &str) -> (String, Vec<u64>) {
 /// `native`: the binary sent it itself.
 pub fn normalise(r: &Logged, native: bool, verb: &str, case: &str) -> String {
     let version = k5_cli::embedded::version();
-    let text = String::from_utf8(r.bytes.clone()).unwrap_or_else(|_| panic!("{case}: a request that is not UTF-8"));
-    let (head, body) = text.split_once("\r\n\r\n").unwrap_or_else(|| panic!("{case}: a request with no head: {text:?}"));
+    let text = String::from_utf8(r.bytes.clone())
+        .unwrap_or_else(|_| panic!("{case}: a request that is not UTF-8"));
+    let (head, body) = text
+        .split_once("\r\n\r\n")
+        .unwrap_or_else(|| panic!("{case}: a request with no head: {text:?}"));
     let (mut ua, mut via, mut ver, mut noun) = (0, 0, 0, 0);
     let mut lines: Vec<String> = Vec::new();
     let mut head_lines = head.split("\r\n");
-    lines.push(fold_query_escapes(head_lines.next().unwrap_or_else(|| panic!("{case}: no request line"))));
+    lines.push(fold_query_escapes(
+        head_lines
+            .next()
+            .unwrap_or_else(|| panic!("{case}: no request line")),
+    ));
     let noun_line = format!("X-K5-Cli-Noun: {verb}");
     for line in head_lines {
         let masked = if native {
@@ -328,10 +456,18 @@ pub fn normalise(r: &Logged, native: bool, verb: &str, case: &str) -> String {
         } else {
             None
         };
-        lines.push(masked.map(str::to_string).unwrap_or_else(|| line.to_string()));
+        lines.push(
+            masked
+                .map(str::to_string)
+                .unwrap_or_else(|| line.to_string()),
+        );
     }
     let side = if native { "native" } else { "the shell" };
-    assert_eq!((ua, via, ver, noun), (1, 1, usize::from(native), usize::from(!native)), "{case} ({side}): the masked lines in {text:?}");
+    assert_eq!(
+        (ua, via, ver, noun),
+        (1, 1, usize::from(native), usize::from(!native)),
+        "{case} ({side}): the masked lines in {text:?}"
+    );
     format!("[{}]\n{}\n\n{body}", r.channel, lines.join("\n"))
 }
 
@@ -341,20 +477,33 @@ pub fn fold_query_escapes(request_line: &str) -> String {
     let Some((before, query)) = request_line.split_once('?') else {
         return request_line.to_string();
     };
-    let (query, after) = query.rsplit_once(' ').unwrap_or_else(|| panic!("no HTTP version after the query: {request_line:?}"));
+    let (query, after) = query
+        .rsplit_once(' ')
+        .unwrap_or_else(|| panic!("no HTTP version after the query: {request_line:?}"));
     let b = query.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit() {
-            out.extend_from_slice(&[b'%', b[i + 1].to_ascii_uppercase(), b[i + 2].to_ascii_uppercase()]);
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && b[i + 1].is_ascii_hexdigit()
+            && b[i + 2].is_ascii_hexdigit()
+        {
+            out.extend_from_slice(&[
+                b'%',
+                b[i + 1].to_ascii_uppercase(),
+                b[i + 2].to_ascii_uppercase(),
+            ]);
             i += 3;
         } else {
             out.push(b[i]);
             i += 1;
         }
     }
-    format!("{before}?{} {after}", String::from_utf8(out).expect("upper-casing ASCII hex keeps UTF-8"))
+    format!(
+        "{before}?{} {after}",
+        String::from_utf8(out).expect("upper-casing ASCII hex keeps UTF-8")
+    )
 }
 
 pub fn ok(body: &str) -> Reply {
@@ -383,15 +532,24 @@ pub fn healed_on_disk(r: &Rig) {
 
 /// A refusal that writes the re-minted passport first.
 pub fn heal(rig: &Rig) -> Reply {
-    Reply::WriteThen { file: rig.secrets.join(".k2-passport"), content: format!("{HEALED}\n"), status: 403, body: REFUSED.to_string() }
+    Reply::WriteThen {
+        file: rig.secrets.join(".k2-passport"),
+        content: format!("{HEALED}\n"),
+        status: 403,
+        body: REFUSED.to_string(),
+    }
 }
 
 /// The passport's settings, and `extra`.
 pub fn with_passport(port: u16, extra: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
-    [("K2_PORT", port.to_string()), ("K2_HOOK_TOKEN", PASSPORT.to_string()), ("K2_SECRETS_DIR", "{secrets}".to_string())]
-        .into_iter()
-        .chain(extra.iter().map(|(k, v)| (*k, v.to_string())))
-        .collect()
+    [
+        ("K2_PORT", port.to_string()),
+        ("K2_HOOK_TOKEN", PASSPORT.to_string()),
+        ("K2_SECRETS_DIR", "{secrets}".to_string()),
+    ]
+    .into_iter()
+    .chain(extra.iter().map(|(k, v)| (*k, v.to_string())))
+    .collect()
 }
 
 pub fn case(

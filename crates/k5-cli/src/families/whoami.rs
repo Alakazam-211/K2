@@ -73,7 +73,9 @@ pub const UNPARSEABLE: &str = "Error: daemon returned an unparseable whoami resp
 /// What the flags ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Flags {
-    Run { json: bool },
+    Run {
+        json: bool,
+    },
     /// The first word starting with `-` that isn't `--json`.
     Unknown(String),
 }
@@ -148,7 +150,11 @@ fn run_with(args: &[OsString], mut settings: Settings) -> Exit {
     // The gate passed, so there is a port text and a token. curl refuses a
     // port that is no port (3), and `_cli_curl` reads that as any failure.
     let Some(port) = settings.port_text.as_deref().and_then(curl_port) else {
-        return Exit::from_curl(if tmpdir_unusable() { LOCAL_TRANSPORT_DENIED } else { curl::URL_MALFORMAT });
+        return Exit::from_curl(if tmpdir_unusable() {
+            LOCAL_TRANSPORT_DENIED
+        } else {
+            curl::URL_MALFORMAT
+        });
     };
     settings.port = Some(port);
     let mut client = match settings.client(passport::current(args).would_refuse()) {
@@ -222,21 +228,39 @@ pub const PY_OTHERS: u32 = 28;
 
 /// The shell's Python for the plain form, on `resp`.
 pub fn human(resp: &[u8]) -> Shown {
-    let fail = |stderr: String| Shown { stdout: String::new(), stderr, exit: Exit::Error };
-    let parsed = std::str::from_utf8(resp).ok().and_then(|t| json::parse(t).ok());
+    let fail = |stderr: String| Shown {
+        stdout: String::new(),
+        stderr,
+        exit: Exit::Error,
+    };
+    let parsed = std::str::from_utf8(resp)
+        .ok()
+        .and_then(|t| json::parse(t).ok());
     let Some(d) = parsed else {
         return fail(format!("{UNPARSEABLE}\n"));
     };
     let Value::Object(pairs) = &d else {
-        let exception = format!("AttributeError: '{}' object has no attribute 'get'", py::type_name(&d));
-        return fail(traceback(&[(PY_FIRST_PRINT, "<module>"), (PY_FIELD_RETURN, "field")], &exception));
+        let exception = format!(
+            "AttributeError: '{}' object has no attribute 'get'",
+            py::type_name(&d)
+        );
+        return fail(traceback(
+            &[(PY_FIRST_PRINT, "<module>"), (PY_FIELD_RETURN, "field")],
+            &exception,
+        ));
     };
     if let Some(err) = get(pairs, "error") {
         let mut stderr = String::new();
         match err {
             Value::Object(e) => {
-                let pick = [get(e, "hint"), get(e, "code")].into_iter().flatten().find(|v| py::truthy(v));
-                stderr.push_str(&format!("Error: {}\n", pick.map_or_else(|| py::str_of(err), py::str_of)));
+                let pick = [get(e, "hint"), get(e, "code")]
+                    .into_iter()
+                    .flatten()
+                    .find(|v| py::truthy(v));
+                stderr.push_str(&format!(
+                    "Error: {}\n",
+                    pick.map_or_else(|| py::str_of(err), py::str_of)
+                ));
             }
             other => {
                 stderr.push_str(&format!("Error: {}\n", py::str_of(other)));
@@ -252,20 +276,36 @@ pub fn human(resp: &[u8]) -> Shown {
         format!("{:<10} {value}\n", format!("{label}:"))
     };
     let mut stdout = String::new();
-    for (label, key) in [("workspace", "workspace"), ("role", "role"), ("address", "address"), ("primary", "primary"), ("session", "session")] {
+    for (label, key) in [
+        ("workspace", "workspace"),
+        ("role", "role"),
+        ("address", "address"),
+        ("primary", "primary"),
+        ("session", "session"),
+    ] {
         stdout.push_str(&field(label, key));
     }
     if let Some(Value::Object(sib)) = get(pairs, "siblings") {
         if let Some(live) = get(sib, "live") {
             match py::percent_d(live) {
-                Ok(n) => stdout.push_str(&format!("{:<10} {n} live here (k2 sessions)\n", "others:")),
+                Ok(n) => {
+                    stdout.push_str(&format!("{:<10} {n} live here (k2 sessions)\n", "others:"))
+                }
                 Err(exception) => {
-                    return Shown { stdout, stderr: traceback(&[(PY_OTHERS, "<module>")], &exception), exit: Exit::Error };
+                    return Shown {
+                        stdout,
+                        stderr: traceback(&[(PY_OTHERS, "<module>")], &exception),
+                        exit: Exit::Error,
+                    };
                 }
             }
         }
     }
-    Shown { stdout, stderr: String::new(), exit: Exit::Ok }
+    Shown {
+        stdout,
+        stderr: String::new(),
+        exit: Exit::Ok,
+    }
 }
 
 #[cfg(test)]
@@ -278,19 +318,34 @@ mod tests {
     }
 
     fn ok(stdout: &str) -> Shown {
-        Shown { stdout: stdout.to_string(), stderr: String::new(), exit: Exit::Ok }
+        Shown {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            exit: Exit::Ok,
+        }
     }
 
     fn err(stderr: &str) -> Shown {
-        Shown { stdout: String::new(), stderr: stderr.to_string(), exit: Exit::Error }
+        Shown {
+            stdout: String::new(),
+            stderr: stderr.to_string(),
+            exit: Exit::Error,
+        }
     }
 
     /// The shell's Python, its lines as `python3 -c` numbers them.
     fn script() -> Vec<String> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/msg-whoami-done.sh");
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        let body = text.split_once("cmd_whoami() {").expect("cmd_whoami in msg-whoami-done.sh").1;
-        let start = body.find("| python3 -c \"\nimport json, sys\n").expect("the plain form's Python");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/src/msg-whoami-done.sh");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let body = text
+            .split_once("cmd_whoami() {")
+            .expect("cmd_whoami in msg-whoami-done.sh")
+            .1;
+        let start = body
+            .find("| python3 -c \"\nimport json, sys\n")
+            .expect("the plain form's Python");
         let py = &body[start..];
         let py = &py[py.find("-c \"").expect("-c") + 4..];
         let end = py.find("\n\"\n").expect("the end of the Python");
@@ -301,27 +356,52 @@ mod tests {
     fn the_traceback_lines_are_the_script_s() {
         let lines = script();
         let line = |n: u32| lines[n as usize - 1].trim().to_string();
-        assert_eq!(line(PY_FIRST_PRINT), "print(field('workspace', 'workspace'))");
-        assert_eq!(line(PY_FIELD_RETURN), "return '%-10s %s' % (label + ':', d.get(key, ''))");
-        assert_eq!(line(PY_OTHERS), "print('%-10s %d live here (k2 sessions)' % ('others:', sib.get('live', 0)))");
+        assert_eq!(
+            line(PY_FIRST_PRINT),
+            "print(field('workspace', 'workspace'))"
+        );
+        assert_eq!(
+            line(PY_FIELD_RETURN),
+            "return '%-10s %s' % (label + ':', d.get(key, ''))"
+        );
+        assert_eq!(
+            line(PY_OTHERS),
+            "print('%-10s %d live here (k2 sessions)' % ('others:', sib.get('live', 0)))"
+        );
         assert_eq!(line(7), format!("sys.stderr.write('{UNPARSEABLE}\\n')"));
     }
 
     #[test]
     fn the_shell_s_lines() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/msg-whoami-done.sh");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/src/msg-whoami-done.sh");
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains(r#"echo "Error: unknown flag '$arg' (try 'k2 whoami --help')" >&2"#), "the unknown-flag line moved");
-        assert_eq!(unknown_flag("--x"), "Error: unknown flag '--x' (try 'k2 whoami --help')");
-        assert!(text.contains(r#"resp=$(cli_send cli_request "/cli/whoami" "${q%&}")"#), "the request moved");
+        assert!(
+            text.contains(r#"echo "Error: unknown flag '$arg' (try 'k2 whoami --help')" >&2"#),
+            "the unknown-flag line moved"
+        );
+        assert_eq!(
+            unknown_flag("--x"),
+            "Error: unknown flag '--x' (try 'k2 whoami --help')"
+        );
+        assert!(
+            text.contains(r#"resp=$(cli_send cli_request "/cli/whoami" "${q%&}")"#),
+            "the request moved"
+        );
     }
 
     #[test]
     fn the_flags() {
         assert_eq!(flags(&[]), Flags::Run { json: false });
         assert_eq!(flags(&["--json"]), Flags::Run { json: true });
-        assert_eq!(flags(&["extra", "--json", "words"]), Flags::Run { json: true });
-        assert_eq!(flags(&["--bogus", "--json"]), Flags::Unknown("--bogus".into()));
+        assert_eq!(
+            flags(&["extra", "--json", "words"]),
+            Flags::Run { json: true }
+        );
+        assert_eq!(
+            flags(&["--bogus", "--json"]),
+            Flags::Unknown("--bogus".into())
+        );
         assert_eq!(flags(&["--json", "-"]), Flags::Unknown("-".into()));
         assert_eq!(flags(&["--json=1"]), Flags::Unknown("--json=1".into()));
         assert_eq!(flags(&["-j"]), Flags::Unknown("-j".into()));
@@ -330,15 +410,30 @@ mod tests {
     #[test]
     fn the_query() {
         let env = |pairs: &[(&str, &str)]| {
-            let map: HashMap<String, OsString> = pairs.iter().map(|(k, v)| (k.to_string(), OsString::from(v))).collect();
+            let map: HashMap<String, OsString> = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), OsString::from(v)))
+                .collect();
             move |name: &str| map.get(name).cloned()
         };
         assert_eq!(query(env(&[])), "");
         assert_eq!(
-            query(env(&[("K5_SESSION_ID", "s 5/é"), ("K2_CELL", "sidecar"), ("K2SO_SIDECAR_NAME", "rev&x"), ("K2_PRIMARY", "acme")])),
+            query(env(&[
+                ("K5_SESSION_ID", "s 5/é"),
+                ("K2_CELL", "sidecar"),
+                ("K2SO_SIDECAR_NAME", "rev&x"),
+                ("K2_PRIMARY", "acme")
+            ])),
             "session=s%205%2F%C3%A9&cell=sidecar&sidecar_name=rev%26x&primary=acme"
         );
-        assert_eq!(query(env(&[("K5_SESSION_ID", ""), ("K2_SESSION_ID", "s2"), ("K5_PRIMARY", "p")])), "session=s2&primary=p");
+        assert_eq!(
+            query(env(&[
+                ("K5_SESSION_ID", ""),
+                ("K2_SESSION_ID", "s2"),
+                ("K5_PRIMARY", "p")
+            ])),
+            "session=s2&primary=p"
+        );
     }
 
     #[test]
@@ -371,8 +466,14 @@ mod tests {
             shown(r#"{"role":null,"primary":1.0,"session":[1,"a"],"siblings":{"other":1}}"#),
             ok("workspace: \nrole:      None\naddress:   \nprimary:   1.0\nsession:   [1, 'a']\n")
         );
-        assert_eq!(shown(r#"{"siblings":{"live":true}}"#).stdout.lines().last(), Some("others:    1 live here (k2 sessions)"));
-        assert_eq!(shown(r#"{"siblings":{"live":2.7}}"#).stdout.lines().last(), Some("others:    2 live here (k2 sessions)"));
+        assert_eq!(
+            shown(r#"{"siblings":{"live":true}}"#).stdout.lines().last(),
+            Some("others:    1 live here (k2 sessions)")
+        );
+        assert_eq!(
+            shown(r#"{"siblings":{"live":2.7}}"#).stdout.lines().last(),
+            Some("others:    2 live here (k2 sessions)")
+        );
         assert_eq!(shown(r#"{"siblings":[1]}"#).stdout.lines().count(), 5);
     }
 
@@ -382,14 +483,25 @@ mod tests {
         assert_eq!(shown("{"), err(&format!("{UNPARSEABLE}\n")));
         assert_eq!(human(b"\xff"), err(&format!("{UNPARSEABLE}\n")));
         assert_eq!(
-            shown(r#"{"error":"cannot determine identity","hint":"run inside a workspace session"}"#),
+            shown(
+                r#"{"error":"cannot determine identity","hint":"run inside a workspace session"}"#
+            ),
             err("Error: cannot determine identity\nrun inside a workspace session\n")
         );
         assert_eq!(shown(r#"{"error":"x","hint":""}"#), err("Error: x\n"));
         assert_eq!(shown(r#"{"error":null}"#), err("Error: None\n"));
-        assert_eq!(shown(r#"{"error":{"hint":"h","code":"c"}}"#), err("Error: h\n"));
-        assert_eq!(shown(r#"{"error":{"hint":"","code":"c"}}"#), err("Error: c\n"));
-        assert_eq!(shown(r#"{"error":{"code":0,"msg":"m"},"hint":"not read"}"#), err("Error: {'code': 0, 'msg': 'm'}\n"));
+        assert_eq!(
+            shown(r#"{"error":{"hint":"h","code":"c"}}"#),
+            err("Error: h\n")
+        );
+        assert_eq!(
+            shown(r#"{"error":{"hint":"","code":"c"}}"#),
+            err("Error: c\n")
+        );
+        assert_eq!(
+            shown(r#"{"error":{"code":0,"msg":"m"},"hint":"not read"}"#),
+            err("Error: {'code': 0, 'msg': 'm'}\n")
+        );
         assert_eq!(shown(r#"{"error":{}}"#), err("Error: {}\n"));
     }
 
@@ -401,7 +513,9 @@ mod tests {
             s.stderr,
             "Traceback (most recent call last):\n  File \"<string>\", line 21, in <module>\n  File \"<string>\", line 20, in field\nAttributeError: 'list' object has no attribute 'get'\n"
         );
-        assert!(shown("null").stderr.ends_with("AttributeError: 'NoneType' object has no attribute 'get'\n"));
+        assert!(shown("null")
+            .stderr
+            .ends_with("AttributeError: 'NoneType' object has no attribute 'get'\n"));
         let s = shown(r#"{"role":"r","siblings":{"live":"3"}}"#);
         assert_eq!(s.exit, Exit::Error);
         assert_eq!(s.stdout.lines().count(), 5, "the five lines are out first");

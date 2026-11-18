@@ -58,15 +58,23 @@ pub fn version_of(body: &[u8]) -> Option<String> {
 pub fn outcome(ours: &str, result: Result<Response, Error>) -> Outcome {
     let r = match result {
         Ok(r) => r,
-        Err(e @ Error::Unreachable { .. }) => return Outcome::Failed(e.to_string(), Exit::DaemonUnreachable),
+        Err(e @ Error::Unreachable { .. }) => {
+            return Outcome::Failed(e.to_string(), Exit::DaemonUnreachable)
+        }
         Err(e) => return Outcome::Failed(e.to_string(), Exit::Error),
     };
     if r.status != 200 {
-        return Outcome::Failed(format!("{PRODUCT_NAME}'s server answered {PATH} with {}", r.status), Exit::Error);
+        return Outcome::Failed(
+            format!("{PRODUCT_NAME}'s server answered {PATH} with {}", r.status),
+            Exit::Error,
+        );
     }
     match version_of(&r.body) {
         Some(theirs) => Outcome::Answer(answer_line(ours, &theirs)),
-        None => Outcome::Failed(format!("{PRODUCT_NAME}'s server didn't say its version at {PATH}"), Exit::Error),
+        None => Outcome::Failed(
+            format!("{PRODUCT_NAME}'s server didn't say its version at {PATH}"),
+            Exit::Error,
+        ),
     }
 }
 
@@ -83,34 +91,83 @@ mod tests {
     use crate::transport::Channel;
 
     fn ok(status: u16, body: &str) -> Result<Response, Error> {
-        Ok(Response { status, body: body.as_bytes().to_vec(), channel: Channel::Tcp, permission: None, server_version: None })
+        Ok(Response {
+            status,
+            body: body.as_bytes().to_vec(),
+            channel: Channel::Tcp,
+            permission: None,
+            server_version: None,
+        })
     }
 
     #[test]
     fn same_or_skewed() {
-        assert_eq!(outcome("0.46.16", ok(200, r#"{"phase":"ready","version":"0.46.16"}"#)), Outcome::Answer("server 0.46.16: same version".into()));
-        assert_eq!(outcome("0.46.16", ok(200, r#"{"version":"0.46.17"}"#)), Outcome::Answer(skew::line("0.46.16", "0.46.17")));
+        assert_eq!(
+            outcome(
+                "0.46.16",
+                ok(200, r#"{"phase":"ready","version":"0.46.16"}"#)
+            ),
+            Outcome::Answer("server 0.46.16: same version".into())
+        );
+        assert_eq!(
+            outcome("0.46.16", ok(200, r#"{"version":"0.46.17"}"#)),
+            Outcome::Answer(skew::line("0.46.16", "0.46.17"))
+        );
     }
 
     #[test]
     fn no_version_is_exit_1() {
-        for body in [r#"{"view":"public","phase":"ready"}"#, r#"{"version":46}"#, r#"{"version":"0.46 16"}"#, "not json", r#"["version"]"#] {
-            let Outcome::Failed(line, exit) = outcome("0.46.16", ok(200, body)) else { panic!("{body}") };
-            assert_eq!((line.as_str(), exit), ("K2's server didn't say its version at /boot-status", Exit::Error), "{body}");
+        for body in [
+            r#"{"view":"public","phase":"ready"}"#,
+            r#"{"version":46}"#,
+            r#"{"version":"0.46 16"}"#,
+            "not json",
+            r#"["version"]"#,
+        ] {
+            let Outcome::Failed(line, exit) = outcome("0.46.16", ok(200, body)) else {
+                panic!("{body}")
+            };
+            assert_eq!(
+                (line.as_str(), exit),
+                (
+                    "K2's server didn't say its version at /boot-status",
+                    Exit::Error
+                ),
+                "{body}"
+            );
         }
         assert_eq!(
             outcome("0.46.16", ok(503, r#"{"version":"0.46.16"}"#)),
-            Outcome::Failed("K2's server answered /boot-status with 503".into(), Exit::Error)
+            Outcome::Failed(
+                "K2's server answered /boot-status with 503".into(),
+                Exit::Error
+            )
         );
     }
 
     #[test]
     fn a_daemon_that_is_not_there_is_exit_7() {
-        let err = Error::Unreachable { endpoint: PATH.into(), err: std::io::Error::from(std::io::ErrorKind::ConnectionRefused) };
-        let Outcome::Failed(line, exit) = outcome("0.46.16", Err(err)) else { panic!() };
+        let err = Error::Unreachable {
+            endpoint: PATH.into(),
+            err: std::io::Error::from(std::io::ErrorKind::ConnectionRefused),
+        };
+        let Outcome::Failed(line, exit) = outcome("0.46.16", Err(err)) else {
+            panic!()
+        };
         assert_eq!(exit, Exit::DaemonUnreachable);
-        assert!(line.starts_with("can't reach K2's server for /boot-status: "), "{line}");
-        let other = Error::Empty { endpoint: PATH.into() };
-        assert_eq!(outcome("0.46.16", Err(other)), Outcome::Failed("K2's server gave an empty answer to /boot-status".into(), Exit::Error));
+        assert!(
+            line.starts_with("can't reach K2's server for /boot-status: "),
+            "{line}"
+        );
+        let other = Error::Empty {
+            endpoint: PATH.into(),
+        };
+        assert_eq!(
+            outcome("0.46.16", Err(other)),
+            Outcome::Failed(
+                "K2's server gave an empty answer to /boot-status".into(),
+                Exit::Error
+            )
+        );
     }
 }

@@ -83,7 +83,10 @@ pub const SEARCH_USAGE: &str = "Usage: k2 inbox search \"query\"";
 /// `format_inbox` on an empty inbox.
 pub const NO_ITEMS: &str = "No items.";
 /// `folders` with none.
-pub const NO_FOLDERS: [&str; 2] = ["No folders yet. Create one by moving an item:", "  k2 inbox move <id> projects"];
+pub const NO_FOLDERS: [&str; 2] = [
+    "No folders yet. Create one by moving an item:",
+    "  k2 inbox move <id> projects",
+];
 /// `read`'s Python on an answer that is empty or only spaces.
 pub const READ_NO_ANSWER: &str = concat!(
     "Error: no answer from the ",
@@ -93,7 +96,11 @@ pub const READ_NO_ANSWER: &str = concat!(
     " running? Try again: k2 inbox read <id>"
 );
 /// `read`'s Python on an answer that is not JSON, before its `%r`.
-pub const READ_UNUSABLE: &str = concat!("Error: the ", k2_client::product_name!(), " daemon gave no usable answer: ");
+pub const READ_UNUSABLE: &str = concat!(
+    "Error: the ",
+    k2_client::product_name!(),
+    " daemon gave no usable answer: "
+);
 /// The line of `read`'s Python that calls `hint.lower()`, for its
 /// traceback (`tests` pins it to the script).
 pub const PY_READ_LOWER: u32 = 16;
@@ -103,9 +110,15 @@ pub const PY_READ_LOWER: u32 = 16;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
     /// `folder=` only when the folder is not empty.
-    List { folder: String },
-    Read { id: String },
-    Search { q: String },
+    List {
+        folder: String,
+    },
+    Read {
+        id: String,
+    },
+    Search {
+        q: String,
+    },
     Folders,
 }
 
@@ -115,10 +128,16 @@ pub enum Ask {
 pub fn parse(words: &[&str]) -> Option<Ask> {
     let first = |rest: &[&str]| rest.first().map_or_else(String::new, |w| (*w).to_string());
     match words.first() {
-        None => Some(Ask::List { folder: String::new() }),
+        None => Some(Ask::List {
+            folder: String::new(),
+        }),
         Some(&"list") => list(&words[1..]),
-        Some(&"read") => Some(Ask::Read { id: first(&words[1..]) }),
-        Some(&"search") => Some(Ask::Search { q: first(&words[1..]) }),
+        Some(&"read") => Some(Ask::Read {
+            id: first(&words[1..]),
+        }),
+        Some(&"search") => Some(Ask::Search {
+            q: first(&words[1..]),
+        }),
         Some(&"folders") => Some(Ask::Folders),
         Some(&("compose" | "respond" | "move" | "archive" | "delete" | "--help" | "-h")) => None,
         // `-*|*`: the whole line is `inbox list`'s.
@@ -157,7 +176,11 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if hook_sock.is_some() && prelude::codex_env(std::env::vars_os().map(|(name, _)| name)) {
         return None;
     }
-    let words: Vec<&str> = args.iter().skip(1).map(|a| a.to_str()).collect::<Option<_>>()?;
+    let words: Vec<&str> = args
+        .iter()
+        .skip(1)
+        .map(|a| a.to_str())
+        .collect::<Option<_>>()?;
     let ask = parse(&words)?;
     if !super::has_python3() {
         return None;
@@ -169,13 +192,20 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             return Some(Exit::Error);
         }
     };
-    if prelude::gate(&settings).is_none() && settings.port_text.as_deref().and_then(curl_port).is_none() {
+    if prelude::gate(&settings).is_none()
+        && settings.port_text.as_deref().and_then(curl_port).is_none()
+    {
         return None;
     }
     Some(run_with(args, &ask, hook_sock.as_deref(), settings))
 }
 
-fn run_with(args: &[OsString], ask: &Ask, hook_sock: Option<&Path>, mut settings: Settings) -> Exit {
+fn run_with(
+    args: &[OsString],
+    ask: &Ask,
+    hook_sock: Option<&Path>,
+    mut settings: Settings,
+) -> Exit {
     if let Some(notice) = prelude::rename_notice(Path::new(&settings.project)) {
         out::stderr_line(notice);
     }
@@ -208,7 +238,10 @@ fn run_with(args: &[OsString], ask: &Ask, hook_sock: Option<&Path>, mut settings
     };
     let mut closing = Closing::default();
     let (endpoint, arg) = match ask {
-        Ask::List { folder } => (LIST, (!folder.is_empty()).then(|| format!("folder={}", quote(folder)))),
+        Ask::List { folder } => (
+            LIST,
+            (!folder.is_empty()).then(|| format!("folder={}", quote(folder))),
+        ),
         Ask::Read { id } => (READ, Some(format!("id={}", quote(id)))),
         Ask::Search { q } => (SEARCH, Some(format!("q={}", quote(q)))),
         Ask::Folders => (FOLDERS, None),
@@ -244,7 +277,11 @@ fn left(v: &Value, width: usize) -> Option<String> {
         Value::Null | Value::Array(_) | Value::Object(_) => return None,
     };
     let n = text.chars().count();
-    Some(if n < width { format!("{text}{}", " ".repeat(width - n)) } else { text })
+    Some(if n < width {
+        format!("{text}{}", " ".repeat(width - n))
+    } else {
+        text
+    })
 }
 
 /// One item's lines as `format_inbox` prints them, each `None` where its
@@ -253,10 +290,19 @@ fn item_lines(item: &Value) -> [Option<String>; 2] {
     let Value::Object(pairs) = item else {
         return [None, None];
     };
-    let or = |key: &str, default: &str| get(pairs, key).cloned().unwrap_or_else(|| Value::Str(Text::from(default)));
-    let folder = Some(or("folder", "")).filter(py::truthy).unwrap_or_else(|| Value::Str(Text::from("(top)")));
+    let or = |key: &str, default: &str| {
+        get(pairs, key)
+            .cloned()
+            .unwrap_or_else(|| Value::Str(Text::from(default)))
+    };
+    let folder = Some(or("folder", ""))
+        .filter(py::truthy)
+        .unwrap_or_else(|| Value::Str(Text::from("(top)")));
     let priority = or("priority", "normal");
-    let title = get(pairs, "title").filter(|v| py::truthy(v)).cloned().unwrap_or_else(|| or("filename", ""));
+    let title = get(pairs, "title")
+        .filter(|v| py::truthy(v))
+        .cloned()
+        .unwrap_or_else(|| or("filename", ""));
     let iid = or("id", "?");
     // A dict lookup: a list or a dict is unhashable.
     if matches!(priority, Value::Array(_) | Value::Object(_)) {
@@ -330,7 +376,11 @@ pub fn folders(body: &[u8]) -> Shown {
     }
     let names: Vec<Value> = match data {
         Value::Array(items) => items,
-        Value::Str(t) => t.code_points().into_iter().map(|cp| Value::Str(one_code_point(cp))).collect(),
+        Value::Str(t) => t
+            .code_points()
+            .into_iter()
+            .map(|cp| Value::Str(one_code_point(cp)))
+            .collect(),
         Value::Object(pairs) => pairs.into_iter().map(|(k, _)| Value::Str(k)).collect(),
         // A number or true: not iterable.
         _ => return Shown::err("", Exit::Error),
@@ -343,7 +393,13 @@ pub fn folders(body: &[u8]) -> Shown {
                 stdout.push_str(&py::str_of(name));
                 stdout.push('\n');
             }
-            _ => return Shown { stdout, stderr: String::new(), exit: Exit::Error },
+            _ => {
+                return Shown {
+                    stdout,
+                    stderr: String::new(),
+                    exit: Exit::Error,
+                }
+            }
         }
     }
     Shown::out(stdout)
@@ -368,7 +424,13 @@ pub fn read_item(body: &[u8]) -> Shown {
     }
     let Ok(d) = json::parse(&raw) else {
         let head: String = raw.chars().take(200).collect();
-        return Shown::err(format!("{READ_UNUSABLE}{}\n", py::repr(&Value::Str(Text::from(head)))), Exit::Error);
+        return Shown::err(
+            format!(
+                "{READ_UNUSABLE}{}\n",
+                py::repr(&Value::Str(Text::from(head)))
+            ),
+            Exit::Error,
+        );
     };
     let unexpected = Value::Str(Text::from("unexpected answer"));
     let err = match &d {
@@ -387,19 +449,34 @@ pub fn read_item(body: &[u8]) -> Shown {
         };
         let line = format!("Error: {}\n", py::str_of(&hint));
         let Value::Str(h) = &hint else {
-            let exception = format!("AttributeError: '{}' object has no attribute 'lower'", py::type_name(&hint));
-            return Shown::err(line + &traceback(&[(PY_READ_LOWER, "<module>")], &exception), Exit::Error);
+            let exception = format!(
+                "AttributeError: '{}' object has no attribute 'lower'",
+                py::type_name(&hint)
+            );
+            return Shown::err(
+                line + &traceback(&[(PY_READ_LOWER, "<module>")], &exception),
+                Exit::Error,
+            );
         };
         let lowered: String = py::str_of(&Value::Str(h.clone())).to_lowercase();
         let not_found = lowered.contains("not found")
             || matches!(err, Value::Object(e) if get(e, "code") == Some(&Value::Str(Text::from("not_found"))));
-        return Shown::err(line, if not_found { Exit::NotFound } else { Exit::Error });
+        return Shown::err(
+            line,
+            if not_found {
+                Exit::NotFound
+            } else {
+                Exit::Error
+            },
+        );
     }
     let Value::Object(pairs) = &d else {
         // Not a dict is the "unexpected answer" above.
         return Shown::err("", Exit::Error);
     };
-    let content = get(pairs, "content").cloned().unwrap_or_else(|| Value::Str(Text::from("")));
+    let content = get(pairs, "content")
+        .cloned()
+        .unwrap_or_else(|| Value::Str(Text::from("")));
     Shown::out(format!("{}\n", py::str_of(&content)))
 }
 
@@ -453,14 +530,37 @@ mod tests {
             r#"        --help|-h) cmd_help_inbox ;;"#,
             r#"            cmd_inbox_list "$@""#,
         ] {
-            assert!(text.lines().any(|l| l == shell), "cmd_inbox no longer has {shell:?}");
+            assert!(
+                text.lines().any(|l| l == shell),
+                "cmd_inbox no longer has {shell:?}"
+            );
         }
-        assert_eq!(text.matches("cli_send cli_request").count(), 5, "a read form's request moved, or a new one came");
-        let policy = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cli-tools-policy.sh")).unwrap();
-        assert!(policy.contains(r#"        inbox) echo "inbox" ;;"#), "inbox's tool id moved");
-        assert!(policy.contains("        msg|inbox|respond|awareness|"), "inbox is no longer an id tool");
-        let cell = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cell-socket.sh")).unwrap();
-        assert!(cell.contains("        /cli/inbox/*|/cli/review-checklist/*) return 0 ;;"), "the cell socket no longer serves /cli/inbox/*");
+        assert_eq!(
+            text.matches("cli_send cli_request").count(),
+            5,
+            "a read form's request moved, or a new one came"
+        );
+        let policy = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../cli/src/cli-tools-policy.sh"),
+        )
+        .unwrap();
+        assert!(
+            policy.contains(r#"        inbox) echo "inbox" ;;"#),
+            "inbox's tool id moved"
+        );
+        assert!(
+            policy.contains("        msg|inbox|respond|awareness|"),
+            "inbox is no longer an id tool"
+        );
+        let cell = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cell-socket.sh"),
+        )
+        .unwrap();
+        assert!(
+            cell.contains("        /cli/inbox/*|/cli/review-checklist/*) return 0 ;;"),
+            "the cell socket no longer serves /cli/inbox/*"
+        );
     }
 
     /// `read`'s Python, its lines as `python3 -c` numbers them.
@@ -470,9 +570,21 @@ mod tests {
         let line = |n: usize| lines[n - 1].trim().to_string();
         assert_eq!(line(3), "raw = sys.stdin.read()");
         assert_eq!(line(4), "if not raw.strip():");
-        assert_eq!(line(5), format!("sys.stderr.write('{}\\n')", READ_NO_ANSWER.replace('\'', "\\'")));
-        assert_eq!(line(10), format!("sys.stderr.write('{}%r\\n' % raw[:200])", READ_UNUSABLE));
-        assert_eq!(line(12), "err = d.get('error') if isinstance(d, dict) else 'unexpected answer'");
+        assert_eq!(
+            line(5),
+            format!(
+                "sys.stderr.write('{}\\n')",
+                READ_NO_ANSWER.replace('\'', "\\'")
+            )
+        );
+        assert_eq!(
+            line(10),
+            format!("sys.stderr.write('{}%r\\n' % raw[:200])", READ_UNUSABLE)
+        );
+        assert_eq!(
+            line(12),
+            "err = d.get('error') if isinstance(d, dict) else 'unexpected answer'"
+        );
         assert_eq!(line(14), "hint = (err.get('hint') or err.get('code') or str(err)) if isinstance(err, dict) else str(err)");
         assert_eq!(line(15), "sys.stderr.write('Error: %s\\n' % hint)");
         assert_eq!(
@@ -482,12 +594,17 @@ mod tests {
         assert_eq!(line(17), "print(d.get('content', ''))");
         assert_eq!(lines.len(), 17);
         let folders = super::super::shell_python("inbox.sh", "cmd_inbox_folders() {");
-        assert_eq!(folders[3].trim(), "folders = json.loads(sys.stdin.read() or '[]')");
+        assert_eq!(
+            folders[3].trim(),
+            "folders = json.loads(sys.stdin.read() or '[]')"
+        );
         assert_eq!(folders[5].trim(), "folders = []");
     }
 
     fn list(folder: &str) -> Option<Ask> {
-        Some(Ask::List { folder: folder.into() })
+        Some(Ask::List {
+            folder: folder.into(),
+        })
     }
 
     #[test]
@@ -511,12 +628,23 @@ mod tests {
         assert_eq!(parse(&["", "a"]), list("a"));
         assert_eq!(parse(&["--folder", "f"]), list("f"));
         assert_eq!(parse(&["read"]), Some(Ask::Read { id: String::new() }));
-        assert_eq!(parse(&["read", "a1", "extra"]), Some(Ask::Read { id: "a1".into() }));
-        assert_eq!(parse(&["read", "--x"]), Some(Ask::Read { id: "--x".into() }));
+        assert_eq!(
+            parse(&["read", "a1", "extra"]),
+            Some(Ask::Read { id: "a1".into() })
+        );
+        assert_eq!(
+            parse(&["read", "--x"]),
+            Some(Ask::Read { id: "--x".into() })
+        );
         assert_eq!(parse(&["search"]), Some(Ask::Search { q: String::new() }));
-        assert_eq!(parse(&["search", "q &x"]), Some(Ask::Search { q: "q &x".into() }));
+        assert_eq!(
+            parse(&["search", "q &x"]),
+            Some(Ask::Search { q: "q &x".into() })
+        );
         assert_eq!(parse(&["folders", "extra"]), Some(Ask::Folders));
-        for write in ["compose", "respond", "move", "archive", "delete", "--help", "-h"] {
+        for write in [
+            "compose", "respond", "move", "archive", "delete", "--help", "-h",
+        ] {
             assert_eq!(parse(&[write, "x"]), None, "{write}");
         }
         assert_eq!(parse(&["Read", "x"]), list("Read"));
@@ -529,50 +657,131 @@ mod tests {
             assert_eq!(f(none), "No items.\n", "{none}");
         }
         // Not JSON, or not a list: nothing (its errors are thrown away).
-        for nothing in ["hello", " ", "\"abc\"", "5", "true", r#"{"error":{"code":"x"}}"#, "[1]", r#"["a"]"#, "\u{feff}[]"] {
+        for nothing in [
+            "hello",
+            " ",
+            "\"abc\"",
+            "5",
+            "true",
+            r#"{"error":{"code":"x"}}"#,
+            "[1]",
+            r#"["a"]"#,
+            "\u{feff}[]",
+        ] {
             assert_eq!(f(nothing), "", "{nothing}");
         }
         assert_eq!(format_inbox(b"\xff"), "");
         assert_eq!(
             f(r#"[{"id":"a1","folder":"projects","priority":"high","title":"T","summary":"S"}]"#),
-            format!("  a1{} [projects  ] ! T\n  {}   summary: S\n", " ".repeat(22), " ".repeat(24))
+            format!(
+                "  a1{} [projects  ] ! T\n  {}   summary: S\n",
+                " ".repeat(22),
+                " ".repeat(24)
+            )
         );
-        assert_eq!(f(r#"[{"id":"b","filename":"f.md","priority":"low"}]"#), format!("  b{} [(top)     ] . f.md\n", " ".repeat(23)));
-        assert_eq!(f(r#"[{"id":5,"folder":7,"priority":"critical","title":null}]"#), format!("  5{} [7         ] !! \n", " ".repeat(23)));
-        assert_eq!(f(r#"[{"id":true,"folder":1.5}]"#), format!("  1{} [1.5       ]   \n", " ".repeat(23)));
-        assert_eq!(f(r#"[{}]"#), format!("  ?{} [(top)     ]   \n", " ".repeat(23)));
+        assert_eq!(
+            f(r#"[{"id":"b","filename":"f.md","priority":"low"}]"#),
+            format!("  b{} [(top)     ] . f.md\n", " ".repeat(23))
+        );
+        assert_eq!(
+            f(r#"[{"id":5,"folder":7,"priority":"critical","title":null}]"#),
+            format!("  5{} [7         ] !! \n", " ".repeat(23))
+        );
+        assert_eq!(
+            f(r#"[{"id":true,"folder":1.5}]"#),
+            format!("  1{} [1.5       ]   \n", " ".repeat(23))
+        );
+        assert_eq!(
+            f(r#"[{}]"#),
+            format!("  ?{} [(top)     ]   \n", " ".repeat(23))
+        );
         // Each at its own place: a long id is not cut.
         let long = "x".repeat(30);
-        assert_eq!(f(&format!(r#"[{{"id":"{long}","folder":"élan","title":"é","priority":1}}]"#)), format!("  {long} [élan      ]   é\n"));
+        assert_eq!(
+            f(&format!(
+                r#"[{{"id":"{long}","folder":"élan","title":"é","priority":1}}]"#
+            )),
+            format!("  {long} [élan      ]   é\n")
+        );
         // A title that is falsy gives way to the filename; a summary that is falsy is no line.
-        assert_eq!(f(r#"[{"id":"i","title":"","filename":"f","summary":""}]"#), format!("  i{} [(top)     ]   f\n", " ".repeat(23)));
-        assert_eq!(f(r#"[{"id":"i","title":[1,"a"],"summary":{"k":null}}]"#).lines().last(), Some(format!("  {}   summary: {{'k': None}}", " ".repeat(24)).as_str()));
+        assert_eq!(
+            f(r#"[{"id":"i","title":"","filename":"f","summary":""}]"#),
+            format!("  i{} [(top)     ]   f\n", " ".repeat(23))
+        );
+        assert_eq!(
+            f(r#"[{"id":"i","title":[1,"a"],"summary":{"k":null}}]"#)
+                .lines()
+                .last(),
+            Some(format!("  {}   summary: {{'k': None}}", " ".repeat(24)).as_str())
+        );
         // Where Python raises, what came before stays.
-        assert_eq!(f(r#"[{"id":"a"},{"id":null}]"#), format!("  a{} [(top)     ]   \n", " ".repeat(23)));
-        assert_eq!(f(r#"[{"id":"a"},{"id":"b","folder":[1]}]"#).lines().count(), 1);
-        assert_eq!(f(r#"[{"id":"a"},{"id":"b","priority":["x"]}]"#).lines().count(), 1);
-        assert_eq!(f(r#"[{"id":"a"},{"id":"b","priority":{}}]"#).lines().count(), 1, "an empty dict is unhashable too");
+        assert_eq!(
+            f(r#"[{"id":"a"},{"id":null}]"#),
+            format!("  a{} [(top)     ]   \n", " ".repeat(23))
+        );
+        assert_eq!(
+            f(r#"[{"id":"a"},{"id":"b","folder":[1]}]"#).lines().count(),
+            1
+        );
+        assert_eq!(
+            f(r#"[{"id":"a"},{"id":"b","priority":["x"]}]"#)
+                .lines()
+                .count(),
+            1
+        );
+        assert_eq!(
+            f(r#"[{"id":"a"},{"id":"b","priority":{}}]"#)
+                .lines()
+                .count(),
+            1,
+            "an empty dict is unhashable too"
+        );
         assert_eq!(f(r#"[{"id":"a"},"b",{"id":"c"}]"#).lines().count(), 1);
-        assert_eq!(f(r#"[{"id":"a","summary":"\ud83d"},{"id":"c"}]"#).lines().count(), 1, "the summary can't be printed");
+        assert_eq!(
+            f(r#"[{"id":"a","summary":"\ud83d"},{"id":"c"}]"#)
+                .lines()
+                .count(),
+            1,
+            "the summary can't be printed"
+        );
         assert_eq!(f(r#"[{"id":"\ud83d"}]"#), "");
-        assert_eq!(f(r#"[{"id":"a","folder":"","priority":null,"title":0,"filename":"f"}]"#), format!("  a{} [(top)     ]   f\n", " ".repeat(23)));
+        assert_eq!(
+            f(r#"[{"id":"a","folder":"","priority":null,"title":0,"filename":"f"}]"#),
+            format!("  a{} [(top)     ]   f\n", " ".repeat(23))
+        );
     }
 
     #[test]
     fn folders_prints_what_python_does() {
         let f = |s: &str| folders(s.as_bytes());
-        let none = Shown::out("No folders yet. Create one by moving an item:\n  k2 inbox move <id> projects\n");
+        let none = Shown::out(
+            "No folders yet. Create one by moving an item:\n  k2 inbox move <id> projects\n",
+        );
         for empty in ["", "[]", "not json", "{}", "null", "0"] {
             assert_eq!(f(empty), none, "{empty}");
         }
         assert_eq!(folders(b"\xff"), none);
         assert_eq!(f(r#"["a","b é"]"#), Shown::out("  a\n  b é\n"));
-        assert_eq!(f(r#"["a",1,"c"]"#), Shown { stdout: "  a\n".into(), stderr: String::new(), exit: Exit::Error });
+        assert_eq!(
+            f(r#"["a",1,"c"]"#),
+            Shown {
+                stdout: "  a\n".into(),
+                stderr: String::new(),
+                exit: Exit::Error
+            }
+        );
         assert_eq!(f(r#""ab""#), Shown::out("  a\n  b\n"));
         assert_eq!(f(r#"{"x":1,"y":2}"#), Shown::out("  x\n  y\n"));
         assert_eq!(f("5"), Shown::err("", Exit::Error));
         assert_eq!(f("true"), Shown::err("", Exit::Error));
-        assert_eq!(f(r#"["a","\ud83d"]"#), Shown { stdout: "  a\n".into(), stderr: String::new(), exit: Exit::Error });
+        assert_eq!(
+            f(r#"["a","\ud83d"]"#),
+            Shown {
+                stdout: "  a\n".into(),
+                stderr: String::new(),
+                exit: Exit::Error
+            }
+        );
     }
 
     #[test]
@@ -582,25 +791,70 @@ mod tests {
         for empty in ["", " \n\t", "\u{a0}\u{3000}"] {
             assert_eq!(f(empty), no_answer, "{empty:?}");
         }
-        assert_eq!(f(r#"{"content":"hello\nworld"}"#), Shown::out("hello\nworld\n"));
+        assert_eq!(
+            f(r#"{"content":"hello\nworld"}"#),
+            Shown::out("hello\nworld\n")
+        );
         assert_eq!(f(r#"{"content":5}"#), Shown::out("5\n"));
         assert_eq!(f(r#"{"x":1}"#), Shown::out("\n"));
         assert_eq!(f(r#"{"error":null,"content":"c"}"#), Shown::out("c\n"));
-        assert_eq!(f("x\n"), Shown::err(format!("{READ_UNUSABLE}'x\\n'\n"), Exit::Error));
-        assert_eq!(f("it's"), Shown::err(format!("{READ_UNUSABLE}\"it's\"\n"), Exit::Error));
+        assert_eq!(
+            f("x\n"),
+            Shown::err(format!("{READ_UNUSABLE}'x\\n'\n"), Exit::Error)
+        );
+        assert_eq!(
+            f("it's"),
+            Shown::err(format!("{READ_UNUSABLE}\"it's\"\n"), Exit::Error)
+        );
         let long = "y".repeat(250);
-        assert_eq!(f(&long), Shown::err(format!("{READ_UNUSABLE}'{}'\n", "y".repeat(200)), Exit::Error));
-        assert_eq!(f("[1]"), Shown::err("Error: unexpected answer\n", Exit::Error));
-        assert_eq!(f("\"x\""), Shown::err("Error: unexpected answer\n", Exit::Error));
-        assert_eq!(f(r#"{"error":"inbox item not found: zzz"}"#), Shown::err("Error: inbox item not found: zzz\n", Exit::NotFound));
-        assert_eq!(f(r#"{"error":"Item NOT FOUND"}"#), Shown::err("Error: Item NOT FOUND\n", Exit::NotFound));
-        assert_eq!(f(r#"{"error":{"code":"not_found"}}"#), Shown::err("Error: not_found\n", Exit::NotFound));
-        assert_eq!(f(r#"{"error":{"code":"not_found","hint":"gone"}}"#), Shown::err("Error: gone\n", Exit::NotFound));
-        assert_eq!(f(r#"{"error":{"code":"owner_only","hint":"Only the owner can do that."}}"#), Shown::err("Error: Only the owner can do that.\n", Exit::Error));
-        assert_eq!(f(r#"{"error":{"hint":"","code":""}}"#), Shown::err("Error: {'hint': '', 'code': ''}\n", Exit::Error));
+        assert_eq!(
+            f(&long),
+            Shown::err(
+                format!("{READ_UNUSABLE}'{}'\n", "y".repeat(200)),
+                Exit::Error
+            )
+        );
+        assert_eq!(
+            f("[1]"),
+            Shown::err("Error: unexpected answer\n", Exit::Error)
+        );
+        assert_eq!(
+            f("\"x\""),
+            Shown::err("Error: unexpected answer\n", Exit::Error)
+        );
+        assert_eq!(
+            f(r#"{"error":"inbox item not found: zzz"}"#),
+            Shown::err("Error: inbox item not found: zzz\n", Exit::NotFound)
+        );
+        assert_eq!(
+            f(r#"{"error":"Item NOT FOUND"}"#),
+            Shown::err("Error: Item NOT FOUND\n", Exit::NotFound)
+        );
+        assert_eq!(
+            f(r#"{"error":{"code":"not_found"}}"#),
+            Shown::err("Error: not_found\n", Exit::NotFound)
+        );
+        assert_eq!(
+            f(r#"{"error":{"code":"not_found","hint":"gone"}}"#),
+            Shown::err("Error: gone\n", Exit::NotFound)
+        );
+        assert_eq!(
+            f(r#"{"error":{"code":"owner_only","hint":"Only the owner can do that."}}"#),
+            Shown::err("Error: Only the owner can do that.\n", Exit::Error)
+        );
+        assert_eq!(
+            f(r#"{"error":{"hint":"","code":""}}"#),
+            Shown::err("Error: {'hint': '', 'code': ''}\n", Exit::Error)
+        );
         assert_eq!(f(r#"{"error":{}}"#), Shown::err("Error: {}\n", Exit::Error));
-        assert_eq!(f(r#"{"error":false}"#), Shown::err("Error: False\n", Exit::Error));
-        assert_eq!(f(r#"{"error":[1]}"#), Shown::err("Error: [1]\n", Exit::Error));
+        assert_eq!(
+            f(r#"{"error":false}"#),
+            Shown::err("Error: False\n", Exit::Error)
+        );
+        assert_eq!(
+            f(r#"{"error":[1]}"#),
+            Shown::err("Error: [1]\n", Exit::Error)
+        );
         assert_eq!(
             f(r#"{"error":{"hint":5}}"#),
             Shown::err(
@@ -608,6 +862,8 @@ mod tests {
                 Exit::Error
             )
         );
-        assert!(f(r#"{"error":{"code":["x"]}}"#).stderr.ends_with("AttributeError: 'list' object has no attribute 'lower'\n"));
+        assert!(f(r#"{"error":{"code":["x"]}}"#)
+            .stderr
+            .ends_with("AttributeError: 'list' object has no attribute 'lower'\n"));
     }
 }

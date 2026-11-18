@@ -36,7 +36,16 @@ use k2_client::proc_tree::{ancestry, ProcessTable};
 /// for the virtual-desktop guard (`_k2_offline_verb` in
 /// `cli/src/cli-tools-policy.sh`); a test holds the two the same. The
 /// empty string is a bare `k5`.
-pub const OFFLINE_FIRST: &[&str] = &["", "study", "help", "--help", "-h", "--schema", "version", "--version"];
+pub const OFFLINE_FIRST: &[&str] = &[
+    "",
+    "study",
+    "help",
+    "--help",
+    "-h",
+    "--schema",
+    "version",
+    "--version",
+];
 
 /// An argument that makes any command offline, wherever it is.
 pub const OFFLINE_ANYWHERE: &[&str] = &["-h", "--help"];
@@ -47,7 +56,12 @@ pub const OFFLINE_ANYWHERE: &[&str] = &["-h", "--help"];
 /// `CELL` is set in every cell, `CLAUDECODE` by Claude Code and
 /// `CODEX_THREAD_ID` by Codex on its tool runs (the shell's stale-passport
 /// check in `cli/src/cli-tools-policy.sh` names it).
-pub const SESSION_MARKERS: &[&[&str]] = &[env_names::PANE_ID, env_names::CELL, &["CLAUDECODE"], &["CODEX_THREAD_ID"]];
+pub const SESSION_MARKERS: &[&[&str]] = &[
+    env_names::PANE_ID,
+    env_names::CELL,
+    &["CLAUDECODE"],
+    &["CODEX_THREAD_ID"],
+];
 
 /// A session process among the ancestors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +78,10 @@ pub enum SessionProcess {
 /// The session processes by command name: each `[[bin]]` name in its
 /// crate. All are shorter than the 15 bytes Linux keeps.
 pub const SESSION_PROCESSES: &[(&str, SessionProcess)] = &[
-    (k2_client::daemon_lifecycle::DAEMON_BINARY_NAME, SessionProcess::Daemon),
+    (
+        k2_client::daemon_lifecycle::DAEMON_BINARY_NAME,
+        SessionProcess::Daemon,
+    ),
     ("k2-ptyd", SessionProcess::Ptyd),
     ("k2-app-engine", SessionProcess::AppEngine),
 ];
@@ -138,23 +155,40 @@ pub fn decide(facts: Facts, tree: impl FnOnce() -> Ancestry) -> Verdict {
 
 /// True when the arguments name an offline verb.
 pub fn is_offline(args: &[OsString]) -> bool {
-    let first = args.first().map(OsString::as_os_str).unwrap_or(OsStr::new(""));
-    OFFLINE_FIRST.iter().any(|v| first == *v) || args.iter().any(|a| OFFLINE_ANYWHERE.iter().any(|v| a == *v))
+    let first = args
+        .first()
+        .map(OsString::as_os_str)
+        .unwrap_or(OsStr::new(""));
+    OFFLINE_FIRST.iter().any(|v| first == *v)
+        || args
+            .iter()
+            .any(|a| OFFLINE_ANYWHERE.iter().any(|v| a == *v))
 }
 
 /// The facts, from the arguments and an environment lookup.
 pub fn facts(args: &[OsString], lookup: impl Fn(&str) -> Option<OsString>) -> Facts {
     let passport = env_names::first_nonempty_os_in(env_names::HOOK_TOKEN, &lookup).is_some();
-    let no_owner_fallback =
-        env_names::first_nonempty_os_in(env_names::NO_OWNER_FALLBACK, &lookup).is_some_and(|(_, v)| v == "1");
-    let marker = SESSION_MARKERS.iter().find_map(|names| env_names::first_nonempty_os_in(names, &lookup).map(|(n, _)| n));
-    Facts { offline: is_offline(args), passport, no_owner_fallback, marker }
+    let no_owner_fallback = env_names::first_nonempty_os_in(env_names::NO_OWNER_FALLBACK, &lookup)
+        .is_some_and(|(_, v)| v == "1");
+    let marker = SESSION_MARKERS
+        .iter()
+        .find_map(|names| env_names::first_nonempty_os_in(names, &lookup).map(|(n, _)| n));
+    Facts {
+        offline: is_offline(args),
+        passport,
+        no_owner_fallback,
+        marker,
+    }
 }
 
 /// The session process among `start`'s ancestors (itself included), by
 /// `table`'s walk and `name`'s answer for each pid. [`Ancestry::Unknown`]
 /// when the table doesn't know `start`.
-pub fn session_ancestor(table: &dyn ProcessTable, name: impl Fn(i32) -> Option<String>, start: i32) -> Ancestry {
+pub fn session_ancestor(
+    table: &dyn ProcessTable,
+    name: impl Fn(i32) -> Option<String>,
+    start: i32,
+) -> Ancestry {
     let Some(me) = table.info(start) else {
         return Ancestry::Unknown;
     };
@@ -183,7 +217,10 @@ pub fn live_session_ancestor() -> Ancestry {
 
 /// The verdict for this process and its arguments.
 pub fn current(args: &[OsString]) -> Verdict {
-    decide(facts(args, |name| std::env::var_os(name)), live_session_ancestor)
+    decide(
+        facts(args, |name| std::env::var_os(name)),
+        live_session_ancestor,
+    )
 }
 
 /// What the shell CLI gets for `verdict`: [`WOULD_REFUSE_VAR`]`=1` when the
@@ -192,21 +229,34 @@ pub fn current(args: &[OsString]) -> Verdict {
 ///
 /// [`WOULD_REFUSE_VAR`]: crate::called_as::WOULD_REFUSE_VAR
 pub fn hand_off_env(verdict: Verdict) -> (&'static str, Option<&'static str>) {
-    (crate::called_as::WOULD_REFUSE_VAR, verdict.would_refuse().then_some("1"))
+    (
+        crate::called_as::WOULD_REFUSE_VAR,
+        verdict.would_refuse().then_some("1"),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use k2_client::proc_tree::ProcInfo;
+    use std::collections::HashMap;
 
     fn args(list: &[&str]) -> Vec<OsString> {
         list.iter().map(OsString::from).collect()
     }
 
-    fn facts(offline: bool, passport: bool, no_owner_fallback: bool, marker: Option<&'static str>) -> Facts {
-        Facts { offline, passport, no_owner_fallback, marker }
+    fn facts(
+        offline: bool,
+        passport: bool,
+        no_owner_fallback: bool,
+        marker: Option<&'static str>,
+    ) -> Facts {
+        Facts {
+            offline,
+            passport,
+            no_owner_fallback,
+            marker,
+        }
     }
 
     /// Every combination: (offline, passport, no-owner-fallback, marker,
@@ -215,7 +265,13 @@ mod tests {
     fn the_rule_over_every_combination() {
         use Ancestry::*;
         use Verdict::*;
-        let trees = [Found(SessionProcess::Daemon), Found(SessionProcess::Ptyd), Found(SessionProcess::AppEngine), NotFound, Unknown];
+        let trees = [
+            Found(SessionProcess::Daemon),
+            Found(SessionProcess::Ptyd),
+            Found(SessionProcess::AppEngine),
+            NotFound,
+            Unknown,
+        ];
         let mut rows = 0;
         for offline in [false, true] {
             for passport in [false, true] {
@@ -253,7 +309,10 @@ mod tests {
     }
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
-        let map: HashMap<String, OsString> = pairs.iter().map(|(k, v)| (k.to_string(), OsString::from(v))).collect();
+        let map: HashMap<String, OsString> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), OsString::from(v)))
+            .collect();
         move |name| map.get(name).cloned()
     }
 
@@ -263,8 +322,14 @@ mod tests {
         assert_eq!(none, facts(false, false, false, None));
         // A passport under any of its three names; empty is unset.
         for name in env_names::HOOK_TOKEN.iter().copied() {
-            assert!(super::facts(&args(&["msg"]), env(&[(name, "t")])).passport, "{name}");
-            assert!(!super::facts(&args(&["msg"]), env(&[(name, "")])).passport, "{name} empty");
+            assert!(
+                super::facts(&args(&["msg"]), env(&[(name, "t")])).passport,
+                "{name}"
+            );
+            assert!(
+                !super::facts(&args(&["msg"]), env(&[(name, "")])).passport,
+                "{name} empty"
+            );
         }
         // No owner fallback is exactly 1, the first non-empty name wins.
         for (pairs, want) in [
@@ -273,21 +338,48 @@ mod tests {
             (&[("K2SO_NO_OWNER_FALLBACK", "1")][..], true),
             (&[("K2_NO_OWNER_FALLBACK", "yes")][..], false),
             (&[("K2_NO_OWNER_FALLBACK", "")][..], false),
-            (&[("K5_NO_OWNER_FALLBACK", "0"), ("K2_NO_OWNER_FALLBACK", "1")][..], false),
-            (&[("K5_NO_OWNER_FALLBACK", ""), ("K2_NO_OWNER_FALLBACK", "1")][..], true),
+            (
+                &[("K5_NO_OWNER_FALLBACK", "0"), ("K2_NO_OWNER_FALLBACK", "1")][..],
+                false,
+            ),
+            (
+                &[("K5_NO_OWNER_FALLBACK", ""), ("K2_NO_OWNER_FALLBACK", "1")][..],
+                true,
+            ),
         ] {
-            assert_eq!(super::facts(&args(&["msg"]), env(pairs)).no_owner_fallback, want, "{pairs:?}");
+            assert_eq!(
+                super::facts(&args(&["msg"]), env(pairs)).no_owner_fallback,
+                want,
+                "{pairs:?}"
+            );
         }
         // Each marker, by the name it was set under; empty is unset.
         for names in SESSION_MARKERS {
             for name in names.iter().copied() {
-                assert_eq!(super::facts(&args(&["msg"]), env(&[(name, "x")])).marker, Some(name));
-                assert_eq!(super::facts(&args(&["msg"]), env(&[(name, "")])).marker, None, "{name} empty");
+                assert_eq!(
+                    super::facts(&args(&["msg"]), env(&[(name, "x")])).marker,
+                    Some(name)
+                );
+                assert_eq!(
+                    super::facts(&args(&["msg"]), env(&[(name, "")])).marker,
+                    None,
+                    "{name} empty"
+                );
             }
         }
         // Not markers: Codex's home, a session id, a hook socket alone.
-        for name in ["CODEX_HOME", "CODEX_SANDBOX", "K2_SESSION_ID", "K2_HOOK_SOCK", "CLAUDE_CODE_ENTRYPOINT"] {
-            assert_eq!(super::facts(&args(&["msg"]), env(&[(name, "x")])).marker, None, "{name}");
+        for name in [
+            "CODEX_HOME",
+            "CODEX_SANDBOX",
+            "K2_SESSION_ID",
+            "K2_HOOK_SOCK",
+            "CLAUDE_CODE_ENTRYPOINT",
+        ] {
+            assert_eq!(
+                super::facts(&args(&["msg"]), env(&[(name, "x")])).marker,
+                None,
+                "{name}"
+            );
         }
     }
 
@@ -312,8 +404,17 @@ mod tests {
         for row in offline {
             assert!(is_offline(&args(row)), "{row:?}");
         }
-        let online: &[&[&str]] =
-            &[&["msg"], &["schema"], &["explain"], &["glossary"], &["-v"], &["msg", "--helpx"], &["msg", "help"], &["Help"], &[" help"]];
+        let online: &[&[&str]] = &[
+            &["msg"],
+            &["schema"],
+            &["explain"],
+            &["glossary"],
+            &["-v"],
+            &["msg", "--helpx"],
+            &["msg", "help"],
+            &["Help"],
+            &[" help"],
+        ];
         for row in online {
             assert!(!is_offline(&args(row)), "{row:?}");
         }
@@ -324,7 +425,11 @@ mod tests {
 
     impl ProcessTable for Fake {
         fn info(&self, pid: i32) -> Option<ProcInfo> {
-            self.0.get(&pid).map(|(ppid, _)| ProcInfo { pid, ppid: *ppid, start_time: 0 })
+            self.0.get(&pid).map(|(ppid, _)| ProcInfo {
+                pid,
+                ppid: *ppid,
+                start_time: 0,
+            })
         }
     }
 
@@ -349,12 +454,34 @@ mod tests {
     #[test]
     fn the_name_matcher_over_a_made_up_tree() {
         let rows: &[(&[&'static str], Ancestry)] = &[
-            (&["k5-cli", "zsh", "k2-ptyd", "launchd-ish"], Ancestry::Found(SessionProcess::Ptyd)),
-            (&["k5-cli", "bash", "claude", "zsh", "k2-ptyd", "k2-daemon"], Ancestry::Found(SessionProcess::Ptyd)),
-            (&["k5-cli", "sh", "k2-daemon"], Ancestry::Found(SessionProcess::Daemon)),
-            (&["k5-cli", "node", "k2-app-engine"], Ancestry::Found(SessionProcess::AppEngine)),
+            (
+                &["k5-cli", "zsh", "k2-ptyd", "launchd-ish"],
+                Ancestry::Found(SessionProcess::Ptyd),
+            ),
+            (
+                &["k5-cli", "bash", "claude", "zsh", "k2-ptyd", "k2-daemon"],
+                Ancestry::Found(SessionProcess::Ptyd),
+            ),
+            (
+                &["k5-cli", "sh", "k2-daemon"],
+                Ancestry::Found(SessionProcess::Daemon),
+            ),
+            (
+                &["k5-cli", "node", "k2-app-engine"],
+                Ancestry::Found(SessionProcess::AppEngine),
+            ),
             (&["k5-cli", "zsh", "Terminal"], Ancestry::NotFound),
-            (&["k5-cli", "zsh", "k2-ptyd-test-agent", "k2-daemonx", "K2-PTYD", "k2"], Ancestry::NotFound),
+            (
+                &[
+                    "k5-cli",
+                    "zsh",
+                    "k2-ptyd-test-agent",
+                    "k2-daemonx",
+                    "K2-PTYD",
+                    "k2",
+                ],
+                Ancestry::NotFound,
+            ),
             (&["k2-ptyd"], Ancestry::Found(SessionProcess::Ptyd)),
         ];
         for (names, want) in rows {
@@ -371,21 +498,35 @@ mod tests {
         assert_eq!(session_ancestor(&t, |p| t.name(p), 100), Ancestry::NotFound);
         long.remove(0);
         let t = chain(&long);
-        assert_eq!(session_ancestor(&t, |p| t.name(p), 100), Ancestry::Found(SessionProcess::Ptyd));
+        assert_eq!(
+            session_ancestor(&t, |p| t.name(p), 100),
+            Ancestry::Found(SessionProcess::Ptyd)
+        );
     }
 
     #[test]
     fn the_names_are_the_binaries() {
         assert_eq!(k2_client::daemon_lifecycle::DAEMON_BINARY_NAME, "k2-daemon");
         for (name, _) in SESSION_PROCESSES {
-            assert!(name.len() <= 15, "{name} is longer than Linux's command name");
+            assert!(
+                name.len() <= 15,
+                "{name} is longer than Linux's command name"
+            );
         }
     }
 
     #[test]
     fn the_hand_off_is_one_name_set_or_taken_out() {
-        assert_eq!(hand_off_env(Verdict::WouldRefuse), ("K5_CLI_WOULD_REFUSE", Some("1")));
-        for v in [Verdict::Offline, Verdict::Passport, Verdict::NoOwnerFallback, Verdict::Owner] {
+        assert_eq!(
+            hand_off_env(Verdict::WouldRefuse),
+            ("K5_CLI_WOULD_REFUSE", Some("1"))
+        );
+        for v in [
+            Verdict::Offline,
+            Verdict::Passport,
+            Verdict::NoOwnerFallback,
+            Verdict::Owner,
+        ] {
             assert_eq!(hand_off_env(v), ("K5_CLI_WOULD_REFUSE", None), "{v:?}");
         }
     }

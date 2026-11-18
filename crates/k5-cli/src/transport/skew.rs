@@ -21,7 +21,9 @@ pub const MAX_LEN: usize = 64;
 pub fn clean(value: &str) -> Option<&str> {
     let ok = !value.is_empty()
         && value.len() <= MAX_LEN
-        && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+'));
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+'));
     ok.then_some(value)
 }
 
@@ -49,7 +51,12 @@ pub fn note(ours: &str, theirs: Option<&str>) {
 }
 
 /// [`note`] with its flag and its printer given: true when it printed.
-pub fn note_into(shown: &AtomicBool, ours: &str, theirs: Option<&str>, print: impl FnOnce(&str)) -> bool {
+pub fn note_into(
+    shown: &AtomicBool,
+    ours: &str,
+    theirs: Option<&str>,
+    print: impl FnOnce(&str),
+) -> bool {
     let Some(theirs) = differs(ours, theirs) else {
         return false;
     };
@@ -84,7 +91,14 @@ mod tests {
             assert_eq!(clean(ok), Some(ok), "{ok}");
         }
         let long = "1".repeat(MAX_LEN + 1);
-        for bad in ["", "0.46 .16", "0.46.16\u{1b}[2J", "0.46.16;", "\u{e9}", long.as_str()] {
+        for bad in [
+            "",
+            "0.46 .16",
+            "0.46.16\u{1b}[2J",
+            "0.46.16;",
+            "\u{e9}",
+            long.as_str(),
+        ] {
             assert_eq!(clean(bad), None, "{bad:?}");
         }
         assert_eq!(clean(&"1".repeat(MAX_LEN)).map(str::len), Some(MAX_LEN));
@@ -95,12 +109,22 @@ mod tests {
         let shown = AtomicBool::new(false);
         let mut lines = Vec::new();
         for theirs in [None, Some("0.46.16"), Some(""), Some("bad value")] {
-            assert!(!note_into(&shown, "0.46.16", theirs, |l| lines.push(l.to_string())), "{theirs:?}");
+            assert!(
+                !note_into(&shown, "0.46.16", theirs, |l| lines.push(l.to_string())),
+                "{theirs:?}"
+            );
         }
-        assert!(!shown.load(Ordering::SeqCst), "nothing differed, the flag is still down");
-        assert!(note_into(&shown, "0.46.16", Some("0.46.17"), |l| lines.push(l.to_string())));
+        assert!(
+            !shown.load(Ordering::SeqCst),
+            "nothing differed, the flag is still down"
+        );
+        assert!(note_into(&shown, "0.46.16", Some("0.46.17"), |l| lines
+            .push(l.to_string())));
         for theirs in [Some("0.46.17"), Some("0.47.0"), None] {
-            assert!(!note_into(&shown, "0.46.16", theirs, |l| lines.push(l.to_string())), "{theirs:?}");
+            assert!(
+                !note_into(&shown, "0.46.16", theirs, |l| lines.push(l.to_string())),
+                "{theirs:?}"
+            );
         }
         assert_eq!(lines, [line("0.46.16", "0.46.17")]);
     }
@@ -108,6 +132,8 @@ mod tests {
     #[test]
     fn a_shown_flag_prints_nothing() {
         let shown = AtomicBool::new(true);
-        assert!(!note_into(&shown, "0.46.16", Some("0.46.17"), |l| panic!("printed {l}")));
+        assert!(!note_into(&shown, "0.46.16", Some("0.46.17"), |l| panic!(
+            "printed {l}"
+        )));
     }
 }

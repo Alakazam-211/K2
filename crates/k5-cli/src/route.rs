@@ -82,21 +82,35 @@ pub fn find(table: &'static [Noun], args: &[OsString]) -> Found {
         Some(w) => w.to_str(),
     };
     let Some(noun) = first.and_then(|w| table.iter().find(|n| n.names(w))) else {
-        return Found { noun: None, owner: Owner::Bash };
+        return Found {
+            noun: None,
+            owner: Owner::Bash,
+        };
     };
     let verb = args.get(1).and_then(|w| w.to_str());
     let owner = verb
         .and_then(|w| noun.verbs.iter().find(|v| v.words.contains(&w)))
         .map_or(noun.owner, |v| v.owner);
-    Found { noun: Some(noun), owner }
+    Found {
+        noun: Some(noun),
+        owner,
+    }
 }
 
 const fn bash(words: &'static [&'static str]) -> Noun {
-    Noun { words, owner: Owner::Bash, verbs: &[] }
+    Noun {
+        words,
+        owner: Owner::Bash,
+        verbs: &[],
+    }
 }
 
 const fn native(words: &'static [&'static str]) -> Noun {
-    Noun { words, owner: Owner::Native, verbs: &[] }
+    Noun {
+        words,
+        owner: Owner::Native,
+        verbs: &[],
+    }
 }
 
 /// The route table: one row per arm of `cli/src/router.sh`'s top-level
@@ -224,7 +238,11 @@ mod tests {
         let mut seen = BTreeSet::new();
         for noun in TABLE {
             assert!(!noun.words.is_empty(), "a row with no words");
-            for word in noun.words.iter().chain(noun.verbs.iter().flat_map(|v| v.words)) {
+            for word in noun
+                .words
+                .iter()
+                .chain(noun.verbs.iter().flat_map(|v| v.words))
+            {
                 assert!(!word.is_empty(), "an empty word in {:?}", noun.words);
             }
             for word in noun.words {
@@ -233,7 +251,11 @@ mod tests {
             let mut verbs = BTreeSet::new();
             for verb in noun.verbs {
                 for word in verb.words {
-                    assert!(verbs.insert(*word), "{word} is two verbs of {:?}", noun.words);
+                    assert!(
+                        verbs.insert(*word),
+                        "{word} is two verbs of {:?}",
+                        noun.words
+                    );
                 }
             }
         }
@@ -250,9 +272,19 @@ mod tests {
             }
             assert_eq!(noun.owner, Owner::Bash, "{:?} has verb rows", noun.words);
             for verb in noun.verbs {
-                assert_ne!(verb.owner, Owner::Bash, "{:?} {:?} says what its row says", noun.words, verb.words);
+                assert_ne!(
+                    verb.owner,
+                    Owner::Bash,
+                    "{:?} {:?} says what its row says",
+                    noun.words,
+                    verb.words
+                );
                 for word in verb.words {
-                    assert!(!["--help", "-h", "help"].contains(word), "{:?} {word} is a help form", noun.words);
+                    assert!(
+                        !["--help", "-h", "help"].contains(word),
+                        "{:?} {word} is a help form",
+                        noun.words
+                    );
                 }
             }
         }
@@ -271,7 +303,13 @@ mod tests {
             assert_eq!(found.owner, Owner::Bash, "{list:?}");
         }
         // The `*)` arm: no row, the shell's.
-        for list in [&["nosuchverb"][..], &["Version"], &[" version"], &["-V"], &["*"]] {
+        for list in [
+            &["nosuchverb"][..],
+            &["Version"],
+            &[" version"],
+            &["-V"],
+            &["*"],
+        ] {
             let found = find(TABLE, &args(list));
             assert!(found.noun.is_none(), "{list:?}");
             assert_eq!(found.owner, Owner::Bash, "{list:?}");
@@ -296,14 +334,31 @@ mod tests {
             Noun {
                 words: &["mail", "email"],
                 owner: Owner::Bash,
-                verbs: &[Verb { words: &["read", "show"], owner: Owner::Native }, Verb { words: &["list"], owner: Owner::Spec }],
+                verbs: &[
+                    Verb {
+                        words: &["read", "show"],
+                        owner: Owner::Native,
+                    },
+                    Verb {
+                        words: &["list"],
+                        owner: Owner::Spec,
+                    },
+                ],
             },
             native(&["whoami"]),
         ];
         assert_eq!(owner(PART, &["mail", "read"]), Owner::Native);
         assert_eq!(owner(PART, &["email", "show", "--json"]), Owner::Native);
         assert_eq!(owner(PART, &["mail", "list"]), Owner::Spec);
-        for list in [&["mail"][..], &["mail", "--help"], &["mail", "-h"], &["mail", "help"], &["mail", "send"], &["mail", ""], &["read"]] {
+        for list in [
+            &["mail"][..],
+            &["mail", "--help"],
+            &["mail", "-h"],
+            &["mail", "help"],
+            &["mail", "send"],
+            &["mail", ""],
+            &["read"],
+        ] {
             assert_eq!(owner(PART, list), Owner::Bash, "{list:?}");
         }
         // A whole row turned: its help is its own.

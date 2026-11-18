@@ -40,7 +40,11 @@ pub enum Streams {
 /// and stderr are merged into one capture; and when the merged check
 /// can't tell, only when `stderr_is_console` says stderr is a console.
 /// That check runs only then.
-pub fn should_show(called_as: CalledAs, streams: Streams, stderr_is_console: impl FnOnce() -> bool) -> bool {
+pub fn should_show(
+    called_as: CalledAs,
+    streams: Streams,
+    stderr_is_console: impl FnOnce() -> bool,
+) -> bool {
     if called_as != CalledAs::K2Name {
         return false;
     }
@@ -124,7 +128,10 @@ mod tests {
 
     #[test]
     fn the_text_is_the_ruled_line() {
-        assert_eq!(TEXT, "note: k2 is now k5 (the same command). Type k5 from now on.");
+        assert_eq!(
+            TEXT,
+            "note: k2 is now k5 (the same command). Type k5 from now on."
+        );
         assert!(!TEXT.contains('\n'));
     }
 
@@ -137,7 +144,10 @@ mod tests {
         assert!(should_show(CalledAs::K2Name, Streams::Apart, never_asked));
         assert!(!should_show(CalledAs::K2Name, Streams::Merged, never_asked));
         for streams in [Streams::Apart, Streams::Merged, Streams::Unknown] {
-            assert!(!should_show(CalledAs::K5Name, streams, never_asked), "{streams:?}");
+            assert!(
+                !should_show(CalledAs::K5Name, streams, never_asked),
+                "{streams:?}"
+            );
         }
     }
 
@@ -225,11 +235,24 @@ mod tests {
                 let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
                 assert!(fd >= 0, "posix_openpt: {}", io::Error::last_os_error());
                 let master = OwnedFd::from_raw_fd(fd);
-                assert_eq!(libc::grantpt(fd), 0, "grantpt: {}", io::Error::last_os_error());
-                assert_eq!(libc::unlockpt(fd), 0, "unlockpt: {}", io::Error::last_os_error());
+                assert_eq!(
+                    libc::grantpt(fd),
+                    0,
+                    "grantpt: {}",
+                    io::Error::last_os_error()
+                );
+                assert_eq!(
+                    libc::unlockpt(fd),
+                    0,
+                    "unlockpt: {}",
+                    io::Error::last_os_error()
+                );
                 let name = libc::ptsname(fd);
                 assert!(!name.is_null(), "ptsname: {}", io::Error::last_os_error());
-                let path = CStr::from_ptr(name).to_str().expect("a UTF-8 pty name").to_owned();
+                let path = CStr::from_ptr(name)
+                    .to_str()
+                    .expect("a UTF-8 pty name")
+                    .to_owned();
                 let far = OpenOptions::new()
                     .read(true)
                     .write(true)

@@ -44,7 +44,11 @@ fn router_arms(text: &str) -> Vec<Vec<String>> {
         .filter_map(arm_words)
         .filter(|words| words != &["*"])
         .collect();
-    assert!(arms.len() >= 80, "read only {} router arms: the parser is out of date", arms.len());
+    assert!(
+        arms.len() >= 80,
+        "read only {} router arms: the parser is out of date",
+        arms.len()
+    );
     arms
 }
 
@@ -85,10 +89,17 @@ fn left_out(text: &str) -> BTreeMap<String, String> {
         if line.trim().is_empty() {
             continue;
         }
-        let body = line.strip_prefix('#').filter(|b| b.starts_with(char::is_whitespace));
-        let parts: Vec<&str> = body.map(|b| b.split_whitespace().collect()).unwrap_or_default();
+        let body = line
+            .strip_prefix('#')
+            .filter(|b| b.starts_with(char::is_whitespace));
+        let parts: Vec<&str> = body
+            .map(|b| b.split_whitespace().collect())
+            .unwrap_or_default();
         let reasons = ["retired", "stub", "internal", "person-only", "beta"];
-        assert!(parts.len() == 2 && reasons.contains(&parts[1]), "left-out line is not `#   <word>  <reason>`: {line:?}");
+        assert!(
+            parts.len() == 2 && reasons.contains(&parts[1]),
+            "left-out line is not `#   <word>  <reason>`: {line:?}"
+        );
         out.insert(parts[0].to_string(), parts[1].to_string());
     }
     out
@@ -117,18 +128,35 @@ const OFFLINE: &[(&str, &str)] = &[(
 fn exemptions(heads: &BTreeSet<String>) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = left_out(&common::schema_head())
         .into_iter()
-        .map(|(word, why)| (word, format!("left out of --schema in cli/src/schema-head.sh: {why}")))
+        .map(|(word, why)| {
+            (
+                word,
+                format!("left out of --schema in cli/src/schema-head.sh: {why}"),
+            )
+        })
         .collect();
     for (word, target, what) in ALIASES {
-        assert!(heads.contains(*target), "alias {word}: {target} has no --schema entry to cover it");
-        out.push((word.to_string(), format!("{what}: {target}'s entry covers it")));
+        assert!(
+            heads.contains(*target),
+            "alias {word}: {target} has no --schema entry to cover it"
+        );
+        out.push((
+            word.to_string(),
+            format!("{what}: {target}'s entry covers it"),
+        ));
     }
     for (word, why) in OFFLINE {
         out.push((word.to_string(), why.to_string()));
     }
-    let words: BTreeSet<String> = router_arms(&common::router()).into_iter().flatten().collect();
+    let words: BTreeSet<String> = router_arms(&common::router())
+        .into_iter()
+        .flatten()
+        .collect();
     for (word, _) in &out {
-        assert!(words.contains(word), "the exemption {word} is not a router word");
+        assert!(
+            words.contains(word),
+            "the exemption {word} is not a router word"
+        );
     }
     out
 }
@@ -152,41 +180,77 @@ fn run(cmd: &mut Command, home: &Path, extra: &[(&str, &str)]) -> String {
     cmd.env("HOME", home).envs(extra.iter().copied());
     let out = cmd.output().unwrap_or_else(|e| panic!("run {cmd:?}: {e}"));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success() && stderr.is_empty(), "{cmd:?} failed ({}): {stderr}", out.status);
+    assert!(
+        out.status.success() && stderr.is_empty(),
+        "{cmd:?} failed ({}): {stderr}",
+        out.status
+    );
     String::from_utf8(out.stdout).expect("UTF-8 output")
 }
 
 /// The first word of every `bash cli/k2 --schema` command's name.
 fn schema_heads() -> BTreeSet<String> {
     let dir = temp_dir("schema");
-    let text = run(Command::new("bash").arg(common::cli_src().join("../k2")).arg("--schema"), &dir, &[]);
+    let text = run(
+        Command::new("bash")
+            .arg(common::cli_src().join("../k2"))
+            .arg("--schema"),
+        &dir,
+        &[],
+    );
     std::fs::remove_dir_all(&dir).unwrap();
     let doc = json::parse(&text).unwrap_or_else(|e| panic!("--schema is not JSON: {e:?}"));
     let field = |v: &Value, key: &str| -> Value {
-        let Value::Object(pairs) = v else { panic!("not an object: {v:?}") };
-        pairs.iter().find(|(k, _)| k.as_str() == Some(key)).unwrap_or_else(|| panic!("no {key:?}")).1.clone()
+        let Value::Object(pairs) = v else {
+            panic!("not an object: {v:?}")
+        };
+        pairs
+            .iter()
+            .find(|(k, _)| k.as_str() == Some(key))
+            .unwrap_or_else(|| panic!("no {key:?}"))
+            .1
+            .clone()
     };
-    let Value::Array(commands) = field(&doc, "commands") else { panic!("--schema's commands is not a list") };
+    let Value::Array(commands) = field(&doc, "commands") else {
+        panic!("--schema's commands is not a list")
+    };
     let heads: BTreeSet<String> = commands
         .iter()
         .map(|c| match field(c, "name") {
-            Value::Str(name) => name.as_str().expect("a UTF-8 name").split_whitespace().next().expect("a word").to_string(),
+            Value::Str(name) => name
+                .as_str()
+                .expect("a UTF-8 name")
+                .split_whitespace()
+                .next()
+                .expect("a word")
+                .to_string(),
             other => panic!("a command name that is not a string: {other:?}"),
         })
         .collect();
-    assert!(heads.len() >= 50, "only {} commands in --schema", heads.len());
+    assert!(
+        heads.len() >= 50,
+        "only {} commands in --schema",
+        heads.len()
+    );
     heads
 }
 
 fn table_rows() -> Vec<Vec<String>> {
-    TABLE.iter().map(|n| n.words.iter().map(|w| w.to_string()).collect()).collect()
+    TABLE
+        .iter()
+        .map(|n| n.words.iter().map(|w| w.to_string()).collect())
+        .collect()
 }
 
 #[test]
 fn the_parser_reads_the_router_as_schema_drift_does() {
     let dir = temp_dir("drift");
     let script = common::cli_src().join("../../tests/cli/schema_drift.sh");
-    let text = run(Command::new("bash").arg(&script), &dir, &[("SCHEMA_DRIFT_LIST", "1")]);
+    let text = run(
+        Command::new("bash").arg(&script),
+        &dir,
+        &[("SCHEMA_DRIFT_LIST", "1")],
+    );
     std::fs::remove_dir_all(&dir).unwrap();
     let mut arms = Vec::new();
     let mut gone = BTreeMap::new();
@@ -210,12 +274,26 @@ fn the_parser_reads_the_router_as_schema_drift_does() {
     let verdict = verdict.expect("schema_drift.sh passed");
     let ours = router_arms(&common::router());
     let words: usize = ours.iter().map(Vec::len).sum();
-    println!("router: {} arms, {words} words; table: {} rows", ours.len(), TABLE.len());
+    println!(
+        "router: {} arms, {words} words; table: {} rows",
+        ours.len(),
+        TABLE.len()
+    );
     println!("schema_drift.sh: {verdict}");
     assert_eq!(ours, arms, "the two parsers read different arms");
-    assert!(verdict.starts_with(&format!("PASS: {} router commands:", ours.len())), "{verdict}");
-    assert_eq!(left_out(&common::schema_head()), gone, "the two read different left-out words");
-    let mine: BTreeSet<(String, String)> = ALIASES.iter().map(|(w, t, _)| (w.to_string(), t.to_string())).collect();
+    assert!(
+        verdict.starts_with(&format!("PASS: {} router commands:", ours.len())),
+        "{verdict}"
+    );
+    assert_eq!(
+        left_out(&common::schema_head()),
+        gone,
+        "the two read different left-out words"
+    );
+    let mine: BTreeSet<(String, String)> = ALIASES
+        .iter()
+        .map(|(w, t, _)| (w.to_string(), t.to_string()))
+        .collect();
     assert_eq!(mine, aliases, "ALIASES here and in schema_drift.sh differ");
 }
 
@@ -227,18 +305,31 @@ fn every_router_arm_has_its_row_and_every_row_is_an_arm() {
         list.iter().flatten().cloned().collect()
     }
     let missing: Vec<String> = words(&arms).difference(&words(&rows)).cloned().collect();
-    assert!(missing.is_empty(), "router words with no row in k5_cli::route::TABLE: {missing:?}");
+    assert!(
+        missing.is_empty(),
+        "router words with no row in k5_cli::route::TABLE: {missing:?}"
+    );
     let unknown: Vec<String> = words(&rows).difference(&words(&arms)).cloned().collect();
-    assert!(unknown.is_empty(), "rows naming words the router does not take: {unknown:?}");
+    assert!(
+        unknown.is_empty(),
+        "rows naming words the router does not take: {unknown:?}"
+    );
     for row in &rows {
-        assert!(arms.contains(row), "the row {row:?} is not one arm of the router (an arm's words, in its order)");
+        assert!(
+            arms.contains(row),
+            "the row {row:?} is not one arm of the router (an arm's words, in its order)"
+        );
     }
     assert_eq!(rows, arms, "the rows are not in the router's order");
     // A verb row is a family's second word, which this test can't check
     // against the router's top-level case. The first one brings its own
     // check against its family's case.
     for noun in TABLE {
-        assert!(noun.verbs.is_empty(), "{:?} has verb rows: check them against the family's case first", noun.words);
+        assert!(
+            noun.verbs.is_empty(),
+            "{:?} has verb rows: check them against the family's case first",
+            noun.words
+        );
     }
 }
 
@@ -257,10 +348,16 @@ fn a_native_or_spec_row_has_a_schema_entry_or_a_named_reason() {
             continue;
         }
         let entry = noun.words.iter().any(|w| heads.contains(*w));
-        let reason = noun.words.iter().any(|w| exempt.iter().any(|(e, _)| e == w));
+        let reason = noun
+            .words
+            .iter()
+            .any(|w| exempt.iter().any(|(e, _)| e == w));
         if !entry && !reason {
             bad.push(noun.words.join("|"));
         }
     }
-    assert!(bad.is_empty(), "Native or Spec rows with no `k2 --schema` entry and no reason in the exemptions: {bad:?}");
+    assert!(
+        bad.is_empty(),
+        "Native or Spec rows with no `k2 --schema` entry and no reason in the exemptions: {bad:?}"
+    );
 }

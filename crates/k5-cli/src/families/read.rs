@@ -86,7 +86,12 @@ pub struct Ask {
 /// The words after `read`, as `cmd_read`'s loop reads them. `None`: a
 /// value flag with nothing after it (the shell's).
 pub fn parse(words: &[&str]) -> Option<Ask> {
-    let mut ask = Ask { workspace: words.first().map_or_else(String::new, |w| (*w).to_string()), lines: "50".into(), agent: String::new(), session: String::new() };
+    let mut ask = Ask {
+        workspace: words.first().map_or_else(String::new, |w| (*w).to_string()),
+        lines: "50".into(),
+        agent: String::new(),
+        session: String::new(),
+    };
     let mut i = 1;
     while let Some(w) = words.get(i) {
         let slot = match *w {
@@ -134,7 +139,9 @@ pub fn split_remote(raw: &str) -> (String, String) {
 /// A `--lines` value the binary sends as the shell's curl does: printable
 /// ASCII and no `#`.
 pub fn sendable_lines(lines: &str) -> bool {
-    lines.bytes().all(|b| (0x21..0x7f).contains(&b) && b != b'#')
+    lines
+        .bytes()
+        .all(|b| (0x21..0x7f).contains(&b) && b != b'#')
 }
 
 /// The query the shell hands `cli_request`, one argument. `workspace` is
@@ -155,7 +162,11 @@ pub fn query(ask: &Ask, workspace: &str) -> String {
 /// `k5 read ...`: `args` is the whole command line after `argv[0]`.
 /// `None`: the shell CLI answers it (see the module's notes).
 pub fn run(args: &[OsString]) -> Option<Exit> {
-    let words: Vec<&str> = args.iter().skip(1).map(|a| a.to_str()).collect::<Option<_>>()?;
+    let words: Vec<&str> = args
+        .iter()
+        .skip(1)
+        .map(|a| a.to_str())
+        .collect::<Option<_>>()?;
     let ask = parse(&words)?;
     let (bare, host) = split_remote(&ask.workspace);
     if !host.is_empty() || !sendable_lines(&ask.lines) || !super::has_python3() {
@@ -225,29 +236,64 @@ pub fn reader(body: &[u8]) -> Shown {
             let truthy = |key: &str| get(e, key).filter(|v| py::truthy(v)).cloned();
             let code = truthy("code").unwrap_or_else(|| Value::Str(Text::from("error")));
             let hint = truthy("hint").unwrap_or_else(|| code.clone());
-            let refusal = matches!(&code, Value::Str(t) if t.as_str().is_some_and(|c| REFUSALS.contains(&c)));
-            let shape = Value::Object(vec![(Text::from("error"), Value::Object(vec![(Text::from("code"), code), (Text::from("hint"), hint)]))]);
-            let compact = Options { compact: true, ensure_ascii: false, ..Options::default() };
+            let refusal =
+                matches!(&code, Value::Str(t) if t.as_str().is_some_and(|c| REFUSALS.contains(&c)));
+            let shape = Value::Object(vec![(
+                Text::from("error"),
+                Value::Object(vec![(Text::from("code"), code), (Text::from("hint"), hint)]),
+            )]);
+            let compact = Options {
+                compact: true,
+                ensure_ascii: false,
+                ..Options::default()
+            };
             // Half of a surrogate pair can't be UTF-8: Python's stderr
             // writes it escaped, as `ensure_ascii` would.
             let text = json::to_string(&shape, &compact)
-                .or_else(|_| json::to_string(&shape, &Options { compact: true, ..Options::default() }))
+                .or_else(|_| {
+                    json::to_string(
+                        &shape,
+                        &Options {
+                            compact: true,
+                            ..Options::default()
+                        },
+                    )
+                })
                 .unwrap_or_default();
-            return Shown::err(format!("{text}\n"), if refusal { Exit::Refused } else { Exit::Error });
+            return Shown::err(
+                format!("{text}\n"),
+                if refusal { Exit::Refused } else { Exit::Error },
+            );
         }
     }
     let Value::Object(pairs) = &data else {
-        let exception = format!("AttributeError: '{}' object has no attribute 'get'", py::type_name(&data));
-        return Shown::err(traceback(&[(PY_LINES, "<module>")], &exception), Exit::Error);
+        let exception = format!(
+            "AttributeError: '{}' object has no attribute 'get'",
+            py::type_name(&data)
+        );
+        return Shown::err(
+            traceback(&[(PY_LINES, "<module>")], &exception),
+            Exit::Error,
+        );
     };
     let items: Vec<Value> = match get(pairs, "lines") {
         None => Vec::new(),
         Some(Value::Array(items)) => items.clone(),
-        Some(Value::Str(t)) => t.code_points().into_iter().map(|cp| Value::Str(code_point(cp))).collect(),
+        Some(Value::Str(t)) => t
+            .code_points()
+            .into_iter()
+            .map(|cp| Value::Str(code_point(cp)))
+            .collect(),
         Some(Value::Object(keys)) => keys.iter().map(|(k, _)| Value::Str(k.clone())).collect(),
         Some(other) => {
-            let exception = format!("TypeError: '{}' object is not iterable", py::type_name(other));
-            return Shown::err(traceback(&[(PY_LINES, "<module>")], &exception), Exit::Error);
+            let exception = format!(
+                "TypeError: '{}' object is not iterable",
+                py::type_name(other)
+            );
+            return Shown::err(
+                traceback(&[(PY_LINES, "<module>")], &exception),
+                Exit::Error,
+            );
         }
     };
     let mut stdout = String::new();
@@ -274,7 +320,9 @@ mod tests {
     use super::*;
 
     fn source(file: &str) -> String {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src").join(file);
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/src")
+            .join(file);
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
     }
 
@@ -282,7 +330,10 @@ mod tests {
     #[test]
     fn the_shell_s_lines() {
         let text = source("daemon-install.sh");
-        let body = text.split_once("cmd_read() {").expect("cmd_read in daemon-install.sh").1;
+        let body = text
+            .split_once("cmd_read() {")
+            .expect("cmd_read in daemon-install.sh")
+            .1;
         for shell in [
             r#"    local workspace="${1:-}""#,
             r#"    local lines=50"#,
@@ -302,12 +353,24 @@ mod tests {
             r#"        cli_send cli_request "/cli/terminal/read" "$query" | python3 -c ""#,
             r#"        sys.exit(3 if code in ('not_connected', 'gated', 'forbidden') else 1)"#,
         ] {
-            assert!(body.lines().any(|l| l == shell), "cmd_read no longer has {shell:?}");
+            assert!(
+                body.lines().any(|l| l == shell),
+                "cmd_read no longer has {shell:?}"
+            );
         }
-        assert!(body.contains(&format!("        echo \"{USAGE}\" >&2\n        exit 1")), "the usage line moved");
+        assert!(
+            body.contains(&format!("        echo \"{USAGE}\" >&2\n        exit 1")),
+            "the usage line moved"
+        );
         let policy = source("cli-tools-policy.sh");
-        assert!(policy.contains(r#"        read) echo "read" ;;"#), "read's tool id moved");
-        assert!(policy.contains("        help|schema|whats-new|checkin|activity|read|"), "read is no longer an open tool");
+        assert!(
+            policy.contains(r#"        read) echo "read" ;;"#),
+            "read's tool id moved"
+        );
+        assert!(
+            policy.contains("        help|schema|whats-new|checkin|activity|read|"),
+            "read is no longer an open tool"
+        );
         let remote = source("remote-target.sh");
         for shell in [
             r#"    if [[ "$raw" == *::*::* ]]; then"#,
@@ -315,10 +378,16 @@ mod tests {
             r#"            _REMOTE_HOST="${raw##*@}""#,
             r#"            _BARE_TARGET="${raw%@*}""#,
         ] {
-            assert!(remote.lines().any(|l| l == shell), "_split_remote_target no longer has {shell:?}");
+            assert!(
+                remote.lines().any(|l| l == shell),
+                "_split_remote_target no longer has {shell:?}"
+            );
         }
         let remote_msg = source("remote-msg.sh");
-        assert!(remote_msg.contains("    [ -z \"$host\" ] && return 0\n"), "_apply_remote_host no longer leaves an empty host local");
+        assert!(
+            remote_msg.contains("    [ -z \"$host\" ] && return 0\n"),
+            "_apply_remote_host no longer leaves an empty host local"
+        );
     }
 
     /// The shell's Python, its lines as `python3 -c` numbers them.
@@ -331,8 +400,14 @@ mod tests {
         assert_eq!(line(9), "if isinstance(data, dict) and 'error' in data:");
         assert_eq!(line(12), "code = err.get('code') or 'error'");
         assert_eq!(line(13), "hint = err.get('hint') or code");
-        assert_eq!(line(14), "sys.stderr.write(json.dumps({'error': {'code': code, 'hint': hint}},");
-        assert_eq!(line(15), "ensure_ascii=False, separators=(',', ':')) + '\\n')");
+        assert_eq!(
+            line(14),
+            "sys.stderr.write(json.dumps({'error': {'code': code, 'hint': hint}},"
+        );
+        assert_eq!(
+            line(15),
+            "ensure_ascii=False, separators=(',', ':')) + '\\n')"
+        );
         assert_eq!(line(17), "sys.stderr.write(str(err) + '\\n')");
         assert_eq!(line(PY_LINES), "for line in data.get('lines', []):");
         assert_eq!(line(20), "print(line)");
@@ -340,26 +415,47 @@ mod tests {
     }
 
     fn ask(workspace: &str, lines: &str, agent: &str, session: &str) -> Option<Ask> {
-        Some(Ask { workspace: workspace.into(), lines: lines.into(), agent: agent.into(), session: session.into() })
+        Some(Ask {
+            workspace: workspace.into(),
+            lines: lines.into(),
+            agent: agent.into(),
+            session: session.into(),
+        })
     }
 
     #[test]
     fn the_words() {
         assert_eq!(parse(&[]), ask("", "50", "", ""));
         assert_eq!(parse(&["ws"]), ask("ws", "50", "", ""));
-        assert_eq!(parse(&["ws", "--lines", "5", "--agent", "x y"]), ask("ws", "5", "x y", ""));
-        assert_eq!(parse(&["ws", "--session", "s1", "extra", "--token", "t"]), ask("ws", "50", "", "s1"));
+        assert_eq!(
+            parse(&["ws", "--lines", "5", "--agent", "x y"]),
+            ask("ws", "5", "x y", "")
+        );
+        assert_eq!(
+            parse(&["ws", "--session", "s1", "extra", "--token", "t"]),
+            ask("ws", "50", "", "s1")
+        );
         // The first word is the workspace, a flag too.
         assert_eq!(parse(&["--session", "s 1"]), ask("--session", "50", "", ""));
         assert_eq!(parse(&["--lines", "5"]), ask("--lines", "50", "", ""));
-        assert_eq!(parse(&["ws", "--agent", "--lines"]), ask("ws", "50", "--lines", ""));
+        assert_eq!(
+            parse(&["ws", "--agent", "--lines"]),
+            ask("ws", "50", "--lines", "")
+        );
         assert_eq!(parse(&["ws", "--lines", ""]), ask("ws", "", "", ""));
-        assert_eq!(parse(&["ws", "--lines", "1", "--lines", "2"]), ask("ws", "2", "", ""));
+        assert_eq!(
+            parse(&["ws", "--lines", "1", "--lines", "2"]),
+            ask("ws", "2", "", "")
+        );
         for last in ["--lines", "--agent", "--session", "--token"] {
             assert_eq!(parse(&["ws", last]), None, "{last}");
             assert_eq!(parse(&["ws", "x", last]), None, "{last}");
         }
-        assert_eq!(parse(&["--lines"]), ask("--lines", "50", "", ""), "the first word is never a flag");
+        assert_eq!(
+            parse(&["--lines"]),
+            ask("--lines", "50", "", ""),
+            "the first word is never a flag"
+        );
     }
 
     #[test]
@@ -385,10 +481,24 @@ mod tests {
 
     #[test]
     fn the_query() {
-        let a = |lines: &str, agent: &str, session: &str| Ask { workspace: "w".into(), lines: lines.into(), agent: agent.into(), session: session.into() };
-        assert_eq!(query(&a("50", "", ""), "acme ws"), "workspace=acme%20ws&lines=50");
-        assert_eq!(query(&a("5", "x&y", ""), "w"), "workspace=w&lines=5&agent=x%26y");
-        assert_eq!(query(&a("5&x=1", "a", "s/1"), "w"), "session=s%2F1&lines=5&x=1");
+        let a = |lines: &str, agent: &str, session: &str| Ask {
+            workspace: "w".into(),
+            lines: lines.into(),
+            agent: agent.into(),
+            session: session.into(),
+        };
+        assert_eq!(
+            query(&a("50", "", ""), "acme ws"),
+            "workspace=acme%20ws&lines=50"
+        );
+        assert_eq!(
+            query(&a("5", "x&y", ""), "w"),
+            "workspace=w&lines=5&agent=x%26y"
+        );
+        assert_eq!(
+            query(&a("5&x=1", "a", "s/1"), "w"),
+            "session=s%2F1&lines=5&x=1"
+        );
         assert!(sendable_lines("50") && sendable_lines("5&x=%41") && sendable_lines(""));
         for bad in ["5 6", "5#6", "5\t", "é", "\u{7f}"] {
             assert!(!sendable_lines(bad), "{bad:?}");
@@ -402,37 +512,84 @@ mod tests {
     #[test]
     fn the_reader() {
         let f = |s: &str| reader(s.as_bytes());
-        assert_eq!(f(r#"{"lines":["a","b",1,null,[1,"x"]]}"#), ok("a\nb\n1\nNone\n[1, 'x']\n"));
+        assert_eq!(
+            f(r#"{"lines":["a","b",1,null,[1,"x"]]}"#),
+            ok("a\nb\n1\nNone\n[1, 'x']\n")
+        );
         assert_eq!(f(r#"{"lines":[]}"#), ok(""));
         assert_eq!(f(r#"{"x":1}"#), ok(""));
         assert_eq!(f(r#"{"lines":"ab"}"#), ok("a\nb\n"));
         assert_eq!(f(r#"{"lines":{"k":1,"j":2}}"#), ok("k\nj\n"));
         assert_eq!(f(r#"{"lines":["é \t"]}"#), ok("é \t\n"));
-        assert_eq!(f(r#"{"error":{"code":"forbidden","hint":"nope é"}}"#), Shown::err("{\"error\":{\"code\":\"forbidden\",\"hint\":\"nope é\"}}\n", Exit::Refused));
+        assert_eq!(
+            f(r#"{"error":{"code":"forbidden","hint":"nope é"}}"#),
+            Shown::err(
+                "{\"error\":{\"code\":\"forbidden\",\"hint\":\"nope é\"}}\n",
+                Exit::Refused
+            )
+        );
         for code in ["not_connected", "gated"] {
-            assert_eq!(f(&format!(r#"{{"error":{{"code":"{code}"}}}}"#)), Shown::err(format!("{{\"error\":{{\"code\":\"{code}\",\"hint\":\"{code}\"}}}}\n"), Exit::Refused));
+            assert_eq!(
+                f(&format!(r#"{{"error":{{"code":"{code}"}}}}"#)),
+                Shown::err(
+                    format!("{{\"error\":{{\"code\":\"{code}\",\"hint\":\"{code}\"}}}}\n"),
+                    Exit::Refused
+                )
+            );
         }
-        assert_eq!(f(r#"{"error":{"code":"","hint":""}}"#), Shown::err("{\"error\":{\"code\":\"error\",\"hint\":\"error\"}}\n", Exit::Error));
-        assert_eq!(f(r#"{"error":{"code":5,"hint":[1]}}"#), Shown::err("{\"error\":{\"code\":5,\"hint\":[1]}}\n", Exit::Error));
+        assert_eq!(
+            f(r#"{"error":{"code":"","hint":""}}"#),
+            Shown::err(
+                "{\"error\":{\"code\":\"error\",\"hint\":\"error\"}}\n",
+                Exit::Error
+            )
+        );
+        assert_eq!(
+            f(r#"{"error":{"code":5,"hint":[1]}}"#),
+            Shown::err("{\"error\":{\"code\":5,\"hint\":[1]}}\n", Exit::Error)
+        );
         assert_eq!(f(r#"{"error":{"code":"Forbidden"}}"#).exit, Exit::Error);
-        assert_eq!(f(r#"{"error":{}}"#), Shown::err("{\"error\":{\"code\":\"error\",\"hint\":\"error\"}}\n", Exit::Error));
-        assert_eq!(f(r#"{"error":"bad","lines":["x"]}"#), Shown::err("bad\n", Exit::Error));
+        assert_eq!(
+            f(r#"{"error":{}}"#),
+            Shown::err(
+                "{\"error\":{\"code\":\"error\",\"hint\":\"error\"}}\n",
+                Exit::Error
+            )
+        );
+        assert_eq!(
+            f(r#"{"error":"bad","lines":["x"]}"#),
+            Shown::err("bad\n", Exit::Error)
+        );
         assert_eq!(f(r#"{"error":null}"#), Shown::err("None\n", Exit::Error));
-        assert_eq!(f(r#"{"error":[1,"a"]}"#), Shown::err("[1, 'a']\n", Exit::Error));
+        assert_eq!(
+            f(r#"{"error":[1,"a"]}"#),
+            Shown::err("[1, 'a']\n", Exit::Error)
+        );
         assert_eq!(f("x\n"), Shown::err("x\n\n", Exit::Error));
         assert_eq!(f(""), Shown::err("\n", Exit::Error));
-        assert_eq!(f(&"z".repeat(250)), Shown::err(format!("{}\n", "z".repeat(200)), Exit::Error));
+        assert_eq!(
+            f(&"z".repeat(250)),
+            Shown::err(format!("{}\n", "z".repeat(200)), Exit::Error)
+        );
         assert_eq!(
             f("[1]"),
             Shown::err("Traceback (most recent call last):\n  File \"<string>\", line 19, in <module>\nAttributeError: 'list' object has no attribute 'get'\n", Exit::Error)
         );
-        assert!(f("\"s\"").stderr.ends_with("AttributeError: 'str' object has no attribute 'get'\n"));
-        assert!(f("null").stderr.ends_with("AttributeError: 'NoneType' object has no attribute 'get'\n"));
+        assert!(f("\"s\"")
+            .stderr
+            .ends_with("AttributeError: 'str' object has no attribute 'get'\n"));
+        assert!(f("null")
+            .stderr
+            .ends_with("AttributeError: 'NoneType' object has no attribute 'get'\n"));
         assert_eq!(
             f(r#"{"lines":5}"#),
             Shown::err("Traceback (most recent call last):\n  File \"<string>\", line 19, in <module>\nTypeError: 'int' object is not iterable\n", Exit::Error)
         );
-        assert!(f(r#"{"lines":null}"#).stderr.ends_with("TypeError: 'NoneType' object is not iterable\n"));
-        assert!(f(r#"{"lines":true}"#).stderr.ends_with("TypeError: 'bool' object is not iterable\n"));
+        assert!(f(r#"{"lines":null}"#)
+            .stderr
+            .ends_with("TypeError: 'NoneType' object is not iterable\n"));
+        assert!(f(r#"{"lines":true}"#)
+            .stderr
+            .ends_with("TypeError: 'bool' object is not iterable\n"));
     }
 }

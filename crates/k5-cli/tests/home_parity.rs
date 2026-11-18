@@ -170,8 +170,20 @@ struct DotRow {
 }
 
 const DOT_ROWS: &[DotRow] = &[
-    DotRow { case: "neither folder: a new workspace", make: &[], shell: Want::Under(".k2"), k5: Want::Under(".k2"), differs: SAME },
-    DotRow { case: "only .k2", make: &[Make::Dir(".k2")], shell: Want::Under(".k2"), k5: Want::Under(".k2"), differs: SAME },
+    DotRow {
+        case: "neither folder: a new workspace",
+        make: &[],
+        shell: Want::Under(".k2"),
+        k5: Want::Under(".k2"),
+        differs: SAME,
+    },
+    DotRow {
+        case: "only .k2",
+        make: &[Make::Dir(".k2")],
+        shell: Want::Under(".k2"),
+        k5: Want::Under(".k2"),
+        differs: SAME,
+    },
     DotRow {
         case: "only .k2so: an older workspace keeps its name",
         make: &[Make::Dir(".k2so")],
@@ -186,7 +198,13 @@ const DOT_ROWS: &[DotRow] = &[
         k5: Want::Under(".k2"),
         differs: SAME,
     },
-    DotRow { case: "a file named .k2", make: &[Make::File(".k2")], shell: Want::Under(".k2so"), k5: Want::Under(".k2so"), differs: SAME },
+    DotRow {
+        case: "a file named .k2",
+        make: &[Make::File(".k2")],
+        shell: Want::Under(".k2so"),
+        k5: Want::Under(".k2so"),
+        differs: SAME,
+    },
     DotRow {
         case: "a file named .k2 beside a .k2so folder",
         make: &[Make::File(".k2"), Make::Dir(".k2so")],
@@ -194,7 +212,13 @@ const DOT_ROWS: &[DotRow] = &[
         k5: Want::Under(".k2so"),
         differs: SAME,
     },
-    DotRow { case: "a file named .k2so", make: &[Make::File(".k2so")], shell: Want::Under(".k2"), k5: Want::Under(".k2"), differs: SAME },
+    DotRow {
+        case: "a file named .k2so",
+        make: &[Make::File(".k2so")],
+        shell: Want::Under(".k2"),
+        k5: Want::Under(".k2"),
+        differs: SAME,
+    },
     DotRow {
         case: "only .k5 (neither rule knows it yet)",
         make: &[Make::Dir(".k5")],
@@ -246,9 +270,13 @@ impl Temp {
     fn new(tag: &str) -> Temp {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock after 1970").as_nanos();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after 1970")
+            .as_nanos();
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("k5-cli-{tag}-{}-{nanos}-{n}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("k5-cli-{tag}-{}-{nanos}-{n}", std::process::id()));
         std::fs::create_dir(&dir).unwrap_or_else(|e| panic!("make {}: {e}", dir.display()));
         Temp(dir)
     }
@@ -276,11 +304,15 @@ fn build(root: &Path, make: &[Make]) -> bool {
     }
     for m in make {
         match *m {
-            Make::Dir(name) => std::fs::create_dir(root.join(name)).unwrap_or_else(|e| panic!("mkdir {name}: {e}")),
-            Make::File(name) => std::fs::write(root.join(name), b"not a folder").unwrap_or_else(|e| panic!("write {name}: {e}")),
+            Make::Dir(name) => {
+                std::fs::create_dir(root.join(name)).unwrap_or_else(|e| panic!("mkdir {name}: {e}"))
+            }
+            Make::File(name) => std::fs::write(root.join(name), b"not a folder")
+                .unwrap_or_else(|e| panic!("write {name}: {e}")),
             Make::Link(name, to) => {
                 #[cfg(unix)]
-                std::os::unix::fs::symlink(to, root.join(name)).unwrap_or_else(|e| panic!("link {name} -> {to}: {e}"));
+                std::os::unix::fs::symlink(to, root.join(name))
+                    .unwrap_or_else(|e| panic!("link {name} -> {to}: {e}"));
                 #[cfg(not(unix))]
                 unreachable!("{name} -> {to}");
             }
@@ -306,9 +338,12 @@ fn row_env(root: &Path, env: &[(&'static str, Value)]) -> Vec<(&'static str, OsS
 fn expect(want: Want, base: &Path, env: &[(&'static str, OsString)]) -> Result<PathBuf, String> {
     match want {
         Want::Under(name) => Ok(base.join(name)),
-        Want::OverrideOf(var) => {
-            Ok(PathBuf::from(&env.iter().find(|(n, _)| *n == var).unwrap_or_else(|| panic!("the row sets no {var}")).1))
-        }
+        Want::OverrideOf(var) => Ok(PathBuf::from(
+            &env.iter()
+                .find(|(n, _)| *n == var)
+                .unwrap_or_else(|| panic!("the row sets no {var}"))
+                .1,
+        )),
         Want::Error(var) => Err(var.to_string()),
     }
 }
@@ -318,12 +353,30 @@ fn expect(want: Want, base: &Path, env: &[(&'static str, OsString)]) -> Result<P
 #[test]
 fn every_row_is_marked_by_whether_the_answers_differ() {
     for row in HOME_ROWS {
-        assert_eq!(row.differs, row.shell != row.k5, "home row {:?}: the DIFFERS mark is wrong", row.case);
-        assert!(matches!(row.shell, Want::Under(_)), "home row {:?}: the shell always answers a folder", row.case);
+        assert_eq!(
+            row.differs,
+            row.shell != row.k5,
+            "home row {:?}: the DIFFERS mark is wrong",
+            row.case
+        );
+        assert!(
+            matches!(row.shell, Want::Under(_)),
+            "home row {:?}: the shell always answers a folder",
+            row.case
+        );
     }
     for row in DOT_ROWS {
-        assert_eq!(row.differs, row.shell != row.k5, "workspace row {:?}: the DIFFERS mark is wrong", row.case);
-        assert!(!row.differs, "workspace row {:?}: the dot-dir rules agree today; a difference needs K2's ruling", row.case);
+        assert_eq!(
+            row.differs,
+            row.shell != row.k5,
+            "workspace row {:?}: the DIFFERS mark is wrong",
+            row.case
+        );
+        assert!(
+            !row.differs,
+            "workspace row {:?}: the dot-dir rules agree today; a difference needs K2's ruling",
+            row.case
+        );
     }
 }
 
@@ -357,7 +410,12 @@ fn k5_cli_finds_a_workspace_folder_by_the_daemon_s_rule() {
         if !build(&tmp.0, row.make) {
             continue;
         }
-        assert_eq!(Ok(workspace_dot_dir(&tmp.0)), expect(row.k5, &tmp.0, &[]), "workspace row {:?}", row.case);
+        assert_eq!(
+            Ok(workspace_dot_dir(&tmp.0)),
+            expect(row.k5, &tmp.0, &[]),
+            "workspace row {:?}",
+            row.case
+        );
         ran += 1;
     }
     assert!(ran >= DOT_ROWS.iter().filter(|r| !has_link(r.make)).count());
@@ -370,10 +428,21 @@ fn the_shell_finds_the_home_as_the_rows_say() {
     let prelude = common::prelude();
     let first = r#"K2_HOME="${HOME}/.k2""#;
     let lines: Vec<&str> = prelude.lines().collect();
-    let at = lines.iter().position(|l| *l == first).expect("prelude.sh sets K2_HOME from HOME");
-    assert_eq!(lines.iter().filter(|l| **l == first).count(), 1, "K2_HOME is set from HOME once");
+    let at = lines
+        .iter()
+        .position(|l| *l == first)
+        .expect("prelude.sh sets K2_HOME from HOME");
+    assert_eq!(
+        lines.iter().filter(|l| **l == first).count(),
+        1,
+        "K2_HOME is set from HOME once"
+    );
     let script = format!("{}\n{}\nprintf '%s' \"$K2_HOME\"", lines[at], lines[at + 1]);
-    assert!(lines[at + 1].starts_with(r#"[ -d "$K2_HOME" ] || K2_HOME="#), "the fallback line moved: {}", lines[at + 1]);
+    assert!(
+        lines[at + 1].starts_with(r#"[ -d "$K2_HOME" ] || K2_HOME="#),
+        "the fallback line moved: {}",
+        lines[at + 1]
+    );
     for row in HOME_ROWS {
         let tmp = Temp::new("shell-home");
         let user = tmp.0.join("user");
@@ -384,7 +453,12 @@ fn the_shell_finds_the_home_as_the_rows_say() {
         let mut vars: Vec<(&str, &str)> = vec![("HOME", user_text)];
         vars.extend(env.iter().map(|(n, v)| (*n, v.to_str().expect("UTF-8"))));
         let got = PathBuf::from(common::bash(&script, "k2", &vars));
-        assert_eq!(Ok(got), expect(row.shell, &user, &env), "home row {:?}", row.case);
+        assert_eq!(
+            Ok(got),
+            expect(row.shell, &user, &env),
+            "home row {:?}",
+            row.case
+        );
     }
 }
 
@@ -399,6 +473,11 @@ fn the_shell_finds_a_workspace_folder_as_the_rows_say() {
         let root = tmp.0.to_str().expect("a UTF-8 temp path");
         let script = format!("{function}\n_ws_dot_dir \"$1\"");
         let got = common::bash_args(&script, &[root]);
-        assert_eq!(Ok(PathBuf::from(got.trim_end_matches('\n'))), expect(row.shell, &tmp.0, &[]), "workspace row {:?}", row.case);
+        assert_eq!(
+            Ok(PathBuf::from(got.trim_end_matches('\n'))),
+            expect(row.shell, &tmp.0, &[]),
+            "workspace row {:?}",
+            row.case
+        );
     }
 }

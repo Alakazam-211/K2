@@ -88,7 +88,10 @@ pub enum Auth {
     Owner(String),
     /// A passport: the Bearer on the cell socket at `sock`, and `token=`
     /// over TCP.
-    Passport { passport: Passport, sock: Option<PathBuf> },
+    Passport {
+        passport: Passport,
+        sock: Option<PathBuf>,
+    },
 }
 
 impl fmt::Debug for Auth {
@@ -96,7 +99,10 @@ impl fmt::Debug for Auth {
         match self {
             Auth::None => f.write_str("None"),
             Auth::Owner(_) => f.write_str("Owner(..)"),
-            Auth::Passport { sock, .. } => f.debug_struct("Passport").field("sock", sock).finish_non_exhaustive(),
+            Auth::Passport { sock, .. } => f
+                .debug_struct("Passport")
+                .field("sock", sock)
+                .finish_non_exhaustive(),
         }
     }
 }
@@ -132,7 +138,9 @@ impl Healer for SecretsDir {
         let t = std::str::from_utf8(line).ok()?;
         let (session, secret) = t.split_once('.')?;
         let shaped = !session.is_empty()
-            && session.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            && session
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
             && !secret.is_empty()
             && secret.bytes().all(|b| b.is_ascii_alphanumeric());
         let same_session = cur.split('.').next() == Some(session);
@@ -218,18 +226,31 @@ impl Kind {
     }
     /// `_cli_no_answer` runs.
     fn says_no_answer(self) -> bool {
-        !matches!(self, Kind::PostJsonStdin | Kind::SendJsonGet | Kind::SendJsonPost | Kind::Probe | Kind::BearerForm)
+        !matches!(
+            self,
+            Kind::PostJsonStdin
+                | Kind::SendJsonGet
+                | Kind::SendJsonPost
+                | Kind::Probe
+                | Kind::BearerForm
+        )
     }
     /// A refused passport is tried again with a healed one, on either
     /// channel. Not a body from stdin, a call with no credential, nor the
     /// probe.
     fn heals(self) -> bool {
-        !matches!(self, Kind::PostJsonStdin | Kind::Public | Kind::Probe | Kind::BearerForm)
+        !matches!(
+            self,
+            Kind::PostJsonStdin | Kind::Public | Kind::Probe | Kind::BearerForm
+        )
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
     /// call with no credential, nor the probe.
     fn notes_permission(self) -> bool {
-        !matches!(self, Kind::PostJsonStdin | Kind::Public | Kind::Probe | Kind::BearerForm)
+        !matches!(
+            self,
+            Kind::PostJsonStdin | Kind::Public | Kind::Probe | Kind::BearerForm
+        )
     }
     /// `--connect-timeout`.
     fn connect_timeout(self) -> Duration {
@@ -280,7 +301,11 @@ impl fmt::Display for NoAnswer {
         if self.empty {
             write!(f, "Error: {PRODUCT_NAME}'s server gave an empty answer to {} after {} s; run k2 daemon status", self.endpoint, self.waited)
         } else {
-            write!(f, "Error: {PRODUCT_NAME}'s server didn't answer {} within {} s; run k2 daemon status", self.endpoint, self.waited)
+            write!(
+                f,
+                "Error: {PRODUCT_NAME}'s server didn't answer {} within {} s; run k2 daemon status",
+                self.endpoint, self.waited
+            )
         }
     }
 }
@@ -299,7 +324,11 @@ pub enum Error {
     Empty { endpoint: String },
     /// The exchange broke some other way; `curl` is curl's exit code for
     /// it ([`wire::curl`]).
-    Broken { endpoint: String, why: String, curl: i32 },
+    Broken {
+        endpoint: String,
+        why: String,
+        curl: i32,
+    },
     /// A target curl would not send as it is (a space, a control byte or
     /// a `#`).
     BadTarget { target: String, byte: u8 },
@@ -364,7 +393,9 @@ impl Error {
             Error::Broken { curl, .. } => *curl,
             Error::BadTarget { .. } => wire::curl::URL_MALFORMAT,
             Error::Denied { .. } => LOCAL_TRANSPORT_DENIED,
-            Error::NoCellSocket { .. } | Error::NoCredential { .. } | Error::MaybeApplied { .. } => 1,
+            Error::NoCellSocket { .. }
+            | Error::NoCredential { .. }
+            | Error::MaybeApplied { .. } => 1,
         }
     }
 }
@@ -415,8 +446,15 @@ pub fn uds_eligible(endpoint: &str) -> bool {
         "/cli/heartbeat/fires-list-all",
         "/cli/heartbeat/set-show-sessions",
     ];
-    const UNDER: &[&str] =
-        &["/cli/inbox/", "/cli/review-checklist/", "/cli/dns/", "/cli/certs/", "/cli/publish/", "/cli/heartbeat/", "/cli/thread/"];
+    const UNDER: &[&str] = &[
+        "/cli/inbox/",
+        "/cli/review-checklist/",
+        "/cli/dns/",
+        "/cli/certs/",
+        "/cli/publish/",
+        "/cli/heartbeat/",
+        "/cli/thread/",
+    ];
     if NOT.contains(&endpoint) {
         return false;
     }
@@ -459,7 +497,12 @@ pub struct Client {
 
 impl Client {
     /// A client for `host:port` with the shell's defaults.
-    pub fn new(host: impl Into<String>, port: u16, project: impl Into<String>, auth: Auth) -> Client {
+    pub fn new(
+        host: impl Into<String>,
+        port: u16,
+        project: impl Into<String>,
+        auth: Auth,
+    ) -> Client {
         Client {
             host: host.into(),
             port,
@@ -508,7 +551,14 @@ impl Client {
         if self.passport().is_none() {
             return false;
         }
-        match self.run(Kind::Probe, Channel::Tcp, PROBE_ENDPOINT, &[], &[], Instant::now()) {
+        match self.run(
+            Kind::Probe,
+            Channel::Tcp,
+            PROBE_ENDPOINT,
+            &[],
+            &[],
+            Instant::now(),
+        ) {
             Ok(r) => contains(&r.body, PASSPORT_REFUSAL),
             Err(_) => false,
         }
@@ -524,8 +574,14 @@ impl Client {
 
     /// One call on one channel: `cli_request`, `cli_request_uds`, and the
     /// others of [`Call`].
-    pub fn call(&mut self, channel: Channel, endpoint: &str, call: Call<'_>) -> Result<Response, Error> {
-        self.call_from(channel, endpoint, call, Instant::now()).map_err(|f| f.error)
+    pub fn call(
+        &mut self,
+        channel: Channel,
+        endpoint: &str,
+        call: Call<'_>,
+    ) -> Result<Response, Error> {
+        self.call_from(channel, endpoint, call, Instant::now())
+            .map_err(|f| f.error)
     }
 
     /// `cli_send`: the cell socket when there is a passport with a live
@@ -542,13 +598,16 @@ impl Client {
         if self.cell_socket().is_some() && uds_eligible(endpoint) {
             match self.call_from(Channel::Uds, endpoint, call, t0) {
                 Ok(r) if contains(&r.body, NOT_SERVED) => {}
-                Ok(r) if call.is_post() || r.body.iter().any(|b| !matches!(b, b'\n' | 0)) => return Ok(r),
+                Ok(r) if call.is_post() || r.body.iter().any(|b| !matches!(b, b'\n' | 0)) => {
+                    return Ok(r)
+                }
                 Ok(_) => {}
                 Err(f) if f.sent && call.is_post() => return Err(maybe_applied(endpoint, t0)),
                 Err(_) => {}
             }
         }
-        self.call_from(Channel::Tcp, endpoint, call, t0).map_err(|f| f.error)
+        self.call_from(Channel::Tcp, endpoint, call, t0)
+            .map_err(|f| f.error)
     }
 
     /// A GET of `path` as it is, over TCP, with no credential and no query
@@ -556,13 +615,22 @@ impl Client {
     /// shows anyone on this machine (`/boot-status`). A refused or timed
     /// out connect is tried again as `cli_request`'s is; no heal, no note.
     pub fn get_public(&mut self, path: &str) -> Result<Response, Error> {
-        self.run(Kind::Public, Channel::Tcp, path, &[], &[], Instant::now()).map_err(|f| f.error)
+        self.run(Kind::Public, Channel::Tcp, path, &[], &[], Instant::now())
+            .map_err(|f| f.error)
     }
 
     /// `cli_post_json_stdin`: a JSON body that was read from stdin, over
     /// TCP. Sent once: no tries, no heal, no line, no note.
     pub fn post_json_stdin(&mut self, endpoint: &str, body: &[u8]) -> Result<Response, Error> {
-        self.run(Kind::PostJsonStdin, Channel::Tcp, endpoint, &[], body, Instant::now()).map_err(|f| f.error)
+        self.run(
+            Kind::PostJsonStdin,
+            Channel::Tcp,
+            endpoint,
+            &[],
+            body,
+            Instant::now(),
+        )
+        .map_err(|f| f.error)
     }
 
     /// `k2 respond`'s TCP arm: `args` joined by `&` as a form body, POSTed
@@ -572,7 +640,15 @@ impl Client {
     /// 30 s; only a refused connect is tried again. Nothing is read back:
     /// no heal, no no-answer line, no note. Needs a passport.
     pub fn post_form_bearer(&mut self, endpoint: &str, args: &[&str]) -> Result<Response, Error> {
-        self.run(Kind::BearerForm, Channel::Tcp, endpoint, args, &[], Instant::now()).map_err(|f| f.error)
+        self.run(
+            Kind::BearerForm,
+            Channel::Tcp,
+            endpoint,
+            args,
+            &[],
+            Instant::now(),
+        )
+        .map_err(|f| f.error)
     }
 
     /// `cli_send_json METHOD PATH [payload]`: GET with `payload` as a
@@ -584,7 +660,11 @@ impl Client {
     /// socket and failed is [`Error::MaybeApplied`], never sent again over
     /// TCP; a GET goes to TCP, as the shell's does.
     pub fn send_json(&mut self, post: bool, path: &str, payload: &str) -> Result<Response, Error> {
-        let kind = if post { Kind::SendJsonPost } else { Kind::SendJsonGet };
+        let kind = if post {
+            Kind::SendJsonPost
+        } else {
+            Kind::SendJsonGet
+        };
         let t0 = Instant::now();
         if self.cell_socket().is_some() {
             match self.run(kind, Channel::Uds, path, &[], payload.as_bytes(), t0) {
@@ -594,7 +674,8 @@ impl Client {
                 Err(_) => {}
             }
         }
-        self.run(kind, Channel::Tcp, path, &[], payload.as_bytes(), t0).map_err(|f| f.error)
+        self.run(kind, Channel::Tcp, path, &[], payload.as_bytes(), t0)
+            .map_err(|f| f.error)
     }
 
     /// The cell socket, when there is a passport, the socket is a socket
@@ -604,28 +685,48 @@ impl Client {
             return None;
         }
         match &self.auth {
-            Auth::Passport { sock: Some(sock), .. } if is_socket(sock) => Some(sock),
+            Auth::Passport {
+                sock: Some(sock), ..
+            } if is_socket(sock) => Some(sock),
             _ => None,
         }
     }
 
-    fn call_from(&mut self, channel: Channel, endpoint: &str, call: Call<'_>, t0: Instant) -> Result<Response, Failed> {
+    fn call_from(
+        &mut self,
+        channel: Channel,
+        endpoint: &str,
+        call: Call<'_>,
+        t0: Instant,
+    ) -> Result<Response, Failed> {
         match call {
             Call::Request(args) => self.run(Kind::Request, channel, endpoint, args, &[], t0),
-            Call::RequestPost(args) => self.run(Kind::RequestPost, channel, endpoint, args, &[], t0),
+            Call::RequestPost(args) => {
+                self.run(Kind::RequestPost, channel, endpoint, args, &[], t0)
+            }
             Call::PostForm(args) => self.run(Kind::PostForm, channel, endpoint, args, &[], t0),
             Call::PostJson(body) => self.run(Kind::PostJson, channel, endpoint, &[], body, t0),
         }
     }
 
     /// One shell request function, all its tries included.
-    fn run(&mut self, kind: Kind, channel: Channel, endpoint: &str, args: &[&str], body: &[u8], t0: Instant) -> Result<Response, Failed> {
+    fn run(
+        &mut self,
+        kind: Kind,
+        channel: Channel,
+        endpoint: &str,
+        args: &[&str],
+        body: &[u8],
+        t0: Instant,
+    ) -> Result<Response, Failed> {
         let (target, request) = match self.build(kind, channel, endpoint, args, body) {
             Ok(built) => built,
             // The shell hands curl such a URL, and curl refuses it (3)
             // before it connects: `_cli_curl`'s check still runs.
             Err(Error::BadTarget { .. }) if kind.checks_local_denial() && tmpdir_unusable() => {
-                return Err(Failed::unsent(Error::Denied { endpoint: endpoint.to_string() }));
+                return Err(Failed::unsent(Error::Denied {
+                    endpoint: endpoint.to_string(),
+                }));
             }
             Err(e) => return Err(Failed::unsent(e)),
         };
@@ -634,7 +735,11 @@ impl Client {
         let result = loop {
             let r = self.attempt(kind, &target, &request, max);
             if let Ok(a) = &r {
-                if kind.retries_migrating() && a.status == 503 && contains(&a.body, MIGRATING) && tries < TRIES {
+                if kind.retries_migrating()
+                    && a.status == 503
+                    && contains(&a.body, MIGRATING)
+                    && tries < TRIES
+                {
                     tries += 1;
                     std::thread::sleep(self.pause);
                     continue;
@@ -644,20 +749,38 @@ impl Client {
         };
         let answer = match result {
             Ok(a) => {
-                if kind.says_no_answer() && kind.reads_status() && a.body.is_empty() && (500..600).contains(&a.status) {
-                    return Err(Failed { error: Error::NoAnswer(no_answer(endpoint, t0, true)), sent: true });
+                if kind.says_no_answer()
+                    && kind.reads_status()
+                    && a.body.is_empty()
+                    && (500..600).contains(&a.status)
+                {
+                    return Err(Failed {
+                        error: Error::NoAnswer(no_answer(endpoint, t0, true)),
+                        sent: true,
+                    });
                 }
                 a
             }
             Err(f) => {
                 let sent = f.sent();
                 if kind.checks_local_denial() && locally_denied(&f, &self.host) {
-                    return Err(Failed { error: Error::Denied { endpoint: endpoint.to_string() }, sent });
+                    return Err(Failed {
+                        error: Error::Denied {
+                            endpoint: endpoint.to_string(),
+                        },
+                        sent,
+                    });
                 }
-                return Err(Failed { error: failure(kind, endpoint, f, t0), sent });
+                return Err(Failed {
+                    error: failure(kind, endpoint, f, t0),
+                    sent,
+                });
             }
         };
-        if kind == Kind::RequestPost && channel == Channel::Tcp && contains(&answer.body, METHOD_NOT_ALLOWED) {
+        if kind == Kind::RequestPost
+            && channel == Channel::Tcp
+            && contains(&answer.body, METHOD_NOT_ALLOWED)
+        {
             return self.run(Kind::Request, Channel::Tcp, endpoint, args, &[], t0);
         }
         if kind.heals() && contains(&answer.body, PASSPORT_REFUSAL) && self.heal() {
@@ -674,8 +797,18 @@ impl Client {
         } else {
             None
         };
-        let server_version = answer.server_version.as_deref().and_then(skew::clean).map(str::to_string);
-        Ok(Response { status: answer.status, body: answer.body, channel, permission, server_version })
+        let server_version = answer
+            .server_version
+            .as_deref()
+            .and_then(skew::clean)
+            .map(str::to_string);
+        Ok(Response {
+            status: answer.status,
+            body: answer.body,
+            channel,
+            permission,
+            server_version,
+        })
     }
 
     /// Switches to a healed passport, once per client.
@@ -702,18 +835,33 @@ impl Client {
     fn max_time(&self, kind: Kind) -> Duration {
         match kind {
             Kind::PostForm | Kind::PostJson => self.post_max_time.unwrap_or(MAX_TIME),
-            Kind::SendJsonGet | Kind::SendJsonPost => self.send_max_time.unwrap_or(SEND_JSON_MAX_TIME),
-            Kind::Request | Kind::RequestPost | Kind::PostJsonStdin | Kind::Public | Kind::BearerForm => MAX_TIME,
+            Kind::SendJsonGet | Kind::SendJsonPost => {
+                self.send_max_time.unwrap_or(SEND_JSON_MAX_TIME)
+            }
+            Kind::Request
+            | Kind::RequestPost
+            | Kind::PostJsonStdin
+            | Kind::Public
+            | Kind::BearerForm => MAX_TIME,
             Kind::Probe => PROBE_MAX_TIME,
         }
     }
 
     /// `_cli_curl`'s loop: a connect that timed out, again (its kinds).
-    fn attempt(&self, kind: Kind, target: &Target, request: &Request, max: Duration) -> Result<Answer, Failure> {
+    fn attempt(
+        &self,
+        kind: Kind,
+        target: &Target,
+        request: &Request,
+        max: Duration,
+    ) -> Result<Answer, Failure> {
         let mut tries = 1;
         loop {
             let r = self.curl(kind, target, request, max);
-            if matches!(r, Err(Failure::ConnectTimedOut)) && kind.retries_connect_timeout() && tries < TRIES {
+            if matches!(r, Err(Failure::ConnectTimedOut))
+                && kind.retries_connect_timeout()
+                && tries < TRIES
+            {
                 tries += 1;
                 std::thread::sleep(self.pause);
                 continue;
@@ -724,7 +872,13 @@ impl Client {
 
     /// `_k2_curl`'s loop: a refused connect, again, following a moved
     /// port; a body from stdin never.
-    fn curl(&self, kind: Kind, target: &Target, request: &Request, max: Duration) -> Result<Answer, Failure> {
+    fn curl(
+        &self,
+        kind: Kind,
+        target: &Target,
+        request: &Request,
+        max: Duration,
+    ) -> Result<Answer, Failure> {
         let mut target = target.clone();
         let mut request = request.clone();
         let mut tries = 1;
@@ -787,26 +941,55 @@ impl Client {
     }
 
     /// The request, byte for byte the shell's for this kind and channel.
-    fn build(&self, kind: Kind, channel: Channel, endpoint: &str, args: &[&str], body: &[u8]) -> Result<(Target, Request), Error> {
+    fn build(
+        &self,
+        kind: Kind,
+        channel: Channel,
+        endpoint: &str,
+        args: &[&str],
+        body: &[u8],
+    ) -> Result<(Target, Request), Error> {
         let mut headers: Vec<(String, String)> = Vec::new();
         let (target, host) = match channel {
             Channel::Tcp if matches!(kind, Kind::Probe | Kind::BearerForm) => {
                 // A config line read before the command line's `-H`s, as
                 // on the cell socket.
                 let Some(passport) = self.passport() else {
-                    return Err(Error::NoCredential { endpoint: endpoint.to_string() });
+                    return Err(Error::NoCredential {
+                        endpoint: endpoint.to_string(),
+                    });
                 };
-                headers.push(("Authorization".into(), format!("Bearer {}", passport.as_str())));
-                (Target::Tcp { host: self.host.clone(), port: self.port }, format!("{}:{}", self.host, self.port))
+                headers.push((
+                    "Authorization".into(),
+                    format!("Bearer {}", passport.as_str()),
+                ));
+                (
+                    Target::Tcp {
+                        host: self.host.clone(),
+                        port: self.port,
+                    },
+                    format!("{}:{}", self.host, self.port),
+                )
             }
-            Channel::Tcp => (Target::Tcp { host: self.host.clone(), port: self.port }, format!("{}:{}", self.host, self.port)),
+            Channel::Tcp => (
+                Target::Tcp {
+                    host: self.host.clone(),
+                    port: self.port,
+                },
+                format!("{}:{}", self.host, self.port),
+            ),
             Channel::Uds => {
-                let no = || Error::NoCellSocket { endpoint: endpoint.to_string() };
+                let no = || Error::NoCellSocket {
+                    endpoint: endpoint.to_string(),
+                };
                 let Auth::Passport { passport, sock } = &self.auth else {
                     return Err(no());
                 };
                 let sock = sock.as_ref().ok_or_else(no)?;
-                headers.push(("Authorization".into(), format!("Bearer {}", passport.as_str())));
+                headers.push((
+                    "Authorization".into(),
+                    format!("Bearer {}", passport.as_str()),
+                ));
                 (uds_target(sock, endpoint)?, "localhost".to_string())
             }
         };
@@ -823,13 +1006,20 @@ impl Client {
         let token = match (kind, self.tcp_token()) {
             (Kind::Public | Kind::Probe | Kind::BearerForm, _) => "",
             (_, Some(t)) => t,
-            (_, None) => return Err(Error::NoCredential { endpoint: endpoint.to_string() }),
+            (_, None) => {
+                return Err(Error::NoCredential {
+                    endpoint: endpoint.to_string(),
+                })
+            }
         };
         let with_project = || format!("token={token}&project={}", quote(&self.project));
         let joined = args.join("&");
         let json = |headers: &mut Vec<(String, String)>| {
             headers.push(("Content-Type".into(), "application/json".into()));
-            Some(Body { bytes: body.to_vec(), curl_form_type: false })
+            Some(Body {
+                bytes: body.to_vec(),
+                curl_form_type: false,
+            })
         };
         let (method, path, body) = match kind {
             Kind::Request => {
@@ -862,15 +1052,37 @@ impl Client {
                 } else {
                     format!("{endpoint}{sep}{joined}")
                 };
-                (Method::Post, path, Some(Body { bytes: Vec::new(), curl_form_type: true }))
+                (
+                    Method::Post,
+                    path,
+                    Some(Body {
+                        bytes: Vec::new(),
+                        curl_form_type: true,
+                    }),
+                )
             }
             Kind::PostForm => {
-                let path = if tcp { format!("{endpoint}?{}", with_project()) } else { endpoint.to_string() };
+                let path = if tcp {
+                    format!("{endpoint}?{}", with_project())
+                } else {
+                    endpoint.to_string()
+                };
                 headers.push(("Content-Type".into(), wire::FORM_TYPE.into()));
-                (Method::Post, path, Some(Body { bytes: joined.into_bytes(), curl_form_type: false }))
+                (
+                    Method::Post,
+                    path,
+                    Some(Body {
+                        bytes: joined.into_bytes(),
+                        curl_form_type: false,
+                    }),
+                )
             }
             Kind::PostJson | Kind::PostJsonStdin => {
-                let path = if tcp { format!("{endpoint}?token={token}") } else { endpoint.to_string() };
+                let path = if tcp {
+                    format!("{endpoint}?token={token}")
+                } else {
+                    endpoint.to_string()
+                };
                 (Method::Post, path, json(&mut headers))
             }
             Kind::SendJsonGet => {
@@ -890,17 +1102,38 @@ impl Client {
                 (Method::Get, path, None)
             }
             Kind::SendJsonPost => {
-                let path = if tcp { format!("{endpoint}?token={}", quote(token)) } else { endpoint.to_string() };
+                let path = if tcp {
+                    format!("{endpoint}?token={}", quote(token))
+                } else {
+                    endpoint.to_string()
+                };
                 (Method::Post, path, json(&mut headers))
             }
             Kind::Public | Kind::Probe => (Method::Get, endpoint.to_string(), None),
             Kind::BearerForm => {
                 headers.push(("Content-Type".into(), wire::FORM_TYPE.into()));
-                (Method::Post, endpoint.to_string(), Some(Body { bytes: joined.into_bytes(), curl_form_type: false }))
+                (
+                    Method::Post,
+                    endpoint.to_string(),
+                    Some(Body {
+                        bytes: joined.into_bytes(),
+                        curl_form_type: false,
+                    }),
+                )
             }
         };
-        wire::check_target(&path).map_err(|byte| Error::BadTarget { target: path.clone(), byte })?;
-        let request = Request { method, target: path, host, user_agent: format!("k5/{}", self.version), headers, body };
+        wire::check_target(&path).map_err(|byte| Error::BadTarget {
+            target: path.clone(),
+            byte,
+        })?;
+        let request = Request {
+            method,
+            target: path,
+            host,
+            user_agent: format!("k5/{}", self.version),
+            headers,
+            body,
+        };
         Ok((target, request))
     }
 }
@@ -912,7 +1145,9 @@ fn uds_target(sock: &Path, _endpoint: &str) -> Result<Target, Error> {
 
 #[cfg(not(unix))]
 fn uds_target(_sock: &Path, endpoint: &str) -> Result<Target, Error> {
-    Err(Error::NoCellSocket { endpoint: endpoint.to_string() })
+    Err(Error::NoCellSocket {
+        endpoint: endpoint.to_string(),
+    })
 }
 
 /// `[ -S path ]`: a socket, through any links.
@@ -932,13 +1167,23 @@ pub fn is_socket(_path: &Path) -> bool {
 fn failure(kind: Kind, endpoint: &str, f: Failure, t0: Instant) -> Error {
     let endpoint = endpoint.to_string();
     match f {
-        Failure::TimedOut | Failure::ConnectTimedOut if kind.says_no_answer() => Error::NoAnswer(no_answer(&endpoint, t0, false)),
+        Failure::TimedOut | Failure::ConnectTimedOut if kind.says_no_answer() => {
+            Error::NoAnswer(no_answer(&endpoint, t0, false))
+        }
         Failure::Empty if kind.says_no_answer() => Error::NoAnswer(no_answer(&endpoint, t0, true)),
         Failure::TimedOut | Failure::ConnectTimedOut => Error::TimedOut { endpoint },
         Failure::Empty => Error::Empty { endpoint },
         Failure::Connect(err) => Error::Unreachable { endpoint, err },
-        Failure::NotSent(why) => Error::Broken { endpoint, why, curl: wire::curl::SEND_ERROR },
-        Failure::Broken { curl, why } => Error::Broken { endpoint, why, curl },
+        Failure::NotSent(why) => Error::Broken {
+            endpoint,
+            why,
+            curl: wire::curl::SEND_ERROR,
+        },
+        Failure::Broken { curl, why } => Error::Broken {
+            endpoint,
+            why,
+            curl,
+        },
     }
 }
 
@@ -976,7 +1221,9 @@ fn os_denied(e: &io::Error, _host: &str) -> bool {
 
 /// `[ ! -d "$td" ] || [ ! -w "$td" ]` with `td=${TMPDIR:-/tmp}`.
 pub fn tmpdir_unusable() -> bool {
-    let td = std::env::var_os("TMPDIR").filter(|t| !t.is_empty()).map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    let td = std::env::var_os("TMPDIR")
+        .filter(|t| !t.is_empty())
+        .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
     !td.is_dir() || !writable(&td)
 }
 
@@ -996,11 +1243,18 @@ fn writable(dir: &Path) -> bool {
 }
 
 fn maybe_applied(endpoint: &str, t0: Instant) -> Error {
-    Error::MaybeApplied { endpoint: endpoint.to_string(), waited: t0.elapsed().as_secs() }
+    Error::MaybeApplied {
+        endpoint: endpoint.to_string(),
+        waited: t0.elapsed().as_secs(),
+    }
 }
 
 fn no_answer(endpoint: &str, t0: Instant, empty: bool) -> NoAnswer {
-    NoAnswer { endpoint: endpoint.to_string(), waited: t0.elapsed().as_secs(), empty }
+    NoAnswer {
+        endpoint: endpoint.to_string(),
+        waited: t0.elapsed().as_secs(),
+        empty,
+    }
 }
 
 fn contains(hay: &[u8], needle: &str) -> bool {
@@ -1015,18 +1269,38 @@ mod tests {
     #[test]
     fn an_empty_passport_is_none() {
         assert!(Passport::new("").is_none());
-        assert_eq!(Passport::new("s.x").map(|p| p.as_str().to_string()), Some("s.x".to_string()));
+        assert_eq!(
+            Passport::new("s.x").map(|p| p.as_str().to_string()),
+            Some("s.x".to_string())
+        );
         // Never printed.
-        assert_eq!(format!("{:?}", Passport::new("s.secret").unwrap()), "Passport(..)");
-        assert_eq!(format!("{:?}", Auth::Owner("owner-secret".into())), "Owner(..)");
+        assert_eq!(
+            format!("{:?}", Passport::new("s.secret").unwrap()),
+            "Passport(..)"
+        );
+        assert_eq!(
+            format!("{:?}", Auth::Owner("owner-secret".into())),
+            "Owner(..)"
+        );
         assert_eq!(format!("{:?}", Auth::None), "None");
     }
 
     #[test]
     fn the_no_answer_lines_are_the_shell_s() {
-        let n = NoAnswer { endpoint: "/cli/inbox/list".into(), waited: 30, empty: false };
-        assert_eq!(n.to_string(), "Error: K2's server didn't answer /cli/inbox/list within 30 s; run k2 daemon status");
-        let n = NoAnswer { endpoint: "/cli/inbox/list".into(), waited: 0, empty: true };
+        let n = NoAnswer {
+            endpoint: "/cli/inbox/list".into(),
+            waited: 30,
+            empty: false,
+        };
+        assert_eq!(
+            n.to_string(),
+            "Error: K2's server didn't answer /cli/inbox/list within 30 s; run k2 daemon status"
+        );
+        let n = NoAnswer {
+            endpoint: "/cli/inbox/list".into(),
+            waited: 0,
+            empty: true,
+        };
         assert_eq!(n.to_string(), "Error: K2's server gave an empty answer to /cli/inbox/list after 0 s; run k2 daemon status");
     }
 
@@ -1034,22 +1308,66 @@ mod tests {
     fn each_failure_has_the_shell_s_code() {
         let ep = || "/cli/x".to_string();
         let rows: [(Error, i32); 10] = [
-            (Error::NoAnswer(NoAnswer { endpoint: ep(), waited: 30, empty: false }), 28),
-            (Error::NoAnswer(NoAnswer { endpoint: ep(), waited: 0, empty: true }), 52),
-            (Error::Unreachable { endpoint: ep(), err: io::Error::from(io::ErrorKind::ConnectionRefused) }, 7),
+            (
+                Error::NoAnswer(NoAnswer {
+                    endpoint: ep(),
+                    waited: 30,
+                    empty: false,
+                }),
+                28,
+            ),
+            (
+                Error::NoAnswer(NoAnswer {
+                    endpoint: ep(),
+                    waited: 0,
+                    empty: true,
+                }),
+                52,
+            ),
+            (
+                Error::Unreachable {
+                    endpoint: ep(),
+                    err: io::Error::from(io::ErrorKind::ConnectionRefused),
+                },
+                7,
+            ),
             (Error::TimedOut { endpoint: ep() }, 28),
             (Error::Empty { endpoint: ep() }, 52),
-            (Error::Broken { endpoint: ep(), why: "read".into(), curl: 56 }, 56),
-            (Error::BadTarget { target: "/a b".into(), byte: b' ' }, 3),
+            (
+                Error::Broken {
+                    endpoint: ep(),
+                    why: "read".into(),
+                    curl: 56,
+                },
+                56,
+            ),
+            (
+                Error::BadTarget {
+                    target: "/a b".into(),
+                    byte: b' ',
+                },
+                3,
+            ),
             (Error::Denied { endpoint: ep() }, 75),
-            (Error::MaybeApplied { endpoint: ep(), waited: 1 }, 1),
+            (
+                Error::MaybeApplied {
+                    endpoint: ep(),
+                    waited: 1,
+                },
+                1,
+            ),
             (Error::NoCredential { endpoint: ep() }, 1),
         ];
         for (e, want) in rows {
             assert_eq!(e.curl_code(), want, "{e:?}");
         }
         assert!(matches!(
-            failure(Kind::PostForm, "/x", Failure::NotSent("send".into()), Instant::now()),
+            failure(
+                Kind::PostForm,
+                "/x",
+                Failure::NotSent("send".into()),
+                Instant::now()
+            ),
             Error::Broken { curl: 55, .. }
         ));
     }
@@ -1060,7 +1378,10 @@ mod tests {
     #[test]
     fn the_os_refusing_a_connect_is_local() {
         let e = |n: i32| io::Error::from_raw_os_error(n);
-        assert!(!locally_denied(&Failure::Connect(io::Error::from(io::ErrorKind::ConnectionRefused)), "127.0.0.1"));
+        assert!(!locally_denied(
+            &Failure::Connect(io::Error::from(io::ErrorKind::ConnectionRefused)),
+            "127.0.0.1"
+        ));
         for n in [libc::EPERM, libc::EACCES, libc::EAFNOSUPPORT] {
             assert!(locally_denied(&Failure::Connect(e(n)), "127.0.0.1"), "{n}");
         }
@@ -1068,7 +1389,15 @@ mod tests {
         assert!(!os_denied(&e(libc::ENETUNREACH), "127.0.0.1"));
         assert!(!os_denied(&e(libc::ENOENT), "127.0.0.1"));
         assert!(Kind::Request.checks_local_denial() && Kind::RequestPost.checks_local_denial());
-        for k in [Kind::PostForm, Kind::PostJson, Kind::PostJsonStdin, Kind::SendJsonGet, Kind::SendJsonPost, Kind::Public, Kind::Probe] {
+        for k in [
+            Kind::PostForm,
+            Kind::PostJson,
+            Kind::PostJsonStdin,
+            Kind::SendJsonGet,
+            Kind::SendJsonPost,
+            Kind::Public,
+            Kind::Probe,
+        ] {
             assert!(!k.checks_local_denial(), "{k:?}");
         }
     }
@@ -1083,7 +1412,16 @@ mod tests {
             (RequestPost, true, true, true, true, true, true, false),
             (PostForm, false, false, false, true, true, true, false),
             (PostJson, false, false, false, true, true, true, false),
-            (PostJsonStdin, false, false, false, false, false, false, true),
+            (
+                PostJsonStdin,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+            ),
             (SendJsonGet, false, false, false, false, true, true, false),
             (SendJsonPost, false, false, false, false, true, true, false),
             (Public, false, true, false, true, false, false, false),
@@ -1134,9 +1472,23 @@ mod tests {
     #[test]
     fn the_owner_has_no_cell_socket_arm() {
         let mut c = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
-        assert!(matches!(c.call(Channel::Uds, "/cli/inbox/list", Call::Request(&[])), Err(Error::NoCellSocket { .. })));
-        let mut c = Client::new("127.0.0.1", 1, "/p", Auth::Passport { passport: Passport::new("s.x").unwrap(), sock: None });
-        assert!(matches!(c.call(Channel::Uds, "/cli/inbox/list", Call::Request(&[])), Err(Error::NoCellSocket { .. })));
+        assert!(matches!(
+            c.call(Channel::Uds, "/cli/inbox/list", Call::Request(&[])),
+            Err(Error::NoCellSocket { .. })
+        ));
+        let mut c = Client::new(
+            "127.0.0.1",
+            1,
+            "/p",
+            Auth::Passport {
+                passport: Passport::new("s.x").unwrap(),
+                sock: None,
+            },
+        );
+        assert!(matches!(
+            c.call(Channel::Uds, "/cli/inbox/list", Call::Request(&[])),
+            Err(Error::NoCellSocket { .. })
+        ));
     }
 
     /// With no credential only the public GET is built; every other call
@@ -1144,12 +1496,31 @@ mod tests {
     #[test]
     fn no_credential_sends_only_the_public_get() {
         let mut c = Client::new("127.0.0.1", 1, "/p", Auth::None);
-        for call in [Call::Request(&[]), Call::RequestPost(&[]), Call::PostForm(&["a=b"]), Call::PostJson(b"{}")] {
-            assert!(matches!(c.call(Channel::Tcp, "/cli/x", call), Err(Error::NoCredential { .. })), "{call:?}");
+        for call in [
+            Call::Request(&[]),
+            Call::RequestPost(&[]),
+            Call::PostForm(&["a=b"]),
+            Call::PostJson(b"{}"),
+        ] {
+            assert!(
+                matches!(
+                    c.call(Channel::Tcp, "/cli/x", call),
+                    Err(Error::NoCredential { .. })
+                ),
+                "{call:?}"
+            );
         }
-        assert!(matches!(c.post_json_stdin("/cli/x", b"{}"), Err(Error::NoCredential { .. })));
-        assert!(matches!(c.send_json(false, "/cli/x", ""), Err(Error::NoCredential { .. })));
-        let (_, r) = c.build(Kind::Public, Channel::Tcp, "/boot-status", &[], &[]).unwrap();
+        assert!(matches!(
+            c.post_json_stdin("/cli/x", b"{}"),
+            Err(Error::NoCredential { .. })
+        ));
+        assert!(matches!(
+            c.send_json(false, "/cli/x", ""),
+            Err(Error::NoCredential { .. })
+        ));
+        let (_, r) = c
+            .build(Kind::Public, Channel::Tcp, "/boot-status", &[], &[])
+            .unwrap();
         assert_eq!(r.target, "/boot-status");
         assert_eq!(r.method, Method::Get);
         assert!(r.body.is_none());
@@ -1161,41 +1532,99 @@ mod tests {
     /// whose token came from disk, never on the public GET.
     #[test]
     fn the_owner_source_header() {
-        let names = |c: &Client, kind: Kind| -> Vec<(String, String)> { c.build(kind, Channel::Tcp, "/cli/x", &[], &[]).unwrap().1.headers };
+        let names = |c: &Client, kind: Kind| -> Vec<(String, String)> {
+            c.build(kind, Channel::Tcp, "/cli/x", &[], &[])
+                .unwrap()
+                .1
+                .headers
+        };
         let mut c = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
-        assert!(names(&c, Kind::Request).iter().all(|(n, _)| n != OWNER_SOURCE_HEADER));
+        assert!(names(&c, Kind::Request)
+            .iter()
+            .all(|(n, _)| n != OWNER_SOURCE_HEADER));
         c.owner_from_disk = true;
         c.would_refuse = true;
         let got = names(&c, Kind::Request);
         let order: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(order, [WOULD_REFUSE_HEADER, VERSION_HEADER, VIA_HEADER, OWNER_SOURCE_HEADER]);
+        assert_eq!(
+            order,
+            [
+                WOULD_REFUSE_HEADER,
+                VERSION_HEADER,
+                VIA_HEADER,
+                OWNER_SOURCE_HEADER
+            ]
+        );
         assert_eq!(got[3].1, "disk");
-        assert!(names(&c, Kind::Public).iter().all(|(n, _)| n != OWNER_SOURCE_HEADER));
-        let mut p = Client::new("127.0.0.1", 1, "/p", Auth::Passport { passport: Passport::new("s.x").unwrap(), sock: None });
+        assert!(names(&c, Kind::Public)
+            .iter()
+            .all(|(n, _)| n != OWNER_SOURCE_HEADER));
+        let mut p = Client::new(
+            "127.0.0.1",
+            1,
+            "/p",
+            Auth::Passport {
+                passport: Passport::new("s.x").unwrap(),
+                sock: None,
+            },
+        );
         p.owner_from_disk = true;
-        assert!(names(&p, Kind::Request).iter().all(|(n, _)| n != OWNER_SOURCE_HEADER), "never with a passport");
+        assert!(
+            names(&p, Kind::Request)
+                .iter()
+                .all(|(n, _)| n != OWNER_SOURCE_HEADER),
+            "never with a passport"
+        );
     }
 
     /// The probe: the endpoint as it is, the passport as Bearer before
     /// the custom headers, no token in the query and no Owner-Source.
     #[test]
     fn the_probe_request() {
-        let mut p = Client::new("127.0.0.1", 4000, "/p", Auth::Passport { passport: Passport::new("s.x").unwrap(), sock: None });
+        let mut p = Client::new(
+            "127.0.0.1",
+            4000,
+            "/p",
+            Auth::Passport {
+                passport: Passport::new("s.x").unwrap(),
+                sock: None,
+            },
+        );
         p.would_refuse = true;
         p.owner_from_disk = true;
-        let (target, r) = p.build(Kind::Probe, Channel::Tcp, PROBE_ENDPOINT, &[], &[]).unwrap();
+        let (target, r) = p
+            .build(Kind::Probe, Channel::Tcp, PROBE_ENDPOINT, &[], &[])
+            .unwrap();
         assert!(matches!(target, Target::Tcp { ref host, port: 4000 } if host == "127.0.0.1"));
-        assert_eq!((r.method, r.target.as_str(), r.host.as_str()), (Method::Get, "/cli/whoami", "127.0.0.1:4000"));
+        assert_eq!(
+            (r.method, r.target.as_str(), r.host.as_str()),
+            (Method::Get, "/cli/whoami", "127.0.0.1:4000")
+        );
         assert!(r.body.is_none());
-        let names: Vec<(&str, &str)> = r.headers.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+        let names: Vec<(&str, &str)> = r
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
         assert_eq!(names[0], ("Authorization", "Bearer s.x"));
         let order: Vec<&str> = names.iter().map(|(n, _)| *n).collect();
-        assert_eq!(order, ["Authorization", WOULD_REFUSE_HEADER, VERSION_HEADER, VIA_HEADER]);
+        assert_eq!(
+            order,
+            [
+                "Authorization",
+                WOULD_REFUSE_HEADER,
+                VERSION_HEADER,
+                VIA_HEADER
+            ]
+        );
         assert_eq!(Kind::Probe.connect_timeout(), Duration::from_secs(3));
         assert_eq!(Kind::Request.connect_timeout(), Duration::from_secs(5));
         // No passport, no probe: nothing is sent (port 1: nothing listens).
         let mut o = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
-        assert!(matches!(o.build(Kind::Probe, Channel::Tcp, PROBE_ENDPOINT, &[], &[]), Err(Error::NoCredential { .. })));
+        assert!(matches!(
+            o.build(Kind::Probe, Channel::Tcp, PROBE_ENDPOINT, &[], &[]),
+            Err(Error::NoCredential { .. })
+        ));
         assert!(!o.passport_rejected());
     }
 
@@ -1203,15 +1632,41 @@ mod tests {
     /// body, no query of ours, never the owner-source line.
     #[test]
     fn the_bearer_form_request() {
-        let mut p = Client::new("127.0.0.1", 4000, "/p", Auth::Passport { passport: Passport::new("s.x").unwrap(), sock: None });
+        let mut p = Client::new(
+            "127.0.0.1",
+            4000,
+            "/p",
+            Auth::Passport {
+                passport: Passport::new("s.x").unwrap(),
+                sock: None,
+            },
+        );
         p.would_refuse = true;
         p.owner_from_disk = true;
-        let (target, r) = p.build(Kind::BearerForm, Channel::Tcp, "/cli/respond", &["message=hi%20there", "final=1"], &[]).unwrap();
+        let (target, r) = p
+            .build(
+                Kind::BearerForm,
+                Channel::Tcp,
+                "/cli/respond",
+                &["message=hi%20there", "final=1"],
+                &[],
+            )
+            .unwrap();
         assert!(matches!(target, Target::Tcp { ref host, port: 4000 } if host == "127.0.0.1"));
-        assert_eq!((r.method, r.target.as_str(), r.host.as_str()), (Method::Post, "/cli/respond", "127.0.0.1:4000"));
+        assert_eq!(
+            (r.method, r.target.as_str(), r.host.as_str()),
+            (Method::Post, "/cli/respond", "127.0.0.1:4000")
+        );
         let body = r.body.as_ref().expect("a body");
-        assert_eq!((body.bytes.as_slice(), body.curl_form_type), (&b"message=hi%20there&final=1"[..], false));
-        let names: Vec<(&str, &str)> = r.headers.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+        assert_eq!(
+            (body.bytes.as_slice(), body.curl_form_type),
+            (&b"message=hi%20there&final=1"[..], false)
+        );
+        let names: Vec<(&str, &str)> = r
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
         assert_eq!(
             names,
             [
@@ -1223,20 +1678,33 @@ mod tests {
             ]
         );
         let mut o = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
-        assert!(matches!(o.post_form_bearer("/cli/respond", &["message=x"]), Err(Error::NoCredential { .. })));
+        assert!(matches!(
+            o.post_form_bearer("/cli/respond", &["message=x"]),
+            Err(Error::NoCredential { .. })
+        ));
     }
 
     #[test]
     fn a_target_curl_refuses_is_not_sent() {
         let mut c = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
-        assert!(matches!(c.call(Channel::Tcp, "/cli/x", Call::Request(&["a=b c"])), Err(Error::BadTarget { byte: b' ', .. })));
-        assert!(matches!(c.call(Channel::Tcp, "/cli/x#y", Call::PostJson(b"{}")), Err(Error::BadTarget { byte: b'#', .. })));
+        assert!(matches!(
+            c.call(Channel::Tcp, "/cli/x", Call::Request(&["a=b c"])),
+            Err(Error::BadTarget { byte: b' ', .. })
+        ));
+        assert!(matches!(
+            c.call(Channel::Tcp, "/cli/x#y", Call::PostJson(b"{}")),
+            Err(Error::BadTarget { byte: b'#', .. })
+        ));
     }
 
     fn scratch(tag: &str) -> PathBuf {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static N: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!("k5-client-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        let dir = std::env::temp_dir().join(format!(
+            "k5-client-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
         if dir.exists() {
             std::fs::remove_dir_all(&dir).unwrap();
         }
@@ -1267,14 +1735,23 @@ mod tests {
             ("ses-sA.x\n", None),
         ] {
             std::fs::write(&file, content).unwrap();
-            assert_eq!(healer.healed(&cur).map(|p| p.as_str().to_string()), want.map(str::to_string), "{content:?}");
+            assert_eq!(
+                healer.healed(&cur).map(|p| p.as_str().to_string()),
+                want.map(str::to_string),
+                "{content:?}"
+            );
         }
         // An owner-shaped token (no dot) never heals.
         std::fs::write(&file, "sessA.newsecret\n").unwrap();
         assert_eq!(healer.healed(&Passport::new("ownertoken").unwrap()), None);
         // A dash in the session part is fine.
         std::fs::write(&file, "s-1.b2\n").unwrap();
-        assert_eq!(healer.healed(&Passport::new("s-1.a1").unwrap()).map(|p| p.as_str().to_string()), Some("s-1.b2".to_string()));
+        assert_eq!(
+            healer
+                .healed(&Passport::new("s-1.a1").unwrap())
+                .map(|p| p.as_str().to_string()),
+            Some("s-1.b2".to_string())
+        );
         // A link is not followed; a folder is not a file.
         #[cfg(unix)]
         {
@@ -1287,7 +1764,11 @@ mod tests {
         }
         std::fs::create_dir(&file).unwrap();
         assert_eq!(healer.healed(&cur), None, "a folder");
-        assert_eq!(SecretsDir(PathBuf::new()).healed(&cur), None, "no folder set");
+        assert_eq!(
+            SecretsDir(PathBuf::new()).healed(&cur),
+            None,
+            "no folder set"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

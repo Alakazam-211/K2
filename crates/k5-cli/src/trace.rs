@@ -42,10 +42,17 @@ pub fn start() {
     STATE.get_or_init(|| {
         let value = std::env::var_os(TRACE_VAR).filter(|v| !v.is_empty())?;
         let now = Instant::now();
-        if let Some(ms) = value.to_str().and_then(|v| v.parse::<u64>().ok()).and_then(spawn_to_now_ms) {
+        if let Some(ms) = value
+            .to_str()
+            .and_then(|v| v.parse::<u64>().ok())
+            .and_then(spawn_to_now_ms)
+        {
             line("spawn to main", ms);
         }
-        Some(Mutex::new(State { start: now, last: now }))
+        Some(Mutex::new(State {
+            start: now,
+            last: now,
+        }))
     });
 }
 
@@ -54,7 +61,9 @@ pub fn mark(name: &str) {
     let Some(Some(state)) = STATE.get() else {
         return;
     };
-    let mut s = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut s = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let now = Instant::now();
     line(name, ms(now - s.last));
     s.last = now;
@@ -67,7 +76,9 @@ pub fn finish(name: &str) {
     let Some(Some(state)) = STATE.get() else {
         return;
     };
-    let s = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let s = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     line("total", ms(s.last - s.start));
 }
 
@@ -102,7 +113,10 @@ fn clock_ns() -> Option<u64> {
     let id = libc::CLOCK_MONOTONIC;
     #[cfg(target_os = "macos")]
     let id = libc::CLOCK_UPTIME_RAW;
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     // SAFETY: clock_gettime writes one timespec through a pointer to a
     // local that lives for the call.
     let rc = unsafe { libc::clock_gettime(id, &mut ts) };
@@ -126,7 +140,10 @@ mod tests {
     #[test]
     fn the_line_names_the_phase_and_its_milliseconds() {
         assert_eq!(format_line("route", 0.0123), "k5 timing: route 0.012 ms\n");
-        assert_eq!(format_line("cache open and hash", 3.5), "k5 timing: cache open and hash 3.500 ms\n");
+        assert_eq!(
+            format_line("cache open and hash", 3.5),
+            "k5 timing: cache open and hash 3.500 ms\n"
+        );
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

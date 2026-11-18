@@ -43,7 +43,9 @@ pub mod whoami;
 /// The port as curl takes it from the shell's URL: digits only, and a
 /// port number.
 pub fn curl_port(text: &str) -> Option<u16> {
-    (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())).then(|| text.parse().ok()).flatten()
+    (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| text.parse().ok())
+        .flatten()
 }
 
 /// What `printf '%s' "$out"` prints of a body the shell read into `out`
@@ -63,12 +65,20 @@ pub struct Shown {
 impl Shown {
     /// Only `stdout`, and exit 0.
     pub fn out(stdout: impl Into<String>) -> Shown {
-        Shown { stdout: stdout.into(), stderr: String::new(), exit: Exit::Ok }
+        Shown {
+            stdout: stdout.into(),
+            stderr: String::new(),
+            exit: Exit::Ok,
+        }
     }
 
     /// Only `stderr`, and `exit`.
     pub fn err(stderr: impl Into<String>, exit: Exit) -> Shown {
-        Shown { stdout: String::new(), stderr: stderr.into(), exit }
+        Shown {
+            stdout: String::new(),
+            stderr: stderr.into(),
+            exit,
+        }
     }
 
     /// Writes stdout, then stderr; the exit. A broken stdout ends as
@@ -128,18 +138,29 @@ pub struct Piped {
 /// `cli_send cli_request <endpoint> <args>` on the left of a pipe (see the
 /// module's notes). Each answer goes through `closing`. A request with no
 /// answer never comes back: its line, then [`end_in_pipe`].
-pub fn request_piped(client: &mut Client, closing: &mut Closing, endpoint: &str, args: &[&str]) -> Piped {
+pub fn request_piped(
+    client: &mut Client,
+    closing: &mut Closing,
+    endpoint: &str,
+    args: &[&str],
+) -> Piped {
     let passport = client.passport().is_some();
     match client.send(endpoint, Call::Request(args)) {
         Ok(r) => {
             closing.answer(&r, passport);
-            Piped { body: piped_body(&r), exit: Exit::Ok }
+            Piped {
+                body: piped_body(&r),
+                exit: Exit::Ok,
+            }
         }
         Err(Error::NoAnswer(n)) => {
             out::stderr_line(&n.to_string());
             end_in_pipe()
         }
-        Err(e) => Piped { body: Vec::new(), exit: Exit::from_curl(e.curl_code()) },
+        Err(e) => Piped {
+            body: Vec::new(),
+            exit: Exit::from_curl(e.curl_code()),
+        },
     }
 }
 
@@ -164,13 +185,17 @@ pub fn pipefail(call: Exit, reader: Exit) -> Exit {
 /// one the shell prints the answer as it came (or Python's "command not
 /// found"), so a family hands such a line to the shell.
 pub fn has_python3() -> bool {
-    std::env::var_os("PATH").is_some_and(|path| crate::daemon::find_on_path("python3", path).is_some())
+    std::env::var_os("PATH")
+        .is_some_and(|path| crate::daemon::find_on_path("python3", path).is_some())
 }
 
 /// The `HOOK_SOCK` setting (its K5_, K2_ and K2SO_ names, empty counts as
 /// unset).
 pub fn hook_sock() -> Option<std::path::PathBuf> {
-    k2_client::env_names::first_nonempty_os_in(k2_client::env_names::HOOK_SOCK, |n| std::env::var_os(n)).map(|(_, v)| v.into())
+    k2_client::env_names::first_nonempty_os_in(k2_client::env_names::HOOK_SOCK, |n| {
+        std::env::var_os(n)
+    })
+    .map(|(_, v)| v.into())
 }
 
 /// `[ -S "$sock" ]`.
@@ -206,10 +231,19 @@ pub fn py_space(c: char) -> bool {
 /// next line that is only `"`. Line 1 is the empty one after `-c "`.
 #[cfg(test)]
 pub fn shell_python(file: &str, after: &str) -> Vec<String> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src").join(file);
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    let body = text.split_once(after).unwrap_or_else(|| panic!("no {after:?} in {file}")).1;
-    let py = &body[body.find("python3 -c \"").unwrap_or_else(|| panic!("no python3 -c after {after:?}")) + "python3 -c \"".len()..];
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../cli/src")
+        .join(file);
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let body = text
+        .split_once(after)
+        .unwrap_or_else(|| panic!("no {after:?} in {file}"))
+        .1;
+    let py = &body[body
+        .find("python3 -c \"")
+        .unwrap_or_else(|| panic!("no python3 -c after {after:?}"))
+        + "python3 -c \"".len()..];
     let end = py.find("\n\"").expect("the end of the Python");
     py[..end].split('\n').map(str::to_string).collect()
 }
@@ -233,7 +267,13 @@ mod tests {
     }
 
     fn answer(channel: Channel, body: &[u8]) -> Response {
-        Response { status: 200, body: body.to_vec(), channel, permission: None, server_version: None }
+        Response {
+            status: 200,
+            body: body.to_vec(),
+            channel,
+            permission: None,
+            server_version: None,
+        }
     }
 
     #[test]

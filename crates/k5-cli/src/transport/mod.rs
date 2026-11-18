@@ -169,4 +169,6 @@ pub mod permission;
 pub mod skew;
 pub mod wire;
 
-pub use client::{Auth, Call, Channel, Client, Error, Healer, NoAnswer, Passport, Response, SecretsDir};
+pub use client::{
+    Auth, Call, Channel, Client, Error, Healer, NoAnswer, Passport, Response, SecretsDir,
+};

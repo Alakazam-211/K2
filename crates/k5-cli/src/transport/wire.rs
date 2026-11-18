@@ -122,7 +122,11 @@ pub fn curl_get_query(data: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() && bytes[i + 1].is_ascii_hexdigit() && bytes[i + 2].is_ascii_hexdigit() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && bytes[i + 1].is_ascii_hexdigit()
+            && bytes[i + 2].is_ascii_hexdigit()
+        {
             out.push(b'%');
             out.push(bytes[i + 1].to_ascii_uppercase());
             out.push(bytes[i + 2].to_ascii_uppercase());
@@ -163,7 +167,10 @@ pub fn curl_data_urlencode(name: &str, content: &str) -> String {
 /// A target curl would not send as given: a space or a control byte
 /// (curl exits 3) or a `#` (curl drops it and what follows).
 pub fn check_target(target: &str) -> Result<(), u8> {
-    match target.bytes().find(|b| *b <= b' ' || *b == 0x7f || *b == b'#') {
+    match target
+        .bytes()
+        .find(|b| *b <= b' ' || *b == 0x7f || *b == b'#')
+    {
         Some(b) => Err(b),
         None => Ok(()),
     }
@@ -172,7 +179,10 @@ pub fn check_target(target: &str) -> Result<(), u8> {
 /// Where the request goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    Tcp { host: String, port: u16 },
+    Tcp {
+        host: String,
+        port: u16,
+    },
     #[cfg(unix)]
     Unix(PathBuf),
 }
@@ -287,7 +297,10 @@ impl Failure {
             Failure::Connect(_)
                 | Failure::ConnectTimedOut
                 | Failure::NotSent(_)
-                | Failure::Broken { curl: curl::COULDNT_RESOLVE_HOST, .. }
+                | Failure::Broken {
+                    curl: curl::COULDNT_RESOLVE_HOST,
+                    ..
+                }
         )
     }
 
@@ -304,7 +317,10 @@ impl Failure {
 }
 
 fn broken(curl: i32, why: impl Into<String>) -> Failure {
-    Failure::Broken { curl, why: why.into() }
+    Failure::Broken {
+        curl,
+        why: why.into(),
+    }
 }
 
 /// The answer: the last status, the body, and the daemon's version when
@@ -325,11 +341,16 @@ pub struct Answer {
 pub const SERVER_VERSION_HEADER: &str = "X-K5-Server-Version";
 
 fn remaining(deadline: Instant) -> Option<Duration> {
-    deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero())
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|d| !d.is_zero())
 }
 
 fn is_timeout(e: &io::Error) -> bool {
-    matches!(e.kind(), io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock)
+    matches!(
+        e.kind(),
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+    )
 }
 
 /// Opens the connection: within `connect` and before `deadline`,
@@ -341,9 +362,12 @@ pub fn connect(target: &Target, connect: Duration, deadline: Instant) -> Result<
         Target::Tcp { host, port } => {
             use std::net::ToSocketAddrs;
             // A name that doesn't resolve is curl's exit 6, never retried.
-            let addrs: Vec<_> =
-                (host.as_str(), *port).to_socket_addrs().map_err(|e| broken(curl::COULDNT_RESOLVE_HOST, format!("resolve {host}: {e}")))?.collect();
-            let mut last = io::Error::new(io::ErrorKind::NotFound, format!("{host} has no address"));
+            let addrs: Vec<_> = (host.as_str(), *port)
+                .to_socket_addrs()
+                .map_err(|e| broken(curl::COULDNT_RESOLVE_HOST, format!("resolve {host}: {e}")))?
+                .collect();
+            let mut last =
+                io::Error::new(io::ErrorKind::NotFound, format!("{host} has no address"));
             for addr in addrs {
                 let Some(budget) = remaining(limit) else {
                     return Err(Failure::ConnectTimedOut);
@@ -387,13 +411,24 @@ pub fn connect(target: &Target, connect: Duration, deadline: Instant) -> Result<
 /// that follows a whole answer is never seen.
 pub fn exchange(conn: &mut Conn, request: &Request, deadline: Instant) -> Result<Answer, Failure> {
     let bytes = request.encode();
-    let budget = remaining(deadline).ok_or_else(|| Failure::NotSent("no time left to send".into()))?;
-    conn.set_timeouts(budget).map_err(|e| Failure::NotSent(format!("set a timeout: {e}")))?;
+    let budget =
+        remaining(deadline).ok_or_else(|| Failure::NotSent("no time left to send".into()))?;
+    conn.set_timeouts(budget)
+        .map_err(|e| Failure::NotSent(format!("set a timeout: {e}")))?;
     let mut sent = 0;
     while sent < bytes.len() {
         match conn.write(&bytes[sent..]) {
-            Ok(0) if sent == 0 => return Err(Failure::NotSent("send: the connection took no bytes".into())),
-            Ok(0) => return Err(broken(curl::SEND_ERROR, format!("send: the connection stopped after {sent} bytes"))),
+            Ok(0) if sent == 0 => {
+                return Err(Failure::NotSent(
+                    "send: the connection took no bytes".into(),
+                ))
+            }
+            Ok(0) => {
+                return Err(broken(
+                    curl::SEND_ERROR,
+                    format!("send: the connection stopped after {sent} bytes"),
+                ))
+            }
             Ok(n) => sent += n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) if sent == 0 => return Err(Failure::NotSent(format!("send: {e}"))),
@@ -401,7 +436,8 @@ pub fn exchange(conn: &mut Conn, request: &Request, deadline: Instant) -> Result
             Err(e) => return Err(broken(curl::SEND_ERROR, format!("send: {e}"))),
         }
     }
-    conn.flush().map_err(|e| broken(curl::SEND_ERROR, format!("send: {e}")))?;
+    conn.flush()
+        .map_err(|e| broken(curl::SEND_ERROR, format!("send: {e}")))?;
     read_answer(conn, deadline)
 }
 
@@ -463,7 +499,11 @@ impl Reader<'_> {
                 return Ok(line);
             }
             if !self.fill()? {
-                return Err(if self.total == 0 { Failure::Empty } else { broken(curl::RECV_ERROR, "the answer ended inside its head") });
+                return Err(if self.total == 0 {
+                    Failure::Empty
+                } else {
+                    broken(curl::RECV_ERROR, "the answer ended inside its head")
+                });
             }
         }
     }
@@ -472,7 +512,10 @@ impl Reader<'_> {
     fn exact(&mut self, n: usize) -> Result<Vec<u8>, Failure> {
         while self.buf.len() < n {
             if !self.fill()? {
-                return Err(broken(curl::PARTIAL_FILE, format!("the answer ended {} bytes short", n - self.buf.len())));
+                return Err(broken(
+                    curl::PARTIAL_FILE,
+                    format!("the answer ended {} bytes short", n - self.buf.len()),
+                ));
             }
         }
         Ok(self.buf.drain(..n).collect())
@@ -487,7 +530,13 @@ impl Reader<'_> {
 /// Reads one answer: skips any `1xx` head, then reads the body by
 /// `Content-Length`, chunked, or to the end of the stream.
 pub fn read_answer(conn: &mut Conn, deadline: Instant) -> Result<Answer, Failure> {
-    let mut r = Reader { conn, deadline, buf: Vec::new(), total: 0, eof: false };
+    let mut r = Reader {
+        conn,
+        deadline,
+        buf: Vec::new(),
+        total: 0,
+        eof: false,
+    };
     loop {
         let status_line = r.line()?;
         let status = parse_status(&status_line)?;
@@ -501,12 +550,22 @@ pub fn read_answer(conn: &mut Conn, deadline: Instant) -> Result<Answer, Failure
             }
             let text = String::from_utf8_lossy(&line);
             let Some((name, value)) = text.split_once(':') else {
-                return Err(broken(curl::WEIRD_SERVER_REPLY, format!("a header line with no colon: {text}")));
+                return Err(broken(
+                    curl::WEIRD_SERVER_REPLY,
+                    format!("a header line with no colon: {text}"),
+                ));
             };
             let value = value.trim();
             if name.eq_ignore_ascii_case("content-length") {
-                length = Some(value.parse().map_err(|_| broken(curl::WEIRD_SERVER_REPLY, format!("Content-Length {value:?}")))?);
-            } else if name.eq_ignore_ascii_case("transfer-encoding") && value.to_ascii_lowercase().contains("chunked") {
+                length = Some(value.parse().map_err(|_| {
+                    broken(
+                        curl::WEIRD_SERVER_REPLY,
+                        format!("Content-Length {value:?}"),
+                    )
+                })?);
+            } else if name.eq_ignore_ascii_case("transfer-encoding")
+                && value.to_ascii_lowercase().contains("chunked")
+            {
                 chunked = true;
             } else if name.eq_ignore_ascii_case(SERVER_VERSION_HEADER) && server_version.is_none() {
                 server_version = Some(value.to_string());
@@ -523,7 +582,8 @@ pub fn read_answer(conn: &mut Conn, deadline: Instant) -> Result<Answer, Failure
                 let size_line = r.line()?;
                 let text = String::from_utf8_lossy(&size_line);
                 let hex = text.split(';').next().unwrap_or("").trim();
-                let size = usize::from_str_radix(hex, 16).map_err(|_| broken(curl::RECV_ERROR, format!("a chunk size {text:?}")))?;
+                let size = usize::from_str_radix(hex, 16)
+                    .map_err(|_| broken(curl::RECV_ERROR, format!("a chunk size {text:?}")))?;
                 if size == 0 {
                     // Trailers, up to the empty line.
                     while !r.line()?.is_empty() {}
@@ -540,7 +600,11 @@ pub fn read_answer(conn: &mut Conn, deadline: Instant) -> Result<Answer, Failure
         } else {
             r.rest()?
         };
-        return Ok(Answer { status, body, server_version });
+        return Ok(Answer {
+            status,
+            body,
+            server_version,
+        });
     }
 }
 
@@ -551,8 +615,16 @@ fn parse_status(line: &[u8]) -> Result<u16, Failure> {
     let code = parts.next().unwrap_or("");
     // curl reads an answer that doesn't start with `HTTP/` as HTTP/0.9
     // and refuses it (exit 1); a status line it can't read is exit 1 too.
-    let bad = || broken(curl::UNSUPPORTED_PROTOCOL, format!("not an HTTP status line: {text}"));
-    if !version.starts_with("HTTP/1.") || code.len() != 3 || !code.bytes().all(|b| b.is_ascii_digit()) {
+    let bad = || {
+        broken(
+            curl::UNSUPPORTED_PROTOCOL,
+            format!("not an HTTP status line: {text}"),
+        )
+    };
+    if !version.starts_with("HTTP/1.")
+        || code.len() != 3
+        || !code.bytes().all(|b| b.is_ascii_digit())
+    {
         return Err(bad());
     }
     code.parse().map_err(|_| bad())
@@ -569,7 +641,10 @@ mod tests {
             target: "/cli/x?token=t".into(),
             host: "127.0.0.1:9".into(),
             user_agent: "k5/1.2.3".into(),
-            headers: headers.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect(),
+            headers: headers
+                .iter()
+                .map(|(n, v)| (n.to_string(), v.to_string()))
+                .collect(),
             body,
         }
     }
@@ -585,12 +660,26 @@ mod tests {
 
     #[test]
     fn a_custom_type_comes_before_the_length_and_curl_s_own_after() {
-        let json = req(Method::Post, Some(Body { bytes: b"{}".to_vec(), curl_form_type: false }), &[("Content-Type", "application/json")]);
+        let json = req(
+            Method::Post,
+            Some(Body {
+                bytes: b"{}".to_vec(),
+                curl_form_type: false,
+            }),
+            &[("Content-Type", "application/json")],
+        );
         assert_eq!(
             String::from_utf8(json.encode()).unwrap(),
             "POST /cli/x?token=t HTTP/1.1\r\nHost: 127.0.0.1:9\r\nUser-Agent: k5/1.2.3\r\nAccept: */*\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
         );
-        let empty = req(Method::Post, Some(Body { bytes: Vec::new(), curl_form_type: true }), &[]);
+        let empty = req(
+            Method::Post,
+            Some(Body {
+                bytes: Vec::new(),
+                curl_form_type: true,
+            }),
+            &[],
+        );
         assert_eq!(
             String::from_utf8(empty.encode()).unwrap(),
             "POST /cli/x?token=t HTTP/1.1\r\nHost: 127.0.0.1:9\r\nUser-Agent: k5/1.2.3\r\nAccept: */*\r\nContent-Length: 0\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\n"
@@ -599,17 +688,26 @@ mod tests {
 
     #[test]
     fn get_data_has_upper_case_escapes() {
-        assert_eq!(curl_get_query("project=%2ftmp%2Fa%20b&x=%7e"), "project=%2Ftmp%2Fa%20b&x=%7E");
+        assert_eq!(
+            curl_get_query("project=%2ftmp%2Fa%20b&x=%7e"),
+            "project=%2Ftmp%2Fa%20b&x=%7E"
+        );
         // Not escapes: left alone.
         assert_eq!(curl_get_query("a=%zz&b=%2&c=%"), "a=%zz&b=%2&c=%");
         assert_eq!(curl_get_query("a=b%c3%a9"), "a=b%C3%A9");
         assert_eq!(append_get_query("/cli/x", "a=%2f"), "/cli/x?a=%2F");
-        assert_eq!(append_get_query("/cli/x?y=%2f", "a=%2f"), "/cli/x?y=%2f&a=%2F");
+        assert_eq!(
+            append_get_query("/cli/x?y=%2f", "a=%2f"),
+            "/cli/x?y=%2f&a=%2F"
+        );
     }
 
     #[test]
     fn data_urlencode_is_curl_s() {
-        assert_eq!(curl_data_urlencode("token", "a/b c~.-_é+"), "token=a%2Fb+c~.-_%C3%A9%2B");
+        assert_eq!(
+            curl_data_urlencode("token", "a/b c~.-_é+"),
+            "token=a%2Fb+c~.-_%C3%A9%2B"
+        );
         assert_eq!(curl_data_urlencode("token", ""), "token=");
     }
 
@@ -647,7 +745,15 @@ mod tests {
     fn one(reply: &[u8], max: Duration) -> Result<Answer, Failure> {
         let (port, h) = serve_once(reply.to_vec(), Duration::ZERO);
         let deadline = Instant::now() + max;
-        let mut c = connect(&Target::Tcp { host: "127.0.0.1".into(), port }, Duration::from_secs(5), deadline).unwrap_or_else(|f| panic!("connect: {f:?}"));
+        let mut c = connect(
+            &Target::Tcp {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            Duration::from_secs(5),
+            deadline,
+        )
+        .unwrap_or_else(|f| panic!("connect: {f:?}"));
         let r = req(Method::Get, None, &[]);
         let out = exchange(&mut c, &r, deadline);
         drop(c);
@@ -657,14 +763,54 @@ mod tests {
 
     #[test]
     fn answers_by_length_chunks_and_close() {
-        let a = one(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhelloEXTRA", Duration::from_secs(5)).unwrap();
-        assert_eq!(a, Answer { status: 200, body: b"hello".to_vec(), server_version: None });
+        let a = one(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhelloEXTRA",
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(
+            a,
+            Answer {
+                status: 200,
+                body: b"hello".to_vec(),
+                server_version: None
+            }
+        );
         let a = one(b"HTTP/1.1 403 Forbidden\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2;x=1\r\nde\r\n0\r\nT: 1\r\n\r\n", Duration::from_secs(5)).unwrap();
-        assert_eq!(a, Answer { status: 403, body: b"abcde".to_vec(), server_version: None });
-        let a = one(b"HTTP/1.0 503 Service Unavailable\r\n\r\n{\"state\":\"migrating\"}", Duration::from_secs(5)).unwrap();
-        assert_eq!(a, Answer { status: 503, body: b"{\"state\":\"migrating\"}".to_vec(), server_version: None });
-        let a = one(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n", Duration::from_secs(5)).unwrap();
-        assert_eq!(a, Answer { status: 201, body: Vec::new(), server_version: None });
+        assert_eq!(
+            a,
+            Answer {
+                status: 403,
+                body: b"abcde".to_vec(),
+                server_version: None
+            }
+        );
+        let a = one(
+            b"HTTP/1.0 503 Service Unavailable\r\n\r\n{\"state\":\"migrating\"}",
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(
+            a,
+            Answer {
+                status: 503,
+                body: b"{\"state\":\"migrating\"}".to_vec(),
+                server_version: None
+            }
+        );
+        let a = one(
+            b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n",
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(
+            a,
+            Answer {
+                status: 201,
+                body: Vec::new(),
+                server_version: None
+            }
+        );
     }
 
     /// The version header of the last head, the first one there, by any
@@ -672,32 +818,78 @@ mod tests {
     #[test]
     fn the_server_version_is_read_from_the_last_head() {
         let a = one(b"HTTP/1.1 200 OK\r\nx-k5-server-version:  0.46.16 \r\nX-K5-Server-Version: 9.9.9\r\nContent-Length: 2\r\n\r\n{}", Duration::from_secs(5)).unwrap();
-        assert_eq!(a, Answer { status: 200, body: b"{}".to_vec(), server_version: Some("0.46.16".into()) });
+        assert_eq!(
+            a,
+            Answer {
+                status: 200,
+                body: b"{}".to_vec(),
+                server_version: Some("0.46.16".into())
+            }
+        );
         let a = one(b"HTTP/1.1 100 Continue\r\nX-K5-Server-Version: 1.0.0\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", Duration::from_secs(5)).unwrap();
         assert_eq!(a.server_version, None);
-        let a = one(b"HTTP/1.1 403 Forbidden\r\nX-K5-Server-Version-Extra: 1\r\nContent-Length: 0\r\n\r\n", Duration::from_secs(5)).unwrap();
+        let a = one(
+            b"HTTP/1.1 403 Forbidden\r\nX-K5-Server-Version-Extra: 1\r\nContent-Length: 0\r\n\r\n",
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert_eq!(a.server_version, None, "another header's name");
     }
 
     #[test]
     fn nothing_back_is_empty_and_a_short_answer_is_broken() {
-        assert!(matches!(one(b"", Duration::from_secs(5)), Err(Failure::Empty)));
-        assert!(matches!(one(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nabc", Duration::from_secs(5)), Err(Failure::Broken { curl: 18, .. })));
-        assert!(matches!(one(b"SSH-2.0-x\r\n\r\n", Duration::from_secs(5)), Err(Failure::Broken { curl: 1, .. })));
-        assert!(matches!(one(b"HTTP/1.1 200 OK\r\nbad header\r\n\r\n", Duration::from_secs(5)), Err(Failure::Broken { curl: 8, .. })));
+        assert!(matches!(
+            one(b"", Duration::from_secs(5)),
+            Err(Failure::Empty)
+        ));
+        assert!(matches!(
+            one(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nabc",
+                Duration::from_secs(5)
+            ),
+            Err(Failure::Broken { curl: 18, .. })
+        ));
+        assert!(matches!(
+            one(b"SSH-2.0-x\r\n\r\n", Duration::from_secs(5)),
+            Err(Failure::Broken { curl: 1, .. })
+        ));
+        assert!(matches!(
+            one(
+                b"HTTP/1.1 200 OK\r\nbad header\r\n\r\n",
+                Duration::from_secs(5)
+            ),
+            Err(Failure::Broken { curl: 8, .. })
+        ));
     }
 
     #[test]
     fn an_answer_past_the_deadline_is_a_timeout() {
-        let (port, h) = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec(), Duration::from_millis(1500));
+        let (port, h) = serve_once(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec(),
+            Duration::from_millis(1500),
+        );
         let deadline = Instant::now() + Duration::from_millis(300);
-        let mut c = match connect(&Target::Tcp { host: "127.0.0.1".into(), port }, Duration::from_secs(5), deadline) {
+        let mut c = match connect(
+            &Target::Tcp {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            Duration::from_secs(5),
+            deadline,
+        ) {
             Ok(c) => c,
             Err(f) => panic!("connect: {f:?}"),
         };
         let t0 = Instant::now();
-        assert!(matches!(exchange(&mut c, &req(Method::Get, None, &[]), deadline), Err(Failure::TimedOut)));
-        assert!(t0.elapsed() < Duration::from_millis(1200), "{:?}", t0.elapsed());
+        assert!(matches!(
+            exchange(&mut c, &req(Method::Get, None, &[]), deadline),
+            Err(Failure::TimedOut)
+        ));
+        assert!(
+            t0.elapsed() < Duration::from_millis(1200),
+            "{:?}",
+            t0.elapsed()
+        );
         drop(c);
         h.join().unwrap();
     }
@@ -708,7 +900,17 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         drop(l);
         let deadline = Instant::now() + Duration::from_secs(5);
-        assert!(matches!(connect(&Target::Tcp { host: "127.0.0.1".into(), port }, Duration::from_secs(5), deadline), Err(Failure::Connect(_))));
+        assert!(matches!(
+            connect(
+                &Target::Tcp {
+                    host: "127.0.0.1".into(),
+                    port
+                },
+                Duration::from_secs(5),
+                deadline
+            ),
+            Err(Failure::Connect(_))
+        ));
     }
 
     /// The whole answer, then the peer closed (the cell socket) or reset
@@ -726,17 +928,39 @@ mod tests {
         peer.shutdown(std::net::Shutdown::Both).unwrap();
         drop(peer);
         let mut c = Conn::Unix(ours);
-        assert_eq!(read_answer(&mut c, deadline).unwrap(), Answer { status: 200, body: b"hello".to_vec(), server_version: None });
+        assert_eq!(
+            read_answer(&mut c, deadline).unwrap(),
+            Answer {
+                status: 200,
+                body: b"hello".to_vec(),
+                server_version: None
+            }
+        );
 
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
-        let mut c = connect(&Target::Tcp { host: "127.0.0.1".into(), port }, Duration::from_secs(5), deadline).unwrap_or_else(|f| panic!("connect: {f:?}"));
+        let mut c = connect(
+            &Target::Tcp {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            Duration::from_secs(5),
+            deadline,
+        )
+        .unwrap_or_else(|f| panic!("connect: {f:?}"));
         let (mut s, _) = l.accept().unwrap();
         s.write_all(reply).unwrap();
         reset(s);
         // The reset lands before the first read.
         std::thread::sleep(Duration::from_millis(200));
-        assert_eq!(read_answer(&mut c, deadline).unwrap(), Answer { status: 200, body: b"hello".to_vec(), server_version: None });
+        assert_eq!(
+            read_answer(&mut c, deadline).unwrap(),
+            Answer {
+                status: 200,
+                body: b"hello".to_vec(),
+                server_version: None
+            }
+        );
     }
 
     /// A reset before any answer is a read that failed: curl's 56, and the
@@ -747,7 +971,15 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
-        let mut c = connect(&Target::Tcp { host: "127.0.0.1".into(), port }, Duration::from_secs(5), deadline).unwrap_or_else(|f| panic!("connect: {f:?}"));
+        let mut c = connect(
+            &Target::Tcp {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            Duration::from_secs(5),
+            deadline,
+        )
+        .unwrap_or_else(|f| panic!("connect: {f:?}"));
         let (s, _) = l.accept().unwrap();
         reset(s);
         std::thread::sleep(Duration::from_millis(200));
@@ -756,7 +988,12 @@ mod tests {
         assert_eq!(f.curl_code(), 56);
         assert!(f.sent());
         assert_eq!(
-            [Failure::Empty.curl_code(), Failure::TimedOut.curl_code(), Failure::ConnectTimedOut.curl_code(), Failure::NotSent("x".into()).curl_code()],
+            [
+                Failure::Empty.curl_code(),
+                Failure::TimedOut.curl_code(),
+                Failure::ConnectTimedOut.curl_code(),
+                Failure::NotSent("x".into()).curl_code()
+            ],
             [52, 28, 28, 55]
         );
     }
@@ -765,7 +1002,10 @@ mod tests {
     #[cfg(unix)]
     fn reset(s: std::net::TcpStream) {
         use std::os::unix::io::AsRawFd;
-        let linger = libc::linger { l_onoff: 1, l_linger: 0 };
+        let linger = libc::linger {
+            l_onoff: 1,
+            l_linger: 0,
+        };
         // SAFETY: a valid socket and a `linger` of the size passed.
         let rc = unsafe {
             libc::setsockopt(
@@ -788,10 +1028,26 @@ mod tests {
         let (ours, peer) = UnixStream::pair().unwrap();
         drop(peer);
         let mut c = Conn::Unix(ours);
-        let f = exchange(&mut c, &req(Method::Post, Some(Body { bytes: b"x".to_vec(), curl_form_type: true }), &[]), Instant::now() + Duration::from_secs(5)).unwrap_err();
+        let f = exchange(
+            &mut c,
+            &req(
+                Method::Post,
+                Some(Body {
+                    bytes: b"x".to_vec(),
+                    curl_form_type: true,
+                }),
+                &[],
+            ),
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap_err();
         assert!(matches!(f, Failure::NotSent(_)), "{f:?}");
         assert!(!f.sent());
-        assert!(Failure::Empty.sent() && Failure::TimedOut.sent() && broken(curl::RECV_ERROR, "x").sent());
+        assert!(
+            Failure::Empty.sent()
+                && Failure::TimedOut.sent()
+                && broken(curl::RECV_ERROR, "x").sent()
+        );
         assert!(!broken(curl::COULDNT_RESOLVE_HOST, "x").sent());
         assert!(!Failure::ConnectTimedOut.sent());
     }
@@ -801,6 +1057,9 @@ mod tests {
     fn a_missing_socket_is_a_connect_failure() {
         let path = std::env::temp_dir().join(format!("k5-wire-none-{}.sock", std::process::id()));
         let deadline = Instant::now() + Duration::from_secs(5);
-        assert!(matches!(connect(&Target::Unix(path), Duration::from_secs(5), deadline), Err(Failure::Connect(_))));
+        assert!(matches!(
+            connect(&Target::Unix(path), Duration::from_secs(5), deadline),
+            Err(Failure::Connect(_))
+        ));
     }
 }

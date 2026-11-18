@@ -52,7 +52,9 @@ pub fn k2_home_with(
     user_home: impl FnOnce() -> Option<PathBuf>,
 ) -> Result<PathBuf, HomeError> {
     let read = env_names::first_set_os_in(env_names::HOME_OVERRIDE, lookup);
-    paths::k2_home_from(read, user_home).map_err(HomeError::Override)?.ok_or(HomeError::NoUserHome)
+    paths::k2_home_from(read, user_home)
+        .map_err(HomeError::Override)?
+        .ok_or(HomeError::NoUserHome)
 }
 
 #[cfg(test)]
@@ -72,18 +74,31 @@ mod tests {
     fn the_errors_name_what_to_fix() {
         let none = |_: &str| None;
         assert_eq!(k2_home_with(none, || None), Err(HomeError::NoUserHome));
-        assert_eq!(HomeError::NoUserHome.to_string(), "no home folder: set HOME");
+        assert_eq!(
+            HomeError::NoUserHome.to_string(),
+            "no home folder: set HOME"
+        );
         let rel = |name: &str| (name == "K2_HOME_OVERRIDE").then(|| OsString::from("rel/home"));
-        let err = k2_home_with(rel, || Some(abs("/u"))).expect_err("a relative override is an error");
-        let HomeError::Override(m) = &err else { panic!("{err:?}") };
+        let err =
+            k2_home_with(rel, || Some(abs("/u"))).expect_err("a relative override is an error");
+        let HomeError::Override(m) = &err else {
+            panic!("{err:?}")
+        };
         assert_eq!(m.name, "K2_HOME_OVERRIDE");
-        assert!(err.to_string().starts_with("K2_HOME_OVERRIDE=\"rel/home\" is not valid: "), "{err}");
+        assert!(
+            err.to_string()
+                .starts_with("K2_HOME_OVERRIDE=\"rel/home\" is not valid: "),
+            "{err}"
+        );
     }
 
     #[test]
     fn the_home_is_k2_client_s_answer() {
         let none = |_: &str| None;
-        assert_eq!(k2_home_with(none, || Some(abs("/u"))), Ok(paths::k2_home_in(abs("/u"))));
+        assert_eq!(
+            k2_home_with(none, || Some(abs("/u"))),
+            Ok(paths::k2_home_in(abs("/u")))
+        );
         let over = abs("/rig/home");
         let set = |name: &str| (name == "K5_HOME_OVERRIDE").then(|| over.clone().into_os_string());
         assert_eq!(k2_home_with(set, || None), Ok(over.clone()));

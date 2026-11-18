@@ -76,9 +76,15 @@ pub fn repr(v: &Value) -> String {
         Value::Int(digits) => digits.clone(),
         Value::Float(f) => float_repr(*f),
         Value::Str(t) => str_repr(t),
-        Value::Array(items) => format!("[{}]", items.iter().map(repr).collect::<Vec<_>>().join(", ")),
+        Value::Array(items) => format!(
+            "[{}]",
+            items.iter().map(repr).collect::<Vec<_>>().join(", ")
+        ),
         Value::Object(pairs) => {
-            let inner: Vec<String> = pairs.iter().map(|(k, v)| format!("{}: {}", str_repr(k), repr(v))).collect();
+            let inner: Vec<String> = pairs
+                .iter()
+                .map(|(k, v)| format!("{}: {}", str_repr(k), repr(v)))
+                .collect();
             format!("{{{}}}", inner.join(", "))
         }
     }
@@ -92,7 +98,8 @@ fn float_repr(f: f64) -> String {
     } else if f.is_infinite() {
         (if f > 0.0 { "inf" } else { "-inf" }).to_string()
     } else {
-        json::to_string(&Value::Float(f), &Options::default()).expect("a finite float always prints")
+        json::to_string(&Value::Float(f), &Options::default())
+            .expect("a finite float always prints")
     }
 }
 
@@ -169,10 +176,17 @@ pub fn percent_d(v: &Value) -> Result<String, String> {
     match v {
         Value::Int(digits) => Ok(digits.clone()),
         Value::Bool(b) => Ok(if *b { "1" } else { "0" }.to_string()),
-        Value::Float(f) if f.is_nan() => Err("ValueError: cannot convert float NaN to integer".to_string()),
-        Value::Float(f) if f.is_infinite() => Err("OverflowError: cannot convert float infinity to integer".to_string()),
+        Value::Float(f) if f.is_nan() => {
+            Err("ValueError: cannot convert float NaN to integer".to_string())
+        }
+        Value::Float(f) if f.is_infinite() => {
+            Err("OverflowError: cannot convert float infinity to integer".to_string())
+        }
         Value::Float(f) => Ok(whole_digits(f.trunc())),
-        other => Err(format!("TypeError: %d format: a real number is required, not {}", type_name(other))),
+        other => Err(format!(
+            "TypeError: %d format: a real number is required, not {}",
+            type_name(other)
+        )),
     }
 }
 
@@ -187,7 +201,11 @@ fn whole_digits(w: f64) -> String {
     let mantissa = (bits & ((1u64 << 52) - 1)) | (1u64 << 52);
     let shift = ((bits >> 52) & 0x7ff) as i32 - 1075;
     // Base 10^9 limbs, least significant first.
-    let mut limbs: Vec<u64> = vec![mantissa % 1_000_000_000, (mantissa / 1_000_000_000) % 1_000_000_000, mantissa / 1_000_000_000_000_000_000];
+    let mut limbs: Vec<u64> = vec![
+        mantissa % 1_000_000_000,
+        (mantissa / 1_000_000_000) % 1_000_000_000,
+        mantissa / 1_000_000_000_000_000_000,
+    ];
     for _ in 0..shift {
         let mut carry = 0;
         for limb in limbs.iter_mut() {
@@ -244,8 +262,14 @@ mod tests {
             (r#"["it's"]"#, r#"["it's"]"#),
             (r#"["it's \"q\""]"#, r#"['it\'s "q"']"#),
             (r#"["a\\b\t\n\r\u0001\u007f"]"#, r"['a\\b\t\n\r\x01\x7f']"),
-            (r#"["\u0085\u00a0\u00ad\u00e9\u2028\u200b\ufeff\ud83d\ude00"]"#, "['\\x85\\xa0\\xad\u{e9}\\u2028\\u200b\\ufeff\u{1f600}']"),
-            (r#"["\ud83d", "\ue000", "\uffff", "\udb80\udc00"]"#, r"['\ud83d', '\ue000', '\uffff', '\U000f0000']"),
+            (
+                r#"["\u0085\u00a0\u00ad\u00e9\u2028\u200b\ufeff\ud83d\ude00"]"#,
+                "['\\x85\\xa0\\xad\u{e9}\\u2028\\u200b\\ufeff\u{1f600}']",
+            ),
+            (
+                r#"["\ud83d", "\ue000", "\uffff", "\udb80\udc00"]"#,
+                r"['\ud83d', '\ue000', '\uffff', '\U000f0000']",
+            ),
             (r#"{"k": {"x": []}}"#, "{'k': {'x': []}}"),
         ] {
             assert_eq!(str_of(&v(text)), want, "{text}");
@@ -296,14 +320,36 @@ mod tests {
         }
         for (text, want) in [
             ("NaN", "ValueError: cannot convert float NaN to integer"),
-            ("Infinity", "OverflowError: cannot convert float infinity to integer"),
-            ("-Infinity", "OverflowError: cannot convert float infinity to integer"),
-            (r#""3""#, "TypeError: %d format: a real number is required, not str"),
-            ("null", "TypeError: %d format: a real number is required, not NoneType"),
-            ("[]", "TypeError: %d format: a real number is required, not list"),
-            ("{}", "TypeError: %d format: a real number is required, not dict"),
+            (
+                "Infinity",
+                "OverflowError: cannot convert float infinity to integer",
+            ),
+            (
+                "-Infinity",
+                "OverflowError: cannot convert float infinity to integer",
+            ),
+            (
+                r#""3""#,
+                "TypeError: %d format: a real number is required, not str",
+            ),
+            (
+                "null",
+                "TypeError: %d format: a real number is required, not NoneType",
+            ),
+            (
+                "[]",
+                "TypeError: %d format: a real number is required, not list",
+            ),
+            (
+                "{}",
+                "TypeError: %d format: a real number is required, not dict",
+            ),
         ] {
-            assert_eq!(percent_d(&v(text)).as_ref().map_err(String::as_str), Err(want), "{text}");
+            assert_eq!(
+                percent_d(&v(text)).as_ref().map_err(String::as_str),
+                Err(want),
+                "{text}"
+            );
         }
     }
 }

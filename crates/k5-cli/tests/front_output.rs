@@ -27,7 +27,11 @@ struct Rig {
 
 impl Rig {
     fn new(tag: &str) -> Rig {
-        let dir = std::env::temp_dir().join(format!("k5-out-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        let dir = std::env::temp_dir().join(format!(
+            "k5-out-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
         if dir.exists() {
             std::fs::remove_dir_all(&dir).unwrap();
         }
@@ -45,7 +49,9 @@ impl Rig {
         if let Some(path) = std::env::var_os("PATH") {
             cmd.env("PATH", path);
         }
-        cmd.env("HOME", self.dir.join("home")).env("K2_PORT", "1").env("K2_HOOK_TOKEN", "test-token");
+        cmd.env("HOME", self.dir.join("home"))
+            .env("K2_PORT", "1")
+            .env("K2_HOOK_TOKEN", "test-token");
         cmd
     }
 
@@ -78,9 +84,18 @@ fn with_no_reader(cmd: &mut Command) -> Output {
         .spawn()
         .unwrap_or_else(|e| panic!("run {cmd:?}: {e}"));
     let mut stderr = Vec::new();
-    child.stderr.take().expect("stderr is piped").read_to_end(&mut stderr).unwrap();
+    child
+        .stderr
+        .take()
+        .expect("stderr is piped")
+        .read_to_end(&mut stderr)
+        .unwrap();
     let status = child.wait().unwrap();
-    Output { status, stdout: Vec::new(), stderr }
+    Output {
+        status,
+        stdout: Vec::new(),
+        stderr,
+    }
 }
 
 #[test]
@@ -88,15 +103,26 @@ fn a_broken_pipe_on_version_ends_by_sigpipe_as_bash_does() {
     let rig = Rig::new("pipe");
     for one in ["--version", "-v", "version"] {
         let bash = with_no_reader(rig.bash().arg(one));
-        assert_eq!(bash.status.signal(), Some(libc::SIGPIPE), "bash cli/k2 {one}: {bash:?}");
+        assert_eq!(
+            bash.status.signal(),
+            Some(libc::SIGPIPE),
+            "bash cli/k2 {one}: {bash:?}"
+        );
         // Linux's bash says nothing. macOS's /bin/bash 3.2 lets its exit
         // trap catch the signal, so its echo first says why, with the
         // script's path and line. The front says nothing anywhere.
         let said = String::from_utf8_lossy(&bash.stderr);
-        assert!(said.is_empty() || said.ends_with("echo: write error: Broken pipe\n"), "bash cli/k2 {one}: {said}");
+        assert!(
+            said.is_empty() || said.ends_with("echo: write error: Broken pipe\n"),
+            "bash cli/k2 {one}: {said}"
+        );
         for name in ["k2", "k5"] {
             let front = with_no_reader(rig.front(name).arg(one));
-            assert_eq!(front.status.signal(), Some(libc::SIGPIPE), "{name} {one}: {front:?}");
+            assert_eq!(
+                front.status.signal(),
+                Some(libc::SIGPIPE),
+                "{name} {one}: {front:?}"
+            );
             assert_eq!(String::from_utf8_lossy(&front.stderr), "", "{name} {one}");
         }
     }
@@ -110,12 +136,19 @@ fn the_notice_is_not_printed_today() {
     for name in ["k2", "k5"] {
         let out = rig.front(name).arg("--version").output().unwrap();
         assert_eq!(out.status.code(), Some(0), "{name}: {out:?}");
-        assert_eq!(String::from_utf8_lossy(&out.stderr), "", "{name} --version wrote to stderr");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            "",
+            "{name} --version wrote to stderr"
+        );
         let out = rig.front(name).arg("nosuchverb").output().unwrap();
         assert_eq!(out.status.code(), Some(1), "{name}: {out:?}");
         let said = String::from_utf8_lossy(&out.stderr);
         assert!(!said.is_empty(), "{name} nosuchverb said nothing on stderr");
-        assert!(!said.contains(k5_cli::notice::TEXT), "{name} nosuchverb: {said}");
+        assert!(
+            !said.contains(k5_cli::notice::TEXT),
+            "{name} nosuchverb: {said}"
+        );
         assert!(!said.contains("k2 is now k5"), "{name} nosuchverb: {said}");
     }
 }

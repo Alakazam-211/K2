@@ -49,7 +49,12 @@ impl Note {
     /// newlines, trailing newlines and NULs dropped (`$(…)`), and one
     /// newline at the end.
     pub fn text(&self) -> String {
-        let joined: String = self.lines.join("\n").chars().filter(|c| *c != '\0').collect();
+        let joined: String = self
+            .lines
+            .join("\n")
+            .chars()
+            .filter(|c| *c != '\0')
+            .collect();
         format!("{}\n", joined.trim_end_matches('\n'))
     }
 
@@ -112,7 +117,10 @@ fn strip_status(raw: &str) -> &str {
 /// A key of an object (its last value, as Python keeps).
 fn get<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
     match v {
-        Value::Object(pairs) => pairs.iter().find(|(k, _)| k.as_str() == Some(key)).map(|(_, v)| v),
+        Value::Object(pairs) => pairs
+            .iter()
+            .find(|(k, _)| k.as_str() == Some(key))
+            .map(|(_, v)| v),
         _ => None,
     }
 }
@@ -132,7 +140,9 @@ mod tests {
     #[test]
     fn the_command_is_the_ask_line() {
         assert_eq!(
-            lines(r#"{"error":"x","permission":{"command":"k2 permission request --why ...","requestable":true}}"#),
+            lines(
+                r#"{"error":"x","permission":{"command":"k2 permission request --why ...","requestable":true}}"#
+            ),
             Some(vec!["Ask with: k2 permission request --why ...".to_string()])
         );
     }
@@ -141,14 +151,29 @@ mod tests {
     fn not_requestable_has_the_hint_then_the_line() {
         assert_eq!(
             lines(r#"{"permission":{"requestable":false,"hint":"Only a person can."}}"#),
-            Some(vec!["Only a person can.".to_string(), "It can't be requested.".to_string()])
+            Some(vec![
+                "Only a person can.".to_string(),
+                "It can't be requested.".to_string()
+            ])
         );
-        assert_eq!(lines(r#"{"permission":{"requestable":false}}"#), Some(vec!["It can't be requested.".to_string()]));
-        assert_eq!(lines(r#"{"permission":{"requestable":false,"hint":""}}"#), Some(vec!["It can't be requested.".to_string()]));
+        assert_eq!(
+            lines(r#"{"permission":{"requestable":false}}"#),
+            Some(vec!["It can't be requested.".to_string()])
+        );
+        assert_eq!(
+            lines(r#"{"permission":{"requestable":false,"hint":""}}"#),
+            Some(vec!["It can't be requested.".to_string()])
+        );
         // A hint that isn't a string is left out.
-        assert_eq!(lines(r#"{"permission":{"requestable":false,"hint":3}}"#), Some(vec!["It can't be requested.".to_string()]));
+        assert_eq!(
+            lines(r#"{"permission":{"requestable":false,"hint":3}}"#),
+            Some(vec!["It can't be requested.".to_string()])
+        );
         // An empty command falls to the requestable test.
-        assert_eq!(lines(r#"{"permission":{"command":"","requestable":false}}"#), Some(vec!["It can't be requested.".to_string()]));
+        assert_eq!(
+            lines(r#"{"permission":{"command":"","requestable":false}}"#),
+            Some(vec!["It can't be requested.".to_string()])
+        );
     }
 
     #[test]
@@ -175,10 +200,19 @@ mod tests {
 
     #[test]
     fn the_status_tail_is_cut_and_the_last_key_wins() {
-        assert_eq!(lines("{\"permission\":{\"command\":\"a\"}}\n403"), Some(vec!["Ask with: a".to_string()]));
-        assert_eq!(lines("{\"permission\":{\"command\":\"a\"}}\n403\n"), Some(vec!["Ask with: a".to_string()]));
+        assert_eq!(
+            lines("{\"permission\":{\"command\":\"a\"}}\n403"),
+            Some(vec!["Ask with: a".to_string()])
+        );
+        assert_eq!(
+            lines("{\"permission\":{\"command\":\"a\"}}\n403\n"),
+            Some(vec!["Ask with: a".to_string()])
+        );
         assert_eq!(lines("{\"permission\":{\"command\":\"a\"}}\n40"), None);
-        assert_eq!(lines(r#"{"permission":{"command":"a"},"permission":{"command":"b"}}"#), Some(vec!["Ask with: b".to_string()]));
+        assert_eq!(
+            lines(r#"{"permission":{"command":"a"},"permission":{"command":"b"}}"#),
+            Some(vec!["Ask with: b".to_string()])
+        );
     }
 
     #[test]

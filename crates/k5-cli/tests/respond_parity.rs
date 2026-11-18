@@ -59,51 +59,442 @@ fn respond_answers_as_the_shell_does() {
     let refused = || Reply::Answer(403, REFUSED.into());
     let v = vec![
         // The cell socket.
-        with(c(&[]), case("a line over the cell socket", &["hello", "world"], &[], vec![ok(OK)], port_only, 0, 1)),
-        with(c(&[]), case("--final", &["--final", "done now"], &[], vec![ok(OK)], port_only, 0, 1)),
-        with(c(&[]), case("-- then a flag's word", &["--", "--final"], &[], vec![ok(OK)], port_only, 0, 1)),
-        with(c(&[]), case("--final twice, then --", &["--final", "--final", "--", "--", "x"], &[], vec![ok(OK)], port_only, 0, 1)),
-        with(c(&[]), case("a word like a flag is text", &["-x", "hi"], &[], vec![ok(OK)], port_only, 0, 1)),
-        with(c(&[]), case("--json is text", &["--json", "hi"], &[], vec![ok(OK)], port_only, 0, 1)),
-        with(c(&[]), case("--final after text is text", &["hi", "--final"], &[], vec![ok(OK)], port_only, 0, 1)),
-        with(c(&[]), case("odd bytes", &["é & = /x \"q\" 'y' %41 + \t"], &[], vec![ok(OK)], port_only, 0, 1)),
-        with(c(&[]), case("two empty words are a space", &["", ""], &[], vec![ok(OK)], port_only, 0, 1)),
-        with(c(&[]), case("no message", &[], &[], vec![], port_only, 1, 0)),
-        with(c(&[]), case("an empty message", &[""], &[], vec![], port_only, 1, 0)),
-        with(c(&[]), case("--final alone", &["--final"], &[], vec![], port_only, 1, 0)),
-        with(c(&[]), case("not served on the cell socket: no TCP after it", &["x"], &[], vec![Reply::Answer(404, r#"{"error":"route not served on cell socket"}"#.into())], port_only, 0, 1)),
-        with(c(&[]), case("a refusal: printed, exit 0, no closing line", &["x"], &[], vec![Reply::Answer(403, PERMISSION_ASK.into())], port_only, 0, 1)),
-        with(c(&[]), case("a re-minted passport is used from the start", &["x"], &[], vec![ok(OK)], healed_on_disk, 0, 1)),
-        with(c(&[]), case("a refused passport heals once", &["x"], &[], vec![heal(&rig), ok(OK)], port_only, 0, 2)),
-        with(c(&[]), case("a dead passport: the probe, then the restart line", &["x"], &[], vec![refused(), refused()], port_only, 0, 2)),
-        with(c(&[]), case("a refused passport the probe finds good: no line", &["x"], &[], vec![refused(), ok(ROLE)], port_only, 0, 2)),
-        with(c(&[]), case("the bulletin line when it worked", &["x"], &[], vec![ok(BULLETIN)], port_only, 0, 1)),
-        with(c(&[]), case("the answer's bytes as they came", &["x"], &[], vec![ok("x\n\n y \n")], port_only, 0, 1)),
-        with(c(&[("K2_PORT", "41o0")]), case("a port that is no port: the socket doesn't need it", &["x"], &[], vec![ok(OK)], nothing, 0, 1)),
-        with(c(&[("K2_NO_OWNER_FALLBACK", "1")]), case("the guard lets a passport through", &["x"], &[], vec![ok(OK)], port_only, 0, 1)),
-        Case { no_tmpdir: true, ..with(c(&[]), case("TMPDIR unusable", &["x"], &[], vec![ok(OK)], port_only, 0, 1)) },
+        with(
+            c(&[]),
+            case(
+                "a line over the cell socket",
+                &["hello", "world"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "--final",
+                &["--final", "done now"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "-- then a flag's word",
+                &["--", "--final"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "--final twice, then --",
+                &["--final", "--final", "--", "--", "x"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "a word like a flag is text",
+                &["-x", "hi"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "--json is text",
+                &["--json", "hi"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "--final after text is text",
+                &["hi", "--final"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "odd bytes",
+                &["é & = /x \"q\" 'y' %41 + \t"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "two empty words are a space",
+                &["", ""],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case("no message", &[], &[], vec![], port_only, 1, 0),
+        ),
+        with(
+            c(&[]),
+            case("an empty message", &[""], &[], vec![], port_only, 1, 0),
+        ),
+        with(
+            c(&[]),
+            case("--final alone", &["--final"], &[], vec![], port_only, 1, 0),
+        ),
+        with(
+            c(&[]),
+            case(
+                "not served on the cell socket: no TCP after it",
+                &["x"],
+                &[],
+                vec![Reply::Answer(
+                    404,
+                    r#"{"error":"route not served on cell socket"}"#.into(),
+                )],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "a refusal: printed, exit 0, no closing line",
+                &["x"],
+                &[],
+                vec![Reply::Answer(403, PERMISSION_ASK.into())],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "a re-minted passport is used from the start",
+                &["x"],
+                &[],
+                vec![ok(OK)],
+                healed_on_disk,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "a refused passport heals once",
+                &["x"],
+                &[],
+                vec![heal(&rig), ok(OK)],
+                port_only,
+                0,
+                2,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "a dead passport: the probe, then the restart line",
+                &["x"],
+                &[],
+                vec![refused(), refused()],
+                port_only,
+                0,
+                2,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "a refused passport the probe finds good: no line",
+                &["x"],
+                &[],
+                vec![refused(), ok(ROLE)],
+                port_only,
+                0,
+                2,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "the bulletin line when it worked",
+                &["x"],
+                &[],
+                vec![ok(BULLETIN)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[]),
+            case(
+                "the answer's bytes as they came",
+                &["x"],
+                &[],
+                vec![ok("x\n\n y \n")],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[("K2_PORT", "41o0")]),
+            case(
+                "a port that is no port: the socket doesn't need it",
+                &["x"],
+                &[],
+                vec![ok(OK)],
+                nothing,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(&[("K2_NO_OWNER_FALLBACK", "1")]),
+            case(
+                "the guard lets a passport through",
+                &["x"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        Case {
+            no_tmpdir: true,
+            ..with(
+                c(&[]),
+                case(
+                    "TMPDIR unusable",
+                    &["x"],
+                    &[],
+                    vec![ok(OK)],
+                    port_only,
+                    0,
+                    1,
+                ),
+            )
+        },
         // An id tool in a session.
-        case("HOOK_SOCK and no passport", &["x"], &[("K2_HOOK_SOCK", "{sock}")], vec![], owner_and_port, 3, 0),
-        with(h(&[("K2_HOOK_SOCK", "{nosock}")]), case("the socket gone, the probe finds the passport dead", &["x"], &[], vec![refused()], port_only, 3, 1)),
-        with(h(&[("K2_HOOK_SOCK", "{nosock}")]), case("the socket gone, the probe finds it good: TCP", &["x"], &[], vec![ok(ROLE), ok(OK)], port_only, 0, 2)),
-        with(h(&[("K2_HOOK_SOCK", "{nosock}"), ("K2_PORT", "41o0")]), case("the socket gone and a port that is no port: no probe, curl's 3", &["x"], &[], vec![], nothing, 3, 0)),
+        case(
+            "HOOK_SOCK and no passport",
+            &["x"],
+            &[("K2_HOOK_SOCK", "{sock}")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        with(
+            h(&[("K2_HOOK_SOCK", "{nosock}")]),
+            case(
+                "the socket gone, the probe finds the passport dead",
+                &["x"],
+                &[],
+                vec![refused()],
+                port_only,
+                3,
+                1,
+            ),
+        ),
+        with(
+            h(&[("K2_HOOK_SOCK", "{nosock}")]),
+            case(
+                "the socket gone, the probe finds it good: TCP",
+                &["x"],
+                &[],
+                vec![ok(ROLE), ok(OK)],
+                port_only,
+                0,
+                2,
+            ),
+        ),
+        with(
+            h(&[("K2_HOOK_SOCK", "{nosock}"), ("K2_PORT", "41o0")]),
+            case(
+                "the socket gone and a port that is no port: no probe, curl's 3",
+                &["x"],
+                &[],
+                vec![],
+                nothing,
+                3,
+                0,
+            ),
+        ),
         // A host session.
-        with(h(&[]), case("a host session: TCP, the passport as Bearer", &["hi", "there"], &[], vec![ok(OK)], port_only, 0, 1)),
-        with(h(&[]), case("--final over TCP", &["--final", "é&"], &[], vec![ok(OK)], port_only, 0, 1)),
-        with(h(&[]), case("a refusal over TCP: printed, no heal, no probe", &["x"], &[], vec![refused()], port_only, 0, 1)),
-        with(h(&[]), case("a permission refusal over TCP: no closing line", &["x"], &[], vec![Reply::Answer(403, PERMISSION_ASK.into())], port_only, 0, 1)),
-        with(h(&[]), case("the bulletin over TCP: no line", &["x"], &[], vec![ok(BULLETIN)], port_only, 0, 1)),
-        with(h(&[]), case("the answer's bytes over TCP", &["x"], &[], vec![ok("x\n\n y \n")], port_only, 0, 1)),
-        with(h(&[]), case("a re-minted passport over TCP", &["x"], &[], vec![ok(OK)], healed_on_disk, 0, 1)),
-        with(h(&[]), case("no message over TCP", &[], &[], vec![], port_only, 1, 0)),
-        with(h(&[("K2_PORT", "41o0")]), case("a port that is no port over TCP: curl's 3", &["x"], &[], vec![], nothing, 3, 0)),
-        case("a passport with no dot", &["x"], &[("K2_HOOK_TOKEN", "nodot")], vec![], port_only, 1, 0),
+        with(
+            h(&[]),
+            case(
+                "a host session: TCP, the passport as Bearer",
+                &["hi", "there"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            h(&[]),
+            case(
+                "--final over TCP",
+                &["--final", "é&"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            h(&[]),
+            case(
+                "a refusal over TCP: printed, no heal, no probe",
+                &["x"],
+                &[],
+                vec![refused()],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            h(&[]),
+            case(
+                "a permission refusal over TCP: no closing line",
+                &["x"],
+                &[],
+                vec![Reply::Answer(403, PERMISSION_ASK.into())],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            h(&[]),
+            case(
+                "the bulletin over TCP: no line",
+                &["x"],
+                &[],
+                vec![ok(BULLETIN)],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            h(&[]),
+            case(
+                "the answer's bytes over TCP",
+                &["x"],
+                &[],
+                vec![ok("x\n\n y \n")],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            h(&[]),
+            case(
+                "a re-minted passport over TCP",
+                &["x"],
+                &[],
+                vec![ok(OK)],
+                healed_on_disk,
+                0,
+                1,
+            ),
+        ),
+        with(
+            h(&[]),
+            case("no message over TCP", &[], &[], vec![], port_only, 1, 0),
+        ),
+        with(
+            h(&[("K2_PORT", "41o0")]),
+            case(
+                "a port that is no port over TCP: curl's 3",
+                &["x"],
+                &[],
+                vec![],
+                nothing,
+                3,
+                0,
+            ),
+        ),
+        case(
+            "a passport with no dot",
+            &["x"],
+            &[("K2_HOOK_TOKEN", "nodot")],
+            vec![],
+            port_only,
+            1,
+            0,
+        ),
         case("the owner only", &["x"], &[], vec![], owner_and_port, 1, 0),
         // The gates.
         case("no port", &["x"], &[], vec![], owner_only, 1, 0),
         case("no token", &["x"], &[], vec![], port_only, 1, 0),
-        case("the gate comes before the words", &[], &[], vec![], owner_only, 1, 0),
-        case("the virtual desktop's guard", &["x"], &[("K2_NO_OWNER_FALLBACK", "1")], vec![], owner_and_port, 3, 0),
+        case(
+            "the gate comes before the words",
+            &[],
+            &[],
+            vec![],
+            owner_only,
+            1,
+            0,
+        ),
+        case(
+            "the virtual desktop's guard",
+            &["x"],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
     ];
     for c in v {
         rig.check(&c);
@@ -118,7 +509,11 @@ fn cell_reset(c: Case) -> Case {
     if cfg!(target_os = "linux") {
         c
     } else {
-        Case { code: 1, compare: Compare::Waited, ..c }
+        Case {
+            code: 1,
+            compare: Compare::Waited,
+            ..c
+        }
     }
 }
 
@@ -127,26 +522,175 @@ fn cell_reset(c: Case) -> Case {
 #[test]
 fn respond_with_no_answer() {
     let rig = Rig::new(VERB, "none");
-    let waited = |c: Case| Case { compare: Compare::Waited, ..c };
-    let no_tmp = |c: Case| Case { no_tmpdir: true, ..c };
+    let waited = |c: Case| Case {
+        compare: Compare::Waited,
+        ..c
+    };
+    let no_tmp = |c: Case| Case {
+        no_tmpdir: true,
+        ..c
+    };
     let c = || cell(&rig, &[]);
     let h = || host(&rig, &[]);
     let garbage = || Reply::Raw(GARBAGE.to_vec());
     let empty_5xx = || Reply::Answer(502, String::new());
     let v = vec![
-        waited(with(c(), case("cell: an empty reply (52)", &["x"], &[], vec![Reply::Close], port_only, 1, 1))),
-        cell_reset(with(c(), case("cell: a reset (56 on Linux)", &["x"], &[], vec![Reply::Reset], port_only, 56, 1))),
-        with(c(), case("cell: an empty 200", &["x"], &[], vec![ok("")], port_only, 0, 1)),
-        with(c(), case("cell: not HTTP (curl 1)", &["x"], &[], vec![garbage()], port_only, 1, 1)),
-        with(c(), case("cell: a 5xx with no body (no status read)", &["x"], &[], vec![empty_5xx()], port_only, 0, 1)),
-        no_tmp(waited(with(c(), case("cell: TMPDIR unusable, an empty reply", &["x"], &[], vec![Reply::Close], port_only, 1, 1)))),
-        no_tmp(cell_reset(with(c(), case("cell: TMPDIR unusable, a reset", &["x"], &[], vec![Reply::Reset], port_only, 56, 1)))),
-        with(h(), case("TCP: an empty reply (52)", &["x"], &[], vec![Reply::Close], port_only, 52, 1)),
-        with(h(), case("TCP: a reset (56)", &["x"], &[], vec![Reply::Reset], port_only, 56, 1)),
-        with(h(), case("TCP: an empty 200", &["x"], &[], vec![ok("")], port_only, 0, 1)),
-        with(h(), case("TCP: not HTTP (curl 1)", &["x"], &[], vec![garbage()], port_only, 1, 1)),
-        with(h(), case("TCP: a 5xx with no body", &["x"], &[], vec![empty_5xx()], port_only, 0, 1)),
-        no_tmp(with(h(), case("TCP: TMPDIR unusable, an empty reply", &["x"], &[], vec![Reply::Close], port_only, 52, 1))),
+        waited(with(
+            c(),
+            case(
+                "cell: an empty reply (52)",
+                &["x"],
+                &[],
+                vec![Reply::Close],
+                port_only,
+                1,
+                1,
+            ),
+        )),
+        cell_reset(with(
+            c(),
+            case(
+                "cell: a reset (56 on Linux)",
+                &["x"],
+                &[],
+                vec![Reply::Reset],
+                port_only,
+                56,
+                1,
+            ),
+        )),
+        with(
+            c(),
+            case(
+                "cell: an empty 200",
+                &["x"],
+                &[],
+                vec![ok("")],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            c(),
+            case(
+                "cell: not HTTP (curl 1)",
+                &["x"],
+                &[],
+                vec![garbage()],
+                port_only,
+                1,
+                1,
+            ),
+        ),
+        with(
+            c(),
+            case(
+                "cell: a 5xx with no body (no status read)",
+                &["x"],
+                &[],
+                vec![empty_5xx()],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        no_tmp(waited(with(
+            c(),
+            case(
+                "cell: TMPDIR unusable, an empty reply",
+                &["x"],
+                &[],
+                vec![Reply::Close],
+                port_only,
+                1,
+                1,
+            ),
+        ))),
+        no_tmp(cell_reset(with(
+            c(),
+            case(
+                "cell: TMPDIR unusable, a reset",
+                &["x"],
+                &[],
+                vec![Reply::Reset],
+                port_only,
+                56,
+                1,
+            ),
+        ))),
+        with(
+            h(),
+            case(
+                "TCP: an empty reply (52)",
+                &["x"],
+                &[],
+                vec![Reply::Close],
+                port_only,
+                52,
+                1,
+            ),
+        ),
+        with(
+            h(),
+            case(
+                "TCP: a reset (56)",
+                &["x"],
+                &[],
+                vec![Reply::Reset],
+                port_only,
+                56,
+                1,
+            ),
+        ),
+        with(
+            h(),
+            case(
+                "TCP: an empty 200",
+                &["x"],
+                &[],
+                vec![ok("")],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        with(
+            h(),
+            case(
+                "TCP: not HTTP (curl 1)",
+                &["x"],
+                &[],
+                vec![garbage()],
+                port_only,
+                1,
+                1,
+            ),
+        ),
+        with(
+            h(),
+            case(
+                "TCP: a 5xx with no body",
+                &["x"],
+                &[],
+                vec![empty_5xx()],
+                port_only,
+                0,
+                1,
+            ),
+        ),
+        no_tmp(with(
+            h(),
+            case(
+                "TCP: TMPDIR unusable, an empty reply",
+                &["x"],
+                &[],
+                vec![Reply::Close],
+                port_only,
+                52,
+                1,
+            ),
+        )),
     ];
     for c in v {
         rig.check(&c);
@@ -158,15 +702,43 @@ fn respond_with_no_answer() {
 fn respond_with_no_daemon() {
     let rig = Rig::new(VERB, "dead");
     let port = dead_port();
-    rig.check(&with(host(&rig, &[("K2_PORT", port.as_str())]), case("TCP: nothing listens", &["x"], &[], vec![], nothing, 7, 0)));
-    rig.check(&with(cell(&rig, &[("K2_HOOK_SOCK", "{deadsock}")]), case("cell: a socket file nothing listens on", &["x"], &[], vec![], port_only, 7, 0)));
+    rig.check(&with(
+        host(&rig, &[("K2_PORT", port.as_str())]),
+        case("TCP: nothing listens", &["x"], &[], vec![], nothing, 7, 0),
+    ));
+    rig.check(&with(
+        cell(&rig, &[("K2_HOOK_SOCK", "{deadsock}")]),
+        case(
+            "cell: a socket file nothing listens on",
+            &["x"],
+            &[],
+            vec![],
+            port_only,
+            7,
+            0,
+        ),
+    ));
 }
 
 /// No answer within 30 s on the cell socket: the line, exit 1. Slow.
 #[test]
 fn respond_on_a_cell_socket_that_never_answers() {
     let rig = Rig::new(VERB, "hangc");
-    let c = Case { compare: Compare::Waited, ..with(cell(&rig, &[]), case("cell: no answer in time (28)", &["x"], &[], vec![Reply::Hang(Duration::from_secs(35))], port_only, 1, 1)) };
+    let c = Case {
+        compare: Compare::Waited,
+        ..with(
+            cell(&rig, &[]),
+            case(
+                "cell: no answer in time (28)",
+                &["x"],
+                &[],
+                vec![Reply::Hang(Duration::from_secs(35))],
+                port_only,
+                1,
+                1,
+            ),
+        )
+    };
     rig.check(&c);
 }
 
@@ -174,7 +746,18 @@ fn respond_on_a_cell_socket_that_never_answers() {
 #[test]
 fn respond_over_tcp_that_never_answers() {
     let rig = Rig::new(VERB, "hangt");
-    let c = with(host(&rig, &[]), case("TCP: no answer in time (28)", &["x"], &[], vec![Reply::Hang(Duration::from_secs(35))], port_only, 28, 1));
+    let c = with(
+        host(&rig, &[]),
+        case(
+            "TCP: no answer in time (28)",
+            &["x"],
+            &[],
+            vec![Reply::Hang(Duration::from_secs(35))],
+            port_only,
+            28,
+            1,
+        ),
+    );
     rig.check(&c);
 }
 
@@ -183,14 +766,64 @@ fn respond_over_tcp_that_never_answers() {
 #[test]
 fn respond_hands_these_to_the_shell() {
     let rig = Rig::new(VERB, "shell");
-    let shell = |c: Case| Case { compare: Compare::Shell, ..c };
+    let shell = |c: Case| Case {
+        compare: Compare::Shell,
+        ..c
+    };
     let c = |extra: &[(&'static str, &str)]| cell(&rig, extra);
     let v = vec![
-        shell(with(c(&[]), case("--help", &["--help"], &[], vec![], port_only, 0, 0))),
-        shell(with(c(&[]), case("-h after --final", &["--final", "-h"], &[], vec![], port_only, 0, 0))),
-        shell(with(c(&[]), case("--help after text is text", &["hi", "--help"], &[], vec![ok(OK)], port_only, 0, 1))),
-        shell(with(c(&[]), case("-- then --help", &["--", "--help"], &[], vec![ok(OK)], port_only, 0, 1))),
-        shell(with(c(&[("CODEX_THREAD_ID", "t1")]), case("a CODEX_ variable with HOOK_SOCK", &["x"], &[], vec![ok(OK)], port_only, 0, 1))),
+        shell(with(
+            c(&[]),
+            case("--help", &["--help"], &[], vec![], port_only, 0, 0),
+        )),
+        shell(with(
+            c(&[]),
+            case(
+                "-h after --final",
+                &["--final", "-h"],
+                &[],
+                vec![],
+                port_only,
+                0,
+                0,
+            ),
+        )),
+        shell(with(
+            c(&[]),
+            case(
+                "--help after text is text",
+                &["hi", "--help"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        )),
+        shell(with(
+            c(&[]),
+            case(
+                "-- then --help",
+                &["--", "--help"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        )),
+        shell(with(
+            c(&[("CODEX_THREAD_ID", "t1")]),
+            case(
+                "a CODEX_ variable with HOOK_SOCK",
+                &["x"],
+                &[],
+                vec![ok(OK)],
+                port_only,
+                0,
+                1,
+            ),
+        )),
     ];
     for c in v {
         rig.check(&c);

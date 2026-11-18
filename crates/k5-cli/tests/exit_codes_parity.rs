@@ -40,20 +40,30 @@ fn literal_exits(line: &str) -> Vec<i32> {
         from = start + 5;
         let before = line[..start].trim_end();
         let at_command = before.is_empty()
-            || [";", "&&", "||", "{", "(", "then", "else", "do"].iter().any(|t| {
-                before.ends_with(t)
-                    && (t.len() == 1
-                        || !before[..before.len() - t.len()].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_'))
-            });
+            || [";", "&&", "||", "{", "(", "then", "else", "do"]
+                .iter()
+                .any(|t| {
+                    before.ends_with(t)
+                        && (t.len() == 1
+                            || !before[..before.len() - t.len()]
+                                .ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_'))
+                });
         if !at_command {
             continue;
         }
-        let digits: String = line[from..].chars().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = line[from..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
         if digits.is_empty() {
             continue;
         }
         let rest = &line[from + digits.len()..];
-        if rest.is_empty() || rest.starts_with(|c: char| c.is_whitespace() || matches!(c, ';' | '}' | ')' | '"' | '\'')) {
+        if rest.is_empty()
+            || rest.starts_with(|c: char| {
+                c.is_whitespace() || matches!(c, ';' | '}' | ')' | '"' | '\'')
+            })
+        {
             found.push(digits.parse().expect("a short number"));
         }
     }
@@ -63,16 +73,31 @@ fn literal_exits(line: &str) -> Vec<i32> {
 #[test]
 fn the_reader_finds_exits_where_a_command_stands_only() {
     assert_eq!(literal_exits("    exit 2"), vec![2]);
-    assert_eq!(literal_exits("  [ -n \"$x\" ] || { echo no >&2; exit 3; }"), vec![3]);
-    assert_eq!(literal_exits("if a; then exit 4; else exit 5; fi"), vec![4, 5]);
+    assert_eq!(
+        literal_exits("  [ -n \"$x\" ] || { echo no >&2; exit 3; }"),
+        vec![3]
+    );
+    assert_eq!(
+        literal_exits("if a; then exit 4; else exit 5; fi"),
+        vec![4, 5]
+    );
     assert_eq!(literal_exits("  cmd && exit 0"), vec![0]);
     assert_eq!(literal_exits("  # exit 9 in a comment"), Vec::<i32>::new());
-    assert_eq!(literal_exits("  [compute] job <id>: exit 100 after 6m"), Vec::<i32>::new());
+    assert_eq!(
+        literal_exits("  [compute] job <id>: exit 100 after 6m"),
+        Vec::<i32>::new()
+    );
     assert_eq!(literal_exits("  exit \"$rc\""), Vec::<i32>::new());
     assert_eq!(literal_exits("  exit 12x"), Vec::<i32>::new());
     assert_eq!(literal_exits("  redo exit 7"), Vec::<i32>::new());
-    assert_eq!(literal_exits("    trap \"rm -f x; echo detached >&2; exit 130\" INT"), vec![130]);
-    assert_eq!(literal_exits("    trap 'echo cancelled >&2; exit 130' INT TERM"), vec![130]);
+    assert_eq!(
+        literal_exits("    trap \"rm -f x; echo detached >&2; exit 130\" INT"),
+        vec![130]
+    );
+    assert_eq!(
+        literal_exits("    trap 'echo cancelled >&2; exit 130' INT TERM"),
+        vec![130]
+    );
 }
 
 #[test]
@@ -81,20 +106,38 @@ fn every_code_the_shell_cli_ends_with_is_on_the_enum() {
     for (file, text) in common::shell_sources() {
         for (n, line) in text.lines().enumerate() {
             for code in literal_exits(line) {
-                seen.entry(code).or_insert_with(|| format!("{file}:{}", n + 1));
+                seen.entry(code)
+                    .or_insert_with(|| format!("{file}:{}", n + 1));
             }
         }
     }
-    assert!(seen.contains_key(&2) && seen.contains_key(&3), "the reader found too little: {seen:?}");
+    assert!(
+        seen.contains_key(&2) && seen.contains_key(&3),
+        "the reader found too little: {seen:?}"
+    );
     for (code, why) in PASSED_ON {
-        assert!(!seen.contains_key(code), "{code} is now a literal exit at {}; drop it from PASSED_ON ({why})", seen[code]);
+        assert!(
+            !seen.contains_key(code),
+            "{code} is now a literal exit at {}; drop it from PASSED_ON ({why})",
+            seen[code]
+        );
         seen.insert(*code, (*why).to_string());
     }
     let named: Vec<i32> = Exit::ALL.iter().map(|e| e.code()).collect();
     for (code, at) in &seen {
-        assert!(named.contains(code), "the shell CLI ends with {code} ({at}) and Exit has no name for it");
+        assert!(
+            named.contains(code),
+            "the shell CLI ends with {code} ({at}) and Exit has no name for it"
+        );
     }
     let shell: Vec<i32> = seen.keys().copied().collect();
-    let unused: Vec<i32> = named.iter().copied().filter(|c| !shell.contains(c) && !FRONT_ONLY.contains(c)).collect();
-    assert!(unused.is_empty(), "Exit names codes the shell CLI never ends with and the front doesn't own: {unused:?}");
+    let unused: Vec<i32> = named
+        .iter()
+        .copied()
+        .filter(|c| !shell.contains(c) && !FRONT_ONLY.contains(c))
+        .collect();
+    assert!(
+        unused.is_empty(),
+        "Exit names codes the shell CLI never ends with and the front doesn't own: {unused:?}"
+    );
 }

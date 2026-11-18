@@ -61,7 +61,8 @@ pub const TOOL: &str = "respond";
 /// No message.
 pub const USAGE: &str = "Usage: k2 respond [--final] <message>";
 /// No cell socket and no passport to send it with.
-pub const NO_SESSION: &str = "Error: 'k2 respond' needs an API-launched session (per-cell socket or scoped session token).";
+pub const NO_SESSION: &str =
+    "Error: 'k2 respond' needs an API-launched session (per-cell socket or scoped session token).";
 
 /// What the words say.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,22 +91,33 @@ pub fn parse(words: &[&str]) -> Option<Line> {
             _ => break,
         }
     }
-    Some(Line { last, message: words[i..].join(" ") })
+    Some(Line {
+        last,
+        message: words[i..].join(" "),
+    })
 }
 
 /// The form both arms send.
 pub fn form(line: &Line) -> [String; 2] {
-    [format!("message={}", quote(&line.message)), format!("final={}", u8::from(line.last))]
+    [
+        format!("message={}", quote(&line.message)),
+        format!("final={}", u8::from(line.last)),
+    ]
 }
 
 /// `k5 respond ...`: `args` is the whole command line after `argv[0]`.
 /// `None`: the shell CLI answers it (see the module's notes).
 pub fn run(args: &[OsString]) -> Option<Exit> {
-    let hook_sock = env_names::first_nonempty_os_in(env_names::HOOK_SOCK, |n| std::env::var_os(n)).map(|(_, v)| v);
+    let hook_sock = env_names::first_nonempty_os_in(env_names::HOOK_SOCK, |n| std::env::var_os(n))
+        .map(|(_, v)| v);
     if hook_sock.is_some() && prelude::codex_env(std::env::vars_os().map(|(name, _)| name)) {
         return None;
     }
-    let words: Vec<&str> = args.iter().skip(1).map(|a| a.to_str()).collect::<Option<_>>()?;
+    let words: Vec<&str> = args
+        .iter()
+        .skip(1)
+        .map(|a| a.to_str())
+        .collect::<Option<_>>()?;
     let line = parse(&words)?;
     Some(match daemon::current() {
         Ok(settings) => run_with(args, &line, hook_sock.as_deref().map(Path::new), settings),
@@ -116,7 +128,12 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     })
 }
 
-fn run_with(args: &[OsString], line: &Line, hook_sock: Option<&Path>, mut settings: Settings) -> Exit {
+fn run_with(
+    args: &[OsString],
+    line: &Line,
+    hook_sock: Option<&Path>,
+    mut settings: Settings,
+) -> Exit {
     if let Some(notice) = prelude::rename_notice(Path::new(&settings.project)) {
         out::stderr_line(notice);
     }
@@ -202,7 +219,8 @@ mod tests {
     use super::*;
 
     fn source() -> String {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/respond.sh");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/respond.sh");
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
     }
 
@@ -225,16 +243,32 @@ mod tests {
             r#"            -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null"#,
             r#"    echo "Error: 'k2 respond' needs an API-launched session (per-cell socket or scoped session token)." >&2"#,
         ] {
-            assert!(text.lines().any(|l| l == shell), "cmd_respond no longer has {shell:?}");
+            assert!(
+                text.lines().any(|l| l == shell),
+                "cmd_respond no longer has {shell:?}"
+            );
         }
         assert_eq!(USAGE, "Usage: k2 respond [--final] <message>");
-        let policy = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/cli-tools-policy.sh")).unwrap();
-        assert!(policy.contains(r#"        respond) echo "respond" ;;"#), "respond's tool id moved");
-        assert!(policy.contains("        msg|inbox|respond|awareness|"), "respond is no longer an id tool");
+        let policy = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../cli/src/cli-tools-policy.sh"),
+        )
+        .unwrap();
+        assert!(
+            policy.contains(r#"        respond) echo "respond" ;;"#),
+            "respond's tool id moved"
+        );
+        assert!(
+            policy.contains("        msg|inbox|respond|awareness|"),
+            "respond is no longer an id tool"
+        );
     }
 
     fn line(last: bool, message: &str) -> Option<Line> {
-        Some(Line { last, message: message.into() })
+        Some(Line {
+            last,
+            message: message.into(),
+        })
     }
 
     #[test]
@@ -254,7 +288,22 @@ mod tests {
 
     #[test]
     fn the_form() {
-        assert_eq!(form(&Line { last: true, message: "é & x=1".into() }), ["message=%C3%A9%20%26%20x%3D1".to_string(), "final=1".to_string()]);
-        assert_eq!(form(&Line { last: false, message: "a".into() })[1], "final=0");
+        assert_eq!(
+            form(&Line {
+                last: true,
+                message: "é & x=1".into()
+            }),
+            [
+                "message=%C3%A9%20%26%20x%3D1".to_string(),
+                "final=1".to_string()
+            ]
+        );
+        assert_eq!(
+            form(&Line {
+                last: false,
+                message: "a".into()
+            })[1],
+            "final=0"
+        );
     }
 }

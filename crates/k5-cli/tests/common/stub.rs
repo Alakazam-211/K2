@@ -26,7 +26,12 @@ pub enum Reply {
     /// The same, with these header lines too, after `Content-Type`.
     Headed(u16, Vec<(String, String)>, String),
     /// Writes `content` to `file`, then answers.
-    WriteThen { file: PathBuf, content: String, status: u16, body: String },
+    WriteThen {
+        file: PathBuf,
+        content: String,
+        status: u16,
+        body: String,
+    },
     /// Reads the request, waits, and closes with nothing sent.
     Hang(Duration),
     /// Reads the request and closes with nothing sent.
@@ -71,7 +76,8 @@ impl Stub {
         if sock.exists() {
             std::fs::remove_file(sock).expect("remove an old stub socket");
         }
-        let uds = UnixListener::bind(sock).unwrap_or_else(|e| panic!("bind {}: {e}", sock.display()));
+        let uds =
+            UnixListener::bind(sock).unwrap_or_else(|e| panic!("bind {}: {e}", sock.display()));
         let s = Arc::clone(&state);
         std::thread::spawn(move || {
             for conn in tcp.incoming() {
@@ -88,7 +94,11 @@ impl Stub {
                 std::thread::spawn(move || serve(conn, "uds", &s));
             }
         });
-        Stub { port, sock: sock.to_path_buf(), state }
+        Stub {
+            port,
+            sock: sock.to_path_buf(),
+            state,
+        }
     }
 
     /// Empties the log and sets the answers to come.
@@ -128,7 +138,11 @@ fn complete(got: &[u8]) -> bool {
     let head = String::from_utf8_lossy(&got[..at]);
     let length: usize = head
         .lines()
-        .find_map(|l| l.split_once(':').filter(|(n, _)| n.eq_ignore_ascii_case("content-length")).map(|(_, v)| v.trim().to_string()))
+        .find_map(|l| {
+            l.split_once(':')
+                .filter(|(n, _)| n.eq_ignore_ascii_case("content-length"))
+                .map(|(_, v)| v.trim().to_string())
+        })
         .map_or(0, |v| v.parse().expect("a numeric Content-Length"));
     got.len() >= at + 4 + length
 }
@@ -156,10 +170,16 @@ fn peek_request(fd: RawFd) -> Vec<u8> {
 }
 
 fn serve<S: Read + Write + AsRawFd>(mut conn: S, channel: &'static str, state: &Mutex<State>) {
-    if matches!(state.lock().expect("the stub's lock").queue.front(), Some(Reply::Reset)) {
+    if matches!(
+        state.lock().expect("the stub's lock").queue.front(),
+        Some(Reply::Reset)
+    ) {
         let got = peek_request(conn.as_raw_fd());
         let mut s = state.lock().expect("the stub's lock");
-        s.log.push(Logged { channel, bytes: got });
+        s.log.push(Logged {
+            channel,
+            bytes: got,
+        });
         s.queue.pop_front();
         drop(s);
         drop(conn);
@@ -179,7 +199,11 @@ fn serve<S: Read + Write + AsRawFd>(mut conn: S, channel: &'static str, state: &
     let head = String::from_utf8_lossy(&got[..head_end]).to_string();
     let length: usize = head
         .lines()
-        .find_map(|l| l.split_once(':').filter(|(n, _)| n.eq_ignore_ascii_case("content-length")).map(|(_, v)| v.trim().to_string()))
+        .find_map(|l| {
+            l.split_once(':')
+                .filter(|(n, _)| n.eq_ignore_ascii_case("content-length"))
+                .map(|(_, v)| v.trim().to_string())
+        })
         .map(|v| v.parse().expect("a numeric Content-Length"))
         .unwrap_or(0);
     while got.len() < head_end + length {
@@ -190,14 +214,25 @@ fn serve<S: Read + Write + AsRawFd>(mut conn: S, channel: &'static str, state: &
     }
     let reply = {
         let mut s = state.lock().expect("the stub's lock");
-        s.log.push(Logged { channel, bytes: got });
-        s.queue.pop_front().unwrap_or(Reply::Answer(200, r#"{"ok":true}"#.to_string()))
+        s.log.push(Logged {
+            channel,
+            bytes: got,
+        });
+        s.queue
+            .pop_front()
+            .unwrap_or(Reply::Answer(200, r#"{"ok":true}"#.to_string()))
     };
     let (status, extra, body) = match reply {
         Reply::Answer(status, body) => (status, Vec::new(), body),
         Reply::Headed(status, extra, body) => (status, extra, body),
-        Reply::WriteThen { file, content, status, body } => {
-            std::fs::write(&file, content).unwrap_or_else(|e| panic!("write {}: {e}", file.display()));
+        Reply::WriteThen {
+            file,
+            content,
+            status,
+            body,
+        } => {
+            std::fs::write(&file, content)
+                .unwrap_or_else(|e| panic!("write {}: {e}", file.display()));
             (status, Vec::new(), body)
         }
         Reply::Hang(d) => {

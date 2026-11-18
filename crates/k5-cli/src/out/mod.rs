@@ -102,9 +102,11 @@ mod tests {
 
     #[test]
     fn a_failed_write_or_flush_is_an_error() {
-        let err = write_flushed(&mut Failing(io::ErrorKind::BrokenPipe, false), b"x").expect_err("write fails");
+        let err = write_flushed(&mut Failing(io::ErrorKind::BrokenPipe, false), b"x")
+            .expect_err("write fails");
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
-        let err = write_flushed(&mut Failing(io::ErrorKind::StorageFull, true), b"x").expect_err("flush fails");
+        let err = write_flushed(&mut Failing(io::ErrorKind::StorageFull, true), b"x")
+            .expect_err("flush fails");
         assert_eq!(err.kind(), io::ErrorKind::StorageFull);
     }
 
@@ -122,8 +124,16 @@ mod tests {
 
     #[test]
     fn another_failure_is_exit_1() {
-        for kind in [io::ErrorKind::StorageFull, io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
-            assert_eq!(after_stdout_error(&io::Error::from(kind)), Exit::Error, "{kind:?}");
+        for kind in [
+            io::ErrorKind::StorageFull,
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::Other,
+        ] {
+            assert_eq!(
+                after_stdout_error(&io::Error::from(kind)),
+                Exit::Error,
+                "{kind:?}"
+            );
         }
     }
 }

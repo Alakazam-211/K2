@@ -56,19 +56,35 @@ impl Rig {
         let proj = dir.join("proj");
         // The project is the run's folder: its workspace folder stops the
         // search there.
-        for d in [dir.join("bin"), k2_client::paths::k2_home_in(&home), k2_client::workspace_dir::workspace_dot_dir(&proj)] {
+        for d in [
+            dir.join("bin"),
+            k2_client::paths::k2_home_in(&home),
+            k2_client::workspace_dir::workspace_dot_dir(&proj),
+        ] {
             std::fs::create_dir_all(&d).unwrap();
         }
         for name in ["k2", "k5"] {
             std::os::unix::fs::symlink(BIN, dir.join("bin").join(name)).unwrap();
         }
-        let stub = Stub::start(&PathBuf::from(format!("/tmp/k5n-{tag}-{}-{n}.sock", std::process::id())));
-        Rig { dir, home, proj, stub }
+        let stub = Stub::start(&PathBuf::from(format!(
+            "/tmp/k5n-{tag}-{}-{n}.sock",
+            std::process::id()
+        )));
+        Rig {
+            dir,
+            home,
+            proj,
+            stub,
+        }
     }
 
     /// The owner token in the K2 home, as the daemon writes it.
     fn owner_on_disk(&self) {
-        std::fs::write(k2_client::paths::k2_home_in(&self.home).join("heartbeat.token"), format!("{OWNER}\n")).unwrap();
+        std::fs::write(
+            k2_client::paths::k2_home_in(&self.home).join("heartbeat.token"),
+            format!("{OWNER}\n"),
+        )
+        .unwrap();
     }
 
     fn port(&self) -> String {
@@ -81,7 +97,10 @@ impl Rig {
         if let Some(path) = std::env::var_os("PATH") {
             cmd.env("PATH", path);
         }
-        cmd.env("HOME", &self.home).current_dir(&self.proj).envs(extra.iter().copied()).args(args.iter().map(OsString::from));
+        cmd.env("HOME", &self.home)
+            .current_dir(&self.proj)
+            .envs(extra.iter().copied())
+            .args(args.iter().map(OsString::from));
         let out = cmd.output().unwrap_or_else(|e| panic!("run {cmd:?}: {e}"));
         Out {
             code: out.status.code(),
@@ -104,7 +123,9 @@ fn dead_port() -> String {
 }
 
 fn headed(status: u16, version: Option<&str>, body: &str) -> Reply {
-    let extra = version.map(|v| vec![("X-K5-Server-Version".to_string(), v.to_string())]).unwrap_or_default();
+    let extra = version
+        .map(|v| vec![("X-K5-Server-Version".to_string(), v.to_string())])
+        .unwrap_or_default();
     Reply::Headed(status, extra, body.to_string())
 }
 
@@ -118,7 +139,9 @@ fn head(r: &Logged) -> Vec<String> {
 fn rows(pairs: &[(&str, &str, i64)]) -> String {
     let rows: Vec<String> = pairs
         .iter()
-        .map(|(kind, key, n)| format!(r#"{{"kind":"{kind}","key":"{key}","count":{n},"first_at":1,"last_at":2}}"#))
+        .map(|(kind, key, n)| {
+            format!(r#"{{"kind":"{kind}","key":"{key}","count":{n},"first_at":1,"last_at":2}}"#)
+        })
         .collect();
     format!(r#"{{"rows":[{}]}}"#, rows.join(","))
 }
@@ -133,10 +156,17 @@ fn skew_lines(stderr: &str) -> usize {
 #[test]
 fn version_check_same_version() {
     let rig = Rig::new("chk-same");
-    rig.stub.reset(&[headed(200, None, &format!(r#"{{"phase":"ready","version":"{}"}}"#, ours()))]);
+    rig.stub.reset(&[headed(
+        200,
+        None,
+        &format!(r#"{{"phase":"ready","version":"{}"}}"#, ours()),
+    )]);
     let out = rig.run(&["--version", "--check"], &[("K2_PORT", &rig.port())]);
     assert_eq!(out.code, Some(0), "{out:?}");
-    assert_eq!(out.stdout, format!("k2 {v}\nserver {v}: same version\n", v = ours()));
+    assert_eq!(
+        out.stdout,
+        format!("k2 {v}\nserver {v}: same version\n", v = ours())
+    );
     assert_eq!(out.stderr, "");
     // One request: a bare GET, no credential, no query.
     let log = rig.stub.log();
@@ -144,8 +174,20 @@ fn version_check_same_version() {
     let h = head(&log[0]);
     assert_eq!(h[0], "GET /boot-status HTTP/1.1");
     assert_eq!(log[0].channel, "tcp");
-    let names: Vec<&str> = h[1..].iter().map(|l| l.split_once(':').expect("a header").0).collect();
-    assert_eq!(names, ["Host", "User-Agent", "Accept", "X-K5-Cli-Version", "X-K5-Cli-Via"]);
+    let names: Vec<&str> = h[1..]
+        .iter()
+        .map(|l| l.split_once(':').expect("a header").0)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "Host",
+            "User-Agent",
+            "Accept",
+            "X-K5-Cli-Version",
+            "X-K5-Cli-Via"
+        ]
+    );
 }
 
 #[test]
@@ -153,15 +195,29 @@ fn version_check_skewed_is_one_stdout_line_and_exit_0() {
     let rig = Rig::new("chk-skew");
     rig.owner_on_disk();
     // The header names the other version too: still one line.
-    rig.stub.reset(&[headed(200, Some(OTHER), &format!(r#"{{"version":"{OTHER}"}}"#))]);
+    rig.stub.reset(&[headed(
+        200,
+        Some(OTHER),
+        &format!(r#"{{"version":"{OTHER}"}}"#),
+    )]);
     let out = rig.run(&["--version", "--check"], &[("K2_PORT", &rig.port())]);
     assert_eq!(out.code, Some(0), "{out:?}");
-    assert_eq!(out.stdout, format!("k2 {}\n{}\n", ours(), skew::line(ours(), OTHER)));
-    assert_eq!(out.stderr, "", "the transport's own line is not printed as well");
+    assert_eq!(
+        out.stdout,
+        format!("k2 {}\n{}\n", ours(), skew::line(ours(), OTHER))
+    );
+    assert_eq!(
+        out.stderr, "",
+        "the transport's own line is not printed as well"
+    );
     // The owner token on disk is not sent to a public read.
     let h = head(&rig.stub.log()[0]);
     assert_eq!(h[0], "GET /boot-status HTTP/1.1");
-    assert!(h.iter().all(|l| !l.contains(OWNER) && !l.starts_with("X-K5-Owner-Source")), "{h:?}");
+    assert!(
+        h.iter()
+            .all(|l| !l.contains(OWNER) && !l.starts_with("X-K5-Owner-Source")),
+        "{h:?}"
+    );
 }
 
 #[test]
@@ -171,23 +227,48 @@ fn version_check_with_the_daemon_down_is_one_line_and_exit_7() {
     assert_eq!(out.code, Some(7), "{out:?}");
     assert_eq!(out.stdout, format!("k2 {}\n", ours()));
     assert_eq!(out.stderr.lines().count(), 1, "{out:?}");
-    assert!(out.stderr.starts_with("can't reach K2's server for /boot-status: "), "{out:?}");
+    assert!(
+        out.stderr
+            .starts_with("can't reach K2's server for /boot-status: "),
+        "{out:?}"
+    );
     // No port anywhere: the same exit, a line that says where it looked.
     let out = rig.run(&["--version", "--check"], &[]);
     assert_eq!(out.code, Some(7), "{out:?}");
     assert_eq!(out.stderr.lines().count(), 1, "{out:?}");
-    assert!(out.stderr.starts_with("can't reach K2's server: no port in K5_PORT or "), "{out:?}");
+    assert!(
+        out.stderr
+            .starts_with("can't reach K2's server: no port in K5_PORT or "),
+        "{out:?}"
+    );
 }
 
 #[test]
 fn only_the_exact_pair_checks() {
     let rig = Rig::new("chk-pair");
     // The shell's connection gate wants a credential before its router.
-    for args in [&["-v", "--check"][..], &["version", "--check"], &["--version", "--check", "x"]] {
-        let out = rig.run(args, &[("K2_PORT", &rig.port()), ("K2_HOOK_TOKEN", "test-token")]);
-        assert_eq!((out.code, out.stdout.as_str()), (Some(0), format!("k2 {}\n", ours()).as_str()), "{args:?}: {out:?}");
+    for args in [
+        &["-v", "--check"][..],
+        &["version", "--check"],
+        &["--version", "--check", "x"],
+    ] {
+        let out = rig.run(
+            args,
+            &[("K2_PORT", &rig.port()), ("K2_HOOK_TOKEN", "test-token")],
+        );
+        assert_eq!(
+            (out.code, out.stdout.as_str()),
+            (Some(0), format!("k2 {}\n", ours()).as_str()),
+            "{args:?}: {out:?}"
+        );
     }
-    assert!(rig.stub.log().iter().all(|r| !head(r)[0].contains("/boot-status")), "the shell's version arm never asks");
+    assert!(
+        rig.stub
+            .log()
+            .iter()
+            .all(|r| !head(r)[0].contains("/boot-status")),
+        "the shell's version arm never asks"
+    );
 }
 
 // ── cli status ─────────────────────────────────────────────────────────
@@ -208,8 +289,15 @@ fn table_families(stdout: &str) -> Vec<(String, String, Option<String>)> {
 }
 
 fn field(v: &Value, key: &str) -> Value {
-    let Value::Object(pairs) = v else { panic!("not an object: {v:?}") };
-    pairs.iter().find(|(k, _)| k.as_str() == Some(key)).unwrap_or_else(|| panic!("no {key}")).1.clone()
+    let Value::Object(pairs) = v else {
+        panic!("not an object: {v:?}")
+    };
+    pairs
+        .iter()
+        .find(|(k, _)| k.as_str() == Some(key))
+        .unwrap_or_else(|| panic!("no {key}"))
+        .1
+        .clone()
 }
 
 fn string(v: Value) -> Option<String> {
@@ -225,31 +313,79 @@ fn string(v: Value) -> Option<String> {
 fn cli_status_as_the_owner_shows_the_counts() {
     let rig = Rig::new("st-owner");
     rig.owner_on_disk();
-    let body = rows(&[("fallthrough", "doc", 3), ("fallthrough", "docs", 2), ("fallthrough", "msg", 4), ("fallthrough", "other", 1), ("would_refuse", "ws", 9)]);
+    let body = rows(&[
+        ("fallthrough", "doc", 3),
+        ("fallthrough", "docs", 2),
+        ("fallthrough", "msg", 4),
+        ("fallthrough", "other", 1),
+        ("would_refuse", "ws", 9),
+    ]);
     rig.stub.reset(&[headed(200, Some(ours()), &body)]);
     let out = rig.run(&["cli", "status"], &[("K2_PORT", &rig.port())]);
     assert_eq!(out.code, Some(0), "{out:?}");
     assert_eq!(out.stderr, "", "{out:?}");
     let lines: Vec<&str> = out.stdout.lines().collect();
-    let native = TABLE.iter().filter(|n| n.owner == k5_cli::route::Owner::Native).count();
-    assert_eq!(lines[0], format!("k5 {}: {native} native, 0 spec, {} bash", ours(), TABLE.len() - native));
-    assert_eq!(lines[1].split_whitespace().collect::<Vec<_>>(), ["family", "by", "fallthroughs"]);
+    let native = TABLE
+        .iter()
+        .filter(|n| n.owner == k5_cli::route::Owner::Native)
+        .count();
+    assert_eq!(
+        lines[0],
+        format!(
+            "k5 {}: {native} native, 0 spec, {} bash",
+            ours(),
+            TABLE.len() - native
+        )
+    );
+    assert_eq!(
+        lines[1].split_whitespace().collect::<Vec<_>>(),
+        ["family", "by", "fallthroughs"]
+    );
     let fams = table_families(&out.stdout);
     assert_eq!(fams.len(), TABLE.len() + 1, "every row, and `other`");
-    let get = |name: &str| fams.iter().find(|f| f.0 == name).unwrap_or_else(|| panic!("no {name} in\n{}", out.stdout)).clone();
-    assert_eq!(get("doc|docs"), ("doc|docs".into(), "bash".into(), Some("5".into())));
+    let get = |name: &str| {
+        fams.iter()
+            .find(|f| f.0 == name)
+            .unwrap_or_else(|| panic!("no {name} in\n{}", out.stdout))
+            .clone()
+    };
+    assert_eq!(
+        get("doc|docs"),
+        ("doc|docs".into(), "bash".into(), Some("5".into()))
+    );
     assert_eq!(get("msg"), ("msg".into(), "bash".into(), Some("4".into())));
-    assert_eq!(get("cli"), ("cli".into(), "native".into(), Some("0".into())));
+    assert_eq!(
+        get("cli"),
+        ("cli".into(), "native".into(), Some("0".into()))
+    );
     assert_eq!(get("version|--version|-v").1, "native");
-    assert_eq!(fams.last().unwrap(), &("other".into(), "-".into(), Some("1".into())));
+    assert_eq!(
+        fams.last().unwrap(),
+        &("other".into(), "-".into(), Some("1".into()))
+    );
     // One request: cli_request's shape with the owner token from disk.
     let log = rig.stub.log();
     assert_eq!(log.len(), 1, "{log:?}");
     let h = head(&log[0]);
     // The folder as the process sees it (macOS's temp folder is a link).
-    let proj = k5_cli::transport::encode::quote(&std::fs::canonicalize(&rig.proj).unwrap().to_string_lossy());
-    assert_eq!(h[0], format!("GET /cli/cli-usage?token={OWNER}&project={} HTTP/1.1", k5_cli::transport::wire::curl_get_query(&proj)));
-    assert_eq!(&h[4..], ["X-K5-Cli-Version: ".to_string() + ours(), "X-K5-Cli-Via: native".into(), "X-K5-Owner-Source: disk".into()]);
+    let proj = k5_cli::transport::encode::quote(
+        &std::fs::canonicalize(&rig.proj).unwrap().to_string_lossy(),
+    );
+    assert_eq!(
+        h[0],
+        format!(
+            "GET /cli/cli-usage?token={OWNER}&project={} HTTP/1.1",
+            k5_cli::transport::wire::curl_get_query(&proj)
+        )
+    );
+    assert_eq!(
+        &h[4..],
+        [
+            "X-K5-Cli-Version: ".to_string() + ours(),
+            "X-K5-Cli-Via: native".into(),
+            "X-K5-Owner-Source: disk".into()
+        ]
+    );
 }
 
 #[test]
@@ -257,46 +393,94 @@ fn cli_status_json_parses_and_matches_the_table() {
     let rig = Rig::new("st-json");
     rig.owner_on_disk();
     let body = rows(&[("fallthrough", "docs", 2), ("fallthrough", "nosuchverb", 6)]);
-    rig.stub.reset(&[headed(200, None, &body), headed(200, None, &body)]);
+    rig.stub
+        .reset(&[headed(200, None, &body), headed(200, None, &body)]);
     let table = rig.run(&["cli", "status"], &[("K2_PORT", &rig.port())]);
     let out = rig.run(&["cli", "status", "--json"], &[("K2_PORT", &rig.port())]);
     assert_eq!((out.code, out.stderr.as_str()), (Some(0), ""), "{out:?}");
-    let doc = json::parse(&out.stdout).unwrap_or_else(|e| panic!("not JSON: {e:?}\n{}", out.stdout));
+    let doc =
+        json::parse(&out.stdout).unwrap_or_else(|e| panic!("not JSON: {e:?}\n{}", out.stdout));
     assert_eq!(string(field(&doc, "version")).as_deref(), Some(ours()));
     assert_eq!(string(field(&doc, "counts")).as_deref(), Some("shown"));
-    let Value::Array(fams) = field(&doc, "families") else { panic!("families is not a list") };
+    let Value::Array(fams) = field(&doc, "families") else {
+        panic!("families is not a list")
+    };
     let from_json: Vec<(String, String, Option<String>)> = fams
         .iter()
         .map(|f| {
             let owner = string(field(f, "owner")).unwrap_or_else(|| "-".into());
-            (string(field(f, "family")).expect("a family name"), owner, string(field(f, "fallthroughs")))
+            (
+                string(field(f, "family")).expect("a family name"),
+                owner,
+                string(field(f, "fallthroughs")),
+            )
         })
         .collect();
     assert_eq!(from_json, table_families(&table.stdout));
     let first = table.stdout.lines().next().unwrap().to_string();
     let n = |k: &str| string(field(&doc, k)).unwrap();
-    assert_eq!(first, format!("k5 {}: {} native, {} spec, {} bash", ours(), n("native"), n("spec"), n("bash")));
+    assert_eq!(
+        first,
+        format!(
+            "k5 {}: {} native, {} spec, {} bash",
+            ours(),
+            n("native"),
+            n("spec"),
+            n("bash")
+        )
+    );
 }
 
 #[test]
 fn cli_status_with_a_passport_is_the_table_and_one_line() {
     let rig = Rig::new("st-pass");
     rig.owner_on_disk();
-    let refusal = headed(403, Some(ours()), r#"{"error":"only the owner can read the CLI usage counts"}"#);
+    let refusal = headed(
+        403,
+        Some(ours()),
+        r#"{"error":"only the owner can read the CLI usage counts"}"#,
+    );
     rig.stub.reset(&[refusal.clone(), refusal]);
-    let out = rig.run(&["cli", "status"], &[("K2_PORT", &rig.port()), ("K2_HOOK_TOKEN", PASSPORT)]);
+    let out = rig.run(
+        &["cli", "status"],
+        &[("K2_PORT", &rig.port()), ("K2_HOOK_TOKEN", PASSPORT)],
+    );
     assert_eq!(out.code, Some(0), "{out:?}");
-    assert_eq!(out.stderr, format!("{}\n", k5_cli::cli_status::OWNER_ONLY_LINE));
-    assert_eq!(out.stdout.lines().nth(1).unwrap().split_whitespace().collect::<Vec<_>>(), ["family", "by"]);
-    assert!(table_families(&out.stdout).iter().all(|f| f.2.is_none()), "no counts column");
+    assert_eq!(
+        out.stderr,
+        format!("{}\n", k5_cli::cli_status::OWNER_ONLY_LINE)
+    );
+    assert_eq!(
+        out.stdout
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+        ["family", "by"]
+    );
+    assert!(
+        table_families(&out.stdout).iter().all(|f| f.2.is_none()),
+        "no counts column"
+    );
     // The passport, never the owner token on disk (PRD 13.9 #4).
     let log = rig.stub.log();
     assert_eq!(log.len(), 1, "{log:?}");
     let h = head(&log[0]);
-    assert!(h[0].starts_with(&format!("GET /cli/cli-usage?token={PASSPORT}&project=")), "{h:?}");
+    assert!(
+        h[0].starts_with(&format!("GET /cli/cli-usage?token={PASSPORT}&project=")),
+        "{h:?}"
+    );
     assert_eq!(rig.stub.left(), 1);
-    assert!(h.iter().all(|l| !l.contains(OWNER) && !l.starts_with("X-K5-Owner-Source")), "{h:?}");
-    let json = rig.run(&["cli", "status", "--json"], &[("K2_PORT", &rig.port()), ("K2_HOOK_TOKEN", PASSPORT)]);
+    assert!(
+        h.iter()
+            .all(|l| !l.contains(OWNER) && !l.starts_with("X-K5-Owner-Source")),
+        "{h:?}"
+    );
+    let json = rig.run(
+        &["cli", "status", "--json"],
+        &[("K2_PORT", &rig.port()), ("K2_HOOK_TOKEN", PASSPORT)],
+    );
     let doc = json::parse(&json.stdout).unwrap();
     assert_eq!(string(field(&doc, "counts")).as_deref(), Some("owner-only"));
 }
@@ -305,7 +489,11 @@ fn cli_status_with_a_passport_is_the_table_and_one_line() {
 fn cli_status_with_no_credential_asks_nothing() {
     let rig = Rig::new("st-none");
     let out = rig.run(&["cli", "status"], &[("K2_PORT", &rig.port())]);
-    assert_eq!((out.code, out.stderr.as_str()), (Some(0), "the fallthrough counts are the owner's only\n"), "{out:?}");
+    assert_eq!(
+        (out.code, out.stderr.as_str()),
+        (Some(0), "the fallthrough counts are the owner's only\n"),
+        "{out:?}"
+    );
     assert!(rig.stub.log().is_empty(), "{:?}", rig.stub.log());
 }
 
@@ -316,10 +504,17 @@ fn cli_status_with_the_daemon_down_is_the_table_and_one_line() {
     let out = rig.run(&["cli", "status"], &[("K2_PORT", &dead_port())]);
     assert_eq!(out.code, Some(0), "{out:?}");
     assert_eq!(out.stderr.lines().count(), 1, "{out:?}");
-    assert!(out.stderr.starts_with("can't reach K2's server for /cli/cli-usage: "), "{out:?}");
+    assert!(
+        out.stderr
+            .starts_with("can't reach K2's server for /cli/cli-usage: "),
+        "{out:?}"
+    );
     assert_eq!(table_families(&out.stdout).len(), TABLE.len());
     let json = rig.run(&["cli", "status", "--json"], &[("K2_PORT", &dead_port())]);
-    assert_eq!(string(field(&json::parse(&json.stdout).unwrap(), "counts")).as_deref(), Some("unavailable"));
+    assert_eq!(
+        string(field(&json::parse(&json.stdout).unwrap(), "counts")).as_deref(),
+        Some("unavailable")
+    );
 }
 
 #[test]
@@ -327,7 +522,10 @@ fn inside_a_session_with_no_passport_the_call_is_counted() {
     let rig = Rig::new("st-wr");
     rig.owner_on_disk();
     rig.stub.reset(&[headed(200, None, &rows(&[]))]);
-    let out = rig.run(&["cli", "status"], &[("K2_PORT", &rig.port()), ("CLAUDECODE", "1")]);
+    let out = rig.run(
+        &["cli", "status"],
+        &[("K2_PORT", &rig.port()), ("CLAUDECODE", "1")],
+    );
     assert_eq!(out.code, Some(0), "{out:?}");
     let h = head(&rig.stub.log()[0]);
     assert_eq!(h[4], "X-K5-Would-Refuse: 1", "{h:?}");
@@ -336,20 +534,52 @@ fn inside_a_session_with_no_passport_the_call_is_counted() {
 #[test]
 fn cli_help_is_answered_here_and_other_forms_reach_the_shell_s_pointer() {
     let rig = Rig::new("st-help");
-    for args in [&["cli"][..], &["cli", "--help"], &["cli", "-h"], &["cli", "help"], &["cli", "status", "--help"]] {
+    for args in [
+        &["cli"][..],
+        &["cli", "--help"],
+        &["cli", "-h"],
+        &["cli", "help"],
+        &["cli", "status", "--help"],
+    ] {
         let out = rig.run(args, &[("K2_PORT", &rig.port())]);
-        assert_eq!((out.code, out.stdout.as_str(), out.stderr.as_str()), (Some(0), k5_cli::cli_status::HELP, ""), "{args:?}");
+        assert_eq!(
+            (out.code, out.stdout.as_str(), out.stderr.as_str()),
+            (Some(0), k5_cli::cli_status::HELP, ""),
+            "{args:?}"
+        );
     }
     let pointer = "k5 cli status is answered by the k5 binary: run k5 cli status\n";
     for args in [&["cli", "status", "--bogus"][..], &["cli", "usage"]] {
-        let out = rig.run(args, &[("K2_PORT", &rig.port()), ("K2_HOOK_TOKEN", "test-token")]);
-        assert_eq!((out.code, out.stdout.as_str(), out.stderr.as_str()), (Some(2), "", pointer), "{args:?}");
+        let out = rig.run(
+            args,
+            &[("K2_PORT", &rig.port()), ("K2_HOOK_TOKEN", "test-token")],
+        );
+        assert_eq!(
+            (out.code, out.stdout.as_str(), out.stderr.as_str()),
+            (Some(2), "", pointer),
+            "{args:?}"
+        );
     }
     // The shell CLI on its own says the same.
     let mut cmd = Command::new("bash");
-    cmd.env_clear().env("PATH", std::env::var_os("PATH").unwrap()).env("HOME", &rig.home).env("K2_PORT", "1").env("K2_HOOK_TOKEN", "test-token");
-    let o = cmd.arg(common::cli_src().join("../k2")).args(["cli", "status"]).output().unwrap();
-    assert_eq!((o.status.code(), &*String::from_utf8_lossy(&o.stderr), o.stdout.is_empty()), (Some(2), pointer, true));
+    cmd.env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap())
+        .env("HOME", &rig.home)
+        .env("K2_PORT", "1")
+        .env("K2_HOOK_TOKEN", "test-token");
+    let o = cmd
+        .arg(common::cli_src().join("../k2"))
+        .args(["cli", "status"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        (
+            o.status.code(),
+            &*String::from_utf8_lossy(&o.stderr),
+            o.stdout.is_empty()
+        ),
+        (Some(2), pointer, true)
+    );
     assert!(rig.stub.log().is_empty(), "{:?}", rig.stub.log());
 }
 
@@ -361,13 +591,21 @@ fn cli_help_is_answered_here_and_other_forms_reach_the_shell_s_pointer() {
 fn the_skew_line_is_printed_once_per_process() {
     let rig = Rig::new("skew-once");
     rig.owner_on_disk();
-    rig.stub.reset(&[headed(503, Some(OTHER), r#"{"state":"migrating"}"#), headed(200, Some(OTHER), &rows(&[("fallthrough", "msg", 1)]))]);
+    rig.stub.reset(&[
+        headed(503, Some(OTHER), r#"{"state":"migrating"}"#),
+        headed(200, Some(OTHER), &rows(&[("fallthrough", "msg", 1)])),
+    ]);
     let out = rig.run(&["cli", "status"], &[("K2_PORT", &rig.port())]);
     assert_eq!(out.code, Some(0), "{out:?}");
     assert_eq!(rig.stub.log().len(), 2, "the retry happened");
     assert_eq!(skew_lines(&out.stderr), 1, "{out:?}");
     assert_eq!(out.stderr, format!("{}\n", skew::line(ours(), OTHER)));
-    assert!(table_families(&out.stdout).iter().any(|f| f.0 == "msg" && f.2.as_deref() == Some("1")), "it carried on");
+    assert!(
+        table_families(&out.stdout)
+            .iter()
+            .any(|f| f.0 == "msg" && f.2.as_deref() == Some("1")),
+        "it carried on"
+    );
 }
 
 #[test]
@@ -377,7 +615,11 @@ fn no_skew_line_when_equal_absent_or_not_a_version() {
     for version in [Some(ours()), None, Some("0.46.99\u{1b}[2J"), Some("")] {
         rig.stub.reset(&[headed(200, version, &rows(&[]))]);
         let out = rig.run(&["cli", "status"], &[("K2_PORT", &rig.port())]);
-        assert_eq!((out.code, out.stderr.as_str()), (Some(0), ""), "{version:?}: {out:?}");
+        assert_eq!(
+            (out.code, out.stderr.as_str()),
+            (Some(0), ""),
+            "{version:?}: {out:?}"
+        );
     }
 }
 
@@ -386,8 +628,22 @@ fn no_skew_line_when_equal_absent_or_not_a_version() {
 #[test]
 fn a_refusal_of_another_version_gets_the_line_too() {
     let rig = Rig::new("skew-403");
-    rig.stub.reset(&[headed(403, Some(OTHER), r#"{"error":"only the owner can read the CLI usage counts"}"#)]);
-    let out = rig.run(&["cli", "status"], &[("K2_PORT", &rig.port()), ("K2_HOOK_TOKEN", PASSPORT)]);
+    rig.stub.reset(&[headed(
+        403,
+        Some(OTHER),
+        r#"{"error":"only the owner can read the CLI usage counts"}"#,
+    )]);
+    let out = rig.run(
+        &["cli", "status"],
+        &[("K2_PORT", &rig.port()), ("K2_HOOK_TOKEN", PASSPORT)],
+    );
     assert_eq!(out.code, Some(0), "{out:?}");
-    assert_eq!(out.stderr, format!("{}\n{}\n", skew::line(ours(), OTHER), k5_cli::cli_status::OWNER_ONLY_LINE));
+    assert_eq!(
+        out.stderr,
+        format!(
+            "{}\n{}\n",
+            skew::line(ours(), OTHER),
+            k5_cli::cli_status::OWNER_ONLY_LINE
+        )
+    );
 }

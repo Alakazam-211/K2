@@ -27,8 +27,16 @@ mod tests {
         assert_eq!(version(), SCRIPT_VERSION);
         // What the install code reads in the binary's bytes is this version.
         assert_eq!(k2_client::cli_install::BINARY_VERSION_MARKER, MARKER_PREFIX);
-        assert_eq!(k2_client::cli_install::binary_versions(VERSION_MARKER.as_bytes()), vec![SCRIPT_VERSION.to_string()]);
+        assert_eq!(
+            k2_client::cli_install::binary_versions(VERSION_MARKER.as_bytes()),
+            vec![SCRIPT_VERSION.to_string()]
+        );
         assert_eq!(SCRIPT_BLAKE3.len(), 64);
-        assert!(SCRIPT_BLAKE3.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)), "{SCRIPT_BLAKE3}");
+        assert!(
+            SCRIPT_BLAKE3
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "{SCRIPT_BLAKE3}"
+        );
     }
 }

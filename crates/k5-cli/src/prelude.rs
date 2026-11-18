@@ -56,20 +56,33 @@ pub const VIRTUAL_DESKTOP: [&str; 3] = [
 /// The connection gate: exit 1.
 pub const CANNOT_CONNECT: [&str; 3] = [
     concat!("Error: Cannot connect to ", k2_client::product_name!(), "."),
-    concat!("Either run this from a ", k2_client::product_name!(), " terminal, or ensure ", k2_client::product_name!(), " is running."),
+    concat!(
+        "Either run this from a ",
+        k2_client::product_name!(),
+        " terminal, or ensure ",
+        k2_client::product_name!(),
+        " is running."
+    ),
     "(Connection details: ~/.k2/heartbeat.port and ~/.k2/heartbeat.token)",
 ];
 
 /// The line after a refused passport the daemon doesn't know.
-pub const DEAD_PASSPORT: &str = "This session's passport isn't valid on this daemon. Restart this tab to get a new one.";
+pub const DEAD_PASSPORT: &str =
+    "This session's passport isn't valid on this daemon. Restart this tab to get a new one.";
 
 /// `_cli_require_session_passport <tool>`: an `id` tool in a session
 /// with `HOOK_SOCK` set and no passport. Exit 3.
 pub fn require_passport_lines(tool: &str) -> [String; 4] {
     [
         format!("Error: tool '{tool}' requires session ID (passport)."),
-        concat!("Run from a ", k2_client::product_name!(), " agent session that carries session identity, or ask the owner").to_string(),
-        "to set this tool to Open in Settings \u{2192} CLI Tools (if the platform allows).".to_string(),
+        concat!(
+            "Run from a ",
+            k2_client::product_name!(),
+            " agent session that carries session identity, or ask the owner"
+        )
+        .to_string(),
+        "to set this tool to Open in Settings \u{2192} CLI Tools (if the platform allows)."
+            .to_string(),
         "Locked production tools cannot be set Open.".to_string(),
     ]
 }
@@ -78,9 +91,15 @@ pub fn require_passport_lines(tool: &str) -> [String; 4] {
 /// and the daemon refuses its passport. Exit 3.
 pub fn stale_passport_lines(sock: &str) -> [String; 4] {
     [
-        concat!("Error: this shell's ", k2_client::product_name!(), " session credentials are stale: the session socket is gone").to_string(),
+        concat!(
+            "Error: this shell's ",
+            k2_client::product_name!(),
+            " session credentials are stale: the session socket is gone"
+        )
+        .to_string(),
         format!("({sock}) and the daemon rejects the session token."),
-        "If this is a Codex tab, the tool runs under a shared Codex app-server started by".to_string(),
+        "If this is a Codex tab, the tool runs under a shared Codex app-server started by"
+            .to_string(),
         "another session; restart Codex in this tab. Otherwise restart this tab.".to_string(),
     ]
 }
@@ -89,7 +108,9 @@ pub fn stale_passport_lines(sock: &str) -> [String; 4] {
 /// starts with `CODEX_`, so the shell looks for a shared Codex server in
 /// the process's ancestry (`_cli_under_shared_codex_server`).
 pub fn codex_env(names: impl IntoIterator<Item = std::ffi::OsString>) -> bool {
-    names.into_iter().any(|n| n.to_str().is_some_and(|n| n.starts_with("CODEX_")))
+    names
+        .into_iter()
+        .any(|n| n.to_str().is_some_and(|n| n.starts_with("CODEX_")))
 }
 
 /// Step 3 for an `id` tool, in a session with `HOOK_SOCK` set (`hook_sock`):
@@ -99,13 +120,28 @@ pub fn codex_env(names: impl IntoIterator<Item = std::ffi::OsString>) -> bool {
 /// all ([`require_passport_lines`] for `tool`). Each prints its lines and
 /// is exit 3. `None`: go on. The probe asks only when the port is one curl
 /// takes ([`crate::families::curl_port`]).
-pub fn id_tool(settings: &Settings, hook_sock: Option<&Path>, would_refuse: bool, tool: &str) -> Option<Exit> {
+pub fn id_tool(
+    settings: &Settings,
+    hook_sock: Option<&Path>,
+    would_refuse: bool,
+    tool: &str,
+) -> Option<Exit> {
     let sock = hook_sock?;
     let passport = matches!(settings.auth, Auth::Passport { .. });
     if !crate::transport::client::is_socket(sock) && passport {
-        if let Some(port) = settings.port_text.as_deref().and_then(crate::families::curl_port) {
-            let probe = Settings { port: Some(port), ..settings.clone() };
-            if probe.client(would_refuse).is_ok_and(|mut c| c.passport_rejected()) {
+        if let Some(port) = settings
+            .port_text
+            .as_deref()
+            .and_then(crate::families::curl_port)
+        {
+            let probe = Settings {
+                port: Some(port),
+                ..settings.clone()
+            };
+            if probe
+                .client(would_refuse)
+                .is_ok_and(|mut c| c.passport_rejected())
+            {
                 for l in stale_passport_lines(&sock.to_string_lossy()) {
                     out::stderr_line(&l);
                 }
@@ -211,7 +247,12 @@ impl Closing {
         if let Some(b) = bulletin(&r.body) {
             self.bulletin = Some(b);
         }
-        if passport && contains(&r.body, crate::transport::client::PASSPORT_REFUSAL.as_bytes()) {
+        if passport
+            && contains(
+                &r.body,
+                crate::transport::client::PASSPORT_REFUSAL.as_bytes(),
+            )
+        {
             self.passport_refused = true;
         }
         if let Some(n) = &r.permission {
@@ -241,26 +282,44 @@ impl Closing {
 }
 
 fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// The bulletin's line for `day`, once per [`BULLETIN_EVERY`] per `key`:
 /// its stamp file is `<TMPDIR or /tmp>/k2-bulletin.<key>`, holding the
 /// time it was last shown.
 fn bulletin_line(day: &str, key: &str, tmpdir: Option<std::ffi::OsString>, now: u64) {
-    let dir = tmpdir.filter(|d| !d.is_empty()).map_or_else(|| std::path::PathBuf::from("/tmp"), std::path::PathBuf::from);
+    let dir = tmpdir.filter(|d| !d.is_empty()).map_or_else(
+        || std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from,
+    );
     let stamp = dir.join(format!("k2-bulletin.{key}"));
     // `read -r last`: the first line, spaces and tabs trimmed; anything
     // but digits counts as never shown.
     let last = std::fs::read_to_string(&stamp)
         .ok()
         .and_then(|t| {
-            let first = t.split('\n').next().unwrap_or("").trim_matches([' ', '\t']).to_string();
-            (!first.is_empty() && first.bytes().all(|b| b.is_ascii_digit())).then(|| first.parse::<i128>().ok()).flatten()
+            let first = t
+                .split('\n')
+                .next()
+                .unwrap_or("")
+                .trim_matches([' ', '\t'])
+                .to_string();
+            (!first.is_empty() && first.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| first.parse::<i128>().ok())
+                .flatten()
         })
         .unwrap_or(0);
     if i128::from(now) - last >= i128::from(BULLETIN_EVERY) {
-        out::stderr_line(&format!(concat!(k2_client::product_name!(), " bulletin for {} is unread: k2 organization bulletin"), day));
+        out::stderr_line(&format!(
+            concat!(
+                k2_client::product_name!(),
+                " bulletin for {} is unread: k2 organization bulletin"
+            ),
+            day
+        ));
         let _ = std::fs::write(&stamp, format!("{now}\n"));
     }
 }
@@ -276,12 +335,18 @@ pub fn bulletin(body: &[u8]) -> Option<(String, String)> {
         let start = from + at + HEAD.len();
         from = from + at + 1;
         let rest = &body[start..];
-        let day_len = rest.iter().take_while(|b| b.is_ascii_digit() || **b == b'-').count();
+        let day_len = rest
+            .iter()
+            .take_while(|b| b.is_ascii_digit() || **b == b'-')
+            .count();
         if day_len == 0 || !rest[day_len..].starts_with(MID) {
             continue;
         }
         let after = &rest[day_len + MID.len()..];
-        let key_len = after.iter().take_while(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(*b)).count();
+        let key_len = after
+            .iter()
+            .take_while(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(*b))
+            .count();
         if key_len == 0 || after.get(key_len) != Some(&b'"') {
             continue;
         }
@@ -304,26 +369,46 @@ mod tests {
     use super::*;
 
     fn source(file: &str) -> String {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src").join(file);
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/src")
+            .join(file);
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
     }
 
     /// `echo "<line>" >&2` is in the file, as one line of its own.
     fn echoed(file: &str, line: &str) {
         let want = format!("echo \"{}\" >&2", line.replace('"', "\\\""));
-        assert!(source(file).lines().any(|l| l.trim() == want), "no `{want}` in cli/src/{file}");
+        assert!(
+            source(file).lines().any(|l| l.trim() == want),
+            "no `{want}` in cli/src/{file}"
+        );
     }
 
     #[test]
     fn the_passport_lines_are_the_shell_s() {
-        for line in require_passport_lines("${tool_id}").iter().chain(stale_passport_lines("${sock}").iter()) {
+        for line in require_passport_lines("${tool_id}")
+            .iter()
+            .chain(stale_passport_lines("${sock}").iter())
+        {
             echoed("cli-tools-policy.sh", line);
         }
         let policy = source("cli-tools-policy.sh");
-        assert!(policy.contains("    exit 3\n}\n\n# COMPAT-58"), "_cli_require_session_passport's exit moved");
-        assert!(policy.contains(r#"_cli_require_session_passport "${tool_id:-$verb}""#), "the tool's name moved");
-        assert!(policy.contains(r#"[ -n "$(compgen -e CODEX_ 2>/dev/null)" ] || return 1"#), "the Codex check moved");
-        assert!(policy.contains(r#"if [ ! -S "$hook_sock" ] && _cli_scoped_token_rejected; then"#), "the stale check moved");
+        assert!(
+            policy.contains("    exit 3\n}\n\n# COMPAT-58"),
+            "_cli_require_session_passport's exit moved"
+        );
+        assert!(
+            policy.contains(r#"_cli_require_session_passport "${tool_id:-$verb}""#),
+            "the tool's name moved"
+        );
+        assert!(
+            policy.contains(r#"[ -n "$(compgen -e CODEX_ 2>/dev/null)" ] || return 1"#),
+            "the Codex check moved"
+        );
+        assert!(
+            policy.contains(r#"if [ ! -S "$hook_sock" ] && _cli_scoped_token_rejected; then"#),
+            "the stale check moved"
+        );
         let names = |l: &[&str]| l.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
         assert!(codex_env(names(&["PATH", "CODEX_THREAD_ID"])));
         assert!(!codex_env(names(&["PATH", "MY_CODEX_X", "codex_x"])));
@@ -338,18 +423,31 @@ mod tests {
         echoed("cell-socket.sh", DEAD_PASSPORT);
         let cell = source("cell-socket.sh");
         assert!(
-            cell.contains(concat!("echo \"", k2_client::product_name!(), " bulletin for ${day} is unread: k2 organization bulletin\" >&2")),
+            cell.contains(concat!(
+                "echo \"",
+                k2_client::product_name!(),
+                " bulletin for ${day} is unread: k2 organization bulletin\" >&2"
+            )),
             "the bulletin line moved"
         );
-        assert!(cell.contains("if [ $((now - last)) -ge 1800 ]; then"), "the bulletin's half hour moved");
-        assert!(cell.contains(r#"stamp="${TMPDIR:-/tmp}/k2-bulletin.${key}""#), "the bulletin's stamp file moved");
+        assert!(
+            cell.contains("if [ $((now - last)) -ge 1800 ]; then"),
+            "the bulletin's half hour moved"
+        );
+        assert!(
+            cell.contains(r#"stamp="${TMPDIR:-/tmp}/k2-bulletin.${key}""#),
+            "the bulletin's stamp file moved"
+        );
     }
 
     /// The folders that rule the line out before git is asked; git's
     /// part is in `tests/whoami_parity.rs`.
     #[test]
     fn the_rename_line_needs_k2_and_no_k2so() {
-        assert_eq!(k2_client::paths::WORKSPACE_DOT_DIR_NAMES.last(), Some(&".k2so"));
+        assert_eq!(
+            k2_client::paths::WORKSPACE_DOT_DIR_NAMES.last(),
+            Some(&".k2so")
+        );
         let dir = std::env::temp_dir().join(format!("k5-rename-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -368,14 +466,32 @@ mod tests {
             at(r#"{"ok":true,"bulletin":{"day":"2026-11-17","unread":true,"key":"ab12"}}"#),
             Some(("2026-11-17".into(), "ab12".into()))
         );
-        assert_eq!(at(r#"{"bulletin":{"day":"2026-11-17","unread":false,"key":"ab12"}}"#), None);
-        assert_eq!(at(r#"{"bulletin":{"day":"x","unread":true,"key":"ab12"}}"#), None);
-        assert_eq!(at(r#"{"bulletin":{"day":"1","unread":true,"key":"AB"}}"#), None);
-        assert_eq!(at(r#"{"bulletin":{"day":"1","unread":true,"key":"ab"#), None);
-        assert_eq!(at(r#"{"bulletin": {"day":"1","unread":true,"key":"ab"}}"#), None, "the shell's pattern has no spaces");
+        assert_eq!(
+            at(r#"{"bulletin":{"day":"2026-11-17","unread":false,"key":"ab12"}}"#),
+            None
+        );
+        assert_eq!(
+            at(r#"{"bulletin":{"day":"x","unread":true,"key":"ab12"}}"#),
+            None
+        );
+        assert_eq!(
+            at(r#"{"bulletin":{"day":"1","unread":true,"key":"AB"}}"#),
+            None
+        );
+        assert_eq!(
+            at(r#"{"bulletin":{"day":"1","unread":true,"key":"ab"#),
+            None
+        );
+        assert_eq!(
+            at(r#"{"bulletin": {"day":"1","unread":true,"key":"ab"}}"#),
+            None,
+            "the shell's pattern has no spaces"
+        );
         // The first place it matches.
         assert_eq!(
-            at(r#"{"a":{"bulletin":{"day":"","unread":true,"key":"1"}},"bulletin":{"day":"2","unread":true,"key":"3"}}"#),
+            at(
+                r#"{"a":{"bulletin":{"day":"","unread":true,"key":"1"}},"bulletin":{"day":"2","unread":true,"key":"3"}}"#
+            ),
             Some(("2".into(), "3".into()))
         );
         assert_eq!(at(""), None);
@@ -389,13 +505,29 @@ mod tests {
         let stamp = dir.join("k2-bulletin.k1");
         bulletin_line("d", "k1", Some(dir.clone().into()), 5000);
         assert_eq!(std::fs::read_to_string(&stamp).unwrap(), "5000\n");
-        bulletin_line("d", "k1", Some(dir.clone().into()), 5000 + BULLETIN_EVERY - 1);
-        assert_eq!(std::fs::read_to_string(&stamp).unwrap(), "5000\n", "shown again too soon");
+        bulletin_line(
+            "d",
+            "k1",
+            Some(dir.clone().into()),
+            5000 + BULLETIN_EVERY - 1,
+        );
+        assert_eq!(
+            std::fs::read_to_string(&stamp).unwrap(),
+            "5000\n",
+            "shown again too soon"
+        );
         bulletin_line("d", "k1", Some(dir.clone().into()), 5000 + BULLETIN_EVERY);
-        assert_eq!(std::fs::read_to_string(&stamp).unwrap(), format!("{}\n", 5000 + BULLETIN_EVERY));
+        assert_eq!(
+            std::fs::read_to_string(&stamp).unwrap(),
+            format!("{}\n", 5000 + BULLETIN_EVERY)
+        );
         std::fs::write(&stamp, "junk\n").unwrap();
         bulletin_line("d", "k1", Some(dir.clone().into()), 2000);
-        assert_eq!(std::fs::read_to_string(&stamp).unwrap(), "2000\n", "junk counts as never shown");
+        assert_eq!(
+            std::fs::read_to_string(&stamp).unwrap(),
+            "2000\n",
+            "junk counts as never shown"
+        );
         // A stamp from the future: not shown.
         std::fs::write(&stamp, " 9000\t\nx\n").unwrap();
         bulletin_line("d", "k1", Some(dir.clone().into()), 8000);
@@ -419,16 +551,44 @@ mod tests {
 
     #[test]
     fn the_gates_in_the_shell_s_order() {
-        let passport = || Auth::Passport { passport: crate::transport::Passport::new("s.x").unwrap(), sock: None };
-        assert_eq!(gate(&settings(Some("1"), Auth::Owner("o".into()), false)), None);
+        let passport = || Auth::Passport {
+            passport: crate::transport::Passport::new("s.x").unwrap(),
+            sock: None,
+        };
+        assert_eq!(
+            gate(&settings(Some("1"), Auth::Owner("o".into()), false)),
+            None
+        );
         assert_eq!(gate(&settings(Some("1"), passport(), true)), None);
-        assert_eq!(gate(&settings(Some("1"), Auth::None, true)), Some(Gate::VirtualDesktop));
-        assert_eq!(gate(&settings(None, Auth::None, true)), Some(Gate::VirtualDesktop), "the guard comes first");
-        assert_eq!(gate(&settings(None, Auth::Owner("o".into()), false)), Some(Gate::CannotConnect));
-        assert_eq!(gate(&settings(Some(""), passport(), false)), Some(Gate::CannotConnect));
-        assert_eq!(gate(&settings(Some("1"), Auth::None, false)), Some(Gate::CannotConnect));
+        assert_eq!(
+            gate(&settings(Some("1"), Auth::None, true)),
+            Some(Gate::VirtualDesktop)
+        );
+        assert_eq!(
+            gate(&settings(None, Auth::None, true)),
+            Some(Gate::VirtualDesktop),
+            "the guard comes first"
+        );
+        assert_eq!(
+            gate(&settings(None, Auth::Owner("o".into()), false)),
+            Some(Gate::CannotConnect)
+        );
+        assert_eq!(
+            gate(&settings(Some(""), passport(), false)),
+            Some(Gate::CannotConnect)
+        );
+        assert_eq!(
+            gate(&settings(Some("1"), Auth::None, false)),
+            Some(Gate::CannotConnect)
+        );
         // A port that is no number still passes the gate: curl refuses it.
         assert_eq!(gate(&settings(Some("abc"), passport(), false)), None);
-        assert_eq!((Gate::VirtualDesktop.exit().code(), Gate::CannotConnect.exit().code()), (3, 1));
+        assert_eq!(
+            (
+                Gate::VirtualDesktop.exit().code(),
+                Gate::CannotConnect.exit().code()
+            ),
+            (3, 1)
+        );
     }
 }

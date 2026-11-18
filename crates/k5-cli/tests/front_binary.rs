@@ -36,7 +36,9 @@ fn script_version() -> String {
         .take(40)
         .find_map(|l| l.strip_prefix("K2_CLI_VERSION=\""))
         .expect("cli/k2 has a K2_CLI_VERSION line near the top");
-    line.strip_suffix('"').expect("the version is quoted").to_string()
+    line.strip_suffix('"')
+        .expect("the version is quoted")
+        .to_string()
 }
 
 fn blake3_hex(bytes: &[u8]) -> String {
@@ -54,7 +56,11 @@ struct Rig {
 
 impl Rig {
     fn new(tag: &str) -> Rig {
-        let dir = std::env::temp_dir().join(format!("k5-front-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        let dir = std::env::temp_dir().join(format!(
+            "k5-front-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
         if dir.exists() {
             std::fs::remove_dir_all(&dir).unwrap();
         }
@@ -72,7 +78,9 @@ impl Rig {
         if let Some(path) = std::env::var_os("PATH") {
             cmd.env("PATH", path);
         }
-        cmd.env("HOME", &self.home).env("K2_PORT", "1").env("K2_HOOK_TOKEN", "test-token");
+        cmd.env("HOME", &self.home)
+            .env("K2_PORT", "1")
+            .env("K2_HOOK_TOKEN", "test-token");
         cmd.envs(extra.iter().copied());
     }
 
@@ -133,10 +141,15 @@ fn the_binary_carries_the_version_marker() {
         "{marker:?} is not in the bytes of {BIN}"
     );
     // The install code's check, on the built binary: read, never run.
-    assert_eq!(k2_client::cli_install::binary_versions(&bytes), vec![script_version()]);
+    assert_eq!(
+        k2_client::cli_install::binary_versions(&bytes),
+        vec![script_version()]
+    );
     k2_client::cli_install::check_binary(std::path::Path::new(BIN), Some(&script_version()))
         .unwrap_or_else(|e| panic!("the built binary fails the install check: {e}"));
-    assert!(k2_client::cli_install::is_k5_binary(std::path::Path::new(BIN)));
+    assert!(k2_client::cli_install::is_k5_binary(std::path::Path::new(
+        BIN
+    )));
     let other = k2_client::cli_install::check_binary(std::path::Path::new(BIN), Some("0.0.1"))
         .expect_err("another version must fail");
     assert!(other.contains("0.0.1"), "{other}");
@@ -148,13 +161,20 @@ fn version_prints_what_the_shell_prints() {
     for one in ["--version", "-v", "version"] {
         let want = rig.bash(&args(&[one]), &[]);
         assert_eq!(want.code, Some(0), "bash cli/k2 {one}: {want:?}");
-        assert_eq!(want.stdout, format!("k2 {}\n", script_version()), "bash cli/k2 {one}");
+        assert_eq!(
+            want.stdout,
+            format!("k2 {}\n", script_version()),
+            "bash cli/k2 {one}"
+        );
         for name in ["k2", "k5"] {
             assert_eq!(rig.front(name, &args(&[one]), &[]), want, "{name} {one}");
         }
     }
     // Answered here: the shell CLI was never written out.
-    assert!(!rig.home.join(".k2").exists(), "--version wrote under the K2 home");
+    assert!(
+        !rig.home.join(".k2").exists(),
+        "--version wrote under the K2 home"
+    );
 }
 
 #[test]
@@ -183,10 +203,22 @@ fn a_verb_falls_through_and_answers_as_the_shell_does() {
     let script = std::fs::read(cli_k2()).unwrap();
     let digest = blake3_hex(&script);
     let file = rig.cache().join(format!("k2-{}.sh", &digest[..12]));
-    assert_eq!(std::fs::read(&file).unwrap_or_else(|e| panic!("read {}: {e}", file.display())), script);
-    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o755);
-    assert_eq!(std::fs::metadata(rig.cache()).unwrap().permissions().mode() & 0o777, 0o700);
-    let names: Vec<_> = std::fs::read_dir(rig.cache()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(
+        std::fs::read(&file).unwrap_or_else(|e| panic!("read {}: {e}", file.display())),
+        script
+    );
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        std::fs::metadata(rig.cache()).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    let names: Vec<_> = std::fs::read_dir(rig.cache())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
     assert_eq!(names.len(), 1, "{names:?}");
 }
 
@@ -196,12 +228,24 @@ fn a_changed_cache_file_is_never_run() {
     let want = rig.bash(&args(&["nosuchverb"]), &[]);
     let first = rig.front("k2", &args(&["nosuchverb"]), &[]);
     assert_eq!(first, want);
-    let file = std::fs::read_dir(rig.cache()).unwrap().next().expect("a cache file").unwrap().path();
+    let file = std::fs::read_dir(rig.cache())
+        .unwrap()
+        .next()
+        .expect("a cache file")
+        .unwrap()
+        .path();
     std::fs::write(&file, "#!/bin/bash\necho PWNED\nexit 42\n").unwrap();
     let ino = std::fs::metadata(&file).unwrap().ino();
     assert_eq!(rig.front("k2", &args(&["nosuchverb"]), &[]), want);
-    assert_eq!(std::fs::read(&file).unwrap(), std::fs::read(cli_k2()).unwrap());
-    assert_ne!(std::fs::metadata(&file).unwrap().ino(), ino, "replaced by a new file, not edited in place");
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        std::fs::read(cli_k2()).unwrap()
+    );
+    assert_ne!(
+        std::fs::metadata(&file).unwrap().ino(),
+        ino,
+        "replaced by a new file, not edited in place"
+    );
 }
 
 #[test]
@@ -210,9 +254,19 @@ fn the_cache_follows_the_home_override() {
     let over = rig.dir.join("k2home");
     let over_s = over.to_str().unwrap().to_string();
     let want = rig.bash(&args(&["nosuchverb"]), &[]);
-    assert_eq!(rig.front("k2", &args(&["nosuchverb"]), &[("K2_HOME_OVERRIDE", &over_s)]), want);
+    assert_eq!(
+        rig.front(
+            "k2",
+            &args(&["nosuchverb"]),
+            &[("K2_HOME_OVERRIDE", &over_s)]
+        ),
+        want
+    );
     assert!(k5_cli::fallthrough::cache_dir(&over).is_dir());
-    assert!(!rig.home.join(".k2").exists(), "the cache went to the user home, not the override");
+    assert!(
+        !rig.home.join(".k2").exists(),
+        "the cache went to the user home, not the override"
+    );
 }
 
 #[test]
@@ -222,10 +276,17 @@ fn a_cache_that_cannot_be_written_is_one_line_and_exit_1() {
     let blocked = rig.dir.join("blocked");
     std::fs::write(&blocked, "").unwrap();
     let blocked_s = blocked.to_str().unwrap().to_string();
-    let out = rig.front("k5", &args(&["nosuchverb"]), &[("K5_HOME_OVERRIDE", &blocked_s)]);
+    let out = rig.front(
+        "k5",
+        &args(&["nosuchverb"]),
+        &[("K5_HOME_OVERRIDE", &blocked_s)],
+    );
     assert_eq!(out.code, Some(1), "{out:?}");
     assert_eq!(out.stdout, "");
-    let want = format!("k5: can't write the shell CLI to {}/run/cli: ", blocked.display());
+    let want = format!(
+        "k5: can't write the shell CLI to {}/run/cli: ",
+        blocked.display()
+    );
     assert!(out.stderr.starts_with(&want), "{out:?}");
     assert_eq!(out.stderr.lines().count(), 1, "{out:?}");
 }
@@ -238,19 +299,34 @@ fn a_cache_that_cannot_be_written_is_one_line_and_exit_1() {
 fn bash_runs_the_open_cache_file_and_the_front_s_variables_arrive() {
     let rig = Rig::new("dollar0");
     // A value left by some other call is replaced by the front's own.
-    let out = rig.front("k5", &args(&["nosuchverb"]), &[("SHELLOPTS", "xtrace"), ("K5_CLI_SCRIPT_DIR", "/stale")]);
+    let out = rig.front(
+        "k5",
+        &args(&["nosuchverb"]),
+        &[("SHELLOPTS", "xtrace"), ("K5_CLI_SCRIPT_DIR", "/stale")],
+    );
     assert_eq!(out.code, Some(1), "{}", out.stdout);
-    let lines: Vec<&str> = out.stderr.lines().map(|l| l.trim_start_matches('+')).collect();
+    let lines: Vec<&str> = out
+        .stderr
+        .lines()
+        .map(|l| l.trim_start_matches('+'))
+        .collect();
     let traced = |line: &str| lines.iter().any(|l| *l == format!(" {line}"));
     // `$0` is /dev/fd/N, so the name from it is N, a number of 3 or more.
     let n = lines
         .iter()
         .find_map(|l| l.strip_prefix(" _k2_name="))
         .unwrap_or_else(|| panic!("no _k2_name in the trace:\n{}", out.stderr));
-    assert!(n.parse::<u32>().is_ok_and(|n| n >= 3), "$0 is not /dev/fd/N: _k2_name={n}");
+    assert!(
+        n.parse::<u32>().is_ok_and(|n| n >= 3),
+        "$0 is not /dev/fd/N: _k2_name={n}"
+    );
     // The folder of the binary as run, links resolved: the rig's links
     // point at the build.
-    let dir = std::fs::canonicalize(BIN).unwrap().parent().unwrap().to_path_buf();
+    let dir = std::fs::canonicalize(BIN)
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
     for line in [
         "_K2_CALLED_AS=k5".to_string(),
         "_K5_NOTICE_DONE=1".to_string(),
@@ -263,7 +339,19 @@ fn bash_runs_the_open_cache_file_and_the_front_s_variables_arrive() {
     }
     // Run straight, the shell sees none of them and closes nothing.
     let plain = rig.bash(&args(&["nosuchverb"]), &[("SHELLOPTS", "xtrace")]);
-    let traced = |line: &str| plain.stderr.lines().any(|l| l.trim_start_matches('+') == format!(" {line}"));
-    assert!(traced("_k2_name=k2") && traced("_K2_CALLED_AS=k2") && traced("_K5_SCRIPT_DIR=") && !traced("_K5_CLI_VIA=rust"), "{}", plain.stderr);
+    let traced = |line: &str| {
+        plain
+            .stderr
+            .lines()
+            .any(|l| l.trim_start_matches('+') == format!(" {line}"))
+    };
+    assert!(
+        traced("_k2_name=k2")
+            && traced("_K2_CALLED_AS=k2")
+            && traced("_K5_SCRIPT_DIR=")
+            && !traced("_K5_CLI_VIA=rust"),
+        "{}",
+        plain.stderr
+    );
     assert!(!plain.stderr.contains("exec 3<&-"), "{}", plain.stderr);
 }

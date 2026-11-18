@@ -418,7 +418,9 @@ impl Parser<'_> {
         if int_digits > MAX_INT_DIGITS {
             return Err(Error::IntTooLong { at: start });
         }
-        Ok(Value::Int(if token == "-0" { "0" } else { token }.to_owned()))
+        Ok(Value::Int(
+            if token == "-0" { "0" } else { token }.to_owned(),
+        ))
     }
 
     /// Four hex digits after `\u`, as one UTF-16 code unit.

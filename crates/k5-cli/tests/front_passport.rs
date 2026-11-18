@@ -51,7 +51,14 @@ impl Stub {
                 if reader.read_line(&mut first).is_err() {
                     continue;
                 }
-                let path = first.split_whitespace().nth(1).unwrap_or("").split('?').next().unwrap_or("").to_string();
+                let path = first
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("")
+                    .split('?')
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
                 let (mut refuse, mut via, mut length) = (Vec::new(), Vec::new(), 0usize);
                 loop {
                     let mut line = String::new();
@@ -62,7 +69,9 @@ impl Stub {
                     if line.is_empty() {
                         break;
                     }
-                    let Some((k, v)) = line.split_once(':') else { continue };
+                    let Some((k, v)) = line.split_once(':') else {
+                        continue;
+                    };
                     let v = v.trim().to_string();
                     match k.to_ascii_lowercase().as_str() {
                         "x-k5-would-refuse" => refuse.push(v),
@@ -114,7 +123,10 @@ impl Rig {
         }
         std::os::unix::fs::symlink(BIN, dir.join("bin/k2")).unwrap();
         std::fs::write(dir.join("home/.k2/heartbeat.token"), "owner-test-token\n").unwrap();
-        Rig { dir, stub: Stub::start() }
+        Rig {
+            dir,
+            stub: Stub::start(),
+        }
     }
 
     /// The binary as `k2 <args>`, detached, with `extra` in its
@@ -147,8 +159,14 @@ impl Rig {
             assert!(Instant::now() < deadline, "k2 {args:?} never ended");
             std::thread::sleep(Duration::from_millis(20));
         }
-        let read = |p: &Path| std::fs::read_to_string(p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
-        Out { code: read(&run.join("rc")).trim().to_string(), stdout: read(&run.join("out")), stderr: read(&run.join("err")) }
+        let read = |p: &Path| {
+            std::fs::read_to_string(p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
+        };
+        Out {
+            code: read(&run.join("rc")).trim().to_string(),
+            stdout: read(&run.join("out")),
+            stderr: read(&run.join("err")),
+        }
     }
 
     /// The would-refuse values of every request to `path` in this run.
@@ -177,7 +195,11 @@ const PATH: &str = "/cli/heartbeat/list";
 fn no_passport_inside_a_session_is_counted() {
     let rig = Rig::new("counted");
     for marker in ["CLAUDECODE", "K2_PANE_ID", "K5_CELL", "CODEX_THREAD_ID"] {
-        assert_eq!(rig.refuse(LIST, &[(marker, "1")], PATH), [["1"]], "{marker}");
+        assert_eq!(
+            rig.refuse(LIST, &[(marker, "1")], PATH),
+            [["1"]],
+            "{marker}"
+        );
     }
 }
 
@@ -185,7 +207,11 @@ fn no_passport_inside_a_session_is_counted() {
 fn a_passport_is_never_counted() {
     let rig = Rig::new("passport");
     for name in ["K2_HOOK_TOKEN", "K5_HOOK_TOKEN", "K2SO_HOOK_TOKEN"] {
-        assert_eq!(rig.refuse(LIST, &[("CLAUDECODE", "1"), (name, "test-token")], PATH), [Vec::<String>::new()], "{name}");
+        assert_eq!(
+            rig.refuse(LIST, &[("CLAUDECODE", "1"), (name, "test-token")], PATH),
+            [Vec::<String>::new()],
+            "{name}"
+        );
     }
 }
 
@@ -193,9 +219,15 @@ fn a_passport_is_never_counted() {
 fn outside_a_session_nothing_is_counted_whatever_the_caller_set() {
     let rig = Rig::new("outside");
     assert_eq!(rig.refuse(LIST, &[], PATH), [Vec::<String>::new()]);
-    assert_eq!(rig.refuse(LIST, &[("K5_CLI_WOULD_REFUSE", "1")], PATH), [Vec::<String>::new()]);
+    assert_eq!(
+        rig.refuse(LIST, &[("K5_CLI_WOULD_REFUSE", "1")], PATH),
+        [Vec::<String>::new()]
+    );
     // An empty marker counts as unset.
-    assert_eq!(rig.refuse(LIST, &[("CLAUDECODE", "")], PATH), [Vec::<String>::new()]);
+    assert_eq!(
+        rig.refuse(LIST, &[("CLAUDECODE", "")], PATH),
+        [Vec::<String>::new()]
+    );
 }
 
 #[test]
@@ -203,7 +235,10 @@ fn no_owner_fallback_is_left_to_the_shell() {
     let rig = Rig::new("nofb");
     let out = rig.run(LIST, &[("CLAUDECODE", "1"), ("K2_NO_OWNER_FALLBACK", "1")]);
     assert_eq!(out.code, "3", "{out:?}");
-    assert!(out.stderr.contains("won't act as this server's owner"), "{out:?}");
+    assert!(
+        out.stderr.contains("won't act as this server's owner"),
+        "{out:?}"
+    );
     assert!(rig.stub.take().is_empty());
 }
 
@@ -216,13 +251,39 @@ fn offline_verbs_and_the_version_never_count() {
     // help runs in the shell: its trace shows the variable never came.
     for args in [&["help"][..], &["msg", "--help"], &[]] {
         let out = rig.run(args, &[("CLAUDECODE", "1"), ("SHELLOPTS", "xtrace")]);
-        let traced = |line: &str| out.stderr.lines().any(|l| l.trim_start_matches('+') == format!(" {line}"));
-        assert!(traced("_K5_CLI_VIA=rust"), "{args:?}: not through the front:\n{}", out.stderr);
-        assert!(traced("_K5_WOULD_REFUSE="), "{args:?}: no read of the variable:\n{}", out.stderr);
-        assert!(!traced("_K5_WOULD_REFUSE=1"), "{args:?}: counted:\n{}", out.stderr);
+        let traced = |line: &str| {
+            out.stderr
+                .lines()
+                .any(|l| l.trim_start_matches('+') == format!(" {line}"))
+        };
+        assert!(
+            traced("_K5_CLI_VIA=rust"),
+            "{args:?}: not through the front:\n{}",
+            out.stderr
+        );
+        assert!(
+            traced("_K5_WOULD_REFUSE="),
+            "{args:?}: no read of the variable:\n{}",
+            out.stderr
+        );
+        assert!(
+            !traced("_K5_WOULD_REFUSE=1"),
+            "{args:?}: counted:\n{}",
+            out.stderr
+        );
     }
     // And the same trace does show it for a verb that is counted.
     let out = rig.run(LIST, &[("CLAUDECODE", "1"), ("SHELLOPTS", "xtrace")]);
-    assert!(out.stderr.lines().any(|l| l.trim_start_matches('+') == " _K5_WOULD_REFUSE=1"), "{}", out.stderr);
-    assert!(rig.stub.take().iter().all(|s| s.path == PATH && s.refuse == ["1"]));
+    assert!(
+        out.stderr
+            .lines()
+            .any(|l| l.trim_start_matches('+') == " _K5_WOULD_REFUSE=1"),
+        "{}",
+        out.stderr
+    );
+    assert!(rig
+        .stub
+        .take()
+        .iter()
+        .all(|s| s.path == PATH && s.refuse == ["1"]));
 }

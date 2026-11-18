@@ -21,7 +21,11 @@ const PAUSE: Duration = Duration::from_millis(100);
 
 fn scratch(tag: &str) -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
-    let dir = std::env::temp_dir().join(format!("k5-tc-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+    let dir = std::env::temp_dir().join(format!(
+        "k5-tc-{tag}-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    ));
     if dir.exists() {
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -31,7 +35,11 @@ fn scratch(tag: &str) -> PathBuf {
 
 fn stub(tag: &str) -> Stub {
     static N: AtomicUsize = AtomicUsize::new(0);
-    Stub::start(&PathBuf::from(format!("/tmp/k5tc-{tag}-{}-{}.sock", std::process::id(), N.fetch_add(1, Ordering::SeqCst))))
+    Stub::start(&PathBuf::from(format!(
+        "/tmp/k5tc-{tag}-{}-{}.sock",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    )))
 }
 
 /// A loopback port nothing listens on.
@@ -54,11 +62,16 @@ fn text(bytes: &[u8]) -> String {
 fn nothing_listening_is_tried_four_times_then_unreachable() {
     let mut c = owner(free_port());
     let t0 = Instant::now();
-    let err = c.call(Channel::Tcp, "/cli/x", Call::Request(&[])).unwrap_err();
+    let err = c
+        .call(Channel::Tcp, "/cli/x", Call::Request(&[]))
+        .unwrap_err();
     assert!(matches!(err, Error::Unreachable { .. }), "{err:?}");
     // Three pauses between four tries.
     let took = t0.elapsed();
-    assert!(took >= PAUSE * 3 && took < PAUSE * 3 + Duration::from_secs(3), "{took:?}");
+    assert!(
+        took >= PAUSE * 3 && took < PAUSE * 3 + Duration::from_secs(3),
+        "{took:?}"
+    );
 }
 
 #[test]
@@ -85,14 +98,18 @@ fn a_daemon_that_comes_up_between_tries_answers() {
             let n = s.read(&mut buf).unwrap();
             got.extend_from_slice(&buf[..n]);
         }
-        s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}").unwrap();
+        s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+            .unwrap();
         got
     });
     let mut c = owner(port);
     let r = c.call(Channel::Tcp, "/cli/x", Call::Request(&[])).unwrap();
     assert_eq!((r.status, r.body.as_slice()), (200, &b"{}"[..]));
     let got = text(&up.join().unwrap());
-    assert!(got.starts_with("GET /cli/x?token=owner-tok&project=%2Fp HTTP/1.1\r\n"), "{got}");
+    assert!(
+        got.starts_with("GET /cli/x?token=owner-tok&project=%2Fp HTTP/1.1\r\n"),
+        "{got}"
+    );
 }
 
 #[test]
@@ -104,12 +121,17 @@ fn a_refused_loopback_port_follows_daemon_port() {
     let mut c = owner(free_port());
     c.port_file = Some(file);
     s.reset(&[]);
-    let r = c.call(Channel::Tcp, "/cli/x", Call::RequestPost(&["a=1"])).unwrap();
+    let r = c
+        .call(Channel::Tcp, "/cli/x", Call::RequestPost(&["a=1"]))
+        .unwrap();
     assert_eq!(r.status, 200);
     let log = s.log();
     assert_eq!(log.len(), 1);
     let got = text(&log[0].bytes);
-    assert!(got.contains(&format!("\r\nHost: 127.0.0.1:{}\r\n", s.port)), "{got}");
+    assert!(
+        got.contains(&format!("\r\nHost: 127.0.0.1:{}\r\n", s.port)),
+        "{got}"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -117,10 +139,19 @@ fn a_refused_loopback_port_follows_daemon_port() {
 fn migrating_four_times_gives_the_last_answer() {
     let s = stub("mig");
     let migrating = Reply::Answer(503, r#"{"state":"migrating"}"#.into());
-    s.reset(&[migrating.clone(), migrating.clone(), migrating.clone(), migrating.clone(), Reply::Answer(200, "{}".into())]);
+    s.reset(&[
+        migrating.clone(),
+        migrating.clone(),
+        migrating.clone(),
+        migrating.clone(),
+        Reply::Answer(200, "{}".into()),
+    ]);
     let mut c = owner(s.port);
     let r = c.call(Channel::Tcp, "/cli/x", Call::Request(&[])).unwrap();
-    assert_eq!((r.status, text(&r.body)), (503, r#"{"state":"migrating"}"#.to_string()));
+    assert_eq!(
+        (r.status, text(&r.body)),
+        (503, r#"{"state":"migrating"}"#.to_string())
+    );
     assert_eq!(s.log().len(), 4);
     // The status decides: a 200 that says migrating is final.
     s.reset(&[Reply::Answer(200, r#"{"state":"migrating"}"#.into())]);
@@ -129,7 +160,9 @@ fn migrating_four_times_gives_the_last_answer() {
     assert_eq!(s.log().len(), 1);
     // Not retried by a call that doesn't (cli_post_json).
     s.reset(&[migrating]);
-    let r = c.call(Channel::Tcp, "/cli/x", Call::PostJson(b"{}")).unwrap();
+    let r = c
+        .call(Channel::Tcp, "/cli/x", Call::PostJson(b"{}"))
+        .unwrap();
     assert_eq!(r.status, 503);
     assert_eq!(s.log().len(), 1);
 }
@@ -140,16 +173,36 @@ fn a_heal_happens_once() {
     let dir = scratch("heal");
     let refused = r#"{"error":"Invalid or missing auth token"}"#;
     std::fs::write(dir.join(".k2-passport"), "sessA.new1\n").unwrap();
-    let mut c = Client::new("127.0.0.1", s.port, "/p", Auth::Passport { passport: Passport::new("sessA.old1").unwrap(), sock: None });
+    let mut c = Client::new(
+        "127.0.0.1",
+        s.port,
+        "/p",
+        Auth::Passport {
+            passport: Passport::new("sessA.old1").unwrap(),
+            sock: None,
+        },
+    );
     c.pause = PAUSE;
     c.healer = Some(Box::new(SecretsDir(dir.clone())));
-    s.reset(&[Reply::Answer(401, refused.into()), Reply::Answer(401, refused.into()), Reply::Answer(401, refused.into())]);
+    s.reset(&[
+        Reply::Answer(401, refused.into()),
+        Reply::Answer(401, refused.into()),
+        Reply::Answer(401, refused.into()),
+    ]);
     let r = c.call(Channel::Tcp, "/cli/x", Call::Request(&[])).unwrap();
     assert_eq!(r.status, 401);
     let log: Vec<String> = s.log().iter().map(|l| text(&l.bytes)).collect();
     assert_eq!(log.len(), 2, "{log:?}");
-    assert!(log[0].starts_with("GET /cli/x?token=sessA.old1&"), "{}", log[0]);
-    assert!(log[1].starts_with("GET /cli/x?token=sessA.new1&"), "{}", log[1]);
+    assert!(
+        log[0].starts_with("GET /cli/x?token=sessA.old1&"),
+        "{}",
+        log[0]
+    );
+    assert!(
+        log[1].starts_with("GET /cli/x?token=sessA.new1&"),
+        "{}",
+        log[1]
+    );
     assert_eq!(c.passport().map(Passport::as_str), Some("sessA.new1"));
     // Healed already: the next refusal is the answer.
     std::fs::write(dir.join(".k2-passport"), "sessA.new2\n").unwrap();
@@ -161,7 +214,12 @@ fn a_heal_happens_once() {
     s.reset(&[Reply::Answer(401, refused.into())]);
     let mut o = owner(s.port);
     o.healer = Some(Box::new(SecretsDir(dir.clone())));
-    assert_eq!(o.call(Channel::Tcp, "/cli/x", Call::Request(&[])).unwrap().status, 401);
+    assert_eq!(
+        o.call(Channel::Tcp, "/cli/x", Call::Request(&[]))
+            .unwrap()
+            .status,
+        401
+    );
     assert_eq!(s.log().len(), 1);
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -171,13 +229,29 @@ fn a_heal_happens_once() {
 #[test]
 fn a_passport_never_sends_the_owner_token() {
     let s = stub("owner");
-    let mut c = Client::new("127.0.0.1", s.port, "/p", Auth::Passport { passport: Passport::new("sessA.pp").unwrap(), sock: Some(s.sock.clone()) });
+    let mut c = Client::new(
+        "127.0.0.1",
+        s.port,
+        "/p",
+        Auth::Passport {
+            passport: Passport::new("sessA.pp").unwrap(),
+            sock: Some(s.sock.clone()),
+        },
+    );
     c.pause = PAUSE;
     let refused = Reply::Answer(403, r#"{"error":"owner_only"}"#.into());
     let not_served = Reply::Answer(404, r#"{"error":"not served on cell socket"}"#.into());
     // In order: not served then TCP, TCP, the cell socket, not served then
     // TCP, TCP.
-    s.reset(&[not_served.clone(), refused.clone(), refused.clone(), refused.clone(), not_served, refused.clone(), refused]);
+    s.reset(&[
+        not_served.clone(),
+        refused.clone(),
+        refused.clone(),
+        refused.clone(),
+        not_served,
+        refused.clone(),
+        refused,
+    ]);
     let calls: Vec<Result<_, Error>> = vec![
         c.send("/cli/inbox/list", Call::Request(&[])),
         c.send("/cli/agents/list", Call::RequestPost(&[])),
@@ -193,7 +267,8 @@ fn a_passport_never_sends_the_owner_token() {
     for l in &log {
         let t = text(&l.bytes);
         assert!(!t.contains("owner"), "{t}");
-        let carries = t.contains("token=sessA.pp") || t.contains("\r\nAuthorization: Bearer sessA.pp\r\n");
+        let carries =
+            t.contains("token=sessA.pp") || t.contains("\r\nAuthorization: Bearer sessA.pp\r\n");
         assert!(carries, "no passport in {t}");
         assert!(!t.contains("Bearer \r\n"), "an empty Bearer: {t}");
     }
@@ -203,18 +278,40 @@ fn a_passport_never_sends_the_owner_token() {
 fn a_cell_socket_that_is_gone_goes_to_tcp() {
     let s = stub("gone");
     let gone = PathBuf::from(format!("/tmp/k5tc-gone-{}.sock", std::process::id()));
-    let mut c = Client::new("127.0.0.1", s.port, "/p", Auth::Passport { passport: Passport::new("sessA.pp").unwrap(), sock: Some(gone) });
+    let mut c = Client::new(
+        "127.0.0.1",
+        s.port,
+        "/p",
+        Auth::Passport {
+            passport: Passport::new("sessA.pp").unwrap(),
+            sock: Some(gone),
+        },
+    );
     c.pause = PAUSE;
     s.reset(&[]);
     c.send("/cli/inbox/list", Call::Request(&[])).unwrap();
     let log = s.log();
-    assert_eq!(log.iter().map(|l| l.channel).collect::<Vec<_>>(), vec!["tcp"]);
+    assert_eq!(
+        log.iter().map(|l| l.channel).collect::<Vec<_>>(),
+        vec!["tcp"]
+    );
     // A remote host forces TCP too.
-    let mut c = Client::new("127.0.0.1", s.port, "/p", Auth::Passport { passport: Passport::new("sessA.pp").unwrap(), sock: Some(s.sock.clone()) });
+    let mut c = Client::new(
+        "127.0.0.1",
+        s.port,
+        "/p",
+        Auth::Passport {
+            passport: Passport::new("sessA.pp").unwrap(),
+            sock: Some(s.sock.clone()),
+        },
+    );
     c.force_tcp = true;
     s.reset(&[]);
     c.send_json(false, "/cli/x", "").unwrap();
-    assert_eq!(s.log().iter().map(|l| l.channel).collect::<Vec<_>>(), vec!["tcp"]);
+    assert_eq!(
+        s.log().iter().map(|l| l.channel).collect::<Vec<_>>(),
+        vec!["tcp"]
+    );
 }
 
 /// What a [`door`] does with each request it reads.
@@ -259,7 +356,10 @@ fn read_request<S: std::io::Read>(s: &mut S) {
 /// Closes a TCP connection with a reset.
 fn reset_tcp(s: std::net::TcpStream) {
     use std::os::unix::io::AsRawFd;
-    let linger = libc::linger { l_onoff: 1, l_linger: 0 };
+    let linger = libc::linger {
+        l_onoff: 1,
+        l_linger: 0,
+    };
     // SAFETY: a valid socket and a `linger` of the size passed.
     let rc = unsafe {
         libc::setsockopt(
@@ -285,7 +385,10 @@ struct Door {
 
 impl Door {
     fn counts(&self) -> (usize, usize) {
-        (self.uds.load(Ordering::SeqCst), self.tcp.load(Ordering::SeqCst))
+        (
+            self.uds.load(Ordering::SeqCst),
+            self.tcp.load(Ordering::SeqCst),
+        )
     }
 }
 
@@ -299,7 +402,11 @@ fn door(tag: &str, uds_act: Act, tcp_act: Act) -> Door {
     use std::io::Write;
     use std::os::unix::net::UnixListener;
     static N: AtomicUsize = AtomicUsize::new(0);
-    let sock = PathBuf::from(format!("/tmp/k5tcd-{tag}-{}-{}.sock", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+    let sock = PathBuf::from(format!(
+        "/tmp/k5tcd-{tag}-{}-{}.sock",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    ));
     let _ = std::fs::remove_file(&sock);
     let ul = UnixListener::bind(&sock).unwrap();
     let tl = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -337,11 +444,24 @@ fn door(tag: &str, uds_act: Act, tcp_act: Act) -> Door {
             }
         }
     });
-    Door { port, sock, tcp, uds }
+    Door {
+        port,
+        sock,
+        tcp,
+        uds,
+    }
 }
 
 fn with_passport(port: u16, sock: &std::path::Path) -> Client {
-    let mut c = Client::new("127.0.0.1", port, "/p", Auth::Passport { passport: Passport::new("sessA.pp").unwrap(), sock: Some(sock.to_path_buf()) });
+    let mut c = Client::new(
+        "127.0.0.1",
+        port,
+        "/p",
+        Auth::Passport {
+            passport: Passport::new("sessA.pp").unwrap(),
+            sock: Some(sock.to_path_buf()),
+        },
+    );
     c.pause = PAUSE;
     c
 }
@@ -357,17 +477,32 @@ fn a_post_the_cell_socket_read_is_never_sent_again_over_tcp() {
     let d = door("post", Act::CloseNoAnswer, Act::Answer);
     let mut c = with_passport(d.port, &d.sock);
     let posts: [(&str, CallFn); 4] = [
-        ("cli_request_post", |c| c.send("/cli/inbox/claim", Call::RequestPost(&["id=7"]))),
-        ("cli_post_form", |c| c.send("/cli/workspace/msg", Call::PostForm(&["text=x"]))),
-        ("cli_post_json", |c| c.send("/cli/awareness/publish", Call::PostJson(b"{}"))),
-        ("cli_send_json POST", |c| c.send_json(true, "/cli/compute/run", "{}")),
+        ("cli_request_post", |c| {
+            c.send("/cli/inbox/claim", Call::RequestPost(&["id=7"]))
+        }),
+        ("cli_post_form", |c| {
+            c.send("/cli/workspace/msg", Call::PostForm(&["text=x"]))
+        }),
+        ("cli_post_json", |c| {
+            c.send("/cli/awareness/publish", Call::PostJson(b"{}"))
+        }),
+        ("cli_send_json POST", |c| {
+            c.send_json(true, "/cli/compute/run", "{}")
+        }),
     ];
     for (i, (name, call)) in posts.iter().enumerate() {
         let err = call(&mut c).unwrap_err();
         assert!(matches!(err, Error::MaybeApplied { .. }), "{name}: {err:?}");
-        assert_eq!(d.counts(), (i + 1, 0), "{name}: (cell socket, TCP) requests");
+        assert_eq!(
+            d.counts(),
+            (i + 1, 0),
+            "{name}: (cell socket, TCP) requests"
+        );
     }
-    let err = Error::MaybeApplied { endpoint: "/cli/workspace/msg".into(), waited: 0 };
+    let err = Error::MaybeApplied {
+        endpoint: "/cli/workspace/msg".into(),
+        waited: 0,
+    };
     assert_eq!(
         err.to_string(),
         "Error: K2's server didn't answer /cli/workspace/msg (0 s); the request may have been applied. Check before running it again."
@@ -377,7 +512,11 @@ fn a_post_the_cell_socket_read_is_never_sent_again_over_tcp() {
     assert_eq!(d.counts(), (5, 1), "a GET: (cell socket, TCP) requests");
     let r = c.send_json(false, "/cli/compute/nodes", "").unwrap();
     assert_eq!((r.status, r.channel), (200, Channel::Tcp));
-    assert_eq!(d.counts(), (6, 2), "a cli_send_json GET: (cell socket, TCP) requests");
+    assert_eq!(
+        d.counts(),
+        (6, 2),
+        "a cli_send_json GET: (cell socket, TCP) requests"
+    );
 }
 
 /// A whole answer followed by a reset is the answer, on both channels,
@@ -386,16 +525,32 @@ fn a_post_the_cell_socket_read_is_never_sent_again_over_tcp() {
 fn a_whole_answer_then_a_reset_is_the_answer() {
     let d = door("reset", Act::AnswerThenReset, Act::AnswerThenReset);
     let mut c = with_passport(d.port, &d.sock);
-    let r = c.send("/cli/workspace/msg", Call::PostForm(&["text=x"])).unwrap();
-    assert_eq!((r.status, r.channel, text(&r.body)), (200, Channel::Uds, "{}".to_string()));
+    let r = c
+        .send("/cli/workspace/msg", Call::PostForm(&["text=x"]))
+        .unwrap();
+    assert_eq!(
+        (r.status, r.channel, text(&r.body)),
+        (200, Channel::Uds, "{}".to_string())
+    );
     let r = c.send("/cli/inbox/list", Call::Request(&[])).unwrap();
     assert_eq!((r.status, r.channel), (200, Channel::Uds));
     let r = c.send_json(true, "/cli/compute/run", "{}").unwrap();
     assert_eq!((r.status, r.channel), (200, Channel::Uds));
     assert_eq!(d.counts(), (3, 0), "(cell socket, TCP) requests");
-    let r = c.call(Channel::Tcp, "/cli/inbox/claim", Call::RequestPost(&["id=7"])).unwrap();
-    assert_eq!((r.status, r.channel, text(&r.body)), (200, Channel::Tcp, "{}".to_string()));
-    let r = c.call(Channel::Tcp, "/cli/users/add", Call::PostJson(b"{}")).unwrap();
+    let r = c
+        .call(
+            Channel::Tcp,
+            "/cli/inbox/claim",
+            Call::RequestPost(&["id=7"]),
+        )
+        .unwrap();
+    assert_eq!(
+        (r.status, r.channel, text(&r.body)),
+        (200, Channel::Tcp, "{}".to_string())
+    );
+    let r = c
+        .call(Channel::Tcp, "/cli/users/add", Call::PostJson(b"{}"))
+        .unwrap();
     assert_eq!(r.status, 200);
     assert_eq!(d.counts(), (3, 2), "(cell socket, TCP) requests");
 }
@@ -406,13 +561,23 @@ fn a_whole_answer_then_a_reset_is_the_answer() {
 fn a_close_with_no_answer_over_tcp_is_sent_once() {
     let d = door("tcpclose", Act::Answer, Act::CloseNoAnswer);
     let mut c = with_passport(d.port, &d.sock);
-    let err = c.call(Channel::Tcp, "/cli/inbox/claim", Call::RequestPost(&["id=7"])).unwrap_err();
+    let err = c
+        .call(
+            Channel::Tcp,
+            "/cli/inbox/claim",
+            Call::RequestPost(&["id=7"]),
+        )
+        .unwrap_err();
     assert!(matches!(err, Error::NoAnswer(ref n) if n.empty), "{err:?}");
     assert_eq!(d.counts(), (0, 1));
-    let err = c.call(Channel::Tcp, "/cli/users/add", Call::PostJson(b"{}")).unwrap_err();
+    let err = c
+        .call(Channel::Tcp, "/cli/users/add", Call::PostJson(b"{}"))
+        .unwrap_err();
     assert!(matches!(err, Error::NoAnswer(ref n) if n.empty), "{err:?}");
     assert_eq!(d.counts(), (0, 2));
-    let err = c.call(Channel::Tcp, "/cli/inbox/list", Call::Request(&[])).unwrap_err();
+    let err = c
+        .call(Channel::Tcp, "/cli/inbox/list", Call::Request(&[]))
+        .unwrap_err();
     assert!(matches!(err, Error::NoAnswer(ref n) if n.empty), "{err:?}");
     assert_eq!(d.counts(), (0, 3));
 }
@@ -427,7 +592,9 @@ fn a_refused_cell_socket_sends_nothing_and_tcp_answers() {
     let _ = std::fs::remove_file(&dead);
     drop(UnixListener::bind(&dead).unwrap());
     let mut c = with_passport(d.port, &dead);
-    let r = c.send("/cli/workspace/msg", Call::PostForm(&["text=x"])).unwrap();
+    let r = c
+        .send("/cli/workspace/msg", Call::PostForm(&["text=x"]))
+        .unwrap();
     assert_eq!((r.status, r.channel), (200, Channel::Tcp));
     let r = c.send_json(true, "/cli/compute/run", "{}").unwrap();
     assert_eq!((r.status, r.channel), (200, Channel::Tcp));
@@ -442,12 +609,25 @@ fn a_refused_cell_socket_sends_nothing_and_tcp_answers() {
 #[test]
 fn the_server_version_comes_back_with_the_answer() {
     let s = stub("ver");
-    let v = |value: &str| Reply::Headed(200, vec![("X-K5-Server-Version".into(), value.into())], r#"{"ok":true}"#.into());
-    s.reset(&[v("0.46.16"), v("0.46.17"), v("not a version"), Reply::Answer(200, "{}".into())]);
+    let v = |value: &str| {
+        Reply::Headed(
+            200,
+            vec![("X-K5-Server-Version".into(), value.into())],
+            r#"{"ok":true}"#.into(),
+        )
+    };
+    s.reset(&[
+        v("0.46.16"),
+        v("0.46.17"),
+        v("not a version"),
+        Reply::Answer(200, "{}".into()),
+    ]);
     let mut c = owner(s.port);
     let r = c.call(Channel::Tcp, "/cli/x", Call::Request(&[])).unwrap();
     assert_eq!(r.server_version.as_deref(), Some("0.46.16"));
-    let r = c.call(Channel::Tcp, "/cli/x", Call::PostJson(b"{}")).unwrap();
+    let r = c
+        .call(Channel::Tcp, "/cli/x", Call::PostJson(b"{}"))
+        .unwrap();
     assert_eq!(r.server_version.as_deref(), Some("0.46.17"));
     let r = c.call(Channel::Tcp, "/cli/x", Call::Request(&[])).unwrap();
     assert_eq!(r.server_version, None);
@@ -474,6 +654,9 @@ fn the_public_get_carries_no_credential() {
         v = k5_cli::embedded::version()
     );
     assert_eq!(text(&log[0].bytes), want);
-    assert!(matches!(c.call(Channel::Tcp, "/cli/x", Call::Request(&[])), Err(Error::NoCredential { .. })));
+    assert!(matches!(
+        c.call(Channel::Tcp, "/cli/x", Call::Request(&[])),
+        Err(Error::NoCredential { .. })
+    ));
     assert_eq!(s.log().len(), 1, "nothing more was sent");
 }

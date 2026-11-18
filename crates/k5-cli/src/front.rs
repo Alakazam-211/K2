@@ -83,19 +83,39 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
     }
     let help = words.iter().any(|w| matches!(*w, "-h" | "--help"));
     if noun.names("whoami") {
-        return if help { Route::Fallthrough } else { Route::Whoami };
+        return if help {
+            Route::Fallthrough
+        } else {
+            Route::Whoami
+        };
     }
     if noun.names("done") {
-        return if help { Route::Fallthrough } else { Route::Done };
+        return if help {
+            Route::Fallthrough
+        } else {
+            Route::Done
+        };
     }
     if noun.names("respond") {
-        return if help { Route::Fallthrough } else { Route::Respond };
+        return if help {
+            Route::Fallthrough
+        } else {
+            Route::Respond
+        };
     }
     if noun.names("inbox") {
-        return if help { Route::Fallthrough } else { Route::Inbox };
+        return if help {
+            Route::Fallthrough
+        } else {
+            Route::Inbox
+        };
     }
     if noun.names("read") {
-        return if help { Route::Fallthrough } else { Route::Read };
+        return if help {
+            Route::Fallthrough
+        } else {
+            Route::Read
+        };
     }
     Route::Fallthrough
 }
@@ -153,9 +173,22 @@ mod tests {
 
     #[test]
     fn the_cli_forms() {
-        assert_eq!(route(&args(&["cli", "status"])), Route::CliStatus { json: false });
-        assert_eq!(route(&args(&["cli", "status", "--json"])), Route::CliStatus { json: true });
-        for help in [&["cli"][..], &["cli", "--help"], &["cli", "-h"], &["cli", "help"], &["cli", "status", "--help"], &["cli", "status", "-h"]] {
+        assert_eq!(
+            route(&args(&["cli", "status"])),
+            Route::CliStatus { json: false }
+        );
+        assert_eq!(
+            route(&args(&["cli", "status", "--json"])),
+            Route::CliStatus { json: true }
+        );
+        for help in [
+            &["cli"][..],
+            &["cli", "--help"],
+            &["cli", "-h"],
+            &["cli", "help"],
+            &["cli", "status", "--help"],
+            &["cli", "status", "-h"],
+        ] {
             assert_eq!(route(&args(help)), Route::CliHelp, "{help:?}");
         }
         // Any other form is the shell's: its `cli` arm points here.
@@ -175,10 +208,23 @@ mod tests {
     /// word sends the whole line to the shell.
     #[test]
     fn the_whoami_forms() {
-        for line in [&["whoami"][..], &["whoami", "--json"], &["whoami", "extra"], &["whoami", "--bogus"], &["whoami", "help"], &["whoami", "-help"]] {
+        for line in [
+            &["whoami"][..],
+            &["whoami", "--json"],
+            &["whoami", "extra"],
+            &["whoami", "--bogus"],
+            &["whoami", "help"],
+            &["whoami", "-help"],
+        ] {
             assert_eq!(route(&args(line)), Route::Whoami, "{line:?}");
         }
-        for line in [&["whoami", "--help"][..], &["whoami", "-h"], &["whoami", "--json", "-h"], &["whoami", "--bogus", "--help"], &["whoami", "x", "--help"]] {
+        for line in [
+            &["whoami", "--help"][..],
+            &["whoami", "-h"],
+            &["whoami", "--json", "-h"],
+            &["whoami", "--bogus", "--help"],
+            &["whoami", "x", "--help"],
+        ] {
             assert_eq!(route(&args(line)), Route::Fallthrough, "{line:?}");
         }
         assert_eq!(route(&args(&["Whoami"])), Route::Fallthrough);
@@ -189,11 +235,25 @@ mod tests {
     /// route table's (`native` reads only the words).
     #[test]
     fn the_done_forms() {
-        let done = route::TABLE.iter().find(|n| n.names("done")).expect("a done row");
-        for line in [&["done"][..], &["done", "--blocked", "x"], &["done", "--agent", "a"], &["done", "--bogus"], &["done", "help"]] {
+        let done = route::TABLE
+            .iter()
+            .find(|n| n.names("done"))
+            .expect("a done row");
+        for line in [
+            &["done"][..],
+            &["done", "--blocked", "x"],
+            &["done", "--agent", "a"],
+            &["done", "--bogus"],
+            &["done", "help"],
+        ] {
             assert_eq!(native(done, &args(line)), Route::Done, "{line:?}");
         }
-        for line in [&["done", "--help"][..], &["done", "-h"], &["done", "--blocked", "--help"], &["done", "--agent", "-h"]] {
+        for line in [
+            &["done", "--help"][..],
+            &["done", "-h"],
+            &["done", "--blocked", "--help"],
+            &["done", "--agent", "-h"],
+        ] {
             assert_eq!(native(done, &args(line)), Route::Fallthrough, "{line:?}");
         }
     }
@@ -202,11 +262,24 @@ mod tests {
     /// word `--help` in the shell, and goes there.
     #[test]
     fn the_respond_forms() {
-        let respond = route::TABLE.iter().find(|n| n.names("respond")).expect("a respond row");
-        for line in [&["respond"][..], &["respond", "hi"], &["respond", "--final", "x"], &["respond", "help"]] {
+        let respond = route::TABLE
+            .iter()
+            .find(|n| n.names("respond"))
+            .expect("a respond row");
+        for line in [
+            &["respond"][..],
+            &["respond", "hi"],
+            &["respond", "--final", "x"],
+            &["respond", "help"],
+        ] {
             assert_eq!(native(respond, &args(line)), Route::Respond, "{line:?}");
         }
-        for line in [&["respond", "--help"][..], &["respond", "-h"], &["respond", "hi", "--help"], &["respond", "--", "-h"]] {
+        for line in [
+            &["respond", "--help"][..],
+            &["respond", "-h"],
+            &["respond", "hi", "--help"],
+            &["respond", "--", "-h"],
+        ] {
             assert_eq!(native(respond, &args(line)), Route::Fallthrough, "{line:?}");
         }
     }
@@ -215,11 +288,25 @@ mod tests {
     /// the shell (`inbox read --help` reads the item `--help` there).
     #[test]
     fn the_inbox_forms() {
-        let inbox = route::TABLE.iter().find(|n| n.names("inbox")).expect("an inbox row");
-        for line in [&["inbox"][..], &["inbox", "list"], &["inbox", "read", "a1"], &["inbox", "compose", "--title", "t"], &["inbox", "help"]] {
+        let inbox = route::TABLE
+            .iter()
+            .find(|n| n.names("inbox"))
+            .expect("an inbox row");
+        for line in [
+            &["inbox"][..],
+            &["inbox", "list"],
+            &["inbox", "read", "a1"],
+            &["inbox", "compose", "--title", "t"],
+            &["inbox", "help"],
+        ] {
             assert_eq!(native(inbox, &args(line)), Route::Inbox, "{line:?}");
         }
-        for line in [&["inbox", "--help"][..], &["inbox", "-h"], &["inbox", "read", "--help"], &["inbox", "list", "--folder", "-h"]] {
+        for line in [
+            &["inbox", "--help"][..],
+            &["inbox", "-h"],
+            &["inbox", "read", "--help"],
+            &["inbox", "list", "--folder", "-h"],
+        ] {
             assert_eq!(native(inbox, &args(line)), Route::Fallthrough, "{line:?}");
         }
     }
@@ -228,11 +315,23 @@ mod tests {
     /// workspace `--help`).
     #[test]
     fn the_read_forms() {
-        let read = route::TABLE.iter().find(|n| n.names("read")).expect("a read row");
-        for line in [&["read"][..], &["read", "ws"], &["read", "ws", "--lines", "5"], &["read", "help"]] {
+        let read = route::TABLE
+            .iter()
+            .find(|n| n.names("read"))
+            .expect("a read row");
+        for line in [
+            &["read"][..],
+            &["read", "ws"],
+            &["read", "ws", "--lines", "5"],
+            &["read", "help"],
+        ] {
             assert_eq!(native(read, &args(line)), Route::Read, "{line:?}");
         }
-        for line in [&["read", "--help"][..], &["read", "-h"], &["read", "ws", "--agent", "--help"]] {
+        for line in [
+            &["read", "--help"][..],
+            &["read", "-h"],
+            &["read", "ws", "--agent", "--help"],
+        ] {
             assert_eq!(native(read, &args(line)), Route::Fallthrough, "{line:?}");
         }
     }
@@ -241,11 +340,26 @@ mod tests {
     #[test]
     fn an_argument_that_is_not_utf8_falls_through() {
         use std::os::unix::ffi::OsStringExt;
-        assert_eq!(route(&[OsString::from_vec(b"--version\xff".to_vec())]), Route::Fallthrough);
+        assert_eq!(
+            route(&[OsString::from_vec(b"--version\xff".to_vec())]),
+            Route::Fallthrough
+        );
         let odd = OsString::from_vec(b"st\xffatus".to_vec());
         assert_eq!(route(&[OsString::from("cli"), odd]), Route::Fallthrough);
-        assert_eq!(route(&[OsString::from("whoami"), OsString::from_vec(b"--json\xff".to_vec())]), Route::Fallthrough);
-        assert_eq!(route(&[OsString::from("--version"), OsString::from_vec(b"--check\xff".to_vec())]), Route::Fallthrough);
+        assert_eq!(
+            route(&[
+                OsString::from("whoami"),
+                OsString::from_vec(b"--json\xff".to_vec())
+            ]),
+            Route::Fallthrough
+        );
+        assert_eq!(
+            route(&[
+                OsString::from("--version"),
+                OsString::from_vec(b"--check\xff".to_vec())
+            ]),
+            Route::Fallthrough
+        );
     }
 
     /// A `Native` row is one the front has code for, under each of its
@@ -257,12 +371,21 @@ mod tests {
             assert!(owners.all(|o| o != Owner::Spec), "{:?} is Spec", noun.words);
             if noun.owner == Owner::Native {
                 for word in noun.words {
-                    assert_ne!(route(&args(&[*word])), Route::Fallthrough, "{word} is Native but falls through");
+                    assert_ne!(
+                        route(&args(&[*word])),
+                        Route::Fallthrough,
+                        "{word} is Native but falls through"
+                    );
                 }
             }
             for verb in noun.verbs.iter().filter(|v| v.owner == Owner::Native) {
                 for word in verb.words {
-                    assert_ne!(route(&args(&[noun.words[0], *word])), Route::Fallthrough, "{:?} {word}", noun.words);
+                    assert_ne!(
+                        route(&args(&[noun.words[0], *word])),
+                        Route::Fallthrough,
+                        "{:?} {word}",
+                        noun.words
+                    );
                 }
             }
         }

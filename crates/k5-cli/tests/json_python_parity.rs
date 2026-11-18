@@ -446,10 +446,7 @@ fn quotes_and_backslashes_are_escaped_and_slashes_are_not() {
         default_print(r#""say \"hi\" \\ a\/b a/b""#),
         r#""say \"hi\" \\ a/b a/b""#
     );
-    assert_eq!(
-        parse(r#""a\/b""#),
-        Ok(Value::Str(Text::from("a/b")))
-    );
+    assert_eq!(parse(r#""a\/b""#), Ok(Value::Str(Text::from("a/b"))));
 }
 
 #[test]
@@ -631,8 +628,28 @@ fn trailing_commas_comments_and_single_quotes_are_refused() {
 #[test]
 fn numbers_python_does_not_read_are_refused() {
     for text in [
-        "01", "-01", "00", "1.", "1.e5", ".5", "-.5", "1e", "1e+", "+1", "-", "--1", "0x10",
-        "1_0", "1e5x", "1.2.3", "nan", "inf", "-NaN", "+Infinity", "-Infinit", "\u{661}",
+        "01",
+        "-01",
+        "00",
+        "1.",
+        "1.e5",
+        ".5",
+        "-.5",
+        "1e",
+        "1e+",
+        "+1",
+        "-",
+        "--1",
+        "0x10",
+        "1_0",
+        "1e5x",
+        "1.2.3",
+        "nan",
+        "inf",
+        "-NaN",
+        "+Infinity",
+        "-Infinit",
+        "\u{661}",
     ] {
         assert!(parse(text).is_err(), "{text:?} was read");
     }
@@ -693,7 +710,11 @@ fn nesting_is_read_up_to_the_depth_limit() {
     let too_deep = format!("{}{}", "[".repeat(MAX_DEPTH + 1), "]".repeat(MAX_DEPTH + 1));
     assert_eq!(parse(&too_deep), Err(Error::TooDeep { at: MAX_DEPTH }));
 
-    let objects = format!("{}1{}", "{\"a\":".repeat(MAX_DEPTH + 1), "}".repeat(MAX_DEPTH + 1));
+    let objects = format!(
+        "{}1{}",
+        "{\"a\":".repeat(MAX_DEPTH + 1),
+        "}".repeat(MAX_DEPTH + 1)
+    );
     assert_eq!(
         parse(&objects),
         Err(Error::TooDeep {

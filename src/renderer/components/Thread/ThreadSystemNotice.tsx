@@ -26,6 +26,7 @@
 import { useCallback, useId, useState, type CSSProperties, type JSX } from 'react'
 import { CheckIcon, TriangleAlertIcon } from 'lucide-react'
 import k2Logo from '@/assets/k2-logo.png'
+import { PRODUCT_NAME } from '@/lib/brand'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
 import { scopeMayWrite } from '@/kessel/server-scope'
@@ -43,7 +44,7 @@ export type SystemNoticeLook = 'rules' | 'band'
 export const SYSTEM_NOTICE_LOOK: SystemNoticeLook = 'rules'
 
 /** The label on every notice. */
-export const SYSTEM_NOTICE_LABEL = 'K2 · system'
+export const SYSTEM_NOTICE_LABEL = `${PRODUCT_NAME} · system`
 
 /** Each kind's tone: the chip, the rules or band, and the icon. */
 export const SYSTEM_NOTICE_TONE: Record<SystemNoticeKind, string> = {
@@ -149,7 +150,7 @@ function NoticePostButton({
       if (words) setRefused(words)
       else {
         console.warn('[thread] notice action failed:', err)
-        setError(daemonErrorText(err) || 'K2 couldn’t do that.')
+        setError(daemonErrorText(err) || 'That didn’t work. Try again.')
       }
     } finally {
       setBusy(false)
@@ -191,7 +192,7 @@ function NoticePostButton({
 
 /** What Open its terminal says when the window's server has no agent at
  *  that address. */
-export const TERMINAL_NOT_FOUND_WORDS = 'K2 couldn’t find that agent on this server.'
+export const TERMINAL_NOT_FOUND_WORDS = 'That agent isn’t on this server.'
 
 /** Open its terminal: the agent at the action's `workspace`. This Thread's
  *  own agent opens in this view (the session chrome); an agent on the

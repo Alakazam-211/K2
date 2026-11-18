@@ -15,6 +15,7 @@
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 import type { ReportedFeatureKey } from '@/lib/reported-features'
 import { isSystemThreadAuthor, parseThreadAuthor, type ThreadAuthor } from '@/lib/thread-viewer'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 /** The `/boot-status` key of a server that posts these. Without it, a
  *  post draws as it always did (a bubble). */
@@ -68,7 +69,8 @@ const MAX_ACTIONS = 4
 
 /** The old text label on K2's lines ("K2: " or "[K2] "); the row says
  *  "K2 · system" instead. */
-const PREFIX = /^(?:K2:|\[K2\])\s*/
+const NAME = PRODUCT_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const PREFIX = new RegExp(`^(?:${NAME}:|\\[${NAME}\\])\\s*`)
 
 /** `text` without one leading "K2: " or "[K2] ". */
 export function stripSystemPrefix(text: string): string {

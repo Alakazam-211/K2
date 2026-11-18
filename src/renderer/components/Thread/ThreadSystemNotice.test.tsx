@@ -44,7 +44,7 @@ import { OWNER_VIEWER, type ThreadViewer } from '@/lib/thread-viewer'
 import { fakeScope } from '@/test-utils/fake-scope'
 import { ThreadAttachmentSourceProvider } from './ThreadImageObjects'
 import { ThreadBubble } from './ThreadZenKit'
-import { RESEND_REFUSAL_WORDS, TERMINAL_NOT_FOUND_WORDS, THREAD_SYSTEM_NOTICE_CSS } from './ThreadSystemNotice'
+import { RESEND_REFUSAL_WORDS, SYSTEM_NOTICE_LABEL, TERMINAL_NOT_FOUND_WORDS, THREAD_SYSTEM_NOTICE_CSS } from './ThreadSystemNotice'
 import {
   ACTION_NOTICE,
   DELIVERY_NOTICES,
@@ -120,7 +120,7 @@ describe('a K2 system notice in the Thread', () => {
     const r = row()
     expect(r.closest('[data-zen-message]')).not.toBeNull()
     const label = r.querySelector('[data-notice-label]')!
-    expect(label.textContent).toBe('K2 · system')
+    expect(label.textContent).toBe(SYSTEM_NOTICE_LABEL)
     expect(label.querySelector('[data-notice-mark]')).not.toBeNull()
     const words = r.querySelector('[data-notice-text]')!
     expect(words.textContent).toBe('job nightly-backup removed by ada.')
@@ -344,7 +344,7 @@ describe('focus', () => {
     expect(r.getAttribute('role')).toBe('note')
     // Named by its label and words.
     const named = (r.getAttribute('aria-labelledby') ?? '').split(' ').map((id) => document.getElementById(id)?.textContent)
-    expect(named[0]).toBe('K2 · system')
+    expect(named[0]).toBe(SYSTEM_NOTICE_LABEL)
     expect(named[1]).toContain("didn't take the message")
     r.focus()
     expect(document.activeElement).toBe(r)

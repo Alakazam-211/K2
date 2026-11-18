@@ -5,6 +5,9 @@
 // a Thread really receives.
 
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
+import { PRODUCT_NAME } from '@/lib/brand'
+
+const P = PRODUCT_NAME
 
 const AGENT = 'k2-design'
 
@@ -49,28 +52,28 @@ export const DELIVERY_NOTICES = {
   neverReadIn: item(
     'n-never',
     1,
-    `K2: ${AGENT} didn't take ${QUOTE}. K2 typed it into ${AGENT}'s terminal twice, but the agent never read it in. Its screen may be on another view. Check its terminal, then send the message again.`,
+    `${P}: ${AGENT} didn't take ${QUOTE}. ${P} typed it into ${AGENT}'s terminal twice, but the agent never read it in. Its screen may be on another view. Check its terminal, then send the message again.`,
     delivery('n-never', 'delivery.not_taken.never_read_in'),
     'thread',
   ),
   retryFailed: item(
     'n-retry',
     2,
-    `K2: ${AGENT} didn't take ${QUOTE}, and K2 couldn't type it in again. Check its terminal, then send the message again.`,
+    `${P}: ${AGENT} didn't take ${QUOTE}, and ${P} couldn't type it in again. Check its terminal, then send the message again.`,
     delivery('n-retry', 'delivery.not_taken.retry_failed'),
     'thread',
   ),
   restartMidDelivery: item(
     'n-restart',
     3,
-    `K2: K2 itself restarted while it was typing ${QUOTE} into ${AGENT}'s terminal, so it may not have reached ${AGENT}. Check before you send it again.`,
+    `${P}: ${P} itself restarted while it was typing ${QUOTE} into ${AGENT}'s terminal, so it may not have reached ${AGENT}. Check before you send it again.`,
     delivery('n-restart', 'delivery.not_taken.restart_mid_delivery'),
     'thread',
   ),
   restartTooOld: item(
     'n-old',
     4,
-    `K2: ${QUOTE} was still waiting for ${AGENT} when K2 restarted, and it was over an hour old, so K2 didn't send it. Send it again if it still matters.`,
+    `${P}: ${QUOTE} was still waiting for ${AGENT} when ${P} restarted, and it was over an hour old, so ${P} didn't send it. Send it again if it still matters.`,
     delivery('n-old', 'delivery.not_taken.restart_too_old'),
     'thread',
   ),
@@ -81,34 +84,34 @@ export const INFO_NOTICES = {
   jobAdded: item(
     'n-job-add',
     5,
-    'K2: job **nightly-backup** added by ada: every day at 02:00, runs `scripts/backup.sh` (timeout 30m). It runs unattended with only the secrets granted to job:nightly-backup. `k2 job disable nightly-backup` stops it.',
+    `${P}: job **nightly-backup** added by ada: every day at 02:00, runs \`scripts/backup.sh\` (timeout 30m). It runs unattended with only the secrets granted to job:nightly-backup. \`k2 job disable nightly-backup\` stops it.`,
     { kind: 'info', code: 'job.added' },
     'k2-job',
   ),
   jobChanged: item(
     'n-job-edit',
     6,
-    'K2: job **nightly-backup** changed by ada: every day at 03:00, runs `scripts/backup.sh` (timeout 30m). It runs unattended with only the secrets granted to job:nightly-backup. `k2 job disable nightly-backup` stops it.',
+    `${P}: job **nightly-backup** changed by ada: every day at 03:00, runs \`scripts/backup.sh\` (timeout 30m). It runs unattended with only the secrets granted to job:nightly-backup. \`k2 job disable nightly-backup\` stops it.`,
     { kind: 'info', code: 'job.changed' },
     'k2-job',
   ),
-  jobRemoved: item('n-job-rm', 7, 'K2: job **nightly-backup** removed by ada.', { kind: 'info', code: 'job.removed' }, 'k2-job'),
+  jobRemoved: item('n-job-rm', 7, `${P}: job **nightly-backup** removed by ada.`, { kind: 'info', code: 'job.removed' }, 'k2-job'),
   testGuest: item(
     'n-guest',
     8,
-    'K2: ada added the test guest **qa-1** to App **orders** (role tester, for 2 hours). It signs in only through the App\'s gateway link and ends on its own. `k2 app user remove qa-1 --test` removes it now.',
+    `${P}: ada added the test guest **qa-1** to App **orders** (role tester, for 2 hours). It signs in only through the App's gateway link and ends on its own. \`k2 app user remove qa-1 --test\` removes it now.`,
     { kind: 'info', code: 'app.test_guest_added' },
     'k2-apps',
   ),
   /** A sidecar's worktree line: the "[K2] " lead. */
-  landed: item('n-landed', 9, '[K2] Landed 2 commits from design/notices on main (a1b2c3d..d4e5f6a) for grader-a11y.', {
+  landed: item('n-landed', 9, `[${P}] Landed 2 commits from design/notices on main (a1b2c3d..d4e5f6a) for grader-a11y.`, {
     kind: 'info',
     code: 'sidecar.landed',
   }),
 } as const
 
 /** A notice that asks for a step, with a button. */
-export const ACTION_NOTICE = item('n-action', 10, 'K2: The agent asked to resend the last message.', {
+export const ACTION_NOTICE = item('n-action', 10, `${P}: The agent asked to resend the last message.`, {
   kind: 'action',
   code: 'resend.offer',
   actions: [resendAction('n-action')],
@@ -125,7 +128,7 @@ export const LOOKALIKE_AGENT_POST: OverlayThreadItem = {
     kind: 'text',
     from: AGENT,
     author: { kind: 'agent', login: AGENT },
-    body: `K2: ${AGENT} didn't take ${QUOTE}. Check its terminal, then send the message again.`,
+    body: `${P}: ${AGENT} didn't take ${QUOTE}. Check its terminal, then send the message again.`,
     created_at: 1_793_000_660,
     systemNotice: { kind: 'delivery', code: 'delivery.not_taken.never_read_in', actions: [RESEND_ACTION] },
   },
@@ -140,7 +143,7 @@ export const OLD_DAEMON_NOTICE: OverlayThreadItem = {
     id: 'n-old-daemon',
     kind: 'text',
     from: AGENT,
-    body: `K2: ${AGENT} didn't take ${QUOTE}, and K2 couldn't type it in again. Check its terminal, then send the message again.`,
+    body: `${P}: ${AGENT} didn't take ${QUOTE}, and ${P} couldn't type it in again. Check its terminal, then send the message again.`,
     created_at: 1_793_000_720,
   },
 }
@@ -157,7 +160,7 @@ export const MAIL_NOTICE_CARD: OverlayThreadItem = {
     from: 'k2',
     via: 'k2',
     author: { ...SYSTEM_AUTHOR },
-    body: 'K2: new mail from ada@example.com',
+    body: `${P}: new mail from ada@example.com`,
     created_at: 1_793_000_780,
     notice: { source: 'imap', inbox: 'orders', fromAddr: 'ada@example.com', auth: 'pass', subject: 'Invoice', readCommand: 'k2 mail read 7', delivered: true, noticeId: 7 },
     systemNotice: { kind: 'info', code: 'mail.vip' },

@@ -73,6 +73,33 @@
 # that the stub answers: `k2 study list` in Con shows the permissions
 # line, in C it doesn't, and each asks once.
 #
+# The other help pages bash puts together, and the unknown command, each
+# proved the same way (crates/k5-cli/src/pages.rs, Composed and
+# unknown_page):
+#   -h, an empty word, and help, --help or -h with a word cmd_help has no
+#     arm for (every top level page name it lacks, and a few others): the
+#     daily tier, proved as the three above.
+#   help, --help or -h with deprecated or --deprecated, and
+#     help-deprecated: _deprecated, then one printf step per row of
+#     _K2_RETIRED_VERBS (read from cli/src/deprecation.sh as bash reads
+#     it) on _retired_verbs_map's line, then _deprecated-end; nothing else
+#     but plain steps and two cats; nothing asked, in all seven.
+#   chat, chat --help, chat -h, chat help (A, B, C, Con, T, Ton: chat is
+#     an id tool, so in As bash refuses it before the router) and help,
+#     --help or -h with chat (all seven): chat/_head, chat/_manage,
+#     chat/_end, plain steps with three cats; with _CHAT_HELP_MANAGE set to
+#     anything but empty or 1, two, and no manage piece.
+#   a word the router has no arm for, alone and with words after it (in
+#     all seven): `Unknown command: <word>` on stderr, the daily tier for
+#     the env's cards on stdout, exit 1, asking as the tier asks; the
+#     trace is the daily tier's but for two calls of _retired_verb_exit,
+#     inside which only its loop runs (local, for, a test of two words,
+#     continue), and the line's echo.
+#   every retired verb whose first word the router has no arm for, alone
+#     and with a word after it (all seven): the row's line on stderr,
+#     nothing on stdout, exit 1, nothing asked; inside _retired_verb_exit
+#     its loop, then the row's assignment, case, one echo and exit.
+#
 # Never touches ~/.k2. The stub daemon is this script's own, on two Unix
 # sockets in the scratch folder.
 set -euo pipefail
@@ -99,7 +126,7 @@ SANDBOX="$(mktemp -d -t k2-help-native-XXXXXX)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 python3 -I - "$ROOT" "$CLI_BASH_SOURCE" "$BASH_BIN" "$SANDBOX" "$LIST" "$WRITE" <<'PY'
-import concurrent.futures, http.server, json, os, re, shutil, socketserver, subprocess, sys, threading
+import concurrent.futures, http.server, json, os, re, shlex, shutil, socketserver, subprocess, sys, threading
 
 root, script, bash_bin, sandbox, list_path, write = sys.argv[1:7]
 text_dir = os.path.join(root, "cli/text/help")
@@ -512,6 +539,255 @@ print("help_native: the daily tier (k2, k2 help, k2 --help) in %s: bash prints _
       % (", ".join(DAILY_ENVS), len(probe_funcs)))
 if os.environ.get("HELP_NATIVE_WHY"):
     print("  the cards probe's functions: %s" % " ".join(sorted(probe_funcs)))
+
+# The other forms of the daily tier: -h, an empty word, and help, --help
+# or -h with a word cmd_help has no arm for (crates/k5-cli/src/pages.rs,
+# Composed::Daily). Each is proved as the three above.
+wiki = open(os.path.join(root, "cli/src/wiki.sh")).read()
+m = re.search(r"^cmd_help\(\) \{\n.*?^    case \"\$\{1:-\}\" in\n(.*?)^    esac\n", wiki, re.S | re.M)
+if not m:
+    sys.exit("FAIL: no cmd_help case in cli/src/wiki.sh")
+help_arms = set()
+for l in m.group(1).splitlines():
+    pm = re.match(r"^        ([^ )][^)]*)\)", l)
+    if pm:
+        help_arms.update(w for w in pm.group(1).split("|") if w not in ("''", "*"))
+if len(help_arms) < 50:
+    sys.exit("FAIL: read only %d of cmd_help's words" % len(help_arms))
+page_words = sorted(r for r in files if "/" not in r and not r.startswith("_") and r not in help_arms)
+odd_words = ["nope", "", "HELP", "--json", "-h", "help", "a b"]
+DAILY_MORE = [["-h"], [""]] + [["help", w] for w in page_words] + \
+    [[first, w] for w in odd_words for first in HELP_FIRST]
+for argv in DAILY_MORE:
+    daily_check(argv)
+print("help_native: the daily tier for -h, an empty word and %d forms of help <a word cmd_help has no arm "
+      "for> (%d page names, %d others, each after help, --help and -h), proved as the three above"
+      % (len(DAILY_MORE) - 2, len(page_words), len(odd_words)))
+
+# The retired verbs' table, as bash reads it (cli/src/deprecation.sh).
+dep = open(os.path.join(root, "cli/src/deprecation.sh"), encoding="utf-8").read()
+m = re.search(r"^_K2_RETIRED_VERBS=\(\n(.*?)^\)\n", dep, re.S | re.M)
+if not m:
+    sys.exit("FAIL: no _K2_RETIRED_VERBS in cli/src/deprecation.sh")
+retired = []
+for l in m.group(1).splitlines():
+    rm = re.match(r'^    "(.*)"$', l)
+    if not rm or "$" in l or "`" in l or "\\" in rm.group(1).replace('\\"', ""):
+        sys.exit("FAIL: a retired row this test can't read as bash does: %r" % l)
+    k, v = rm.group(1).replace('\\"', '"').split("|", 1)
+    if not k.isascii() or len(k) > 31:
+        sys.exit("FAIL: a retired key wider than the map's column: %r" % k)
+    retired.append((k, v))
+if len(retired) < 20:
+    sys.exit("FAIL: only %d retired rows" % len(retired))
+retired_map = "".join("  %-31s → %s\n" % (k, v) for k, v in retired).encode("utf-8")
+def retired_line(k, v):
+    if v.startswith("("):
+        return ("Error: '%s' is retired %s. Run 'k2 help-deprecated' for the full map.\n" % (k, v)).encode("utf-8")
+    return ("Error: '%s' is retired. Use instead: %s\n" % (k, v)).encode("utf-8")
+exit_lo, exit_hi = body_ranges("_retired_verb_exit")[0]
+map_lo, map_hi = body_ranges("_retired_verbs_map")[0]
+if len(body_ranges("_retired_verb_exit")) != 1 or len(body_ranges("_retired_verbs_map")) != 1:
+    sys.exit("FAIL: the retired verbs' functions are defined more than once")
+star = next((i + 1 for i, l in enumerate(k2_lines) if l == '        echo "Unknown command: $1" >&2'
+             and k2_lines[i - 1] == '        _retired_verb_exit "$1"'), None)
+if not star:
+    sys.exit("FAIL: no Unknown command line in the router's *) arm")
+
+def retired_steps(steps, matched):
+    """The steps outside _retired_verb_exit, and the calls of it. Inside,
+    only the loop's steps; with `matched`, then the row's line and exit."""
+    outside, calls, echoes = [], 0, 0
+    for l in steps:
+        m = STEP.match(l)
+        if not m or len(m.group(1)) != 1:
+            # Not a step of its own (the cards probe's, or the next line
+            # of one): the caller's checks judge it.
+            outside.append(l)
+            continue
+        n, body = int(m.group(2)), m.group(3)
+        if exit_lo <= n <= exit_hi:
+            word = body.split(" ", 1)[0]
+            if word in ("local", "for", "continue"):
+                continue
+            if word in ("'['", "["):
+                try:
+                    toks = shlex.split(body)
+                except ValueError:
+                    return None, "a test this check can't read: %r" % l
+                if len(toks) == 5 and toks[2] == "=" and toks[4] == "]":
+                    continue
+                return None, "a test that is not two words compared: %r" % l
+            if matched and (word.startswith("new=") or word in ("case", "exit")):
+                continue
+            if matched and word == "echo":
+                echoes += 1
+                continue
+            return None, "a step of a retired verb's branch: %r" % l
+        if body.startswith("_retired_verb_exit "):
+            calls += 1
+        outside.append(l)
+    if echoes != (1 if matched else 0):
+        return None, "%d echo steps in _retired_verb_exit" % echoes
+    return (outside, calls), None
+
+def form_label(argv):
+    return "k2 " + " ".join(repr(a) if (not a or " " in a) else a for a in argv)
+
+def unknown_check(argv):
+    """`k2 <a word the router has no arm for> ...`: the router's *) arm."""
+    label = form_label(argv)
+    outsides = []
+    for kind in DAILY_ENVS:
+        want = files["_daily"] + (cards_line if kind in ON else b"") + files["_daily-end"]
+        want_err = ("Unknown command: %s\n" % argv[0]).encode("utf-8")
+        got = []
+        for trace in (False, True):
+            before = dict(hits)
+            got.append(run(argv, kind, trace))
+            asked = {k: hits[k] - before[k] for k in hits}
+            want_asked = {k: (1 if k == kind and kind in ASKS else 0) for k in hits}
+            if asked != want_asked:
+                sys.exit("FAIL: %s in %s asked %r, want %r" % (label, kind, asked, want_asked))
+        (code, out, err), (tcode, tout, trace_err) = got
+        if (code, out, err) != (1, want, want_err):
+            sys.exit("FAIL: %s in %s: exit %d, %d bytes on stdout (want the tier's %d, cards %s), stderr %r"
+                     % (label, kind, code, len(out), len(want), "on" if kind in ON else "off", err[-300:]))
+        if (tcode, tout) != (code, out) or err not in trace_err:
+            sys.exit("FAIL: %s in %s: the traced run differs from the untraced run" % (label, kind))
+        w, why = window(trace_err.replace(err, b"", 1), kind)
+        if w is None:
+            sys.exit("FAIL: %s in %s: %s" % (label, kind, why))
+        split, why = retired_steps(w, False)
+        if why:
+            sys.exit("FAIL: %s in %s: %s" % (label, kind, why))
+        rest, calls = split
+        if calls != 2:
+            sys.exit("FAIL: %s in %s: %d calls of _retired_verb_exit, want 2" % (label, kind, calls))
+        lead = [l for l in rest if STEP.match(l) and STEP.match(l).group(1) == "+"
+                and int(STEP.match(l).group(2)) == star]
+        if len(lead) != 1 or not STEP.match(lead[0]).group(3).startswith("echo "):
+            sys.exit("FAIL: %s in %s: the Unknown command line's steps %r" % (label, kind, lead))
+        rest = [l for l in rest if l not in lead]
+        split, why = daily_split(rest)
+        if why:
+            sys.exit("FAIL: %s in %s: %s" % (label, kind, why))
+        outside, echo, calls = split
+        if calls != 1 or len(echo) != (1 if kind in ON else 0):
+            sys.exit("FAIL: %s in %s: %d probe calls, cards line steps %r" % (label, kind, calls, echo))
+        why = plain(outside, want_cats=2)
+        if why:
+            sys.exit("FAIL: %s in %s: %s" % (label, kind, why))
+        outsides.append([l.replace(argv[0], "<w>") for l in outside])
+    if any(o != outsides[0] for o in outsides):
+        sys.exit("FAIL: %s: the trace outside the cards probe differs between the environments" % label)
+
+arms = set()
+rm_ = re.search(r'^case "\$\{1:-help\}" in\n(.*?)^esac\n', open(os.path.join(root, "cli/src/router.sh")).read(), re.S | re.M)
+for l in rm_.group(1).splitlines():
+    am = re.match(r"^    ([^ #(][^)]*)\)", l)
+    if am:
+        arms.update(w.strip("'\"") for w in am.group(1).split("|"))
+if len(arms) < 100:
+    sys.exit("FAIL: read only %d router words" % len(arms))
+UNKNOWN = [["nope"], ["Help"], ["--nope"], ["-x"], ["x-y_z"], ["a b"], ["agents"], ["agents", "nope"],
+           ["work"], ["whoo"], ["nope", "extra"], ["nope", "--json"], ["nope", "-h"], ["nope", "--help", "x"]]
+for argv in UNKNOWN:
+    if argv[0] in arms:
+        sys.exit("FAIL: %s is a router word" % argv[0])
+    unknown_check(argv)
+print("help_native: the unknown command in %s: %d forms, each the line on stderr, then the daily tier "
+      "(asking once with a passport and a socket or a port), exit 1; inside _retired_verb_exit only "
+      "its loop, twice" % (", ".join(DAILY_ENVS), len(UNKNOWN)))
+
+def quiet_check(argv, want_code, want_out, want_err, kinds, judge):
+    """A form that asks nothing: the same output and the same trace in
+    `kinds`, and `judge(window)` passes it."""
+    label = form_label(argv)
+    wins = []
+    for kind in kinds:
+        code, out, err = run(argv, kind, False)
+        tcode, tout, terr = run(argv, kind, True)
+        if (code, out, err) != (want_code, want_out, want_err):
+            return "%s in %s: exit %d, stdout %r..., stderr %r" % (label, kind, code, out[:80], err[-200:])
+        if (tcode, tout) != (code, out) or err not in terr:
+            return "%s in %s: the traced run differs from the untraced run" % (label, kind)
+        w, why = window(terr.replace(err, b"", 1) if err else terr, kind)
+        if w is None:
+            return "%s in %s: %s" % (label, kind, why)
+        wins.append(w)
+    if any(w != wins[0] for w in wins):
+        return "%s: the trace differs between the environments" % label
+    why = judge(wins[0])
+    return "%s: %s" % (label, why) if why else None
+
+def judge_deprecated(steps):
+    bad = [l for l in steps if not STEP.match(l)]
+    if bad:
+        return "a step that spans lines or is not a trace line: %r" % bad[0]
+    prints = [l for l in steps if map_lo <= int(STEP.match(l).group(2)) <= map_hi
+              and STEP.match(l).group(3).startswith("printf ")]
+    if len(prints) != len(retired):
+        return "%d printf steps in _retired_verbs_map, want %d" % (len(prints), len(retired))
+    return plain([l for l in steps if l not in prints], want_cats=2)
+
+def judge_retired(steps):
+    split, why = retired_steps(steps, True)
+    if why:
+        return why
+    outside, calls = split
+    if calls not in (1, 2):
+        return "%d calls of _retired_verb_exit" % calls
+    return plain(outside, want_cats=0)
+
+chat_pieces = [files["chat/_head"], files["chat/_manage"], files["chat/_end"]]
+QUIET = []
+for first in HELP_FIRST:
+    for w in ("deprecated", "--deprecated"):
+        QUIET.append(([first, w], 0, files["_deprecated"] + retired_map + files["_deprecated-end"], b"",
+                      DAILY_ENVS, judge_deprecated))
+QUIET.append((["help-deprecated"], 0, files["_deprecated"] + retired_map + files["_deprecated-end"], b"",
+              DAILY_ENVS, judge_deprecated))
+# chat is an id tool: with K2_HOOK_SOCK set and no passport (As) its own
+# forms are refused before the router (the Rust parity tests prove that);
+# help chat is the open tool help.
+for argv in (["chat"], ["chat", "--help"], ["chat", "-h"], ["chat", "help"]):
+    QUIET.append((argv, 0, b"".join(chat_pieces), b"", ["A", "B", "C", "Con", "T", "Ton"],
+                  lambda w: plain(w, want_cats=3)))
+for first in HELP_FIRST:
+    QUIET.append(([first, "chat"], 0, b"".join(chat_pieces), b"", DAILY_ENVS, lambda w: plain(w, want_cats=3)))
+n_retired = 0
+for k, v in retired:
+    words = k.split(" ")
+    if words[0] in arms:
+        continue  # `agent create`: the agent arm's own lookup
+    n_retired += 1
+    for argv in (words, words + ["x"]):
+        QUIET.append((argv, 1, b"", retired_line(k, v), DAILY_ENVS, judge_retired))
+before = dict(hits)
+with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+    fails = [f for f in pool.map(lambda q: quiet_check(*q), QUIET) if f]
+if fails:
+    sys.exit("FAIL: " + "\nFAIL: ".join(fails))
+if hits != before:
+    sys.exit("FAIL: a form that asks nothing asked: %r, before %r" % (hits, before))
+# _CHAT_HELP_MANAGE: anything but empty or 1 leaves the manage piece out.
+for val, want in (("0", chat_pieces[0] + chat_pieces[2]), ("", b"".join(chat_pieces)),
+                  ("1", b"".join(chat_pieces)), ("yes", chat_pieces[0] + chat_pieces[2])):
+    for kind in ("A", "C"):
+        envs[kind][0]["_CHAT_HELP_MANAGE"] = val
+    try:
+        why = quiet_check(["chat", "--help"], 0, want, b"", ["A", "C"],
+                          lambda w: plain(w, want_cats=2 if want != b"".join(chat_pieces) else 3))
+    finally:
+        for kind in ("A", "C"):
+            del envs[kind][0]["_CHAT_HELP_MANAGE"]
+    if why:
+        sys.exit("FAIL: _CHAT_HELP_MANAGE=%r: %s" % (val, why))
+print("help_native: the deprecated tier (%d forms: _deprecated, the %d rows' printf, _deprecated-end), "
+      "chat's usage (%d forms: its three pieces, the manage one by _CHAT_HELP_MANAGE) and %d retired "
+      "verbs (alone and with a word after: the row's line, exit 1) in their environments; nothing asked"
+      % (7, len(retired), 7, n_retired))
 
 rows, kept = [], {}
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:

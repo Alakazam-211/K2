@@ -18,6 +18,7 @@ import {
   type HomeChatRecordingSummary,
   type TranscriptLine,
 } from '@/lib/home-chat/recordings'
+import { parseHomeChatMessage } from '@/lib/home-chat/api'
 
 afterEach(cleanup)
 
@@ -102,6 +103,64 @@ describe("the DM header's chip", () => {
     expect(got?.card.id).toBe('2')
     expect(got?.startedAt).toBe(200_000)
     expect(liveDmRecording(null)).toBeNull()
+  })
+
+  it("Sew's start time on the card (Sew 0.10.5) is the running recording's start; without it, the card's time", () => {
+    const at = '2026-11-17T14:41:00Z'
+    const live = parseRecordingSummary({ recording_id: '42', started_by: '7', started_at: at })
+    expect(liveDmRecording([{ id: '2', createdAt: 200, recording: live }])?.startedAt).toBe(Date.parse(at))
+    // Not a date: as if Sew never said.
+    const bad = parseRecordingSummary({ recording_id: '42', started_by: '7', started_at: 'yesterday' })
+    expect(bad).not.toHaveProperty('startedAt')
+    expect(liveDmRecording([{ id: '2', createdAt: 200, recording: bad }])?.startedAt).toBe(200_000)
+  })
+})
+
+describe("the card's reason (Sew 0.10.5's transcript_failure)", () => {
+  const failed = (failure: unknown) => recordingCardView(parseRecordingSummary({ recording_id: '42', started_by: '7', stopped_at: '2026-11-17T14:00:00Z', duration_ms: 724_000, transcript: { state: 'failed' } }, failure)!, 'Alex')
+  const failedLine = (failure: unknown): string => {
+    const { unmount } = render(<HomeChatRecordingCard view={failed(failure)} timeLabel="2m" />)
+    const text = screen.getByTestId('home-chat-recording-card-failed').textContent ?? ''
+    unmount()
+    return text
+  }
+
+  it("reads the record message's transcript_failure onto its card", () => {
+    const m = parseHomeChatMessage({ id: '9', channel_id: '3', author_id: '1', created_at: '2026-11-17T14:00:00Z', recording: { recording_id: '42', stopped_at: '2026-11-17T14:00:00Z', transcript: { state: 'failed' } }, transcript_failure: { code: 'audio_gone', message: '' } })
+    expect(m?.recording?.failure).toEqual({ code: 'audio_gone', message: '' })
+    const old = parseHomeChatMessage({ id: '9', channel_id: '3', author_id: '1', created_at: '2026-11-17T14:00:00Z', recording: { recording_id: '42', transcript: { state: 'failed' } } })
+    expect(old?.recording).not.toHaveProperty('failure')
+  })
+
+  it('each code in our words after "No transcript: "', () => {
+    expect(failedLine({ code: 'audio_gone', message: 'x' })).toBe('No transcript: the audio was removed before it could be transcribed.')
+    expect(failedLine({ code: 'unsupported_language', message: 'x' })).toBe('No transcript: this language isn’t supported yet.')
+    expect(failedLine({ code: 'transcriber_error', message: 'x' })).toBe('No transcript: it couldn’t be made from this recording.')
+  })
+
+  it("an unknown code says Sew's message; an empty message or no field keeps the plain line", () => {
+    expect(failedLine({ code: 'something_new', message: 'the transcriber was turned off.' })).toBe('No transcript: the transcriber was turned off.')
+    expect(failedLine({ code: 'something_new', message: '' })).toBe(TRANSCRIPT_FAILED_LINE)
+    expect(failedLine(undefined)).toBe(TRANSCRIPT_FAILED_LINE)
+    expect(failed(undefined)).toEqual({ title: 'Recording · 12:04', detail: 'Started by Alex', state: 'failed', partial: false })
+    // A partial-only code on a failed card isn't a reason.
+    expect(failedLine({ code: 'audio_not_captured', message: 'x' })).toBe(TRANSCRIPT_FAILED_LINE)
+  })
+
+  it('audio_not_captured: a quiet note on the Ready card, and Show transcript still works', () => {
+    const show = vi.fn()
+    const raw = { recording_id: '42', started_by: '7', stopped_at: '2026-11-17T14:00:00Z', duration_ms: 724_000, transcript: { state: 'partial', turns: 3 } }
+    const r = parseRecordingSummary(raw, { code: 'audio_not_captured', message: 'segments lost' })!
+    render(<HomeChatRecordingCard view={recordingCardView(r, 'Alex')} timeLabel="2m" onShowTranscript={show} />)
+    expect(screen.getByTestId('home-chat-recording-card').getAttribute('data-state')).toBe('ready')
+    expect(screen.getByTestId('home-chat-recording-card-note').textContent).toBe('Part of the call wasn’t captured, so this transcript is incomplete.')
+    expect(screen.queryByTestId('home-chat-recording-card-failed')).toBeNull()
+    fireEvent.click(screen.getByTestId('home-chat-show-transcript'))
+    expect(show).toHaveBeenCalledTimes(1)
+    cleanup()
+    // Without the field, the partial card keeps its line.
+    render(<HomeChatRecordingCard view={recordingCardView(parseRecordingSummary(raw)!, 'Alex')} timeLabel="2m" onShowTranscript={show} />)
+    expect(screen.getByTestId('home-chat-recording-card-note').textContent).toBe('Some parts couldn’t be transcribed.')
   })
 })
 

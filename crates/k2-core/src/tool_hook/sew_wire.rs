@@ -1778,6 +1778,28 @@ pub struct RecordingSummary {
     /// Sew 0.9.0 names them `participants` (`{external_id, consent, recorded}`).
     #[serde(default, alias = "participants")]
     pub consents: Vec<RecordingConsent>,
+    /// Sew 0.10.5: why the transcript failed or has gaps. Absent from an
+    /// older Sew; a shape K2 doesn't know reads as none, never a failed page.
+    #[serde(default, deserialize_with = "de_transcript_failure", skip_serializing_if = "Option::is_none")]
+    pub transcript_failure: Option<TranscriptFailure>,
+}
+
+/// Sew 0.10.5's `transcript_failure`: a code (`audio_gone`,
+/// `unsupported_language`, `transcriber_error`, `audio_not_captured` for a
+/// partial one, or a newer one) and Sew's own words.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptFailure {
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub code: String,
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub message: String,
+}
+
+fn de_transcript_failure<'de, D: Deserializer<'de>>(d: D) -> Result<Option<TranscriptFailure>, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        v @ Value::Object(_) => serde_json::from_value::<TranscriptFailure>(v).ok().filter(|f| !f.code.is_empty() || !f.message.is_empty()),
+        _ => None,
+    })
 }
 
 impl RecordingSummary {
@@ -2447,6 +2469,15 @@ mod tests {
         assert_eq!(one.stop_reason.as_deref(), Some("10"));
         let out = serde_json::to_string(&page).unwrap();
         assert!(!out.contains("audio") && !out.contains("extra"), "{out}");
+        assert!(page.recordings.iter().all(|r| r.transcript_failure.is_none()), "an older Sew sends no reason");
+        // Sew 0.10.5's reason beside the summary; a shape K2 doesn't know is none.
+        let f: RecordingSummary =
+            serde_json::from_str(r#"{"id":"71","transcript_state":"failed","transcript_failure":{"code":"audio_gone","message":"Audio purged."}}"#).unwrap();
+        assert_eq!(f.transcript_failure, Some(TranscriptFailure { code: "audio_gone".into(), message: "Audio purged.".into() }));
+        for odd in [r#""audio_gone""#, "7", "null", "[]", "{}", r#"{"code":null}"#] {
+            let r: RecordingSummary = serde_json::from_str(&format!(r#"{{"id":"71","transcript_failure":{odd}}}"#)).unwrap();
+            assert_eq!(r.transcript_failure, None, "{odd}");
+        }
         let t: TranscriptPage =
             serde_json::from_str(r#"{"turns":[{"id":"m1","speaker_external_id":"k2:owner","start_ms":0,"end_ms":900,"text":"hi \\*"}]}"#).unwrap();
         assert_eq!(t.turns[0].end_ms, 900);

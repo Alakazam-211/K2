@@ -313,6 +313,8 @@ fn recording_json(r: &sew_wire::RecordingSummary, k5: &K5) -> Value {
         "stoppedAt": r.stopped_at,
         "transcriptReady": r.transcript_final(),
         "transcriptState": r.transcript_state,
+        // Sew 0.10.5: `{code, message}`, or null from an older Sew.
+        "transcriptFailure": r.transcript_failure,
         "people": r.consents.iter().map(|c| json!({ "externalId": c.external_id, "consent": c.consent })).collect::<Vec<_>>(),
     })
 }

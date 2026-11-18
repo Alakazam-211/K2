@@ -188,7 +188,7 @@ export function parseHomeChatMessage(v: unknown): HomeChatMessage | null {
     deleted: m.deleted_at !== undefined && m.deleted_at !== null,
     nonce: typeof m.nonce === 'string' ? m.nonce : null,
     call: m.call ? parseCallSummary(m.call) : null,
-    recording: m.recording ? parseRecordingSummary(m.recording) : null,
+    recording: m.recording ? parseRecordingSummary(m.recording, m.transcript_failure) : null,
     transcriptOf: transcriptRootOf(m),
   }
 }

@@ -159,6 +159,28 @@ describe('the recordings drawer', () => {
     await waitFor(() => expect(screen.getByTestId('home-chat-transcript-state').textContent).toContain('Sign in to this server with your own login'))
   })
 
+  it("each row says why its transcript failed (Sew 0.10.5), and a partial one's note; Show transcript still works", async () => {
+    h.get.mockResolvedValue({
+      ok: true,
+      canRead: true,
+      next: null,
+      recordings: [
+        row('1', '2026-11-18T14:41:00Z', { transcriptState: 'failed', transcriptReady: true, transcriptFailure: { code: 'audio_gone', message: '' } }),
+        row('2', '2026-11-18T13:41:00Z', { transcriptState: 'failed', transcriptReady: true, transcriptFailure: { code: 'odd_new_code', message: 'the transcriber was switched off.' } }),
+        row('3', '2026-11-18T12:41:00Z', { transcriptState: 'failed', transcriptReady: true }),
+        row('4', '2026-11-18T11:41:00Z', { transcriptState: 'partial', transcriptFailure: { code: 'audio_not_captured', message: 'gaps' } }),
+      ],
+    })
+    render(<RecordingsDrawer target={target} onClose={() => {}} />)
+    await waitFor(() => expect(screen.getAllByTestId('voice-recording')).toHaveLength(4))
+    const rows = screen.getAllByTestId('voice-recording')
+    expect(within(rows[0]).getByTestId('home-chat-recording-card-failed').textContent).toBe('No transcript: the audio was removed before it could be transcribed.')
+    expect(within(rows[1]).getByTestId('home-chat-recording-card-failed').textContent).toBe('No transcript: the transcriber was switched off.')
+    expect(within(rows[2]).getByTestId('home-chat-recording-card-failed').textContent).toBe('The transcript couldn’t be made.')
+    expect(within(rows[3]).getByTestId('home-chat-recording-card-note').textContent).toBe('Part of the call wasn’t captured, so this transcript is incomplete.')
+    expect(within(rows[3]).getByTestId('home-chat-show-transcript')).toBeTruthy()
+  })
+
   it('the sheet draws nothing until a room’s drawer opens; × and Escape close it', async () => {
     h.get.mockResolvedValue({ ok: true, recordings: [], next: null, canRead: true })
     render(<VoiceRoomRecordingsSheet />)

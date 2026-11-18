@@ -143,6 +143,27 @@ describe('the list', () => {
     expect(roomRecordingCardView(rec({ transcriptState: null, transcriptReady: true }), null).state).toBe('ready')
   })
 
+  it("Sew 0.10.5's transcriptFailure: read when it's there, the row says why; without it, as before", () => {
+    const page = parseRoomRecordings({
+      recordings: [
+        { id: 1, state: 'stopped', transcriptState: 'failed', transcriptFailure: { code: 'unsupported_language', message: '' } },
+        { id: 2, state: 'stopped', transcriptState: 'failed' },
+        { id: 3, state: 'stopped', transcriptState: 'failed', transcriptFailure: 'audio_gone' },
+      ],
+    })
+    expect(page?.recordings[0].transcriptFailure).toEqual({ code: 'unsupported_language', message: '' })
+    expect(page?.recordings[1]).not.toHaveProperty('transcriptFailure')
+    expect(page?.recordings[2]).not.toHaveProperty('transcriptFailure')
+    const failed = (f: { code: string; message: string }) => roomRecordingCardView(rec({ transcriptState: 'failed', transcriptFailure: f }), null)
+    expect(failed({ code: 'audio_gone', message: '' }).failWords).toBe('the audio was removed before it could be transcribed.')
+    expect(failed({ code: 'transcriber_error', message: '' }).failWords).toBe('it couldn’t be made from this recording.')
+    expect(failed({ code: 'new_code', message: 'Sew’s words.' }).failWords).toBe('Sew’s words.')
+    expect(failed({ code: 'new_code', message: '' })).not.toHaveProperty('failWords')
+    const partial = roomRecordingCardView(rec({ transcriptState: 'partial', transcriptFailure: { code: 'audio_not_captured', message: '' } }), null)
+    expect(partial).toMatchObject({ state: 'ready', partial: true, note: 'Part of the call wasn’t captured, so this transcript is incomplete.' })
+    expect(partial).not.toHaveProperty('failWords')
+  })
+
   it('the transcript heading: "Transcript · 12:04 · Nov 18, 2:41 PM"', () => {
     expect(roomTranscriptHeading(rec())).toMatch(/^Transcript · 12:04 · Nov 18, 2:41\sPM$/)
   })

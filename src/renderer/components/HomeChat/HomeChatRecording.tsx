@@ -42,7 +42,10 @@ export function HomeChatRecordingChip({ title }: { title: string }): JSX.Element
 }
 
 /** Sew's transcript failed and said nothing more. */
-export const TRANSCRIPT_FAILED_LINE = "The transcript couldn't be made."
+export const TRANSCRIPT_FAILED_LINE = 'The transcript couldn’t be made.'
+
+/** A partial transcript's note when Sew gives no reason. */
+export const TRANSCRIPT_PARTIAL_LINE = 'Some parts couldn’t be transcribed.'
 
 export function HomeChatRecordingCard({
   view,
@@ -55,7 +58,7 @@ export function HomeChatRecordingCard({
   /** The whole card in one line, for a screen reader (recordingCardLine). */
   label?: string
   timeLabel: string
-  /** Why the transcript failed, when Sew says. */
+  /** Why the transcript failed, when Sew says (else the view's words). */
   failReason?: string | null
   /** Absent: Show transcript isn't offered (no transcript yet, or none). */
   onShowTranscript?: () => void
@@ -91,14 +94,18 @@ export function HomeChatRecordingCard({
               </span>
             ) : view.state === 'failed' ? (
               <span className="type-hint text-[var(--color-text-muted)]" data-testid="home-chat-recording-card-failed">
-                {failReason ? `No transcript: ${failReason}` : TRANSCRIPT_FAILED_LINE}
+                {(failReason ?? view.failWords) ? `No transcript: ${failReason ?? view.failWords}` : TRANSCRIPT_FAILED_LINE}
               </span>
             ) : onShowTranscript ? (
               <>
                 <Button variant="quiet" className="min-h-6" data-testid="home-chat-show-transcript" onClick={onShowTranscript}>
                   Show transcript
                 </Button>
-                {view.partial ? <span className="type-hint text-[var(--color-text-muted)]">Some parts couldn’t be transcribed.</span> : null}
+                {view.note || view.partial ? (
+                  <span className="type-hint text-[var(--color-text-muted)]" data-testid="home-chat-recording-card-note">
+                    {view.note ?? TRANSCRIPT_PARTIAL_LINE}
+                  </span>
+                ) : null}
               </>
             ) : null}
           </div>

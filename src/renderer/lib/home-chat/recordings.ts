@@ -12,6 +12,8 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { formatCallDuration } from './calls'
 import { recordingBadgeTitle, recordingButtons } from '@/lib/voice/recording-controls'
+import { startedAtOf } from '@/lib/voice/native-voice-engine'
+import { parseTranscriptFailure, transcriptFailureWords, transcriptPartialNote, type TranscriptFailure } from './transcript-failure'
 import type { VoiceCall } from '@/stores/voice-core'
 
 /** Sew's RecordingSummary on a recording card (`Message.recording`). */
@@ -29,6 +31,11 @@ export interface HomeChatRecordingSummary {
   audioState: string
   /** How long the audio is kept, in days (0: deleted once the transcript is final). */
   keepDays: number | null
+  /** Sew's start (epoch ms), when the card says (`started_at`). */
+  startedAt?: number
+  /** Why the transcript failed or has gaps (Sew 0.10.5's
+   *  `Message.transcript_failure`, beside the card's summary). */
+  failure?: TranscriptFailure
 }
 
 function idOf(v: unknown): string | null {
@@ -37,12 +44,15 @@ function idOf(v: unknown): string | null {
   return null
 }
 
-export function parseRecordingSummary(v: unknown): HomeChatRecordingSummary | null {
+/** `failure`: the message's `transcript_failure`, when it has one. */
+export function parseRecordingSummary(v: unknown, failure?: unknown): HomeChatRecordingSummary | null {
   const o = v as Record<string, unknown> | null
   const recordingId = idOf(o?.recording_id)
   if (!o || !recordingId) return null
   const t = (o.transcript ?? {}) as Record<string, unknown>
   const a = (o.audio ?? {}) as Record<string, unknown>
+  const startedAt = startedAtOf(o.started_at)
+  const f = parseTranscriptFailure(failure)
   return {
     recordingId,
     startedBy: idOf(o.started_by),
@@ -53,6 +63,8 @@ export function parseRecordingSummary(v: unknown): HomeChatRecordingSummary | nu
     turns: typeof t.turns === 'number' ? t.turns : 0,
     audioState: typeof a.state === 'string' ? a.state : 'available',
     keepDays: typeof a.keep_days === 'number' ? a.keep_days : null,
+    ...(startedAt !== null ? { startedAt } : {}),
+    ...(f ? { failure: f } : {}),
   }
 }
 
@@ -83,6 +95,17 @@ export interface RecordingCardView {
   state: RecordingCardState
   /** The transcript has gaps (Sew's `partial`). */
   partial: boolean
+  /** Failed: why, after "No transcript: " (only when Sew says). */
+  failWords?: string
+  /** Ready: Sew's note on the gaps (only when Sew says). */
+  note?: string
+}
+
+/** Sew's reason on a card's view: the Failed words, or the Ready note. */
+export function withTranscriptFailure(view: RecordingCardView, f: TranscriptFailure | null | undefined): RecordingCardView {
+  const words = view.state === 'failed' ? transcriptFailureWords(f ?? null) : null
+  const note = view.state === 'ready' ? transcriptPartialNote(f ?? null) : null
+  return { ...view, ...(words ? { failWords: words } : {}), ...(note ? { note } : {}) }
 }
 
 export function recordingCardView(r: HomeChatRecordingSummary, starter: string | null): RecordingCardView {
@@ -95,12 +118,15 @@ export function recordingCardView(r: HomeChatRecordingSummary, starter: string |
   if (detail.length > 0) detail[0] = detail[0].charAt(0).toUpperCase() + detail[0].slice(1)
   const t = r.transcriptState
   const state: RecordingCardState = !r.stopped ? 'live' : t === 'done' || t === 'partial' ? 'ready' : t === 'failed' ? 'failed' : 'transcribing'
-  return {
-    title: r.stopped ? `Recording · ${formatCallDuration(r.durationMs ?? 0)}` : 'Recording',
-    detail: detail.join(' · '),
-    state,
-    partial: t === 'partial',
-  }
+  return withTranscriptFailure(
+    {
+      title: r.stopped ? `Recording · ${formatCallDuration(r.durationMs ?? 0)}` : 'Recording',
+      detail: detail.join(' · '),
+      state,
+      partial: t === 'partial',
+    },
+    r.failure,
+  )
 }
 
 /** The card as one line, for a screen reader or a copy: "Recording · 12:04
@@ -116,13 +142,19 @@ export function recordingCardLine(r: HomeChatRecordingSummary, starter: string |
       : t === 'partial'
         ? 'transcript ready (with gaps)'
         : t === 'failed'
-          ? 'no transcript'
+          ? noTranscriptLine(r.failure)
           : 'transcript coming',
   )
   if (r.audioState !== 'available') parts.push('audio deleted')
   else if (r.keepDays === 0) parts.push('audio deleted once the transcript is final')
   else if (r.keepDays !== null) parts.push(`audio kept ${r.keepDays} ${r.keepDays === 1 ? 'day' : 'days'}`)
   return parts.join(' · ')
+}
+
+/** "no transcript", with Sew's reason when it gives one. */
+function noTranscriptLine(f: TranscriptFailure | undefined): string {
+  const words = transcriptFailureWords(f ?? null)
+  return words ? `no transcript: ${words.replace(/\.$/, '')}` : 'no transcript'
 }
 
 /** Show transcript is there once a line can exist. */
@@ -258,15 +290,16 @@ export function dmCallRecording(c: Pick<VoiceCall, 'recording' | 'recordingPerms
 
 /** The DM's recording that runs now, from its cards: the newest card Sew
  *  hasn't stopped. It is the same for both people and on every device, so
- *  the DM's header says so without the call open here. `createdAt` is the
- *  card's time in seconds (Sew posts the card as the recording starts). */
+ *  the DM's header says so without the call open here. Its start is Sew's
+ *  `started_at` when the card has it, else `createdAt`, the card's time in
+ *  seconds (Sew posts the card as the recording starts). */
 export function liveDmRecording<M extends { recording?: HomeChatRecordingSummary | null; createdAt: number }>(
   messages: readonly M[] | null,
 ): { card: M; startedAt: number } | null {
   if (!messages) return null
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
-    if (m.recording) return m.recording.stopped ? null : { card: m, startedAt: m.createdAt * 1000 }
+    if (m.recording) return m.recording.stopped ? null : { card: m, startedAt: m.recording.startedAt ?? m.createdAt * 1000 }
   }
   return null
 }

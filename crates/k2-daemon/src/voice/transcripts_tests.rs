@@ -165,3 +165,14 @@ fn methods_are_fixed() {
     }
     assert!(is_post_route(SUBSCRIBE));
 }
+
+/// Sew 0.10.5's `transcript_failure` reaches the voice rooms' Recordings
+/// list as `transcriptFailure`; an older Sew's row carries null.
+#[test]
+fn the_list_hands_on_why_a_transcript_failed() {
+    let k5 = K5 { space: "7001".into(), rooms: std::collections::HashMap::new() };
+    let mut r = rec("71", "9", "failed", "2026-11-18T14:41:00Z");
+    assert_eq!(recording_json(&r, &k5)["transcriptFailure"], Value::Null);
+    r.transcript_failure = Some(sew_wire::TranscriptFailure { code: "audio_gone".into(), message: "Audio purged.".into() });
+    assert_eq!(recording_json(&r, &k5)["transcriptFailure"], json!({"code": "audio_gone", "message": "Audio purged."}));
+}

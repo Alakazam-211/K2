@@ -19,7 +19,8 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { httpCodeOf, httpStatusOf } from '@/lib/daemon-http-error'
 import { formatCallDuration } from '@/lib/home-chat/calls'
-import type { RecordingCardView, TranscriptLine } from '@/lib/home-chat/recordings'
+import { withTranscriptFailure, type RecordingCardView, type TranscriptLine } from '@/lib/home-chat/recordings'
+import { parseTranscriptFailure, type TranscriptFailure } from '@/lib/home-chat/transcript-failure'
 
 export const RECORDINGS_ROUTE = 'voice/recordings'
 export const TRANSCRIPT_ROUTE = 'voice/transcript'
@@ -103,6 +104,9 @@ export interface RoomRecording {
   /** `pending`, `running`, `done`, `partial` or `failed`; null from an older Sew. */
   transcriptState: string | null
   transcriptReady: boolean
+  /** Why the transcript failed or has gaps (Sew 0.10.5's
+   *  `MgmtRecordingSummary.transcript_failure`; absent from an older Sew). */
+  transcriptFailure?: TranscriptFailure
 }
 
 export interface RoomRecordingsPage {
@@ -131,6 +135,7 @@ function parseRecording(v: unknown): RoomRecording | null {
   const o = v as Record<string, unknown> | null
   const id = str(o?.id)
   if (!o || !id) return null
+  const failure = parseTranscriptFailure(o.transcriptFailure)
   return {
     id,
     room: str(o.room),
@@ -142,6 +147,7 @@ function parseRecording(v: unknown): RoomRecording | null {
     stoppedAt: timeOf(o.stoppedAt),
     transcriptState: str(o.transcriptState),
     transcriptReady: o.transcriptReady === true,
+    ...(failure ? { transcriptFailure: failure } : {}),
   }
 }
 
@@ -217,12 +223,15 @@ export function roomRecordingCardView(r: RoomRecording, starter: string | null):
       : t === 'failed'
         ? 'failed'
         : 'transcribing'
-  return {
-    title: stopped(r) && len !== null ? `Recording · ${formatCallDuration(len)}` : 'Recording',
-    detail,
-    state,
-    partial: t === 'partial',
-  }
+  return withTranscriptFailure(
+    {
+      title: stopped(r) && len !== null ? `Recording · ${formatCallDuration(len)}` : 'Recording',
+      detail,
+      state,
+      partial: t === 'partial',
+    },
+    r.transcriptFailure,
+  )
 }
 
 /** "Nov 18, 2:41 PM". */

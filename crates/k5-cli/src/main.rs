@@ -8,12 +8,13 @@
 //! The result goes to stdout and the front's own errors to stderr
 //! ([`k5_cli::out`]); the exit codes are [`k5_cli::exit::Exit`]'s. The
 //! notice for callers of `k2` ([`k5_cli::notice`]) is off: nothing here
-//! prints it.
+//! prints it. With `K5_CLI_TRACE_TIMING` set, each phase's time goes to
+//! stderr ([`k5_cli::trace`]).
 
 use k5_cli::called_as::CalledAs;
 use k5_cli::exit::Exit;
 use k5_cli::front::{self, Route};
-use k5_cli::{check, cli_status, daemon, embedded, fallthrough, families, out, passport};
+use k5_cli::{check, cli_status, daemon, embedded, fallthrough, families, out, passport, trace};
 use std::ffi::OsString;
 
 /// Writes `text` to stdout; the exit after it.
@@ -65,11 +66,15 @@ fn cli_status(args: &[OsString], json: bool) -> Exit {
 }
 
 fn main() {
+    trace::start();
     let mut argv = std::env::args_os();
     let argv0 = argv.next().unwrap_or_default();
     let args: Vec<OsString> = argv.collect();
     let who = CalledAs::current(&argv0);
-    let exit = match front::route(&args) {
+    trace::mark("called_as");
+    let route = front::route(&args);
+    trace::mark("route");
+    let exit = match route {
         Route::Version => print(&front::version_line(embedded::version()), Exit::Ok),
         Route::VersionCheck => version_check(&args),
         Route::CliStatus { json } => cli_status(&args, json),
@@ -84,10 +89,12 @@ fn main() {
                 (name, Some(value)) => std::env::set_var(name, value),
                 (name, None) => std::env::remove_var(name),
             }
+            trace::mark("passport rule");
             let err = fallthrough::run(who, &args);
             out::stderr_line(&err.line(who));
             err.exit()
         }
     };
+    trace::finish("command");
     std::process::exit(exit.code());
 }

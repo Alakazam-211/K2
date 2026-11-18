@@ -43,6 +43,8 @@
 //!   the copy of `cli/k2` packed into the binary ([`embedded`]).
 //! - [`passport`]: the passport rule the front applies before a verb
 //!   falls through. It only counts for now.
+//! - [`trace`]: opt-in timing of the front's phases on stderr
+//!   (`K5_CLI_TRACE_TIMING`).
 
 pub mod called_as;
 pub mod check;
@@ -59,4 +61,5 @@ pub mod out;
 pub mod passport;
 pub mod prelude;
 pub mod route;
+pub mod trace;
 pub mod transport;

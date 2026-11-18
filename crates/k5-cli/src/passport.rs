@@ -168,13 +168,17 @@ pub fn session_ancestor(table: &dyn ProcessTable, name: impl Fn(i32) -> Option<S
     Ancestry::NotFound
 }
 
-/// [`session_ancestor`] of this process, over the live table.
+/// [`session_ancestor`] of this process, over the live table. Timed as
+/// its own phase ([`crate::trace`]).
 pub fn live_session_ancestor() -> Ancestry {
+    crate::trace::mark("passport facts");
     let table = LiveProcessTable;
     let Ok(me) = i32::try_from(std::process::id()) else {
         return Ancestry::Unknown;
     };
-    session_ancestor(&table, |pid| table.command_name(pid), me)
+    let found = session_ancestor(&table, |pid| table.command_name(pid), me);
+    crate::trace::mark("passport ancestry walk");
+    found
 }
 
 /// The verdict for this process and its arguments.

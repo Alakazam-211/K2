@@ -48,6 +48,7 @@ use crate::called_as::{CalledAs, SCRIPT_DIR_VAR};
 use crate::embedded;
 use crate::exit::Exit;
 use crate::home::HomeError;
+use crate::trace;
 use flate2::read::GzDecoder;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -124,9 +125,12 @@ fn open_matching(path: &Path, want: &str, follow_links: bool) -> Option<fs::File
     if !file.metadata().ok()?.is_file() {
         return None;
     }
+    trace::mark("open copy");
     let mut hasher = blake3::Hasher::new();
     hasher.update_reader(&mut file).ok()?;
-    if hasher.finalize().to_hex().as_str() != want {
+    let matches = hasher.finalize().to_hex().as_str() == want;
+    trace::mark("hash copy");
+    if !matches {
         return None;
     }
     file.seek(SeekFrom::Start(0)).ok()?;
@@ -229,6 +233,7 @@ pub fn script(
         }
     }
     let home = k2_home().map_err(FrontError::Home)?;
+    trace::mark("home");
     cached(packed, &cache_dir(&home))
 }
 
@@ -238,12 +243,14 @@ pub fn script(
 /// before it is written and read back after.
 pub fn cached(packed: &Packed<'_>, dir: &Path) -> Result<Script, FrontError> {
     private_dir(dir)?;
+    trace::mark("cache folder");
     let path = dir.join(packed.cache_name());
     if let Some(file) = open_matching(&path, packed.blake3, false) {
         return Ok(Script { path, file });
     }
     let bytes = packed.unpack()?;
     write_replacing(dir, &path, &bytes).map_err(|err| FrontError::Cache { path: path.clone(), err })?;
+    trace::mark("unpack and write the cache");
     match open_matching(&path, packed.blake3, false) {
         Some(file) => Ok(Script { path, file }),
         None => Err(FrontError::CacheMismatch { path }),
@@ -434,13 +441,16 @@ pub fn run(who: CalledAs, args: &[OsString]) -> FrontError {
         Ok(b) => b,
         Err(e) => return e,
     };
+    trace::mark("find bash");
     let exe = resolved_exe();
     let bundled = exe.as_deref().and_then(bundled_place);
+    trace::mark("exe and bundled place");
     let script = match script(&embedded(), bundled.as_deref(), crate::home::k2_home) {
         Ok(s) => s,
         Err(e) => return e,
     };
     let dir = exe.as_deref().and_then(script_dir_for);
+    trace::mark("script dir");
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -448,13 +458,16 @@ pub fn run(who: CalledAs, args: &[OsString]) -> FrontError {
             Ok(fd) => fd,
             Err(err) => return FrontError::Run { bash, err },
         };
-        let err = command(&bash, &dev_fd(&fd), args, who, dir.as_deref()).exec();
+        let mut cmd = command(&bash, &dev_fd(&fd), args, who, dir.as_deref());
+        trace::finish("descriptor and command");
+        let err = cmd.exec();
         FrontError::Run { bash, err }
     }
     #[cfg(not(unix))]
     {
         // No /dev/fd: bash runs the path. The open file stays open until
         // bash is done.
+        trace::finish("command");
         match command(&bash, script.path.as_os_str(), args, who, dir.as_deref()).status() {
             Ok(status) => std::process::exit(status.code().unwrap_or(1)),
             Err(err) => FrontError::Run { bash, err },

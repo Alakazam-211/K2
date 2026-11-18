@@ -4,9 +4,15 @@
 // Replace and Replace all, off with a reason where it can't act), go to line
 // (⌘L and the status line's Ln, Col), the outline in the side panel (click to
 // jump), the formatting toolbar over a selection in Write, and the / menu.
+//
+// Every test runs with a sandboxed frame on the page and React's dev render
+// logging on (test-utils/cross-origin-frame): the tools take the frame's
+// store, never the EditorView, as a prop. A view in props reaches the top
+// window (`observer.win`) and through it the frame's window; React's dev build
+// reads it while logging the prop diff, WebKit throws, and the UI dies.
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '../../../../../vendor/k2-mpc-base/client/test/jsdom-shims'
 import { useEffect, useRef } from 'react'
 import { EditorSelection, EditorState, type Extension } from '@codemirror/state'
@@ -14,10 +20,24 @@ import { highlightSelectionMatches } from '@codemirror/search'
 import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { EditorTab, type EditorTabProps, type EditorMountOptions } from '../EditorTab'
+import { withCrossOriginFrame } from '@/test-utils/cross-origin-frame'
 
+// React's dev build turns its render logging on only if console.timeStamp is
+// there when react-dom loads (before the imports above run).
+vi.hoisted(() => {
+  const c = console as unknown as { timeStamp?: () => void }
+  if (typeof c.timeStamp !== 'function') c.timeStamp = () => {}
+})
+
+let undoFrame: (() => void) | null = null
+beforeEach(() => {
+  undoFrame = withCrossOriginFrame()
+})
 afterEach(() => {
   cleanup()
   window.localStorage.clear()
+  undoFrame?.()
+  undoFrame = null
 })
 
 const README = ['# Quill', '', 'Quill writes a draft, then a second draft.', '', '## Setup', '', 'Open the draft.', '', '## Configuration', '', 'Last line.'].join('\n')

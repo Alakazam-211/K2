@@ -6,12 +6,13 @@
 // frost float, Terminal cut.
 
 import { forwardRef, useLayoutEffect, useRef } from 'react'
-import type { EditorView } from '@codemirror/view'
+import type { FrameView } from '@/lib/editor/frame-view'
 import { cx, floatMaterial } from '@/components/ui'
 import { filterBlocks, pickBlock, type SlashState } from '@/lib/editor/slash/slash'
 import { ToolGlyph } from './glyphs'
 
-export const SlashMenu = forwardRef<HTMLDivElement, { view: EditorView; state: SlashState; id: string; style: React.CSSProperties }>(function SlashMenu({ view, state, id, style }, ref) {
+/** `store`: the frame's (never the view itself as a prop; see FindBarProps.store). */
+export const SlashMenu = forwardRef<HTMLDivElement, { store: FrameView; state: SlashState; id: string; style: React.CSSProperties }>(function SlashMenu({ store, state, id, style }, ref) {
   const blocks = filterBlocks(state.query)
   const list = useRef<HTMLDivElement>(null)
   // A capped list keeps the chosen row in view.
@@ -32,7 +33,8 @@ export const SlashMenu = forwardRef<HTMLDivElement, { view: EditorView; state: S
             className={cx('ed-slash-opt', i === state.active ? 'ed-slash-on' : '')}
             onMouseDown={(e) => {
               e.preventDefault()
-              pickBlock(view, b.id)
+              const view = store.get()
+              if (view) pickBlock(view, b.id)
             }}
           >
             <span aria-hidden="true" data-k2-chamfer="chip" className="ed-slash-tile">

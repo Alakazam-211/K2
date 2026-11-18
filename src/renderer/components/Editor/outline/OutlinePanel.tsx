@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
+import type { FrameView } from '@/lib/editor/frame-view'
 import { cx } from '@/components/ui'
 import { headingAt, outlineOf, type OutlineItem } from '@/lib/editor/outline/outline'
 import { PanelTabs, type PanelTabsValue } from './PanelTabs'
@@ -26,7 +27,10 @@ export function jumpToHeading(view: EditorView, item: OutlineItem): void {
   view.focus()
 }
 
-export function OutlinePanel({ view, version, tabs }: { view: EditorView | null; version: number; tabs: PanelTabsValue }): React.JSX.Element {
+/** `store`: the frame's; `version` redraws the panel as the view changes. Never
+ *  the view itself as a prop (see FindBarProps.store). */
+export function OutlinePanel({ store, version, tabs }: { store: FrameView; version: number; tabs: PanelTabsValue }): React.JSX.Element {
+  const view = store.get()
   const doc = view?.state.doc ?? null
   const items = useMemo(() => (doc ? outlineOf(doc) : []), [doc])
   const [current, setCurrent] = useState(-1)

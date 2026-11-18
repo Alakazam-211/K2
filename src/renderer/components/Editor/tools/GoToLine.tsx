@@ -6,6 +6,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
+import type { FrameView } from '@/lib/editor/frame-view'
 import { floatMaterial } from '@/components/ui'
 import { parseLineTarget } from '@/lib/editor/goto-line'
 
@@ -16,11 +17,14 @@ export function goToLine(view: EditorView, line: number, col: number | null): vo
   view.focus()
 }
 
-export function GoToLine({ view, onClose }: { view: EditorView; onClose: () => void }): React.JSX.Element {
+/** `store`: the frame's (never the view itself as a prop; see FindBarProps.store). */
+export function GoToLine({ store, onClose }: { store: FrameView; onClose: () => void }): React.JSX.Element | null {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const field = useRef<HTMLInputElement>(null)
   useLayoutEffect(() => field.current?.focus(), [])
+  const view = store.get()
+  if (!view) return null
   const lines = view.state.doc.lines
   const go = (): void => {
     const t = parseLineTarget(text, lines)

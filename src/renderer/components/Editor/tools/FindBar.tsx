@@ -10,13 +10,18 @@
 
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { EditorView } from '@codemirror/view'
+import type { FrameView } from '@/lib/editor/frame-view'
 import { cx } from '@/components/ui'
 import { countWords, findCount, findStep, firstFrom, replaceAllSpec, replaceOneSpec, selectMatch, type FindSpec } from '@/lib/editor/find/find'
 import { hideMatches, showMatches } from '@/lib/editor/find/find-view'
 import { ToolGlyph } from './glyphs'
 
 export interface FindBarProps {
-  view: EditorView | null
+  /** The frame's store; the bar reads the view from it. Never the view itself
+   *  as a prop: an EditorView reaches the top window (`observer.win`), and
+   *  React's dev build walks props, so with a sandboxed frame on the page the
+   *  read throws and the UI dies (cross-origin-frame.ts). */
+  store: FrameView
   /** The view's update count: the bar redraws with it. */
   version: number
   fileName: string
@@ -42,7 +47,8 @@ function Toggle({ label, title, on, onClick, children }: { label: string; title?
 }
 
 export function FindBar(p: FindBarProps): React.JSX.Element {
-  const { view, spec, setSpec } = p
+  const { spec, setSpec } = p
+  const view = p.store.get()
   const field = useRef<HTMLInputElement>(null)
   const replaceField = useRef<HTMLInputElement>(null)
   // Where typing in the field searches from: the selection when the bar opened.

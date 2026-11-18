@@ -122,7 +122,7 @@ export function EditorFrame(props: {
   const word = save?.status ? { id: 'save', node: <SaveWord word={save.status.word} tone={save.status.tone} /> } : null
   const name = fileNameOf(filePath)
   const tools = useFrameTools({ store: frame.store, fileName: name, mode, readOnly: props.readOnly ?? null })
-  const side = useFramePanel({ kind, live, view: tools.view, version: tools.version, narrow: frame.narrow })
+  const side = useFramePanel({ kind, live, store: frame.store, version: tools.version, narrow: frame.narrow })
   // Ln, Col opens go to line.
   const pos = (it: StatusItem): StatusItem => (it.id === 'pos' && tools.openGoto ? { id: 'pos', node: <button type="button" data-k2-focus="" data-k2-chamfer="chip" title="Go to line (⌃G)" onClick={tools.openGoto} className="ed-sb no-drag">{it.node}</button> } : it)
   const items = (save ? status.items.flatMap((it) => (it.id !== 'save' ? [it] : word ? [word] : [])) : status.items).map(pos)

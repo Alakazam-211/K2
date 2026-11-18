@@ -6,7 +6,7 @@
 //   - code: the live panel only, as before (no outline).
 
 import { useEffect, useState } from 'react'
-import type { EditorView } from '@codemirror/view'
+import type { FrameView } from '@/lib/editor/frame-view'
 import { cx } from '@/components/ui'
 import { useLocalFlag } from '@/lib/editor/local-flag'
 import type { EditorKind } from '@/lib/editor/preview-switch'
@@ -24,7 +24,7 @@ export interface FramePanel {
   panelLabel?: string
 }
 
-export function useFramePanel(o: { kind: EditorKind; live: FrameLive | null; view: EditorView | null; version: number; narrow: boolean }): FramePanel {
+export function useFramePanel(o: { kind: EditorKind; live: FrameLive | null; store: FrameView; version: number; narrow: boolean }): FramePanel {
   const { kind, live } = o
   const [wideOpen, setWideOpen] = useLocalFlag(OUTLINE_OPEN_KEY, true)
   const [narrowOpen, setNarrowOpen] = useState(false)
@@ -42,7 +42,7 @@ export function useFramePanel(o: { kind: EditorKind; live: FrameLive | null; vie
     const set = (v: boolean): void => (o.narrow ? setNarrowOpen(v) : setWideOpen(v))
     const tabs: PanelTabsValue = { tabs: [outlineTab], selected: 'outline', onSelect: () => {} }
     return {
-      panel: <OutlinePanel view={o.view} version={o.version} tabs={tabs} />,
+      panel: <OutlinePanel store={o.store} version={o.version} tabs={tabs} />,
       panelOpen: open,
       onTogglePanel: () => set(!open),
       onClosePanel: () => set(false),
@@ -63,7 +63,7 @@ export function useFramePanel(o: { kind: EditorKind; live: FrameLive | null; vie
   }
   const tabs: PanelTabsValue = { tabs: [outlineTab, liveTab], selected: tab, onSelect: setTab }
   return {
-    panel: tab === 'outline' ? <OutlinePanel view={o.view} version={o.version} tabs={tabs} /> : <PanelTabsContext.Provider value={tabs}>{live.panel}</PanelTabsContext.Provider>,
+    panel: tab === 'outline' ? <OutlinePanel store={o.store} version={o.version} tabs={tabs} /> : <PanelTabsContext.Provider value={tabs}>{live.panel}</PanelTabsContext.Provider>,
     panelOpen: live.panelOpen,
     onTogglePanel: live.onTogglePanel,
     onClosePanel: live.onClosePanel,

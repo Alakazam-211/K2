@@ -185,21 +185,20 @@ export function useFrameTools(o: FrameToolsOptions) {
     view && fmtWanted ? <FormatToolbar ref={fmtRef} docked={docked} active={formatState(view.state)} onRun={run} onEscape={() => view.focus()} style={docked || fmtPlace === 'dock' || !fmtPlace ? undefined : { position: 'absolute', left: fmtPlace.left, top: fmtPlace.top }} /> : null
 
   return {
-    view,
     version,
     onKey,
-    findBar: find.open && view ? <FindBar view={view} version={version} fileName={o.fileName} spec={spec} setSpec={setSpec} replaceOpen={find.replace} setReplaceOpen={(r) => setFind((f) => ({ ...f, replace: r, focusReplace: r }))} readOnly={o.readOnly} focusKey={find.key} focusReplace={find.focusReplace} onClose={closeFind} /> : null,
+    findBar: find.open && view ? <FindBar store={o.store} version={version} fileName={o.fileName} spec={spec} setSpec={setSpec} replaceOpen={find.replace} setReplaceOpen={(r) => setFind((f) => ({ ...f, replace: r, focusReplace: r }))} readOnly={o.readOnly} focusKey={find.key} focusReplace={find.focusReplace} onClose={closeFind} /> : null,
     /** The hero's own box: the floats are placed against it. */
     hero,
     floats: (
       <>
         {fmtPlace && fmtPlace !== 'dock' ? toolbar(false) : null}
-        {view && slash ? <SlashMenu ref={slashRef} view={view} state={slash} id={o.store.slashId} style={{ position: 'absolute', left: slashPlace?.left ?? 8, top: slashPlace?.top ?? 8, ...(slashPlace?.maxHeight ? { maxHeight: slashPlace.maxHeight } : {}), visibility: slashPlace ? undefined : 'hidden' }} /> : null}
+        {view && slash ? <SlashMenu ref={slashRef} store={o.store} state={slash} id={o.store.slashId} style={{ position: 'absolute', left: slashPlace?.left ?? 8, top: slashPlace?.top ?? 8, ...(slashPlace?.maxHeight ? { maxHeight: slashPlace.maxHeight } : {}), visibility: slashPlace ? undefined : 'hidden' }} /> : null}
       </>
     ),
     /** In the file bar when the margin has no room. */
     docked: fmtPlace === 'dock' ? toolbar(true) : null,
-    goto: goto && view ? <GoToLine view={view} onClose={() => setGoto(false)} /> : null,
+    goto: goto && view ? <GoToLine store={o.store} onClose={() => setGoto(false)} /> : null,
     openGoto: view ? () => setGoto(true) : null,
   }
 }

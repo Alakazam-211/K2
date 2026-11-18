@@ -21,6 +21,9 @@
 #   K2_OWNER_USER=alice \
 #   ./provision-k2-server.sh
 #
+#   # a deliberate non-App box: a NOT READY `k2 app doctor` is a warning
+#   ./provision-k2-server.sh --allow-not-ready
+#
 #   # self-host interactive path (after install, no K2_TUNNEL_TOKEN):
 #   k2 users add alice --role owner    # prompts for password
 #   k2 connect login                   # k2.dev account → pick subdomain → live
@@ -56,7 +59,24 @@
 #                      enables mail, touches DNS, or edits other sudoers.
 #   K2_SKIP_APPS       1 = skip step 8b (Apps (beta) box prep + App engine).
 #                      Default: a full provision prepares the box for walled
-#                      Apps and installs the App engine (0.46.3+ daemons).
+#                      Apps and installs the App engine (0.46.3+ daemons),
+#                      gives agent sessions their own memory budget (the
+#                      agents leaf: --cores-mem-min sized by the box's RAM,
+#                      then one k2-daemon restart while there are no guests
+#                      yet) and requires `k2 app doctor` READY: NOT READY
+#                      stops provisioning and names the failing checks.
+#                      READY turns on automatic box prep (appsAutoPrepare)
+#                      so the box stays ready after every update.
+#   K2_ALLOW_NOT_READY 1 = (or --allow-not-ready) a deliberate non-App box:
+#                      a NOT READY doctor at the end of 8b is a warning
+#                      instead of a stop. Box prep and engine failures still
+#                      stop provisioning (K2_SKIP_APPS=1 skips 8b entirely).
+#   K2_CORES_MEM_MIN_MIB  the protected floor for K2's cores (MiB), passed
+#                      to `k2 app box prepare --cores-mem-min`. Default:
+#                      about 1/16 of the box's RAM, at least 2 GiB, at most
+#                      8 GiB (2 GiB at 32 GB or less, 4 GiB at 64 GB, 8 GiB
+#                      at 128 GB and up); a box under ~4 GiB gets a quarter
+#                      of its RAM (the root helper refuses more than half).
 #   K2_SKIP_SEW        1 = skip step 9c (Sew chat + voice, Home chat, voice
 #                      rooms). Default: every full provision installs Sew
 #                      (identity k2, K2's pinned version) and voice, takes
@@ -88,15 +108,18 @@ K2_VERSION="${K2_VERSION:-}"
 RAW_BASE="https://raw.githubusercontent.com/Alakazam-211/K2/main"
 BAKE_ONLY=0
 WITH_DB=0
+ALLOW_NOT_READY=0
 # Must still treat `--bake` as argv[1] (historical). Extra flags are
 # parsed without breaking that; `K2_BAKE_DB=1` is the env alias.
 for _arg in "$@"; do
 	case "$_arg" in
 		--bake) BAKE_ONLY=1 ;;
 		--with-db) WITH_DB=1 ;;
+		--allow-not-ready) ALLOW_NOT_READY=1 ;;
 	esac
 done
 [ "${K2_BAKE_DB:-}" = "1" ] && WITH_DB=1
+[ "${K2_ALLOW_NOT_READY:-}" = "1" ] && ALLOW_NOT_READY=1
 
 # The helper python snippets read these from the environment.
 export K2_TUNNEL_TOKEN="${K2_TUNNEL_TOKEN:-}"
@@ -108,6 +131,25 @@ export K2_CALLBACK_TOKEN="${K2_CALLBACK_TOKEN:-}"
 
 log() { printf '\033[1;36m[provision]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[provision] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# The agents leaf's protected floor for K2's cores, in MiB, from MemTotal
+# in KiB (/proc/meminfo): about 1/16 of the RAM rounded to whole GiB, at
+# least 2 GiB, at most 8 GiB (2 GiB at 32 GB or less, 4 GiB at 64 GB, 8 GiB
+# at 128 GB and up). The root helper refuses a floor above half the box, so
+# a box under ~4 GiB gets a quarter of its RAM. Same rule as the daemon's
+# `k2_core::agents_leaf::cores_floor_mib` (the owner's one-click card).
+k2_cores_mem_min_mib() {
+	local kib="${1:-0}" ram_mib g n
+	case "$kib" in ''|*[!0-9]*) return 1 ;; esac
+	ram_mib=$(( kib / 1024 ))
+	[ "$ram_mib" -gt 0 ] || return 1
+	g=$(( (ram_mib + 8192) / 16384 ))
+	[ "$g" -ge 2 ] || g=2
+	[ "$g" -le 8 ] || g=8
+	n=$(( g * 1024 ))
+	[ "$n" -le $(( ram_mib / 2 )) ] || n=$(( ram_mib / 4 ))
+	printf '%s\n' "$n"
+}
 
 # Credentials never ride curl's argv (any OS user can read argv with `ps`).
 # k2_curl hands curl its URL (the owner token stays in the query, exactly
@@ -580,34 +622,29 @@ systemctl restart "$K2_UNIT_NAME"
 # The daemon rotates daemon.token on EVERY boot, so on a re-run the old
 # files linger until the restarted daemon rewrites them. Re-read both
 # each iteration and only accept a token the live daemon actually honors.
-log "waiting for daemon readiness (fresh port + token)"
-PORT=""; TOKEN=""; BASE=""
-for _ in $(seq 1 90); do
-	PORT=$(cat "$K2_HOME/.k2/daemon.port" 2>/dev/null || true)
-	TOKEN=$(cat "$K2_HOME/.k2/daemon.token" 2>/dev/null || true)
-	if [ -n "$PORT" ] && [ -n "$TOKEN" ]; then
-		BASE="http://127.0.0.1:${PORT}"
-		if curl -fsS "$BASE/boot-status" 2>/dev/null | grep -q '"phase":"ready"'; then
-			AUTH_CODE=$(k2_curl "$BASE/cli/auth/whoami?token=$TOKEN" "" "" -s -o /dev/null -w '%{http_code}')
-			[ "$AUTH_CODE" = "200" ] && break
+# Also after 8b's restart (the agents leaf): sets PORT, TOKEN and BASE.
+k2_wait_ready() {
+	PORT=""; TOKEN=""; BASE=""
+	for _ in $(seq 1 90); do
+		PORT=$(cat "$K2_HOME/.k2/daemon.port" 2>/dev/null || true)
+		TOKEN=$(cat "$K2_HOME/.k2/daemon.token" 2>/dev/null || true)
+		if [ -n "$PORT" ] && [ -n "$TOKEN" ]; then
+			BASE="http://127.0.0.1:${PORT}"
+			if curl -fsS "$BASE/boot-status" 2>/dev/null | grep -q '"phase":"ready"'; then
+				AUTH_CODE=$(k2_curl "$BASE/cli/auth/whoami?token=$TOKEN" "" "" -s -o /dev/null -w '%{http_code}')
+				[ "$AUTH_CODE" = "200" ] && break
+			fi
 		fi
-	fi
-	sleep 1
-	PORT=""
-done
-[ -n "$PORT" ] || die "daemon not ready with a live token in 90s (journalctl -u ${K2_UNIT_NAME})"
+		sleep 1
+		PORT=""
+	done
+	[ -n "$PORT" ] || die "daemon not ready with a live token in 90s (journalctl -u ${K2_UNIT_NAME})"
+}
+log "waiting for daemon readiness (fresh port + token)"
+k2_wait_ready
 
-# ── 8b. Apps (beta): prepare the box + install the App engine ───────
-# 0.46.3+: Apps are on by default; walled Apps need box prep (k2app user,
-# subuids, delegation, nft table, Podman 5) and the guarded App engine,
-# both through the root helper from step 7a. Run as the daemon user with
-# the owner token the CLI reads from its own ~/.k2/daemon.token (never on
-# an argv). Idempotent: prepare converges on a re-run; the engine is
-# installed only when the doctor says it isn't answering at this version.
-# K2_SKIP_APPS=1 skips it. A daemon that predates the Apps switch (pinned
-# K2_VERSION, legacy root helper) is skipped with a line; any other
-# failure stops provisioning.
-APPS_LINE="skipped"
+# The k2 CLI as the daemon user, with the owner token it reads from its own
+# ~/.k2/daemon.token (never on an argv). 8b and 9c use it.
 # K2_CLI_TIMEOUT=<limit> (timeout(1) syntax) bounds one call (9c's long steps).
 k2_as_daemon_user() {
 	local _bound=()
@@ -616,6 +653,26 @@ k2_as_daemon_user() {
 	${_bound[@]+"${_bound[@]}"} runuser -u "$K2_RUN_USER" -- env -i HOME="$K2_HOME" USER="$K2_RUN_USER" LANG=C.UTF-8 \
 		PATH="$K2_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" /usr/local/bin/k2 "$@"
 }
+
+# ── 8b. Apps (beta): prepare the box + install the App engine ───────
+# 0.46.3+: Apps are on by default; walled Apps need box prep (k2app user,
+# subuids, delegation, nft table, Podman 5) and the guarded App engine,
+# both through the root helper from step 7a. Run as the daemon user with
+# the owner token the CLI reads from its own ~/.k2/daemon.token (never on
+# an argv). Idempotent: prepare converges on a re-run; the engine is
+# installed only when the doctor says it isn't answering at this version.
+# The agents leaf: prepare passes --cores-mem-min (k2_cores_mem_min_mib,
+# about 1/16 of RAM), and the daemon is restarted once here so its unit
+# starts in k2cores.slice with Delegate=yes (no guests are signed in yet,
+# so nobody is signed out). At the end `k2 app doctor` must say READY:
+# NOT READY stops provisioning with the failing checks, unless
+# --allow-not-ready / K2_ALLOW_NOT_READY=1 (a deliberate non-App box).
+# READY: automatic box prep goes on (`k2 app box auto-prepare on`,
+# appsAutoPrepare) so the box stays ready after every update.
+# K2_SKIP_APPS=1 skips it. A daemon that predates the Apps switch (pinned
+# K2_VERSION, legacy root helper) is skipped with a line; any other
+# failure stops provisioning.
+APPS_LINE="skipped"
 if [ "${K2_SKIP_APPS:-}" = "1" ]; then
 	log "Apps: skipped (K2_SKIP_APPS=1)"
 elif [ "${ROOT_HELPER_MODE:-root}" = "legacy" ]; then
@@ -631,9 +688,17 @@ else
 	elif [ "$APPS_HTTP" != "200" ]; then
 		die "Apps: GET /cli/app/box answered HTTP ${APPS_HTTP}: ${APPS_DOC%$'\n'*}"
 	else
-		log "Apps: preparing the box (k2 app box prepare --install-podman)"
+		# The agents leaf (S17): a protected floor for K2's cores, sized by
+		# the box's RAM; it takes effect at the daemon's next start (below).
+		APPS_CORES_MIB="${K2_CORES_MEM_MIN_MIB:-}"
+		if [ -z "$APPS_CORES_MIB" ]; then
+			APPS_CORES_MIB=$(k2_cores_mem_min_mib "$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)") \
+				|| die "Apps: could not read MemTotal from /proc/meminfo to size the cores floor (set K2_CORES_MEM_MIN_MIB)"
+		fi
+		case "$APPS_CORES_MIB" in ''|*[!0-9]*) die "K2_CORES_MEM_MIN_MIB must be a number of MiB (got '${APPS_CORES_MIB}')" ;; esac
+		log "Apps: preparing the box (k2 app box prepare --install-podman --cores-mem-min ${APPS_CORES_MIB})"
 		APPS_PREP_OUT=$(mktemp)
-		if ! k2_as_daemon_user app box prepare --install-podman --json >"$APPS_PREP_OUT" 2>&1; then
+		if ! k2_as_daemon_user app box prepare --install-podman --cores-mem-min "$APPS_CORES_MIB" --json >"$APPS_PREP_OUT" 2>&1; then
 			cat "$APPS_PREP_OUT" >&2
 			die "Apps: box prep failed (output above). Fix it, then re-run, or run as ${K2_RUN_USER}: k2 app doctor ; k2 app box prepare --dry-run"
 		fi
@@ -652,9 +717,74 @@ else
 			fi
 			rm -f "$APPS_ENG_OUT"
 		fi
-		k2_as_daemon_user app doctor >/dev/null 2>&1 \
-			|| log "WARN: Apps: k2 app doctor still reports items to fix (run it as ${K2_RUN_USER}); provisioning continues"
-		APPS_LINE="prepared, App engine installed"
+		# The agents leaf needs the daemon's unit started with the cores
+		# drop-in (Delegate=yes). Restart it now: there are no guests or
+		# agent sessions yet, so nobody is signed out.
+		APPS_LEAF=$(k2_curl "$BASE/cli/app/box?token=$TOKEN" "" "" -fsS \
+			| python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((c.get("status") or "unknown" for c in d.get("checks",[]) if c.get("id")=="agentsLeaf"), "absent"))') \
+			|| die "Apps: reading the agents leaf from the doctor failed"
+		if [ "$APPS_LEAF" = "ok" ] || [ "$APPS_LEAF" = "absent" ]; then
+			log "Apps: agent sessions already have their own memory budget"
+		else
+			log "Apps: restarting ${K2_UNIT_NAME} so agent sessions get their own memory budget (setup: no guests yet)"
+			systemctl restart "$K2_UNIT_NAME"
+			k2_wait_ready
+			APPS_LEAF=$(k2_curl "$BASE/cli/app/box?token=$TOKEN" "" "" -fsS \
+				| python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((c.get("status") or "unknown" for c in d.get("checks",[]) if c.get("id")=="agentsLeaf"), "absent"))') \
+				|| die "Apps: reading the agents leaf after the restart failed"
+			[ "$APPS_LEAF" = "ok" ] \
+				|| log "WARN: Apps: agent sessions still share the daemon's memory after the restart (k2 app doctor as ${K2_RUN_USER}: agentsLeaf)"
+		fi
+		# The doctor's verdict decides: NOT READY stops provisioning and
+		# names the failing checks, unless this is a deliberate non-App box
+		# (--allow-not-ready / K2_ALLOW_NOT_READY=1).
+		APPS_DOC_OUT=$(mktemp)
+		k2_curl "$BASE/cli/app/box?token=$TOKEN" "" "" -fsS >"$APPS_DOC_OUT" \
+			|| die "Apps: GET /cli/app/box failed after box prep (journalctl -u ${K2_UNIT_NAME})"
+		APPS_FAILING=$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+if d.get("ready") is True:
+    sys.exit(0)
+gate = d.get("blocking")
+rows = [c for c in d.get("checks", []) if (c.get("id") in gate if isinstance(gate, list) else c.get("status") not in ("ok", "warn"))]
+out = []
+for c in rows:
+    t = "%s (%s): %s" % (c.get("id"), c.get("status"), c.get("detail") or "")
+    if c.get("fix"):
+        t += " [fix: %s]" % c["fix"]
+    out.append(t)
+print("; ".join(out) or "the doctor says not ready without naming a check")
+' "$APPS_DOC_OUT") || die "Apps: the doctor's answer is unreadable: $(cat "$APPS_DOC_OUT")"
+		# 0.46.16+ daemons take `k2 app box auto-prepare on` (the doctor
+		# names its route); older ones keep the owner's Settings switch.
+		APPS_AUTO_ROUTE=$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("autoPrepare") or {}).get("setRoute") or "")' "$APPS_DOC_OUT") \
+			|| die "Apps: the doctor's answer is unreadable: $(cat "$APPS_DOC_OUT")"
+		rm -f "$APPS_DOC_OUT"
+		if [ -z "$APPS_FAILING" ]; then
+			log "Apps: k2 app doctor: READY"
+			# Keep it ready after every update (appsAutoPrepare, the owner's
+			# switch; this provisioner acts as the owner).
+			if [ -n "$APPS_AUTO_ROUTE" ]; then
+				APPS_AUTO_OUT=$(mktemp)
+				if ! k2_as_daemon_user app box auto-prepare on --json >"$APPS_AUTO_OUT" 2>&1; then
+					cat "$APPS_AUTO_OUT" >&2
+					die "Apps: turning on automatic box prep failed (output above). Re-run, or run as ${K2_RUN_USER}: k2 app box auto-prepare on"
+				fi
+				rm -f "$APPS_AUTO_OUT"
+				APPS_AUTO_LINE="automatic prep on"
+			else
+				log "Apps: this daemon predates k2 app box auto-prepare on: automatic prep stays as set (Settings → Cores → Apps → This server)"
+				APPS_AUTO_LINE="automatic prep unchanged (older daemon)"
+			fi
+			APPS_LINE="ready (box prepared, App engine installed, cores floor ${APPS_CORES_MIB} MiB, ${APPS_AUTO_LINE})"
+		elif [ "$ALLOW_NOT_READY" = 1 ]; then
+			# A deliberate non-App box: automatic prep is left off.
+			log "WARN: Apps: k2 app doctor: NOT READY (allowed: --allow-not-ready): ${APPS_FAILING}"
+			APPS_LINE="NOT READY (allowed): ${APPS_FAILING}"
+		else
+			die "Apps: k2 app doctor: NOT READY. Failing checks: ${APPS_FAILING}. Fix them and re-run (idempotent), or for a box that won't run Apps re-run with --allow-not-ready (K2_ALLOW_NOT_READY=1)"
+		fi
 	fi
 fi
 

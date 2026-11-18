@@ -42,6 +42,7 @@
 //! Python 3.12 one, without source lines. The exit code and stdout are the
 //! shell's.
 
+use super::curl_port;
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::out::json::{self, Text, Value};
@@ -112,12 +113,6 @@ fn os_bytes(v: &OsString) -> Vec<u8> {
 #[cfg(not(unix))]
 fn os_bytes(v: &OsString) -> Vec<u8> {
     v.to_string_lossy().into_owned().into_bytes()
-}
-
-/// The port as curl takes it from the shell's URL: digits only, and a
-/// port number.
-fn curl_port(text: &str) -> Option<u16> {
-    (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())).then(|| text.parse().ok()).flatten()
 }
 
 /// `k5 whoami ...`: `args` is the whole command line after `argv[0]`.

@@ -3,15 +3,15 @@
 //!
 //! The route table ([`crate::route`]) says who answers. Its `Native` rows
 //! are the version (alone, or exactly `--version --check`), `cli`
-//! (`cli status [--json]` and its help) and `whoami`
-//! ([`crate::families::whoami`]). A form the front's code does not take
-//! falls through, as does everything else, byte for byte
-//! ([`crate::fallthrough`]).
+//! (`cli status [--json]` and its help) and the families in
+//! [`crate::families`]. A form the front's code does not take falls
+//! through, as does everything else, byte for byte ([`crate::fallthrough`]).
 //!
-//! `whoami`'s help is the shell's: a `whoami` command line with `-h` or
-//! `--help` anywhere in it falls through, so the shell prints its help
-//! text (or its error for a flag before it), with its connection gate in
-//! front of it, exactly as it always has. No copy of the text lives here.
+//! A family's help is the shell's: a `whoami` or `done` command line with
+//! `-h` or `--help` anywhere in it falls through, so the shell prints its
+//! help text (or its error for a flag before it, or whatever it does with
+//! such a word where it reads a value), with its connection gate in front
+//! of it, exactly as it always has. No copy of the text lives here.
 
 use crate::route::{self, Noun, Owner};
 use std::ffi::OsString;
@@ -31,6 +31,9 @@ pub enum Route {
     CliHelp,
     /// `whoami` with no `-h` or `--help` in it ([`crate::families::whoami`]).
     Whoami,
+    /// `done` with no `-h` or `--help` in it ([`crate::families::done`],
+    /// which may still hand it to the shell).
+    Done,
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
@@ -67,8 +70,12 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
             _ => Route::Fallthrough,
         };
     }
+    let help = words.iter().any(|w| matches!(*w, "-h" | "--help"));
     if noun.names("whoami") {
-        return if words.iter().any(|w| matches!(*w, "-h" | "--help")) { Route::Fallthrough } else { Route::Whoami };
+        return if help { Route::Fallthrough } else { Route::Whoami };
+    }
+    if noun.names("done") {
+        return if help { Route::Fallthrough } else { Route::Done };
     }
     Route::Fallthrough
 }
@@ -155,6 +162,20 @@ mod tests {
             assert_eq!(route(&args(line)), Route::Fallthrough, "{line:?}");
         }
         assert_eq!(route(&args(&["Whoami"])), Route::Fallthrough);
+    }
+
+    /// `done`'s front code: any `-h` or `--help` word goes to the shell,
+    /// even as a flag's value. Whether the row is the binary's is the
+    /// route table's (`native` reads only the words).
+    #[test]
+    fn the_done_forms() {
+        let done = route::TABLE.iter().find(|n| n.names("done")).expect("a done row");
+        for line in [&["done"][..], &["done", "--blocked", "x"], &["done", "--agent", "a"], &["done", "--bogus"], &["done", "help"]] {
+            assert_eq!(native(done, &args(line)), Route::Done, "{line:?}");
+        }
+        for line in [&["done", "--help"][..], &["done", "-h"], &["done", "--blocked", "--help"], &["done", "--agent", "-h"]] {
+            assert_eq!(native(done, &args(line)), Route::Fallthrough, "{line:?}");
+        }
     }
 
     #[cfg(unix)]

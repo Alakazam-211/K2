@@ -36,7 +36,7 @@
 //!   ([`check`]), `cli status` ([`cli_status`]) and the families in
 //!   [`families`] here, everything else to the shell CLI.
 //! - [`families`]: the command families the binary answers itself, as the
-//!   shell CLI does: `whoami` so far.
+//!   shell CLI does: `whoami` and `done` so far.
 //! - [`prelude`]: what the shell CLI does around such a verb: its first
 //!   line, its two gates and its EXIT trap's lines.
 //! - [`fallthrough`]: handing a verb to the shell CLI, byte for byte, from

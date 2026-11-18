@@ -65,6 +65,21 @@ fn cli_status(args: &[OsString], json: bool) -> Exit {
     exit
 }
 
+/// The shell CLI runs the command line. The passport rule, count-only:
+/// the shell is told when the call would be refused, and a value the
+/// caller set never stands. Nothing else has changed the process
+/// environment, so it is what the shell inherits.
+fn shell(who: CalledAs, args: &[OsString]) -> Exit {
+    match passport::hand_off_env(passport::current(args)) {
+        (name, Some(value)) => std::env::set_var(name, value),
+        (name, None) => std::env::remove_var(name),
+    }
+    trace::mark("passport rule");
+    let err = fallthrough::run(who, args);
+    out::stderr_line(&err.line(who));
+    err.exit()
+}
+
 fn main() {
     trace::start();
     let mut argv = std::env::args_os();
@@ -80,20 +95,10 @@ fn main() {
         Route::CliStatus { json } => cli_status(&args, json),
         Route::CliHelp => print(cli_status::HELP, Exit::Ok),
         Route::Whoami => families::whoami::run(&args),
-        Route::Fallthrough => {
-            // The passport rule, count-only: the shell is told when the
-            // call would be refused, and a value the caller set never
-            // stands. Nothing else runs yet, so the process environment is
-            // what the shell inherits.
-            match passport::hand_off_env(passport::current(&args)) {
-                (name, Some(value)) => std::env::set_var(name, value),
-                (name, None) => std::env::remove_var(name),
-            }
-            trace::mark("passport rule");
-            let err = fallthrough::run(who, &args);
-            out::stderr_line(&err.line(who));
-            err.exit()
-        }
+        // A form the family hands back goes to the shell before anything
+        // is printed or sent.
+        Route::Done => families::done::run(&args).unwrap_or_else(|| shell(who, &args)),
+        Route::Fallthrough => shell(who, &args),
     };
     trace::finish("command");
     std::process::exit(exit.code());

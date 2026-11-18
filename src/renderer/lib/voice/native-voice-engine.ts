@@ -54,7 +54,9 @@ export interface NativeConsentPrompt {
   /** Who started it (absent for a room that records by itself). */
   startedByName: string | null
   /** 0 = deleted once the transcript is final. */
-  audioKeepDays: number
+  /** The audio's keep days from this recording's own prompt; null when the
+   *  prompt doesn't say, so the notice says nothing rather than guess. */
+  audioKeepDays: number | null
   /** The room records every call with two or more people. */
   required: boolean
   /** Apps whose servers can read the transcript. */
@@ -205,7 +207,7 @@ export function parsePrompt(v: unknown): NativeConsentPrompt | null {
   return {
     noticeVersion: p.notice_version,
     startedByName: typeof started?.display_name === 'string' && started.display_name !== '' ? started.display_name : null,
-    audioKeepDays: typeof p.audio_keep_days === 'number' ? p.audio_keep_days : 0,
+    audioKeepDays: typeof p.audio_keep_days === 'number' && p.audio_keep_days >= 0 ? p.audio_keep_days : null,
     required: p.required === true,
     appReaders: Array.isArray(p.app_readers) ? p.app_readers.filter((x): x is string => typeof x === 'string') : [],
     agentReaders: p.agent_readers === true,

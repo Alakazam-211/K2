@@ -96,11 +96,10 @@ export function recordingNoticeText(opts: {
       ? "Everyone's voice is recorded and transcribed. The transcript is kept in this DM."
       : "Everyone's voice is recorded and transcribed. The transcript is kept in this room's chat.",
   )
-  lines.push(
-    prompt.audioKeepDays === 0
-      ? 'The audio is deleted once the transcript is final.'
-      : `The audio is kept for ${prompt.audioKeepDays} ${prompt.audioKeepDays === 1 ? 'day' : 'days'}.`,
-  )
+  // The keep days come from this recording's prompt. When the prompt
+  // doesn't say, the notice says nothing about the audio rather than guess.
+  if (prompt.audioKeepDays === 0) lines.push('The audio is deleted once the transcript is final.')
+  else if (prompt.audioKeepDays !== null) lines.push(`The audio is kept for ${prompt.audioKeepDays} ${prompt.audioKeepDays === 1 ? 'day' : 'days'}.`)
   if (prompt.appReaders.length > 0) lines.push(`${prompt.appReaders.join(', ')} can read the transcript.`)
   if ((opts.agentReaders && !dm) || prompt.agentReaders) lines.push(AGENT_READERS_LINE)
   lines.push(opts.ask === 'join' ? 'Joining means being recorded.' : 'Staying in the call means being recorded.')

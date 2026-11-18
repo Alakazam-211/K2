@@ -120,3 +120,14 @@ describe("a DM call's recording notice (prd-home-call-recording-v1 §2, HR-8)", 
     expect(recordingBadgeTitle(rec(), 'Alex', true)).toBe('Alex started recording')
   })
 })
+
+describe('the audio keep days', () => {
+  it('says nothing about the audio when the prompt has no keep days, never a guess', () => {
+    const t = recordingNoticeText({ roomName: 'Standup', prompt: prompt({ audioKeepDays: null }), agentReaders: false, ask: 'in_call' })
+    expect(t.lines.some((l) => /audio/i.test(l))).toBe(false)
+  })
+  it("uses the recording's own number", () => {
+    const t = recordingNoticeText({ roomName: 'Standup', prompt: prompt({ audioKeepDays: 7 }), agentReaders: false, ask: 'in_call' })
+    expect(t.lines).toContain('The audio is kept for 7 days.')
+  })
+})

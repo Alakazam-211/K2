@@ -455,13 +455,31 @@ pub fn jail_rel_path(ws_root: &str, rel: &str, for_write: bool) -> Result<PathBu
         }
         Ok(target)
     } else {
-        let canon = dunce::canonicalize(&target)
-            .map_err(|e| format!("Invalid path: {e}"))?;
+        let canon = dunce::canonicalize(&target).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                missing_path_text()
+            } else {
+                format!("Invalid path: {e}")
+            }
+        })?;
         if !canon.starts_with(&root) {
             return Err("path escapes the workspace".to_string());
         }
         Ok(canon)
     }
+}
+
+/// The jail's words for a path that isn't there (any OS's "not found").
+/// A hidden path (a role line's `hide` list) answers exactly this on every
+/// guest read door, so it reads like a missing file (no existence oracle).
+pub(crate) fn missing_path_text() -> String {
+    format!("Invalid path: {}", std::io::Error::from_raw_os_error(2))
+}
+
+/// The guest read doors' answer for a path that isn't there (and for a
+/// hidden one): the jail's 400.
+pub(crate) fn missing_path_response() -> CliResponse {
+    CliResponse::bad_request(missing_path_text())
 }
 
 fn relative_under(root: &Path, abs: &str) -> String {
@@ -721,10 +739,18 @@ fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> Cl
         Ok(p) => p,
         Err(e) => return e,
     };
-    let scope = match scope_gate(pass, &resolved, &rel, PathNeed::List) {
+    // 0.46.16: a hidden folder (the line's `hide` list) is the 404 of a
+    // folder that isn't there, before anything else is looked at.
+    let scope = match room_scope(pass, &resolved, PathNeed::List) {
         Ok(s) => s,
         Err(r) => return r,
     };
+    if k2_core::skin::paths::hides_rel(&scope, &rel) {
+        return read_dir_not_found();
+    }
+    if let Some(r) = scope_lexical(&scope, &rel, PathNeed::List) {
+        return r;
+    }
     let jailed = match jail_rel_path(&resolved.path, &rel, false) {
         Ok(p) => p,
         Err(e) => {
@@ -734,12 +760,18 @@ fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> Cl
             let Some(would_be) = missing_in_room(&resolved.path, &rel) else {
                 return CliResponse::bad_request(e);
             };
+            if hidden_landed(&scope, &resolved, &would_be) {
+                return read_dir_not_found();
+            }
             if let Some(r) = scope_gate_landed(&scope, &resolved, &would_be, PathNeed::List, true) {
                 return r;
             }
             return read_dir_not_found();
         }
     };
+    if hidden_landed(&scope, &resolved, &jailed) {
+        return read_dir_not_found();
+    }
     if let Some(r) = scope_gate_landed(&scope, &resolved, &jailed, PathNeed::List, true) {
         return r;
     }
@@ -752,12 +784,18 @@ fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> Cl
         Ok(mut entries) => {
             let root = dunce::canonicalize(&Path::new(&resolved.path))
                 .unwrap_or_else(|_| PathBuf::from(&resolved.path));
+            // 0.46.16: a link whose target is hidden is left out too (its
+            // name alone isn't, so the landed path is asked).
+            if !scope.hide.is_empty() {
+                entries.retain(|e| !hidden_landed(&scope, &resolved, Path::new(&e.path)));
+            }
             for e in &mut entries {
                 e.path = relative_under(&root, &e.path);
             }
             // R3: a scoped line lists only the granted folders and the
-            // way down to them (never a sibling).
-            if scope.is_scoped() {
+            // way down to them (never a sibling); hidden paths are never
+            // listed, `show_hidden` or not.
+            if scope.has_walls() {
                 entries.retain(|e| {
                     k2_core::skin::paths::allows_rel(&scope, &e.path, PathNeed::List).unwrap_or(false)
                 });
@@ -995,6 +1033,50 @@ fn scope_refused(need: PathNeed) -> CliResponse {
     })
 }
 
+/// A hidden path's refusal (0.46.16): a read or a listing answers exactly
+/// like a path that isn't there (the jail's 400; `read-dir` answers its own
+/// 404 itself), so a guest never learns whether it exists. A write, upload,
+/// copy, move or rename into one is the plain missing-cap 403 (decided on
+/// the path alone, never on the disk).
+fn hidden_refused(need: PathNeed) -> CliResponse {
+    match need {
+        PathNeed::List | PathNeed::Read => missing_path_response(),
+        PathNeed::Write | PathNeed::Upload => scope_refused(need),
+    }
+}
+
+/// `abs` (jailed) lands, symlinks followed, on a path the line hides. A
+/// path that can't be resolved is not "hidden" here (the other gates fail
+/// closed on it).
+fn hidden_landed(scope: &RoomPathScope, resolved: &SkinWorkspace, abs: &Path) -> bool {
+    if scope.hide.is_empty() {
+        return false;
+    }
+    resolve_existing_prefix(abs)
+        .as_deref()
+        .and_then(|f| rel_in_room(&resolved.path, f))
+        .is_some_and(|rel| k2_core::skin::paths::hides_rel(scope, &rel))
+}
+
+/// A copy, move or rename source that holds a rooted hidden path below it
+/// (0.46.16): carrying it elsewhere would bring the hidden path out from
+/// under its pattern. Checked on the path as sent and where it lands.
+fn source_holds_hidden(scope: &RoomPathScope, resolved: &SkinWorkspace, rel: &str, abs: &Path) -> bool {
+    if scope.hide.is_empty() {
+        return false;
+    }
+    let holds = |r: &str| {
+        k2_core::skin::paths::rel_segments(r).is_ok_and(|segs| k2_core::skin::paths::holds_hidden(scope, &segs))
+    };
+    if holds(rel) {
+        return true;
+    }
+    match resolve_existing_prefix(abs).as_deref().and_then(|f| rel_in_room(&resolved.path, f)) {
+        Some(landed) => holds(&landed),
+        None => true,
+    }
+}
+
 /// This login's folders on the resolved room line. `Err` = fail closed.
 pub(crate) fn room_scope(pass: &SkinPass, resolved: &SkinWorkspace, need: PathNeed) -> Result<RoomPathScope, CliResponse> {
     pass.path_scope(&resolved.project_id).map_err(|e| {
@@ -1007,6 +1089,9 @@ pub(crate) fn room_scope(pass: &SkinPass, resolved: &SkinWorkspace, need: PathNe
 /// malformed path answers the jail's own 400 (the same an unscoped login
 /// gets).
 fn scope_lexical(scope: &RoomPathScope, rel: &str, need: PathNeed) -> Option<CliResponse> {
+    if k2_core::skin::paths::hides_rel(scope, rel) {
+        return Some(hidden_refused(need));
+    }
     match k2_core::skin::paths::allows_rel(scope, rel, need) {
         Ok(true) => None,
         Ok(false) => Some(scope_refused(need)),
@@ -1039,8 +1124,9 @@ pub(crate) fn rel_in_room(room_root: &str, full: &Path) -> Option<String> {
 }
 
 /// After the jail: the landed path (symlinks followed; for a new name the
-/// leaf is kept as written) must still be inside the scope. Unscoped lines
-/// pass. Anything that can't be resolved fails closed.
+/// leaf is kept as written) must still be inside the scope and not hidden.
+/// Lines with no folders and nothing hidden pass. Anything that can't be
+/// resolved fails closed.
 pub(crate) fn scope_gate_landed(
     scope: &RoomPathScope,
     resolved: &SkinWorkspace,
@@ -1048,13 +1134,16 @@ pub(crate) fn scope_gate_landed(
     need: PathNeed,
     follow_leaf: bool,
 ) -> Option<CliResponse> {
-    if !scope.is_scoped() {
+    if !scope.has_walls() {
         return None;
     }
     let full = if follow_leaf { resolve_existing_prefix(abs) } else { resolve_parent_keep_leaf(abs) };
     let Some(rel) = full.as_deref().and_then(|f| rel_in_room(&resolved.path, f)) else {
         return Some(scope_refused(need));
     };
+    if k2_core::skin::paths::hides_rel(scope, &rel) {
+        return Some(hidden_refused(need));
+    }
     match k2_core::skin::paths::allows_rel(scope, &rel, need) {
         Ok(true) => None,
         _ => Some(scope_refused(need)),
@@ -1461,7 +1550,7 @@ fn drop_scope(line: &RoomPathScope) -> Option<RoomPathScope> {
         return (!line.write.is_empty() || !line.upload.is_empty()).then(|| line.clone());
     }
     let dir = line.upload_dir.clone()?;
-    Some(RoomPathScope { upload: vec![dir.clone()], upload_dir: Some(dir), ..Default::default() })
+    Some(RoomPathScope { upload: vec![dir.clone()], upload_dir: Some(dir), hide: line.hide.clone(), ..Default::default() })
 }
 
 /// Where an upload door lands.
@@ -2535,6 +2624,11 @@ fn handle_skin_copy_or_move(body: &[u8], pass: &SkinPass, is_move: bool) -> CliR
     for rel in &sources {
         match jail_rel_path(&resolved.path, rel, false) {
             Ok(p) => {
+                // 0.46.16: never carry a hidden path out from under its
+                // pattern (a folder that holds one stays where it is).
+                if source_holds_hidden(&scope, &resolved, rel, &p) {
+                    return scope_refused(source_need);
+                }
                 // R2: a move carries the source away, so `.` / `.k2` count.
                 if is_move {
                     if let Some(r) = refuse_protected_write(pass, &scope, &resolved, rel, &p, true) {
@@ -2678,6 +2772,11 @@ fn handle_skin_rename(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
+    // 0.46.16: renaming a folder that holds a rooted hidden path would
+    // bring it out from under its pattern.
+    if source_holds_hidden(&scope, &resolved, &rel, &jailed) {
+        return scope_refused(PathNeed::Write);
+    }
     // R2: neither the source nor the renamed path may be heartbeat ground.
     if let Some(r) = refuse_protected_write(pass, &scope, &resolved, &rel, &jailed, true) {
         return r;

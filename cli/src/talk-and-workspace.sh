@@ -3066,8 +3066,13 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         too; caps still decide. --upload = drop folders (files:upload adds files
                                         in its own subfolder, never lists or reads). --upload-dir = default upload folder.
                                         --download = folders or files files:download may save (omitted = kept, --no-download clears; --download alone changes only them).
+  k2 app role paths <role> <room> --hide .k2,.env,secrets/ | --unhide .env | --no-hide
+                                        Paths this role's logins never see or read, even inside a permitted
+                                        folder: not listed, answered like a missing file. One name = any
+                                        depth; a/b = from the room root; * and ? inside a name. Nothing is
+                                        hidden unless set. An agent's .k2 holds its inbox and sessions.
   k2 app role paths <role> <room> --clear
-                                        Back to the whole room
+                                        Back to the whole room (hidden paths stay hidden)
   k2 app role list                     Roles (per-room lines; no secrets)
   k2 app role update <name> [--agent … | --clear]
                                         --clear empties the whole map. Always rewrites live sessions.

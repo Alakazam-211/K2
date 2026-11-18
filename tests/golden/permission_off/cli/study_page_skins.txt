@@ -394,6 +394,7 @@ ROLES (named bundles for guests — not Connect, not a platform token)
 FOLDERS PER ROOM LINE (path scope, 0.46.1)
   k2 app role paths adam-jobs docs --read jobs/J1/,jobs/J3/ --write jobs/J1/photos/ --upload-dir jobs/J1/photos
   k2 app role paths adam-jobs docs --clear      (back to the whole room)
+  k2 app role paths adam-jobs docs --hide .k2,.env   (never shown, even inside a folder)
   - Per role, per room line; any room the role holds (not only a home room).
   - Same walls for people and agent logins (k2 app user agent).
   - Unlisted folder = the same 403 as a missing cap, before the disk is read
@@ -418,6 +419,16 @@ FOLDERS PER ROOM LINE (path scope, 0.46.1)
     1 MiB or binary files are checked by name only, not by content.
   - GET /cli/fs/stat?workspace=<room>&path=… (files.stat): kind, size,
     modifiedAt, ext, mime under the same rules.
+  - Hidden paths (0.46.16): --hide .k2,.env,secrets/ = never seen or read by
+    this line's logins, even inside a --read or --write folder. Left out of
+    read-dir (show_hidden too) and fs/events; read-file, read-binary,
+    read-range, stat, downloads and attachments answer like a missing file;
+    no write, upload, copy, move or rename reaches one, and a folder holding
+    a rooted hidden path (.k2/inbox) can't be copied, moved or renamed.
+    One name (.env, secrets, *.pem) = that name at any depth; a path with /
+    (.k2/inbox) = from the room root; * and ? match inside one name; case
+    is ignored. --unhide takes one off, --no-hide empties the list; --clear
+    keeps it. Nothing is hidden unless you set it. Same right as folders.
   - Native agents reading another room by disk path are NOT walled (RS-A4);
     give an agent its own marked App login for the walled route.
 
@@ -490,6 +501,8 @@ THE AGENT'S .k2 FOLDER (0.45.6)
     403 {"error":"agent_config_protected","message":"…"}
   Reads are unchanged: files:read reads .k2/ like any other folder, and
   copying a file OUT of .k2/ is a read.
+  An agent's .k2 holds its inbox and archived sessions; hide it from roles
+  that shouldn't read it: k2 app role paths <role> <room> --hide .k2
   Opt-in, per room (the owner, or the agent that owns the App on that App's
   roles): add files:agentconfig next to files:write
     k2 app role room <role> <handle> --caps files:read,files:write,files:agentconfig

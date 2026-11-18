@@ -75,7 +75,8 @@ pub fn subscriber_frame_scoped(
                 return None;
             }
             let mut rel = map_changed_paths(root, paths);
-            if let Some(scope) = scope.filter(|s| s.is_scoped()) {
+            // 0.46.16: hidden paths never show either (`has_walls`).
+            if let Some(scope) = scope.filter(|s| s.has_walls()) {
                 rel.retain(|p| {
                     k2_core::skin::paths::allows_rel(scope, p, k2_core::skin::paths::PathNeed::Read)
                         .unwrap_or(false)
@@ -448,6 +449,45 @@ mod tests {
         assert!(all.contains("jobs/J2/b.pdf"));
         let open = k2_core::skin::RoomPathScope::default();
         assert!(subscriber_frame_scoped("p", "/tmp/docs", "docs", &ev(&["top.txt"]), Some(&open)).is_some());
+    }
+
+    /// 0.46.16: a line's hidden paths never reach its frames, on a
+    /// whole-room line and inside a permitted folder alike.
+    #[test]
+    fn hidden_paths_never_reach_a_frame() {
+        let ev = |paths: &[&str]| crate::session_events::SessionEvent::FsChanged {
+            workspace_path: "/tmp/docs".into(),
+            paths: paths.iter().map(|p| format!("/tmp/docs/{p}")).collect(),
+        };
+        let whole = k2_core::skin::paths::normalize_scope(&k2_core::skin::RoomPathScope {
+            hide: vec![".k2".into(), ".env".into()],
+            ..Default::default()
+        })
+        .expect("scope");
+        let frame = subscriber_frame_scoped(
+            "p",
+            "/tmp/docs",
+            "docs",
+            &ev(&[".k2/inbox/m.md", "app/.env", "top.txt", ".K2/sessions/x"]),
+            Some(&whole),
+        )
+        .expect("top.txt still shows");
+        let v: serde_json::Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(v["paths"], serde_json::json!(["top.txt"]));
+        assert!(
+            subscriber_frame_scoped("p", "/tmp/docs", "docs", &ev(&[".k2/inbox/m.md"]), Some(&whole)).is_none(),
+            "only hidden paths: no frame at all"
+        );
+        let inside = k2_core::skin::paths::normalize_scope(&k2_core::skin::RoomPathScope {
+            read: vec!["app".into()],
+            hide: vec!["app/config".into()],
+            ..Default::default()
+        })
+        .expect("scope");
+        let frame = subscriber_frame_scoped("p", "/tmp/docs", "docs", &ev(&["app/main.rs", "app/config/db.toml"]), Some(&inside))
+            .expect("app/main.rs shows");
+        let v: serde_json::Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(v["paths"], serde_json::json!(["app/main.rs"]));
     }
 
     #[test]

@@ -952,7 +952,9 @@ for r in roles:
         if f.get("write"):
             print("      write:  %s" % ", ".join(f["write"]))
         if f.get("uploadDir"):
-            print("      upload: %s" % f["uploadDir"])'
+            print("      upload: %s" % f["uploadDir"])
+        if f.get("hide"):
+            print("      hidden: %s" % ", ".join(f["hide"]))'
                     ;;
                 room)
                     local role="" handle="" caps="" clear=0
@@ -1008,13 +1010,18 @@ for a in access:
     print("  %s  %s" % (a.get("handle") or "", caps))
     f=a.get("folders") or {}
     if f.get("read") or f.get("write") or f.get("upload") or f.get("download"):
-        print("      folders: %s" % ", ".join((f.get("read") or []) + [w + " (write)" for w in (f.get("write") or [])] + [u + " (drop)" for u in (f.get("upload") or [])] + [x + " (save)" for x in (f.get("download") or [])]))'
+        print("      folders: %s" % ", ".join((f.get("read") or []) + [w + " (write)" for w in (f.get("write") or [])] + [u + " (drop)" for u in (f.get("upload") or [])] + [x + " (save)" for x in (f.get("download") or [])]))
+    if f.get("hide"):
+        print("      hidden: %s" % ", ".join(f["hide"]))'
                     ;;
                 paths|folders)
                     # Room-scope R3 (RS-A1..A3): one room line's folders.
-                    local role="" handle="" read="" write="" upload="" drop="" download="" nodownload=0 clear=0
+                    local role="" handle="" read="" write="" upload="" drop="" download="" nodownload=0 clear=0 hide="" unhide="" nohide=0
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
+                            --hide) hide="${hide:+$hide,}${2:-}"; shift 2 ;;
+                            --unhide) unhide="${unhide:+$unhide,}${2:-}"; shift 2 ;;
+                            --no-hide) nohide=1; shift ;;
                             --read) read="${2:-}"; shift 2 ;;
                             --write) write="${2:-}"; shift 2 ;;
                             --upload) drop="${2:-}"; shift 2 ;;
@@ -1022,7 +1029,7 @@ for a in access:
                             --download) download="${2:-}"; shift 2 ;;
                             --no-download) nodownload=1; shift ;;
                             --clear) clear=1; shift ;;
-                            --help|-h) echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] | --clear" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] [--hide .k2,.env] [--unhide .env | --no-hide] | --clear" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *)
                                 if [[ -z "$role" ]]; then role="$1"
@@ -1032,7 +1039,7 @@ for a in access:
                                 shift ;;
                         esac
                     done
-                    [[ -z "$role" || -z "$handle" ]] && { echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] | --clear" >&2; exit 1; }
+                    [[ -z "$role" || -z "$handle" ]] && { echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] [--hide .k2,.env] [--unhide .env | --no-hide] | --clear" >&2; exit 1; }
                     if [[ "$clear" == "1" && ( -n "$read" || -n "$write" || -n "$upload" || -n "$drop" || -n "$download" || "$nodownload" == "1" ) ]]; then
                         echo "Error: --clear puts the room back to the whole room; don't pass folders with it" >&2
                         exit 2
@@ -1041,14 +1048,28 @@ for a in access:
                         echo "Error: --download sets the download entries, --no-download clears them; pass one" >&2
                         exit 2
                     fi
-                    if [[ "$clear" == "0" && -z "$read" && -z "$write" && -z "$upload" && -z "$drop" && -z "$download" && "$nodownload" == "0" ]]; then
-                        echo "Error: name folders (--read, --write, --upload, --upload-dir, --download) or pass --clear for the whole room" >&2
+                    if [[ "$nohide" == "1" && ( -n "$hide" || -n "$unhide" ) ]]; then
+                        echo "Error: --no-hide empties the hidden list; don't pass --hide or --unhide with it" >&2
+                        exit 2
+                    fi
+                    if [[ "$clear" == "0" && -z "$read" && -z "$write" && -z "$upload" && -z "$drop" && -z "$download" && "$nodownload" == "0" && -z "$hide" && -z "$unhide" && "$nohide" == "0" ]]; then
+                        echo "Error: name folders (--read, --write, --upload, --upload-dir, --download), hidden paths (--hide, --unhide, --no-hide) or pass --clear for the whole room" >&2
                         exit 2
                     fi
                     local body raw
-                    body=$(K2_SKIN_ROLE="$role" K2_SKIN_HANDLE="$handle" K2_SKIN_READ="$read" K2_SKIN_WRITE="$write" K2_SKIN_DROP="$drop" K2_SKIN_UPLOAD="$upload" K2_SKIN_DOWNLOAD="$download" K2_SKIN_NODOWNLOAD="$nodownload" K2_SKIN_CLEAR="$clear" python3 -c '
+                    body=$(K2_SKIN_ROLE="$role" K2_SKIN_HANDLE="$handle" K2_SKIN_READ="$read" K2_SKIN_WRITE="$write" K2_SKIN_DROP="$drop" K2_SKIN_UPLOAD="$upload" K2_SKIN_DOWNLOAD="$download" K2_SKIN_NODOWNLOAD="$nodownload" K2_SKIN_CLEAR="$clear" K2_SKIN_HIDE="$hide" K2_SKIN_UNHIDE="$unhide" K2_SKIN_NOHIDE="$nohide" python3 -c '
 import json,os
 b={"name": os.environ["K2_SKIN_ROLE"], "handle": os.environ["K2_SKIN_HANDLE"]}
+# Hidden paths (0.46.16): --hide adds, --unhide takes off, --no-hide empties;
+# omitted = kept, and --clear keeps them.
+split=lambda env: [s.strip() for s in os.environ.get(env,"").split(",") if s.strip()]
+if os.environ.get("K2_SKIN_NOHIDE","0") == "1":
+    b["hide"]=[]
+else:
+    if split("K2_SKIN_HIDE"):
+        b["hideAdd"]=split("K2_SKIN_HIDE")
+    if split("K2_SKIN_UNHIDE"):
+        b["hideRemove"]=split("K2_SKIN_UNHIDE")
 if os.environ.get("K2_SKIN_CLEAR","0") == "1":
     b["clear"]=True
 else:
@@ -1090,7 +1111,9 @@ for a in d.get("roomAccess") or d.get("room_access") or []:
     if f.get("uploadDir"):
         print("      upload: %s" % f["uploadDir"])
     if f.get("download"):
-        print("      save:   %s (files:download: may save these)" % ", ".join(f["download"]))'
+        print("      save:   %s (files:download: may save these)" % ", ".join(f["download"]))
+    if f.get("hide"):
+        print("      hidden: %s (never listed or read, even inside a folder)" % ", ".join(f["hide"]))'
                     ;;
                 update)
                     local name="" caps="" clear=0 agents=()

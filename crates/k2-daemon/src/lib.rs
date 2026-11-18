@@ -545,6 +545,7 @@ pub mod room_stream_ws;
 pub mod fs_events_ws;
 pub mod activity_events_ws;
 pub mod skin_hydra;
+pub mod skin_role_paths_routes;
 pub mod skin_routes;
 // Room-scope R6: `GET /cli/skin/me` (lane 4, 0.46.1).
 pub mod skin_me_routes;

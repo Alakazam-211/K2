@@ -5444,3 +5444,112 @@ async fn skin_login_email_and_locked_reply() {
         let _ = std::fs::remove_dir_all(&path);
     });
 }
+
+/// 0.46.16: a role line's hidden paths through the `--skin` gateway (the
+/// cookie door): a hidden `.k2` is absent from read-dir (show_hidden too),
+/// read-file, read-binary, read-range and stat answer it exactly like a
+/// path that isn't there, fs/events never names it, and unhide restores.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_hidden_paths() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(start_old_skin_daemon());
+        let dport = daemon.port;
+        let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_anna_id, _anna_conv, anna_path) = seed_files_workspace(&anna);
+        let (_docs_id, _docs_conv, docs_path) = seed_files_workspace(&docs);
+        for (rel, body) in [(".k2/inbox/m.md", "private inbox note"), (".k2/sessions/old.json", "{}"), ("app/main.rs", "fn main() {}"), ("app/.env", "DB=secret")] {
+            let p = std::path::Path::new(&docs_path).join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).expect("dirs");
+            std::fs::write(&p, body).expect("seed");
+        }
+        add_user(dport, "bob");
+        set_password(dport, "bob", "s3cret-horse");
+        let owner_post = |path: &str, body: String| {
+            let r = http(dport, "POST", &format!("{path}?token={OWNER_TOKEN}"), Some(&body));
+            assert_eq!(r.status, 200, "{path}: {}", r.body);
+            r
+        };
+        owner_post("/cli/skin/roles", r#"{"name":"hider"}"#.to_string());
+        owner_post("/cli/skin/roles/room", format!(r#"{{"name":"hider","handle":"{anna}","caps":["thread:read"]}}"#));
+        owner_post("/cli/skin/roles/room", format!(r#"{{"name":"hider","handle":"{docs}","caps":["files:read"]}}"#));
+        owner_post("/cli/skin/roles/assign", r#"{"username":"bob","role":"hider"}"#.to_string());
+        owner_post("/cli/skin/roles/paths", format!(r#"{{"name":"hider","handle":"{docs}","hideAdd":[".k2",".env"]}}"#));
+
+        let gport = free_port();
+        publish_skin(dport, &anna_path, gport, None);
+        let login = http(gport, "POST", "/login", Some(r#"{"username":"bob","password":"s3cret-horse"}"#));
+        assert_eq!(login.status, 200, "gateway login; {}", login.body);
+        let set_cookie = header_value(&login.headers, "set-cookie").expect("Set-Cookie");
+        let cookie = format!("Cookie: k2_skin_ui={}", cookie_k2_skin_ui(&set_cookie).expect("opaque id"));
+        let get = |route: &str, rel: &str| {
+            http_ex(gport, "GET", &format!("{route}?workspace={docs}&path={rel}&show_hidden=1"), None, &cookie)
+        };
+        let names = |r: &Resp| -> Vec<String> {
+            json(&r.body).as_array().unwrap_or_else(|| panic!("entries: {}", r.body)).iter().map(|e| e["path"].as_str().unwrap().to_string()).collect()
+        };
+
+        let root = get("/cli/fs/read-dir", ".");
+        assert_eq!(root.status, 200, "{}", root.body);
+        let n = names(&root);
+        assert!(n.contains(&"README.md".to_string()) && n.contains(&"app".to_string()), "{}", root.body);
+        assert!(!n.iter().any(|p| p == ".k2"), "hidden .k2 is absent with show_hidden: {}", root.body);
+        assert_eq!(names(&get("/cli/fs/read-dir", "app")), ["app/main.rs"], "app/.env is absent");
+
+        for route in ["/cli/fs/read-file", "/cli/fs/read-binary", "/cli/fs/read-range", "/cli/fs/stat", "/cli/fs/read-dir"] {
+            let missing = get(route, "app/no-such-thing");
+            assert!(missing.status == 400 || missing.status == 404, "{route}: {}", missing.body);
+            for rel in [".k2", ".k2/inbox/m.md", ".k2/sessions/old.json", "app/.env", ".k2/nope"] {
+                let r = get(route, rel);
+                assert_eq!((r.status, &r.body), (missing.status, &missing.body), "{route} {rel}: reads like a missing path");
+                assert!(!r.body.contains("private inbox") && !r.body.contains("secret"), "{route} {rel}: {}", r.body);
+            }
+        }
+
+        // fs/events through the gateway never names a hidden path.
+        let mut sock = StdTcpStream::connect(("127.0.0.1", gport)).expect("ws connect");
+        sock.set_read_timeout(Some(Duration::from_secs(10))).expect("read timeout");
+        let req = format!(
+            "GET /cli/fs/events?workspace={docs} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{cookie}\r\n\r\n"
+        );
+        sock.write_all(req.as_bytes()).expect("ws write");
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            sock.read_exact(&mut byte).expect("upgrade head");
+            head.push(byte[0]);
+        }
+        assert!(String::from_utf8_lossy(&head).starts_with("HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
+        std::thread::sleep(Duration::from_millis(200));
+        for rel in [".k2/inbox/new.md", "app/.env", "seen.txt"] {
+            let abs = std::path::Path::new(&docs_path).join(rel).to_string_lossy().to_string();
+            let body = serde_json::json!({ "path": abs, "content": "changed" }).to_string();
+            owner_post("/cli/fs/write-file", body);
+        }
+        let mut saw = false;
+        while let Some(t) = try_read_ws_text(&mut sock, Duration::from_secs(5)) {
+            assert!(!t.contains(".k2") && !t.contains(".env"), "a hidden path reached the gateway socket: {t}");
+            if t.contains("seen.txt") {
+                saw = true;
+                break;
+            }
+        }
+        assert!(saw, "the visible change arrives through the gateway");
+        while let Some(t) = try_read_ws_text(&mut sock, Duration::from_millis(300)) {
+            assert!(!t.contains(".k2") && !t.contains(".env"), "late frame leaked: {t}");
+        }
+
+        // Unhide restores, at once, for the live session.
+        owner_post("/cli/skin/roles/paths", format!(r#"{{"name":"hider","handle":"{docs}","hideRemove":[".k2"]}}"#));
+        let r = get("/cli/fs/read-file", ".k2/inbox/m.md");
+        assert_eq!(r.status, 200, "unhidden: {}", r.body);
+        assert!(names(&get("/cli/fs/read-dir", ".")).contains(&".k2".to_string()));
+        let r = get("/cli/fs/read-file", "app/.env");
+        assert_eq!(r.status, 400, ".env stays hidden: {}", r.body);
+
+        stop_skin(dport, &anna_path);
+        let _ = std::fs::remove_dir_all(&anna_path);
+        let _ = std::fs::remove_dir_all(&docs_path);
+    });
+}

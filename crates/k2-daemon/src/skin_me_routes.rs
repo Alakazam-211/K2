@@ -162,7 +162,10 @@ pub fn view(pass: &SkinPass, on_link: bool) -> serde_json::Value {
             "can": k2_core::skin::access::can_of(&caps),
         });
         // R3: a login's room line folders (absent = the whole room).
-        if let Ok(scope) = pass.path_scope(&a.project_id) {
+        // 0.46.16: the line's hidden paths are the App agent's business,
+        // not the guest's (a guest sees them as missing), so they stay out.
+        if let Ok(mut scope) = pass.path_scope(&a.project_id) {
+            scope.hide.clear();
             if !scope.is_empty() {
                 row["folders"] = serde_json::to_value(&scope).unwrap_or_default();
                 agent["folders"] = row["folders"].clone();

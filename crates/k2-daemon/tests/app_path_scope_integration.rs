@@ -629,4 +629,215 @@ async fn cli_role_paths_round_trip() {
     assert!(out.contains("folders: whole room"), "{out}");
     let root = guest_get(port, "/cli/fs/read-dir", &pass, &docs, ".").await;
     assert!(names(&root).contains(&"top.txt".to_string()), "{}", root.body);
+
+    // 0.46.16: --hide adds, --unhide takes off, --no-hide empties; --clear keeps them.
+    let out = ok_out(run(s(&["app", "role", "paths", &role, &h, "--hide", ".k2,top.txt", "--hide", ".env"])).await, "paths --hide");
+    assert!(out.contains("hidden: .k2, top.txt, .env"), "{out}");
+    assert!(out.contains("folders: whole room"), "hiding walls nothing: {out}");
+    let root = guest_get(port, "/cli/fs/read-dir", &pass, &docs, ".").await;
+    assert!(!names(&root).contains(&"top.txt".to_string()), "{}", root.body);
+    let listed = ok_out(run(s(&["app", "role", "list"])).await, "role list");
+    assert!(listed.contains("hidden: .k2, top.txt, .env"), "{listed}");
+    let out = ok_out(run(s(&["app", "role", "paths", &role, &h, "--read", "jobs"])).await, "paths --read keeps hidden");
+    assert!(out.contains("read:   jobs") && out.contains("hidden: .k2, top.txt, .env"), "{out}");
+    let out = ok_out(run(s(&["app", "role", "paths", &role, &h, "--clear"])).await, "--clear keeps hidden");
+    assert!(out.contains("hidden: .k2, top.txt, .env"), "{out}");
+    let out = ok_out(run(s(&["app", "role", "paths", &role, &h, "--unhide", "top.txt"])).await, "paths --unhide");
+    assert!(out.contains("hidden: .k2, .env") && !out.contains("top.txt"), "{out}");
+    let r = guest_get(port, "/cli/fs/read-file", &pass, &docs, "top.txt").await;
+    assert_eq!(r.status, 200, "unhidden: {}", r.body);
+    let out = run(s(&["app", "role", "paths", &role, &h, "--unhide", "not-hidden"])).await;
+    assert!(!out.status.success(), "unhiding what isn't hidden fails loudly");
+    let out = run(s(&["app", "role", "paths", &role, &h, "--no-hide", "--hide", "x"])).await;
+    assert_eq!(out.status.code(), Some(2), "--no-hide with --hide");
+    let out = ok_out(run(s(&["app", "role", "paths", &role, &h, "--no-hide"])).await, "paths --no-hide");
+    assert!(!out.contains("hidden:"), "{out}");
+}
+
+/// What a guest gets on `route` for a path that isn't there.
+async fn missing_answer(port: u16, route: &str, pass: &str, ws: &Ws, missing: &str) -> Resp {
+    let r = guest_get(port, route, pass, ws, missing).await;
+    assert!(r.status == 400 || r.status == 404, "{route} {missing}: a missing path's answer: {} {}", r.status, r.body);
+    r
+}
+
+/// A room with an agent's `.k2` (inbox, archived sessions), `.env` files
+/// and an `app/` folder, plus a link into `.k2` from inside `app/`.
+fn seed_hidden(docs: &Ws) {
+    write(&docs.path, ".k2/inbox/m.md", b"private inbox note");
+    write(&docs.path, ".k2/sessions/old.json", b"{\"archived\":true}");
+    write(&docs.path, ".env", b"API_KEY=root-secret");
+    write(&docs.path, "top.txt", b"company notes");
+    write(&docs.path, "app/main.rs", b"fn main() {}");
+    write(&docs.path, "app/.env", b"DB=app-secret");
+    write(&docs.path, "app/config/db.toml", b"password = 'nested-secret'");
+    write(&docs.path, "out/keep.txt", b"out");
+    k2_core::test_env::symlink(docs.path.join(".k2"), docs.path.join("app/k2link")).unwrap();
+}
+
+/// 0.46.16 (Rosson's ruling): a role line's HIDE list. Through K2's own
+/// port with an App guest pass: a hidden `.k2` is absent from listings
+/// (show_hidden too) and every read door answers it byte for byte like a
+/// path that isn't there (read-file, read-binary, read-range, stat,
+/// read-dir); writes are refused; fs/events never names it; a link into it
+/// is hidden too; unhide restores; permits still work; and a hidden path
+/// inside a permitted folder stays hidden. The App's agent sets it with the
+/// same right as folders.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hidden_paths_are_absent_and_read_like_missing_files() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let docs = seed_ws(&env, &format!("docs{tag}"));
+    seed_hidden(&docs);
+    let role = format!("hide{tag}");
+    role_with_rooms(port, &role, &[(&docs, &["files:read", "files:write"])]).await;
+    let pass = login_with_role(port, &format!("hid{tag}"), &role).await;
+    let h = docs.handle.clone();
+    let list = |rel: &'static str| {
+        let (pass, h) = (pass.clone(), h.clone());
+        async move { get(port, "/cli/fs/read-dir", &pass, &format!("workspace={}&path={}&show_hidden=1", enc(&h), enc(rel))).await }
+    };
+
+    // No default change: nothing is hidden until the list is set.
+    let root = list(".").await;
+    assert_eq!(root.status, 200, "{}", root.body);
+    assert!(names(&root).contains(&".k2".to_string()) && names(&root).contains(&".env".to_string()), "{}", root.body);
+    let r = guest_get(port, "/cli/fs/read-file", &pass, &docs, ".k2/inbox/m.md").await;
+    assert_eq!(r.status, 200, "unhidden .k2 reads as before: {}", r.body);
+
+    // The App's agent hides .k2 and .env (the right that sets folders).
+    allow_manage(&docs, true);
+    let agent = passport(&docs);
+    let r = post(port, "/cli/skin/roles/paths", &agent, json!({ "name": role, "handle": h, "hideAdd": [".k2/", ".env"] })).await;
+    assert_eq!(r.status, 200, "agent hides: {}", r.body);
+    let line = r.json()["roomAccess"].as_array().unwrap().iter().find(|a| a["handle"] == h.as_str()).cloned().unwrap();
+    assert_eq!(line["folders"], json!({ "hide": [".k2", ".env"] }), "hiding walls nothing else");
+
+    // Listings: gone, show_hidden or not; the link into .k2 is gone too.
+    let root = list(".").await;
+    let n = names(&root);
+    assert!(n.contains(&"app".to_string()) && n.contains(&"top.txt".to_string()), "{}", root.body);
+    assert!(!n.iter().any(|p| p == ".k2" || p == ".env"), "hidden paths are absent with show_hidden: {}", root.body);
+    let app = list("app").await;
+    assert_eq!(names(&app), ["app/config", "app/main.rs"], "app/.env and the link into .k2 are absent: {}", app.body);
+
+    // Every read door: byte for byte what a missing path gets.
+    for route in ["/cli/fs/read-file", "/cli/fs/read-binary", "/cli/fs/read-range", "/cli/fs/stat", "/cli/fs/read-dir"] {
+        let missing = missing_answer(port, route, &pass, &docs, "app/no-such-thing").await;
+        for rel in [".k2", ".k2/inbox/m.md", ".k2/inbox", ".k2/sessions/old.json", ".K2/inbox/m.md", ".env", "app/.env", "app/k2link/inbox/m.md", ".k2/no-such-file"] {
+            let r = guest_get(port, route, &pass, &docs, rel).await;
+            assert_eq!((r.status, &r.body), (missing.status, &missing.body), "{route} {rel}: reads like a missing path");
+            assert!(!r.body.contains("private inbox") && !r.body.contains("secret"), "{route} {rel}: {}", r.body);
+        }
+    }
+    // read-range with its offset form too.
+    let r = get(port, "/cli/fs/read-range", &pass, &format!("workspace={}&path={}&offset=0&len=4", enc(&h), enc(".k2/inbox/m.md"))).await;
+    let missing = get(port, "/cli/fs/read-range", &pass, &format!("workspace={}&path={}&offset=0&len=4", enc(&h), enc("nope.md"))).await;
+    assert_eq!((r.status, &r.body), (missing.status, &missing.body));
+
+    // No write, copy, move or rename reaches one (files:write held).
+    for (route, body) in [
+        ("write-file", json!({ "workspace": h, "path": ".k2/planted.md", "content": "x" })),
+        ("write-file", json!({ "workspace": h, "path": "app/.env", "content": "x" })),
+        ("create", json!({ "workspace": h, "path": ".env", "is_directory": false })),
+        ("rename", json!({ "workspace": h, "path": "top.txt", "new_name": ".env" })),
+        ("copy", json!({ "workspace": h, "sources": ["top.txt"], "destination": ".k2" })),
+        ("move", json!({ "workspace": h, "sources": ["app/.env"], "destination": "app/config" })),
+    ] {
+        let r = post(port, &format!("/cli/fs/{route}"), &pass, body.clone()).await;
+        assert!(r.status == 403 || r.status == 400, "{route} {body}: refused: {} {}", r.status, r.body);
+    }
+    let r = post(port, "/cli/fs/copy", &pass, json!({ "workspace": h, "sources": [".k2/inbox/m.md"], "destination": "app" })).await;
+    assert_eq!(r.status, 400, "copying a hidden file out reads like a missing one: {}", r.body);
+    assert!(!docs.path.join(".k2/planted.md").exists() && !docs.path.join("app/m.md").exists());
+    assert_eq!(std::fs::read(docs.path.join("app/.env")).unwrap(), b"DB=app-secret");
+    assert_eq!(std::fs::read(docs.path.join("top.txt")).unwrap(), b"company notes");
+
+    // fs/events never names a hidden path.
+    let url = format!("ws://127.0.0.1:{port}/cli/fs/events?workspace={}&token={}", enc(&h), enc(&pass));
+    let (mut ws, resp) = tokio_tungstenite::connect_async(&url).await.expect("files WS upgrades");
+    assert_eq!(resp.status(), 101);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    for rel in [".k2/inbox/new.md", "app/.env", ".k2/sessions/s2.json", "seen.txt"] {
+        let abs = docs.path.join(rel).to_string_lossy().to_string();
+        owner_ok(port, "/cli/fs/write-file", json!({ "path": abs, "content": "changed" })).await;
+    }
+    let mut saw = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while let Ok(Some(frame)) = tokio::time::timeout(deadline.saturating_duration_since(tokio::time::Instant::now()), ws.next()).await {
+        let frame = frame.expect("ws ok");
+        let Ok(t) = frame.to_text() else { continue };
+        assert!(!t.contains(".k2") && !t.contains(".env"), "a hidden path reached a frame: {t}");
+        if t.contains("seen.txt") {
+            saw = true;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            break;
+        }
+    }
+    assert!(saw, "the visible change still arrives");
+    while let Ok(Some(Ok(frame))) = tokio::time::timeout(Duration::from_millis(200), ws.next()).await {
+        if let Ok(t) = frame.to_text() {
+            assert!(!t.contains(".k2") && !t.contains(".env"), "late frame leaked: {t}");
+        }
+    }
+
+    // skin/me never tells the guest what is hidden.
+    let me = get(port, "/cli/skin/me", &pass, "").await;
+    assert!(!me.body.contains("\"hide\""), "{}", me.body);
+
+    // Inside a permitted folder: permits still work, the hidden path stays hidden.
+    let r = post(port, "/cli/skin/roles/paths", &agent, json!({ "name": role, "handle": h, "write": ["app", "out"], "hideAdd": ["app/config"] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = guest_get(port, "/cli/fs/read-file", &pass, &docs, "app/main.rs").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let missing = missing_answer(port, "/cli/fs/read-file", &pass, &docs, "app/nope.txt").await;
+    for rel in ["app/config/db.toml", "app/.env"] {
+        let r = guest_get(port, "/cli/fs/read-file", &pass, &docs, rel).await;
+        assert_eq!((r.status, &r.body), (missing.status, &missing.body), "{rel} hidden inside a read folder");
+    }
+    assert_missing_cap(&guest_get(port, "/cli/fs/read-file", &pass, &docs, "top.txt").await, "files:read", "outside the permits");
+    assert_eq!(names(&list("app").await), ["app/main.rs"], "app/config, app/.env and the link are absent");
+    // A folder holding a rooted hidden path can't be carried elsewhere
+    // (the copy would bring app/config out from under its pattern).
+    let r = post(port, "/cli/fs/copy", &pass, json!({ "workspace": h, "sources": ["app"], "destination": "out" })).await;
+    assert_missing_cap(&r, "files:read", "copy of a folder holding a hidden path");
+    assert!(!docs.path.join("out/app").exists(), "nothing copied");
+    let r = post(port, "/cli/fs/copy", &pass, json!({ "workspace": h, "sources": ["app/main.rs"], "destination": "out" })).await;
+    assert_eq!(r.status, 200, "a plain file still copies: {}", r.body);
+
+    // Unhide restores.
+    let r = post(port, "/cli/skin/roles/paths", &agent, json!({ "name": role, "handle": h, "hideRemove": ["app/config", ".env"] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = guest_get(port, "/cli/fs/read-file", &pass, &docs, "app/config/db.toml").await;
+    assert_eq!(r.status, 200, "unhidden: {}", r.body);
+    let r = guest_get(port, "/cli/fs/read-file", &pass, &docs, "app/.env").await;
+    assert_eq!(r.status, 200, "unhidden: {}", r.body);
+    // Taking off what isn't hidden is a loud 400.
+    let r = post(port, "/cli/skin/roles/paths", &agent, json!({ "name": role, "handle": h, "hideRemove": ["nothing-here"] })).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert!(r.body.contains("not hidden"), "{}", r.body);
+    // --clear keeps the hidden list (clearing folders never reveals it)…
+    let r = owner_ok(port, "/cli/skin/roles/paths", json!({ "name": role, "handle": h, "clear": true })).await;
+    let line = r["roomAccess"].as_array().unwrap().iter().find(|a| a["handle"] == h.as_str()).cloned().unwrap();
+    assert_eq!(line["folders"], json!({ "hide": [".k2"] }));
+    let r = guest_get(port, "/cli/fs/read-file", &pass, &docs, ".k2/inbox/m.md").await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    // …and an empty list unhides everything.
+    owner_ok(port, "/cli/skin/roles/paths", json!({ "name": role, "handle": h, "hide": [] })).await;
+    let r = guest_get(port, "/cli/fs/read-file", &pass, &docs, ".k2/inbox/m.md").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(names(&list(".").await).contains(&".k2".to_string()));
+
+    // A guest can't edit the list; nonsense patterns are refused.
+    let r = post(port, "/cli/skin/roles/paths", &pass, json!({ "name": role, "handle": h, "hide": [] })).await;
+    assert!(r.status == 401 || r.status == 403, "{} {}", r.status, r.body);
+    for bad in [json!({ "hideAdd": ["../x"] }), json!({ "hideAdd": ["*"] }), json!({ "hideAdd": ["a/**/b"] }), json!({ "hide": [".k2"], "hideAdd": [".env"] })] {
+        let mut b = bad.clone();
+        b["name"] = json!(role);
+        b["handle"] = json!(h);
+        let r = post(port, "/cli/skin/roles/paths", OWNER, b).await;
+        assert_eq!(r.status, 400, "{bad}: {}", r.body);
+    }
 }

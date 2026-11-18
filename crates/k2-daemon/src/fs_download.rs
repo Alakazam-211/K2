@@ -108,7 +108,13 @@ fn denied_by_name(rel: &str) -> bool {
 /// May a download entry serve the room-relative `rel` (as written)?
 fn entry_allows_rel(scope: &RoomPathScope, rel: &str) -> bool {
     match sp::rel_segments(rel) {
-        Ok(segs) => !segs.is_empty() && sp::download_allows(scope, &segs) && !lexically_in_agent_config(rel, false) && !denied_by_name(rel),
+        Ok(segs) => {
+            !segs.is_empty()
+                && sp::download_allows(scope, &segs)
+                && !sp::hides(scope, &segs)
+                && !lexically_in_agent_config(rel, false)
+                && !denied_by_name(rel)
+        }
         Err(_) => false,
     }
 }

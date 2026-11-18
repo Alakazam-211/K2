@@ -84,6 +84,15 @@ pub struct RoomPathScope {
     /// [`Self::is_scoped`]. An older K2 refuses this key too (fails closed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub download: Vec<String>,
+    /// Hidden paths (0.46.16): names or room-relative paths a login of this
+    /// line never sees or reads, even inside a permitted folder (see
+    /// [`hides`] for the pattern rules). Absent from listings and events,
+    /// and every guest file door answers them like a missing file. Not part
+    /// of [`Self::is_scoped`]: a line with only hidden paths still reaches
+    /// the rest of the room. An older K2 refuses this key too (fails
+    /// closed).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hide: Vec<String>,
 }
 
 impl RoomPathScope {
@@ -95,7 +104,13 @@ impl RoomPathScope {
     /// `true` when there is nothing to store (no folders, no upload dir,
     /// no download entries).
     pub fn is_empty(&self) -> bool {
-        !self.is_scoped() && self.upload_dir.is_none() && self.download.is_empty()
+        !self.is_scoped() && self.upload_dir.is_none() && self.download.is_empty() && self.hide.is_empty()
+    }
+
+    /// `true` when a file door must check paths at all: the line lists
+    /// folders or hides paths.
+    pub fn has_walls(&self) -> bool {
+        self.is_scoped() || !self.hide.is_empty()
     }
 }
 
@@ -200,9 +215,13 @@ fn readable(scope: &RoomPathScope) -> impl Iterator<Item = &String> {
 }
 
 /// May a login with `scope` do `need` on the room-relative `rel`
-/// (already split by [`rel_segments`])? Unscoped lines allow everything
-/// (the caps still decide).
+/// (already split by [`rel_segments`])? A hidden path ([`hides`]) is
+/// refused for every need. Otherwise unscoped lines allow everything (the
+/// caps still decide).
 pub fn allows(scope: &RoomPathScope, rel: &[String], need: PathNeed) -> bool {
+    if hides(scope, rel) {
+        return false;
+    }
     if !scope.is_scoped() {
         return true;
     }
@@ -262,10 +281,123 @@ pub fn download_widening<'a>(old: &[String], new: &'a [String]) -> Option<&'a st
 /// [`allows`] on a raw room-relative path. `Err` = a malformed path (the
 /// jail's own 400 words).
 pub fn allows_rel(scope: &RoomPathScope, rel: &str, need: PathNeed) -> Result<bool, String> {
-    if !scope.is_scoped() {
+    if !scope.has_walls() {
         return Ok(true);
     }
     Ok(allows(scope, &rel_segments(rel)?, need))
+}
+
+// ── Hidden paths (0.46.16) ────────────────────────────────────────────
+//
+// A room line's `hide` list: what its logins never see, even inside a
+// permitted folder. Rosson's ruling: guest file reads stay the App agent's
+// choice; the agent can now say "never this" beside "only these".
+//
+// Pattern rules (a small piece of gitignore):
+// - one name (`.env`, `secrets`, `*.pem`): that name at ANY depth, and
+//   everything under it;
+// - a path with `/` (`.k2/inbox`, `jobs/J2`): from the room root, and
+//   everything under it;
+// - `*` matches any run of characters inside one name, `?` one character;
+//   `**` is not a pattern (use one name to mean "anywhere");
+// - matching ignores ASCII and Unicode case and trailing dots and spaces,
+//   so `.K2` on a case-insensitive disk is still `.k2` (hiding more is the
+//   safe direction).
+
+/// At most this many hidden patterns per room line.
+pub const MAX_HIDE_PER_LIST: usize = MAX_FOLDERS_PER_LIST;
+
+/// One hide pattern as stored: room-relative, `/`-joined, no `.`/`..`,
+/// never the room root, no `**`.
+pub fn normalize_hide(raw: &str) -> Result<String, String> {
+    let t = raw.trim();
+    if t.chars().count() > MAX_FOLDER_LEN {
+        return Err(format!("hidden path is longer than {MAX_FOLDER_LEN} characters"));
+    }
+    if t.contains('\0') {
+        return Err(format!("hidden path {raw:?} has a NUL character"));
+    }
+    let segs = rel_segments(t).map_err(|e| format!("hidden path {raw:?}: {e}"))?;
+    if segs.is_empty() {
+        return Err(format!("hidden path {raw:?} is the room root; take the room line off the role instead"));
+    }
+    if segs.iter().any(|s| s.contains("**")) {
+        return Err(format!(
+            "hidden path {raw:?}: '**' is not a pattern; a single name (like .env) already means any depth"
+        ));
+    }
+    if segs.len() == 1 && fold_name(&segs[0]).chars().all(|c| c == '*') {
+        return Err(format!("hidden path {raw:?} would hide everything; take the room line off the role instead"));
+    }
+    Ok(segs.join("/"))
+}
+
+/// A name folded for matching: lowercase, trailing dots and spaces gone.
+fn fold_name(s: &str) -> String {
+    s.trim_end_matches(['.', ' ']).to_lowercase()
+}
+
+/// `*` / `?` glob over one (folded) name.
+fn glob_name(pat: &str, name: &str) -> bool {
+    let p: Vec<char> = pat.chars().collect();
+    let n: Vec<char> = name.chars().collect();
+    let (mut pi, mut ni) = (0usize, 0usize);
+    let (mut star, mut mark) = (None::<usize>, 0usize);
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ni;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ni = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+fn name_matches(pattern_seg: &str, name: &str) -> bool {
+    glob_name(&fold_name(pattern_seg), &fold_name(name))
+}
+
+/// Is the room-relative `rel` (already split) hidden by one of the line's
+/// `hide` patterns: the hidden path itself or anything under it?
+pub fn hides(scope: &RoomPathScope, rel: &[String]) -> bool {
+    scope.hide.iter().any(|h| {
+        let p = folder_segments(h);
+        match p.as_slice() {
+            [] => false,
+            [one] => rel.iter().any(|seg| name_matches(one, seg)),
+            many => rel.len() >= many.len() && many.iter().zip(rel.iter()).all(|(a, b)| name_matches(a, b)),
+        }
+    })
+}
+
+/// [`hides`] on a raw room-relative path. A malformed path is not hidden
+/// here (the jail refuses it with its own words).
+pub fn hides_rel(scope: &RoomPathScope, rel: &str) -> bool {
+    !scope.hide.is_empty() && rel_segments(rel).is_ok_and(|segs| hides(scope, &segs))
+}
+
+/// Does the room-relative `rel` (already split) HOLD a hidden path below
+/// it, one that would stop being hidden if `rel` were copied, moved or
+/// renamed elsewhere? Only rooted patterns (with a `/`) can: a one-name
+/// pattern hides that name wherever it lands. The room root holds every
+/// rooted pattern.
+pub fn holds_hidden(scope: &RoomPathScope, rel: &[String]) -> bool {
+    scope.hide.iter().any(|h| {
+        let p = folder_segments(h);
+        p.len() > 1 && rel.len() < p.len() && rel.iter().zip(p.iter()).all(|(a, b)| name_matches(b, a))
+    })
 }
 
 /// The files an LLM CLI loads as its standing orders from the room's root.
@@ -319,7 +451,23 @@ pub fn normalize_scope(scope: &RoomPathScope) -> Result<RoomPathScope, String> {
     if let Some(f) = download.iter().find(|f| folder_in_agent_config(f)) {
         return Err(format!("download entry {f:?} is the agent's .k2 folder or inside it; it can never be downloaded"));
     }
-    let out = RoomPathScope { read, write, upload_dir, upload, download };
+    // Hidden paths (0.46.16): checked and deduped like folders.
+    if scope.hide.len() > MAX_HIDE_PER_LIST {
+        return Err(format!("at most {MAX_HIDE_PER_LIST} hidden paths per room"));
+    }
+    let mut hide: Vec<String> = Vec::new();
+    for h in &scope.hide {
+        let n = normalize_hide(h)?;
+        if !hide.contains(&n) {
+            hide.push(n);
+        }
+    }
+    let out = RoomPathScope { read, write, upload_dir, upload, download, hide };
+    if let Some(dir) = out.upload_dir.as_deref() {
+        if hides_rel(&out, dir) {
+            return Err(format!("uploadDir {dir:?} is a hidden path on this room line; unhide it or pick another"));
+        }
+    }
     if let (true, Some(dir)) = (out.is_scoped(), out.upload_dir.as_deref()) {
         let segs: Vec<String> = dir.split('/').map(str::to_string).collect();
         // AC8: inside a write folder or a drop folder.
@@ -902,5 +1050,105 @@ mod tests {
         assert!(parse_room_paths(Some(r#"{"r1":{"upload":"Inbox"}}"#)).is_err(), "a list, not a string");
         assert!(parse_room_paths(Some(r#"{"r1":{"read":["../x"]}}"#)).is_err());
         assert!(parse_room_paths(Some("not json")).is_err());
+    }
+
+    fn hidden(read: &[&str], hide: &[&str]) -> RoomPathScope {
+        normalize_scope(&RoomPathScope {
+            read: read.iter().map(|s| s.to_string()).collect(),
+            hide: hide.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        })
+        .expect("valid scope")
+    }
+
+    #[test]
+    fn hidden_paths_refuse_every_need_even_inside_a_permitted_folder() {
+        // Nothing hidden: nothing changes (no default).
+        let open = RoomPathScope::default();
+        assert!(!open.has_walls());
+        assert!(allows_rel(&open, ".k2/inbox/a.md", PathNeed::Read).unwrap());
+
+        // Whole room, `.k2` hidden: the rest of the room stays open.
+        let s = hidden(&[], &[".k2/", ".env", "secrets", "*.pem", "jobs/J2"]);
+        assert!(!s.is_scoped(), "hiding never walls the line");
+        assert!(s.has_walls());
+        assert!(!s.is_empty());
+        for need in [PathNeed::List, PathNeed::Read, PathNeed::Write, PathNeed::Upload] {
+            for rel in [
+                ".k2",
+                ".k2/inbox/a.md",
+                ".K2/inbox",
+                ".k2./inbox",
+                ".env",
+                "app/.env",
+                "app/.ENV",
+                "secrets/key.txt",
+                "deep/down/secrets",
+                "certs/server.pem",
+                "jobs/J2",
+                "jobs/J2/secret.txt",
+            ] {
+                assert!(!allows_rel(&s, rel, need).unwrap(), "{rel} must be hidden for {need:?}");
+                assert!(hides_rel(&s, rel), "{rel}");
+            }
+            for rel in [".", "top.txt", "app/.env.example", "jobs", "jobs/J1/plan.pdf", "x/jobs/J2", "my-secrets/a", ".k2-notes.md"] {
+                assert!(allows_rel(&s, rel, need).unwrap(), "{rel} stays open for {need:?}");
+                assert!(!hides_rel(&s, rel), "{rel}");
+            }
+        }
+
+        // A hidden path inside a permitted folder stays hidden.
+        let s = hidden(&["app"], &["app/config", ".env"]);
+        assert!(s.is_scoped());
+        assert!(allows_rel(&s, "app/main.rs", PathNeed::Read).unwrap());
+        assert!(!allows_rel(&s, "app/config/db.toml", PathNeed::Read).unwrap());
+        assert!(!allows_rel(&s, "app/config", PathNeed::List).unwrap());
+        assert!(!allows_rel(&s, "app/.env", PathNeed::Read).unwrap());
+        assert!(allows_rel(&s, "app", PathNeed::List).unwrap(), "the folder itself still lists");
+        assert!(!allows_rel(&s, "other/x", PathNeed::Read).unwrap(), "the permits still wall the rest");
+    }
+
+    #[test]
+    fn hidden_patterns_normalize_and_refuse_nonsense() {
+        let s = hidden(&[], &["./.k2/", ".k2", "a\\b", " .env "]);
+        assert_eq!(s.hide, vec![".k2".to_string(), "a/b".to_string(), ".env".to_string()]);
+        for bad in [".", "/", "/etc", "../x", "a/../b", "**", "a/**/b", "*", "**/x", "C:/x"] {
+            let r = normalize_scope(&RoomPathScope { hide: vec![bad.to_string()], ..Default::default() });
+            assert!(r.is_err(), "{bad:?} must be refused: {r:?}");
+        }
+        assert!(normalize_hide("*/drafts").is_ok(), "a star inside a rooted path is a pattern");
+        // An upload dir that is hidden makes no sense.
+        let r = normalize_scope(&RoomPathScope {
+            upload_dir: Some("inbox".into()),
+            hide: vec!["inbox".into()],
+            ..Default::default()
+        });
+        assert!(r.unwrap_err().contains("hidden"));
+        // Stored round trip: the key parses, and an unknown key still fails closed.
+        let p = parse_room_paths(Some(r#"{"r1":{"hide":[".k2"]}}"#)).unwrap();
+        assert_eq!(p["r1"].hide, vec![".k2".to_string()]);
+        assert!(!p["r1"].is_scoped());
+        assert!(parse_room_paths(Some(r#"{"r1":{"hide":".k2"}}"#)).is_err(), "a list, not a string");
+    }
+
+    #[test]
+    fn globs_and_holds_hidden() {
+        assert!(glob_name("*.pem", "server.pem"));
+        assert!(glob_name(".env*", ".env.local"));
+        assert!(!glob_name(".env*", "x.env"));
+        assert!(glob_name("?.txt", "a.txt"));
+        assert!(!glob_name("?.txt", "ab.txt"));
+        assert!(glob_name("a*b*c", "aXXbYYc"));
+        assert!(!glob_name("a*b*c", "aXXbYY"));
+        let s = hidden(&[], &[".k2/inbox", ".env", "*/private"]);
+        // Copying or moving an ancestor of a rooted hidden path would carry
+        // it out from under its pattern.
+        assert!(holds_hidden(&s, &segs(".")));
+        assert!(holds_hidden(&s, &segs(".k2")));
+        assert!(holds_hidden(&s, &segs("jobs")), "*/private is rooted under any top folder");
+        assert!(!holds_hidden(&s, &segs(".k2/inbox")), "the hidden path itself is hides(), not holds");
+        assert!(!holds_hidden(&s, &segs("jobs/J1")));
+        let one = hidden(&[], &[".env"]);
+        assert!(!holds_hidden(&one, &segs("app")), "a one-name pattern follows the name anywhere");
     }
 }

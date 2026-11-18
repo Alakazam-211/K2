@@ -9881,8 +9881,13 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         too; caps still decide. --upload = drop folders (files:upload adds files
                                         in its own subfolder, never lists or reads). --upload-dir = default upload folder.
                                         --download = folders or files files:download may save (omitted = kept, --no-download clears; --download alone changes only them).
+  k2 app role paths <role> <room> --hide .k2,.env,secrets/ | --unhide .env | --no-hide
+                                        Paths this role's logins never see or read, even inside a permitted
+                                        folder: not listed, answered like a missing file. One name = any
+                                        depth; a/b = from the room root; * and ? inside a name. Nothing is
+                                        hidden unless set. An agent's .k2 holds its inbox and sessions.
   k2 app role paths <role> <room> --clear
-                                        Back to the whole room
+                                        Back to the whole room (hidden paths stay hidden)
   k2 app role list                     Roles (per-room lines; no secrets)
   k2 app role update <name> [--agent … | --clear]
                                         --clear empties the whole map. Always rewrites live sessions.
@@ -22590,7 +22595,9 @@ for r in roles:
         if f.get("write"):
             print("      write:  %s" % ", ".join(f["write"]))
         if f.get("uploadDir"):
-            print("      upload: %s" % f["uploadDir"])'
+            print("      upload: %s" % f["uploadDir"])
+        if f.get("hide"):
+            print("      hidden: %s" % ", ".join(f["hide"]))'
                     ;;
                 room)
                     local role="" handle="" caps="" clear=0
@@ -22646,13 +22653,18 @@ for a in access:
     print("  %s  %s" % (a.get("handle") or "", caps))
     f=a.get("folders") or {}
     if f.get("read") or f.get("write") or f.get("upload") or f.get("download"):
-        print("      folders: %s" % ", ".join((f.get("read") or []) + [w + " (write)" for w in (f.get("write") or [])] + [u + " (drop)" for u in (f.get("upload") or [])] + [x + " (save)" for x in (f.get("download") or [])]))'
+        print("      folders: %s" % ", ".join((f.get("read") or []) + [w + " (write)" for w in (f.get("write") or [])] + [u + " (drop)" for u in (f.get("upload") or [])] + [x + " (save)" for x in (f.get("download") or [])]))
+    if f.get("hide"):
+        print("      hidden: %s" % ", ".join(f["hide"]))'
                     ;;
                 paths|folders)
                     # Room-scope R3 (RS-A1..A3): one room line's folders.
-                    local role="" handle="" read="" write="" upload="" drop="" download="" nodownload=0 clear=0
+                    local role="" handle="" read="" write="" upload="" drop="" download="" nodownload=0 clear=0 hide="" unhide="" nohide=0
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
+                            --hide) hide="${hide:+$hide,}${2:-}"; shift 2 ;;
+                            --unhide) unhide="${unhide:+$unhide,}${2:-}"; shift 2 ;;
+                            --no-hide) nohide=1; shift ;;
                             --read) read="${2:-}"; shift 2 ;;
                             --write) write="${2:-}"; shift 2 ;;
                             --upload) drop="${2:-}"; shift 2 ;;
@@ -22660,7 +22672,7 @@ for a in access:
                             --download) download="${2:-}"; shift 2 ;;
                             --no-download) nodownload=1; shift ;;
                             --clear) clear=1; shift ;;
-                            --help|-h) echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] | --clear" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] [--hide .k2,.env] [--unhide .env | --no-hide] | --clear" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *)
                                 if [[ -z "$role" ]]; then role="$1"
@@ -22670,7 +22682,7 @@ for a in access:
                                 shift ;;
                         esac
                     done
-                    [[ -z "$role" || -z "$handle" ]] && { echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] | --clear" >&2; exit 1; }
+                    [[ -z "$role" || -z "$handle" ]] && { echo "Usage: k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] [--hide .k2,.env] [--unhide .env | --no-hide] | --clear" >&2; exit 1; }
                     if [[ "$clear" == "1" && ( -n "$read" || -n "$write" || -n "$upload" || -n "$drop" || -n "$download" || "$nodownload" == "1" ) ]]; then
                         echo "Error: --clear puts the room back to the whole room; don't pass folders with it" >&2
                         exit 2
@@ -22679,14 +22691,28 @@ for a in access:
                         echo "Error: --download sets the download entries, --no-download clears them; pass one" >&2
                         exit 2
                     fi
-                    if [[ "$clear" == "0" && -z "$read" && -z "$write" && -z "$upload" && -z "$drop" && -z "$download" && "$nodownload" == "0" ]]; then
-                        echo "Error: name folders (--read, --write, --upload, --upload-dir, --download) or pass --clear for the whole room" >&2
+                    if [[ "$nohide" == "1" && ( -n "$hide" || -n "$unhide" ) ]]; then
+                        echo "Error: --no-hide empties the hidden list; don't pass --hide or --unhide with it" >&2
+                        exit 2
+                    fi
+                    if [[ "$clear" == "0" && -z "$read" && -z "$write" && -z "$upload" && -z "$drop" && -z "$download" && "$nodownload" == "0" && -z "$hide" && -z "$unhide" && "$nohide" == "0" ]]; then
+                        echo "Error: name folders (--read, --write, --upload, --upload-dir, --download), hidden paths (--hide, --unhide, --no-hide) or pass --clear for the whole room" >&2
                         exit 2
                     fi
                     local body raw
-                    body=$(K2_SKIN_ROLE="$role" K2_SKIN_HANDLE="$handle" K2_SKIN_READ="$read" K2_SKIN_WRITE="$write" K2_SKIN_DROP="$drop" K2_SKIN_UPLOAD="$upload" K2_SKIN_DOWNLOAD="$download" K2_SKIN_NODOWNLOAD="$nodownload" K2_SKIN_CLEAR="$clear" python3 -c '
+                    body=$(K2_SKIN_ROLE="$role" K2_SKIN_HANDLE="$handle" K2_SKIN_READ="$read" K2_SKIN_WRITE="$write" K2_SKIN_DROP="$drop" K2_SKIN_UPLOAD="$upload" K2_SKIN_DOWNLOAD="$download" K2_SKIN_NODOWNLOAD="$nodownload" K2_SKIN_CLEAR="$clear" K2_SKIN_HIDE="$hide" K2_SKIN_UNHIDE="$unhide" K2_SKIN_NOHIDE="$nohide" python3 -c '
 import json,os
 b={"name": os.environ["K2_SKIN_ROLE"], "handle": os.environ["K2_SKIN_HANDLE"]}
+# Hidden paths (0.46.16): --hide adds, --unhide takes off, --no-hide empties;
+# omitted = kept, and --clear keeps them.
+split=lambda env: [s.strip() for s in os.environ.get(env,"").split(",") if s.strip()]
+if os.environ.get("K2_SKIN_NOHIDE","0") == "1":
+    b["hide"]=[]
+else:
+    if split("K2_SKIN_HIDE"):
+        b["hideAdd"]=split("K2_SKIN_HIDE")
+    if split("K2_SKIN_UNHIDE"):
+        b["hideRemove"]=split("K2_SKIN_UNHIDE")
 if os.environ.get("K2_SKIN_CLEAR","0") == "1":
     b["clear"]=True
 else:
@@ -22728,7 +22754,9 @@ for a in d.get("roomAccess") or d.get("room_access") or []:
     if f.get("uploadDir"):
         print("      upload: %s" % f["uploadDir"])
     if f.get("download"):
-        print("      save:   %s (files:download: may save these)" % ", ".join(f["download"]))'
+        print("      save:   %s (files:download: may save these)" % ", ".join(f["download"]))
+    if f.get("hide"):
+        print("      hidden: %s (never listed or read, even inside a folder)" % ", ".join(f["hide"]))'
                     ;;
                 update)
                     local name="" caps="" clear=0 agents=()
@@ -54886,7 +54914,7 @@ cmd_schema() {
     },
     {
       "name": "app role paths",
-      "usage": "k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] | --clear",
+      "usage": "k2 app role paths <role> <room> [--read a/,b/] [--write c/] [--upload d/] [--upload-dir c/in] [--download e/,f.pdf | --no-download] [--hide .k2,.env] [--unhide .env | --no-hide] | --clear",
       "description": "Folder path scope on one room line of a role (room-scope R3). Replaces the line's folders; unlisted folders are refused with the missing-cap 403. Works on any room the role holds and for agent logins alike.",
       "args": [
         {"name": "role", "required": true},
@@ -54899,7 +54927,10 @@ cmd_schema() {
         {"name": "--upload-dir", "arg": "folder", "description": "Default upload folder (inside a --write or --upload folder when folders are listed)."},
         {"name": "--download", "arg": "list", "description": "Comma-separated folders or single files files:download may save without files:read. Adding entries is person-only; omitted = the stored entries stay; alone it changes only the entries."},
         {"name": "--no-download", "arg": null, "description": "Clear the line's download entries."},
-        {"name": "--clear", "arg": null, "description": "Back to the whole room."}
+        {"name": "--hide", "arg": "list", "description": "Comma-separated paths this line's logins never see or read, even inside a permitted folder (absent from listings and events, answered like a missing file). One name = any depth; a/b = from the room root; * and ? inside a name. Adds to the list."},
+        {"name": "--unhide", "arg": "list", "description": "Take paths off the hidden list."},
+        {"name": "--no-hide", "arg": null, "description": "Empty the hidden list."},
+        {"name": "--clear", "arg": null, "description": "Back to the whole room (the hidden list stays)."}
       ]
     },
     {
@@ -66943,6 +66974,7 @@ ROLES (named bundles for guests — not Connect, not a platform token)
 FOLDERS PER ROOM LINE (path scope, 0.46.1)
   k2 app role paths adam-jobs docs --read jobs/J1/,jobs/J3/ --write jobs/J1/photos/ --upload-dir jobs/J1/photos
   k2 app role paths adam-jobs docs --clear      (back to the whole room)
+  k2 app role paths adam-jobs docs --hide .k2,.env   (never shown, even inside a folder)
   - Per role, per room line; any room the role holds (not only a home room).
   - Same walls for people and agent logins (k2 app user agent).
   - Unlisted folder = the same 403 as a missing cap, before the disk is read
@@ -66967,6 +66999,16 @@ FOLDERS PER ROOM LINE (path scope, 0.46.1)
     1 MiB or binary files are checked by name only, not by content.
   - GET /cli/fs/stat?workspace=<room>&path=… (files.stat): kind, size,
     modifiedAt, ext, mime under the same rules.
+  - Hidden paths (0.46.16): --hide .k2,.env,secrets/ = never seen or read by
+    this line's logins, even inside a --read or --write folder. Left out of
+    read-dir (show_hidden too) and fs/events; read-file, read-binary,
+    read-range, stat, downloads and attachments answer like a missing file;
+    no write, upload, copy, move or rename reaches one, and a folder holding
+    a rooted hidden path (.k2/inbox) can't be copied, moved or renamed.
+    One name (.env, secrets, *.pem) = that name at any depth; a path with /
+    (.k2/inbox) = from the room root; * and ? match inside one name; case
+    is ignored. --unhide takes one off, --no-hide empties the list; --clear
+    keeps it. Nothing is hidden unless you set it. Same right as folders.
   - Native agents reading another room by disk path are NOT walled (RS-A4);
     give an agent its own marked App login for the walled route.
 
@@ -67039,6 +67081,8 @@ THE AGENT'S .k2 FOLDER (0.45.6)
     403 {"error":"agent_config_protected","message":"…"}
   Reads are unchanged: files:read reads .k2/ like any other folder, and
   copying a file OUT of .k2/ is a read.
+  An agent's .k2 holds its inbox and archived sessions; hide it from roles
+  that shouldn't read it: k2 app role paths <role> <room> --hide .k2
   Opt-in, per room (the owner, or the agent that owns the App on that App's
   roles): add files:agentconfig next to files:write
     k2 app role room <role> <handle> --caps files:read,files:write,files:agentconfig

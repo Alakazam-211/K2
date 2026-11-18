@@ -14301,7 +14301,9 @@ READING WHAT WENT WRONG
   [k2] line. Other pasta errors are never folded.
 
 MEMORY AND DISK
-  No per-App memory limit by default: the user decides. Set one with
+  A new App gets a 512 MiB memory limit (memory.max) unless the install
+  names one: k2 app install <app-id> --memory 1G (or none for no per-App
+  limit; the box's App pool still applies). Change it later with
   k2 app config <app-id> --memory 8G (or none to clear).
   Walled Apps get a disk ceiling (io.max): writes 40 MiB/s, 2000 IOPS.
   You may tighten it (k2 app config <id> --io-write 20M); raising it

@@ -193,3 +193,20 @@ pub(crate) fn hold(who: &Who, path: &str, v: &J, ws: &str, reasons: Vec<String>)
     ));
     Ok(out)
 }
+
+#[cfg(test)]
+mod docs_tests {
+    use super::DEFAULT_MEMORY;
+
+    /// 0.46.16: `k2 study app-deploys` said a new App had no memory limit
+    /// by default, while every install with no `--memory` gets
+    /// [`DEFAULT_MEMORY`] (the install prints it). The page states the
+    /// code's number.
+    #[test]
+    fn the_app_deploys_page_states_the_default_memory_limit() {
+        let page = include_str!("../../../../cli/src/app-doctor.sh");
+        let want = format!("A new App gets a {} MiB memory limit (memory.max)", DEFAULT_MEMORY >> 20);
+        assert!(page.contains(&want), "k2 study app-deploys must say: {want}");
+        assert!(!page.contains("No per-App memory limit by default"), "the old claim is gone");
+    }
+}

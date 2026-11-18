@@ -52,6 +52,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A rollback leaves one live deploy.** After `k2 app rollback`, history shows exactly one deploy as live, the rollback's own, with its port (the answer said "live on port None"); the deploy you went back from is marked rolled back but is not an error, so `k2 app errors` no longer lists it.
 - **Uninstalling an App clears its request log.** `k2 app requests` for an App you install again under the same id starts empty instead of showing the old install's requests.
 - **`k2 app init --template node-api` makes a server that passes the health check.** It listens on the `$HOST` K2 gives (inside the App's wall that is every address, where a server bound to 127.0.0.1 never answers), asks for no App rights it doesn't use, and its next steps install the App first, with a public URL (`k2 app expose --tunnel`) as a separate step.
+- **`k2 study app-deploys` gives the real default memory limit.** A new App gets 512 MiB (`memory.max`) unless the install names one; the page said there was no limit by default.
 
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 

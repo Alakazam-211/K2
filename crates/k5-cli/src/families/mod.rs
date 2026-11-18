@@ -12,6 +12,8 @@
 //! - [`sessions`]: `k5 sessions` and its read forms (`--past`, `show`,
 //!   `main`).
 //! - [`connections`]: `k5 connections list`.
+//! - [`feedback`]: `k5 feedback list` and `k5 feedback show <id>` (also
+//!   `tickets`).
 //!
 //! A family may hand a command line back to the shell CLI ([`done::run`]
 //! and the others return `None`) when it is a form only the shell
@@ -42,6 +44,7 @@ use std::path::Path;
 pub mod activity;
 pub mod connections;
 pub mod done;
+pub mod feedback;
 pub mod inbox;
 pub mod read;
 pub mod respond;

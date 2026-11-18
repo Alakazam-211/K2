@@ -1,0 +1,74 @@
+k2 study suite-apps — one-click suite Apps (Sew's Hearth and Meet)
+
+WHAT IT IS
+  A suite App is an App from a known publisher that K2 deploys in one step.
+  The catalog is compiled into this K2 release: each version is pinned by
+  sha256 and by K2's own hash of the stored files ("Verified by K2", shown
+  only once a version is pinned; until then "verified" is null). A new
+  version arrives with a K2 update; moving an installed App to it is a later
+  K2. After deploy it is an ordinary App: every k2 app verb, rollback,
+  audit, domains and users apply. Hearth comes in "looks" (front ends); this
+  K2 pins one. Variant = how people sign in (k2 = K2 logins, standalone =
+  Sew's own); K2 picks the one that matches this box's Sew.
+
+THE FLOW
+  k2 app catalog                          what this box can deploy, and why not
+  k2 app catalog check sew/meet team-meet   is the address free? (exit 0/2)
+  k2 app install --catalog sew/meet --address team-meet --dry-run   the plan
+  k2 app install --catalog sew/meet --address team-meet
+    prints "Job sj-…", then each step as it finishes:
+    download → check → install → address → deploy → approve → sew_setup
+    → healthy → ready
+  The job runs in the daemon: closing the terminal doesn't stop it, and a
+  daemon restart resumes it. Find it again: k2 app catalog job (all jobs) or
+  k2 app catalog job <job-id>.
+
+ADDRESSES
+  The install id is not the address: Hearth installs as App hearth (then
+  hearth-2), Meet as sew-meet; neither gets hearth.<box>.k2.dev.
+  Defaults: chat.<box>.k2.dev (Hearth), meet.<box>.k2.dev (Meet). Any free
+  ordinary label works (team-meet). Taken: address_taken, exit 2, nothing
+  made; it names the holder and a suggestion (the look's own name, else
+  <app>-chat). Rerun with --address <suggestion> or --address auto.
+  chat, meet, mail, voice, skin are reserved: only their own family's App.
+  One level only (x.chat.<box>.k2.dev is refused).
+  A K2 address needs K2 Connect Pro (pro_required). In this K2 every
+  one-click deploy needs one, so no Pro = no one-click deploy yet. Your own
+  domain goes on afterwards: k2 app domain add <app-id> <host>, where
+  <app-id> is the App id (hearth, sew-meet), not the entry; it prints the DNS
+  records. A second Hearth: k2 app install --catalog sew/hearth --address auto.
+
+WHO MAY, AND THE WAITS
+  An agent needs "Build and run Apps". Binding chat/meet and Meet's Sew setup
+  also need "Manage chat and voice". Without it the job waits
+  (waiting_sew_rights): the owner runs k2 agent access set <workspace>
+  chat_manage on, or deploys from Settings → Cores → Apps → Add an App. Nothing to
+  rerun: the job goes on by itself.
+  Box services or caps not yet approved: the job waits (waiting_approval) on
+  the request it filed (k2 app catalog job <job-id> shows its id); the owner
+  approves it in Settings → Cores → App Approvals or k2 app approve <request>.
+  Then the job goes on. Denied: the job ends; ask again with a new install.
+
+MEET
+  One per box (one_per_box). Sew setup: meet init with the App's service id,
+  the Meetings Space recorded as the App's Space, meetings.enabled. A Space
+  still bound to a removed Meet stops the job (meet_space_bound); the owner
+  (a person, never an agent) reruns the install with --rebind-meet.
+
+NEVER AUTOMATIC
+  Rotating the seal key, changing the sign-in variant, re-binding Meet's
+  Space, turning meetings off, deleting the App's data, approving what a
+  version adds, changing the primary address after first use.
+
+CODES
+  Refused, nothing made: exit 2 address_taken, address_reserved,
+  address_invalid, one_per_box (change the command); exit 3 pro_required,
+  catalog_not_pinned, variant_mismatch (Sew's sign-in doesn't match a pinned
+  variant), requires_unmet (Sew too old), sew_not_installed, needs_linux.
+  The job failed, exit 1: catalog_mismatch (<field>): the named field
+  (sha256, caps, build.json…) isn't what K2 pinned, nothing installed, never
+  retried; unpack_refused; approval_denied (ask the owner again);
+  meet_slug_taken (the owner decides in Sew); version_mismatch (/readyz names
+  another version: k2 app logs <app>). Retry with k2 app catalog retry <job>:
+  download_failed, sew_unreachable, not_ready (/readyz not 200 yet),
+  deploy_failed.

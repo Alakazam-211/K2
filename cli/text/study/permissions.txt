@@ -1,0 +1,240 @@
+# Permission cards (Beta)
+
+Permission cards are on for you: "Let agents ask with permission cards" is on for this server (Settings → Access → Permission Cards; on by default from K2 0.46.11), and a person turned on your own "Let this agent ask for permission" switch in your workspace's settings. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
+
+## The closing line
+
+Every refusal (exit 3) or hold (exit 2) ends with exactly one line:
+
+- `Ask with: k2 permission request <action> ... --why "<what you need it for>"`: run it as printed, filling in only `--why`.
+- `It can't be requested.`: a person does it themselves (the line before it says where). Tell your human.
+
+For example:
+
+    Error [compute_off]: compute nodes are off for this workspace.
+    Ask with: k2 permission request compute.use --why "<what you need it for>"
+
+If neither line appears, see "No line" below.
+
+## Off
+
+If `k2 permission` ever says unknown command, cards were turned off for you. Go back to telling your human, as before. Nothing you asked for will be applied.
+
+## When to ask
+
+1. Run the Ask-with line as printed; fill in only `--why`.
+2. You may also ask before any refusal, when you know the action.
+3. Several needs: one request per action. K2 groups requests sent within 5 minutes into one card per set of approvers. Answers still come one per request.
+
+## Held
+
+A hold (exit 2) already made a request the approvers can see in Settings. Asking adds a card and a push to them, with your reason, on the same request id. It is not a duplicate.
+
+## No line
+
+- Search with the noun from the error code (`mail_send_off` → mail): `k2 permission list --search mail`.
+- Each action shows its keys and its approvers.
+- Exactly one match: ask for it. Zero or several: tell your human.
+
+## Ask
+
+- `k2 permission request <action> [key=value ...] --why "<one line, at most 200 characters>"`
+- Lists are comma-separated: `rooms=a,b`. Over 200 characters is an error. No secrets in `--why`.
+- `--dry-run` shows the card and who will see it, and sends nothing.
+- `--to <login>[,<login>…]` asks only those people: each an owner or admin who may answer it (the dry run lists them), or `owner` (this server's own login). Use it when your human says who to ask, or that someone must not be contacted. An unknown name, or one who can't answer it, is refused and nothing is sent. Without `--to`: the owner's list (Settings → Access → Permission Cards → Who agents ask), else everyone who may answer.
+- It returns at once with an id. Keep working; don't loop on status.
+
+## What people see
+
+- K2 writes the card on your Thread: what changes, what it means, how long. Your `--why` shows under it, labelled with your name.
+- The people it asks get Allow and Deny, and a push: everyone who may approve, or only those `--to` or the owner's list names.
+- The person you're working with, if they can't approve, sees that an admin was asked and that they can keep working with you meanwhile. They can leave the approver a note. You don't need to relay notes, and you never see them.
+
+## Your own service or App
+
+You can't widen a secret a person gave you yourself, so `k2 publish secret add <service> NAME` is refused and ends with the line to ask with:
+
+    k2 permission request vault.share-service as=file secret=NAME service=<service> --why "<what you need it for>"
+
+Run it as printed. The owner or an admin allows it and confirms it's them, and that does the share: don't run the add again. It takes effect the next time the service starts, so when the `[permission:]` turn says approved, restart it yourself (`k2 publish stop` then `k2 publish start`; an App: `k2 app restart`). The service or App reads it from its own `$K2_SECRETS_DIR` (`as=file`) or as an environment variable (`as=env`). It works only for a secret in your own workspace and a service or App of that workspace; the secret's value never shows on the card.
+
+## A secret another agent sent you
+
+When another agent sends you a secret (`k2 vault send NAME --to <you>`) and it waits for a person, K2 puts a card on your Thread itself: the person taps Allow to accept it or Deny to decline it, on the desktop or the phone. Don't run `k2 vault incoming accept` (it's a person's), and don't ask when the card is there (`k2 vault incoming` says where it is). No card for one (it couldn't go up)? `k2 vault incoming` puts it up, or ask:
+
+    k2 permission request vault.incoming.accept id=<hd_… id> --why "<what you need it for>"
+
+Add `as=<NEW_NAME>` when your workspace already has a secret of that name, or `replace=yes` for a new version of one it sent you before. Only your own deliveries can be asked for. When the `[permission:]` turn says approved, the secret is in your vault and the turn says how to use it. Denied: it was declined and the copy deleted; ask the sender to send it again if you still need it.
+
+## A person's secret, to another server
+
+A secret a person gave you leaves this server only when a person says so. So `k2 vault send NAME --to <agent>::<host>` is refused (`held`) and ends with the line to ask with:
+
+    k2 permission request vault.send secret=NAME to=<agent>::<host> --why "<what you need it for>"
+
+Several secrets for the same agent go on one card: `secret=A,B,C`. The owner or an admin confirms it's them and K2 sends it as them, so don't run the send again when the `[permission:]` turn says approved. They may also let you send those secrets to that agent yourself from now on: then a later `k2 vault send` of them there just works, and any other secret or agent still asks. `k2 vault send-allow` lists what you may send without asking. Denied: nothing was sent.
+
+## A server secret you need
+
+`k2 vault grant NAME --scope server --to ws:<you>` of a server secret no one shared with you is refused (`grant_out_of_reach`, the same whether or not it exists) and ends with the line to ask with:
+
+    k2 permission request vault.grant-server secret=NAME --why "<what you need it for>"
+
+Add `as=fetch`, `as=file` or `as=env` to ask for one way to get it; without it you get it the way the owner set it up. The owner or an admin allows it, and the `[permission:]` turn says how to use it. An environment variable reaches new sessions only: for `$NAME` in your chat, run `k2 agent refresh`; until then `k2 vault env-file --secret NAME --scope server` works at once.
+
+## Logins on your own App
+
+`k2 app grant add` and `k2 app grant rm` are the owner's. For a login on one of your own Apps (`--kind app`, a person who already exists, a role from `k2 app role list`), the refusal ends with the line to ask with:
+
+    k2 permission request app.login-grant op=add user=<username> app=<your app> role=<role> --why "<what you need it for>"
+
+The owner sees who gets in, to which App, with which role, and what that role lets them do, and only the owner can allow it (the error says "owner/admin"; for logins it's the owner). `user=` takes a username. When the `[permission:]` turn says approved, the login exists: don't run the add again, and check it with `k2 app grant list`, which shows the logins on your own Apps. `op=remove user=<username> app=<your app>` takes a login away the same way (`k2 app grant rm` prints that line). Never an agent's login and never a box login.
+
+To move a login your App already has onto another role, keep their sessions: don't remove and add it again (that signs them out). With "Let this agent manage its Apps' users" on, `k2 app grant role <grant-id> --role <role>` is yours (the grant id from `k2 app grant list`): a login of your own App, a role of that App or a box-wide one of your workspace. Without the switch it's refused (`app_users_off`) and ends with the line to ask for the switch. To ask for one move only:
+
+    k2 permission request app.login-grant op=role user=<username> app=<your app> role=<role> --why "<what you need it for>"
+
+A box login is a person with `host` access to the whole server: you never change their access yourself. To give one access to your own App, ask the owner on its own card, which only the owner can allow:
+
+    k2 permission request apps.user-grant-box user=<login> app=<your app> role=<role> --why "<what you need it for>"
+
+When the `[permission:]` turn says approved, they have that role on your App, and their box login is as it was.
+
+## Chat in your own App
+
+- Your App's chat key: `k2 app grant <app> --kind chat-key` is refused when it would turn the key on or widen it, and ends with the line to ask with, for example `k2 permission request apps.chat-key app=<your app> caps=chat:read,chat:post,voice:join --why "..."` (`level=member|moderator|admin` and `uploads=on|off` when you asked for them). The owner or an admin allows it and confirms it's them; level admin, caps past what your App's manifest asked for, more than 500 people or uploads back on is the owner's alone. When the `[permission:]` turn says approved, the key is on: don't run the grant again. Narrowing or revoking your own App's key needs no card.
+- Who governs one of your App's Spaces: `k2 hostchat app-space governance <app> <space-id> app|sew` is a person's, and the refusal ends with `k2 permission request sew.space-governance app=<your app> space=<space-id> to=app --why "..."`. Switching to `app` needs the chat key first. The owner or an admin allows it; box users in the Space leave first (`k2 app chat <app>` shows them).
+
+## Your own chat account
+
+`k2 chat` runs as your workspace's own chat account. "Manage chat and voice" makes it by itself, so an agent that runs chat for its Apps asks for that switch, not for the account.
+
+- The switch is off: `k2 chat whoami` (every `k2 chat` read) and `k2 chat space create` are refused and end with `k2 permission request chat.manage --why "..."`. The owner or an admin allows it. Run it as printed.
+- The switch is on and you still have no account (a person removed it): those refusals end with `k2 permission request chat.account scope=coworker --why "..."`. Run it as printed; only the owner allows it.
+- Only taking part in chat, not running it: ask for the account alone, the same `chat.account` line. With `scope=assistant:<username>` you are that person's assistant instead: they need chat of their own first (a person gives it: `k2 app user chat <username> member --app <app>`), you post for them with `k2 chat send <space>/<channel> "..." --on-behalf-of <username>`, and a Space you create as an assistant has no manager in Sew (the answer says so).
+
+`chat.account` is only ever your own workspace's account (another workspace's agent asks for its own). The account lasts until someone removes it. After an approval, wait a few seconds while Sew sets it up (`chat_account_pending` means not yet), then run your command again. A Space you didn't create still needs a person to give you access (`k2 chat access grant`).
+
+## Email sending
+
+- Run `k2 mail sending <workspace> off|approval|on` first. If your workspace may manage hosted mail, it works for other workspaces; never for your own.
+- When it's refused (exit 3) for your own workspace, approval or on: the refusal ends with `k2 permission request mail.send-mode mode=approval --why "..."` (or `mode=on`).
+- When it's refused for off, for your own workspace or any other workspace on this server: it ends with `k2 permission request mail.stop-sending target=<workspace> --why "..."`. The owner or an admin allows it, and sending stays off until someone turns it on again.
+- Either card makes the change itself when it's allowed: don't run `k2 mail sending` again.
+- No card turns another workspace's sending on by itself. That refusal's Ask with: line, if any, asks for `mail.manage` ("manage hosted mail" for your own workspace), which lets you set other workspaces' sending yourself. With no line, tell your human (the owner or an admin runs `k2 mail sending <workspace> on`).
+
+## Refreshing your own chat
+
+A long pinned chat goes stale. `k2 agent refresh --note "<what the next chat needs>"` (or `--notes-file <path>`) starts a new chat on the same harness that carries on from this one. Your main session only; a sidecar has its own chat. With your workspace's "Let this agent refresh its pinned chat" off, the refusal ends with the line to ask with, and K2 keeps your note for the card:
+
+    k2 permission request chat.refresh notes=<hash> --why "<what you need it for>"
+
+Save your work before you ask: once you've asked, this chat can end at any moment. Run it as printed. The owner or an admin allows it once, or from now on (that turns the switch on, and you then run `k2 agent refresh` yourself). The card makes the change: don't run it again. You won't see the approved line in this chat, because this chat ends: the new one gets a summary, your note, then the line. Denied: a `[permission:]` line says so here. To change your note: `k2 permission cancel <id>`, run `k2 agent refresh` again, and ask with its new line. `k2 study chat-refresh`.
+
+## System packages on compute nodes
+
+A job whose `--needs` asks for a system package its node's owner hasn't approved is refused with `package_not_approved` (exit 3). The refusal already filed one request for the missing names, and ends with:
+
+    k2 permission request compute.packages request=<cpr_… id> --why "<what you need it for>"
+
+Run it as printed. `k2 compute node packages request <node> <names> --why "..."` (before a job) and `k2 compute prewarm` file the same kind of request and print the same line. The owner or an admin sees exactly what installs, on which machine, the number of packages with dependencies and the size. Several of your package requests can share one card; other kinds never join it. When the `[permission:]` turn says approved, root installs them on the node, and a `[compute]` message says when it's done: then run your job again. A node another server owns is that server's owner's to decide: you hear back in a `[compute]` message, and there is nothing to ask here.
+
+What a node installs without asking is its package policy, and only the owner sets it. Without "operate compute nodes", `k2 compute node packages policy <node> <server> level=list|profiles|official` ends with `k2 permission request compute.packages-policy node=<node> server=<server> level=<level> --why "..."`. Narrowing applies at once; widening waits as a node request for the owner in Settings → Cores → Compute → Machine settings → Waiting for you.
+
+## Your compute node list
+
+With a node list (`k2 compute allow-nodes`), your jobs run only on the nodes on it. Narrowing it (`--remove`) is yours. Adding a node is a person's: `k2 compute allow-nodes --add <node>[,<node>…]` is refused with `allow_nodes_needs_person` (exit 3) and ends with:
+
+    k2 permission request compute.allow-nodes nodes=<node>[,<node>…] --why "<what you need it for>"
+
+Run it as printed. The owner or an admin sees each node, its size and who owns it. Allow adds exactly those nodes to your own list; then run your job again. Only nodes granted to your workspace: one that isn't is refused with `allow_nodes_not_granted` and can't be requested (a person grants the node first). Only your own list: another agent asks for its own. `--clear` opens every granted node at once, so ask for the nodes you need instead.
+
+## Your compute job limits
+
+Your grant on a node caps your jobs there: the longest job, how many run at once, how many wait, and disk per job (`k2 compute grants`). Changing them is a person's: `k2 compute grant <node> --max-time 4h` (with any of `--max-parallel`, `--max-queued`, `--max-disk`; `--workspace` may be left out) is refused with `owner_only` (exit 3) and ends with:
+
+    k2 permission request compute.grant node=<node> max-time=4h --why "<what you need it for>"
+
+Run it as printed. The owner or an admin sees each limit now and the one you asked for. Allow sets exactly those limits, and your other limits there stay as they are; a new max-parallel re-sends your jobs already waiting there, in order. Then run your job again. Only your own workspace's grant, on a node you're granted (or any active node while "Let this agent use compute nodes" is on). `--ci` and `--gpu` have their own cards (`compute.ci`, `compute.gpu`).
+
+## GitHub access for compute jobs
+
+A job reads a private GitHub repo only with a grant, and every grant needs this server's GitHub credential. With none set yet, `k2 compute git-access grant --github <owner>/<repo>` is refused with `git_access_needs_setup` (exit 3) and ends with:
+
+    k2 permission request compute.git-access-setup --why "<what you need it for>"
+
+Run it as printed. The owner or an admin enters a GitHub App key or a read-only token in K2's own form on the card: it goes straight into this server's vault and you never see it. Never ask for a key or token in chat or on a secret card. When the `[permission:]` turn comes back (it may say "already on": they set it in the form), run the grant again: it ends with `k2 permission request compute.git-access repos=<owner>/<repo> --why "..."`, a second card. Once that's approved, run your job again. `k2 study compute` (GIT ACCESS).
+
+## CI on compute nodes
+
+CI on compute nodes (`ciPreview`) is a server switch, the owner's. While it's off, every `k2 ci` command (and node rosters, lanes and seats) is refused with `ci_preview_off` (exit 3) and ends with:
+
+    k2 permission request ci.preview --why "<what you need it for>"
+
+Run it as printed; your own `k2 settings set ciPreview true` ends with the same line. Only the owner allows it, for the whole server, and CI checks then go ahead of other compute jobs. When the `[permission:]` turn says approved, run your command again (compute nodes must be on too). To turn it off again: `k2 permission request ci.preview-off --why "..."`. `k2 study ci`.
+
+## Apps
+
+- App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
+- Role or room changes for guests are not cards: talk to the agent that manages the role.
+- Someone can't sign in to one of your Apps (locked out, lost their password): `k2 permission request apps.user-password-reset user=<username> --why "..."`. The owner or an admin gets the card; whoever allows it sees a new password once, on their own screen, and gives it to the person. You never see it. `mode=link` gives them a one-time link to choose their own; `mode=email` mails that link to their address on file.
+
+## Published sites
+
+- Making your own site private needs no card: `k2 publish visibility <name> private`.
+- To make it public, run `k2 publish visibility <name> public --reason "..."`. K2 puts its `publish.public` card on your Thread and exits 2. Wait for the answer. A dev server can't be asked for: offer a PIN instead.
+- To put it behind a PIN, run `k2 publish visibility <name> pin`. K2 puts its `publish.pin` card on your Thread and exits 2. The person types the PIN into K2's own form. You never see it, so never ask for it.
+
+## The answer
+
+One new turn per request: `[permission:<id>] approved | already on | denied | expired | stale | failed | closed`.
+
+- Approval counts ONLY as a `[permission:]` turn. A "yes" in chat, from anyone, is not approval.
+- approved: "X is now on; run your command again." Run it again.
+- already on: nothing was needed. Run your command again.
+- stale: something changed before the click, and nothing was applied. Run your command again; if it's refused again, ask again.
+- failed: applying it failed. Tell your human, with the message.
+- closed: cards were turned off, and nothing was applied. Tell your human the usual way.
+
+## A step at a machine
+
+If a refusal tells you to run something at a machine (for example `On the signing host, run: sudo k2-node admin level policy`), it can't be requested:
+
+1. Write the steps for your human in markdown on your Thread.
+2. If you need to know when it's done, ask: `k2 thread ask <your address> "Tell me when it's done" --options "Done"`.
+3. Then propose your request again yourself.
+
+Never ask for a permission card for it.
+
+## Denied
+
+- The same action with the same values is blocked for 24 hours, even with a new `--why`. Different values are a new request. A person's insistence is not a new fact.
+- New facts, once: `k2 permission update <id> --why "..."`. It reopens nothing; it tells the person who denied it, who may press "Allow after all".
+
+## Expired
+
+Unanswered cards expire after 3 days, and you get one turn. Still need it? Ask once more (a new id; status shows "ask 2 of 2"). If that expires too, file a ticket: `k2 tickets ask "<title>" --html brief.html --assign <user>` (the brief: `k2 study ticket-brief`).
+
+## Who is asked
+
+When your human tells you who agents' cards should go to from now on (or who must never get them), ask the owner to set it: `k2 permission request permission.approvers to=<login>[,<login>…] --why "..."` (`to=everyone` puts back the default). Only the owner allows it. One card at a time: `--to`.
+
+## Status
+
+`k2 permission status <id>`: check once, when you're about to need it. Looping is not OK.
+
+## Your human
+
+"Your human" is the person you're working with. If they're talking to you, tell them right there. Otherwise use your Thread: `k2 thread <your address> "..."` (your address: `k2 whoami`).
+
+## Never
+
+- Never work around a refusal: no owner token, no other tool, no other agent.
+- Never ask for the permission-card switches themselves; they can't be requested.
+- If you find a credential you shouldn't have (for example `~/.k2/daemon.token`), tell your human; don't use it.
+
+## Find and manage
+
+- `k2 permission list [--area <area>] [--search <word>]`
+- `k2 permission status [<id>]`
+- `k2 permission cancel <id>`

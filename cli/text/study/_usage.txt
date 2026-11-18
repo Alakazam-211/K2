@@ -1,0 +1,22 @@
+Usage: k2 study [list|<topic>|--json]
+
+Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
+
+  k2 study                 catalog
+  k2 study list            same
+  k2 study <topic>         one page
+  k2 study --json          catalog JSON
+  k2 study <topic> --json  page JSON {id,body}
+
+Topics:
+  what  source  map  identity  send  human  people  auth  errors
+  context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
+  app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  auth-pages  app-profile
+  app-account-deletion  app-transfers  app-recording
+  app-transfers-http  app-chat  chat-voice  chat-voice-rooms  voice-rooms  tauri  tauri-voice  app-errors
+  skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
+  publish-visibility  publish-dev  compute  compute-shared  ci  ci-release  ci-stats  vault
+  notifications  data-sources  projects  hooks  agent-hire
+  garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  app-databases  jobs  heartbeats
+  folder-trust  email-notifications  box-move  board  chat-refresh  desktop  send-feedback  organization
+  agent-templates  provenance  suite-apps  postal

@@ -156,5 +156,35 @@ run 0 "4 parts" --recut
 [ ! -e "$T/cli/src/schema" ] && [ -f "$T/cli/src/schema.sh" ] || no "the schema folder stayed: $(ls "$T/cli/src")"; ok
 rm -rf "$T/cli/src"
 run 1 "--recut needs an existing cli/src" --recut
+
+# --recut keeps a page in cli/text: cli/k2 is checked against the join with
+# the text inlined, and the part that holds the page keeps its `%include`.
+T3="$T/three"
+mkdir -p "$T3/cli/src" "$T3/cli/text/study" "$T3/scripts/garden"
+printf 'page line one\n\tpage line two\n' > "$T3/cli/text/study/p.txt"
+cat > "$T3/cli/src/prelude.sh" <<'PART'
+#!/bin/bash
+# ── study ──
+_study_page_p() {
+    cat <<'EOF'
+%include cli/text/study/p.txt
+EOF
+}
+main "$@"
+PART
+printf 'prelude.sh\n' > "$T3/cli/src/ORDER"
+bash "$HERE/scripts/build-cli.sh" --root "$T3" >/dev/null || no "the include tree does not build"
+grep -qx "$(printf '\tpage line two')" "$T3/cli/k2" || no "the page is not in the built cli/k2"; ok
+printf 'prelude\t(file start)\nstudy\tstudy\n' > "$T3/scripts/garden/cli-parts.txt"
+recut3() { set +e; out="$(cd "$T3" && python3 "$P" --recut 2>&1)"; code=$?; set -e; }
+printf 'page line one, edited\n' > "$T3/cli/text/study/p.txt"
+recut3
+[ "$code" = 1 ] && case "$out" in *"cli/k2 is not the join of cli/src"*) ;; *) false ;; esac || no "a page edited without a build: exit $code: $out"; ok
+printf 'page line one\n\tpage line two\n' > "$T3/cli/text/study/p.txt"
+recut3
+[ "$code" = 0 ] || no "the recut of the include tree: exit $code: $out"; ok
+grep -qx '%include cli/text/study/p.txt' "$T3/cli/src/study.sh" || no "the recut part lost its include line: $(cat "$T3/cli/src/study.sh")"; ok
+! grep -q 'page line' "$T3/cli/src/"*.sh || no "the recut put the page's text into a part"; ok
+bash "$HERE/scripts/build-cli.sh" --root "$T3" --check >/dev/null || no "build-cli --check after the include recut"; ok
 run 1 "split-cli.py [--dry-run] [--recut]" --bogus
 echo "split-cli tests: $pass passed"

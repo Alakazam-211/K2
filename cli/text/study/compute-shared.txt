@@ -1,0 +1,243 @@
+k2 study compute-shared — a node many K2 servers share (0.46.3)
+
+WORDS
+  server   a K2 that sends jobs to nodes (yours, or someone else's)
+  owner    the server the node enrolled with first; only it sends admin
+           and updates, and adds or removes servers
+  tenant   any other server connected to the node; each has a share
+  share    one server's limits there: running, queued, CPU-hours a day
+           (soft), time/CPUs/memory per job, disk, network, end date
+  solo     a node with one server: everything works exactly as before
+
+WHAT YOU SEE
+  k2 compute nodes    "shared by acme.k2.dev (3 servers) until Oct 27"
+                      and your share: running 1/1 · queued 2/10 · …
+  k2 compute queue <node>   the whole node queue. Other servers' jobs show
+                      as "another server", tier, class, size and ETA only. No
+                      command, workspace, session, job id or logs. Ever.
+  k2 compute get <job>      "queued on mac-mini-1: 2 of 5, ETA ~6m — your
+                      workspace runs 3 of 3 here (its grant); jobs behind it
+                      may start first" (0.46.6: every waiting job says why)
+                      or "waits on this server for mac-mini-1 (1 of 2) — this
+                      server's queue on the node is full" (not sent yet)
+  A job waiting for its OWN limit (its workspace's grant, this server's
+  share, the per-submitter cap) lets jobs behind it start first; that is
+  why a newer job can start ahead of it. A job waiting for ROOM (slots,
+  CPU, memory) or behind a hold doesn't.
+  ETAs are durations, never clock times, and rounded for other servers.
+
+THE QUEUE (the node decides, one queue for every server)
+  1 the line first (0.46.6; k2 study compute, TIERS): CI (only where the
+    share has gate); then Priority (only where the node's owner lets this
+    server's Priority count) and Standard, taking turns when both wait;
+    then Batch, only when the node is idle. A guest server's Priority
+    counts only where the node's owner allows it (priority=true); its CI
+    only where its share has gate. No slot is reserved and no tier ever
+    stops a running job: while a CI or Priority job waits for room,
+    nothing behind it starts.
+  2 inside a line, a job waiting over an hour first (first come)
+  3 servers within today's CPU-hours before servers over them (inside a
+    line: an over-quota server's CI still goes before anyone's Standard)
+  4 fair share by recent use and weight (every server starts at 1, the
+    owner too; the node's owner raises a weight with servers limits)
+  Inside one server: CI goes first come; every other line: workspaces take
+  turns, then submitters (--submitter, else the session), then first come.
+  --detach and shard counts don't change the order.
+  Every waiting job says why ("2 of 5 — your workspace runs 3 of 3 here
+  (its grant)"); a job waiting for its own limit lets jobs behind it start.
+  Over your limits you WAIT, never fail. A job bigger than your share's
+  per-job limits is refused at submit (exit 3).
+
+YOUR JOBS
+  Same verbs as ever: run, --shards, test, wait, logs, cancel.
+  Named runs go into the node's queue at once. A run with no node named
+  (K2 places it; --any is the same) waits up to 60 s on this server for a
+  node that can start it now, then goes to the node with the lowest ETA.
+  It may move later, but only after the node confirms the
+  job hadn't started (never more than twice). Your server's queued jobs
+  start only while it's connected; running ones carry on regardless.
+  cancel without --force on a queued job: it ends cancelled, or keeps
+  running (job_started) if it had just started. --force always stops it.
+
+CODES (exit 3 with a JSON code)
+  exceeds_share_caps     over your share's time/CPUs/memory per job
+  gate_not_allowed       --gate / --tier ci, but your share doesn't allow it
+  ci_not_allowed         --tier ci without a grant with --ci on your server
+  tier_hold              a CI or Priority job ahead takes the next free slot
+  replaced               cancelled: a newer job with the same --supersede key
+  critical_path_taken    (note) another submitter already holds Priority
+  priority_downgraded    (note) your Priority runs as Normal on this node
+  node_too_old_for_tiers (note) a pre-0.46.5 node: Priority has no effect
+  exclusive_not_allowed  --exclusive, but your share doesn't allow it
+  tenant_queue_full      your queue on the node is full: it waits here
+  share_paused           the node's owner paused your server's share
+  share_expired          your share's end date passed
+  share_revoked          the node's owner removed your server
+  not_node_owner         admin/update/servers verbs on a node you share
+  node_too_old           servers add on a pre-0.46.3 node: update it first
+  server_add_pending     one server is added at a time
+  server_too_old         a 0.46.2 server can't join: update it
+  tenant_needs_job_wall  the node needs its job wall before a second server
+  team_needs_tenant_wall other people's servers need the tenant wall
+                         (Linux nodes; Macs in 0.46.4)
+
+SYSTEM PACKAGES ON A SHARED NODE (0.46.9)
+  What you may install: the node's owner sets a package policy for each
+  server on it. Another person's server gets `profiles` by default: every
+  K2 profile (build-base, tauri-linux, rust-gui-ci, k2-workspace,
+  gpu-headless) and the
+  names on the node's approved list. The owner may narrow or widen it.
+  See yours: k2 compute node packages <node>.
+  Anything else, the NODE'S OWNER approves, never you or your own server's
+  people. Your run is refused with package_not_approved (exit 3), and one
+  request goes through the node to the owner's server, which shows them a
+  card. You never see who they are, only their server's label. You get a
+  [compute] message when they decide (installed, denied, or no answer in
+  24 h); then run again. At most 10 open requests per server per node.
+  Ask ahead: k2 compute node packages request <node> <name>,… --why "…".
+  A node whose k2-node is older than 0.46.9 takes no requests from other
+  servers (pkg_requests_unsupported): its owner installs at the machine.
+  Packages are host-wide: once installed they are in /usr for every job on
+  the node, from every server. Your policy decides what you may trigger,
+  not who may use the result.
+  Every server sees the same host facts: distro, kernel, libc, GPU and
+  "reboot pending" (k2 compute info <node>, and the [k2-node] host: line
+  at the top of each job log). A job could read them anyway.
+
+SEATS AND LANES (0.46.10: your CI on another owner's nodes)
+  (preview: k2 settings set ciPreview true) on BOTH servers (the node owner's
+  and yours); off, these verbs exit 3 (ci_preview_off). On the node
+  machine, lane secrets and per-job uids are also the machine owner's,
+  off by default: sudo k2-node admin lane-secrets on, sudo k2-node admin
+  job-uid on (then restart k2-node-admin and k2-node).
+  A seat is your server's place on a set of another owner's nodes, under
+  one of that owner's lanes (their standing rules: the CI tier, caps, and
+  whether vault secrets may go there). K2 ships one lane, ci-standard
+  (secrets on); the owner's `k2 compute lanes` lists theirs.
+  0 The two servers pair once (both owners, each on their own server; each
+    step prints a token to pass to the other; each next step reads it with
+    --token-stdin, off the command line):
+      A: k2 fed pair-start          B: k2 fed pair-join --token-stdin   (token 1)
+      A: k2 fed pair-finish --token-stdin (token 2)  B: k2 fed pair-verify --token-stdin (token 3)
+      both compare the codes, then each: k2 fed confirm <fp> <code>
+  1 Ask (an agent may):
+      k2 compute seats request <owner-host> --lane ci-standard --secrets --why "…"
+    It is held for a person here. Its card shows the owner's node-roster
+    key (to compare with `k2 compute roster key` on their screen).
+    --secrets only asks: approving the seat never sends a vault secret.
+  2 A person here approves, from a terminal outside K2 (a fresh confirm):
+      k2 compute trust requests          (find the request id)
+      k2 compute trust approve <id>
+    That pins the owner's key and sends the request. An agent gets
+    person_only (exit 3): ask your person. Secrets are a separate yes, on
+    their own confirm, whose words say what they mean (their root can read
+    them): k2 compute owners consent <owner-host> on.
+  3 On the owner's server (their side, not yours): k2 compute trust
+    requests shows your request; they (or their agent) name the nodes,
+    k2 compute seats offer <request> --nodes a,b, and their owner approves:
+    k2 compute trust approve <request>. The nodes then join this server
+    by themselves (no code, no SAS). k2 compute seats shows the seat
+    active; k2 compute nodes lists the nodes.
+  4 The secret is in your workspace's vault (a person: k2 vault set NAME
+    < value). A person grants it to the lane (the value leaves this box;
+    the answer warns that the owner's root can read it):
+      k2 vault grant NAME --scope ws:<ws> --to compute:<ws>/lane:<owner-host>/<lane> --as env
+    <ws> is your workspace's name, <owner-host> the owner's server (the
+    host you asked in step 1). One grant covers every node of the seat.
+    An agent can't grant: secret_not_granted prints the person's command.
+    Then run as usual, no node named:
+      k2 compute run --secret NAME -- make release
+    K2 places it only on a seat node that passes every rule below. A node
+    with a per-job uid lists job-uid in k2 compute info <node>; elsewhere
+    the job needs --exclusive.
+  The consent (step 2's separate yes, or later): k2 compute owners consent
+  <owner-host> on (a person, a fresh confirm); off works at once (an agent
+  may). See it: k2 compute owners. A new owner key (pinned again) needs a
+  new consent.
+  A lane secret is sealed only to a Linux node of an active seat, behind
+  the job wall, whose key is active and clean in the owner's node roster,
+  in a job with its own uid (the node's job-uid) or --exclusive. Checked
+  at submit, at placement and again right before the value is sent.
+  When a secret job on another owner's node ends, this server fetches its
+  artifacts at once (hash-checked) and the node deletes its copy.
+  Codes (exit 3): secret_owner_not_trusted (no consent: the hint names
+  the person's command), secret_needs_isolation (no per-job uid there:
+  add --exclusive), secret_env_linux_only, secret_needs_update (k2-node
+  older than protocol 9, or the lane's secrets off on the node),
+  secret_untrusted_server (seat not active, node not on it, lane without
+  secrets, key not active in the roster), node_key_tainted.
+
+WHAT THE WALL DOES NOT STOP (say so before you share)
+  Each server's jobs get their own folders (and on Linux their own user).
+  They can't read each other's code, caches, results or logs. They still
+  share the kernel, CPU and disk, can reach the internet and any service
+  on the machine's loopback, and the node's owner (root) can read
+  everything. Send secrets only to an owner you trust with them: on a
+  lane of theirs that allows secrets, after a person here consented
+  (k2 compute owners consent <owner> on: their root can read them), to a
+  Linux node behind the job wall, in a job with its own uid or
+  --exclusive. Without that consent: secret_owner_not_trusted. On a Mac in
+  0.46.3 every server's jobs run as one user: share Macs only with your
+  own servers.
+
+FOR THE NODE'S OWNER
+  k2 compute node servers <node>                 list (slot, state, share)
+  k2 compute node servers <node> add --url … --code-stdin [--trust team]
+  k2 compute node servers <node> limits|pause|resume|revoke <server> …
+  k2 compute node servers <node> limits <server> priority=true|false
+                                 its --tier priority counts here (default:
+                                 your own server yes, others no; a 0.46.5
+                                 node keeps it in queue.toml; true widens)
+  Adds and widenings wait for your approval; narrowing, pause and revoke
+  apply at once. Updates keep every server's running jobs (from k2-node
+  0.46.9): the updated node picks them up, so nobody waits. The update's
+  health check covers the owner's jobs; other servers' jobs are picked up
+  right after. Linux nodes without the job wall wait for running jobs: from
+  0.46.13 as long as their own time limits (older nodes: ≤ 30 min).
+  An add from K2 needs the node's remote-admin level `full`; on a node set
+  to `policy`, add servers at the machine: sudo k2-node servers add …
+  servers add --for none: a share with no end date.
+  Package requests from other servers come to you as cards (or k2 compute
+  node packages requests / approve|deny outside K2). What each server may
+  install without asking:
+    k2 compute node packages policy <node> <server> level=list|profiles|official
+                                   [profiles=a,b] [max_install_mb=N]
+    at the machine: sudo k2-node packages policy <own|server> level=…
+  <server> is own, or the label k2 compute node servers <node> shows.
+  profiles= takes bare names (profiles=build-base,tauri-linux) and
+  replaces that server's profile list. Only two profiles, for example:
+    k2 compute node packages policy linux-1 globex.k2.dev level=profiles profiles=build-base,tauri-linux
+  Narrowing applies at once; widening waits for your approval.
+
+CHANGING THE NODE'S OWNER (0.46.4)
+  k2 compute node servers <node> owner <server> [--old keep|revoke]
+                                 [--caches move|wipe] [--now]
+  Another of YOUR OWN servers already on the node (trust own, active,
+  confirmed, online) becomes its owner: it gets the node's admin, updates
+  and approvals. Only you, the owner, ask for it (never an agent), and it
+  waits for your approval (Touch ID / vault password). The node drains
+  first (--now stops running jobs as node_update, no strike), the two
+  servers swap slots, root re-pins to the new owner's key, k2-node
+  restarts once. Queued jobs stay with their server; other servers on the
+  node are untouched. This server stays on the node as one of your
+  servers, with a new server's default share (raise it as usual); with
+  --old revoke it leaves: its queued jobs end share_revoked and its files
+  go after 24 h. Caches move with their server (--caches wipe: cold
+  builds once). The approval card shows the new owner's full key: check
+  it against that server's controllerFp (k2 compute nodes --json there).
+  Root checks it against the key it recorded when that server was
+  confirmed. The new owner pins its own approval key once it takes the
+  node over. At `policy`, or from the machine:
+  sudo k2-node servers owner <server> --fp <full key>.
+  The new owner server takes the node over in person: the node says it's
+  the owner now, but stays the old owner's there (no admin, no secrets)
+  until its owner runs k2 compute node take-owner <node>: it shows the
+  node's full key, the old owner, and every compute:<ws>/* secret grant
+  that starts reaching the node; you type the node's name, then Touch ID
+  / vault password. An offer alone never makes a node a server's own.
+  Codes: owner_needs_own_server (a team server would get root admin),
+  owner_target_not_ready (not active, confirmed or online),
+  owner_change_pending (one at a time), no_owner_claim (take-owner on a
+  node that doesn't say this server owns it).
+
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.

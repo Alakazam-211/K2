@@ -172,14 +172,10 @@ mod tests {
     /// in the same place.
     #[test]
     fn the_study_page_s_codes_are_the_same() {
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/study-basics.sh");
-        let text = std::fs::read_to_string(&path)
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/text/study/errors.txt");
+        let page = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        let page = text
-            .split_once("_study_page_errors() {")
-            .unwrap_or_else(|| panic!("no _study_page_errors in {}", path.display()))
-            .1;
         for (exit, words) in [
             (Exit::Ok, "ok."),
             (Exit::Error, "error (daemon down"),

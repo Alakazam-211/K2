@@ -1,0 +1,114 @@
+k2 study ci-release — signed release builds on K2 Compute (k2 ci release)
+(0.46.11, behind the same ciPreview as k2 ci; k2 study ci)
+
+  The words:
+    node owner  the K2 server that owns the compute nodes (often K2's own,
+                e.g. rosson.k2.dev); not this server's owner
+    seat        the node owner's nodes this server may use, under a lane
+                (its rules: CI tier, secrets, limits); the node owner
+                approves one per client server
+    node roster the node owner's signed list of its node keys and what each
+                is (which physical host, site, provider): what decides that
+                two nodes are independent
+    L1, V1, L3  the jobs of one release: L1 builds the files that get
+                signed, V1 builds the same commit again on a node on another
+                host (the dual build), L3 is any other build of the set
+    signer      k2-signer, on a machine YOU keep (a Mac, for now): it holds
+                the updater key and signs only after checking the evidence
+                against its own pins and a person's Touch ID. It is in K2's
+                repo (github.com/Alakazam-211/K2, scripts/k2sign/
+                install-k2-signer.sh); it replaces "tauri signer sign" for
+                builds made on K2 Compute
+  Once (P = a person; which one is named):
+    P  this server's owner: a seat, k2 compute seats request <node-owner-host>
+       --lane ci-standard; the NODE owner approves it (k2 compute seats then
+       says active)
+    P  this server's owner: each seat node granted to your workspace with
+       --ci (k2 compute grant <node> --workspace <ws> --ci)
+    P  at the signing machine: install k2-signer, pair it with this server
+       (k2 ci signer add, SIGNER PAIRING in k2 ci --help), trust the node
+       owner's roster key, approve the project's policy (.k2/signer.toml,
+       written by k2 app init --template tauri), make the updater key
+       (k2-signer-admin generate-key <project> updater). Its public line goes
+       in tauri.conf.json plugins.updater.pubkey and k2 app updates key
+  Then, from the repo (an agent may do all of this):
+  1. [release] in .k2/ci.toml (k2 app init --template tauri writes it):
+       [release]
+       project = "acme-desktop"        # the signer's project name
+       owner = "owner.example.k2.dev"  # the node owner's host (your seat)
+       lane = "ci-standard"
+       [release.builds.linux-x86_64]   # the signer policy's build name
+       argv = ["bash", "k2/ci/build-linux.sh"]
+       needs = ["rust@1.99.1", "node@22", "profile:tauri-linux"]
+       artifacts = ["k2/out/*"]
+       env = ["BUILD_COMMIT", "BUILD_TREE"]   # K2 fills these two
+       label = "L1"                    # the build whose files are signed
+       verify_label = "V1"             # the same build on another host
+       independent = ["host"]          # what V1's node must differ in
+       mem_gb = 16                     # cpus, timeout_secs too
+     needs: a pinned Rust (the signer policy names the same one),
+     profile:tauri-linux = WebKitGTK and the rest, installed by the node
+     under its owner's package policy. Commit the file: K2 reads it AT THE
+     COMMIT it releases.
+  2. k2 ci release 1.2.0 --plan        where each job would go; nothing sent
+  3. k2 ci release 1.2.0 --wait        build L1, V1 (and any L3) now; no
+                                       secret and no signing key on a node
+  4. k2 ci evidence <run> --out rel/   rel/evidence-<project>-1.2.0.json and
+                                       each job's files, at their paths:
+                                       rel/L1/k2/out/<bin>.AppImage. Use a
+                                       folder inside the repo (push reads
+                                       files there only); gitignore it
+  5. P at the signing machine, with the evidence file and the AppImage:
+       k2-signer rehearse <project> < evidence.json      (checks only)
+       k2-signer evidence <project> 1.2.0 < evidence.json
+       k2-signer challenge <project> 1.2.0 <commit> <bin>.AppImage, approve
+       (Touch ID), then
+       k2-signer sign <project> updater <bin>.AppImage 1.2.0 b64 < <bin>.AppImage > <bin>.AppImage.sig
+     (each as: sudo -n -u _k2sign /usr/local/libexec/k2-signer/k2-signer …)
+     b64 is the form Tauri's updater and k2 app updates push read
+  6. k2 app updates push <app> --channel beta --version 1.2.0
+       --artifact linux-x86_64=rel/L1/k2/out/<bin>.AppImage
+       --sig linux-x86_64=<bin>.AppImage.sig --evidence <run>
+     then k2 app updates promote <app> --from beta --to stable (the
+     template's updater follows stable). <app> is the App's id
+     (k2 app list)
+  A DOWNLOAD BUTTON on your web App: link /_k2/download/stable/linux-x86_64
+    on the App's own host: it redirects to the newest stable file (404 when
+    there is none). The version and notes: /_k2/updates/stable/latest.json
+  What K2 checks here is a convenience: each receipt verified with the
+  node key this server pinned, L1's and V1's files compared. The signer
+  checks everything again with its own pins and decides. PROVENANCE: each
+  job's signed build statement rides in the bundle (k2 study provenance).
+  Refusals: ci_no_release (no [release] at the commit), ci_no_seat (no
+  seat on that owner's lane), seat_degraded (too few seat nodes can take
+  it now: each one's reason is named), no_independent_nodes (no two seat
+  nodes differ in what independent asks; the owner's roster decides),
+  ci_release_not_done (evidence before every job passed),
+  ci_receipt_not_usable (a receipt failed this server's check: don't sign),
+  evidence_mismatch (push: a file the run didn't build).
+  With ciPreview off, node rosters, lanes, seats, owners consent, signer
+  pairing, lane secrets and --receipt-v2 answer ci_preview_off too.
+
+RELEASE FREEZE
+  k2 ci freeze --until 3d --why "0.9 release": K2 moves no compute seat
+  while it lasts; k2 ci freeze off ends it.
+
+TRUSTED CACHE (nodes with cache generations; k2 study compute)
+  Every job on such a node starts from a copy of the last good build. Only
+  CI checks of a TRUSTED branch save the shared copy, and only when the
+  commit is verified on that branch: a watched push to it, or a k2 ci run
+  whose commit the remote's branch has (the daemon fetches it into
+  refs/k2-ci/<branch> to check; --ref alone is just a label). A check of
+  any other branch, a local commit, or any plain k2 compute run saves only
+  its own scratch copy. Trusted branches are server state, never read from
+  .k2/ci.toml (a PR could name its own branch there). The shared copy is
+  also pinned to the git remote a person's change saw (its URL after any
+  insteadOf): if the remote is repointed, checks save only scratch until a
+  person sets the branches again. Nothing is recorded until a person sets
+  them (or turns the watch on):
+    k2 ci cache trust                the list and the recorded remote
+    k2 ci cache trust --remove B     yours to do
+    k2 ci cache trust --add B        a person's: the owner or an Admin, from
+                                     a terminal outside K2
+                                     (cache_trust_needs_person; ask with the
+                                     k2 permission request line)

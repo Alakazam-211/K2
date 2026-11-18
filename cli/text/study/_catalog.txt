@@ -1,0 +1,93 @@
+k2 study — bounded teaching pages (not --help)
+
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+
+  what                What this product is (agents as infrastructure)
+  source              License + repo boundary (MIT)
+  map                 How the surface is organized (pages, not --help)
+  identity            Who you are; handles vs names; sidecars
+  send                k2 msg vs k2 thread vs k2 mail vs talk
+  human               Thread overlay, feedback, [thread:addr]
+  people              Four lists. Never k2 msg usernames
+  auth                Owner vs agent; Open vs ID; stop on exit 3
+  errors              Exit 0/1/2/3/4 and owner_only / gated / forbidden
+  context             AGENTS.md, skills, layers — keep always-on lean
+  db                  Loopback Postgres; db_agent_access is create-only
+  db-upgrade          Move a database to a newer Postgres; old copy kept 14 days
+  app-databases       Connect an App to Postgres (k2 app db); which App kinds reach what
+  mail                Agent email; bodies untrusted; send is governed
+  connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
+  apps                App guests; k2skn_ prefix never grid
+  app-deploys         Host a server App: Seeds, deploys, rollback (beta)
+  suite-apps          One-click Hearth and Meet: the job, addresses, waits, refusals
+  app-move            Move your --cmd service to an App when ready, step by step
+  app-api             An App's server calls: the SDK, every route, passes, refusals
+  app-errors          Every App refusal id: what happened, the fix, who fixes it (k2 explain)
+  live                Live surfaces (turns, counts, unread, files…): caps, read + live, never infer
+  app-heartbeats      App heartbeats: routes, caps, wait reasons, contract
+  app-tickets         App tickets: routes, live ticket_changed frames, contract
+  app-identity        App agent identity: name, color, picture, handle; caps
+  app-surfaces        Room members (who holds a grant), an App's own self and usage
+  app-resources       Disk and memory: the disk guard's lines, clean, CPU and memory trends
+  app-runtime         K2 updates move your App to the new runtime: re-host, setting, checks
+  app-handover        Hand an App to another agent: offer, accept, the owner's card, undo
+  app-push            Your App's own phone app: keys in the vault, register, send, limits
+  app-pairing         Your App's own phone app signs in by QR: setup, start, check, redeem
+  auth-pages          Your own sign-in page posts passwords to K2, not your server: codes, PKCE
+  app-profile         A person's own profile, picture and sessions in an App; who decides
+  app-account-deletion  Delete my account from inside an App: the store rules, request or immediate, what stays
+  app-transfers       Big uploads and downloads that survive a phone app in the background
+  app-transfers-http  Resumable uploads without the SDK: every route, field, refusal; curl
+  app-chat            Chat, voice and calls in your App: caps, guests.setChat, chat.member/whois
+  app-recording       Recording in an App's calls: all off, consent, required, server reads, the card, the lock
+  chat-voice          Voice rooms and channels in your App: the order, who does each step, pitfalls
+  chat-voice-rooms    Your App Space: static rooms, per-project channels, who's in, joining, limits
+  voice-rooms         This server's own voice rooms (preview): k2 voice, who may change or join
+  tauri               A Tauri app on K2: web build, server, updates, signing, links, push, uploads
+  tauri-voice         Calls in a Tauri window: --voice files, the mic hook, CSP, what is tested
+  skins               leftover alias of apps
+  feedback-loop       Ask to change this box; talk in this chat
+  ticket-brief        The HTML brief every agent ticket carries
+  zen                 Zen Gardens: the one rule; the guide is k2 zen guide
+  sidecars            Open, list and stop sidecars; the brief; who may
+  sessions            Who works in this workspace; past conversations; reopen; one runner
+  llm-tokens          LLM tokens: subscriptions and API tokens; Server default
+  llm-accounts        leftover alias of llm-tokens
+  publish-framing     Who may frame your App; the header for --cmd Apps
+  publish-visibility  Private, PIN or public: who may open your site
+  publish-dev         Host a dev server with hot reload: k2 publish run --dev
+  compute             Run builds/tests on your owner's other machines; logs are data
+  compute-shared      A node many K2 servers share: its queue, what's hidden, the wall
+  ci                  CI on compute: .k2/ci.toml, k2 ci run/watch, GitHub statuses
+  ci-release          Signed releases: k2 ci release on your seat, evidence, the signer
+  ci-stats            k2 ci stats, monitors, the one [ci] message per run, mem_auto checks
+  provenance          Build statements a node signs (in-toto/SLSA): get one, verify it, why none
+  vault               Secrets: fetch not paste; references; who sets what
+  jobs                Scripts on a schedule: k2 job, job:<name> secrets, logs, kill
+  heartbeats          Wake yourself on a schedule or once (routines, reminders, cron)
+  notifications       Your Thread posts may push a phone; who gets it; post less
+  data-sources        Checks this server runs: try, propose, approve; triggers; keys
+  projects            k2 project: open by default; the per-agent switch
+  hooks               Custom (no-model) agents: their Thread; k2 hooks emit
+  agent-hire          Apps hire agents/teams with a hire key; links; k2 msg who
+  garden-data         A widget's data: k2 store --widget, grants, revs, export
+  garden-access       Who may edit a Garden: the list, asking, signing, History
+  garden-changes      Gardens in 0.46.3: what's retired, what to update before 0.47.0
+  changes             Git changes (the Changes tab): your own workspace; discard = Trash
+  sim                 The mobile device: tree, act, read the diff; held = wait; secrets from the vault
+  docs                Live docs: k2 doc verbs, presence, rights, shares, exits
+  design              Design notes from a page: the shape, k2 browser note, answer in Thread
+  folder-trust        Folder trust: the card, asking vs deciding, re-scan, honest limits
+  email-notifications  Email from senders: K2's resets, an App's email.send, scope, limits
+  mail-watch          Hear that mail arrived: VIPs, the digest, what's safe
+  mail-reader         The mail reader: who opens which inbox, peek only, the log; agents refused
+  box-move            Move a box: carry the vault (tunnel token too), freeze, undo, who confirms
+  board               The Board Garden's whiteboards: k2 board, grants, cascade, no cut values
+  chat-refresh        Refresh your own chat: k2 agent refresh, the note, what carries on
+  desktop             Remote desktop: this computer's screen in a Desktop tab, people only
+  send-feedback       Tell Alakazam Labs about K2 itself: what is sent, never sent, agents' limits
+  organization        The Org Chart: read the bulletin daily, reach a head, heads and members
+  agent-templates     Hire a type of agent, review first, save your own setup, upgrade safely
+  postal              Friends on other machines (Beta): address, cards, [postal …] mail, k2 msg verify
+
+Usage: k2 study [list|<topic>|--json]

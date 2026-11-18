@@ -74,6 +74,7 @@ K2/
 │   └── shared/                # Constants, types and generated data the frontend shares with the Rust crates and the CLI
 ├── cli/
 │   ├── src/                   # The CLI's parts (*.sh), joined in the order cli/src/ORDER lists
+│   ├── text/                  # Text the CLI prints (study/<id>.txt: the `k2 study` pages), inlined at each `%include` line
 │   └── k2                     # The built CLI. Edit a part, then run scripts/build-cli.sh; never edit this file
 ├── sdk/                       # k2-runtime.js (widget frame runtime), server/, activity/, mail-reader/, generated/
 ├── styles/                    # Style packages: the data that defines K2's look (see styles/README.md)
@@ -99,6 +100,7 @@ A feature is a daemon route first. The CLI, the desktop app and the web client a
 2. **Policy row.** Every `/cli/*` route needs a row in the route policy table (`ROUTES` in `crates/k2-daemon/src/routes/route_policy.rs`). The rows live in `crates/k2-daemon/src/routes/policy/`, one file per busy area and `core.rs` for the rest, each sorted by path. A row gives the method and the lowest login role, for example `get("/cli/fs/read-binary", Member)`. A route with no row is refused for logins, and the test `every_cli_route_literal_is_in_the_policy_table` fails.
 3. **Logic.** Put it in `crates/k2-daemon` or `crates/k2-core`, never in `src-tauri/` or the renderer.
 4. **CLI verb.** Add the command to a part under `cli/src/` (a new part is also listed in `cli/src/ORDER`), wire it in `cli/src/router.sh`, then run `bash scripts/build-cli.sh`. Never edit `cli/k2`: the next build undoes it.
+   A `k2 study` page is a file, `cli/text/study/<id>.txt`, printed exactly as written: the part keeps the page's quoted heredoc with one `%include cli/text/study/<id>.txt` line in it, and `build-cli.sh` puts the file there.
    A new verb also needs its schema entry, which is what `k2 --schema` prints: add it to `cli/src/schema/<noun>.entries` (`build-cli.sh` checks each of those files). The explorer catalog `src/shared/cli-catalog.generated.json` is generated from it by `bash scripts/regen.sh`; never edit it by hand.
 5. **Renderer.** Call the route with `daemonCliGet` or `daemonCliPost` from `src/renderer/lib/daemon-cli.ts` and render the answer. No logic here.
 

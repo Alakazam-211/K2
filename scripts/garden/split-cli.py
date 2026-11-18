@@ -26,8 +26,11 @@ at the entry with that name. A part named `schema/<noun>` is written as
 cli/src/schema/<noun>.entries: a run of entries with no shell around it,
 which scripts/build-cli.sh checks file by file.
 
---recut is for a tree that already has cli/src: the parts are joined,
-checked against cli/k2, cut again by the table, and ORDER is rewritten.
+--recut is for a tree that already has cli/src: cli/k2 must be the join
+of the parts (each `%include cli/text/...` line with its file in its
+place, as scripts/build-cli.sh builds it). The parts as written, include
+lines and all, are then cut again by the table, so the pages stay in
+cli/text, and ORDER is rewritten.
 """
 import os
 import re
@@ -39,6 +42,15 @@ NAMES = "scripts/garden/cli-parts.txt"
 ALLOW = "scripts/k2-home-allowlist.txt"
 HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z_0-9]*)\1")
 START = "(file start)"
+INCLUDE = re.compile(r"^%include (cli/text/[a-z0-9_/-]+\.txt)$", re.M)
+
+
+def inline(rel):
+    """A text file's bytes as build-cli.sh inlines them: the file without
+    its last new line (the line it replaces keeps its own)."""
+    with open(rel, encoding="utf-8", newline="") as f:
+        body = f.read()
+    return body[:-1] if body.endswith("\n") else body
 
 
 def header_text(line):
@@ -109,12 +121,18 @@ def main():
             return
         with open(os.path.join(SRC, "ORDER"), encoding="utf-8") as f:
             old = [l.strip() for l in f if l.strip() and not l.startswith("#")]
-        joined = ""
+        raw = ""
         for name in old:
             with open(os.path.join(SRC, name), encoding="utf-8", newline="") as f:
-                joined += f.read()
+                raw += f.read()
+        # build-cli.sh puts each `%include cli/text/...` line's file in its
+        # place (and checks the includes); compare cli/k2 to that join.
+        joined = INCLUDE.sub(lambda m: inline(m.group(1)), raw)
         if joined != text:
             sys.exit("split-cli: cli/k2 is not the join of cli/src; run scripts/build-cli.sh first. Nothing written.")
+        # Cut the parts as written, `%include` lines and all, so the pages
+        # stay in cli/text.
+        text = raw
     elif recut:
         sys.exit("split-cli: --recut needs an existing %s" % SRC)
     lines = text.split("\n")

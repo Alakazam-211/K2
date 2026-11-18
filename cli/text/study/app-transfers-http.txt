@@ -1,0 +1,162 @@
+k2 study app-transfers-http — resumable uploads over plain HTTP, every field
+
+The same calls as files.uploadCreate … and uploadToDoor, without @k2/server.
+The shape and the phone recipes: k2 study app-transfers. Sizes and offsets
+are bytes, times milliseconds since the epoch, ranges [first, last] with
+last inclusive. JSON numbers are integers. Machine-readable, generated from
+K2's verb catalog: the vendored SDK's dist/server/src/generated/verbs.js
+(each verb's method, route and response schema) and verbs.d.ts (its args).
+The door and the refusal codes are on this page only. Browsers never send
+Expect: 100-continue, so the -H 'Expect:' in the curl lines is for curl only.
+
+YOUR SERVER, AS THE PERSON
+  On your gateway link, K2_GATEWAY_URL (a --cmd service: the daemon's
+  loopback port), with the person's session pass on every call:
+    Authorization: Bearer k2skn_…      (?token=k2skn_… also works)
+  POST bodies are JSON, at most 64 KiB. Caps: files:write, or files:upload
+  for an upload-only drop folder (leave dir out: the person's own folder).
+  POST /cli/fs/upload/create                              files.uploadCreate
+    {workspace: string (the room: agent handle or project id),
+     filename: string, size: number (0 to 10 GiB),
+     dir?: string (room-relative, made if missing),
+     sha256?: string (64 hex, the whole file; checked at complete),
+     tokenTtlSecs?: number (60 to 86400, default 21600)}
+    → the upload (below) + transferToken: string (k2up_…, shown once),
+      tokenExpiresAt: number, dir: string (where it lands)
+  GET  /cli/fs/upload/status?uploadId=<id>                files.uploadStatus
+    → the upload
+  POST /cli/fs/upload/complete {uploadId, sha256?}        files.uploadComplete
+    → {uploadId, done: true, relPath: string, size: number, sha256: string}
+  POST /cli/fs/upload/abort {uploadId}                    files.uploadAbort
+    → {ok: true, uploadId, aborted: true}
+  POST /cli/fs/upload/token {uploadId, tokenTtlSecs?}     files.uploadToken
+    → {uploadId, transferToken, tokenExpiresAt, url} (never past expiresAt;
+      older tokens keep working until theirs end)
+  The upload (create, status, and every door PUT and GET):
+    {uploadId: string (32 hex), url: string (/_k2/transfers/uploads/<id>),
+     size, receivedBytes, partMax (16777216), expiresAt: numbers,
+     received, missing: [[first, last], …],
+     complete: bool (every byte held), done: bool (the file landed),
+     relPath, sha256: strings, once done}
+  Refusals are {"error": {"code", "hint"}} plus the fields named; the
+  checks shared with files.* answer {"error": "<text>"}, no code:
+    400 (text)              create: no workspace, filename or size (a
+                            JSON number), a bad sha256 or tokenTtlSecs,
+                            invalid JSON
+    400 usage               no uploadId, tokenTtlSecs not a number, a
+                            sha256 unlike create's, not a folder
+    400 guest_pass_required the App's own pass: use the person's
+    401 (text)              invalid or revoked skin token: the pass ended
+    403 (text)              missing capability files:write (or
+                            files:upload): the cap, the room or the folder
+    404 not_found           no such upload of this person's
+    405 (text)              POST required (status is the one GET)
+    409 upload_incomplete   complete early: {missing}
+    409 upload_done         token after complete
+    410 transfer_expired    7 days after create
+    413 too_large           over 10 GiB; a body over 64 KiB
+    422 checksum_mismatch   the file's sha256 {range: false, expected,
+                            actual}: K2 dropped every range, send them again
+    429 too_many_transfers  32 unfinished uploads for this person
+    507 no_space
+
+THE DOOR (the browser or the phone, with the upload token)
+  <origin><url>: <origin> is your App's address (https://<app>.<box>.k2.dev,
+  its custom domains), its local front port (http://127.0.0.1:<front port>,
+  k2 app status <app>) or this server's own address; never the gateway
+  link. On every request, as a header only (an upload takes no ?token=):
+    Authorization: Bearer k2up_<id>.<secret>
+  PUT <url>
+    Content-Range: bytes <first>-<last>/<size>   0 <= first <= last < size;
+                                                 size = the upload's size
+    Content-Length: <last - first + 1>           required, at most 16777216;
+                                                 no chunked bodies
+    K2-Content-Sha256: <64 hex of this range>    optional, checked first
+    <the range's bytes>
+    → 200, the upload JSON, and the headers HEAD answers. There is no
+      single next offset: send what missing lists. missing[0][0] is the
+      first byte K2 lacks (sent in order from 0, it equals receivedBytes);
+      missing is [] once complete is true. Ranges may overlap, repeat and
+      come in any order.
+  HEAD <url> → 200, no body:
+    K2-Upload-Received: 0-8388607,16777216-25165823   ("" when none)
+    K2-Upload-Size: <size>  K2-Upload-Expires: <ms>  K2-Upload-Done: 0|1
+  GET <url> → 200, the upload JSON
+  POST <url>/complete {"sha256": "<64 hex>"} or {} (at most 4 KiB)
+    → 200 {uploadId, done: true, relPath, size, sha256}; again: the same
+  DELETE <url> → 200 {ok: true, uploadId, aborted: true}
+  OPTIONS <url> (or <url>/complete), no token → 204
+    Access-Control-Allow-Methods: GET, HEAD, PUT, POST, DELETE, OPTIONS
+    Access-Control-Allow-Headers: Authorization, Content-Type, Content-Range,
+      K2-Content-Sha256, Range, If-Range
+    Access-Control-Max-Age: 600
+  Every answer carries Access-Control-Allow-Origin: * and exposes ETag,
+  Content-Range, Accept-Ranges, Content-Disposition and the four K2-Upload-*
+  headers, and closes its connection (HTTP/1.1). Any origin may call the
+  door straight from the browser (no credentials mode): it needn't go
+  through your App's origin.
+  Refusals, {"error": {"code", "hint"}} plus the fields named:
+    400 bad_range           no or bad Content-Range, a size not the upload's,
+                            outside the file, Content-Length not the range's
+                            length, more than 4096 separate ranges held
+    400 usage               chunked, a bad sha256 or K2-Content-Sha256,
+                            bad JSON, a sha256 unlike create's
+    401 transfer_token_required  no bearer (WWW-Authenticate: Bearer)
+    401 transfer_token_invalid   no such upload, or not its token
+    401 transfer_token_expired   files.uploadToken, go on with the new one
+    401 pass_invalid        the person's pass ended: sign in, a new upload
+    403 cap_not_granted     {cap}: the person lost the cap, room or folder
+    404 not_found           not a door path (the id is 32 lower-case hex)
+    405 usage               another method
+    409 upload_done         a PUT after complete
+    409 upload_incomplete   complete early: {missing}
+    410 transfer_expired    7 days after create; K2 dropped what it held
+    411 usage               a PUT without Content-Length
+    413 too_large           a range over 16 MiB; complete's body over 4 KiB
+    422 checksum_mismatch   {range, expected, actual}. range true: this
+                            range, nothing written; false: the file, K2
+                            dropped every range, send them all again
+    429 rate_limited        {retryAfterSecs: 1}, Retry-After: 1 (a burst of
+                            64, then about 8 a second per upload)
+    503 busy                {retryAfterSecs: 2}, Retry-After: 2
+    507 no_space
+  Retry network errors, 5xx and 429 with backoff; fix any other 4xx.
+
+A LOCAL APP (no --tunnel, http://127.0.0.1:<front port>)
+  Yes, the door answers there, App up or down: the front port runs the same
+  App path as the App's public address, and K2 reads its requests for the
+  door while any transfer exists on this box (from your first uploadCreate).
+  Keep host.clientIp on (the default): K2 then checks every request of a
+  connection. With host.clientIp: false only a connection's first request
+  is checked, so a browser reusing the connection your page loaded on
+  would send its PUTs to your App.
+
+THE WHOLE FLOW WITH curl (placeholders)
+  # Your server: create, as the person.
+  curl -sS -X POST "$K2_GATEWAY_URL/cli/fs/upload/create" \
+    -H "Authorization: Bearer $PASS" -H 'Content-Type: application/json' \
+    -d '{"workspace":"<agent>","dir":"uploads","filename":"clip.mp4",
+         "size":20000000,"sha256":"<64 hex>"}'
+  # → {"uploadId":"<id>","url":"/_k2/transfers/uploads/<id>",
+  #    "transferToken":"k2up_…","missing":[[0,19999999]],…}
+  # The browser or phone: ranges, what K2 holds, complete.
+  O=https://<app>.<box>.k2.dev   # local: http://127.0.0.1:<front port>
+  head -c 16777216 clip.mp4 > p0; tail -c +16777217 clip.mp4 > p1
+  curl -sS -X PUT "$O/_k2/transfers/uploads/<id>" -H 'Expect:' \
+    -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Range: bytes 0-16777215/20000000' --data-binary @p0
+  curl -sS -X PUT "$O/_k2/transfers/uploads/<id>" -H 'Expect:' \
+    -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Range: bytes 16777216-19999999/20000000' --data-binary @p1
+  curl -sSI "$O/_k2/transfers/uploads/<id>" -H "Authorization: Bearer $TOKEN"
+  curl -sS -X POST "$O/_k2/transfers/uploads/<id>/complete" \
+    -H "Authorization: Bearer $TOKEN" -d '{"sha256":"<64 hex>"}'
+  (-H 'Expect:': curl otherwise waits a second for a 100 Continue the door
+  never sends.)
+
+FROM JS: uploadToDoor in @k2/server (k2 app sdk add) does the loop above:
+  import { uploadToDoor, TransferError, type UploadToDoorOptions,
+    type DoorUploadStatus, type DoorUploadDone } from '@k2/server'
+  It needs only fetch and crypto.subtle. The package's entry imports Node
+  modules: for a browser bundle, copy its dist/server/src/transfer.js (and
+  transfer.d.ts); it imports nothing.

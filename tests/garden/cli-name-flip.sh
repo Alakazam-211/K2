@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for scripts/garden/cli-name-flip.py: its classes on a small made-up
-# part, then the real rewrite on a COPY of cli/src, which must still build,
-# parse and compile. The real tree is never rewritten.
+# part, then the real rewrite on a COPY of cli/src and cli/text, which must
+# still build, parse and compile. The real tree is never rewritten.
 # Run: bash tests/garden/cli-name-flip.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -212,10 +212,23 @@ out="$(python3 "$FLIP" --nope 2>&1)"; code=$?
 set -e
 [ "$code" = 1 ] && case "$out" in *"usage: cli-name-flip.py"*) ok ;; *) die "bad argument: exit $code: $out" ;; esac
 
+# A cli/text file is the body of a printed, quoted heredoc: all text, and
+# --apply rewrites it like a heredoc in a part.
+X="$T/text"
+mkdir -p "$X/cli/src" "$X/cli/text/study"
+printf 'case "$1" in\n    msg) cmd_msg "$@" ;;\nesac\n' > "$X/cli/src/router.sh"
+printf 'Run k2 msg <addr> to send.\nExample: eval "$(k2 msg --json)"\n[k2 sidecar] a stamp\n' > "$X/cli/text/study/a.txt"
+xshow() { python3 "$FLIP" --root "$X" --show "$1"; }
+[ "$(xshow text | grep -c '^cli/text/study/a.txt:[12]: \[printed text\]')" = 2 ] || die "the text file's text uses: $(xshow text)"; ok
+xshow kept | grep -q '^cli/text/study/a.txt:3: ' || die "the text file's stamp: $(xshow kept)"; ok
+python3 "$FLIP" --apply --root "$X" | grep -q "rewrote 2 uses of k2 to k5 in 1 files" || die "--apply on the text file"; ok
+[ "$(cat "$X/cli/text/study/a.txt")" = "$(printf 'Run k5 msg <addr> to send.\nExample: eval "$(k5 msg --json)"\n[k2 sidecar] a stamp')" ] || die "the rewritten text file: $(cat "$X/cli/text/study/a.txt")"; ok
+
 # ── the real parts, rewritten in a copy ─────────────────────────────────
 C="$T/copy"
 mkdir -p "$C/cli" "$C/scripts" "$C/tests"
 cp -R "$HERE/cli/src" "$C/cli/src"
+cp -R "$HERE/cli/text" "$C/cli/text"
 cp "$HERE/scripts/build-cli.sh" "$C/scripts/"
 cp "$HERE/tests/check-embedded-python.sh" "$C/tests/"
 out="$(python3 "$FLIP" --root "$C")"

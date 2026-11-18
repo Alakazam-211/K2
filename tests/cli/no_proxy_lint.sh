@@ -19,6 +19,10 @@
 #   daemon-install.sh  the daemon manifest, binary and signature downloads
 #   connect-account.sh the K2 Connect account service (sign-in, logout)
 #
+# It also reads the scripts outside cli/src that call the daemon with curl
+# (NAMED below) and fails on a curl command line there without
+# --noproxy '*', except the outside-host lines named with them.
+#
 # Before the real scan it runs itself on a scratch dir of broken and good
 # parts and fails unless it catches exactly the broken ones.
 #
@@ -103,6 +107,47 @@ sys.exit(1 if problems else 0)
 PYEOF
 }
 
+# Scripts outside cli/src that reach the daemon with curl, as
+# "<path>|<outside-host line marker>|...". A marker is text on a curl line
+# that fetches an outside host and keeps the proxy settings.
+NAMED=(
+    "scripts/install-root-helper.sh|fetch() { curl -fsSL"   # GitHub release downloads
+    "scripts/k2-open"
+    "crates/k2-daemon/src/update_routes.rs"                 # the update swap script
+    "crates/k2-core/src/agent_hooks/install.rs"             # notify.sh
+)
+
+lint_named() { # lint_named <root> <entry>...: one line per problem; exit 1 when any
+    python3 - "$@" <<'PYEOF'
+import os, re, sys
+
+root = sys.argv[1]
+problems = []
+CURL = re.compile(r"(^|[\s;|&(`$\"])curl\s+-")
+for entry in sys.argv[2:]:
+    rel, *outside = entry.split("|")
+    path = os.path.join(root, rel)
+    if not os.path.isfile(path):
+        problems.append("%s: missing (update NAMED in the lint)" % rel)
+        continue
+    curls = 0
+    for i, line in enumerate(open(path, encoding="utf-8", errors="replace").read().split("\n")):
+        s = line.strip()
+        if s.startswith("#") or s.startswith("//") or not CURL.search(line):
+            continue
+        curls += 1
+        if any(m in line for m in outside):
+            continue
+        if "--noproxy '*'" not in line:
+            problems.append("%s:%d: curl without --noproxy '*': %s" % (rel, i + 1, s[:100]))
+    if curls == 0:
+        problems.append("%s: no curl command line found (update NAMED in the lint)" % rel)
+for p in problems:
+    print(p)
+sys.exit(1 if problems else 0)
+PYEOF
+}
+
 # ── self test on broken and good parts ───────────────────────────────
 FIX="$(mktemp -d -t k2-noproxy-lint-XXXXXX)"
 trap 'rm -rf "$FIX"' EXIT
@@ -177,6 +222,23 @@ if ! out="$(lint "$FIX/good")"; then echo "SELF-TEST FAIL: good parts flagged: $
 for b in no_noproxy bare_curl py_proxy query_token py_query_token; do
     if out="$(lint "$FIX/$b")"; then echo "SELF-TEST FAIL: $b not caught" >&2; self_ok=0; fi
 done
+mkdir -p "$FIX/named/s"
+cat >"$FIX/named/s/good.sh" <<'EOF'
+# curl -s http://127.0.0.1/ in a comment is not a call
+fetch() { curl -fsSL -o "$2" "$1"; }
+body=$(curl -fsS --noproxy '*' "http://127.0.0.1:$PORT/boot-status")
+EOF
+cat >"$FIX/named/s/bad.sh" <<'EOF'
+body=$(curl -fsS "http://127.0.0.1:$PORT/boot-status")
+EOF
+cat >"$FIX/named/s/none.sh" <<'EOF'
+echo no request here
+EOF
+if ! out="$(lint_named "$FIX/named" "s/good.sh|fetch() { curl -fsSL")"; then echo "SELF-TEST FAIL: good named script flagged: $out" >&2; self_ok=0; fi
+# good.sh without its outside-host marker: the fetch line must be caught.
+for b in "s/bad.sh" "s/none.sh" "s/gone.sh" "s/good.sh"; do
+    if out="$(lint_named "$FIX/named" "$b")"; then echo "SELF-TEST FAIL: named $b not caught" >&2; self_ok=0; fi
+done
 [ "$self_ok" = 1 ] || exit 1
 echo "self test: every broken fixture caught, the good one passes"
 
@@ -184,6 +246,13 @@ echo "self test: every broken fixture caught, the good one passes"
 DIR="${1:-$PROJECT_ROOT/cli/src}"
 if out="$(lint "$DIR")"; then
     echo "no_proxy_lint: cli/src sends no daemon request through a proxy and no credential in a query"
+else
+    echo "$out" >&2
+    echo "no_proxy_lint: FAILED" >&2
+    exit 1
+fi
+if out="$(lint_named "$PROJECT_ROOT" "${NAMED[@]}")"; then
+    echo "no_proxy_lint: ${#NAMED[@]} scripts outside cli/src send every daemon curl with --noproxy '*'"
 else
     echo "$out" >&2
     echo "no_proxy_lint: FAILED" >&2

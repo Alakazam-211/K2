@@ -16,7 +16,8 @@
 #      other people's bodies inside UNTRUSTED markers, --json raw.
 #   4. Exit codes: 0 ok · 1 error (503, 422 needs_km1) · 2 usage/400/wait
 #      timeout · 3 any 403. A 5xx error carries the key to retry with.
-#   5. A K2 terminal sends its passport, never the owner token.
+#   5. A K2 terminal sends its passport, never the owner token, as a
+#      Bearer header (never in the query).
 #   6. hostchat approvals approve / act-as allow: send, get 403
 #      confirm_required, confirm through vault.sock with the action and
 #      secretId the daemon named, resend with confirmToken. Inside a K2
@@ -121,8 +122,11 @@ class H(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         parsed = urllib.parse.urlparse(self.path)
         q = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
-        token = q.pop("token", "")
-        rec = {"method": method, "path": parsed.path, "token": token, "query": q, "body": body.decode("utf-8", "replace")}
+        # The credential rides the Authorization header. The query keeps
+        # every key, so a stray token= there shows up in the query asserts.
+        auth = self.headers.get("Authorization") or ""
+        token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
+        rec = {"method": method, "path": parsed.path, "token": token, "auth": auth, "query": q, "body": body.decode("utf-8", "replace")}
         with open(os.path.join(work, "reqs.jsonl"), "a") as f:
             f.write(json.dumps(rec) + "\n")
         b = json.loads(body) if body else {}
@@ -631,6 +635,12 @@ assert_eq "agent on-behalf approve → exit 3, nothing sent" "$rc/$(nreq)" "3/$b
 assert_contains "agent on-behalf: person only" "$err" "person_only"
 run owner hostchat act-as allow alpha
 assert_eq "act-as is gone → exit 2" "$rc" "2"
+
+# No request carries a credential in its query string.
+in_query="$(python3 -c '
+import json, sys
+print(sum(1 for l in open(sys.argv[1]) if "token" in json.loads(l)["query"]))' "$WORK/reqs.jsonl")"
+assert_eq "no request has token= in its query" "$in_query" "0"
 
 echo
 echo "chat CLI: $pass passed, $fail failed"

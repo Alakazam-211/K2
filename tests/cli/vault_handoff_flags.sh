@@ -67,8 +67,11 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(b)
     def record(self, body):
         u = urlparse(self.path)
+        # The credential rides the Authorization header only; a token in
+        # the query stays in "query", where the checks below would see it.
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
-        tok = q.pop("token", None)
+        auth = self.headers.get("Authorization")
+        tok = auth[len("Bearer "):] if auth and auth.startswith("Bearer ") else auth
         with open(LOG, "a") as f:
             f.write(json.dumps({"via": self.channel, "token": tok, "method": self.command, "path": u.path,
                                 "query": q, "body": body}, sort_keys=True) + "\n")

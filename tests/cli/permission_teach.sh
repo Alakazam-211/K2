@@ -128,7 +128,7 @@ class H(BaseHTTPRequestHandler):
             return self.reply(403, err)
         if path in ("/cli/settings/update", "/cli/workspace/open"):
             err = {"error": {"code": "owner_only", "hint": "owner only"}}
-            if on and path == "/cli/settings/update" and "token=passport-teach" in self.path:
+            if on and path == "/cli/settings/update" and self.headers.get("Authorization") == "Bearer passport-teach":
                 err["permission"] = {"requestable": False, "where": "a person does this, from a terminal outside K2"}
             return self.reply(403, err)
         err = {"error": {"code": "owner_only", "hint": "only the server's owner may do this"}}

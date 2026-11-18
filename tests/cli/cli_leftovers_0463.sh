@@ -58,9 +58,11 @@ class H(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         parsed = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        # The credential rides the Authorization header, never the query.
+        auth = self.headers.get("Authorization") or ""
         rec = {"method": method, "path": parsed.path,
-               "query": {k: v[0] for k, v in q.items() if k != "token"},
-               "token": (q.get("token") or [""])[0],
+               "query": {k: v[0] for k, v in q.items()},
+               "token": auth[len("Bearer "):] if auth.startswith("Bearer ") else "",
                "body": body.decode("utf-8", "replace")}
         with open(os.path.join(work, "reqs.jsonl"), "a") as f:
             f.write(json.dumps(rec) + "\n")
@@ -123,6 +125,15 @@ rows = [r for r in rows if r["path"] == sys.argv[2]]
 print(rows[-1]["token"] if rows else "<no request>")
 ' "$WORK/reqs.jsonl" "$1"
 }
+# "yes" when the last request to a path has a token key in its query.
+last_query_has_token() {
+    python3 -c '
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+rows = [r for r in rows if r["path"] == sys.argv[2]]
+print(("yes" if "token" in rows[-1]["query"] else "no") if rows else "<no request>")
+' "$WORK/reqs.jsonl" "$1"
+}
 run() {
     set +e
     out="$("$@" 2>"$WORK/err")"; rc=$?
@@ -152,7 +163,8 @@ routes "$ROUTES_OK"
 run agent tickets list
 assert_eq "agent tickets list exit 0" "$rc" "0"
 assert_eq "agent tickets list → passport workspace" "$(last_q /cli/feedback/list)" "$WORK/agentws"
-assert_eq "whoami asked with the passport" "$(last_token /cli/whoami)" "$SCOPED"
+assert_eq "whoami asked with the passport as Bearer" "$(last_token /cli/whoami)" "$SCOPED"
+assert_eq "whoami: no token in the query" "$(last_query_has_token /cli/whoami)" "no"
 run agent feedback list
 assert_eq "agent feedback list → passport workspace" "$(last_q /cli/feedback/list)" "$WORK/agentws"
 run agent activity

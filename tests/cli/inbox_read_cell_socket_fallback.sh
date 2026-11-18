@@ -67,7 +67,8 @@ PIDS+=($!)
 disown "$!" 2>/dev/null || true
 
 # Stub daemon: /cli/inbox/read answers the item, or an empty 200 for
-# id=empty. Records each request's path + query.
+# id=empty. Records each request's path, query and Authorization header
+# (the header is where k2 sends the credential).
 python3 - "$WORKDIR" <<'PY' &
 import json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -80,7 +81,9 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         with open(os.path.join(root, "requests.log"), "a") as f:
-            f.write(u.path + " " + json.dumps({k: v[0] for k, v in q.items()}) + "\n")
+            rec = {k: v[0] for k, v in q.items()}
+            rec["auth"] = self.headers.get("Authorization") or ""
+            f.write(u.path + " " + json.dumps(rec) + "\n")
         if u.path == "/cli/inbox/read" and q.get("id", [""])[0] == "empty":
             body = b""
         elif u.path == "/cli/inbox/read":
@@ -132,7 +135,8 @@ assert_eq "the item's content prints" "$out" "hello from the loopback port"
 assert_absent "no empty-answer error" "$err" "no usable answer"
 reqs="$(cat "$WORKDIR/requests.log")"
 assert_contains "the TCP request named the item" "$reqs" '"id": "from-a-sidecar"'
-assert_contains "the TCP request carried the session passport" "$reqs" '"token": "test-session.passport"'
+assert_contains "the TCP request carried the session passport as a Bearer" "$reqs" '"auth": "Bearer test-session.passport"'
+assert_absent "no token in the TCP request's query" "$reqs" '"token":'
 
 echo "== 2. dead cell socket, TCP answers nothing: a plain error =="
 set +e

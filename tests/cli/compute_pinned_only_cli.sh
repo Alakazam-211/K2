@@ -55,9 +55,12 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
     def note(self, path, body):
-        token = (parse_qs(urlparse(self.path).query).get("token") or [""])[0]
+        # The credential rides the Authorization header, never the query.
+        auth = self.headers.get("Authorization") or ""
+        token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
+        query_token = "token" in parse_qs(urlparse(self.path).query)
         with open(LOG, "a") as f:
-            f.write(json.dumps({"path": path, "body": body, "token": token}) + "\n")
+            f.write(json.dumps({"path": path, "body": body, "token": token, "query_token": query_token}) + "\n")
     def do_GET(self):
         u = urlparse(self.path)
         self.note(u.path, {})
@@ -115,7 +118,8 @@ out="$("$K2" compute node pinned-only mini-9 on </dev/null)"
 expect_has "on renders" "$out" "mini-9: pinned-only on. automatic placement no longer chooses this node"
 expect_eq "on path" "$(last path)" "/cli/compute/nodes/pinned-only"
 expect_eq "on body: a JSON true" "$(last body)" '{"node": "mini-9", "on": true}'
-expect_eq "sent with the owner token" "$(last token)" "owner-test-token"
+expect_eq "sent with the owner token as Bearer" "$(last token)" "owner-test-token"
+expect_eq "no token in the query" "$(last query_token)" "false"
 out="$("$K2" compute node pinned-only mini-9 on </dev/null)"
 expect_has "on again says it already was" "$out" "mini-9: pinned-only on (it already was)."
 out="$("$K2" compute nodes </dev/null)"

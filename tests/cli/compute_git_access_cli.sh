@@ -43,7 +43,7 @@ SETUP_ASK='k2 permission request compute.git-access-setup --why "<what you need 
 cat > "$SANDBOX/stub.py" <<'PY'
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 LOG = sys.argv[1]
 ASK = 'k2 permission request compute.git-access-setup --why "<what you need it for>"'
@@ -60,9 +60,11 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(b)
     def log(self, method, body):
         u = urlparse(self.path)
+        # The credential rides the Authorization header, never the query.
+        auth = self.headers.get("Authorization") or ""
         with open(LOG, "a") as f:
             f.write(json.dumps({"method": method, "path": u.path, "query": u.query, "body": body,
-                                "token": (parse_qs(u.query).get("token") or [""])[0]}) + "\n")
+                                "token": auth[len("Bearer "):] if auth.startswith("Bearer ") else ""}) + "\n")
         return u
     def do_GET(self):
         u = self.log("GET", None)
@@ -118,7 +120,8 @@ expect_eq "App setup path" "$(last path)" "/cli/compute/git-access/setup"
 expect_has "the key rides the body" "$(last body)" "$PEM_BODY"
 expect_has "the App id rides the body" "$(last body)" '"app_id": "4242"'
 expect_not "never the query" "$(last query)" "PRIVATE"
-expect_eq "sent with the owner token" "$(last token)" "owner-test-token"
+expect_eq "sent with the owner token as Bearer" "$(last token)" "owner-test-token"
+expect_not "no credential in the query" "$(last query)" "token="
 
 out="$(printf '%s\n' "$PAT" | "$K2" compute git-access setup --github-token-stdin)"
 expect_has "token setup renders" "$out" "GitHub credential set: fine-grained token"

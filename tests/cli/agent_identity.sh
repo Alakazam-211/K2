@@ -6,7 +6,7 @@
 # socket) that records each request and asserts what the CLI sends:
 #   1. tool policy: both spellings are the locked `agent-identity` id tool.
 #   2. owner terminal: POST /cli/agent/identity {workspace, color} with the
-#      owner token; rgb(r,g,b) and r,g,b become hex; --name rides along.
+#      owner token as Bearer; rgb(r,g,b) and r,g,b become hex; --name rides along.
 #   3. show (no flags): GET with workspace=<agent>; prints name/color/picture.
 #   4. --image: PNG sent as a data URL; SVG / non-image / both image flags
 #      are usage errors (exit 2) that never reach the daemon.
@@ -166,9 +166,9 @@ _cli_tool_is_locked agent-identity && ok "1: locked" || bad "1: not locked"
 
 # ── 2. Owner terminal: POST with the owner token ──────────────────────
 out="$(owner_k2 agent identity docs --color 'rgb(34, 197, 94)' --name 'Doc Bot' 2>&1)" || bad "2: exit non-zero: $out"
-got="$(field 'r["transport"], r["method"], r["path"], r["query"].get("token"), r["body"]')"
-want="('tcp', 'POST', '/cli/agent/identity', '$OWNER', {'workspace': 'docs', 'displayName': 'Doc Bot', 'color': '#22c55e'})"
-[ "$got" = "$want" ] && ok "2: owner POST body + token" || bad "2: got [$got] want [$want]"
+got="$(field 'r["transport"], r["method"], r["path"], r["auth"], "token" in r["query"], r["body"]')"
+want="('tcp', 'POST', '/cli/agent/identity', 'Bearer $OWNER', False, {'workspace': 'docs', 'displayName': 'Doc Bot', 'color': '#22c55e'})"
+[ "$got" = "$want" ] && ok "2: owner POST body + Bearer owner token, no token in the query" || bad "2: got [$got] want [$want]"
 grep -qF 'Agent docs: displayName, color updated' <<<"$out" && ok "2: change summary" || bad "2: output: $out"
 owner_k2 agent identity docs --color '1,2,3' >/dev/null 2>&1 || bad "2: r,g,b exit non-zero"
 [ "$(field 'r["body"]["color"]')" = "#010203" ] && ok "2: r,g,b → hex" || bad "2: r,g,b: $(field 'r["body"]')"

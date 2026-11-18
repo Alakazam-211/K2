@@ -266,7 +266,8 @@ set -e
 assert_eq "new exit 0" "$rc" "0"
 assert_eq "stdout is exactly the address" "$out" "k2/gardens"
 assert_contains "stderr summary" "$(cat "$WORK/err")" "opened k2/gardens"
-assert_eq "request carries the scoped token" "$(last token_query)" "$SCOPED"
+assert_eq "request carries the scoped token as Bearer" "$(last authorization)" "Bearer $SCOPED"
+assert_eq "no token in the query" "$(last token_query)" ""
 assert_absent "never the owner token" "$(cat "$WORK/last_req.json")" "$OWNER"
 assert_eq "POST /cli/sidecar/new" "$(last path)" "/cli/sidecar/new"
 python3 -c '
@@ -292,7 +293,8 @@ assert v["address"] == "k2/raw" and v["ok"] is True and v["brief"] is None, v
 list_json="$(cell sidecar list --json)"
 assert_eq "list GET path" "$(last path)" "/cli/sidecar/list"
 assert_eq "list sends the workspace" "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['query']['workspace'])" "$WORK/last_req.json")" "$WORK/proj"
-assert_eq "list scoped token" "$(last token_query)" "$SCOPED"
+assert_eq "list scoped token as Bearer" "$(last authorization)" "Bearer $SCOPED"
+assert_eq "list: no token in the query" "$(last token_query)" ""
 python3 -c 'import json,sys; assert json.loads(sys.argv[1])["cap"] == 8' "$list_json" && ok "list --json shape" || bad "list --json shape"
 assert_contains "list table empty state" "$(cell sidecar list)" "(no sidecars)"
 

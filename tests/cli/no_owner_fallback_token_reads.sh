@@ -8,7 +8,8 @@
 # refuses as the guard does (exit 3, the same message) and never reads the
 # file. With a passport, or without the variable, nothing changes.
 #
-# A stub daemon logs every request. HOME is a temp dir holding a known
+# A stub daemon logs every request with its Authorization header (the
+# only place k2 puts a credential). HOME is a temp dir holding a known
 # owner token in heartbeat.token and daemon.token; never the real ~/.k2.
 # The commands run end to end, and the functions themselves (taken from the
 # bash source) where the guard or the help page stops the command first,
@@ -125,9 +126,14 @@ refused() { # refused <case>: the guard's exit and message, no owner token anywh
     if grep -q "$OWNER" "$T/requests.log"; then die "$1: the owner token reached the daemon"; fi
     ok "$1"
 }
-sent() { # sent <case> <route> <token>: the route was called with that token
-    grep -q "^[A-Z]* ${2}?\(.*&\)\{0,1\}token=${3}\(&\| \)" "$T/requests.log" ||
-        die "$1: no $2 with token=$3"
+sent() { # sent <case> <route> <token>: the route was called with that Bearer token
+    local n
+    n="$(awk -v route="$2" -v want=" auth=Bearer $3" '
+        { split($2, p, "?") }
+        p[1] == route && substr($0, length($0) - length(want) + 1) == want' \
+        "$T/requests.log" | wc -l | tr -d ' ')"
+    [ "$n" -ge 1 ] || die "$1: no $2 with Bearer $3"
+    if grep -q "token=" "$T/requests.log"; then die "$1: a token in the query string"; fi
     ok "$1"
 }
 never_sent() { # never_sent <case> <token>

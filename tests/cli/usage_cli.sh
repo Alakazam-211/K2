@@ -151,7 +151,9 @@ class H(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         parsed = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(parsed.query)
-        token = (q.get("token") or [""])[0]
+        # The credential rides the Authorization header only.
+        auth = self.headers.get("Authorization") or ""
+        token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
         rec = {"method": method, "path": parsed.path, "token": token,
                "query": {k: v[0] for k, v in q.items()}, "body": body.decode("utf-8", "replace")}
         with open(os.path.join(work, "reqs.jsonl"), "a") as f:
@@ -209,7 +211,8 @@ lastq() { tail -n 1 "$WORK/reqs.jsonl" | python3 -c "import json,sys; print(json
 out="$(owner usage tokens --since 7d --harness claude --login acc_1 --model claude-opus-5-5 --by model --workspace /w)"
 assert_eq "tokens is a GET" "$(last method)" "GET"
 assert_eq "tokens path" "$(last path)" "/cli/usage/tokens"
-assert_eq "owner sends the disk owner token" "$(last token)" "$OWNER"
+assert_eq "owner sends the disk owner token as Bearer" "$(last token)" "$OWNER"
+assert_eq "owner: no token in the query" "$(lastq token)" "<none>"
 assert_eq "since sent" "$(lastq since)" "7d"
 assert_eq "harness sent" "$(lastq harness)" "claude"
 assert_eq "login sent as account" "$(lastq account)" "acc_1"
@@ -258,7 +261,8 @@ assert_eq "refresh body" "$(python3 -c 'import json,sys; print(json.dumps(json.l
 
 echo "== K2 terminal: passport =="
 out="$(cell usage limits)"
-assert_eq "passport limits sends the scoped token" "$(last token)" "$SCOPED"
+assert_eq "passport limits sends the scoped token as Bearer" "$(last token)" "$SCOPED"
+assert_eq "passport: no token in the query" "$(lastq token)" "<none>"
 assert_absent "passport never sends the owner token" "$(cat "$WORK/reqs.jsonl" | tail -n 1)" "$OWNER"
 set +e
 out="$(cell usage limits --refresh 2>&1)"; rc=$?

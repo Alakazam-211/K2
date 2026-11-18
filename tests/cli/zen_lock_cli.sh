@@ -74,9 +74,13 @@ class H(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b""
         parsed = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(parsed.query)
-        tok = (q.get("token") or [""])[0]
+        # The credential rides the Authorization header only; the raw query
+        # is kept so a token sent there shows in the log.
+        auth = self.headers.get("Authorization") or ""
+        tok = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
         with open(os.path.join(work, "requests.log"), "a") as f:
-            f.write(json.dumps({"method": method, "path": parsed.path, "token": tok, "body": raw.decode()}) + "\n")
+            f.write(json.dumps({"method": method, "path": parsed.path, "token": tok,
+                                "query": parsed.query, "body": raw.decode()}) + "\n")
         try:
             body = json.loads(raw) if raw.strip() else {}
         except Exception:

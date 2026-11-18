@@ -3,8 +3,10 @@
 # workspace's ACTIVE-database cap; default 25, 0 = unlimited) and `--db`
 # on dsn / migrate / dump / restore / drop. A local fake daemon stands in:
 # it logs each request (method, path, body) and answers like the real
-# routes do for the owner token and refuses any other token the way
-# POST /cli/workspace/set refuses an agent's passport. No real daemon.
+# routes do for the owner token (an Authorization: Bearer header) and
+# refuses any other token the way POST /cli/workspace/set refuses an
+# agent's passport. A token in a query string is logged apart and fails
+# the test. No real daemon.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -25,7 +27,7 @@ trap cleanup EXIT
 
 cat >"$FAKE_DIR/fake.py" <<'PY'
 import http.server, json, sys, urllib.parse
-log_path, port_path = sys.argv[1], sys.argv[2]
+log_path, port_path, query_token_path = sys.argv[1], sys.argv[2], sys.argv[3]
 OWNER = "owner-token"
 class H(http.server.BaseHTTPRequestHandler):
     def _any(self):
@@ -33,12 +35,16 @@ class H(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(n).decode() if n else ""
         u = urllib.parse.urlsplit(self.path)
         q = dict(urllib.parse.parse_qsl(u.query))
+        auth = self.headers.get("Authorization") or ""
+        token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
         with open(log_path, "a") as f:
-            shown = {k: v for k, v in q.items() if k != "token"}
-            f.write("%s %s %s %s\n" % (self.command, u.path, json.dumps(shown, sort_keys=True), body))
+            f.write("%s %s %s %s\n" % (self.command, u.path, json.dumps(q, sort_keys=True), body))
+        if "token" in q:
+            with open(query_token_path, "a") as f:
+                f.write("%s %s\n" % (self.command, u.path))
         status, out = 200, {"ok": True}
         if u.path == "/cli/workspace/set":
-            if q.get("token") != OWNER:
+            if token != OWNER:
                 status, out = 403, {"error": "invalid or missing token"}
             else:
                 out = {"ok": True, "changed": True}
@@ -59,7 +65,7 @@ srv = http.server.HTTPServer(("127.0.0.1", 0), H)
 open(port_path, "w").write(str(srv.server_address[1]))
 srv.serve_forever()
 PY
-python3 -I "$FAKE_DIR/fake.py" "$FAKE_DIR/requests.log" "$FAKE_DIR/port" &
+python3 -I "$FAKE_DIR/fake.py" "$FAKE_DIR/requests.log" "$FAKE_DIR/port" "$FAKE_DIR/query-token.log" &
 FAKE_PID=$!
 for _ in $(seq 1 50); do [ -s "$FAKE_DIR/port" ] && break; sleep 0.1; done
 [ -s "$FAKE_DIR/port" ] || fail "fake daemon did not start"
@@ -141,5 +147,8 @@ grep -q '^POST /cli/db/restore .*"file": *".k2/db/dumps/a.dump".*"db": *"ws_x_tw
     || fail "restore --db not sent: $(cat "$FAKE_DIR/requests.log")"
 run db drop --yes --db ws_x_two --workspace "$WS"
 grep -q '^POST /cli/db/drop .*"db": *"ws_x_two"' "$FAKE_DIR/requests.log" || fail "drop --db not sent: $(cat "$FAKE_DIR/requests.log")"
+
+# The credential rode the Authorization header on every request, never a query.
+[ ! -e "$FAKE_DIR/query-token.log" ] || fail "requests sent token= in the query: $(cat "$FAKE_DIR/query-token.log")"
 
 echo "PASS: k2 db cap and --db"

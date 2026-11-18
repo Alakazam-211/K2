@@ -2,7 +2,7 @@
 # `k2 tickets settings` (Settings → Tickets, 0.45.4).
 #
 # Runs the REAL cli/k2 against a stub python daemon that records every
-# /cli/tickets/settings request (method, token, body):
+# /cli/tickets/settings request (method, Bearer token, body):
 #   1. no flags → GET, prints the three rules, exit 0.
 #   2. --brief/--assignee-required/--default-assignee → POST with exactly
 #      those keys, prints "Saved.", exit 0.
@@ -36,7 +36,7 @@ trap cleanup EXIT
 python3 - "$WORK" <<'PYEOF' &
 import json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit
 
 work = sys.argv[1]
 state = {"briefPolicy": "warn", "assigneePolicy": "warn", "defaultAssignee": None}
@@ -60,9 +60,13 @@ class H(BaseHTTPRequestHandler):
 
     def record(self, method, body):
         u = urlsplit(self.path)
-        token = (parse_qs(u.query).get("token") or [""])[0]
+        # The credential rides the Authorization header only; the raw query
+        # is kept so a token sent there shows in the log.
+        auth = self.headers.get("Authorization") or ""
+        token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
         with open(log, "a") as f:
             f.write(json.dumps({"method": method, "path": u.path, "token": token,
+                                "query": u.query,
                                 "body": body.decode() if body else ""}) + "\n")
         return u.path, token
 

@@ -8,8 +8,9 @@
 #      never re-source ~/.k2/heartbeat.token (owner) into $TOKEN.
 #   3. Open verbs still invert to disk owner for TCP ergonomics (COMPAT-58).
 #   4. ID verb + scoped cell + empty passport → teaching error, exit 3.
-#   5. End-to-end: `k2 mail messages` over TCP records the scoped token, not
-#      the owner, when K2_HOOK_SOCK is present.
+#   5. End-to-end: `k2 mail messages` over TCP sends the scoped token as an
+#      `Authorization: Bearer` header (never in the query), not the owner,
+#      when K2_HOOK_SOCK is present.
 #
 # No daemon build — pure functions are sourced from cli/k2 markers; HTTP is a
 # tiny python stub. Never touches the real ~/.k2 (HOME is sandboxed).
@@ -223,6 +224,8 @@ for _ in $(seq 1 50); do
 done
 [ -f "$WORK/stub.port" ] || { echo "FAIL: stub never bound" >&2; exit 1; }
 STUB_PORT="$(cat "$WORK/stub.port")"
+# req_field <name>: one field of the stub's last recorded request.
+req_field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$WORK/last_req.json" "$1"; }
 
 # Fake per-cell socket path (need not be a real socket — mail is TCP-only today;
 # presence of K2_HOOK_SOCK is the scoped-session marker for auth selection).
@@ -245,12 +248,13 @@ if [ ! -f "$WORK/last_req.json" ]; then
     echo "  FAIL: stub saw no request (cli rc=$mail_rc err=$(cat "$WORK/cli.err" 2>/dev/null))" >&2
     fail=$((fail + 1))
 else
-    tok="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("token_query",""))' "$WORK/last_req.json")"
-    assert_eq "mail TCP token is scoped (not owner)" "$tok" "$SCOPED"
-    if [ "$tok" = "$OWNER" ]; then
-        echo "  FAIL: owner token leaked on ID tool path" >&2
-        fail=$((fail + 1))
-    fi
+    auth="$(req_field authorization)"
+    tok_q="$(req_field token_query)"
+    assert_eq "mail TCP Bearer is scoped (not owner)" "$auth" "Bearer $SCOPED"
+    assert_eq "mail TCP query carries no token" "$tok_q" ""
+    case "$auth $tok_q" in
+        *"$OWNER"*) echo "  FAIL: owner token leaked on ID tool path" >&2; fail=$((fail + 1)) ;;
+    esac
 fi
 
 # Calendars S3 (CAL23.4): `k2 calendar` / `k2 cal` from a scoped cell must
@@ -270,10 +274,10 @@ for cal_verb in calendar cal; do
         echo "  FAIL: stub saw no $cal_verb request (rc=$cal_rc err=$(cat "$WORK/cal.err" 2>/dev/null))" >&2
         fail=$((fail + 1))
     else
-        cal_path="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["path"])' "$WORK/last_req.json")"
+        cal_path="$(req_field path)"
         assert_eq "$cal_verb list hits the calendar route" "$cal_path" "/cli/mail/calendar/list"
-        tok="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("token_query",""))' "$WORK/last_req.json")"
-        assert_eq "$cal_verb TCP token is scoped (not owner)" "$tok" "$SCOPED"
+        assert_eq "$cal_verb TCP Bearer is scoped (not owner)" "$(req_field authorization)" "Bearer $SCOPED"
+        assert_eq "$cal_verb TCP query carries no token" "$(req_field token_query)" ""
     fi
     set +e
     env -u K2SO_HOOK_SOCK -u K2SO_HOOK_TOKEN -u K2_HOOK_TOKEN -u K2SO_PORT \

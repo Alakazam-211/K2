@@ -79,17 +79,19 @@ class H(BaseHTTPRequestHandler):
     def handle_any(self):
         u = urllib.parse.urlparse(self.path)
         q = dict(urllib.parse.parse_qsl(u.query))
+        # k2 sends its credential as an Authorization: Bearer header only.
+        agent = (self.headers.get("Authorization") or "") == "Bearer agent-passport"
         n = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(n).decode() if n else ""
         body = json.loads(raw) if raw else {}
         with open(LOG, "a") as f:
             f.write("%s %s %s\n" % (self.command, u.path, raw))
         p = u.path
-        if p.startswith("/cli/mail/self/") and q.get("token") == "agent-passport":
+        if p.startswith("/cli/mail/self/") and agent:
             return reply(self, 403, {"ok": False, "error": {"code": "person_only", "hint": "this is a person's own mailbox route"}})
         if p in ("/cli/mail/config/forward-copies-per-day", "/cli/mail/config/forward-copies-per-hour"):
             daily = p.endswith("day")
-            if q.get("token") == "agent-passport":
+            if agent:
                 return reply(self, 403, {"ok": False, "error": {"code": "owner_only", "hint": "only the owner changes this"},
                                          "permission": {"requestable": False, "where": "the owner does this, with k2 hostmail config " + ("--forward-copies-per-day" if daily else "--forward-copies-per-hour") + " <n>"}})
             field, top, dflt = ("perDay", 24000, 500) if daily else ("perHour", 1000, 100)
@@ -98,7 +100,7 @@ class H(BaseHTTPRequestHandler):
             return reply(self, 200, {"ok": True, field: body[field], "default": dflt, "max": top,
                                      "note": "at 300 an hour at most 7200 copies can leave in a day" if body[field] == 20000 else None})
         if p == "/cli/mail/config/forward-new-per-day":
-            if q.get("token") == "agent-passport" or self.headers.get("Authorization", "").endswith("agent-passport"):
+            if agent:
                 return reply(self, 403, {"ok": False, "error": {"code": "owner_only", "hint": "only the owner changes how many new outside addresses this server may add a day"},
                                          "permission": {"requestable": False, "where": "the owner does this, with k2 hostmail config --forward-new-per-day <n>"}})
             if body.get("perDay", 0) > 1000:

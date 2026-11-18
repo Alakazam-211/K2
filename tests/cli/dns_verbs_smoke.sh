@@ -7,7 +7,7 @@
 #   2. Local usage errors exit 2 with JSON {"error":{"code":"usage",...}}
 #      without requiring a live control plane (stub daemon returns nothing
 #      useful — these fire before HTTP).
-#   3. Stub daemon: access GET path + scoped token; gated list → exit 3
+#   3. Stub daemon: access GET path + scoped token as Bearer; gated list → exit 3
 #      with Settings teaching text; record add POST body shape.
 #   4. Schema mentions dns verbs.
 #
@@ -270,13 +270,18 @@ set -e
 assert_eq "access exit 0" "$rc" "0"
 assert_contains "access allowed true" "$out" '"allowed":true'
 assert_contains "access hit /cli/dns/access" "$(cat "$WORK/reqs.jsonl")" '"path": "/cli/dns/access"'
-tok="$(python3 -c 'import json
-for line in open("'"$WORK"'/reqs.jsonl"):
-    r=json.loads(line)
-    if r["path"]=="/cli/dns/access":
-        print(r["token_query"]); break
-')"
-assert_eq "access uses scoped token (ID tool)" "$tok" "$SCOPED"
+access_field() {
+    python3 -c 'import json, sys
+for line in open(sys.argv[1]):
+    r = json.loads(line)
+    if r["path"] == "/cli/dns/access":
+        print(r[sys.argv[2]]); break
+else:
+    sys.exit("no request to /cli/dns/access")
+' "$WORK/reqs.jsonl" "$1"
+}
+assert_eq "access uses scoped token as Bearer (ID tool)" "$(access_field authorization)" "Bearer $SCOPED"
+assert_eq "access sends no token in the query" "$(access_field token_query)" ""
 
 set +e
 out="$(run_cli dns list 2>"$WORK/err_list")"

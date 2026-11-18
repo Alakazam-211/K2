@@ -74,9 +74,13 @@ class H(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0) or 0)
         body = self.rfile.read(length) if length else b""
         parsed = urllib.parse.urlparse(self.path)
-        q = urllib.parse.parse_qs(parsed.query)
+        # The credential rides the Authorization header only. The raw
+        # header and query are kept too, so "never the owner token" checks
+        # see a token sent anywhere else.
+        auth = self.headers.get("Authorization") or ""
         rec = {"method": method, "path": parsed.path,
-               "token": (q.get("token") or [""])[0],
+               "token": auth[len("Bearer "):] if auth.startswith("Bearer ") else "",
+               "authorization": auth, "query": parsed.query,
                "body": body.decode("utf-8", "replace")}
         with open(os.path.join(work, "reqs.jsonl"), "a") as f:
             f.write(json.dumps(rec) + "\n")

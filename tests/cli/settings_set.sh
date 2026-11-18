@@ -36,7 +36,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The stub. By the request's token:
+# The stub. By the request's Bearer token:
 #   owner-tok  → 200 the merged settings (the body's keys over defaults)
 #   stale-tok  → 200 the defaults only (the write didn't stick)
 #   anything else → 403 owner_only (an agent passport, an Admin login)
@@ -66,7 +66,9 @@ class H(BaseHTTPRequestHandler):
         body = self.rfile.read(n).decode("utf-8", "replace") if n else ""
         u = urlparse(self.path)
         q = parse_qs(u.query)
-        token = (q.get("token") or [""])[0]
+        # The credential rides the Authorization header only.
+        auth = self.headers.get("Authorization") or ""
+        token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
         with open(LOG, "a") as f:
             f.write("%s %s %s\n" % (self.command, u.path, body))
         if u.path == "/cli/settings/update":

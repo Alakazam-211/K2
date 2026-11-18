@@ -88,7 +88,11 @@ class H(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         parsed = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(parsed.query)
-        rec = {"method": method, "path": parsed.path, "token": (q.get("token") or [""])[0], "body": body.decode()}
+        # k2 sends its credential as an Authorization: Bearer header only.
+        auth = self.headers.get("Authorization") or ""
+        token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
+        rec = {"method": method, "path": parsed.path, "token": token,
+               "query_token": "token" in q, "body": body.decode()}
         with open(os.path.join(work, "reqs.jsonl"), "a") as f:
             f.write(json.dumps(rec) + "\n")
         b = json.loads(body) if body else {}
@@ -289,6 +293,8 @@ assert_contains "status: off-box copy" "$out" "/mnt/offbox/sew"
 assert_contains "status: last copied" "$out" "20260103T000000Z"
 assert_contains "status: key mirror" "$out" "/mnt/keys"
 assert_contains "status: owner in Sew" "$out" "owner in Sew:"
+
+if grep -q '"query_token": true' "$WORK/reqs.jsonl"; then bad "a request carried a token in its query"; else ok "no request carried a token in its query"; fi
 
 echo
 echo "hostchat S32 CLI: $pass passed, $fail failed"

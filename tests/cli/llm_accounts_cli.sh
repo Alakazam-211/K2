@@ -207,7 +207,9 @@ class H(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         parsed = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(parsed.query)
-        token = (q.get("token") or [""])[0]
+        # k2 sends its credential as an Authorization: Bearer header only.
+        auth = self.headers.get("Authorization") or ""
+        token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
         rec = {"method": method, "path": parsed.path, "token": token,
                "query": {k: v[0] for k, v in q.items()}, "body": body.decode("utf-8", "replace")}
         with open(os.path.join(work, "reqs.jsonl"), "a") as f:
@@ -648,6 +650,12 @@ set -e
 assert_eq "passport add-key → exit 3" "$rc" "3"
 assert_contains "passport add-key owner_only" "$(cat "$WORK/err")" "owner_only:"
 assert_absent "owner_only error never echoes the key" "$(cat "$WORK/err")" "$API_KEY"
+python3 - "$WORK/reqs.jsonl" <<'PY' && ok "no request carried a token in its query" || bad "a request carried a token in its query"
+import json, sys
+for line in open(sys.argv[1]):
+    r = json.loads(line)
+    assert "token" not in r["query"], r
+PY
 : "$nreq_before"
 
 echo ""

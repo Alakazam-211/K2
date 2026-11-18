@@ -5,7 +5,9 @@
 # session since 0.40) sent that check to the port on disk with the OWNER
 # token from ~/.k2/heartbeat.token. It must send the session's passport.
 #
-# A stub daemon logs every request line. No real daemon, no real home.
+# A stub daemon logs every request line with its Authorization header.
+# The credential rides that header only, never the query string.
+# No real daemon, no real home.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -36,7 +38,7 @@ log, portfile = sys.argv[1], sys.argv[2]
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         with open(log, "a") as f:
-            f.write(self.command + " " + self.path + "\n")
+            f.write(self.command + " " + self.path + " auth=" + (self.headers.get("Authorization") or "") + "\n")
         body = b"[]"
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -80,17 +82,23 @@ wake() {
     [ "$rc" = 0 ] || die "heartbeat wake exited $rc ($*): $out $(cat "$T/stderr")"
     [ "$out" = '{"status":"noop","reason":"no inbox work found"}' ] || die "heartbeat wake printed ($*): $out"
 }
-# The inbox check is two requests, each with one token.
+# The inbox check is two requests, each with one Bearer token and no
+# token in the query.
 check_token() { # check_token <case> <wanted token>
     local n
     for route in /cli/agents/list /cli/work/inbox; do
-        n="$(grep -c "^GET ${route}?token=${2}&project=" "$T/requests.log" || true)"
-        [ "$n" = 1 ] || die "$1: wanted one GET $route with token=$2, saw $n"
+        n="$(grep -cF "GET ${route}?project=" "$T/requests.log" || true)"
+        [ "$n" = 1 ] || die "$1: wanted one GET ${route}?project=..., saw $n"
+        n="$(awk -v pre="GET ${route}?project=" -v want=" auth=Bearer ${2}" \
+            'index($0, pre) == 1 && substr($0, length($0) - length(want) + 1) == want' \
+            "$T/requests.log" | wc -l | tr -d ' ')"
+        [ "$n" = 1 ] || die "$1: wanted GET $route with Bearer $2, saw $n"
     done
+    if grep -qF "token=" "$T/requests.log"; then die "$1: a token in the query string"; fi
     pass=$((pass + 1))
 }
-never_sent() { # never_sent <case> <token>
-    if grep -q "token=${2}" "$T/requests.log"; then die "$1: sent ${2}"; fi
+never_sent() { # never_sent <case> <token>: not in a query, not in a header
+    if grep -qF -- "${2}" "$T/requests.log"; then die "$1: sent ${2}"; fi
     pass=$((pass + 1))
 }
 

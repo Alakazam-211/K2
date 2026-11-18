@@ -96,7 +96,8 @@ class H(BaseHTTPRequestHandler):
     def record(self, body):
         u = urllib.parse.urlparse(self.path)
         with open(work + "/requests.log", "a") as f:
-            f.write(json.dumps({"method": self.command, "path": u.path, "query": u.query, "body": body}) + "\n")
+            f.write(json.dumps({"method": self.command, "path": u.path, "query": u.query, "body": body,
+                                "auth": self.headers.get("Authorization") or ""}) + "\n")
         return u.path, dict(urllib.parse.parse_qsl(u.query))
     def do_GET(self):
         path, q = self.record("")
@@ -159,6 +160,28 @@ if not rows:
 r = rows[-1]
 print(r["body"] if r["method"] == "POST" else r["query"])' "$REQ_LOG" "$1"
 }
+# qparam <path> <key>: one query value of the last request to <path>,
+# or <absent> when the key is not there.
+qparam() {
+    python3 -c '
+import json, sys, urllib.parse
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+rows = [r for r in rows if r["path"] == sys.argv[2]]
+if not rows:
+    sys.exit("no request to " + sys.argv[2])
+q = urllib.parse.parse_qs(rows[-1]["query"], keep_blank_values=True)
+print(q[sys.argv[3]][0] if sys.argv[3] in q else "<absent>")' "$REQ_LOG" "$1" "$2"
+}
+# last_auth <path>: the Authorization header of the last request to <path>.
+last_auth() {
+    python3 -c '
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+rows = [r for r in rows if r["path"] == sys.argv[2]]
+if not rows:
+    sys.exit("no request to " + sys.argv[2])
+print(rows[-1]["auth"])' "$REQ_LOG" "$1"
+}
 field() { python3 -c 'import json,sys; v=json.loads(sys.argv[1]).get(sys.argv[2]); print(v if isinstance(v, str) else json.dumps(v))' "$1" "$2"; }
 
 # rc <label> <want> <args…>: the exit code; stdout in $WORK/out, stderr in $WORK/err.
@@ -194,7 +217,9 @@ echo "== k2 compute provenance =="
 want_line="$(python3 -c 'import json; print(json.dumps({"payloadType": "application/vnd.in-toto+json", "payload": "eyJfdHlwZSI6IngifQ==", "signatures": [{"keyid": "a" * 64, "sig": "MEUCIQ=="}]}, separators=(",", ":")))')"
 eq "prints the line byte for byte" "$(cat "$WORK/line.out")" "$want_line"
 eq "one line, newline-terminated" "$(wc -l <"$WORK/line.out" | tr -d ' ')" "1"
-has "asks for the job" "$(last /cli/compute/jobs/provenance)" "&job=job1"
+eq "asks for the job" "$(qparam /cli/compute/jobs/provenance job)" "job1"
+eq "provenance: the token rides the Bearer header" "$(last_auth /cli/compute/jobs/provenance)" "Bearer owner-token-for-test"
+eq "provenance: no token in the query" "$(qparam /cli/compute/jobs/provenance token)" "<absent>"
 out="$("$K2" compute provenance job1 --out "$WORK/job1.intoto.jsonl")"
 eq "--out writes the line" "$(cat "$WORK/job1.intoto.jsonl")" "$want_line"
 has "--out names the node" "$out" "signed by node k2n7, naming 1 file(s)"
@@ -231,7 +256,8 @@ eq "--json: verified" "$(field "$json_out" verified)" "true"
 
 echo "== k2 compute receipt (moved to its own part) =="
 rc "receipt" 0 compute receipt job1
-has "receipt asks for the job" "$(last /cli/compute/jobs/receipt)" "&job=job1"
+eq "receipt asks for the job" "$(qparam /cli/compute/jobs/receipt job)" "job1"
+eq "receipt: no token in the query" "$(qparam /cli/compute/jobs/receipt token)" "<absent>"
 
 echo "== k2 ci provenance =="
 rc "ci provenance" 0 ci provenance ab12cd34 --out "$WORK/prov"

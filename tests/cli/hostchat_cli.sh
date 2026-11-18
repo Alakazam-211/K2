@@ -129,7 +129,9 @@ class H(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         parsed = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(parsed.query)
-        token = (q.get("token") or [""])[0]
+        # k2 sends its credential as an Authorization: Bearer header only.
+        auth = self.headers.get("Authorization") or ""
+        token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
         rec = {"method": method, "path": parsed.path, "token": token,
                "query": {k: v[0] for k, v in q.items()}, "body": body.decode("utf-8", "replace")}
         with open(os.path.join(work, "reqs.jsonl"), "a") as f:
@@ -307,6 +309,17 @@ rows = [r for r in rows if r["path"] == sys.argv[2]]
 r = rows[-1]
 print(r[sys.argv[3]] if sys.argv[3] != "body" else json.dumps(json.loads(r["body"] or "{}"), sort_keys=True))
 ' "$WORK/reqs.jsonl" "$1" "$2"
+}
+# The paths of recorded requests that carried a token in the query string
+# (k2 never does); prints nothing when there are none.
+query_tokens() {
+    python3 -c '
+import json, sys
+for l in open(sys.argv[1]):
+    r = json.loads(l)
+    if "token" in r["query"]:
+        print(r["path"])
+' "$WORK/reqs.jsonl"
 }
 run() {
     set +e
@@ -705,6 +718,7 @@ run owner hostchat recording uninstall --yes </dev/null
 assert_eq "recording uninstall --yes exit 0" "$rc" "0"
 assert_eq "recording uninstall --yes body" "$(req_where /cli/sew/recording/uninstall body)" '{"confirm": true}'
 assert_contains "recording uninstall keeps recordings" "$out" "every recording stays in Sew"
+assert_eq "no request carried a token in its query" "$(query_tokens)" ""
 
 echo
 echo "hostchat CLI: $pass passed, $fail failed"

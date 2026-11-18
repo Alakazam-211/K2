@@ -3,8 +3,9 @@
 # first run without git).
 #
 # - status/install/recheck hit the right routes with the right method,
-#   `token=` percent-encoded in pure bash and `format=text` (the daemon
-#   renders the lines; its wording is tested in Rust, git_tools::render_text);
+#   the token exactly as given in an `Authorization: Bearer` header (never
+#   in the query) and `format=text` (the daemon renders the lines; its
+#   wording is tested in Rust, git_tools::render_text);
 #   `--json` asks for JSON and passes it through.
 # - NO python3: on a fresh Mac /usr/bin/python3 is Apple's shim (it opens
 #   the install dialog or prints an xcrun error). Every verb here runs with
@@ -86,12 +87,14 @@ class H(BaseHTTPRequestHandler):
 
     def _answer(self, method, body):
         u = urlsplit(self.path)
+        auth = self.headers.get("Authorization") or ""
         with open(LOG_FILE, "a") as f:
-            f.write("%s %s %s %s\n" % (method, u.path, u.query, body))
+            f.write("%s %s query=%s auth=%s body=%s\n" % (method, u.path, u.query, auth, body))
         q = parse_qs(u.query)
         text = q.get("format") == ["text"]
         mode = open(MODE_FILE).read().strip()
-        if q.get("token") != ["t.k/+= z"]:
+        # The credential rides the Authorization header only, byte for byte.
+        if auth != "Bearer t.k/+= z":
             return self._send(403, '{"error":"invalid or missing token"}', "application/json")
         if mode == "agent" and u.path == "/cli/git-tools/install":
             return self._send(403, json.dumps({"error": "owner_only", "hint": "Installing git is your owner's step. Ask them to click Install in Settings."}), "application/json")
@@ -153,12 +156,12 @@ assert_contains "help: install verb" "$out" "k2 git-tools install [--json]"
 echo "== status =="
 run git-tools
 assert_eq "status: exit 0" "$rc" "0"
-assert_eq "status: GET, token encoded, text" "$(last_request)" "GET /cli/git-tools token=t.k%2F%2B%3D%20z&format=text "
+assert_eq "status: GET, Bearer token exact, text" "$(last_request)" "GET /cli/git-tools query=format=text auth=Bearer t.k/+= z body="
 assert_eq "status: the daemon's lines verbatim" "$out" "$(printf "git        : not installed (needs Apple's command line tools)\nwaiting    : site (/Users/me/site) git: waiting for Apple's command line tools\n  last try : Failed to initialize git: boom")"
 assert_eq "status: nothing on stderr" "$err" ""
 run git-tools status --json
 assert_eq "--json: exit 0" "$rc" "0"
-assert_eq "--json: no format=text" "$(last_request)" "GET /cli/git-tools token=t.k%2F%2B%3D%20z "
+assert_eq "--json: no format=text" "$(last_request)" "GET /cli/git-tools query= auth=Bearer t.k/+= z body="
 assert_contains "--json: body verbatim" "$out" '"needs": "apple_clt"'
 run git-tools --json
 assert_contains "bare --json = status" "$out" '"state": "not_installed"'
@@ -166,11 +169,11 @@ assert_contains "bare --json = status" "$out" '"state": "not_installed"'
 echo "== install / recheck =="
 run git-tools install
 assert_eq "install: exit 0" "$rc" "0"
-assert_eq "install: POST {}" "$(last_request)" "POST /cli/git-tools/install token=t.k%2F%2B%3D%20z&format=text {}"
+assert_eq "install: POST {}" "$(last_request)" "POST /cli/git-tools/install query=format=text auth=Bearer t.k/+= z body={}"
 assert_contains "install: the daemon's line" "$out" "Apple's installer is open on this Mac's screen"
 run git-tools recheck
 assert_eq "recheck: exit 0" "$rc" "0"
-assert_eq "recheck: POST {}" "$(last_request)" "POST /cli/git-tools/recheck token=t.k%2F%2B%3D%20z&format=text {}"
+assert_eq "recheck: POST {}" "$(last_request)" "POST /cli/git-tools/recheck query=format=text auth=Bearer t.k/+= z body={}"
 assert_contains "recheck: finished" "$out" "finished   : /Users/me/site"
 
 echo "== refusals =="

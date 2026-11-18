@@ -12,7 +12,9 @@
 #     takes one and binds the message to that session's workspace).
 # With no passport (a person's own terminal) nothing changes.
 #
-# A stub daemon logs every request line. No real daemon, no real home.
+# A stub daemon logs every request line and its Authorization header.
+# The credential rides that header as a Bearer, never the query.
+# No real daemon, no real home.
 # bash-only: reads cli/k2 as source; the parity gate skips it for the binary.
 set -euo pipefail
 
@@ -52,7 +54,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if n:
             self.rfile.read(n)
         with open(log, "a") as f:
-            f.write(self.command + " " + self.path + "\n")
+            f.write(self.command + " " + self.path + " " + (self.headers.get("Authorization") or "") + "\n")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(BODY)))
@@ -101,10 +103,10 @@ fed() {
     ERR="$(cat "$T/stderr")"
 }
 sent_nothing() { [ ! -s "$T/requests.log" ] || die "$1: a request was sent"; ok; }
-never_sent() { if grep -q "token=${2}" "$T/requests.log"; then die "$1: sent ${2}"; fi; ok; }
-sent_once() { # sent_once <case> <METHOD> <route> <token>
-    local n; n="$(grep -c "^${2} ${3}?token=${4}\$" "$T/requests.log" || true)"
-    [ "$n" = 1 ] || die "$1: wanted one ${2} ${3} with token=${4}, saw $n"
+never_sent() { if grep -qF -- "${2}" "$T/requests.log"; then die "$1: sent ${2}"; fi; ok; }
+sent_once() { # sent_once <case> <METHOD> <route> <token>: no query, the token as Bearer
+    local n; n="$(grep -cxF -- "${2} ${3} Bearer ${4}" "$T/requests.log" || true)"
+    [ "$n" = 1 ] || die "$1: wanted one ${2} ${3} with Bearer ${4} and no query, saw $n"
     [ "$(wc -l < "$T/requests.log" | tr -d ' ')" = 1 ] || die "$1: more than one request"
     ok
 }

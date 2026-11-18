@@ -42,6 +42,7 @@ trap cleanup EXIT
 mkdir -p "$WORK/home/.k2"
 MODE_FILE="$WORK/mode"
 LOG_FILE="$WORK/requests"
+AUTH_FILE="$WORK/last-auth"
 
 # A python3 (and python) that fails loudly.
 SHIMS="$WORK/shims"
@@ -61,7 +62,7 @@ import json, os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlsplit, parse_qs
 
-MODE_FILE, LOG_FILE = os.environ["MODE_FILE"], os.environ["LOG_FILE"]
+MODE_FILE, LOG_FILE, AUTH_FILE = os.environ["MODE_FILE"], os.environ["LOG_FILE"], os.environ["AUTH_FILE"]
 LIST = ("Setup: 1 of 3 done\n"
         "  [ ] Install developer tools (The Apple tools include git, which workspaces need: k2 git-tools install)\n"
         "  [x] Sign in to an AI tool\n"
@@ -104,7 +105,12 @@ class H(BaseHTTPRequestHandler):
             f.write("%s %s %s %s\n" % (method, u.path, u.query, body))
         q = parse_qs(u.query)
         mode = open(MODE_FILE).read().strip()
-        if q.get("token") != ["t.k/+= z"]:
+        # The credential rides the Authorization header only, the raw token
+        # exactly as given (nothing encoded).
+        auth = self.headers.get("Authorization")
+        with open(AUTH_FILE, "w") as f:
+            f.write("%r\n" % (auth,))
+        if auth != "Bearer t.k/+= z":
             return self._send(403, '{"error":"invalid or missing token"}', "application/json")
         if mode in ERRORS:
             return self._send(*ERRORS[mode])
@@ -130,7 +136,7 @@ PY
 PORT="$("$PY" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 echo ok >"$MODE_FILE"
 : >"$LOG_FILE"
-MODE_FILE="$MODE_FILE" LOG_FILE="$LOG_FILE" PORT="$PORT" "$PY" "$WORK/stub.py" &
+MODE_FILE="$MODE_FILE" LOG_FILE="$LOG_FILE" AUTH_FILE="$AUTH_FILE" PORT="$PORT" "$PY" "$WORK/stub.py" &
 STUB_PID=$!
 for _i in $(seq 1 50); do
     curl -s --connect-timeout 1 "http://127.0.0.1:${PORT}/cli/first-run/status" >/dev/null 2>&1 && break
@@ -148,7 +154,7 @@ run() {
     set -e
 }
 last_request() { tail -n 1 "$LOG_FILE"; }
-Q='token=t.k%2F%2B%3D%20z&format=text'
+Q='format=text'
 LIST="$(printf '%s\n' \
     "Setup: 1 of 3 done" \
     "  [ ] Install developer tools (The Apple tools include git, which workspaces need: k2 git-tools install)" \
@@ -159,14 +165,16 @@ LIST="$(printf '%s\n' \
 echo "== the list =="
 run setup
 assert_eq "setup: exit 0" "$rc" "0"
-assert_eq "setup: GET, token encoded, text" "$(last_request)" "GET /cli/first-run/status $Q "
+assert_eq "setup: GET, no token in the query, text" "$(last_request)" "GET /cli/first-run/status $Q "
+assert_eq "setup: the raw token in the Bearer header" "$(cat "$AUTH_FILE")" "'Bearer t.k/+= z'"
 assert_eq "setup: the daemon's lines verbatim" "$out" "$LIST"
 assert_eq "setup: nothing on stderr" "$err" ""
 
 echo "== --json =="
 run setup --json
 assert_eq "--json: exit 0" "$rc" "0"
-assert_eq "--json: no format=text" "$(last_request)" "GET /cli/first-run/status token=t.k%2F%2B%3D%20z "
+assert_eq "--json: no query at all" "$(last_request)" "GET /cli/first-run/status  "
+assert_eq "--json: the raw token in the Bearer header" "$(cat "$AUTH_FILE")" "'Bearer t.k/+= z'"
 assert_eq "--json: the body as sent" "$out" '{"enabled":true,"hidden":false,"finished":false,"rows":[{"id":"dev_tools","state":"todo","opens":"dev_tools"}],"offer":"meet_kessel"}'
 
 echo "== verbs that print the list =="

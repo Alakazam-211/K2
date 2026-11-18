@@ -20,6 +20,7 @@ import { retainVoice, useVoice, voice } from '@/stores/voice'
 import { useSettingsStore } from '@/stores/settings'
 import { headsetState } from './voice-labels'
 import VoicePopover from './VoicePopover'
+import { VoiceRoomRecordingsSheet } from './VoiceRoomRecordings'
 import TopCallBar from './TopCallBar'
 import VideoDemo from './VideoDemo'
 import { retainVideo, video } from '@/stores/video'
@@ -121,6 +122,7 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
           : null}
       </div>
       <TopCallBar />
+      <VoiceRoomRecordingsSheet />
       {withPipe ? <TopBarPipe /> : null}
       {demo && videoPreview ? createPortal(<VideoDemo onClose={() => setDemo(false)} />, document.body) : null}
     </>

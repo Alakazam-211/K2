@@ -20,6 +20,7 @@ import { isWebClient } from '@/lib/is-web'
 import { callDuration, roomStateText } from './voice-labels'
 import { VOICE_CHAT_LINE } from '@/lib/voice-chat-only'
 import { VoiceChatOnlyChip } from './VoiceChatOnlyChip'
+import { RoomRecordingsButton, useRoomRecordingsGate, useRoomRecordingsSheet } from './VoiceRoomRecordings'
 
 /** While a join runs, another Join (and "Leave and join") would leave it
  *  half way, so they wait. */
@@ -241,11 +242,14 @@ function RoomRow({
   room,
   call,
   onJoin,
+  onRecordings,
 }: {
   server: VoiceServer
   room: VoiceRoom
   call: VoiceCall | null
   onJoin: (room: VoiceRoom) => void
+  /** This server lists this login its rooms' recordings. */
+  onRecordings?: () => void
 }): React.JSX.Element {
   const here = call !== null && call.hostKey === server.hostKey && call.roomId === room.id
   const joining = call?.phase === 'joining'
@@ -266,6 +270,7 @@ function RoomRow({
           </div>
         ) : null}
       </div>
+      {onRecordings ? <RoomRecordingsButton onOpen={onRecordings} /> : null}
       {here ? (
         <span className="text-[11px] text-[var(--color-accent)]">You're here</span>
       ) : state === null ? (
@@ -300,6 +305,12 @@ function ServerSection({
   onJoin: (server: VoiceServer, room: VoiceRoom) => void
 }): React.JSX.Element {
   const title = server.isWindow ? `This server · ${server.label}` : server.label
+  // This server's rooms: Recordings once it lists them for this login.
+  const recordings = useRoomRecordingsGate(server.hostKey, server.kind === 'live' && server.isWindow && !server.voiceChatOnly)
+  const openRecordings = (room: VoiceRoom): void => {
+    useRoomRecordingsSheet.getState().show({ hostKey: server.hostKey, roomId: room.id, roomName: room.name, occupants: room.occupants })
+    voice.setPopoverOpen(false)
+  }
   if (server.kind === 'offline') {
     return (
       <section data-testid="voice-server" data-kind="offline" className="py-1 opacity-60">
@@ -351,7 +362,14 @@ function ServerSection({
       {list && list.rooms.length > 0 ? (
         <ul>
           {list.rooms.map((r) => (
-            <RoomRow key={r.id} server={server} room={r} call={call} onJoin={(room) => onJoin(server, room)} />
+            <RoomRow
+              key={r.id}
+              server={server}
+              room={r}
+              call={call}
+              onJoin={(room) => onJoin(server, room)}
+              onRecordings={recordings ? () => openRecordings(r) : undefined}
+            />
           ))}
         </ul>
       ) : null}

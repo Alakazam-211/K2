@@ -20,6 +20,13 @@ const h = vi.hoisted(() => ({
   preview: false,
   videoPreview: false,
   setSection: vi.fn(),
+  // A room's recordings (VoiceRoomRecordings): every GET to the daemon.
+  cliGet: vi.fn(),
+}))
+
+vi.mock('@/lib/daemon-cli', async (orig) => ({
+  ...(await orig<typeof import('@/lib/daemon-cli')>()),
+  daemonCliGet: (...a: unknown[]) => h.cliGet(...a),
 }))
 
 vi.mock('@/stores/settings', () => {
@@ -127,6 +134,9 @@ import { overlayClaims } from '@/lib/browser-overlay'
 import { FrostCapsule, expectOnPopoverLayer } from '@/test-utils/popover-layer'
 import { CALL_PANEL_BUTTON } from './CallControls'
 import { CALL_PANEL_ROW_WIDTH, VOICE_POPOVER_WIDTH, callPanelRowWidth } from './call-panel-fit'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
+import { resetRoomRecordingsGate } from '@/lib/voice/room-recordings'
+import { useRoomRecordingsSheet } from './VoiceRoomRecordings'
 
 function entry(hostKey: string, patch: Partial<HostEntry> = {}, features = ['voice-rooms-v1']): HostEntry {
   return {
@@ -163,6 +173,11 @@ beforeEach(async () => {
   h.setSection.mockReset()
   h.preview = false
   h.videoPreview = false
+  // An older server by default: it doesn't know the route.
+  h.cliGet.mockReset()
+  h.cliGet.mockRejectedValue(new DaemonHttpError('not found', 404, null))
+  resetRoomRecordingsGate()
+  useRoomRecordingsSheet.setState({ open: null })
   await act(async () => {
     if (voice.store.getState().call) await voice.leave()
     voice.store.setState({ rooms: {}, notice: null, popoverOpen: false, windowHosting: null })
@@ -678,5 +693,90 @@ describe('video in the call (videoRoomsPreview)', () => {
     await inCall()
     act(() => voice.store.setState({ engineKind: 'seat' }))
     expect(screen.queryByTestId('video-camera')).toBeNull()
+  })
+})
+
+describe('a room’s Recordings entry', () => {
+  const recordingsCalls = (): unknown[][] => h.cliGet.mock.calls.filter((c) => c[1] === 'voice/recordings')
+  const openList = async (): Promise<void> => {
+    h.entries = { 'zed.k2.dev': entry('zed.k2.dev', { role: 'owner' }) }
+    h.lists = { 'zed.k2.dev': sewList }
+    act(() => voice.recompute())
+    render(<VoiceButton />)
+    fireEvent.click(screen.getByTestId('voice-button'))
+    await waitFor(() => expect(screen.getAllByTestId('voice-room')).toHaveLength(2))
+  }
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+  }
+
+  it('an older server answers 404: no entry, nothing thrown, one request', async () => {
+    await openList()
+    await settle()
+    expect(screen.queryByTestId('voice-room-recordings')).toBeNull()
+    expect(recordingsCalls()).toHaveLength(1)
+    expect(recordingsCalls()[0][2]).toEqual({ limit: 1 })
+    // The list re-renders every second while open: still one request.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 1100))
+    })
+    expect(recordingsCalls()).toHaveLength(1)
+    // Closing and opening it again asks no more: that server has no route.
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.click(screen.getByTestId('voice-button'))
+    await settle()
+    expect(screen.queryByTestId('voice-room-recordings')).toBeNull()
+    expect(recordingsCalls()).toHaveLength(1)
+  })
+
+  it('an answer of an unknown shape, a 200 that isn’t a list, and a refusal all hide it', async () => {
+    for (const answer of [
+      () => Promise.reject(new Error('socket hang up')),
+      () => Promise.reject('just a string'),
+      () => Promise.resolve({ weird: true }),
+      () => Promise.resolve('<html>not json</html>'),
+      () => Promise.reject(new DaemonHttpError('off', 403, 'transcripts_read_off')),
+      () => Promise.reject(new DaemonHttpError('needs Sew 0.9.0', 409, 'sew_feature_missing')),
+    ]) {
+      cleanup()
+      act(() => voice.store.setState({ popoverOpen: false }))
+      resetRoomRecordingsGate()
+      h.cliGet.mockReset()
+      h.cliGet.mockImplementation(answer)
+      await openList()
+      await settle()
+      expect(screen.queryByTestId('voice-room-recordings')).toBeNull()
+      expect(recordingsCalls()).toHaveLength(1)
+    }
+  })
+
+  it('a server that lists them: each room of this server gets Recordings, which opens the drawer and closes the list', async () => {
+    h.cliGet.mockReset()
+    h.cliGet.mockResolvedValue({ ok: true, recordings: [], next: null, canRead: true })
+    await openList()
+    await waitFor(() => expect(screen.getAllByTestId('voice-room-recordings')).toHaveLength(2))
+    expect(recordingsCalls()).toHaveLength(1)
+    fireEvent.click(screen.getAllByTestId('voice-room-recordings')[0])
+    expect(screen.queryByTestId('voice-popover')).toBeNull()
+    expect(useRoomRecordingsSheet.getState().open).toMatchObject({ hostKey: 'zed.k2.dev', roomId: 'room-1', roomName: 'Standup' })
+    await waitFor(() => expect(screen.getByTestId('voice-recordings-empty').textContent).toBe('No recordings yet in this room.'))
+    expect(screen.getByTestId('voice-recordings-heading').textContent).toBe('Recordings · Standup')
+    expect(recordingsCalls().at(-1)?.[2]).toMatchObject({ room: 'room-1' })
+  })
+
+  it('another server’s rooms get no entry and ask nothing', async () => {
+    h.cliGet.mockReset()
+    h.cliGet.mockResolvedValue({ ok: true, recordings: [], next: null, canRead: true })
+    h.entries = { 'zed.k2.dev': entry('zed.k2.dev', {}, []), 'sewlab.k2.dev': entry('sewlab.k2.dev') }
+    h.lists = { 'sewlab.k2.dev': sewList }
+    act(() => voice.recompute())
+    render(<VoiceButton />)
+    fireEvent.click(screen.getByTestId('voice-button'))
+    await waitFor(() => expect(screen.getAllByTestId('voice-room')).toHaveLength(2))
+    await settle()
+    expect(screen.queryByTestId('voice-room-recordings')).toBeNull()
+    expect(recordingsCalls()).toHaveLength(0)
   })
 })

@@ -119,6 +119,13 @@ export interface TranscriptPerson {
  *  line of speech, at most a drawer's widest. */
 const TRANSCRIPT_MIN_WIDTH = 320
 
+/** The transcript panel's width; a voice room's recordings list beside it
+ *  takes the same. */
+export function useTranscriptPanelWidth(): number {
+  const drawerWidth = usePanelsStore((s) => s.rightPanelWidth)
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(TRANSCRIPT_MIN_WIDTH, drawerWidth))
+}
+
 export function HomeChatTranscriptPanel({
   heading,
   lines,
@@ -134,8 +141,7 @@ export function HomeChatTranscriptPanel({
   state: string | null
   onClose: () => void
 }): JSX.Element {
-  const drawerWidth = usePanelsStore((s) => s.rightPanelWidth)
-  const width = Math.min(SIDEBAR_MAX_WIDTH, Math.max(TRANSCRIPT_MIN_WIDTH, drawerWidth))
+  const width = useTranscriptPanelWidth()
   const [query, setQuery] = useState('')
   const [copied, setCopied] = useState(false)
   const closeRef = useRef<HTMLButtonElement>(null)

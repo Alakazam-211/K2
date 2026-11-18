@@ -1,10 +1,9 @@
 // Recording a DM call (prd-home-call-recording-v1 S1, HR-10): the client
 // side of what Sew posts after a recording. Sew posts a **recording card**
 // (the record message, `Message.recording`) into the DM, and the transcript
-// as replies under it, one per speaker turn (`thread_root_id`, and
-// `Message.transcript` on each line: the `transcript` object is what marks
-// a line; a plain thread reply is an ordinary message). The DM draws the card as a line, like a
-// call's own line; the lines never show as bubbles and never add to the DM's
+// as replies under it, one per speaker turn (`Message.transcript` on each
+// line marks it; a reply with no `transcript` is an ordinary message). The
+// DM draws the card as a line, like a call's own line; the lines never show as bubbles and never add to the DM's
 // unread (the daemon keeps them out of its counts too). "Show transcript"
 // reads them with `GET /cli/home-chat/replies` as the person: only the two
 // people in the DM can. There is no audio playback in K2.
@@ -57,14 +56,17 @@ export function parseRecordingSummary(v: unknown): HomeChatRecordingSummary | nu
   }
 }
 
-/** A recording's transcript line: a message that carries a `transcript`
- *  object (Sew puts one on every turn). Off the DM's timeline (Show
- *  transcript reads them). Returns the card it sits under (`thread_root_id`),
- *  else its recording id. A person's ordinary thread reply has
- *  `thread_root_id` but no `transcript`: it's a message, so null. */
+function isTranscriptTurn(o: Record<string, unknown> | null): boolean {
+  return !!o && !!o.transcript && typeof o.transcript === 'object' && !Array.isArray(o.transcript)
+}
+
+/** A recording's transcript line: a message that carries `transcript` (Sew
+ *  puts it on every turn, as a reply under the card); its root is the card.
+ *  Off the DM's timeline (Show transcript reads them). A thread reply with no
+ *  `transcript` is an ordinary message (Home has no thread view yet). */
 export function transcriptRootOf(v: unknown): string | null {
   const o = v as Record<string, unknown> | null
-  if (!o || !o.transcript || typeof o.transcript !== 'object') return null
+  if (!o || !isTranscriptTurn(o)) return null
   return idOf(o.thread_root_id) ?? idOf((o.transcript as Record<string, unknown>).recording_id) ?? 'transcript'
 }
 
@@ -221,7 +223,9 @@ export async function fetchHomeChatTranscript(scope: ServerScope, conv: string, 
   const v = await daemonCliGet<{ page?: unknown }>(scope, 'home-chat/replies', { conv, id: cardId })
   const page = v?.page as { items?: unknown } | unknown[] | undefined
   const items = Array.isArray(page) ? page : Array.isArray((page as { items?: unknown })?.items) ? ((page as { items: unknown[] }).items) : []
-  const lines = items.map(parseTranscriptLine).filter((l): l is TranscriptLine => l !== null)
+  // Only the turns: a person's plain reply under the card isn't a line.
+  const turns = items.filter((m) => isTranscriptTurn(m as Record<string, unknown> | null))
+  const lines = turns.map(parseTranscriptLine).filter((l): l is TranscriptLine => l !== null)
   // Sew ids are decimal strings of any length: compare them as numbers.
   return lines.sort((a, b) => (a.id.length !== b.id.length ? a.id.length - b.id.length : a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 }

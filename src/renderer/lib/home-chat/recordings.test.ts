@@ -2,9 +2,14 @@
 // words, what counts as a transcript line, and that a page's lines never
 // join the timeline.
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+const cli = vi.hoisted(() => ({ get: vi.fn() }))
+vi.mock('@/lib/daemon-cli', () => ({ daemonCliGet: cli.get }))
+
+import type { ServerScope } from '@/kessel/server-scope'
 import { parseHomeChatMessage, parseHomeChatPage } from './api'
-import { canShowTranscript, parseRecordingSummary, parseTranscriptLine, recordingCardLine, transcriptRootOf } from './recordings'
+import { canShowTranscript, fetchHomeChatTranscript, parseRecordingSummary, parseTranscriptLine, recordingCardLine, transcriptRootOf } from './recordings'
 
 const summary = (over: Record<string, unknown> = {}) =>
   parseRecordingSummary({
@@ -84,5 +89,42 @@ describe('transcript lines (HR-10)', () => {
   it('a line names its speaker from transcript, else its author', () => {
     expect(parseTranscriptLine({ id: '51', author_id: '7', body: 'x', transcript: { speaker_id: '8', start_ms: 900 } })).toEqual({ id: '51', speaker: '8', text: 'x', startMs: 900 })
     expect(parseTranscriptLine({ id: '51', author_id: '7', body: 'x' })?.speaker).toBe('7')
+  })
+
+  it('a message with transcript is a line (its root the card); a plain message or a plain thread reply is not', () => {
+    expect(transcriptRootOf({ id: '51', thread_root_id: '50', transcript: { recording_id: '42' } })).toBe('50')
+    expect(transcriptRootOf({ id: '51', transcript: { recording_id: '42' } })).toBe('42')
+    // A person's reply in a Sew thread (from Sew's own app): no transcript, an ordinary message.
+    expect(transcriptRootOf({ id: '51', thread_root_id: '50' })).toBeNull()
+    expect(transcriptRootOf({ id: '52', reference: { kind: 'reply', message_id: '50' } })).toBeNull()
+    expect(transcriptRootOf({ id: '53' })).toBeNull()
+  })
+  it('a plain thread reply in a page stays on the timeline', () => {
+    const p = parseHomeChatPage({
+      page: {
+        items: [
+          { id: '49', channel_id: '900', body: 'hi' },
+          { id: '51', channel_id: '900', body: 'a reply from Sew', thread_root_id: '49' },
+          { id: '52', channel_id: '900', body: 'a turn', thread_root_id: '50', transcript: { recording_id: '42' } },
+        ],
+      },
+    })
+    expect(p.messages.map((m) => m.id)).toEqual(['49', '51'])
+    expect(p.messages[1].transcriptOf).toBeNull()
+  })
+  it("Show transcript reads only the card's turns, not a plain reply under it", async () => {
+    cli.get.mockResolvedValueOnce({
+      ok: true,
+      page: {
+        items: [
+          { id: '53', channel_id: '900', author_id: '8', body: 'second', thread_root_id: '50', transcript: { speaker_id: '8', start_ms: 900 } },
+          { id: '52', channel_id: '900', author_id: '7', body: 'nice call!', thread_root_id: '50' },
+          { id: '51', channel_id: '900', author_id: '7', body: 'first', thread_root_id: '50', transcript: { speaker_id: '7', start_ms: 0 } },
+        ],
+      },
+    })
+    const lines = await fetchHomeChatTranscript({} as ServerScope, '900', '50')
+    expect(cli.get).toHaveBeenCalledWith({}, 'home-chat/replies', { conv: '900', id: '50' })
+    expect(lines.map((l) => l.id)).toEqual(['51', '53'])
   })
 })

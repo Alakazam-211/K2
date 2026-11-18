@@ -111,11 +111,14 @@ pub struct PersonState {
     pub missed_counted: HashSet<String>,
 }
 
-/// A recording's transcript line (Sew S35 v2 §15.2): a reply under the
-/// recording card (`thread_root_id`), or a message that carries
-/// `transcript`. Kept off the timeline and out of every count (HR-10).
+/// A recording's transcript line (Sew S35 v2 §15.2): a message that carries
+/// `transcript` (Sew's TranscriptTurn, on every turn it posts, as a reply
+/// under the recording card). Kept off the timeline and out of every count
+/// (HR-10). A thread reply without `transcript` (a person replying in a Sew
+/// thread from Sew's own app) is an ordinary message: shown and counted
+/// (Home has no thread view yet, so it shows as a normal message).
 pub fn is_transcript_line(m: &Value) -> bool {
-    m["transcript"].is_object() || !m["thread_root_id"].is_null()
+    m["transcript"].is_object()
 }
 
 fn id_of(v: &Value) -> Option<String> {
@@ -353,7 +356,7 @@ impl PersonState {
                 let Some(cid) = id_of(&m["channel_id"]) else { return out };
                 if is_transcript_line(m) {
                     // A recording's transcript line (prd-home-call-recording-v1
-                    // HR-10): a reply under its recording card. It reaches the
+                    // HR-10): it carries `transcript`. It reaches the
                     // person's windows (Show transcript) but never moves the
                     // conversation's unread, its count or its last message
                     // (the row's preview never shows a transcript line).

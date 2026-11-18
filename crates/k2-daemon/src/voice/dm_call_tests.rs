@@ -653,8 +653,8 @@ fn a_dm_controls_read_says_dm_and_never_the_agent_line() {
     crate::home_chat::set_deps(None);
 }
 
-/// HR-10: a transcript line (a reply under the recording card) from the
-/// other person never adds to the DM's unread, its count or its last
+/// HR-10: a transcript line (a message that carries `transcript`, as a
+/// reply under the recording card or not) from the other person never adds to the DM's unread, its count or its last
 /// message (so the row's preview never shows one); the card itself makes
 /// the DM unread but counts nothing. The frame still reaches the windows.
 #[test]
@@ -672,7 +672,6 @@ fn a_transcript_line_never_counts_toward_the_dms_badge() {
     let lines = [
         json!({"id": "2002", "channel_id": "900", "author_id": "42", "body": "hello", "thread_root_id": "2001",
             "transcript": {"recording_id": "42", "speaker_id": "42", "start_ms": 0, "end_ms": 900}}),
-        json!({"id": "2003", "channel_id": "900", "author_id": "42", "body": "a reply only", "thread_root_id": "2001"}),
         json!({"id": "2004", "channel_id": "900", "author_id": "42", "body": "a turn only", "transcript": {"recording_id": "42"}}),
     ];
     for (i, line) in lines.into_iter().enumerate() {
@@ -687,4 +686,39 @@ fn a_transcript_line_never_counts_toward_the_dms_badge() {
     // An ordinary DM message from them still counts (Sew's HP-26 rule).
     st.apply_event("message_created", &json!({"message": {"id": "2005", "channel_id": "900", "author_id": "42", "body": "hi"}}), true);
     assert_eq!(st.convs["900"].mention_count, 1);
+}
+
+/// A plain thread reply (a person's reply in a Sew thread, written in Sew's
+/// own app: `thread_root_id`, no `transcript`) is an ordinary message, as
+/// before 0.46.15: on the timeline, counted, and the row's last message.
+/// Only a recording's transcript turn (Sew always puts `transcript` on one)
+/// is kept off, whether or not it names a thread root (HR-10).
+#[test]
+fn a_plain_thread_reply_shows_and_counts_like_any_message() {
+    let mut st = ringing_state();
+    let reply = json!({"id": "2003", "channel_id": "900", "author_id": "42", "body": "a reply only", "thread_root_id": "2001"});
+    assert!(!crate::home_chat::state::is_transcript_line(&reply), "a reply with no transcript is not a transcript line");
+    let f = st.apply_event("message_created", &json!({"message": reply}), true);
+    let kinds: Vec<&str> = f.iter().map(|x| x["type"].as_str().expect("a frame type")).collect();
+    assert_eq!(kinds, ["message", "summary_changed"], "shown, and the badge may move");
+    assert_eq!(f[0]["message"]["id"], "2003");
+    let c = &st.convs["900"];
+    assert!(c.unread, "the reply makes the DM unread");
+    assert_eq!((c.mention_count, c.unread_count), (1, Some(1)), "counted like any DM message");
+    assert_eq!(c.last_message_id.as_deref(), Some("2003"), "the row's preview may show the reply");
+
+    let turns = [
+        json!({"id": "2004", "channel_id": "900", "author_id": "42", "body": "a turn", "thread_root_id": "2001",
+            "transcript": {"recording_id": "42", "speaker_id": "42", "start_ms": 0, "end_ms": 900}}),
+        json!({"id": "2005", "channel_id": "900", "author_id": "42", "body": "a turn, no root", "transcript": {"recording_id": "42"}}),
+    ];
+    for (i, turn) in turns.into_iter().enumerate() {
+        assert!(crate::home_chat::state::is_transcript_line(&turn), "{i}: a message with transcript is a transcript line");
+        let f = st.apply_event("message_created", &json!({"message": turn}), true);
+        assert_eq!(f.len(), 1, "{i}: one frame, no summary_changed");
+        assert_eq!(f[0]["type"], "message", "{i}: Show transcript hears it");
+        let c = &st.convs["900"];
+        assert_eq!((c.mention_count, c.unread_count), (1, Some(1)), "{i}: a transcript turn is never counted");
+        assert_eq!(c.last_message_id.as_deref(), Some("2003"), "{i}: the preview stays the reply");
+    }
 }

@@ -9,7 +9,6 @@
 import type { SaveNoticeView } from '@/lib/editor/save-model/notices'
 import type { ConnectionState } from '@/lib/live-view/shared/notices'
 import type { LiveDocClose } from './live-doc-source'
-import { PRODUCT_NAME } from '@/lib/brand'
 
 export type LiveActionId =
   | 'retry'
@@ -81,7 +80,7 @@ export function declinedWords(c: { code?: string; message?: string }): string | 
     case 'secret':
       return `${LEAD}it looks like it holds a secret.`
     case 'generated':
-      return `${LEAD}${PRODUCT_NAME} writes it itself. Edit its source instead.`
+      return `${LEAD}it’s made from other files. Edit its source instead.`
     case 'not_a_text_doc':
       return `${LEAD}it isn’t text.`
     case 'too_large':

@@ -4,10 +4,11 @@ exit: 3
 --- stderr
 {"error":{"code":"owner_only","hint":"only the server's owner may do this — this agent isn't allowed to manage DNS — Settings → Network → Tunnel → Policies → \"Agents can change DNS records\", or Settings → Workspaces / Agents → <workspace> → Permissions → DNS → \"Let this agent manage DNS\"."}}
 --- requests
-> POST /cli/dns/records/add?token=passport-golden
+> POST /cli/dns/records/add
 > Host: 127.0.0.1:<PORT>
 > User-Agent: curl/<VERSION>
 > Accept: */*
+> Authorization: Bearer passport-golden
 > Content-Type: application/json
 > Content-Length: 75
 > body: {"domain": "example.com", "type": "A", "name": "www", "value": "192.0.2.1"}

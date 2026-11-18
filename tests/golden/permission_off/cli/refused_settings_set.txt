@@ -5,10 +5,11 @@ exit: 3
 Error: owner_only: only the server's owner may do this
 Server settings are the owner's: ask your human, or run it from a terminal outside a K2 agent session.
 --- requests
-> POST /cli/settings/update?token=passport-golden
+> POST /cli/settings/update
 > Host: 127.0.0.1:<PORT>
 > User-Agent: curl/<VERSION>
 > Accept: */*
+> Authorization: Bearer passport-golden
 > Content-Type: application/json
 > Content-Length: 23
 > body: {"computePreview":true}

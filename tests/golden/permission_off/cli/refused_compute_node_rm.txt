@@ -4,10 +4,11 @@ exit: 3
 --- stderr
 {"error": "owner_only", "hint": "only the server's owner may do this"}
 --- requests
-> POST /cli/compute/nodes/remove?token=passport-golden
+> POST /cli/compute/nodes/remove
 > Host: 127.0.0.1:<PORT>
 > User-Agent: curl/<VERSION>
 > Accept: */*
+> Authorization: Bearer passport-golden
 > Content-Type: application/json
 > Content-Length: 18
 > body: {"node": "mini-9"}

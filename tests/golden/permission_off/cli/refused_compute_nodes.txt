@@ -4,8 +4,9 @@ exit: 3
 --- stderr
 {"error": "owner_only", "hint": "only the server's owner may do this"}
 --- requests
-> GET /cli/compute/nodes?token=passport-golden
+> GET /cli/compute/nodes
 > Host: 127.0.0.1:<PORT>
 > User-Agent: curl/<VERSION>
 > Accept: */*
+> Authorization: Bearer passport-golden
 > body: 

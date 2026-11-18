@@ -101,12 +101,25 @@ fn page(
     let Some(page) = found else {
         return shell(who, args);
     };
+    if let Some(lead) = &page.lead {
+        // As `echo ... >&2` under `set -e`: a stderr that can't be written
+        // ends the run before the page.
+        if let Err(err) = out::write_flushed(&mut std::io::stderr().lock(), lead.as_bytes()) {
+            return out::after_stdout_error(&err);
+        }
+    }
     if page.stderr {
         // As `cat >&2`: a stderr that can't be written is not an error.
         let _ = out::write_flushed(&mut std::io::stderr().lock(), page.text.as_bytes());
         return page.exit;
     }
     print(&page.text, page.exit)
+}
+
+/// The arguments as words, when each is UTF-8 (the front routes only
+/// such command lines to a page).
+fn words(args: &[OsString]) -> Option<Vec<&str>> {
+    args.iter().map(|a| a.to_str()).collect()
 }
 
 fn main() {
@@ -144,6 +157,14 @@ fn main() {
         }),
         Route::Daily => page(who, &args, |p, env| {
             pages::daily_page(p, env, || passport::current(&args).would_refuse())
+        }),
+        Route::Composed(c) => page(who, &args, |p, env| {
+            let argv = words(&args)?;
+            pages::composed_page(c, &argv, p, env, || passport::current(&args).would_refuse())
+        }),
+        Route::Unknown => page(who, &args, |p, env| {
+            let argv = words(&args)?;
+            pages::unknown_page(&argv, p, env, || passport::current(&args).would_refuse())
         }),
         Route::Fallthrough => shell(who, &args),
     };

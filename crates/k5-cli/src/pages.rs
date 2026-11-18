@@ -16,7 +16,12 @@
 //! The daily tier of the help (`k2`, `k2 help`, `k2 --help`:
 //! [`daily_page`]) is two files with one line between them while
 //! permission cards are on, which the shell asks the daemon with a
-//! passport ([`crate::cards`]); its switch is [`DAILY_NATIVE`].
+//! passport ([`crate::cards`]); its switch is [`DAILY_NATIVE`]. The other
+//! help pages bash puts together ([`Composed`]: the same tier for `-h`
+//! and `help <word with no arm>`, the deprecated tier, chat's usage) have
+//! [`COMPOSED_NATIVE`]; the router's `*)` arm for a word it has no arm
+//! for ([`unknown_page`]: a retired verb's line, or `Unknown command` and
+//! the daily tier) has [`UNKNOWN_NATIVE`].
 //!
 //! `k2 study` (`cli/src/study-command.sh`): its arguments are read in
 //! order, as the shell reads them. The binary answers the list (`study`,
@@ -51,6 +56,8 @@ pub struct Page {
     pub text: Cow<'static, str>,
     pub stderr: bool,
     pub exit: Exit,
+    /// Written to stderr before `text` (the unknown command's line).
+    pub lead: Option<String>,
 }
 
 /// A `k2 study` command line the binary may answer.
@@ -310,6 +317,7 @@ pub fn study_page(
             .into(),
             stderr: true,
             exit: Exit::Usage,
+            lead: None,
         });
     }
     let text: Cow<'static, str> = match s {
@@ -328,6 +336,7 @@ pub fn study_page(
         text,
         stderr: false,
         exit: Exit::Ok,
+        lead: None,
     })
 }
 
@@ -336,9 +345,13 @@ pub fn study_page(
 /// pass it with `HOOK_SOCK` set. A family's own help may not be: its
 /// tool may be an `id` tool ([`session_checks`]).
 pub fn open_tool(form: &HelpForm) -> bool {
-    form.argv
-        .first()
-        .is_some_and(|w| ["help", "--help", "-h"].contains(w) || w.starts_with("help-"))
+    open_words(form.argv)
+}
+
+/// [`open_tool`] for a command line's words.
+pub fn open_words(argv: &[&str]) -> bool {
+    argv.first()
+        .is_some_and(|w| HELP_FIRST.contains(w) || w.starts_with("help-"))
 }
 
 /// Lines on stderr, then exit 3: how a session check stops a command.
@@ -352,6 +365,7 @@ fn refused(lines: &[String]) -> Page {
         text: text.into(),
         stderr: true,
         exit: Exit::Refused,
+        lead: None,
     }
 }
 
@@ -435,6 +449,7 @@ pub fn help_page(
         text: text::help(form.page)?.into(),
         stderr: form.stderr,
         exit,
+        lead: None,
     })
 }
 
@@ -443,7 +458,7 @@ pub fn help_page(
 /// types: `k2` alone, `k2 help` and `k2 --help`. `tests/cli/help_native.sh`
 /// proves from bash's own trace that bash does nothing else for them
 /// but the cards probe. `-h`, an empty word and `help <word>` for a word
-/// with no page of its own print the same tier, and stay the shell's.
+/// `cmd_help` has no arm for print the same tier: [`Composed::Daily`].
 pub const DAILY_FORMS: &[&[&str]] = &[&[], &["help"], &["--help"]];
 
 /// The daily tier for [`DAILY_FORMS`]. True: the binary asks the daemon
@@ -495,6 +510,225 @@ pub fn daily_page(p: &Prelude, env: &Env, would_refuse: impl FnOnce() -> bool) -
         text: daily_text(on)?.into(),
         stderr: false,
         exit: Exit::Ok,
+        lead: None,
+    })
+}
+
+/// The words the router sends to `cmd_help` (`help|--help|-h)`).
+pub const HELP_FIRST: &[&str] = &["help", "--help", "-h"];
+
+/// The words `cmd_help` (`cli/src/wiki.sh`) has an arm for, in its order,
+/// but `''` and `*`, which print the daily tier. `help <word>` for any
+/// other word prints the daily tier too.
+pub const HELP_WORDS: &[&str] = &[
+    "-a",
+    "--advanced",
+    "advanced",
+    "--internal",
+    "internal",
+    "msg",
+    "thread",
+    "browser",
+    "whoami",
+    "setup",
+    "talk",
+    "read",
+    "inbox",
+    "agent",
+    "preset",
+    "sidecar",
+    "compute",
+    "ci",
+    "changes",
+    "sim",
+    "hostchat",
+    "chat",
+    "sources",
+    "source",
+    "llm",
+    "usage",
+    "vault",
+    "job",
+    "jobs",
+    "feedback",
+    "tickets",
+    "mail",
+    "calendar",
+    "cal",
+    "db",
+    "store",
+    "board",
+    "dns",
+    "domain",
+    "cert",
+    "project",
+    "workspace",
+    "skills",
+    "settings",
+    "heartbeat",
+    "wiki",
+    "zen",
+    "publish",
+    "connect",
+    "users",
+    "remote-session",
+    "study",
+    "explain",
+    "capabilities",
+    "deprecated",
+    "--deprecated",
+];
+
+/// A help page bash puts together from pieces, besides [`DAILY_FORMS`]
+/// (`tests/cli/help_native.sh` proves each from bash's trace).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Composed {
+    /// `-h`, an empty word, and `help`, `--help` or `-h` with one word
+    /// `cmd_help` has no arm for (an empty one too): the daily tier, as
+    /// [`daily_page`] prints it.
+    Daily,
+    /// `help`, `--help` or `-h` with `deprecated` or `--deprecated`, and
+    /// `help-deprecated` (`cmd_help_deprecated`): `_deprecated.txt`, the
+    /// retired verbs' map ([`crate::retired::map`]), `_deprecated-end.txt`.
+    Deprecated,
+    /// `chat`, `chat --help`, `chat -h`, `chat help`, and `help`, `--help`
+    /// or `-h` with `chat` (`_chat_usage`): `chat/_head.txt`,
+    /// `chat/_manage.txt` unless `_CHAT_HELP_MANAGE` is set to something
+    /// other than `1`, `chat/_end.txt`. `chat` is an `id` tool: with
+    /// `HOOK_SOCK` set its own forms run the session checks first.
+    Chat,
+}
+
+/// The pages of [`Composed`]. True: the binary prints them as bash puts
+/// them together. False: the shell answers them.
+pub const COMPOSED_NATIVE: bool = false;
+
+/// The setting `_chat_usage` reads: `${_CHAT_HELP_MANAGE:-1}` is `1` for
+/// the manage piece.
+pub const CHAT_MANAGE: &str = "_CHAT_HELP_MANAGE";
+
+/// The composed page `args` (the words after the program's name) is.
+pub fn composed(args: &[&str]) -> Option<Composed> {
+    match args {
+        ["-h"] | [""] => Some(Composed::Daily),
+        ["help-deprecated"] => Some(Composed::Deprecated),
+        ["chat"] | ["chat", "--help" | "-h" | "help"] => Some(Composed::Chat),
+        [first, word] if HELP_FIRST.contains(first) => match *word {
+            "deprecated" | "--deprecated" => Some(Composed::Deprecated),
+            "chat" => Some(Composed::Chat),
+            w if HELP_WORDS.contains(&w) => None,
+            _ => Some(Composed::Daily),
+        },
+        _ => None,
+    }
+}
+
+/// `cmd_help_deprecated`: the deprecated tier.
+pub fn deprecated_text() -> Option<String> {
+    let (head, end) = (text::help("_deprecated")?, text::help("_deprecated-end")?);
+    Some(format!("{head}{}{end}", crate::retired::map()))
+}
+
+/// `_chat_usage` in `env`.
+pub fn chat_text(env: &Env) -> Option<String> {
+    let manage = env
+        .get(CHAT_MANAGE)
+        .is_none_or(|v| v.is_empty() || v == "1");
+    let mut out = text::help("chat/_head")?.to_string();
+    if manage {
+        out.push_str(text::help("chat/_manage")?);
+    }
+    out.push_str(text::help("chat/_end")?);
+    Some(out)
+}
+
+/// A [`Composed`] page for `argv`, or `None` when the shell answers. The
+/// connection gate needs a port and a token (the shell skips it for some
+/// of chat's forms; the binary hands those over). The daily tier asks
+/// whether permission cards are on as [`daily_page`] does.
+pub fn composed_page(
+    c: Composed,
+    argv: &[&str],
+    p: &Prelude,
+    env: &Env,
+    would_refuse: impl FnOnce() -> bool,
+) -> Option<Page> {
+    if !COMPOSED_NATIVE || !(p.port && p.token) {
+        return None;
+    }
+    let text = match c {
+        Composed::Daily => daily_text(cards::on(cards::ask(env, p, would_refuse)?))?,
+        Composed::Deprecated => deprecated_text()?,
+        Composed::Chat => {
+            if p.hook_sock && !open_words(argv) {
+                if let Some(stop) = session_checks(argv, p, env, would_refuse)? {
+                    return Some(stop);
+                }
+            }
+            chat_text(env)?
+        }
+    };
+    Some(Page {
+        text: text.into(),
+        stderr: false,
+        exit: Exit::Ok,
+        lead: None,
+    })
+}
+
+/// The unknown command (the router's `*)` arm): when the binary prints
+/// it itself. True: a word the router has no arm for is a retired verb's
+/// line, or `Unknown command: <word>` and the daily tier, as
+/// [`unknown_page`] says. False: the shell answers it.
+pub const UNKNOWN_NATIVE: bool = false;
+
+/// The router's `*)` arm for `argv`, whose first word has no arm
+/// ([`crate::route::TABLE`]), or `None` when the shell answers:
+///
+/// ```text
+/// _retired_verb_exit "$1 ${2:-}"
+/// _retired_verb_exit "$1"
+/// echo "Unknown command: $1" >&2
+/// cmd_help
+/// exit 1
+/// ```
+///
+/// A retired verb ([`crate::retired`]) is its one line on stderr, exit 1.
+/// Any other word is its line on stderr, then the daily tier (the cards
+/// probe as [`daily_page`] asks it), exit 1. The connection gate needs a
+/// port and a token (and with a token the virtual desktop's guard
+/// passes). With `HOOK_SOCK` set, a word whose tool is an `id` tool (the
+/// tool table names a few words the router has no arm for) runs the
+/// session checks first: those go to the shell.
+pub fn unknown_page(
+    argv: &[&str],
+    p: &Prelude,
+    env: &Env,
+    would_refuse: impl FnOnce() -> bool,
+) -> Option<Page> {
+    let (verb, sub) = (*argv.first()?, argv.get(1).copied().unwrap_or(""));
+    if !UNKNOWN_NATIVE || verb.is_empty() || !(p.port && p.token) {
+        return None;
+    }
+    if p.hook_sock
+        && (tools::is_id(tools::tool_id(verb, "")) || tools::is_id(tools::tool_id(verb, sub)))
+    {
+        return None;
+    }
+    if let Some((key, new)) = crate::retired::lookup(verb, sub) {
+        return Some(Page {
+            text: crate::retired::line(&key, new).into(),
+            stderr: true,
+            exit: Exit::Error,
+            lead: None,
+        });
+    }
+    let on = cards::on(cards::ask(env, p, would_refuse)?);
+    Some(Page {
+        text: daily_text(on)?.into(),
+        stderr: false,
+        exit: Exit::Error,
+        lead: Some(format!("Unknown command: {verb}\n")),
     })
 }
 
@@ -965,5 +1199,349 @@ mod tests {
         ] {
             assert_eq!(daily_page(&no, &env, never), None, "{no:?}");
         }
+    }
+
+    /// `cli/k2`, the script the shell runs.
+    fn script() -> String {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
+        std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
+    }
+
+    /// Each function these pages stand for is defined once in the script
+    /// (a second definition would win).
+    #[test]
+    fn each_function_is_defined_once() {
+        let k2 = script();
+        for f in [
+            "cmd_help",
+            "cmd_help_v2_daily",
+            "cmd_help_deprecated",
+            "cmd_chat",
+            "_chat_usage",
+            "_retired_verb_exit",
+            "_retired_verbs_map",
+        ] {
+            let def = format!("\n{f}() {{\n");
+            assert_eq!(
+                k2.matches(&def).count(),
+                1,
+                "{f} is defined other than once"
+            );
+        }
+    }
+
+    /// [`HELP_WORDS`] is `cmd_help`'s arms, in order; `''` and `*` print
+    /// the daily tier.
+    #[test]
+    fn the_help_words_are_cmd_help_s_arms() {
+        let wiki = src("wiki.sh");
+        let start = wiki.find("cmd_help() {\n").expect("cmd_help in wiki.sh");
+        let body = &wiki[start..];
+        let case = body
+            .find("    case \"${1:-}\" in\n")
+            .expect("cmd_help's case");
+        let end = body[case..].find("\n    esac\n").expect("cmd_help's esac") + case;
+        let mut words = Vec::new();
+        let mut daily = Vec::new();
+        for line in body[case..end].lines().skip(1) {
+            let arm = line
+                .strip_prefix("        ")
+                .unwrap_or_else(|| panic!("not an arm: {line:?}"));
+            let (pats, rest) = arm.split_once(')').unwrap_or_else(|| panic!("{line:?}"));
+            let call = rest
+                .trim()
+                .strip_suffix(";;")
+                .unwrap_or_else(|| panic!("{line:?}"))
+                .trim();
+            for w in pats.split('|') {
+                if w == "''" || w == "*" {
+                    daily.push((w.to_string(), call.to_string()));
+                } else {
+                    assert!(
+                        !w.contains(['"', '\'', '*', '?', '[', '$']),
+                        "a pattern: {w:?}"
+                    );
+                    words.push(w.to_string());
+                }
+            }
+        }
+        assert_eq!(words, HELP_WORDS, "cmd_help's arms moved");
+        assert_eq!(
+            daily,
+            [
+                ("''".to_string(), "cmd_help_v2_daily".to_string()),
+                ("*".to_string(), "cmd_help_v2_daily".to_string())
+            ]
+        );
+        for (word, call) in [
+            ("deprecated|--deprecated)  ", "cmd_help_deprecated ;;"),
+            ("chat)                     ", "_chat_usage ;;"),
+        ] {
+            assert!(
+                body[case..end].contains(&format!("        {word}{call}\n")),
+                "{word}{call}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_composed_forms() {
+        for daily in [
+            &["-h"][..],
+            &[""],
+            &["help", "nope"],
+            &["--help", ""],
+            &["-h", "--json"],
+            &["help", "HELP"],
+            &["help", "app"],
+        ] {
+            assert_eq!(composed(daily), Some(Composed::Daily), "{daily:?}");
+        }
+        for first in HELP_FIRST {
+            for word in HELP_WORDS {
+                let want = match *word {
+                    "deprecated" | "--deprecated" => Some(Composed::Deprecated),
+                    "chat" => Some(Composed::Chat),
+                    _ => None,
+                };
+                assert_eq!(composed(&[first, word]), want, "{first} {word}");
+            }
+        }
+        assert_eq!(composed(&["help-deprecated"]), Some(Composed::Deprecated));
+        for chat in [
+            &["chat"][..],
+            &["chat", "-h"],
+            &["chat", "--help"],
+            &["chat", "help"],
+        ] {
+            assert_eq!(composed(chat), Some(Composed::Chat), "{chat:?}");
+        }
+        for none in [
+            &[][..],
+            &["help"],
+            &["--help"],
+            &["help", "mail"],
+            &["help", "nope", "x"],
+            &["chat", "x"],
+            &["chat", "--help", "x"],
+            &["", "x"],
+            &["help-deprecated", "x"],
+            &["deprecated"],
+        ] {
+            assert_eq!(composed(none), None, "{none:?}");
+        }
+    }
+
+    /// The deprecated tier and chat's usage, as bash puts them together.
+    #[test]
+    fn the_pieces_are_the_shell_s() {
+        let deprecated = "cmd_help_deprecated() {\n    cat <<'EOF'\n%include cli/text/help/_deprecated.txt\nEOF\n    _retired_verbs_map\n    cat <<'EOF'\n%include cli/text/help/_deprecated-end.txt\nEOF\n}\n";
+        assert!(
+            src("agent-context.sh").contains(deprecated),
+            "cmd_help_deprecated moved"
+        );
+        assert_eq!(
+            deprecated_text().unwrap(),
+            format!(
+                "{}{}{}",
+                text::help("_deprecated").unwrap(),
+                crate::retired::map(),
+                text::help("_deprecated-end").unwrap()
+            )
+        );
+        let router = src("router.sh");
+        assert!(router.contains("    help-deprecated)\n        cmd_help_deprecated\n        ;;\n"));
+        let chat = src("chat.sh");
+        assert!(chat.contains(&format!(
+            "_chat_usage() {{\n    cat <<'EOF'\n%include cli/text/help/chat/_head.txt\nEOF\n    if [ \"${{{CHAT_MANAGE}:-1}}\" = \"1\" ]; then\n        cat <<'EOF'\n%include cli/text/help/chat/_manage.txt\nEOF\n    fi\n    cat <<'EOF'\n%include cli/text/help/chat/_end.txt\nEOF\n}}\n"
+        )));
+        assert!(chat.contains(
+            "cmd_chat() {\n    if [ $# -eq 0 ]; then _chat_usage; return 0; fi\n    local sub=\"$1\"; shift\n    case \"$sub\" in\n        -h|--help|help) _chat_usage; return 0 ;;\n    esac\n"
+        ));
+        assert!(router.contains("    chat)\n        # Sew chat inside Spaces, for agents (Sew S30 K21).\n        shift; cmd_chat \"$@\"\n        ;;\n"));
+        let (head, manage, end) = (
+            text::help("chat/_head").unwrap(),
+            text::help("chat/_manage").unwrap(),
+            text::help("chat/_end").unwrap(),
+        );
+        let with = format!("{head}{manage}{end}");
+        let without = format!("{head}{end}");
+        for (pairs, want) in [
+            (&[][..], &with),
+            (&[(CHAT_MANAGE, "1")], &with),
+            (&[(CHAT_MANAGE, "")], &with),
+            (&[(CHAT_MANAGE, "0")], &without),
+            (&[(CHAT_MANAGE, " 1")], &without),
+        ] {
+            assert_eq!(&chat_text(&Env::of(pairs)).unwrap(), want, "{pairs:?}");
+        }
+        assert!(
+            !tools::is_id(tools::tool_id("help", "chat"))
+                && tools::is_id(tools::tool_id("chat", ""))
+        );
+    }
+
+    /// The router's `*)` arm, as [`unknown_page`] answers it.
+    #[test]
+    fn the_unknown_command_is_the_router_s_arm() {
+        let router = src("router.sh");
+        assert!(router.contains(
+            "    *)\n        _retired_verb_exit \"$1 ${2:-}\"\n        _retired_verb_exit \"$1\"\n        echo \"Unknown command: $1\" >&2\n        cmd_help\n        exit 1\n        ;;\nesac\n"
+        ), "the router's *) arm moved");
+        assert_eq!(Exit::Error.code(), 1);
+    }
+
+    /// Every word the prelude's gates read as the first word
+    /// (`cli-tools-policy.sh`, before `BASE_URL`) is a router word, so a
+    /// word the router has no arm for reaches none of them: the gates do
+    /// the same for it as for `help`, but for the virtual desktop's
+    /// guard, which a token passes.
+    #[test]
+    fn the_gates_read_no_word_the_router_lacks() {
+        let policy = src("cli-tools-policy.sh");
+        let start = policy
+            .find("_skip_conn_gate=0\n")
+            .expect("the gates' start");
+        let end = policy
+            .find("\nBASE_URL=\"http://${HOST}:${PORT}\"\n")
+            .expect("BASE_URL");
+        let gates = &policy[start..end];
+        let mut words = std::collections::BTreeSet::new();
+        for (at, _) in gates.match_indices("\"${1:-}\" = \"") {
+            let rest = &gates[at + "\"${1:-}\" = \"".len()..];
+            words.insert(rest[..rest.find('"').unwrap()].to_string());
+        }
+        // The arms of each `case "${1:-}" in` there.
+        let mut rest = gates;
+        while let Some(at) = rest.find("case \"${1:-}\" in") {
+            let block = &rest[at..];
+            let first = block.lines().next().unwrap();
+            if first.ends_with(" esac") {
+                // On one line: the guard's, checked below.
+                rest = &block[first.len()..];
+                continue;
+            }
+            let prefix = rest[..at].rsplit('\n').next().unwrap();
+            assert!(prefix.bytes().all(|b| b == b' '), "a case after {prefix:?}");
+            let indent = prefix.len();
+            let esac = block
+                .find(&format!("\n{}esac\n", " ".repeat(indent)))
+                .expect("the case's esac");
+            for line in block[..esac].lines().skip(1) {
+                let Some(arm) = line.strip_prefix(&" ".repeat(indent + 4)) else {
+                    continue;
+                };
+                if arm.starts_with(' ') || arm.starts_with('#') {
+                    continue;
+                }
+                let Some((pats, _)) = arm.split_once(')') else {
+                    continue;
+                };
+                for w in pats.split('|') {
+                    words.insert(w.trim_matches('"').to_string());
+                }
+            }
+            rest = &block[esac..];
+        }
+        assert!(words.len() > 30, "only read {words:?}");
+        let known: Vec<&str> = crate::route::TABLE
+            .iter()
+            .flat_map(|n| n.words.iter().copied())
+            .collect();
+        for w in &words {
+            assert!(
+                w.is_empty() || known.contains(&w.as_str()),
+                "the gates read {w:?}, which the router has no arm for"
+            );
+        }
+        // The guard's offline words: `help` and the like, never a word the
+        // router lacks.
+        assert!(gates.contains(
+            "case \"${1:-}\" in \"\"|study|help|--help|-h|--schema|version|--version) _k2_offline_verb=1 ;; esac\n"
+        ));
+    }
+
+    #[test]
+    fn the_switches_decide() {
+        let env = Env::of(&[("HOME", "/nonexistent/k5-composed")]);
+        let never = || -> bool { panic!("nothing is asked") };
+        let owner = prelude(true, true, false, false);
+        let tier = composed_page(Composed::Daily, &["-h"], &owner, &env, never);
+        let deprecated = composed_page(
+            Composed::Deprecated,
+            &["help-deprecated"],
+            &owner,
+            &env,
+            never,
+        );
+        let chat = composed_page(Composed::Chat, &["chat"], &owner, &env, never);
+        let unknown = unknown_page(&["nope"], &owner, &env, never);
+        let retired = unknown_page(&["who"], &owner, &env, never);
+        if COMPOSED_NATIVE {
+            let page = |text: String| {
+                Some(Page {
+                    text: text.into(),
+                    stderr: false,
+                    exit: Exit::Ok,
+                    lead: None,
+                })
+            };
+            assert_eq!(tier, page(daily_text(false).unwrap()));
+            assert_eq!(deprecated, page(deprecated_text().unwrap()));
+            assert_eq!(chat, page(chat_text(&env).unwrap()));
+        } else {
+            assert_eq!((tier, deprecated, chat), (None, None, None));
+        }
+        if UNKNOWN_NATIVE {
+            assert_eq!(
+                unknown,
+                Some(Page {
+                    text: daily_text(false).unwrap().into(),
+                    stderr: false,
+                    exit: Exit::Error,
+                    lead: Some("Unknown command: nope\n".to_string()),
+                })
+            );
+            assert_eq!(
+                retired,
+                Some(Page {
+                    text: "Error: 'who' is retired. Use instead: k2 connections list\n".into(),
+                    stderr: true,
+                    exit: Exit::Error,
+                    lead: None,
+                })
+            );
+        } else {
+            assert_eq!((unknown, retired), (None, None));
+        }
+        // No port or no token: the gate's, always.
+        for no in [
+            prelude(false, true, false, false),
+            prelude(true, false, false, false),
+        ] {
+            assert_eq!(
+                composed_page(Composed::Deprecated, &["help-deprecated"], &no, &env, never),
+                None
+            );
+            assert_eq!(unknown_page(&["who"], &no, &env, never), None);
+        }
+        // HOOK_SOCK set and a word whose tool is an id tool: the shell's
+        // session checks.
+        let sock = prelude(true, true, true, true);
+        assert!(tools::is_id(tools::tool_id("fs", "")));
+        assert!(
+            !crate::route::TABLE.iter().any(|n| n.names("fs")),
+            "fs has an arm now"
+        );
+        assert_eq!(unknown_page(&["fs"], &sock, &env, never), None);
+        assert_eq!(
+            unknown_page(
+                &["nope", "x"],
+                &prelude(true, true, false, true),
+                &env,
+                never
+            ),
+            unknown_page(&["nope", "x"], &owner, &env, never)
+        );
     }
 }

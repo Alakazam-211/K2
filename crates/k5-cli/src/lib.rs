@@ -58,6 +58,8 @@
 //!   is and whether it needs the session's own passport.
 //! - [`python`]: whether the shell has a Python 3 to run, and whether a
 //!   native command runs without one.
+//! - [`retired`]: the shell's table of retired verbs, for the line a
+//!   retired verb gets and the deprecated tier of the help.
 
 pub mod called_as;
 pub mod cards;
@@ -77,6 +79,7 @@ pub mod pages;
 pub mod passport;
 pub mod prelude;
 pub mod python;
+pub mod retired;
 pub mod route;
 pub mod text;
 pub mod tools;

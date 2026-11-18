@@ -19,12 +19,15 @@
 //!
 //! A study page ([`Route::Study`], when the `study` row is `Native`), a
 //! help form the shell only prints a file for ([`Route::Help`],
-//! [`help_route`]) and the daily tier of the help (`k2`, `k2 help`,
-//! `k2 --help`: [`Route::Daily`]) are pages: the binary prints them when
-//! the shell's environment lets it ([`crate::pages`]), and hands them
+//! [`help_route`]), the daily tier of the help (`k2`, `k2 help`,
+//! `k2 --help`: [`Route::Daily`]), the other help pages bash puts
+//! together from pieces ([`Route::Composed`]) and a first word the router
+//! has no arm for ([`Route::Unknown`]: a retired verb's line, or
+//! `Unknown command` and the daily tier) are pages: the binary prints them
+//! when the shell's environment lets it ([`crate::pages`]), and hands them
 //! over otherwise.
 
-use crate::pages::{self, Study};
+use crate::pages::{self, Composed, Study};
 use crate::route::{self, Noun, Owner};
 use crate::text::{self, HelpForm};
 use std::ffi::OsString;
@@ -80,6 +83,10 @@ pub enum Route {
     /// `k2`, `k2 help` or `k2 --help`: the daily tier of the help
     /// ([`pages::daily_page`]).
     Daily,
+    /// A help page bash puts together from pieces ([`pages::composed`]).
+    Composed(Composed),
+    /// A first word the router has no arm for ([`pages::unknown_page`]).
+    Unknown,
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
@@ -93,7 +100,23 @@ pub fn route(args: &[OsString]) -> Route {
         // tier and a help form the shell only prints a file for are
         // pages.
         _ if daily_route(args) => Route::Daily,
-        _ => help_route(args).map_or(Route::Fallthrough, Route::Help),
+        (_, noun) => {
+            let words: Option<Vec<&str>> = args.iter().map(|a| a.to_str()).collect();
+            let Some(words) = words else {
+                return Route::Fallthrough;
+            };
+            if let Some(c) = pages::composed(&words) {
+                return Route::Composed(c);
+            }
+            if let Some(form) = text::help_form(&words) {
+                return Route::Help(form);
+            }
+            // The router's `*)` arm: a first word no row names.
+            if noun.is_none() && words.first().is_some_and(|w| !w.is_empty()) {
+                return Route::Unknown;
+            }
+            Route::Fallthrough
+        }
     }
 }
 
@@ -208,8 +231,14 @@ mod tests {
             &[""],
         ];
         for row in rows {
-            assert_eq!(route(&args(row)), Route::Fallthrough, "{row:?}");
+            let r = route(&args(row));
+            assert!(
+                !matches!(r, Route::Version | Route::VersionCheck),
+                "{row:?}: {r:?}"
+            );
         }
+        assert_eq!(route(&args(&["--version", "--json"])), Route::Fallthrough);
+        assert_eq!(route(&args(&["-V"])), Route::Unknown, "no row has -V");
     }
 
     /// `k2`, `k2 help` and `k2 --help` are the daily tier; the other
@@ -219,14 +248,24 @@ mod tests {
         for daily in [&[][..], &["help"], &["--help"]] {
             assert_eq!(route(&args(daily)), Route::Daily, "{daily:?}");
         }
+        // The other forms that print the tier are composed pages.
         for other in [
             &["-h"][..],
             &[""],
             &["help", "nope"],
             &["--help", "nope"],
+            &["-h", "nope"],
             &["help", ""],
+            &["help", "app"],
         ] {
-            assert_eq!(route(&args(other)), Route::Fallthrough, "{other:?}");
+            assert_eq!(
+                route(&args(other)),
+                Route::Composed(Composed::Daily),
+                "{other:?}"
+            );
+        }
+        for shell in [&["help", "nope", "x"][..], &["", "x"], &["-h", "-h", "x"]] {
+            assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
         }
         assert_eq!(
             route(&args(&["help", "mail"])),
@@ -307,7 +346,7 @@ mod tests {
         ] {
             assert_eq!(route(&args(line)), Route::Fallthrough, "{line:?}");
         }
-        assert_eq!(route(&args(&["Whoami"])), Route::Fallthrough);
+        assert_eq!(route(&args(&["Whoami"])), Route::Unknown);
     }
 
     /// `done`'s front code: any `-h` or `--help` word goes to the shell,
@@ -600,12 +639,13 @@ mod tests {
         // A native row keeps its own help; anything not exactly a form is
         // the shell's.
         assert_eq!(route(&args(&["cli", "--help"])), Route::CliHelp);
-        // The daily tier's forms are [`Route::Daily`] (the_daily_forms).
+        // The daily tier's forms are [`Route::Daily`] (the_daily_forms),
+        // the pieces' pages [`Route::Composed`] (the_composed_forms).
         for shell in [
-            &["-h"][..],
-            &["mail", "send", "x", "--help"],
-            &["help", "nope"],
-            &["chat", "--help"],
+            &["mail", "send", "x", "--help"][..],
+            &["help", "mail", "send"],
+            &["chat", "--help", "x"],
+            &["app", "--help"],
         ] {
             assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
         }
@@ -616,6 +656,78 @@ mod tests {
                 "{:?}",
                 form.argv
             );
+        }
+    }
+
+    #[test]
+    fn the_composed_forms() {
+        for (line, want) in [
+            (&["help-deprecated"][..], Composed::Deprecated),
+            (&["help", "deprecated"], Composed::Deprecated),
+            (&["--help", "--deprecated"], Composed::Deprecated),
+            (&["-h", "deprecated"], Composed::Deprecated),
+            (&["chat"], Composed::Chat),
+            (&["chat", "--help"], Composed::Chat),
+            (&["chat", "-h"], Composed::Chat),
+            (&["chat", "help"], Composed::Chat),
+            (&["help", "chat"], Composed::Chat),
+            (&["-h", "chat"], Composed::Chat),
+        ] {
+            assert_eq!(route(&args(line)), Route::Composed(want), "{line:?}");
+        }
+        // `cmd_help`'s other words are files or the shell's.
+        for word in pages::HELP_WORDS {
+            for first in pages::HELP_FIRST {
+                let r = route(&args(&[first, word]));
+                assert!(
+                    !matches!(r, Route::Composed(Composed::Daily) | Route::Unknown),
+                    "{first} {word}: {r:?}"
+                );
+            }
+        }
+    }
+
+    /// A first word the router has no arm for is the `*)` arm's; every
+    /// word it has an arm for is never (so a typo never reaches a real
+    /// verb, and a real verb never gets the unknown command's answer).
+    #[test]
+    fn the_unknown_forms() {
+        for line in [
+            &["nope"][..],
+            &["nope", "x", "--help"],
+            &["Help"],
+            &["--nope"],
+            &["-x"],
+            &["who"],
+            &["agents", "create"],
+            &["work", "move", "x"],
+            &["a b"],
+        ] {
+            assert_eq!(route(&args(line)), Route::Unknown, "{line:?}");
+        }
+        for noun in route::TABLE {
+            for word in noun.words {
+                for line in [&[*word][..], &[*word, "nope"], &[*word, "--help"]] {
+                    assert_ne!(route(&args(line)), Route::Unknown, "{line:?}");
+                }
+            }
+        }
+        // Every retired verb is the `*)` arm's, but for the `agent` arm's
+        // own (`agent create`), which that arm answers.
+        for (key, _) in crate::retired::TABLE {
+            let words: Vec<&str> = key.split(' ').collect();
+            let r = route(&args(&words));
+            if route::TABLE.iter().any(|n| n.names(words[0])) {
+                assert_ne!(r, Route::Unknown, "{key}");
+            } else {
+                assert_eq!(r, Route::Unknown, "{key}");
+            }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let odd = vec![OsString::from("nope"), OsString::from_vec(vec![0xff])];
+            assert_eq!(route(&odd), Route::Fallthrough);
         }
     }
 

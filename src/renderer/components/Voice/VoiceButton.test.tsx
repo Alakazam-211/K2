@@ -125,6 +125,8 @@ import { RoomCallBand } from './CallPlace'
 import { voice } from '@/stores/voice'
 import { overlayClaims } from '@/lib/browser-overlay'
 import { FrostCapsule, expectOnPopoverLayer } from '@/test-utils/popover-layer'
+import { CALL_PANEL_BUTTON } from './CallControls'
+import { CALL_PANEL_ROW_WIDTH, VOICE_POPOVER_WIDTH, callPanelRowWidth } from './call-panel-fit'
 
 function entry(hostKey: string, patch: Partial<HostEntry> = {}, features = ['voice-rooms-v1']): HostEntry {
   return {
@@ -582,6 +584,33 @@ describe('video in the call (videoRoomsPreview)', () => {
     fireEvent.click(within(tile).getByTestId('call-overlay-leave'))
     await waitFor(() => expect(screen.queryByTestId('call-tile')).toBeNull())
     expect(voice.store.getState().call).toBeNull()
+  })
+
+  it('video on and Record shown: the call row fits the list, Leave call last; Choose screen folds into Share screen', async () => {
+    h.videoPreview = true
+    await inCall()
+    await screen.findByTestId('video-camera')
+    act(() => {
+      const c = voice.store.getState().call!
+      voice.store.setState({ call: { ...c, recordingControls: { canRecord: true, canStop: false } } })
+    })
+    const rowOf = (): HTMLElement[] => Array.from(screen.getByTestId('voice-call-controls').children) as HTMLElement[]
+    await waitFor(() => expect(screen.queryByTestId('voice-record')).not.toBeNull())
+    const ids = rowOf().map((b) => b.dataset.testid)
+    expect(ids).toEqual(['voice-mute', 'voice-deafen', 'voice-noise', 'video-camera', 'video-screen', 'voice-record', 'voice-leave'])
+    expect(callPanelRowWidth(ids.length, CALL_PANEL_BUTTON)).toBeLessThanOrEqual(CALL_PANEL_ROW_WIDTH)
+    expect(screen.getByTestId('voice-popover').style.width).toBe(`${VOICE_POPOVER_WIDTH}px`)
+    // This OS only lists what can be shared: Share screen opens that list.
+    fireEvent.click(screen.getByTestId('video-screen'))
+    expect(await screen.findByTestId('video-screen-picker')).toBeTruthy()
+    // Recording: Stop in Record's place, still in full.
+    act(() => {
+      const c = voice.store.getState().call!
+      voice.store.setState({ call: { ...c, recordingControls: { canRecord: false, canStop: true } } })
+    })
+    await waitFor(() => expect(rowOf().at(-2)?.dataset.testid).toBe('voice-stop-recording'))
+    expect(rowOf().at(-1)?.dataset.testid).toBe('voice-leave')
+    expect(rowOf()).toHaveLength(7)
   })
 
   it('the wave button: noise removal on by default, one tap turns it off live, in step with Settings → Voice', async () => {

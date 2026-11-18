@@ -24,8 +24,9 @@ import { VoiceChatOnlyChip } from './VoiceChatOnlyChip'
  *  half way, so they wait. */
 const JOINING_WAIT = 'Joining… wait a moment'
 import { video } from '@/stores/video'
-import { CameraPicker, ScreenPicker, VideoCallButtons, VideoNoticeLine } from './VideoControls'
-import { CALL_PANEL_ICON, CallPanelButton, RECORD_LABEL, STOP_RECORDING_LABEL, noiseRemovalLabel } from './CallControls'
+import { CameraPicker, ScreenPicker, VideoCallButtons, VideoNoticeLine, useVideoCallButtonIds } from './VideoControls'
+import { CALL_PANEL_BUTTON, CALL_PANEL_ICON, CallPanelButton, RECORD_LABEL, STOP_RECORDING_LABEL, noiseRemovalLabel } from './CallControls'
+import { VOICE_POPOVER_WIDTH, callPanelFolds, type CallPanelButtonId } from './call-panel-fit'
 import { recordingButtons } from '@/lib/voice/recording-controls'
 import { HeadphonesIcon, MicIcon, MicOffIcon, NoiseWaveIcon, PhoneOffIcon, RecordIcon, StopRecordIcon } from '@/components/icons/K2Icons'
 
@@ -85,6 +86,17 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
   // Deafen mutes too (the store sets `muted`), so this covers it.
   const micOff = call.muted || call.micDenied || micBlocked !== null
   const rec = recordingButtons({ perms: call.recordingPerms, recording: call.recording, controls: call.recordingControls })
+  // The row fits the list with Leave call last and in full (call-panel-fit).
+  const videoIds = useVideoCallButtonIds(video, videoOn)
+  const rowIds: CallPanelButtonId[] = [
+    'mute',
+    'deafen',
+    ...(engineKind === 'native' ? (['noise'] as const) : []),
+    ...videoIds,
+    ...(engineKind === 'native' && (rec.canStop || rec.canRecord) ? (['record'] as const) : []),
+    'leave',
+  ]
+  const folds = callPanelFolds(rowIds, CALL_PANEL_BUTTON)
   return (
     <section data-testid="voice-call" data-phase={call.phase} className="border-b border-[var(--color-border)] -mx-3 px-3 pb-2 mb-2">
       <div className="flex items-center justify-between">
@@ -121,7 +133,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
           />
         </div>
       ) : null}
-      <div data-testid="voice-call-controls" role="group" aria-label="Call controls" className="mt-2 flex items-center gap-1.5">
+      <div data-testid="voice-call-controls" role="group" aria-label="Call controls" className="mt-2 flex flex-wrap items-center gap-1.5">
         <CallPanelButton
           testId="voice-mute"
           label={micOff ? 'Unmute' : 'Mute'}
@@ -141,7 +153,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
         >
           <HeadphonesIcon off={call.deafened} size={CALL_PANEL_ICON} />
         </CallPanelButton>
-        {engineKind === 'native' ? (
+        {engineKind === 'native' && !folds.has('noise') ? (
           <CallPanelButton
             testId="voice-noise"
             label={noiseRemovalLabel(prefs.noiseRemoval)}
@@ -151,7 +163,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
             <NoiseWaveIcon off={!prefs.noiseRemoval} size={CALL_PANEL_ICON} />
           </CallPanelButton>
         ) : null}
-        {videoOn ? <VideoCallButtons ctl={video} disabled={busy} /> : null}
+        {videoOn ? <VideoCallButtons ctl={video} disabled={busy} foldPick={folds.has('pick')} /> : null}
         {/* Record or Stop: here too, for a top bar too narrow to hold them. */}
         {engineKind === 'native' && rec.canStop ? (
           <CallPanelButton testId="voice-stop-recording" label={STOP_RECORDING_LABEL} disabled={busy} onPress={() => void voice.stopRecording()}>
@@ -428,8 +440,8 @@ export default function VoicePopover({
       role="dialog"
       aria-label="Voice rooms"
       data-testid="voice-popover"
-      {...floatMaterial('popover')} className="w-[320px] max-h-[calc(var(--k2-vh)*0.7)] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
-      style={{ ...style, ...noDrag }}
+      {...floatMaterial('popover')} className="max-h-[calc(var(--k2-vh)*0.7)] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
+      style={{ ...style, width: VOICE_POPOVER_WIDTH, ...noDrag }}
     >
       <header className="mb-1 text-[12px] text-[var(--color-text-primary)]">Voice rooms</header>
       {call ? <CallPanel call={call} /> : null}

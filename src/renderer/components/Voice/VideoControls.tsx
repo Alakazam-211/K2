@@ -14,11 +14,27 @@ import type { VideoController } from '@/stores/video-core'
 import { ChevronDownIcon, ScreenShareIcon, VideoIcon } from '@/components/icons/K2Icons'
 import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
 
+/** Which of Camera, Share screen and Choose screen the call row shows (the
+ *  row's fit counts them: call-panel-fit). `on`: video is on for this call. */
+export function useVideoCallButtonIds(ctl: VideoController, on: boolean): ('camera' | 'screen' | 'pick')[] {
+  const availability = useStore(ctl.store, (s) => s.availability)
+  const caps = useStore(ctl.store, (s) => s.caps)
+  const screenOn = useStore(ctl.store, (s) => s.local.screen !== 'off')
+  if (!on || availability !== 'ready' || !caps) return []
+  const ids: ('camera' | 'screen' | 'pick')[] = []
+  if (caps.camera) ids.push('camera')
+  if (caps.screen.supported) ids.push('screen')
+  if (caps.screen.supported && caps.screen.list && !screenOn) ids.push('pick')
+  return ids
+}
+
 /** Camera and Share screen, beside Mute and Deafen (icon buttons, as the top
  *  bar's and the tile's). Share screen opens the OS's own picker; where the OS
  *  lists what can be shared, "Choose screen" (a chevron) offers that list
- *  too. The room's media policy greys out what this person may not turn on. */
-export function VideoCallButtons({ ctl, disabled = false }: { ctl: VideoController; disabled?: boolean }): React.JSX.Element | null {
+ *  too. The room's media policy greys out what this person may not turn on.
+ *  `foldPick`: the row is too narrow for the chevron (call-panel-fit), so
+ *  Share screen opens the list itself where the OS has no picker. */
+export function VideoCallButtons({ ctl, disabled = false, foldPick = false }: { ctl: VideoController; disabled?: boolean; foldPick?: boolean }): React.JSX.Element | null {
   const availability = useStore(ctl.store, (s) => s.availability)
   const caps = useStore(ctl.store, (s) => s.caps)
   const local = useStore(ctl.store, (s) => s.local)
@@ -30,7 +46,11 @@ export function VideoCallButtons({ ctl, disabled = false }: { ctl: VideoControll
   // Turning one off is always allowed.
   const cameraBlock = cameraOn ? null : policyBlockText(policy, 'camera')
   const screenBlock = screenOn ? null : policyBlockText(policy, 'screen')
-  const share = (): void => void ctl.setScreen(!screenOn)
+  const listOnShare = foldPick && caps.screen.list && !caps.screen.systemPicker
+  const share = (): void => {
+    if (!screenOn && listOnShare) void ctl.loadScreenSources()
+    else void ctl.setScreen(!screenOn)
+  }
   return (
     <>
       {caps.camera ? (
@@ -59,7 +79,7 @@ export function VideoCallButtons({ ctl, disabled = false }: { ctl: VideoControll
           <ScreenShareIcon stop={screenOn} size={CALL_PANEL_ICON} />
         </CallPanelButton>
       ) : null}
-      {caps.screen.supported && caps.screen.list && !screenOn ? (
+      {caps.screen.supported && caps.screen.list && !screenOn && !foldPick ? (
         <CallPanelButton
           testId="video-screen-pick"
           label="Choose screen"

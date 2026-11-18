@@ -392,9 +392,9 @@ pub fn deny_output(rel: &str) -> Result<(), target::Refusal> {
     if target::is_generated(rel) {
         return Err(declined("generated", format!("K2 writes {rel} itself")));
     }
-    // Markdown under .k2/ may be a live doc (as for mv); other files there are K2's own.
-    if target::is_git_internal(rel) || (Tier::of(rel) != Tier::Markdown && target::is_k2_config(rel)) {
-        return Err(declined("protected", format!("{rel} is protected (git's folder or K2's configuration)")));
+    // As for mv: git's folder and the protected list under .k2/ (target::PROTECTED_IN_DOT_DIR).
+    if target::is_git_internal(rel) || target::k2_protected(rel).is_some() {
+        return Err(declined("protected", format!("{rel} is protected (git's folder, or the vault, dumps or the daemon's own state)")));
     }
     if k2_core::secret_paths::is_secret_rel(rel) {
         return Err(declined("secret", format!("{rel} is a secret's name; an export never lands there")));

@@ -34,8 +34,28 @@
 //! core is on (`blob_packs`).
 //!
 //! **Never live docs** (MI12), refused before any open, on every tier:
-//! - secret files by path or content (`secret_paths::classify`), `secret`;
-//! - `.k2/vault/**`, `protected`;
+//! - secret files by path or content (`secret_paths::classify`: keys,
+//!   tokens, credentials, `.env`…, anywhere), `secret`;
+//! - `protected`, exactly these (each a home of secrets, a trust root or
+//!   the daemon's own state, [`PROTECTED_IN_DOT_DIR`]):
+//!   - `.k2/vault/**`: the vault, the workspace's secrets and the key that
+//!     opens them;
+//!   - `.k2/db/dumps/**`: database dumps, an App's rows with its users'
+//!     password hashes and grants;
+//!   - `.k2/signer.toml`: the signer's trust policy, which keys may sign
+//!     this workspace's releases;
+//!   - `.k2/*.json`, `.k2/*.lock`, `.k2/agent/template.lock` and the
+//!     `.k2/.*` markers: the daemon's own settings and state for the workspace;
+//!   - anything in the daemon's own folder on this server (`~/.k2`: its database,
+//!     tokens, keys and certificates) that no workspace under it holds, as
+//!     when a workspace's root is the home folder;
+//!   - inside any `.git` folder: git's database, config and hooks (a
+//!     written hook would run as the workspace's user).
+//!
+//!   Everything else under `.k2/` is the workspace's own files and opens
+//!   live like any other: agents' work pages and notes, the wiki, PRDs,
+//!   heartbeat prompts, tools (Rosson 2026-11-18: people open and edit
+//!   them often);
 //! - files K2 generates and rewrites (AGENTS.md, its own skills, rosters,
 //!   the harness mirrors), `generated`. An edit there would be overwritten
 //!   by the next recompose.
@@ -334,20 +354,59 @@ pub fn is_git_internal(rel: &str) -> bool {
     segs.len() > 1 && segs[..segs.len() - 1].contains(&".git")
 }
 
-/// `.k2/` folders whose other files may be tier-0 docs (wiki attachments,
-/// PRD images), and the conflict copies' folder (`.k2/conflicts/`,
-/// [`super::host::conflict_dir_for`]: someone's version of a doc, kept when
-/// an outside save replaced it, opened as a doc of its own: kit v0.19.0's
-/// `outside_save.copy.doc`). Everything else under `.k2/` is K2's
-/// configuration (settings, heartbeats, hooks, rosters): never written
-/// through a doc.
-const K2_DOC_DIRS: &[&str] = &[".k2/wiki/", ".k2/prds/", ".k2/docs/", ".k2/conflicts/"];
+/// What under a workspace's private `.k2` folder is `protected` (MI12), and
+/// why: never a live doc, never written through one, never where `mv` or an
+/// export lands. Each entry holds secrets, a trust root or the daemon's own state;
+/// nothing else under `.k2/` is (agents' work pages and notes, the wiki,
+/// PRDs, heartbeat prompts and tools open live like any file). Workspace
+/// relative under `.k2/` (any of its names: [`with_k2_dot_dir`]), lowercase
+/// compared; a trailing `/` is the folder and everything in it, `*` one
+/// segment. Secrets elsewhere are `secret` (`secret_paths`), generated
+/// files `generated`, git's folder [`is_git_internal`].
+pub const PROTECTED_IN_DOT_DIR: &[(&str, &str)] = &[
+    (".k2/vault/", "the vault: the workspace's secrets and the key that opens them"),
+    (".k2/db/dumps/", "a database dump: an App's rows, with its users' password hashes and grants"),
+    (".k2/signer.toml", "the signer's trust policy: which keys may sign this workspace's releases"),
+    (".k2/*.json", "the daemon's own settings and state for this workspace"),
+    (".k2/*.lock", "the daemon's own state for this workspace"),
+    (".k2/agent/template.lock", "the daemon's record of the template this agent was made from"),
+    (".k2/.*", "one of the daemon's own markers"),
+];
 
-/// True for a path under `.k2/` (or `.k2so/`, `.k5/`) outside
-/// [`K2_DOC_DIRS`].
-pub fn is_k2_config(rel: &str) -> bool {
+/// Why `rel` is protected under the workspace's `.k2` folder
+/// ([`PROTECTED_IN_DOT_DIR`]), or None.
+pub fn k2_protected(rel: &str) -> Option<&'static str> {
     let lower = with_k2_dot_dir(rel);
-    lower.starts_with(".k2/") && !K2_DOC_DIRS.iter().any(|d| lower.starts_with(d))
+    if lower == ".k2/vault" {
+        return Some(PROTECTED_IN_DOT_DIR[0].1);
+    }
+    let segs: Vec<&str> = lower.split('/').collect();
+    PROTECTED_IN_DOT_DIR.iter().find_map(|(pat, why)| {
+        let hit = match pat.strip_suffix('/') {
+            Some(dir) => lower.starts_with(pat) && lower.len() > dir.len(),
+            None => {
+                let ps: Vec<&str> = pat.split('/').collect();
+                ps.len() == segs.len() && ps.iter().zip(&segs).all(|(p, s)| segment_match(p, s))
+            }
+        };
+        hit.then_some(*why)
+    })
+}
+
+/// True when `abs` is in the daemon's own folder on this server (`~/.k2`, or the
+/// home override) while the workspace that holds it (`rel` under its root)
+/// isn't itself inside that folder: a workspace whose root is the home
+/// folder (or above it) would otherwise reach the daemon's database, tokens
+/// and keys as its `.k2/` files.
+fn in_daemon_home(rel: &str, abs: &Path) -> bool {
+    let Some(home) = k2_core::paths::k2_home_opt() else { return false };
+    let home = dunce::canonicalize(&home).unwrap_or(home);
+    if !abs.starts_with(&home) {
+        return false;
+    }
+    let depth = rel.split('/').filter(|s| !s.is_empty()).count();
+    let root = abs.ancestors().nth(depth);
+    !root.is_some_and(|r| r.starts_with(&home))
 }
 
 /// `n` bytes for a person: `512 B`, `3.0 KiB`, `40.0 MiB`.
@@ -386,10 +445,13 @@ pub fn deny(rel: &str, link: &Path, abs: &Path) -> Result<(), Refusal> {
     if is_git_internal(rel) {
         return Err(Refusal::declined("protected", format!("{rel} is inside git's own folder; it is never a live doc")));
     }
-    if Tier::of(rel) != Tier::Markdown && is_k2_config(rel) {
+    if let Some(why) = k2_protected(rel) {
+        return Err(Refusal::declined("protected", format!("{rel} is {why}; it is never a live doc")));
+    }
+    if in_daemon_home(rel, abs) {
         return Err(Refusal::declined(
             "protected",
-            format!("{rel} is in the workspace's private .k2 folder, where only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs"),
+            format!("{rel} is in the daemon's own folder on this server (its database, tokens and keys); it is never a live doc"),
         ));
     }
     let link_name = link.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -514,8 +576,8 @@ pub fn resolve_new(t: &Target, to: &str) -> Result<(String, PathBuf), Refusal> {
     if is_generated(&rel) {
         return Err(Refusal::declined("generated", format!("K2 writes {rel} itself")));
     }
-    if is_git_internal(&rel) || (t.tier != Tier::Markdown && is_k2_config(&rel)) {
-        return Err(Refusal::declined("protected", format!("{rel} is protected (git's folder or K2's configuration)")));
+    if is_git_internal(&rel) || k2_protected(&rel).is_some() {
+        return Err(Refusal::declined("protected", format!("{rel} is protected (git's folder, or the vault, dumps or the daemon's own state)")));
     }
     if k2_core::secret_paths::is_secret_rel(&rel) {
         return Err(Refusal::declined("secret", format!("{rel} is a secret's name; it is never a live doc")));
@@ -744,11 +806,12 @@ mod tests {
             assert!(is_vault(&format!("{dir}/VAULT/x.md")), "{dir}");
             assert!(!is_vault(&format!("{dir}/vaulted.md")), "{dir}");
 
-            for p in ["settings.json", "heartbeats/digest/WAKEUP.md", "agent/ROLE.md", "hooks/notify.sh", "inbox/a.txt"] {
-                assert!(is_k2_config(&format!("{dir}/{p}")), "{dir}/{p}");
+            // The protected list, entry by entry, and nothing else there.
+            for p in ["vault", "vault/vault.db", "db/dumps/2026-11-18.dump", "db/dumps/x.dump.grants.json", "signer.toml", "settings.json", "config.json", "heartbeats.json", "settings.v3.json", "state.lock", "agent/template.lock", ".last-skill-regen", ".agents-md-generate"] {
+                assert!(k2_protected(&format!("{dir}/{p}")).is_some(), "{dir}/{p}");
             }
-            for p in ["wiki/Home.md", "wiki/img/a.png", "prds/plan.md", "docs/a.pdf", "conflicts/a.md"] {
-                assert!(!is_k2_config(&format!("{dir}/{p}")), "{dir}/{p} is a doc folder");
+            for p in ["agent/work/x.html", "agent/work/progress.html", "agent/ROLE.md", "agent/tools/vitest-job.sh", "notes/a.md", "heartbeats/digest/WAKEUP.md", "inbox/a.txt", "wiki/Home.md", "wiki/x.md", "wiki/img/a.png", "prds/plan.md", "docs/a.pdf", "conflicts/a.md", "ci.toml", "db/migrations/0001.sql", "agent/work/data.json", "vaulted.md", "db/dumps"] {
+                assert!(k2_protected(&format!("{dir}/{p}")).is_none(), "{dir}/{p} is the workspace's own file");
             }
 
             for p in ["AGENTS.md", "skills/k2-cli/SKILL.md", "skills/k2-zen/SKILL.md", "context/catalog/team-roster.md"] {
@@ -767,7 +830,7 @@ mod tests {
             "notes/.k5/settings.json",
         ] {
             assert!(!is_vault(p), "{p}");
-            assert!(!is_k2_config(p), "{p}");
+            assert!(k2_protected(p).is_none(), "{p}");
             assert!(!is_generated(p), "{p}");
         }
         assert_eq!(with_k2_dot_dir(".K2SO/Wiki/Home.md"), ".k2/wiki/home.md");
@@ -881,6 +944,39 @@ mod tests {
         d.canonicalize().expect("canon")
     }
 
+    /// A workspace rooted at the home folder reaches the daemon's own folder
+    /// (`~/.k2`: its database, tokens and keys) as its `.k2/`: protected
+    /// there whatever the name. A workspace that lives inside `~/.k2` keeps
+    /// the plain rules for its own files.
+    #[test]
+    fn k2s_own_folder_is_protected_when_a_workspace_at_home_reaches_it() {
+        crate::test_support::with_temp_home(|| {
+            let home = dunce::canonicalize(std::env::var("HOME").expect("HOME")).expect("home");
+            let w = |rel: &str| {
+                let p = home.join(rel);
+                std::fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+                std::fs::write(&p, b"x").expect("write");
+                p
+            };
+            for rel in [".k2/daemon.token", ".k2/db.sqlite", ".k2/certs/box.key", ".k2/agent/work/page.html"] {
+                let f = w(rel);
+                let r = deny(rel, &f, &f).expect_err(rel);
+                assert_eq!(r.code, "protected", "{rel}: {r:?}");
+            }
+            let inner = home.join(".k2/agents/helper");
+            let page = inner.join(".k2/agent/work/page.html");
+            std::fs::create_dir_all(page.parent().expect("parent")).expect("mkdir");
+            std::fs::write(&page, b"<p>hi</p>\n").expect("page");
+            assert_eq!(deny(".k2/agent/work/page.html", &page, &page), Ok(()), "a workspace inside ~/.k2 keeps its own files");
+            let elsewhere = tmp();
+            let f = elsewhere.join(".k2/agent/work/page.html");
+            std::fs::create_dir_all(f.parent().expect("parent")).expect("mkdir");
+            std::fs::write(&f, b"<p>hi</p>\n").expect("page");
+            assert_eq!(deny(".k2/agent/work/page.html", &f, &f), Ok(()));
+            std::fs::remove_dir_all(&elsewhere).expect("cleanup");
+        });
+    }
+
     #[test]
     fn deny_list_refuses_each_kind_and_admits_markdown_and_any_other_file() {
         let d = tmp();
@@ -914,6 +1010,25 @@ mod tests {
         assert_eq!(deny(".k2/heartbeats.json", &cfg, &cfg).expect_err("k2 config").code, "protected");
         let att = w(".k2/wiki/assets/map.png", &[1, 2, 3]);
         assert_eq!(deny(".k2/wiki/assets/map.png", &att, &att), Ok(()));
+        // Rosson's ruling (11-18): protected is the vault and what holds
+        // secrets, a trust root or the daemon's own state, never an agent's work
+        // page, notes or the wiki.
+        for (rel, body) in [(".k2/agent/work/x.html", &b"<!doctype html><p>slice 3 landed</p>\n"[..]), (".k2/wiki/x.md", &b"# x\n"[..]), (".k2/notes/plan.txt", &b"plan\n"[..]), (".k2/agent/tools/job.sh", &b"#!/bin/sh\n"[..])] {
+            let f = w(rel, body);
+            assert_eq!(deny(rel, &f, &f), Ok(()), "{rel}");
+        }
+        for (rel, why) in [
+            (".k2/db/dumps/a.dump", "a database dump"),
+            (".k2/signer.toml", "the signer's trust policy"),
+            (".k2/config.json", "the daemon's own settings"),
+            (".k2/agent/template.lock", "the daemon's record of the template"),
+            (".k2/.last-skill-regen", "one of the daemon's own markers"),
+        ] {
+            let f = w(rel, b"x");
+            let r = deny(rel, &f, &f).expect_err(rel);
+            assert_eq!(r.code, "protected", "{rel}");
+            assert!(r.message.starts_with(&format!("{rel} is {why}")) && r.message.ends_with("; it is never a live doc"), "{rel}: {}", r.message);
+        }
         // The same under a leftover `.k2so/` and the coming `.k5/`. The
         // generated skill under `.k2so/` is what a stale root link
         // (CLAUDE.md) may still point at.

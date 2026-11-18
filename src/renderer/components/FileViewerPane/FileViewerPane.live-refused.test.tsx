@@ -3,15 +3,17 @@
 // A live open the daemon refuses never blanks the page (Rosson 2026-11-17: a
 // 10 KB HTML file in another workspace's `.k2/agent/work/` opened to "Live
 // editing stopped. This file can't be edited live: too large, or not text." and
-// an empty preview). The daemon refuses it as `protected` (the workspace's
-// private .k2 folder); the tab then:
+// an empty preview: a 0.46.13 app over a daemon that refused it as
+// `protected`). Since the 11-18 ruling such a work page opens live; the vault
+// is still `protected`, and is the refusal here. The tab then:
 //   - draws the page from its plain read, never from the live text it never got;
 //   - says the real reason, in the daemon's words, never "too large, or not text";
-//   - opens the usual way (the plain editor), since that file is never live.
-// Rosson hit it again (2026-11-18, a 0.46.13 server): the same holds for a
-// session that closes `declined` after its welcome, and for an older server's
-// close with only a code (mapped to plain words) or only the kit's report;
-// with no words at all, "Live editing isn’t available for this file here."
+//   - opens the usual way (the plain editor), since that file is never live;
+//   - offers Reload, which reads it again and retries the live open.
+// The same holds for a session that closes `declined` after its welcome, and
+// for an older server's close with only a code (mapped to plain words) or
+// only the kit's report; with no words at all, "Live editing isn’t available
+// for this file here."
 // And the "undefined" tile: a read whose body isn't `{content}` is an error,
 // never the word "undefined" drawn as the page.
 
@@ -20,7 +22,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { act, cleanup, fireEvent, renderHook, screen, waitFor } from '@testing-library/react'
 
 const PAGE = '<!doctype html>\n<html><head><style>body { font: 14px sans-serif; }</style></head><body><h1>k5 CLI progress</h1><p>Slice 10 landed.</p></body></html>\n'
-const WHY = ".k2/agent/work/k5-cli-progress.html is in the workspace's private .k2 folder, where only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs"
+const WHY = '.k2/vault/progress.html is in the vault folder; it is never a live doc'
 const h = vi.hoisted(() => ({
   read: null as unknown,
   refuse: null as Record<string, unknown> | null,
@@ -91,7 +93,7 @@ import { NOT_FILE_TEXT, fileTextOf } from '@/lib/read-file-text'
 import { FileViewerPane } from './FileViewerPane'
 import { useLiveRefused } from './live-refused'
 
-const FILE = '/home/me/project/.k2/agent/work/progress.html'
+const FILE = '/home/me/project/.k2/vault/progress.html'
 
 beforeAll(async () => {
   await import('@/components/Editor/EditorTab')
@@ -114,7 +116,7 @@ afterEach(() => {
 const pageFrame = (): HTMLIFrameElement | null => document.querySelector('iframe[srcdoc]')
 
 describe('a refused live open of an HTML page', () => {
-  it('draws the page from its plain read, names the .k2 folder, and opens the usual way', async () => {
+  it('draws the page from its plain read, names the vault, and opens the usual way', async () => {
     setEditorPreview('code', true)
     renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
     const bar = await screen.findByTestId('file-viewer-live-refused-words', {}, { timeout: 5000 })

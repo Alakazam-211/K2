@@ -249,7 +249,7 @@ describe('a refused open (closed before any welcome)', () => {
       return Promise.reject(new LiveConnectError(parseClose(this.frame)))
     }
   }
-  const WHY = ".k2/agent/work/page.html is in the workspace's private .k2 folder, where only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs"
+  const WHY = '.k2/vault/page.html is in the vault folder; it is never a live doc'
   const refusal = { type: 'closed', reason: 'declined', retry: false, code: 'protected', message: WHY }
 
   it('the preview asks the host for the file as read (null, never the empty live text), and the notice says the real reason', async () => {
@@ -258,7 +258,7 @@ describe('a refused open (closed before any welcome)', () => {
     render(
       <LiveEditorFile
         scope={scope}
-        filePath="/w/.k2/agent/work/page.html"
+        filePath="/w/.k2/vault/page.html"
         kind="code"
         roomReadOnly={null}
         onCoreOff={() => undefined}
@@ -283,7 +283,7 @@ describe('a refused open (closed before any welcome)', () => {
   it('tells the host, once, with the daemon’s code and words', async () => {
     const onRefused = vi.fn()
     const t = new RefusingTransport(refusal)
-    render(<LiveEditorFile scope={scope} filePath="/w/.k2/agent/work/page.html" kind="code" roomReadOnly={null} onCoreOff={() => undefined} onRefused={onRefused} width={1440} createTransport={() => t} />)
+    render(<LiveEditorFile scope={scope} filePath="/w/.k2/vault/page.html" kind="code" roomReadOnly={null} onCoreOff={() => undefined} onRefused={onRefused} width={1440} createTransport={() => t} />)
     await waitFor(() => expect(onRefused).toHaveBeenCalledTimes(1))
     expect(onRefused.mock.calls[0][0]).toEqual({ reason: 'declined', code: 'protected', message: WHY })
   })

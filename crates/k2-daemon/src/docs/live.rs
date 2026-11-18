@@ -1712,12 +1712,6 @@ mod tests {
         assert_eq!(c.error.as_ref().expect("the kit's report").id(), "MPC-E169");
     }
 
-    /// The file Rosson opened: a plain 10 KB HTML page in ANOTHER
-    /// workspace's `.k2/agent/work/`. The owner's absolute path resolves to
-    /// that workspace (a file there outside `.k2/` opens live), but `.k2/`
-    /// outside its doc folders is K2's private folder: the socket closes
-    /// `declined` with `protected` and the daemon's words naming the folder,
-    /// never a size or text reason. Outside every workspace is its own code.
     #[test]
     fn a_declined_close_logs_one_line_with_its_codes_and_no_words() {
         let k2 = Closed::k2(CloseReason::Declined, "protected", "notes/secret-plan.html is in the private .k2 folder");
@@ -1731,8 +1725,15 @@ mod tests {
         assert_eq!(declined_log_line(&Closed::new(CloseReason::Idle)), None);
     }
 
+    /// The file Rosson opened: a plain 10 KB HTML page in ANOTHER
+    /// workspace's `.k2/agent/work/`. The owner's absolute path resolves to
+    /// that workspace, and an agent's work page there opens live (Rosson
+    /// 11-18: `protected` is the vault and what holds secrets or K2's own
+    /// state, never a work page). The vault beside it stays `protected`, in
+    /// words naming it, never a size or text reason. Outside every
+    /// workspace is its own code.
     #[test]
-    fn a_page_in_another_workspaces_k2_folder_is_refused_as_protected_not_too_large() {
+    fn a_page_in_another_workspaces_agent_work_folder_opens_live_and_its_vault_stays_protected() {
         let dir = crate::test_support::Scratch::new();
         let mine = dir.path().join("mine");
         let other = dir.path().join("other");
@@ -1764,14 +1765,17 @@ mod tests {
             live_target(&super::super::caller::owner(), &params)
         };
 
-        let c = open(&inside).expect_err("a page in .k2/agent/work is not a live doc");
-        println!("[docs/live] refusal for {}: {}", inside.display(), c.value().to_json());
-        assert_eq!(c.reason, CloseReason::Declined);
-        assert_eq!(c.code.as_deref(), Some("protected"), "{:?}", c);
-        assert_eq!(
-            c.message.as_deref(),
-            Some(".k2/agent/work/k5-cli-progress.html is in the workspace's private .k2 folder, where only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs"),
-        );
+        let t = open(&inside).expect("an agent's work page opens live, in its own workspace");
+        assert_eq!((t.project_id.as_str(), t.rel.as_str()), (other_id.as_str(), ".k2/agent/work/k5-cli-progress.html"));
+        assert_eq!(t.tier, Tier::Text(k2_mpc_text::Family::Markup));
+
+        std::fs::create_dir_all(other.join(".k2/vault")).expect("other's vault");
+        let vaulted = other.join(".k2/vault/notes.html");
+        std::fs::write(&vaulted, &page).expect("page in the vault");
+        let c = open(&vaulted).expect_err("the vault is never a live doc");
+        println!("[docs/live] refusal for {}: {}", vaulted.display(), c.value().to_json());
+        assert_eq!((c.reason, c.code.as_deref()), (CloseReason::Declined, Some("protected")), "{:?}", c);
+        assert_eq!(c.message.as_deref(), Some(".k2/vault/notes.html is in the vault folder; it is never a live doc"));
         assert!(c.error.is_none(), "K2's own rule, not a kit report: {:?}", c.error);
         let frame = c.value().to_json();
         assert!(!frame.contains("too_large") && !frame.contains("not_utf8") && !frame.contains("binary"), "{frame}");
@@ -1794,12 +1798,12 @@ mod tests {
     /// Rosson's tab, again (11-18): an agent's ~10 KB HTML progress page in
     /// its OWN workspace's `.k2/agent/work/`, opened from that workspace.
     /// The page is what such pages hold: tables, code, long hex ids, a word
-    /// like "secret" in prose. The socket's close is `protected` (the
-    /// private .k2 folder, checked before the secret scan), with words;
-    /// never a size or text reason, and never `secret`: the same page beside
-    /// `.k2` opens live (the content scan finds no credential in it).
+    /// like "secret" in prose. Before the 11-18 ruling the socket closed it
+    /// `protected` (all of `.k2/` but its doc folders); now it opens live,
+    /// by absolute path and named from its workspace, and the content scan
+    /// finds no credential in it (never `secret`).
     #[test]
-    fn an_agents_progress_page_in_its_own_k2_work_folder_closes_protected_with_words() {
+    fn an_agents_progress_page_in_its_own_k2_work_folder_opens_live() {
         let dir = crate::test_support::Scratch::new();
         let ws = dir.path().join("agent-ws");
         std::fs::create_dir_all(ws.join(".k2/agent/work")).expect(".k2/agent/work");
@@ -1835,11 +1839,8 @@ mod tests {
 
         // Opened by absolute path, and as from that workspace (its id).
         for workspace in [None, Some(id.as_str())] {
-            let c = open(&inside, workspace).expect_err("a page in .k2/agent/work is not a live doc");
-            println!("[docs/live] the Closed frame for {} (workspace {workspace:?}): {}", inside.display(), c.value().to_json());
-            assert_eq!((c.reason, c.code.as_deref()), (CloseReason::Declined, Some("protected")), "{:?}", c);
-            assert!(c.message.as_deref().is_some_and(|m| m.starts_with(".k2/agent/work/progress.html is in the workspace's private .k2 folder")), "{:?}", c.message);
-            assert!(c.error.is_none(), "{:?}", c.error);
+            let t = open(&inside, workspace).unwrap_or_else(|c| panic!("the work page opens live (workspace {workspace:?}): {}", c.value().to_json()));
+            assert_eq!((t.project_id.as_str(), t.rel.as_str(), t.tier), (id.as_str(), ".k2/agent/work/progress.html", Tier::Text(k2_mpc_text::Family::Markup)));
             let t = open(&beside, workspace).expect("the same page beside .k2 opens live: not a secret by its content");
             assert_eq!((t.project_id.as_str(), t.rel.as_str(), t.tier), (id.as_str(), "progress.html", Tier::Text(k2_mpc_text::Family::Markup)));
         }

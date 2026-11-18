@@ -440,7 +440,7 @@ describe('the Live view’s words', () => {
     expect(closedText({ reason: 'declined' })).toBe('Live editing isn’t available for this file here.')
   })
   it('a refused open says its own reason by code, never "too large, or not text" for a rule', () => {
-    const why = ".k2/agent/work/p.html is in the workspace's private .k2 folder, where only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs"
+    const why = '.k2/vault/p.html is in the vault folder; it is never a live doc'
     const d = (code: string, message?: string) => closedText({ reason: 'declined', code, ...(message ? { message } : {}) })
     expect(d('protected', why)).toBe(`This file can’t be edited live: ${why}.`)
     expect(d('secret', '.env looks like it holds a secret (dotenv); it is never a live doc')).toBe('This file can’t be edited live: it looks like it holds a secret.')

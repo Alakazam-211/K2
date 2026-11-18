@@ -335,6 +335,8 @@ fn local_daemon_boot_ready() -> bool {
     let url = format!("http://127.0.0.1:{port}/boot-status");
     let Ok(client) = reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(800))
+        // K2 never sends a request to its own server through a proxy.
+        .no_proxy()
         .build()
     else {
         return false;

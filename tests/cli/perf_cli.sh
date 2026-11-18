@@ -11,6 +11,10 @@
 #   --version      k5 --version                       <= 5 ms
 #   whoami         k5 whoami (an agent's: passport,   <= 30 ms + the stub's
 #                  project, session names)               p95 handler time
+#   done           k5 done (the agent's name set)     <= 30 ms + the stub's
+#                                                        p95 handler time
+#   respond        k5 respond <line> (a host          <= 30 ms + the stub's
+#                  session: TCP, passport as Bearer)     p95 handler time
 #   fallthrough    k5 heartbeat list (a verb the      <= cli/k2's p95 for
 #                  shell answers)                        the same + 5 ms
 #   thread read    k5 thread read                     <= 40 ms: pending
@@ -101,6 +105,7 @@ env = {
     "K2_PROJECT_PATH": work + "/ws",
     "K2_SESSION_ID": "s1",
     "K2_CELL": "canonical",
+    "K2_AGENT_NAME": "perf",
 }
 k5 = work + "/bin/k5"
 
@@ -146,6 +151,8 @@ os.chdir(work + "/ws")
 # --version: bash wants a port and a token even for it; both are set.
 check_same("--version", [k5, "--version"], bash_argv("--version"))
 check_same("whoami", [k5, "whoami"], bash_argv("whoami"))
+check_same("done", [k5, "done"], bash_argv("done"))
+check_same("respond", [k5, "respond", "perf line"], bash_argv("respond", "perf line"))
 check_same("fallthrough (heartbeat list)", [k5, "heartbeat", "list"], bash_argv("heartbeat", "list"))
 
 results = []
@@ -160,20 +167,28 @@ def measure(name, argv, target_ms, why):
     return got
 
 measure("k5 --version", [k5, "--version"], 5.0, "PRD 7.5")
-handler_ns.clear()
-w = timed([k5, "whoami"])
-stub_p95 = p95([n / 1e6 for n in handler_ns]) if handler_ns else 0.0
-got = p95(w)
-target = 30.0 + stub_p95
-results.append(got <= target)
-print(f"perf_cli: {'pass' if got <= target else 'FAIL'}: k5 whoami: p95 {got:.2f} ms, target <= {target:.2f} ms "
-      f"(30 ms + the stub's p95 handler time {stub_p95:.3f} ms over {len(handler_ns)} requests); "
-      f"median {statistics.median(w):.2f} ms, min {min(w):.2f}, max {max(w):.2f}")
+
+def measure_native(name, words):
+    """A native family: <= 30 ms plus the stub's p95 handler time."""
+    handler_ns.clear()
+    w = timed([k5, *words])
+    stub_p95 = p95([n / 1e6 for n in handler_ns]) if handler_ns else 0.0
+    got = p95(w)
+    target = 30.0 + stub_p95
+    results.append(got <= target)
+    print(f"perf_cli: {'pass' if got <= target else 'FAIL'}: k5 {name}: p95 {got:.2f} ms, target <= {target:.2f} ms "
+          f"(30 ms + the stub's p95 handler time {stub_p95:.3f} ms over {len(handler_ns)} requests); "
+          f"median {statistics.median(w):.2f} ms, min {min(w):.2f}, max {max(w):.2f}")
+
+measure_native("whoami", ["whoami"])
+measure_native("done", ["done"])
+measure_native("respond", ["respond", "perf line"])
 bash_ft = p95(timed(bash_argv("heartbeat", "list")))
 print(f"perf_cli: info: cli/k2 heartbeat list: p95 {bash_ft:.2f} ms (the fallthrough's base)")
 measure("k5 heartbeat list (fallthrough)", [k5, "heartbeat", "list"], bash_ft + 5.0, "cli/k2's p95 + 5 ms")
-bash_who = p95(timed(bash_argv("whoami")))
-print(f"perf_cli: info: cli/k2 whoami: p95 {bash_who:.2f} ms (for comparison)")
+for words in (["whoami"], ["done"], ["respond", "perf line"]):
+    bash_p95 = p95(timed(bash_argv(*words)))
+    print(f"perf_cli: info: cli/k2 {words[0]}: p95 {bash_p95:.2f} ms (for comparison)")
 print("perf_cli: pending: k5 thread read <= 40 ms (R3.5: thread read is not native yet)")
 
 # Where the fallthrough's time goes. Info only, no target: the front's

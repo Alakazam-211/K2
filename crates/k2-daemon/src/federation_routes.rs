@@ -1477,12 +1477,16 @@ pub(crate) fn peer_host(peer: &k2_core::federation::FederationPeer) -> String {
 /// receive-side DECLINE (a 200 with `delivered:false` / `mode:"declined"`).
 pub fn post_inbound(base: &str, envelope_bytes: &[u8]) -> Result<String, String> {
     let url = format!("{base}/cli/federation/inbound");
-    let client = reqwest::blocking::Client::builder()
+    let mut builder = reqwest::blocking::Client::builder()
         // Never follow a redirect: a peer must not steer us to another host.
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| format!("build http client: {e}"))?;
+        .timeout(std::time::Duration::from_secs(20));
+    // Loopback (127.0.0.1, ::1, localhost) and plain http never use a
+    // proxy; HTTPS to a remote K2 may use the box's proxy settings.
+    if k2_core::proxy_rule::direct(&url) {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().map_err(|e| format!("build http client: {e}"))?;
     let resp = send_with_retry(DialRetry::NeverSent, std::time::Duration::from_secs(20), || {
         client
             .post(&url)
@@ -2382,13 +2386,17 @@ pub(crate) fn get_peer_roster_typed(
     timeout: std::time::Duration,
 ) -> Result<String, RosterFetchError> {
     let url = format!("{base}/cli/federation/roster");
-    let client = reqwest::blocking::Client::builder()
+    let mut builder = reqwest::blocking::Client::builder()
         // Never follow a redirect: a peer must not steer us to another host.
         .redirect(reqwest::redirect::Policy::none())
         .timeout(timeout)
-        .connect_timeout(timeout)
-        .build()
-        .map_err(|e| RosterFetchError::Body(format!("build http client: {e}")))?;
+        .connect_timeout(timeout);
+    // Loopback (127.0.0.1, ::1, localhost) and plain http never use a
+    // proxy; HTTPS to a remote K2 may use the box's proxy settings.
+    if k2_core::proxy_rule::direct(&url) {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().map_err(|e| RosterFetchError::Body(format!("build http client: {e}")))?;
     let ts_s = ts.to_string();
     let resp = send_with_retry(DialRetry::AnyTransport, timeout, || {
         client.get(&url).query(&[("fp", fp), ("ts", ts_s.as_str()), ("sig", sig)])

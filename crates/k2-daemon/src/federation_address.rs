@@ -155,13 +155,17 @@ fn send_notice(peer: &FederationPeer, body: &[u8]) -> SendResult {
         Err(e) => return SendResult::Transport(e),
     };
     let url = format!("{base}{}", notice::ROUTE);
-    let client = match reqwest::blocking::Client::builder()
+    let mut builder = reqwest::blocking::Client::builder()
         // Never follow a redirect: a peer must not steer us to another host.
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(SEND_TIMEOUT)
-        .build()
-    {
+        .timeout(SEND_TIMEOUT);
+    // Loopback (127.0.0.1, ::1, localhost) and plain http never use a
+    // proxy; HTTPS to a remote K2 may use the box's proxy settings.
+    if k2_core::proxy_rule::direct(&url) {
+        builder = builder.no_proxy();
+    }
+    let client = match builder.build() {
         Ok(c) => c,
         Err(e) => return SendResult::Transport(format!("build http client: {e}")),
     };

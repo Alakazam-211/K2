@@ -228,16 +228,10 @@ RUST_OUTSIDE=(
     "crates/k2-daemon/src/zen_lib_routes.rs|1|the Zen library CDN"
     "src-tauri/src/commands/linux_pkg_update.rs|1|the Linux package release download"
     "src-tauri/src/commands/updater.rs|2|the app release feed and download"
-    # Another K2 server over the internet, server to server: not K2's own
-    # server, so the box's proxy settings still apply.
-    "crates/k2-core/src/app_updates/dl_client.rs|1|an App's update downloads from its K2 server"
-    "crates/k2-daemon/src/compute_trust.rs|1|a federated K2 peer"
-    "crates/k2-daemon/src/federation_address.rs|1|a federated K2 peer"
-    "crates/k2-daemon/src/federation_drain.rs|1|a federated K2 peer"
-    "crates/k2-daemon/src/federation_routes.rs|2|a federated K2 peer"
-    "crates/k2-daemon/src/federation_vault.rs|1|a federated K2 peer"
+    # HTTPS to a remote K2 host may use the person's proxy; each of these
+    # also has a no-proxy client for loopback and plain http.
     "src-tauri/src/native_voice/provider.rs|1|HTTPS to a remote K2 host (its other client, for loopback and http, skips proxies)"
-    "crates/k2-transfer-client/src/lib.rs|1|an App's transfer door, for the App's own code"
+    "crates/k2-transfer-client/src/lib.rs|1|HTTPS to an App's remote transfer door (its other client, for loopback and http, skips proxies)"
     # Services on this box that are not the daemon.
     "crates/k2-daemon/src/mail/sieve_lockdown_live.rs|1|a mail test sink"
 )

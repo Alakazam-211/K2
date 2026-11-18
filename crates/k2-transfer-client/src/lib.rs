@@ -259,23 +259,60 @@ impl Default for UploadOptions {
 /// The transfer client. Cheap to clone (reqwest's client is shared).
 #[derive(Clone)]
 pub struct Client {
+    /// For HTTPS to a remote host: the person's proxy settings apply.
     http: reqwest::Client,
+    /// For loopback and plain http: no proxy setting applies.
+    direct: reqwest::Client,
     retry: Retry,
+}
+
+/// Loopback (127.0.0.1, ::1, localhost) and plain http never use a proxy;
+/// HTTPS to a remote K2 may use the person's proxy (a CONNECT tunnel hides
+/// the request and its token). The same rule as K2's own clients
+/// (tests/fixtures/proxy_rule/table.txt).
+fn direct(url: &str) -> bool {
+    let Ok(u) = reqwest::Url::parse(url) else {
+        return true;
+    };
+    if u.scheme() != "https" {
+        return true;
+    }
+    let Some(host) = u.host_str() else {
+        return true;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']').trim_end_matches('.').to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => ip.is_loopback(),
+        Err(_) => false,
+    }
 }
 
 impl Client {
     /// A client with reqwest's defaults (rustls, its default provider).
+    /// A request to loopback or a plain-http door never goes through a
+    /// proxy; https to a remote door uses the person's proxy settings.
     pub fn new() -> Result<Self, Error> {
-        let http = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(20))
-            .build()
-            .map_err(Error::Transport)?;
-        Ok(Client { http, retry: Retry::default() })
+        let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(20)).build().map_err(Error::Transport)?;
+        let direct = reqwest::Client::builder().connect_timeout(Duration::from_secs(20)).no_proxy().build().map_err(Error::Transport)?;
+        Ok(Client { http, direct, retry: Retry::default() })
     }
 
-    /// Use your own reqwest client (proxy, timeouts, user agent).
+    /// Use your own reqwest client (proxy, timeouts, user agent) for every
+    /// request.
     pub fn with_http(http: reqwest::Client) -> Self {
-        Client { http, retry: Retry::default() }
+        Client { direct: http.clone(), http, retry: Retry::default() }
+    }
+
+    /// The client for a request to `url` (see [`direct`]).
+    fn http_for(&self, url: &str) -> &reqwest::Client {
+        if direct(url) {
+            &self.direct
+        } else {
+            &self.http
+        }
     }
 
     /// Change how transient failures are retried.
@@ -333,7 +370,7 @@ impl Client {
 
     /// What the door holds of this upload.
     pub async fn upload_status(&self, ep: &Endpoint) -> Result<UploadStatus, Error> {
-        let r = self.send(|| self.http.get(&ep.url).bearer_auth(&ep.token)).await?;
+        let r = self.send(|| self.http_for(&ep.url).get(&ep.url).bearer_auth(&ep.token)).await?;
         json_of(r).await
     }
 
@@ -349,7 +386,7 @@ impl Client {
         let r = self
             .send(|| {
                 let mut req = self
-                    .http
+                    .http_for(&ep.url)
                     .put(&ep.url)
                     .bearer_auth(&ep.token)
                     .header(reqwest::header::CONTENT_RANGE, format!("bytes {start}-{last}/{total}"))
@@ -374,7 +411,7 @@ impl Client {
         };
         let r = self
             .send(|| {
-                self.http
+                self.http_for(&url)
                     .post(&url)
                     .bearer_auth(&ep.token)
                     .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -386,7 +423,7 @@ impl Client {
 
     /// Stop the upload; what K2 held is deleted.
     pub async fn abort(&self, ep: &Endpoint) -> Result<(), Error> {
-        self.send(|| self.http.delete(&ep.url).bearer_auth(&ep.token)).await.map(|_| ())
+        self.send(|| self.http_for(&ep.url).delete(&ep.url).bearer_auth(&ep.token)).await.map(|_| ())
     }
 
     /// Upload `path` (whose size the upload was made with): ask what the
@@ -449,7 +486,7 @@ impl Client {
     {
         let have = tokio::fs::metadata(part).await.map(|m| m.len()).unwrap_or(0);
         let etag = tokio::fs::read_to_string(etag_file).await.ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        let mut req = self.http.get(&ep.url).bearer_auth(&ep.token);
+        let mut req = self.http_for(&ep.url).get(&ep.url).bearer_auth(&ep.token);
         if let (true, Some(tag)) = (have > 0, etag.as_deref()) {
             req = req.header(reqwest::header::RANGE, format!("bytes={have}-")).header(reqwest::header::IF_RANGE, tag);
         }
@@ -533,6 +570,32 @@ fn content_range_total(h: &reqwest::header::HeaderMap) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    /// Every row of the shared proxy-rule table.
+    #[test]
+    fn the_proxy_rule_matches_the_shared_table() {
+        let table = include_str!("../../../tests/fixtures/proxy_rule/table.txt");
+        let mut rows = 0;
+        for line in table.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            let (want, url) = line.split_once(' ').expect("a row is \"direct|proxy <url>\"");
+            let want_direct = match want {
+                "direct" => true,
+                "proxy" => false,
+                other => panic!("bad row kind {other:?} in {line:?}"),
+            };
+            assert_eq!(super::direct(url), want_direct, "{url}: want {want}");
+            rows += 1;
+        }
+        assert!(rows >= 19, "the table lost rows: {rows}");
+    }
+
+    #[test]
+    fn a_plain_http_or_loopback_door_uses_the_no_proxy_client() {
+        let c = super::Client::new().expect("client");
+        assert!(std::ptr::eq(c.http_for("http://door.acme.test/x"), &c.direct));
+        assert!(std::ptr::eq(c.http_for("https://127.0.0.1:4646/x"), &c.direct));
+        assert!(std::ptr::eq(c.http_for("https://notes.acme.test/x"), &c.http));
+    }
+
     use super::*;
 
     #[test]

@@ -446,12 +446,16 @@ fn classify(status: u16, body: &str) -> Disposition {
 /// means TRANSPORT failure only (unreachable / timeout).
 fn post_inbound_status(base: &str, envelope_bytes: &[u8]) -> Result<(u16, String), String> {
     let url = format!("{base}/cli/federation/inbound");
-    let client = reqwest::blocking::Client::builder()
+    let mut builder = reqwest::blocking::Client::builder()
         // Never follow a redirect: a peer must not steer us to another host.
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|e| format!("build http client: {e}"))?;
+        .timeout(Duration::from_secs(20));
+    // Loopback (127.0.0.1, ::1, localhost) and plain http never use a
+    // proxy; HTTPS to a remote K2 may use the box's proxy settings.
+    if k2_core::proxy_rule::direct(&url) {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().map_err(|e| format!("build http client: {e}"))?;
     let resp = crate::federation_routes::send_with_retry(
         crate::federation_routes::DialRetry::NeverSent,
         Duration::from_secs(20),

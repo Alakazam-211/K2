@@ -89,12 +89,16 @@ fn is_retryable(status: u16) -> bool {
 
 impl Client {
     pub fn new(base: &str, token: &str) -> Result<Self, DlError> {
-        let http = reqwest::blocking::Client::builder()
+        let mut builder = reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(15))
             .timeout(None)
-            .user_agent(concat!("k2-daemon/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .map_err(|e| DlError::Bad(format!("http client: {e}")))?;
+            .user_agent(concat!("k2-daemon/", env!("CARGO_PKG_VERSION")));
+        // Loopback (127.0.0.1, ::1, localhost) and plain http never use a
+        // proxy; HTTPS to a remote K2 may use the box's proxy settings.
+        if crate::proxy_rule::direct(base) {
+            builder = builder.no_proxy();
+        }
+        let http = builder.build().map_err(|e| DlError::Bad(format!("http client: {e}")))?;
         Ok(Self {
             base: base.trim_end_matches('/').to_string(),
             token: token.to_string(),

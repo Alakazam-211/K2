@@ -323,13 +323,18 @@ fn receive_revoke(vault: &LocalVault, peer_fp: &str, host: &str, signal: &AgentS
 // Sender
 // ─────────────────────────────────────────────────────────────────────
 
-fn client() -> Result<reqwest::blocking::Client, VaultError> {
-    reqwest::blocking::Client::builder()
+/// The client for `url`. Loopback (127.0.0.1, ::1, localhost) and plain
+/// http never use a proxy; HTTPS to a remote K2 may use the box's proxy
+/// settings.
+fn client(url: &str) -> Result<reqwest::blocking::Client, VaultError> {
+    let mut builder = reqwest::blocking::Client::builder()
         // A peer must never steer us to another host.
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(DIAL_TIMEOUT)
-        .build()
-        .map_err(|e| VaultError::internal(format!("http client: {e}")))
+        .timeout(DIAL_TIMEOUT);
+    if k2_core::proxy_rule::direct(url) {
+        builder = builder.no_proxy();
+    }
+    builder.build().map_err(|e| VaultError::internal(format!("http client: {e}")))
 }
 
 fn sign_signal(peer: &FederationPeer, signal: &AgentSignal) -> Result<Vec<u8>, VaultError> {
@@ -369,7 +374,7 @@ fn peer_vault(vault: &LocalVault, peer: &FederationPeer, host: &str, refresh: bo
     };
     let bytes = sign_signal(peer, &signal)?;
     let url = format!("{base}/cli/federation/vault-recipient");
-    let resp = client()?
+    let resp = client(&url)?
         .post(&url)
         .header("Content-Type", "application/json")
         .body(bytes)
@@ -412,7 +417,7 @@ enum Answer {
 
 fn post_handoff(base: &str, bytes: Vec<u8>, host: &str) -> Result<Answer, VaultError> {
     let url = format!("{base}/cli/federation/vault-handoff");
-    let resp = client()?
+    let resp = client(&url)?
         .post(&url)
         .header("Content-Type", "application/json")
         .body(bytes)

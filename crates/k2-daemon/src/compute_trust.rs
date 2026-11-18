@@ -1939,13 +1939,18 @@ fn fed_send(peer_fp: &str, kind: &str, payload: Value) -> R<Value> {
     };
     let key = federation::identity::load_or_create().map_err(|e| no("federation_key", 500, e))?;
     let bytes = federation::seal(&signal, &key, &peer.subdomain, 8).map_err(|e| no("seal", 500, e.to_string()))?;
-    let client = reqwest::blocking::Client::builder()
+    let url = format!("{base}{FEDERATION_ROUTE}");
+    let mut builder = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(db_err)?;
+        .timeout(std::time::Duration::from_secs(20));
+    // Loopback (127.0.0.1, ::1, localhost) and plain http never use a
+    // proxy; HTTPS to a remote K2 may use the box's proxy settings.
+    if k2_core::proxy_rule::direct(&url) {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().map_err(db_err)?;
     let resp = client
-        .post(format!("{base}{FEDERATION_ROUTE}"))
+        .post(&url)
         .header("Content-Type", "application/json")
         .body(bytes)
         .send()

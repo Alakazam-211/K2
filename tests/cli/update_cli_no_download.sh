@@ -84,7 +84,12 @@ export PATH="$SHIM:$PATH"
 CLI_VERSION="$("$K2_CLI" version)"
 CLI_VERSION="${CLI_VERSION#k2 }"
 [ -n "$CLI_VERSION" ] || { echo "FAIL: k2 version printed nothing" >&2; exit 1; }
-CLI_SUM_BEFORE="$(shasum -a 256 "$K2_CLI" | cut -d' ' -f1)"
+# sha256 of a file: shasum where it exists (macOS), else sha256sum (some
+# Linux images ship only that).
+sum256() {
+    if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1"; else sha256sum "$1"; fi | cut -d' ' -f1
+}
+CLI_SUM_BEFORE="$(sum256 "$K2_CLI")"
 
 # run <daemon version|down> <k2 args...>: sets OUT and RC.
 run() {
@@ -131,7 +136,7 @@ fi
 [ "$(grep -c '127.0.0.1:1/boot-status' "$CALL_LOG")" -eq 3 ] \
     && ok "one /boot-status read per run" \
     || { bad "expected 3 /boot-status reads"; sed 's/^/      | /' "$CALL_LOG" >&2; }
-[ "$(shasum -a 256 "$K2_CLI" | cut -d' ' -f1)" = "$CLI_SUM_BEFORE" ] \
+[ "$(sum256 "$K2_CLI")" = "$CLI_SUM_BEFORE" ] \
     && ok "cli/k2 unchanged" || bad "cli/k2 was rewritten"
 if grep -q 'raw.githubusercontent.com/Alakazam-211/K2/main/cli/k2' "$CLI_BASH_SOURCE"; then
     bad "the CLI still names the raw-branch cli/k2 URL"

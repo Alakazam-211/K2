@@ -14,11 +14,15 @@ Usage: k2 update [--app|--cli [--check]|--list]
                  Show the CLI's and the local daemon's versions. The CLI
                  updates with K2; --check leaves out "Nothing was changed."
 
-  None of these downloads or installs anything.
+  None of these downloads or installs anything. --app and --list ask
+  GitHub, so they are refused while air-gap is on; they need no running
+  daemon. --cli asks this machine's daemon for its version.
 EOF
 }
 
 cmd_app_update() {
+    # Both forms ask GitHub: refused under air-gap, like k2 daemon install.
+    _k2_refuse_if_airgap
     local version="${1:-}"
     if [ "$version" = "--list" ] || [ "$version" = "-l" ]; then
         # List available versions from GitHub

@@ -607,9 +607,12 @@ _k2_update_form() {
     done
     echo "$form"
 }
-# `k2 update --help` only prints the usage: no daemon.
-if [ "${1:-}" = "update" ] && [ "$(_k2_update_form "${@:2}")" = "help" ]; then
-    _skip_conn_gate=1
+# `k2 update --help` only prints the usage, and `k2 update` / `--app` /
+# `--list` talk only to GitHub (cmd_app_update refuses them under
+# air-gap): no daemon, like `k2 daemon install`. `--cli` reads the local
+# daemon's version, so it keeps the gate.
+if [ "${1:-}" = "update" ]; then
+    case "$(_k2_update_form "${@:2}")" in help|app|list) _skip_conn_gate=1 ;; esac
 fi
 # `k2 publish` P15 — split the connection gate.
 # Skip only plan/CP verbs that talk to connect.k2.dev + tunnel.json

@@ -25,6 +25,10 @@
 #                  rows)                                 p95 handler time
 #   connections    k5 connections list (this          <= 30 ms + the stub's
 #                  workspace's rows, three peers)        p95 handler time
+#   feedback list  k5 feedback list (three tickets)   <= 30 ms + the stub's
+#                                                        p95 handler time
+#   feedback show  k5 feedback show <id> (a brief,    <= 30 ms + the stub's
+#                  a thread with a file)                 p95 handler time
 #   fallthrough    k5 heartbeat list (a verb the      <= cli/k2's p95 for
 #                  shell answers)                        the same + 5 ms
 #   thread read    k5 thread read                     <= 40 ms: pending
@@ -90,8 +94,19 @@ CONNECTIONS = json.dumps({"workspace": {"name": "acme", "path": work + "/ws"},
     "thisWorkspace": {"handle": "acme", "sessions": [{"address": "acme", "role": "main", "cli": "claude", "state": "working", "you": True}]},
     "connections": [{"projectName": "beta"}, {"projectName": "gamma", "reachable": False},
                     {"remote": True, "agent": "delta", "host": "box.example"}]}).encode()
+TICKETS = json.dumps({"items": [
+    {"id": "fb_000001aa", "status": "waiting", "priority": 1, "kind": "question", "title": "Ship it?"},
+    {"id": "fb_000002bb", "status": "answered", "priority": 2, "kind": "decision", "title": "Pick a name"},
+    {"id": "fb_000003cc", "status": "planned", "priority": 3, "kind": "note", "title": "Later"}]}).encode()
+TICKET = json.dumps({"id": "fb_000001aa", "status": "waiting", "title": "Ship it?", "kind": "question",
+    "priority": 1, "agentName": "perf", "sessionId": "s1", "createdAt": 1763400000, "assignees": ["owner"],
+    "options": ["yes", "no"], "body": "Ready to ship.\nAll green.", "hasBrief": True, "briefBytes": 2048,
+    "brief": {"text": "Problem\nThe release is ready."}, "projectPath": work + "/ws",
+    "comments": [{"author": "perf", "at": 1763400061, "body": "See the log.",
+                  "attachments": [{"path": "out/log.txt", "size": 4096}]}]}).encode()
 BODIES = {"/cli/whoami": WHOAMI, "/cli/heartbeat/list": b"[]", "/cli/inbox/list": INBOX, "/cli/terminal/read": LINES,
-          "/cli/feed": FEED, "/cli/sessions/roster": ROSTER, "/cli/connections": CONNECTIONS}
+          "/cli/feed": FEED, "/cli/sessions/roster": ROSTER, "/cli/connections": CONNECTIONS,
+          "/cli/feedback/list": TICKETS, "/cli/feedback/show": TICKET}
 handler_ns = []
 lock = threading.Lock()
 
@@ -185,6 +200,8 @@ check_same("read", [k5, "read", "acme"], bash_argv("read", "acme"))
 check_same("activity", [k5, "activity"], bash_argv("activity"))
 check_same("sessions", [k5, "sessions"], bash_argv("sessions"))
 check_same("connections list", [k5, "connections", "list"], bash_argv("connections", "list"))
+check_same("feedback list", [k5, "feedback", "list"], bash_argv("feedback", "list"))
+check_same("feedback show", [k5, "feedback", "show", "fb_1"], bash_argv("feedback", "show", "fb_1"))
 check_same("fallthrough (heartbeat list)", [k5, "heartbeat", "list"], bash_argv("heartbeat", "list"))
 
 results = []
@@ -220,13 +237,17 @@ measure_native("read", ["read", "acme"])
 measure_native("activity", ["activity"])
 measure_native("sessions", ["sessions"])
 measure_native("connections list", ["connections", "list"])
+measure_native("feedback list", ["feedback", "list"])
+measure_native("feedback show", ["feedback", "show", "fb_1"])
 bash_ft = p95(timed(bash_argv("heartbeat", "list")))
 print(f"perf_cli: info: cli/k2 heartbeat list: p95 {bash_ft:.2f} ms (the fallthrough's base)")
 measure("k5 heartbeat list (fallthrough)", [k5, "heartbeat", "list"], bash_ft + 5.0, "cli/k2's p95 + 5 ms")
 for words in (["whoami"], ["done"], ["respond", "perf line"], ["inbox"], ["read", "acme"],
-              ["activity"], ["sessions"], ["connections", "list"]):
+              ["activity"], ["sessions"], ["connections", "list"], ["feedback", "list"],
+              ["feedback", "show", "fb_1"]):
     bash_p95 = p95(timed(bash_argv(*words)))
-    print(f"perf_cli: info: cli/k2 {' '.join(words[:2]) if words[0] == 'connections' else words[0]}: p95 {bash_p95:.2f} ms (for comparison)")
+    name = ' '.join(words[:2]) if words[0] in ('connections', 'feedback') else words[0]
+    print(f"perf_cli: info: cli/k2 {name}: p95 {bash_p95:.2f} ms (for comparison)")
 print("perf_cli: pending: k5 thread read <= 40 ms (R3.5: thread read is not native yet)")
 
 # Where the fallthrough's time goes. Info only, no target: the front's

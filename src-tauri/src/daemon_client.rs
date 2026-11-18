@@ -647,7 +647,9 @@ mod tests {
     }
 
     /// A one-shot WebSocket stand-in for the daemon's /events: accepts one
-    /// upgrade and reports its target and Authorization header.
+    /// upgrade and reports its target and Authorization header. The
+    /// handshake callback's error type is tungstenite's own response.
+    #[allow(clippy::result_large_err)]
     fn events_stub() -> (u16, std::sync::mpsc::Receiver<(String, Option<String>)>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind events stub");
         let port = listener.local_addr().expect("events stub addr").port();

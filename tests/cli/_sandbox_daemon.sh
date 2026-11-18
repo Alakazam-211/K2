@@ -15,6 +15,12 @@
 
 set -euo pipefail
 
+# The tests make throwaway git repos and commit in them. A machine with no
+# git identity (a fresh CI or compute host) makes `git commit` fail with
+# exit 128, so the tests carry their own. Test processes only.
+export GIT_AUTHOR_NAME="K2 test" GIT_AUTHOR_EMAIL="test@example.com"
+export GIT_COMMITTER_NAME="K2 test" GIT_COMMITTER_EMAIL="test@example.com"
+
 sandbox_daemon_start() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

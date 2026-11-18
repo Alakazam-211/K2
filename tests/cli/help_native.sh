@@ -16,12 +16,12 @@
 #                                   pages print from other commands)
 #   help <w>, --help <w>, -h <w>    for each top level page and tier word
 #   help-advanced, help-internal
-# A form is on the list only when, run as bash under two different
-# environments (below), all of this holds:
-#   1. stdout and stderr and the exit code are the same in both, and one
+# A form is on the list only when, run as bash under each of the
+# environments below, all of this holds:
+#   1. stdout and stderr and the exit code are the same in all, and one
 #      stream is exactly one cli/text/help file while the other is empty;
 #   2. the trace (bash -x) from the router's case to the EXIT trap is the
-#      same in both, and each step in it is one of: case, shift, local,
+#      same in all, and each step in it is one of: case, shift, local,
 #      for, return, exit, true, :, break, continue, a variable assignment,
 #      a call of a function the script defines, `[` or `[[` comparing two
 #      words, and exactly one `cat` with no arguments (the quoted heredoc);
@@ -32,17 +32,29 @@
 # with a line between them when permission cards are on) and every page
 # piped through the card filter fail rule 2, so bash keeps them.
 #
-# The two environments, each env -i with a scratch HOME, stubs for curl and
+# The environments, each env -i with a scratch HOME, stubs for curl and
 # the system tools (a call fails the form), stdin from /dev/null:
-#   A  the owner's terminal: a port and an owner token in HOME/.k2.
-#   B  an agent's settings the front lets through: a passport
-#      (K2_HOOK_TOKEN) and K5_PORT, no token files, the virtual desktop's
-#      switch, air-gap on, a project path, another TMPDIR and LANG, and
-#      session names. For help/--help/-h forms also K2_HOOK_SOCK (those
-#      are open tools: the passport checks pass them), never for a family's
-#      --help (the front hands those to bash when HOOK_SOCK is set).
+#   A    the owner's terminal: a port and an owner token in HOME/.k2.
+#   B    an agent's settings the front lets through: a passport
+#        (K2_HOOK_TOKEN) and K5_PORT, no token files, the virtual desktop's
+#        switch, air-gap on, a project path, another TMPDIR and LANG, and
+#        session names. A family's --help only (help/--help/-h forms run
+#        in C instead).
+#   C    an agent in a K2 terminal: B and K2_HOOK_SOCK, a live socket. A
+#        stub daemon answers there, and only there: the permission cards
+#        probe (GET /cli/permission/enabled) says cards are off. curl runs
+#        for real only for a request to that socket, python3 for real
+#        always, so a form that asks reads the answer as it would.
+#   Con  C with cards on.
+# Every form runs in A, C and Con, and a family's --help in B too. The
+# session checks pass in all of them (a passport, a live socket, no
+# CODEX_ setting): the binary runs the same checks for a family's help
+# (crates/k5-cli/src/pages.rs, session_checks). Before the forms, a check
+# that the stub answers: `k2 study list` in Con shows the permissions
+# line, in C it doesn't, and each asks once.
 #
-# Never touches ~/.k2. No daemon.
+# Never touches ~/.k2. The stub daemon is this script's own, on two Unix
+# sockets in the scratch folder.
 set -euo pipefail
 export LC_ALL=C
 
@@ -67,7 +79,7 @@ SANDBOX="$(mktemp -d -t k2-help-native-XXXXXX)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 python3 -I - "$ROOT" "$CLI_BASH_SOURCE" "$BASH_BIN" "$SANDBOX" "$LIST" "$WRITE" <<'PY'
-import concurrent.futures, os, re, subprocess, sys
+import concurrent.futures, http.server, json, os, re, shutil, socketserver, subprocess, sys, threading
 
 root, script, bash_bin, sandbox, list_path, write = sys.argv[1:7]
 text_dir = os.path.join(root, "cli/text/help")
@@ -143,18 +155,67 @@ def make_env(kind, base):
             "K2_CELL": "canonical", "K2_PANE_ID": "p9", "CLAUDECODE": "1", "NO_COLOR": "1",
             "TERM": "dumb", "COLUMNS": "40", "K2_JSON": "1", "K2_DEBUG": "1",
         })
-        if kind == "C":
-            env["K2_HOOK_SOCK"] = os.path.join(base, "no.sock")
+        if kind in ("C", "Con"):
+            env["K2_HOOK_SOCK"] = cards_sock[kind]
+            env["PATH"] = os.path.join(sandbox, "stub-cell") + ":" + os.environ.get("PATH", "/usr/bin:/bin")
     return env, cwd
 
-os.makedirs(os.path.join(sandbox, "stub"))
-for t in ["curl", "wget", "nc", "launchctl", "systemctl", "sudo", "security", "open", "osascript",
-          "pkill", "killall", "ssh", "k2", "k5", "git", "python3", "sqlite3"]:
-    p = os.path.join(sandbox, "stub", t)
-    with open(p, "w") as f:
-        f.write("#!/bin/sh\necho \"stub %s $*\" >&2\nexit 97\n" % t)
-    os.chmod(p, 0o755)
-envs = {k: make_env(k, os.path.join(sandbox, k)) for k in "ABC"}
+STUBBED = ["curl", "wget", "nc", "launchctl", "systemctl", "sudo", "security", "open", "osascript",
+           "pkill", "killall", "ssh", "k2", "k5", "git", "python3", "sqlite3"]
+for d, real in (("stub", ()), ("stub-cell", ("curl", "python3"))):
+    os.makedirs(os.path.join(sandbox, d))
+    for t in STUBBED:
+        if t in real:
+            continue
+        p = os.path.join(sandbox, d, t)
+        with open(p, "w") as f:
+            f.write("#!/bin/sh\necho \"stub %s $*\" >&2\nexit 97\n" % t)
+        os.chmod(p, 0o755)
+real_curl = shutil.which("curl")
+if not real_curl:
+    sys.exit("FAIL: no curl on PATH for the cell environments")
+# In a cell, curl runs for a request to a Unix socket (the stub's) only.
+with open(os.path.join(sandbox, "stub-cell", "curl"), "w") as f:
+    f.write("#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = --unix-socket ] && exec %s \"$@\"; done\n"
+            "echo \"stub curl $*\" >&2\nexit 97\n" % real_curl)
+os.chmod(os.path.join(sandbox, "stub-cell", "curl"), 0o755)
+
+# The stub daemon: the cards probe off on one socket, on on the other.
+hits = {"C": 0, "Con": 0}
+hits_lock = threading.Lock()
+cards_sock = {}
+class UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+for kind, on in (("C", False), ("Con", True)):
+    class Cards(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        kind_, on_ = kind, on
+        def do_GET(self):
+            with hits_lock:
+                hits[self.kind_] += 1
+            if self.path.split("?", 1)[0] == "/cli/permission/enabled":
+                status, body = 200, json.dumps({"enabled": self.on_}).encode()
+            else:
+                status, body = 404, b'{"error":"not found"}'
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+        do_POST = do_GET
+        def address_string(self):
+            return "cell"
+        def log_message(self, *a):
+            pass
+    # In the environment's own folder, so a path in a trace reads <base>.
+    os.makedirs(os.path.join(sandbox, kind), exist_ok=True)
+    path = os.path.join(sandbox, kind, "cards.sock")
+    srv = UnixServer(path, Cards)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    cards_sock[kind] = path
+envs = {k: make_env(k, os.path.join(sandbox, k)) for k in ("A", "B", "C", "Con")}
 
 STEP = re.compile(r"^(\++)([0-9]+): (.*)$")
 OK_WORDS = {"case", "shift", "local", "for", "return", "exit", "true", ":", "break", "continue"}
@@ -217,7 +278,10 @@ def plain(steps):
     return None
 
 def classify(argv):
-    kinds = ["A", "C" if argv[0] in HELP_FIRST or argv[0].startswith("help-") else "B"]
+    if argv[0] in HELP_FIRST or argv[0].startswith("help-"):
+        kinds = ["A", "C", "Con"]
+    else:
+        kinds = ["A", "B", "C", "Con"]
     outs, wins = [], []
     for k in kinds:
         outs.append(run(argv, k, False))
@@ -237,9 +301,9 @@ def classify(argv):
         if w is None:
             return argv, None, why
         wins.append(w)
-    if outs[0] != outs[1]:
+    if any(o != outs[0] for o in outs):
         return argv, None, "the output differs between the environments"
-    if wins[0] != wins[1]:
+    if any(w != wins[0] for w in wins):
         return argv, None, "the trace differs between the environments"
     why = plain(wins[0])
     if why:
@@ -257,6 +321,17 @@ def classify(argv):
     want = "/".join(w for w in argv if w not in ("--help", "-h", "help")) if argv[0] not in HELP_FIRST else argv[1]
     rel = want if want in rels else rels[0]
     return argv, (rel, stream, code), None
+
+# The stub answers, both ways, once per command.
+for kind, want in (("C", False), ("Con", True)):
+    before = hits[kind]
+    code, out, err = run(["study", "list"], kind, False)
+    line = b"\n  permissions " in out
+    if code != 0 or line != want or hits[kind] != before + 1:
+        sys.exit("FAIL: k2 study list in %s: exit %d, the permissions line %s, %d requests (want %s, 1): %r"
+                 % (kind, code, "shown" if line else "not shown", hits[kind] - before,
+                    "shown" if want else "not shown", err[-300:]))
+print("help_native: the stub answers the cards probe: off in C, on in Con")
 
 rows, kept = [], {}
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:

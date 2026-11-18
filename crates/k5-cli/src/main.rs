@@ -137,7 +137,9 @@ fn main() {
         }
         Route::Feedback => families::feedback::run(&args).unwrap_or_else(|| shell(who, &args)),
         Route::Study(s) => page(who, &args, |p, env| pages::study_page(s, p, env)),
-        Route::Help(form) => page(who, &args, |p, _| pages::help_page(form, p)),
+        Route::Help(form) => page(who, &args, |p, env| {
+            pages::help_page(form, p, env, || passport::current(&args).would_refuse())
+        }),
         Route::Fallthrough => shell(who, &args),
     };
     trace::finish("command");

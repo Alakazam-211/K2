@@ -39,10 +39,14 @@
 #    set to a relative path, which bash never reads and the binary refuses
 #    before it runs bash. So a pass is the binary's own answer. Forms bash
 #    keeps (the tiers made of pieces, the card pages, pieces, a form that
-#    is not exactly a row) must fail that way. So must a family's help
-#    with K2_HOOK_SOCK set (its session checks are bash's) and any help
-#    with no port or no token (the connection gate); help <w> with
-#    K2_HOOK_SOCK set, and a passport with K2_PORT, stay the binary's.
+#    is not exactly a row) must fail that way. So must any help with no
+#    port or no token (the connection gate), and a family's help with
+#    K2_HOOK_SOCK set and a CODEX_ setting (bash looks for a shared Codex
+#    server). An agent's terminal (a passport, K2_PORT and K2_HOOK_SOCK a
+#    live socket) gets every row from the binary too; with K2_HOOK_SOCK
+#    set and no passport, an id tool's help is refused the same way
+#    (exit 3) by both. (The dead-passport probe, with the socket gone,
+#    needs a daemon: crates/k5-cli/tests/help_session_parity.rs.)
 #
 # No daemon: help is offline. Each run gets a scratch HOME and no K2_/K5_
 # settings from the caller (env -i). The connection gate wants a port and a
@@ -350,10 +354,28 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
         handed -- $cmd
     done
     SOCK="K2_HOOK_SOCK=$SANDBOX/no.sock"
-    handed "$SOCK" -- mail send --help
-    handed "$SOCK" -- vault --help
+    # No passport: an id tool's help is refused, an open one prints.
+    native "$SOCK" -- mail send --help
+    native "$SOCK" -- vault --help
+    native "$SOCK" -- agent harness --help
+    native "$SOCK" -- agent --help
     native "$SOCK" -- help mail
     native "$SOCK" -- help-advanced
+    handed "$SOCK" "CODEX_THREAD_ID=t1" -- mail send --help
+    native "$SOCK" "CODEX_THREAD_ID=t1" -- agent --help
+    # An agent's terminal: a passport and its live socket (a bound socket
+    # file; nothing needs to listen, the checks only test that it is one).
+    python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$SANDBOX/live.sock"
+    [ -S "$SANDBOX/live.sock" ] || bad "no socket at $SANDBOX/live.sock"
+    AGENT=("K2_PORT=1" "K2_HOOK_TOKEN=sessT.notreal1" "K2_HOOK_SOCK=$SANDBOX/live.sock")
+    agent_rows=0
+    while IFS='|' read -r argv _; do
+        case "$argv" in ''|'#'*) continue ;; esac
+        agent_rows=$((agent_rows + 1))
+        # shellcheck disable=SC2086  # argv is words
+        native "${AGENT[@]}" -- $argv
+    done < "$LIST"
+    [ "$agent_rows" = "$rows" ] || bad "$agent_rows rows in an agent's terminal, $rows in all"
     EMPTY="HOME=$SANDBOX/empty-home"
     mkdir -p "$SANDBOX/empty-home"
     handed "$EMPTY" -- help mail
@@ -363,7 +385,7 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     native "$EMPTY" "K2_PORT=1" "K2_HOOK_TOKEN=sessT.notreal1" -- help mail
     native "$EMPTY" "K2_PORT=1" "K2_HOOK_TOKEN=sessT.notreal1" -- mail send --help
     handed "SHELLOPTS=xtrace" -- mail send --help
-    echo "  $((pass - before)) binary checks passed ($rows forms)"
+    echo "  $((pass - before)) binary checks passed ($rows forms, each also in an agent's terminal)"
 fi
 
 echo ""

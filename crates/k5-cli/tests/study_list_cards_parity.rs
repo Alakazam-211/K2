@@ -29,3 +29,17 @@ fn the_usage_with_a_passport() {
         }
     }
 }
+
+#[test]
+fn the_list_and_usage_read_the_daemon_itself_without_python3() {
+    let rig = Rig::new("study", "list-nopy");
+    for args in [
+        &[][..],
+        &["list"],
+        &["--help"],
+        &["-h"],
+        &["errors", "--help"],
+    ] {
+        common::cards::check_without_python3(&rig, args, 0, 0);
+    }
+}

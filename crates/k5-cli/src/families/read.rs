@@ -44,8 +44,8 @@
 //! - `HOOK_SOCK` naming a live socket and no passport: the shell tries the
 //!   cell socket with an empty Bearer (the binary has no cell socket
 //!   without a passport);
-//! - a port that is set but is no port curl takes, and no `python3` on
-//!   `PATH`, as for [`super::inbox`].
+//! - a port that is set but is no port curl takes, and a `python3` the
+//!   binary can't tell, as for [`super::inbox`].
 //!
 //! Where the shell's Python itself fails with a traceback (an answer that
 //! is JSON but not an object, or `lines` that is not a list), the text

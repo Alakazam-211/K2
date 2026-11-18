@@ -30,3 +30,16 @@ fn the_skins_alias_with_a_passport() {
         }
     }
 }
+
+#[test]
+fn the_apps_page_reads_the_daemon_itself_without_python3() {
+    let rig = Rig::new("study", "apps-nopy");
+    for args in [
+        &["apps"][..],
+        &["apps", "--json"],
+        &["skins"],
+        &["--json", "skins"],
+    ] {
+        common::cards::check_without_python3(&rig, args, 0, 0);
+    }
+}

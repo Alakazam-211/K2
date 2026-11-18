@@ -35,6 +35,13 @@
 //! is not a plain port number, a host that is not an IPv4 address, or a
 //! passport, host or port that is not plain ASCII.
 //!
+//! With no `python3` ([`crate::python::Python3::Missing`]) the shell's
+//! probe can't read any answer, so it is always off there. The binary's
+//! own probe gives the real answer instead (K2's ruling,
+//! [`crate::python::NATIVE_WITHOUT_PYTHON3`]): a 200 whose JSON says
+//! `"enabled": true` is on, after a refused try too, and neither a
+//! `PYTHON*` setting nor the locale counts, as no Python reads it.
+//!
 //! Where this differs from the shell, on purpose or as a known gap: the
 //! binary's own request headers ([`crate::transport`]: its User-Agent,
 //! `X-K5-Cli-Version` and `X-K5-Cli-Via: native`), the one line when the

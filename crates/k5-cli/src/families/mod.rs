@@ -19,6 +19,20 @@
 //! and the others return `None`) when it is a form only the shell
 //! answers. It decides before it prints or sends anything.
 //!
+//! # Without Python
+//!
+//! The shell's readers are `python3`; a family reads the answer itself.
+//! Where the shell has a `python3`, a family prints what it prints, byte
+//! for byte. Where it has none ([`crate::python::Python3::Missing`]), a
+//! family answers just the same (K2's ruling,
+//! [`crate::python::NATIVE_WITHOUT_PYTHON3`]), where the shell would print
+//! the answer as it came or Python's "command not found". That includes
+//! the Python 3.12 traceback a family prints where the shell's Python
+//! raises: it is what the command prints wherever it runs, so a caller
+//! sees one output with or without Python. Where the binary can't tell
+//! what the shell's `python3` is (Windows, an exported `python3`
+//! function), a family hands its command to the shell.
+//!
 //! # A request on the left of a pipe
 //!
 //! `inbox`, `read` and `activity` send `cli_send cli_request … | python3 -c …`

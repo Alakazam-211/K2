@@ -27,6 +27,10 @@
 //! on the Python version, so those cases compare the exit code, stdout and
 //! the traceback's last line's exception name.
 //!
+//! Each case then runs the binary once more with no `python3` on `PATH`
+//! (K2's ruling: a native command runs where python3 is missing): the
+//! same requests and the same output as with one.
+//!
 //! Hermetic: HOME, TMPDIR and the K2 home are scratch folders, the tokens
 //! are made up, and each side gets nothing from the environment but PATH
 //! and what the case sets.
@@ -90,6 +94,7 @@ impl Rig {
             &secrets,
             &dir.join("tmp-bash"),
             &dir.join("tmp-rust"),
+            &dir.join("tmp-nopy"),
         ] {
             std::fs::create_dir_all(d).unwrap();
         }
@@ -122,6 +127,11 @@ impl Rig {
     /// One side's run. `bash`: `cli/k2` as the front hands it a verb;
     /// else the binary.
     fn run(&self, bash: bool, case: &Case) -> Out {
+        self.run_on(bash, case, None)
+    }
+
+    /// [`Rig::run`], with `path` as `PATH` when given.
+    fn run_on(&self, bash: bool, case: &Case, path: Option<&str>) -> Out {
         let mut cmd = if bash {
             let mut c = Command::new("bash");
             c.arg(cli_k2());
@@ -130,13 +140,24 @@ impl Rig {
             Command::new(BIN)
         };
         cmd.env_clear();
-        if let Some(path) = std::env::var_os("PATH") {
-            cmd.env("PATH", path);
+        match path {
+            Some(path) => {
+                cmd.env("PATH", path);
+            }
+            None => {
+                if let Some(path) = std::env::var_os("PATH") {
+                    cmd.env("PATH", path);
+                }
+            }
         }
         let tmp = if case.no_tmpdir {
             self.dir.join("no-tmp")
         } else {
-            self.dir.join(if bash { "tmp-bash" } else { "tmp-rust" })
+            self.dir.join(match (bash, path) {
+                (true, _) => "tmp-bash",
+                (false, None) => "tmp-rust",
+                (false, Some(_)) => "tmp-nopy",
+            })
         };
         cmd.env("HOME", &self.home)
             .env("TMPDIR", &tmp)
@@ -349,22 +370,68 @@ fn case(
     }
 }
 
+/// Each case starts from an empty K2 home, no re-minted passport and its
+/// own answers.
+fn prepare(rig: &Rig, c: &Case) {
+    for f in [
+        rig.secrets.join(".k2-passport"),
+        rig.k2home.join("heartbeat.port"),
+        rig.k2home.join("heartbeat.token"),
+        rig.k2home.join("daemon.token"),
+    ] {
+        let _ = std::fs::remove_file(f);
+    }
+    (c.setup)(rig);
+    rig.stub.reset(&c.replies);
+}
+
 fn check(rig: &Rig, c: &Case) {
+    // The run with no python3 gets a TMPDIR as the binary's is now (the
+    // bulletin line's stamp lives there).
+    let nopy = rig.dir.join("tmp-nopy");
+    let _ = std::fs::remove_dir_all(&nopy);
+    common::parity::copy_tree(&rig.dir.join("tmp-rust"), &nopy);
+    let (with, with_log) = check_parity(rig, c);
+    let name = c.name;
+    prepare(rig, c);
+    let path = common::path_without_python3(&rig.dir);
+    let out = rig.run_on(false, c, Some(&path));
+    println!("-- rust, no python3: {out:?}");
+    assert_eq!(
+        rig.stub.left(),
+        0,
+        "{name}: answers left unused with no python3"
+    );
+    let log: Vec<String> = rig
+        .stub
+        .log()
+        .iter()
+        .map(|r| normalise(r, true, name))
+        .collect();
+    assert_eq!(log, with_log, "{name}: the requests with no python3");
+    assert_eq!(out.code, with.code, "{name}: the exit with no python3");
+    assert_eq!(out.stdout, with.stdout, "{name}: stdout with no python3");
+    if c.compare == Compare::Waited {
+        let (ws, wn) = common::parity::mask_waited(&with.stderr);
+        let (os, on) = common::parity::mask_waited(&out.stderr);
+        assert_eq!(os, ws, "{name}: stderr with no python3 (seconds masked)");
+        assert!(
+            on.len() == wn.len() && on.iter().zip(&wn).all(|(x, y)| x.abs_diff(*y) <= 1),
+            "{name}: the waited lines with no python3"
+        );
+    } else {
+        assert_eq!(out.stderr, with.stderr, "{name}: stderr with no python3");
+    }
+}
+
+/// Runs both sides of `c` and compares them. The binary's run and its
+/// requests.
+fn check_parity(rig: &Rig, c: &Case) -> (Out, Vec<String>) {
     let name = c.name;
     let mut outs = Vec::new();
     let mut logs = Vec::new();
     for bash in [true, false] {
-        // Each case starts from an empty K2 home and no re-minted passport.
-        for f in [
-            rig.secrets.join(".k2-passport"),
-            rig.k2home.join("heartbeat.port"),
-            rig.k2home.join("heartbeat.token"),
-            rig.k2home.join("daemon.token"),
-        ] {
-            let _ = std::fs::remove_file(f);
-        }
-        (c.setup)(rig);
-        rig.stub.reset(&c.replies);
+        prepare(rig, c);
         let out = rig.run(bash, c);
         let side = if bash { "bash" } else { "rust" };
         assert_eq!(
@@ -454,6 +521,7 @@ fn check(rig: &Rig, c: &Case) {
     } else {
         assert_eq!(r.stderr, b.stderr, "{name}: stderr");
     }
+    (r.clone(), rl)
 }
 
 /// A port nothing listens on.

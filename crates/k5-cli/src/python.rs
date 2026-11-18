@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 /// one; that is a named difference (`native-without-python3` in
 /// `scripts/cli-parity.sh`). False: it goes to the shell, as when the
 /// binary can't tell.
-pub const NATIVE_WITHOUT_PYTHON3: bool = false;
+pub const NATIVE_WITHOUT_PYTHON3: bool = true;
 
 /// macOS's stand-in for `python3`.
 pub const MACOS_STAND_IN: &str = "/usr/bin/python3";

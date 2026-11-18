@@ -38,10 +38,12 @@
 //! [`crate::route`]); `feedback` alone, its help and every other verb
 //! (`ask`, `comment`, `resolve` and the rest) stay the shell's. So does a
 //! command line with `-h` or `--help` ([`crate::front`]), a word that is
-//! not UTF-8, a port that is set but is no port curl takes, and no
-//! `python3` on `PATH`. `show` also hands the shell a port written with a
-//! leading zero (urllib's `Host` line keeps the text) and an `http_proxy`
-//! setting in any case (urllib would go through that proxy).
+//! not UTF-8, a port that is set but is no port curl takes, and a
+//! `python3` the binary can't tell ([`crate::families`], Without Python).
+//! `show` also hands the shell a port written with a leading zero
+//! (urllib's `Host` line keeps the text) and an `http_proxy` setting in
+//! any case (urllib would go through that proxy), with or without
+//! `python3`.
 //!
 //! Where the shell's Python raises (an answer that is not an object, a
 //! field of a type it doesn't expect), this prints a Python 3.12

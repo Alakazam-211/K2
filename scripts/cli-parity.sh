@@ -28,7 +28,10 @@
 # mapped to its difference here by name, never skipped broadly. (The
 # binary's own parity tests meet owner-token-with-passport:
 # crates/k5-cli/tests/whoami_parity.rs, done_parity.rs, read_parity.rs,
-# activity_parity.rs and feedback_parity.rs.)
+# activity_parity.rs and feedback_parity.rs. They meet
+# native-without-python3 in every case of the parity rig, in
+# whoami_parity.rs, pages_without_python3.rs and the study cards tests;
+# tests/cli runs with python3 on PATH.)
 #
 # --shard I/N runs every Nth test starting at the Ith (1-based), so the
 # list can be split across jobs. Names after `--` run only those tests.
@@ -131,6 +134,7 @@ done
 # The named expected differences: "name|PRD reference|what differs".
 EXPECTED_DIFFS=(
     "version-offline|13.9 #3|--version with no port or token: bash refuses (exit 1, \"Error: Cannot connect to K2.\"); the binary prints \"k2 <version>\" (exit 0), as help, --schema and --version never need the daemon"
+    "native-without-python3|K2 ruling, out-of-box S1|a native k5 command runs when python3 is missing; that is a named, beneficial difference, and parity stays exact everywhere python3 exists. Hand-offs to bash for anything not native stay, with a plain line naming what is missing (python3 on a fresh Mac, Git Bash on Windows): with no python3 on PATH, study errors --json prints its JSON as with python3 where bash prints none, and msg prints one line naming Python 3 and exits 127 without starting bash"
     "owner-token-with-passport|13.9 #4|an open verb (whoami, done, read, activity, feedback list and show) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
 )
 
@@ -156,6 +160,53 @@ check_version_offline() {
             || problems+=("the binary as $name printed '$(head -c 200 "$out")', want exactly 'k2 $cli_version'")
         [ ! -s "$err" ] || problems+=("the binary as $name wrote on stderr: $(head -c 200 "$err")")
     done
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_native_without_python3: a PATH with no python3 (each folder that
+# has one replaced by a folder of links to its other files). With it,
+# `study errors --json` (whose JSON the shell's Python writes) prints the
+# binary's JSON exactly as with python3, and bash's prints none; `msg`
+# (not built in) prints the one line naming Python 3 on stderr and
+# exits 127, and bash never starts (the shell CLI is not written out).
+check_native_without_python3() {
+    local d="$WORK/no-python3" i=0 dir f nopath="" rc want got problems=()
+    local -a dirs
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf '1\n' >"$d/home/.k2/heartbeat.port"
+    printf 'tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    IFS=: read -r -a dirs <<<"$PATH"
+    for dir in "${dirs[@]}"; do
+        i=$((i + 1))
+        if [ -e "$dir/python3" ] || [ -L "$dir/python3" ]; then
+            mkdir -p "$d/path-$i"
+            while IFS= read -r f; do
+                [ "$f" = python3 ] || ln -s "$dir/$f" "$d/path-$i/$f"
+            done < <(ls -A "$dir")
+            dir="$d/path-$i"
+        fi
+        nopath="${nopath:+$nopath:}$dir"
+    done
+    if (PATH="$nopath"; command -v python3 >/dev/null 2>&1); then
+        echo "python3 is still on the PATH made without it: $nopath"
+        return 1
+    fi
+    run_in() { (cd "$d/ws" && env -i PATH="$1" HOME="$d/home" "${@:2}") </dev/null; }
+    want="$(run_in "$PATH" "$WORK/bin/k5" study errors --json 2>&1)" || problems+=("the binary with python3 failed: $want")
+    case "$want" in '{"id":"errors"'*) ;; *) problems+=("the binary with python3 printed no JSON page: $(printf '%s' "$want" | head -c 200)") ;; esac
+    rc=0; got="$(run_in "$nopath" "$WORK/bin/k5" study errors --json 2>&1)" || rc=$?
+    [ "$rc" = 0 ] && [ "$got" = "$want" ] \
+        || problems+=("the binary with no python3 exited $rc and printed: $(printf '%s' "$got" | head -c 200)")
+    got="$(run_in "$nopath" bash "$ROOT/cli/k2" study errors --json 2>/dev/null)" || true
+    [ "$got" != "$want" ] || problems+=("bash printed the JSON page with no python3: the difference is gone")
+    rc=0; got="$(run_in "$nopath" "$WORK/bin/k5" msg acme hello 2>"$d/err")" || rc=$?
+    [ "$rc" = 127 ] || problems+=("the binary's msg with no python3 exited $rc, want 127")
+    [ -z "$got" ] || problems+=("the binary's msg with no python3 printed on stdout: $(printf '%s' "$got" | head -c 200)")
+    [ "$(wc -l <"$d/err" | tr -d ' ')" = 1 ] && grep -q '^k5 msg: this command is not built into k5 yet and needs Python 3\. ' "$d/err" \
+        || problems+=("the binary's msg with no python3 wrote: $(head -c 300 "$d/err")")
+    [ ! -e "$d/home/.k2/run/cli" ] || problems+=("the binary's msg with no python3 wrote the shell CLI out")
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1

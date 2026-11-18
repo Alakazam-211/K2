@@ -4,12 +4,19 @@
 //! come. A study page's parity test runs them on a [`Rig`] for its own
 //! arguments: `cli/k2` and the binary must send the same request (or
 //! none) and print the same page with the same exit.
+//!
+//! With no `python3` the binary's probe reads the daemon's answer itself
+//! (K2's ruling), so three rows answer otherwise there, on purpose: a
+//! `PYTHON*` setting and a locale that is not UTF-8 (no Python reads the
+//! answer, so neither counts) and the daemon that moved its port (no
+//! shell `$(…)` holds the refused try's `000`). Each reads the daemon's
+//! "on" as on ([`check_without_python3`]).
 
 #![cfg(unix)]
 
 use super::parity::{
-    case, dead_port, heal, healed_on_disk, ok, owner_and_port, with_passport, Case, Compare, Rig,
-    GARBAGE, REFUSED,
+    case, dead_port, heal, healed_on_disk, ok, owner_and_port, with_passport, Case, Compare,
+    NoPython3, Rig, GARBAGE, REFUSED,
 };
 use super::stub::Reply;
 use std::time::Duration;
@@ -248,6 +255,7 @@ pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i3
                 .collect(),
             Case {
                 compare: Compare::Shell,
+                no_python3: NoPython3::Own,
                 ..row("a PYTHON setting: the shell's", vec![ok(ON)], on_code, 1)
             },
         ),
@@ -258,6 +266,7 @@ pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i3
                 .collect(),
             Case {
                 compare: Compare::Shell,
+                no_python3: NoPython3::Own,
                 ..row(
                     "a locale that is not UTF-8: the shell's",
                     vec![ok(ON)],
@@ -291,6 +300,7 @@ pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i3
             ],
             Case {
                 setup: moved,
+                no_python3: NoPython3::Own,
                 ..row(
                     "the daemon moved its port: asked again there, read as off",
                     vec![ok(ON)],
@@ -300,4 +310,39 @@ pub fn rows(rig: &Rig, args: &'static [&'static str], on_code: i32, off_code: i3
             },
         ),
     ]
+}
+
+/// The rows that answer otherwise with no `python3` ([`NoPython3::Own`]):
+/// the binary sends what the row says and prints the page as it does for
+/// "on, on the cell socket" with `python3`, the daemon's "on" read as on.
+pub fn check_without_python3(
+    rig: &Rig,
+    args: &'static [&'static str],
+    on_code: i32,
+    off_code: i32,
+) {
+    let all = rows(rig, args, on_code, off_code);
+    let on = all
+        .iter()
+        .find(|c| c.name == "on, on the cell socket")
+        .expect("the row with cards on");
+    let (want, _) = rig.binary(on, false);
+    assert_eq!(want.code, Some(on_code), "{args:?}: {want:?}");
+    let own: Vec<&Case> = all
+        .iter()
+        .filter(|c| c.no_python3 == NoPython3::Own)
+        .collect();
+    assert_eq!(own.len(), 3, "{args:?}: the rows that differ");
+    for c in own {
+        let (got, log) = rig.binary(c, true);
+        let name = c.name;
+        println!("== {name} {args:?} (no python3)\n-- rust: {got:?}");
+        assert_eq!(rig.stub.left(), 0, "{name}: answers left unused");
+        assert_eq!(log.len(), c.requests, "{name}: the requests {log:?}");
+        assert_eq!(
+            (got.code, got.stdout.as_str(), got.stderr.as_str()),
+            (want.code, want.stdout.as_str(), want.stderr.as_str()),
+            "{name} {args:?}: with no python3, the page with cards on"
+        );
+    }
 }

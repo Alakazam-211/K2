@@ -39,3 +39,11 @@ fn without_a_passport_it_is_the_shell_s_error() {
     };
     rig.check(&c);
 }
+
+#[test]
+fn the_cards_page_reads_the_daemon_itself_without_python3() {
+    let rig = Rig::new("study", "perm-nopy");
+    for args in [&["permissions"][..], &["permissions", "--json"]] {
+        common::cards::check_without_python3(&rig, args, 0, 2);
+    }
+}

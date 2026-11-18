@@ -31,8 +31,8 @@
 //! `connections` alone and its help stay the shell's. So does a command
 //! line with `-h` or `--help` ([`crate::front`]), a word that is not
 //! UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a port that
-//! is set but is no port curl takes, and no `python3` on `PATH`, as for
-//! [`super::inbox`].
+//! is set but is no port curl takes, and a `python3` the binary can't
+//! tell, as for [`super::inbox`].
 //!
 //! Where the shell's Python raises (an answer that is not an object, a
 //! field of a type it doesn't expect), this prints a Python 3.12

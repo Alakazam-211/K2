@@ -48,7 +48,7 @@
 //!   for a shared Codex server first, [`crate::prelude::codex_env`]);
 //! - a port that is set but is no port curl takes (the shell's curl fails
 //!   on TCP where its cell socket may still answer);
-//! - no `python3` on `PATH` (the shell's readers need it).
+//! - a `python3` the binary can't tell ([`crate::families`], Without Python).
 //!
 //! Where the shell's Python itself fails with a traceback (`read`: a hint
 //! or code that is not a string), the text depends on the Python version;

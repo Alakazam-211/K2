@@ -31,8 +31,9 @@
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`): a
 //! command line with `-h` or `--help` ([`crate::front`]), a word that is
-//! not UTF-8, a port that is set but is no port curl takes, and no
-//! `python3` on `PATH`.
+//! not UTF-8, a port that is set but is no port curl takes, and a
+//! `python3` the binary can't tell ([`crate::families`], Without
+//! Python).
 //!
 //! The time of an event is `time.localtime`'s, by the C library's
 //! `localtime_r` and `strftime`, as Python's is: the same `TZ`, the same

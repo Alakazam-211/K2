@@ -244,7 +244,12 @@ fn attach_engine_settings<'a, R: Runtime, M: Manager<R>>(
     builder.on_page_load(|window, _payload| {
         let _ = window.with_webview(|platform| {
             use webkit2gtk::{SettingsExt, WebViewExt};
-            if let Some(settings) = WebViewExt::settings(&platform.inner()) {
+            let view = platform.inner();
+            // Loopback never uses a proxy; the person's proxy stays for
+            // the rest. Once per session; the main window sets it at build.
+            #[cfg(target_os = "linux")]
+            crate::linux_webview_proxy::apply_once(&view);
+            if let Some(settings) = WebViewExt::settings(&view) {
                 settings.set_enable_hyperlink_auditing(false);
             }
         });
@@ -294,7 +299,14 @@ pub fn create_main_k2_window<R: Runtime>(
             "tauri.conf.json app.windows[0] is missing",
         )
     })?;
-    Ok(k2_app_window_from_config(app, &config)?.build()?)
+    let window = k2_app_window_from_config(app, &config)?.build()?;
+    // Before the page's first request: loopback never uses a proxy, the
+    // person's proxy stays for the rest (Linux; a no-op without a proxy).
+    #[cfg(target_os = "linux")]
+    {
+        let _ = window.with_webview(|platform| crate::linux_webview_proxy::apply_once(&platform.inner()));
+    }
+    Ok(window)
 }
 
 #[cfg(test)]

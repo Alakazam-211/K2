@@ -50,6 +50,10 @@ mod linux_daemon;
 // setup() once; reconnects forever so we survive daemon restarts.
 mod daemon_events;
 mod k2_app_window;
+/// The Linux web view's proxy settings: loopback never uses a proxy.
+/// `pub` for tests/webview_proxy.rs (a real WebKitGTK page under Xvfb).
+#[cfg(target_os = "linux")]
+pub mod linux_webview_proxy;
 // Native voice calls (prd-k2-voice-rooms-v1 §14): Sew's plugin + K2's sign-in.
 #[cfg(feature = "native-voice")]
 mod native_voice;

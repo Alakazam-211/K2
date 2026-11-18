@@ -1,5 +1,6 @@
-// The slim in-call bar in the top bar: the call's name, its time and its
-// controls (mute, deafen, camera, share, leave), and the actions that say
+// The slim in-call bar in the top bar: the call's name, the recording badge
+// while it records, its time and its controls (mute, deafen, camera, share,
+// Record or Stop, leave), and the actions that say
 // where the call goes from here (Expand or Back to call, Pop out, Show call
 // here, Back to chat). It is the whole call while the call is audio only, and
 // the call wherever its tile or stage isn't showing. In the top bar's flow,
@@ -11,6 +12,7 @@ import { video } from '@/stores/video'
 import { voice } from '@/stores/voice'
 import type { VoiceCall } from '@/stores/voice-core'
 import CallControls from './CallControls'
+import { CallRecordingBadge } from './RecordingBadge'
 import { useCallNoiseRemoval } from './CallLayer'
 import { useCallTime } from './callHooks'
 import { useCallPopout } from '@/stores/call-popout'
@@ -42,6 +44,8 @@ export default function CallBar({ call, action }: CallBarProps): React.JSX.Eleme
       <span data-testid="call-bar-title" data-call-bar-part="name" className="min-w-0 max-w-[160px] truncate text-[var(--color-text-primary)]">
         {title}
       </span>
+      {/* While it records: right after the name, and it never folds away. */}
+      <CallRecordingBadge call={call} testId="call-topbar-recording" />
       <span data-testid="call-bar-time" data-call-bar-part="time" className="text-[11px] tabular-nums text-[var(--color-text-secondary)]">
         {time ?? 'Connecting…'}
       </span>

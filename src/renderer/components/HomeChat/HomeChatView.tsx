@@ -95,17 +95,22 @@ import { HomeChatTyping } from './HomeChatTyping'
 import { HomeChatChannelGlyph, HomeChatPersonAvatar } from './HomeChatGlyphs'
 import { EyeIcon } from 'lucide-react'
 import { K2_ICON_STROKE } from '@/components/icons/K2Icons'
-import { HomeChatCallButton, HomeChatCallRecord, HomeChatRecordingCard, HomeChatTranscriptPanel } from './HomeChatCall'
+import { HomeChatCallButton, HomeChatCallRecord } from './HomeChatCall'
+import { HomeChatRecordingCard, HomeChatRecordingChip, HomeChatTranscriptPanel } from './HomeChatRecording'
 import { HomeChatDmCallBars, dmCallButtonState, useDmCall } from './HomeChatCallControls'
 import { callRecordLine } from '@/lib/home-chat/calls'
 import {
   canShowTranscript,
   fetchHomeChatTranscript,
+  liveDmRecording,
   parseTranscriptLine,
   recordingCardLine,
+  recordingCardView,
+  transcriptHeading,
   transcriptRootOf,
   type TranscriptLine,
 } from '@/lib/home-chat/recordings'
+import { recordingBadgeTitle } from '@/lib/voice/recording-controls'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { serverLabelFor } from './serverLabel'
 import { HomeChatErrorState } from './HomeChatStates'
@@ -530,7 +535,36 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
   const nowSec = Math.floor(Date.now() / 1000)
   const dm = target.kind === 'person'
   // DM calls (§11a): the Call button says why when it can't call.
-  const dmCall = useDmCall(hostKey, dm ? conv : null, title, me)
+  const dmCallHere = useDmCall(hostKey, dm ? conv : null, title, me)
+  // A recording that runs now, as Sew says it, the same for both people:
+  // this device's call when it has one, else the DM's newest card that
+  // hasn't stopped (on the call from another device, the web client, or
+  // just reading the DM).
+  const cardRec = dm ? liveDmRecording(messages) : null
+  const callRec = dmCallHere.strip?.recording?.badge ? dmCallHere.strip.recording : null
+  const liveRec = callRec
+    ? { title: callRec.badge ?? 'Recording', startedAt: callRec.startedAt ?? null }
+    : cardRec
+      ? {
+          title: recordingBadgeTitle(
+            { trigger: cardRec.card.recording?.auto ? 'auto' : 'manual' },
+            cardRec.card.recording?.startedBy ? authorName(cardRec.card.recording.startedBy, me, names) : null,
+            true,
+            cardRec.startedAt,
+          ),
+          startedAt: cardRec.startedAt,
+        }
+      : null
+  const dmCall =
+    liveRec && dmCallHere.strip && !callRec
+      ? {
+          ...dmCallHere,
+          strip: {
+            ...dmCallHere.strip,
+            recording: { canRecord: false, canStop: false, ...dmCallHere.strip.recording, badge: liveRec.title, startedAt: liveRec.startedAt },
+          },
+        }
+      : dmCallHere
   const callBlocked = !dm
     ? null
     : chatOff
@@ -567,6 +601,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
         <span className="truncate text-sm text-[var(--color-text-primary)]" data-testid="home-chat-title">
           {title}
         </span>
+        {liveRec ? <HomeChatRecordingChip title={liveRec.title} /> : null}
         {place !== null && <MachineChip place={place} />}
         {channel && channel.agents.length > 0 && (
           <span className="inline-flex items-center gap-1 type-hint text-[var(--color-text-secondary)]" data-testid="home-chat-agent-eye" title="Agents with access can read this channel">
@@ -641,7 +676,8 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
                     return (
                       <div key={m.id} data-home-chat-message="" data-zen-message={m.id}>
                         <HomeChatRecordingCard
-                          text={recordingCardLine(r, starter)}
+                          view={recordingCardView(r, starter)}
+                          label={recordingCardLine(r, starter)}
                           timeLabel={formatRelativeTime(m.createdAt, nowSec)}
                           onShowTranscript={canShowTranscript(r) ? () => showTranscript(m.id) : undefined}
                         />
@@ -754,9 +790,14 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
       </ThreadChatScope>
       {transcript && (
         <HomeChatTranscriptPanel
+          heading={transcriptHeading(messages?.find((m) => m.id === transcript.cardId) ?? null)}
           lines={transcript.lines}
           state={transcript.state}
-          nameOf={(id) => (me !== null && id === me ? 'You' : authorName(id, me, names))}
+          personOf={(id) => {
+            const p = people?.people.find((x) => x.memberId === id)
+            const name = me !== null && id === me ? 'You' : authorName(id, me, names)
+            return { name, username: p?.username ?? name, picture: p?.picture ?? null }
+          }}
           onClose={() => setTranscript(null)}
         />
       )}

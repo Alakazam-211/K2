@@ -367,16 +367,21 @@ describe('Home chat view', () => {
     })
     render(<HomeChatView target={DM} />)
     await screen.findByText('before the call')
-    const text = await screen.findByTestId('home-chat-recording-card-text')
-    await waitFor(() => expect(text.textContent).toBe('Recording · 12:04 · started by Alex · transcript ready · audio kept 30 days'))
+    const text = await screen.findByTestId('home-chat-recording-card-title')
+    await waitFor(() => expect(text.textContent).toBe('Recording · 12:04'))
+    expect(screen.getByTestId('home-chat-recording-card-detail').textContent).toBe('Started by Alex · audio kept 30 days')
+    expect(screen.getByTestId('home-chat-recording-card').getAttribute('data-state')).toBe('ready')
+    // A stopped recording: no chip in the header.
+    expect(screen.queryByTestId('home-chat-header-recording')).toBeNull()
     expect(screen.queryByText('in the page')).toBeNull()
     expect(screen.getByTestId('home-chat-recording-card').closest('[data-zen-message="50"]')?.querySelector('[data-testid="home-chat-hover-row"]')).toBeFalsy()
 
     fireEvent.click(screen.getByTestId('home-chat-show-transcript'))
     const panel = await screen.findByTestId('home-chat-transcript')
     await waitFor(() => expect(panel.querySelectorAll('[data-testid="home-chat-transcript-line"]').length).toBe(2))
-    const lines = [...panel.querySelectorAll('[data-testid="home-chat-transcript-line"]')].map((el) => el.textContent)
-    expect(lines).toEqual(['Alexhello from Alex', 'Youand me'])
+    const turns = [...panel.querySelectorAll('[data-testid="home-chat-transcript-turn"]')].map((el) => el.textContent)
+    expect(turns.map((t) => t?.replace(/^[A-Z]{1,2}(?=[A-Z][a-z])/, ''))).toEqual(['Alex0:00hello from Alex', 'You0:00and me'])
+    expect(screen.getByTestId('home-chat-transcript-heading').textContent).toMatch(/^Transcript · 12:04 · /)
     // A live line goes to the open transcript, never the timeline.
     await waitFor(() => expect(h.frames).not.toBeNull())
     await act(async () => {

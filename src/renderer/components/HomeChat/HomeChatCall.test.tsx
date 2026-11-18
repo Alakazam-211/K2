@@ -10,9 +10,7 @@ import {
   HomeChatCallingBar,
   HomeChatCallRecord,
   HomeChatCallStrip,
-  HomeChatRecordingCard,
   HomeChatRingCard,
-  HomeChatTranscriptPanel,
   RING_DOCK_BELOW,
   ringLayerPlace,
   ringLayerTop,
@@ -233,10 +231,13 @@ describe('recording a DM call (prd-home-call-recording-v1 §2, HR-9)', () => {
     fireEvent.click(screen.getByTestId('home-chat-call-record'))
     expect(rec).toHaveBeenCalledTimes(1)
     expect(screen.queryByTestId('home-chat-call-stop-recording')).toBeNull()
-    rerender(strip({ badge: 'Recording: started by Alex', canRecord: false, canStop: true }))
+    rerender(strip({ badge: 'Alex started recording', canRecord: false, canStop: true }))
     const badge = screen.getByTestId('home-chat-call-recording')
     expect(badge.textContent).toBe('Recording')
-    expect(badge.getAttribute('title')).toBe('Recording: started by Alex')
+    expect(badge.getAttribute('title')).toBe('Alex started recording')
+    // Never red words: the dot carries the colour.
+    expect(badge.className).not.toMatch(/status-error|danger/)
+    expect(badge.querySelector('[data-recording-dot]')?.className).toContain('--color-status-error')
     expect(screen.queryByTestId('home-chat-call-record')).toBeNull()
     fireEvent.click(screen.getByTestId('home-chat-call-stop-recording'))
     expect(stop).toHaveBeenCalledTimes(1)
@@ -255,42 +256,32 @@ describe('recording a DM call (prd-home-call-recording-v1 §2, HR-9)', () => {
       dmCallRecording({ recording: null, recordingPerms: { recordCalls: true, manageChannels: false, voiceChatOnly: true }, recordingControls: { canRecord: true, canStop: true }, participants }),
     ).toEqual({ badge: null, canRecord: false, canStop: false })
     expect(dmCallRecording({ recording, recordingPerms: null, recordingControls: { canRecord: false, canStop: true }, participants })).toEqual({
-      badge: 'Recording: started by Alex',
+      badge: 'Alex started recording',
+      startedAt: null,
       canRecord: false,
       canStop: true,
     })
+    const at = new Date(2026, 10, 17, 14, 41).getTime()
+    expect(dmCallRecording({ recording: { ...recording, startedAt: at }, recordingPerms: null, recordingControls: null, participants }).badge).toMatch(
+      /^Alex started recording at 2:41\sPM$/,
+    )
   })
 
-  it('the recording card: its line, and Show transcript only when offered', () => {
-    const show = vi.fn()
-    const { rerender } = render(<HomeChatRecordingCard text="Recording · 12:04 · started by Alex" timeLabel="2m" onShowTranscript={show} />)
-    expect(screen.getByTestId('home-chat-recording-card-text').textContent).toBe('Recording · 12:04 · started by Alex')
-    fireEvent.click(screen.getByTestId('home-chat-show-transcript'))
-    expect(show).toHaveBeenCalledTimes(1)
-    rerender(<HomeChatRecordingCard text="Recording in progress" timeLabel="now" />)
-    expect(screen.queryByTestId('home-chat-show-transcript')).toBeNull()
-  })
-
-  it('the transcript panel: each line under who spoke, loading and empty states, Close', () => {
-    const close = vi.fn()
-    const nameOf = (id: string) => (id === '7' ? 'Alex' : 'You')
-    const { rerender } = render(<HomeChatTranscriptPanel lines={null} state="Loading…" nameOf={nameOf} onClose={close} />)
-    expect(screen.getByTestId('home-chat-transcript-state').textContent).toBe('Loading…')
-    rerender(<HomeChatTranscriptPanel lines={[]} state={null} nameOf={nameOf} onClose={close} />)
-    expect(screen.getByTestId('home-chat-transcript-empty')).toBeTruthy()
-    rerender(
-      <HomeChatTranscriptPanel
-        lines={[
-          { id: '1', speaker: '7', text: 'hello', startMs: 0 },
-          { id: '2', speaker: '1', text: 'hi', startMs: 900 },
-        ]}
-        state={null}
-        nameOf={nameOf}
-        onClose={close}
+  it('the strip on another device shows the badge, with its clock, and no Record or Stop', () => {
+    render(
+      <HomeChatCallStrip
+        seconds={null}
+        muted={false}
+        elsewhere="another device"
+        onMute={vi.fn()}
+        onLeave={vi.fn()}
+        recording={{ badge: 'Alex started recording at 2:41 PM', startedAt: Date.now() - 192_000, canRecord: true, canStop: true }}
+        onRecord={vi.fn()}
+        onStop={vi.fn()}
       />,
     )
-    expect(screen.getAllByTestId('home-chat-transcript-line').map((el) => el.textContent)).toEqual(['Alexhello', 'Youhi'])
-    fireEvent.click(screen.getByTestId('home-chat-transcript-close'))
-    expect(close).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('home-chat-call-recording').textContent).toBe('Recording 03:12')
+    expect(screen.queryByTestId('home-chat-call-record')).toBeNull()
+    expect(screen.queryByTestId('home-chat-call-stop-recording')).toBeNull()
   })
 })

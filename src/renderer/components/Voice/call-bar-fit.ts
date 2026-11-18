@@ -7,7 +7,8 @@
 //   no-time  the time goes too;
 //   icons    the action (Back to call, Show call here…) shows its icon,
 //            its word in the tooltip and its name;
-//   minimal  the last resort: mute, hang up and the action only (deafen,
+//   minimal  the last resort: mute, hang up, the recording badge and the
+//            action only (deafen, Record and Stop,
 //            noise removal, camera and share are in the headset's list).
 //
 // The slim bar carries the step in `data-call-bar-fit`; globals.css hides

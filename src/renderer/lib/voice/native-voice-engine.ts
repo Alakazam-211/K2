@@ -86,6 +86,10 @@ export interface NativeRecording {
    *  now; the plugin writes each only when true. */
   canRecord?: boolean | null
   canStop?: boolean | null
+  /** When it started (epoch ms): Sew's `started_at` when the event carries
+   *  it, else the moment this device saw it start in the call (the voice
+   *  store); null when it was already running as this device joined. */
+  startedAt?: number | null
 }
 
 /** No names here: the media token and call keys carry none (the rooms list does). */
@@ -225,7 +229,18 @@ export function parseRecording(v: unknown): NativeRecording | null {
     prompt: parsePrompt(r.consent_prompt),
     ...(typeof r.can_record === 'boolean' ? { canRecord: r.can_record } : {}),
     ...(typeof r.can_stop === 'boolean' ? { canStop: r.can_stop } : {}),
+    ...(startedAtOf(r.started_at) !== null ? { startedAt: startedAtOf(r.started_at) } : {}),
   }
+}
+
+/** Sew's `started_at` (RFC 3339 or epoch ms), or null. */
+function startedAtOf(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string') {
+    const t = Date.parse(v)
+    return Number.isFinite(t) ? t : null
+  }
+  return null
 }
 
 export function parseParticipants(v: unknown): NativeParticipant[] {

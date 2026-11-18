@@ -29,6 +29,7 @@ import type { VideoController } from '@/stores/video-core'
 import type { VoiceCall } from '@/stores/voice-core'
 import CallControls, { type CallControlsProps } from './CallControls'
 import CallStage from './CallStage'
+import { CallRecordingBadge } from './RecordingBadge'
 import { PopOutButton } from './CallViewButtons'
 import { useCallDuration } from './callHooks'
 import { ScreenPicker, VideoNoticeLine } from './VideoControls'
@@ -109,9 +110,11 @@ function View({ call, video, actions, noiseRemoval }: CallExpandedProps): React.
         onKeyDown={keepFocusIn}
       >
         <header className="flex flex-shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 py-2">
-          <span data-testid="call-expanded-title" className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-text-primary)]">
+          <span data-testid="call-expanded-title" className="min-w-0 truncate text-[12px] text-[var(--color-text-primary)]">
             {callTitle(call)}
           </span>
+          <CallRecordingBadge call={call} testId="call-expanded-recording" />
+          <span className="flex-1" />
           {time ? (
             <span data-testid="call-expanded-duration" className="text-[11px] tabular-nums text-[var(--color-text-secondary)]">
               {time}

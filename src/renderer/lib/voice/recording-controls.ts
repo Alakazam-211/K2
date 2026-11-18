@@ -112,9 +112,37 @@ export function recordingNoticeText(opts: {
   }
 }
 
-/** The badge's tooltip: what started it. */
-export function recordingBadgeTitle(r: NativeRecording, startedByName: string | null, dm = false): string {
-  if (r.trigger === 'required') return dm ? 'Recording: this server records every call with more than one person' : 'Recording: this room records every call with more than one person'
-  if (r.trigger === 'auto') return dm ? 'Recording: this server records its calls' : 'Recording: this room records its calls'
-  return startedByName ? `Recording: started by ${startedByName}` : 'Recording'
+/** The badge's clock: "03:12", then "1:03:12" past an hour. */
+export function formatRecordingClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const sec = total % 60
+  const two = (n: number): string => String(n).padStart(2, '0')
+  return h > 0 ? `${h}:${two(m)}:${two(sec)}` : `${two(m)}:${two(sec)}`
+}
+
+/** A start time as the badge's tooltip says it ("2:41 PM"). */
+export function recordingClockTime(at: number): string {
+  return new Date(at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
+
+/** The badge's tooltip: who or what started it, and when ("Alex started
+ *  recording at 2:41 PM"). A room or server that records by itself says
+ *  so. `startedAt` null: the time isn't known (it was running as this
+ *  device joined), so the line leaves it out. */
+export function recordingBadgeTitle(
+  r: Pick<NativeRecording, 'trigger'>,
+  startedByName: string | null,
+  dm = false,
+  startedAt: number | null = null,
+): string {
+  const at = startedAt !== null ? ` at ${recordingClockTime(startedAt)}` : ''
+  const place = dm ? 'This server' : 'This room'
+  if (r.trigger === 'required') {
+    return startedAt !== null ? `${place} started recording${at}: it records every call with more than one person` : `${place} records every call with more than one person`
+  }
+  if (r.trigger === 'auto') return startedAt !== null ? `${place} started recording${at}: it records its calls` : `${place} records its calls`
+  if (startedByName) return `${startedByName} started recording${at}`
+  return startedAt !== null ? `Recording started${at}` : 'Recording'
 }

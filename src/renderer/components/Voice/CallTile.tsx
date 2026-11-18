@@ -42,6 +42,7 @@ import { popOutCall, useCallPopout } from '@/stores/call-popout'
 import { CALL_TILE_GAP, clearCallTileRest, setCallTileRest } from '@/stores/call-tile-place'
 import type { VideoController } from '@/stores/video-core'
 import type { VoiceCall } from '@/stores/voice-core'
+import { CallRecordingBadge } from './RecordingBadge'
 import CallControls, { CallControlBar, type CallControlsProps } from './CallControls'
 import { PictureButton } from './CallViewButtons'
 import { ScreenPicker, VideoNoticeLine } from './VideoControls'
@@ -337,22 +338,28 @@ function Card({ call, video, actions, noiseRemoval }: CallTileProps): React.JSX.
             </PictureButton>
           ) : null}
         </div>
-        {hiddenShare ? (
-          <button
-            type="button"
-            data-testid="call-tile-share-cue"
-            data-track={hiddenShare.key}
-            aria-label={`Full screen, to see ${hiddenShare.name}`}
-            title={`Full screen, to see ${hiddenShare.name}`}
-            data-k2-chamfer="chip"
-            className={`k2-focus absolute left-1.5 top-1.5 ${MEDIA_LABEL} max-w-[60%] opacity-90 hover:opacity-100 focus-visible:opacity-100`}
-            style={{ WebkitAppRegion: 'no-drag', '--k2-ch-w': '0px' } as React.CSSProperties}
-            onClick={() => expandCall('call-tile-share-cue')}
-          >
-            <ScreenShareIcon size={12} />
-            <span className="truncate">{hiddenShare.name}</span>
-          </button>
-        ) : null}
+        {/* The tile's header: the recording badge while it records (over
+            the picture, so it reads on any video), then the cue to a share
+            this tile doesn't show. */}
+        <div data-testid="call-tile-header" className="pointer-events-none absolute left-1.5 top-1.5 flex max-w-[60%] flex-col items-start gap-1 empty:hidden [&>*]:pointer-events-auto">
+          <CallRecordingBadge call={call} testId="call-tile-recording" onMedia />
+          {hiddenShare ? (
+            <button
+              type="button"
+              data-testid="call-tile-share-cue"
+              data-track={hiddenShare.key}
+              aria-label={`Full screen, to see ${hiddenShare.name}`}
+              title={`Full screen, to see ${hiddenShare.name}`}
+              data-k2-chamfer="chip"
+              className={`k2-focus ${MEDIA_LABEL} max-w-full opacity-90 hover:opacity-100 focus-visible:opacity-100`}
+              style={{ WebkitAppRegion: 'no-drag', '--k2-ch-w': '0px' } as React.CSSProperties}
+              onClick={() => expandCall('call-tile-share-cue')}
+            >
+              <ScreenShareIcon size={12} />
+              <span className="truncate">{hiddenShare.name}</span>
+            </button>
+          ) : null}
+        </div>
       </div>
       <div data-k2-chamfer-float="" data-testid="call-tile-strip" className="pointer-events-auto flex flex-col items-center gap-1">
         <CallControlBar>

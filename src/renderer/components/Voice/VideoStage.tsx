@@ -118,9 +118,11 @@ export interface VideoStageProps {
   controls?: React.ReactNode
   /** A line under the header from the place (why Pop out failed). */
   notice?: React.ReactNode
+  /** Right after the title: the call's state (the recording badge). */
+  status?: React.ReactNode
 }
 
-export default function VideoStage({ ctl, people, title, footerStart, footer, onClose, actions, className = '', controls, notice }: VideoStageProps): React.JSX.Element | null {
+export default function VideoStage({ ctl, people, title, footerStart, footer, onClose, actions, className = '', controls, notice, status }: VideoStageProps): React.JSX.Element | null {
   const availability = useStore(ctl.store, (s) => s.availability)
   const video = useStageTiles(ctl, people)
   // A call's stage (it has the call's controls) stays up with nobody's video
@@ -139,7 +141,15 @@ export default function VideoStage({ ctl, people, title, footerStart, footer, on
       style={noDrag}
     >
       <header className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-1 text-[12px] text-[var(--color-text-primary)]">
-        <span className="min-w-0 flex-1 truncate">{title}</span>
+        {status ? (
+          <>
+            <span className="min-w-0 truncate">{title}</span>
+            {status}
+            <span className="flex-1" />
+          </>
+        ) : (
+          <span className="min-w-0 flex-1 truncate">{title}</span>
+        )}
         {actions}
         {onClose ? (
           <button type="button" data-testid="video-stage-close" className={SMALL_BTN} onClick={onClose}>

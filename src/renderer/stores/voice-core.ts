@@ -806,7 +806,14 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     } else if (!r || r.myConsent !== 'pending') {
       recordingNotice = null
     }
-    store.setState({ call: { ...c, recording: r, recordingNotice } })
+    // The badge's clock: Sew's start when it says, else when this device saw
+    // it start (once in the call); one found while joining has none.
+    let rec = r
+    if (r && typeof r.startedAt !== 'number') {
+      const kept = !changed ? (c.recording?.startedAt ?? null) : c.phase === 'connected' || c.phase === 'reconnecting' ? deps.now() : null
+      rec = { ...r, startedAt: kept }
+    }
+    store.setState({ call: { ...c, recording: rec, recordingNotice } })
     if (changed) void readRecordingPerms()
   }
 

@@ -1912,3 +1912,92 @@ describe('the tile never covers the message box', () => {
     }
   })
 })
+
+describe('a recording: Record and Stop in the call controls, and one badge in every place the call shows', () => {
+  /** Sew's word that the call records (the same for everyone in it). */
+  function recording(on: boolean, controls = { canRecord: !on, canStop: on }): void {
+    act(() => {
+      const c = voice.store.getState().call!
+      voice.store.setState({
+        call: {
+          ...c,
+          recording: on
+            ? { recordingId: '42', myConsent: 'granted', recorderPresent: true, trigger: 'manual', required: false, startedBy: null, prompt: null, startedAt: Date.now() - 5_000 }
+            : null,
+          recordingControls: controls,
+        },
+      })
+    })
+  }
+
+  it('Record sits in the slim bar with the hollow dot, the size of Mute; Stop takes its place while it records', async () => {
+    await inCall()
+    recording(false)
+    const rec = within(topBar()).getByTestId('call-topbar-record')
+    expect(rec.getAttribute('title')).toBe('Record this call')
+    expect(rec.querySelector('[data-k2-icon]')?.getAttribute('data-k2-icon')).toBe('record')
+    expect(rec.className).toBe(within(topBar()).getByTestId('call-topbar-mute').className)
+    // A narrow top bar folds it into the headset's list.
+    expect(rec.hasAttribute('data-call-optional')).toBe(true)
+    recording(true)
+    expect(within(topBar()).queryByTestId('call-topbar-record')).toBeNull()
+    const stop = within(topBar()).getByTestId('call-topbar-stop-recording')
+    expect(stop.getAttribute('title')).toBe('Stop recording')
+    expect(stop.querySelector('[data-k2-icon]')?.getAttribute('data-k2-icon')).toBe('stop-record')
+  })
+
+  it("the headset's list has Record and Stop too, for a top bar too narrow for them", async () => {
+    await inCall()
+    recording(false)
+    act(() => voice.setPopoverOpen(true))
+    expect((await screen.findByTestId('voice-record')).getAttribute('title')).toBe('Record this call')
+    recording(true)
+    expect(screen.getByTestId('voice-stop-recording').getAttribute('title')).toBe('Stop recording')
+  })
+
+  it('a Voice & Chat only login never sees Record or Stop, in the slim bar or on the tile', async () => {
+    await inCall()
+    act(() => {
+      const c = voice.store.getState().call!
+      voice.store.setState({
+        call: { ...c, recordingPerms: { recordCalls: true, manageChannels: true, voiceChatOnly: true }, recordingControls: { canRecord: true, canStop: true } },
+      })
+    })
+    expect(within(topBar()).queryByTestId('call-topbar-record')).toBeNull()
+    expect(within(topBar()).queryByTestId('call-topbar-stop-recording')).toBeNull()
+    await cameraOn()
+    expect(within(screen.getByTestId('call-tile')).queryByTestId('call-overlay-record')).toBeNull()
+    expect(within(screen.getByTestId('call-tile')).queryByTestId('call-overlay-stop-recording')).toBeNull()
+  })
+
+  it('the badge: right after the name in the slim bar, in the tile header, the stage header, full screen and the call window', async () => {
+    installFullscreenApi()
+    await inCall()
+    recording(true)
+    const badge = within(topBar()).getByTestId('call-topbar-recording')
+    expect(badge.previousElementSibling?.getAttribute('data-testid')).toBe('call-bar-title')
+    expect(badge.textContent).toMatch(/^Recording 00:0\d$/)
+    // It never folds in a narrow top bar.
+    expect(badge.hasAttribute('data-call-optional')).toBe(false)
+    expect(badge.hasAttribute('data-call-bar-part')).toBe(false)
+
+    await cameraOn()
+    expect(within(inTile('call-tile-header')).getByTestId('call-tile-recording').textContent).toMatch(/^Recording 00:0\d$/)
+    expect(inTile('call-overlay-stop-recording')).toBeTruthy()
+
+    await expandFromTile()
+    expect(inStage('call-stage-recording').textContent).toMatch(/^Recording/)
+    fireEvent.click(inStage('video-stage-fullscreen'))
+    expect(within(screen.getByTestId('call-expanded')).getByTestId('call-expanded-recording')).toBeTruthy()
+
+    act(() => useCallPopout.setState({ open: true }))
+    render(<CallWindow closeWindow={vi.fn()} />)
+    expect(within(screen.getByTestId('call-window')).getByTestId('call-window-recording').textContent).toMatch(/^Recording/)
+
+    // Sew says it stopped: gone from every place.
+    recording(false)
+    for (const id of ['call-topbar-recording', 'call-tile-recording', 'call-stage-recording', 'call-expanded-recording', 'call-window-recording']) {
+      expect(screen.queryByTestId(id)).toBeNull()
+    }
+  })
+})

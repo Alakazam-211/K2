@@ -28,15 +28,20 @@ import {
   MicOffIcon,
   NoiseWaveIcon,
   PhoneOffIcon,
+  RecordIcon,
   ScreenShareIcon,
+  StopRecordIcon,
   TOP_BAR_ICON_REST_CLASS,
   VideoIcon,
 } from '@/components/icons/K2Icons'
 import { micBlockedText, MIC_DENIED_LINE } from '@/lib/voice/voice-wire'
 import { policyBlockText } from '@/lib/voice/video-labels'
-import { recordingBadgeTitle, recordingButtons } from '@/lib/voice/recording-controls'
-import { convOfDmRoom } from '@/lib/home-chat/calls'
+import { recordingButtons } from '@/lib/voice/recording-controls'
 import type { VoiceCall } from '@/stores/voice-core'
+
+/** Record's and Stop's names and tooltips, in every place they show. */
+export const RECORD_LABEL = 'Record this call'
+export const STOP_RECORDING_LABEL = 'Stop recording'
 import type { VideoController } from '@/stores/video-core'
 
 /** `tile`: the floating tile's strip; `overlay`: the expanded view and the
@@ -172,7 +177,7 @@ function CallButton({
   onPress: () => void
   children: ReactNode
   /** One a narrow top bar may fold away (call-bar-fit's last step): it is
-   *  in the headset's list too. Mute, Hang up and Record never are. */
+   *  in the headset's list too. Mute and Hang up never are. */
   optional?: boolean
 }): React.JSX.Element {
   const look =
@@ -315,25 +320,6 @@ function ScreenButton({ variant, video, busy }: { variant: CallControlsVariant; 
   )
 }
 
-/** The red "Recording" badge, the whole time a recording is on. */
-export function RecordingBadge({ call, variant }: { call: VoiceCall; variant: CallControlsVariant }): React.JSX.Element | null {
-  const r = call.recording
-  if (!r) return null
-  const starter = r.startedBy ? (call.participants.find((p) => p.memberId === r.startedBy)?.user ?? null) : null
-  return (
-    <span
-      data-testid={`call-${variant}-recording`}
-      role="status"
-      title={recordingBadgeTitle(r, starter, convOfDmRoom(call.roomId) !== null)}
-      className="flex shrink-0 items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-status-error-text)]"
-      style={noDrag}
-    >
-      <span aria-hidden className="inline-block h-2 w-2 rounded-[var(--radius-pill)] bg-[var(--color-status-error)]" />
-      Recording
-    </span>
-  )
-}
-
 
 export default function CallControls({ variant, call, actions, video, noiseRemoval }: CallControlsProps): React.JSX.Element {
   const busy = call.phase === 'joining'
@@ -392,17 +378,32 @@ export default function CallControls({ variant, call, actions, video, noiseRemov
       ) : null}
       {video ? <CameraButton variant={variant} video={video} busy={busy} /> : null}
       {video ? <ScreenButton variant={variant} video={video} busy={busy} /> : null}
-      {rec.canRecord && actions.startRecording ? (
-        <CallButton variant={variant} label="Record" dead={busy} testId={`call-${variant}-record`} onPress={() => void actions.startRecording?.()}>
-          <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-[var(--radius-pill)] border-2 border-[var(--color-status-error)]" />
-        </CallButton>
-      ) : null}
+      {/* Record, then Stop in its place while it records: the size of Mute.
+          In the top bar they fold into the headset's list last of all
+          (call-bar-fit's minimal step); the badge itself never folds. */}
       {rec.canStop && actions.stopRecording ? (
-        <CallButton variant={variant} label="Stop recording" dead={busy} testId={`call-${variant}-stop-recording`} onPress={() => void actions.stopRecording?.()}>
-          <span aria-hidden className="inline-block h-2.5 w-2.5 bg-[var(--color-status-error)]" />
+        <CallButton
+          variant={variant}
+          label={STOP_RECORDING_LABEL}
+          dead={busy}
+          testId={`call-${variant}-stop-recording`}
+          optional={variant === 'topbar'}
+          onPress={() => void actions.stopRecording?.()}
+        >
+          <StopRecordIcon size={size} />
+        </CallButton>
+      ) : rec.canRecord && actions.startRecording ? (
+        <CallButton
+          variant={variant}
+          label={RECORD_LABEL}
+          dead={busy}
+          testId={`call-${variant}-record`}
+          optional={variant === 'topbar'}
+          onPress={() => void actions.startRecording?.()}
+        >
+          <RecordIcon size={size} />
         </CallButton>
       ) : null}
-      <RecordingBadge call={call} variant={variant} />
       <CallButton variant={variant} label="Leave call" danger testId={`call-${variant}-leave`} onPress={() => void actions.leave()}>
         <PhoneOffIcon size={size} />
       </CallButton>

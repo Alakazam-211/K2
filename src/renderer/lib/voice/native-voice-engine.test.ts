@@ -93,6 +93,9 @@ describe("Sew's contract (native-voice-contract.json, held to the plugin's types
     expect(parseRecording(contract.recording.granted)).not.toHaveProperty('canRecord')
     expect(parseRecording({ ...contract.recording.granted, can_record: false, can_stop: true })).toMatchObject({ canRecord: false, canStop: true })
     expect(parseRecording(contract.recording.stopped)).toBeNull()
+    // Sew's start time, when the event carries it (the badge's clock); none today.
+    expect(parseRecording(contract.recording.granted)).not.toHaveProperty('startedAt')
+    expect(parseRecording({ ...contract.recording.granted, started_at: '2026-11-17T14:41:00Z' })?.startedAt).toBe(Date.parse('2026-11-17T14:41:00Z'))
   })
 
   it('reads participants (no names), speaking, devices and errors', () => {

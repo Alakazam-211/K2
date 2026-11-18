@@ -42,6 +42,7 @@ import { BackToChatButton } from './CallViewButtons'
 import { ScreenPicker, VideoNoticeLine } from './VideoControls'
 import { useStageTiles } from './VideoStage'
 import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
+import { CallRecordingBadge } from './RecordingBadge'
 
 const NO_PEOPLE: never[] = []
 
@@ -139,9 +140,11 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
         onContextMenu={titleBarOnContextMenu}
       >
         <DesktopChromeLeft />
-        <span data-testid="call-window-title" className="type-heading min-w-0 flex-1 truncate font-medium text-[var(--color-text-primary)]">
+        <span data-testid="call-window-title" className="type-heading min-w-0 truncate font-medium text-[var(--color-text-primary)]">
           {roomName ?? 'Call'}
         </span>
+        {call ? <CallRecordingBadge call={call} testId="call-window-recording" /> : null}
+        <span className="flex-1" />
         {time ? (
           <span data-testid="call-window-duration" className="type-control tabular-nums text-[var(--color-text-secondary)]">
             {time}

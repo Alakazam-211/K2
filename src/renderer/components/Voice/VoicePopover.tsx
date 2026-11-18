@@ -25,8 +25,9 @@ import { VoiceChatOnlyChip } from './VoiceChatOnlyChip'
 const JOINING_WAIT = 'Joining… wait a moment'
 import { video } from '@/stores/video'
 import { CameraPicker, ScreenPicker, VideoCallButtons, VideoNoticeLine } from './VideoControls'
-import { CALL_PANEL_ICON, CallPanelButton, noiseRemovalLabel } from './CallControls'
-import { HeadphonesIcon, MicIcon, MicOffIcon, NoiseWaveIcon, PhoneOffIcon } from '@/components/icons/K2Icons'
+import { CALL_PANEL_ICON, CallPanelButton, RECORD_LABEL, STOP_RECORDING_LABEL, noiseRemovalLabel } from './CallControls'
+import { recordingButtons } from '@/lib/voice/recording-controls'
+import { HeadphonesIcon, MicIcon, MicOffIcon, NoiseWaveIcon, PhoneOffIcon, RecordIcon, StopRecordIcon } from '@/components/icons/K2Icons'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const noDrag = { WebkitAppRegion: 'no-drag' } as any
@@ -83,6 +84,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
   const micBlocked = call.speakDenied ? micBlockedText('speak_denied', call.roomName) : call.serverMuted ? micBlockedText('server_muted', call.roomName) : null
   // Deafen mutes too (the store sets `muted`), so this covers it.
   const micOff = call.muted || call.micDenied || micBlocked !== null
+  const rec = recordingButtons({ perms: call.recordingPerms, recording: call.recording, controls: call.recordingControls })
   return (
     <section data-testid="voice-call" data-phase={call.phase} className="border-b border-[var(--color-border)] -mx-3 px-3 pb-2 mb-2">
       <div className="flex items-center justify-between">
@@ -150,6 +152,16 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
           </CallPanelButton>
         ) : null}
         {videoOn ? <VideoCallButtons ctl={video} disabled={busy} /> : null}
+        {/* Record or Stop: here too, for a top bar too narrow to hold them. */}
+        {engineKind === 'native' && rec.canStop ? (
+          <CallPanelButton testId="voice-stop-recording" label={STOP_RECORDING_LABEL} disabled={busy} onPress={() => void voice.stopRecording()}>
+            <StopRecordIcon size={CALL_PANEL_ICON} />
+          </CallPanelButton>
+        ) : engineKind === 'native' && rec.canRecord ? (
+          <CallPanelButton testId="voice-record" label={RECORD_LABEL} disabled={busy} onPress={() => void voice.startRecording()}>
+            <RecordIcon size={CALL_PANEL_ICON} />
+          </CallPanelButton>
+        ) : null}
         <CallPanelButton testId="voice-leave" label="Leave call" danger onPress={() => void voice.leave()}>
           <PhoneOffIcon size={CALL_PANEL_ICON} />
         </CallPanelButton>

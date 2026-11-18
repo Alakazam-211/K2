@@ -2102,6 +2102,18 @@ html[data-style="terminal"] .k2-slider::-webkit-slider-thumb {
 :is([data-call-bar-fit="icons"], [data-call-bar-fit="minimal"]) button:has(> [data-call-bar-glyph]) { padding-inline: calc(var(--spacing) * 1.5); }
 [data-call-bar-fit="minimal"] [data-call-optional] { display: none; }
 
+/* A call's recording (Voice/RecordingBadge.tsx): the danger dot breathes
+   slowly, so it is noticed without alarming; under reduced motion it holds
+   still at full strength. */
+@keyframes k2-recording-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+[data-recording-dot] { animation: k2-recording-pulse var(--motion-duration-pulse) ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  [data-recording-dot] { animation: none; }
+}
+
 /* Add to Home: the search field, section heads, rows and a section's note
    start on the dialog's 20px edge (px-5), the title's and the tabs'. The
    shared list pads them for a menu (6-8px); a note keeps its own 8px, so

@@ -690,6 +690,26 @@ export function ScreenShareIcon({ stop = false, ...props }: K2IconProps & { stop
   )
 }
 
+/** The call's Record: a hollow dot, in the danger colour (a recording's
+ *  colour everywhere), in every Style: a recording dot is round even where
+ *  boxes are square. */
+export function RecordIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('record', props, 'round')} stroke="var(--color-status-error)">
+      <circle cx="12" cy="12" r="6.5" />
+    </svg>
+  )
+}
+
+/** The call's Stop recording: a filled square in the danger colour. */
+export function StopRecordIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('stop-record', props)} stroke="none" fill="var(--color-status-error)">
+      <rect x="6" y="6" width="12" height="12" />
+    </svg>
+  )
+}
+
 /** Hang up: Lucide `phone-off` (the handset's curves, kept round). */
 export function PhoneOffIcon(props: K2IconProps = {}): React.JSX.Element {
   return (

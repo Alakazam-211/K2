@@ -46,6 +46,7 @@ import VideoStage from './VideoStage'
 import CallExpanded from './CallExpanded'
 import PopOutError from './PopOutError'
 import RecordingNotice from './RecordingNotice'
+import { CallRecordingBadge } from './RecordingBadge'
 import { callTitle } from '@/lib/home-chat/call-names'
 import CallControls, { CallControlBar } from './CallControls'
 import { FloatButton, FullScreenButton, PopOutButton, useFullScreenChordLabel } from './CallViewButtons'
@@ -184,6 +185,7 @@ export function CallStageView({ call, className }: { call: VoiceCall; className?
       title={callTitle(call)}
       className={className}
       actions={<CallStageActions />}
+      status={call.recording ? <CallRecordingBadge call={call} testId="call-stage-recording" /> : undefined}
       notice={<PopOutError />}
       controls={
         <CallControlBar>

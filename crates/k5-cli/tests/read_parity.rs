@@ -56,6 +56,13 @@ fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
 }
 
+/// No answer on the left of the pipe: the line, then SIGPIPE. macOS's
+/// bash 3.2 runs the reader on an empty input instead, which prints an
+/// empty line on stderr ([`Compare::InPipe`]).
+fn in_pipe(c: Case) -> Case {
+    Case { compare: Compare::InPipe { stdout: "", stderr: "\n" }, ..c }
+}
+
 fn reply(body: String) -> Reply {
     Reply::Answer(200, body)
 }
@@ -161,17 +168,16 @@ fn read_over_the_cell_socket() {
 #[test]
 fn read_with_no_answer() {
     let rig = Rig::new(VERB, "none");
-    let waited = |c: Case| Case { compare: Compare::Waited, ..c };
     let no_tmp = |c: Case| Case { no_tmpdir: true, ..c };
     let c = || cell(&rig, &[]);
     let v = vec![
-        waited(case("an empty reply: the line, then SIGPIPE", &["acme"], &[], vec![Reply::Close], owner_and_port, 141, 1)),
-        waited(case("a 5xx with no body: the line, then SIGPIPE", &["acme"], &[], vec![Reply::Answer(502, String::new())], owner_and_port, 141, 1)),
+        in_pipe(case("an empty reply: the line, then SIGPIPE", &["acme"], &[], vec![Reply::Close], owner_and_port, 141, 1)),
+        in_pipe(case("a 5xx with no body: the line, then SIGPIPE", &["acme"], &[], vec![Reply::Answer(502, String::new())], owner_and_port, 141, 1)),
         case("a reset: an empty line, exit 1", &["acme"], &[], vec![Reply::Reset], owner_and_port, 1, 1),
         case("not HTTP", &["acme"], &[], vec![Reply::Raw(GARBAGE.to_vec())], owner_and_port, 1, 1),
         no_tmp(case("TMPDIR unusable, a reset", &["acme"], &[], vec![Reply::Reset], owner_and_port, 1, 1)),
         no_tmp(case("TMPDIR unusable, an answer", &["acme"], &[], vec![ok(LINES)], owner_and_port, 0, 1)),
-        waited(with(c(), case("the cell socket and TCP: an empty reply on both", &["acme"], &[], vec![Reply::Close, Reply::Close], port_only, 141, 2))),
+        in_pipe(with(c(), case("the cell socket and TCP: an empty reply on both", &["acme"], &[], vec![Reply::Close, Reply::Close], port_only, 141, 2))),
     ];
     for c in v {
         rig.check(&c);
@@ -190,7 +196,7 @@ fn read_with_no_daemon() {
 #[test]
 fn read_with_a_daemon_that_never_answers() {
     let rig = Rig::new(VERB, "hang");
-    let c = Case { compare: Compare::Waited, ..case("no answer in time (28)", &["acme"], &[], vec![Reply::Hang(Duration::from_secs(35))], owner_and_port, 141, 1) };
+    let c = in_pipe(case("no answer in time (28)", &["acme"], &[], vec![Reply::Hang(Duration::from_secs(35))], owner_and_port, 141, 1));
     rig.check(&c);
 }
 

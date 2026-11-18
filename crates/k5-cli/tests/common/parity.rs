@@ -92,6 +92,15 @@ pub enum Compare {
     Shell,
     /// PRD 13.9 #4: bash sends the owner token, the binary the passport.
     OwnerTokenWithPassport,
+    /// No answer to a request on the left of a pipe into a reader: the
+    /// line, then death by SIGPIPE (141, `_k2_end_command`), compared as
+    /// [`Compare::Waited`]. macOS's `/bin/bash` 3.2 doesn't stop the
+    /// reader there: it reads an empty input, prints `stdout` and
+    /// `stderr`, and the command exits 1. Only there, and only when bash
+    /// ended with no signal, that is what bash must print (after the
+    /// binary's line) while the binary still dies of SIGPIPE with nothing
+    /// on stdout.
+    InPipe { stdout: &'static str, stderr: &'static str },
 }
 
 pub struct Case {
@@ -211,7 +220,12 @@ impl Rig {
         let (b, r) = (&outs[0], &outs[1]);
         let (mut bl, rl) = (logs[0].clone(), logs[1].clone());
         println!("== {name}\n{}\n-- bash: {b:?}\n-- rust: {r:?}", bl.join("\n----\n").replace('\r', ""));
-        assert_eq!(b.code, Some(c.code), "{name}: bash's exit: {b:?}");
+        let bash_3_2_pipe = match c.compare {
+            Compare::InPipe { stdout, stderr } if cfg!(target_os = "macos") && b.signal.is_none() => Some((stdout, stderr)),
+            _ => None,
+        };
+        let want = if bash_3_2_pipe.is_some() { 1 } else { c.code };
+        assert_eq!(b.code, Some(want), "{name}: bash's exit: {b:?}");
         assert_eq!(bl.len(), c.requests, "{name}: bash sent {} requests:\n{}", bl.len(), bl.join("\n----\n"));
         if c.compare == Compare::OwnerTokenWithPassport {
             assert!(bl.iter().all(|l| l.contains(&format!("token={OWNER}&"))), "{name}: bash no longer sends the owner token: {bl:?}");
@@ -219,10 +233,19 @@ impl Rig {
             bl = bl.iter().map(|l| l.replace(&format!("token={OWNER}&"), &format!("token={PASSPORT}&"))).collect();
         }
         assert_eq!(rl, bl, "{name}: the requests differ\n== rust ==\n{}\n== bash ==\n{}", rl.join("\n----\n"), bl.join("\n----\n"));
+        if let Some((stdout, stderr)) = bash_3_2_pipe {
+            assert_eq!((r.code, r.signal, r.stdout.as_str()), (Some(c.code), Some(13), ""), "{name}: the binary: {r:?}");
+            assert_eq!(b.stdout, stdout, "{name}: bash 3.2's reader on an empty input");
+            let (bs, bn) = mask_waited(&b.stderr);
+            let (rs, rn) = mask_waited(&format!("{}{stderr}", r.stderr));
+            assert_eq!(bs, rs, "{name}: stderr (seconds masked): bash 3.2 adds the reader's");
+            assert!(bn.len() == rn.len() && bn.iter().zip(&rn).all(|(x, y)| x.abs_diff(*y) <= 1), "{name}: the waited lines");
+            return;
+        }
         assert_eq!(r.code, b.code, "{name}: the exit code\nrust: {r:?}\nbash: {b:?}");
         assert_eq!(r.signal, b.signal, "{name}: the signal that ended it\nrust: {r:?}\nbash: {b:?}");
         assert_eq!(r.stdout, b.stdout, "{name}: stdout");
-        if c.compare == Compare::Waited {
+        if matches!(c.compare, Compare::Waited | Compare::InPipe { .. }) {
             let (bs, bn) = mask_waited(&b.stderr);
             let (rs, rn) = mask_waited(&r.stderr);
             assert_eq!(rs, bs, "{name}: stderr (seconds masked)");

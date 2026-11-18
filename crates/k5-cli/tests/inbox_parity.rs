@@ -79,6 +79,21 @@ fn words(v: Vec<&'static str>) -> &'static [&'static str] {
     Box::leak(v.into_boxed_slice())
 }
 
+/// What the shell's readers print on an empty input (macOS's bash 3.2
+/// runs them after a request with no answer: [`Compare::InPipe`]).
+const NO_ITEMS: &str = "No items.\n";
+const NO_FOLDERS: &str = "No folders yet. Create one by moving an item:\n  k2 inbox move <id> projects\n";
+const READ_NO_ANSWER: &str = "Error: no answer from the K2 daemon (neither this session's cell socket nor the loopback port answered). Is K2 running? Try again: k2 inbox read <id>\n";
+
+fn in_pipe(c: Case, stdout: &'static str, stderr: &'static str) -> Case {
+    Case { compare: Compare::InPipe { stdout, stderr }, ..c }
+}
+
+/// `list` or `search` with no answer.
+fn listed(c: Case) -> Case {
+    in_pipe(c, NO_ITEMS, "")
+}
+
 fn reply(body: String) -> Reply {
     Reply::Answer(200, body)
 }
@@ -213,16 +228,15 @@ fn inbox_in_a_session_as_the_shell_does() {
 #[test]
 fn inbox_with_no_answer() {
     let rig = Rig::new(VERB, "none");
-    let waited = |c: Case| Case { compare: Compare::Waited, ..c };
     let no_tmp = |c: Case| Case { no_tmpdir: true, ..c };
     let c = || cell(&rig, &[]);
     let empty_5xx = || Reply::Answer(502, String::new());
     let garbage = || Reply::Raw(GARBAGE.to_vec());
     let v = vec![
-        waited(case("an empty reply: the line, then SIGPIPE", &[], &[], vec![Reply::Close], owner_and_port, 141, 1)),
-        waited(case("a 5xx with no body: the line, then SIGPIPE", &["search", "q"], &[], vec![empty_5xx()], owner_and_port, 141, 1)),
-        waited(case("read: an empty reply", &["read", "a1"], &[], vec![Reply::Close], owner_and_port, 141, 1)),
-        waited(case("folders: an empty reply", &["folders"], &[], vec![Reply::Close], owner_and_port, 141, 1)),
+        listed(case("an empty reply: the line, then SIGPIPE", &[], &[], vec![Reply::Close], owner_and_port, 141, 1)),
+        listed(case("a 5xx with no body: the line, then SIGPIPE", &["search", "q"], &[], vec![empty_5xx()], owner_and_port, 141, 1)),
+        in_pipe(case("read: an empty reply", &["read", "a1"], &[], vec![Reply::Close], owner_and_port, 141, 1), "", READ_NO_ANSWER),
+        in_pipe(case("folders: an empty reply", &["folders"], &[], vec![Reply::Close], owner_and_port, 141, 1), NO_FOLDERS, ""),
         case("a reset (56): no items, exit 56", &[], &[], vec![Reply::Reset], owner_and_port, 56, 1),
         case("read, a reset: the reader's line, exit 1", &["read", "a1"], &[], vec![Reply::Reset], owner_and_port, 1, 1),
         case("folders, a reset: none, exit 56", &["folders"], &[], vec![Reply::Reset], owner_and_port, 56, 1),
@@ -232,9 +246,9 @@ fn inbox_with_no_answer() {
         no_tmp(case("TMPDIR unusable, an answer", &[], &[], vec![ok(ITEMS)], owner_and_port, 0, 1)),
         no_tmp(case("TMPDIR unusable, an empty reply: 75, no line", &[], &[], vec![Reply::Close], owner_and_port, 75, 1)),
         no_tmp(case("TMPDIR unusable, not HTTP: 75", &["folders"], &[], vec![garbage()], owner_and_port, 75, 1)),
-        no_tmp(waited(case("TMPDIR unusable, a 5xx with no body still says so", &[], &[], vec![empty_5xx()], owner_and_port, 141, 1))),
+        no_tmp(listed(case("TMPDIR unusable, a 5xx with no body still says so", &[], &[], vec![empty_5xx()], owner_and_port, 141, 1))),
         no_tmp(with(c(), case("TMPDIR unusable, a reset on the cell socket: TCP", &[], &[], vec![Reply::Reset, ok(ITEMS)], port_only, 0, 2))),
-        waited(with(c(), case("the cell socket and TCP: an empty reply on both", &[], &[], vec![Reply::Close, Reply::Close], port_only, 141, 2))),
+        listed(with(c(), case("the cell socket and TCP: an empty reply on both", &[], &[], vec![Reply::Close, Reply::Close], port_only, 141, 2))),
         with(c(), case("the cell socket and TCP: a reset on both", &[], &[], vec![Reply::Reset, Reply::Reset], port_only, 56, 2)),
     ];
     for c in v {
@@ -259,7 +273,7 @@ fn inbox_with_no_daemon() {
 #[test]
 fn inbox_with_a_daemon_that_never_answers() {
     let rig = Rig::new(VERB, "hang");
-    let c = Case { compare: Compare::Waited, ..case("no answer in time (28)", &[], &[], vec![Reply::Hang(Duration::from_secs(35))], owner_and_port, 141, 1) };
+    let c = listed(case("no answer in time (28)", &[], &[], vec![Reply::Hang(Duration::from_secs(35))], owner_and_port, 141, 1));
     rig.check(&c);
 }
 

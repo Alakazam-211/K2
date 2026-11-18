@@ -27,8 +27,8 @@
 # No tests/cli test meets one through the binary today; one that does is
 # mapped to its difference here by name, never skipped broadly. (The
 # binary's own parity tests meet owner-token-with-passport:
-# crates/k5-cli/tests/whoami_parity.rs, done_parity.rs, read_parity.rs
-# and activity_parity.rs.)
+# crates/k5-cli/tests/whoami_parity.rs, done_parity.rs, read_parity.rs,
+# activity_parity.rs and feedback_parity.rs.)
 #
 # --shard I/N runs every Nth test starting at the Ith (1-based), so the
 # list can be split across jobs. Names after `--` run only those tests.
@@ -131,7 +131,7 @@ done
 # The named expected differences: "name|PRD reference|what differs".
 EXPECTED_DIFFS=(
     "version-offline|13.9 #3|--version with no port or token: bash refuses (exit 1, \"Error: Cannot connect to K2.\"); the binary prints \"k2 <version>\" (exit 0), as help, --schema and --version never need the daemon"
-    "owner-token-with-passport|13.9 #4|an open verb (whoami, done, read, activity) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
+    "owner-token-with-passport|13.9 #4|an open verb (whoami, done, read, activity, feedback list and show) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
 )
 
 # check_version_offline: both CLIs run `--version` with a temp HOME and no
@@ -162,8 +162,9 @@ check_version_offline() {
 }
 
 # check_owner_token_with_passport: both CLIs run `whoami --json`, `done`,
-# `read acme` and `activity` with a passport, K2_HOOK_SOCK set (no socket
-# there, so both go over TCP), K2_PROJECT_PATH set (so `activity` asks no
+# `read acme`, `activity`, `feedback list` and `feedback show x` with a
+# passport, K2_HOOK_SOCK set (no socket there, so both go over TCP),
+# K2_PROJECT_PATH set (so `activity` and `feedback list` ask no
 # /cli/whoami first) and the owner token on disk, against a stub that logs
 # each request's token.
 check_owner_token_with_passport() {
@@ -202,7 +203,7 @@ s.serve_forever()
         echo "the stub daemon didn't start"
         return 1
     fi
-    for verb in "whoami --json" done "read acme" activity; do
+    for verb in "whoami --json" done "read acme" activity "feedback list" "feedback show x"; do
         for side in bash binary; do
             : >"$d/log"
             rc=0

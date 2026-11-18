@@ -103,7 +103,7 @@ pub const APPS_WITH_PASSPORT: bool = true;
 /// the binary asks the same way and prints the page or the shell's error
 /// for the answer. False: the shell answers it. Without a passport it is
 /// always the shell's error.
-pub const PERMISSIONS_WITH_PASSPORT: bool = false;
+pub const PERMISSIONS_WITH_PASSPORT: bool = true;
 
 /// The study command line in `rest` (the arguments after `study`), when
 /// the binary may answer it.

@@ -258,7 +258,7 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     #
     #
     #
-    CARDS_PERMISSIONS=bash
+    CARDS_PERMISSIONS=native
     #   study permissions, text and --json (PERMISSIONS_WITH_PASSPORT)
     #
     # The stub: cards off on one cell socket, on on another and over TCP.

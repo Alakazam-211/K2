@@ -330,7 +330,7 @@ else
 	# A regular file only (no link, no FIFO); at most 16 bytes read.
 	if [ -n "$_home" ] && [ -f "$_home/.k2/daemon.port" ] && [ ! -L "$_home/.k2/daemon.port" ]; then _port="$(head -c 16 "$_home/.k2/daemon.port" | tr -dc '0-9' | head -c 5)"; fi
 	if [ -n "$_port" ] && command -v curl >/dev/null 2>&1; then
-		RUNNING_DAEMON="$(curl -fsS --max-time 3 "http://127.0.0.1:$_port/boot-status" 2>/dev/null \
+		RUNNING_DAEMON="$(curl -fsS --noproxy '*' --max-time 3 "http://127.0.0.1:$_port/boot-status" 2>/dev/null \
 			| boot_status_version || true)"
 	fi
 fi

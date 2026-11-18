@@ -73,8 +73,12 @@ fi
 [ -z "${STUB_TAURI_SLEEP:-}" ] || sleep "$STUB_TAURI_SLEEP"
 [ "${STUB_TAURI_FAIL:-0}" = 1 ] && { echo "stub bun: failing on purpose"; exit 1; }
 t="${CARGO_TARGET_DIR:-target}"
-mkdir -p "$t/release/bundle/macos/K2.app/Contents/MacOS" "$t/release/bundle/dmg"
+mkdir -p "$t/release/bundle/macos/K2.app/Contents/MacOS" "$t/release/bundle/dmg" "$t/release/bundle/macos/K2.app/Contents/Resources/dfn3"
 printf 'app' > "$t/release/bundle/macos/K2.app/Contents/MacOS/k2"
+# The DeepFilterNet3 files tauri bundles (beforeBuildCommand stages them).
+for f in dfn3_ll.nnef.tar NOTICE LICENSE-MIT LICENSE-APACHE; do
+    printf 'fake %s' "$f" > "$t/release/bundle/macos/K2.app/Contents/Resources/dfn3/$f"
+done
 printf '#!/bin/sh\n' > "$t/release/bundle/dmg/bundle_dmg.sh"
 echo "tauri: Finished release"
 EOF
@@ -99,6 +103,12 @@ EOF
     chmod +x "$stub/plutil"
 fi
 
+# scripts/fetch-dfn3.sh in the project: a stub that fetches nothing and pins
+# the fake weights the stub tauri build bundles (k2_check_bundled_dfn3).
+mkdir -p "$proj/scripts"
+printf '#!/bin/sh\n# stub\nDFN3_WEIGHTS_SHA256="%s"\nexit 0\n' \
+    "$(printf 'fake dfn3_ll.nnef.tar' | shasum -a 256 | cut -d' ' -f1)" > "$proj/scripts/fetch-dfn3.sh"
+chmod +x "$proj/scripts/fetch-dfn3.sh"
 export MEET="$work/meet"
 mkdir -p "$MEET"
 # run_step2 LOG [VAR=value...]: k2_build_mac_binaries in $proj with stubs.

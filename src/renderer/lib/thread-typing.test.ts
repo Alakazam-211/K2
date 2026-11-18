@@ -120,6 +120,18 @@ describe('who is typing', () => {
     expect(other.result.current).toEqual([])
   })
 
+  it('hands back the same names across re-renders while the viewer lookup is pending', () => {
+    // A remote with a saved login: the viewer is the guess until the server answers.
+    const remote = { ...scopeWith(['thread-typing-v1']), connectHost: () => ({ username: 'alice' }) } as unknown as ServerScope
+    const { result, rerender } = renderHook(() => useThreadTyping(remote, 'sales'))
+    act(() => noteThreadTyping('box', frame('mira', 'Mira')))
+    const first = result.current
+    expect(first).toEqual(['Mira'])
+    rerender()
+    rerender()
+    expect(result.current).toBe(first)
+  })
+
   it('never shows the viewer', () => {
     act(() => setThreadViewerForTests(scope, { principal: 'owner', aliases: ['rosson'] }))
     const { result } = renderHook(() => useThreadTyping(scope, 'sales'))

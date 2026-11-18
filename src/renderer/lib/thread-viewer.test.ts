@@ -174,6 +174,15 @@ describe('the viewer', () => {
     expect(guessThreadViewer(fakeScope({ key: 'r2', remote: true }))).toBeNull()
   })
 
+  it('the guess is the same object for the same inputs', () => {
+    const a = fakeScope({ key: 'r1', remote: true, username: 'alice' })
+    expect(guessThreadViewer(a)).toBe(guessThreadViewer(a))
+    expect(guessThreadViewer(a)).toBe(guessThreadViewer(fakeScope({ key: 'r3', remote: true, username: ' alice ' })))
+    expect(guessThreadViewer(a)).not.toBe(guessThreadViewer(fakeScope({ key: 'r1', remote: true, username: 'bob' })))
+    const local = fakeScope({ key: 'local', remote: false })
+    expect(guessThreadViewer(local)).toBe(guessThreadViewer(local))
+  })
+
   it('asks notify/prefs on a thread-push server (principal + owner aliases), once per connection', async () => {
     const scope = fakeScope({ key: 'p1', remote: true, username: 'rosson', push: true })
     calls.prefs.push({ principal: 'owner', aliases: ['rosson'] })

@@ -173,12 +173,25 @@ export function cardAnswererLabel(raw: unknown, viewer: ThreadViewer | null): st
   return a.login
 }
 
+/** One guess per saved login, so the same inputs give the same object and
+ *  a hook that depends on the viewer doesn't redo its work every render
+ *  while the lookup is pending or has failed. */
+const guesses = new Map<string, ThreadViewer>()
+
 /** The viewer before the server answers: the saved login on the scope's
  *  server entry, or the owner on this computer. A remote with no saved
- *  login (a hosted web page) is unknown until whoami answers. */
+ *  login (a hosted web page) is unknown until whoami answers. The same
+ *  login always returns the same (frozen) object. */
 export function guessThreadViewer(scope: ServerScope): ThreadViewer | null {
   const username = scope.connectHost()?.username?.trim()
-  if (username) return { principal: username, aliases: [] }
+  if (username) {
+    let guess = guesses.get(username)
+    if (!guess) {
+      guess = Object.freeze({ principal: username, aliases: Object.freeze([]) as readonly string[] })
+      guesses.set(username, guess)
+    }
+    return guess
+  }
   return scope.isRemote ? null : OWNER_VIEWER
 }
 
@@ -275,6 +288,7 @@ export function resetThreadViewersForTests(): void {
   inflight.clear()
   failedAt.clear()
   listeners.clear()
+  guesses.clear()
 }
 
 /** Tests: set the server's answer for `scope`. */

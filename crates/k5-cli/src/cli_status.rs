@@ -272,6 +272,8 @@ Usage: k5 cli status [--json]
   --json    One JSON document instead of the table.
 
 Answered by the k5 binary only; the shell CLI's `cli` points here.
+New k5 command (Beta): off by default; the owner turns it on in Settings,
+General, Server, Advanced. Not on Windows yet.
 ";
 
 #[cfg(test)]

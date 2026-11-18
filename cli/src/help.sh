@@ -320,6 +320,8 @@ UPDATE
   update                                        Check for desktop app updates (default: --app)
   update --app                                  Same; downloads and installs nothing
   update --cli [--check]                        CLI vs daemon version; the CLI updates with K2
+  cli status [--json]                           New k5 command (Beta): what the k5 program answers
+                                                Off by default (Settings → General → Server → Advanced); not on Windows yet
   update --list                                 Show available versions
 
 ONBOARDING (adding a workspace: what to do with its CLAUDE.md, GEMINI.md, ...)

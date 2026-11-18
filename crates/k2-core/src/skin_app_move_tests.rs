@@ -139,3 +139,41 @@ fn the_expect_copy_writes_only_the_guests_the_card_showed() {
     assert_eq!(r.added.len(), 2);
     assert!(on(&bob.id, APP).is_some());
 }
+
+/// A role's folder permit list (`k2 app role paths`) is copied exactly: a
+/// guest permitted only docs/ on the site is permitted only docs/ on the
+/// App, read back the way a login's request reads it (the App grant's
+/// role → its `room_paths`).
+#[test]
+fn a_site_roles_folder_permit_list_is_copied_exactly() {
+    let _home = crate::test_env::TempHome::new();
+    let room = uuid::Uuid::new_v4().to_string();
+    create_role_for_app("reader", &policy(&room, &[CAP_THREAD_READ, CAP_FILES_READ]), Some(SITE)).expect("site role");
+    let scope = paths::RoomPathScope { read: vec!["docs/".to_string()], ..Default::default() };
+    let site_role = paths::set_role_room_paths("reader", &room, &scope).expect("docs/ only on the site");
+    let ada = add_principal("ada").expect("ada");
+    grant(&ada.id, SITE, Some("reader"), None);
+
+    let r = copy_site_grants_to_app(SITE, APP, "jobs", None, "owner-token", false).expect("copy");
+    assert_eq!(r.roles_copied, vec![("reader".to_string(), "reader-jobs".to_string())]);
+
+    let app_role = on(&ada.id, APP).expect("ada on the App").role_id.expect("a role");
+    let (site_paths, app_paths) = with_conn(|c| Ok((paths::role_room_paths(c, &site_role.id)?, paths::role_room_paths(c, &app_role)?))).expect("paths");
+    assert_eq!(app_paths, site_paths, "the App's copy holds the site role's permit list exactly");
+    let line = app_paths.get(&room).expect("the room's line on the App");
+    assert_eq!(line.read, vec!["docs".to_string()], "only docs/ (stored without the slash): {line:?}");
+    assert!(line.write.is_empty(), "no write folder appears: {line:?}");
+    let can = |rel: &str, need: paths::PathNeed| paths::allows_rel(line, rel, need).expect("a valid path");
+    assert!(can("docs/plan.md", paths::PathNeed::Read), "docs/ is readable on the App");
+    assert!(!can("private/notes.md", paths::PathNeed::Read), "outside docs/ stays hidden on the App");
+    assert!(!can("docs/plan.md", paths::PathNeed::Write), "read only stays read only");
+
+    // A role of that name with other folders is never re-used for the copy.
+    create_role_for_app("crew", &policy(&room, &[CAP_FILES_READ]), Some(SITE)).expect("crew");
+    paths::set_role_room_paths("crew", &room, &scope).expect("crew docs/");
+    create_role_for_app("crew-jobs", &policy(&room, &[CAP_FILES_READ]), Some(APP)).expect("same policy, whole room");
+    let bob = add_principal("bob").expect("bob");
+    grant(&bob.id, SITE, Some("crew"), None);
+    let r = copy_site_grants_to_app(SITE, APP, "jobs", None, "owner-token", false).expect("copy bob");
+    assert_eq!(r.roles_copied, vec![("crew".to_string(), "crew-jobs-2".to_string())], "a whole-room crew-jobs isn't the copy");
+}

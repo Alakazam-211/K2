@@ -298,6 +298,14 @@ fn copy_role(conn: &Connection, id: &str, to: &str, to_name: &str, dry_run: bool
             None => {
                 let new_id = uuid::Uuid::new_v4().to_string();
                 if !dry_run {
+                    // Every column that limits a login is copied byte for
+                    // byte: the per-room functions (`room_policy`, `caps`,
+                    // `rooms`) and the folder permit list (`room_paths`,
+                    // `k2 app role paths`), so a guest never reaches more on
+                    // the App than on the site.
+                    // TODO(feat/app-role-hide-and-fixes, 0.46.16): copy the
+                    // role's hide list here too once that branch lands (and
+                    // add it to the reuse comparison above).
                     conn.execute(
                         "INSERT INTO roles (id, name, caps, rooms, created_at, room_policy, app_id, room_paths)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",

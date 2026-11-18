@@ -58,8 +58,9 @@ Agents:
                  start the job now (a warm one if it isn't busier), else the
                  one with the shortest wait, and prints where and why
                  ("placed on …"). Name a node only to pin the job there
-                 (its full name, or a start of it that fits only one: k2n12;
-                 a start that fits two or more: node_ambiguous, exit 2).
+                 (its full name, or a start of it that fits only one: win
+                 for win-1; a start that fits two or more: node_ambiguous,
+                 exit 2).
                  It prefers a node that already has the --needs tools.
                  --label k=v picks nodes by a label the node has.
                  [--distro ubuntu|ubuntu@24.04|debian|arch]  only nodes of that
@@ -425,7 +426,7 @@ Agents:
                  checks as naming the node in run)
   k2 compute move --all-mine|--workspace-all [--tag T] [--node N] [--workspace WS] (--auto … | --to <node>)
                  every QUEUED job this session (or the workspace) sent that
-                 matches; e.g. move --all-mine --node k2n12 --auto.
+                 matches; e.g. move --all-mine --node linux-1 --auto.
                  --workspace WS with --workspace-all: that workspace's jobs
                  (a person; an agent always acts on its own).
                  A started job is never moved (job_started, exit 3)

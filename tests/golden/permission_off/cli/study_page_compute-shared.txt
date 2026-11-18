@@ -18,10 +18,10 @@ WHAT YOU SEE
   k2 compute queue <node>   the whole node queue. Other servers' jobs show
                       as "another server", tier, class, size and ETA only. No
                       command, workspace, session, job id or logs. Ever.
-  k2 compute get <job>      "queued on k2n2-m1: 2 of 5, ETA ~6m — your
+  k2 compute get <job>      "queued on mac-mini-1: 2 of 5, ETA ~6m — your
                       workspace runs 3 of 3 here (its grant); jobs behind it
                       may start first" (0.46.6: every waiting job says why)
-                      or "waits on this server for k2n2-m1 (1 of 2) — this
+                      or "waits on this server for mac-mini-1 (1 of 2) — this
                       server's queue on the node is full" (not sent yet)
   A job waiting for its OWN limit (its workspace's grant, this server's
   share, the per-submitter cap) lets jobs behind it start first; that is
@@ -208,7 +208,7 @@ FOR THE NODE'S OWNER
   <server> is own, or the label k2 compute node servers <node> shows.
   profiles= takes bare names (profiles=build-base,tauri-linux) and
   replaces that server's profile list. Only two profiles, for example:
-    k2 compute node packages policy k2n11 globex.k2.dev level=profiles profiles=build-base,tauri-linux
+    k2 compute node packages policy linux-1 globex.k2.dev level=profiles profiles=build-base,tauri-linux
   Narrowing applies at once; widening waits for your approval.
 
 CHANGING THE NODE'S OWNER (0.46.4)

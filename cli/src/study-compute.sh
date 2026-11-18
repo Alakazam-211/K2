@@ -20,10 +20,10 @@ WHERE IT RUNS (0.46.6)
   Nothing free: it queues where the wait looks shortest and moves if
   another node frees up first. Every run (attached, --wait or --detach)
   prints where and why, right after its job line:
-    [k2 compute] placed on k2n10-vin (auto): starts now · warm slot (this commit) · 46/110 GB, 8/12 CPUs free · 6 nodes fit, 2 skipped (1 offline, 1 too small for --mem 24G)
+    [k2 compute] placed on linux-1 (auto): starts now · warm slot (this commit) · 46/110 GB, 8/12 CPUs free · 6 nodes fit, 2 skipped (1 offline, 1 too small for --mem 24G)
   k2 compute get <job> shows the same line later; --plan shows it first.
   macOS only (an Xcode build): --os macos. A Linux box: --os linux.
-  Name a node only to pin the job there (k2 compute run k2n2-m1 -- …).
+  Name a node only to pin the job there (k2 compute run mac-mini-1 -- …).
   --any is the same as naming no node (kept for scripts).
   No node fits: no_node_fits (exit 3) with the counts (2 too small for
   --mem 24G, 1 offline, …). You only ever see nodes granted to you.
@@ -40,8 +40,8 @@ PINNED OR AUTO (0.46.8)
   Release a pinned job without cancelling it (same job id, same place in
   your history):
     k2 compute move ab12cd34 --auto
-    k2 compute move --all-mine --node k2n12 --auto     every queued job this
-                                                       session sent to k2n12
+    k2 compute move --all-mine --node linux-1 --auto   every queued job this
+                                                       session sent to linux-1
   It becomes auto, as if you had named no node: --needs, --mem, --cpus,
   the tier, --cache, --exclusive and your grants still apply. It keeps the
   OS and arch of the node it waited on unless you say otherwise (--os
@@ -49,7 +49,7 @@ PINNED OR AUTO (0.46.8)
   moves later. An auto job takes move --auto again to add --avoid, --os
   or --label (the same ask twice: already_auto). Pin a queued job to
   another node instead:
-    k2 compute move ab12cd34 --to k2n11
+    k2 compute move ab12cd34 --to linux-2
   --to takes no --avoid/--os/--label (bad_request, exit 2). Node names
   in --to and --avoid work as in run: the full name or a start that
   fits one node (else node_ambiguous, exit 2).
@@ -61,7 +61,7 @@ AVOID A NODE (0.46.8)
   --avoid <node> (repeatable) on run, test or move --auto: K2 never picks
   that node for the job, not at submit, not when it moves it, not for a
   retry. Use it when someone keeps a node for their own work by agreement:
-    k2 compute run --avoid k2n11 --mem 24G -- cargo nextest run
+    k2 compute run --avoid linux-2 --mem 24G -- cargo nextest run
   It works with --any and --shards (both auto). With a node named it is
   refused (avoid_with_pinned_node, exit 2). When every node that could
   take the job is avoided, nothing is queued (avoid_leaves_no_node,
@@ -69,12 +69,12 @@ AVOID A NODE (0.46.8)
   node by that name) is fine: the job runs and one note says so. It is
   still kept: if it becomes yours while the job waits (granted, or a new
   node by that name), K2 still never picks it. Keep a "never" list as flags:
-    k2 compute run --avoid k2n9 --avoid k2-arch --mem 8G -- make test
-    [k2 compute] note: --avoid k2n9: not one of your nodes now; if it becomes one, this job still never goes there
+    k2 compute run --avoid linux-3 --avoid arch-1 --mem 8G -- make test
+    [k2 compute] note: --avoid linux-3: not one of your nodes now; if it becomes one, this job still never goes there
   --only <node> (repeatable, run and test; 0.46.9) is the other way round:
   K2 picks only among the nodes you list. Use it to keep private work on
   your own nodes without listing every node to avoid:
-    k2 compute run --only k2n8 --only k2n10 --mem 24G -- cargo nextest run
+    k2 compute run --only linux-1 --only linux-2 --mem 24G -- cargo nextest run
   Other nodes show as "off your --only list" in the placed-on line. With
   a node named it is refused, as --avoid is.
 
@@ -94,7 +94,7 @@ NODE LIST (0.46.8)
   list). No node named or --any: K2 picks from the list. Moves, retries
   and --same-node-as never leave it. Use it when your tree holds code
   that must not reach other machines.
-  You may narrow your own list (k2 compute allow-nodes k2n9,k2-arch, or
+  You may narrow your own list (k2 compute allow-nodes linux-3,arch-1, or
   --remove N). Adding a node or --clear is a person's (the owner or an
   Admin): allow_nodes_needs_person, exit 3; ask on the card it names:
   k2 permission request compute.allow-nodes nodes=N[,N…] --why "…". The
@@ -141,7 +141,7 @@ RUN
   Longer than your shell tool's timeout? Use --detach. (If an attached
   run gets killed, the job keeps going and you still get that line.)
   WAIT: k2 compute run --wait -- cargo test prints the job id,
-  then where it waits ("queued on k2n9-vin: 2 of 5 — why"), then streams
+  then where it waits ("queued on linux-1: 2 of 5 — why"), then streams
   the job's output and exits with the job's exit code (0.46.6).
   --wait --quiet: no output, only the wait lines and the exit code.
   k2 compute wait <id> --follow resumes the stream; k2 compute wait
@@ -566,10 +566,10 @@ EVENTS (0.46.7)
   k2 compute events --follow --json prints one line per event of every
   job of your workspace as it happens, instead of polling logs:
     {"cursor":812,"at":…,"event":"finished","job":"…","short":"ab12cd34",
-     "node":"k2n7-vin","state":"done","exit":0,"reason":null}
+     "node":"linux-1","state":"done","exit":0,"reason":null}
   event: queued, started, finished, requeued (an infrastructure retry),
   moved (to another node; "from" names the node it left, and "detail"
-  says why: "moved from k2n7-vin to k2n12-vin: k2n12-vin can start it
+  says why: "moved from linux-1 to linux-2: linux-2 can start it
   now"). A finished job: state done with its exit code
   (non-zero = the command failed), or failed / timeout / cancelled /
   interrupted with a reason (mem_cap, stalled, queue_timeout, …).
@@ -583,9 +583,9 @@ EVENTS (0.46.7)
 CODES (0.46.7)
   Refusals (nothing is queued):
     node_ambiguous         the node name you gave is the start of several
-                           nodes' names (k2n1: k2n10-vin and k2n12-vin):
+                           nodes' names (linux: linux-1 and linux-2):
                            give more of it, or the full name (exit 2). A
-                           start that fits one node works (k2n12).
+                           start that fits one node works (win, for win-1).
     not_now                you passed --now (start at once or refuse) and no
                            node can start it now; the error names the
                            shortest wait (exit 3).
@@ -671,8 +671,8 @@ WHY HASN'T IT STARTED? (0.46.7)
   A message can name more than one of these at once.
   A job K2 placed (no node named) also says why no other node takes it,
   in each node's own numbers, best first:
-    "no other node has 8 free CPUs now: k2n10 0/12 (other servers' jobs),
-     k2n11 2.4/14.4 unreserved"
+    "no other node has 8 free CPUs now: linux-1 0/12 (other servers' jobs),
+     linux-2 2.4/14.4 unreserved"
   K2 checks every node every 5 seconds and moves the job to the first one
   that can start it, whichever node's job ended.
   "unreserved" CPU (k2 compute nodes: all servers: cpu 0/12 unreserved ·
@@ -847,7 +847,7 @@ ENVIRONMENT (0.46.9: what each machine is, and its system packages)
       k2 compute node packages requests (state installed = run again;
       denied, failed or expired = it won't install).
   Ask ahead, one request for many nodes and names:
-    k2 compute node packages request k2n11,k2n12 libgtk-3-dev,profile:build-base \
+    k2 compute node packages request linux-1,linux-2 libgtk-3-dev,profile:build-base \
         --why "Tauri build for the Acme desktop app"
   Held for this server's owner, it exits 2 like any held change, and the
   Ask with: line it ends with puts the request on the owner's card.
@@ -1349,10 +1349,10 @@ WHAT YOU SEE
   k2 compute queue <node>   the whole node queue. Other servers' jobs show
                       as "another server", tier, class, size and ETA only. No
                       command, workspace, session, job id or logs. Ever.
-  k2 compute get <job>      "queued on k2n2-m1: 2 of 5, ETA ~6m — your
+  k2 compute get <job>      "queued on mac-mini-1: 2 of 5, ETA ~6m — your
                       workspace runs 3 of 3 here (its grant); jobs behind it
                       may start first" (0.46.6: every waiting job says why)
-                      or "waits on this server for k2n2-m1 (1 of 2) — this
+                      or "waits on this server for mac-mini-1 (1 of 2) — this
                       server's queue on the node is full" (not sent yet)
   A job waiting for its OWN limit (its workspace's grant, this server's
   share, the per-submitter cap) lets jobs behind it start first; that is
@@ -1539,7 +1539,7 @@ FOR THE NODE'S OWNER
   <server> is own, or the label k2 compute node servers <node> shows.
   profiles= takes bare names (profiles=build-base,tauri-linux) and
   replaces that server's profile list. Only two profiles, for example:
-    k2 compute node packages policy k2n11 globex.k2.dev level=profiles profiles=build-base,tauri-linux
+    k2 compute node packages policy linux-1 globex.k2.dev level=profiles profiles=build-base,tauri-linux
   Narrowing applies at once; widening waits for your approval.
 
 CHANGING THE NODE'S OWNER (0.46.4)

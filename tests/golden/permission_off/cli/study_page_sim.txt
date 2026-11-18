@@ -74,7 +74,7 @@ AN IPHONE FROM A LINUX SERVER
   - A workspace with a compute node list (`k2 compute allow-nodes`) gets
     an iPhone only on a Mac on that list (else exit 3 node_not_allowed;
     a person adds the Mac). A pinned-only Mac is used only when you boot
-    a device that names it (an id like k2n1-m4:<type> from list-devices).
+    a device that names it (an id like mac-mini-1:<type> from list-devices).
   - The Mac can't reach this server's localhost or LAN. Open the App's
     public URL (the url line of `k2 app inspect <app>`). localhost and
     private addresses are refused (sim_url_unreachable), and so are

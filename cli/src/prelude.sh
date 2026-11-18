@@ -284,7 +284,7 @@ _thread_md_nudge() {
 # prd-k2-db-rename-v1 DB-A9: K2's database is only ever opened through
 # _k2_db_uri (`file:…?mode=rw`): it opens an existing file and never
 # creates a missing one (a plain `sqlite3 <missing>` mints a 0-byte stub,
-# which is how the z3mbp stub k2.db appeared). Not `-readonly`/`mode=ro`:
+# which is how a dev Mac got a stub k2.db). Not `-readonly`/`mode=ro`:
 # the sqlite3 CLI refuses those on a WAL database once K2 has stopped and
 # removed its -shm. Callers only read.
 _k2_db_uri() {

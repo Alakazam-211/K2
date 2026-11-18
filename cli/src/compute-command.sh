@@ -423,7 +423,7 @@ for e in v.get("events") or []:
             if e.get("reason"):
                 tail += " (%s)" % e["reason"]
         if e.get("detail"):
-            # A move: "moved from k2n7-vin to k2n12-vin: k2n12-vin can start it now".
+            # A move: "moved from linux-1 to linux-2: linux-2 can start it now".
             print("%s  %s  %s" % (time.strftime("%H:%M:%S", time.localtime(e.get("at") or 0)), e.get("short"), e["detail"]))
             continue
         print("%s  %s  %-9s on %s%s" % (time.strftime("%H:%M:%S", time.localtime(e.get("at") or 0)), e.get("short"), e.get("event"), e.get("node") or "?", tail))

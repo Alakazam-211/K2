@@ -5,7 +5,7 @@
 # agent hook script's sibling the browser shim (scripts/k2-open) and every
 # curl they run must keep the owner token, a session passport, the Connect
 # bearer, passwords and API keys OFF curl's argv, while the daemon still
-# receives them exactly as before (`?token=` query, Bearer header, body).
+# receives them (an Authorization: Bearer header, or the body).
 #
 # How: a `curl` shim first on PATH logs every argv it is given and then
 # runs the real curl against a python stub daemon (TCP + a real Unix
@@ -219,32 +219,32 @@ if [ $((t1 - t0)) -le 10 ]; then ok "big body quoting is fast ($((t1 - t0))s)"; 
 # ── 2. external owner terminal (TCP, owner token) ─────────────────────
 echo "== owner over TCP =="
 owner heartbeat list --json >/dev/null 2>&1 || true
-expect_seen "cli_request GET carries ?token=" /cli/heartbeat/list tcp token_query "$OWNER"
+expect_seen "cli_request GET carries the owner Bearer" /cli/heartbeat/list tcp authorization "Bearer $OWNER"
 owner review approve agentx branchx >/dev/null 2>&1 || true
-expect_seen "cli_request_post carries ?token=" /cli/review/approve tcp token_query "$OWNER"
+expect_seen "cli_request_post carries the owner Bearer" /cli/review/approve tcp authorization "Bearer $OWNER"
 owner tunnel stop >/dev/null 2>&1 || true
-expect_seen "cli_post carries ?token=" /cli/tunnel/stop tcp token_query "$OWNER"
+expect_seen "cli_post carries the owner Bearer" /cli/tunnel/stop tcp authorization "Bearer $OWNER"
 owner msg some-ws "hello there" >/dev/null 2>&1 || true
-expect_seen "cli_post_form carries ?token=" /cli/workspace/msg tcp token_query "$OWNER"
+expect_seen "cli_post_form carries the owner Bearer" /cli/workspace/msg tcp authorization "Bearer $OWNER"
 printf '%s\n' "$PASSWORD" | owner users add bob --password-stdin >/dev/null 2>&1 || true
-expect_seen "cli_post_json carries ?token=" /cli/users/add tcp token_query "$OWNER"
+expect_seen "cli_post_json carries the owner Bearer" /cli/users/add tcp authorization "Bearer $OWNER"
 expect_seen "cli_post_json body carries the password" /cli/users/add tcp body "$PASSWORD"
 printf '%s\n' "$APIKEY" | owner llm tokens add-key claude work >/dev/null 2>&1 || true
-expect_seen "_sidecar_send POST carries ?token=" /cli/llm/accounts/add-key tcp token_query "$OWNER"
+expect_seen "_sidecar_send POST carries the owner Bearer" /cli/llm/accounts/add-key tcp authorization "Bearer $OWNER"
 expect_seen "_sidecar_send POST body carries the API key" /cli/llm/accounts/add-key tcp body "$APIKEY"
 owner llm tokens list >/dev/null 2>&1 || true
-expect_seen "_sidecar_send GET carries ?token=" /cli/llm/accounts/list tcp token_query "$OWNER"
+expect_seen "_sidecar_send GET carries the owner Bearer" /cli/llm/accounts/list tcp authorization "Bearer $OWNER"
 owner fed outbox >/dev/null 2>&1 || true
-expect_seen "fed outbox carries ?token=" /cli/federation/outbox tcp token_query "$OWNER"
+expect_seen "fed outbox carries the owner Bearer" /cli/federation/outbox tcp authorization "Bearer $OWNER"
 owner daemon restart --host "http://127.0.0.1:${PORT}" >/dev/null 2>&1 || true
-expect_seen "daemon restart --host carries ?token=" /cli/daemon/restart tcp token_query "$OWNER"
+expect_seen "daemon restart --host carries the owner Bearer" /cli/daemon/restart tcp authorization "Bearer $OWNER"
 printf '{"token":"%s","subdomain":"me"}' "$CONNECT" >"$HOME/.k2/tunnel.json"
 chmod 600 "$HOME/.k2/tunnel.json"
 clean_env K2_PORT="$PORT" K2_CONNECT_BASE="http://127.0.0.1:${PORT}" "$K2_CLI" publish status --json >/dev/null 2>&1 || true
-expect_seen "_connect_curl asks the daemon first (?token=)" /cli/connect/proxy tcp token_query "$OWNER"
+expect_seen "_connect_curl asks the daemon first (owner Bearer)" /cli/connect/proxy tcp authorization "Bearer $OWNER"
 expect_seen "_connect_curl carries the Connect bearer" /subdomains tcp authorization "Bearer $CONNECT"
 owner workspace swap-canonical "$WORK/proj" --agent claude >/dev/null 2>&1 || true
-expect_seen "swap-canonical carries ?token=" /cli/workspace/swap-canonical tcp token_query "$OWNER"
+expect_seen "swap-canonical carries the owner Bearer" /cli/workspace/swap-canonical tcp authorization "Bearer $OWNER"
 expect_seen "swap-canonical body carries the provider" /cli/workspace/swap-canonical tcp body '"provider": "claude"'
 
 # ── 3. scoped session without a socket (TCP, passport) ────────────────
@@ -272,7 +272,7 @@ expect_seen "_sidecar_send UDS GET carries the passport" /cli/llm/accounts/list 
 cell publish status >/dev/null 2>&1 || true
 expect_seen "_connect_curl UDS carries the passport" /cli/connect/proxy uds authorization "Bearer $SCOPED"
 cell workspace swap-canonical "$WORK/proj" --agent claude >/dev/null 2>&1 || true
-expect_seen "swap-canonical in a cell carries the passport as ?token=" /cli/workspace/swap-canonical tcp token_query "$SCOPED"
+expect_seen "swap-canonical in a cell carries the passport as a Bearer" /cli/workspace/swap-canonical tcp authorization "Bearer $SCOPED"
 
 # ── 5. stale-passport probe (sourced; the e2e path needs a Codex tree) ─
 echo "== stale-passport probe =="
@@ -285,7 +285,7 @@ echo "== k2-open shim =="
 clean_env K2_HOOK_TOKEN="$SCOPED" K2_HOOK_SOCK="$SOCK" /bin/sh "$K2_OPEN" "https://example.com/a?b=c" >/dev/null 2>&1 || true
 expect_seen "k2-open socket arm carries the passport" /cli/browser/open-url uds authorization "Bearer $SCOPED"
 clean_env /bin/sh "$K2_OPEN" "https://example.com/owner" >/dev/null 2>&1 || true
-expect_seen "k2-open owner arm carries ?token=" /cli/browser/open-url tcp token_query "$OWNER"
+expect_seen "k2-open owner arm carries the owner Bearer" /cli/browser/open-url tcp authorization "Bearer $OWNER"
 
 # ── 7. nothing secret ever reached curl's argv ────────────────────────
 echo "== curl argv =="

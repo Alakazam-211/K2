@@ -55,8 +55,23 @@ const SCHEMES = ['light', 'dark'] as const
 
 /** The Terminal chamfer rule's selector (from the kit's own CSS). */
 const TERMINAL_CHAMFER = 'html[data-style="terminal"] [data-k2-thread-zen] [data-chamfer]'
-/** The light-scheme wash on the message field (from the kit's own CSS). */
-const LIGHT_FIELD = 'html[data-scheme="light"] [data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]'
+/** The light-scheme wash on the message field (from the kit's own CSS). The
+ *  scheme sits in :where(), so the wash weighs no more than the dark one. */
+const LIGHT_FIELD = ':where(html[data-scheme="light"]) [data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]'
+/** The same field, as a plain selector to match the rendered box against. */
+const LIGHT_FIELD_MATCH = 'html[data-scheme="light"] [data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]'
+
+/** A simple selector's weight [ids, attributes and classes, types]; a
+ *  :where() weighs nothing. Enough for the kit's own selectors. */
+function weight(sel: string): [number, number, number] {
+  const s = sel.replace(/:where\([^)]*\)/g, '').replace(/:not\(([^)]*)\)/g, ' $1 ')
+  const ids = (s.match(/#[\w-]+/g) ?? []).length
+  const attrs = (s.match(/\[[^\]]*\]|\.[\w-]+|:(?!:)[\w-]+/g) ?? []).length
+  const types = (s.replace(/\[[^\]]*\]/g, '').match(/(^|[\s>+~])[a-z][\w-]*/g) ?? []).length
+  return [ids, attrs, types]
+}
+const outweighs = (a: [number, number, number], b: [number, number, number]): boolean =>
+  a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] > b[2]
 
 function must<T>(v: T | null | undefined, what: string): T {
   if (v === null || v === undefined) throw new Error(`missing ${what}`)
@@ -181,6 +196,15 @@ describe('every K2 Style paints the chat as it paints the Thread', () => {
     expect(THREAD_FOOTER_FADE_CSS).toContain(LIGHT_FIELD)
   })
 
+  it('in Terminal light the field shows no square fill under its cut corners', () => {
+    // The chamfer clears the box's own background and paints its fill
+    // inside the cut; the light wash sets a background too, so it must
+    // weigh less than the chamfer's rule or its square shows in the cuts.
+    expect(THREAD_FOOTER_FADE_CSS).not.toMatch(/(^|[\s,])html\[data-scheme="light"\] \[data-k2-thread-zen\]/)
+    expect(weight(TERMINAL_CHAMFER)).toEqual([0, 3, 1])
+    expect(outweighs(weight(TERMINAL_CHAMFER), weight(LIGHT_FIELD))).toBe(true)
+  })
+
   for (const style of STYLES) {
     for (const scheme of SCHEMES) {
       it(`${style} / ${scheme}`, () => {
@@ -210,7 +234,7 @@ describe('every K2 Style paints the chat as it paints the Thread', () => {
         }
         expect(bubbles[0].style.borderRadius).toBe('var(--zen-bubble-radius)')
         // The light scheme's wash on the field, as on the Thread's field.
-        expect([scheme, box.matches(LIGHT_FIELD)]).toEqual([scheme, scheme === 'light'])
+        expect([scheme, box.matches(LIGHT_FIELD_MATCH)]).toEqual([scheme, scheme === 'light'])
       })
     }
   }

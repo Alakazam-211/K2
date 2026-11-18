@@ -930,14 +930,14 @@ describe('frosted glass behind the message box', () => {
     expect(FOOTER_GLASS_WASH).toEqual({ dark: 72, light: 86 })
     const dark = ruleFor(THREAD_FOOTER_FADE_CSS, `${field} {`)
     expect(dark).toContain(wash(72))
-    const light = ruleFor(THREAD_FOOTER_FADE_CSS, `html[data-scheme="light"] ${field} {`)
+    const light = ruleFor(THREAD_FOOTER_FADE_CSS, `:where(html[data-scheme="light"]) ${field} {`)
     expect(light).toContain(wash(86))
     for (const head of ['@media (prefers-reduced-transparency: reduce)', '@supports not ((-webkit-backdrop-filter']) {
       const body = block(head)
       expect(body, head).toContain('[class^="thread-footer-blur-"] { display: none; }')
       expect(body, head).not.toMatch(/blur\(\d|backdrop-filter:/)
       expect(body, head).toContain('background: var(--zen-surface-raised) !important; --ch-fill: var(--zen-surface-raised) !important;')
-      expect(body, head).toContain(`html[data-scheme="light"] ${field}`)
+      expect(body, head).toContain(`:where(html[data-scheme="light"]) ${field}`)
       expect(body, head).toContain('var(--zen-canvas) 95%, transparent) 6px')
     }
     // The activity tab keeps its own darker fill in every state of the box

@@ -293,6 +293,12 @@ const blurLayerCss = ([px, from, to]: readonly [number, number, number], n: numb
 /** The desktop bar's field (not Zen). Not the drawer's tab: it keeps its
  *  own fill, whatever the box does. */
 const GLASS_TARGETS = [`[${THREAD_ZEN_SCOPE_ATTR}] [data-zen-compose] [data-zen-compose-box]`].join(', ')
+/** The same in the light scheme. The scheme sits in :where() so the light
+ *  wash weighs no more than the dark one: heavier, its `background` beat the
+ *  square Style's chamfer (which clears the box's own fill and paints it
+ *  inside the cut), and the field's square fill showed under its cut
+ *  corners in Terminal light. */
+const LIGHT_GLASS_TARGETS = GLASS_TARGETS.split(', ').map((s) => `:where(html[data-scheme="light"]) ${s}`).join(', ')
 
 /** A wash of the element's own fill at `pct`% (the square Style's chamfer
  *  layers read `--ch-fill`, the round ones `background`). */
@@ -307,19 +313,19 @@ ${FOOTER_FADE_SCOPE} > span { position: absolute; inset: 0; pointer-events: none
 ${FOOTER_BLUR_LAYERS.map(blurLayerCss).join('\n')}
 ${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tintCss(FOOTER_TINT_STOPS, '%')} }
 ${GLASS_TARGETS} { ${glassCss(FOOTER_GLASS_WASH.dark)} }
-html[data-scheme="light"] ${GLASS_TARGETS.split(', ').join(', html[data-scheme="light"] ')} { ${glassCss(FOOTER_GLASS_WASH.light)} }
+${LIGHT_GLASS_TARGETS} { ${glassCss(FOOTER_GLASS_WASH.light)} }
 @media (prefers-reduced-motion: reduce) {
   ${FOOTER_FADE_SCOPE} { transition: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
   ${FOOTER_FADE_SCOPE} > [class^="thread-footer-blur-"] { display: none; }
   ${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tintCss(FOOTER_TINT_STOPS_OPAQUE, 'px')} }
-  ${GLASS_TARGETS}, html[data-scheme="light"] ${GLASS_TARGETS.split(', ').join(', html[data-scheme="light"] ')} { ${glassCss(100)} }
+  ${GLASS_TARGETS}, ${LIGHT_GLASS_TARGETS} { ${glassCss(100)} }
 }
 @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
   ${FOOTER_FADE_SCOPE} > [class^="thread-footer-blur-"] { display: none; }
   ${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tintCss(FOOTER_TINT_STOPS_OPAQUE, 'px')} }
-  ${GLASS_TARGETS}, html[data-scheme="light"] ${GLASS_TARGETS.split(', ').join(', html[data-scheme="light"] ')} { ${glassCss(100)} }
+  ${GLASS_TARGETS}, ${LIGHT_GLASS_TARGETS} { ${glassCss(100)} }
 }
 `
 

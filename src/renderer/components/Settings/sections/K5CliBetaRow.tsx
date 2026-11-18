@@ -19,7 +19,7 @@ import type { ServerScope } from '@/kessel/server-scope'
 export const K5_CLI_NAME = 'New k5 command'
 /** The accessible name: the words plus "(Beta)", which the tag says on screen. */
 export const K5_CLI_LABEL = `${K5_CLI_NAME} (Beta)`
-export const K5_CLI_LINE = `On: the ${CLI_NAME} and k5 commands run the new k5 program instead of the shell script, where this server's release has it. Off: the shell script, as before.`
+export const K5_CLI_LINE = `On: the ${CLI_NAME} and k5 commands run the new k5 program instead of the shell script, where this server's release has it. Off by default: the shell script, as before. Not on Windows yet.`
 
 /** `GET /cli/k5-cli`. `runs` and `note` come with the links' choice: what
  *  the commands run now, and why the script when the switch is on. */

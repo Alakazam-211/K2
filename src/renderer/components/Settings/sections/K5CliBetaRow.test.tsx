@@ -62,6 +62,8 @@ describe('New k5 command (Beta)', () => {
     await waitFor(() => expect(sw().getAttribute('aria-checked')).toBe('false'))
     expect(h.gets).toEqual(['k5-cli'])
     expect(screen.getByTestId('k5-cli-card').textContent).toContain('Advanced')
+    expect(screen.getByTestId('k5-cli-card').textContent).toContain('Off by default')
+    expect(screen.getByTestId('k5-cli-card').textContent).toContain('Not on Windows yet.')
   })
 
   it('posts {on} to k5-cli and shows what the daemon answers', async () => {
@@ -126,5 +128,7 @@ describe('New k5 command (Beta)', () => {
     const e = GENERAL_MANIFEST.find((x) => x.id === 'general.k5-cli-beta')
     expect(e?.beta).toBe(true)
     expect(e?.group).toBe('Server')
+    expect(e?.description).toContain('Off by default.')
+    expect(e?.description).toContain('Not on Windows yet.')
   })
 })

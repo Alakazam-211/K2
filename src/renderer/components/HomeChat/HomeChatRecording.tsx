@@ -219,7 +219,7 @@ export function HomeChatTranscriptPanel({
                       <p key={l.id} className="type-row whitespace-pre-wrap break-words text-[var(--color-text-primary)]" data-testid="home-chat-transcript-line">
                         {transcriptMatches(l.text, q).map((p, i) =>
                           p.hit ? (
-                            <mark key={i} data-transcript-hit="" className="rounded-[var(--radius-status)] bg-[var(--color-accent-soft)] text-[var(--color-text-primary)]">
+                            <mark key={i} data-transcript-hit="" className="rounded-[var(--radius-status)] bg-[color-mix(in_srgb,var(--color-accent)_28%,transparent)] text-[var(--color-text-primary)]">
                               {p.text}
                             </mark>
                           ) : (

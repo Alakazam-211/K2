@@ -76040,9 +76040,13 @@ cmd_feedback_list() {
         _feedback_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
         exit 1
     fi
-    RESP="$resp" AS_JSON="$as_json" python3 - <<'PYEOF'
+    printf '%s' "$resp" | AS_JSON="$as_json" python3 -c "$_feedback_list_py"
+}
+
+# `k2 tickets list`: print the list from the reply on stdin.
+_feedback_list_py='
 import json, os, sys
-raw = os.environ["RESP"]
+raw = sys.stdin.buffer.read().decode("utf-8", "replace")
 try:
     d = json.loads(raw)
 except Exception:
@@ -76064,8 +76068,7 @@ for i in d.get("items", []):
     print("%-10s%-18s%2s   %-10s%s" % (
         str(i.get("id", ""))[:8], i.get("status", "?"),
         i.get("priority", "?"), i.get("kind", "?"), i.get("title", "")))
-PYEOF
-}
+'
 
 cmd_feedback_show() {
     if _wants_help "$@"; then cmd_help_feedback_show; exit 0; fi

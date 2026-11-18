@@ -212,6 +212,10 @@ enum Compare {
     Traceback,
     /// PRD 13.9 #4: bash sends the owner token, the binary the passport.
     OwnerTokenWithPassport,
+    /// A no-answer line's seconds may be one apart: bash counts whole
+    /// seconds of `$SECONDS`, which ticks on its own
+    /// ([`common::parity::mask_waited`]).
+    Waited,
 }
 
 struct Case {
@@ -286,7 +290,15 @@ fn check(rig: &Rig, c: &Case) {
     assert_eq!(rl, bl, "{name}: the requests differ\n== rust ==\n{}\n== bash ==\n{}", rl.join("\n----\n"), bl.join("\n----\n"));
     assert_eq!(r.code, b.code, "{name}: the exit code\nrust: {r:?}\nbash: {b:?}");
     assert_eq!(r.stdout, b.stdout, "{name}: stdout");
-    if c.compare == Compare::Traceback {
+    if c.compare == Compare::Waited {
+        let (bs, bn) = common::parity::mask_waited(&b.stderr);
+        let (rs, rn) = common::parity::mask_waited(&r.stderr);
+        assert_eq!(rs, bs, "{name}: stderr (seconds masked)");
+        assert_eq!(rn.len(), bn.len(), "{name}: the waited lines");
+        for (x, y) in rn.iter().zip(&bn) {
+            assert!(x.abs_diff(*y) <= 1, "{name}: waited {x} s here, {y} s in bash");
+        }
+    } else if c.compare == Compare::Traceback {
         let last = |s: &str| s.lines().last().and_then(|l| l.split(':').next()).map(str::to_string);
         assert!(b.stderr.starts_with("Traceback (most recent call last):\n"), "{name}: bash: {b:?}");
         assert_eq!(last(&r.stderr), last(&b.stderr), "{name}: the exception\nrust: {}\nbash: {}", r.stderr, b.stderr);
@@ -353,7 +365,7 @@ fn cases(rig: &Rig) -> Vec<Case> {
         case("--json drops the answer's trailing newlines", &["--json"], &[], vec![ok("{\"role\":\"r\"}\n\n\n")], owner_and_port, 0, 1),
         case("an answer that is not JSON", &[], &[], vec![ok("<html>oops</html>")], owner_and_port, 1, 1),
         case("an empty answer with 200", &[], &[], vec![ok("")], owner_and_port, 1, 1),
-        case("a 5xx with an empty body: no answer", &[], &[], vec![Reply::Answer(502, String::new())], owner_and_port, 1, 1),
+        Case { compare: Compare::Waited, ..case("a 5xx with an empty body: no answer", &[], &[], vec![Reply::Answer(502, String::new())], owner_and_port, 1, 1) },
         case("migrating: asked again", &[], &[], vec![Reply::Answer(503, r#"{"state":"migrating"}"#.into()), ok(FULL)], owner_and_port, 0, 2),
         case("Python's str() of each value", &[], &[], vec![ok(r#"{"workspace":null,"role":1.0,"address":["a",{"b":false}],"primary":1e16,"session":-0,"siblings":{"live":2.9}}"#)], owner_and_port, 0, 1),
         case("the bulletin line when it worked", &[], &[], vec![ok(r#"{"role":"r","bulletin":{"day":"2026-11-17","unread":true,"key":"ab12"}}"#)], owner_and_port, 0, 1),

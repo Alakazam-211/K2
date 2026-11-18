@@ -213,6 +213,7 @@ impl Rig {
             let (bs, bn) = mask_waited(&b.stderr);
             let (rs, rn) = mask_waited(&r.stderr);
             assert_eq!(rs, bs, "{name}: stderr (seconds masked)");
+            assert_eq!(rn.len(), bn.len(), "{name}: the waited lines");
             for (x, y) in rn.iter().zip(&bn) {
                 assert!(x.abs_diff(*y) <= 1, "{name}: waited {x} s here, {y} s in bash");
             }

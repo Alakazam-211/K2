@@ -198,11 +198,12 @@ fn referenced_by_apps(conn: &Connection, keep_deployments: usize) -> rusqlite::R
     Ok(out)
 }
 
-/// The `error` of a deployment someone chose to leave (a rollback through
-/// the warm instance, by a person or an agent): it ran fine until then. A
-/// crash in the watch window has `<why> inside the watch window; …` here.
-/// Both have the result `rolled_back`; this text is what tells them apart,
-/// and it is what rows written by earlier releases already hold.
+/// The `error` releases before 0.46.16 wrote on a deployment someone chose
+/// to leave (a rollback through the warm instance, by a person or an
+/// agent). Since 0.46.16 such a row is `rolled_back` with NO error (it ran
+/// fine until then: not an error, never in `k2 app errors`). A crash in the
+/// watch window has `<why> inside the watch window; …` here. So a
+/// `rolled_back` row crashed only when its error is set and isn't this.
 pub const ROLLED_BACK_BY_CHOICE: &str = "rolled back";
 
 /// Did this deployment go live and hold? A rollback someone chose doesn't
@@ -212,7 +213,7 @@ pub const ROLLED_BACK_BY_CHOICE: &str = "rolled back";
 /// that already died).
 pub fn stayed_live(d: &DeploymentRow) -> bool {
     let crashed = match d.result.as_str() {
-        RESULT_ROLLED_BACK => d.error.as_deref() != Some(ROLLED_BACK_BY_CHOICE),
+        RESULT_ROLLED_BACK => d.error.as_deref().is_some_and(|e| e != ROLLED_BACK_BY_CHOICE),
         RESULT_EXITED => matches!((d.finished_at, d.watch_until), (Some(end), Some(until)) if end <= until),
         _ => false,
     };
@@ -222,7 +223,7 @@ pub fn stayed_live(d: &DeploymentRow) -> bool {
 /// [`stayed_live`] as SQL, over `deployments`' own columns.
 fn stayed_live_sql() -> String {
     format!(
-        "live_at IS NOT NULL AND (result != '{RESULT_ROLLED_BACK}' OR error = '{ROLLED_BACK_BY_CHOICE}') \
+        "live_at IS NOT NULL AND (result != '{RESULT_ROLLED_BACK}' OR error IS NULL OR error = '{ROLLED_BACK_BY_CHOICE}') \
          AND (result != '{RESULT_EXITED}' OR finished_at IS NULL OR watch_until IS NULL OR finished_at > watch_until)"
     )
 }
@@ -804,7 +805,43 @@ pub fn set_result(conn: &Connection, id: &str, result: &str, error: Option<&str>
         "UPDATE deployments SET result = ?2, error = COALESCE(?3, error), finished_at = CASE WHEN ?4 THEN ?5 ELSE finished_at END WHERE id = ?1",
         params![id, result, error, finished, super::now()],
     )?;
+    // 0.46.16: a warm rollback's row carries the instance it switched back
+    // to ([`carry_live`]). What ends that instance (its own row's result)
+    // ends the carrying row too, so it never stays `live` after the
+    // instance is gone.
+    if result != RESULT_LIVE {
+        conn.execute(
+            "UPDATE deployments SET result = ?2, error = COALESCE(?3, error), finished_at = CASE WHEN ?4 THEN ?5 ELSE finished_at END \
+             WHERE kind = ?6 AND result = ?7 AND reason = ?8 AND id != ?1 \
+               AND app_id = (SELECT app_id FROM deployments WHERE id = ?1)",
+            params![id, result, error, finished, super::now(), KIND_ROLLBACK, RESULT_LIVE, carrier_reason(id)],
+        )?;
+    }
     Ok(())
+}
+
+/// The `reason` of a warm rollback's row: names the deployment whose
+/// instance it switched back to (the link [`set_result`] follows).
+pub fn carrier_reason(instance_row: &str) -> String {
+    format!("rollback to the warm previous instance (deployment {instance_row})")
+}
+
+/// A warm rollback (0.46.16): rollback row `carrier` takes over as the ONE
+/// live row of the instance it switched back to, which keeps its own
+/// deployment id (`instance_row`: the engine and `apps.live_deployment`
+/// know it by that). The instance's own row and any earlier rollback row
+/// carrying it become `superseded`; `carrier` gets the instance's port and
+/// pid, the link ([`carrier_reason`]) and goes live. From then on
+/// [`set_result`] on `instance_row` ends `carrier` too.
+pub fn carry_live(conn: &Connection, app_id: &str, instance_row: &str, port: u16, pid: Option<i64>, carrier: &str, watch_until: i64) -> rusqlite::Result<()> {
+    let reason = carrier_reason(instance_row);
+    conn.execute(
+        "UPDATE deployments SET result = ?5, finished_at = ?6 \
+         WHERE app_id = ?1 AND result = ?7 AND id != ?4 AND (id = ?2 OR (kind = ?8 AND reason = ?3))",
+        params![app_id, instance_row, reason, carrier, RESULT_SUPERSEDED, super::now(), RESULT_LIVE, KIND_ROLLBACK],
+    )?;
+    conn.execute("UPDATE deployments SET port = ?2, pid = ?3, reason = ?4 WHERE id = ?1", params![carrier, port as i64, pid, reason])?;
+    set_went_live(conn, carrier, watch_until)
 }
 
 /// A deployment failed with `code` (stored structurally, A4) and `message`
@@ -1305,13 +1342,20 @@ pub(crate) mod tests {
             dep(&c, "jim", KIND_DEPLOY, &hash(ch), 10 + i as i64, RESULT_SUPERSEDED);
         }
         // Left by choice: '6' ran, and someone went back from it to '5'.
+        // Since 0.46.16 that row has no error at all (not an error).
         let left = dep(&c, "jim", KIND_DEPLOY, &hash('6'), 20, RESULT_LIVE);
-        set_result(&c, &left, RESULT_ROLLED_BACK, Some(ROLLED_BACK_BY_CHOICE)).unwrap();
+        set_result(&c, &left, RESULT_ROLLED_BACK, None).unwrap();
         // `retire` sets the same result again later, with no text.
         set_result(&c, &left, RESULT_ROLLED_BACK, None).unwrap();
+        assert_eq!(get_deployment(&c, &left).unwrap().unwrap().error, None);
         dep(&c, "jim", KIND_ROLLBACK, &hash('5'), 21, RESULT_LIVE);
         set_live(&c, "jim", Some(&hash('5')), None).unwrap();
         assert!(stayed_live(&get_deployment(&c, &left).unwrap().unwrap()));
+        // A row an earlier release wrote ("rolled back") reads the same.
+        c.execute("UPDATE deployments SET error = ?2 WHERE id = ?1", params![left, ROLLED_BACK_BY_CHOICE]).unwrap();
+        assert!(stayed_live(&get_deployment(&c, &left).unwrap().unwrap()));
+        assert_eq!(went_live_seeds(&c, "jim", 2).unwrap(), vec![hash('5'), hash('6')]);
+        c.execute("UPDATE deployments SET error = NULL WHERE id = ?1", params![left]).unwrap();
         assert_eq!(went_live_seeds(&c, "jim", 2).unwrap(), vec![hash('5'), hash('6')], "a plain rollback goes back to the one left");
         assert_eq!(went_live_seeds(&c, "jim", 5).unwrap().len(), 5);
         assert!(went_live_seeds(&c, "jim", 5).unwrap().contains(&hash('6')), "it keeps its place");
@@ -1320,6 +1364,46 @@ pub(crate) mod tests {
         assert!(!stayed_live(&get_deployment(&c, &left).unwrap().unwrap()));
         assert!(!went_live_seeds(&c, "jim", 5).unwrap().contains(&hash('6')));
         assert!(rollback_targets(&c, "jim", Some(&hash('5')), SWEEP_KEEP_DEPLOYMENTS).unwrap().iter().all(|t| t.seed != hash('6')));
+    }
+
+    /// 0.46.16: a warm rollback's row is the ONE live row of the instance it
+    /// went back to, with its port; what ends the instance ends the row; a
+    /// second warm rollback to the same instance hands over again; another
+    /// App's rows and other rows on the same port are untouched.
+    #[test]
+    fn a_warm_rollback_row_carries_the_instance_and_ends_with_it() {
+        let c = conn();
+        app(&c, "jim", "jim");
+        app(&c, "ann", "ann");
+        for ch in ['0', '1'] {
+            upsert_seed(&c, &seed(ch, 1)).unwrap();
+        }
+        let hash = |ch: char| seed(ch, 1).hash;
+        let first = dep(&c, "jim", KIND_DEPLOY, &hash('0'), 10, RESULT_LIVE);
+        c.execute("UPDATE deployments SET port = 41000, pid = 7 WHERE id = ?1", params![first]).unwrap();
+        let other = dep(&c, "ann", KIND_ROLLBACK, &hash('0'), 10, RESULT_LIVE);
+        c.execute("UPDATE deployments SET port = 41000, reason = ?2 WHERE id = ?1", params![other, carrier_reason(&first)]).unwrap();
+        let second = dep(&c, "jim", KIND_DEPLOY, &hash('1'), 20, RESULT_LIVE);
+        let rb = dep(&c, "jim", KIND_ROLLBACK, &hash('0'), 30, RESULT_PENDING);
+        carry_live(&c, "jim", &first, 41000, Some(7), &rb, 30).unwrap();
+        set_result(&c, &second, RESULT_ROLLED_BACK, None).unwrap();
+        let live: Vec<DeploymentRow> = list_deployments(&c, "jim", 10).unwrap().into_iter().filter(|d| d.result == RESULT_LIVE).collect();
+        assert_eq!(live.len(), 1, "exactly one live row: {live:?}");
+        assert_eq!((live[0].id.as_str(), live[0].port), (rb.as_str(), Some(41000)));
+        let left = get_deployment(&c, &second).unwrap().unwrap();
+        assert_eq!((left.result.as_str(), left.error.as_deref()), (RESULT_ROLLED_BACK, None), "left by choice: no error");
+        assert!(stayed_live(&left));
+        assert_eq!(get_deployment(&c, &first).unwrap().unwrap().result, RESULT_SUPERSEDED);
+        // Rolled back to the same instance again: the newer row carries it.
+        let rb2 = dep(&c, "jim", KIND_ROLLBACK, &hash('0'), 40, RESULT_PENDING);
+        carry_live(&c, "jim", &first, 41000, Some(7), &rb2, 40).unwrap();
+        let live: Vec<String> = list_deployments(&c, "jim", 10).unwrap().into_iter().filter(|d| d.result == RESULT_LIVE).map(|d| d.id).collect();
+        assert_eq!(live, vec![rb2.clone()]);
+        // The instance exits: its carrying row ends with it.
+        set_result(&c, &first, RESULT_EXITED, Some("exited (code 1)")).unwrap();
+        let ended = get_deployment(&c, &rb2).unwrap().unwrap();
+        assert_eq!((ended.result.as_str(), ended.error.as_deref()), (RESULT_EXITED, Some("exited (code 1)")));
+        assert_eq!(get_deployment(&c, &other).unwrap().unwrap().result, RESULT_LIVE, "another App's row is untouched");
     }
 
     /// A crash in the watch window with nothing warm ends `exited`, not

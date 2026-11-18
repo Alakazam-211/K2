@@ -798,8 +798,11 @@ fn second_seed(f: &Fx) -> String {
 
 /// 0.46.8, through the real pipeline: a rollback someone chose through the
 /// warm instance marks the outgoing deploy `rolled_back`, but it ran fine,
-/// so it stays a rollback point, and its text survives the retire that
-/// follows. A plain rollback goes back to it, as it always did.
+/// so it stays a rollback point. A plain rollback goes back to it, as it
+/// always did. 0.46.16: it carries no error (so `k2 app errors` doesn't
+/// list it), exactly one row is live afterwards (the rollback's own, with
+/// the instance's port: the CLI printed "live on port None" and history
+/// two "<- live" marks), and the instance keeps its own deployment id.
 #[test]
 fn a_chosen_rollback_through_the_warm_instance_keeps_the_deploy_it_left() {
     let f = fx();
@@ -810,15 +813,27 @@ fn a_chosen_rollback_through_the_warm_instance_keeps_the_deploy_it_left() {
     go_live_first(id, &f.seed);
     let second = begin(&app_row(id), &two, store::KIND_DEPLOY, "owner", None).unwrap();
     assert_eq!(wait_done(&second, 30).unwrap().result, store::RESULT_LIVE);
-    rollback_to_warm(&app_row(id), &f.seed, "owner").unwrap().expect("the warm instance answers");
+    let first = with_rt(id, |rt| rt.warm.as_ref().map(|w| (w.handle.deployment_id.clone(), w.handle.port))).expect("the first deploy is warm");
+    let rb = rollback_to_warm(&app_row(id), &f.seed, "owner").unwrap().expect("the warm instance answers");
     let end = Instant::now() + Duration::from_secs(15);
     while !audit_events(id).iter().any(|e| e == "stopped") {
         assert!(Instant::now() < end, "the deploy it left must be retired: {:?}", audit_events(id));
         std::thread::sleep(Duration::from_millis(20));
     }
     let row = db(|c| store::get_deployment(c, &second)).unwrap().unwrap();
-    assert_eq!((row.result.as_str(), row.error.as_deref()), (store::RESULT_ROLLED_BACK, Some(store::ROLLED_BACK_BY_CHOICE)));
+    assert_eq!((row.result.as_str(), row.error.as_deref()), (store::RESULT_ROLLED_BACK, None), "left by choice: not an error");
     assert!(store::stayed_live(&row));
+    let rows = db(|c| store::list_deployments(c, id, 20)).unwrap();
+    let live: Vec<&store::DeploymentRow> = rows.iter().filter(|d| d.result == store::RESULT_LIVE).collect();
+    assert_eq!(live.len(), 1, "exactly one live row: {rows:?}");
+    assert_eq!((live[0].id.as_str(), live[0].kind.as_str(), live[0].port), (rb.as_str(), store::KIND_ROLLBACK, Some(first.1 as i64)), "the rollback's row, with the port");
+    assert_eq!(app_row(id).live_deployment.as_deref(), Some(first.0.as_str()), "the instance keeps its own deployment id");
+    k2_core::deploy::set_enabled(true);
+    let errs = super::super::routes::handle("/cli/app/errors", super::super::routes::Who::Owner, b"", &[("app".to_string(), id.to_string())].into_iter().collect());
+    assert!(errs.status.starts_with("200"), "{} {}", errs.status, errs.body);
+    let ev: serde_json::Value = serde_json::from_str(&errs.body).expect("errors json");
+    let events = ev["events"].as_array().unwrap_or_else(|| panic!("events: {}", errs.body));
+    assert!(events.iter().all(|e| e["deployment"] != second.as_str()), "the deploy left by choice is no error event: {}", errs.body);
     let a = app_row(id);
     assert_eq!(a.live_seed.as_deref(), Some(f.seed.as_str()));
     assert_eq!(db(|c| store::went_live_seeds(c, id, 2)).unwrap(), vec![f.seed.clone(), two.clone()]);

@@ -2120,9 +2120,14 @@ fn rollback_to_warm_where(app: &AppRow, actor: &str, pick: impl Fn(&Instance) ->
                 reason: Some("rollback to the warm previous instance"),
             },
         )?;
-        store::set_went_live(c, &id, now())?;
+        // 0.46.16: this row is now the ONE live row of the warm instance
+        // (its port and pid; the instance's own row and any earlier rollback
+        // row carrying it step aside as `superseded`). The instance keeps its
+        // deployment id: the engine and `live_deployment` know it by that.
+        store::carry_live(c, &app.app_id, &warm.handle.deployment_id, warm.handle.port, warm.handle.pid.map(i64::from), &id, now())?;
         if let Some(b) = &bad {
-            store::set_result(c, &b.handle.deployment_id, store::RESULT_ROLLED_BACK, Some(store::ROLLED_BACK_BY_CHOICE))?;
+            // Left by choice: it ran fine, so no error (never in `k2 app errors`).
+            store::set_result(c, &b.handle.deployment_id, store::RESULT_ROLLED_BACK, None)?;
         }
         store::set_live(c, &app.app_id, Some(target), Some(&warm.handle.deployment_id))?;
         store::set_state(c, &app.app_id, store::STATE_RUNNING, None)?;

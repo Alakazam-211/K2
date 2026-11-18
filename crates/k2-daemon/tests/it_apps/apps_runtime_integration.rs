@@ -375,7 +375,16 @@ async fn s7_deploy_switch_rollback_stop_start_with_no_dropped_requests() {
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["instant"], true);
     assert_eq!(r.json()["deployment"]["kind"], "rollback");
+    // 0.46.16: the answer names the port it is live on (the CLI printed
+    // "live on port None"), and history has exactly one live row.
+    assert!(r.json()["deployment"]["port"].as_u64().is_some(), "{}", r.body);
     assert_eq!(body_of(front, "/"), "200 v1");
+    let h = get(d.port, "/cli/app/history", OWNER, "app=s7app").await.json();
+    let live: Vec<&serde_json::Value> = h["deployments"].as_array().unwrap().iter().filter(|x| x["result"] == "live").collect();
+    assert_eq!(live.len(), 1, "exactly one live deploy: {h}");
+    assert_eq!((live[0]["kind"].clone(), live[0]["toSeed"].clone()), (json!("rollback"), h["liveSeed"].clone()), "{h}");
+    let left = h["deployments"].as_array().unwrap().iter().find(|x| x["id"] == d2["id"]).cloned().unwrap();
+    assert_eq!((left["result"].clone(), left["error"].clone()), (json!("rolled_back"), serde_json::Value::Null), "left by choice is no error: {left}");
     let slow = slow.join().unwrap();
     assert_eq!(slow.as_ref().map(|(s, b)| (*s, b.trim())), Some((200, "v2")), "the request in flight across the rollback was answered");
 

@@ -199,10 +199,17 @@ HDR=(-H "Content-Type: application/json"
 [ -z "$SCOPED" ] && exit 0
 
 # Per-cell socket first, with the scoped token as a Bearer header.
+# Sent once: TCP only when the socket took none of the event, that is the
+# connect failed (curl 7) or the daemon answered with an error status
+# (curl 22; its "not served on cell socket" 404 is one). Any other failure
+# may have reached the daemon, which may have counted it: stop.
 if [ -n "$SOCK" ] && [ -S "$SOCK" ]; then
-    if {sock_send}; then
-        exit 0
-    fi
+    RC=0
+    {sock_send} || RC=$?
+    case "$RC" in
+        7|22) ;;
+        *) exit 0 ;;
+    esac
 fi
 
 # Retry over loopback TCP with the SAME passport (the cell socket can be
@@ -1723,6 +1730,243 @@ mod tests {
         assert_eq!(curls.len(), 2, "two curl arms: {curls:?}");
         for l in curls {
             assert!(l.contains("--noproxy '*'"), "a curl arm without --noproxy: {l}");
+        }
+    }
+
+    /// What the cell socket stub does with the hook's request, named by
+    /// the curl exit it gives the script's socket arm (`curl -sf`).
+    #[cfg(unix)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum SockMode {
+        /// Nobody listens on the socket file: the connect fails (curl 7).
+        Dead,
+        /// The socket file is closed to this user (EACCES): curl 7 too.
+        Closed,
+        /// Holds the request past the script's 2 s limit (curl 28).
+        Hang,
+        /// Reads the request and closes with no reply (curl 52).
+        NoReply,
+        /// Closes with the request unread: a reset (curl 56; 52 on some curls).
+        Reset,
+        /// Answers bytes that aren't HTTP (status 000).
+        Garbage,
+        /// 200 with an empty body: an answer.
+        Empty200,
+        /// The daemon's "not served on cell socket" 404 (curl 22).
+        NotServed,
+    }
+
+    /// Read one HTTP request (head and Content-Length body), or what came
+    /// before the peer stopped sending.
+    #[cfg(unix)]
+    fn read_one_request(conn: &mut impl Read) {
+        let mut raw = Vec::new();
+        let mut chunk = [0u8; 65536];
+        loop {
+            if let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                let head = String::from_utf8_lossy(&raw[..end]).to_ascii_lowercase();
+                let len = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().expect("len")))
+                    .unwrap_or(0);
+                if raw.len() >= end + 4 + len {
+                    return;
+                }
+            }
+            match conn.read(&mut chunk) {
+                Ok(0) => return,
+                Ok(n) => raw.extend_from_slice(&chunk[..n]),
+                Err(e) => panic!("read: {e}"),
+            }
+        }
+    }
+
+    /// A listener thread that counts arrivals until `stop`. `serve` handles
+    /// each accepted connection; a connection it hands back stays open
+    /// until the thread ends.
+    #[cfg(unix)]
+    fn count_arrivals<L, S, C>(
+        mut accept: L,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        mut serve: S,
+    ) -> std::thread::JoinHandle<usize>
+    where
+        L: FnMut() -> std::io::Result<C> + Send + 'static,
+        S: FnMut(C) -> Option<C> + Send + 'static,
+        C: Send + 'static,
+    {
+        std::thread::spawn(move || {
+            let mut n = 0;
+            let mut held = Vec::new();
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                match accept() {
+                    Ok(c) => {
+                        n += 1;
+                        if let Some(c) = serve(c) {
+                            held.push(c);
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10))
+                    }
+                    Err(e) => panic!("accept: {e}"),
+                }
+            }
+            n
+        })
+    }
+
+    /// The cell socket stub's answer for one mode.
+    #[cfg(unix)]
+    fn serve_sock(mode: SockMode, mut c: std::os::unix::net::UnixStream) -> Option<std::os::unix::net::UnixStream> {
+        use std::io::Write;
+        c.set_nonblocking(false).expect("blocking");
+        if mode == SockMode::Reset {
+            // Close with the request unread: the peer's read gets a reset.
+            std::thread::sleep(Duration::from_millis(300));
+            return None;
+        }
+        read_one_request(&mut c);
+        match mode {
+            SockMode::Hang => return Some(c),
+            SockMode::Garbage => c.write_all(b"garbage\r\n\r\n").expect("write"),
+            SockMode::Empty200 => c.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").expect("write"),
+            SockMode::NotServed => {
+                let body = b"{\"error\":\"route not served on cell socket\"}";
+                c.write_all(format!("HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes())
+                    .expect("write");
+                c.write_all(body).expect("write");
+            }
+            SockMode::NoReply | SockMode::Dead | SockMode::Closed | SockMode::Reset => {}
+        }
+        None
+    }
+
+    /// Stand up the cell socket for `mode` at `sock`, run `client`, and
+    /// return what the client gave back and how many connections the
+    /// socket took.
+    #[cfg(unix)]
+    fn with_sock_stub<T>(mode: SockMode, sock: &Path, client: impl FnOnce() -> T) -> (T, usize) {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let _ = std::fs::remove_file(sock);
+        let listener = std::os::unix::net::UnixListener::bind(sock).expect("bind");
+        if mode == SockMode::Dead {
+            // The file stays; nobody listens on it.
+            drop(listener);
+            let out = client();
+            std::fs::remove_file(sock).expect("remove socket");
+            return (out, 0);
+        }
+        if mode == SockMode::Closed {
+            std::fs::set_permissions(sock, std::fs::Permissions::from_mode(0o000)).expect("chmod 000");
+        }
+        listener.set_nonblocking(true).expect("nonblocking");
+        let stop = Arc::new(AtomicBool::new(false));
+        let counter = count_arrivals(
+            move || listener.accept().map(|(c, _)| c),
+            stop.clone(),
+            move |c| serve_sock(mode, c),
+        );
+        let out = client();
+        stop.store(true, Ordering::SeqCst);
+        let n = counter.join().expect("socket stub");
+        std::fs::remove_file(sock).expect("remove socket");
+        (out, n)
+    }
+
+    /// Sent once (0.46.15): the script goes on to loopback TCP only when
+    /// the cell socket took none of the event: the connect failed (curl 7)
+    /// or the daemon answered with an error status (curl 22, the "not
+    /// served on cell socket" 404). Any other failure may have reached the
+    /// daemon, which may have counted it, so it is not sent again. It
+    /// always exits 0 and prints nothing. A probe runs curl against each
+    /// mode first, so each case is the exit code it names.
+    #[cfg(unix)]
+    #[test]
+    fn script_sends_over_tcp_only_when_the_socket_took_none_of_the_event() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let home = TempHome::new("sendonce");
+        write_script(&script_path(home.path()), "0.46.15", generate_hook_script("0.46.15")).expect("script");
+        let sock = PathBuf::from(format!("/tmp/k2once-{}.sock", std::process::id()));
+        // (mode, the curl exits it may give (empty: any other failure),
+        // socket arrivals, TCP arrivals).
+        let cases: [(SockMode, &[i32], usize, usize); 8] = [
+            (SockMode::Dead, &[7], 0, 1),
+            (SockMode::Closed, &[7], 0, 1),
+            (SockMode::Hang, &[28], 1, 0),
+            (SockMode::NoReply, &[52], 1, 0),
+            (SockMode::Reset, &[56, 52], 1, 0),
+            (SockMode::Garbage, &[], 1, 0),
+            (SockMode::Empty200, &[0], 1, 0),
+            (SockMode::NotServed, &[22], 1, 1),
+        ];
+        for (mode, want_rc, want_sock, want_tcp) in cases {
+            // The probe: curl itself, as the script's socket arm calls it.
+            let (rc, _) = with_sock_stub(mode, &sock, || {
+                crate::bg_proc::command("curl")
+                    .args(["-sf", "--noproxy", "*", "-X", "POST", "--connect-timeout", "1", "--max-time", "2"])
+                    .arg("--unix-socket")
+                    .arg(&sock)
+                    .args(["--data-binary", "{}", "http://localhost/hook/event"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .expect("run curl")
+                    .code()
+                    .expect("curl exit code")
+            });
+            if want_rc.is_empty() {
+                assert!(
+                    ![0, 7, 22, 28, 52, 56].contains(&rc),
+                    "{mode:?}: curl exit {rc}, want another failure"
+                );
+            } else {
+                assert!(
+                    want_rc.contains(&rc),
+                    "{mode:?}: curl exit {rc}, want one of {want_rc:?} (for Closed: running as root?)"
+                );
+            }
+
+            // The script, with a TCP listener that counts arrivals.
+            let tcp = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = tcp.local_addr().expect("addr").port();
+            std::fs::write(crate::paths::k2_home_in(home.path()).join("heartbeat.port"), port.to_string()).unwrap();
+            tcp.set_nonblocking(true).expect("nonblocking");
+            let stop = Arc::new(AtomicBool::new(false));
+            let tcp_counter = count_arrivals(
+                move || tcp.accept().map(|(c, _)| c),
+                stop.clone(),
+                |mut c: std::net::TcpStream| {
+                    use std::io::Write;
+                    c.set_nonblocking(false).expect("blocking");
+                    read_one_request(&mut c);
+                    c.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n").expect("answer");
+                    None
+                },
+            );
+            let ((code, stdout, _), got_sock) = with_sock_stub(mode, &sock, || {
+                run_script(
+                    home.path(),
+                    &[
+                        ("K2_PANE_ID", "pane-once"),
+                        ("K2_HOOK_SOCK", sock.to_str().expect("utf8")),
+                        ("K2_HOOK_TOKEN", "sid.scoped-once"),
+                    ],
+                    b"{\"hook_event_name\":\"Stop\"}",
+                )
+            });
+            stop.store(true, Ordering::SeqCst);
+            let got_tcp = tcp_counter.join().expect("tcp stub");
+            assert_eq!(code, 0, "{mode:?}: the script always exits 0");
+            assert!(stdout.is_empty(), "{mode:?}: stdout {:?}", String::from_utf8_lossy(&stdout));
+            assert_eq!(
+                (got_sock, got_tcp),
+                (want_sock, want_tcp),
+                "{mode:?}: (socket, TCP) arrivals"
+            );
         }
     }
 

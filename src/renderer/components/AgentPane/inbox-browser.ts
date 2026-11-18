@@ -115,6 +115,14 @@ export function buildSourceList(catalog: InboxBrowserSource[]): InboxBrowserSour
   return [traySource(), ...catalog]
 }
 
+/** A tray row's identity in the list. An id is a file name stem and only
+ *  unique within its folder: the same name shows up in `done/` and in the
+ *  root, or as attachments of several messages, so the row's key is the
+ *  folder and the id together. */
+export function trayItemKey(item: Pick<InboxItem, 'folder' | 'id'>): string {
+  return `${item.folder ?? ''}/${item.id}`
+}
+
 export function parseTrayList(raw: unknown): InboxItem[] {
   if (!Array.isArray(raw)) {
     throw new Error('inbox/list: expected an array of InboxItem')

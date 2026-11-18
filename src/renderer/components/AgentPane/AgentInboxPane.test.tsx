@@ -297,6 +297,37 @@ describe('AgentInboxPane sources + tray', () => {
     }
   })
 
+  it('keys tray rows by folder and id: the same name in two folders is two rows, no duplicate-key warning', async () => {
+    // An id is a file name stem: `done/` keeps a copy of a root item's name,
+    // and every message's attachments folder can hold a README or REPORT.
+    mockDaemon({
+      trayList: [
+        { ...TRAY_ITEM, id: 'README', filename: 'README.md', folder: 'a.files', title: 'First README' },
+        { ...TRAY_ITEM, id: 'README', filename: 'README.md', folder: 'b.files', title: 'Second README' },
+        { ...TRAY_ITEM, id: 'README', filename: 'README.md', folder: '', title: 'Root README' },
+      ],
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)
+      await waitFor(() => expect(screen.getAllByTestId('inbox-message-README')).toHaveLength(3))
+      expect(screen.getByText('First README')).toBeTruthy()
+      expect(screen.getByText('Second README')).toBeTruthy()
+      expect(screen.getByText('Root README')).toBeTruthy()
+      const dupes = errors.mock.calls.filter((c) => String(c[0]).includes('same key'))
+      expect(dupes).toEqual([])
+      // Selecting one row highlights only that row, not every row of that name.
+      fireEvent.click(screen.getByText('Second README'))
+      await waitFor(() => expect(calls('inbox/read').length).toBe(1))
+      const highlighted = screen
+        .getAllByTestId('inbox-message-README')
+        .filter((b) => b.className.includes('bg-[var(--color-accent)]/15'))
+      expect(highlighted.map((b) => b.textContent)).toEqual([expect.stringContaining('Second README')])
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
   it('empty mail catalog keeps tray and points at Settings → Email', async () => {
     mockDaemon({ inboxes: { ok: true, count: 0, inboxes: [] } })
     renderInRoom(room, <AgentInboxPane agentName="sales" projectPath="/ws" />)

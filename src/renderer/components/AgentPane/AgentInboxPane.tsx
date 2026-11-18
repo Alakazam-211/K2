@@ -29,6 +29,7 @@ import {
   preferMailHtml,
   stripExternalEmailMarkers,
   traySource,
+  trayItemKey,
   type ChatAboutStamp,
   type InboxBrowserSource,
   type InboxItem,
@@ -42,6 +43,7 @@ interface AgentInboxPaneProps {
 }
 
 type SelectedRow =
+  /** `id` is `trayItemKey`: folder and id (an id repeats across folders). */
   | { kind: 'tray'; id: string }
   | { kind: 'mail'; id: string }
   | null
@@ -223,7 +225,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
   }, [room.scope, projectPath, isWorkspaceBoard])
 
   const openTrayItem = async (item: InboxItem): Promise<void> => {
-    setSelectedRow({ kind: 'tray', id: item.id })
+    setSelectedRow({ kind: 'tray', id: trayItemKey(item) })
     setMailBody(null)
     setShowHtml(false)
     setChatAboutStamp(null)
@@ -475,10 +477,11 @@ function MessageColumn({
       <div className="flex-1 overflow-y-auto px-1 pb-2">
         {isTray
           ? trayItems.map((item) => {
-              const selected = selectedRow?.kind === 'tray' && selectedRow.id === item.id
+              const rowKey = trayItemKey(item)
+              const selected = selectedRow?.kind === 'tray' && selectedRow.id === rowKey
               return (
                 <button
-                  key={item.id}
+                  key={rowKey}
                   type="button"
                   data-testid={`inbox-message-${item.id}`}
                   onClick={() => onOpenTray(item)}

@@ -355,3 +355,36 @@ fn bash_runs_the_open_cache_file_and_the_front_s_variables_arrive() {
     );
     assert!(!plain.stderr.contains("exec 3<&-"), "{}", plain.stderr);
 }
+
+#[test]
+fn a_verb_that_falls_through_without_python3_says_so_and_runs_nothing() {
+    let rig = Rig::new("no-python3");
+    let path = common::path_without_python3(&rig.dir);
+    for (name, case) in [
+        ("k5", args(&["msg", "acme", "hello"])),
+        ("k2", args(&["compute", "list"])),
+        ("k5", args(&["nosuchverb"])),
+    ] {
+        let noun = k5_cli::fallthrough::noun(&case);
+        let line = k5_cli::fallthrough::FrontError::NoPython { noun }.to_string();
+        assert_eq!(
+            rig.front(name, &case, &[("PATH", &path)]),
+            Out {
+                code: Some(127),
+                stdout: String::new(),
+                stderr: format!("{line}\n"),
+            },
+            "{name} {case:?}"
+        );
+        assert!(line.contains("needs Python 3"), "{line}");
+        // bash never ran: the shell CLI was never written out.
+        assert!(!rig.cache().exists(), "{name} {case:?} wrote the shell CLI");
+    }
+    // With python3 the same verb goes to the shell.
+    let with = rig.front("k5", &args(&["nosuchverb"]), &[]);
+    assert_eq!(
+        with,
+        rig.bash(&args(&["nosuchverb"]), &[("K5_CLI_CALLED_AS", "k5")])
+    );
+    assert!(rig.cache().exists(), "the shell CLI was not written out");
+}

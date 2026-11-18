@@ -139,3 +139,44 @@ fn run_bash(script: &str, argv0: &str, args: &[&str], env: &[(&str, &str)]) -> S
     );
     String::from_utf8(out.stdout).expect("bash printed UTF-8")
 }
+
+/// This process's `PATH` with every `python3` taken out: each folder that
+/// has one is replaced by a folder under `scratch` with a link to each of
+/// its other entries, so every other program is found as before. The
+/// binary's rule ([`k5_cli::python::in_env`]) must then find none.
+#[cfg(unix)]
+pub fn path_without_python3(scratch: &std::path::Path) -> String {
+    let path = std::env::var_os("PATH").expect("a PATH to run the tests with");
+    let mut dirs = Vec::new();
+    for (i, dir) in std::env::split_paths(&path).enumerate() {
+        if std::fs::symlink_metadata(dir.join("python3")).is_err() {
+            dirs.push(dir);
+            continue;
+        }
+        let shadow = scratch.join(format!("no-python3-{i}"));
+        if !shadow.exists() {
+            std::fs::create_dir_all(&shadow).unwrap();
+            let entries =
+                std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+            for entry in entries {
+                let name = entry
+                    .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+                    .file_name();
+                if name != "python3" {
+                    std::os::unix::fs::symlink(dir.join(&name), shadow.join(&name)).unwrap();
+                }
+            }
+        }
+        dirs.push(shadow);
+    }
+    let joined = std::env::join_paths(dirs)
+        .expect("the folders join")
+        .into_string()
+        .expect("a UTF-8 PATH");
+    assert_eq!(
+        k5_cli::python::in_env(&k5_cli::offline::Env::of(&[("PATH", &joined)])),
+        k5_cli::python::Python3::Missing,
+        "python3 is still on {joined}"
+    );
+    joined
+}

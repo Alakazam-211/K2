@@ -33,6 +33,18 @@
 //! `/bin/bash` and `/usr/bin/bash` that is there. On Windows, Git Bash, by
 //! the search of `k2.cmd` (`k2_client::win_cli::find_git_bash`).
 //!
+//! What the shell needs must be there, or nothing is handed over: one
+//! plain line on stderr names what is missing and how to get it, and the
+//! front exits with the code a shell gives for a program it can't find.
+//! On macOS and Linux that is Python 3 ([`crate::python`]: none on `PATH`,
+//! or only macOS's stand-in), exit 127 ([`FrontError::NoPython`]). Which
+//! verbs need it can't be told before they run, and one that sends its
+//! request first and reads the answer with Python would act and then
+//! fail, so every hand-off checks, before bash starts or the cache is
+//! written. On Windows it is Git Bash, exit 9009, as `k2.cmd` does
+//! ([`FrontError::NoGitBash`]); the shell's prelude there finds its own
+//! Python and says so itself when there is none.
+//!
 //! On Unix the front becomes bash (`exec`): the process id, the terminal,
 //! signals and the process ancestry the passport check walks are bash's
 //! own, and so is the exit code. bash's `$0` is `/dev/fd/N`, which says
@@ -150,7 +162,8 @@ fn open_matching(path: &Path, want: &str, follow_links: bool) -> Option<fs::File
 }
 
 /// The front's own failures. Each is one line on stderr and exit 1;
-/// Windows without Git Bash is exit 9009, as `k2.cmd` does.
+/// no Python 3 is exit 127, and Windows without Git Bash is exit 9009, as
+/// `k2.cmd` does.
 #[derive(Debug)]
 pub enum FrontError {
     /// The K2 home can't be found, so the cache has nowhere to go.
@@ -163,6 +176,8 @@ pub enum FrontError {
     Packed(String),
     /// No bash in any of the places looked in.
     NoBash { looked: Vec<PathBuf> },
+    /// macOS or Linux: no Python 3 for the shell. Carries the verb.
+    NoPython { noun: String },
     /// Windows: no Git Bash. Carries the verb.
     NoGitBash { noun: String },
     /// bash could not be started.
@@ -173,6 +188,7 @@ impl FrontError {
     /// The exit.
     pub fn exit(&self) -> Exit {
         match self {
+            FrontError::NoPython { .. } => Exit::NoPython,
             FrontError::NoGitBash { .. } => Exit::NoGitBash,
             _ => Exit::Error,
         }
@@ -186,7 +202,7 @@ impl FrontError {
     /// The line printed on stderr, for a front called as `who`.
     pub fn line(&self, who: CalledAs) -> String {
         match self {
-            FrontError::NoGitBash { .. } => self.to_string(),
+            FrontError::NoPython { .. } | FrontError::NoGitBash { .. } => self.to_string(),
             _ => format!("{}: {self}", who.name()),
         }
     }
@@ -205,6 +221,11 @@ impl fmt::Display for FrontError {
                 let looked: Vec<String> = looked.iter().map(|p| p.display().to_string()).collect();
                 write!(f, "no bash to run the shell CLI (looked for {})", looked.join(", "))
             }
+            FrontError::NoPython { noun } => write!(
+                f,
+                "k5 {noun}: this command is not built into k5 yet and needs Python 3. {}, then open a new terminal.",
+                python_how(cfg!(target_os = "macos"))
+            ),
             FrontError::NoGitBash { noun } => write!(
                 f,
                 "k5 {noun} is not built into k5 on Windows yet and still needs Git Bash (Git for Windows): {}",
@@ -216,6 +237,15 @@ impl fmt::Display for FrontError {
 }
 
 impl std::error::Error for FrontError {}
+
+/// How to get Python 3, on macOS (`macos`) or Linux.
+pub fn python_how(macos: bool) -> &'static str {
+    if macos {
+        "Install Apple's command line tools (xcode-select --install)"
+    } else {
+        "Install it with your system's package manager (python3)"
+    }
+}
 
 /// The verb as the shell reads it: the first argument, `help` when there
 /// is none or it is empty (`${1:-help}`).
@@ -474,6 +504,10 @@ pub fn dev_fd(fd: &std::os::fd::OwnedFd) -> OsString {
 /// this process exits with its code. What comes back is the front's own
 /// error.
 pub fn run(who: CalledAs, args: &[OsString]) -> FrontError {
+    if crate::python::here() == crate::python::Python3::Missing {
+        return FrontError::NoPython { noun: noun(args) };
+    }
+    trace::mark("python3");
     let bash = match interpreter(args) {
         Ok(b) => b,
         Err(e) => return e,
@@ -892,6 +926,28 @@ mod tests {
         assert_eq!(err.exit_code(), 9009);
         assert_eq!(noun(&[]), "help");
         assert_eq!(noun(&[OsString::new()]), "help");
+    }
+
+    #[test]
+    fn without_python3_it_says_so_and_exits_127() {
+        let err = FrontError::NoPython {
+            noun: noun(&[OsString::from("msg"), OsString::from("x")]),
+        };
+        let line = |how: &str| {
+            format!("k5 msg: this command is not built into k5 yet and needs Python 3. {how}, then open a new terminal.")
+        };
+        let here = line(python_how(cfg!(target_os = "macos")));
+        assert_eq!(err.line(CalledAs::K2Name), here);
+        assert_eq!(err.line(CalledAs::K5Name), here);
+        assert_eq!(err.exit_code(), 127);
+        assert_eq!(
+            line(python_how(true)),
+            "k5 msg: this command is not built into k5 yet and needs Python 3. Install Apple's command line tools (xcode-select --install), then open a new terminal."
+        );
+        assert_eq!(
+            line(python_how(false)),
+            "k5 msg: this command is not built into k5 yet and needs Python 3. Install it with your system's package manager (python3), then open a new terminal."
+        );
     }
 
     #[test]

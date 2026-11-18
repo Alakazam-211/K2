@@ -496,19 +496,25 @@ cmd_feedback_show() {
         _feedback_err "usage" "show requires an <id> (from ask/list; a short unique prefix works)"
         exit 2
     fi
-    # The reply can carry a 1 MiB brief, so python fetches it itself (like
-    # `ask`) instead of passing it through an env var, which Linux caps at
-    # 128 KiB per string (prd-ticket-html-brief-v1 H20/H31).
-    FB_ID="$id" AS_JSON="$as_json" WANT_HTML="$want_html" FB_FILES_PY="$_ticket_files_check_py" \
-    ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
+    # The reply can carry a 1 MiB brief, so it reaches python on stdin, not
+    # in an env var, which Linux caps at 128 KiB per string
+    # (prd-ticket-html-brief-v1 H20/H31). It is fetched like every other
+    # verb (cli_request), so it gets the same retries and closing lines.
+    local resp
+    resp=$(cli_request "/cli/feedback/show" "id=$(urlencode "$id")" "brief=1") || resp=""
+    if [ -z "$resp" ]; then
+        _feedback_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
+        exit 1
+    fi
+    printf '%s' "$resp" | AS_JSON="$as_json" WANT_HTML="$want_html" FB_FILES_PY="$_ticket_files_check_py" \
+        python3 -c "$_feedback_show_py"
+}
+
+# `k2 tickets show`: print one ticket from the reply on stdin.
+_feedback_show_py='
 import json, os, sys, time
-import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 exec(os.environ["FB_FILES_PY"])
 
-base = os.environ["ABASE"]
-token = os.environ["ATOKEN"]
 as_json = os.environ.get("AS_JSON") == "true"
 want_html = os.environ.get("WANT_HTML") == "true"
 
@@ -519,16 +525,7 @@ def die(err):
     code = err.get("code")
     sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
 
-qs = urllib.parse.urlencode({"id": os.environ["FB_ID"], "brief": "1", "token": token})
-req = urllib.request.Request(base + "/cli/feedback/show?" + qs, method="GET")
-raw = None
-try:
-    with urllib.request.urlopen(req, timeout=30) as r:
-        raw = r.read().decode("utf-8", "replace")
-except urllib.error.HTTPError as e:
-    raw = e.read().decode("utf-8", "replace")
-except Exception:
-    die({"code": "daemon_unreachable", "hint": "no response from the K2 daemon (is it running?)"})
+raw = sys.stdin.buffer.read().decode("utf-8", "replace")
 try:
     d = json.loads(raw)
 except Exception:
@@ -607,11 +604,10 @@ for c in d.get("comments", []):
     print("  %-9s%-10s%s" % (c.get("author", "?"), "(%s)" % ago(c.get("at", 0)), lines[0]))
     for extra in lines[1:]:
         print(" " * 21 + extra)
-    # 0.46.6: the message's files, absolute for the owner (projectPath).
+    # 0.46.6: the files of the message, absolute for the owner (projectPath).
     for line in ticket_file_lines(c.get("attachments"), d.get("projectPath"), " " * 21):
         print(line)
-PYEOF
-}
+'
 
 # `k2 tickets template` — the brief skeleton (prd-ticket-html-brief-v1 H15).
 # Static and daemon-optional (H42). Only tags and classes the daemon keeps.

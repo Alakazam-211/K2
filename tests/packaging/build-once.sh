@@ -6,7 +6,8 @@
 # reuses every compiled crate and only k2-daemon relinks. The k5 command's
 # program is the one other call: universal (both --target slices joined by
 # lipo) and checked to carry cli/k2's version. Stub `bun`, `cargo`, `lipo`,
-# `rustup` and `codesign` on PATH; nothing compiles, signs or touches ~/.k2.
+# `rustup` and `codesign` on PATH, and scripts/fetch-dfn3.sh in the stub
+# project; nothing compiles, downloads, signs or touches ~/.k2.
 # Runs on macOS and Linux. No skips.
 set -euo pipefail
 
@@ -20,9 +21,41 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 stub="$work/stub"
 proj="$work/proj"
-mkdir -p "$stub" "$proj/cli"
+mkdir -p "$stub" "$proj/cli" "$proj/scripts"
+# Some Linux hosts have sha256sum but no shasum (the test and
+# k2_check_bundled_dfn3 call `shasum -a 256`): the same digest line from
+# sha256sum, for this whole test.
+if ! command -v shasum >/dev/null 2>&1; then
+    mkdir -p "$work/tools"
+    cat > "$work/tools/shasum" <<'EOF'
+#!/usr/bin/env bash
+[ "${1:-}" = -a ] && [ "${2:-}" = 256 ] || { echo "stub shasum: only -a 256" >&2; exit 1; }
+shift 2
+exec sha256sum "$@"
+EOF
+    chmod +x "$work/tools/shasum"
+    export PATH="$work/tools:$PATH"
+fi
 # The script the k5 program's version comes from (its build.rs reads it).
 printf '#!/bin/bash\nK2_CLI_VERSION="9.8.7"\n' > "$proj/cli/k2"
+# scripts/fetch-dfn3.sh stand-in: Step 2 runs it first, and
+# k2_check_bundled_dfn3 reads its DFN3_WEIGHTS_SHA256 pin. Like the real
+# one it stages the four files in src-tauri/dfn3/ beside itself, from a few
+# local bytes (never a download), and the pin is those bytes' sha256.
+dfn3_weights="stand-in DeepFilterNet3 weights"
+dfn3_sha="$(printf '%s' "$dfn3_weights" | shasum -a 256 | cut -d' ' -f1)"
+cat > "$proj/scripts/fetch-dfn3.sh" <<EOF
+#!/bin/bash
+set -euo pipefail
+DFN3_WEIGHTS_SHA256="$dfn3_sha"
+[ \$# -eq 0 ] || { echo "stub fetch-dfn3: unexpected: \$*" >&2; exit 2; }
+stage="\$(cd "\$(dirname "\$0")/.." && pwd)/src-tauri/dfn3"
+mkdir -p "\$stage"
+printf '%s' "$dfn3_weights" > "\$stage/dfn3_ll.nnef.tar"
+for f in NOTICE LICENSE-MIT LICENSE-APACHE; do printf 'stand-in %s\n' "\$f" > "\$stage/\$f"; done
+echo "fetch-dfn3: staged (stand-in)"
+EOF
+chmod +x "$proj/scripts/fetch-dfn3.sh"
 export CALLS="$work/cargo-calls"
 : > "$CALLS"
 
@@ -107,7 +140,8 @@ echo aarch64-apple-darwin
 echo aarch64-unknown-linux-gnu
 EOF
 # bun run tauri build: makes the app bundle where tauri does, under
-# $CARGO_TARGET_DIR (else target/).
+# $CARGO_TARGET_DIR (else target/), with src-tauri/dfn3/* in
+# Resources/dfn3/ (tauri.conf.json's bundle.resources).
 cat > "$stub/bun" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -122,12 +156,10 @@ fi
 [ -z "${STUB_TAURI_SLEEP:-}" ] || sleep "$STUB_TAURI_SLEEP"
 [ "${STUB_TAURI_FAIL:-0}" = 1 ] && { echo "stub bun: failing on purpose"; exit 1; }
 t="${CARGO_TARGET_DIR:-target}"
-mkdir -p "$t/release/bundle/macos/K2.app/Contents/MacOS" "$t/release/bundle/dmg" "$t/release/bundle/macos/K2.app/Contents/Resources/dfn3"
+mkdir -p "$t/release/bundle/macos/K2.app/Contents/MacOS" "$t/release/bundle/dmg"
 printf 'app' > "$t/release/bundle/macos/K2.app/Contents/MacOS/k2"
-# The DeepFilterNet3 files tauri bundles (beforeBuildCommand stages them).
-for f in dfn3_ll.nnef.tar NOTICE LICENSE-MIT LICENSE-APACHE; do
-    printf 'fake %s' "$f" > "$t/release/bundle/macos/K2.app/Contents/Resources/dfn3/$f"
-done
+mkdir -p "$t/release/bundle/macos/K2.app/Contents/Resources/dfn3"
+cp src-tauri/dfn3/* "$t/release/bundle/macos/K2.app/Contents/Resources/dfn3/"
 printf '#!/bin/sh\n' > "$t/release/bundle/dmg/bundle_dmg.sh"
 echo "tauri: Finished release"
 EOF
@@ -152,12 +184,6 @@ EOF
     chmod +x "$stub/plutil"
 fi
 
-# scripts/fetch-dfn3.sh in the project: a stub that fetches nothing and pins
-# the fake weights the stub tauri build bundles (k2_check_bundled_dfn3).
-mkdir -p "$proj/scripts"
-printf '#!/bin/sh\n# stub\nDFN3_WEIGHTS_SHA256="%s"\nexit 0\n' \
-    "$(printf 'fake dfn3_ll.nnef.tar' | shasum -a 256 | cut -d' ' -f1)" > "$proj/scripts/fetch-dfn3.sh"
-chmod +x "$proj/scripts/fetch-dfn3.sh"
 export MEET="$work/meet"
 mkdir -p "$MEET"
 # run_step2 LOG [VAR=value...]: k2_build_mac_binaries in $proj with stubs.

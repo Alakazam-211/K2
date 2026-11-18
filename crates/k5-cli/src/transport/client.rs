@@ -24,6 +24,10 @@ pub const PROBE_MAX_TIME: Duration = Duration::from_secs(5);
 pub const PROBE_ENDPOINT: &str = "/cli/whoami";
 /// `cli_send_json`'s default, `_K2_SEND_MAX_TIME`.
 pub const SEND_JSON_MAX_TIME: Duration = Duration::from_secs(60);
+/// `_sidecar_send`'s `--max-time 120` (`cli/src/sidecar.sh`).
+pub const SIDECAR_MAX_TIME: Duration = Duration::from_secs(120);
+/// `_cli_use_passport_project`'s `--max-time 15` (`cli/src/cell-socket.sh`).
+pub const PASSPORT_PROJECT_MAX_TIME: Duration = Duration::from_secs(15);
 /// `_K2_CURL_TRIES`: each retry loop's tries, the first included.
 pub const TRIES: u32 = 4;
 /// The `sleep 1` between tries.
@@ -204,6 +208,14 @@ enum Kind {
     /// TCP, the passport as Bearer, no query of ours. Only `_k2_curl`'s
     /// tries; nothing read back, so no heal, no line, no note.
     BearerForm,
+    /// `_sidecar_send GET` (`cli/src/sidecar.sh`): `cli_send_json GET`'s
+    /// request, at most 120 s, and nothing else: no heal, no line, and no
+    /// note (the caller notes a refusal itself).
+    SidecarGet,
+    /// `_cli_use_passport_project`'s `/cli/whoami` (`cli/src/cell-socket.sh`):
+    /// `cli_send_json GET`'s request with no query of the caller's, at
+    /// most 15 s; no heal, no line, no note.
+    PassportProject,
 }
 
 impl Kind {
@@ -233,6 +245,8 @@ impl Kind {
                 | Kind::SendJsonPost
                 | Kind::Probe
                 | Kind::BearerForm
+                | Kind::SidecarGet
+                | Kind::PassportProject
         )
     }
     /// A refused passport is tried again with a healed one, on either
@@ -241,7 +255,12 @@ impl Kind {
     fn heals(self) -> bool {
         !matches!(
             self,
-            Kind::PostJsonStdin | Kind::Public | Kind::Probe | Kind::BearerForm
+            Kind::PostJsonStdin
+                | Kind::Public
+                | Kind::Probe
+                | Kind::BearerForm
+                | Kind::SidecarGet
+                | Kind::PassportProject
         )
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
@@ -249,7 +268,12 @@ impl Kind {
     fn notes_permission(self) -> bool {
         !matches!(
             self,
-            Kind::PostJsonStdin | Kind::Public | Kind::Probe | Kind::BearerForm
+            Kind::PostJsonStdin
+                | Kind::Public
+                | Kind::Probe
+                | Kind::BearerForm
+                | Kind::SidecarGet
+                | Kind::PassportProject
         )
     }
     /// `--connect-timeout`.
@@ -665,6 +689,51 @@ impl Client {
         } else {
             Kind::SendJsonGet
         };
+        self.send_json_as(kind, path, payload)
+    }
+
+    /// `_sidecar_send GET <path> <query>`: `cli_send_json GET`'s requests
+    /// and channels (the cell socket, then TCP when that failed, said "not
+    /// served on cell socket" or gave status 0), at most 120 s each, with
+    /// no heal and no note. The shell prints `<body>\n<status>`; an error
+    /// here stands for its `000`.
+    pub fn sidecar_get(&mut self, path: &str, payload: &str) -> Result<Response, Error> {
+        self.send_json_as(Kind::SidecarGet, path, payload)
+    }
+
+    /// `_cli_use_passport_project`'s request: `/cli/whoami` with the
+    /// passport, on the cell socket when there is a live one, then over
+    /// TCP (`token=` the passport) when that failed or its answer, as
+    /// `$(…)` holds it, is empty or says "not served on cell socket".
+    /// At most 15 s each; no heal, no line, no note. What `out` holds
+    /// after it: the answer's bytes with the NULs and trailing newlines
+    /// dropped, or nothing when it failed. Needs a passport.
+    pub fn passport_project(&mut self) -> Vec<u8> {
+        let held = |r: &Response| {
+            let mut b: Vec<u8> = r.body.iter().copied().filter(|b| *b != 0).collect();
+            while b.last() == Some(&b'\n') {
+                b.pop();
+            }
+            b
+        };
+        let t0 = Instant::now();
+        let kind = Kind::PassportProject;
+        if self.cell_socket().is_some() {
+            if let Ok(r) = self.run(kind, Channel::Uds, PROBE_ENDPOINT, &[], &[], t0) {
+                let out = held(&r);
+                if !out.is_empty() && !contains(&out, NOT_SERVED) {
+                    return out;
+                }
+            }
+        }
+        match self.run(kind, Channel::Tcp, PROBE_ENDPOINT, &[], &[], t0) {
+            Ok(r) => held(&r),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn send_json_as(&mut self, kind: Kind, path: &str, payload: &str) -> Result<Response, Error> {
+        let post = kind == Kind::SendJsonPost;
         let t0 = Instant::now();
         if self.cell_socket().is_some() {
             match self.run(kind, Channel::Uds, path, &[], payload.as_bytes(), t0) {
@@ -844,6 +913,8 @@ impl Client {
             | Kind::Public
             | Kind::BearerForm => MAX_TIME,
             Kind::Probe => PROBE_MAX_TIME,
+            Kind::SidecarGet => SIDECAR_MAX_TIME,
+            Kind::PassportProject => PASSPORT_PROJECT_MAX_TIME,
         }
     }
 
@@ -1085,7 +1156,7 @@ impl Client {
                 };
                 (Method::Post, path, json(&mut headers))
             }
-            Kind::SendJsonGet => {
+            Kind::SendJsonGet | Kind::SidecarGet | Kind::PassportProject => {
                 let payload = String::from_utf8_lossy(body);
                 let path = if tcp {
                     let mut data = wire::curl_data_urlencode("token", token);
@@ -1397,6 +1468,8 @@ mod tests {
             Kind::SendJsonPost,
             Kind::Public,
             Kind::Probe,
+            Kind::SidecarGet,
+            Kind::PassportProject,
         ] {
             assert!(!k.checks_local_denial(), "{k:?}");
         }
@@ -1427,6 +1500,17 @@ mod tests {
             (Public, false, true, false, true, false, false, false),
             (Probe, false, false, false, false, false, false, false),
             (BearerForm, false, false, false, false, false, false, false),
+            (SidecarGet, false, false, false, false, false, false, false),
+            (
+                PassportProject,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+            ),
         ];
         for (k, m, c, s, n, h, p, o) in rows {
             assert_eq!(
@@ -1464,6 +1548,8 @@ mod tests {
             (Kind::Public, 30),
             (Kind::Probe, 5),
             (Kind::BearerForm, 30),
+            (Kind::SidecarGet, 120),
+            (Kind::PassportProject, 15),
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }

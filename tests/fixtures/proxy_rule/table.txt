@@ -1,0 +1,25 @@
+# The proxy rule, one URL per line: "direct" (never through a proxy) or
+# "proxy" (may use the person's proxy). Loopback (127.0.0.1, ::1,
+# localhost) and plain http never use a proxy; HTTPS to a remote K2 may
+# use the person's proxy. Read by k2_client::proxy_rule's tests (Rust) and
+# tests/cli/proxy_rule_parity.sh (the CLI's bash and Python helpers), so
+# all three give the same answers.
+direct http://127.0.0.1:4646/cli/x
+direct http://127.9.9.9:1
+direct http://[::1]:4646/
+direct http://localhost:4646
+direct https://127.0.0.1:4646/
+direct https://127.0.0.2/
+direct https://[::1]/
+direct https://localhost/
+direct https://LOCALHOST./
+direct https://app.localhost/
+direct http://k2.example.com/cli/x
+direct ws://127.0.0.1:4646/events
+direct not-a-url
+proxy https://k2.example.com/cli/x
+proxy https://acme.k2.dev
+proxy https://10.0.0.5:4646/
+proxy https://[2001:db8::1]/
+proxy HTTPS://K2.EXAMPLE.COM/
+proxy https://user@k2.example.com/

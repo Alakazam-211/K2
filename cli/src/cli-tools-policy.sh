@@ -365,6 +365,45 @@ _k2_direct_url() {
     esac
     return 1
 }
+# _K2_PY_PROXY_RULE: the same rule for the CLI's embedded Python. Every
+# Python block that calls the daemon runs exec(os.environ["_K2_PY_PROXY_RULE"])
+# first: it installs one urllib opener that skips the proxy for a direct
+# URL (k2_direct, the same answers as _k2_direct_url and
+# k2_client::proxy_rule::direct; tests/cli/proxy_rule_parity.sh holds the
+# table) and uses the person's proxy settings for https to a remote host.
+# Exported so every python3 the CLI starts can read it. Not a secret.
+_K2_PY_PROXY_RULE='
+import ipaddress as _k2_ip, urllib.parse as _k2_up, urllib.request as _k2_ur
+
+def k2_direct(url):
+    # Loopback (127.0.0.1, ::1, localhost) and plain http never use a proxy;
+    # HTTPS to a remote K2 may use the person'"'"'s proxy.
+    try:
+        u = _k2_up.urlsplit(url)
+        host = u.hostname
+    except ValueError:
+        return True
+    if u.scheme != "https" or not host:
+        return True
+    host = host.rstrip(".")
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return _k2_ip.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+class _K2ProxyRule(_k2_ur.ProxyHandler):
+    # The person'"'"'s proxy settings (ProxyHandler reads them), except for a
+    # direct URL: returning None hands the request to the plain handlers.
+    def proxy_open(self, req, proxy, type):
+        if k2_direct(req.full_url):
+            return None
+        return super().proxy_open(req, proxy, type)
+
+_k2_ur.install_opener(_k2_ur.build_opener(_K2ProxyRule()))
+'
+export _K2_PY_PROXY_RULE
 _K2_CURL_TRIES=4
 _k2_curl() {
     local cfg="$1"; shift

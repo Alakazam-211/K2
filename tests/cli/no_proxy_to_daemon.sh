@@ -17,9 +17,11 @@
 #
 # Loopback (127.0.0.1, ::1, localhost) and plain http never use a proxy;
 # HTTPS to a remote K2 may use the person's proxy. The last rows send
-# `daemon restart --host` to a remote https host (the proxy stub must get
-# its CONNECT), a remote plain-http host and https on localhost (the proxy
-# stub must get nothing).
+# `daemon restart --host` and the Python `clone preview --host` to a remote
+# https host (the proxy stub must get their CONNECT), and `daemon restart
+# --host` to a remote plain-http host and https on localhost and 127.0.0.1
+# (the proxy stub must get nothing). The Python verbs above, on loopback,
+# reach the daemon stub with nothing at the proxy.
 #
 # No daemon build, no real ~/.k2 (HOME is a temp dir), no network.
 
@@ -310,6 +312,15 @@ if grep -qx "CONNECT k2-remote.example.test:443 HTTP/1.1" "$WORK/proxy.log"; the
     ok "remote https --host asked the proxy for a tunnel"
 else
     bad "remote https --host did not go through the proxy (proxy log: $(tr '\n' ';' <"$WORK/proxy.log"))"
+fi
+# An embedded Python verb to the same remote https host: the shared rule
+# (_K2_PY_PROXY_RULE) keeps the person's proxy for it too.
+: >"$WORK/proxy.log"
+"${LIMIT[@]}" owner clone preview some-ws --host "https://k2-remote.example.test" --token tok-remote >"$WORK/out.txt" 2>"$WORK/err.txt" || true
+if grep -qx "CONNECT k2-remote.example.test:443 HTTP/1.1" "$WORK/proxy.log"; then
+    ok "python: remote https --host asked the proxy for a tunnel"
+else
+    bad "python: remote https --host did not go through the proxy (proxy log: $(tr '\n' ';' <"$WORK/proxy.log"); stderr: $(tail -2 "$WORK/err.txt" | tr '\n' ' '))"
 fi
 for host in "http://k2-remote.invalid" "https://localhost:${PORT}" "https://127.0.0.1:${PORT}"; do
     : >"$WORK/proxy.log"

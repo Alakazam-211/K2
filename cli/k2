@@ -802,6 +802,45 @@ _k2_direct_url() {
     esac
     return 1
 }
+# _K2_PY_PROXY_RULE: the same rule for the CLI's embedded Python. Every
+# Python block that calls the daemon runs exec(os.environ["_K2_PY_PROXY_RULE"])
+# first: it installs one urllib opener that skips the proxy for a direct
+# URL (k2_direct, the same answers as _k2_direct_url and
+# k2_client::proxy_rule::direct; tests/cli/proxy_rule_parity.sh holds the
+# table) and uses the person's proxy settings for https to a remote host.
+# Exported so every python3 the CLI starts can read it. Not a secret.
+_K2_PY_PROXY_RULE='
+import ipaddress as _k2_ip, urllib.parse as _k2_up, urllib.request as _k2_ur
+
+def k2_direct(url):
+    # Loopback (127.0.0.1, ::1, localhost) and plain http never use a proxy;
+    # HTTPS to a remote K2 may use the person'"'"'s proxy.
+    try:
+        u = _k2_up.urlsplit(url)
+        host = u.hostname
+    except ValueError:
+        return True
+    if u.scheme != "https" or not host:
+        return True
+    host = host.rstrip(".")
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return _k2_ip.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+class _K2ProxyRule(_k2_ur.ProxyHandler):
+    # The person'"'"'s proxy settings (ProxyHandler reads them), except for a
+    # direct URL: returning None hands the request to the plain handlers.
+    def proxy_open(self, req, proxy, type):
+        if k2_direct(req.full_url):
+            return None
+        return super().proxy_open(req, proxy, type)
+
+_k2_ur.install_opener(_k2_ur.build_opener(_K2ProxyRule()))
+'
+export _K2_PY_PROXY_RULE
 _K2_CURL_TRIES=4
 _k2_curl() {
     local cfg="$1"; shift
@@ -7130,8 +7169,8 @@ base = f'http://127.0.0.1:{port}'
 agent_inbox = False
 ws_inbox = False
 import urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ['_K2_PY_PROXY_RULE'])
 auth = {'Authorization': 'Bearer ' + token} if token else {}
 try:
     req = urllib.request.Request(f'{base}/cli/agents/list?project={urllib.parse.quote(project)}', headers=auth)
@@ -45554,8 +45593,8 @@ _clone_py() {
     python3 - "$@" <<'PY'
 import base64, getpass, http.client, json, os, socket, sys, time, uuid
 import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 
 LOCAL = ("local", os.environ["K2C_LOCAL_URL"], os.environ["K2C_LOCAL_TOKEN"])
 REMOTE = ("remote", os.environ.get("K2C_REMOTE_URL", ""), os.environ.get("K2C_REMOTE_TOKEN", ""))
@@ -69785,8 +69824,8 @@ cmd_agent_set() {
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 
 conf = json.loads(os.environ["CONF"])
 mode = os.environ.get("MODE", "")
@@ -70986,8 +71025,8 @@ print(json.dumps(out))' ${answers[@]+"${answers[@]}"}) || exit 2
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" PTOKEN="$core_token" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 
 dir_arg = os.environ["HIRE_DIR"]
 name = os.environ.get("NAME", "")
@@ -72304,8 +72343,8 @@ cmd_agent_retire() {
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 
 conf = json.loads(os.environ["CONF"])
 archive_to = os.environ.get("ARCHIVE_TO", "")
@@ -72436,8 +72475,8 @@ cmd_agent_restart() {
         AHARNESS="$harness" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 
 conf = json.loads(os.environ["CONF"])
 dry_run = os.environ.get("DRY_RUN") == "true"
@@ -72656,8 +72695,8 @@ _context_http() {
     QS="${4:-}" BODY="${5:-}" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
@@ -76020,8 +76059,8 @@ cmd_feedback_ask() {
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys, time
 import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 exec(os.environ["FB_FILES_PY"])
 
 base = os.environ["ABASE"]
@@ -77198,8 +77237,8 @@ _project_py() {
     python3 - <<'PYEOF'
 import json, os, sys, time
 import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -78627,8 +78666,8 @@ _mail_py() {
     python3 - <<'PYEOF'
 import base64, json, os, socket, sys, time
 import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -89556,8 +89595,8 @@ _cal_py() {
     python3 - <<'PYEOF'
 import json, os, socket, sys
 import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -90234,8 +90273,8 @@ cmd_mail_reader() {
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import base64, json, os, sys, time
 import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -94938,8 +94977,8 @@ _preset_py() {
     python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -95508,8 +95547,8 @@ _db_py() {
     D_REVEAL="${D_REVEAL:-false}" D_AS="${D_AS:-}" D_PERM_NOTE="${_K2_PERMISSION_NOTE:-}" \
     python3 - <<'PYEOF'
 import json, os, sys, urllib.error, urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ["_K2_PY_PROXY_RULE"])
 
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]

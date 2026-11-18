@@ -582,8 +582,8 @@ base = f'http://127.0.0.1:{port}'
 agent_inbox = False
 ws_inbox = False
 import urllib.parse, urllib.request
-# The CLI never sends a request to the daemon through a proxy.
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+# Loopback and plain http skip the proxy; remote https may use it.
+exec(os.environ['_K2_PY_PROXY_RULE'])
 auth = {'Authorization': 'Bearer ' + token} if token else {}
 try:
     req = urllib.request.Request(f'{base}/cli/agents/list?project={urllib.parse.quote(project)}', headers=auth)

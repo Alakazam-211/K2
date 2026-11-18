@@ -34,30 +34,23 @@ pub fn direct(url: &str) -> bool {
 mod tests {
     use super::direct;
 
+    /// The shared table (tests/fixtures/proxy_rule/table.txt): the CLI's
+    /// bash and Python helpers answer the same rows the same way
+    /// (tests/cli/proxy_rule_parity.sh).
     #[test]
-    fn loopback_and_plain_http_skip_the_proxy() {
-        for url in [
-            "http://127.0.0.1:4646/cli/x",
-            "http://127.9.9.9:1",
-            "http://[::1]:4646/",
-            "http://localhost:4646",
-            "https://127.0.0.1:4646/",
-            "https://[::1]/",
-            "https://localhost/",
-            "https://LOCALHOST./",
-            "https://app.localhost/",
-            "http://k2.example.com/cli/x",
-            "ws://127.0.0.1:4646/events",
-            "not a url",
-        ] {
-            assert!(direct(url), "{url} must skip the proxy");
+    fn every_row_of_the_shared_table() {
+        let table = include_str!("../../../tests/fixtures/proxy_rule/table.txt");
+        let mut rows = 0;
+        for line in table.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            let (want, url) = line.split_once(' ').expect("a row is \"direct|proxy <url>\"");
+            let want_direct = match want {
+                "direct" => true,
+                "proxy" => false,
+                other => panic!("bad row kind {other:?} in {line:?}"),
+            };
+            assert_eq!(direct(url), want_direct, "{url}: want {want}");
+            rows += 1;
         }
-    }
-
-    #[test]
-    fn https_to_a_remote_host_may_use_the_proxy() {
-        for url in ["https://k2.example.com/cli/x", "https://acme.k2.dev", "https://10.0.0.5:4646/", "https://[2001:db8::1]/"] {
-            assert!(!direct(url), "{url} may use the person's proxy");
-        }
+        assert!(rows >= 19, "the table lost rows: {rows}");
     }
 }

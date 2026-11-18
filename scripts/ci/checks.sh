@@ -93,6 +93,7 @@ part_web() {
     step "no daemon call through a proxy or with a query token (lint)"; bash tests/cli/no_proxy_lint.sh
     step "a POST that tried the cell socket is sent once (lint)"; bash tests/cli/post_no_resend_lint.sh
     step "k2 never sends a daemon request through a proxy (stub daemon)"; bash tests/cli/no_proxy_to_daemon.sh
+    step "one proxy rule in Rust, the CLI's curl and its Python (parity table)"; bash tests/cli/proxy_rule_parity.sh
     step "k2 names a body file the Windows way in Git Bash"; bash tests/cli/windows_curl_body_path.sh
     step "k2 heartbeat wake sends the session passport"; bash tests/cli/heartbeat_wake_passport.sh
     step "k2 fed never sends the owner token from a session"; bash tests/cli/fed_passport.sh

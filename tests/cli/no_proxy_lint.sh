@@ -13,8 +13,11 @@
 #   1. _k2_curl no longer adds --noproxy '*' for daemon calls;
 #   2. a curl runs outside _k2_curl, in a file not on the outside-host list
 #      below (a daemon call must go through _k2_curl);
-#   3. a Python block calls urlopen without installing an opener with an
-#      empty ProxyHandler first, in a file not on the outside-host list;
+#   3. a Python block calls urlopen without first running the shared rule
+#      (exec(os.environ["_K2_PY_PROXY_RULE"]): loopback and http skip the
+#      proxy, remote https may use it) or an empty ProxyHandler opener, in
+#      a file not on the outside-host list; and a part that runs the rule
+#      while no part defines _K2_PY_PROXY_RULE with its ProxyHandler;
 #   4. a request line builds a token query parameter (?token=, &token=,
 #      "token=$…", data-urlencode "token=…", dict(…, token=token),
 #      {"token": tok…}, q["token"] = …). The credential rides Authorization: Bearer.
@@ -67,6 +70,9 @@ if not files:
     sys.exit(2)
 
 curl_fn_ok = False
+py_rule_used = False
+py_rule_defined = False
+PY_RULE_RUN = ('exec(os.environ["_K2_PY_PROXY_RULE"])', "exec(os.environ['_K2_PY_PROXY_RULE'])")
 for f in files:
     name = os.path.basename(f)
     lines = open(f, encoding="utf-8", errors="replace").read().split("\n")
@@ -94,6 +100,11 @@ for f in files:
             curl_fn_ok = True
         if re.search(r"\bpython3\b", line):
             py_start = i
+        if line.startswith("_K2_PY_PROXY_RULE='"):
+            body = "\n".join(lines[i:i + 60])
+            if "class _K2ProxyRule(_k2_ur.ProxyHandler)" in body and "def proxy_open(" in body \
+                    and "export _K2_PY_PROXY_RULE" in body:
+                py_rule_defined = True
         if s.startswith("#"):
             continue
         # 2. a curl outside _k2_curl
@@ -103,14 +114,18 @@ for f in files:
         # 3. urlopen with no proxy-free opener in its block
         if "urlopen(" in line and name not in OUTSIDE:
             block = "\n".join(lines[(py_start if py_start is not None else 0):i])
-            if "install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))" not in block:
-                problems.append("%s:%d: urlopen without an empty ProxyHandler opener" % (name, i + 1))
+            ruled = any(r in block for r in PY_RULE_RUN)
+            py_rule_used = py_rule_used or ruled
+            if not ruled and "install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))" not in block:
+                problems.append("%s:%d: urlopen without the proxy rule or an empty ProxyHandler opener" % (name, i + 1))
         # 4. a token in the query
         if name not in OUTSIDE and REQUEST_LINE.search(line) and any(p.search(line) for p in TOKEN_Q):
             problems.append("%s:%d: a credential in the query string: %s" % (name, i + 1, s[:100]))
 
 if not curl_fn_ok:
     problems.append("_k2_curl does not add --noproxy '*' for daemon calls")
+if py_rule_used and not py_rule_defined:
+    problems.append("a Python block runs _K2_PY_PROXY_RULE but no part defines it (with its ProxyHandler and export)")
 for p in problems:
     print(p)
 sys.exit(1 if problems else 0)
@@ -344,6 +359,33 @@ urllib.request.urlopen(req)
 PY
 }
 EOF
+mk good py_rule.sh <<'EOF'
+_K2_PY_PROXY_RULE='
+class _K2ProxyRule(_k2_ur.ProxyHandler):
+    def proxy_open(self, req, proxy, type):
+        return None
+'
+export _K2_PY_PROXY_RULE
+h() {
+    python3 - <<'PY'
+import os, urllib.request
+exec(os.environ["_K2_PY_PROXY_RULE"])
+urllib.request.urlopen(req)
+PY
+}
+EOF
+mk py_rule_undefined policy.sh <<'EOF'
+_k2_curl() {
+    set -- --noproxy '*' "$@"
+}
+h() {
+    python3 - <<'PY'
+import os, urllib.request
+exec(os.environ["_K2_PY_PROXY_RULE"])
+urllib.request.urlopen(req)
+PY
+}
+EOF
 mk good help.sh <<'EOF'
 help() {
     cat <<'TXT'
@@ -396,7 +438,7 @@ PY
 EOF
 self_ok=1
 if ! out="$(lint "$FIX/good")"; then echo "SELF-TEST FAIL: good parts flagged: $out" >&2; self_ok=0; fi
-for b in no_noproxy bare_curl py_proxy query_token py_query_token; do
+for b in no_noproxy bare_curl py_proxy query_token py_query_token py_rule_undefined; do
     if out="$(lint "$FIX/$b")"; then echo "SELF-TEST FAIL: $b not caught" >&2; self_ok=0; fi
 done
 mkdir -p "$FIX/named/s"

@@ -33,8 +33,12 @@
 //!   `--schema` entry, or the shell CLI).
 //! - [`front`]: what the binary (`src/main.rs`, `k5-cli`) does with a
 //!   command line, by the route table: `--version`, `--version --check`
-//!   ([`check`]) and `cli status` ([`cli_status`]) here, everything else
-//!   to the shell CLI.
+//!   ([`check`]), `cli status` ([`cli_status`]) and the families in
+//!   [`families`] here, everything else to the shell CLI.
+//! - [`families`]: the command families the binary answers itself, as the
+//!   shell CLI does: `whoami` so far.
+//! - [`prelude`]: what the shell CLI does around such a verb: its first
+//!   line, its two gates and its EXIT trap's lines.
 //! - [`fallthrough`]: handing a verb to the shell CLI, byte for byte, from
 //!   the copy of `cli/k2` packed into the binary ([`embedded`]).
 //! - [`passport`]: the passport rule the front applies before a verb
@@ -47,10 +51,12 @@ pub mod daemon;
 pub mod embedded;
 pub mod exit;
 pub mod fallthrough;
+pub mod families;
 pub mod front;
 pub mod home;
 pub mod notice;
 pub mod out;
 pub mod passport;
+pub mod prelude;
 pub mod route;
 pub mod transport;

@@ -579,6 +579,7 @@ mod tests {
         assert_eq!(prog, "lonely");
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_cmd_builtin_runs_through_cmd_exe() {
         let files: HashSet<PathBuf> = HashSet::new();

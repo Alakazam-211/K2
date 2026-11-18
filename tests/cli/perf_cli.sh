@@ -31,6 +31,8 @@
 #                  a thread with a file)                 p95 handler time
 #   update --cli   k5 update --cli (the daemon's      <= 30 ms + the stub's
 #                  version from /boot-status)            p95 handler time
+#   setup          k5 setup (the setup list the       <= 30 ms + the stub's
+#                  daemon draws, five lines)             p95 handler time
 #   fallthrough    k5 heartbeat list (a verb the      <= cli/k2's p95 for
 #                  shell answers)                        the same + 5 ms
 #   agent help     k5 mail send --help in a K2        <= 30 ms
@@ -138,10 +140,13 @@ TICKET = json.dumps({"id": "fb_000001aa", "status": "waiting", "title": "Ship it
     "brief": {"text": "Problem\nThe release is ready."}, "projectPath": work + "/ws",
     "comments": [{"author": "perf", "at": 1763400061, "body": "See the log.",
                   "attachments": [{"path": "out/log.txt", "size": 4096}]}]}).encode()
+SETUP = (b"Setup: 1 of 3 done\n  [ ] Install developer tools (The Apple tools include git, which workspaces need: k2 git-tools install)\n"
+         b"  [x] Sign in to an AI tool\n  [-] Link your subdomain\nNext: meet Kessel, the agent that runs K2: k2 setup kessel\n")
 BODIES = {"/cli/permission/enabled": b'{"enabled":true}', "/cli/whoami": WHOAMI, "/cli/heartbeat/list": b"[]", "/cli/inbox/list": INBOX, "/cli/terminal/read": LINES,
           "/cli/feed": FEED, "/cli/sessions/roster": ROSTER, "/cli/connections": CONNECTIONS,
           "/cli/feedback/list": TICKETS, "/cli/feedback/show": TICKET,
-          "/boot-status": b'{"phase":"ready","version":"0.0.0"}'}
+          "/boot-status": b'{"phase":"ready","version":"0.0.0"}',
+          "/cli/first-run/status": SETUP}
 handler_ns = []
 lock = threading.Lock()
 
@@ -238,6 +243,7 @@ check_same("connections list", [k5, "connections", "list"], bash_argv("connectio
 check_same("feedback list", [k5, "feedback", "list"], bash_argv("feedback", "list"))
 check_same("feedback show", [k5, "feedback", "show", "fb_1"], bash_argv("feedback", "show", "fb_1"))
 check_same("update --cli", [k5, "update", "--cli"], bash_argv("update", "--cli"))
+check_same("setup", [k5, "setup"], bash_argv("setup"))
 check_same("fallthrough (heartbeat list)", [k5, "heartbeat", "list"], bash_argv("heartbeat", "list"))
 
 results = []
@@ -276,12 +282,13 @@ measure_native("connections list", ["connections", "list"])
 measure_native("feedback list", ["feedback", "list"])
 measure_native("feedback show", ["feedback", "show", "fb_1"])
 measure_native("update --cli", ["update", "--cli"])
+measure_native("setup", ["setup"])
 bash_ft = p95(timed(bash_argv("heartbeat", "list")))
 print(f"perf_cli: info: cli/k2 heartbeat list: p95 {bash_ft:.2f} ms (the fallthrough's base)")
 measure("k5 heartbeat list (fallthrough)", [k5, "heartbeat", "list"], bash_ft + 5.0, "cli/k2's p95 + 5 ms")
 for words in (["whoami"], ["done"], ["respond", "perf line"], ["inbox"], ["read", "acme"],
               ["activity"], ["sessions"], ["connections", "list"], ["feedback", "list"],
-              ["feedback", "show", "fb_1"], ["update", "--cli"]):
+              ["feedback", "show", "fb_1"], ["update", "--cli"], ["setup"]):
     bash_p95 = p95(timed(bash_argv(*words)))
     name = ' '.join(words[:2]) if words[0] in ('connections', 'feedback', 'update') else words[0]
     print(f"perf_cli: info: cli/k2 {name}: p95 {bash_p95:.2f} ms (for comparison)")

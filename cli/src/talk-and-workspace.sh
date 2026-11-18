@@ -581,8 +581,10 @@ base = f'http://127.0.0.1:{port}'
 
 agent_inbox = False
 ws_inbox = False
+import urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 try:
-    import urllib.request
     req = urllib.request.Request(f'{base}/cli/agents/list?token={token}&project={urllib.parse.quote(project)}')
     with urllib.request.urlopen(req, timeout=5) as resp:
         agents = json.loads(resp.read())

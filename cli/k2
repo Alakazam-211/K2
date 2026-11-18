@@ -7061,8 +7061,10 @@ base = f'http://127.0.0.1:{port}'
 
 agent_inbox = False
 ws_inbox = False
+import urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 try:
-    import urllib.request
     req = urllib.request.Request(f'{base}/cli/agents/list?token={token}&project={urllib.parse.quote(project)}')
     with urllib.request.urlopen(req, timeout=5) as resp:
         agents = json.loads(resp.read())
@@ -45373,6 +45375,8 @@ _clone_py() {
     python3 - "$@" <<'PY'
 import base64, getpass, http.client, json, os, socket, sys, time, uuid
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 LOCAL = ("local", os.environ["K2C_LOCAL_URL"], os.environ["K2C_LOCAL_TOKEN"])
 REMOTE = ("remote", os.environ.get("K2C_REMOTE_URL", ""), os.environ.get("K2C_REMOTE_TOKEN", ""))
@@ -69568,6 +69572,8 @@ cmd_agent_set() {
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 conf = json.loads(os.environ["CONF"])
 mode = os.environ.get("MODE", "")
@@ -70762,6 +70768,8 @@ print(json.dumps(out))' ${answers[@]+"${answers[@]}"}) || exit 2
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" PTOKEN="$core_token" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 dir_arg = os.environ["HIRE_DIR"]
 name = os.environ.get("NAME", "")
@@ -72073,6 +72081,8 @@ cmd_agent_retire() {
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 conf = json.loads(os.environ["CONF"])
 archive_to = os.environ.get("ARCHIVE_TO", "")
@@ -72201,6 +72211,8 @@ cmd_agent_restart() {
         AHARNESS="$harness" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 conf = json.loads(os.environ["CONF"])
 dry_run = os.environ.get("DRY_RUN") == "true"
@@ -72418,6 +72430,8 @@ _context_http() {
     QS="${4:-}" BODY="${5:-}" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
@@ -75772,6 +75786,8 @@ cmd_feedback_ask() {
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys, time
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 exec(os.environ["FB_FILES_PY"])
 
 base = os.environ["ABASE"]
@@ -76080,6 +76096,8 @@ cmd_feedback_show() {
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, sys, time
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 exec(os.environ["FB_FILES_PY"])
 
 base = os.environ["ABASE"]
@@ -76945,6 +76963,8 @@ _project_py() {
     python3 - <<'PYEOF'
 import json, os, sys, time
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -78370,6 +78390,8 @@ _mail_py() {
     python3 - <<'PYEOF'
 import base64, json, os, socket, sys, time
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -89295,6 +89317,8 @@ _cal_py() {
     python3 - <<'PYEOF'
 import json, os, socket, sys
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -89969,6 +89993,8 @@ cmd_mail_reader() {
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import base64, json, os, sys, time
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -94670,6 +94696,8 @@ _preset_py() {
     python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -95236,6 +95264,8 @@ _db_py() {
     D_REVEAL="${D_REVEAL:-false}" D_AS="${D_AS:-}" D_PERM_NOTE="${_K2_PERMISSION_NOTE:-}" \
     python3 - <<'PYEOF'
 import json, os, sys, urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]

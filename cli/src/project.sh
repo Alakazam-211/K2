@@ -49,6 +49,8 @@ _project_py() {
     python3 - <<'PYEOF'
 import json, os, sys, time
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 for _s in (sys.stdout, sys.stderr):
     try:

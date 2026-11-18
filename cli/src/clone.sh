@@ -79,6 +79,8 @@ _clone_py() {
     python3 - "$@" <<'PY'
 import base64, getpass, http.client, json, os, socket, sys, time, uuid
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 LOCAL = ("local", os.environ["K2C_LOCAL_URL"], os.environ["K2C_LOCAL_TOKEN"])
 REMOTE = ("remote", os.environ.get("K2C_REMOTE_URL", ""), os.environ.get("K2C_REMOTE_TOKEN", ""))

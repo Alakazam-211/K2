@@ -129,6 +129,8 @@ _context_http() {
     QS="${4:-}" BODY="${5:-}" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]

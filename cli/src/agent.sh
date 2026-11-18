@@ -451,6 +451,8 @@ cmd_agent_set() {
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 conf = json.loads(os.environ["CONF"])
 mode = os.environ.get("MODE", "")
@@ -1645,6 +1647,8 @@ print(json.dumps(out))' ${answers[@]+"${answers[@]}"}) || exit 2
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" PTOKEN="$core_token" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 dir_arg = os.environ["HIRE_DIR"]
 name = os.environ.get("NAME", "")
@@ -2956,6 +2960,8 @@ cmd_agent_retire() {
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 conf = json.loads(os.environ["CONF"])
 archive_to = os.environ.get("ARCHIVE_TO", "")
@@ -3084,6 +3090,8 @@ cmd_agent_restart() {
         AHARNESS="$harness" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
+# The CLI never sends a request to the daemon through a proxy.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 conf = json.loads(os.environ["CONF"])
 dry_run = os.environ.get("DRY_RUN") == "true"

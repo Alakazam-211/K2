@@ -155,7 +155,8 @@ def exit_for(code):
         return 4
     return 1
 
-params = {"token": token, "project": project}
+params = {"project": project}
+auth = {"Authorization": "Bearer " + token} if token else {}
 if qs_extra:
     for part in qs_extra.split("&"):
         if not part:
@@ -169,7 +170,7 @@ if qs_extra:
 url = base + route + "?" + urllib.parse.urlencode(params)
 try:
     if method == "GET":
-        req = urllib.request.Request(url, method="GET")
+        req = urllib.request.Request(url, method="GET", headers=auth)
         with urllib.request.urlopen(req, timeout=30) as r:
             raw = r.read().decode("utf-8", "replace")
             status = r.status
@@ -177,7 +178,7 @@ try:
         data = (body or "{}").encode("utf-8")
         req = urllib.request.Request(
             url, data=data,
-            headers={"Content-Type": "application/json"},
+            headers=dict(auth, **{"Content-Type": "application/json"}),
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=60) as r:

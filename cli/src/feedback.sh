@@ -234,11 +234,13 @@ def read_file(path, what):
         die({"code": "usage", "hint": "%s: cannot read '%s': %s" % (what, path, e.strerror)})
 
 def request(method, route, params=None, body=None):
-    qs = urllib.parse.urlencode(dict(params or {}, token=token))
-    url = base + route + "?" + qs
+    qs = urllib.parse.urlencode(params or {})
+    url = base + route + ("?" + qs if qs else "")
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode("utf-8", "replace"))

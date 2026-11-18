@@ -49,10 +49,12 @@ def die(err, exit_code=None):
     sys.exit(exit_code)
 
 def request(method, route, params=None, body=None):
-    qs = urllib.parse.urlencode(dict(params or {}, token=token))
-    url = base + route + "?" + qs
+    qs = urllib.parse.urlencode(params or {})
+    url = base + route + ("?" + qs if qs else "")
     data = dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:

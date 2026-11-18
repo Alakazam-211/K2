@@ -584,14 +584,15 @@ ws_inbox = False
 import urllib.parse, urllib.request
 # The CLI never sends a request to the daemon through a proxy.
 urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+auth = {'Authorization': 'Bearer ' + token} if token else {}
 try:
-    req = urllib.request.Request(f'{base}/cli/agents/list?token={token}&project={urllib.parse.quote(project)}')
+    req = urllib.request.Request(f'{base}/cli/agents/list?project={urllib.parse.quote(project)}', headers=auth)
     with urllib.request.urlopen(req, timeout=5) as resp:
         agents = json.loads(resp.read())
         agent_inbox = any(a.get('inboxCount', 0) > 0 for a in agents)
 except: pass
 try:
-    req = urllib.request.Request(f'{base}/cli/work/inbox?token={token}&project={urllib.parse.quote(project)}')
+    req = urllib.request.Request(f'{base}/cli/work/inbox?project={urllib.parse.quote(project)}', headers=auth)
     with urllib.request.urlopen(req, timeout=5) as resp:
         items = json.loads(resp.read())
         ws_inbox = len(items) > 0 if isinstance(items, list) else False
@@ -885,7 +886,8 @@ print(json.dumps({
 }))
 ' && printf x) || rc=$?
     if [[ "$rc" -eq 0 ]]; then
-        _k2_cfg_add url "${BASE_URL}/cli/workspace/swap-canonical?token=$(_git_tools_q "$auth_token")"
+        _k2_cfg_add url "${BASE_URL}/cli/workspace/swap-canonical"
+        _k2_cfg_auth "$auth_token"
         _k2_cfg_add data-raw "${body%x}"
         out=$(_K2_CURL_TRIES=1 _k2_curl "$_K2_CFG" -sS -X POST \
             --connect-timeout 5 --max-time 120 \

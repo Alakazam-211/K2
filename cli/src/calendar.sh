@@ -100,11 +100,13 @@ def _restart_kind(exc):
 
 def call(method, route, params=None, body=None, timeout=60):
     import time
-    qs = urllib.parse.urlencode(dict(params or {}, token=token))
-    url = base + route + "?" + qs
+    qs = urllib.parse.urlencode(params or {})
+    url = base + route + ("?" + qs if qs else "")
     data = dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
     # k2-ptyd S5 (P47, P48): a refused connect and the daemon's pre-ready
     # 503 ("state":"migrating") never reached a handler: retried (4 tries,
     # 1 s apart). A GET whose connection dropped with no answer (`calendar

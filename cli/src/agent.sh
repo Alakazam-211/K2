@@ -474,9 +474,11 @@ def fail(code, hint, exit_code=1):
     sys.exit(exit_code)
 
 def http_get(route, params):
-    qs = urllib.parse.urlencode(dict(params, token=token))
+    qs = urllib.parse.urlencode(params)
+    req = urllib.request.Request(base + route + ("?" + qs if qs else ""),
+                                 headers={"Authorization": "Bearer " + token} if token else {})
     try:
-        with urllib.request.urlopen(base + route + "?" + qs, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
@@ -489,8 +491,9 @@ def http_get(route, params):
 # 0.44.4: state-changing routes refuse GET (405). Same query-string params,
 # sent as POST with an empty body.
 def http_post_query(route, params, timeout=30):
-    qs = urllib.parse.urlencode(dict(params, token=token))
-    req = urllib.request.Request(base + route + "?" + qs, data=b"", method="POST")
+    qs = urllib.parse.urlencode(params)
+    req = urllib.request.Request(base + route + ("?" + qs if qs else ""), data=b"", method="POST",
+                                 headers={"Authorization": "Bearer " + token} if token else {})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
@@ -507,9 +510,11 @@ def http_post_query(route, params, timeout=30):
 proj_token = os.environ.get("APROJTOKEN") or token
 
 def http_post_json(route, body, tok=None):
-    url = base + route + "?token=" + urllib.parse.quote(tok or token, safe="")
-    req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+    headers = {"Content-Type": "application/json"}
+    if tok or token:
+        headers["Authorization"] = "Bearer " + (tok or token)
+    req = urllib.request.Request(base + route, data=json.dumps(body).encode(),
+                                 headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
@@ -1702,9 +1707,11 @@ def fail(code, hint, exit_code=1):
     sys.exit(exit_code)
 
 def http_get(route, params, timeout=30):
-    qs = urllib.parse.urlencode(dict(params, token=token))
+    qs = urllib.parse.urlencode(params)
+    req = urllib.request.Request(base + route + ("?" + qs if qs else ""),
+                                 headers={"Authorization": "Bearer " + token} if token else {})
     try:
-        with urllib.request.urlopen(base + route + "?" + qs, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
@@ -1717,8 +1724,9 @@ def http_get(route, params, timeout=30):
 # 0.44.4: state-changing routes refuse GET (405). Same query-string params,
 # sent as POST with an empty body.
 def http_post_query(route, params, timeout=30):
-    qs = urllib.parse.urlencode(dict(params, token=token))
-    req = urllib.request.Request(base + route + "?" + qs, data=b"", method="POST")
+    qs = urllib.parse.urlencode(params)
+    req = urllib.request.Request(base + route + ("?" + qs if qs else ""), data=b"", method="POST",
+                                 headers={"Authorization": "Bearer " + token} if token else {})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
@@ -1735,9 +1743,11 @@ def http_post_query(route, params, timeout=30):
 proj_token = os.environ.get("APROJTOKEN") or token
 
 def http_post_json(route, body, timeout=30, tok=None):
-    url = base + route + "?token=" + urllib.parse.quote(tok or token, safe="")
-    req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+    headers = {"Content-Type": "application/json"}
+    if tok or token:
+        headers["Authorization"] = "Bearer " + (tok or token)
+    req = urllib.request.Request(base + route, data=json.dumps(body).encode(),
+                                 headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
@@ -2975,11 +2985,13 @@ token = os.environ["ATOKEN"]
 path = conf["path"]
 label = conf.get("name") or os.path.basename(path)
 
-url = base + "/cli/agent/retire?token=" + urllib.parse.quote(token, safe="")
+url = base + "/cli/agent/retire"
 body = json.dumps({"q": path, "force": force, "dryRun": dry_run,
                    "archiveTo": archive_to}).encode()
-req = urllib.request.Request(url, data=body,
-                             headers={"Content-Type": "application/json"}, method="POST")
+headers = {"Content-Type": "application/json"}
+if token:
+    headers["Authorization"] = "Bearer " + token
+req = urllib.request.Request(url, data=body, headers=headers, method="POST")
 try:
     with urllib.request.urlopen(req, timeout=120) as r:
         d = json.loads(r.read().decode("utf-8", "replace"))
@@ -3115,14 +3127,15 @@ if dry_run:
         print("DRY RUN — %s has no live session; restart would start one." % label)
     sys.exit(0)
 
-url = os.environ["ABASE"] + "/cli/workspace/ensure-pinned-chat?token=" + \
-    urllib.parse.quote(os.environ["ATOKEN"], safe="")
+url = os.environ["ABASE"] + "/cli/workspace/ensure-pinned-chat"
 req_body = {"project": path, "forceRespawn": True}
 if harness:
     req_body["harness"] = harness
 body = json.dumps(req_body).encode()
-req = urllib.request.Request(url, data=body,
-                             headers={"Content-Type": "application/json"}, method="POST")
+headers = {"Content-Type": "application/json"}
+if os.environ["ATOKEN"]:
+    headers["Authorization"] = "Bearer " + os.environ["ATOKEN"]
+req = urllib.request.Request(url, data=body, headers=headers, method="POST")
 try:
     with urllib.request.urlopen(req, timeout=120) as r:
         d = json.loads(r.read().decode("utf-8", "replace"))

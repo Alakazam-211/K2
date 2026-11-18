@@ -117,13 +117,15 @@ def call(side, method, route, body=None, params=None, timeout=120):
     name, base, tok = side
     if not base:
         raise Fail("usage", "no %s server" % name, 2)
-    q = {"token": tok}
-    q.update({k: v for k, v in (params or {}).items() if v is not None})
-    url = base + route + "?" + urllib.parse.urlencode(q)
+    q = {k: v for k, v in (params or {}).items() if v is not None}
+    url = base + route + ("?" + urllib.parse.urlencode(q) if q else "")
     data = None
     if method == "POST":
         data = json.dumps(body if body is not None else {}).encode()
-    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if tok:
+        headers["Authorization"] = "Bearer " + tok
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             status, raw = r.status, r.read()

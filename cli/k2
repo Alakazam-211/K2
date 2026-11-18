@@ -7083,14 +7083,15 @@ ws_inbox = False
 import urllib.parse, urllib.request
 # The CLI never sends a request to the daemon through a proxy.
 urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+auth = {'Authorization': 'Bearer ' + token} if token else {}
 try:
-    req = urllib.request.Request(f'{base}/cli/agents/list?token={token}&project={urllib.parse.quote(project)}')
+    req = urllib.request.Request(f'{base}/cli/agents/list?project={urllib.parse.quote(project)}', headers=auth)
     with urllib.request.urlopen(req, timeout=5) as resp:
         agents = json.loads(resp.read())
         agent_inbox = any(a.get('inboxCount', 0) > 0 for a in agents)
 except: pass
 try:
-    req = urllib.request.Request(f'{base}/cli/work/inbox?token={token}&project={urllib.parse.quote(project)}')
+    req = urllib.request.Request(f'{base}/cli/work/inbox?project={urllib.parse.quote(project)}', headers=auth)
     with urllib.request.urlopen(req, timeout=5) as resp:
         items = json.loads(resp.read())
         ws_inbox = len(items) > 0 if isinstance(items, list) else False
@@ -7384,7 +7385,8 @@ print(json.dumps({
 }))
 ' && printf x) || rc=$?
     if [[ "$rc" -eq 0 ]]; then
-        _k2_cfg_add url "${BASE_URL}/cli/workspace/swap-canonical?token=$(_git_tools_q "$auth_token")"
+        _k2_cfg_add url "${BASE_URL}/cli/workspace/swap-canonical"
+        _k2_cfg_auth "$auth_token"
         _k2_cfg_add data-raw "${body%x}"
         out=$(_K2_CURL_TRIES=1 _k2_curl "$_K2_CFG" -sS -X POST \
             --connect-timeout 5 --max-time 120 \
@@ -45427,13 +45429,15 @@ def call(side, method, route, body=None, params=None, timeout=120):
     name, base, tok = side
     if not base:
         raise Fail("usage", "no %s server" % name, 2)
-    q = {"token": tok}
-    q.update({k: v for k, v in (params or {}).items() if v is not None})
-    url = base + route + "?" + urllib.parse.urlencode(q)
+    q = {k: v for k, v in (params or {}).items() if v is not None}
+    url = base + route + ("?" + urllib.parse.urlencode(q) if q else "")
     data = None
     if method == "POST":
         data = json.dumps(body if body is not None else {}).encode()
-    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if tok:
+        headers["Authorization"] = "Bearer " + tok
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             status, raw = r.status, r.read()
@@ -69608,9 +69612,11 @@ def fail(code, hint, exit_code=1):
     sys.exit(exit_code)
 
 def http_get(route, params):
-    qs = urllib.parse.urlencode(dict(params, token=token))
+    qs = urllib.parse.urlencode(params)
+    req = urllib.request.Request(base + route + ("?" + qs if qs else ""),
+                                 headers={"Authorization": "Bearer " + token} if token else {})
     try:
-        with urllib.request.urlopen(base + route + "?" + qs, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
@@ -69623,8 +69629,9 @@ def http_get(route, params):
 # 0.44.4: state-changing routes refuse GET (405). Same query-string params,
 # sent as POST with an empty body.
 def http_post_query(route, params, timeout=30):
-    qs = urllib.parse.urlencode(dict(params, token=token))
-    req = urllib.request.Request(base + route + "?" + qs, data=b"", method="POST")
+    qs = urllib.parse.urlencode(params)
+    req = urllib.request.Request(base + route + ("?" + qs if qs else ""), data=b"", method="POST",
+                                 headers={"Authorization": "Bearer " + token} if token else {})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
@@ -69641,9 +69648,11 @@ def http_post_query(route, params, timeout=30):
 proj_token = os.environ.get("APROJTOKEN") or token
 
 def http_post_json(route, body, tok=None):
-    url = base + route + "?token=" + urllib.parse.quote(tok or token, safe="")
-    req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+    headers = {"Content-Type": "application/json"}
+    if tok or token:
+        headers["Authorization"] = "Bearer " + (tok or token)
+    req = urllib.request.Request(base + route, data=json.dumps(body).encode(),
+                                 headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
@@ -70836,9 +70845,11 @@ def fail(code, hint, exit_code=1):
     sys.exit(exit_code)
 
 def http_get(route, params, timeout=30):
-    qs = urllib.parse.urlencode(dict(params, token=token))
+    qs = urllib.parse.urlencode(params)
+    req = urllib.request.Request(base + route + ("?" + qs if qs else ""),
+                                 headers={"Authorization": "Bearer " + token} if token else {})
     try:
-        with urllib.request.urlopen(base + route + "?" + qs, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
@@ -70851,8 +70862,9 @@ def http_get(route, params, timeout=30):
 # 0.44.4: state-changing routes refuse GET (405). Same query-string params,
 # sent as POST with an empty body.
 def http_post_query(route, params, timeout=30):
-    qs = urllib.parse.urlencode(dict(params, token=token))
-    req = urllib.request.Request(base + route + "?" + qs, data=b"", method="POST")
+    qs = urllib.parse.urlencode(params)
+    req = urllib.request.Request(base + route + ("?" + qs if qs else ""), data=b"", method="POST",
+                                 headers={"Authorization": "Bearer " + token} if token else {})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
@@ -70869,9 +70881,11 @@ def http_post_query(route, params, timeout=30):
 proj_token = os.environ.get("APROJTOKEN") or token
 
 def http_post_json(route, body, timeout=30, tok=None):
-    url = base + route + "?token=" + urllib.parse.quote(tok or token, safe="")
-    req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+    headers = {"Content-Type": "application/json"}
+    if tok or token:
+        headers["Authorization"] = "Bearer " + (tok or token)
+    req = urllib.request.Request(base + route, data=json.dumps(body).encode(),
+                                 headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
@@ -72109,11 +72123,13 @@ token = os.environ["ATOKEN"]
 path = conf["path"]
 label = conf.get("name") or os.path.basename(path)
 
-url = base + "/cli/agent/retire?token=" + urllib.parse.quote(token, safe="")
+url = base + "/cli/agent/retire"
 body = json.dumps({"q": path, "force": force, "dryRun": dry_run,
                    "archiveTo": archive_to}).encode()
-req = urllib.request.Request(url, data=body,
-                             headers={"Content-Type": "application/json"}, method="POST")
+headers = {"Content-Type": "application/json"}
+if token:
+    headers["Authorization"] = "Bearer " + token
+req = urllib.request.Request(url, data=body, headers=headers, method="POST")
 try:
     with urllib.request.urlopen(req, timeout=120) as r:
         d = json.loads(r.read().decode("utf-8", "replace"))
@@ -72249,14 +72265,15 @@ if dry_run:
         print("DRY RUN — %s has no live session; restart would start one." % label)
     sys.exit(0)
 
-url = os.environ["ABASE"] + "/cli/workspace/ensure-pinned-chat?token=" + \
-    urllib.parse.quote(os.environ["ATOKEN"], safe="")
+url = os.environ["ABASE"] + "/cli/workspace/ensure-pinned-chat"
 req_body = {"project": path, "forceRespawn": True}
 if harness:
     req_body["harness"] = harness
 body = json.dumps(req_body).encode()
-req = urllib.request.Request(url, data=body,
-                             headers={"Content-Type": "application/json"}, method="POST")
+headers = {"Content-Type": "application/json"}
+if os.environ["ATOKEN"]:
+    headers["Authorization"] = "Bearer " + os.environ["ATOKEN"]
+req = urllib.request.Request(url, data=body, headers=headers, method="POST")
 try:
     with urllib.request.urlopen(req, timeout=120) as r:
         d = json.loads(r.read().decode("utf-8", "replace"))
@@ -72469,7 +72486,8 @@ def exit_for(code):
         return 4
     return 1
 
-params = {"token": token, "project": project}
+params = {"project": project}
+auth = {"Authorization": "Bearer " + token} if token else {}
 if qs_extra:
     for part in qs_extra.split("&"):
         if not part:
@@ -72483,7 +72501,7 @@ if qs_extra:
 url = base + route + "?" + urllib.parse.urlencode(params)
 try:
     if method == "GET":
-        req = urllib.request.Request(url, method="GET")
+        req = urllib.request.Request(url, method="GET", headers=auth)
         with urllib.request.urlopen(req, timeout=30) as r:
             raw = r.read().decode("utf-8", "replace")
             status = r.status
@@ -72491,7 +72509,7 @@ try:
         data = (body or "{}").encode("utf-8")
         req = urllib.request.Request(
             url, data=data,
-            headers={"Content-Type": "application/json"},
+            headers=dict(auth, **{"Content-Type": "application/json"}),
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=60) as r:
@@ -75847,11 +75865,13 @@ def read_file(path, what):
         die({"code": "usage", "hint": "%s: cannot read '%s': %s" % (what, path, e.strerror)})
 
 def request(method, route, params=None, body=None):
-    qs = urllib.parse.urlencode(dict(params or {}, token=token))
-    url = base + route + "?" + qs
+    qs = urllib.parse.urlencode(params or {})
+    url = base + route + ("?" + qs if qs else "")
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
@@ -77049,11 +77069,13 @@ def die(err):
     sys.exit(4 if code in EXIT4 else 2 if code == "usage" else 1)
 
 def request(method, route, params=None, body=None):
-    qs = urllib.parse.urlencode(dict(params or {}, token=token))
-    url = base + route + "?" + qs
+    qs = urllib.parse.urlencode(params or {})
+    url = base + route + ("?" + qs if qs else "")
     data = dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
@@ -78494,11 +78516,13 @@ def request(method, route, params=None, body=None, timeout=30):
     env_t = os.environ.get("K5_MAIL_HTTP_TIMEOUT") or os.environ.get("K2_MAIL_HTTP_TIMEOUT") or os.environ.get("K2SO_MAIL_HTTP_TIMEOUT")
     if env_t:
         timeout = float(env_t)
-    qs = urllib.parse.urlencode(dict(params or {}, token=token))
-    url = base + route + "?" + qs
+    qs = urllib.parse.urlencode(params or {})
+    url = base + route + ("?" + qs if qs else "")
     data = dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
     # k2-ptyd S5 (P47, P48): a daemon restart is not a failure. A refused
     # connect and the daemon's pre-ready 503 ("state":"migrating") never
     # reached a handler: retried (4 tries, 1 s apart). A GET whose
@@ -89410,11 +89434,13 @@ def _restart_kind(exc):
 
 def call(method, route, params=None, body=None, timeout=60):
     import time
-    qs = urllib.parse.urlencode(dict(params or {}, token=token))
-    url = base + route + "?" + qs
+    qs = urllib.parse.urlencode(params or {})
+    url = base + route + ("?" + qs if qs else "")
     data = dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
     # k2-ptyd S5 (P47, P48): a refused connect and the daemon's pre-ready
     # 503 ("state":"migrating") never reached a handler: retried (4 tries,
     # 1 s apart). A GET whose connection dropped with no answer (`calendar
@@ -90038,11 +90064,12 @@ def die(err):
 
 def call(method, route, params=None, body=None):
     q = {k: v for k, v in (params or {}).items() if v not in (None, "", False)}
-    q["token"] = E("ATOKEN", "")
-    url = E("ABASE") + route + "?" + urllib.parse.urlencode(q)
+    url = E("ABASE") + route + ("?" + urllib.parse.urlencode(q) if q else "")
     data = dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
+    if E("ATOKEN", ""):
+        req.add_header("Authorization", "Bearer " + E("ATOKEN", ""))
     try:
         with urllib.request.urlopen(req, timeout=float(E("K5_MAIL_HTTP_TIMEOUT") or E("K2_MAIL_HTTP_TIMEOUT") or E("K2SO_MAIL_HTTP_TIMEOUT") or 60)) as r:
             d = json.loads(r.read().decode("utf-8", "replace"))
@@ -94739,11 +94766,13 @@ def die(code, hint, exit_code=None):
     sys.exit(exit_code)
 
 def request(method, route, params=None, body=None):
-    qs = urllib.parse.urlencode(dict(params or {}, token=token))
-    url = base + route + "?" + qs
+    qs = urllib.parse.urlencode(params or {})
+    url = base + route + ("?" + qs if qs else "")
     data = dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return r.status, json.loads(r.read().decode("utf-8", "replace"))
@@ -95311,10 +95340,12 @@ def die(err, exit_code=None):
     sys.exit(exit_code)
 
 def request(method, route, params=None, body=None):
-    qs = urllib.parse.urlencode(dict(params or {}, token=token))
-    url = base + route + "?" + qs
+    qs = urllib.parse.urlencode(params or {})
+    url = base + route + ("?" + qs if qs else "")
     data = dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:

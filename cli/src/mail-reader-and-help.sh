@@ -204,11 +204,12 @@ def die(err):
 
 def call(method, route, params=None, body=None):
     q = {k: v for k, v in (params or {}).items() if v not in (None, "", False)}
-    q["token"] = E("ATOKEN", "")
-    url = E("ABASE") + route + "?" + urllib.parse.urlencode(q)
+    url = E("ABASE") + route + ("?" + urllib.parse.urlencode(q) if q else "")
     data = dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
         headers={"Content-Type": "application/json"} if data else {})
+    if E("ATOKEN", ""):
+        req.add_header("Authorization", "Bearer " + E("ATOKEN", ""))
     try:
         with urllib.request.urlopen(req, timeout=float(E("K5_MAIL_HTTP_TIMEOUT") or E("K2_MAIL_HTTP_TIMEOUT") or E("K2SO_MAIL_HTTP_TIMEOUT") or 60)) as r:
             d = json.loads(r.read().decode("utf-8", "replace"))

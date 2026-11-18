@@ -759,6 +759,13 @@ _k2_cfg_add() {
 # secret, so it rides argv. The daemon reads headers by name and ignores
 # the ones it doesn't know. A caller that talks to something other than
 # the daemon sets _K2_CURL_NOT_DAEMON=1 for that call.
+#
+# The CLI never sends a request to the daemon through a proxy: every
+# daemon call gets `--noproxy '*'`, so http_proxy, https_proxy, ALL_PROXY
+# and their other spellings are not used for it, whatever its host (the
+# loopback port, the cell socket or a remote K2 server). It is not a
+# secret, so it rides argv. A _K2_CURL_NOT_DAEMON call keeps the proxy
+# settings of the person's environment.
 _K2_CURL_TRIES=4
 _k2_curl() {
     local cfg="$1"; shift
@@ -768,6 +775,9 @@ _k2_curl() {
     done
     if [ "${_K5_CLI_VIA:-}" = "rust" ] && [ -z "${_K2_CURL_NOT_DAEMON:-}" ]; then
         set -- -H "X-K5-Cli-Via: fallthrough" "$@"
+    fi
+    if [ -z "${_K2_CURL_NOT_DAEMON:-}" ]; then
+        set -- --noproxy '*' "$@"
     fi
     while :; do
         rc=0

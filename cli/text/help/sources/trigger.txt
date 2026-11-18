@@ -1,0 +1,16 @@
+k2 sources trigger — wake an agent on this server when a source changes
+
+  k2 sources trigger list [--source NAME] [--json]
+  k2 sources trigger show <id> [--json]
+  k2 sources trigger log <id> [--limit 50] [--json]
+  k2 sources trigger propose --source NAME --on KIND [--agent HANDLE] [--note "…"]
+  k2 sources trigger add --source NAME --on KIND --agent HANDLE [--note "…"] [--cooldown 30m] [--daily-cap 12]
+  k2 sources trigger edit <id> [--on KIND] [--agent HANDLE] [--note "…"|--no-note] [--cooldown 30m] [--daily-cap 12]
+  k2 sources trigger approve|pause|resume|remove|test <id>
+
+KIND: went_crit · went_warn · recovered · item_went_crit · stale_for:30m
+Agents propose (waking only themselves) and may remove their own proposal;
+a person approves. A proposed trigger never fires. An agent with "Manage
+Gardens and data sources" also approves, adds (waking itself), pauses and
+resumes triggers, always with the default cooldown and daily cap (only a
+person sets those; edit and test stay a person's).

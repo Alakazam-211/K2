@@ -1,0 +1,47 @@
+Make an Apple setup profile (.mobileconfig) for one hosted address, so a
+Mac or iPhone gets Mail, Calendar and Contacts in one install.
+Owner/admin only — it mints a credential for a person's mailbox; the
+"agents manage hosted mail" toggle does not open it. POST /cli/mail/profile.
+
+What's inside
+  Mail      IMAP <mail host>:993 and SMTP <mail host>:465, both TLS.
+  Calendar  CalDAV https://<mail host>/dav/cal       } only when calendars
+  Contacts  CardDAV https://<mail host>/dav/card     } are on and reachable
+            (k2 hostmail calendar status); otherwise mail only, with a note.
+  <mail host> is the domain's mail host — the name on the mail certificate.
+  Never a *.k2.dev name (refused: that's the control plane, not this box).
+
+The password
+  Every run mints a FRESH app password named k2-profile-<YYYY-MM-DD> on
+  the mailbox. A stored mailbox password is never read back or reused.
+  The password is only inside the profile file; treat the file like the
+  password. It can do what the mailbox password can (not scoped yet).
+  Revoke it any time:
+    k2 hostmail app-password list <addr>
+    k2 hostmail app-password revoke <addr> <id>
+  Making a new profile for the same address replaces the old one on the
+  device when installed; revoke the old app password afterwards.
+
+Installing
+  AirDrop or email the file to the Mac/iPhone. iPhone: Settings →
+  Profile Downloaded → Install. Mac: System Settings → Privacy & Security
+  → Profiles (or General → Device Management) → Install. The profile is
+  unsigned, so the device shows it as "Unverified" — that is expected.
+  Delete the file once it's installed.
+
+Auth bans
+  A device signing in with a stale or wrong password gets its network's
+  IP banned for everyone behind it. During rollout, allowlist office and
+  home IPs first (k2 hostmail allowlist add <ip>); see bans with
+  k2 hostmail bans list, clear one with k2 hostmail bans clear <ip>.
+  If a device keeps failing: revoke its app password, make a new
+  profile, reinstall.
+
+Refuses: linked inboxes (another provider's account), retired addresses,
+a mail server that is not running, a mail host that is only *.k2.dev.
+
+USAGE
+  k2 hostmail profile <addr> --apple                  XML to stdout
+  k2 hostmail profile <addr> --apple --out <file>     write it (mode 0600)
+  k2 hostmail profile <addr> --apple --out <file> --force   overwrite
+  k2 hostmail profile <addr> --apple --json           JSON (profile = XML)

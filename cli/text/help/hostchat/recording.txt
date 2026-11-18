@@ -1,0 +1,57 @@
+k2 hostchat recording — Sew's call recorder on this box (chat and voice)
+
+Recording (Sew, this box's chat and voice service: its recorder and transcriber; Sew 0.9.0+):
+  k2 hostchat recording status [--json]     installed, on or off, versions, Sew's recording settings
+                                            and whether this Sew can record (its app_recording flag)
+  k2 hostchat recording preflight [--json]  what install and enable check, changing nothing; each
+                                            failed check names its fix
+  k2 hostchat recording install [--recorder-tarball FILE] [--transcriber-tarball FILE]
+                                [--model-file FILE] [--no-wait] [--json]
+                                            install the recorder, the transcriber and the speech
+                                            model and leave recording OFF: it never turns
+                                            recording on. For provisioning scripts that run with
+                                            the server's owner token (no person there), or an
+                                            Owner or Admin login; no confirm, since it records
+                                            nobody. An agent or a K2 terminal is refused
+                                            (person_only). It stops, changing nothing, unless the
+                                            box passes the same checks as enable (8 GiB of RAM,
+                                            voice installed, the RAM fit, disk; see enable and
+                                            preflight), and takes the same files. Status then says
+                                            installed yes, recording off.
+  k2 hostchat recording enable [--recorder-tarball FILE] [--transcriber-tarball FILE]
+                               [--model-file FILE] [--no-wait] [--json]
+                                            install the recorder, the transcriber and the speech
+                                            model (when not installed yet), then turn recording on
+                                            (Sew's own switch, recording.enabled). An Owner or Admin
+                                            does it in person, with Touch ID on a Mac or the vault
+                                            password. An agent never runs enable: it asks on a card
+                                            (k2 permission request sew.recording-enable --why "...");
+                                            the Owner or Admin who allows it there installs it and
+                                            turns recording on, and the agent has nothing to run
+                                            afterwards.
+                                            Stops, changing nothing, unless: the box has at least
+                                            8 GiB of RAM; voice is installed (k2 hostchat media
+                                            install first); every Sew service fits in RAM with 40%
+                                            kept for K2's own database; and /var/lib has the disk
+                                            guard's reserve (10 GiB by default) free beyond the model
+                                            and room for recordings. Run preflight to see which.
+                                            K2 downloads the files from Sew's release and checks each
+                                            against the sha256 built into K2; a file that doesn't
+                                            match stops everything. On a box without internet the
+                                            error names each file and its sha256: download them
+                                            elsewhere and pass the FILE flags.
+                                            With --model-file, put the model's licence files from
+                                            the same release (asr-license-*.txt and
+                                            sew-asr-models-NOTICE.txt) in the same folder: K2
+                                            checks and installs them with the model.
+                                            --no-wait returns while it installs (status shows how
+                                            far it got).
+  k2 hostchat recording disable [--json]    turn recording off (live recordings stop). The recorder
+                                            stays installed and every recording is kept.
+  k2 hostchat recording uninstall [--yes] [--json]
+                                            remove the recorder, the transcriber and the model.
+                                            Never deletes recordings: they stay in Sew. Asks on a
+                                            terminal; with no terminal, --yes is required.
+  Turning recording on doesn't record anyone: Apps and rooms choose who may record, and each
+  person consents for themselves. On a Sew older than 0.9.0 every change is refused with
+  sew_feature_missing (exit 3).

@@ -8,43 +8,7 @@
 
 _changes_usage() {
     cat <<'EOF'
-k2 changes — review, stage and commit this workspace's git changes
-(the Changes tab, from the CLI)
-
-  k2 changes [--json] [--base <ref>]          the change list (staged, unstaged,
-                                              untracked, conflicted); --base = vs a branch
-  k2 changes diff [<path>...] [--staged|--unstaged] [--base <ref>] [-U <n>] [--json]
-                                              unified diff text. Default: everything not
-                                              committed, vs HEAD (untracked files included)
-  k2 changes stage <path>... | --all          stage files (git add)
-  k2 changes unstage <path>...                unstage files (back to HEAD in the index)
-  k2 changes discard <path>... [--staged] [--yes]
-                                              throw away edits. Every copy that would be
-                                              lost goes to the Trash first; untracked files
-                                              go to the Trash. Asks on a terminal; --yes is
-                                              required when not on a terminal. --staged also
-                                              throws away staged edits (restores from HEAD)
-  k2 changes commit -m "message" [--all]      commit what is staged (--all stages
-                                              everything first). Author = this server's
-                                              git user.name / user.email
-
-  k2 changes notes [list|add|resolve|reopen|edit|delete|send]
-                                              review notes on changed lines; agents
-                                              list and resolve theirs (k2 changes notes --help)
-  k2 changes open                             open the Changes tab in the K2 window that
-                                              shows this workspace
-  k2 changes init                             make the workspace root a git repository
-
-Every command takes --workspace <path> (default: the git checkout you are in,
-else this workspace) and --json (the daemon's JSON as is).
-Agents (inside a K2 terminal) can only use their own workspace and folders
-inside it (e.g. .worktrees/<branch>); anything else is refused (forbidden).
-Paths are relative to where you run the command, or to the repo root.
-
-Exit: 0 ok · 1 daemon unreachable, or a discard left a file untouched ·
-2 bad usage (incl. discard without --yes off a terminal) · 3 the daemon
-refused (code on stderr: bad_path, not_a_repo, bad_ref, not_found,
-conflicted, forbidden, nothing_staged, …). See `k2 study changes`.
+%include cli/text/help/changes.txt
 EOF
 }
 

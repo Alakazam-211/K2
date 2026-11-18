@@ -1,0 +1,10 @@
+Rotate leftover bootstrap recovery principal (`admin`) and the
+provisioned admin password. For boxes already enabled with a leftover
+recovery admin. Does not wipe the store, SIGTERM, or re-bootstrap.
+disable is not a wipe. enable no-op is not rotate.
+
+USAGE
+  k2 hostmail rotate-admin [--json]
+
+FLAGS
+  --json                 JSON output

@@ -1,0 +1,93 @@
+k2 vault — secrets for agents, without showing them the value
+
+  k2 vault status                          where the key lives, recovery, honest line
+  k2 vault open                            open a vault that didn't open at start (a locked
+                                           or cancelled Keychain prompt); may ask once
+  k2 vault list [--scope <s>] [--system]   names, scope, sites, delivery (never values)
+  k2 vault show NAME [--scope <s>]         one secret: sites, delivery, shares, recent use
+  k2 vault set NAME [options] < value      create, or a new version (value on stdin)
+  k2 vault rotate NAME < value             a new version
+  k2 vault hosts NAME --add <host> | --remove <host>
+  k2 vault delivery NAME fetch|agent|proxy|file|env|api [--ceiling <d>]
+                                           (no --env-name here: names live on grants)
+  k2 vault sign NAME ovh|hmac-sha256|hmac-sha256-ts|oauth-refresh|none [--sign-header …]
+                                           K2 signs fetch requests with the secret
+  k2 vault public-key NAME                 an ssh key's .pub line (never the private key)
+  k2 vault agent-limit NAME [--burst N] [--per-minute M] [--allow-forwarded|--no-forwarded]
+                                           an ssh key's agent signing limits (agent delivery)
+  k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label>|job:<name>|compute:<ws>/<node>|compute:<ws>/lane:<owner>/<lane> [--as <d>] [--env-name X] [--file-name F] [--ttl 2h]
+  k2 vault revoke NAME --from <who>        (or --grant <id>)
+  k2 vault disable|enable NAME             destroy NAME --yes
+  k2 vault fetch --secret NAME [-X M] [-H 'N: v'] [-d @file] URL
+                                           K2 makes the call and adds the key; you never see it
+  k2 vault get NAME                        print a value (needs an api grant; it lands in your transcript)
+  k2 vault audit [NAME] [--since <rfc3339>]
+  k2 vault requests                        Thread secret cards (pending / set / declined)
+  k2 vault presets                         known key formats (Stripe, OpenAI, Anthropic, …)
+  k2 vault env-file NAME [--ttl 90s]       a short-lived 0600 file for docker/podman --env-file
+  k2 vault file NAME [--ttl 90s]           a short-lived 0600 file holding one secret delivered to you
+                                           as file (or env): pass the file, never the value
+                                           (tool --code - < "$(k2 vault file NAME)")
+  k2 vault sync                            files granted since this session started, into $K2_SECRETS_DIR now
+  k2 vault import .env [--scope <s>] [--remove-original]   move a .env in; writes .env.k2 (references)
+  k2 vault service <service> [clean|legacy] [--env-file .env.k2]   a published service's environment
+  k2 publish secret add|remove|list <service> NAME [--as file|env]   secrets a service gets at start
+  k2 vault doctor                          plaintext .env files, due rotations, problems
+  k2 vault send NAME --to <agent>[::<host>] [--note …]   hand a secret to another agent by name
+  k2 vault incoming | sent | accept-from | send-allow   handoffs to and from this agent (k2 vault send --help)
+  k2 vault placement add NAME --where <host>:<path> [--note …] | done ID | rm ID
+                                           note a place the value lives that K2 doesn't write
+  k2 vault placements [NAME]               where values live outside the vault (due after a rotate)
+
+  People only (from your own terminal or SSH, not a K2 terminal):
+  k2 vault reveal NAME                     show a value (asks for a confirm)
+  k2 vault recovery show-once              make and show the recovery key once; type back 3 words
+  k2 vault recovery rotate                 replace the recovery key (asks for a confirm)
+  k2 vault confirm-password set            set the vault password used for confirms
+  k2 vault kek rotate | rekey              rotate the box key / the data key (owner, confirm)
+  k2 vault rollback NAME --to <version>    put an older version back (confirm)
+  k2 vault systemd-cred NAME --unit <unit.service> [--restart] [--dry-run] | --remove
+                                           seal it as a root unit's systemd credential (Linux, confirm)
+  k2 vault systemd-cred NAME --replace     re-place a new version into its root units (confirm)
+  k2 vault backup <dir>                    a ciphertext snapshot of the vault (owner)
+  k2 vault backup key <age1…> | remove     let this backup key open the vault, or take it off (owner, confirm)
+  k2 vault restore --from <dir> [--holder recovery|backup] [--dry-run] [--replace]
+                                           restore a backup on this box (recovery words or backup key on stdin)
+
+  Moving secrets to another box (owner, Admin, or an agent allowed to manage server-wide secrets):
+  k2 vault recipient                       this vault's carry address (run it on the target box)
+  k2 vault carry export --recipient <age1…> --target <vault-id> --workspace <ws> [--target-workspace <id>] [--server NAME] [--own-box-move] --out <file>
+  k2 vault carry import <file> [--workspace <id>] [--apply]
+                                           lists first (with the target workspace id); --apply puts them in this box's vault.
+                                           Workspace secrets match by id, never by name: --workspace <id> on this box, or the
+                                           id the carry was made for (--target-workspace). A name works only if it is that id.
+
+Scope (--scope): ws:<workspace> (default inside a workspace), server, session.
+set options:
+  --kind api_key|password|oauth_token|ssh_key|tls_key|dsn|url|generic   (default api_key)
+  --for <host>[,<host>]       sites this secret may be sent to (exact hosts)
+  --preset stripe|openai|anthropic|xai|gemini|github|slack|supabase|ovh-eu|ovh-ca|ovh-us
+                              fills the sites and where the key goes in a request
+  --sign ovh|hmac-sha256|hmac-sha256-ts|oauth-refresh [--sign-header <Name> …]
+                              K2 signs each request instead (k2 vault set --help)
+  --inject-dst header:<Name>|query:<param>|basic|body   where fetch puts the key
+  --inject-header <Name>      same as --inject-dst header:<Name>
+  --inject-format '<fmt>'     how it's written, one {} (e.g. 'Bearer {}'; default {})
+  --delivery fetch|agent|file|env|api   how agents get it (default fetch for keys;
+                              agent: ssh keys sign on $SSH_AUTH_SOCK, never shown)
+  --ceiling fetch|agent|file|env|api    the loosest delivery allowed later
+  --describe <text>  --rotate-every <days>  --ttl 2h (session scope)
+
+Times (--ttl on set, grant, file, env-file and secret cards): 90s, 10m, 2h,
+7d, or plain seconds (3600).
+
+Where the key goes is fixed by whoever creates the secret (header and
+format); agents name the secret and K2 adds it. The presets fill this in
+for common key formats, so you usually just confirm.
+
+Agents: use `k2 vault fetch` (K2 makes the call and adds the key), never
+paste a key into a file or chat; ask a person with `k2 thread secret`.
+Each verb has its own help: k2 vault <verb> --help.
+Scripts: most verbs take --json and print the daemon's answer as it came
+(fetch: --json-out); each verb's help lists it.
+More: k2 study vault

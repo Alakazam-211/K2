@@ -1,0 +1,6 @@
+Restore snapshotted authBanRate early and clear the migrate window.
+Missing snapshot screams (does not invent stock 100/day).
+POST /cli/mail/bans/migrate/restore. GET → 405. mail_manage.
+
+USAGE
+  k2 hostmail bans migrate restore [--json]

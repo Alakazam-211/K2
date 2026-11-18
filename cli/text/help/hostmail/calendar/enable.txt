@@ -1,0 +1,8 @@
+Allow CalDAV + CardDAV (and their JMAP calendar/contacts methods) for
+every hosted address. First run also turns WebDAV files off unless
+--files on; later runs keep the stored files choice unless --files is
+given. POST /cli/mail/dav {action:"enable", files?}. Owner/admin.
+Never restarts Stalwart. Resets on `k2 hostmail uninstall`.
+
+USAGE
+  k2 hostmail calendar enable [--files on|off] [--json]

@@ -1,0 +1,55 @@
+Usage: k2 doc cores [on|off <core>] [--json] [--host <server> [--token-stdin]]
+
+Live docs are switched per kind of file on each server. Each kind has a
+multiplayer core; while its core is off, every k2 doc verb on those files
+refuses (core_off, exit 3: nothing is opened or changed) and people open them
+the usual way. Every core is off until the server's owner or an Admin turns
+it on.
+
+Which core a file needs, by its name:
+  markdown    .md and .markdown
+  text        any other text: code, config, HTML/XML/SVG, diagram sources,
+              .txt, logs, .csv/.tsv, and names without an extension
+  any-file    everything else: PSD, CAD, 3D and .blend files, images, PDFs,
+              office files, archives, binaries
+  These kinds have their own core (Beta); while it is off, they are any-file
+  docs:
+  slides      .pptx decks: slide and shape verbs for agents
+  timeline    .otio, .fcpxml and .prproj timelines: clip, track and marker
+              reads; .otio also takes clip and marker edits
+  fab         photoplot and drill files (.gbr, .ger, .pho, the .gtl-style
+              layer files, .drl, .xnc, .xln, .ncd): feature and hole reads,
+              never written
+  blend       .blend scenes: object reads (read only for now)
+  cad         .dxf and .dwg drawings: drawing reads, the AV reading of a set,
+              and .dxf edit verbs (a .dwg is read only)
+  A text file too large or too odd to edit live (it is then an any-file doc)
+  still needs its own core: a big .md needs markdown, not any-file.
+
+One core opens as a Garden, not a file kind:
+  board       the Board Garden (a whiteboard for you and your agents, Beta).
+              Off: Board Gardens show a placeholder and k2 board refuses
+              (core_off, exit 3); the boards are kept. Adding a Board Garden
+              in New Garden turns it on in the same step.
+
+  k2 doc cores                list the cores on this server and whether each is on
+  k2 doc cores on <core>      turn one on (people only: the owner or an Admin)
+  k2 doc cores off <core>     turn one off; files open live are written to disk
+                              and closed (their history stays)
+    <core>: markdown | text | any-file | board | slides | timeline | fab | blend | cad
+  --json                      the daemon's JSON (on/off: the switches and the report)
+  --host <server> [--token-stdin]
+                              another server (a Connect login with the Owner or
+                              Admin role); its token on stdin (--token T still
+                              works, but every account on this computer can see
+                              it while the command runs)
+
+People turn cores on or off here (from a terminal outside K2) or in
+Settings → Cores → Multiplayer. Agents only list them: an agent that needs a
+core asks its human (k2 thread) and, meanwhile, edits the file with ordinary
+tools. There is no permission card for it.
+
+Exit: 0 ok · 1 the flip worked but a file couldn't be written (its changes
+are kept in K2's history and written when the core is on again), or no
+answer from the daemon · 2 bad usage or an unknown core · 3 refused (an
+agent, or a login that isn't the owner or an Admin).

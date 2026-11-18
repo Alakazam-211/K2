@@ -4,48 +4,7 @@
 
 _app_door_usage() {
     cat <<'EOF'
-k2 app — the App door (quotas, audit, requests, suspend, remote passes)
-
-  k2 app suspend <app-id> [--reason TEXT]
-                                       Stop it now: every pass it holds is
-                                       revoked (its next call is 401), deploys
-                                       and starts are frozen. The owner or an
-                                       Admin, on any App; an agent, on its own
-                                       workspace's Apps. Not a Member.
-  k2 app resume <app-id> [--start]     The owner; or the App's own agent for a
-                                       suspension it made itself, with "Manage
-                                       its Apps end to end".
-  k2 app audit <app-id> [--since 1h] [--verb V] [--denied] [--limit N]
-                 [--oldest-first] [--verify] [--json]
-                                       Every call the App made through its
-                                       gateway (who, verb, room, result, K2's
-                                       refusal code, bytes, latency), hash-
-                                       chained per day. The newest N (default
-                                       100), newest first; --oldest-first
-                                       reads them top to bottom. --verify
-                                       checks the chain.
-  k2 app requests <app-id> [--since 1h] [--until 10m] [--status 4xx|5xx|N]
-                 [--path /prefix] [--method POST] [--limit N] [--json]
-                                       Visitors' requests to the App, one row
-                                       each: time, method, path (never its
-                                       query), status (or K2's own answer and
-                                       code: 400, 431, 429, 502, 503), bytes
-                                       in/out, ms, who closed early. Did a
-                                       browser's POST reach the App? Look
-                                       here. Kept 7 days, 200,000 rows per
-                                       App. Owner, Admins, the App's agent.
-  k2 app quota <app-id> [--rps N] [--burst N] [--sockets N] [--body 8M]
-                 [--upload 100M] [--subscriptions N] [--reset] [--reason TEXT]
-                                       Per-App gateway quotas. No flags: show.
-                                       Lowering applies now; raising is the
-                                       owner's (anyone else's is held, exit 2).
-  k2 app token rotate <app-id> [--ttl 30d] [--keep-old] [--caps a,b]
-                                       Owner: a remote App pass (an App hosted
-                                       elsewhere), shown once. Works on the main
-                                       port and the tunnel, never on a link.
-                                       The old pass is revoked unless --keep-old.
-  k2 app remote-pass <app-id> [--revoke [PASS-ID]] [--json]
-                                       List remote passes; --revoke ends them.
+%include cli/text/help/app/door.txt
 EOF
 }
 
@@ -278,28 +237,7 @@ if v.get("raised"):
 # app.usage) and Gardens through the bridge; here for agents and the owner.
 _app_surfaces_usage() {
     cat <<'EOF'
-k2 app — room members, and an App's own self and usage (0.46.1)
-
-  k2 app members [<room>] [--app <app-id>|host|all] [--json]
-                                       Who holds a grant on the room: guests and
-                                       agent logins with their role and caps,
-                                       from grants (not who is online). Connect
-                                       logins are one line, "admins of this
-                                       box". The owner and admins: any room. An
-                                       agent: its own room (no <room> needed).
-  k2 app room-names <room> hide|show   Owner, outside K2: hide guests' names
-                                       from Apps in that room's member list.
-                                       The owner and Gardens still see them.
-  k2 app self <app-id> [--json]        The App: its live Seed, health and when
-                                       its live deployment went live.
-  k2 app usage <app-id> [--hours N] [--json]
-                                       Its quotas, live connections and its
-                                       per-call counts from its own audit
-                                       (default the last 24 hours, at most 720).
-
-An agent reads its own workspace's Apps. Apps read the same through their
-gateway: room.members (cap room:members), app.self and app.usage (their own
-App only). More: k2 study app-surfaces.
+%include cli/text/help/app/surfaces.txt
 EOF
 }
 

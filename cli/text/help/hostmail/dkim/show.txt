@@ -1,0 +1,5 @@
+List DKIM selectors, stage, expected TXT, and live DNS match.
+Not a second domain check (that is k2 hostmail domain check).
+
+USAGE
+  k2 hostmail dkim show <domain> [--json]

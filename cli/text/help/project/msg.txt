@@ -1,0 +1,43 @@
+Post a message to a project's chat. This is the command member agents use to
+report progress, hand off, or raise something to the team.
+
+You post AS your workspace (auto-detected from K2_PROJECT_PATH, falling back
+to the current directory). Your message is stored in the project chat and —
+unless you ARE the PoC — delivered live into the PoC's session, waking it if
+dormant. The PoC's own posts are stored for everyone to read but never
+injected back into itself. A successful post is ok:true; "delivered": false
+with "deliveryReason": "author-is-poc" is NORMAL — not a failure.
+
+USAGE
+  k2 project msg [<project>] <text> [flags]
+
+ARGUMENT RULES (exact)
+  two arguments   → the first is ALWAYS <project>, the second is <text>
+  one argument    → it is ALWAYS <text>; the project is auto-detected
+  three or more   → exit 2 (usage). Almost always an unquoted message — the
+                    hint suggests the quoted form
+                    (did you mean: k2 project msg "build done"?)
+  <text> of "-"   → the message body is read from stdin (works in both forms;
+                    to send a literal "-", send it via stdin)
+
+QUOTING
+  <text> is ONE argument — always quote multi-word messages ("build done",
+  not build done). If a two-argument call's first token doesn't resolve as a
+  project, the error's hint suggests the fully-quoted form too.
+
+WHICH PROJECT? (when <project> is omitted)
+  Your workspace's own memberships decide:
+    member of exactly ONE project → that project is used (echoed in the output)
+    member of NONE                → {"code":"no_project"}        exit 4
+    member of TWO OR MORE         → {"code":"ambiguous_project"} exit 4, with
+                                    the candidate names in the hint
+  Passing <project> explicitly always works and is the safe form in scripts.
+
+FLAGS
+  --json                 JSON output (includes the delivery outcome:
+                         delivered / deliveryReason / deliveredSessionId)
+
+EXAMPLES
+  k2 project msg "Build is green on all three targets."
+  k2 project msg 0.41-release "Starting the notarize pass now."
+  git log --oneline -5 | k2 project msg 0.41-release -

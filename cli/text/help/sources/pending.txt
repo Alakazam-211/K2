@@ -1,0 +1,6 @@
+k2 sources pending [--names a,b] [--json]
+
+  Proposals (sources and triggers) waiting for approval.
+  A person, or an agent with "Let this agent manage Gardens and data sources": every proposal.
+  Any other agent: only its own (the answer says "scope": "own"); a person
+  approves them.

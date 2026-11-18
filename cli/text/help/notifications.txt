@@ -1,0 +1,102 @@
+k2 notifications email — the senders K2's notification mail leaves from
+(Email Notifications). Owner and Admins only; adding a sender or a relay,
+choosing the system sender and test sends need the owner in person (Touch
+ID / login / vault password), from a terminal outside K2.
+
+  k2 notifications email [status] [--json]
+  k2 notifications email sender add <address> [--name N] [--lock-name]
+                 [--reply-to <addr>]… [--relay <relay id> | --via <bounce subdomain>]
+                                    A send-only account K2 creates (hosted
+                                    mail, Linux) or an address on a relay. It
+                                    is never a mailbox: no agent can read it.
+                                    --via: send as noreply@brand.com when
+                                    brand.com's mail lives elsewhere (Google,
+                                    Microsoft…). Hosted mail only (Linux). Host
+                                    a subdomain here first: k2 hostmail domain
+                                    add bounce.brand.com prints the DNS records
+                                    to publish (MX, SPF, DKIM, DMARC); then
+                                    k2 hostmail domain check bounce.brand.com.
+                                    Bounces and the signature use it, and K2
+                                    never changes brand.com's DNS. brand.com
+                                    needs a DMARC record that isn't strict on
+                                    both checks: adkim=s with aspf=s is
+                                    refused; one relaxed (r, the default) is
+                                    enough.
+  k2 notifications email sender list [--all] [--json]
+  k2 notifications email sender check <sender>   re-check DMARC and the domain
+  k2 notifications email sender set <sender> [--name N] [--lock-name|--unlock-name] [--reply-to <addr>]…
+  k2 notifications email sender rm <sender>       its address stays reserved 30 days
+  k2 notifications email sender resume <sender>   the owner, with a confirm: an App's sender
+                                    that K2 paused (over 5% hard bounces or 0.1%
+                                    spam complaints of at least 50 recipients in
+                                    24 h) sends again, and the 24-hour count
+                                    starts again from zero. `sender list` marks
+                                    paused senders (and shows each App's). The
+                                    system sender is never paused (you get a
+                                    warning notice instead).
+                                    <sender>, everywhere here: its address or
+                                    its id from `sender list`.
+  k2 notifications email suppressions [list] [<address>] [--limit N] [--json]
+                                    Addresses K2 won't send to: a hard bounce
+                                    (every sender), a spam complaint (that sender
+                                    only), or added by hand. Kept hashed: the
+                                    list shows the domain, reason and hash;
+                                    give an address to see only its entries.
+  k2 notifications email suppressions add <address> [--sender <sender>]
+                                    Owner or Admin. Without --sender: every sender.
+  k2 notifications email suppressions rm <address> [--sender <sender> | --all]
+                                    The owner: mail may go to it again. No flag:
+                                    removes its every-sender entry (a hard
+                                    bounce, or one added for every sender);
+                                    --sender: that sender's entry (a complaint);
+                                    --all: every entry for the address.
+  k2 notifications email system-sender [show] | set <sender> | clear | test
+                                    K2's own mail (owner password resets with
+                                    no --from, codes) comes from it.
+  k2 notifications email relay add --host H [--port P] [--tls implicit|starttls]
+                 --username U --from-domain D   (the password is read from stdin)
+  k2 notifications email relay list | rm <relay>
+  k2 notifications email relay test <relay> --from <sender>
+                                    One test to your own address; the sender
+                                    goes ready when the relay takes it.
+  k2 notifications email log [--app <app>] [--limit N] [--json]
+  k2 notifications email settings [--retention-days 7-90] [--owner-email <you@…>]
+                                    Test emails only ever go to --owner-email.
+
+Your notice address: where emails FROM this server's AI agents reach you.
+Run these yourself from a terminal outside K2 (any person with a login on this
+server, or the server's owner). An agent can't run them (refused, 403).
+  k2 notifications email address [show] [--person <login>] [--json]
+                                    Your confirmed address ("address") and any
+                                    still waiting for a confirm ("pending", up
+                                    to 3). --person: another person's (the
+                                    server's owner or an Admin only).
+  k2 notifications email address set <you@example.com>
+                                    Emails that address a confirm link from the
+                                    system sender. The link expires after 24
+                                    hours. Notices go there only after you press
+                                    Confirm on the page it opens. Your current
+                                    address keeps working until the new one is
+                                    confirmed, then it is replaced; if the link
+                                    expires, nothing changes. Setting the same
+                                    address again sends a fresh link.
+  k2 notifications email address remove [<address>] [--person <login>]
+                                    Stops notices to <address> now, confirmed or
+                                    still waiting. With no address: all of them
+                                    (confirmed and waiting). --person: another
+                                    person's (the server's owner or an Admin).
+
+Agents' email notices (an agent emails a person on this server; off by default):
+  k2 notifications email agent [list] [--json]
+  k2 notifications email agent on <workspace> --sender <address>
+                                    The owner, with a confirm: the workspace's
+                                    agent may email people here from <address>
+                                    (a sender of its own: not the system
+                                    sender, not an App's; add it first with
+                                    sender add). Agents then send with
+                                    k2 notify email (see k2 notify --help).
+  k2 notifications email agent off <workspace>    the owner or an Admin
+
+A hosted sender needs its domain Verified (k2 hostmail domain check) and a
+DMARC record (any policy). On a Mac (no hosted mail), add a relay first.
+Grant a sender to an App: k2 app email on. The guide: k2 study email-notifications.

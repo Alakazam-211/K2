@@ -1,0 +1,21 @@
+Import mail into a hosted address this workspace can manage. Maildir
+(INBOX new/ + cur/, plus Maildir++ .Sent/.Archive/…) and/or IMAP
+(--imapsync). Does not rsync into SST.
+
+Large Maildirs need a long wait: this command waits up to 2 hours
+(7200s). The global CLI 30s cap does not apply here — 30s was the
+wall a field import hit (the daemon kept importing after the client gave up).
+
+USAGE
+  k2 hostmail import --address <a@domain> --maildir <path> [--skip-inbox] [--json]
+  k2 hostmail import --address <a@domain> --imapsync from=<host> --user <u> --pass-stdin [--json]
+
+FLAGS
+  --address <a>          Hosted address to import into
+  --maildir <path>       Local Maildir (INBOX new/cur plus Maildir++ folders)
+  --skip-inbox           Skip top-level INBOX (cur/ + new/); import folders only
+  --imapsync from=<host> Remote IMAP host
+  --user <u>             Remote IMAP username
+  --pass-stdin           Remote IMAP password on stdin (never argv)
+  --port <n>             Remote IMAP port (default 993)
+  --json                 JSON output

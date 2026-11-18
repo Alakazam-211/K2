@@ -1,0 +1,33 @@
+k2 workspace trust — folder trust (who may start AI tools in a folder)
+
+K2 looks inside a folder before it tells Claude, Codex, Grok, Gemini or
+Cursor to trust it. A clean folder is trusted as before. A folder with
+settings that run commands or send your logins elsewhere waits for the
+owner: a card on Thread (Trust it / Always trust this folder / Don't trust).
+
+  k2 workspace trust status [<folder>] [--json]
+                                    One folder (or every workspace): clean,
+                                    trusted, always, pending, undecided,
+                                    changed or denied, with the findings
+  k2 workspace trust request <folder> --why "…"
+                                    Agents: present the card (only asks).
+                                    Your own folder, or another workspace's
+                                    on this server while it waits (its own
+                                    agent can't start, so can't ask)
+  k2 workspace trust <folder> --yes|--always|--no [--fingerprint <fp>]
+                                    Owner: Trust it (this version) / Always
+                                    trust this folder / Don't trust, for the
+                                    settings shown. A risky folder needs the
+                                    fingerprint from status or the ticket,
+                                    or a yes at the prompt in a terminal;
+                                    refused if the settings changed
+  k2 workspace trust reset <folder> Owner: back to undecided (asks again)
+  k2 workspace trust forget <folder>
+                                    Owner: remove every trust entry for the
+                                    folder in every tool's file (yours and
+                                    parent folders' too); status lists them
+
+Deciding is the owner's: an agent or a K2 terminal gets exit 3 and the
+request line to run instead. The owner can also decide in the app:
+Settings → Workspaces / Agents → <workspace> → Agent → Folder trust, or by opening that
+agent. More: k2 study folder-trust

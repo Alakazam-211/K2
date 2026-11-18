@@ -1,0 +1,17 @@
+Add addresses to a hosted mailbox's forwards. The others stay as they are,
+and the mailbox keeps a copy or not as it does now unless you say. The
+rules and refusals are the same as set (k2 hostmail forward set --help):
+an outside address goes on at once after K2 emails it a stop link, at
+most 100 addresses per mailbox, and this server's daily limit on new outside
+addresses (20 unless the owner changed it with k2 hostmail config
+--forward-new-per-day).
+
+If K2 has sent 60 of these emails in the last hour, the new forward waits
+its turn: state pending_verify until K2 has emailed the address, then it goes
+on by itself.
+
+Adding an address also turns on an old forward K2 left off (also shown as
+pending_verify; show says which of the two it is).
+
+USAGE
+  k2 hostmail forward add <addr> --to <dest> [--to <dest>…] [--keep|--no-keep] [--restart-stopped] [--json]

@@ -1,0 +1,22 @@
+Rotate the IMAP/SMTP password for a hosted address (one secret for
+both). POST /cli/mail/address/password {address}. The new password is
+printed once with the Mail.app client block (IMAP host:443 ALPN,
+submission :465). This invalidates the mint-time secret — existing
+mailbox-password sessions die. Every API key on the mailbox is revoked
+too (the output says how many), so a key someone made with the old
+password stops working. App passwords on the mailbox also stop working;
+add new ones with `k2 hostmail app-password`. Cannot GET the old secret.
+No port 993.
+
+Who: the owner, or an IT agent (a workspace allowed to manage hosted
+mail) for any mailbox but its own workspace's (a person's mailbox in its
+workspace is fine — `k2 hostmail person`). An IT agent asking for its own
+mailbox gets exit 3, owner_only: an agent can't loosen mail rules on its
+own sends. Agents without mail-manage send with `k2 mail send`, where the
+owner's rules apply, and never get a mail password (exit 3).
+
+USAGE
+  k2 hostmail password rotate <addr> [--json]
+
+FLAGS
+  --json                 JSON output (once password + client block)

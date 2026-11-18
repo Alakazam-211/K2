@@ -1,0 +1,6 @@
+Set out-of-office auto-reply (Stalwart vacation) on a minted mailbox.
+mail_manage. :from and :addresses are the primary mint address.
+--text is literal; @path reads a file; - reads stdin.
+
+USAGE
+  k2 hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE] [--json]

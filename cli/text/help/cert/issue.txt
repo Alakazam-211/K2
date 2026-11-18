@@ -1,0 +1,13 @@
+Issue a Let's Encrypt cert for an attached hostname (on-box ACME). Adding
+a second mail host (`k2 domain name add mail.<apex> --role mail` first)
+doesn't change the mail server's default certificate.
+
+USAGE
+  k2 cert issue <hostname> [--json]
+
+DNS
+  K2-hosted zone (ns1/ns2.k2.dev, dns_write): DNS-01 plants
+  _acme-challenge here.
+  Any other DNS: you must add the hostname (and _acme-challenge if
+  using DNS-01) on THAT platform pointing at this box. HTTP-01 follows
+  a CNAME (often onto a closed :80). K2 cannot plant on Vercel/etc.

@@ -1,0 +1,6 @@
+k2 vault requests [--json]
+
+Thread secret cards (k2 thread secret) and their state: pending, set or
+declined.
+
+Example: k2 vault requests

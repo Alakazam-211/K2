@@ -1,0 +1,6 @@
+k2 vault kek rotate     rotate the box key that wraps the vault
+k2 vault rekey          rotate the data key (re-encrypts every secret)
+
+Owner only, from their own terminal, with a confirm.
+
+Example: k2 vault kek rotate

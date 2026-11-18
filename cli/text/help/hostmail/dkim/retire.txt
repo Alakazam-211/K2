@@ -1,0 +1,5 @@
+Drop one old DKIM selector after overlap. Removes the TXT when we
+host DNS. mail_manage.
+
+USAGE
+  k2 hostmail dkim retire <domain> <selector> [--json]

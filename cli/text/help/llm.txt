@@ -1,0 +1,55 @@
+k2 llm tokens — LLM tokens: subscriptions and API tokens
+(Claude, Codex, Grok subscriptions; API tokens also Gemini)
+
+  k2 llm tokens list [--tool <tool>] [--json]
+  k2 llm tokens status <tool> <label|id> [--json]
+  k2 llm tokens usage [--json]
+  k2 llm tokens add <tool> <label> [--device]        add a subscription (the tool's own sign-in)
+  k2 llm tokens login <tool> <label> [--device]      sign a subscription in again
+  k2 llm tokens switch <tool> <label>                use this token as the server default (Admin or Owner)
+  k2 llm tokens next <tool>                          use the next signed-in subscription (Admin or Owner)
+  k2 llm tokens auto-next [<tool> on|off] [--json]   auto-rotate: Next by itself when the subscription in
+                                                     use reaches 99% of its limit. Off by default; may go
+                                                     against the provider's terms, so a person turns it
+                                                     on with their own confirm (Admin or Owner)
+  k2 llm tokens rename <tool> <label> <new-label>
+  k2 llm tokens remove <tool> <label> [--clear-default]
+                                                     kept in Trash; the server default API token,
+                                                     or a default whose sign-in has ended, only
+                                                     with --clear-default (Admin or Owner)
+  k2 llm tokens clear-default <tool>                 no server default for that tool (an API token
+                                                     default only; Admin or Owner)
+  k2 llm tokens refresh [<tool> <label>] [--usage]   re-read state (and usage)
+  k2 llm tokens add-key <tool> <label>               add an API token (read from stdin)
+  k2 llm tokens pin --workspace <ws> <tool> <label>  use this token for a workspace
+  k2 llm tokens pin --session <key> <tool> <label>   use this token for one chat
+  k2 llm tokens unpin --workspace <ws>|--session <key> <tool>
+                                                     back to Server default
+  k2 llm tokens pins [--json]                        workspaces and chats with their own token
+  k2 llm tokens for <agent> [--refresh] [--json]     the token one chat runs on (<agent> = ws or a
+                                                     sidecar ws/2) and its usage, the top-bar chip's
+                                                     number; --refresh re-reads it (once a minute)
+  k2 llm tokens storage [--json]                     where saved tokens are kept (files or the K2
+                                                     vault) and whether each is sealed
+  k2 llm tokens storage files|vault                  change it (Admin or Owner; audited). The plain
+                                                     files stay either way, so going back is instant
+
+`k2 llm accounts …` is the same command (alias).
+
+Each tool has ONE server default token per server. Changing the server
+default affects every chat that uses Server default on this server;
+running sessions pick up the new token.
+add/login print the sign-in page and any device code; when the tool asks
+for a code, paste it at the prompt (it is read from stdin, never an argument).
+--device signs in from another device (device code where the tool has one).
+Which token a chat uses: its own token > its workspace's token > Server
+default. A chat's own token (--session <key>: the pinned chat's key is its
+workspace id, a tab's is tab-<id>; or conversation:<id>) applies every time
+that chat starts or is revived. Otherwise a resumed chat keeps the token it
+started on. A subscription set for a workspace or chat is never also the
+server default, and `next` skips it.
+API tokens (add-key) are billed per token, go only to sessions that use
+them, and are never shown again. The key is read from stdin, never an argument.
+Agents and K2 terminals are read-only (list, status, usage, pins, for). Change
+tokens on Settings → Language Models → Subs / Tokens, or run k2 from a terminal outside K2.
+More: k2 study llm-tokens

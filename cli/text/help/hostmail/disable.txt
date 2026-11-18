@@ -1,0 +1,8 @@
+Host-wide inbound down for EVERY hosted domain until
+`k2 hostmail enable` actually restarts the unit. Data is kept —
+disable is not a wipe. MX still points here. disable is not an ACME retry — use `k2 hostmail cert renew`. disable is not
+rotate-admin — use `k2 hostmail rotate-admin` for leftover
+recovery admin.
+
+USAGE
+  k2 hostmail disable [--json]

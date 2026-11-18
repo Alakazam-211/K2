@@ -1,0 +1,5 @@
+Read the live Stalwart quota object for a hosted address (engine truth).
+mail_manage; 0 = unlimited (and the default on new mints).
+
+USAGE
+  k2 hostmail quota get <addr> [--json]

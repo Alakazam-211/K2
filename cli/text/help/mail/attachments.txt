@@ -1,0 +1,20 @@
+List a message's attachments, or fetch ONE to a file. Numbers are 1-BASED,
+matching the numbered list `read` prints. The daemon writes the bytes to
+your path and does nothing else with them — attachments are never opened.
+
+USAGE
+  k2 mail attachments <message-id> [--get <n> --out <path>] [--json]
+
+FLAGS
+  --get <n>              The 1-based attachment number to fetch
+  --out <path>           Where to write it (workspace-relative; escaping the
+                         workspace is refused). A file path is written
+                         (and overwritten). A folder (existing, or ending
+                         in /, created if missing) gets <folder>/<name>,
+                         and an existing file there is never overwritten.
+  --json                 JSON output
+
+EXAMPLES
+  k2 mail attachments m_abc123
+  k2 mail attachments m_abc123 --get 1 --out downloads/report.pdf
+  k2 mail attachments m_abc123 --get 1 --out downloads/

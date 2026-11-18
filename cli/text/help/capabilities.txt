@@ -1,0 +1,26 @@
+k2 capabilities [--json] [--node <name>]
+
+What this K2 server can do for Apps, before you try: one row per
+capability, "ok" or "no". A "no" row names the reason, the fix and the
+refusal id you would hit (k2 explain <id>).
+
+  this box   Apps on, engines (walled, open, static), protocols, public
+             ports, custom domains, phone simulators, Postgres versions,
+             mail, push keys per App (set or not, never the keys), the
+             update feed, limits (Seed, archive, upload part, disk guard)
+  compute    each node your workspace may use: OS, CPU type, free slots,
+             Xcode, Android SDK, tools
+
+  --node <name>  only that compute node's row (k2 compute nodes)
+  --json         {schema: 1, box: [...], compute: [...], doctor: {...}};
+                 a row is {cap, ok, detail, missing?: {reason, fix, code}}
+
+Rows to look for: protocols.other (HTTP/2 to the App, gRPC, UDP),
+ports.public, engine.static, updates, push.<app> (one per App you see:
+its APNs and FCM keys set or not), node.<name>.
+Reasons: not_built (K2 doesn't do it yet), owner_disabled (the owner
+turned it off), level (your access doesn't reach it: ask the owner),
+not_prepared (the box isn't set up for it yet), hardware (this machine
+can't).
+k2 app doctor stays the box's setup check; its result is in "doctor".
+Exit codes: 0, 3 refused, 2 bad usage.

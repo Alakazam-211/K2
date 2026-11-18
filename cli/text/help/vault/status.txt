@@ -1,0 +1,8 @@
+k2 vault status [--json]
+
+Where the vault's key lives, the recovery key, the vault password, and
+counts: your secrets, K2 system secrets (K2's own, hidden from agents),
+shares and pending secret cards. Ends with one honest line on what the
+vault protects. Values are never shown.
+
+Example: k2 vault status

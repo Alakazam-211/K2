@@ -1,0 +1,7 @@
+k2 vault public-key NAME [--scope <s>] [--json]
+
+Print an ssh key's public half (the .pub line, comment NAME) and its
+SHA256 fingerprint, for authorized_keys or a deploy key. Never the
+private key.
+
+Example: k2 vault public-key DEPLOY_KEY >> authorized_keys.new

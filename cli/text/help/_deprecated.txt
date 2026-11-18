@@ -1,0 +1,26 @@
+K2 retired verbs → new equivalents
+
+HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
+
+  state list|get|set              → (removed — Workspace States retired)
+  app-update                      → update --app
+  status "msg"                    → organization update "<news>"
+  checkin                         → organization bulletin|update, thread, tickets, inbox
+  checkin --done                  → done [--blocked "reason"]
+
+  # 0.40.31 — legacy per-agent adaptive heartbeat control removed
+  # (heartbeat.json; nothing consumed it since 0.39.0d). Named
+  # workspace heartbeat schedules are the only heartbeat surface.
+
+  heartbeat set --agent <n> ...   → heartbeat schedule add/edit --name <n> <spec>
+  heartbeat get --agent <n>       → heartbeat show <name> [--json]
+  heartbeat force --agent <n>     → heartbeat signal fire <name>
+  heartbeat noop|action           → (removed — adaptive backoff is gone;
+                                       the user owns wake cadence via schedules)
+
+  --agent <name> flag             → --workspace <path>  (everywhere)
+                                       Hard-removed; pass workspace explicitly.
+
+RETIRED (the CLI no longer runs these; each answers with its pointer and
+exits 1; /cli/agents/work and /cli/work/inbox answer 410 and point here)
+

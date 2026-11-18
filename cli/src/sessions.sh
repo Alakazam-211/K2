@@ -7,36 +7,7 @@
 
 _sessions_usage() {
     cat <<'EOF'
-k2 sessions — who is working in this workspace, and past conversations to reopen
-
-  k2 sessions [--all] [--json]                 live sessions here (* marks you), with their state
-  k2 sessions --past [--search <text>] [--days N] [--cli <cli>] [--limit N] [--json]
-                                               past conversations in this workspace, newest first
-  k2 sessions show <id|address> [--tail N] [--json]
-                                               what it was about and its last messages
-  k2 sessions open <id> [--name <name>] [--brief <file>|-] [--brief-text "…"] [--force] [--json]
-                                               reopen a past conversation as a sidecar, same history
-  k2 sessions new <name> [--cli <cli>] [--brief <file>|-] [--brief-text "…"] [--json]
-                                               start a helper (a sidecar); prints its address <ws>/<name>
-  k2 sessions stop <name|address> [--force]    stop is sleep: its history stays (open or msg wakes it)
-  k2 sessions main [--json]                    which chat is pinned as this workspace's main chat, and whether K2 can find it
-  k2 sessions main set <id> [--thread keep-main|adopt-sidecar] [--json]
-                                               choose the main chat, an <id> from --past (people only); takes effect the next time it starts.
-                                               --thread keep-main (default): the main chat keeps its Thread; the other chat's
-                                               Thread stays at an address of its own. adopt-sidecar: the other chat's Thread
-                                               becomes the main Thread; the old one stays at an address. Nothing is deleted.
-
-Talk to any of them: k2 msg <address> "…"      (a sleeping one wakes)
-                     k2 msg --session <id> "…" (delivers to whoever holds it; a past one is reopened first)
-Replies arrive in your terminal as [from <address>] …; answer with k2 msg <address>.
-One conversation never runs twice: opening a live one prints its address.
-<id> is the short id from --past (6+ characters), the full id, or an address.
-Agents see their own workspace only. Opening, starting and stopping follow
-"Let this agent manage its sidecars" and the main-session rule (k2 study sessions).
-CLIs: claude, codex, grok, gemini, cursor (cursor-agent), pi, hermes.
-Owner: --workspace <ws> on every verb. Also: archives (on-disk archives),
-live <ws> (the owner's raw PTY view), compact, set-label.
-More: k2 study sessions
+%include cli/text/help/sessions.txt
 EOF
 }
 

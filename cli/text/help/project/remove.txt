@@ -1,0 +1,16 @@
+Remove a member workspace from a project. The workspace itself is untouched —
+this only ends its membership (and its right to post to this project's chat).
+
+Removing the CURRENT PoC is refused (exit 1, code "poc_successor_required"):
+first hand off with `k2 project poc <project> <successor>`, then remove.
+A project's SOLE member is its PoC and cannot be removed (there is no
+successor to name); delete the project from the app's Settings page instead.
+
+USAGE
+  k2 project remove <project> <workspace> [flags]
+
+FLAGS
+  --json                 JSON output
+
+EXAMPLES
+  k2 project remove 0.41-release "QA Bot"

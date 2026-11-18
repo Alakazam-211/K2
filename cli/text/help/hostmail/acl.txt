@@ -1,0 +1,10 @@
+IMAP/JMAP sharing between minted Users (Mail.app rights). Does not
+replace `k2 mail access grant` (agent CLI layer). Both mailbox and
+user must be minted. Probe Mailbox/set shareWith; fallback IMAP SETACL.
+K2 never EXPUNGEs.
+
+USAGE
+  k2 hostmail acl grant <mailbox> --user <addr> --rights lrswipkxten [--json]
+  k2 hostmail acl grant <mailbox> --user <addr> --read|--write|--post|--admin [--json]
+  k2 hostmail acl revoke <mailbox> --user <addr> [--json]
+  k2 hostmail acl show <mailbox> [--json]

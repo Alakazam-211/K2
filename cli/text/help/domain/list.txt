@@ -1,0 +1,6 @@
+List custom domains attached to this server. A pending row prints
+"Pending: point nameservers to …" and whether k2.dev auto-added the
+zone to your account. Agents need dns_manage (exit 3 without it).
+
+USAGE
+  k2 domain list [--json]

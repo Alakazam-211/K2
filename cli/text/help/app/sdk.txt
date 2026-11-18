@@ -1,0 +1,58 @@
+k2 app sdk — K2's server SDK (and Sew's) inside your App folder
+
+  k2 app sdk add <app-folder> [--sew] [--json]
+        <app-folder> is an existing folder (mkdir it first; a relative
+        path is fine). Copies @k2/server (this K2's version) into
+        <app-folder>/vendor/ and adds "@k2/server":
+        "file:vendor/k2-server-<version>.tgz" to the App's package.json
+        (made when there is none: private, "type": "module"). Then, in
+        <app-folder>: npm install. Your server code:
+          import { fromEnv } from '@k2/server'
+        --sew does all that AND copies Sew's packages (this box needs Sew
+        0.5.0+): @sew/client (Sew's API), @sew/channel (chat), @sew/voice
+        (voice and video calls), @sew/e2ee (call encryption), @sew/bff
+        (your server's side), and from Sew 0.7.1 @sew/noise (the mic noise
+        filter @sew/voice uses). It pins their links to each other in npm
+        "overrides" and prints an npm i line for what comes from the npm
+        registry (React, LiveKit, …): run that line instead of npm
+        install. Adding --sew later to an App that has @k2/server is
+        fine. Run add again after a K2 or Sew update: it replaces the
+        older files and never duplicates.
+  k2 app sdk status <app-folder> [--json]
+        What the folder has in vendor/ against what this box carries:
+        current, older (run add again), newer, missing.
+  k2 app sdk kit <sew-app-kit-<version>.tar.gz> [--json]
+        Keep Sew's App kit on this box for --sew when k2 hostchat
+        enable|upgrade could not download it (a box without internet) and
+        it wasn't beside --tarball. Only the Sew version this K2 pins,
+        checked against its pinned sha256.
+
+Keep vendor/ with your App (commit it; never list it in .k2appignore): the
+Seed carries it, so the App installs offline and a rollback keeps its SDK.
+K2 never runs npm and never uses the network here; it writes only
+vendor/ and package.json inside <app-folder>.
+
+Who: the owner, an Admin, a K2 terminal, the App's agent with "Build and
+run Apps" (folders inside its own workspace).
+
+An agent's <app-folder> must be inside its own workspace folder (the
+owner, an Admin and a K2 terminal may name any folder), on purpose: it is
+the same rule as k2 app deploy (an agent builds and writes
+only in its own workspace, never in another agent's or the owner's
+folders). A folder elsewhere is refused (folder_outside_workspace), however
+it is named; a link that points outside counts as outside. To use it there:
+keep the App's source inside your workspace, or ask a person to run k2 app
+sdk add on that folder from their own terminal, or copy vendor/ and the
+package.json lines from a folder inside your workspace (they are ordinary
+files).
+
+Exit codes: 0 done, 2 usage, 3 refused, with JSON on stderr:
+  apps_manage_off           ask your owner for "Build and run Apps"
+  folder_outside_workspace  an agent's folder must be in its workspace
+  sew_kit_unavailable       this K2 pins a Sew older than 0.5.0 (no kit
+                            until a K2 update); use add without --sew
+  sew_kit_missing           the kit isn't on this box: k2 app sdk kit
+                            <file>, or ask your owner for it
+  sew_kit_tampered          the kit doesn't match K2's pin: refused
+  sdk_package_json_invalid  fix package.json (not valid JSON) and rerun
+  sdk_folder_invalid        vendor/ or package.json is a symlink or odd

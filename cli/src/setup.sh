@@ -6,45 +6,7 @@
 # pass, a Voice & Chat only login); 4 no such Focus Group; 1 anything else.
 _setup_usage() {
     cat <<'EOF'
-k2 setup [--json]       your setup list on this server: [x] done, [ ] to do, [-] skipped
-k2 setup hide           hide the list in the app (k2 setup still prints it)
-k2 setup show           bring the list back, skipped steps included, even after it finished
-k2 setup skip <step>    skip one step: dev_tools, llm_sign_in, first_agent (or chief_of_staff), tunnel, phone, own_sign_in
-
-Kessel, K2's own agent (when the owner has turned on kesselFirstRun):
-k2 setup kessel [--tool claude|codex|grok] [--name N] [--handle H] [--focus-group G]
-                        meet Kessel, the agent that runs K2: its setup,
-                        settings and agents. It helps you hire
-                        your Chief of Staff. --tool defaults to the
-                        server default (it must be signed in: k2 llm tokens);
-                        --name Kessel and --handle kessel by default (its folder
-                        is <hire root>/<handle>); --focus-group puts it in a
-                        Focus Group (id or name; none by default).
-                        Owner, Owner or Admin login.
-k2 setup chief-of-staff --name N --about "what they do" --tool claude|codex|grok [--focus-group G]
-                        hire this person's Chief of Staff, their lead agent.
-                        It joins Kessel's Focus Group unless --focus-group names
-                        another (id or name).
-                        For Kessel only: it works from Kessel's own pinned chat, never a
-                        sidecar, another agent or a person (exit 3).
-k2 setup dismiss-offer  "Not now" on the Meet Kessel offer (yours only)
-k2 setup agent-reports [--agents off|cli|all] [--attach <parts>|none|all]
-                        whether agents may report K2 problems to Alakazam Labs
-                        on their own: off, problems with K2 commands (cli), or
-                        anything about K2 (all); and which parts of the K2
-                        details they may attach (joined by commas, none or
-                        all; the versions always go). No flags: what is set.
-                        The same as k2 send-feedback settings --agents/--attach.
-                        The owner or an admin.
-
-Every verb takes --json: the daemon's JSON as is.
-
-Each step is done by doing it: the list reads what is set up on this
-server, never a tick. dev_tools shows only while git does not run here:
-on a Mac, k2 git-tools install opens the Apple installer on its screen. It is yours: the owner and the logins the owner
-linked share one list, and every other login has its own. When every
-step is done or skipped the list finishes and the app stops showing it.
-Agents have no setup list (exit 3), except Kessel running k2 setup chief-of-staff.
+%include cli/text/help/setup.txt
 EOF
 }
 

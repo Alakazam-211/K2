@@ -1,0 +1,134 @@
+k2 talk <workspace> "text" [--read-only] [--from <name>] [--lines N] [--agent <name>]
+k2 talk <workspace> --answer <N>      # BETA: drive a 1-question HITL + re-read
+k2 talk <workspace> --respond <y|n>   # BETA: alias of --answer (y->1, n->2)
+k2 talk <workspace> --scout           # BETA: surface a WHOLE multi-Q form at once
+k2 talk <workspace> --answers <a,b,c> # BETA: answer a whole form + submit, one call
+k2 talk <workspace>@<host> "text" --token-stdin
+                                      # a workspace on a remote server; reads its
+                                      # token from stdin (--token <tok> works too,
+                                      # but a token on the command line is visible
+                                      # to other users on this machine)
+
+  ★ BETA — THE inter-agent interaction verb. ★
+
+`talk` FUSES "read the peer's live screen" + "send" into one call, so
+you can't forget to look before you inject. That slip is what gets a
+message *eaten*: if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow
+menu, a "proceed?" confirm), an injected `msg` is silently consumed as
+the ANSWER to that prompt instead of delivered. `talk` reads first so
+you SEE the state and decide.
+
+  talk vs msg:
+    k2 talk  = interactive collaboration. Read → judge → drive/back-off
+               → deliver. Use it whenever the peer might be busy/HITL.
+    k2 msg   = deliberate fire-and-forget. The blind send; unchanged.
+  A wrong-verb mistake is benign both ways, so prefer `talk` for any
+  interactive or HITL-sensitive exchange.
+
+HOW IT WORKS (pure ergonomics over read + msg)
+  1. READS the target's live terminal (same as `k2 read`) and prints it.
+  2. Surfaces the drive-or-back-off guidance. YOU (the calling agent —
+     you are the LLM) comprehend the screen; the CLI does not judge.
+  3. AUTO-DETECTS a HITL (GH#8): before sending, it asks the daemon's
+     /cli/terminal/classify whether the peer is on a human-in-the-loop
+     prompt. If so it AUTO-STARTS --scout (surfaces the whole form, non-
+     destructive) and HOLDS your message instead of letting it get eaten;
+     answer with `--answers`/`--answer`, then re-run to deliver. Detection
+     matches known prompt patterns (select menus, permission gates, trust
+     dialogs); a prompt with no known marker is not detected. When nothing
+     is detected it delivers as normal: you already saw the screen from
+     step 1.
+  4. SENDS via the `k2 msg` path — unless --read-only. `talk` AUTO-WAKES
+     a dormant canonical session by default (it's the explicit "interact
+     now" verb): if the peer is asleep it resumes it, waits until READY,
+     then delivers, and prints "peer was dormant — woke (Xs)". Suppress
+     with --no-wake.
+
+YOU JUDGE — ready vs HITL:
+  • READY (idle/empty input)             → deliver; it lands cleanly.
+  • HITL you must NOT answer for it       → BACK OFF. Re-run --read-only
+    (canonical/federation peer waiting      in a few minutes; deliver
+     on its OWNER, or no standing)          only once it returns to READY.
+  • HITL you DO have standing over        → DRIVE it: answer + re-read in
+                                            ONE call with --answer <N> /
+                                            --respond <y|n> (see below),
+                                            repeat for chains, THEN deliver.
+
+ACT-RETURNS-STATE (BETA, GH#8) — the #1 round-trip win:
+  --answer <N> / --respond <y|n> FUSE the drive + the confirm re-read so
+  a drive step is ONE call instead of write-then-separately-re-read:
+    1. send the key (<N>, or y/n) to the resolved session via the SAME
+       raw TUI-control path `k2 terminal write` uses (/cli/terminal/write);
+    2. immediately re-read + print the resulting screen.
+  Best-effort and DELIBERATELY un-validated: `--answer 4` just sends the
+  digit (exactly like a manual `terminal write <id> "4"`), it does NOT
+  check that option 4 exists or parse the menu — YOU still read the
+  re-printed screen to confirm. Structured-state (--json) and
+  option-name selection (--select) are a later wave.
+  --respond <y|n> is just an ALIAS of --answer for the standard
+  "1. Yes / 2. No" confirm ordering: y->1, n->2 (a number passes through).
+
+BATCH FORM (BETA, GH#8 #69) — collapse an N-question form to ~2 turns:
+  Claude's AskUserQuestion shows N questions CO-RESIDENT: ←/→ move
+  between them, a number key auto-selects + ADVANCES (no Enter), and the
+  last question lands on a "Review your answers" -> "1. Submit / 2.
+  Cancel" screen. So the whole form = N digits (one per question, each
+  auto-advancing) + a final `1` to submit.
+  --scout            Walk the form with ARROW KEYS ONLY (non-destructive),
+                     capturing every question+options, then return focus
+                     to Q1 UNMODIFIED — see the WHOLE form in one call.
+  --answers <a,b,c>  From Q1, send each digit (auto-advances), then the
+                     final `1` to submit; re-reads + prints the outcome.
+                     Warns if the count != the form's N (still proceeds).
+  Tunables (env-overridable): K2_TALK_NAV_SETTLE / K2_TALK_ANSWER_SETTLE
+  (settle seconds), K2_TALK_SUBMIT_KEY (submit key, default 1).
+
+ARGUMENTS
+  <workspace>    Workspace name (preferred), path, or UUID. Same
+                 addressing as `k2 msg` / `k2 read`.
+  "text"         The message body. Required unless --read-only or a
+                 drive flag (--answer / --respond) is used.
+
+OPTIONS
+  --read-only    Read + judge ONLY; send nothing. Use this to BACK OFF
+                 and re-check a HITL peer later. (aliases: --dry-run, --peek)
+  --answer <N>   BETA. Send key <N> to the resolved session, then re-read
+                 + print the resulting screen. Drives a numbered/menu HITL
+                 in one call. No message text needed.
+  --respond <y|n> BETA. ALIAS of --answer for a y/n confirm: maps y->1,
+                 n->2 (standard "1. Yes / 2. No" ordering); a number
+                 passes through. Sends the key, then re-reads + prints.
+  --scout        BETA. Surface a WHOLE multi-question form in one call:
+                 walks it with ARROW KEYS ONLY (non-destructive), captures
+                 every question, then returns focus to Q1 unmodified.
+  --answers <a,b,c>  BETA. Answer a form currently on Q1: send each digit
+                 (auto-advances), then a final 1 to submit; re-read +
+                 print the outcome. Warns if count != N (still proceeds).
+  --from <name>  Sender identity for the [from <name>] prefix (forwarded
+                 to `msg`; same default-derivation as `msg`).
+  --lines N      Lines of the peer's screen to read first. Default 50.
+  --agent <name> Read/target a specific agent's session in the workspace.
+  --command "<text>"  Slash-command prepended to the delivered message
+                 (forwarded to `msg`).
+  --no-wake      Do NOT auto-wake a dormant canonical session (talk wakes
+                 by default). With --no-wake a sleeping peer returns
+                 `dormant_no_wake` instead of being spun up.
+  --wake-timeout <secs>
+                 Ceiling for the post-wake readiness wait (default 20).
+
+EXIT CODE
+  Mirrors `k2 msg`: 0 when the message lands, 2 on a delivery failure.
+  --read-only always exits 0 (it only reads).
+
+EXAMPLES
+  k2 talk scout_v3 --read-only          # peek + judge; send nothing
+  k2 talk scout_v3 "ready when you are" # read its screen, then deliver
+  k2 talk MyApp "merged" --from ci-bot  # attributed delivery
+  k2 talk scout_v3 --answer 2           # BETA: pick menu option 2, see result
+  k2 talk scout_v3 --respond y          # BETA: confirm a y/n (y->1), see result
+  k2 talk scout_v3 --scout              # BETA: see a WHOLE multi-Q form at once
+  k2 talk scout_v3 --answers 1,2,1      # BETA: answer all 3 Qs + auto-submit
+
+RELATED VERBS
+  k2 msg <workspace> "text"     Deliberate blind send (no read).
+  k2 read <workspace>           Just read a peer's live terminal.

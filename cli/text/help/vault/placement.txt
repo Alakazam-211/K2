@@ -1,0 +1,19 @@
+k2 vault placement add NAME --where <host>:<path> [--note <text>] [--scope <s>] [--json]
+k2 vault placement done ID [--json]
+k2 vault placement rm ID [--json]
+k2 vault placements [NAME] [--scope <s>] [--json]
+
+Where a secret's value lives outside the vault. K2 records the systemd
+credentials it writes itself (k2 vault systemd-cred); add the places it
+doesn't write: another box, Vercel prod, a box without K2. No value is
+stored, only the place (at most 200 characters) and a note (500).
+After a rotate the doctor lists each place as due until you put the new
+value there and mark it: k2 vault placement done ID. Agents may keep
+these for their own workspace's secrets; systemd credential rows are
+people-only (k2 vault systemd-cred --remove).
+
+Examples:
+  k2 vault placement add INGEST_KEY --where vercel:prod/k2-web --note "Vercel prod env"
+  k2 vault placement add INGEST_KEY --where box3:/etc/credstore.encrypted/ingest_key.cred
+  k2 vault placements INGEST_KEY
+  k2 vault placement done 3f2a…

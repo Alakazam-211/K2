@@ -1,0 +1,5 @@
+Drop that extra address. Cannot remove the mailbox's primary mint
+address this way (use k2 hostmail delete).
+
+USAGE
+  k2 hostmail alias remove <mailbox> <alias> [--json]

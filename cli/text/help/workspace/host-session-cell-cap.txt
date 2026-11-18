@@ -1,0 +1,13 @@
+Usage: k2 workspace api-host-session-cap get|set <workspace> [n|default]
+       (alias: host-session-cell-cap)
+
+Per-workspace concurrent host-session (live cell) cap. Default is 15
+(overridable via env K2_SANDBOX_WORKSPACE_CELL_CAP). Max 512 (daemon
+ceiling so agents cannot set unbounded). Raising the cap is runway —
+agents still need `k2 done` to avoid accretion.
+
+  get <ws>              Print N, or "15 (default)" when inheriting
+  set <ws> <n>          Set concurrent live host-session cap (1..512)
+  set <ws> default      Clear override → inherit daemon default
+
+Also: POST /cli/workspace/set {"project":"…","fields":{"host_session_cell_cap":"64"|"default"}}

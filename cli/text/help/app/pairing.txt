@@ -1,0 +1,52 @@
+k2 app pairing — let people pair a custom App's own phone app by QR from
+the App's web page (no password typed on the phone). K2 serves the App's
+iOS and Android link files on its own k2.dev labels while pairing is on.
+
+  k2 app pairing status <app> [--json]
+                                       On or off, the phone apps, the hosts K2
+                                       pairs on, paired phones, the last check.
+  k2 app pairing setup <app> [--ios TEAMID.com.you.app]…
+                 [--android com.you.app:AB:CD:…[,AB:CD:…]]…
+                 [--host <app label host>]… [--native-origin tauri://localhost]…
+                 [--link-path '/jobs/*']… [--app-store URL] [--play-store URL]
+                                       Name the phone apps that open the App's
+                                       sign-in codes and turn pairing on. The
+                                       owner, in person: Touch ID, your login
+                                       or the vault password confirms it (from
+                                       a terminal outside K2). Every setup
+                                       replaces the last one.
+  k2 app pairing setup <app> --desktop-only [--native-origin tauri://localhost]…
+                 [--host <app label host>]…
+                                       An App with no phone app: turn pairing
+                                       on so its desktop app pairs with the
+                                       code the web App shows, typed in (K2
+                                       serves no link files; nothing opens the
+                                       QR). Same owner, same confirm, the same
+                                       checks. Not with --ios, --android or
+                                       --link-path. A Mac app that opens
+                                       universal links (Associated Domains)
+                                       can go under --ios TEAMID.bundle.id
+                                       instead, like an iPhone app.
+  k2 app pairing off <app>             Turn it off (the owner, an Admin or the
+                                       App's agent). Codes stop at once; phones
+                                       already paired stay signed in (end them
+                                       in k2 app people).
+  k2 app pairing check <app> [--json]  Fetch the link files from each host over
+                                       the internet (and Apple's CDN copy) and
+                                       compare them with what K2 serves.
+  k2 app pairing log <app> [--json]    The App's paired phones: when, who, the
+                                       device's name, the host, live or ended.
+
+v1 pairs on the App's own k2.dev labels. A custom domain works only when you
+front it to the label yourself. In your app, list each host exactly
+(applinks:jobs.you.k2.dev), never a wildcard. While pairing is on, K2 answers
+/.well-known/apple-app-site-association and /.well-known/assetlinks.json on
+those hosts: list the App's other universal-link paths with --link-path.
+
+Who: status and off: an Admin or the App's own agent ("Build and run Apps");
+log: the App's agent only when it may manage the App's users; setup and
+check: the owner in person (an agent asks with a permission card).
+
+The web App calls pairing.start / pairing.status; the phone (or desktop) app
+calls pairing.check, then pairing.redeem: k2 study app-pairing for the whole
+guide. K2 Companion's own phones are k2 users pair-phone (k2 users --help).

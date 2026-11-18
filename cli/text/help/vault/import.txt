@@ -1,0 +1,9 @@
+k2 vault import <.env file> [--scope ws:<name>|server] [--delivery env|file|fetch] [--remove-original] [--json]
+
+Move a .env's secret-looking values into the vault (the names k2 vault
+doctor flags) and write .env.k2 beside it: the same lines with k2v://
+references, safe to commit. Moved secrets use env delivery unless
+--delivery says otherwise, so tools still find $NAME in new sessions.
+The original stays unless --remove-original.
+
+Example: k2 vault import .env --remove-original

@@ -1,0 +1,7 @@
+DMARC report mailbox. show prints live _dmarc TXT plus
+reportAddressUri. report-to points Stalwart at a minted inbox and
+prints the rua= line to plant — it does not rewrite DNS. mail_manage.
+
+USAGE
+  k2 hostmail dmarc show <domain> [--json]
+  k2 hostmail dmarc report-to <domain> --address <minted> [--json]

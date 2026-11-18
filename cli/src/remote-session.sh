@@ -112,65 +112,7 @@ sys.exit(1)
 
 cmd_help_remote_session() {
     cat <<'EOF'
-k2 remote-session — owner/admin Remote Session surface (Layer 0 + grants + shell)
-
-Master switch defaults OFF. Drive (shell/write/read) is denied until enable.
-Grants mint a one-time k2rs_… token; shell PTYs and terminal I/O require a
-live grant (or owner break-glass on write/read).
-
-USAGE
-  k2 remote-session status [--json] [--host HOST] [--token-stdin | --token TOK]
-  k2 remote-session enable  [--host HOST] [--token-stdin | --token TOK]
-  k2 remote-session disable [--host HOST] [--token-stdin | --token TOK]
-  k2 remote-session grant [--scope shell] [--ttl 30m|1800] [--label "..."]
-                          [--host HOST] [--token-stdin | --token TOK]
-  k2 remote-session grants [--json] [--host HOST] [--token-stdin | --token TOK]
-  k2 remote-session revoke <grant-id> [--host HOST] [--token-stdin | --token TOK]
-  k2 remote-session shell [--cwd PATH] [--host HOST] [--token-stdin | --token k2rs_…]
-  k2 remote-session write <session-id> "text" [--token-stdin | --token k2rs_…] [--host HOST]
-  k2 remote-session read  <session-id> [--lines N] [--token-stdin | --token k2rs_…] [--host HOST]
-
-ADMIN (owner/admin token)
-  status     Layer 0 enabled?, active grants/sessions, recent denials
-  enable     Turn Remote Sessions ON
-  disable    Turn OFF and kill grant-bound shells
-  grant      Mint shell grant; prints token ONCE
-  grants     List grants (no secrets)
-  revoke     Revoke by id (kills bound shells)
-
-DRIVE (prefer a k2rs_… grant token, with --token-stdin)
-  shell      Spawn daemon-user login shell PTY under the grant
-  write      Inject text into a remote-session PTY (terminal/write)
-  read       Peek last N lines of a remote-session PTY (terminal/read)
-
-OPTIONS
-  --scope shell     Only scope implemented (default shell)
-  --ttl <dur>       Grant lifetime: 30m, 45m, 1h, 90s, or bare seconds (1800)
-  --label "..."     Optional human label on the grant
-  --cwd PATH        Working directory for shell spawn (default: daemon HOME)
-  --lines N         Lines for read (default 50)
-  --host HOST       Remote daemon (https://HOST or full URL). Reuses
-                    connect-tokens / --token-stdin / $K2_REMOTE_TOKEN like k2 talk.
-  --token-stdin     Read the token from stdin: owner/connect token (admin)
-                    or k2rs_… grant (drive)
-  --token TOK       The token on the command line, where other users on
-                    this machine can see it; prefer --token-stdin
-  --json            Machine-readable status / grants
-
-EXAMPLES
-  k2 remote-session enable
-  k2 remote-session grant --ttl 30m --label "lab overnight"
-  k2 remote-session shell --token-stdin          # paste the k2rs_… token
-  k2 remote-session write <session-id> "ls -la" --token-stdin
-  k2 remote-session read  <session-id> --lines 80 --token-stdin
-  k2 remote-session revoke rs_…
-  k2 remote-session status --host box.k2.dev   # owner token from connect-tokens
-
-EXIT CODES
-  0  ok
-  1  unexpected / transport
-  2  usage / bad request
-  3  teaching auth: REMOTE_SESSIONS_DISABLED, NO_GRANT, GRANT_*, owner_only
+%include cli/text/help/remote-session.txt
 EOF
 }
 

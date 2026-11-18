@@ -12,27 +12,7 @@ _ZEN_GUIDE_EXAMPLES="rail-top quiet-top bottom-bar menu-both texting-chrome menu
 
 _zen_guide_usage() {
     cat <<'EOF'
-Usage: k2 zen guide [<topic>] [--json]
-       k2 zen guide example [<name> [--toml]] [--json]
-       k2 zen guide example --list
-
-Short pages on building Zen Gardens. Works with no daemon running.
-
-Topics:
-  gardens  files  widgets  bands  required  menus  phone  themes  sync
-  examples  undo  safe-mode  api  services  libs
-
-  k2 zen guide                          the index (start here)
-  k2 zen guide <topic>                  one page
-  k2 zen guide <topic> --json           {"id","title","body"}
-  k2 zen guide example                  the example list
-  k2 zen guide example <name>           one example with notes
-  k2 zen guide example <name> --toml    the file only, ready to pipe:
-      k2 zen guide example bottom-bar --toml > ~/.k2/zen/gardens/<id>.toml
-  k2 zen guide example --list           bare example names
-  k2 zen guide example board-lite [--toml | --script]
-                                        a widget kept in its data, and the
-                                        agent's script beside it
+%include cli/text/help/zen/guide.txt
 EOF
 }
 

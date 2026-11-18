@@ -1,0 +1,11 @@
+k2 vault recovery status
+k2 vault recovery show-once     people only: make and show the recovery key once, type back 3 words
+k2 vault recovery rotate        people only: replace it (asks for a confirm)
+
+The recovery key opens the vault if this box's key is lost. Until one is
+confirmed, show-once asks for this computer's own user check (Touch ID or
+the Mac's password, Windows Hello, or on a Linux server an owner login's
+password); the words show only here, in the K2 app or over a Connect
+login. Agents: don't run show-once or rotate; tell your owner.
+
+Example: k2 vault recovery status

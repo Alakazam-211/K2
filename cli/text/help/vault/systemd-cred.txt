@@ -1,0 +1,63 @@
+k2 vault systemd-cred NAME --unit <unit.service> [--cred-name <id>] [--restart] [--dry-run] [--scope <s>] [--json]
+k2 vault systemd-cred NAME --unit <unit.service> [--cred-name <id>] --remove [--scope <s>] [--json]
+k2 vault systemd-cred NAME --replace [--dry-run] [--scope <s>] [--json]
+
+People only, on Linux (systemd 250+), from your own terminal or SSH (not a
+K2 terminal), with a confirm bound to exactly what you approve (the unit,
+the cred name, the restart flag; K2 prints it first). K2 seals the
+secret's current value as a systemd encrypted credential through the root
+helper and binds it to a unit K2 doesn't run (a root service, a timer):
+  /etc/k2/credstore.encrypted/<cred>.cred  (K2's own store; --with-key=auto)
+  /etc/systemd/system/<unit>.d/k2-cred-<cred>.conf
+      LoadCredentialEncrypted=<cred>:/etc/k2/credstore.encrypted/<cred>.cred
+The service reads $CREDENTIALS_DIRECTORY/<cred> (%d/<cred> in the unit).
+  --cred-name <id>  the credential's name (default: NAME; never a systemd
+                    namespace such as tmpfiles.*, sysusers.*, ssh.*)
+  --restart         queue systemctl try-restart after (at most every 30 s)
+  --dry-run         show what it would write and the confirm text
+  --remove          take it off: the drop-in, then the .cred
+  --replace         after a rotate: re-place the new version into every
+                    unit it is placed on (each keeps its own --restart)
+  --accept-agent-value   place a version no person wrote (an agent's
+                    rotate): review it first with k2 vault reveal NAME
+  --scope <s>       which secret of that name (ws:<name>, server, session)
+  --json            print the daemon's answer (with --dry-run: the plan)
+
+The confirm names the exact version and who wrote it ("v5, written by an
+agent of workspace ops, 3 min ago"); if the secret moves on before you
+confirm, nothing is placed. An Owner or Admin can place a value into any
+unit the box's admin listed. "Already loads" covers LoadCredential*,
+SetCredential* and ImportCredential= (with systemd 257's GLOB:RENAME); a
+credential source a later systemd adds is not checked.
+
+The box's admin chooses which units may get one, once, as root over SSH:
+  echo k2-watch.service >> /etc/k2-root-helper/systemd-cred-units
+(root:root 0644, one unit per line; or install-root-helper.sh --creds-unit
+k2-watch.service). Nothing else is allowed; K2's own units, core system
+units, templates (foo@.service) and aliases are always refused, as is a
+unit that already loads a credential with the same ID.
+
+A new version (rotate, set, an agent's rotate) never reaches the unit by
+itself: the placement goes stale, the owner is told, and a person runs
+--replace. A rollback re-places the restored value. The secret's ceiling
+must allow file delivery. k2 vault show, placements and doctor list it;
+destroying a secret doesn't take its credential off a box: remove it first.
+
+A unit that uses EnvironmentFile= with several variables: seal the whole
+file as one credential (k2 vault set CP_ENV --kind generic < file, every
+value in single quotes: KEY='value'), then a drop-in of your own:
+  [Service]
+  LoadCredentialEncrypted=k2c.env:/etc/k2/credstore.encrypted/k2c.env.cred
+  ExecStart=
+  ExecStart=/bin/sh -c 'set -a; . "%d/k2c.env"; set +a; exec /usr/local/bin/app'
+The file is shell code run by the unit: keep it a person-only secret.
+The ExecStart target must be on a filesystem mounted without noexec (on
+Ubuntu /run, and often /tmp, are noexec).
+Keep the old EnvironmentFile= until the unit runs on the credential (use
+a cred name that differs from the old file's), then remove both.
+
+Examples:
+  k2 vault systemd-cred INGEST_KEY --unit k2-watch.service --restart
+  k2 vault systemd-cred CP_ENV --unit k2-control-plane.service --cred-name k2c.env --dry-run
+  k2 vault systemd-cred INGEST_KEY --replace
+  k2 vault systemd-cred INGEST_KEY --unit k2-watch.service --remove

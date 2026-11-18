@@ -1,0 +1,88 @@
+File a feedback item asking a human for input. Returns immediately with the new
+item's id (the human answers later) — UNLESS you pass --wait, which blocks until
+the item is answered or resolved.
+
+The workspace and your session are auto-detected from the environment, so the
+human can jump straight into your session to talk to you if they prefer.
+
+USAGE
+  k2 tickets ask <title> [flags]
+
+ARGUMENTS
+  <title>                One-line summary of what you need (the notification text)
+
+FLAGS
+  --html <file|->        The HTML brief: Problem, What I tried, What I need
+                         from you, Options, Context. Agents must attach one
+                         (fyi is exempt). Start from `k2 tickets template`;
+                         `-` reads stdin. Max 1 MiB; the daemon cleans it.
+                         Missing: a warning or a refusal, per the owner's
+                         setting (`k2 tickets settings`).
+                         See `k2 study ticket-brief`.
+  --body <text>          Short plain summary (one or two sentences) that
+                         text-only readers see first
+  --body-file <file>     Read the summary from a file
+  --kind <kind>          question | approval | fyi   (default: question).
+                         fyi = no answer expected: it sits on the human's page
+                         until THEY dismiss/resolve it (or you resolve it
+                         yourself). --wait on a fyi is pointless.
+  --options <a,b,c>      Offer specific choices the human taps instead of typing
+                         (e.g. --options "Ship it,Hold,Needs changes")
+                         Escape a literal comma inside an option with \,
+  --priority <1-5>       1 = urgent … 5 = whenever   (default: 3)
+  --assign <users>       Who handles it: comma-separated users on this
+                         server (owner and/or Connect users, from
+                         `k2 connections list --users`). Assign every
+                         ticket: without one this server warns
+                         (assignee_required) or refuses, per the owner's
+                         setting (`k2 tickets settings`); a name that is
+                         not a user here is assignee_unknown. fyi is
+                         exempt. With no --assign, the owner's default
+                         assignee (if set) gets it. Narrows mobile push
+                         and shows on the ticket card. Alias: --to.
+  --wait                 Block until the item is answered, then print the BARE
+                         answer to stdout (exit 0) — safe for $(...) capture.
+                         A person answers by picking one of your options.
+                         If they write free text instead, the ticket goes to
+                         needs_discussion: their message prints to stdout,
+                         {"status":"needs_discussion"} to stderr, and the
+                         exit code is 5. Reply with `k2 tickets comment`,
+                         settle it, then `k2 tickets resolve <id> --answered
+                         "<outcome>"` (or plain `resolve`).
+                         If the item is resolved/dismissed WITHOUT an answer,
+                         stdout stays empty, a {"error":{"code":"closed_unanswered"}}
+                         prints to stderr, and the exit code is 1.
+  --timeout <seconds>    With --wait: give up after N seconds. On timeout stdout
+                         stays empty, {"error":{"code":"timeout"}} prints to
+                         stderr, exit 1 — and the item STAYS open (waiting); the
+                         human can still answer and you can read it later with
+                         `show`. Always check the exit code before trusting a
+                         captured answer.
+  --file <path[:line[-end]]>
+                         Attach a workspace file to the ask (repeatable, at
+                         most 10). A pointer, not a copy: the person sees it
+                         under your message (images as pictures) and opens
+                         it from there. A path that exists here is sent
+                         absolute; anything else resolves against the
+                         ticket's workspace. Secrets (.env, keys, tokens in
+                         the text) are refused; use k2 vault. With --wait,
+                         files on the answer print one stderr line
+                         ("1 file attached: k2 tickets show <id>"); stdout
+                         stays the bare answer, and your session got
+                         "Attached: <abs path>" lines.
+  --json                 JSON output (with --wait: {answer, attachments}
+                         with absolute paths)
+
+BRIEF ERRORS (exit 2, JSON on stderr)
+  brief_required · brief_empty · brief_too_large · brief_invalid
+  Warnings print as {"warning":{"code","hint"}} on stderr and keep exit 0
+  (brief_missing, brief_sanitized, brief_no_need, brief_not_stored,
+  assignee_required, assignee_unknown).
+
+EXAMPLES
+  k2 tickets template > brief.html
+  k2 tickets ask "Deploy to prod now?" --html brief.html --assign owner --kind approval --options "Yes,No,Wait for me" --priority 1
+  k2 tickets ask "Which color for the CTA?" --html brief.html --body-file ./summary.md --assign owner
+  k2 tickets ask "Review the sales pricing" --html brief.html --assign julie --priority 2
+  k2 tickets ask "Which logo?" --html brief.html --assign owner --options "A,B" --file out/a.png --file out/b.png
+  ANSWER=$(k2 tickets ask "Proceed with the migration?" --options "Go,Stop" --wait)

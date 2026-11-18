@@ -1,0 +1,70 @@
+k2 mail reader — open this server's inboxes as a person (Owner, Admin, or your own mailbox)
+
+For people, not agents (an agent gets exit 3 and uses the rest of k2 mail).
+The Owner and Admins open every inbox here: agents' and people's, hosted and
+linked. A Member login opens only their own mailbox; any other inbox answers
+"not found" (exit 1), as if it didn't exist. Opening a message never marks it
+read. Every access is logged with who, when and which message (never its
+content), and the mailbox's person isn't notified.
+
+USAGE
+  k2 mail reader <command> [args] [flags]
+
+READ
+  inboxes                         The inboxes you can open (yours marked "you")
+  folders <inbox>                 An inbox's folders
+  messages <inbox>                Newest first, 50 a page (--limit up to 100).
+                                  --folder <name> --unread --query <text>
+                                  --from <text> --since <d> --before <d>
+                                  --offset <n> (the "more:" line gives the next)
+  show <message-id>               One message, plain text (--html for the cleaned HTML)
+  thread <message-id>             The message and its thread, oldest first
+  attachment <message-id> <n> --out <file>
+                                  Save attachment n (1-based, up to 25 MB)
+  log                             Who opened what, newest first (100; --limit up to
+                                  500): --inbox <address> --actor <login> --since <d>.
+                                  Owners and Admins see every row; you see the rows
+                                  about your own mailboxes
+
+ACT (as the inbox's own workspace: its level and send rules apply)
+  flag <message-id> --read|--unread|--star|--unstar
+  move <message-id> <folder>      archive <message-id>      delete <message-id> (to Trash)
+  reply <message-id> --body <text>               (--body - < reply.txt for a file)
+  draft <message-id> --body <text>               (a reply draft)
+  draft --inbox <address> --to <a> --subject <s> --body <text>
+  send --inbox <address> --to <a> [--cc <a>] --subject <s> --body <text>
+                                  The workspace's send rule decides: off refuses
+                                  (exit 3), approval queues it for the owner (prints
+                                  "send pending", exit 0), on sends. No attachments yet
+
+DRAFTED REPLIES (an agent's 'k2 mail draft <id>', or yours; 'thread' shows them first)
+  drafts <inbox>                  The drafts K2 tracks in an inbox (d_… ids) and
+                                  what became of each: waiting, edited, sent, held
+                                  (waiting for approval), discarded
+  draft-show <draft-id>           One draft: who drafted it, To, Cc, Subject, text
+  draft-save <draft-id> [--to <a>] [--cc <a>] [--subject <s>] [--body <text>|-]
+                                  Change it; what you leave out stays as it is
+  draft-send <draft-id> [same flags as draft-save]
+                                  Send it, by the same send rule as 'send': off
+                                  refuses (exit 3, the draft stays); approval
+                                  queues it for the owner (Settings → Cores →
+                                  Email Hosting → Approvals, or k2 hostmail
+                                  approvals) and the
+                                  draft shows "held"; on sends. Either way it
+                                  leaves Drafts; once sent it joins the thread
+  draft-discard <draft-id>        Remove it from Drafts (hosted: deleted; linked: Trash)
+                                  The agent that drafted it is told what you did
+
+FLAGS (every command)
+  --reason <text>   Why you're looking; kept in the log row
+  --json            The daemon's JSON answer
+
+  <d> is YYYY-MM-DD or an age: 30m, 24h, 7d, 2w. <inbox> is an address from
+  'k2 mail reader inboxes'; message ids (m_…) come from 'messages'. --body -
+  reads the text from stdin.
+
+EXIT CODES
+  0 ok (a send queued for approval is ok)   1 error, or no such inbox/message
+  2 bad usage   3 refused: you're an agent (owner_only), or the inbox's workspace
+                may not do that (not_allowed / gated; the error says the fix)
+More: k2 study mail-reader

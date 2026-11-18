@@ -1,0 +1,12 @@
+k2 vault carry export --recipient <age1…> --target <vault-id> --workspace <ws> [--target-workspace <id>] [--server NAME] [--own-box-move] --out <file>
+k2 vault carry import <file> [--workspace <id>] [--apply] [--json]
+
+Move secrets to another box (owner, Admin, or an agent allowed to manage
+server-wide secrets). export seals them so only the target vault opens
+them; import lists first and changes nothing until --apply. Workspace
+secrets land by workspace id on the new box, never by name.
+
+Example:
+  new box: k2 vault recipient
+  old box: k2 vault carry export --recipient age1… --target <vault-id> --workspace web --out carry.age
+  new box: k2 vault carry import carry.age --workspace <id> --apply

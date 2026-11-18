@@ -1,0 +1,9 @@
+Add a hostname under an attached apex (dns_manage). Apex must already
+be on this server (`k2 domain add` is owner). Then `k2 cert issue`.
+
+--external (with --role app:<name>): your own web server serves this
+name, not K2's front; the App treats it as its origin from its next
+start (k2 app restart <name>). Same as k2 app domain add … --external.
+
+USAGE
+  k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--external] [--json]

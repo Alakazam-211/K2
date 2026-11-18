@@ -1,0 +1,4 @@
+Print the domain catch-all address, or none.
+
+USAGE
+  k2 hostmail catchall show <domain> [--json]

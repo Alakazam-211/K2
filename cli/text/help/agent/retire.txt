@@ -1,0 +1,21 @@
+Safely decommission an agent. Retire NEVER deletes: the agent's folder is
+archived, its registration and connections are removed.
+
+SAFETY GUARDS — retire REFUSES (exit 3) instead of asking, when it finds:
+  * uncommitted or unpushed git work in the agent's folder
+  * likely secrets (.env files, key material) in the agent's folder
+Pass --force to proceed anyway. Use --dry-run to preview.
+
+An agent that is a project's Point of Contact cannot be retired at all
+(poc_of_projects — NOT --force-overridable): reassign the PoC first with
+`k2 project poc <project> <successor>`. Plain project memberships are
+removed automatically as part of retirement.
+
+USAGE
+  k2 agent retire <name> [flags]
+
+FLAGS
+  --archive-to <dir>      Where to move the folder (default: ~/.k2/archive/<name>-<date>/)
+  --force                 Override the safety guards
+  --dry-run               Show what would happen; change nothing
+  --json                  JSON output

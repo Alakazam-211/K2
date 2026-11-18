@@ -1,0 +1,21 @@
+Who owns the mail certificate: K2 or Stalwart's own ACME.
+
+USAGE
+  k2 hostmail cert owner [--json]
+  k2 hostmail cert owner --stalwart-acme [--json]
+
+OWNERS
+  k2             The mail host is attached in `k2 domain` (role mail) and
+                 the mail certificate is the one K2's issuer planted. K2
+                 renews it; Stalwart ACME is Manual for that domain.
+  stalwart-acme  The mail host is not attached. Stalwart's ACME renews it;
+                 K2 locks the name list to the mail host only.
+  unknown        Attached, but no K2-planted certificate yet:
+                 `k2 hostmail cert renew` issues and installs it.
+
+--stalwart-acme
+  Hand the certificate back to Stalwart's ACME, ordering the mail host
+  only (Manual → Automatic; Stalwart queues one order). Refused while K2
+  owns it — first `k2 domain name remove <mail host>`. K2 never flips it
+  back by itself. One Stalwart setting, no restart; never
+  `k2 hostmail disable/enable`. Owner/admin only.

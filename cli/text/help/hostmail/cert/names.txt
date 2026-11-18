@@ -1,0 +1,50 @@
+Per-name certificates for the extra mail names: autoconfig, autodiscover,
+mta-sts and ua-auto-config under each hosted domain (never the apex, never
+www). Each name gets its OWN certificate — never a SAN on the mail
+certificate, never Stalwart's ACME — so one bad name cannot cost mail its
+certificate. The mail host's certificate stays Stalwart's default, so
+clients without SNI keep getting it.
+
+A MAIL HOST ON ANOTHER DOMAIN is not an extra name. For mail.<apex>, with its
+A record pointing at this server:
+  k2 domain name add mail.<apex> --role mail
+  k2 cert issue mail.<apex>
+It gets its own certificate, served to clients that ask for that name. K2
+loads and renews it. The default stays on the mail host in `k2 hostmail
+status`; `k2 hostmail doctor` checks that (default-cert). Receiving mail for
+the domain is separate: `k2 hostmail domain add <apex>`.
+
+USAGE
+  k2 hostmail cert names [list] [--json]
+  k2 hostmail cert names issue [--name <host>] [--json]
+  k2 hostmail cert names renew [--name <host>] [--json]
+
+  list    GET /cli/mail/cert/names: per name, does it point here (its A
+          records are this box; any AAAA is the mail host's) and the state
+          of its certificate.
+  issue   POST /cli/mail/cert/names: for every name that points here (or
+  renew   just --name), order a certificate when it has none or it expires
+          within 30 days. issue and renew are the same run. Names that do
+          not point here are skipped; a certificate already in Stalwart for
+          a name whose DNS moved is left to expire (never deleted on a DNS
+          answer). One name failing never affects the others.
+
+ISSUER
+  K2's own DNS-01 issuer on a K2-hosted zone (ns1/ns2.k2.dev). A zone on
+  other DNS gets no per-name certificate (the doctor says so).
+
+LOADING
+  Stalwart reloads its certificates in place (ReloadTlsCertificates). Only
+  if that fails does K2 restart Stalwart (the mail helper, else
+  `sudo -n systemctl restart stalwart`). Never hostmail disable/enable.
+
+RENEWAL
+  The daemon renews names it issued before once fewer than 30 days remain
+  (hourly check, DNS re-checked, per-name backoff 1h/6h/24h, skipped under
+  air-gap); the superseded certificate is removed after the reload. `renew`
+  retries by hand; the doctor warns 14 days before expiry or after a failed
+  attempt. Owner/admin only, like cert renew.
+
+FLAGS
+  --name <host>          One extra name (issue|renew only)
+  --json                 JSON output

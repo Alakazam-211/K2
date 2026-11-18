@@ -1,0 +1,39 @@
+k2 connections [list|add|remove] [workspace-name] [--json] [--users]
+
+Manage this workspace's connections to other workspaces (agents).
+
+  list [--json] [--users]  List connections for this workspace (exit 0).
+                    --users also prints humans on this host (do not k2 msg those names).
+  add <name>        Connect to another workspace (name, path, or <agent>::<host>)
+                    Legacy <agent>@<host> still accepted.
+  remove <name>     Disconnect from a workspace
+
+AGENT GATE (create / remove)
+  Adding and removing connections is OFF by default for agents.
+  When gated, both `add` and `remove` exit 3 with:
+    {"error":{"code":"agents_create_connections_disabled","hint":"…"}}
+  Owner can turn on: Settings → Network → Tunnel → Policies → "Agents can add connections"
+  (or Settings → Workspaces / Agents → <workspace> → Connections → "Let this agent add
+  connections"). `list` is always allowed.
+
+MSG / READ PEER GATE
+  Live `k2 msg`, tray `k2 msg --inbox-wake|--inbox-silent`, and `k2 read` require a local
+  connection to the target (or same-workspace). Unconnected peers
+  return exit 3 with code `not_connected` — add them here first.
+
+HANDLES ARE NEVER REUSED
+  A connection to <agent>::<host> is to that WORKSPACE, not to the name.
+  Handles are never given to another workspace (a removed workspace's
+  handles are retired for good). If the workspace leaves the other host,
+  `list` marks the connection GONE and sends fail with
+  `remote_workspace_gone`; it never moves to a new workspace that has
+  the name. Only your human (owner or admin) can `add` it again to
+  connect to whichever workspace has that name now.
+
+EXAMPLES
+  k2 connections list
+  k2 connections list --json
+  k2 connections list --users
+  k2 connections add "QA Bot"
+  k2 connections add peer::other.k2.dev
+  k2 connections remove scout

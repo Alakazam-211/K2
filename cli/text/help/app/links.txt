@@ -1,0 +1,53 @@
+k2 app links — "open in app" links for an App's own iOS and Android apps.
+K2 serves the two link files (/.well-known/apple-app-site-association and
+/.well-known/assetlinks.json) on every host of the App, with or without phone
+pairing (k2 app pairing). With pairing on too, its apps and paths and these
+are served in the same two files.
+
+  k2 app links <app> [--json]          The phone apps, the paths (each with the
+                                       date K2 first served it), the hosts,
+                                       on/off.
+  k2 app links set <app> [--ios TEAMID.com.you.app]…
+                 [--android com.you.app:AB:CD:…[,AB:CD:…]]…
+                 [--path '/tickets/*']… [--path '/messages?addr=*']…
+                 [--drop '<path>']… [--json]
+                                       Name the phone apps and the paths they
+                                       open, and turn the files on. Each set
+                                       replaces the whole list: give every
+                                       --ios, --android and --path again. A set
+                                       that leaves out a path already set is
+                                       refused (link_path_dropped) unless
+                                       --drop names it, written as k2 app links
+                                       shows it (query pairs sorted by name):
+                                       phones and Apple's CDN keep the old
+                                       file for days. An app left out is
+                                       removed. Quote paths so the shell
+                                       keeps * and ?.
+  k2 app links off <app>               Stop serving them (the apps and paths
+                                       stay; set turns them on again).
+  k2 app links check <app> [--json]    Fetch both files from each host over the
+                                       internet (and Apple's CDN copy) and
+                                       compare them with what K2 serves. The
+                                       owner only; the last result shows in
+                                       k2 app links <app>.
+
+Paths: a path (A-Z a-z 0-9 . _ ~ * / -, never under /.well-known/), and an
+optional query pattern after ?: name=value pairs joined by &, where * in a
+value matches anything. /messages?addr=* opens /messages?addr=… links in the
+app (iOS 14 and newer; older iOS matches the path alone). At most 20 paths.
+
+--android takes the package, a colon, then the full SHA-256 fingerprint of
+the certificate that signs the app as installed (from Play: the app signing
+key), colons and all; several fingerprints are comma separated.
+
+In your app, list each host exactly (applinks:jobs.you.k2.dev, and each
+custom domain you add), never a wildcard. K2 answers those two paths in
+front of the App, so an App whose manifest says host.clientIp: false (its
+connections reach it raw) can't have them: refused with needs_k2_front.
+
+Who: every form needs the owner, an Admin, or the App's own agent with the
+workspace's "Build and run Apps" switch (Settings → Workspaces / Agents → <agent> →
+Permissions → Apps); check is the
+owner's. Every change is recorded in the App's deploy audit. Exit codes: 0
+ok, 2 bad usage, 3 refused (JSON with a code on stderr); check exits 1 when a
+host serves a different file.

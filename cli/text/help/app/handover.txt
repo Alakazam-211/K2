@@ -1,0 +1,8 @@
+usage: k2 app handover <app> --to <workspace> [--brief FILE] [--dry-run]
+         [--db share|wait] [--collisions keep|use_b] [--reset-shared] [--copy-source] [--reason TEXT]
+       k2 app handover accept|decline|cancel|undo|finish|rekey <app> [--reason TEXT]
+       k2 app handover status [<app>] [--detail]
+       k2 app handover brief <app>
+  The App's own agent offers it (the agent that takes it accepts); the
+  owner approves one card in person. Run by the owner outside K2, it
+  files the card and asks for the confirm. --dry-run shows what would move.

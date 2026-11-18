@@ -1,0 +1,22 @@
+k2 app — room members, and an App's own self and usage (0.46.1)
+
+  k2 app members [<room>] [--app <app-id>|host|all] [--json]
+                                       Who holds a grant on the room: guests and
+                                       agent logins with their role and caps,
+                                       from grants (not who is online). Connect
+                                       logins are one line, "admins of this
+                                       box". The owner and admins: any room. An
+                                       agent: its own room (no <room> needed).
+  k2 app room-names <room> hide|show   Owner, outside K2: hide guests' names
+                                       from Apps in that room's member list.
+                                       The owner and Gardens still see them.
+  k2 app self <app-id> [--json]        The App: its live Seed, health and when
+                                       its live deployment went live.
+  k2 app usage <app-id> [--hours N] [--json]
+                                       Its quotas, live connections and its
+                                       per-call counts from its own audit
+                                       (default the last 24 hours, at most 720).
+
+An agent reads its own workspace's Apps. Apps read the same through their
+gateway: room.members (cap room:members), app.self and app.usage (their own
+App only). More: k2 study app-surfaces.

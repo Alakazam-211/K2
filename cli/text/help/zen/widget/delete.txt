@@ -1,0 +1,16 @@
+Usage: k2 zen widget delete <name> [--json]
+
+Delete a custom widget (~/.k2/zen/widgets/<name>/) that no Garden places.
+While any Garden places it, K2 refuses and names those Gardens: take it off
+each Garden's page first. Nothing is lost: its code is kept as a history
+snapshot and the whole folder (images and fonts too) beside it, and the
+answer prints the undo:  k2 zen reset --widget <name> --to <snapshot>.
+Its data and its last good version stay. K2's built-in widgets (k2:<name>)
+can't be deleted.
+
+Who may delete: the person (outside K2), or an agent with "Manage Gardens
+and data sources" (with Garden access on: as for put, a widget placed
+nowhere is open). Any other agent is refused (person_only, exit 3).
+
+Exit: 0 deleted · 1 refused (still placed) · 2 usage ·
+3 Zen isn't set up / not allowed · 4 no such widget.

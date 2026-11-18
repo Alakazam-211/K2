@@ -1,0 +1,9 @@
+List DNS zones for the connected K2 account.
+
+USAGE
+  k2 dns list [--json]
+
+Requires DNS manage allowed for this workspace (else exit 3).
+
+FLAGS
+  --json                 JSON zones list

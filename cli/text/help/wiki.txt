@@ -1,0 +1,51 @@
+k2 wiki — per-workspace knowledge base (brain map)
+
+Vault: <workspace>/.k2/wiki/  (Markdown + YAML frontmatter + [[wikilinks]])
+Index + optional localhost site live in the daemon (headless-safe).
+Publish reuses k2 publish subdomain (nested label.user.k2.dev → 127.0.0.1:port).
+
+USAGE
+  k2 wiki status [--json] [project]
+  k2 wiki index [--json] [project]
+  k2 wiki note <id> [--json] [project]
+  k2 wiki seed [project]
+  k2 wiki serve on|off [--port N] [project]
+  k2 wiki chat off [project]
+  k2 wiki publish [--label LABEL] [project]
+  k2 wiki unpublish [project]
+
+COMMANDS
+  status     Local serve state + published label (if any); public chat is always off
+  index      Full graph index (nodes, links, noteCount)
+  note       Fetch one note body by stable id (wiki-relative path, e.g. Home.md)
+  seed       Create seed notes Home.md + _Index.md when missing
+  serve      Toggle read-only localhost SPA (binds 127.0.0.1 only)
+  chat       Public chat is unavailable — it is coming back with the K2 runtime.
+             `chat on` exits 3 (public_chat_unavailable); `chat off` still works.
+  publish    Turn serve ON, then create/point a nested subdomain (or print the command)
+  unpublish  Turn serve OFF and print how to remove the nested subdomain
+
+HOSTING
+  Hosting is being rebuilt on the K2 runtime (hidden in the desktop app).
+  serve/publish/unpublish keep working here. The site answers only its own
+  loopback host:port or its published subdomain (no CORS), never shows
+  absolute paths or dot-folder notes, and publishes every other note in
+  .k2/wiki/ — unpublish anything you don't want public.
+
+PROJECT
+  Optional [project] / --workspace / --project: workspace path, name, or uuid.
+  Default: current workspace (K2_PROJECT_PATH / walk-up from CWD).
+
+EXAMPLES
+  k2 wiki seed
+  k2 wiki index --json
+  k2 wiki note Home.md
+  k2 wiki serve on --port 7420
+  k2 wiki publish --label brain
+  k2 wiki status --json
+  k2 wiki unpublish
+
+SEE ALSO
+  k2 publish subdomain create <label> --target 127.0.0.1:<port>
+  k2 publish subdomain rm <label>
+  k2 publish --help

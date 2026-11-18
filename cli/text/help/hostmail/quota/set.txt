@@ -1,0 +1,7 @@
+Patch a hosted mailbox's Stalwart Account quotas (maxDiskQuota /
+maxEmails). mail_manage. 0 = unlimited. Existing boxes need this —
+mint constants do not retrofit. Give --bytes or --gb (not both) and/or
+--messages.
+
+USAGE
+  k2 hostmail quota set <addr> --bytes N|--gb N [--messages N] [--json]

@@ -1,0 +1,25 @@
+k2 vault proxy-url NAME [--scope session|server|ws:<name>] [--ttl 2h] [--json]
+
+From a K2 terminal: a placeholder key and a loopback base URL for one
+secret, so an SDK or script can use it and never hold the real key. Prints
+two lines, ready for the environment:
+
+  ANTHROPIC_API_KEY=k2v_ph_…
+  ANTHROPIC_BASE_URL=http://127.0.0.1:<port>/p/k2v_ph_…/anthropic
+
+K2 takes the placeholder out of each request, adds the real key the way the
+secret says, and calls the secret's one site. Responses stream back; an echo
+of the key comes back as [k2v:NAME]. Works for any secret you may fetch that
+has exactly one site (several sites: use k2 vault fetch).
+
+The placeholder ends with this session (a daemon restart doesn't end it) or
+at --ttl (90s, 10m, 1h, 7d). A process on this machine that gets hold of it
+can call that one site through K2 until then, but never sees the key. Put it
+only where an API key goes: in a query or path K2 refuses with 400
+placeholder_misplaced rather than send it. A request body may hold it (a
+chat history can); K2 passes the body on unchanged and never fills it in.
+
+New sessions get these two variables by themselves when a secret's delivery
+is proxy (k2 vault delivery NAME proxy, or grant --as proxy).
+
+Example: set -a; eval "$(k2 vault proxy-url ANTHROPIC_KEY)"; set +a; python3 ask.py

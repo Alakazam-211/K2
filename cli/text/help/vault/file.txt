@@ -1,0 +1,28 @@
+k2 vault file NAME [--scope session|server|ws:<name>] [--ttl 90s] [--wait 10m] [--json]
+k2 vault file --done <path> [--json]
+
+From a K2 terminal: the value of NAME, as is, in a short-lived 0600 file
+in a memory-backed folder; prints the path. For a secret delivered to you
+as a file (or env), e.g. one another agent handed you: a tool reads it
+from the file or its stdin, so the value never goes on a command line
+(ps shows command lines to every user) or into your transcript.
+Removed after --ttl (90s, 10m or seconds; default 60s, 5s to 1h) or with
+--done; a `< file` redirect opens it at once, so a sudo prompt after that
+is fine. --secret NAME works too. Fetch-only secrets are refused (use k2
+vault fetch); the refusal says who can widen it.
+
+--wait 10m (90s, 2h, at most 24h): if the secret isn't there yet and an
+open Thread card for NAME was asked by this session or is in the chat it
+runs, block until a person saves it and print the path. --ttl starts when
+the file is written. Exit 4 at once if no open card asks for NAME (ask with
+k2 thread secret). Exit 5 when the card closed without a value:
+card_dismissed (a person dismissed it; the line says who and why) or
+card_withdrawn (it was withdrawn with k2 thread withdraw). Exit 3, and the
+error line says which: card_expired, no_answer (your time ran out; the card
+stays open and the line names it), or card_declined (an older K2 server's
+word for a dismissed card). Example:
+some-cli login --code-stdin < "$(k2 vault file CODE --wait 10m)"
+A one-time code (k2 thread secret --once) is read here once, then deleted.
+
+Example: sudo k2-node servers add --url URL --code - < "$(k2 vault file ENROLL_CODE)"
+Example: some-cli login --token-stdin < "$(k2 vault file API_TOKEN)"

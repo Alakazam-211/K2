@@ -1,0 +1,10 @@
+Show the DAV policy (calendars on/off, files on/off, default or set),
+whether calendar clients can reach CalDAV on this box, the discovery
+url, and why not. reachable = Stalwart owns :443 (tls-alpn plan) or
+K2's Caddy serves the mail host; otherwise the reason names the paths
+your proxy must forward (/.well-known/caldav, /.well-known/carddav,
+/dav/ → https://127.0.0.1:8443). GET /cli/mail/dav. Owner/admin.
+Auth bans: `k2 hostmail bans list` / `k2 hostmail allowlist`.
+
+USAGE
+  k2 hostmail calendar status [--json]

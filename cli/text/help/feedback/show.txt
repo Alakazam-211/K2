@@ -1,0 +1,23 @@
+Show one feedback item: the ask, its status/answer, and the full discussion
+thread. Use it to read the answer after `ask` returned (or after a --wait
+timed out).
+
+USAGE
+  k2 tickets show <id> [flags]
+
+ARGUMENTS
+  <id>                   A feedback id from `ask`/`list`. A short unique prefix
+                         works; an ambiguous prefix fails (exit 4) listing the
+                         matching candidates in the hint.
+
+FLAGS
+  --html                 Print ONLY the ticket's cleaned HTML brief to stdout
+                         (k2 tickets show <id> --html > brief.html). No brief:
+                         exit 1, {"error":{"code":"no_brief"}}, empty stdout.
+  --json                 JSON output (includes the comments array, each with
+                         its id and attachments; the brief HTML only with
+                         --html)
+
+Without --html, show prints the body, a "brief : HTML, <size>" line, and the
+brief's plain-text extract (first 40 lines). Each message's files print under
+it: "[file] <abs path> (240 KB)", plus "(changed since sent)" or "(gone)".

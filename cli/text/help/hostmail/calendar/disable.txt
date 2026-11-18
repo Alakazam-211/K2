@@ -1,0 +1,8 @@
+Deny CalDAV + CardDAV, JMAP calendars/contacts, and calendar
+scheduling/alarm sending for every hosted address (user logins only —
+the daemon's own access is unaffected). First run also turns WebDAV
+files off unless --files on. POST /cli/mail/dav {action:"disable",
+files?}. Owner/admin. Never restarts Stalwart. Resets on uninstall.
+
+USAGE
+  k2 hostmail calendar disable [--files on|off] [--json]

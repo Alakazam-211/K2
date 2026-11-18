@@ -1,0 +1,48 @@
+Save a DRAFT into an inbox's Drafts folder. It never sends. Two forms:
+
+  Reply draft (any inbox you have 'draft' on: K2-hosted, or a linked
+  Gmail/IMAP/Microsoft 365 account): threaded onto the message (In-Reply-To,
+  References, "Re:" subject, addressed to its sender; with --reply-all, to
+  everyone on it too). It shows at the top
+  of its thread in K2's Mail page, marked "Draft, not sent", where a person
+  can edit it, send it (by your workspace's send rule) or discard it.
+  'k2 mail drafts' shows what became of it.
+
+  Compose draft (linked inboxes only): a brand-new To/Subject in your
+  human's own Gmail/IMAP Drafts, for them to finish in their mail client.
+
+Sending yourself is 'k2 mail reply' / 'k2 mail send' (level 'send' and the
+workspace's Sending rule). A hosted reply draft takes no --attach yet (it
+answers a usage error, exit 2): draft the text, and if a file must go,
+send it yourself with 'k2 mail reply <id> --attach <path>' or ask your
+human. Your level on each inbox (read < draft < send): 'k2 mail inboxes'.
+
+USAGE
+  k2 mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>] [--json]
+  k2 mail draft --reply-to <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--json]
+  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>] [--json]
+
+ARGUMENTS
+  <message-id>           Reply form: a message id from 'k2 mail messages'
+                         (mutually exclusive with --to/--subject)
+
+FLAGS
+  --reply-to <id>        Reply form, spelled as a flag (same as <message-id>)
+  --reply-all            Reply form: also address everyone on the original
+                         (its To join the draft's To, its Cc the draft's Cc),
+                         without your own inbox's addresses and repeats
+  --to <addr>            Compose form: recipient (repeatable)
+  --subject <s>          Compose form: subject (required with --to)
+  --cc <addr>            Cc (repeatable or comma-separated). On a reply draft
+                         it adds to the reply's recipients.
+  --bcc <addr>           Bcc (repeatable or comma-separated). Saved as the
+                         draft's Bcc; the mail client keeps it blind when
+                         the draft is sent. to + cc + bcc max 10.
+  --from <linked-addr>   Compose: which linked inbox (required when several)
+  --body <text>          The draft text
+  --body-file <f>        Read the draft text from a file
+  --attach <path>        Workspace-relative file to attach (repeatable; 10 / 25MiB;
+                         linked inboxes only)
+  --json                 JSON output ({ok,id?,draftId?,address,folder,hint}):
+                         id = the message the draft answers (m_…); draftId =
+                         the draft itself (d_…), as 'k2 mail drafts' lists it

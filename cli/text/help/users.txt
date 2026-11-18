@@ -1,0 +1,130 @@
+k2 users — local daemon connect-user accounts
+
+USAGE
+  k2 users                      List accounts (username, name, role,
+                                disabled, PASSWORD, created). PASSWORD is
+                                "temporary" while the person still has to
+                                choose their own, else "-"
+  k2 users list [--json]        Same as above; --json adds firstName,
+                                lastName, displayName (names are display
+                                only — commands take the username) and
+                                mustChangePassword (true = temporary)
+  k2 users add <username> [--role owner|admin|member|voice_chat] [--password-stdin] [--keep-password]
+                [--share-agent <agent>]... [--share-garden <garden>]... [--share-source <name>]...
+                [--fixed-password|--no-fixed-password] [--force]
+                                Create an account; prompts for password
+                                (hidden) + confirm. The password is
+                                TEMPORARY: at their first sign-in K2 asks
+                                the person to choose their own. Making a
+                                login for yourself? Add --keep-password
+                                (K2 can't tell it's yours yet). Default
+                                role is member. owner/admin are set right
+                                after the account is made; member and
+                                voice_chat are made at that role. A
+                                member is a trusted operator.
+                                voice_chat ("Voice & Chat only") can only
+                                join this server's voice rooms, plus what
+                                you share with it: --share-agent (their
+                                own conversation with that agent; repeat
+                                for more) and
+                                --share-garden (a Garden, read-only on a
+                                phone; id or name) and --share-source (a
+                                data source such a Garden may show).
+                                Nothing else: no terminals, agents, files,
+                                settings, vault. Share ONLY a dedicated
+                                demo agent: K2 refuses one with
+                                connections, vault grants, mail, compute,
+                                no permission prompts or a switch that
+                                reaches past its Thread unless --force.
+                                Each person gets their own conversation
+                                with it, delivered as a guest, but the
+                                agent's memory is shared by every login
+                                and its own Thread: never use that
+                                agent's Thread yourself, and give each
+                                reviewer their own login. A voice_chat
+                                password is fixed and kept by default
+                                (they can't change it; a wrong guess
+                                locks only their own address):
+                                --no-fixed-password lets them change it.
+                                For other limited access use an app pass
+                                (k2 app).
+  k2 users set-role <username> owner|admin|member|voice_chat [--fixed-password|--no-fixed-password]
+                                Change a login's role. Owner: any change.
+                                Admin: only member <-> voice_chat. A
+                                change into or out of voice_chat applies
+                                at once with no sign-out; others sign the
+                                person out. Moving someone to voice_chat
+                                ends their paired phones.
+  k2 users share <username> [--agent <agent>]... [--garden <garden>]... [--source <name>]... [--force] [--clear] [--json]
+                                Set what a voice_chat login can use (it
+                                REPLACES the list): agents by address (a
+                                dedicated demo agent only; --force to
+                                share another, with warnings), Gardens by
+                                id or name, data sources by name. No
+                                flags: show it. Admin or owner.
+  k2 users set-password <username> [--password-stdin] [--keep-password]
+                                Reset someone's password (owner only);
+                                prompts like add. Signs them out
+                                everywhere. TEMPORARY like add, except on
+                                a login linked to you as the owner
+                                (Settings → General → Your account), which
+                                keeps it with no flag. --keep-password:
+                                the person keeps the password you typed.
+  k2 users audit [--tail N] [--json]
+                                Last N auth-audit records (login,
+                                change-password, logout, set-password,
+                                add-user), each with its time, outcome,
+                                user, ingress, ip and client. Owner only.
+                                Default 50, max 1000. ~/.k2/auth-audit.jsonl
+  k2 users set-can-clone <username> on|off
+                                Settings → Admin Access → "Can clone" (owner
+                                only). Owners can always clone.
+  k2 users unlock <username> [--json]
+                                Clear a box login lock without changing
+                                the password. Exit 0 when no lock is there.
+  k2 users pair-phone [--user <login>] [--json] [--invert]
+                                Make a one-time code (10 minutes) and QR that
+                                pair the K2 Companion phone app. The owner
+                                token pairs as --user, else as the login
+                                linked to the owner (Settings → General →
+                                Your account); a login pairs as itself and
+                                types its password again. --invert for
+                                light-background terminals. For a custom
+                                App's own phone app (its users, its QR on
+                                its web page): k2 app pairing --help.
+  k2 users phones [--json]      Paired phones (the owner sees everyone's)
+                                and the login a new code pairs as.
+  k2 users unpair-phone <id> [--json]
+                                End one paired phone (ids: k2 users phones).
+                                A paired phone also ends after 30 days
+                                unused or 180 days in all, on a password
+                                change, or when it signs itself out. A
+                                desktop logout does not end it.
+
+FLAGS
+  --role <r>                    owner | admin | member | voice_chat
+  --share-agent / --agent <a>   an agent address (repeat for more)
+  --share-garden / --garden <g> a Garden id or name (repeat for more)
+  --share-source / --source <s> a data source name a shared Garden may show
+  --fixed-password              add / set-role: the person can't change it
+                                (the default for an add --role voice_chat)
+  --no-fixed-password           add / set-role: the person may change it
+  --force                       share an agent that isn't a dedicated demo agent
+  --password-stdin              Read password from stdin (automation; no echo)
+  --keep-password               add / set-password: not temporary (no
+                                forced change at the next sign-in)
+  --tail <N>                    audit: how many records (1..1000, default 50)
+  --json                        list: {ok,users[]} with names; unlock: daemon body; audit: raw JSON
+  --help, -h                    This help
+
+SECURITY
+  Password is NEVER accepted on the command line (no --password flag).
+  Making a login an owner, and setting an owner login's password, take
+  this computer's own user check (Touch ID or the Mac's password, Windows
+  Hello, or on a Linux server an owner login's password; a server's first
+  owner login is made from a terminal outside K2). The owner runs it in
+  person: k2 users add <you> --role owner --keep-password
+  Agents: don't run it; tell your owner.
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage

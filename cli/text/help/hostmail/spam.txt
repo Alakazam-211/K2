@@ -1,0 +1,10 @@
+Train Stalwart's classifier via Junk / $junk (no x:Spam). allow/block
+stores the sender domain on x:MemoryLookupKey then InvalidateCaches.
+Quarantine is that mailbox's Junk; discard moves to Trash (never
+EXPUNGE).
+
+USAGE
+  k2 hostmail spam ham|spam <message-id> --address <addr> [--json]
+  k2 hostmail spam allow|block <sender> [--json]
+  k2 hostmail spam quarantine list --address <addr> [--json]
+  k2 hostmail spam quarantine release|discard <id> --address <addr> [--json]

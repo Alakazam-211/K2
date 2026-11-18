@@ -1,0 +1,19 @@
+Usage: k2 workspace mobile-tab get <workspace>
+       k2 workspace mobile-tab set <workspace> on|off|auto
+
+"Show the Mobile tab": keeps the workspace's Mobile tab (its phone) pinned
+next to Chat and Inbox, for every person and window on this server.
+  auto  the default: pinned whenever this server can run a phone
+  on    pinned (still only where this server can run a phone); today it
+        acts like auto, it just records that someone chose it
+  off   not pinned; the Mobile tab still opens from + or Cmd+Shift+M
+        as an ordinary tab you can close
+`get` prints the setting, then whether the tab shows on this server:
+  auto (shown)
+  off (not shown)
+  on (not shown: this server cannot run a phone)
+
+Examples:
+  k2 workspace mobile-tab get my-app
+  k2 workspace mobile-tab set my-app off
+  k2 workspace mobile-tab set my-app auto

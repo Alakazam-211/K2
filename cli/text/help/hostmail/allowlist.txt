@@ -1,0 +1,8 @@
+Stalwart AllowedIp — allowed beats blocked and skips fail2ban.
+add/remove use ReloadSettings (not ReloadBlockedIps).
+mail_manage. Do not allowlist 172.56.0.0/16.
+
+USAGE
+  k2 hostmail allowlist list [--json]
+  k2 hostmail allowlist add <ip|cidr> [--reason migration] [--expires <rfc3339>] [--json]
+  k2 hostmail allowlist remove <ip|cidr> [--json]

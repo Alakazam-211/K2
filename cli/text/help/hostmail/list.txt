@@ -1,0 +1,11 @@
+Mailing lists (Stalwart x:MailingList). Members are minted inboxes
+this cut. Not aliases. Not `k2 mail list` (inboxes). Bare
+`k2 hostmail list` is this usage.
+
+USAGE
+  k2 hostmail list create <addr> --member <a> [--member <a>…] [--json]
+  k2 hostmail list show <addr> [--json]
+  k2 hostmail list members <addr> [--json]
+  k2 hostmail list members add <addr> --member <a>… [--json]
+  k2 hostmail list members remove <addr> --member <a>… [--json]
+  k2 hostmail list delete <addr> [--json]

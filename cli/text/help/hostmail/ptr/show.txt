@@ -1,0 +1,5 @@
+Show origin IPv4, live PTR, HELO/hostname, A records, and alignment
+flags (ptrMatchesHelo / aMatchesOrigin / aligned). GET /cli/mail/ptr.
+
+USAGE
+  k2 hostmail ptr show [--json]

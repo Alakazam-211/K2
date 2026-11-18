@@ -1,0 +1,10 @@
+k2 vault sync [--json]
+
+From a K2 terminal: write every file secret this session is granted and
+doesn't have yet into its $K2_SECRETS_DIR, now. K2 does the same by
+itself right after a grant and once a minute; sync is for "now" and says
+what's what: delivered, present, restart (env and ssh keys can't reach a
+running session, nor can a file when the session has no $K2_SECRETS_DIR:
+restart your session to receive it), skipped (exit 1).
+
+Example: k2 vault sync && cat "$K2_SECRETS_DIR/DEPLOY_TOKEN"

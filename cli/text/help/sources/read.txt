@@ -1,0 +1,9 @@
+k2 sources list [--all] [--json]    every source with its state
+k2 sources show <name> [--json]     definition + current state
+k2 sources read <name> [--json]     the card view (what sources.read gives a widget)
+
+  The card view: health ok|warn|crit|unknown, phase pending|live|stale|paused,
+  display, reason (a fixed code), fields, items[] (each with health, reason,
+  soft, list for a named list), counts, soft, serverNow, updatedAt.
+  soft {count, of, level}: a reading waiting to go hard, e.g. "soft crit 2/3"
+  (a rule's critAfter) or "soft crit 1/3" for a fetch failure (failAfter).

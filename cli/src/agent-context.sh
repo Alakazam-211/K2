@@ -7,73 +7,7 @@
 
 cmd_help_agent_context() {
     cat <<'EOF'
-k2 agent context — manage the always-on AGENTS.md context management stack
-
-The host library is Settings → Context Catalog (pack.toml + layer.md). This
-command stacks those packs onto a workspace; it does not author the library.
-
-System (pinned) layers: Agent persona, PROJECT.md, Tooling footer — toggleable
-with on/off (ids pinned:agent|pinned:project|pinned:tooling, or short aliases
-agent|project|tooling). Optional layers are ordered path references you can
-add, toggle, reorder, or remove. The daemon composes them into .k2/AGENTS.md
-on every mutate. Hire can seed layers: k2 agent hire <dir> --context <path|catalog-id>
-
-USAGE
-  k2 agent context <command> [args] [flags]
-
-COMMANDS
-  list                    Show system layers (on/off) + optional layers
-  add <path|id>           Add an optional layer (workspace path or catalog id —
-                          run `catalog` for the full local list)
-  remove <id|path>        Drop an optional layer (file on disk is kept)
-  on <id|path|system>     Enable optional or system layer
-  off <id|path|system>    Disable optional or system layer
-  move <id|path> <where>  Reorder: absolute position n, or up|down|top|bottom
-  show [--outline]        Preview composed AGENTS.md (or section outline)
-  regen                   Force-compose AGENTS.md from the current stack
-  catalog                 List the local context catalog (path / static / live)
-
-LOCAL CATALOG (also hire --context)
-  Path:   wiki:index, wiki:home
-  Static: wiki:hygiene, subagents:pack, browser:pack, manager:pack, kessel:pack
-  Live:   connections:roster, heartbeats:roster, skills:roster, users:roster
-  (Aliases work too — e.g. manager, connections, hygiene, subagents, browser.)
-
-WORKSPACE
-  Resolved from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD (same as other
-  agent verbs). Override with --workspace / --project (path, name, or uuid)
-  so an orchestrator can recompose a peer without cwd-switching.
-
-FLAGS
-  --workspace|--project <ws>  Target workspace (path, name, or uuid)
-  --label <name>          With add: optional display label
-  --outline               With show: section headings only
-  --json                  Machine-readable output (catalog: full metadata)
-
-EXIT CODES
-  0 ok · 1 error · 2 bad usage · 3 precondition (e.g. duplicate layer) · 4 not found
-
-EXAMPLES
-  k2 agent context list
-  k2 agent context catalog
-  k2 agent context catalog --json
-  k2 agent context add wiki:index
-  k2 agent context add wiki:hygiene
-  k2 agent context add subagents:pack
-  k2 agent context add browser:pack
-  k2 agent context add manager:pack
-  k2 agent context add connections:roster
-  k2 agent context add skills:roster
-  k2 agent context add users:roster
-  k2 agent context add docs/architecture.md --label arch
-  k2 agent context off wiki-index
-  k2 agent context off pinned:tooling
-  k2 agent context on agent
-  k2 agent context move 0 top
-  k2 agent context show --outline
-  k2 agent context regen
-  k2 agent context regen --workspace acme
-  k2 agent context list --workspace /path/to/peer
+%include cli/text/help/agent/context.txt
 EOF
 }
 
@@ -823,336 +757,35 @@ cmd_agent_context_catalog() {
 
 cmd_help_skills() {
     cat <<'EOF'
-k2 skills <subcommand> [options]
-
-Manage documentation profiles (skills) for the workspace. Skills are
-markdown files (SKILL.md) describing roles, personas, and instructions
-your harness loads when spawning sub-agents.
-
-  list                              Skill profiles in this workspace
-  create <name> [--template <src>]  Create a new skill profile
-                                    (optionally seeded from another skill)
-  remove <name>                     Delete a skill profile (sent to Trash)
-  profile <name>                    Read the skill's SKILL.md
-  regenerate                        Refresh every skill's SKILL.md
-
-SKILLS vs AGENT
-  An agent IS a workspace (1:1). A skill is a documentation profile
-  the agent (or your harness) can reference when applying a specific
-  role to work.
-
-  Spawning sessions pre-loaded with a skill is your harness's job
-  (Claude Code's sub-agent spawning, Cursor's worktree management).
-  K2 no longer provides a `delegate` verb — see `k2 help-deprecated`.
-
-  Skills live at `.k2/skills/<name>/SKILL.md` (consolidated home as of
-  Phase 2.5b). The legacy `.k2so/agents/` and `.k2so/agent-templates/`
-  folders are migrated into here on first daemon boot per upgraded
-  workspace. Originals go to the macOS Recycle Bin (recoverable).
-
-TEMPLATING (post-Phase-2.5b)
-  Any existing skill can seed a new one — there is no separate
-  "template" namespace. `--template <name>` means "copy this skill as
-  the starting point for the new skill." Edit the new file freely from
-  there; the seed is unaffected.
-
-EXAMPLES
-  k2 skills list
-  k2 skills create backend-eng --template rust-eng
-  k2 skills profile backend-eng
-  k2 skills regenerate
+%include cli/text/help/skills.txt
 EOF
 }
 
 cmd_help_settings() {
     cat <<'EOF'
-k2 settings [--mode <off|custom|manager|k2>]
-k2 settings set <key> <true|false>
-
-Show this workspace's settings (name, mode, heartbeat, pinned). With
---mode, set the workspace mode. With set, turn one of this server's
-preview switches on or off.
-
-WORKSPACE MODE
-  --mode <off|custom|manager|k2>
-                            off: K2 ignores this workspace
-                            custom: the workspace has its own agent
-                            manager: the workspace coordinates other workspaces
-                            k2: K2's own agent (k2so is accepted too)
-
-SERVER SWITCHES (the owner only)
-  k2 settings set <key> <true|false>      on and off work too; nothing else
-    voiceRoomsPreview       voice rooms on this server (k2 voice, the
-                            top-bar headset, Settings → Voice Rooms)
-    voiceTunnelPreview      voice through K2's tunnel
-                            (k2 hostchat media tier tunnel)
-    computePreview          compute nodes (same as k2 compute preview on|off)
-    ciPreview               CI on K2 Compute: k2 ci, node rosters, lanes,
-                            seats, owners consent, signer pairing, lane
-                            secrets, --receipt-v2 (needs computePreview on
-                            too)
-    boardFilePreview        board files open in a tab
-    videoRoomsPreview       video in voice rooms: camera and screen share
-                            in the K2 desktop app's call panel (needs
-                            voiceRoomsPreview on too)
-    usageSingleRecord       one usage percent per token (preview; off = today's)
-    agentProcessNames       Activity Monitor shows each agent's Claude Code
-                            by the agent's name, not its version (new
-                            sessions; off = today's)
-    homeChat                people and channels on Home (DMs and channels
-                            in the K5 Space; needs chat on this server)
-    homeChatPush            phone pushes for Home chat DMs, @mentions and
-                            replies (needs homeChat on too)
-  All of them are off until the owner turns them on.
-  Run it as the owner in a plain terminal on the server (not a K2 tab): the
-  CLI picks up the owner's credential there by itself. These are the only
-  keys it takes: any other key, or a value that isn't true/false/on/off,
-  exits 2 with this list and sends nothing. Agents, Admins and Members get
-  exit 3: the daemon checks that the caller is the owner. An agent asks
-  its human (k2 thread). The change applies at once, with no restart.
-
-EXIT
-  0 ok · 1 no usable answer · 2 bad usage, an unknown key or a bad value
-  (checked first, before anything is sent) · 3 the daemon refused you
-  (set: only the owner; --mode: the owner or an admin)
-
-EXAMPLES
-  k2 settings
-  k2 settings --mode manager
-  k2 settings set voiceRoomsPreview true
-  k2 settings set voiceTunnelPreview off
+%include cli/text/help/settings.txt
 EOF
 }
 
 cmd_help_heartbeat() {
     cat <<'EOF'
-k2 heartbeat [<family> <subcommand>]
-
-Manage workspace-scoped scheduled wakes.
-Some people call these routines, scheduled tasks or cron jobs: if you were
-looking for those, heartbeats are it. For a wake that happens once (a
-reminder), use `k2 heartbeat remind` below.
-
-DEFAULT (no args)
-  k2 heartbeat                                Lists active heartbeat schedules
-                                                (= `heartbeat schedule list`)
-
-THREE FAMILIES:
-
-SCHEDULE (CRUD on heartbeat definitions)
-  heartbeat schedule add --name <n> <spec> [--tz Area/City] [--instructions "..."]
-       <spec> is one of:
-         --daily --time HH:MM
-         --weekly --days mon,wed,fri --time HH:MM
-         --monthly --days 1,15 --time HH:MM
-         --yearly --months jan,jul --time HH:MM
-         --hourly --start 09:00 --end 17:00 --every 30 --unit minutes
-       --tz America/New_York
-         read the times in that IANA zone: 14:15 fires at 14:15 New York
-         time wherever the server is (a laptop that travels keeps the
-         market's clock), and an --hourly --start/--end window is New
-         York's hours all year. Without --tz a new schedule takes the owner's
-         timezone (Settings → General) when one is set, else the
-         server's clock; --tz server picks the server's clock. Schedules
-         made before this keep the zone they had. On a DST day a time
-         that doesn't exist (spring forward) fires at the first minute
-         after the jump; a time that happens twice (fall back) fires
-         once, the first time
-       --instructions "text" | --instructions-file <path>
-         write the WAKEUP.md (the job that runs on fire) at create time;
-         the daemon writes it on its own machine. Without it the
-         heartbeat stays enabled and waits ("needs instructions"), then
-         fires at the next scheduled slot after a body is added
-       New schedules land in the PINNED chat. For a trained flow prefer
-       a sidecar: k2 heartbeat session <n> --set sales/reviewer
-       (UUID form still works: --set <session-id> --provider <p>)
-  heartbeat schedule list [--archived] [--json]  (--json: raw array)
-       Zone is the zone the times are read in: an IANA name, or
-       "server clock (UTC)" for one without. Next is this computer's
-       clock; a heartbeat with a zone also shows its next fire in that
-       zone. --json: tz (null = the server's clock) and zoneLabel
-  heartbeat schedule list --workspace <ws>       Another workspace's (people only)
-  heartbeat schedule remove <n> [--purge]
-       Default archives (restorable). --purge hard-deletes and is
-       owner-only: agents archive instead.
-  heartbeat schedule unarchive <n>
-  heartbeat schedule edit <n> [<new-spec>] [--tz Area/City|server] [--instructions "..."]
-       spec flags change the schedule; --tz sets its zone (alone is fine;
-       --tz server follows the server's clock again; a spec
-       edit without --tz keeps the zone); --instructions/--instructions-file
-       have the daemon rewrite the WAKEUP.md (any or all)
-  heartbeat schedule rename <old> <new>
-  heartbeat schedule enable <n> [--workspace <ws>]   Resume scheduling
-  heartbeat schedule disable <n> [--workspace <ws>]  Pause scheduling
-       (also: heartbeat enable|disable <n> [--workspace <ws>])
-       --workspace <ws>: a heartbeat of ANOTHER workspace (handle, name or
-       path; <ws>/<n> means the same). Without it: your own workspace.
-       Who may pause or resume another workspace's heartbeat: the server's
-       owner, an Admin login, or a person typing in a K2 shell tab. An agent
-       (an LLM chat in K2, like you) may not. K2 checks the names first
-       (exit 4: no such workspace; exit 1: no such heartbeat there: ask
-       your person for the right name), then refuses an agent with exit 3
-       (other_workspace). With permission cards on, that error ends with an
-       "Ask with:" line; run it as printed, filling in only --why:
-         k2 permission request heartbeat.pause-other target=<ws> heartbeat=<n> --why "…"
-       (key=value pairs in any order; heartbeat.resume-other to resume).
-       Your person gets a card on your Thread; when they tap Allow, K2
-       pauses it as them and you get a message saying so (or that they
-       declined). Don't run disable again: it stays paused until someone
-       resumes it. No "Ask with:" line (cards off): ask your person to run
-       the same command themselves.
-
-REMIND (a one-time heartbeat: fires once, then goes away)
-  heartbeat remind "<text>" (--in 45m | --at 13:00 | --on 2026-10-30 [--at 09:00]) [--tz Area/City]
-       Short form: k2 remind. Also: heartbeat remind list [--all] | show <n> |
-       snooze <n> <when> | cancel <n>. Full details: k2 heartbeat remind --help
-
-SIGNAL (immediate one-shot triggers)
-  heartbeat signal fire <n> [--force]
-                                 Fire one heartbeat now (skips schedule
-                                 window; --force: fire even if disabled)
-  heartbeat signal wakeup <n>    Print/edit the WAKEUP.md
-  heartbeat signal wake          Auto-wake (no name needed)
-
-DELIVERY (where a fire's wake message lands)
-  heartbeat session <n>          Show the current delivery target
-  heartbeat session <n> --pinned Deliver into the workspace pinned chat
-  heartbeat session <n> --auto   Own session (a new one on the next fire)
-  heartbeat session <n> --set <session-id|workspace/handle> [--provider <p>]
-                                 Deliver into a specific saved session
-                                 (handle: sales/reviewer or 1; UUID form
-                                 still wants --provider claude|grok|…)
-
-RESTART (the heartbeat's own session)
-  heartbeat restart <n> [--workspace <ws>] [--json]
-       Stops the heartbeat's own session and forgets its saved
-       conversation. The schedule and WAKEUP.md stay as they are. Nothing
-       fires now: the next fire starts a new session (to fire at once:
-       heartbeat signal fire <n>). Use it when the session is stuck: out
-       of its usage limit, signed out, or on an old LLM token.
-       The new session uses the token a new chat here would use: the
-       workspace's pinned token, else the server default. If that token is
-       out too, the fire fails again (heartbeat status <n> shows it): ask
-       your person to pick another token, or wait for the limit to reset.
-       <n> is the heartbeat's name (hb:<n> works too). Run from inside that
-       heartbeat's own session, it stops you. It never stops the pinned
-       chat or a sidecar. A heartbeat set to a chosen session (heartbeat
-       session <n> --set) keeps that choice and restart stops only the
-       heartbeat's own terminal; to let K2 start its own session instead:
-       heartbeat session <n> --auto.
-       An agent may restart its own workspace's heartbeats; no switch is
-       needed (k2 sessions stop refuses hb: runs). --workspace <ws>
-       (another workspace's) is for people only.
-       Fires also restart a stuck session on their own when the CLI's last
-       answer was a limit or sign-in error, or the token changed:
-       heartbeat status <n> then shows "restarted: weekly limit",
-       "restarted: usage limit", "restarted: signed out" or "restarted:
-       token changed". If the new session fails too, the fire is recorded
-       as an error. A chosen session is never replaced: when it is stuck,
-       the fire is recorded as an error that says so.
-       Exit: 0 done · 1 error (no such heartbeat) · 2 bad usage or not a
-       heartbeat name · 3 refused (you named another workspace) · 4
-       workspace not found
-
-INSPECTION (read-only)
-  heartbeat show <n> [--workspace <ws>] [--json]  Single heartbeat details + instructions
-  heartbeat status <n> [-n N]    Recent history: fires and changes, with
-                                 who did it (owner, user, agent, app)
-  heartbeat log [-n N]           Scheduler decisions
-
-EXAMPLES
-  k2 heartbeat schedule add --name deploy-check --daily --time 09:00 \
-      --instructions "Check the deploy dashboard and report anomalies to the workspace chat."
-  k2 heartbeat schedule add --name roundup --hourly --every 1 --unit hours
-  k2 heartbeat schedule edit after-close --daily --time 14:15 --tz America/New_York
-  k2 heartbeat schedule list
-  k2 heartbeat schedule disable deploy-check
-  k2 heartbeat schedule disable triage --workspace companion
-  k2 heartbeat signal fire deploy-check
-  k2 heartbeat log
-
-EXIT CODES (enable/disable)
-  0 done · 1 error (no such heartbeat: the error names the workspace) ·
-  2 bad usage · 3 refused · 4 workspace not found
+%include cli/text/help/heartbeat.txt
 EOF
 }
 
 cmd_help_deprecated() {
     cat <<'EOF'
-K2 retired verbs → new equivalents
-
-HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
-
-  state list|get|set              → (removed — Workspace States retired)
-  app-update                      → update --app
-  status "msg"                    → organization update "<news>"
-  checkin                         → organization bulletin|update, thread, tickets, inbox
-  checkin --done                  → done [--blocked "reason"]
-
-  # 0.40.31 — legacy per-agent adaptive heartbeat control removed
-  # (heartbeat.json; nothing consumed it since 0.39.0d). Named
-  # workspace heartbeat schedules are the only heartbeat surface.
-
-  heartbeat set --agent <n> ...   → heartbeat schedule add/edit --name <n> <spec>
-  heartbeat get --agent <n>       → heartbeat show <name> [--json]
-  heartbeat force --agent <n>     → heartbeat signal fire <name>
-  heartbeat noop|action           → (removed — adaptive backoff is gone;
-                                       the user owns wake cadence via schedules)
-
-  --agent <name> flag             → --workspace <path>  (everywhere)
-                                       Hard-removed; pass workspace explicitly.
-
-RETIRED (the CLI no longer runs these; each answers with its pointer and
-exits 1; /cli/agents/work and /cli/work/inbox answer 410 and point here)
-
+%include cli/text/help/_deprecated.txt
 EOF
     _retired_verbs_map
     cat <<'EOF'
-
-EXAMPLES OF MIGRATION
-
-  # Sending a message
-  Old: k2 msg --agent scout_v3 "hello"
-  New: k2 msg scout_v3 "hello"            # workspace-implicit; --agent removed
-
-  # Marking a task done
-  Old: k2 checkin --done --blocked "Stripe API access"
-  New: k2 done --blocked "Stripe API access"
+%include cli/text/help/_deprecated-end.txt
 EOF
 }
 
 cmd_help_internal() {
     cat <<'EOF'
-K2 CLI — Internal surface (rare; used by agent runtimes)
-
-These verbs exist for orchestrators and tools that integrate with K2.
-Humans rarely run them directly.
-
-TERMINAL (raw PTY I/O)
-  terminal spawn --command "..."                Spawn a sub-terminal
-  terminal write <id> "text"                    Paste + Enter to PTY by id
-  terminal read <id> [--lines N]                Last N lines from buffer
-
-SESSIONS (low-level session lifecycle)
-  sessions list [--json]                        Raw session map
-  sessions live                                 Subscribe to session events
-  sessions compact                              Compact archive ring
-
-AGENT (single-item ops on the workspace's primary agent)
-  agent profile [<path>]                        Equivalent to `workspace profile`
-  agent update --field <f> --value <v>          Equivalent to `workspace update`
-  agent complete --file <f>                     Mark work item complete
-
-HOOKS (Claude Code / Cursor / Gemini integration state)
-  hooks status [--limit N] [--json]             Hook pipeline state
-                                                (same as `daemon hooks status`)
-  hooks install [--json]                        Re-run the daemon's hook installer
-  hooks uninstall [--json]                      Remove K2's hook entries (others kept)
-  hooks emit <event> [--json '<obj>']           A custom program reports its lifecycle
-                                                (session passport only; k2 study hooks)
-
-For what's running and who you can reach use `connections list` (daily tier).
-For workspace-scoped ops use the `workspace` verb (daily tier).
+%include cli/text/help/_internal.txt
 EOF
 }
 

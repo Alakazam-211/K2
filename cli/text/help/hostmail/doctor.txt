@@ -1,0 +1,16 @@
+Deliverability doctor. This CLI POSTs /cli/mail/doctor (runs probes now:
+outbound port 25, rDNS/PTR, FCrDNS, MX/SPF/DKIM/DMARC, blocklists, TLS,
+open-relay self-test, direct-send grade). It does not GET the last stored
+run — that stays stale after PTR/DNS already moved. mail_manage agents
+may call it.
+
+USAGE
+  k2 hostmail doctor [<domain>] [--json]
+
+NOTES
+  Passing <domain> grades that hosted domain (and reruns every box check).
+  Bare doctor is server-level. Direct send mode on a domain unlocks when
+  the newest run covering it, bare or for that domain, does not fail.
+
+FLAGS
+  --json                 JSON output

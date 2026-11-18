@@ -1,0 +1,41 @@
+k2 hostmail group — groups of hosted addresses, for SHARED CALENDARS.
+A list (`k2 hostmail list`) is for mail fan-out; a group is for sharing
+calendars with several people at once. Groups live in the mail server
+(Stalwart `x:Account` @type Group); K2 keeps no copy.
+
+A group always has an address <name>@<domain>, so the name must be free
+(no mailbox, alias, list, other group or catch-all destination). Inbound
+mail to the group address is OFF unless --mail. Members are hosted
+addresses on this server. Members also see an IMAP "Shared Folders/<group>"
+tree in their mail app.
+
+Owner/admin, or an agent whose workspace may manage hosted mail. An agent
+can't widen its own access: it may not add an inbox its workspace can
+read to a group that has calendar shares (exit 3, owner_only).
+
+USAGE
+  k2 hostmail group create <name> [--domain <apex>] [--mail] [--json]
+  k2 hostmail group add <group> <addr> [<addr>…] [--json]
+  k2 hostmail group remove <group> <addr> [<addr>…] [--json]
+  k2 hostmail group list [--json]
+  k2 hostmail group show <group> [--json]
+  k2 hostmail group delete <group> [--json]
+
+<group> is its address (team@example.com) or its name when unique.
+--domain is needed when this server hosts more than one domain.
+delete also removes the group from every calendar share and takes its
+members out first.
+
+TEAM CALENDAR
+  k2 hostmail group create team
+  k2 hostmail group add team a@example.com b@example.com
+  k2 hostmail calendar create owner@example.com "Team"
+  k2 hostmail calendar share owner@example.com --calendar Team --with team --write
+  k2 hostmail calendar share owner@example.com --calendar Team --with a@example.com --editor
+One owner mailbox owns the calendar; the group gets --write (add and
+edit events); only the few named with --editor may also delete the
+calendar. See `k2 hostmail calendar --help`.
+
+ROUTES
+  GET|POST /cli/mail/group · GET|POST /cli/mail/group/members ·
+  POST /cli/mail/group/delete

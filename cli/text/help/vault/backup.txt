@@ -1,0 +1,15 @@
+k2 vault backup <dir>
+k2 vault backup key <age1…>
+k2 vault backup key remove
+
+Owner only, from your own terminal. A ciphertext snapshot of the vault
+into <dir>; it opens with the recovery words or a backup key. `backup key`
+adds (or replaces) an age key that can open backups on a new box;
+`backup key remove` takes it off. Both ask you to confirm, and
+k2 vault status lists every key holder by fingerprint. Until a recovery
+key is confirmed, a backup and adding a backup key ask for this
+computer's own user check instead (Touch ID or the Mac's password, Windows
+Hello, or on a Linux server an owner login's password), bound to that
+folder or key; a scheduled backup is refused until then.
+
+Example: k2 vault backup /Volumes/backup/k2

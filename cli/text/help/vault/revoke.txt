@@ -1,0 +1,12 @@
+k2 vault revoke NAME --from <who> [--scope <s>] [--json]
+k2 vault revoke --grant <id> [--json]
+
+Remove a share (<who> as in grant --to; grant ids are in k2 vault show
+--json). New sessions and fetches stop getting it, and its file goes from
+$K2_SECRETS_DIR in running sessions that no longer get it. A value already
+read stays read, and an environment variable stays in a running session
+until it restarts: rotate the key at the provider if that matters. A
+compute: grant's running jobs keep what they got (they're listed); the
+next attempt is refused.
+
+Example: k2 vault revoke STRIPE_KEY --from ws:billing

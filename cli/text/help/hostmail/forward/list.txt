@@ -1,0 +1,12 @@
+Every forward on this server, one line per address. Owner and Admin only
+(an agent gets exit 3 owner_only; it uses show on each mailbox instead).
+Says when K2 hasn't managed to email an address its stop link (it keeps
+trying), which forwards are waiting their turn for that email (they go on by
+themselves), and which old forwards K2 left off: ones still waiting for a
+confirm that were set more than 7 days before the update that dropped the
+confirm. Those send nothing until someone adds them again.
+  --paused | --active | --pending   only that state (--pending: not on yet)
+  --external                        only outside destinations
+
+USAGE
+  k2 hostmail forward list [--paused|--active|--pending] [--external] [--json]

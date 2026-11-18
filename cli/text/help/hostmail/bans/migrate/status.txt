@@ -1,0 +1,5 @@
+Show active migrate window, remaining seconds, restoreAt.
+GET|POST /cli/mail/bans/migrate. mail_manage.
+
+USAGE
+  k2 hostmail bans migrate status [--json]

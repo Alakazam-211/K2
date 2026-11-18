@@ -6,15 +6,7 @@
 # commands to run yourself.
 _git_tools_usage() {
     cat <<'EOF'
-k2 git-tools — is git usable here (Apple's command line tools on macOS)
-
-  k2 git-tools [status] [--json]   git found?, install state, how to install, waiting workspaces
-  k2 git-tools install [--json]    macOS: open Apple's installer for the command line tools
-                                   (owner; a dialog on this Mac's screen; no sudo)
-  k2 git-tools recheck [--json]    look for git again now and do the waiting git steps
-
-Over SSH (no screen for Apple's dialog), status prints the softwareupdate
-steps; they need an admin password, so run them yourself.
+%include cli/text/help/git-tools.txt
 EOF
 }
 

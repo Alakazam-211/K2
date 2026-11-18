@@ -1,0 +1,48 @@
+usage: k2 app recording <app> [--json]
+       k2 app recording <app> set [--start-level none|admin|moderator|member]
+                                  [--audio-max-days N|org] [--required on|off]
+                                  [--server-read on|off] [--json]
+Recording in an App's calls, on this server's chat (Sew 0.9.0 or later).
+No flags: what K2 wants for the App, whether Sew has it yet (delivered),
+the Spaces the App is bound to, and the lock on each. The owner, an Admin
+or the App's own agent may look. <app> is the App's id or name (k2 app list).
+Each flag is optional; name one or more.
+
+Every setting starts off: nobody may start a recording, nothing is
+required, and the App's own server reads nothing. Each person in a call
+still answers their own consent notice; a recording never records someone
+who said no.
+  --start-level L       the lowest chat level that may start a recording in
+                        the App's Spaces: none (nobody, the default), admin,
+                        moderator or member
+  --audio-max-days N    keep recorded audio N days (1 to 3650; 30 or 30d),
+                        never more than this server's own limit
+                        (recording.audio_max_days, k2 hostchat recording
+                        policy: above it is above_org_audio_max_days);
+                        org = the server's limit
+  --required on|off     on: every call with two or more people in the App's
+                        Spaces is recorded, and nobody can stop it there. Each
+                        person still consents for themselves.
+  --server-read on|off  on: the App's own server may read its recordings'
+                        details, transcripts and changes (the SDK's
+                        recordings.list, get, transcript, events). Each
+                        consent notice names the App as a reader; every read
+                        is logged.
+Who: turning a setting down or off: the owner, an Admin, or the App's own
+agent with its App switch "…and manage them end to end" on (switch 2:
+k2 app access <workspace> shows it; the owner turns it on with --manage on).
+A higher start level or longer keep days: the owner or an Admin, in
+person, with a confirm (Touch ID or the vault password) from a terminal
+outside K2; an agent gets person_only. --required on and --server-read on:
+the server's owner only, in person; anyone else gets owner_only. With
+permission cards on for its workspace, the agent's refusal ends with the
+line to ask the owner on a card (the card's key is server-read, with a dash):
+  k2 permission request apps.recording app=<app> server-read=on --why "…"
+  k2 permission request apps.recording app=<app> required=on server-read=on --why "…"
+Not for the home client (the App that sees every Space): it takes no
+recording settings (home_client_cannot_govern). A server whose chat can't
+record in Apps yet answers sew_feature_missing (k2 hostchat upgrade).
+A Space's own rule, and the owner's no-recording lock for CUI/FCI Spaces:
+k2 hostchat app-space recording --help. Uninstalling an App never deletes
+its recordings. More: k2 study app-recording.
+Exit codes: 0 ok, 2 bad usage, 3 refused.

@@ -277,189 +277,13 @@ _connect_curl() {
 # lived only in `k2 vault grant --help`).
 _publish_secret_usage() {
     cat <<'EOF'
-k2 publish secret — vault secrets a published service gets when it starts
-
-  k2 publish secret add <service> NAME [--scope <s>] [--as env|file] [--env-name X] [--file-name F]
-  k2 publish secret remove <service> NAME [--scope <s>]
-  k2 publish secret list <service>
-
-  <service>        the name you gave k2 publish run
-  NAME             the secret's name in the vault (k2 vault list)
-  --scope <s>      where NAME lives: ws:<workspace> or server.
-                   Default: your own workspace if you're an agent; the server
-                   scope if the owner runs it from their own terminal.
-                   If NAME isn't there, the error names the scope that has it.
-  --as env|file    env: an environment variable; file: a 0600 file in
-                   $K2_SECRETS_DIR. Default: how the secret was saved to be
-                   delivered. You can't pick a delivery the secret doesn't
-                   allow (k2 vault show NAME shows both).
-  --env-name X     the variable's name (default: NAME in capitals, - and . as _).
-                   --env-name alone means --as env.
-  --file-name F    the file's name in $K2_SECRETS_DIR (default: NAME).
-                   --file-name alone means --as file.
-
-The service gets it the next time it starts: a file in its own
-$K2_SECRETS_DIR, or the env variable. Running: k2 publish stop <service>, then
-k2 publish start <service>. Exited: k2 publish start <service>.
-An App: k2 app restart <app>.
-Removing works the same way: it needs no card, and the running process keeps
-what it got.
-
-An agent can add the secrets its own workspace created. A secret a person
-gave (a Thread secret card, Settings → Vault) only the owner or an Admin
-can share with a service. With permission cards on, the refusal ends with
-the line to ask them with, filled in: run it, adding only your reason.
-
-  k2 permission request vault.share-service as=file|env secret=NAME service=<service> --why "<what you need it for>"
-
-They press Allow from their Thread, phone or desktop and confirm it's them.
-That does the share: don't run the add again. You get a [permission:<id>]
-turn saying so; then restart the service. It works only for a secret in your
-own workspace and a service or App of that workspace.
-Cards off (no Ask-with line): the refusal prints the exact command for them
-to run in their own terminal (Terminal or iTerm, not a K2 terminal; it asks
-for Touch ID or the vault password). Don't retry it yourself.
-
-Example: a status page that won't start without MPC_PROGRESS_PIN
-  k2 publish secret add mpc-progress MPC_PROGRESS_PIN --as env
-  k2 publish start mpc-progress
-  (A person gave the secret? The owner runs the first line in their own
-  terminal with --scope ws:k2-cores added.)
-More: k2 vault grant --help, k2 study vault
+%include cli/text/help/publish/secret.txt
 EOF
 }
 
 _publish_usage() {
     cat <<'EOF' >&2
-k2 publish — host a process on this machine, optionally on a nested URL
-
-TWO DIFFERENT LISTS
-  k2 publish ps                 processes this workspace is hosting
-  k2 publish status             your Connect host + plan (not processes)
-  k2 publish subdomain list     nested hostnames (DNS), whether or not you host the process
-
-k2 tunnel is the device pipe to your primary *.k2.dev. Nested names ride that
-same pipe. This command does not start k2 tunnel.
-
-USAGE
-  k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>] [--transfer] [--probe-timeout <dur>]
-  k2 publish run <name> --cmd <dev command> --port <n> --dev [--cwd <path>] [--idle 60m] [--mem 4G] [--cpus 2]
-  k2 publish run <name> --skin [<dir>] --port <n> ...   (only a site already on --skin; no new ones)
-  k2 publish start|stop|logs <name>
-  k2 publish rm <name> [--keep-hostname]
-  k2 publish ps|status [--long] [--json]       (ps = list)
-  k2 publish visibility <name> [private|pin|public] [--reason <why>] [--pin-days N] [--yes] [--dev-is-public] [--json]
-  k2 publish open <name> [--path <p>] [--no-browser] [--json]
-  k2 publish sessions <name> [--revoke-all] [--json]
-  k2 publish env <name> [clean|legacy] · k2 publish secret add|remove|list <name> …
-  k2 publish frame <name> (--allow <origin> ... | --none | --reset) [--json]
-  k2 publish client-ip [<label> on|off] [--json]
-  k2 publish subdomain <create|list|point|target|rm|claim|unclaim> ...
-
-run
-  Starts <name> from --cmd, listening on --port.
-  K2 0.46.1+, a Linux server with the App runtime set up: a NEW <name> runs as
-  an open-path App (a relaxed container with a fresh copy of the folder at each
-  start; keep lasting files in $K2_APP_DATA; --port is its port inside; egress
-  logged). Run it again to deploy changes; start|stop|rm map onto the App
-  (k2 app logs|inspect <name>). An agent's new service waits for the owner's
-  in-person approval (exit 2); re-running one it already has needs "Build and
-  run Apps".
-  Services published before keep running as they are.
-  Default (Pro): also creates nested https://<name>.<host>.k2.dev → localhost:<port>.
-  <host> is the Connected host from `k2 publish status`.
-  Not Pro / no tunnel: run FAILS, nothing starts. Use --no-tunnel or upgrade:
-    https://k2.dev/dashboard
-  --no-tunnel: process only, no public URL, no Pro required.
-  Same <name> already running: error — stop first. Does not overwrite.
-  A name another workspace on this server owns is refused
-  (label_owned_by_other_workspace). --transfer: owner/admin only, moves it
-  here on purpose; recorded in the access audit log.
-  --cmd and --skin are mutually exclusive. --cwd is for --cmd only.
-
-  --probe-timeout <dur>  how long the service may take to open --port
-                   (default 15s, at most 15m): 90s, 10m, 1m30s, 1500ms.
-                   Saved on the service: start, restarts and boot use it.
-                   A re-run without it keeps the saved value; `default` resets.
-                   While it waits the status is "starting (waiting for port
-                   N, 4m12s left)"; with a tunnel the nested URL is published
-                   only once the port answers. Never answered in time: the
-                   run is rolled back (tunnel) or shows unhealthy (local,
-                   still re-checked, so a late bind turns running).
-
-  --dev            Run a dev server from the live folder, with hot reload through
-                   the site's address. Private until you share it. It stops after
-                   --idle (default 60m, off is for the owner and Admins) and starts
-                   again for the next visitor who passes K2's check. Not walled (a
-                   normal new --cmd service is), so an agent's first one waits for
-                   the owner. How: k2 study publish-dev
-
-  --skin [<dir>]   Keeps a site already on --skin running. A new <name> is refused
-                   (skin_retired). A folder of files is an App now:
-                   k2 app init --template static (k2 study app-deploys).
-
-visibility
-  Who may open a site. A new site is private. Sites from before 0.46.7 stay
-  public until someone changes them. No mode: show it. k2 study publish-visibility
-  private          only the owner and Admins, after K2 checks who they are
-  pin              the PIN first. A person gives it on stdin, or types it when
-                   asked (--pin is refused: it would land in shell history)
-  public           anyone with the address; needs --reason, and an owner or Admin
-  An agent can make its own site private. For pin or public, the same command
-  puts a card on the agent's Thread and exits 2 (waiting for a person); the person
-  answers it, and types any PIN into K2's own form, so the agent never sees it.
-  A dev server can't be asked for public (dev_public_person_only): ask for a PIN.
-  (Exit 2 = waiting for a person, or a usage error: the message says which.
-  Exit 3 = refused.)
-
-open       a one-time link to a private site, for a browser outside K2. K2's own
-           tabs need no link. Not for agents: test on the local port instead.
-sessions   who is signed in to a site, private or PIN; --revoke-all ends them all.
-
-start / stop
-  start <name>: uses the saved --cmd/--port/--cwd. Do not pass them again.
-  stop <name>:  kill the process. Nested URL stays (it will miss until start).
-
-rm
-  stop + forget the service. Also removes the nested URL unless --keep-hostname
-  (--keep-hostname: process gone, https://<name>.<host>.k2.dev still exists).
-
-  <name> on run is the subdomain label. It cannot differ.
-
-ps     hosted processes for THIS workspace (running/stopped, port, who may open
-       it, URL if any); --long adds why a site is public, and a dev server's caps
-       [legacy env] = a service from before 0.45.4 that still inherits the
-       daemon's whole environment (it keeps it; no end is set). Start it
-       clean: k2 publish env <name> clean
-logs   that process's log file (--tail follows)
-status Connect plan + primary host. Not "is my app up" — use ps.
-
-subdomain  (Pro) hostname for a port that is ALREADY listening.
-  Does not start/stop a process. ps/stop/logs will not see it.
-  create <label> --target localhost:<port>   new name → that port
-  point  <label> --target localhost:<port>   existing name → a different port
-  rm     <label>                             delete the name (not the process)
-  claim / unclaim <label>                    show or hide that name on THIS
-                                             workspace's Published list
-  A name another workspace owns is refused before anything changes.
-  create/point/claim --transfer: owner/admin only, audited.
-
-  Labels `skin`, `meet`, `chat` and `mail` are reserved (box front doors: Apps, K2 Meet, K2 chat, K2 webmail).
-  Off-platform custom domains are not created here.
-  k2 app is guests/roles/tokens, and (Apps beta) hosts server Apps with
-  deploys and rollback: k2 study app-deploys.
-  Leftover: k2 skin.
-
-logs <name> [--tail]   dump the log file; --tail follows
-
-frame  (owner only) who may put a --skin App in a frame on another site.
-  Default: the App itself and K2's own windows. Every other site is refused.
-  --allow https://your.site   add an origin (repeatable, at most 8)
-  --none                      refuse every frame, K2's windows too
-  --reset                     back to the default
-  ps shows the policy. A --cmd App sets its own header: k2 study publish-framing
-
-If Connect/tunnel is down, default run FAILS (nothing starts). --no-tunnel still works.
+%include cli/text/help/publish.txt
 EOF
 }
 
@@ -1855,23 +1679,7 @@ cmd_publish_status() {
             --json) as_json=true; shift ;;
             --help|-h)
                 cat <<'EOF'
-Show the connected K2 Connect subdomain and plan for this device, or one
-published App's state (loopable: an agent can wait on it).
-
-USAGE
-  k2 publish status [--json]
-  k2 publish status <name> [--json]
-
-FLAGS
-  --json                 JSON: {connected, host, plan, tier, nested_subdomains}
-                         <name>: {name, status, statusText, desired, error, lastExitCode,
-                                  probeTimeoutMs, probeTimeoutEffectiveMs, startingLeftMs,
-                                  hostnamePending, suggestion, exit}
-
-EXIT CODES
-  without <name>: 0 ok, 1 error (no tunnel token / control plane)
-  with <name>:    0 running, 2 starting (loop: run it again), 1 exited,
-                  unhealthy, stopped or not found (the suggestion says what next)
+%include cli/text/help/publish/status.txt
 EOF
                 exit 0 ;;
             -*)
@@ -2304,13 +2112,7 @@ print("  effective: %s" % d.get("effective","?"))
                     --json) as_json=true; shift ;;
                     --help|-h)
                         cat <<'EOF'
-List your K2 Connect subdomains (primary + nested).
-
-USAGE
-  k2 publish subdomain list [--json]
-
-FLAGS
-  --json                 JSON: {subdomains:[{host,target,plan,tier,status,flags}]}
+%include cli/text/help/publish/subdomain/list.txt
 EOF
                         exit 0 ;;
                     -*)

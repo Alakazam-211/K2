@@ -1,0 +1,17 @@
+Retry ACME for the mail hostname. Does not SIGTERM, wipe /etc/stalwart,
+or re-bootstrap. Second enable on a healthy install is a no-op — this
+is the retry path.
+
+USAGE
+  k2 hostmail cert renew [--json]
+
+DNS
+  ns1/ns2.k2.dev (K2-hosted): records can be planted here.
+  Any other DNS platform: you (or whoever has that panel) must add
+  mail.<apex> A → origin (`k2 hostmail ptr show`) and the extra names
+  Stalwart orders (autoconfig, autodiscover, mta-sts, ua-auto-config)
+  pointing at mail.<apex> / origin — not the apex wildcard. Then rerun
+  this command. K2 cannot plant on Vercel/Cloudflare/cPanel.
+
+FLAGS
+  --json                 JSON output

@@ -1,0 +1,8 @@
+List this server's projects: member count, PoC, and a pinned marker (*) for
+projects pinned in the app's Projects nav.
+
+USAGE
+  k2 project list [flags]
+
+FLAGS
+  --json                 JSON output

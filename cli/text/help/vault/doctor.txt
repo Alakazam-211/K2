@@ -1,0 +1,31 @@
+k2 vault doctor [--json]
+k2 vault doctor --transcripts [--json]
+
+Problems: no confirmed recovery key, tamper, rotations due, secrets a
+newer K2 wrote (this one skips them), published services on the old
+inherited environment, (Linux) a runtime dir systemd-logind can delete
+under the daemon (no linger; the warning names the fix), and
+secret-looking values in plain .env files in your workspace and one
+level of subfolders (clones, worktrees; not node_modules, .git or
+target; at most 200 files and 4 MiB a run). A value that looks like a
+known provider's key (sk_live_, sk-ant-, ghp_, …) is flagged under any
+name, by provider, never the value. It also lists CLI login files that
+hold a credential: gh hosts.yml, vercel auth.json, ~/.npmrc with a
+literal _authToken, ovh.conf, ~/.ssh/id_* keys, each with the vault
+recipe. The last line says which .env names it checks; other
+names aren't flagged. Exit 1 on an error.
+
+--transcripts: only the transcript scan, instead of the checks above.
+Looks for vault values in what your LLM CLIs saved (Claude, Codex, Grok,
+Gemini, Cursor, Pi, Hermes, and K2's per-login config folders). Reports
+which secret names appear in which files, never a value or a line of the
+file. Run by a person (owner, Admin): every transcript against every
+value, older versions too. Run by an agent: this workspace's transcripts
+against the latest value of secrets it can already read (file, env or
+api); for the rest, ask your owner to run it. Reads newest files first,
+at most 2 GB a run. It only reports: K2 doesn't edit other tools' files.
+Exit 0 when the scan finished and found nothing; exit 1 on a leak or a
+scan that couldn't cover everything (the last line says what it read).
+
+Example: k2 vault doctor
+Example: k2 vault doctor --transcripts

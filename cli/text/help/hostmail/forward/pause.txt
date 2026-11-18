@@ -1,0 +1,9 @@
+Pause a mailbox's forwards by hand: one with --to, otherwise all of them.
+New mail stays in the mailbox and isn't sent there until someone resumes it.
+Anyone who may set the forward may pause it. A person's pause also takes over
+one an agent made. On a forward K2 already holds (air_gap, receive_only,
+upgrade_required, not_told, agent_send_off), your pause is kept beside K2's
+reason, and it stays paused when K2 lets go; show says so.
+
+USAGE
+  k2 hostmail forward pause <addr> [--to <dest>] [--json]

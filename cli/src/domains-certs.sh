@@ -488,178 +488,73 @@ cmd_cert() {
 
 cmd_help_domain() {
     cat <<'EOF'
-k2 domain — attach custom domains to THIS server
-
-This is box inventory: apex + hostnames this machine may terminate.
-It is NOT `k2 hostmail domain` (mail MX recipe) and NOT a nameserver
-cutover. Apex add/remove is owner (exit 3). Hostname add/remove and
-list are dns_manage (same grant as k2 dns / k2 cert); without it an
-agent's `k2 domain list` exits 3.
-
-USAGE
-  k2 domain list [--json]
-  k2 domain add <apex> [--json]
-  k2 domain remove <apex> [--json]
-  k2 domain refresh [<apex>] [--json]
-  k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--json]
-  k2 domain name remove <hostname> [--json]
-
-A domain k2.dev holds but whose nameservers don't point at k2.dev yet
-lists as "pending" with the nameservers to set at your registrar. DNS
-record writes are refused (zone_pending_ns) until the zone is active.
-The server re-checks pending domains with k2.dev by itself (every
-minute at first, backing off to daily for long-pending ones) and once
-more before refusing a write; `k2 domain refresh` checks right now.
-A zone k2.dev winds down or suspends lists as "readonly"; writes are
-refused with zone_readonly.
-
-See also: k2 dns (records on attached K2-hosted zones), k2 cert (certs
-for attached hostnames), k2 hostmail domain (mail).
+%include cli/text/help/domain.txt
 EOF
 }
 
 cmd_help_domain_list() {
     cat <<'EOF'
-List custom domains attached to this server. A pending row prints
-"Pending: point nameservers to …" and whether k2.dev auto-added the
-zone to your account. Agents need dns_manage (exit 3 without it).
-
-USAGE
-  k2 domain list [--json]
+%include cli/text/help/domain/list.txt
 EOF
 }
 
 cmd_help_domain_refresh() {
     cat <<'EOF'
-Check now with k2.dev: re-bind an attached apex so a pending zone
-(nameservers not yet pointed at k2.dev) flips to active. The server
-also re-checks pending domains by itself, so this is only needed to
-skip the wait. With no apex,
-checks every pending domain. Owner/admin; agents exit 3.
-
-USAGE
-  k2 domain refresh [<apex>] [--json]
+%include cli/text/help/domain/refresh.txt
 EOF
 }
 
 cmd_help_domain_add() {
     cat <<'EOF'
-Attach an apex to this server (idempotent). Does not transfer NS.
-If k2.dev auto-adds the zone to your account it starts pending: point
-the registrar nameservers at k2.dev, then `k2 domain refresh <apex>`.
-Exit 1 with zone_owned_elsewhere when another k2.dev account owns it;
-bind_api_unavailable when domain linking isn't live on k2.dev yet.
-
-USAGE
-  k2 domain add <apex> [--json]
+%include cli/text/help/domain/add.txt
 EOF
 }
 
 cmd_help_domain_remove() {
     cat <<'EOF'
-Detach an apex from this server (cascades hostnames).
-
-USAGE
-  k2 domain remove <apex> [--json]
+%include cli/text/help/domain/remove.txt
 EOF
 }
 
 cmd_help_domain_name() {
     cat <<'EOF'
-Add or remove a hostname under an attached apex.
-
-USAGE
-  k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>]
-  k2 domain name remove <hostname>
+%include cli/text/help/domain/name.txt
 EOF
 }
 
 cmd_help_domain_name_add() {
     cat <<'EOF'
-Add a hostname under an attached apex (dns_manage). Apex must already
-be on this server (`k2 domain add` is owner). Then `k2 cert issue`.
-
---external (with --role app:<name>): your own web server serves this
-name, not K2's front; the App treats it as its origin from its next
-start (k2 app restart <name>). Same as k2 app domain add … --external.
-
-USAGE
-  k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--external] [--json]
+%include cli/text/help/domain/name/add.txt
 EOF
 }
 
 cmd_help_domain_name_remove() {
     cat <<'EOF'
-Remove a hostname from this server's inventory.
-
-USAGE
-  k2 domain name remove <hostname> [--json]
+%include cli/text/help/domain/name/remove.txt
 EOF
 }
 
 cmd_help_cert() {
     cat <<'EOF'
-k2 cert — certificates for hostnames attached on THIS server
-
-This is box inventory (`k2 cert list`) and the issuer. `k2 hostmail cert
-renew` uses this issuer for the mail host when it's attached here.
-
-A role-mail hostname goes into the mail server too. Only the mail host in
-`k2 hostmail status` is its default certificate, the one clients without SNI
-get; any other mail host is served to clients that ask for its name.
-
-USAGE
-  k2 cert list [--json]
-  k2 cert issue <hostname> [--json]
-  k2 cert renew <hostname> [--json]
-
-RENEWAL
-  The daemon renews certificates K2 issued once fewer than 30 days remain
-  (hourly check, per-name backoff 1h/6h/24h, skipped under air-gap).
-  issue/renew by hand re-order only inside that window; outside it they
-  re-plant the stored certificate. Uploaded certificates are never renewed.
-  `k2 cert list` shows the renewal state per hostname.
+%include cli/text/help/cert.txt
 EOF
 }
 
 cmd_help_cert_issue() {
     cat <<'EOF'
-Issue a Let's Encrypt cert for an attached hostname (on-box ACME). Adding
-a second mail host (`k2 domain name add mail.<apex> --role mail` first)
-doesn't change the mail server's default certificate.
-
-USAGE
-  k2 cert issue <hostname> [--json]
-
-DNS
-  K2-hosted zone (ns1/ns2.k2.dev, dns_write): DNS-01 plants
-  _acme-challenge here.
-  Any other DNS: you must add the hostname (and _acme-challenge if
-  using DNS-01) on THAT platform pointing at this box. HTTP-01 follows
-  a CNAME (often onto a closed :80). K2 cannot plant on Vercel/etc.
+%include cli/text/help/cert/issue.txt
 EOF
 }
 
 cmd_help_cert_renew() {
     cat <<'EOF'
-Renew the cert for an attached hostname. Never hostmail disable/enable.
-
-USAGE
-  k2 cert renew <hostname> [--json]
-
-DNS
-  Same as issue: if the zone is not on ns1/ns2.k2.dev, add records on
-  the platform that actually serves DNS, then rerun. K2 cannot plant
-  there.
+%include cli/text/help/cert/renew.txt
 EOF
 }
 
 cmd_help_cert_list() {
     cat <<'EOF'
-List cert state for attached hostnames.
-
-USAGE
-  k2 cert list [--json]
+%include cli/text/help/cert/list.txt
 EOF
 }
 

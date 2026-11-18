@@ -1,0 +1,6 @@
+k2 vault recipient [--json]
+
+This vault's carry address (an age recipient) and vault id. Run it on the
+box secrets move TO, then k2 vault carry export on the old box.
+
+Example: k2 vault recipient

@@ -1,0 +1,34 @@
+k2 app expose <app-id> --tunnel [--transfer] | --local [--json]
+
+Turn an installed App's public URL on or off, with no reinstall.
+
+  --tunnel     Give the App its public URL, https://<app-id>.<box>.k2.dev
+               (the same one k2 app install --tunnel makes). Needs K2
+               Connect with a Pro plan on this box; without it the answer
+               is exit 3 (engine_unavailable) and nothing changes.
+  --transfer   With --tunnel, owner or admin only. Use it when that name
+               already points at something else on this box (a hostname
+               made by hand, say) that no workspace holds: --transfer moves
+               it to the App. Without it you get exit 3
+               (label_exists_elsewhere) and nothing changes; an agent gets
+               that answer with or without --transfer. A name another
+               workspace holds is never moved: exit 3, naming its agent.
+  --local      Remove the public URL; the App answers on this box only. If
+               the name now belongs to another workspace, or points
+               somewhere else, it is left as it is: the answer says so and
+               the App is still set to local only (exit 0).
+  --json       Print the daemon's answer as JSON.
+
+What stays: the same App, its users' logins and sessions, grants, shared
+secrets and chat Spaces. Nothing is reinstalled.
+
+After a change (--tunnel or --local):
+  1. Chat (Sew) learns the App's new address within seconds.
+  2. Run k2 app restart <app-id>. The App reads its public address from
+     K2_APP_ORIGIN (and K2_APP_ORIGINS) when it starts; with no public URL
+     those are unset. A deploy also starts it with the new values.
+
+Who: the owner, an admin, or the App's own agent with "Build and run
+Apps". An agent without that switch, or with another App already public
+(an agent's limit is one public URL), gets a request held for the owner
+(exit 2); the message says which. The owner sees it in k2 app approvals.

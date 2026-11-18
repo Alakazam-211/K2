@@ -1,0 +1,5 @@
+Destroy AllowedIp for address then ReloadSettings.
+POST /cli/mail/allowlist/remove. GET → 405. mail_manage.
+
+USAGE
+  k2 hostmail allowlist remove <ip|cidr> [--json]

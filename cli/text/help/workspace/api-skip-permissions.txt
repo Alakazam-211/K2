@@ -1,0 +1,11 @@
+Usage: k2 workspace api-skip-permissions get|set <workspace> [on|off]
+
+Whether /v1 host-session spawns keep agent auto-approve flags
+(--dangerously-skip-permissions, etc.). Product default is ON (headless
+/v1 cannot answer a HITL gate). Opt out for fail-closed stripping.
+
+  get <ws>              Print on|off (default on when unset)
+  set <ws> on|1         Keep auto-approve flags on API host-session spawns
+  set <ws> off|0        Strip auto-approve flags (pre-0.40.x fail-closed)
+
+Also: POST /cli/workspace/set {"project":"…","fields":{"api_skip_permissions":"0"|"1"}}

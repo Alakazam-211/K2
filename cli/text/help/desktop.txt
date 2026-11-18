@@ -1,0 +1,91 @@
+k2 desktop — this computer's screen in a Desktop tab (Remote desktop, Beta)
+
+People only: the owner, and the logins the owner allows. Agents can't use
+this in v1: they can't see or drive the screen with K2, and can't ask to
+(an agent gets desktop_people_only, exit 3, "It can't be requested.").
+The one agent verb is k2 desktop env (below): a desktop of the agent's own
+on a Linux server, to put windows on.
+
+  k2 desktop [status] [--json]      on or off, the machine's state, what you may do;
+                                    the owner also sees viewers, grants, hidden apps
+  k2 desktop enable [--json]        turn it on (Owner); prints what that allows.
+                                    On a Mac, K2 Screen asks macOS for Screen
+                                    Recording and Accessibility at once; when
+                                    someone at the Mac allows them, K2 restarts
+                                    K2 Screen by itself (status shows the steps)
+  k2 desktop disable [--json]       turn it off (Owner); closes every viewer
+  k2 desktop ask [--open screen|accessibility | --check] [--json]
+                                    a Mac with it on (Owner): show macOS's prompt
+                                    for K2 Screen again (macOS shows it once; after
+                                    that K2 opens System Settings at the pane),
+                                    open one System Settings pane, or check again
+                                    after K2 stopped checking (10 minutes)
+  k2 desktop policy --hide-app <bundle id> [--hide-app …] | --no-hide-apps [--json]
+                                    the apps viewers never see on macOS (Owner);
+                                    replaces the list (default: Passwords,
+                                    Keychain Access, 1Password, Bitwarden)
+  k2 desktop grant <login> [--view] [--json]
+                                    let a Member login watch (Owner). --view is the
+                                    default and the only kind: Members never drive.
+                                    Owners and Admins open it without a grant. A
+                                    grant lasts until revoked, or until that login
+                                    is removed, disabled or changes role. Refused:
+                                    an Owner or Admin (grant_not_needed), a Voice &
+                                    Chat only or disabled login, an unknown login
+                                    (no_such_user, exit 4)
+  k2 desktop revoke <login> [--json] end a grant; closes that login's viewers
+  k2 desktop grants [--json]        the grants (Owner)
+  k2 desktop viewers [--json]       who is watching or driving, from where (Owner)
+  k2 desktop kick <viewer-id|login> [--json]
+                                    close one viewer, or every viewer of a login (Owner)
+  k2 desktop audit [--since 1d] [--limit 50] [--json]
+                                    the access log, newest first (Owner). Who,
+                                    when, from where; never what was on screen
+                                    or typed
+  k2 desktop open [--display <id>] [--json]
+                                    open the Desktop tab in your own K2 client. Run
+                                    from a terminal on this computer it succeeds,
+                                    but the tab opens in this computer's K2 app and
+                                    only says "You're on this computer"; run it on
+                                    the device you watch from
+  k2 desktop displays [--json]      the screens you can pick in the tab
+
+On a Linux server with no screen (a virtual desktop K2 starts; never on a Mac):
+  k2 desktop setup [--timeout 10m] [--no-wait] [--json]
+                                    install the packages it needs (Owner). The
+                                    install runs on the server; this waits for
+                                    it (10 minutes at most) and prints progress.
+                                    --no-wait returns at once (k2 desktop status
+                                    shows setting_up until it ends)
+  k2 desktop list [--json]          the desktops you may open, with their state
+  k2 desktop start [--size WxH] [--json]
+                                    start it, or wake it (Owners and Admins);
+                                    1280x720 to 1920x1080, default 1280x720
+  k2 desktop stop [--json]          close it; what was open on it is lost
+  --desktop <id>                    any verb above: which desktop. virtual is
+                                    This server, virtual:<workspace id> an
+                                    agent's own; default This server
+  k2 desktop env [--release] [--timeout 2m] [--json]
+                                    AGENTS, on a Linux server: your own desktop.
+                                    Starts or wakes it and prints shell lines;
+                                    run  eval "$(k2 desktop env)"  then start a
+                                    GUI program (agent-browser --headed, a
+                                    browser with --user-data-dir
+                                    "$K2_DESKTOP_PROFILE"). Each call holds it
+                                    for you 30 minutes; --release when done.
+                                    Needs your workspace's "Allow a virtual
+                                    desktop" switch (exit 3 + Ask with: if off)
+  k2 desktop allow [on|off] [--workspace <ws>] [--json]
+                                    "Allow a virtual desktop" for one agent
+                                    (Owner or Admin; default: this workspace).
+                                    No on/off: show it. On lets that agent get
+                                    a desktop of its own with k2 desktop env
+
+(Owner) means an Owner login, or the owner at this computer: a plain
+terminal or a K2 shell tab here. The owner at this computer can run every
+verb above; they just never watch from here. You watch from another device, over K2 Connect or the LAN, signed in
+with a login: Owner and Admin logins watch and drive; a Member login only
+with a grant, and only to watch; Voice & Chat only never. No one at the
+screen has to click Allow. It stays on until an Owner turns it off. Also:
+Settings → Remote Desktop, and + → Desktop (Beta) in a tab strip. More:
+k2 study desktop.

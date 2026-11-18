@@ -71,7 +71,7 @@ A one-page map. K2 is daemon-first: one long-running daemon (`crates/k2-daemon`,
 | Apps | `crates/k2-app-engine` | Drives rootless Podman for guarded K2 Apps, on the daemon's orders only. |
 | Desktop shell | `src-tauri/` | The Tauri app: windows, menu, tray, and the connection to the daemon. |
 | Renderer | `src/renderer/` | The React front-end, a thin client of the daemon. |
-| CLI | `cli/src/`, `cli/text/`, `cli/k2` | Shell parts, joined into the one file `cli/k2` by `scripts/build-cli.sh`, with the printed text in `cli/text/` (the `k2 study` pages) inlined at each `%include` line. Edit a part or a text file, never `cli/k2`. |
+| CLI | `cli/src/`, `cli/text/`, `cli/k2` | Shell parts, joined into the one file `cli/k2` by `scripts/build-cli.sh`, with the printed text in `cli/text/` (the `k2 study` pages and the static help) inlined at each `%include` line. Edit a part or a text file, never `cli/k2`. |
 | SDK | `sdk/` | The widget frame runtime (`sdk/k2-runtime.js`), the server SDK and generated contract files. |
 | Migrations | `crates/k2-core/drizzle_sql/` | Numbered SQL migrations for the SQLite database. |
 | Contract catalog | `crates/k2-core/src/contract/catalog.json` | The verb catalog: a verb layer over the route table, not a second one. |

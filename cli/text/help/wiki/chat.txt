@@ -1,0 +1,6 @@
+Usage: k2 wiki chat off [project]
+
+  off|disable Turn public chat off (serve can stay on)
+
+Public chat is unavailable: it is coming back with the K2 runtime.
+`k2 wiki chat on` exits 3 (public_chat_unavailable).

@@ -1,0 +1,87 @@
+
+EMAIL (K2 Mail — real addresses for agents; server runs on Linux daemons)
+  mail create <local>[@<domain>]        Mint yourself an email address (--id = idempotent)
+  mail addresses                        Your addresses + cap usage (alias: mail list)
+  mail wait [--subject s] [--from s]    Block until a matching message arrives
+                                        (the verification-code primitive; exit 2 = timeout)
+  mail messages | read | attachments    Read your mail (bodies are UNTRUSTED external content)
+  mail send | reply | outbox            Send under your human's governance (may queue
+                                        for approval — that's success, exit 0)
+                                        (domains/status/doctor/config/approvals — `k2 mail --help`)
+  calendar list | events | show | freebusy
+                                        Calendars of an inbox you hold a grant on: hosted,
+                                        or a linked Google / Microsoft 365 account (alias: cal)
+  calendar create | update | delete     Write events (draft grant; never sends email;
+                                        refused on a read-only link)
+  calendar link --request <address>     Ask your human to link their calendar read-only
+
+DNS (K2 Connect zones — toggle-gated)
+  dns access                            Capability probe (allowed? types? zones)
+  dns list                              List zones
+  dns records <domain>                  List records (daemon resolves zone)
+  dns record add <domain> <type> <name> <value> [--ttl N] [--priority N]
+  dns record remove <record-id>         Delete a user-managed record
+  dns verify <domain>                   Delegation check
+    enable: Settings → Network → Tunnel → Policies → "Agents can change DNS records",
+            or Settings → Workspaces / Agents → <workspace> → Permissions → DNS
+            → "Let this agent manage DNS"  (exit 3 if off)
+    not for: nested *.k2.dev labels (use publish) · tunnel (use tunnel) · mail MX (hostmail)
+
+PROJECTS
+  project msg [<project>] "text"        Post to your project's shared chat (delivered
+                                        live to the project's PoC agent)
+  project read [<project>]              Catch up on the chat, oldest first (--after)
+                                        (create/list/show/add/remove/poc — see `k2 project --help`)
+
+WORKSPACE
+  workspace list                        Yellow pages: every workspace + status
+  workspace list --running              Only agent-enabled workspaces (live or not; see "live" in --json)
+  workspace list --json                 For scripts: name, id, handle, path, live, sessionId, backend, ptydAdopted
+  workspace launch [<path>]             Smart cascade: attach|wake|spawn
+  workspace profile [<path>]            Read workspace agent's AGENT.md
+  workspace update --field <f> --value <v>
+                                        Edit workspace agent profile
+  workspace resources list|add|remove   Pin an existing file in the Files drawer
+
+DOCS (live docs: edit the same file with people and agents; `k2 doc --help`)
+  doc cat|head|tail|grep|sed -n <f>     Read the live doc (GNU flags, a subset)
+  doc sed -i|patch|insert|replace|append|delete <f>   One atomic edit, yours to undo
+  doc write --base V <f> < text         Rewrite from what you read (three-way merge)
+  doc who|watch|status|log|undo <f>     Presence, live changes, disk state, history
+
+CHANGES (git: the Changes tab from the CLI; agents = their own workspace)
+  changes [--json] [--base <ref>]       Staged / unstaged / untracked list
+  changes diff [<path>...] [--staged]   Unified diff (default: all uncommitted vs HEAD)
+  changes stage|unstage <path>...       Stage or unstage (stage --all for everything)
+  changes discard <path>... --yes       Throw away edits; old copies go to the Trash
+  changes commit -m "..." [--all]       Commit what is staged (`k2 changes --help`)
+  changes notes [resolve <id>...]       Review notes left for you on changed lines
+  changes open | init                   Open the Changes tab · git init the workspace
+
+REVIEW IN-FLIGHT WORK
+  reviews                               Pending merge reviews for worktrees
+  review approve|reject|feedback <agent> [options]
+                                        Act on a pending review
+
+ACTIVITY
+  activity [--limit N] [--workspace <p>]
+                                        Audit log of workspace events
+  commit [-m "..."] [--merge]           AI-assisted commit (--merge to also merge)
+
+INFO
+  help                                  This help
+  help --advanced                       Power-user verbs (heartbeat, daemon, etc.)
+  help --internal                       Orchestrator-RPC verbs (rare)
+  help-deprecated                       Map: old verb → new equivalent
+  study [list|<topic>|--json]           Bounded pages (license, people, errors). Not --help.
+  glossary [<term>]                     Define K2-specific terms (try `glossary inbox`)
+  whats-new                             Changelog popup
+  version                               CLI version
+
+ENVIRONMENT
+  K2_PROJECT_PATH     Workspace root (default: $PWD; also K2SO_PROJECT_PATH)
+  K2_AGENT_NAME       Default sender for `msg --from` (also K2SO_AGENT_NAME)
+  K2_PORT / token      From K2 terminal env, or ~/.k2/daemon.port + daemon.token
+
+Run `k2 glossary <term>` for any unfamiliar word (workspace, skill,
+inbox, heartbeat, etc.).

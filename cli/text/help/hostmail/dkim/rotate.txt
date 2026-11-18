@@ -1,0 +1,6 @@
+Mint a new DKIM pair in Stalwart, print the TXT, and plant it when
+this box already has dnsWrite on the apex. Does not bind a zone.
+BYO NS prints the record (planted:false, exit 0). mail_manage.
+
+USAGE
+  k2 hostmail dkim rotate <domain> [--json]

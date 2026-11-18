@@ -1,0 +1,38 @@
+k2 vault run [--secret NAME[=ENV_NAME]]... [--env-file .env.k2] [--scope workspace|server|session] [--no-mask] -- cmd [args…]
+
+From a K2 terminal: run one command with its secrets, now, with no session
+restart. What the child gets is what you already have, never more:
+  env delivery    ENV_NAME=<value>, default the name the share set, else
+                  NAME in capitals (--secret NAME=ENV_NAME picks another)
+  file delivery   ENV_NAME_FILE=<path>, a private 0600 file for this run,
+                  removed when the command exits. Never put in env
+  fetch only      refused; no person needed, K2 can make the call for you:
+                  k2 vault fetch --secret NAME <url>
+  ssh keys        refused; ssh and git already sign with $SSH_AUTH_SOCK
+  one-time codes  refused; reading one deletes it, so read it yourself:
+                  tool --code-file "$(k2 vault file NAME)"
+  OAuth sign-ins  a placeholder key and base URL, as k2 vault proxy-url
+                  prints; the tokens stay in K2 and K2 keeps them fresh
+--secret repeats; NAME alone works too. --env-file resolves each KEY=k2v://…
+line through the vault and passes other lines through as they are; the file
+must be inside your workspace.
+
+The values are replaced by [k2v:NAME] (the vault's name for the secret) in
+the command's output. That is hygiene, not a wall: the command has the value
+and can write it anywhere. Without --no-mask the command's output goes
+through pipes, so it doesn't see a terminal. --no-mask lets the command use
+your terminal (TTY), for interactive tools. Output is then not masked, and
+the run is logged as no-mask.
+
+The command gets its secrets, not your identity: no session passport or
+other K2 token is in its environment, and a k2 it runs refuses (exit 3)
+rather than act as you or as this server's owner. Run such k2 commands
+outside vault run.
+
+Exit code: the command's own (128 + the signal if a signal killed it).
+K2's own refusals come before the command starts, on stderr as "code: hint":
+2 usage, 3 refused (the hint or the last line says what to run), 4 no such
+secret.
+
+Example: k2 vault run --secret DATABASE_URL -- npm run migrate
+Example: k2 vault run --secret STRIPE_KEY=STRIPE_API_KEY --env-file .env.k2 -- node app.js

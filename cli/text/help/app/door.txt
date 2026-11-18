@@ -1,0 +1,42 @@
+k2 app — the App door (quotas, audit, requests, suspend, remote passes)
+
+  k2 app suspend <app-id> [--reason TEXT]
+                                       Stop it now: every pass it holds is
+                                       revoked (its next call is 401), deploys
+                                       and starts are frozen. The owner or an
+                                       Admin, on any App; an agent, on its own
+                                       workspace's Apps. Not a Member.
+  k2 app resume <app-id> [--start]     The owner; or the App's own agent for a
+                                       suspension it made itself, with "Manage
+                                       its Apps end to end".
+  k2 app audit <app-id> [--since 1h] [--verb V] [--denied] [--limit N]
+                 [--oldest-first] [--verify] [--json]
+                                       Every call the App made through its
+                                       gateway (who, verb, room, result, K2's
+                                       refusal code, bytes, latency), hash-
+                                       chained per day. The newest N (default
+                                       100), newest first; --oldest-first
+                                       reads them top to bottom. --verify
+                                       checks the chain.
+  k2 app requests <app-id> [--since 1h] [--until 10m] [--status 4xx|5xx|N]
+                 [--path /prefix] [--method POST] [--limit N] [--json]
+                                       Visitors' requests to the App, one row
+                                       each: time, method, path (never its
+                                       query), status (or K2's own answer and
+                                       code: 400, 431, 429, 502, 503), bytes
+                                       in/out, ms, who closed early. Did a
+                                       browser's POST reach the App? Look
+                                       here. Kept 7 days, 200,000 rows per
+                                       App. Owner, Admins, the App's agent.
+  k2 app quota <app-id> [--rps N] [--burst N] [--sockets N] [--body 8M]
+                 [--upload 100M] [--subscriptions N] [--reset] [--reason TEXT]
+                                       Per-App gateway quotas. No flags: show.
+                                       Lowering applies now; raising is the
+                                       owner's (anyone else's is held, exit 2).
+  k2 app token rotate <app-id> [--ttl 30d] [--keep-old] [--caps a,b]
+                                       Owner: a remote App pass (an App hosted
+                                       elsewhere), shown once. Works on the main
+                                       port and the tunnel, never on a link.
+                                       The old pass is revoked unless --keep-old.
+  k2 app remote-pass <app-id> [--revoke [PASS-ID]] [--json]
+                                       List remote passes; --revoke ends them.

@@ -1,0 +1,11 @@
+Delete a user-managed DNS record by id (from 'k2 dns records <domain>').
+Automation-managed rows (managed_by != user) are refused.
+
+USAGE
+  k2 dns record remove <record-id> [--json]
+
+ARGUMENTS
+  <record-id>            Record id from the records list
+
+FLAGS
+  --json                 JSON response

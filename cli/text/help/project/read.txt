@@ -1,0 +1,27 @@
+Read a project's chat, oldest first. Default: the 20 most recent messages.
+
+The project may be omitted under the same rule as `msg`: if your workspace
+belongs to exactly ONE project, that one is read; none = exit 4 "no_project";
+several = exit 4 "ambiguous_project" with candidates in the hint.
+
+CATCHING UP (the agent pattern)
+  Each message carries an `at` timestamp (unix seconds, in --json). Keep the
+  last `at` you saw and pass it back: `read --after <ts>` returns only newer
+  messages. There is no --follow; poll with --after when you wake.
+  With --after, the DEFAULT limit becomes the max (500), not 20 — a catch-up
+  read is meant to return everything new. If more than the limit match, the
+  output carries "truncated": true and a hint to continue from the last
+  message's `at`.
+
+USAGE
+  k2 project read [<project>] [flags]
+
+FLAGS
+  --after <ts>           Only messages with `at` greater than <ts> (unix seconds)
+  --limit <n>            How many of the most recent messages to show
+                         (default 20 — or 500 when --after is given; max 500)
+  --json                 JSON output
+
+EXAMPLES
+  k2 project read 0.41-release
+  k2 project read --after 1720000000 --json

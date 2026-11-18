@@ -1,0 +1,7 @@
+Add or remove a user-managed DNS record.
+
+USAGE
+  k2 dns record add <domain> <type> <name> <value> [--ttl N] [--priority N] [--json]
+  k2 dns record remove <record-id> [--json]
+
+See 'k2 dns record add --help' / 'k2 dns record remove --help'.

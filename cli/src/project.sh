@@ -956,416 +956,85 @@ cmd_project_read() {
 
 cmd_help_project() {
     cat <<'EOF'
-k2 project — post to and manage this server's projects (named groups of agents)
-
-A project groups agent workspaces into one effort with ONE shared chat stream.
-Every project has exactly one Point of Contact (PoC) agent: anything anyone
-ELSE posts to the chat is delivered straight into the PoC's live session, so
-the PoC always hears the room (the PoC's own posts are never echoed back).
-If you are a member agent: `msg` posts to the chat, `read` catches you up.
-The other commands manage the group itself.
-
-USAGE
-  k2 project <command> [args] [flags]
-
-COMMANDS
-  create <name>                  Create an empty project
-  rename <project> <new-name>    Rename a project
-  pin <project> [on|off]         Show it in everyone's Pinned section (default on)
-  view <project> [<view>]        Print or set the view the project's agents
-                                 open in: terminal, thread or chatter
-                                 (--agent <name>: one agent's own view)
-  delete <project> --yes         Delete a project with its dashboards and chat
-                                 (owner or admin only; agents can't)
-  list                           List this server's projects (members, PoC, pinned)
-  show <project>                 One project: members, PoC, last few messages
-  add <project> <workspace>      Add a member workspace (the FIRST member added
-                                 automatically becomes the PoC)
-  remove <project> <workspace>   Remove a member. Removing the current PoC is
-                                 REFUSED until you name a successor with `poc`
-  poc <project> [<workspace>]    Print the current PoC — or, with <workspace>,
-                                 reassign the PoC to that member
-  msg [<project>] <text>         Post to the project chat. <project> may be
-                                 omitted when your workspace belongs to exactly
-                                 ONE project (rule spelled out in `msg --help`)
-  read [<project>]               Read the chat, oldest first (--after to catch up
-                                 on messages since your last read)
-  access on|off [--workspace <ws>]
-                                 Owner/admin: turn a workspace agent's "Manage
-                                 K2 projects" switch on or off
-
-WHO MAY CHANGE PROJECTS
-  Projects are open by default: any agent may create, rename and pin
-  projects and add or remove members. Deleting a project (and its chat) and
-  setting the view its agents open in (`view`) are for the owner, an admin,
-  or an agent with "Let this agent manage K2 projects" on: a Member login gets
-  exit 1 with code forbidden. Each workspace has that per-agent switch, "Let
-  this agent manage K2 projects" (on by default; Settings → Workspaces /
-  Agents → <ws> → Permissions → Projects and Gardens, or
-  `k2 project access`). Off: that agent gets exit 1 with code
-  agent_permission_off on every change, but `list`, `show`, `read` and `msg`
-  still work. Only the owner or an admin can flip it; an agent never can.
-  Every project created or deleted and every member change is logged
-  (who, what, when). More: `k2 study projects`.
-
-ADDRESSING
-  <project> is a project name. Names match case-insensitively, and any UNIQUE
-  PREFIX works ("0.41" matches "0.41-release"). An ambiguous prefix fails with
-  exit 4 and lists the matching candidates in the hint. An EXACT name match
-  ALWAYS wins, even when it is also a prefix of other names ("Atlas" resolves
-  to Atlas even with Atlas-docs present); prefix resolution only engages when
-  there is no exact match.
-  <workspace> is an agent name or a path — same rules as `k2 agent`: anything
-  containing "/" is treated as a path; names match case-insensitively; quote
-  names containing spaces ("QA Bot").
-
-WHO YOU ARE
-  msg and read act AS your workspace, auto-detected from K2_PROJECT_PATH
-  (falling back to the current directory) — the same detection `k2 tickets`
-  uses. Only members (and the server owner via the app) can post.
-
-GLOBAL FLAGS
-  --json                 Machine-readable output (single JSON object)
-
-OUTPUT CONTRACT
-  Success output is human-readable by default; --json switches it to JSON.
-  ERRORS are ALWAYS JSON on stderr — {"error":{"code","hint"}} — regardless
-  of --json, so scripts can rely on the shape.
-  Success means ok:true. On msg, "delivered": false with "deliveryReason":
-  "author-is-poc" is NORMAL (your own post never injects back to you) —
-  it is NOT a failure.
-
-EXIT CODES
-  0 ok · 1 error (including refusals like removing the PoC or posting as a
-  non-member) · 2 bad usage · 4 not found / ambiguous (candidates in the hint)
-  4 = a name could not be resolved (fix the name and retry) · 1 = resolved
-  but refused or failed
-
-Run 'k2 project <command> --help' for details on a command.
+%include cli/text/help/project.txt
 EOF
 }
 
 cmd_help_project_access() {
     cat <<'EOF'
-Turn a workspace agent's "Let this agent manage K2 projects" switch on or off. Projects are
-open by default (the switch starts ON). Off: that workspace's agent can't
-create, rename or delete projects or change their members or settings
-(code agent_permission_off); it can still list, show and read projects and
-post in its project chat. You (the owner) and people are never limited.
-
-Owner or admin only. Inside a K2 terminal this sends the session passport,
-which the daemon refuses: an agent can never flip its own switch. Run it from
-a terminal outside K2, or use Settings → Workspaces / Agents → <ws> → Permissions.
-
-USAGE
-  k2 project access on|off [--workspace <ws>] [--json]
-
-FLAGS
-  --workspace <ws>       The workspace (name or path); default: this one
-  --json                 JSON output
-
-EXAMPLES
-  k2 project access off --workspace scout
-  k2 project access on --workspace ~/agents/scout
+%include cli/text/help/project/access.txt
 EOF
 }
 
 cmd_help_project_rename() {
     cat <<'EOF'
-Rename a project. Names are unique per server, case-insensitively.
-
-USAGE
-  k2 project rename <project> <new-name> [--json]
-
-EXAMPLES
-  k2 project rename 0.41-release 0.42-release
+%include cli/text/help/project/rename.txt
 EOF
 }
 
 cmd_help_project_delete() {
     cat <<'EOF'
-Delete a project: its member list, dashboards and its whole chat. The agents
-and their folders are never touched. Only the owner, an admin, or an agent
-with "Let this agent manage K2 projects" on can delete a project; a Member login is refused
-(exit 1, code forbidden), and an agent with the switch off gets
-agent_permission_off.
-
-USAGE
-  k2 project delete <project> --yes [--json]
-
-FLAGS
-  --yes, -y              Required: confirms you mean it
-  --json                 JSON output
+%include cli/text/help/project/delete.txt
 EOF
 }
 
 cmd_help_project_pin() {
     cat <<'EOF'
-Pin a project so it shows in the Pinned section of the Projects nav for
-everyone on this server, or unpin it with off.
-
-USAGE
-  k2 project pin <project> [on|off] [--json]
-
-EXAMPLES
-  k2 project pin 0.46.1
-  k2 project pin 0.46.1 off
+%include cli/text/help/project/pin.txt
 EOF
 }
 
 cmd_help_project_view() {
     cat <<'EOF'
-Print or set the view a project opens its agents in: terminal, thread or
-chatter. Every agent on the project's dashboards opens in this view, unless
-that agent has its own view (--agent, below). New projects start on thread.
-
-Anyone can switch one agent with the view picker in its bar. That switch
-is only for them, and it ends when they restart the app or when this
-default changes; the agent then goes back to the project's default view.
-
-With --agent <name>, the same for one agent of the project: its own view,
-for everyone, in place of the project's. The view `default` clears it, so
-the agent follows the project's view again.
-
-With no <view>, prints the current default, like this:
-  sales opens agents in: thread
-  ada in sales opens in: terminal (its own view)
-  bo in sales opens in: thread (the project's view)
-Anyone may read it; no permission is needed. After a set it prints:
-  sales now opens agents in: terminal
-  ada in sales now opens in: chatter
-  ada in sales now follows the project's view: thread
-
-Setting it is for the owner, an admin, or an agent with "Let this agent
-manage K2 projects" on (on by default), for the project's view and one agent's alike.
-A Member login gets exit 1 with code forbidden; an agent with the switch
-off gets exit 1 with code agent_permission_off.
-
-USAGE
-  k2 project view <project> [terminal|thread|chatter] [--json]
-  k2 project view <project> [terminal|thread|chatter|default] --agent <name> [--json]
-
-VIEWS
-  thread       The agent's Thread: you and the agent, like a text chat (new projects)
-  terminal     The agent's live terminal
-  chatter      Messages between this agent and other agents
-  default      Only with --agent: clear the agent's own view
-  There is no split view for a project. Any other view (split, for one) is
-  refused with exit 2, code usage, before the daemon is asked, so before
-  any permission check.
-
-FLAGS
-  --agent <name>  One agent of the project: its name, folder path or
-               workspace id. One that is not a member gets exit 1 with code
-               not_a_member, before anything is set.
-  --json       JSON output: {"ok":true,"project":"sales","defaultView":"thread"}
-               With --agent it adds "agent" and "ownDefaultView" (null when
-               the agent follows the project's view).
-
-EXAMPLES
-  k2 project view sales
-  k2 project view sales terminal
-  k2 project view sales --agent ada
-  k2 project view sales chatter --agent ada
-  k2 project view sales default --agent ada
-
-EXIT CODES
-  0 ok · 1 refused · 2 bad usage (an unknown view) · 4 project not found or ambiguous
+%include cli/text/help/project/view.txt
 EOF
 }
 
 cmd_help_project_create() {
     cat <<'EOF'
-Create an empty project. Add members with `k2 project add` — the first member
-you add automatically becomes the Point of Contact (reassign later with `poc`).
-
-Project names are unique per server, case-insensitively ("Kessel" and "kessel"
-collide). Pick something short: everyone will type it in `msg`.
-
-USAGE
-  k2 project create <name> [flags]
-
-ARGUMENTS
-  <name>                 The project's name (quote names containing spaces)
-
-FLAGS
-  --json                 JSON output
-
-EXAMPLES
-  k2 project create 0.41-release
-  k2 project create "Kessel Perf"
+%include cli/text/help/project/create.txt
 EOF
 }
 
 cmd_help_project_list() {
     cat <<'EOF'
-List this server's projects: member count, PoC, and a pinned marker (*) for
-projects pinned in the app's Projects nav.
-
-USAGE
-  k2 project list [flags]
-
-FLAGS
-  --json                 JSON output
+%include cli/text/help/project/list.txt
 EOF
 }
 
 cmd_help_project_show() {
     cat <<'EOF'
-Show one project: its members (PoC marked), and the last few chat messages.
-For the full chat stream use `k2 project read`.
-
-USAGE
-  k2 project show <project> [flags]
-
-FLAGS
-  --json                 JSON output
-
-EXAMPLES
-  k2 project show 0.41-release
-  k2 project show 0.41            (unique prefix works)
+%include cli/text/help/project/show.txt
 EOF
 }
 
 cmd_help_project_add() {
     cat <<'EOF'
-Add a member workspace to a project. A workspace can belong to many projects.
-
-The FIRST member added to an empty project automatically becomes the PoC —
-the output says so when it happens. Adding an existing member again is a
-no-op (reported, exit 0).
-
-USAGE
-  k2 project add <project> <workspace> [flags]
-
-FLAGS
-  --json                 JSON output
-
-EXAMPLES
-  k2 project add 0.41-release Appa
-  k2 project add 0.41-release ~/agents/scout
+%include cli/text/help/project/add.txt
 EOF
 }
 
 cmd_help_project_remove() {
     cat <<'EOF'
-Remove a member workspace from a project. The workspace itself is untouched —
-this only ends its membership (and its right to post to this project's chat).
-
-Removing the CURRENT PoC is refused (exit 1, code "poc_successor_required"):
-first hand off with `k2 project poc <project> <successor>`, then remove.
-A project's SOLE member is its PoC and cannot be removed (there is no
-successor to name); delete the project from the app's Settings page instead.
-
-USAGE
-  k2 project remove <project> <workspace> [flags]
-
-FLAGS
-  --json                 JSON output
-
-EXAMPLES
-  k2 project remove 0.41-release "QA Bot"
+%include cli/text/help/project/remove.txt
 EOF
 }
 
 cmd_help_project_poc() {
     cat <<'EOF'
-Without <workspace>: print the current PoC's name — bare, script-friendly
-(like `k2 agent get`). With <workspace>: reassign the PoC to that member.
-
-The PoC is the project's injection target: every chat post by anyone else is
-delivered into the PoC's session. The target must already be a member (add it
-first). Reassignment takes effect for the NEXT message.
-
-USAGE
-  k2 project poc <project> [<workspace>] [flags]
-
-FLAGS
-  --json                 JSON output
-
-EXAMPLES
-  k2 project poc 0.41-release            (prints: Appa)
-  k2 project poc 0.41-release scout      (scout is now the PoC)
+%include cli/text/help/project/poc.txt
 EOF
 }
 
 cmd_help_project_msg() {
     cat <<'EOF'
-Post a message to a project's chat. This is the command member agents use to
-report progress, hand off, or raise something to the team.
-
-You post AS your workspace (auto-detected from K2_PROJECT_PATH, falling back
-to the current directory). Your message is stored in the project chat and —
-unless you ARE the PoC — delivered live into the PoC's session, waking it if
-dormant. The PoC's own posts are stored for everyone to read but never
-injected back into itself. A successful post is ok:true; "delivered": false
-with "deliveryReason": "author-is-poc" is NORMAL — not a failure.
-
-USAGE
-  k2 project msg [<project>] <text> [flags]
-
-ARGUMENT RULES (exact)
-  two arguments   → the first is ALWAYS <project>, the second is <text>
-  one argument    → it is ALWAYS <text>; the project is auto-detected
-  three or more   → exit 2 (usage). Almost always an unquoted message — the
-                    hint suggests the quoted form
-                    (did you mean: k2 project msg "build done"?)
-  <text> of "-"   → the message body is read from stdin (works in both forms;
-                    to send a literal "-", send it via stdin)
-
-QUOTING
-  <text> is ONE argument — always quote multi-word messages ("build done",
-  not build done). If a two-argument call's first token doesn't resolve as a
-  project, the error's hint suggests the fully-quoted form too.
-
-WHICH PROJECT? (when <project> is omitted)
-  Your workspace's own memberships decide:
-    member of exactly ONE project → that project is used (echoed in the output)
-    member of NONE                → {"code":"no_project"}        exit 4
-    member of TWO OR MORE         → {"code":"ambiguous_project"} exit 4, with
-                                    the candidate names in the hint
-  Passing <project> explicitly always works and is the safe form in scripts.
-
-FLAGS
-  --json                 JSON output (includes the delivery outcome:
-                         delivered / deliveryReason / deliveredSessionId)
-
-EXAMPLES
-  k2 project msg "Build is green on all three targets."
-  k2 project msg 0.41-release "Starting the notarize pass now."
-  git log --oneline -5 | k2 project msg 0.41-release -
+%include cli/text/help/project/msg.txt
 EOF
 }
 
 cmd_help_project_read() {
     cat <<'EOF'
-Read a project's chat, oldest first. Default: the 20 most recent messages.
-
-The project may be omitted under the same rule as `msg`: if your workspace
-belongs to exactly ONE project, that one is read; none = exit 4 "no_project";
-several = exit 4 "ambiguous_project" with candidates in the hint.
-
-CATCHING UP (the agent pattern)
-  Each message carries an `at` timestamp (unix seconds, in --json). Keep the
-  last `at` you saw and pass it back: `read --after <ts>` returns only newer
-  messages. There is no --follow; poll with --after when you wake.
-  With --after, the DEFAULT limit becomes the max (500), not 20 — a catch-up
-  read is meant to return everything new. If more than the limit match, the
-  output carries "truncated": true and a hint to continue from the last
-  message's `at`.
-
-USAGE
-  k2 project read [<project>] [flags]
-
-FLAGS
-  --after <ts>           Only messages with `at` greater than <ts> (unix seconds)
-  --limit <n>            How many of the most recent messages to show
-                         (default 20 — or 500 when --after is given; max 500)
-  --json                 JSON output
-
-EXAMPLES
-  k2 project read 0.41-release
-  k2 project read --after 1720000000 --json
+%include cli/text/help/project/read.txt
 EOF
 }
 

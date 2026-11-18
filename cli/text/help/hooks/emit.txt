@@ -1,0 +1,23 @@
+Usage: k2 hooks emit <event> [--json '<object>'] [--session-id <id>] [--quiet]
+
+Report a lifecycle event from a custom program running in this K2 session
+(the session's own passport; never the owner token).
+
+Events (Claude's names):
+  SessionStart       the program is up (add --json '{"source":"startup"}')
+  UserPromptSubmit   a turn starts: the agent shows as working
+  PreToolUse         a tool call starts (--json '{"tool_name":…,"tool_use_id":…}')
+  PostToolUse        that tool call ended (same tool_use_id)
+  Notification       waiting on a person
+  Stop               the turn is done: the agent shows as idle
+  SessionEnd         the program is exiting
+
+  --json '<object>'  extra fields merged into the event (object only;
+                     hook_event_name always comes from <event>)
+  --session-id <id>  the program's own conversation id, if it has one
+                     (informational; it never changes the Thread pin)
+  --quiet            print nothing on success
+
+Exit: 0 accepted; 1 not counted (foreign / unknown_pane / parse_error /
+daemon unreachable); 2 usage; 3 no session passport (run it inside a K2
+session). More: k2 study hooks

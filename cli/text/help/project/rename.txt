@@ -1,0 +1,7 @@
+Rename a project. Names are unique per server, case-insensitively.
+
+USAGE
+  k2 project rename <project> <new-name> [--json]
+
+EXAMPLES
+  k2 project rename 0.41-release 0.42-release

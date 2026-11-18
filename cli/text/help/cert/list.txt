@@ -1,0 +1,4 @@
+List cert state for attached hostnames.
+
+USAGE
+  k2 cert list [--json]

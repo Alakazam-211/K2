@@ -1,0 +1,8 @@
+Check now with k2.dev: re-bind an attached apex so a pending zone
+(nameservers not yet pointed at k2.dev) flips to active. The server
+also re-checks pending domains by itself, so this is only needed to
+skip the wait. With no apex,
+checks every pending domain. Owner/admin; agents exit 3.
+
+USAGE
+  k2 domain refresh [<apex>] [--json]

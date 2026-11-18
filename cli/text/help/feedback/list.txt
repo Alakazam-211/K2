@@ -1,0 +1,10 @@
+List this workspace's feedback items, newest first. Default shows open items
+(waiting + answered + needs_discussion); pass --all to include resolved/dismissed/planned.
+
+USAGE
+  k2 tickets list [flags]
+
+FLAGS
+  --all                  Include resolved, dismissed, and planned items
+  --status <status>      Filter to one status: waiting | needs_discussion | answered | planned | resolved | dismissed
+  --json                 JSON output

@@ -306,43 +306,7 @@ _compute_pkg_held_exit() {
 # more. Thin: every rule lives in the daemon (compute_pkg.rs).
 _compute_node_packages_usage() {
     cat <<'EOF'
-k2 compute node packages — system packages on a compute node (0.46.9)
-
-  k2 compute node packages <node> [--json]
-        the node's host line, its package manager, the policy for this
-        server there, the approved and installed names, and your recent
-        requests
-  k2 compute node packages request <node>[,<node>…] <name>[,<name>…] --why "…" [--job ID] [--json]
-        ask the node's owner to install them: one request for every name
-        on every node named. A name is a Debian name (libssl-dev; K2 maps
-        it for each distro), a native one (pacman:openssl, dnf:openssl-devel)
-        or a K2 profile (profile:tauri-linux). A job whose --needs aren't
-        covered files the same request by itself. Held for this server's
-        owner: exit 2, and the Ask with: line puts it on their card. You
-        get a [compute] message when the owner decides; then run your job
-        again
-  k2 compute node packages requests [--node N] [--state S] [--limit N] [--json]
-        your requests (the owner or an Admin outside K2: every request).
-        S: pending, approved, installed, denied, failed, expired or all.
-        installed = run your job again; denied, failed, expired = it won't
-  k2 compute node packages approve|deny <request> [--add] [--note "…"]
-        the owner or an Admin, from a terminal outside K2 (an agent never
-        decides). <request> is the cpr_… id that requests shows (a start of
-        it that fits one is enough). The card in chat and Settings → Cores →
-        Compute → Machine settings → Waiting for you are the main path. approve --add also puts the
-        names on that server's approved list, so the next ask for them
-        needs no card
-  k2 compute node packages policy <node> [--json]
-        what this server may install there without asking
-  k2 compute node packages policy <node> [<server>] [level=list|profiles|official]
-        [profiles=a,b] [max_install_mb=N] [--reason "…"]
-        change it for <server>: own (this server, the default), or another
-        server's label as k2 compute node servers <node> shows it. The
-        node's owner only. profiles= takes bare K2 profile names
-        (build-base, tauri-linux, rust-gui-ci, k2-workspace, gpu-headless) and replaces
-        the server's list. Narrowing applies at once; widening is held for
-        the owner's approval (exit 2). Every server's policy, at the
-        machine: k2-node packages list
+%include cli/text/help/compute/node/packages.txt
 EOF
 }
 

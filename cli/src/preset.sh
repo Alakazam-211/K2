@@ -285,115 +285,19 @@ PYEOF
 
 cmd_help_preset() {
     cat <<'EOF'
-Manage agent PRESETS — the roster of launchable agent programs this
-server knows (Claude, Codex, Gemini, ... plus your own). A preset is a
-command string plus metadata the daemon uses at spawn time:
-
-  danger-flags   the agent's OWN auto-approve flags (e.g. --yes-always).
-                 On API host-session spawns they are KEPT by default
-                 (api_skip_permissions ON). Opt out per workspace to strip
-                 them (fail-closed).
-  env            environment variables staged into the agent's process
-                 (e.g. OPENAI_BASE_URL for a local-LLM harness).
-  readiness      when prompt injection may fire: 'bracketed-paste'
-                 (TUI readiness signal is trustworthy) or 'settle:<ms>'.
-  inject-flow    keystroke sequence used to deliver a message into this
-                 LLM's terminal (paste|esc|space|return). NULL = default
-                 paste / return / return.
-
-USAGE
-  k2 preset list [--json]
-  k2 preset show <preset> [--json]
-  k2 preset add --id <slug> --command '<argv string>' [flags]
-  k2 preset set <preset> [flags]
-  k2 preset remove <preset> [--json]        (custom presets only)
-
-<preset> = preset id, label (case-insensitive), or command first-token.
-Mutations need the owner token or an Owner/Admin session. Built-ins:
-editable (incl. metadata), never deletable — disable instead.
-
-Point a workspace at a preset: k2 agent hire <dir> --agent <preset>
-
-EXAMPLES
-  k2 preset list
-  k2 preset show codex
-  k2 preset add --id aider-ollama --command 'aider --model ollama_chat/qwen3' \
-      --env OLLAMA_API_BASE=http://localhost:11434 \
-      --danger-flag --yes-always --readiness settle:2000
-  k2 preset set aider-ollama --readiness settle:3000
-  k2 preset remove aider-ollama
-
-See `k2 preset add --help` / `k2 preset set --help` for the full flags,
-and docs/agent-contract.md for what a custom agent must do to be a
-first-class K2 citizen.
+%include cli/text/help/preset.txt
 EOF
 }
 
 cmd_help_preset_add() {
     cat <<'EOF'
-Add a CUSTOM agent preset.
-
-USAGE
-  k2 preset add --id <slug> --command '<argv string>' [flags]
-
-FLAGS
-  --id <slug>             Preset id (1-64 chars: letters, digits, . _ -).
-                          This is the stable handle `hire --agent` and
-                          projects.default_agent reference.
-  --command '<argv>'      Full launch command string, quote-aware
-                          (e.g. 'aider --model ollama_chat/qwen3').
-  --label <label>         Display label (default: the id)
-  --icon <emoji>          Icon shown in Settings/pickers
-  --danger-flag <flag>    Declare ONE of the agent's own auto-approve
-                          flags (repeatable). Kept on API host-session
-                          spawns by default; stripped if the workspace
-                          sets api_skip_permissions off.
-  --env K=V               Environment variable staged at spawn
-                          (repeatable). Values may hold secrets — they
-                          are never logged by the daemon.
-  --readiness <v>         'bracketed-paste' | 'settle:<ms>' (1..600000)
-  --json                  JSON output
-
-EXAMPLE — local-LLM harness (aider against Ollama):
-  k2 preset add --id aider-ollama \
-      --command 'aider --model ollama_chat/qwen3 --no-auto-commits' \
-      --env OLLAMA_API_BASE=http://localhost:11434 \
-      --danger-flag --yes-always \
-      --readiness settle:2000
+%include cli/text/help/preset/add.txt
 EOF
 }
 
 cmd_help_preset_set() {
     cat <<'EOF'
-Edit a preset (custom or built-in). Only the flags you pass change.
---danger-flag / --env REPLACE the stored set wholesale (they don't
-append) — pass the full desired set.
-
-USAGE
-  k2 preset set <preset> [flags]
-
-FLAGS
-  --command '<argv>'      Replace the launch command string
-  --label <label>         Rename
-  --icon <emoji>          Change the icon
-  --enable | --disable    Toggle availability (disabled presets are
-                          skipped by the default-agent resolver)
-  --danger-flag <flag>    Replace the declared auto-approve flags
-                          (repeatable)
-  --env K=V               Replace the spawn env (repeatable)
-  --readiness <v>         'bracketed-paste' | 'settle:<ms>'
-  --clear-danger-flags    Clear back to undeclared (fail-closed floor)
-  --clear-env             Clear the spawn env
-  --clear-readiness       Clear back to the default injection profile
-  --inject-flow '<json>'  Replace the submit-keys flow (paste|esc|space|return)
-  --clear-inject-flow     Reset submit keys to the default paste/return/return
-  --json                  JSON output
-
-EXAMPLES
-  k2 preset set aider-ollama --readiness settle:3000
-  k2 preset set Gemini --danger-flag --yolo
-  k2 preset set my-agent --disable
-  k2 preset set grok --inject-flow '[{"key":"esc","waitMs":0},{"key":"space","waitMs":50},{"key":"paste","waitMs":150},{"key":"return","waitMs":250},{"key":"return","waitMs":120}]'
+%include cli/text/help/preset/set.txt
 EOF
 }
 

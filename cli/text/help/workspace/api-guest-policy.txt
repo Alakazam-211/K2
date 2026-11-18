@@ -1,0 +1,11 @@
+Usage: k2 workspace api-guest-policy get|set <workspace> [text|--file PATH|--default]
+
+Per-workspace owner policy re-injected on every /v1 host-session turn so
+external API clients are framed as non-owners. Callers cannot set this.
+
+  get <ws>                      Print effective policy (platform default if unset)
+  set <ws> <text…>              Set custom policy text
+  set <ws> --file <path>        Set policy from a file (use - for stdin)
+  set <ws> --default            Clear custom text → platform default
+
+Also writable via: k2 agent set / POST /cli/workspace/set field api_guest_policy

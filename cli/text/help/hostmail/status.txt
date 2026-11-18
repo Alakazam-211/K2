@@ -1,0 +1,29 @@
+Email server status: state (not-installed | installing | running | degraded |
+stopped | disabled | error), installed vs pinned engine version, mail hostname, and the
+TLS/port plan. Works on any daemon — `supported: no` means this daemon
+cannot run the server (Linux-only feature).
+
+Linux: systemd is the ground truth — `systemctl is-active stalwart`
+(read-only; reading is allowed). `state` is never `running` unless the unit
+is active; SQLite is a cache. `consistent: false` means status and systemd
+disagree: a WARNING line prints `lastError`, and the command exits ≠ 0.
+`state` other than `running` also exits ≠ 0. Envelope `ok` is the status
+read, not the systemd verdict.
+Do not `systemctl start` or `stop` the unit by hand — writes stay
+`k2 hostmail enable` / `disable`.
+
+`k2 hostmail disable` stops inbound mail for the WHOLE host (every hosted
+domain) until `k2 hostmail enable` actually restarts the unit.
+
+Linux: `helper:` is the root door enable and cert restarts use —
+installed | missing | not allowed by sudoers. When it is not installed,
+`fix:` prints the one command for root to run on the box (an admin SSH
+session, never a K2 terminal; `k2 root-helper install-command`):
+  curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-root-helper.sh | sudo bash -s -- --version <version>
+
+USAGE
+  k2 hostmail status [flags]
+
+FLAGS
+  --health               Also run the live health probe (systemd + API ping)
+  --json                 JSON output

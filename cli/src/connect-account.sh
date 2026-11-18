@@ -76,42 +76,7 @@ _connect_account_file() { echo "${K2_HOME}/connect-account.json"; }
 
 _connect_usage() {
     cat <<'EOF' >&2
-k2 connect — pair a purchased k2.dev subdomain to this device
-
-USAGE
-  k2 connect login [--email <e>] [--token-stdin] [--subdomain <label>]
-  k2 connect status
-  k2 connect logout
-
-COMMANDS
-  login     Sign in to k2.dev (email+password or a JWT on stdin), pick a
-            purchased subdomain, write tunnel config, start the tunnel.
-  status    Show paired subdomain + tunnel/account state.
-  logout    Clear the saved account session (~/.k2/connect-account.json).
-            Does not unpair the tunnel (see: k2 tunnel release --confirm).
-
-FLAGS (login)
-  --email <e>         Account email (prompted if omitted with password flow)
-  --token-stdin       Read an access JWT from stdin instead of email/password
-                      (scripted)
-  --token <jwt>       The same on the command line, where every account on
-                      this computer can see it while the command runs
-  --subdomain <label> Skip the interactive picker
-  --help, -h          This help
-
-Nested Pro subdomains / plan status live under `k2 publish` (not here).
-Which relay the tunnel dials (relay.k2.dev by default) and how to restore
-the old built-in relay: k2 tunnel --help (RELAYS) and k2 tunnel status.
-
-ACCOUNT SERVER
-  login and logout talk to the k2.dev account server. To use another one
-  (rarely needed), set K2_CONNECT_DB_URL=https://... for this command, or
-  the Owner-only connectDbUrl setting (~/.k2/settings.json; the daemon and
-  the desktop app use it too). The env var wins; otherwise the default.
-  There is no automatic switch between servers.
-
-EXIT CODES
-  0 ok · 1 error · 2 bad usage
+%include cli/text/help/connect.txt
 EOF
 }
 

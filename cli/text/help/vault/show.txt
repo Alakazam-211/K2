@@ -1,0 +1,7 @@
+k2 vault show NAME [--scope <s>] [--json]
+
+One secret: kind, sites, where fetch puts it (header/query/basic/body and
+format), delivery and ceiling, who gave it, shares, recent use. Never the
+value.
+
+Example: k2 vault show STRIPE_KEY

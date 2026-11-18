@@ -1,0 +1,35 @@
+k2 app data — an App's data folder ($K2_APP_DATA, /data in its wall)
+
+Your App's pages write to /data (answers, uploads); read them back here.
+Paths are inside the data folder: relative (var/answers.json) or as the App
+sees them (/data/var/answers.json). Never .., never through a symlink. A
+walled App must be running (these go through its own exec, as the App).
+
+  k2 app data put <app-id> <path> [--to <dir>] [--json]
+                                       Copy a file or folder of your workspace
+                                       into the data folder (64 MiB compressed
+                                       per put; any bytes: PDFs, images, tars).
+  k2 app data ls <app-id> [<path>] [--json]
+                                       List a folder (at most 2000 entries) or
+                                       show one file. Links show as links,
+                                       never followed.
+  k2 app data get <app-id> <path> [--to <local path> | -] [--json]
+                                       Read a file back (256 MiB at most), in
+                                       512 KiB pieces into a temp file, then
+                                       renamed into place. Default: ./<name>;
+                                       --to a folder: into it; - : stdout.
+  k2 app data rm <app-id> <path> [--recursive] [--json]
+                                       Remove a file (a link: the link only). A
+                                       folder needs --recursive.
+  k2 app data mv <app-id> <from> <to> [--force] [--json]
+                                       Rename or move inside the data folder
+                                       (missing folders are made). Never
+                                       replaces a file without --force, never
+                                       lands inside or replaces a folder.
+
+Who: the App's workspace agent with "Build and run Apps" (without it, rm and
+mv wait for your owner; ls and get are refused), the owner, an Admin.
+
+Exit codes: 0 done, 2 usage error or held for your owner, 3 refused (JSON on
+stderr: data_not_found, data_symlink, data_is_folder, data_exists,
+data_too_large, app_not_running, …).

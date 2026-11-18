@@ -1,0 +1,10 @@
+usage: k2 app account-deletion <app> [--json]                     pending requests and the settings
+       k2 app account-deletion complete <app> <adr_…|username>    delete now (can't be undone)
+       k2 app account-deletion cancel <app> <adr_…|username>      undo: their access comes back
+A person deletes their own account from inside the App (profile.deleteAccount).
+With the App's mode "request" (the default), K2 signs them out and turns their
+access off, and the deletion waits here until you complete it or its grace period
+ends. The owner or an Admin completes or cancels; so may the App's own agent with
+"Let this agent manage its Apps' users" on. Settings: k2 app set <app> --help.
+After a deletion, delete what the App keeps for that person in its own data.
+More: k2 study app-account-deletion.

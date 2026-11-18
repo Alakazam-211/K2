@@ -1,0 +1,14 @@
+Capability probe for DNS manage on this workspace.
+
+USAGE
+  k2 dns access [--json]
+
+When the toggle is OFF, returns allowed:false without dialing the control
+plane (no zone existence oracle). When ON, returns live capability + zones
+summary from the control plane.
+
+Exit 0 even when allowed:false (capability read succeeded). Mutations
+still exit 3 when gated.
+
+FLAGS
+  --json                 JSON capability envelope

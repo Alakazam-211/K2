@@ -1,0 +1,16 @@
+Mark a mailbox password as reviewed: you know who has it, so
+`k2 hostmail doctor` stops listing it under "Mail passwords an agent may
+hold". The owner, or an IT agent for any mailbox but its own workspace's
+(exit 3 owner_only); agents without mail-manage exit 3. Shows and changes
+no secret. If you don't know who has it, rotate it instead (`k2 hostmail
+password rotate <addr>`). POST /cli/mail/credentials/keep {address}.
+
+--all-existing marks every mailbox password whose mailbox existed before
+the 0.45.0 update. Mailboxes created after that are never covered —
+review them one by one. Already marked ones are left as they are. An IT
+agent's run skips its own workspace's mailboxes (left for the owner).
+POST /cli/mail/credentials/keep {allExisting: true, kind: "mailbox"}.
+
+USAGE
+  k2 hostmail password keep <addr> [--json]
+  k2 hostmail password keep --all-existing [--json]

@@ -1,0 +1,19 @@
+Host email domains (OWNER — agents get exit 3: ask your human). Adding a
+domain prints the DNS record table to set at your registrar; K2 verifies the
+records live and flips the domain Verified when MX + SPF + one DKIM are
+valid. Records can take up to 48 h to propagate; K2 keeps re-checking and
+never touches your DNS.
+
+USAGE
+  k2 hostmail domain add <domain>            Create + print the DNS record table
+  k2 hostmail domain list                    Every domain + status + record summary
+  k2 hostmail domain show <domain>           Full per-record table (Valid/Missing/
+                                         Wrong with the live-value diff)
+  k2 hostmail domain check <domain>          Force re-verification now
+  k2 hostmail domain remove <domain> [--yes] [--purge-data]
+                                         Retires its addresses (count shown);
+                                         --yes confirms; --purge-data also
+                                         deletes stored mail
+
+FLAGS
+  --json                 JSON output (any subcommand)

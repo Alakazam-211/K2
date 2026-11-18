@@ -1,0 +1,28 @@
+TLS certificate for the mail hostname. Renew retries ACME without
+re-enable, SIGTERM, or wiping the store. enable is not the retry
+path; disable is not a retry.
+
+USAGE
+  k2 hostmail cert renew [--json]
+  k2 hostmail cert names [issue|renew] [--name <host>] [--json]
+  k2 hostmail cert owner [--stalwart-acme] [--json]
+
+  names: one certificate per extra name (autoconfig, autodiscover,
+  mta-sts, ua-auto-config) that points here — see
+  `k2 hostmail cert names --help`.
+
+WHO OWNS IT
+  `k2 hostmail status` → cert.owner (or `k2 hostmail cert owner`).
+  k2: K2 issues, installs and renews it; Stalwart ACME stays Manual —
+  never turn it back on by hand. stalwart-acme: Stalwart renews it, K2
+  locks its names to the mail host. Full story: `k2 study mail`
+  (WHO OWNS THE MAIL CERTIFICATE). Never fix a certificate with
+  `k2 hostmail disable/enable`.
+
+DNS
+  If this zone is on ns1/ns2.k2.dev (K2-hosted), ACME can plant records.
+  If DNS is elsewhere (Vercel, Cloudflare, cPanel, …), K2 cannot plant.
+  On THAT platform add: mail.<apex> A to this box's origin
+  (`k2 hostmail ptr show`). Also autoconfig, autodiscover, mta-sts,
+  ua-auto-config (A or CNAME to mail.<apex> / origin) — if those stay
+  on an apex wildcard the order stays self-signed. Then cert renew.

@@ -1,0 +1,14 @@
+Owner-only wipe of the hosted mail server and its on-disk data.
+POSTs {"purgeData":true,"confirmHostname":"<host>"} to
+/cli/mail/server/uninstall. Both flags are required. --purge without
+--confirm-hostname exits 2 and does not POST. Not a mail_manage verb.
+disable is not this wipe.
+
+USAGE
+  k2 hostmail uninstall --purge --confirm-hostname <host> [--json]
+
+FLAGS
+  --purge                Required. Delete mail data with the server.
+  --confirm-hostname <host>
+                         Mail hostname. Must match the server. Required.
+  --json                 JSON output

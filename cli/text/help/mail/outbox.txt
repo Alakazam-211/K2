@@ -1,0 +1,16 @@
+Your outbound messages, newest first: pending approval / approved+submitted /
+rejected (with your human's note inline) / failed. Point lookup with an id.
+
+USAGE
+  k2 mail outbox [<id>] [flags]
+
+ARGUMENTS
+  <id>                   An outbound id (out_… — stable, also in --json)
+
+FLAGS
+  --limit <n>            1-100 (default 20)
+  --json                 JSON output
+
+STATUSES
+  pending_approval · approved · submitted (= accepted-for-delivery; K2 never
+  claims "delivered") · rejected (the note says why) · failed

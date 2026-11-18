@@ -1,0 +1,5 @@
+Remove vacation from that mailbox's user Sieve. Leaves a forward
+block if present. POST /cli/mail/ooo/unset. GET is 405.
+
+USAGE
+  k2 hostmail ooo unset <addr> [--json]

@@ -1,0 +1,86 @@
+k2 project — post to and manage this server's projects (named groups of agents)
+
+A project groups agent workspaces into one effort with ONE shared chat stream.
+Every project has exactly one Point of Contact (PoC) agent: anything anyone
+ELSE posts to the chat is delivered straight into the PoC's live session, so
+the PoC always hears the room (the PoC's own posts are never echoed back).
+If you are a member agent: `msg` posts to the chat, `read` catches you up.
+The other commands manage the group itself.
+
+USAGE
+  k2 project <command> [args] [flags]
+
+COMMANDS
+  create <name>                  Create an empty project
+  rename <project> <new-name>    Rename a project
+  pin <project> [on|off]         Show it in everyone's Pinned section (default on)
+  view <project> [<view>]        Print or set the view the project's agents
+                                 open in: terminal, thread or chatter
+                                 (--agent <name>: one agent's own view)
+  delete <project> --yes         Delete a project with its dashboards and chat
+                                 (owner or admin only; agents can't)
+  list                           List this server's projects (members, PoC, pinned)
+  show <project>                 One project: members, PoC, last few messages
+  add <project> <workspace>      Add a member workspace (the FIRST member added
+                                 automatically becomes the PoC)
+  remove <project> <workspace>   Remove a member. Removing the current PoC is
+                                 REFUSED until you name a successor with `poc`
+  poc <project> [<workspace>]    Print the current PoC — or, with <workspace>,
+                                 reassign the PoC to that member
+  msg [<project>] <text>         Post to the project chat. <project> may be
+                                 omitted when your workspace belongs to exactly
+                                 ONE project (rule spelled out in `msg --help`)
+  read [<project>]               Read the chat, oldest first (--after to catch up
+                                 on messages since your last read)
+  access on|off [--workspace <ws>]
+                                 Owner/admin: turn a workspace agent's "Manage
+                                 K2 projects" switch on or off
+
+WHO MAY CHANGE PROJECTS
+  Projects are open by default: any agent may create, rename and pin
+  projects and add or remove members. Deleting a project (and its chat) and
+  setting the view its agents open in (`view`) are for the owner, an admin,
+  or an agent with "Let this agent manage K2 projects" on: a Member login gets
+  exit 1 with code forbidden. Each workspace has that per-agent switch, "Let
+  this agent manage K2 projects" (on by default; Settings → Workspaces /
+  Agents → <ws> → Permissions → Projects and Gardens, or
+  `k2 project access`). Off: that agent gets exit 1 with code
+  agent_permission_off on every change, but `list`, `show`, `read` and `msg`
+  still work. Only the owner or an admin can flip it; an agent never can.
+  Every project created or deleted and every member change is logged
+  (who, what, when). More: `k2 study projects`.
+
+ADDRESSING
+  <project> is a project name. Names match case-insensitively, and any UNIQUE
+  PREFIX works ("0.41" matches "0.41-release"). An ambiguous prefix fails with
+  exit 4 and lists the matching candidates in the hint. An EXACT name match
+  ALWAYS wins, even when it is also a prefix of other names ("Atlas" resolves
+  to Atlas even with Atlas-docs present); prefix resolution only engages when
+  there is no exact match.
+  <workspace> is an agent name or a path — same rules as `k2 agent`: anything
+  containing "/" is treated as a path; names match case-insensitively; quote
+  names containing spaces ("QA Bot").
+
+WHO YOU ARE
+  msg and read act AS your workspace, auto-detected from K2_PROJECT_PATH
+  (falling back to the current directory) — the same detection `k2 tickets`
+  uses. Only members (and the server owner via the app) can post.
+
+GLOBAL FLAGS
+  --json                 Machine-readable output (single JSON object)
+
+OUTPUT CONTRACT
+  Success output is human-readable by default; --json switches it to JSON.
+  ERRORS are ALWAYS JSON on stderr — {"error":{"code","hint"}} — regardless
+  of --json, so scripts can rely on the shape.
+  Success means ok:true. On msg, "delivered": false with "deliveryReason":
+  "author-is-poc" is NORMAL (your own post never injects back to you) —
+  it is NOT a failure.
+
+EXIT CODES
+  0 ok · 1 error (including refusals like removing the PoC or posting as a
+  non-member) · 2 bad usage · 4 not found / ambiguous (candidates in the hint)
+  4 = a name could not be resolved (fix the name and retry) · 1 = resolved
+  but refused or failed
+
+Run 'k2 project <command> --help' for details on a command.

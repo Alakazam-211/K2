@@ -1,0 +1,9 @@
+Extra EmailAlias on an existing mailbox (same User, same domain).
+Not a mint: no new mailbox, no password, not IMAP login.
+`k2 hostmail create foo@domain` mints a mailbox — it does not add an alias.
+mail_manage. No + in the alias local-part (plus-tags already land).
+
+USAGE
+  k2 hostmail alias add <mailbox> <alias> [--json]
+  k2 hostmail alias remove <mailbox> <alias> [--json]
+  k2 hostmail alias list <mailbox> [--json]

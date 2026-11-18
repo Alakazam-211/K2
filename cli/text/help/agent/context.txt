@@ -1,0 +1,67 @@
+k2 agent context — manage the always-on AGENTS.md context management stack
+
+The host library is Settings → Context Catalog (pack.toml + layer.md). This
+command stacks those packs onto a workspace; it does not author the library.
+
+System (pinned) layers: Agent persona, PROJECT.md, Tooling footer — toggleable
+with on/off (ids pinned:agent|pinned:project|pinned:tooling, or short aliases
+agent|project|tooling). Optional layers are ordered path references you can
+add, toggle, reorder, or remove. The daemon composes them into .k2/AGENTS.md
+on every mutate. Hire can seed layers: k2 agent hire <dir> --context <path|catalog-id>
+
+USAGE
+  k2 agent context <command> [args] [flags]
+
+COMMANDS
+  list                    Show system layers (on/off) + optional layers
+  add <path|id>           Add an optional layer (workspace path or catalog id —
+                          run `catalog` for the full local list)
+  remove <id|path>        Drop an optional layer (file on disk is kept)
+  on <id|path|system>     Enable optional or system layer
+  off <id|path|system>    Disable optional or system layer
+  move <id|path> <where>  Reorder: absolute position n, or up|down|top|bottom
+  show [--outline]        Preview composed AGENTS.md (or section outline)
+  regen                   Force-compose AGENTS.md from the current stack
+  catalog                 List the local context catalog (path / static / live)
+
+LOCAL CATALOG (also hire --context)
+  Path:   wiki:index, wiki:home
+  Static: wiki:hygiene, subagents:pack, browser:pack, manager:pack, kessel:pack
+  Live:   connections:roster, heartbeats:roster, skills:roster, users:roster
+  (Aliases work too — e.g. manager, connections, hygiene, subagents, browser.)
+
+WORKSPACE
+  Resolved from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD (same as other
+  agent verbs). Override with --workspace / --project (path, name, or uuid)
+  so an orchestrator can recompose a peer without cwd-switching.
+
+FLAGS
+  --workspace|--project <ws>  Target workspace (path, name, or uuid)
+  --label <name>          With add: optional display label
+  --outline               With show: section headings only
+  --json                  Machine-readable output (catalog: full metadata)
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage · 3 precondition (e.g. duplicate layer) · 4 not found
+
+EXAMPLES
+  k2 agent context list
+  k2 agent context catalog
+  k2 agent context catalog --json
+  k2 agent context add wiki:index
+  k2 agent context add wiki:hygiene
+  k2 agent context add subagents:pack
+  k2 agent context add browser:pack
+  k2 agent context add manager:pack
+  k2 agent context add connections:roster
+  k2 agent context add skills:roster
+  k2 agent context add users:roster
+  k2 agent context add docs/architecture.md --label arch
+  k2 agent context off wiki-index
+  k2 agent context off pinned:tooling
+  k2 agent context on agent
+  k2 agent context move 0 top
+  k2 agent context show --outline
+  k2 agent context regen
+  k2 agent context regen --workspace acme
+  k2 agent context list --workspace /path/to/peer

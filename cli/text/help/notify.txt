@@ -1,0 +1,29 @@
+k2 notify email: an agent emails a person on this server (text only).
+
+  k2 notify email <login|owner> --subject "…" --text "…"
+  k2 notify email <login|owner> --subject "…" --text-file <file>
+                 One email to that person, from the workspace you run it in
+                 (there is no --workspace) and its own sender. <login> is
+                 their K2 login on this server; type `owner` literally for
+                 the server's owner. Never an email address.
+                 Text only: a subject up to 200 characters, a body up to
+                 16 KB; no HTML, no attachments, no Reply-To. K2 adds a line
+                 saying which agent sent it, and a link to stop them.
+                 Refusals (the error code, then what to do):
+                   agent_email_off    off for this workspace: only the owner
+                                      turns it on. Ask them: run the
+                                      "Ask with:" line the error ends with,
+                                      if it has one, else a Thread message.
+                   no_notice_address  the person hasn't confirmed an address
+                                      (they run k2 notifications email
+                                      address set themselves); tell them.
+                   person_muted       they muted this workspace; don't retry.
+                   rate_limited       10 an hour, 50 a day per workspace;
+                                      retryAfterMs says when.
+  k2 notify email off
+                 Turn this workspace's notices off. Only the owner turns them
+                 back on.
+
+For people (not agents), from their own terminal:
+  k2 notify email mute <workspace>      stop that workspace's notices to you
+  k2 notify email unmute <workspace>

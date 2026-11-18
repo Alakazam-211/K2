@@ -1,0 +1,36 @@
+Set the whole list of addresses a hosted mailbox forwards to: exactly the
+--to addresses you give, up to 100. Any it forwarded to before and you don't
+name are removed. To change one without touching the others, use add or rm.
+
+  dest is a mailbox on this server   on at once; keeps no copy
+                                     unless --keep
+  dest is an outside address         on at once, after K2 emails it who
+                                     set this up with a stop link; nobody
+                                     has to confirm; keeps a copy unless
+                                     --no-keep
+--keep and --no-keep together: exit 2.
+If K2 has sent 60 of these emails in the last hour, a new outside address
+waits its turn: state pending_verify until K2 has emailed it (2 a minute), then
+it goes on by itself.
+Refused, and then nothing changes and nobody is emailed: no way to give the
+address a stop link (no_front_door, no_mail_path, or suppressed because it
+bounced or complained before); K2 emailed it 3 times in 24 hours (notice_limit);
+a same-box forward that would loop (forward_loop). If you're an agent: your
+own mailbox, unless agent sending is on (agent_send_required; ask your human);
+an address K2 paused by itself in the 24 hours before this, even if it was
+removed since (owner_only). More than 100
+addresses (too_many_destinations); over this server's daily limit on new
+outside addresses, 20 unless the owner changed it with k2 hostmail config
+--forward-new-per-day, all of the list or none (new_outside_limit); an address that pressed Stop
+(destination_stopped); an address on one of this server's domains that
+isn't a mailbox here, because that mail would never reach another provider,
+whatever the domain's MX says; the mailbox itself; a notification sender address; outside destinations under
+air-gap or on a receive-only domain, or on a mail server older than Stalwart
+0.16.25 (upgrade_required, exit 1: k2 hostmail upgrade, then set again).
+--restart-stopped: owner or Admin only. Send to an address that pressed
+Stop anyway, and email it again. Ask them first; agents can't use it.
+An address already on: it keeps its state (a paused one stays paused) and
+only the keep setting can change.
+
+USAGE
+  k2 hostmail forward set <addr> --to <dest> [--to <dest>…] [--keep|--no-keep] [--restart-stopped] [--json]

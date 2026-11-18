@@ -1,0 +1,12 @@
+Delete a project: its member list, dashboards and its whole chat. The agents
+and their folders are never touched. Only the owner, an admin, or an agent
+with "Let this agent manage K2 projects" on can delete a project; a Member login is refused
+(exit 1, code forbidden), and an agent with the switch off gets
+agent_permission_off.
+
+USAGE
+  k2 project delete <project> --yes [--json]
+
+FLAGS
+  --yes, -y              Required: confirms you mean it
+  --json                 JSON output

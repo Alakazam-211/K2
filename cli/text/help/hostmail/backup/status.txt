@@ -1,0 +1,10 @@
+The box's backup choice and the churn observer.
+
+USAGE
+  k2 hostmail backup status [--json]
+
+Prints mode (unconfigured until chosen), who set it and when, the reason
+(mode none), window, retention, and the observer: last run, days of churn
+measured, bytes deleted/created per day, store size, free space and
+whether the view root is on the store's filesystem. GET /cli/mail/backup
+(also `backup` in `k2 hostmail status --json`). Read-only.

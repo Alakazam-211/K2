@@ -1,0 +1,100 @@
+Connect your OWN external email accounts (Gmail app-password, Fastmail,
+company IMAP) as LINKED assistant inboxes. Each links to ONE PRIMARY
+workspace (which manages it); its agents READ the inbox (`k2 mail
+messages/read/wait` just work — same ids, same untrusted-content markers)
+and save reply DRAFTS into the account's real Drafts folder (`k2 mail
+draft`). Sending is OFF by default (draft-only); raise a workspace to the
+'send' level (`k2 mail access set-level … send`) to let its agents send
+FROM the account over SMTP submission (same vaulted app-password; the
+SMTP server is derived from the provider, or pin it with --smtp-*).
+Share with more workspaces via `k2 mail access grant … --level
+read|draft|send`.
+
+The password is vaulted daemon-side (0600 file), never stored in the
+database, never shown in any output, and never accepted on argv.
+
+A Gmail or Microsoft 365 account can instead be linked with OAuth (no
+password): `k2 mail link add <address> --provider gmail|microsoft
+--workspace <ws>`. Microsoft prints a device code + URL to enter in any
+browser; Gmail opens the system browser on the daemon's machine (do it on
+that machine — a remote daemon returns a clear "link on the daemon's box"
+message). The command then waits for you to approve, and connects.
+
+The account that signs in must BE the address you typed — otherwise the
+link fails with account_mismatch and nothing is stored. --features picks
+what to consent for: mail, calendar-read (read-only calendar), or both
+(mail,calendar-read); add a read-only calendar to an existing link later
+with `k2 mail link upgrade <address> --features calendar-read` (same
+inbox, grants and ids). A link may be calendar-only (Google or Microsoft):
+no mail access — agents get its calendar and mail verbs answer
+capability_missing until `k2 mail link upgrade <address> --features mail`.
+To link just a calendar, `k2 cal link` is shorter (k2 cal --help).
+A link with calendar-read gives its agents `k2 calendar` reads only: no
+event is ever created, changed, accepted or declined. `calendar` (read and
+write; drafts only, nobody is emailed) is still accepted for owners who
+want it; links made before 0.46.16 keep what they have. An upgrade only
+adds: making a read-write calendar read-only means unlink and link again. `k2 mail link calendars on|off` is the per-server switch
+for calendars on linked inboxes (default on; hosted calendars keep
+`k2 hostmail calendar enable|disable`).
+Removing a Google link revokes K2's access at Google; Microsoft has no
+per-token revoke, so remove tells you where to remove the consent.
+
+Microsoft needs an OAuth app: K2's built-in one, or your own set with
+`k2 mail oauth-config set --provider microsoft --client-id <id>
+[--tenant <t>]`. A tenant that requires admin consent fails with
+admin_consent_required and prints the admin-consent URL.
+
+USAGE
+  k2 mail link add <address> --host <imap-host> --workspace <ws>
+                   (--pass-stdin | --pass-ref <ref>)
+                   [--port <n>] [--tls implicit-tls|starttls]
+                   [--user <login>] [--name <display>]
+                   [--drafts-folder <folder>]
+                   [--smtp-host <h>] [--smtp-port <n>]
+                   [--smtp-tls implicit-tls|starttls] [--json]
+  k2 mail link add <address> --provider gmail|microsoft --workspace <ws>
+                   [--features mail|calendar-read|mail,calendar-read|calendar] [--json]
+  k2 mail link upgrade <address> --features calendar-read|mail|calendar [--json]
+  k2 mail link calendars [on|off] [--json]
+  k2 mail link list [--json]
+  k2 mail link remove <address> [--json]
+
+FLAGS (OAuth add / upgrade)
+  --provider <p>         gmail (IMAP-XOAUTH2, system-browser + loopback) or
+                         microsoft (Microsoft Graph, device code). No --host
+                         or password — the daemon runs the OAuth flow.
+  --workspace <ws>       The PRIMARY workspace this inbox binds to (add)
+  --features <f>         mail (default), calendar-read (read-only calendar),
+                         mail,calendar-read, or calendar (read and write).
+                         Calendar-only links skip mail access. upgrade: what
+                         to ADD to an existing OAuth link, re-consented in place
+
+FLAGS (add)
+  --host <h>             The IMAP server, e.g. imap.gmail.com
+  --workspace <ws>       The PRIMARY workspace whose agents may read this inbox
+  --pass-stdin           Read the app-password from stdin (pipe it in)
+  --pass-ref <ref>       Or resolve it once from env:<VAR> / an absolute
+                         file path ON THE DAEMON'S BOX — never on argv
+  --port <n>             Default: 993 (implicit-tls) / 143 (starttls)
+  --tls <kind>           implicit-tls (default) | starttls — always verified
+  --user <login>         IMAP login if it differs from the address
+  --name <display>       Display name used on drafts' From header
+  --drafts-folder <f>    Pin the Drafts folder (default: autodetect)
+  --smtp-host <h>        Pin the SMTP submission server for linked send
+                         (default: derived, e.g. smtp.gmail.com)
+  --smtp-port <n>        SMTP port (default: 465 implicit-tls / 587 starttls)
+  --smtp-tls <kind>      implicit-tls | starttls for SMTP — always verified
+
+EXAMPLES
+  printf %s "$APP_PW" | k2 mail link add alice@example.com \
+      --host imap.gmail.com --workspace ~/DevProjects/K2 --pass-stdin
+  k2 mail link add ops@acme.com --host mail.acme.com --tls starttls \
+      --workspace acme-ops --pass-ref env:ACME_MAIL_PW
+  k2 mail link add alice@example.com --provider gmail --workspace ~/DevProjects/K2
+  k2 mail link add me@company.com --provider microsoft --workspace acme-ops
+  k2 mail link add me@company.com --provider microsoft --workspace acme-ops \
+      --features mail,calendar-read
+  k2 mail link upgrade me@company.com --features calendar-read
+  k2 mail link add organiser@gmail.com --provider gmail --workspace meet \
+      --features calendar-read
+  k2 mail link calendars off

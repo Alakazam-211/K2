@@ -1,0 +1,8 @@
+Host-wide outbound company footer (DATA-stage trusted Sieve).
+mail_manage. Plain text only, max 4096 bytes. --domain is reserved
+and 400 this cut. Personal signatures stay in the client.
+
+USAGE
+  k2 hostmail footer set --text FILE_OR_STRING [--json]
+  k2 hostmail footer unset [--json]
+  k2 hostmail footer show [--json]

@@ -1,64 +1,7 @@
 # ── One-time reminders (a heartbeat that fires once, 0.46.11) ─────────
 cmd_help_remind() {
     cat <<'EOF'
-k2 heartbeat remind — a one-time heartbeat: fires once, then goes away
-(Short form: k2 remind. Some people call this a reminder, an alarm or a
-one-shot; repeating ones are heartbeats: k2 heartbeat --help.)
-
-SET ONE
-  k2 heartbeat remind "<text>" (--in 45m | --at 13:00 | --on 2026-10-30 [--at 09:00])
-                      [--tz Area/City] [--name n] [--file path]
-                      [--session pinned|own] [--workspace <ws>] [--json]
-
-  --in 45m      s m h d w, combined: 1h30m. At least 1 minute, at most 365 days.
-  --at 13:00    The next 13:00: today if it's still ahead, else tomorrow.
-                (For "tomorrow at 13:00" on a certain day, use --on.)
-  --at 2026-10-30T09:00            That date and time.
-  --at 2026-10-30T09:00:00-06:00   That exact instant (--tz is ignored).
-  --on 2026-10-30                  That date at 09:00.
-  --on 2026-10-30 --at 14:30       That date and time ('--on "2026-10-30 14:30"' too).
-  --tz Area/City  IANA zone. Default: the owner's timezone
-                  (Settings → General), else this computer's clock.
-  --name n      Lowercase letters, digits, hyphens. Default: r-<6 chars>.
-                The name of a finished reminder can be used again.
-  --file path   A file in this workspace the reminder points the agent to.
-  --session     pinned (default): the workspace's pinned chat.
-                own: a session of its own, started for this fire.
-
-  Times in the past are refused. Text is at most 2000 characters; put more
-  in a file and use --file.
-
-MANAGE
-  k2 heartbeat remind list [--all] [--json]   pending; --all adds finished (90 days)
-  k2 heartbeat remind show <name> [--json]    one, with its fire history
-  k2 heartbeat remind snooze <name> <10m> [--json]
-                                              fires again that long FROM NOW (or
-                                              --in/--at/--on [--tz] for a set time);
-                                              also re-arms one that already fired
-  k2 heartbeat remind cancel <name> [--json]  stops a pending one, keeps the history
-  k2 reminders                                = k2 heartbeat remind list
-  Each of these also takes --workspace <ws> (or --project), as setting one
-  does; an agent reaches only its own workspace.
-
-WHAT HAPPENS
-  At its time the agent gets one line in its session:
-    [reminder:call-jane · set by Rosson 10-26 09:12] Call Jane back.
-  A reminder a person set also posts "Reminder fired: …" to the Thread. An
-  agent's own reminder stays in its session.
-
-  Late (this computer was asleep, K2 was off): it fires up to 24 hours late,
-  with "· late by 3h 10m" in the stamp. Later than that it finishes as
-  missed and tells the owner on the Thread. A reminder never vanishes.
-  If it can't be delivered: retried with backoff, then after 5 tries it
-  finishes as failed and tells the owner.
-
-  It fires once, even across a restart or a sleep: it is retired in the same
-  step that records the fire. Limits: 100 pending per workspace, 20 fires an
-  hour per workspace, and the agent's 30 automatic wakes an hour shared with
-  mail and Sources (anything over waits for the next minute).
-
-Exit codes: 0 ok, 1 error, 2 bad input (a past time, a bad flag), 3 gated.
-More: k2 study heartbeats
+%include cli/text/help/remind.txt
 EOF
 }
 
@@ -1551,29 +1494,7 @@ _HOOKS_EMIT_EVENTS="SessionStart UserPromptSubmit PreToolUse PostToolUse Notific
 
 _hooks_emit_usage() {
     cat <<'EOF'
-Usage: k2 hooks emit <event> [--json '<object>'] [--session-id <id>] [--quiet]
-
-Report a lifecycle event from a custom program running in this K2 session
-(the session's own passport; never the owner token).
-
-Events (Claude's names):
-  SessionStart       the program is up (add --json '{"source":"startup"}')
-  UserPromptSubmit   a turn starts: the agent shows as working
-  PreToolUse         a tool call starts (--json '{"tool_name":…,"tool_use_id":…}')
-  PostToolUse        that tool call ended (same tool_use_id)
-  Notification       waiting on a person
-  Stop               the turn is done: the agent shows as idle
-  SessionEnd         the program is exiting
-
-  --json '<object>'  extra fields merged into the event (object only;
-                     hook_event_name always comes from <event>)
-  --session-id <id>  the program's own conversation id, if it has one
-                     (informational; it never changes the Thread pin)
-  --quiet            print nothing on success
-
-Exit: 0 accepted; 1 not counted (foreign / unknown_pane / parse_error /
-daemon unreachable); 2 usage; 3 no session passport (run it inside a K2
-session). More: k2 study hooks
+%include cli/text/help/hooks/emit.txt
 EOF
 }
 

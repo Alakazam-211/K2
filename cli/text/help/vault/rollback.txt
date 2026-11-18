@@ -1,0 +1,9 @@
+k2 vault rollback NAME --to <version> [--scope <s>] [--accept-agent-value]
+
+People only: put an older version's value back, as a new version (asks
+for a confirm). Undoes an agent's rotate. When root units load the secret
+(k2 vault systemd-cred), the confirm names them and the rollback re-places
+the value there; a version no person wrote then needs --accept-agent-value
+(and keeps its author, so it is never shown as yours).
+
+Example: k2 vault rollback STRIPE_KEY --to 3

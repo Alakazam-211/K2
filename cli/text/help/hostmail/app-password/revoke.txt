@@ -1,0 +1,5 @@
+Revoke one app password on a hosted mailbox. POST
+/cli/mail/app-password/revoke {address, id}. Unknown id is 404.
+
+USAGE
+  k2 hostmail app-password revoke <addr> <id> [--json]

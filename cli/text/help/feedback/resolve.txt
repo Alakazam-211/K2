@@ -1,0 +1,23 @@
+Mark a feedback item resolved — you got what you needed (or the ask no longer
+applies). Resolved items drop out of the default `list` view (still visible
+with --all). The recorded answer, if any, is kept.
+
+With --answered, settle a discussion instead: a person wrote free text, so the
+ticket is in needs_discussion. Once you have replied and agreed on an outcome,
+mark it answered with that outcome. It becomes the ticket's answer (what
+`ask --wait` and `show` print). It is not sent back into your session.
+
+USAGE
+  k2 tickets resolve <id> [flags]
+  k2 tickets resolve <id> --answered "<outcome>" [flags]
+
+ARGUMENTS
+  <id>                   A feedback id from `ask`/`list` (short unique prefix ok)
+
+FLAGS
+  --answered <outcome>   Mark it answered with the agreed outcome (not resolved)
+  --file <path[:line[-end]]>
+                         With --answered: attach files to the outcome
+                         (repeatable, at most 10). Without --answered it is a
+                         usage error: files ride a message (use comment).
+  --json                 JSON output

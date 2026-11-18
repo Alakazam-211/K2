@@ -1,0 +1,25 @@
+Set who a ticket is assigned to. Usernames are snapshots (owner, or names from
+`k2 users list`) — they do not have to exist forever; removed users still show
+on the board and still match push targeting.
+
+Replaces the full assignee set (not additive). Prefer assigning at create time
+with `k2 tickets ask … --assign user` when you already know who should own it.
+
+USAGE
+  k2 tickets assign <id> <user> [user…] [--json]
+  k2 tickets assign <id> --to user1,user2 [--json]
+  k2 tickets assign <id> --clear [--json]
+
+ARGUMENTS
+  <id>                   Ticket id from ask/list (short unique prefix ok)
+  <user>…                One or more usernames to assign
+
+FLAGS
+  --to <users>           Comma-separated usernames (same as positional users)
+  --clear                Remove all assignees (push fans out to everyone again)
+  --json                 JSON output
+
+EXAMPLES
+  k2 tickets assign ab12cd34 owner
+  k2 tickets assign ab12cd34 --to alice,bob
+  k2 tickets assign ab12cd34 --clear

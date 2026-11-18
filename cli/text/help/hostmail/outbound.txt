@@ -1,0 +1,27 @@
+The outbound settings K2 manages on the mail server.
+
+USAGE
+  k2 hostmail outbound [show] [--json]
+  k2 hostmail outbound dane on [--json]
+
+SHOW
+  mx route   The IP lookup strategy of Stalwart's outbound `mx` route.
+             K2 sets the default v4ThenV6 to v4Only ONCE (its PTR and SPF
+             are IPv4 only; Stalwart 0.16.10 drops good IPv4 answers when
+             an IPv6 lookup errors). A value set by hand is never changed.
+  DANE       Per outbound TLS strategy: optional | require | disable, and
+             who set it. Below Stalwart 0.16.20 K2 turns `optional` off
+             (0.16.10 can't check DNSSEC reliably) and turns back on only
+             what it turned off after `k2 hostmail upgrade`. A `disable`
+             set by hand stays until you run `dane on`.
+  DNSSEC     The last `k2 hostmail doctor` verdict on the box resolver
+             (DNSSEC over TCP).
+
+DANE ON
+  Every disabled TLS strategy back to `optional`, then a settings reload
+  (restart only if Stalwart refuses it). Refused below Stalwart 0.16.20.
+  Owner/admin, or an IT agent with mail-manage. Never
+  `k2 hostmail disable/enable`.
+
+Mail stuck in the queue keeps its own retry time: `k2 hostmail queue list`,
+then `k2 hostmail queue retry <id>`.

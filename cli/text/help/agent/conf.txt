@@ -1,0 +1,12 @@
+Show all of an agent's settings: name, path, mode, enabled, persona,
+connections, project memberships (PoC marked), and live-session status.
+
+USAGE
+  k2 agent conf [<name>] [--json]
+
+  <name> is an agent name or a path (anything containing "/" is a path).
+  Omitted: the agent in the current directory (exit 4 when the current
+  directory isn't a registered agent).
+
+FLAGS
+  --json                  Machine-readable output (single JSON object)

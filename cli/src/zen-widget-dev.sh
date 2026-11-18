@@ -97,92 +97,13 @@ _zen_dir_call() {
 
 _zen_help_validate() {
     cat <<'EOF'
-Usage: k2 zen validate [--json] [--strict]
-       k2 zen validate --garden <name|id> [--from <file>|-] [--json]
-       k2 zen validate --theme <name> | --file <file> [--json]
-       k2 zen validate --widget <name> [--types[=all]] [--sign] [--strict] [--json]
-       k2 zen validate --dir <folder> [--as <name>] [--json]
-
-Check Zen files without changing what Zen shows. Prints file:line:col:
-message for each error (with a suggestion line) and warnings.
-
-  (no target)            every file in ~/.k2/zen, and one line per widget:
-                         where it is placed and its runtime state.
-  --garden <g>           one Garden page as it is on disk.
-  --garden <g> --from F  a STAGED Garden page (a file anywhere, - for stdin)
-                         checked against that Garden. Nothing is written.
-  --widget <name>        a widget folder as it is on disk: manifest, folder
-                         rules, bundle, scripts (oxc parse + catalog lints)
-                         and the runtime errors its saved version hit:
-                         errors only when a Garden places it and they are
-                         from the last 24 h; otherwise warnings.
-  --dir <folder>         a STAGED widget folder anywhere on disk, checked
-                         exactly like a widget folder. Nothing is written and
-                         Zen needn't be set up. --as names it (default:
-                         manifest.json's "id", else the folder's name).
-  --types[=all]          --widget: also type-check its scripts (tsc-rs).
-  --sign                 --widget: when clean, sign this version as made by
-                         you (or this agent) for its Garden data calls. A
-                         check never signs on its own (0.46.1); --no-sign is
-                         accepted and does nothing. k2 zen widget sign <name>
-                         signs without checking.
-  --strict               exit 2 while a placed widget's saved version hasn't
-                         run in a Zen window yet ("pending"), or while old
-                         runtime errors are logged (not confirmed clean).
-                         Without it, both exit 0 with a note.
-
-The dev loop for a widget kept outside ~/.k2:
-  k2 zen validate --dir ./board              check (writes nothing)
-  k2 zen widget preview --dir ./board        try it on K2's preview Garden
-  k2 zen widget preview --dir ./board --shot board.png --theme dark
-                                             a headless PNG (writes nothing else)
-  k2 zen widget put board --dir ./board      write it (you need the Garden's list)
-  k2 zen widget errors board                 its runtime errors in Zen
-  k2 zen widget errors board --clear         drop old ones validate ignores
-
-Exit: 0 clean (or pending without --strict) · 1 errors · 2 usage, or pending
-or old runtime errors with --strict · 3 Zen isn't set up, or the Garden is
-locked.
-
-New to Gardens? k2 zen guide.
-  k2 zen guide [<topic>] [--json]    short pages; no daemon needed
+%include cli/text/help/zen/validate.txt
 EOF
 }
 
 _zen_help_widget_put() {
     cat <<'EOF'
-Usage: k2 zen widget put <name> <file> --from <path>|- [--note "…"] [--json]
-       k2 zen widget put [<name>] --dir <folder> [--prune] [--note "…"] [--json]
-       k2 zen widget apply --from <folder> [<name>] [--prune] [--note "…"] [--json]
-
-Change a custom widget (~/.k2/zen/widgets/<name>/) through K2, from anywhere
-on disk. You never edit ~/.k2 yourself.
-
-  <file> --from <path>   one code file (.html .js .css .json); "-" reads stdin.
-                         Written even if the widget then has errors (the last
-                         good version keeps running); the errors are printed.
-  --dir <folder>         the whole folder in one checked write: code files,
-                         images and .woff2 fonts. A folder with errors is
-                         refused and NOTHING is written. <name> defaults to
-                         manifest.json's "id", else the folder's own name.
-                         Files the folder doesn't have are left alone.
-  --prune                with --dir: also remove code files, images and fonts
-                         the folder doesn't have (never README or dotfiles).
-  --note "…"             one paragraph for the Garden's History.
-  apply --from <folder>  the same as put --dir.
-
-Who may write: the person (outside K2), or an agent on the list of every
-Garden that places the widget (a draft placed nowhere is open). Any other
-agent is refused (garden_access_needed, exit 3) and K2 asks the person (a
-garden.access card); nothing is proposed. Sign what you wrote: k2 zen
-validate --widget <name> --sign. K2's built-in widgets (k2:<name>) are never
-written. k2 study garden-access.
-
-Check first, write nothing:  k2 zen validate --dir <folder>
-Try it on K2's preview page: k2 zen widget preview --dir <folder>
-
-Exit: 0 written · 1 refused (errors, a bad file name) · 2 usage ·
-3 Zen isn't set up / not on the Garden's list / locked · 4 no such widget.
+%include cli/text/help/zen/widget/put.txt
 EOF
 }
 
@@ -237,22 +158,7 @@ sys.stdout.buffer.write(json.dumps(b, ensure_ascii=False).encode("utf-8") + b"\n
 
 _zen_help_widget_delete() {
     cat <<'EOF'
-Usage: k2 zen widget delete <name> [--json]
-
-Delete a custom widget (~/.k2/zen/widgets/<name>/) that no Garden places.
-While any Garden places it, K2 refuses and names those Gardens: take it off
-each Garden's page first. Nothing is lost: its code is kept as a history
-snapshot and the whole folder (images and fonts too) beside it, and the
-answer prints the undo:  k2 zen reset --widget <name> --to <snapshot>.
-Its data and its last good version stay. K2's built-in widgets (k2:<name>)
-can't be deleted.
-
-Who may delete: the person (outside K2), or an agent with "Manage Gardens
-and data sources" (with Garden access on: as for put, a widget placed
-nowhere is open). Any other agent is refused (person_only, exit 3).
-
-Exit: 0 deleted · 1 refused (still placed) · 2 usage ·
-3 Zen isn't set up / not allowed · 4 no such widget.
+%include cli/text/help/zen/widget/delete.txt
 EOF
 }
 
@@ -297,55 +203,7 @@ cmd_zen_widget_apply() {
 
 _zen_help_widget_preview() {
     cat <<'EOF'
-Usage: k2 zen widget preview --dir <folder> [<name>] [--config key=value]... [--json]
-       k2 zen widget preview --dir <folder> [<name>] --shot <png> [--theme dark|light]
-                             [--width N] [--height N] [--zen-theme <name>]
-                             [--data <file.json>] [--config key=value]... [--json]
-       k2 zen widget preview --clear [--json]
-
-Try a staged widget folder in Zen without touching your Gardens. K2 writes it
-as widgets/preview-<name>/ (its manifest id renamed to match) and places it,
-alone, on K2's own "Widget preview" Garden (made the first time). Each preview
-replaces the last. Open Zen and switch to "Widget preview" to see it.
-
-  --dir <folder>         the staged folder (checked first; errors refuse it).
-  <name>                 defaults to manifest.json's "id", else the folder name.
-  --config key=value     the placement's config, repeatable. A card that reads
-                         data sources takes them here, for example
-                         --config sources=fleet,k2-ops-boxes
-  --clear                remove the preview Garden and every preview-* widget.
-
-The preview runs as its own widget (preview-<name>): it has its own empty
-store, and its runtime errors are k2 zen widget errors preview-<name>.
-Who may preview: the person, or any agent in a K2 terminal (it never
-touches the person's Gardens). Check without writing: k2 zen validate --dir.
-
---shot <png>: a picture instead, with nobody at a Zen window. K2 checks and
-bundles the folder exactly as Zen would, puts it in K2's real widget frame
-on a Garden canvas, answers its calls from a stand-in bridge with sample
-data, and renders it headless in WebKit (the engine of K2's desktop app).
-It writes only the PNG: no Garden, no widget folder, no store. Any local
-agent may shoot, and Zen needn't be set up.
-  --theme dark|light     the Garden's scheme (default: the theme's own, else
-                         light). The card follows the Garden, never the OS.
-  --zen-theme <name>     a built-in Zen theme: basic (default), paper,
-                         midnight, haunted, glass.
-  --width N --height N   the card's size in CSS pixels (default 420x360;
-                         120 to 2400). The PNG is drawn at 2x.
-  --data <file.json>     your own data instead of the samples: one object,
-                         keys "<verb> <first arg>" or "<verb>" (for example
-                         "sources.subscribe fleet": a card view, "agents.list":
-                         rows) and "store": {key: value} preloaded.
-  --libs <dir>           K2's zen-lib folder, for a widget with
-                         requires.libs (found by itself in a K2 checkout).
-  --wait-ms N            settle time after the widget says ready (default 400).
-Needs Node.js and Playwright's WebKit:
-  npm install -g playwright && npx playwright install webkit
-
-Exit: 0 previewed, cleared or shot (and the widget said ready) · 1 refused
-(errors), or the shot widget threw or never said ready (the PNG is still
-written) · 2 usage · 3 needs a person, Zen isn't set up, or --shot has no
-Node/Playwright WebKit.
+%include cli/text/help/zen/widget/preview.txt
 EOF
 }
 

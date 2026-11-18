@@ -1,0 +1,26 @@
+k2 vault fetch --secret NAME [--scope session|server|ws:<name>] [-X METHOD] [-H 'Name: value']... [-d 'text' | -d @file | --json @file]
+               [--max-bytes N] [--timeout S] [--include-headers] [-o file] [--json-out] URL
+
+K2 makes the call and adds the secret (header and format fixed by whoever
+created it); only to the secret's sites. Bodies over 64 KiB and -o output
+are files inside your workspace. Echoes of the value come back as [k2v:NAME].
+
+fetch adds the secret as-is, in one place: a header, a query parameter,
+basic auth or the body (k2 vault set --help: --inject-dst).
+Some secrets are signers: K2 signs the request (OVH, HMAC, HMAC with a
+timestamp). Same command. --dst and --fmt are refused for them, and so is
+a -H naming one of the signer's headers. (Not yet: AWS SigV4, Google
+service-account JWT; give those tools env or file delivery.)
+
+Scripts: --json-out prints the daemon's answer as one JSON object:
+  {"status": 200, "headers": [["content-type", "…"], …], "truncated": false,
+   "redirected": false, "body": "…"}   (or "bodyB64" for a non-text body;
+   with -o: "out" and "bytes" instead of the body; OVH: "clock": "server"
+   or "local")
+Headers are the short allowlist (content-type, date, etag, location,
+retry-after, request ids, rate limits) unless --include-headers. A refusal
+exits non-zero with {"error": {"code", "hint"}}. Running 8 at once is fine
+(the limit is 30 a second and 600 a minute per session).
+
+Example: k2 vault fetch --secret STRIPE_KEY https://api.stripe.com/v1/balance
+         k2 vault fetch --secret OVH_EU --json-out https://eu.api.ovh.com/1.0/me

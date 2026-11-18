@@ -1,0 +1,5 @@
+Remove the host-wide footer script. POST /cli/mail/footer/unset.
+GET is 405. --domain is 400 this cut.
+
+USAGE
+  k2 hostmail footer unset [--json]

@@ -1,0 +1,46 @@
+Manage WHO can use an inbox — one access layer over BOTH hosted and
+linked inboxes. mail_manage agents may grant. Grant returns not_found
+if the inbox does not exist (not owner_only). Levels order
+read < draft < send. 'send' works on BOTH sources: HOSTED sends through
+the K2 server under your send-gating governance; LINKED sends FROM the
+user's own account over SMTP when level send AND Sending=on.
+
+USAGE
+  k2 mail access grant   <address> <workspace> --level read|draft|send
+  k2 mail access revoke  <address> <workspace>
+  k2 mail access primary <address> <workspace>   (transfer who manages it)
+  k2 mail access level   <address> <workspace> --level read|draft|send
+  k2 mail access manage  <address> <workspace> [--on|--off] [--delete|--no-delete]
+  grant and level also take --calendar-omit-description on|off (a linked
+  calendar: that workspace's agents never see event descriptions; the
+  meeting link and id are still read out of them). Owner or Admin only.
+
+NOTES
+  grant   upsert a workspace's access (default --level read).
+  revoke  remove a grant (idempotent; the primary can't be revoked —
+          transfer with 'primary' or disconnect with 'k2 mail link remove').
+  primary TRANSFER the managing workspace; the old primary keeps access as
+          a grant at its prior ceiling.
+  level   set a workspace's level (the primary's own ceiling when it names
+          the primary).
+  manage  set the MANAGEMENT caps (ORTHOGONAL to level): --on/--off toggles
+          canManage (move/flag/archive/folders); --delete/--no-delete toggles
+          canDelete (delete = move to Trash, never erase). Delete REQUIRES
+          manage; --off also clears delete. Defaults: --on, --no-delete.
+
+  See 'k2 mail inboxes' (owner view) for primary + grants (with canManage /
+  canDelete) per inbox.
+
+CALENDARS
+  A grant on a HOSTED inbox also covers that inbox's calendars
+  (`k2 calendar`) — existing grants included: read = read calendars,
+  draft = write events WITHOUT any email (no invites, no email alarms),
+  send = invites (a later release).
+
+EXAMPLES
+  k2 mail access grant ops@acme.dev support-team --level send
+  k2 mail access grant alice@example.com research --level draft
+  k2 mail access primary ops@acme.dev new-owner
+  k2 mail access manage ops@acme.dev support-team --on            (manage, no delete)
+  k2 mail access manage ops@acme.dev support-team --on --delete   (manage + delete)
+  k2 mail access manage ops@acme.dev support-team --off           (revoke both caps)

@@ -12,122 +12,25 @@
 
 cmd_help_agent() {
     cat <<'EOF'
-k2 agent — manage this server's agents (each agent lives in its own workspace directory)
-
-USAGE
-  k2 agent <command> [args] [flags]
-
-COMMANDS
-  hire <dir>              Provision a new agent in <dir> (create, configure, wire, launch) in one call
-                          (--template <id>: from an agent type; <dir> then optional)
-  template [list|show]    The agent types you can hire (general, developer, writer, …)
-  conf [<name>]           Show all of an agent's settings (default: the agent in the current directory)
-  get <name> <key>        Print a single setting's value (bare, script-friendly)
-  set <name> [flags]      Change one or more settings (hire's settings flags)
-  list                    List every agent on this server with mode + live status
-  retire <name>           Safely decommission an agent (guards + archive; never deletes)
-  restart <name>          Restart the agent's chat session (reloads charter + MCP config; same conversation)
-  harness <name> <harness>  Move the agent's pinned chat (what heartbeats, Threads and msg reach) to
-                          claude, codex, grok, gemini, cursor, pi or hermes. Changing the default
-                          agent only changes NEW chats. People run it; an agent is refused (exit 3)
-                          and asks its person (the refusal says how).
-  refresh [<name>]        Start a new pinned chat on the same harness that carries on from this one,
-                          with a note for it. The old chat stays in Chat history; the Thread comes along.
-                          An agent's main session may, for its own chat, when a person allows it.
-  identity [<name>]       Show or change the picture, color and name (an agent: its own color and picture)
-  access set <ws> chat_manage on|off
-                          "Manage chat and voice" for that workspace's agent (the owner or an admin)
-  context <subcommand>    Manage the always-on AGENTS.md context stack (layers)
-  team [served|link|unlink]  Team links: who serves this agent, who it serves (agents read their own)
-  instances [show|hire|retire]  Hires made from an inline recipe (owner/admin; v1 API keys hire too)
-  hire-root [set <dir>]   The folder API keys hire new agents into (owner sets it)
-
-ADDRESSING
-  <name> accepts an agent name or a path. Anything containing "/" is treated as a path.
-  Names match case-insensitively; quote names containing spaces ("QA Bot").
-  Unknown or ambiguous names fail with exit 4; the error says why (a near-miss name,
-  several matches, or a retired handle) and names the workspace's handle and path
-  to use instead. A full path always works. Commands that default to
-  the current directory (conf) fail with exit 4 when it isn't a registered agent.
-
-GLOBAL FLAGS
-  --json                  Machine-readable output (single JSON object; mutations include ok/changed/actions)
-  --dry-run               Print the exact action plan without changing anything (mutating commands).
-                          Combines with --json: the plan prints as actions with status "pending".
-
-EXIT CODES
-  0 ok · 1 error · 2 bad usage · 3 refused by a safety guard · 4 not found
-
-Run 'k2 agent <command> --help' for details on a command.
+%include cli/text/help/agent.txt
 EOF
 }
 
 cmd_help_agent_set() {
     cat <<'EOF'
-Change one or more of an agent's settings in a single call.
-Uses the same SETTINGS flags as hire (--mode, --enabled, --name, --persona)
-plus project membership (--add-project / --remove-project); set does not
-wire connections or launch sessions. Unknown flags fail (exit 2) and list
-the valid flags.
-
-USAGE
-  k2 agent set <name> [flags]
-
-FLAGS
-  --mode <mode>           off | custom | manager | k2 ("off" also sets enabled=false)
-  --enabled <bool>        true | false (false pauses without changing mode)
-  --name <new-name>       Rename the agent (display name; the directory does not move)
-  --persona <file.md>     Replace the agent's persona with this file's contents.
-                          The previous persona is backed up automatically to
-                          <dir>/.k2/agent/agent-backups/.
-  --add-project <p>       Add the agent to a project (name or id; repeatable).
-                          Already a member = reported no-op. The FIRST member of
-                          an empty project becomes its Point of Contact.
-  --remove-project <p>    Remove the agent from a project (membership only;
-                          repeatable). Removing the current PoC is refused
-                          (poc_successor_required) until `k2 project poc`
-                          names a successor.
-  --dry-run               Show what would change; change nothing
-  --json                  JSON output
-
-EXAMPLES
-  k2 agent set scout --mode manager
-  k2 agent set scout --enabled false --persona ./scout-v2.md
-  k2 agent set scout --add-project "Blue Harbor" --remove-project sandbox
+%include cli/text/help/agent/set.txt
 EOF
 }
 
 cmd_help_agent_conf() {
     cat <<'EOF'
-Show all of an agent's settings: name, path, mode, enabled, persona,
-connections, project memberships (PoC marked), and live-session status.
-
-USAGE
-  k2 agent conf [<name>] [--json]
-
-  <name> is an agent name or a path (anything containing "/" is a path).
-  Omitted: the agent in the current directory (exit 4 when the current
-  directory isn't a registered agent).
-
-FLAGS
-  --json                  Machine-readable output (single JSON object)
+%include cli/text/help/agent/conf.txt
 EOF
 }
 
 cmd_help_agent_get() {
     cat <<'EOF'
-Print a single setting's value — bare on stdout, script-friendly.
-
-USAGE
-  k2 agent get <name> <key> [--json]
-
-KEYS
-  mode | enabled | name | path | persona | projects
-  (persona prints the charter file's content; projects prints the
-  agent's project names, one per line)
-
-FLAGS
-  --json                  Wrap the value in a JSON object instead
+%include cli/text/help/agent/get.txt
 EOF
 }
 
@@ -797,314 +700,25 @@ PYEOF
 
 cmd_help_agent_hire() {
     cat <<'EOF'
-Provision a new agent — one atomic call that replaces the manual dance:
-create the folder, write the persona, register the workspace, set mode,
-wire connections, and optionally launch + send a first message.
-
-Re-running hire on the same <dir> is safe: it completes whatever is
-missing and reports changed:false when there is nothing to do.
-
-USAGE
-  k2 agent hire <dir> [flags]
-  k2 agent hire [<dir>] --template <id> [--name <name>] [--agent <preset>]
-                [--param <key>=<value>]... [--answer <id>=<text>]...
-                [--dry-run] [--launch] [flags]   (--dry-run wins: it only previews)
-
-  The handle is the name in lowercase with dashes ("Rita Lee" → rita-lee).
-  With --template and no <dir>, the folder is <hire root>/<handle>
-  (k2 agent hire-root), or <hire root>/<template id> with no --name.
-
-FROM A TEMPLATE, IN THREE STEPS (k2 study agent-templates)
-  1. Look:    k2 agent template list, then k2 agent template show <id>
-  2. Review:  the same hire with --dry-run: the folder, and each file, layer
-              and permission with its label: would write · skip ·
-              yours, kept · suggested. Nothing is written.
-  3. Hire:    the same line without --dry-run. Nothing starts unless you add
-              --launch; with it, K2 starts the agent and it says hello on
-              its Thread. Tell your person what you hired.
-  The hello goes once, the first time the agent starts: with --launch
-  here, a later re-run with --launch, k2 workspace launch <folder>, or
-  opening it in the app. Later starts send nothing. --dry-run with
-  --launch or --onboard only previews: nothing is written or started.
-  Re-running the same --template and --name with no <dir> reuses
-  <hire root>/<handle>; folder_exists means that folder holds something
-  else (another agent or other files). A re-run without --agent keeps
-  the tool set at create.
-
-ARGUMENTS
-  <dir>                   Directory for the agent's workspace (created if missing).
-                          Optional with --template: then <hire root>/<handle>,
-                          or <hire root>/<template id> with no --name.
-                          --dry-run prints the folder.
-
-FLAGS
-  --name <name>           Agent's display name (default: the folder's basename,
-                          as-is: the template id with --template and no <dir>).
-                          Its handle is the name in lowercase with dashes.
-  --template <id>         Make the agent from an agent template: its charter
-                          (ROLE.md), starter wiki notes and context layers.
-                          Types: general, lead, developer, app-owner, designer,
-                          researcher, reviewer, writer, support, ops (plus any
-                          saved on this server: `k2 agent template list`;
-                          `k2 agent template show <id>` shows what one gives).
-                          The old ids still work: worker = general,
-                          manager = lead, qa = reviewer.
-                          Writes only what's missing and never replaces the
-                          agent's own files. One template per agent: hiring an
-                          agent made from one template with another is not
-                          allowed (template_conflict, exit 3); re-running with
-                          the same one is safe.
-                          A template only SUGGESTS permissions; nothing is
-                          turned on for the agent by the hire. The output
-                          lists each one as "suggested", for a person to turn
-                          on, and the agent asks on a card when K2 refuses it.
-  --param <key>=<value>   A value the template asks for (repeatable). Quote a
-                          value with spaces: --param about="the billing service".
-                          Every built-in takes `about` (optional: what to focus
-                          on). `show` lists each template's params and which
-                          are required.
-  --answer <id>=<text>    Answer one of the template's first-conversation
-                          questions now (repeatable). Each built-in asks its
-                          person 3–5 short questions (a writer: audience,
-                          samples, avoid, drafts); `k2 agent template show <id>`
-                          lists the ids and the questions. The text is plain
-                          words or a link, up to 1000 characters; quote it
-                          like --param: --answer audience="Local customers".
-                          It goes into the agent's ROLE.md ("What I know about
-                          my work") or the starter wiki note the question
-                          names. Answer only what you know; don't guess (if
-                          you know part, say which part is unsure, and the
-                          agent checks it with its person). On its first
-                          start the agent asks its person the questions left
-                          out, on the Thread, and its hello names them. An unknown
-                          id is a usage error (exit 2) naming the valid ids, in a
-                          --dry-run too. Like --param, it is written once: a
-                          re-run never changes what the agent has, so to
-                          correct an answer later, tell the agent.
-  --persona <file.md>     Use this file as the agent's persona (copied to
-                          <dir>/.k2/agent/ROLE.md). Mutually exclusive with
-                          --template (passing both = exit 2).
-  --mode <mode>           Agent mode: off | custom | manager | k2   (default: custom).
-                          "off" also sets --enabled false.
-  --agent <preset>        Which AGENT PROGRAM this workspace launches — an agent
-                          preset id, label, or command token (see `k2 preset list`).
-                          Sets the workspace's default agent during hire. Left
-                          out: the template's suggested tool if it names one
-                          (K2's built-ins don't), else this server's default
-                          tool, else Claude. So to hire a Codex agent, pass
-                          --agent codex.
-  --enabled <bool>        true | false (default: true). false pauses the agent
-                          without changing its configured mode.
-  --connect <name>        Wire a connection to another agent (repeatable): a
-                          workspace here, or agent::host on a paired server.
-                          Connections are always mutual (bidirectional). The
-                          daemon resolves each one first (dry run too); one it
-                          can't find is not_found (exit 4).
-  --project <p>           Add the new agent to a project (name or id; repeatable —
-                          see `k2 project list`). Already a member = reported
-                          no-op. The FIRST member of an empty project becomes
-                          its Point of Contact.
-  --focus-group <g>       Assign a Focus Group (name or id). `none` / `off`
-                          clears. Unknown group = exit 4.
-  --color <hex|rgb>       Workspace color: #rrggbb, #rgb, rgb(r,g,b), or r,g,b.
-                          Not limited to the GUI swatches.
-  --context <path|catalog-id>
-                          Seed an always-on AGENTS.md layer after open (repeatable).
-                          Explicit paths must exist or hire fails. Catalog ids from
-                          `k2 agent context catalog` (wiki:index|home|hygiene,
-                          subagents:pack, browser:pack, manager:pack, kessel:pack,
-                          connections|heartbeats|skills|users:roster) warn if the file
-                          is missing and still stack. Same layer on re-hire = no-op.
-                          Day-2: k2 agent context …
-  --no-wiki               Do not seed .k2/wiki (Home.md + _Index.md). Wiki is
-                          seeded by default on first register.
-  --no-agents-md          Do not plant cwd AGENTS.md. Compose still writes
-                          .k2/AGENTS.md. Generate is on by default for new agents.
-  --fanout                Plant leftover harness names (CLAUDE.md, GEMINI.md,
-                          AGENT.md, …). Off by default.
-  --launch                Start the agent's session after provisioning. A
-                          template agent says hello on its Thread the first
-                          time it starts (here, a later --launch, or the
-                          app), once. Without --launch nothing starts.
-  --onboard <msg>         Send <msg> to the agent after it starts (implies --launch).
-                          With a template's hello, <msg> goes after the hello.
-  --db-access off|read|write
-                          Create-only DB passport (default off). Gates k2 db
-                          create, not list/dsn/store. Does not mint a
-                          database — call k2 db create after hire.
-  --take-app <app>        After the hire, offer this App to the new agent and
-                          accept it for it (k2 study app-handover). Owner:
-                          one card to approve. Reported as its own step.
-  --brief <file>          With --take-app: your notes for the new agent about
-                          the App (markdown, at most 64 KiB).
-  --dry-run               Show the full plan; change nothing (steps that would
-                          fail are FAILED, and it exits non-zero). With
-                          --template it names the folder it would use, every
-                          file it would write, each catalog layer, and the
-                          permissions it suggests.
-  --json                  JSON output
-
-  A failed step (a connect, a project, a context…) doesn't stop the others:
-  every step's result is printed, then the exit is non-zero (the first
-  failure's code). Only a failure to make the workspace itself stops the
-  rest (reported "not run").
-
-EXIT CODES (the same for k2 agent hire and k2 agent template)
-  0  ok
-  1  refused for what it is: id_reserved, id_taken, secret_found,
-     too_large; or the daemon failed
-  2  bad usage: a wrong flag, param, answer or id (usage, bad_id,
-     bad_template, no_charter)
-  3  not allowed here: template_conflict, folder_exists, system_template,
-     own_workspace_only, not_author, role_required, owner_only
-  4  not found: unknown_template, no_template, no_workspace, no_note,
-     no_folder, not_found (an unknown --agent preset or --connect)
-  folder_exists: <hire root>/<handle> is taken; pick another --name, or
-  pass that folder as <dir>. Every code and its fix: k2 study agent-templates.
-
-WHO MAY
-  A person: the owner, or a login in Settings or a terminal. An agent: only
-  its main session (a sidecar gets main_only, exit 3), and only while
-  "Let this agent hire agents" is on for its workspace (else hire_off, exit
-  3; ask with k2 permission request agents.hire; with permission cards
-  off, the refusal says how a person turns them on). A --dry-run shows
-  that refusal too, except a --template --dry-run: it needs only the main
-  session and says the real hire needs the switch. Opening its own
-  sidecars is a separate switch, "Let this agent manage its sidecars"
-  (k2 sidecar). The owner or an admin turns hiring on:
-  k2 agent access set <ws> agents_hire on.
-
-EXAMPLES
-  k2 agent hire --template writer --name "Max" --agent codex --dry-run
-  k2 agent hire --template writer --name "Max" --agent codex --launch
-  k2 agent hire ~/agents/coder --template developer --param about="the billing service"
-  k2 agent hire --template writer --name "Max" \
-      --answer audience="Small-business owners" --answer samples="https://example.k2.dev/blog" --launch
-  k2 agent hire ~/agents/scout --template general --connect "Appa" --launch
-  k2 agent hire ~/agents/qa-bot --persona ./qa-persona.md --name "QA Bot" \
-      --connect "Manager" --onboard "Welcome aboard — read your persona and check in."
-  k2 agent hire ~/agents/researcher --template researcher --project "Blue Harbor"
-  k2 agent hire ~/agents/mgr --template lead --context wiki:index
-  k2 agent hire ~/agents/ops --context wiki:hygiene --context connections:roster \
-      --context skills:roster
-  k2 agent hire ~/agents/ops --focus-group Ops --color "#22c55e"
+%include cli/text/help/agent/hire.txt
 EOF
 }
 
 cmd_help_agent_retire() {
     cat <<'EOF'
-Safely decommission an agent. Retire NEVER deletes: the agent's folder is
-archived, its registration and connections are removed.
-
-SAFETY GUARDS — retire REFUSES (exit 3) instead of asking, when it finds:
-  * uncommitted or unpushed git work in the agent's folder
-  * likely secrets (.env files, key material) in the agent's folder
-Pass --force to proceed anyway. Use --dry-run to preview.
-
-An agent that is a project's Point of Contact cannot be retired at all
-(poc_of_projects — NOT --force-overridable): reassign the PoC first with
-`k2 project poc <project> <successor>`. Plain project memberships are
-removed automatically as part of retirement.
-
-USAGE
-  k2 agent retire <name> [flags]
-
-FLAGS
-  --archive-to <dir>      Where to move the folder (default: ~/.k2/archive/<name>-<date>/)
-  --force                 Override the safety guards
-  --dry-run               Show what would happen; change nothing
-  --json                  JSON output
+%include cli/text/help/agent/retire.txt
 EOF
 }
 
 cmd_help_agent_restart() {
     cat <<'EOF'
-Restart an agent's pinned chat session. The running CLI process is stopped
-and started again on the SAME conversation (resume), so it re-reads its
-charter (AGENTS.md / CLAUDE.md) and workspace config (.mcp.json) without
-losing history. Use it after editing a charter or adding an MCP server.
-
-Only the pinned chat is restarted; sidecar tabs keep running. If the agent
-has no live session, restart starts one.
-
-USAGE
-  k2 agent restart <name> [flags]
-
-  <name> is the agent's handle, its name, or its full workspace path
-  (/home/k2/hooli/hooli-manager; a trailing slash or a symlink to the
-  folder works too). When a name matches more than one workspace, or an
-  old handle that was retired, it exits 4 and the error names each
-  workspace's handle and path: use one of those.
-
-On a server that has never had a pinned chat, the first one waits for you to
-pick its LLM: restart then exits 1 (harness_choice_needed), lists the
-harnesses and starts nothing. Run it again with --harness.
-
-FLAGS
-  --harness <harness>     For an agent that has never had a chat: the LLM CLI
-                          to start it on (claude, codex, grok, …). It becomes
-                          the workspace's default agent. Ignored once the
-                          agent has a chat; to move a chat to another
-                          harness, use k2 agent harness.
-  --dry-run               Show which session would restart; change nothing
-  --json                  JSON output: {ok, changed, name, path, oldSessionId,
-                          sessionId, conversationId, resumedExisting, provider}
+%include cli/text/help/agent/restart.txt
 EOF
 }
 
 cmd_help_agent_harness() {
     cat <<'EOF'
-Move a workspace's pinned chat to another harness (the coding CLI it runs:
-claude, codex, grok, gemini, cursor, pi or hermes).
-
-The pinned chat is the chat heartbeats, Threads and `k2 msg` go to. It keeps
-the harness it started with: changing the workspace's Default Agent only
-changes NEW chats. This command moves the pinned chat itself:
-
-  1. K2 ends the current pinned chat and starts a new one on <harness>,
-     seeded with a summary of the recent conversation (the same summary as
-     Chat history → "Continue in a new chat…").
-  2. Heartbeats on the pinned chat, Threads and messages go to the new chat.
-  3. The old chat stays in Chat history.
-
-Already on <harness>: nothing changes (exit 0), unless you name a --model:
-then it starts a new chat on that model with the summary. <harness> not installed
-on this computer: nothing changes either (exit 1, harness_not_installed);
-the old chat keeps running and the error says how to install it.
---dry-run runs the same check and shows the program it would launch.
-
-USAGE
-  k2 agent harness <workspace> <harness> [flags]
-
-  <workspace>   handle, name or path ("." = the current directory)
-  <harness>     claude, codex, grok, gemini, cursor, pi or hermes
-
-FLAGS
-  --full                  Seed with the whole old conversation (default: the recent part)
-  --notes-file <path>     Extra handover notes for the new chat
-  --model <id>            Start the new chat on this model, even if the preset
-                          names another. This start only: a later resume uses
-                          the preset or workspace model again
-  --dry-run               Show what would move; change nothing
-  --json                  The daemon's JSON
-
-WHO
-  A person: the owner (the desktop app, or a terminal outside K2), an Admin
-  login, or a person typing in a K2 shell tab. An agent can't move its own
-  pinned chat (that restarts its own session): it gets exit 3 and asks its
-  person to run this command, or, with permission cards on:
-    k2 permission request agent.harness-switch harness=<harness> --why "…"
-  In the app: the pinned chat's menu → "Move pinned chat to …", or answer
-  "Also move the pinned chat?" after changing a workspace's Default Agent.
-
-EXAMPLES
-  k2 agent harness sales claude
-  k2 agent harness ~/agents/ops claude --dry-run
-  k2 agent harness ops codex --full --notes-file handover.md
-  k2 agent harness ops codex --model gpt-6-astra
-
-EXIT CODES
-  0 ok (moved, or already there) · 1 error · 2 bad usage · 3 refused · 4 not found
+%include cli/text/help/agent/harness.txt
 EOF
 }
 
@@ -1257,51 +871,7 @@ if d.get("seedError"):
 
 cmd_help_agent_refresh() {
     cat <<'EOF'
-k2 agent refresh — start a new pinned chat that carries on from this one
-
-For a long chat that has gone stale. K2 ends the current pinned chat, starts a
-new one on the same harness with the same launch options, and sends it a summary
-of the old chat and your note once it is ready.
-
-  Stops:         the current chat, at once. It does not wait: anything running
-                 in it stops. If that is you, so does this command.
-  Carries on:    the Thread, messages and heartbeats on the pinned chat, in the
-                 new chat. Sidecars keep running.
-  Stays:         the old chat, in Chat history.
-
-USAGE
-  k2 agent refresh [<workspace>] [flags]
-
-  <workspace>   handle, name or path ("." = the current directory). Default:
-                this workspace.
-
-FLAGS
-  --note <text>           A note for the new chat: what you were doing, what's next
-  --notes-file <path>     The note, from a file (at most 32,000 characters)
-  --full                  Summarize a longer part of the old chat (default: the recent part)
-  --dry-run               Show what would happen, and if a person has to allow it;
-                          change nothing. It keeps no note and gives no line to ask with
-  --json                  The daemon's JSON
-
-WHO
-  A person: the owner (the desktop app, or a terminal outside K2), an Admin login,
-  or a person typing in a K2 shell tab, for any workspace.
-  An agent: its main session, for its own chat, with "Let this agent refresh its
-  pinned chat" on. Off, it gets exit 3, and with permission cards on the error ends with
-  the line to ask with: k2 permission request chat.refresh … --why "…". Save your
-  work first: once you've asked, the chat can end at any moment. A sidecar can't
-  refresh itself.
-  In the app: the pinned chat's menu → "Continue in a new chat…".
-
-Full page: k2 study chat-refresh
-
-EXAMPLES
-  k2 agent refresh --note "Next: finish the import; the failing test is tests/import.rs"
-  k2 agent refresh sales --notes-file handover.md
-  k2 agent refresh sales --dry-run
-
-EXIT CODES
-  0 ok · 1 error · 2 bad usage · 3 refused · 4 not found
+%include cli/text/help/agent/refresh.txt
 EOF
 }
 
@@ -1446,21 +1016,7 @@ if d.get("seedError"):
 
 cmd_help_agent_list() {
     cat <<'EOF'
-List every agent on this server: name, mode, enabled, live-session
-status, and workspace path.
-
-USAGE
-  k2 agent list [--json]
-
-FLAGS
-  --json                  Machine-readable output, for scripts (names and paths can
-                          contain spaces; never parse the table):
-                          {"ok":true,"agents":[{"name","id","handle","mode","enabled",
-                           "live","sessionId","backend","ptydAdopted","path"}]}
-                          path: absolute; live: true/false; sessionId and backend
-                          ("ptyd" or "in-process") are null when not live;
-                          ptydAdopted: true when the session survived a daemon
-                          restart (false when not live). Check "ok" first.
+%include cli/text/help/agent/list.txt
 EOF
 }
 

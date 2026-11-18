@@ -1,0 +1,27 @@
+Choose this box's backup mode. Nothing runs yet: backups start in a later
+release; status says so.
+
+USAGE
+  k2 hostmail backup set --mode local|offsite-only|both|none
+                         [--reason <text>]                 (required for none)
+                         [--keep-daily N] [--keep-weekly N]           (7 / 4)
+                         [--offsite-keep-daily N] [--offsite-keep-weekly N]
+                         [--offsite-keep-monthly N]                (7 / 4 / 6)
+                         [--window HH:MM-HH:MM]          (03:30-04:30 box time)
+                         [--max-local-gb G]
+                         --confirm-plan <hash> [--json]
+
+RULES
+  --confirm-plan   the planHash of `k2 hostmail backup plan` run with the
+                   same retention flags; a changed plan is refused
+                   (plan_changed) — run plan again.
+  none             needs --reason (e.g. "provider snapshots daily").
+  offsite-only, both
+                   refused until the owner sets an offsite destination
+                   (a later release).
+  local            refused when the plan's local verdict is REFUSED (it
+                   would not fit above the free-space floor).
+
+Unset flags keep the box's current values (or the defaults).
+POST /cli/mail/backup/set. it-email agent (mail-manage) or owner/admin;
+recorded with who, workspace, when, old → new.

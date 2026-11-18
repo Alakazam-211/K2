@@ -1,0 +1,18 @@
+k2 usage — token usage and subscription limits on this server (Owner and Admin).
+
+  k2 usage tokens [--workspace PATH|--here] [--outside] [--harness H] [--login ID]
+                  [--model M] [--since 7d] [--until T]
+                  [--by workspace|model|login|harness] [--tz ZONE] [--json]
+                                  totals, estimated cost, days, and a breakdown
+  k2 usage turns [--limit N] [--workspace PATH|--here] [--harness H] [--login ID]
+                 [--since T] [--before CURSOR] [--json]
+                                  the newest requests first
+  k2 usage limits [--refresh] [--tool claude|codex|grok] [--login ID] [--json]
+                                  every login's subscription windows
+
+Times: 7d, 24h, 90m, an RFC3339 time, or unix ms. --tz defaults to this
+computer's zone. Input is uncached input; output includes reasoning; one
+request is one model call (Grok: one prompt). Cost is an estimate at API
+list prices, not your bill.
+In a K2 terminal (an agent) you see your own workspace only, and limits are
+read-only (--refresh needs a terminal outside K2).

@@ -1,0 +1,157 @@
+k2 hostmail — run the K2 email SERVER (owner surface). Provision the
+server, host domains, mint addresses, check deliverability, and gate
+agent sending.
+
+Agents: with "Let this agent manage hosted mail" on for the agent's OWN
+workspace (Settings → Workspaces / Agents → that workspace → Permissions →
+Hosted mail), it
+may run server enable/disable, domain add/list/show/check, doctor,
+config, approvals and the mailbox-setting verbs. uninstall, upgrade and
+domain remove stay owner-only. Otherwise the server refuses (exit 3,
+owner_only) and names the workspace whose toggle it checked.
+
+Not installed here? That is NOT "mail broken" — `k2 mail inboxes` still
+works for LINKED accounts. Hosting is a capability; access is separate.
+
+USAGE
+  k2 hostmail <command> [args] [flags]
+
+COMMANDS
+  status                      Server health, version, hostname, port plan.
+                              Linux ground truth (read-only):
+                              `systemctl is-active stalwart`.
+                              consistent:false = status and systemd
+                              disagree (warning, exit ≠ 0).
+                              Do not systemctl start/stop — writes stay
+                              k2 hostmail enable/disable.
+  enable --hostname <name>    Provision / start the mail server (e.g. mail.acme.dev).
+                              Healthy second enable is a no-op — not rotate-admin.
+  disable                     Host-wide inbound down for EVERY domain until
+                              enable actually restarts the unit (data kept;
+                              MX still points here). disable is not a wipe.
+                              Re-enable with --hostname.
+  uninstall --purge --confirm-hostname <host>
+                              Owner-only wipe of the server and its data.
+                              --purge without --confirm-hostname exits 2
+                              and does not POST. Not mail_manage.
+  upgrade [--dry-run]         Move Stalwart to this daemon's pinned version:
+                              stop → snapshot → install → health check,
+                              rolls back on failure. Owner-only, never
+                              automatic. --dry-run prints the plan + outage.
+  backup status|plan|set      The box's backup choice (local|offsite-only|
+                              both|none), chosen by the it-email agent with
+                              the client after `backup plan`. No backups run
+                              in this release; unconfigured until chosen.
+  rotate-admin                Rotate leftover recovery principal `admin` and
+                              the provisioned admin password. Does not wipe
+                              the store. enable no-op is not rotate.
+  password rotate|keep <addr> Rotate IMAP/SMTP password (one secret, shown
+                              once), or mark it reviewed for the doctor.
+                              mail_manage; an IT agent never for its own
+                              workspace's mailbox. Not rotate-admin.
+  app-password add|list|revoke|keep <addr>
+                              Extra labeled secrets on a minted mailbox
+                              (secret shown once). mail_manage; add/keep
+                              never on an IT agent's own mailbox. Survive
+                              password rotate. Not `k2 mail link`.
+  person <addr>|--all --workspace <ws> on|off
+                              Mark a person's mailbox (an IT agent may set
+                              its passwords). mail_manage; only the owner
+                              turns it on in the IT agent's own workspace.
+  domain add|list|show|check|remove
+                              Host a domain: DNS record table + live verify
+  create <local>[@<domain>]   Mint a hosted address (bound to this workspace)
+  delete <address>            Retire a hosted address you own
+  doctor [<domain>]           Deliverability checks + direct-send grade
+  config [...]                Send mode, relay creds, agent-send gating,
+                              address caps
+  approvals [list|approve|deny]
+                              The pending-outbound queue (deny needs --note)
+  import --address <a>        Import Maildir and/or IMAP into a hosted address
+  quota get|set <addr>        Per-address mailbox disk/message cap (mail_manage).
+                              Existing boxes need quota set — mint constants
+                              do not retrofit. 0 = unlimited (and the default).
+  catchall set|unset|show     Unknown recipients on a domain → a minted mailbox
+                              (mail_manage). Unset rejects unknown.
+  alias add|remove|list       Extra address on an existing mailbox (not a mint;
+                              k2 hostmail create mints). mail_manage.
+  forward set|show|unset|pause|resume|list
+                              Forward a mailbox to a mailbox here or an outside
+                              address (outside: confirm link first; keeps a copy
+                              unless --no-keep). mail_manage.
+  ooo set|unset|show <addr>   Out-of-office auto-reply (vacation) on a minted
+                              mailbox. mail_manage. --text literal|@path|-.
+  footer set|unset|show       Host-wide outbound company footer (plain text).
+                              mail_manage. --domain is 400 this cut.
+  audit-sieve [--json]        Read-only: user Sieve scripts on every mailbox
+                              (targets as domains), redirects in K2's own
+                              scripts with no forward behind them, mailboxes without the
+                              Sieve lock, enotify state, mailboxes that can
+                              still create API keys or hold any. Owner/admin.
+  cert renew                  Retry ACME for the mail hostname (enable is
+                              not the retry path; disable is not a retry).
+                              If DNS is not ns1/ns2.k2.dev, add mail.<apex>
+                              (and autoconfig/autodiscover/mta-sts) on that
+                              platform pointing at origin, then renew.
+  cert names [issue|renew]    One certificate per extra name (autoconfig,
+                              autodiscover, mta-sts, ua-auto-config) that
+                              points here. K2-hosted zones only. Never
+                              touches the mail certificate. A mail host on
+                              another domain: see cert names --help.
+  cert owner [--stalwart-acme]
+                              Who owns the mail certificate (k2 |
+                              stalwart-acme). --stalwart-acme hands it back
+                              to Stalwart ACME (mail host only) once K2 no
+                              longer owns it.
+  outbound [show] | outbound dane on
+                              mx route lookup (K2 sets v4Only once) and DANE
+                              per TLS strategy, who set each. `dane on`
+                              turns DANE back on (Stalwart 0.16.20+).
+  list create|members|delete|show
+                              Mailing lists (x:MailingList). Members minted-only.
+                              Bare `k2 hostmail list` is usage — not inbox catalog
+                              (`k2 mail list` still lists inboxes).
+  spam ham|spam|allow|block|quarantine
+                              Train Junk/$junk; allow/block sender domain;
+                              quarantine is that mailbox's Junk (discard = Trash).
+  queue list|retry|drop       Outbound x:QueuedMessage. drop is not mailbox Trash.
+  acl grant|revoke|show       IMAP/JMAP sharing between minted Users. Not
+                              `k2 mail access grant` (agent layer).
+  autoconfig show|apply       dnsZoneFile advanced rows (incl. CalDAV/CardDAV
+                              SRV). apply plants via k2 dns if we host NS;
+                              BYO prints. Not A8 bind.
+  ptr show|set <hostname>     HELO + reverse DNS. show = origin/rDNS/alignment;
+                              set = Stalwart HELO then CP POST /api/dns/ptr
+                              (Bearer k2c_). mail_manage. Not auto on enable.
+  dkim show|rotate|retire     DKIM selectors. rotate mints a new pair and keeps
+                              the old selector until retire. mail_manage.
+  dmarc show|report-to        DMARC report mailbox (a minted inbox). Prints the
+                              rua= line; does not rewrite _dmarc. mail_manage.
+  bans list|clear|migrate    BlockedIp list/clear + auth-ban migrate window.
+                              clear default = authFailure only (--all for scan).
+                              Pair clear with allowlist (fail counters survive).
+  allowlist list|add|remove   AllowedIp (beats blocked; ReloadSettings).
+                              Standing IPs in add --help only — never auto-insert.
+  calendar status|enable|disable [--files on|off]
+                              CalDAV/CardDAV (and WebDAV files) for every
+                              hosted address. Owner/admin only (not
+                              mail_manage). First enable|disable turns
+                              WebDAV files off unless --files on. Never
+                              restarts Stalwart.
+  calendar create|rename|share|unshare|shares|sharing
+                              Calendars of hosted mailboxes and who they
+                              are shared with (--freebusy|--read|--write|
+                              --editor). mail_manage; an agent never widens
+                              its own access.
+  group create|add|remove|list|show|delete
+                              Groups of hosted addresses for shared
+                              calendars (a list is for mail fan-out).
+                              Group inbound mail off unless --mail.
+                              mail_manage.
+  profile <addr> --apple [--out <file>]
+                              Unsigned Apple .mobileconfig (Mail, plus
+                              Calendar + Contacts when calendars are on and
+                              reachable) with a fresh app password.
+                              Owner/admin only.
+
+Run 'k2 hostmail <command> --help' for details.

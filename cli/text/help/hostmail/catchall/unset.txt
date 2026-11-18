@@ -1,0 +1,4 @@
+Clear the domain catch-all (unknown RCPT rejected). JMAP null, not "".
+
+USAGE
+  k2 hostmail catchall unset <domain> [--json]

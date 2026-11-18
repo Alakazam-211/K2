@@ -1,0 +1,24 @@
+Provision or start the K2 mail server. A second enable on a healthy
+running install (unit active + config/data present) is a no-op — no
+SIGTERM, no config wipe, no data-store move, and not rotate-admin
+(use `k2 hostmail rotate-admin` for leftover recovery admin). After
+disable, enable actually restarts the unit. Hostname retarget is
+disable then enable.
+
+Needs the root helper /usr/local/libexec/k2-root-helper (user k2 runs it
+with `sudo -n`; the agent never gets a root shell; `k2 root-helper status`).
+Without it enable stops before any download with error mail_helper_missing,
+whose hint is the command an admin runs once per box:
+  curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-root-helper.sh | sudo bash -s -- --version <version>
+Never create /usr/local/bin/stalwart by hand.
+
+Enable never changes an installed Stalwart version. When the installed
+version differs from this daemon's pin, enable refuses and names
+`k2 hostmail upgrade` (explicit, with snapshot + rollback).
+
+USAGE
+  k2 hostmail enable --hostname <name> [--json]
+
+FLAGS
+  --hostname <name>      Mail hostname (e.g. mail.acme.dev). Required.
+  --json                 JSON output ({ok,state,alreadyEnabled?})

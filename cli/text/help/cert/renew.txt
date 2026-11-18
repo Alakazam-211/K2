@@ -1,0 +1,9 @@
+Renew the cert for an attached hostname. Never hostmail disable/enable.
+
+USAGE
+  k2 cert renew <hostname> [--json]
+
+DNS
+  Same as issue: if the zone is not on ns1/ns2.k2.dev, add records on
+  the platform that actually serves DNS, then rerun. K2 cannot plant
+  there.

@@ -1,0 +1,4 @@
+Remove a hostname from this server's inventory.
+
+USAGE
+  k2 domain name remove <hostname> [--json]

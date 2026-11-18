@@ -1,0 +1,39 @@
+k2 clone — copy an agent (workspace + chat history + Thread) to another server
+
+People:
+  k2 clone preview <ws> [--host H] [--threads-since N] [--json]
+                                   what would travel (names only)
+  k2 clone to <host> <ws> [--dest DIR] [flags]      push a workspace from this server
+  k2 clone from <host>:<ws> [--dest DIR] [flags]    pull one to this computer
+  k2 clone here <ws> [--dest DIR] [flags]           a second copy on this server
+  k2 clone <ws> --dest DIR [flags]                  same as `here`
+  k2 clone proposals [--all] [--json]               agent proposals waiting for a person
+  k2 clone approve <id> [--yes]                     approve (asks you to confirm) and run it
+  k2 clone deny <id> [--reason TEXT]
+
+Agents (a person approves):
+  k2 clone propose --to <host|here> [flags] --why "…"
+  k2 clone proposals --mine        k2 clone withdraw <id>
+
+Flags:
+  --no-threads                 leave the Thread behind (default: bring it)
+  --threads-since N            only the last N days of Thread
+  --copy A,B  --blank C  --skip D
+                               per-secret choices (names only). Without them a
+                               terminal asks per secret; otherwise defaults:
+                               API keys copy, sign-ins skip, server/box keys blank.
+                               Copying needs an Owner/Admin confirm.
+  --own                        this is my own server (keeps "given by a person")
+  --live-only                  only the newest chat transcript (default: all)
+  --env-files                  also send .env files as files (asks you to confirm;
+                               better: k2 vault import .env first)
+  --token-stdin                remote token on stdin (else connect-tokens.json /
+                               $K2_REMOTE_TOKEN); --token T still works, but every
+                               account on this computer can see it while the
+                               command runs
+  --yes                        don't ask; take defaults and flags as given
+  --json                       names, choices and counts as JSON
+
+Agents can't clone: `k2 clone propose` holds the plan for a person, who runs
+`k2 clone approve <id>` from a terminal outside K2 (or approves in K2).
+Exit: 0 ok · 2 bad usage · 3 refused or unreachable.

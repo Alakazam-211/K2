@@ -1,0 +1,12 @@
+Show one project: its members (PoC marked), and the last few chat messages.
+For the full chat stream use `k2 project read`.
+
+USAGE
+  k2 project show <project> [flags]
+
+FLAGS
+  --json                 JSON output
+
+EXAMPLES
+  k2 project show 0.41-release
+  k2 project show 0.41            (unique prefix works)

@@ -1,0 +1,35 @@
+k2 app box-service — let a walled App reach a service on this box's loopback
+
+  k2 app box-service <app-id> [--json]
+                                       Its box services (approved / held), where
+                                       each is inside the wall (K2_BOX_<NAME>),
+                                       whether the running App has the forward,
+                                       and the known names (presets).
+  k2 app box-service request <app-id> <name> [<host-port>] [--app-port N]
+                 [--reason TEXT] [--json]
+                                       Ask for one. Always held for the owner:
+                                       exit 2 with the request id until they
+                                       approve. sew-api and sew-signal need no
+                                       port (read from Sew's config). The App
+                                       dials 127.0.0.1:<app-port> in its wall
+                                       (the host port by default).
+  k2 app box-service revoke <app-id> <name> [--json]
+                                       Shut it at once (new connections are
+                                       refused). No approval needed.
+
+  k2 app approvals | approve <id> | deny <id>
+                                       The owner approves in person (Touch ID or
+                                       a password, outside K2). Agents never can.
+
+In a manifest: "boxServices": [{"name": "sew-api"}, {"name": "sew-signal"},
+{"name": "cache", "hostPort": 6380, "appPort": 6380}] — asked for at deploy.
+Approving opens the door without a restart when the App was deployed with
+it; one asked for later needs one k2 app restart for its forward.
+
+TCP only (HTTP, websockets, long uploads ride it). Never forwarded: ports
+below 1024 (ssh, mail, DNS), 38600-38999 (every App's gateway and proxy),
+5432-5449 (Postgres, every major: use the App's database door), 2019 (Caddy admin), 38472
+(the box router), this daemon's own ports. The process exception dials the
+host port directly (same approval, same nft door).
+
+Exit codes: 0 ok · 2 usage or held (pending the owner) · 3 refused/infra.

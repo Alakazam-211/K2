@@ -1,0 +1,18 @@
+Create an empty project. Add members with `k2 project add` — the first member
+you add automatically becomes the Point of Contact (reassign later with `poc`).
+
+Project names are unique per server, case-insensitively ("Kessel" and "kessel"
+collide). Pick something short: everyone will type it in `msg`.
+
+USAGE
+  k2 project create <name> [flags]
+
+ARGUMENTS
+  <name>                 The project's name (quote names containing spaces)
+
+FLAGS
+  --json                 JSON output
+
+EXAMPLES
+  k2 project create 0.41-release
+  k2 project create "Kessel Perf"

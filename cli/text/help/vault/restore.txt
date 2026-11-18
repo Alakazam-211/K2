@@ -1,0 +1,7 @@
+k2 vault restore --from <dir> [--holder recovery|backup] [--dry-run] [--replace]
+
+People only: restore a backup on this box. The recovery words (or the
+backup key, --holder backup) come on stdin or are asked for. --dry-run
+checks first; --replace overwrites a vault that already has secrets.
+
+Example: k2 vault restore --from /Volumes/backup/k2 --dry-run

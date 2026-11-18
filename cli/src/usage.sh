@@ -6,24 +6,7 @@
 
 _usage_cli_usage() {
     cat <<'EOF'
-k2 usage — token usage and subscription limits on this server (Owner and Admin).
-
-  k2 usage tokens [--workspace PATH|--here] [--outside] [--harness H] [--login ID]
-                  [--model M] [--since 7d] [--until T]
-                  [--by workspace|model|login|harness] [--tz ZONE] [--json]
-                                  totals, estimated cost, days, and a breakdown
-  k2 usage turns [--limit N] [--workspace PATH|--here] [--harness H] [--login ID]
-                 [--since T] [--before CURSOR] [--json]
-                                  the newest requests first
-  k2 usage limits [--refresh] [--tool claude|codex|grok] [--login ID] [--json]
-                                  every login's subscription windows
-
-Times: 7d, 24h, 90m, an RFC3339 time, or unix ms. --tz defaults to this
-computer's zone. Input is uncached input; output includes reasoning; one
-request is one model call (Grok: one prompt). Cost is an estimate at API
-list prices, not your bill.
-In a K2 terminal (an agent) you see your own workspace only, and limits are
-read-only (--refresh needs a terminal outside K2).
+%include cli/text/help/usage.txt
 EOF
 }
 
@@ -1149,119 +1132,7 @@ if not targets:
             ;;
         --help|-h|help)
             cat <<'EOF'
-k2 tunnel — device tunnel to primary *.k2.dev (frpc)
-
-PRODUCT BOUNDARY
-  Device tunnel to primary *.k2.dev         → k2 tunnel (this family)
-  Nested label.user.k2.dev + local target   → k2 publish subdomain
-  Custom zone records (A/TXT/MX/…)          → k2 dns
-  Hosted mail domain / MX                   → k2 hostmail domain (owner)
-
-USAGE
-  k2 tunnel start [--subdomain <s>]
-  k2 tunnel stop | disable
-  k2 tunnel enable [--subdomain <s>] [--no-auto-start]   (persists auto-start on by default)
-  k2 tunnel switch <subdomain> [--token-stdin | --token <t>] [--start|--no-start]
-                                   --token-stdin reads the tunnel token from stdin;
-                                   a token on the command line (--token <t>) is
-                                   visible to other users on this machine
-  k2 tunnel release --confirm      (tells K2 Connect only when this device holds the name)
-  k2 tunnel forget --confirm       (local only: stale config from another machine)
-  k2 tunnel status [--json]
-  k2 tunnel subdomains [--json]
-  k2 tunnel boot-status [ghost|compat]   what strangers see on /boot-status (Owner/Admin to set)
-
-RELAYS (which relay this box dials)
-  The built-in relay is relay.k2.dev (since 0.46.6; before, a fixed IP,
-  178.156.232.105). k2.dev may hand out a list of relays instead; it is
-  refreshed at daemon start and every few hours.
-  k2 tunnel status shows it:
-    Server:   the relay frpc dials right now (also while it is still
-              connecting or retrying), e.g.
-                Server:     relay.k2.dev:7000 (primary relay)
-                Server:     203.0.113.10:7000 (fallback relay; returns to the primary once it answers again)
-              Whenever Server: is printed, --json has server_addr and
-              server_port; stopped, there is no Server: line and --json
-              has neither.
-    Relays:   always printed: the list the tunnel dials, primary first,
-              then [source]:
-              fetched (a list from k2.dev), provisioned (a relay list
-              written into tunnel.json by hand or a setup script) or
-              default (no relay list stored, only tunnel.json's single
-              server_addr: the built-in relay, which a box paired before
-              0.46.6 has saved as 178.156.232.105). Stopped, the first entry
-              is what k2 tunnel start dials. Examples:
-                Relays:     relay.k2.dev:7000 [default]
-                Relays:     relay.k2.dev:7000 [default; replaces the old built-in 178.156.232.105:7000]
-                Relays:     relay.k2.dev:7000 [provisioned; replaces the old built-in 178.156.232.105:7000, 40.160.53.25:7000]
-              "replaces the old built-in …" means tunnel.json still holds
-              the old relay IPs and the tunnel dials relay.k2.dev instead
-              (in memory; the file is not rewritten). With the legacy switch
-              below on, the boxes of all three examples show (and dial) the
-              old IPs instead, and a running one shows
-              e.g. Server:     178.156.232.105:7000 (primary relay):
-                Relays:     178.156.232.105:7000 [default]
-                Relays:     178.156.232.105:7000, 40.160.53.25:7000 [provisioned]
-    Relay default:  only while something sets the switch below, e.g.
-                Relay default: legacy (pre-0.46.6, the old built-in IP; set by relay_default in /home/k2/.k2/tunnel.json)
-                Relay default: name (relay.k2.dev, the 0.46.6 default; set by relay_default in /home/k2/.k2/tunnel.json)
-                Relay default: name (relay.k2.dev, the 0.46.6 default; set by K2_RELAY_DEFAULT in the daemon environment, which wins over tunnel.json)
-              Values are "legacy" or "name", any case. Anything else is
-              ignored as if unset (no Relay default: line).
-    Tunnel config:  the tunnel.json this daemon reads (the file to edit),
-              printed even when the file does not exist yet.
-  k2 tunnel status --json (relay_list is always there, running or not):
-  server_addr + server_port = the relay in use (whenever Server: is
-  printed); relay_list.relays = the list dialed, a JSON array of
-  "host:port" strings; relay_list.source = "fetched"|"provisioned"|"default";
-  relay_list.replaced = the old list it stands in for, an array of
-  "host:port" strings (the key is absent otherwise); relay_list.relay_default
-  = "legacy"|"name" and relay_list.relay_default_set_by = "env"|"tunnel.json"
-  whenever the switch is set (else both absent); relay_list.config_file =
-  the path of that tunnel.json.
-  Timing: Relays: shows any change (a new list, the switch) at once. Every
-  minute the running tunnel compares that list with the one it uses: if
-  its relay is still listed it takes the new list with no reconnect; if
-  not, it reconnects once, to the new first entry, after a random 0-60 s.
-  So Server: follows within about two minutes.
-  Go back to the pre-0.46.6 default: the built-in relay is 178.156.232.105
-  again (a box showing relay.k2.dev:7000 [default] then dials
-  178.156.232.105, whether or not tunnel.json names relay.k2.dev), and
-  saved old IPs are dialed as saved, never replaced. It changes only boxes
-  whose Relays: says "replaces the old built-in" or shows relay.k2.dev as
-  [default]; any other fetched or provisioned list is dialed as it is
-  either way, as before 0.46.6:
-    put "relay_default": "legacy" at the top level of the file that
-    k2 tunnel status prints as Tunnel config: (if it is missing the box is
-    not paired yet; create it as {"relay_default": "legacy"}, and pairing
-    adds the rest). No restart: a running tunnel follows within about two
-    minutes, a stopped one at the next k2 tunnel start. K2's own writes to
-    the file (enable, switch, pairing) keep the key.
-  Undo: delete the key, or set "relay_default": "name" (the 0.46.6
-  default: relay.k2.dev, replacing the old IPs); same timing.
-  Or, on Linux only (on a Mac use the file), set K2_RELAY_DEFAULT=legacy in
-  the daemon's own environment: k2 daemon status prints "Unit: <name>
-  (user)" or "(system)"; run systemctl edit <name> (systemctl --user edit
-  <name> for a user unit), add the two lines
-      [Service]
-      Environment=K2_RELAY_DEFAULT=legacy
-  save, and run k2 daemon restart (systemctl edit reloads systemd itself).
-  While the variable is set (legacy or name) the file's key is ignored;
-  Relay default: says so. Undo: run systemctl edit <name> again (--user
-  for a user unit), delete those two lines, save, then k2 daemon restart.
-  On a Mac the variable is only there if someone added it to the daemon's
-  launchd plist; remove it there, then k2 daemon restart. The k2 CLI
-  itself never needs it. Editing the file needs no K2 role, only
-  access to that file (the box owner). The switch is temporary: a release
-  after the old relay is retired drops it, and "legacy" then reads as
-  "name".
-
-OUTPUT CONTRACT
-  status / subdomains: human by default; --json → single JSON object on stdout
-  ERRORS on stderr (human text today for most tunnel verbs)
-
-EXIT CODES
-  0 ok · 1 error
+%include cli/text/help/tunnel.txt
 EOF
             exit 0
             ;;

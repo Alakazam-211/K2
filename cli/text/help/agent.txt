@@ -1,0 +1,47 @@
+k2 agent — manage this server's agents (each agent lives in its own workspace directory)
+
+USAGE
+  k2 agent <command> [args] [flags]
+
+COMMANDS
+  hire <dir>              Provision a new agent in <dir> (create, configure, wire, launch) in one call
+                          (--template <id>: from an agent type; <dir> then optional)
+  template [list|show]    The agent types you can hire (general, developer, writer, …)
+  conf [<name>]           Show all of an agent's settings (default: the agent in the current directory)
+  get <name> <key>        Print a single setting's value (bare, script-friendly)
+  set <name> [flags]      Change one or more settings (hire's settings flags)
+  list                    List every agent on this server with mode + live status
+  retire <name>           Safely decommission an agent (guards + archive; never deletes)
+  restart <name>          Restart the agent's chat session (reloads charter + MCP config; same conversation)
+  harness <name> <harness>  Move the agent's pinned chat (what heartbeats, Threads and msg reach) to
+                          claude, codex, grok, gemini, cursor, pi or hermes. Changing the default
+                          agent only changes NEW chats. People run it; an agent is refused (exit 3)
+                          and asks its person (the refusal says how).
+  refresh [<name>]        Start a new pinned chat on the same harness that carries on from this one,
+                          with a note for it. The old chat stays in Chat history; the Thread comes along.
+                          An agent's main session may, for its own chat, when a person allows it.
+  identity [<name>]       Show or change the picture, color and name (an agent: its own color and picture)
+  access set <ws> chat_manage on|off
+                          "Manage chat and voice" for that workspace's agent (the owner or an admin)
+  context <subcommand>    Manage the always-on AGENTS.md context stack (layers)
+  team [served|link|unlink]  Team links: who serves this agent, who it serves (agents read their own)
+  instances [show|hire|retire]  Hires made from an inline recipe (owner/admin; v1 API keys hire too)
+  hire-root [set <dir>]   The folder API keys hire new agents into (owner sets it)
+
+ADDRESSING
+  <name> accepts an agent name or a path. Anything containing "/" is treated as a path.
+  Names match case-insensitively; quote names containing spaces ("QA Bot").
+  Unknown or ambiguous names fail with exit 4; the error says why (a near-miss name,
+  several matches, or a retired handle) and names the workspace's handle and path
+  to use instead. A full path always works. Commands that default to
+  the current directory (conf) fail with exit 4 when it isn't a registered agent.
+
+GLOBAL FLAGS
+  --json                  Machine-readable output (single JSON object; mutations include ok/changed/actions)
+  --dry-run               Print the exact action plan without changing anything (mutating commands).
+                          Combines with --json: the plan prints as actions with status "pending".
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage · 3 refused by a safety guard · 4 not found
+
+Run 'k2 agent <command> --help' for details on a command.

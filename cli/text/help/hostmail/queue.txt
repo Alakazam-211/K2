@@ -1,0 +1,8 @@
+Outbound queue (x:QueuedMessage). retry patches nextRetry. drop
+destroys the queued message — not mailbox Trash, not EXPUNGE, not
+`k2 mail delete`.
+
+USAGE
+  k2 hostmail queue list [--json]
+  k2 hostmail queue retry <id> [--json]
+  k2 hostmail queue drop <id> [--json]

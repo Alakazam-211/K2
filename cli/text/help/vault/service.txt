@@ -1,0 +1,9 @@
+k2 vault service <service> [clean|legacy] [--env-file .env.k2] [--json]
+
+Show or set a k2 publish service's environment: clean (base environment +
+granted secrets) or legacy (the daemon's whole environment; owner only,
+being retired). --env-file points it at a .env.k2 of k2v:// references.
+Restart the service to apply.
+Give it a secret: k2 publish secret add <service> NAME [--as file|env]
+
+Example: k2 vault service api clean --env-file .env.k2

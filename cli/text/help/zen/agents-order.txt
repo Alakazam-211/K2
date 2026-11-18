@@ -1,0 +1,23 @@
+k2 zen agents-order — the person's order and pins in each Garden's Agents widget
+
+USAGE
+  k2 zen agents-order [<garden>] [--json]
+
+In any Garden's Agents widget the person can drag agents into their own
+order (or move a row with Alt+Up / Alt+Down) and pin or unpin an agent
+(right-click a row, or Shift+F10). That is the person's view, per Garden,
+on this computer only: it is not in the Garden's file, Garden sync or any
+other computer. This prints it for every Garden, or the one named (an id
+or a name):
+
+  order   the person's order (full row addresses, first first), on top of
+          the widget's own order (the Home group's, or a list-from list's);
+          "the widget's own" until they drag.
+  pins    the Garden's own pins once they pinned or unpinned there ("none"
+          = they unpinned all); until then each agent's workspace pin.
+
+Agents can read it, never set it: only the person changes it, in Zen.
+Addresses the widget doesn't show are ignored, so it never adds reach.
+
+--json   the daemon's answer: {ok, gardens: [{id, name, order, pins,
+         updatedAt}]}, null where the person never set one.

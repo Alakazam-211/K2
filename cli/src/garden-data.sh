@@ -146,33 +146,7 @@ cmd_zen_data() {
 
 cmd_help_zen_data() {
     cat <<'EOF'
-k2 zen data — a widget's data on this computer (the person only)
-
-Each custom widget has its own keyspace (data:<widget>) that it reads and
-writes with k2.store, and that agents you allow read and write with
-`k2 store --widget`. These commands are for you, the person: inside a K2
-terminal they're refused (run them outside K2, or use a Garden's Local
-Data in Settings → Gardens).
-
-USAGE
-  k2 zen data list [--json]
-  k2 zen data show <widget> [--json]
-  k2 zen data grant <widget> --agent <h> | --project <p> --level read|write [--prefix p/]
-  k2 zen data revoke <widget> --agent <h> | --project <p> [--prefix p/]
-  k2 zen data admin <widget> --agent <h> --level read|write [--prefix p/]
-  k2 zen data unadmin <widget> --agent <h> [--prefix p/] [--yes]
-  k2 zen data delete <widget> [--yes]
-  k2 zen data move <old> <new>
-  k2 zen data export <widget> [--at YYYY-MM-DD] [--blobs <dir>] > data.jsonl
-  k2 zen data import <widget> [--replace] [--blobs <dir>] < data.jsonl
-  k2 zen data restore <widget> (--rev N | --at 2026-10-26T17:30 | --snapshot <ref>)
-                      [--prefix p/]... [--except r/]... [--dry-run]
-
-GRANTS
-  An agent grant is a wall: only that agent gets it. A --project grant is a
-  convenience, not a wall: any agent can join a K2 project. admin makes one
-  agent a grant admin: it may grant others inside its prefix, up to its own
-  level, never itself; unadmin removes it and every grant it made.
+%include cli/text/help/zen/data.txt
 EOF
 }
 # END_GARDEN_DATA_C0

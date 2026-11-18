@@ -1,0 +1,12 @@
+Stalwart BlockedIp list/clear and auth-ban migrate window.
+clear destroys matching bans then ReloadBlockedIps (required).
+Default clear = authFailure only; --all also portScanning.
+Unban does NOT reset in-memory fail counters — pair with allowlist.
+mail_manage. Not hostmail disable. Scan-ban stays.
+
+USAGE
+  k2 hostmail bans list [--json]
+  k2 hostmail bans clear <ip> [--all] [--json]
+  k2 hostmail bans migrate --hours N [--json]
+  k2 hostmail bans migrate restore [--json]
+  k2 hostmail bans migrate status [--json]

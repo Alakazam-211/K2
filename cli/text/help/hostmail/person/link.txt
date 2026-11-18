@@ -1,0 +1,9 @@
+Link a hosted mailbox to the box login (a person) it belongs to, so that
+person can manage its forwarding themselves (k2 mail forward, or
+Settings). Linking also marks it a person's mailbox. owner links it to
+the server's owner. Owner and Admin only.
+POST /cli/mail/address/person-link {address, person}.
+
+USAGE
+  k2 hostmail person link <addr> <login|owner> [--json]
+  k2 hostmail person link <addr> --unlink [--json]

@@ -1,0 +1,10 @@
+k2 sources history <name> health|<series> [--item <key>] [--from 6h|epoch] [--to 1h|epoch] [--json]
+
+  health          the source's state changes, oldest first (went_warn, recovered, …);
+                  with --item <key>, that item's (a box, a cert). Kept: the newest 200.
+  <series>        a trend, count or aggregate of the source (extract.trend, counts,
+                  aggregates): points (t, v). Raw points 48 h, hourly 35 days.
+                  An item field has no series; aggregate it (--agg) instead.
+
+  Values are hidden from agents on an agentAccess "shape" source (0s), and a
+  keep "states" source has no series (409 no_history); health still reads.

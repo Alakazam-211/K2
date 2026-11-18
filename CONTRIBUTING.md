@@ -101,6 +101,7 @@ A feature is a daemon route first. The CLI, the desktop app and the web client a
 3. **Logic.** Put it in `crates/k2-daemon` or `crates/k2-core`, never in `src-tauri/` or the renderer.
 4. **CLI verb.** Add the command to a part under `cli/src/` (a new part is also listed in `cli/src/ORDER`), wire it in `cli/src/router.sh`, then run `bash scripts/build-cli.sh`. Never edit `cli/k2`: the next build undoes it.
    A `k2 study` page is a file, `cli/text/study/<id>.txt`, printed exactly as written: the part keeps the page's quoted heredoc with one `%include cli/text/study/<id>.txt` line in it, and `build-cli.sh` puts the file there.
+   Static help is a file the same way: `cli/text/help/<command words>.txt` is what `k2 <command words> --help` prints (`cli/text/help/mail/send.txt` for `k2 mail send --help`); a name starting with `_` is a `k2 help` tier or a piece bash joins with other output. `tests/cli/help_text.sh` says which command prints which file.
    A new verb also needs its schema entry, which is what `k2 --schema` prints: add it to `cli/src/schema/<noun>.entries` (`build-cli.sh` checks each of those files). The explorer catalog `src/shared/cli-catalog.generated.json` is generated from it by `bash scripts/regen.sh`; never edit it by hand.
 5. **Renderer.** Call the route with `daemonCliGet` or `daemonCliPost` from `src/renderer/lib/daemon-cli.ts` and render the answer. No logic here.
 

@@ -1,0 +1,16 @@
+Usage:
+  k2 browser note --url <page-url> [--workspace <ws>] [--selector <css>]
+                  [--html-file <file>] [--text <element text>] [--title <page title>]
+                  [--intent change|question] [--json] "what to change"
+  k2 browser redeliver <threadItemId> [--workspace <ws>] [--json]
+
+note        Post one Design note (same route as a Design tab's Send:
+            POST /cli/browser/notes). The note lands in the workspace's
+            Thread and is delivered to its pinned Chat once. The page URL
+            loses its query and hash; HTML is cleaned (scripts, handlers and
+            secret-looking attributes removed) and clamped by the daemon.
+            Without --workspace an agent posts to its own workspace.
+redeliver   Deliver a stored notes post again when the first delivery
+            failed ("delivered": false). Never posts a second Thread item.
+
+Exit codes: 0 ok · 1 refused or failed · 2 usage.

@@ -1,0 +1,114 @@
+Forward a hosted mailbox's new mail to up to 100 addresses: other mailboxes
+on this server, or outside addresses (Gmail, Outlook, any). Each one has
+its own state, so one can pause or stop while the others carry on.
+
+A forward goes on at once, unless K2 is pacing its emails (below). An
+outside address isn't asked to agree: K2 first emails it who set this up and
+which mailbox, with a stop link (no login, never expires), and then starts
+forwarding. K2 also tells the owner (their K2 Inbox, plus email if they have a notice address): the first
+5 changes or Stop presses in an hour one by one, the rest in one summary an
+hour later, with how to list them. If the
+email to the address fails for now, the forward still runs; list and show say so,
+K2 keeps trying, and after a day the forward pauses (not_told). If K2 can't give
+it a stop link at all, the add is refused. Only mail that arrives from then on is
+forwarded.
+
+An address on one of this server's own domains with no mailbox here is
+refused: this mail server delivers its own domains itself, so that mail would
+bounce here and never reach another provider, whatever the domain's MX says.
+Forward to an address on a domain this server doesn't host instead. If that
+address has a mailbox here and its domain's MX points elsewhere, K2 treats it
+as outside (it gets the email, and the limits apply), but the mail lands in
+the mailbox here, not at the other provider. An older forward like this, set
+before its domain came to this server or before its mailbox here went away,
+isn't changed: its mail bounces, K2 tells the owner once, list and show say
+its mail can't arrive, and an outside one pauses after 3 bounces.
+
+An address that pressed Stop stays out: set, add and resume all refuse it
+(destination_stopped). Only the owner or an Admin can override that, with
+add or set --restart-stopped. An agent can't; tell your human on Thread.
+
+A copy stays in the mailbox if you say --keep, and that's one setting for
+the mailbox. With neither flag, a mailbox with any outside address keeps a
+copy, and one with only same-box addresses doesn't. Spam, mail whose sender nothing vouches for, bounces and mail K2 already
+forwarded stay in the mailbox and aren't forwarded.
+
+Limits on addresses: 100 per mailbox (too_many_destinations). 20 new outside
+addresses a day on this server, across all mailboxes (new_outside_limit): a
+list that would go over is refused whole, so more than 20 new ones at a time
+needs the limit raised first. Only the owner can change that number, up to
+1000: k2 hostmail config --forward-new-per-day <n>.
+Pacing: once K2 has sent 60 of those emails to new addresses in the last
+hour, a new outside forward waits its turn (state pending_verify, no mail
+goes there yet): K2 emails the address, then turns the forward on, 2 a minute.
+You do nothing.
+
+Limits on volume, where every copy to an outside address counts: 100 an
+hour per mailbox and 1,000 an hour per server (above them mail waits in the
+queue, nothing is lost); 500 in any 24 hours per mailbox (K2 pauses all its
+outside forwards, reason daily_cap; new mail stays in the mailbox). At 100
+outside addresses one message uses the whole hour's 100, and the fifth message
+in a day reaches the 500. Same-box copies count toward the hourly limits too
+(Stalwart 0.16.25 or later), and wait in the queue the same way, but not toward
+the 500. Only the owner can change the per-mailbox numbers, for every mailbox:
+k2 hostmail config --forward-copies-per-day <n> (up to 24000) and
+--forward-copies-per-hour <n> (up to 1000). show gives the numbers in force and
+the mailbox's count. The 1,000 an hour per server doesn't change.
+
+Paused = new mail stays in the mailbox and isn't sent to that address, not
+even after a resume. Copies already in the queue still go. show gives the
+reason:
+  manual        someone paused it (k2 hostmail forward pause)
+  dest_gone     the destination says the address doesn't exist: 3 times
+                in a row, or for over 5% of a day's messages once 50 were sent
+  refused       over 20% of a day's messages refused as spam or by policy,
+                once 10 were sent
+  daily_cap     500 copies in 24 hours, or the number the owner set (doesn't
+                lift by itself; k2 hostmail config --forward-copies-per-day
+                raises it, then someone resumes, which starts the count over)
+  box_brake     too many of this server's forwards were refused, so
+                every outside forward is paused (the server brake)
+  revoked       the address pressed Stop in K2's email
+  not_told      K2 couldn't email the address its stop link for a day; it
+                goes back on by itself when the email goes
+  agent_send_off
+                an agent set this on its own mailbox, and that workspace's
+                agent sending is off now; it goes back on when sending does,
+                or a person resumes it and it's theirs from then on
+  air_gap, receive_only
+                nothing may leave; lifts by itself when that changes
+  upgrade_required
+                not forwarding: the mail server needs upgrading
+                (k2 hostmail upgrade); lifts by itself after it
+Resume rules per reason: k2 hostmail forward resume --help.
+
+Outside forwards need Stalwart 0.16.25 or later on this server. On an
+older one, set to an outside address fails with upgrade_required (exit 1)
+and saves nothing: run k2 hostmail upgrade, then set again. A forward
+that was already set shows paused (upgrade_required) instead, and starts
+again by itself after the upgrade. Same-box forwards work on any version.
+
+WHO
+  Owner, Admin, and agents with "Let this agent manage hosted mail"
+  on: set, add, rm, show, unset, pause, and resume a manual
+  pause (an agent only its own), on any mailbox they manage, outside
+  destinations included (no extra approval; the owner is told who did it). Without that switch an
+  agent gets exit 3 owner_only; the owner or an Admin turns it on in
+  Settings → Workspaces / Agents → (the agent's workspace) → Permissions →
+  Hosted mail.
+  Resume after any other pause, and list: see their own help.
+  After K2 or a person pauses an address, an agent can't add it again for 24
+  hours, even if it was removed since, so an agent that removes it can't put
+  it back (exit 3 owner_only).
+  A person's own mailbox: k2 mail forward (the owner links it first with
+  k2 hostmail person link).
+
+USAGE
+  k2 hostmail forward set <addr> --to <dest> [--to <dest>…] [--keep|--no-keep] [--restart-stopped] [--json]
+  k2 hostmail forward add <addr> --to <dest> [--to <dest>…] [--keep|--no-keep] [--restart-stopped] [--json]
+  k2 hostmail forward rm <addr> --to <dest> [--to <dest>…] [--json]
+  k2 hostmail forward show <addr> [--json]
+  k2 hostmail forward unset <addr> [--json]
+  k2 hostmail forward pause <addr> [--to <dest>] [--json]
+  k2 hostmail forward resume <addr> [--to <dest>] [--json]
+  k2 hostmail forward list [--paused|--active|--pending] [--external] [--json]

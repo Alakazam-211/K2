@@ -1,0 +1,45 @@
+k2 agent refresh — start a new pinned chat that carries on from this one
+
+For a long chat that has gone stale. K2 ends the current pinned chat, starts a
+new one on the same harness with the same launch options, and sends it a summary
+of the old chat and your note once it is ready.
+
+  Stops:         the current chat, at once. It does not wait: anything running
+                 in it stops. If that is you, so does this command.
+  Carries on:    the Thread, messages and heartbeats on the pinned chat, in the
+                 new chat. Sidecars keep running.
+  Stays:         the old chat, in Chat history.
+
+USAGE
+  k2 agent refresh [<workspace>] [flags]
+
+  <workspace>   handle, name or path ("." = the current directory). Default:
+                this workspace.
+
+FLAGS
+  --note <text>           A note for the new chat: what you were doing, what's next
+  --notes-file <path>     The note, from a file (at most 32,000 characters)
+  --full                  Summarize a longer part of the old chat (default: the recent part)
+  --dry-run               Show what would happen, and if a person has to allow it;
+                          change nothing. It keeps no note and gives no line to ask with
+  --json                  The daemon's JSON
+
+WHO
+  A person: the owner (the desktop app, or a terminal outside K2), an Admin login,
+  or a person typing in a K2 shell tab, for any workspace.
+  An agent: its main session, for its own chat, with "Let this agent refresh its
+  pinned chat" on. Off, it gets exit 3, and with permission cards on the error ends with
+  the line to ask with: k2 permission request chat.refresh … --why "…". Save your
+  work first: once you've asked, the chat can end at any moment. A sidecar can't
+  refresh itself.
+  In the app: the pinned chat's menu → "Continue in a new chat…".
+
+Full page: k2 study chat-refresh
+
+EXAMPLES
+  k2 agent refresh --note "Next: finish the import; the failing test is tests/import.rs"
+  k2 agent refresh sales --notes-file handover.md
+  k2 agent refresh sales --dry-run
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage · 3 refused · 4 not found

@@ -1,0 +1,13 @@
+Create an app password on a hosted mailbox. Secret is server-set and
+printed once. Default --label is k2. POST /cli/mail/app-password.
+The owner, or an IT agent (a workspace allowed to manage hosted mail) for
+any mailbox but its own workspace's — an IT agent asking for its own gets
+exit 3, owner_only (an agent can't loosen mail rules on its own sends).
+Agents without mail-manage send with `k2 mail send` and get exit 3.
+
+USAGE
+  k2 hostmail app-password add <addr> [--label <s>] [--json]
+
+FLAGS
+  --label <s>            Description (default k2)
+  --json                 JSON output (once secret + id)

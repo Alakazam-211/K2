@@ -1,0 +1,41 @@
+k2 wiki — per-workspace knowledge base (brain map)
+
+Vault lives at <workspace>/.k2/wiki/ (Markdown + [[wikilinks]]).
+
+USAGE
+  k2 wiki status [--json] [project]
+  k2 wiki index [--json] [project]
+  k2 wiki note <id> [--json] [project]
+  k2 wiki seed [project]
+  k2 wiki serve on|off [--port N] [project]
+  k2 wiki chat off [project]
+  k2 wiki publish [--label LABEL] [project]
+  k2 wiki unpublish [project]
+
+COMMANDS
+  status     Serve + publish state (port, url); public chat is always off
+  index      Graph index (nodes + links)
+  note       One note body by id (e.g. Home.md)
+  seed       Create Home.md + _Index.md if missing
+  serve      Start/stop read-only localhost site (127.0.0.1 only)
+  chat       Public chat is unavailable (coming back with the K2 runtime); `on` exits 3
+  publish    Serve on + nest a subdomain (or print create instructions)
+  unpublish  Serve off + hint to remove the nested subdomain
+
+HOSTING
+  Wiki hosting is being rebuilt on the K2 runtime. serve/publish keep
+  working from the CLI; the site answers only its own loopback host:port
+  or its published subdomain, sends no CORS headers, and shows every note
+  outside dot-folders. Public chat is off everywhere.
+
+FLAGS
+  --json                 Machine-readable stdout (status/index/note)
+  --port N               Preferred port for serve on (daemon may reassign)
+  --label LABEL          Nested subdomain label for publish (default: workspace basename slug)
+  --workspace|--project  Alias for trailing [project] (path, name, or uuid)
+
+EXIT CODES
+  0 ok
+  1 error (daemon / not found / control plane)
+  2 bad usage
+  3 public_chat_unavailable (k2 wiki chat on)

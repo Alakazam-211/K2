@@ -1,0 +1,20 @@
+k2 cert — certificates for hostnames attached on THIS server
+
+This is box inventory (`k2 cert list`) and the issuer. `k2 hostmail cert
+renew` uses this issuer for the mail host when it's attached here.
+
+A role-mail hostname goes into the mail server too. Only the mail host in
+`k2 hostmail status` is its default certificate, the one clients without SNI
+get; any other mail host is served to clients that ask for its name.
+
+USAGE
+  k2 cert list [--json]
+  k2 cert issue <hostname> [--json]
+  k2 cert renew <hostname> [--json]
+
+RENEWAL
+  The daemon renews certificates K2 issued once fewer than 30 days remain
+  (hourly check, per-name backoff 1h/6h/24h, skipped under air-gap).
+  issue/renew by hand re-order only inside that window; outside it they
+  re-plant the stored certificate. Uploaded certificates are never renewed.
+  `k2 cert list` shows the renewal state per hostname.

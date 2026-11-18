@@ -1,0 +1,6 @@
+Retire a hosted address you own. It stops receiving immediately and its
+cap slot frees immediately. Mailbox data is kept for the retention
+window, then purged.
+
+USAGE
+  k2 hostmail delete <address> [--json]

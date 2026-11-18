@@ -1,0 +1,32 @@
+k2 app doctor --store — is this Tauri App ready for App Store and Play review?
+
+  k2 app doctor --store [<folder>] [--voice | --no-voice] [--json]
+      Checks a Tauri v2 app's repo (default: this folder) and prints each
+      problem with its fix. It only reads; it never changes a file.
+
+  What it checks:
+    all       Tauri 2.12.5 or newer (older: the 2.10 deadlock, a launch crash
+              on iOS 27, an IPC request that aborts the app); K2's patched wry
+              (without it, any iframe in your page can call your Tauri
+              commands)
+    iOS       src-tauri/PrivacyInfo.xcprivacy, its reasons, and that the iOS
+              target includes it; UIApplicationSceneManifest (iOS 27);
+              ITSAppUsesNonExemptEncryption (the export answer)
+    calls     the mic and camera usage strings (iOS and macOS), background
+              audio (iOS), the mic entitlement (macOS), and on Android the
+              mic, camera and foreground-service permissions
+    Android   POST_NOTIFICATIONS
+  iOS checks run when src-tauri/Info.ios.plist or src-tauri/gen/apple is
+  there; Android checks when src-tauri/gen/android is. The rest are skipped,
+  and it says so.
+
+  --voice / --no-voice   check calls, or don't. Default: it checks calls when
+                         the repo has them (src-tauri/src/k2_voice.rs, a mic
+                         usage string, or Sew's voice plugin).
+  --json                 {voice, voiceWhy, tauri, tao, wry, findings[{id,
+                         level, platform, path, problem, fix}], passed[],
+                         notes[], ok}
+
+  Exit: 0 when nothing is an error (warnings may remain), 1 otherwise.
+  Fix a missing file with k2 app init --template tauri [--voice] (it never
+  overwrites a file). Why each one matters: k2/README.md, and k2 study tauri.

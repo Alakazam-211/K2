@@ -114,69 +114,7 @@ if v.get("withdrawn"):
 # and asks on a card); an agent may list and revoke its own workspace's.
 _compute_git_access_usage() {
     cat <<'EOF'
-k2 compute git-access — let compute jobs read private GitHub repos
-
-  k2 compute git-access [--workspace WS] [--json]
-        the workspace's grants and this server's GitHub credential (its
-        kind and App id; never a key or token). WS defaults to the
-        workspace of the folder you run from; an agent always gets its own.
-
-  k2 compute git-access setup --github-app <app id> --key-file <app.pem>
-  k2 compute git-access setup --github-token-file <file> | --github-token-stdin
-  k2 compute git-access setup --clear
-        the server's GitHub credential, one per server. The owner or an
-        Admin, from a terminal outside K2 (a plain shell on this machine,
-        where k2 uses the owner's token; a K2 tab sends the tab's passport
-        and is refused). Preferred: a GitHub App you create (Repository
-        permissions: Contents read-only; install it on every repo you'll
-        grant; download a private key). The key goes into this server's
-        vault: delete the .pem afterwards. Each ask gets a 1-hour token that
-        reads one repo. A fine-grained token (github_pat_…) also works, but
-        GitHub can't mint short-lived tokens from it, so nodes get the
-        token itself: make it read-only, for just these repos, with an
-        expiry. Your gh login and classic tokens (ghp_…) are refused: they
-        reach every repo you can, with write access.
-        An agent can't set it (nor see it). It asks a person on a card:
-          k2 permission request compute.git-access-setup --why "…"
-        The owner or an Admin then picks App or token in K2's own form on
-        the card; the value goes straight into this server's vault, the
-        same as this command.
-
-  k2 compute git-access grant --github <owner>/<repo>[,<owner>/<repo>…]
-        [--nodes all|<node>[,<node>…]] [--shared] [--workspace WS]
-        let the workspace's jobs read these repos. Grant the job's own repo
-        too when it's a private GitHub repo: the node then fetches it
-        itself, so the 50 MB relay cap no longer applies. --nodes all (the
-        default) is every node this server owns, now and enrolled later
-        (k2 compute nodes lists them; a node another server shares with you
-        says "shared by …"). Such a node needs its name and --shared: the
-        token then reaches that machine (its admin can read it while a job
-        uses it); App tokens only. Access is read-only; there's no write
-        (--read-only is accepted and changes nothing). The grant checks each
-        repo with GitHub first. It reaches jobs placed after it.
-        A person grants. An agent gets git_access_needs_person (exit 3) and
-        asks: k2 permission request compute.git-access repos=<owner>/<repo> --why "…"
-        When a person approves that card, the grant is made (every node this
-        server owns); run the job again. With no credential on the server
-        yet, the agent gets git_access_needs_setup (exit 3) instead and
-        asks for the setup card first (above); then it runs the grant
-        again, which asks for the grant card.
-
-  k2 compute git-access revoke --github <owner>/<repo>[,…] [--nodes …] | --all [--workspace WS]
-        new asks are refused at once; an App's tokens already handed out are
-        deleted at GitHub. Running jobs keep running; their next git call
-        for the repo fails. A fine-grained token stays valid at GitHub until
-        you rotate it there. An agent may revoke its own workspace's.
-
-What a job sees: plain `git clone/fetch https://github.com/<owner>/<repo>`
-works (submodules too; ssh URLs to github.com are read as https), through
-git's own credential helper. Cargo git dependencies: add
---env CARGO_NET_GIT_FETCH_WITH_CLI=true so cargo uses git. Inside the job
-this needs a Linux node with the job wall (sudo k2-node setup); on a Mac or
-an unwalled node only the node's own fetch of your source uses the grant.
-The token is never in the job's env, so the job keeps --cache, its warm
-slot and sccache. A job can read a token it's handed while it runs.
-More: k2 study compute (GIT ACCESS).
+%include cli/text/help/compute/git-access.txt
 EOF
 }
 

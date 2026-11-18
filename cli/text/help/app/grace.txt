@@ -1,0 +1,101 @@
+k2 app — moving existing --cmd services to Apps (nothing removes them)
+
+Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
+  k2 app data put <app-id> <path> [--to <dir>]
+                                       Copy a file or folder of your workspace
+                                       into the App's data folder ($K2_APP_DATA,
+                                       /data in its wall). The App must be live.
+  k2 app data ls|get|rm|mv <app-id> …  Read back what its pages write to /data
+                                       (k2 app data get <app-id> var/answers.json),
+                                       list, remove, rename (k2 app data --help).
+  k2 app label take <app-id> <label>   Your legacy service's or --skin site's
+                                       public hostname now serves the App (the
+                                       App must be healthy). The old service
+                                       keeps running, unrouted. A --skin site's
+                                       guests are copied onto the App first
+                                       (same usernames and passwords).
+  k2 app label return <app-id> <label> Move it back (the old service must answer).
+  k2 app domain add|rm <app-id> <sub>  Any other subdomain of your workspace
+                                       (one you pointed at the service's port)
+                                       serves the App too (k2 app domain --help).
+  k2 app move-plan <service|site> [--app <app-id>] [--request] [--json]
+                                       Every step of the move, what's done, and
+                                       (--request) one owner approval for all
+                                       the owner's steps.
+
+  k2 app warnings [<app>] [--json]     What breaks when it moves to an App: env
+                                       names the code reads that only the daemon
+                                       gives it, K2 files it touches
+                                       (daemon.token, heartbeat.port), programs
+                                       it finds through PATH, owner-token calls
+                                       K2 saw it make (Linux), form-encoded
+                                       calls to K2 routes that read JSON only.
+                                       An App: writes its gateway link refused
+                                       for their body, a pass sent in ?token=
+                                       (deprecated). No <app>: every --cmd
+                                       service you can see.
+  k2 app clean-mode <app> on|off [--restart]
+                                       Run it the way an App runs: clean env,
+                                       system PATH, its own HOME, owner-token
+                                       calls refused (Linux). On narrows (agents
+                                       may); off is the owner's (held otherwise).
+  k2 app key mint <app> --scopes users,rooms,fetch,push [--rooms a,b] [--roles r]
+                 [--label L] [--show]
+                                       An App-scoped key instead of the owner
+                                       token: it opens /v1/apps/<app id>/… only.
+                                       The owner confirms in person; K2 puts it
+                                       in the vault and the App reads
+                                       $K2_SECRETS_DIR/K2_APP_KEY at its next
+                                       start (--show prints it once instead).
+                                       From an agent: held for the owner.
+  k2 app keys [<app>] [--json]         App keys (never the key itself).
+  k2 app key revoke <key-id>           Stops it at once.
+  k2 app approvals [--app A] [--all] [--json]
+                                       Held requests (an agent's widening, key
+                                       mint, clean mode off, new --cmd service).
+  k2 app approvals revoke <request-id> | --app <name>
+                                       Owner: an approved k2 publish run stops
+                                       covering identical re-runs (they ask
+                                       again; it lapses by itself after 30 days).
+  k2 app approve <request-id>          Owner or admin, in person (Touch ID /
+                                       your own password), from a terminal
+                                       outside K2.
+  k2 app deny <request-id> [--reason R]
+                                       Owner/Admin; an agent withdraws its own.
+  k2 app access <workspace> [--build on|off] [--manage on|off] [--users on|off]
+                 [--core db|files|thread|mail|sew=on|off[,…]] [--json]
+                                       No flags: show the agent's switches and
+                                       cores. --build = "Build and run Apps"
+                                       (switch 1: build, install, deploy, run
+                                       its own Apps, their roles and App
+                                       passes), --manage = the nested "…and
+                                       manage them end to end" (switch 2: it
+                                       raises its own budgets, quotas, egress,
+                                       box services and keys, resumes an App it
+                                       suspended, sends push, moves its own
+                                       labels), --users = "Let this agent
+                                       manage its Apps' users" (App users and
+                                       test guests of its own Apps, their
+                                       passwords, email, names, unlock, roles
+                                       and any room or cap on its App's roles,
+                                       invites, the guests-rooms grant;
+                                       never a box login; the owner, both
+                                       ways). --core ticks a
+                                       core: its Apps then use Database, Files
+                                       and rooms, or Thread inside their own
+                                       slice with no hold (Mail takes effect
+                                       when App mail lands). The
+                                       owner turns things on, from
+                                       a terminal outside K2; an Admin may only
+                                       turn them off. Anything that loosens an
+                                       App's wall still waits for the owner in
+                                       person. (--open is retired.)
+
+A new --cmd service from an agent is an open-path App: from 0.46.3 each one
+is held for the owner's in-person approval (re-runs of an existing service
+need only "Build and run Apps").
+Owner-token calls are traced on Linux only for now: on macOS, warnings and
+clean-mode say "not available on macOS" (the code scan still works).
+
+Exit codes: 0 done, 2 held for the owner (or a usage error), 3 refused or
+infra (JSON on stderr).

@@ -1,0 +1,33 @@
+k2 hostmail backup — choose how this box backs up its hosted mail.
+
+Backup is a per-box choice the box's it-email agent makes WITH the client.
+It stays "unconfigured" until someone chooses; the doctor reminds.
+
+THIS RELEASE RUNS NO BACKUPS. It records the choice and measures churn
+(a daily listing of the Stalwart store — no stop, no copy, no sudo) so
+`plan` gives real numbers. Local frozen views and offsite uploads come in
+later releases. Restore and the offsite destination are owner-only.
+
+USAGE
+  k2 hostmail backup status [--json]
+  k2 hostmail backup plan   [--bandwidth-mbps N] [--keep-daily N] [--keep-weekly N]
+                            [--max-local-gb G] [--json]
+  k2 hostmail backup set    --mode local|offsite-only|both|none [--reason <text>]
+                            [retention flags] [--window HH:MM-HH:MM]
+                            [--max-local-gb G] --confirm-plan <hash> [--json]
+
+MODES
+  local         a nightly frozen view (hard links, same filesystem): seconds
+                of downtime, no full copy. Protects against logical damage,
+                NOT disk failure (the view shares inodes with the store).
+  offsite-only  view → encrypted upload → view deleted. Temporary space only.
+                Not available until the owner sets a destination (later).
+  both          local + offsite. Not available until a destination exists.
+  none          nothing runs; --reason is required and recorded.
+
+WHO
+  The box's it-email agent (Settings → Workspaces / Agents → <workspace> →
+  Permissions → "Let this agent manage hosted mail") or the owner/admin. Every change is recorded
+  (who, workspace, when, old → new).
+
+Run `k2 hostmail backup <command> --help` for details.

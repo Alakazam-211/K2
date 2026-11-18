@@ -1,0 +1,10 @@
+k2 vault destroy NAME --yes [--scope <s>] [--json]
+
+Delete every version on this box. The name can't be used again. Its file
+goes from $K2_SECRETS_DIR in every running session at once. K2 can't take
+back a value a session already read or copied, or an environment variable
+in a running session (it stays until that session restarts): rotate the key
+at the provider if that matters. Backups made earlier keep it until they
+expire. To pause instead: k2 vault disable.
+
+Example: k2 vault destroy OLD_KEY --yes

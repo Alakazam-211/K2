@@ -1,0 +1,14 @@
+Autoconfig / Autodiscover DNS from Stalwart dnsZoneFile advanced rows.
+apply plants via k2 dns (POST /cli/dns/records/add) only if the apex
+is a zone on GET /cli/dns/zones. BYO prints records. Not A8 bind.
+
+Includes the CalDAV/CardDAV discovery records Stalwart emits
+(_caldavs._tcp / _carddavs._tcp SRV 0 1 443 <mail host>), so Apple
+Calendar, Thunderbird and DAVx5 find the server from the address alone.
+Never applied automatically: boxes set up before calendars get them by
+rerunning `k2 hostmail autoconfig apply <domain>` (the doctor's
+caldav-srv check says so).
+
+USAGE
+  k2 hostmail autoconfig show <domain> [--json]
+  k2 hostmail autoconfig apply <domain> [--json]

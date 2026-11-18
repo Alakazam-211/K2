@@ -1,0 +1,15 @@
+k2 vault env-file NAME [NAME2 …] [--scope session|server|ws:<name>] [--ttl 90s] [--wait 10m] [--json]
+k2 vault env-file --done <path> [--json]
+
+From a K2 terminal: a short-lived 0600 file of NAME=value lines for
+docker/podman --env-file, in a memory-backed folder. Removed after --ttl
+(90s, 10m or seconds; default 60s, 5s to 1h) or with --done. Each secret
+needs env delivery for you: your workspace's own secret set to env, or a
+server (or other workspace's) secret shared with your workspace as env
+(k2 vault grant NAME --to ws:<you> --as env --scope server, by a person;
+then name it with --scope server). A value with a line break is refused
+(use file delivery). --secret NAME works too. One value for a tool's stdin or a file
+flag: k2 vault file NAME. --wait 10m blocks until a person saves the card
+that asks for it (see k2 vault file --help).
+
+Example: docker run --env-file "$(k2 vault env-file DATABASE_URL)" myapp

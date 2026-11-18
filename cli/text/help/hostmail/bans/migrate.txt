@@ -1,0 +1,9 @@
+Snapshot authBanRate, set authBanRate null (auth-ban only; scan-ban
+stays), persist restoreAt. Daemon health loop auto-restores.
+Never authBanPeriod. Standing IPs are NOT auto-inserted — add them
+via allowlist. POST /cli/mail/bans/migrate. mail_manage.
+
+USAGE
+  k2 hostmail bans migrate --hours N [--json]
+  k2 hostmail bans migrate restore [--json]
+  k2 hostmail bans migrate status [--json]

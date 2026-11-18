@@ -1,0 +1,46 @@
+Mint an email address on a hosted domain (verified, or pending
+receive-only before NS cut — send/direct stay locked until DNS
+verifies). Without a domain, the workspace default is used (see
+`k2 mail domains`); or spell it inline (research-bot@acme.dev) or via
+--domain.
+
+Prints a once password plus IMAP/submission/JMAP host and port so the
+inbox can be added to Mail.app. An existing --id match does not re-print
+the password. When an agent mints its own mailbox, the password is
+withheld: agents send with `k2 mail send` and read with `k2 mail
+messages`, so they never need it; the owner can set one with `k2 hostmail
+password rotate <addr>`. --person mints a PERSON's mailbox: the owner or
+an IT agent (a workspace allowed to manage hosted mail) sees the password
+once, to hand to that person; agents without mail-manage can't use it.
+
+USAGE
+  k2 hostmail create <localpart>[@<domain>] [flags]
+
+ARGUMENTS
+  <localpart>            1-64 chars of [a-z0-9._-], no leading/trailing
+                         separator. A collision suggests <name>2.
+
+FLAGS
+  --domain <d>           Mint on a specific hosted domain (verified, or
+                         pending receive-only)
+  --id <client-id>       Idempotency key — retrying with the same --id returns
+                         the existing address instead of erroring. Use it
+                         whenever a retry is possible (crash-safe minting).
+  --person               A person's mailbox, not this agent's own (owner or
+                         IT agent only); the password is shown once
+  --json                 JSON output
+
+CAP
+  Addresses are capped per workspace (default 5; 0 = unlimited; your human
+  adjusts it with `k2 hostmail config --workspace <ws> --address-cap <n>`).
+  The cap counts ACTIVE addresses —
+  `k2 mail delete <addr>` frees its slot immediately.
+
+TIP — plus addressing
+  research-bot+github@acme.dev delivers to research-bot@acme.dev: unlimited
+  per-service tags without minting new addresses. Prefer this for tracking
+  signups.
+
+EXAMPLES
+  k2 hostmail create research-bot
+  k2 hostmail create research-bot@acme.dev --id signup-saasco

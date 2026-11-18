@@ -1,0 +1,23 @@
+The unified inbox catalog: every inbox THIS workspace can access, hosted
+or linked, with your access level. One mental model — no "addresses empty
+but messages full" split. (`k2 mail addresses` and `k2 mail list` are
+aliases printing this same table.)
+
+USAGE
+  k2 mail inboxes [--json]
+
+COLUMNS
+  ADDRESS   the inbox
+  SOURCE    hosted (K2-minted) | linked (your own external IMAP account)
+  LEVEL     your access: read < draft < send
+  MAX       the ceiling for this source (send for both hosted and linked) —
+            a CEILING, not a promise: effective send also needs a send
+            transport configured on the inbox
+  STATUS    active / connected / error
+
+  read: k2 mail messages [<address>]   draft: k2 mail draft (linked only)
+  send needs level 'send' (hosted, or a linked inbox with SMTP configured).
+
+FLAGS
+  --json                 JSON: {ok,count,inboxes:[{address,source,displayName,
+                         status,primary,grants,yourLevel,maxLevel,...}]}

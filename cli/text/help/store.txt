@@ -1,0 +1,52 @@
+k2 store — JSONB documents in this workspace's SQL database
+
+Works when this workspace owns a DB or has a grant. db_agent_access only
+gates k2 db create — not list/get/put.
+
+Global: --workspace|--project <ws>  path, handle, or uuid (same as k2 db dsn).
+k2 store list --workspace I uses I's PG LOGIN (owner token; cell stamp pins).
+
+  create <name>
+  list
+  put  <name> --id <id> --json '{…}'
+  get  <name> <id>
+  query <name> [--limit N]
+  rm   <name> <id>
+  drop <name>
+
+OWNER vs AGENT: create-new-DB needs db_agent_access=write. list/get/put
+work when you own a DB or have a grant covering the verb.
+
+GARDEN DATA (--widget): a Garden widget's own data on THIS computer.
+Agents see only the keys the person (or a grant admin) granted them.
+  get     --widget <w> <key> [--json]
+  put     --widget <w> <key> --value '{…}' | --file f.json [--if-rev N]
+  patch   --widget <w> <key> --value '{"done":true}' [--if-rev N]
+                                       (change only these fields, keep the rest;
+                                        null removes a field)
+  rm      --widget <w> <key> [--if-rev N]
+  list    --widget <w> [--prefix p/] [--after <key>] [--limit N] [--all]
+  changes --widget <w> --since N [--prefix p/] [--wait 30] [--follow]
+  batch   --widget <w> < ops.json      (≤ 1,000 ops, all or nothing, one rev)
+          ops: {"op":"put","key":k,"value":v}, {"op":"patch","key":k,"value":{fields}}
+               or {"op":"delete","key":k}; each may add "ifRev":N. A conflict or a
+               bad patch writes nothing and names the op (its index and key).
+  grants  --widget <w>                 (what can I access?)
+  grant   --widget <w> --agent <h> | --project <p> --level read|write [--prefix p/]
+  revoke  --widget <w> --agent <h> | --project <p> [--prefix p/]
+  export  --widget <w> [--at YYYY-MM-DD] > data.jsonl
+  blob put <file> --widget <w> [--mime m] [--name n]   (prints the ref; ≤ 16 MiB)
+  blob get <ref> --widget <w> --out <file> [--px 256|512]
+  blob ls  --widget <w>                (files the widget's data holds)
+          A file stays while a key's value names its ref ("k2blob:sha256-…").
+  history  --widget <w> [--key k | --prefix p/] [--limit N] [--all]
+                                       (every change in the last 7 days, newest first)
+  restore  --widget <w> (--rev N | --at 2026-10-26T17:30 | --snapshot <ref>)
+           --prefix p/ [--prefix q/] [--except r/] [--dry-run]
+                                       (one new change you can undo; an agent always
+                                        names --prefix: the whole widget is the person's)
+  snapshot --widget <w> [--prefix p/]... [--except r/]... [--label l]
+                                       (prints a ref; keep it under a key)
+grant/revoke are for a grant admin the person named (k2 zen data admin).
+Exit codes: 3 not granted / needs a person, 4 not found or blob_missing, 5 conflict (re-read, retry).
+The person's admin commands: k2 zen data --help.

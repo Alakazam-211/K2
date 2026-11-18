@@ -1,0 +1,28 @@
+Manage messages IN an inbox — organize, flag, archive, and delete. These
+are AGENT verbs, gated by the per-workspace canManage / canDelete caps
+(ORTHOGONAL to your read/draft/send level; your human grants them with
+'k2 mail access manage'). DELETE is ALWAYS a MOVE to Trash — a message is
+never permanently erased.
+
+USAGE
+  k2 mail move <message-id> <folder>            Move a message to a folder
+  k2 mail flag <message-id> [--read|--unread] [--star|--unstar]
+                                                Mark read/unread, flag/unflag
+  k2 mail archive <message-id>                  Move to the Archive folder
+  k2 mail delete <message-id>                   Move to Trash (needs canDelete)
+  k2 mail folder list   <address>               List an inbox's folders
+  k2 mail folder create <address> <name>        Create a folder
+  k2 mail folder rename <address> <from> <to>   Rename a folder
+
+NOTES
+  All of these need canManage on the inbox (delete additionally needs
+  canDelete). Without it you get the SAME "no message/address here" a
+  foreign inbox gets — ask your human for 'k2 mail access manage'.
+  <folder> resolves case-insensitively (special: inbox, junk). Add --json
+  to any verb for machine output.
+
+EXAMPLES
+  k2 mail move m_ab12  Archive
+  k2 mail flag m_ab12 --read --star
+  k2 mail delete m_ab12
+  k2 mail folder create alice@example.com "Receipts"

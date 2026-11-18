@@ -1,0 +1,21 @@
+Insert a user-managed DNS record. Agents may use: A AAAA CNAME TXT MX SRV CAA.
+NS and zone apex lifecycle are owner-only.
+
+USAGE
+  k2 dns record add <domain> <type> <name> <value> [flags]
+
+ARGUMENTS
+  <domain>               Zone domain (daemon resolves the zone)
+  <type>                 A | AAAA | CNAME | TXT | MX | SRV | CAA
+  <name>                 Relative name (@ for apex)
+  <value>                Record content (IP, host, text, …)
+
+FLAGS
+  --ttl <N>              TTL seconds (default 300 server-side)
+  --priority <N>         Priority / prio (MX/SRV)
+  --json                 JSON response
+
+EXAMPLES
+  k2 dns record add example.com A www 203.0.113.10 --ttl 60
+  k2 dns record add example.com MX @ mail.example.com --priority 10
+  k2 dns record add example.com TXT @ "v=spf1 include:_spf.example.com ~all"

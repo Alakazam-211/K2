@@ -1,0 +1,13 @@
+Usage: k2 workspace design-tab get <workspace>
+       k2 workspace design-tab set <workspace> on|off
+
+"Show the Design tab": keeps the workspace's Design tab pinned next to
+Chat and Inbox, for every person and window on this server. Default on.
+Off removes the pinned tab. A Design tab can still be opened from the
++ menu while it is off (an ordinary tab you can close).
+`get` prints `on` or `off` (`on` when nobody has set it).
+`design-mode` is the old name of this command and still works.
+
+Examples:
+  k2 workspace design-tab get my-site
+  k2 workspace design-tab set my-site off

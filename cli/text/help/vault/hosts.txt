@@ -1,0 +1,7 @@
+k2 vault hosts NAME --add <host> | --remove <host> [--scope <s>] [--json]
+
+The sites fetch may send NAME to. Exact hosts only (wildcards are for
+people). --add and --remove repeat. Adding a site widens the secret: an
+agent may do it only for secrets its own workspace created.
+
+Example: k2 vault hosts STRIPE_KEY --add files.stripe.com

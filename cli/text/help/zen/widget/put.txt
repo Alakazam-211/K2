@@ -1,0 +1,32 @@
+Usage: k2 zen widget put <name> <file> --from <path>|- [--note "…"] [--json]
+       k2 zen widget put [<name>] --dir <folder> [--prune] [--note "…"] [--json]
+       k2 zen widget apply --from <folder> [<name>] [--prune] [--note "…"] [--json]
+
+Change a custom widget (~/.k2/zen/widgets/<name>/) through K2, from anywhere
+on disk. You never edit ~/.k2 yourself.
+
+  <file> --from <path>   one code file (.html .js .css .json); "-" reads stdin.
+                         Written even if the widget then has errors (the last
+                         good version keeps running); the errors are printed.
+  --dir <folder>         the whole folder in one checked write: code files,
+                         images and .woff2 fonts. A folder with errors is
+                         refused and NOTHING is written. <name> defaults to
+                         manifest.json's "id", else the folder's own name.
+                         Files the folder doesn't have are left alone.
+  --prune                with --dir: also remove code files, images and fonts
+                         the folder doesn't have (never README or dotfiles).
+  --note "…"             one paragraph for the Garden's History.
+  apply --from <folder>  the same as put --dir.
+
+Who may write: the person (outside K2), or an agent on the list of every
+Garden that places the widget (a draft placed nowhere is open). Any other
+agent is refused (garden_access_needed, exit 3) and K2 asks the person (a
+garden.access card); nothing is proposed. Sign what you wrote: k2 zen
+validate --widget <name> --sign. K2's built-in widgets (k2:<name>) are never
+written. k2 study garden-access.
+
+Check first, write nothing:  k2 zen validate --dir <folder>
+Try it on K2's preview page: k2 zen widget preview --dir <folder>
+
+Exit: 0 written · 1 refused (errors, a bad file name) · 2 usage ·
+3 Zen isn't set up / not on the Garden's list / locked · 4 no such widget.

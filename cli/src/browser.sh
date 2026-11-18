@@ -5,22 +5,7 @@
 # login (Connect logins also need the workspace's remote-instruct opt-in).
 cmd_help_browser() {
     cat <<'EOF'
-Usage:
-  k2 browser note --url <page-url> [--workspace <ws>] [--selector <css>]
-                  [--html-file <file>] [--text <element text>] [--title <page title>]
-                  [--intent change|question] [--json] "what to change"
-  k2 browser redeliver <threadItemId> [--workspace <ws>] [--json]
-
-note        Post one Design note (same route as a Design tab's Send:
-            POST /cli/browser/notes). The note lands in the workspace's
-            Thread and is delivered to its pinned Chat once. The page URL
-            loses its query and hash; HTML is cleaned (scripts, handlers and
-            secret-looking attributes removed) and clamped by the daemon.
-            Without --workspace an agent posts to its own workspace.
-redeliver   Deliver a stored notes post again when the first delivery
-            failed ("delivered": false). Never posts a second Thread item.
-
-Exit codes: 0 ok · 1 refused or failed · 2 usage.
+%include cli/text/help/browser.txt
 EOF
 }
 
@@ -153,42 +138,12 @@ _workspace_pinned_tab_help() {
     case "$1" in
         design)
             cat <<'EOF'
-Usage: k2 workspace design-tab get <workspace>
-       k2 workspace design-tab set <workspace> on|off
-
-"Show the Design tab": keeps the workspace's Design tab pinned next to
-Chat and Inbox, for every person and window on this server. Default on.
-Off removes the pinned tab. A Design tab can still be opened from the
-+ menu while it is off (an ordinary tab you can close).
-`get` prints `on` or `off` (`on` when nobody has set it).
-`design-mode` is the old name of this command and still works.
-
-Examples:
-  k2 workspace design-tab get my-site
-  k2 workspace design-tab set my-site off
+%include cli/text/help/workspace/design-tab.txt
 EOF
             ;;
         mobile)
             cat <<'EOF'
-Usage: k2 workspace mobile-tab get <workspace>
-       k2 workspace mobile-tab set <workspace> on|off|auto
-
-"Show the Mobile tab": keeps the workspace's Mobile tab (its phone) pinned
-next to Chat and Inbox, for every person and window on this server.
-  auto  the default: pinned whenever this server can run a phone
-  on    pinned (still only where this server can run a phone); today it
-        acts like auto, it just records that someone chose it
-  off   not pinned; the Mobile tab still opens from + or Cmd+Shift+M
-        as an ordinary tab you can close
-`get` prints the setting, then whether the tab shows on this server:
-  auto (shown)
-  off (not shown)
-  on (not shown: this server cannot run a phone)
-
-Examples:
-  k2 workspace mobile-tab get my-app
-  k2 workspace mobile-tab set my-app off
-  k2 workspace mobile-tab set my-app auto
+%include cli/text/help/workspace/mobile-tab.txt
 EOF
             ;;
     esac
@@ -1192,210 +1147,13 @@ for c in d.get("byConversation") or []:
 
 cmd_help_thread() {
     cat <<'EOF'
-k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
-
-  k2 thread <addr> "text"                         # overlay text (not PTY; that's k2 msg)
-  k2 thread <addr> "text" --file path[:line[-end]]  # attach a workspace file (repeatable, ≤10)
-  k2 thread <addr> --file out/shot.png            # text is optional when a file rides
-  k2 thread <addr> [--limit N|--all] [--before-seq N]  # read newest 25
-  k2 thread <addr> --seq N                        # read message N (the [N] in a read), whole
-  k2 thread ask <addr> "prompt" --option "…" --option "…"  # choice card; do not wait
-      --option "…"       repeatable, one per button; commas inside are fine
-      --options "a,b,c"  short labels without commas (commas inside (), [] or "…" stay
-                         in one label; a prose-like comma, "Yes, node-2…", splits and warns)
-      [--expires 2h|3d|90m] [--no-expiry]          # open 7 days unless you pick a time frame
-  k2 thread secret <addr> --name NAME             # secret field; you never see the value
-      [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|proxy|file|env|agent]
-      [--scope workspace|server|session] [--kind api_key|password|…] [--ttl 24h]
-      [--inject-dst basic|header:Name|query:param] [--inject-format 'user:{}']
-      The value goes into the K2 vault; you get a k2v:// reference and use it with
-      `k2 vault fetch --secret NAME …` (no --for: a file, `k2 vault file NAME`).
-      YOU choose the sites, scope, delivery and how
-      K2 sends it: the card shows your choice in one sentence and the person just
-      clicks Save. If they say it's wrong, `k2 thread withdraw` it and ask again. Exact
-      hosts only. All flags: k2 thread secret --help. More: k2 study vault
-  k2 thread withdraw <addr> <card-id> [--why "…"] # take back your own card (no longer relevant)
-      (void is the old name and still works)
-  k2 thread dismiss <addr> <card-id> [--why "…"]  # for a PERSON: close a card without answering
-  k2 thread delete <addr> <seq|id> [--json]       # for a PERSON: delete a message you sent
-      (the owner: anyone's). Its text and files go; "Message deleted" stays in its
-      place. The agent gets one line: [thread:<addr>] <who> deleted a message they
-      sent at <time>. Don't repeat, store or act on what it said. Agents get exit 3
-      (person_only): only the person who sent it can delete it.
-  k2 thread unread [--kind thread|project] [--json]  # a PERSON's unread + waiting counts
-  k2 thread read-all <agent> [--json]             # mark all of an agent's Thread messages read
-      (for you: every chat's Thread of that agent; waiting cards stay waiting)
-      (owner token or a K2 login; agents have no read state and get 403)
-
-<addr> is the same first-arg grammar as k2 msg: sales / sales/reviewer / sales/1.
-sales = live alias for pinned Chat now. sales/reviewer is durable.
-
-gb:<bot name> (or gb:<agent id>) reads a local Grok Bot's collected messages:
-people signed in to this server only, while Local Grok Bots → Show is on. Agents
-and App guests get 403, and nobody posts there (message the bot from its chat).
-
-Post and continue; you get a later turn when they answer. Do not --wait. Do not
-emit widget JSON.
-
-ask prints "<card-id>  card #<seq>" (--json: id and seq). The seq is the [N] a
-read shows, and the answer names it, with the start of the prompt (60 characters):
-  [thread:<addr>] chose "<option>" on card #<seq> ("<start of the prompt>")
-A settings card says what it is about instead: chose "<option>" on card #<seq> for
-<subject>. A secret card names its secret: secret NAME set on card #<seq> → k2v://…
-
-A card stays open until the person taps it (or dismisses it), you withdraw it, or
-its time frame runs out (choice cards: 7 days unless --expires / --no-expiry; secret
-cards: 7 days). Pick a time frame that fits the decision. People may discuss a card
-before answering: keep it open and answer their questions in prose;
-never treat their prose as the card's answer; talking never closes or shortens it.
-Withdraw your own card when its question no longer matters
-(k2 thread withdraw <addr> <card-id> [--why "…"]; --why is optional, one line), or
-post a new card if the options changed. The person then sees the card as Withdrawn,
-with your reason; nobody is woken. A secret card: only one your own session asked
-for (K2's own secret cards, from a clone or a reconnect, are the person's to answer
-or dismiss). A permission card: your own requests on it (the same as k2 permission
-cancel).
-
-Closed cards stay on the Thread, marked Dismissed or Withdrawn. When the person
-dismisses your card you get a turn like an answer:
-  [thread:<addr>] dismissed card <id> without answering: "<their reason>"
-It means "not needed now", not yes and not no: don't ask the same thing again unless
-something changed. A dismissed permission card is not a denial: nothing was applied,
-and you may ask again (k2 permission request …) if you still need it.
-k2 vault file NAME --wait 10m (see k2 vault file --help) on a secret card exits 5
-when it was dismissed or withdrawn (card_dismissed / card_withdrawn) and 3 when it
-expired (card_expired). An expired card says so on the Thread; ask again if you
-still need it.
-
-withdraw/dismiss exit 0 (prints "<card-id>  withdrawn|dismissed"), 2 bad usage, 3
-refused, 4 not found. On 3 the error line names why: card_not_yours (not your card),
-card_not_pending (already answered, dismissed, withdrawn or expired) or
-action_card_person_only (a settings card: only the person closes it).
-
-When a person deletes a message they sent, you get that one line. Treat what the
-message said as gone: don't repeat it, quote it, store it or act on it.
-delete exits 0 (prints "[N] <id>  deleted…"; again: "already deleted"), 2 bad usage,
-3 refused (person_only, not_your_message, not_a_persons_message), 4 not found.
-
-Text (and ask prompts) render markdown: **bold**, lists, `code`, fences, links.
-
-Attach the files you mention (--file): the person taps them to open (desktop and
-phone). A file is a pointer to this workspace's copy, not a copy: it shows
-"changed" when the file changes and "not found" when it moves. Only files inside
-this workspace (copy others into it first, e.g. out/); secrets (.env, keys,
-tokens, credentials in the text) are refused: secrets go through k2 vault.
-path:12 or path:12-40 opens at that line.
-
---json on any verb. Ask: --option is repeatable; --allow-custom; mixing --option and --options is 400.
-
-A post or an ask that got no answer is asked again with the same key (K2 posts one
-key once). If K2 still doesn't answer, the error says it may have been delivered
-and prints the key: run the same command with --idempotency-key <key> to try once
-more without a duplicate.
+%include cli/text/help/thread.txt
 EOF
 }
 
 cmd_help_thread_secret() {
     cat <<'EOF'
-k2 thread secret — ask a person for a secret on a card; you never see the value
-
-  k2 thread secret <addr> --name NAME [flags]
-
-<addr> is the Thread the card goes to, as in k2 thread <addr>: your own
-workspace's name (ops) or a sidecar (ops/reviewer). NAME is how the secret is
-saved: letters, digits, _ . - (HETZNER_KEY).
-
-The person pastes the value into the card and clicks Save. It goes into the
-K2 vault and you get a k2v:// reference. You choose the flags below; the card
-says them in one plain sentence, and the person can change them under Advanced.
-
-WHERE IT GOES
-  --for HOST[,HOST]          the exact sites K2 may send it to: host names only,
-                             no https:// or path (api.example.com)
-  --delivery fetch|proxy|file|env|agent  the default is fetch with --for, and
-                             file without it (a password that isn't for a
-                             website: a computer's admin password, an ssh
-                             passphrase). fetch and proxy need --for.
-                             fetch: K2 makes the HTTPS call and adds the
-                             secret; you never see it. Use it with
-                             k2 vault fetch --secret NAME https://HOST/path
-                             (GET by default; k2 vault fetch --help)
-                             proxy: as fetch, and new sessions also get a
-                             placeholder key and a local base URL in their env.
-                             file: $K2_SECRETS_DIR/NAME, or a copy with
-                             k2 vault file NAME. env: $NAME (upper case,
-                             - and . become _) in new sessions. You can read both.
-                             agent (an ssh key, with --kind ssh_key, workspace
-                             scope): ssh and git sign with it on $SSH_AUTH_SOCK
-                             in new sessions; you never see the key.
-  --scope workspace|server|session  who keeps it (default workspace; ws:<this
-                             workspace> means the same). session: one
-                             running K2 session, with fetch or file (env never
-                             arrives): the one that asks, or this chat's running
-                             session if that one ended before Save. It stays with
-                             this chat (the same conversation, also after --resume)
-                             until --ttl runs out: after a restart, the chat's next
-                             session gets it within a minute (k2 vault sync: now).
-                             Another chat never does. Workspace scope keeps it for
-                             good. server (an Owner or Admin saves it): kept on
-                             the server and shared with your workspace on Save;
-                             other workspaces get it only when a person shares
-                             it (k2 vault grant NAME --to ws:<name> --scope
-                             server). Name it with --scope server when you use
-                             it (k2 vault env-file NAME --scope server).
-                             If a guest or Member saves it
-                             and a workspace secret has the same name, a bare name
-                             keeps the workspace one: use it with --scope session.
-  --kind api_key|password|generic|…  what it is, so the card names it (default
-                             api_key; password for a password)
-  --ttl 24h                  session scope only: how long it lasts (90s, 10m, 2h,
-                             7d or seconds). Default 24h;
-                             longer than 7d is cut to 7d, and to 24h when a guest
-                             answers. Other scopes ignore it.
-  --once                     a one-time code a tool reads once (needs --scope
-                             session --delivery file). The card says "used
-                             once, then deleted"; it is never put in
-                             $K2_SECRETS_DIR (unlike other file secrets), and
-                             k2 vault file NAME is the only way to read it. A
-                             tool can block until it is saved:
-                             k2 vault file NAME --wait 10m
-  --prompt "…"               your note, shown on the card beside its sentence
-                             (at most 200 characters)
-
-HOW K2 SENDS IT (fetch only)
-  Leave these out and K2 uses the format it knows for the key, else
-  Authorization: Bearer <secret>.
-  --inject-dst basic         a Basic login. The person pastes user:password (the
-                             user ends at the first :, the password may hold more).
-                             K2 builds the Authorization: Basic header.
-  --inject-dst basic --inject-format 'USER:{}'
-                             a Basic login as USER; the person pastes only the password
-  --inject-header NAME       the secret, as is, is the value of header NAME (X-Api-Key)
-  --inject-dst query:PARAM   the secret, as is, is the URL parameter PARAM (sites can
-                             log URLs)
-  --inject-format 'FORMAT'   how the value is written; {} is the secret, once
-                             ('Token {}'). It combines with --inject-dst or
-                             --inject-header; alone, it goes in Authorization.
-  Once saved, only a person can change how it is sent. Cards take no presets
-  (those are for k2 vault set).
-
-EXAMPLES
-  k2 thread secret ops --name STRIPE_KEY --for api.stripe.com
-  k2 thread secret ops --name JIRA_LOGIN --kind password --for acme.atlassian.net \
-      --inject-dst basic --prompt "Your Jira email and API token, as email:token"
-  k2 thread secret ops --name MAIL_API --for api.mail.example \
-      --inject-dst basic --inject-format 'api:{}'      # user api; paste only the key
-  k2 thread secret ops --name HOOK_TOKEN --for hooks.example.com \
-      --inject-header X-Hook-Token --inject-format 'Token {}'
-  k2 thread secret ops --name WEATHER_KEY --for api.weather.example --inject-dst query:appid
-  k2 thread secret ops --name GITHUB_CLI --delivery env
-  k2 thread secret ops --name MAC_ADMIN --kind password \
-      --prompt "The admin password for this Mac"     # no site: a file you read
-  k2 thread secret ops --name LOGIN_CODE --scope session --delivery file --once
-
-It prints the card id, and on stderr what the card says. Don't wait: you get a
-Thread turn when it is saved. Wrong? k2 thread withdraw <addr> <card-id> and
-ask again. --json prints the whole answer. More: k2 study vault
+%include cli/text/help/thread/secret.txt
 EOF
 }
 

@@ -1,0 +1,9 @@
+k2 vault presets [--json]
+
+Known key formats: the sites and where the key goes. Use one with
+k2 vault set NAME --preset <id>. Run it to see the ids.
+
+Presets are for k2 vault set only. A secret card (k2 thread secret) has
+none: name the site and how K2 sends it there (k2 thread secret --help).
+
+Example: k2 vault presets

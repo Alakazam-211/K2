@@ -1,0 +1,17 @@
+Show the connected K2 Connect subdomain and plan for this device, or one
+published App's state (loopable: an agent can wait on it).
+
+USAGE
+  k2 publish status [--json]
+  k2 publish status <name> [--json]
+
+FLAGS
+  --json                 JSON: {connected, host, plan, tier, nested_subdomains}
+                         <name>: {name, status, statusText, desired, error, lastExitCode,
+                                  probeTimeoutMs, probeTimeoutEffectiveMs, startingLeftMs,
+                                  hostnamePending, suggestion, exit}
+
+EXIT CODES
+  without <name>: 0 ok, 1 error (no tunnel token / control plane)
+  with <name>:    0 running, 2 starting (loop: run it again), 1 exited,
+                  unhealthy, stopped or not found (the suggestion says what next)

@@ -1,0 +1,11 @@
+k2 vault reveal NAME [--scope <s>]
+
+People only, from your own terminal or SSH login (not a K2 terminal):
+show a value after a confirm (Touch ID or the vault password).
+
+Example: k2 vault reveal STRIPE_KEY
+
+K2's own secrets are never shown, except Sew's launch key (the key Sew's
+chat and voice data is sealed with), which the server's owner may see:
+  k2 vault reveal sew-launch-key --scope engine:sew
+Admins, Members and agents are refused.

@@ -1,0 +1,10 @@
+List DNS records for a zone. Pass a domain; the daemon resolves the zone id.
+
+USAGE
+  k2 dns records <domain> [--json]
+
+ARGUMENTS
+  <domain>               Zone domain (e.g. example.com)
+
+FLAGS
+  --json                 JSON records list

@@ -1,0 +1,39 @@
+k2 read <workspace> [--lines N] [--agent <name>]
+
+Read another workspace's LIVE terminal — the last N lines of plain
+text from its running session. The "read" complement to the messaging
+verbs: `msg` talks live or sends a tray package; `inbox` is YOUR tray;
+`read` peeks their terminal. Not mail. Addresses by workspace NAME
+exactly like `msg`.
+
+Use it to PEEK BEFORE YOU INJECT (human-in-the-loop: see what an agent
+is doing / waiting on before sending it a message), or to diagnose a
+stuck or quiet agent.
+
+ARGUMENTS
+  <workspace>    Workspace name (preferred — see `k2 connections list`).
+                 Absolute path or project UUID also accepted. Same
+                 addressing as `k2 msg`.
+
+OPTIONS
+  --lines N      How many trailing lines to return. Default 50.
+  --agent <name> Read a specific agent's session in the workspace.
+                 Omit to read the workspace's primary (coordinator)
+                 session — the usual target.
+
+OUTPUT
+  Plain text, one terminal row per line (most recent at the bottom).
+  Styling / cursor are stripped — this is for reading, not rendering.
+  Exit code 0 on success; non-zero with a hint if the workspace isn't
+  found or has no live session (it may be asleep — see `k2 sessions`).
+
+RELATED VERBS
+  k2 msg <workspace> "text"          Talk to the agent live.
+  k2 msg <ws> --inbox-wake <path>    Package + short live notify.
+  k2 msg <ws> --inbox-silent <path>  Package only (no notify).
+  k2 sessions                        Who is working in your workspace.
+
+EXAMPLES
+  k2 read scout_v3                   # last 50 lines of its coordinator
+  k2 read scout_v3 --lines 120       # more history
+  k2 read MyApp --agent frontend-eng # a specific agent's session

@@ -1,0 +1,80 @@
+Send an email from one of your addresses. Sending is GOVERNED by your human
+per workspace: off (the default) → exit 3 with guidance; approval → the
+message is QUEUED for your human; on → submitted immediately.
+
+USAGE
+  k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [flags]
+  k2 mail send --to <addr> ...          (positional <to> and --to both work)
+
+ARGUMENTS / FLAGS
+  <to> / --to <addr>     Recipient (repeatable or comma-separated; max 10
+                         recipients per message counting --to + --cc +
+                         --bcc, plus any owner always-BCC policy)
+  --subject <s>          Required
+  --body <text>          Message text (or --body-file <f>)
+  --cc <addr>            Cc (repeatable or comma-separated)
+  --bcc <addr>           Blind copy (repeatable or comma-separated). Rides
+                         the SMTP envelope only — To/Cc recipients never
+                         see it (no Bcc header). Recorded in `k2 mail
+                         outbox`. Your workspace owner may also have set an
+                         always-BCC policy; those copies are added by the
+                         daemon on every send and you can't remove them.
+  --from <owned-addr>    Which of YOUR addresses sends (needed when you own
+                         several). The sender is verified server-side — you
+                         can only ever send as an address you own.
+  --from-name <name>     The display name on the From line, e.g.
+                         --from-name "Laura" → Laura <laura@acme.com>.
+                         Default: your workspace's agent name. Cosmetic
+                         only — the address is still the one above. HOSTED
+                         K2 mailboxes only (a linked inbox keeps its own
+                         name). Max 128 characters; no '@', line breaks or
+                         control characters.
+  --reply-to <addr>      Where answers go instead of From (repeatable or
+                         comma-separated, max 3). A header only: nothing is
+                         sent there, and it doesn't count toward the 10
+                         recipients. Your human sees it under approval, and
+                         `k2 mail outbox` records it. HOSTED K2 mailboxes only.
+  --attach <path>        Workspace-relative path to a file to attach
+                         (repeatable). The DAEMON reads the file — you pass a
+                         path, not bytes. Max 10 files, 25 MiB each and 25 MiB
+                         in total (a linked Microsoft 365 inbox: 3 MiB each).
+                         Refused: anything outside the workspace, anything in
+                         .k2/ (copy it out first if you mean to send it), and
+                         files that look like secrets (.env, keys, .ssh/, a
+                         file holding a credential). That check catches
+                         mistakes; it isn't a guarantee. Under approval the
+                         file is captured when you send: changing it later
+                         changes nothing, and your human sees each file's name
+                         and size, and whether it could be scanned. The server
+                         refuses to hold more when its queue or disk is full.
+                         Files grow by a third in the email: many mail servers
+                         refuse a message over 25 MB, so a file over about 18
+                         MiB may bounce. `k2 mail outbox` lists the filenames.
+  --at <when>            Leave at this time: RFC3339 with offset, at most 30
+                         days ahead (hosted mailboxes; with files, 7 days)
+  --in <duration>        Leave after this long: 30m, 2h, 1d (same limits)
+  --wait                 Block until the message is DECIDED:
+                         approved-and-submitted or denied (approval mode) /
+                         accepted-for-delivery (on mode). Exit 2 on timeout —
+                         the message is still queued; check `k2 mail outbox`.
+  --timeout <secs>       With --wait: 1-900 (default 300)
+  --json                 JSON output
+
+STATUSES
+  pending_approval → approved → submitted | failed
+  pending_approval → rejected (your human's note lands in `k2 mail outbox`)
+  scheduled → submitted | failed | pending_approval, under the rules at its send
+  time: sending turned off fails it, and sending moved to approval queues it
+  "submitted" means accepted-for-delivery — final delivery is the receiving
+  server's business; K2 never claims "delivered".
+
+QUEUED IS SUCCESS
+  In approval mode this prints `queued for approval (out_…)` and exits 0 —
+  the queueing succeeded; track it with `k2 mail outbox <id>`. If sending is
+  off or a send was denied, that is your human's decision — raise it with
+  `k2 tickets ask`, don't retry-loop.
+
+EXAMPLES
+  k2 mail send hello@example.com --subject "hi" --body "hello from the bot"
+  k2 mail send --to a@x.com --to b@y.com --subject "digest" --body-file ./digest.md --wait
+  k2 mail send cust@x.com --from laura@acme.com --from-name "Laura" --subject "hi" --body "hello"

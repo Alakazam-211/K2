@@ -1,0 +1,5 @@
+Add or remove a hostname under an attached apex.
+
+USAGE
+  k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>]
+  k2 domain name remove <hostname>

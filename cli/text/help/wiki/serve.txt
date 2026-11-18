@@ -1,0 +1,6 @@
+Usage: k2 wiki serve on|off [--port N] [project]
+
+  on|start    Bind read-only localhost site (127.0.0.1)
+  off|stop    Drop the listener (in-app wiki still works)
+
+  --port N    Preferred port when turning on (optional)

@@ -1,0 +1,34 @@
+Linked inboxes are live IMAP, not a local store; large folders stall; searches use a ≤30-day window.
+
+Newest-first summaries of mail received at your addresses:
+id · from · subject · age (+ attachment/UNREAD markers). Summaries only —
+`k2 mail read <id>` fetches a full message.
+
+USAGE
+  k2 mail messages [<address>] [flags]
+
+ARGUMENTS
+  <address>              Only this owned address (default: all your addresses)
+
+FLAGS
+  --unread               Only unread messages
+  --limit <n>            1-200 (default 25)
+  --offset <n>           Skip the newest <n> (pagination cursor; when a page is
+                         full the output prints a ready-to-run "more:" line)
+  --since <date>         Only mail on/after <date>: YYYY-MM-DD or a relative age
+                         like 7d / 24h / 30m (IMAP-linked inboxes are day-granular).
+                         Linked IMAP requires --before within 30 days of --since
+                         if the range would be longer.
+  --before <date>        Only mail before <date> (same date forms as --since)
+  --folder <name>        Read a mailbox OTHER than the Inbox (case-insensitive;
+                         an unknown name lists the folders that DO exist)
+  --junk                 Read the Junk/Spam folder (shorthand for --folder)
+  --query <text>         Match subject AND body
+  --from <substr>        Match the From header (address + display name)
+  --json                 JSON output (carries "nextOffset" when more remain)
+
+EXAMPLES
+  k2 mail messages --since 7d --unread
+  k2 mail messages --junk --limit 50
+  k2 mail messages --folder "[Gmail]/All Mail" --before 2026-07-01
+  k2 mail messages --limit 50 --offset 50        # the second page

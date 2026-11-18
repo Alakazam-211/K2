@@ -1,0 +1,17 @@
+Print the HTML brief skeleton every agent ticket carries. Static: works with
+no daemon running.
+
+USAGE
+  k2 tickets template > brief.html
+  (fill in the sections)
+  k2 tickets ask "<one-line title>" --html brief.html --assign <user>
+
+Assign every ticket to a user on this server (the owner or a Connect user:
+`k2 connections list --users`). Without one, the owner's setting decides:
+a warning or a refusal (`k2 tickets settings`).
+
+SECTIONS
+  Problem · What I tried · What I need from you (section.k2-need) ·
+  Options (ol.k2-options) · Context
+
+See `k2 study ticket-brief` for the caps and what gets stripped.

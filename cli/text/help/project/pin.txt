@@ -1,0 +1,9 @@
+Pin a project so it shows in the Pinned section of the Projects nav for
+everyone on this server, or unpin it with off.
+
+USAGE
+  k2 project pin <project> [on|off] [--json]
+
+EXAMPLES
+  k2 project pin 0.46.1
+  k2 project pin 0.46.1 off

@@ -1,0 +1,54 @@
+k2 app db — connect an App to a Postgres database on this box
+
+  k2 app db connect <app-id> --new [--major N] [--cluster NAME] [--name DB]
+  k2 app db connect <app-id> --db <name|id>
+        [--as NAME_URL] [--no-migrate-url] [--wait [--timeout 10m]] [--reason TEXT] [--json]
+      --new         a new database for this App (connecting --new again is the
+                    same one). --major: a Postgres major this box runs
+                    (k2 app db status <app-id> lists them). --cluster: a named
+                    cluster of this workspace (k2 db clusters). Connect never
+                    installs Postgres: a major or cluster this box doesn't run
+                    is refused (app_db_cluster_missing, exit 3) with the
+                    command that makes it.
+      --db          a database the App's workspace owns or was granted
+                    (k2 db list).
+      --as          the env name, ending in _URL (default DATABASE_URL). Each
+                    name holds one database: a second database needs another
+                    name (--as REPORTS_URL) or a disconnect first
+                    (app_db_already_connected, exit 3).
+      What it does: makes the App its own login (never your agent's), grants
+      the App DATABASE_URL and, only on a database its workspace owns, the
+      migrator's DATABASE_MIGRATE_URL (--no-migrate-url: not that one; with
+      --as REPORTS_URL they are REPORTS_URL and REPORTS_MIGRATE_URL), opens
+      the App's database door, re-hosts the App (it starts again with the new
+      env; people signed in to an App that keeps sessions in memory sign in
+      again), then checks it from inside the App: select 1 as the App. In the
+      App, read process.env.DATABASE_URL. No URL or password is ever printed.
+      Who waits: the owner and Admins connect at once. An agent (a K2 tab)
+      connects at once only when every switch it needs is on and the
+      database is its own workspace's; otherwise connect files ONE card for
+      the owner naming each switch that is off by its Settings name and
+      exits 2 with nothing changed. Run the "Ask with:" line it prints, then
+      wait: --wait blocks (default 10m; exit 2 if still waiting), or
+      k2 app db status <app-id>. Running connect again doesn't nudge: it is
+      the same card.
+  k2 app db status <app-id> [--json]   its databases, last checks, waiting
+                                       cards, and the majors this box runs
+  k2 app db check <app-id> [--as NAME_URL] [--json]
+                                       the live check again (no card needed)
+  k2 app db disconnect <app-id> [--as NAME_URL] [--drop-roles] [--json]
+                                       its login stops, open sessions end, the
+                                       door shuts, its secrets go, it is
+                                       re-hosted. The database is never dropped.
+
+What connect prints (PASS):
+  connected feedback → ws_…_app_feedback (Postgres 17, cluster 17/main)
+  secrets  DATABASE_URL, DATABASE_MIGRATE_URL (granted to the App; not shown)
+  check    PASS · PostgreSQL 17.6 · 3 ms · from inside the App
+A FAIL ends with "check    FAIL · <step>: <error>", a "fix" line and the App's
+last output lines (steps: k2 study app-databases, THE CHECK).
+
+Exit codes: 0 done (PASS) · 1 FAIL (a "check FAIL" line), or a usage error
+({"error":"usage",…} on stderr) · 2 held for the owner (one card) · 3 refused
+({"error":"<code>",…} and a fix line; k2 explain <code>).
+More: k2 study app-databases (which App kinds reach what, outside databases).

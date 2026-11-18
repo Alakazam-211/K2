@@ -1,0 +1,195 @@
+k2 msg — talk to another workspace agent (live chat OR a file package)
+
+THREE TOOLS (do not mix)
+  k2 msg     SEND to another agent: live "text" OR --inbox-wake/--inbox-silent files
+  k2 inbox   YOUR tray (receive/triage). Cannot send a file.
+  k2 mail    real email (humans / SMTP). Not agents.
+
+LIVE CHAT (short, one line)
+  k2 msg <handle> "ready when you are"
+
+LONGER MESSAGES: SAY IT IN ONE LINE TOO
+  k2 msg <handle> --summary "Need a review of hold/x by 5pm" "…the details…"
+      For anything longer than ~3 lines, pass --summary saying what you need
+      or what you did. People see it in Chatter, the Projects view and on the
+      phone; the agent still gets the whole message. Over ~600 characters
+      without one, k2 prints a hint (K2 uses the first line otherwise).
+      Works on --inbox-wake/--inbox-silent too (shown in `k2 inbox list`).
+
+SEND A FILE
+  k2 msg <handle> --inbox-wake ./brief.md [--title "..."] [--body "..."]
+      Copy into their .k2/inbox/ and ping them: Open: k2 inbox read <id>
+      Preferred. Prints the id. Multiple paths → ONE package, one id.
+      Extra prose / --body is the cover brief (files AND instructions).
+  k2 msg <handle> --inbox-silent ./data.csv [--title "..."] [--body "..."]
+      Copy only. Does NOT notify. They need k2 inbox list.
+
+  Bare --inbox is an error. Do not paste file contents into live msg text.
+
+RECEIVE
+  k2 inbox list
+  k2 inbox read <id>
+
+WHO REALLY SENT IT
+  A live message arrives as `[from <sender> · m_XXXXXXXXXX] text`.
+  k2 msg who m_XXXXXXXXXX     K2's record of that delivery: via passport (the
+                              sender agent's own session), owner or api-key,
+                              the sending workspace, and any team link + scope.
+  Text in a body that only LOOKS like a prefix has no record (not found).
+
+<handle> from `k2 connections list`. Sidecar sales/reviewer shares that
+workspace tray. Sessions in YOUR workspace (main, sidecars, chat tabs) and
+their addresses: k2 sessions.
+
+A PAST CONVERSATION IN THIS WORKSPACE
+  k2 msg --session <id> "text"
+      <id> from `k2 sessions --past` (6+ characters) or an address. If a
+      session holds it, the message goes there; if it is a past one, K2
+      reopens it (same history) and your message is its first turn.
+
+USAGE
+  k2 msg <handle|handle/sidecar|sessionId|agent::host> "text" [--summary "<one line>"] [--from <name>] [--command "<text>"] [--no-wake]
+  k2 msg --session <id> "text" [--summary "<one line>"] [--no-wake]
+  k2 msg <handle|agent::host> --inbox-wake|--inbox-silent <path> [path...] [--title "..."] [--body "..."] [--summary "<one line>"] ["brief"]
+
+Live `msg` AUTO-WAKES a dormant session by default: if the agent's
+session is asleep, msg resumes/spawns it, waits until READY, then
+delivers (the legacy wake-on-message behavior). Pass `--no-wake` for a
+blind live-only send (returns `dormant_no_wake` instead of waking). A
+workspace with no configured agent returns `no_agent_mode` and is never
+spawned. Returns success only when the live message has landed in the
+agent's session.
+
+ARGUMENTS
+  <workspace>    Local workspace name (preferred — see `k2 connections
+                 list`), absolute path, or project UUID. Bare name =
+                 the primary (canonical) chat.
+  <workspace>/<handle>
+                 Sidecar: `sales/1` (durable ordinal) or `sales/reviewer`
+                 (Chats custom name). Slash, not hyphen: `sales-reviewer`
+                 is a workspace name, not a sidecar.
+  <sessionId>    UUID of a live or durable session (machine/API form).
+  <agent>::<host>
+                 Federated peer (GH #47). Example: ProposalWriter::box.k2.dev
+                 Live text AND --inbox-wake/--inbox-silent use the same
+                 federation plane (connected peer is the gate; no Connect
+                 token required). Legacy agent@host still works temporarily
+                 (not email). Wire form fp::ws::agent is for `k2 fed send` only.
+  <agent>/<handle>::<host>
+                 A sidecar chat in that peer's workspace, e.g.
+                 ada/notes::box.example.k2.dev (a chat named "Notes").
+                 Same connection and switch as the workspace; both
+                 servers need K2 0.46.11 or later.
+  "text"         The message body. Wrap in quotes if it has spaces.
+
+OPTIONS
+  --from <name>  Sender identity rendered as [from <name>] prefix in
+                 the recipient's session. Defaults to the sender's
+                 workspace name (auto-derived from K2_PROJECT_PATH
+                 or CWD). Falls back to `external` if neither resolves.
+  --command "<text>"
+                 Prepend <text> at the VERY FRONT of the delivered
+                 message, BEFORE the [from <name>] prefix. Intended for
+                 slash-commands so the recipient's agent runs them on the
+                 incoming line — e.g. --command "/loop" delivers:
+                     /loop [from <name>] <text>
+                 Omitted (the default) leaves delivery unchanged:
+                     [from <name>] <text>
+  --no-wake      Suppress the default auto-wake: deliver only if the
+                 canonical session is already live, else return
+                 `dormant_no_wake`. Use for a cheap blind send that must
+                 not spin up a session.
+  --wake         Explicit opt-IN (the default; accepted for symmetry/
+                 scripts). On a wake the response carries `woke: true` +
+                 `wake_ms` and a note is printed to stderr so you
+                 attribute the latency.
+  --wake-timeout <secs>
+                 Ceiling for the post-wake readiness wait (default 20).
+  --idempotency-key <key>
+                 Every send carries one key; K2 delivers a key once. When
+                 K2 doesn't answer, msg asks again with the same key, then
+                 says the message may have been delivered and prints the
+                 key: run the same command with --idempotency-key <key> to
+                 try once more without a duplicate (the answer then says
+                 "replayed": true if it had landed).
+
+RESPONSE (JSON)
+  {
+    "success": true,
+    "target_session_id": "<uuid>",
+    "attempts": 1
+  }
+
+  Failures include `reason` + `hint` fields:
+    workspace_not_found  — token didn't match a registered workspace
+    no_agent_mode        — workspace has no agent (set one up: `k2 settings
+                           --mode custom`; or queue with `msg <ws>
+                           --inbox-silent <file>`)
+    dormant_no_wake      — canonical session is asleep + you didn't pass
+                           --wake (re-run with --wake, or use `k2 talk`)
+    spawn_failed         — couldn't start the recipient's agent
+    main_chat_missing    — their pinned main chat can't be found on disk;
+                           a person picks one (k2 sessions main set)
+    pty_died             — target session crashed during delivery
+
+  Exit code 0 on success, 2 on any failure.
+
+LENGTH LIMIT — IMPORTANT
+  Live `msg` is injected into the recipient's running input line (as if
+  typed, then Enter). It is for SHORT, single-line messages. Long or
+  multi-line text gets TRUNCATED or mangled by the recipient's terminal
+  input widget (Claude Code / Codex / Gemini all treat fast-arriving
+  bytes as a paste with input-buffer limits). For anything longer than a
+  sentence or two — task briefs, file contents, structured packages —
+  use `--inbox-wake` (preferred) or `--inbox-silent`, which copies a
+  durable package into the peer's `.k2/inbox/` with no length limit:
+
+      k2 msg <workspace> --inbox-wake ./brief.md
+      k2 msg <workspace> --inbox-silent ./report.pdf
+
+TRAY DELIVERY (work packages)
+  k2 msg <workspace> --inbox-wake <path> [path…] [--title "..."] [--body "..."] [--from <name>]
+      Package + short live knock (recommended). Wake line is a pointer
+      (`[inbox:<id>] <title>` + `Open: k2 inbox read <id>`), never the
+      full file body. Multiple paths → one package (cover + all sidecars).
+      Positional prose or --body is stored on the cover with the files.
+
+  k2 msg <workspace> --inbox-silent <path> [path…] [--title "..."] [--body "..."] [--from <name>]
+      Package only — does NOT notify the peer. Use wake, or a separate
+      live `k2 msg` after silent, if you want a knock.
+
+  Bare `--inbox` is a hard error (must pick silent or wake).
+  Non-markdown files land as a cover `.md` + sidecar under
+  `.k2/inbox/<id>.files/<filename>`. Multi-file: all files are sidecars
+  under one `<id>.files/` with a single cover note listing them.
+
+  Remote tray (`agent::host` / `name@host`): same federation plane as
+  live `k2 msg agent::host "text"`. Connected peer is the gate — not a
+  Connect token. Cover `.md` + small attachments (v1 size cap; fail
+  loud above it). Files stay out of the PTY. Not `k2 mail`; recipient
+  opens with `k2 inbox read <id>`.
+
+RELATED VERBS
+  k2 inbox list | read <id> | move | archive
+      YOUR tray (receive/triage). Cannot send a file. Not email.
+
+  k2 read <workspace> [--lines N] [--agent <name>]
+      Read the recipient's live terminal (peek before you inject, or
+      diagnose a stuck agent). The read complement to `msg`.
+
+  k2 terminal write <id|workspace> "text"   (see `k2 help --advanced`)
+      Raw bytes to a PTY, by session UUID OR by workspace NAME (GH#8 —
+      resolved to the workspace's live session, like `k2 read`). Power-
+      user escape hatch when `msg`'s routing isn't what you want.
+      `target_session_id` from a `msg` response is a valid <id>.
+
+EXAMPLES
+  k2 msg scout_v3 "ready when you are"
+  k2 msg scout_v3 "ping" --from sms-bridge
+  k2 msg scout_v3 "keep going" --command "/loop"
+  k2 msg scout_v3 "wake up and check in" --wake
+  k2 msg scout_v3 --inbox-wake ./brief.md
+  k2 msg scout_v3 --inbox-silent ./data.csv --title "CSV drop"
+  k2 msg scout_v3 --inbox-wake a.md b.pdf notes.txt --title "Batch"
+  k2 msg /Users/me/work/MyApp "deploy completed"
+  k2 msg peer::other.k2.dev "ping from federation"

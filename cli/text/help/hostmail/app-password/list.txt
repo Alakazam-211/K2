@@ -1,0 +1,5 @@
+List app passwords on a hosted mailbox (id, label, createdAt — never
+the secret). GET /cli/mail/app-password?address=.
+
+USAGE
+  k2 hostmail app-password list <addr> [--json]

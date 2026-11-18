@@ -1,0 +1,8 @@
+Per-address mailbox disk and message caps. mail_manage agents (or
+owner/admin) may cap existing hosted boxes. 0 = unlimited. NEW mints
+default unlimited; mint constants do not retrofit existing addresses —
+use `quota set`.
+
+USAGE
+  k2 hostmail quota get <addr> [--json]
+  k2 hostmail quota set <addr> --bytes N|--gb N [--messages N] [--json]

@@ -1,0 +1,42 @@
+CalDAV + CardDAV (calendars and contacts) for every hosted address, and
+WebDAV file storage. status|enable|disable: Owner/admin only — the
+"agents manage hosted mail" workspace toggle does not open them.
+GET|POST /cli/mail/dav.
+
+The policy is per-account Stalwart permissions (x:Account/set
+permissions Merge): it never restarts Stalwart and never uses
+`k2 hostmail disable/enable`. New addresses get it at creation; existing
+ones are updated right away (any left over finish on the next daemon
+start). Other permission settings on an account are kept.
+
+Default before the first run: Stalwart's own (everything on). The FIRST
+enable or disable also turns WebDAV file storage off, unless --files on.
+The policy resets on `k2 hostmail uninstall` (the server row is deleted).
+
+Clients sign in at https://<mail host>/ (`status` prints the url). A
+calendar app retrying a wrong password gets its IP banned: see
+`k2 hostmail bans list`, `k2 hostmail bans clear <ip>`, and keep office
+IPs on `k2 hostmail allowlist`.
+
+USAGE
+  k2 hostmail calendar status [--json]
+  k2 hostmail calendar enable [--files on|off] [--json]
+  k2 hostmail calendar disable [--files on|off] [--json]
+
+CALENDARS AND SHARING (mail-manage: owner/admin, or an agent whose
+workspace may manage hosted mail — never widening its own access)
+  k2 hostmail calendar create <owner-addr> <name> [--color <c>]
+  k2 hostmail calendar rename <owner-addr> <calendar> <new-name>
+  k2 hostmail calendar share <owner-addr> [--calendar <id|name>] --with <addr|group>
+                             --freebusy|--read|--write|--editor
+  k2 hostmail calendar unshare <owner-addr> [--calendar <id|name>] --with <addr|group>
+  k2 hostmail calendar shares <owner-addr>
+  k2 hostmail calendar sharing [--max-shares N]
+  Details: `k2 hostmail calendar share --help`. Groups: `k2 hostmail group`.
+
+TEAM CALENDAR
+  k2 hostmail group create team
+  k2 hostmail group add team a@example.com b@example.com
+  k2 hostmail calendar create owner@example.com "Team"
+  k2 hostmail calendar share owner@example.com --calendar Team --with team --write
+  k2 hostmail calendar share owner@example.com --calendar Team --with a@example.com --editor

@@ -1,0 +1,5 @@
+Add an extra address that delivers into mailbox. Same hosted domain.
+Collision with another mint or alias is 409. Not a mint.
+
+USAGE
+  k2 hostmail alias add <mailbox> <alias> [--json]

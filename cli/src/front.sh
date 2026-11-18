@@ -5,75 +5,7 @@
 # without the front ending TLS. Owner/admin verbs: run them outside K2.
 _front_usage() {
     cat <<'EOF'
-k2 front — K2's front on this box's port 443 (Linux)
-
-The front holds the box's public :443 (IPv4 and IPv6). For each visitor
-it reads the name they asked for (the TLS server name) and passes the
-connection, still encrypted, to the server for that name: custom App
-names (k2 app domain), K2's own Caddy (the App front door in direct
-mode), hosted mail's web pages, chat and voice calls (their TURN relay), and
-names you pass through to your own web server. A name nothing serves is
-closed.
-
-  k2 front status [--json]          who holds :443, the routes, counters
-  k2 front enable [--mail] [--json] take :443 (the daemon restarts once: a few seconds)
-                                    voice calls move onto :443 (calls in progress drop once);
-                                    K2's Caddy moves to 127.0.0.1:38473 behind it
-                    --mail          also put hosted mail's web pages behind the front:
-                                    they move to 127.0.0.1:8443 (PROXY v2); mail's own
-                                    certificate renewal (TLS-ALPN-01) keeps working;
-                                    the mail server restarts once
-  k2 front disable [--json]         give :443 back (voice to TCP 5349, mail to :443)
-  k2 front http on|off [--json]     the https redirect for people who type http://: on
-                                    K2's relays for names through K2 Connect, and on this
-                                    box's :80 where K2's front runs (K2's own HTTP-01
-                                    certificates answer there too). On by default:
-                                    k2 front enable installs :80 when it is free. On takes
-                                    :80 (the daemon restarts once); off frees it.
-  k2 front passthrough [list] [--json]
-                                    names passed through to your own web server
-  k2 front passthrough add <host>|'*' --to 127.0.0.1:<port> [--proxy-v2] [--label <why>] [--json]
-                                    pass <host> (or '*': every name K2 doesn't serve),
-                                    still encrypted, to a web server you run on this
-                                    box; K2's own names always win. Works before
-                                    enable: saved now, routed once the front is on.
-                    --proxy-v2      only if that server reads the PROXY protocol
-                                    (nginx: listen ... proxy_protocol): it then sees
-                                    visitors' real IPs (without it, every visitor is
-                                    127.0.0.1). A server that doesn't read it breaks.
-                                    Give every name on one port the same choice.
-  k2 front passthrough rm <host>|'*' [--json]
-
-Who (every verb above): the owner (a terminal outside K2, e.g. over
-SSH), an Admin login, or a person typing in a K2 shell tab. An agent may
-only list the passthrough names (k2 front passthrough); anything else is
-refused (exit 3, owner_only; the error names the command, e.g. "The
-owner runs: k2 front enable [--mail]"): ask the owner to run it.
-
-KEEP A WEB SERVER THAT ISN'T K2'S (a system nginx or Caddy on :443)
-status names it, and enable refuses while it holds :443: K2 never takes
-the port from it. To keep its sites:
-  0. k2 front status: a "helper" line means the root helper is too old
-     for the front; run k2 root-helper update before going on
-  1. k2 front passthrough add <its host> --to 127.0.0.1:9443
-     once per site; all its sites can share the one port (it picks the
-     site by name). Or '*' once: every name K2 doesn't serve.
-  2. in each site, replace its :443 listen lines (IPv4 and IPv6) with
-     one TLS listen on 127.0.0.1:9443 (nginx: listen 127.0.0.1:9443 ssl;)
-     and reload it (its certificates stay; leave its :80 as it is)
-  3. k2 front enable (a refusal names its cause: port_443_taken names
-     what still holds :443; also helper_needed, not_systemd, user_scope,
-     unsupported)
-Its sites are down from step 2 until the front holds :443 (a few
-seconds). If enable refuses, put the server back on :443. Its own
-certificate renewal keeps working: TLS-ALPN-01 passes through the front
-untouched, and HTTP-01 still reaches its :80, as long as :80 stays
-public: k2 firewall open 80/tcp --label "nginx" unless k2 firewall
-already lists it.
-
-Linux boxes under systemd with k2-root-helper protocol 8; the :80 front needs
-protocol 12 (k2 root-helper update). An App on your own domain that doesn't
-need this box's :443 at all: Path B (k2 app domain --help).
+%include cli/text/help/front.txt
 EOF
 }
 

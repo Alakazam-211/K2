@@ -1,0 +1,35 @@
+k2 app catalog — suite Apps this K2 deploys in one step (Sew's Hearth and Meet),
+verified by K2: each version is pinned by sha256 inside this K2 release.
+
+  k2 app catalog [list] [--json]          What this box can deploy, and why not when not.
+  k2 app catalog show <entry> [--json]    What it does, what deploying approves, versions.
+  k2 app catalog check <entry> <address> [--id ID] [--json]
+                                          Is the address free for that App? exit 0 yes,
+                                          exit 2 no (with a suggestion).
+  k2 app install --catalog <entry> [--address LABEL|auto] [--id ID]
+                 [--variant k2|standalone] [--version V] [--workspace WS]
+                 [--dry-run] [--no-wait] [--rebind-meet] [--json]
+                                          Deploy it as one daemon job: download, check,
+                                          install, address, deploy, approve, sew_setup,
+                                          healthy, ready. Prints the job id first, then
+                                          each step; closing the terminal doesn't stop it.
+    --address   the label in <label>.<box>.k2.dev (default: chat for Hearth, meet for
+                Meet); auto = the default, else the suggestion when it's taken
+    --id        the App id (default hearth, then hearth-2…; sew-meet); rarely needed
+    --no-wait   start the job and return; follow it with k2 app catalog job <id>
+    --workspace the workspace whose agent looks after it (an agent: its own)
+    --variant   only to assert the variant; K2 picks it from this box's Sew sign-in
+  k2 app catalog job [<job-id>] [--app APP] [--json]
+                                          One job's steps, or every job.
+  k2 app catalog retry <job-id>           Go on from a failed download_failed,
+                                          sew_unreachable, not_ready or deploy_failed step.
+
+Entries: sew/hearth (chat.<box>.k2.dev), sew/meet (meet.<box>.k2.dev, one per box).
+A K2 address needs K2 Connect Pro (pro_required). Your own domain: deploy first,
+then k2 app domain add <app> <host>.
+--json: each reason, wait and error has "text" (plain words for people) and "hint"
+(the command to run, or null); a done job's "next" lines carry the commands.
+Exit: 0 done; 1 the job failed (its error has the fix); 2 not done: the job waits
+and goes on by itself, OR the command needs changing (address taken: use the
+suggestion) — the JSON's "error"/"waiting" says which; 3 refused.
+More: k2 study suite-apps

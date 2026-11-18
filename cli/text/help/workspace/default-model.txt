@@ -1,0 +1,10 @@
+Usage: k2 workspace default-model get|set <workspace> [model|clear]
+
+Per-workspace default LLM model spliced onto new agent sessions
+(claude --model, codex -m, …). Empty/clear = today's preset/harness.
+
+  get <ws>              Print the stored model, or (unset)
+  set <ws> opus         Store an opaque model id
+  set <ws> clear        Clear back to unset
+
+API POST /v1/w/<ws>/host-sessions {"model":"…"} overrides this per call.

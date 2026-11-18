@@ -1,0 +1,5 @@
+Set Domain.reportAddressUri to a minted inbox on that domain. Does
+not mint and does not rewrite _dmarc TXT.
+
+USAGE
+  k2 hostmail dmarc report-to <domain> --address <minted> [--json]

@@ -1,0 +1,6 @@
+List BlockedIp. Human: counts by reason, authFailure rows first,
+scanners summarized (full list --json). GET|POST /cli/mail/bans.
+mail_manage.
+
+USAGE
+  k2 hostmail bans list [--json]

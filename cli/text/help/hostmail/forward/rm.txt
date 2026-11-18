@@ -1,0 +1,7 @@
+Remove addresses from a hosted mailbox's forwards. The others stay as they
+are. An address it doesn't forward to: exit 1 not_found, nothing changes.
+Removing an address that pressed Stop doesn't forget the Stop: adding it
+again still needs --restart-stopped. To remove every address, use unset.
+
+USAGE
+  k2 hostmail forward rm <addr> --to <dest> [--to <dest>…] [--json]

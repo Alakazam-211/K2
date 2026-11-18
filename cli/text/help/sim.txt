@@ -1,0 +1,40 @@
+k2 sim — drive this workspace's mobile device (the Mobile tab's device)
+
+Read first, act second, read the diff:
+  k2 sim tree [--all] [--find <text>] [--boxes]   what is on screen: ids (e5) tied
+                                              to a snapshot (t7); interactive only
+                                              by default
+  k2 sim tap e5 | tap --at 120,300            each action prints one line:
+  k2 sim type [--into e3] "text"                ok tap e5 · 140ms · +e9 text "Saved"
+  k2 sim type [--into e3] --secret <vault-name>   types a vault secret; you never see it
+  k2 sim swipe up|down|left|right [--from e7]
+  k2 sim key enter|backspace|delete|tab|escape|arrow-up|arrow-down|arrow-left|arrow-right
+  k2 sim button home|back|lock|volume-up|volume-down|app-switch|dev-menu
+                                              (back: Android)
+  k2 sim rotate left|right
+  k2 sim open-url <url> | location <lat,lon> | appearance dark|light
+  k2 sim wait [--for "text"] [--timeout 10s]  until the text is on screen (or the
+                                              device is free again)
+
+The device:
+  k2 sim status                               lanes this server can run, the device
+  k2 sim list-devices [--platform android|ios]  device profiles you can boot
+  k2 sim boot [--platform android|ios] [--device "Pixel 9"] [--no-tab]
+                                              (opens the Mobile tab unless --no-tab)
+  k2 sim stop | erase [--yes]                 erase wipes the device's data
+  k2 sim install <app.apk|App.app>            build in your own terminal first
+  k2 sim launch <package|bundleId> | terminate <id>
+
+Eyes and ears:
+  k2 sim screenshot [--region e7]             saves a PNG, prints its path
+  k2 sim logs [--app <id>] [--since 2m] [--grep <text>] [--lines N]
+                                              bounded and redacted
+
+Every command takes --workspace <path|name> (outside K2; agents: only their
+own) and --json (the daemon's JSON as is).
+A person's tap holds the device for 3 s (Take over: until they hand it
+back); an action then exits 2 "held". Run `k2 sim wait`, then `k2 sim tree`.
+
+Exit: 0 ok · 1 daemon unreachable · 2 usage, or held · 3 refused (the
+"Allow mobile devices" switch is off, a stale id, no device running, …).
+See `k2 study sim`.

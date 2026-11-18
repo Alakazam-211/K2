@@ -36,54 +36,7 @@ _rec_switch_json() {
 
 _app_recording_usage() {
     cat <<'EOF'
-usage: k2 app recording <app> [--json]
-       k2 app recording <app> set [--start-level none|admin|moderator|member]
-                                  [--audio-max-days N|org] [--required on|off]
-                                  [--server-read on|off] [--json]
-Recording in an App's calls, on this server's chat (Sew 0.9.0 or later).
-No flags: what K2 wants for the App, whether Sew has it yet (delivered),
-the Spaces the App is bound to, and the lock on each. The owner, an Admin
-or the App's own agent may look. <app> is the App's id or name (k2 app list).
-Each flag is optional; name one or more.
-
-Every setting starts off: nobody may start a recording, nothing is
-required, and the App's own server reads nothing. Each person in a call
-still answers their own consent notice; a recording never records someone
-who said no.
-  --start-level L       the lowest chat level that may start a recording in
-                        the App's Spaces: none (nobody, the default), admin,
-                        moderator or member
-  --audio-max-days N    keep recorded audio N days (1 to 3650; 30 or 30d),
-                        never more than this server's own limit
-                        (recording.audio_max_days, k2 hostchat recording
-                        policy: above it is above_org_audio_max_days);
-                        org = the server's limit
-  --required on|off     on: every call with two or more people in the App's
-                        Spaces is recorded, and nobody can stop it there. Each
-                        person still consents for themselves.
-  --server-read on|off  on: the App's own server may read its recordings'
-                        details, transcripts and changes (the SDK's
-                        recordings.list, get, transcript, events). Each
-                        consent notice names the App as a reader; every read
-                        is logged.
-Who: turning a setting down or off: the owner, an Admin, or the App's own
-agent with its App switch "…and manage them end to end" on (switch 2:
-k2 app access <workspace> shows it; the owner turns it on with --manage on).
-A higher start level or longer keep days: the owner or an Admin, in
-person, with a confirm (Touch ID or the vault password) from a terminal
-outside K2; an agent gets person_only. --required on and --server-read on:
-the server's owner only, in person; anyone else gets owner_only. With
-permission cards on for its workspace, the agent's refusal ends with the
-line to ask the owner on a card (the card's key is server-read, with a dash):
-  k2 permission request apps.recording app=<app> server-read=on --why "…"
-  k2 permission request apps.recording app=<app> required=on server-read=on --why "…"
-Not for the home client (the App that sees every Space): it takes no
-recording settings (home_client_cannot_govern). A server whose chat can't
-record in Apps yet answers sew_feature_missing (k2 hostchat upgrade).
-A Space's own rule, and the owner's no-recording lock for CUI/FCI Spaces:
-k2 hostchat app-space recording --help. Uninstalling an App never deletes
-its recordings. More: k2 study app-recording.
-Exit codes: 0 ok, 2 bad usage, 3 refused.
+%include cli/text/help/app/recording.txt
 EOF
 }
 
@@ -185,16 +138,7 @@ for s in sp:
 # k2 app account-deletion <app> | complete <app> <request|user> | cancel <app> <request|user>
 _app_account_deletion_usage() {
     cat <<'EOF'
-usage: k2 app account-deletion <app> [--json]                     pending requests and the settings
-       k2 app account-deletion complete <app> <adr_…|username>    delete now (can't be undone)
-       k2 app account-deletion cancel <app> <adr_…|username>      undo: their access comes back
-A person deletes their own account from inside the App (profile.deleteAccount).
-With the App's mode "request" (the default), K2 signs them out and turns their
-access off, and the deletion waits here until you complete it or its grace period
-ends. The owner or an Admin completes or cancels; so may the App's own agent with
-"Let this agent manage its Apps' users" on. Settings: k2 app set <app> --help.
-After a deletion, delete what the App keeps for that person in its own data.
-More: k2 study app-account-deletion.
+%include cli/text/help/app/account-deletion.txt
 EOF
 }
 
@@ -315,23 +259,7 @@ print("%s: guests names %s%s" % (v["workspace"], state, "" if v.get("changed") e
 # private channels, level and last sync; box users leaving before the switch.
 _app_chat_usage() {
     cat <<'EOF'
-k2 app chat <app> [--json]
-  What K2 keeps in step for an App's chat (Sew 0.6.0, App-governed Spaces). Read-only.
-  - the chat key (k2 app grant <app> --kind chat-key) and its level ceiling;
-  - each Space bound to the App and who governs it: sew (people run it in chat) or app
-    (k2 hostchat app-space governance <app> <space> app|sew; the owner or an admin, in person);
-  - its channels: the manifest's chat block (static channels; roles/rooms see the private ones;
-    levels; agents) and channels the App made itself; each with Sew's id once made;
-  - the steps K2 is taking toward Sew for each Space: the current one, Sew's last answer, and any
-    blocked row (shown to a person and the App's own agent);
-  - each App user's private channels and level, and their last sync: synced, pending (on its
-    way; after their own chat account), queued (Sew runs a large change as a job), or held
-    (banned in that Space, deactivated in chat, the Space at the App's member limit,
-    an unknown channel: the reason says);
-  - box users (the owner, admins) leaving the Space before it switches to app.
-  The App decides who sees which channel: its manifest's chat block (change it and deploy), or,
-  for channels it makes at run time, its own chat.channels / chat.setChannels calls. No k2 verb
-  edits that; K2 syncs within seconds of any change (App users, roles, the manifest, the switch).
+%include cli/text/help/app/chat.txt
 EOF
 }
 

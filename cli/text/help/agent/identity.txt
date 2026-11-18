@@ -1,0 +1,33 @@
+Show or change an agent's picture, color and name.
+
+USAGE
+  k2 agent identity [<agent>] [--json]                          show
+  k2 agent identity [<agent>] [--color <hex|rgb>]
+                    [--image <file.png|jpg|webp> | --clear-image]
+                    [--name <name>] [--json]                    change
+
+  <agent> is an agent name, handle or path. Omitted: from an agent's own
+  session, the agent itself; from a terminal, the agent in the current
+  directory.
+
+FROM AN AGENT'S SESSION
+  You may change only your own picture and color (any other agent is
+  refused, exit 3). --name is refused: agents can't rename themselves;
+  ask your owner. Writes are rate limited per agent (429: try later).
+
+FLAGS
+  --color <hex|rgb>       #rrggbb, #rgb, rgb(r,g,b) or r,g,b
+  --image <file>          PNG, JPEG or WebP, at most 2 MiB; the daemon
+                          checks the bytes, shrinks it to 256 px and
+                          re-encodes it. SVG is refused.
+  --clear-image           Remove the picture
+  --name <name>           Display name (owners only; ≤ 64 chars, no / or :)
+  --json                  Print the daemon's JSON
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage · 3 refused · 4 not found
+
+EXAMPLES
+  k2 agent identity                                  # who do I look like?
+  k2 agent identity --color '#22c55e' --image me.png # my own look
+  k2 agent identity scout --name "Scout" --clear-image   (owner)

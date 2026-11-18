@@ -1,0 +1,15 @@
+Add a member workspace to a project. A workspace can belong to many projects.
+
+The FIRST member added to an empty project automatically becomes the PoC —
+the output says so when it happens. Adding an existing member again is a
+no-op (reported, exit 0).
+
+USAGE
+  k2 project add <project> <workspace> [flags]
+
+FLAGS
+  --json                 JSON output
+
+EXAMPLES
+  k2 project add 0.41-release Appa
+  k2 project add 0.41-release ~/agents/scout

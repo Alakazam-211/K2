@@ -1,0 +1,7 @@
+k2 sources export <name>
+
+  The definition as JSON: the shape `propose --from` takes, so
+    k2 sources export fleet > fleet.json && $EDITOR fleet.json && k2 sources propose --from fleet.json
+  round-trips. Secret NAMES only, never values. For agents, query values that
+  look secret (token/key/sig keys, or 24+ character token-shaped values) show
+  as •••; plain ones (?part=boxes) stay as they are.

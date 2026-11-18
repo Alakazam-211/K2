@@ -1,0 +1,36 @@
+k2 app validate — check an App's code before you publish, build or deploy it
+
+USAGE
+  k2 app validate <folder>        a folder (a path, or --dir <path>)
+  k2 app validate <seed>          a stored Seed (k2 app build prints its hash)
+  k2 app validate <name>          a published App (k2 publish ps): its --skin dir or --cwd
+  k2 app validate                 this workspace's folder
+  k2 app validate <folder> --manifest <file>
+                                  check the folder as k2 app deploy --manifest
+                                  packs it: <file> becomes its manifest.json
+                                  (a build output like dist/ is checked too)
+  ... --types                     also run the TypeScript checker (Seeds and
+                                  manifest folders; its errors block)
+  ... --json                      the report as JSON
+
+WHAT IT CHECKS (it never runs your code)
+  - every .js .mjs .cjs .jsx .ts .tsx .mts .cts file and every inline <script>
+    in .html pages parses (oxc): errors, file:line:col, each with a suggestion
+  - leak lints, as warnings: module-level Map/Set/array/object growth inside
+    request/event handlers, setInterval started in a handler with no clear,
+    listeners added per request to long-lived targets, session stores with
+    no expiry (express-session with no store, MemoryStore)
+  - a folder with manifest.json, or a Seed (Apps on: Settings → Cores → Apps
+    → This server, on by default): also manifest.json and the K2 contract (caps,
+    bindings, roles, requires). With Apps off a folder gets the code
+    checks only (said on stderr).
+  Skipped inside the folder: node_modules, dist, build, .next and other
+  build/hidden folders, symlinks, files over 2 MB; anything skipped is listed.
+
+  A path that exists as a folder wins over a published App with that name.
+
+EXIT CODES
+  0 no errors (warnings may be listed)
+  1 errors, or the check could not run
+  2 bad usage
+  3 the daemon refused (JSON with a code on stderr)

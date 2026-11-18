@@ -1,0 +1,35 @@
+k2 app egress — what a guarded App may reach on the internet
+
+  k2 app egress <app-id> [--json]      Mode, hosts (allowed / pending / seen,
+                                       with counts), pending requests, proxy.
+  k2 app egress add <app-id> <host[:port]>... [--reason TEXT] [--json]
+                                       Ask for hosts (443 by default; *.suffix
+                                       for any name under a suffix). Always
+                                       held for the owner: exit 2 with the
+                                       request id until they approve.
+  k2 app egress rm <app-id> <host[:port]> [--json]
+                                       Take a host off at once (open tunnels to
+                                       it are cut). No approval needed.
+  k2 app egress mode <app-id> allowlist|broad [--reason TEXT]
+                                       allowlist applies at once; broad is the
+                                       open path's (held for the owner).
+  k2 app egress log <app-id> [--tail N] [--json]
+                                       The last connections: host, port, result,
+                                       bytes (never paths or queries).
+
+  k2 app approvals [--app A] [--all] [--json]
+                                       Held requests (an agent sees its own
+                                       workspace's).
+  k2 app approve <request-id>          Owner or admin, in person: Touch ID or
+                                       your own password, outside K2. Agents
+                                       never can.
+  k2 app deny <request-id> [--reason TEXT]
+                                       Owner/admin denies; the requester
+                                       withdraws its own.
+
+Always refused, even if listed: private, local, link-local and metadata
+addresses, this box's own names (reach K2 through K2_GATEWAY_URL), and a
+TLS name that isn't the CONNECT name. A manifest's egress.hosts are asked
+for at deploy. Keys never go through this proxy (use the vault).
+
+Exit codes: 0 ok · 2 usage or held (pending the owner) · 3 refused/infra.

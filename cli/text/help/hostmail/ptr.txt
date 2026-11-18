@@ -1,0 +1,9 @@
+SMTP HELO + reverse DNS for this box's origin IPv4. One PTR equals
+the HELO hostname (not per mailbox / not per later mail.<apex>).
+show reads live rDNS + mail_server.hostname. set updates Stalwart
+HELO then asks CP POST /api/dns/ptr (Bearer k2c_ from tunnel.json).
+No OVH key on the box. Not auto on enable. mail_manage.
+
+USAGE
+  k2 hostmail ptr show [--json]
+  k2 hostmail ptr set <hostname> [--json]

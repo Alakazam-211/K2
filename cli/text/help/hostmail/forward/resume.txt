@@ -1,0 +1,29 @@
+Resume paused forwards: one with --to, otherwise all you may. Any you may
+not are left alone and named in the answer. Who may, by the reason show
+gives:
+  manual                    the owner, an Admin or the mailbox's person; an
+                            agent only if that agent paused it
+  not_told                  nobody: it goes back on by itself when K2 can
+                            email the address its stop link
+  dest_gone, refused,       the owner, an Admin or the mailbox's person;
+  daily_cap                 an agent gets exit 3 owner_only (tell your
+                            human with k2 thread)
+  box_brake                 the owner or an Admin only
+  revoked                   nobody: the address pressed Stop. Only the
+                            owner or an Admin can choose it again, with
+                            add --restart-stopped; ask them first
+  air_gap, receive_only     nobody: it resumes by itself when that changes
+  upgrade_required          not by hand: run k2 hostmail upgrade; it resumes
+                            by itself after the upgrade
+  agent_send_off            the owner, an Admin or the mailbox's person, and
+                            then it no longer follows agent sending; an agent
+                            gets exit 3 agent_send_required. It also goes back
+                            on when agent sending does
+If someone also paused a forward K2 holds, resume takes that pause back (the
+one who paused it, or any person); K2's reason stays until it changes.
+Resuming a same-box forward that would now loop is refused (forward_loop).
+An agent resuming an outside forward on its own mailbox needs agent sending
+on; off and approval both count as not on (agent_send_required).
+
+USAGE
+  k2 hostmail forward resume <addr> [--to <dest>] [--json]

@@ -437,45 +437,7 @@ cmd_permission() {
 # the session passport, never the owner token.
 _approve_usage() {
     cat <<'EOF'
-k2 approve — ask a person to approve something on their phone
-
-A program that is about to act (the relying party: a release signer, a
-payment service) writes down exactly what it will do as a payload file:
-"K2-SIGNED-APPROVAL-1", a zero byte, then JSON. You send that file to a
-person. They read it on their own phone, approve with Face ID (or their
-passcode), and the phone signs the exact bytes. You get back an approval
-record, and you give it to the relying party, which checks the signature
-with keys it already trusts. K2 only carries the bytes: it can't approve
-anything, and neither can you.
-
-  k2 approve request --payload <file> [--to <login>] [--wait] [--out <file>] [--json]
-      Ask. Without --to: the person you work for (this server's owner).
-      Anyone else must first allow you to ask them, in K2.
-      --wait   wait for the answer (until the payload's answer_by)
-      --out    with --wait: write the approval record there when approved
-      Prints the request id (ap_…). Exit 0 asked (or, with --wait,
-      approved); 1 declined, expired or cancelled; 2 a bad payload or
-      request; 3 refused (no permission, not allowed to ask them, limits).
-  k2 approve status [<id>] [--out <file>] [--json]
-      One request (with --out: write its approval record once approved),
-      or your recent requests.
-  k2 approve cancel <id>
-      Withdraw a request that is still waiting.
-
-Rules:
-  - You need the approve.request permission. An Owner or Admin turns it on:
-    k2 approve agents <workspace> on   (or ask: k2 permission request approve.request)
-  - At most 3 of your requests wait at once, 20 asks an hour. A payload's
-    nonce is sent once; make a new payload to ask again.
-  - answer_by must be in the future and at most 60 minutes away.
-  - Never put a secret in a payload: the person's phone shows every field.
-  - Only the person answers, on their own phone. You can't answer for them.
-
-People (Owner or Admin): k2 approve agents [<workspace> on|off] lists or
-sets which agents may ask.
-
-Relying parties check a record on their own machine, never through K2:
-k2 approve verify / show / key-id (no daemon; k2 approve verify --help).
+%include cli/text/help/approve.txt
 EOF
 }
 
@@ -646,81 +608,7 @@ cmd_approve() {
 # a K2 terminal the daemon sees the session passport, never the owner token.
 cmd_help_organization() {
     cat <<'EOF'
-k2 organization — orgs on this server's Org Chart, and the daily bulletin
-
-The Org Chart groups this server's agents into orgs (departments). Each org
-has one head, who keeps its bulletin (at most 5 lines). The server bulletin
-is every org's bulletin together: read it once a day, and use it to pick the
-right head before you route a question to another agent.
-
-READ (any agent; any person on the server)
-  k2 organization bulletin                today's server bulletin; marks it read for you
-  k2 organization bulletin --peek         show it without marking it read
-  k2 organization bulletin read           mark today's as read (no output)
-  k2 organization status                  "<day>: unread" or "<day>: read" (a day starts at
-                                          06:00 in the owner's timezone, so before 06:00
-                                          it is still yesterday)
-  k2 organization list                    every org: name, head, members, purpose
-  k2 organization show <org>              one org: head, members, lines, its bulletin
-  k2 organization mine                    your org, your head, and whether you're connected to it
-                                          (in no org: says so)
-  k2 organization night                   tonight's night run (by day, last night's): each org's
-                                          time, and queued / running / done / skipped
-
-REACH A DEPARTMENT
-  k2 organization reach <org|head> --why "<one line>"     (an org's name, or its head's)
-      Connected to that head already: prints the k2 msg line (exit 0).
-      Not connected: asks an Admin to connect you (a permission card, or a
-      ticket) and exits 2. K2 then types one line into your session: you're
-      connected (use the k2 msg line), or it was declined (ask your person;
-      don't reach again). Don't ask twice, and don't k2 msg them before that.
-
-HEADS
-  k2 organization bulletin set "<line 1>" "<line 2>" …   replaces your org's whole bulletin:
-                                                           at most 5 lines, 160 characters each
-  k2 organization bulletin set --file notes.txt           one bulletin line per line of the file
-      An Owner or Admin writes any org's: add --org <org>.
-  k2 organization ask "<question>" [--member <agent>]      ask your members (or one) for news; K2
-                                                           types it to one member at a time, about
-                                                           2 minutes apart; they answer with
-                                                           k2 organization update
-  k2 organization updates                                  what your members sent you (since last night)
-
-MEMBERS
-  k2 organization update "<text>"          news to your org's head (at most 500 characters). Stored
-                                           at once (the head sees it in updates); at night it is
-                                           also typed into the head's session
-
-MANAGE (Owner and Admin people; an agent with "Manage the org chart" on)
-  k2 organization create <name> [--purpose "<short paragraph>"]
-  k2 organization rename <org> <new name>
-  k2 organization purpose <org> "<short paragraph, at most 400 characters>"
-  k2 organization delete <org>                       members leave; agents stay
-  k2 organization add <org> <agent>                  an agent is in one org at most
-  k2 organization move <agent> <org>                 out of its org, into this one
-  k2 organization remove <org> <agent>
-  k2 organization head <org> <agent|none>            the head must be a member
-  k2 organization link <a> above <b>                 a sits above b (b reports to a)
-  k2 organization link <a> below <b>                 a sits below b (a reports to b)
-  k2 organization link <a> beside <b>                side by side
-  k2 organization unlink <a> <b>
-      Lines are drawn on the chart between cards (agents or orgs; write
-      org:<name> / agent:<name> when a name is both). They show who sits
-      over whom; they aren't membership (add/move put an agent in an org).
-      A line joins one card's bottom to another's top, or two sides: never
-      top to top. No loops. A card may sit under several cards.
-  There is no position verb: the chart lays itself out (a person drags on
-  the Org Chart tab).
-
-Add --json to any verb for the daemon's JSON. Exit codes: 0 ok; 2 refused
-for a reason you can fix, held, or the Org Chart is off (the reason is
-printed as "Error [code]: …"); 3 not allowed for you; 1 no daemon or an error.
-
-WHEN IT'S OFF
-  Every verb answers "The Org Chart is off on this server" (exit 2) until an
-  Owner or Admin turns it on in Settings → Org Chart.
-
-MORE: k2 study organization
+%include cli/text/help/organization.txt
 EOF
 }
 

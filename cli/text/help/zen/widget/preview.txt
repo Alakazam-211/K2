@@ -1,0 +1,49 @@
+Usage: k2 zen widget preview --dir <folder> [<name>] [--config key=value]... [--json]
+       k2 zen widget preview --dir <folder> [<name>] --shot <png> [--theme dark|light]
+                             [--width N] [--height N] [--zen-theme <name>]
+                             [--data <file.json>] [--config key=value]... [--json]
+       k2 zen widget preview --clear [--json]
+
+Try a staged widget folder in Zen without touching your Gardens. K2 writes it
+as widgets/preview-<name>/ (its manifest id renamed to match) and places it,
+alone, on K2's own "Widget preview" Garden (made the first time). Each preview
+replaces the last. Open Zen and switch to "Widget preview" to see it.
+
+  --dir <folder>         the staged folder (checked first; errors refuse it).
+  <name>                 defaults to manifest.json's "id", else the folder name.
+  --config key=value     the placement's config, repeatable. A card that reads
+                         data sources takes them here, for example
+                         --config sources=fleet,k2-ops-boxes
+  --clear                remove the preview Garden and every preview-* widget.
+
+The preview runs as its own widget (preview-<name>): it has its own empty
+store, and its runtime errors are k2 zen widget errors preview-<name>.
+Who may preview: the person, or any agent in a K2 terminal (it never
+touches the person's Gardens). Check without writing: k2 zen validate --dir.
+
+--shot <png>: a picture instead, with nobody at a Zen window. K2 checks and
+bundles the folder exactly as Zen would, puts it in K2's real widget frame
+on a Garden canvas, answers its calls from a stand-in bridge with sample
+data, and renders it headless in WebKit (the engine of K2's desktop app).
+It writes only the PNG: no Garden, no widget folder, no store. Any local
+agent may shoot, and Zen needn't be set up.
+  --theme dark|light     the Garden's scheme (default: the theme's own, else
+                         light). The card follows the Garden, never the OS.
+  --zen-theme <name>     a built-in Zen theme: basic (default), paper,
+                         midnight, haunted, glass.
+  --width N --height N   the card's size in CSS pixels (default 420x360;
+                         120 to 2400). The PNG is drawn at 2x.
+  --data <file.json>     your own data instead of the samples: one object,
+                         keys "<verb> <first arg>" or "<verb>" (for example
+                         "sources.subscribe fleet": a card view, "agents.list":
+                         rows) and "store": {key: value} preloaded.
+  --libs <dir>           K2's zen-lib folder, for a widget with
+                         requires.libs (found by itself in a K2 checkout).
+  --wait-ms N            settle time after the widget says ready (default 400).
+Needs Node.js and Playwright's WebKit:
+  npm install -g playwright && npx playwright install webkit
+
+Exit: 0 previewed, cleared or shot (and the widget said ready) · 1 refused
+(errors), or the shot widget threw or never said ready (the PNG is still
+written) · 2 usage · 3 needs a person, Zen isn't set up, or --shot has no
+Node/Playwright WebKit.

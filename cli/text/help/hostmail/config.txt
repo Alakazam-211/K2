@@ -1,0 +1,118 @@
+Read or change mail configuration. Global defaults and relay stay owner.
+mail_manage (IT) agents may set --address-cap / --quota-bytes /
+--quota-gb / --quota-messages / --agent-send / --always-bcc with
+--workspace for any workspace — except --agent-send / --always-bcc on
+their OWN workspace (exit 3 owner_only: an agent can't loosen mail rules
+on its own sends). With no setting flags it prints the
+current config; with flags it applies them. 0 = unlimited. New mints
+default unlimited; mail-manage sets a cap per inbox. Existing boxes
+need `k2 hostmail quota set` (mint constants do not retrofit).
+
+USAGE
+  k2 hostmail config                                   Read the effective config
+  k2 hostmail config [--send-mode direct|relay|receive-only] [--domain <d>]
+                 [--relay-host <h> --relay-port <p> --relay-user <u>
+                  --relay-pass-stdin]
+                 [--agent-send off|approval|on] [--address-cap <n>]
+                 [--quota-bytes N|--quota-gb N] [--quota-messages N]
+                 [--workspace <ws>]
+  k2 hostmail config --workspace <ws> --always-bcc <addr>[,<addr>]
+  k2 hostmail config --workspace <ws> --always-bcc ''    Clear the policy
+  k2 hostmail config --forward-new-per-day <n>           The owner only; give it alone,
+                                                         not with other flags
+  k2 hostmail config --forward-copies-per-day <n>        The same
+  k2 hostmail config --forward-copies-per-hour <n>       The same
+
+FLAGS
+  --send-mode <m>        Per-domain outbound path (pair with --domain):
+                         direct (from this box's IP — requires a passing
+                         doctor grade) | relay (smart host) | receive-only
+  --relay-host/--relay-port/--relay-user
+                         Smart-host SMTP relay credentials
+  --relay-pass-stdin     Read the relay password from stdin (never argv)
+  --agent-send <m>       Agent send gating: off (default) | approval | on
+                         (pair with --workspace for a per-workspace override)
+                         With sending on, an agent that reads a malicious
+                         email can be talked into sending any mail it can
+                         read, with its attachments, and any workspace file
+                         that doesn't look like a secret, to any address: up
+                         to 20 messages an hour and 100 a day per mailbox,
+                         at 25 MiB each. Nobody is asked or told at send
+                         time; the outbox records it afterwards. The secret
+                         check catches mistakes, not intent. The DMARC check
+                         only slows forged senders, and an attacker's own
+                         domain passes it. Use approval for any agent that
+                         reads mail from outside.
+  --address-cap <n>      Addresses per workspace (0 = unlimited; default 5).
+                         Pair with --workspace; the global default is owner.
+  --quota-bytes <n>      Mailbox disk quota for NEW mints (0 = unlimited,
+                         and that is the default). Pair with --workspace.
+                         Existing boxes need `k2 hostmail quota set`.
+  --quota-gb <n>         Same as --quota-bytes, in GiB (× 2^30). Not both.
+  --quota-messages <n>   Mailbox message cap for NEW mints (0 = unlimited,
+                         and that is the default). Pair with --workspace.
+  --workspace <ws>       Scope --agent-send/--address-cap/--quota-*/
+                         --always-bcc to one workspace (required for
+                         mail_manage agents)
+  --forward-new-per-day <n>
+                         THE OWNER ONLY (not an Admin, not an agent, even
+                         with mail-manage). How many new outside addresses
+                         this server may add a day, across all mailboxes.
+                         Default 20; 0 stops new ones; above 1000 is refused.
+                         It doesn't change the limit of 100 forward addresses
+                         per mailbox. Nothing else relaxes: every new address
+                         still gets K2's email with a stop link, you're still
+                         told, and K2 still pauses an address that bounces or
+                         refuses. Once K2 has sent 60 of those emails in the
+                         last hour, it sends 2 a minute and turns each forward
+                         on after its email: 300 at once take about 2 hours,
+                         1000 about 8. k2 hostmail config shows the number
+                         under forwarding.newOutsidePerDay.
+  --forward-copies-per-day <n>
+                         THE OWNER ONLY (not an Admin, not an agent, even
+                         with mail-manage). How many forwarded copies one
+                         mailbox may send to outside addresses in 24 hours
+                         before K2 pauses all its outside forwards (daily_cap).
+                         The same number for every mailbox. Default 500; 1 to
+                         24000 (what one mailbox could send with the server's
+                         1,000 an hour to itself). It takes effect at once; a
+                         mailbox already paused for it stays paused until
+                         someone resumes it (k2 hostmail forward resume), which
+                         also starts its count over. Mail that arrived during
+                         the pause stays in the mailbox and isn't forwarded.
+                         Lower it under what's been counted and the next copy
+                         pauses the mailbox.
+  --forward-copies-per-hour <n>
+                         THE OWNER ONLY, the same. How many copies one mailbox
+                         may send an hour; above that the mail server holds the
+                         rest in its queue. The same number for every mailbox.
+                         Default 100; 1 to 1000, because the server as a whole
+                         stops at 1,000 an hour whatever this says, so a mailbox
+                         using all of that leaves none for the others. K2 writes it
+                         to the mail server right away; if that fails it says
+                         so, the old number holds, and K2 tries again within the
+                         hour. Copies still waiting from before keep their turn.
+                         k2 hostmail config shows both under forwarding, and k2
+                         hostmail forward show shows them with a mailbox's count.
+                         Neither changes what K2 pauses for refusals: a mailbox
+                         that sends more reaches those limits sooner.
+                         If copies a day is more than 24 times copies an hour,
+                         the answer warns you: only 24 times can leave in a
+                         day, and the mail server gives up on a copy still
+                         waiting after about 3 days.
+  --always-bcc <list>    OWNER/ADMIN ONLY. Blind-copy these addresses on
+                         EVERY email this workspace's agent sends (send and
+                         reply, hosted and linked; approval-queued and
+                         scheduled sends keep them). Comma-separated, max 9;
+                         '' clears. Counts toward the 10-recipient limit — a
+                         send that would exceed it is refused, never
+                         trimmed. The agent can't set, clear, or skip it
+                         (mail-manage agents included). The outbox marks
+                         these as "bcc (owner policy)". Shown under
+                         workspaceOverrides[].alwaysBcc in `k2 hostmail
+                         config`. Needs --workspace.
+  --json                 JSON output
+
+Per-workspace --agent-send (and --always-bcc) also work on macOS — they
+gate linked inboxes too. `k2 mail sending <ws> [off|approval|on]` is the
+short form for agent-send.

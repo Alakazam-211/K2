@@ -1,0 +1,26 @@
+Dry-run: what each backup mode would cost on THIS box. Changes nothing.
+
+USAGE
+  k2 hostmail backup plan [--bandwidth-mbps N] [--keep-daily N]
+                          [--keep-weekly N] [--max-local-gb G] [--json]
+
+PER MODE (local, offsite-only, both, none)
+  local disk    first night (mutable files + /etc/stalwart + K2 half) and
+                steady state (views + churn deleted while views are kept,
+                capped by --max-local-gb)
+  offsite       first upload (≈ the store, shown as a range) and nightly
+                upload (≈ churn), rough time at --bandwidth-mbps (default
+                50), and the temporary space an upload needs
+  downtime      a conservative estimate (not measured yet)
+  verdict       OK / TIGHT / REFUSED against the free-space floor
+                max(5 GiB, 10% of the filesystem)
+
+Churn is "measured over N days" once the observer has 3 days, else
+"unmeasured — conservative bound" (10% of the store per day).
+
+planHash
+  Pass it to `k2 hostmail backup set --confirm-plan <hash>` with the SAME
+  --keep-daily/--keep-weekly/--max-local-gb. It changes when the numbers
+  change (rounded to GiB), so a stale plan is refused.
+
+GET /cli/mail/backup/plan. it-email agent (mail-manage) or owner/admin.

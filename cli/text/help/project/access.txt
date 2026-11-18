@@ -1,0 +1,20 @@
+Turn a workspace agent's "Let this agent manage K2 projects" switch on or off. Projects are
+open by default (the switch starts ON). Off: that workspace's agent can't
+create, rename or delete projects or change their members or settings
+(code agent_permission_off); it can still list, show and read projects and
+post in its project chat. You (the owner) and people are never limited.
+
+Owner or admin only. Inside a K2 terminal this sends the session passport,
+which the daemon refuses: an agent can never flip its own switch. Run it from
+a terminal outside K2, or use Settings → Workspaces / Agents → <ws> → Permissions.
+
+USAGE
+  k2 project access on|off [--workspace <ws>] [--json]
+
+FLAGS
+  --workspace <ws>       The workspace (name or path); default: this one
+  --json                 JSON output
+
+EXAMPLES
+  k2 project access off --workspace scout
+  k2 project access on --workspace ~/agents/scout

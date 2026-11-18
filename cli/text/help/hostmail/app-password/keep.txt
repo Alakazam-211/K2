@@ -1,0 +1,17 @@
+Mark an app password as one you handed out, so `k2 hostmail doctor`
+stops listing it under "Mail passwords an agent may hold". The owner, or
+an IT agent for any mailbox but its own workspace's (exit 3 owner_only);
+agents without mail-manage exit 3. Shows and changes no secret. If you
+don't know who has it, revoke it instead (`k2 hostmail app-password
+revoke <addr> <id>`). POST /cli/mail/credentials/keep {address,
+appPasswordId}.
+
+--all-existing marks every app password created before the 0.45.0 update
+(by its creation time on the mail server). Newer ones, and any with no
+creation time, are never covered — review them one by one. Already
+marked ones are left as they are. An IT agent's run skips its own
+workspace's mailboxes (left for the owner).
+
+USAGE
+  k2 hostmail app-password keep <addr> <id> [--json]
+  k2 hostmail app-password keep --all-existing [--json]

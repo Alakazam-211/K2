@@ -1,0 +1,21 @@
+k2 app uninstall <app-id> [--purge] [--drop-access] [--json]
+
+Stop the App and remove it from this box. Its data folder stays
+(~/.k2/apps/<app-id>) unless --purge.
+
+Before it removes anything, K2 counts what the App would lose: people's
+App logins, chat grants the App gave, other grants on the App, the owner's
+grants to it, secrets shared with it, and chat Spaces bound to it. If any
+count is above zero, nothing is removed: the command exits 3 with the
+error code uninstall_drops_access and lists the counts. That is a safety
+stop, not a failure. A reinstall is a new App and gets none of it back.
+
+  --drop-access   Uninstall anyway; all of the above is lost. Same rules
+                  for who may uninstall as without it.
+  --purge         Uninstall and also delete the App's data folder. The
+                  owner confirms in person every time (an agent can't).
+                  --purge alone drops the access above too, without the
+                  safety stop.
+  --json          Print the daemon's answer as JSON.
+
+Only wanted a public URL? Don't reinstall: k2 app expose <app-id> --tunnel.

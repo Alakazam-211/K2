@@ -1,0 +1,4 @@
+Show the current host-wide outbound footer or none.
+
+USAGE
+  k2 hostmail footer show [--json]

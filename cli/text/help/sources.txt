@@ -1,0 +1,54 @@
+k2 sources — data sources: HTTP JSON checks this server runs for Garden cards and agents
+
+  k2 sources list [--all] [--json]          every source with its state
+  k2 sources show <name> [--json]           definition + current state
+  k2 sources read <name> [--json]           current state (the card view)
+  k2 sources history <name> health|<series> [--item K] [--from <dur|epoch>] [--to …]
+  k2 sources status [--json]                the poller: in flight, behind, parked sites
+  k2 sources export <name>                  definition as JSON (feeds propose --from)
+  k2 sources propose --from <file.json> | --name N --label L --url URL [flags…]
+  k2 sources add …                          like propose; people only (Settings or outside K2)
+  k2 sources edit <name> [flags…]           change a source (agents: only their own)
+  k2 sources remove <name> --yes            the name is held for 7 days
+  k2 sources pause|resume <name>            people, or agents with the switch below
+  k2 sources mute <name> --for 30m [--reason "…"]   agents: up to 2 h, reason required
+  k2 sources unmute <name>
+  k2 sources refresh <name> [--wait]        check now (at most once per 15 s)
+  k2 sources try [propose flags] | --name <saved> [--targets N]   fetch once (every target)
+  k2 sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for 1h]
+  k2 sources pending [--names a,b]          proposals waiting (agents: their own)
+  k2 sources approve <name>… [--secret NAME]        one secret for every name: ONE confirm
+  k2 sources secret <name>… NAME|--none     bind (or unbind) one secret: all or none, ONE confirm
+  k2 sources pin|unpin <name>               pinned: agents without the switch can't change it
+  k2 sources trigger list|show|log|propose|add|edit|approve|pause|resume|remove|test …
+  k2 sources access on|off [--workspace <ws>]   owner/admin: the agent switch below
+
+AGENTS AND "LET THIS AGENT MANAGE GARDENS AND DATA SOURCES"
+  A per-agent switch (Settings → Workspaces / Agents → <ws> → Permissions
+  → Projects and Gardens, or
+  `k2 sources access on --workspace <ws>` outside K2). Off (the default): an
+  agent proposes; pending, approve, secret, pause/resume, pin/unpin and
+  trigger approve/add/pause/resume exit 3 (person_only). On: the agent does
+  all of those itself with no confirm (approve its own proposals and others'
+  on this server). It binds only a secret it may already use: its own
+  workspace's secret, or a server secret when it also has "Let this agent
+  manage server-wide secrets" (else secret_not_usable, exit 3). The bind still goes
+  only to the source's one site, inside the secret's own sites. It never sets
+  viewers / agent-access / keep or a trigger's cooldown or cap. Every act is
+  logged with the agent and its session (Settings → Logs → Access Audit).
+  Only the owner or an admin flips the switch; an agent never can.
+
+RULES AND THRESHOLDS (k2 sources propose --help has every flag)
+  --rule 'field:crit:op:v,warn:op:v,ok:op:v' with eq ne in lt lte gt gte exists, ageGt/ageLt
+  (a timestamp's age), versionBehind/versionAtLeast (semver), and @field to compare two
+  fields (box version vs target_version). failAfter (--fail-after, default 3) is how many
+  checks in a row a reading waits before it goes hard. warnAfter:N / critAfter:N on any
+  rule opts the source in to per-rule thresholds: failAfter then counts FETCH failures
+  only, and each rule waits its own warnAfter (default 1: at once) / critAfter (warn after
+  1, crit after N). Without them a source behaves as before 0.46.1.
+  --expect-status 200,401 makes a status-only check.
+  More lists: --list / --list-field; an array's length: --count.
+
+Exit codes: 0 ok, 1 failure, 2 usage, 3 needs a person, 4 not found.
+--json prints the daemon's answer as is (also on errors).
+Each verb has its own page: k2 sources <verb> --help. More: k2 study data-sources

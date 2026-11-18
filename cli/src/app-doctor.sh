@@ -1,38 +1,7 @@
 # ── k2 app doctor --store (0.46.9, the Tauri App SDK) ──────────────
 _app_store_doctor_usage() {
     cat <<'EOF'
-k2 app doctor --store — is this Tauri App ready for App Store and Play review?
-
-  k2 app doctor --store [<folder>] [--voice | --no-voice] [--json]
-      Checks a Tauri v2 app's repo (default: this folder) and prints each
-      problem with its fix. It only reads; it never changes a file.
-
-  What it checks:
-    all       Tauri 2.12.5 or newer (older: the 2.10 deadlock, a launch crash
-              on iOS 27, an IPC request that aborts the app); K2's patched wry
-              (without it, any iframe in your page can call your Tauri
-              commands)
-    iOS       src-tauri/PrivacyInfo.xcprivacy, its reasons, and that the iOS
-              target includes it; UIApplicationSceneManifest (iOS 27);
-              ITSAppUsesNonExemptEncryption (the export answer)
-    calls     the mic and camera usage strings (iOS and macOS), background
-              audio (iOS), the mic entitlement (macOS), and on Android the
-              mic, camera and foreground-service permissions
-    Android   POST_NOTIFICATIONS
-  iOS checks run when src-tauri/Info.ios.plist or src-tauri/gen/apple is
-  there; Android checks when src-tauri/gen/android is. The rest are skipped,
-  and it says so.
-
-  --voice / --no-voice   check calls, or don't. Default: it checks calls when
-                         the repo has them (src-tauri/src/k2_voice.rs, a mic
-                         usage string, or Sew's voice plugin).
-  --json                 {voice, voiceWhy, tauri, tao, wry, findings[{id,
-                         level, platform, path, problem, fix}], passed[],
-                         notes[], ok}
-
-  Exit: 0 when nothing is an error (warnings may remain), 1 otherwise.
-  Fix a missing file with k2 app init --template tauri [--voice] (it never
-  overwrites a file). Why each one matters: k2/README.md, and k2 study tauri.
+%include cli/text/help/app/doctor-store.txt
 EOF
 }
 
@@ -1491,27 +1460,7 @@ cmd_app_uninstall() {
 
 _app_uninstall_usage() {
     cat <<'EOF'
-k2 app uninstall <app-id> [--purge] [--drop-access] [--json]
-
-Stop the App and remove it from this box. Its data folder stays
-(~/.k2/apps/<app-id>) unless --purge.
-
-Before it removes anything, K2 counts what the App would lose: people's
-App logins, chat grants the App gave, other grants on the App, the owner's
-grants to it, secrets shared with it, and chat Spaces bound to it. If any
-count is above zero, nothing is removed: the command exits 3 with the
-error code uninstall_drops_access and lists the counts. That is a safety
-stop, not a failure. A reinstall is a new App and gets none of it back.
-
-  --drop-access   Uninstall anyway; all of the above is lost. Same rules
-                  for who may uninstall as without it.
-  --purge         Uninstall and also delete the App's data folder. The
-                  owner confirms in person every time (an agent can't).
-                  --purge alone drops the access above too, without the
-                  safety stop.
-  --json          Print the daemon's answer as JSON.
-
-Only wanted a public URL? Don't reinstall: k2 app expose <app-id> --tunnel.
+%include cli/text/help/app/uninstall.txt
 EOF
 }
 
@@ -1557,40 +1506,7 @@ print(v.get("next", ""))'
 
 _app_expose_usage() {
     cat <<'EOF'
-k2 app expose <app-id> --tunnel [--transfer] | --local [--json]
-
-Turn an installed App's public URL on or off, with no reinstall.
-
-  --tunnel     Give the App its public URL, https://<app-id>.<box>.k2.dev
-               (the same one k2 app install --tunnel makes). Needs K2
-               Connect with a Pro plan on this box; without it the answer
-               is exit 3 (engine_unavailable) and nothing changes.
-  --transfer   With --tunnel, owner or admin only. Use it when that name
-               already points at something else on this box (a hostname
-               made by hand, say) that no workspace holds: --transfer moves
-               it to the App. Without it you get exit 3
-               (label_exists_elsewhere) and nothing changes; an agent gets
-               that answer with or without --transfer. A name another
-               workspace holds is never moved: exit 3, naming its agent.
-  --local      Remove the public URL; the App answers on this box only. If
-               the name now belongs to another workspace, or points
-               somewhere else, it is left as it is: the answer says so and
-               the App is still set to local only (exit 0).
-  --json       Print the daemon's answer as JSON.
-
-What stays: the same App, its users' logins and sessions, grants, shared
-secrets and chat Spaces. Nothing is reinstalled.
-
-After a change (--tunnel or --local):
-  1. Chat (Sew) learns the App's new address within seconds.
-  2. Run k2 app restart <app-id>. The App reads its public address from
-     K2_APP_ORIGIN (and K2_APP_ORIGINS) when it starts; with no public URL
-     those are unset. A deploy also starts it with the new values.
-
-Who: the owner, an admin, or the App's own agent with "Build and run
-Apps". An agent without that switch, or with another App already public
-(an agent's limit is one public URL), gets a request held for the owner
-(exit 2); the message says which. The owner sees it in k2 app approvals.
+%include cli/text/help/app/expose.txt
 EOF
 }
 
@@ -1631,14 +1547,7 @@ if isinstance(e, dict) and e.get("code") == "vault_confirm_required" and e.get("
 # Exit: 0 done, 2 held (an offer, or a card for the owner), 3 refused, 1 failed.
 _app_handover_usage() {
     cat >&2 <<'USAGE'
-usage: k2 app handover <app> --to <workspace> [--brief FILE] [--dry-run]
-         [--db share|wait] [--collisions keep|use_b] [--reset-shared] [--copy-source] [--reason TEXT]
-       k2 app handover accept|decline|cancel|undo|finish|rekey <app> [--reason TEXT]
-       k2 app handover status [<app>] [--detail]
-       k2 app handover brief <app>
-  The App's own agent offers it (the agent that takes it accepts); the
-  owner approves one card in person. Run by the owner outside K2, it
-  files the card and asks for the confirm. --dry-run shows what would move.
+%include cli/text/help/app/handover.txt
 USAGE
 }
 

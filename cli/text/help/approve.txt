@@ -1,0 +1,39 @@
+k2 approve — ask a person to approve something on their phone
+
+A program that is about to act (the relying party: a release signer, a
+payment service) writes down exactly what it will do as a payload file:
+"K2-SIGNED-APPROVAL-1", a zero byte, then JSON. You send that file to a
+person. They read it on their own phone, approve with Face ID (or their
+passcode), and the phone signs the exact bytes. You get back an approval
+record, and you give it to the relying party, which checks the signature
+with keys it already trusts. K2 only carries the bytes: it can't approve
+anything, and neither can you.
+
+  k2 approve request --payload <file> [--to <login>] [--wait] [--out <file>] [--json]
+      Ask. Without --to: the person you work for (this server's owner).
+      Anyone else must first allow you to ask them, in K2.
+      --wait   wait for the answer (until the payload's answer_by)
+      --out    with --wait: write the approval record there when approved
+      Prints the request id (ap_…). Exit 0 asked (or, with --wait,
+      approved); 1 declined, expired or cancelled; 2 a bad payload or
+      request; 3 refused (no permission, not allowed to ask them, limits).
+  k2 approve status [<id>] [--out <file>] [--json]
+      One request (with --out: write its approval record once approved),
+      or your recent requests.
+  k2 approve cancel <id>
+      Withdraw a request that is still waiting.
+
+Rules:
+  - You need the approve.request permission. An Owner or Admin turns it on:
+    k2 approve agents <workspace> on   (or ask: k2 permission request approve.request)
+  - At most 3 of your requests wait at once, 20 asks an hour. A payload's
+    nonce is sent once; make a new payload to ask again.
+  - answer_by must be in the future and at most 60 minutes away.
+  - Never put a secret in a payload: the person's phone shows every field.
+  - Only the person answers, on their own phone. You can't answer for them.
+
+People (Owner or Admin): k2 approve agents [<workspace> on|off] lists or
+sets which agents may ask.
+
+Relying parties check a record on their own machine, never through K2:
+k2 approve verify / show / key-id (no daemon; k2 approve verify --help).

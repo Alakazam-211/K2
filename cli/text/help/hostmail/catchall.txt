@@ -1,0 +1,8 @@
+Unknown local recipients on a hosted domain go to one minted mailbox
+on that domain (Stalwart Domain.catchAllAddress). Unset rejects them
+at SMTP. mail_manage. Not a domain alias.
+
+USAGE
+  k2 hostmail catchall set <domain> --address <addr> [--json]
+  k2 hostmail catchall unset <domain> [--json]
+  k2 hostmail catchall show <domain> [--json]

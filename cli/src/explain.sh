@@ -12,26 +12,7 @@ _K2_REFUSAL_AREA=""
 # `k2 explain [<id>] [--json]`.
 _explain_usage() {
     cat <<'EOF'
-k2 explain [<id>] [--json]
-
-What an App refusal id means and how to fix it. Every App route refuses
-with a stable id: the "error" field of the JSON line a refused k2 app
-command prints (with a "fix:" line after it). Look the id up here.
-
-  k2 explain                 every id, by area
-  k2 explain <id>            what happened, the fix, who fixes it
-  k2 explain <id> --json     the same, one JSON object:
-                             {id, area, http, exit, what, fix, who,
-                              askable, status, aliases}
-
-Ids are lowercase with underscores (apps_manage_off). In a row: "exit" is
-the code the refused command exits with; "who" is who can fix it (you,
-the owner, an Admin, the person signed in, or K2 itself); "askable" means
-k2 permission request can ask for it (the refusal ends with an Ask with:
-line to run). "retired" ids are ones only older K2 servers send; they
-still explain. Works with the daemon down. All of them on one page:
-k2 study app-errors.
-This command's own exit codes: 0 found, 4 unknown id, 2 bad usage.
+%include cli/text/help/explain.txt
 EOF
 }
 
@@ -104,32 +85,7 @@ if row.get("aliases"):
 # `k2 capabilities [--json] [--node <n>]` (TC-17).
 _capabilities_usage() {
     cat <<'EOF'
-k2 capabilities [--json] [--node <name>]
-
-What this K2 server can do for Apps, before you try: one row per
-capability, "ok" or "no". A "no" row names the reason, the fix and the
-refusal id you would hit (k2 explain <id>).
-
-  this box   Apps on, engines (walled, open, static), protocols, public
-             ports, custom domains, phone simulators, Postgres versions,
-             mail, push keys per App (set or not, never the keys), the
-             update feed, limits (Seed, archive, upload part, disk guard)
-  compute    each node your workspace may use: OS, CPU type, free slots,
-             Xcode, Android SDK, tools
-
-  --node <name>  only that compute node's row (k2 compute nodes)
-  --json         {schema: 1, box: [...], compute: [...], doctor: {...}};
-                 a row is {cap, ok, detail, missing?: {reason, fix, code}}
-
-Rows to look for: protocols.other (HTTP/2 to the App, gRPC, UDP),
-ports.public, engine.static, updates, push.<app> (one per App you see:
-its APNs and FCM keys set or not), node.<name>.
-Reasons: not_built (K2 doesn't do it yet), owner_disabled (the owner
-turned it off), level (your access doesn't reach it: ask the owner),
-not_prepared (the box isn't set up for it yet), hardware (this machine
-can't).
-k2 app doctor stays the box's setup check; its result is in "doctor".
-Exit codes: 0, 3 refused, 2 bad usage.
+%include cli/text/help/capabilities.txt
 EOF
 }
 

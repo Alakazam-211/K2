@@ -1,0 +1,6 @@
+k2 done [--blocked "reason"] [--agent <name>]
+  Mark your task done, or blocked with a reason (POST /cli/done).
+  --agent defaults to K2_AGENT_NAME. Other words are ignored; any other
+  flag is a usage error (exit 2) and nothing is sent.
+In a session the API started (K2_API_CELL=1): k2 done [--reason <text>]
+  completes that session instead (k2 done --help there says more).

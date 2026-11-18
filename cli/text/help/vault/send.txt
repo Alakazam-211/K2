@@ -1,0 +1,74 @@
+k2 vault send — hand a vault secret to another agent by name (you never see the value)
+
+  k2 vault send NAME --to <agent>|<agent>::<host> [--as NEWNAME] [--note "…"] [--ttl 7d] [--json]
+                                    same server: vault to vault; another server: sealed to its vault
+  k2 vault send NAME --to <agent> --delivery file|env [--kind generic]
+                                    a code or token for a CLI: they get it as a file
+                                    ($K2_SECRETS_DIR/NAME) or env; no sites, no header
+  k2 vault send NAME --to <agent> --delivery fetch
+                                    an HTTP API key: K2 adds it to requests to its sites
+  k2 vault incoming [--workspace <ws>] [--json]     secrets sent to this agent (names only)
+  k2 vault sent [--workspace <ws>] [--json]         what this agent sent
+  k2 vault accept-from list [--workspace <ws>] [--json]   who may land secrets here without asking
+  k2 vault ask <agent>|<agent>::<host> NAME [--note "…"] [--workspace <ws>] [--json]
+                                    ask an agent for a secret (no value travels)
+  k2 vault send NAME --to <agent> --reply <ask-id>  answer an ask: it lands straight in
+  k2 vault asks [--workspace <ws>] [--json]         open and closed asks, in and out
+  k2 vault unsend <delivery-id> [--json]            take a delivery back (not a revoke: rotate the key)
+  k2 msg <agent> "text" --secret NAME               the same send, the text is the note
+
+  Sent to you and waiting (an agent):
+  K2 puts a permission card on your Thread: a person taps Allow (accept) or
+  Deny (decline) there, on the desktop or the phone. Nothing for you to run.
+  No card there (it couldn't go up, or it's from before 0.46.10)? k2 vault
+  incoming puts it up, or ask for one (permission cards on):
+  k2 permission request vault.incoming.accept id=<delivery-id> [as=NEW|replace=yes] --why "…"
+
+  A secret a person gave you, to another server (an agent):
+  the send is refused (held, exit 3). Permission cards on: run the Ask with:
+  line it prints (several for one agent: secret=A,B,C):
+  k2 permission request vault.send secret=NAME to=<agent>::<host> --why "…"
+  An Owner or Admin sends it from the card, or lets you send it there from
+  now on. Cards off: ask them to add it in Settings → Workspaces / Agents →
+  <you> → Permissions → Secrets it may send to other servers.
+  k2 vault send-allow [--workspace <ws>] [--json]   what you may send to another server without asking
+
+  People only (your own terminal, not a K2 terminal; the card does the same):
+  k2 vault incoming accept <id> [--as NEW] [--replace] [--always] [--json]
+  k2 vault incoming decline <id> [--json]
+  k2 vault accept-from add|remove <ws:agent|agent|agent::host|team:id> --workspace <ws> [--json]
+  k2 vault send-allow add|remove NAME --to <agent>::<host> --workspace <ws> [--json]   (add asks for the vault confirm)
+  k2 vault send NAME --to <agent> --workspace <ws> | --scope ws:<ws>|server
+                                    which secret of that name (an agent sends its own workspace's)
+  printf '%s' "$KEY" | k2 vault send NAME --to <agent>::<host> --stdin [--kind api_key] [--for host[,host]]
+                                    a value you type in, to another server only
+
+Secrets arrive pending: a person on the receiving server accepts them on
+the card K2 puts on the receiving agent's Thread, unless that agent
+accepts from you (k2 vault accept-from) or you answer its ask. A same-named secret is never overwritten; re-sending the
+same secret makes a new version. A secret a person gave needs a person's
+yes to go to another server (the vault.send card above, or a standing yes
+from k2 vault send-allow). Server-wide secrets aren't sent (the owner
+shares them with k2 vault grant).
+
+The copy keeps the sender's delivery (or --delivery), at most env and
+never api: fetch with sites stays fetch (k2 vault fetch), fetch with no
+sites lands as file, file stays file, env stays env. Deliveries go
+fetch < file < env (env is the most readable). --delivery can't go above
+your own copy's ceiling (delivery_above_ceiling, exit 3: a person raises
+it). A file copy is $K2_SECRETS_DIR/NAME (not there yet? k2 vault sync; no
+$K2_SECRETS_DIR at all: restart the session), or k2 vault file --secret
+NAME for a 0600 path to hand a tool on stdin, never the value on a command
+line. The accept card shows the delivery and the ceiling; once a person
+accepts it, the receiving agent may take it up to that ceiling itself, no
+owner needed: k2 vault grant NAME --to ws:<you> --as env (then
+k2 vault env-file --secret NAME works at once; $NAME in new sessions).
+k2 vault incoming and k2 vault show NAME say how to use each one. --replace takes the incoming
+delivery (a wider one needs an Owner or Admin). --ttl is kept on the other
+side: the copy (and a pending card) ends that long after it was sent.
+
+Exit codes: 0 landed · 3 a person must act (pending, held, declined, not
+connected, not allowed) · 2 bad request or the peer can't (peer_too_old,
+federation_off, never_sendable, send_by_name_only) · 4 no such secret or
+agent · 1 unreachable or internal. Don't retry on 3.
+More: k2 study vault

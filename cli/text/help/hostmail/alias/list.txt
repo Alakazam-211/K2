@@ -1,0 +1,4 @@
+Extra addresses on that User (not the primary mint).
+
+USAGE
+  k2 hostmail alias list <mailbox> [--json]

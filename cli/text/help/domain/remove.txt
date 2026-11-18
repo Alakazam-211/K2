@@ -1,0 +1,4 @@
+Detach an apex from this server (cascades hostnames).
+
+USAGE
+  k2 domain remove <apex> [--json]

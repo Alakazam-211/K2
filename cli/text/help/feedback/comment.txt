@@ -1,0 +1,28 @@
+Add a message to a feedback item's discussion thread. Bumps the card's
+message count only — your comment does NOT change the item's status and does
+not fire a notification (only NEW items notify).
+
+Use it to reply when a person wrote free text (status needs_discussion).
+When you have settled it, mark it answered with
+`k2 tickets resolve <id> --answered "<outcome>"`, or `k2 tickets resolve <id>`.
+
+USAGE
+  k2 tickets comment <id> "<text>" [flags]
+  k2 tickets comment <id> --file <path> [--file <path>…]
+
+ARGUMENTS
+  <id>                   A feedback id from `ask`/`list` (short unique prefix ok)
+  <text>                 The message (quote it). Optional with --file.
+
+FLAGS
+  --file <path[:line[-end]]>
+                         Attach a file from the TICKET's workspace (repeatable,
+                         at most 10). A path that exists here is sent absolute;
+                         anything else resolves against the ticket's workspace
+                         root (which may not be yours). Secrets are refused
+                         (use k2 vault). Read them back with k2 tickets show.
+  --json                 JSON output
+
+EXAMPLES
+  k2 tickets comment ab12cd34 "Here's the fixed build" --file out/report.pdf
+  k2 tickets comment ab12cd34 --file src/session.rs:120-140

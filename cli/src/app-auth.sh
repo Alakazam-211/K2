@@ -1,45 +1,7 @@
 # ── k2 app auth (0.46.9, prd-app-hosted-sign-in-v1) ─────────────────
 _app_auth_usage() {
     cat <<'EOF'
-k2 app auth — the sign-in door: your App's own sign-in page posts the
-password straight to K2 at /.k2/auth/* on the App's own host, never to your
-server. K2 answers that path before your App sees it and gives back a
-one-time code; your server swaps the code for the person's pass
-(k2.auth.exchange). How to build the page: k2 study auth-pages.
-
-  k2 app auth [<app>] [--json]          Is the door on for this server? With
-                                        <app>: that App's door, its extra page
-                                        origins and its hosts.
-  k2 app auth door on|off [--json]      The server's switch, for every App on
-                                        this server (it starts off). The owner
-                                        only: an Admin or an agent gets
-                                        owner_only (exit 3).
-  k2 app auth door on|off <app> [--json]
-                                        That App only: the owner, an Admin, or
-                                        the App's own agent. off hands
-                                        /.k2/auth/* back to the App (one that
-                                        serves the path itself); on undoes
-                                        that. An App has a door only while the
-                                        server's switch is on too.
-  k2 app auth origins <app> [--origin O]… [--clear] [--json]
-                                        The page origins, beyond the App's own
-                                        host, whose posts the door takes and
-                                        answers with CORS: a bundled Tauri
-                                        page (tauri://localhost,
-                                        http://tauri.localhost). Each call
-                                        replaces the whole list; --clear
-                                        empties it. The webview origins the
-                                        App's phone pairing lists count too.
-
-Your App's own server reads the same answer for itself on its link, with
-no agent: k2.auth.doorStatus() (GET /cli/skin/auth/door with the App pass):
-{on, box, appOff, hosts: [{host, door}]}, its own App only.
-
-Who: door on|off with no <app> (the server's switch) is the owner's alone.
-One App's door (door on|off <app>) and its origins: the owner, an Admin, or
-the App's own agent with "Build and run Apps" (Settings → Workspaces /
-Agents → <agent> → Permissions → Apps). Every change is recorded. Exit
-codes: 0 ok, 2 bad usage, 3 refused (JSON with a code on stderr).
+%include cli/text/help/app/auth.txt
 EOF
 }
 
@@ -124,58 +86,7 @@ for w in v.get("warnings") or []:
 
 _app_pairing_usage() {
     cat <<'EOF'
-k2 app pairing — let people pair a custom App's own phone app by QR from
-the App's web page (no password typed on the phone). K2 serves the App's
-iOS and Android link files on its own k2.dev labels while pairing is on.
-
-  k2 app pairing status <app> [--json]
-                                       On or off, the phone apps, the hosts K2
-                                       pairs on, paired phones, the last check.
-  k2 app pairing setup <app> [--ios TEAMID.com.you.app]…
-                 [--android com.you.app:AB:CD:…[,AB:CD:…]]…
-                 [--host <app label host>]… [--native-origin tauri://localhost]…
-                 [--link-path '/jobs/*']… [--app-store URL] [--play-store URL]
-                                       Name the phone apps that open the App's
-                                       sign-in codes and turn pairing on. The
-                                       owner, in person: Touch ID, your login
-                                       or the vault password confirms it (from
-                                       a terminal outside K2). Every setup
-                                       replaces the last one.
-  k2 app pairing setup <app> --desktop-only [--native-origin tauri://localhost]…
-                 [--host <app label host>]…
-                                       An App with no phone app: turn pairing
-                                       on so its desktop app pairs with the
-                                       code the web App shows, typed in (K2
-                                       serves no link files; nothing opens the
-                                       QR). Same owner, same confirm, the same
-                                       checks. Not with --ios, --android or
-                                       --link-path. A Mac app that opens
-                                       universal links (Associated Domains)
-                                       can go under --ios TEAMID.bundle.id
-                                       instead, like an iPhone app.
-  k2 app pairing off <app>             Turn it off (the owner, an Admin or the
-                                       App's agent). Codes stop at once; phones
-                                       already paired stay signed in (end them
-                                       in k2 app people).
-  k2 app pairing check <app> [--json]  Fetch the link files from each host over
-                                       the internet (and Apple's CDN copy) and
-                                       compare them with what K2 serves.
-  k2 app pairing log <app> [--json]    The App's paired phones: when, who, the
-                                       device's name, the host, live or ended.
-
-v1 pairs on the App's own k2.dev labels. A custom domain works only when you
-front it to the label yourself. In your app, list each host exactly
-(applinks:jobs.you.k2.dev), never a wildcard. While pairing is on, K2 answers
-/.well-known/apple-app-site-association and /.well-known/assetlinks.json on
-those hosts: list the App's other universal-link paths with --link-path.
-
-Who: status and off: an Admin or the App's own agent ("Build and run Apps");
-log: the App's agent only when it may manage the App's users; setup and
-check: the owner in person (an agent asks with a permission card).
-
-The web App calls pairing.start / pairing.status; the phone (or desktop) app
-calls pairing.check, then pairing.redeem: k2 study app-pairing for the whole
-guide. K2 Companion's own phones are k2 users pair-phone (k2 users --help).
+%include cli/text/help/app/pairing.txt
 EOF
 }
 
@@ -404,70 +315,7 @@ for r in rows:
 # prints a key.
 _app_push_usage() {
     cat <<'EOF'
-k2 app push — notifications to a custom App's own phone app (its bundle id,
-its Apple team, its Firebase project). K2 keeps the App owner's Apple and
-Google keys in the vault and sends to Apple and Google itself. The App, its
-agent and other Apps can use the keys, never read them.
-
-  k2 app push status <app> [--json]   On or off, the keys' ids and fingerprints
-                                       (never a key), device counts.
-  k2 app push setup <app> [--apns-key AuthKey_XXXXXXXXXX.p8 --key-id XXXXXXXXXX
-                 --team-id YYYYYYYYYY --bundle-id com.you.app]
-                 [--fcm-service-account sa.json]
-                                       Store the App's Apple key and/or Firebase
-                                       service account. The owner, in person:
-                                       Touch ID, your login or the vault password
-                                       confirms it (from a terminal outside K2).
-                                       K2 checks each key before storing it.
-  k2 app push creds rm <app> --apns|--fcm|--all
-                                       Remove a key (the same confirm).
-  k2 app push check <app>              One real call per key to a fake token:
-                                       says whether Apple and Google accept it.
-  k2 app push on|off <app>             On is the owner's approval (also given by
-                                       approving push:send in a deploy); off is
-                                       the owner's, an Admin's or the App agent's.
-  k2 app push set <app> [--agent-replies on|off] [--chat on|off]
-                 [--previews on|off] [--max-devices N] [--register server|any]
-                                       Agent-reply pushes (off by default) and
-                                       their previews. --chat: DM and channel
-                                       pushes for the App's users in its Sew
-                                       Space (off by default; the server also
-                                       needs K2_APP_CHAT_PUSH=1); a tap opens
-                                       your phone app (k2Kind chat). With
-                                       every preview switch on, the sender's
-                                       name and the start of each message go
-                                       through Apple's and Google's push
-                                       services to reach phones; --previews
-                                       off sends only "New message". --max-devices: phones
-                                       that can get this App's notifications,
-                                       everyone together (owner; not sign-ins:
-                                       k2 app login settings --max-devices).
-                                       --register server: only your App's own
-                                       server may call push.register and
-                                       push.viewing, never a phone calling K2
-                                       directly (push_server_only). Pairing
-                                       still signs the phone in, its answer says
-                                       push {registered: false}, and your server
-                                       registers the token. Default any.
-  k2 app push send <app> (--to <user> [--to <user>…] | --room <room>)
-                 --title T --body B [--data key=value]… [--topic t]
-                 [--collapse-id c] [--thread-id t] [--sound s] [--badge n]
-                 [--priority high|normal] [--ttl secs] [--android-channel c]
-                 [--silent] [--json]   Send to this App's own users only.
-  k2 app push test <app> --to <user>  "Test notification from K2".
-  k2 app push log <app> [--json]       The last hour's sends: counts only.
-  k2 app push devices <app> [--guest <user>] [--json]
-                                       Each registered phone: platform,
-                                       environment, last seen. Never a token.
-  k2 app push devices rm <app> <apd_…> Remove one.
-
-Who: status and log: an Admin or the App's own agent. send, test and
-agent replies: an Admin or the App's agent with "…and manage them end to end".
-Keys: the owner in person only; an agent asks with a permission card.
-
-The phone app registers with the guest's own pass (push.register); see
-k2 study app-push for the whole mobile guide. K2 Companion's own phones are
-`k2 push` (k2 push --help).
+%include cli/text/help/app/push.txt
 EOF
 }
 
@@ -877,33 +725,7 @@ for d in ds:
 # email, or its agent here under its email sending setting.
 _app_email_usage() {
     cat <<'EOF'
-k2 app email — an App's own email (Email Notifications). The App sends from
-a sender the owner granted it (noreply@your-domain), never from a mailbox; no
-agent can read the sender's mail.
-
-  k2 app email show <app> [--json]   On or off, the sender, the recipient scope.
-  k2 app email on <app> --sender <address|id> [--scope users|any]
-                                     The owner, in person, from a terminal
-                                     outside K2 (Touch ID / login / vault
-                                     password confirms; scope any asks twice).
-  k2 app email off <app>             The owner, an Admin or the App's agent.
-  k2 app email test <app>            K2's fixed text to the owner's own address.
-  k2 app email send <app> --to <addr> [--to …] [--cc …] [--bcc …]
-                 --subject S (--text T | --text-file F) [--html-file F]
-                 [--reply-to <addr>] [--header X-Name=value]… [--tag t]…
-                 [--idempotency-key K] [--json]
-                                     The owner and Admins send as themselves;
-                                     the App's agent needs "…and manage them
-                                     end to end" and its email sending setting
-                                     (approval holds the email for the owner).
-  k2 app email log <app> [--limit N] [--status S] [--tag T] [--json]
-  k2 app email status <app> <id> [--json]
-
-Scope users (default): only this App's users whose address is confirmed
-(they used a link K2 mailed them). Scope any: any address, lower limits.
-Limits: 100 recipients an hour and 1,000 a day per App (any: 30 and 300;
-a domain's first 14 days: 20 and 200). Senders and relays: k2 notifications
-email --help. The whole guide: k2 study email-notifications.
+%include cli/text/help/app/email.txt
 EOF
 }
 
@@ -1157,108 +979,7 @@ cmd_app_email_status() {
 
 _notifications_usage() {
     cat <<'EOF'
-k2 notifications email — the senders K2's notification mail leaves from
-(Email Notifications). Owner and Admins only; adding a sender or a relay,
-choosing the system sender and test sends need the owner in person (Touch
-ID / login / vault password), from a terminal outside K2.
-
-  k2 notifications email [status] [--json]
-  k2 notifications email sender add <address> [--name N] [--lock-name]
-                 [--reply-to <addr>]… [--relay <relay id> | --via <bounce subdomain>]
-                                    A send-only account K2 creates (hosted
-                                    mail, Linux) or an address on a relay. It
-                                    is never a mailbox: no agent can read it.
-                                    --via: send as noreply@brand.com when
-                                    brand.com's mail lives elsewhere (Google,
-                                    Microsoft…). Hosted mail only (Linux). Host
-                                    a subdomain here first: k2 hostmail domain
-                                    add bounce.brand.com prints the DNS records
-                                    to publish (MX, SPF, DKIM, DMARC); then
-                                    k2 hostmail domain check bounce.brand.com.
-                                    Bounces and the signature use it, and K2
-                                    never changes brand.com's DNS. brand.com
-                                    needs a DMARC record that isn't strict on
-                                    both checks: adkim=s with aspf=s is
-                                    refused; one relaxed (r, the default) is
-                                    enough.
-  k2 notifications email sender list [--all] [--json]
-  k2 notifications email sender check <sender>   re-check DMARC and the domain
-  k2 notifications email sender set <sender> [--name N] [--lock-name|--unlock-name] [--reply-to <addr>]…
-  k2 notifications email sender rm <sender>       its address stays reserved 30 days
-  k2 notifications email sender resume <sender>   the owner, with a confirm: an App's sender
-                                    that K2 paused (over 5% hard bounces or 0.1%
-                                    spam complaints of at least 50 recipients in
-                                    24 h) sends again, and the 24-hour count
-                                    starts again from zero. `sender list` marks
-                                    paused senders (and shows each App's). The
-                                    system sender is never paused (you get a
-                                    warning notice instead).
-                                    <sender>, everywhere here: its address or
-                                    its id from `sender list`.
-  k2 notifications email suppressions [list] [<address>] [--limit N] [--json]
-                                    Addresses K2 won't send to: a hard bounce
-                                    (every sender), a spam complaint (that sender
-                                    only), or added by hand. Kept hashed: the
-                                    list shows the domain, reason and hash;
-                                    give an address to see only its entries.
-  k2 notifications email suppressions add <address> [--sender <sender>]
-                                    Owner or Admin. Without --sender: every sender.
-  k2 notifications email suppressions rm <address> [--sender <sender> | --all]
-                                    The owner: mail may go to it again. No flag:
-                                    removes its every-sender entry (a hard
-                                    bounce, or one added for every sender);
-                                    --sender: that sender's entry (a complaint);
-                                    --all: every entry for the address.
-  k2 notifications email system-sender [show] | set <sender> | clear | test
-                                    K2's own mail (owner password resets with
-                                    no --from, codes) comes from it.
-  k2 notifications email relay add --host H [--port P] [--tls implicit|starttls]
-                 --username U --from-domain D   (the password is read from stdin)
-  k2 notifications email relay list | rm <relay>
-  k2 notifications email relay test <relay> --from <sender>
-                                    One test to your own address; the sender
-                                    goes ready when the relay takes it.
-  k2 notifications email log [--app <app>] [--limit N] [--json]
-  k2 notifications email settings [--retention-days 7-90] [--owner-email <you@…>]
-                                    Test emails only ever go to --owner-email.
-
-Your notice address: where emails FROM this server's AI agents reach you.
-Run these yourself from a terminal outside K2 (any person with a login on this
-server, or the server's owner). An agent can't run them (refused, 403).
-  k2 notifications email address [show] [--person <login>] [--json]
-                                    Your confirmed address ("address") and any
-                                    still waiting for a confirm ("pending", up
-                                    to 3). --person: another person's (the
-                                    server's owner or an Admin only).
-  k2 notifications email address set <you@example.com>
-                                    Emails that address a confirm link from the
-                                    system sender. The link expires after 24
-                                    hours. Notices go there only after you press
-                                    Confirm on the page it opens. Your current
-                                    address keeps working until the new one is
-                                    confirmed, then it is replaced; if the link
-                                    expires, nothing changes. Setting the same
-                                    address again sends a fresh link.
-  k2 notifications email address remove [<address>] [--person <login>]
-                                    Stops notices to <address> now, confirmed or
-                                    still waiting. With no address: all of them
-                                    (confirmed and waiting). --person: another
-                                    person's (the server's owner or an Admin).
-
-Agents' email notices (an agent emails a person on this server; off by default):
-  k2 notifications email agent [list] [--json]
-  k2 notifications email agent on <workspace> --sender <address>
-                                    The owner, with a confirm: the workspace's
-                                    agent may email people here from <address>
-                                    (a sender of its own: not the system
-                                    sender, not an App's; add it first with
-                                    sender add). Agents then send with
-                                    k2 notify email (see k2 notify --help).
-  k2 notifications email agent off <workspace>    the owner or an Admin
-
-A hosted sender needs its domain Verified (k2 hostmail domain check) and a
-DMARC record (any policy). On a Mac (no hosted mail), add a relay first.
-Grant a sender to an App: k2 app email on. The guide: k2 study email-notifications.
+%include cli/text/help/notifications.txt
 EOF
 }
 
@@ -1315,35 +1036,7 @@ for r in rows:
 
 _notify_usage() {
     cat <<'EOF'
-k2 notify email: an agent emails a person on this server (text only).
-
-  k2 notify email <login|owner> --subject "…" --text "…"
-  k2 notify email <login|owner> --subject "…" --text-file <file>
-                 One email to that person, from the workspace you run it in
-                 (there is no --workspace) and its own sender. <login> is
-                 their K2 login on this server; type `owner` literally for
-                 the server's owner. Never an email address.
-                 Text only: a subject up to 200 characters, a body up to
-                 16 KB; no HTML, no attachments, no Reply-To. K2 adds a line
-                 saying which agent sent it, and a link to stop them.
-                 Refusals (the error code, then what to do):
-                   agent_email_off    off for this workspace: only the owner
-                                      turns it on. Ask them: run the
-                                      "Ask with:" line the error ends with,
-                                      if it has one, else a Thread message.
-                   no_notice_address  the person hasn't confirmed an address
-                                      (they run k2 notifications email
-                                      address set themselves); tell them.
-                   person_muted       they muted this workspace; don't retry.
-                   rate_limited       10 an hour, 50 a day per workspace;
-                                      retryAfterMs says when.
-  k2 notify email off
-                 Turn this workspace's notices off. Only the owner turns them
-                 back on.
-
-For people (not agents), from their own terminal:
-  k2 notify email mute <workspace>      stop that workspace's notices to you
-  k2 notify email unmute <workspace>
+%include cli/text/help/notify.txt
 EOF
 }
 

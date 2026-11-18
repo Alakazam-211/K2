@@ -1,0 +1,16 @@
+k2 vault delivery NAME fetch|agent|proxy|file|env|api [--ceiling <d>] [--scope <s>] [--json]
+
+NAME's default delivery (what its own workspace gets without a grant) and,
+with --ceiling, the loosest delivery allowed. fetch: K2 makes the call;
+proxy: fetch, plus a placeholder key and local base URL in new sessions'
+env (k2 vault proxy-url NAME gets them now);
+agent (ssh keys): $SSH_AUTH_SOCK, ssh and git sign, nobody sees the key;
+file: $K2_SECRETS_DIR/NAME; env: $NAME; api: k2 vault get NAME. Agent,
+file, env and api arrive in new sessions. No --env-name or --file-name
+here: names live on grants (k2 vault grant --help).
+An agent widens only secrets its own workspace created; for one a person
+gave it or another agent handed it: vault_owner_confirm_required (exit 3).
+With permission cards on, that refusal ends with the line to ask with:
+k2 permission request vault.delivery secret=NAME delivery=file|env.
+
+Example: k2 vault delivery DEPLOY_KEY agent

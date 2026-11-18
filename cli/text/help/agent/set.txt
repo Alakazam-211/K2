@@ -1,0 +1,30 @@
+Change one or more of an agent's settings in a single call.
+Uses the same SETTINGS flags as hire (--mode, --enabled, --name, --persona)
+plus project membership (--add-project / --remove-project); set does not
+wire connections or launch sessions. Unknown flags fail (exit 2) and list
+the valid flags.
+
+USAGE
+  k2 agent set <name> [flags]
+
+FLAGS
+  --mode <mode>           off | custom | manager | k2 ("off" also sets enabled=false)
+  --enabled <bool>        true | false (false pauses without changing mode)
+  --name <new-name>       Rename the agent (display name; the directory does not move)
+  --persona <file.md>     Replace the agent's persona with this file's contents.
+                          The previous persona is backed up automatically to
+                          <dir>/.k2/agent/agent-backups/.
+  --add-project <p>       Add the agent to a project (name or id; repeatable).
+                          Already a member = reported no-op. The FIRST member of
+                          an empty project becomes its Point of Contact.
+  --remove-project <p>    Remove the agent from a project (membership only;
+                          repeatable). Removing the current PoC is refused
+                          (poc_successor_required) until `k2 project poc`
+                          names a successor.
+  --dry-run               Show what would change; change nothing
+  --json                  JSON output
+
+EXAMPLES
+  k2 agent set scout --mode manager
+  k2 agent set scout --enabled false --persona ./scout-v2.md
+  k2 agent set scout --add-project "Blue Harbor" --remove-project sandbox

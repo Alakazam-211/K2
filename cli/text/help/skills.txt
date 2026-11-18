@@ -1,0 +1,38 @@
+k2 skills <subcommand> [options]
+
+Manage documentation profiles (skills) for the workspace. Skills are
+markdown files (SKILL.md) describing roles, personas, and instructions
+your harness loads when spawning sub-agents.
+
+  list                              Skill profiles in this workspace
+  create <name> [--template <src>]  Create a new skill profile
+                                    (optionally seeded from another skill)
+  remove <name>                     Delete a skill profile (sent to Trash)
+  profile <name>                    Read the skill's SKILL.md
+  regenerate                        Refresh every skill's SKILL.md
+
+SKILLS vs AGENT
+  An agent IS a workspace (1:1). A skill is a documentation profile
+  the agent (or your harness) can reference when applying a specific
+  role to work.
+
+  Spawning sessions pre-loaded with a skill is your harness's job
+  (Claude Code's sub-agent spawning, Cursor's worktree management).
+  K2 no longer provides a `delegate` verb — see `k2 help-deprecated`.
+
+  Skills live at `.k2/skills/<name>/SKILL.md` (consolidated home as of
+  Phase 2.5b). The legacy `.k2so/agents/` and `.k2so/agent-templates/`
+  folders are migrated into here on first daemon boot per upgraded
+  workspace. Originals go to the macOS Recycle Bin (recoverable).
+
+TEMPLATING (post-Phase-2.5b)
+  Any existing skill can seed a new one — there is no separate
+  "template" namespace. `--template <name>` means "copy this skill as
+  the starting point for the new skill." Edit the new file freely from
+  there; the seed is unaffected.
+
+EXAMPLES
+  k2 skills list
+  k2 skills create backend-eng --template rust-eng
+  k2 skills profile backend-eng
+  k2 skills regenerate

@@ -1,0 +1,6 @@
+Set the host-wide outbound footer appended to text/plain parts on
+authenticated submission (587/465). --text is literal; @path reads
+a file; - reads stdin. --domain is 400 this cut.
+
+USAGE
+  k2 hostmail footer set --text FILE_OR_STRING [--json]

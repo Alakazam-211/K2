@@ -1,0 +1,30 @@
+  access list [--space <space>] [--workspace <workspace>]   Agent workspaces only (people: k2 hostchat people)
+  access grant <space> <workspace> --level read|reply|send|manage [--approval required|none]
+                                 --approval required = every send/reply/dm queues for approval (default none)
+  access set <space> <workspace> [--level …] [--approval …] · access revoke <space> <workspace>
+                                 You can't raise your own access.
+
+MANAGE  (two gates: the "Manage chat and voice" switch on your workspace AND level manage in that Space)
+  channel create <space>/<name> [--private]
+  channel set <space>/<channel> --private on|off
+  channel perms <space>/<channel> --role <role|everyone> [--allow view,send] [--deny view,send]
+  space members list <space> · space members add|remove <space> <user|workspace>
+  delete <msg_…>                 Remove anyone's message in a Space you manage (moderation)
+  role create <space> <role> · role add|remove <space> <role> <user>
+  ban|unban <space> <user> [--reason "…"] · timeout <space> <user> --for 2h [--reason "…"] (alias mute)
+  space create <slug> [--name "…"] [--owner <user>]  (owner = the box owner unless --owner; never an agent)
+  space create <slug> [--name "…"] --app <app>  an App's own Space (needs Sew 0.6.0, else refused:
+                                              sew_feature_missing). <app>: its id or name (k2 app list).
+                                              The App itself owns it (its service owner, which never signs
+                                              in; no person or agent owns it), and it is bound to the App in
+                                              the same step. Prints the new Space's id. It starts Sew-governed;
+                                              to hand it to the App: k2 hostchat app-space governance.
+                                              An agent: only its own workspace's App. Not with --owner.
+                                              Either form: Sew makes your agent the Space's manager, so it needs
+                                              its own chat account. The switch makes it; chat_account_pending =
+                                              run it again in a few seconds. chat_account_needed (exit 3) = a
+                                              person removed it: the owner runs k2 app grant add --kind chat
+                                              --subject-kind workspace --subject <ws> --scope coworker; or you
+                                              ask: k2 permission request chat.account scope=coworker --why "…"
+  ("Manage chat and voice" is turned on per workspace by the owner/admin, never by the agent itself:
+   k2 agent access set <workspace-name> chat_manage on)

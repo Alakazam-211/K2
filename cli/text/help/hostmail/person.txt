@@ -1,0 +1,26 @@
+Mark a hosted mailbox as a PERSON's mailbox (on) or an agent's (off).
+An IT agent (a workspace allowed to manage hosted mail) may create,
+rotate and see the passwords of a person's mailbox even when it is bound
+to the IT agent's own workspace; that workspace's own agent mailboxes
+stay the owner's call. The owner, or an IT agent — except turning it ON
+for its own workspace's mailbox (exit 3, owner_only: an agent can't
+loosen mail rules on its own sends). Agents without mail-manage exit 3.
+New person mailboxes: `k2 hostmail create <name> --person`.
+POST /cli/mail/address/person {address, person}.
+
+--all --workspace <ws> on marks every mailbox in that workspace at once
+(run it once, as the owner, for an IT agent's workspace full of imported
+or provisioned staff mailboxes). It never marks the workspace's send
+identities: addresses its agent has sent from, and mailboxes its agent
+minted for itself. Existing mailboxes default to the agent's own, because
+nothing recorded tells them apart; `k2 hostmail doctor` names this
+command when it applies. POST /cli/mail/address/person {all: true,
+workspace, person}.
+
+link ties a mailbox to its person's box login, so they manage its
+forwarding themselves (k2 hostmail person link --help).
+
+USAGE
+  k2 hostmail person <addr> on|off [--json]
+  k2 hostmail person --all --workspace <ws> on|off [--json]
+  k2 hostmail person link <addr> <login|owner> | <addr> --unlink [--json]

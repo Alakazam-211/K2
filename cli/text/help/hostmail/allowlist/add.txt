@@ -1,0 +1,9 @@
+Create AllowedIp then ReloadSettings. Default reason=migration.
+--expires RFC3339 for a temporary cut window; omit for permanent.
+The allowlist is yours: add the addresses you trust (your home and
+office IPs, for example 203.0.113.10). Nothing is added for you.
+Do not allowlist 172.56.0.0/16 (T-Mobile CGNAT).
+POST /cli/mail/allowlist/add. GET → 405. mail_manage.
+
+USAGE
+  k2 hostmail allowlist add <ip|cidr> [--reason migration] [--expires <rfc3339>] [--json]

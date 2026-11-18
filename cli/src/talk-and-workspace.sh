@@ -1178,39 +1178,7 @@ except Exception as e:
 # `k2 workspace set-agent-identity` is a thin alias of this function.
 cmd_help_agent_identity() {
     cat <<'EOF'
-Show or change an agent's picture, color and name.
-
-USAGE
-  k2 agent identity [<agent>] [--json]                          show
-  k2 agent identity [<agent>] [--color <hex|rgb>]
-                    [--image <file.png|jpg|webp> | --clear-image]
-                    [--name <name>] [--json]                    change
-
-  <agent> is an agent name, handle or path. Omitted: from an agent's own
-  session, the agent itself; from a terminal, the agent in the current
-  directory.
-
-FROM AN AGENT'S SESSION
-  You may change only your own picture and color (any other agent is
-  refused, exit 3). --name is refused: agents can't rename themselves;
-  ask your owner. Writes are rate limited per agent (429: try later).
-
-FLAGS
-  --color <hex|rgb>       #rrggbb, #rgb, rgb(r,g,b) or r,g,b
-  --image <file>          PNG, JPEG or WebP, at most 2 MiB; the daemon
-                          checks the bytes, shrinks it to 256 px and
-                          re-encodes it. SVG is refused.
-  --clear-image           Remove the picture
-  --name <name>           Display name (owners only; ≤ 64 chars, no / or :)
-  --json                  Print the daemon's JSON
-
-EXIT CODES
-  0 ok · 1 error · 2 bad usage · 3 refused · 4 not found
-
-EXAMPLES
-  k2 agent identity                                  # who do I look like?
-  k2 agent identity --color '#22c55e' --image me.png # my own look
-  k2 agent identity scout --name "Scout" --clear-image   (owner)
+%include cli/text/help/agent/identity.txt
 EOF
 }
 
@@ -1504,17 +1472,7 @@ else:
             ;;
         ""|-h|--help|help)
             cat <<'EOF' >&2
-Usage: k2 workspace api-guest-policy get|set <workspace> [text|--file PATH|--default]
-
-Per-workspace owner policy re-injected on every /v1 host-session turn so
-external API clients are framed as non-owners. Callers cannot set this.
-
-  get <ws>                      Print effective policy (platform default if unset)
-  set <ws> <text…>              Set custom policy text
-  set <ws> --file <path>        Set policy from a file (use - for stdin)
-  set <ws> --default            Clear custom text → platform default
-
-Also writable via: k2 agent set / POST /cli/workspace/set field api_guest_policy
+%include cli/text/help/workspace/api-guest-policy.txt
 EOF
             [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
             exit 2
@@ -1665,17 +1623,7 @@ print("api_skip_permissions set to %s." % state)
             ;;
         ""|-h|--help|help)
             cat <<'EOF' >&2
-Usage: k2 workspace api-skip-permissions get|set <workspace> [on|off]
-
-Whether /v1 host-session spawns keep agent auto-approve flags
-(--dangerously-skip-permissions, etc.). Product default is ON (headless
-/v1 cannot answer a HITL gate). Opt out for fail-closed stripping.
-
-  get <ws>              Print on|off (default on when unset)
-  set <ws> on|1         Keep auto-approve flags on API host-session spawns
-  set <ws> off|0        Strip auto-approve flags (pre-0.40.x fail-closed)
-
-Also: POST /cli/workspace/set {"project":"…","fields":{"api_skip_permissions":"0"|"1"}}
+%include cli/text/help/workspace/api-skip-permissions.txt
 EOF
             [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
             exit 2
@@ -1795,16 +1743,7 @@ else:
             ;;
         ""|-h|--help|help)
             cat <<'EOF' >&2
-Usage: k2 workspace default-model get|set <workspace> [model|clear]
-
-Per-workspace default LLM model spliced onto new agent sessions
-(claude --model, codex -m, …). Empty/clear = today's preset/harness.
-
-  get <ws>              Print the stored model, or (unset)
-  set <ws> opus         Store an opaque model id
-  set <ws> clear        Clear back to unset
-
-API POST /v1/w/<ws>/host-sessions {"model":"…"} overrides this per call.
+%include cli/text/help/workspace/default-model.txt
 EOF
             [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
             exit 2
@@ -1934,15 +1873,7 @@ print("force_model_on_resume set to %s." % state)
             ;;
         ""|-h|--help|help)
             cat <<'EOF' >&2
-Usage: k2 workspace force-model-on-resume get|set <workspace> [on|off]
-
-When on, K2-direct dead resume (new PTY) also passes the workspace
-default model. Off (default) keeps the transcript's model. API `model`
-on a host-session still applies on resume regardless.
-
-  get <ws>              Print on|off (default off)
-  set <ws> on|1         Splice default model on resume
-  set <ws> off|0        Leave resume argv unpinned
+%include cli/text/help/workspace/force-model-on-resume.txt
 EOF
             [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
             exit 2
@@ -2098,19 +2029,7 @@ else:
             ;;
         ""|-h|--help|help)
             cat <<'EOF' >&2
-Usage: k2 workspace api-host-session-cap get|set <workspace> [n|default]
-       (alias: host-session-cell-cap)
-
-Per-workspace concurrent host-session (live cell) cap. Default is 15
-(overridable via env K2_SANDBOX_WORKSPACE_CELL_CAP). Max 512 (daemon
-ceiling so agents cannot set unbounded). Raising the cap is runway —
-agents still need `k2 done` to avoid accretion.
-
-  get <ws>              Print N, or "15 (default)" when inheriting
-  set <ws> <n>          Set concurrent live host-session cap (1..512)
-  set <ws> default      Clear override → inherit daemon default
-
-Also: POST /cli/workspace/set {"project":"…","fields":{"host_session_cell_cap":"64"|"default"}}
+%include cli/text/help/workspace/host-session-cell-cap.txt
 EOF
             [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
             exit 2
@@ -2961,272 +2880,7 @@ _teach_skin_token_now_app_token() {
 _skin_usage() {
     # `#if-cards` / `#if-no-cards` lines: `_perm_lines` (permission.sh).
     cat <<'EOF' | _perm_lines >&2
-Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
-       k2 app token <create|list|revoke|rooms> ...
-       k2 app validate [<name>] [--dir <path>] [--json]
-                                        Parse an App's JS/TS and run the leak lints (exit 1 on errors)
-       k2 app <build|install|deploy|rollback|list|inspect|history|logs|errors|...>
-
-  Guests, roles, and tokens for apps on this box, and (Apps beta) hosting
-  server Apps: k2 app deploy (k2 app validate --help, k2 study app-deploys).
-  A built static site (a web build, docs, a PWA) deploys as an App
-  (host.mode "static"; k2 app init --template static). A site already on
-  k2 publish run --skin keeps working; new static sites are Apps.
-  Desktop binary updates are k2 update --app. See k2 study apps (leftover: k2 study skins).
-  Your own sign-in page: post passwords straight to K2 at /.k2/auth/* on the
-  App's host, never to your server (k2 app auth --help, k2 study auth-pages).
-
-  Leftover aliases (still work): k2 skin …    k2 skin-token …
-
-  k2 app user add <username> [--email e] [--password-stdin]
-                                        Owner only. Add an app principal (not a Connect user) with the box login
-  k2 app user add <username> --app <app> [--role R] [--email e] [--password-stdin | --temp-password]
-                                        A guest of ONE App: that App's grant, no box login. The owner,
-                                        or an agent with "Let this agent manage its Apps' users" for
-                                        its own workspace's Apps. An agent's login works at once in the
-                                        App's own room; any other room its role names waits until the
-                                        person chooses their own password (the answer says so and how).
-                                        Names people on this box use are refused too. --temp-password:
-                                        K2 makes a password and prints it once; the person chooses their
-                                        own at first sign-in (or k2 app user invite: a mailed link, so you
-                                        handle no password)
-  k2 app user add <app-id> <name> --test [--role R] [--room H] [--expires 24h] [--password-stdin]
-                                        A test guest of ONE App: signs in only through that App's
-                                        link, a role the App defines, ends on its own (24 h, at most
-                                        7 d), at most 5 per App (k2 app test-guests). The owner, or
-                                        the App's own agent with "Let this agent manage its Apps'
-                                        users" (else one held request: a card for the owner, exit 2)
-  k2 app user invite <username> --app <app> [--email e] [--role R] [--from <address>] [--json]
-                                        Mail a one-time link to set their own password (new people
-                                        need --email and are made App-only). The owner, or an agent
-                                        for its own workspace's Apps (from its workspace's address,
-                                        under its email sending mode). Links expire (k2 app login settings)
-  k2 app user reset <username> [--app <app>] [--revoke] [--to <email> | --code] [--from <address>] [--json]
-                                        An agent with "Let this agent manage its Apps' users" on, for a login
-                                        that signs in only on your workspace's Apps (one also on another
-                                        workspace's App answers not_found: ask the owner). K2 mails
-                                        the person the App's reset link, to the email on the login, from the
-                                        App's address (you never see the link). Sending it takes nothing away; access
-                                        held back until they set a password starts when they do.
-                                        --revoke takes back that login's unused links on the App and sends nothing.
-                                        The owner, or an admin for App-only users (box logins stay
-                                        the owner's). A one-time reset link on K2's own page: when used,
-                                        extra access waiting for the person's own password starts. --code: the link is printed for you to hand over. Mailing it needs --from
-                                        <an address no agent reads>; a tied person's stored email
-                                        (or one from before 0.46.4 you haven't set) needs --to.
-                                        An agent wanting --code, --to or --from asks a person on a card, #if-cards
-                                        k2 permission request apps.user-password-reset user=<username> #if-cards
-                                        [app=<app>] [mode=password|link|email] --why "<why>". The #if-cards
-                                        person who allows it sees the new password (or a one-time #if-cards
-                                        link) once, on their own screen; you never see it #if-cards
-                                        An agent wanting --code, --to or --from asks the owner or an admin #if-no-cards
-                                        to run it (Settings → User Access), or to turn on permission cards #if-no-cards
-                                        (Settings → Access → Permission Cards) so it can ask on a card #if-no-cards
-  k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] [--max-devices <n>] …
-                                        The App's link lives, set-password page, own mail text
-                                        and how many devices a person may keep signed in
-  k2 app profile settings <app> [--names on|off] [--image on|off]
-                                        May the App's people change their own names and picture
-                                        (default on; the App's agent may only turn them off)
-  k2 app set <app> [--account-deletion request|immediate] [--deletion-grace <days>] [--client-logs-days <days>]
-                                        How "Delete my account" works in the App (request by
-                                        default, 30-day grace) and how long client logs stay
-  k2 app recording <app> [set [--start-level L] [--audio-max-days N|org] [--required on|off] [--server-read on|off]]
-                                        Recording in the App's calls (Sew 0.9.0). All off by default;
-                                        each person still consents. --required on and --server-read on
-                                        are the owner's only (an agent asks: k2 permission request #if-cards
-                                        apps.recording app=<app> server-read=on --why "…"). #if-cards
-                                        are the owner's only (an agent asks the owner to run it). #if-no-cards
-                                        k2 app recording --help, k2 study app-recording
-  k2 app account-deletion <app> | complete|cancel <app> <request|user>
-                                        Pending account deletions: list, complete now, undo
-  k2 app user show <username> --app <app> [--json]
-                                        Owner only. Their profile in that App: names (a self-set one
-                                        names its username), email, picture, role, sign-ins, sessions
-  k2 app user image <username> --clear  Owner only. Remove their picture
-  k2 app user sessions <username> --app <app> [--revoke <id> | --revoke-all]
-                                        Their browsers and devices in that App; end one or all (their chat
-                                        session too). That App only, and their password stays the same (a stolen
-                                        password: k2 permission request apps.user-password-reset). The owner, or #if-cards
-                                        password: the owner or an admin resets it, k2 app user reset). The owner, or #if-no-cards
-                                        the App's own agent with "Let this agent manage its Apps' users"; never
-                                        a box login
-  k2 app user email <username> [--email e]
-                                        Set/clear guest email (omit/empty clears)
-  k2 app user full-name <username> [--name <text>]
-                                        Set/clear full name (omit/empty clears)
-  k2 app user agent <username> <workspace> | <username> --clear
-                                        Owner only. Mark this login as that workspace's agent
-                                        (db actor kind agent, not guest); --clear = a person again
-  k2 app user password <username> --password-stdin
-                                        Set/reset K2-login password (empty stdin clears). They must
-                                        choose a new one at their next sign-in (no session until then),
-                                        except an agent's own test guest (k2 app user add <app> <name> --test)
-  k2 app user unlock <username> [--json]
-                                        Clear K2's sign-in lockout (the owner, an admin for App-only users,
-                                        or an agent with the App-users switch for a login on its own App;
-                                        audited). The password stays the same. An agent clears one login
-                                        at most 6 times an hour (429 unlock_limit): at the limit it's being
-                                        guessed or they need a reset (k2 app user reset), it ends by itself
-                                        after 15 minutes, and the owner has no cap.
-  k2 app user chat <username> [member|guest|none] [--app <app>] [--json]
-                                        A person's chat (their chat account, k2:principal:<id>); no scope = show it.
-                                        The owner: anyone (--app: that App's user). An agent: its own App's
-                                        users under its guests-chat grant, once Sew has app_scoped_sessions.
-  k2 app user list                     Roster (username  full name|—  role|—  rooms|—  email|—  [agent:<ws>] [waiting for reset: set up by <ws>'s agent]; no secrets)
-  k2 app user remove <username>        Drop principal + login sessions (platform tokens survive)
-  k2 app user rooms <username> --agent sales [--app <app>]
-                                        Set default rooms (unassigned guests only); --app sets that App's rooms
-                                        (the owner, or an agent for its own workspace's Apps: any room on this
-                                        box). Signed-in people get the change
-                                        at their next request
-  k2 app user role <username> <role>   Assign an app role (not Connect owner/admin/member)
-  k2 app user unassign <username>      Clear the assigned role (restore Thread-only + default rooms)
-  k2 app role create <name> [--agent sales] [--app <app>]
-                                        Named bundle. No --agent = Thread dark. --agent without --caps = Thread-only on that room.
-                                        --app tags the role for one App (usable only on that App's grants).
-  k2 app role room <role> <handle> [--caps thread:read,thread:post,files:read]
-                                        Add/replace functions on one room. Omit --caps = Thread-only. Not --caps with --agent.
-                                        files:write never reaches the agent's .k2/ folder or its root
-                                        CLAUDE.md, AGENTS.md and GEMINI.md unless you add
-                                        files:agentconfig too (not recommended). k2 study apps.
-                                        files:upload = drop files into --upload folders, never see them.
-                                        Chat caps (App-wide; any room line counts): chat:read, chat:post,
-                                        chat:respond, voice:join, voice:video (needs voice:join). They cap the
-                                        person's chat pass; Sew's roles still decide. k2 study app-chat.
-                                        An App's own agent: any room on any role of its own App, at once
-                                        with "Let this agent manage its Apps' users" on; with it off, one
-                                        held request with a card for the owner on your Thread (exit 2).
-                                        A box-wide role, or another workspace's App's, stays the owner's.
-  k2 app role room <role> <handle> --clear
-                                        Drop that room from the role
-  k2 app role paths <role> <room> [--read jobs/J1/,jobs/J3/] [--write jobs/J1/in/] [--upload Inbox/] [--upload-dir jobs/J1/in]
-                   [--download reports/,price-list.pdf | --no-download]
-                                        Folders this role reaches in one room (any room on the role). Unlisted
-                                        folders get the same 403 as a missing cap. --write folders are readable
-                                        too; caps still decide. --upload = drop folders (files:upload adds files
-                                        in its own subfolder, never lists or reads). --upload-dir = default upload folder.
-                                        --download = folders or files files:download may save (omitted = kept, --no-download clears; --download alone changes only them).
-  k2 app role paths <role> <room> --hide .k2,.env,secrets/ | --unhide .env | --no-hide
-                                        Paths this role's logins never see or read, even inside a permitted
-                                        folder: not listed, answered like a missing file. One name = any
-                                        depth; a/b = from the room root; * and ? inside a name. Nothing is
-                                        hidden unless set. An agent's .k2 holds its inbox and sessions.
-  k2 app role paths <role> <room> --clear
-                                        Back to the whole room (hidden paths stay hidden)
-  k2 app role list                     Roles (per-room lines; no secrets)
-  k2 app role update <name> [--agent … | --clear]
-                                        --clear empties the whole map. Always rewrites live sessions.
-  k2 app role remove <name>            Drop an unassigned role
-  k2 app grant list                    Grants (subject, kind, target, role|scope; chat rows show hook state).
-                                        An agent sees the logins on its own workspace's Apps.
-  k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli|chat --target <id> [--role <role> | --room <handle>…] [--scope <text>]
-                                        Owner only. An App's own agent asks for a login on its App on a #if-cards
-                                        permission card: the refusal ends with the line to ask with #if-cards
-                                        (k2 permission request app.login-grant op=add|remove user=… app=… role=…); #if-cards
-                                        the owner's Allow makes it, so don't run the add again. #if-cards
-                                        Owner only. An App's own agent asks its owner to run it (from a #if-no-cards
-                                        terminal outside K2, or Settings → Cores → Apps → <the App> → Add a person), or #if-no-cards
-                                        to turn on permission cards (Settings → Access → Permission Cards) so it can ask on a card. #if-no-cards
-                                        kind=app is a login on one App: --role, or --room (repeatable;
-                                        Thread-only rooms). --target: host, a service id, or <workspace>/<name>.
-                                        Other kinds need --scope and no --role (recorded, not enforced).
-  k2 app grant add --kind chat --subject-kind principal --subject <username|id> [--scope member|guest]
-                                        (an App's user: k2 app user chat <user> member --app <app> instead)
-  k2 app grant add --kind chat --subject-kind workspace --subject <handle|id> --scope coworker|assistant:<username|owner>
-  k2 app grant add --kind chat --subject-kind connect --subject <login|id> [--scope member|guest]
-                                        chat grants create the person's or agent's chat account (Linux, chat and voice on);
-                                        roles and channels are set in Sew. --target is optional (sew).
-                                        A Connect login's first chat pass writes its own connect grant;
-                                        switch it off (not rm) to keep that login out of chat.
-                                        The owner's linked Connect login is the owner in chat (k2:owner):
-                                        no connect grant; revoking k2:owner's Sew sessions ends its
-                                        sessions too (intended; one person, one member).
-  k2 app grant set --id <grant-id> --scope <scope>
-                                        Change a chat grant's scope (member↔guest, assistant re-pin).
-  k2 app grant role <grant-id> --role <role>
-                                        Owner only. Give an App login (kind=app grant) another role in
-                                        place: its live logins stay signed in and get the new role's
-                                        rooms now (rm + add would end them). The role must be box-wide
-                                        or that App's. Ids: k2 app grant list.
-  k2 app grant rm --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>
-  k2 app grant rm --id <id>            Revoke the grant. The role stays. Ends that App's live logins.
-                                        A person's chat grant also removes assistant grants pinned to them.
-  k2 app grant hooks [status] [--json] Grant-hook targets, outbox counts, blocked + held rows
-  k2 app grant hooks log [--subject <ext id>] [--limit N] [--json]
-  k2 app grant hooks retry <outbox-id> | skip <outbox-id> | reconcile
-  k2 app grant hooks target chat --on|--off [--socket <path>] [--token-file <path>]
-  k2 app grant copy-host <app> [--dry-run] [--json]
-                                        Everyone with the box login gets the same access on <app>
-                                        (an App published after 0.45.5 starts with nobody). The owner, at
-                                        once; an agent's (its own App) is one held request listing the
-                                        logins: a card for the owner (exit 2). --dry-run only looks.
-  k2 app grant <app> --kind guests-rooms [--room <handle>]... [--revoke]
-                                        <app>'s own code sets its OWN guests' rooms with its own pass (no
-                                        owner token): its --room rooms plus its own, never above a role.
-                                        An agent with "Let this agent manage its Apps' users" on doesn't
-                                        need this to give people rooms (k2 app user rooms). --revoke stops
-                                        the App's code handing out more; rooms already on a login or role
-                                        stay until they're changed. The
-                                        owner; or the App's own agent in its own room with "Let this
-                                        agent manage its Apps' users" (else, or another workspace's
-                                        room, one held request: a card for the owner, exit 2).
-  k2 app grant <app> --kind guests-chat [--max N] [--revoke]
-                                        Lets <app> give its own users chat (the owner only; works once Sew has
-                                        app_scoped_sessions: k2 hostchat home). k2 study app-chat.
-  k2 app grant <app> --kind chat-key [--caps "…"] [--max-level L] [--uploads on|off] [--max N] [--revoke]
-                                        A chat key: K2 signs chat passes for <app>'s own users with no chat
-                                        grant per person (Sew 0.6.0+). On or wider: the owner in person, with a
-                                        confirm. Narrower or --revoke: the owner, an Admin or the App's agent.
-                                        k2 app grant <app> --kind chat-key --help: every flag.
-  k2 app guest rooms <app> <user> [set <room,...>]
-                                        Read/set one guest's rooms on <app> (owner; an agent with the App-users switch).
-                                        k2 app guest --help.
-  k2 app guest ceiling <app> | list <app> [--json]
-                                        What <app> may hand its guests; its guests with their rooms (0.46.4).
-  k2 app hydra [on|off] [--json]       Sign-in for other sites: the OIDC issuer sidecar (Linux; leftover)
-  k2 app token create --name vercel --agent sales [--caps thread:read,thread:post,files:read]
-                                        Mint platform k2skn_ pass (secret once; ≥1 --agent; no user)
-  k2 app token list                    Keys for other sites only (prefix + caps + rooms; hide sessions)
-  k2 app token rooms <id> --agent sales
-  k2 app token rooms <id> --clear      Empty rooms (Thread dark, keep secret)
-  k2 app token revoke <id>
-
-WHAT THIS IS
-  Users + roles + tokens + scopes (caps + rooms), and (Apps beta) the App
-  runtime: Seeds, deploys, rollback (k2 study app-deploys). Never grid.
-
-PER-APP LOGINS (0.45.5)
-  A login is for ONE App: the box login (host) or a published App. It needs
-  that person's enabled grant for that App, and its pass only reaches that
-  App's rooms. Wrong App = the same 401 as a bad password. A --skin App's
-  helper always logs in for its own App. A BFF (--cmd) names its App on
-  POST /cli/skin/login with {"app": $K2_APP_ID}; no app = the box login.
-  See k2 study apps.
-
-HOST THE UI (k2 study apps)
-  A new App: k2 app init --template static for a folder of files, or
-  k2 app install + k2 app deploy for your own code with a port (Apps beta;
-  k2 study app-deploys). A site already on k2 publish run --skin keeps working;
-  --skin makes no new ones.
-
-Caps: thread:read (GET /cli/thread + overlay WS + find-only ensure-pinned-chat),
-thread:post (POST /cli/thread/post),
-files:read (GET /cli/fs/read-dir|read-file|read-binary|read-range + WS /cli/fs/events),
-files:write (POST /cli/fs/write-file|upload-binary|upload-chunk|create|copy|move|rename;
-  never into the agent's .k2/ folder),
-files:agentconfig (opt-in: also lets files:write reach .k2/ and the root CLAUDE.md, AGENTS.md, GEMINI.md; not recommended),
-files:download (opt-in: save Thread files, GET /cli/thread/attachment
-  mode=download; never implied by thread:read or files:read; opening files is unchanged).
-Rooms: workspace handles. Empty = Thread dark.
-Grid/PTY is never an app room. Capability check paths (full):
-  GET /cli/sessions/grid  and  GET /cli/sessions/bytes
-  → 403 {"error":"skin tokens cannot use the terminal"}
-  Do not probe /cli/grid or /cli/pty for that string.
-
-LEFTOVER (not how you host an app)
-  k2 app front-door [connect|direct] [--ui-port N] [--url URL] [--hint TEXT] [--json]
-                                        Optional Caddy path-filter (owner). Not required.
+%include cli/text/help/app.txt
 EOF
 }
 
@@ -3322,42 +2976,7 @@ cmd_app_validate() {
             --json) as_json=true; shift ;;
             --help|-h)
                 cat <<'EOF'
-k2 app validate — check an App's code before you publish, build or deploy it
-
-USAGE
-  k2 app validate <folder>        a folder (a path, or --dir <path>)
-  k2 app validate <seed>          a stored Seed (k2 app build prints its hash)
-  k2 app validate <name>          a published App (k2 publish ps): its --skin dir or --cwd
-  k2 app validate                 this workspace's folder
-  k2 app validate <folder> --manifest <file>
-                                  check the folder as k2 app deploy --manifest
-                                  packs it: <file> becomes its manifest.json
-                                  (a build output like dist/ is checked too)
-  ... --types                     also run the TypeScript checker (Seeds and
-                                  manifest folders; its errors block)
-  ... --json                      the report as JSON
-
-WHAT IT CHECKS (it never runs your code)
-  - every .js .mjs .cjs .jsx .ts .tsx .mts .cts file and every inline <script>
-    in .html pages parses (oxc): errors, file:line:col, each with a suggestion
-  - leak lints, as warnings: module-level Map/Set/array/object growth inside
-    request/event handlers, setInterval started in a handler with no clear,
-    listeners added per request to long-lived targets, session stores with
-    no expiry (express-session with no store, MemoryStore)
-  - a folder with manifest.json, or a Seed (Apps on: Settings → Cores → Apps
-    → This server, on by default): also manifest.json and the K2 contract (caps,
-    bindings, roles, requires). With Apps off a folder gets the code
-    checks only (said on stderr).
-  Skipped inside the folder: node_modules, dist, build, .next and other
-  build/hidden folders, symlinks, files over 2 MB; anything skipped is listed.
-
-  A path that exists as a folder wins over a published App with that name.
-
-EXIT CODES
-  0 no errors (warnings may be listed)
-  1 errors, or the check could not run
-  2 bad usage
-  3 the daemon refused (JSON with a code on stderr)
+%include cli/text/help/app/validate.txt
 EOF
                 exit 0 ;;
             -*) echo "Error: unknown flag '$1' — usage: k2 app validate [<folder|seed|name>] [--dir <path>] [--manifest <file>] [--types] [--json]" >&2; exit 2 ;;

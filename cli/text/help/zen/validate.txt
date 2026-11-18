@@ -1,0 +1,49 @@
+Usage: k2 zen validate [--json] [--strict]
+       k2 zen validate --garden <name|id> [--from <file>|-] [--json]
+       k2 zen validate --theme <name> | --file <file> [--json]
+       k2 zen validate --widget <name> [--types[=all]] [--sign] [--strict] [--json]
+       k2 zen validate --dir <folder> [--as <name>] [--json]
+
+Check Zen files without changing what Zen shows. Prints file:line:col:
+message for each error (with a suggestion line) and warnings.
+
+  (no target)            every file in ~/.k2/zen, and one line per widget:
+                         where it is placed and its runtime state.
+  --garden <g>           one Garden page as it is on disk.
+  --garden <g> --from F  a STAGED Garden page (a file anywhere, - for stdin)
+                         checked against that Garden. Nothing is written.
+  --widget <name>        a widget folder as it is on disk: manifest, folder
+                         rules, bundle, scripts (oxc parse + catalog lints)
+                         and the runtime errors its saved version hit:
+                         errors only when a Garden places it and they are
+                         from the last 24 h; otherwise warnings.
+  --dir <folder>         a STAGED widget folder anywhere on disk, checked
+                         exactly like a widget folder. Nothing is written and
+                         Zen needn't be set up. --as names it (default:
+                         manifest.json's "id", else the folder's name).
+  --types[=all]          --widget: also type-check its scripts (tsc-rs).
+  --sign                 --widget: when clean, sign this version as made by
+                         you (or this agent) for its Garden data calls. A
+                         check never signs on its own (0.46.1); --no-sign is
+                         accepted and does nothing. k2 zen widget sign <name>
+                         signs without checking.
+  --strict               exit 2 while a placed widget's saved version hasn't
+                         run in a Zen window yet ("pending"), or while old
+                         runtime errors are logged (not confirmed clean).
+                         Without it, both exit 0 with a note.
+
+The dev loop for a widget kept outside ~/.k2:
+  k2 zen validate --dir ./board              check (writes nothing)
+  k2 zen widget preview --dir ./board        try it on K2's preview Garden
+  k2 zen widget preview --dir ./board --shot board.png --theme dark
+                                             a headless PNG (writes nothing else)
+  k2 zen widget put board --dir ./board      write it (you need the Garden's list)
+  k2 zen widget errors board                 its runtime errors in Zen
+  k2 zen widget errors board --clear         drop old ones validate ignores
+
+Exit: 0 clean (or pending without --strict) · 1 errors · 2 usage, or pending
+or old runtime errors with --strict · 3 Zen isn't set up, or the Garden is
+locked.
+
+New to Gardens? k2 zen guide.
+  k2 zen guide [<topic>] [--json]    short pages; no daemon needed

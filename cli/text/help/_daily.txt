@@ -1,0 +1,63 @@
+K2 CLI — workspace orchestration for AI agents
+
+A workspace = a folder K2 manages, with exactly one primary agent
+that reads its inbox, applies skills to work, and coordinates with
+other workspaces. A Project is different: a NAMED GROUP of workspaces
+with one shared chat + one PoC agent (see PROJECTS below).
+
+TALK TO OTHERS
+  whoami [--json]                       This cell: workspace / role / address / session
+  thread <addr> "text"                  Overlay text (not PTY; that's msg). sales / sales/reviewer
+  thread <addr> [--json]                Read / tail that conversation's Thread
+  thread ask <addr> "prompt" --option   Choice card (--option "…" repeatable; --options a,b for short
+                                        labels); returns immediately (do not wait)
+  thread secret <addr> --name NAME      Secret field; you never see the value
+  msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)
+  msg <workspace>/<handle> "text"       Sidecar (`sales/1`, `sales/reviewer`; slash not hyphen)
+  msg <agent>::<host> "text"            Federated peer (prefer ::; legacy agent@host ok; not email)
+  msg <workspace> --inbox-wake <path> [path…]   Send file + knock (copy into their tray; multi-file → one package)
+  msg <workspace> --inbox-silent <path> [path…] Send file, no notify (they need `inbox list`)
+  msg <workspace> --signal <kind> ...   Emit a typed signal (advanced)
+  read <workspace> [--lines N]          Read their live terminal (peek before you inject)
+  connections list [--json] [--users]   Connected workspaces (bidirectional); --users lists humans on this box
+  connections add <path|agent::host>    Connect (agent: gated; exit 3 when disabled)
+  connections remove <name>             Disconnect (same agent create/remove gate)
+
+YOUR INBOX
+  inbox                                 YOUR tray — receive/triage (others send with `msg --inbox-wake`)
+  inbox list [<folder>]                 List items in inbox or a folder
+  inbox read <id>                       Full text of one item
+  inbox compose --title "..." --body    Write your own item (self-note / task)
+  inbox respond <id> "text"             Reply (back to sender)
+  inbox move <id> <folder>              File into folder (creates if needed)
+  inbox archive <id>                    Standard archive (preserved + searchable)
+  inbox delete <id>                     Move to macOS Recycle Bin (recoverable from Trash)
+  inbox search "query"                  Search inbox + folders
+  inbox folders                         List folders this workspace has created
+  done [--blocked "reason"]             Mark your task done (or blocked) via /cli/done;
+                                        in an API cell (K2_API_CELL=1): complete (grace)
+
+AGENTS
+  agent                                 Hire, configure, list, retire this server's agents;
+                                        manage AGENTS.md context layers (hire/conf/get/set/
+                                        list/retire/context — see `k2 agent --help`)
+  preset                                Agent PRESETS: the launchable agent roster + custom
+                                        agents (list/show/add/set/remove — `k2 preset --help`)
+  sidecar new <name> --harness <preset> Open a named sidecar (<workspace>/<name>) with a brief;
+                                        list / stop / access — see `k2 sidecar --help`
+  llm tokens list                       This server's LLM subscriptions and API tokens
+                                        (one server default per tool); read-only from
+                                        K2 terminals — `k2 llm tokens --help`
+  organization bulletin                 The Org Chart: today's bulletin of orgs and heads;
+                                        reach / update / ask — `k2 organization --help`
+
+ASK A HUMAN
+  feedback ask "<title>"                File a durable ask for human input (survives
+                                        your session; supports --options/--wait;
+                                        agents attach --html brief.html, from
+                                        `k2 tickets template`)
+  feedback list                         This workspace's asks + their status
+  feedback show <id>                    One ask: status, answer, discussion thread
+                                        (ask/list/show/comment/resolve — see `k2 feedback --help`)
+  approve request --payload <file>      Ask a person to approve exact bytes on their phone
+                                        (Face ID); status / cancel — `k2 approve --help`

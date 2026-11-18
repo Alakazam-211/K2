@@ -457,171 +457,49 @@ cmd_dns_record() {
 
 cmd_help_dns() {
     cat <<'EOF'
-k2 dns — manage DNS records for zones on this K2 Connect account (toggle-gated)
-
-Agents can list zones, list/add/remove user-managed records, and verify
-delegation when the owner opts in. Zone create/delete is owner/dashboard-only.
-
-PRODUCT BOUNDARY (agents: pick the right tool)
-  Custom zone records (A/TXT/MX/…)     → k2 dns (this family; zone must already
-                                           exist, be attached on this server, and
-                                           be delegated; manage toggle ON)
-  Attach apex / hostnames on this box  → k2 domain (owner; not hostmail domain)
-  Box certs for attached hostnames     → k2 cert (not hostmail cert renew)
-  Nested label.user.k2.dev + target    → k2 publish subdomain
-  Device tunnel to primary *.k2.dev    → k2 tunnel
-  Hosted mail domain / MX recipe       → k2 hostmail domain (owner)
-
-USAGE
-  k2 dns <command> [args] [flags]
-
-COMMANDS
-  access                      Capability envelope (allowed? types? zones summary)
-  list                        List DNS zones for the account
-  records <domain>            List records (daemon resolves zone from domain)
-  record add <domain> <type> <name> <value> [--ttl N] [--priority N]
-                              Insert a user-managed record (A|AAAA|CNAME|TXT|MX|SRV|CAA)
-  record remove <record-id>   Delete a user-managed record by id
-  verify <domain>             On-demand delegation check
-
-GLOBAL FLAGS
-  --json                      Machine-readable output (single JSON object)
-
-OUTPUT CONTRACT
-  Success output is human-readable by default; --json switches it to JSON.
-  ERRORS are ALWAYS JSON on stderr — {"error":{"code","hint"}} — regardless
-  of --json.
-
-EXIT CODES
-  0 ok
-  1 error (proxy/upstream/not found/etc.)
-  2 bad usage (missing args, disallowed record type)
-  3 gated/forbidden — DNS manage is off; ask your human to turn it on in
-    Settings → Network → Tunnel → Policies → "Agents can change DNS records",
-    or Settings → Workspaces / Agents → <workspace> → Permissions → DNS →
-    "Let this agent manage DNS"
-    (same path as the access-denied `hint` — GH#32)
-
-NS and zone lifecycle are not available to agents.
-
-Run 'k2 dns <command> --help' for details on a command.
+%include cli/text/help/dns.txt
 EOF
 }
 
 cmd_help_dns_access() {
     cat <<'EOF'
-Capability probe for DNS manage on this workspace.
-
-USAGE
-  k2 dns access [--json]
-
-When the toggle is OFF, returns allowed:false without dialing the control
-plane (no zone existence oracle). When ON, returns live capability + zones
-summary from the control plane.
-
-Exit 0 even when allowed:false (capability read succeeded). Mutations
-still exit 3 when gated.
-
-FLAGS
-  --json                 JSON capability envelope
+%include cli/text/help/dns/access.txt
 EOF
 }
 
 cmd_help_dns_list() {
     cat <<'EOF'
-List DNS zones for the connected K2 account.
-
-USAGE
-  k2 dns list [--json]
-
-Requires DNS manage allowed for this workspace (else exit 3).
-
-FLAGS
-  --json                 JSON zones list
+%include cli/text/help/dns/list.txt
 EOF
 }
 
 cmd_help_dns_records() {
     cat <<'EOF'
-List DNS records for a zone. Pass a domain; the daemon resolves the zone id.
-
-USAGE
-  k2 dns records <domain> [--json]
-
-ARGUMENTS
-  <domain>               Zone domain (e.g. example.com)
-
-FLAGS
-  --json                 JSON records list
+%include cli/text/help/dns/records.txt
 EOF
 }
 
 cmd_help_dns_record() {
     cat <<'EOF'
-Add or remove a user-managed DNS record.
-
-USAGE
-  k2 dns record add <domain> <type> <name> <value> [--ttl N] [--priority N] [--json]
-  k2 dns record remove <record-id> [--json]
-
-See 'k2 dns record add --help' / 'k2 dns record remove --help'.
+%include cli/text/help/dns/record.txt
 EOF
 }
 
 cmd_help_dns_record_add() {
     cat <<'EOF'
-Insert a user-managed DNS record. Agents may use: A AAAA CNAME TXT MX SRV CAA.
-NS and zone apex lifecycle are owner-only.
-
-USAGE
-  k2 dns record add <domain> <type> <name> <value> [flags]
-
-ARGUMENTS
-  <domain>               Zone domain (daemon resolves the zone)
-  <type>                 A | AAAA | CNAME | TXT | MX | SRV | CAA
-  <name>                 Relative name (@ for apex)
-  <value>                Record content (IP, host, text, …)
-
-FLAGS
-  --ttl <N>              TTL seconds (default 300 server-side)
-  --priority <N>         Priority / prio (MX/SRV)
-  --json                 JSON response
-
-EXAMPLES
-  k2 dns record add example.com A www 203.0.113.10 --ttl 60
-  k2 dns record add example.com MX @ mail.example.com --priority 10
-  k2 dns record add example.com TXT @ "v=spf1 include:_spf.example.com ~all"
+%include cli/text/help/dns/record/add.txt
 EOF
 }
 
 cmd_help_dns_record_remove() {
     cat <<'EOF'
-Delete a user-managed DNS record by id (from 'k2 dns records <domain>').
-Automation-managed rows (managed_by != user) are refused.
-
-USAGE
-  k2 dns record remove <record-id> [--json]
-
-ARGUMENTS
-  <record-id>            Record id from the records list
-
-FLAGS
-  --json                 JSON response
+%include cli/text/help/dns/record/remove.txt
 EOF
 }
 
 cmd_help_dns_verify() {
     cat <<'EOF'
-On-demand DNS delegation check for a zone domain.
-
-USAGE
-  k2 dns verify <domain> [--json]
-
-ARGUMENTS
-  <domain>               Zone domain to verify
-
-FLAGS
-  --json                 JSON verification result
+%include cli/text/help/dns/verify.txt
 EOF
 }
 

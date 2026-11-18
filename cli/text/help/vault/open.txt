@@ -1,0 +1,6 @@
+k2 vault open [--json]
+
+Open a vault that didn't open when K2 started (a locked or cancelled
+Keychain prompt). It may ask once.
+
+Example: k2 vault open

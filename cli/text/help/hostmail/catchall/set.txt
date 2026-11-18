@@ -1,0 +1,4 @@
+Point this domain's catch-all at a minted mailbox on the same domain.
+
+USAGE
+  k2 hostmail catchall set <domain> --address <addr> [--json]

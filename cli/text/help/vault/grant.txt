@@ -1,0 +1,45 @@
+k2 vault grant NAME --to <who> [--as <d>] [--env-name X] [--file-name F] [--ttl 2h] [--scope <s>] [--json]
+
+Share NAME, or set how one consumer gets it (one grant per consumer and
+delivery; a new one replaces the old).
+  --to ws:<name>     a workspace; ws:* = every workspace;
+                     session:<id> (a running session's id, not k2 whoami's; the
+                     owner lists them: k2 sessions live <workspace>. Other ids
+                     are refused, and the share ends with that session);
+                     service:<label> (a k2 publish service);
+                     job:<name> (a k2 job; its runs get only these);
+                     compute:<ws>/<node> (that workspace's compute jobs on
+                     that node: k2 compute run --secret NAME), or
+                     compute:<ws>/* (every node this server owns), or
+                     compute:<ws>/lane:<owner>/<lane> (every node of your
+                     seat on that owner's lane, while a person here consents
+                     for that owner: k2 compute owners consent <owner> on;
+                     the seat request card gives it;
+                     (preview: k2 settings set ciPreview true)). People
+                     only (the value leaves this machine), --as env only.
+  --as fetch|agent|proxy|file|env|api   default: the secret's delivery; --env-name alone
+                     means env, --file-name alone means file. Never above
+                     the secret's ceiling.
+  --env-name X       the variable for env delivery (default: NAME in capitals,
+                     - and . as _). Names that change how programs run
+                     (PATH, LD_*, GIT_*, SSH_*, K2_*, *_BASE_URL…) are
+                     refused.
+  --file-name F      the file in $K2_SECRETS_DIR (default NAME)
+  --ttl 2h           the share ends by itself that long from now (90s, 10m,
+                     2h, 7d or seconds); k2 vault show lists "until <time>".
+                     Without it the share stays until revoked.
+A file grant also reaches running sessions: K2 writes it into their
+$K2_SECRETS_DIR at once (or within a minute; k2 vault sync in a session
+does it now). Env and ssh-key grants reach new sessions only: restart
+your session to receive it.
+
+A share they can read (file, env or api) asks you to confirm first, like
+reveal (Touch ID or your vault password), when you run it from your own
+terminal. A K2 terminal can't: share it in Settings → Vault instead.
+An agent refused a share with its own service (a person gave the secret):
+with permission cards on, the refusal ends with the line to ask with:
+k2 permission request vault.share-service as=file|env secret=NAME service=<service>.
+
+Example, a CLI tool that reads its token from the environment:
+  k2 vault grant GITHUB_CLI --to ws:<you> --env-name GH_TOKEN
+  (restart the session; gh now reads $GH_TOKEN)

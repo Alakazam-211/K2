@@ -1,0 +1,30 @@
+Restart an agent's pinned chat session. The running CLI process is stopped
+and started again on the SAME conversation (resume), so it re-reads its
+charter (AGENTS.md / CLAUDE.md) and workspace config (.mcp.json) without
+losing history. Use it after editing a charter or adding an MCP server.
+
+Only the pinned chat is restarted; sidecar tabs keep running. If the agent
+has no live session, restart starts one.
+
+USAGE
+  k2 agent restart <name> [flags]
+
+  <name> is the agent's handle, its name, or its full workspace path
+  (/home/k2/hooli/hooli-manager; a trailing slash or a symlink to the
+  folder works too). When a name matches more than one workspace, or an
+  old handle that was retired, it exits 4 and the error names each
+  workspace's handle and path: use one of those.
+
+On a server that has never had a pinned chat, the first one waits for you to
+pick its LLM: restart then exits 1 (harness_choice_needed), lists the
+harnesses and starts nothing. Run it again with --harness.
+
+FLAGS
+  --harness <harness>     For an agent that has never had a chat: the LLM CLI
+                          to start it on (claude, codex, grok, …). It becomes
+                          the workspace's default agent. Ignored once the
+                          agent has a chat; to move a chat to another
+                          harness, use k2 agent harness.
+  --dry-run               Show which session would restart; change nothing
+  --json                  JSON output: {ok, changed, name, path, oldSessionId,
+                          sessionId, conversationId, resumedExisting, provider}

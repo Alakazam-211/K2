@@ -1,0 +1,53 @@
+Your own OAuth app for Email Link, per provider — used instead of K2's
+built-in app — and the Microsoft tenant. OWNER verb (agents exit 3).
+
+USAGE
+  k2 mail oauth-config show [--json]
+  k2 mail oauth-config set --provider gmail --client-id <id> [--secret-stdin] [--json]
+  k2 mail oauth-config set --provider microsoft [--client-id <id>] [--tenant <t>] [--json]
+  k2 mail oauth-config clear --provider gmail|microsoft [--json]
+
+FLAGS
+  --provider <p>     gmail | microsoft
+  --client-id <id>   The app's client (application) id. Public, not a secret.
+  --secret-stdin     Gmail only: read the Desktop client's secret from stdin
+                     (never argv). Vaulted daemon-side, never shown again.
+  --tenant <t>       Microsoft only: common (default: any work or personal
+                     account) | organizations | consumers | a tenant id or
+                     domain. A single-tenant app registration needs its tenant.
+
+A link remembers which app minted it and always refreshes with that app:
+swap or clear your app and those links ask you to relink
+('k2 mail link upgrade <address> --features mail').
+
+MICROSOFT APP REGISTRATION (Entra → App registrations → New)
+  Supported accounts  any organizational directory + personal accounts
+                      (or one tenant, then pass --tenant)
+  Authentication      'Allow public client flows' = Yes (device code)
+  API permissions     delegated Microsoft Graph: openid, profile, email,
+                      offline_access, User.Read, Mail.ReadWrite, Mail.Send,
+                      Calendars.Read (read-only calendar links) and
+                      Calendars.ReadWrite (read-write ones; no admin consent
+                      for either)
+
+GOOGLE APP (Google Cloud console → APIs & Services)
+  Enable              Gmail API (mail links) and Google Calendar API
+  Client              OAuth client ID, type Desktop app (loopback redirect)
+  Consent screen      scopes openid, email, https://mail.google.com/
+                      (restricted: CASA to publish externally), and
+                      .../auth/calendar.events.readonly and .../auth/calendar
+                      .calendarlist.readonly (read-only calendar links), and
+                      .../auth/calendar.events, .../auth/calendar.freebusy
+                      (read-write ones). All four are sensitive, not
+                      restricted.
+                      In Testing mode only listed test users can link and
+                      refresh tokens expire after 7 days; an Internal app
+                      (Workspace) needs no verification.
+
+EXAMPLES
+  k2 mail oauth-config show
+  k2 mail oauth-config set --provider microsoft \
+      --client-id 00000000-0000-0000-0000-000000000000 --tenant organizations
+  printf %s "$GOOGLE_SECRET" | k2 mail oauth-config set --provider gmail \
+      --client-id 123-abc.apps.googleusercontent.com --secret-stdin
+  k2 mail oauth-config clear --provider microsoft

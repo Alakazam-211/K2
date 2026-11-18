@@ -1,0 +1,87 @@
+k2 workspace <subcommand> [options]
+
+Manage workspaces (project folders K2 knows about).
+
+DAILY SUBCOMMANDS
+  list                              Yellow pages: every workspace + status
+  list --running                    Filter to live agents
+  launch [<path>]                   Smart cascade: attach|wake|spawn
+  profile [<path>]                  Read workspace agent's AGENT.md
+  update --field <f> --value <v>    Edit workspace agent profile
+
+LIFECYCLE (less common)
+  create <path> [--no-wiki] [--no-agents-md] [--fanout]
+                                    Create folder + register (wiki + cwd AGENTS.md
+                                    seeded unless opted out; leftover fan-out off)
+  open <path> [--no-wiki] [--no-agents-md] [--fanout]
+                                    Register existing folder (same defaults)
+  remove <path>                     Deregister (files stay)
+  triage                            This workspace's inbox list (same as k2 inbox list)
+
+FOLDER TRUST (who may start AI tools in a folder; k2 workspace trust --help)
+  trust status [<folder>] [--json]  Clean / trusted / pending / denied + findings
+  trust request <folder> --why "…"  Agents: ask the owner (a Thread card)
+  trust <folder> --yes|--always|--no
+                                    Owner: Trust it / Always / Don't trust
+  trust reset <folder>              Owner: back to undecided
+
+WORKSPACE RESOURCES
+  resources list [--json]           Files pinned in the Files drawer for this workspace
+  resources add <file> [--json]     Pin an existing file (absolute path from this cwd)
+  resources remove <file> [--json]  Unpin that file
+  --workspace / --project <path>    Override the workspace (default: this one)
+
+API / HOST-SESSIONS
+  api-guest-policy get <ws>         Show owner guest policy (default if unset)
+  api-guest-policy set <ws> <text>  Set policy re-injected every /v1 turn
+  api-guest-policy set <ws> --file <path>
+  api-guest-policy set <ws> --default   Clear → platform default
+  api-skip-permissions get <ws>     Show if /v1 host spawns keep auto-approve (default on)
+  api-skip-permissions set <ws> on|off   Opt in/out of auto-approve on API host spawns
+  host-session-cell-cap get <ws>    Show concurrent host-session cap (15 default)
+  host-session-cell-cap set <ws> <n|default>  Set/clear per-ws live cell cap (max 512)
+  default-model get <ws>            Show workspace default model (unset if empty)
+  default-model set <ws> <model|clear>   Set or clear workspace default model
+  force-model-on-resume get <ws>    Show if resume also splices the default model
+  force-model-on-resume set <ws> on|off  Pass default model on dead resume (new PTY)
+
+TABS (Workspace settings → Tabs; every window and person on this server)
+  design-tab get <ws>               Show if the Design tab is pinned (default on)
+  design-tab set <ws> on|off        Pin or remove the Design tab (old name: design-mode)
+  mobile-tab get <ws>               Show the Mobile tab setting and if it shows here
+  mobile-tab set <ws> on|off|auto   Pin, remove, or auto (pinned where a phone can run)
+
+CANONICAL CHAT
+  swap-canonical <ws> --agent <harness>
+                                    Replace the pinned chat with a new session
+                                    of that harness and send it a transcript seed.
+                                    Does not resume the old chat. Does not move
+                                    heartbeats.
+      --recent                      Last turn only (default)
+      --full                        Longer transcript tail
+      --notes-file <path>           Extra notes appended to the seed
+      --model <id>                  Start the new chat on this model, even if
+                                    the preset names another (this start only)
+      harness: claude, grok, cursor, gemini, pi, codex, hermes
+                                    The same harness is a refresh (k2 agent
+                                    refresh): the Thread comes along.
+
+`<path>` defaults to K2_PROJECT_PATH or PWD.
+
+EXAMPLES
+  k2 workspace list
+  k2 workspace launch
+  k2 workspace launch /Users/me/Projects/myapp
+  k2 workspace profile
+  k2 workspace update --field role --value "frontend lead"
+  k2 workspace api-guest-policy get my-wiki
+  k2 workspace api-guest-policy set my-wiki "Read-only; use k2 respond --final"
+  k2 workspace api-skip-permissions get my-api-ws
+  k2 workspace api-skip-permissions set my-api-ws off
+  k2 workspace host-session-cell-cap get sales-interview
+  k2 workspace host-session-cell-cap set sales-interview 64
+  k2 workspace host-session-cell-cap set sales-interview default
+  k2 workspace resources add docs/brief.md
+  k2 workspace resources list
+  k2 workspace resources remove docs/brief.md
+  k2 workspace swap-canonical my-agent --agent claude --notes-file handoff.md

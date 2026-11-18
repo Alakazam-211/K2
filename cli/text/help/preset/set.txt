@@ -1,0 +1,29 @@
+Edit a preset (custom or built-in). Only the flags you pass change.
+--danger-flag / --env REPLACE the stored set wholesale (they don't
+append) — pass the full desired set.
+
+USAGE
+  k2 preset set <preset> [flags]
+
+FLAGS
+  --command '<argv>'      Replace the launch command string
+  --label <label>         Rename
+  --icon <emoji>          Change the icon
+  --enable | --disable    Toggle availability (disabled presets are
+                          skipped by the default-agent resolver)
+  --danger-flag <flag>    Replace the declared auto-approve flags
+                          (repeatable)
+  --env K=V               Replace the spawn env (repeatable)
+  --readiness <v>         'bracketed-paste' | 'settle:<ms>'
+  --clear-danger-flags    Clear back to undeclared (fail-closed floor)
+  --clear-env             Clear the spawn env
+  --clear-readiness       Clear back to the default injection profile
+  --inject-flow '<json>'  Replace the submit-keys flow (paste|esc|space|return)
+  --clear-inject-flow     Reset submit keys to the default paste/return/return
+  --json                  JSON output
+
+EXAMPLES
+  k2 preset set aider-ollama --readiness settle:3000
+  k2 preset set Gemini --danger-flag --yolo
+  k2 preset set my-agent --disable
+  k2 preset set grok --inject-flow '[{"key":"esc","waitMs":0},{"key":"space","waitMs":50},{"key":"paste","waitMs":150},{"key":"return","waitMs":250},{"key":"return","waitMs":120}]'

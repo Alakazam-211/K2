@@ -5,47 +5,7 @@
 
 _wiki_usage() {
     cat <<'EOF' >&2
-k2 wiki — per-workspace knowledge base (brain map)
-
-Vault lives at <workspace>/.k2/wiki/ (Markdown + [[wikilinks]]).
-
-USAGE
-  k2 wiki status [--json] [project]
-  k2 wiki index [--json] [project]
-  k2 wiki note <id> [--json] [project]
-  k2 wiki seed [project]
-  k2 wiki serve on|off [--port N] [project]
-  k2 wiki chat off [project]
-  k2 wiki publish [--label LABEL] [project]
-  k2 wiki unpublish [project]
-
-COMMANDS
-  status     Serve + publish state (port, url); public chat is always off
-  index      Graph index (nodes + links)
-  note       One note body by id (e.g. Home.md)
-  seed       Create Home.md + _Index.md if missing
-  serve      Start/stop read-only localhost site (127.0.0.1 only)
-  chat       Public chat is unavailable (coming back with the K2 runtime); `on` exits 3
-  publish    Serve on + nest a subdomain (or print create instructions)
-  unpublish  Serve off + hint to remove the nested subdomain
-
-HOSTING
-  Wiki hosting is being rebuilt on the K2 runtime. serve/publish keep
-  working from the CLI; the site answers only its own loopback host:port
-  or its published subdomain, sends no CORS headers, and shows every note
-  outside dot-folders. Public chat is off everywhere.
-
-FLAGS
-  --json                 Machine-readable stdout (status/index/note)
-  --port N               Preferred port for serve on (daemon may reassign)
-  --label LABEL          Nested subdomain label for publish (default: workspace basename slug)
-  --workspace|--project  Alias for trailing [project] (path, name, or uuid)
-
-EXIT CODES
-  0 ok
-  1 error (daemon / not found / control plane)
-  2 bad usage
-  3 public_chat_unavailable (k2 wiki chat on)
+%include cli/text/help/wiki/_unknown.txt
 EOF
 }
 
@@ -194,57 +154,7 @@ cmd_wiki() {
 
 cmd_help_wiki() {
     cat <<'EOF'
-k2 wiki — per-workspace knowledge base (brain map)
-
-Vault: <workspace>/.k2/wiki/  (Markdown + YAML frontmatter + [[wikilinks]])
-Index + optional localhost site live in the daemon (headless-safe).
-Publish reuses k2 publish subdomain (nested label.user.k2.dev → 127.0.0.1:port).
-
-USAGE
-  k2 wiki status [--json] [project]
-  k2 wiki index [--json] [project]
-  k2 wiki note <id> [--json] [project]
-  k2 wiki seed [project]
-  k2 wiki serve on|off [--port N] [project]
-  k2 wiki chat off [project]
-  k2 wiki publish [--label LABEL] [project]
-  k2 wiki unpublish [project]
-
-COMMANDS
-  status     Local serve state + published label (if any); public chat is always off
-  index      Full graph index (nodes, links, noteCount)
-  note       Fetch one note body by stable id (wiki-relative path, e.g. Home.md)
-  seed       Create seed notes Home.md + _Index.md when missing
-  serve      Toggle read-only localhost SPA (binds 127.0.0.1 only)
-  chat       Public chat is unavailable — it is coming back with the K2 runtime.
-             `chat on` exits 3 (public_chat_unavailable); `chat off` still works.
-  publish    Turn serve ON, then create/point a nested subdomain (or print the command)
-  unpublish  Turn serve OFF and print how to remove the nested subdomain
-
-HOSTING
-  Hosting is being rebuilt on the K2 runtime (hidden in the desktop app).
-  serve/publish/unpublish keep working here. The site answers only its own
-  loopback host:port or its published subdomain (no CORS), never shows
-  absolute paths or dot-folder notes, and publishes every other note in
-  .k2/wiki/ — unpublish anything you don't want public.
-
-PROJECT
-  Optional [project] / --workspace / --project: workspace path, name, or uuid.
-  Default: current workspace (K2_PROJECT_PATH / walk-up from CWD).
-
-EXAMPLES
-  k2 wiki seed
-  k2 wiki index --json
-  k2 wiki note Home.md
-  k2 wiki serve on --port 7420
-  k2 wiki publish --label brain
-  k2 wiki status --json
-  k2 wiki unpublish
-
-SEE ALSO
-  k2 publish subdomain create <label> --target 127.0.0.1:<port>
-  k2 publish subdomain rm <label>
-  k2 publish --help
+%include cli/text/help/wiki.txt
 EOF
 }
 
@@ -525,12 +435,7 @@ cmd_wiki_serve() {
         on|off|start|stop|true|false|1|0) ;;
         --help|-h|help|"")
             cat <<'EOF'
-Usage: k2 wiki serve on|off [--port N] [project]
-
-  on|start    Bind read-only localhost site (127.0.0.1)
-  off|stop    Drop the listener (in-app wiki still works)
-
-  --port N    Preferred port when turning on (optional)
+%include cli/text/help/wiki/serve.txt
 EOF
             [ -z "$mode" ] && exit 2 || exit 0
             ;;
@@ -608,12 +513,7 @@ cmd_wiki_chat() {
         off|disable|false|0) ;;
         --help|-h|help|"")
             cat <<'EOF'
-Usage: k2 wiki chat off [project]
-
-  off|disable Turn public chat off (serve can stay on)
-
-Public chat is unavailable: it is coming back with the K2 runtime.
-`k2 wiki chat on` exits 3 (public_chat_unavailable).
+%include cli/text/help/wiki/chat.txt
 EOF
             [ -z "$mode" ] && exit 2 || exit 0
             ;;
@@ -1147,39 +1047,7 @@ cmd_trust_folders() {
 # only presents the card); people decide.
 cmd_help_workspace_trust() {
     cat <<'EOF'
-k2 workspace trust — folder trust (who may start AI tools in a folder)
-
-K2 looks inside a folder before it tells Claude, Codex, Grok, Gemini or
-Cursor to trust it. A clean folder is trusted as before. A folder with
-settings that run commands or send your logins elsewhere waits for the
-owner: a card on Thread (Trust it / Always trust this folder / Don't trust).
-
-  k2 workspace trust status [<folder>] [--json]
-                                    One folder (or every workspace): clean,
-                                    trusted, always, pending, undecided,
-                                    changed or denied, with the findings
-  k2 workspace trust request <folder> --why "…"
-                                    Agents: present the card (only asks).
-                                    Your own folder, or another workspace's
-                                    on this server while it waits (its own
-                                    agent can't start, so can't ask)
-  k2 workspace trust <folder> --yes|--always|--no [--fingerprint <fp>]
-                                    Owner: Trust it (this version) / Always
-                                    trust this folder / Don't trust, for the
-                                    settings shown. A risky folder needs the
-                                    fingerprint from status or the ticket,
-                                    or a yes at the prompt in a terminal;
-                                    refused if the settings changed
-  k2 workspace trust reset <folder> Owner: back to undecided (asks again)
-  k2 workspace trust forget <folder>
-                                    Owner: remove every trust entry for the
-                                    folder in every tool's file (yours and
-                                    parent folders' too); status lists them
-
-Deciding is the owner's: an agent or a K2 terminal gets exit 3 and the
-request line to run instead. The owner can also decide in the app:
-Settings → Workspaces / Agents → <workspace> → Agent → Folder trust, or by opening that
-agent. More: k2 study folder-trust
+%include cli/text/help/workspace/trust.txt
 EOF
 }
 
@@ -1861,403 +1729,25 @@ cmd_help() {
 
 cmd_help_whoami() {
     cat <<'EOF'
-k2 whoami [--json]
-
-Print this cell's identity (same fields a launch snapshot pastes).
-Sidecar means this chat is an extra session of the workspace, not the
-primary. Owner messages here stay here unless you need the primary.
-
-  workspace: sales
-  role:      sidecar | canonical
-  address:   sales/reviewer   (or sales/1 or just sales)
-  primary:   sales
-  session:   <provider conversation id, else daemon PTY id>
-
-Exit 0. Fails loud if identity cannot be determined (run inside a
-workspace session). --json prints the daemon object.
+%include cli/text/help/whoami.txt
 EOF
 }
 
 cmd_help_msg() {
     cat <<'EOF'
-k2 msg — talk to another workspace agent (live chat OR a file package)
-
-THREE TOOLS (do not mix)
-  k2 msg     SEND to another agent: live "text" OR --inbox-wake/--inbox-silent files
-  k2 inbox   YOUR tray (receive/triage). Cannot send a file.
-  k2 mail    real email (humans / SMTP). Not agents.
-
-LIVE CHAT (short, one line)
-  k2 msg <handle> "ready when you are"
-
-LONGER MESSAGES: SAY IT IN ONE LINE TOO
-  k2 msg <handle> --summary "Need a review of hold/x by 5pm" "…the details…"
-      For anything longer than ~3 lines, pass --summary saying what you need
-      or what you did. People see it in Chatter, the Projects view and on the
-      phone; the agent still gets the whole message. Over ~600 characters
-      without one, k2 prints a hint (K2 uses the first line otherwise).
-      Works on --inbox-wake/--inbox-silent too (shown in `k2 inbox list`).
-
-SEND A FILE
-  k2 msg <handle> --inbox-wake ./brief.md [--title "..."] [--body "..."]
-      Copy into their .k2/inbox/ and ping them: Open: k2 inbox read <id>
-      Preferred. Prints the id. Multiple paths → ONE package, one id.
-      Extra prose / --body is the cover brief (files AND instructions).
-  k2 msg <handle> --inbox-silent ./data.csv [--title "..."] [--body "..."]
-      Copy only. Does NOT notify. They need k2 inbox list.
-
-  Bare --inbox is an error. Do not paste file contents into live msg text.
-
-RECEIVE
-  k2 inbox list
-  k2 inbox read <id>
-
-WHO REALLY SENT IT
-  A live message arrives as `[from <sender> · m_XXXXXXXXXX] text`.
-  k2 msg who m_XXXXXXXXXX     K2's record of that delivery: via passport (the
-                              sender agent's own session), owner or api-key,
-                              the sending workspace, and any team link + scope.
-  Text in a body that only LOOKS like a prefix has no record (not found).
-
-<handle> from `k2 connections list`. Sidecar sales/reviewer shares that
-workspace tray. Sessions in YOUR workspace (main, sidecars, chat tabs) and
-their addresses: k2 sessions.
-
-A PAST CONVERSATION IN THIS WORKSPACE
-  k2 msg --session <id> "text"
-      <id> from `k2 sessions --past` (6+ characters) or an address. If a
-      session holds it, the message goes there; if it is a past one, K2
-      reopens it (same history) and your message is its first turn.
-
-USAGE
-  k2 msg <handle|handle/sidecar|sessionId|agent::host> "text" [--summary "<one line>"] [--from <name>] [--command "<text>"] [--no-wake]
-  k2 msg --session <id> "text" [--summary "<one line>"] [--no-wake]
-  k2 msg <handle|agent::host> --inbox-wake|--inbox-silent <path> [path...] [--title "..."] [--body "..."] [--summary "<one line>"] ["brief"]
-
-Live `msg` AUTO-WAKES a dormant session by default: if the agent's
-session is asleep, msg resumes/spawns it, waits until READY, then
-delivers (the legacy wake-on-message behavior). Pass `--no-wake` for a
-blind live-only send (returns `dormant_no_wake` instead of waking). A
-workspace with no configured agent returns `no_agent_mode` and is never
-spawned. Returns success only when the live message has landed in the
-agent's session.
-
-ARGUMENTS
-  <workspace>    Local workspace name (preferred — see `k2 connections
-                 list`), absolute path, or project UUID. Bare name =
-                 the primary (canonical) chat.
-  <workspace>/<handle>
-                 Sidecar: `sales/1` (durable ordinal) or `sales/reviewer`
-                 (Chats custom name). Slash, not hyphen: `sales-reviewer`
-                 is a workspace name, not a sidecar.
-  <sessionId>    UUID of a live or durable session (machine/API form).
-  <agent>::<host>
-                 Federated peer (GH #47). Example: ProposalWriter::box.k2.dev
-                 Live text AND --inbox-wake/--inbox-silent use the same
-                 federation plane (connected peer is the gate; no Connect
-                 token required). Legacy agent@host still works temporarily
-                 (not email). Wire form fp::ws::agent is for `k2 fed send` only.
-  <agent>/<handle>::<host>
-                 A sidecar chat in that peer's workspace, e.g.
-                 ada/notes::box.example.k2.dev (a chat named "Notes").
-                 Same connection and switch as the workspace; both
-                 servers need K2 0.46.11 or later.
-  "text"         The message body. Wrap in quotes if it has spaces.
-
-OPTIONS
-  --from <name>  Sender identity rendered as [from <name>] prefix in
-                 the recipient's session. Defaults to the sender's
-                 workspace name (auto-derived from K2_PROJECT_PATH
-                 or CWD). Falls back to `external` if neither resolves.
-  --command "<text>"
-                 Prepend <text> at the VERY FRONT of the delivered
-                 message, BEFORE the [from <name>] prefix. Intended for
-                 slash-commands so the recipient's agent runs them on the
-                 incoming line — e.g. --command "/loop" delivers:
-                     /loop [from <name>] <text>
-                 Omitted (the default) leaves delivery unchanged:
-                     [from <name>] <text>
-  --no-wake      Suppress the default auto-wake: deliver only if the
-                 canonical session is already live, else return
-                 `dormant_no_wake`. Use for a cheap blind send that must
-                 not spin up a session.
-  --wake         Explicit opt-IN (the default; accepted for symmetry/
-                 scripts). On a wake the response carries `woke: true` +
-                 `wake_ms` and a note is printed to stderr so you
-                 attribute the latency.
-  --wake-timeout <secs>
-                 Ceiling for the post-wake readiness wait (default 20).
-  --idempotency-key <key>
-                 Every send carries one key; K2 delivers a key once. When
-                 K2 doesn't answer, msg asks again with the same key, then
-                 says the message may have been delivered and prints the
-                 key: run the same command with --idempotency-key <key> to
-                 try once more without a duplicate (the answer then says
-                 "replayed": true if it had landed).
-
-RESPONSE (JSON)
-  {
-    "success": true,
-    "target_session_id": "<uuid>",
-    "attempts": 1
-  }
-
-  Failures include `reason` + `hint` fields:
-    workspace_not_found  — token didn't match a registered workspace
-    no_agent_mode        — workspace has no agent (set one up: `k2 settings
-                           --mode custom`; or queue with `msg <ws>
-                           --inbox-silent <file>`)
-    dormant_no_wake      — canonical session is asleep + you didn't pass
-                           --wake (re-run with --wake, or use `k2 talk`)
-    spawn_failed         — couldn't start the recipient's agent
-    main_chat_missing    — their pinned main chat can't be found on disk;
-                           a person picks one (k2 sessions main set)
-    pty_died             — target session crashed during delivery
-
-  Exit code 0 on success, 2 on any failure.
-
-LENGTH LIMIT — IMPORTANT
-  Live `msg` is injected into the recipient's running input line (as if
-  typed, then Enter). It is for SHORT, single-line messages. Long or
-  multi-line text gets TRUNCATED or mangled by the recipient's terminal
-  input widget (Claude Code / Codex / Gemini all treat fast-arriving
-  bytes as a paste with input-buffer limits). For anything longer than a
-  sentence or two — task briefs, file contents, structured packages —
-  use `--inbox-wake` (preferred) or `--inbox-silent`, which copies a
-  durable package into the peer's `.k2/inbox/` with no length limit:
-
-      k2 msg <workspace> --inbox-wake ./brief.md
-      k2 msg <workspace> --inbox-silent ./report.pdf
-
-TRAY DELIVERY (work packages)
-  k2 msg <workspace> --inbox-wake <path> [path…] [--title "..."] [--body "..."] [--from <name>]
-      Package + short live knock (recommended). Wake line is a pointer
-      (`[inbox:<id>] <title>` + `Open: k2 inbox read <id>`), never the
-      full file body. Multiple paths → one package (cover + all sidecars).
-      Positional prose or --body is stored on the cover with the files.
-
-  k2 msg <workspace> --inbox-silent <path> [path…] [--title "..."] [--body "..."] [--from <name>]
-      Package only — does NOT notify the peer. Use wake, or a separate
-      live `k2 msg` after silent, if you want a knock.
-
-  Bare `--inbox` is a hard error (must pick silent or wake).
-  Non-markdown files land as a cover `.md` + sidecar under
-  `.k2/inbox/<id>.files/<filename>`. Multi-file: all files are sidecars
-  under one `<id>.files/` with a single cover note listing them.
-
-  Remote tray (`agent::host` / `name@host`): same federation plane as
-  live `k2 msg agent::host "text"`. Connected peer is the gate — not a
-  Connect token. Cover `.md` + small attachments (v1 size cap; fail
-  loud above it). Files stay out of the PTY. Not `k2 mail`; recipient
-  opens with `k2 inbox read <id>`.
-
-RELATED VERBS
-  k2 inbox list | read <id> | move | archive
-      YOUR tray (receive/triage). Cannot send a file. Not email.
-
-  k2 read <workspace> [--lines N] [--agent <name>]
-      Read the recipient's live terminal (peek before you inject, or
-      diagnose a stuck agent). The read complement to `msg`.
-
-  k2 terminal write <id|workspace> "text"   (see `k2 help --advanced`)
-      Raw bytes to a PTY, by session UUID OR by workspace NAME (GH#8 —
-      resolved to the workspace's live session, like `k2 read`). Power-
-      user escape hatch when `msg`'s routing isn't what you want.
-      `target_session_id` from a `msg` response is a valid <id>.
-
-EXAMPLES
-  k2 msg scout_v3 "ready when you are"
-  k2 msg scout_v3 "ping" --from sms-bridge
-  k2 msg scout_v3 "keep going" --command "/loop"
-  k2 msg scout_v3 "wake up and check in" --wake
-  k2 msg scout_v3 --inbox-wake ./brief.md
-  k2 msg scout_v3 --inbox-silent ./data.csv --title "CSV drop"
-  k2 msg scout_v3 --inbox-wake a.md b.pdf notes.txt --title "Batch"
-  k2 msg /Users/me/work/MyApp "deploy completed"
-  k2 msg peer::other.k2.dev "ping from federation"
+%include cli/text/help/msg.txt
 EOF
 }
 
 cmd_help_read() {
     cat <<'EOF'
-k2 read <workspace> [--lines N] [--agent <name>]
-
-Read another workspace's LIVE terminal — the last N lines of plain
-text from its running session. The "read" complement to the messaging
-verbs: `msg` talks live or sends a tray package; `inbox` is YOUR tray;
-`read` peeks their terminal. Not mail. Addresses by workspace NAME
-exactly like `msg`.
-
-Use it to PEEK BEFORE YOU INJECT (human-in-the-loop: see what an agent
-is doing / waiting on before sending it a message), or to diagnose a
-stuck or quiet agent.
-
-ARGUMENTS
-  <workspace>    Workspace name (preferred — see `k2 connections list`).
-                 Absolute path or project UUID also accepted. Same
-                 addressing as `k2 msg`.
-
-OPTIONS
-  --lines N      How many trailing lines to return. Default 50.
-  --agent <name> Read a specific agent's session in the workspace.
-                 Omit to read the workspace's primary (coordinator)
-                 session — the usual target.
-
-OUTPUT
-  Plain text, one terminal row per line (most recent at the bottom).
-  Styling / cursor are stripped — this is for reading, not rendering.
-  Exit code 0 on success; non-zero with a hint if the workspace isn't
-  found or has no live session (it may be asleep — see `k2 sessions`).
-
-RELATED VERBS
-  k2 msg <workspace> "text"          Talk to the agent live.
-  k2 msg <ws> --inbox-wake <path>    Package + short live notify.
-  k2 msg <ws> --inbox-silent <path>  Package only (no notify).
-  k2 sessions                        Who is working in your workspace.
-
-EXAMPLES
-  k2 read scout_v3                   # last 50 lines of its coordinator
-  k2 read scout_v3 --lines 120       # more history
-  k2 read MyApp --agent frontend-eng # a specific agent's session
+%include cli/text/help/read.txt
 EOF
 }
 
 cmd_help_talk() {
     cat <<'EOF'
-k2 talk <workspace> "text" [--read-only] [--from <name>] [--lines N] [--agent <name>]
-k2 talk <workspace> --answer <N>      # BETA: drive a 1-question HITL + re-read
-k2 talk <workspace> --respond <y|n>   # BETA: alias of --answer (y->1, n->2)
-k2 talk <workspace> --scout           # BETA: surface a WHOLE multi-Q form at once
-k2 talk <workspace> --answers <a,b,c> # BETA: answer a whole form + submit, one call
-k2 talk <workspace>@<host> "text" --token-stdin
-                                      # a workspace on a remote server; reads its
-                                      # token from stdin (--token <tok> works too,
-                                      # but a token on the command line is visible
-                                      # to other users on this machine)
-
-  ★ BETA — THE inter-agent interaction verb. ★
-
-`talk` FUSES "read the peer's live screen" + "send" into one call, so
-you can't forget to look before you inject. That slip is what gets a
-message *eaten*: if the recipient is mid-HITL (a y/n, a 1·2·3 / arrow
-menu, a "proceed?" confirm), an injected `msg` is silently consumed as
-the ANSWER to that prompt instead of delivered. `talk` reads first so
-you SEE the state and decide.
-
-  talk vs msg:
-    k2 talk  = interactive collaboration. Read → judge → drive/back-off
-               → deliver. Use it whenever the peer might be busy/HITL.
-    k2 msg   = deliberate fire-and-forget. The blind send; unchanged.
-  A wrong-verb mistake is benign both ways, so prefer `talk` for any
-  interactive or HITL-sensitive exchange.
-
-HOW IT WORKS (pure ergonomics over read + msg)
-  1. READS the target's live terminal (same as `k2 read`) and prints it.
-  2. Surfaces the drive-or-back-off guidance. YOU (the calling agent —
-     you are the LLM) comprehend the screen; the CLI does not judge.
-  3. AUTO-DETECTS a HITL (GH#8): before sending, it asks the daemon's
-     /cli/terminal/classify whether the peer is on a human-in-the-loop
-     prompt. If so it AUTO-STARTS --scout (surfaces the whole form, non-
-     destructive) and HOLDS your message instead of letting it get eaten;
-     answer with `--answers`/`--answer`, then re-run to deliver. Detection
-     matches known prompt patterns (select menus, permission gates, trust
-     dialogs); a prompt with no known marker is not detected. When nothing
-     is detected it delivers as normal: you already saw the screen from
-     step 1.
-  4. SENDS via the `k2 msg` path — unless --read-only. `talk` AUTO-WAKES
-     a dormant canonical session by default (it's the explicit "interact
-     now" verb): if the peer is asleep it resumes it, waits until READY,
-     then delivers, and prints "peer was dormant — woke (Xs)". Suppress
-     with --no-wake.
-
-YOU JUDGE — ready vs HITL:
-  • READY (idle/empty input)             → deliver; it lands cleanly.
-  • HITL you must NOT answer for it       → BACK OFF. Re-run --read-only
-    (canonical/federation peer waiting      in a few minutes; deliver
-     on its OWNER, or no standing)          only once it returns to READY.
-  • HITL you DO have standing over        → DRIVE it: answer + re-read in
-                                            ONE call with --answer <N> /
-                                            --respond <y|n> (see below),
-                                            repeat for chains, THEN deliver.
-
-ACT-RETURNS-STATE (BETA, GH#8) — the #1 round-trip win:
-  --answer <N> / --respond <y|n> FUSE the drive + the confirm re-read so
-  a drive step is ONE call instead of write-then-separately-re-read:
-    1. send the key (<N>, or y/n) to the resolved session via the SAME
-       raw TUI-control path `k2 terminal write` uses (/cli/terminal/write);
-    2. immediately re-read + print the resulting screen.
-  Best-effort and DELIBERATELY un-validated: `--answer 4` just sends the
-  digit (exactly like a manual `terminal write <id> "4"`), it does NOT
-  check that option 4 exists or parse the menu — YOU still read the
-  re-printed screen to confirm. Structured-state (--json) and
-  option-name selection (--select) are a later wave.
-  --respond <y|n> is just an ALIAS of --answer for the standard
-  "1. Yes / 2. No" confirm ordering: y->1, n->2 (a number passes through).
-
-BATCH FORM (BETA, GH#8 #69) — collapse an N-question form to ~2 turns:
-  Claude's AskUserQuestion shows N questions CO-RESIDENT: ←/→ move
-  between them, a number key auto-selects + ADVANCES (no Enter), and the
-  last question lands on a "Review your answers" -> "1. Submit / 2.
-  Cancel" screen. So the whole form = N digits (one per question, each
-  auto-advancing) + a final `1` to submit.
-  --scout            Walk the form with ARROW KEYS ONLY (non-destructive),
-                     capturing every question+options, then return focus
-                     to Q1 UNMODIFIED — see the WHOLE form in one call.
-  --answers <a,b,c>  From Q1, send each digit (auto-advances), then the
-                     final `1` to submit; re-reads + prints the outcome.
-                     Warns if the count != the form's N (still proceeds).
-  Tunables (env-overridable): K2_TALK_NAV_SETTLE / K2_TALK_ANSWER_SETTLE
-  (settle seconds), K2_TALK_SUBMIT_KEY (submit key, default 1).
-
-ARGUMENTS
-  <workspace>    Workspace name (preferred), path, or UUID. Same
-                 addressing as `k2 msg` / `k2 read`.
-  "text"         The message body. Required unless --read-only or a
-                 drive flag (--answer / --respond) is used.
-
-OPTIONS
-  --read-only    Read + judge ONLY; send nothing. Use this to BACK OFF
-                 and re-check a HITL peer later. (aliases: --dry-run, --peek)
-  --answer <N>   BETA. Send key <N> to the resolved session, then re-read
-                 + print the resulting screen. Drives a numbered/menu HITL
-                 in one call. No message text needed.
-  --respond <y|n> BETA. ALIAS of --answer for a y/n confirm: maps y->1,
-                 n->2 (standard "1. Yes / 2. No" ordering); a number
-                 passes through. Sends the key, then re-reads + prints.
-  --scout        BETA. Surface a WHOLE multi-question form in one call:
-                 walks it with ARROW KEYS ONLY (non-destructive), captures
-                 every question, then returns focus to Q1 unmodified.
-  --answers <a,b,c>  BETA. Answer a form currently on Q1: send each digit
-                 (auto-advances), then a final 1 to submit; re-read +
-                 print the outcome. Warns if count != N (still proceeds).
-  --from <name>  Sender identity for the [from <name>] prefix (forwarded
-                 to `msg`; same default-derivation as `msg`).
-  --lines N      Lines of the peer's screen to read first. Default 50.
-  --agent <name> Read/target a specific agent's session in the workspace.
-  --command "<text>"  Slash-command prepended to the delivered message
-                 (forwarded to `msg`).
-  --no-wake      Do NOT auto-wake a dormant canonical session (talk wakes
-                 by default). With --no-wake a sleeping peer returns
-                 `dormant_no_wake` instead of being spun up.
-  --wake-timeout <secs>
-                 Ceiling for the post-wake readiness wait (default 20).
-
-EXIT CODE
-  Mirrors `k2 msg`: 0 when the message lands, 2 on a delivery failure.
-  --read-only always exits 0 (it only reads).
-
-EXAMPLES
-  k2 talk scout_v3 --read-only          # peek + judge; send nothing
-  k2 talk scout_v3 "ready when you are" # read its screen, then deliver
-  k2 talk MyApp "merged" --from ci-bot  # attributed delivery
-  k2 talk scout_v3 --answer 2           # BETA: pick menu option 2, see result
-  k2 talk scout_v3 --respond y          # BETA: confirm a y/n (y->1), see result
-  k2 talk scout_v3 --scout              # BETA: see a WHOLE multi-Q form at once
-  k2 talk scout_v3 --answers 1,2,1      # BETA: answer all 3 Qs + auto-submit
-
-RELATED VERBS
-  k2 msg <workspace> "text"     Deliberate blind send (no read).
-  k2 read <workspace>           Just read a peer's live terminal.
+%include cli/text/help/talk.txt
 EOF
 }
 

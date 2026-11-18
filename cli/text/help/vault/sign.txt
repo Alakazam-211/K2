@@ -1,0 +1,21 @@
+k2 vault sign NAME ovh | hmac-sha256 --sign-header <Name> [--sign-encoding hex|base64] [--sign-prefix '<p>']
+k2 vault sign NAME hmac-sha256-ts --sign-header <Name> [--sign-ts-header <Name>] [--sign-template '<t>'] [--sign-value '<v>']
+k2 vault sign NAME oauth-refresh --oauth-token-url <url> [--oauth-client-auth basic|post|none]
+k2 vault sign NAME none
+Each takes [--scope <s>] (which secret) and [--json].
+
+Set or remove how K2 signs requests made with NAME (k2 vault set --help:
+Signers). k2 vault fetch then adds the signer's headers on every request,
+redirects included; --dst/--fmt are refused. Changing the signer of a
+secret a person gave you is the owner's call. ovh checks that the stored
+value is the OVH JSON. none goes back to pasting the value as set.
+oauth-refresh checks that the stored value is the sign-in JSON (k2 vault set
+--help). Once set it can't be removed, and NAME stays at fetch: K2 refreshes the
+token and the refresh token never leaves K2. If the provider stops accepting
+it, NAME reads "expired: sign in again" and uses exit 3 (oauth_expired); a card
+goes to the Thread, or a person runs k2 vault rotate NAME < sign-in.json.
+
+Examples:
+  k2 vault sign OVH_EU ovh
+  k2 vault sign HOOK_KEY hmac-sha256 --sign-header X-Hub-Signature-256 --sign-prefix 'sha256='
+  k2 vault sign STRIPE_HOOK hmac-sha256-ts --sign-header Stripe-Signature --sign-value 't={ts},v1={sig}'

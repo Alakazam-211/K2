@@ -1,0 +1,61 @@
+
+FETCH (one of)
+  --url URL                       one HTTPS JSON address
+  --target key=URL                one fan-out target (repeat, up to 50); each answer is one item
+  --url-secret NAME --origin https://host   the whole URL lives in the vault
+  --secret NAME                   a vault secret sent as the auth header (bound by a person,
+                                  or an agent with the switch)
+  --header 'Name: value'          a plain header (no secrets: those are refused)
+  --expect-status 200,401         status-only check: these statuses are healthy answers,
+                                  whatever the body (HTML, 401). JSON is still read if it parses.
+
+SCHEDULE
+  --every 60s|5m|1h               how often (30 s to 1 day; default 60 s)
+  --timeout 10s                   1-30 s (fan-out default 5 s)
+  --max-bytes 1M                  1 KiB to 5 MiB
+  --fail-after N                  checks in a row before a reading goes hard (1-10,
+                                  default 3). Once any rule sets warnAfter/critAfter,
+                                  failAfter counts fetch failures only.
+  --on-target-error crit|unknown  what a failed fan-out target reads as
+
+WHAT TO KEEP
+  --field name=/pointer           a value from the answer
+  --count name=/pointer           the length of an array or object (e.g. past_due)
+  --items /pointer                the item list (array, or object keyed by name)
+  --item-key /pointer             each item's key (default: index or property name)
+  --item-field name=/pointer      a value from each item
+  --list name=/pointer            another item list next to --items (single URL only)
+  --list-key name=/pointer        that list's item key
+  --list-field list.field=/pointer   a value from each of that list's items
+                                  (item field names are unique across all lists; list
+                                  items have the key <list>/<key> and "list": "<list>")
+  --agg name=count[:list] | count-where:field:op:value | sum:f | min:f | max:f | distinct:f
+  --trend name                    chart a field/count/aggregate (up to 8; history also
+                                  keeps every count and aggregate)
+
+RULES  --rule 'field:level:op:value[,level:op:value…][,warnAfter:N][,critAfter:N]'
+  level: crit, warn, ok (checked in that order; none matching = unknown)
+  op:    eq ne in lt lte gt gte exists
+         ageGt ageLt           the value is a time (epoch s/ms, RFC 3339) older/newer than
+                               a duration:  --rule 'ts:warn:ageGt:5m,crit:ageGt:15m'
+         versionBehind         older than a version or @field, optionally by a distance:
+                               --rule 'version:warn:versionBehind:@target_version,crit:versionBehind:@target_version~minor=1'
+         versionAtLeast        at or past:  ok:versionAtLeast:@target_version
+  value: a literal, a|b|c for in, or @name: another field (the item's own, else the
+         source's), e.g. 'used:warn:gt:@quota'
+  warnAfter:N  checks in a row before this rule's warn goes hard (1-20, default 1: at once)
+  critAfter:N  checks in a row (not ok, the last one crit) before crit; until then it
+               shows as warn ("soft crit 2/3"). Default: warnAfter.
+  Opt-in: setting warnAfter or critAfter on ANY rule turns per-rule thresholds on for the
+  whole source (rules without them then go hard at once; failAfter = fetch failures only).
+  With neither set, every rule reading waits failAfter, as before 0.46.1. Opting in
+  changes the definition, so the source is approved again.
+  A field rule colours the source; an item field rule colours each item of its list.
+
+WHO SEES WHAT
+  --viewers member|admin  --agent-access values|shape  --keep values|states   (people only)
+  --link https://…        where the card's title goes
+  --preset NAME --preset-arg k=v   start from a preset (k2 study data-sources)
+
+THE FILE FORM (--from) is the export shape; see k2 sources export <name> and
+k2 study data-sources for a full example. Flags given with --from override it.

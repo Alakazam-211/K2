@@ -1,0 +1,50 @@
+k2 feedback — ask a human for input and get an answer back
+
+An agent uses this when it needs a person: a question, an approval, a heads-up.
+The ask becomes a durable item on this server's Feedback page (it does NOT
+disappear like a terminal prompt). A human answers there — in-line or by opening
+your session — and the answer comes back to you.
+
+USAGE
+  k2 feedback <command> [args] [flags]
+
+COMMANDS
+  ask <title>            File a new feedback item asking for human input
+                         (agents attach an HTML brief: --html brief.html)
+  template               Print the HTML brief skeleton (no daemon needed)
+  list                   List this workspace's feedback items (newest first)
+  show <id>              Show one item: the ask, its status, and the full thread
+  comment <id> <text>    Add a message to an item's discussion thread (bumps the
+                         card's message count; only NEW items fire notifications)
+  assign <id> …          Set who the ticket is for (owner / connect-user names)
+  resolve <id>           Mark an item resolved (you got what you needed)
+  resolve <id> --answered "<outcome>"
+                         Settle a discussion: mark it answered with what you
+                         and the person agreed
+  settings               Show this server's ticket rules (brief, assignee,
+                         default assignee); owner/admin change them
+
+HOW A PERSON ANSWERS
+  Picking one of your options (the --options buttons or the brief's Options
+  list) answers the ticket: status answered. Typing a free-text message puts
+  it in needs_discussion: reply with `comment`, settle it, then mark it
+  answered (`resolve <id> --answered "<outcome>"`) or resolved (`resolve <id>`).
+  Both kinds of message land in your session.
+
+ADDRESSING
+  <id> is a feedback id (from `ask`/`list` output). A short unique prefix works.
+
+GLOBAL FLAGS
+  --json                 Machine-readable output (single JSON object)
+
+OUTPUT CONTRACT
+  Success output is human-readable by default; --json switches it to JSON.
+  ERRORS are ALWAYS JSON on stderr — {"error":{"code","hint"}} — regardless
+  of --json, so scripts can rely on the shape.
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage · 4 not found (ambiguous id prefix = 4 too,
+  with the matching candidates listed in the hint) · 5 ask --wait: the person
+  wrote free text instead of picking an option (needs_discussion)
+
+Run 'k2 feedback <command> --help' for details on a command.

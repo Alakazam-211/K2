@@ -1,0 +1,41 @@
+Manage agent PRESETS — the roster of launchable agent programs this
+server knows (Claude, Codex, Gemini, ... plus your own). A preset is a
+command string plus metadata the daemon uses at spawn time:
+
+  danger-flags   the agent's OWN auto-approve flags (e.g. --yes-always).
+                 On API host-session spawns they are KEPT by default
+                 (api_skip_permissions ON). Opt out per workspace to strip
+                 them (fail-closed).
+  env            environment variables staged into the agent's process
+                 (e.g. OPENAI_BASE_URL for a local-LLM harness).
+  readiness      when prompt injection may fire: 'bracketed-paste'
+                 (TUI readiness signal is trustworthy) or 'settle:<ms>'.
+  inject-flow    keystroke sequence used to deliver a message into this
+                 LLM's terminal (paste|esc|space|return). NULL = default
+                 paste / return / return.
+
+USAGE
+  k2 preset list [--json]
+  k2 preset show <preset> [--json]
+  k2 preset add --id <slug> --command '<argv string>' [flags]
+  k2 preset set <preset> [flags]
+  k2 preset remove <preset> [--json]        (custom presets only)
+
+<preset> = preset id, label (case-insensitive), or command first-token.
+Mutations need the owner token or an Owner/Admin session. Built-ins:
+editable (incl. metadata), never deletable — disable instead.
+
+Point a workspace at a preset: k2 agent hire <dir> --agent <preset>
+
+EXAMPLES
+  k2 preset list
+  k2 preset show codex
+  k2 preset add --id aider-ollama --command 'aider --model ollama_chat/qwen3' \
+      --env OLLAMA_API_BASE=http://localhost:11434 \
+      --danger-flag --yes-always --readiness settle:2000
+  k2 preset set aider-ollama --readiness settle:3000
+  k2 preset remove aider-ollama
+
+See `k2 preset add --help` / `k2 preset set --help` for the full flags,
+and docs/agent-contract.md for what a custom agent must do to be a
+first-class K2 citizen.

@@ -1,0 +1,32 @@
+k2 app status <app-id> [--json] [--no-checks] [--public]
+
+How an App is doing, in one answer: everything you would otherwise check
+one command at a time after a deploy.
+
+  deploy     the live Seed (version, commit, who, when) and the last deploy's result
+  health     a health check now (status and time), uptime, restarts
+  checks     the App's own host.checks from its manifest, run now
+  errors     failures in the last hour, by kind (crash, health, build, deploy)
+  resources  the App's disk and memory, and the box's disk level
+  door       outside hosts refused in the last hour; requests waiting for the owner
+  hosts      its label, URL and custom domains
+  phone      phone pairing, push keys (set or not) and devices
+  updates    the App's desktop update feed (on servers that have one)
+  next       one exact command for each red or yellow item
+
+  --no-checks  don't run host.checks; show the run recorded when the live
+               deploy switched in (it may be old)
+  --public     run host.checks through the App's public URL (proves TLS
+               and the relay), not on this machine. Not with --no-checks.
+  --json       {schema: 1, verdict, deploy, health, checks, errors,
+                resources, door, hosts, phone, updates, next: [{level,
+                part, what, run}]}
+
+Exit codes: 0 green (all good); 1 red (the health check failing, a
+host.check failed, crash looping, nothing live after a deploy); 2 yellow
+and nothing red (a deploy in progress, nothing deployed yet, the last
+deploy failed while the previous version still serves, requests waiting
+for the owner, failures in the last hour); 3 refused (no such App, or not
+yours: k2 explain <id>). A usage mistake also exits 2, with a usage: line.
+Text the App itself produced is never printed: checks say only whether
+the status, header and body matched.

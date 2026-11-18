@@ -1,0 +1,22 @@
+What each inbox you can use can do — and, for anything that is off, why
+and the fix.
+
+USAGE
+  k2 mail capabilities [<address>] [--json]
+
+Inside a workspace you see your own inboxes at your access level; outside
+one (owner) every inbox on the box. Per inbox:
+  source     hosted | imap | google | microsoft
+  mail       read, draft, compose, send
+  calendar   read, write, invite, rsvp; free/busy reach (box | self |
+             none);
+             scheduling
+  account    linked Google / Microsoft only: personal | work | consumer |
+             workspace, the tenant, and whether the signed-in account was
+             checked against the address
+  missing    {cap, reason, fix} for every capability that is off. reason:
+             level (ask your human to raise it), scope_not_granted (the owner
+             re-consents with 'k2 mail link upgrade'), owner_disabled,
+             backend_unsupported, not_built
+
+An inbox you can't use answers not_found, like every mail verb.

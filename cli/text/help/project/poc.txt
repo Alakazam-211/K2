@@ -1,0 +1,16 @@
+Without <workspace>: print the current PoC's name — bare, script-friendly
+(like `k2 agent get`). With <workspace>: reassign the PoC to that member.
+
+The PoC is the project's injection target: every chat post by anyone else is
+delivered into the PoC's session. The target must already be a member (add it
+first). Reassignment takes effect for the NEXT message.
+
+USAGE
+  k2 project poc <project> [<workspace>] [flags]
+
+FLAGS
+  --json                 JSON output
+
+EXAMPLES
+  k2 project poc 0.41-release            (prints: Appa)
+  k2 project poc 0.41-release scout      (scout is now the PoC)

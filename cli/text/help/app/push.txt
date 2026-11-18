@@ -1,0 +1,64 @@
+k2 app push — notifications to a custom App's own phone app (its bundle id,
+its Apple team, its Firebase project). K2 keeps the App owner's Apple and
+Google keys in the vault and sends to Apple and Google itself. The App, its
+agent and other Apps can use the keys, never read them.
+
+  k2 app push status <app> [--json]   On or off, the keys' ids and fingerprints
+                                       (never a key), device counts.
+  k2 app push setup <app> [--apns-key AuthKey_XXXXXXXXXX.p8 --key-id XXXXXXXXXX
+                 --team-id YYYYYYYYYY --bundle-id com.you.app]
+                 [--fcm-service-account sa.json]
+                                       Store the App's Apple key and/or Firebase
+                                       service account. The owner, in person:
+                                       Touch ID, your login or the vault password
+                                       confirms it (from a terminal outside K2).
+                                       K2 checks each key before storing it.
+  k2 app push creds rm <app> --apns|--fcm|--all
+                                       Remove a key (the same confirm).
+  k2 app push check <app>              One real call per key to a fake token:
+                                       says whether Apple and Google accept it.
+  k2 app push on|off <app>             On is the owner's approval (also given by
+                                       approving push:send in a deploy); off is
+                                       the owner's, an Admin's or the App agent's.
+  k2 app push set <app> [--agent-replies on|off] [--chat on|off]
+                 [--previews on|off] [--max-devices N] [--register server|any]
+                                       Agent-reply pushes (off by default) and
+                                       their previews. --chat: DM and channel
+                                       pushes for the App's users in its Sew
+                                       Space (off by default; the server also
+                                       needs K2_APP_CHAT_PUSH=1); a tap opens
+                                       your phone app (k2Kind chat). With
+                                       every preview switch on, the sender's
+                                       name and the start of each message go
+                                       through Apple's and Google's push
+                                       services to reach phones; --previews
+                                       off sends only "New message". --max-devices: phones
+                                       that can get this App's notifications,
+                                       everyone together (owner; not sign-ins:
+                                       k2 app login settings --max-devices).
+                                       --register server: only your App's own
+                                       server may call push.register and
+                                       push.viewing, never a phone calling K2
+                                       directly (push_server_only). Pairing
+                                       still signs the phone in, its answer says
+                                       push {registered: false}, and your server
+                                       registers the token. Default any.
+  k2 app push send <app> (--to <user> [--to <user>…] | --room <room>)
+                 --title T --body B [--data key=value]… [--topic t]
+                 [--collapse-id c] [--thread-id t] [--sound s] [--badge n]
+                 [--priority high|normal] [--ttl secs] [--android-channel c]
+                 [--silent] [--json]   Send to this App's own users only.
+  k2 app push test <app> --to <user>  "Test notification from K2".
+  k2 app push log <app> [--json]       The last hour's sends: counts only.
+  k2 app push devices <app> [--guest <user>] [--json]
+                                       Each registered phone: platform,
+                                       environment, last seen. Never a token.
+  k2 app push devices rm <app> <apd_…> Remove one.
+
+Who: status and log: an Admin or the App's own agent. send, test and
+agent replies: an Admin or the App's agent with "…and manage them end to end".
+Keys: the owner in person only; an agent asks with a permission card.
+
+The phone app registers with the guest's own pass (push.register); see
+k2 study app-push for the whole mobile guide. K2 Companion's own phones are
+`k2 push` (k2 push --help).

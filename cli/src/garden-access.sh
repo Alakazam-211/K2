@@ -623,29 +623,7 @@ cmd_zen_agents_order() {
             --json) as_json=true; shift ;;
             -h|--help)
                 cat <<'EOF'
-k2 zen agents-order — the person's order and pins in each Garden's Agents widget
-
-USAGE
-  k2 zen agents-order [<garden>] [--json]
-
-In any Garden's Agents widget the person can drag agents into their own
-order (or move a row with Alt+Up / Alt+Down) and pin or unpin an agent
-(right-click a row, or Shift+F10). That is the person's view, per Garden,
-on this computer only: it is not in the Garden's file, Garden sync or any
-other computer. This prints it for every Garden, or the one named (an id
-or a name):
-
-  order   the person's order (full row addresses, first first), on top of
-          the widget's own order (the Home group's, or a list-from list's);
-          "the widget's own" until they drag.
-  pins    the Garden's own pins once they pinned or unpinned there ("none"
-          = they unpinned all); until then each agent's workspace pin.
-
-Agents can read it, never set it: only the person changes it, in Zen.
-Addresses the widget doesn't show are ignored, so it never adds reach.
-
---json   the daemon's answer: {ok, gardens: [{id, name, order, pins,
-         updatedAt}]}, null where the person never set one.
+%include cli/text/help/zen/agents-order.txt
 EOF
                 return 0 ;;
             -*) echo "Error: unexpected '$1' (see k2 zen agents-order --help)" >&2; exit 2 ;;
@@ -721,30 +699,7 @@ cmd_zen_links() {
             --json) as_json=true; shift ;;
             -h|--help)
                 cat <<'EOF'
-k2 zen links — the sites a Garden opens in the person's browser without asking
-
-USAGE
-  k2 zen links [<garden>] [--json]
-  k2 zen links forget <garden> <site> [--json]
-
-A widget opens a link with k2.open(url) (cap links:open), only just after
-the person's click in it. The first time a Garden opens a site, K2 shows
-its own card: Don't open, Open once, or Always open <site> from this
-Garden. Only "Always" is kept, per Garden, on this computer: it is not in
-the Garden's file, Garden sync or any other computer.
-
-  (no args)   every Garden that keeps a site: "<garden id>: site, site"
-  <garden>    one Garden's sites (a Garden id: k2 zen garden list)
-  forget      the person only: drop one site, so K2 asks again next time
-
-A site is an origin: https://host[:port], lower case, no path. Deleting a
-Garden drops its sites.
-
-Agents can read the list, never add to it or forget a site: forget is
-refused inside a K2 terminal (owner_only, exit 3); run it outside K2.
-
---json   the daemon's answer: {ok, gardens: {<id>: [sites]}}; with a
-         Garden {ok, garden, sites}; forget {ok, garden, site, removed}.
+%include cli/text/help/zen/links.txt
 EOF
                 return 0 ;;
             -*) echo "Error: unexpected '$1' (see k2 zen links --help)" >&2; exit 2 ;;

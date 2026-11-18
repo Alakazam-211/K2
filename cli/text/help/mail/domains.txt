@@ -1,0 +1,9 @@
+List the VERIFIED domains you can mint addresses on, with the workspace
+default marked. (Domain management — add/verify/remove — is
+`k2 hostmail domain --help`.)
+
+USAGE
+  k2 mail domains [--json]
+
+FLAGS
+  --json                 JSON output ({ok,domains:[{domain,isDefault}],defaultDomain})

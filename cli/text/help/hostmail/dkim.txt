@@ -1,0 +1,9 @@
+DKIM selectors for a hosted domain. Stalwart signs; DNS publishes.
+Rotate generates a new Ed25519+RSA pair (Stalwart selector template)
+and plants TXT when this box already has dnsWrite. The previous
+selector stays until retire. mail_manage.
+
+USAGE
+  k2 hostmail dkim show <domain> [--json]
+  k2 hostmail dkim rotate <domain> [--json]
+  k2 hostmail dkim retire <domain> <selector> [--json]

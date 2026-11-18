@@ -1,0 +1,4 @@
+Show OOO on/off, days, until, and text. GET /cli/mail/ooo?address=.
+
+USAGE
+  k2 hostmail ooo show <addr> [--json]

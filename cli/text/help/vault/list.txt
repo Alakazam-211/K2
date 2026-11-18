@@ -1,0 +1,10 @@
+k2 vault list [--scope ws:<name>|server|session] [--system] [--json]
+
+Names, scope, kind, delivery, version and sites of the secrets you can
+see. Never values. "(agent can see it)" = file, env or api delivery.
+  --scope <s>   one scope only
+  --system      also K2's own secrets (mail and database passwords, login
+                slots, signing keys). The owner and Admins see their names;
+                agents and Members get a count and why they're hidden.
+
+Example: k2 vault list --scope server

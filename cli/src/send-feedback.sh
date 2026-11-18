@@ -17,116 +17,7 @@
 _SF_PRODUCT="K2"
 _send_feedback_usage() {
     cat <<'EOF'
-k2 send-feedback "<text>" [--category bug|idea|praise|other] [--scope cli|platform] [--command "<cmd>"]
-                 [--diagnostics | --diagnostics-preview] [--yes] [--json]
-k2 send-feedback - [flags]                 the text from stdin
-k2 send-feedback list [--state queued|sending|sent|failed|refused|cancelled] [--json]
-k2 send-feedback show <id> [--json]
-k2 send-feedback retry <id>                a failed one goes back in the queue now
-k2 send-feedback cancel <id>               a queued one is not sent
-k2 send-feedback settings [--enabled on|off] [--agents off|cli|all] [--attach <parts>|none|all]
-                          [--agent-diagnostics on|off] [--json]
-
-Tell Alakazam Labs, the people who make K2, about K2 itself: a bug, an
-idea, praise. Not for your human: to ask the people on this server, use
-k2 tickets ask "<question>" (k2 feedback ask is the same command). Write
-what you did, what you expected and what happened; the versions are added
-for you. At most 20,000 bytes as typed.
-
-What is sent: the category (default other); your text, with values from
-the vault replaced by [k2v:NAME] (anything else you type is sent as
-written, so leave out paths, names and output you wouldn't hand to
-Alakazam); whether a person or an agent sent it; the client (cli); the K2,
-daemon and OS versions, install kind, architecture and locale; and a
-5-minute K2 Connect token naming this server's label (such as
-<name>.k2.dev, which can point to who runs it), the proof of which server
-it came from. Never sent: your name, login or workspace, files, terminal
-output, chats, mail, tickets, environment variables, your own tokens, IP
-addresses.
-
-  --category C           bug, idea, praise or other (default other)
-  --scope S              an agent's report says what it is about: cli (a
-                         problem with a K2 command) or platform (anything
-                         else about K2). A person's report has no scope.
-  --command "<cmd>"      with --scope cli: the one command you ran, as you
-                         ran it (one line, at most 1000 bytes; required)
-  --diagnostics          also include details about K2 on this computer:
-                         versions, settings that are on, counts, recent
-                         errors and the end of K2's log, with passwords,
-                         keys, names and paths taken out. They are printed
-                         first; a person at a terminal is asked "Send these
-                         details with your feedback? [y/N]" (N still sends
-                         the feedback, without them). The CLI never
-                         remembers the answer.
-  --diagnostics-preview  print those details, send nothing (exit 0)
-  --yes                  send the details without asking. Agents always
-                         pass it with --diagnostics (there is no one to
-                         ask); without a terminal and without --yes,
-                         --diagnostics is a usage error (exit 2)
-  --json                 the saved row as JSON
-
-The plain output prints the id (pf_…) that show, retry and cancel take.
-This server keeps what you send in its outbox and sends it to Alakazam
-when it can. Offline, or while K2's feedback service isn't reachable yet,
-it waits as queued with the reason, and nothing is lost: don't send it
-again, check it with show. After 7 days of trying it is failed. One that
-failed because the service couldn't be reached goes again by itself: this
-server checks about once an hour whether the service is taking feedback
-again (it sends nothing to check), and once it is, all of them saved in
-the last 90 days go back in the queue and leave oldest first. Retry puts any failed one back at once, including one
-that failed for another reason (sending turned off, air-gap, no K2
-Connect pairing). A refused one (the service said no; the reason names why)
-is not retried: fix what it says and send a new one. Rows are deleted 90
-days after they are sent, refused, cancelled or failed.
-
-settings with no flags shows this server's switches and "can send now":
-what agents may report (nothing, CLI problems, or anything about K2), the
-parts of the K2 details they may attach, each on or off, and who answered
-and when (or "not asked yet"); --json is the daemon's answer. Anyone may
-read it. Changing them is for a person, the owner or an admin:
-  --agents off|cli|all   off: agents report nothing (and attach nothing);
-                         cli: problems with K2 commands; all: anything
-                         about K2 too. on is the same as cli.
-  --attach <parts>       the parts agents may attach, joined by commas
-                         (settings lists them), or none or all. The
-                         versions always go.
-  --agent-diagnostics on|off
-                         the older switch: on is every part, off none. Not
-                         with --attach.
-Until a person answers, agents report nothing. A server older than K2
-0.46.17 takes only --agents on|off and --agent-diagnostics; there,
---agents cli|all and --attach say it needs the update (exit 1) and change
-nothing. k2 setup agent-reports takes the same --agents and --attach.
-
-Agents: allowed only while a person on this server said yes, at most 1 in any 60
-seconds and 3 in any 24 hours per workspace, and 10 in any 24 hours for
-all agents on this server. Every saved send counts (cancelled ones don't;
-refusals and previews save nothing and don't count). There is no contact
-email from the CLI: only a person, in the desktop dialog, can ask
-Alakazam to write back. An agent's report says its scope: --scope cli
---command "<the command you ran>" for a problem with a K2 command, or
---scope platform for anything else (only where a person allowed that
-too: otherwise scope_off). --diagnostics and --diagnostics-preview from an
-agent attach only the parts a person allowed (and the versions); with
-none allowed nothing is saved or sent (diagnostics_need_owner): send it
-again without --diagnostics. The details are printed for you too and the
-owner sees them in the Sent tab. When this server can't send at all,
-tell your human: they can email hello@alakazamlabs.com.
-
-Text that is exactly list, show, retry, cancel, settings or help, or
-starts with a dash: send it from stdin (echo "settings" | k2 send-feedback -).
-
-Exit codes: 0 saved, sent or previewed; 1 this server needs an update
-for the flag; 2 a usage or input mistake (bad_category, text_required,
-text_too_long, command_required, bad_command, bad_scope, bad_attach_part,
-platform_needs_agents); 3 refused, nothing saved or changed: disabled,
-agents_off, scope_off, answer_agents_first, agent_limit (with retryAfterSecs),
-diagnostics_need_owner, needs_connect (this server isn't paired with K2
-Connect), airgap, settings_people_only, admin_only, not_found, wrong_state
-(retry on a row that isn't failed, cancel on one that isn't queued). A
-refusal prints one JSON line on stderr: {"error": <code>, "hint": <why>}.
-A later refusal by the service shows as refused in list. More:
-k2 study send-feedback.
+%include cli/text/help/send-feedback.txt
 EOF
 }
 
@@ -657,38 +548,7 @@ cmd_send_feedback() {
 # `k2 app status <app-id> [--json] [--no-checks] [--public]` (TC-15).
 _app_status_usage() {
     cat <<'EOF'
-k2 app status <app-id> [--json] [--no-checks] [--public]
-
-How an App is doing, in one answer: everything you would otherwise check
-one command at a time after a deploy.
-
-  deploy     the live Seed (version, commit, who, when) and the last deploy's result
-  health     a health check now (status and time), uptime, restarts
-  checks     the App's own host.checks from its manifest, run now
-  errors     failures in the last hour, by kind (crash, health, build, deploy)
-  resources  the App's disk and memory, and the box's disk level
-  door       outside hosts refused in the last hour; requests waiting for the owner
-  hosts      its label, URL and custom domains
-  phone      phone pairing, push keys (set or not) and devices
-  updates    the App's desktop update feed (on servers that have one)
-  next       one exact command for each red or yellow item
-
-  --no-checks  don't run host.checks; show the run recorded when the live
-               deploy switched in (it may be old)
-  --public     run host.checks through the App's public URL (proves TLS
-               and the relay), not on this machine. Not with --no-checks.
-  --json       {schema: 1, verdict, deploy, health, checks, errors,
-                resources, door, hosts, phone, updates, next: [{level,
-                part, what, run}]}
-
-Exit codes: 0 green (all good); 1 red (the health check failing, a
-host.check failed, crash looping, nothing live after a deploy); 2 yellow
-and nothing red (a deploy in progress, nothing deployed yet, the last
-deploy failed while the previous version still serves, requests waiting
-for the owner, failures in the last hour); 3 refused (no such App, or not
-yours: k2 explain <id>). A usage mistake also exits 2, with a usage: line.
-Text the App itself produced is never printed: checks say only whether
-the status, header and body matched.
+%include cli/text/help/app/status.txt
 EOF
 }
 

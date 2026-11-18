@@ -1,0 +1,9 @@
+k2 vault rotate NAME [--scope <s>] [--json] < value
+
+A new version of an existing secret (value on stdin). K2 stops using older
+versions; sessions with env or file delivery get the new value when they
+restart (until then, their env value and any file already in $K2_SECRETS_DIR
+hold the old one).
+An agent may rotate a secret a person gave it (the owner is told, with undo).
+
+Example: k2 vault rotate STRIPE_KEY < new-key.txt

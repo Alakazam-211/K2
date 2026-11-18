@@ -1,0 +1,19 @@
+k2 vault agent-limit NAME [--burst N] [--per-minute M] [--allow-forwarded | --no-forwarded] [--scope <s>] [--json]
+
+The ssh-agent settings of an ssh key with agent delivery. With no option,
+prints them. Per session: at most --burst signatures a second (1-600,
+default 60) and --per-minute (1-6000, default 240); over that, the
+agent says no and the audit says rate_limited.
+By default K2 won't sign when the ssh client says the connection is a
+forwarded agent (ssh -A, then ssh from the other box): deny forwarded in
+the audit. --allow-forwarded turns that off. Raising a limit or allowing
+forwarding is widening: a secret a person gave you needs the owner.
+
+Advisory, not a security control: agent delivery stops the key being
+copied out, but while the session runs anything in it, or any same-user
+process that finds the socket, can still sign with it. The forwarding
+refusal and the host key in the audit come from what the ssh client
+says; a client that says nothing, or a process that speaks the agent
+protocol itself, can't be told apart.
+
+Example: k2 vault agent-limit DEPLOY_KEY --burst 10 --per-minute 60

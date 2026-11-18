@@ -1,0 +1,10 @@
+k2 vault disable NAME [--scope <s>] [--json]
+k2 vault enable NAME [--scope <s>] [--json]
+
+Stop every use of NAME without deleting it, or start it again. Disabling
+takes its file out of $K2_SECRETS_DIR in running sessions; enabling puts it
+back within a minute. An environment variable stays in a running session
+until it restarts. Enabling counts as widening: a secret a person gave needs
+the owner.
+
+Example: k2 vault disable STRIPE_KEY

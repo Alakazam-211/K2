@@ -1,0 +1,17 @@
+Normalize hostname, require public A(hostname) includes origin IPv4,
+set Stalwart HELO + mail_server.hostname, reload its settings so the running
+server uses the name (a restart only if the reload is refused), then CP POST
+/api/dns/ptr {hostname, helo}. HELO failure skips CP. Unpaired k2c_ fails loud.
+POST /cli/mail/ptr/set. mail_manage.
+
+The name becomes the primary mail host. If it has a live certificate that
+becomes the default one; if not, nothing changes and the output says how to
+get one. Do it first: `k2 domain name add <hostname> --role mail`, then
+`k2 cert issue <hostname>`. K2 doesn't change DNS: move each domain's MX
+yourself, and keep the old name's A record until no MX points at it.
+
+aligned uses k2.dev's authoritative PTR when k2.dev returns one; this
+box's own lookup is ptrLocal, and a note says when its cache is stale.
+
+USAGE
+  k2 hostmail ptr set <hostname> [--json]

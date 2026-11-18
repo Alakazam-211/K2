@@ -2,24 +2,7 @@
 
 _changes_notes_usage() {
     cat <<'EOF'
-k2 changes notes — review notes people left on changed lines (the Changes tab)
-
-  k2 changes notes [list] [--status open|unsent|sent|resolved|all] [--file <path>] [--json]
-                                      the notes on this workspace (default: open)
-  k2 changes notes resolve <id>...    mark notes fixed (agents: the notes left for you)
-  k2 changes notes reopen <id>...     people only: open a resolved note again
-  k2 changes notes add <path> --line <n>[-<m>] [--old] -m "comment"
-                                      people only: a note on lines of a changed file
-                                      (--old = the text before the change)
-  k2 changes notes edit <id> -m "comment"     people only (author or Admin)
-  k2 changes notes delete <id>...             people only (author or Admin)
-  k2 changes notes send [<id>...] [--no-wake] people only: send the open unsent
-                                      notes to this workspace's agent as one message
-
-The loop for an agent: notes arrive as one message (File / Line / Comment /
-Note id). Fix each one, then `k2 changes notes resolve <id>`. Every command
-takes --workspace <path> and --json. Exit 3 + code when the daemon refuses
-(forbidden, not_found, not_author, nothing_to_send, not_delivered, …).
+%include cli/text/help/changes/notes.txt
 EOF
 }
 

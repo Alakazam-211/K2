@@ -1,0 +1,43 @@
+Reply to a message you received. Guardrailed: the reply goes back to the
+original sender (with --reply-all, also to everyone the message went to), the
+From is LOCKED to the address that received it, and
+loop caps apply (max 4 replies per thread per hour; deep threads refused).
+A reply is refused unless the mail server's DMARC check clears the sender (a
+pass, or one sender whose domain publishes no policy) or it's a mailbox on this
+server. In approval mode your human decides instead.
+
+Replies pass the same send gating as `k2 mail send` (off | approval | on).
+
+USAGE
+  k2 mail reply <message-id> (--body <text> | --body-file <f>) [flags]
+
+FLAGS
+  --body <text>          The reply text (or --body-file <f>)
+  --reply-all            Also reply to everyone on the original: its To join
+                         the reply's To, its Cc the reply's Cc. Your own
+                         inbox's addresses (aliases too) are left out, and
+                         nobody gets it twice.
+  --cc <addr>            Add a Cc (repeatable or comma-separated)
+  --bcc <addr>           Add a blind copy (repeatable or comma-separated).
+                         Max 10 recipients in all, plus any owner always-BCC.
+                         An address that isn't on the original is a NEW
+                         recipient: it needs what 'k2 mail send' to it needs
+                         (your 'send' level and the workspace's Sending rule;
+                         under approval the whole reply waits for your human),
+                         else the reply is refused and nothing is sent. A
+                         draft ('k2 mail draft <id> --cc') takes any address.
+  --from-name <name>     The display name on the From line, as on `send`,
+                         e.g. --from-name "Laura" → Laura <laura@acme.com>.
+                         Default: the workspace's agent name. Cosmetic only:
+                         the address stays the one that received the
+                         message. HOSTED mailboxes only. Max 128 chars; no
+                         '@', line breaks or control characters.
+  --attach <path>        Workspace-relative path to a file to attach
+                         (repeatable). The DAEMON reads the file. Same limits
+                         and refusals as `k2 mail send --attach`: 10 files, 25
+                         MiB each and in total; nothing outside the workspace,
+                         in .k2/, or secret.
+  --wait                 Block until decided — same clause as `send --wait`:
+                         exit 2 on timeout, message still queued.
+  --timeout <secs>       With --wait: 1-900 (default 300)
+  --json                 JSON output

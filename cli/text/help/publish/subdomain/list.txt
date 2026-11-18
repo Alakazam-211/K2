@@ -1,0 +1,7 @@
+List your K2 Connect subdomains (primary + nested).
+
+USAGE
+  k2 publish subdomain list [--json]
+
+FLAGS
+  --json                 JSON: {subdomains:[{host,target,plan,tier,status,flags}]}

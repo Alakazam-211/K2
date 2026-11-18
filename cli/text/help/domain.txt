@@ -1,0 +1,27 @@
+k2 domain — attach custom domains to THIS server
+
+This is box inventory: apex + hostnames this machine may terminate.
+It is NOT `k2 hostmail domain` (mail MX recipe) and NOT a nameserver
+cutover. Apex add/remove is owner (exit 3). Hostname add/remove and
+list are dns_manage (same grant as k2 dns / k2 cert); without it an
+agent's `k2 domain list` exits 3.
+
+USAGE
+  k2 domain list [--json]
+  k2 domain add <apex> [--json]
+  k2 domain remove <apex> [--json]
+  k2 domain refresh [<apex>] [--json]
+  k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--json]
+  k2 domain name remove <hostname> [--json]
+
+A domain k2.dev holds but whose nameservers don't point at k2.dev yet
+lists as "pending" with the nameservers to set at your registrar. DNS
+record writes are refused (zone_pending_ns) until the zone is active.
+The server re-checks pending domains with k2.dev by itself (every
+minute at first, backing off to daily for long-pending ones) and once
+more before refusing a write; `k2 domain refresh` checks right now.
+A zone k2.dev winds down or suspends lists as "readonly"; writes are
+refused with zone_readonly.
+
+See also: k2 dns (records on attached K2-hosted zones), k2 cert (certs
+for attached hostnames), k2 hostmail domain (mail).

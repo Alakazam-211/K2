@@ -14,18 +14,7 @@ cmd_whatsnew() {
             --mark-seen) action="mark-seen"; shift ;;
             --help|-h)
                 cat <<'EOF'
-k2 whats-new [--reset] [--all] [--mark-seen]
-
-Show the user-facing changelog for K2 versions you haven't seen yet
-(the same content the Tauri app shows in its popup on first launch
-after an update).
-
-OPTIONS
-  --reset      Clear the "last seen" marker so the popup shows again
-               next K2 launch.
-  --all        Print the full changelog regardless of last-seen state.
-  --mark-seen  Manually mark the current version as seen (rarely needed;
-               the popup does this on dismiss).
+%include cli/text/help/whats-new.txt
 EOF
                 return 0 ;;
             *) shift ;;

@@ -1,0 +1,56 @@
+k2 inbox [<subcommand>] [options]
+
+YOUR tray. Not email. Not live chat.
+Others SEND a file with:
+  k2 msg <your-handle> --inbox-wake ./file.md
+You cannot send a file with `k2 inbox`. Use `k2 msg <handle> --inbox-wake`.
+
+Items arrive from other workspaces (via `k2 msg --inbox-wake|--inbox-silent`)
+or are composed as self-notes (`k2 inbox compose`). Read, triage, file
+into folders.
+
+SUBCOMMANDS
+  (none)                    Show inbox items (= `inbox list`)
+  list [<folder>]           List items in inbox (or a specific folder)
+  read <id>                 Full text of one item
+  compose --title "..." --body "..."
+                            Write your own inbox item (self-note / task)
+  respond <id> "text"       Reply (back to sender)
+  move <id> <folder>        File into a folder (creates folder if needed)
+  archive <id>              Standard archive (preserved + searchable; goes to inbox/done/)
+  delete <id>               Move to macOS Recycle Bin (recoverable from Trash)
+                            Use `inbox archive` for "done but keep around";
+                            use `inbox delete` only for "actually remove this."
+  search "query"            Search inbox + all folders
+  folders                   List folders this workspace has created
+
+ORGANIZING YOUR INBOX
+  K2 doesn't impose a folder taxonomy. Organize your tray the way
+  you'd file notes — create folders that fit your workflow:
+    inbox move <id> projects/    # active work items
+    inbox move <id> reference/   # things to remember
+    inbox move <id> issues/      # problems to address
+    inbox move <id> done/        # completed work
+  Folders are auto-created on first `inbox move` into them.
+
+EXAMPLES
+  k2 inbox                                  # show top-level inbox
+  k2 inbox list projects                    # what's in projects/
+  k2 inbox read 42                          # full text of item 42
+  k2 inbox move 42 projects                 # file 42 into projects/
+  k2 inbox compose --title "audit auth" --body "..."   # self-note
+  k2 inbox respond 42 "thanks, looking into this"
+  k2 inbox archive 42                       # done with this item
+  k2 inbox search "oauth"                   # find all oauth-related
+
+RECEIVING FROM OTHER WORKSPACES
+  Other workspaces send to your inbox with:
+    k2 msg <your-workspace> --inbox-wake ./brief.md
+    k2 msg <your-workspace> --inbox-silent ./data.pdf
+  Their items appear in your inbox alongside your own composes.
+
+LEGACY ITEMS
+  Pre-Phase-2.1 work items at .k2so/work/{inbox,active,done}/ have
+  been migrated to .k2/inbox/{,active,done}/. If migration didn't
+  run yet, trigger it manually: `k2 inbox` will reveal nothing
+  until the daemon has converted the layout.

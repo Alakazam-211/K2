@@ -1,0 +1,20 @@
+k2 explain [<id>] [--json]
+
+What an App refusal id means and how to fix it. Every App route refuses
+with a stable id: the "error" field of the JSON line a refused k2 app
+command prints (with a "fix:" line after it). Look the id up here.
+
+  k2 explain                 every id, by area
+  k2 explain <id>            what happened, the fix, who fixes it
+  k2 explain <id> --json     the same, one JSON object:
+                             {id, area, http, exit, what, fix, who,
+                              askable, status, aliases}
+
+Ids are lowercase with underscores (apps_manage_off). In a row: "exit" is
+the code the refused command exits with; "who" is who can fix it (you,
+the owner, an Admin, the person signed in, or K2 itself); "askable" means
+k2 permission request can ask for it (the refusal ends with an Ask with:
+line to run). "retired" ids are ones only older K2 servers send; they
+still explain. Works with the daemon down. All of them on one page:
+k2 study app-errors.
+This command's own exit codes: 0 found, 4 unknown id, 2 bad usage.

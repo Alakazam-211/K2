@@ -1,0 +1,16 @@
+k2 root-helper — K2's one root door on Linux (/usr/local/libexec/k2-root-helper)
+
+  k2 root-helper status [--events] [--json]   state, version, protocol, auto-heal, legacy helpers
+  k2 root-helper update [--from <dir>] [--version <x.y.z> | --match-installed] [--json]
+                                              install the signed helper for this daemon's version now
+                                              (--from: a dir holding k2-root-helper-linux-<arch> + .sig; air-gap)
+                                              (--version: that release's helper instead; --match-installed: the
+                                               version of the daemon binary on disk, e.g. after a binary swap
+                                               before the restart. It warns when a newer daemon is installed
+                                               or staged than the helper it fetches.)
+  k2 root-helper rollback [--json]            one step back to the previous helper
+  k2 root-helper install-command [--json]     the one root command for a box without it
+                                              (--json: the status JSON, installCommand in it)
+
+Agents: if hosted mail, the db sidecar or the vault says `helper_needed`,
+ask your human (k2 tickets ask). Never install Stalwart or Postgres by hand.

@@ -1,0 +1,42 @@
+k2 app wallet — App users' personal wallets (0.46.3). Each App user can keep
+their own LLM subscriptions (Claude, Codex, Grok) and API keys in a wallet on
+this server, from the App (wallet.* verbs). Their subscription runs only
+their own personal agent. You see that it exists and its status; never the
+secret, the sign-in link or code.
+
+  k2 app wallet settings <app> [--on|--off] [--fallback on|off] [--json]
+                                       Show or change an App's wallet. --on lets
+                                       the App's users use their wallet. With
+                                       --fallback on, a personal agent whose
+                                       person's subscription can't be used runs
+                                       on the company plan; off (default), it
+                                       doesn't start. Owner or Admin; an agent of
+                                       the App's own workspace with "…and manage
+                                       them end to end" may set --fallback only.
+                                       <app> is the App id (k2 app list), its
+                                       service id or <workspace>/<name>; an
+                                       unknown App is refused.
+  k2 app wallet people [<app>] [--json]
+                                       Every wallet item (or those of <app>'s
+                                       users): user, provider, label, state,
+                                       which agents use it.
+  k2 app wallet remove <item-id>       Delete one item for good (not Trash): its
+                                       sessions stop; the person signs in again
+                                       to use it. Audited.
+  k2 app wallet personal-agent <app> <user> <workspace>
+                                       Mark <workspace> as <user>'s own agent
+                                       (they must have its room in <app>). It
+                                       then runs on <user>'s own subscription
+                                       while nobody else has its room. Your
+                                       extra tabs in it use the server default.
+  k2 app wallet personal-agent --clear <workspace>
+  k2 app wallet personal-agents [--json]
+
+Lifecycle: an App user who loses App access keeps their items unused for
+30 days (back at once if access returns), then they are deleted. An App user
+who is deleted, or turned into an agent's login, loses their items and their
+personal-agent marks at the next sweep (within a minute). Removed items are
+deleted, never kept in Trash.
+
+Note: each person's subscription runs only their own agent. Check that your
+plan's terms allow the way your App uses it.

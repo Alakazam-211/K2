@@ -1,0 +1,9 @@
+Destroy BlockedIp rows for <ip> then ReloadBlockedIps.
+Default: authFailure only. --all also destroys portScanning/etc.
+Unknown IP → ok destroyed:[]. There is no built-in allowlist: add the
+addresses you trust with k2 hostmail allowlist add.
+Unban does not reset fail counters — pair with allowlist add.
+POST /cli/mail/bans/clear. GET → 405. mail_manage.
+
+USAGE
+  k2 hostmail bans clear <ip> [--all] [--json]

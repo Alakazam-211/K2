@@ -11,60 +11,7 @@
 # BEGIN_SOURCES_C0
 _sources_usage() {
     cat <<'EOF'
-k2 sources — data sources: HTTP JSON checks this server runs for Garden cards and agents
-
-  k2 sources list [--all] [--json]          every source with its state
-  k2 sources show <name> [--json]           definition + current state
-  k2 sources read <name> [--json]           current state (the card view)
-  k2 sources history <name> health|<series> [--item K] [--from <dur|epoch>] [--to …]
-  k2 sources status [--json]                the poller: in flight, behind, parked sites
-  k2 sources export <name>                  definition as JSON (feeds propose --from)
-  k2 sources propose --from <file.json> | --name N --label L --url URL [flags…]
-  k2 sources add …                          like propose; people only (Settings or outside K2)
-  k2 sources edit <name> [flags…]           change a source (agents: only their own)
-  k2 sources remove <name> --yes            the name is held for 7 days
-  k2 sources pause|resume <name>            people, or agents with the switch below
-  k2 sources mute <name> --for 30m [--reason "…"]   agents: up to 2 h, reason required
-  k2 sources unmute <name>
-  k2 sources refresh <name> [--wait]        check now (at most once per 15 s)
-  k2 sources try [propose flags] | --name <saved> [--targets N]   fetch once (every target)
-  k2 sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for 1h]
-  k2 sources pending [--names a,b]          proposals waiting (agents: their own)
-  k2 sources approve <name>… [--secret NAME]        one secret for every name: ONE confirm
-  k2 sources secret <name>… NAME|--none     bind (or unbind) one secret: all or none, ONE confirm
-  k2 sources pin|unpin <name>               pinned: agents without the switch can't change it
-  k2 sources trigger list|show|log|propose|add|edit|approve|pause|resume|remove|test …
-  k2 sources access on|off [--workspace <ws>]   owner/admin: the agent switch below
-
-AGENTS AND "LET THIS AGENT MANAGE GARDENS AND DATA SOURCES"
-  A per-agent switch (Settings → Workspaces / Agents → <ws> → Permissions
-  → Projects and Gardens, or
-  `k2 sources access on --workspace <ws>` outside K2). Off (the default): an
-  agent proposes; pending, approve, secret, pause/resume, pin/unpin and
-  trigger approve/add/pause/resume exit 3 (person_only). On: the agent does
-  all of those itself with no confirm (approve its own proposals and others'
-  on this server). It binds only a secret it may already use: its own
-  workspace's secret, or a server secret when it also has "Let this agent
-  manage server-wide secrets" (else secret_not_usable, exit 3). The bind still goes
-  only to the source's one site, inside the secret's own sites. It never sets
-  viewers / agent-access / keep or a trigger's cooldown or cap. Every act is
-  logged with the agent and its session (Settings → Logs → Access Audit).
-  Only the owner or an admin flips the switch; an agent never can.
-
-RULES AND THRESHOLDS (k2 sources propose --help has every flag)
-  --rule 'field:crit:op:v,warn:op:v,ok:op:v' with eq ne in lt lte gt gte exists, ageGt/ageLt
-  (a timestamp's age), versionBehind/versionAtLeast (semver), and @field to compare two
-  fields (box version vs target_version). failAfter (--fail-after, default 3) is how many
-  checks in a row a reading waits before it goes hard. warnAfter:N / critAfter:N on any
-  rule opts the source in to per-rule thresholds: failAfter then counts FETCH failures
-  only, and each rule waits its own warnAfter (default 1: at once) / critAfter (warn after
-  1, crit after N). Without them a source behaves as before 0.46.1.
-  --expect-status 200,401 makes a status-only check.
-  More lists: --list / --list-field; an array's length: --count.
-
-Exit codes: 0 ok, 1 failure, 2 usage, 3 needs a person, 4 not found.
---json prints the daemon's answer as is (also on errors).
-Each verb has its own page: k2 sources <verb> --help. More: k2 study data-sources
+%include cli/text/help/sources.txt
 EOF
 }
 
@@ -74,47 +21,19 @@ _sources_verb_help() {
     case "$1" in
         propose|add|edit|try) _sources_flags_help "$1" ;;
         history) cat <<'EOF'
-k2 sources history <name> health|<series> [--item <key>] [--from 6h|epoch] [--to 1h|epoch] [--json]
-
-  health          the source's state changes, oldest first (went_warn, recovered, …);
-                  with --item <key>, that item's (a box, a cert). Kept: the newest 200.
-  <series>        a trend, count or aggregate of the source (extract.trend, counts,
-                  aggregates): points (t, v). Raw points 48 h, hourly 35 days.
-                  An item field has no series; aggregate it (--agg) instead.
-
-  Values are hidden from agents on an agentAccess "shape" source (0s), and a
-  keep "states" source has no series (409 no_history); health still reads.
+%include cli/text/help/sources/history.txt
 EOF
         ;;
         export) cat <<'EOF'
-k2 sources export <name>
-
-  The definition as JSON: the shape `propose --from` takes, so
-    k2 sources export fleet > fleet.json && $EDITOR fleet.json && k2 sources propose --from fleet.json
-  round-trips. Secret NAMES only, never values. For agents, query values that
-  look secret (token/key/sig keys, or 24+ character token-shaped values) show
-  as •••; plain ones (?part=boxes) stay as they are.
+%include cli/text/help/sources/export.txt
 EOF
         ;;
         pending) cat <<'EOF'
-k2 sources pending [--names a,b] [--json]
-
-  Proposals (sources and triggers) waiting for approval.
-  A person, or an agent with "Let this agent manage Gardens and data sources": every proposal.
-  Any other agent: only its own (the answer says "scope": "own"); a person
-  approves them.
+%include cli/text/help/sources/pending.txt
 EOF
         ;;
         read|show|list) cat <<'EOF'
-k2 sources list [--all] [--json]    every source with its state
-k2 sources show <name> [--json]     definition + current state
-k2 sources read <name> [--json]     the card view (what sources.read gives a widget)
-
-  The card view: health ok|warn|crit|unknown, phase pending|live|stale|paused,
-  display, reason (a fixed code), fields, items[] (each with health, reason,
-  soft, list for a named list), counts, soft, serverNow, updatedAt.
-  soft {count, of, level}: a reading waiting to go hard, e.g. "soft crit 2/3"
-  (a rule's critAfter) or "soft crit 1/3" for a fetch failure (failAfter).
+%include cli/text/help/sources/read.txt
 EOF
         ;;
         *) return 1 ;;
@@ -131,67 +50,7 @@ _sources_flags_help() {
   A fan-out source fetches every target (or the first N with --targets N)." ;;
     esac
     cat <<'EOF'
-
-FETCH (one of)
-  --url URL                       one HTTPS JSON address
-  --target key=URL                one fan-out target (repeat, up to 50); each answer is one item
-  --url-secret NAME --origin https://host   the whole URL lives in the vault
-  --secret NAME                   a vault secret sent as the auth header (bound by a person,
-                                  or an agent with the switch)
-  --header 'Name: value'          a plain header (no secrets: those are refused)
-  --expect-status 200,401         status-only check: these statuses are healthy answers,
-                                  whatever the body (HTML, 401). JSON is still read if it parses.
-
-SCHEDULE
-  --every 60s|5m|1h               how often (30 s to 1 day; default 60 s)
-  --timeout 10s                   1-30 s (fan-out default 5 s)
-  --max-bytes 1M                  1 KiB to 5 MiB
-  --fail-after N                  checks in a row before a reading goes hard (1-10,
-                                  default 3). Once any rule sets warnAfter/critAfter,
-                                  failAfter counts fetch failures only.
-  --on-target-error crit|unknown  what a failed fan-out target reads as
-
-WHAT TO KEEP
-  --field name=/pointer           a value from the answer
-  --count name=/pointer           the length of an array or object (e.g. past_due)
-  --items /pointer                the item list (array, or object keyed by name)
-  --item-key /pointer             each item's key (default: index or property name)
-  --item-field name=/pointer      a value from each item
-  --list name=/pointer            another item list next to --items (single URL only)
-  --list-key name=/pointer        that list's item key
-  --list-field list.field=/pointer   a value from each of that list's items
-                                  (item field names are unique across all lists; list
-                                  items have the key <list>/<key> and "list": "<list>")
-  --agg name=count[:list] | count-where:field:op:value | sum:f | min:f | max:f | distinct:f
-  --trend name                    chart a field/count/aggregate (up to 8; history also
-                                  keeps every count and aggregate)
-
-RULES  --rule 'field:level:op:value[,level:op:value…][,warnAfter:N][,critAfter:N]'
-  level: crit, warn, ok (checked in that order; none matching = unknown)
-  op:    eq ne in lt lte gt gte exists
-         ageGt ageLt           the value is a time (epoch s/ms, RFC 3339) older/newer than
-                               a duration:  --rule 'ts:warn:ageGt:5m,crit:ageGt:15m'
-         versionBehind         older than a version or @field, optionally by a distance:
-                               --rule 'version:warn:versionBehind:@target_version,crit:versionBehind:@target_version~minor=1'
-         versionAtLeast        at or past:  ok:versionAtLeast:@target_version
-  value: a literal, a|b|c for in, or @name: another field (the item's own, else the
-         source's), e.g. 'used:warn:gt:@quota'
-  warnAfter:N  checks in a row before this rule's warn goes hard (1-20, default 1: at once)
-  critAfter:N  checks in a row (not ok, the last one crit) before crit; until then it
-               shows as warn ("soft crit 2/3"). Default: warnAfter.
-  Opt-in: setting warnAfter or critAfter on ANY rule turns per-rule thresholds on for the
-  whole source (rules without them then go hard at once; failAfter = fetch failures only).
-  With neither set, every rule reading waits failAfter, as before 0.46.1. Opting in
-  changes the definition, so the source is approved again.
-  A field rule colours the source; an item field rule colours each item of its list.
-
-WHO SEES WHAT
-  --viewers member|admin  --agent-access values|shape  --keep values|states   (people only)
-  --link https://…        where the card's title goes
-  --preset NAME --preset-arg k=v   start from a preset (k2 study data-sources)
-
-THE FILE FORM (--from) is the export shape; see k2 sources export <name> and
-k2 study data-sources for a full example. Flags given with --from override it.
+%include cli/text/help/sources/_flags.txt
 EOF
 }
 
@@ -1483,22 +1342,7 @@ cmd_sources_trigger() {
     case "$sub" in
         ""|help|--help|-h)
             cat <<'EOF'
-k2 sources trigger — wake an agent on this server when a source changes
-
-  k2 sources trigger list [--source NAME] [--json]
-  k2 sources trigger show <id> [--json]
-  k2 sources trigger log <id> [--limit 50] [--json]
-  k2 sources trigger propose --source NAME --on KIND [--agent HANDLE] [--note "…"]
-  k2 sources trigger add --source NAME --on KIND --agent HANDLE [--note "…"] [--cooldown 30m] [--daily-cap 12]
-  k2 sources trigger edit <id> [--on KIND] [--agent HANDLE] [--note "…"|--no-note] [--cooldown 30m] [--daily-cap 12]
-  k2 sources trigger approve|pause|resume|remove|test <id>
-
-KIND: went_crit · went_warn · recovered · item_went_crit · stale_for:30m
-Agents propose (waking only themselves) and may remove their own proposal;
-a person approves. A proposed trigger never fires. An agent with "Manage
-Gardens and data sources" also approves, adds (waking itself), pauses and
-resumes triggers, always with the default cooldown and daily cap (only a
-person sets those; edit and test stay a person's).
+%include cli/text/help/sources/trigger.txt
 EOF
             return 0 ;;
     esac

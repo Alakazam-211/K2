@@ -1,0 +1,27 @@
+k2 app email — an App's own email (Email Notifications). The App sends from
+a sender the owner granted it (noreply@your-domain), never from a mailbox; no
+agent can read the sender's mail.
+
+  k2 app email show <app> [--json]   On or off, the sender, the recipient scope.
+  k2 app email on <app> --sender <address|id> [--scope users|any]
+                                     The owner, in person, from a terminal
+                                     outside K2 (Touch ID / login / vault
+                                     password confirms; scope any asks twice).
+  k2 app email off <app>             The owner, an Admin or the App's agent.
+  k2 app email test <app>            K2's fixed text to the owner's own address.
+  k2 app email send <app> --to <addr> [--to …] [--cc …] [--bcc …]
+                 --subject S (--text T | --text-file F) [--html-file F]
+                 [--reply-to <addr>] [--header X-Name=value]… [--tag t]…
+                 [--idempotency-key K] [--json]
+                                     The owner and Admins send as themselves;
+                                     the App's agent needs "…and manage them
+                                     end to end" and its email sending setting
+                                     (approval holds the email for the owner).
+  k2 app email log <app> [--limit N] [--status S] [--tag T] [--json]
+  k2 app email status <app> <id> [--json]
+
+Scope users (default): only this App's users whose address is confirmed
+(they used a link K2 mailed them). Scope any: any address, lower limits.
+Limits: 100 recipients an hour and 1,000 a day per App (any: 30 and 300;
+a domain's first 14 days: 20 and 200). Senders and relays: k2 notifications
+email --help. The whole guide: k2 study email-notifications.

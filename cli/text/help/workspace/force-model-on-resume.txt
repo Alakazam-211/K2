@@ -1,0 +1,9 @@
+Usage: k2 workspace force-model-on-resume get|set <workspace> [on|off]
+
+When on, K2-direct dead resume (new PTY) also passes the workspace
+default model. Off (default) keeps the transcript's model. API `model`
+on a host-session still applies on resume regardless.
+
+  get <ws>              Print on|off (default off)
+  set <ws> on|1         Splice default model on resume
+  set <ws> off|0        Leave resume argv unpinned

@@ -1,0 +1,12 @@
+Print a single setting's value — bare on stdout, script-friendly.
+
+USAGE
+  k2 agent get <name> <key> [--json]
+
+KEYS
+  mode | enabled | name | path | persona | projects
+  (persona prints the charter file's content; projects prints the
+  agent's project names, one per line)
+
+FLAGS
+  --json                  Wrap the value in a JSON object instead

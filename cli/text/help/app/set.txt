@@ -1,0 +1,14 @@
+usage: k2 app set <app> [--account-deletion request|immediate] [--deletion-grace <days>]
+                        [--client-logs-days <days>] [--json]
+  --account-deletion request    (default) a person's "Delete my account" signs them out of
+                                the App everywhere and turns their access off at once; the
+                                deletion completes when you run k2 app account-deletion
+                                complete, or by itself when the grace period ends
+  --account-deletion immediate  the deletion runs at once
+  --deletion-grace <days>       how long a request waits before K2 completes it
+                                (1 to 90 days, default 30; 30d also works)
+  --client-logs-days <days>     how long K2 keeps the App's client log bundles
+                                (1 to 90 days, default 14; k2 app logs <app> --client)
+No flags: show the settings. The owner or an Admin changes them; so may the App's
+own agent with "Let this agent manage its Apps' users" on. Every change is a line in
+k2 app history <app> --users. More: k2 study app-account-deletion.

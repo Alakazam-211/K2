@@ -1,0 +1,8 @@
+Show a mailbox's forwards, one per address: destination, keep, kind
+(internal or external), state (active, paused, or pending_verify: not on,
+either waiting its turn for K2's email or an old forward K2 left off), why it is paused, whether K2 could email the
+address its stop link, the last 24 hours (forwarded, delivered, refused),
+and the latest events. --json adds every event K2 keeps.
+
+USAGE
+  k2 hostmail forward show <addr> [--json]

@@ -1,0 +1,4 @@
+List AllowedIp entries. GET|POST /cli/mail/allowlist. mail_manage.
+
+USAGE
+  k2 hostmail allowlist list [--json]

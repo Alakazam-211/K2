@@ -1,0 +1,10 @@
+
+EXAMPLES OF MIGRATION
+
+  # Sending a message
+  Old: k2 msg --agent scout_v3 "hello"
+  New: k2 msg scout_v3 "hello"            # workspace-implicit; --agent removed
+
+  # Marking a task done
+  Old: k2 checkin --done --blocked "Stripe API access"
+  New: k2 done --blocked "Stripe API access"

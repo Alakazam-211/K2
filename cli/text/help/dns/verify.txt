@@ -1,0 +1,10 @@
+On-demand DNS delegation check for a zone domain.
+
+USAGE
+  k2 dns verify <domain> [--json]
+
+ARGUMENTS
+  <domain>               Zone domain to verify
+
+FLAGS
+  --json                 JSON verification result

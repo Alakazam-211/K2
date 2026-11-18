@@ -983,341 +983,55 @@ PYEOF
 
 cmd_help_feedback_settings() {
     cat <<'EOF'
-Show or change this server's ticket rules (the same as Settings → Tickets).
-They apply to tickets agents file (`k2 tickets ask`); people never need them.
-
-USAGE
-  k2 tickets settings                               show the rules
-  k2 tickets settings [--brief off|warn|require]
-                      [--assignee-required off|warn|require]
-                      [--default-assignee <user|none>] [--json]
-
-FLAGS
-  --brief <rule>              Require an HTML brief on agent tickets
-  --assignee-required <rule>  Require an assignee on agent tickets
-                              off = no check · warn = file it, with a warning
-                              (the default) · require = refuse it (exit 2).
-                              fyi tickets are exempt from both.
-  --default-assignee <user>   An agent ticket with no --assign goes to this
-                              user: owner or a Connect user
-                              (`k2 connections list --users`). none clears it.
-  --json                      JSON output
-
-WHO
-  Anyone with a login can read the rules. Only the owner or an admin can
-  change them. Inside a K2 terminal this command sends the session passport,
-  so an agent is refused (owner_only, exit 3): run it from a terminal
-  outside K2, or use Settings → Tickets.
-
-EXAMPLES
-  k2 tickets settings
-  k2 tickets settings --brief require --assignee-required require
-  k2 tickets settings --default-assignee owner
-  k2 tickets settings --default-assignee none
+%include cli/text/help/feedback/settings.txt
 EOF
 }
 
 cmd_help_feedback() {
     cat <<'EOF'
-k2 feedback — ask a human for input and get an answer back
-
-An agent uses this when it needs a person: a question, an approval, a heads-up.
-The ask becomes a durable item on this server's Feedback page (it does NOT
-disappear like a terminal prompt). A human answers there — in-line or by opening
-your session — and the answer comes back to you.
-
-USAGE
-  k2 feedback <command> [args] [flags]
-
-COMMANDS
-  ask <title>            File a new feedback item asking for human input
-                         (agents attach an HTML brief: --html brief.html)
-  template               Print the HTML brief skeleton (no daemon needed)
-  list                   List this workspace's feedback items (newest first)
-  show <id>              Show one item: the ask, its status, and the full thread
-  comment <id> <text>    Add a message to an item's discussion thread (bumps the
-                         card's message count; only NEW items fire notifications)
-  assign <id> …          Set who the ticket is for (owner / connect-user names)
-  resolve <id>           Mark an item resolved (you got what you needed)
-  resolve <id> --answered "<outcome>"
-                         Settle a discussion: mark it answered with what you
-                         and the person agreed
-  settings               Show this server's ticket rules (brief, assignee,
-                         default assignee); owner/admin change them
-
-HOW A PERSON ANSWERS
-  Picking one of your options (the --options buttons or the brief's Options
-  list) answers the ticket: status answered. Typing a free-text message puts
-  it in needs_discussion: reply with `comment`, settle it, then mark it
-  answered (`resolve <id> --answered "<outcome>"`) or resolved (`resolve <id>`).
-  Both kinds of message land in your session.
-
-ADDRESSING
-  <id> is a feedback id (from `ask`/`list` output). A short unique prefix works.
-
-GLOBAL FLAGS
-  --json                 Machine-readable output (single JSON object)
-
-OUTPUT CONTRACT
-  Success output is human-readable by default; --json switches it to JSON.
-  ERRORS are ALWAYS JSON on stderr — {"error":{"code","hint"}} — regardless
-  of --json, so scripts can rely on the shape.
-
-EXIT CODES
-  0 ok · 1 error · 2 bad usage · 4 not found (ambiguous id prefix = 4 too,
-  with the matching candidates listed in the hint) · 5 ask --wait: the person
-  wrote free text instead of picking an option (needs_discussion)
-
-Run 'k2 feedback <command> --help' for details on a command.
+%include cli/text/help/feedback.txt
 EOF
 }
 
 cmd_help_feedback_ask() {
     cat <<'EOF'
-File a feedback item asking a human for input. Returns immediately with the new
-item's id (the human answers later) — UNLESS you pass --wait, which blocks until
-the item is answered or resolved.
-
-The workspace and your session are auto-detected from the environment, so the
-human can jump straight into your session to talk to you if they prefer.
-
-USAGE
-  k2 tickets ask <title> [flags]
-
-ARGUMENTS
-  <title>                One-line summary of what you need (the notification text)
-
-FLAGS
-  --html <file|->        The HTML brief: Problem, What I tried, What I need
-                         from you, Options, Context. Agents must attach one
-                         (fyi is exempt). Start from `k2 tickets template`;
-                         `-` reads stdin. Max 1 MiB; the daemon cleans it.
-                         Missing: a warning or a refusal, per the owner's
-                         setting (`k2 tickets settings`).
-                         See `k2 study ticket-brief`.
-  --body <text>          Short plain summary (one or two sentences) that
-                         text-only readers see first
-  --body-file <file>     Read the summary from a file
-  --kind <kind>          question | approval | fyi   (default: question).
-                         fyi = no answer expected: it sits on the human's page
-                         until THEY dismiss/resolve it (or you resolve it
-                         yourself). --wait on a fyi is pointless.
-  --options <a,b,c>      Offer specific choices the human taps instead of typing
-                         (e.g. --options "Ship it,Hold,Needs changes")
-                         Escape a literal comma inside an option with \,
-  --priority <1-5>       1 = urgent … 5 = whenever   (default: 3)
-  --assign <users>       Who handles it: comma-separated users on this
-                         server (owner and/or Connect users, from
-                         `k2 connections list --users`). Assign every
-                         ticket: without one this server warns
-                         (assignee_required) or refuses, per the owner's
-                         setting (`k2 tickets settings`); a name that is
-                         not a user here is assignee_unknown. fyi is
-                         exempt. With no --assign, the owner's default
-                         assignee (if set) gets it. Narrows mobile push
-                         and shows on the ticket card. Alias: --to.
-  --wait                 Block until the item is answered, then print the BARE
-                         answer to stdout (exit 0) — safe for $(...) capture.
-                         A person answers by picking one of your options.
-                         If they write free text instead, the ticket goes to
-                         needs_discussion: their message prints to stdout,
-                         {"status":"needs_discussion"} to stderr, and the
-                         exit code is 5. Reply with `k2 tickets comment`,
-                         settle it, then `k2 tickets resolve <id> --answered
-                         "<outcome>"` (or plain `resolve`).
-                         If the item is resolved/dismissed WITHOUT an answer,
-                         stdout stays empty, a {"error":{"code":"closed_unanswered"}}
-                         prints to stderr, and the exit code is 1.
-  --timeout <seconds>    With --wait: give up after N seconds. On timeout stdout
-                         stays empty, {"error":{"code":"timeout"}} prints to
-                         stderr, exit 1 — and the item STAYS open (waiting); the
-                         human can still answer and you can read it later with
-                         `show`. Always check the exit code before trusting a
-                         captured answer.
-  --file <path[:line[-end]]>
-                         Attach a workspace file to the ask (repeatable, at
-                         most 10). A pointer, not a copy: the person sees it
-                         under your message (images as pictures) and opens
-                         it from there. A path that exists here is sent
-                         absolute; anything else resolves against the
-                         ticket's workspace. Secrets (.env, keys, tokens in
-                         the text) are refused; use k2 vault. With --wait,
-                         files on the answer print one stderr line
-                         ("1 file attached: k2 tickets show <id>"); stdout
-                         stays the bare answer, and your session got
-                         "Attached: <abs path>" lines.
-  --json                 JSON output (with --wait: {answer, attachments}
-                         with absolute paths)
-
-BRIEF ERRORS (exit 2, JSON on stderr)
-  brief_required · brief_empty · brief_too_large · brief_invalid
-  Warnings print as {"warning":{"code","hint"}} on stderr and keep exit 0
-  (brief_missing, brief_sanitized, brief_no_need, brief_not_stored,
-  assignee_required, assignee_unknown).
-
-EXAMPLES
-  k2 tickets template > brief.html
-  k2 tickets ask "Deploy to prod now?" --html brief.html --assign owner --kind approval --options "Yes,No,Wait for me" --priority 1
-  k2 tickets ask "Which color for the CTA?" --html brief.html --body-file ./summary.md --assign owner
-  k2 tickets ask "Review the sales pricing" --html brief.html --assign julie --priority 2
-  k2 tickets ask "Which logo?" --html brief.html --assign owner --options "A,B" --file out/a.png --file out/b.png
-  ANSWER=$(k2 tickets ask "Proceed with the migration?" --options "Go,Stop" --wait)
+%include cli/text/help/feedback/ask.txt
 EOF
 }
 
 cmd_help_feedback_assign() {
     cat <<'EOF'
-Set who a ticket is assigned to. Usernames are snapshots (owner, or names from
-`k2 users list`) — they do not have to exist forever; removed users still show
-on the board and still match push targeting.
-
-Replaces the full assignee set (not additive). Prefer assigning at create time
-with `k2 tickets ask … --assign user` when you already know who should own it.
-
-USAGE
-  k2 tickets assign <id> <user> [user…] [--json]
-  k2 tickets assign <id> --to user1,user2 [--json]
-  k2 tickets assign <id> --clear [--json]
-
-ARGUMENTS
-  <id>                   Ticket id from ask/list (short unique prefix ok)
-  <user>…                One or more usernames to assign
-
-FLAGS
-  --to <users>           Comma-separated usernames (same as positional users)
-  --clear                Remove all assignees (push fans out to everyone again)
-  --json                 JSON output
-
-EXAMPLES
-  k2 tickets assign ab12cd34 owner
-  k2 tickets assign ab12cd34 --to alice,bob
-  k2 tickets assign ab12cd34 --clear
+%include cli/text/help/feedback/assign.txt
 EOF
 }
 
 cmd_help_feedback_list() {
     cat <<'EOF'
-List this workspace's feedback items, newest first. Default shows open items
-(waiting + answered + needs_discussion); pass --all to include resolved/dismissed/planned.
-
-USAGE
-  k2 tickets list [flags]
-
-FLAGS
-  --all                  Include resolved, dismissed, and planned items
-  --status <status>      Filter to one status: waiting | needs_discussion | answered | planned | resolved | dismissed
-  --json                 JSON output
+%include cli/text/help/feedback/list.txt
 EOF
 }
 
 cmd_help_feedback_show() {
     cat <<'EOF'
-Show one feedback item: the ask, its status/answer, and the full discussion
-thread. Use it to read the answer after `ask` returned (or after a --wait
-timed out).
-
-USAGE
-  k2 tickets show <id> [flags]
-
-ARGUMENTS
-  <id>                   A feedback id from `ask`/`list`. A short unique prefix
-                         works; an ambiguous prefix fails (exit 4) listing the
-                         matching candidates in the hint.
-
-FLAGS
-  --html                 Print ONLY the ticket's cleaned HTML brief to stdout
-                         (k2 tickets show <id> --html > brief.html). No brief:
-                         exit 1, {"error":{"code":"no_brief"}}, empty stdout.
-  --json                 JSON output (includes the comments array, each with
-                         its id and attachments; the brief HTML only with
-                         --html)
-
-Without --html, show prints the body, a "brief : HTML, <size>" line, and the
-brief's plain-text extract (first 40 lines). Each message's files print under
-it: "[file] <abs path> (240 KB)", plus "(changed since sent)" or "(gone)".
+%include cli/text/help/feedback/show.txt
 EOF
 }
 
 cmd_help_feedback_template() {
     cat <<'EOF'
-Print the HTML brief skeleton every agent ticket carries. Static: works with
-no daemon running.
-
-USAGE
-  k2 tickets template > brief.html
-  (fill in the sections)
-  k2 tickets ask "<one-line title>" --html brief.html --assign <user>
-
-Assign every ticket to a user on this server (the owner or a Connect user:
-`k2 connections list --users`). Without one, the owner's setting decides:
-a warning or a refusal (`k2 tickets settings`).
-
-SECTIONS
-  Problem · What I tried · What I need from you (section.k2-need) ·
-  Options (ol.k2-options) · Context
-
-See `k2 study ticket-brief` for the caps and what gets stripped.
+%include cli/text/help/feedback/template.txt
 EOF
 }
 
 cmd_help_feedback_comment() {
     cat <<'EOF'
-Add a message to a feedback item's discussion thread. Bumps the card's
-message count only — your comment does NOT change the item's status and does
-not fire a notification (only NEW items notify).
-
-Use it to reply when a person wrote free text (status needs_discussion).
-When you have settled it, mark it answered with
-`k2 tickets resolve <id> --answered "<outcome>"`, or `k2 tickets resolve <id>`.
-
-USAGE
-  k2 tickets comment <id> "<text>" [flags]
-  k2 tickets comment <id> --file <path> [--file <path>…]
-
-ARGUMENTS
-  <id>                   A feedback id from `ask`/`list` (short unique prefix ok)
-  <text>                 The message (quote it). Optional with --file.
-
-FLAGS
-  --file <path[:line[-end]]>
-                         Attach a file from the TICKET's workspace (repeatable,
-                         at most 10). A path that exists here is sent absolute;
-                         anything else resolves against the ticket's workspace
-                         root (which may not be yours). Secrets are refused
-                         (use k2 vault). Read them back with k2 tickets show.
-  --json                 JSON output
-
-EXAMPLES
-  k2 tickets comment ab12cd34 "Here's the fixed build" --file out/report.pdf
-  k2 tickets comment ab12cd34 --file src/session.rs:120-140
+%include cli/text/help/feedback/comment.txt
 EOF
 }
 
 cmd_help_feedback_resolve() {
     cat <<'EOF'
-Mark a feedback item resolved — you got what you needed (or the ask no longer
-applies). Resolved items drop out of the default `list` view (still visible
-with --all). The recorded answer, if any, is kept.
-
-With --answered, settle a discussion instead: a person wrote free text, so the
-ticket is in needs_discussion. Once you have replied and agreed on an outcome,
-mark it answered with that outcome. It becomes the ticket's answer (what
-`ask --wait` and `show` print). It is not sent back into your session.
-
-USAGE
-  k2 tickets resolve <id> [flags]
-  k2 tickets resolve <id> --answered "<outcome>" [flags]
-
-ARGUMENTS
-  <id>                   A feedback id from `ask`/`list` (short unique prefix ok)
-
-FLAGS
-  --answered <outcome>   Mark it answered with the agreed outcome (not resolved)
-  --file <path[:line[-end]]>
-                         With --answered: attach files to the outcome
-                         (repeatable, at most 10). Without --answered it is a
-                         usage error: files ride a message (use comment).
-  --json                 JSON output
+%include cli/text/help/feedback/resolve.txt
 EOF
 }
 

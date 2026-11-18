@@ -1,0 +1,51 @@
+Move a workspace's pinned chat to another harness (the coding CLI it runs:
+claude, codex, grok, gemini, cursor, pi or hermes).
+
+The pinned chat is the chat heartbeats, Threads and `k2 msg` go to. It keeps
+the harness it started with: changing the workspace's Default Agent only
+changes NEW chats. This command moves the pinned chat itself:
+
+  1. K2 ends the current pinned chat and starts a new one on <harness>,
+     seeded with a summary of the recent conversation (the same summary as
+     Chat history → "Continue in a new chat…").
+  2. Heartbeats on the pinned chat, Threads and messages go to the new chat.
+  3. The old chat stays in Chat history.
+
+Already on <harness>: nothing changes (exit 0), unless you name a --model:
+then it starts a new chat on that model with the summary. <harness> not installed
+on this computer: nothing changes either (exit 1, harness_not_installed);
+the old chat keeps running and the error says how to install it.
+--dry-run runs the same check and shows the program it would launch.
+
+USAGE
+  k2 agent harness <workspace> <harness> [flags]
+
+  <workspace>   handle, name or path ("." = the current directory)
+  <harness>     claude, codex, grok, gemini, cursor, pi or hermes
+
+FLAGS
+  --full                  Seed with the whole old conversation (default: the recent part)
+  --notes-file <path>     Extra handover notes for the new chat
+  --model <id>            Start the new chat on this model, even if the preset
+                          names another. This start only: a later resume uses
+                          the preset or workspace model again
+  --dry-run               Show what would move; change nothing
+  --json                  The daemon's JSON
+
+WHO
+  A person: the owner (the desktop app, or a terminal outside K2), an Admin
+  login, or a person typing in a K2 shell tab. An agent can't move its own
+  pinned chat (that restarts its own session): it gets exit 3 and asks its
+  person to run this command, or, with permission cards on:
+    k2 permission request agent.harness-switch harness=<harness> --why "…"
+  In the app: the pinned chat's menu → "Move pinned chat to …", or answer
+  "Also move the pinned chat?" after changing a workspace's Default Agent.
+
+EXAMPLES
+  k2 agent harness sales claude
+  k2 agent harness ~/agents/ops claude --dry-run
+  k2 agent harness ops codex --full --notes-file handover.md
+  k2 agent harness ops codex --model gpt-6-astra
+
+EXIT CODES
+  0 ok (moved, or already there) · 1 error · 2 bad usage · 3 refused · 4 not found

@@ -1,0 +1,82 @@
+k2 vault set NAME [options] < value
+
+Create a secret, or a new version of NAME. The value comes on stdin, never
+as an argument. A new version changes only the value; the options below
+apply when NAME is created.
+
+  --kind <k>       what it is (default api_key); picks the default delivery:
+                     api_key, oauth_token, generic   fetch
+                     password, dsn, url              env
+                     ssh_key, tls_key                file
+                   Every kind allows fetch, file and env; api only when
+                   --delivery or --ceiling says api. Fetch needs --for.
+                   ssh_key also allows agent: sessions get $SSH_AUTH_SOCK
+                   and ssh/git sign through K2; nobody sees the key
+                   (unencrypted ed25519 or RSA ≥ 2048 bits).
+  --delivery fetch|agent|file|env|api   how agents get it (default: by kind)
+  --ceiling fetch|agent|file|env|api    the loosest delivery allowed later
+                                  (default env, or --delivery if looser)
+  --scope ws:<name>|server|session   (default: your workspace)
+  --for <host>[,<host>]   the sites fetch may send it to (exact hosts)
+  --preset <id>    stripe|openai|anthropic|xai|gemini|github|slack|supabase:
+                   fills --for and where the key goes (k2 vault presets);
+                   ovh-eu|ovh-ca|ovh-us: fills --for and --sign ovh
+
+  Where fetch puts the value (agents just name the secret):
+  --inject-dst <d>         header:<Name>   a request header (default
+                                           header:Authorization)
+                           query:<param>   a URL query parameter
+                           basic           Authorization: Basic base64(format)
+                           body            replaces {{secret}} in the request
+                                           body (a person only)
+  --inject-header <Name>   same as --inject-dst header:<Name>
+  --inject-format '<fmt>'  how it's written, exactly one {} (default {})
+  With no preset and no --inject-*, K2 sends Authorization: Bearer <value>
+  (or, for api_key/oauth_token/generic, a known provider's format when the
+  value's prefix matches one).
+
+  Signers (K2 signs each request with the secret instead of pasting it;
+  default delivery and ceiling fetch; agents can't change it):
+  --sign ovh               OVH API v1. The value is one JSON object:
+                           {"applicationKey":…,"applicationSecret":…,
+                            "consumerKey":…}; kind defaults to generic.
+                           Uses OVH's clock (/1.0/auth/time, cached 15 min).
+  --sign hmac-sha256       --sign-header <Name>: prefix + HMAC of the body
+  --sign hmac-sha256-ts    --sign-header <Name>: HMAC of a template with a
+                           Unix timestamp; kind defaults to hmac_key
+  --sign-header <Name>     the signature header (HMAC schemes)
+  --sign-encoding hex|base64   (default hex)
+  --sign-prefix '<p>'      hmac-sha256 only, e.g. 'sha256=' (≤ 32 chars)
+  --sign-ts-header <Name>  hmac-sha256-ts: also send the timestamp here
+  --sign-template '<t>'    hmac-sha256-ts: what's signed, one {ts} and one
+                           {body} (default '{ts}.{body}')
+  --sign-value '<v>'       hmac-sha256-ts: the header value, one {sig},
+                           at most one {ts} (default '{sig}')
+  --sign oauth-refresh     A sign-in K2 keeps fresh. The value is one JSON
+                           object: {"access_token":…,"refresh_token":…,
+                            "client_id":…, optional "expires_at" (Unix seconds
+                            or RFC 3339), "client_secret", "scope"}; kind
+                           defaults to oauth_token. Sent as Authorization:
+                           Bearer unless --inject-* says otherwise. Used
+                           through k2 vault fetch only: never env, file or api.
+  --oauth-token-url <url>  oauth-refresh: the provider's token URL (https)
+  --oauth-client-auth basic|post|none
+                           oauth-refresh: how the client proves itself
+                           (default post; none = a public client)
+  Change it later with k2 vault sign (k2 vault sign --help).
+
+  --describe <text>  --rotate-every <days>
+  --ttl 2h                 session scope: how long it lasts (90s, 10m, 2h, 7d
+                           or seconds; default 24h, 60s to 7d; longer is cut to 7d)
+
+Examples:
+  k2 vault set STRIPE_KEY --preset stripe < key.txt
+  k2 vault set WEATHER_KEY --for api.weather.example --inject-dst query:appid < key.txt
+  k2 vault set MAILGUN_KEY --for api.mailgun.net --inject-dst basic --inject-format 'api:{}' < key.txt
+  k2 vault set DEPLOY_KEY --kind ssh_key --delivery agent < deploy_ed25519
+  k2 vault set OVH_EU --sign ovh --preset ovh-eu < ovh-keys.json
+  k2 vault set HOOK_KEY --sign hmac-sha256 --sign-header X-Hub-Signature-256 --sign-prefix 'sha256=' --for hooks.example.com < key
+  k2 vault set OPS_INGEST --sign hmac-sha256-ts --sign-header X-K2-Ops-Sig --sign-ts-header X-K2-Ops-Ts --for ingest.example.com < key
+  k2 vault set GMAIL_API --sign oauth-refresh --oauth-token-url https://oauth2.googleapis.com/token --for gmail.googleapis.com < sign-in.json
+Better than set: ask a person, so the value never passes through you:
+  k2 thread secret <addr> --name STRIPE_KEY --for api.stripe.com

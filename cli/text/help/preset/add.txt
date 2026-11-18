@@ -1,0 +1,29 @@
+Add a CUSTOM agent preset.
+
+USAGE
+  k2 preset add --id <slug> --command '<argv string>' [flags]
+
+FLAGS
+  --id <slug>             Preset id (1-64 chars: letters, digits, . _ -).
+                          This is the stable handle `hire --agent` and
+                          projects.default_agent reference.
+  --command '<argv>'      Full launch command string, quote-aware
+                          (e.g. 'aider --model ollama_chat/qwen3').
+  --label <label>         Display label (default: the id)
+  --icon <emoji>          Icon shown in Settings/pickers
+  --danger-flag <flag>    Declare ONE of the agent's own auto-approve
+                          flags (repeatable). Kept on API host-session
+                          spawns by default; stripped if the workspace
+                          sets api_skip_permissions off.
+  --env K=V               Environment variable staged at spawn
+                          (repeatable). Values may hold secrets — they
+                          are never logged by the daemon.
+  --readiness <v>         'bracketed-paste' | 'settle:<ms>' (1..600000)
+  --json                  JSON output
+
+EXAMPLE — local-LLM harness (aider against Ollama):
+  k2 preset add --id aider-ollama \
+      --command 'aider --model ollama_chat/qwen3 --no-auto-commits' \
+      --env OLLAMA_API_BASE=http://localhost:11434 \
+      --danger-flag --yes-always \
+      --readiness settle:2000

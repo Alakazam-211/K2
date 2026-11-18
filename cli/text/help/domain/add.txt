@@ -1,0 +1,8 @@
+Attach an apex to this server (idempotent). Does not transfer NS.
+If k2.dev auto-adds the zone to your account it starts pending: point
+the registrar nameservers at k2.dev, then `k2 domain refresh <apex>`.
+Exit 1 with zone_owned_elsewhere when another k2.dev account owns it;
+bind_api_unavailable when domain linking isn't live on k2.dev yet.
+
+USAGE
+  k2 domain add <apex> [--json]

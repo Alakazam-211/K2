@@ -1,0 +1,49 @@
+Calendars of hosted mailboxes: create, rename, share. Owner/admin, or an
+agent whose workspace may manage hosted mail (mail-manage). An agent can't
+widen its own access: sharing a calendar with an inbox its workspace can
+read (or a group holding one) is owner-only (exit 3) unless it only
+narrows that share. Unsharing is always allowed.
+
+USAGE
+  k2 hostmail calendar create <owner-addr> <name> [--color <c>] [--json]
+  k2 hostmail calendar rename <owner-addr> <calendar> <new-name> [--color <c>] [--json]
+  k2 hostmail calendar share <owner-addr> [--calendar <id|name>] --with <addr|group>
+                             --freebusy|--read|--write|--editor [--json]
+  k2 hostmail calendar unshare <owner-addr> [--calendar <id|name>] --with <addr|group> [--json]
+  k2 hostmail calendar shares <owner-addr> [--json]
+  k2 hostmail calendar sharing [--max-shares N] [--json]
+
+RIGHTS (Stalwart calendar rights)
+  --freebusy  mayReadFreeBusy — busy times only
+  --read      + mayReadItems — see events
+  --write     + mayWriteAll + mayRSVP — add and edit events (in their own
+              calendar app this also removes events)
+  --editor    --write + mayDelete — may also delete the calendar itself
+  Never mayShare: a grantee can't re-share. Re-sharing with someone
+  replaces their rights.
+
+<calendar> defaults to the owner's default calendar. --with is a hosted
+address or a group (`k2 hostmail group`) on this server.
+create/rename need Stalwart 0.16.19 or later (older versions store the
+name on the admin account): run `k2 hostmail upgrade` first.
+A calendar holds at most maxShares grantees (Stalwart default 10); share
+with a group to go past it, or raise it with `sharing --max-shares N`.
+
+AGENTS
+  An agent with a `k2 mail access` grant on an inbox sees the calendars
+  shared to that inbox (directly or through a group) in `k2 calendar`,
+  limited by both the share and its grant level.
+
+TEAM CALENDAR
+  k2 hostmail group create team
+  k2 hostmail group add team a@example.com b@example.com
+  k2 hostmail calendar create owner@example.com "Team"
+  k2 hostmail calendar share owner@example.com --calendar Team --with team --write
+  k2 hostmail calendar share owner@example.com --calendar Team --with a@example.com --editor
+
+ROUTES
+  POST /cli/mail/calendar/manage {action:create|rename, owner, name, calendar?, color?}
+  POST /cli/mail/calendar/share {owner, calendar?, with, level}
+  POST /cli/mail/calendar/unshare {owner, calendar?, with}
+  GET  /cli/mail/calendar/shares?owner=
+  GET|POST /cli/mail/calendar/sharing {maxShares}

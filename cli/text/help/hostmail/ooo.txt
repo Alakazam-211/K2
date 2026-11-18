@@ -1,0 +1,8 @@
+Out-of-office auto-reply on a minted mailbox (Stalwart vacation).
+mail_manage. Unminted address is 404. --text is literal; @path reads
+a file; - reads stdin. --days 1-31 (default 7). --until UTC YYYY-MM-DD.
+
+USAGE
+  k2 hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE] [--json]
+  k2 hostmail ooo unset <addr> [--json]
+  k2 hostmail ooo show <addr> [--json]

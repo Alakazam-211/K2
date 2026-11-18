@@ -1,0 +1,48 @@
+k2 dns — manage DNS records for zones on this K2 Connect account (toggle-gated)
+
+Agents can list zones, list/add/remove user-managed records, and verify
+delegation when the owner opts in. Zone create/delete is owner/dashboard-only.
+
+PRODUCT BOUNDARY (agents: pick the right tool)
+  Custom zone records (A/TXT/MX/…)     → k2 dns (this family; zone must already
+                                           exist, be attached on this server, and
+                                           be delegated; manage toggle ON)
+  Attach apex / hostnames on this box  → k2 domain (owner; not hostmail domain)
+  Box certs for attached hostnames     → k2 cert (not hostmail cert renew)
+  Nested label.user.k2.dev + target    → k2 publish subdomain
+  Device tunnel to primary *.k2.dev    → k2 tunnel
+  Hosted mail domain / MX recipe       → k2 hostmail domain (owner)
+
+USAGE
+  k2 dns <command> [args] [flags]
+
+COMMANDS
+  access                      Capability envelope (allowed? types? zones summary)
+  list                        List DNS zones for the account
+  records <domain>            List records (daemon resolves zone from domain)
+  record add <domain> <type> <name> <value> [--ttl N] [--priority N]
+                              Insert a user-managed record (A|AAAA|CNAME|TXT|MX|SRV|CAA)
+  record remove <record-id>   Delete a user-managed record by id
+  verify <domain>             On-demand delegation check
+
+GLOBAL FLAGS
+  --json                      Machine-readable output (single JSON object)
+
+OUTPUT CONTRACT
+  Success output is human-readable by default; --json switches it to JSON.
+  ERRORS are ALWAYS JSON on stderr — {"error":{"code","hint"}} — regardless
+  of --json.
+
+EXIT CODES
+  0 ok
+  1 error (proxy/upstream/not found/etc.)
+  2 bad usage (missing args, disallowed record type)
+  3 gated/forbidden — DNS manage is off; ask your human to turn it on in
+    Settings → Network → Tunnel → Policies → "Agents can change DNS records",
+    or Settings → Workspaces / Agents → <workspace> → Permissions → DNS →
+    "Let this agent manage DNS"
+    (same path as the access-denied `hint` — GH#32)
+
+NS and zone lifecycle are not available to agents.
+
+Run 'k2 dns <command> --help' for details on a command.

@@ -1,0 +1,27 @@
+The pending-outbound approvals queue. approve/deny: the owner, or a
+mail_manage (IT) agent for OTHER workspaces' sends — never its own (exit 3
+owner_only: an agent can't loosen mail rules on its own sends). Agents
+without mail_manage exit 3. Any agent can cancel its own queued sends
+(`k2 mail outbox cancel <id>`). Approve submits the message via the
+mail server; deny requires a --note, which lands in the agent's outbox.
+Pending items auto-deny after 7 days.
+
+USAGE
+  k2 hostmail approvals [list] [--json]          The queue (default), with each file's name and size
+  k2 hostmail approvals show <id> [--json]       The whole message and its numbered files
+  k2 hostmail approvals save <id> --file <n> --out <path>
+                                                 Write file number <n> (from 1, as show lists them)
+                                                 to a new path on this machine. A path that already
+                                                 exists is refused. The file isn't opened. It came
+                                                 from an agent or, in a forward, from outside, so
+                                                 treat it as untrusted.
+
+A file marked "not scanned": K2's check for secrets couldn't read it (a binary
+file, or an attachment a forward carried over). The mark doesn't stop the message.
+A file without the mark was read as plain text, so an encoded secret can still
+pass. Neither means virus scanned.
+  k2 hostmail approvals approve <id> [--note "..."] [--json]
+  k2 hostmail approvals deny <id> --note "..." [--json]
+
+ARGUMENTS
+  <id>                   An outbound id from the list (out_…)

@@ -1,0 +1,4 @@
+Live _dmarc TXT, current reportAddressUri, and the rua= line to plant.
+
+USAGE
+  k2 hostmail dmarc show <domain> [--json]

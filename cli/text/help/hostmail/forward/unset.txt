@@ -1,0 +1,5 @@
+Remove every forward on this mailbox (same box or outside). Mail stays in
+the mailbox from now on. To remove just one, use rm.
+
+USAGE
+  k2 hostmail forward unset <addr> [--json]

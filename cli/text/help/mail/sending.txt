@@ -1,0 +1,51 @@
+Show or set whether a workspace's agents may SEND email — from hosted K2
+mailboxes and from linked inboxes (Gmail, Outlook, IMAP) alike. This is
+the switch behind the `gated` error on `k2 mail send` / `k2 mail reply`.
+The inbox LEVEL (`k2 mail access level`) says which inbox an agent may
+use; this mode says whether that workspace may send at all. Works on
+every OS (macOS included).
+
+With sending on, an agent that reads a malicious email can be talked into
+sending any mail it can read, with its attachments, and any workspace file
+that doesn't look like a secret, to any address: up to 20 messages an hour
+and 100 a day per mailbox, at 25 MiB each. Nobody is asked or told at send
+time; the outbox records it afterwards. The secret check catches mistakes,
+not intent. The DMARC check only slows forged senders, and an attacker's own
+domain passes it. Use approval for any agent that reads mail from outside.
+
+Owner/admin verb (a terminal outside a K2 agent session), with one
+exception: an agent whose workspace may manage hosted mail may set it for
+OTHER workspaces. Any other agent call exits 3 (owner_only), and so does
+an agent changing its own workspace (ask, below). Member logins are
+refused (Admin floor).
+
+An agent that gets exit 3 asks the owner or an admin instead, with the Ask
+with: line the refusal ends with (permission cards on); their Allow makes
+the change, so don't run it again. For your own workspace, approval or on:
+  k2 permission request mail.send-mode mode=approval --why "…"   (or mode=on)
+For off, any workspace on this server, yours or another's:
+  k2 permission request mail.stop-sending target=<workspace> --why "…"
+
+Same setting as `k2 hostmail config --workspace <ws> --agent-send <m>`,
+and as Settings → Workspaces / Agents → <workspace> → Permissions → Email sending.
+
+USAGE
+  k2 mail sending <workspace>                   Show the mode
+  k2 mail sending <workspace> off|approval|on   Set it
+
+MODES
+  off        Agents can't send (the default)
+  approval   Sends wait in `k2 hostmail approvals` (hosted and linked
+             inboxes; an approved linked send leaves through its own
+             provider — SMTP or Microsoft Graph)
+  on         Agents send under the owner's rules (always-BCC, limits)
+
+ARGUMENTS
+  <workspace>            Workspace name, path or UUID
+
+FLAGS
+  --json                 JSON output
+
+EXAMPLES
+  k2 mail sending appa
+  k2 mail sending appa on

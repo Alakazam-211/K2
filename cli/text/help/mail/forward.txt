@@ -1,0 +1,24 @@
+Forward your own hosted mailbox to up to 100 addresses. For people: a box
+login whose mailbox the owner linked (k2 hostmail person link), or the
+owner. Same rules as k2 hostmail forward: it goes on at once; an outside
+address gets an email first saying who set it, with a link to stop it,
+and the owner is told; outside forwards keep a copy unless --no-keep.
+set replaces the whole list; add and rm leave the others alone.
+You can resume a forward after a pause, with these exceptions: box_brake
+needs the owner or an Admin; revoked means the address pressed Stop, and
+only the owner or an Admin can choose it again; air_gap and receive_only
+lift by themselves. show says which. With more than one mailbox linked to
+you, say which with --address.
+
+Agents: this verb answers exit 3 person_only. Use
+k2 hostmail forward <set|add|rm|show|unset|pause|resume> <your address>,
+with "Let this agent manage hosted mail" on.
+
+USAGE
+  k2 mail forward set --to <dest> [--to <dest>…] [--keep|--no-keep] [--address <addr>] [--json]
+  k2 mail forward add --to <dest> [--to <dest>…] [--keep|--no-keep] [--address <addr>] [--json]
+  k2 mail forward rm --to <dest> [--to <dest>…] [--address <addr>] [--json]
+  k2 mail forward show [--address <addr>] [--json]
+  k2 mail forward unset [--address <addr>] [--json]
+  k2 mail forward pause [--to <dest>] [--address <addr>] [--json]
+  k2 mail forward resume [--to <dest>] [--address <addr>] [--json]

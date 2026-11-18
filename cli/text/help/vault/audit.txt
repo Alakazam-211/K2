@@ -1,0 +1,6 @@
+k2 vault audit [NAME] [--since <rfc3339>] [--scope <s>] [--json]
+
+Uses, changes, shares and refusals, names only. Agents see their own
+workspace's; the owner and Admins see all.
+
+Example: k2 vault audit STRIPE_KEY --since 2026-10-01T00:00:00Z

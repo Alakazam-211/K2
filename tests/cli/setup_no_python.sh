@@ -5,9 +5,10 @@
 # verb asks the daemon for its lines (`?format=text`) and prints them with
 # bash and curl only; refusals (JSON) map to the same exit codes as before
 # (2 usage, 3 refused, 4 no such Focus Group, 1 anything else). The POST bodies are built in bash,
-# quotes and backslashes escaped. k2 setup agent-reports reads the
-# feedback settings' JSON and prints it in bash too. A python3 that fails
-# loudly is first on PATH; the test fails if it ever runs.
+# quotes and backslashes escaped. A write that got no answer is sent once.
+# k2 setup agent-reports reads the feedback settings' JSON and prints it
+# in bash too. A python3 that fails loudly is first on PATH; the test fails
+# if it ever runs.
 #
 # Nothing is installed: the daemon is a stub (python3 runs only the stub,
 # from its full path). The CLI runs with a clean environment (`env -i`, a
@@ -131,6 +132,13 @@ class H(BaseHTTPRequestHandler):
             f.write("%r\n" % (auth,))
         if auth != "Bearer t.k/+= z":
             return self._send(403, '{"error":"invalid or missing token"}', "application/json")
+        if mode == "close":
+            self.close_connection = True
+            return
+        if mode == "empty":
+            return self._send(200, "", "text/plain")
+        if mode == "migrating":
+            return self._send(503, '{"state":"migrating"}', "application/json")
         if mode in ERRORS:
             return self._send(*ERRORS[mode])
         if u.path == "/cli/product-feedback/settings":
@@ -332,6 +340,30 @@ refused garbage 1 "Error: the daemon sent something k2 setup does not understand
 echo agent >"$MODE_FILE"
 run setup --json
 assert_eq "agent --json: exit 3" "$rc" "3"
+echo ok >"$MODE_FILE"
+
+echo "== a write is sent once =="
+# A POST that may have reached the daemon is never sent again: one request
+# for an answer that never came, an empty one, or a 503 while migrating.
+for mode in close empty migrating; do
+    echo "$mode" >"$MODE_FILE"
+    : >"$LOG_FILE"
+    run setup skip dev_tools
+    assert_eq "$mode: exit 1" "$rc" "1"
+    assert_eq "$mode: one request" "$(grep -c . "$LOG_FILE")" "1"
+    assert_eq "$mode: nothing on stdout" "$out" ""
+done
+echo close >"$MODE_FILE"
+run setup skip dev_tools
+assert_eq "close: the line" "$err" "Error: could not reach the K2 daemon (k2 setup)"
+echo migrating >"$MODE_FILE"
+run setup skip dev_tools
+assert_eq "migrating: the answer" "$err" 'Error: {"state":"migrating"}'
+# The list (a GET) is asked again while the daemon migrates: four tries.
+: >"$LOG_FILE"
+run setup
+assert_eq "migrating list: exit 1" "$rc" "1"
+assert_eq "migrating list: four requests" "$(grep -c . "$LOG_FILE")" "4"
 echo ok >"$MODE_FILE"
 
 echo "== no daemon =="

@@ -365,6 +365,28 @@ run "$WORK/box10" --version "$V" --dry-run
 <<<"$out" grep -q "helper install: $SD/install-root-helper.sh, through sudo" || fail "dry-run installer: $out"
 ok "dry run prints the helper plan and changes nothing"
 
+echo "== --version takes the release with or without its v: one URL, never vv =="
+# The manifest URL adds the tag's v, so v$V once built .../download/vv$V/.
+# The curl shim logs every release URL; a vv URL has no file and fails.
+WANT_URL="https://github.com/Alakazam-211/K2/releases/download/v$V/daemon-latest.json"
+n=0
+for how in "flag:$V" "flag:v$V" "env:$V" "env:v$V"; do
+	n=$((n + 1))
+	given="${how#*:}"
+	rm -f "$WORK/curl.log"
+	case "$how" in
+		flag:*) run "$WORK/box-ver$n" --version "$given" --dry-run ;;
+		env:*) K2_VERSION="$given" run "$WORK/box-ver$n" --dry-run ;;
+	esac
+	label="${how%%:*} $given"
+	[ "$rc" -eq 0 ] || fail "$label: exit $rc: $out"
+	[ -f "$WORK/curl.log" ] || fail "$label: no release request"
+	[ "$(head -n1 "$WORK/curl.log")" = "$WANT_URL" ] || fail "$label: first request $(head -n1 "$WORK/curl.log"), want $WANT_URL"
+	! grep -q '/download/vv' "$WORK/curl.log" || fail "$label: asked for a vv URL: $(cat "$WORK/curl.log")"
+	<<<"$out" grep -qx "  requested ver:  $V" || fail "$label: dry run's requested version: $out"
+	ok "$label: asks for $WANT_URL and plans v$V"
+done
+
 echo "== provisioning: install-daemon.sh installs the helper once; step 7a only checks =="
 PROVISION="$ROOT/scripts/provision-k2-server.sh"
 STEP4="$(sed -n '/^# ── 4\. daemon binary/,/^# ── 5\./p' "$PROVISION")"

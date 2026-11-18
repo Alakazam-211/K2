@@ -138,6 +138,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# A release is named with or without its tag's v: 0.46.7 and v0.46.7
+# are the same release (the manifest URL below adds the v).
+K2_VERSION="${K2_VERSION#v}"
+
 die() { echo "$@" >&2; exit 1; }
 
 # ── Daemon user ──────────────────────────────────────────────────────

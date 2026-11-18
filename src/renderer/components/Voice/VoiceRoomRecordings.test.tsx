@@ -127,6 +127,26 @@ describe('the recordings drawer', () => {
     expect(listCalls()).toHaveLength(1)
   })
 
+  it('Escape with the focus on the page: the transcript goes back to the list, then the list closes', async () => {
+    h.get.mockImplementation((_s: unknown, route: string) =>
+      route === 'voice/recordings'
+        ? Promise.resolve({ ok: true, canRead: true, next: null, recordings: [row('42', '2026-11-18T14:41:00Z')] })
+        : Promise.resolve({ ok: true, lines: [{ id: '1', speaker: 'owner', speakerExternalId: 'k2:owner', startMs: 0, text: 'Hi.' }], next: null }),
+    )
+    const onClose = vi.fn()
+    render(<RecordingsDrawer target={target} onClose={onClose} />)
+    await waitFor(() => expect(screen.getByTestId('home-chat-show-transcript')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('home-chat-show-transcript'))
+    await waitFor(() => expect(screen.getAllByTestId('home-chat-transcript-turn')).toHaveLength(1))
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(screen.queryByTestId('home-chat-transcript')).toBeNull()
+    expect(onClose).not.toHaveBeenCalled()
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('a refused transcript read says why in the panel', async () => {
     h.get.mockImplementation((_s: unknown, route: string) =>
       route === 'voice/recordings'

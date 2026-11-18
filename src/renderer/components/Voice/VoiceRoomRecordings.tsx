@@ -152,6 +152,21 @@ export function RecordingsDrawer({ target, onClose }: { target: RoomRecordingsTa
     if (!transcript) closeRef.current?.focus()
   }, [transcript])
 
+  // Escape with the focus elsewhere (the page, after a press on the list):
+  // the transcript goes back to the list, the list closes. A press the
+  // drawer took already (the search clearing, the panel closing) is left be.
+  const reading = transcript !== null
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      e.preventDefault()
+      if (reading) setTranscript(null)
+      else onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [reading, onClose])
+
   const starterOf = useMemo(() => {
     const byMember = new Map(target.occupants.filter((o) => o.memberId).map((o) => [o.memberId as string, o.name ?? o.user]))
     return (memberId: string | null) => (memberId ? (byMember.get(memberId) ?? null) : null)

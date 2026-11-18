@@ -11,8 +11,8 @@
 # them as schema/<noun>.entries between schema-head.sh and schema-tail.sh.
 # Each one is checked on its own before any join (see check_entries).
 #
-# Text the CLI prints (the `k2 study` pages) lives in cli/text/, one file
-# per page, so the Rust CLI can read the same files. The part keeps the
+# Text the CLI prints (the `k2 study` pages and the static help) lives in
+# cli/text/, one file per page, so the Rust CLI can read the same files. The part keeps the
 # page's quoted heredoc with one line in it, `%include cli/text/<path>.txt`,
 # and the join puts the file's bytes in that line's place. Every file under
 # cli/text is included exactly once (see join_parts).
@@ -121,8 +121,10 @@ fi
 
 # The join: the parts in ORDER, byte for byte, with each `%include` line
 # replaced by the text file it names. The line must be the only line of a
-# quoted heredoc (`cat <<'WORD'`, maybe piped on, then the line, then
-# WORD), so the file prints exactly as written: nothing in it expands.
+# quoted heredoc (`cat <<'WORD'`, maybe after a case pattern on the same
+# line, maybe sent to stderr with `>&2` before or after the word, or piped
+# on, then the line, then WORD), so the file prints exactly as written:
+# nothing in it expands.
 # Exit 2 for a broken include or a file nobody includes, 1 for text that
 # can't sit in its heredoc. Writes the join to $1.
 join_parts() {
@@ -131,7 +133,7 @@ join_parts() {
 import os, re, sys
 root, out, names = sys.argv[1], sys.argv[2], sys.argv[3:]
 INCLUDE = re.compile(r"%include (cli/text/[a-z0-9_-]+(?:/[a-z0-9_-]+)*\.txt)")
-OPEN = re.compile(r"\s*cat <<'([A-Za-z_][A-Za-z_0-9]*)'(?: \| .*)?")
+OPEN = re.compile(r"\s*(?:[^\s()][^()]*\) )?cat(?: >&2)? <<'([A-Za-z_][A-Za-z_0-9]*)'(?: >&2| \| .*)?")
 used, pieces, broken, bad_text = {}, [], [], []
 for name in names:
     with open(root + "/cli/src/" + name, "rb") as f:

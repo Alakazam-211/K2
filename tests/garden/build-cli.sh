@@ -132,6 +132,23 @@ pass=$((pass + 1))
 # A pipe after the heredoc is allowed (a filter like _perm_lines).
 page EOF ' | _perm_lines'
 run 0 "wrote cli/k2"
+# A usage sent to stderr: `cat <<'EOF' >&2` and `cat >&2 <<'EOF'`.
+page EOF ' >&2'
+run 0 "wrote cli/k2"
+grep -qx "    cat <<'EOF' >&2" "$T/cli/k2" && grep -qx 'line $HOME \\n `x`' "$T/cli/k2" || { echo "FAIL: the stderr page was not inlined" >&2; exit 1; }
+[ "$(bash -c "$(cat "$T/cli/k2" | sed '$d'); _study_page_a" 2>&1 >/dev/null)" = "$(cat "$X/a.txt")" ] || { echo "FAIL: the stderr page does not print its text file on stderr" >&2; exit 1; }
+printf '%s\n' '_study_page_a() {' "    cat >&2 <<'EOF'" '%include cli/text/study/a.txt' 'EOF' '}' > "$S/a.sh"
+run 0 "wrote cli/k2"
+grep -qx 'line $HOME \\n `x`' "$T/cli/k2" || { echo "FAIL: the cat >&2 page was not inlined" >&2; exit 1; }
+pass=$((pass + 2))
+# A case arm on the heredoc's own line: `sync) cat <<'EOF'`.
+printf '%s\n' '_study_page_a() {' '    case "$1" in' "        sync|pull) cat <<'EOF'" '%include cli/text/study/a.txt' 'EOF' '            ;;' '    esac' '}' > "$S/a.sh"
+run 0 "wrote cli/k2"
+[ "$(bash -c "$(cat "$T/cli/k2" | sed '$d'); _study_page_a pull")" = "$(cat "$X/a.txt")" ] || { echo "FAIL: the case arm page does not print its text file" >&2; exit 1; }
+pass=$((pass + 1))
+# Any other redirect is not a plain quoted heredoc.
+printf '%s\n' '_study_page_a() {' "    cat <<'EOF' > out.txt" '%include cli/text/study/a.txt' 'EOF' '}' > "$S/a.sh"
+run 2 "cli/src/a.sh:3: cli/text/study/a.txt must be the only line of a quoted heredoc"
 # Broken includes: exit 2, nothing written.
 before="$(cat "$T/cli/k2")"
 page EOF ''

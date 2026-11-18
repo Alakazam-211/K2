@@ -37,6 +37,9 @@
 #                  pass, nothing is sent)
 #   study list     k5 study with a passport (the      <= 30 ms + the stub's
 #   (passport)     cards probe over TCP, cards on)       p95 handler time
+#   --help         k5 --help in an agent's terminal   <= 30 ms + the stub's
+#   (passport)     (the cards probe over TCP, cards      p95 handler time
+#                  on: the daily tier and its line)
 #   thread read    k5 thread read                     <= 40 ms: pending
 #                                                        (R3.5, not timed)
 #
@@ -49,6 +52,8 @@
 #   page --version k5 --version                       <= 5 ms
 #   study errors   k5 study errors                    <= 30 ms
 #   help page      k5 mail send --help                <= 30 ms
+#   bare k5        k5 alone (the daily tier, no       <= 30 ms
+#                  passport: nothing asked)
 #
 # with cli/k2's p95 for the two pages as info. Before timing, each page
 # runs once on both CLIs and the two must print the same and exit the
@@ -377,6 +382,7 @@ def agent_page(name, words, run_env, target, with_stub):
 
 agent_page("agent help (mail send --help, HOOK_SOCK set)", ["mail", "send", "--help"], cell_env, 30.0, False)
 agent_page("study list with a passport (cards probe)", ["study"], env, 30.0, True)
+agent_page("--help with a passport (cards probe over TCP)", ["--help"], env, 30.0, True)
 
 phases("a passport (this script's call)", env)
 owner = {k: v for k, v in env.items() if k not in ("K2_HOOK_TOKEN", "K2_CELL", "K2_SESSION_ID")}
@@ -425,6 +431,7 @@ def measure_page(name, words, target_ms):
 measure_page("page --version", ["--version"], 5.0)
 measure_page("study errors", ["study", "errors"], 30.0)
 measure_page("help page (mail send --help)", ["mail", "send", "--help"], 30.0)
+measure_page("bare k5 (the daily tier)", [], 30.0)
 if not all(results):
     sys.exit(f"perf_cli: {results.count(False)} of {len(results)} measures missed their target")
 print(f"perf_cli: {len(results)} measures met their targets")

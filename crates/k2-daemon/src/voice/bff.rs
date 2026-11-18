@@ -307,9 +307,12 @@ fn http() -> Result<&'static reqwest::blocking::Client, String> {
     if let Some(c) = C.get() {
         return Ok(c);
     }
+    // Every call is plain http to the voice server's client listener:
+    // plain http never uses a proxy (k2_core::proxy_rule).
     let c = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(15))
+        .no_proxy()
         .build()
         .map_err(|e| format!("http client: {e}"))?;
     Ok(C.get_or_init(|| c))

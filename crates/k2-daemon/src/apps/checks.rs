@@ -177,11 +177,15 @@ pub fn judge(c: &Check, a: &Answer) -> (bool, Option<bool>, Option<bool>, Option
 
 /// GET `base + path` with `headers`, no redirects, [`TIMEOUT`].
 fn fetch(base: &str, path: &str, headers: &[(String, String)]) -> Result<Answer, String> {
-    let client = reqwest::blocking::Client::builder()
+    let mut builder = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(TIMEOUT)
-        .build()
-        .map_err(|e| format!("client: {e}"))?;
+        .timeout(TIMEOUT);
+    // The App's loopback port never goes through a proxy; its public
+    // https host may use this box's proxy settings (k2_core::proxy_rule).
+    if k2_core::proxy_rule::direct(base) {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().map_err(|e| format!("client: {e}"))?;
     let mut req = client.get(format!("{base}{path}")).header("User-Agent", "k2-check/1");
     for (k, v) in headers {
         req = req.header(k.as_str(), v.as_str());

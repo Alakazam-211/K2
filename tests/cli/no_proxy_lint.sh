@@ -224,9 +224,7 @@ RUST_OUTSIDE=(
     "src-tauri/src/native_voice/provider.rs|1|HTTPS to a remote K2 host (its other client, for loopback and http, skips proxies)"
     "crates/k2-transfer-client/src/lib.rs|1|an App's transfer door, for the App's own code"
     # Services on this box that are not the daemon.
-    "crates/k2-daemon/src/apps/checks.rs|1|an App's health checks (its loopback port or its public host)"
     "crates/k2-daemon/src/mail/sieve_lockdown_live.rs|1|a mail test sink"
-    "crates/k2-daemon/src/voice/bff.rs|1|the voice server's client listener"
 )
 RUST_TOKEN_OK=(
     "crates/k2-daemon/src/apps/grace.rs|1|a notice's text names ?token=, it builds no address"

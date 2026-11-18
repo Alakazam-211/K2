@@ -292,7 +292,7 @@ describe('three panes', () => {
     const heights = [
       screen.getByTestId('ticket-list').querySelector<HTMLElement>('[data-ticket-list-header]')!.style.height,
       screen.getByTestId('ticket-detail-title').parentElement!.style.height,
-      screen.getByTestId('ticket-rail-tab-thread').parentElement!.style.height,
+      screen.getByTestId('ticket-agent-rail').querySelector<HTMLElement>('[data-ticket-discussion-header]')!.style.height,
     ]
     expect(heights[0]).toMatch(/48px/)
     expect(new Set(heights).size).toBe(1)
@@ -329,5 +329,77 @@ describe('three panes', () => {
     expect(JSON.parse(localStorage.getItem('k2.windowChrome.tickets.window-test') ?? '{}').discussionWidth).toBe(
       before + 16,
     )
+  })
+})
+
+describe('shared controls', () => {
+  it('the tabs are the shared segmented control, Waiting on me first; the arrows choose', async () => {
+    board()
+    const group = screen.getByRole('radiogroup', { name: 'Which tickets' })
+    const radios = within(group).getAllByRole('radio')
+    expect(radios.map((r) => r.getAttribute('data-testid'))).toEqual([
+      'ticket-scope-waiting',
+      'ticket-scope-mine',
+      'ticket-scope-all',
+    ])
+    // Opened on All (this file's pref); ← goes to Mine.
+    expect(screen.getByTestId('ticket-scope-all').getAttribute('aria-checked')).toBe('true')
+    fireEvent.keyDown(screen.getByTestId('ticket-scope-all'), { key: 'ArrowLeft' })
+    expect(screen.getByTestId('ticket-scope-mine').getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('search is the shared search field; Esc clears it and keeps the open ticket', async () => {
+    board()
+    fireEvent.click(card(first.id))
+    await screen.findByTestId('ticket-detail')
+    const search = screen.getByLabelText('Search tickets')
+    expect(search.hasAttribute('data-k2-search')).toBe(true)
+    fireEvent.change(search, { target: { value: 'second' } })
+    fireEvent.keyDown(search, { key: 'Escape' })
+    expect((search as HTMLInputElement).value).toBe('')
+    expect(screen.getByTestId('ticket-detail')).toBeTruthy()
+  })
+
+  it('a card is a raised, cut surface; the selected one has one fill and no ring', async () => {
+    board()
+    fireEvent.click(card(first.id))
+    await screen.findByTestId('ticket-detail')
+    const c = card(first.id)
+    expect(c.getAttribute('data-material')).toBe('raised')
+    expect(c.getAttribute('data-k2-chamfer')).toBe('surface')
+    expect(c.className).not.toMatch(/(^|\s)ring-/)
+  })
+
+  it('the header status menu takes the focus, and the arrows move through it', async () => {
+    board()
+    fireEvent.click(card(first.id))
+    await screen.findByTestId('ticket-rail-thread')
+    // Let the reply box take its opening focus first.
+    await new Promise((r) => setTimeout(r, 100))
+    fireEvent.click(screen.getByTestId('ticket-status'))
+    const menu = screen.getByTestId('ticket-header-status-menu')
+    expect(menu.getAttribute('role')).toBe('menu')
+    await waitFor(() => expect(document.activeElement).toBe(within(menu).getByTestId('ticket-status-option-waiting')))
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(within(menu).getByTestId('ticket-status-option-needs_discussion'))
+    fireEvent.keyDown(document.activeElement!, { key: 'End' })
+    expect(document.activeElement).toBe(within(menu).getByTestId('ticket-status-option-resolved'))
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByTestId('ticket-header-status-menu')).toBeNull())
+    // The ticket stays open.
+    expect(screen.getByTestId('ticket-detail')).toBeTruthy()
+  })
+
+  it('the header controls are glyph buttons; a hidden discussion comes back from the report’s header', async () => {
+    board()
+    fireEvent.click(card(first.id))
+    await screen.findByTestId('ticket-rail-thread')
+    expect(screen.queryByText('Hide chat')).toBeNull()
+    fireEvent.click(screen.getByTestId('ticket-chat-toggle'))
+    await waitFor(() => expect(screen.queryByTestId('ticket-agent-rail')).toBeNull())
+    const show = screen.getByTestId('ticket-chat-toggle')
+    expect(screen.getByTestId('ticket-detail-header').contains(show)).toBe(true)
+    fireEvent.click(show)
+    expect(await screen.findByTestId('ticket-agent-rail')).toBeTruthy()
   })
 })

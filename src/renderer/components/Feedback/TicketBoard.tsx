@@ -43,7 +43,7 @@ import {
 import { useElementWidth } from '@/hooks/useElementWidth'
 import { NavTile } from '@/components/Layout/NavTile'
 import { ResizeEdge } from '@/components/Layout/ResizeEdge'
-import { ScrollEdgeFrame, Surface, TILE_FOOT_CLIP } from '@/components/ui'
+import { ScrollEdgeFrame, SearchField, Segmented, Surface, TILE_FOOT_CLIP } from '@/components/ui'
 import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
 import {
   filterByScope,
@@ -141,8 +141,14 @@ export function TicketBoard({
       if (e.key !== 'Escape') return
       if (document.querySelector('[data-testid="brief-overlay"]')) return
       if (document.querySelector('[data-ticket-discussion-drawer]')) return
+      // An open menu (a status menu, the assignees, the workspace filter)
+      // closes on this Esc, not the ticket.
+      if (document.querySelector('[data-k2-menu]')) return
       // The answer box closes itself on Esc; keep the ticket open.
       if ((e.target as HTMLElement | null)?.tagName === 'TEXTAREA') return
+      // The search field clears its text on Esc first (SearchField).
+      const field = e.target as HTMLInputElement | null
+      if (field?.matches?.('input[data-k2-search]') && field.value) return
       e.preventDefault()
       e.stopPropagation()
       if (listOverlay) setListOverlay(false)
@@ -265,33 +271,31 @@ export function TicketBoard({
         className="flex items-center gap-1 pl-2 flex-shrink-0 border-b border-[var(--color-border)]"
         style={{ height: PROJECT_BAR_ROW_HEIGHT }}
       >
-        <div role="tablist" aria-label="Which tickets" className="flex flex-1 min-w-0 border border-[var(--color-border)]">
-          {TICKET_SCOPES.map((s) => {
-            const active = scope === s.value
-            return (
-              <button
-                key={s.value}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                data-testid={`ticket-scope-${s.value}`}
-                onClick={() => setScope(s.value)}
-                className={`flex-1 min-w-0 flex items-center justify-center gap-1 px-1.5 py-1 text-[10px] font-medium truncate cursor-pointer transition-colors ${
-                  active
-                    ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                    : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-1)]'
-                }`}
-              >
-                <span className="truncate">{s.label}</span>
+        {/* Which tickets: the app's segmented control (Frost in Glass, cut in
+            Terminal, the arrow keys move and choose), Waiting on me first as
+            on the phone; each count in a small pill. */}
+        <Segmented<TicketScope>
+          aria-label="Which tickets"
+          value={scope}
+          onChange={setScope}
+          activation="auto"
+          className="flex-1 min-w-0"
+          data-testid="ticket-scopes"
+          options={TICKET_SCOPES.map((s) => ({
+            value: s.value,
+            label: (
+              <span className="inline-flex items-center gap-1.5">
+                <span>{s.label}</span>
                 {!failedEmpty && (
-                  <span className={`tabular-nums ${active ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'}`}>
+                  <span data-scope-count="" className="type-badge tabular-nums px-1.5 rounded-[var(--radius-pill)] bg-[var(--color-wash-2)]">
                     {scopeCounts[s.value]}
                   </span>
                 )}
-              </button>
-            )
-          })}
-        </div>
+              </span>
+            ),
+            buttonProps: { 'data-testid': `ticket-scope-${s.value}`, className: 'cursor-pointer' },
+          }))}
+        />
         <DrawerToggleButton
           side="left"
           placement="drawer"
@@ -301,29 +305,14 @@ export function TicketBoard({
         />
       </div>
       <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 flex-shrink-0">
-        <div className="relative flex-1 min-w-0">
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search tickets…"
-            aria-label="Search tickets"
-            className="w-full px-2 py-1.5 pr-6 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-text-muted)]"
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => setSearch('')}
-              aria-label="Clear search"
-              className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center w-4 h-4 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
-            >
-              <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <line x1="2" y1="2" x2="10" y2="10" />
-                <line x1="10" y1="2" x2="2" y2="10" />
-              </svg>
-            </button>
-          )}
-        </div>
+        {/* The app's one search field: a magnifier, × and Esc clear it. */}
+        <SearchField
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search tickets…"
+          aria-label="Search tickets"
+          className="flex-1 min-w-0"
+        />
         {extraFilter}
       </div>
 

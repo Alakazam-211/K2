@@ -8,6 +8,7 @@
 
 import React from 'react'
 import { statusLabel, type FeedbackKind, type FeedbackStatus } from './feedback-api'
+import { PaperclipIcon } from '@/components/icons/K2Icons'
 
 /** A status's word colour (waiting = needs you, needs discussion orange,
  *  answered green, planned accent, closed muted). Each reads at 4.5:1 or
@@ -111,9 +112,7 @@ export function FileCountBadge({ count }: { count: number | null | undefined }):
       aria-label={label}
       className="inline-flex items-center gap-0.5 tabular-nums flex-shrink-0"
     >
-      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <path d="M13.5 7.5 8 13a3.5 3.5 0 0 1-5-5l6-6a2.3 2.3 0 0 1 3.3 3.3L6.4 11.2a1.2 1.2 0 0 1-1.7-1.7L10 4.2" />
-      </svg>
+      <PaperclipIcon className="w-3 h-3" />
       {count}
     </span>
   )

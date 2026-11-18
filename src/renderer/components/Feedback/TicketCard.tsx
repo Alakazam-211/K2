@@ -8,8 +8,11 @@
 // keeps its identifying line (Appa A1) — agent, filing date, short id —
 // because it has nothing else to tell it apart.
 
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { floatMaterial, MENU_LIST, MENU_ROW } from '@/components/ui/float-material'
+import { Surface } from '@/components/ui'
+import { CheckIcon, ChevronDownIcon } from '@/components/icons/K2Icons'
+import { focusMenuStart, onMenuKeyDown, TICKET_MENU_BOX, TICKET_MENU_ROW } from './ticket-menu'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/lib/format-relative-time'
@@ -37,12 +40,9 @@ import type { FilterableWorkspace } from './WorkspaceFilterDropdown'
 // The status colours live with the badges; re-exported for callers.
 export { statusDotColor, statusTextClass } from './badges'
 
-function CheckGlyph(): React.JSX.Element {
-  return (
-    <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-    </svg>
-  )
+/** The picked row's mark, the same in every ticket menu. */
+export function MenuCheck(): React.JSX.Element {
+  return <CheckIcon className="w-3 h-3 flex-shrink-0 text-[var(--color-accent-text)]" />
 }
 
 /** The card's status chip, which is also its status menu. */
@@ -66,6 +66,22 @@ export function CardStatusDropdown({
     minWidth: 140,
     estimatedHeight: 160,
   })
+
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const anchoredRef = menu.menuRef
+  const setBox = useCallback(
+    (el: HTMLDivElement | null) => {
+      boxRef.current = el
+      anchoredRef(el)
+    },
+    [anchoredRef],
+  )
+  // Into the menu as it opens (the picked row, else the first).
+  useEffect(() => {
+    if (!open) return
+    const frame = requestAnimationFrame(() => focusMenuStart(boxRef.current))
+    return () => cancelAnimationFrame(frame)
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -110,7 +126,7 @@ export function CardStatusDropdown({
     // keyboard changes status from the open ticket's header.
     <div
       ref={menu.anchorRef}
-      className="relative flex-shrink-0 min-w-0"
+      className="relative min-w-0"
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
     >
@@ -126,38 +142,39 @@ export function CardStatusDropdown({
       >
         <StatusMark status={row.status}>
           {/* The chevron shows on hover or focus, and while the menu is open. */}
-          <svg
-            aria-hidden
+          <span
             data-card-status-chevron=""
-            className={`w-2 h-2 flex-shrink-0 transition-[opacity,transform] ${
+            className={`flex transition-[opacity,transform] ${
               open ? 'rotate-180 opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
             }`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2.5}
           >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-          </svg>
+            <ChevronDownIcon className="w-3 h-3 flex-shrink-0" />
+          </span>
         </StatusMark>
       </button>
 
       {open && menu.portal(
         <div
-          ref={menu.menuRef}
+          ref={setBox}
+          role="menu"
+          aria-label="Change status"
           data-testid="ticket-status-menu"
           data-placement={menu.placement}
+          data-k2-chamfer="surface"
           style={menu.style}
-          {...floatMaterial('menu')} {...MENU_LIST} className="min-w-[140px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg"
+          onKeyDown={(e) => onMenuKeyDown(e, boxRef.current, () => setOpen(false))}
+          {...floatMaterial('menu')}
+          {...MENU_LIST}
+          className={`min-w-[140px] ${TICKET_MENU_BOX}`}
         >
           {/* Answered shows as the current state but is not offered. */}
           {row.status === 'answered' && (
             <div
-              className="flex items-center gap-2 px-2 py-1.5 text-[11px] text-[var(--color-status-ok-soft)] opacity-70 cursor-default select-none"
+              className="flex items-center gap-2 px-3 py-1.5 type-control text-[var(--color-status-ok-soft)] cursor-default select-none"
               title="Answered is set by an option pick or by the agent, not by hand"
             >
               <span className="flex-1">Answered</span>
-              <CheckGlyph />
+              <MenuCheck />
             </div>
           )}
           {statuses.map((s) => {
@@ -166,18 +183,19 @@ export function CardStatusDropdown({
               <button
                 key={s}
                 type="button"
+                role="menuitemradio"
+                aria-checked={current}
                 disabled={busy}
                 onClick={() => void setStatus(s)}
+                data-k2-focus=""
                 {...MENU_ROW}
-                className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left transition-colors cursor-pointer disabled:opacity-50 ${
-                  current
-                    ? 'text-[var(--color-text-primary)] bg-[var(--color-wash-1)]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]'
+                className={`${TICKET_MENU_ROW} ${
+                  current ? 'text-[var(--color-text-primary)] bg-[var(--color-wash-1)]' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
                 }`}
                 title={s === 'waiting' ? 'Reopen — back to waiting' : undefined}
               >
                 <span className="flex-1">{statusLabel(s)}</span>
-                {current && <CheckGlyph />}
+                {current && <MenuCheck />}
               </button>
             )
           })}
@@ -284,23 +302,32 @@ export function FeedbackCard({
   const details = unlinked ? unlinkedDetails(row) : null
   const summary = cardSummary(row.body)
   return (
-    <div
+    // A card: raised and rounded with its rim in Glass, cut in Terminal. The
+    // hover and selected fills are a layer under the text (::before), so
+    // they show over either material: the nav row's wash on hover, its
+    // accent fill when selected, with the nav row's bar at the left edge.
+    <Surface
       role="option"
       aria-selected={selected}
       tabIndex={tabStop ? 0 : -1}
+      role2="elevated"
+      material="raised"
+      chamfer
       data-k2-focus=""
       data-testid="ticket-card"
       data-ticket-id={row.id}
+      data-selected={selected ? '' : undefined}
       onClick={() => {
         if (clickWasTextSelection()) return
         onSelect()
       }}
-      className={`group border bg-[var(--color-bg-surface)] px-2.5 py-2 cursor-pointer outline-none transition-colors ${
-        selected
-          ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
-          : 'border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
+      className={`group relative isolate px-3 py-2.5 cursor-pointer outline-none transition-colors before:absolute before:inset-0 before:-z-10 before:rounded-[var(--radius-box)] before:pointer-events-none before:transition-colors ${
+        selected ? 'before:bg-[var(--color-accent)]/15' : 'hover:before:bg-[var(--color-wash-1)]'
       }`}
     >
+      {selected && (
+        <span aria-hidden="true" className="absolute left-0 top-2 bottom-2 w-[3px] bg-[var(--color-accent)]" />
+      )}
       <p
         data-testid="card-title"
         className="text-[12px] font-medium leading-snug text-[var(--color-text-primary)] truncate"
@@ -342,7 +369,7 @@ export function FeedbackCard({
           {formatRelativeTime(row.createdAt, nowSec)}
         </span>
       </div>
-    </div>
+    </Surface>
   )
 }
 

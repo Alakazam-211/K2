@@ -150,7 +150,7 @@ describe('TicketBoard filters', () => {
       assignees: ['owner'],
     })
     board([mine, julies, answeredMine])
-    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-checked')).toBe('true')
     await waitFor(() => expect(screen.getAllByTestId('ticket-card')).toHaveLength(1))
     expect(screen.getByTestId('ticket-card').textContent).toContain('Mine ticket')
     expect(screen.queryByText('Julie ticket')).toBeNull()
@@ -185,13 +185,19 @@ describe('TicketBoard filters', () => {
       assignees: ['owner'],
     })
     board([mine, julies, discussMine, discussNobody, answeredMine])
-    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-checked')).toBe('true')
     await waitFor(() => expect(screen.getAllByTestId('ticket-card')).toHaveLength(2))
     expect(screen.getAllByTestId('ticket-card').map((c) => c.textContent)).toEqual([
       expect.stringContaining('Mine ticket'),
       expect.stringContaining('Discuss mine'),
     ])
     expect(screen.getByTestId('ticket-scope-waiting').textContent).toBe('Waiting on me2')
+    // Waiting on me comes first, as on the phone.
+    expect(screen.getAllByRole('radio').map((r) => r.getAttribute('data-testid'))).toEqual([
+      'ticket-scope-waiting',
+      'ticket-scope-mine',
+      'ticket-scope-all',
+    ])
   })
 
   it('an empty Waiting tab counts other needs-discussion tickets too', async () => {
@@ -215,13 +221,13 @@ describe('TicketBoard filters', () => {
     })
     board([julies, answeredMine])
     const empty = await screen.findByTestId('ticket-waiting-empty')
-    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-checked')).toBe('true')
     expect(empty.textContent).toContain('Nothing is waiting on you')
     expect(empty.textContent).toContain('1 other waiting ticket is assigned to someone else or no one.')
     expect(screen.queryByTestId('ticket-card')).toBeNull()
 
     fireEvent.click(screen.getByTestId('ticket-waiting-empty-all'))
-    expect(screen.getByTestId('ticket-scope-all').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('ticket-scope-all').getAttribute('aria-checked')).toBe('true')
     expect(screen.getAllByTestId('ticket-card')).toHaveLength(2)
   })
 
@@ -242,25 +248,25 @@ describe('TicketBoard filters', () => {
   it('honours "Open the Tickets page on: All"', async () => {
     writeTicketOpenOn('all')
     board()
-    expect(screen.getByTestId('ticket-scope-all').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('ticket-scope-all').getAttribute('aria-checked')).toBe('true')
     await waitFor(() => expect(screen.getAllByTestId('ticket-card')).toHaveLength(2))
   })
 
   it('honours "Remember my last tab", and only then', async () => {
     writeTicketOpenOn('last')
     const first = board()
-    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-checked')).toBe('true')
     fireEvent.click(screen.getByTestId('ticket-scope-mine'))
     first.unmount()
 
     board()
-    expect(screen.getByTestId('ticket-scope-mine').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('ticket-scope-mine').getAttribute('aria-checked')).toBe('true')
     cleanup()
 
     // Back on the default: the remembered tab is ignored.
     writeTicketOpenOn('waiting')
     board()
-    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-checked')).toBe('true')
   })
 
   it('search narrows the list', async () => {
@@ -356,10 +362,16 @@ describe('ticket detail', () => {
     const header = screen.getByTestId('ticket-detail-header')
     expect(screen.getByTestId('ticket-detail-title').textContent).toBe('Which DB?')
     expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^from ada → assigned to Owner/)
-    for (const t of ['ticket-expand', 'ticket-open-window', 'ticket-chat-toggle', 'ticket-status', 'ticket-reassign']) {
+    for (const t of ['ticket-expand', 'ticket-open-window', 'ticket-status', 'ticket-reassign']) {
       expect(header.contains(screen.getByTestId(t)), t).toBe(true)
     }
-    expect(screen.getByTestId('ticket-chat-toggle').textContent).toBe('Hide chat')
+    // Glyphs with tooltips, so the title keeps its line.
+    expect(screen.getByTestId('ticket-expand').getAttribute('aria-label')).toBe('Show the report full screen')
+    expect(screen.getByTestId('ticket-open-window').getAttribute('aria-label')).toBe('Open in its own window')
+    // While the discussion shows, its » is in its own top row.
+    const hide = screen.getByTestId('ticket-chat-toggle')
+    expect(railOf().contains(hide)).toBe(true)
+    expect(hide.getAttribute('aria-label')).toBe('Hide discussion')
     // The conversation lives in the rail's Thread tab only.
     expect(screen.queryByTestId('ticket-history-toggle')).toBeNull()
     expect(screen.queryByTestId('ticket-history')).toBeNull()
@@ -420,8 +432,8 @@ describe('ticket detail', () => {
     const thread = within(rail).getByTestId('ticket-rail-tab-thread')
     const agent = within(rail).getByTestId('ticket-rail-tab-agent')
     expect([thread.textContent, agent.textContent]).toEqual(['Thread', 'Agent'])
-    expect(thread.getAttribute('aria-selected')).toBe('true')
-    expect(agent.getAttribute('aria-selected')).toBe('false')
+    expect(thread.getAttribute('aria-checked')).toBe('true')
+    expect(agent.getAttribute('aria-checked')).toBe('false')
     // The ticket's comments are in the thread.
     const pane = await within(rail).findByTestId('ticket-rail-thread')
     expect(pane.textContent).toContain('Which DB?')
@@ -490,7 +502,7 @@ describe('ticket detail', () => {
     const rail = await screen.findByTestId('ticket-agent-rail')
     expect(within(rail).queryByTestId('stub-terminal-pane')).toBeNull()
     fireEvent.click(within(rail).getByTestId('ticket-rail-tab-agent'))
-    expect(within(rail).getByTestId('ticket-rail-tab-agent').getAttribute('aria-selected')).toBe('true')
+    expect(within(rail).getByTestId('ticket-rail-tab-agent').getAttribute('aria-checked')).toBe('true')
     await within(rail).findByTestId('stub-terminal-pane')
     const last = seen.terminal.at(-1)
     if (!last) throw new Error('the terminal never mounted')
@@ -516,8 +528,11 @@ describe('ticket detail', () => {
     await within(railOf()).findByTestId('ticket-compose-input')
     fireEvent.click(screen.getByTestId('ticket-status'))
     const menu = screen.getByTestId('ticket-header-status-menu')
+    // Floats from the chip (the app's anchored menu), never inside the tile.
+    expect(screen.getByTestId('ticket-detail').contains(menu)).toBe(false)
+    expect(menu.querySelector('[aria-checked="true"]')?.textContent).toBe('Waiting')
     expect(Array.from(menu.querySelectorAll('[role="menuitemradio"]')).map((b) => b.textContent)).toEqual([
-      'Waiting✓',
+      'Waiting',
       'Needs discussion',
       'Answered',
       'Resolved',
@@ -556,14 +571,19 @@ describe('ticket detail', () => {
     await within(railOf()).findByTestId('ticket-compose-input')
     fireEvent.click(screen.getByTestId('ticket-reassign'))
     const menu = screen.getByTestId('ticket-reassign-menu')
-    expect(screen.getByTestId('ticket-detail-header').contains(menu)).toBe(true)
+    expect(menu.getAttribute('role')).toBe('menu')
     await waitFor(() =>
       expect(within(menu).getAllByTestId('ticket-reassign-option').map((b) => b.textContent)).toEqual([
-        '✓owner',
+        'owner',
         'julie',
         'baden',
       ]),
     )
+    expect(within(menu).getAllByRole('menuitemcheckbox').map((b) => b.getAttribute('aria-checked'))).toEqual([
+      'true',
+      'false',
+      'false',
+    ])
     api.assignFeedback.mockResolvedValueOnce({
       assignees: ['owner', 'julie'],
       warnings: [{ code: 'assignee_unknown', hint: 'julie is not a user on this server' }],
@@ -582,10 +602,12 @@ describe('ticket detail', () => {
     detail(row)
     await screen.findByTestId('ticket-agent-rail')
     const toggle = screen.getByTestId('ticket-chat-toggle')
-    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
     fireEvent.click(toggle)
     expect(screen.queryByTestId('ticket-agent-rail')).toBeNull()
-    expect(screen.getByTestId('ticket-chat-toggle').textContent).toBe('Show chat')
+    // Hidden, » to show it sits in the report's header.
+    expect(screen.getByTestId('ticket-detail-header').contains(screen.getByTestId('ticket-chat-toggle'))).toBe(true)
+    expect(screen.getByTestId('ticket-chat-toggle').getAttribute('aria-label')).toBe('Show discussion')
     expect(readTicketBoardChrome('window-test').chatOpen).toBe(false)
     // Another window keeps its own (default open).
     expect(readTicketBoardChrome('main').chatOpen).toBe(true)

@@ -361,13 +361,14 @@ export function quickAnswerOptions(
     .map((o) => ({ answer: o, label: o, detail: o }))
 }
 
-// ── List scope: Mine / Waiting on me / All ────────────────────────────────
+// ── List scope: Waiting on me / Mine / All ────────────────────────────────
 
 export type TicketScope = 'mine' | 'waiting' | 'all'
 
+/** The list's tabs, in the phone's order: Waiting on me (the default) first. */
 export const TICKET_SCOPES: ReadonlyArray<{ value: TicketScope; label: string }> = [
-  { value: 'mine', label: 'Mine' },
   { value: 'waiting', label: 'Waiting on me' },
+  { value: 'mine', label: 'Mine' },
   { value: 'all', label: 'All' },
 ]
 

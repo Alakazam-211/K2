@@ -29,7 +29,10 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/lib/format-relative-time'
-import { useDismiss } from '@/hooks/useDismiss'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
+import { DrawerHeaderButton, DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
+import { ChevronDownIcon, ExpandIcon, PopOutIcon } from '@/components/icons/K2Icons'
+import { focusMenuStart, onMenuKeyDown, TICKET_MENU_BOX, TICKET_MENU_ROW } from './ticket-menu'
 import { isWebClient } from '@/lib/is-web'
 import {
   assignFeedback,
@@ -48,7 +51,7 @@ import {
 } from './feedback-api'
 import { HtmlBriefBadge, PriorityBadge, StatusBadge, StatusMark } from './badges'
 import { BriefFrame } from './BriefFrame'
-import { cardAssigneeNames } from './TicketCard'
+import { cardAssigneeNames, MenuCheck } from './TicketCard'
 import { TicketAgentRail } from './TicketAgentRail'
 import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
@@ -64,7 +67,7 @@ import {
   type TicketDiscussionMode,
 } from '@/lib/ticket-board-chrome'
 import { useElementWidth } from '@/hooks/useElementWidth'
-import { ScrollEdgeFrame, Surface, TILE_FOOT_CLIP } from '@/components/ui'
+import { Button, Input, ScrollEdgeFrame, Surface, TILE_FOOT_CLIP } from '@/components/ui'
 import { ResizeEdge } from '@/components/Layout/ResizeEdge'
 import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
 
@@ -126,8 +129,8 @@ export function openTicketWindow(ticketId: string): Promise<unknown> {
   return invoke('window_open_ticket', { ticketId })
 }
 
-const HEADER_BUTTON_CLASS =
-  'px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] disabled:opacity-40 cursor-pointer flex-shrink-0'
+/** The header's glyphs (full screen, own window), at the icon size. */
+const HEADER_GLYPH = 'w-[var(--control-search-icon)] h-[var(--control-search-icon)]'
 
 export function FeedbackItemView({
   id,
@@ -143,7 +146,6 @@ export function FeedbackItemView({
   const [item, setItem] = useState<FeedbackShow | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
-  const [reassignOpen, setReassignOpen] = useState(false)
   // Open by default; remembered per window (ticket-board-chrome). The board
   // keeps it when it draws this view.
   const [ownRailOpen, setOwnRailOpen] = useState(() => readTicketBoardChrome().chatOpen)
@@ -348,7 +350,7 @@ export function FeedbackItemView({
             open downward over the body, hence the stacking context. */}
         <div data-testid="ticket-detail-header" className="relative z-20 flex-shrink-0">
           <div
-            className="flex items-center gap-2 min-w-0 px-4 border-b border-[var(--color-border)]"
+            className="flex items-center gap-1 min-w-0 px-4 border-b border-[var(--color-border)]"
             style={{ height: PROJECT_BAR_ROW_HEIGHT }}
           >
             <span
@@ -358,46 +360,44 @@ export function FeedbackItemView({
             >
               {view.title}
             </span>
+            {/* The header's controls are glyphs with tooltips, so the title
+                keeps its line: full screen, its own window, and (while the
+                discussion is hidden) » to show it, as the list's « and ». */}
             {hasBrief && (
-              <button
-                type="button"
+              <DrawerHeaderButton
+                shape="glyph"
+                label="Show the report full screen"
                 data-testid="ticket-expand"
                 disabled={!brief}
                 onClick={() => setExpanded(true)}
-                className={HEADER_BUTTON_CLASS}
+                className="disabled:opacity-40 disabled:cursor-default"
               >
-                Expand
-              </button>
+                <ExpandIcon className={HEADER_GLYPH} />
+              </DrawerHeaderButton>
             )}
             {canOpenWindow && (
-              <button
-                type="button"
+              <DrawerHeaderButton
+                shape="glyph"
+                label="Open in its own window"
                 data-testid="ticket-open-window"
                 onClick={() => {
-                  openTicketWindow(id).catch((e: unknown) =>
-                    console.warn('[tickets] open in window failed', e),
-                  )
+                  openTicketWindow(id).catch((e: unknown) => console.warn('[tickets] open in window failed', e))
                 }}
-                className={HEADER_BUTTON_CLASS}
               >
-                Open in window
-              </button>
+                <PopOutIcon className={HEADER_GLYPH} />
+              </DrawerHeaderButton>
             )}
-            {!unlinked && (
-              <button
-                type="button"
-                data-testid="ticket-chat-toggle"
-                aria-pressed={asDrawer ? drawerOpen : railOpen}
-                onClick={toggleDiscussion}
-                title={railOpen ? 'Hide the chat with the agent' : 'Show the chat with the agent'}
-                className={`${HEADER_BUTTON_CLASS} inline-flex items-center gap-1`}
-              >
-                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden>
-                  <rect x="1" y="1.5" width="10" height="9" />
-                  <line x1="7.5" y1="1.5" x2="7.5" y2="10.5" />
-                </svg>
-                {(asDrawer ? drawerOpen : railOpen) ? 'Hide chat' : 'Show chat'}
-              </button>
+            {!unlinked && !discussionShown && (
+              <span className="flex self-stretch -mr-4">
+                <DrawerToggleButton
+                  side="right"
+                  placement="room"
+                  name="discussion"
+                  testId="ticket-chat-toggle"
+                  divider={false}
+                  onToggle={toggleDiscussion}
+                />
+              </span>
             )}
           </div>
           {/* The report's first line: its status, and who asked whom. */}
@@ -422,30 +422,7 @@ export function FeedbackItemView({
               {unlinked ? (
                 <span className="flex-shrink-0 ml-1">{assignedLabel}</span>
               ) : (
-                <span className="relative flex-shrink-0 ml-1">
-                  <button
-                    type="button"
-                    data-testid="ticket-reassign"
-                    aria-expanded={reassignOpen}
-                    disabled={!item}
-                    onClick={() => setReassignOpen((o) => !o)}
-                    title="Reassign"
-                    className="hover:underline cursor-pointer disabled:cursor-default"
-                  >
-                    {assignedLabel}
-                  </button>
-                  {reassignOpen && item && (
-                    <ReassignMenu
-                      ticketId={item.id}
-                      assignees={item.assignees ?? []}
-                      onClose={() => setReassignOpen(false)}
-                      onSaved={() => {
-                        setReassignOpen(false)
-                        onChanged()
-                      }}
-                    />
-                  )}
-                </span>
+                <ReassignControl item={item} label={assignedLabel} onSaved={onChanged} />
               )}
               <span className="truncate min-w-0">
                 {' '}· {showWorkspace ? `${workspaceName} · ` : ''}asked{' '}
@@ -504,6 +481,7 @@ export function FeedbackItemView({
           width={discussionWidth}
           drawer={asDrawer}
           onHide={asDrawer ? () => setDrawerOpen(false) : () => setRailOpen(false)}
+          hideTestId={asDrawer ? 'ticket-discussion-hide' : 'ticket-chat-toggle'}
           feedbackId={id}
           item={item}
           error={error}
@@ -606,9 +584,10 @@ function TicketBody({
         >
         <div className="flex-1 flex flex-col" data-ticket-thread={ticketId}>
           {item.body && (
-            <div className="mb-3 px-3 py-2 bg-[var(--color-wash-2)] border border-[var(--color-border)]">
+            // The short summary: an inset well above the report.
+            <Surface role2="inset" chamfer data-testid="ticket-summary" className="mb-3 px-3 py-2">
               <ChatMessageBody text={item.body} style={{ fontSize: editorFontSize }} />
-            </div>
+            </Surface>
           )}
 
           {hasBrief &&
@@ -621,6 +600,7 @@ function TicketBody({
                 onExpandedChange={onExpandedChange}
                 heightClass={BRIEF_HEIGHT_CLASS}
                 fill
+                onTile
               />
             ) : briefError ? (
               <div data-testid="brief-error" className="mb-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">
@@ -644,22 +624,12 @@ function TicketBody({
           </p>
           {open && (
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void submit(() => resolveFeedback(item.id, 'resolved'))}
-                className="px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-1)] disabled:opacity-50 transition-colors cursor-pointer"
-              >
+              <Button variant="quiet" disabled={busy} onClick={() => void submit(() => resolveFeedback(item.id, 'resolved'))}>
                 Resolve
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void submit(() => resolveFeedback(item.id, 'dismissed'))}
-                className="px-3 py-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-1)] disabled:opacity-50 transition-colors cursor-pointer"
-              >
+              </Button>
+              <Button variant="quiet" disabled={busy} onClick={() => void submit(() => resolveFeedback(item.id, 'dismissed'))}>
                 Dismiss
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -667,11 +637,29 @@ function TicketBody({
     </div>
   )
 }
+/** A menu box placed by the app's anchored-menu layer: its element, for
+ *  the keys, and the hook's own ref. */
+function useMenuBox(menuRef: React.RefCallback<HTMLDivElement>): {
+  box: React.MutableRefObject<HTMLDivElement | null>
+  ref: (el: HTMLDivElement | null) => void
+} {
+  const box = useRef<HTMLDivElement | null>(null)
+  const ref = useCallback(
+    (el: HTMLDivElement | null) => {
+      box.current = el
+      menuRef(el)
+    },
+    [menuRef],
+  )
+  return { box, ref }
+}
 
 /** The header's status chip, which is also the status dropdown: waiting,
  *  needs discussion, answered, resolved — all over `POST
  *  /cli/feedback/resolve`. Answered asks for the agreed outcome first (the
- *  daemon refuses `answered` without one). */
+ *  daemon refuses `answered` without one). The menu floats from the chip
+ *  (the app's anchored menu: never clipped by the tile, flips up when
+ *  there's no room below), focus moves into it, and ↑ / ↓ move. */
 export function HeaderStatusMenu({
   ticketId,
   status,
@@ -688,13 +676,29 @@ export function HeaderStatusMenu({
   const [menuError, setMenuError] = useState<string | null>(null)
   const [answering, setAnswering] = useState(false)
   const [answer, setAnswer] = useState(currentAnswer ?? '')
-  const rootRef = useRef<HTMLDivElement>(null)
   const close = useCallback(() => {
     setOpen(false)
     setAnswering(false)
     setMenuError(null)
   }, [])
-  useDismiss(rootRef, close, open)
+  const menu = useAnchoredMenu<HTMLDivElement>({ open, onClose: close, width: 'min', minWidth: 200, estimatedHeight: 200 })
+  const { box, ref } = useMenuBox(menu.menuRef)
+  useEffect(() => {
+    if (!open) return
+    const frame = requestAnimationFrame(() => focusMenuStart(box.current))
+    return () => cancelAnimationFrame(frame)
+  }, [open, box])
+  useEffect(() => {
+    if (!open) return
+    // Capture-phase so Esc closes this menu before the board's Esc.
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      close()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [open, close])
 
   const apply = async (next: HeaderStatus, agreed?: string): Promise<void> => {
     if (busy) return
@@ -725,7 +729,7 @@ export function HeaderStatusMenu({
   }
 
   return (
-    <div ref={rootRef} className="relative flex-shrink-0">
+    <div ref={menu.anchorRef} className="relative flex-shrink-0">
       <button
         type="button"
         data-testid="ticket-status"
@@ -738,116 +742,162 @@ export function HeaderStatusMenu({
         title="Change status"
       >
         <StatusMark status={status}>
-          <svg
-            className={`w-2 h-2 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2.5}
-            aria-hidden
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-          </svg>
+          <span className={`flex flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}>
+            <ChevronDownIcon className="w-3 h-3" />
+          </span>
         </StatusMark>
       </button>
-      {open && (
-        <div
-          role="menu"
-          data-testid="ticket-header-status-menu"
-          {...floatMaterial('menu')} {...MENU_LIST} className="absolute left-0 top-full mt-1 z-30 min-w-[180px] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg"
-        >
-          {HEADER_STATUSES.map((s) => {
-            const current = status === s
-            return (
-              <button
-                key={s}
-                type="button"
-                role="menuitemradio"
-                aria-checked={current}
-                data-testid={`ticket-status-option-${s}`}
-                disabled={busy}
-                onClick={() => choose(s)}
-                {...MENU_ROW}
-                className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left transition-colors cursor-pointer disabled:opacity-50 ${
-                  current
-                    ? 'text-[var(--color-text-primary)] bg-[var(--color-wash-1)]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]'
-                }`}
-              >
-                <span className="flex-1">{statusLabel(s)}</span>
-                {current && <span className="text-[var(--color-accent)]">✓</span>}
-              </button>
-            )
-          })}
-          {answering && (
-            <div className="border-t border-[var(--color-border)] mt-0.5 px-2 py-1.5">
-              <label className="block mb-1 text-[10px] text-[var(--color-text-muted)]" htmlFor={`answered-${ticketId}`}>
-                What was agreed?
-              </label>
-              <input
-                id={`answered-${ticketId}`}
-                data-testid="ticket-answered-input"
-                autoFocus
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && answer.trim()) {
-                    e.preventDefault()
-                    void apply('answered', answer.trim())
-                  }
-                }}
-                className="w-full px-1.5 py-1 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)]"
-              />
-              <div className="mt-1.5 flex justify-end gap-2">
+      {open &&
+        menu.portal(
+          <div
+            ref={ref}
+            role="menu"
+            aria-label="Change status"
+            data-testid="ticket-header-status-menu"
+            data-placement={menu.placement}
+            data-k2-chamfer="surface"
+            style={menu.style}
+            onKeyDown={(e) => onMenuKeyDown(e, box.current, close)}
+            {...floatMaterial('menu')}
+            {...MENU_LIST}
+            className={`min-w-[180px] ${TICKET_MENU_BOX}`}
+          >
+            {HEADER_STATUSES.map((s) => {
+              const current = status === s
+              return (
                 <button
+                  key={s}
                   type="button"
-                  onClick={() => setAnswering(false)}
-                  className="text-[10px] text-[var(--color-text-muted)] cursor-pointer"
+                  role="menuitemradio"
+                  aria-checked={current}
+                  data-testid={`ticket-status-option-${s}`}
+                  disabled={busy}
+                  onClick={() => choose(s)}
+                  data-k2-focus=""
+                  {...MENU_ROW}
+                  className={`${TICKET_MENU_ROW} ${
+                    current ? 'text-[var(--color-text-primary)] bg-[var(--color-wash-1)]' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+                  }`}
                 >
-                  Cancel
+                  <span className="flex-1">{statusLabel(s)}</span>
+                  {current && <MenuCheck />}
                 </button>
-                <button
-                  type="button"
-                  data-testid="ticket-answered-save"
-                  disabled={busy || answer.trim().length === 0}
-                  onClick={() => void apply('answered', answer.trim())}
-                  className="text-[10px] text-[var(--color-accent)] cursor-pointer disabled:opacity-50"
-                >
-                  Mark answered
-                </button>
+              )
+            })}
+            {answering && (
+              <div className="border-t border-[var(--color-border)] mt-0.5 px-3 py-2">
+                <label className="block mb-1 type-hint text-[var(--color-text-secondary)]" htmlFor={`answered-${ticketId}`}>
+                  What was agreed?
+                </label>
+                <Input
+                  id={`answered-${ticketId}`}
+                  data-testid="ticket-answered-input"
+                  autoFocus
+                  value={answer}
+                  onChange={(e) => setAnswer(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && answer.trim()) {
+                      e.preventDefault()
+                      void apply('answered', answer.trim())
+                    }
+                  }}
+                  className="w-full"
+                />
+                <div className="mt-2 flex justify-end gap-2">
+                  <Button variant="ghost" onClick={() => setAnswering(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="accent"
+                    data-testid="ticket-answered-save"
+                    disabled={busy || answer.trim().length === 0}
+                    onClick={() => void apply('answered', answer.trim())}
+                  >
+                    Mark answered
+                  </Button>
+                </div>
               </div>
-            </div>
-          )}
-          {menuError && (
-            <div className="px-2 py-1 text-[10px] text-[var(--color-status-error-soft)] selectable-copy">{menuError}</div>
-          )}
-        </div>
-      )}
+            )}
+            {menuError && (
+              <div className="px-3 py-1 type-hint text-[var(--color-status-error-text)] selectable-copy">{menuError}</div>
+            )}
+          </div>,
+        )}
     </div>
   )
 }
 
-/** Reassign: multi-select from the server's users + `owner`, opening under
- *  the header's "assigned to" text. Replaces the whole assignee set. A name
- *  the daemon does not know still assigns; its `assignee_unknown` warning
- *  is shown as a toast. */
+/** Reassign: the "assigned to …" control in the byline and its menu, a
+ *  multi-select from the server's users + `owner`. Replaces the whole
+ *  assignee set on Save. A name the daemon does not know still assigns; its
+ *  `assignee_unknown` warning is shown as a toast. The menu floats from the
+ *  control (never clipped), with checkbox rows and the menu keys. */
+function ReassignControl({
+  item,
+  label,
+  onSaved,
+}: {
+  item: FeedbackShow | null
+  label: React.ReactNode
+  onSaved: () => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const close = useCallback(() => setOpen(false), [])
+  const menu = useAnchoredMenu<HTMLSpanElement>({ open, onClose: close, width: 'min', minWidth: 200, estimatedHeight: 260 })
+  return (
+    <span ref={menu.anchorRef} className="relative flex-shrink-0 ml-1">
+      <button
+        type="button"
+        data-testid="ticket-reassign"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={!item}
+        onClick={() => setOpen((o) => !o)}
+        title="Reassign"
+        className="k2-focus hover:underline cursor-pointer disabled:cursor-default"
+      >
+        {label}
+      </button>
+      {open && item && (
+        <ReassignMenu
+          menuRef={menu.menuRef}
+          style={menu.style}
+          portal={menu.portal}
+          ticketId={item.id}
+          assignees={item.assignees ?? []}
+          onClose={close}
+          onSaved={() => {
+            close()
+            onSaved()
+          }}
+        />
+      )}
+    </span>
+  )
+}
+
 function ReassignMenu({
+  menuRef,
+  style,
+  portal,
   ticketId,
   assignees,
   onClose,
   onSaved,
 }: {
+  menuRef: React.RefCallback<HTMLDivElement>
+  style: React.CSSProperties
+  portal: (node: React.ReactNode) => React.ReactPortal | null
   ticketId: string
   assignees: string[]
   onClose: () => void
   onSaved: () => void
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const [candidates, setCandidates] = useState<string[]>(['owner'])
   const [local, setLocal] = useState<string[]>(assignees)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const rootRef = useRef<HTMLDivElement>(null)
-  useDismiss(rootRef, onClose)
+  const { box, ref } = useMenuBox(menuRef)
 
   useEffect(() => {
     let cancelled = false
@@ -865,6 +915,19 @@ function ReassignMenu({
       cancelled = true
     }
   }, [])
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => focusMenuStart(box.current))
+    return () => cancelAnimationFrame(frame)
+  }, [box])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      onClose()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
 
   const all = [...new Set([...candidates, ...local])]
   const toggle = (name: string): void => {
@@ -886,11 +949,18 @@ function ReassignMenu({
     }
   }
 
-  return (
+  return portal(
     <div
-      ref={rootRef}
+      ref={ref}
+      role="menu"
+      aria-label="Who answers this ticket"
       data-testid="ticket-reassign-menu"
-      {...floatMaterial('menu')} {...MENU_LIST} className="absolute left-0 top-full mt-1 z-30 min-w-[180px] max-h-56 overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg"
+      data-k2-chamfer="surface"
+      style={style}
+      onKeyDown={(e) => onMenuKeyDown(e, box.current, onClose)}
+      {...floatMaterial('menu')}
+      {...MENU_LIST}
+      className={`min-w-[180px] max-h-56 overflow-y-auto ${TICKET_MENU_BOX}`}
     >
       {all.map((name) => {
         const on = local.includes(name)
@@ -898,34 +968,30 @@ function ReassignMenu({
           <button
             key={name}
             type="button"
+            role="menuitemcheckbox"
+            aria-checked={on}
             data-testid="ticket-reassign-option"
-            aria-pressed={on}
             onClick={() => toggle(name)}
+            data-k2-focus=""
             {...MENU_ROW}
-            className={`flex w-full items-center gap-2 px-2 py-1.5 text-[11px] text-left cursor-pointer ${
-              on ? 'bg-[var(--color-wash-1)] text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)]'
+            className={`${TICKET_MENU_ROW} ${
+              on ? 'bg-[var(--color-wash-1)] text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'
             }`}
           >
-            <span className="w-3 text-[var(--color-accent)]">{on ? '✓' : ''}</span>
+            <span className="flex w-3 flex-shrink-0">{on && <MenuCheck />}</span>
             {name}
           </button>
         )
       })}
-      {saveError && <div className="px-2 py-1 text-[10px] text-[var(--color-status-error-soft)]">{saveError}</div>}
-      <div className="border-t border-[var(--color-border)] mt-1 pt-1 px-2 pb-1 flex justify-end gap-2">
-        <button type="button" onClick={onClose} className="text-[10px] text-[var(--color-text-muted)] cursor-pointer">
+      {saveError && <div className="px-3 py-1 type-hint text-[var(--color-status-error-text)]">{saveError}</div>}
+      <div className="border-t border-[var(--color-border)] mt-1 pt-1.5 px-2 pb-1.5 flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>
           Cancel
-        </button>
-        <button
-          type="button"
-          data-testid="ticket-reassign-save"
-          disabled={saving}
-          onClick={() => void save()}
-          className="text-[10px] text-[var(--color-accent)] cursor-pointer disabled:opacity-50"
-        >
+        </Button>
+        <Button variant="accent" data-testid="ticket-reassign-save" disabled={saving} onClick={() => void save()}>
           Save
-        </button>
+        </Button>
       </div>
-    </div>
+    </div>,
   )
 }

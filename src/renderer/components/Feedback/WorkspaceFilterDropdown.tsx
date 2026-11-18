@@ -23,8 +23,11 @@
 // which Home's Add Agent picker uses too; this wrapper keeps the trigger,
 // the popover, its close rules and the store reads.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
+import { ChevronDownIcon } from '@/components/icons/K2Icons'
+import { TICKET_MENU_BOX } from './ticket-menu'
 import { useFocusGroupsStore, type FocusGroup } from '@/stores/focus-groups'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
@@ -180,7 +183,16 @@ export function WorkspaceFilterDropdown({
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const rootRef = useRef<HTMLDivElement>(null)
+  // The menu floats from the trigger, out of the list's tile (which would
+  // clip it), and closes on a mousedown outside both.
+  const menu = useAnchoredMenu<HTMLDivElement>({
+    open,
+    onClose: () => setOpen(false),
+    width: 'min',
+    minWidth: 256,
+    estimatedHeight: 360,
+    align: 'end',
+  })
 
   const sections = useMemo(
     () => groupWorkspacesForFilter(projects, focusGroups, focusGroupsEnabled, query),
@@ -226,25 +238,18 @@ export function WorkspaceFilterDropdown({
     if (!open) setQuery('')
   }, [open])
 
-  // Outside click closes; capture-phase Esc closes the popover BEFORE
-  // the page-level Esc handler (clear selection / close page) sees it.
+  // Capture-phase Esc closes the popover BEFORE the page-level Esc handler
+  // (clear selection / close page) sees it. (Outside clicks: the menu hook.)
   useEffect(() => {
     if (!open) return
-    const onDown = (e: MouseEvent): void => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
-    }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         e.stopPropagation()
         setOpen(false)
       }
     }
-    document.addEventListener('mousedown', onDown)
     window.addEventListener('keydown', onKey, true)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey, true)
-    }
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [open])
 
   const pick = (v: string): void => {
@@ -253,12 +258,16 @@ export function WorkspaceFilterDropdown({
   }
 
   return (
-    <div ref={rootRef} className="relative flex-shrink-0">
-      {/* Trigger — sized like the old <select>, showing the current pick. */}
+    <div ref={menu.anchorRef} className="relative flex-shrink-0 min-w-0">
+      {/* Trigger — the shared dropdown trigger (Settings' look), as tall as
+          the search field beside it, showing the current pick. */}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 px-2 py-1.5 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border)] outline-none cursor-pointer hover:text-[var(--color-text-primary)] transition-colors max-w-[180px]"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        data-k2-chamfer="control"
+        className="k2-focus no-drag flex items-center gap-1.5 px-2.5 h-[calc(var(--control-search-height)*var(--density-scale,1))] type-control bg-[var(--color-bg)] text-[var(--color-text-primary)] border border-[var(--color-control-edge)] rounded-[var(--radius-field)] [box-shadow:var(--ring-field)] outline-none cursor-pointer hover:border-[var(--color-text-muted)] transition-colors max-w-[180px]"
         title="Filter by workspace or project"
       >
         {selected && (
@@ -281,19 +290,20 @@ export function WorkspaceFilterDropdown({
                 ? UNLINKED_FILTER_LABEL
                 : 'All workspaces'}
         </span>
-        <svg
-          className={`w-2.5 h-2.5 flex-shrink-0 text-[var(--color-text-muted)] transition-transform ${open ? 'rotate-180' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
+        <span className={`flex flex-shrink-0 text-[var(--color-text-muted)] transition-transform ${open ? 'rotate-180' : ''}`}>
+          <ChevronDownIcon className="w-3 h-3" />
+        </span>
       </button>
 
-      {open && (
-        <div {...floatMaterial('menu')} className="absolute right-0 top-full mt-1 w-64 z-30 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg flex flex-col">
+      {open && menu.portal(
+        <div
+          ref={menu.menuRef}
+          style={menu.style}
+          data-testid="workspace-filter-menu"
+          data-k2-chamfer="surface"
+          {...floatMaterial('menu')}
+          className={`w-64 flex flex-col ${TICKET_MENU_BOX}`}
+        >
           {/* Search + rows: the shared list (search, sections, keyboard). */}
           <SearchableAgentList
             sections={listSections}
@@ -306,7 +316,7 @@ export function WorkspaceFilterDropdown({
             ariaLabel="Workspaces"
             autoFocus
           />
-        </div>
+        </div>,
       )}
     </div>
   )

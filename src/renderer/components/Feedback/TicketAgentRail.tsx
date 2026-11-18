@@ -85,7 +85,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 import { TICKET_DISCUSSION_DEFAULT_WIDTH } from '@/lib/ticket-board-chrome'
-import { Surface, TILE_FOOT_CLIP } from '@/components/ui'
+import { Button, Segmented, Surface, TILE_FOOT_CLIP } from '@/components/ui'
 import { PROJECT_BAR_ROW_HEIGHT } from '@/components/Projects/project-bar-height'
 import {
   TICKET_ATTACHMENTS_FEATURE,
@@ -243,6 +243,7 @@ export function TicketAgentRail({
   width = TICKET_DISCUSSION_DEFAULT_WIDTH,
   drawer = false,
   onHide,
+  hideTestId = 'ticket-discussion-hide',
   feedbackId,
   item,
   error,
@@ -263,6 +264,7 @@ export function TicketAgentRail({
   drawer?: boolean
   /** Shows » in its top row, closing it (the drawer). */
   onHide?: () => void
+  hideTestId?: string
   feedbackId: string
   /** The loaded ticket (null while loading). */
   item: FeedbackShow | null
@@ -304,30 +306,27 @@ export function TicketAgentRail({
       {(terminal || onHide) && (
         // Its top row, level with the report's header and the list's.
         <div
-          role={terminal ? 'tablist' : undefined}
           className="flex items-center gap-1 px-3 border-b border-[var(--color-border)] flex-shrink-0"
           style={{ height: PROJECT_BAR_ROW_HEIGHT }}
+          data-ticket-discussion-header=""
         >
-          {terminal && (['thread', 'agent'] as const).map((t) => (
-            <button
-              key={t}
-              type="button"
-              role="tab"
-              aria-selected={tab === t}
-              data-testid={`ticket-rail-tab-${t}`}
-              onClick={() => setTab(t)}
-              className={`px-3 py-2 text-[11px] font-medium border-b-2 -mb-px transition-colors cursor-pointer ${
-                tab === t
-                  ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                  : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
-              }`}
-            >
-              {t === 'thread' ? 'Thread' : 'Agent'}
-            </button>
-          ))}
+          {/* Thread or the asking agent's terminal: the app's small
+              segmented control. */}
+          {terminal && (
+            <Segmented<RailTab>
+              aria-label="Show the thread or the agent"
+              value={tab}
+              onChange={setTab}
+              activation="auto"
+              options={[
+                { value: 'thread', label: 'Thread', buttonProps: { 'data-testid': 'ticket-rail-tab-thread' } },
+                { value: 'agent', label: 'Agent', buttonProps: { 'data-testid': 'ticket-rail-tab-agent' } },
+              ]}
+            />
+          )}
           {onHide && (
             <span className="ml-auto -mr-3 flex self-stretch">
-              <DrawerToggleButton side="right" placement="drawer" name="discussion" testId="ticket-discussion-hide" onToggle={onHide} />
+              <DrawerToggleButton side="right" placement="drawer" name="discussion" testId={hideTestId} onToggle={onHide} />
             </span>
           )}
         </div>
@@ -855,13 +854,9 @@ function AgentTab({
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
         <p className="text-xs text-[var(--color-status-error-soft)] max-w-[48ch]">{phase.message}</p>
-        <button
-          type="button"
-          onClick={retry}
-          className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-wash-1)] text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)] transition-colors cursor-pointer"
-        >
+        <Button variant="quiet" onClick={retry}>
           Retry
-        </button>
+        </Button>
       </div>
     )
   }
@@ -877,13 +872,9 @@ function AgentTab({
           {phase.wakeable ? ' Wake it to attach its terminal here.' : ''}
         </p>
         {phase.wakeable && (
-          <button
-            type="button"
-            onClick={() => void wake()}
-            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer"
-          >
+          <Button variant="accent" onClick={() => void wake()}>
             Wake session
-          </button>
+          </Button>
         )}
       </div>
     )

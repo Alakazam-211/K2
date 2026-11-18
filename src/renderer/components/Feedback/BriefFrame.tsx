@@ -35,7 +35,7 @@ import {
 import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
 import type { FeedbackBrief } from './feedback-api'
-import { buildBriefSrcDoc, readBriefTokens, type BriefLink } from './brief-srcdoc'
+import { buildBriefSrcDoc, readBriefTokens, type BriefLink, type BriefTokens } from './brief-srcdoc'
 import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 import { clientToCssPx, cssViewport } from '@/lib/app-zoom'
 
@@ -107,6 +107,16 @@ function BriefLinks({ links }: { links: BriefLink[] }): React.JSX.Element | null
   )
 }
 
+/** The brief's tokens for a frame on a tile: in Glass the page under the
+ *  report is the tile's fill, not the window's, so the document takes it
+ *  (one surface, no darker box inside the tile). Elsewhere the app's. */
+export function briefTokensFor(onTile: boolean, root: HTMLElement = document.documentElement): BriefTokens {
+  const tokens = readBriefTokens(root)
+  if (!onTile || root.getAttribute('data-style') !== 'glass') return tokens
+  const fill = getComputedStyle(root).getPropertyValue('--tile-fill').trim()
+  return fill ? { ...tokens, bg: fill } : tokens
+}
+
 export function BriefFrame({
   brief,
   title,
@@ -115,6 +125,7 @@ export function BriefFrame({
   hideToolbar = false,
   heightClass = DEFAULT_HEIGHT_CLASS,
   fill = false,
+  onTile = false,
 }: {
   brief: FeedbackBrief
   /** The ticket title — names the frame and the Expand overlay. */
@@ -129,12 +140,15 @@ export function BriefFrame({
   /** Fill the parent's remaining height (the ticket detail pane) until the
    *  user drags the handle; the links list sits under it with no empty gap. */
   fill?: boolean
+  /** The frame sits on a tile (the report's): its page takes the tile's
+   *  fill in Glass, and its box rounds and clips to the field radius. */
+  onTile?: boolean
 }): React.JSX.Element {
   const themeKey = useBriefThemeKey()
   // Memo on sha256 + theme (H39): a thread refetch hands a new `brief`
   // object only if the brief itself changed, and briefs never change (H8).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const built = useMemo(() => buildBriefSrcDoc(brief.html, readBriefTokens()), [brief.sha256, themeKey])
+  const built = useMemo(() => buildBriefSrcDoc(brief.html, briefTokensFor(onTile)), [brief.sha256, themeKey, onTile])
 
   const [height, setHeight] = useState<number | null>(null)
   const [dragging, setDragging] = useState(false)
@@ -204,7 +218,7 @@ export function BriefFrame({
       <div
         ref={boxRef}
         data-testid="brief-box"
-        className={`relative border border-[var(--color-border)] ${height === null ? (fill ? 'flex-1 min-h-[240px]' : heightClass) : 'flex-none'}`}
+        className={`relative border border-[var(--color-border)] ${onTile ? 'rounded-[var(--radius-field)] overflow-hidden' : ''} ${height === null ? (fill ? 'flex-1 min-h-[240px]' : heightClass) : 'flex-none'}`}
         style={height === null ? undefined : { height: `${height}px` }}
       >
         <HtmlFrame

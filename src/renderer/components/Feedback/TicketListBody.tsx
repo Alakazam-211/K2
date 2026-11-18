@@ -172,7 +172,7 @@ export function TicketListBody({
                 type="button"
                 data-testid="ticket-waiting-empty-all"
                 onClick={() => setScope('all')}
-                className="mt-1.5 text-[11px] text-[var(--color-accent)] hover:underline cursor-pointer"
+                className="k2-focus mt-1.5 type-hint text-[var(--color-accent-text)] hover:underline cursor-pointer"
               >
                 Show all tickets
               </button>
@@ -186,7 +186,7 @@ export function TicketListBody({
                 <button
                   type="button"
                   onClick={() => setScope('all')}
-                  className="mt-1.5 text-[11px] text-[var(--color-accent)] hover:underline cursor-pointer"
+                  className="k2-focus mt-1.5 type-hint text-[var(--color-accent-text)] hover:underline cursor-pointer"
                 >
                   Show all tickets
                 </button>

@@ -1034,6 +1034,16 @@ export function CloseIcon(props: K2IconProps = {}): React.JSX.Element {
   )
 }
 
+/** The picked row in a menu (the Tickets status and assignee menus):
+ *  Lucide `check`, squared. */
+export function CheckIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('check', props)}>
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  )
+}
+
 /** Zoom in (a video tile's zoom): Lucide `plus`, squared. */
 export function PlusIcon(props: K2IconProps = {}): React.JSX.Element {
   return (

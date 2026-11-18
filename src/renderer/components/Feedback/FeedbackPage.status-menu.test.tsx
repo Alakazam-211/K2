@@ -126,7 +126,8 @@ describe('ticket status menu', () => {
 
     fireEvent.mouseDown(menu)
     expect(screen.getByTestId('ticket-status-menu')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Planned' }))
+    // A menu of radios now (the menu keys move through them).
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Planned' }))
     await waitFor(() => {
       expect(api.resolveFeedback).toHaveBeenCalledWith('fb-1', 'planned')
       expect(onMutated).toHaveBeenCalled()
@@ -245,7 +246,7 @@ describe('unlinked ticket card (prd-tickets-badge-orphans TB18 + Appa A1)', () =
     const labels = Array.from(menu.querySelectorAll('button')).map((b) => b.textContent?.trim())
     expect(labels).toEqual(['Resolved', 'Dismissed'])
 
-    fireEvent.click(screen.getByRole('button', { name: 'Dismissed' }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Dismissed' }))
     await waitFor(() => {
       expect(api.resolveFeedback).toHaveBeenCalledWith(unlinkedRow.id, 'dismissed')
       expect(onMutated).toHaveBeenCalled()

@@ -128,11 +128,12 @@ describe('FeedbackItemView — unlinked ticket', () => {
     const rail = await screen.findByTestId('ticket-agent-rail')
     expect(screen.queryByTestId('unlinked-thread-footer')).toBeNull()
     expect(screen.queryByTestId('ticket-action-bar')).toBeNull()
-    // Status, reassign and the chat toggle are in the header.
+    // Status and reassign are in the header; the discussion's » in its own row.
     const header = screen.getByTestId('ticket-detail-header')
-    for (const t of ['ticket-status', 'ticket-reassign', 'ticket-chat-toggle']) {
+    for (const t of ['ticket-status', 'ticket-reassign']) {
       expect(header.contains(screen.getByTestId(t)), t).toBe(true)
     }
+    expect(rail.contains(screen.getByTestId('ticket-chat-toggle'))).toBe(true)
     // Structured --options become quick answers (no brief here), in the rail.
     await waitFor(() =>
       expect(screen.getAllByTestId('ticket-quick-answer').map((b) => b.textContent)).toEqual(['Yes', 'No']),

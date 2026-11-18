@@ -92,7 +92,7 @@ async function openDropdown(props: {
   fireEvent.click(screen.getByTitle('Filter by workspace or project'))
   const input = screen.getByPlaceholderText('Search workspaces...')
   if (!(input instanceof HTMLInputElement)) throw new Error('search is not an input')
-  const popover = input.closest('.absolute')
+  const popover = input.closest('[data-testid="workspace-filter-menu"]')
   if (!(popover instanceof HTMLElement)) throw new Error('no popover around the search')
   await act(async () => {
     await new Promise((r) => setTimeout(r, 0))
@@ -258,7 +258,9 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
     fireEvent.keyDown(input, { key: 'ArrowDown' })
     fireEvent.keyDown(input, { key: 'ArrowDown' })
     fireEvent.keyDown(input, { key: 'ArrowDown' })
-    expect(popover.getAttribute('class')).toMatchInlineSnapshot(`"absolute right-0 top-full mt-1 w-64 z-30 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg flex flex-col"`)
+    // The menu box floats from the trigger (the app's anchored menu): the page's
+    // fill, its border and the menu shadow token.
+    expect(popover.getAttribute('class')).toMatchInlineSnapshot(`"w-64 flex flex-col bg-[var(--color-bg)] border border-[var(--color-border)] [box-shadow:var(--shadow-3)]"`)
     expect(classTree(input.parentElement as Element)).toMatchInlineSnapshot(`
       "div .p-1.5 border-b border-[var(--color-border)]
         input .w-full px-2 py-1.5 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)]"

@@ -205,9 +205,9 @@ describe('FeedbackItemView — brief', () => {
     const body = await screen.findByText('Short summary.')
     const box = body.closest('div.mb-3')
     expect(box).not.toBeNull()
-    // The summary's resting fill is the wash token (white washes vanish on
+    // The summary is an inset well (never a white wash, which vanished on
     // the light looks).
-    expect(box!.className).toContain('bg-[var(--color-wash-2)]')
+    expect(box!.getAttribute('data-surface')).toBe('inset')
     expect(box!.className).not.toContain('bg-white')
     expect(screen.queryByTestId('brief')).toBeNull()
     expect(screen.queryByTestId('brief-loading')).toBeNull()

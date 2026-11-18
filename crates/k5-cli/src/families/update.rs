@@ -83,7 +83,7 @@ pub const APP_NATIVE: bool = true;
 
 /// `k5 update --list` is the binary's. Off, the shell answers it (and
 /// runs curl itself).
-pub const LIST_NATIVE: bool = false;
+pub const LIST_NATIVE: bool = true;
 
 /// What the daemon's version is read from.
 pub const BOOT_STATUS: &str = "/boot-status";

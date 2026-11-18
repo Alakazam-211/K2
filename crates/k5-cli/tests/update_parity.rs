@@ -22,6 +22,9 @@
 //!   with newlines after it, not JSON, a list, nothing, curl failing
 //!   (before and after an answer), the proxy settings passed through, the
 //!   gate; `--help` goes to the shell (which asks GitHub for it).
+//! - `--list`: releases (a pre-release, no date, a date that is a list),
+//!   none, an object, a raise part way, curl failing (with and without an
+//!   answer), not JSON, the flags around it.
 
 #![cfg(unix)]
 
@@ -517,6 +520,116 @@ fn update_app_answers_as_the_shell_does() {
     assert_native(&rig, &v[0]);
 }
 
+#[test]
+fn update_list_answers_as_the_shell_does() {
+    let rig = rig("list");
+    let releases = r#"[
+        {"tag_name":"v0.47.0-rc1","published_at":"2026-11-19T00:00:00Z","prerelease":true},
+        {"tag_name":"v0.46.20","published_at":"2026-11-18T01:02:03Z","prerelease":false},
+        {"tag_name":"v0.46.19 é","prerelease":0},
+        {"published_at":["a",1,2,3,4,5,6,7,8,9,10,11],"prerelease":"yes"}]"#;
+    let v = vec![
+        with(
+            gh(releases),
+            case("--list", &["--list"], &[], vec![], owner_and_port, 0, 0),
+        ),
+        with(
+            gh(releases),
+            case(
+                "--cli --list",
+                &["--cli", "--list"],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
+        ),
+        with(
+            gh(releases),
+            case(
+                "-c, a word, --list, --cli",
+                &["-c", "x", "--list", "--cli"],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
+        ),
+        with(
+            gh("[]"),
+            case("none", &["--list"], &[], vec![], owner_and_port, 0, 0),
+        ),
+        with(
+            gh("{}"),
+            case(
+                "an empty object",
+                &["--list"],
+                &[],
+                vec![],
+                owner_and_port,
+                0,
+                0,
+            ),
+        ),
+        with(
+            gh(r#"{"message":"Not Found"}"#),
+            case("an object", &["--list"], &[], vec![], owner_and_port, 1, 0),
+        ),
+        with(
+            gh(r#"[{"tag_name":"a"},{"published_at":null}]"#),
+            case(
+                "a raise part way",
+                &["--list"],
+                &[],
+                vec![],
+                owner_and_port,
+                1,
+                0,
+            ),
+        ),
+        with(
+            gh_rc("", 6),
+            case(
+                "curl fails, nothing read",
+                &["--list"],
+                &[],
+                vec![],
+                owner_and_port,
+                1,
+                0,
+            ),
+        ),
+        with(
+            gh_rc(releases, 56),
+            case(
+                "curl fails after a whole answer",
+                &["--list"],
+                &[],
+                vec![],
+                owner_and_port,
+                56,
+                0,
+            ),
+        ),
+        with(
+            gh("<html>"),
+            case("not JSON", &["--list"], &[], vec![], owner_and_port, 1, 0),
+        ),
+        with(
+            gh(releases),
+            case("the gate", &["--list"], &[], vec![], nothing, 1, 0),
+        ),
+    ];
+    for c in &v {
+        rig.check(c);
+    }
+    assert_native(&rig, &v[0]);
+}
+
+/// The stub curl is the one both sides run: a GitHub call in the shell
+/// reaches it, and logs what it was given.
 #[test]
 fn the_stub_curl_answers_for_github() {
     let rig = rig("stub");

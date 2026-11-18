@@ -192,6 +192,10 @@ enum Kind {
     /// TCP, the passport as Bearer and no query of ours. Only `_k2_curl`'s
     /// tries (a refused connect); nothing else.
     Probe,
+    /// `k2 respond`'s TCP arm (`cli/src/respond.sh`): a form POST over
+    /// TCP, the passport as Bearer, no query of ours. Only `_k2_curl`'s
+    /// tries; nothing read back, so no heal, no line, no note.
+    BearerForm,
 }
 
 impl Kind {
@@ -214,18 +218,18 @@ impl Kind {
     }
     /// `_cli_no_answer` runs.
     fn says_no_answer(self) -> bool {
-        !matches!(self, Kind::PostJsonStdin | Kind::SendJsonGet | Kind::SendJsonPost | Kind::Probe)
+        !matches!(self, Kind::PostJsonStdin | Kind::SendJsonGet | Kind::SendJsonPost | Kind::Probe | Kind::BearerForm)
     }
     /// A refused passport is tried again with a healed one, on either
     /// channel. Not a body from stdin, a call with no credential, nor the
     /// probe.
     fn heals(self) -> bool {
-        !matches!(self, Kind::PostJsonStdin | Kind::Public | Kind::Probe)
+        !matches!(self, Kind::PostJsonStdin | Kind::Public | Kind::Probe | Kind::BearerForm)
     }
     /// `_permission_note` runs on the answer. Not a body from stdin, a
     /// call with no credential, nor the probe.
     fn notes_permission(self) -> bool {
-        !matches!(self, Kind::PostJsonStdin | Kind::Public | Kind::Probe)
+        !matches!(self, Kind::PostJsonStdin | Kind::Public | Kind::Probe | Kind::BearerForm)
     }
     /// `--connect-timeout`.
     fn connect_timeout(self) -> Duration {
@@ -559,6 +563,16 @@ impl Client {
         self.run(Kind::PostJsonStdin, Channel::Tcp, endpoint, &[], body, Instant::now()).map_err(|f| f.error)
     }
 
+    /// `k2 respond`'s TCP arm: `args` joined by `&` as a form body, POSTed
+    /// to `endpoint` as it is over TCP with the passport as Bearer (a
+    /// config line, before the shell's `-H`s), no `token=` and no
+    /// `project=`. `_k2_curl` with `-s -X POST`, connect 5 s, at most
+    /// 30 s; only a refused connect is tried again. Nothing is read back:
+    /// no heal, no no-answer line, no note. Needs a passport.
+    pub fn post_form_bearer(&mut self, endpoint: &str, args: &[&str]) -> Result<Response, Error> {
+        self.run(Kind::BearerForm, Channel::Tcp, endpoint, args, &[], Instant::now()).map_err(|f| f.error)
+    }
+
     /// `cli_send_json METHOD PATH [payload]`: GET with `payload` as a
     /// pre-encoded query, or POST with it as a JSON body. The cell socket
     /// when there is a passport with a live socket (any route), then TCP
@@ -687,7 +701,7 @@ impl Client {
         match kind {
             Kind::PostForm | Kind::PostJson => self.post_max_time.unwrap_or(MAX_TIME),
             Kind::SendJsonGet | Kind::SendJsonPost => self.send_max_time.unwrap_or(SEND_JSON_MAX_TIME),
-            Kind::Request | Kind::RequestPost | Kind::PostJsonStdin | Kind::Public => MAX_TIME,
+            Kind::Request | Kind::RequestPost | Kind::PostJsonStdin | Kind::Public | Kind::BearerForm => MAX_TIME,
             Kind::Probe => PROBE_MAX_TIME,
         }
     }
@@ -774,7 +788,7 @@ impl Client {
     fn build(&self, kind: Kind, channel: Channel, endpoint: &str, args: &[&str], body: &[u8]) -> Result<(Target, Request), Error> {
         let mut headers: Vec<(String, String)> = Vec::new();
         let (target, host) = match channel {
-            Channel::Tcp if kind == Kind::Probe => {
+            Channel::Tcp if matches!(kind, Kind::Probe | Kind::BearerForm) => {
                 // A config line read before the command line's `-H`s, as
                 // on the cell socket.
                 let Some(passport) = self.passport() else {
@@ -805,7 +819,7 @@ impl Client {
 
         let tcp = channel == Channel::Tcp;
         let token = match (kind, self.tcp_token()) {
-            (Kind::Public | Kind::Probe, _) => "",
+            (Kind::Public | Kind::Probe | Kind::BearerForm, _) => "",
             (_, Some(t)) => t,
             (_, None) => return Err(Error::NoCredential { endpoint: endpoint.to_string() }),
         };
@@ -878,6 +892,10 @@ impl Client {
                 (Method::Post, path, json(&mut headers))
             }
             Kind::Public | Kind::Probe => (Method::Get, endpoint.to_string(), None),
+            Kind::BearerForm => {
+                headers.push(("Content-Type".into(), wire::FORM_TYPE.into()));
+                (Method::Post, endpoint.to_string(), Some(Body { bytes: joined.into_bytes(), curl_form_type: false }))
+            }
         };
         wire::check_target(&path).map_err(|byte| Error::BadTarget { target: path.clone(), byte })?;
         let request = Request { method, target: path, host, user_agent: format!("k5/{}", self.version), headers, body };
@@ -1066,6 +1084,7 @@ mod tests {
             (SendJsonPost, false, false, false, false, true, true, false),
             (Public, false, true, false, true, false, false, false),
             (Probe, false, false, false, false, false, false, false),
+            (BearerForm, false, false, false, false, false, false, false),
         ];
         for (k, m, c, s, n, h, p, o) in rows {
             assert_eq!(
@@ -1102,6 +1121,7 @@ mod tests {
             (Kind::SendJsonPost, 330),
             (Kind::Public, 30),
             (Kind::Probe, 5),
+            (Kind::BearerForm, 30),
         ] {
             assert_eq!(c.max_time(k), Duration::from_secs(want), "{k:?}");
         }
@@ -1173,6 +1193,33 @@ mod tests {
         let mut o = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
         assert!(matches!(o.build(Kind::Probe, Channel::Tcp, PROBE_ENDPOINT, &[], &[]), Err(Error::NoCredential { .. })));
         assert!(!o.passport_rejected());
+    }
+
+    /// `k2 respond`'s TCP arm: the passport as Bearer first, the form
+    /// body, no query of ours, never the owner-source line.
+    #[test]
+    fn the_bearer_form_request() {
+        let mut p = Client::new("127.0.0.1", 4000, "/p", Auth::Passport { passport: Passport::new("s.x").unwrap(), sock: None });
+        p.would_refuse = true;
+        p.owner_from_disk = true;
+        let (target, r) = p.build(Kind::BearerForm, Channel::Tcp, "/cli/respond", &["message=hi%20there", "final=1"], &[]).unwrap();
+        assert!(matches!(target, Target::Tcp { ref host, port: 4000 } if host == "127.0.0.1"));
+        assert_eq!((r.method, r.target.as_str(), r.host.as_str()), (Method::Post, "/cli/respond", "127.0.0.1:4000"));
+        let body = r.body.as_ref().expect("a body");
+        assert_eq!((body.bytes.as_slice(), body.curl_form_type), (&b"message=hi%20there&final=1"[..], false));
+        let names: Vec<(&str, &str)> = r.headers.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+        assert_eq!(
+            names,
+            [
+                ("Authorization", "Bearer s.x"),
+                (WOULD_REFUSE_HEADER, "1"),
+                (VERSION_HEADER, p.version.as_str()),
+                (VIA_HEADER, VIA_NATIVE),
+                ("Content-Type", wire::FORM_TYPE)
+            ]
+        );
+        let mut o = Client::new("127.0.0.1", 1, "/p", Auth::Owner("o".into()));
+        assert!(matches!(o.post_form_bearer("/cli/respond", &["message=x"]), Err(Error::NoCredential { .. })));
     }
 
     #[test]

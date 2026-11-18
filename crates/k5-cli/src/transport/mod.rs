@@ -51,6 +51,7 @@
 //! | `cli_send_json GET` | `GET <ep>?token=<curl-escaped T>&payload` (-G) | `GET <ep>?payload` (-G) |
 //! | `cli_send_json POST` | `POST <ep>?token=<quoted T>`, JSON | `POST <ep>`, JSON |
 //! | (none: [`client::Client::get_public`]) | `GET <ep>`: no token, no `project=`, no Owner-Source | none |
+//! | `k2 respond`'s own curl ([`client::Client::post_form_bearer`]) | `POST <ep>`, the passport as Bearer (first), body `args`, the form type; no query | none |
 //!
 //! An endpoint that already has a `?` gets the `-G` query, and
 //! `cli_request_post`'s, after `&`; the other POST forms always add `?`,

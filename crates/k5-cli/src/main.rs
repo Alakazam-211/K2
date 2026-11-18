@@ -1,6 +1,7 @@
 //! `k5-cli`: the k5 command line's front. It answers `--version`,
-//! `--version --check` and `cli status` itself and hands every other verb
-//! to the shell CLI it carries ([`k5_cli::fallthrough`]). Before a verb
+//! `--version --check`, `cli status` and the families in
+//! [`k5_cli::families`] itself and hands every other verb to the shell CLI
+//! it carries ([`k5_cli::fallthrough`]). Before a verb
 //! falls through, the passport rule ([`k5_cli::passport`]) runs; for now
 //! it only counts. The binary's own requests carry its verdict too.
 //!
@@ -12,7 +13,7 @@
 use k5_cli::called_as::CalledAs;
 use k5_cli::exit::Exit;
 use k5_cli::front::{self, Route};
-use k5_cli::{check, cli_status, daemon, embedded, fallthrough, out, passport};
+use k5_cli::{check, cli_status, daemon, embedded, fallthrough, families, out, passport};
 use std::ffi::OsString;
 
 /// Writes `text` to stdout; the exit after it.
@@ -73,6 +74,7 @@ fn main() {
         Route::VersionCheck => version_check(&args),
         Route::CliStatus { json } => cli_status(&args, json),
         Route::CliHelp => print(cli_status::HELP, Exit::Ok),
+        Route::Whoami => families::whoami::run(&args),
         Route::Fallthrough => {
             // The passport rule, count-only: the shell is told when the
             // call would be refused, and a value the caller set never

@@ -2,10 +2,16 @@
 //! to the shell CLI.
 //!
 //! The route table ([`crate::route`]) says who answers. Its `Native` rows
-//! are the version (alone, or exactly `--version --check`) and `cli`
-//! (`cli status [--json]` and its help). A form the front's code does not
-//! take falls through, as does everything else, byte for byte
+//! are the version (alone, or exactly `--version --check`), `cli`
+//! (`cli status [--json]` and its help) and `whoami`
+//! ([`crate::families::whoami`]). A form the front's code does not take
+//! falls through, as does everything else, byte for byte
 //! ([`crate::fallthrough`]).
+//!
+//! `whoami`'s help is the shell's: a `whoami` command line with `-h` or
+//! `--help` anywhere in it falls through, so the shell prints its help
+//! text (or its error for a flag before it), with its connection gate in
+//! front of it, exactly as it always has. No copy of the text lives here.
 
 use crate::route::{self, Noun, Owner};
 use std::ffi::OsString;
@@ -23,6 +29,8 @@ pub enum Route {
     /// `cli` alone, `cli --help`, `cli -h`, `cli help`, and `cli status`
     /// with `--help` or `-h`.
     CliHelp,
+    /// `whoami` with no `-h` or `--help` in it ([`crate::families::whoami`]).
+    Whoami,
     /// Anything else: the shell CLI runs it.
     Fallthrough,
 }
@@ -58,6 +66,9 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
             ["status", "--json"] => Route::CliStatus { json: true },
             _ => Route::Fallthrough,
         };
+    }
+    if noun.names("whoami") {
+        return if words.iter().any(|w| matches!(*w, "-h" | "--help")) { Route::Fallthrough } else { Route::Whoami };
     }
     Route::Fallthrough
 }
@@ -133,6 +144,19 @@ mod tests {
         }
     }
 
+    /// `whoami` is the binary's, but for its help: any `-h` or `--help`
+    /// word sends the whole line to the shell.
+    #[test]
+    fn the_whoami_forms() {
+        for line in [&["whoami"][..], &["whoami", "--json"], &["whoami", "extra"], &["whoami", "--bogus"], &["whoami", "help"], &["whoami", "-help"]] {
+            assert_eq!(route(&args(line)), Route::Whoami, "{line:?}");
+        }
+        for line in [&["whoami", "--help"][..], &["whoami", "-h"], &["whoami", "--json", "-h"], &["whoami", "--bogus", "--help"], &["whoami", "x", "--help"]] {
+            assert_eq!(route(&args(line)), Route::Fallthrough, "{line:?}");
+        }
+        assert_eq!(route(&args(&["Whoami"])), Route::Fallthrough);
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_argument_that_is_not_utf8_falls_through() {
@@ -140,6 +164,7 @@ mod tests {
         assert_eq!(route(&[OsString::from_vec(b"--version\xff".to_vec())]), Route::Fallthrough);
         let odd = OsString::from_vec(b"st\xffatus".to_vec());
         assert_eq!(route(&[OsString::from("cli"), odd]), Route::Fallthrough);
+        assert_eq!(route(&[OsString::from("whoami"), OsString::from_vec(b"--json\xff".to_vec())]), Route::Fallthrough);
         assert_eq!(route(&[OsString::from("--version"), OsString::from_vec(b"--check\xff".to_vec())]), Route::Fallthrough);
     }
 

@@ -137,7 +137,7 @@ pub static TABLE: &[Noun] = &[
     bash(&["checkin"]),
     bash(&["status"]),
     bash(&["done"]),
-    bash(&["whoami"]),
+    native(&["whoami"]),
     bash(&["setup"]),
     bash(&["msg"]),
     bash(&["thread"]),

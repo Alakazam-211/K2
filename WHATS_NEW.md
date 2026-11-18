@@ -54,6 +54,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A compute job only shows as finished when its exit is known,** and its log is complete. A job that was running while its machine updated no longer reads as a clean exit by mistake.
 - **The Compute garden's load tile keeps refreshing** after a slow or lost answer, instead of freezing on old numbers.
 - **Commands refuse options they don't use** (vault, compute, done, reserve) instead of ignoring them, and their help now matches what they do.
+- **`k2` never sends a request to K2's server through a proxy.** The `k2` command, the browser-open shim and the agent hook skip the proxy settings (http_proxy, https_proxy, ALL_PROXY and the rest) for every request to K2, and send its credential in a header, never in the address.
 - **Multiplayer kit 0.21.0** and its file packs.
 
 ### Windows

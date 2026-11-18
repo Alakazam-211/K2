@@ -16,6 +16,11 @@
 //! - agents: the switch, the box limits, no contact email, no settings;
 //!   people: Member sees only their own rows, the owner sees all; App
 //!   passes are refused; GET on every POST route is 405;
+//! - the server keys: a Member login gets `admin_only`, an agent's or a
+//!   terminal's passport `settings_people_only`, an Admin and the owner
+//!   change them; each key that changes is one auth audit row (who, the
+//!   key, old to new), none for a refusal, a no-op or a Member's own
+//!   remembered choice;
 //! - `needs_connect`, `disabled` and air-gap refuse a send, and air-gap
 //!   holds what is queued;
 //! - diagnostics: nothing without the tick, the preview is scrubbed, the
@@ -567,6 +572,118 @@ async fn agents_people_and_wrong_credentials() {
     assert_eq!((s, v["error"].clone()), (400, json!("text_too_long")), "{v}");
     let (s, v) = send(port, OWNER, json!({"text": "x", "contactEmail": "not an email"}));
     assert_eq!((s, v["error"].clone()), (400, json!("bad_email")), "{v}");
+}
+
+// ── 3b. who changes the server's settings, and the audit ─────────────
+
+/// The `product-feedback-settings` rows in the auth audit, as (user, outcome).
+fn settings_audit() -> Vec<(String, String)> {
+    k2_core::auth_audit::tail(1000)
+        .expect("audit tail")
+        .into_iter()
+        .filter(|e| e["event"] == "product-feedback-settings")
+        .map(|e| {
+            let field = |k: &str| e[k].as_str().unwrap_or_else(|| panic!("audit row without {k}: {e}")).to_string();
+            (field("user"), field("outcome"))
+        })
+        .collect()
+}
+
+fn post_settings(port: u16, tok: &str, body: J) -> (u16, J) {
+    call(port, "POST", &q("/cli/product-feedback/settings", tok), Some(body))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_keys_need_an_admin_and_each_change_is_audited() {
+    use k2_core::product_feedback::settings::{self, Settings};
+    let e = setup(true);
+    let port = e.port;
+    let defaults = Settings { enabled: true, agents: true, agent_diagnostics: false };
+    assert_eq!(settings::load(), defaults);
+    assert_eq!(settings_audit(), Vec::<(String, String)>::new(), "a fresh home has no rows");
+
+    // A person typing in a K2 terminal tab: a live non-harness PTY's passport.
+    let shell_key = "shell-pf-settings";
+    let shell = {
+        let home = k2_core::paths::k2_home();
+        std::fs::create_dir_all(&home).expect("k2 home");
+        let cfg = k2_core::terminal::DaemonPtyConfig {
+            cols: 80,
+            rows: 24,
+            cwd: Some(home),
+            program: Some(k2_core::test_env::pty_idle_program("cat")),
+            ..Default::default()
+        };
+        let pty = k2_core::terminal::DaemonPtySession::spawn(cfg).expect("spawn a terminal PTY");
+        k2_daemon::v2_session_map::register(shell_key, Arc::clone(&pty));
+        session_token::mint_session_token(
+            &pty.session_id,
+            &pty.session_id.to_string(),
+            HookPrincipal { workspace_uuid: "ws-pf-settings-shell".into(), agent_address: shell_key.into() },
+            CredMode::ApiKey,
+            Provider::Anthropic,
+        )
+    };
+    let agent = passport("ws-pf-settings-agent");
+    let member = login("pfs-member", None);
+    let admin = login("pfs-admin", Some(connect_users::Role::Admin));
+
+    // Refused: a Member (even with a per-person key in the same write), an
+    // agent and a terminal. Nothing changes and nothing is audited.
+    for (who, tok, body, code) in [
+        ("Member", &member, json!({"agents": false}), "admin_only"),
+        ("Member with remember", &member, json!({"agents": false, "rememberDiagnostics": true}), "admin_only"),
+        ("agent passport", &agent, json!({"agents": false}), "settings_people_only"),
+        ("terminal passport", &shell, json!({"agents": false}), "settings_people_only"),
+    ] {
+        let (s, v) = post_settings(port, tok, body);
+        assert_eq!((s, v["error"].clone()), (403, json!(code)), "{who}: {v}");
+        assert_eq!(settings::load(), defaults, "{who} changed nothing");
+    }
+    let (_, v) = call(port, "GET", &q("/cli/product-feedback/settings", &member), None);
+    assert_eq!(v["rememberDiagnostics"], json!(false), "the refused write kept nothing: {v}");
+    assert_eq!(settings_audit(), Vec::<(String, String)>::new(), "a refused attempt writes no row");
+
+    // An Admin login changes it: one row, who, the key, old to new.
+    let (s, v) = post_settings(port, &admin, json!({"agents": false}));
+    assert_eq!((s, v["agents"].clone()), (200, json!(false)), "{v}");
+    assert_eq!(settings::load(), Settings { agents: false, ..defaults });
+    let want = vec![("login:pfs-admin".to_string(), "ok agents on->off".to_string())];
+    assert_eq!(settings_audit(), want);
+
+    // The terminal's passport was a person's, the agent's an agent's.
+    let (_, v) = call(port, "GET", &q("/cli/product-feedback/settings", &shell), None);
+    assert_eq!(v["senderKind"], json!("person"), "{v}");
+    let (_, v) = call(port, "GET", &q("/cli/product-feedback/settings", &agent), None);
+    assert_eq!(v["senderKind"], json!("agent"), "{v}");
+
+    // A write of the values already set: 200 and no row.
+    let (s, v) = post_settings(port, &admin, json!({"agents": false, "enabled": true, "agentDiagnostics": false}));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(settings_audit(), want, "a no-op writes no row");
+
+    // The owner: one row per key that changed, none for the one that didn't.
+    let (s, v) = post_settings(port, OWNER, json!({"enabled": true, "agents": true, "agentDiagnostics": true}));
+    assert_eq!((s, v["agents"].clone(), v["agentDiagnostics"].clone()), (200, json!(true), json!(true)), "{v}");
+    let after_owner = Settings { agent_diagnostics: true, ..defaults };
+    assert_eq!(settings::load(), after_owner);
+    let want = [
+        want,
+        vec![
+            ("owner".to_string(), "ok agents off->on".to_string()),
+            ("owner".to_string(), "ok agentDiagnostics off->on".to_string()),
+        ],
+    ]
+    .concat();
+    assert_eq!(settings_audit(), want);
+
+    // A Member remembers their own choice: 200, no server key moves, no row.
+    let (s, v) = post_settings(port, &member, json!({"rememberDiagnostics": true}));
+    assert_eq!((s, v["rememberDiagnostics"].clone()), (200, json!(true)), "{v}");
+    assert_eq!(settings::load(), after_owner);
+    assert_eq!(settings_audit(), want, "a per-person choice is not a server change");
+
+    drop(k2_daemon::v2_session_map::unregister(shell_key));
 }
 
 // ── 4. when nothing may leave ────────────────────────────────────────

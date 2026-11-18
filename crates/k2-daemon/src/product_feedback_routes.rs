@@ -31,7 +31,9 @@
 //!   rememberDiagnostics, canEdit, canSend, why?, message?, endpoint,
 //!   contactAddress, pending, service}`; `POST settings` `{enabled?,
 //!   agents?, agentDiagnostics?}` (the owner or an admin, a person) and
-//!   `{rememberDiagnostics?}` (any person, for themselves)
+//!   `{rememberDiagnostics?}` (any person, for themselves). Each server
+//!   key a write changes is one `product-feedback-settings` row in the
+//!   auth audit (who, the key, old to new).
 //!
 //! Who: the owner token, a Connect login (Member floor in `route_policy`),
 //! a K2 terminal's passport (a person typing) and an agent's passport. App
@@ -950,7 +952,8 @@ fn settings_post(c: &Caller, body: &[u8]) -> CliResponse {
         }
     }
     if server_keys {
-        let mut s = settings::load();
+        let before = settings::load();
+        let mut s = before;
         if let Some(v) = b.enabled {
             s.enabled = v;
         }
@@ -963,12 +966,41 @@ fn settings_post(c: &Caller, body: &[u8]) -> CliResponse {
         if let Err(e) = settings::save(&s) {
             return CliResponse::internal_error(format!("save feedback settings: {e}"));
         }
+        audit_changes(c, &before, &s);
         if s.enabled {
             // Rows held while it was off may go now.
             drain::kick();
         }
     }
     settings_get(c)
+}
+
+/// The auth audit event for a change of a server key. The owner sees it in
+/// Settings → Logs → Access Audit, beside the ticket rules and the other
+/// server switches.
+const SETTINGS_AUDIT_EVENT: &str = "product-feedback-settings";
+
+/// One audit row per server key the write changed: who, the key (its wire
+/// name) and old to new, as `ok <key> <old>-><new>`. A key set to the
+/// value it had writes no row.
+fn audit_changes(c: &Caller, before: &settings::Settings, after: &settings::Settings) {
+    let word = |on: bool| if on { "on" } else { "off" };
+    for (key, old, new) in [
+        ("enabled", before.enabled, after.enabled),
+        ("agents", before.agents, after.agents),
+        ("agentDiagnostics", before.agent_diagnostics, after.agent_diagnostics),
+    ] {
+        if old != new {
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                SETTINGS_AUDIT_EVENT,
+                &c.sender,
+                format!("ok {key} {}->{}", word(old), word(new)),
+                "-",
+                "-",
+                "cli",
+            ));
+        }
+    }
 }
 
 #[cfg(test)]

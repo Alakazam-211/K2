@@ -20,7 +20,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { httpCodeOf, httpStatusOf } from '@/lib/daemon-http-error'
 import { formatCallDuration } from '@/lib/home-chat/calls'
 import { withTranscriptFailure, type RecordingCardView, type TranscriptLine } from '@/lib/home-chat/recordings'
-import { parseTranscriptFailure, type TranscriptFailure } from '@/lib/home-chat/transcript-failure'
+import { parseTranscriptFailure, type TranscriptFailure } from '@/lib/home-chat/recording-failure'
 
 export const RECORDINGS_ROUTE = 'voice/recordings'
 export const TRANSCRIPT_ROUTE = 'voice/transcript'

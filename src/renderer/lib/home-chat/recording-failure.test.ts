@@ -4,7 +4,7 @@
 // failure. No words point to the audio.
 
 import { describe, expect, it } from 'vitest'
-import { PARTIAL_NOT_CAPTURED_LINE, parseTranscriptFailure, transcriptFailureWords, transcriptPartialNote } from './transcript-failure'
+import { PARTIAL_NOT_CAPTURED_LINE, parseTranscriptFailure, transcriptFailureWords, transcriptPartialNote } from './recording-failure'
 
 describe("Sew's transcript failure", () => {
   it('reads {code, message}; anything else is no reason', () => {

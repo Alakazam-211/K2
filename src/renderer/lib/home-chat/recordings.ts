@@ -13,7 +13,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { formatCallDuration } from './calls'
 import { recordingBadgeTitle, recordingButtons } from '@/lib/voice/recording-controls'
 import { startedAtOf } from '@/lib/voice/native-voice-engine'
-import { parseTranscriptFailure, transcriptFailureWords, transcriptPartialNote, type TranscriptFailure } from './transcript-failure'
+import { parseTranscriptFailure, transcriptFailureWords, transcriptPartialNote, type TranscriptFailure } from './recording-failure'
 import type { VoiceCall } from '@/stores/voice-core'
 
 /** Sew's RecordingSummary on a recording card (`Message.recording`). */

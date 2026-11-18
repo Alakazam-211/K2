@@ -221,7 +221,8 @@ exit 0
     )
 }
 
-/// How `notify.sh` hands curl the token and the payload.
+/// How `notify.sh` hands curl the token and the payload. Every arm passes
+/// `--noproxy '*'`: a hook never reaches the daemon through a proxy.
 struct HookSend {
     how: &'static str,
     sock: &'static str,
@@ -234,11 +235,11 @@ const HOOK_SEND_UNIX: HookSend = HookSend {
     how: r#"# Tokens never ride curl's argv (any OS user can read argv with `ps`):
 # the Authorization header goes in a curl config on fd 3 (a here-string;
 # stdin carries the payload). Tokens hold no `"` or `\`, so no escaping."#,
-    sock: r#"printf '%s' "$BODY" | curl -sf -K /dev/fd/3 -X POST --unix-socket "$SOCK" \
+    sock: r#"printf '%s' "$BODY" | curl -sf --noproxy '*' -K /dev/fd/3 -X POST --unix-socket "$SOCK" \
         --connect-timeout 1 --max-time 2 "${HDR[@]}" \
         --data-binary @- "http://localhost/hook/event" >/dev/null 2>&1 \
         3<<<"header = \"Authorization: Bearer $SCOPED\"""#,
-    tcp: r#"printf '%s' "$BODY" | curl -s -K /dev/fd/3 -X POST --connect-timeout 1 --max-time 2 \
+    tcp: r#"printf '%s' "$BODY" | curl -s --noproxy '*' -K /dev/fd/3 -X POST --connect-timeout 1 --max-time 2 \
     "${HDR[@]}" \
     --data-binary @- "http://127.0.0.1:$PORT/hook/event" >/dev/null 2>&1 \
     3<<<"header = \"Authorization: Bearer $SCOPED\"""#,
@@ -261,10 +262,10 @@ k2_cfg() {
     b="${b//$'\n'/"${bs}n"}"
     printf 'header = "Authorization: Bearer %s"\ndata-raw = "%s"\n' "$SCOPED" "$b"
 }"#,
-    sock: r#"k2_cfg | curl -sf -K - -X POST --unix-socket "$SOCK" \
+    sock: r#"k2_cfg | curl -sf --noproxy '*' -K - -X POST --unix-socket "$SOCK" \
         --connect-timeout 1 --max-time 2 "${HDR[@]}" \
         "http://localhost/hook/event" >/dev/null 2>&1"#,
-    tcp: r#"k2_cfg | curl -s -K - -X POST --connect-timeout 1 --max-time 2 \
+    tcp: r#"k2_cfg | curl -s --noproxy '*' -K - -X POST --connect-timeout 1 --max-time 2 \
     "${HDR[@]}" \
     "http://127.0.0.1:$PORT/hook/event" >/dev/null 2>&1"#,
 };
@@ -1707,6 +1708,21 @@ mod tests {
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(e) => panic!("accept: {e}"),
             Ok((_, peer)) => panic!("the script must not connect without a passport (peer {peer})"),
+        }
+    }
+
+    /// A hook never reaches the daemon through a proxy: both arms (the
+    /// cell socket and loopback TCP) tell curl `--noproxy '*'`.
+    #[test]
+    fn script_never_sends_through_a_proxy() {
+        let s = generate_hook_script("0.46.15");
+        let curls: Vec<&str> = s
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#') && l.contains("| curl "))
+            .collect();
+        assert_eq!(curls.len(), 2, "two curl arms: {curls:?}");
+        for l in curls {
+            assert!(l.contains("--noproxy '*'"), "a curl arm without --noproxy: {l}");
         }
     }
 

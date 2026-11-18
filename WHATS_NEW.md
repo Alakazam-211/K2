@@ -56,6 +56,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Settings → Tunnel is laid out in two columns,** so Policies and Advanced are visible without scrolling.
 
 ### Under the hood
+- **Updates the mail library to fix several upstream security issues** (lettre 0.11.24).
 - **Hosted mail keeps its store private.** Stalwart's mail, settings and logs are readable only by the mail server itself; existing servers are tightened on their own, with no restart.
 - **A compute job only shows as finished when its exit is known,** and its log is complete. A job that was running while its machine updated no longer reads as a clean exit by mistake.
 - **The Compute garden's load tile keeps refreshing** after a slow or lost answer, instead of freezing on old numbers.

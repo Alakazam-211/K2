@@ -13,6 +13,15 @@
 #      checked here, so it needs the rule and a row in this lint first;
 #   3. a function named on the known-open list below no longer is one
 #      (fixed or gone): take it off the list.
+# And it reads the two senders outside cli/src that try the cell socket
+# and then go on (scripts/k2-open; the notify.sh agent hook, whose text
+# is generate_hook_script in crates/k2-core/src/agent_hooks/install.rs).
+# It fails when, after the socket's curl, the script doesn't keep curl's
+# exit (`|| VAR=$?`) and branch on it with a `case` that lets only 7 (and
+# 22, an error status: K2 took nothing) go on and stops on every other
+# code (an arm, or the lines after `esac`, that exits). The case may sit
+# in a function the script calls with the code (k2-open's _sent_once).
+# The same holds after k2-open's TCP curl (the system opener comes next).
 #
 # What counts:
 #   cell socket send  a curl line with --unix-socket in a function that
@@ -35,13 +44,13 @@
 # function. Comments and help text are skipped.
 #
 # Known open (reported, not failing; each needs K2's sign-off to change):
-#   _connect_curl_daemon (connect.sh): K2 Connect requests proxied by the
-#     daemon (POST /cli/connect/proxy). Any socket failure goes on to TCP.
+#   none.
 #
 # Before the real scan it runs itself on a scratch dir of broken and good
 # parts and fails unless it catches exactly the broken ones.
 #
-# Run with: bash tests/cli/post_no_resend_lint.sh [dir]   (default cli/src)
+# Run with: bash tests/cli/post_no_resend_lint.sh [dir]   (default cli/src;
+# the two shims are read from the repo either way)
 # bash-only: reads the bash CLI's parts as text.
 set -euo pipefail
 export LC_ALL=C
@@ -234,6 +243,143 @@ sys.exit(1 if problems else 0)
 PYEOF
 }
 
+lint_shims() { # lint_shims <file>...: k2-open-style scripts or install.rs
+    python3 - "$@" <<'PYEOF'
+import re, sys
+
+SOCK = re.compile(r"--unix-socket|\{sock_send\}")
+TCP = re.compile(r"\bcurl\b.*127\.0\.0\.1|127\.0\.0\.1.*\bcurl\b|\{tcp_send\}")
+CAPTURE = re.compile(r"\|\|\s*([A-Za-z_][A-Za-z0-9_]*)=\$\?\s*$")
+problems = []
+
+def script_of(path):
+    text = open(path, encoding="utf-8").read()
+    first = 1  # the file line of the script's first line
+    if path.endswith(".rs"):
+        i = text.find("pub fn generate_hook_script")
+        a = text.find('r#"#!/bin/bash', i)
+        if i < 0 or a < 0:
+            problems.append("%s: generate_hook_script's script not found" % path)
+            return []
+        b = text.find('\n"#,', a)
+        first = text.count("\n", 0, a) + 1
+        text = text[a + 3:b]
+    out, buf, start = [], "", None
+    for no, line in enumerate(text.split("\n"), first):
+        s = line.strip()
+        if s.startswith("#") and not buf:
+            continue
+        if start is None:
+            start = no
+        if s.endswith("\\"):
+            buf += s[:-1] + " "
+            continue
+        out.append((start, buf + s))
+        buf, start = "", None
+    return out
+
+def case_blocks(lines, lo, hi):
+    """(index of `case`, var, arms [(patterns, body)], index of esac) in lines[lo:hi]."""
+    found = []
+    i = lo
+    while i < hi:
+        m = re.match(r'case\s+"\$\{?([A-Za-z_0-9]+)\}?"\s+in\b', lines[i][1])
+        if not m:
+            i += 1
+            continue
+        arms, j = [], i + 1
+        while j < len(lines) and lines[j][1] != "esac":
+            am = re.match(r"([^()\s]+)\)\s*(.*)$", lines[j][1])
+            if am:
+                body = am.group(2)
+                while not body.rstrip().endswith(";;") and j + 1 < len(lines) and lines[j + 1][1] != "esac":
+                    j += 1
+                    body += " " + lines[j][1]
+                arms.append((am.group(1).split("|"), body.rstrip()[:-2].strip() if body.rstrip().endswith(";;") else body))
+            j += 1
+        found.append((i, m.group(1), arms, j))
+        i = j + 1
+    return found
+
+def guard_ok(lines, case, stop_at):
+    """True when the case lets only 7 (and 22) go on and stops on every other code."""
+    _, _, arms, esac = case
+    go_on, has_star = set(), False
+    for pats, body in arms:
+        cont = body in ("", "return 0", ":")
+        if "*" in pats:
+            has_star = True
+            if cont or not re.search(r"\bexit\b", body):
+                return False
+        elif cont:
+            go_on.update(pats)
+        elif not re.search(r"\bexit\b", body):
+            return False
+    if "7" not in go_on or not go_on <= {"7", "22"}:
+        return False
+    if has_star:
+        return True
+    # No `*)` arm: the lines after esac must exit before anything else runs.
+    for _, l in lines[esac + 1:stop_at]:
+        if re.match(r"exit\b", l):
+            return True
+        if l == "}" or TCP.search(l) or re.search(r"\bcurl\b", l):
+            return False
+    return False
+
+def check(path):
+    lines = script_of(path)
+    funcs = {}
+    for k, (_, l) in enumerate(lines):
+        m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{$", l)
+        if m:
+            end = next((e for e in range(k + 1, len(lines)) if lines[e][1] == "}"), len(lines))
+            funcs[m.group(1)] = (k, end)
+    sends = [k for k, (_, l) in enumerate(lines) if SOCK.search(l)]
+    tcps = [k for k, (_, l) in enumerate(lines) if TCP.search(l)]
+    if not sends:
+        problems.append("%s: no cell socket send found (the lint can't read it)" % path)
+        return
+    if not tcps:
+        problems.append("%s: no loopback TCP send found (the lint can't read it)" % path)
+        return
+    # Each socket send, and each TCP send that something else follows (an
+    # opener), needs the guard before the next step.
+    steps = [(k, "cell socket") for k in sends]
+    if any(re.search(r"\bexec\b", l) for _, l in lines[tcps[-1] + 1:]):
+        steps += [(k, "loopback TCP") for k in tcps]
+    for k, what in steps:
+        no, l = lines[k]
+        m = CAPTURE.search(l)
+        if not m:
+            problems.append("%s:%d: the %s curl's exit isn't kept (|| VAR=$?), so the next step can't know "
+                            "whether K2 took the request" % (path, no, what))
+            continue
+        var = m.group(1)
+        nxt = next((t for t in sorted(tcps + [len(lines)]) if t > k), len(lines))
+        ok = False
+        for case in case_blocks(lines, k + 1, nxt):
+            if case[1] == var and guard_ok(lines, case, nxt):
+                ok = True
+        for _, l2 in lines[k + 1:nxt]:
+            cm = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s+"\$\{?%s\}?"\s*$' % var, l2)
+            if cm and cm.group(1) in funcs:
+                a, e = funcs[cm.group(1)]
+                for case in case_blocks(lines, a + 1, e):
+                    if case[1] == "1" and guard_ok(lines, case, e + 1):
+                        ok = True
+        if not ok:
+            problems.append("%s:%d: after the %s curl, no case on $%s that lets only 7 (or 22) go on and "
+                            "stops on every other code" % (path, no, what, var))
+
+for f in sys.argv[1:]:
+    check(f)
+for p in problems:
+    print(p)
+sys.exit(1 if problems else 0)
+PYEOF
+}
+
 # ── self test on broken and good parts ───────────────────────────────
 FIX="$(mktemp -d -t k2-norest-lint-XXXXXX)"
 trap 'rm -rf "$FIX"' EXIT
@@ -382,17 +528,109 @@ if out="$(lint "$FIX/good" no_such_fn)"; then echo "SELF-TEST FAIL: a missing kn
 if ! out="$(lint "$FIX/post_fallback" send_twice)" || [[ "$out" != *"note: senders.sh:2: send_twice: known open"* ]]; then
     echo "SELF-TEST FAIL: a known-open entry: $out" >&2; self_ok=0
 fi
+# ── self test of the shim check ───────────────────────────────────────
+mks() { mkdir -p "$FIX/shims"; cat >"$FIX/shims/$1"; }
+mks good_open <<'EOF'
+_sent_once() {
+    case "$1" in
+        0) exit 0 ;;
+        7|22) return 0 ;;
+    esac
+    echo "no answer" >&2
+    exit 1
+}
+if [ -S "$_sock" ]; then
+    _rc=0
+    printf 'h' | curl -fsS -K - --unix-socket "$_sock" \
+        "http://k2/cli/browser/open-url" >/dev/null 2>&1 || _rc=$?
+    _sent_once "$_rc"
+fi
+_rc=0
+printf 'url = "http://127.0.0.1:%s/x"\n' "$p" | curl -fsS -K - >/dev/null 2>&1 || _rc=$?
+_sent_once "$_rc"
+exec /usr/bin/open "$@"
+EOF
+mks good_hook <<'EOF'
+if [ -S "$SOCK" ]; then
+    RC=0
+    printf '%s' "$BODY" | curl -sf --unix-socket "$SOCK" "http://localhost/hook/event" || RC=$?
+    case "$RC" in
+        7|22) ;;
+        *) exit 0 ;;
+    esac
+fi
+printf '%s' "$BODY" | curl -s "http://127.0.0.1:$PORT/hook/event"
+exit 0
+EOF
+mks old_if <<'EOF'
+if [ -S "$SOCK" ]; then
+    if printf '%s' "$BODY" | curl -sf --unix-socket "$SOCK" "http://localhost/hook/event"; then
+        exit 0
+    fi
+fi
+printf '%s' "$BODY" | curl -s "http://127.0.0.1:$PORT/hook/event"
+EOF
+mks lets_28 <<'EOF'
+RC=0
+curl -sf --unix-socket "$SOCK" "http://localhost/hook/event" || RC=$?
+case "$RC" in
+    7|22|28) ;;
+    *) exit 0 ;;
+esac
+curl -s "http://127.0.0.1:$PORT/hook/event"
+EOF
+mks star_goes_on <<'EOF'
+RC=0
+curl -sf --unix-socket "$SOCK" "http://localhost/hook/event" || RC=$?
+case "$RC" in
+    0) exit 0 ;;
+    *) ;;
+esac
+curl -s "http://127.0.0.1:$PORT/hook/event"
+EOF
+mks tcp_then_opener <<'EOF'
+_sent_once() {
+    case "$1" in
+        0) exit 0 ;;
+        7|22) return 0 ;;
+    esac
+    exit 1
+}
+_rc=0
+curl -fsS --unix-socket "$_sock" "http://k2/cli/browser/open-url" || _rc=$?
+_sent_once "$_rc"
+if printf 'url = "http://127.0.0.1:%s/x"\n' "$p" | curl -fsS -K - >/dev/null 2>&1; then
+    exit 0
+fi
+exec /usr/bin/open "$@"
+EOF
+for g in good_open good_hook; do
+    if ! out="$(lint_shims "$FIX/shims/$g")"; then echo "SELF-TEST FAIL: shim $g flagged: $out" >&2; self_ok=0; fi
+done
+for b in old_if lets_28 star_goes_on tcp_then_opener; do
+    if out="$(lint_shims "$FIX/shims/$b")"; then echo "SELF-TEST FAIL: shim $b not caught" >&2; self_ok=0; fi
+done
 [ "$self_ok" = 1 ] || exit 1
 echo "self test: every broken fixture caught, the good ones pass"
 
 # ── the real scan ─────────────────────────────────────────────────────
 DIR="${1:-$PROJECT_ROOT/cli/src}"
-KNOWN_OPEN="_connect_curl_daemon"
+KNOWN_OPEN=""
+SHIMS=("$PROJECT_ROOT/scripts/k2-open" "$PROJECT_ROOT/crates/k2-core/src/agent_hooks/install.rs")
+rc=0
 if out="$(lint "$DIR" "$KNOWN_OPEN")"; then
     [ -z "$out" ] || echo "$out"
-    echo "post_no_resend_lint: every other cell-socket-then-TCP sender in cli/src keeps the send-once rule for non-GETs"
 else
     echo "$out" >&2
+    rc=1
+fi
+if ! out="$(lint_shims "${SHIMS[@]}")"; then
+    echo "$out" >&2
+    rc=1
+fi
+if [ "$rc" != 0 ]; then
     echo "post_no_resend_lint: FAILED" >&2
     exit 1
 fi
+echo "post_no_resend_lint: every cell-socket-then-TCP sender in cli/src, scripts/k2-open and the notify.sh hook keeps the send-once rule for non-GETs"
+

@@ -442,6 +442,19 @@ mod unix_impl {
             None => (target, ""),
         };
 
+        // A caller that has already hung up is not waiting for this answer:
+        // its request sat in the listener's queue (a cell socket ptyd held
+        // while no daemon accepted on it, e.g. across a restart). Its `k2`
+        // gave up long ago and may have sent it again over TCP, so running
+        // it now would deliver it a second time, under a new id. Never run it.
+        if peer_hung_up(&stream) {
+            log_debug!(
+                "[hook-scoped] cell sock {this_session_id}: {method} {path} not run: the caller hung up \
+                 before K2 read the request (it waited in the socket's queue)"
+            );
+            return;
+        }
+
         // params = query + (for form verbs) the urlencoded POST body, body
         // winning on collision — exactly the TCP dispatcher's merge order.
         let mut params = crate::routes::http::parse_params(path, query);
@@ -1587,6 +1600,17 @@ mod unix_impl {
         }
     }
 
+    /// Has the caller closed its end? True once the peer has closed (or, on
+    /// macOS, shut its write side; `k2`'s curl does neither while it waits).
+    /// The request bytes it wrote before closing are still readable, which
+    /// is why a stale request looks whole to [`read_request`].
+    pub(crate) fn peer_hung_up(stream: &impl AsRawFd) -> bool {
+        let mut fds = libc::pollfd { fd: stream.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        // SAFETY: one valid pollfd for an fd the caller owns; timeout 0.
+        let rc = unsafe { libc::poll(&mut fds, 1, 0) };
+        rc > 0 && fds.revents & libc::POLLHUP != 0
+    }
+
     async fn write_response(stream: &mut UnixStream, status: &str, content_type: &str, body: &str) {
         let resp = format!(
             "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{}",
@@ -1610,6 +1634,56 @@ mod unix_impl {
     mod tests {
         use super::*;
         use crate::session_token::HookPrincipal;
+
+        /// The field report: `k2 msg` connected to a cell socket nobody
+        /// accepted on, wrote its request, gave up and closed. Hours later a
+        /// daemon accepted the queued connection and ran it as a new send.
+        /// The queued request is still whole; the gate must see the hang-up.
+        #[test]
+        fn a_queued_request_whose_caller_hung_up_is_seen_as_hung_up() {
+            use std::io::Write;
+            // Short, so the socket path fits SUN_LEN under any TMPDIR.
+            let dir = k2_core::test_env::short_tmp(format!("k2hu-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]));
+            std::fs::create_dir_all(&dir).expect("dir");
+            let sock = dir.join("c.sock");
+            let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
+            // Connect and send while nobody accepts (the backlog), then hang up.
+            let mut gone = std::os::unix::net::UnixStream::connect(&sock).expect("connect");
+            gone.write_all(b"POST /cli/workspace/msg HTTP/1.1\r\nContent-Length: 2\r\n\r\nhi").expect("write");
+            drop(gone);
+            // A caller still waiting for its answer.
+            let mut waiting = std::os::unix::net::UnixStream::connect(&sock).expect("connect 2");
+            waiting.write_all(b"POST /cli/workspace/msg HTTP/1.1\r\nContent-Length: 2\r\n\r\nhi").expect("write 2");
+
+            let (first, _) = listener.accept().expect("accept gone");
+            let (second, _) = listener.accept().expect("accept waiting");
+            assert!(peer_hung_up(&first), "a caller that closed before the accept must not be served");
+            assert!(!peer_hung_up(&second), "a caller still waiting must be served");
+            drop(waiting);
+            assert!(peer_hung_up(&second), "a caller that closes while queued is seen at once");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// The same through tokio, as `handle_conn` holds it.
+        #[tokio::test]
+        async fn a_hung_up_tokio_stream_is_seen_as_hung_up() {
+            use tokio::io::AsyncWriteExt;
+            let (mut client, server) = UnixStream::pair().expect("pair");
+            client.write_all(b"GET /cli/whoami HTTP/1.1\r\n\r\n").await.expect("write");
+            assert!(!peer_hung_up(&server));
+            drop(client);
+            assert!(peer_hung_up(&server));
+        }
+
+        /// Linux: a client that only shut its write side still waits for the
+        /// answer and is served.
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn a_write_half_close_is_not_a_hang_up_on_linux() {
+            let (client, server) = std::os::unix::net::UnixStream::pair().expect("pair");
+            client.shutdown(std::net::Shutdown::Write).expect("shutdown");
+            assert!(!peer_hung_up(&server));
+        }
 
         fn vh(session_id: &str, pane_id: &str) -> ValidatedHook {
             ValidatedHook {

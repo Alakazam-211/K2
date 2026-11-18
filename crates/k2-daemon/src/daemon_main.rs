@@ -1492,7 +1492,7 @@ async fn async_main() {
     // Phase 3.1 F3 — boot-time pending-live replay. Previous
     // 0.37.5 migration: legacy `<sanitized_pid>_<agent>/` queue dirs
     // (pre-0.37.5 keying) merged into bare `<sanitized_pid>/`. MUST
-    // run BEFORE replay_all so the in-memory `pending_state` counter
+    // run BEFORE boot_sweep so the in-memory `pending_state` counter
     // is built from the post-migration shape. Idempotent.
     pending_live::migrate_legacy_dirs_to_bare_pid();
     boot_clock.phase("pending-live folders");
@@ -1534,23 +1534,14 @@ async fn async_main() {
 
     // daemon-run may have queued signals for offline agents that
     // never got injected (daemon crashed before the session came
-    // online). Log them so operators can eyeball the queue; the
-    // signals stay on disk until a session spawns for that agent
-    // and drains them.
-    let pending_summary = pending_live::replay_all();
-    for (agent, sigs) in &pending_summary {
+    // online). The sweep leaves them on disk for the next spawn's
+    // drain, deletes a second file for one signal id and drops any
+    // older than an hour; it writes nothing, so a boot never
+    // multiplies or re-dates the queue.
+    for (agent, kept) in pending_live::boot_sweep() {
         log_debug!(
-            "[daemon/boot] {} pending-live signals queued for agent {} (will deliver on next spawn)",
-            sigs.len(),
-            agent
+            "[daemon/boot] {kept} pending-live signals queued for agent {agent} (will deliver on next spawn)"
         );
-        // Re-enqueue so the next spawn's drain path finds them —
-        // `replay_all` deletes on read, so we need to put them
-        // back for the spawn-time drain to pick up. Tests cover
-        // this round-trip.
-        for sig in sigs {
-            let _ = pending_live::enqueue(sig, agent);
-        }
     }
 
     boot_clock.phase("pending-live replay");

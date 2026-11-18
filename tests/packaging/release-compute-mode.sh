@@ -346,6 +346,8 @@ assert i_stage < i_manifest < i_assets < i_create < i_args < i_sign, "order"
 blk = s[s.index('if [ "$K2_LINUX_BUILDS" = "compute" ]; then\n    while IFS= read -r f; do'):i_assets]
 assert "k2-daemon-linux-x86_64|k2-daemon-linux-x86_64.sha256|k2-daemon-linux-aarch64|k2-daemon-linux-aarch64.sha256) continue" in blk, \
     "the daemons go up with their signatures at 10.5 (sign-daemon.sh), not at Step 9"
+assert "k5-cli-linux-x86_64|k5-cli-linux-x86_64.sha256|k5-cli-linux-aarch64|k5-cli-linux-aarch64.sha256) continue" in blk, \
+    "k5-cli goes up with its signature at 10.5 (sign-daemon.sh), like the daemons"
 # SS1: a Linux daemon is signed only by sign-daemon.sh (with provenance), never at 8.5.
 assert "k2_sign_daemon_raw" not in s and 'k2u_sign u1 "$DIST_DIR/k2-daemon-linux' not in s, "no Linux daemon signing at 8.5"
 assert 'merge-daemon-manifest.py" "$DIST_DIR/daemon-latest.json"' not in s, "Linux manifest keys come from sign-daemon.sh at 10.5"

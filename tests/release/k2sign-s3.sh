@@ -12,7 +12,7 @@ V=0.46.20
 REPOP="/repos/Alakazam-211/K2"
 T="$(printf 'c%.0s' $(seq 40))"
 IDENT="https://github.com/Alakazam-211/K2/.github/workflows/daemon-binaries.yml@refs/tags/v$V"
-ASSETS=(K2.app.tar.gz k2-daemon-linux-aarch64 k2-daemon-linux-x86_64 k2-daemon-macos-aarch64)
+ASSETS=(K2.app.tar.gz k2-daemon-linux-aarch64 k2-daemon-linux-x86_64 k2-daemon-macos-aarch64 k5-cli-linux-aarch64 k5-cli-linux-x86_64)
 
 open_session() { # <version> <base> [--windows] assets…
     local v="$1" b="$2"; shift 2
@@ -38,6 +38,16 @@ json.dump([{"verificationResult": {
     "statement": {"subject": [{"name": os.path.basename(f), "digest": {"sha256": sha}}]},
     "signature": {"certificate": {"subjectAlternativeName": ident, "sourceRepositoryRef": ref,
                                   "sourceRepositoryDigest": commit}}}}], open(os.path.join(d, sha + ".json"), "w"))
+PY
+}
+mkk5() { # <out> <arch> <mark version>... : the k5 command's program as build.rs marks it
+    python3 -I - "$@" <<'PY'
+import os, struct, sys
+out, arch, marks = sys.argv[1], sys.argv[2], sys.argv[3:]
+h = bytearray(64)
+h[0:4] = b"\x7fELF"; h[4] = 2; h[5] = 1; h[6] = 1
+struct.pack_into("<H", h, 18, {"x86_64": 62, "aarch64": 183}[arch])
+open(out, "wb").write(bytes(h) + os.urandom(2048) + b"".join(b"K5_CLI_VERSION=%s\0" % m.encode() for m in marks))
 PY
 }
 mkdaemon() { # <out> <arch> <version> [two-markers|no-ptyd]
@@ -99,6 +109,25 @@ grep -qF -- "--cert-identity $IDENT --source-ref refs/tags/v$V --source-digest $
     && pass "gh ran the strict check: exact identity, tag ref and tag commit" || fail "strict gh call" "$(cat "$FIX/gh.log")"
 signs "…and u1 (the bridge)" "$tmp/lx" u1 k2-daemon-linux-x86_64 "$V"
 signs "aarch64 too" "$tmp/la" u2 k2-daemon-linux-aarch64 "$V"
+
+echo "== k5-cli: the daemon's key (U2 only), evidence and attestation, its own byte checks =="
+mkk5 "$tmp/kx" x86_64 "$V" "$V"; mkk5 "$tmp/ka" aarch64 "$V"
+refuses "a k5-cli with no attestation of its own bytes" "$tmp/kx" u2 k5-cli-linux-x86_64 "$V" "no build attestation for $(shasum -a 256 "$tmp/kx" | awk '{print $1}')"
+attest "$tmp/kx" "$IDENT" "refs/tags/v$V" "$T"; attest "$tmp/ka" "$IDENT" "refs/tags/v$V" "$T"
+refuses "U1 never signs k5-cli (the policy's assets.u1 doesn't list it)" "$tmp/kx" u1 k5-cli-linux-x86_64 "$V" "asset k5-cli-linux-x86_64 is not signable"
+# The byte checks, before the good ones sign (one sha per asset after that).
+mkk5 "$tmp/k-arch" aarch64 "$V"; attest "$tmp/k-arch" "$IDENT" "refs/tags/v$V" "$T"
+refuses "an aarch64 k5-cli offered as x86_64" "$tmp/k-arch" u2 k5-cli-linux-x86_64 "$V" "k5-cli-linux-x86_64: ELF machine 183, expected 62 (x86_64)"
+mkk5 "$tmp/k-old" aarch64 0.46.19; attest "$tmp/k-old" "$IDENT" "refs/tags/v$V" "$T"
+refuses "a k5-cli built for another version" "$tmp/k-old" u2 k5-cli-linux-aarch64 "$V" "carries version 0.46.19, release is v$V"
+mkk5 "$tmp/k-mixed" aarch64 "$V" 0.46.19; attest "$tmp/k-mixed" "$IDENT" "refs/tags/v$V" "$T"
+refuses "a k5-cli with one stale mark among good ones" "$tmp/k-mixed" u2 k5-cli-linux-aarch64 "$V" "carries version 0.46.19, $V, release is v$V"
+mkk5 "$tmp/k-none" aarch64; attest "$tmp/k-none" "$IDENT" "refs/tags/v$V" "$T"
+refuses "a k5-cli with no version mark" "$tmp/k-none" u2 k5-cli-linux-aarch64 "$V" "carries no K5_CLI_VERSION mark"
+mkdaemon "$tmp/la-as-k5" aarch64 "$V"; attest "$tmp/la-as-k5" "$IDENT" "refs/tags/v$V" "$T"
+refuses "a daemon's bytes offered as k5-cli" "$tmp/la-as-k5" u2 k5-cli-linux-aarch64 "$V" "k5-cli-linux-aarch64: carries no K5_CLI_VERSION mark"
+signs "k5-cli-linux-x86_64 with all its evidence signs (u2)" "$tmp/kx" u2 k5-cli-linux-x86_64 "$V"
+signs "k5-cli-linux-aarch64 too" "$tmp/ka" u2 k5-cli-linux-aarch64 "$V"
 grep -q "^/repos/Alakazam-211/K2/compare/$B1...main$" "$FIX/api.log" && pass "the signer asked GitHub itself whether the base is on main" || fail "main check call"
 mkdaemon "$tmp/lx-arch" aarch64 "$V"; attest "$tmp/lx-arch" "$IDENT" "refs/tags/v$V" "$T"
 V2=0.46.21; open_session "$V2" "$B1" "${ASSETS[@]}"; T2="$(printf 'd%.0s' $(seq 40))"

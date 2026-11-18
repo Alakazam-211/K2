@@ -28,6 +28,12 @@
 # 4. A Windows file names it at all: Windows keeps the script (Authenticode
 #    for new programs isn't in place).
 # 5. A Tauri bundle config names it (it is not a Tauri sidecar).
+# 6. A package fetches it: the daemon .deb and the Arch package build it
+#    from this tree in the same build as the daemon they ship (a line that
+#    names the release asset k5-cli-linux-<arch>, or a download tool or URL
+#    with k5 on it, fails). install-daemon.sh, which does download it,
+#    verifies its U2 signature first (a SHIPS line below; the refusals are
+#    tests/packaging/install-daemon-root-helper.sh's).
 # A listed file or glob that matches nothing fails too: a rename must
 # update these lists.
 #
@@ -88,7 +94,10 @@ scripts/lib/compute-release.sh	K2CR_LINUX_BINS=\"k2-daemon k2-node k2-root-helpe
 .github/workflows/daemon-binaries.yml	\"\${{ matrix.cli_asset }}.sha256\" \\
 scripts/package-daemon-deb.sh	install -D -m 0755 \"\$K5_BIN\" \"\$PKGROOT/usr/bin/k5-cli\"
 packaging/arch/PKGBUILD	install -Dm755 \"\${target}/release/k5-cli\" \"\${pkgdir}/usr/bin/k5-cli\"
-scripts/install-daemon.sh	K5_PATH=\"\$K2_BIN_DIR/k5-cli\""
+scripts/install-daemon.sh	K5_PATH=\"\$K2_BIN_DIR/k5-cli\"
+scripts/install-daemon.sh	( verify_update_sig \"\$DL_K5\" \"\$DL_K5.sig2\" \"\$K5_ASSET\" \"\$MVER\" ) \\
+scripts/package-daemon-deb.sh	cargo build --release -p k5-cli --bin k5-cli
+packaging/arch/PKGBUILD	cargo build --release -p k5-cli --bin k5-cli"
 
 # files_of <root> <list>: every file the list matches, one per line, from
 # <root>; prints "MISSING: <entry>" for an entry that matches nothing.
@@ -253,6 +262,16 @@ scan() {
             bad=1
         fi
     done <<<"$SHIPS"
+    # 6. The packages build it; they never fetch one.
+    for file in scripts/package-daemon-deb.sh packaging/arch/PKGBUILD; do
+        if [ ! -f "$root/$file" ]; then
+            echo "MISSING: $file (it builds k5-cli; update rule 6 in tests/packaging/k5_cli_shipped_off_by_default.sh)"
+            bad=1
+        elif out="$(grep -nE '^[^#]*(k5-cli-linux-|(curl|wget|gh release download|https?://)[^#]*k5|k5[^#]*(curl|wget|gh release download|https?://))' "$root/$file")"; then
+            while IFS= read -r line; do echo "FETCHES k5-cli: $file:$line"; done <<<"$out"
+            bad=1
+        fi
+    done
     # 4 and 5. Windows files and the Tauri configs never name it.
     out="$(files_of "$root" "$WINDOWS
 $TAURI")"
@@ -337,6 +356,24 @@ fresh "$K"
 grep -vF 'k2_k5_cli_sign "target/release/bundle/macos/K2.app"' "$ROOT/$R" >"$T/$R"
 expect_fail "a release.sh that no longer signs k5-cli" "SHIPS NO MORE: $R has no line: k2_k5_cli_sign"
 fresh "$R"
+
+# Rule 3: install-daemon.sh no longer verifies the k5 program it downloads.
+grep -vF '( verify_update_sig "$DL_K5" "$DL_K5.sig2" "$K5_ASSET" "$MVER" ) \' "$ROOT/$I" >"$T/$I"
+expect_fail "an install-daemon.sh that installs k5-cli without its signature check" "SHIPS NO MORE: $I has no line: ( verify_update_sig"
+fresh "$I"
+
+# Rule 6: a package that downloads k5-cli instead of building it.
+echo '    curl -fsSL "https://github.com/Alakazam-211/K2/releases/download/v${pkgver}/k5-cli-linux-x86_64" -o "${srcdir}/k5-cli"' >>"$T/$K"
+expect_fail "a PKGBUILD that downloads k5-cli" "FETCHES k5-cli: packaging/arch/PKGBUILD:"
+fresh "$K"
+D=scripts/package-daemon-deb.sh
+echo 'K5_BIN="$(mktemp)"; gh release download "v$VERSION" -p k5-cli-linux-x86_64 -O "$K5_BIN"' >>"$T/$D"
+expect_fail "a .deb build that downloads k5-cli" "FETCHES k5-cli: $D:"
+fresh "$D"
+echo '# a comment may say curl https://example.invalid/k5' >>"$T/$D"
+out="$(scan "$T")" || die "a comment about a download failed: $out"
+pass=$((pass + 1))
+fresh "$D"
 
 # Rules 4 and 5: Windows and Tauri configs.
 printf '{"bundle": {"externalBin": ["binaries/k5-cli"]}}\n' >"$T/src-tauri/tauri.windows.conf.json"

@@ -99,6 +99,15 @@ POLICY_KEYS = {
 # Question 1: the face or fingerprint, on the phone).
 POLICY_DEFAULTS = {"require": "biometric device", "require_attest": "production"}
 LINUX_DAEMONS = {"k2-daemon-linux-x86_64": "x86_64", "k2-daemon-linux-aarch64": "aarch64"}
+# The k5 command's program (crates/k5-cli), installed beside the Linux daemon
+# in /usr/bin by install-daemon.sh as root: signed with the same U2 key, from
+# the same builds, on the same evidence as the daemon (K2's ruling). U1 never
+# signs it: no install older than 0.46.6 fetches it.
+LINUX_K5 = {"k5-cli-linux-x86_64": "x86_64", "k5-cli-linux-aarch64": "aarch64"}
+# Every Linux file the signer signs from a release build, and its arch.
+LINUX_BUILT = dict(LINUX_DAEMONS, **LINUX_K5)
+K5_MARK_RE = re.compile(rb"K5_CLI_VERSION=([0-9A-Za-z.+-]+)\x00")
+ELF_MACHINES = {"x86_64": 62, "aarch64": 183}
 MAC_DAEMON = "k2-daemon-macos-aarch64"
 # K2 Screen.app, the remote desktop helper (prd-remote-desktop-tab-v1 D3):
 # the one K2 process that holds Screen Recording and Accessibility.
@@ -552,11 +561,11 @@ def load_policy(ctx):
         if not FP_RE.match(pol[k]):
             raise Refused("policy: %s must be a sha256 (64 lowercase hex)" % k)
     for a in pol["compute_assets"].split():
-        if a not in LINUX_DAEMONS:
-            raise Refused("policy: compute_assets may list only the Linux daemons (not %s)" % a)
+        if a not in LINUX_BUILT:
+            raise Refused("policy: compute_assets may list only the Linux daemons and k5-cli (not %s)" % a)
         # A file signed from compute must have been built twice, on two
         # nodes: one node alone could get anything signed.
-        build, verify, _, _, dual_key = COMPUTE_PAIRS[LINUX_DAEMONS[a]]
+        build, verify, _, _, dual_key = COMPUTE_PAIRS[LINUX_BUILT[a]]
         if a not in pol[dual_key].split():
             raise Refused("policy: compute asset %s is not in %s: a compute-built file is signed only "
                           "when %s reproduced %s's build byte for byte" % (a, dual_key, verify, build))
@@ -972,14 +981,45 @@ def check_attestation(ctx, pol, asset, version, path, sha, t, d):
         raise Refused("%s: gh refuses the attestation with the exact identity (%s)" % (asset, first_line(err or out)))
 
 
-def linux_evidence(ctx, pol, asset, version, path, session, d):
-    sha = sha256_file(path)
-    t = check_release_commit(ctx, pol, version, session["base_commit"] if session else None)
+def k5_problems(path, arch, version):
+    """The k5 command's program (the checks scripts/lib/check-k5-cli.py runs
+    at build time): a 64-bit little-endian ELF for the arch, and at least one
+    K5_CLI_VERSION mark (its build.rs writes cli/k2's version, NUL-ended),
+    every one of them this release's version."""
+    with open(path, "rb") as f:
+        b = f.read()
+    problems = []
+    if not (len(b) >= 20 and b[:4] == b"\x7fELF" and b[4] == 2 and b[5] == 1):
+        problems.append("not an ELF64 little-endian file")
+    elif struct.unpack_from("<H", b, 18)[0] != ELF_MACHINES[arch]:
+        problems.append("ELF machine %d, expected %d (%s)" % (struct.unpack_from("<H", b, 18)[0], ELF_MACHINES[arch], arch))
+    marks = sorted({m.decode() for m in K5_MARK_RE.findall(b)})
+    if not marks:
+        problems.append("carries no K5_CLI_VERSION mark")
+    elif marks != [version]:
+        problems.append("carries version %s, release is v%s" % (", ".join(marks), version))
+    return problems
+
+
+def linux_bytes_check(ctx, asset, version, path):
+    """The byte checks for a Linux file: the daemon's by the pinned
+    check-daemon-asset.py, k5-cli's here."""
+    if asset in LINUX_K5:
+        problems = k5_problems(path, LINUX_K5[asset], version)
+        if problems:
+            raise Refused("%s: %s" % (asset, "; ".join(problems)))
+        return
     rc, out, err = run([sys.executable, "-I", os.path.join(ctx.libexec, "check-daemon-asset.py"),
                         path, LINUX_DAEMONS[asset], version])
     if rc != 0:
         msg = "; ".join((out + err).decode(errors="replace").strip().splitlines()).replace(path + ": ", "").replace(path, "the file")
         raise Refused("%s: %s" % (asset, msg[:300]))
+
+
+def linux_evidence(ctx, pol, asset, version, path, session, d):
+    sha = sha256_file(path)
+    t = check_release_commit(ctx, pol, version, session["base_commit"] if session else None)
+    linux_bytes_check(ctx, asset, version, path)
     check_attestation(ctx, pol, asset, version, path, sha, t, d)
 
 
@@ -1666,7 +1706,7 @@ def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None, 
     summary = {"tag_commit": t, "tree": t_tree, "base": base, "built_commit": l1["src"]["commit"], "rust": pin,
                "arches": arches, "jobs": out}
     if asset is not None:
-        arch = LINUX_DAEMONS.get(asset)
+        arch = LINUX_BUILT.get(asset)
         if arch not in arches:
             raise Refused("%s: the compute evidence has no %s build" % (asset, arch))
         lab = COMPUTE_PAIRS[arch][0]
@@ -1698,18 +1738,14 @@ def compute_covers(ctx, version, asset):
     p = compute_state_path(ctx, version)
     if not os.path.exists(p):
         return False
-    return LINUX_DAEMONS.get(asset) in bundle_arches(read_json(p).get("bundle"))
+    return LINUX_BUILT.get(asset) in bundle_arches(read_json(p).get("bundle"))
 
 
 def compute_evidence(ctx, pol, asset, version, path, session, d):
     """A compute-built file: the registered bundle, checked again in full."""
     st = read_json(compute_state_path(ctx, version))
     compute_check(ctx, pol, version, session, st["bundle"], d, asset, path)
-    rc, out, err = run([sys.executable, "-I", os.path.join(ctx.libexec, "check-daemon-asset.py"),
-                        path, LINUX_DAEMONS[asset], version])
-    if rc != 0:
-        msg = "; ".join((out + err).decode(errors="replace").strip().splitlines()).replace(path + ": ", "").replace(path, "the file")
-        raise Refused("%s: %s" % (asset, msg[:300]))
+    linux_bytes_check(ctx, asset, version, path)
 
 
 def verb_compute_evidence(ctx, args):
@@ -1841,7 +1877,7 @@ def check_evidence(ctx, pol, slot, asset, version, path, session, d):
         # Registered compute evidence with a build of this arch decides
         # this asset: no fallback.
         compute_evidence(ctx, pol, asset, version, path, session, d)
-    elif asset in LINUX_DAEMONS:
+    elif asset in LINUX_BUILT:
         linux_evidence(ctx, pol, asset, version, path, session, d)
     elif asset == APP_TARBALL:
         app_evidence(ctx, pol, version, path, d)

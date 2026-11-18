@@ -8,7 +8,8 @@
 # getent, runuser, sudo, minisign, install, stat, visudo, dpkg-query, timeout
 # and curl (github.com release URLs are served from a local mirror). The
 # minisign shim "verifies" a daemon .sig2 carrying GOOD-DAEMON-SIG against any
-# -P key, and a root-helper .sig carrying GOOD-SIG against a pubkey file with
+# -P key (and, when that line also says SHA:<hex>, only the file with that
+# sha256), and a root-helper .sig carrying GOOD-SIG against a pubkey file with
 # the TEST key line; it prints the trusted comment like `minisign -V -Q`.
 # No root, no network, no real sudo, nothing outside the temp dir.
 # Run with: bash tests/packaging/install-daemon-root-helper.sh
@@ -64,12 +65,17 @@ SHIM_UID=0 exec "\$@"
 SH
 cat >"$SHIMS/minisign" <<'SH'
 #!/bin/sh
-sig=""; pub=""; inline=""
+sig=""; pub=""; inline=""; msg=""
 while [ $# -gt 0 ]; do
-    case "$1" in -x) sig="$2"; shift 2 ;; -p) pub="$2"; shift 2 ;; -P) inline="$2"; shift 2 ;; *) shift ;; esac
+    case "$1" in -x) sig="$2"; shift 2 ;; -p) pub="$2"; shift 2 ;; -P) inline="$2"; shift 2 ;; -m) msg="$2"; shift 2 ;; *) shift ;; esac
 done
 if [ -n "$inline" ]; then
     grep -q GOOD-DAEMON-SIG "$sig" || exit 1
+    want="$(sed -n 's/.*GOOD-DAEMON-SIG SHA:\([0-9a-f]*\).*/\1/p' "$sig")"
+    if [ -n "$want" ]; then
+        got="$( (sha256sum "$msg" 2>/dev/null || shasum -a 256 "$msg") | awk '{print $1}')"
+        [ "$got" = "$want" ] || exit 1
+    fi
 else
     grep -q "^RWTESTKEY\$" "$pub" || exit 1
     grep -q GOOD-SIG "$sig" || exit 1
@@ -222,33 +228,111 @@ L_DAEMON="$(<<<"$out" grep -n "Installing to $BIN" | cut -d: -f1)"
 [ -n "$L_HELPER" ] && [ -n "$L_DAEMON" ] && [ "$L_HELPER" -lt "$L_DAEMON" ] || fail "helper must go in before the daemon: $out"
 ok "the helper goes in before the daemon binary is swapped"
 
-echo "== the k5 program goes in beside the daemon, sha256-checked, never fatal =="
+echo "== the k5 program: verified like the daemon, before anything is installed =="
 K5A="k5-cli-linux-x86_64"
 K5="$WORK/home/k2/.local/bin/k5-cli"
-<<<"$out" grep -q "WARNING: the k5 program could not be installed" || fail "a release without k5-cli must warn: $out"
-[ ! -e "$K5" ] || fail "no k5-cli asset, yet $K5 exists"
-ok "a release with no k5-cli asset: a warning, the daemon still installs (rc 0)"
-{ printf '\177ELF'; printf 'K5_CLI_VERSION=%s\0' "$V"; } >"$WORK/rel/v$V/$K5A"
-(cd "$WORK/rel/v$V" && sha "$K5A" >"$K5A.sha256")
-run "$B1" --version "$V"
-[ "$rc" -eq 0 ] || fail "install with k5-cli: $out"
-cmp -s "$WORK/rel/v$V/$K5A" "$K5" || fail "k5-cli bytes are not the release asset"
+FIRST_K5="$(sed -n 's/^K2_FIRST_K5_VERSION="\([0-9.]*\)"$/\1/p' "$SD/install-daemon.sh")"
+[ -n "$FIRST_K5" ] || fail "install-daemon.sh has no K2_FIRST_K5_VERSION"
+<<<"$out" grep -qF "The k5 program: v$V is older than $FIRST_K5, the first release that signs it; not installed" || fail "an older release must say k5 is skipped: $out"
+[ ! -e "$K5" ] || fail "v$V has no signed k5 program, yet $K5 exists"
+ok "v$V (older than $FIRST_K5): no k5 program fetched or installed, said so, the daemon installs (rc 0)"
+V5="$FIRST_K5"
+release "$V5"
+k5_set() { # <sig2 form>: the release's k5-cli and its .sig2 (good, none, bad, other-file, other-version, other-bytes, legacy)
+	local d="$WORK/rel/v$V5" file="$K5A" ver="$V5" alg=RUQ mark=GOOD-DAEMON-SIG sum
+	{ printf '\177ELF'; printf 'K5_CLI_VERSION=%s\0' "$V5"; } >"$d/$K5A"
+	rm -f "$d/$K5A.sig2"
+	sum="$(sha "$d/$K5A" | awk '{print $1}')"
+	case "$1" in
+		none) return 0 ;;
+		bad) mark=BAD-SIG ;;
+		other-file) file="$DA" ;;
+		other-version) ver=0.46.99 ;;
+		other-bytes) sum="$(printf 'other bytes' | sha | awk '{print $1}')" ;;
+		legacy) alg=RWQ ;;
+		good) ;;
+		*) fail "k5_set: unknown form $1" ;;
+	esac
+	printf 'untrusted comment: test\n%s%s SHA:%s\ntrusted comment: timestamp:1\tfile:%s\tversion:%s\nGLOBAL\n' "$alg" "$mark" "$sum" "$file" "$ver" >"$d/$K5A.sig2"
+}
+# k5_refused <label> <reason> <box> [run args...]: non-zero, the plain error
+# names the file, and nothing at all was installed (no helper run, no daemon,
+# no k5 program, no unit).
+k5_refused() {
+	local label="$1" why="$2" box="$WORK/box-k5-$3"
+	shift 3
+	rm -rf "$WORK/home/k2/.local" "$WORK/home/k2/.config" "$box"
+	run "$box" "$@"
+	[ "$rc" -ne 0 ] || fail "$label: installed (rc 0): $out"
+	<<<"$out" grep -qF "K5 PROGRAM NOT VERIFIED: " || fail "$label: no K5 PROGRAM NOT VERIFIED line: $out"
+	<<<"$out" grep -qF "$why" || fail "$label: the reason must say '$why': $out"
+	<<<"$out" grep -qF "Nothing was installed or changed" || fail "$label: must say nothing was installed: $out"
+	[ "$(irh_runs)" = 0 ] && [ ! -e "$WORK/sudo.log" ] || fail "$label: the root helper step ran"
+	[ ! -e "$box/usr/local/libexec/k2-root-helper" ] || fail "$label: a root helper was installed"
+	[ ! -e "$BIN" ] && [ ! -e "$K5" ] && [ ! -e "$K5.new" ] || fail "$label: a daemon or k5 program was installed"
+	[ ! -e "$WORK/home/k2/.config/systemd/user/k2-daemon.service" ] || fail "$label: a service unit was written"
+	ok "v$V5, $label: refused, the error names $K5A, nothing installed"
+}
+rm -f "$WORK/rel/v$V5/$K5A" "$WORK/rel/v$V5/$K5A.sig2"
+k5_refused "no k5 program in the release" "$K5A could not be fetched" none --version "$V5"
+k5_set none
+k5_refused "an unsigned k5 program (no .sig2)" "$K5A.sig2 could not be fetched" unsigned --version "$V5"
+k5_set bad
+k5_refused "a bad signature" "MINISIGN VERIFICATION FAILED for $K5A" bad --version "$V5"
+k5_set other-bytes
+k5_refused "a tampered k5 program (a good signature for other bytes)" "MINISIGN VERIFICATION FAILED for $K5A" tampered --version "$V5"
+k5_set other-file
+k5_refused "a signature for another file (the daemon's)" "The signature is for '$DA', not $K5A" otherfile --version "$V5"
+k5_set other-version
+k5_refused "a signature for another version" "The signature is for version '0.46.99', not $V5" otherver --version "$V5"
+k5_set legacy
+k5_refused "a legacy (not prehashed) signature" "not a prehashed minisign signature" legacy --version "$V5"
+k5_set none
+k5_refused "air-gapped (file://) without the .sig2 beside it" "$K5A.sig2 could not be fetched" gap --no-service --manifest-url "file://$WORK/rel/v$V5/daemon-latest.json"
+k5_set bad
+SHIM_UID=0 k5_refused "a bad signature, run as root for k2" "MINISIGN VERIFICATION FAILED for $K5A" root --version "$V5" --user k2
+# Nothing in the environment turns the check off: the keys are the script's
+# own (K2_DAEMON_PUBKEYS is never read from it) and no variable skips it.
+K2_DAEMON_PUBKEYS=RWANYKEY K2_NO_K5=1 K2_SKIP_K5=1 K2_K5_VERIFY=0 K2_NO_VERIFY=1 \
+	k5_refused "a bad signature with look-alike skip variables set" "MINISIGN VERIFICATION FAILED for $K5A" env --version "$V5"
+[ "$(grep -c '^K2_DAEMON_PUBKEYS="RW[A-Za-z0-9+/ ]*"$' "$SD/install-daemon.sh")" = 1 ] \
+	&& [ "$(grep -c 'K2_DAEMON_PUBKEYS=' "$SD/install-daemon.sh")" = 1 ] || fail "K2_DAEMON_PUBKEYS must be set once, as a pinned literal"
+ok "the update keys are one pinned literal in the script, never from the environment"
+# The verifier itself missing: refused before anything is fetched or installed.
+NOMS="$WORK/no-minisign"
+mkdir -p "$NOMS"
+for f in "$SHIMS"/* /usr/local/bin/* /usr/bin/* /bin/*; do
+	b="${f##*/}"
+	[ "$b" = minisign ] || [ -e "$NOMS/$b" ] || ln -sf "$f" "$NOMS/$b"
+done
+rm -f "$NOMS/minisign"
+k5_set good
+rm -rf "$WORK/home/k2/.local" "$WORK/box-k5-noms"
+PATH="$NOMS" run "$WORK/box-k5-noms" --version "$V5"
+[ "$rc" -ne 0 ] && <<<"$out" grep -q "minisign is required" && <<<"$out" grep -q "Refusing to install an unverified binary" || fail "no minisign must refuse: rc=$rc $out"
+[ ! -e "$BIN" ] && [ ! -e "$K5" ] && [ "$(irh_runs)" = 0 ] || fail "no minisign: something was installed"
+ok "no minisign on PATH: refused before any download, nothing installed"
+rm -rf "$WORK/home/k2/.local" "$WORK/home/k2/.config" "$WORK/curl.log"
+run "$WORK/box-k5-good" --version "$V5"
+[ "$rc" -eq 0 ] || fail "a good k5 program: $out"
+cmp -s "$WORK/rel/v$V5/$K5A" "$K5" || fail "k5-cli bytes are not the release asset"
 [ "$(mode_of "$K5")" = 755 ] || fail "k5-cli mode $(mode_of "$K5")"
 [ "$(dirname "$K5")" = "$(dirname "$BIN")" ] || fail "k5-cli is not beside the daemon"
 [ ! -L "$WORK/home/k2/.local/bin/k2" ] && [ ! -e "$WORK/home/k2/.local/bin/k5" ] || fail "the installer linked k2 or k5 (only the switch may)"
-<<<"$out" grep -q "Installed $K5 " || fail "k5 line: $out"
-ok "k5-cli (the release asset, 0755) beside the daemon; no k2 or k5 link made"
-cp "$WORK/rel/v$V/$K5A" "$WORK/good-k5"
-printf 'tampered' >>"$WORK/rel/v$V/$K5A"
-rm -f "$K5"
-run "$B1" --version "$V"
-[ "$rc" -eq 0 ] && [ ! -e "$K5" ] && <<<"$out" grep -q "WARNING: the k5 program could not be installed" || fail "a k5-cli that fails its sha256 must not install: rc=$rc $out"
-cp "$WORK/good-k5" "$WORK/rel/v$V/$K5A"
-(cd "$WORK/rel/v$V" && sha "$K5A" | sed "s/$K5A/k2-daemon-linux-x86_64/" >"$K5A.sha256")
-run "$B1" --version "$V"
-[ "$rc" -eq 0 ] && [ ! -e "$K5" ] || fail "a .sha256 that names another asset must not install k5-cli: rc=$rc $out"
-ok "a k5-cli that fails its sha256, or whose .sha256 names another file, is not installed (the daemon still is)"
-(cd "$WORK/rel/v$V" && sha "$K5A" >"$K5A.sha256")
+<<<"$out" grep -qF "Installed $K5, minisign-verified" || fail "k5 line: $out"
+grep -qx "https://github.com/Alakazam-211/K2/releases/download/v$V5/$K5A.sig2" "$WORK/curl.log" || fail "the .sig2 was not fetched from the same release: $(cat "$WORK/curl.log")"
+L_K5V="$(<<<"$out" grep -n "Verifying the k5 program's minisign signature" | cut -d: -f1)"
+L_HELPER="$(<<<"$out" grep -n 'Installing the K2 root helper' | cut -d: -f1)"
+[ -n "$L_K5V" ] && [ -n "$L_HELPER" ] && [ "$L_K5V" -lt "$L_HELPER" ] || fail "the k5 check must come before the root helper and the daemon: $out"
+ok "a good signature: k5-cli (the release asset, 0755) beside the daemon, checked before the helper and daemon go in; no k2 or k5 link"
+rm -rf "$WORK/home/k2/.local"
+SHIM_UID=0 run "$WORK/box-k5-root" --user k2 --no-service --version "$V5"
+[ "$rc" -eq 0 ] && cmp -s "$WORK/rel/v$V5/$K5A" "$K5" || fail "root mode with a good k5 program: $out"
+[ "$(grep -c '^k2 cp$' "$WORK/runuser.log")" -ge 2 ] || fail "the daemon and k5-cli must both be written as k2 in root mode: $(cat "$WORK/runuser.log")"
+ok "as root for k2: the verified k5 program is written as k2"
+run "$WORK/box-k5-dry" --version "$V5" --dry-run
+<<<"$out" grep -qF "k5 program:     https://github.com/Alakazam-211/K2/releases/download/v$V5/$K5A (+ .sig2: K2 update key, file:$K5A version:$V5)" || fail "dry run k5 line: $out"
+ok "dry run names the k5 program and the signature it will need"
 
 echo "== re-run with the helper current: nothing to change, no sudo =="
 SHIM_DOOR=0 run "$B1" --version "$V"

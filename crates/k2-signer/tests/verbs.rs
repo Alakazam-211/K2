@@ -346,6 +346,7 @@ fn project_k2_shares_k2sign_state() {
             "[assets.k2-daemon-linux-x86_64]",
             "[assets.k2-root-helper-linux-x86_64]\nkey = \"u2\"\nbuild = \"linux-x86_64\"\nartifact = \"dist/k2-daemon-linux-x86_64\"\ncheck = \"artifact\"\n\n\
              [assets.\"setup.exe\"]\nkey = \"u2\"\nbuild = \"linux-x86_64\"\nartifact = \"dist/k2-daemon-linux-x86_64\"\ncheck = \"artifact\"\n\n\
+             [assets.k5-cli-linux-x86_64]\nkey = \"u2\"\nbuild = \"linux-x86_64\"\nartifact = \"dist/k2-daemon-linux-x86_64\"\ncheck = \"artifact\"\n\n\
              [assets.k2-daemon-linux-x86_64]",
         );
     approve_policy(&r, "k2", &text);
@@ -365,12 +366,12 @@ fn project_k2_shares_k2sign_state() {
     std::fs::create_dir_all(&k2etc).unwrap();
     std::fs::write(
         k2etc.join("policy"),
-        "approval = on\nrelease_commit_files = package.json Cargo.lock WHATS_NEW.md\ncompute_assets = k2-daemon-linux-x86_64 setup.exe\nwindows_assets = setup.exe K2_{version}_x64-setup.exe\n",
+        "approval = on\nrelease_commit_files = package.json Cargo.lock WHATS_NEW.md\ncompute_assets = k2-daemon-linux-x86_64 k5-cli-linux-x86_64 setup.exe\nwindows_assets = setup.exe K2_{version}_x64-setup.exe\nassets.u1 = k2-daemon-linux-x86_64 setup.exe\n",
     )
     .unwrap();
     let state = r.dir.join("var/k2sign/state");
     std::fs::create_dir_all(state.join("sessions")).unwrap();
-    let sess = serde_json::json!({"version": version, "base_commit": w.base, "assets": ["k2-daemon-linux-x86_64", "k2-root-helper-linux-x86_64", "setup.exe"], "windows": false,
+    let sess = serde_json::json!({"version": version, "base_commit": w.base, "assets": ["k2-daemon-linux-x86_64", "k2-root-helper-linux-x86_64", "k5-cli-linux-x86_64", "setup.exe"], "windows": false,
         "max_signatures": 6, "approved": NOW - 3600, "opened": NOW - 3600, "expires": NOW + 3600, "nonce": "0".repeat(32),
         "reapproval": false, "by": "touchid", "count": 0, "signed": []});
     std::fs::write(state.join("sessions").join(format!("{version}.json")), sess.to_string()).unwrap();
@@ -402,6 +403,16 @@ fn project_k2_shares_k2sign_state() {
     );
     refused(run(&r.signer, "verdict", &["k2", "k2-root-helper-linux-x86_64", version], &daemon, Some(&f)), "signs only k2sign's compute_assets");
     refused(run(&r.signer, "sign", &["k2", "u2", "setup.exe", version, "raw"], &daemon, Some(&f)), "Windows setup not approved");
+    // k5-cli: U2 only (k2sign's assets.u1 doesn't list it), and U2 signs only bytes that pass the
+    // k5 checks (this policy points its artifact at the daemon's bytes, which carry no k5 mark).
+    refused(
+        run(&r.signer, "sign", &["k2", "u1", "k5-cli-linux-x86_64", version, "raw"], &daemon, Some(&f)),
+        "k5-cli-linux-x86_64: k2sign's assets.u1 (k2-daemon-linux-x86_64 setup.exe) does not list it",
+    );
+    refused(
+        run(&r.signer, "sign", &["k2", "u2", "k5-cli-linux-x86_64", version, "raw"], &daemon, Some(&f)),
+        "k5-cli-linux-x86_64: carries no K5_CLI_VERSION mark",
+    );
     // U2, and U1 (the bridge until SS6), both on the shared one-sha registry.
     let sig2 = ok(run(&r.signer, "sign", &["k2", "u2", "k2-daemon-linux-x86_64", version, "raw"], &daemon, Some(&f)));
     assert!(minisign::verify(&u2, &daemon, &sig2).unwrap().ends_with(&format!("version:{version}")));

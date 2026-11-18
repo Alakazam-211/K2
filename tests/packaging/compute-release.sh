@@ -70,6 +70,8 @@ if kind == "linux-bins":
         files[f"k2-node-linux-{arch}"] += os.environ["GEN_SALT"].encode()
     if os.environ.get("GEN_DAEMON_SALT"):
         files[f"k2-daemon-linux-{arch}"] += os.environ["GEN_DAEMON_SALT"].encode()
+    if os.environ.get("GEN_K5_SALT"):
+        files[f"k5-cli-linux-{arch}"] += os.environ["GEN_K5_SALT"].encode()
 else:
     files[f"K2_{version}_amd64.deb"] = b"!<arch>\ndebian-binary   " + b"x" * 40
     files[f"K2-{version}-1.x86_64.rpm"] = b"\xed\xab\xee\xdb" + b"r" * 40
@@ -280,7 +282,7 @@ grep -q 'k2 compute run k2n8-vin .*rust@1.98.7,.*bun@1.2.*sys:libwebkit2gtk-4.1-
     && pass "L3 goes to k2n8-vin with the pin, bun + GTK packages" || fail "L3 submit" "$(cat "$tmp/calls-ok")"
 grep -q 'k2 compute run k2n8-vin .*sys:libasound2-dev --mem 24G .*-- bash scripts/ci/build-linux-app.sh' "$tmp/calls-ok" \
     && pass "L3 asks for ALSA headers and 24G (native-voice release link)" || fail "L3 voice needs" "$(grep build-linux-app "$tmp/calls-ok")"
-grep -q 'identical in both builds: .*k2-daemon-linux-x86_64' "$tmp/ok.collect" && ! grep -q 'reported only' "$tmp/ok.collect" \
+grep -q 'identical in both builds: .*k5-cli-linux-x86_64' "$tmp/ok.collect" && grep -q 'identical in both builds: .*k2-daemon-linux-x86_64' "$tmp/ok.collect" && ! grep -q 'reported only' "$tmp/ok.collect" \
     && pass "the daemon's dual build is required, not only reported (review H1)" || fail "daemon dual" "$(cat "$tmp/ok.collect")"
 grep -q 'L1 on k2n7-vin and V1 on k2n9-vin: two nodes' "$tmp/ok.collect" && pass "collect checks L1 and V1 came from two node keys" \
     || fail "dual nodes line" "$(cat "$tmp/ok.collect")"
@@ -510,9 +512,9 @@ rc="$(
 [ "$rc" != 0 ] && grep -q 'k2-node-linux-x86_64: the two builds differ' "$tmp/v-diff.collect" && pass "V1 differing from L1 fails" \
     || fail "V1 diff" "rc=$rc $(cat "$tmp/v-diff.collect")"
 unset K2_COMPUTE_VERIFY_NODE
-# collect_pair <name> <L1 node> <V1 node> [V1 daemon salt]: L1 and V1 by hand, then collect; echoes rc.
+# collect_pair <name> <L1 node> <V1 node> [V1 daemon salt] [V1 k5-cli salt]: L1 and V1 by hand, then collect; echoes rc.
 collect_pair() {
-    local name="$1" l1="$2" v1="$3" salt="${4:-}"
+    local name="$1" l1="$2" v1="$3" salt="${4:-}" k5salt="${5:-}"
     export STUB_DIR="$tmp/stub-$name"
     (
         export STUB_CALLS="$tmp/calls-$name"; rm -rf "$STUB_DIR" "${tmp:?}/$name" "${tmp:?}/$name-files"; mkdir -p "$STUB_DIR"
@@ -520,13 +522,16 @@ collect_pair() {
         source "$ROOT/scripts/lib/compute-release.sh"
         k2cr_init "$VERSION" "$COMMIT" "$tmp/$name" "$tmp/$name-files"
         k2cr_submit L1 "$l1" linux-bins x86_64 rust@1.98.7 -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
-        GEN_DAEMON_SALT="$salt" k2cr_submit V1 "$v1" linux-bins x86_64 rust@1.98.7 -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
+        GEN_DAEMON_SALT="$salt" GEN_K5_SALT="$k5salt" k2cr_submit V1 "$v1" linux-bins x86_64 rust@1.98.7 -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
         r=0; k2cr_collect >"$tmp/$name.collect" 2>&1 || r=$?; echo "$r"
     )
 }
 rc="$(collect_pair v-daemon k2n7-vin k2n9-vin trojan)"
 [ "$rc" != 0 ] && grep -q 'k2-daemon-linux-x86_64: the two builds differ' "$tmp/v-daemon.collect" \
     && pass "review H1: V1's daemon differing from L1's fails collect (not only reported)" || fail "V1 daemon diff" "rc=$rc $(cat "$tmp/v-daemon.collect")"
+rc="$(collect_pair v-k5 k2n7-vin k2n9-vin "" other)"
+[ "$rc" != 0 ] && grep -q 'k5-cli-linux-x86_64: the two builds differ' "$tmp/v-k5.collect" \
+    && pass "V1's k5-cli differing from L1's fails collect (the update key signs it from compute)" || fail "V1 k5 diff" "rc=$rc $(cat "$tmp/v-k5.collect")"
 rc="$(collect_pair v-samename k2n7-vin k2n7-vin)"
 [ "$rc" != 0 ] && grep -q 'both ran on k2n7-vin' "$tmp/v-samename.collect" && grep -q 'same node key' "$tmp/v-samename.collect" \
     && pass "collect: V1 on L1's node fails (name and node_fp)" || fail "V1 same node" "rc=$rc $(cat "$tmp/v-samename.collect")"

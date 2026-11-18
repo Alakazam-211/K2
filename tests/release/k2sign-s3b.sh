@@ -12,7 +12,7 @@ OPENSSL=/usr/bin/openssl
 REPOP="/repos/Alakazam-211/K2"
 NOW0=1800000000
 export K2SIGN_TEST_NOW="$NOW0"
-ASSETS=(K2.app.tar.gz k2-daemon-linux-aarch64 k2-daemon-linux-x86_64 k2-daemon-macos-aarch64)
+ASSETS=(K2.app.tar.gz k2-daemon-linux-aarch64 k2-daemon-linux-x86_64 k2-daemon-macos-aarch64 k5-cli-linux-aarch64 k5-cli-linux-x86_64)
 # The controller's key, the way K2 keeps it (~/.k2/tunnel-key.pem: a PKCS#8
 # P-256 private key); its fingerprint is sha256 of the public key's DER.
 "$OPENSSL" ecparam -name prime256v1 -genkey -noout 2>/dev/null | "$OPENSSL" pkcs8 -topk8 -nocrypt -out "$tmp/keys/tunnel-key.pem"
@@ -70,7 +70,8 @@ fp_of() { "$OPENSSL" ec -in "$tmp/keys/$1.key" -pubout -outform DER 2>/dev/null 
 FP_A="$(fp_of build-a)"; FP_B="$(fp_of build-b)"; FP_R="$(fp_of rogue)"
 
 # mkset <version> <dir>: the files one release build makes (the daemon is a
-# real-shaped ELF the signer's check-daemon-asset.py accepts).
+# real-shaped ELF the signer's check-daemon-asset.py accepts; k5-cli an ELF
+# with its K5_CLI_VERSION mark, MKSET_K5_VERSION if set).
 mkset() {
     local v="$1" d="$2"
     mkdir -p "$d"
@@ -93,6 +94,10 @@ for arch, mach in (("x86_64", 62), ("aarch64", 183)):
     open(p, "wb").write(body)
     open(p + ".sha256", "w").write("%s  %s\n" % (hashlib.sha256(body).hexdigest(), os.path.basename(p)))
     open(os.path.join(d, "k2-app-engine-linux-" + arch), "wb").write(b"engine-" + arch.encode() + os.urandom(64))
+    k5 = elf(mach, 2048) + b"K5_CLI_VERSION=" + os.environ.get("MKSET_K5_VERSION", version).encode() + b"\0"
+    p = os.path.join(d, "k5-cli-linux-" + arch)
+    open(p, "wb").write(k5)
+    open(p + ".sha256", "w").write("%s  %s\n" % (hashlib.sha256(k5).hexdigest(), os.path.basename(p)))
 for n in ("k2-root-helper-linux-x86_64", "k2-node-linux-x86_64", "k2-root-helper-linux-aarch64", "k2-node-linux-aarch64"):
     open(os.path.join(d, n), "wb").write(n.encode() + os.urandom(64))
 # build-info.json as build-linux-bins.sh writes it for the aarch64 cross
@@ -347,6 +352,10 @@ grep -q "\"built_commit\": \"$C\"" "$tmp/out" && grep -q "\"tree\": \"$TT\"" "$t
     && pass "the summary names the preview commit and the tag's tree" || fail "summary" "$(cat "$tmp/out")"
 signs "S3b the compute-built x86 daemon signs (u2)" "$D1" u2 k2-daemon-linux-x86_64 0.47.1
 signs "…and u1 (the bridge)" "$D1" u1 k2-daemon-linux-x86_64 0.47.1
+K1="$tmp/set-0.47.1/k5-cli-linux-x86_64"
+refuses "k5-cli never signs with U1 (not in assets.u1)" "$K1" u1 k5-cli-linux-x86_64 0.47.1 "asset k5-cli-linux-x86_64 is not signable"
+refuses "the daemon's bytes offered as k5-cli: not L1's k5-cli artifact" "$D1" u2 k5-cli-linux-x86_64 0.47.1 "are not L1's signed artifact"
+signs "the compute-built x86 k5-cli signs (u2) on the same evidence" "$K1" u2 k5-cli-linux-x86_64 0.47.1
 grep -q $'\tCOMPUTE-EVIDENCE\t' "$AUDIT/0.47.1/signatures.tsv" && pass "the registration is in the signer's audit log" || fail "audit" ""
 check "status shows the compute evidence" 0 "\"built_commit\": \"$C\"" "$K" status 0.47.1
 
@@ -515,6 +524,11 @@ register "H1 V1 mismatch on the daemon (L1's daemon is not what V1 built): refus
     "V1 mismatch: k2-daemon-linux-x86_64 differs between L1 on build-a" 0.47.2 v1daemon
 bundle v1nodaemon "$S2" build-a '{}' build-b '{"drop_art": ["k2-daemon-linux-x86_64"]}'
 register "H1 V1 did not build the daemon: refused" 3 "V1 match missing: V1's receipt lists no k2-daemon-linux-x86_64" 0.47.2 v1nodaemon
+# k5-cli signs from compute too, so V1 must reproduce it byte for byte.
+bundle v1k5 "$S2" build-a '{}' build-b "{\"set_art\": {\"k5-cli-linux-x86_64\": \"$(printf 'f%.0s' $(seq 64))\"}}"
+register "V1 mismatch on k5-cli: refused" 3 "V1 mismatch: k5-cli-linux-x86_64 differs between L1 on build-a" 0.47.2 v1k5
+bundle v1nok5 "$S2" build-a '{}' build-b '{"drop_art": ["k5-cli-linux-x86_64"]}'
+register "V1 did not build k5-cli: refused" 3 "V1 match missing: V1's receipt lists no k5-cli-linux-x86_64" 0.47.2 v1nok5
 bundle samenode "$S2" build-a '{}' build-a
 register "V1 on the same node as L1" 3 "V1 ran on the same node as L1 (build-a)" 0.47.2 samenode
 
@@ -545,6 +559,14 @@ json.dump([{"verificationResult": {"statement": {"subject": [{"name": os.path.ba
 PY
 refuses "registered compute evidence decides: a GitHub attestation for other bytes doesn't get around it" "$tmp/other-0.47.4/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.4 "are not L1's signed artifact"
 signs "0.47.4's own compute-built daemon signs" "$S4/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.4
+refuses "other k5-cli bytes than L1's signed artifact" "$tmp/other-0.47.4/k5-cli-linux-x86_64" u2 k5-cli-linux-x86_64 0.47.4 "are not L1's signed artifact"
+# A compute build whose k5-cli carries another version (both nodes agree): the signer's byte check.
+S3K="$tmp/set-0.47.3k"
+MKSET_K5_VERSION=0.47.2 mkset 0.47.3 "$S3K"
+bundle k5ver "$S3K"
+register "0.47.3: a bundle whose k5-cli is marked 0.47.2 registers (the bytes are what L1 and V1 built)" 0 '"ok": true' 0.47.3 k5ver
+refuses "…but that k5-cli does not sign: its mark is not the release's" "$S3K/k5-cli-linux-x86_64" u2 k5-cli-linux-x86_64 0.47.3 "k5-cli-linux-x86_64: carries version 0.47.2, release is v0.47.3"
+signs "…while the daemon from the same evidence does" "$S3K/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.3
 S5="$tmp/set-0.47.5"
 bundle noart "$S5" build-a '{"drop_art": ["k2-daemon-linux-x86_64"]}' build-b '{"drop_art": ["k2-daemon-linux-x86_64"]}'
 register "S3b-8 a bundle whose receipts list no daemon: refused at registration (the daemon is dual-built)" 3 \
@@ -604,6 +626,9 @@ refuses "the x86_64 daemon's bytes offered as aarch64: refused" "$S7/k2-daemon-l
 signs "the compute-built aarch64 daemon signs (u2)" "$A7" u2 k2-daemon-linux-aarch64 0.47.7
 signs "…and u1 (the bridge)" "$A7" u1 k2-daemon-linux-aarch64 0.47.7
 signs "the x86_64 daemon from the same evidence signs too" "$S7/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.7
+refuses "the x86_64 k5-cli offered as aarch64: refused" "$S7/k5-cli-linux-x86_64" u2 k5-cli-linux-aarch64 0.47.7 "are not L2's signed artifact"
+signs "the compute-built aarch64 k5-cli signs (u2)" "$S7/k5-cli-linux-aarch64" u2 k5-cli-linux-aarch64 0.47.7
+signs "…and the x86_64 one" "$S7/k5-cli-linux-x86_64" u2 k5-cli-linux-x86_64 0.47.7
 
 echo "== N1: root never writes through a symlink the signing user planted =="
 printf "root's file\n" > "$tmp/root-target"
@@ -671,10 +696,11 @@ python3 -I - "$S6" "$tmp/audit6" <<'PY'
 import hashlib, json, os, sys
 d, out = sys.argv[1:3]
 files = {"dist/" + n: {"sha256": hashlib.sha256(open(os.path.join(d, n), "rb").read()).hexdigest(), "bytes": 1}
-         for n in sorted(os.listdir(d)) if n.startswith("k2-daemon-linux-") and not n.endswith(".sha256")}
+         for n in sorted(os.listdir(d)) if n.startswith(("k2-daemon-linux-", "k5-cli-linux-")) and not n.endswith(".sha256")}
 json.dump({"label": "L1", "ok": True, "files": files, "problems": []}, open(os.path.join(out, "L1.verdict.json"), "w"))
 PY
-python3 -I - "$FIX/attest" "$S6/k2-daemon-linux-aarch64" "https://github.com/Alakazam-211/K2/.github/workflows/daemon-binaries.yml@refs/tags/v$V6" "refs/tags/v$V6" "$T" <<'PY'
+for f in "$S6/k2-daemon-linux-aarch64" "$S6/k5-cli-linux-aarch64"; do
+python3 -I - "$FIX/attest" "$f" "https://github.com/Alakazam-211/K2/.github/workflows/daemon-binaries.yml@refs/tags/v$V6" "refs/tags/v$V6" "$T" <<'PY'
 import hashlib, json, os, sys
 d, f, ident, ref, commit = sys.argv[1:6]
 sha = hashlib.sha256(open(f, "rb").read()).hexdigest()
@@ -682,6 +708,7 @@ json.dump([{"verificationResult": {"statement": {"subject": [{"name": os.path.ba
             "signature": {"certificate": {"subjectAlternativeName": ident, "sourceRepositoryRef": ref, "sourceRepositoryDigest": commit}}}}],
           open(os.path.join(d, sha + ".json"), "w"))
 PY
+done
 # A bad verdict dir first: V1's receipt edited (a mismatch): nothing is signed.
 cp -R "$tmp/audit6" "$tmp/audit6-bad"
 mkrcpt "$tmp/audit6-bad/V1/receipt.json" build-b "$S6" "{\"set_art\": {\"k2-node-linux-x86_64\": \"$(printf 'a%.0s' $(seq 64))\"}}"
@@ -702,6 +729,11 @@ grep -q "registered the K2 Compute evidence for $V6" "$tmp/sd.log" && pass "…a
 [ -s "$tmp/audit6/k2sign-compute-evidence.json" ] && pass "the signer's answer is kept in the audit dir" || fail "audit copy" ""
 bash -c 'source "$1"; k2u_verify_u2 "$2" "$3" k2-daemon-linux-x86_64 "$4"' _ "$TREE/scripts/lib/sign-updater.sh" "$S6/k2-daemon-linux-x86_64" "$tmp/sd/k2-daemon-linux-x86_64.sig2" "$V6" \
     && pass "the x86 .sig2 verifies the way 0.46.6+ installs check" || fail "x86 sig2" ""
+for a in x86_64 aarch64; do
+    bash -c 'source "$1"; k2u_verify_u2 "$2" "$3" "k5-cli-linux-$5" "$4"' _ "$TREE/scripts/lib/sign-updater.sh" "$S6/k5-cli-linux-$a" "$tmp/sd/k5-cli-linux-$a.sig2" "$V6" "$a" \
+        && pass "k5-cli-linux-$a.sig2 (signer, U2) verifies the way install-daemon.sh checks" || fail "k5 $a sig2" ""
+    [ ! -e "$tmp/sd/k5-cli-linux-$a.sig" ] && pass "k5-cli-linux-$a: no U1 signature" || fail "k5 $a u1" ""
+done
 grep -q "\"sha256\": \"$(shasum -a 256 "$S6/k2-daemon-linux-x86_64" | awk '{print $1}')\"" "$tmp/sd/daemon-latest.json" \
     && pass "daemon-latest.json lists the compute-built x86 daemon" || fail "manifest" "$(cat "$tmp/sd/daemon-latest.json")"
 V8=0.47.8 S8="$tmp/set-0.47.8"
@@ -712,8 +744,8 @@ python3 -I - "$S8" "$tmp/audit8" <<'PY'
 import hashlib, json, os, sys
 d, out = sys.argv[1:3]
 for label, arch in (("L1", "x86_64"), ("L2", "aarch64")):
-    n = "k2-daemon-linux-" + arch
-    files = {"dist/" + n: {"sha256": hashlib.sha256(open(os.path.join(d, n), "rb").read()).hexdigest(), "bytes": 1}}
+    files = {"dist/" + n: {"sha256": hashlib.sha256(open(os.path.join(d, n), "rb").read()).hexdigest(), "bytes": 1}
+             for n in ("k2-daemon-linux-" + arch, "k5-cli-linux-" + arch)}
     json.dump({"label": label, "ok": True, "files": files, "problems": []}, open(os.path.join(out, label + ".verdict.json"), "w"))
 PY
 rc=0
@@ -723,6 +755,8 @@ bash "$REPO/scripts/sign-daemon.sh" "$V8" --dry --from-dir "$S8" --compute-verdi
 grep -q '"L2": {' "$tmp/audit8/k2sign-compute-evidence.json" && pass "…the signer registered L2 and V2 too" || fail "arm registration" "$(cat "$tmp/audit8/k2sign-compute-evidence.json")"
 bash -c 'source "$1"; k2u_verify_u2 "$2" "$3" k2-daemon-linux-aarch64 "$4"' _ "$TREE/scripts/lib/sign-updater.sh" "$S8/k2-daemon-linux-aarch64" "$tmp/sd8/k2-daemon-linux-aarch64.sig2" "$V8" \
     && pass "the aarch64 .sig2 verifies the way 0.46.6+ installs check" || fail "arm sig2" ""
+bash -c 'source "$1"; k2u_verify_u2 "$2" "$3" k5-cli-linux-aarch64 "$4"' _ "$TREE/scripts/lib/sign-updater.sh" "$S8/k5-cli-linux-aarch64" "$tmp/sd8/k5-cli-linux-aarch64.sig2" "$V8" \
+    && pass "the compute-built aarch64 k5-cli .sig2 verifies the way install-daemon.sh checks" || fail "arm k5 sig2" ""
 unset K2_SIGNER K2_SIGN_SOURCE_DIR
 
 echo "== the policy: every compute asset is dual-built (review H1) =="
@@ -751,8 +785,31 @@ check "repin the edited policy (admin)" 0 "pins.sha256 rewritten" "$ADM" repin
 refuses "a policy whose aarch64 compute asset is not dual-built does not load" "$A7" u2 k2-daemon-linux-aarch64 0.47.7 \
     "policy: compute asset k2-daemon-linux-aarch64 is not in compute_dual_names_aarch64"
 cp "$tmp/policy.bak" "$POL"
+python3 -I - "$POL" <<'PY'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+s, n = re.subn(r"^(compute_dual_names = .*) k5-cli-linux-x86_64 (.*)$", r"\1 \2", s, flags=re.M)
+assert n == 1, "the policy's compute_dual_names has no k5-cli to drop"
+open(p, "w").write(s)
+PY
+check "repin the edited policy (admin)" 0 "pins.sha256 rewritten" "$ADM" repin
+refuses "a policy whose k5-cli is not dual-built does not load" "$S4/k5-cli-linux-x86_64" u2 k5-cli-linux-x86_64 0.47.4 \
+    "policy: compute asset k5-cli-linux-x86_64 is not in compute_dual_names"
+cp "$tmp/policy.bak" "$POL"
+python3 -I - "$POL" <<'PY'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+s, n = re.subn(r"^(compute_assets = .*)$", r"\1 k2-node-linux-x86_64", s, flags=re.M)
+assert n == 1
+open(p, "w").write(s)
+PY
+check "repin the edited policy (admin)" 0 "pins.sha256 rewritten" "$ADM" repin
+refuses "a compute asset other than the daemons and k5-cli: the policy does not load" "$S4/k5-cli-linux-x86_64" u2 k5-cli-linux-x86_64 0.47.4 \
+    "policy: compute_assets may list only the Linux daemons and k5-cli (not k2-node-linux-x86_64)"
+cp "$tmp/policy.bak" "$POL"
 check "repin the reviewed policy (admin)" 0 "pins.sha256 rewritten" "$ADM" repin
 signs "the reviewed policy back: 0.47.4's daemon signs again" "$S4/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.4
+signs "…and its k5-cli" "$S4/k5-cli-linux-x86_64" u2 k5-cli-linux-x86_64 0.47.4
 
 python3 -I - "$POL" <<'PY'
 import re, sys

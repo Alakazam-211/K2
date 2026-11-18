@@ -141,17 +141,27 @@ fn assets_and_keys_match_the_source_tree() {
     assert_eq!(p.keys["root-helper"].public, source_key("crates/k2-root-proto/src/keys.rs", "primary"));
     assert!(p.keys["u1"].held && p.keys["u2"].held, "the update keys are the signer's");
     assert!(!p.keys["root-helper"].held, "BA-11: the signer only gives verdicts for the root-helper key");
-    // The daemons, signed with the update key: exactly k2sign's compute_assets.
+    // The daemons and k5-cli, signed with the update key: exactly k2sign's compute_assets.
     let signed: BTreeSet<String> = p.assets.iter().filter(|(_, a)| a.key == "u2").map(|(n, _)| n.clone()).collect();
     let compute: BTreeSet<String> = k2sign("compute_assets").split_whitespace().map(String::from).collect();
     assert_eq!(signed, compute);
+    let want: BTreeSet<String> =
+        ["k2-daemon-linux-x86_64", "k2-daemon-linux-aarch64", "k5-cli-linux-x86_64", "k5-cli-linux-aarch64"].map(String::from).into();
+    assert_eq!(signed, want, "the update key signs the Linux daemons and k5-cli, nothing else from compute");
+    // U2 signs k5-cli, U1 (the bridge for installs older than 0.46.6) never does.
+    let u1: BTreeSet<String> = k2sign("assets.u1").split_whitespace().map(String::from).collect();
+    let u2: BTreeSet<String> = k2sign("assets.u2").split_whitespace().map(String::from).collect();
+    for k5 in ["k5-cli-linux-x86_64", "k5-cli-linux-aarch64"] {
+        assert!(u2.contains(k5) && !u1.contains(k5), "{k5}: U2 only");
+    }
     // Every other dual-built file gets a verdict for the root-helper key.
     for (b, r) in [("linux-x86_64", &p.build["linux-x86_64"]), ("linux-aarch64", &p.build["linux-aarch64"])] {
         for d in &r.dual {
             let name = d.strip_prefix("dist/").unwrap();
             let a = p.assets.get(name).unwrap_or_else(|| panic!("no asset for {d}"));
             assert_eq!((a.build.as_str(), a.artifact.as_str()), (b, d.as_str()));
-            assert_eq!(a.key, if name.starts_with("k2-daemon-") { "u2" } else { "root-helper" }, "{name}");
+            let update_key = name.starts_with("k2-daemon-") || name.starts_with("k5-cli-");
+            assert_eq!(a.key, if update_key { "u2" } else { "root-helper" }, "{name}");
         }
     }
 }

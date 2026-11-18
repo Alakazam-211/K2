@@ -333,5 +333,24 @@ assert depth_ok and opens[0] < closes[0] < approve < opens[1] < closes[1], (open
 assert re.search(r'for _k2_seam in [^;]*K2SIGN_TEST_ROOT[^;]*K2_SIGN_APPROVE_CMD K2SA_HELPER K2SA_OPEN K2SA_NOTIFY[^;]*; do', s)
 assert 'Step 0.46' not in s, "a stale Step 0.46 label"
 PY
+# The asset list release.sh opens its session with: the app, the macOS
+# daemon and every compute asset of the policy (the Linux daemons and
+# k5-cli), each signable by U2; k5-cli never by U1.
+python3 -I - "$REPO/scripts/release.sh" "$REPO/scripts/k2sign/policy" <<'PY' && pass "release.sh's session list is the app, the macOS daemon and the policy's compute_assets (daemons and k5-cli); all U2-signable, k5-cli not U1" || fail "release.sh session assets"
+import re, sys
+rel, pol = open(sys.argv[1]).read(), open(sys.argv[2]).read()
+m = re.findall(r"^    K2_SIGN_ASSETS=\(([^)]*)\)$", rel, re.M)
+assert len(m) == 1, m
+listed = m[0].split()
+val = {k.strip(): v.strip() for k, _, v in (l.split("#", 1)[0].partition("=") for l in pol.splitlines()) if v.strip()}
+compute = val["compute_assets"].split()
+assert sorted(listed) == sorted(["K2.app.tar.gz", "k2-daemon-macos-aarch64"] + compute), (listed, compute)
+assert {"k5-cli-linux-x86_64", "k5-cli-linux-aarch64"} <= set(compute), compute
+u1, u2 = set(val["assets.u1"].split()), set(val["assets.u2"].split())
+assert set(listed) <= u2, set(listed) - u2
+assert not {"k5-cli-linux-x86_64", "k5-cli-linux-aarch64"} & u1, u1
+PY
+REL_ASSETS=(K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64 k5-cli-linux-x86_64 k5-cli-linux-aarch64)
+check "the installed policy takes release.sh's asset list (k5-cli included) in a challenge" 0 "" "$K" challenge 0.46.40 "$B1" "${REL_ASSETS[@]}"
 
 finish

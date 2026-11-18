@@ -11,6 +11,12 @@
 # checks sha256, drops it into a bin dir, and writes a supervisor unit
 # (systemd on Linux, launchd on macOS) so a crash respawns the daemon.
 #
+# Linux, 0.46.15 and newer: the k5 command's program (k5-cli-linux-<arch>)
+# goes in beside the daemon, verified the same way (its .sig2, one of the
+# K2 update keys, the signed comment naming that asset and version). A
+# missing or bad k5 program or signature stops the install before anything
+# is installed.
+#
 # Linux: it also installs (or updates) K2's root helper at the SAME version
 # as the daemon, before the daemon binary is swapped, through
 # install-root-helper.sh (the signed release asset, checked against the
@@ -40,6 +46,10 @@ set -eu
 K2_DAEMON_PUBKEYS="RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv RWSkAlEaeKUBUZhQA52GoMLa0rt8KLdEoto26gLHRpm9QIC5ColsvG/Y"
 # Releases before this carry no .sig2 (signed with the retired key only).
 K2_FIRST_U2_VERSION="0.46.6"
+# The first release whose k5 program (k5-cli-linux-<arch>) carries a .sig2:
+# from it on, Linux installs need both and refuse without them. Older ones
+# ship no signed k5 program; the k2 command runs the script there.
+K2_FIRST_K5_VERSION="0.46.15"
 
 # K2_* is canonical; K2SO_* still honored through the 0.x transition.
 K2_VERSION="${K2_VERSION:-${K2SO_VERSION:-}}"
@@ -71,8 +81,9 @@ RH_CANON="/usr/local/libexec/k2-root-helper"
 DEFAULT_LATEST_URL="https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json"
 
 usage() {
-    # @FIRST_U2@ is K2_FIRST_U2_VERSION (one value; the copies test pins it).
-    sed "s/@FIRST_U2@/$K2_FIRST_U2_VERSION/g" >&2 <<'EOF'
+    # @FIRST_U2@ is K2_FIRST_U2_VERSION (one value; the copies test pins it),
+    # @FIRST_K5@ is K2_FIRST_K5_VERSION.
+    sed -e "s/@FIRST_U2@/$K2_FIRST_U2_VERSION/g" -e "s/@FIRST_K5@/$K2_FIRST_K5_VERSION/g" >&2 <<'EOF'
 Usage: install-daemon.sh [--version x.y.z] [--bin-dir DIR]
                          [--manifest-url URL] [--no-service] [--dry-run]
                          [--user NAME] [--unit UNIT] [--scope system|user]
@@ -95,6 +106,10 @@ twins still honored):
   --manifest-url  override daemon-latest.json URL (supports file://)
   --no-service    skip the systemd/launchd supervisor unit
   --dry-run       print the plan; download/install nothing
+
+Linux, @FIRST_K5@ and newer: the k5 command's program goes in beside the
+daemon, verified with the same keys; without it, or with a bad
+signature, nothing is installed and the exit code is non-zero.
 
 Linux only: before the daemon binary is replaced, the K2 root helper
 (/usr/local/libexec/k2-root-helper) is installed or updated to the
@@ -325,11 +340,14 @@ BIN_PATH="$K2_BIN_DIR/k2-daemon"
 # k2-client's cli_install looks for it. Off by default: only the owner's
 # "New k5 command (Beta)" switch points the k2 and k5 links at it, and only
 # when its version mark is this release's; otherwise they run the script.
-# Unsigned for now: checked against the .sha256 published beside it in the
-# same release. Never fatal (without it the commands run the script).
+# Signed like the daemon (sign-daemon.sh, U2): its .sig2 must verify with
+# the K2 update keys for exactly this asset and version, or the install
+# stops before anything is installed. Releases before K2_FIRST_K5_VERSION
+# have no signed k5 program: skipped, the commands run the script.
 K5_ON=0
+K5_OLD=0
 if [ "${PLATFORM%%-*}" = "linux" ] && [ -n "$MVER" ]; then
-    K5_ON=1
+    if version_lt "$MVER" "$K2_FIRST_K5_VERSION"; then K5_OLD=1; else K5_ON=1; fi
 fi
 K5_ASSET="k5-cli-$PLATFORM"
 # A file:// manifest (a mirror, an air-gapped box): from its folder, no
@@ -440,7 +458,9 @@ if [ "$K2_DRY_RUN" = "1" ]; then
         echo "  app engine:     (none installed; nothing to stage)"
     fi
     if [ "$K5_ON" = "1" ]; then
-        echo "  k5 program:     $K5_URL (+ .sha256) -> $K5_PATH (off until the owner turns it on)"
+        echo "  k5 program:     $K5_URL (+ .sig2: K2 update key, file:$K5_ASSET version:$MVER) -> $K5_PATH (off until the owner turns it on)"
+    elif [ "$K5_OLD" = "1" ]; then
+        echo "  k5 program:     (none signed before $K2_FIRST_K5_VERSION; the k2 command runs the script)"
     fi
     if [ "$RH_ON" = "1" ]; then
         echo "  root helper:    $RH_CANON v$MVER for $DAEMON_USER ($RH_UNIT, $RH_SCOPE scope), before the daemon"
@@ -514,6 +534,24 @@ if [ "$GOT_SHA" != "$SHA256" ]; then
     echo "  expected: $SHA256" >&2
     echo "  got:      $GOT_SHA" >&2
     die "Refusing to install."
+fi
+
+# ── The k5 program (Linux): verified like the daemon, before any install ──
+# k5_refused <reason>: the one way out when the k5 program doesn't verify.
+k5_refused() {
+    echo "K5 PROGRAM NOT VERIFIED: $1" >&2
+    die "Refusing to install. Nothing was installed or changed (the daemon, the root helper and $K5_ASSET are as they were)."
+}
+DL_K5="$TMP/$K5_ASSET"
+if [ "$K5_ON" = "1" ]; then
+    echo "Downloading the k5 program ($K5_ASSET) and its signature..."
+    ( fetch "$K5_URL" "$DL_K5" ) || k5_refused "$K5_ASSET could not be fetched from $K5_URL."
+    ( fetch "$K5_URL.sig2" "$DL_K5.sig2" ) || k5_refused "$K5_ASSET.sig2 could not be fetched from $K5_URL.sig2 (this release's k5 program must carry its signature)."
+    echo "Verifying the k5 program's minisign signature (K2 update keys)..."
+    ( verify_update_sig "$DL_K5" "$DL_K5.sig2" "$K5_ASSET" "$MVER" ) \
+        || k5_refused "MINISIGN VERIFICATION FAILED for $K5_ASSET ($K5_URL): not signed by a K2 update key for $K5_ASSET v$MVER."
+elif [ "$K5_OLD" = "1" ]; then
+    echo "The k5 program: v$MVER is older than $K2_FIRST_K5_VERSION, the first release that signs it; not installed (the k2 command runs the script)."
 fi
 
 # ── Root helper (Linux): installed or updated BEFORE the daemon swap ──
@@ -640,22 +678,14 @@ as_user cp "$DL_BIN" "$BIN_PATH.new"
 as_user chmod +x "$BIN_PATH.new"
 as_user mv -f "$BIN_PATH.new" "$BIN_PATH"
 
-# The k5 command's program beside the daemon: sha256-checked against the
-# .sha256 of the same release (it must name this asset); never fatal.
+# The k5 command's program beside the daemon (verified above).
 if [ "$K5_ON" = "1" ]; then
     echo "Installing the k5 program for v$MVER..."
-    DL_K5="$TMP/$K5_ASSET"
-    if ( fetch "$K5_URL" "$DL_K5" ) 2>/dev/null && ( fetch "$K5_URL.sha256" "$DL_K5.sha256" ) 2>/dev/null \
-        && [ "$(awk 'NR == 1 { print $2 }' "$DL_K5.sha256")" = "$K5_ASSET" ] \
-        && [ "$(sha256_of "$DL_K5")" = "$(awk 'NR == 1 { print $1 }' "$DL_K5.sha256")" ]; then
-        [ -z "$AS_USER" ] || chmod 0644 "$DL_K5"
-        as_user cp "$DL_K5" "$K5_PATH.new"
-        as_user chmod 0755 "$K5_PATH.new"
-        as_user mv -f "$K5_PATH.new" "$K5_PATH"
-        echo "Installed $K5_PATH (the k2 command runs it only when the owner turns on the new k5 command)."
-    else
-        echo "WARNING: the k5 program could not be installed (download or sha256); the k2 command runs the script." >&2
-    fi
+    [ -z "$AS_USER" ] || chmod 0644 "$DL_K5"
+    as_user cp "$DL_K5" "$K5_PATH.new"
+    as_user chmod 0755 "$K5_PATH.new"
+    as_user mv -f "$K5_PATH.new" "$K5_PATH"
+    echo "Installed $K5_PATH, minisign-verified (the k2 command runs it only when the owner turns on the new k5 command)."
 fi
 
 # Stage the matching App engine (R3): sha256-checked; never fatal (the

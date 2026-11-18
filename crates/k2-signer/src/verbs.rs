@@ -612,10 +612,18 @@ fn verb_sign(env: &Env, args: &[String]) -> R<Vec<u8>> {
     let Some(rule) = pol.assets.get(asset.as_str()) else {
         return refused(format!("asset {asset} is not signable in project {project}'s policy"));
     };
-    // K2's U1/U2 bridge (until SS6): K2's assets sign under both keys.
+    // K2's U1/U2 bridge (until SS6): K2's assets sign under both keys,
+    // U1 only for what k2sign's assets.u1 lists (k5-cli, for one, is U2
+    // only: nothing older than 0.46.6 fetches it).
     let slot_ok = *slot == rule.key || (project == "k2" && slot == "u1" && rule.key == "u2");
     if !slot_ok {
         return refused(format!("asset {asset} is signed with key {}, not {slot}", rule.key));
+    }
+    if project == "k2" && slot == "u1" {
+        let u1 = k2sign_policy_value(ctx, "assets.u1")?.unwrap_or_default();
+        if !u1.split_whitespace().any(|a| a.replace("{version}", version) == *asset) {
+            return refused(format!("{asset}: k2sign's assets.u1 ({u1}) does not list it: the U1 bridge signs only what installs older than 0.46.6 fetch"));
+        }
     }
     let Some(key_rule) = pol.keys.get(slot.as_str()) else {
         return refused(format!("project {project}'s policy has no [keys.{slot}]"));

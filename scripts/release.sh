@@ -1304,7 +1304,7 @@ if [ "$K2_SIGNER" = k2sign ]; then
     if [ "$(git log -1 --format=%s HEAD)" = "chore(release): ${TAG}" ]; then
         K2_SIGN_BASE="$(git rev-parse HEAD^)"
     fi
-    K2_SIGN_ASSETS=(K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64)
+    K2_SIGN_ASSETS=(K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64 k5-cli-linux-x86_64 k5-cli-linux-aarch64)
     if [ "${K2_SKIP_WINDOWS_NSIS}" != "1" ]; then
         K2_SIGN_ASSETS+=(--windows setup.exe "K2_${VERSION}_x64-setup.exe")
     fi
@@ -1903,19 +1903,21 @@ ASSETS+=(
 )
 # Compute mode: every staged file (node, root helper and engine with their
 # .sha256, x86_64 and, unless it fell back, aarch64; deb/rpm/AppImage,
-# SHA256SUMS-linux-x86_64.txt) but the daemons: sign-daemon.sh uploads
-# each daemon at Step 10.5, after it has checked and signed it. The root-helper-key .sig files come at Step 10.5 as
+# SHA256SUMS-linux-x86_64.txt) but the daemons and k5-cli (the update key
+# signs them): sign-daemon.sh uploads each at Step 10.5, after it has
+# checked and signed it. The root-helper-key .sig files come at Step 10.5 as
 # for GitHub's uploads; the Arch package's SUMS line is merged in by
 # arch-package.yml after the tag.
 if [ "$K2_LINUX_BUILDS" = "compute" ]; then
     while IFS= read -r f; do
         case "$f" in
             ""|*/*|k2-daemon-linux-x86_64|k2-daemon-linux-x86_64.sha256|k2-daemon-linux-aarch64|k2-daemon-linux-aarch64.sha256) continue ;;
+            k5-cli-linux-x86_64|k5-cli-linux-x86_64.sha256|k5-cli-linux-aarch64|k5-cli-linux-aarch64.sha256) continue ;;
         esac
         [ -s "$DIST_DIR/$f" ] || { echo "ERROR: staged compute file $f is missing" >&2; exit 1; }
         ASSETS+=("$DIST_DIR/$f")
     done < "$DIST_DIR/.compute-staged"
-    echo "  Assets include the K2 Compute x86 set ($(grep -c . "$DIST_DIR/.compute-staged") files; the daemon goes up at Step 10.5)."
+    echo "  Assets include the K2 Compute x86 set ($(grep -c . "$DIST_DIR/.compute-staged") files; the daemon and k5-cli go up at Step 10.5)."
 fi
 # Standalone macOS k2-node (Step 8.55): bare binary + .sha256. Its .sig
 # (root-helper key) is uploaded at Step 10.5.

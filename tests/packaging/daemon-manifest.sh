@@ -182,8 +182,8 @@ if printf '%s' "$out" | grep -qF "$want_line"; then pass "dry run: $want_line"; 
 # The k5 command's program: on Linux beside the daemon, from the file://
 # manifest's own folder; never on macOS (the app carries it there).
 case "$(uname -s)-$(uname -m)" in
-    Linux-x86_64|Linux-amd64) k5_line="k5 program:     file://$SCRIPT_DIR/fixtures/k5-cli-linux-x86_64 (+ .sha256) -> " ;;
-    Linux-aarch64|Linux-arm64) k5_line="k5 program:     file://$SCRIPT_DIR/fixtures/k5-cli-linux-aarch64 (+ .sha256) -> " ;;
+    Linux-x86_64|Linux-amd64) k5_line="k5 program:     file://$SCRIPT_DIR/fixtures/k5-cli-linux-x86_64 (+ .sig2: K2 update key, file:k5-cli-linux-x86_64 version:9.9.9) -> " ;;
+    Linux-aarch64|Linux-arm64) k5_line="k5 program:     file://$SCRIPT_DIR/fixtures/k5-cli-linux-aarch64 (+ .sig2: K2 update key, file:k5-cli-linux-aarch64 version:9.9.9) -> " ;;
     *) k5_line="" ;;
 esac
 if [ -n "$k5_line" ]; then

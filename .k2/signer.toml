@@ -47,7 +47,7 @@ secrets = ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET"]
 secrets_optional = ["BUILD_MICROSOFT_CLIENT_ID"]
 isolation = ["job_uid", "exclusive"]
 walls = ["job_user"]
-dual = ["dist/k2-root-helper-linux-x86_64", "dist/k2-node-linux-x86_64", "dist/k2-app-engine-linux-x86_64", "dist/k2-daemon-linux-x86_64"]
+dual = ["dist/k2-root-helper-linux-x86_64", "dist/k2-node-linux-x86_64", "dist/k2-app-engine-linux-x86_64", "dist/k5-cli-linux-x86_64", "dist/k2-daemon-linux-x86_64"]
 independent = ["host"]
 
 [build.linux-aarch64]
@@ -60,7 +60,7 @@ secrets = ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET"]
 secrets_optional = ["BUILD_MICROSOFT_CLIENT_ID"]
 isolation = ["job_uid", "exclusive"]
 walls = ["job_user"]
-dual = ["dist/k2-root-helper-linux-aarch64", "dist/k2-node-linux-aarch64", "dist/k2-app-engine-linux-aarch64", "dist/k2-daemon-linux-aarch64"]
+dual = ["dist/k2-root-helper-linux-aarch64", "dist/k2-node-linux-aarch64", "dist/k2-app-engine-linux-aarch64", "dist/k5-cli-linux-aarch64", "dist/k2-daemon-linux-aarch64"]
 independent = ["host"]
 
 # The zig tarball and cargo-zigbuild crate the aarch64 build fetched,
@@ -89,6 +89,20 @@ check = "artifact"
 key = "u2"
 build = "linux-aarch64"
 artifact = "dist/k2-daemon-linux-aarch64"
+check = "artifact"
+
+# The k5 command's program, which install-daemon.sh puts beside the daemon:
+# the daemon's key and evidence, U2 only (no bridge).
+[assets.k5-cli-linux-x86_64]
+key = "u2"
+build = "linux-x86_64"
+artifact = "dist/k5-cli-linux-x86_64"
+check = "artifact"
+
+[assets.k5-cli-linux-aarch64]
+key = "u2"
+build = "linux-aarch64"
+artifact = "dist/k5-cli-linux-aarch64"
 check = "artifact"
 
 # Signed by the release user's sign-*.sh with the root-helper key, which

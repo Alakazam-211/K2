@@ -6,6 +6,11 @@
 //! - no test-keys or test-pins flag from any K2 crate;
 //! - k2-ptyd embedded: an ELF for the same arch inside the daemon whose
 //!   sha256 hex the daemon also carries.
+//!
+//! And the k5 command's program beside it (`k5-cli-linux-<arch>`, signed
+//! with the daemon's key; k2sign runs the same checks): an ELF64
+//! little-endian file for the arch with at least one `K5_CLI_VERSION=<v>`
+//! NUL-ended mark, every one of them the release's version.
 
 use crate::{refused, R};
 
@@ -21,6 +26,15 @@ pub fn daemon_arch(asset: &str) -> Option<&'static str> {
     match asset {
         "k2-daemon-linux-x86_64" => Some("x86_64"),
         "k2-daemon-linux-aarch64" => Some("aarch64"),
+        _ => None,
+    }
+}
+
+/// The arch of a K2 Linux k5-cli asset name, if it is one.
+pub fn k5_arch(asset: &str) -> Option<&'static str> {
+    match asset {
+        "k5-cli-linux-x86_64" => Some("x86_64"),
+        "k5-cli-linux-aarch64" => Some("aarch64"),
         _ => None,
     }
 }
@@ -131,10 +145,53 @@ pub fn problems(b: &[u8], arch: &str, version: &str) -> Vec<String> {
     p
 }
 
-/// Refuse a daemon asset with any problem.
+/// The versions in every `K5_CLI_VERSION=<v>` NUL-ended mark.
+fn k5_marks(b: &[u8]) -> Vec<String> {
+    let pre = b"K5_CLI_VERSION=";
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(at) = find(b, pre, i) {
+        i = at + 1;
+        let rest = &b[at + pre.len()..];
+        let n = rest.iter().take_while(|c| c.is_ascii_alphanumeric() || matches!(**c, b'.' | b'+' | b'-')).count();
+        if n > 0 && rest.get(n) == Some(&0) {
+            out.push(String::from_utf8_lossy(&rest[..n]).into_owned());
+        }
+    }
+    out
+}
+
+/// Every problem with a k5-cli asset (empty = ok).
+pub fn k5_problems(b: &[u8], arch: &str, version: &str) -> Vec<String> {
+    let Some(machine) = machine_of(arch) else {
+        return vec![format!("unknown arch {arch:?}")];
+    };
+    let mut p = Vec::new();
+    match elf_machine(b, 0) {
+        None => p.push("not an ELF64 little-endian file".to_string()),
+        Some(m) if m != machine => p.push(format!("ELF machine {m}, expected {machine} ({arch})")),
+        _ => {}
+    }
+    let mut marks = k5_marks(b);
+    marks.sort();
+    marks.dedup();
+    if marks.is_empty() {
+        p.push("carries no K5_CLI_VERSION mark".to_string());
+    } else if marks != [version] {
+        p.push(format!("carries version {}, release is v{version}", marks.join(", ")));
+    }
+    p
+}
+
+/// Refuse a daemon or k5-cli asset with any problem.
 pub fn check(asset: &str, b: &[u8], version: &str) -> R<()> {
-    let Some(arch) = daemon_arch(asset) else { return Ok(()) };
-    let ps = problems(b, arch, version);
+    let ps = if let Some(arch) = daemon_arch(asset) {
+        problems(b, arch, version)
+    } else if let Some(arch) = k5_arch(asset) {
+        k5_problems(b, arch, version)
+    } else {
+        return Ok(());
+    };
     if !ps.is_empty() {
         return refused(format!("{asset}: {}", ps.join("; ")));
     }
@@ -189,5 +246,39 @@ mod tests {
         assert!(problems(&no_ptyd, "x86_64", "0.47.1").iter().any(|p| p.contains("k2-ptyd")));
         assert!(check("k2-daemon-linux-x86_64", &d, "0.47.1").is_ok());
         assert!(check("acme", b"anything", "1.0.0").is_ok());
+    }
+
+    fn k5(machine: u16, marks: &[&str]) -> Vec<u8> {
+        let mut b = elf(machine, 4096);
+        for m in marks {
+            b.extend_from_slice(format!("K5_CLI_VERSION={m}\0").as_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn a_real_shaped_k5_cli_passes_and_wrong_ones_fail() {
+        let good = k5(62, &["0.47.1", "0.47.1"]);
+        assert!(k5_problems(&good, "x86_64", "0.47.1").is_empty(), "{:?}", k5_problems(&good, "x86_64", "0.47.1"));
+        assert!(check("k5-cli-linux-x86_64", &good, "0.47.1").is_ok());
+        assert!(check("k5-cli-linux-aarch64", &k5(183, &["0.47.1"]), "0.47.1").is_ok());
+        let e = |asset: &str, b: &[u8], v: &str| match check(asset, b, v) {
+            Err(crate::Fail::Refused(m)) => m,
+            other => panic!("{asset}: expected a refusal, got {other:?}"),
+        };
+        assert_eq!(e("k5-cli-linux-x86_64", &good, "0.47.2"), "k5-cli-linux-x86_64: carries version 0.47.1, release is v0.47.2");
+        assert_eq!(e("k5-cli-linux-aarch64", &good, "0.47.1"), "k5-cli-linux-aarch64: ELF machine 62, expected 183 (aarch64)");
+        assert_eq!(e("k5-cli-linux-x86_64", &k5(62, &[]), "0.47.1"), "k5-cli-linux-x86_64: carries no K5_CLI_VERSION mark");
+        assert_eq!(e("k5-cli-linux-x86_64", &k5(62, &["0.47.1", "0.47.0"]), "0.47.1"), "k5-cli-linux-x86_64: carries version 0.47.0, 0.47.1, release is v0.47.1");
+        let mut not_elf = good.clone();
+        not_elf[0] = b'#';
+        assert_eq!(e("k5-cli-linux-x86_64", &not_elf, "0.47.1"), "k5-cli-linux-x86_64: not an ELF64 little-endian file");
+        // A mark without its NUL is not a mark (build.rs always ends it with one).
+        let mut open_mark = elf(62, 4096);
+        open_mark.extend_from_slice(b"K5_CLI_VERSION=0.47.1");
+        assert_eq!(e("k5-cli-linux-x86_64", &open_mark, "0.47.1"), "k5-cli-linux-x86_64: carries no K5_CLI_VERSION mark");
+        // The daemon's checks never pass a k5-cli, nor k5-cli's a daemon.
+        assert!(check("k2-daemon-linux-x86_64", &good, "0.47.1").is_err());
+        assert!(check("k5-cli-linux-x86_64", &daemon("0.47.1"), "0.47.1").is_err());
     }
 }

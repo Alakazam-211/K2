@@ -151,6 +151,11 @@ inst="$tmp/inst"; mkdir -p "$inst"
 printf 'the new daemon for %s\n' "$PLAT" > "$inst/$NA"
 lib k2u_sign u1 "$inst/$NA" "$NA" 9.9.9 "$inst/$NA.sig" raw 2>/dev/null
 lib k2u_sign u2 "$inst/$NA" "$NA" 9.9.9 "$inst/$NA.sig2" raw 2>/dev/null
+# The release's k5 program beside the manifest (a Linux install needs it
+# and its .sig2; macOS ignores it).
+KA="k5-cli-$PLAT"
+printf 'the k5 program for %s\n' "$PLAT" > "$inst/$KA"
+lib k2u_sign u2 "$inst/$KA" "$KA" 9.9.9 "$inst/$KA.sig2" raw 2>/dev/null
 mkman() { # <out> <version> <sig2 file or "">
     python3 -I - "$1" "$2" "$3" "$inst/$NA" "$PLAT" <<'PY'
 import hashlib, json, sys
@@ -177,6 +182,38 @@ for m in u1as2 ver; do
         [ ! -e "$tmp/ib/k2-daemon" ] && pass "install-daemon.sh refuses $m (real minisign)" || fail "install-daemon $m" "left a binary"
     fi
 done
+# The k5 program on a Linux box (uname says so), real minisign -V.
+lnx="$tmp/linux-bin"; mkdir -p "$lnx"
+printf '#!/bin/sh\ncase "${1:-}" in -s) echo Linux ;; -m) echo x86_64 ;; *) echo Linux ;; esac\n' > "$lnx/uname"; chmod +x "$lnx/uname"
+kd="$tmp/k5rel"; mkdir -p "$kd"
+LD="k2-daemon-linux-x86_64" LK="k5-cli-linux-x86_64"
+head -c 3000 /dev/urandom > "$kd/$LD"; head -c 2000 /dev/urandom > "$kd/$LK"
+lib k2u_sign u2 "$kd/$LD" "$LD" 9.9.9 "$kd/$LD.sig2" raw 2>/dev/null
+lib k2u_sign u2 "$kd/$LK" "$LK" 9.9.9 "$kd/$LK.sig2" raw 2>/dev/null
+python3 -I - "$kd" <<'PY'
+import hashlib, json, os, sys
+d = sys.argv[1]
+b = os.path.join(d, "k2-daemon-linux-x86_64")
+e = {"url": "file://" + b, "sha256": hashlib.sha256(open(b, "rb").read()).hexdigest(), "sig2": "file://" + b + ".sig2"}
+json.dump({"version": "9.9.9", "pub_date": "", "artifacts": {"linux-x86_64": e}}, open(os.path.join(d, "daemon-latest.json"), "w"))
+PY
+k5_install() {
+    rm -rf "$tmp/kb"
+    env PATH="$lnx:$PATH" K2_MANIFEST_URL="file://$kd/daemon-latest.json" K2_BIN_DIR="$tmp/kb" K2_NO_SERVICE=1 K2_NO_ROOT_HELPER=1 \
+        K2_APP_ENGINE_PATH="$tmp/no-engine" sh "$SRC/scripts/install-daemon.sh" >"$tmp/k5.out" 2>&1
+}
+k5_install && cmp -s "$tmp/kb/k5-cli" "$kd/$LK" \
+    && pass "install-daemon.sh installs a U2-signed k5 program (real minisign)" || fail "k5 good" "$(tail -5 "$tmp/k5.out")"
+cp "$kd/$LK" "$tmp/k5.keep"; printf 'x' >> "$kd/$LK"
+if k5_install; then fail "k5 tampered" "installed"; else
+    grep -q "K5 PROGRAM NOT VERIFIED: MINISIGN VERIFICATION FAILED for $LK" "$tmp/k5.out" && [ ! -e "$tmp/kb/k5-cli" ] && [ ! -e "$tmp/kb/k2-daemon" ] \
+        && pass "install-daemon.sh refuses a tampered k5 program, nothing installed (real minisign)" || fail "k5 tampered" "$(tail -3 "$tmp/k5.out")"
+fi
+cp "$tmp/k5.keep" "$kd/$LK"; rm "$kd/$LK.sig2"
+if k5_install; then fail "k5 unsigned" "installed"; else
+    grep -q "K5 PROGRAM NOT VERIFIED: $LK.sig2 could not be fetched" "$tmp/k5.out" && [ ! -e "$tmp/kb/k5-cli" ] && [ ! -e "$tmp/kb/k2-daemon" ] \
+        && pass "install-daemon.sh refuses a k5 program with no signature, nothing installed (real minisign)" || fail "k5 unsigned" "$(tail -3 "$tmp/k5.out")"
+fi
 rm -rf "$tmp/cb"
 bash "$SRC/cli/k2" daemon install --manifest-url "file://$inst/dual.json" --bin-dir "$tmp/cb" --no-service >"$tmp/c.out" 2>&1 \
     && cmp -s "$tmp/cb/k2-daemon" "$inst/$NA" \

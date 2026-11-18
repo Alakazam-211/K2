@@ -57,13 +57,20 @@
 #      `timestamp:…\tfile:k2-daemon-linux-<arch>`, for installs older than
 #      0.46.6) and `.sig2` with U2 (`…\tversion:<v>`, the only one 0.46.6+
 #      accepts; SS4/SS5);
-# then merge both into daemon-latest.json with scripts/merge-daemon-manifest.py
+#   4. k5-cli-linux-<arch> (the k5 command's program, which install-daemon.sh
+#      puts beside the daemon and refuses without this signature): the same
+#      fetch, sha256 and provenance as the daemon (it comes from the same
+#      build), scripts/lib/check-k5-cli.py (ELF of the right arch, its
+#      K5_CLI_VERSION marks this version), then `.sig2` with U2 only
+#      (`…\tfile:k5-cli-linux-<arch>\tversion:<v>`; nothing older than 0.46.6
+#      fetches it, so no U1 bridge);
+# then merge the daemons into daemon-latest.json with scripts/merge-daemon-manifest.py
 # (the same script CI's old merge job ran: same keys and fields, plus
 # `sig2`) and upload the .sig/.sig2 files, THEN the manifest, so the
-# manifest never lists a daemon whose signatures aren't up yet. Finally it
-# re-downloads the published manifest, each published daemon (its hash must
-# be the one it signed) and the .sig2 files, and checks them the way a
-# 0.46.6 install does.
+# manifest never lists a release whose signatures aren't up yet. Finally it
+# re-downloads the published manifest, each published daemon and k5-cli
+# (its hash must be the one it signed) and the .sig2 files, and checks them
+# the way a 0.46.6 install does.
 #
 # Re-running daemon-binaries.yml by hand: delete the release's
 # k2-daemon-linux-<arch> and .sha256 first (no --clobber), then
@@ -305,6 +312,17 @@ for ARCH in "${ARCHES[@]}"; do
         gh_needed+=("$A" "$A.sha256")
         log "$A: from the GitHub release $TAG"
     fi
+    # k5-cli comes from the same build as the daemon.
+    K="k5-cli-linux-$ARCH"
+    if [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/$K" ] && [ -f "$FROM_DIR/$K.sha256" ]; then
+        cp "$FROM_DIR/$K" "$FROM_DIR/$K.sha256" "$ASSETS/"
+        log "$K: from $FROM_DIR"
+    elif [ "$DRY" = 1 ]; then
+        die "$K (+ .sha256) not in $FROM_DIR"
+    else
+        gh_needed+=("$K" "$K.sha256")
+        log "$K: from the GitHub release $TAG"
+    fi
     # The App engines are listed in the manifest too (their .sig comes from
     # sign-app-engine.sh); merge-daemon-manifest.py hashes them.
     E="k2-app-engine-linux-$ARCH"
@@ -350,28 +368,43 @@ elif [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/k2-daemon-linux-x86_64" ] && [ "$(k2u
         || log "WARNING: could not copy the signer's compute-evidence answer into $VERDICTS (audit copy only)"
 fi
 
+# provenance <asset>: its sha256 matches its .sha256, and where it came
+# from is proven (k2-signer's verdict, a compute verdict, or GitHub's
+# attestation). Sets VIA, the signer that signs it.
+provenance() {
+    local a="$1" want got
+    want="$(awk '{print $1; exit}' "$ASSETS/$a.sha256")"
+    got="$(sha256_of "$ASSETS/$a")"
+    [ -n "$want" ] && [ "$want" = "$got" ] || die "$a: sha256 differs from its .sha256 ($got vs $want)"
+    VIA=k2sign
+    if [ -n "$CI_EVIDENCE" ] && [ -f "$FROM_DIR/$a" ]; then
+        k2s_verdict "$a" "$VERSION" "$ASSETS/$a" || die "$a: k2-signer's verdict refused these bytes (above) — not signing"
+        log "$a: k2-signer's verdict: these are the bytes its registered evidence lists"
+        VIA=k2-signer
+    elif [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/$a" ]; then
+        check_compute_provenance "$ASSETS/$a" "$a"
+    else
+        check_github_provenance "$ASSETS/$a" "$a"
+    fi
+}
+
 # 2. Check, 3. sign.
 for ARCH in "${ARCHES[@]}"; do
     A="k2-daemon-linux-$ARCH"
-    want="$(awk '{print $1; exit}' "$ASSETS/$A.sha256")"
-    got="$(sha256_of "$ASSETS/$A")"
-    [ -n "$want" ] && [ "$want" = "$got" ] || die "$A: sha256 differs from its .sha256 ($got vs $want)"
-    via=k2sign
-    if [ -n "$CI_EVIDENCE" ] && [ -f "$FROM_DIR/$A" ]; then
-        k2s_verdict "$A" "$VERSION" "$ASSETS/$A" || die "$A: k2-signer's verdict refused these bytes (above) — not signing"
-        log "$A: k2-signer's verdict: these are the bytes its registered evidence lists"
-        via=k2-signer
-    elif [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/$A" ]; then
-        check_compute_provenance "$ASSETS/$A" "$A"
-    else
-        check_github_provenance "$ASSETS/$A" "$A"
-    fi
+    provenance "$A"
     python3 -I "$ROOT/scripts/lib/check-daemon-asset.py" "$ASSETS/$A" "$ARCH" "$VERSION" || die "$A failed the byte checks (above) — not signing"
     ( # shellcheck source=require-mail-oauth-build-env.sh
       source "$ROOT/scripts/require-mail-oauth-build-env.sh"
       assert_daemon_oauth_not_placeholder "$ASSETS/$A" ) || die "$A: OAuth bake check failed — not signing a placeholder build"
-    K2U_SIGN_VIA="$via" k2u_sign u1 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig" raw || die "$A: U1 signing failed"
-    K2U_SIGN_VIA="$via" k2u_sign u2 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig2" raw || die "$A: U2 signing failed"
+    K2U_SIGN_VIA="$VIA" k2u_sign u1 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig" raw || die "$A: U1 signing failed"
+    K2U_SIGN_VIA="$VIA" k2u_sign u2 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig2" raw || die "$A: U2 signing failed"
+    # 4. k5-cli: U2 only. check-k5-cli.py reads the version from a cli/k2
+    # shaped line; the release's version stands in for the script.
+    K="k5-cli-linux-$ARCH"
+    provenance "$K"
+    printf 'K2_CLI_VERSION="%s"\n' "$VERSION" > "$WORK/k5-version.sh"
+    python3 -I "$ROOT/scripts/lib/check-k5-cli.py" "$ASSETS/$K" "$WORK/k5-version.sh" "linux-$ARCH" || die "$K failed the byte checks (above): not signing"
+    K2U_SIGN_VIA="$VIA" k2u_sign u2 "$ASSETS/$K" "$K" "$VERSION" "$ASSETS/$K.sig2" raw || die "$K: U2 signing failed"
 done
 
 # 4. Manifest: the released one (Step 9 published it with macos-aarch64),
@@ -387,7 +420,7 @@ python3 -I "$ROOT/scripts/merge-daemon-manifest.py" "$ASSETS/daemon-latest.json"
     "https://github.com/$REPO/releases/download/$TAG" "$ASSETS"
 
 if [ "$DRY" = 1 ]; then
-    for ARCH in "${ARCHES[@]}"; do cp "$ASSETS/k2-daemon-linux-$ARCH.sig" "$ASSETS/k2-daemon-linux-$ARCH.sig2" "$OUT/"; done
+    for ARCH in "${ARCHES[@]}"; do cp "$ASSETS/k2-daemon-linux-$ARCH.sig" "$ASSETS/k2-daemon-linux-$ARCH.sig2" "$ASSETS/k5-cli-linux-$ARCH.sig2" "$OUT/"; done
     cp "$ASSETS/daemon-latest.json" "$OUT/"
     log "dry run: signatures + manifest in $OUT (nothing uploaded)"
     exit 0
@@ -396,10 +429,11 @@ fi
 # 5. Upload: signatures (and compute-built bytes) first, the manifest last.
 up=()
 for ARCH in "${ARCHES[@]}"; do
-    A="k2-daemon-linux-$ARCH"
-    up+=("$ASSETS/$A.sig" "$ASSETS/$A.sig2")
+    A="k2-daemon-linux-$ARCH" K="k5-cli-linux-$ARCH"
+    up+=("$ASSETS/$A.sig" "$ASSETS/$A.sig2" "$ASSETS/$K.sig2")
     # Files that came from compute aren't on the release yet.
     if [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/$A" ]; then up+=("$ASSETS/$A" "$ASSETS/$A.sha256"); fi
+    if [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/$K" ]; then up+=("$ASSETS/$K" "$ASSETS/$K.sha256"); fi
 done
 gh release upload "$TAG" -R "$REPO" "${up[@]}" --clobber
 gh release upload "$TAG" -R "$REPO" "$ASSETS/daemon-latest.json" --clobber
@@ -429,5 +463,11 @@ PY
     k2u_verify_u2 "$CHECK/$A" "$CHECK/$A.sig2" "$A" "$VERSION" || die "published $A.sig2 does not verify with UPDATER_KEYS"
     # Fail closed on the bridge half too (installs on 0.46.5 or older).
     k2u_verify_u1 "$CHECK/$A" "$CHECK/$A.sig" "$A" || die "published $A.sig (U1) does not verify: installs on 0.46.5 or older could not update"
+    # What install-daemon.sh fetches beside the daemon: k5-cli and its .sig2.
+    K="k5-cli-linux-$ARCH"
+    gh release download "$TAG" -R "$REPO" -p "$K" -p "$K.sig2" -D "$CHECK" --clobber
+    [ "$(sha256_of "$CHECK/$K")" = "$(sha256_of "$ASSETS/$K")" ] \
+        || die "the published $K is not the binary that was signed (swapped after signing?): delete its .sig2 from $TAG now"
+    k2u_verify_u2 "$CHECK/$K" "$CHECK/$K.sig2" "$K" "$VERSION" || die "published $K.sig2 does not verify with UPDATER_KEYS: install-daemon.sh refuses this release"
 done
-log "done: $TAG Linux daemons signed (U1 + U2); daemon-latest.json lists them; the published binaries are the signed ones and both their signatures verify"
+log "done: $TAG Linux daemons signed (U1 + U2) and k5-cli (U2); daemon-latest.json lists the daemons; the published binaries are the signed ones and their signatures verify"

@@ -55,8 +55,11 @@
 # k5-cli, the k5 command's program (crates/k5-cli). Built here UNSIGNED,
 # Linux only, installed beside the daemon (install-daemon.sh, the daemon
 # .deb, the Arch package):
-#   k5-cli-linux-x86_64{,.sha256}
-#   k5-cli-linux-aarch64{,.sha256}
+#   k5-cli-linux-x86_64{,.sha256}    (.sig2 added by sign-daemon.sh)
+#   k5-cli-linux-aarch64{,.sha256}   (.sig2 added by sign-daemon.sh)
+# sign-daemon.sh signs it with the update key U2, the daemon's, on the same
+# evidence (this workflow's attestation of its bytes), and install-daemon.sh
+# refuses it without that signature.
 # Off by default: only the owner's "New k5 command (Beta)" switch points
 # the k2 and k5 links at it, and only when its K5_CLI_VERSION mark is this
 # release's (k2-client's cli_install); otherwise the commands run the
@@ -311,11 +314,17 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: ${{ matrix.asset }}
+      # k5-cli signs with the daemon's key on the same evidence.
+      - name: Attest k5-cli build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ matrix.cli_asset }}
 
-      # The daemon assets are uploaded WITHOUT --clobber: a daemon already
-      # on the release is never silently replaced. What sign-daemon.sh
-      # really relies on is the attestation above plus the local tag
-      # commit. To redo a build: delete the two assets, then
+      # The daemon and k5-cli assets (the update key signs them) are
+      # uploaded WITHOUT --clobber: one already on the release is never
+      # silently replaced. What sign-daemon.sh really relies on is the
+      # attestations above plus the local tag commit. To redo a build:
+      # delete the four assets, then
       # `gh workflow run daemon-binaries.yml --ref v<x> -f tag=v<x>`. The
       # other assets are signed with the root-helper key and keep --clobber.
       - name: Upload to release
@@ -329,6 +338,8 @@ jobs:
           # script (security review), and it must look like a release tag.
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $TAG" >&2; exit 1; }
           gh release upload "$TAG" \
+            "${{ matrix.cli_asset }}" \
+            "${{ matrix.cli_asset }}.sha256" \
             "${{ matrix.asset }}" \
             "${{ matrix.asset }}.sha256"
           gh release upload "$TAG" \
@@ -338,8 +349,6 @@ jobs:
             "${{ matrix.root_asset }}.sha256" \
             "${{ matrix.engine_asset }}" \
             "${{ matrix.engine_asset }}.sha256" \
-            "${{ matrix.cli_asset }}" \
-            "${{ matrix.cli_asset }}.sha256" \
             --clobber
 
   # The root installer the daemon's "mail helper not installed" hint points

@@ -433,10 +433,25 @@ open(out, "wb").write(body)
 PY
     python3 -I -c 'import hashlib,sys; print("%s  %s" % (hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest(), sys.argv[1].rsplit("/",1)[-1]))' "$1" > "$1.sha256"
 }
+# mkk5 <out> <arch> <version>: a k5 command program as build.rs marks it
+# (ELF64 for the arch, K5_CLI_VERSION=<v> NUL-ended), with its .sha256.
+mkk5() {
+    python3 -I - "$@" <<'PY'
+import hashlib, os, struct, sys
+out, arch, version = sys.argv[1:4]
+h = bytearray(64)
+h[0:4] = b"\x7fELF"; h[4] = 2; h[5] = 1; h[6] = 1
+struct.pack_into("<H", h, 18, {"x86_64": 62, "aarch64": 183}[arch])
+body = bytes(h) + os.urandom(2048) + b"K5_CLI_VERSION=" + version.encode() + b"\0"
+open(out, "wb").write(body)
+open(out + ".sha256", "w").write("%s  %s\n" % (hashlib.sha256(body).hexdigest(), os.path.basename(out)))
+PY
+}
 V=9.9.9
 good="$tmp/good"; mkdir -p "$good"
 for a in x86_64 aarch64; do
     mkdaemon "$good/k2-daemon-linux-$a" "$a" "$V"
+    mkk5 "$good/k5-cli-linux-$a" "$a" "$V"
     printf 'engine-%s' "$a" > "$good/k2-app-engine-linux-$a"
 done
 cat > "$tmp/WHATS_NEW.md" <<'MD'
@@ -460,7 +475,7 @@ mkverdict() { # <dist dir> <state dir> [ok=true]
 import hashlib, json, os, sys
 d, out, ok = sys.argv[1:4]
 files = {"dist/" + n: {"sha256": hashlib.sha256(open(os.path.join(d, n), "rb").read()).hexdigest(), "bytes": 1}
-         for n in sorted(os.listdir(d)) if n.startswith("k2-daemon-linux-") and not n.endswith(".sha256")}
+         for n in sorted(os.listdir(d)) if n.startswith(("k2-daemon-linux-", "k5-cli-linux-")) and not n.endswith(".sha256")}
 json.dump({"label": "L1", "ok": ok == "true", "commit": "c" * 40, "files": files, "problems": [] if ok == "true" else ["x"]},
           open(os.path.join(out, "L1.verdict.json"), "w"))
 PY
@@ -480,6 +495,10 @@ for a in x86_64 aarch64; do
     o="$(minisign -V -P "$U1_PUB_LINE" -m "$good/k2-daemon-linux-$a" -x "$out/k2-daemon-linux-$a.sig" -Q 2>&1)" \
         && [[ "$o" == *$'\tfile:k2-daemon-linux-'"$a" ]] && head -1 "$out/k2-daemon-linux-$a.sig" | grep -qx 'untrusted comment: signature from tauri secret key' \
         && pass "linux-$a .sig: raw minisig, verifies, file:k2-daemon-linux-$a" || fail "linux-$a sig" "$o"
+    lib k2u_verify_u2 "$good/k5-cli-linux-$a" "$out/k5-cli-linux-$a.sig2" "k5-cli-linux-$a" "$V" 2>/dev/null \
+        && pass "k5-cli-linux-$a .sig2: U2, file + version, as install-daemon.sh checks" || fail "k5-cli-linux-$a sig2" ""
+    [ ! -e "$out/k5-cli-linux-$a.sig" ] && ! grep -q "k5-cli-linux-$a signed with u1" "$tmp/sd.log" \
+        && pass "k5-cli-linux-$a: no U1 signature (U2 only)" || fail "k5-cli-linux-$a u1" "$(grep k5-cli "$tmp/sd.log")"
 done
 # Byte-compatible: exactly what CI's old merge job wrote for the same inputs.
 cp "$tmp/daemon-latest.json" "$tmp/ci-merge.json"
@@ -527,6 +546,10 @@ t_test() { mkdaemon "$1/k2-daemon-linux-aarch64" aarch64 "$V" testkeys; }
 t_ptyd() { mkdaemon "$1/k2-daemon-linux-x86_64" x86_64 "$V" no-ptyd; }
 t_oauth() { mkdaemon "$1/k2-daemon-linux-x86_64" x86_64 "$V" no-oauth; }
 t_missing() { rm "$1/k2-daemon-linux-aarch64.sha256"; }
+t_k5sha() { printf 'x' >> "$1/k5-cli-linux-x86_64"; }
+t_k5arch() { mkk5 "$1/k5-cli-linux-x86_64" aarch64 "$V"; }
+t_k5ver() { mkk5 "$1/k5-cli-linux-aarch64" aarch64 9.9.8; }
+t_k5gone() { rm "$1/k5-cli-linux-aarch64" "$1/k5-cli-linux-aarch64.sha256"; }
 refuse wrong-sha "sha256 differs" t_sha
 refuse wrong-arch "ELF machine 183" t_arch
 refuse two-markers "exactly one K2_DAEMON_BUILD marker, found 2" t_two
@@ -536,6 +559,10 @@ refuse test-pins "K2_SEW_TEST_PINS_ENABLED" t_test
 refuse no-ptyd "does not embed k2-ptyd" t_ptyd
 refuse placeholder-oauth "OAuth bake check failed" t_oauth
 refuse missing-sha "not in" t_missing
+refuse k5-wrong-sha "k5-cli-linux-x86_64: sha256 differs" t_k5sha
+refuse k5-wrong-arch "not a 64-bit little-endian x86_64 ELF" t_k5arch
+refuse k5-old-version "carries version 9.9.8, the script 9.9.9" t_k5ver
+refuse k5-missing "k5-cli-linux-aarch64 (+ .sha256) not in" t_k5gone
 if bash "$ROOT/scripts/sign-daemon.sh" "$V" --dry --from-dir "$good" --compute-verdict "$tmp/verdict-good" --out "$tmp/o2" >/dev/null 2>&1; then fail "dry needs manifest" "ran"; else pass "--dry without --manifest refused (never falls back to GitHub)"; fi
 
 echo "== compute provenance: no ok verdict for these bytes, no signature =="
@@ -553,9 +580,19 @@ prov_refuses() { # <label> <expect> <args…>
 prov_refuses "--from-dir without --compute-verdict" "needs --compute-verdict"
 mkverdict "$good" "$tmp/verdict-bad" false
 prov_refuses "a verdict that isn't ok" "no ok compute verdict" --compute-verdict "$tmp/verdict-bad"
-mkdir -p "$tmp/other-dist"; cp "$good"/k2-daemon-linux-* "$tmp/other-dist/"; printf 'x' >> "$tmp/other-dist/k2-daemon-linux-aarch64"
+mkdir -p "$tmp/other-dist"; cp "$good"/k2-daemon-linux-* "$good"/k5-cli-linux-* "$tmp/other-dist/"; printf 'x' >> "$tmp/other-dist/k2-daemon-linux-aarch64"
 mkverdict "$tmp/other-dist" "$tmp/verdict-other"
 prov_refuses "a verdict for other bytes" "no ok compute verdict" --compute-verdict "$tmp/verdict-other"
+rm -rf "$tmp/k5-other"; mkdir -p "$tmp/k5-other"; cp "$good"/k2-daemon-linux-* "$good"/k5-cli-linux-* "$tmp/k5-other/"
+mkverdict "$tmp/k5-other" "$tmp/verdict-k5-other"
+mkk5 "$tmp/k5-other/k5-cli-linux-x86_64" x86_64 "$V"
+rm -rf "$tmp/o3"
+if bash "$ROOT/scripts/sign-daemon.sh" "$V" --dry --from-dir "$tmp/k5-other" --compute-verdict "$tmp/verdict-k5-other" --manifest "$tmp/daemon-latest.json" --out "$tmp/o3" >"$tmp/r.log" 2>&1; then
+    fail "provenance k5-cli" "signed anyway"
+else
+    grep -q "k5-cli-linux-x86_64: no ok compute verdict" "$tmp/r.log" && ! ls "$tmp/o3"/*.sig2 >/dev/null 2>&1 \
+        && pass "refused: a k5-cli whose bytes no ok verdict lists (the daemon's verdict is not enough)" || fail "provenance k5-cli" "$(tail -3 "$tmp/r.log")"
+fi
 
 echo "== sign-daemon.sh: the GitHub path (stub gh) =="
 # The release commit comes from the LOCAL tag (a fixture checkout here).
@@ -567,10 +604,10 @@ export K2_SIGN_SOURCE_DIR="$srcrepo"
 STUB_TAG_COMMIT="$(git -C "$srcrepo" rev-parse "refs/tags/v$V^{commit}")"
 export STUB_TAG_COMMIT
 export STUB_ATTESTED="$tmp/attested"
-for a in x86_64 aarch64; do awk '{print $1}' "$good/k2-daemon-linux-$a.sha256"; done > "$STUB_ATTESTED"
+for a in x86_64 aarch64; do awk '{print $1}' "$good/k2-daemon-linux-$a.sha256" "$good/k5-cli-linux-$a.sha256"; done > "$STUB_ATTESTED"
 fresh_rel() {
     rm -rf "$STUB_REL/v$V"; mkdir -p "$STUB_REL/v$V"
-    cp "$good"/k2-daemon-linux-* "$good"/k2-app-engine-linux-* "$STUB_REL/v$V/"
+    cp "$good"/k2-daemon-linux-* "$good"/k5-cli-linux-* "$good"/k2-app-engine-linux-* "$STUB_REL/v$V/"
     cp "$tmp/daemon-latest.json" "$STUB_REL/v$V/daemon-latest.json"
     : > "$STUB_GH_LOG"
 }
@@ -594,11 +631,19 @@ gh_refuses "no build-provenance attestation" "no valid build-provenance attestat
 gh_refuses "an attestation made at another commit" "no valid build-provenance attestation" STUB_ATTESTED_COMMIT="$(printf 'b%.0s' $(seq 1 40))"
 gh_refuses "an asset uploaded by a person" "uploaded by 'mallory', not github-actions" STUB_UPLOADER=mallory
 gh_refuses "an asset uploaded before the release existed" "before the release" STUB_ASSET_TIME=2026-10-24T10:00:00Z
+awk '{print $1}' "$good"/k2-daemon-linux-*.sha256 > "$tmp/attested-daemons-only"
+gh_refuses "k5-cli without its own attestation (the daemons have theirs)" "k5-cli-linux-x86_64: no valid build-provenance attestation" STUB_ATTESTED="$tmp/attested-daemons-only"
 fresh_rel
 if STUB_SWAP_AFTER_MANIFEST=k2-daemon-linux-x86_64 K2_SIGN_WAIT_MIN=1 bash "$ROOT/scripts/sign-daemon.sh" "$V" >"$tmp/gh.out" 2>&1; then
     fail "post-publish swap" "not caught"
 else
     grep -q "is not the binary that was signed" "$tmp/gh.out" && pass "a daemon swapped after signing is caught by the post-publish check" || fail "post-publish swap" "$(tail -4 "$tmp/gh.out")"
+fi
+fresh_rel
+if STUB_SWAP_AFTER_MANIFEST=k5-cli-linux-aarch64 K2_SIGN_WAIT_MIN=1 bash "$ROOT/scripts/sign-daemon.sh" "$V" >"$tmp/gh.out" 2>&1; then
+    fail "post-publish k5 swap" "not caught"
+else
+    grep -q "the published k5-cli-linux-aarch64 is not the binary that was signed" "$tmp/gh.out" && pass "a k5-cli swapped after signing is caught by the post-publish check" || fail "post-publish k5 swap" "$(tail -4 "$tmp/gh.out")"
 fi
 fresh_rel
 rel="$STUB_REL/v$V"
@@ -607,11 +652,16 @@ grep -q "provenance ok (attested by daemon-binaries.yml" "$tmp/gh.out" && pass "
 python3 -I - "$STUB_GH_LOG" <<'PY' && pass "uploads the .sig and .sig2 files before daemon-latest.json" || fail "upload order" "$(grep UPLOAD "$STUB_GH_LOG")"
 import sys
 ups = [l.split()[1] for l in open(sys.argv[1]) if l.startswith("UPLOAD ")]
-assert set(ups) == {"k2-daemon-linux-x86_64.sig", "k2-daemon-linux-aarch64.sig", "k2-daemon-linux-x86_64.sig2", "k2-daemon-linux-aarch64.sig2", "daemon-latest.json"}, ups
+assert set(ups) == {"k2-daemon-linux-x86_64.sig", "k2-daemon-linux-aarch64.sig", "k2-daemon-linux-x86_64.sig2", "k2-daemon-linux-aarch64.sig2",
+                    "k5-cli-linux-x86_64.sig2", "k5-cli-linux-aarch64.sig2", "daemon-latest.json"}, ups
 assert ups[-1] == "daemon-latest.json", ups
 PY
 python3 -I -c 'import json,sys; a=json.load(open(sys.argv[1]))["artifacts"]; sys.exit(0 if {"macos-aarch64","linux-x86_64","linux-aarch64","k2-app-engine-linux-x86_64","k2-app-engine-linux-aarch64"} == set(a) else 1)' "$rel/daemon-latest.json" \
     && pass "the released manifest lists macOS, both Linux daemons and both engines" || fail "released manifest" "$(cat "$rel/daemon-latest.json")"
+for a in x86_64 aarch64; do
+    lib k2u_verify_u2 "$rel/k5-cli-linux-$a" "$rel/k5-cli-linux-$a.sig2" "k5-cli-linux-$a" "$V" 2>/dev/null \
+        && pass "the released k5-cli-linux-$a.sig2 verifies for the released bytes" || fail "released k5 sig2 $a" ""
+done
 
 echo "== sign-daemon.sh: the compute path (stub gh): the verdict's tree must be the tag's =="
 # Compute builds release.sh's preview commit (Step 1.6c); Step 8.9 then
@@ -630,21 +680,23 @@ json.dump({"label": "L1", "ok": True, "commit": "d" * 40, "tree": tree, "files":
 PY
 }
 rm -rf "$tmp/comp-dist"; mkdir -p "$tmp/comp-dist"
-cp "$good/k2-daemon-linux-x86_64" "$good/k2-daemon-linux-x86_64.sha256" "$good/k2-app-engine-linux-x86_64" "$tmp/comp-dist/"
+cp "$good/k2-daemon-linux-x86_64" "$good/k2-daemon-linux-x86_64.sha256" "$good/k5-cli-linux-x86_64" "$good/k5-cli-linux-x86_64.sha256" "$good/k2-app-engine-linux-x86_64" "$tmp/comp-dist/"
 mkcompverdict "$tmp/comp-v-good" "$srctree"
 mkcompverdict "$tmp/comp-v-other" "$(printf 'e%.0s' $(seq 1 40))"
-fresh_rel; rm -f "$STUB_REL/v$V/k2-daemon-linux-x86_64" "$STUB_REL/v$V/k2-daemon-linux-x86_64.sha256"
+fresh_rel; rm -f "$STUB_REL/v$V/k2-daemon-linux-x86_64" "$STUB_REL/v$V/k2-daemon-linux-x86_64.sha256" "$STUB_REL/v$V/k5-cli-linux-x86_64" "$STUB_REL/v$V/k5-cli-linux-x86_64.sha256"
 if K2_SIGN_WAIT_MIN=1 bash "$ROOT/scripts/sign-daemon.sh" "$V" --from-dir "$tmp/comp-dist" --compute-verdict "$tmp/comp-v-other" >"$tmp/cp.out" 2>&1; then
     fail "compute: verdict for another tree" "signed"
 else
     grep -q "k2-daemon-linux-x86_64: no ok compute verdict" "$tmp/cp.out" && ! grep -q '^UPLOAD .*\.sig' "$STUB_GH_LOG" \
         && pass "compute: a verdict for another tree is refused (no signature uploaded)" || fail "compute other tree" "$(tail -4 "$tmp/cp.out")"
 fi
-fresh_rel; rm -f "$STUB_REL/v$V/k2-daemon-linux-x86_64" "$STUB_REL/v$V/k2-daemon-linux-x86_64.sha256"
+fresh_rel; rm -f "$STUB_REL/v$V/k2-daemon-linux-x86_64" "$STUB_REL/v$V/k2-daemon-linux-x86_64.sha256" "$STUB_REL/v$V/k5-cli-linux-x86_64" "$STUB_REL/v$V/k5-cli-linux-x86_64.sha256"
 if K2_SIGN_WAIT_MIN=1 bash "$ROOT/scripts/sign-daemon.sh" "$V" --from-dir "$tmp/comp-dist" --compute-verdict "$tmp/comp-v-good" >"$tmp/cp.out" 2>&1; then
     grep -q "k2-daemon-linux-x86_64: in L1.verdict.json (job j1)" "$tmp/cp.out" && grep -q "k2-daemon-linux-aarch64: provenance ok (attested" "$tmp/cp.out" \
         && grep -q '^UPLOAD k2-daemon-linux-x86_64$' "$STUB_GH_LOG" && grep -q '^UPLOAD k2-daemon-linux-x86_64.sig2$' "$STUB_GH_LOG" \
-        && pass "compute: the tag's tree in an ok verdict → x86 signed from the stage and uploaded; aarch64 still from GitHub's attested build" \
+        && grep -q "k5-cli-linux-x86_64: in L1.verdict.json (job j1)" "$tmp/cp.out" && grep -q "k5-cli-linux-aarch64: provenance ok (attested" "$tmp/cp.out" \
+        && grep -q '^UPLOAD k5-cli-linux-x86_64$' "$STUB_GH_LOG" && grep -q '^UPLOAD k5-cli-linux-x86_64.sig2$' "$STUB_GH_LOG" \
+        && pass "compute: the tag's tree in an ok verdict → x86 (daemon and k5-cli) signed from the stage and uploaded; aarch64 still from GitHub's attested build" \
         || fail "compute path" "$(tail -8 "$tmp/cp.out"; cat "$STUB_GH_LOG")"
 else
     fail "compute path" "$(tail -20 "$tmp/cp.out")"
@@ -718,6 +770,10 @@ inst="$tmp/inst"; mkdir -p "$inst"
 printf 'the new daemon for %s\n' "$PLAT" > "$inst/$DA"
 lib k2u_sign u1 "$inst/$DA" "$DA" 9.9.9 "$inst/$DA.sig" raw 2>/dev/null
 lib k2u_sign u2 "$inst/$DA" "$DA" 9.9.9 "$inst/$DA.sig2" raw 2>/dev/null
+# On a Linux host the release also carries its signed k5 program (beside the
+# manifest: a file:// install reads it from there).
+mkk5 "$inst/k5-cli-$PLAT" "$parch" 9.9.9
+lib k2u_sign u2 "$inst/k5-cli-$PLAT" "k5-cli-$PLAT" 9.9.9 "$inst/k5-cli-$PLAT.sig2" raw 2>/dev/null
 mkman() { # <out> <version> <sig2 file, or "" for none>
     python3 -I - "$1" "$2" "$3" "$inst/$DA" "$PLAT" <<'PY'
 import hashlib, json, sys
@@ -817,6 +873,67 @@ cli_help="$(bash "$ROOT/cli/k2" daemon install --help 2>&1 || true)"
 grep -qi "an OLDER release than the one installed" "$ROOT/scripts/install-daemon.sh" \
     && [[ "$cli_help" == *"an OLDER release than the one installed"* ]] \
     && pass "install-daemon.sh and k2 daemon install --help say an older 0.46.6+ install is an allowed explicit action" || fail "downgrade help" ""
+
+echo "== install-daemon.sh: the k5 program needs its U2 signature (a Linux box) =="
+# uname says Linux x86_64 on any host; minisign is the stub (it checks the
+# key, the bytes and the comments).
+lnx="$tmp/linux-bin"; mkdir -p "$lnx"
+printf '#!/bin/sh\ncase "${1:-}" in -s) echo Linux ;; -m) echo x86_64 ;; *) echo Linux ;; esac\n' > "$lnx/uname"
+chmod +x "$lnx/uname"
+k5d="$tmp/k5rel"; rm -rf "$k5d"; mkdir -p "$k5d"
+LD="k2-daemon-linux-x86_64" LK="k5-cli-linux-x86_64"
+printf 'the linux daemon\n' > "$k5d/$LD"
+lib k2u_sign u2 "$k5d/$LD" "$LD" 9.9.9 "$k5d/$LD.sig2" raw 2>/dev/null
+python3 -I - "$k5d" <<'PY'
+import hashlib, json, os, sys
+d = sys.argv[1]
+b = os.path.join(d, "k2-daemon-linux-x86_64")
+e = {"url": "file://" + b, "sha256": hashlib.sha256(open(b, "rb").read()).hexdigest(), "sig2": "file://" + b + ".sig2"}
+json.dump({"version": "9.9.9", "pub_date": "", "artifacts": {"linux-x86_64": e}}, open(os.path.join(d, "daemon-latest.json"), "w"))
+PY
+mkk5 "$k5d/$LK" x86_64 9.9.9
+cp "$k5d/$LK" "$tmp/k5-good"
+lib k2u_sign u2 "$k5d/$LK" "$LK" 9.9.9 "$tmp/k5-good.sig2" raw 2>/dev/null
+k5_install() { # [env…]: the fixture tree's install-daemon.sh on the Linux shape
+    rm -rf "$tmp/kb"
+    env PATH="$lnx:$PATH" K2_MANIFEST_URL="file://$k5d/daemon-latest.json" K2_BIN_DIR="$tmp/kb" K2_NO_SERVICE=1 K2_NO_ROOT_HELPER=1 \
+        K2_APP_ENGINE_PATH="$tmp/no-engine" "$@" sh "$SRC/scripts/install-daemon.sh" >"$tmp/k5.out" 2>&1
+}
+k5_refuses() { # <label> <expect> [env…]
+    local label="$1" expect="$2"; shift 2
+    if k5_install "$@"; then
+        fail "k5 $label" "installed"
+    elif ! grep -qF -- "K5 PROGRAM NOT VERIFIED" "$tmp/k5.out" || ! grep -qF -- "$expect" "$tmp/k5.out"; then
+        fail "k5 $label" "wrong reason: $(tail -3 "$tmp/k5.out")"
+    elif [ -e "$tmp/kb/k2-daemon" ] || [ -e "$tmp/kb/k5-cli" ]; then
+        fail "k5 $label" "left a binary: $(ls "$tmp/kb")"
+    else
+        pass "install-daemon.sh refuses $label (nothing installed)"
+    fi
+}
+cp "$tmp/k5-good" "$k5d/$LK"; rm -f "$k5d/$LK.sig2"
+k5_refuses "a k5 program with no .sig2" "$LK.sig2 could not be fetched"
+cp "$tmp/k5-good.sig2" "$k5d/$LK.sig2"; printf 'x' >> "$k5d/$LK"
+k5_refuses "a tampered k5 program (its good signature is for other bytes)" "MINISIGN VERIFICATION FAILED for $LK"
+cp "$tmp/k5-good" "$k5d/$LK"
+lib k2u_sign u2 "$k5d/$LK" "$LD" 9.9.9 "$k5d/$LK.sig2" raw 2>/dev/null
+k5_refuses "a U2 signature for another file (the daemon's name)" "The signature is for '$LD', not $LK"
+lib k2u_sign u2 "$k5d/$LK" "$LK" 9.9.8 "$k5d/$LK.sig2" raw 2>/dev/null
+k5_refuses "a U2 signature for another version" "The signature is for version '9.9.8', not 9.9.9"
+lib k2u_sign u1 "$k5d/$LK" "$LK" 9.9.9 "$k5d/$LK.sig2" raw 2>/dev/null
+k5_refuses "a U1 (retired key) signature" "MINISIGN VERIFICATION FAILED for $LK"
+printf 'okpw\n' | minisign -G -p "$tmp/gen/other.pub" -s "$tmp/gen/other.key" >/dev/null
+printf 'okpw\n' | minisign -S -s "$tmp/gen/other.key" -m "$k5d/$LK" -x "$k5d/$LK.sig2" -t "timestamp:1"$'\t'"file:$LK"$'\t'"version:9.9.9" >/dev/null
+OTHER_PUB_LINE="$(sed -n 2p "$tmp/gen/other.pub")"
+minisign -V -P "$OTHER_PUB_LINE" -m "$k5d/$LK" -x "$k5d/$LK.sig2" -q && pass "(control: the other key's signature verifies with that key)" || fail "other-key control" ""
+k5_refuses "a signature by a key the script doesn't pin" "MINISIGN VERIFICATION FAILED for $LK"
+k5_refuses "the same, with K2_DAEMON_PUBKEYS naming that key in the environment" "MINISIGN VERIFICATION FAILED for $LK" K2_DAEMON_PUBKEYS="$OTHER_PUB_LINE"
+cp "$tmp/k5-good.sig2" "$k5d/$LK.sig2"
+if k5_install && cmp -s "$tmp/kb/k5-cli" "$k5d/$LK" && cmp -s "$tmp/kb/k2-daemon" "$k5d/$LD" && grep -qF "Installed $tmp/kb/k5-cli, minisign-verified" "$tmp/k5.out"; then
+    pass "a good U2 signature: install-daemon.sh installs the k5 program beside the daemon"
+else
+    fail "k5 good" "$(tail -5 "$tmp/k5.out")"
+fi
 
 echo "== k2 daemon install (cli/k2) checks sig2 the same way =="
 cli_install() { # <manifest> [extra args…]

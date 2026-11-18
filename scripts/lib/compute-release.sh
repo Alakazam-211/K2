@@ -467,19 +467,19 @@ k2cr_verdict_ok() {
 }
 
 # The files V1 must reproduce byte for byte: the root-key assets (they
-# run as root on customer boxes) and the daemon, the file the signing user
-# signs from compute (it refuses one V1 didn't reproduce: policy
-# compute_dual_names, which a test keeps equal to this list). The daemons
-# reproduce since 0.46.9's shadow run.
+# run as root on customer boxes), and the daemon and k5-cli, the files the
+# signing user signs from compute (it refuses one V1 didn't reproduce:
+# policy compute_dual_names, which a test keeps equal to this list). The
+# daemons reproduce since 0.46.9's shadow run.
 k2cr_dual_names() {
     local a="${1:-x86_64}"
-    printf '%s' "k2-root-helper-linux-$a,k2-node-linux-$a,k2-app-engine-linux-$a,k2-daemon-linux-$a"
+    printf '%s' "k2-root-helper-linux-$a,k2-node-linux-$a,k2-app-engine-linux-$a,k5-cli-linux-$a,k2-daemon-linux-$a"
 }
 
 # The Linux binaries a linux-bins job builds and stage 1 publishes, each
 # with its .sha256 (scripts/ci/build-linux-bins.sh). k5-cli, the k5
-# command's program, ships beside the daemon off by default; it is not a
-# dual name (nothing signs it yet).
+# command's program, ships beside the daemon off by default; the update
+# key signs it with the daemon (a dual name above).
 K2CR_LINUX_BINS="k2-daemon k2-node k2-root-helper k2-app-engine k5-cli"
 
 # Compute mode (stage 1): copy every verified x86 file into <dist-dir>,

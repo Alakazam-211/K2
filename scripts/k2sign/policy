@@ -26,8 +26,9 @@ require_attest = production
 max_stdin_mb = 1024
 # What each key may sign ({version} is the release version). The Windows
 # setup signs under two names (A7): setup.exe for U1, the URL name for U2.
+# k5-cli (beside the Linux daemon) is U2 only: nothing older than 0.46.6 fetches it.
 assets.u1 = K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64 setup.exe
-assets.u2 = K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64 K2_{version}_x64-setup.exe
+assets.u2 = K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64 k5-cli-linux-x86_64 k5-cli-linux-aarch64 K2_{version}_x64-setup.exe
 # Signable only when the approval said "windows": true (A7, Q5).
 windows_assets = setup.exe K2_{version}_x64-setup.exe
 # The repository S3's GitHub checks read (attestations, tags, main), and
@@ -50,7 +51,7 @@ apple_team = 36B8R93HXV
 # suffix). aarch64: L2 and V2, cross-compiled on x86_64 nodes with zig (the
 # _aarch64 lines); an aarch64 daemon signs from compute only when the
 # registered evidence has L2 and V2, else it takes the GitHub path.
-compute_assets = k2-daemon-linux-x86_64 k2-daemon-linux-aarch64
+compute_assets = k2-daemon-linux-x86_64 k2-daemon-linux-aarch64 k5-cli-linux-x86_64 k5-cli-linux-aarch64
 # The release build command both jobs must have run (compute-release.sh L1/V1).
 compute_argv = bash scripts/ci/build-linux-bins.sh x86_64
 compute_argv_aarch64 = bash scripts/ci/build-linux-bins.sh aarch64
@@ -88,7 +89,7 @@ compute_secret_env_optional = BUILD_MICROSOFT_CLIENT_ID
 # k2cr_dual_names, and a test keeps the two equal): the root-key assets
 # and every compute_assets entry (the signer refuses a policy whose
 # compute asset isn't here: one node alone must never get a file signed).
-compute_dual_names = k2-root-helper-linux-x86_64 k2-node-linux-x86_64 k2-app-engine-linux-x86_64 k2-daemon-linux-x86_64
-compute_dual_names_aarch64 = k2-root-helper-linux-aarch64 k2-node-linux-aarch64 k2-app-engine-linux-aarch64 k2-daemon-linux-aarch64
+compute_dual_names = k2-root-helper-linux-x86_64 k2-node-linux-x86_64 k2-app-engine-linux-x86_64 k5-cli-linux-x86_64 k2-daemon-linux-x86_64
+compute_dual_names_aarch64 = k2-root-helper-linux-aarch64 k2-node-linux-aarch64 k2-app-engine-linux-aarch64 k5-cli-linux-aarch64 k2-daemon-linux-aarch64
 # A receipt older than this is refused, even with the approval off.
 compute_receipt_max_hours = 24

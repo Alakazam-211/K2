@@ -21,30 +21,19 @@ EOF
 # Pure bash + curl: on a fresh Mac `/usr/bin/python3` is one of Apple's
 # shims, so these verbs never touch python3 (or `urlencode`, which uses
 # it). The daemon renders the text (`?format=text`).
-_git_tools_q() {
-    # Percent-encode $1 for a query value, byte by byte.
-    local LC_ALL=C s="$1" out="" c i
-    for ((i = 0; i < ${#s}; i++)); do
-        c="${s:i:1}"
-        case "$c" in
-            [A-Za-z0-9._~-]) out+="$c" ;;
-            *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
-        esac
-    done
-    printf '%s' "$out"
-}
-
 _git_tools_send() {
     # _git_tools_send <GET|POST> <path> <as_json>: the body, then the HTTP code.
-    local method="$1" path="$2" as_json="$3" q
-    q="token=$(_git_tools_q "$TOKEN")"
-    [ "$as_json" = "1" ] || q="${q}&format=text"
+    local method="$1" path="$2" as_json="$3" q="" _K2_CFG=""
+    [ "$as_json" = "1" ] || q="?format=text"
+    # The URL and the token ride curl's config, never argv.
+    _k2_cfg_add url "${BASE_URL}${path}${q}"
+    _k2_cfg_auth "$TOKEN"
     # Through _k2_curl: a refused connect (a daemon restart) is retried (S5).
     if [ "$method" = "GET" ]; then
-        _k2_curl "" -s "${BASE_URL}${path}?${q}" --connect-timeout 5 --max-time 120 \
+        _k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 120 \
             -w $'\n%{http_code}' 2>/dev/null || true
     else
-        _k2_curl "" -s -X POST "${BASE_URL}${path}?${q}" --connect-timeout 5 --max-time 120 \
+        _k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 120 \
             -H "Content-Type: application/json" --data-raw '{}' \
             -w $'\n%{http_code}' 2>/dev/null || true
     fi

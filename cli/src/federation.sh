@@ -62,7 +62,8 @@ cmd_fed() {
             local body
             body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3]}))' "$to" "$text" "$PROJECT")
             local _K2_CFG=""
-            _k2_cfg_add url "${BASE_URL}/cli/federation/send?token=${send_token}"
+            _k2_cfg_add url "${BASE_URL}/cli/federation/send"
+            _k2_cfg_auth "$send_token"
             _k2_cfg_add data-raw "$body"
             _k2_curl "$_K2_CFG" -s -X POST \
                 --connect-timeout 5 --max-time 60 \
@@ -127,7 +128,8 @@ print(json.dumps({want[1]: obj}))' "$token_in" "$sub") || exit 2
                     ;;
             esac
             local _K2_CFG="" resp
-            _k2_cfg_add url "${BASE_URL}/cli/federation/${route}?token=${owner_token}"
+            _k2_cfg_add url "${BASE_URL}/cli/federation/${route}"
+            _k2_cfg_auth "$owner_token"
             _k2_cfg_add data-raw "$body"
             resp=$(_k2_curl "$_K2_CFG" -s -X POST \
                 --connect-timeout 5 --max-time 30 \
@@ -204,7 +206,8 @@ print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv
             local body
             body=$(python3 -c 'import json,sys; print(json.dumps({"fingerprint":sys.argv[1],"sas":sys.argv[2]}))' "$fp" "$sas")
             local _K2_CFG=""
-            _k2_cfg_add url "${BASE_URL}/cli/federation/pair/confirm?token=${owner_token}"
+            _k2_cfg_add url "${BASE_URL}/cli/federation/pair/confirm"
+            _k2_cfg_auth "$owner_token"
             _k2_cfg_add data-raw "$body"
             _k2_curl "$_K2_CFG" -s -X POST \
                 --connect-timeout 5 --max-time 30 \
@@ -343,7 +346,8 @@ for p in peers:
                 exit 1
             fi
             local _K2_CFG=""
-            _k2_cfg_add url "${BASE_URL}/cli/federation/outbox?token=${owner_token}"
+            _k2_cfg_add url "${BASE_URL}/cli/federation/outbox"
+            _k2_cfg_auth "$owner_token"
             _k2_curl "$_K2_CFG" -s \
                 --connect-timeout 5 --max-time 30 2>/dev/null \
                 | python3 -c "import json,sys

@@ -109,7 +109,8 @@ _daemon_systemctl() {
 }
 
 # POST a lifecycle route on the LOCAL daemon with the on-disk owner token
-# (query string, never argv). Prints the body; returns curl's status.
+# (an Authorization header in curl's config, never argv or the query).
+# Prints the body; returns curl's status.
 _daemon_local_post() {
     local path="$1" token="" _K2_CFG=""
     [ -f "$_daemon_token_file" ] && token=$(tr -d '[:space:]' < "$_daemon_token_file" 2>/dev/null)
@@ -117,8 +118,8 @@ _daemon_local_post() {
         echo "no owner token at $_daemon_token_file" >&2
         return 1
     fi
-    case "$path" in *\?*) path="${path}&token=${token}" ;; *) path="${path}?token=${token}" ;; esac
     _k2_cfg_add url "${BASE_URL}${path}"
+    _k2_cfg_auth "$token"
     _k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 30
 }
 
@@ -414,12 +415,12 @@ cmd_daemon_restart() {
         fi
         # Strip a trailing slash so we don't emit a double-slash URL.
         local base="${host%/}"
-        # OWNER-ONLY route: token rides the query string (the daemon's
-        # require_owner reads it there), no body.
+        # OWNER-ONLY route: the token rides an Authorization header, no body.
         local resp _K2_CFG=""
-        local q="token=${token}"
-        [ "$end_agents" = "1" ] && q="${q}&end_agents=1"
-        _k2_cfg_add url "${base}/cli/daemon/restart?${q}"
+        local q=""
+        [ "$end_agents" = "1" ] && q="?end_agents=1"
+        _k2_cfg_add url "${base}/cli/daemon/restart${q}"
+        _k2_cfg_auth "$token"
         resp=$(_k2_curl "$_K2_CFG" -s -X POST \
             --connect-timeout 5 --max-time 30 2>/dev/null) || true
         if [ -z "$resp" ]; then
@@ -533,8 +534,10 @@ else:
             ;;
         status)
             resp=$(cli_request "/cli/settings/get")
-            local boot
-            boot=$(_k2_curl "" -s --connect-timeout 3 --max-time 5 "${BASE_URL}/boot-status?token=${TOKEN}" 2>/dev/null || true)
+            local boot _K2_CFG=""
+            _k2_cfg_add url "${BASE_URL}/boot-status"
+            _k2_cfg_auth "$TOKEN"
+            boot=$(_k2_curl "$_K2_CFG" -s --connect-timeout 3 --max-time 5 2>/dev/null || true)
             printf '%s\n%s' "$resp" "$boot" | python3 -c '
 import json, sys
 lines = sys.stdin.read().split("\n", 1)

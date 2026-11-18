@@ -191,12 +191,12 @@ _setup_jfield() {
 # _setup_send <GET|POST> <path> <as_json> [<body>]: the answer, then a
 # newline and the HTTP code. The token rides curl's config, never argv.
 _setup_send() {
-    local method="$1" path="$2" as_json="$3" body="${4:-}" q out try=1 code _K2_CFG
-    q="token=$(_git_tools_q "$TOKEN")"
-    [ "$as_json" = "1" ] || q="${q}&format=text"
+    local method="$1" path="$2" as_json="$3" body="${4:-}" q="" out try=1 code _K2_CFG
+    [ "$as_json" = "1" ] || q="?format=text"
     while :; do
         _K2_CFG=""
-        _k2_cfg_add url "${BASE_URL}${path}?${q}"
+        _k2_cfg_add url "${BASE_URL}${path}${q}"
+        _k2_cfg_auth "$TOKEN"
         if [ "$method" = "GET" ]; then
             out="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 30 -w $'\n%{http_code}' 2>/dev/null; printf x)"
         else
@@ -210,10 +210,9 @@ _setup_send() {
         if [ "$method" = "GET" ] && [ "$code" = "503" ] && [[ "$out" == *'"state":"migrating"'* ]] && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
             try=$((try + 1)); sleep 1; continue
         fi
-        # A passport the daemon refused while restarting: once with the new one.
+        # A passport the daemon refused while restarting: once with the new
+        # one (the loop builds the header again from $TOKEN).
         if _cli_retry_with_healed_passport "${out%$'\n'*}"; then
-            q="token=$(_git_tools_q "$TOKEN")"
-            [ "$as_json" = "1" ] || q="${q}&format=text"
             continue
         fi
         break

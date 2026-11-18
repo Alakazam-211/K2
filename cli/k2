@@ -5185,7 +5185,8 @@ _daemon_systemctl() {
 }
 
 # POST a lifecycle route on the LOCAL daemon with the on-disk owner token
-# (query string, never argv). Prints the body; returns curl's status.
+# (an Authorization header in curl's config, never argv or the query).
+# Prints the body; returns curl's status.
 _daemon_local_post() {
     local path="$1" token="" _K2_CFG=""
     [ -f "$_daemon_token_file" ] && token=$(tr -d '[:space:]' < "$_daemon_token_file" 2>/dev/null)
@@ -5193,8 +5194,8 @@ _daemon_local_post() {
         echo "no owner token at $_daemon_token_file" >&2
         return 1
     fi
-    case "$path" in *\?*) path="${path}&token=${token}" ;; *) path="${path}?token=${token}" ;; esac
     _k2_cfg_add url "${BASE_URL}${path}"
+    _k2_cfg_auth "$token"
     _k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 30
 }
 
@@ -5490,12 +5491,12 @@ cmd_daemon_restart() {
         fi
         # Strip a trailing slash so we don't emit a double-slash URL.
         local base="${host%/}"
-        # OWNER-ONLY route: token rides the query string (the daemon's
-        # require_owner reads it there), no body.
+        # OWNER-ONLY route: the token rides an Authorization header, no body.
         local resp _K2_CFG=""
-        local q="token=${token}"
-        [ "$end_agents" = "1" ] && q="${q}&end_agents=1"
-        _k2_cfg_add url "${base}/cli/daemon/restart?${q}"
+        local q=""
+        [ "$end_agents" = "1" ] && q="?end_agents=1"
+        _k2_cfg_add url "${base}/cli/daemon/restart${q}"
+        _k2_cfg_auth "$token"
         resp=$(_k2_curl "$_K2_CFG" -s -X POST \
             --connect-timeout 5 --max-time 30 2>/dev/null) || true
         if [ -z "$resp" ]; then
@@ -5609,8 +5610,10 @@ else:
             ;;
         status)
             resp=$(cli_request "/cli/settings/get")
-            local boot
-            boot=$(_k2_curl "" -s --connect-timeout 3 --max-time 5 "${BASE_URL}/boot-status?token=${TOKEN}" 2>/dev/null || true)
+            local boot _K2_CFG=""
+            _k2_cfg_add url "${BASE_URL}/boot-status"
+            _k2_cfg_auth "$TOKEN"
+            boot=$(_k2_curl "$_K2_CFG" -s --connect-timeout 3 --max-time 5 2>/dev/null || true)
             printf '%s\n%s' "$resp" "$boot" | python3 -c '
 import json, sys
 lines = sys.stdin.read().split("\n", 1)
@@ -28750,30 +28753,19 @@ EOF
 # Pure bash + curl: on a fresh Mac `/usr/bin/python3` is one of Apple's
 # shims, so these verbs never touch python3 (or `urlencode`, which uses
 # it). The daemon renders the text (`?format=text`).
-_git_tools_q() {
-    # Percent-encode $1 for a query value, byte by byte.
-    local LC_ALL=C s="$1" out="" c i
-    for ((i = 0; i < ${#s}; i++)); do
-        c="${s:i:1}"
-        case "$c" in
-            [A-Za-z0-9._~-]) out+="$c" ;;
-            *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
-        esac
-    done
-    printf '%s' "$out"
-}
-
 _git_tools_send() {
     # _git_tools_send <GET|POST> <path> <as_json>: the body, then the HTTP code.
-    local method="$1" path="$2" as_json="$3" q
-    q="token=$(_git_tools_q "$TOKEN")"
-    [ "$as_json" = "1" ] || q="${q}&format=text"
+    local method="$1" path="$2" as_json="$3" q="" _K2_CFG=""
+    [ "$as_json" = "1" ] || q="?format=text"
+    # The URL and the token ride curl's config, never argv.
+    _k2_cfg_add url "${BASE_URL}${path}${q}"
+    _k2_cfg_auth "$TOKEN"
     # Through _k2_curl: a refused connect (a daemon restart) is retried (S5).
     if [ "$method" = "GET" ]; then
-        _k2_curl "" -s "${BASE_URL}${path}?${q}" --connect-timeout 5 --max-time 120 \
+        _k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 120 \
             -w $'\n%{http_code}' 2>/dev/null || true
     else
-        _k2_curl "" -s -X POST "${BASE_URL}${path}?${q}" --connect-timeout 5 --max-time 120 \
+        _k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 120 \
             -H "Content-Type: application/json" --data-raw '{}' \
             -w $'\n%{http_code}' 2>/dev/null || true
     fi
@@ -58612,12 +58604,12 @@ _setup_jfield() {
 # _setup_send <GET|POST> <path> <as_json> [<body>]: the answer, then a
 # newline and the HTTP code. The token rides curl's config, never argv.
 _setup_send() {
-    local method="$1" path="$2" as_json="$3" body="${4:-}" q out try=1 code _K2_CFG
-    q="token=$(_git_tools_q "$TOKEN")"
-    [ "$as_json" = "1" ] || q="${q}&format=text"
+    local method="$1" path="$2" as_json="$3" body="${4:-}" q="" out try=1 code _K2_CFG
+    [ "$as_json" = "1" ] || q="?format=text"
     while :; do
         _K2_CFG=""
-        _k2_cfg_add url "${BASE_URL}${path}?${q}"
+        _k2_cfg_add url "${BASE_URL}${path}${q}"
+        _k2_cfg_auth "$TOKEN"
         if [ "$method" = "GET" ]; then
             out="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 30 -w $'\n%{http_code}' 2>/dev/null; printf x)"
         else
@@ -58631,10 +58623,9 @@ _setup_send() {
         if [ "$method" = "GET" ] && [ "$code" = "503" ] && [[ "$out" == *'"state":"migrating"'* ]] && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
             try=$((try + 1)); sleep 1; continue
         fi
-        # A passport the daemon refused while restarting: once with the new one.
+        # A passport the daemon refused while restarting: once with the new
+        # one (the loop builds the header again from $TOKEN).
         if _cli_retry_with_healed_passport "${out%$'\n'*}"; then
-            q="token=$(_git_tools_q "$TOKEN")"
-            [ "$as_json" = "1" ] || q="${q}&format=text"
             continue
         fi
         break
@@ -75295,7 +75286,8 @@ cmd_fed() {
             local body
             body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3]}))' "$to" "$text" "$PROJECT")
             local _K2_CFG=""
-            _k2_cfg_add url "${BASE_URL}/cli/federation/send?token=${send_token}"
+            _k2_cfg_add url "${BASE_URL}/cli/federation/send"
+            _k2_cfg_auth "$send_token"
             _k2_cfg_add data-raw "$body"
             _k2_curl "$_K2_CFG" -s -X POST \
                 --connect-timeout 5 --max-time 60 \
@@ -75360,7 +75352,8 @@ print(json.dumps({want[1]: obj}))' "$token_in" "$sub") || exit 2
                     ;;
             esac
             local _K2_CFG="" resp
-            _k2_cfg_add url "${BASE_URL}/cli/federation/${route}?token=${owner_token}"
+            _k2_cfg_add url "${BASE_URL}/cli/federation/${route}"
+            _k2_cfg_auth "$owner_token"
             _k2_cfg_add data-raw "$body"
             resp=$(_k2_curl "$_K2_CFG" -s -X POST \
                 --connect-timeout 5 --max-time 30 \
@@ -75437,7 +75430,8 @@ print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv
             local body
             body=$(python3 -c 'import json,sys; print(json.dumps({"fingerprint":sys.argv[1],"sas":sys.argv[2]}))' "$fp" "$sas")
             local _K2_CFG=""
-            _k2_cfg_add url "${BASE_URL}/cli/federation/pair/confirm?token=${owner_token}"
+            _k2_cfg_add url "${BASE_URL}/cli/federation/pair/confirm"
+            _k2_cfg_auth "$owner_token"
             _k2_cfg_add data-raw "$body"
             _k2_curl "$_K2_CFG" -s -X POST \
                 --connect-timeout 5 --max-time 30 \
@@ -75576,7 +75570,8 @@ for p in peers:
                 exit 1
             fi
             local _K2_CFG=""
-            _k2_cfg_add url "${BASE_URL}/cli/federation/outbox?token=${owner_token}"
+            _k2_cfg_add url "${BASE_URL}/cli/federation/outbox"
+            _k2_cfg_auth "$owner_token"
             _k2_curl "$_K2_CFG" -s \
                 --connect-timeout 5 --max-time 30 2>/dev/null \
                 | python3 -c "import json,sys

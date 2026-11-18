@@ -65,6 +65,13 @@ export const useRoomRecordingsSheet = create<SheetState>((set) => ({
 
 // ── the gate ──────────────────────────────────────────────────────────
 
+/** Only an owner's or Admin's login lists the rooms' recordings (the daemon
+ *  refuses a Member and a Voice & Chat only login), so only they ask. No
+ *  role known (this computer's own server, the owner token) asks too. */
+export function mayListRecordings(role: string | null): boolean {
+  return role === null || role === 'owner' || role === 'admin'
+}
+
 /** True once `hostKey`'s server lists recordings for this login. Asked when
  *  the list mounts (it mounts each time it opens) and when `enabled` turns
  *  on, never on a re-render. */

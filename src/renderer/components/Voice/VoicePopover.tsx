@@ -20,7 +20,7 @@ import { isWebClient } from '@/lib/is-web'
 import { callDuration, roomStateText } from './voice-labels'
 import { VOICE_CHAT_LINE } from '@/lib/voice-chat-only'
 import { VoiceChatOnlyChip } from './VoiceChatOnlyChip'
-import { RoomRecordingsButton, useRoomRecordingsGate, useRoomRecordingsSheet } from './VoiceRoomRecordings'
+import { RoomRecordingsButton, mayListRecordings, useRoomRecordingsGate, useRoomRecordingsSheet } from './VoiceRoomRecordings'
 
 /** While a join runs, another Join (and "Leave and join") would leave it
  *  half way, so they wait. */
@@ -305,8 +305,9 @@ function ServerSection({
   onJoin: (server: VoiceServer, room: VoiceRoom) => void
 }): React.JSX.Element {
   const title = server.isWindow ? `This server · ${server.label}` : server.label
-  // This server's rooms: Recordings once it lists them for this login.
-  const recordings = useRoomRecordingsGate(server.hostKey, server.kind === 'live' && server.isWindow && !server.voiceChatOnly)
+  // This server's rooms: Recordings once it lists them for this login (an
+  // owner's or Admin's; a Member's would only be refused, so it isn't asked).
+  const recordings = useRoomRecordingsGate(server.hostKey, server.kind === 'live' && server.isWindow && mayListRecordings(server.role))
   const openRecordings = (room: VoiceRoom): void => {
     useRoomRecordingsSheet.getState().show({ hostKey: server.hostKey, roomId: room.id, roomName: room.name, occupants: room.occupants })
     voice.setPopoverOpen(false)

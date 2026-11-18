@@ -24,10 +24,15 @@ const h = vi.hoisted(() => ({
   cliGet: vi.fn(),
 }))
 
-vi.mock('@/lib/daemon-cli', async (orig) => ({
-  ...(await orig<typeof import('@/lib/daemon-cli')>()),
-  daemonCliGet: (...a: unknown[]) => h.cliGet(...a),
-}))
+// Only the recordings routes are answered here; every other GET is the real one.
+vi.mock('@/lib/daemon-cli', async (orig) => {
+  const real = await orig<typeof import('@/lib/daemon-cli')>()
+  return {
+    ...real,
+    daemonCliGet: (...a: unknown[]) =>
+      typeof a[1] === 'string' && a[1].startsWith('voice/') ? h.cliGet(...a) : (real.daemonCliGet as (...x: unknown[]) => Promise<unknown>)(...a),
+  }
+})
 
 vi.mock('@/stores/settings', () => {
   const state = (): { voiceRoomsPreview: boolean; videoRoomsPreview: boolean; setSection: (s: string) => void } => ({
@@ -764,6 +769,24 @@ describe('a room’s Recordings entry', () => {
     await waitFor(() => expect(screen.getByTestId('voice-recordings-empty').textContent).toBe('No recordings yet in this room.'))
     expect(screen.getByTestId('voice-recordings-heading').textContent).toBe('Recordings · Standup')
     expect(recordingsCalls().at(-1)?.[2]).toMatchObject({ room: 'room-1' })
+  })
+
+  it('a Member’s or a Voice & Chat only login asks nothing and gets no entry', async () => {
+    h.cliGet.mockReset()
+    h.cliGet.mockResolvedValue({ ok: true, recordings: [], next: null, canRead: false })
+    for (const role of ['member', 'voice_chat']) {
+      cleanup()
+      act(() => voice.store.setState({ popoverOpen: false }))
+      h.entries = { 'zed.k2.dev': entry('zed.k2.dev', { role }) }
+      h.lists = { 'zed.k2.dev': sewList }
+      act(() => voice.recompute())
+      render(<VoiceButton />)
+      fireEvent.click(screen.getByTestId('voice-button'))
+      await waitFor(() => expect(screen.getAllByTestId('voice-room')).toHaveLength(2))
+      await settle()
+      expect(screen.queryByTestId('voice-room-recordings')).toBeNull()
+    }
+    expect(recordingsCalls()).toHaveLength(0)
   })
 
   it('another server’s rooms get no entry and ask nothing', async () => {

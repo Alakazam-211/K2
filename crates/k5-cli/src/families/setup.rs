@@ -89,7 +89,7 @@ use std::path::Path;
 
 /// `k5 setup` and `k5 setup --json` (and every usage mistake, which sends
 /// nothing) are the binary's. Off, the shell answers them.
-pub const READ_NATIVE: bool = false;
+pub const READ_NATIVE: bool = true;
 
 /// The writes (`hide`, `show`, `skip`, `kessel`, `chief-of-staff`,
 /// `dismiss-offer`) are the binary's. Off, the shell answers them.

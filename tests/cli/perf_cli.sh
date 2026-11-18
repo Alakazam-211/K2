@@ -15,6 +15,10 @@
 #                                                        p95 handler time
 #   respond        k5 respond <line> (a host          <= 30 ms + the stub's
 #                  session: TCP, passport as Bearer)     p95 handler time
+#   inbox          k5 inbox (two items, formatted     <= 30 ms + the stub's
+#                  as the shell's Python does)           p95 handler time
+#   read           k5 read <workspace> (a terminal's  <= 30 ms + the stub's
+#                  last lines)                           p95 handler time
 #   fallthrough    k5 heartbeat list (a verb the      <= cli/k2's p95 for
 #                  shell answers)                        the same + 5 ms
 #   thread read    k5 thread read                     <= 40 ms: pending
@@ -65,6 +69,10 @@ work, binary, bash_cli = sys.argv[1], sys.argv[2], sys.argv[3]
 RUNS, WARM = 50, 3
 WHOAMI = json.dumps({"workspace": "acme", "role": "canonical", "address": "acme", "primary": "acme",
                      "session": "s1", "path": work + "/ws", "siblings": {"live": 1}}).encode()
+INBOX = json.dumps([{"id": "i1", "folder": "projects", "priority": "high", "title": "Perf item", "summary": "s"},
+                    {"id": "i2", "filename": "notes.md", "priority": "low"}]).encode()
+LINES = json.dumps({"lines": ["$ cargo test", "test result: ok. 3 passed"]}).encode()
+BODIES = {"/cli/whoami": WHOAMI, "/cli/heartbeat/list": b"[]", "/cli/inbox/list": INBOX, "/cli/terminal/read": LINES}
 handler_ns = []
 lock = threading.Lock()
 
@@ -76,7 +84,7 @@ class Stub(BaseHTTPRequestHandler):
         if n:
             self.rfile.read(n)
         path = self.path.split("?", 1)[0]
-        body = WHOAMI if path == "/cli/whoami" else b"[]" if path == "/cli/heartbeat/list" else b'{"ok":true}'
+        body = BODIES.get(path, b'{"ok":true}')
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -153,6 +161,8 @@ check_same("--version", [k5, "--version"], bash_argv("--version"))
 check_same("whoami", [k5, "whoami"], bash_argv("whoami"))
 check_same("done", [k5, "done"], bash_argv("done"))
 check_same("respond", [k5, "respond", "perf line"], bash_argv("respond", "perf line"))
+check_same("inbox", [k5, "inbox"], bash_argv("inbox"))
+check_same("read", [k5, "read", "acme"], bash_argv("read", "acme"))
 check_same("fallthrough (heartbeat list)", [k5, "heartbeat", "list"], bash_argv("heartbeat", "list"))
 
 results = []
@@ -183,10 +193,12 @@ def measure_native(name, words):
 measure_native("whoami", ["whoami"])
 measure_native("done", ["done"])
 measure_native("respond", ["respond", "perf line"])
+measure_native("inbox", ["inbox"])
+measure_native("read", ["read", "acme"])
 bash_ft = p95(timed(bash_argv("heartbeat", "list")))
 print(f"perf_cli: info: cli/k2 heartbeat list: p95 {bash_ft:.2f} ms (the fallthrough's base)")
 measure("k5 heartbeat list (fallthrough)", [k5, "heartbeat", "list"], bash_ft + 5.0, "cli/k2's p95 + 5 ms")
-for words in (["whoami"], ["done"], ["respond", "perf line"]):
+for words in (["whoami"], ["done"], ["respond", "perf line"], ["inbox"], ["read", "acme"]):
     bash_p95 = p95(timed(bash_argv(*words)))
     print(f"perf_cli: info: cli/k2 {words[0]}: p95 {bash_p95:.2f} ms (for comparison)")
 print("perf_cli: pending: k5 thread read <= 40 ms (R3.5: thread read is not native yet)")

@@ -3736,9 +3736,14 @@ pub const PASSWORD_CHANGE_REQUIRED: &str = "password_change_required";
 ///   [`PASSWORD_CHANGE_REQUIRED`], `mustChangePassword: true`,
 ///   `changeToken` (`k2chg_…`, 15 minutes, one use, only on
 ///   `POST /cli/skin/password/reset`), `changeExpiresAt`, `changePath`
-///   (K2's set-password page on this door) and `changeUrl` (the App's
-///   set-password page, or K2's, with the token in the `#fragment`) when
-///   there is one. A non-2xx so a server that doesn't know the shape fails
+///   (the route that takes it: `POST /cli/skin/password/reset {token,
+///   password}` on this door; 0.46.16, it named the set-password PAGE, which
+///   answers a POST with 405) and `changeUrl` (the App's own set-password
+///   page, or K2's on the box's front door, with the token in the
+///   `#fragment`) when there is one. An App with no URL of its own gets no
+///   `changeUrl` (0.46.16: K2's page sat on the server's host, a place an
+///   App's person has no business); its server's own form posts to
+///   `changePath`. A non-2xx so a server that doesn't know the shape fails
 ///   closed.
 /// - Form: `303` to K2's set-password page with the token in the fragment.
 ///
@@ -3776,13 +3781,12 @@ fn must_change_reply(form: bool, p: &skin::SkinPrincipal, app: Option<&str>) -> 
         };
     }
     // The App's own set-password page when it has one, else K2's on the
-    // box's front door (never an App's host); none: changePath only.
-    let page = skin::invites::settings(&app)
-        .ok()
-        .and_then(|st| st.set_password_url)
-        .or_else(|| crate::app_user_invites::k2_set_password_page().ok().flatten());
-    let change_url = page.map(|page| skin::invites::link_for(&page, &started.token));
-    let body = serde_json::json!({
+    // box's front door (never an App's host) for the box login or an App
+    // that has a URL; none: changePath only (0.46.16).
+    let page = skin::invites::settings(&app).ok().and_then(|st| st.set_password_url).or_else(|| {
+        app_has_url(&app).then(|| crate::app_user_invites::k2_set_password_page().ok().flatten()).flatten()
+    });
+    let mut body = serde_json::json!({
         "ok": false,
         "error": {
             "code": PASSWORD_CHANGE_REQUIRED,
@@ -3791,12 +3795,14 @@ fn must_change_reply(form: bool, p: &skin::SkinPrincipal, app: Option<&str>) -> 
         "mustChangePassword": true,
         "changeToken": started.token,
         "changeExpiresAt": started.expires_at,
-        "changePath": path,
-        "changeUrl": change_url,
+        "changePath": CHANGE_PASSWORD_ROUTE,
         "username": p.username,
         "app": app,
-    })
-    .to_string();
+    });
+    if let Some(page) = page {
+        body["changeUrl"] = serde_json::Value::String(skin::invites::link_for(&page, &started.token));
+    }
+    let body = body.to_string();
     debug_assert!(!body.contains("k2skn_"), "a must-change answer carries no pass");
     SkinLoginReply {
         response: CliResponse { status: "403 Forbidden", content_type: "application/json", body },
@@ -3806,9 +3812,29 @@ fn must_change_reply(form: bool, p: &skin::SkinPrincipal, app: Option<&str>) -> 
     }
 }
 
+/// Where a change token is spent: `POST {token, password}` (the must-change
+/// answer's `changePath`).
+pub const CHANGE_PASSWORD_ROUTE: &str = "/cli/skin/password/reset";
+
+/// Does App `app` have a URL of its own (a public origin: its label, a
+/// suite label, a live custom domain)? The box login (`host`) lives on the
+/// box's front door, so it counts. An App id that names no published
+/// service has none.
+fn app_has_url(app: &str) -> bool {
+    if app == skin::HOST_APP_ID {
+        return true;
+    }
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::get_by_id(&conn, app).ok().flatten()
+    };
+    row.is_some_and(|r| !crate::apps::origins::for_service(&r.id, &r.name).is_empty())
+}
+
 /// The hint on [`PASSWORD_CHANGE_REQUIRED`]: what the App's server does.
 pub const PASSWORD_CHANGE_REQUIRED_HINT: &str = "this person must choose a new password before signing in (someone else set this one): \
-send their browser to changeUrl; with no changeUrl, your own form posts {token: changeToken, password} to POST /cli/skin/password/reset. \
+send their browser to changeUrl; with no changeUrl, your own form posts {token: changeToken, password} to POST changePath (/cli/skin/password/reset). \
 Then they sign in with the new password (the token works once, for 15 minutes; signing in again gets a new one). \
 An App on an older @k2/server sees a failed login: update it (k2 app sdk add <app-folder>, then npm install).";
 

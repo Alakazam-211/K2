@@ -67,9 +67,9 @@ export interface AppGuestMustChange {
     mustChangePassword: true;
     /** One-time token (`k2chg_…`) for `POST /cli/skin/password/reset` `{token, password}`. */
     changeToken: string;
-    /** The App's own set-password page (`k2 app login settings <app> --set-password-url`), else K2's on the box's front door, with the token in the `#fragment`; null when there is neither. */
+    /** The App's own set-password page (`k2 app login settings <app> --set-password-url`), else K2's on the box's front door (the box login, or an App with a URL of its own), with the token in the `#fragment`; null when there is neither. */
     changeUrl: string | null;
-    /** K2's set-password page path on any K2 door (`/cli/skin/password/set`). */
+    /** Where your own form posts `{token: changeToken, password}` (`/cli/skin/password/reset`; K2 0.46.15 and older sent the set-password page path here). */
     changePath: string;
     /** When the change token ends, seconds since the epoch. */
     changeExpiresAt: number;

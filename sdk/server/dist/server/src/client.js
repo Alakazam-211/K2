@@ -60,7 +60,7 @@ function mustChangeOf(e) {
         mustChangePassword: true,
         changeToken: tok,
         changeUrl: typeof v.changeUrl === 'string' ? v.changeUrl : null,
-        changePath: typeof v.changePath === 'string' ? v.changePath : '/cli/skin/password/set',
+        changePath: typeof v.changePath === 'string' && v.changePath !== '/cli/skin/password/set' ? v.changePath : '/cli/skin/password/reset',
         changeExpiresAt: typeof v.changeExpiresAt === 'number' ? v.changeExpiresAt : 0,
         username: typeof v.username === 'string' ? v.username : '',
         app: typeof v.app === 'string' ? v.app : '',

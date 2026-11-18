@@ -525,7 +525,7 @@ describe('login: must change password (K2 0.46.6, catalog v37)', () => {
       mustChangePassword: true,
       changeToken: TOKEN,
       changeExpiresAt: 1_900_000_000,
-      changePath: '/cli/skin/password/set',
+      changePath: '/cli/skin/password/reset',
       changeUrl: `https://box.example/cli/skin/password/set#${TOKEN}`,
       username: 'dana',
       app: 'svc-jobs-1',
@@ -543,7 +543,7 @@ describe('login: must change password (K2 0.46.6, catalog v37)', () => {
       mustChangePassword: true,
       changeToken: TOKEN,
       changeUrl: `https://box.example/cli/skin/password/set#${TOKEN}`,
-      changePath: '/cli/skin/password/set',
+      changePath: '/cli/skin/password/reset',
       changeExpiresAt: 1_900_000_000,
       username: 'dana',
       app: 'svc-jobs-1',
@@ -559,7 +559,20 @@ describe('login: must change password (K2 0.46.6, catalog v37)', () => {
     const s = await k2.login({ username: 'dana', password: 'temp-pw' })
     if (!('mustChangePassword' in s)) throw new Error('expected must-change')
     expect(s.changeUrl).toBeNull()
-    expect(s.changePath).toBe('/cli/skin/password/set')
+    expect(s.changePath).toBe('/cli/skin/password/reset')
+  })
+
+  it('an App with no URL: no changeUrl key at all is null; an older K2 page path becomes the reset route', async () => {
+    const k2 = client()
+    answer = () => {
+      const a = mustChange({ changePath: '/cli/skin/password/set' })
+      delete (a.body as Record<string, unknown>).changeUrl
+      return a
+    }
+    const s = await k2.login({ username: 'dana', password: 'temp-pw' })
+    if (!('mustChangePassword' in s)) throw new Error('expected must-change')
+    expect(s.changeUrl).toBeNull()
+    expect(s.changePath).toBe('/cli/skin/password/reset')
   })
 
   it('a malformed must-change answer is a thrown error, never a login', async () => {

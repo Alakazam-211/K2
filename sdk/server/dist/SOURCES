@@ -5,7 +5,7 @@
 94afdf21fd3a89dc5c996672f42bdf0b566b884045672549e732b82bd025e867  sdk/server/src/activity.ts
 b2e4c9e8c3618af82a5bcf2cdddf1e298e5f19817f74187c4e517059d6dbcb91  sdk/server/src/auth.ts
 2033a0b1bef92e1edd96fcbb9be3feead61c43a78d5208441245303275f25436  sdk/server/src/chat.ts
-207d100ae4e75d1f2ea8e761dcbd2488a7017eeade40d4bc76484e1a9b4934bb  sdk/server/src/client.ts
+9010ffce85e125eed2a1da07fc1f078f56dd01722cec1704db4bfff2841c2434  sdk/server/src/client.ts
 b11130af85eca99bef24c5cb208a5f2e78c4c1bf19c71694f5b8b670aa2bfc30  sdk/server/src/errors.ts
 4ffb15f243d95b13d48acc4b27dd8aee21466dd3eb1dde95aa0acce6983818f5  sdk/server/src/generated/verbs.ts
 bfc2f66a6e264912f289ee64a011476761592fc2622801bea5184d8d713d42ad  sdk/server/src/index.ts

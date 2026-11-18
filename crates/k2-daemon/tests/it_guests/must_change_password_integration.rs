@@ -118,7 +118,9 @@ fn assert_must_change(r: &Raw, what: &str) -> String {
     assert!(v["error"]["hint"].as_str().expect("hint").contains("@k2/server"), "{what}: the hint tells an older App to update: {v}");
     assert_eq!((v["ok"].clone(), v["mustChangePassword"].clone()), (json!(false), json!(true)), "{what}: {v}");
     assert!(v.get("token").is_none() && v.get("refresh").is_none(), "{what}: {v}");
-    assert_eq!(v["changePath"], "/cli/skin/password/set", "{what}: {v}");
+    // 0.46.16: changePath is the route that takes the token (a POST to the
+    // set-password PAGE answers 405).
+    assert_eq!(v["changePath"], "/cli/skin/password/reset", "{what}: {v}");
     assert!(v["changeExpiresAt"].as_i64().is_some(), "{what}: {v}");
     let tok = v["changeToken"].as_str().expect("changeToken").to_string();
     assert!(tok.starts_with("k2chg_") && tok.len() == 6 + 64, "{what}: {tok}");
@@ -168,12 +170,30 @@ async fn an_owner_set_password_gets_no_pass_on_any_path_until_the_person_changes
     assert!(t_form.starts_with("k2chg_"), "{loc}");
     assert!(!r.body.contains("k2skn_"), "{}", r.body);
 
-    // With a front door, the answer carries K2's page with the token.
+    // With a front door: an App with no URL of its own gets no changeUrl
+    // (0.46.16: K2's page would sit on the server's host); its own form
+    // posts to changePath. The box login gets K2's page with the token.
     let door = format!("https://door{tag}.example.test");
     owner_post(port, "/cli/skin/front-door", json!({ "mode": "direct", "url": door, "apply": false })).await;
     let r = login_json(port, json!({ "username": dana, "password": temp, "app": app })).await;
     let t_last = assert_must_change(&r, "json with a front door");
-    assert_eq!(r.json()["changeUrl"], json!(format!("{door}/cli/skin/password/set#{t_last}")), "{}", r.body);
+    assert!(r.json().get("changeUrl").is_none(), "an App with no URL: no changeUrl: {}", r.body);
+    let erin = format!("erin{tag}");
+    owner_post(port, "/cli/skin/users", json!({ "username": erin, "password": temp })).await;
+    owner_post(port, "/cli/skin/roles/assign", json!({ "username": erin, "role": role })).await;
+    let r = login_json(port, json!({ "username": erin, "password": temp })).await;
+    let t_erin = assert_must_change(&r, "box login with a front door");
+    assert_eq!(r.json()["changeUrl"], json!(format!("{door}/cli/skin/password/set#{t_erin}")), "{}", r.body);
+    // changePath really takes the token (and the page path really doesn't).
+    let page_post = tokio::task::spawn_blocking(move || {
+        let b = json!({ "token": "k2chg_x", "password": "p" }).to_string();
+        raw(port, "POST", "/cli/skin/password/set", "application/json", &b, "")
+    })
+    .await
+    .unwrap();
+    assert_eq!(page_post.status, 405, "the page is no POST target: {}", page_post.body);
+    let r = reset(port, &t_erin, "erins-own-pw-1").await;
+    assert_eq!(r.status, 200, "changePath takes the token: {}", r.body);
 
     // Only the newest token works; the change token is no pass.
     for old in [&t_json, &t_dev, &t_form] {

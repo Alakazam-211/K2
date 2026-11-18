@@ -10,14 +10,18 @@
 //! 1. The bundled copy, when the binary sits in a packaged macOS app:
 //!    `cli_install`'s layout, `<X>.app/Contents/Resources/_up_/cli/k2` for
 //!    an executable in `<X>.app/Contents/MacOS/`. It counts only when its
-//!    sha256 is this build's. Nowhere else does the layout name a copy,
+//!    BLAKE3 is this build's. Nowhere else does the layout name a copy,
 //!    so elsewhere there is none.
-//! 2. The cache, `<K2 home>/run/cli/k2-<first 12 of the sha256>.sh`
+//! 2. The cache, `<K2 home>/run/cli/k2-<first 12 of the BLAKE3>.sh`
 //!    (folder 0700, file 0755). It is hashed again before every use and
 //!    replaced when it doesn't match.
 //! 3. Otherwise the copy packed into the binary is written to the cache
 //!    (to a temporary name in the same folder, then renamed) and runs
 //!    from there.
+//!
+//! The check is BLAKE3 ([`embedded::SCRIPT_BLAKE3`], from `build.rs`):
+//! the whole file, every run. Nothing outside the binary reads that
+//! digest or the cache file's name.
 //!
 //! A copy that doesn't match is never run. The copy is opened once, and
 //! the open file is both what is hashed and what bash reads: on Unix bash
@@ -45,7 +49,6 @@ use crate::embedded;
 use crate::exit::Exit;
 use crate::home::HomeError;
 use flate2::read::GzDecoder;
-use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
@@ -53,49 +56,40 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A packed copy of the shell CLI: gzip bytes, and the sha256 (lowercase
+/// A packed copy of the shell CLI: gzip bytes, and the BLAKE3 (lowercase
 /// hex) of what they unpack to.
 #[derive(Debug, Clone, Copy)]
 pub struct Packed<'a> {
     pub gz: &'a [u8],
-    pub sha256: &'a str,
+    pub blake3: &'a str,
 }
 
 /// The copy this binary carries.
 pub fn embedded() -> Packed<'static> {
-    Packed { gz: embedded::SCRIPT_GZ, sha256: embedded::SCRIPT_SHA256 }
+    Packed { gz: embedded::SCRIPT_GZ, blake3: embedded::SCRIPT_BLAKE3 }
 }
 
 impl Packed<'_> {
-    /// The cache file's name: `k2-<first 12 of the sha256>.sh`.
+    /// The cache file's name: `k2-<first 12 of the BLAKE3>.sh`.
     pub fn cache_name(&self) -> String {
-        format!("k2-{}.sh", &self.sha256[..12])
+        format!("k2-{}.sh", &self.blake3[..12])
     }
 
-    /// The script, unpacked, when it matches its sha256.
+    /// The script, unpacked, when it matches its BLAKE3.
     pub fn unpack(&self) -> Result<Vec<u8>, FrontError> {
         let mut out = Vec::new();
         GzDecoder::new(self.gz).read_to_end(&mut out).map_err(|e| FrontError::Packed(e.to_string()))?;
-        let got = sha256_hex(&out);
-        if got != self.sha256 {
-            return Err(FrontError::Packed(format!("it unpacks to sha256 {got}, not {}", self.sha256)));
+        let got = blake3_hex(&out);
+        if got != self.blake3 {
+            return Err(FrontError::Packed(format!("it unpacks to BLAKE3 {got}, not {}", self.blake3)));
         }
         Ok(out)
     }
 }
 
-/// The sha256 of `bytes`, in lowercase hex.
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    hex(&Sha256::digest(bytes))
-}
-
-fn hex(digest: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(digest.len() * 2);
-    for b in digest {
-        write!(s, "{b:02x}").expect("write to a String");
-    }
-    s
+/// The BLAKE3 of `bytes`, in lowercase hex.
+pub fn blake3_hex(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
 }
 
 /// The copy of the shell CLI that runs: its path, and the file opened at
@@ -107,7 +101,7 @@ pub struct Script {
     pub file: fs::File,
 }
 
-/// `path` opened, when it is a file whose sha256 is `want`, wound back to
+/// `path` opened, when it is a file whose BLAKE3 is `want`, wound back to
 /// the start. With `follow_links` false a link is no match (on Unix it is
 /// not even opened: `O_NOFOLLOW`). What is hashed is the open file, so it
 /// is the same bytes whatever is put at `path` afterwards.
@@ -130,9 +124,9 @@ fn open_matching(path: &Path, want: &str, follow_links: bool) -> Option<fs::File
     if !file.metadata().ok()?.is_file() {
         return None;
     }
-    let mut hasher = Sha256::new();
-    io::copy(&mut file, &mut hasher).ok()?;
-    if hex(&hasher.finalize()) != want {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(&mut file).ok()?;
+    if hasher.finalize().to_hex().as_str() != want {
         return None;
     }
     file.seek(SeekFrom::Start(0)).ok()?;
@@ -149,7 +143,7 @@ pub enum FrontError {
     Cache { path: PathBuf, err: io::Error },
     /// The cache file was written but doesn't read back as this build's.
     CacheMismatch { path: PathBuf },
-    /// The packed copy doesn't unpack to its sha256: a broken build.
+    /// The packed copy doesn't unpack to its BLAKE3: a broken build.
     Packed(String),
     /// No bash in any of the places looked in.
     NoBash { looked: Vec<PathBuf> },
@@ -230,7 +224,7 @@ pub fn script(
     k2_home: impl FnOnce() -> Result<PathBuf, HomeError>,
 ) -> Result<Script, FrontError> {
     if let Some(copy) = bundled {
-        if let Some(file) = open_matching(copy, packed.sha256, true) {
+        if let Some(file) = open_matching(copy, packed.blake3, true) {
             return Ok(Script { path: copy.to_path_buf(), file });
         }
     }
@@ -239,18 +233,18 @@ pub fn script(
 }
 
 /// The cache copy in `dir`, made private first, open. A plain file whose
-/// sha256 is this build's is kept; anything else (missing, changed, a
+/// BLAKE3 is this build's is kept; anything else (missing, changed, a
 /// link, a folder) is replaced from the packed copy, which is checked
 /// before it is written and read back after.
 pub fn cached(packed: &Packed<'_>, dir: &Path) -> Result<Script, FrontError> {
     private_dir(dir)?;
     let path = dir.join(packed.cache_name());
-    if let Some(file) = open_matching(&path, packed.sha256, false) {
+    if let Some(file) = open_matching(&path, packed.blake3, false) {
         return Ok(Script { path, file });
     }
     let bytes = packed.unpack()?;
     write_replacing(dir, &path, &bytes).map_err(|err| FrontError::Cache { path: path.clone(), err })?;
-    match open_matching(&path, packed.sha256, false) {
+    match open_matching(&path, packed.blake3, false) {
         Some(file) => Ok(Script { path, file }),
         None => Err(FrontError::CacheMismatch { path }),
     }
@@ -501,15 +495,15 @@ mod tests {
 
     struct Fixture {
         gz: Vec<u8>,
-        sha: String,
+        blake: String,
     }
 
     impl Fixture {
         fn new(bytes: &[u8]) -> Fixture {
-            Fixture { gz: gzip(bytes), sha: sha256_hex(bytes) }
+            Fixture { gz: gzip(bytes), blake: blake3_hex(bytes) }
         }
         fn packed(&self) -> Packed<'_> {
-            Packed { gz: &self.gz, sha256: &self.sha }
+            Packed { gz: &self.gz, blake3: &self.blake }
         }
     }
 
@@ -528,7 +522,7 @@ mod tests {
     #[test]
     fn the_cache_name_is_the_hash_s_first_12() {
         let f = Fixture::new(SCRIPT);
-        assert_eq!(f.packed().cache_name(), format!("k2-{}.sh", &f.sha[..12]));
+        assert_eq!(f.packed().cache_name(), format!("k2-{}.sh", &f.blake[..12]));
         assert_eq!(cache_dir(Path::new("/h/.k2")), Path::new("/h/.k2/run/cli"));
     }
 
@@ -539,7 +533,46 @@ mod tests {
         let want = fs::read(&repo).unwrap_or_else(|e| panic!("read {}: {e}", repo.display()));
         let got = embedded().unpack().expect("the embedded copy unpacks");
         assert!(got == want, "the embedded copy differs from {}", repo.display());
-        assert_eq!(embedded().sha256, sha256_hex(&want));
+        assert_eq!(embedded().blake3, blake3_hex(&want));
+    }
+
+    /// The hex is BLAKE3's own: the reference vectors for "" and "abc".
+    #[test]
+    fn the_digest_is_blake3() {
+        assert_eq!(blake3_hex(b""), "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262");
+        assert_eq!(blake3_hex(b"abc"), "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85");
+    }
+
+    /// The digest built into the binary is the BLAKE3 of this checkout's
+    /// `cli/k2`, worked out here; and a copy one byte off, at the start, in
+    /// the middle or at the end, is never what runs: not from the cache
+    /// (it is replaced with the real one) and not from a bundled copy.
+    #[test]
+    fn the_built_in_blake3_is_cli_k2_s_and_a_one_byte_change_is_refused() {
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
+        let real = fs::read(&repo).unwrap_or_else(|e| panic!("read {}: {e}", repo.display()));
+        assert_eq!(embedded::SCRIPT_BLAKE3, blake3::hash(&real).to_hex().as_str());
+        let packed = embedded();
+        for at in [0, real.len() / 2, real.len() - 1] {
+            let mut off = real.clone();
+            off[at] ^= 0x01;
+            assert_ne!(blake3_hex(&off), packed.blake3, "byte {at}");
+            let dir = scratch("onebyte");
+            let path = dir.join(packed.cache_name());
+            fs::write(&path, &off).unwrap();
+            let got = cached(&packed, &dir).unwrap();
+            assert_eq!(got.path, path);
+            assert!(read_all(got.file) == real, "byte {at}: the changed cache file was run");
+            assert!(fs::read(&path).unwrap() == real, "byte {at}: the changed cache file was not replaced");
+            let bundled = dir.join("bundled-k2");
+            fs::write(&bundled, &off).unwrap();
+            let home = dir.join("home");
+            let got = script(&packed, Some(&bundled), || Ok(home.clone())).unwrap();
+            assert_eq!(got.path, cache_dir(&home).join(packed.cache_name()), "byte {at}: the changed bundled copy was used");
+            assert!(read_all(got.file) == real);
+            assert!(fs::read(&bundled).unwrap() == off, "byte {at}: the bundled copy was touched");
+            fs::remove_dir_all(&dir).unwrap();
+        }
     }
 
     #[test]
@@ -636,12 +669,12 @@ mod tests {
     fn a_packed_copy_that_does_not_match_is_never_written() {
         let dir = scratch("badpack");
         let f = Fixture::new(SCRIPT);
-        let wrong = sha256_hex(b"something else");
-        let bad = Packed { gz: &f.gz, sha256: &wrong };
+        let wrong = blake3_hex(b"something else");
+        let bad = Packed { gz: &f.gz, blake3: &wrong };
         let err = cached(&bad, &dir).expect_err("a mismatch is an error");
         assert!(matches!(err, FrontError::Packed(_)), "{err:?}");
         assert!(!dir.join(bad.cache_name()).exists());
-        let not_gzip = Packed { gz: b"not gzip", sha256: &f.sha };
+        let not_gzip = Packed { gz: b"not gzip", blake3: &f.blake };
         assert!(matches!(not_gzip.unpack(), Err(FrontError::Packed(_))));
         fs::remove_dir_all(&dir).unwrap();
     }

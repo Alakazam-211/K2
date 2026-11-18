@@ -39,8 +39,8 @@ fn script_version() -> String {
     line.strip_suffix('"').expect("the version is quoted").to_string()
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    k5_cli::fallthrough::sha256_hex(bytes)
+fn blake3_hex(bytes: &[u8]) -> String {
+    k5_cli::fallthrough::blake3_hex(bytes)
 }
 
 static N: AtomicUsize = AtomicUsize::new(0);
@@ -181,8 +181,8 @@ fn a_verb_falls_through_and_answers_as_the_shell_does() {
     // The cache: one file named by the hash, 0755, in a 0700 folder, and
     // it is cli/k2.
     let script = std::fs::read(cli_k2()).unwrap();
-    let sha = sha256_hex(&script);
-    let file = rig.cache().join(format!("k2-{}.sh", &sha[..12]));
+    let digest = blake3_hex(&script);
+    let file = rig.cache().join(format!("k2-{}.sh", &digest[..12]));
     assert_eq!(std::fs::read(&file).unwrap_or_else(|e| panic!("read {}: {e}", file.display())), script);
     assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o755);
     assert_eq!(std::fs::metadata(rig.cache()).unwrap().permissions().mode() & 0o777, 0o700);

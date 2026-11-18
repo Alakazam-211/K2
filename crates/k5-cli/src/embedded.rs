@@ -1,5 +1,5 @@
 //! The shell CLI the binary carries: `cli/k2` from this checkout, packed
-//! by `build.rs` (gzipped, its sha256 and its version).
+//! by `build.rs` (gzipped, its BLAKE3 and sha256, and its version).
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
@@ -28,7 +28,9 @@ mod tests {
         // What the install code reads in the binary's bytes is this version.
         assert_eq!(k2_client::cli_install::BINARY_VERSION_MARKER, MARKER_PREFIX);
         assert_eq!(k2_client::cli_install::binary_versions(VERSION_MARKER.as_bytes()), vec![SCRIPT_VERSION.to_string()]);
-        assert_eq!(SCRIPT_SHA256.len(), 64);
-        assert!(SCRIPT_SHA256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)), "{SCRIPT_SHA256}");
+        for hex in [SCRIPT_BLAKE3, SCRIPT_SHA256] {
+            assert_eq!(hex.len(), 64, "{hex}");
+            assert!(hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)), "{hex}");
+        }
     }
 }

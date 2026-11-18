@@ -21,12 +21,15 @@ path = "src/main.rs"
 # on numbers and key order, so it is our own. k2-client holds the one
 # registry of setting names, the brand's names and the K2 home's paths; the
 # CLI reads them there and keeps no copy. flate2 unpacks the shell CLI the
-# binary carries and sha2 checks it. All three are already in the
-# workspace, so Cargo.lock gains no crate.
+# binary carries and blake3 checks it, in full, every run, before it runs:
+# on an x86_64 CPU without SHA instructions sha256 took about 21 ms of each
+# run for the 5.6 MB script, BLAKE3 under 2 ms (tests/cli/perf_cli.sh).
+# blake3 has k2-daemon's requirement and its default features. All three
+# are already in the workspace, so Cargo.lock gains no crate.
 [dependencies]
+blake3 = "1"
 flate2 = "1.1.9"
 k2-client = { path = "../k2-client" }
-sha2 = "0.10"
 
 # libc (Unix): a broken pipe on stdout ends the process by SIGPIPE, as the
 # shell CLI's does (src/out/mod.rs); the notice test opens a pseudo
@@ -36,7 +39,9 @@ sha2 = "0.10"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# build.rs packs cli/k2 into the binary: gzip, and its sha256.
+# build.rs packs cli/k2 into the binary: gzip, its BLAKE3 (what the front
+# checks) and its sha256.
 [build-dependencies]
+blake3 = "1"
 flate2 = "1.1.9"
 sha2 = "0.10"

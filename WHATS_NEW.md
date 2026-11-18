@@ -41,6 +41,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Agent messages
 - **Thread messages sent to Codex agents are no longer typed in twice or reported as 'never read in' when the agent took them, and a working Codex agent's last-active time now keeps moving.**
 
+### Settings
+- **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.
+
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 
 ### Threads and Home

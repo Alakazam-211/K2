@@ -106,7 +106,8 @@ impl<L: LoginSource> Clone for K2Provider<L> {
 
 impl<L: LoginSource> K2Provider<L> {
     pub fn new(logins: L) -> Result<Self, reqwest::Error> {
-        let http = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT).timeout(JOIN_TIMEOUT).build()?;
+        // K2 never sends a request to its own server through a proxy.
+        let http = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT).timeout(JOIN_TIMEOUT).no_proxy().build()?;
         Ok(Self { logins: std::sync::Arc::new(logins), http, calls: Default::default() })
     }
 

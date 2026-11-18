@@ -53,6 +53,8 @@ pub async fn remote_boot_probe(
             // guarantees it can't coalesce onto a shared h2 connection at
             // the tunnel edge — the exact mechanism that wedged the webview.
             .http1_only()
+            // K2 never sends a request to its own server through a proxy.
+            .no_proxy()
             .timeout(Duration::from_secs(4))
             .build()
             .map_err(|e| format!("build probe client: {e}"))?;

@@ -6136,7 +6136,7 @@ cmd_daemon_install() {
                 echo "  from a signed GitHub release ($_DAEMON_FIRST_U2_VERSION or newer). Minisign-verifies"
                 echo "  the binary with the embedded K2 update keys before installing."
                 echo ""
-                echo "  --version       install a specific release tag (default: latest)."
+                echo "  --version       install a specific release, 0.46.7 or v0.46.7 (default: latest)."
                 echo "                  $_DAEMON_FIRST_U2_VERSION or newer; an OLDER release than the one installed"
                 echo "                  is allowed here on purpose (a local, explicit action). The"
                 echo "                  daemon's own self-update refuses a downgrade unless the"
@@ -6155,6 +6155,10 @@ cmd_daemon_install() {
             *) echo "k2 daemon install: unknown argument: $1" >&2; return 2 ;;
         esac
     done
+
+    # A release is named with or without its tag's v: 0.46.7 and v0.46.7
+    # are the same release (the URL template adds the v).
+    version="${version#v}"
 
     local bin_dir_given=0
     [ -n "$bin_dir" ] && bin_dir_given=1

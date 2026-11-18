@@ -105,7 +105,8 @@ fn native(noun: &Noun, args: &[OsString]) -> Route {
         };
     }
     if noun.names("study") {
-        return pages::study(words.get(1..).unwrap_or_default()).map_or(Route::Fallthrough, Route::Study);
+        return pages::study(words.get(1..).unwrap_or_default())
+            .map_or(Route::Fallthrough, Route::Study);
     }
     if noun.names("cli") {
         return match words.get(1..).unwrap_or_default() {
@@ -416,7 +417,10 @@ mod tests {
                 assert_eq!(native(row(w), &args(line)), want, "{line:?}");
             }
             let page = native(row(w), &args(&[w, "--help"]));
-            assert!(matches!(page, Route::Help(f) if f.page == w), "{w} --help: {page:?}");
+            assert!(
+                matches!(page, Route::Help(f) if f.page == w),
+                "{w} --help: {page:?}"
+            );
             for line in [&[w, "list", "-h"][..], &[w, "x", "--help"]] {
                 assert_eq!(native(row(w), &args(line)), Route::Fallthrough, "{line:?}");
             }
@@ -516,30 +520,64 @@ mod tests {
     #[test]
     fn the_study_forms() {
         assert_eq!(route(&args(&["study"])), Route::Study(Study::Catalog));
-        assert_eq!(route(&args(&["study", "list"])), Route::Study(Study::Catalog));
+        assert_eq!(
+            route(&args(&["study", "list"])),
+            Route::Study(Study::Catalog)
+        );
         assert_eq!(route(&args(&["study", "-h"])), Route::Study(Study::Usage));
-        assert_eq!(route(&args(&["study", "errors", "--json"])), Route::Study(Study::Page { topic: "errors", json: true }));
-        assert_eq!(route(&args(&["study", "cron"])), Route::Study(Study::Page { topic: "heartbeats", json: false }));
+        assert_eq!(
+            route(&args(&["study", "errors", "--json"])),
+            Route::Study(Study::Page {
+                topic: "errors",
+                json: true
+            })
+        );
+        assert_eq!(
+            route(&args(&["study", "cron"])),
+            Route::Study(Study::Page {
+                topic: "heartbeats",
+                json: false
+            })
+        );
         // The shell's: the list as JSON, unknown and bash topics, errors.
-        for shell in [&["study", "--json"][..], &["study", "nope"], &["study", "app-api"], &["study", "errors", "db"], &["study", "--x"]] {
+        for shell in [
+            &["study", "--json"][..],
+            &["study", "nope"],
+            &["study", "app-api"],
+            &["study", "errors", "db"],
+            &["study", "--x"],
+        ] {
             assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
         }
     }
 
     #[test]
     fn the_help_forms() {
-        let Route::Help(form) = route(&args(&["mail", "send", "--help"])) else { panic!("mail send --help is not a page") };
+        let Route::Help(form) = route(&args(&["mail", "send", "--help"])) else {
+            panic!("mail send --help is not a page")
+        };
         assert_eq!(form.page, "mail/send");
         assert!(matches!(route(&args(&["help", "mail"])), Route::Help(f) if f.page == "mail"));
         // A native row keeps its own help; anything not exactly a form is
         // the shell's.
         assert_eq!(route(&args(&["cli", "--help"])), Route::CliHelp);
-        for shell in [&["--help"][..], &["help"], &[], &["mail", "send", "x", "--help"], &["help", "nope"], &["chat", "--help"]] {
+        for shell in [
+            &["--help"][..],
+            &["help"],
+            &[],
+            &["mail", "send", "x", "--help"],
+            &["help", "nope"],
+            &["chat", "--help"],
+        ] {
             assert_eq!(route(&args(shell)), Route::Fallthrough, "{shell:?}");
         }
         for form in text::HELP_FORMS {
             let argv: Vec<OsString> = form.argv.iter().map(OsString::from).collect();
-            assert!(matches!(route(&argv), Route::Help(f) if std::ptr::eq(f, form)), "{:?}", form.argv);
+            assert!(
+                matches!(route(&argv), Route::Help(f) if std::ptr::eq(f, form)),
+                "{:?}",
+                form.argv
+            );
         }
     }
 

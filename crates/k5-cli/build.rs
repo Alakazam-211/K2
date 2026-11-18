@@ -92,13 +92,16 @@ fn text(manifest: &Path, out: &Path) {
     for (name, list) in [("STUDY", &study), ("HELP", &help)] {
         writeln!(rs, "pub static {name}: &[(&str, &str)] = &[").expect("write to a String");
         for (key, path) in list.iter() {
-            let path = path.to_str().unwrap_or_else(|| panic!("not UTF-8: {}", path.display()));
+            let path = path
+                .to_str()
+                .unwrap_or_else(|| panic!("not UTF-8: {}", path.display()));
             writeln!(rs, "    ({key:?}, include_str!({path:?})),").expect("write to a String");
         }
         rs.push_str("];\n");
     }
 
-    let list = std::fs::read_to_string(&native).unwrap_or_else(|e| panic!("read {}: {e}", native.display()));
+    let list = std::fs::read_to_string(&native)
+        .unwrap_or_else(|e| panic!("read {}: {e}", native.display()));
     rs.push_str("pub static HELP_FORMS: &[HelpForm] = &[\n");
     for (n, line) in list.lines().enumerate() {
         if line.starts_with('#') || line.is_empty() {
@@ -106,17 +109,33 @@ fn text(manifest: &Path, out: &Path) {
         }
         let at = || format!("{}:{}", native.display(), n + 1);
         let parts: Vec<&str> = line.split('|').collect();
-        let [argv, page, stream, code] = parts[..] else { panic!("{}: not <argv>|<page>|<out or err>|<code>: {line:?}", at()) };
-        assert!(help.iter().any(|(k, _)| k == page), "{}: no cli/text/help/{page}.txt", at());
+        let [argv, page, stream, code] = parts[..] else {
+            panic!("{}: not <argv>|<page>|<out or err>|<code>: {line:?}", at())
+        };
+        assert!(
+            help.iter().any(|(k, _)| k == page),
+            "{}: no cli/text/help/{page}.txt",
+            at()
+        );
         let stderr = match stream {
             "out" => false,
             "err" => true,
             _ => panic!("{}: the stream is out or err, not {stream:?}", at()),
         };
-        let code: u8 = code.parse().unwrap_or_else(|_| panic!("{}: the exit code is not a number: {code:?}", at()));
+        let code: u8 = code
+            .parse()
+            .unwrap_or_else(|_| panic!("{}: the exit code is not a number: {code:?}", at()));
         let words: Vec<&str> = argv.split(' ').collect();
-        assert!(words.iter().all(|w| !w.is_empty()), "{}: an empty word in {argv:?}", at());
-        writeln!(rs, "    HelpForm {{ argv: &{words:?}, page: {page:?}, stderr: {stderr}, code: {code} }},").expect("write to a String");
+        assert!(
+            words.iter().all(|w| !w.is_empty()),
+            "{}: an empty word in {argv:?}",
+            at()
+        );
+        writeln!(
+            rs,
+            "    HelpForm {{ argv: &{words:?}, page: {page:?}, stderr: {stderr}, code: {code} }},"
+        )
+        .expect("write to a String");
     }
     rs.push_str("];\n");
     let rs_path = out.join("text.rs");
@@ -131,14 +150,29 @@ fn pages(dir: &Path) -> Vec<(String, PathBuf)> {
     while let Some(d) = todo.pop() {
         let entries = std::fs::read_dir(&d).unwrap_or_else(|e| panic!("read {}: {e}", d.display()));
         for entry in entries {
-            let path = entry.unwrap_or_else(|e| panic!("read {}: {e}", d.display())).path();
+            let path = entry
+                .unwrap_or_else(|e| panic!("read {}: {e}", d.display()))
+                .path();
             if path.is_dir() {
                 todo.push(path);
             } else if path.extension().is_some_and(|x| x == "txt") {
-                let rel = path.strip_prefix(dir).expect("under the folder").with_extension("");
-                let words: Vec<&str> =
-                    rel.components().map(|c| c.as_os_str().to_str().unwrap_or_else(|| panic!("not UTF-8: {}", path.display()))).collect();
-                found.push((words.join("/"), path.canonicalize().unwrap_or_else(|e| panic!("{}: {e}", path.display()))));
+                let rel = path
+                    .strip_prefix(dir)
+                    .expect("under the folder")
+                    .with_extension("");
+                let words: Vec<&str> = rel
+                    .components()
+                    .map(|c| {
+                        c.as_os_str()
+                            .to_str()
+                            .unwrap_or_else(|| panic!("not UTF-8: {}", path.display()))
+                    })
+                    .collect();
+                found.push((
+                    words.join("/"),
+                    path.canonicalize()
+                        .unwrap_or_else(|e| panic!("{}: {e}", path.display())),
+                ));
             }
         }
     }

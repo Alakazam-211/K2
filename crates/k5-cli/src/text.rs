@@ -61,7 +61,9 @@ mod tests {
         let mut out = BTreeMap::new();
         let mut todo = vec![dir.to_path_buf()];
         while let Some(d) = todo.pop() {
-            for entry in std::fs::read_dir(&d).unwrap_or_else(|e| panic!("read {}: {e}", d.display())) {
+            for entry in
+                std::fs::read_dir(&d).unwrap_or_else(|e| panic!("read {}: {e}", d.display()))
+            {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
                     todo.push(path);
@@ -91,9 +93,16 @@ mod tests {
             "cli/text/{which}: on disk only {only_disk:?}, embedded only {only_here:?} (a stale build)"
         );
         for (key, bytes) in &disk {
-            assert!(embedded[key] == *bytes, "cli/text/{which}/{key}.txt differs from the embedded copy (a stale build)");
+            assert!(
+                embedded[key] == *bytes,
+                "cli/text/{which}/{key}.txt differs from the embedded copy (a stale build)"
+            );
         }
-        assert!(disk.len() > 50, "only {} files under cli/text/{which}", disk.len());
+        assert!(
+            disk.len() > 50,
+            "only {} files under cli/text/{which}",
+            disk.len()
+        );
     }
 
     /// A build that missed a change to cli/text can't pass: the key set is
@@ -112,10 +121,21 @@ mod tests {
                 assert_eq!(find(list, key), Some(*page), "{key}");
             }
         }
-        assert_eq!(study("errors"), STUDY.iter().find(|(k, _)| *k == "errors").map(|(_, v)| *v));
-        assert_eq!(help("mail/send"), HELP.iter().find(|(k, _)| *k == "mail/send").map(|(_, v)| *v));
+        assert_eq!(
+            study("errors"),
+            STUDY.iter().find(|(k, _)| *k == "errors").map(|(_, v)| *v)
+        );
+        assert_eq!(
+            help("mail/send"),
+            HELP.iter()
+                .find(|(k, _)| *k == "mail/send")
+                .map(|(_, v)| *v)
+        );
         assert_eq!(study("nope"), None);
-        assert_eq!(help("mail"), HELP.iter().find(|(k, _)| *k == "mail").map(|(_, v)| *v));
+        assert_eq!(
+            help("mail"),
+            HELP.iter().find(|(k, _)| *k == "mail").map(|(_, v)| *v)
+        );
         assert_eq!(help("mail/"), None);
     }
 
@@ -125,11 +145,27 @@ mod tests {
     fn the_forms_are_the_list_on_disk() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/help_native.txt");
         let text = std::fs::read_to_string(&path).unwrap();
-        let rows: Vec<&str> = text.lines().filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
-        assert_eq!(rows.len(), HELP_FORMS.len(), "a stale build of {}", path.display());
+        let rows: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect();
+        assert_eq!(
+            rows.len(),
+            HELP_FORMS.len(),
+            "a stale build of {}",
+            path.display()
+        );
         for (row, form) in rows.iter().zip(HELP_FORMS) {
             let stream = if form.stderr { "err" } else { "out" };
-            assert_eq!(*row, format!("{}|{}|{stream}|{}", form.argv.join(" "), form.page, form.code));
+            assert_eq!(
+                *row,
+                format!(
+                    "{}|{}|{stream}|{}",
+                    form.argv.join(" "),
+                    form.page,
+                    form.code
+                )
+            );
             assert!(help(form.page).is_some(), "{row}");
             let first = help_form(form.argv).unwrap();
             assert!(std::ptr::eq(first, form), "{row} is there twice");

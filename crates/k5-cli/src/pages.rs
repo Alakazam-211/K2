@@ -79,7 +79,11 @@ pub fn study(rest: &[&str]) -> Option<Study> {
     if topic.is_empty() || topic == "list" {
         return (!json).then_some(Study::Catalog);
     }
-    let topic = if HEARTBEAT_ALIASES.contains(&topic) { "heartbeats" } else { topic };
+    let topic = if HEARTBEAT_ALIASES.contains(&topic) {
+        "heartbeats"
+    } else {
+        topic
+    };
     let topic = match topic {
         "skins" => "skins",
         "llm-accounts" => "llm-accounts",
@@ -210,7 +214,9 @@ pub fn help_page(form: &'static HelpForm, p: &Prelude) -> Option<Page> {
     if !(p.port && p.token) || (p.hook_sock && !open_tool(form)) {
         return None;
     }
-    let exit = Exit::ALL.into_iter().find(|e| e.code() == i32::from(form.code))?;
+    let exit = Exit::ALL
+        .into_iter()
+        .find(|e| e.code() == i32::from(form.code))?;
     Some(Page {
         text: text::help(form.page)?.into(),
         stderr: form.stderr,
@@ -224,7 +230,9 @@ mod tests {
     use std::path::Path;
 
     fn src(file: &str) -> String {
-        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src").join(file);
+        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/src")
+            .join(file);
         std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
     }
 
@@ -237,14 +245,24 @@ mod tests {
         assert_eq!(study(&[]), Some(Study::Catalog));
         assert_eq!(study(&["list"]), Some(Study::Catalog));
         assert_eq!(study(&[""]), Some(Study::Catalog));
-        assert_eq!(study(&["", "errors"]), page("errors", false), "an empty topic is no topic");
+        assert_eq!(
+            study(&["", "errors"]),
+            page("errors", false),
+            "an empty topic is no topic"
+        );
         assert_eq!(study(&["errors"]), page("errors", false));
         assert_eq!(study(&["errors", "--json"]), page("errors", true));
         assert_eq!(study(&["--json", "errors"]), page("errors", true));
         assert_eq!(study(&["cron"]), page("heartbeats", false));
         assert_eq!(study(&["skins", "--json"]), page("skins", true));
         assert_eq!(study(&["llm-accounts"]), page("llm-accounts", false));
-        for usage in [&["--help"][..], &["-h"], &["errors", "--help"], &["--json", "-h"], &["a", "-h", "b"]] {
+        for usage in [
+            &["--help"][..],
+            &["-h"],
+            &["errors", "--help"],
+            &["--json", "-h"],
+            &["a", "-h", "b"],
+        ] {
             assert_eq!(study(usage), Some(Study::Usage), "{usage:?}");
         }
         // The shell's: the list as JSON, errors (an unknown flag, a second
@@ -278,10 +296,20 @@ mod tests {
         assert!(index.contains(&format!("llm-accounts) printf '%s\\n\\n' \"{LLM_ACCOUNTS_LINE}\"; _study_page_llm_tokens ;;")), "the llm-accounts arm moved");
         assert!(index.contains("        apps) _study_page_skins ;;\n"));
         let command = src("study-command.sh");
-        let aliases = format!("case \"$topic\" in {}) topic=\"heartbeats\" ;; esac", HEARTBEAT_ALIASES.join("|"));
-        assert!(command.contains(&aliases), "no `{aliases}` in study-command.sh");
+        let aliases = format!(
+            "case \"$topic\" in {}) topic=\"heartbeats\" ;; esac",
+            HEARTBEAT_ALIASES.join("|")
+        );
+        assert!(
+            command.contains(&aliases),
+            "no `{aliases}` in study-command.sh"
+        );
         let skins = src("study-skins.sh");
-        assert!(skins.contains("    cat <<'EOF' | _perm_lines\n%include cli/text/study/apps.txt\nEOF\n"), "the apps page's filter moved");
+        assert!(
+            skins
+                .contains("    cat <<'EOF' | _perm_lines\n%include cli/text/study/apps.txt\nEOF\n"),
+            "the apps page's filter moved"
+        );
         let perm = src("permission.sh");
         for arm in [
             "            *' #if-cards') if [ \"$on\" = 1 ]; then printf '%s\\n' \"${line% #if-cards}\"; fi ;;",
@@ -309,7 +337,10 @@ mod tests {
                 continue;
             }
             assert!(ids.contains(key), "cli/text/study/{key}.txt is not a topic");
-            assert!(!HEARTBEAT_ALIASES.contains(key), "{key} is a heartbeats alias");
+            assert!(
+                !HEARTBEAT_ALIASES.contains(key),
+                "{key} is a heartbeats alias"
+            );
             assert_eq!(study(&[*key]), page(key, false));
         }
         for alias in ["skins", "llm-accounts"] {
@@ -325,16 +356,28 @@ mod tests {
         assert_eq!(cards_off("x #if-no-cards #if-cards\n"), "");
         assert_eq!(cards_off("x#if-cards\n  #if-cards\n"), "x#if-cards\n");
         let apps = text::study(CARDS_PAGE).unwrap();
-        assert!(apps.lines().any(|l| l.ends_with(" #if-cards")), "the apps page has no card line");
+        assert!(
+            apps.lines().any(|l| l.ends_with(" #if-cards")),
+            "the apps page has no card line"
+        );
         assert!(!cards_off(apps).contains("#if-"));
     }
 
     #[test]
     fn the_json_is_python_s() {
         assert_eq!(study_json("x", "a\n"), "{\"id\":\"x\",\"body\":\"a\"}\n");
-        assert_eq!(study_json("x", "a\n\n"), "{\"id\":\"x\",\"body\":\"a\\n\"}\n");
-        assert_eq!(study_json("x", "\"\\\t\u{2014}\r\n"), "{\"id\":\"x\",\"body\":\"\\\"\\\\\\t\\u2014\"}\n");
-        assert_eq!(study_json("x", "a\rb"), "{\"id\":\"x\",\"body\":\"a\\nb\"}\n");
+        assert_eq!(
+            study_json("x", "a\n\n"),
+            "{\"id\":\"x\",\"body\":\"a\\n\"}\n"
+        );
+        assert_eq!(
+            study_json("x", "\"\\\t\u{2014}\r\n"),
+            "{\"id\":\"x\",\"body\":\"\\\"\\\\\\t\\u2014\"}\n"
+        );
+        assert_eq!(
+            study_json("x", "a\rb"),
+            "{\"id\":\"x\",\"body\":\"a\\nb\"}\n"
+        );
     }
 
     #[test]
@@ -357,17 +400,28 @@ mod tests {
         assert!(reads(&[], "\u{2014}"));
         assert!(reads(&[("LC_ALL", "C")], "\u{2014}"));
         assert!(reads(&[("LANG", "en_US.UTF-8")], "\u{2014}"));
-        assert!(reads(&[("LC_ALL", ""), ("LC_CTYPE", "de_DE.utf8")], "\u{2014}"));
+        assert!(reads(
+            &[("LC_ALL", ""), ("LC_CTYPE", "de_DE.utf8")],
+            "\u{2014}"
+        ));
         assert!(!reads(&[("LANG", "en_US.ISO8859-1")], "\u{2014}"));
         assert!(reads(&[("LANG", "en_US.ISO8859-1")], "ascii"));
         assert!(!reads(&[("PYTHONIOENCODING", "latin-1")], "ascii"));
         assert!(!reads(&[("PYTHONPATH", "/x")], "ascii"));
-        assert!(!python_reads_as_we_do(&Env::of(&[("PATH", "/nonexistent")]), "ascii"));
+        assert!(!python_reads_as_we_do(
+            &Env::of(&[("PATH", "/nonexistent")]),
+            "ascii"
+        ));
         std::fs::remove_dir_all(&d).unwrap();
     }
 
     fn prelude(port: bool, token: bool, passport: bool, hook_sock: bool) -> Prelude {
-        Prelude { port, token, passport, hook_sock }
+        Prelude {
+            port,
+            token,
+            passport,
+            hook_sock,
+        }
     }
 
     #[test]
@@ -375,36 +429,84 @@ mod tests {
         let env = Env::of(&[]);
         let with = prelude(false, true, true, true);
         let without = prelude(false, false, false, false);
-        for s in [Study::Usage, Study::Catalog, Study::Page { topic: "apps", json: false }, Study::Page { topic: "skins", json: false }] {
+        for s in [
+            Study::Usage,
+            Study::Catalog,
+            Study::Page {
+                topic: "apps",
+                json: false,
+            },
+            Study::Page {
+                topic: "skins",
+                json: false,
+            },
+        ] {
             assert_eq!(study_page(s, &with, &env), None, "{s:?}");
             assert!(study_page(s, &without, &env).is_some(), "{s:?}");
         }
-        let errors = Study::Page { topic: "errors", json: false };
-        assert_eq!(study_page(errors, &with, &env).unwrap().text, text::study("errors").unwrap());
+        let errors = Study::Page {
+            topic: "errors",
+            json: false,
+        };
+        assert_eq!(
+            study_page(errors, &with, &env).unwrap().text,
+            text::study("errors").unwrap()
+        );
         let usage = study_page(Study::Usage, &without, &env).unwrap();
-        assert_eq!((usage.text.as_ref(), usage.stderr, usage.exit), (text::study("_usage").unwrap(), false, Exit::Ok));
-        let skins = study_page(Study::Page { topic: "skins", json: false }, &without, &env).unwrap();
+        assert_eq!(
+            (usage.text.as_ref(), usage.stderr, usage.exit),
+            (text::study("_usage").unwrap(), false, Exit::Ok)
+        );
+        let skins = study_page(
+            Study::Page {
+                topic: "skins",
+                json: false,
+            },
+            &without,
+            &env,
+        )
+        .unwrap();
         assert!(skins.text.starts_with(&format!("{SKINS_LINE}\n\n")));
-        assert_eq!(&skins.text[SKINS_LINE.len() + 2..], cards_off(text::study("apps").unwrap()));
+        assert_eq!(
+            &skins.text[SKINS_LINE.len() + 2..],
+            cards_off(text::study("apps").unwrap())
+        );
     }
 
     #[test]
     fn help_needs_the_gate_s_port_and_token() {
-        let family = text::help_form(&["mail", "send", "--help"]).expect("mail send --help is a plain print");
-        let open = text::HELP_FORMS.iter().find(|f| f.argv.first() == Some(&"help")).expect("a help <w> form");
+        let family = text::help_form(&["mail", "send", "--help"])
+            .expect("mail send --help is a plain print");
+        let open = text::HELP_FORMS
+            .iter()
+            .find(|f| f.argv.first() == Some(&"help"))
+            .expect("a help <w> form");
         assert!(!open_tool(family) && open_tool(open));
         let ok = prelude(true, true, true, false);
         let page = help_page(family, &ok).unwrap();
-        assert_eq!((page.text.as_ref(), page.stderr, page.exit), (text::help("mail/send").unwrap(), false, Exit::Ok));
-        for no in [prelude(false, true, false, false), prelude(true, false, false, false)] {
+        assert_eq!(
+            (page.text.as_ref(), page.stderr, page.exit),
+            (text::help("mail/send").unwrap(), false, Exit::Ok)
+        );
+        for no in [
+            prelude(false, true, false, false),
+            prelude(true, false, false, false),
+        ] {
             assert_eq!(help_page(family, &no), None);
             assert_eq!(help_page(open, &no), None);
         }
         let sock = prelude(true, true, true, true);
-        assert_eq!(help_page(family, &sock), None, "a family's help runs the session checks");
+        assert_eq!(
+            help_page(family, &sock),
+            None,
+            "a family's help runs the session checks"
+        );
         assert!(help_page(open, &sock).is_some(), "help is an open tool");
         for f in text::HELP_FORMS {
-            assert!(Exit::ALL.iter().any(|e| e.code() == i32::from(f.code)), "{f:?}");
+            assert!(
+                Exit::ALL.iter().any(|e| e.code() == i32::from(f.code)),
+                "{f:?}"
+            );
         }
     }
 }

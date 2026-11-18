@@ -128,7 +128,13 @@ const NEW_NAME: &str = HOME_DIR_NAME;
 const OLD_NAME: &str = WORKSPACE_DOT_DIR_NAMES[WORKSPACE_DOT_DIR_NAMES.len() - 1];
 
 /// What bash reads at start that changes what runs.
-pub const STARTUP: &[&str] = &["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "POSIXLY_CORRECT"];
+pub const STARTUP: &[&str] = &[
+    "BASH_ENV",
+    "ENV",
+    "SHELLOPTS",
+    "BASHOPTS",
+    "POSIXLY_CORRECT",
+];
 
 /// The prelude's settings in `env`, run from `cwd` (the shell's `pwd`,
 /// [`shell_pwd`]), or why the page goes to the shell.
@@ -165,7 +171,9 @@ pub fn prelude(env: &Env, cwd: &Path) -> Result<Prelude, Handoff> {
     if !port && port_file.is_file() {
         port = !cat(&port_file)?.is_empty();
     }
-    let no_owner = env.first(env_names::NO_OWNER_FALLBACK).is_some_and(|v| v == "1");
+    let no_owner = env
+        .first(env_names::NO_OWNER_FALLBACK)
+        .is_some_and(|v| v == "1");
     let mut token = passport;
     if !no_owner {
         let mut disk = false;
@@ -335,7 +343,10 @@ fn project(env: &Env, home: &OsStr, path: &SearchPath, cwd: &Path) -> Result<(),
             found.unwrap_or(start)
         }
     };
-    if cat_path(&project, NEW_NAME).is_dir() && !cat_path(&project, OLD_NAME).is_dir() && git.usable() {
+    if cat_path(&project, NEW_NAME).is_dir()
+        && !cat_path(&project, OLD_NAME).is_dir()
+        && git.usable()
+    {
         path.need("head")?;
         if git.lists_old_folder(&project) {
             return Err(Handoff::RenameNotice);
@@ -415,8 +426,15 @@ impl<'a> Git<'a> {
 
     /// `git -C <dir> ls-files .k2so | head -1` is not empty.
     fn lists_old_folder(&self, dir: &OsStr) -> bool {
-        let out = self.run(&[OsStr::new("-C"), dir, OsStr::new("ls-files"), OsStr::new(OLD_NAME)]);
-        out.split(|b| *b == b'\n').next().is_some_and(|l| !l.is_empty())
+        let out = self.run(&[
+            OsStr::new("-C"),
+            dir,
+            OsStr::new("ls-files"),
+            OsStr::new(OLD_NAME),
+        ]);
+        out.split(|b| *b == b'\n')
+            .next()
+            .is_some_and(|l| !l.is_empty())
     }
 }
 
@@ -428,7 +446,9 @@ fn strip_dot_git(line: &[u8]) -> &[u8] {
     };
     // The one character before `git`: a UTF-8 sequence, else one byte.
     let width = (1..=4.min(rest.len()))
-        .find(|n| std::str::from_utf8(&rest[rest.len() - n..]).is_ok_and(|s| s.chars().count() == 1))
+        .find(|n| {
+            std::str::from_utf8(&rest[rest.len() - n..]).is_ok_and(|s| s.chars().count() == 1)
+        })
         .unwrap_or(1);
     if rest.len() > width && rest[rest.len() - width - 1] == b'/' {
         &line[..rest.len() - width - 1]
@@ -518,14 +538,30 @@ mod tests {
     fn what_bash_reads_at_start_hands_off() {
         let d = scratch("start");
         let path = bin(&d, &["cat", "dirname"]);
-        for (k, v) in [("BASH_ENV", "/x"), ("ENV", ""), ("SHELLOPTS", "xtrace"), ("BASHOPTS", ""), ("POSIXLY_CORRECT", "1"), ("BASH_FUNC_cat%%", "() { :; }")] {
+        for (k, v) in [
+            ("BASH_ENV", "/x"),
+            ("ENV", ""),
+            ("SHELLOPTS", "xtrace"),
+            ("BASHOPTS", ""),
+            ("POSIXLY_CORRECT", "1"),
+            ("BASH_FUNC_cat%%", "() { :; }"),
+        ] {
             let env = Env::of(&[("HOME", s(&d)), ("PATH", &path), (k, v)]);
             assert!(matches!(prelude(&env, &d), Err(Handoff::Startup(_))), "{k}");
         }
-        assert_eq!(prelude(&Env::of(&[("PATH", &path)]), &d), Err(Handoff::Unset("HOME")));
-        assert_eq!(prelude(&Env::of(&[("HOME", s(&d))]), &d), Err(Handoff::Unset("PATH")));
+        assert_eq!(
+            prelude(&Env::of(&[("PATH", &path)]), &d),
+            Err(Handoff::Unset("HOME"))
+        );
+        assert_eq!(
+            prelude(&Env::of(&[("HOME", s(&d))]), &d),
+            Err(Handoff::Unset("PATH"))
+        );
         let none = bin(&d.join("none"), &[]);
-        assert_eq!(prelude(&Env::of(&[("HOME", s(&d)), ("PATH", &none)]), &d), Err(Handoff::Missing("cat")));
+        assert_eq!(
+            prelude(&Env::of(&[("HOME", s(&d)), ("PATH", &none)]), &d),
+            Err(Handoff::Missing("cat"))
+        );
     }
 
     #[test]
@@ -536,25 +572,45 @@ mod tests {
         std::fs::create_dir_all(hd.join(".k2so")).unwrap();
         let env = Env::of(&[("HOME", s(&hd)), ("PATH", &path)]);
         let p = prelude(&env, &d).unwrap();
-        assert_eq!((p.port, p.token, p.passport, p.hook_sock), (false, false, false, false));
+        assert_eq!(
+            (p.port, p.token, p.passport, p.hook_sock),
+            (false, false, false, false)
+        );
         // No .k2 folder: the old name is the hd.
         std::fs::write(hd.join(".k2so/heartbeat.port"), "\n\n").unwrap();
         std::fs::write(hd.join(".k2so/daemon.token"), "tok\n").unwrap();
         let p = prelude(&env, &d).unwrap();
-        assert_eq!((p.port, p.token), (false, true), "a port file of newlines is no port");
+        assert_eq!(
+            (p.port, p.token),
+            (false, true),
+            "a port file of newlines is no port"
+        );
         std::fs::write(hd.join(".k2so/heartbeat.port"), "4100\n").unwrap();
         assert!(prelude(&env, &d).unwrap().port);
         // With .k2 a folder, its files count, not the old name's.
         std::fs::create_dir_all(hd.join(".k2")).unwrap();
         let p = prelude(&env, &d).unwrap();
         assert_eq!((p.port, p.token), (false, false));
-        let env2 = Env::of(&[("HOME", s(&hd)), ("PATH", &path), ("K2_PORT", "1"), ("K5_HOOK_TOKEN", "s.x"), ("K2SO_HOOK_SOCK", "/s")]);
+        let env2 = Env::of(&[
+            ("HOME", s(&hd)),
+            ("PATH", &path),
+            ("K2_PORT", "1"),
+            ("K5_HOOK_TOKEN", "s.x"),
+            ("K2SO_HOOK_SOCK", "/s"),
+        ]);
         let p = prelude(&env2, &d).unwrap();
-        assert_eq!((p.port, p.token, p.passport, p.hook_sock), (true, true, true, true));
+        assert_eq!(
+            (p.port, p.token, p.passport, p.hook_sock),
+            (true, true, true, true)
+        );
         // The virtual desktop reads no token file.
         std::fs::write(hd.join(".k2/heartbeat.token"), "t").unwrap();
         assert!(prelude(&env, &d).unwrap().token);
-        let vd = Env::of(&[("HOME", s(&hd)), ("PATH", &path), ("K2_NO_OWNER_FALLBACK", "1")]);
+        let vd = Env::of(&[
+            ("HOME", s(&hd)),
+            ("PATH", &path),
+            ("K2_NO_OWNER_FALLBACK", "1"),
+        ]);
         assert!(!prelude(&vd, &d).unwrap().token);
         // A file the shell can't read stops it; a NUL is a warning.
         std::fs::remove_file(hd.join(".k2/heartbeat.token")).unwrap();
@@ -574,7 +630,11 @@ mod tests {
         let path = bin(&d, &["cat", "dirname", "sed", "head", "uname"]);
         // A git that lists a file for ls-files and fails anything else.
         let git = d.join("bin/git");
-        std::fs::write(&git, "#!/bin/sh\ncase \"$3\" in ls-files) echo .k2so/x ;; *) exit 128 ;; esac\n").unwrap();
+        std::fs::write(
+            &git,
+            "#!/bin/sh\ncase \"$3\" in ls-files) echo .k2so/x ;; *) exit 128 ;; esac\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
         let env = Env::of(&[("HOME", s(&d)), ("PATH", &path)]);
         assert_eq!(prelude(&env, &ws.join("a/b")), Err(Handoff::RenameNotice));
@@ -594,7 +654,10 @@ mod tests {
         // No head on PATH while the check would run: the shell's error.
         let nohead = bin(&d.join("nohead"), &["cat", "dirname", "sed", "git"]);
         let env = Env::of(&[("HOME", s(&d)), ("PATH", &nohead)]);
-        assert_eq!(prelude(&env, &ws.join("a/b")), Err(Handoff::Missing("head")));
+        assert_eq!(
+            prelude(&env, &ws.join("a/b")),
+            Err(Handoff::Missing("head"))
+        );
     }
 
     #[test]
@@ -633,11 +696,27 @@ mod tests {
         let real = std::fs::canonicalize(&here).unwrap();
         assert_eq!(shell_pwd(&Env::of(&[])).unwrap(), here);
         let h = here.to_str().unwrap();
-        assert_eq!(shell_pwd(&Env::of(&[("PWD", h)])).unwrap(), PathBuf::from(h));
-        assert_eq!(shell_pwd(&Env::of(&[("PWD", "/")])).unwrap(), here, "/ is another folder");
+        assert_eq!(
+            shell_pwd(&Env::of(&[("PWD", h)])).unwrap(),
+            PathBuf::from(h)
+        );
+        assert_eq!(
+            shell_pwd(&Env::of(&[("PWD", "/")])).unwrap(),
+            here,
+            "/ is another folder"
+        );
         assert_eq!(shell_pwd(&Env::of(&[("PWD", "rel")])).unwrap(), here);
-        for odd in [format!("{h}/"), format!("{h}/."), format!("{h}/../x"), "//x".to_string()] {
-            assert_eq!(shell_pwd(&Env::of(&[("PWD", &odd)])), Err(Handoff::Pwd), "{odd}");
+        for odd in [
+            format!("{h}/"),
+            format!("{h}/."),
+            format!("{h}/../x"),
+            "//x".to_string(),
+        ] {
+            assert_eq!(
+                shell_pwd(&Env::of(&[("PWD", &odd)])),
+                Err(Handoff::Pwd),
+                "{odd}"
+            );
         }
         assert!(real.is_absolute());
     }
@@ -651,9 +730,16 @@ mod tests {
         std::fs::write(plain.join("git"), "x").unwrap();
         let joined = format!("{}:{a}", s(&plain));
         let p = SearchPath(OsStr::new(&joined));
-        assert_eq!(p.find("git"), Some(format!("{a}/git")), "a file that is not executable is passed over");
+        assert_eq!(
+            p.find("git"),
+            Some(format!("{a}/git")),
+            "a file that is not executable is passed over"
+        );
         assert_eq!(p.find("nope"), None);
         let slash = format!("{a}/");
-        assert_eq!(SearchPath(OsStr::new(&slash)).find("git"), Some(format!("{a}//git")));
+        assert_eq!(
+            SearchPath(OsStr::new(&slash)).find("git"),
+            Some(format!("{a}//git"))
+        );
     }
 }

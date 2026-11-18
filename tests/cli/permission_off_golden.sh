@@ -35,8 +35,8 @@
 #     differs between macOS /private/tmp and Linux /tmp)
 #   * a `User-Agent: curl/x.y.z` / `Python-urllib/x.y` value → …/<VERSION>
 #   * ONLY when the CLI under test is not the bash source (the k5 binary,
-#     K5_CLI_UNDER_TEST): two request log lines are dropped, a line that is
-#     exactly `> X-K5-Cli-Via: fallthrough` or `> X-K5-Cli-Via: native`,
+#     K5_CLI_UNDER_TEST): two request log lines are dropped per request,
+#     for the bash a line that is exactly `> X-K5-Cli-Via: fallthrough`
 #     and a line that is exactly `> X-K5-Cli-Noun: <noun>`, where <noun> is
 #     the capture's first word (`project` for `k2 project create demo`;
 #     `other` when that word is not [a-z][a-z0-9-]{0,31}, as the bash
@@ -44,15 +44,22 @@
 #     K5_CLI_VIA=rust, and the bash then marks every daemon request it
 #     sends, with curl and from its embedded python's urlopen alike, with
 #     those two headers (tests/cli/k5_cli_via.sh); the goldens are bash's
-#     bytes. It is counted, not trusted: each request in the log sent by
-#     curl (`User-Agent: curl/…`) or by the embedded python
+#     bytes. A verb the binary answers itself sends its own request, as
+#     curl would but with `User-Agent: k5/<version>`, then
+#     `X-K5-Cli-Version: <version>` and `X-K5-Cli-Via: native`
+#     (crates/k5-cli/src/transport/mod.rs); for those the two lines are
+#     dropped and the User-Agent becomes `curl/<VERSION>`. It is counted,
+#     not trusted (drop_via): each request in the log sent by curl
+#     (`User-Agent: curl/…`) or by the embedded python
 #     (`User-Agent: Python-urllib/…`, e.g. `k2 project create`) must carry
-#     exactly one Via line and exactly one Noun line, and any other request
-#     neither, so the lines dropped are twice the requests the bash sent
-#     (none with no request). A Noun line naming another word is not
-#     dropped. Anything else fails the capture loudly, naming it and the
-#     counts. On the bash CLI none of this runs: a Via or Noun line there
-#     stays and fails against its golden.
+#     exactly one `Via: fallthrough` and one Noun line and no Version line;
+#     each sent by the binary (`User-Agent: k5/<version>`, <version> the
+#     CLI's) exactly one `Via: native` and one Version line naming that
+#     version, and no Noun line; any other request none of them. A Noun
+#     line naming another word is not dropped. Anything else fails the
+#     capture loudly, naming it and what it found; the bites before the
+#     captures prove the rule refuses. On the bash CLI none of this runs: a
+#     Via, Noun or Version line there stays and fails against its golden.
 #
 # Modes:
 #   bash tests/cli/permission_off_golden.sh              compare (fails loudly on any diff or missing fixture)
@@ -160,7 +167,7 @@ mkdir -p "$HOME" "$SANDBOX/ws"
 cd "$SANDBOX/ws"
 
 normalize() {
-    # stdin → stdout. Never drops a line (the Via and Noun lines go before
+    # stdin → stdout. Never drops a line (the hand-over lines go before
     # it, in drop_via, and only for the binary).
     python3 -I -c '
 import re, sys
@@ -200,50 +207,128 @@ sys.stdout.write(t)
 }
 
 # drop_via <capture> <log> <out> <first word>: the binary's request log
-# without its X-K5-Cli-Via and X-K5-Cli-Noun lines. Drops only a line that
-# is exactly one of the headers (the Noun's value the noun of <first
-# word>), and fails (non-zero, naming the capture and the counts) unless
-# every request sent by curl or by the embedded python carries exactly one
-# of each and every other request neither, so the lines dropped are twice
-# the requests the bash sent.
+# with the lines its own requests and the bash's hand-over add taken out,
+# so it compares with the bash's golden. Per request, by its User-Agent:
+#   * curl/… or Python-urllib/… (the bash, run by the binary): exactly one
+#     `X-K5-Cli-Via: fallthrough` and one `X-K5-Cli-Noun: <noun>` (the
+#     noun of <first word>), both dropped; no X-K5-Cli-Version.
+#   * k5/<version> (the binary's own, native): exactly one
+#     `X-K5-Cli-Via: native` and one `X-K5-Cli-Version: <version>`, both
+#     dropped, <version> the CLI's and the User-Agent's; no X-K5-Cli-Noun
+#     line at all. Its `User-Agent: k5/<version>` becomes curl's
+#     `User-Agent: curl/<VERSION>`.
+#   * anything else: none of these lines.
+# Fails (non-zero, naming the capture and what it found) on anything else,
+# or on such a line before any request. The bites below prove it refuses.
 drop_via() {
     python3 -I -c '
 import re, sys
-name, src, dst, word = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+name, src, dst, word, version = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 # The bash sends a word the daemon would not take as `other` (_k5_headers).
 noun = word if re.fullmatch(r"[a-z][a-z0-9-]{0,31}", word) else "other"
 request = re.compile(r"> [A-Z]+ /")
 via = re.compile(r"> X-K5-Cli-Via: (fallthrough|native)\r?")
 noun_line = re.compile(r"> X-K5-Cli-Noun: " + re.escape(noun) + r"\r?")
+any_noun = re.compile(r"> X-K5-Cli-Noun:")
+cli_version = re.compile(r"> X-K5-Cli-Version: (.*?)\r?")
+bash_agent = re.compile(r"> User-Agent: (curl|Python-urllib)/")
+k5_agent = re.compile(r"> User-Agent: k5/(.*?)(\r?)")
 with open(src, encoding="utf-8", errors="surrogateescape", newline="") as f:
     lines = f.read().split("\n")
-bash_agent = re.compile(r"> User-Agent: (curl|Python-urllib)/")
-# Per request: [Via lines dropped, Noun lines dropped, sent by the bash].
-kept, per_request, stray = [], [], 0
+# Per request: who sent it, the Via values, the Noun lines (this noun, any
+# noun), the X-K5-Cli-Version values, the User-Agent version (k5 only).
+kept, reqs, stray = [], [], 0
 for line in lines:
     if request.match(line):
-        per_request.append([0, 0, False])
-    elif per_request and bash_agent.match(line):
-        per_request[-1][2] = True
-    which = 0 if via.fullmatch(line) else 1 if noun_line.fullmatch(line) else None
-    if which is not None:
-        if per_request:
-            per_request[-1][which] += 1
-        else:
+        reqs.append({"by": None, "via": [], "noun": 0, "anynoun": 0, "ver": [], "ua": None})
+        kept.append(line)
+        continue
+    r = reqs[-1] if reqs else None
+    m = k5_agent.fullmatch(line)
+    if r is not None and m:
+        r["by"], r["ua"] = "k5", m.group(1)
+        kept.append("> User-Agent: curl/<VERSION>" + m.group(2))
+        continue
+    if r is not None and bash_agent.match(line):
+        r["by"] = "bash"
+    if any_noun.match(line) and r is not None:
+        r["anynoun"] += 1
+    v, n, c = via.fullmatch(line), noun_line.fullmatch(line), cli_version.fullmatch(line)
+    if v or n or c:
+        if r is None:
             stray += 1
+        elif v:
+            r["via"].append(v.group(1))
+        elif n:
+            r["noun"] += 1
+        else:
+            r["ver"].append(c.group(1))
         continue
     kept.append(line)
-requests = len(per_request)
-by_bash = sum(1 for _, _, b in per_request if b)
-vias = sum(v for v, _, _ in per_request)
-nouns = sum(n for _, n, _ in per_request)
-if stray or vias != by_bash or nouns != by_bash or any((v, n) != ((1, 1) if b else (0, 0)) for v, n, b in per_request):
-    sys.stderr.write("  FAIL: %s: dropped %d X-K5-Cli-Via and %d X-K5-Cli-Noun: %s line(s) (%d before any request) for %d request(s) in the log, %d of them sent by curl or the embedded python; want exactly one of each per such request and none on any other\n" % (name, vias, nouns, noun, stray, requests, by_bash))
+bad = []
+for i, r in enumerate(reqs, 1):
+    if r["by"] == "bash":
+        ok = r["via"] == ["fallthrough"] and r["noun"] == 1 and r["anynoun"] == 1 and not r["ver"]
+        want = "one X-K5-Cli-Via: fallthrough, one X-K5-Cli-Noun: %s, no X-K5-Cli-Version" % noun
+    elif r["by"] == "k5":
+        ok = r["via"] == ["native"] and r["anynoun"] == 0 and r["ver"] == [version] and r["ua"] == version
+        want = "one X-K5-Cli-Via: native, one X-K5-Cli-Version: %s, User-Agent k5/%s, no X-K5-Cli-Noun" % (version, version)
+    else:
+        ok = not r["via"] and r["noun"] == 0 and not r["ver"]
+        want = "none of the hand-over lines"
+    if not ok:
+        bad.append("request %d (%s): Via %s, %d Noun line(s), Version %s, User-Agent version %s; want %s" % (
+            i, r["by"] or "other", r["via"], r["anynoun"], r["ver"], r["ua"], want))
+if stray or bad:
+    sys.stderr.write("  FAIL: %s: %d hand-over line(s) before any request; %d of %d request(s) wrong%s\n" % (
+        name, stray, len(bad), len(reqs), "".join("\n    " + b for b in bad)))
     sys.exit(1)
 with open(dst, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
     f.write("\n".join(kept))
-' "$1" "$2" "$3" "$4"
+' "$1" "$2" "$3" "$4" "$CLI_VERSION"
 }
+
+# drop_via's bites, run every time (bash or binary): each log below must be
+# refused, and a well-formed one of each kind must pass as the golden's.
+drop_via_bites() {
+    local d="$SANDBOX/bites" k5ua="> User-Agent: k5/$CLI_VERSION"
+    mkdir -p "$d"
+    local head="> GET /cli/sessions/roster?token=t
+> Host: 127.0.0.1:1"
+    printf '%s\n%s\n> Accept: */*\n> X-K5-Cli-Version: %s\n> X-K5-Cli-Via: native\n> body: \n' "$head" "$k5ua" "$CLI_VERSION" > "$d/good_k5"
+    printf '%s\n> User-Agent: curl/8.5.0\n> Accept: */*\n> X-K5-Cli-Via: fallthrough\n> X-K5-Cli-Noun: sessions\n> body: \n' "$head" > "$d/good_bash"
+    printf '%s\n> User-Agent: curl/<VERSION>\n> Accept: */*\n> body: \n' "$head" > "$d/want_k5"
+    printf '%s\n> User-Agent: curl/8.5.0\n> Accept: */*\n> body: \n' "$head" > "$d/want_bash"
+    # (1) a binary request with two Via lines
+    printf '%s\n%s\n> Accept: */*\n> X-K5-Cli-Version: %s\n> X-K5-Cli-Via: native\n> X-K5-Cli-Via: native\n> body: \n' "$head" "$k5ua" "$CLI_VERSION" > "$d/bite_two_vias"
+    # (2) a curl request marked as the binary's own
+    printf '%s\n> User-Agent: curl/8.5.0\n> Accept: */*\n> X-K5-Cli-Via: native\n> X-K5-Cli-Noun: sessions\n> body: \n' "$head" > "$d/bite_curl_native"
+    # (3) a binary request carrying a Noun line
+    printf '%s\n%s\n> Accept: */*\n> X-K5-Cli-Version: %s\n> X-K5-Cli-Via: native\n> X-K5-Cli-Noun: sessions\n> body: \n' "$head" "$k5ua" "$CLI_VERSION" > "$d/bite_k5_noun"
+    # (4) a binary request with no X-K5-Cli-Version, (5) two of them
+    printf '%s\n%s\n> Accept: */*\n> X-K5-Cli-Via: native\n> body: \n' "$head" "$k5ua" > "$d/bite_k5_no_version"
+    printf '%s\n%s\n> Accept: */*\n> X-K5-Cli-Version: %s\n> X-K5-Cli-Version: %s\n> X-K5-Cli-Via: native\n> body: \n' "$head" "$k5ua" "$CLI_VERSION" "$CLI_VERSION" > "$d/bite_k5_two_versions"
+    # (6) a binary request whose version is not the CLI's
+    printf '%s\n> User-Agent: k5/0.0.0-other\n> Accept: */*\n> X-K5-Cli-Version: 0.0.0-other\n> X-K5-Cli-Via: native\n> body: \n' "$head" > "$d/bite_k5_other_version"
+    # (7) a curl request carrying the binary's X-K5-Cli-Version
+    printf '%s\n> User-Agent: curl/8.5.0\n> Accept: */*\n> X-K5-Cli-Version: %s\n> X-K5-Cli-Via: fallthrough\n> X-K5-Cli-Noun: sessions\n> body: \n' "$head" "$CLI_VERSION" > "$d/bite_curl_version"
+    local k
+    for k in k5 bash; do
+        if ! drop_via "bite good_$k" "$d/good_$k" "$d/got_$k" sessions || ! cmp -s "$d/got_$k" "$d/want_$k"; then
+            echo "FAIL: drop_via refused or changed a well-formed $k request (bites)" >&2
+            exit 1
+        fi
+    done
+    for k in two_vias curl_native k5_noun k5_no_version k5_two_versions k5_other_version curl_version; do
+        if drop_via "bite $k" "$d/bite_$k" "$d/got" sessions 2>"$d/err"; then
+            echo "FAIL: drop_via took the bite $k; it must refuse it" >&2
+            exit 1
+        fi
+        grep -q "FAIL: bite $k:" "$d/err" || { echo "FAIL: drop_via refused the bite $k without naming it" >&2; cat "$d/err" >&2; exit 1; }
+    done
+    echo "drop_via: 2 well-formed requests kept, 7 bites refused"
+}
+drop_via_bites
 
 pass=0
 fail=0

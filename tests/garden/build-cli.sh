@@ -104,4 +104,63 @@ printf 'schema-head.sh\nschema/../schema-tail.sh\nschema/deep/x.entries\n' > "$S
 run 2 "ORDER names a part outside cli/src"
 printf 'schema-head.sh\nschema/mail.sh\nschema-tail.sh\n' > "$S/ORDER"
 run 2 "ORDER names a part outside cli/src: schema/mail.sh"
+
+# cli/text: a page's text file is inlined at its `%include` line, byte for
+# byte (tabs, backslashes and `$` stay as written), inside the quoted
+# heredoc that prints it.
+rm -rf "$T/cli"; mkdir -p "$S" "$T/cli/text/study"
+X="$T/cli/text/study"
+page() {
+    printf '%s\n' '_study_page_a() {' "    cat <<'$1'$2" '%include cli/text/study/a.txt' "$1" '}' > "$S/a.sh"
+}
+page EOF ''
+printf 'after\n' > "$S/z.sh"
+printf 'a.sh\nz.sh\n' > "$S/ORDER"
+printf 'line $HOME \\n `x`\n\tTabbed\n' > "$X/a.txt"
+run 0 "wrote cli/k2 from 2 parts"
+want="$(printf '%s\n' '_study_page_a() {' "    cat <<'EOF'" 'line $HOME \n `x`' "$(printf '\tTabbed')" 'EOF' '}' 'after')"
+[ "$(cat "$T/cli/k2")" = "$want" ] || { echo "FAIL: the inlined page: $(cat "$T/cli/k2")" >&2; exit 1; }
+[ "$(bash -c "$(cat "$T/cli/k2" | sed '$d'); _study_page_a")" = "$(cat "$X/a.txt")" ] || { echo "FAIL: the page does not print its text file" >&2; exit 1; }
+pass=$((pass + 2))
+run 0 "is current" --check
+# A changed text file shows as stale until the build runs.
+printf 'line two\n' >> "$X/a.txt"
+run 1 "cli/k2 is not the join of cli/src (with cli/text)" --check
+run 0 "wrote cli/k2"
+grep -qx 'line two' "$T/cli/k2" || { echo "FAIL: the rebuilt page lacks the new line" >&2; exit 1; }
+pass=$((pass + 1))
+# A pipe after the heredoc is allowed (a filter like _perm_lines).
+page EOF ' | _perm_lines'
+run 0 "wrote cli/k2"
+# Broken includes: exit 2, nothing written.
+before="$(cat "$T/cli/k2")"
+page EOF ''
+printf '%s\n' '_study_page_b() {' '    cat <<EOF' '%include cli/text/study/a.txt' 'EOF' '}' > "$S/b.sh"
+printf 'a.sh\nb.sh\nz.sh\n' > "$S/ORDER"
+run 2 "cli/src/b.sh:3: cli/text/study/a.txt must be the only line of a quoted heredoc" --check
+printf '%s\n' '_study_page_b() {' "    cat <<'EOF'" '%include cli/text/study/a.txt' 'EOF' '}' > "$S/b.sh"
+run 2 "cli/src/b.sh:3: cli/text/study/a.txt is already included at cli/src/a.sh:3" --check
+printf '%s\n' "    cat <<'EOF'" '%include cli/text/study/gone.txt' 'EOF' > "$S/b.sh"
+run 2 "cli/src/b.sh:2: cli/text/study/gone.txt does not exist"
+printf '%s\n' "    cat <<'EOF'" '%include cli/text/../k2.txt' 'EOF' > "$S/b.sh"
+run 2 "an include is \`%include cli/text/<path>.txt\`"
+rm "$S/b.sh"; printf 'a.sh\nz.sh\n' > "$S/ORDER"
+printf '%s\n' "    cat <<'EOF'" '%include cli/text/study/a.txt' 'more' 'EOF' > "$S/a.sh"
+run 2 "cli/src/a.sh:2: cli/text/study/a.txt must be the only line of a quoted heredoc"
+page EOF ''
+# A text file nobody includes would silently drop out of the CLI.
+printf 'stray\n' > "$X/stray.txt"
+run 2 "cli/text/study/stray.txt is not included by any part"
+rm "$X/stray.txt"
+# Text that can't sit in its heredoc: exit 1.
+printf 'no new line at the end' > "$X/a.txt"
+run 1 "cli/text/study/a.txt: must end with a new line"
+printf 'one\nEOF\ntwo\n' > "$X/a.txt"
+run 1 "cli/text/study/a.txt: a line is the heredoc word EOF alone"
+[ "$(cat "$T/cli/k2")" = "$before" ] || { echo "FAIL: a refused build changed cli/k2" >&2; exit 1; }
+pass=$((pass + 1))
+page PAGE ''
+run 0 "wrote cli/k2"
+[ "$(cat "$T/cli/k2")" != "$before" ] && grep -qx 'EOF' "$T/cli/k2" || { echo "FAIL: another heredoc word lets EOF be a line" >&2; exit 1; }
+pass=$((pass + 1))
 echo "build-cli tests: $pass passed"

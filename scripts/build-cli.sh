@@ -11,6 +11,12 @@
 # them as schema/<noun>.entries between schema-head.sh and schema-tail.sh.
 # Each one is checked on its own before any join (see check_entries).
 #
+# Text the CLI prints (the `k2 study` pages) lives in cli/text/, one file
+# per page, so the Rust CLI can read the same files. The part keeps the
+# page's quoted heredoc with one line in it, `%include cli/text/<path>.txt`,
+# and the join puts the file's bytes in that line's place. Every file under
+# cli/text is included exactly once (see join_parts).
+#
 # Edit a part, never cli/k2: the next build would undo an edit made there.
 # cli/k2 stays committed, because the app bundle, the installers, the
 # daemon (include_str!) and the tests all read that one file.
@@ -113,16 +119,85 @@ if [ "${#entries[@]}" -gt 0 ]; then
     check_entries "${entries[@]}" || exit 1
 fi
 
+# The join: the parts in ORDER, byte for byte, with each `%include` line
+# replaced by the text file it names. The line must be the only line of a
+# quoted heredoc (`cat <<'WORD'`, maybe piped on, then the line, then
+# WORD), so the file prints exactly as written: nothing in it expands.
+# Exit 2 for a broken include or a file nobody includes, 1 for text that
+# can't sit in its heredoc. Writes the join to $1.
+join_parts() {
+    command -v python3 >/dev/null || { echo "build-cli: python3 is required to join cli/src" >&2; return 2; }
+    python3 - "$ROOT" "$1" "${parts[@]}" <<'PY'
+import os, re, sys
+root, out, names = sys.argv[1], sys.argv[2], sys.argv[3:]
+INCLUDE = re.compile(r"%include (cli/text/[a-z0-9_-]+(?:/[a-z0-9_-]+)*\.txt)")
+OPEN = re.compile(r"\s*cat <<'([A-Za-z_][A-Za-z_0-9]*)'(?: \| .*)?")
+used, pieces, broken, bad_text = {}, [], [], []
+for name in names:
+    with open(root + "/cli/src/" + name, "rb") as f:
+        lines = f.read().split(b"\n")
+    for i, raw in enumerate(lines):
+        if not raw.startswith(b"%include"):
+            continue
+        line = raw.decode("utf-8", "replace")
+        where = "cli/src/%s:%d" % (name, i + 1)
+        m = INCLUDE.fullmatch(line)
+        if not m:
+            broken.append("%s: an include is `%%include cli/text/<path>.txt` (a-z, 0-9, _ and -), not %r" % (where, line))
+            continue
+        rel = m.group(1)
+        opener = OPEN.fullmatch(lines[i - 1].decode("utf-8", "replace")) if i > 0 else None
+        if not opener or i + 1 >= len(lines) or lines[i + 1] != opener.group(1).encode():
+            broken.append("%s: %s must be the only line of a quoted heredoc (cat <<'WORD' above it, WORD below)" % (where, rel))
+            continue
+        if rel in used:
+            broken.append("%s: %s is already included at %s; a text file is included once" % (where, rel, used[rel]))
+            continue
+        used[rel] = where
+        if not os.path.isfile(root + "/" + rel):
+            broken.append("%s: %s does not exist" % (where, rel))
+            continue
+        with open(root + "/" + rel, "rb") as f:
+            body = f.read()
+        word = opener.group(1)
+        try:
+            body.decode("utf-8")
+        except UnicodeDecodeError as e:
+            bad_text.append("%s: not UTF-8 (%s)" % (rel, e))
+            continue
+        if not body.endswith(b"\n"):
+            bad_text.append("%s: must end with a new line (the heredoc prints one after the last line)" % rel)
+            continue
+        if word.encode() in body[:-1].split(b"\n"):
+            bad_text.append("%s: a line is the heredoc word %s alone; it would end the page early" % (rel, word))
+            continue
+        lines[i] = body[:-1]
+    pieces.append(b"\n".join(lines))
+for top, dirs, files in os.walk(root + "/cli/text"):
+    dirs.sort()
+    for f in sorted(files):
+        rel = os.path.relpath(os.path.join(top, f), root).replace(os.sep, "/")
+        if rel not in used:
+            broken.append("%s is not included by any part: add its `%%include` line to the heredoc that prints it, or remove the file" % rel)
+for line in broken + bad_text:
+    print("build-cli: " + line, file=sys.stderr)
+if broken or bad_text:
+    sys.exit(2 if broken else 1)
+with open(out, "wb") as f:
+    f.write(b"".join(pieces))
+PY
+}
+
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
-for name in "${parts[@]}"; do cat "$SRC/$name"; done > "$tmp"
+join_parts "$tmp" || exit $?
 
 if [ "$CHECK" = 1 ]; then
     if [ -f "$OUT" ] && cmp -s "$tmp" "$OUT"; then
         echo "build-cli: cli/k2 is current (${#parts[@]} parts)"
         exit 0
     fi
-    echo "build-cli: cli/k2 is not the join of cli/src. Edit the part in cli/src (never cli/k2), then run scripts/build-cli.sh." >&2
+    echo "build-cli: cli/k2 is not the join of cli/src (with cli/text). Edit the part in cli/src (never cli/k2), or the page in cli/text, then run scripts/build-cli.sh." >&2
     exit 1
 fi
 if [ -f "$OUT" ] && cmp -s "$tmp" "$OUT"; then

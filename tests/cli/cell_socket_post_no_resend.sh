@@ -4,9 +4,9 @@
 #
 # cli_send, cli_send_json, _compute_send (compute, App, chat, CI and the
 # other daemon-route verbs), _app_rt_post_file (k2 app exec with stdin),
-# _sidecar_send (sessions, sidecar, vault and the other id-tool families)
-# and _doc_xfer (the doc verbs that send a whole file) try the session's
-# cell socket first. They go
+# _sidecar_send (sessions, sidecar, vault and the other id-tool families),
+# _doc_xfer (the doc verbs that send a whole file) and k2 hooks emit try
+# the session's cell socket first. They go
 # on to loopback TCP for a POST only when the connect failed (curl 7) or
 # the daemon answered "not served on cell socket". Any other failure after
 # the request may have gone out (curl 28, 52, 56, rc 0 with an empty body,
@@ -30,6 +30,7 @@
 #   k2 sidecar list                 _sidecar_send GET
 #   k2 doc write --base live <doc>  _doc_xfer POST (the body from a file)
 #   k2 doc show --version <v> <doc> _doc_xfer GET
+#   k2 hooks emit Stop              cmd_hooks_emit POST /hook/event
 #
 # A stub daemon serves loopback TCP and a Unix socket and counts each route
 # per channel. The socket's behaviour per run comes from a mode file:
@@ -78,7 +79,8 @@ from urllib.parse import urlsplit
 LOG, PORTF, MODEF, SOCK, DEAD, VAULT, TOKLOG = sys.argv[1:8]
 TARGETS = ("/cli/inbox/archive", "/cli/inbox/read", "/cli/heartbeat/unarchive", "/cli/agent/identity",
            "/cli/compute/run", "/cli/compute/jobs/get", "/cli/app/install", "/cli/app/exception",
-           "/cli/app/exec", "/cli/sidecar/stop", "/cli/sidecar/list", "/cli/docs/write", "/cli/docs/show")
+           "/cli/app/exec", "/cli/sidecar/stop", "/cli/sidecar/list", "/cli/docs/write", "/cli/docs/show",
+           "/hook/event")
 JOB = {"id": "abcd1234" * 4, "short": "abcd1234", "node": "n1", "state": "queued"}
 log_lock = threading.Lock()
 
@@ -126,6 +128,8 @@ def answer(path, method):
         return {"tier": 0, "doc": {"path": "notes.md"}, "result": {"changed": True, "size": 3, "version": 2}}
     if path == "/cli/docs/show":
         return {"doc": {"path": "notes.md"}, "text": "from tcp", "version": 1}
+    if path == "/hook/event":
+        return {"verdict": "accepted"}
     return {"ok": True}
 
 def http(status, reason, obj):
@@ -606,6 +610,10 @@ for mode in close garbage; do
     case "$OUT" in *"from tcp"*) ok "GET $mode: the TCP answer prints" ;; *) bad "GET $mode: stdout $(printf %q "$OUT")" ;; esac
     no_unanswered "GET $mode"
 done
+
+echo "== 15. k2 hooks emit (POST /hook/event) =="
+# It needs this session's pane (K2_PANE_ID) besides the passport.
+K2_PANE_ID=pane-1 post_rows /hook/event "hooks emit: Stop accepted" hooks emit Stop
 
 echo
 echo "cell_socket_post_no_resend: $pass passed, $fail failed"

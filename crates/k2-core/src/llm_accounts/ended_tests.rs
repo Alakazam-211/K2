@@ -432,3 +432,30 @@ fn the_default_can_be_signed_in_again_within_the_warning_window_and_the_new_one_
     assert!(read_live(&h).ends_with(br#""mcpOAuth":{"one":{"accessToken":"K2TEST_SECRET_MARKER-mcp"}}}"#));
     assert_eq!(get(&conn, &a.id).unwrap().unwrap().sign_in_ends_at, Some(now + 30 * 86_400));
 }
+
+/// The live file's temp file has a name of its own each time, is created
+/// new and never through a symlink: a symlink left at the old
+/// `<name>.k2tmp-<pid>` name is not followed, and the file the write makes
+/// is 0600 from the start.
+#[cfg(unix)]
+#[test]
+fn the_live_files_temp_file_is_new_and_never_a_symlink() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = Home::new();
+    let dir = h.p(".claude");
+    fs::create_dir_all(&dir).unwrap();
+    let target = dir.join(".credentials.json");
+    fs::write(&target, ended_file()).unwrap();
+    let elsewhere = h.p("elsewhere.json");
+    fs::write(&elsewhere, b"keep me").unwrap();
+    let planted = dir.join(format!("..credentials.json.k2tmp-{}", std::process::id()));
+    std::os::unix::fs::symlink(&elsewhere, &planted).unwrap();
+    store::write_private_owned_for_tests(&target, &good("a")).unwrap();
+    assert_eq!(fs::read(&elsewhere).unwrap(), b"keep me", "nothing written through the symlink");
+    assert!(fs::symlink_metadata(&planted).unwrap().file_type().is_symlink(), "the symlink is left as it was");
+    assert_eq!(fs::read(&target).unwrap(), good("a"));
+    assert!(!fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
+    assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o600);
+    let left: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.contains("k2tmp")).collect();
+    assert_eq!(left, vec![planted.file_name().unwrap().to_string_lossy().into_owned()], "no temp file left behind");
+}

@@ -921,45 +921,52 @@ pub(crate) fn write_live_file(path: &Path, bytes: &[u8]) -> Result<(), WalletErr
     write_private_owned(path, bytes, owner).map_err(|e| WalletError::Io(format!("{}: {e}", path.display())))
 }
 
-/// [`write_private`], with the temp file given `owner` (uid, gid) before
-/// the rename when it differs from the writer's, and the folder synced
-/// after it.
+/// [`write_private`] for the live file: the temp file beside it has a
+/// random name and is created new (never an existing file, never through
+/// a symlink), its mode (0600) and `owner` (uid, gid, when it differs from
+/// the writer's) are set on the open file, then fsync, rename, and the
+/// folder is synced.
 fn write_private_owned(path: &Path, bytes: &[u8], owner: Option<(u32, u32)>) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
     let tmp = parent.join(format!(
         ".{}.k2tmp-{}",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("cred"),
-        std::process::id()
+        uuid::Uuid::new_v4().simple()
     ));
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    // Nothing is removed when this fails: the name isn't ours.
+    let mut f = opts.open(&tmp)?;
     let res = (|| -> std::io::Result<()> {
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        #[cfg(unix)]
-        if let Some((uid, gid)) = owner {
-            use std::os::unix::fs::MetadataExt;
-            let md = f.metadata()?;
-            if (md.uid(), md.gid()) != (uid, gid) {
-                std::os::unix::fs::fchown(&f, Some(uid), Some(gid))?;
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(fs::Permissions::from_mode(0o600))?;
+            if let Some((uid, gid)) = owner {
+                use std::os::unix::fs::MetadataExt;
+                let md = f.metadata()?;
+                if (md.uid(), md.gid()) != (uid, gid) {
+                    std::os::unix::fs::fchown(&f, Some(uid), Some(gid))?;
+                }
             }
         }
         #[cfg(not(unix))]
         let _ = owner;
+        f.write_all(bytes)?;
+        f.sync_all()?;
         Ok(())
     })();
+    drop(f);
     if let Err(e) = res {
         let _ = fs::remove_file(&tmp);
         return Err(e);
     }
-    set_mode(&tmp, 0o600)?;
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         e
@@ -969,6 +976,12 @@ fn write_private_owned(path: &Path, bytes: &[u8], owner: Option<(u32, u32)>) -> 
         let _ = d.sync_all();
     }
     Ok(())
+}
+
+/// The live file's write, for tests: how it names and opens its temp file.
+#[cfg(test)]
+pub(crate) fn write_private_owned_for_tests(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_private_owned(path, bytes, None)
 }
 
 // ── Claude's live file: replace only `claudeAiOauth` ────────────────

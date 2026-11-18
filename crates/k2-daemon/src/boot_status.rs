@@ -1488,6 +1488,7 @@ mod tests {
                 "thread-images-v1",
                 "thread-delta-v1",
                 "thread-message-delete-v1",
+                "thread-system-notice-v1",
                 "thread-author-agent-v1",
                 "project-chat-paging-v1",
                 "app-project-chat-v1",

@@ -65,6 +65,8 @@ pub const KNOWN_FEATURES: &[&str] = &[
     "thread-delta-v1",
     // 0.46.11: Delete message (a person deletes a post they sent).
     "thread-message-delete-v1",
+    // 0.46.15: K2's own Thread lines carry `system_notice`.
+    "thread-system-notice-v1",
     // 0.46.13: an agent's posts and cards carry `author {kind: "agent"}`.
     "thread-author-agent-v1",
     // 0.46.3: the Garden bridge's person rows (tickets, activity, files,

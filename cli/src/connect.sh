@@ -117,6 +117,15 @@ sys.stderr.write("Error: %s\n" % m); sys.exit(1)
 # connection refused, or one too old to have the route) so the caller may
 # fall back; otherwise prints why on stderr (_publish_err: JSON under
 # --json) and returns the exit code to use (3 = needs the owner).
+#
+# 0.46.15: a request that isn't a GET goes on from the cell socket to
+# loopback TCP only when the socket took none of it: the connect failed
+# (curl 7) or the daemon answered "not served on cell socket". It goes on
+# from TCP to the control plane only when the TCP connect failed (curl
+# 7). Any other failure (a timeout, an empty or broken reply) may have
+# reached the daemon, which may have made the call, so it is not sent
+# again: _cli_send_unanswered says so and ends the command with 1. GETs
+# keep both fallbacks.
 _CONNECT_NO_DAEMON=10
 _connect_curl_daemon() {
     local method="$1" endpoint="$2" body="${3:-}"
@@ -132,7 +141,7 @@ if os.environ.get("K2CC_B"):
     d["body"] = os.environ["K2CC_B"]
 print(json.dumps(d))
 ')" || return 1
-    local _K2_CFG="" out="" rc=1 code="" resp=""
+    local _K2_CFG="" out="" rc=1 code="" resp="" t0="$SECONDS"
     # A K2 agent terminal / sealed cell: the per-cell socket with the
     # session passport first (a sealed cell may have no TCP route), like
     # cli_send. A daemon that doesn't serve the route there → TCP below.
@@ -147,6 +156,9 @@ print(json.dumps(d))
             --connect-timeout 5 --max-time 45 -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
         if [ "$rc" -eq 0 ] && [[ "$out" == *"not served on cell socket"* ]]; then
             rc=1
+        elif [ "$rc" -ne 0 ] && [ "$rc" -ne 7 ] && [ "$method" != "GET" ]; then
+            _cli_send_unanswered /cli/connect/proxy "$t0" "$rc" ""
+            return 1
         fi
     fi
     if [ "$rc" -ne 0 ]; then
@@ -160,6 +172,10 @@ print(json.dumps(d))
         rc=0
         out="$(_k2_curl "$_K2_CFG" -sS -X POST -H "Content-Type: application/json" \
             --connect-timeout 5 --max-time 45 -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
+        if [ "$rc" -ne 0 ] && [ "$rc" -ne 7 ] && [ "$method" != "GET" ]; then
+            _cli_send_unanswered /cli/connect/proxy "$t0" "$rc" ""
+            return 1
+        fi
         if [ "$rc" -ne 0 ]; then
             return "$_CONNECT_NO_DAEMON"
         fi

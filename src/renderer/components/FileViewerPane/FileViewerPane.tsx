@@ -277,7 +277,8 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const [liveEpoch, setLiveEpoch] = useState(0)
   const [liveEnded, setLiveEnded] = useState(false)
   const liveCore = useLiveDocCore(room.scope, filePath, liveEpoch)
-  const { refusedWords, refusedReadOnly, onLiveRefused, refusedBar } = useLiveRefused(filePath) // a declined live open or session: the usual view, and why
+  // A declined live open or session: the usual view, and why; Reload reads the file and retries the live open.
+  const { refusedWords, refusedReadOnly, onLiveRefused, reload: reloadLive, refusedBar } = useLiveRefused(filePath, () => void (setLiveEpoch((e) => e + 1), loadFile()))
   const liveOn = liveCore.status === 'live' && textLock === null && !isDirty && refusedWords === null
   // The "Any other file" core: the usual view, with the panel beside it.
   const anyFile = liveCore.status === 'any-file'
@@ -958,7 +959,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         {/* Refresh */}
         <button
           className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
-          onClick={loadFile}
+          onClick={refusedWords !== null ? reloadLive : loadFile}
           title="Refresh"
         >
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">

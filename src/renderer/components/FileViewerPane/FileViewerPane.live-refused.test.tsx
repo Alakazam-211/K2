@@ -17,7 +17,7 @@
 
 import '../../../../vendor/k2-mpc-base/client/test/jsdom-shims'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, renderHook, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, renderHook, screen, waitFor } from '@testing-library/react'
 
 const PAGE = '<!doctype html>\n<html><head><style>body { font: 14px sans-serif; }</style></head><body><h1>k5 CLI progress</h1><p>Slice 10 landed.</p></body></html>\n'
 const WHY = ".k2/agent/work/k5-cli-progress.html is in the workspace's private .k2 folder, where only Markdown and files under .k2/wiki, .k2/prds, .k2/docs or .k2/conflicts are live docs"
@@ -26,6 +26,8 @@ const h = vi.hoisted(() => ({
   refuse: null as Record<string, unknown> | null,
   // A session that opens (its welcome) and then closes with this frame.
   closeAfterWelcome: null as Record<string, unknown> | null,
+  // The welcome's text (an older server's that came through empty, or the page).
+  welcomeText: '',
   end: null as ((e: unknown) => void) | null,
   connects: 0,
 }))
@@ -65,7 +67,7 @@ vi.mock('@/lib/docs-live-daemon', async () => {
               for (const cb of [...closeCbs]) cb(parseClose(frame))
             }
             // An older server's welcome whose live text came through empty.
-            return { root: 'source', version: 1, text: '', client: 7, self: 'person:owner', rights: 'edit' }
+            return { root: 'source', version: 1, text: h.welcomeText, client: 7, self: 'person:owner', rights: 'edit' }
           }
           throw new Error('this test only refuses')
         },
@@ -100,6 +102,7 @@ beforeEach(() => {
   h.read = { content: PAGE, path: FILE, name: 'k5-cli-progress.html' }
   h.refuse = { type: 'closed', reason: 'declined', retry: false, code: 'protected', message: WHY }
   h.closeAfterWelcome = null
+  h.welcomeText = ''
   h.end = null
   h.connects = 0
 })
@@ -114,7 +117,7 @@ describe('a refused live open of an HTML page', () => {
   it('draws the page from its plain read, names the .k2 folder, and opens the usual way', async () => {
     setEditorPreview('code', true)
     renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
-    const bar = await screen.findByTestId('file-viewer-live-refused', {}, { timeout: 5000 })
+    const bar = await screen.findByTestId('file-viewer-live-refused-words', {}, { timeout: 5000 })
     expect(bar.textContent).toBe(`This file can’t be edited live: ${WHY}. It opens the usual way.`)
     expect(h.connects).toBe(1)
     // Handed over: the plain editor, not the live one (no second open, no closed notice).
@@ -130,7 +133,7 @@ describe('a refused live open of an HTML page', () => {
     h.refuse = { type: 'closed', reason: 'declined', retry: false }
     setEditorPreview('code', true)
     renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
-    expect((await screen.findByTestId('file-viewer-live-refused', {}, { timeout: 5000 })).textContent).toBe('Live editing isn’t available for this file here. It opens the usual way.')
+    expect((await screen.findByTestId('file-viewer-live-refused-words', {}, { timeout: 5000 })).textContent).toBe('Live editing isn’t available for this file here. It opens the usual way.')
     await waitFor(() => expect(pageFrame()?.getAttribute('srcdoc') ?? '').toContain('<h1>k5 CLI progress</h1>'))
     expect(document.body.textContent).not.toContain('too large, or not text')
   })
@@ -139,7 +142,7 @@ describe('a refused live open of an HTML page', () => {
     h.refuse = { type: 'closed', reason: 'declined', retry: false, code: 'path_escapes' }
     setEditorPreview('code', true)
     renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
-    expect((await screen.findByTestId('file-viewer-live-refused', {}, { timeout: 5000 })).textContent).toBe('This file is in another workspace’s folder, so it opens read-only here. Open it from that workspace to edit it live.')
+    expect((await screen.findByTestId('file-viewer-live-refused-words', {}, { timeout: 5000 })).textContent).toBe('This file is in another workspace’s folder, so it opens read-only here. Open it from that workspace to edit it live.')
     await waitFor(() => expect(pageFrame()?.getAttribute('srcdoc') ?? '').toContain('<h1>k5 CLI progress</h1>'))
     // The words say read only, and it is: the plain editor gets the reason.
     const { result } = renderHook(() => useLiveRefused(FILE))
@@ -153,7 +156,7 @@ describe('a refused live open of an HTML page', () => {
     h.refuse = { type: 'closed', reason: 'declined', retry: false, error: { id: 'MPC-E000', message: 'this doc has no `source` text' } }
     setEditorPreview('code', true)
     renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
-    expect((await screen.findByTestId('file-viewer-live-refused', {}, { timeout: 5000 })).textContent).toBe('This file can’t be edited live: this doc has no `source` text. It opens the usual way.')
+    expect((await screen.findByTestId('file-viewer-live-refused-words', {}, { timeout: 5000 })).textContent).toBe('This file can’t be edited live: this doc has no `source` text. It opens the usual way.')
   })
 })
 
@@ -165,7 +168,7 @@ describe('a live session that closes declined after it opened', () => {
     renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
     await waitFor(() => expect(screen.getByTestId('ed-live-file').dataset.liveState).toBe('live'), { timeout: 5000 })
     act(() => h.end?.(null))
-    const bar = await screen.findByTestId('file-viewer-live-refused', {}, { timeout: 5000 })
+    const bar = await screen.findByTestId('file-viewer-live-refused-words', {}, { timeout: 5000 })
     expect(bar.textContent).toBe('This file can’t be edited live: the doc moved to another engine. It opens the usual way.')
     await waitFor(() => expect(screen.queryByTestId('ed-live-file')).toBeNull())
     await waitFor(() => expect(pageFrame()?.getAttribute('srcdoc') ?? '').toContain('<h1>k5 CLI progress</h1>'))
@@ -184,5 +187,37 @@ describe('a read that is not the file’s text', () => {
     expect(() => fileTextOf(undefined)).toThrow(NOT_FILE_TEXT)
     expect(() => fileTextOf({ path: '/ws/report.html' })).toThrow(NOT_FILE_TEXT)
     expect(fileTextOf({ content: '' })).toBe('')
+  })
+})
+
+describe('Reload on the refused bar', () => {
+  it('reads the file again and re-opens a file that is live now (healed), in the same tab', async () => {
+    setEditorPreview('code', true)
+    renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
+    await screen.findByTestId('file-viewer-live-refused-words', {}, { timeout: 5000 })
+    expect(h.connects).toBe(1)
+    // The daemon takes it now.
+    h.refuse = null
+    h.closeAfterWelcome = { type: 'closed', reason: 'declined', retry: false }
+    h.welcomeText = PAGE
+    h.read = { content: PAGE.replace('Slice 10 landed.', 'Slice 11 landed.'), path: FILE, name: 'progress.html' }
+    fireEvent.click(screen.getByTestId('file-viewer-live-reload'))
+    await waitFor(() => expect(screen.getByTestId('ed-live-file').dataset.liveState).toBe('live'), { timeout: 5000 })
+    expect(h.connects).toBe(2)
+    expect(screen.queryByTestId('file-viewer-live-refused')).toBeNull()
+  })
+
+  it('a file still refused stays on its preview from the read, with the reason, never blank', async () => {
+    setEditorPreview('code', true)
+    renderInPrimaryRoom(<FileViewerPane filePath={FILE} paneId="p" tabId="t" />)
+    await screen.findByTestId('file-viewer-live-refused-words', {}, { timeout: 5000 })
+    h.read = { content: PAGE.replace('Slice 10 landed.', 'Slice 11 landed.'), path: FILE, name: 'progress.html' }
+    fireEvent.click(screen.getByTestId('file-viewer-live-reload'))
+    await waitFor(() => expect(h.connects).toBe(2), { timeout: 5000 })
+    const bar = await screen.findByTestId('file-viewer-live-refused-words', {}, { timeout: 5000 })
+    expect(bar.textContent).toContain(`This file can’t be edited live: ${WHY}. It opens the usual way.`)
+    // The page as read again (the new read), never blank.
+    await waitFor(() => expect(pageFrame()?.getAttribute('srcdoc') ?? '').toContain('Slice 11 landed.'))
+    expect(screen.queryByTestId('ed-live-file')).toBeNull()
   })
 })

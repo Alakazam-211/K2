@@ -20,6 +20,14 @@
 # 2. With --base REV: `git show REV:cli/k2` runs beside the CLI under test
 #    (CLI_UNDER_TEST). Every topic of either, each page as text and as
 #    JSON, the list, the list as JSON and the usage: same bytes, same exit.
+# 3. When the CLI under test is the k5 binary (K5_CLI_UNDER_TEST set): the
+#    forms it answers itself (the list, the usage, every page as text and
+#    as JSON, the aliases) print what this checkout's bash prints, with
+#    the binary's hand-over to bash broken: K5_HOME_OVERRIDE set to a
+#    relative path, which bash never reads and the binary refuses before
+#    it runs bash. So a pass is the binary's own answer. The forms bash
+#    keeps (the list as JSON, an unknown topic, the bash pages, the cards
+#    page, errors) must fail that way, never print a page.
 #
 # No daemon: study pages are offline. Each run gets an empty HOME and no
 # K2_/K5_ settings (env -i), in a scratch folder. Never touches ~/.k2.
@@ -59,10 +67,13 @@ trap 'rm -rf "$SANDBOX"' EXIT
 mkdir -p "$SANDBOX/home" "$SANDBOX/cwd" "$SANDBOX/out"
 
 # run <prog> <out file> <args...>: the program's stdout to the file, its
-# exit code as the file's last line in <out file>.code.
+# exit code as the file's last line in <out file>.code. RUN_ENV holds
+# settings to add (NAME=value words).
+RUN_ENV=()
 run() {
     local prog="$1" out="$2" code=0; shift 2
-    (cd "$SANDBOX/cwd" && env -i HOME="$SANDBOX/home" PATH="$PATH" LC_ALL=C "$prog" "$@") > "$out" 2> "$out.err" || code=$?
+    (cd "$SANDBOX/cwd" && env -i HOME="$SANDBOX/home" PATH="$PATH" LC_ALL=C ${RUN_ENV[@]+"${RUN_ENV[@]}"} "$prog" "$@") \
+        > "$out" 2> "$out.err" || code=$?
     printf '%s\n' "$code" > "$out.code"
 }
 
@@ -161,6 +172,79 @@ if [ -n "$BASE" ]; then
         both "k2 study $id" study "$id"
         both "k2 study $id --json" study "$id" --json
     done
+fi
+
+if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
+    echo "== the binary answers the study pages itself =="
+    BROKEN="K5_HOME_OVERRIDE=not/absolute"
+    # native <args...>: the binary with its hand-over broken prints what
+    # the bash prints.
+    native() {
+        RUN_ENV=()
+        run "$CLI_BASH_SOURCE" "$SANDBOX/out/bash" study "$@"
+        RUN_ENV=("$BROKEN")
+        run "$NEW" "$SANDBOX/out/bin" study "$@"
+        RUN_ENV=()
+        if cmp -s "$SANDBOX/out/bash" "$SANDBOX/out/bin" && cmp -s "$SANDBOX/out/bash.err" "$SANDBOX/out/bin.err" \
+            && cmp -s "$SANDBOX/out/bash.code" "$SANDBOX/out/bin.code"; then
+            ok "the binary answers k2 study $*"
+        else
+            bad "k2 study $*: the binary's own answer differs from bash"
+            diff "$SANDBOX/out/bash" "$SANDBOX/out/bin" | head -6 >&2 || true
+            diff "$SANDBOX/out/bash.err" "$SANDBOX/out/bin.err" | head -6 >&2 || true
+        fi
+    }
+    # handed <args...>: the binary hands the form to bash (so with the
+    # hand-over broken it fails, saying why, and prints nothing on stdout).
+    handed() {
+        RUN_ENV=("$BROKEN")
+        run "$NEW" "$SANDBOX/out/bin" study "$@"
+        RUN_ENV=()
+        if [ "$(cat "$SANDBOX/out/bin.code")" != 0 ] && [ ! -s "$SANDBOX/out/bin" ] \
+            && grep -q K5_HOME_OVERRIDE "$SANDBOX/out/bin.err"; then
+            ok "k2 study $* goes to bash"
+        else
+            bad "k2 study $* did not go to bash (exit $(cat "$SANDBOX/out/bin.code"))"
+        fi
+    }
+    native
+    native list
+    native --help
+    native -h
+    native errors --help
+    native --json -h
+    native "" errors
+    for a in routines routine reminders reminder cron; do native "$a"; native "$a" --json; done
+    for id in $ids; do
+        case " $BASH_PAGES " in *" $id "*) handed "$id"; handed "$id" --json; continue ;; esac
+        native "$id"
+        native "$id" --json
+    done
+    handed --json
+    handed list --json
+    handed nope
+    handed "$CARDS_ONLY"
+    handed --bogus
+    handed errors db
+    handed -- errors
+    # A passport: the list, the usage and the apps pages ask the daemon
+    # whether cards are on, so they go to bash; other pages don't ask.
+    RUN_ENV=("K2_HOOK_TOKEN=sessT.notreal1" "$BROKEN")
+    for f in "" --help apps skins; do
+        run "$NEW" "$SANDBOX/out/bin" study $f
+        if [ "$(cat "$SANDBOX/out/bin.code")" != 0 ] && grep -q K5_HOME_OVERRIDE "$SANDBOX/out/bin.err"; then
+            ok "with a passport k2 study $f goes to bash"
+        else
+            bad "with a passport k2 study $f did not go to bash"
+        fi
+    done
+    run "$NEW" "$SANDBOX/out/bin" study errors
+    RUN_ENV=()
+    if [ "$(cat "$SANDBOX/out/bin.code")" = 0 ] && cmp -s "$SANDBOX/out/bin" "$TEXT/errors.txt"; then
+        ok "with a passport the binary answers k2 study errors"
+    else
+        bad "with a passport k2 study errors was not the binary's page"
+    fi
 fi
 
 echo ""

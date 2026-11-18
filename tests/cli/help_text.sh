@@ -32,6 +32,17 @@
 #    the same stdout, the same stderr, the same exit. (`<words> help` is
 #    not a help form for most verbs: `k2 domain remove help` would remove
 #    a domain named help. It runs only where ENTRY names it.)
+# 3. When the CLI under test is the k5 binary (K5_CLI_UNDER_TEST set):
+#    every form in crates/k5-cli/src/help_native.txt (the forms it answers
+#    itself, tests/cli/help_native.sh) prints what this checkout's bash
+#    prints, with the binary's hand-over to bash broken: K5_HOME_OVERRIDE
+#    set to a relative path, which bash never reads and the binary refuses
+#    before it runs bash. So a pass is the binary's own answer. Forms bash
+#    keeps (the tiers made of pieces, the card pages, pieces, a form that
+#    is not exactly a row) must fail that way. So must a family's help
+#    with K2_HOOK_SOCK set (its session checks are bash's) and any help
+#    with no port or no token (the connection gate); help <w> with
+#    K2_HOOK_SOCK set, and a passport with K2_PORT, stay the binary's.
 #
 # No daemon: help is offline. Each run gets a scratch HOME and no K2_/K5_
 # settings from the caller (env -i). The connection gate wants a port and a
@@ -129,11 +140,13 @@ done
 
 # run <prog> <out file> <args...>: stdout to the file, stderr to <out>.err,
 # the exit code to <out>.code. A stub call is a failure.
+# RUN_ENV holds settings to add (NAME=value words; a later HOME wins).
+RUN_ENV=()
 run() {
     local prog="$1" out="$2" code=0; shift 2
     : > "$SANDBOX/stub.log"
     (cd "$SANDBOX/cwd" && env -i HOME="$SANDBOX/home" PATH="$SANDBOX/stub:$PATH" LC_ALL=C \
-        "$prog" "$@") > "$out" 2> "$out.err" < /dev/null || code=$?
+        ${RUN_ENV[@]+"${RUN_ENV[@]}"} "$prog" "$@") > "$out" 2> "$out.err" < /dev/null || code=$?
     printf '%s\n' "$code" > "$out.code"
     if [ -s "$SANDBOX/stub.log" ]; then
         bad "k2 $* ran $(tr '\n' ';' < "$SANDBOX/stub.log")"
@@ -280,6 +293,77 @@ if [ -n "$BASE" ]; then
         both $cmd
     done <<<"$all"
     echo "  $((pass - before)) entry points match"
+fi
+
+if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
+    echo "== the binary answers the help forms itself =="
+    LIST="$ROOT/crates/k5-cli/src/help_native.txt"
+    BROKEN="K5_HOME_OVERRIDE=not/absolute"
+    before=$pass
+    # native <settings words> -- <args...>: the binary with its hand-over
+    # broken prints what the bash prints, both with the settings.
+    native() {
+        local -a set=()
+        while [ "$1" != "--" ]; do set+=("$1"); shift; done
+        shift
+        RUN_ENV=(${set[@]+"${set[@]}"})
+        run "$CLI_BASH_SOURCE" "$SANDBOX/out/bash" "$@"
+        RUN_ENV=(${set[@]+"${set[@]}"} "$BROKEN")
+        run "$NEW" "$SANDBOX/out/bin" "$@"
+        RUN_ENV=()
+        if cmp -s "$SANDBOX/out/bash" "$SANDBOX/out/bin" && cmp -s "$SANDBOX/out/bash.err" "$SANDBOX/out/bin.err" \
+            && cmp -s "$SANDBOX/out/bash.code" "$SANDBOX/out/bin.code"; then
+            ok
+        else
+            bad "k2 $* (${set[*]:-}): the binary's own answer differs from bash"
+            diff "$SANDBOX/out/bash" "$SANDBOX/out/bin" | head -6 >&2 || true
+            diff "$SANDBOX/out/bash.err" "$SANDBOX/out/bin.err" | head -6 >&2 || true
+        fi
+    }
+    # handed <settings words> -- <args...>: the binary hands it to bash, so
+    # with the hand-over broken it fails, saying why, with stdout empty.
+    handed() {
+        local -a set=()
+        while [ "$1" != "--" ]; do set+=("$1"); shift; done
+        shift
+        RUN_ENV=(${set[@]+"${set[@]}"} "$BROKEN")
+        run "$NEW" "$SANDBOX/out/bin" "$@"
+        RUN_ENV=()
+        if [ "$(cat "$SANDBOX/out/bin.code")" != 0 ] && [ ! -s "$SANDBOX/out/bin" ] \
+            && grep -q K5_HOME_OVERRIDE "$SANDBOX/out/bin.err"; then
+            ok
+        else
+            bad "k2 $* (${set[*]:-}) did not go to bash (exit $(cat "$SANDBOX/out/bin.code"))"
+        fi
+    }
+    rows=0
+    while IFS='|' read -r argv _; do
+        case "$argv" in ''|'#'*) continue ;; esac
+        rows=$((rows + 1))
+        # shellcheck disable=SC2086  # argv is words
+        native -- $argv
+    done < "$LIST"
+    [ "$rows" -gt 300 ] || bad "only $rows rows in $LIST"
+    for cmd in "" "help" "--help" "-h" "help deprecated" "help nope" "app --help" "chat --help" \
+        "mail send x --help" "help mail send" "zen --help" "wiki nope" "mail --help x"; do
+        # shellcheck disable=SC2086
+        handed -- $cmd
+    done
+    SOCK="K2_HOOK_SOCK=$SANDBOX/no.sock"
+    handed "$SOCK" -- mail send --help
+    handed "$SOCK" -- vault --help
+    native "$SOCK" -- help mail
+    native "$SOCK" -- help-advanced
+    EMPTY="HOME=$SANDBOX/empty-home"
+    mkdir -p "$SANDBOX/empty-home"
+    handed "$EMPTY" -- help mail
+    handed "$EMPTY" -- mail send --help
+    handed "$EMPTY" "K2_PORT=1" -- help mail
+    handed "$EMPTY" "K2_HOOK_TOKEN=sessT.notreal1" -- help mail
+    native "$EMPTY" "K2_PORT=1" "K2_HOOK_TOKEN=sessT.notreal1" -- help mail
+    native "$EMPTY" "K2_PORT=1" "K2_HOOK_TOKEN=sessT.notreal1" -- mail send --help
+    handed "SHELLOPTS=xtrace" -- mail send --help
+    echo "  $((pass - before)) binary checks passed ($rows forms)"
 fi
 
 echo ""

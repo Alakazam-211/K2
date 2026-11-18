@@ -69545,11 +69545,13 @@ Usage: k2 update [--app|--cli [--check]|--list]
 EOF
 }
 
+# `k2 update` / `--app`: this k2's version and the latest release's tag,
+# with its download page. `k2 update --list`: the ten newest releases.
+# cmd_update_v2 is the only caller, with --list or with nothing.
 cmd_app_update() {
     # Both forms ask GitHub: refused under air-gap, like k2 daemon install.
     _k2_refuse_if_airgap
-    local version="${1:-}"
-    if [ "$version" = "--list" ] || [ "$version" = "-l" ]; then
+    if [ "${1:-}" = "--list" ]; then
         # List available versions from GitHub
         echo "Available K2 releases:"
         curl -sH "Accept: application/vnd.github.v3+json" \
@@ -69566,41 +69568,20 @@ for r in data:
         return
     fi
 
-    if [ -z "$version" ]; then
-        # Check for latest and show info
-        echo "Checking for app updates..."
-        local latest
-        latest=$(curl -sH "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/Alakazam-211/K2/releases/latest" 2>/dev/null)
-        local tag
-        tag=$(echo "$latest" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('tag_name','unknown'))" 2>/dev/null)
-        echo "  Current: v$K2_CLI_VERSION"
-        echo "  Latest:  $tag"
-        echo ""
-        echo "To update the app, download from:"
-        echo "  https://github.com/Alakazam-211/K2/releases/tag/$tag"
-        echo ""
-        echo "Or use: k2 update --app --list  to see all versions"
-        return
-    fi
-
-    # Download specific version
-    local tag="$version"
-    # Add 'v' prefix if not present
-    [[ "$tag" != v* ]] && tag="v$tag"
-    local dmg_url="https://github.com/Alakazam-211/K2/releases/download/${tag}/K2_${tag#v}_aarch64.dmg"
-    echo "Downloading K2 $tag..."
-    echo "  URL: $dmg_url"
-    local tmpfile="/tmp/K2_${tag}.dmg"
-    if curl -L --progress-bar -o "$tmpfile" "$dmg_url" 2>&1; then
-        echo ""
-        echo "Downloaded to: $tmpfile"
-        echo "Opening DMG..."
-        open "$tmpfile"
-    else
-        echo "Error: Failed to download. Check the version tag exists." >&2
-        exit 1
-    fi
+    # Check for latest and show info
+    echo "Checking for app updates..."
+    local latest
+    latest=$(curl -sH "Accept: application/vnd.github.v3+json" \
+        "https://api.github.com/repos/Alakazam-211/K2/releases/latest" 2>/dev/null)
+    local tag
+    tag=$(echo "$latest" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('tag_name','unknown'))" 2>/dev/null)
+    echo "  Current: v$K2_CLI_VERSION"
+    echo "  Latest:  $tag"
+    echo ""
+    echo "To update the app, download from:"
+    echo "  https://github.com/Alakazam-211/K2/releases/tag/$tag"
+    echo ""
+    echo "Or use: k2 update --app --list  to see all versions"
 }
 
 # `k2 update --cli [--check]`. The CLI never updates itself: it ships with K2

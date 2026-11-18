@@ -377,7 +377,9 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 63;
 /// v15 = 0.46.15: "Your compute node list" (`compute.allow-nodes`).
 /// v16 = 0.46.15: the switches by their current Settings labels ("Let agents
 /// ask with permission cards", "Let this agent refresh its pinned chat").
-pub const SKILL_VERSION_PERMISSIONS: u32 = 16;
+/// v17 = 0.46.16: `--to` and "Who is asked" (`permission.approvers`), and a
+/// login's role moved in place (`k2 app grant role`, `app.login-grant op=role`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 17;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

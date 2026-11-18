@@ -66,6 +66,11 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Servers
 - **New servers come up ready for Apps.** The server setup script now gives agent sessions their own memory budget, sized by the server's memory (about 1/16 of it: 2 GB on 32 GB or less, 4 GB on 64 GB, 8 GB on 128 GB and up), restarts K2 once during setup while nobody is signed in yet, turns on automatic setup after updates, and stops with the failing checks named if `k2 app doctor` isn't ready at the end. `--allow-not-ready` (or `K2_ALLOW_NOT_READY=1`) is for a server that deliberately won't run Apps.
 
+### Permission cards
+- **Choose who an agent's card asks.** An agent can name who it asks: `k2 permission request … --to <login>[,<login>…]` (owners or admins who can answer it, or `owner`). Only those people get the card's Allow and Deny, the push, the Tickets item and the row in Waiting on you; a name K2 doesn't know, or someone who can't answer that card, is refused and nothing is sent. The owner can also choose who agents' cards go to when an agent names no one: Settings → Access → Permission Cards → Who agents ask, `k2 permission approvers`, or a card an agent puts up for it. Left as it is, every owner or admin who can answer is asked, as before.
+- **An App's agent can move one of its App's logins to another role without signing the person out.** With "Let this agent manage its Apps' users" on, `k2 app grant role <grant-id> --role <role>` works for a login of the agent's own App; without it, the refusal ends with the line to ask for that switch. An agent can also ask for one move on a card (`app.login-grant op=role`); the person stays signed in either way.
+- **A refused `k2 msg` ends with the right line.** When K2 refuses a message to an agent that isn't one of your connections, the error now ends with "Ask with: k2 permission request connections.add …", not "It can't be requested." `--inbox-wake` and `--inbox-silent` sends, `k2 fed send` and `k2 push` end their refusals the same way.
+
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 
 ### Threads and Home

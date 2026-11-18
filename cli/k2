@@ -99077,12 +99077,13 @@ A hold (exit 2) already made a request the approvers can see in Settings. Asking
 - `k2 permission request <action> [key=value ...] --why "<one line, at most 200 characters>"`
 - Lists are comma-separated: `rooms=a,b`. Over 200 characters is an error. No secrets in `--why`.
 - `--dry-run` shows the card and who will see it, and sends nothing.
+- `--to <login>[,<login>…]` asks only those people: each an owner or admin who may answer it (the dry run lists them), or `owner` (this server's own login). Use it when your human says who to ask, or that someone must not be contacted. An unknown name, or one who can't answer it, is refused and nothing is sent. Without `--to`: the owner's list (Settings → Access → Permission Cards → Who agents ask), else everyone who may answer.
 - It returns at once with an id. Keep working; don't loop on status.
 
 ## What people see
 
 - K2 writes the card on your Thread: what changes, what it means, how long. Your `--why` shows under it, labelled with your name.
-- People who may approve get Allow and Deny, and a push.
+- The people it asks get Allow and Deny, and a push: everyone who may approve, or only those `--to` or the owner's list names.
 - The person you're working with, if they can't approve, sees that an admin was asked and that they can keep working with you meanwhile. They can leave the approver a note. You don't need to relay notes, and you never see them.
 
 ## Your own service or App
@@ -99124,6 +99125,10 @@ Add `as=fetch`, `as=file` or `as=env` to ask for one way to get it; without it y
     k2 permission request app.login-grant op=add user=<username> app=<your app> role=<role> --why "<what you need it for>"
 
 The owner sees who gets in, to which App, with which role, and what that role lets them do, and only the owner can allow it (the error says "owner/admin"; for logins it's the owner). `user=` takes a username. When the `[permission:]` turn says approved, the login exists: don't run the add again, and check it with `k2 app grant list`, which shows the logins on your own Apps. `op=remove user=<username> app=<your app>` takes a login away the same way (`k2 app grant rm` prints that line). Never an agent's login and never a box login.
+
+To move a login your App already has onto another role, keep their sessions: don't remove and add it again (that signs them out). With "Let this agent manage its Apps' users" on, `k2 app grant role <grant-id> --role <role>` is yours (the grant id from `k2 app grant list`): a login of your own App, a role of that App or a box-wide one of your workspace. Without the switch it's refused (`app_users_off`) and ends with the line to ask for the switch. To ask for one move only:
+
+    k2 permission request app.login-grant op=role user=<username> app=<your app> role=<role> --why "<what you need it for>"
 
 A box login is a person with `host` access to the whole server: you never change their access yourself. To give one access to your own App, ask the owner on its own card, which only the owner can allow:
 
@@ -99229,6 +99234,10 @@ Never ask for a permission card for it.
 ## Expired
 
 Unanswered cards expire after 3 days, and you get one turn. Still need it? Ask once more (a new id; status shows "ask 2 of 2"). If that expires too, file a ticket: `k2 tickets ask "<title>" --html brief.html --assign <user>` (the brief: `k2 study ticket-brief`).
+
+## Who is asked
+
+When your human tells you who agents' cards should go to from now on (or who must never get them), ask the owner to set it: `k2 permission request permission.approvers to=<login>[,<login>…] --why "..."` (`to=everyone` puts back the default). Only the owner allows it. One card at a time: `--to`.
 
 ## Status
 

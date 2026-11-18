@@ -55,6 +55,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 study app-deploys` gives the real default memory limit.** A new App gets 512 MiB (`memory.max`) unless the install names one; the page said there was no limit by default.
 - **Who can turn on the sign-in door is now spelled out.** `k2 app auth door on <app>` turns on that App's door: you, an Admin, or the App's own agent with "Build and run Apps" can do this. `k2 app auth door on`, with no App, is the server's switch for every App, and only you can use it. When an agent tries the server's switch, the refusal shows it the command for its own App.
 - **A temporary password's sign-in answer points at what works.** When someone else set a person's password, the answer's `changePath` is now `/cli/skin/password/reset`, the route your form posts `{token, password}` to (it named the set-password page, which refuses a post). `changeUrl` is left out for an App with no URL of its own, instead of pointing at the server's own address.
+- **`k2 capabilities` says static Apps and the update feed are here.** The `engine.static` and `updates` rows used to say "not built" on every server, though both shipped in 0.46.7; they now say yes while Apps are on, and name the Apps switch when they're off. `k2 app status` shows an App's update feed too: its key, its channels and the version each points at.
 
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 

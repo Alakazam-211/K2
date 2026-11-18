@@ -363,10 +363,30 @@ fn phone_part(app: &store::AppRow) -> J {
     json!({ "pairing": pairing, "push": push })
 }
 
-/// 9. Updates: the update feed (prd-tauri-core-0467-v1 TC-6…TC-12) when
-/// this server has it.
-fn updates_part(_app: &store::AppRow) -> J {
-    json!({ "feed": "off", "why": "not_built" })
+/// 9. Updates: the update feed (prd-tauri-core-0467-v1 TC-6…TC-12; built
+/// in since 0.46.7, `k2 app updates`): whether the App has an updater key,
+/// its channels and the version each points at, and how many releases.
+/// `feed` is `on` once a channel points at a release, `unused` before.
+fn updates_part(app: &store::AppRow) -> J {
+    use k2_core::app_updates::store as us;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let key = us::key(&conn, &app.app_id).ok().flatten().is_some();
+    let releases = us::releases(&conn, &app.app_id).unwrap_or_default();
+    let channels: serde_json::Map<String, J> = us::channels(&conn, &app.app_id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| {
+            let version = releases.iter().find(|r| r.id == c.release_id).map(|r| J::String(r.version.clone())).unwrap_or(J::Null);
+            (c.channel, version)
+        })
+        .collect();
+    json!({
+        "feed": if channels.is_empty() { "unused" } else { "on" },
+        "key": key,
+        "channels": channels,
+        "releases": releases.len(),
+    })
 }
 
 #[cfg(test)]

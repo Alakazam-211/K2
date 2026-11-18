@@ -47,10 +47,6 @@ pub fn no_row(cap: &str, detail: impl Into<String>, reason: &str, fix: &str, cod
     json!({ "cap": cap, "ok": false, "detail": detail.into(), "missing": { "reason": reason, "fix": fix, "code": code } })
 }
 
-fn feature_on(f: &str) -> bool {
-    crate::boot_status::features().iter().any(|x| *x == f)
-}
-
 /// `GET /cli/capabilities[?node=]`.
 pub fn handle(who: Who, params: &HashMap<String, String>) -> CliResponse {
     match who {
@@ -121,10 +117,14 @@ fn box_rows(who: &Who, doctor: &J) -> Vec<J> {
     } else {
         no_row("engine.open", "the open path is off here", OWNER_DISABLED, "deploy walled Apps, or the owner opens the path for one App (k2 app exception)", Some("open_path_only"))
     });
-    out.push(if feature_on("app-static-v1") {
-        row("engine.static", true, "static Apps: a built folder served with no process (host.mode \"static\")")
+    // The static engine (`apps::static_engine`, 0.46.7) is always built in
+    // and needs no wall, so it is on exactly when Apps are (every
+    // `/cli/app/*` route is dark otherwise). It never names
+    // `static_not_on_runtime`: that id is retired (older servers only).
+    out.push(if apps_on {
+        row("engine.static", true, format!("static Apps: a built folder served with no process (host.mode \"static\"); wall: {}", crate::apps::static_engine::ISOLATION_NOTE))
     } else {
-        no_row("engine.static", "this K2 doesn't serve static Apps on the runtime yet", NOT_BUILT, "serve the folder with k2 publish, or update K2 (k2 update --app)", Some("static_not_on_runtime"))
+        no_row("engine.static", "static Apps deploy only while Apps are on", OWNER_DISABLED, "the owner turns Apps on in Settings → Cores → Apps → This server", Some("apps_disabled"))
     });
     out.push(row("protocols", true, "HTTP/1.1 and WebSocket on the App's labels and custom domains"));
     out.push(no_row(
@@ -149,10 +149,13 @@ fn box_rows(who: &Who, doctor: &J) -> Vec<J> {
         no_row("mail", "email from Apps is off on this server", OWNER_DISABLED, "the owner turns it on (Settings → Cores → Email Notifications)", Some("email_off"))
     });
     out.extend(push_rows(who));
-    out.push(if feature_on("app-updates-v1") {
-        row("updates", true, "a desktop app's update feed (k2 app updates)")
+    // The update feed (`apps::updates_routes`, 0.46.7) is built in and
+    // behind the same Apps switch; each App still needs its download-host
+    // token before a push (`dl_token_missing`, per App, not per box).
+    out.push(if apps_on {
+        row("updates", true, "a desktop app's update feed (k2 app updates); each App keeps its own download-host token (k2 app updates token)")
     } else {
-        no_row("updates", "this K2 has no update feed for desktop apps yet", NOT_BUILT, "update K2 (k2 update --app); until then host latest.json yourself", Some("updates_host_unavailable"))
+        no_row("updates", "the update feed for desktop apps runs only while Apps are on", OWNER_DISABLED, "the owner turns Apps on in Settings → Cores → Apps → This server", Some("apps_disabled"))
     });
     let q = crate::apps::quotas::DEFAULTS;
     out.push(row(

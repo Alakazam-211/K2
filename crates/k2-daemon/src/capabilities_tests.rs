@@ -64,6 +64,50 @@ fn the_box_rows_have_the_shape_and_every_code_is_explained() {
     k2_core::deploy::set_enabled(true);
 }
 
+/// The static engine and the update feed are built in (0.46.7) and on with
+/// Apps: their rows read from the Apps switch, never from a boot-status
+/// flag nothing sets (an App agent saw `engine.static: not_built` on a
+/// 0.46.14 server while `k2 explain static_not_on_runtime` said 0.46.7).
+#[test]
+fn static_and_updates_rows_follow_the_apps_switch_and_no_row_names_a_retired_id() {
+    let _home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    let find = |v: &J, cap: &str| v["box"].as_array().expect("rows").iter().find(|r| r["cap"] == cap).cloned().unwrap_or_else(|| panic!("{cap}: {v}"));
+    k2_core::deploy::set_enabled(true);
+    let (_, on) = call(Who::Owner, &[]);
+    let st = find(&on, "engine.static");
+    assert_eq!(st["ok"], true, "{st}");
+    assert!(st.get("missing").is_none(), "{st}");
+    assert!(st["detail"].as_str().expect("detail").contains(crate::apps::static_engine::ISOLATION_NOTE), "{st}");
+    let up = find(&on, "updates");
+    assert_eq!(up["ok"], true, "{up}");
+    assert!(up.get("missing").is_none(), "{up}");
+    for r in on["box"].as_array().expect("rows") {
+        if let Some(code) = r["missing"]["code"].as_str() {
+            let row = k2_core::refusals::lookup(code).expect("registry row");
+            assert_eq!(row.status, k2_core::refusals::Status::Live, "{}: names the retired id {code}", r["cap"]);
+        }
+    }
+    k2_core::deploy::set_enabled(false);
+    let (_, off) = call(Who::Owner, &[]);
+    for cap in ["engine.static", "updates"] {
+        let r = find(&off, cap);
+        assert_eq!(r["ok"], false, "{r}");
+        assert_eq!(r["missing"]["reason"], OWNER_DISABLED, "{r}");
+        assert_eq!(r["missing"]["code"], "apps_disabled", "{r}");
+    }
+    k2_core::deploy::set_enabled(true);
+}
+
+/// No row reads a boot-status flag: a flag nobody pushes is a row that is
+/// "no" forever. Rows read the real switch or the real module.
+#[test]
+fn no_row_reads_a_boot_status_flag() {
+    let src = include_str!("capabilities.rs");
+    let prod = src.split("\n#[cfg(test)]").next().expect("prod");
+    assert!(!prod.contains("boot_status::features"), "capabilities rows must not read boot-status flags");
+}
+
 #[test]
 fn every_code_this_module_can_name_is_a_registry_row() {
     let src = include_str!("capabilities.rs");

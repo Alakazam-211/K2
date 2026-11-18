@@ -94,7 +94,8 @@ fn every_part_is_there_and_a_fresh_app_is_yellow_with_the_deploy_command() {
     assert!(next_runs(&v).contains(&"k2 app deploy jobs <folder>".to_string()), "{v}");
     assert_eq!(v["checks"]["declared"], 0, "{v}");
     assert_eq!(v["phone"]["push"]["keys"], json!({ "apns": false, "fcm": false }), "yes/no only: {v}");
-    assert_eq!(v["updates"]["feed"], "off");
+    // The feed is built in (0.46.7): a fresh App has it, unused, no key.
+    assert_eq!(v["updates"], json!({ "feed": "unused", "key": false, "channels": {}, "releases": 0 }), "{v}");
 }
 
 #[test]

@@ -165,7 +165,7 @@ pub static TABLE: &[Noun] = &[
     bash(&["glossary"]),
     bash(&["help-deprecated"]),
     bash(&["help-internal"]),
-    bash(&["sessions"]),
+    native(&["sessions"]),
     bash(&["sidecar"]),
     bash(&["root-helper"]),
     bash(&["front"]),

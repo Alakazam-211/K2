@@ -476,7 +476,9 @@ for p in parts:
         raw="$(_compute_send POST /cli/zen/data/tx/add "{\"txId\":\"$tx\",\"ops\":$part}")"
         status="${raw##*$'\n'}"; body="${raw%$'\n'*}"
         if [ "$status" != "200" ]; then
-            _compute_send POST /cli/zen/data/tx/abort "{\"txId\":\"$tx\"}" >/dev/null 2>&1 || true
+            # Best effort, soft: an abort with no answer never ends the
+            # command before _gd_fail names the add that failed.
+            _K2_NOANSWER_SOFT=1 _compute_send POST /cli/zen/data/tx/abort "{\"txId\":\"$tx\"}" >/dev/null 2>&1 || true
             _gd_fail "$status" "$body"
         fi
     done <<<"$plan"

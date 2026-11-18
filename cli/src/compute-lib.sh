@@ -1,5 +1,3 @@
-# _compute_send METHOD PATH [payload] [tcp] → `<body>\n<status>` on stdout.
-# GET payload = urlencoded query; POST payload = JSON body.
 # Is this shell inside a K2 terminal (a k2-ptyd or k2-daemon ancestor)?
 # CE-9: an agent there whose K2_* passport vars went missing falls back to
 # the owner token silently; the submit says so (a warning, never a refusal).
@@ -17,9 +15,18 @@ _compute_in_k2_tree() {
     return 1
 }
 
+# _compute_send METHOD PATH [payload] [tcp] → `<body>\n<status>` on stdout.
+# GET payload = urlencoded query; POST payload = JSON body.
+#
+# 0.46.15: a POST goes again over TCP after the cell socket only when the
+# socket took none of it: the connect failed (curl 7) or the daemon
+# answered "not served on cell socket", as cli_send_json. Any other
+# failure (a timeout, an empty or broken reply, status 000) may have run
+# it, so it is not sent again: _cli_send_unanswered says so and ends the
+# command with 1. GETs keep the fallback.
 _compute_send() {
     local method="$1" path="$2" payload="${3:-}" force_tcp="${4:-}"
-    local sock out="" _K2_CFG=""
+    local sock out="" _K2_CFG="" rc=0 t0="$SECONDS"
     if [ "$method" = "POST" ] && [ "$path" = "/cli/compute/run" ] && [ -z "${_CP_OWNER_WARNED:-}" ] && ! _compute_in_session && _compute_in_k2_tree; then
         _CP_OWNER_WARNED=1
         echo "[k2 compute] no passport in this shell: this job is submitted as the owner (its jobs show via: owner_token). Keep K2_* set in agent shells." >&2
@@ -30,16 +37,21 @@ _compute_send() {
         if [ "$method" = "GET" ]; then
             [ -n "$payload" ] && _k2_cfg_add data "$payload"
             out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost${path}" \
-                --connect-timeout 5 --max-time 60 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+                --connect-timeout 5 --max-time 60 -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
         else
             _k2_cfg_add data-raw "$payload"
             out="$(_k2_curl "$_K2_CFG" -s -X POST --unix-socket "$sock" "http://localhost${path}" \
                 --connect-timeout 5 --max-time "${K2_CP_MAX_TIME:-120}" -H "Content-Type: application/json" \
-                -w $'\n%{http_code}' 2>/dev/null)" || out=""
+                -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
         fi
-        if [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
+        if [ "$rc" -eq 0 ] && [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
             printf '%s' "$out"
             return 0
+        fi
+        # Soft callers (_K2_NOANSWER_SOFT=1) get status 000 back instead.
+        if [ "$method" != "GET" ] && [ "$rc" -ne 7 ] && [[ "$out" != *"not served on cell socket"* ]]; then
+            _cli_send_unanswered "$path" "$t0" 0 $'\n000'
+            return
         fi
     fi
     _K2_CFG=""

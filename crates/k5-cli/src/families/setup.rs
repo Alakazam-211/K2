@@ -93,7 +93,7 @@ pub const READ_NATIVE: bool = true;
 
 /// The writes (`hide`, `show`, `skip`, `kessel`, `chief-of-staff`,
 /// `dismiss-offer`) are the binary's. Off, the shell answers them.
-pub const WRITE_NATIVE: bool = false;
+pub const WRITE_NATIVE: bool = true;
 
 /// The tool `setup chief-of-staff` rides (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "agent-harness";

@@ -385,3 +385,145 @@ fn setup_hands_these_to_the_shell() {
         rig.check(&c);
     }
 }
+
+const MADE: &str = "Made Kessel: Kessel (kessel) at /home/me/k2-agents/kessel\nKessel is starting and will say hello on its Thread: k2 thread kessel\n";
+
+/// Each write's request and what it prints, the bodies of
+/// `tests/cli/setup_no_python.sh` among them.
+#[test]
+fn the_writes() {
+    let rig = Rig::new(VERB, "writes");
+    let r = |s: u16, b: &str| refusal(s, b);
+    let v = vec![
+        case("hide", &["hide"], &[], vec![text(LIST)], owner_and_port, 0, 1),
+        case("show", &["show"], &[], vec![text(LIST)], owner_and_port, 0, 1),
+        case("dismiss-offer", &["dismiss-offer"], &[], vec![text(LIST)], owner_and_port, 0, 1),
+        case("hide --json", &["hide", "--json"], &[], vec![text(STATUS)], owner_and_port, 0, 1),
+        case("--json skip", &["--json", "skip", "dev_tools"], &[], vec![text(STATUS)], owner_and_port, 0, 1),
+        case("skip", &["skip", "dev_tools"], &[], vec![text(LIST)], owner_and_port, 0, 1),
+        case("skip: the row escaped", &["skip", "od\"d\\row"], &[], vec![text(LIST)], owner_and_port, 0, 1),
+        case("skip: control bytes and UTF-8", &["skip", "a\u{1}\u{7f}\tb\u{e9}\u{2192}"], &[], vec![text(LIST)], owner_and_port, 0, 1),
+        case("skip: a row like a flag", &["skip", "--json"], &[], vec![text(LIST)], owner_and_port, 0, 1),
+        case("kessel: no flags", &["kessel"], &[], vec![text(MADE)], owner_and_port, 0, 1),
+        case("kessel: every flag", &["kessel", "--tool", "claude", "--name", "Kay", "--handle", "kay", "--focus-group", "Ops"], &[], vec![text(MADE)], owner_and_port, 0, 1),
+        case("kessel: the fields escaped", &["kessel", "--tool", "claude", "--name", "K \"Five\" \\ 5", "--handle", "kessel"], &[], vec![text(MADE)], owner_and_port, 0, 1),
+        case("kessel: the last of a flag", &["kessel", "--name", "a", "--name", "b"], &[], vec![text(MADE)], owner_and_port, 0, 1),
+        case("kessel: an empty focus group is left out", &["kessel", "--focus-group", ""], &[], vec![text(MADE)], owner_and_port, 0, 1),
+        case("kessel: a focus group escaped", &["kessel", "--tool", "claude", "--handle", "kessel", "--focus-group", "Bo\"s \\ crew"], &[], vec![text(MADE)], owner_and_port, 0, 1),
+        case("chief-of-staff: about escaped", &["chief-of-staff", "--name", "Ada", "--about", "runs \"ops\"\tand\nbooks", "--tool", "codex"], &[], vec![text(MADE)], owner_and_port, 0, 1),
+        case("chief-of-staff: an empty about is sent", &["chief-of-staff", "--name", "Ada", "--about", "", "--tool", "codex"], &[], vec![text(MADE)], owner_and_port, 0, 1),
+        case("chief-of-staff: a focus group after about", &["chief-of-staff", "--name", "Ada", "--about", "", "--tool", "codex", "--focus-group", "fg_\"1\""], &[], vec![text(MADE)], owner_and_port, 0, 1),
+        case("chief-of-staff --json", &["chief-of-staff", "--json", "--name", "A", "--about", "b", "--tool", "grok"], &[], vec![text(r#"{"workspaceId":"w"}"#)], owner_and_port, 0, 1),
+        case("skip: unknown_row", &["skip", "nope"], &[], vec![r(400, r#"{"ok":false,"error":{"code":"unknown_row","hint":"\"nope\" is not a row on your setup list (k2 setup shows them)"}}"#)], owner_and_port, 2, 1),
+        case("kessel: tool_not_signed_in", &["kessel", "--tool", "grok"], &[], vec![r(400, r#"{"ok":false,"error":{"code":"tool_not_signed_in","hint":"grok isn't signed in on this server: sign in first"}}"#)], owner_and_port, 2, 1),
+        case("kessel: off", &["kessel"], &[], vec![r(404, r#"{"ok":false,"error":{"code":"kessel_first_run_off","hint":"Kessel at first run is off on this server (the owner turns on kesselFirstRun)"}}"#)], owner_and_port, 1, 1),
+        case("kessel: a handle taken", &["kessel"], &[], vec![r(409, r#"{"ok":false,"error":{"code":"kessel_handle_taken","hint":"the handles kessel and kessel5 are both taken by other agents: pass another with --handle (k2 setup kessel --handle <h>), or free one of them"}}"#)], owner_and_port, 1, 1),
+        case("chief-of-staff: a shell tab is a person", &["chief-of-staff", "--name", "A", "--about", "b", "--tool", "claude"], &[], vec![r(403, r#"{"ok":false,"error":{"code":"kessel_session_only","hint":"a shell tab is a person: ask Kessel on its Thread to hire your Chief of Staff"}}"#)], owner_and_port, 3, 1),
+        case("kessel: no such focus group", &["kessel", "--focus-group", "Nope"], &[], vec![r(400, r#"{"ok":false,"error":{"code":"unknown_focus_group","hint":"no focus group is \"Nope\": nothing was made (Settings → Workspaces lists them)"}}"#)], owner_and_port, 4, 1),
+        case("chief-of-staff: two focus groups", &["chief-of-staff", "--name", "A", "--about", "b", "--tool", "claude", "--focus-group", "Ops"], &[], vec![r(400, r#"{"ok":false,"error":{"code":"ambiguous_focus_group","hint":"more than one focus group is named \"Ops\": send its id"}}"#)], owner_and_port, 4, 1),
+        case("hide: a refusal with the cards' object", &["hide"], &[], vec![r(403, PERMISSION_ASK)], owner_and_port, 1, 1),
+        case("kessel: an older daemon's JSON", &["kessel", "--tool", "codex"], &[], vec![text(r#"{"workspaceId":"w1","name":"Kessel","handle":"kessel","path":"/a/kessel","permissions":{"granted":["msg","inbox"],"left":[{"action":"compute.run","reason":"owner asks"},{"action":"vault.read"}]}}"#)], owner_and_port, 0, 1),
+        case("chief-of-staff: an older daemon's JSON", &["chief-of-staff", "--name", "Ada", "--about", "x", "--tool", "codex"], &[], vec![text(r#"{"workspaceId":"w2","name":"Ada","handle":"ada","path":"/a/ada"}"#)], owner_and_port, 0, 1),
+        case("skip: an older daemon's list", &["skip", "phone"], &[], vec![text(STATUS)], owner_and_port, 0, 1),
+        case("hide: an older daemon's answer with no rows", &["hide"], &[], vec![text(r#"{"ok":true}"#)], owner_and_port, 1, 1),
+        Case {
+            compare: Compare::Traceback,
+            ..case("kessel: an older daemon's granted list of numbers", &["kessel"], &[], vec![text(r#"{"workspaceId":"w","permissions":{"granted":[1]}}"#)], owner_and_port, 1, 1)
+        },
+        Case {
+            compare: Compare::Traceback,
+            ..case("kessel: an older daemon's left list of strings", &["kessel"], &[], vec![text(r#"{"workspaceId":"w","permissions":{"left":["x"]}}"#)], owner_and_port, 1, 1)
+        },
+        Case {
+            compare: Compare::Traceback,
+            ..case("kessel: an older daemon's permissions a list", &["kessel"], &[], vec![text(r#"{"workspaceId":"w","permissions":[1]}"#)], owner_and_port, 1, 1)
+        },
+        case("a POST is not asked again when migrating", &["hide"], &[], vec![r(503, r#"{"state":"migrating"}"#)], owner_and_port, 1, 1),
+        case("the bulletin line after a write", &["hide", "--json"], &[], vec![text(BULLETIN)], owner_and_port, 0, 1),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// The writes with a passport: the locked tool sends it in a K2 terminal
+/// even with the owner token on disk; the other verbs send the owner
+/// token there (PRD 13.9 #4: the binary, the passport).
+#[test]
+fn the_writes_with_a_passport() {
+    let rig = Rig::new(VERB, "wpass");
+    let chief: &'static [&'static str] = &["chief-of-staff", "--name", "A", "--about", "b", "--tool", "claude"];
+    let sock = [("K2_HOOK_SOCK", "{sock}")];
+    let v = vec![
+        agent(&rig, &[], case("chief-of-staff over TCP", chief, &[], vec![text(MADE)], port_only, 0, 1)),
+        agent(&rig, &sock, case("chief-of-staff in a K2 terminal", chief, &[], vec![text(MADE)], port_only, 0, 1)),
+        agent(&rig, &sock, case("chief-of-staff in a K2 terminal, the owner token on disk: the passport", chief, &[], vec![text(MADE)], owner_and_port, 0, 1)),
+        Case {
+            compare: Compare::OwnerTokenWithPassport,
+            ..agent(&rig, &sock, case("hide in a K2 terminal, the owner token on disk (PRD 13.9 #4)", &["hide"], &[], vec![text(LIST)], owner_and_port, 0, 1))
+        },
+        agent(&rig, &[], case("an agent's refusal", &["dismiss-offer"], &[], vec![refusal(403, PERSON_ONLY)], port_only, 3, 1)),
+        agent(&rig, &[], case("a refused passport: the write once more, healed", &["skip", "phone"], &[], vec![heal(&rig), text(LIST)], port_only, 0, 2)),
+        agent(&rig, &[], case("a dead passport after a write", &["hide"], &[], vec![refusal(403, REFUSED), refusal(403, REFUSED)], port_only, 3, 2)),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}
+
+/// A write that may have gone out is never sent again: one request for
+/// each way an answer fails to come, TMPDIR usable or not (`_k2_curl` has
+/// no local check, so nothing becomes 75); only a refused connect, which
+/// reached nothing, is tried again.
+#[test]
+fn a_write_is_sent_once() {
+    let rig = Rig::new(VERB, "once");
+    let mut v = Vec::new();
+    for no_tmpdir in [false, true] {
+        for (name, reply) in [
+            ("an empty reply (52)", Reply::Close),
+            ("a reset (56)", Reply::Reset),
+            ("an empty 200", text("")),
+            ("not HTTP (000)", Reply::Raw(GARBAGE.to_vec())),
+            ("a 5xx with no body", Reply::Answer(502, String::new())),
+        ] {
+            for args in [&["hide"][..], &["kessel", "--name", "K"]] {
+                let name: &'static str = Box::leak(
+                    format!("{}{name}: {}", if no_tmpdir { "TMPDIR unusable: " } else { "" }, args.join(" "))
+                        .into_boxed_str(),
+                );
+                v.push(Case {
+                    no_tmpdir,
+                    ..case(name, args, &[], vec![reply.clone()], owner_and_port, 1, 1)
+                });
+            }
+        }
+    }
+    for c in v {
+        rig.check(&c);
+    }
+    let dead = dead_port();
+    rig.check(&case("nothing listens (7): nothing sent", &["skip", "phone"], &[("K2_PORT", dead.as_str())], vec![], owner_only, 1, 0));
+    let published = |r: &Rig| {
+        r.owner_on_disk();
+        std::fs::write(r.k2home.join("daemon.port"), format!("{}\n", r.stub.port)).unwrap();
+    };
+    rig.check(&case("a refused connect, then the published port: sent once", &["hide"], &[("K2_PORT", dead.as_str())], vec![text(LIST)], published, 0, 1));
+}
+
+/// No answer in time (28): one request, the line, exit 1. Slow: 30 s a
+/// side.
+#[test]
+fn a_write_with_a_daemon_that_never_answers() {
+    let rig = Rig::new(VERB, "hang");
+    let c = case(
+        "no answer in time (28)",
+        &["skip", "dev_tools"],
+        &[],
+        vec![Reply::Hang(std::time::Duration::from_secs(35))],
+        owner_and_port,
+        1,
+        1,
+    );
+    rig.check(&c);
+}

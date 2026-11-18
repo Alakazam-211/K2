@@ -27,7 +27,8 @@
 # No tests/cli test meets one through the binary today; one that does is
 # mapped to its difference here by name, never skipped broadly. (The
 # binary's own parity tests meet owner-token-with-passport:
-# crates/k5-cli/tests/whoami_parity.rs and done_parity.rs.)
+# crates/k5-cli/tests/whoami_parity.rs, done_parity.rs and
+# read_parity.rs.)
 #
 # --shard I/N runs every Nth test starting at the Ith (1-based), so the
 # list can be split across jobs. Names after `--` run only those tests.
@@ -130,7 +131,7 @@ done
 # The named expected differences: "name|PRD reference|what differs".
 EXPECTED_DIFFS=(
     "version-offline|13.9 #3|--version with no port or token: bash refuses (exit 1, \"Error: Cannot connect to K2.\"); the binary prints \"k2 <version>\" (exit 0), as help, --schema and --version never need the daemon"
-    "owner-token-with-passport|13.9 #4|an open verb (whoami, done) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
+    "owner-token-with-passport|13.9 #4|an open verb (whoami, done, read) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token"
 )
 
 # check_version_offline: both CLIs run `--version` with a temp HOME and no
@@ -160,10 +161,10 @@ check_version_offline() {
     return 1
 }
 
-# check_owner_token_with_passport: both CLIs run `whoami --json` and
-# `done` with a passport, K2_HOOK_SOCK set (no socket there, so both go
-# over TCP) and the owner token on disk, against a stub that logs each
-# request's token.
+# check_owner_token_with_passport: both CLIs run `whoami --json`, `done`
+# and `read acme` with a passport, K2_HOOK_SOCK set (no socket there, so
+# both go over TCP) and the owner token on disk, against a stub that logs
+# each request's token.
 check_owner_token_with_passport() {
     local d="$WORK/owner-token" port="" pid rc side tok problems=()
     local owner="owner-tok-parity" passport="sessP.parity1"
@@ -200,7 +201,7 @@ s.serve_forever()
         echo "the stub daemon didn't start"
         return 1
     fi
-    for verb in "whoami --json" done; do
+    for verb in "whoami --json" done "read acme"; do
         for side in bash binary; do
             : >"$d/log"
             rc=0

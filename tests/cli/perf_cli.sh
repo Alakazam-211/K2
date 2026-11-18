@@ -31,6 +31,12 @@
 #                  a thread with a file)                 p95 handler time
 #   fallthrough    k5 heartbeat list (a verb the      <= cli/k2's p95 for
 #                  shell answers)                        the same + 5 ms
+#   agent help     k5 mail send --help in a K2        <= 30 ms
+#                  terminal (the passport, a live
+#                  cell socket: the session checks
+#                  pass, nothing is sent)
+#   study list     k5 study with a passport (the      <= 30 ms + the stub's
+#   (passport)     cards probe over TCP, cards on)       p95 handler time
 #   thread read    k5 thread read                     <= 40 ms: pending
 #                                                        (R3.5, not timed)
 #
@@ -123,7 +129,7 @@ TICKET = json.dumps({"id": "fb_000001aa", "status": "waiting", "title": "Ship it
     "brief": {"text": "Problem\nThe release is ready."}, "projectPath": work + "/ws",
     "comments": [{"author": "perf", "at": 1763400061, "body": "See the log.",
                   "attachments": [{"path": "out/log.txt", "size": 4096}]}]}).encode()
-BODIES = {"/cli/whoami": WHOAMI, "/cli/heartbeat/list": b"[]", "/cli/inbox/list": INBOX, "/cli/terminal/read": LINES,
+BODIES = {"/cli/permission/enabled": b'{"enabled":true}', "/cli/whoami": WHOAMI, "/cli/heartbeat/list": b"[]", "/cli/inbox/list": INBOX, "/cli/terminal/read": LINES,
           "/cli/feed": FEED, "/cli/sessions/roster": ROSTER, "/cli/connections": CONNECTIONS,
           "/cli/feedback/list": TICKETS, "/cli/feedback/show": TICKET}
 handler_ns = []
@@ -334,6 +340,43 @@ def phases(label, run_env):
     front = statistics.median(rows.get("spawn to main", [0.0])) + statistics.median(rows["total"])
     print(f"perf_cli: info:   {'wall':<28} {statistics.median(walls):8.3f} ms "
           f"(the front's part {front:.3f} ms, the shell's the rest)")
+
+# An agent in a K2 terminal: its passport, the port and a live cell
+# socket (a bound socket file: the session checks only test that it is
+# one). Each page runs once on both CLIs, then once on the binary with
+# its hand-over to bash broken, before timing.
+import socket
+cell_sock = work + "/cell.sock"
+socket.socket(socket.AF_UNIX).bind(cell_sock)
+cell_env = dict(env, K2_HOOK_SOCK=cell_sock)
+
+def agent_page(name, words, run_env, target, with_stub):
+    def once(argv, extra=None):
+        p = subprocess.run(argv, env=dict(run_env, **(extra or {})), cwd=work + "/ws",
+                           stdin=subprocess.DEVNULL, capture_output=True)
+        return p.returncode, p.stdout, p.stderr
+    a, b = once([k5, *words]), once(bash_argv(*words))
+    if a != b:
+        sys.exit(f"perf_cli: FAIL: {name}: the two CLIs differ before timing\n  k5:   {a!r}\n  bash: {b!r}")
+    own = once([k5, *words], {"K5_HOME_OVERRIDE": "not/absolute"})
+    if own != a:
+        sys.exit(f"perf_cli: FAIL: {name}: not the binary's own answer (it went to bash): {own!r}")
+    print(f"perf_cli: {name}: both exit {a[0]}, same output ({len(a[1])} bytes), the binary's own answer")
+    handler_ns.clear()
+    xs, _ = spawn_runs([k5, *words], run_env, want=a[0])
+    stub_p95 = p95([n / 1e6 for n in handler_ns]) if (with_stub and handler_ns) else 0.0
+    if with_stub and len(handler_ns) != WARM + RUNS:
+        sys.exit(f"perf_cli: FAIL: {name}: {len(handler_ns)} requests in {WARM + RUNS} runs, want one each")
+    got, goal = p95(xs), target + stub_p95
+    results.append(got <= goal)
+    extra = f" + the stub's p95 handler time {stub_p95:.3f} ms" if with_stub else ""
+    print(f"perf_cli: {'pass' if got <= goal else 'FAIL'}: k5 {name}: p95 {got:.2f} ms, target <= {goal:.2f} ms "
+          f"({target:.0f} ms{extra}); median {statistics.median(xs):.2f} ms, min {min(xs):.2f}, max {max(xs):.2f}")
+    theirs, _ = spawn_runs(bash_argv(*words), run_env, want=a[0])
+    print(f"perf_cli: info: cli/k2 {name}: p95 {p95(theirs):.2f} ms (for comparison)")
+
+agent_page("agent help (mail send --help, HOOK_SOCK set)", ["mail", "send", "--help"], cell_env, 30.0, False)
+agent_page("study list with a passport (cards probe)", ["study"], env, 30.0, True)
 
 phases("a passport (this script's call)", env)
 owner = {k: v for k, v in env.items() if k not in ("K2_HOOK_TOKEN", "K2_CELL", "K2_SESSION_ID")}

@@ -177,17 +177,35 @@ fn version_prints_what_the_shell_prints() {
     );
 }
 
+/// A line the front hands to the shell, which needs no daemon: an
+/// unknown verb with a word after it that is not UTF-8 (the binary
+/// answers only UTF-8 lines). bash prints `Unknown command` and its help,
+/// exit 1. The tests that use it test the hand-over, so it must stay one.
+fn unknown() -> Vec<OsString> {
+    let line = vec![
+        OsString::from("nosuchverb"),
+        OsString::from_vec(b"x\xff".to_vec()),
+    ];
+    assert_eq!(
+        k5_cli::front::route(&line),
+        k5_cli::front::Route::Fallthrough,
+        "the binary answers {line:?} itself now: pick another fall-through line"
+    );
+    line
+}
+
 #[test]
 fn a_verb_falls_through_and_answers_as_the_shell_does() {
     let rig = Rig::new("fall");
     let mut odd = b"no\xffsuch verb".to_vec();
     odd.push(b'\n');
     let cases: Vec<Vec<OsString>> = vec![
-        args(&["nosuchverb"]),
+        unknown(),
         args(&["study", "app-api"]),
         args(&["version", "extra"]),
-        // The daily tier's -h is the shell's (k5 alone is the binary's).
-        args(&["-h"]),
+        // A word after help's that is not cmd_help's is the binary's;
+        // two are the shell's.
+        args(&["help", "nope", "x"]),
         vec![OsString::from_vec(odd)],
     ];
     for case in &cases {
@@ -197,7 +215,7 @@ fn a_verb_falls_through_and_answers_as_the_shell_does() {
         assert_eq!(rig.front("k5", case, &[]), want, "k5 {case:?}");
     }
     // The unknown verb's exit code came through.
-    assert_eq!(rig.front("k2", &args(&["nosuchverb"]), &[]).code, Some(1));
+    assert_eq!(rig.front("k2", &unknown(), &[]).code, Some(1));
 
     // The cache: one file named by the hash, 0755, in a 0700 folder, and
     // it is cli/k2.
@@ -226,8 +244,8 @@ fn a_verb_falls_through_and_answers_as_the_shell_does() {
 #[test]
 fn a_changed_cache_file_is_never_run() {
     let rig = Rig::new("tamper");
-    let want = rig.bash(&args(&["nosuchverb"]), &[]);
-    let first = rig.front("k2", &args(&["nosuchverb"]), &[]);
+    let want = rig.bash(&unknown(), &[]);
+    let first = rig.front("k2", &unknown(), &[]);
     assert_eq!(first, want);
     let file = std::fs::read_dir(rig.cache())
         .unwrap()
@@ -237,7 +255,7 @@ fn a_changed_cache_file_is_never_run() {
         .path();
     std::fs::write(&file, "#!/bin/bash\necho PWNED\nexit 42\n").unwrap();
     let ino = std::fs::metadata(&file).unwrap().ino();
-    assert_eq!(rig.front("k2", &args(&["nosuchverb"]), &[]), want);
+    assert_eq!(rig.front("k2", &unknown(), &[]), want);
     assert_eq!(
         std::fs::read(&file).unwrap(),
         std::fs::read(cli_k2()).unwrap()
@@ -254,13 +272,9 @@ fn the_cache_follows_the_home_override() {
     let rig = Rig::new("override");
     let over = rig.dir.join("k2home");
     let over_s = over.to_str().unwrap().to_string();
-    let want = rig.bash(&args(&["nosuchverb"]), &[]);
+    let want = rig.bash(&unknown(), &[]);
     assert_eq!(
-        rig.front(
-            "k2",
-            &args(&["nosuchverb"]),
-            &[("K2_HOME_OVERRIDE", &over_s)]
-        ),
+        rig.front("k2", &unknown(), &[("K2_HOME_OVERRIDE", &over_s)]),
         want
     );
     assert!(k5_cli::fallthrough::cache_dir(&over).is_dir());
@@ -277,11 +291,7 @@ fn a_cache_that_cannot_be_written_is_one_line_and_exit_1() {
     let blocked = rig.dir.join("blocked");
     std::fs::write(&blocked, "").unwrap();
     let blocked_s = blocked.to_str().unwrap().to_string();
-    let out = rig.front(
-        "k5",
-        &args(&["nosuchverb"]),
-        &[("K5_HOME_OVERRIDE", &blocked_s)],
-    );
+    let out = rig.front("k5", &unknown(), &[("K5_HOME_OVERRIDE", &blocked_s)]);
     assert_eq!(out.code, Some(1), "{out:?}");
     assert_eq!(out.stdout, "");
     let want = format!(
@@ -302,7 +312,7 @@ fn bash_runs_the_open_cache_file_and_the_front_s_variables_arrive() {
     // A value left by some other call is replaced by the front's own.
     let out = rig.front(
         "k5",
-        &args(&["nosuchverb"]),
+        &unknown(),
         &[("SHELLOPTS", "xtrace"), ("K5_CLI_SCRIPT_DIR", "/stale")],
     );
     assert_eq!(out.code, Some(1), "{}", out.stdout);
@@ -339,7 +349,7 @@ fn bash_runs_the_open_cache_file_and_the_front_s_variables_arrive() {
         assert!(traced(&line), "no `{line}` in the trace:\n{}", out.stderr);
     }
     // Run straight, the shell sees none of them and closes nothing.
-    let plain = rig.bash(&args(&["nosuchverb"]), &[("SHELLOPTS", "xtrace")]);
+    let plain = rig.bash(&unknown(), &[("SHELLOPTS", "xtrace")]);
     let traced = |line: &str| {
         plain
             .stderr
@@ -364,7 +374,7 @@ fn a_verb_that_falls_through_without_python3_says_so_and_runs_nothing() {
     for (name, case) in [
         ("k5", args(&["msg", "acme", "hello"])),
         ("k2", args(&["compute", "list"])),
-        ("k5", args(&["nosuchverb"])),
+        ("k5", unknown()),
     ] {
         let noun = k5_cli::fallthrough::noun(&case);
         let line = k5_cli::fallthrough::FrontError::NoPython { noun }.to_string();
@@ -382,10 +392,7 @@ fn a_verb_that_falls_through_without_python3_says_so_and_runs_nothing() {
         assert!(!rig.cache().exists(), "{name} {case:?} wrote the shell CLI");
     }
     // With python3 the same verb goes to the shell.
-    let with = rig.front("k5", &args(&["nosuchverb"]), &[]);
-    assert_eq!(
-        with,
-        rig.bash(&args(&["nosuchverb"]), &[("K5_CLI_CALLED_AS", "k5")])
-    );
+    let with = rig.front("k5", &unknown(), &[]);
+    assert_eq!(with, rig.bash(&unknown(), &[("K5_CLI_CALLED_AS", "k5")]));
     assert!(rig.cache().exists(), "the shell CLI was not written out");
 }

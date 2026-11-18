@@ -10,6 +10,7 @@
 mod common;
 
 use std::io::Read;
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
@@ -141,7 +142,17 @@ fn the_notice_is_not_printed_today() {
             "",
             "{name} --version wrote to stderr"
         );
-        let out = rig.front(name).arg("nosuchverb").output().unwrap();
+        // An unknown verb with a word that is not UTF-8: the shell's.
+        let line = [
+            std::ffi::OsString::from("nosuchverb"),
+            std::ffi::OsString::from_vec(b"x\xff".to_vec()),
+        ];
+        assert_eq!(
+            k5_cli::front::route(&line),
+            k5_cli::front::Route::Fallthrough,
+            "the binary answers {line:?} itself now: pick another fall-through line"
+        );
+        let out = rig.front(name).args(&line).output().unwrap();
         assert_eq!(out.status.code(), Some(1), "{name}: {out:?}");
         let said = String::from_utf8_lossy(&out.stderr);
         assert!(!said.is_empty(), "{name} nosuchverb said nothing on stderr");

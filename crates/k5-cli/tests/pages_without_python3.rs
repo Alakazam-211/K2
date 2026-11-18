@@ -3,8 +3,8 @@
 //! every study topic as text and as `--json`, the study list and usage,
 //! every help form in `src/help_native.txt`, the daily tier (`k2`,
 //! `k2 help`, `k2 --help`) and the other pages bash puts together
-//! (`-h`, `help <word>`, the deprecated tier, chat's usage) print the
-//! same bytes, on
+//! (`-h`, `help <word>`, the deprecated tier, chat's usage) and the
+//! unknown command print the same bytes, on
 //! the same stream, with the same exit as with `python3`. With none, the
 //! `--json` pages are the binary's whatever the `PYTHON*` settings and the
 //! locale say, as no Python reads them.
@@ -264,4 +264,36 @@ fn without_python3_the_json_pages_are_the_binary_s_whatever_python_s_settings_sa
     }
     // Some pages have text a Latin-1 reader would read otherwise.
     assert!(non_ascii > 0, "no page has text past ASCII");
+}
+
+/// The unknown command: a retired verb's line, or `Unknown command` and
+/// the daily tier (no passport: cards off), exit 1, the same with no
+/// python3 as with it.
+#[test]
+fn the_unknown_command_prints_the_same_without_python3() {
+    let rig = Rig::new("unknown");
+    let tier = k5_cli::pages::daily_text(false).expect("the daily tier");
+    for (args, stdout, stderr) in [
+        (&["nope"][..], tier.as_str(), "Unknown command: nope\n"),
+        (&["nope", "x", "--json"], tier.as_str(), "Unknown command: nope\n"),
+        (
+            &["who"],
+            "",
+            "Error: 'who' is retired. Use instead: k2 connections list\n",
+        ),
+        (
+            &["agents", "lock", "x"],
+            "",
+            "Error: 'agents lock' is retired (nothing replaces it). Run 'k2 help-deprecated' for the full map.\n",
+        ),
+    ] {
+        let with = rig.run(args, true, &[]);
+        let without = rig.run(args, false, &[]);
+        assert_eq!(
+            (without.code, without.stdout.as_str(), without.stderr.as_str()),
+            (Some(1), stdout, stderr),
+            "{args:?} with no python3"
+        );
+        assert_eq!(without, with, "{args:?}: with no python3, and with it");
+    }
 }

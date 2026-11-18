@@ -680,7 +680,7 @@ pub fn composed_page(
 /// it itself. True: a word the router has no arm for is a retired verb's
 /// line, or `Unknown command: <word>` and the daily tier, as
 /// [`unknown_page`] says. False: the shell answers it.
-pub const UNKNOWN_NATIVE: bool = false;
+pub const UNKNOWN_NATIVE: bool = true;
 
 /// The router's `*)` arm for `argv`, whose first word has no arm
 /// ([`crate::route::TABLE`]), or `None` when the shell answers:

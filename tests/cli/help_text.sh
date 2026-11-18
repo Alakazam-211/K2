@@ -39,9 +39,10 @@
 #    set to a relative path, which bash never reads and the binary refuses
 #    before it runs bash. So a pass is the binary's own answer. The daily
 #    tier's forms (`k2`, `k2 help`, `k2 --help`, `-h`, an empty word,
-#    `help <a word cmd_help has no arm for>`), the deprecated tier and
-#    chat's usage are the binary's too, with no passport (cards off,
-#    nothing asked). Forms bash keeps (the card pages, other pieces, a
+#    `help <a word cmd_help has no arm for>`), the deprecated tier,
+#    chat's usage and the unknown command (a retired verb's line, or
+#    `Unknown command` and the tier) are the binary's too, with no
+#    passport (cards off, nothing asked). Forms bash keeps (the card pages, other pieces, a
 #    form that is not exactly a row) must fail that way. So must any help
 #    with no port or no token (the connection gate), and a family's help
 #    with K2_HOOK_SOCK set and a CODEX_ setting (bash looks for a shared
@@ -378,6 +379,12 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     native -- chat help
     native -- help chat
     native "_CHAT_HELP_MANAGE=0" -- chat --help
+    # The unknown command: a retired verb's line, or the line and the tier.
+    native -- nope
+    native -- nope x --help
+    native -- who
+    native -- agents create
+    native -- work move x
     SOCK="K2_HOOK_SOCK=$SANDBOX/no.sock"
     # No passport: an id tool's help is refused, an open one prints.
     native "$SOCK" -- mail send --help
@@ -394,6 +401,10 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     native "$SOCK" -- help-deprecated
     native "$SOCK" -- help chat
     native "$SOCK" -- chat --help
+    native "$SOCK" -- nope
+    native "$SOCK" -- who
+    # fs is an id tool with no arm: bash's session checks refuse it first.
+    handed "$SOCK" -- fs
     handed "$SOCK" "CODEX_THREAD_ID=t1" -- mail send --help
     native "$SOCK" "CODEX_THREAD_ID=t1" -- agent --help
     # An agent's terminal: a passport and its live socket (a bound socket
@@ -431,6 +442,8 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     # binary hands them over.
     handed "$EMPTY" -- chat --help
     handed "$EMPTY" -- help-deprecated
+    handed "$EMPTY" -- nope
+    handed "$EMPTY" -- who
     echo "  $((pass - before)) binary checks passed ($rows forms, each also in an agent's terminal)"
 fi
 

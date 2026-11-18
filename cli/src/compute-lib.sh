@@ -44,12 +44,13 @@ _compute_send() {
     fi
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_add data-urlencode "token=${TOKEN}"
+        _k2_cfg_auth "$TOKEN"
         [ -n "$payload" ] && _k2_cfg_add data "$payload"
         _k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time 60 -w $'\n%{http_code}' 2>/dev/null || printf '\n000'
     else
-        _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
+        _k2_cfg_add url "${BASE_URL}${path}"
+        _k2_cfg_auth "$TOKEN"
         _k2_cfg_add data-raw "$payload"
         _k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time "${K2_CP_MAX_TIME:-120}" \
             -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'

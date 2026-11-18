@@ -154,7 +154,8 @@ print(json.dumps(d))
             return "$_CONNECT_NO_DAEMON"
         fi
         _K2_CFG=""
-        _k2_cfg_add url "${BASE_URL}/cli/connect/proxy?token=${TOKEN}"
+        _k2_cfg_add url "${BASE_URL}/cli/connect/proxy"
+        _k2_cfg_auth "$TOKEN"
         _k2_cfg_add data-raw "$req"
         rc=0
         out="$(_k2_curl "$_K2_CFG" -sS -X POST -H "Content-Type: application/json" \

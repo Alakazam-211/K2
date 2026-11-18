@@ -254,12 +254,13 @@ cli_send_json() {
     fi
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_add data-urlencode "token=${TOKEN}"
+        _k2_cfg_auth "$TOKEN"
         [ -n "$payload" ] && _k2_cfg_add data "$payload"
         out="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time "$mt" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
     else
-        _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
+        _k2_cfg_add url "${BASE_URL}${path}"
+        _k2_cfg_auth "$TOKEN"
         _k2_cfg_add data-raw "$payload"
         out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time "$mt" \
             -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
@@ -434,7 +435,7 @@ _K2_SEND_ONCE=""
 _k2_send_once_supported() {
     if [ -z "$_K2_SEND_ONCE" ]; then
         local _K2_CFG="" body=""
-        [ -n "${TOKEN:-}" ] && _k2_cfg_add data-urlencode "token=${TOKEN}"
+        _k2_cfg_auth "${TOKEN:-}"
         body="$(_K2_CURL_TRIES=1 _k2_curl "$_K2_CFG" -s -G --connect-timeout 3 --max-time 5 "${BASE_URL}/boot-status" 2>/dev/null)" || body=""
         case "$body" in
             *'"send-once"'*) _K2_SEND_ONCE=1 ;;
@@ -539,7 +540,7 @@ _cli_use_passport_project() {
     fi
     if [ -z "$out" ] || [[ "$out" == *"not served on cell socket"* ]]; then
         _K2_CFG=""
-        _k2_cfg_add data-urlencode "token=${SCOPED_TOKEN}"
+        _k2_cfg_auth "$SCOPED_TOKEN"
         out="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}/cli/whoami" \
             --connect-timeout 5 --max-time 15 2>/dev/null)" || out=""
     fi

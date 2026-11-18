@@ -26,7 +26,7 @@ _permission_probe() {
         out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost/cli/permission/enabled" \
             --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     elif [ -n "${PORT:-}" ]; then
-        _k2_cfg_add data-urlencode "token=${tok}"
+        _k2_cfg_auth "$tok"
         out="$(_k2_curl "$_K2_CFG" -s -G "http://${HOST}:${PORT}/cli/permission/enabled" \
             --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     fi

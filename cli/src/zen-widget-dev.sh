@@ -77,7 +77,8 @@ _zen_session_post_file() {
         tok="${SCOPED_TOKEN:-$(_envn HOOK_TOKEN)}"
     fi
     local _K2_CFG=""
-    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${tok}"
+    _k2_cfg_add url "${BASE_URL}${endpoint}"
+    _k2_cfg_auth "$tok"
     _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time 120 \
         -H "Content-Type: application/json" --data-binary "@$file" 2>/dev/null

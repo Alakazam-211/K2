@@ -626,17 +626,18 @@ print('Disconnected.')
 }
 
 # POST to a query-string route (no JSON body). The daemon parses the
-# token + params from the query; the body is empty/drained. Used by the
+# params from the query and the token from its header; the body is empty. Used by the
 # tunnel start/stop control routes (mutating → POST-allowlisted, with a
 # per-handler `require_post` gate on the daemon side).
 cli_post() {
     local endpoint="$1"; shift
-    local params="token=${TOKEN}&project=$(urlencode "$PROJECT")"
+    local params="project=$(urlencode "$PROJECT")"
     for param in "$@"; do
         params="${params}&${param}"
     done
     local _K2_CFG=""
     _k2_cfg_add url "${BASE_URL}${endpoint}?${params}"
+    _k2_cfg_auth "$TOKEN"
     _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time 30 \
         --data-raw "" 2>/dev/null

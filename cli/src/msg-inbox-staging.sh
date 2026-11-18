@@ -83,13 +83,15 @@ except Exception:
 }
 
 # POST JSON body from a file (avoids ARG_MAX on multi-MB base64 payloads).
-# Uses $TOKEN like cli_post_json (owner or connect-user; not UDS-scoped fs).
+# Uses $TOKEN like cli_post_json (owner or connect-user; not UDS-scoped fs),
+# in an Authorization header.
 _msg_inbox_cli_post_json_file() {
     local endpoint="$1"
     local body_file="$2"
     local max_time="${3:-300}"
     local _K2_CFG=""
-    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}"
+    _k2_cfg_add url "${BASE_URL}${endpoint}"
+    _k2_cfg_auth "$TOKEN"
     _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 10 --max-time "$max_time" \
         -H "Content-Type: application/json" \
@@ -102,7 +104,8 @@ _msg_inbox_cli_post_json() {
     local body="$2"
     local max_time="${3:-30}"
     local _K2_CFG=""
-    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}"
+    _k2_cfg_add url "${BASE_URL}${endpoint}"
+    _k2_cfg_auth "$TOKEN"
     _k2_cfg_add data-raw "$body"
     _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 10 --max-time "$max_time" \

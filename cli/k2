@@ -739,6 +739,17 @@ _k2_cfg_add() {
     _K2_CFG="${_K2_CFG}${1} = ${_K2_CQ}"$'\n'
 }
 
+# _k2_cfg_auth TOKEN: the credential of a daemon request, as an
+# `Authorization: Bearer` line in the caller's _K2_CFG (curl config on
+# stdin, never argv). The CLI never puts a credential in the query string.
+# The daemon reads the header the same way it reads `?token=` (it folds the
+# Bearer into the query before any route runs), and still accepts
+# `?token=` from older clients. An empty TOKEN adds nothing.
+_k2_cfg_auth() {
+    [ -n "${1:-}" ] || return 0
+    _k2_cfg_add header "Authorization: Bearer $1"
+}
+
 # _k2_curl CFG curl-args… — run curl with CFG (config lines) on stdin.
 # CFG empty → plain curl. The caller's stdin is NOT available to curl.
 #
@@ -1442,11 +1453,12 @@ _cli_no_answer() {
 cli_request() {
     local endpoint="$1"
     shift
-    local params="token=${TOKEN}&project=$(urlencode "$PROJECT")"
+    local params="project=$(urlencode "$PROJECT")"
     for param in "$@"; do
         params="${params}&${param}"
     done
     local _K2_CFG="" out rc=0 try=1 t0="${_K2_REQ_T0:-$SECONDS}"
+    _k2_cfg_auth "$TOKEN"
     _k2_cfg_add data "$params"
     # Captured (with a sentinel, so trailing newlines survive) only so the
     # permission-cards closing line can be noted; the bytes are unchanged.
@@ -1483,12 +1495,13 @@ cli_request() {
 cli_request_post() {
     local endpoint="$1"
     shift
-    local params="token=${TOKEN}&project=$(urlencode "$PROJECT")"
+    local params="project=$(urlencode "$PROJECT")"
     for param in "$@"; do
         params="${params}&${param}"
     done
     local out rc=0 _K2_CFG="" try=1 t0="${_K2_REQ_T0:-$SECONDS}"
     _k2_cfg_add url "${BASE_URL}${endpoint}?${params}"
+    _k2_cfg_auth "$TOKEN"
     while :; do
         rc=0
         out="$(_cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST -w "$_K2_WSTATUS" \
@@ -1544,8 +1557,8 @@ cli_request_post_uds() {
 }
 
 # POST a JSON body. Used by /cli/awareness/publish (Phase 3).
-# Token rides in the query string (the daemon parses it there
-# before looking at the body). Caller supplies the full endpoint
+# The token rides an Authorization header (_k2_cfg_auth). Caller supplies
+# the full endpoint
 # and the JSON body on stdin via a pipe, or as the second arg.
 cli_post_json() {
     local endpoint="$1"
@@ -1555,7 +1568,8 @@ cli_post_json() {
     fi
     # Bodies carry passwords (k2 users add, k2 app user password): config too.
     local _K2_CFG="" out rc=0 t0="${_K2_REQ_T0:-$SECONDS}"
-    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}"
+    _k2_cfg_add url "${BASE_URL}${endpoint}"
+    _k2_cfg_auth "$TOKEN"
     _k2_cfg_add data-raw "$body"
     # 0.46.6 (client papercut 12): note the refusal's (or hold's) `permission`
     # object, so a held `k2 publish run` ends with its Ask-with line.
@@ -1577,8 +1591,8 @@ cli_post_json() {
 
 # POST a JSON body read from STDIN (`--data-binary @-`). For bodies that
 # carry a secret (API keys): the body never sits on any process's argv
-# (argv is readable by every OS user via `ps`). The URL, with the token,
-# reaches curl as a config line on fd 3, so it is off curl's argv too.
+# (argv is readable by every OS user via `ps`). The URL and the token's
+# header reach curl as config lines on fd 3, so they are off argv too.
 # Same wire request as cli_post_json.
 cli_post_json_stdin() {
     local endpoint="$1"
@@ -1590,15 +1604,15 @@ cli_post_json_stdin() {
         cli_post_json "$endpoint"
         return
     fi
-    local url="${BASE_URL}${endpoint}?token=${TOKEN}"
-    url="${url//\\/\\\\}"
-    url="${url//\"/\\\"}"
-    # _k2_curl with no config: its stdin is the body, so the URL stays on
-    # fd 3. A body read from stdin is never retried.
+    local _K2_CFG=""
+    _k2_cfg_add url "${BASE_URL}${endpoint}"
+    _k2_cfg_auth "$TOKEN"
+    # _k2_curl with no config: its stdin is the body, so the URL and the
+    # header stay on fd 3. A body read from stdin is never retried.
     _k2_curl "" -s -K /dev/fd/3 -X POST \
         --connect-timeout 5 --max-time 30 \
         -H "Content-Type: application/json" \
-        --data-binary @- 2>/dev/null 3<<<"url = \"${url}\""
+        --data-binary @- 2>/dev/null 3<<<"$_K2_CFG"
 }
 
 # Read one secret from stdin into _K2_SECRET: a hidden prompt when stdin
@@ -1671,8 +1685,8 @@ _wants_help() {
     return 1
 }
 
-# POST a form-encoded body (0.39.45, GH #35/#37/#29). Token + project
-# ride the query string (the daemon's auth gate parses the query);
+# POST a form-encoded body (0.39.45, GH #35/#37/#29). Project rides the
+# query string and the token an Authorization header (_k2_cfg_auth);
 # everything else — message text, inbox title/body — rides the POST
 # body so long payloads dodge the daemon's 16KB request-head cap that
 # used to silently truncate query-string values at ~2.7KB. Callers pass
@@ -1685,7 +1699,8 @@ cli_post_form() {
         body="${body}${body:+&}${param}"
     done
     local _K2_CFG="" out rc=0 t0="${_K2_REQ_T0:-$SECONDS}"
-    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}&project=$(urlencode "$PROJECT")"
+    _k2_cfg_add url "${BASE_URL}${endpoint}?project=$(urlencode "$PROJECT")"
+    _k2_cfg_auth "$TOKEN"
     _k2_cfg_add data-raw "$body"
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \
@@ -1954,12 +1969,13 @@ cli_send_json() {
     fi
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_add data-urlencode "token=${TOKEN}"
+        _k2_cfg_auth "$TOKEN"
         [ -n "$payload" ] && _k2_cfg_add data "$payload"
         out="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time "$mt" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
     else
-        _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
+        _k2_cfg_add url "${BASE_URL}${path}"
+        _k2_cfg_auth "$TOKEN"
         _k2_cfg_add data-raw "$payload"
         out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time "$mt" \
             -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
@@ -2134,7 +2150,7 @@ _K2_SEND_ONCE=""
 _k2_send_once_supported() {
     if [ -z "$_K2_SEND_ONCE" ]; then
         local _K2_CFG="" body=""
-        [ -n "${TOKEN:-}" ] && _k2_cfg_add data-urlencode "token=${TOKEN}"
+        _k2_cfg_auth "${TOKEN:-}"
         body="$(_K2_CURL_TRIES=1 _k2_curl "$_K2_CFG" -s -G --connect-timeout 3 --max-time 5 "${BASE_URL}/boot-status" 2>/dev/null)" || body=""
         case "$body" in
             *'"send-once"'*) _K2_SEND_ONCE=1 ;;
@@ -2239,7 +2255,7 @@ _cli_use_passport_project() {
     fi
     if [ -z "$out" ] || [[ "$out" == *"not served on cell socket"* ]]; then
         _K2_CFG=""
-        _k2_cfg_add data-urlencode "token=${SCOPED_TOKEN}"
+        _k2_cfg_auth "$SCOPED_TOKEN"
         out="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}/cli/whoami" \
             --connect-timeout 5 --max-time 15 2>/dev/null)" || out=""
     fi
@@ -12064,7 +12080,8 @@ _app_rt_post_file() {
         fi
     fi
     _K2_CFG=""
-    _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
+    _k2_cfg_add url "${BASE_URL}${path}"
+    _k2_cfg_auth "$TOKEN"
     _k2_cfg_add data-binary "@$file"
     out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time "${K2_CP_MAX_TIME:-120}" \
         -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000')"
@@ -26492,7 +26509,7 @@ _sidecar_send() {
     fi
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_add data-urlencode "token=${TOKEN}"
+        _k2_cfg_auth "$TOKEN"
         if [ -n "$payload" ]; then
             _k2_cfg_add data "$payload"
         fi
@@ -26500,7 +26517,8 @@ _sidecar_send() {
             --connect-timeout 5 --max-time 120 \
             -w $'\n%{http_code}' 2>/dev/null || true
     else
-        _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
+        _k2_cfg_add url "${BASE_URL}${path}"
+        _k2_cfg_auth "$TOKEN"
         _k2_cfg_add data-raw "$payload"
         _k2_curl "$_K2_CFG" -s -X POST \
             --connect-timeout 5 --max-time 120 \
@@ -27552,7 +27570,7 @@ EOF
 _push_send() {
     local method="$1" path="$2" payload="${3:-}" _K2_CFG="" kv
     if [ "$method" = "GET" ]; then
-        _k2_cfg_add data-urlencode "token=${TOKEN}"
+        _k2_cfg_auth "$TOKEN"
         for kv in "${@:4}"; do
             _k2_cfg_add data-urlencode "$kv"
         done
@@ -27560,7 +27578,8 @@ _push_send() {
             --connect-timeout 5 --max-time 30 \
             -w $'\n%{http_code}' 2>/dev/null || true
     else
-        _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
+        _k2_cfg_add url "${BASE_URL}${path}"
+        _k2_cfg_auth "$TOKEN"
         _k2_cfg_add data-raw "$payload"
         _k2_curl "$_K2_CFG" -s -X POST \
             --connect-timeout 5 --max-time 30 \
@@ -29583,12 +29602,13 @@ _compute_send() {
     fi
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_add data-urlencode "token=${TOKEN}"
+        _k2_cfg_auth "$TOKEN"
         [ -n "$payload" ] && _k2_cfg_add data "$payload"
         _k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time 60 -w $'\n%{http_code}' 2>/dev/null || printf '\n000'
     else
-        _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
+        _k2_cfg_add url "${BASE_URL}${path}"
+        _k2_cfg_auth "$TOKEN"
         _k2_cfg_add data-raw "$payload"
         _k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time "${K2_CP_MAX_TIME:-120}" \
             -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'
@@ -42148,17 +42168,18 @@ print('Disconnected.')
 }
 
 # POST to a query-string route (no JSON body). The daemon parses the
-# token + params from the query; the body is empty/drained. Used by the
+# params from the query and the token from its header; the body is empty. Used by the
 # tunnel start/stop control routes (mutating → POST-allowlisted, with a
 # per-handler `require_post` gate on the daemon side).
 cli_post() {
     local endpoint="$1"; shift
-    local params="token=${TOKEN}&project=$(urlencode "$PROJECT")"
+    local params="project=$(urlencode "$PROJECT")"
     for param in "$@"; do
         params="${params}&${param}"
     done
     local _K2_CFG=""
     _k2_cfg_add url "${BASE_URL}${endpoint}?${params}"
+    _k2_cfg_auth "$TOKEN"
     _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time 30 \
         --data-raw "" 2>/dev/null
@@ -42971,7 +42992,8 @@ print(json.dumps(d))
             return "$_CONNECT_NO_DAEMON"
         fi
         _K2_CFG=""
-        _k2_cfg_add url "${BASE_URL}/cli/connect/proxy?token=${TOKEN}"
+        _k2_cfg_add url "${BASE_URL}/cli/connect/proxy"
+        _k2_cfg_auth "$TOKEN"
         _k2_cfg_add data-raw "$req"
         rc=0
         out="$(_k2_curl "$_K2_CFG" -sS -X POST -H "Content-Type: application/json" \
@@ -74204,13 +74226,15 @@ except Exception:
 }
 
 # POST JSON body from a file (avoids ARG_MAX on multi-MB base64 payloads).
-# Uses $TOKEN like cli_post_json (owner or connect-user; not UDS-scoped fs).
+# Uses $TOKEN like cli_post_json (owner or connect-user; not UDS-scoped fs),
+# in an Authorization header.
 _msg_inbox_cli_post_json_file() {
     local endpoint="$1"
     local body_file="$2"
     local max_time="${3:-300}"
     local _K2_CFG=""
-    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}"
+    _k2_cfg_add url "${BASE_URL}${endpoint}"
+    _k2_cfg_auth "$TOKEN"
     _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 10 --max-time "$max_time" \
         -H "Content-Type: application/json" \
@@ -74223,7 +74247,8 @@ _msg_inbox_cli_post_json() {
     local body="$2"
     local max_time="${3:-30}"
     local _K2_CFG=""
-    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}"
+    _k2_cfg_add url "${BASE_URL}${endpoint}"
+    _k2_cfg_auth "$TOKEN"
     _k2_cfg_add data-raw "$body"
     _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 10 --max-time "$max_time" \
@@ -103041,7 +103066,8 @@ _zen_session_post_file() {
         tok="${SCOPED_TOKEN:-$(_envn HOOK_TOKEN)}"
     fi
     local _K2_CFG=""
-    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${tok}"
+    _k2_cfg_add url "${BASE_URL}${endpoint}"
+    _k2_cfg_auth "$tok"
     _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time 120 \
         -H "Content-Type: application/json" --data-binary "@$file" 2>/dev/null
@@ -106640,12 +106666,13 @@ _doc_xfer() {
     fi
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_add data-urlencode "token=${TOKEN}"
+        _k2_cfg_auth "$TOKEN"
         [ -n "$query" ] && _k2_cfg_add data "$query"
         code="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time 300 -o "$outf" -w '%{http_code}' 2>/dev/null)" || code="000"
     else
-        _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
+        _k2_cfg_add url "${BASE_URL}${path}"
+        _k2_cfg_auth "$TOKEN"
         _k2_cfg_add data-binary "@$bodyf"
         code="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 300 \
             -H "Content-Type: application/json" -o "$outf" -w '%{http_code}' 2>/dev/null)" || code="000"
@@ -108525,7 +108552,7 @@ _permission_probe() {
         out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost/cli/permission/enabled" \
             --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     elif [ -n "${PORT:-}" ]; then
-        _k2_cfg_add data-urlencode "token=${tok}"
+        _k2_cfg_auth "$tok"
         out="$(_k2_curl "$_K2_CFG" -s -G "http://${HOST}:${PORT}/cli/permission/enabled" \
             --connect-timeout 1 --max-time 1 -w $'\n%{http_code}' 2>/dev/null)" || out=""
     fi

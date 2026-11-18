@@ -302,6 +302,17 @@ _k2_cfg_add() {
     _K2_CFG="${_K2_CFG}${1} = ${_K2_CQ}"$'\n'
 }
 
+# _k2_cfg_auth TOKEN: the credential of a daemon request, as an
+# `Authorization: Bearer` line in the caller's _K2_CFG (curl config on
+# stdin, never argv). The CLI never puts a credential in the query string.
+# The daemon reads the header the same way it reads `?token=` (it folds the
+# Bearer into the query before any route runs), and still accepts
+# `?token=` from older clients. An empty TOKEN adds nothing.
+_k2_cfg_auth() {
+    [ -n "${1:-}" ] || return 0
+    _k2_cfg_add header "Authorization: Bearer $1"
+}
+
 # _k2_curl CFG curl-args… — run curl with CFG (config lines) on stdin.
 # CFG empty → plain curl. The caller's stdin is NOT available to curl.
 #
@@ -1005,11 +1016,12 @@ _cli_no_answer() {
 cli_request() {
     local endpoint="$1"
     shift
-    local params="token=${TOKEN}&project=$(urlencode "$PROJECT")"
+    local params="project=$(urlencode "$PROJECT")"
     for param in "$@"; do
         params="${params}&${param}"
     done
     local _K2_CFG="" out rc=0 try=1 t0="${_K2_REQ_T0:-$SECONDS}"
+    _k2_cfg_auth "$TOKEN"
     _k2_cfg_add data "$params"
     # Captured (with a sentinel, so trailing newlines survive) only so the
     # permission-cards closing line can be noted; the bytes are unchanged.
@@ -1046,12 +1058,13 @@ cli_request() {
 cli_request_post() {
     local endpoint="$1"
     shift
-    local params="token=${TOKEN}&project=$(urlencode "$PROJECT")"
+    local params="project=$(urlencode "$PROJECT")"
     for param in "$@"; do
         params="${params}&${param}"
     done
     local out rc=0 _K2_CFG="" try=1 t0="${_K2_REQ_T0:-$SECONDS}"
     _k2_cfg_add url "${BASE_URL}${endpoint}?${params}"
+    _k2_cfg_auth "$TOKEN"
     while :; do
         rc=0
         out="$(_cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST -w "$_K2_WSTATUS" \
@@ -1107,8 +1120,8 @@ cli_request_post_uds() {
 }
 
 # POST a JSON body. Used by /cli/awareness/publish (Phase 3).
-# Token rides in the query string (the daemon parses it there
-# before looking at the body). Caller supplies the full endpoint
+# The token rides an Authorization header (_k2_cfg_auth). Caller supplies
+# the full endpoint
 # and the JSON body on stdin via a pipe, or as the second arg.
 cli_post_json() {
     local endpoint="$1"
@@ -1118,7 +1131,8 @@ cli_post_json() {
     fi
     # Bodies carry passwords (k2 users add, k2 app user password): config too.
     local _K2_CFG="" out rc=0 t0="${_K2_REQ_T0:-$SECONDS}"
-    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}"
+    _k2_cfg_add url "${BASE_URL}${endpoint}"
+    _k2_cfg_auth "$TOKEN"
     _k2_cfg_add data-raw "$body"
     # 0.46.6 (client papercut 12): note the refusal's (or hold's) `permission`
     # object, so a held `k2 publish run` ends with its Ask-with line.
@@ -1140,8 +1154,8 @@ cli_post_json() {
 
 # POST a JSON body read from STDIN (`--data-binary @-`). For bodies that
 # carry a secret (API keys): the body never sits on any process's argv
-# (argv is readable by every OS user via `ps`). The URL, with the token,
-# reaches curl as a config line on fd 3, so it is off curl's argv too.
+# (argv is readable by every OS user via `ps`). The URL and the token's
+# header reach curl as config lines on fd 3, so they are off argv too.
 # Same wire request as cli_post_json.
 cli_post_json_stdin() {
     local endpoint="$1"
@@ -1153,15 +1167,15 @@ cli_post_json_stdin() {
         cli_post_json "$endpoint"
         return
     fi
-    local url="${BASE_URL}${endpoint}?token=${TOKEN}"
-    url="${url//\\/\\\\}"
-    url="${url//\"/\\\"}"
-    # _k2_curl with no config: its stdin is the body, so the URL stays on
-    # fd 3. A body read from stdin is never retried.
+    local _K2_CFG=""
+    _k2_cfg_add url "${BASE_URL}${endpoint}"
+    _k2_cfg_auth "$TOKEN"
+    # _k2_curl with no config: its stdin is the body, so the URL and the
+    # header stay on fd 3. A body read from stdin is never retried.
     _k2_curl "" -s -K /dev/fd/3 -X POST \
         --connect-timeout 5 --max-time 30 \
         -H "Content-Type: application/json" \
-        --data-binary @- 2>/dev/null 3<<<"url = \"${url}\""
+        --data-binary @- 2>/dev/null 3<<<"$_K2_CFG"
 }
 
 # Read one secret from stdin into _K2_SECRET: a hidden prompt when stdin
@@ -1234,8 +1248,8 @@ _wants_help() {
     return 1
 }
 
-# POST a form-encoded body (0.39.45, GH #35/#37/#29). Token + project
-# ride the query string (the daemon's auth gate parses the query);
+# POST a form-encoded body (0.39.45, GH #35/#37/#29). Project rides the
+# query string and the token an Authorization header (_k2_cfg_auth);
 # everything else — message text, inbox title/body — rides the POST
 # body so long payloads dodge the daemon's 16KB request-head cap that
 # used to silently truncate query-string values at ~2.7KB. Callers pass
@@ -1248,7 +1262,8 @@ cli_post_form() {
         body="${body}${body:+&}${param}"
     done
     local _K2_CFG="" out rc=0 t0="${_K2_REQ_T0:-$SECONDS}"
-    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}&project=$(urlencode "$PROJECT")"
+    _k2_cfg_add url "${BASE_URL}${endpoint}?project=$(urlencode "$PROJECT")"
+    _k2_cfg_auth "$TOKEN"
     _k2_cfg_add data-raw "$body"
     out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time "${_K2_POST_MAX_TIME:-30}" \

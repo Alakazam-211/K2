@@ -463,12 +463,13 @@ _doc_xfer() {
     fi
     _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        _k2_cfg_add data-urlencode "token=${TOKEN}"
+        _k2_cfg_auth "$TOKEN"
         [ -n "$query" ] && _k2_cfg_add data "$query"
         code="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time 300 -o "$outf" -w '%{http_code}' 2>/dev/null)" || code="000"
     else
-        _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
+        _k2_cfg_add url "${BASE_URL}${path}"
+        _k2_cfg_auth "$TOKEN"
         _k2_cfg_add data-binary "@$bodyf"
         code="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 300 \
             -H "Content-Type: application/json" -o "$outf" -w '%{http_code}' 2>/dev/null)" || code="000"

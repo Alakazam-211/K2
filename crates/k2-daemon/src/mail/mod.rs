@@ -199,6 +199,7 @@ pub mod routes_server;
 pub mod schedule;
 /// Agents hear that mail arrived, on the inboxes someone chose.
 pub mod watch;
+pub mod windows_zones;
 pub mod secrets;
 pub mod fwd_message;
 // Drafted replies K2 tracks (the reader shows them on their thread; 0292).

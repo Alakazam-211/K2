@@ -90,7 +90,7 @@ pub const CARDS_USAGE_LINE: &str = "  permissions";
 /// the daemon whether cards are on. True: the binary asks the same way
 /// and prints the list or the usage for the answer. False: the shell
 /// answers them.
-pub const LIST_WITH_PASSPORT: bool = false;
+pub const LIST_WITH_PASSPORT: bool = true;
 
 /// With a passport, `k2 study apps` and `k2 study skins` (text or
 /// `--json`) ask the daemon whether cards are on, for the apps page's

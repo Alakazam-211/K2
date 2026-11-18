@@ -248,7 +248,7 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
 
     echo "== with a passport, the pages that ask whether permission cards are on =="
     # Which of them the binary answers itself: pages.rs's switches.
-    CARDS_LIST=bash
+    CARDS_LIST=native
     #   k2 study, study list, study --help, study -h (LIST_WITH_PASSPORT)
     #
     #

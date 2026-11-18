@@ -10,6 +10,8 @@ EXITS
      (`k2 mail wait` timeout is 2; the item may still be queued).
   3  teaching refusal. STOP LOOPING.
   4  not found (workspace, feedback id, …). Ambiguous prefix is 4 too.
+  69  a program the command needs is missing. One line says which and
+      how to get it (k5: Python 3, for a command it hands to the shell CLI).
 
 EXIT 3 — STOP LOOPING
   A valid identity was not enough. Retrying will not mint owner

@@ -35,9 +35,9 @@
 //!
 //! What the shell needs must be there, or nothing is handed over: one
 //! plain line on stderr names what is missing and how to get it, and the
-//! front exits with the code a shell gives for a program it can't find.
+//! front exits with a code of its own for it.
 //! On macOS and Linux that is Python 3 ([`crate::python`]: none on `PATH`,
-//! or only macOS's stand-in), exit 127 ([`FrontError::NoPython`]). Which
+//! or only macOS's stand-in), exit 69 ([`FrontError::NoPython`]). Which
 //! verbs need it can't be told before they run, and one that sends its
 //! request first and reads the answer with Python would act and then
 //! fail, so every hand-off checks, before bash starts or the cache is
@@ -162,7 +162,7 @@ fn open_matching(path: &Path, want: &str, follow_links: bool) -> Option<fs::File
 }
 
 /// The front's own failures. Each is one line on stderr and exit 1;
-/// no Python 3 is exit 127, and Windows without Git Bash is exit 9009, as
+/// no Python 3 is exit 69, and Windows without Git Bash is exit 9009, as
 /// `k2.cmd` does.
 #[derive(Debug)]
 pub enum FrontError {
@@ -942,7 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn without_python3_it_says_so_and_exits_127() {
+    fn without_python3_it_says_so_and_exits_69() {
         let err = FrontError::NoPython {
             noun: noun(&[OsString::from("msg"), OsString::from("x")]),
         };
@@ -952,7 +952,7 @@ mod tests {
         let here = line(python_how(cfg!(target_os = "macos")));
         assert_eq!(err.line(CalledAs::K2Name), here);
         assert_eq!(err.line(CalledAs::K5Name), here);
-        assert_eq!(err.exit_code(), 127);
+        assert_eq!(err.exit_code(), 69);
         assert_eq!(
             line(python_how(true)),
             "k5 msg: this command is not built into k5 yet and needs Python 3. Install Apple's command line tools (xcode-select --install), then open a new terminal."

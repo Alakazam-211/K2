@@ -58,11 +58,12 @@ pub enum Exit {
     /// calling the command `k2` only says to use `k5`. Nothing exits with
     /// it yet. It is what a shell gives for a command it can't find.
     K2Retired,
-    /// 127, as for the `k2` name above: macOS or Linux, a command the
-    /// binary hands to the shell CLI, and no Python 3 for the shell to
-    /// run ([`crate::fallthrough::FrontError::NoPython`]). It is what a
-    /// shell gives for a program it can't find, and what the shell CLI's
-    /// own stand-in for a missing Python returns on Windows.
+    /// 69: macOS or Linux, a command the binary hands to the shell CLI,
+    /// and no Python 3 for the shell to run
+    /// ([`crate::fallthrough::FrontError::NoPython`]); its one line says
+    /// what is missing and how to get it. sysexits' `EX_UNAVAILABLE`, "a
+    /// support program does not exist". The binary's own: the shell CLI
+    /// never ends with it (`k2 study errors` lists it).
     NoPython,
     /// 9009: Windows, and no Git Bash to run the shell CLI. `k2.cmd`
     /// exits 9009 there, the code `cmd.exe` gives for a program it can't
@@ -92,8 +93,8 @@ impl Exit {
         Exit::DaemonUnreachable,
         Exit::TooOld,
         Exit::CurlReadError,
-        Exit::K2Retired,
         Exit::NoPython,
+        Exit::K2Retired,
         Exit::Interrupted,
         Exit::NoGitBash,
     ];
@@ -111,8 +112,8 @@ impl Exit {
             Exit::DaemonUnreachable => 7,
             Exit::TooOld => 8,
             Exit::CurlReadError => 26,
+            Exit::NoPython => 69,
             Exit::K2Retired => 127,
-            Exit::NoPython => 127,
             Exit::Interrupted => 130,
             Exit::NoGitBash => 9009,
             Exit::Curl(code) => code,
@@ -161,28 +162,20 @@ mod tests {
                 (Exit::DaemonUnreachable, 7),
                 (Exit::TooOld, 8),
                 (Exit::CurlReadError, 26),
+                (Exit::NoPython, 69),
                 (Exit::K2Retired, 127),
-                (Exit::NoPython, 127),
                 (Exit::Interrupted, 130),
                 (Exit::NoGitBash, 9009),
             ]
         );
     }
 
-    /// But 127, which both the `k2` name's end and a missing Python give:
-    /// each says a program the command needs can't be found.
     #[test]
     fn no_two_share_a_number() {
         let mut codes: Vec<i32> = Exit::ALL.iter().map(|e| e.code()).collect();
         codes.sort_unstable();
         codes.dedup();
-        assert_eq!(codes.len(), Exit::ALL.len() - 1);
-        let shared: Vec<Exit> = Exit::ALL
-            .iter()
-            .copied()
-            .filter(|e| e.code() == 127)
-            .collect();
-        assert_eq!(shared, vec![Exit::K2Retired, Exit::NoPython]);
+        assert_eq!(codes.len(), Exit::ALL.len());
     }
 
     /// The codes `k2 study errors` lists are there, with the same meaning
@@ -199,6 +192,7 @@ mod tests {
             (Exit::Usage, "bad usage"),
             (Exit::Refused, "teaching refusal"),
             (Exit::NotFound, "not found"),
+            (Exit::NoPython, "a program the command needs is missing"),
         ] {
             let line = format!("  {}  {words}", exit.code());
             assert!(

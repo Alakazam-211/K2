@@ -370,7 +370,7 @@ fn a_verb_that_falls_through_without_python3_says_so_and_runs_nothing() {
         assert_eq!(
             rig.front(name, &case, &[("PATH", &path)]),
             Out {
-                code: Some(127),
+                code: Some(69),
                 stdout: String::new(),
                 stderr: format!("{line}\n"),
             },

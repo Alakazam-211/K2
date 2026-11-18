@@ -23,8 +23,10 @@ const PASSED_ON: &[(i32, &str)] = &[
     (26, "cli-tools-policy.sh: curl exit 26, it couldn't read its input (Git for Windows' /dev/fd/3)"),
 ];
 
-/// The front's own codes, which the shell script never uses.
-const FRONT_ONLY: &[i32] = &[127, 9009];
+/// The front's own codes, which the shell script never uses: 69 no
+/// Python 3 for a hand-off (`k2 study errors` names it), 127 reserved for
+/// the `k2` name's end, 9009 no Git Bash on Windows.
+const FRONT_ONLY: &[i32] = &[69, 127, 9009];
 
 /// The literal `exit <number>` codes in one line of shell, where a command
 /// can stand. Comments are skipped.

@@ -29,7 +29,7 @@
 //! requests and print the same as with one (K2's ruling: a native command
 //! runs where python3 is missing, [`k5_cli::python::NATIVE_WITHOUT_PYTHON3`]),
 //! and a case the binary hands to the shell (it wrote the shell CLI out
-//! to run it) must print the missing-Python line instead, exit 127 and
+//! to run it) must print the missing-Python line instead, exit 69 and
 //! send nothing. Its TMPDIR starts as the binary's did (the bulletin
 //! line's stamp lives there). A case that differs there on
 //! purpose says so ([`NoPython3::Own`]) and is checked by its own test.
@@ -380,7 +380,7 @@ impl Rig {
             );
             assert_eq!(
                 (out.code, out.stdout.as_str(), out.stderr.as_str()),
-                (Some(127), "", format!("{line}\n").as_str()),
+                (Some(69), "", format!("{line}\n").as_str()),
                 "{name}: a hand-off with no python3"
             );
             return;

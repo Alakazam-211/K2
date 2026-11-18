@@ -544,9 +544,16 @@ cmd_mail_forward_message() {
 cmd_mail_reply() {
     if _wants_help "$@"; then cmd_help_mail_reply; exit 0; fi
     local id="" body="" body_file="" attach="" wait=false timeout="" as_json=false
-    local from_name="" from_name_set=false
+    local from_name="" from_name_set=false cc="" bcc="" reply_all=false
     while [ $# -gt 0 ]; do
         case "$1" in
+            --reply-all) reply_all=true; shift ;;
+            --cc)
+                [ $# -ge 2 ] || { _mail_err "usage" "--cc requires an address"; exit 2; }
+                cc="${cc}${cc:+$'\n'}$2"; shift 2 ;;
+            --bcc)
+                [ $# -ge 2 ] || { _mail_err "usage" "--bcc requires an address"; exit 2; }
+                bcc="${bcc}${bcc:+$'\n'}$2"; shift 2 ;;
             --body)
                 [ $# -ge 2 ] || { _mail_err "usage" "--body requires the reply text"; exit 2; }
                 body="$2"; shift 2 ;;
@@ -568,7 +575,7 @@ cmd_mail_reply() {
                 timeout="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail reply <message-id> (--body <text> | --body-file <f>) [--from-name <name>] [--attach <path>] [--wait [--timeout <s>]] [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail reply <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--from-name <name>] [--attach <path>] [--wait [--timeout <s>]] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; else
@@ -612,7 +619,8 @@ cmd_mail_reply() {
         _mail_check_timeout "$timeout"
     fi
     local M_VERB="reply" M_JSON="$as_json" M_ID="$id" M_BODY="$body" \
-          M_ATTACH="$attach" M_FROM_NAME="$from_name" M_WAIT="$wait" M_TIMEOUT="$timeout"
+          M_ATTACH="$attach" M_FROM_NAME="$from_name" M_WAIT="$wait" M_TIMEOUT="$timeout" \
+          M_CC="$cc" M_BCC="$bcc" M_REPLY_ALL="$reply_all"
     _mail_py
 }
 
@@ -1094,9 +1102,10 @@ cmd_mail_approvals() {
 cmd_mail_draft() {
     if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
     local id="" body="" body_file="" as_json=false
-    local to="" subject="" cc="" bcc="" from="" attach=""
+    local to="" subject="" cc="" bcc="" from="" attach="" reply_all=false
     while [ $# -gt 0 ]; do
         case "$1" in
+            --reply-all) reply_all=true; shift ;;
             --reply-to)
                 [ $# -ge 2 ] || { _mail_err "usage" "--reply-to requires a message id (from 'k2 mail messages')"; exit 2; }
                 if [ -n "$id" ] && [ "$id" != "$2" ]; then
@@ -1130,7 +1139,7 @@ cmd_mail_draft() {
                 attach="${attach}${attach:+$'\n'}$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>]  OR  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>]  OR  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; elif [ "$id" != "$1" ]; then
@@ -1144,12 +1153,8 @@ cmd_mail_draft() {
         _mail_err "usage" "pass either a <message-id> (reply draft) or --to/--subject (compose draft), not both"
         exit 2
     fi
-    if [ -n "$id" ] && [ -n "$cc" ]; then
-        _mail_err "usage" "--cc is for compose drafts (k2 mail draft --to … --cc)"
-        exit 2
-    fi
-    if [ -n "$id" ] && [ -n "$bcc" ]; then
-        _mail_err "usage" "--bcc is for compose drafts (k2 mail draft --to … --bcc)"
+    if [ -z "$id" ] && $reply_all; then
+        _mail_err "usage" "--reply-all needs the message you're answering: k2 mail draft <message-id> --reply-all"
         exit 2
     fi
     if [ -n "$id" ] && [ -n "$from" ]; then
@@ -1185,7 +1190,8 @@ cmd_mail_draft() {
         exit 2
     fi
     local M_VERB="draft" M_JSON="$as_json" M_ID="$id" M_BODY="$body" \
-          M_TO="$to" M_SUBJECT="$subject" M_CC="$cc" M_BCC="$bcc" M_FROM="$from" M_ATTACH="$attach"
+          M_TO="$to" M_SUBJECT="$subject" M_CC="$cc" M_BCC="$bcc" M_FROM="$from" M_ATTACH="$attach" \
+          M_REPLY_ALL="$reply_all"
     _mail_py
 }
 

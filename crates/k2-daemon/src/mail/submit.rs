@@ -100,6 +100,19 @@ pub trait MailSubmit {
     /// = no such message.
     fn reply_preview(&self, source_email_id: &str)
         -> Result<Option<(String, String)>, SubmitError>;
+    /// [`Self::reply_preview`] plus the source's To and Cc, for a reply
+    /// that copies them (`--reply-all`). `primary` is the same locked
+    /// recipient `reply_preview` answers. A backend that can't read them
+    /// refuses: a reply-all never quietly becomes a plain reply.
+    fn reply_parties(
+        &self,
+        _source_email_id: &str,
+    ) -> Result<Option<crate::mail::reply_all::SourceParties>, SubmitError> {
+        Err(SubmitError::Usage {
+            code: "usage",
+            hint: format!("--reply-all isn't available for {} replies yet", self.backend()),
+        })
+    }
 }
 
 // ── Hosted (local Stalwart, JMAP) ───────────────────────────────────────
@@ -214,6 +227,9 @@ impl MailSubmit for SmtpSubmit {
             source_email_id,
             &msg.text_body,
             attachments,
+            // `to[0]` is the locked recipient the provider re-derives.
+            msg.to.get(1..).unwrap_or_default(),
+            &msg.cc,
             &msg.all_bcc(),
         )?;
         Ok(Receipt {
@@ -227,6 +243,12 @@ impl MailSubmit for SmtpSubmit {
         &self,
         source_email_id: &str,
     ) -> Result<Option<(String, String)>, SubmitError> {
+        Ok(self.reply_parties(source_email_id)?.map(|p| (p.primary.email, p.subject)))
+    }
+    fn reply_parties(
+        &self,
+        source_email_id: &str,
+    ) -> Result<Option<crate::mail::reply_all::SourceParties>, SubmitError> {
         use crate::mail::external::ImapOps as _;
         let raw = crate::mail::external_imap::RealImapOps
             .fetch_raw(&self.inbox, &self.password, source_email_id)
@@ -251,7 +273,12 @@ impl MailSubmit for SmtpSubmit {
                 ),
             }
         })?;
-        Ok(Some((to, crate::mail::send::reply_subject(&src.subject))))
+        Ok(Some(crate::mail::reply_all::SourceParties {
+            primary: crate::mail::jmap::MailAddr { name: sender.name, email: to },
+            to: src.to,
+            cc: src.cc,
+            subject: crate::mail::send::reply_subject(&src.subject),
+        }))
     }
 }
 
@@ -320,6 +347,9 @@ impl MailSubmit for GraphSubmit {
             &self.inbox_id,
             source_email_id,
             &msg.text_body,
+            // `to[0]` is the locked recipient the provider re-derives.
+            msg.to.get(1..).unwrap_or_default(),
+            &msg.cc,
             &msg.all_bcc(),
             &graph_atts(attachments),
         )?;
@@ -336,6 +366,14 @@ impl MailSubmit for GraphSubmit {
     ) -> Result<Option<(String, String)>, SubmitError> {
         self.backend
             .reply_preview(&self.inbox_id, source_email_id)
+            .map_err(SubmitError::Engine)
+    }
+    fn reply_parties(
+        &self,
+        source_email_id: &str,
+    ) -> Result<Option<crate::mail::reply_all::SourceParties>, SubmitError> {
+        self.backend
+            .reply_parties(&self.inbox_id, source_email_id)
             .map_err(SubmitError::Engine)
     }
 }

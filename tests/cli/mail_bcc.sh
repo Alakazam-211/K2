@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Loud harness for blind copies in the CLI: `k2 mail send --bcc`,
-# `k2 mail draft --bcc`, and the owner's `k2 hostmail config
+# `k2 mail draft --bcc`, reply drafts and replies with `--reply-all` /
+# `--cc` / `--bcc` (0.46.15), and the owner's `k2 hostmail config
 # --workspace <ws> --always-bcc <list>` ('' clears). cargo does not cover
 # cmd_mail_* / _mail_py. Fail-loud: no skip-if-missing.
 # Run with: bash tests/cli/mail_bcc.sh  (no live daemon — a tiny fake).
@@ -62,7 +63,7 @@ class H(BaseHTTPRequestHandler):
         name = "post" + path.replace("/", "_") + ".json"
         with open(os.path.join(root, name), "wb") as f:
             f.write(raw)
-        if path == "/cli/mail/send":
+        if path in ("/cli/mail/send", "/cli/mail/reply"):
             self._ok({"ok": True, "id": "out_fake00000001", "status": "pending_approval",
                       "queued": True, "hint": "queued for approval"})
         elif path == "/cli/mail/draft":
@@ -133,13 +134,79 @@ assert_exit "draft compose --bcc" 0 "$rc"
 post="$(cat "$DRAFT_POST" 2>/dev/null || echo '{}')"
 assert_json "draft POST bcc" "$post" "d.get('bcc') == ['boss@shop.example']"
 
-echo "== mail draft <id> --bcc is refused (compose only) =="
+echo "== mail draft <id> --reply-all --cc --bcc (reply draft) =="
+rm -f "$DRAFT_POST"
 set +e
-out="$("${K2[@]}" "$K2_CLI" mail draft m_abc --body t --bcc boss@shop.example 2>&1)"
+"${K2[@]}" "$K2_CLI" mail draft --reply-to m_abc --body t --reply-all --cc a@example.com \
+    --cc 'b@example.com, c@example.com' --bcc boss@shop.example --json >/dev/null 2>&1
 rc=$?
 set -e
-assert_exit "reply draft --bcc" 2 "$rc"
-<<<"$out" grep -q "compose drafts" && ok "reply-draft bcc hint" || bad "reply-draft hint missing in: $out"
+assert_exit "reply draft --reply-all --cc --bcc" 0 "$rc"
+post="$(cat "$DRAFT_POST" 2>/dev/null || echo '{}')"
+assert_json "reply draft POST id" "$post" "d.get('id') == 'm_abc' and 'to' not in d and 'subject' not in d"
+assert_json "reply draft POST replyAll" "$post" "d.get('replyAll') is True"
+assert_json "reply draft POST cc (repeatable + comma)" "$post" "d.get('cc') == ['a@example.com','b@example.com','c@example.com']"
+assert_json "reply draft POST bcc" "$post" "d.get('bcc') == ['boss@shop.example']"
+
+echo "== mail draft <id> --cc without --reply-all sends no replyAll =="
+rm -f "$DRAFT_POST"
+set +e
+"${K2[@]}" "$K2_CLI" mail draft m_abc --body t --cc a@example.com --json >/dev/null 2>&1
+rc=$?
+set -e
+assert_exit "reply draft --cc" 0 "$rc"
+post="$(cat "$DRAFT_POST" 2>/dev/null || echo '{}')"
+assert_json "reply draft POST cc only" "$post" "d.get('cc') == ['a@example.com'] and 'replyAll' not in d and 'bcc' not in d"
+
+echo "== mail draft --reply-all needs a message id =="
+rm -f "$DRAFT_POST"
+set +e
+out="$("${K2[@]}" "$K2_CLI" mail draft --to cust@dest.example --subject s --body t --reply-all 2>&1)"
+rc=$?
+set -e
+assert_exit "compose draft --reply-all" 2 "$rc"
+<<<"$out" grep -q -- "--reply-all needs the message" && ok "reply-all needs-id hint" || bad "reply-all hint missing in: $out"
+[ ! -f "$DRAFT_POST" ] && ok "nothing POSTed" || bad "a POST went out for a compose --reply-all"
+
+echo "== mail reply <id> --reply-all --cc --bcc =="
+REPLY_POST="$WORKDIR/post_cli_mail_reply.json"
+set +e
+"${K2[@]}" "$K2_CLI" mail reply m_abc --body thanks --reply-all --cc 'a@example.com,b@example.com' \
+    --bcc boss@shop.example --json >/dev/null 2>&1
+rc=$?
+set -e
+assert_exit "reply --reply-all --cc --bcc" 0 "$rc"
+post="$(cat "$REPLY_POST" 2>/dev/null || echo '{}')"
+assert_json "reply POST id + body" "$post" "d.get('id') == 'm_abc' and d.get('body') == 'thanks'"
+assert_json "reply POST replyAll" "$post" "d.get('replyAll') is True"
+assert_json "reply POST cc" "$post" "d.get('cc') == ['a@example.com','b@example.com']"
+assert_json "reply POST bcc" "$post" "d.get('bcc') == ['boss@shop.example']"
+
+echo "== mail reply without the flags sends none of them =="
+rm -f "$REPLY_POST"
+set +e
+"${K2[@]}" "$K2_CLI" mail reply m_abc --body thanks --json >/dev/null 2>&1
+rc=$?
+set -e
+assert_exit "reply (plain)" 0 "$rc"
+post="$(cat "$REPLY_POST" 2>/dev/null || echo '{}')"
+assert_json "reply POST plain" "$post" "'replyAll' not in d and 'cc' not in d and 'bcc' not in d"
+
+echo "== mail reply --cc needs a value =="
+set +e
+out="$("${K2[@]}" "$K2_CLI" mail reply m_abc --body b --cc 2>&1)"
+rc=$?
+set -e
+assert_exit "reply --cc without value" 2 "$rc"
+<<<"$out" grep -q -- "--cc requires an address" && ok "--cc missing-value hint" || bad "--cc hint missing in: $out"
+
+echo "== the help names the flags =="
+for verb in draft reply; do
+    out="$("${K2[@]}" "$K2_CLI" mail "$verb" --help 2>&1)"
+    for flag in --reply-all --cc --bcc; do
+        <<<"$out" grep -q -- "^  $flag " && ok "mail $verb --help lists $flag" || bad "mail $verb --help misses $flag: $out"
+    done
+done
 
 echo "== hostmail config --always-bcc sets the policy =="
 set +e

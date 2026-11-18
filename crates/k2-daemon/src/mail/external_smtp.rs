@@ -574,7 +574,11 @@ pub fn send_linked_message_threaded(
 /// sender, reuses the hosted `reply_subject`/`build_out_references`
 /// guardrail helpers for the Subject/References, then submits over SMTP.
 /// Returns the recipient it sent to. Health is stamped on the row.
-/// `bcc` (the owner's always-BCC policy) rides the envelope only.
+/// `bcc` (`--bcc` and the owner's always-BCC policy) rides the envelope
+/// only. `to` / `cc` are the reply's planned recipients
+/// ([`crate::mail::reply_all::plan`]: `--reply-all`, `--cc`); the locked
+/// recipient is re-read from the source here and always comes first, so
+/// `to` only adds people beyond it.
 #[allow(clippy::too_many_arguments)]
 pub fn send_linked_reply(
     imap: &dyn ImapOps,
@@ -584,6 +588,8 @@ pub fn send_linked_reply(
     source_uid_token: &str,
     body: &str,
     attachments: &[OutAttachment],
+    to: &[String],
+    cc: &[String],
     bcc: &[String],
 ) -> Result<LinkedReceipt, ExtError> {
     let route = derive_smtp_route(inbox).map_err(ExtError::Engine)?;
@@ -617,16 +623,31 @@ pub fn send_linked_reply(
         src.message_id.as_deref(),
     );
     let to_addr = MailAddr { name: reply_to.name.clone(), email: recipient.clone() };
+    // The locked recipient first, then whoever else the reply copies.
+    let mut to_list = vec![recipient.clone()];
+    for a in to {
+        if !to_list.iter().any(|t| t.eq_ignore_ascii_case(a)) {
+            to_list.push(a.clone());
+        }
+    }
+    let cc_list: Vec<String> = cc
+        .iter()
+        .filter(|a| !to_list.iter().any(|t| t.eq_ignore_ascii_case(a)))
+        .cloned()
+        .collect();
+    let mut to_addrs = vec![to_addr];
+    to_addrs.extend(as_mailaddrs(&to_list[1..]));
+    let cc_addrs = as_mailaddrs(&cc_list);
     let now = chrono::Utc::now();
     let mid = external::new_message_id(&inbox.email_address);
-    let to_slice = std::slice::from_ref(&to_addr);
+    let to_slice = to_addrs.as_slice();
     // Zero attachments = the unchanged single-part reply; attachments =
     // a lettre multipart/mixed carrying the SAME threading headers.
     let rfc822 = if attachments.is_empty() {
         external::compose_outgoing_rfc822(
             inbox,
             to_slice,
-            &[],
+            &cc_addrs,
             &subject,
             body,
             &now.to_rfc2822(),
@@ -639,7 +660,7 @@ pub fn send_linked_reply(
         compose_outgoing_multipart(
             inbox,
             to_slice,
-            &[],
+            &cc_addrs,
             &subject,
             body,
             now.into(),
@@ -658,13 +679,13 @@ pub fn send_linked_reply(
             return Err(ExtError::Engine(e));
         }
     };
-    let recipients = envelope_recipients(&[std::slice::from_ref(&recipient), bcc]);
+    let recipients = envelope_recipients(&[&to_list, &cc_list, bcc]);
     let result = smtp.submit(&route, &inbox.username, &auth, &inbox.email_address, &recipients, &rfc822);
     external::record_check(&inbox.id, result.as_ref().map(|_| ()).map_err(|e| e.as_str()));
     result
         .map(|()| LinkedReceipt {
-            to: vec![recipient],
-            cc: Vec::new(),
+            to: to_list,
+            cc: cc_list,
             subject,
             attachments: attachments.iter().map(|a| a.filename.clone()).collect(),
         })

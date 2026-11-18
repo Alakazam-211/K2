@@ -56,6 +56,7 @@ _mail_py() {
     M_LABEL="${M_LABEL:-}" M_SELECTOR="${M_SELECTOR:-}" \
     M_BODY="${M_BODY:-}" M_CC="${M_CC:-}" M_BCC="${M_BCC:-}" M_ATTACH="${M_ATTACH:-}" \
     M_REPLY_TO="${M_REPLY_TO:-}" M_REPLY_TO_ORIGINAL="${M_REPLY_TO_ORIGINAL:-false}" M_AS_EML="${M_AS_EML:-false}" \
+    M_REPLY_ALL="${M_REPLY_ALL:-false}" \
     M_ALWAYS_BCC="${M_ALWAYS_BCC:-}" M_ALWAYS_BCC_SET="${M_ALWAYS_BCC_SET:-false}" \
     M_WAIT="${M_WAIT:-false}" M_CONFIRM="${M_CONFIRM:-false}" M_PURGE="${M_PURGE:-false}" \
     M_NOTE="${M_NOTE:-}" M_HEALTH="${M_HEALTH:-false}" \
@@ -849,6 +850,13 @@ elif verb == "reply":
         # From DISPLAY NAME only (as on send) — the daemon validates it;
         # the address stays locked to the receiving one.
         body["fromName"] = env("M_FROM_NAME")
+    # --reply-all / --cc / --bcc: the daemon plans who it goes to.
+    if env("M_REPLY_ALL") == "true":
+        body["replyAll"] = True
+    for envk, key in (("M_CC", "cc"), ("M_BCC", "bcc")):
+        vals = env_list(envk)
+        if vals:
+            body[key] = vals
     attach = env_lines("M_ATTACH")
     if attach:
         # Workspace-relative file PATHS — the daemon reads the bytes.
@@ -1724,6 +1732,8 @@ elif verb == "draft":
         body["bcc"] = bcc
     if env("M_FROM"):
         body["from"] = env("M_FROM")
+    if env("M_REPLY_ALL") == "true":
+        body["replyAll"] = True
     attach = env_lines("M_ATTACH")
     if attach:
         body["attachments"] = attach

@@ -1401,6 +1401,7 @@ pub(crate) mod tests {
         EmailFull {
             summary: s.clone(),
             cc: vec![],
+            bcc: vec![],
             blob_id: Some("B-raw".to_string()),
             text: Some("Your code is 424242.".to_string()),
             html: Some("<p>Your code is <b>424242</b>.</p>".to_string()),

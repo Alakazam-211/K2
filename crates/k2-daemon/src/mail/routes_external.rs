@@ -41,6 +41,7 @@ use crate::mail::external_smtp::OutAttachment;
 use crate::mail::graph;
 use crate::mail::jmap::MailAddr;
 use crate::mail::messages::{self, MailBackend, ReadError};
+use crate::mail::reply_all::ReplyAsk;
 use crate::mail::routes_send;
 use crate::mail::secrets::{self, FileSecretStore};
 use crate::mail::send;
@@ -269,10 +270,14 @@ struct DraftBody {
     body: String,
     to: serde_json::Value,
     subject: String,
+    /// Copies. On a reply draft they add to the reply's recipients.
     cc: serde_json::Value,
-    /// Compose drafts only: blind copies, kept as the draft's `Bcc:`
-    /// header (the human's client strips it at send time).
+    /// Blind copies, kept as the draft's `Bcc:` (the person's client keeps
+    /// them blind at send time).
     bcc: serde_json::Value,
+    /// Reply drafts only: also copy the original's To and Cc, minus this
+    /// inbox's own addresses (`k2 mail draft <id> --reply-all`).
+    reply_all: bool,
     from: String,
     attachments: serde_json::Value,
 }
@@ -337,18 +342,11 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
             "pass either a message id (reply draft) or --to/--subject (compose draft), not both",
         );
     }
-    if has_id && !cc_raw.is_empty() {
+    if !has_id && b.reply_all {
         return error_response(
             "400 Bad Request",
             "usage",
-            "--cc is for compose drafts (k2 mail draft --to … --cc)",
-        );
-    }
-    if has_id && !bcc_raw.is_empty() {
-        return error_response(
-            "400 Bad Request",
-            "usage",
-            "--bcc is for compose drafts (k2 mail draft --to … --bcc)",
+            "--reply-all needs the message you're answering: k2 mail draft <message-id> --reply-all",
         );
     }
     // Same always-on recipient cap as send: to + cc + bcc together.
@@ -399,7 +397,7 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
     };
 
     enum DraftKind {
-        Reply { address: String, email_id: String, source_id: String },
+        Reply { address: String, email_id: String, source_id: String, ask: ReplyAsk },
         Compose { to: Vec<String>, cc: Vec<String>, bcc: Vec<String>, subject: String },
     }
     let kind = if has_id {
@@ -410,7 +408,19 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                 "invalid message id — use an id from 'k2 mail messages'",
             );
         };
-        DraftKind::Reply { address, email_id, source_id: b.id.clone() }
+        // `--reply-all` / `--cc` / `--bcc`: checked like a send's recipients.
+        let ask = ReplyAsk {
+            all: b.reply_all,
+            cc: match normalize_draft_recipients(&cc_raw) {
+                Ok(c) => c,
+                Err(resp) => return resp,
+            },
+            bcc: match normalize_draft_recipients(&bcc_raw) {
+                Ok(c) => c,
+                Err(resp) => return resp,
+            },
+        };
+        DraftKind::Reply { address, email_id, source_id: b.id.clone(), ask }
     } else {
         let to = match normalize_draft_recipients(&to_raw) {
             Ok(t) => t,
@@ -434,7 +444,7 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
 
     // A reply on a HOSTED message: a real draft in the account's Drafts
     // mailbox (JMAP), tracked so the mail reader shows it on its thread.
-    if let DraftKind::Reply { address, email_id, source_id } = &kind {
+    if let DraftKind::Reply { address, email_id, source_id, ask } = &kind {
         if let Ok(ai) = access::can_draft(&project_id, address) {
             if ai.source == Source::Hosted {
                 if !attach_specs.is_empty() {
@@ -445,7 +455,7 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                          with 'k2 mail reply <id> --attach'",
                     );
                 }
-                return crate::mail::drafts::save_hosted_reply(&project_id, &path, &ai, email_id, source_id, &b.body);
+                return crate::mail::drafts::save_hosted_reply(&project_id, &path, &ai, email_id, source_id, &b.body, ask);
             }
         }
     }
@@ -509,8 +519,21 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                 })
                 .collect();
             let saved = match &kind {
-                DraftKind::Reply { email_id, .. } => {
-                    backend.save_reply_draft_with(&inbox.id, email_id, &b.body, &atts)
+                DraftKind::Reply { email_id, ask, .. } => {
+                    // Graph picks the locked recipient itself; anyone else
+                    // the draft copies is planned here from the source.
+                    let parties = if ask.is_plain() {
+                        None
+                    } else {
+                        match graph_reply_parties(&backend, &inbox, email_id, ask, &b.id) {
+                            Ok(p) => Some(p),
+                            Err(resp) => return resp,
+                        }
+                    };
+                    let (to, cc, bcc) = parties
+                        .map(|p| (p.extra_to_emails(), p.cc_emails(), p.bcc_emails()))
+                        .unwrap_or_default();
+                    backend.save_reply_draft_with(&inbox.id, email_id, &b.body, &to, &cc, &bcc, &atts)
                 }
                 DraftKind::Compose { to, cc, bcc, subject } => backend.save_compose_draft(
                     &inbox.id, to, cc, bcc, subject, &b.body, &atts,
@@ -561,9 +584,9 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                 Err(resp) => return resp,
             };
             match &kind {
-                DraftKind::Reply { email_id, source_id: token, .. } => {
+                DraftKind::Reply { email_id, source_id: token, ask, .. } => {
                     match external::save_reply_draft_located(
-                        ops, &inbox, &password, email_id, &b.body, &parts,
+                        ops, &inbox, &password, email_id, &b.body, &parts, ask,
                     ) {
                         Ok(saved) => match crate::mail::drafts::record_new(
                             Source::Linked,
@@ -603,6 +626,32 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
             }
         }
     }
+}
+
+/// A Microsoft 365 reply draft's planned recipients: the source's parties
+/// read through Graph, then [`crate::mail::reply_all::plan`] without this
+/// inbox's own addresses.
+fn graph_reply_parties(
+    backend: &graph::GraphBackend,
+    inbox: &MailExternalInbox,
+    email_id: &str,
+    ask: &ReplyAsk,
+    token: &str,
+) -> Result<crate::mail::reply_all::ReplyParties, CliResponse> {
+    let src = match backend.reply_parties(&inbox.id, email_id) {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return Err(error_response(
+                "404 Not Found",
+                "not_found",
+                &format!("no message '{token}' in this workspace"),
+            ))
+        }
+        Err(h) => return Err(error_response("502 Bad Gateway", "engine", &h)),
+    };
+    let own = crate::mail::reply_all::linked_own_addresses(&inbox.email_address, &inbox.username);
+    crate::mail::reply_all::plan(&src.primary, &src.to, &src.cc, &own, ask)
+        .map_err(|h| error_response("400 Bad Request", "usage", &h))
 }
 
 fn out_to_rfc822(a: OutAttachment) -> Rfc822Attachment {
@@ -1112,19 +1161,19 @@ mod tests {
     }
 
     /// Compose drafts take `bcc` (saved as the draft's Bcc header — the
-    /// human's client keeps it blind at send); reply drafts refuse it;
-    /// to + cc + bcc share the 10-recipient cap.
+    /// human's client keeps it blind at send); `replyAll` needs a message
+    /// id; to + cc + bcc share the 10-recipient cap.
     #[test]
     fn draft_compose_bcc_lands_in_the_draft_and_counts_toward_the_cap() {
         let resp = handle_draft(
             serde_json::json!({
-                "project": "/tmp/x", "id": "m_abc", "body": "hi", "bcc": "b@x.example",
+                "project": "/tmp/x", "to": "a@x.example", "subject": "s", "body": "hi", "replyAll": true,
             })
             .to_string()
             .as_bytes(),
         );
         assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
-        assert!(resp.body.contains("--bcc is for compose drafts"), "{}", resp.body);
+        assert!(resp.body.contains("--reply-all needs the message"), "{}", resp.body);
 
         let resp = handle_draft(
             serde_json::json!({
@@ -1161,6 +1210,96 @@ mod tests {
         let appended = ops.appended.lock().expect("lock");
         let text = String::from_utf8(appended[0].1.clone()).expect("ascii");
         assert!(text.contains("Bcc: <boss@shop.example>\r\n"), "{text}");
+        drop(appended);
+
+        let _ = std::fs::remove_dir_all(&path);
+        cleanup_project(&project_id);
+    }
+
+    /// `k2 mail draft <id> --reply-all --cc --bcc` on a linked IMAP inbox:
+    /// one threaded draft whose To is the source's Reply-To plus its To,
+    /// whose Cc is the source's three Cc's plus `--cc`, without this
+    /// inbox's own address in any case, no repeats; `--bcc` is the draft's
+    /// Bcc. A plain reply draft with `--cc` adds only that copy.
+    #[test]
+    fn linked_reply_all_draft_carries_the_original_parties_and_threads() {
+        let (name, path) = unique("reply-all");
+        let project_id = insert_project(&name, &path);
+        std::fs::create_dir_all(&path).ok();
+        let mine = format!("me-{}@ext.example", &project_id[..8]);
+        seed_linked(&project_id, &mine, "imap", "oauth", Some("Drafts"));
+        let me_upper = mine.to_ascii_uppercase();
+        let raw = format!(
+            "Date: Wed, 08 Jul 2026 10:15:00 +0000\r\n\
+             Message-ID: <multi-1@mailer.example>\r\n\
+             References: <thread-9@mailer.example>\r\n\
+             From: \"Pat Sender\" <pat@sender.example>\r\n\
+             Reply-To: replies@sender.example\r\n\
+             To: {me_upper}, \"Ada\" <ada@example.com>\r\n\
+             Cc: bo@example.com, cy@example.com, {mine}, di@example.com, Ada@Example.com\r\n\
+             Subject: Plans\r\n\
+             Content-Type: text/plain; charset=utf-8\r\n\
+             \r\n\
+             What do you all think?\r\n"
+        );
+        let mut ops = crate::mail::external::tests::FakeOps {
+            folders: vec![("Drafts".to_string(), true)],
+            ..Default::default()
+        };
+        ops.raw_by_token.insert(
+            "uid:7:5".to_string(),
+            crate::mail::external::RawEmail {
+                received_at_iso: "2026-07-08T10:15:00Z".to_string(),
+                unread: false,
+                raw: raw.into_bytes(),
+            },
+        );
+        let token = messages::encode_message_id(&mine, "uid:7:5");
+        let resp = handle_draft_with(
+            serde_json::json!({
+                "project": path, "id": token, "body": "Count me in.", "replyAll": true,
+                "cc": ["eve@example.com", "bo@example.com"], "bcc": ["boss@example.com"],
+            })
+            .to_string()
+            .as_bytes(),
+            &ops,
+        );
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        {
+            let appended = ops.appended.lock().expect("lock");
+            assert_eq!(appended.len(), 1, "one draft");
+            let text = String::from_utf8(appended[0].1.clone()).expect("ascii");
+            assert!(text.contains("To: <replies@sender.example>, \"Ada\" <ada@example.com>\r\n"), "{text}");
+            assert!(
+                text.contains("Cc: <bo@example.com>, <cy@example.com>, <di@example.com>, <eve@example.com>\r\n"),
+                "{text}"
+            );
+            assert!(text.contains("Bcc: <boss@example.com>\r\n"), "{text}");
+            for line in text.split("\r\n").filter(|l| l.starts_with("To:") || l.starts_with("Cc:") || l.starts_with("Bcc:")) {
+                assert!(!line.to_ascii_lowercase().contains(&mine), "never to ourselves: {line}");
+            }
+            assert!(text.contains("In-Reply-To: <multi-1@mailer.example>\r\n"), "{text}");
+            assert!(
+                text.contains("References: <thread-9@mailer.example> <multi-1@mailer.example>\r\n"),
+                "{text}"
+            );
+            assert!(text.contains("Subject: Re: Plans\r\n"), "{text}");
+        }
+
+        // A plain reply draft: `--cc` adds that copy only.
+        let resp = handle_draft_with(
+            serde_json::json!({ "project": path, "id": token, "body": "Just one.", "cc": ["eve@example.com"] })
+                .to_string()
+                .as_bytes(),
+            &ops,
+        );
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let appended = ops.appended.lock().expect("lock");
+        let text = String::from_utf8(appended[1].1.clone()).expect("ascii");
+        assert!(text.contains("To: <replies@sender.example>\r\n"), "{text}");
+        assert!(text.contains("Cc: <eve@example.com>\r\n"), "{text}");
+        assert!(!text.contains("\r\nBcc:"), "{text}");
+        assert!(text.contains("In-Reply-To: <multi-1@mailer.example>\r\n"), "{text}");
         drop(appended);
 
         let _ = std::fs::remove_dir_all(&path);

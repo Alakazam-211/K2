@@ -25,6 +25,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A message sent twice lands once.** `k2 msg` (live and `--inbox-wake`/`--inbox-silent`, local or `agent::host`), `k2 thread` and `k2 thread ask` give each send a key; when K2 is slow to answer, the command asks again with the same key and K2 delivers it once, answering with the first delivery. If K2 still doesn't answer, the error says the message may have been delivered and prints the key: run the same command with `--idempotency-key <key>` to try again without a duplicate.
 - **No more "It can't be requested." under a send that wasn't refused.** That line now closes only a refusal of the send itself, not a delivery that waits on folder trust, an unknown address or a timeout.
 
+### Mail
+- **Agents can reply to everyone on an email.** `k2 mail draft <id>` and `k2 mail reply <id>` take `--reply-all` (the original's To and Cc, without the agent's own address) and `--cc` / `--bcc`, and the reply stays in the same thread.
+
 ### Apps
 - **An App's agent can ask to change its App's logins in other rooms.** When people who sign in to an agent's App also talk in another workspace's room, the agent used to be refused when it added, removed, reset or changed the role of one of those logins, and you had to do it yourself in Settings. Now the agent's request comes to you, or an admin, as a card on its Thread. The card says exactly what changes, for which login, and in which room. Allow it and K2 makes that change. Deny it and nothing changes. Logins of other workspaces' Apps are still refused.
 - **Passwords stay off the card.** For a password change, the approval lets the agent set that login's password once. The person then chooses their own password at their next sign-in. For a reset, K2 emails the person the App's one-time link.

@@ -644,6 +644,7 @@ fn full_from_message(m: &serde_json::Value, attachments: Vec<AttachmentMeta>) ->
     Some(EmailFull {
         summary,
         cc: m.get("ccRecipients").map(parse_recipient_list).unwrap_or_default(),
+        bcc: m.get("bccRecipients").map(parse_recipient_list).unwrap_or_default(),
         blob_id: raw_id,
         text,
         html,
@@ -928,25 +929,31 @@ impl GraphBackend {
     /// save_reply_draft` APPEND path), so the Graph backend satisfies the
     /// full seam surface.
     pub fn save_reply_draft(&self, account_id: &str, email_id: &str, body: &str) -> Result<String, String> {
-        self.save_reply_draft_with(account_id, email_id, body, &[]).map_err(|e| e.to_string())
+        self.save_reply_draft_with(account_id, email_id, body, &[], &[], &[], &[]).map_err(|e| e.to_string())
     }
 
     /// [`Self::save_reply_draft`] with attachments (MCS2): createReply →
     /// PATCH the body → one POST per attachment onto the draft. NEVER
-    /// `/send`.
+    /// `/send`. `to` / `cc` / `bcc` are the reply's planned recipients
+    /// (`--reply-all`, `--cc`, `--bcc`); Graph picks the locked recipient
+    /// itself, so `to` only adds people beyond it.
+    #[allow(clippy::too_many_arguments)]
     pub fn save_reply_draft_with(
         &self,
         account_id: &str,
         email_id: &str,
         body: &str,
+        to: &[String],
+        cc: &[String],
+        bcc: &[String],
         attachments: &[GraphAttachment],
     ) -> Result<String, GraphSendError> {
         self.check_handle(account_id).map_err(GraphSendError::Engine)?;
         check_inline_attachments(attachments, 0)?;
         let draft = self.create_reply(email_id)?;
-        self.patch_message(&draft.id, &serde_json::json!({
-            "body": { "contentType": "text", "content": body },
-        }))?;
+        let mut patch = serde_json::json!({ "body": { "contentType": "text", "content": body } });
+        add_reply_recipients(&mut patch, &draft.to, to, cc, bcc);
+        self.patch_message(&draft.id, &patch)?;
         self.attach_all(&draft.id, attachments)?;
         Ok("Drafts".to_string())
     }
@@ -1041,13 +1048,17 @@ impl GraphBackend {
     }
 
     /// MCS2 REPLY (PRD §3.3): `createReply` (Graph locks the recipient to
-    /// the original sender and threads it) → PATCH the body (+ policy
-    /// blind copies) → attachments → `POST …/send`. Returns who it went to.
+    /// the original sender and threads it) → PATCH the body (+ the planned
+    /// extra To / Cc of `--reply-all` and `--cc`, + blind copies) →
+    /// attachments → `POST …/send`. Returns who it went to.
+    #[allow(clippy::too_many_arguments)]
     pub fn send_reply(
         &self,
         account_id: &str,
         email_id: &str,
         body: &str,
+        to: &[String],
+        cc: &[String],
         bcc: &[String],
         attachments: &[GraphAttachment],
     ) -> Result<GraphReceipt, GraphSendError> {
@@ -1060,17 +1071,15 @@ impl GraphBackend {
             ));
         }
         let mut patch = serde_json::json!({ "body": { "contentType": "text", "content": body } });
-        if !bcc.is_empty() {
-            patch["bccRecipients"] = serde_json::json!(recipients_json(bcc));
-        }
+        let (to_all, cc_all) = add_reply_recipients(&mut patch, &draft.to, to, cc, bcc);
         self.patch_message(&draft.id, &patch)?;
         self.attach_all(&draft.id, attachments)?;
         let url = Self::url(&format!("/me/messages/{}/send", path_encode(&draft.id)));
         let resp = self.send(GraphMethod::Post, &url, None).map_err(GraphSendError::Engine)?;
         self.expect_accepted(resp, "send reply")?;
         Ok(GraphReceipt {
-            to: draft.to,
-            cc: Vec::new(),
+            to: to_all,
+            cc: cc_all,
             subject: draft.subject,
             attachments: attachments.iter().map(|a| a.filename.to_string()).collect(),
         })
@@ -1088,6 +1097,27 @@ impl GraphBackend {
             return Err("the source message has no sender address to reply to".to_string());
         };
         Ok(Some((sender, crate::mail::send::reply_subject(&full.summary.subject))))
+    }
+
+    /// [`Self::reply_preview`] plus the source's To and Cc (`--reply-all`).
+    pub fn reply_parties(
+        &self,
+        account_id: &str,
+        email_id: &str,
+    ) -> Result<Option<crate::mail::reply_all::SourceParties>, String> {
+        self.check_handle(account_id)?;
+        let Some(full) = self.fetch_full(account_id, email_id)? else {
+            return Ok(None);
+        };
+        let Some(sender) = full.summary.from.first().cloned() else {
+            return Err("the source message has no sender address to reply to".to_string());
+        };
+        Ok(Some(crate::mail::reply_all::SourceParties {
+            primary: sender,
+            subject: crate::mail::send::reply_subject(&full.summary.subject),
+            to: full.summary.to,
+            cc: full.cc,
+        }))
     }
 
     /// `POST …/createReply` → the new draft's id, recipients and subject.
@@ -1161,6 +1191,37 @@ impl GraphBackend {
             ))),
         }
     }
+}
+
+/// Add a reply's planned recipients to its draft PATCH: To = the ones
+/// `createReply` chose, then `to`'s others (no repeats, any case); Cc and
+/// Bcc as given. Answers the reply's To and Cc. Nothing beyond the locked
+/// recipient → the PATCH doesn't touch To (Graph's choice stands).
+fn add_reply_recipients(
+    patch: &mut serde_json::Value,
+    locked: &[String],
+    to: &[String],
+    cc: &[String],
+    bcc: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let mut to_all = locked.to_vec();
+    for a in to {
+        if !to_all.iter().any(|t| t.eq_ignore_ascii_case(a)) {
+            to_all.push(a.clone());
+        }
+    }
+    if to_all.len() > locked.len() {
+        patch["toRecipients"] = serde_json::json!(recipients_json(&to_all));
+    }
+    let cc_all: Vec<String> =
+        cc.iter().filter(|a| !to_all.iter().any(|t| t.eq_ignore_ascii_case(a))).cloned().collect();
+    if !cc_all.is_empty() {
+        patch["ccRecipients"] = serde_json::json!(recipients_json(&cc_all));
+    }
+    if !bcc.is_empty() {
+        patch["bccRecipients"] = serde_json::json!(recipients_json(bcc));
+    }
+    (to_all, cc_all)
 }
 
 /// The draft `createReply` made.
@@ -1797,6 +1858,8 @@ mod tests {
                 "row-1",
                 "graph:AAA",
                 "Thanks!",
+                &[],
+                &[],
                 &["owner@shop.example".to_string()],
                 &[att("n.pdf", b"x")],
             )
@@ -1817,11 +1880,51 @@ mod tests {
         assert!(seen.iter().all(|s| !s.url.ends_with("/sendMail")));
     }
 
+    /// `--reply-all` / `--cc` on a Microsoft 365 reply: Graph's locked
+    /// recipient stays first, the planned others join To (no repeats, any
+    /// case), Cc rides `ccRecipients`; a plain reply leaves To alone.
+    #[test]
+    fn send_reply_adds_the_planned_to_and_cc_after_the_locked_sender() {
+        let created = r#"{"id":"R1","subject":"RE: Hi","toRecipients":[{"emailAddress":{"address":"alice@example.com"}}]}"#;
+        let mock = MockGraph::new(vec![(201, None, created), (200, None, r#"{"id":"R1"}"#), (202, None, "")]);
+        let be = backend(mock.clone());
+        let r = be
+            .send_reply(
+                "row-1",
+                "graph:AAA",
+                "All of you",
+                &["Alice@Example.com".to_string(), "bo@example.com".to_string()],
+                &["cy@example.com".to_string(), "bo@example.com".to_string()],
+                &[],
+                &[],
+            )
+            .expect("reply-all");
+        assert_eq!(r.to, vec!["alice@example.com".to_string(), "bo@example.com".to_string()]);
+        assert_eq!(r.cc, vec!["cy@example.com".to_string()]);
+        let patch = mock.seen()[1].body.clone().expect("patch body");
+        let addrs = |k: &str| -> Vec<String> {
+            patch[k]
+                .as_array()
+                .unwrap_or_else(|| panic!("no {k} in {patch}"))
+                .iter()
+                .map(|r| r["emailAddress"]["address"].as_str().expect("address").to_string())
+                .collect()
+        };
+        assert_eq!(addrs("toRecipients"), ["alice@example.com", "bo@example.com"]);
+        assert_eq!(addrs("ccRecipients"), ["cy@example.com"]);
+        assert!(patch.get("bccRecipients").is_none(), "{patch}");
+
+        let mock = MockGraph::new(vec![(201, None, created), (200, None, r#"{"id":"R1"}"#), (202, None, "")]);
+        backend(mock.clone()).send_reply("row-1", "graph:AAA", "Just you", &[], &[], &[], &[]).expect("reply");
+        let patch = mock.seen()[1].body.clone().expect("patch body");
+        assert!(patch.get("toRecipients").is_none() && patch.get("ccRecipients").is_none(), "{patch}");
+    }
+
     #[test]
     fn send_reply_to_a_missing_message_is_not_found() {
         let mock = MockGraph::new(vec![(404, None, r#"{"error":{"code":"ErrorItemNotFound"}}"#)]);
         let be = backend(mock);
-        let err = be.send_reply("row-1", "graph:GONE", "x", &[], &[]).expect_err("gone");
+        let err = be.send_reply("row-1", "graph:GONE", "x", &[], &[], &[], &[]).expect_err("gone");
         assert!(matches!(err, GraphSendError::NotFound(_)), "{err:?}");
     }
 
@@ -1860,7 +1963,7 @@ mod tests {
             (201, None, r#"{"id":"A1"}"#),
         ]);
         let be = backend(mock.clone());
-        be.save_reply_draft_with("row-1", "graph:AAA", "ok", &[att("a.txt", b"a")]).expect("draft");
+        be.save_reply_draft_with("row-1", "graph:AAA", "ok", &[], &[], &[], &[att("a.txt", b"a")]).expect("draft");
         let seen = mock.seen();
         assert_eq!(seen.len(), 3);
         assert!(seen.iter().all(|s| !s.url.contains("/send")), "{seen:?}");

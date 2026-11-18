@@ -175,6 +175,16 @@ fn reply_context_parses_headers_and_masks_not_found() {
     assert_eq!(ctx.message_id.as_deref(), Some("<abc@github.com>"), "trimmed");
     assert_eq!(ctx.references.as_deref(), Some("<r1@x> <r2@x>"));
     assert_eq!(ctx.auth_results.len(), 1);
+    assert!(ctx.to.is_empty() && ctx.cc.is_empty(), "absent To/Cc parse empty");
+
+    // `--reply-all` reads the original's To and Cc.
+    let mut multi = args.clone();
+    multi["list"][0]["to"] = serde_json::json!([{ "email": "bot@example.org" }, { "name": "Ada", "email": "ada@example.com" }]);
+    multi["list"][0]["cc"] = serde_json::json!([{ "email": "bo@example.com" }, { "email": "cy@example.com" }, { "email": "di@example.com" }]);
+    let ctx = parse_reply_context("M1", &multi).expect("parses").expect("found");
+    assert_eq!(ctx.to.iter().map(|a| a.email.as_str()).collect::<Vec<_>>(), ["bot@example.org", "ada@example.com"]);
+    assert_eq!(ctx.to[1].name.as_deref(), Some("Ada"));
+    assert_eq!(ctx.cc.len(), 3, "{:?}", ctx.cc);
 
     // notFound → Ok(None); neither → loud.
     let nf = serde_json::json!({ "notFound": ["M1"], "list": [] });

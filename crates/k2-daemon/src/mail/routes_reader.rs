@@ -957,9 +957,10 @@ fn draft_values(
 ) -> Result<drafts::DraftValues, CliResponse> {
     let to = str_list(v, "to")?;
     let cc = str_list(v, "cc")?;
+    let bcc = str_list(v, "bcc")?;
     let subject = v["subject"].as_str().map(|s| s.trim().to_string());
     let body = v["body"].as_str().map(str::to_string);
-    let current = if to.is_none() || cc.is_none() || subject.is_none() || body.is_none() {
+    let current = if to.is_none() || cc.is_none() || bcc.is_none() || subject.is_none() || body.is_none() {
         let Some(r) = row.backend_ref.as_deref() else {
             return Err(drafts::not_editable(row));
         };
@@ -975,6 +976,9 @@ fn draft_values(
     let cur_list = |l: &[MailAddr]| l.iter().map(|a| a.email.clone()).collect::<Vec<_>>();
     let to = to.unwrap_or_else(|| current.as_ref().map(|f| cur_list(&f.summary.to)).unwrap_or_default());
     let cc = cc.unwrap_or_else(|| current.as_ref().map(|f| cur_list(&f.cc)).unwrap_or_default());
+    // A drafted reply's blind copies (`k2 mail draft <id> --bcc`) stay
+    // through an edit that doesn't name them.
+    let bcc = bcc.unwrap_or_else(|| current.as_ref().map(|f| cur_list(&f.bcc)).unwrap_or_default());
     let subject = subject.unwrap_or_else(|| current.as_ref().map(|f| f.summary.subject.clone()).unwrap_or_default());
     let body = body.unwrap_or_else(|| current.as_ref().and_then(|f| f.text.clone()).unwrap_or_default());
     if to.is_empty() {
@@ -992,10 +996,10 @@ fn draft_values(
     if subject.len() + body.len() > crate::mail::send::MAX_MESSAGE_BYTES {
         return Err(usage(&format!("draft too large — max {} bytes of text", crate::mail::send::MAX_MESSAGE_BYTES)));
     }
-    if to.len() + cc.len() > crate::mail::send::MAX_RECIPIENTS {
+    if to.len() + cc.len() + bcc.len() > crate::mail::send::MAX_RECIPIENTS {
         return Err(usage(&format!(
-            "too many recipients ({}) — max {} per message, counting to + cc",
-            to.len() + cc.len(),
+            "too many recipients ({}) — max {} per message, counting to + cc + bcc",
+            to.len() + cc.len() + bcc.len(),
             crate::mail::send::MAX_RECIPIENTS
         )));
     }
@@ -1005,7 +1009,7 @@ fn draft_values(
             other => usage(&format!("invalid recipient: {other:?}")),
         })
     };
-    Ok(drafts::DraftValues { to: norm(&to)?, cc: norm(&cc)?, subject, body })
+    Ok(drafts::DraftValues { to: norm(&to)?, cc: norm(&cc)?, bcc: norm(&bcc)?, subject, body })
 }
 
 /// POST draft-save | draft-send | draft-discard `{id, to?, cc?, subject?,
@@ -1095,6 +1099,7 @@ fn handle_draft_action(verb: &str, body: &[u8]) -> CliResponse {
                 "from": inbox.address,
                 "to": values.to,
                 "cc": values.cc,
+                "bcc": values.bcc,
                 "subject": values.subject,
                 "body": values.body,
             });

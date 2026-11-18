@@ -1141,7 +1141,10 @@ fn from_name_param(v: &serde_json::Value) -> Result<Option<String>, CliResponse>
 // ── POST /cli/mail/reply ────────────────────────────────────────────────
 
 /// S5: guardrailed reply (§8.4). Body: `{project, id, body, fromName?,
-/// wait?, timeout?}`. Recipient LOCKED to the original sender, From LOCKED
+/// replyAll?, cc?, bcc?, wait?, timeout?}`. `replyAll` also copies the
+/// original's To and Cc (minus this mailbox's own addresses), `cc` / `bcc`
+/// add on top ([`crate::mail::reply_all::plan`]); the send gate, approval
+/// and caps are the same as for any reply. Recipient LOCKED to the original sender, From LOCKED
 /// to the receiving address, In-Reply-To/References stamped, loop caps
 /// (no self-chains, ≤100 References, ≤4 replies/thread/hour),
 /// DMARC-fail gated outside approval mode. `fromName` is the same
@@ -1184,6 +1187,11 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
              message with k2 mail send if answers should go elsewhere",
         );
     }
+    // `--reply-all` / `--cc` / `--bcc`: checked before any identity work.
+    let ask = match reply_ask(&v) {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
     let wait_timeout = match wait_params(&v) {
         Ok(w) => w,
         Err(resp) => return resp,
@@ -1305,18 +1313,34 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             // subject — read BEFORE anything is audited, queued or sent, so
             // an approval shows the real recipient. `email_id` is the
             // linked message's backend id (`uid:…` / `graph:…`).
-            let (recipient, subject) = match submit.reply_preview(&email_id) {
-                Ok(Some(p)) => p,
-                Ok(None) => return masked(),
-                Err(e) => return submit_error_response(e),
+            // `--reply-all` / `--cc` / `--bcc` read the source's parties too;
+            // `to[0]` stays the locked recipient the provider re-derives.
+            let (parties, subject) = if ask.is_plain() {
+                match submit.reply_preview(&email_id) {
+                    Ok(Some((recipient, subject))) => ((vec![recipient], Vec::new(), Vec::new()), subject),
+                    Ok(None) => return masked(),
+                    Err(e) => return submit_error_response(e),
+                }
+            } else {
+                let src = match submit.reply_parties(&email_id) {
+                    Ok(Some(p)) => p,
+                    Ok(None) => return masked(),
+                    Err(e) => return submit_error_response(e),
+                };
+                let own = crate::mail::reply_all::linked_own_addresses(&inbox.email_address, &inbox.username);
+                match crate::mail::reply_all::plan(&src.primary, &src.to, &src.cc, &own, &ask) {
+                    Ok(p) => ((p.to_emails(), p.cc_emails(), p.bcc_emails()), src.subject),
+                    Err(h) => return error_response("400 Bad Request", "usage", &h),
+                }
             };
+            let (to, cc, bcc) = parties;
             let agent_name = k2_core::workspace::display::agent_display_name(&path);
             let mut msg = OutboundMessage {
                 from_name: Some(agent_name.clone()),
                 from: inbox.email_address.clone(),
-                to: vec![recipient],
-                cc: Vec::new(),
-                bcc: Vec::new(),
+                to,
+                cc,
+                bcc,
                 policy_bcc: Vec::new(),
                 reply_to: Vec::new(),
                 subject,
@@ -1407,13 +1431,26 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 return send_error_response(e);
             }
 
+            // Who else it goes to (`--reply-all`, `--cc`, `--bcc`): never
+            // this mailbox itself (its aliases included).
+            let own = if ask.all {
+                crate::mail::reply_all::hosted_own_addresses(&client, &from_address, &account_id)
+            } else {
+                vec![from_address.clone()]
+            };
+            let primary = crate::mail::jmap::MailAddr { name: None, email: recipient };
+            let parties = match crate::mail::reply_all::plan(&primary, &ctx.to, &ctx.cc, &own, &ask) {
+                Ok(p) => p,
+                Err(h) => return error_response("400 Bad Request", "usage", &h),
+            };
+
             let agent_name = k2_core::workspace::display::agent_display_name(&path);
             let mut msg = OutboundMessage {
                 from_name: Some(from_name_explicit.clone().unwrap_or_else(|| agent_name.clone())),
                 from: from_address.clone(),
-                to: vec![recipient],
-                cc: Vec::new(),
-                bcc: Vec::new(),
+                to: parties.to_emails(),
+                cc: parties.cc_emails(),
+                bcc: parties.bcc_emails(),
                 policy_bcc: Vec::new(),
                 reply_to: Vec::new(),
                 subject: send::reply_subject(&ctx.subject),
@@ -1460,6 +1497,20 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             )
         }
     }
+}
+
+/// A reply's `replyAll` / `cc` / `bcc` (each address checked like a send's).
+fn reply_ask(v: &serde_json::Value) -> Result<crate::mail::reply_all::ReplyAsk, CliResponse> {
+    let all = match &v["replyAll"] {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(b) => *b,
+        _ => return Err(error_response("400 Bad Request", "usage", "'replyAll' must be true or false")),
+    };
+    let norm = |field: &str| -> Result<Vec<String>, CliResponse> {
+        let raw = string_list(&v[field], field)?;
+        send::normalize_recipients(&raw).map_err(send_error_response)
+    };
+    Ok(crate::mail::reply_all::ReplyAsk { all, cc: norm("cc")?, bcc: norm("bcc")? })
 }
 
 // ── POST /cli/mail/forward-message ──────────────────────────────────────

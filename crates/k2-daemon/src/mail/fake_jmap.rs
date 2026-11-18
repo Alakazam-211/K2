@@ -39,6 +39,8 @@ pub(crate) struct FakeState {
     /// first. An `Email/query` naming a mailbox with entries here lists
     /// them (newest first); any other mailbox lists `inbox`.
     pub members: HashMap<(String, String), Vec<String>>,
+    /// Account id → its aliases' local parts (`x:Account/get` answers them).
+    pub aliases: HashMap<String, Vec<String>>,
 }
 
 pub(crate) struct FakeJmap {
@@ -250,6 +252,24 @@ fn route(method: &str, path: &str, body: &[u8], state: &Mutex<FakeState>) -> (u1
                         }
                     }
                     serde_json::json!({ "list": list, "notFound": not_found })
+                }
+                // A mailbox's aliases (the registry read `reply_all` uses).
+                "x:Account/get" => {
+                    let list: Vec<serde_json::Value> = args["ids"]
+                        .as_array()
+                        .expect("x:Account/get ids")
+                        .iter()
+                        .filter_map(|id| id.as_str())
+                        .map(|id| {
+                            let aliases: Vec<serde_json::Value> = st
+                                .aliases
+                                .get(id)
+                                .map(|l| l.iter().map(|n| serde_json::json!({ "name": n, "domainId": "d1", "enabled": true })).collect())
+                                .unwrap_or_default();
+                            serde_json::json!({ "id": id, "name": id, "domainId": "d1", "aliases": aliases })
+                        })
+                        .collect();
+                    serde_json::json!({ "list": list, "notFound": [] })
                 }
                 other => panic!("fake JMAP: unexpected method {other}"),
             };

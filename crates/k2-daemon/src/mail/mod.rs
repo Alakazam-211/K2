@@ -214,7 +214,12 @@ mod reader_presence_tests;
 // Drafted replies in the reader: at the top of the thread, edit, send, discard.
 #[cfg(test)]
 mod reader_drafts_tests;
+// `--reply-all` / `--cc` / `--bcc` on hosted reply drafts and replies.
+#[cfg(test)]
+mod reply_all_tests;
 pub mod send;
+// `--reply-all` / `--cc` / `--bcc` on reply drafts and replies (0.46.15).
+pub mod reply_all;
 pub mod submit;
 pub mod sieve_user;
 // 0.46.6: mailboxes can't write their own Sieve; enotify off; leftover

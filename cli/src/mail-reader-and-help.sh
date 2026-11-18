@@ -456,12 +456,14 @@ DISCOVER & READ
 
 WRITE
   draft <message-id>          Reply DRAFT in the inbox's Drafts (hosted or linked);
-                              a person edits/sends it from the top of its thread
+                              a person edits/sends it from the top of its thread.
+                              --reply-all, --cc, --bcc: who else it goes to
   draft --to --subject        LINKED: compose a brand-new draft (no message-id)
   drafts                      Your reply drafts and what a person did with each
   send <to>                   Send from an inbox you have 'send' on — hosted OR a linked
                               inbox over SMTP — gated off | approval | on (human's choice)
-  reply <message-id>          Guardrailed reply (needs 'send' on the receiving inbox)
+  reply <message-id>          Guardrailed reply (needs 'send' on the receiving inbox);
+                              --reply-all, --cc, --bcc as on draft
   forward-message <message-id> --to <addr>
                               Send one message on to someone, from your mailbox
                               (hosted; gated like send). Not 'forward', the rule
@@ -811,8 +813,9 @@ EOF
 
 cmd_help_mail_reply() {
     cat <<'EOF'
-Reply to a message you received. Guardrailed: the recipient is LOCKED to the
-original sender, the From is LOCKED to the address that received it, and
+Reply to a message you received. Guardrailed: the reply goes back to the
+original sender (with --reply-all, also to everyone the message went to), the
+From is LOCKED to the address that received it, and
 loop caps apply (max 4 replies per thread per hour; deep threads refused).
 A reply is refused unless the mail server's DMARC check clears the sender (a
 pass, or one sender whose domain publishes no policy) or it's a mailbox on this
@@ -825,6 +828,13 @@ USAGE
 
 FLAGS
   --body <text>          The reply text (or --body-file <f>)
+  --reply-all            Also reply to everyone on the original: its To join
+                         the reply's To, its Cc the reply's Cc. Your own
+                         inbox's addresses (aliases too) are left out, and
+                         nobody gets it twice.
+  --cc <addr>            Add a Cc (repeatable or comma-separated)
+  --bcc <addr>           Add a blind copy (repeatable or comma-separated).
+                         Max 10 recipients in all, plus any owner always-BCC.
   --from-name <name>     The display name on the From line, as on `send`,
                          e.g. --from-name "Laura" → Laura <laura@acme.com>.
                          Default: the workspace's agent name. Cosmetic only:
@@ -1255,7 +1265,8 @@ Save a DRAFT into an inbox's Drafts folder. It never sends. Two forms:
 
   Reply draft (any inbox you have 'draft' on: K2-hosted, or a linked
   Gmail/IMAP/Microsoft 365 account): threaded onto the message (In-Reply-To,
-  References, "Re:" subject, addressed to its sender). It shows at the top
+  References, "Re:" subject, addressed to its sender; with --reply-all, to
+  everyone on it too). It shows at the top
   of its thread in K2's Mail page, marked "Draft, not sent", where a person
   can edit it, send it (by your workspace's send rule) or discard it.
   'k2 mail drafts' shows what became of it.
@@ -1270,8 +1281,8 @@ send it yourself with 'k2 mail reply <id> --attach <path>' or ask your
 human. Your level on each inbox (read < draft < send): 'k2 mail inboxes'.
 
 USAGE
-  k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>] [--json]
-  k2 mail draft --reply-to <message-id> (--body <text> | --body-file <f>) [--json]
+  k2 mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>] [--json]
+  k2 mail draft --reply-to <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--json]
   k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>] [--json]
 
 ARGUMENTS
@@ -1280,12 +1291,16 @@ ARGUMENTS
 
 FLAGS
   --reply-to <id>        Reply form, spelled as a flag (same as <message-id>)
+  --reply-all            Reply form: also address everyone on the original
+                         (its To join the draft's To, its Cc the draft's Cc),
+                         without your own inbox's addresses and repeats
   --to <addr>            Compose form: recipient (repeatable)
   --subject <s>          Compose form: subject (required with --to)
-  --cc <addr>            Compose only: Cc (repeatable)
-  --bcc <addr>           Compose only: Bcc (repeatable). Saved as the
-                         draft's Bcc header; your human's mail client keeps
-                         it blind when they send. to + cc + bcc max 10.
+  --cc <addr>            Cc (repeatable or comma-separated). On a reply draft
+                         it adds to the reply's recipients.
+  --bcc <addr>           Bcc (repeatable or comma-separated). Saved as the
+                         draft's Bcc; the mail client keeps it blind when
+                         the draft is sent. to + cc + bcc max 10.
   --from <linked-addr>   Compose: which linked inbox (required when several)
   --body <text>          The draft text
   --body-file <f>        Read the draft text from a file

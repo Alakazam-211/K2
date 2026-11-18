@@ -913,6 +913,8 @@ fn mx() -> messages::AuthAuthority {
 fn ctx(from_email: &str, dmarc: &str, refs: Option<&str>) -> ReplyContext {
     ReplyContext {
         from: vec![MailAddr { name: None, email: from_email.to_string() }],
+        to: Vec::new(),
+        cc: Vec::new(),
         subject: "Verify".to_string(),
         thread_id: Some("T1".to_string()),
         message_id: Some("<m1@x>".to_string()),

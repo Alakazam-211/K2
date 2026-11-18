@@ -51747,12 +51747,15 @@ cmd_schema() {
     },
     {
       "name": "mail reply",
-      "usage": "k2 mail reply <message-id> (--body <text> | --body-file <f>) [--from-name <name>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
-      "description": "Guardrailed reply to a received message: recipient locked to the original sender, From locked to the receiving address, loop caps (max 4 replies/thread/hour). On HOSTED addresses this uses the same send gating and --wait semantics as 'mail send'; on a LINKED inbox where you hold the 'send' level AND Sending=on it submits the reply immediately over SMTP. Attachments (--attach) work on HOSTED and LINKED replies. For a linked message you'd rather NOT send, save a draft with 'k2 mail draft'.",
+      "usage": "k2 mail reply <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--from-name <name>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
+      "description": "Guardrailed reply to a received message: goes to the original sender (--reply-all: also everyone on the original, minus your own inbox's addresses), From locked to the receiving address, loop caps (max 4 replies/thread/hour). On HOSTED addresses this uses the same send gating and --wait semantics as 'mail send'; on a LINKED inbox where you hold the 'send' level AND Sending=on it submits the reply immediately over SMTP. Attachments (--attach) work on HOSTED and LINKED replies. For a linked message you'd rather NOT send, save a draft with 'k2 mail draft'.",
       "args": [{"name": "message-id", "required": true}],
       "flags": [
         {"name": "--body", "arg": "text", "description": "The reply text."},
         {"name": "--body-file", "arg": "f", "description": "Read the reply from a file."},
+        {"name": "--reply-all", "arg": null, "description": "Also reply to everyone on the original: its To join the reply's To, its Cc the reply's Cc; your own inbox's addresses (aliases too) are left out, nobody twice."},
+        {"name": "--cc", "arg": "addr", "description": "Add a Cc (repeatable / comma-separated)."},
+        {"name": "--bcc", "arg": "addr", "description": "Add a blind copy (repeatable / comma-separated). Max 10 recipients in all, plus any owner always-BCC."},
         {"name": "--from-name", "arg": "name", "description": "From display name (default: the workspace's agent name). Cosmetic only; the address stays the one that received the message. HOSTED mailboxes only. Max 128 chars; no '@', line breaks or control characters."},
         {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). Max 10 files, 25 MiB each and 25 MiB in total. Refused: outside the workspace, anything in .k2/, and files that look like secrets (.env, keys, .ssh/, a file holding a credential); a check for mistakes, not a guarantee. Under approval the bytes are captured when you send."},
         {"name": "--wait", "arg": null, "description": "Block until decided (exit 2 on timeout, still queued)."},
@@ -51762,13 +51765,16 @@ cmd_schema() {
     },
     {
       "name": "mail draft",
-      "usage": "k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>] [--json]  |  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--attach <path>] [--from <linked-addr>] [--json]",
-      "description": "Save a DRAFT into your human's linked Gmail/IMAP Drafts folder (APPEND \\Draft) — they review and send from their own client. Two forms: reply (positional <message-id>, inherits To/Subject) or compose (--to and --subject, no id). Works at the 'draft' level; a send is a different verb (k2 mail send/reply need level send AND Sending=on). --attach matches send caps (10 files / 25MiB) on both forms. Graph/Microsoft compose and Graph attachments are out of v1 (teaching error). For K2-hosted messages use 'k2 mail reply'.",
+      "usage": "k2 mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>] [--json]  |  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked-addr>] [--json]",
+      "description": "Save a DRAFT into your human's linked Gmail/IMAP Drafts folder (APPEND \\Draft) — they review and send from their own client. Two forms: reply (positional <message-id> or --reply-to <id>; threaded, inherits To/Subject; --reply-all also addresses the original's To and Cc minus your own inbox; --cc/--bcc add copies) or compose (--to and --subject, no id). Works at the 'draft' level; a send is a different verb (k2 mail send/reply need level send AND Sending=on). --attach matches send caps (10 files / 25MiB) on both forms. Graph/Microsoft compose and Graph attachments are out of v1 (teaching error). For K2-hosted messages use 'k2 mail reply'.",
       "args": [{"name": "message-id", "required": false}],
       "flags": [
+        {"name": "--reply-to", "arg": "message-id", "description": "Reply form, spelled as a flag (same as <message-id>)."},
+        {"name": "--reply-all", "arg": null, "description": "Reply form: also address everyone on the original (its To join the draft's To, its Cc the draft's Cc), without your own inbox's addresses and repeats."},
         {"name": "--to", "arg": "addr", "description": "Compose: recipient (repeatable / comma-separated). Mutually exclusive with <message-id>."},
         {"name": "--subject", "arg": "s", "description": "Compose: subject. Required with --to."},
-        {"name": "--cc", "arg": "addr", "description": "Compose only: Cc (repeatable / comma-separated)."},
+        {"name": "--cc", "arg": "addr", "description": "Cc (repeatable / comma-separated). On a reply draft it adds to the reply's recipients."},
+        {"name": "--bcc", "arg": "addr", "description": "Bcc (repeatable / comma-separated), saved as the draft's Bcc. to + cc + bcc max 10."},
         {"name": "--from", "arg": "linked-addr", "description": "Compose: which linked inbox to draft FROM (needed with several; one may be implicit)."},
         {"name": "--body", "arg": "text", "description": "The draft text."},
         {"name": "--body-file", "arg": "f", "description": "Read the draft text from a file."},
@@ -78302,6 +78308,7 @@ _mail_py() {
     M_LABEL="${M_LABEL:-}" M_SELECTOR="${M_SELECTOR:-}" \
     M_BODY="${M_BODY:-}" M_CC="${M_CC:-}" M_BCC="${M_BCC:-}" M_ATTACH="${M_ATTACH:-}" \
     M_REPLY_TO="${M_REPLY_TO:-}" M_REPLY_TO_ORIGINAL="${M_REPLY_TO_ORIGINAL:-false}" M_AS_EML="${M_AS_EML:-false}" \
+    M_REPLY_ALL="${M_REPLY_ALL:-false}" \
     M_ALWAYS_BCC="${M_ALWAYS_BCC:-}" M_ALWAYS_BCC_SET="${M_ALWAYS_BCC_SET:-false}" \
     M_WAIT="${M_WAIT:-false}" M_CONFIRM="${M_CONFIRM:-false}" M_PURGE="${M_PURGE:-false}" \
     M_NOTE="${M_NOTE:-}" M_HEALTH="${M_HEALTH:-false}" \
@@ -79095,6 +79102,13 @@ elif verb == "reply":
         # From DISPLAY NAME only (as on send) — the daemon validates it;
         # the address stays locked to the receiving one.
         body["fromName"] = env("M_FROM_NAME")
+    # --reply-all / --cc / --bcc: the daemon plans who it goes to.
+    if env("M_REPLY_ALL") == "true":
+        body["replyAll"] = True
+    for envk, key in (("M_CC", "cc"), ("M_BCC", "bcc")):
+        vals = env_list(envk)
+        if vals:
+            body[key] = vals
     attach = env_lines("M_ATTACH")
     if attach:
         # Workspace-relative file PATHS — the daemon reads the bytes.
@@ -79970,6 +79984,8 @@ elif verb == "draft":
         body["bcc"] = bcc
     if env("M_FROM"):
         body["from"] = env("M_FROM")
+    if env("M_REPLY_ALL") == "true":
+        body["replyAll"] = True
     attach = env_lines("M_ATTACH")
     if attach:
         body["attachments"] = attach
@@ -82383,9 +82399,16 @@ cmd_mail_forward_message() {
 cmd_mail_reply() {
     if _wants_help "$@"; then cmd_help_mail_reply; exit 0; fi
     local id="" body="" body_file="" attach="" wait=false timeout="" as_json=false
-    local from_name="" from_name_set=false
+    local from_name="" from_name_set=false cc="" bcc="" reply_all=false
     while [ $# -gt 0 ]; do
         case "$1" in
+            --reply-all) reply_all=true; shift ;;
+            --cc)
+                [ $# -ge 2 ] || { _mail_err "usage" "--cc requires an address"; exit 2; }
+                cc="${cc}${cc:+$'\n'}$2"; shift 2 ;;
+            --bcc)
+                [ $# -ge 2 ] || { _mail_err "usage" "--bcc requires an address"; exit 2; }
+                bcc="${bcc}${bcc:+$'\n'}$2"; shift 2 ;;
             --body)
                 [ $# -ge 2 ] || { _mail_err "usage" "--body requires the reply text"; exit 2; }
                 body="$2"; shift 2 ;;
@@ -82407,7 +82430,7 @@ cmd_mail_reply() {
                 timeout="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail reply <message-id> (--body <text> | --body-file <f>) [--from-name <name>] [--attach <path>] [--wait [--timeout <s>]] [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail reply <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--from-name <name>] [--attach <path>] [--wait [--timeout <s>]] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; else
@@ -82451,7 +82474,8 @@ cmd_mail_reply() {
         _mail_check_timeout "$timeout"
     fi
     local M_VERB="reply" M_JSON="$as_json" M_ID="$id" M_BODY="$body" \
-          M_ATTACH="$attach" M_FROM_NAME="$from_name" M_WAIT="$wait" M_TIMEOUT="$timeout"
+          M_ATTACH="$attach" M_FROM_NAME="$from_name" M_WAIT="$wait" M_TIMEOUT="$timeout" \
+          M_CC="$cc" M_BCC="$bcc" M_REPLY_ALL="$reply_all"
     _mail_py
 }
 
@@ -82933,9 +82957,10 @@ cmd_mail_approvals() {
 cmd_mail_draft() {
     if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
     local id="" body="" body_file="" as_json=false
-    local to="" subject="" cc="" bcc="" from="" attach=""
+    local to="" subject="" cc="" bcc="" from="" attach="" reply_all=false
     while [ $# -gt 0 ]; do
         case "$1" in
+            --reply-all) reply_all=true; shift ;;
             --reply-to)
                 [ $# -ge 2 ] || { _mail_err "usage" "--reply-to requires a message id (from 'k2 mail messages')"; exit 2; }
                 if [ -n "$id" ] && [ "$id" != "$2" ]; then
@@ -82969,7 +82994,7 @@ cmd_mail_draft() {
                 attach="${attach}${attach:+$'\n'}$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>]  OR  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>]  OR  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; elif [ "$id" != "$1" ]; then
@@ -82983,12 +83008,8 @@ cmd_mail_draft() {
         _mail_err "usage" "pass either a <message-id> (reply draft) or --to/--subject (compose draft), not both"
         exit 2
     fi
-    if [ -n "$id" ] && [ -n "$cc" ]; then
-        _mail_err "usage" "--cc is for compose drafts (k2 mail draft --to … --cc)"
-        exit 2
-    fi
-    if [ -n "$id" ] && [ -n "$bcc" ]; then
-        _mail_err "usage" "--bcc is for compose drafts (k2 mail draft --to … --bcc)"
+    if [ -z "$id" ] && $reply_all; then
+        _mail_err "usage" "--reply-all needs the message you're answering: k2 mail draft <message-id> --reply-all"
         exit 2
     fi
     if [ -n "$id" ] && [ -n "$from" ]; then
@@ -83024,7 +83045,8 @@ cmd_mail_draft() {
         exit 2
     fi
     local M_VERB="draft" M_JSON="$as_json" M_ID="$id" M_BODY="$body" \
-          M_TO="$to" M_SUBJECT="$subject" M_CC="$cc" M_BCC="$bcc" M_FROM="$from" M_ATTACH="$attach"
+          M_TO="$to" M_SUBJECT="$subject" M_CC="$cc" M_BCC="$bcc" M_FROM="$from" M_ATTACH="$attach" \
+          M_REPLY_ALL="$reply_all"
     _mail_py
 }
 
@@ -90215,12 +90237,14 @@ DISCOVER & READ
 
 WRITE
   draft <message-id>          Reply DRAFT in the inbox's Drafts (hosted or linked);
-                              a person edits/sends it from the top of its thread
+                              a person edits/sends it from the top of its thread.
+                              --reply-all, --cc, --bcc: who else it goes to
   draft --to --subject        LINKED: compose a brand-new draft (no message-id)
   drafts                      Your reply drafts and what a person did with each
   send <to>                   Send from an inbox you have 'send' on — hosted OR a linked
                               inbox over SMTP — gated off | approval | on (human's choice)
-  reply <message-id>          Guardrailed reply (needs 'send' on the receiving inbox)
+  reply <message-id>          Guardrailed reply (needs 'send' on the receiving inbox);
+                              --reply-all, --cc, --bcc as on draft
   forward-message <message-id> --to <addr>
                               Send one message on to someone, from your mailbox
                               (hosted; gated like send). Not 'forward', the rule
@@ -90570,8 +90594,9 @@ EOF
 
 cmd_help_mail_reply() {
     cat <<'EOF'
-Reply to a message you received. Guardrailed: the recipient is LOCKED to the
-original sender, the From is LOCKED to the address that received it, and
+Reply to a message you received. Guardrailed: the reply goes back to the
+original sender (with --reply-all, also to everyone the message went to), the
+From is LOCKED to the address that received it, and
 loop caps apply (max 4 replies per thread per hour; deep threads refused).
 A reply is refused unless the mail server's DMARC check clears the sender (a
 pass, or one sender whose domain publishes no policy) or it's a mailbox on this
@@ -90584,6 +90609,13 @@ USAGE
 
 FLAGS
   --body <text>          The reply text (or --body-file <f>)
+  --reply-all            Also reply to everyone on the original: its To join
+                         the reply's To, its Cc the reply's Cc. Your own
+                         inbox's addresses (aliases too) are left out, and
+                         nobody gets it twice.
+  --cc <addr>            Add a Cc (repeatable or comma-separated)
+  --bcc <addr>           Add a blind copy (repeatable or comma-separated).
+                         Max 10 recipients in all, plus any owner always-BCC.
   --from-name <name>     The display name on the From line, as on `send`,
                          e.g. --from-name "Laura" → Laura <laura@acme.com>.
                          Default: the workspace's agent name. Cosmetic only:
@@ -91014,7 +91046,8 @@ Save a DRAFT into an inbox's Drafts folder. It never sends. Two forms:
 
   Reply draft (any inbox you have 'draft' on: K2-hosted, or a linked
   Gmail/IMAP/Microsoft 365 account): threaded onto the message (In-Reply-To,
-  References, "Re:" subject, addressed to its sender). It shows at the top
+  References, "Re:" subject, addressed to its sender; with --reply-all, to
+  everyone on it too). It shows at the top
   of its thread in K2's Mail page, marked "Draft, not sent", where a person
   can edit it, send it (by your workspace's send rule) or discard it.
   'k2 mail drafts' shows what became of it.
@@ -91029,8 +91062,8 @@ send it yourself with 'k2 mail reply <id> --attach <path>' or ask your
 human. Your level on each inbox (read < draft < send): 'k2 mail inboxes'.
 
 USAGE
-  k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>] [--json]
-  k2 mail draft --reply-to <message-id> (--body <text> | --body-file <f>) [--json]
+  k2 mail draft <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--attach <path>] [--json]
+  k2 mail draft --reply-to <message-id> (--body <text> | --body-file <f>) [--reply-all] [--cc <addr>] [--bcc <addr>] [--json]
   k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>] [--json]
 
 ARGUMENTS
@@ -91039,12 +91072,16 @@ ARGUMENTS
 
 FLAGS
   --reply-to <id>        Reply form, spelled as a flag (same as <message-id>)
+  --reply-all            Reply form: also address everyone on the original
+                         (its To join the draft's To, its Cc the draft's Cc),
+                         without your own inbox's addresses and repeats
   --to <addr>            Compose form: recipient (repeatable)
   --subject <s>          Compose form: subject (required with --to)
-  --cc <addr>            Compose only: Cc (repeatable)
-  --bcc <addr>           Compose only: Bcc (repeatable). Saved as the
-                         draft's Bcc header; your human's mail client keeps
-                         it blind when they send. to + cc + bcc max 10.
+  --cc <addr>            Cc (repeatable or comma-separated). On a reply draft
+                         it adds to the reply's recipients.
+  --bcc <addr>           Bcc (repeatable or comma-separated). Saved as the
+                         draft's Bcc; the mail client keeps it blind when
+                         the draft is sent. to + cc + bcc max 10.
   --from <linked-addr>   Compose: which linked inbox (required when several)
   --body <text>          The draft text
   --body-file <f>        Read the draft text from a file

@@ -779,6 +779,7 @@ pub fn full_from_raw(uid_token: &str, raw: &RawEmail) -> Result<EmailFull, Strin
     Ok(EmailFull {
         summary,
         cc: addr_list(msg.cc()),
+        bcc: addr_list(msg.bcc()),
         // The raw message IS the blob (`read --raw`).
         blob_id: Some(uid_token.to_string()),
         text: msg.body_text(0).map(|t| t.into_owned()),
@@ -815,6 +816,9 @@ pub struct DraftSource {
     pub subject: String,
     /// Reply-To first, else the first From — where the reply goes.
     pub reply_to: Option<MailAddr>,
+    /// The source's To and Cc (`--reply-all` copies them, minus this inbox).
+    pub to: Vec<MailAddr>,
+    pub cc: Vec<MailAddr>,
 }
 
 fn bracketed(id: &str) -> String {
@@ -847,6 +851,8 @@ pub fn draft_source_from_raw(raw: &[u8]) -> Result<DraftSource, String> {
         references,
         subject: msg.subject().unwrap_or_default().to_string(),
         reply_to,
+        to: addr_list(msg.to()),
+        cc: addr_list(msg.cc()),
     })
 }
 
@@ -1053,16 +1059,52 @@ pub fn compose_draft_rfc822(
     attachments: &[Rfc822Attachment],
     boundary: &str,
 ) -> Result<Vec<u8>, String> {
-    let Some(to) = src.reply_to.as_ref() else {
+    let parties = reply_draft_parties(inbox, src, &crate::mail::reply_all::ReplyAsk::default())?;
+    compose_reply_draft_rfc822(inbox, src, &parties, body, date_rfc2822, attachments, boundary)
+}
+
+/// Who a reply draft on this linked inbox goes to: the locked recipient
+/// (the source's Reply-To, else its From), plus — on `--reply-all` — the
+/// source's To and Cc without this inbox's own addresses, plus `--cc` /
+/// `--bcc` ([`crate::mail::reply_all::plan`]).
+pub fn reply_draft_parties(
+    inbox: &MailExternalInbox,
+    src: &DraftSource,
+    ask: &crate::mail::reply_all::ReplyAsk,
+) -> Result<crate::mail::reply_all::ReplyParties, String> {
+    let Some(primary) = src.reply_to.as_ref() else {
         return Err("the source message has no sender address to reply to".to_string());
     };
+    let own = crate::mail::reply_all::linked_own_addresses(&inbox.email_address, &inbox.username);
+    crate::mail::reply_all::plan(primary, &src.to, &src.cc, &own, ask)
+}
+
+/// [`compose_draft_rfc822`] for planned recipients ([`reply_draft_parties`]):
+/// To and Cc as planned; blind copies land as a `Bcc:` header IN THE DRAFT
+/// (how mail clients store a draft's blind copies; the person's client
+/// strips it when they send — K2 never sends a draft).
+pub fn compose_reply_draft_rfc822(
+    inbox: &MailExternalInbox,
+    src: &DraftSource,
+    parties: &crate::mail::reply_all::ReplyParties,
+    body: &str,
+    date_rfc2822: &str,
+    attachments: &[Rfc822Attachment],
+    boundary: &str,
+) -> Result<Vec<u8>, String> {
     let mut h = String::new();
     h.push_str(&format!("Date: {date_rfc2822}\r\n"));
     h.push_str(&format!(
         "From: {}\r\n",
         format_mailbox(inbox.display_name.as_deref(), &inbox.email_address)
     ));
-    h.push_str(&format!("To: {}\r\n", format_mailbox(to.name.as_deref(), &to.email)));
+    h.push_str(&format!("To: {}\r\n", format_addr_list(&parties.to)));
+    if !parties.cc.is_empty() {
+        h.push_str(&format!("Cc: {}\r\n", format_addr_list(&parties.cc)));
+    }
+    if !parties.bcc.is_empty() {
+        h.push_str(&format!("Bcc: {}\r\n", format_addr_list(&parties.bcc)));
+    }
     h.push_str(&format!(
         "Subject: {}\r\n",
         encode_header_text(&crate::mail::send::reply_subject(&src.subject))
@@ -1882,7 +1924,16 @@ pub fn save_reply_draft(
     body: &str,
     attachments: &[Rfc822Attachment],
 ) -> Result<String, ExtError> {
-    save_reply_draft_located(ops, inbox, password, source_uid_token, body, attachments).map(|d| d.folder)
+    save_reply_draft_located(
+        ops,
+        inbox,
+        password,
+        source_uid_token,
+        body,
+        attachments,
+        &crate::mail::reply_all::ReplyAsk::default(),
+    )
+    .map(|d| d.folder)
 }
 
 /// Where a reply draft landed, and the thread it answers.
@@ -1906,6 +1957,7 @@ pub fn save_reply_draft_located(
     source_uid_token: &str,
     body: &str,
     attachments: &[Rfc822Attachment],
+    ask: &crate::mail::reply_all::ReplyAsk,
 ) -> Result<SavedReplyDraft, ExtError> {
     let src_raw = ops
         .fetch_raw(inbox, password, source_uid_token)
@@ -1923,7 +1975,9 @@ pub fn save_reply_draft_located(
     let folder = resolved_drafts_folder(ops, inbox, password)?;
     let date = chrono::Utc::now().to_rfc2822();
     let boundary = format!("=_k2_draft_{}", uuid::Uuid::new_v4().simple());
-    let rfc822 = compose_draft_rfc822(inbox, &src, body, &date, attachments, &boundary)
+    // Who it goes to is the caller's to fix (usage), not the server's.
+    let parties = reply_draft_parties(inbox, &src, ask).map_err(ExtError::Usage)?;
+    let rfc822 = compose_reply_draft_rfc822(inbox, &src, &parties, body, &date, attachments, &boundary)
         .map_err(ExtError::Engine)?;
     let (folder, uid_token) = append_draft_located(ops, inbox, password, &folder, &rfc822)?;
     Ok(SavedReplyDraft {
@@ -1965,6 +2019,7 @@ pub fn save_edited_draft(
     password: &str,
     to: &[String],
     cc: &[String],
+    bcc: &[String],
     subject: &str,
     body: &str,
     in_reply_to: Option<&str>,
@@ -1981,6 +2036,7 @@ pub fn save_edited_draft(
         inbox,
         &as_addrs(to),
         &as_addrs(cc),
+        &as_addrs(bcc),
         subject,
         body,
         in_reply_to,
@@ -1999,6 +2055,7 @@ pub fn compose_threaded_draft_rfc822(
     inbox: &MailExternalInbox,
     to: &[MailAddr],
     cc: &[MailAddr],
+    bcc: &[MailAddr],
     subject: &str,
     body: &str,
     in_reply_to: Option<&str>,
@@ -2018,6 +2075,9 @@ pub fn compose_threaded_draft_rfc822(
     h.push_str(&format!("To: {}\r\n", format_addr_list(to)));
     if !cc.is_empty() {
         h.push_str(&format!("Cc: {}\r\n", format_addr_list(cc)));
+    }
+    if !bcc.is_empty() {
+        h.push_str(&format!("Bcc: {}\r\n", format_addr_list(bcc)));
     }
     h.push_str(&format!("Subject: {}\r\n", encode_header_text(subject)));
     for v in [in_reply_to, references].into_iter().flatten() {
@@ -2899,6 +2959,8 @@ a,b\r\n1,2\r\n\
             references: None,
             subject: "Überweisung".to_string(),
             reply_to: Some(MailAddr { name: None, email: "a@b.example".to_string() }),
+            to: Vec::new(),
+            cc: Vec::new(),
         };
         let rfc822 = compose_draft_rfc822(&inbox, &src, "ok", "d", &[], "b").expect("composes");
         let text = String::from_utf8(rfc822).expect("ASCII wire form");

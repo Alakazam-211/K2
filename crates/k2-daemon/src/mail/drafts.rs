@@ -324,11 +324,13 @@ fn meta_json_fields(row: &DraftRow) -> serde_json::Value {
 /// Pure: the RFC 8621 Email create object for a draft (the JMAP layer adds
 /// `mailboxIds` and the `$draft` keyword). Threading headers only when set.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn draft_email_json(
     from_name: Option<&str>,
     from: &str,
     to: &[String],
     cc: &[String],
+    bcc: &[String],
     subject: &str,
     body: &str,
     in_reply_to: Option<&str>,
@@ -344,6 +346,11 @@ pub fn draft_email_json(
     });
     if !cc.is_empty() {
         v["cc"] = serde_json::Value::Array(list(cc));
+    }
+    // A draft keeps its blind copies as `bcc` (mail clients store them so);
+    // the send strips them from the headers.
+    if !bcc.is_empty() {
+        v["bcc"] = serde_json::Value::Array(list(bcc));
     }
     if let Some(irt) = in_reply_to.filter(|s| !s.trim().is_empty()) {
         v["header:In-Reply-To:asText"] = serde_json::json!(irt);
@@ -442,6 +449,7 @@ pub fn save_hosted_reply(
     email_id: &str,
     source_token: &str,
     body: &str,
+    ask: &crate::mail::reply_all::ReplyAsk,
 ) -> CliResponse {
     let Some(account) = inbox.account_id.clone().filter(|a| !a.is_empty()) else {
         return error_response(
@@ -461,8 +469,19 @@ pub fn save_hosted_reply(
         }
         Err(hint) => return error_response("502 Bad Gateway", "engine", &hint),
     };
-    let Some(to) = ctx.from.first().map(|a| a.email.clone()).filter(|e| !e.trim().is_empty()) else {
+    let Some(sender) = ctx.from.first().cloned().filter(|a| !a.email.trim().is_empty()) else {
         return error_response("400 Bad Request", "usage", "the message has no sender address to reply to");
+    };
+    // `--reply-all` / `--cc` / `--bcc`: the original's parties minus this
+    // mailbox's own addresses (its aliases too), then the explicit copies.
+    let own = if ask.all {
+        crate::mail::reply_all::hosted_own_addresses(&client, &inbox.address, &account)
+    } else {
+        vec![inbox.address.clone()]
+    };
+    let parties = match crate::mail::reply_all::plan(&sender, &ctx.to, &ctx.cc, &own, ask) {
+        Ok(p) => p,
+        Err(hint) => return error_response("400 Bad Request", "usage", &hint),
     };
     let refs = crate::mail::send::build_out_references(ctx.references.as_deref(), ctx.message_id.as_deref());
     let subject = crate::mail::send::reply_subject(&ctx.subject);
@@ -470,8 +489,9 @@ pub fn save_hosted_reply(
     let email = draft_email_json(
         Some(&from_name),
         &inbox.address,
-        &[to],
-        &[],
+        &parties.to_emails(),
+        &parties.cc_emails(),
+        &parties.bcc_emails(),
         &subject,
         body,
         ctx.message_id.as_deref(),
@@ -518,6 +538,7 @@ fn hosted_inbox_id(address: &str) -> Option<String> {
 pub struct DraftValues {
     pub to: Vec<String>,
     pub cc: Vec<String>,
+    pub bcc: Vec<String>,
     pub subject: String,
     pub body: String,
 }
@@ -542,6 +563,7 @@ pub fn replace_in_mailbox(
                 &row.address,
                 &values.to,
                 &values.cc,
+                &values.bcc,
                 &values.subject,
                 &values.body,
                 row.in_reply_to.as_deref(),
@@ -566,6 +588,7 @@ pub fn replace_in_mailbox(
                 &password,
                 &values.to,
                 &values.cc,
+                &values.bcc,
                 &values.subject,
                 &values.body,
                 row.in_reply_to.as_deref(),
@@ -732,14 +755,16 @@ mod tests {
 
     #[test]
     fn a_draft_email_threads_only_when_told() {
-        let v = draft_email_json(Some("Bot"), "bot@x.example", &["ada@example.com".into()], &[], "Re: hi", "b", Some("<a@x>"), Some("<r@x> <a@x>"));
+        let v = draft_email_json(Some("Bot"), "bot@x.example", &["ada@example.com".into()], &[], &[], "Re: hi", "b", Some("<a@x>"), Some("<r@x> <a@x>"));
         assert_eq!(v["header:In-Reply-To:asText"], "<a@x>");
         assert_eq!(v["header:References:asText"], "<r@x> <a@x>");
         assert!(v.get("cc").is_none());
-        let bare = draft_email_json(None, "bot@x.example", &["ada@example.com".into()], &["bo@example.com".into()], "s", "b", None, Some(" "));
+        assert!(v.get("bcc").is_none(), "no blind copies unless asked: {v}");
+        let bare = draft_email_json(None, "bot@x.example", &["ada@example.com".into()], &["bo@example.com".into()], &["cy@example.com".into()], "s", "b", None, Some(" "));
         assert!(bare.get("header:In-Reply-To:asText").is_none());
         assert!(bare.get("header:References:asText").is_none());
         assert_eq!(bare["cc"], serde_json::json!([{ "email": "bo@example.com" }]));
+        assert_eq!(bare["bcc"], serde_json::json!([{ "email": "cy@example.com" }]), "a draft keeps its blind copies");
     }
 
     #[test]

@@ -2,8 +2,11 @@
 # A POST over the cell socket is sent again over TCP only when the socket
 # took none of it (0.46.15).
 #
-# cli_send, cli_send_json and _compute_send (compute, App, chat, CI and the
-# other daemon-route verbs) try the session's cell socket first. They go
+# cli_send, cli_send_json, _compute_send (compute, App, chat, CI and the
+# other daemon-route verbs), _app_rt_post_file (k2 app exec with stdin),
+# _sidecar_send (sessions, sidecar, vault and the other id-tool families)
+# and _doc_xfer (the doc verbs that send a whole file) try the session's
+# cell socket first. They go
 # on to loopback TCP for a POST only when the connect failed (curl 7) or
 # the daemon answered "not served on cell socket". Any other failure after
 # the request may have gone out (curl 28, 52, 56, rc 0 with an empty body,
@@ -22,6 +25,11 @@
 #   k2 app exception <app> on       _compute_send POST that carries a vault
 #                                   confirmToken (a stub vault socket gives it)
 #   k2 compute get <job>            _compute_send GET
+#   k2 app exec <app> -- <cmd>      _app_rt_post_file POST (stdin from a file)
+#   k2 sidecar stop <name>          _sidecar_send POST
+#   k2 sidecar list                 _sidecar_send GET
+#   k2 doc write --base live <doc>  _doc_xfer POST (the body from a file)
+#   k2 doc show --version <v> <doc> _doc_xfer GET
 #
 # A stub daemon serves loopback TCP and a Unix socket and counts each route
 # per channel. The socket's behaviour per run comes from a mode file:
@@ -69,7 +77,8 @@ from urllib.parse import urlsplit
 
 LOG, PORTF, MODEF, SOCK, DEAD, VAULT, TOKLOG = sys.argv[1:8]
 TARGETS = ("/cli/inbox/archive", "/cli/inbox/read", "/cli/heartbeat/unarchive", "/cli/agent/identity",
-           "/cli/compute/run", "/cli/compute/jobs/get", "/cli/app/install", "/cli/app/exception")
+           "/cli/compute/run", "/cli/compute/jobs/get", "/cli/app/install", "/cli/app/exception",
+           "/cli/app/exec", "/cli/sidecar/stop", "/cli/sidecar/list", "/cli/docs/write", "/cli/docs/show")
 JOB = {"id": "abcd1234" * 4, "short": "abcd1234", "node": "n1", "state": "queued"}
 log_lock = threading.Lock()
 
@@ -77,11 +86,15 @@ def log(via, method, path):
     with log_lock, open(LOG, "a") as f:
         f.write("%s %s %s\n" % (via, method, path))
 
-# The confirmToken each /cli/app/exception arrival carried, per channel.
+# The confirmToken each /cli/app/exception arrival carried, and the stdin
+# each /cli/app/exec arrival carried, per channel.
 def log_token(via, path, body):
-    if path != "/cli/app/exception":
+    if path == "/cli/app/exception":
+        tok = json.loads(body or b"{}").get("confirmToken")
+    elif path == "/cli/app/exec":
+        tok = "stdin=%s" % json.loads(body or b"{}").get("stdin")
+    else:
         return
-    tok = json.loads(body or b"{}").get("confirmToken")
     with log_lock, open(TOKLOG, "a") as f:
         f.write("%s %s\n" % (via, tok))
 
@@ -103,6 +116,16 @@ def answer(path, method):
         return {"app": {"appId": "shop"}, "frontPort": 4100}
     if path == "/cli/app/exception":
         return {"app": "shop", "label": "process exception", "changed": True}
+    if path == "/cli/app/exec":
+        return {"framed": "exec ran", "exitCode": 0, "timedOut": False}
+    if path == "/cli/sidecar/stop":
+        return {"address": "ws/scout", "stopped": True}
+    if path == "/cli/sidecar/list":
+        return {"sidecars": [{"address": "ws/scout", "state": "running"}]}
+    if path == "/cli/docs/write":
+        return {"tier": 0, "doc": {"path": "notes.md"}, "result": {"changed": True, "size": 3, "version": 2}}
+    if path == "/cli/docs/show":
+        return {"doc": {"path": "notes.md"}, "text": "from tcp", "version": 1}
     return {"ok": True}
 
 def http(status, reason, obj):
@@ -302,7 +325,8 @@ probe "$SOCK" notserved
 [ "$PRC" = 0 ] && [ "$PCODE" = 404 ] && ok "notserved: curl 0, status 404" || bad "notserved: curl $PRC, status $PCODE"
 
 # run <sock-path> <mode> <k2 args…>: an agent in a K2 terminal (passport,
-# cell socket). Sets OUT, ERR, RC. RUN_TMPDIR, when set, is its TMPDIR.
+# cell socket). Sets OUT, ERR, RC. RUN_TMPDIR, when set, is its TMPDIR;
+# RUN_STDIN, when set, is its stdin (else /dev/null).
 run() {
     local sock="$1" mode="$2"; shift 2
     echo "$mode" > "$MODE"
@@ -313,7 +337,7 @@ run() {
         K2_HOST=127.0.0.1 K2_PORT="$PORT" K2_HOOK_TOKEN=test-session.passport \
         K2_HOOK_SOCK="$sock" K2_PROJECT_PATH="$SANDBOX/ws" \
         _K2_POST_MAX_TIME=1 _K2_SEND_MAX_TIME=1 K2_CP_MAX_TIME=1 \
-        "$K2" "$@" </dev/null >"$SANDBOX/out" 2>"$SANDBOX/err"
+        "$K2" "$@" <"${RUN_STDIN:-/dev/null}" >"$SANDBOX/out" 2>"$SANDBOX/err"
     RC=$?
     set -e
     OUT="$(cat "$SANDBOX/out")"
@@ -490,12 +514,20 @@ post_rows() {
     [ "$RC" = 0 ] && ok "75: exit 0" || bad "75: exit $RC ($ERR)"
     no_unanswered "75"
     # 76: no reply (curl 52) while TMPDIR can't be written. It went out.
+    # A sender whose body is staged in TMPDIR first (STAGED=1) stops before
+    # it sends anything.
     chmod 555 "$RO_TMP"
     RUN_TMPDIR="$RO_TMP" run "$SOCK" close "$@"
     chmod 755 "$RO_TMP"
-    want_counts "76" POST "$path" 1 0
-    [ "$RC" = 1 ] && ok "76: exit 1" || bad "76: exit $RC, want 1"
-    want_unanswered "76" "$path"
+    if [ "${STAGED:-0}" = 1 ]; then
+        want_counts "76 (body staged in TMPDIR)" POST "$path" 0 0
+        [ "$RC" != 0 ] && ok "76 (body staged in TMPDIR): exit $RC (not 0)" || bad "76 (body staged in TMPDIR): exit 0"
+        no_unanswered "76 (body staged in TMPDIR)"
+    else
+        want_counts "76" POST "$path" 1 0
+        [ "$RC" = 1 ] && ok "76: exit 1" || bad "76: exit $RC, want 1"
+        want_unanswered "76" "$path"
+    fi
 }
 
 echo "== 6. _compute_send POST (k2 compute run --detach) =="
@@ -528,6 +560,50 @@ for mode in close garbage; do
     want_counts "GET $mode" GET /cli/compute/jobs/get 1 1
     [ "$RC" = 0 ] && ok "GET $mode: exit 0" || bad "GET $mode: exit $RC ($ERR)"
     case "$OUT" in *abcd1234*) ok "GET $mode: the TCP answer prints" ;; *) bad "GET $mode: stdout $(printf %q "$OUT")" ;; esac
+    no_unanswered "GET $mode"
+done
+
+echo "== 10. _app_rt_post_file POST (k2 app exec with stdin from a file) =="
+# A pipe or a file on stdin rides in the body (base64), sent from a temp
+# file: the exec runs once at most.
+printf 'hi\n' > "$SANDBOX/stdin.txt"
+RUN_STDIN="$SANDBOX/stdin.txt" STAGED=1 post_rows /cli/app/exec "exec ran" app exec shop -- cat
+# The stdin path, not the one without it: each arrival carried the stdin.
+RUN_STDIN="$SANDBOX/stdin.txt" run "$SOCK" close app exec shop -- cat
+[ "$(cat "$TOKLOG")" = "uds stdin=aGkK" ] && ok "close: the socket arrival carried the stdin" \
+    || bad "close: arrivals $(tr '\n' ';' < "$TOKLOG")"
+RUN_STDIN="$SANDBOX/stdin.txt" run "$DEAD" close app exec shop -- cat
+[ "$(cat "$TOKLOG")" = "tcp stdin=aGkK" ] && ok "curl 7: the TCP arrival carried the stdin" \
+    || bad "curl 7: arrivals $(tr '\n' ';' < "$TOKLOG")"
+# No copy of stdin is left in TMPDIR after a send that got no answer.
+EXEC_TMP="$SANDBOX/exec-tmp"
+mkdir -p "$EXEC_TMP"
+RUN_TMPDIR="$EXEC_TMP" RUN_STDIN="$SANDBOX/stdin.txt" run "$SOCK" close app exec shop -- cat
+want_counts "close, own TMPDIR" POST /cli/app/exec 1 0
+[ -z "$(ls -A "$EXEC_TMP")" ] && ok "close: nothing left in TMPDIR" || bad "close: TMPDIR holds $(ls -A "$EXEC_TMP" | tr '\n' ' ')"
+
+echo "== 11. _sidecar_send POST (k2 sidecar stop) =="
+post_rows /cli/sidecar/stop '"stopped": true' sidecar stop scout --json
+
+echo "== 12. _sidecar_send GET (k2 sidecar list) still falls back =="
+for mode in close garbage; do
+    run "$SOCK" "$mode" sidecar list --json
+    want_counts "GET $mode" GET /cli/sidecar/list 1 1
+    [ "$RC" = 0 ] && ok "GET $mode: exit 0" || bad "GET $mode: exit $RC ($ERR)"
+    case "$OUT" in *ws/scout*) ok "GET $mode: the TCP answer prints" ;; *) bad "GET $mode: stdout $(printf %q "$OUT")" ;; esac
+    no_unanswered "GET $mode"
+done
+
+echo "== 13. _doc_xfer POST (k2 doc write) =="
+# The new content is staged in TMPDIR first, then sent from that file.
+STAGED=1 post_rows /cli/docs/write '"version": 2' doc write --base live notes.md --text abc --json
+
+echo "== 14. _doc_xfer GET (k2 doc show --version) still falls back =="
+for mode in close garbage; do
+    run "$SOCK" "$mode" doc show --version 1 notes.md --json
+    want_counts "GET $mode" GET /cli/docs/show 1 1
+    [ "$RC" = 0 ] && ok "GET $mode: exit 0" || bad "GET $mode: exit $RC ($ERR)"
+    case "$OUT" in *"from tcp"*) ok "GET $mode: the TCP answer prints" ;; *) bad "GET $mode: stdout $(printf %q "$OUT")" ;; esac
     no_unanswered "GET $mode"
 done
 

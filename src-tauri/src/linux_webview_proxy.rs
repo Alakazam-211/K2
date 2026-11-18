@@ -10,8 +10,10 @@
 //! proxy, the web view's session gets custom settings that keep it: for
 //! each scheme, the proxy GIO's own resolver picks for a remote host (the
 //! environment's or GNOME's, whichever the system uses), the person's own
-//! ignore hosts, and the loopback hosts added to them. With no proxy, the
-//! session is left at its default. Connection only: no product logic.
+//! ignore hosts, and the loopback hosts added to them. With no proxy, or a
+//! PAC or autoconfig setup (a PAC file answers per host, which custom
+//! settings can't hold), the session is left at its default and the PAC
+//! case logs one line. Connection only: no product logic.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
@@ -30,6 +32,28 @@ const SCHEMES: [(&str, &str); 4] = [("http", "http"), ("https", "https"), ("ws",
 /// A host no one owns: what the system's resolver would do for a remote
 /// host, without a request.
 const PROBE_HOST: &str = "k2-proxy-probe.invalid";
+
+/// The proxy variables GIO reads (through libproxy).
+const PROXY_VARS: [&str; 6] = ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"];
+
+/// A PAC or autoconfig setup GIO would follow, named (never its address):
+/// a proxy variable that points at a PAC file (`pac+…`) or WPAD
+/// (`wpad:…`), or GNOME's proxy mode `auto`.
+pub fn pac_setup() -> Option<String> {
+    for var in PROXY_VARS {
+        if let Ok(v) = std::env::var(var) {
+            let v = v.trim().to_ascii_lowercase();
+            if v.starts_with("pac+") || v.starts_with("wpad:") {
+                return Some(format!("{var} names a PAC file or WPAD"));
+            }
+        }
+    }
+    let gnome = gio::SettingsSchemaSource::default().and_then(|s| s.lookup("org.gnome.system.proxy", true));
+    if gnome.is_some() && gio::Settings::new("org.gnome.system.proxy").string("mode").as_str() == "auto" {
+        return Some("GNOME's proxy mode is auto".to_string());
+    }
+    None
+}
 
 /// Custom proxy settings for the session: a proxy per scheme and the hosts
 /// that never use one.
@@ -88,6 +112,10 @@ pub fn person_ignore_hosts() -> Vec<String> {
 /// The plan for this system, with `loopback` added: GIO's default resolver
 /// (the one WebKit's network process uses) and the person's ignore hosts.
 pub fn system_plan_with(loopback: &[&str]) -> Option<Plan> {
+    if let Some(setup) = pac_setup() {
+        k2_client::log_debug!("[webview-proxy] a PAC or autoconfig proxy setup ({setup}): the web view's proxy settings stay at their defaults");
+        return None;
+    }
     let resolver = gio::ProxyResolver::default();
     let lookup = |uri: &str| -> Vec<String> {
         match resolver.lookup(uri, None::<&gio::Cancellable>) {

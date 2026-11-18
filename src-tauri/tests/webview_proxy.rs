@@ -20,6 +20,10 @@
 //!   none     no proxy at all: nothing is set, nothing reaches the stub.
 //!   bite     the env case with the loopback hosts left out of the ignore
 //!            list: the loopback requests go to the proxy stub.
+//!   pac      GNOME's proxy mode auto (a PAC file the stub server serves),
+//!   pacenv   or http_proxy=pac+<that file>: the session stays at its
+//!            default and one line says so. What reaches the stubs is
+//!            printed, not checked: the PAC setup decides it.
 //!
 //! Linux only, with Xvfb on PATH (or a DISPLAY). Settings never touch the
 //! machine's: the GNOME case uses a keyfile in a temp XDG_CONFIG_HOME, the
@@ -63,9 +67,13 @@ mod linux {
         let proxy = format!("http://127.0.0.1:{proxy_port}");
         let keyfile_home = tempfile::tempdir().expect("settings dir");
         write_gnome_keyfile(keyfile_home.path(), proxy_port);
+        let pac_home = tempfile::tempdir().expect("settings dir");
+        let pac_url = format!("http://127.0.0.1:{server_port}/proxy.pac");
+        write_gnome_auto_keyfile(pac_home.path(), &pac_url);
+        *PAC_PROXY.lock().expect("pac") = proxy_port;
 
         let mut problems = Vec::new();
-        for case in ["env", "gnome", "none", "bite"] {
+        for case in ["env", "gnome", "none", "bite", "pac", "pacenv"] {
             for origin in ORIGINS {
                 proxy_log.lock().expect("log").clear();
                 server_log.lock().expect("log").clear();
@@ -92,6 +100,18 @@ mod linux {
                             .env("XDG_CONFIG_HOME", keyfile_home.path())
                             .env("XDG_CURRENT_DESKTOP", "GNOME")
                             .env("GIO_USE_PROXY_RESOLVER", "gnome");
+                    }
+                    "pac" => {
+                        cmd.env("GSETTINGS_BACKEND", "keyfile")
+                            .env("XDG_CONFIG_HOME", pac_home.path())
+                            .env("XDG_CURRENT_DESKTOP", "GNOME")
+                            .env("GIO_USE_PROXY_RESOLVER", "gnome");
+                    }
+                    "pacenv" => {
+                        for var in PROXY_VARS {
+                            cmd.env(var, format!("pac+{pac_url}"));
+                        }
+                        cmd.env("GSETTINGS_BACKEND", "memory");
                     }
                     _ => {
                         cmd.env("GSETTINGS_BACKEND", "memory");
@@ -125,6 +145,12 @@ mod linux {
                         }
                         if !remote_at_proxy || p.len() != 1 {
                             problems.push(format!("{case} {origin}: the remote host must go to the person's proxy, alone (proxy {p:?})"));
+                        }
+                    }
+                    "pac" | "pacenv" => {
+                        let logged = stderr.lines().filter(|l| l.contains("a PAC or autoconfig proxy setup")).count();
+                        if logged == 0 || !result.starts_with("RESULT done") {
+                            problems.push(format!("{case} {origin}: a PAC setup must leave the session default and log one line (logged {logged}, {result})"));
                         }
                     }
                     "none" => {
@@ -181,6 +207,16 @@ mod linux {
         )
         .expect("keyfile");
     }
+
+    /// GNOME's proxy mode auto with `pac_url` as its autoconfig file.
+    fn write_gnome_auto_keyfile(home: &std::path::Path, pac_url: &str) {
+        let dir = home.join("glib-2.0/settings");
+        std::fs::create_dir_all(&dir).expect("keyfile dir");
+        std::fs::write(dir.join("keyfile"), format!("[system/proxy]\nmode='auto'\nautoconfig-url='{pac_url}'\n")).expect("keyfile");
+    }
+
+    /// The proxy the stub server's PAC file names.
+    static PAC_PROXY: Mutex<u16> = Mutex::new(0);
 
     /// The person's proxy: logs each request line; answers the remote host
     /// with 200, anything else with 502.
@@ -246,6 +282,11 @@ mod linux {
         let path = line.split_whitespace().nth(1).unwrap_or("?").to_string();
         log.lock().expect("log").push(format!("GET {path}"));
         let mut s = stream;
+        if path == "/proxy.pac" {
+            let pac = format!("function FindProxyForURL(url, host) {{ return \"PROXY 127.0.0.1:{}\"; }}", *PAC_PROXY.lock().expect("pac"));
+            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: application/x-ns-proxy-autoconfig\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{pac}", pac.len());
+            return;
+        }
         let _ = s.write_all(b"HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
     }
 
@@ -295,6 +336,10 @@ mod linux {
             }
             "none" => {
                 assert_eq!(wp::system_plan_with(&wp::LOOPBACK_IGNORE), None, "no proxy: nothing to set");
+                wp::apply_once(&view);
+            }
+            "pac" | "pacenv" => {
+                assert!(wp::pac_setup().is_some(), "{case}: the PAC setup must be seen");
                 wp::apply_once(&view);
             }
             "bite" => {

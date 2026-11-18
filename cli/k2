@@ -444,20 +444,6 @@ if ! _envn_any PROJECT_PATH; then
     unset _dir _found _main_root
 fi
 
-# 0.40.4 cutover heads-up — git-derived + self-clearing. While the
-# `.k2so/` -> `.k2/` rename is uncommitted, `git ls-files .k2so` still lists
-# the (now-deleted-on-disk) tracked files; once the user commits the rename it
-# returns nothing and this goes silent. `|| true` guards the git call from
-# aborting the script in a non-git CWD (GH#16). stderr only — never pollutes
-# command stdout / JSON.
-if [ -d "$PROJECT/.k2" ] && [ ! -d "$PROJECT/.k2so" ] && _k2_git_usable; then
-    _k2so_pending=$(git -C "$PROJECT" ls-files .k2so 2>/dev/null | head -1 || true)
-    if [ -n "$_k2so_pending" ]; then
-        echo "i  K2 0.40.4 renamed this workspace's .k2so/ -> .k2/ (harness symlinks + .gitignore updated). Commit the rename when ready — git tracks it as renames." >&2
-    fi
-    unset _k2so_pending
-fi
-
 # Auto-discover connection from the daemon home if not in a K2 terminal.
 # Always capture DISK_OWNER_TOKEN when readable so Open tools can still do
 # the COMPAT-58 TCP inversion; never *apply* that inversion here — ID/locked

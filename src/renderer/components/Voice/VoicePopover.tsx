@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
 import PresenceAvatar from '@/components/Presence/PresenceAvatar'
 import type { PresenceRole } from '@/components/Presence/PresenceChip'
+import type { PersonNames } from '@/lib/person-name'
 import { roomFailureActions } from '@/components/Home/room/RoomFailure'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { useSettingsStore } from '@/stores/settings'
@@ -40,6 +41,16 @@ function roleOf(r: string | null): PresenceRole {
   return r === 'owner' || r === 'admin' ? r : 'member'
 }
 
+/** A display name as first and last (the chip's initials: "Ana Ruiz" → AR). */
+function namesOf(name: string | null): PersonNames | null {
+  const parts = (name ?? '').trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return null
+  return { firstName: parts[0], lastName: parts.length > 1 ? parts[parts.length - 1] : null, displayName: name }
+}
+
+/** The call row's and the room list's avatars draw each person the same way:
+ *  initials from the display name (else the login name), and the person
+ *  colour the server serves (else one from the login name). */
 function Occupants({ list, size }: { list: VoiceOccupant[]; size: number }): React.JSX.Element {
   return (
     <span className="flex flex-wrap items-center" style={{ gap: 3 }}>
@@ -51,11 +62,23 @@ function Occupants({ list, size }: { list: VoiceOccupant[]; size: number }): Rea
           className={o.speaking ? 'outline outline-2 outline-[var(--color-accent)]' : ''}
           title={`${o.name ?? o.user}${o.muted ? ' (muted)' : ''}`}
         >
-          <PresenceAvatar name={o.user} role={roleOf(o.role)} size={size} color={o.color} />
+          <PresenceAvatar name={o.user} names={namesOf(o.name)} role={roleOf(o.role)} size={size} color={o.color} />
         </span>
       ))}
     </span>
   )
+}
+
+/** The call's people as the room list draws them: each one's own entry in
+ *  the room (matched by Sew's member id) gives the login, name, colour and
+ *  role, so the call row and the room under it show the same avatars. Not
+ *  in the list (a DM call): the engine's name for them, as before. */
+function callOccupants(call: Pick<VoiceCall, 'participants'>, room: VoiceOccupant[] | undefined): VoiceOccupant[] {
+  return call.participants.map((p) => {
+    const o = p.memberId ? room?.find((x) => x.memberId === p.memberId) : undefined
+    const live = { muted: p.muted, deafened: false, speaking: p.speaking }
+    return o ? { ...o, ...live } : { user: p.user, name: null, role: null, color: null, ...live }
+  })
 }
 
 /** "System default" ('' → null) first, then the devices in the engine's order. */
@@ -67,6 +90,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
   const devices = useVoice((s) => s.devices)
   const prefs = useVoice((s) => s.prefs)
   const engineKind = useVoice((s) => s.engineKind)
+  const roomPeople = useVoice((s) => s.rooms[call.hostKey]?.list?.rooms.find((r) => r.id === call.roomId)?.occupants)
   // Video (preview, off by default): the camera and screen controls.
   const videoOn = useSettingsStore((s) => s.videoRoomsPreview) === true && engineKind === 'native'
   useEffect(() => {
@@ -127,10 +151,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
       ) : null}
       {call.participants.length > 0 ? (
         <div className="mt-1">
-          <Occupants
-            size={20}
-            list={call.participants.map((p) => ({ user: p.user, name: null, role: null, color: null, muted: p.muted, deafened: false, speaking: p.speaking }))}
-          />
+          <Occupants size={20} list={callOccupants(call, roomPeople)} />
         </div>
       ) : null}
       <div data-testid="voice-call-controls" role="group" aria-label="Call controls" className="mt-2 flex flex-wrap items-center gap-1.5">

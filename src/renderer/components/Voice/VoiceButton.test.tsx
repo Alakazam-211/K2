@@ -416,6 +416,50 @@ describe('VoiceButton', () => {
     expect(screen.getByTestId('voice-notice').textContent).toBe('You left Standup.')
   })
 
+  it('the call row and the room list draw the same people the same way: display names, one colour each', async () => {
+    const people = [
+      { user: 'owner', name: 'Rosson Long', memberId: 'm-1', role: 'owner', color: '#3366cc', muted: false, deafened: false, speaking: false },
+      { user: 'ana', name: 'Ana Ruiz', memberId: 'm-2', role: 'admin', color: null, muted: false, deafened: false, speaking: false },
+      { user: 'ben', name: null, memberId: 'm-3', role: null, color: null, muted: false, deafened: false, speaking: false },
+    ]
+    h.entries = { 'sewlab.k2.dev': entry('sewlab.k2.dev') }
+    h.lists = { 'sewlab.k2.dev': { ...sewList, rooms: [{ ...sewList.rooms[0], occupants: people }] } }
+    act(() => voice.recompute())
+    render(<VoiceButton />)
+    fireEvent.click(screen.getByTestId('voice-button'))
+    await waitFor(() => expect(screen.getAllByTestId('voice-join')).toHaveLength(1))
+    fireEvent.click(screen.getByTestId('voice-join'))
+    await waitFor(() => expect(screen.getByTestId('voice-call').getAttribute('data-phase')).toBe('connected'))
+    // The engine names each person from the room's list (its display name).
+    act(() => {
+      const c = voice.store.getState().call!
+      voice.store.setState({
+        call: {
+          ...c,
+          participants: [
+            { user: 'Rosson Long', memberId: 'm-1', speaking: false, muted: false, isSelf: true },
+            { user: 'Ana Ruiz', memberId: 'm-2', speaking: false, muted: false },
+            { user: 'ben', memberId: 'm-3', speaking: false, muted: false },
+          ],
+        },
+      })
+    })
+    const chips = (root: HTMLElement): { text: string; color: string | null; role: string | null }[] =>
+      Array.from(root.querySelectorAll<HTMLElement>('[data-presence-chip]')).map((c) => ({
+        text: c.textContent ?? '',
+        color: c.getAttribute('data-person-color'),
+        role: c.getAttribute('data-presence-chip'),
+      }))
+    const inCall = chips(screen.getByTestId('voice-call'))
+    const inRoom = chips(screen.getByTestId('voice-room'))
+    // Two letters at the call row's 20px, one on the room's 14px rows.
+    expect(inCall.map((c) => c.text)).toEqual(['RL', 'AR', 'B'])
+    expect(inRoom.map((c) => c.text)).toEqual(['R', 'A', 'B'])
+    expect(inCall.map((c) => c.color)).toEqual(inRoom.map((c) => c.color))
+    expect(inRoom[0].color).toBe('#3366cc')
+    expect(inCall.map((c) => c.role)).toEqual(inRoom.map((c) => c.role))
+  })
+
   it('joining another room while in a call asks first', async () => {
     h.entries = { 'sewlab.k2.dev': entry('sewlab.k2.dev') }
     h.lists = { 'sewlab.k2.dev': sewList }

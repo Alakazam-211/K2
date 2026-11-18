@@ -3,10 +3,6 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.16
-
-- **Heartbeat hours keep their zone too.** `k2 heartbeat schedule add --hourly --start 05:00 --end 22:00 --tz America/New_York` fires 05:00 to 21:00 New York time all year, through both daylight-saving changes, and a window that crosses midnight (22:00 to 06:00) works the same way. A window that starts in the hour a spring-forward day skips opens when that day's clock resumes. `--tz box` now also means the server's clock.
-
 ## 0.46.15 — Live 3D scenes and timelines, a new PDF viewer, and safer agent messages
 
 ### Threads and Home
@@ -36,6 +32,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Clearer next steps when permission cards are off.** If permission cards are off and an agent is refused, `k2 app grant`, `k2 study apps` and `k2 app --help` no longer tell it to use `k2 permission request`, which it can't run. They tell it what you can do instead: make the change in Settings → Apps, or turn on permission cards in Settings → Permission Cards.
 
 ### Heartbeats
+- **Heartbeat hours keep their zone too.** `k2 heartbeat schedule add --hourly --start 05:00 --end 22:00 --tz America/New_York` fires 05:00 to 21:00 New York time all year, through both daylight-saving changes, and a window that crosses midnight (22:00 to 06:00) works the same way. A window that starts in the hour a spring-forward day skips opens when that day's clock resumes. `--tz box` now also means the server's clock.
 - **A heartbeat can keep its own time zone.** `k2 heartbeat schedule add` and `edit` take `--tz America/New_York`: a 14:15 heartbeat then fires at 14:15 New York time even when the computer is in another zone, so a laptop that travels keeps the schedule's clock. `k2 heartbeat schedule list` shows its next fire in that zone and here; `--tz local` follows the computer's clock again. A time that doesn't exist on a spring-forward day fires at the first minute after the jump, and one that happens twice on a fall-back day fires once.
 
 ### Compute

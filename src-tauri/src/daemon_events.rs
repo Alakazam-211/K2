@@ -71,7 +71,8 @@ fn run_subscriber(app_handle: AppHandle) {
     }
 }
 
-enum ConnectOutcome {
+#[derive(Debug)]
+pub(crate) enum ConnectOutcome {
     Handled,
     NoDaemon,
     Error,
@@ -90,6 +91,30 @@ fn events_request(port: u16, token: &str) -> Result<tungstenite::handshake::clie
     Ok(request)
 }
 
+/// Open the `/events` socket on the local daemon. The socket is a plain
+/// TcpStream to 127.0.0.1 that this module opens itself, so no proxy
+/// setting applies to it; the token rides the upgrade's header
+/// ([`events_request`]).
+pub(crate) fn connect_events(
+    port: u16,
+    token: &str,
+) -> Result<tungstenite::WebSocket<TcpStream>, (ConnectOutcome, String)> {
+    // 0.46.3: `client=desktop-app` tells the daemon this subscription is the
+    // desktop app, so a bundled-app update trigger only goes out while the
+    // app is really open (a phone on /events no longer counts). Older
+    // daemons ignore the extra parameter.
+    let request = events_request(port, token).map_err(|e| (ConnectOutcome::Error, e))?;
+    // Open a raw TCP socket ourselves so we can set a read timeout; a
+    // frozen daemon shouldn't freeze this thread.
+    let tcp = TcpStream::connect(format!("127.0.0.1:{port}"))
+        .map_err(|e| (ConnectOutcome::NoDaemon, format!("connect 127.0.0.1:{port}: {e}")))?;
+    // Long enough to cover an idle daemon, short enough to detect a
+    // truly dead process in under a minute.
+    let _ = tcp.set_read_timeout(Some(Duration::from_secs(45)));
+    let (ws, _response) = client(request, tcp).map_err(|e| (ConnectOutcome::Error, format!("ws handshake: {e}")))?;
+    Ok(ws)
+}
+
 /// Single connect attempt. Returns once the connection closes or an error
 /// surfaces. Does NOT panic — every error path logs and returns.
 fn connect_once(app_handle: &AppHandle) -> ConnectOutcome {
@@ -98,38 +123,13 @@ fn connect_once(app_handle: &AppHandle) -> ConnectOutcome {
         None => return ConnectOutcome::NoDaemon,
     };
 
-    // 0.46.3: `client=desktop-app` tells the daemon this subscription is the
-    // desktop app, so a bundled-app update trigger only goes out while the
-    // app is really open (a phone on /events no longer counts). Older
-    // daemons ignore the extra parameter.
-    let request = match events_request(port, &token) {
-        Ok(r) => r,
-        Err(e) => {
-            log_debug!("[daemon-events] {e}");
-            return ConnectOutcome::Error;
-        }
-    };
-
-    // Open a raw TCP socket ourselves so we can set a read timeout; a
-    // frozen daemon shouldn't freeze this thread.
-    let tcp = match TcpStream::connect(format!("127.0.0.1:{port}")) {
-        Ok(t) => t,
-        Err(e) => {
+    let mut ws = match connect_events(port, &token) {
+        Ok(ws) => ws,
+        Err((outcome, e)) => {
             // Only log noisily the first time per app boot; otherwise
             // it's spam when the daemon isn't installed.
-            log_debug!("[daemon-events] connect 127.0.0.1:{port}: {e}");
-            return ConnectOutcome::NoDaemon;
-        }
-    };
-    // Long enough to cover an idle daemon, short enough to detect a
-    // truly dead process in under a minute.
-    let _ = tcp.set_read_timeout(Some(Duration::from_secs(45)));
-
-    let (mut ws, _response) = match client(request, tcp) {
-        Ok(pair) => pair,
-        Err(e) => {
-            log_debug!("[daemon-events] ws handshake: {e}");
-            return ConnectOutcome::Error;
+            log_debug!("[daemon-events] {e}");
+            return outcome;
         }
     };
     log_debug!("[daemon-events] subscribed to daemon on port {port}");

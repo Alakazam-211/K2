@@ -634,11 +634,32 @@ mod tests {
         );
     }
 
+    /// A one-shot WebSocket stand-in for the daemon's /events: accepts one
+    /// upgrade and reports its target and Authorization header.
+    fn events_stub() -> (u16, std::sync::mpsc::Receiver<(String, Option<String>)>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind events stub");
+        let port = listener.local_addr().expect("events stub addr").port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("events stub accept");
+            let mut seen = None;
+            let ws = tungstenite::accept_hdr(stream, |req: &tungstenite::handshake::server::Request, res| {
+                let auth = req.headers().get("authorization").map(|v| v.to_str().expect("ascii header").to_string());
+                seen = Some((req.uri().to_string(), auth));
+                Ok(res)
+            });
+            drop(ws.expect("events stub handshake"));
+            tx.send(seen.expect("the upgrade's head")).expect("report the upgrade");
+        });
+        (port, rx)
+    }
+
     /// K2 never sends a request to its own server through a proxy. The
     /// child process has every proxy variable set to a listening stub;
     /// a plain reqwest client there goes through the stub (the control,
-    /// so the zero below means something), and the daemon client goes
-    /// straight to the daemon with the stub seeing nothing.
+    /// so the zeros below mean something), while the daemon client and
+    /// the /events socket go straight to their daemon stubs with the proxy
+    /// stub seeing nothing.
     #[test]
     fn proxy_settings_never_reach_the_daemon_client() {
         if let Ok(mode) = std::env::var(PROXY_CHILD) {
@@ -656,6 +677,10 @@ mod tests {
                     let client = DaemonClient::for_test(&base, "tok");
                     let body = client.cli_get("/cli/through", &[]).expect("the daemon stub answered");
                     assert_eq!(body, "{}");
+                }
+                "events" => {
+                    let port: u16 = base.parse().expect("the events stub's port");
+                    let _ws = crate::daemon_events::connect_events(port, "tok").expect("the events stub upgraded");
                 }
                 other => panic!("unknown child mode {other}"),
             }
@@ -678,5 +703,16 @@ mod tests {
         let seen = fake.next();
         assert_eq!((seen.method.as_str(), seen.path.as_str()), ("GET", "/cli/through"));
         assert_eq!(seen.authorization.as_deref(), Some("Bearer tok"));
+
+        // The /events socket (tungstenite over a TcpStream the app opens
+        // itself) ignores them too.
+        let proxy = ProxyStub::start();
+        let (port, upgrade) = events_stub();
+        let out = run_proxy_child("events", &proxy, &port.to_string());
+        assert_eq!(proxy.hits(), 0, "a proxy variable reached the events socket: the proxy stub got its upgrade");
+        assert_child_passed("events", &out);
+        let (target, auth) = upgrade.recv_timeout(Duration::from_secs(10)).expect("the events stub saw the upgrade");
+        assert_eq!(target, "/events?client=desktop-app");
+        assert_eq!(auth.as_deref(), Some("Bearer tok"));
     }
 }

@@ -112,6 +112,7 @@ import {
   canShowTranscript,
   fetchHomeChatTranscript,
   liveDmRecording,
+  liveDmRecordingTitle,
   parseTranscriptLine,
   recordingCardLine,
   recordingCardView,
@@ -119,7 +120,6 @@ import {
   transcriptRootOf,
   type TranscriptLine,
 } from '@/lib/home-chat/recordings'
-import { recordingBadgeTitle } from '@/lib/voice/recording-controls'
 import { MachineChip } from '@/components/Home/MachineChip'
 import { serverLabelFor } from './serverLabel'
 import { HomeChatErrorState } from './HomeChatStates'
@@ -559,10 +559,9 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
     ? { title: callRec.badge ?? 'Recording', startedAt: callRec.startedAt ?? null }
     : cardRec
       ? {
-          title: recordingBadgeTitle(
-            { trigger: cardRec.card.recording?.auto ? 'auto' : 'manual' },
+          title: liveDmRecordingTitle(
+            cardRec.card.recording,
             cardRec.card.recording?.startedBy ? authorName(cardRec.card.recording.startedBy, me, names) : null,
-            true,
             cardRec.startedAt,
           ),
           startedAt: cardRec.startedAt,

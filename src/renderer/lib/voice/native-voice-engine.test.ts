@@ -101,6 +101,14 @@ describe("Sew's contract (native-voice-contract.json, held to the plugin's types
     for (const bad of ['', 'soon', '2026-11-17', 'Nov 17 2026 14:41', '2026-13-45T99:99:99Z', null, -5, NaN, {}]) {
       expect(parseRecording({ ...contract.recording.granted, started_at: bad })).not.toHaveProperty('startedAt')
     }
+    // Sew 0.10.6's audio_keep_days: N days, 0 deleted once the transcript is
+    // final; absent (an older plugin) is unknown, never 0.
+    expect(parseRecording(contract.recording.granted)).not.toHaveProperty('audioKeepDays')
+    expect(parseRecording({ ...contract.recording.granted, audio_keep_days: 30 })?.audioKeepDays).toBe(30)
+    expect(parseRecording({ ...contract.recording.granted, audio_keep_days: 0 })?.audioKeepDays).toBe(0)
+    for (const bad of [-1, 2.5, NaN, Infinity, '30', null, {}, true]) {
+      expect(parseRecording({ ...contract.recording.granted, audio_keep_days: bad })).not.toHaveProperty('audioKeepDays')
+    }
   })
 
   it('reads participants (no names), speaking, devices and errors', () => {

@@ -9,6 +9,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { HomeChatRecordingCard, HomeChatRecordingChip, HomeChatTranscriptPanel, TRANSCRIPT_FAILED_LINE } from './HomeChatRecording'
 import {
   liveDmRecording,
+  liveDmRecordingTitle,
   parseRecordingSummary,
   recordingCardView,
   transcriptCopyText,
@@ -113,6 +114,15 @@ describe("the DM header's chip", () => {
     const bad = parseRecordingSummary({ recording_id: '42', started_by: '7', started_at: 'yesterday' })
     expect(bad).not.toHaveProperty('startedAt')
     expect(liveDmRecording([{ id: '2', createdAt: 200, recording: bad }])?.startedAt).toBe(200_000)
+  })
+
+  it("the header's tooltip from the card: who started it, and how long the audio is kept when the card says", () => {
+    const at = new Date(2026, 10, 17, 14, 41).getTime()
+    expect(liveDmRecordingTitle(summary({ stopped: false, keepDays: 30 }), 'Alex', at)).toMatch(/^Alex started recording at 2:41\sPM\nAudio kept 30 days$/)
+    expect(liveDmRecordingTitle(summary({ stopped: false, keepDays: 0 }), 'Alex', at)).toMatch(/\nAudio deleted once the transcript is final$/)
+    expect(liveDmRecordingTitle(summary({ stopped: false, auto: true, startedBy: null, keepDays: 1 }), null, at)).toMatch(/^This server started recording at 2:41\sPM: it records its calls\nAudio kept 1 day$/)
+    expect(liveDmRecordingTitle(summary({ stopped: false, keepDays: null }), 'Alex', at)).toMatch(/^Alex started recording at 2:41\sPM$/)
+    expect(liveDmRecordingTitle(undefined, null, at)).toMatch(/^Recording started at 2:41\sPM$/)
   })
 })
 

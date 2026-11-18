@@ -4,8 +4,9 @@
 // breathes slowly (still under reduced motion: globals.css,
 // `[data-recording-dot]`), then "Recording 03:12" in the place's own ink,
 // never red text. The tooltip says who started it and when ("Alex started
-// recording at 2:41 PM"). It is driven by Sew's word that the call records,
-// the same for everyone in it, never by who pressed Record.
+// recording at 2:41 PM"), and how long the audio is kept when Sew says. It
+// is driven by Sew's word that the call records, the same for everyone in
+// it, never by who pressed Record.
 
 import { useEffect, useState } from 'react'
 import { convOfDmRoom } from '@/lib/home-chat/calls'
@@ -62,8 +63,9 @@ export function RecordingBadge({ startedAt, title, testId, onMedia = false, shor
       data-testid={testId}
       title={title}
       // Stable for screen readers (a status is read again on each change):
-      // the clock ticks for the eye only.
-      aria-label={title === 'Recording' ? 'Recording' : `Recording. ${title}`}
+      // the clock ticks for the eye only. The tooltip's lines are read as
+      // sentences.
+      aria-label={title === 'Recording' ? 'Recording' : `Recording. ${title.split('\n').join('. ')}`}
       data-k2-chamfer={onMedia ? 'chip' : undefined}
       className={`type-hint flex shrink-0 items-center gap-1.5 whitespace-nowrap ${look} ${className}`}
       style={onMedia ? { ...noDrag, '--k2-ch-w': '0px' } : noDrag}

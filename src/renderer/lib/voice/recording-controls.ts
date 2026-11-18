@@ -9,7 +9,7 @@
 // answer within a minute. Apps' Spaces keep Sew's full per-person sheet; this
 // is only for K2's own rooms.
 
-import type { NativeConsentPrompt, NativeRecording } from './native-voice-engine'
+import { keepDaysOf, type NativeConsentPrompt, type NativeRecording } from './native-voice-engine'
 
 /** The person's Sew permissions in the room (`POST /cli/voice/recording/controls`). */
 export interface RecordingPerms {
@@ -131,13 +131,28 @@ export function recordingClockTime(at: number): string {
 /** The badge's tooltip: who or what started it, and when ("Alex started
  *  recording at 2:41 PM"). A room or server that records by itself says
  *  so. `startedAt` null: the time isn't known (it was running as this
- *  device joined), so the line leaves it out. */
+ *  device joined), so the line leaves it out. When Sew says how long the
+ *  audio is kept, a second line under it ("Audio kept 30 days"); when it
+ *  doesn't, nothing, never a guess. Lines are joined with "\n". */
 export function recordingBadgeTitle(
-  r: Pick<NativeRecording, 'trigger'>,
+  r: Pick<NativeRecording, 'trigger' | 'audioKeepDays'>,
   startedByName: string | null,
   dm = false,
   startedAt: number | null = null,
 ): string {
+  const audio = recordingAudioLine(r.audioKeepDays)
+  const who = recordingStarterLine(r, startedByName, dm, startedAt)
+  return audio ? `${who}\n${audio}` : who
+}
+
+/** The tooltip's audio line, or null when the days aren't known. */
+function recordingAudioLine(days: unknown): string | null {
+  const d = keepDaysOf(days)
+  if (d === null) return null
+  return d === 0 ? 'Audio deleted once the transcript is final' : `Audio kept ${d} ${d === 1 ? 'day' : 'days'}`
+}
+
+function recordingStarterLine(r: Pick<NativeRecording, 'trigger'>, startedByName: string | null, dm: boolean, startedAt: number | null): string {
   const at = startedAt !== null ? ` at ${recordingClockTime(startedAt)}` : ''
   const place = dm ? 'This server' : 'This room'
   if (r.trigger === 'required') {

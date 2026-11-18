@@ -92,6 +92,10 @@ export interface NativeRecording {
    *  it, else the moment this device saw it start in the call (the voice
    *  store); null when it was already running as this device joined. */
   startedAt?: number | null
+  /** Sew 0.10.6's `audio_keep_days`: how long the audio is kept, in days (0:
+   *  deleted once the transcript is final). Absent when the plugin doesn't
+   *  say (an older one): unknown, never 0. */
+  audioKeepDays?: number | null
 }
 
 /** No names here: the media token and call keys carry none (the rooms list does). */
@@ -232,7 +236,13 @@ export function parseRecording(v: unknown): NativeRecording | null {
     ...(typeof r.can_record === 'boolean' ? { canRecord: r.can_record } : {}),
     ...(typeof r.can_stop === 'boolean' ? { canStop: r.can_stop } : {}),
     ...(startedAtOf(r.started_at) !== null ? { startedAt: startedAtOf(r.started_at) } : {}),
+    ...(keepDaysOf(r.audio_keep_days) !== null ? { audioKeepDays: keepDaysOf(r.audio_keep_days) } : {}),
   }
+}
+
+/** A day count Sew sends (a u16): a non-negative whole number, else null. */
+export function keepDaysOf(v: unknown): number | null {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null
 }
 
 const RFC3339 = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/

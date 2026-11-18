@@ -288,6 +288,12 @@ export function dmCallRecording(c: Pick<VoiceCall, 'recording' | 'recordingPerms
   return { badge: recordingBadgeTitle(r, starter, true, startedAt), startedAt, canRecord: b.canRecord, canStop: b.canStop }
 }
 
+/** The DM header's tooltip for a running recording read from its card: the
+ *  call badge's words, with the card's keep days as the audio line. */
+export function liveDmRecordingTitle(r: HomeChatRecordingSummary | null | undefined, startedByName: string | null, startedAt: number): string {
+  return recordingBadgeTitle({ trigger: r?.auto ? 'auto' : 'manual', audioKeepDays: r?.keepDays }, startedByName, true, startedAt)
+}
+
 /** The DM's recording that runs now, from its cards: the newest card Sew
  *  hasn't stopped. It is the same for both people and on every device, so
  *  the DM's header says so without the call open here. Its start is Sew's

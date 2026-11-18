@@ -265,6 +265,13 @@ describe('recording a DM call (prd-home-call-recording-v1 §2, HR-9)', () => {
     expect(dmCallRecording({ recording: { ...recording, startedAt: at }, recordingPerms: null, recordingControls: null, participants }).badge).toMatch(
       /^Alex started recording at 2:41\sPM$/,
     )
+    // Sew 0.10.6's keep days: the badge's second line.
+    expect(dmCallRecording({ recording: { ...recording, audioKeepDays: 14 }, recordingPerms: null, recordingControls: null, participants }).badge).toBe(
+      'Alex started recording\nAudio kept 14 days',
+    )
+    expect(dmCallRecording({ recording: { ...recording, audioKeepDays: 0 }, recordingPerms: null, recordingControls: null, participants }).badge).toBe(
+      'Alex started recording\nAudio deleted once the transcript is final',
+    )
   })
 
   it('the strip on another device shows the badge, with its clock, and no Record or Stop', () => {

@@ -102,6 +102,18 @@ describe("K2's own recording notice", () => {
     expect(recordingBadgeTitle(rec(), null)).toBe('Recording')
   })
 
+  it("the badge's second line says how long the audio is kept, when Sew says", () => {
+    const at = new Date(2026, 10, 17, 14, 41).getTime()
+    expect(recordingBadgeTitle(rec({ audioKeepDays: 30 }), 'Alice', false, at)).toMatch(/^Alice started recording at 2:41\sPM\nAudio kept 30 days$/)
+    expect(recordingBadgeTitle(rec({ audioKeepDays: 1 }), 'Alice')).toBe('Alice started recording\nAudio kept 1 day')
+    expect(recordingBadgeTitle(rec({ audioKeepDays: 0 }), 'Alice')).toBe('Alice started recording\nAudio deleted once the transcript is final')
+    expect(recordingBadgeTitle(rec({ trigger: 'auto', audioKeepDays: 7 }), null, true)).toBe('This server records its calls\nAudio kept 7 days')
+    expect(recordingBadgeTitle(rec({ audioKeepDays: 0 }), null)).toBe('Recording\nAudio deleted once the transcript is final')
+    // Not said (an older plugin), or not a day count: no line, never a guess.
+    expect(recordingBadgeTitle(rec(), 'Alice')).toBe('Alice started recording')
+    for (const bad of [null, -1, 2.5, NaN]) expect(recordingBadgeTitle(rec({ audioKeepDays: bad }), 'Alice')).toBe('Alice started recording')
+  })
+
   it('the badge clock: mm:ss, then h:mm:ss', () => {
     expect(formatRecordingClock(192_000)).toBe('03:12')
     expect(formatRecordingClock(0)).toBe('00:00')

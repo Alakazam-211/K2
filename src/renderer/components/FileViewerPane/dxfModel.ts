@@ -23,6 +23,7 @@ import type {
   ISplineEntity,
   ITextEntity,
 } from 'dxf-parser'
+import { arcSweep, forwardSweep } from './dxf/angle'
 import { entityColor, FG, hex } from './dxf/color'
 import { IndexBuilder, type DrawingIndex } from './dxf/drawing-index'
 import { layerFlags, layerHidden } from './dxf/layers'
@@ -296,9 +297,7 @@ export function drawingFromDxf(
   }
 
   function arcNode(cx: number, cy: number, r: number, a0: number, a1: number, c: string, ctx: Ctx): DxfNode {
-    let span = a1 - a0
-    while (span <= 0) span += 2 * Math.PI
-    while (span > 2 * Math.PI) span -= 2 * Math.PI
+    const span = arcSweep(a1 - a0)
     const sx = cx + r * Math.cos(a0)
     const sy = cy + r * Math.sin(a0)
     const ex = cx + r * Math.cos(a0 + span)
@@ -425,14 +424,13 @@ export function drawingFromDxf(
         const mx = n(el.majorAxisEndPoint?.x)
         const my = n(el.majorAxisEndPoint?.y)
         const ratio = n(el.axisRatio, 1)
-        let t0 = n(el.startAngle, 0)
-        let t1 = n(el.endAngle, 2 * Math.PI)
-        while (t1 <= t0) t1 += 2 * Math.PI
-        const full = t1 - t0 >= 2 * Math.PI - 1e-6
-        const steps = Math.max(8, Math.ceil((72 * (t1 - t0)) / (2 * Math.PI)))
+        const t0 = n(el.startAngle, 0)
+        const span = forwardSweep(n(el.endAngle, 2 * Math.PI) - t0)
+        const full = span >= 2 * Math.PI - 1e-6
+        const steps = Math.max(8, Math.ceil((72 * span) / (2 * Math.PI)))
         let d = ''
         for (let i = 0; i <= steps; i++) {
-          const t = t0 + ((t1 - t0) * i) / steps
+          const t = t0 + (span * i) / steps
           const x = cx + mx * Math.cos(t) - ratio * my * Math.sin(t)
           const y = cy + my * Math.cos(t) + ratio * mx * Math.sin(t)
           add(ctx.m, x, y)

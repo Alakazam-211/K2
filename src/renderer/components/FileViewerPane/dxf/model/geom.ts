@@ -3,6 +3,7 @@
 // SVG sweep 1. Ellipses are flattened as the viewer's own reading does (72
 // steps a turn), so both paths draw the same curve.
 
+import { arcSweep, forwardSweep, TAU } from '../angle'
 import type { XY } from './types'
 
 export const num = (v: unknown, d = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : d)
@@ -13,13 +14,9 @@ export const fmt = (v: number): string => {
 export const xy = (v: unknown): XY | null =>
   Array.isArray(v) && v.length >= 2 && typeof v[0] === 'number' && typeof v[1] === 'number' ? [v[0], v[1]] : null
 
-const TAU = 2 * Math.PI
-
 /** A counter-clockwise arc from a0 to a1 (radians); a full turn is drawn as two halves. */
 export function arcD(c: XY, r: number, a0: number, a1: number, move = true): string {
-  let span = a1 - a0
-  while (span <= 0) span += TAU
-  while (span > TAU) span -= TAU
+  const span = arcSweep(a1 - a0)
   const at = (a: number) => `${fmt(c[0] + r * Math.cos(a))} ${fmt(c[1] + r * Math.sin(a))}`
   const head = move ? `M${at(a0)}` : ''
   if (span > TAU - 1e-9) return `${head} A${fmt(r)} ${fmt(r)} 0 0 1 ${at(a0 + Math.PI)} A${fmt(r)} ${fmt(r)} 0 0 1 ${at(a0)}`
@@ -27,13 +24,12 @@ export function arcD(c: XY, r: number, a0: number, a1: number, move = true): str
 }
 
 export function ellipsePoints(c: XY, major: XY, ratio: number, p0: number, p1: number): { pts: XY[]; full: boolean } {
-  let t1 = p1
-  while (t1 <= p0) t1 += TAU
-  const full = t1 - p0 >= TAU - 1e-6
-  const steps = Math.max(8, Math.ceil((72 * (t1 - p0)) / TAU))
+  const span = forwardSweep(p1 - p0)
+  const full = span >= TAU - 1e-6
+  const steps = Math.max(8, Math.ceil((72 * span) / TAU))
   const pts: XY[] = []
   for (let i = 0; i <= steps; i++) {
-    const t = p0 + ((t1 - p0) * i) / steps
+    const t = p0 + (span * i) / steps
     pts.push([c[0] + major[0] * Math.cos(t) - ratio * major[1] * Math.sin(t), c[1] + major[1] * Math.cos(t) + ratio * major[0] * Math.sin(t)])
   }
   return { pts, full }

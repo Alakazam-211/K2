@@ -8,6 +8,7 @@
 //     pattern rather than a solid;
 //   - gradient: filled in its colour, as a flat fill.
 
+import { forwardSweep } from '../angle'
 import { bulgeD, ellipsePoints, fmt, num, pointsOf, polyD, vertsOf, xy } from './geom'
 import { paintProps, type Paint } from './paint'
 import type { XY } from './types'
@@ -24,9 +25,9 @@ function edgeD(e: Edge, first: boolean): string {
       // Sampled in the edge's own direction, so a clockwise edge joins its neighbours.
       const r = num(arc.r)
       const a0 = num(arc.a0)
-      let span = num(arc.a1) - a0
-      if (arc.ccw === false) while (span >= 0) span -= 2 * Math.PI
-      else while (span <= 0) span += 2 * Math.PI
+      const raw = num(arc.a1) - a0
+      // Clockwise runs backward: a sweep at or past its start wraps into [-2π, 0).
+      const span = arc.ccw === false ? -forwardSweep(-raw) : forwardSweep(raw)
       const n = Math.max(8, Math.ceil((Math.abs(span) / (2 * Math.PI)) * 72))
       const pts: XY[] = Array.from({ length: n + 1 }, (_, i) => [c[0] + r * Math.cos(a0 + (span * i) / n), c[1] + r * Math.sin(a0 + (span * i) / n)])
       return polyD(pts, false).replace(/^M/, first ? 'M' : 'L')

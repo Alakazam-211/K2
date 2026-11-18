@@ -4,10 +4,10 @@
 // shape counts as on it (inside its box), though a line or curve under the
 // pointer wins over it; anything else by its box's outline.
 
+import { arcSweep, normalizeAngle, TAU } from '../angle'
 import { ellipsePoints, num, pointsOf, vertsOf, xy } from '../model/geom'
 import type { ModelRow, XY } from '../model/types'
 
-const TAU = 2 * Math.PI
 
 function segment(p: XY, a: XY, b: XY): number {
   const vx = b[0] - a[0]
@@ -79,10 +79,10 @@ export function hitDistance(r: ModelRow, p: XY): number {
       const d = Math.hypot(p[0] - c[0], p[1] - c[1])
       if (r.kind === 'CIRCLE') return Math.abs(d - rad)
       const a0 = num(g.a0)
-      let span = num(g.a1) - a0
-      while (span <= 0) span += TAU
-      let at = Math.atan2(p[1] - c[1], p[0] - c[0]) - a0
-      while (at < 0) at += TAU
+      const raw = num(g.a1) - a0
+      const span = raw > 0 ? raw : arcSweep(raw)
+      const off = Math.atan2(p[1] - c[1], p[0] - c[0]) - a0
+      const at = off < 0 ? normalizeAngle(off) : off
       if (at <= span) return Math.abs(d - rad)
       const end = (a: number): number => Math.hypot(p[0] - (c[0] + rad * Math.cos(a)), p[1] - (c[1] + rad * Math.sin(a)))
       return Math.min(end(a0), end(a0 + span))

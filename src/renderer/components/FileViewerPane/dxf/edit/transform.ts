@@ -34,8 +34,9 @@ const deg = (v: XY, c: XY): number => (Math.atan2(v[1] - c[1], v[0] - c[0]) * 18
 /** The turn (degrees, anticlockwise, -180 to 180) a drag from `a` to `b` sweeps about `c`; Shift snaps to 15°, else to a tenth of a degree. */
 export function turnDeg(c: XY, a: XY, b: XY, shift: boolean): number {
   let d = deg(b, c) - deg(a, c)
-  while (d > 180) d -= 360
-  while (d <= -180) d += 360
+  if (!Number.isFinite(d)) return 0
+  // Into (-180, 180] by modulo, never a loop.
+  if (d > 180 || d <= -180) d = 180 - ((((180 - d) % 360) + 360) % 360)
   const step = shift ? 15 : 0.1
   const r = Number((Math.round(d / step) * step).toFixed(1))
   return r === 0 || r === -180 ? Math.abs(r) : r

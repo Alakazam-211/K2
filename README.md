@@ -126,6 +126,7 @@ Release: `cargo tauri build`.
 | **Daemon** | Source of truth — always on, headless-capable |
 | **Desktop / web / mobile** | Thin viewers on the same server |
 | **`k2` CLI** | Day-to-day surface for humans and agents |
+| **New k5 command (Beta)** | The `k2` and `k5` commands as a Rust program, on macOS and Linux. Off by default: the owner turns it on in Settings → General → Server → Advanced. Not on Windows yet |
 | **Stack** | Tauri v2 · React · Rust · SQLite |
 
 Architecture map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

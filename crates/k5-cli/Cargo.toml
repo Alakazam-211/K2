@@ -39,9 +39,7 @@ k2-client = { path = "../k2-client" }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# build.rs packs cli/k2 into the binary: gzip, its BLAKE3 (what the front
-# checks) and its sha256.
+# build.rs packs cli/k2 into the binary: gzip, and its BLAKE3.
 [build-dependencies]
 blake3 = "1"
 flate2 = "1.1.9"
-sha2 = "0.10"

@@ -1,7 +1,7 @@
 //! Packs the shell CLI (`cli/k2`) into the binary: gzipped, with its
-//! BLAKE3 and sha256 (hex) and the version on its `K2_CLI_VERSION="x.y.z"`
-//! line. A verb the front doesn't handle runs this copy, so the binary and
-//! the script it falls through to are always the same release. The front
+//! BLAKE3 (hex) and the version on its `K2_CLI_VERSION="x.y.z"` line. A
+//! verb the front doesn't handle runs this copy, so the binary and the
+//! script it falls through to are always the same release. The front
 //! checks a copy by its BLAKE3 before every run.
 //!
 //! Writes `$OUT_DIR/k2.gz` and `$OUT_DIR/embedded.rs` (read by
@@ -10,8 +10,6 @@
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use sha2::{Digest, Sha256};
-use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::PathBuf;
 
@@ -33,10 +31,6 @@ fn main() {
     });
 
     let blake = blake3::hash(&bytes).to_hex().to_string();
-    let mut sha = String::with_capacity(64);
-    for b in Sha256::digest(&bytes) {
-        write!(sha, "{b:02x}").expect("write to a String");
-    }
 
     let mut gz = GzEncoder::new(Vec::new(), Compression::default());
     gz.write_all(&bytes).expect("gzip the shell CLI");
@@ -51,8 +45,6 @@ fn main() {
          /// The BLAKE3 of `cli/k2` (not of the gzip), in lowercase hex: what\n\
          /// the front checks a copy by before it runs it.\n\
          pub const SCRIPT_BLAKE3: &str = {blake:?};\n\
-         /// The sha256 of `cli/k2` (not of the gzip), in lowercase hex.\n\
-         pub const SCRIPT_SHA256: &str = {sha:?};\n\
          /// The version on `cli/k2`'s `K2_CLI_VERSION=` line.\n\
          pub const SCRIPT_VERSION: &str = {version:?};\n\
          /// The version as a marker other code finds in the binary's bytes\n\

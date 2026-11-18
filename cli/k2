@@ -181,30 +181,81 @@ K2_HOME="${HOME}/.k2"
 
 # Air-gap: same polarity as k2_core::airgap (env wins; garbage → on;
 # unset → persisted `airgap` in ~/.k2/settings.json; default off).
-_k2_airgap_enabled() {
+#
+# The setting is read with the shell alone (tr and grep), so a box with no
+# python3, or a python3 that only stands in for one, still sees it. The
+# daemon writes it as a top-level `"airgap": true` or `"airgap": false`.
+# _k2_airgap_state prints one word:
+#   on          K2_AIRGAP is on (or garbage), or an "airgap" key is true
+#   off         K2_AIRGAP is off; or no settings file; or every "airgap"
+#               key is false; or the file has no "airgap" key (an older
+#               file, which the daemon reads as off too)
+#   unreadable  the file is there but can't be read, or an "airgap" key
+#               has a value that is not true or false
+# Any "airgap" key counts, wherever it sits: a stray true turns air-gap on
+# rather than off.
+_k2_airgap_state() {
     if [ "${K2_AIRGAP+x}" = "x" ]; then
         case "$(printf '%s' "$K2_AIRGAP" | tr '[:upper:]' '[:lower:]')" in
-            1|true|on|yes) return 0 ;;
-            0|false|off|no) return 1 ;;
-            *) return 0 ;;
+            0|false|off|no) echo off ;;
+            *) echo on ;;
         esac
+        return 0
     fi
-    python3 -c '
-import json, sys
-try:
-    with open(sys.argv[1]) as fh:
-        v = json.load(fh).get("airgap")
-except Exception:
-    sys.exit(1)
-sys.exit(0 if v is True else 1)
-' "${K2_HOME}/settings.json" 2>/dev/null
+    local f="${K2_HOME}/settings.json" body keys vals v n=0 on=0 bad=0
+    if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+        echo off
+        return 0
+    fi
+    if ! { body="$(tr -d '\n\r' <"$f")"; } 2>/dev/null; then
+        echo unreadable
+        return 0
+    fi
+    keys="$(printf '%s' "$body" | { grep -o '"airgap"' || true; } | wc -l)"
+    if [ "$((keys))" -eq 0 ]; then
+        echo off
+        return 0
+    fi
+    vals="$(printf '%s' "$body" \
+        | { grep -oE '"airgap"[[:space:]]*:[[:space:]]*[^[:space:],}]*' || true; } \
+        | sed -E 's/^"airgap"[[:space:]]*:[[:space:]]*//')"
+    if [ -n "$vals" ]; then
+        while IFS= read -r v; do
+            n=$((n + 1))
+            case "$v" in
+                true) on=1 ;;
+                false) ;;
+                *) bad=1 ;;
+            esac
+        done <<<"$vals"
+    fi
+    [ "$n" -eq "$((keys))" ] || bad=1
+    if [ "$on" = 1 ]; then
+        echo on
+    elif [ "$bad" = 1 ]; then
+        echo unreadable
+    else
+        echo off
+    fi
+}
+
+# True when air-gap is on, or when its setting can't be read (fail closed).
+_k2_airgap_enabled() {
+    [ "$(_k2_airgap_state)" != "off" ]
 }
 
 _k2_refuse_if_airgap() {
-    if _k2_airgap_enabled; then
-        echo "Error: air-gap is on (K2_AIRGAP=1). This command cannot phone Connect, GitHub, or other hosted services." >&2
-        exit 1
-    fi
+    case "$(_k2_airgap_state)" in
+        off) return 0 ;;
+        unreadable)
+            echo "Error: can't read the air-gap setting in ${K2_HOME}/settings.json (\"airgap\" must be true or false), so k2 treats air-gap as on. This command cannot phone Connect, GitHub, or other hosted services." >&2
+            exit 1
+            ;;
+        *)
+            echo "Error: air-gap is on (K2_AIRGAP=1). This command cannot phone Connect, GitHub, or other hosted services." >&2
+            exit 1
+            ;;
+    esac
 }
 
 # Workspace dot-dir for a project root, by the daemon's rule
